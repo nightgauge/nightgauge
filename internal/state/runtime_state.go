@@ -407,6 +407,13 @@ type StageResult struct {
 	CacheRead     int           `json:"cacheRead"` // cache read tokens (subset of InputTokens)
 	CacheCreation int           `json:"cacheCreation"`
 	CostUSD       float64       `json:"costUsd"`
+	// CostSource records HOW CostUSD was priced (Issue #682): CostSourceNative
+	// (CompleteStageWithCost's CLI-reported figure), CostSourceComputed
+	// (CompleteStage, rate-card resolved), or CostSourceUnknown (CompleteStage,
+	// registry lookup missed — mirrors CostUnstamped below). Carried onto
+	// V2StageTokens.CostSource by BuildV2Record so it reaches the durable
+	// history record TypeScript's HistoryStageTokenUsageSchema validates.
+	CostSource string `json:"costSource,omitempty"`
 	// CostUnstamped is true when CostUSD is NOT a priced figure: the serving
 	// adapter's provider/model could not be resolved against the registry, so
 	// CostUSD is a placeholder 0 rather than a fabricated price (#585). Never
@@ -745,6 +752,13 @@ func (rs *RuntimeState) CompleteStage(exitCode int, counts tokens.TokenCounts, m
 
 	counts = rs.consumeCurrentStageTokenCountsLocked(counts)
 	cost, stamped := tokens.CalculateCostForAdapter(adapter, model, counts)
+	// stamped mirrors !CostUnstamped exactly (both come from the same
+	// CalculateCostForAdapter call) — so CostSource and CostUnstamped can
+	// never disagree about whether this occurrence was priced (#682).
+	costSource := CostSourceComputed
+	if !stamped {
+		costSource = CostSourceUnknown
+	}
 	rs.completeStageInternalLocked(
 		exitCode,
 		counts.Input+counts.CacheRead,
@@ -753,6 +767,7 @@ func (rs *RuntimeState) CompleteStage(exitCode int, counts tokens.TokenCounts, m
 		counts.CacheCreation5m+counts.CacheCreation1h,
 		cost,
 		!stamped,
+		costSource,
 	)
 }
 
@@ -783,7 +798,8 @@ func (rs *RuntimeState) CompleteStageWithCost(exitCode, inputTokens, outputToken
 		counts.CacheRead,
 		counts.CacheCreation5m+counts.CacheCreation1h,
 		actualCostUsd,
-		false, // the CLI-reported actual cost is always a priced figure
+		false,            // the CLI-reported actual cost is always a priced figure
+		CostSourceNative, // by definition — this IS the vendor-reported cost (#682)
 	)
 }
 
@@ -829,7 +845,7 @@ func (rs *RuntimeState) consumeCurrentStageTokenCountsLocked(direct tokens.Token
 // completeStageInternalLocked appends one completed occurrence. The caller
 // holds rs.mu so pending-token consumption and the idempotency decision are one
 // atomic transaction.
-func (rs *RuntimeState) completeStageInternalLocked(exitCode, inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens int, cost float64, costUnstamped bool) {
+func (rs *RuntimeState) completeStageInternalLocked(exitCode, inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens int, cost float64, costUnstamped bool, costSource string) {
 	// Idempotency guard (#230): if this exact stage occurrence was already
 	// completed — same Stage AND the same BeginStage-stamped StageStart — skip
 	// it so a residual double-complete yields exactly one completedStages entry
@@ -899,6 +915,7 @@ func (rs *RuntimeState) completeStageInternalLocked(exitCode, inputTokens, outpu
 		CacheRead:     cacheReadTokens,
 		CacheCreation: cacheCreationTokens,
 		CostUSD:       cost,
+		CostSource:    costSource,
 		CostUnstamped: costUnstamped,
 	}
 	rs.CompletedStages = append(rs.CompletedStages, result)
@@ -1204,6 +1221,18 @@ func (rs *RuntimeState) ClearStageOutputTail(stage PipelineStage) {
 // stage on the failure path, so BuildV2Record's synthesis branch can populate
 // tokens.per_stage even when the stage never reached CompleteStage (Issue
 // #146). A multi-attempt run's most recent record for a stage wins.
+//
+// KNOWN GAP (#682, mirrors the pre-existing CostUnstamped gap noted at the
+// call site below): this constructor has no costSource parameter, so the
+// synthesized StageResult always carries CostSource == "" — BuildV2Record's
+// synthesis branch therefore writes an absent cost_source for any stage whose
+// only record came from this path. Both call sites (internal/ipc/server.go,
+// internal/orchestrator/scheduler.go) already know the right label — they
+// call this immediately after CompleteStage/CompleteStageWithCost, which
+// picked native vs. computed/unknown from the exact same actualCostUsd — but
+// threading it through was left out of scope here, same as #585/#588 left
+// costUnstamped out. A future caller that DOES pass one is not silently
+// dropped: the field exists and BuildV2Record already carries it through.
 func (rs *RuntimeState) RecordTerminatingStageTokens(stage PipelineStage, inputTokens, outputTokens, cacheReadTokens int, actualCostUsd float64) {
 	rs.mu.Lock()
 	defer rs.mu.Unlock()

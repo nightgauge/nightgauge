@@ -34,8 +34,9 @@
  *   - Go never fabricates, so "" now genuinely reaches these readers. The LIVE
  *     pre-#397 dropper was the strict SCHEMA: `branch: z.string()` (required)
  *     failed `safeParse` for a record without the key, dumping it into
- *     `executionHistoryReader`'s lenient raw-cast fallback, which skips the
- *     #3228 `cost_source` backfill. `z.string().default("")` closes that.
+ *     `executionHistoryReader`'s lenient raw-cast fallback — a bare `as`
+ *     cast that keeps every key verbatim, unlike a successful `safeParse`,
+ *     which strips unrecognized ones. `z.string().default("")` closes that.
  *   - `DashboardState.importParsedRunRecord`'s truthiness guard dropped any
  *     record with a falsy branch — the whole run, not just the field. That
  *     guard is why the fabrication existed in the first place. It runs only on
@@ -241,6 +242,21 @@ describe("undetermined-branch history record (#397)", () => {
         // #446).
         const record = parsedRun();
         delete record.branch;
+        // A schema-only witness, independent of the branch assertion below
+        // (see the comment further down for why that independence matters):
+        // Zod's z.object() STRIPS unrecognized keys from its parsed output by
+        // default, while the reader's lenient fallback is a bare `as` cast
+        // that keeps everything verbatim. Planting an unknown top-level key
+        // and checking its ABSENCE after a read proves the strict safeParse
+        // ran, without depending on any particular field's value semantics.
+        //
+        // Until #682 this used the #3228 `cost_source` backfill for the same
+        // purpose (its presence after a read was proof of the strict path,
+        // since the captured per_stage blocks carry none of their own). #682
+        // removed that backfill — Go now writes cost_source itself, so the
+        // reader no longer manufactures it — which retired that witness
+        // along with it.
+        (record as Record<string, unknown>).__strict_parse_witness = true;
         writeHistory(JSON.stringify(record));
 
         const state = attach();
@@ -260,17 +276,15 @@ describe("undetermined-branch history record (#397)", () => {
         // projection coerces (executionHistoryWriter's `branch: record.branch`
         // and DashboardState's `branch: entry.branch`); a defensive `?? ""`
         // added to either would silently delete the gate while every test
-        // stayed green. This witness does not depend on that: the #3228
-        // `cost_source` backfill runs ONLY inside `if (v2Result.success)` in
-        // ExecutionHistoryReader, and the captured per_stage blocks carry no
-        // cost_source of their own (keys: input/output/cache_read/
-        // cache_creation/cost_usd/cache_hit_rate/adapter), so its PRESENCE
-        // after a read is unambiguous proof the strict path executed on the
-        // live reader — for a record carrying a model_selection, which before
-        // #446 could only reach the lenient raw cast.
+        // stayed green. This witness does not depend on that: the
+        // unknown-key strip only happens inside a successful `safeParse`, so
+        // its ABSENCE after a read is unambiguous proof the strict path
+        // executed on the live reader — for a record carrying a
+        // model_selection, which before #446 could only reach the lenient
+        // raw cast.
         const recs = await ExecutionHistoryReader.readAll(root);
         expect(recs).toHaveLength(1);
-        expect(recs[0].tokens.per_stage?.["feature-dev"]?.cost_source).toBeDefined();
+        expect(recs[0]).not.toHaveProperty("__strict_parse_witness");
       });
 
       it("rebuilds the same branch Go wrote into index.json", async () => {

@@ -241,7 +241,7 @@ describe("adapter attribution", () => {
     const { provider: p } = provider([
       // Earlier this month, but not today and not in this session.
       runRecord(new Date(2026, 7, 4, 9, 0), {
-        "feature-dev": { cost_usd: 6, adapter: "claude" },
+        "feature-dev": { cost_usd: 6, adapter: "claude", cost_source: "native" },
       }),
     ]);
 
@@ -318,9 +318,14 @@ describe("confidence", () => {
     expect(
       stageCostConfidence({ ...base, cost_usd: 0, cost_source: "native", cost_unstamped: true })
     ).toBe("unknown");
-    // Absent on records whose writer omits the field; the reader has already
-    // backfilled "native" for every priced stage, so what is left is a real zero.
-    expect(stageCostConfidence({ ...base, cost_usd: 0 })).toBe("measured");
+    // Absent `cost_source` (Issue #682): pre-#682 the reader backfilled
+    // "native" for any priced stage here, manufacturing confidence from
+    // silence. Post-#682 Go sets cost_source on every stage it completes, so
+    // an absent field is honestly "we don't know" — same as the explicit
+    // "unknown" case above — for either a genuinely legacy record or a
+    // known-gap write path (RecordTerminatingStageTokens).
+    expect(stageCostConfidence({ ...base, cost_usd: 0 })).toBe("unknown");
+    expect(stageCostConfidence({ ...base, cost_usd: 1 })).toBe("unknown");
   });
 
   it("degrades a window to its weakest contributing stage", async () => {

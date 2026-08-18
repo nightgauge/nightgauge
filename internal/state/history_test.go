@@ -1311,6 +1311,247 @@ func TestBuildV2Record_StampedStageDoesNotCarryCostUnstamped(t *testing.T) {
 	}
 }
 
+// TestCompleteStage_CostSourceMatchesStampedness (Issue #682) pins
+// RuntimeState.CompleteStage's cost_source decision directly against the
+// exact stamped bool CalculateCostForAdapter returned — the same value that
+// already decides CostUnstamped, so the two fields can never disagree about
+// whether an occurrence was priced.
+func TestCompleteStage_CostSourceMatchesStampedness(t *testing.T) {
+	// grok/sonnet resolves against the pricing registry for a NON-Claude
+	// adapter (see TestCalculateCostForAdapter_PinsRun01a007d5Regression) —
+	// exactly the case #682 exists to make reachable: a rate-card-derived,
+	// not vendor-reported, cost.
+	rs := NewRuntimeState("nightgauge/nightgauge", 682, "item-682-computed", testRunID())
+	rs.BeginStage(StageFeatureDev)
+	rs.CompleteStage(0, tokens.TokenCounts{Input: 1000, Output: 500}, "sonnet", "grok")
+
+	got := rs.CompletedStages[0]
+	if got.CostSource != CostSourceComputed {
+		t.Errorf("CostSource = %q, want %q for a resolvable (grok, sonnet) pair", got.CostSource, CostSourceComputed)
+	}
+	if got.CostUnstamped {
+		t.Error("CostUnstamped = true, want false — grok/sonnet resolves cleanly")
+	}
+
+	// An unresolvable (provider, model) pair: CalculateCostForAdapter returns
+	// stamped=false, so CostSource must read "unknown", not "computed".
+	rs2 := NewRuntimeState("nightgauge/nightgauge", 682, "item-682-unknown", testRunID())
+	rs2.BeginStage(StageFeatureDev)
+	rs2.CompleteStage(0, tokens.TokenCounts{Input: 1000, Output: 500}, "nonexistent-band-xyz", "grok")
+
+	got2 := rs2.CompletedStages[0]
+	if got2.CostSource != CostSourceUnknown {
+		t.Errorf("CostSource = %q, want %q for an unresolvable pair", got2.CostSource, CostSourceUnknown)
+	}
+	if !got2.CostUnstamped {
+		t.Error("CostUnstamped = false, want true — the pair does not resolve")
+	}
+
+	// The local-provider convention (#56): ollama/lm-studio resolve to a
+	// STAMPED $0 (genuinely free, not "we don't know"), so CostSource must
+	// read "computed" — a rate-card resolution at a zero rate — never
+	// "unknown".
+	rs3 := NewRuntimeState("nightgauge/nightgauge", 682, "item-682-local", testRunID())
+	rs3.BeginStage(StageFeatureDev)
+	rs3.CompleteStage(0, tokens.TokenCounts{Input: 1000, Output: 500}, "qwen3-coder:32b", "ollama")
+
+	got3 := rs3.CompletedStages[0]
+	if got3.CostSource != CostSourceComputed {
+		t.Errorf("CostSource = %q, want %q for the local-provider intentional $0", got3.CostSource, CostSourceComputed)
+	}
+	if got3.CostUnstamped {
+		t.Error("CostUnstamped = true, want false — a local-provider $0 is not a pricing gap")
+	}
+}
+
+// TestCompleteStageWithCost_CostSourceIsAlwaysNative (Issue #682) pins that
+// the CLI-reported actual-cost path always writes CostSourceNative — by
+// definition, this IS the vendor-measured figure, never a rate-card estimate.
+func TestCompleteStageWithCost_CostSourceIsAlwaysNative(t *testing.T) {
+	rs := NewRuntimeState("nightgauge/nightgauge", 682, "item-682-native", testRunID())
+	rs.BeginStage(StageFeatureDev)
+	rs.CompleteStageWithCost(0, 10000, 4000, 3000, 0.20)
+
+	got := rs.CompletedStages[0]
+	if got.CostSource != CostSourceNative {
+		t.Errorf("CostSource = %q, want %q for the CLI-reported cost path", got.CostSource, CostSourceNative)
+	}
+	if got.CostUnstamped {
+		t.Error("CostUnstamped = true, want false — a CLI-reported cost is always priced")
+	}
+}
+
+// TestBuildV2Record_ComputedCostSourceReachesPerStage is the end-to-end proof
+// AC 2 of #682 asks for: a rate-card-derived (non-Claude) cost reaches the
+// DURABLE V2StageTokens record with cost_source="computed" — the exact value
+// LocalTelemetryUsageProvider.stageCostConfidence maps to confidence
+// "estimated". Before #682, V2StageTokens had no CostSource field at all, so
+// this value could never leave RuntimeState.
+func TestBuildV2Record_ComputedCostSourceReachesPerStage(t *testing.T) {
+	hw := NewHistoryWriter(t.TempDir())
+	now := time.Now()
+	rs := NewRuntimeState("nightgauge/nightgauge", 682, "item-682-e2e-computed", testRunID())
+
+	rs.BeginStage(StageFeatureDev)
+	rs.CompleteStage(0, tokens.TokenCounts{Input: 1000, Output: 500}, "sonnet", "grok")
+
+	record := hw.BuildV2Record(rs, true, "", V2RunInput{}, now)
+
+	stageName := string(StageFeatureDev)
+	tok, ok := record.Tokens.PerStage[stageName]
+	if !ok {
+		t.Fatalf("Tokens.PerStage missing entry for %q", stageName)
+	}
+	if tok.CostSource != CostSourceComputed {
+		t.Errorf("PerStage[%q].CostSource = %q, want %q — a grok/sonnet stage is rate-card priced", stageName, tok.CostSource, CostSourceComputed)
+	}
+	if tok.CostUSD <= 0 {
+		t.Errorf("PerStage[%q].CostUSD = %v, want a positive priced figure", stageName, tok.CostUSD)
+	}
+
+	// Marshal to the actual bytes the writer would persist to the JSONL
+	// history file — proving the field survives serialization onto the wire
+	// TypeScript's HistoryStageTokenUsageSchema validates, not merely that
+	// the in-memory struct carries it.
+	raw, err := json.Marshal(record.Tokens)
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+	if !strings.Contains(string(raw), `"cost_source":"computed"`) {
+		t.Errorf("marshaled Tokens JSON missing `\"cost_source\":\"computed\"`; got: %s", raw)
+	}
+}
+
+// TestBuildV2Record_UnknownCostSourceReachesPerStage extends
+// TestBuildV2Record_UnresolvableAdapterMarksCostUnstamped with the
+// cost_source assertion: an unpriceable pair must read "unknown", not be
+// silently absent (absence reads as "we never learned the source at all",
+// a weaker and different claim than "we tried and could not price it").
+func TestBuildV2Record_UnknownCostSourceReachesPerStage(t *testing.T) {
+	hw := NewHistoryWriter(t.TempDir())
+	now := time.Now()
+	rs := NewRuntimeState("nightgauge/nightgauge", 682, "item-682-e2e-unknown", testRunID())
+
+	rs.BeginStage(StageFeaturePlanning)
+	rs.CompleteStage(0, tokens.TokenCounts{Input: 1000, Output: 500}, "nonexistent-band-xyz", "grok")
+
+	record := hw.BuildV2Record(rs, true, "", V2RunInput{}, now)
+
+	stageName := string(StageFeaturePlanning)
+	tok, ok := record.Tokens.PerStage[stageName]
+	if !ok {
+		t.Fatalf("Tokens.PerStage missing entry for %q", stageName)
+	}
+	if tok.CostSource != CostSourceUnknown {
+		t.Errorf("PerStage[%q].CostSource = %q, want %q", stageName, tok.CostSource, CostSourceUnknown)
+	}
+}
+
+// TestBuildV2Record_NativeCostSourceReachesPerStage is the native-path
+// counterpart of the computed/unknown end-to-end tests above.
+func TestBuildV2Record_NativeCostSourceReachesPerStage(t *testing.T) {
+	hw := NewHistoryWriter(t.TempDir())
+	now := time.Now()
+	rs := NewRuntimeState("nightgauge/nightgauge", 682, "item-682-e2e-native", testRunID())
+
+	rs.BeginStage(StageFeatureDev)
+	rs.CompleteStageWithCost(0, 10000, 4000, 3000, 0.20)
+
+	record := hw.BuildV2Record(rs, true, "", V2RunInput{}, now)
+
+	stageName := string(StageFeatureDev)
+	tok, ok := record.Tokens.PerStage[stageName]
+	if !ok {
+		t.Fatalf("Tokens.PerStage missing entry for %q", stageName)
+	}
+	if tok.CostSource != CostSourceNative {
+		t.Errorf("PerStage[%q].CostSource = %q, want %q", stageName, tok.CostSource, CostSourceNative)
+	}
+}
+
+// TestBuildV2Record_CostSourceFoldsToWeakestAcrossRetries (Issue #682) proves
+// foldCostSource's "weakest wins" rule end to end: a stage that ran once
+// native and once computed (a genuine backtrack/adapter-switch scenario, same
+// shape as TestBuildV2Record_BacktrackedStageAccumulates) must report the
+// ACCUMULATED entry as "computed" — the sum is only PART vendor-measured, and
+// "native" would overstate that. Order must not matter, so both orderings are
+// exercised.
+func TestBuildV2Record_CostSourceFoldsToWeakestAcrossRetries(t *testing.T) {
+	hw := NewHistoryWriter(t.TempDir())
+	now := time.Now()
+
+	t.Run("native then computed", func(t *testing.T) {
+		rs := NewRuntimeState("nightgauge/nightgauge", 682, "item-682-fold-a", testRunID())
+		rs.BeginStage(StageFeatureDev)
+		rs.CompleteStageWithCost(0, 10000, 4000, 3000, 0.20) // native
+		rs.BeginStage(StageFeatureValidate)
+		rs.CompleteStageWithCost(0, 2000, 500, 1000, 0.02)
+		rs.BeginStage(StageFeatureDev)                                                        // backtrack re-run
+		rs.CompleteStage(0, tokens.TokenCounts{Input: 12000, Output: 5000}, "sonnet", "grok") // computed
+
+		record := hw.BuildV2Record(rs, true, "", V2RunInput{}, now)
+		tok := record.Tokens.PerStage[string(StageFeatureDev)]
+		if tok.CostSource != CostSourceComputed {
+			t.Errorf("CostSource = %q, want %q (weakest of native, computed)", tok.CostSource, CostSourceComputed)
+		}
+	})
+
+	t.Run("computed then native", func(t *testing.T) {
+		rs := NewRuntimeState("nightgauge/nightgauge", 682, "item-682-fold-b", testRunID())
+		rs.BeginStage(StageFeatureDev)
+		rs.CompleteStage(0, tokens.TokenCounts{Input: 10000, Output: 4000}, "sonnet", "grok") // computed
+		rs.BeginStage(StageFeatureValidate)
+		rs.CompleteStageWithCost(0, 2000, 500, 1000, 0.02)
+		rs.BeginStage(StageFeatureDev)                       // backtrack re-run
+		rs.CompleteStageWithCost(0, 12000, 5000, 4000, 0.25) // native
+
+		record := hw.BuildV2Record(rs, true, "", V2RunInput{}, now)
+		tok := record.Tokens.PerStage[string(StageFeatureDev)]
+		if tok.CostSource != CostSourceComputed {
+			t.Errorf("CostSource = %q, want %q (weakest of computed, native — order must not matter)", tok.CostSource, CostSourceComputed)
+		}
+	})
+
+	t.Run("computed then unknown", func(t *testing.T) {
+		rs := NewRuntimeState("nightgauge/nightgauge", 682, "item-682-fold-c", testRunID())
+		rs.BeginStage(StageFeatureDev)
+		rs.CompleteStage(0, tokens.TokenCounts{Input: 10000, Output: 4000}, "sonnet", "grok") // computed
+		rs.BeginStage(StageFeatureValidate)
+		rs.CompleteStageWithCost(0, 2000, 500, 1000, 0.02)
+		rs.BeginStage(StageFeatureDev)                                                                      // backtrack re-run
+		rs.CompleteStage(0, tokens.TokenCounts{Input: 12000, Output: 5000}, "nonexistent-band-xyz", "grok") // unknown
+
+		record := hw.BuildV2Record(rs, true, "", V2RunInput{}, now)
+		tok := record.Tokens.PerStage[string(StageFeatureDev)]
+		if tok.CostSource != CostSourceUnknown {
+			t.Errorf("CostSource = %q, want %q (weakest of computed, unknown)", tok.CostSource, CostSourceUnknown)
+		}
+	})
+}
+
+// TestFoldCostSource pins the priority table directly, independent of the
+// BuildV2Record plumbing above.
+func TestFoldCostSource(t *testing.T) {
+	cases := []struct {
+		a, b, want string
+	}{
+		{"", "", ""},
+		{"", CostSourceNative, CostSourceNative},
+		{CostSourceComputed, "", CostSourceComputed},
+		{CostSourceNative, CostSourceNative, CostSourceNative},
+		{CostSourceNative, CostSourceComputed, CostSourceComputed},
+		{CostSourceComputed, CostSourceNative, CostSourceComputed},
+		{CostSourceComputed, CostSourceUnknown, CostSourceUnknown},
+		{CostSourceUnknown, CostSourceComputed, CostSourceUnknown},
+		{CostSourceNative, CostSourceUnknown, CostSourceUnknown},
+	}
+	for _, tc := range cases {
+		if got := foldCostSource(tc.a, tc.b); got != tc.want {
+			t.Errorf("foldCostSource(%q, %q) = %q, want %q", tc.a, tc.b, got, tc.want)
+		}
+	}
+}
+
 // TestBuildV2Record_UnstampedFoldSurvivesRetry pins the OR-fold semantics: a
 // stage that ran twice (retry/backtrack) with the FIRST attempt unstamped and
 // the SECOND attempt stamped must still read cost_unstamped=true overall — a

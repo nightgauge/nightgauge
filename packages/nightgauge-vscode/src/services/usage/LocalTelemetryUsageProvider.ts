@@ -104,22 +104,31 @@ interface CostEvent {
  * registry. It is never set for a legitimately free local-provider run, so
  * its absence on a zero-cost stage means the zero is real.
  *
- * `cost_source` is honoured when present. Absent means either a pre-#3228
- * record or a writer that omits the field; the reader backfills `"native"`
- * whenever `cost_usd > 0`, so what reaches the `default` arm is a genuine,
- * measured zero.
+ * `cost_source` is honoured when present: `"native"` is a vendor/CLI-reported
+ * measurement, `"computed"` is a rate-card estimate, `"unknown"` is an
+ * explicit "could not price this at all". Absent (Issue #682) means one of
+ * two things: a pre-#682 record, or a Go write path that has not been taught
+ * to set the field yet (RecordTerminatingStageTokens's failure-path
+ * synthesis — see its doc comment in internal/state/runtime_state.go) — and
+ * this function cannot tell those apart. Until #682 the READER backfilled
+ * `"native"` for any absent field with `cost_usd > 0`; that manufactured a
+ * confident answer from silence, which is exactly the bug #682 fixes. Absent
+ * now honestly reports `"unknown"`, the same as the writer's own explicit
+ * `"unknown"` label — silence and an explicit "I don't know" carry the same
+ * weight here.
  */
 export function stageCostConfidence(usage: HistoryStageTokenUsage): UsageConfidence {
   if (usage.cost_unstamped === true) {
     return "unknown";
   }
   switch (usage.cost_source) {
+    case "native":
+      return "measured";
     case "computed":
       return "estimated";
     case "unknown":
-      return "unknown";
     default:
-      return "measured";
+      return "unknown";
   }
 }
 
