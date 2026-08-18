@@ -264,41 +264,43 @@ async function detectFrameworks(workspaceRoot: string, language: string): Promis
 // Complexity score lookup
 // ============================================================================
 
-async function getComplexityScore(workspaceRoot: string): Promise<number | undefined> {
+/**
+ * Read the complexity score recorded for a specific issue's pipeline
+ * context file, when present.
+ *
+ * Reads `.nightgauge/pipeline/issue-<issueNumber>.json` directly — it does
+ * NOT scan the pipeline directory for the most-recently-modified
+ * `issue-*.json` file. With concurrent pipelines sharing one workspace
+ * root, a directory-wide "most recent" read returns whichever issue's
+ * pipeline happened to touch its context file last, which is very often a
+ * *different* issue than the one this SkillContext is being assembled for
+ * (issue #655) — and that wrong value then silently steers skill-overlay
+ * selection and model adaptation for the other issue's stage prompt.
+ *
+ * When `issueNumber` is unknown, or that issue's own context file has not
+ * been written yet, there is no complexity signal to report: this returns
+ * `undefined` rather than falling back to any other issue's score.
+ */
+async function getComplexityScore(
+  workspaceRoot: string,
+  issueNumber: number | undefined
+): Promise<number | undefined> {
+  if (issueNumber === undefined) {
+    return undefined;
+  }
+
   try {
-    const pipelineDir = path.join(workspaceRoot, ".nightgauge", "pipeline");
-    const dirUri = vscode.Uri.file(pipelineDir);
-    let entries: [string, vscode.FileType][];
-    try {
-      entries = await vscode.workspace.fs.readDirectory(dirUri);
-    } catch {
+    const filePath = path.join(
+      workspaceRoot,
+      ".nightgauge",
+      "pipeline",
+      `issue-${issueNumber}.json`
+    );
+    if (!(await fileExists(filePath))) {
       return undefined;
     }
 
-    // Filter to issue-*.json files, find most recently modified
-    const issueFiles = entries.filter(
-      ([name, type]) => type === vscode.FileType.File && /^issue-\d+\.json$/.test(name)
-    );
-    if (issueFiles.length === 0) {
-      return undefined;
-    }
-
-    // Stat each to find most recent mtime
-    const statResults = await Promise.all(
-      issueFiles.map(async ([name]) => {
-        const filePath = path.join(pipelineDir, name);
-        try {
-          const stat = await vscode.workspace.fs.stat(vscode.Uri.file(filePath));
-          return { filePath, mtime: stat.mtime };
-        } catch {
-          return { filePath, mtime: 0 };
-        }
-      })
-    );
-    statResults.sort((a, b) => b.mtime - a.mtime);
-    const mostRecent = statResults[0].filePath;
-
-    const content = await readWorkspaceFile(mostRecent);
+    const content = await readWorkspaceFile(filePath);
     if (!content) return undefined;
 
     const data = JSON.parse(content) as {
@@ -346,11 +348,17 @@ export class SkillContextAssembler implements vscode.Disposable {
   /**
    * Assemble SkillContext for the given workspace root.
    *
-   * Results are cached per workspace root and invalidated on repository change.
-   * On any detection error, returns a minimal valid context rather than throwing.
+   * `issueNumber` scopes the complexity-score read (see `getComplexityScore`)
+   * to that issue's own pipeline context file — pass the issue this
+   * SkillContext is being assembled for whenever one is known, so a stage
+   * prompt is never adapted using a *different* issue's complexity score.
+   * Results are cached per (workspace root, issue) pair and invalidated on
+   * repository change. On any detection error, returns a minimal valid
+   * context rather than throwing.
    */
-  async assemble(workspaceRoot: string): Promise<SkillContext> {
-    const cached = this._cache.get(workspaceRoot);
+  async assemble(workspaceRoot: string, issueNumber?: number): Promise<SkillContext> {
+    const cacheKey = `${workspaceRoot}#issue:${issueNumber ?? "none"}`;
+    const cached = this._cache.get(cacheKey);
     if (cached) {
       return cached;
     }
@@ -358,7 +366,7 @@ export class SkillContextAssembler implements vscode.Disposable {
     try {
       const [langInfo, complexityScore] = await Promise.all([
         detectLanguage(workspaceRoot),
-        getComplexityScore(workspaceRoot),
+        getComplexityScore(workspaceRoot, issueNumber),
       ]);
 
       const frameworks = await detectFrameworks(workspaceRoot, langInfo.primaryLanguage);
@@ -371,7 +379,7 @@ export class SkillContextAssembler implements vscode.Disposable {
         ...(complexityScore !== undefined && { complexityScore }),
       };
 
-      this._cache.set(workspaceRoot, ctx);
+      this._cache.set(cacheKey, ctx);
       return ctx;
     } catch (err) {
       console.warn("[SkillContextAssembler] Context assembly failed, using fallback", err);
@@ -381,7 +389,7 @@ export class SkillContextAssembler implements vscode.Disposable {
         multiLanguage: false,
         detectedLanguages: [],
       };
-      this._cache.set(workspaceRoot, fallback);
+      this._cache.set(cacheKey, fallback);
       return fallback;
     }
   }
