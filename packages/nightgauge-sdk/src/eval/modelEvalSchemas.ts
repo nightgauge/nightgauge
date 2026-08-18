@@ -195,8 +195,12 @@ export type RateProvenance = z.infer<typeof RateProvenanceSchema>;
  * `served: false` is a positive fact — "exists at the provider, unreachable
  * through this transport" (the #532 class, previously smuggled through
  * `deprecated: true`). An entirely ABSENT transport key is the unexpressed
- * state: the fact is pending (e.g. the xai `api` transport awaits #553) and
- * must never be read as either served or unserved.
+ * state: the fact is not stated, and must never be read as either served or
+ * unserved. A cell stays unexpressed for one of two reasons — the fact is
+ * genuinely unverified (the deprecated openai/google entries' CLI
+ * reachability), or it is settled that no fact will ever exist (the xai `api`
+ * cells: #553 closed won't-do, so no XAI_API_KEY HTTP transport is built and
+ * there is no API transport to describe).
  *
  * `verified` + `evidence` cite the last live catalog/billing check; absent
  * means the fact is declared, not verified. Transport `rates` override the
