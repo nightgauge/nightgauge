@@ -367,7 +367,11 @@ export class RunStateManager {
     const archiveDir = path.join(this.basePath, "history", cur.run_id);
     await fs.mkdir(archiveDir, { recursive: true });
 
-    const issuePrefix = `${cur.issue_number}.json`;
+    // Anchored on the leading hyphen so archiving issue 33 never matches
+    // issue-633.json (or any other -N33.json): an unanchored suffix would
+    // treat "633.json" as ending in "33.json" and move a concurrently
+    // running issue's live context files out from under it (#654).
+    const issueSuffix = `-${cur.issue_number}.json`;
     let entries: string[];
     try {
       entries = await fs.readdir(this.basePath);
@@ -378,7 +382,7 @@ export class RunStateManager {
       // Match issue-<N>.json, planning-<N>.json, dev-<N>.json, validate-<N>.json,
       // pr-<N>.json, feedback-<N>.json — never run-state.json itself.
       if (name === RUN_STATE_FILENAME) continue;
-      if (!name.endsWith(issuePrefix)) continue;
+      if (!name.endsWith(issueSuffix)) continue;
       const src = path.join(this.basePath, name);
       const dst = path.join(archiveDir, name);
       try {
