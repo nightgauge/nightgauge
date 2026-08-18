@@ -57,6 +57,29 @@ const (
 // raiseableProducers is the closed allowlist. Adding an entry here is the
 // declaration that a producer may be raised from outside the Go scheduler; it
 // is deliberately a short, reviewable list rather than a registry lookup.
+//
+// NO SWEEP PRODUCER BELONGS IN IT, and `dependabot-stale-remediation` (#649) is
+// the worked example — it was proposed for this list and is deliberately
+// absent. TestStandingSweepProducersAreNotRaiseable pins that, and the reasons
+// are structural rather than editorial:
+//
+//   - This verb reaches surfaces through `attention.sweep`, not `attention.raise`.
+//     The extension already triggers the whole registry in-process
+//     (attention_sweep.go), so an allowlist entry would add no reachability —
+//     it would add a SECOND way in, with different semantics.
+//   - A card written through this handler is not Standing (the sweep's
+//     ReconcileStanding is what stamps that), and the reconciler's auto-resolve
+//     leg skips non-standing records. So a raise of a sweep producer's key
+//     produces a card the sweep can never retract — the run-scoped divergence
+//     #649 rejects for the scheduler, arriving over the socket instead.
+//     TestNoRaiseableProducerIsStandingWithoutRetraction is the general form.
+//   - Every fact on such a card is a forge read (which advisories, which PR,
+//     how long). buildRaise has no forge client and no context, so the facts
+//     could only come from the CALLER — the exact thing this file's type doc
+//     forbids, and the round-2 finding that put derivedFacts here.
+//   - AttentionRaiseParams requires an `issue`, and a Dependabot remediation PR
+//     has none. Widening that validation for one producer weakens the
+//     card-injection bound in isConfiguredRepo's neighbourhood for all of them.
 var raiseableProducers = map[string]struct{}{
 	ProducerBudgetCeiling:     {},
 	ProducerBranchProtection:  {},

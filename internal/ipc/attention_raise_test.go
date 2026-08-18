@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/attention"
+	"github.com/nightgauge/nightgauge/internal/attention/sweep"
 	"github.com/nightgauge/nightgauge/internal/orchestrator"
 	"github.com/nightgauge/nightgauge/internal/state"
 )
@@ -1404,5 +1405,34 @@ func TestRemedyPreservationProtectsTheGoPathsCardToo(t *testing.T) {
 	}
 	if got, _ := card.FindOption("raise").Args["ceilingUsd"].(float64); got != 112.5 {
 		t.Errorf("scheduler's ceilingUsd arg moved to %v, want 112.5", got)
+	}
+}
+
+// TestStandingSweepProducersAreNotRaiseable is the structural fence around the
+// #649 decision recorded on raiseableProducers.
+//
+// TestNoRaiseableProducerIsStandingWithoutRetraction states the rule from the
+// allowlist's side ("nothing on this list may declare Standing"). This states
+// it from the producer registry's side, which is where the pressure comes from:
+// a repo-scoped sweep producer is standing BY CONSTRUCTION — ReconcileStanding
+// stamps Standing on every observation it prepares — so a sweep producer added
+// to the allowlist would be a card the sweep can never auto-resolve, standing
+// until StandingExpiry. Adding one is not a matter of also adding a sample to
+// the map above; it is a retraction story that does not exist.
+//
+// It runs over the REGISTRY rather than a hard-coded list, so a producer added
+// in a later issue inherits the fence without anyone remembering to widen it.
+func TestStandingSweepProducersAreNotRaiseable(t *testing.T) {
+	producers := sweep.Default.Producers()
+	if len(producers) == 0 {
+		t.Fatal("no sweep producers registered — this fence would pass vacuously")
+	}
+	for _, p := range producers {
+		if _, raiseable := raiseableProducers[p.Name()]; raiseable {
+			t.Errorf("sweep producer %q is in raiseableProducers: a raise writes a NON-standing "+
+				"card under a standing producer's key, which the sweep reconciler skips when it "+
+				"auto-resolves — the card would stand until StandingExpiry. Reach sweep producers "+
+				"through attention.sweep instead (#649).", p.Name())
+		}
 	}
 }
