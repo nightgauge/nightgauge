@@ -2595,6 +2595,11 @@ func (s *Scheduler) recoverOrchestratorCrashAt(root string, now time.Time) {
 	}
 	rec := SynthesizeOrchestratorCrashRecord(*sc, now)
 	hw := state.NewHistoryWriter(root)
+	// pipeline.logs.history_retention_days drives the prune pass
+	// appendAndIndex runs on every write below (#674).
+	if cfg, cfgErr := config.Load(root); cfgErr == nil && cfg != nil {
+		hw.SetRetentionDays(cfg.Pipeline.ResolveHistoryRetentionDays())
+	}
 	if writeErr := hw.WriteRecord(rec); writeErr != nil {
 		log.Printf("recovery: failed to write synthesized crash record for #%d: %v",
 			sc.IssueNumber, writeErr)
@@ -6842,6 +6847,11 @@ func (s *Scheduler) recordV2History(
 	prediction *state.OutcomePrediction,
 ) {
 	hw := state.NewHistoryWriter(workspaceRoot)
+	// pipeline.logs.history_retention_days drives the prune pass
+	// appendAndIndex runs on every write below (#674).
+	if cfg, cfgErr := config.Load(workspaceRoot); cfgErr == nil && cfg != nil {
+		hw.SetRetentionDays(cfg.Pipeline.ResolveHistoryRetentionDays())
+	}
 	// Resolve worktree-first (#299): snap carries the run's WorktreeDir, so this
 	// consults the live runtime and the worktree the stages ran in before the
 	// workspace root. The bare root lookup answered "" for every

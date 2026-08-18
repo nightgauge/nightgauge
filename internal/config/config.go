@@ -1108,6 +1108,47 @@ type PipelineConfig struct {
 	// health-aware fallback walker lives in the VSCode layer; the Go
 	// scheduler surfaces resolution failures instead of walking.
 	AdapterFallbackChain []string `yaml:"adapter_fallback_chain,omitempty" json:"adapterFallbackChain,omitempty"`
+
+	// Logs holds the pipeline.logs: block — currently just
+	// history_retention_days, the ONE knob shared by the VSCode extension's
+	// execution-history cleanup and the Go writer's own prune pass (#674).
+	// The other pipeline.logs.* keys (retain, dir, max_age_days, max_count,
+	// max_entry_chars) govern the VSCode-only disk session log and have no Go
+	// consumer, so they are deliberately not modeled here.
+	Logs *PipelineLogsConfig `yaml:"logs,omitempty" json:"logs,omitempty"`
+}
+
+// PipelineLogsConfig is the pipeline.logs: block (#674).
+//
+//	pipeline:
+//	  logs:
+//	    history_retention_days: 30
+type PipelineLogsConfig struct {
+	// HistoryRetentionDays is how many days of daily execution-history JSONL
+	// files (and their index.json entries) to keep before pruning.
+	// 0/absent → DefaultHistoryRetentionDays. Mirrors
+	// PipelineLogsConfigSchema.history_retention_days in
+	// packages/nightgauge-vscode/src/config/schema.ts — one config key, one
+	// resolved value, both runtimes.
+	HistoryRetentionDays int `yaml:"history_retention_days,omitempty" json:"historyRetentionDays,omitempty"`
+}
+
+// DefaultHistoryRetentionDays is the default execution-history retention
+// window in days (#674) — kept in sync with the TypeScript
+// DEFAULT_RETENTION_DAYS in
+// packages/nightgauge-vscode/src/utils/executionHistoryWriter.ts and the Go
+// state.DefaultHistoryRetentionDays (internal/state cannot import this
+// package — see that constant's doc for why).
+const DefaultHistoryRetentionDays = 90
+
+// ResolveHistoryRetentionDays returns the effective execution-history
+// retention window in days, applying the default in one place. Safe on a nil
+// receiver.
+func (p *PipelineConfig) ResolveHistoryRetentionDays() int {
+	if p == nil || p.Logs == nil || p.Logs.HistoryRetentionDays <= 0 {
+		return DefaultHistoryRetentionDays
+	}
+	return p.Logs.HistoryRetentionDays
 }
 
 // TokenBudgetCeilingConfig is the pipeline.token_budget_ceiling: block.

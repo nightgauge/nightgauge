@@ -701,6 +701,15 @@ func recordRichness(rec V2RunRecord) int {
 type HistoryWriter struct {
 	root string
 	dir  string
+	// retentionDays is the execution-history retention window in days.
+	// Zero (the NewHistoryWriter default) means "unset": appendAndIndex's
+	// prune pass falls back to DefaultHistoryRetentionDays. internal/state
+	// cannot import internal/config (it sits underneath config in the
+	// dependency graph — config -> intelligence/routing -> platform ->
+	// state — so importing it here would cycle), so a caller that already
+	// has internal/config in scope resolves pipeline.logs.history_retention_days
+	// itself and calls SetRetentionDays before writing (#674).
+	retentionDays int
 }
 
 // NewHistoryWriter creates a history writer for the given workspace root.
@@ -709,6 +718,32 @@ func NewHistoryWriter(workspaceRoot string) *HistoryWriter {
 		root: workspaceRoot,
 		dir:  filepath.Join(workspaceRoot, ".nightgauge", "pipeline", "history"),
 	}
+}
+
+// DefaultHistoryRetentionDays is the default execution-history retention
+// window in days (#674) — kept in sync with
+// config.DefaultHistoryRetentionDays and the TypeScript
+// DEFAULT_RETENTION_DAYS in
+// packages/nightgauge-vscode/src/utils/executionHistoryWriter.ts.
+const DefaultHistoryRetentionDays = 90
+
+// SetRetentionDays overrides the writer's execution-history retention window
+// (days). Zero or negative leaves DefaultHistoryRetentionDays in effect.
+// Callers that have loaded the merged config call this once, right after
+// NewHistoryWriter, so appendAndIndex's prune pass honors
+// pipeline.logs.history_retention_days instead of the hardcoded default
+// (#674).
+func (hw *HistoryWriter) SetRetentionDays(days int) {
+	hw.retentionDays = days
+}
+
+// effectiveRetentionDays returns the writer's configured retention window,
+// applying the default when unset.
+func (hw *HistoryWriter) effectiveRetentionDays() int {
+	if hw.retentionDays > 0 {
+		return hw.retentionDays
+	}
+	return DefaultHistoryRetentionDays
 }
 
 // WriteRecord appends a pre-built V2RunRecord to today's daily JSONL file and
@@ -796,8 +831,140 @@ func (hw *HistoryWriter) appendAndIndex(record V2RunRecord, now time.Time) error
 		fmt.Fprintf(os.Stderr, "[history] index update failed: %v\n", indexErr)
 	}
 
+	// Prune records older than the retention window (non-critical, same
+	// discipline as the index update above). Runs under the same coordinator
+	// lock so a prune can never race a concurrent append/index update in this
+	// process (#674). This is the ONLY retention enforcement a headless/
+	// CLI-only workspace gets — it never runs the VSCode extension's
+	// ExecutionHistoryWriter.cleanupOldFiles.
+	hw.pruneOldRecordsLocked()
+
 	c.seen[key] = rich
 	return nil
+}
+
+// pruneOldRecordsLocked deletes daily JSONL files older than
+// effectiveRetentionDays and drops the matching index.json entries, so the
+// index never outlives the file it summarizes (#674). Caller MUST hold the
+// directory coordinator lock (mirrors updateIndexLocked's contract).
+//
+// Best-effort like updateIndexLocked: errors are logged to stderr, never
+// returned, so a disk problem here cannot fail the run-record write it rides
+// along with.
+func (hw *HistoryWriter) pruneOldRecordsLocked() {
+	cutoff := historyDateCutoff(time.Now(), hw.effectiveRetentionDays())
+
+	entries, err := os.ReadDir(hw.dir)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			fmt.Fprintf(os.Stderr, "[history] prune: read history dir: %v\n", err)
+		}
+		return
+	}
+
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		fileDate, ok := parseDailyHistoryDate(e.Name())
+		if !ok || !fileDate.Before(cutoff) {
+			continue
+		}
+		if rmErr := os.Remove(filepath.Join(hw.dir, e.Name())); rmErr != nil {
+			fmt.Fprintf(os.Stderr, "[history] prune: remove %s: %v\n", e.Name(), rmErr)
+		}
+	}
+
+	hw.pruneIndexEntriesLocked(cutoff)
+}
+
+// historyDateCutoff is the local-midnight cutoff for retention: a daily file
+// or index entry dated strictly before this instant is out of the retention
+// window. Mirrors the TypeScript ExecutionHistoryWriter.cleanupOldFiles cutoff
+// (now, minus retentionDays, truncated to local midnight).
+func historyDateCutoff(now time.Time, retentionDays int) time.Time {
+	local := now.Local()
+	return time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, local.Location()).
+		AddDate(0, 0, -retentionDays)
+}
+
+// pruneIndexEntriesLocked drops index.json entries dated before cutoff — the
+// same cutoff pruneOldRecordsLocked just used to delete daily files — so an
+// index entry never outlives the daily file it summarizes. Deliberately
+// re-evaluated against the cutoff rather than "did THIS call just delete this
+// entry's file": an entry orphaned by an earlier process, a manual `rm`, or a
+// version of this binary that predates pruning is cleaned up too, not just
+// entries this exact call happens to touch.
+func (hw *HistoryWriter) pruneIndexEntriesLocked(cutoff time.Time) {
+	idx, ok := hw.readIndex()
+	if !ok || len(idx.Entries) == 0 {
+		return
+	}
+
+	kept := idx.Entries[:0]
+	dropped := 0
+	for _, e := range idx.Entries {
+		d, ok := entryHistoryDate(e)
+		if ok && d.Before(cutoff) {
+			dropped++
+			continue
+		}
+		kept = append(kept, e)
+	}
+	if dropped == 0 {
+		return
+	}
+
+	idx.Entries = kept
+	idx.TotalRuns = len(kept)
+	idx.UpdatedAt = time.Now().Format(time.RFC3339)
+	if err := writeIndexAtomic(filepath.Join(hw.dir, "index.json"), idx); err != nil {
+		fmt.Fprintf(os.Stderr, "[history] prune: write index: %v\n", err)
+	}
+}
+
+// entryHistoryDate returns the local calendar date the entry's daily file was
+// written under — RecordedAt (write time) preferred, StartedAt as a fallback
+// for entries missing it. Mirrors the filename WriteRecord/WriteV2Record
+// derive their daily file from. An entry whose date cannot be parsed from
+// either field returns (zero, false) — the caller keeps it rather than
+// guessing.
+func entryHistoryDate(e V2IndexEntry) (time.Time, bool) {
+	if t, err := time.Parse(time.RFC3339, e.RecordedAt); err == nil {
+		return truncateToLocalDate(t), true
+	}
+	if t, err := time.Parse(time.RFC3339, e.StartedAt); err == nil {
+		return truncateToLocalDate(t), true
+	}
+	return time.Time{}, false
+}
+
+// truncateToLocalDate converts t to local time and zeroes its time-of-day
+// component, for date-only (no time-of-day) comparisons against
+// historyDateCutoff.
+func truncateToLocalDate(t time.Time) time.Time {
+	local := t.Local()
+	return time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, local.Location())
+}
+
+// parseDailyHistoryDate parses a "YYYY-MM-DD.jsonl" filename's date. Returns
+// false for any name that doesn't match that shape (executions.jsonl,
+// index.json, temp files, etc.) so prune logic never treats an unrelated file
+// as history. Mirrors the filename validation duplicated in ReadRecentV2 and
+// readAllDailyRecords.
+func parseDailyHistoryDate(name string) (time.Time, bool) {
+	if len(name) != len("2006-01-02.jsonl") || !strings.HasSuffix(name, ".jsonl") {
+		return time.Time{}, false
+	}
+	base := strings.TrimSuffix(name, ".jsonl")
+	if len(base) != 10 || base[4] != '-' || base[7] != '-' {
+		return time.Time{}, false
+	}
+	t, err := time.Parse("2006-01-02", base)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return t, true
 }
 
 // seedSeenLocked hydrates the coordinator's idempotency ledger from the on-disk

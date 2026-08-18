@@ -16,6 +16,8 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
+import { resolveConfigPathSync } from "./configPathResolver";
+import { readEffectiveConfigTextSync } from "./mergedConfigReader";
 import {
   type ExecutionHistoryRunRecordV2,
   type ExecutionHistoryRunRecordV3,
@@ -152,14 +154,23 @@ const DEFAULT_RETENTION_DAYS = 90;
 
 export class ExecutionHistoryWriter {
   /**
-   * Delete history files older than the retention period.
+   * Delete history files older than the retention period, and drop the
+   * index.json entries that summarized them — an index entry pointing at a
+   * deleted daily file is its own bug (Issue #674): every consumer that
+   * trusts the index (TelemetryStore.getIndex, the dashboard run list)
+   * would resolve a run that no longer exists on disk.
    *
    * @param workspaceRoot - Absolute path to repository root
-   * @param retentionDays - Number of days to retain (default: 90)
+   * @param retentionDays - Number of days to retain. Defaults to the
+   *   configured `pipeline.logs.history_retention_days` (config.yaml,
+   *   merged across tiers), falling back to DEFAULT_RETENTION_DAYS when
+   *   unset — evaluated lazily as a default-parameter expression so an
+   *   explicit caller-supplied value (e.g. a test, or a forwarded override)
+   *   always wins over the configured one.
    */
   static async cleanupOldFiles(
     workspaceRoot: string,
-    retentionDays: number = DEFAULT_RETENTION_DAYS
+    retentionDays: number = ExecutionHistoryWriter.resolveConfiguredRetentionDays(workspaceRoot)
   ): Promise<{ deleted: string[] }> {
     const deleted: string[] = [];
     try {
@@ -189,10 +200,126 @@ export class ExecutionHistoryWriter {
           deleted.push(entry);
         }
       }
+
+      await this.pruneIndexEntries(historyDir, cutoff);
     } catch (error) {
       console.warn(`[Nightgauge] History cleanup failed: ${error}`);
     }
     return { deleted };
+  }
+
+  /**
+   * Resolve `pipeline.logs.history_retention_days` from the merged config
+   * tiers (machine → project → local → env), falling back to
+   * DEFAULT_RETENTION_DAYS when unset, malformed, or the config cannot be
+   * read. Synchronous — reuses the same sync merged-config reader the other
+   * resolvers use (utils/resolvers/*) so this stays usable at extension
+   * activation, before any async config load has completed (Issue #674).
+   */
+  private static resolveConfiguredRetentionDays(workspaceRoot: string): number {
+    try {
+      const pathResult = resolveConfigPathSync(workspaceRoot);
+      if (!pathResult.exists) return DEFAULT_RETENTION_DAYS;
+
+      const configContent = readEffectiveConfigTextSync(pathResult);
+      const lines = configContent.split("\n");
+      let inPipeline = false;
+      let inLogs = false;
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed || trimmed.startsWith("#")) continue;
+
+        if (trimmed === "pipeline:" && !line.startsWith(" ")) {
+          inPipeline = true;
+          inLogs = false;
+          continue;
+        }
+
+        if (!inPipeline) continue;
+
+        // A new top-level (unindented) key ends the pipeline: block.
+        if (!line.startsWith(" ") && /^[a-z_]+:/.test(trimmed)) {
+          inPipeline = false;
+          inLogs = false;
+          continue;
+        }
+
+        const indent = line.length - line.trimStart().length;
+
+        if (trimmed === "logs:") {
+          inLogs = true;
+          continue;
+        }
+
+        // A sibling of logs: at the pipeline level ends the logs: block.
+        if (inLogs && indent <= 2 && /^[a-z_]+:/.test(trimmed) && trimmed !== "logs:") {
+          inLogs = false;
+        }
+
+        if (inLogs) {
+          const match = trimmed.match(/^history_retention_days:\s*(\d+)/);
+          if (match) {
+            const parsed = Number.parseInt(match[1], 10);
+            if (!Number.isNaN(parsed) && parsed >= 1) {
+              return parsed;
+            }
+          }
+        }
+      }
+    } catch {
+      // Non-critical: fall through to default
+    }
+    return DEFAULT_RETENTION_DAYS;
+  }
+
+  /**
+   * Drop index.json entries dated before `cutoff` — the same cutoff that
+   * just decided which daily JSONL files to delete — so the index never
+   * outlives the file it summarizes (Issue #674). An entry's date is its
+   * `recorded_at` (write time, matching the daily filename the Go writer and
+   * this class both derive from), falling back to `started_at` for entries
+   * missing it. An entry whose date cannot be parsed from either field is
+   * kept — never dropped on a parse failure.
+   */
+  private static async pruneIndexEntries(historyDir: string, cutoff: Date): Promise<void> {
+    const indexPath = path.join(historyDir, "index.json");
+    let raw: string;
+    try {
+      raw = await fs.readFile(indexPath, "utf-8");
+    } catch {
+      return; // No index — nothing to prune.
+    }
+
+    let index: HistoryIndex;
+    try {
+      index = JSON.parse(raw) as HistoryIndex;
+    } catch {
+      return; // Corrupt index — the next TelemetryStore read rebuilds it.
+    }
+    if (!Array.isArray(index.entries)) return;
+
+    const kept = index.entries.filter((entry) => {
+      const source = entry.recorded_at || entry.started_at;
+      const parsed = source ? new Date(source) : null;
+      if (!parsed || isNaN(parsed.getTime())) return true; // Unparseable: keep, never guess.
+      return parsed >= cutoff;
+    });
+
+    if (kept.length === index.entries.length) return; // Nothing to prune.
+
+    const next: HistoryIndex = {
+      ...index,
+      entries: kept,
+      total_runs: kept.length,
+      updated_at: new Date().toISOString(),
+    };
+
+    try {
+      await fs.writeFile(indexPath, JSON.stringify(next, null, 2), "utf-8");
+    } catch (error) {
+      console.warn(`[Nightgauge] Index prune write failed: ${error}`);
+    }
   }
 
   /**
