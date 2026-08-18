@@ -71,6 +71,7 @@ import type { ProjectBoardProviders } from "./index";
 
 // Additional register functions imported individually
 import { registerResetUsageCounterCommand } from "./resetUsageCounter";
+import { registerCycleUsageMetricCommand } from "./cycleUsageMetric";
 import { registerClearCompletedIssuesCommand } from "./clearCompletedIssues";
 import { registerClearFailedIssuesCommand } from "./clearFailedIssues";
 import { registerRetryFailedIssueCommand } from "./retryFailedIssue";
@@ -859,6 +860,9 @@ export function registerAllCommands(deps: AllCommandDeps): void {
 
     // Performance mode selector (Issue #3009 — replaces Supercharge from #2433)
     registerSelectPerformanceModeCommand(logger, statusBar),
+
+    // Usage meter click-to-cycle (Issue #659)
+    registerCycleUsageMetricCommand(context, statusBar),
 
     // Auto-merge guard command (Issue #2720)
     ...(repositorySettingsService

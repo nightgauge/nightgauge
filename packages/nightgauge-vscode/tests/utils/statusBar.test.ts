@@ -22,10 +22,55 @@ vi.mock("vscode", () => ({
   ThemeColor: class ThemeColor {
     constructor(public id: string) {}
   },
+  MarkdownString: class MarkdownString {
+    value: string = "";
+    isTrusted?: boolean;
+    constructor(value?: string) {
+      this.value = value ?? "";
+    }
+    appendMarkdown(value: string) {
+      this.value += value;
+      return this;
+    }
+  },
 }));
 
 import * as vscode from "vscode";
-import { StatusBarManager } from "../../src/utils/statusBar";
+import {
+  StatusBarManager,
+  formatUsageValue,
+  formatUsageWindowText,
+  renderUsageBar,
+  usageThresholdColor,
+  buildUsageTooltip,
+} from "../../src/utils/statusBar";
+import type { UsageSnapshot, UsageWindow } from "../../src/services/usage/types";
+import type { ExecutionAdapter } from "../../src/config/schema";
+
+/** Build a `UsageWindow` fixture, defaulting to an unlimited monthly window. */
+function makeWindow(overrides: Partial<UsageWindow> = {}): UsageWindow {
+  return {
+    id: "local-telemetry:monthly",
+    label: "This month",
+    scope: "monthly",
+    used: 0,
+    limit: null,
+    unit: "usd",
+    resetsAt: null,
+    confidence: "measured",
+    ...overrides,
+  };
+}
+
+/** Build a `UsageSnapshot` fixture from a window list. */
+function makeSnapshot(windows: UsageWindow[], adapter: ExecutionAdapter = "claude"): UsageSnapshot {
+  return {
+    adapter,
+    plan: { kind: windows.length > 0 ? "pay-per-token" : "unknown" },
+    capturedAt: new Date("2026-08-18T10:00:00Z"),
+    windows,
+  };
+}
 
 describe("StatusBarManager", () => {
   let statusBar: StatusBarManager;
@@ -371,6 +416,137 @@ describe("StatusBarManager", () => {
       expect(mockModeItem.dispose).toHaveBeenCalled();
     });
   });
+
+  describe("usage meter (Issue #659)", () => {
+    it("wires the click gesture to cycling, not to opening the dashboard", () => {
+      expect(mockUsageItem.command).toBe("nightgauge.cycleUsageMetric");
+    });
+
+    it("stays hidden until the first snapshot arrives", () => {
+      expect(mockUsageItem.show).not.toHaveBeenCalled();
+    });
+
+    it("renders a bar-mode window (limit known) and colors by threshold", () => {
+      const window = makeWindow({ used: 50, limit: 100, unit: "usd" });
+      statusBar.showUsageSnapshot(makeSnapshot([window]));
+
+      expect(mockUsageItem.text).toBe(`$(flame) claude ${renderUsageBar(50)} 50%`);
+      expect(mockUsageItem.backgroundColor).toBeUndefined();
+      expect(mockUsageItem.show).toHaveBeenCalled();
+    });
+
+    it("colors warningBackground at >= 80%", () => {
+      statusBar.showUsageSnapshot(makeSnapshot([makeWindow({ used: 80, limit: 100 })]));
+      expect(mockUsageItem.backgroundColor).toBeInstanceOf(vscode.ThemeColor);
+      expect((mockUsageItem.backgroundColor as vscode.ThemeColor).id).toBe(
+        "statusBarItem.warningBackground"
+      );
+    });
+
+    it("colors errorBackground at >= 90%", () => {
+      statusBar.showUsageSnapshot(makeSnapshot([makeWindow({ used: 90, limit: 100 })]));
+      expect(mockUsageItem.backgroundColor).toBeInstanceOf(vscode.ThemeColor);
+      expect((mockUsageItem.backgroundColor as vscode.ThemeColor).id).toBe(
+        "statusBarItem.errorBackground"
+      );
+    });
+
+    it("leaves the warning/error background once usage drops back under 80% (bidirectional)", () => {
+      statusBar.showUsageSnapshot(makeSnapshot([makeWindow({ used: 95, limit: 100 })]));
+      expect(mockUsageItem.backgroundColor).toBeInstanceOf(vscode.ThemeColor);
+
+      statusBar.showUsageSnapshot(makeSnapshot([makeWindow({ used: 10, limit: 100 })]));
+      expect(mockUsageItem.backgroundColor).toBeUndefined();
+    });
+
+    it("renders an absolute figure — never a bar or a percentage — when limit is null", () => {
+      const window = makeWindow({ used: 4.12, limit: null, unit: "usd", label: "Today" });
+      statusBar.showUsageSnapshot(makeSnapshot([window]));
+
+      expect(mockUsageItem.text).toBe("$(flame) claude $4.12 today");
+      expect(mockUsageItem.text).not.toContain("%");
+      expect(mockUsageItem.backgroundColor).toBeUndefined();
+    });
+
+    it("renders an explicit 'usage unknown' state rather than hiding when no provider claims the adapter", () => {
+      statusBar.showUsageSnapshot(makeSnapshot([], "ollama"));
+
+      expect(mockUsageItem.text).toBe("$(flame) ollama usage unknown");
+      expect(mockUsageItem.show).toHaveBeenCalled();
+      expect(mockUsageItem.backgroundColor).toBeUndefined();
+    });
+
+    it("builds a tooltip listing every window with used/limit, reset, and confidence", () => {
+      const monthly = makeWindow({ id: "m", label: "This month", used: 8, limit: 10 });
+      statusBar.showUsageSnapshot(makeSnapshot([monthly]));
+
+      const tooltip = (mockUsageItem.tooltip as vscode.MarkdownString).value;
+      expect(tooltip).toContain("This month");
+      expect(tooltip).toContain("$8.00");
+      expect(tooltip).toContain("$10.00");
+      expect(tooltip).toContain("measured");
+      expect(tooltip).toContain("[Open Dashboard](command:nightgauge.showDashboard)");
+    });
+
+    describe("cycleUsageWindow", () => {
+      const session = makeWindow({ id: "session", label: "This session", scope: "session" });
+      const daily = makeWindow({ id: "daily", label: "Today", scope: "daily" });
+      const monthly = makeWindow({ id: "monthly", label: "This month", scope: "monthly" });
+
+      it("returns null and does nothing when there is no snapshot yet", () => {
+        expect(statusBar.cycleUsageWindow()).toBeNull();
+      });
+
+      it("returns null when the snapshot is unknown (zero windows)", () => {
+        statusBar.showUsageSnapshot(makeSnapshot([], "ollama"));
+        expect(statusBar.cycleUsageWindow()).toBeNull();
+      });
+
+      it("advances session -> daily -> monthly -> session, wrapping around", () => {
+        statusBar.showUsageSnapshot(makeSnapshot([session, daily, monthly]));
+
+        expect(statusBar.cycleUsageWindow()).toBe("daily");
+        expect(statusBar.cycleUsageWindow()).toBe("monthly");
+        expect(statusBar.cycleUsageWindow()).toBe("session");
+      });
+
+      it("re-renders the item text on each cycle", () => {
+        statusBar.showUsageSnapshot(
+          makeSnapshot([
+            makeWindow({ id: "session", used: 1, limit: null, unit: "usd", label: "This session" }),
+            makeWindow({ id: "daily", used: 2, limit: null, unit: "usd", label: "Today" }),
+          ])
+        );
+        expect(mockUsageItem.text).toBe("$(flame) claude $1.00 this session");
+
+        statusBar.cycleUsageWindow();
+        expect(mockUsageItem.text).toBe("$(flame) claude $2.00 today");
+      });
+    });
+
+    describe("setSelectedUsageWindowId", () => {
+      it("restores a persisted selection before the first snapshot renders it", () => {
+        statusBar.setSelectedUsageWindowId("daily");
+        statusBar.showUsageSnapshot(
+          makeSnapshot([
+            makeWindow({ id: "session", used: 1, limit: null, label: "This session" }),
+            makeWindow({ id: "daily", used: 2, limit: null, label: "Today" }),
+          ])
+        );
+
+        expect(mockUsageItem.text).toBe("$(flame) claude $2.00 today");
+      });
+
+      it("falls back to the first window when the persisted id is not in this snapshot", () => {
+        statusBar.setSelectedUsageWindowId("stale-id-from-a-different-adapter");
+        statusBar.showUsageSnapshot(
+          makeSnapshot([makeWindow({ id: "session", used: 1, limit: null, label: "This session" })])
+        );
+
+        expect(mockUsageItem.text).toBe("$(flame) claude $1.00 this session");
+      });
+    });
+  });
 });
 
 // ── Issue #3446: Autonomous quota cooldown status-bar visibility ──────────
@@ -475,5 +651,215 @@ describe("StatusBarManager.showAutonomousCooldown (#3446)", () => {
   it("uses the paused/warning background to differentiate from active running", () => {
     sb.showAutonomousCooldown(new Date(Date.now() + 60_000));
     expect(mainItem.backgroundColor).toBeInstanceOf(vscode.ThemeColor);
+  });
+});
+
+// ── Issue #659: adapter usage meter — pure formatting functions ───────────
+
+describe("renderUsageBar (#659)", () => {
+  it("renders all-empty at 0%", () => {
+    expect(renderUsageBar(0)).toBe("░░░░░░░░");
+  });
+
+  it("renders all-full at 100%", () => {
+    expect(renderUsageBar(100)).toBe("████████");
+  });
+
+  it("renders an exact half-fill with no partial character at 50%", () => {
+    expect(renderUsageBar(50)).toBe("████░░░░");
+  });
+
+  it("renders a partial eighths-block character for a fractional segment", () => {
+    // 43.75% of 8 segments = 3.5 segments = 3 full + a half-filled 4th.
+    expect(renderUsageBar(43.75)).toBe("███▌░░░░");
+  });
+
+  it("clamps negative and >100 fill to the bar's own bounds", () => {
+    expect(renderUsageBar(-10)).toBe("░░░░░░░░");
+    expect(renderUsageBar(250)).toBe("████████");
+  });
+});
+
+describe("formatUsageValue (#659)", () => {
+  it("formats usd to two decimal places", () => {
+    expect(formatUsageValue(4.1, "usd")).toBe("$4.10");
+  });
+
+  it("formats percent rounded, with a % suffix", () => {
+    expect(formatUsageValue(61.6, "percent")).toBe("62%");
+  });
+
+  it("formats small token counts as a bare integer", () => {
+    expect(formatUsageValue(42, "tokens")).toBe("42 tokens");
+  });
+
+  it("formats thousands of tokens with a k suffix", () => {
+    expect(formatUsageValue(812_000, "tokens")).toBe("812k tokens");
+  });
+
+  it("formats millions of tokens with an m suffix", () => {
+    expect(formatUsageValue(1_250_000, "tokens")).toBe("1.3m tokens");
+  });
+
+  it("formats requests with singular/plural agreement", () => {
+    expect(formatUsageValue(1, "requests")).toBe("1 request");
+    expect(formatUsageValue(5, "requests")).toBe("5 requests");
+  });
+});
+
+describe("formatUsageWindowText (#659)", () => {
+  it("renders icon, adapter, bar, and rounded percentage for a bar-mode window", () => {
+    const window: UsageWindow = {
+      id: "w",
+      label: "This month",
+      scope: "monthly",
+      used: 62,
+      limit: 100,
+      unit: "usd",
+      resetsAt: null,
+      confidence: "measured",
+    };
+    expect(formatUsageWindowText("claude", window)).toBe(
+      `$(flame) claude ${renderUsageBar(62)} 62%`
+    );
+  });
+
+  it("appends a resets-in suffix when the window has a scheduled reset", () => {
+    const now = new Date("2026-08-18T10:00:00Z");
+    const window: UsageWindow = {
+      id: "w",
+      label: "Today",
+      scope: "daily",
+      used: 10,
+      limit: 100,
+      unit: "usd",
+      resetsAt: new Date("2026-08-18T11:30:00Z"), // 1h 30m from `now`
+      confidence: "measured",
+    };
+    expect(formatUsageWindowText("codex", window, now)).toBe(
+      `$(flame) codex ${renderUsageBar(10)} 10% · resets 1h 30m`
+    );
+  });
+
+  it("omits the resets suffix when resetsAt is null (session windows)", () => {
+    const window: UsageWindow = {
+      id: "w",
+      label: "This session",
+      scope: "session",
+      used: 5,
+      limit: 20,
+      unit: "usd",
+      resetsAt: null,
+      confidence: "measured",
+    };
+    expect(formatUsageWindowText("claude", window)).not.toContain("resets");
+  });
+
+  it("renders the absolute figure — not a bar — when limit is null", () => {
+    const window: UsageWindow = {
+      id: "w",
+      label: "This session",
+      scope: "session",
+      used: 812_000,
+      limit: null,
+      unit: "tokens",
+      resetsAt: null,
+      confidence: "measured",
+    };
+    expect(formatUsageWindowText("gemini", window)).toBe(
+      "$(flame) gemini 812k tokens this session"
+    );
+  });
+});
+
+describe("usageThresholdColor (#659)", () => {
+  const base: UsageWindow = {
+    id: "w",
+    label: "This month",
+    scope: "monthly",
+    used: 0,
+    limit: 100,
+    unit: "usd",
+    resetsAt: null,
+    confidence: "measured",
+  };
+
+  it("returns undefined below 80%", () => {
+    expect(usageThresholdColor({ ...base, used: 79 })).toBeUndefined();
+  });
+
+  it("returns the warning color at exactly 80%", () => {
+    expect(usageThresholdColor({ ...base, used: 80 })?.id).toBe("statusBarItem.warningBackground");
+  });
+
+  it("returns the error color at exactly 90%", () => {
+    expect(usageThresholdColor({ ...base, used: 90 })?.id).toBe("statusBarItem.errorBackground");
+  });
+
+  it("returns undefined when limit is null — no ceiling to measure against", () => {
+    expect(usageThresholdColor({ ...base, used: 99999, limit: null })).toBeUndefined();
+  });
+
+  it("returns undefined when limit is zero (not a valid ceiling)", () => {
+    expect(usageThresholdColor({ ...base, used: 5, limit: 0 })).toBeUndefined();
+  });
+});
+
+describe("buildUsageTooltip (#659)", () => {
+  it("lists every window's used/limit, reset time, and confidence", () => {
+    const snapshot: UsageSnapshot = {
+      adapter: "claude",
+      plan: { kind: "pay-per-token" },
+      capturedAt: new Date("2026-08-18T10:00:00Z"),
+      windows: [
+        {
+          id: "s",
+          label: "This session",
+          scope: "session",
+          used: 1.5,
+          limit: null,
+          unit: "usd",
+          resetsAt: null,
+          confidence: "measured",
+        },
+        {
+          id: "m",
+          label: "This month",
+          scope: "monthly",
+          used: 8,
+          limit: 10,
+          unit: "usd",
+          resetsAt: new Date("2026-09-01T00:00:00Z"),
+          confidence: "estimated",
+        },
+      ],
+    };
+
+    const tooltip = buildUsageTooltip(snapshot);
+
+    expect(tooltip.isTrusted).toBe(true);
+    expect(tooltip.value).toContain("claude usage");
+    expect(tooltip.value).toContain("This session");
+    expect(tooltip.value).toContain("$1.50");
+    expect(tooltip.value).toContain("no limit configured");
+    expect(tooltip.value).toContain("This month");
+    expect(tooltip.value).toContain("$8.00");
+    expect(tooltip.value).toContain("$10.00");
+    expect(tooltip.value).toContain("estimated");
+    expect(tooltip.value).toContain("[Open Dashboard](command:nightgauge.showDashboard)");
+  });
+
+  it("explains the unknown state rather than showing an empty list", () => {
+    const snapshot: UsageSnapshot = {
+      adapter: "ollama",
+      plan: { kind: "unknown" },
+      capturedAt: new Date(),
+      windows: [],
+    };
+
+    const tooltip = buildUsageTooltip(snapshot);
+
+    expect(tooltip.value).toContain("unknown");
+    expect(tooltip.value).toContain("[Open Dashboard](command:nightgauge.showDashboard)");
   });
 });

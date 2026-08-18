@@ -8,6 +8,8 @@ import * as vscode from "vscode";
 import type { PipelineStage } from "@nightgauge/sdk";
 import type { StageExecutionMode } from "./incrediConfig";
 import { DEFAULT_PERFORMANCE_MODE, MODE_PROFILES, type PerformanceMode } from "./modeProfiles";
+import type { ExecutionAdapter } from "../config/schema";
+import type { UsageSnapshot, UsageUnit, UsageWindow } from "../services/usage/types";
 
 /**
  * Pipeline state for status bar display
@@ -58,7 +60,13 @@ const STAGE_NAMES: Record<PipelineStage, string> = {
 export class StatusBarManager {
   readonly item: vscode.StatusBarItem;
   readonly targetBranchItem: vscode.StatusBarItem;
-  /** Usage tracking item — shown only when a monthly budget is configured (Issue #1333) */
+  /**
+   * Adapter usage meter — renders the active adapter's `UsageSnapshot`,
+   * cycling through the windows it exposes on click (Issue #659, superseding
+   * the budget-only counter from Issue #1333; see
+   * docs/decisions/018-adapter-usage-quota-model.md). Hidden until the first
+   * snapshot arrives.
+   */
   readonly usageItem: vscode.StatusBarItem;
   /** Dedicated always-visible performance-mode selector — big clickable footer button (Issue #3009) */
   readonly modeItem: vscode.StatusBarItem;
@@ -81,6 +89,15 @@ export class StatusBarManager {
   private customOverridesActive = false;
   /** Current token source for debugging display (Issue #2670) */
   private tokenSourceLabel: string | null = null;
+  /** Latest adapter usage snapshot rendered into `usageItem` (Issue #659). */
+  private usageSnapshot: UsageSnapshot | null = null;
+  /**
+   * Id of the window currently displayed in `usageItem`. The caller
+   * (`nightgauge.cycleUsageMetric`) persists this to workspace state and
+   * restores it via `setSelectedUsageWindowId` so the selection survives a
+   * window reload.
+   */
+  private selectedUsageWindowId: string | null = null;
 
   constructor() {
     // Main pipeline status item (leftmost)
@@ -100,13 +117,15 @@ export class StatusBarManager {
     this.targetBranchItem.command = "nightgauge.selectTargetBranch";
     this.hideTargetBranch();
 
-    // Usage tracking item (rightmost of the three, hidden until budget configured)
+    // Adapter usage meter (rightmost of the three, hidden until the first
+    // snapshot arrives). Click cycles through the windows the snapshot
+    // exposes (Issue #659) — "Open Dashboard" remains reachable via a
+    // command link in the tooltip instead of the click gesture.
     this.usageItem = vscode.window.createStatusBarItem(
       vscode.StatusBarAlignment.Left,
       98 // Just to the right of target branch
     );
-    this.usageItem.command = "nightgauge.showDashboard";
-    // Hidden by default until a budget is configured
+    this.usageItem.command = "nightgauge.cycleUsageMetric";
 
     // Dedicated performance-mode selector — always visible, grouped with the
     // other Nightgauge status bar items on the left. Single click opens
@@ -512,48 +531,82 @@ export class StatusBarManager {
   }
 
   /**
-   * Show live usage in the status bar (Issue #1333)
+   * Render the active adapter's usage snapshot into `usageItem` (Issue #659).
    *
-   * Displayed as: $(flame) $X.XX / $Y
-   * Color-coded by usage percentage:
-   * - < 80%: default
-   * - ≥ 80%: warningBackground
-   * - ≥ 90%: errorBackground
+   * Replaces the budget-only `showUsage()` from Issue #1333 — the monthly
+   * budget figure is now just one window inside `snapshot.windows` (see
+   * docs/decisions/018-adapter-usage-quota-model.md), selected the same way
+   * as any other window rather than rendered by a dedicated code path.
    *
-   * @param costUsd - Current accumulated cost since last reset
-   * @param budgetUsd - Configured monthly budget
+   * The window actually displayed is whichever one's id matches
+   * `selectedUsageWindowId` (restored via `setSelectedUsageWindowId` /
+   * advanced via `cycleUsageWindow`), falling back to the first window when
+   * the selection is unset or no longer present in this snapshot (e.g. the
+   * adapter changed and the new snapshot's window ids differ).
    */
-  showUsage(costUsd: number, budgetUsd: number): void {
-    const usagePct = budgetUsd > 0 ? (costUsd / budgetUsd) * 100 : 0;
-    const remaining = budgetUsd - costUsd;
-
-    this.usageItem.text = `$(flame) $${costUsd.toFixed(2)} / $${budgetUsd.toFixed(0)}`;
-    this.usageItem.tooltip = [
-      `Usage: ${Math.round(usagePct)}% of monthly budget`,
-      `Cost: $${costUsd.toFixed(2)} / $${budgetUsd.toFixed(2)}`,
-      `Remaining: $${remaining.toFixed(2)}`,
-      `Click to open Dashboard`,
-    ].join("\n");
-
-    if (usagePct >= 90) {
-      this.usageItem.backgroundColor = new vscode.ThemeColor("statusBarItem.errorBackground");
-    } else if (usagePct >= 80) {
-      this.usageItem.backgroundColor = new vscode.ThemeColor("statusBarItem.warningBackground");
-    } else {
-      this.usageItem.backgroundColor = undefined;
-    }
-
-    this.usageItem.show();
+  showUsageSnapshot(snapshot: UsageSnapshot): void {
+    this.usageSnapshot = snapshot;
+    this.renderUsageItem();
   }
 
   /**
-   * Hide the usage status bar item (Issue #1333)
+   * Restore a persisted window selection (Issue #659).
    *
-   * Called when budget is disabled or usage counter is reset.
+   * Call before the first snapshot arrives (e.g. during activation, from the
+   * value last written to workspace state) so a window reload resumes on the
+   * window the user had selected, per #659's AC that the selection "persists
+   * in workspace state and survives a window reload".
    */
-  hideUsage(): void {
-    this.usageItem.hide();
-    this.usageItem.backgroundColor = undefined;
+  setSelectedUsageWindowId(id: string | null): void {
+    this.selectedUsageWindowId = id;
+    this.renderUsageItem();
+  }
+
+  /**
+   * Advance to the next window in the current snapshot (Issue #659).
+   *
+   * Returns the newly selected window's id — for the caller
+   * (`nightgauge.cycleUsageMetric`) to persist to workspace state — or `null`
+   * when there is nothing to cycle to: no snapshot has arrived yet, or the
+   * snapshot is `plan.kind: "unknown"` with zero windows.
+   */
+  cycleUsageWindow(): string | null {
+    const snapshot = this.usageSnapshot;
+    if (!snapshot || snapshot.windows.length === 0) {
+      return null;
+    }
+    const currentIndex = snapshot.windows.findIndex((w) => w.id === this.selectedUsageWindowId);
+    // findIndex returns -1 when nothing is selected yet — that state renders
+    // window 0 (see renderUsageItem's fallback), so cycling from "nothing
+    // selected" must advance to window 1, not redraw window 0 again.
+    const nextIndex = (Math.max(currentIndex, 0) + 1) % snapshot.windows.length;
+    this.selectedUsageWindowId = snapshot.windows[nextIndex].id;
+    this.renderUsageItem();
+    return this.selectedUsageWindowId;
+  }
+
+  /** Re-render `usageItem` from `usageSnapshot`/`selectedUsageWindowId`. */
+  private renderUsageItem(): void {
+    const snapshot = this.usageSnapshot;
+    if (!snapshot) {
+      this.usageItem.hide();
+      return;
+    }
+    if (snapshot.windows.length === 0) {
+      // plan.kind: "unknown" — an explicit state, never hidden silently
+      // (docs/decisions/018-adapter-usage-quota-model.md; #659 AC).
+      this.usageItem.text = `${USAGE_METER_ICON} ${snapshot.adapter} usage unknown`;
+      this.usageItem.tooltip = buildUsageTooltip(snapshot);
+      this.usageItem.backgroundColor = undefined;
+      this.usageItem.show();
+      return;
+    }
+    const selected = snapshot.windows.find((w) => w.id === this.selectedUsageWindowId);
+    const window = selected ?? snapshot.windows[0];
+    this.usageItem.text = formatUsageWindowText(snapshot.adapter, window);
+    this.usageItem.tooltip = buildUsageTooltip(snapshot);
+    this.usageItem.backgroundColor = usageThresholdColor(window);
+    this.usageItem.show();
   }
 
   // ── Autonomous mode status bar methods (Issue #2373) ────────────────
@@ -829,4 +882,166 @@ export function formatCooldownRemaining(until: Date, now: Date = new Date()): st
     return `${minutes}m ${seconds}s`;
   }
   return `${seconds}s`;
+}
+
+// ── Adapter usage meter rendering (Issue #659) ────────────────────────────
+//
+// Pure functions so the meter's formatting can be unit-tested without a
+// StatusBarManager instance. `StatusBarManager.renderUsageItem` is the only
+// caller in production code.
+
+/** Icon used for every usage-meter rendering, matching the pre-#659 counter. */
+const USAGE_METER_ICON = "$(flame)";
+
+/** Eighths-resolution partial-block characters, indexed 1-7 (0 is unused). */
+const USAGE_BAR_PARTIALS = ["", "▏", "▎", "▍", "▌", "▋", "▊", "▉"];
+
+/**
+ * Render an 8-segment proportional bar (e.g. `"███▌░░░░"` for ~44%).
+ *
+ * Uses eighths-resolution partial-block characters for a smoothly
+ * proportional fill instead of 8 coarse on/off segments. `pct` is clamped to
+ * `[0, 100]` for the bar's visual fill only — `used > limit` is legal (an
+ * overage-enabled plan keeps serving past 100%, per
+ * docs/decisions/018-adapter-usage-quota-model.md), so the bar saturates full
+ * rather than over/underflowing; the numeric percentage next to it is never
+ * clamped.
+ */
+export function renderUsageBar(pct: number, segments = 8): string {
+  const clamped = Math.max(0, Math.min(100, pct));
+  const eighthsPerSegment = 8;
+  const totalEighths = Math.round((clamped / 100) * segments * eighthsPerSegment);
+  const fullSegments = Math.min(segments, Math.floor(totalEighths / eighthsPerSegment));
+  const remainderEighths = fullSegments < segments ? totalEighths % eighthsPerSegment : 0;
+  const partial = remainderEighths > 0 ? USAGE_BAR_PARTIALS[remainderEighths] : "";
+  const emptySegments = segments - fullSegments - (partial ? 1 : 0);
+  return "█".repeat(fullSegments) + partial + "░".repeat(Math.max(0, emptySegments));
+}
+
+/** Format an eighths-scale value (e.g. very large token counts) as "812k"/"1.2m". */
+function trimTrailingZero(value: number): string {
+  return value % 1 === 0 ? value.toFixed(0) : value.toFixed(1);
+}
+
+function formatTokenCount(value: number): string {
+  const abs = Math.abs(value);
+  if (abs >= 1_000_000) {
+    return `${trimTrailingZero(value / 1_000_000)}m tokens`;
+  }
+  if (abs >= 1_000) {
+    return `${trimTrailingZero(value / 1_000)}k tokens`;
+  }
+  return `${Math.round(value)} tokens`;
+}
+
+/**
+ * Format a raw `used`/`limit` figure per its `UsageUnit` (Issue #659).
+ *
+ * `percent` is the vendor-reported-percentage case reserved by
+ * docs/decisions/018-adapter-usage-quota-model.md (`rate_limit_event`'s
+ * `utilization`) — no producer emits it yet, but the formatter honours it so
+ * that provider needs no change here when it lands.
+ */
+export function formatUsageValue(value: number, unit: UsageUnit): string {
+  switch (unit) {
+    case "usd":
+      return `$${value.toFixed(2)}`;
+    case "percent":
+      return `${Math.round(value)}%`;
+    case "tokens":
+      return formatTokenCount(value);
+    case "requests": {
+      const rounded = Math.round(value);
+      return `${rounded.toLocaleString()} request${rounded === 1 ? "" : "s"}`;
+    }
+  }
+}
+
+/**
+ * The window's fill percentage, or `null` when `limit` is unknown/non-positive
+ * — the caller's cue to render the absolute figure instead of a bar (#659 AC:
+ * "No fabricated fill, no implied percentage").
+ */
+function usagePercent(window: UsageWindow): number | null {
+  if (window.limit === null || window.limit <= 0) {
+    return null;
+  }
+  return (window.used / window.limit) * 100;
+}
+
+/**
+ * Status-bar background colour for a window, matching the pre-#659
+ * threshold behaviour: ≥90% error, ≥80% warning, otherwise default. A window
+ * with no known limit (`usagePercent` returns null) never colours the item —
+ * there is no ceiling to measure against.
+ */
+export function usageThresholdColor(window: UsageWindow): vscode.ThemeColor | undefined {
+  const pct = usagePercent(window);
+  if (pct === null) {
+    return undefined;
+  }
+  if (pct >= 90) {
+    return new vscode.ThemeColor("statusBarItem.errorBackground");
+  }
+  if (pct >= 80) {
+    return new vscode.ThemeColor("statusBarItem.warningBackground");
+  }
+  return undefined;
+}
+
+/**
+ * Render one `UsageWindow` as the `usageItem` label text (Issue #659).
+ *
+ * A window with a known `limit` renders as `$(flame) <adapter> <bar> <pct>%
+ * · resets <duration>` — e.g. `$(flame) claude ███▌░░░░ 44% · resets 2h 14m`.
+ * A `null` limit renders the absolute figure instead
+ * (`$(flame) <adapter> $4.12 today`), never a fabricated bar or percentage.
+ *
+ * The reset duration reuses `formatCooldownRemaining` (Issue #3446) rather
+ * than a second "time until" formatter — the two are the same computation.
+ */
+export function formatUsageWindowText(
+  adapter: ExecutionAdapter,
+  window: UsageWindow,
+  now: Date = new Date()
+): string {
+  const pct = usagePercent(window);
+  if (pct === null) {
+    return `${USAGE_METER_ICON} ${adapter} ${formatUsageValue(window.used, window.unit)} ${window.label.toLowerCase()}`;
+  }
+  const bar = renderUsageBar(pct);
+  const resetSuffix = window.resetsAt
+    ? ` · resets ${formatCooldownRemaining(window.resetsAt, now)}`
+    : "";
+  return `${USAGE_METER_ICON} ${adapter} ${bar} ${Math.round(pct)}%${resetSuffix}`;
+}
+
+/**
+ * Build the `usageItem` hover tooltip (Issue #659): every window in the
+ * snapshot with its used/limit figures, reset time, and confidence, plus a
+ * command link back to `nightgauge.showDashboard` — the click gesture on the
+ * item itself now cycles windows instead of opening the dashboard, so this
+ * link is how "Open Dashboard" stays reachable (#659 AC).
+ */
+export function buildUsageTooltip(snapshot: UsageSnapshot): vscode.MarkdownString {
+  const tooltip = new vscode.MarkdownString();
+  tooltip.isTrusted = true;
+  tooltip.appendMarkdown(`**${snapshot.adapter} usage**\n\n`);
+  if (snapshot.windows.length === 0) {
+    tooltip.appendMarkdown(
+      "_No usage provider is available for this adapter — usage is unknown, not zero._\n\n"
+    );
+  } else {
+    for (const window of snapshot.windows) {
+      const limitText =
+        window.limit === null ? "no limit configured" : formatUsageValue(window.limit, window.unit);
+      const resetText = window.resetsAt ? window.resetsAt.toLocaleString() : "no scheduled reset";
+      tooltip.appendMarkdown(
+        `- **${window.label}**: ${formatUsageValue(window.used, window.unit)} / ${limitText} — resets ${resetText} _(${window.confidence})_\n`
+      );
+    }
+    tooltip.appendMarkdown("\n");
+  }
+  tooltip.appendMarkdown("[Open Dashboard](command:nightgauge.showDashboard)");
+  return tooltip;
 }
