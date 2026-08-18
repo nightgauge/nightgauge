@@ -772,6 +772,54 @@ describe("formatUsageWindowText (#659)", () => {
       "$(flame) gemini 812k tokens this session"
     );
   });
+
+  describe("a vendor-reported subscription window (#709)", () => {
+    /** What a Claude Max five-hour allowance looks like as a snapshot window. */
+    const maxSession: UsageWindow = {
+      id: "claude-rate-limit:rolling",
+      label: "Session (5h)",
+      scope: "rolling",
+      used: 44,
+      limit: 100,
+      unit: "percent",
+      resetsAt: new Date("2026-08-18T12:14:00Z"),
+      confidence: "measured",
+    };
+    const now = new Date("2026-08-18T10:00:00Z");
+
+    it("shows the window, how much is used, how much is left, and when it refills", () => {
+      // The whole point of the ticket: a Max plan has no dollar budget, so a
+      // running dollar total answers the wrong question.
+      expect(formatUsageWindowText("claude", maxSession, now)).toBe(
+        `$(flame) claude session (5h) ${renderUsageBar(44)} 44% · 56% left · resets 2h 14m`
+      );
+    });
+
+    it("never reports negative remaining once an overage-enabled plan passes 100%", () => {
+      const overage = { ...maxSession, used: 112, resetsAt: null };
+      expect(formatUsageWindowText("claude", overage, now)).toBe(
+        `$(flame) claude session (5h) ${renderUsageBar(112)} 112% · 0% left`
+      );
+    });
+
+    it("stamps a cached reading with the time it was actually observed", () => {
+      const cached: UsageWindow = {
+        ...maxSession,
+        confidence: "estimated",
+        observedAt: new Date(2026, 7, 18, 14, 5, 0),
+      };
+      expect(formatUsageWindowText("claude", cached, now)).toContain("· as of 14:05");
+    });
+
+    it("adds no as-of to a live reading — it describes the moment it is read", () => {
+      const live: UsageWindow = {
+        ...maxSession,
+        confidence: "measured",
+        observedAt: new Date(2026, 7, 18, 14, 5, 0),
+      };
+      expect(formatUsageWindowText("claude", live, now)).not.toContain("as of");
+    });
+  });
 });
 
 describe("usageThresholdColor (#659)", () => {

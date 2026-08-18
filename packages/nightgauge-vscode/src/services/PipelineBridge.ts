@@ -43,6 +43,7 @@ import type { StallEscalationLevel, PauseForStallPayload } from "../schemas/pipe
 // orchestration path — so leaving them untyped left the guard with a hole
 // exactly where a silently-refused key would hurt most.
 import type { NotifyPhaseTransitionParams, NotifyStageProgressParams } from "./ipcNotifyParams";
+import type { ClaudeRateLimitStore } from "./usage/ClaudeRateLimitStore";
 
 /**
  * IPC RunStageParams as received from Go.
@@ -111,7 +112,14 @@ export class PipelineBridge {
     private readonly offlineManager: OfflineManager | null = null,
     private readonly outputWindow: OutputWindow | null = null,
     private readonly statusBar: StatusBarManager | null = null,
-    private readonly treeProvider: PipelineTreeProvider | null = null
+    private readonly treeProvider: PipelineTreeProvider | null = null,
+    /**
+     * Sink for the `rate_limit_event` readings the Claude CLI emits mid-run
+     * (Issue #709). This is the only place a live reading is captured, so the
+     * usage meter can serve one at rest; null when there is no workspace root
+     * to persist to.
+     */
+    private readonly claudeRateLimitStore: ClaudeRateLimitStore | null = null
   ) {
     this.skillRunner = new SkillRunner(ipcClient, logger);
     this.stallStatusBarItem = new StallStatusBarItem();
@@ -415,6 +423,14 @@ export class PipelineBridge {
           });
       },
       onRateLimitEvent: (event) => {
+        // Feed the usage meter (Issue #709). Strictly additive to the
+        // pause/fast-fail handling below, which is unchanged: this reads the
+        // same already-parsed event and decides nothing about the run.
+        // Deliberately not awaited: the in-memory update is already done when
+        // `record` returns, and the queued disk write must never sit on the
+        // stream's hot path. The returned promise never rejects.
+        void this.claudeRateLimitStore?.record(event);
+
         this.logger.info("PipelineBridge: rate limit event", {
           stage,
           rateLimitType: event.rateLimitType,
@@ -650,6 +666,14 @@ export class PipelineBridge {
         stderrTail: result?.stderrTail,
         toolCalls: result?.toolCalls,
       });
+    } finally {
+      // The stream is over, so any reading it produced is now a cached one
+      // (Issue #709). This is what makes `confidence: "measured"` mean
+      // "same-run" rather than "sometime this session". In `finally` because a
+      // stage that threw ends its stream just as definitively as one that
+      // succeeded, and a reading left marked live would be presented as
+      // current forever.
+      this.claudeRateLimitStore?.settle();
     }
   }
 

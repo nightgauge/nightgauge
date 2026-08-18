@@ -17,7 +17,7 @@ import { loadWorkspaceConfig } from "./workspaceDetection";
  * Bump this when adding new patterns so the extension knows to update
  * existing .gitignore files that were written with an older version.
  */
-const GITIGNORE_VERSION = 8;
+const GITIGNORE_VERSION = 9;
 const VERSION_MARKER = `# nightgauge-gitignore-version: ${GITIGNORE_VERSION}`;
 
 /**
@@ -98,6 +98,12 @@ pipeline/queue-state.json
 
 # ─── Health telemetry (gate metrics, trend data) ─────────────────────
 /health/
+
+# ─── Adapter usage readings (last-seen provider quota, per machine) ──
+# The Claude CLI reports its rate-limit utilization only while streaming, so
+# the last reading per window is cached here for the status-bar meter to
+# sample at rest. Per-machine, per-account runtime state — never shared.
+/usage/
 
 # ─── Action Center decision requests (ADR 015) ───────────────────────
 # Cards are produced locally by the attention sweeps, carry local run ids,

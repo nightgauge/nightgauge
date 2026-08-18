@@ -115,14 +115,16 @@ afterEach(() => {
 });
 
 describe("UsageProviderRegistry", () => {
-  it("resolves the first registered provider that claims the adapter", () => {
+  it("returns every provider that claims the adapter, in registration order", () => {
     const specific = new FakeProvider("specific", ["claude"]);
     const general = new FakeProvider("general", ["claude", "codex"]);
     const registry = new UsageProviderRegistry().register(specific).register(general);
 
-    expect(registry.resolve("claude")?.id).toBe("specific");
-    expect(registry.resolve("codex")?.id).toBe("general");
-    expect(registry.resolve("ollama")).toBeUndefined();
+    // Registration order is precedence, and a claim by the first provider must
+    // not hide the second: the first may have nothing to say today (#709).
+    expect(registry.resolveAll("claude").map((p) => p.id)).toEqual(["specific", "general"]);
+    expect(registry.resolveAll("codex").map((p) => p.id)).toEqual(["general"]);
+    expect(registry.resolveAll("ollama")).toEqual([]);
   });
 });
 
@@ -166,6 +168,60 @@ describe("unknown fallback", () => {
 
     expect(snapshot.plan.kind).toBe("unknown");
     expect(snapshot.windows).toEqual([]);
+    expect(warn).toHaveBeenCalled();
+  });
+});
+
+describe("provider fall-through (#709)", () => {
+  function serviceWithAll(
+    providers: readonly UsageProvider[],
+    adapter: ExecutionAdapter
+  ): AdapterUsageService {
+    const registry = new UsageProviderRegistry();
+    for (const provider of providers) registry.register(provider);
+    return new AdapterUsageService(registry, { resolveAdapter: () => adapter });
+  }
+
+  it("asks the next claiming provider when the first has nothing to say", async () => {
+    // The production shape: the Claude subscription provider claims `claude`
+    // whether or not a rate_limit_event has been observed, so an API-key user
+    // — who never emits one — has to reach the dollar windows behind it.
+    const subscription = new FakeProvider("claude-rate-limit", ["claude"]);
+    subscription.result = null;
+    const local = new FakeProvider("local-telemetry", ["claude"]);
+    local.result = snapshotFor("claude", 4.12);
+
+    const snapshot = await serviceWithAll([subscription, local], "claude").getSnapshot();
+
+    expect(subscription.calls).toEqual(["claude"]);
+    expect(snapshot.plan.kind).toBe("pay-per-token");
+    expect(snapshot.windows[0].used).toBe(4.12);
+  });
+
+  it("stops at the first provider that answers", async () => {
+    const subscription = new FakeProvider("claude-rate-limit", ["claude"]);
+    subscription.result = { ...snapshotFor("claude", 0), plan: { kind: "subscription-window" } };
+    const local = new FakeProvider("local-telemetry", ["claude"]);
+    local.result = snapshotFor("claude", 4.12);
+
+    const snapshot = await serviceWithAll([subscription, local], "claude").getSnapshot();
+
+    expect(snapshot.plan.kind).toBe("subscription-window");
+    // Precedence is only real if the loser is never consulted — otherwise the
+    // dollar figure would be derived (and its history read) on every refresh.
+    expect(local.calls).toEqual([]);
+  });
+
+  it("falls through a provider that throws rather than taking the meter down", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const subscription = new FakeProvider("claude-rate-limit", ["claude"]);
+    subscription.error = new Error("unreadable store");
+    const local = new FakeProvider("local-telemetry", ["claude"]);
+    local.result = snapshotFor("claude", 4.12);
+
+    const snapshot = await serviceWithAll([subscription, local], "claude").getSnapshot();
+
+    expect(snapshot.plan.kind).toBe("pay-per-token");
     expect(warn).toHaveBeenCalled();
   });
 });

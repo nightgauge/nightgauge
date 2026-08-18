@@ -123,6 +123,7 @@ import { GitHubAuthService } from "../services/GitHubAuthService";
 import { AutomationService } from "../services/AutomationService";
 import { UsageLimitsService } from "../services/UsageLimitsService";
 import { AdapterUsageService } from "../services/usage/AdapterUsageService";
+import { ClaudeRateLimitStore } from "../services/usage/ClaudeRateLimitStore";
 import { USAGE_WINDOW_STATE_KEY } from "../commands/cycleUsageMetric";
 import { PlatformQuotaService } from "../services/PlatformQuotaService";
 import { BrownfieldDataService } from "../services/BrownfieldDataService";
@@ -2797,9 +2798,22 @@ export async function initializeServices(
   // Consequences). Requires incrediRoot: with no workspace/git root there is
   // no `.nightgauge/pipeline/history/` to read, so the meter stays hidden
   // rather than wired against a path that cannot exist.
+  //
+  // The Claude subscription-window provider (Issue #709) needs a place to
+  // persist the `rate_limit_event` readings it can only observe mid-run, so
+  // the store is created here and handed to two collaborators: this service
+  // reads it, and PipelineBridge writes to it from the CLI stream. One store
+  // instance, exactly like the one AdapterUsageService instance below — two
+  // would let the meter read readings the pipeline never wrote.
+  let claudeRateLimitStore: ClaudeRateLimitStore | null = null;
   let adapterUsageService: AdapterUsageService | null = null;
   if (incrediRoot) {
-    adapterUsageService = AdapterUsageService.forWorkspace(incrediRoot, dashboard.getState());
+    claudeRateLimitStore = new ClaudeRateLimitStore(incrediRoot);
+    adapterUsageService = AdapterUsageService.forWorkspace(
+      incrediRoot,
+      dashboard.getState(),
+      claudeRateLimitStore
+    );
     // Restore the persisted window selection before the first snapshot
     // renders, so a reload resumes on the window the user had cycled to
     // (Issue #659 AC — selection "survives a window reload").
@@ -4238,7 +4252,10 @@ export async function initializeServices(
     offlineManager,
     outputWindow,
     statusBar,
-    treeProvider
+    treeProvider,
+    // The only writer of live `rate_limit_event` readings (Issue #709) — the
+    // same instance AdapterUsageService reads from above.
+    claudeRateLimitStore
   );
   context.subscriptions.push(pipelineBridge);
   // Register pipeline services in container (Issue #2772)

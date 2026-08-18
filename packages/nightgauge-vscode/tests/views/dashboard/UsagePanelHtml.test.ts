@@ -226,3 +226,68 @@ describe("getUsagePanelSectionHtml — burn rate and history strip (Issue #661)"
     expect(html).toContain("no adapter attribution");
   });
 });
+
+describe("getUsagePanelSectionHtml — a subscription-window plan (Issue #709)", () => {
+  /** What the Claude provider hands the panel on a Max plan. */
+  function maxSnapshot(overrides: Partial<UsageWindow> = {}): UsageSnapshot {
+    return {
+      adapter: "claude",
+      plan: { kind: "subscription-window" },
+      capturedAt: NOW,
+      windows: [
+        makeWindow({
+          id: "claude-rate-limit:rolling",
+          label: "Session (5h)",
+          scope: "rolling",
+          used: 44,
+          limit: 100,
+          unit: "percent",
+          resetsAt: new Date(NOW.getTime() + 2 * 60 * 60 * 1000),
+          confidence: "measured",
+          ...overrides,
+        }),
+      ],
+    };
+  }
+
+  it("states what is left rather than printing the same percentage twice", () => {
+    const row = rowFor(render(maxSnapshot()), "claude-rate-limit:rolling");
+
+    expect(row).toContain("44% used");
+    expect(row).toContain("56% remaining");
+    // "44% of 100% (44%)" is the shape a plain used/limit line would produce.
+    expect(row).not.toContain("of 100%");
+  });
+
+  it("shows when a cached reading was actually reported", () => {
+    const observedAt = new Date(NOW.getTime() - 25 * 60 * 1000);
+    const row = rowFor(
+      render(maxSnapshot({ confidence: "estimated", observedAt })),
+      "claude-rate-limit:rolling"
+    );
+
+    expect(row).toContain("Reported as of");
+    expect(row).toContain(observedAt.toLocaleString());
+  });
+
+  it("adds no as-of to a live reading", () => {
+    const row = rowFor(
+      render(maxSnapshot({ confidence: "measured", observedAt: NOW })),
+      "claude-rate-limit:rolling"
+    );
+
+    expect(row).not.toContain("Reported as of");
+  });
+
+  it("declines to project a dollar burn rate against a percentage window", () => {
+    // Run history is denominated in dollars. Projecting it against a
+    // vendor-reported percentage would be arithmetic across two different
+    // things, so the panel says why instead of showing a number.
+    const html = render(maxSnapshot(), [makeRun(), makeRun({ issueNumber: 2 })]);
+
+    expect(html).toContain(
+      "Burn rate is measured in dollars from run history, which cannot describe"
+    );
+    expect(html).not.toContain("/hour");
+  });
+});

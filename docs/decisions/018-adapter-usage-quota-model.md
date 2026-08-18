@@ -247,30 +247,31 @@ local-calendar filenames and the reader's UTC day iteration.
 Every member below either has a producer in this PR or is named here with the
 provider that will produce it. Nothing is a permanently-false flag.
 
-| Member                             | Status                                                           | Producer / reason                                                                                                                                                                                                                                           |
-| ---------------------------------- | ---------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `adapter`                          | Produced                                                         | The configured adapter, on every snapshot.                                                                                                                                                                                                                  |
-| `plan.kind: "pay-per-token"`       | Produced                                                         | Every `LocalTelemetryUsageProvider` snapshot.                                                                                                                                                                                                               |
-| `plan.kind: "unknown"`             | Produced                                                         | Unclaimed adapter, no attributed data, or a failed derivation.                                                                                                                                                                                              |
-| `plan.kind: "subscription-window"` | **Reserved**                                                     | The `rate_limit_event`-backed Claude provider; a Copilot provider. Local telemetry cannot observe a plan.                                                                                                                                                   |
-| `capturedAt`                       | Produced                                                         | Derivation time.                                                                                                                                                                                                                                            |
-| `windows[]`                        | Produced                                                         | Three per snapshot; empty on `unknown`.                                                                                                                                                                                                                     |
-| `scope: session/daily/monthly`     | Produced                                                         | One window each.                                                                                                                                                                                                                                            |
-| `scope: "rolling"`                 | **Reserved**                                                     | The `rate_limit_event` provider — `rateLimitType: "five_hour"`. Local telemetry cannot know where a provider's sliding window starts, and guessing is a fabricated percentage.                                                                              |
-| `scope: "weekly"`                  | **Reserved**                                                     | Same provider — `rateLimitType: "seven_day"`.                                                                                                                                                                                                               |
-| `modelFamily`                      | **Reserved** (optional)                                          | A provider that buckets per family. Local telemetry could bucket by `per_stage[*].model`, but a per-family _limit_ is what makes the bucket useful and none exists locally; `rate_limit_event` names a bucket, not a family, so it cannot fill this either. |
-| `used`                             | Produced                                                         | Summed attributed `cost_usd`; an absolute figure, never a ratio this model derived.                                                                                                                                                                         |
-| `limit` (non-null)                 | Produced                                                         | Monthly window, when `monthly_budget_usd > 0`. Defined to carry a provider-reported allowance too; that path is the follow-up provider's.                                                                                                                   |
-| `limit: null`                      | Produced                                                         | Session and daily always; monthly when no budget is configured.                                                                                                                                                                                             |
-| `unit: "usd"`                      | Produced                                                         | Every local-telemetry window.                                                                                                                                                                                                                               |
-| `unit: "percent"`                  | **Reserved**                                                     | The `rate_limit_event` provider — `utilization` is 0-100 with no denominator, so `used: utilization, limit: 100` is the only honest rendering. Vendor-reported, not model-computed.                                                                         |
-| `unit: "tokens"`                   | **Reserved**                                                     | A provider given an absolute token allowance — not derivable from what we persist.                                                                                                                                                                          |
-| `unit: "requests"`                 | **Reserved**                                                     | A Copilot provider — premium requests per month.                                                                                                                                                                                                            |
-| `resetsAt` (non-null)              | Produced                                                         | Next local midnight (daily), 1st of next month (monthly).                                                                                                                                                                                                   |
-| `resetsAt: null`                   | Produced                                                         | Session — no clock resets it, so claiming one would be an invention.                                                                                                                                                                                        |
-| `confidence: "measured"`           | Produced                                                         | Priced stages, and measured-zero windows. Also what the `rate_limit_event` provider will report — the vendor states utilization outright.                                                                                                                   |
-| `confidence: "unknown"`            | Produced                                                         | `cost_unstamped: true` (written by the Go history writer) or `cost_source: "unknown"`.                                                                                                                                                                      |
-| `confidence: "estimated"`          | Produced from schema-valid input; **no production writer today** | Mapped from `cost_source: "computed"`. See the gap below.                                                                                                                                                                                                   |
+| Member                             | Status                  | Producer / reason                                                                                                                                                                                                                                           |
+| ---------------------------------- | ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `adapter`                          | Produced                | The configured adapter, on every snapshot.                                                                                                                                                                                                                  |
+| `plan.kind: "pay-per-token"`       | Produced                | Every `LocalTelemetryUsageProvider` snapshot.                                                                                                                                                                                                               |
+| `plan.kind: "unknown"`             | Produced                | Unclaimed adapter, no attributed data, or a failed derivation.                                                                                                                                                                                              |
+| `plan.kind: "subscription-window"` | Produced (#709)         | `ClaudeRateLimitUsageProvider`, once a `rate_limit_event` has been observed. A Copilot provider would be the second. Local telemetry cannot observe a plan.                                                                                                 |
+| `capturedAt`                       | Produced                | Derivation time.                                                                                                                                                                                                                                            |
+| `windows[]`                        | Produced                | Three per local-telemetry snapshot, up to three per Claude subscription snapshot; empty on `unknown`.                                                                                                                                                       |
+| `scope: session/daily/monthly`     | Produced                | One window each.                                                                                                                                                                                                                                            |
+| `scope: "rolling"`                 | Produced (#709)         | `ClaudeRateLimitUsageProvider` — `rateLimitType: "five_hour"`. Local telemetry still cannot know where a provider's sliding window starts, and guessing is a fabricated percentage.                                                                         |
+| `scope: "weekly"`                  | Produced (#709)         | Same provider — `rateLimitType: "seven_day"`.                                                                                                                                                                                                               |
+| `modelFamily`                      | **Reserved** (optional) | A provider that buckets per family. Local telemetry could bucket by `per_stage[*].model`, but a per-family _limit_ is what makes the bucket useful and none exists locally; `rate_limit_event` names a bucket, not a family, so it cannot fill this either. |
+| `used`                             | Produced                | Summed attributed `cost_usd`; an absolute figure, never a ratio this model derived.                                                                                                                                                                         |
+| `limit` (non-null)                 | Produced                | Monthly window, when `monthly_budget_usd > 0`. Defined to carry a provider-reported allowance too; that path is the follow-up provider's.                                                                                                                   |
+| `limit: null`                      | Produced                | Session and daily always; monthly when no budget is configured.                                                                                                                                                                                             |
+| `unit: "usd"`                      | Produced                | Every local-telemetry window.                                                                                                                                                                                                                               |
+| `unit: "percent"`                  | Produced (#709)         | `ClaudeRateLimitUsageProvider` — `utilization` is 0-100 with no denominator, so `used: utilization, limit: 100` is the only honest rendering. Vendor-reported, not model-computed.                                                                          |
+| `unit: "tokens"`                   | **Reserved**            | A provider given an absolute token allowance — not derivable from what we persist.                                                                                                                                                                          |
+| `unit: "requests"`                 | **Reserved**            | A Copilot provider — premium requests per month.                                                                                                                                                                                                            |
+| `resetsAt` (non-null)              | Produced                | Next local midnight (daily), 1st of next month (monthly).                                                                                                                                                                                                   |
+| `resetsAt: null`                   | Produced                | Session — no clock resets it, so claiming one would be an invention.                                                                                                                                                                                        |
+| `confidence: "measured"`           | Produced                | Priced stages, and measured-zero windows. Also a same-run `rate_limit_event` reading (#709) — the vendor states utilization outright, and only while it is streaming.                                                                                       |
+| `confidence: "unknown"`            | Produced                | `cost_unstamped: true` (written by the Go history writer) or `cost_source: "unknown"`.                                                                                                                                                                      |
+| `confidence: "estimated"`          | Produced (#709)         | A cached `rate_limit_event` reading. Also mapped from `cost_source: "computed"` — see the gap below for why that input is not yet written.                                                                                                                  |
+| `observedAt`                       | Produced (#709)         | Set only when the figure predates the snapshot: a cached vendor reading. Absent means "observed as the snapshot was derived", which is every local-telemetry window.                                                                                        |
 
 ### Gap: `cost_source` never reaches the JSONL history
 
@@ -300,3 +301,63 @@ widened into this ticket.
   pre-existing issue, out of scope here.
 - Adding a provider is additive: implement `UsageProvider`, register it ahead
   of local telemetry, honour the confidence and staleness contract above.
+
+---
+
+## Amendment (#709): the `rate_limit_event` provider, and what it forced
+
+`ClaudeRateLimitUsageProvider` landed as the first producer of
+`plan.kind: "subscription-window"`. It reads the `rate_limit_event` envelope
+`utils/tokenParser.ts` has always parsed and `utils/skillRunner.ts` has always
+consumed for pause/fast-fail — a second reader, not a second data path, and no
+new CLI invocation or flag. Three things in this ADR needed amending, and one
+of them is a genuine correction rather than a status flip.
+
+**1. `supports()` claiming an adapter can no longer mean "answers for it".**
+`ExecutionAdapter` has a single `claude` value covering both the CLI/OAuth
+subscription path and the API-key pay-per-token path, and only the first emits
+the envelope. A `supports()` predicate that claimed `claude` only when a
+reading existed would have to do I/O, breaking this ADR's "cheap, synchronous,
+adapter-only" rule; one that claimed `claude` unconditionally would have
+silenced the dollar windows for API-key users. So `UsageProviderRegistry`
+now returns **every** claiming provider (`resolveAll`) and
+`AdapterUsageService.derive` walks them in precedence order, taking the first
+non-null snapshot. `null` from a provider is a fall-through, not a verdict;
+only an exhausted list produces the unknown snapshot. A provider that throws
+is skipped for the same reason.
+
+**Plan kind follows the observed signal, never the adapter name.**
+
+**2. The figure is only observable mid-stream, so it has to be persisted.**
+The envelope arrives on a live `claude -p` stdout stream and nothing returns
+it at rest, but the status bar samples between runs. `ClaudeRateLimitStore`
+keeps the last reading per bucket in
+`.nightgauge/usage/claude-rate-limits.json` (per-machine runtime state,
+gitignored). `PipelineBridge` is the only writer: `record()` from its
+`onRateLimitEvent` callback, `settle()` in the `finally` of `handleRunStage`.
+
+That split is what makes `confidence` honest here. `measured` is reserved for a
+reading from the run that is **still streaming**; the moment the stage ends,
+`settle()` demotes it and the same number is served as `estimated`. A vendor's
+confident statement about an hour ago is an estimate of now. `UsageWindow`
+gained one optional field, `observedAt`, to carry the as-of — `capturedAt`
+could not, because it says when the snapshot was assembled, not when the
+number was true.
+
+**3. A cached reading past its own `resetsAt` is known-wrong, not stale.**
+That window has since refilled. Nightgauge cannot know the post-reset
+utilization — the user may have spent it in the Claude Code app, outside
+nightgauge entirely — so an expired reading is dropped rather than aged, and a
+`0%` is never synthesised. When every bucket has expired the provider returns
+`null` and the adapter falls through to the dollar windows behind it.
+
+**Stability.** The wire format is unofficial and reverse-engineered; the spike
+that recommended this rated it "reverse-engineered, unofficial; measured only
+mid-run" (`docs/spikes/662-adapter-usage-quota-signals.md` §2.2). Unknown
+bucket names produce no window, malformed persisted entries are discarded
+rather than coerced, and a shape change degrades the meter to the pay-per-token
+path instead of corrupting it.
+
+**Unchanged:** `LocalTelemetryUsageProvider`, `monthlyBudgetUsd` and its
+threshold alerts, and the fast-fail path's reading of the same event. This
+added a provider; it removed nothing.
