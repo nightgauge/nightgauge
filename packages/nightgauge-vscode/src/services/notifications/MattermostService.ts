@@ -34,6 +34,7 @@ import {
   determineAction,
   modeDisplay,
 } from "../DiscordService";
+import { getBranchDisplayText } from "../../views/dashboard/DashboardComponents";
 import type { Notifier, PipelineEventContext } from "./types";
 import { NotifierStatusTracker } from "./NotifierStatusTracker";
 import {
@@ -718,7 +719,13 @@ export class MattermostService implements Notifier, vscode.Disposable {
       ? `https://github.com/${run.repoSlug}/issues/${run.issueNumber}`
       : undefined;
     const titleText = issueUrl ? `[**${run.issueTitle}**](${issueUrl})` : `**${run.issueTitle}**`;
-    const branchDisplay = run.branch ? `\`${run.branch}\`` : "";
+    // An undetermined branch (the honest "" sentinel, #448) must not collapse
+    // to an empty segment: that leaves a dangling "→ `main`" with nothing on
+    // its left once a non-default base branch is present. Render it as the
+    // shared prose label instead of a code span — an empty/blank code span
+    // reads worse than no backticks at all.
+    const branchText = getBranchDisplayText(run.branch);
+    const branchDisplay = run.branch.trim() ? `\`${branchText}\`` : branchText;
     const baseBranch = state.base_branch;
     const branchLine =
       baseBranch && baseBranch !== "main" ? `${branchDisplay} → \`${baseBranch}\`` : branchDisplay;

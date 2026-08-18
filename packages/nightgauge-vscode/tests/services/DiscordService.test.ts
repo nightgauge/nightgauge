@@ -10,6 +10,7 @@ import {
 // from it verbatim so a change to its shape reds these tests rather than
 // silently un-fixing the field.
 import { formatContainmentFailure } from "../../src/utils/worktreeContainment";
+import { UNDETERMINED_BRANCH_LABEL } from "../../src/views/dashboard/DashboardComponents";
 
 // Discord embed color constants (mirrored from DiscordService for assertion clarity)
 const COLOR_RUNNING = 0x5865f2;
@@ -919,6 +920,46 @@ describe("DiscordService retry and flush", () => {
     expect(embed.title).toContain("Shipped — over budget");
     expect(embed.title).not.toContain("Failed");
     expect(embed.fields.find((f: any) => f.name === "💰 Budget")).toBeDefined();
+  });
+
+  // #448 — the "" sentinel for an undetermined branch (schema no longer
+  // requires .min(1)) must not collapse to a blank segment: that leaves a
+  // dangling "→ `base`" with nothing on its left once a non-default base
+  // branch is present.
+  describe("embed rendering: undetermined branch (#448)", () => {
+    async function simulateIssuePickupWithBranch(issueNumber: number, branch: string) {
+      pss.getState.mockResolvedValue({ ...makeState(issueNumber), branch });
+      fetchMock.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ id: `msg-${issueNumber}` }),
+      });
+      await service.initialize();
+      stageStartHandler!({ stage: "issue-pickup", issueNumber });
+      await vi.advanceTimersByTimeAsync(0);
+    }
+
+    it("renders the shared undetermined-branch label instead of a blank segment", async () => {
+      await simulateIssuePickupWithBranch(42, "");
+      const embed = await renderFinalEmbed({
+        ...makeState(42, "productive"),
+        branch: "",
+      });
+
+      expect(embed.description).toContain(`\`my-repo\` · ${UNDETERMINED_BRANCH_LABEL}`);
+    });
+
+    it("does not leave a dangling arrow when the base branch differs from main", async () => {
+      await simulateIssuePickupWithBranch(42, "");
+      const embed = await renderFinalEmbed({
+        ...makeState(42, "productive"),
+        branch: "",
+        base_branch: "develop",
+      });
+
+      expect(embed.description).toContain(
+        `\`my-repo\` · ${UNDETERMINED_BRANCH_LABEL} → \`develop\``
+      );
+    });
   });
 });
 
