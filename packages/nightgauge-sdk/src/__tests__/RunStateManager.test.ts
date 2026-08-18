@@ -237,5 +237,65 @@ describe("RunStateManager", () => {
         await expect(fs.access(path.join(archive, "run-state.json"))).resolves.toBeUndefined();
       }
     });
+
+    // Pins #654: the match must be anchored on the leading hyphen
+    // ("-33.json"), not an unanchored numeric suffix ("33.json"). An
+    // unanchored suffix also matches issue-633.json (and every other kind
+    // of -N33.json file) because "633.json" ends with "33.json" — so
+    // archiving issue 33 would silently relocate issue 633's live,
+    // concurrently running context files into issue 33's archive dir.
+    it("does not move an unrelated issue's files whose number ends with the same digits", async () => {
+      const rs = await mgr.markRunning({ issue_number: 33, branch: "fix/33" });
+
+      const own = [
+        "issue-33.json",
+        "planning-33.json",
+        "dev-33.json",
+        "validate-33.json",
+        "pr-33.json",
+        "feedback-33.json",
+      ];
+      const other = [
+        "issue-633.json",
+        "planning-633.json",
+        "dev-633.json",
+        "validate-633.json",
+        "pr-633.json",
+        "feedback-633.json",
+      ];
+      for (const name of [...own, ...other]) {
+        await fs.writeFile(path.join(dir, name), "{}", "utf-8");
+      }
+
+      const archive = await mgr.archiveRun();
+      expect(archive).toContain(rs.run_id);
+      if (!archive) throw new Error("expected archive dir");
+
+      for (const name of own) {
+        await expect(
+          fs.access(path.join(dir, name)),
+          `${name} should have been moved out of the base dir`
+        ).rejects.toThrow();
+        await expect(
+          fs.access(path.join(archive, name)),
+          `${name} should be present in the archive dir`
+        ).resolves.toBeUndefined();
+      }
+
+      for (const name of other) {
+        await expect(
+          fs.access(path.join(dir, name)),
+          `${name} belongs to issue 633 and must stay in the base dir`
+        ).resolves.toBeUndefined();
+        await expect(
+          fs.access(path.join(archive, name)),
+          `${name} belongs to issue 633 and must NOT be in issue 33's archive dir`
+        ).rejects.toThrow();
+      }
+
+      // run-state.json itself is never matched/moved by the suffix scan —
+      // only the fresh snapshot written directly into the archive dir.
+      await expect(fs.access(path.join(dir, "run-state.json"))).resolves.toBeUndefined();
+    });
   });
 });

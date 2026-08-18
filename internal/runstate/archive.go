@@ -24,7 +24,12 @@ func ArchiveRun(baseDir string, rs *RunState) (string, error) {
 		return "", fmt.Errorf("create archive dir: %w", err)
 	}
 
-	suffix := fmt.Sprintf("%d.json", rs.IssueNumber)
+	// Anchored on the leading hyphen so archiving issue 33 never matches
+	// issue-633.json (or any other -N33.json): an unanchored suffix would
+	// treat "633.json" as ending in "33.json" and move a concurrently
+	// running issue's live context files out from under it (#654). Mirrors
+	// the same anchoring HasContextFiles uses in resume.go.
+	suffix := fmt.Sprintf("-%d.json", rs.IssueNumber)
 	entries, err := os.ReadDir(baseDir)
 	if err != nil && !os.IsNotExist(err) {
 		return "", fmt.Errorf("readdir base: %w", err)
