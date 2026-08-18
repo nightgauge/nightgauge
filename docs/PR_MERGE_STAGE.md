@@ -57,10 +57,10 @@ It then evaluates a pure decision function over the typed snapshot:
 ### Bounded CI wait (Issue #297)
 
 pr-merge starts **immediately** after pr-create, so on repos whose CI takes
-minutes (bowlsheet ~10 min) the PR's first snapshot is `BLOCKED`/`UNSTABLE` with
+minutes (the dogfood workspace ~10 min) the PR's first snapshot is `BLOCKED`/`UNSTABLE` with
 still-running checks. Pre-#297 the runner punted `dirty-merge-state: BLOCKED` on
 **every** such run and the LLM skill "won" pr-merge purely by babysitting CI for
-~10 minutes at ~$3–4.44/run.
+~10 minutes, burning real per-run LLM spend for zero engineering work.
 
 When the **only** thing blocking an otherwise mergeable, conflict-free,
 review-clean PR is **in-flight CI** (`mergeBlockedByPendingCI`: `MERGEABLE`, no

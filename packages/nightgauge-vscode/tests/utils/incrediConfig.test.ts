@@ -88,8 +88,8 @@ describe("getStageBudget", () => {
       const budget = getStageBudget("pr-merge");
       // Bumped in #3650: was $0.8, now $1.5 to give CI-watching headroom
       // (effectiveLimit after generous+grace climbs from $2.40 → $4.50).
-      // Bumped again in #265: was $1.5, now $2.0 — a real $4.51 CI-watching
-      // spend tripped the $4.50 generous+grace ceiling by one cent.
+      // Bumped again in #265: was $1.5, now $2.0 — a real CI-watching spend
+      // tripped the $4.50 generous+grace ceiling by one cent.
       // See DEFAULT_SIZE_AWARE_BUDGETS in budgetEnforcer.ts.
       expect(budget).toEqual({ maxCostUsd: 2.0 });
     });

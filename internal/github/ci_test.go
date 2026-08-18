@@ -245,7 +245,7 @@ func newCIServiceForCombinedTest(server *httptest.Server) *CIService {
 }
 
 // failureRolloutHandler simulates the exact moment described in #273
-// (dogfood run bowlsheet-flutter PR #293): the GraphQL StatusCheckRollup
+// (a dogfood mobile-repo PR): the GraphQL StatusCheckRollup
 // already reads FAILURE while the individual check-runs REST endpoint shows
 // one failed, one still running, and one still queued.
 func failureRolloutHandler() http.HandlerFunc {

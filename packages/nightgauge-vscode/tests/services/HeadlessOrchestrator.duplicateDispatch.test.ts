@@ -1,7 +1,7 @@
 /**
  * #188 — runPipeline second line of defense: the per-issue in-flight
  * registry spans ALL orchestrator instances in the extension host, so a
- * duplicate dispatch through a second instance (the bowlsheet#233 shape —
+ * duplicate dispatch through a second instance (the dogfood pr-merge deadlock shape —
  * the per-instance isRunning throw cannot see it) is refused with a failed
  * result instead of double-running.
  */

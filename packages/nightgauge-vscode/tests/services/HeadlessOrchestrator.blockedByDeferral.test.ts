@@ -202,7 +202,7 @@ describe("HeadlessOrchestrator blockedBy deferral (Issue #305)", () => {
       }
     ).contextAssembler.generateDeterministicContext = vi.fn().mockResolvedValue({
       generated: false,
-      blockedBy: [{ repo: "bowlsheet-flutter", number: 209, title: "Epic still open" }],
+      blockedBy: [{ repo: "acmeapp-flutter", number: 209, title: "Epic still open" }],
     });
     return { orchestrator, mockState };
   }

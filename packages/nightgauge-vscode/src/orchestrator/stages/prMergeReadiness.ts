@@ -3,11 +3,12 @@
  * path (Issue #297).
  *
  * pr-merge starts immediately after pr-create, so on repos whose CI takes
- * minutes (bowlsheet ~10 min) the PR's first snapshot is BLOCKED/UNSTABLE with
- * still-running checks. The legacy TS orchestrator has no deterministic pr-merge
- * — it always ran the LLM skill, which "won" only by babysitting CI for ~10 min
- * at ~$3–4.44/run — and the existing `tryDeterministicMergeFallback` declines
- * unless the merge state is already CLEAN, so it too gives up on pending CI.
+ * minutes (a downstream dogfood repo runs ~10 min) the PR's first snapshot is
+ * BLOCKED/UNSTABLE with still-running checks. The legacy TS orchestrator has
+ * no deterministic pr-merge — it always ran the LLM skill, which "won" only
+ * by babysitting CI for ~10 min at real per-run LLM cost — and the existing
+ * `tryDeterministicMergeFallback` declines unless the merge state is already
+ * CLEAN, so it too gives up on pending CI.
  *
  * This classifier lets the deterministic path WAIT for in-flight CI to finish
  * rather than punt: it distinguishes a PR that is merely waiting on checks

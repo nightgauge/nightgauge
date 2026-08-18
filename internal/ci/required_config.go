@@ -15,8 +15,8 @@ import (
 // only shields the workflow run), so when the underlying command fails the
 // merge is deterministically unwinnable until a human changes repo config —
 // either the check leaves the required set or the job drops
-// continue-on-error. This exact mismatch caused the bowlsheet#233 pr-merge
-// dead-end loop (#184).
+// continue-on-error. This exact mismatch caused the pr-merge dead-end
+// loop (#184).
 type RequiredCheckConfigMismatch struct {
 	Check        string `json:"check"`
 	WorkflowPath string `json:"workflow_path"`

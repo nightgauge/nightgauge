@@ -7143,7 +7143,7 @@ func (s *Scheduler) resolveDispatchModel(
 	// exclusively the judgment-heavy instances (blocked merge state, failing
 	// checks, dirty state). Issue size does not predict punt difficulty, so
 	// haiku is never the right tier here regardless of what config/calibration
-	// resolved (#197 — bowlsheet#233's haiku pr-merge improvised an admin
+	// resolved (#197 — a haiku pr-merge improvised an admin
 	// bypass). Floor: sonnet.
 	if stage == state.StagePRMerge && isHaikuModel(model) {
 		log.Printf("#%d: pr-merge LLM path runs only on deterministic punts — flooring haiku to sonnet (#197)",
@@ -7752,7 +7752,7 @@ func (s *Scheduler) tryDeterministicPRCreate(
 	// (`pipeline.worktree_base` set) those files live ONLY in the worktree, never
 	// in the canonical root — they are gitignored per-worktree local state. Passing
 	// the bare workspaceRoot made DecideCreate see HasDev=false and punt
-	// `missing-dev-context` on EVERY worktree-mode run (bowlsheet was 0-for-N),
+	// `missing-dev-context` on EVERY worktree-mode run (the dogfood workspace was 0-for-N),
 	// forcing the expensive LLM fallback. stageWorkspace mirrors what the LLM path
 	// (line ~2874) and the post-condition gates already use for the same reason.
 	stageWS := stageWorkspace(runtime, workspaceRoot)

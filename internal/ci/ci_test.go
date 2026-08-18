@@ -124,10 +124,10 @@ jobs:
 	}
 }
 
-// TestSplitLogicalCommands covers backslash-continuation joining (#194): the
-// bowlsheet#233 incident split a continued `flutter test` invocation into
-// three fragments and exec'd each separately, producing phantom hard-gate
-// failures (`--tags=e2e` executed as a program).
+// TestSplitLogicalCommands covers backslash-continuation joining (#194): a
+// continued `flutter test` invocation got split into three fragments and
+// exec'd each separately, producing phantom hard-gate failures (`--tags=e2e`
+// executed as a program).
 func TestSplitLogicalCommands(t *testing.T) {
 	cases := []struct {
 		name string

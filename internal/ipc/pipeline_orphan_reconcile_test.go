@@ -445,8 +445,8 @@ func TestNotifyStageTransition_FailedKeepsTheSnapshotForTheTerminalClaim(t *test
 // the same root its stage context files use — not the IPC server's launch
 // root, and the terminal notifyComplete must remove it from there.
 func TestNotifyStageTransition_PersistsSnapshotIntoTargetRepo(t *testing.T) {
-	launchRoot := t.TempDir() // e.g. bowlsheet-infra — workspaceFolders[0]
-	targetRoot := t.TempDir() // e.g. bowlsheet-flutter — the run's repo
+	launchRoot := t.TempDir() // e.g. acmeapp-infra — workspaceFolders[0]
+	targetRoot := t.TempDir() // e.g. acmeapp-flutter — the run's repo
 	s := NewServer(nil, WithWorkspaceRoot(launchRoot))
 	s.RegisterRepo("nightgauge", "acmeapp", targetRoot)
 

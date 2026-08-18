@@ -186,15 +186,16 @@ export const DEFAULT_SIZE_AWARE_BUDGETS: Record<string, SizeAwareBudget> = {
   // feature-dev M re-baselined 16 → 24 (#259): first honest-accounting data
   // (post-#256 — pre-#256 corpora double-counted cumulative result envelopes,
   // so historical p90s are inflated for any stage that emitted more than one)
-  // showed a successful M-sized feature-dev at $23.67 REAL, which the old
-  // $16 base wound down at $19.20 and killed at $24 with grace. A standard-
-  // preset run must be able to finish an observed-successful M stage.
+  // showed a successful M-sized feature-dev landing past the old $16 base's
+  // $19.20 wind-down mark and right up against its $24 kill-with-grace
+  // ceiling. A standard-preset run must be able to finish an observed-
+  // successful M stage.
   "feature-dev": { XS: 4.0, S: 8.0, M: 24.0, L: 50.0, XL: 80.0 },
   "feature-validate": { XS: 2.0, S: 4.0, M: 20.0, L: 40.0, XL: 70.0 },
   // pr-create re-baselined again in #265 (post-#259): the #259 ladder
   // (XS/S 0.2, M 0.3, L 1.0, XL 1.5) still undersized the LLM fallback path
   // — the deterministic-first path costs ≈ $0, but on repos where it never
-  // engages (observed 0-for-4 on the bowlsheet corpus, tracked separately)
+  // engages (observed 0-for-4 on the dogfood corpus, tracked separately)
   // every pr-create run pays LLM-fallback cost. Honest-accounting actuals
   // across 4 runs: $1.70 L, $1.97 M, $2.10 M, $2.50 L (the $2.50 run warned
   // against its $2.00 L×generous cap). New STANDARD (1.0×) values give
@@ -217,11 +218,11 @@ export const DEFAULT_SIZE_AWARE_BUDGETS: Record<string, SizeAwareBudget> = {
   // failure corpus while still firing well below the $4.00 stage cost cap
   // for genuine runaways.
   //
-  // size:M re-baselined again in #265: bowlsheet #261 (M) hit $4.51 REAL on
-  // the CI-watching path, tripping the $4.50 generous+grace ceiling by one
-  // cent and forcing an escalation on a healthy run — CI-watching cost
-  // scales with CI wall-time, not issue size (compare #240, L, at $4.42 —
-  // nearly identical spend at a different size tier). New M generous+grace:
+  // size:M re-baselined again in #265: a dogfood size:M run's CI-watching
+  // spend tripped the $4.50 generous+grace ceiling by one cent, forcing an
+  // escalation on a healthy run — CI-watching cost scales with CI wall-time,
+  // not issue size (compare #240, L, at $4.42 — nearly identical spend at a
+  // different size tier). New M generous+grace:
   // 2.0 × 2.0 × 1.5 = $6.00 (was $4.50).
   "pr-merge": { XS: 0.4, S: 1.0, M: 2.0, L: 3.0, XL: 5.0 },
 };

@@ -496,7 +496,8 @@ export class ProgressMonitor {
  * branch), so a stage could burn real money and make 100+ tool calls while
  * the monitor recorded `activity signals: 0` — and a delegation-heavy
  * feature-dev whose productive-signal path also went quiet was then
- * false-killed by the no-progress runaway monitor (bowlsheet run #262).
+ * false-killed by the no-progress runaway monitor (the dogfood mid-stage
+ * SIGTERM run).
  *
  * Classifying from `toolUses[]` (and still honoring the singular field for the
  * partial-message shape) reconnects the feed. A single parsed line is either a

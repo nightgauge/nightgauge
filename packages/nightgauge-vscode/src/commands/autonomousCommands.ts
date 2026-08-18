@@ -112,7 +112,7 @@ export function setAutonomousSafetyNotifier(notifier: AutonomousSafetyNotifier |
  *   - `safety:lifetime-failure-cap` — Go-side per-issue chronic-failure cap.
  *     Halts ALL dispatching until triaged, exactly the event an unattended
  *     (dark-factory) operator must hear about remotely — a transient VSCode
- *     toast was the only signal when it stopped the bowlsheet factory for
+ *     toast was the only signal when it stopped the dogfood factory for
  *     2h on 2026-07-11.
  *
  * Issue #3605 bullet C.

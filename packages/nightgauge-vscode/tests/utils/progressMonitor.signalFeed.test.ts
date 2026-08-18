@@ -15,8 +15,8 @@
  * `commit` stayed at 0 for the whole stage while cost parsing (independent
  * `result`/`usage` branch) kept working — and a delegation-heavy feature-dev
  * whose productive-signal path also went quiet was false-killed by the
- * no-progress runaway monitor (bowlsheet run #262: "$9.15 spent, activity
- * signals: 0").
+ * no-progress runaway monitor (the dogfood mid-stage SIGTERM run: real
+ * spend logged, "activity signals: 0").
  *
  * These tests exercise the two fixes:
  *   1. `recordToolCallProgress` classifies tool calls from BOTH stream shapes,

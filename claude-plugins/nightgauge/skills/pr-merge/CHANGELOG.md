@@ -27,9 +27,9 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 - **`--admin` argument and `pr.admin_merge` config deleted** (#186). The skill
   advertised an admin bypass the deterministic layer never supported; a
-  pipeline agent improvised `gh pr merge --admin` against branch protection
-  (bowlsheet#233 incident). A blocked merge is terminal — report the blocker
-  and escalate. Deterministic guards: `preflight skill-anti-patterns` flags
+  pipeline agent improvised `gh pr merge --admin` against branch protection.
+  A blocked merge is terminal — report the blocker and escalate.
+  Deterministic guards: `preflight skill-anti-patterns` flags
   admin/auto merge flags in skill text, and the PreToolUse stage-gate hook
   rejects `gh pr merge --admin|--auto` during pipeline sessions.
 

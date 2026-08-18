@@ -1,7 +1,7 @@
 /**
  * #188 — per-issue in-flight guard at the dispatch boundary.
  *
- * bowlsheet#233 ran runPipeline twice within 3 seconds for the same issue
+ * The dogfood pr-merge deadlock ran runPipeline twice within 3 seconds for the same issue
  * (two pre-flight cost estimates, overlapping stage starts, races on the
  * same context files and worktree): IssueQueueService fires onItemAdded
  * from three entrypoints and nothing on the TS side stopped a second

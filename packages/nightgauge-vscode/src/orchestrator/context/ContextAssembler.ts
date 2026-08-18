@@ -1069,9 +1069,9 @@ export class ContextAssembler {
       // Dependency enforcement on the PRIMARY path (#189): this generator
       // used to hard-code blockedBy: [] — GitHub's native blockedBy edges
       // were never consulted, so nothing structural prevented picking up an
-      // issue whose blockers were still open (bowlsheet#233 carried a
-      // cross-repo ORDERING HAZARD that survived only as prose). Run the
-      // same deterministic check the LLM path performs (`hook check-deps`)
+      // issue whose blockers were still open (the dogfood pr-merge deadlock
+      // carried a cross-repo ORDERING HAZARD that survived only as prose).
+      // Run the same deterministic check the LLM path performs (`hook check-deps`)
       // and FAIL CLOSED when open dependencies exist.
       const deps = await this.checkIssueDependencies(issueNumber, execOptions);
       if (deps) {

@@ -800,7 +800,7 @@ type AutonomousScheduler struct {
 	// gh-pr-list per repo, quota-safe) and read by prioritize() to skip
 	// re-dispatching such issues. Without this guard a failed pr-merge reverts
 	// the issue to Ready and the ENTIRE pipeline re-runs against a PR that still
-	// can't merge — the wasteful churn seen across bowlsheet #234/#244/#254/#245.
+	// can't merge — the wasteful churn seen in the dogfood unmergeable-PR retry loop.
 	// Non-destructive: it never moves board status, so once the PR unblocks,
 	// merges, or closes, the issue is eligible again on the next fresh scan.
 	// Guarded by mu.
@@ -4433,9 +4433,10 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 		// stops re-dispatching it into the same external blocker, while
 		// every other Ready issue keeps flowing. Pre-fix this branch paused
 		// the whole scheduler AND reverted the board to Ready — the revert
-		// re-dispatched the issue straight back into the same red check
-		// ($4-5 burned per futile retry on bowlsheet #233/#244,
-		// 2026-07-11), and the pause stopped every unrelated Ready issue.
+		// re-dispatched the issue straight back into the same red check (real
+		// LLM spend burned per futile retry in the dogfood unmergeable-PR
+		// retry loop, 2026-07-11), and the pause stopped every unrelated
+		// Ready issue.
 		// Once the blocker clears, merge the open PR (or move the issue
 		// back to Ready to re-run pr-merge).
 		// Architecture-approval gate halt (#4098/#4222) — a deliberate,

@@ -4,7 +4,7 @@
  * The math was always deterministic; the inputs were not: calibration was
  * re-loaded from disk per call, labels passed live, and the performance
  * mode re-read from disk. Two estimates for the same issue seconds apart
- * differed by 83% (bowlsheet#233). A snapshot captured at pipeline start
+ * differed by 83% (the dogfood pr-merge deadlock). A snapshot captured at pipeline start
  * must make repeat estimates identical even when the live inputs change.
  */
 

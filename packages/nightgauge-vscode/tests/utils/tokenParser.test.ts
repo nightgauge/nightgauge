@@ -1234,9 +1234,9 @@ describe("TokenAccumulator", () => {
     });
 
     it("books only the delta between successive cumulative envelopes", () => {
-      // The bowlsheet #236 incident shape: six envelopes from one process,
-      // each reporting the session's cumulative total_cost_usd. Summing them
-      // recorded $100.47 for a stage that really cost $23.67.
+      // The dogfood multi-envelope cost run's incident shape: six envelopes
+      // from one process, each reporting the session's cumulative
+      // total_cost_usd. Summing them booked roughly 4× the real cost.
       for (const c of [14.7754692, 15.1116708, 15.3359154, 15.70176885, 15.8720232, 23.6728992]) {
         accumulator.add(envelope(c));
       }
@@ -1641,8 +1641,9 @@ describe("resolveStageBookedUsage (#296 — book killed-stage cost)", () => {
   });
 
   it("falls back to the live estimate when the stage was killed before any envelope", () => {
-    // The bowlsheet #262 shape: SIGTERM'd mid-stage, so the accumulator never
-    // received a `result` envelope, but the estimator observed the real burn.
+    // The dogfood mid-stage SIGTERM run shape: SIGTERM'd mid-stage, so the
+    // accumulator never received a `result` envelope, but the estimator
+    // observed the real burn.
     const acc = new TokenAccumulator("claude", "claude-sonnet-4-6");
     const est = new LiveStageEstimator("claude", "claude-sonnet-4-6");
     est.observe(assistantSnapshot(50_000, 4_000, 10_000));

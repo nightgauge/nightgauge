@@ -1485,8 +1485,8 @@ export async function initializeServices(
         // #191: scope this slot's disk session log to the run's TARGET repo.
         // The bootstrap log root is workspaceFolders[0]'s git root — for a
         // cross-repo run that is a different repository, and forensics
-        // landed where nobody looks (bowlsheet#233's log lived in the
-        // sibling infra repo).
+        // landed where nobody looks (the dogfood pr-merge deadlock's log
+        // lived in the sibling infra repo).
         //
         // #216 / #307 follow-up: BOTH the disk-log root (setSlotLogRoot) and
         // the slot's identity record (registerSlotInfo) MUST be seeded before

@@ -124,8 +124,8 @@ func (as *AutonomousScheduler) reconcileStuckInReviewPRs(ctx context.Context, gr
 // check, or correct the required-checks config). It stores the set on the
 // scheduler so prioritize() skips re-dispatching those issues, ending the
 // re-run churn where a failed pr-merge reverts the issue to Ready and the WHOLE
-// pipeline runs again against a PR that still can't merge (the bowlsheet
-// #234/#244/#254/#245 pattern: many full re-runs, each failing at pr-merge
+// pipeline runs again against a PR that still can't merge (the dogfood
+// unmergeable-PR retry loop: many full re-runs, each failing at pr-merge
 // because a required check is red).
 //
 // "Cannot merge" is a UNION of conditions, not one enum value (#159). GitHub

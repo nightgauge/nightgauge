@@ -911,8 +911,9 @@ const LIGHTWEIGHT_STAGE_DEFAULTS: Partial<Record<PipelineStage, DefaultModel>> =
   // and punts to the LLM only when something is WRONG (blocked merge state,
   // failing checks, dirty state). Issue size is irrelevant to that
   // difficulty; routing the punt path to the cheapest tier assigned the
-  // weakest model to the hardest instances (bowlsheet#233: haiku improvised
-  // an admin bypass). pr-merge resolves to sonnet via DEFAULT_STAGE_MODELS.
+  // weakest model to the hardest instances (the dogfood pr-merge deadlock:
+  // haiku improvised an admin bypass). pr-merge resolves to sonnet via
+  // DEFAULT_STAGE_MODELS.
 };
 
 /**
@@ -5225,8 +5226,9 @@ export function runStageSkillHeadless(
     // Fail-open guard (Issue #295): a blind monitor must never shoot. The stage
     // parsed real tool events (`parsedToolEventCount > 0`) but the monitor
     // recorded ZERO signals — the parser→monitor feed is disconnected, the
-    // agent is NOT stalled. Killing here would be a false kill (the bowlsheet
-    // #262 class). Log the discrepancy prominently and refuse to kill. Applies
+    // agent is NOT stalled. Killing here would be a false kill (the same
+    // class as the dogfood mid-stage SIGTERM run). Log the discrepancy
+    // prominently and refuse to kill. Applies
     // to the forced (Nx-escalation) path too — the blindness is what matters,
     // not which path proposed the kill.
     if (isBlindMonitorKill(result.signalsSeen, parsedToolEventCount)) {
@@ -6590,8 +6592,8 @@ export function runStageSkillHeadless(
     // path: a SIGTERM'd CLI (runaway / stall / budget / user cancel) never
     // emits that envelope, so fall back to the LiveStageEstimator's last
     // in-stage snapshot — otherwise the killed stage books $0 while the kill
-    // log reported the real burn (bowlsheet #262). One shared decision
-    // (`resolveStageBookedUsage`) serves every kill site because they all
+    // log reported the real burn (the dogfood mid-stage SIGTERM run). One
+    // shared decision (`resolveStageBookedUsage`) serves every kill site because they all
     // funnel the subprocess to this single close handler; `estimated`
     // distinguishes the fallback so downstream can weight it accordingly.
     const bookedUsage = resolveStageBookedUsage(tokenAccumulator, liveEstimator);

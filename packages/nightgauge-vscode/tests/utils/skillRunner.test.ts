@@ -930,7 +930,7 @@ allowed-tools: Read Write Edit Bash AskUserQuestion
       // Later assistant text must not replay the echo: pre-fix, the command
       // string sat in the phase content buffer and a newline-bearing
       // follow-up flushed it as a phantom duplicate (the 43s-late twin
-      // observed in run bowlsheet-flutter#244).
+      // observed in a dogfood mobile-repo run).
       const followUpLine = JSON.stringify({
         type: "assistant",
         message: {

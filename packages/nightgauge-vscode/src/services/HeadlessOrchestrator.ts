@@ -8498,8 +8498,8 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     // dispatch-boundary guard in ConcurrentPipelineManager (#188). The
     // per-instance isRunning throw below cannot catch a duplicate dispatch
     // through a SECOND orchestrator instance — which is exactly how
-    // bowlsheet#233 double-ran (two pre-flights 3s apart, racing on the
-    // same context files and worktree). Static: spans all instances in
+    // the dogfood pr-merge deadlock double-ran (two pre-flights 3s apart,
+    // racing on the same context files and worktree). Static: spans all instances in
     // this extension host. Log + refuse rather than double-run.
     if (HeadlessOrchestrator.activePipelineIssues.has(issueNumber)) {
       this.logger.error(
@@ -9067,7 +9067,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         // Pin the estimator inputs once per run (#198): calibration table,
         // labels/title, and performance mode are all externally mutable —
         // re-reading them live made two estimates for the same issue differ
-        // by 83% seconds apart (bowlsheet#233). Every estimate, warning
+        // by 83% seconds apart (the dogfood pr-merge deadlock). Every estimate, warning
         // threshold, and post-run comparison in this run reuses this snapshot.
         this.estimatorSnapshot = await captureEstimatorInputs(
           { labels: preCheck.labels, title: preCheck.title },
@@ -10220,7 +10220,8 @@ export class HeadlessOrchestrator implements vscode.Disposable {
               // merge blocked by branch rules / a required-check config
               // mismatch is deterministically unwinnable — the retry would
               // rebuild the same prompt, re-run the same checks, and hit the
-              // same rejection (bowlsheet#233: ~16 min and 2× tokens burned).
+              // same rejection (the dogfood pr-merge deadlock: ~16 min and 2×
+              // tokens burned).
               const blockerClass = await this.classifyMergeBlockerRetryability(
                 issueNumber,
                 this.pinnedWorkspaceRoot ?? this.getWorkingDirectory()

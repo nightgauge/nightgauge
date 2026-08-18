@@ -180,7 +180,7 @@ describe("HeadlessOrchestrator.verifyArchitectureApproval (Issue #4222)", () => 
   it("treats exit-0 with non-JSON stdout as proceed — no spurious 'binary error' log", async () => {
     // Regression: the gate-disabled path of older binaries printed plain text
     // on exit 0; the pre-check's JSON.parse threw and mislabeled every
-    // disabled-gate run as "binary error" (bowlsheet dogfooding, 2026-07-11).
+    // disabled-gate run as "binary error" (observed dogfooding, 2026-07-11).
     scenario.value = "disabled-plain-text";
     const orch = new HeadlessOrchestrator(null as any, logger, { contextFileWaitMs: 0 });
     expect(await (orch as any).verifyArchitectureApproval(237)).toBeNull();

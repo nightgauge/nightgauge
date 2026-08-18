@@ -11,7 +11,7 @@
  * monitor. The productive window therefore advanced on a marker stream that
  * does not exist in practice.
  *
- * The cost, from `bowlsheet-infra#186`'s exit record: a `feature-validate`
+ * The cost, from the dogfood infra false-kill's exit record: a `feature-validate`
  * stage that had walked to phase 18 of 23 was recorded with 4 productive
  * signals over 40 minutes and killed for "no productive progress for 250s"
  * while running its commit-and-push phase.

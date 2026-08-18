@@ -42,9 +42,9 @@ func TestRecordStageExitIPC_PersistsKillCeiling(t *testing.T) {
 	}
 
 	exitCode := 143
-	// The bowlsheet-infra#186 kill, verbatim.
+	// The dogfood infra false-kill, verbatim.
 	params := RecordStageExitParams{
-		Repo:             "EdibuLLC/bowlsheet-infra",
+		Repo:             "acme/acmeapp-infra",
 		IssueNumber:      186,
 		Stage:            "feature-validate",
 		Success:          false,

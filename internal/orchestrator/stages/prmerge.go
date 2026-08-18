@@ -262,10 +262,11 @@ func (r *DeterministicRunner) Run(ctx context.Context, issueNumber int, _ string
 	// Bounded CI wait (Issue #297). When the ONLY thing blocking an otherwise
 	// mergeable, conflict-free, review-clean PR is in-flight CI, poll until the
 	// merge state clears instead of punting to the LLM path. pr-merge starts
-	// immediately after pr-create, so on repos whose CI takes minutes (bowlsheet
-	// ~10 min) the first snapshot is always BLOCKED/UNSTABLE with pending checks
-	// — pre-#297 that punted `dirty-merge-state: BLOCKED` on EVERY run and the
-	// LLM skill "won" only by babysitting CI at ~$3–4.44/run. On a hard blocker
+	// immediately after pr-create, so on repos whose CI takes minutes (the
+	// dogfood workspace ~10 min) the first snapshot is always BLOCKED/UNSTABLE
+	// with pending checks — pre-#297 that punted `dirty-merge-state: BLOCKED`
+	// on EVERY run and the LLM skill "won" only by babysitting CI, burning
+	// real per-run LLM spend for zero engineering work. On a hard blocker
 	// emerging mid-wait (a check fails, a conflict/review appears) or on timeout,
 	// re-Decide/return the appropriate punt so the LLM path still gets its turn.
 	if !decision.ShouldMerge && MergeBlockedByPendingCI(snap) {

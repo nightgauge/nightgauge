@@ -172,10 +172,10 @@ describe("OutputWindow spawn-instant slot identity (#307 follow-up)", () => {
     ow.setIssueNumber(96);
 
     // Slot 0 spawns for infra#163.
-    spawnSlot(ow, 0, 163, "bowlsheet-infra", "/workspace/infra");
+    spawnSlot(ow, 0, 163, "acmeapp-infra", "/workspace/infra");
 
     // Slot 1 spawns for flutter#303, concurrently, in the same burst.
-    spawnSlot(ow, 1, 303, "bowlsheet-flutter", "/workspace/flutter");
+    spawnSlot(ow, 1, 303, "acmeapp-flutter", "/workspace/flutter");
 
     // Every disk write must show the emitting slot's OWN root paired with
     // its OWN issue number — never dashboard's stale 96, never crossed
@@ -213,7 +213,7 @@ describe("OutputWindow spawn-instant slot identity (#307 follow-up)", () => {
 
   it("routes correctly even when a slot index is reused from a completed prior occupant in the same session", () => {
     // Slot 2 first ran dashboard#96...
-    spawnSlot(ow, 2, 96, "bowlsheet-dashboard", "/workspace/dashboard");
+    spawnSlot(ow, 2, 96, "acmeapp-dashboard", "/workspace/dashboard");
     const firstWrite = appendSpy.mock.calls[appendSpy.mock.calls.length - 1];
     expect(firstWrite[0]).toBe("/workspace/dashboard");
     expect(firstWrite[1]).toBe(96);
@@ -221,7 +221,7 @@ describe("OutputWindow spawn-instant slot identity (#307 follow-up)", () => {
     // ...then slot 2 is reused for a fresh dispatch: infra#163. Re-spawning
     // must fully overwrite the stale occupant's identity before the new
     // preamble is emitted.
-    spawnSlot(ow, 2, 163, "bowlsheet-infra", "/workspace/infra");
+    spawnSlot(ow, 2, 163, "acmeapp-infra", "/workspace/infra");
     const secondWrite = appendSpy.mock.calls[appendSpy.mock.calls.length - 1];
     expect(secondWrite[0]).toBe("/workspace/infra");
     expect(secondWrite[1]).toBe(163); // NOT the stale prior occupant's 96

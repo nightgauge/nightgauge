@@ -6,7 +6,8 @@
  * (`tokenParser` populates `usage` only there). Every threshold — wind-down,
  * warning, stage cap, run ceiling — therefore fired in one burst after the work
  * was already done, making the "commit and wrap up" wind-down signal useless
- * (it could only arrive once the stage had finished — bowlsheet-flutter #236).
+ * (it could only arrive once the stage had finished — the dogfood
+ * multi-envelope cost run).
  *
  * Since #233 the extension harvests per-turn `assistant` usage into a
  * `LiveStageEstimator`, so cost can be ESTIMATED while a stage is still running.

@@ -14,7 +14,7 @@ import (
 // Re-running the whole pipeline can't clear a repo-config block — only a human
 // can. This guard ends the churn where a failed pr-merge reverts the issue to
 // Ready and the ENTIRE pipeline re-runs against a PR that still can't merge
-// (the bowlsheet #234/#244/#254/#245 pattern).
+// (the dogfood unmergeable-PR retry loop).
 func TestPrioritize_SkipsOpenPRBlocked(t *testing.T) {
 	nodes := []*depgraph.Node{
 		{Repo: "R", Number: 1, Title: "Blocked PR", State: "OPEN", BoardStatus: "Ready", Priority: "P0", Size: "XS", Weight: 1},

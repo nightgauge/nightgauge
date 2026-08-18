@@ -46,8 +46,8 @@ describe("OutputWindowState per-slot session-log identity (#307)", () => {
     state.setLogConfig("/ws/bootstrap");
 
     // Two concurrent slots in different repos, each with its own issue.
-    state.registerSlot(0, 209, "platform work", "owner/bowlsheet-platform");
-    state.registerSlot(1, 160, "infra work", "owner/bowlsheet-infra");
+    state.registerSlot(0, 209, "platform work", "owner/acmeapp-platform");
+    state.registerSlot(1, 160, "infra work", "owner/acmeapp-infra");
     state.setSlotLogRoot(0, "/ws/platform");
     state.setSlotLogRoot(1, "/ws/infra");
   });
@@ -111,8 +111,8 @@ describe("OutputWindowState per-slot session-log identity (#307)", () => {
  * because the caller (bootstrap/services.ts onSlotStarted) fired that first
  * line via updateStage()/onStageChanged() BEFORE calling registerSlotInfo(),
  * i.e. before this slot's own `slotInfos` entry existed. Two concrete disk
- * incidents: bowlsheet-infra's #96-tagged log held dashboard#96's issue
- * number in a file whose lines were actually infra#163's; bowlsheet-flutter's
+ * incidents: infra's #96-tagged log held dashboard#96's issue
+ * number in a file whose lines were actually infra#163's; flutter's
  * #209-tagged log held platform#209's number for what was actually flutter#303.
  *
  * Both incidents match a slot registering AFTER a stale identity is already
@@ -142,7 +142,7 @@ describe("OutputWindowState spawn-instant identity (#307 follow-up)", () => {
     // Correct call order (the fix): setSlotLogRoot + registerSlot BEFORE the
     // first addEntry for this slot.
     state.setSlotLogRoot(1, "/ws/infra");
-    state.registerSlot(1, 163, "infra work", "owner/bowlsheet-infra");
+    state.registerSlot(1, 163, "infra work", "owner/acmeapp-infra");
 
     // This is the dispatch preamble — the very FIRST line ever emitted for
     // slot 1, tagged with slot 1 as its explicit owner.
@@ -158,7 +158,7 @@ describe("OutputWindowState spawn-instant identity (#307 follow-up)", () => {
   it("resolves correctly even when the slot index is reused and still holds a prior occupant's identity", () => {
     // Slot index 2 was previously dashboard#96 in this same session.
     state.setSlotLogRoot(2, "/ws/dashboard");
-    state.registerSlot(2, 96, "dashboard work", "owner/bowlsheet-dashboard");
+    state.registerSlot(2, 96, "dashboard work", "owner/acmeapp-dashboard");
     state.addEntry("dashboard line", "info", "feature-dev", { slotIndex: 2 });
     const priorWrite = appendSpy.mock.calls[appendSpy.mock.calls.length - 1];
     expect(priorWrite[1]).toBe(96);
@@ -168,7 +168,7 @@ describe("OutputWindowState spawn-instant identity (#307 follow-up)", () => {
     // this re-registration must fully overwrite the stale #96 entry so the
     // very next addEntry for slot 2 never resolves the old occupant's issue.
     state.setSlotLogRoot(2, "/ws/flutter");
-    state.registerSlot(2, 303, "flutter work", "owner/bowlsheet-flutter");
+    state.registerSlot(2, 303, "flutter work", "owner/acmeapp-flutter");
     state.addEntry("Starting issue-pickup for issue #303...", "info", "issue-pickup", {
       slotIndex: 2,
     });
