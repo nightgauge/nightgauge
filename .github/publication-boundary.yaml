@@ -323,6 +323,7 @@ deny:
       - "docs/decisions/015-decision-requests.md"
       - "docs/decisions/016-model-aware-skill-overlays.md"
       - "docs/decisions/017-runtime-identity-keying.md"
+      - "docs/decisions/018-adapter-usage-quota-model.md"
     rationale: >-
       ADRs are private until individually reviewed and excepted. The exceptions
       describe shipped open-source implementation decisions.
