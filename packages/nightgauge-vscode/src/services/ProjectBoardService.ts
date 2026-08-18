@@ -750,13 +750,19 @@ export class ProjectBoardService implements vscode.Disposable, IWorkItemProvider
     for (const issues of this.cache.values()) {
       for (const issue of issues) {
         if (issue.isEpic) {
-          // Issue #656 (Gap 3): thread the epic's own blockedBy through so
-          // EpicGroupTreeItem can render the epic's blocked state.
+          // Issue #656 (Gap 3 / AC 1 remainder): thread the epic's own
+          // blockedBy and labels through so EpicGroupTreeItem can render
+          // the epic's blocked state and (for an empty epic) distinguish
+          // a confirmed needs-decomposition read from an unlabelled one.
+          // `issue` here is the epic's own issue object, so labels are
+          // genuinely known — not the "unknown" case documented on
+          // EpicInfo.labels.
           map.set(issue.number, {
             number: issue.number,
             title: issue.title,
             url: issue.url,
             blockedBy: issue.blockedBy,
+            labels: issue.labels,
           });
         }
       }
@@ -771,6 +777,7 @@ export class ProjectBoardService implements vscode.Disposable, IWorkItemProvider
             title: issue.title,
             url: issue.url,
             blockedBy: issue.blockedBy,
+            labels: issue.labels,
           });
         }
       }
@@ -778,6 +785,12 @@ export class ProjectBoardService implements vscode.Disposable, IWorkItemProvider
 
     // Fallback: resolve epic titles from sub-issues' epicRef + epicTitle
     // when the epic itself is in a different status tab not yet cached.
+    // `labels` is deliberately left unset (undefined) here: unlike the two
+    // scans above, this path never sees the epic's own issue object — only
+    // a sub-issue's epicRef/epicTitle — so it genuinely cannot report the
+    // epic's labels. Per EpicInfo.labels, `undefined` means UNKNOWN and
+    // must not be read by callers as "confirmed no needs-decomposition
+    // label"; setting `labels: []` here would silently assert that.
     const allIssues = [...(extraIssues ?? []), ...[...this.cache.values()].flat()];
     for (const issue of allIssues) {
       if (issue.epicRef && issue.epicTitle && !map.has(issue.epicRef)) {

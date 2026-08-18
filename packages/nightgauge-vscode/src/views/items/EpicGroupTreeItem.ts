@@ -26,6 +26,23 @@ export interface EpicInfo {
    * ReadyIssueTreeItem leaf.
    */
   blockedBy?: BlockingIssue[];
+  /**
+   * The epic issue's own GitHub labels (Issue #656, AC 1 remainder —
+   * distinguishing "mislabelled" from "not yet decomposed" for an empty
+   * epic requires reading `needs-decomposition` off the epic itself).
+   *
+   * `undefined` means UNKNOWN, not "no labels": some `EpicInfo` records
+   * (e.g. the epicRef/epicTitle fallback in
+   * `ProjectBoardService.getEpicMetadataFromCache`) are built without
+   * ever seeing the epic's own issue object, so they cannot report its
+   * labels either way. A defined array — even `[]` — means the epic's
+   * own issue WAS read. Callers must not collapse "unknown" and "known,
+   * label absent" into the same case: only a defined array that
+   * actually contains `needs-decomposition` may assert the confirmed
+   * "awaiting decomposition" state; unknown and known-absent both fall
+   * back to the honest, cause-agnostic "(empty)" rendering.
+   */
+  labels?: string[];
 }
 
 /**
@@ -42,6 +59,24 @@ export interface EpicGroup {
 export interface GroupByEpicResult {
   /** Groups of sub-issues organized by their parent epic */
   groups: EpicGroup[];
+}
+
+/**
+ * Whether an empty epic has been confirmed by a human as genuinely
+ * epic-shaped and simply not decomposed yet, vs. still ambiguous
+ * (Issue #656, AC 1 remainder).
+ *
+ * Requires BOTH zero sub-issues AND a confirmed `needs-decomposition`
+ * read off the epic's own labels — `epic.labels` being `undefined`
+ * (unknown, see `EpicInfo.labels`) or a defined array without the label
+ * both return `false` here, on purpose: absence of the label is not
+ * evidence of anything, and this function must never let the caller
+ * treat "we don't know" the same as "confirmed awaiting decomposition".
+ */
+function epicAwaitingDecomposition(epic: EpicInfo | null, subIssueCount: number): boolean {
+  return (
+    epic !== null && subIssueCount === 0 && epic.labels?.includes("needs-decomposition") === true
+  );
 }
 
 /**
@@ -88,13 +123,21 @@ export class EpicGroupTreeItem extends BaseTreeItem {
 
     // Issue #656: an epic can be blocked (Gap 3) and/or have zero sub-issues
     // (Gap 1) — both need to be visually distinguished from a normal epic,
-    // and from each other, so the label/icon carry both independently.
+    // and from each other, so the label/icon carry both independently. An
+    // empty epic further splits into "confirmed awaiting decomposition"
+    // (needs-decomposition label present) vs. the honest, cause-agnostic
+    // "empty" state (AC 1 remainder) — see epicAwaitingDecomposition().
     const epicIsBlocked = epic ? isBlocked(epic) : false;
     const epicIsEmpty = epic !== null && issues.length === 0;
+    const epicNeedsDecomposition = epicAwaitingDecomposition(epic, issues.length);
 
     const labelSuffixes: string[] = [];
     if (epicIsBlocked) labelSuffixes.push("blocked");
-    if (epicIsEmpty) labelSuffixes.push("empty");
+    if (epicNeedsDecomposition) {
+      labelSuffixes.push("awaiting decomposition");
+    } else if (epicIsEmpty) {
+      labelSuffixes.push("empty");
+    }
     const labelSuffix = labelSuffixes.length > 0 ? ` (${labelSuffixes.join(", ")})` : "";
 
     const label = epic ? `Epic #${epic.number}: ${epic.title}${labelSuffix}` : "No Epic";
@@ -133,13 +176,17 @@ export class EpicGroupTreeItem extends BaseTreeItem {
     descriptionParts.push(`(${this.completedCount}/${this.totalCount} complete)`);
     this.description = descriptionParts.join(" ");
 
-    // Set icon. Issue #656: blocked takes precedence over empty, which
-    // takes precedence over the normal epic/standalone icons — a blocked
-    // epic needs the same lock treatment as a blocked ReadyIssueTreeItem
-    // leaf (Gap 3), and an empty epic needs a distinct "needs attention"
-    // treatment from a healthy one (Gap 1).
+    // Set icon. Issue #656: blocked takes precedence over both empty
+    // states, which take precedence over the normal epic/standalone
+    // icons — a blocked epic needs the same lock treatment as a blocked
+    // ReadyIssueTreeItem leaf (Gap 3). Of the two empty states, a
+    // confirmed "awaiting decomposition" (needs-decomposition label) gets
+    // a distinct, calmer icon from the ambiguous "empty" warning (AC 1
+    // remainder) — it is a known, expected state, not one needing triage.
     if (epicIsBlocked) {
       this.setIconWithColor("lock", new vscode.ThemeColor("problemsErrorIcon.foreground"));
+    } else if (epicNeedsDecomposition) {
+      this.setIconWithColor("checklist", new vscode.ThemeColor("charts.blue"));
     } else if (epicIsEmpty) {
       this.setIconWithColor("warning", new vscode.ThemeColor("problemsWarningIcon.foreground"));
     } else if (epic) {
@@ -200,14 +247,24 @@ export class EpicGroupTreeItem extends BaseTreeItem {
       md.appendMarkdown(`\n`);
     }
 
-    if (issues.length === 0 && this.epic) {
-      // Issue #656 (Gap 1): an empty epic is always one of two states —
-      // mislabelled (rescoped out of epic-shaped work, `type:epic` never
-      // removed) or unpopulated (never decomposed). The treeview has no
-      // reliable signal to tell them apart (labels, sub-issue links, and
-      // blockedBy are identical in both cases; parsing the issue body for
-      // rescoping language would be a fragile heuristic), so say that
-      // plainly instead of guessing.
+    if (issues.length === 0 && this.epic && epicAwaitingDecomposition(this.epic, issues.length)) {
+      // Issue #656 (AC 1 remainder): the maintainer has confirmed via the
+      // needs-decomposition label that this is genuinely epic-shaped and
+      // simply hasn't been broken down yet — a different operator action
+      // from the ambiguous case below, so say so plainly rather than
+      // repeating the "mislabelled or unpopulated" hedge.
+      md.appendMarkdown(
+        `_No sub-issues linked. \`needs-decomposition\` confirms this is genuinely ` +
+          `epic-shaped and simply not broken down yet — decompose it into sub-issues._\n`
+      );
+    } else if (issues.length === 0 && this.epic) {
+      // Issue #656 (Gap 1): an empty epic without a confirmed
+      // needs-decomposition read is always one of two states — mislabelled
+      // (rescoped out of epic-shaped work, `type:epic` never removed) or
+      // unpopulated (never decomposed). Absence of the label is not
+      // evidence of either — it only means no one has made the call — so
+      // the treeview still has no reliable signal to tell them apart here,
+      // and says that plainly instead of guessing.
       md.appendMarkdown(
         `_No sub-issues linked. This is either **mislabelled** (rescoped away from ` +
           `epic-shaped work, but \`type:epic\` was never removed — remove the label) or ` +
@@ -297,15 +354,21 @@ export function groupIssuesByEpic(
         groups.set(issue.number, []);
       }
       if (!epicMetadata.has(issue.number)) {
-        // Issue #656 (Gap 3): thread the epic's own blockedBy through so a
-        // blocked epic renders its blocked state even when this fallback
-        // (epic present in the current batch but missing from the
-        // pre-built epicMetadata map) is the one that fires.
+        // Issue #656 (Gap 3 / AC 1 remainder): thread the epic's own
+        // blockedBy and labels through so a blocked epic renders its
+        // blocked state, and an empty-but-confirmed epic renders
+        // "awaiting decomposition", even when this fallback (epic present
+        // in the current batch but missing from the pre-built
+        // epicMetadata map) is the one that fires. `issue` here IS the
+        // epic's own issue object, so — unlike the epicRef/epicTitle
+        // fallback in ProjectBoardService.getEpicMetadataFromCache —
+        // labels are genuinely known, not "unknown".
         epicMetadata.set(issue.number, {
           number: issue.number,
           title: issue.title,
           url: issue.url,
           blockedBy: issue.blockedBy,
+          labels: issue.labels,
         });
       }
       continue;
@@ -327,6 +390,8 @@ export function groupIssuesByEpic(
   for (const epicNum of epicNumbers) {
     const epicInfo = epicMetadata.get(epicNum);
     result.push({
+      // `labels` intentionally omitted (stays `undefined`, i.e. unknown —
+      // see EpicInfo.labels): no epic issue has been read yet at all here.
       epic: epicInfo ?? {
         number: epicNum,
         title: "(loading...)",
