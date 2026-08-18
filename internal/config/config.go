@@ -647,6 +647,28 @@ type ModelRoutingConfig struct {
 	DefaultEffort string `json:"defaultEffort,omitempty" yaml:"default_effort,omitempty"`
 }
 
+// AttentionConfig is the attention: section of config.yaml — operator-tunable
+// thresholds for the Action Center's repo-scoped sweep producers.
+//
+// A producer threshold has to be configurable rather than compiled in, because
+// the number is a POLICY, not a fact about the world: how long a security fix
+// may sit unmerged before it is worth interrupting somebody over depends on the
+// team, not on Nightgauge. A hard-coded constant makes "seven days" an opinion
+// the operator cannot disagree with, and the only way to disagree becomes
+// ignoring the card — which is how an inbox stops being read.
+type AttentionConfig struct {
+	// DependabotStaleRemediationDays is how long a Dependabot remediation PR
+	// may sit unmerged before the dependabot-stale-remediation producer cards
+	// it (#649). Zero or negative uses the producer's own default.
+	//
+	// It is also the BUCKET WIDTH of that producer's fingerprint: the card
+	// re-alerts once per whole multiple of this value, so shrinking it makes
+	// the surface both fire sooner and re-alert more often. That coupling is
+	// deliberate — one number, one meaning ("this is how often it is worth
+	// telling me again").
+	DependabotStaleRemediationDays int `json:"dependabotStaleRemediationDays,omitempty" yaml:"dependabot_stale_remediation_days,omitempty"`
+}
+
 type Config struct {
 	// GitHub settings
 	Owner         string         `json:"owner"`
@@ -732,6 +754,10 @@ type Config struct {
 	// once, across the workspace and per repository. Owned by the machine tier
 	// (~/.nightgauge/config.yaml). See docs/SETTINGS_ARCHITECTURE.md.
 	Concurrency *ConcurrencyConfig `json:"concurrency,omitempty" yaml:"concurrency,omitempty"`
+
+	// Attention holds the attention: section — thresholds for the Action
+	// Center's repo-scoped sweep producers (#649).
+	Attention *AttentionConfig `json:"attention,omitempty" yaml:"attention,omitempty"`
 
 	// SchemaVersion is the config file format version ("1" or "2"). Missing or
 	// empty version is treated as v1 and triggers automatic in-memory v1→v2
@@ -1477,6 +1503,7 @@ type yamlConfigNested struct {
 	Routing          *RoutingConfig               `yaml:"routing,omitempty"`
 	ModelRouting     *ModelRoutingConfig          `yaml:"model_routing,omitempty"`
 	UI               *UIConfig                    `yaml:"ui,omitempty"`
+	Attention        *AttentionConfig             `yaml:"attention,omitempty"`
 	Forges           map[string]*ForgeConfigEntry `yaml:"forges,omitempty"`
 	Notifications    *NotificationsConfig         `yaml:"notifications,omitempty"`
 	Notifiers        *NotifiersConfig             `yaml:"notifiers,omitempty"`
@@ -1512,6 +1539,7 @@ type yamlConfigFlat struct {
 	Routing          *RoutingConfig               `yaml:"routing,omitempty"`
 	ModelRouting     *ModelRoutingConfig          `yaml:"model_routing,omitempty"`
 	UI               *UIConfig                    `yaml:"ui,omitempty"`
+	Attention        *AttentionConfig             `yaml:"attention,omitempty"`
 	Forges           map[string]*ForgeConfigEntry `yaml:"forges,omitempty"`
 	Notifications    *NotificationsConfig         `yaml:"notifications,omitempty"`
 	Notifiers        *NotifiersConfig             `yaml:"notifiers,omitempty"`
@@ -1690,6 +1718,7 @@ func parseYAMLNested(data []byte) (*Config, error) {
 	cfg.Forges = nested.Forges
 	cfg.Notifications = nested.Notifications
 	cfg.Notifiers = nested.Notifiers
+	cfg.Attention = nested.Attention
 	if len(nested.Project.SizeToEstimate) > 0 {
 		cfg.SizeToEstimate = nested.Project.SizeToEstimate
 	}
@@ -1792,6 +1821,7 @@ func parseYAMLFlat(data []byte) (*Config, error) {
 	cfg.Forges = flat.Forges
 	cfg.Notifications = flat.Notifications
 	cfg.Notifiers = flat.Notifiers
+	cfg.Attention = flat.Attention
 	if len(flat.SizeToEstimate) > 0 {
 		cfg.SizeToEstimate = flat.SizeToEstimate
 	}

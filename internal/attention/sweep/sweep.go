@@ -62,6 +62,17 @@ type Input struct {
 	// producer is called.
 	Forge forge.ForgeClient
 
+	// WorkspaceRoot is the directory a producer resolves operator CONFIGURATION
+	// from — `config.Load(WorkspaceRoot)`, the same read the scheduler does for
+	// its own thresholds. It mirrors WorkspaceInput.WorkspaceRoot so a producer
+	// answers the same question the same way whichever scope it is evaluated in.
+	//
+	// Empty is a legitimate state (a Sweeper constructed without one), and a
+	// producer must degrade to its compiled default rather than erroring: a
+	// missing config file is not a failure to observe the repo, so it must never
+	// reach Evaluate's error return and freeze the producer's cards.
+	WorkspaceRoot string
+
 	// Existing is every non-terminal request already open for this repo, from
 	// every producer including the run-scoped ones.
 	//
@@ -188,7 +199,9 @@ type Sweeper struct {
 	Registry *Registry
 	// Forge is the client handed to every producer. Required.
 	Forge forge.ForgeClient
-	// WorkspaceRoot enables the decision-trace leg; empty disables it.
+	// WorkspaceRoot enables the decision-trace leg; empty disables it. It is
+	// also handed to every producer as Input.WorkspaceRoot, which is where a
+	// producer reads its operator-configured thresholds from (#649).
 	WorkspaceRoot string
 	// Timeout bounds one sweep. Zero uses DefaultTimeout.
 	Timeout time.Duration
@@ -256,7 +269,14 @@ func (s *Sweeper) Sweep(ctx context.Context, repo string) (Result, error) {
 		existing = nil
 	}
 
-	in := Input{Repo: repo, Owner: owner, Name: name, Forge: s.Forge, Existing: existing}
+	in := Input{
+		Repo:          repo,
+		Owner:         owner,
+		Name:          name,
+		Forge:         s.Forge,
+		WorkspaceRoot: s.WorkspaceRoot,
+		Existing:      existing,
+	}
 	var observed []attention.DecisionRequest
 	for _, p := range producers {
 		reqs, perr := p.Evaluate(ctx, in)
