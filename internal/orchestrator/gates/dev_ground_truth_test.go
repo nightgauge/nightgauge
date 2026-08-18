@@ -3,10 +3,11 @@ package gates
 import (
 	"context"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/nightgauge/nightgauge/internal/gittest"
 )
 
 // These tests drive REAL git repositories rather than stubbing the git calls.
@@ -39,11 +40,7 @@ func gitRepo(t *testing.T) string {
 
 func git(t *testing.T, dir string, args ...string) {
 	t.Helper()
-	cmd := exec.Command("git", args...)
-	cmd.Dir = dir
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
-	}
+	gittest.Run(t, dir, args...)
 }
 
 func writeFile(t *testing.T, path, content string) {

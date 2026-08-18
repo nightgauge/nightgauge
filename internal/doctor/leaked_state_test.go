@@ -2,12 +2,12 @@ package doctor
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/nightgauge/nightgauge/internal/gittest"
 	"github.com/nightgauge/nightgauge/internal/reclaim"
 )
 
@@ -47,13 +47,7 @@ func newLeakRepo(t *testing.T) *leakRepo {
 
 func (r *leakRepo) git(args ...string) string {
 	r.t.Helper()
-	cmd := exec.Command("git", args...)
-	cmd.Dir = r.dir
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		r.t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
-	}
-	return string(out)
+	return gittest.Run(r.t, r.dir, args...)
 }
 
 func (r *leakRepo) write(name, content string) {

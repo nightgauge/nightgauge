@@ -13,6 +13,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
+	"github.com/nightgauge/nightgauge/internal/gittest"
 	"github.com/nightgauge/nightgauge/internal/orchestrator/gates"
 	"github.com/nightgauge/nightgauge/internal/state"
 )
@@ -47,8 +48,13 @@ func realGitFixture(t *testing.T, mode string) string {
 	dest := filepath.Join(t.TempDir(), "fixture")
 	// bash is invoked with the script PATH plus positional args (no `-c` string),
 	// so nothing here is interpreted as shell syntax; both args are test-local
-	// constants regardless.
-	out, err := exec.Command("bash", script, dest, mode).Output()
+	// constants regardless. gittest.Env() (rather than a plain exec.Command) so
+	// every `git` invocation the script itself makes inherits the
+	// background-maintenance disarming (#680) alongside the ambient-config
+	// isolation the script already sets up on its own (#542).
+	cmd := exec.Command("bash", script, dest, mode)
+	cmd.Env = gittest.Env()
+	out, err := cmd.Output()
 	if err != nil {
 		stderr := ""
 		var ee *exec.ExitError
@@ -108,7 +114,7 @@ func hasConflictSignal(t *testing.T, ws string, issue int) bool {
 // rebaseInProgress reports whether the workspace is sitting mid-rebase.
 func rebaseInProgress(t *testing.T, ws string) bool {
 	t.Helper()
-	out, err := exec.Command("git", "-C", ws, "rev-parse", "--git-path", "rebase-merge").Output()
+	out, err := gittest.Command(ws, "rev-parse", "--git-path", "rebase-merge").Output()
 	if err != nil {
 		t.Fatalf("rev-parse --git-path: %v", err)
 	}
@@ -347,7 +353,7 @@ func readEvidenceManifest(t *testing.T, ws string, issue int) []evidenceEntry {
 // origin/main's, so git itself supplies both expected values.
 func gitShow(t *testing.T, ws, rev, path string) []byte {
 	t.Helper()
-	out, err := exec.Command("git", "-C", ws, "show", rev+":"+path).Output()
+	out, err := gittest.Command(ws, "show", rev+":"+path).Output()
 	if err != nil {
 		t.Fatalf("git show %s:%s: %v", rev, path, err)
 	}
@@ -717,7 +723,7 @@ func TestRealGit_SymlinkConflict_ReadsAsBlob(t *testing.T) {
 // "<mode> <type> <oid>\t<path>".
 func treeEntry(t *testing.T, ws, rev, path string) (mode, oid string) {
 	t.Helper()
-	out, err := exec.Command("git", "-C", ws, "ls-tree", rev, "--", path).Output()
+	out, err := gittest.Command(ws, "ls-tree", rev, "--", path).Output()
 	if err != nil {
 		t.Fatalf("git ls-tree %s -- %s: %v", rev, path, err)
 	}
@@ -740,7 +746,7 @@ func treeEntry(t *testing.T, ws, rev, path string) (mode, oid string) {
 // reproducing #301 and the assertions below became vacuous.
 func invalidUTF8UnmergedPaths(t *testing.T, ws string) []string {
 	t.Helper()
-	out, err := exec.Command("git", "-C", ws, "ls-files", "-u", "-z").Output()
+	out, err := gittest.Command(ws, "ls-files", "-u", "-z").Output()
 	if err != nil {
 		t.Fatalf("git ls-files -u -z: %v", err)
 	}
@@ -765,11 +771,11 @@ func invalidUTF8UnmergedPaths(t *testing.T, ws string) []string {
 // call the capture directly against a genuinely conflicted index.
 func startRebase(t *testing.T, ws string) {
 	t.Helper()
-	if out, err := exec.Command("git", "-C", ws, "fetch", "origin", "main").CombinedOutput(); err != nil {
+	if out, err := gittest.Command(ws, "fetch", "origin", "main").CombinedOutput(); err != nil {
 		t.Fatalf("git fetch: %v\n%s", err, out)
 	}
 	// A conflicting rebase exits non-zero; that is the point.
-	_ = exec.Command("git", "-C", ws, "rebase", "origin/main").Run()
+	_ = gittest.Command(ws, "rebase", "origin/main").Run()
 	if !rebaseInProgress(t, ws) {
 		t.Fatal("precondition: the rebase must be paused on a conflict")
 	}
@@ -798,13 +804,15 @@ func runSkillCapture(t *testing.T, ws string, issue, pr int, reason string, with
 	}
 	cmd := exec.Command("bash", script)
 	cmd.Dir = ws
-	cmd.Env = append(os.Environ(),
+	// gittest.Env() rather than os.Environ() so the skill fragment's own git
+	// calls inherit the same disarming/isolation every fixture in this
+	// package uses (#680, #542) — it already covers the two GIT_CONFIG_*
+	// overrides this call used to set by hand.
+	cmd.Env = append(gittest.Env(),
 		"ISSUE_NUMBER="+strconv.Itoa(issue),
 		"PR_NUMBER="+strconv.Itoa(pr),
 		"BASE_REF=main",
 		"CCS_REASON="+reason,
-		"GIT_CONFIG_GLOBAL=/dev/null",
-		"GIT_CONFIG_SYSTEM=/dev/null",
 	)
 	if withHeadRef {
 		cmd.Env = append(cmd.Env, "HEAD_REF="+fixtureBranch)
@@ -1227,7 +1235,7 @@ func TestRealGit_PreexistingRebase_OperatorWorkSurvives(t *testing.T) {
 
 func gitStatus(t *testing.T, ws string) string {
 	t.Helper()
-	out, err := exec.Command("git", "-C", ws, "status", "--porcelain", "--untracked-files=all").Output()
+	out, err := gittest.Command(ws, "status", "--porcelain", "--untracked-files=all").Output()
 	if err != nil {
 		t.Fatalf("git status: %v", err)
 	}

@@ -2,9 +2,10 @@ package actualsize
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"testing"
+
+	"github.com/nightgauge/nightgauge/internal/gittest"
 )
 
 func TestFiveBucketMatchesOutcomeServiceBoundaries(t *testing.T) {
@@ -45,23 +46,15 @@ func TestLearningBucketUsesLearnedThresholdsAndScoreVocabulary(t *testing.T) {
 
 func TestMeasureLinesDistinguishesZeroFromFailure(t *testing.T) {
 	root := t.TempDir()
-	run := func(args ...string) {
-		t.Helper()
-		cmd := exec.Command("git", args...)
-		cmd.Dir = root
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %v: %v\n%s", args, err, out)
-		}
-	}
-	run("init", "-b", "main")
-	run("config", "user.email", "test@example.com")
-	run("config", "user.name", "Test User")
+	gittest.Run(t, root, "init", "-b", "main")
+	gittest.Run(t, root, "config", "user.email", "test@example.com")
+	gittest.Run(t, root, "config", "user.name", "Test User")
 	path := filepath.Join(root, "file.txt")
 	if err := os.WriteFile(path, []byte("base\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	run("add", ".")
-	run("commit", "-m", "base")
+	gittest.Run(t, root, "add", ".")
+	gittest.Run(t, root, "commit", "-m", "base")
 	if got, err := MeasureLines(root, "main"); err != nil || got != 0 {
 		t.Fatalf("clean MeasureLines = %d, %v; want measured zero", got, err)
 	}
@@ -78,31 +71,23 @@ func TestMeasureLinesDistinguishesZeroFromFailure(t *testing.T) {
 
 func TestMeasureLinesPrefersRemoteTrackingBaseOverStaleLocalBase(t *testing.T) {
 	root := t.TempDir()
-	run := func(args ...string) {
-		t.Helper()
-		cmd := exec.Command("git", args...)
-		cmd.Dir = root
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %v: %v\n%s", args, err, out)
-		}
-	}
-	run("init", "-b", "main")
-	run("config", "user.email", "test@example.com")
-	run("config", "user.name", "Test User")
+	gittest.Run(t, root, "init", "-b", "main")
+	gittest.Run(t, root, "config", "user.email", "test@example.com")
+	gittest.Run(t, root, "config", "user.name", "Test User")
 	path := filepath.Join(root, "file.txt")
 	if err := os.WriteFile(path, []byte("base\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	run("add", ".")
-	run("commit", "-m", "base")
-	run("checkout", "-b", "upstream")
+	gittest.Run(t, root, "add", ".")
+	gittest.Run(t, root, "commit", "-m", "base")
+	gittest.Run(t, root, "checkout", "-b", "upstream")
 	if err := os.WriteFile(path, []byte("base\nupstream\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	run("commit", "-am", "upstream")
-	run("update-ref", "refs/remotes/origin/main", "HEAD")
-	run("checkout", "main")
-	run("checkout", "-b", "feature", "origin/main")
+	gittest.Run(t, root, "commit", "-am", "upstream")
+	gittest.Run(t, root, "update-ref", "refs/remotes/origin/main", "HEAD")
+	gittest.Run(t, root, "checkout", "main")
+	gittest.Run(t, root, "checkout", "-b", "feature", "origin/main")
 	if err := os.WriteFile(path, []byte("base\nupstream\nfeature\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -114,40 +99,32 @@ func TestMeasureLinesPrefersRemoteTrackingBaseOverStaleLocalBase(t *testing.T) {
 
 func TestMeasureLinesExcludesChangesAddedOnlyToAnAdvancedBase(t *testing.T) {
 	root := t.TempDir()
-	run := func(args ...string) {
-		t.Helper()
-		cmd := exec.Command("git", args...)
-		cmd.Dir = root
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %v: %v\n%s", args, err, out)
-		}
-	}
-	run("init", "-b", "main")
-	run("config", "user.email", "test@example.com")
-	run("config", "user.name", "Test User")
+	gittest.Run(t, root, "init", "-b", "main")
+	gittest.Run(t, root, "config", "user.email", "test@example.com")
+	gittest.Run(t, root, "config", "user.name", "Test User")
 	if err := os.WriteFile(filepath.Join(root, "base.txt"), []byte("base\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	run("add", ".")
-	run("commit", "-m", "base")
-	run("checkout", "-b", "feature")
+	gittest.Run(t, root, "add", ".")
+	gittest.Run(t, root, "commit", "-m", "base")
+	gittest.Run(t, root, "checkout", "-b", "feature")
 	if err := os.WriteFile(filepath.Join(root, "feature.txt"), []byte("feature\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	run("add", ".")
-	run("commit", "-m", "feature")
+	gittest.Run(t, root, "add", ".")
+	gittest.Run(t, root, "commit", "-m", "feature")
 
 	// Advance origin/main on a sibling history after the feature fork. A direct
 	// `git diff origin/main` sees both feature.txt and the missing upstream.txt;
 	// the PR changeset contains only feature.txt.
-	run("checkout", "main")
+	gittest.Run(t, root, "checkout", "main")
 	if err := os.WriteFile(filepath.Join(root, "upstream.txt"), []byte("upstream\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	run("add", ".")
-	run("commit", "-m", "upstream")
-	run("update-ref", "refs/remotes/origin/main", "HEAD")
-	run("checkout", "feature")
+	gittest.Run(t, root, "add", ".")
+	gittest.Run(t, root, "commit", "-m", "upstream")
+	gittest.Run(t, root, "update-ref", "refs/remotes/origin/main", "HEAD")
+	gittest.Run(t, root, "checkout", "feature")
 
 	if got, err := MeasureLines(root, "main"); err != nil || got != 1 {
 		t.Fatalf("MeasureLines with advanced origin/main = %d, %v; want only the 1 feature line", got, err)

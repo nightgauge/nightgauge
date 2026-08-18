@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/nightgauge/nightgauge/internal/gittest"
 )
 
 // sweepFixture is an "origin + clone" pair: a bare upstream and a working
@@ -899,9 +901,20 @@ func captureLog(t *testing.T, fn func()) string {
 	return buf.String()
 }
 
+// commandOutput runs name(args...) in dir. Every call site in this package
+// passes "git" — routed through gittest.Command so it inherits the
+// background-maintenance disarming and ambient-config isolation every
+// test-created repo in this suite needs (#680, #542). A non-git name falls
+// back to a plain exec.Command; nothing currently exercises that path, but
+// the signature stays generic rather than narrowing to git-only.
 func commandOutput(dir, name string, args ...string) (string, error) {
-	cmd := exec.Command(name, args...)
-	cmd.Dir = dir
+	var cmd *exec.Cmd
+	if name == "git" {
+		cmd = gittest.Command(dir, args...)
+	} else {
+		cmd = exec.Command(name, args...)
+		cmd.Dir = dir
+	}
 	out, err := cmd.CombinedOutput()
 	return string(out), err
 }

@@ -2,10 +2,11 @@ package execution
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/nightgauge/nightgauge/internal/gittest"
 )
 
 // initTestGitRepo creates a real git repo with one commit on a named branch.
@@ -13,21 +14,14 @@ import (
 func initTestGitRepo(t *testing.T, branchName string) string {
 	t.Helper()
 	dir := t.TempDir()
-	runGit := func(args ...string) {
-		cmd := exec.Command("git", args...)
-		cmd.Dir = dir
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %s: %v: %s", strings.Join(args, " "), err, out)
-		}
-	}
-	runGit("init", "-b", branchName)
-	runGit("config", "user.email", "test@test")
-	runGit("config", "user.name", "test")
+	gittest.Run(t, dir, "init", "-b", branchName)
+	gittest.Run(t, dir, "config", "user.email", "test@test")
+	gittest.Run(t, dir, "config", "user.name", "test")
 	if err := os.WriteFile(filepath.Join(dir, "README"), []byte("hi"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	runGit("add", ".")
-	runGit("commit", "-m", "initial")
+	gittest.Run(t, dir, "add", ".")
+	gittest.Run(t, dir, "commit", "-m", "initial")
 	return dir
 }
 
@@ -175,20 +169,12 @@ func TestCleanupWorktree_PreservesUnpushedCommit(t *testing.T) {
 		t.Fatalf("ensureWorktree: %v", err)
 	}
 
-	runGit := func(dir string, args ...string) {
-		t.Helper()
-		cmd := exec.Command("git", args...)
-		cmd.Dir = dir
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %s: %v: %s", strings.Join(args, " "), err, out)
-		}
-	}
-	runGit(worktreePath, "checkout", "-b", "feat/266-thing")
+	gittest.Run(t, worktreePath, "checkout", "-b", "feat/266-thing")
 	if err := os.WriteFile(filepath.Join(worktreePath, "feature.txt"), []byte("work\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	runGit(worktreePath, "add", ".")
-	runGit(worktreePath, "commit", "-m", "feat: unpushed work")
+	gittest.Run(t, worktreePath, "add", ".")
+	gittest.Run(t, worktreePath, "commit", "-m", "feat: unpushed work")
 
 	if err := m.CleanupWorktree("nightgauge/nightgauge", 266); err != nil {
 		t.Fatalf("CleanupWorktree: %v", err)
@@ -212,20 +198,12 @@ func TestCleanupWorktree_PreservesStrayTempPrePushBranch(t *testing.T) {
 		t.Fatalf("ensureWorktree: %v", err)
 	}
 
-	runGit := func(dir string, args ...string) {
-		t.Helper()
-		cmd := exec.Command("git", args...)
-		cmd.Dir = dir
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %s: %v: %s", strings.Join(args, " "), err, out)
-		}
-	}
-	runGit(worktreePath, "checkout", "-b", "temp-pre-push-42")
+	gittest.Run(t, worktreePath, "checkout", "-b", "temp-pre-push-42")
 	if err := os.WriteFile(filepath.Join(worktreePath, "stray.txt"), []byte("stray\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	runGit(worktreePath, "add", ".")
-	runGit(worktreePath, "commit", "-m", "feat: committed while stranded on temp branch")
+	gittest.Run(t, worktreePath, "add", ".")
+	gittest.Run(t, worktreePath, "commit", "-m", "feat: committed while stranded on temp branch")
 
 	if err := m.CleanupWorktree("nightgauge/nightgauge", 267); err != nil {
 		t.Fatalf("CleanupWorktree: %v", err)

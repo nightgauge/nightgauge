@@ -3,7 +3,6 @@ package git
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -12,6 +11,7 @@ import (
 	"github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
 
+	"github.com/nightgauge/nightgauge/internal/gittest"
 	"github.com/nightgauge/nightgauge/internal/reclaim"
 )
 
@@ -712,12 +712,7 @@ func TestResetLocalBranchToRemote_CreatesWhenLocalAbsent(t *testing.T) {
 
 func gitExecTest(t *testing.T, dir string, args ...string) string {
 	t.Helper()
-	cmd := exec.Command("git", args...)
-	cmd.Dir = dir
-	cmd.Env = append(os.Environ(),
-		"GIT_AUTHOR_NAME=Test", "GIT_AUTHOR_EMAIL=test@test.com",
-		"GIT_COMMITTER_NAME=Test", "GIT_COMMITTER_EMAIL=test@test.com")
-	out, err := cmd.CombinedOutput()
+	out, err := gittest.Command(dir, args...).CombinedOutput()
 	if err != nil {
 		t.Fatalf("git %v: %v: %s", args, err, string(out))
 	}
@@ -1436,7 +1431,7 @@ func TestBranchCreateFrom_FailureLeavesNoRefAndUnmovedHead(t *testing.T) {
 		t.Fatal("expected BranchCreateFrom to refuse a checkout that would overwrite local changes")
 	}
 
-	if out, err := exec.Command("git", "-C", mainDir, "rev-parse", "--verify",
+	if out, err := gittest.Command(mainDir, "rev-parse", "--verify",
 		"refs/heads/"+branch).CombinedOutput(); err == nil {
 		t.Errorf("a failed BranchCreateFrom left refs/heads/%s behind at %s", branch, strings.TrimSpace(string(out)))
 	}
@@ -1511,7 +1506,7 @@ func TestBranchDelete_RefusesBranchHeldByAnotherWorktree(t *testing.T) {
 	if err := svc.BranchDelete("stale/1"); err != nil {
 		t.Fatalf("BranchDelete of an unheld branch: %v", err)
 	}
-	if _, err := exec.Command("git", "-C", mainDir, "rev-parse", "--verify",
+	if _, err := gittest.Command(mainDir, "rev-parse", "--verify",
 		"refs/heads/stale/1").CombinedOutput(); err == nil {
 		t.Error("refs/heads/stale/1 survived BranchDelete")
 	}
@@ -1537,7 +1532,7 @@ func TestAbortPipeline_NeverOrphansASiblingWorktree(t *testing.T) {
 	if head := strings.TrimSpace(gitExecTest(t, mainDir, "rev-parse", "--abbrev-ref", "HEAD")); head != "main" {
 		t.Errorf("after abort, HEAD = %q, want \"main\"", head)
 	}
-	if _, err := exec.Command("git", "-C", mainDir, "rev-parse", "--verify",
+	if _, err := gittest.Command(mainDir, "rev-parse", "--verify",
 		"refs/heads/feat/535-abort-me").CombinedOutput(); err == nil {
 		t.Error("AbortPipeline left the feature branch behind")
 	}

@@ -9,6 +9,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/nightgauge/nightgauge/internal/gittest"
 )
 
 // gitBinPath and bashBinPath are resolved once at package init, before any
@@ -231,7 +233,7 @@ func TestResolveBinary_CanonicalRepoBin(t *testing.T) {
 	runGit(t, repo, "commit", "--allow-empty", "-m", "init")
 
 	worktreeDir := filepath.Join(t.TempDir(), "worktree")
-	if out, err := exec.Command(gitBinPath, "-C", repo, "worktree", "add", "--detach", worktreeDir).CombinedOutput(); err != nil {
+	if out, err := gittest.Command(repo, "worktree", "add", "--detach", worktreeDir).CombinedOutput(); err != nil {
 		t.Skipf("git worktree add failed (environment limitation): %v: %s", err, out)
 	}
 
@@ -663,7 +665,7 @@ func TestResolveBinary_GuardShParity(t *testing.T) {
 				runGit(t, repo, "config", "user.name", "Test")
 				runGit(t, repo, "commit", "--allow-empty", "-m", "init")
 				worktreeDir := filepath.Join(realPath(t, t.TempDir()), "worktree")
-				if out, err := exec.Command(gitBinPath, "-C", repo, "worktree", "add", "--detach", worktreeDir).CombinedOutput(); err != nil {
+				if out, err := gittest.Command(repo, "worktree", "add", "--detach", worktreeDir).CombinedOutput(); err != nil {
 					t.Skipf("git worktree add failed (environment limitation): %v: %s", err, out)
 				}
 				fake := filepath.Join(repo, "bin", "nightgauge")
@@ -1422,7 +1424,7 @@ func precedenceCases() []precedenceCase {
 				canonicalBin := filepath.Join(repo, "bin", "nightgauge")
 				writeFakeBinary(t, canonicalBin)
 				worktreeDir := filepath.Join(realPath(t, t.TempDir()), "worktree")
-				if out, err := exec.Command(gitBinPath, "-C", repo, "worktree", "add", "--detach", worktreeDir).CombinedOutput(); err != nil {
+				if out, err := gittest.Command(repo, "worktree", "add", "--detach", worktreeDir).CombinedOutput(); err != nil {
 					t.Skipf("git worktree add failed (environment limitation): %v: %s", err, out)
 				}
 				// The worktree carries its own bin/nightgauge — step 2 must
@@ -1447,7 +1449,7 @@ func precedenceCases() []precedenceCase {
 				canonicalBin := filepath.Join(repo, "bin", "nightgauge")
 				writeFakeBinary(t, canonicalBin)
 				worktreeDir := filepath.Join(realPath(t, t.TempDir()), "worktree")
-				if out, err := exec.Command(gitBinPath, "-C", repo, "worktree", "add", "--detach", worktreeDir).CombinedOutput(); err != nil {
+				if out, err := gittest.Command(repo, "worktree", "add", "--detach", worktreeDir).CombinedOutput(); err != nil {
 					t.Skipf("git worktree add failed (environment limitation): %v: %s", err, out)
 				}
 				t.Chdir(worktreeDir)
@@ -1495,18 +1497,14 @@ func precedenceCases() []precedenceCase {
 
 func runGit(t *testing.T, dir string, args ...string) {
 	t.Helper()
-	cmd := exec.Command(gitBinPath, append([]string{"-C", dir}, args...)...)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("git %v failed: %v: %s", args, err, out)
-	}
+	gittest.Run(t, dir, args...)
 }
 
 func gitRepoRootForTest() (string, error) {
 	if runtime.GOOS == "windows" {
 		return "", os.ErrNotExist
 	}
-	cmd := exec.Command(gitBinPath, "rev-parse", "--show-toplevel")
-	out, err := cmd.Output()
+	out, err := gittest.Command("", "rev-parse", "--show-toplevel").Output()
 	if err != nil {
 		return "", err
 	}

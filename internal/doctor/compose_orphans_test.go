@@ -3,11 +3,11 @@ package doctor
 import (
 	"context"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"testing"
+
+	"github.com/nightgauge/nightgauge/internal/gittest"
 )
 
 // installFakeDocker puts a recording docker shim on PATH so ListIssueProjects
@@ -46,27 +46,19 @@ func crossRepoWorkspace(t *testing.T, issue int) string {
 	if err != nil {
 		t.Fatalf("resolve temp dir: %v", err)
 	}
-	git := func(dir string, args ...string) {
-		t.Helper()
-		cmd := exec.Command("git", args...)
-		cmd.Dir = dir
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %s (in %s): %v: %s", strings.Join(args, " "), dir, err, out)
-		}
-	}
 	mkRepo := func(name string) string {
 		root := filepath.Join(base, name)
 		if err := os.MkdirAll(root, 0o755); err != nil {
 			t.Fatal(err)
 		}
-		git(root, "init", "-b", "main")
-		git(root, "config", "user.email", "test@test")
-		git(root, "config", "user.name", "test")
+		gittest.Run(t, root, "init", "-b", "main")
+		gittest.Run(t, root, "config", "user.email", "test@test")
+		gittest.Run(t, root, "config", "user.name", "test")
 		if err := os.WriteFile(filepath.Join(root, "README"), []byte("hi\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		git(root, "add", ".")
-		git(root, "commit", "-m", "initial")
+		gittest.Run(t, root, "add", ".")
+		gittest.Run(t, root, "commit", "-m", "initial")
 		return root
 	}
 
@@ -74,7 +66,7 @@ func crossRepoWorkspace(t *testing.T, issue int) string {
 	sibling := mkRepo("sibling")
 
 	// The live cross-repo run: its worktree is registered in the SIBLING.
-	git(sibling, "worktree", "add",
+	gittest.Run(t, sibling, "worktree", "add",
 		filepath.Join(sibling, ".worktrees", "issue-"+strconv.Itoa(issue)),
 		"-b", "fix/"+strconv.Itoa(issue)+"-work")
 
