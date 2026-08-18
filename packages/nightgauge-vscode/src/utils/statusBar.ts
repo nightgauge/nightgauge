@@ -952,12 +952,58 @@ export function usageThresholdColor(window: UsageWindow): vscode.ThemeColor | un
 }
 
 /**
+ * Local wall-clock "HH:MM" for an as-of stamp.
+ *
+ * Built by hand rather than via `toLocaleTimeString` so the rendered string is
+ * deterministic across locales — the status bar is asserted verbatim in tests,
+ * and a 12/24-hour flip would make those assertions environment-dependent.
+ */
+function formatClockTime(at: Date): string {
+  const hours = String(at.getHours()).padStart(2, "0");
+  const minutes = String(at.getMinutes()).padStart(2, "0");
+  return `${hours}:${minutes}`;
+}
+
+/**
+ * The " · as of HH:MM" suffix for a window whose figure is a cached reading
+ * rather than a live one (Issue #709).
+ *
+ * Empty for a `measured` window: the figure describes the moment it is being
+ * read, so an as-of would add noise. Empty when the provider set no
+ * `observedAt` at all, which means the figure was derived at snapshot time
+ * (every local-telemetry window).
+ *
+ * This is the honesty half of serving a persisted percentage between runs. A
+ * stale percentage rendered as current is worse than no percentage, so the
+ * age travels with the number instead of being inferable only from the
+ * tooltip.
+ */
+function formatAsOfSuffix(window: UsageWindow): string {
+  if (window.observedAt === undefined || window.confidence === "measured") {
+    return "";
+  }
+  return ` · as of ${formatClockTime(window.observedAt)}`;
+}
+
+/**
  * Render one `UsageWindow` as the `usageItem` label text (Issue #659).
  *
- * A window with a known `limit` renders as `$(flame) <adapter> <bar> <pct>%
- * · resets <duration>` — e.g. `$(flame) claude ███▌░░░░ 44% · resets 2h 14m`.
- * A `null` limit renders the absolute figure instead
- * (`$(flame) <adapter> $4.12 today`), never a fabricated bar or percentage.
+ * Three shapes, by what the window can honestly say:
+ *
+ * - **A vendor-reported percentage** (`unit: "percent"`, Issue #709) renders
+ *   as `$(flame) <adapter> <window> <bar> <used>% · <left>% left · resets
+ *   <duration>` — e.g.
+ *   `$(flame) claude session (5h) ███▌░░░░ 44% · 56% left · resets 2h 14m`.
+ *   A subscription plan has no dollar budget, so "how much is left and when
+ *   does it refill" is the whole question; the window is named because the
+ *   click gesture cycles between the five-hour, daily and weekly ones and an
+ *   unlabelled percentage would not say which it is. A cached reading also
+ *   carries ` · as of HH:MM`.
+ * - **A dollar figure against a configured budget** renders as
+ *   `$(flame) <adapter> <bar> <pct>% · resets <duration>` — unchanged from
+ *   #659.
+ * - **A `null` limit** renders the absolute figure
+ *   (`$(flame) <adapter> $4.12 today`), never a fabricated bar or percentage.
  *
  * The reset duration reuses `formatCooldownRemaining` (Issue #3446) rather
  * than a second "time until" formatter — the two are the same computation.
@@ -975,6 +1021,16 @@ export function formatUsageWindowText(
   const resetSuffix = window.resetsAt
     ? ` · resets ${formatCooldownRemaining(window.resetsAt, now)}`
     : "";
+  if (window.unit === "percent") {
+    // `used > limit` is legal on an overage-enabled plan, and "-4% left" is
+    // not a thing — past the ceiling there is nothing left, and the used
+    // figure beside it already says by how much it was passed.
+    const remaining = Math.max(0, (window.limit ?? 0) - window.used);
+    return (
+      `${USAGE_METER_ICON} ${adapter} ${window.label.toLowerCase()} ${bar} ` +
+      `${Math.round(pct)}% · ${Math.round(remaining)}% left${resetSuffix}${formatAsOfSuffix(window)}`
+    );
+  }
   return `${USAGE_METER_ICON} ${adapter} ${bar} ${Math.round(pct)}%${resetSuffix}`;
 }
 
@@ -998,8 +1054,14 @@ export function buildUsageTooltip(snapshot: UsageSnapshot): vscode.MarkdownStrin
       const limitText =
         window.limit === null ? "no limit configured" : formatUsageValue(window.limit, window.unit);
       const resetText = window.resetsAt ? window.resetsAt.toLocaleString() : "no scheduled reset";
+      // As-of only for a figure the provider is serving from cache (#709);
+      // a live one describes the moment it is read.
+      const asOfText =
+        window.observedAt !== undefined && window.confidence !== "measured"
+          ? `, as of ${window.observedAt.toLocaleString()}`
+          : "";
       tooltip.appendMarkdown(
-        `- **${window.label}**: ${formatUsageValue(window.used, window.unit)} / ${limitText} — resets ${resetText} _(${window.confidence})_\n`
+        `- **${window.label}**: ${formatUsageValue(window.used, window.unit)} / ${limitText} — resets ${resetText} _(${window.confidence}${asOfText})_\n`
       );
     }
     tooltip.appendMarkdown("\n");

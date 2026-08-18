@@ -112,6 +112,11 @@ export interface UsagePanelWindowView {
   unit: UsageUnit;
   resetsAt: Date | null;
   confidence: UsageConfidence;
+  /**
+   * When the provider observed the figure, when that predates the snapshot
+   * (Issue #709). Absent for a figure derived at snapshot time.
+   */
+  observedAt?: Date;
   /** Fill percentage, or null when no ceiling is known. Never clamped. */
   pct: number | null;
   /** `pct` clamped to [0, 100] for the bar's width only; null when `pct` is. */
@@ -223,6 +228,7 @@ export function toWindowView(window: UsageWindow): UsagePanelWindowView {
     unit: window.unit,
     resetsAt: window.resetsAt,
     confidence: window.confidence,
+    observedAt: window.observedAt,
     pct,
     barPct: pct === null ? null : Math.max(0, Math.min(100, pct)),
     usedIsFloor,

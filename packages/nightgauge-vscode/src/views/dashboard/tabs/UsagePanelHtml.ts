@@ -48,7 +48,7 @@ function confidenceBadge(view: UsagePanelWindowView): string {
     case "measured":
       return '<span class="badge badge-success" title="Every contributing record carried a reported figure">Measured</span>';
     case "estimated":
-      return '<span class="badge badge-warning" title="At least one contributing record was priced from the local rate card">Estimated</span>';
+      return '<span class="badge badge-warning" title="Either a contributing record was priced from the local rate card, or the vendor figure is a cached last-seen reading rather than a live one">Estimated</span>';
     case "unknown":
       return '<span class="badge badge-danger" title="At least one contributing record could not be priced — this figure is a floor, not a total">Unknown</span>';
   }
@@ -64,12 +64,34 @@ function resetText(view: UsagePanelWindowView, now: Date): string {
   return `Resets ${escapeHtml(view.resetsAt.toLocaleString())}${relative}`;
 }
 
+/**
+ * "as of Aug 18, 2026, 2:05 PM" for a cached vendor reading (Issue #709), or
+ * nothing.
+ *
+ * Only for a figure the provider is serving from cache — a `measured` one
+ * describes the moment the snapshot was taken and `capturedAt` already says
+ * when that was.
+ */
+function asOfText(view: UsagePanelWindowView): string {
+  if (view.observedAt === undefined || view.confidence === "measured") {
+    return "";
+  }
+  return `<span class="usage-as-of">Reported as of ${escapeHtml(view.observedAt.toLocaleString())}</span>`;
+}
+
 /** The used/limit line: a floor is stated as one, a missing ceiling as one. */
 function figureText(view: UsagePanelWindowView): string {
   const used = formatUsageValue(view.used, view.unit);
   const usedText = view.usedIsFloor ? `at least ${used}` : used;
   if (view.limit === null || view.limit <= 0) {
     return `${escapeHtml(usedText)} used &mdash; <em>no limit configured</em>`;
+  }
+  // A vendor-reported percentage is already against 100, so "44% of 100%
+  // (44%)" would print the same number three times. What the operator on a
+  // subscription plan is asking is how much is left (Issue #709).
+  if (view.unit === "percent") {
+    const remaining = Math.max(0, view.limit - view.used);
+    return `${escapeHtml(usedText)} used &mdash; ${escapeHtml(formatUsageValue(remaining, view.unit))} remaining`;
   }
   const limit = formatUsageValue(view.limit, view.unit);
   const pct =
@@ -109,6 +131,7 @@ function windowRowHtml(view: UsagePanelWindowView, now: Date): string {
           ${windowBarHtml(view)}
           <div class="usage-limits-row usage-limits-meta">
             <span class="usage-remaining">${resetText(view, now)}</span>
+            ${asOfText(view)}
           </div>
         </div>`;
 }
@@ -325,6 +348,16 @@ export function getUsagePanelStyles(): string {
       margin: 0 0 var(--spacing-sm) 0;
       font-size: 0.95em;
       color: var(--vscode-foreground);
+    }
+
+    /*
+     * As-of stamp for a cached vendor reading (Issue #709). Same muted weight
+     * as the reset text beside it: it qualifies the figure rather than
+     * competing with it.
+     */
+    .usage-as-of {
+      color: var(--vscode-descriptionForeground);
+      font-size: 0.85em;
     }
 
     .usage-family-heading {

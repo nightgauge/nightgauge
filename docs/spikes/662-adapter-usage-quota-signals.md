@@ -559,6 +559,11 @@ spike: 662
 recommendations:
   - id: claude-usage-provider
     action: adopt
+    # Materialized by hand as issue 709 and shipped as
+    # ClaudeRateLimitUsageProvider. See the amendment section of
+    # docs/decisions/018-adapter-usage-quota-model.md for what the
+    # at-rest/staleness requirement below forced on the model.
+    status: shipped
     title: "feat(vscode): claude UsageProvider from the existing rate_limit_event stream"
     type: feature
     priority: medium

@@ -6,7 +6,7 @@
 #   config.yaml           — repository-wide pipeline configuration
 #   .gitignore            — this file
 #   */.gitkeep            — preserve directory structure
-# nightgauge-gitignore-version: 8
+# nightgauge-gitignore-version: 9
 
 # ─── Pipeline context, state, and execution data ─────────────────────
 pipeline/*
@@ -71,6 +71,12 @@ pipeline/queue-state.json
 
 # ─── Health telemetry (gate metrics, trend data) ─────────────────────
 /health/
+
+# ─── Adapter usage readings (last-seen provider quota, per machine) ──
+# The Claude CLI reports its rate-limit utilization only while streaming, so
+# the last reading per window is cached here for the status-bar meter to
+# sample at rest. Per-machine, per-account runtime state — never shared.
+/usage/
 
 # ─── Action Center decision requests (ADR 015) ───────────────────────
 # Cards are produced locally by the attention sweeps, carry local run ids,

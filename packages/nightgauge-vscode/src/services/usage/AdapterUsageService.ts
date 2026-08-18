@@ -17,13 +17,16 @@ import type { ExecutionAdapter } from "../../config/schema";
 import { getLimitsSettings } from "../../config/limitsSettings";
 import { getGlobalAdapterWithSource } from "../../utils/resolvers/adapterResolver";
 import { LocalTelemetryUsageProvider, type UsageSessionClock } from "./LocalTelemetryUsageProvider";
+import { ClaudeRateLimitUsageProvider } from "./ClaudeRateLimitUsageProvider";
+import type { ClaudeRateLimitStore } from "./ClaudeRateLimitStore";
 import { unknownUsageSnapshot, type UsageProvider, type UsageSnapshot } from "./types";
 
 /**
- * Ordered set of providers. `resolve` returns the first one that claims the
- * adapter, so registration order is precedence: a future per-adapter provider
- * registered ahead of `LocalTelemetryUsageProvider` wins for the adapters it
- * supports and leaves the rest to local telemetry.
+ * Ordered set of providers. `resolveAll` returns every provider that claims
+ * the adapter, in registration order, so registration order is precedence: a
+ * per-adapter provider registered ahead of `LocalTelemetryUsageProvider`
+ * answers first for the adapters it supports and falls back to local
+ * telemetry when it has nothing to say.
  */
 export class UsageProviderRegistry {
   private readonly providers: UsageProvider[] = [];
@@ -33,9 +36,17 @@ export class UsageProviderRegistry {
     return this;
   }
 
-  /** The provider that claims `adapter`, or undefined when none does. */
-  resolve(adapter: ExecutionAdapter): UsageProvider | undefined {
-    return this.providers.find((provider) => provider.supports(adapter));
+  /**
+   * Every provider that claims `adapter`, highest precedence first. Empty
+   * when none does.
+   *
+   * A list rather than a single winner because `supports` answers "could I
+   * ever describe this adapter", while only `getSnapshot` knows whether it
+   * has anything today (see `UsageProvider`'s doc comment). One provider
+   * claiming an adapter must not silence the others (Issue #709).
+   */
+  resolveAll(adapter: ExecutionAdapter): UsageProvider[] {
+    return this.providers.filter((provider) => provider.supports(adapter));
   }
 }
 
@@ -53,6 +64,11 @@ export interface AdapterUsageServiceOptions {
  * deliberately excluded — it changes on every refresh, and firing a change
  * event for it would make the event useless to a consumer that re-renders on
  * it.
+ *
+ * A window's `observedAt` is deliberately **included**: unlike `capturedAt`
+ * it moves only when the provider actually saw a new reading, and the as-of
+ * a surface prints is part of what the operator reads (Issue #709). A
+ * re-observed identical percentage is genuinely newer information.
  */
 export function usageSnapshotsEquivalent(a: UsageSnapshot | null, b: UsageSnapshot): boolean {
   if (a === null) {
@@ -75,6 +91,7 @@ export function usageSnapshotsEquivalent(a: UsageSnapshot | null, b: UsageSnapsh
       windowA.limit === windowB.limit &&
       windowA.unit === windowB.unit &&
       (windowA.resetsAt?.getTime() ?? null) === (windowB.resetsAt?.getTime() ?? null) &&
+      (windowA.observedAt?.getTime() ?? null) === (windowB.observedAt?.getTime() ?? null) &&
       windowA.confidence === windowB.confidence
     );
   });
@@ -95,13 +112,30 @@ export class AdapterUsageService implements vscode.Disposable {
   ) {}
 
   /**
-   * Build the default wiring: local-telemetry usage for the workspace, keyed
-   * to the adapter the pipeline is configured to use.
+   * Build the default wiring, keyed to the adapter the pipeline is configured
+   * to use.
+   *
+   * Registration order is precedence. The Claude subscription provider goes
+   * first because a vendor-reported window allowance answers the operator's
+   * question better than a locally-derived dollar estimate ever can — but it
+   * only answers when a `rate_limit_event` has actually been observed, so
+   * local telemetry still covers the API-key path and every other adapter
+   * (Issue #709).
+   *
+   * `claudeRateLimitStore` is null when the caller has no place to persist
+   * readings; the subscription provider is then simply not registered, which
+   * is the pre-#709 behaviour.
    */
-  static forWorkspace(workspaceRoot: string, sessionClock: UsageSessionClock): AdapterUsageService {
-    const registry = new UsageProviderRegistry().register(
-      LocalTelemetryUsageProvider.forWorkspace(workspaceRoot, sessionClock)
-    );
+  static forWorkspace(
+    workspaceRoot: string,
+    sessionClock: UsageSessionClock,
+    claudeRateLimitStore: ClaudeRateLimitStore | null = null
+  ): AdapterUsageService {
+    const registry = new UsageProviderRegistry();
+    if (claudeRateLimitStore !== null) {
+      registry.register(new ClaudeRateLimitUsageProvider(claudeRateLimitStore));
+    }
+    registry.register(LocalTelemetryUsageProvider.forWorkspace(workspaceRoot, sessionClock));
     return new AdapterUsageService(registry, {
       resolveAdapter: () => getGlobalAdapterWithSource(workspaceRoot).adapter,
     });
@@ -180,27 +214,36 @@ export class AdapterUsageService implements vscode.Disposable {
   }
 
   /**
-   * Ask the resolved provider for a snapshot, falling back to the unknown
-   * snapshot whenever nothing can answer.
+   * Ask each provider that claims the adapter, in precedence order, for a
+   * snapshot — falling back to the unknown snapshot only once none can
+   * answer.
    *
    * Three routes end in "unknown", and all three are the same answer to the
-   * user: no provider claims the adapter, the provider claims it but has no
-   * data, or the derivation threw. A failed read is not evidence of zero
+   * user: no provider claims the adapter, every provider that claims it has
+   * no data, or every derivation threw. A failed read is not evidence of zero
    * usage, so it never becomes a zeroed window.
+   *
+   * The fall-through matters because a provider's `supports` predicate is
+   * about the adapter, not about whether it has observed anything yet
+   * (Issue #709). `ClaudeRateLimitUsageProvider` claims `claude` on both the
+   * subscription and API-key paths, and returns `null` on the latter — which
+   * has to reach `LocalTelemetryUsageProvider`'s dollar windows rather than
+   * dead-ending in "unknown". A provider that throws is skipped for the same
+   * reason: one broken source must not take the whole meter down.
    */
   private async derive(): Promise<UsageSnapshot> {
     const adapter = this.options.resolveAdapter();
-    const provider = this.registry.resolve(adapter);
-    if (provider === undefined) {
-      return unknownUsageSnapshot(adapter, new Date());
+    for (const provider of this.registry.resolveAll(adapter)) {
+      try {
+        const snapshot = await provider.getSnapshot(adapter);
+        if (snapshot !== null) {
+          return snapshot;
+        }
+      } catch (error) {
+        console.warn(`[Nightgauge] usage provider ${provider.id} failed for ${adapter}:`, error);
+      }
     }
-    try {
-      const snapshot = await provider.getSnapshot(adapter);
-      return snapshot ?? unknownUsageSnapshot(adapter, new Date());
-    } catch (error) {
-      console.warn(`[Nightgauge] usage provider ${provider.id} failed for ${adapter}:`, error);
-      return unknownUsageSnapshot(adapter, new Date());
-    }
+    return unknownUsageSnapshot(adapter, new Date());
   }
 
   dispose(): void {

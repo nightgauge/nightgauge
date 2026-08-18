@@ -2237,6 +2237,16 @@ exports[`getDashboardHtml snapshots (Issue #1242) > active pipeline state — cu
       color: var(--vscode-foreground);
     }
 
+    /*
+     * As-of stamp for a cached vendor reading (Issue #709). Same muted weight
+     * as the reset text beside it: it qualifies the figure rather than
+     * competing with it.
+     */
+    .usage-as-of {
+      color: var(--vscode-descriptionForeground);
+      font-size: 0.85em;
+    }
+
     .usage-family-heading {
       margin: var(--spacing-sm) 0 0 0;
       font-size: 0.85em;
@@ -8983,6 +8993,16 @@ exports[`getDashboardHtml snapshots (Issue #1242) > completed run with tool call
       margin: 0 0 var(--spacing-sm) 0;
       font-size: 0.95em;
       color: var(--vscode-foreground);
+    }
+
+    /*
+     * As-of stamp for a cached vendor reading (Issue #709). Same muted weight
+     * as the reset text beside it: it qualifies the figure rather than
+     * competing with it.
+     */
+    .usage-as-of {
+      color: var(--vscode-descriptionForeground);
+      font-size: 0.85em;
     }
 
     .usage-family-heading {
@@ -15781,6 +15801,16 @@ exports[`getDashboardHtml snapshots (Issue #1242) > empty state — no current r
       color: var(--vscode-foreground);
     }
 
+    /*
+     * As-of stamp for a cached vendor reading (Issue #709). Same muted weight
+     * as the reset text beside it: it qualifies the figure rather than
+     * competing with it.
+     */
+    .usage-as-of {
+      color: var(--vscode-descriptionForeground);
+      font-size: 0.85em;
+    }
+
     .usage-family-heading {
       margin: var(--spacing-sm) 0 0 0;
       font-size: 0.85em;
@@ -22420,6 +22450,16 @@ exports[`getDashboardHtml snapshots (Issue #1242) > pagination controls rendered
       margin: 0 0 var(--spacing-sm) 0;
       font-size: 0.95em;
       color: var(--vscode-foreground);
+    }
+
+    /*
+     * As-of stamp for a cached vendor reading (Issue #709). Same muted weight
+     * as the reset text beside it: it qualifies the figure rather than
+     * competing with it.
+     */
+    .usage-as-of {
+      color: var(--vscode-descriptionForeground);
+      font-size: 0.85em;
     }
 
     .usage-family-heading {
