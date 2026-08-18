@@ -300,8 +300,9 @@ describe("model registry — orthogonal axis fields (#578, spike #568 §1/§2)",
       expect(cli?.served, `${id} cli served`).toBe(served);
       expect(cli?.verified).toBe("2026-08-15");
       expect(cli?.evidence, `${id} carries a verified date but no evidence`).toBeTruthy();
-      // The xai api transport is pending #553; pending stays unexpressed.
-      expect(m?.transports?.api, `${id} guessed an api transport fact`).toBeUndefined();
+      // The xai api transport is settled NOT BUILT (#553, won't do), so this
+      // cell is permanently unexpressed — there is no transport to describe.
+      expect(m?.transports?.api, `${id} declares an api transport fact`).toBeUndefined();
     }
   });
 

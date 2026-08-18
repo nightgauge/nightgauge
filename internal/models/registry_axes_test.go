@@ -155,8 +155,10 @@ func TestRegistryDeclaresEffortLevels(t *testing.T) {
 // grok CLI catalog listing of 2026-08-15. grok-build-0.1's served=false is
 // the #532 fact stated as data for the first time — the id exists at the
 // provider but the Build CLI's chat proxy rejects it. The api transport is
-// deliberately ABSENT on all three: the xai API question is pending (#553)
-// and pending stays unexpressed, never guessed.
+// deliberately ABSENT on all three, and permanently so: #553 was closed
+// won't-do, so no XAI_API_KEY HTTP transport will be built and the pipeline
+// reaches xAI only through the Build CLI. These cells state nothing because
+// there is nothing to state — not because a fact is pending.
 func TestXaiTransportFactsCarryMeasuredCatalogEvidence(t *testing.T) {
 	cases := []struct {
 		id     string
@@ -188,8 +190,9 @@ func TestXaiTransportFactsCarryMeasuredCatalogEvidence(t *testing.T) {
 			t.Errorf("%s transports.cli carries a verified date but no evidence citation", c.id)
 		}
 		if _, hasAPI := m.Transports[TransportAPI]; hasAPI {
-			t.Errorf("%s declares api transport facts; the xai API transport is pending #553 "+
-				"and a pending fact stays unexpressed, never guessed", c.id)
+			t.Errorf("%s declares api transport facts; the xai API transport is settled NOT "+
+				"BUILT (#553, won't do), so this cell is permanently unexpressed — delete "+
+				"the fact rather than reopening the decision", c.id)
 		}
 	}
 }
@@ -197,8 +200,9 @@ func TestXaiTransportFactsCarryMeasuredCatalogEvidence(t *testing.T) {
 // TestTransportAndProvenanceValuesMatchSpikeInventory pins every entry's new
 // axis values to the spike's §1 inventory table: which transports carry a
 // declared served=true fact, which stay unexpressed (deprecated entries whose
-// reachability is unverified, the fixture entry, every xai api cell pending
-// #553), and each top-level rate card's provenance.
+// reachability is genuinely still unverified, the fixture entry, and every xai
+// api cell — permanently, since #553 settled that the transport is not built),
+// and each top-level rate card's provenance.
 func TestTransportAndProvenanceValuesMatchSpikeInventory(t *testing.T) {
 	type want struct {
 		cli        *bool // nil = key absent (unexpressed)
@@ -280,14 +284,18 @@ func TestTransportAndProvenanceValuesMatchSpikeInventory(t *testing.T) {
 // TestNoTransportOverridesTopLevelRatesYet pins the additive phase's rate
 // story: every current rate figure lives in the top-level card (measured
 // Build-CLI charges for grok-4.6/grok-4.5 since #570), so no transport block
-// carries an overriding card. When #553 records the xai API card this test is
-// the one to update — with figures, provenance, and a citation.
+// carries an overriding card. The xai api card #578 anticipated is never
+// coming — #553 settled that transport as not built — so the first override
+// must come from some other provider whose two transports genuinely bill
+// differently, and whoever records it updates this test with figures,
+// provenance, and a citation.
 func TestNoTransportOverridesTopLevelRatesYet(t *testing.T) {
 	for _, m := range All() {
 		for transport, facts := range m.Transports {
 			if facts.Rates != nil {
-				t.Errorf("%s transports.%s carries a rate card; this phase declares none — "+
-					"transport cards start with #553 (xai api list prices)", m.ID, transport)
+				t.Errorf("%s transports.%s carries a rate card; no transport overrides the "+
+					"top-level card today — record the measured or published per-transport "+
+					"figures and update this test together", m.ID, transport)
 			}
 		}
 	}
