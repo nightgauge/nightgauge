@@ -39,9 +39,20 @@ publication review before being committed.
 `.github/publication-boundary.yaml` is fail-closed: every tracked path must be
 classified. It also assigns stricter content rules to paths likely to contain
 planning or private implementation details — path allowlisting, a regex
-`forbidden_content` denylist, and a hashed `forbidden_tokens` denylist all
-live in this one config. Passing the automated check is necessary but does
-not replace human publication review.
+`forbidden_content` denylist, a hashed `forbidden_tokens` denylist, and an
+`issue_references` ceiling all live in this one config. Passing the automated
+check is necessary but does not replace human publication review.
+
+`issue_references` rejects a **newly added** line citing an issue number above
+`high_water_mark + slack` — a number this repository has not issued cannot
+resolve at the moment it is written, and once the repository's own numbering
+climbs past it, it stops 404-ing and starts resolving to unrelated live work.
+The rule anchors on the repository's own high-water mark rather than on digit
+count, so it does not need revisiting when the numbering passes four digits;
+the manifest records that mark, and the guard fails closed (exit 2) once
+merge-commit history proves it has gone stale. The scope is the diff, not the
+tree: the rule is "nothing newly introduced", and the tree's inherited
+predecessor references are a separate mechanical sweep.
 
 The guard's own fail-closed regression suite
 (`scripts/test-publication-boundary.sh`) runs both in CI

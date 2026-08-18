@@ -10,6 +10,8 @@ failure:
   * a tracked path matching no `allow` rule     -> FAIL (not warn, not ignore)
   * a tracked path matching a `deny` rule       -> FAIL
   * forbidden content outside its allow_paths   -> FAIL
+  * a NEWLY ADDED line citing an issue number
+    above the repository's high-water mark      -> FAIL
   * a non-empty `needs_decision` bucket         -> FAIL
   * an unexpected exception anywhere            -> FAIL
 
@@ -27,6 +29,7 @@ Exit codes:
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 import subprocess
 import sys
@@ -86,6 +89,145 @@ def _line_has_denied_token(line, word, salt, token_hashes):
     return False
 
 
+# ── Unresolvable issue references (#673) ─────────────────────────────────────
+# A "#N" above the number this repository has actually issued cannot resolve at
+# the moment it is written. That is a definition, not a heuristic: it holds at
+# every repository size, which is why the rule anchors on the high-water mark
+# recorded in the manifest rather than on digit count. Digit count is the wrong
+# axis in both directions -- 951 distinct unresolvable numbers here are below
+# 1000, and #000000 / &#8635; are six digits and are not references at all.
+#
+# The scan is DIFF-SCOPED: only lines this working tree ADDS over its base are
+# considered. The rule is "no NEWLY INTRODUCED unresolvable reference", so a
+# diff is the honest scope. The tree's ~6,800 pre-existing occurrences are a
+# separate, mechanical sweep; gating on them here would mean shipping the sweep
+# before the guard, which is the ordering that lets the queue keep growing.
+
+# A bare "#N", or one qualified with this repository's own name. An
+# "owner/repo#N" for any OTHER repository is deliberately not matched: those
+# numbers belong to a sequence this manifest knows nothing about, and the
+# private ones are already covered by `private-repository-issue-reference`.
+ISSUE_REF = re.compile(r"(?<![0-9A-Za-z_/&#-])(?:nightgauge/nightgauge|nightgauge)?#([0-9]+)")
+HEX_RUN = re.compile(r"[0-9a-fA-F]+")
+
+# Widths a CSS/SVG hex colour can take that this repository cannot produce as an
+# issue number: "#252526", "#101830", "#12345678". Three- and four-digit colours
+# are NOT excluded -- those collide with real issue numbers, and an all-digit
+# three-digit colour is below the mark anyway. Remove this once the repository
+# is anywhere near 100,000 issues.
+HEX_COLOR_WIDTHS = frozenset({6, 8})
+
+
+def unresolvable_refs(line: str, ceiling: int):
+    """Yield (number, matched_text) for each #N on `line` that cannot resolve."""
+    for m in ISSUE_REF.finditer(line):
+        digits = m.group(1)
+        # "#5865f2" -> ISSUE_REF sees "#5865". A reference is never followed by
+        # a hex letter, so a longer hex run means this is a colour.
+        run = HEX_RUN.match(line, m.start(1))
+        if run and run.end() > m.end(1):
+            continue
+        if len(digits) in HEX_COLOR_WIDTHS:
+            continue
+        # GitHub never issues a zero-padded number, so "#000000" and the
+        # "#0000" head of "#0000ff" are not references.
+        if len(digits) > 1 and digits[0] == "0":
+            continue
+        n = int(digits)
+        if n > ceiling:
+            yield n, m.group(0)
+
+
+def _rev_ok(ref: str) -> bool:
+    return (
+        subprocess.run(
+            ["git", "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"],
+            capture_output=True,
+        ).returncode
+        == 0
+    )
+
+
+def resolve_diff_base() -> tuple[str, str] | tuple[None, None]:
+    """Resolve the commit this working tree is measured against.
+
+    NG_BOUNDARY_DIFF_BASE overrides everything (the regression suite pins it so
+    its cases do not depend on branch topology). Otherwise: the pull request's
+    base branch, the commit a push replaced, then the default branch.
+    """
+    candidates: list[str] = []
+    override = os.environ.get("NG_BOUNDARY_DIFF_BASE")
+    if override:
+        # An explicit base that does not resolve is an error, not an invitation
+        # to quietly measure against something else.
+        if not _rev_ok(override):
+            die(2, f"NG_BOUNDARY_DIFF_BASE={override!r} does not resolve to a commit. "
+                   "Failing closed rather than silently diffing against a different base.")
+        candidates.append(override)
+    base_ref = os.environ.get("GITHUB_BASE_REF")
+    if base_ref:
+        candidates += [f"origin/{base_ref}", base_ref]
+    if os.environ.get("GITHUB_EVENT_NAME") == "push":
+        candidates.append("HEAD^")
+    candidates += ["origin/main", "main"]
+
+    for cand in candidates:
+        if not _rev_ok(cand):
+            continue
+        found = subprocess.run(
+            ["git", "merge-base", cand, "HEAD"], capture_output=True
+        )
+        if found.returncode == 0 and found.stdout.strip():
+            return cand, found.stdout.decode().strip()
+    return None, None
+
+
+def added_lines(base: str):
+    """Yield (path, lineno, text) for every line this tree ADDS over `base`.
+
+    `git diff <commit>` compares the commit against the WORKING TREE, so staged
+    and unstaged edits count. That matters: the regression suite plants its
+    violations with `git add` and never commits them.
+    """
+    out = subprocess.run(
+        ["git", "diff", "--no-color", "--no-ext-diff", "--unified=0",
+         "--diff-filter=ACMR", base],
+        capture_output=True,
+        check=True,
+    ).stdout.decode(errors="ignore")
+
+    path: str | None = None
+    lineno = 0
+    for raw in out.splitlines():
+        if raw.startswith("+++ "):
+            target = raw[4:]
+            path = None if target == "/dev/null" else target[2:] if target.startswith("b/") else target
+        elif raw.startswith("@@"):
+            hunk = re.match(r"@@ -\S+ \+(\d+)", raw)
+            lineno = int(hunk.group(1)) if hunk else 0
+        elif raw.startswith("+"):
+            if path is not None:
+                yield path, lineno, raw[1:]
+            lineno += 1
+
+
+def observed_high_water() -> int:
+    """Largest "(#N)" in first-parent commit subjects.
+
+    Squash merges write the pull request number into the subject, so this is an
+    OFFLINE lower bound on the numbers this repository has really issued -- no
+    network call inside a fail-closed guard. It is used only to detect that the
+    recorded mark has gone stale; it never raises the ceiling on its own, so the
+    guard can never be silently weakened by a crafted commit subject.
+    """
+    out = subprocess.run(
+        ["git", "log", "--first-parent", "--format=%s", "HEAD"],
+        capture_output=True,
+        check=True,
+    ).stdout.decode(errors="ignore")
+    return max((int(n) for n in re.findall(r"\(#(\d+)\)", out)), default=0)
+
+
 def main() -> int:
     if not MANIFEST.exists():
         die(2, f"manifest not found: {MANIFEST}\n  The guard cannot verify anything. Failing closed.")
@@ -111,6 +253,32 @@ def main() -> int:
     if not allow:
         die(2, "manifest has no `allow` rules. Every path would be rejected; this is "
                "almost certainly a broken manifest rather than an empty repo. Failing closed.")
+
+    refs_rule = manifest.get("issue_references")
+    if not isinstance(refs_rule, dict):
+        die(2, "manifest has no `issue_references` block. The unresolvable-reference rule "
+               "cannot know this repository's high-water mark, so it would silently check "
+               "nothing. Failing closed.")
+    mark = refs_rule.get("high_water_mark")
+    slack = refs_rule.get("slack")
+    if isinstance(mark, bool) or not isinstance(mark, int) or mark < 1:
+        die(2, "issue_references.high_water_mark must be a positive integer. Failing closed.")
+    if isinstance(slack, bool) or not isinstance(slack, int) or slack < 0:
+        die(2, "issue_references.slack must be a non-negative integer. Failing closed.")
+    ceiling = mark + slack
+
+    # The recorded mark is the source of truth for the ceiling; git history is
+    # only ever consulted to prove that mark has gone stale. Once the repository
+    # has demonstrably issued a number ABOVE the ceiling, the rule would start
+    # denying legitimate references -- so stop, loudly, instead of manufacturing
+    # false positives.
+    observed = observed_high_water()
+    if observed > ceiling:
+        die(2, f"issue_references.high_water_mark ({mark}) is stale.\n"
+               f"  This repository has already merged #{observed}, above the ceiling "
+               f"{ceiling} (= {mark} + slack {slack}).\n"
+               f"  Bump `high_water_mark` in {MANIFEST} to the repository's current highest\n"
+               f"  issue/PR number. Until then this rule would reject real references.")
 
     violations: list[str] = []
     paths = tracked_paths()
@@ -203,6 +371,33 @@ def main() -> int:
                     )
                     break  # one hit per file is enough to fail it
 
+    # ── 3c. Unresolvable issue references, on NEWLY ADDED lines ──────────────
+    # "#N above the high-water mark" is a definition, not a heuristic: such a
+    # number cannot resolve at the moment it is written, at any repository size.
+    # See the module header for why the scope is a diff rather than the tree.
+    base_ref, base = resolve_diff_base()
+    if base is None:
+        die(2, "cannot resolve a base commit to diff against, so the "
+               "unresolvable-reference rule would check nothing.\n"
+               "  Fetch the default branch, or set NG_BOUNDARY_DIFF_BASE to a "
+               "revision. Failing closed.")
+
+    ref_exempt = refs_rule.get("allow_paths") or []
+    added = list(added_lines(base))
+    for p, n, line in added:
+        if any(matches(p, e) for e in ref_exempt):
+            continue
+        for num, token in unresolvable_refs(line, ceiling):
+            violations.append(
+                f"UNRESOLVABLE ISSUE REFERENCE: {p}:{n}\n"
+                f"    {token} is above this repository's high-water mark "
+                f"({mark} + slack {slack} = {ceiling}), so it cannot resolve here.\n"
+                f"    {line.strip()[:100]}\n"
+                f"    Cite the real issue, drop the '#', or -- if #{num} genuinely exists\n"
+                f"    now -- bump issue_references.high_water_mark in {MANIFEST}.\n"
+                f"    (measured against {base_ref} @ {base[:12]})"
+            )
+
     # ── 4. NEEDS-DECISION must be empty ──────────────────────────────────────
     for item in pending:
         violations.append(
@@ -226,6 +421,8 @@ def main() -> int:
 
     print(f"\033[32m✓ publication boundary clean\033[0m — {len(paths)} tracked paths, "
           f"all classified; no denied paths, no forbidden content, no open decisions.")
+    print(f"  issue references: {len(added)} added line(s) over {base_ref} "
+          f"({base[:12]}) carry no #N above {ceiling}.")
     return 0
 
 
