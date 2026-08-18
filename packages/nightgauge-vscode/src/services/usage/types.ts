@@ -19,11 +19,12 @@
  *
  * A `limit` of `null` means "no ceiling is known", never "no usage".
  *
- * The vocabularies below are deliberately wider than what
- * `LocalTelemetryUsageProvider` can produce, so a later per-adapter provider
- * can add windows without a type change. `docs/decisions/018-adapter-usage-quota-model.md`
- * records, member by member, which values have a producer today and which are
- * reserved for a named future provider.
+ * The vocabularies below were deliberately wider than what
+ * `LocalTelemetryUsageProvider` could produce, so a later per-adapter provider
+ * could add windows without a type change. Issue #709 was that provider and
+ * needed none. `docs/decisions/018-adapter-usage-quota-model.md` records,
+ * member by member, which values have a producer and which are still reserved
+ * for a named future one — its amendment section covers what #709 changed.
  *
  * @see docs/decisions/018-adapter-usage-quota-model.md
  * @see Issue #658 - Provider-neutral adapter usage model
@@ -65,14 +66,17 @@ export type UsageWindowScope = "session" | "rolling" | "daily" | "weekly" | "mon
 /**
  * What `used`/`limit` are counted in.
  *
- * `usd` comes from local telemetry and `percent` from the Claude
- * `rate_limit_event` provider. The rest are reserved for named providers:
+ * Two have producers:
  *
+ * - `usd` — every `LocalTelemetryUsageProvider` window.
  * - `percent` — `ClaudeRateLimitUsageProvider` (Issue #709). That channel
  *   reports `utilization` (0-100) and no denominator, so the only honest
  *   rendering is `used: utilization, limit: 100, unit: "percent"`. This is a
  *   **vendor reported** percentage; a percentage this model computed for a
  *   window whose real usage it does not know remains forbidden.
+ *
+ * Two are still reserved for named providers, and nothing emits them:
+ *
  * - `tokens` — a provider that gets an absolute token allowance.
  * - `requests` — a Copilot provider; premium requests per month.
  */
@@ -115,8 +119,11 @@ export interface UsageWindow {
   scope: UsageWindowScope;
   /**
    * Model family this window is scoped to, when the provider buckets per
-   * family (Max meters Opus separately from Sonnet). Absent means the window
-   * covers every model the adapter ran.
+   * family. Absent means the window covers every model the adapter ran, which
+   * is every window produced today: local telemetry has no per-family ceiling
+   * to measure against, and the Claude `rate_limit_event` channel names a
+   * *window* (five-hour, daily, seven-day) rather than a model, so Issue #709
+   * deliberately leaves this unset rather than inventing a breakdown.
    */
   modelFamily?: string;
   /**

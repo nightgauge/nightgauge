@@ -36,10 +36,13 @@ function formatTokenCount(value: number): string {
 /**
  * Format a raw `used`/`limit` figure per its `UsageUnit`.
  *
- * `percent` is the vendor-reported-percentage case reserved by
- * docs/decisions/018-adapter-usage-quota-model.md (`rate_limit_event`'s
- * `utilization`) — no producer emits it yet, but the formatter honours it so
- * that provider needs no change here when it lands.
+ * `percent` is the vendor-reported-percentage case
+ * docs/decisions/018-adapter-usage-quota-model.md reserved, and
+ * `ClaudeRateLimitUsageProvider` now produces it from `rate_limit_event`'s
+ * `utilization` (Issue #709). The formatter needed no change when that
+ * landed, which was the point of honouring the unit ahead of its producer.
+ *
+ * `tokens` and `requests` are still reserved — no provider emits either.
  */
 export function formatUsageValue(value: number, unit: UsageUnit): string {
   switch (unit) {

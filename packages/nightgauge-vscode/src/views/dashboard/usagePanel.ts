@@ -241,10 +241,12 @@ export function toWindowView(window: UsageWindow): UsagePanelWindowView {
  * order within each group and first-appearance order between groups.
  *
  * Returns an empty list when no window carries a family — the panel then omits
- * the whole section rather than rendering an empty heading. Local telemetry
- * emits no family windows today (ADR 018 lists `modelFamily` as reserved), so
- * that is the current path; a provider that buckets per family lights this up
- * with no change here.
+ * the whole section rather than rendering an empty heading. That is the path
+ * every snapshot takes: neither provider emits a family window. Local
+ * telemetry has no per-family limit to measure against, and the Claude
+ * `rate_limit_event` channel names a *window*, not a model, so Issue #709
+ * deliberately never populates `modelFamily` from it. A provider that does
+ * bucket per family lights this up with no change here.
  */
 export function groupByModelFamily(windows: readonly UsageWindow[]): UsagePanelFamilyGroup[] {
   const groups = new Map<string, UsagePanelWindowView[]>();
@@ -294,8 +296,9 @@ export function selectActiveWindow(windows: readonly UsageWindow[]): UsageWindow
  * - the window is not denominated in dollars (`unit !== "usd"`). Run history
  *   records dollars; projecting a vendor-reported percentage or a request
  *   allowance from a dollar rate would be arithmetic across two different
- *   things. Reserved units (ADR 018) reach this branch the day a provider
- *   emits them.
+ *   things. `percent` reaches this branch in production since Issue #709 —
+ *   every Claude subscription window is denominated in it — so the panel
+ *   states why there is no rate instead of showing one.
  * - fewer than `BURN_RATE_MIN_SAMPLES` runs fall inside the lookback.
  */
 export function computeUsageBurnRate(

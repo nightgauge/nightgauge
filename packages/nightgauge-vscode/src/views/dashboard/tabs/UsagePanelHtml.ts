@@ -140,9 +140,10 @@ function windowRowHtml(view: UsagePanelWindowView, now: Date): string {
  * Per-model-family breakdown, or nothing at all.
  *
  * Omitted cleanly — no heading, no empty container — when the snapshot carries
- * no `modelFamily` windows, which is every snapshot local telemetry produces
- * today (ADR 018 lists `modelFamily` as reserved for a provider that buckets
- * per family).
+ * no `modelFamily` windows, which is every snapshot either provider produces:
+ * local telemetry has no per-family limit, and the Claude `rate_limit_event`
+ * channel names a window rather than a model (Issue #709). ADR 018 keeps
+ * `modelFamily` reserved for a provider that really does bucket per family.
  */
 function familyBreakdownHtml(groups: readonly UsagePanelFamilyGroup[], now: Date): string {
   if (groups.length === 0) {
