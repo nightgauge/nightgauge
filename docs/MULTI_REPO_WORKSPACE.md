@@ -608,6 +608,55 @@ The skill automatically:
 3. Creates linked sub-issues in target repos
 4. Updates epic body with issue references
 
+### Editing the Manifest — `workspace repo` (#703)
+
+`.vscode/nightgauge-workspace.yaml` has exactly one supported writer. Every
+surface that mutates it — the settings UI, an attention repair verb, an agent in
+a terminal — goes through `nightgauge workspace repo`, so the guards live in one
+place instead of being reimplemented (and subtly re-broken) per caller.
+
+```bash
+nightgauge workspace repo list [--json]
+nightgauge workspace repo add --name <n> --path <p> [--role <r>] [--project <n>]
+nightgauge workspace repo remove --name <n> [--force]
+```
+
+**Guards.** `add` refuses a duplicate name, a path that is not a directory, a
+path with no `.git`, and any non-positive `--project`. When `--project` is
+omitted it resolves through the single authoritative resolver (see
+[Single-Resolver Contract](#single-resolver-contract-issues-271-313)) and fails loudly rather than
+writing a placeholder. `remove` refuses to orphan `routing.default_repository`
+or a `routing.patterns[].preferred_repo` reference unless `--force` is passed.
+
+**`project_number: 0` is now unwritable.** A zero resolves to project 0 and
+silently misroutes issues. Before #703 that rule existed only as a comment in
+this repository's own manifest and in operator memory; it is now enforced by
+every write path and by the validator that gates them.
+
+**Writes preserve the file.** The manifest carries load-bearing comments, so
+writes are performed as line splices against the original bytes rather than by
+re-marshalling: the target entry's line range is located and replaced, and every
+other byte is left untouched. An add-then-remove cycle returns the file to a
+byte-identical state, which is pinned by a test that runs against this
+repository's actual manifest.
+
+A marshal-based writer cannot do this. Measured on that same file, a
+`gopkg.in/yaml.v3` node round-trip preserves comments, key order and
+indentation but drops **every blank line** — 9 of them — reflowing a
+hand-maintained file on the first write.
+
+**Comment ownership.** yaml attaches a comment block to the node _below_ it, so
+this repository's four-line `project_number` block — which documents the
+whole list — is owned by the _first_ repositories entry. Removing that entry
+therefore must not delete its leading comment, and does not: `remove` deletes an
+entry's own body lines only, leaves the comment in place, and tells the operator
+it did so. Text is never lost; a retained comment may end up heading an entry it
+does not describe, which is the deliberate tradeoff over silent deletion.
+
+Writes are atomic (temp file plus rename, preserving the original file mode) and
+are validated before they land — a change that would produce an invalid manifest
+is refused with the original left untouched.
+
 ### Board-Sync Provisioning
 
 A multi-repo workspace shares one GitHub Project across its member repos, but a

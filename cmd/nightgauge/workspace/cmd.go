@@ -28,6 +28,7 @@ func Cmd() *cobra.Command {
 	cmd.AddCommand(reposFromProjectCmd())
 	cmd.AddCommand(projectsForRepoCmd())
 	cmd.AddCommand(provisionBoardSyncCmd())
+	cmd.AddCommand(repoCmd())
 	return cmd
 }
 
