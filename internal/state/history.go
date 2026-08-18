@@ -369,6 +369,20 @@ type V2StageTokens struct {
 	// canonical set. Empty string maps to absent on the wire via omitempty —
 	// readers must treat absence as adapter-unknown rather than defaulting.
 	Adapter string `json:"adapter,omitempty"`
+	// CostSource records HOW CostUSD was priced (Issue #682): one of
+	// state.CostSourceNative (a vendor/CLI-reported measurement),
+	// state.CostSourceComputed (rate-card derived), or state.CostSourceUnknown
+	// (no pricing-registry entry — CostUSD is a placeholder 0). Mirrors the TS
+	// `cost_source` enum in HistoryStageTokenUsageSchema. Empty string maps to
+	// absent on the wire via omitempty; readers must treat absence as
+	// source-unknown, NOT backfill a guess from cost_usd (that manufactured
+	// confidence was exactly #682's bug — see
+	// executionHistoryReader.ts, "normalizePerStageCostSource", now removed).
+	// BuildV2Record folds this across every CompleteStage occurrence
+	// accumulated into one stage entry via foldCostSource — the LEAST
+	// confident contributor wins, same "never look more confident than the
+	// truth" rule CostUnstamped's OR-fold already applies below.
+	CostSource string `json:"cost_source,omitempty"`
 	// CostUnstamped mirrors StageResult.CostUnstamped (#585, #588): true when
 	// CostUSD is a placeholder 0 because the serving (provider, model) pair
 	// could not be resolved against the pricing registry — never set for the
@@ -1173,6 +1187,14 @@ func (hw *HistoryWriter) BuildV2Record(snap *RuntimeState, success bool, errMsg 
 		// attempt would make the fold look more honest than the sum it
 		// actually is.
 		acc.CostUnstamped = acc.CostUnstamped || sr.CostUnstamped
+		// WEAKEST WINS, never assign (#682): the accumulated cost_usd above
+		// sums every occurrence, so a stage folded from a native attempt and a
+		// computed attempt is now PART measured, part estimated — reporting
+		// "native" for that sum would claim more confidence than the whole
+		// actually earned. foldCostSource ranks native > computed > unknown
+		// and keeps the lower rank, one priority level above CostUnstamped's
+		// OR-fold just above.
+		acc.CostSource = foldCostSource(acc.CostSource, sr.CostSource)
 		acc.Adapter = stageAdapter
 
 		// Cache hit rate: cache_read / (input + cache_read), recomputed from the
@@ -1234,6 +1256,13 @@ func (hw *HistoryWriter) BuildV2Record(snap *RuntimeState, success bool, errMsg 
 						CostUSD:       sr.CostUSD,
 						CacheHitRate:  cacheHitRate,
 						Adapter:       stageAdapter,
+						// RecordTerminatingStageTokens has no costSource
+						// parameter today (#682, same known gap as
+						// costUnstamped below), so this is always "" on this
+						// path — carried through for struct-literal
+						// completeness so a future caller that DOES pass one
+						// is not silently dropped here.
+						CostSource: sr.CostSource,
 						// RecordTerminatingStageTokens has no costUnstamped
 						// parameter today, so this is always false on this
 						// path — carried through for struct-literal

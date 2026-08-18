@@ -371,7 +371,13 @@ describe("ExecutionHistoryReader", () => {
         expect("terminal_failure_kind" in run && run.terminal_failure_kind).toBe(
           "validation_error"
         );
-        expect(run.tokens.per_stage?.["feature-validate"]?.cost_source).toBe("native");
+        // No cost_source backfill (Issue #682 removed it): a stage with a
+        // priced cost_usd but no cost_source in the source bytes stays
+        // undefined rather than being guessed as "native". Go now sets the
+        // field itself on every stage it completes, so an absent field here
+        // is honestly "unknown" downstream (see stageCostConfidence), not a
+        // manufactured "native".
+        expect(run.tokens.per_stage?.["feature-validate"]?.cost_source).toBeUndefined();
       }
     });
 

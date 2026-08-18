@@ -93,45 +93,19 @@ export interface IssueCostAggregation {
 }
 
 /**
- * Backfill `cost_source` on per-stage records that lack it (Issue #3228).
- *
- * Pre-#3228 records never set this field. Native (Claude `total_cost_usd`)
- * was the only path that produced a non-zero cost, so when `cost_usd > 0` we
- * can confidently label the source `'native'`. When `cost_usd === 0` we leave
- * the field undefined — historically the zero could mean either "no tokens
- * spent on this stage" or "non-Claude adapter that never reported cost", and
- * we cannot retroactively distinguish those.
- */
-function normalizePerStageCostSource(
-  perStage: NonNullable<ExecutionHistoryRunRecordV2["tokens"]["per_stage"]> | undefined
-): NonNullable<ExecutionHistoryRunRecordV2["tokens"]["per_stage"]> | undefined {
-  if (!perStage) return perStage;
-  const out: NonNullable<ExecutionHistoryRunRecordV2["tokens"]["per_stage"]> = {};
-  for (const [stage, usage] of Object.entries(perStage)) {
-    if (!usage) continue;
-    if (usage.cost_source === undefined && usage.cost_usd > 0) {
-      out[stage] = { ...usage, cost_source: "native" };
-    } else {
-      out[stage] = usage;
-    }
-  }
-  return out;
-}
-
-function normalizeParsedRunRecord<
-  T extends ExecutionHistoryRunRecordV2 | ExecutionHistoryRunRecordV3,
->(record: T): T {
-  return {
-    ...record,
-    tokens: {
-      ...record.tokens,
-      per_stage: normalizePerStageCostSource(record.tokens.per_stage),
-    },
-  };
-}
-
-/**
  * Normalize a v1 run record to v2 shape by adding defaults for new fields.
+ *
+ * `cost_source` used to get a `cost_usd > 0 → "native"` backfill here (Issue
+ * #3228). Removed by #682: the Go writer now sets `cost_source` itself on
+ * every stage it completes (RuntimeState.CompleteStage /
+ * CompleteStageWithCost), so an absent field is no longer "a pre-#3228 record
+ * we can infer about" — it is either a genuinely legacy record or a
+ * known-gap Go write path (RecordTerminatingStageTokens, #682) that has not
+ * been taught to set it. Guessing `"native"` from `cost_usd > 0` in either
+ * case would manufacture a confident answer this reader has no evidence for
+ * — precisely the bug #682 exists to fix. `stageCostConfidence` in
+ * LocalTelemetryUsageProvider.ts now treats an absent `cost_source` as
+ * `"unknown"`, not `"measured"`.
  */
 function normalizeRunRecordToV2(v1: ExecutionHistoryRunRecord): ExecutionHistoryRunRecordV2 {
   return {
@@ -148,10 +122,6 @@ function normalizeRunRecordToV2(v1: ExecutionHistoryRunRecord): ExecutionHistory
       complexity_score: v1.routing?.complexity_score ?? 0,
       path: v1.routing?.path ?? "unknown",
       skip_stages: v1.routing?.skip_stages ?? [],
-    },
-    tokens: {
-      ...v1.tokens,
-      per_stage: normalizePerStageCostSource(v1.tokens.per_stage),
     },
   };
 }
@@ -548,14 +518,14 @@ export class ExecutionHistoryReader {
           if (parsed.schema_version === "3") {
             const result = ExecutionHistoryRunRecordV3Schema.safeParse(parsed);
             if (result.success) {
-              records.push(normalizeParsedRunRecord(result.data));
+              records.push(result.data);
               continue;
             }
             strictParseError = result.error.message;
           } else if (parsed.schema_version === "2") {
             const result = ExecutionHistoryRunRecordV2Schema.safeParse(parsed);
             if (result.success) {
-              records.push(normalizeParsedRunRecord(result.data));
+              records.push(result.data);
               continue;
             }
             strictParseError = result.error.message;
