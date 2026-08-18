@@ -3188,6 +3188,12 @@ func (s *Server) registerMethods() {
 			}
 
 			hw := state.NewHistoryWriter(root)
+			// pipeline.logs.history_retention_days drives the prune pass
+			// appendAndIndex runs on every write below — the only retention
+			// enforcement a headless/CLI-only workspace gets (#674).
+			if cfg, cfgErr := config.Load(root); cfgErr == nil && cfg != nil {
+				hw.SetRetentionDays(cfg.Pipeline.ResolveHistoryRetentionDays())
+			}
 			now := time.Now()
 			record := hw.BuildV2Record(snap, p.Success, errMsg, input, now)
 

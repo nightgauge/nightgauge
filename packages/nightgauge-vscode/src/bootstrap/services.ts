@@ -840,8 +840,9 @@ export async function initializeServices(
     });
 
     // Clean up old execution history JSONL files (Issue #649)
-    // Retention defaults to 90 days; configurable via pipeline.logs.history_retention_days
-    ExecutionHistoryWriter.cleanupOldFiles(incrediRoot, 90)
+    // Retention is read from pipeline.logs.history_retention_days (config.yaml),
+    // defaulting to 90 days when unset (Issue #674)
+    ExecutionHistoryWriter.cleanupOldFiles(incrediRoot)
       .then((result) => {
         if (result.deleted.length > 0) {
           logger.info("Cleaned old execution history files", {
