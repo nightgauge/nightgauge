@@ -63,11 +63,52 @@ If prerequisites fail, stop with exact remediation command.
    - If a request mixes uncertain capability discovery with concrete delivery,
      split it into a spike and a follow-up implementation issue instead of
      blending both into one ticket
-3. Produce issue title and body with:
-   - Problem statement
-   - Business/user value
-   - Acceptance criteria
-   - Technical notes (if known)
+3. Produce the issue title and body. **The body's `##` headings are a
+   contract, not a style preference** — Phase 6 runs
+   `/nightgauge:issue-audit` as this skill's terminal gate, and its Phase 5
+   checks these exact headings. The canonical per-type table lives in
+   [`nightgauge-issue-audit`'s SKILL.md, Phase 5](../../nightgauge-issue-audit/SKILL.md#phase-5-body-section-completeness);
+   it is reproduced here so the author does not have to open it, and
+   `scripts/check-issue-body-contract.py` fails CI if the two ever drift apart.
+
+   | `type:` label             | Required `##` headings, in this order         |
+   | ------------------------- | --------------------------------------------- |
+   | feature / docs / refactor | Summary, Acceptance Criteria                  |
+   | bug                       | Summary, Steps to Reproduce, Expected, Actual |
+   | spike                     | Summary, Acceptance Criteria, Recommendations |
+   | chore                     | Summary                                       |
+   | epic                      | Summary, Sub-Issues, Acceptance Criteria      |
+
+   **Casing is significant.** The audit matches
+   `^##[[:space:]]+<heading>\s*$` with `grep -E` and no `-i`, so
+   `## Acceptance criteria` does NOT satisfy `Acceptance Criteria`. Copy the
+   headings from the table verbatim.
+
+   Required headings are a floor, not a ceiling — the audit ignores headings
+   it does not require. Add these wherever they carry information:
+
+   - `## Business/user value` — why this is worth doing (strongly encouraged
+     on every `feature` and `epic`)
+   - `## Technical notes` — change targets, constraints, prior art
+   - `## Related work` — sequencing against other issues
+
+   Section content, by type:
+
+   - **Summary** (every type): what is wrong or missing and what changes.
+     Two to six sentences, no bullet-only bodies.
+   - **Acceptance Criteria**: `- [ ]` checkboxes describing shipped or
+     observable behavior (see item 4).
+   - **Steps to Reproduce / Expected / Actual** (`bug`): the reproduction
+     path, the behavior the contract promises, and the behavior observed. A
+     bug without `Actual` is not reviewable, which is why the audit requires
+     all three rather than folding them into Summary.
+   - **Sub-Issues** (`epic`): the decomposition — one line per child, as
+     `- [ ] <owner>/<repo>#<n> — <title>` once created, or as titled bullets
+     when the epic body is written before Phase 3 creates them.
+   - **Recommendations** (`spike`): the fenced `yaml recommendations` block
+     required by [docs/SPIKE_CONTRACT.md](../../../docs/SPIKE_CONTRACT.md).
+     Phase 2.X scaffolds this automatically.
+
 4. For implementation issues:
    - acceptance criteria MUST describe shipped or observable behavior
    - when upstream CLI or API behavior may have changed, include a guardrail
@@ -118,11 +159,17 @@ When creating an epic with 3+ sub-issues:
 1. Separate scope into:
    - **Execution-ready implementation work**
    - **Decision-oriented spikes**
-2. The epic body SHOULD include:
-   - Goal
-   - Scope grouped by implementation vs spike
-   - Sequencing or prerequisites
-   - Epic-level acceptance criteria
+2. The epic body carries this material under the required headings from item
+   3 above — `Goal`, `Scope`, and `Sequencing` are NOT top-level `##`
+   headings, because `## Summary` / `## Sub-Issues` / `## Acceptance Criteria`
+   are what the audit requires of a `type:epic`:
+   - `## Summary` — the goal, and the scope split into implementation work vs
+     decision-oriented spikes
+   - `## Sub-Issues` — one line per child, grouped or ordered by wave when
+     sequencing matters; prerequisites belong here as `Depends on:` notes or
+     as the `blockedBy` edges Phase 3.5 sets
+   - `## Acceptance Criteria` — epic-level criteria, i.e. what is true once
+     every child has merged
 3. Do not create a `feat:` or `chore:` sub-issue when the real deliverable is
    still feasibility, verification, or recommendation.
 4. If a sub-issue depends on verifying upstream tool behavior first and safe

@@ -196,8 +196,11 @@ include an "Expected Deliverables" section in the epic body. This section:
 - [Deliverable 3 description]
 ```
 
-This section should be placed after the Technical Notes section and before the
-sub-issue list. If sub-issues are fewer than 3, the section is optional.
+`Expected Deliverables` is an optional extra section — `issue-audit` Phase 5
+ignores headings its per-type table does not require, so adding it does not
+affect the audit. Place it after `## Technical Notes` and before the required
+`## Sub-Issues` heading. If sub-issues are fewer than 3, the section is
+optional.
 
 Linking existing sub-issues to an epic:
 

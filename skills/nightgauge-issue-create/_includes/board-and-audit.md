@@ -387,6 +387,11 @@ Return:
 Terminal audit is the single source of truth for "did this creation flow
 leave the issues in a state the pipeline can pick up?"
 
+Because this is a `--manifest` (strict) run, a missing required body heading is
+CRITICAL and will fail this gate (#711). That is the point: the bodies were
+authored moments ago against the same table the audit checks. If this fires,
+the Phase 2 authoring rules were not followed — do not reach for `--no-audit`.
+
 ```bash
 if [ "${NO_AUDIT:-false}" = "true" ]; then
   echo "Terminal audit skipped (--no-audit)."
@@ -403,6 +408,9 @@ else
     echo "ERROR: terminal audit reported NEEDS FIXES (exit=$AUDIT_EXIT)."
     echo "Review the report at: .nightgauge/pipeline/issue-audit-*.md"
     echo "Run the audit with --fix to attempt auto-repair, then re-run this skill."
+    echo "NOTE: MISSING_REQUIRED_HEADING has no repair primitive — --fix will not"
+    echo "      touch it. Fix the issue body to match the per-type heading table"
+    echo "      in Phase 2 (item 3), then re-run."
     exit "$AUDIT_EXIT"
   fi
   echo "Terminal audit: READY"

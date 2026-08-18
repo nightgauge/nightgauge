@@ -9,7 +9,7 @@ description: Deterministic post-creation gate that verifies every issue created 
 license: Apache-2.0
 metadata:
   author: nightgauge
-  version: "1.0.2"
+  version: "1.1.0"
   source: https://github.com/nightgauge/nightgauge
   chainable: true
 allowed-tools: Read Write Edit Glob Grep Bash Task AskUserQuestion
@@ -214,7 +214,14 @@ Findings:
 
 ### Phase 5: Body Section Completeness
 
-Required headings table (per type):
+The table below is the **canonical body-section contract** for this repository.
+`nightgauge-issue-create` authors bodies against it rather than restating a
+shape of its own (see that skill's `_includes/environment-and-content.md`,
+Phase 2), and [docs/ISSUE_AUDIT.md](../../docs/ISSUE_AUDIT.md) mirrors it for
+readers. All three copies are pinned against each other by
+`scripts/check-issue-body-contract.py` — edit this table and that gate stays red
+until the other two follow. Before #711 the three disagreed on every row, so
+Phase 5 fired on every issue the pipeline itself authored.
 
 | Type     | Required headings                             |
 | -------- | --------------------------------------------- |
@@ -226,12 +233,21 @@ Required headings table (per type):
 | chore    | Summary                                       |
 | epic     | Summary, Sub-Issues, Acceptance Criteria      |
 
+**Matching is exact and case-sensitive.** The regex below is `grep -E` without
+`-i`, so `## Acceptance criteria` does not satisfy a required
+`Acceptance Criteria`. Reproduce every heading with the casing shown above.
+Headings the table does not list are ignored, so an issue may carry any extra
+sections it likes (`Business/user value`, `Technical notes`, `Related work`)
+without affecting this phase.
+
 For each required heading:
 
 ```bash
 BODY=$(echo "$ISSUE_JSON" | jq -r '.body // ""')
 if ! echo "$BODY" | grep -qE "^##[[:space:]]+${HEADING}\\s*$"; then
-  FINDINGS+=( /* MISSING_REQUIRED_HEADING (WARNING) */ )
+  # Mode-dependent severity — see "Severity of MISSING_REQUIRED_HEADING" below.
+  HEADING_SEV=$([ "$MODE" = "manifest" ] && echo "CRITICAL" || echo "WARNING")
+  FINDINGS+=( /* MISSING_REQUIRED_HEADING ($HEADING_SEV) */ )
   continue
 fi
 
@@ -257,6 +273,28 @@ fi
 The `MISSING_SPIKE_RECS_BLOCK` finding has **no repair primitive**. Even with
 `--fix`, this remains CRITICAL — encoded in Phase 9 logic and pinned by the
 `spike-contract-violation` test fixture.
+
+#### Severity of `MISSING_REQUIRED_HEADING`
+
+CRITICAL in strict (`--manifest`) mode, WARNING everywhere else. The split is
+deliberate and was re-decided in #711 — the reasoning is recorded in
+[docs/ISSUE_AUDIT.md](../../docs/ISSUE_AUDIT.md#severity-tiers).
+
+In strict mode the manifest was written moments earlier by `issue-create`,
+which authors against the table above. A missing heading there is not a
+degraded issue; it is proof the authoring contract was not followed, on the one
+run where following it was guaranteed. That is what CRITICAL means in this
+skill's tier table, and it makes Phase 6 of `issue-create` a gate that can
+actually fail.
+
+In inferential mode (`--epic`, `--issues`, `--all-recent`) the target is
+frequently a hand-filed or pre-#711 issue that no creation flow ever shaped.
+Blocking those is `backlog-audit`'s job, not this skill's, so the finding stays
+a WARNING and the run still exits 0.
+
+The finding has no repair primitive in either mode: headings are human-authored
+prose, and inventing a `## Actual` section is exactly the kind of fabrication
+`--fix` must never do.
 
 #### Oversized-scope check (all issue types)
 
@@ -530,7 +568,11 @@ exit 0
 
 - **Strict vs inferential**: when `--manifest` is set, every assertion
   declared in the manifest must hold; missing fields in inferential mode
-  derive expectations from issue type and project config.
+  derive expectations from issue type and project config. Strict mode also
+  raises `MISSING_REQUIRED_HEADING` from WARNING to CRITICAL — see
+  [Phase 5](#phase-5-body-section-completeness); a body authored seconds
+  earlier by `issue-create` has no excuse for missing a heading that skill
+  prescribes.
 - **Closed issues**: by default, closed issues are flagged
   `UNEXPECTED_STATE` (WARNING). `--allow-closed` suppresses this and runs
   only state-relevant phases (existence, body sections, knowledge scaffold).

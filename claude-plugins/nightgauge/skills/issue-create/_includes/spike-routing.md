@@ -478,7 +478,7 @@ A spike issue body produced by this skill:
 
 <!-- prettier-ignore -->
 ````markdown
-## Problem Statement
+## Summary
 
 The current scheduler polls every 10 seconds regardless of load. We need to
 evaluate whether event-driven dispatch would reduce idle CPU cost.

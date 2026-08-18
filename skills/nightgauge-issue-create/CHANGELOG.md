@@ -6,6 +6,33 @@ documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.23.0] - 2026-08-18
+
+### Changed
+
+- **Body headings are now the audit's per-type contract** (#711). Phase 2 item
+  3 prescribed a single flat shape (`Problem statement`, `Business/user value`,
+  `Acceptance criteria`, `Technical notes`) for every issue type, while the
+  Phase 6 terminal audit required `Summary` plus per-type sections with
+  different casing. The two shared no heading, so every issue this skill
+  authored failed its own gate — 15 `MISSING_REQUIRED_HEADING` findings across
+  the 5 issues of epic #702, each repaired by hand afterwards. Phase 2 now cites
+  the audit's canonical table (`feature`/`docs`/`refactor`, `bug`, `spike`,
+  `chore`, `epic`), states that casing is significant, and keeps
+  `Business/user value` / `Technical notes` as explicitly-optional extra
+  sections.
+- **Epic Refinement Rules** place Goal / Scope / Sequencing _under_ the required
+  `## Summary` / `## Sub-Issues` / `## Acceptance Criteria` headings, rather
+  than proposing them as top-level headings the audit does not recognise.
+
+### Fixed
+
+- The Phase 2.9 Path B decomposition chore body opened with
+  `## Epic Decomposition Chore`, and the spike worked example labelled
+  "Contract-Conformant" opened with `## Problem Statement`. Both are
+  machine-authored or copied verbatim, so both produced a guaranteed
+  `MISSING_REQUIRED_HEADING`; both now open with `## Summary` (#711).
+
 ## [1.22.0] - 2026-06-24
 
 ### Changed

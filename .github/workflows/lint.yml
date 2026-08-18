@@ -43,6 +43,15 @@ jobs:
         run: bash scripts/test-band-vocabulary-check.sh
       - name: Band-vocabulary reintroduction gate
         run: python3 scripts/check-band-vocabulary.py
+      # Issue-body heading contract (#711): the per-type required-heading table
+      # lives in three files and issue-create runs issue-audit as its own
+      # terminal gate, so a drifted copy makes every authored issue fail its own
+      # audit. Self-test first — a gate nothing exercises degrades into an
+      # unconditional pass (the #539/#549 lesson).
+      - name: Issue-body contract gate self-test
+        run: bash scripts/test-issue-body-contract.sh
+      - name: Issue-body heading contract
+        run: python3 scripts/check-issue-body-contract.py
       # Proves the gate below still FAILS CLOSED rather than passing vacuously
       # — the defect #539 exists to fix — and that it fails only on the
       # invariant it names (#546). Without this step, reverting the gate to

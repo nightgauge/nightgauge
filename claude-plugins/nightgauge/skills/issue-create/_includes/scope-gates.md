@@ -268,9 +268,12 @@ if [ "$IS_EPIC" = "true" ]; then
     echo "Phase 2.9: PASS — placeholder marker detected (Path B)"
     echo "  → Creating follow-up type:chore issue for decomposition tracking"
     PLACEHOLDER_CHORE_TITLE="chore: decompose epic — ${EPIC_TITLE}"
-    PLACEHOLDER_CHORE_BODY="## Epic Decomposition Chore
+    PLACEHOLDER_CHORE_BODY="## Summary
 
-This issue tracks the decomposition of the parent epic into executable sub-issues.
+Tracks decomposition of the parent epic into executable sub-issues. The heading
+above is Summary because that is what issue-audit Phase 5 requires of a
+type:chore, and this body is machine-authored with no author in the loop to
+catch a drifted shape.
 
 Parent epic: #${EPIC_NUMBER}
 
