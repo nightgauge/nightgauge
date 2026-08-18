@@ -6,7 +6,7 @@ description: Create well-structured GitHub issues with SDLC metadata, project bo
 license: Apache-2.0
 metadata:
   author: nightgauge
-  version: "1.22.0"
+  version: "1.23.0"
   source: https://github.com/nightgauge/nightgauge
 allowed-tools: Read Write Edit Glob Grep Bash Task AskUserQuestion
 disable-model-invocation: true

@@ -190,6 +190,21 @@ if [ -f scripts/test-mirror-drift-gate.sh ]; then
     bash scripts/test-mirror-drift-gate.sh
 fi
 
+# 11a2. Issue-body heading contract (#711) — the required-heading table exists
+#       in three files (issue-audit SKILL.md, docs/ISSUE_AUDIT.md, and
+#       issue-create's authoring rules) and issue-create runs issue-audit as its
+#       own terminal gate. When the copies drift, every issue the pipeline
+#       authors fails its own audit; that shipped as a WARNING nobody read until
+#       #711. Self-test first, same reasoning as 11 and 5b.
+if [ -f scripts/test-issue-body-contract.sh ]; then
+  run_step "Issue-body contract gate regression suite" \
+    bash scripts/test-issue-body-contract.sh
+fi
+if [ -f scripts/check-issue-body-contract.py ]; then
+  run_step "Issue-body heading contract" \
+    python3 scripts/check-issue-body-contract.py
+fi
+
 # 11b. Plugin skills mirror drift — claude-plugins/nightgauge/skills/ is
 #      generated output committed on purpose (the marketplace manifest ships it
 #      as the plugin source), so a canonical skills/ edit that never reached it

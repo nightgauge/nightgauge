@@ -120,9 +120,16 @@ Query each issue's `projectItems(first: 10)` GraphQL.
 
 ### Phase 4 — Body section completeness
 
-Per-type required heading table (skill body owns the canonical list). Sections
-are detected via heading regex (`^##\s+<heading>$`); non-empty content check
-uses `awk` between heading boundaries.
+Per-type required heading table. The canonical copy lives in
+[`skills/nightgauge-issue-audit/SKILL.md` Phase 5](../skills/nightgauge-issue-audit/SKILL.md#phase-5-body-section-completeness);
+`nightgauge-issue-create` authors against the same table, and
+`scripts/check-issue-body-contract.py` fails if any of the three copies drift.
+
+Sections are detected via heading regex (`^##[[:space:]]+<heading>\s*$`);
+non-empty content check uses `awk` between heading boundaries. **Matching is
+exact and case-sensitive** — `## Acceptance criteria` does not satisfy a
+required `Acceptance Criteria`. Headings the table does not list are ignored,
+so extra sections are always safe.
 
 | Type     | Required headings                             |
 | -------- | --------------------------------------------- |
@@ -134,12 +141,12 @@ uses `awk` between heading boundaries.
 | chore    | Summary                                       |
 | epic     | Summary, Sub-Issues, Acceptance Criteria      |
 
-| Finding type               | Severity | Trigger                                                                              |
-| -------------------------- | -------- | ------------------------------------------------------------------------------------ |
-| `MISSING_REQUIRED_HEADING` | WARNING  | A heading required by the issue's type is absent                                     |
-| `EMPTY_REQUIRED_HEADING`   | WARNING  | A required heading is present but its body is empty                                  |
-| `MISSING_SPIKE_RECS_BLOCK` | CRITICAL | Spike issue is missing the `yaml recommendations` block per `docs/SPIKE_CONTRACT.md` |
-| `OVERSIZED_SCOPE`          | WARNING  | Issue bundles many independent units of work into a single ticket — see below        |
+| Finding type               | Severity                                    | Trigger                                                                                  |
+| -------------------------- | ------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| `MISSING_REQUIRED_HEADING` | CRITICAL in `--manifest` mode, else WARNING | A heading required by the issue's type is absent — see [Severity Tiers](#severity-tiers) |
+| `EMPTY_REQUIRED_HEADING`   | WARNING                                     | A required heading is present but its body is empty                                      |
+| `MISSING_SPIKE_RECS_BLOCK` | CRITICAL                                    | Spike issue is missing the `yaml recommendations` block per `docs/SPIKE_CONTRACT.md`     |
+| `OVERSIZED_SCOPE`          | WARNING                                     | Issue bundles many independent units of work into a single ticket — see below            |
 
 #### `OVERSIZED_SCOPE` heuristic
 
@@ -230,6 +237,47 @@ and `PRD.md` is non-empty.
 
 The verdict is `READY` when no CRITICAL findings remain (post-repair), `NEEDS
 FIXES` otherwise.
+
+### `MISSING_REQUIRED_HEADING` — mode-dependent severity (#711)
+
+This finding is **CRITICAL in strict (`--manifest`) mode and WARNING in every
+inferential mode** (`--epic`, `--issues`, `--all-recent`). The split was decided
+deliberately in #711; the reasoning is recorded here because a severity that is
+not written down drifts back.
+
+Until #711, `issue-create` prescribed one body shape (`Problem statement`,
+`Business/user value`, `Acceptance criteria`, `Technical notes`) and this audit
+required another, while `issue-create` Phase 6 ran the audit as its own terminal
+gate. The two contracts shared no heading, so Phase 5 fired on **every** issue
+the skill authored — 15 findings across the 5 issues of epic #702 alone. Being a
+WARNING is what let that ship silently for as long as it did: the verdict turns
+only on CRITICAL count, so the audit printed `READY` and exited 0 while
+reporting that the issue did not match the shape the pipeline declares it needs.
+
+A finding that fires on 100% of inputs is either mis-specified or under-severe.
+Reconciling the two contracts fixed the mis-specification; the severity was then
+re-decided on its merits:
+
+- **Strict mode is CRITICAL.** The manifest was written moments earlier by
+  `issue-create`, which now authors against this exact table. A missing heading
+  there is not degraded quality — it is proof the authoring contract was not
+  followed on the one run where following it was guaranteed. That matches the
+  CRITICAL row above ("pipeline pickup will fail or silently break"), and it is
+  what makes `issue-create` Phase 6 a gate capable of failing.
+- **Inferential mode stays WARNING.** Those modes routinely target hand-filed
+  and pre-#711 issues that no creation flow ever shaped. Promoting there would
+  turn every backlog sweep red for defects the operator did not introduce in
+  that run; grooming legacy bodies is
+  [`backlog-audit`](../skills/nightgauge-backlog-audit/SKILL.md)'s job.
+
+The finding has no repair primitive in either mode and must not acquire one:
+required sections are human-authored prose, and synthesizing an `## Actual`
+section would fabricate the very evidence the heading exists to carry.
+
+`scripts/check-issue-body-contract.py` pins the reconciliation itself — the three
+copies of the table (this document, the audit skill, the authoring rules in
+`issue-create`) must agree, and a body authored per `issue-create`'s rules must
+produce zero `MISSING_REQUIRED_HEADING` for every type in the table.
 
 ## Repair Primitives
 

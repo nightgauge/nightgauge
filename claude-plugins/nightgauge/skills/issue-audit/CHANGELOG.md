@@ -8,7 +8,29 @@ this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- **`MISSING_REQUIRED_HEADING` is CRITICAL in strict (`--manifest`) mode**
+  (#711), and stays WARNING in inferential modes. Phase 5's required-heading
+  table and `issue-create`'s authoring rules disagreed on every row, so the
+  finding fired on 100% of issues the pipeline authored while the verdict —
+  which turns only on CRITICAL count — still printed `READY`. The contracts are
+  now reconciled, which makes the finding discriminating, and strict mode
+  blocks on it because there the body was authored seconds earlier against this
+  exact table. Reasoning recorded in `docs/ISSUE_AUDIT.md` § Severity Tiers.
+- **Phase 5's table is declared canonical.** `issue-create` cites it instead of
+  restating a shape of its own, `docs/ISSUE_AUDIT.md` mirrors it for readers,
+  and `scripts/check-issue-body-contract.py` fails CI when the three copies
+  drift. Phase 5 also now states that matching is exact and case-sensitive —
+  `## Acceptance criteria` never satisfied `Acceptance Criteria`, and nothing
+  said so.
+
 ### Added
+
+- **`authoring-contract-round-trip` test fixture** (#711) — pins that a body
+  authored per `issue-create`'s rules produces zero `MISSING_REQUIRED_HEADING`
+  for `feature`, `bug`, and `epic`. No fixture pinned the round trip before,
+  which is why the contradiction survived to ship.
 
 - **`OVERSIZED_SCOPE` finding** (#3851, #3835) — flags already-created issues
   (including manually-created ones that never pass through `issue-create`) that
