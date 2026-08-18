@@ -271,6 +271,7 @@ deny:
       - "docs/spikes/README.md"
       - "docs/spikes/183-context-engineering-claude-5.md"
       - "docs/spikes/568-model-identity-axes.md"
+      - "docs/spikes/662-adapter-usage-quota-signals.md"
     rationale: >-
       Company research artifacts require an explicit publication decision.
       The public README documents the product contract without publishing the
@@ -288,7 +289,15 @@ deny:
       figures are provider-observable rates already public in issues
       #531/#553/#570; no COGS, customer data, account identifiers, or
       unreleased roadmap material. The spike-materialize stage requires the
-      artifact at this path to file the epic #567 follow-up issues.
+      artifact at this path to file the epic #567 follow-up issues. Spike #662
+      (what usage and quota signal each execution adapter exposes) is reviewed
+      and excepted on the same basis: it surveys the eight adapters already
+      public under internal/execution/adapters/** and packages/**, and cites
+      only vendor-published material — each provider's own documented usage
+      command, and GitHub's published Copilot list price, which this tree
+      already carries at packages/nightgauge-sdk/src/cli/adapterQuery.ts. It
+      contains no per-run figures from real runs, no COGS, no customer data,
+      no account identifiers, and no unreleased roadmap material.
   - path: "docs/epics/**"
     class: PRIVATE
     except:
