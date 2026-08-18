@@ -37,5 +37,3 @@ export {
   ACTION_ROLE_MAP,
 } from "./TierGate";
 export type { FeatureName, TierCheckResult, ActionName, RoleCheckResult } from "./TierGate";
-export { SkillContextAssembler } from "./SkillContextAssembler";
-export type { SkillContext } from "./SkillContextAssembler";

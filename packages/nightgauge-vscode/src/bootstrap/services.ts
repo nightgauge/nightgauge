@@ -162,7 +162,6 @@ import {
   SessionManager,
   LicensePreflight,
   TierGate,
-  SkillContextAssembler,
 } from "../platform";
 import { PipelineBridge } from "../services/PipelineBridge";
 import { PromptTemplateService } from "../services/PromptTemplateService";
@@ -240,7 +239,6 @@ export interface ExtensionServices {
   agentRegistrationService: AgentRegistrationService | null;
   tierGate: TierGate | null;
   licensePreflight: LicensePreflight | null;
-  skillContextAssembler: SkillContextAssembler | null;
   incrediRoot: string | null;
   projectBoardViews: vscode.TreeView<BaseTreeItem>[];
   treeView: vscode.TreeView<BaseTreeItem>;
@@ -783,7 +781,6 @@ export async function initializeServices(
   let runtimeStateStoreInstance: RuntimeStateStore | null = null;
   let sequentialRepoConfigService: SequentialRepoConfigService | null = null;
   let enabledReposConfigService: EnabledReposConfigService | null = null;
-  let skillContextAssemblerService: SkillContextAssembler | null = null;
   let automationService: AutomationService | null = null;
 
   // Shared getter — resolves the current platform base URL on every call so
@@ -899,12 +896,6 @@ export async function initializeServices(
 
     // Connect PipelineStateService to RepositoryContextLoader for repository-scoped paths
     pipelineStateService.setContextLoader(repositoryContextLoader);
-
-    // Initialize SkillContextAssembler for workspace language/framework detection (Issue #1475)
-    // Must be initialized after WorkspaceManager — uses onWorkspaceChanged for cache invalidation
-    skillContextAssemblerService = SkillContextAssembler.initialize(workspaceManager);
-    context.subscriptions.push(skillContextAssemblerService);
-    logger.info("SkillContextAssembler initialized");
 
     // Initialize RuntimeStateStore — memento-backed runtime config tier (Issue #3335)
     // Phase 2 of epic #3313. The store is wired through ConfigBridge so the
@@ -4481,7 +4472,6 @@ export async function initializeServices(
     machineFingerprint,
     tierGate,
     licensePreflight,
-    skillContextAssembler: skillContextAssemblerService,
     incrediRoot,
     projectBoardViews,
     treeView,
