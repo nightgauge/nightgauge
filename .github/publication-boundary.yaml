@@ -1,7 +1,7 @@
 # Publication Boundary — classification manifest for nightgauge/nightgauge
 #
 # This file is the SINGLE SOURCE OF TRUTH for what may exist in this repository's
-# tree. `scripts/publication-boundary-check.sh` consumes it; the CI guard
+# tree. `scripts/publication-boundary-check.py` consumes it; the CI guard
 # (.github/workflows/publication-boundary.yml) runs that script on every pull
 # request and blocks the merge on failure.
 #
@@ -400,11 +400,15 @@ deny:
 # file. These are the leak classes we have actually observed.
 forbidden_content:
   - id: private-repository-issue-reference
-    pattern: "nightgauge(?:/nightgauge)?-(?:platform|dashboard|flutter)#[0-9]+"
+    pattern: "nightgauge(?:/nightgauge)?-[A-Za-z0-9._-]+#[0-9]+"
     rationale: >-
       Public source may describe integration contracts, but it must never link
       private repository issue numbers. Those references disclose internal
       planning and become misleading when the public backlog is recreated.
+      The pattern covers every `nightgauge-*` repository rather than an
+      enumerated three, so a companion repository is covered the day it is
+      named. `nightgauge/nightgauge#N` -- this repository's own qualified
+      self-reference -- does not match, and is handled by `issue_references`.
     allow_paths:
       - ".github/publication-boundary.yaml"
       - "scripts/test-publication-boundary.sh"
@@ -528,6 +532,93 @@ forbidden_tokens:
     # The downstream workspace this pipeline is dogfooded against (#140). One
     # stem entry; the checker's segment expansion covers its sibling repos.
     - edfbec49152f4e6898e7099f8b58b676b6998cd3a19e4aa926ff77aa826f0b11
+
+# ─── Unresolvable issue references (#673) ────────────────────────────────────
+# This tree was imported from a predecessor repository whose issue numbers came
+# with it. Roughly 6,800 `#N` citations in production and documentation name
+# numbers this repository has never issued, across ~1,021 files. Today most of
+# them 404, which is annoying but self-announcing. As this repository's own
+# numbering climbs past them they stop 404-ing and start resolving -- silently,
+# confidently -- to unrelated live work. That is strictly worse than a dead
+# link, and it is already happening: a `@see Issue #699` comment in
+# HeadlessOrchestrator.ts now points at a real, unrelated issue.
+#
+# THE RULE IS A DEFINITION, NOT A HEURISTIC. A reference to a number above the
+# number this repository has actually issued cannot resolve at the moment it is
+# written. That statement holds at every repository size, so the rule does not
+# need revisiting when this repository passes four digits -- which is precisely
+# the failure mode a `#\d{4,}` regex would have. Digit count is the wrong axis
+# in both directions: 951 distinct unresolvable numbers here are BELOW 1000, and
+# `#000000` / `&#8635;` are six digits and are not references at all.
+#
+# SCOPE: newly ADDED lines, measured against the pull request's base. The rule
+# is "no newly introduced unresolvable reference", so a diff is its honest
+# scope; the ~6,800 legacy occurrences are a separate mechanical sweep that has
+# to land alone over settled code. Gating the whole tree here would mean
+# shipping the sweep before the guard, which is the ordering that let the
+# problem accumulate.
+#
+# CEILING: high_water_mark + slack. `slack` covers numbers this repository
+# issues while a pull request is open, so a reference to an issue filed after
+# the mark was last recorded is not rejected.
+#
+# STALENESS: the recorded mark is the only source of truth for the ceiling --
+# the guard makes no network call. It does read merge-commit subjects on the
+# first-parent history as an OFFLINE lower bound on the numbers really issued,
+# and FAILS (exit 2) once that lower bound passes the ceiling, because from
+# that point the rule would start rejecting legitimate references. Git history
+# can only ever make the guard fail; it never raises the ceiling, so a crafted
+# commit subject cannot weaken it. The remedy is one integer:
+#
+#     high_water_mark: <the repository's current highest issue/PR number>
+#
+# NOT MATCHED, on purpose:
+#   * `owner/repo#N` for any other repository -- those numbers belong to a
+#     sequence this manifest knows nothing about. `google-gemini/gemini-cli#17081`
+#     and `microsoft/vscode#322741` are live, correct citations. The private
+#     `nightgauge-*` forms are covered by `private-repository-issue-reference`.
+#   * `&#8635;` and friends -- HTML numeric entities, not references.
+#   * `#5865f2` -- a hex colour whose digit head a naive regex reads as `#5865`.
+#   * `#252526`, `#101830` -- all-digit hex colours. Six and eight digit widths
+#     are excluded by width; this repository is ~140x away from being able to
+#     issue such a number.
+#   * `#0000ff`, `#000000` -- zero-padded, and GitHub issues no such number.
+#   * anything under `allow_paths` below.
+issue_references:
+  # The highest number this repository has issued (issues and pull requests
+  # share one sequence). Bump this as the repository grows; the guard tells you
+  # when it must be bumped, so it cannot silently rot.
+  high_water_mark: 699
+  # Numbers that may be issued while a pull request is open. Deliberately tight:
+  # the whole point of #673 is that the margin between a dead reference and a
+  # wrong live one is a handful of issue numbers, and a generous slack reopens
+  # exactly that hole.
+  slack: 25
+  allow_paths:
+    # Files that DEFINE or TEST the rule must contain example violations.
+    - ".github/publication-boundary.yaml"
+    - "scripts/publication-boundary-check.py"
+    - "scripts/test-publication-boundary.sh"
+    # Synthetic test identifiers are not citations. `#700` in a table-driven Go
+    # test or a snapshot fixture is an arbitrary key chosen to be out of range;
+    # denying it would make the rule unusable, and rewriting it in the sweep
+    # would be wrong. Accepted trade-off: a genuine citation written in a test
+    # file is not checked.
+    - "**/*_test.go"
+    - "**/*.test.ts"
+    - "**/*.test.tsx"
+    - "**/*.test.js"
+    - "**/*.test.mjs"
+    - "**/*.test.cjs"
+    - "**/*.spec.ts"
+    - "**/*.spec.js"
+    - "**/*.snap"
+    - "**/tests/**"
+    - "**/test/**"
+    - "**/__tests__/**"
+    - "**/__snapshots__/**"
+    - "**/testdata/**"
+    - "**/fixtures/**"
 
 # ─── NEEDS-DECISION ──────────────────────────────────────────────────────────
 # Must be EMPTY to close #117. Any entry here fails the build. This is a

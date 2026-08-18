@@ -16,6 +16,11 @@ cd "$(git rev-parse --show-toplevel)"
 
 MANIFEST=".github/publication-boundary.yaml"
 CHECK="scripts/publication-boundary-check.py"
+
+# The unresolvable-issue-reference rule (#673) scans the lines this working tree
+# ADDS over a base commit. Pin that base to HEAD so every planted violation is
+# exactly the diff, whatever branch the suite runs on.
+export NG_BOUNDARY_DIFF_BASE="HEAD"
 BACKUP="$(mktemp)"
 PLANTED=""
 PASS=0
@@ -23,6 +28,7 @@ FAIL=0
 
 cleanup() {
   cp "$BACKUP" "$MANIFEST"
+  rmdir packages/nightgauge-vscode/tests/_boundary_probe 2>/dev/null
   [ -n "$PLANTED" ] && rm -f "$PLANTED" && git rm --cached -q "$PLANTED" 2>/dev/null
   rm -f "$BACKUP"
 }
@@ -33,6 +39,19 @@ cp "$MANIFEST" "$BACKUP"
 expect_exit() {
   local want="$1" desc="$2"
   python3 "$CHECK" >/dev/null 2>&1
+  local got=$?
+  if [ "$got" = "$want" ]; then
+    printf '  \033[32m✓\033[0m %s (exit %s)\n' "$desc" "$got"
+    PASS=$((PASS + 1))
+  else
+    printf '  \033[31m✗\033[0m %s — wanted exit %s, got %s\n' "$desc" "$want" "$got"
+    FAIL=$((FAIL + 1))
+  fi
+}
+
+expect_exit_with_base() {
+  local base="$1" want="$2" desc="$3"
+  NG_BOUNDARY_DIFF_BASE="$base" python3 "$CHECK" >/dev/null 2>&1
   local got=$?
   if [ "$got" = "$want" ]; then
     printf '  \033[32m✓\033[0m %s (exit %s)\n' "$desc" "$got"
@@ -170,6 +189,91 @@ PLANTED="docs/_pricing_clean_probe.md"
 printf 'Voice is metered by tier; funding was a $100M Series C. See @see acme/platform/src/x.ts and acme/platform#1180.\n' > "$PLANTED"
 git add -f "$PLANTED" 2>/dev/null
 expect_exit 0 "capability prose + generic cross-repo refs do NOT trip the content rules (no false positives)"
+git rm --cached -q "$PLANTED" 2>/dev/null
+rm -f "$PLANTED"
+PLANTED=""
+
+# ── Unresolvable issue references (#673) ────────────────────────────────────
+# The rule is "no NEWLY INTRODUCED reference to a number this repository has
+# never issued". A rule asserted in prose is not a rule, so every case below
+# plants a real line and reads the exit code.
+cp "$BACKUP" "$MANIFEST"
+
+PLANTED="docs/_issue_ref_probe.md"
+printf 'Superseded by the work in #4072; see also #3605.\n' > "$PLANTED"
+git add -f "$PLANTED" 2>/dev/null
+expect_exit 1 "a newly introduced unresolvable reference (#4072) is rejected"
+git rm --cached -q "$PLANTED" 2>/dev/null
+rm -f "$PLANTED"
+
+# The same number written as this repository's own qualified form still cannot
+# resolve, so it is still rejected.
+PLANTED="docs/_issue_ref_qualified_probe.md"
+printf 'The earlier attempt is nightgauge/nightgauge#4500.\n' > "$PLANTED"
+git add -f "$PLANTED" 2>/dev/null
+expect_exit 1 "self-qualified nightgauge/nightgauge#4500 is rejected"
+git rm --cached -q "$PLANTED" 2>/dev/null
+rm -f "$PLANTED"
+
+# ── ...and the false positives that would make it unusable ──────────────────
+# A guard that cries wolf gets disabled, so each exclusion is proven, not
+# assumed. These are the classes measured on the real tree in #673.
+PLANTED="docs/_issue_ref_inrange_probe.md"
+printf 'Fixed in #673, following #140 and #1; the slack window covers #700.\n' > "$PLANTED"
+git add -f "$PLANTED" 2>/dev/null
+expect_exit 0 "in-range self-references (#1, #140, #673, #700) do not trip the rule"
+git rm --cached -q "$PLANTED" 2>/dev/null
+rm -f "$PLANTED"
+
+PLANTED="docs/_issue_ref_hex_probe.md"
+cat > "$PLANTED" <<'MD'
+.badge { color: #5865f2; background: #252526; border-color: #454545; }
+.dark  { color: #000000; accent: #0000ff; shadow: #101830; }
+<div class="icon">&#8635;</div><div class="icon">&#128269;</div>
+MD
+git add -f "$PLANTED" 2>/dev/null
+expect_exit 0 "hex colours and HTML numeric entities do not trip the rule"
+git rm --cached -q "$PLANTED" 2>/dev/null
+rm -f "$PLANTED"
+
+PLANTED="docs/_issue_ref_external_probe.md"
+printf 'Blocked upstream by microsoft/vscode#322741 and google-gemini/gemini-cli#17081.\n' > "$PLANTED"
+git add -f "$PLANTED" 2>/dev/null
+expect_exit 0 "live external owner/repo#N citations do not trip the rule"
+git rm --cached -q "$PLANTED" 2>/dev/null
+rm -f "$PLANTED"
+PLANTED=""
+
+# Synthetic fixtures are arbitrary identifiers, not citations. ~2,977 of them
+# live above the mark today and every one of them is legitimate.
+mkdir -p packages/nightgauge-vscode/tests/_boundary_probe
+PLANTED="packages/nightgauge-vscode/tests/_boundary_probe/issueRef.test.ts"
+printf '// #4500 — a synthetic run identifier, not a citation.\nexport const probe = "nightgauge/nightgauge#4501";\n' > "$PLANTED"
+git add -f "$PLANTED" 2>/dev/null
+expect_exit 0 "synthetic identifiers under a tests/ path are exempt"
+git rm --cached -q "$PLANTED" 2>/dev/null
+rm -f "$PLANTED"
+rmdir packages/nightgauge-vscode/tests/_boundary_probe 2>/dev/null
+PLANTED=""
+
+# ── The rule must fail closed when it cannot trust its own ceiling ──────────
+cp "$BACKUP" "$MANIFEST"
+sed -i.sedbak 's/^  high_water_mark: [0-9]*$/  high_water_mark: 1/' "$MANIFEST"
+rm -f "$MANIFEST.sedbak"
+expect_exit 2 "a stale high_water_mark fails closed instead of rejecting real references"
+
+cp "$BACKUP" "$MANIFEST"
+printf 'version: 1\nallow:\n  - path: "**"\n    class: PUBLIC\n' > "$MANIFEST"
+expect_exit 2 "a manifest with no issue_references block fails closed (checks nothing otherwise)"
+
+cp "$BACKUP" "$MANIFEST"
+expect_exit_with_base "no-such-ref-for-tests" 2 "an unresolvable diff base fails closed (never silently re-bases)"
+
+# ── The private-repository rule covers every nightgauge-* companion ─────────
+PLANTED="docs/_private_repo_wide_probe.md"
+printf 'Tracked internally as nightgauge-internal#42.\n' > "$PLANTED"
+git add -f "$PLANTED" 2>/dev/null
+expect_exit 1 "a nightgauge-* companion repository reference is rejected"
 git rm --cached -q "$PLANTED" 2>/dev/null
 rm -f "$PLANTED"
 PLANTED=""
