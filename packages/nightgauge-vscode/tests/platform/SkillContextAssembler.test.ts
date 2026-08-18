@@ -22,7 +22,6 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const mockStat = vi.fn();
 const mockReadFile = vi.fn();
-const mockReadDirectory = vi.fn();
 
 vi.mock("vscode", () => {
   const FileType = { File: 1, Directory: 2, SymbolicLink: 64, Unknown: 0 };
@@ -44,7 +43,6 @@ vi.mock("vscode", () => {
       fs: {
         stat: (uri: Uri) => mockStat(uri.fsPath),
         readFile: (uri: Uri) => mockReadFile(uri.fsPath),
-        readDirectory: (uri: Uri) => mockReadDirectory(uri.fsPath),
       },
     },
     EventEmitter: class {
@@ -107,11 +105,6 @@ function setFilesPresent(present: string[]): void {
   });
 }
 
-/** Make readDirectory return no issue files by default. */
-function emptyPipelineDir(): void {
-  mockReadDirectory.mockResolvedValue([]);
-}
-
 // ---------------------------------------------------------------------------
 // Test suite
 // ---------------------------------------------------------------------------
@@ -123,7 +116,6 @@ describe("SkillContextAssembler", () => {
     if (existing) existing.dispose();
 
     vi.clearAllMocks();
-    emptyPipelineDir();
   });
 
   // ── Language detection ──────────────────────────────────────────────────
@@ -323,10 +315,9 @@ describe("SkillContextAssembler", () => {
   // ── Complexity score ────────────────────────────────────────────────────
 
   describe("complexity score", () => {
-    it("returns undefined when pipeline directory has no issue files", async () => {
+    it("returns undefined when no issueNumber is provided", async () => {
       setFilesPresent(["package.json", "tsconfig.json"]);
       mockReadFile.mockResolvedValue(utf8(JSON.stringify({ dependencies: {} })));
-      mockReadDirectory.mockResolvedValue([]); // no issue files
       const { mock } = buildWorkspaceManager();
       const assembler = SkillContextAssembler.initialize(mock as any);
 
@@ -334,21 +325,18 @@ describe("SkillContextAssembler", () => {
       expect(ctx.complexityScore).toBeUndefined();
     });
 
-    it("returns score from routing.complexity_score", async () => {
-      setFilesPresent(["package.json", "tsconfig.json"]);
-      mockReadDirectory.mockResolvedValue([["issue-42.json", 1 /* FileType.File */]]);
-      // stat for issue file
-      mockStat.mockImplementation((filePath: string) => {
-        const basename = filePath.split("/").pop()!;
-        if (["package.json", "tsconfig.json"].includes(basename)) {
-          return Promise.resolve({ mtime: 1000 });
-        }
-        if (basename === "issue-42.json") {
-          return Promise.resolve({ mtime: 2000 });
-        }
-        return Promise.reject(new Error("ENOENT"));
-      });
-      // readFile for issue-42.json
+    it("returns undefined when the requested issue's own context file does not exist", async () => {
+      setFilesPresent(["package.json", "tsconfig.json"]); // no issue-42.json
+      mockReadFile.mockResolvedValue(utf8(JSON.stringify({ dependencies: {} })));
+      const { mock } = buildWorkspaceManager();
+      const assembler = SkillContextAssembler.initialize(mock as any);
+
+      const ctx = await assembler.assemble("/workspace", 42);
+      expect(ctx.complexityScore).toBeUndefined();
+    });
+
+    it("returns score from routing.complexity_score for the requested issue", async () => {
+      setFilesPresent(["package.json", "tsconfig.json", "issue-42.json"]);
       mockReadFile.mockImplementation((filePath: string) => {
         if (filePath.endsWith("issue-42.json")) {
           return Promise.resolve(utf8(JSON.stringify({ routing: { complexity_score: 7 } })));
@@ -358,8 +346,65 @@ describe("SkillContextAssembler", () => {
       const { mock } = buildWorkspaceManager();
       const assembler = SkillContextAssembler.initialize(mock as any);
 
-      const ctx = await assembler.assemble("/workspace");
+      const ctx = await assembler.assemble("/workspace", 42);
       expect(ctx.complexityScore).toBe(7);
+    });
+
+    // ── Regression: issue #655 ────────────────────────────────────────────
+    //
+    // Two pipeline context files are present in the same `.nightgauge/pipeline`
+    // directory (concurrent pipelines sharing a workspace root). The NEWEST
+    // by mtime belongs to a DIFFERENT issue and carries a different score.
+    // The assembler must read the score belonging to the issue it was told
+    // to assemble for — never the most-recently-touched file.
+    it("reads its own issue's complexity score, not the most-recently-modified issue file", async () => {
+      setFilesPresent(["package.json", "tsconfig.json", "issue-42.json", "issue-99.json"]);
+      // issue-99.json is the newest by mtime, but we're assembling for #42.
+      mockStat.mockImplementation((filePath: string) => {
+        const basename = filePath.split("/").pop()!;
+        if (basename === "issue-99.json") {
+          return Promise.resolve({ mtime: 9999 }); // newest
+        }
+        if (["package.json", "tsconfig.json", "issue-42.json"].includes(basename)) {
+          return Promise.resolve({ mtime: 1000 }); // older
+        }
+        return Promise.reject(new Error("ENOENT"));
+      });
+      mockReadFile.mockImplementation((filePath: string) => {
+        if (filePath.endsWith("issue-42.json")) {
+          return Promise.resolve(utf8(JSON.stringify({ routing: { complexity_score: 7 } })));
+        }
+        if (filePath.endsWith("issue-99.json")) {
+          return Promise.resolve(utf8(JSON.stringify({ routing: { complexity_score: 3 } })));
+        }
+        return Promise.resolve(utf8(JSON.stringify({ dependencies: {} })));
+      });
+      const { mock } = buildWorkspaceManager();
+      const assembler = SkillContextAssembler.initialize(mock as any);
+
+      const ctx = await assembler.assemble("/workspace", 42);
+      expect(ctx.complexityScore).toBe(7);
+    });
+
+    it("caches per (workspace root, issue) pair rather than sharing across issues", async () => {
+      setFilesPresent(["package.json", "tsconfig.json", "issue-42.json", "issue-99.json"]);
+      mockReadFile.mockImplementation((filePath: string) => {
+        if (filePath.endsWith("issue-42.json")) {
+          return Promise.resolve(utf8(JSON.stringify({ routing: { complexity_score: 7 } })));
+        }
+        if (filePath.endsWith("issue-99.json")) {
+          return Promise.resolve(utf8(JSON.stringify({ routing: { complexity_score: 3 } })));
+        }
+        return Promise.resolve(utf8(JSON.stringify({ dependencies: {} })));
+      });
+      const { mock } = buildWorkspaceManager();
+      const assembler = SkillContextAssembler.initialize(mock as any);
+
+      const ctx42 = await assembler.assemble("/workspace", 42);
+      const ctx99 = await assembler.assemble("/workspace", 99);
+
+      expect(ctx42.complexityScore).toBe(7);
+      expect(ctx99.complexityScore).toBe(3);
     });
   });
 
