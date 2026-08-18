@@ -366,6 +366,110 @@ describe("EpicGroupTreeItem", () => {
     });
   });
 
+  // Issue #656 (AC 1 remainder) — a needs-decomposition label on an empty
+  // epic is a maintainer-confirmed signal, not a guess: it distinguishes
+  // "genuinely epic-shaped, simply not broken down yet" from the still-
+  // ambiguous #671 "(empty)" case. Absence of the label — whether the
+  // epic's labels are known and simply don't include it, or unknown
+  // entirely (epic.labels === undefined) — must NOT be read as a confirmed
+  // "mislabelled" and must fall back to the honest #671 rendering.
+  describe("awaiting decomposition state (#656 AC 1 remainder)", () => {
+    it("empty + labelled: should append an (awaiting decomposition) suffix when the epic carries needs-decomposition", () => {
+      const epicInfo: EpicInfo = {
+        number: 4,
+        title: "Confirmed Epic",
+        url: "https://github.com/org/repo/issues/4",
+        labels: ["type:epic", "needs-decomposition"],
+      };
+
+      const item = new EpicGroupTreeItem(epicInfo, []);
+
+      expect(item.label).toBe("Epic #4: Confirmed Epic (awaiting decomposition)");
+    });
+
+    it("empty + labelled: should use a distinct checklist icon in charts.blue", () => {
+      const epicInfo: EpicInfo = {
+        number: 4,
+        title: "Confirmed Epic",
+        url: "https://github.com/org/repo/issues/4",
+        labels: ["needs-decomposition"],
+      };
+
+      const item = new EpicGroupTreeItem(epicInfo, []);
+      const icon = item.iconPath as vscode.ThemeIcon;
+
+      expect(icon.id).toBe("checklist");
+      expect((icon.color as vscode.ThemeColor).id).toBe("charts.blue");
+    });
+
+    it("empty + labelled: should give the tooltip the decompose action instead of the mislabelled/unpopulated hedge", () => {
+      const epicInfo: EpicInfo = {
+        number: 4,
+        title: "Confirmed Epic",
+        url: "https://github.com/org/repo/issues/4",
+        labels: ["needs-decomposition"],
+      };
+
+      const item = new EpicGroupTreeItem(epicInfo, []);
+      const tooltip = item.tooltip as vscode.MarkdownString;
+
+      expect(tooltip.value).toContain("needs-decomposition");
+      expect(tooltip.value).toContain("decompose it into sub-issues");
+      expect(tooltip.value).not.toContain("mislabelled");
+    });
+
+    it("empty + unlabelled (known labels, tag absent): should keep the honest #671 (empty) state, not assert mislabelled", () => {
+      const epicInfo: EpicInfo = {
+        number: 4,
+        title: "Rescoped Epic",
+        url: "https://github.com/org/repo/issues/4",
+        labels: ["type:epic"], // labels ARE known here — just no needs-decomposition
+      };
+
+      const item = new EpicGroupTreeItem(epicInfo, []);
+      const icon = item.iconPath as vscode.ThemeIcon;
+      const tooltip = item.tooltip as vscode.MarkdownString;
+
+      expect(item.label).toBe("Epic #4: Rescoped Epic (empty)");
+      expect(icon.id).toBe("warning");
+      expect(tooltip.value).toContain("mislabelled");
+      expect(tooltip.value).toContain("unpopulated");
+    });
+
+    it("empty + unlabelled (labels unknown/undefined): should also keep the honest #671 (empty) state", () => {
+      const epicInfo: EpicInfo = {
+        number: 4,
+        title: "Unknown Labels Epic",
+        url: "https://github.com/org/repo/issues/4",
+        // labels intentionally omitted — undefined means "unknown", per
+        // EpicInfo.labels, and must not be treated as a confirmed absence.
+      };
+
+      const item = new EpicGroupTreeItem(epicInfo, []);
+
+      expect(item.label).toBe("Epic #4: Unknown Labels Epic (empty)");
+    });
+
+    it("blocked takes precedence: the icon stays lock/error, not checklist, when both blocked and awaiting decomposition apply", () => {
+      const epicInfo: EpicInfo = {
+        number: 4,
+        title: "Blocked and Awaiting Decomposition",
+        url: "https://github.com/org/repo/issues/4",
+        labels: ["needs-decomposition"],
+        blockedBy: [createMockBlockingIssue({ number: 50, state: "OPEN" })],
+      };
+
+      const item = new EpicGroupTreeItem(epicInfo, []);
+      const icon = item.iconPath as vscode.ThemeIcon;
+
+      expect(icon.id).toBe("lock");
+      expect((icon.color as vscode.ThemeColor).id).toBe("problemsErrorIcon.foreground");
+      expect(item.label).toBe(
+        "Epic #4: Blocked and Awaiting Decomposition (blocked, awaiting decomposition)"
+      );
+    });
+  });
+
   // Issue #656 (Gap 3) — a blocked epic must render its blocked state,
   // following the same idiom as ReadyIssueTreeItem's blocked sub-issues.
   describe("blocked epic state (#656 Gap 3)", () => {
@@ -679,6 +783,23 @@ describe("groupIssuesByEpic", () => {
     const { groups } = groupIssuesByEpic([epic], new Map());
 
     expect(groups[0].epic?.blockedBy).toEqual(blockedBy);
+  });
+
+  // Issue #656 (AC 1 remainder): same backfill idiom as blockedBy above,
+  // for labels — this is the narrow in-file fallback (epic present in the
+  // current batch but missing from epicMetadata), NOT the primary
+  // ProjectBoardService.getEpicMetadataFromCache path exercised in
+  // ProjectBoardService.mapping.test.ts. Both must carry labels; neither
+  // alone proves the other.
+  it("should backfill labels (including needs-decomposition) from the epic's own row when epicMetadata is missing it", () => {
+    const epic = createMockEpicIssue({
+      number: 100,
+      labels: ["type:epic", "needs-decomposition"],
+    });
+
+    const { groups } = groupIssuesByEpic([epic], new Map());
+
+    expect(groups[0].epic?.labels).toEqual(["type:epic", "needs-decomposition"]);
   });
 
   it("should return GroupByEpicResult with correct structure", () => {

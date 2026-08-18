@@ -393,6 +393,76 @@ describe("ProjectBoardService - Label Mapping Integration", () => {
       expect(epicMap.get(12)?.blockedBy).toEqual([]);
     });
   });
+
+  // Issue #656 (AC 1 remainder): the epic's own labels must survive from the
+  // raw BoardItem through the per-status cache into getEpicMetadataFromCache()
+  // — this is the REAL path EpicGroupTreeItem consumes (via
+  // ProjectBoardTreeProvider/RepositoriesTreeProvider), distinct from the
+  // narrow groupIssuesByEpic() in-file backfill. Reading needs-decomposition
+  // only in that narrow fallback would look implemented while being a
+  // near-total no-op, so this exercises getIssuesByStatus() → cache →
+  // getEpicMetadataFromCache() end-to-end with no mocking of the method
+  // under test.
+  describe("epic metadata labels propagation (#656 AC 1 remainder)", () => {
+    it("should include needs-decomposition in getEpicMetadataFromCache() when the epic carries it", async () => {
+      mockBoardList.mockResolvedValue([
+        createMockBoardItem({
+          number: 4,
+          title: "Confirmed Awaiting Decomposition",
+          isEpic: true,
+          labels: ["type:epic", "needs-decomposition"],
+        }),
+      ]);
+
+      await service.getIssuesByStatus("ready");
+      const epicMap = service.getEpicMetadataFromCache();
+
+      expect(epicMap.get(4)?.labels).toEqual(["type:epic", "needs-decomposition"]);
+    });
+
+    it("should carry known labels without needs-decomposition for an epic that hasn't been marked", async () => {
+      mockBoardList.mockResolvedValue([
+        createMockBoardItem({
+          number: 12,
+          title: "Unpopulated Epic",
+          isEpic: true,
+          labels: ["type:epic"],
+        }),
+      ]);
+
+      await service.getIssuesByStatus("ready");
+      const epicMap = service.getEpicMetadataFromCache();
+
+      // Known and defined (the epic's own issue WAS read) — just doesn't
+      // contain the label. Must not be confused with the undefined
+      // ("unknown") case below.
+      expect(epicMap.get(12)?.labels).toEqual(["type:epic"]);
+    });
+
+    it("should leave labels undefined (unknown) when the epic is resolved only via the epicRef/epicTitle fallback", async () => {
+      // The epic issue itself (#999) is never fetched — only a sub-issue
+      // referencing it via parentIssueNumber/parentIssueTitle. This is the
+      // one EpicInfo construction site with no epic issue object to read
+      // labels from at all, so it must report "unknown", not "no labels".
+      mockBoardList.mockResolvedValue([
+        createMockBoardItem({
+          number: 110,
+          title: "Sub-issue of a not-yet-cached epic",
+          isEpic: false,
+          labels: ["type:feature"],
+          parentIssueNumber: 999,
+          parentIssueTitle: "Not Yet Cached Epic",
+        }),
+      ]);
+
+      await service.getIssuesByStatus("ready");
+      const epicMap = service.getEpicMetadataFromCache();
+
+      const epicInfo = epicMap.get(999);
+      expect(epicInfo?.title).toBe("Not Yet Cached Epic");
+      expect(epicInfo?.labels).toBeUndefined();
+    });
+  });
 });
 
 describe("Mapping Function Edge Cases", () => {
