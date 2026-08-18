@@ -84,6 +84,8 @@ import {
   getPlatformCostTabStyles,
   type CostCapWarningRow,
 } from "./tabs/CostTabHtml";
+import { getUsagePanelSectionHtml, getUsagePanelStyles } from "./tabs/UsagePanelHtml";
+import type { UsagePanelState } from "./usagePanel";
 import type { CostAnalyticsResult } from "../../services/IpcClientBase";
 import type { CostDateRange } from "../../services/PlatformCostService";
 import {
@@ -242,6 +244,7 @@ function getStyles(): string {
     getPerformanceTabStyles(),
     getTokenTableStyles(),
     getCostTabStyles(),
+    getUsagePanelStyles(),
     getEpicsTabStyles(),
     getFirewallTabStyles(),
     getHealthTabStyles(),
@@ -952,7 +955,10 @@ export function getDashboardHtml(
   // Issue #3323 — audit retention & integrity panel
   retentionIntegrityData?: RetentionIntegrityData | null,
   // Issue #3116 — dependabot PR dependencies tab
-  dependabotData?: DependabotPRData | null
+  dependabotData?: DependabotPRData | null,
+  // Issue #661 — adapter usage & quota panel, derived from the same
+  // AdapterUsageService snapshot the status-bar meter renders.
+  usagePanelState?: UsagePanelState | null
 ): string {
   const nonce = getNonce();
   const renderTs = Date.now();
@@ -1046,7 +1052,15 @@ export function getDashboardHtml(
       <!-- PRIORITY 2.8: Platform Quota (Issue #1479) -->
       ${getPlatformQuotaSectionHtml(platformQuotaData ?? null)}
 
-      <!-- PRIORITY 2.9: Usage & Limits (Issue #1333) -->
+      <!-- PRIORITY 2.9: Adapter Usage & Quota (Issue #661) — every window in
+           the AdapterUsageService snapshot the status-bar meter reads, plus
+           burn rate and recent runs. -->
+      ${getUsagePanelSectionHtml(usagePanelState ?? null)}
+
+      <!-- PRIORITY 3.0: Usage & Limits (Issue #1333) — the budget-alert
+           control surface (thresholds + Reset Counter). Reads the same
+           monthly window as the panel above via UsageLimitsService (#683),
+           not a second aggregation. -->
       ${getUsageLimitsSectionHtml(usageLimitsData ?? null)}
     </div>
 

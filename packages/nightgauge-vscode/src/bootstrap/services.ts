@@ -2811,6 +2811,11 @@ export async function initializeServices(
     context.subscriptions.push(
       adapterUsageService.onDidChangeUsage((snapshot) => statusBar.showUsageSnapshot(snapshot))
     );
+    // Dashboard usage & quota panel (Issue #661) — the second consumer of the
+    // same service instance. Deliberately the same instance, not a second
+    // AdapterUsageService: the panel and the status-bar meter must answer the
+    // same question with the same number (epic #657 / ADR 018).
+    dashboard.setAdapterUsageService(adapterUsageService);
     adapterUsageService.initialize();
     context.subscriptions.push(adapterUsageService);
   }

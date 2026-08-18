@@ -66,6 +66,12 @@ timestamped development version and is not a release-validation path.
 - **Knowledge Value Dashboard** - Aggregates KB telemetry into header cards, a
   hit-rate gauge, per-stage bar chart, top-recalled/stale tables, and
   graduation history (see below)
+- **Adapter Usage & Quota** - The active adapter's usage as a status-bar meter
+  (click to cycle windows) and, in the dashboard's Overview tab, a panel with
+  every window at once, per-model breakdown, burn rate, projected exhaustion,
+  and a recent-runs strip. Both read one snapshot, so they never disagree; a
+  window with no known ceiling shows an absolute figure rather than a bar, and
+  an adapter nothing can meter is labelled unknown rather than zero
 
 ## Screenshots
 

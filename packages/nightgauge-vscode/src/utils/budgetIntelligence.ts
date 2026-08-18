@@ -528,11 +528,19 @@ export class BurnRateProjector {
   }
 
   /**
-   * Record a cost sample from onTokenUsage callback.
-   * @param costUsd - Cumulative cost so far for the current stage
+   * Record a cost sample.
+   *
+   * @param costUsd - Cumulative cost so far for the series being tracked
+   * @param timestampMs - When the sample was observed. Defaults to now, which
+   *   is what the live mid-stage caller (`HeadlessOrchestrator`) wants: it
+   *   samples an `onTokenUsage` callback as it fires. A caller replaying
+   *   *already-recorded* observations must pass each sample's own timestamp —
+   *   the dashboard usage panel (Issue #661) replays run history through this
+   *   projector, and stamping every historical run `Date.now()` would collapse
+   *   the elapsed time the rate is divided by to ~0.
    */
-  recordSample(costUsd: number): void {
-    this.samples.push({ timestampMs: Date.now(), costUsd });
+  recordSample(costUsd: number, timestampMs: number = Date.now()): void {
+    this.samples.push({ timestampMs, costUsd });
   }
 
   /**

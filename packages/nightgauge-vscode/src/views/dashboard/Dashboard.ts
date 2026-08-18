@@ -30,6 +30,9 @@ import type {
 } from "./SlotCardTypes";
 import type { QueueState, ActiveSlot } from "../../types/queue";
 import type { UsageLimitsService } from "../../services/UsageLimitsService";
+import type { AdapterUsageService } from "../../services/usage/AdapterUsageService";
+import type { UsageSnapshot } from "../../services/usage/types";
+import { buildUsagePanelState, type UsagePanelState } from "./usagePanel";
 import type { PlatformQuotaService } from "../../services/PlatformQuotaService";
 import { getLimitsSettings } from "../../config/limitsSettings";
 import type { HealthWidgetData } from "./HealthWidgetTypes";
@@ -259,6 +262,14 @@ export class Dashboard implements vscode.Disposable {
   private healthCheckReport: HealthCheckReport | null = null;
   /** Optional usage limits service for budget tracking section (Issue #1333) */
   private usageLimitsService: UsageLimitsService | null = null;
+  /**
+   * The adapter usage service backing the usage & quota panel (Issue #661),
+   * and the last snapshot it produced. The snapshot is cached rather than
+   * re-read at render time so the panel renders exactly the object the change
+   * event delivered — the same one the status-bar meter drew.
+   */
+  private adapterUsageService: AdapterUsageService | null = null;
+  private adapterUsageSnapshot: UsageSnapshot | null = null;
   /** Optional platform quota service for tier quota display (Issue #1479) */
   private platformQuotaService: PlatformQuotaService | null = null;
   private auditLogService: AuditLogService | null = null;
@@ -1551,7 +1562,8 @@ export class Dashboard implements vscode.Disposable {
         this.trendsData,
         this.complianceData,
         this.retentionIntegrityData,
-        this.dependabotData
+        this.dependabotData,
+        this.getUsagePanelState()
       );
 
       // Restore scroll position if we had one saved (Issue #923)
@@ -2797,6 +2809,48 @@ export class Dashboard implements vscode.Disposable {
    */
   setUsageLimitsService(service: UsageLimitsService): void {
     this.usageLimitsService = service;
+  }
+
+  /**
+   * Wire in the AdapterUsageService so the dashboard can render the adapter
+   * usage & quota panel (Issue #661).
+   *
+   * Subscribes to `onDidChangeUsage` and re-renders on it, which is the AC
+   * "the panel updates when the service's change event fires — no manual
+   * refresh". The event only fires when the derived usage actually changed
+   * (`usageSnapshotsEquivalent` ignores `capturedAt`), so this does not wake
+   * the dashboard on the refresh timer alone.
+   *
+   * Also seeds from the cached snapshot, because the service is initialized
+   * during activation and its first snapshot can land before the dashboard is
+   * ever opened — without the seed the panel would stay empty until the next
+   * *change*, which on a quiet workspace is never.
+   *
+   * Idempotent: re-wiring the same instance is a no-op rather than a second
+   * subscription.
+   */
+  setAdapterUsageService(service: AdapterUsageService): void {
+    if (this.adapterUsageService === service) return;
+    this.adapterUsageService = service;
+    this.adapterUsageSnapshot = service.getCachedSnapshot();
+    this.disposables.push(
+      service.onDidChangeUsage((snapshot) => {
+        this.adapterUsageSnapshot = snapshot;
+        this.updatePanel("onDidChangeUsage");
+      })
+    );
+  }
+
+  /**
+   * Build the usage panel's render state (Issue #661).
+   *
+   * Quota figures come from the snapshot and nowhere else; the burn rate and
+   * recent-runs strip come from `DashboardState`'s history, per #661's own
+   * instruction. See `usagePanel.ts` for why those two sources cannot be
+   * collapsed into one.
+   */
+  private getUsagePanelState(): UsagePanelState | null {
+    return buildUsagePanelState(this.adapterUsageSnapshot, this.state.getHistory());
   }
 
   /**
