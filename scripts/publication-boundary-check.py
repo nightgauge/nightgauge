@@ -62,6 +62,30 @@ def matches(path: str, pattern: str) -> bool:
     return re.fullmatch(rx, path) is not None
 
 
+def _stem_prefixes(token):
+    """Yield the lowercased leading segments of a hyphen/dot-delimited token.
+
+    "acmeapp-flutter" -> "acmeapp-flutter", "acmeapp". A private workspace
+    identifier is denied once and every repository built on that stem is then
+    denied for free, so the manifest never has to enumerate them — including
+    the suffixes nobody has coined yet.
+    """
+    tok = token.lower()
+    yield tok
+    for i, ch in enumerate(tok):
+        if ch in "-." and i:
+            yield tok[:i]
+
+
+def _line_has_denied_token(line, word, salt, token_hashes):
+    """True if any token on this line (or its stem) hashes into the denylist."""
+    for tok in word.findall(line):
+        for cand in _stem_prefixes(tok):
+            if hashlib.sha256((salt + cand).encode()).hexdigest() in token_hashes:
+                return True
+    return False
+
+
 def main() -> int:
     if not MANIFEST.exists():
         die(2, f"manifest not found: {MANIFEST}\n  The guard cannot verify anything. Failing closed.")
@@ -170,19 +194,14 @@ def main() -> int:
             except (OSError, UnicodeDecodeError):
                 continue
             for n, line in enumerate(text.splitlines(), 1):
-                for tok in word.findall(line):
-                    h = hashlib.sha256((salt + tok.lower()).encode()).hexdigest()
-                    if h in token_hashes:
-                        violations.append(
-                            f"FORBIDDEN TOKEN: {p}:{n}\n"
-                            f"    A token on this line is on the private-identifier denylist.\n"
-                            f"    It is matched by hash, so it is not named here. See\n"
-                            f"    nightgauge-internal (strategy/) for the plaintext list."
-                        )
-                        break
-                else:
-                    continue
-                break  # one hit per file is enough to fail it
+                if _line_has_denied_token(line, word, salt, token_hashes):
+                    violations.append(
+                        f"FORBIDDEN TOKEN: {p}:{n}\n"
+                        f"    A token on this line is on the private-identifier denylist.\n"
+                        f"    It is matched by hash, so it is not named here. See\n"
+                        f"    nightgauge-internal (strategy/) for the plaintext list."
+                    )
+                    break  # one hit per file is enough to fail it
 
     # ── 4. NEEDS-DECISION must be empty ──────────────────────────────────────
     for item in pending:

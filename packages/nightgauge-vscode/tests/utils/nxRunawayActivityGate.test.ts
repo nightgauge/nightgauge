@@ -54,7 +54,7 @@ function decide(overrides: Partial<Parameters<typeof shouldNxRunawayKill>[0]> = 
 }
 
 describe("Nx stall-multiple escalation — activity gate (#161)", () => {
-  it("does NOT kill the bowlsheet-infra #186 stage: mid-tool-call at 8× threshold", () => {
+  it("does NOT kill the dogfood infra-repo runaway stage: mid-tool-call at 8× threshold", () => {
     // The exact shape of the lost stage: 8× threshold reached, no PRODUCTIVE
     // signal for 250s (its phases were printf markers), but a novel tool call
     // 0.4s ago — it was inside `git push`.

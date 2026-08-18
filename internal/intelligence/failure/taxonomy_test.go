@@ -108,7 +108,7 @@ func TestClassifier_RulesetBlocked(t *testing.T) {
 func TestClassifier_RequiredStatusCheckBlocked(t *testing.T) {
 	c := NewClassifier()
 
-	// The bowlsheet#233 incident signature and friends (#185): previously
+	// The dogfood pr-merge deadlock's signature and friends (#185): previously
 	// fell through to CatUnknown → Retryable:true → identical-prompt re-run.
 	cases := []string{
 		`GraphQL: Required status check "Sentry Smoke (integration)" is expected. (mergePullRequest)`,

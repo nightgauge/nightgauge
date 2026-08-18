@@ -63,7 +63,7 @@ pipeline.architecture_approval.enabled: false.`,
 				// Honor --json even on the disabled short-circuit. Callers like
 				// the VSCode pre-check parse stdout as JSON on exit 0 — a plain
 				// text line here made every disabled-gate run log a spurious
-				// "binary error" (observed in bowlsheet dogfooding 2026-07-11).
+				// "binary error" (observed in the dogfood workspace, 2026-07-11).
 				if outputJSON {
 					if err := printJSON(approvalGate.ApprovalResult{
 						Reasons: []string{"gate disabled (pipeline.architecture_approval.enabled=false)"},

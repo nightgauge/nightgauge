@@ -109,7 +109,7 @@ func (c *Classifier) Classify(stage string, exitCode int, stderr string) Classif
 	// requires admin intervention. Covers the base-branch-policy phrasing
 	// (#2780) and the required-status-check GraphQL rejection that was
 	// previously misclassified CatUnknown/retryable and re-run into an
-	// identical dead end (#185 / bowlsheet#233 forensics).
+	// identical dead end (#185 forensics).
 	if containsAny(lower, "base branch policy prohibits the merge", "merge blocked by base branch ruleset") ||
 		isRequiredCheckBlocked(lower) {
 		return Classification{

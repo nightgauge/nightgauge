@@ -32,7 +32,7 @@ describe("autonomousCommands — CASCADE_PAUSE_TRIGGERS", () => {
   it("includes the lifetime-failure-cap tag (halts ALL dispatching — unattended operators need the ping)", () => {
     // Revised 2026-07-11: the lifetime cap doesn't just sideline one issue —
     // it flips the whole scheduler to safety_tripped. A transient VSCode
-    // toast was the only signal when it stopped the bowlsheet factory for
+    // toast was the only signal when it stopped the dogfood factory for
     // 2 hours. Dark-factory operation requires the remote ping.
     expect(CASCADE_PAUSE_TRIGGERS.has("safety:lifetime-failure-cap")).toBe(true);
   });

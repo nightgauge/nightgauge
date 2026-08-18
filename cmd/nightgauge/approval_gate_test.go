@@ -93,7 +93,7 @@ func TestReadApprovalFacts_MissingFileIsSafe(t *testing.T) {
 // gate-disabled short-circuit: exit 0 with a parseable ApprovalResult on
 // stdout. The pre-fix plain-text line made the VSCode pre-check's JSON.parse
 // throw and log a spurious "binary error" on every disabled-gate run
-// (bowlsheet dogfooding, 2026-07-11).
+// (the dogfood workspace, 2026-07-11).
 func TestApprovalGateCmd_DisabledEmitsJSON(t *testing.T) {
 	dir := t.TempDir()
 	cfgDir := filepath.Join(dir, ".nightgauge")

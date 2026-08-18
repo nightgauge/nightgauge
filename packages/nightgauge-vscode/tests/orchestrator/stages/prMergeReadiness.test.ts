@@ -2,7 +2,7 @@
  * prMergeReadiness.test.ts — regression for the production pr-merge punt
  * condition (Issue #297).
  *
- * Every overnight bowlsheet-flutter run paid the LLM pr-merge path ($3–4.44)
+ * Every overnight dogfood mobile-repo run paid real per-run LLM pr-merge cost
  * because pr-merge starts immediately after pr-create, so CI is still in-flight
  * (mergeStateStatus BLOCKED/UNSTABLE, checks pending) and there was no
  * deterministic path that would WAIT for it. These tests pin the decision core:

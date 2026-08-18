@@ -311,8 +311,8 @@ func TestReconcilePrMergeGroundTruth(t *testing.T) {
 	}
 }
 
-// #266 regression: the escalation-race misattribution booked bowlsheet #261 (a
-// MERGED run) as failed/stall_kill. When the extension signals a forge-confirmed
+// #266 regression: the escalation-race misattribution booked a dogfood size:M
+// run (a MERGED run) as failed/stall_kill. When the extension signals a forge-confirmed
 // merge (prMerged=true) but a late progress-runaway kill reported the pr-merge
 // stage failed, the recording boundary must write a COMPLETE RunRecord with NO
 // terminal_failure_kind — never a phantom stall_kill.

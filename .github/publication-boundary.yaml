@@ -477,17 +477,21 @@ forbidden_content:
 # did precisely that, and the issue/PR audit (#120) caught it.
 #
 # So they are stored as salted SHA-256 of the lowercased token. The checker
-# tokenizes each file on [A-Za-z0-9_.-]+, hashes each token, and compares.
-# Enforcement is identical and fail-closed; disclosure is zero. All five
-# identifiers are single tokens under that pattern, so nothing splits.
+# tokenizes each file on [A-Za-z0-9_.-]+, then hashes each token AND each of
+# its leading "-"/"." segments, so denying a workspace stem also denies every
+# sibling repository built on it ("<stem>-infra", "<stem>-flutter") without
+# this file enumerating them. Enforcement is fail-closed; disclosure is zero.
 #
 # The plaintext list lives in nightgauge-internal (strategy/). If you need to
 # know what these are, you have access to that repo — and if you do not, you do
 # not need to know.
 #
-# Verified 2026-07-14: ZERO occurrences in tracked files and ZERO in all 56
-# commits. The rebrand (#35) already removed them. This rule prevents their
-# return; it is not cleaning up an existing mess.
+# Verified 2026-07-14: the first five identifiers had ZERO occurrences in
+# tracked files and ZERO in all 56 commits; the rebrand (#35) had already
+# removed them. The dogfood-workspace stem added by #140 is different — it had
+# 78 tracked references when it was denied, and the rule was landed first so
+# the gate stayed red until the redaction sweep finished. History is NOT
+# rewritten: past commits still carry it, which #140 recorded as accepted.
 forbidden_tokens:
   salt: "nightgauge-publication-boundary-v1"
   # The salt is public and is not a secret. It only defeats a trivial
@@ -511,6 +515,9 @@ forbidden_tokens:
     - e1b36a0840d7aa3ccce99755676daca3b6eaa4c1b02d00782995b917014a2f63
     - 704b6142f4045f0395b5eb66799975f692e5490457fea4edebe97388b07a41ba
     - cdcaa946b75a291c527a410276ce0e9a881f8a5437fb142a1f4ab0ce6bd9a084
+    # The downstream workspace this pipeline is dogfooded against (#140). One
+    # stem entry; the checker's segment expansion covers its sibling repos.
+    - edfbec49152f4e6898e7099f8b58b676b6998cd3a19e4aa926ff77aa826f0b11
 
 # ─── NEEDS-DECISION ──────────────────────────────────────────────────────────
 # Must be EMPTY to close #117. Any entry here fails the build. This is a

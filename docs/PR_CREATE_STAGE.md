@@ -153,7 +153,7 @@ use — not the bare `workspaceRoot`.
 Before #275 the deterministic dispatch passed `workspaceRoot` directly, so on any
 worktree-configured repo the runner found no `dev-{N}.json`, `DecideCreate`
 returned `missing-dev-context`, and **every** run fell through to the ~$2 LLM
-path (bowlsheet/bowlsheet-flutter were 0-for-N). The identical fix applies to the
+path (the dogfood workspace and its mobile repo were 0-for-N). The identical fix applies to the
 pr-merge runner (reads `pr-{N}.json`, which pr-create writes into the worktree)
 and to the recovery registry's `StageFailure.Workspace` (which re-runs both
 runners and drives git-op recovery actions). For in-place runs with no worktree

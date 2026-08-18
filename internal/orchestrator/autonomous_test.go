@@ -4911,8 +4911,8 @@ func TestPrioritize_OffBoardDependencyResolution(t *testing.T) {
 		}
 		edges := []depgraph.Edge{
 			// #100 is blockedBy #209, which is never added as a node — #209 is
-			// on no project board (the real-world #306 trigger: bowlsheet-flutter
-			// #304 blockedBy epic #209).
+			// on no project board (the real-world #306 trigger: a dogfood
+			// mobile-repo issue blockedBy epic #209).
 			{From: depgraph.NodeID{Repo: repo, Number: 100}, To: depgraph.NodeID{Repo: repo, Number: 209}},
 		}
 		return buildTestGraph(nodes, edges)

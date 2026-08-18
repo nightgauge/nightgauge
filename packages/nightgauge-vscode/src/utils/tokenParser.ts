@@ -734,8 +734,8 @@ export class TokenAccumulator {
    * (Issue #256). Result envelopes report session-cumulative cost, so when a
    * process emits several (wind-down nudges, in-process continuations) each
    * one repeats all prior spend — only the delta since the previous envelope
-   * is new money. Bowlsheet #236 booked $100.47 for a stage that really cost
-   * $23.67 because six cumulative envelopes were summed.
+   * is new money. The dogfood multi-envelope cost run booked six cumulative
+   * envelopes as if each were new money — roughly 4× the real cost.
    */
   private lastCumulativeCostUsd = 0;
 
@@ -1006,9 +1006,10 @@ export interface BookedStageUsage {
  * completion. But a stage killed mid-flight (runaway / stall / budget / user
  * cancel) is SIGTERM'd before the CLI emits that envelope, so the accumulator
  * is empty and, pre-#296, the stage booked $0 while the kill log reported the
- * real burn (bowlsheet #262: the run recorded $3.70 while the kill log showed
- * $9.15 actually spent). The {@link LiveStageEstimator} DID observe that burn
- * from per-turn `assistant` messages, so it is the correct fallback.
+ * real burn (the dogfood mid-stage SIGTERM run: the accumulator recorded
+ * under half of what the kill log showed had actually been spent). The
+ * {@link LiveStageEstimator} DID observe that burn from per-turn `assistant`
+ * messages, so it is the correct fallback.
  *
  * Precedence — authoritative first, live estimate only as a fallback, so this
  * never double-books (and so it respects the #256/#258 cumulative-cost delta

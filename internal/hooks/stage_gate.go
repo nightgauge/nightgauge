@@ -83,7 +83,7 @@ func evaluateStageGate(inputJSON []byte, stage string) GateDecision {
 
 	// Admin/auto merge bypass is banned in EVERY pipeline stage — including
 	// pr-merge, whose agent once improvised `gh pr merge --admin` against
-	// branch protection when the merge dead-ended (#186 / bowlsheet#233).
+	// branch protection when the merge dead-ended (#186).
 	// A blocked merge is terminal: escalate, never bypass.
 	if reason := adminMergeBypassReason(segments); reason != "" {
 		return Block(fmt.Sprintf(

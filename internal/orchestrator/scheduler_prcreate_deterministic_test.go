@@ -327,7 +327,7 @@ func TestScheduler_PRCreate_NilRunner_NoOp(t *testing.T) {
 // ONLY in the worktree's `.nightgauge/pipeline/`, never in the canonical root.
 // The scheduler MUST hand the runner the worktree path (via stageWorkspace), not
 // the bare workspaceRoot — otherwise every worktree-mode run punts
-// missing-dev-context and burns the expensive LLM fallback (bowlsheet 0-for-N).
+// missing-dev-context and burns the expensive LLM fallback (the dogfood workspace 0-for-N).
 func TestScheduler_PRCreate_ReadsContextFromWorktree(t *testing.T) {
 	s := newSchedulerForDeterministicTest()
 	det := &fakePRCreateRunner{result: pmstages.PRCreateResult{

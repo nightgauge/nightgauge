@@ -283,7 +283,7 @@ const (
 	// leaves the code uncommitted on disk for retry rather than exiting
 	// non-zero, delegating the halt decision to the orchestrator. Pre-fix this
 	// had no matcher and fell through to the generic subagent_crash fallback
-	// (bowlsheet-infra#164) — hiding an honest, organic quality-gate catch
+	// (observed in the dogfood workspace) — hiding an honest, organic quality-gate catch
 	// behind a label that implies a process crash. This is exactly the
 	// scenario docs/FAILURE_TAXONOMY.md already declared "Feature-validate
 	// test failure → organic, weight 1.0" for; the taxonomy was right, the

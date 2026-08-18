@@ -745,8 +745,8 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
           // #188: per-issue in-flight guard at the dispatch boundary. An
           // issue with a live slot (or a reservation whose worktree is still
           // being created) must be skipped by subsequent fills regardless of
-          // how many onItemAdded events fired — bowlsheet#233 double-ran
-          // runPipeline within 3s (two pre-flights, overlapping stage
+          // how many onItemAdded events fired — the dogfood pr-merge deadlock
+          // double-ran runPipeline within 3s (two pre-flights, overlapping stage
           // starts, races on the same context files and worktree). Skip
           // WITHOUT re-enqueueing: the issue is already being worked.
           if (this.slots.has(item.issueNumber) || this.reservedSlots.has(item.issueNumber)) {

@@ -311,8 +311,9 @@ func TestV2RunRecordToExecutionHistoryRunRecord_ProviderNullWhenNoAdapter(t *tes
 // CompleteStageWithCost and it lands in the V3 history record's per_stage
 // cost_usd. This test asserts the mapper then surfaces that non-zero cost on the
 // killed stage's telemetry metric AND folds it into the run-level total — the
-// exact path that under-reported before #296 (bowlsheet #262: run showed $3.70
-// while feature-dev really burned $9.15 and carried NO per_stage entry).
+// exact path that under-reported before #296 (the dogfood mid-stage SIGTERM
+// run: the reported total was roughly 2.5x too low, and feature-dev carried
+// NO per_stage entry).
 func TestV2RunRecordToExecutionHistoryRunRecord_KilledStageBooksEstimatedCost(t *testing.T) {
 	rec := state.V2RunRecord{
 		SchemaVersion: "3",

@@ -131,8 +131,9 @@ function calibrationCohortLabel(source: CalibrationSource, sizeLabel: string): s
  * between rewrites the bucket), issue labels were passed live (size labels
  * applied by issue-pickup shift complexity → tier → baselines), and the
  * performance mode was re-read from disk. Two estimates for the same issue
- * seconds apart differed by 83% in bowlsheet#233. Capture once per run and
- * reuse for every estimate, warning threshold, and post-run comparison.
+ * seconds apart differed by 83% in the dogfood pr-merge deadlock. Capture
+ * once per run and reuse for every estimate, warning threshold, and
+ * post-run comparison.
  */
 export interface EstimatorInputSnapshot {
   /** Issue labels/title as of pipeline start (labels defensively copied) */

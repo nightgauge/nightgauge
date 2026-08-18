@@ -125,7 +125,7 @@ func TestAutonomous_CascadeIgnoresQuotaExhausted(t *testing.T) {
 //
 //   - NOT increment LifetimeIssueFailures (the work product is shipped and
 //     waiting — a PR exists; counting it against the per-issue cap let a red
-//     required check trip the whole scheduler on bowlsheet #233).
+//     required check trip the whole scheduler in the dogfood pr-merge deadlock).
 //   - NOT feed the cascade-failure breaker (a stuck PR is a single issue
 //     needing attention, not a sign the pipeline is broken).
 //   - KEEP the scheduler running — one externally-blocked PR must not pause
@@ -160,7 +160,7 @@ func TestAutonomous_PrMergeUnmerged_Recoverable(t *testing.T) {
 	}
 	// The unstamped post-merge-verification phrasing must classify to the
 	// same recoverable kind — pre-fix it fell through to the generic path
-	// and burned the lifetime cap (bowlsheet #233/#244).
+	// and burned the lifetime cap (the dogfood unmergeable-PR retry loop).
 	if got := ClassifyTerminalKind(
 		`pr-merge reported success but PR #276 is not merged (state: OPEN). blocked by failing check "Sync E2E (Docker)" (mergeStateStatus=BLOCKED). Pipeline halted after 2 verification attempts.`,
 	); got != TerminalKindPrMergeUnmerged {

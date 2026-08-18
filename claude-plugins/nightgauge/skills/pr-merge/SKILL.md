@@ -400,8 +400,8 @@ merge-strategy selection, the deterministic Go-binary merge (with its
 > **NEVER pass `--admin` (or `--auto`) to any merge command — no admin bypass
 > exists in this pipeline.** A merge blocked by branch protection or required
 > checks is TERMINAL for this stage: report the blocker and escalate; do not
-> improvise an admin-bypass merge via raw `gh` (incident: bowlsheet#233 /
-> #186). A PreToolUse hook blocks these flags during pipeline sessions.
+> improvise an admin-bypass merge via raw `gh` (incident: #186). A PreToolUse
+> hook blocks these flags during pipeline sessions.
 
 > **Read `skills/nightgauge-pr-merge/_includes/merge.md` now and follow its instructions before continuing this phase.**
 

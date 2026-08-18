@@ -403,7 +403,7 @@ const STAGE_COMPLEXITY_MATRIX: Record<StageCategory, Record<ComplexityLabel, Mod
   // checks, dirty state) — a one-line XS diff with a config-blocked merge is
   // exactly the judgment-heavy case. Issue size does not predict punt
   // difficulty, so sizing this row by issue size systematically assigned the
-  // weakest model to the hardest instances (bowlsheet#233).
+  // weakest model to the hardest instances (the dogfood pr-merge deadlock).
   merge: {
     XS: "sonnet",
     S: "sonnet",

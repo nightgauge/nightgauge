@@ -63,9 +63,9 @@ describe("BudgetEnforcer", () => {
     // in the #3646 retro. The bumped baseline gives size:S a $3.00 ceiling
     // post-multipliers and size:M $4.50.
     //
-    // size:M re-baselined again in #265: bowlsheet #261 (M) hit $4.51 REAL
-    // against the $4.50 generous+grace ceiling (1.5 × 2.0 × 1.5), tripping it
-    // by one cent. New size:M = 2.0 → generous+grace = $6.00.
+    // size:M re-baselined again in #265: a dogfood size:M run's real spend
+    // tripped the $4.50 generous+grace ceiling (1.5 × 2.0 × 1.5) by one cent.
+    // New size:M = 2.0 → generous+grace = $6.00.
     it("should have pr-merge size budgets calibrated for the CI-watching path (#3650, #265)", () => {
       expect(DEFAULT_SIZE_AWARE_BUDGETS["pr-merge"]).toEqual({
         XS: 0.4,
