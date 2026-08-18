@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { vi } from "vitest";
 import { makeConfigBridge, makeLogger, makeRun, makeState } from "./_helpers";
+import { UNDETERMINED_BRANCH_LABEL } from "../../../src/views/dashboard/DashboardComponents";
 
 vi.mock("vscode", () => ({
   window: {
@@ -327,5 +328,42 @@ describe("MattermostService.format — snapshot parity", () => {
     const att = service.buildAttachment(run as never, state as never);
     const { ts: _ts, footer: _footer, ...stableAtt } = att;
     expect(stableAtt).toMatchSnapshot();
+  });
+});
+
+// ─── Undetermined branch rendering (#448) ──────────────────────────────────
+//
+// The "" sentinel for an undetermined branch (schema no longer requires
+// .min(1)) must not collapse to a blank segment: that leaves a dangling
+// "→ `base`" with nothing on its left once a non-default base branch is
+// present.
+
+describe("MattermostService.format — undetermined branch (#448)", () => {
+  let service: InstanceType<typeof MattermostService>;
+
+  beforeEach(() => {
+    service = new MattermostService(
+      {} as never,
+      makeConfigBridge() as never,
+      makeLogger() as never
+    );
+  });
+
+  afterEach(() => {
+    service.dispose();
+  });
+
+  it("renders the shared undetermined-branch label instead of a blank segment", () => {
+    const run = makeRun({ branch: "" });
+    const state = makeState(42, "productive", { branch: "" });
+    const att = service.buildAttachment(run as never, state as never);
+    expect(att.text).toContain(`\`my-repo\` · ${UNDETERMINED_BRANCH_LABEL}`);
+  });
+
+  it("does not leave a dangling arrow when the base branch differs from main", () => {
+    const run = makeRun({ branch: "" });
+    const state = makeState(42, "productive", { branch: "", base_branch: "develop" });
+    const att = service.buildAttachment(run as never, state as never);
+    expect(att.text).toContain(`\`my-repo\` · ${UNDETERMINED_BRANCH_LABEL} → \`develop\``);
   });
 });
