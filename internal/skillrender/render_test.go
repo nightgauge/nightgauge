@@ -8,6 +8,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/nightgauge/nightgauge/internal/gittest"
 )
 
 // ─── Migrated regression tests ───────────────────────────────────────────────
@@ -842,11 +844,7 @@ func TestPRMergeBatchProbeSignalsContextPresence(t *testing.T) {
 	probe := phase[probeStart : probeStart+close]
 
 	repo := t.TempDir()
-	initCmd := exec.Command("git", "init", "-q", "-b", "fix/367-test")
-	initCmd.Dir = repo
-	if out, err := initCmd.CombinedOutput(); err != nil {
-		t.Fatalf("initialize probe repo: %v\n%s", err, out)
-	}
+	gittest.Run(t, repo, "init", "-q", "-b", "fix/367-test")
 	runProbe := func() string {
 		t.Helper()
 		cmd := exec.Command("bash", "-c", probe)

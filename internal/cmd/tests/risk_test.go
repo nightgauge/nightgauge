@@ -2,11 +2,12 @@ package tests
 
 import (
 	"context"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/nightgauge/nightgauge/internal/gittest"
 )
 
 // --- bucket boundary tests ---
@@ -210,27 +211,15 @@ func TestRunRiskScore_GitChangeFrequency(t *testing.T) {
 		t.Skip("git not available")
 	}
 	dir := t.TempDir()
-	run := func(args ...string) {
-		t.Helper()
-		cmd := exec.Command("git", args...)
-		cmd.Dir = dir
-		cmd.Env = append(os.Environ(),
-			"GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=t@t",
-			"GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=t@t",
-		)
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %v: %v\n%s", args, err, out)
-		}
-	}
-	run("init", "-q", "-b", "main")
+	gittest.Run(t, dir, "init", "-q", "-b", "main")
 	writeFile(t, dir, "hot.go", "package x\n")
-	run("add", "hot.go")
-	run("commit", "-q", "-m", "initial")
+	gittest.Run(t, dir, "add", "hot.go")
+	gittest.Run(t, dir, "commit", "-q", "-m", "initial")
 	for i := 0; i < 6; i++ {
 		// rewrite the file each iteration so each commit touches it
 		writeFile(t, dir, "hot.go", "package x\n// rev "+string(rune('a'+i))+"\n")
-		run("add", "hot.go")
-		run("commit", "-q", "-m", "edit")
+		gittest.Run(t, dir, "add", "hot.go")
+		gittest.Run(t, dir, "commit", "-q", "-m", "edit")
 	}
 
 	res, err := RunRiskScore(context.Background(), RiskOptions{

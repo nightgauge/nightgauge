@@ -22,6 +22,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/nightgauge/nightgauge/internal/gittest"
 )
 
 // conflictedIndexRepo builds a repo whose index is genuinely unmerged: two
@@ -35,14 +37,7 @@ func conflictedIndexRepo(t *testing.T) string {
 	dir := t.TempDir()
 	run := func(args ...string) {
 		t.Helper()
-		cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
-		cmd.Env = append(os.Environ(),
-			"GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null",
-			"GIT_AUTHOR_NAME=T", "GIT_AUTHOR_EMAIL=t@t.invalid",
-			"GIT_COMMITTER_NAME=T", "GIT_COMMITTER_EMAIL=t@t.invalid")
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
-		}
+		gittest.Run(t, dir, args...)
 	}
 	write := func(name, content string) {
 		t.Helper()
@@ -67,7 +62,7 @@ func conflictedIndexRepo(t *testing.T) string {
 	run("commit", "-q", "-m", "main-side")
 
 	// Expected to fail — that failure IS the fixture.
-	_ = exec.Command("git", "-C", dir, "merge", "feat").Run()
+	_ = gittest.Command(dir, "merge", "feat").Run()
 	return dir
 }
 
@@ -78,7 +73,7 @@ func TestHasUnmergedIndex_RealConflict(t *testing.T) {
 	if !hasUnmergedIndex(dir) {
 		t.Fatal("fixture precondition: the index must be unmerged after the failed merge")
 	}
-	if err := exec.Command("git", "-C", dir, "merge", "--abort").Run(); err != nil {
+	if err := gittest.Command(dir, "merge", "--abort").Run(); err != nil {
 		t.Fatalf("merge --abort: %v", err)
 	}
 	if hasUnmergedIndex(dir) {
@@ -111,14 +106,14 @@ func TestRecoverUncommittedWork_RefusesUnmergedIndex(t *testing.T) {
 	if !hasUnmergedIndex(dir) {
 		t.Error("the conflict stages were destroyed by the rescue")
 	}
-	if out, err := exec.Command("git", "-C", dir, "show", ":2:f.txt").Output(); err != nil {
+	if out, err := gittest.Command(dir, "show", ":2:f.txt").Output(); err != nil {
 		t.Errorf("stage 2 blob no longer readable: %v", err)
 	} else if !strings.Contains(string(out), "main-side") {
 		t.Errorf("stage 2 blob = %q, want the pre-rescue content", out)
 	}
 
 	// And nothing was committed onto the in-progress merge.
-	if out, err := exec.Command("git", "-C", dir, "log", "--oneline").Output(); err == nil {
+	if out, err := gittest.Command(dir, "log", "--oneline").Output(); err == nil {
 		if strings.Contains(string(out), "auto-recovery") {
 			t.Errorf("the rescue committed conflict markers anyway:\n%s", out)
 		}

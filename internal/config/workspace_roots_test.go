@@ -2,10 +2,10 @@ package config
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
-	"strings"
 	"testing"
+
+	"github.com/nightgauge/nightgauge/internal/gittest"
 )
 
 // workspaceWithSibling builds the on-disk shape WorkspaceRepoRoots must
@@ -18,27 +18,19 @@ func workspaceWithSibling(t *testing.T) (string, string) {
 	if err != nil {
 		t.Fatalf("resolve temp dir: %v", err)
 	}
-	git := func(dir string, args ...string) {
-		t.Helper()
-		cmd := exec.Command("git", args...)
-		cmd.Dir = dir
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %s (in %s): %v: %s", strings.Join(args, " "), dir, err, out)
-		}
-	}
 	mkRepo := func(name string) string {
 		root := filepath.Join(base, name)
 		if err := os.MkdirAll(root, 0o755); err != nil {
 			t.Fatal(err)
 		}
-		git(root, "init", "-b", "main")
-		git(root, "config", "user.email", "test@test")
-		git(root, "config", "user.name", "test")
+		gittest.Run(t, root, "init", "-b", "main")
+		gittest.Run(t, root, "config", "user.email", "test@test")
+		gittest.Run(t, root, "config", "user.name", "test")
 		if err := os.WriteFile(filepath.Join(root, "README"), []byte("hi\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		git(root, "add", ".")
-		git(root, "commit", "-m", "initial")
+		gittest.Run(t, root, "add", ".")
+		gittest.Run(t, root, "commit", "-m", "initial")
 		return root
 	}
 
@@ -148,28 +140,20 @@ func mainCheckoutFixture(t *testing.T) (string, string) {
 	if err != nil {
 		t.Fatalf("resolve temp dir: %v", err)
 	}
-	git := func(dir string, args ...string) {
-		t.Helper()
-		cmd := exec.Command("git", args...)
-		cmd.Dir = dir
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %s (in %s): %v: %s", strings.Join(args, " "), dir, err, out)
-		}
-	}
 	root := filepath.Join(base, "repo")
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	git(root, "init", "-b", "main")
-	git(root, "config", "user.email", "test@test")
-	git(root, "config", "user.name", "test")
+	gittest.Run(t, root, "init", "-b", "main")
+	gittest.Run(t, root, "config", "user.email", "test@test")
+	gittest.Run(t, root, "config", "user.name", "test")
 	if err := os.WriteFile(filepath.Join(root, "README"), []byte("hi\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	git(root, "add", ".")
-	git(root, "commit", "-m", "initial")
+	gittest.Run(t, root, "add", ".")
+	gittest.Run(t, root, "commit", "-m", "initial")
 	wt := filepath.Join(root, ".worktrees", "issue-410")
-	git(root, "worktree", "add", wt, "-b", "fix/410-work")
+	gittest.Run(t, root, "worktree", "add", wt, "-b", "fix/410-work")
 	return root, wt
 }
 
@@ -217,10 +201,7 @@ func TestMainCheckoutRoot_NoWorkTreeIsEmpty(t *testing.T) {
 	t.Setenv("GIT_CEILING_DIRECTORIES", filepath.Dir(base))
 
 	bare := filepath.Join(base, "origin.git")
-	cmd := exec.Command("git", "init", "--bare", "-b", "main", bare)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("init bare: %v: %s", err, out)
-	}
+	gittest.Run(t, "", "init", "--bare", "-b", "main", bare)
 	plain := filepath.Join(base, "not-a-repo")
 	if err := os.MkdirAll(plain, 0o755); err != nil {
 		t.Fatal(err)
