@@ -38,12 +38,14 @@ vi.mock("vscode", () => ({
 import * as vscode from "vscode";
 import {
   StatusBarManager,
-  formatUsageValue,
   formatUsageWindowText,
   renderUsageBar,
   usageThresholdColor,
   buildUsageTooltip,
 } from "../../src/utils/statusBar";
+// Moved to a vscode-free module in #661 so the dashboard usage panel can print
+// the same figures without importing the status-bar module.
+import { formatUsageValue } from "../../src/services/usage/format";
 import type { UsageSnapshot, UsageWindow } from "../../src/services/usage/types";
 import type { ExecutionAdapter } from "../../src/config/schema";
 

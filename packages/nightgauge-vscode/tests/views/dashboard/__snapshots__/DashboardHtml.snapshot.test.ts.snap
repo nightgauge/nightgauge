@@ -2221,6 +2221,86 @@ exports[`getDashboardHtml snapshots (Issue #1242) > active pipeline state — cu
       margin-top: var(--spacing-sm);
       margin-bottom: 0;
     }
+/* Adapter Usage & Quota panel (Issue #661) */
+    .usage-window-row {
+      padding: var(--spacing-sm) 0;
+      border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.15));
+    }
+
+    .usage-window-row:last-child {
+      border-bottom: none;
+    }
+
+    .usage-subheading {
+      margin: 0 0 var(--spacing-sm) 0;
+      font-size: 0.95em;
+      color: var(--vscode-foreground);
+    }
+
+    .usage-family-heading {
+      margin: var(--spacing-sm) 0 0 0;
+      font-size: 0.85em;
+      color: var(--vscode-descriptionForeground);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    .usage-family-breakdown,
+    .usage-burn-card,
+    .usage-recent-card {
+      margin-top: var(--spacing-md);
+      padding: var(--spacing-md);
+      background: var(--vscode-editor-background);
+      border: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.2));
+      border-radius: var(--border-radius);
+    }
+
+    /*
+     * Indeterminate fill for a window whose usage is a floor. Full width and
+     * striped on purpose: a proportional fill drawn from a floor would read as
+     * a measurement, and at zero it would be indistinguishable from an empty
+     * bar (docs/decisions/018-adapter-usage-quota-model.md).
+     */
+    .usage-bar-unknown {
+      width: 100%;
+      background: repeating-linear-gradient(
+        45deg,
+        var(--vscode-descriptionForeground, #888),
+        var(--vscode-descriptionForeground, #888) 6px,
+        transparent 6px,
+        transparent 12px
+      );
+      opacity: 0.6;
+    }
+
+    .usage-panel-note {
+      margin-top: var(--spacing-sm);
+      font-size: 0.8em;
+      color: var(--vscode-descriptionForeground);
+    }
+
+    .usage-recent-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.85em;
+    }
+
+    .usage-recent-table th,
+    .usage-recent-table td {
+      padding: 4px 8px;
+      text-align: left;
+      border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.15));
+    }
+
+    .usage-recent-table tfoot td {
+      font-weight: 600;
+      border-bottom: none;
+    }
+
+    .usage-numeric {
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+    }
 /* Epic Estimates Section */
     .epic-estimates-section {
       background: var(--vscode-editorWidget-background);
@@ -5406,7 +5486,15 @@ exports[`getDashboardHtml snapshots (Issue #1242) > active pipeline state — cu
       <!-- PRIORITY 2.8: Platform Quota (Issue #1479) -->
       
 
-      <!-- PRIORITY 2.9: Usage & Limits (Issue #1333) -->
+      <!-- PRIORITY 2.9: Adapter Usage & Quota (Issue #661) — every window in
+           the AdapterUsageService snapshot the status-bar meter reads, plus
+           burn rate and recent runs. -->
+      
+
+      <!-- PRIORITY 3.0: Usage & Limits (Issue #1333) — the budget-alert
+           control surface (thresholds + Reset Counter). Reads the same
+           monthly window as the panel above via UsageLimitsService (#683),
+           not a second aggregation. -->
       
     </div>
 
@@ -8881,6 +8969,86 @@ exports[`getDashboardHtml snapshots (Issue #1242) > completed run with tool call
       margin-top: var(--spacing-sm);
       margin-bottom: 0;
     }
+/* Adapter Usage & Quota panel (Issue #661) */
+    .usage-window-row {
+      padding: var(--spacing-sm) 0;
+      border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.15));
+    }
+
+    .usage-window-row:last-child {
+      border-bottom: none;
+    }
+
+    .usage-subheading {
+      margin: 0 0 var(--spacing-sm) 0;
+      font-size: 0.95em;
+      color: var(--vscode-foreground);
+    }
+
+    .usage-family-heading {
+      margin: var(--spacing-sm) 0 0 0;
+      font-size: 0.85em;
+      color: var(--vscode-descriptionForeground);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    .usage-family-breakdown,
+    .usage-burn-card,
+    .usage-recent-card {
+      margin-top: var(--spacing-md);
+      padding: var(--spacing-md);
+      background: var(--vscode-editor-background);
+      border: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.2));
+      border-radius: var(--border-radius);
+    }
+
+    /*
+     * Indeterminate fill for a window whose usage is a floor. Full width and
+     * striped on purpose: a proportional fill drawn from a floor would read as
+     * a measurement, and at zero it would be indistinguishable from an empty
+     * bar (docs/decisions/018-adapter-usage-quota-model.md).
+     */
+    .usage-bar-unknown {
+      width: 100%;
+      background: repeating-linear-gradient(
+        45deg,
+        var(--vscode-descriptionForeground, #888),
+        var(--vscode-descriptionForeground, #888) 6px,
+        transparent 6px,
+        transparent 12px
+      );
+      opacity: 0.6;
+    }
+
+    .usage-panel-note {
+      margin-top: var(--spacing-sm);
+      font-size: 0.8em;
+      color: var(--vscode-descriptionForeground);
+    }
+
+    .usage-recent-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.85em;
+    }
+
+    .usage-recent-table th,
+    .usage-recent-table td {
+      padding: 4px 8px;
+      text-align: left;
+      border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.15));
+    }
+
+    .usage-recent-table tfoot td {
+      font-weight: 600;
+      border-bottom: none;
+    }
+
+    .usage-numeric {
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+    }
 /* Epic Estimates Section */
     .epic-estimates-section {
       background: var(--vscode-editorWidget-background);
@@ -12066,7 +12234,15 @@ exports[`getDashboardHtml snapshots (Issue #1242) > completed run with tool call
       <!-- PRIORITY 2.8: Platform Quota (Issue #1479) -->
       
 
-      <!-- PRIORITY 2.9: Usage & Limits (Issue #1333) -->
+      <!-- PRIORITY 2.9: Adapter Usage & Quota (Issue #661) — every window in
+           the AdapterUsageService snapshot the status-bar meter reads, plus
+           burn rate and recent runs. -->
+      
+
+      <!-- PRIORITY 3.0: Usage & Limits (Issue #1333) — the budget-alert
+           control surface (thresholds + Reset Counter). Reads the same
+           monthly window as the panel above via UsageLimitsService (#683),
+           not a second aggregation. -->
       
     </div>
 
@@ -15589,6 +15765,86 @@ exports[`getDashboardHtml snapshots (Issue #1242) > empty state — no current r
       margin-top: var(--spacing-sm);
       margin-bottom: 0;
     }
+/* Adapter Usage & Quota panel (Issue #661) */
+    .usage-window-row {
+      padding: var(--spacing-sm) 0;
+      border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.15));
+    }
+
+    .usage-window-row:last-child {
+      border-bottom: none;
+    }
+
+    .usage-subheading {
+      margin: 0 0 var(--spacing-sm) 0;
+      font-size: 0.95em;
+      color: var(--vscode-foreground);
+    }
+
+    .usage-family-heading {
+      margin: var(--spacing-sm) 0 0 0;
+      font-size: 0.85em;
+      color: var(--vscode-descriptionForeground);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    .usage-family-breakdown,
+    .usage-burn-card,
+    .usage-recent-card {
+      margin-top: var(--spacing-md);
+      padding: var(--spacing-md);
+      background: var(--vscode-editor-background);
+      border: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.2));
+      border-radius: var(--border-radius);
+    }
+
+    /*
+     * Indeterminate fill for a window whose usage is a floor. Full width and
+     * striped on purpose: a proportional fill drawn from a floor would read as
+     * a measurement, and at zero it would be indistinguishable from an empty
+     * bar (docs/decisions/018-adapter-usage-quota-model.md).
+     */
+    .usage-bar-unknown {
+      width: 100%;
+      background: repeating-linear-gradient(
+        45deg,
+        var(--vscode-descriptionForeground, #888),
+        var(--vscode-descriptionForeground, #888) 6px,
+        transparent 6px,
+        transparent 12px
+      );
+      opacity: 0.6;
+    }
+
+    .usage-panel-note {
+      margin-top: var(--spacing-sm);
+      font-size: 0.8em;
+      color: var(--vscode-descriptionForeground);
+    }
+
+    .usage-recent-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.85em;
+    }
+
+    .usage-recent-table th,
+    .usage-recent-table td {
+      padding: 4px 8px;
+      text-align: left;
+      border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.15));
+    }
+
+    .usage-recent-table tfoot td {
+      font-weight: 600;
+      border-bottom: none;
+    }
+
+    .usage-numeric {
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+    }
 /* Epic Estimates Section */
     .epic-estimates-section {
       background: var(--vscode-editorWidget-background);
@@ -18774,7 +19030,15 @@ exports[`getDashboardHtml snapshots (Issue #1242) > empty state — no current r
       <!-- PRIORITY 2.8: Platform Quota (Issue #1479) -->
       
 
-      <!-- PRIORITY 2.9: Usage & Limits (Issue #1333) -->
+      <!-- PRIORITY 2.9: Adapter Usage & Quota (Issue #661) — every window in
+           the AdapterUsageService snapshot the status-bar meter reads, plus
+           burn rate and recent runs. -->
+      
+
+      <!-- PRIORITY 3.0: Usage & Limits (Issue #1333) — the budget-alert
+           control surface (thresholds + Reset Counter). Reads the same
+           monthly window as the panel above via UsageLimitsService (#683),
+           not a second aggregation. -->
       
     </div>
 
@@ -22142,6 +22406,86 @@ exports[`getDashboardHtml snapshots (Issue #1242) > pagination controls rendered
       margin-top: var(--spacing-sm);
       margin-bottom: 0;
     }
+/* Adapter Usage & Quota panel (Issue #661) */
+    .usage-window-row {
+      padding: var(--spacing-sm) 0;
+      border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.15));
+    }
+
+    .usage-window-row:last-child {
+      border-bottom: none;
+    }
+
+    .usage-subheading {
+      margin: 0 0 var(--spacing-sm) 0;
+      font-size: 0.95em;
+      color: var(--vscode-foreground);
+    }
+
+    .usage-family-heading {
+      margin: var(--spacing-sm) 0 0 0;
+      font-size: 0.85em;
+      color: var(--vscode-descriptionForeground);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    .usage-family-breakdown,
+    .usage-burn-card,
+    .usage-recent-card {
+      margin-top: var(--spacing-md);
+      padding: var(--spacing-md);
+      background: var(--vscode-editor-background);
+      border: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.2));
+      border-radius: var(--border-radius);
+    }
+
+    /*
+     * Indeterminate fill for a window whose usage is a floor. Full width and
+     * striped on purpose: a proportional fill drawn from a floor would read as
+     * a measurement, and at zero it would be indistinguishable from an empty
+     * bar (docs/decisions/018-adapter-usage-quota-model.md).
+     */
+    .usage-bar-unknown {
+      width: 100%;
+      background: repeating-linear-gradient(
+        45deg,
+        var(--vscode-descriptionForeground, #888),
+        var(--vscode-descriptionForeground, #888) 6px,
+        transparent 6px,
+        transparent 12px
+      );
+      opacity: 0.6;
+    }
+
+    .usage-panel-note {
+      margin-top: var(--spacing-sm);
+      font-size: 0.8em;
+      color: var(--vscode-descriptionForeground);
+    }
+
+    .usage-recent-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.85em;
+    }
+
+    .usage-recent-table th,
+    .usage-recent-table td {
+      padding: 4px 8px;
+      text-align: left;
+      border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.15));
+    }
+
+    .usage-recent-table tfoot td {
+      font-weight: 600;
+      border-bottom: none;
+    }
+
+    .usage-numeric {
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+    }
 /* Epic Estimates Section */
     .epic-estimates-section {
       background: var(--vscode-editorWidget-background);
@@ -25327,7 +25671,15 @@ exports[`getDashboardHtml snapshots (Issue #1242) > pagination controls rendered
       <!-- PRIORITY 2.8: Platform Quota (Issue #1479) -->
       
 
-      <!-- PRIORITY 2.9: Usage & Limits (Issue #1333) -->
+      <!-- PRIORITY 2.9: Adapter Usage & Quota (Issue #661) — every window in
+           the AdapterUsageService snapshot the status-bar meter reads, plus
+           burn rate and recent runs. -->
+      
+
+      <!-- PRIORITY 3.0: Usage & Limits (Issue #1333) — the budget-alert
+           control surface (thresholds + Reset Counter). Reads the same
+           monthly window as the panel above via UsageLimitsService (#683),
+           not a second aggregation. -->
       
     </div>
 

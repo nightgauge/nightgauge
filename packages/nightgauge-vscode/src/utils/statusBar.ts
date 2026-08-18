@@ -9,7 +9,8 @@ import type { PipelineStage } from "@nightgauge/sdk";
 import type { StageExecutionMode } from "./incrediConfig";
 import { DEFAULT_PERFORMANCE_MODE, MODE_PROFILES, type PerformanceMode } from "./modeProfiles";
 import type { ExecutionAdapter } from "../config/schema";
-import type { UsageSnapshot, UsageUnit, UsageWindow } from "../services/usage/types";
+import type { UsageSnapshot, UsageWindow } from "../services/usage/types";
+import { formatUsageValue } from "../services/usage/format";
 
 /**
  * Pipeline state for status bar display
@@ -916,45 +917,6 @@ export function renderUsageBar(pct: number, segments = 8): string {
   const partial = remainderEighths > 0 ? USAGE_BAR_PARTIALS[remainderEighths] : "";
   const emptySegments = segments - fullSegments - (partial ? 1 : 0);
   return "█".repeat(fullSegments) + partial + "░".repeat(Math.max(0, emptySegments));
-}
-
-/** Format an eighths-scale value (e.g. very large token counts) as "812k"/"1.2m". */
-function trimTrailingZero(value: number): string {
-  return value % 1 === 0 ? value.toFixed(0) : value.toFixed(1);
-}
-
-function formatTokenCount(value: number): string {
-  const abs = Math.abs(value);
-  if (abs >= 1_000_000) {
-    return `${trimTrailingZero(value / 1_000_000)}m tokens`;
-  }
-  if (abs >= 1_000) {
-    return `${trimTrailingZero(value / 1_000)}k tokens`;
-  }
-  return `${Math.round(value)} tokens`;
-}
-
-/**
- * Format a raw `used`/`limit` figure per its `UsageUnit` (Issue #659).
- *
- * `percent` is the vendor-reported-percentage case reserved by
- * docs/decisions/018-adapter-usage-quota-model.md (`rate_limit_event`'s
- * `utilization`) — no producer emits it yet, but the formatter honours it so
- * that provider needs no change here when it lands.
- */
-export function formatUsageValue(value: number, unit: UsageUnit): string {
-  switch (unit) {
-    case "usd":
-      return `$${value.toFixed(2)}`;
-    case "percent":
-      return `${Math.round(value)}%`;
-    case "tokens":
-      return formatTokenCount(value);
-    case "requests": {
-      const rounded = Math.round(value);
-      return `${rounded.toLocaleString()} request${rounded === 1 ? "" : "s"}`;
-    }
-  }
 }
 
 /**

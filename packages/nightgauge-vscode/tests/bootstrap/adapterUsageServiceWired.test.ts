@@ -37,6 +37,14 @@ describe("AdapterUsageService has a production consumer (Issue #659)", () => {
     expect(servicesSource).toContain("statusBar.showUsageSnapshot(snapshot)");
   });
 
+  it("feeds the dashboard usage panel from the same instance (Issue #661)", () => {
+    // The panel and the status-bar meter must answer the same question with
+    // the same number, so bootstrap hands the panel the *same* service object
+    // rather than constructing a second one.
+    expect(servicesSource).toContain("dashboard.setAdapterUsageService(adapterUsageService)");
+    expect(servicesSource.match(/AdapterUsageService\.forWorkspace\(/g)).toHaveLength(1);
+  });
+
   it("feeds UsageLimitsService — no second, divergent budget-alert data path", () => {
     // #683: UsageLimitsService must read the same AdapterUsageService
     // instance the status bar renders from, not DashboardState.getAggregates
