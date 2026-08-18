@@ -1,19 +1,29 @@
 /**
- * UsageLimitsService - Tracks cumulative pipeline cost against a monthly budget
+ * UsageLimitsService - Fires threshold notifications when the active
+ * adapter's monthly spend approaches the configured budget.
  *
- * Reads accumulated cost from DashboardState, polls on interval,
- * fires threshold-based notifications, and updates the status bar.
+ * Historically this read `DashboardState.getAggregates("all")` — an
+ * unbounded, all-time total compared against a *monthly* budget, which read
+ * as permanently over-budget on any workspace older than a month (Issue
+ * #683). It now reads the `monthly` window from `AdapterUsageService`
+ * (Issue #658 / #659), whose boundary is the 1st of the local month —
+ * see docs/decisions/018-adapter-usage-quota-model.md.
  *
- * No upstream API is available for Claude Code Max quota — tracking is
- * local and budget-based via user-configured monthly budget.
+ * Status-bar rendering of the usage meter itself is no longer this service's
+ * job: `StatusBarManager.showUsageSnapshot()` renders directly off
+ * `AdapterUsageService.onDidChangeUsage` (wired in bootstrap/services.ts),
+ * so the meter and this service's alerts read the same window instead of two
+ * independently-computed figures.
  *
  * @see Issue #1333 - Show Claude Code usage limits and alert users
+ * @see Issue #683 - Status-bar meter compared all-time cost to a monthly budget
+ * @see Issue #659 - Adapter usage meter in the status bar
  */
 
 import * as vscode from "vscode";
-import type { DashboardState } from "../views/dashboard/DashboardState";
+import type { AdapterUsageService } from "./usage/AdapterUsageService";
+import type { UsageSnapshot } from "./usage/types";
 import type { NotificationService } from "./NotificationService";
-import type { StatusBarManager } from "../utils/statusBar";
 import { getLimitsSettings } from "../config/limitsSettings";
 
 /**
@@ -22,111 +32,122 @@ import { getLimitsSettings } from "../config/limitsSettings";
 type AlertLevel = "none" | "warning" | "critical";
 
 /**
- * UsageLimitsService - Budget tracking and threshold alert service
+ * UsageLimitsService - Budget threshold alert service
  *
- * Polls DashboardState.getAggregates() on a configurable interval,
- * shows live cost in the status bar when a budget is configured,
- * and fires warning/critical notifications via NotificationService.
+ * Reacts to `AdapterUsageService.onDidChangeUsage`, evaluates the snapshot's
+ * `monthly` window against `monthlyBudgetUsd`, and fires warning/critical
+ * notifications via `NotificationService`. A no-op when no budget is
+ * configured.
  *
  * @example
  * ```typescript
- * const usageLimits = new UsageLimitsService(dashboardState, notificationService, statusBar);
+ * const usageLimits = new UsageLimitsService(adapterUsageService, notificationService);
  * usageLimits.initialize();
  * context.subscriptions.push(usageLimits);
  * ```
  */
 export class UsageLimitsService implements vscode.Disposable {
-  private pollingTimer: ReturnType<typeof setInterval> | null = null;
   private lastAlertLevel: AlertLevel = "none";
-  /** Subtracted from totalCostUsd when user resets the counter */
-  private manualCostOffsetUsd = 0;
+  private changeSubscription: vscode.Disposable | null = null;
 
   constructor(
-    private readonly dashboardState: DashboardState,
-    private readonly notificationService: NotificationService,
-    private readonly statusBar: StatusBarManager
+    private readonly usageService: AdapterUsageService,
+    private readonly notificationService: NotificationService
   ) {}
 
   /**
-   * Start usage polling. Call once after construction.
-   * No-op when monthlyBudgetUsd is 0 (disabled).
+   * Start reacting to usage changes. Call once after construction.
+   * No-op when monthlyBudgetUsd is 0 (disabled) — matches the pre-#683
+   * behaviour of not wiring anything up when no budget is configured.
    */
   initialize(): void {
-    this.startPolling();
-  }
-
-  private startPolling(): void {
-    const settings = getLimitsSettings();
-    if (settings.monthlyBudgetUsd <= 0) {
-      return; // Disabled — no budget configured
+    if (getLimitsSettings().monthlyBudgetUsd <= 0) {
+      return;
     }
-
-    // Run immediately then on interval
-    this.poll();
-    this.pollingTimer = setInterval(() => this.poll(), settings.pollingIntervalSeconds * 1000);
+    this.changeSubscription = this.usageService.onDidChangeUsage((snapshot) =>
+      this.evaluate(snapshot)
+    );
+    const cached = this.usageService.getCachedSnapshot();
+    if (cached) {
+      this.evaluate(cached);
+    }
   }
 
-  private poll(): void {
+  /**
+   * Evaluate one snapshot's `monthly` window against the configured budget,
+   * firing a warning/critical notification on a threshold crossing.
+   *
+   * Bidirectional: when usage drops back under the warning threshold — a
+   * fresh calendar month, or a `resetCounter()` call — `lastAlertLevel`
+   * un-latches to `"none"`, so a later rise notifies again instead of
+   * staying silently latched at whatever level last fired (#683 AC: the
+   * 80%/90% thresholds must be reachable in both directions).
+   */
+  private evaluate(snapshot: UsageSnapshot): void {
     const settings = getLimitsSettings();
     if (settings.monthlyBudgetUsd <= 0) {
       return;
     }
+    const monthly = snapshot.windows.find((w) => w.scope === "monthly");
+    if (!monthly || monthly.limit === null || monthly.limit <= 0) {
+      return; // No priced monthly window yet, or the adapter isn't metered.
+    }
 
-    const aggregates = this.dashboardState.getAggregates("all");
-    const effectiveCost = Math.max(0, (aggregates.totalCostUsd ?? 0) - this.manualCostOffsetUsd);
-    const usagePct = (effectiveCost / settings.monthlyBudgetUsd) * 100;
+    const usagePct = (monthly.used / monthly.limit) * 100;
 
-    // Update status bar
-    this.statusBar.showUsage(effectiveCost, settings.monthlyBudgetUsd);
-
-    // Critical threshold check (higher priority, checked first)
     if (usagePct >= settings.criticalThresholdPct && this.lastAlertLevel !== "critical") {
       this.lastAlertLevel = "critical";
       this.notificationService.notifyUsageWarning(
         "critical",
         usagePct,
-        effectiveCost,
-        settings.monthlyBudgetUsd
+        monthly.used,
+        monthly.limit
       );
     } else if (usagePct >= settings.warningThresholdPct && this.lastAlertLevel === "none") {
-      // Warning threshold — only fire if not already warned or critical
       this.lastAlertLevel = "warning";
-      this.notificationService.notifyUsageWarning(
-        "warning",
-        usagePct,
-        effectiveCost,
-        settings.monthlyBudgetUsd
-      );
+      this.notificationService.notifyUsageWarning("warning", usagePct, monthly.used, monthly.limit);
+    } else if (usagePct < settings.warningThresholdPct && this.lastAlertLevel !== "none") {
+      this.lastAlertLevel = "none";
     }
   }
 
   /**
-   * Reset the usage counter by recording the current total as the new baseline.
+   * Re-arm alerts without waiting for the calendar month boundary.
    *
-   * This does not clear DashboardState — it records an offset so future
-   * reads show usage since this reset point. The alert level is also reset
-   * so warnings can fire again.
+   * Before #683 this recorded a manual dollar offset subtracted from an
+   * all-time total — the only reset mechanism that existed. Now that the
+   * `monthly` window itself resets automatically at the 1st, a second,
+   * independently-tracked offset would only reintroduce the bug this ticket
+   * fixes: the moment the calendar rolls over, a stale offset captured in the
+   * old month would outlive it and either mask real spend in the new month or
+   * (once `Math.max(0, …)` stopped clamping it) go negative. So there is
+   * nothing left to subtract — this simply un-latches `lastAlertLevel`,
+   * matching what a fresh month already does on its own, so the operator can
+   * acknowledge and re-arm mid-month without waiting for it.
+   *
+   * @see Issue #683 AC — "manualCostOffsetUsd is either removed or its
+   *      remaining purpose is documented"
    */
   resetCounter(): void {
-    const aggregates = this.dashboardState.getAggregates("all");
-    this.manualCostOffsetUsd = aggregates.totalCostUsd ?? 0;
     this.lastAlertLevel = "none";
-    this.statusBar.hideUsage();
   }
 
   /**
-   * Get the current effective cost (after applying manual offset)
+   * The active adapter's cost for the current calendar month — the same
+   * figure the status-bar meter's "This month" window shows, and what backs
+   * the dashboard's pre-existing budget-vs-spend widget
+   * (`Dashboard.getUsageLimitsData()`). Returns 0 before the first snapshot
+   * or when the monthly window isn't priced.
    */
   getEffectiveCostUsd(): number {
-    const aggregates = this.dashboardState.getAggregates("all");
-    return Math.max(0, (aggregates.totalCostUsd ?? 0) - this.manualCostOffsetUsd);
+    const monthly = this.usageService
+      .getCachedSnapshot()
+      ?.windows.find((w) => w.scope === "monthly");
+    return monthly?.used ?? 0;
   }
 
   dispose(): void {
-    if (this.pollingTimer !== null) {
-      clearInterval(this.pollingTimer);
-      this.pollingTimer = null;
-    }
-    this.statusBar.hideUsage();
+    this.changeSubscription?.dispose();
+    this.changeSubscription = null;
   }
 }

@@ -122,6 +122,8 @@ import { OAuthDeviceFlowService } from "../services/OAuthDeviceFlowService";
 import { GitHubAuthService } from "../services/GitHubAuthService";
 import { AutomationService } from "../services/AutomationService";
 import { UsageLimitsService } from "../services/UsageLimitsService";
+import { AdapterUsageService } from "../services/usage/AdapterUsageService";
+import { USAGE_WINDOW_STATE_KEY } from "../commands/cycleUsageMetric";
 import { PlatformQuotaService } from "../services/PlatformQuotaService";
 import { BrownfieldDataService } from "../services/BrownfieldDataService";
 import { BrownfieldDashboard } from "../views/brownfield/BrownfieldDashboard";
@@ -2790,15 +2792,42 @@ export async function initializeServices(
   // trigger a dashboard refresh after writing a new run record to TelemetryStore.
   dashboardHistoryReloader = () => dashboard.reloadHistory();
 
-  // Initialize usage limits tracking service (Issue #1333)
-  const usageLimitsService: UsageLimitsService = new UsageLimitsService(
-    dashboard.getState(),
-    notificationService,
-    statusBar
-  );
-  usageLimitsService.initialize();
-  context.subscriptions.push(usageLimitsService);
-  dashboard.setUsageLimitsService(usageLimitsService);
+  // Adapter usage meter (Issue #659) — the first production consumer of
+  // AdapterUsageService (#658 shipped it with none; see ADR 018's
+  // Consequences). Requires incrediRoot: with no workspace/git root there is
+  // no `.nightgauge/pipeline/history/` to read, so the meter stays hidden
+  // rather than wired against a path that cannot exist.
+  let adapterUsageService: AdapterUsageService | null = null;
+  if (incrediRoot) {
+    adapterUsageService = AdapterUsageService.forWorkspace(incrediRoot, dashboard.getState());
+    // Restore the persisted window selection before the first snapshot
+    // renders, so a reload resumes on the window the user had cycled to
+    // (Issue #659 AC — selection "survives a window reload").
+    const restoredWindowId = context.workspaceState.get<string | null>(
+      USAGE_WINDOW_STATE_KEY,
+      null
+    );
+    statusBar.setSelectedUsageWindowId(restoredWindowId);
+    context.subscriptions.push(
+      adapterUsageService.onDidChangeUsage((snapshot) => statusBar.showUsageSnapshot(snapshot))
+    );
+    adapterUsageService.initialize();
+    context.subscriptions.push(adapterUsageService);
+  }
+
+  // Usage-limits budget alerts (Issue #1333), sourced from
+  // AdapterUsageService's calendar-bounded `monthly` window rather than
+  // DashboardState.getAggregates("all") — the latter is unbounded in time
+  // and reads as permanently over-budget past the first month (Issue #683).
+  // Only meaningful when a workspace is open (see adapterUsageService above).
+  const usageLimitsService: UsageLimitsService | null = adapterUsageService
+    ? new UsageLimitsService(adapterUsageService, notificationService)
+    : null;
+  if (usageLimitsService) {
+    usageLimitsService.initialize();
+    context.subscriptions.push(usageLimitsService);
+    dashboard.setUsageLimitsService(usageLimitsService);
+  }
 
   // Connect Dashboard to CompletedIssuesService for live updates (Issue #1164)
   dashboard.setCompletedIssuesService(completedIssuesService);

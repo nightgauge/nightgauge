@@ -1,49 +1,29 @@
 /**
- * Tests for UsageLimitsService
+ * Tests for UsageLimitsService (Issue #683 rewrite)
  *
  * Covers:
- * - No polling when budget = 0 (disabled)
- * - Warning fires at ≥80% threshold
- * - Critical fires at ≥90% threshold
+ * - No wiring when budget = 0 (disabled)
+ * - Evaluates the cached snapshot immediately on initialize()
+ * - Reacts to AdapterUsageService.onDidChangeUsage
+ * - Warning fires at ≥80% of the monthly window's limit
+ * - Critical fires at ≥90%
  * - No duplicate warning at the same threshold crossing
  * - Warning → critical escalation fires both, in order
- * - Reset counter sets offset and clears alert level
- * - dispose() clears interval and hides usage status bar item
+ * - Bidirectional: usage dropping back under the warning threshold un-latches
+ *   the alert level so a later rise notifies again (#683 AC)
+ * - No alert when the monthly window has no configured limit
+ * - getEffectiveCostUsd() reads the monthly window's `used`, not an all-time
+ *   total (#683 — the permanently-red-after-month-one bug)
+ * - resetCounter() re-arms alerts without touching the monthly figure
+ * - dispose() unsubscribes from the change event
  *
  * @see Issue #1333
+ * @see Issue #683
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 
-// --- Mocks ---
-
-vi.mock("vscode", () => ({
-  window: {
-    createStatusBarItem: vi.fn(() => ({
-      show: vi.fn(),
-      hide: vi.fn(),
-      dispose: vi.fn(),
-      text: "",
-      tooltip: "",
-      backgroundColor: undefined,
-      command: undefined,
-    })),
-  },
-  StatusBarAlignment: { Left: 1 },
-  ThemeColor: class ThemeColor {
-    constructor(public id: string) {}
-  },
-}));
-
-// Mock ConfigBridge - used by getLimitsSettings
-vi.mock("../../src/services/ConfigBridge", () => ({
-  ConfigBridge: {
-    getInstance: vi.fn(() => ({
-      isInitialized: vi.fn(() => false), // returns defaults
-      getUI: vi.fn(() => undefined),
-    })),
-  },
-}));
+vi.mock("vscode", () => ({}));
 
 // Mock limitsSettings to allow per-test override
 const mockLimitsSettings = {
@@ -59,46 +39,61 @@ vi.mock("../../src/config/limitsSettings", () => ({
 
 import { UsageLimitsService } from "../../src/services/UsageLimitsService";
 import { getLimitsSettings } from "../../src/config/limitsSettings";
+import type { UsageSnapshot } from "../../src/services/usage/types";
 
-// Helper: create a mock DashboardState with a configurable totalCostUsd
-function makeDashboardState(totalCostUsd: number) {
+/** A minimal fake AdapterUsageService: a real emitter plus a settable cache. */
+function makeUsageService() {
+  const handlers: Array<(snapshot: UsageSnapshot) => void> = [];
+  let cached: UsageSnapshot | null = null;
   return {
-    getAggregates: vi.fn(() => ({
-      totalCostUsd,
-      sessionCostUsd: 0,
-      totalRuns: 0,
-      sessionRuns: 0,
-      totalTimeSavedMs: 0,
-      sessionTimeSavedMs: 0,
-      successRate: 1,
-      avgCostPerRun: 0,
-      avgTimeSavedPerRun: 0,
-      stageAverages: [],
-      epics: [],
-      crossRepoEpics: undefined,
-    })),
-  } as unknown as import("../../src/views/dashboard/DashboardState").DashboardState;
+    onDidChangeUsage: vi.fn((cb: (snapshot: UsageSnapshot) => void) => {
+      handlers.push(cb);
+      return { dispose: vi.fn(() => handlers.splice(handlers.indexOf(cb), 1)) };
+    }),
+    getCachedSnapshot: vi.fn(() => cached),
+    /** Test helper: set the cache (as if a derivation just completed). */
+    setCached(snapshot: UsageSnapshot | null) {
+      cached = snapshot;
+    },
+    /** Test helper: fire onDidChangeUsage as AdapterUsageService.refresh() would. */
+    fire(snapshot: UsageSnapshot) {
+      cached = snapshot;
+      for (const h of [...handlers]) h(snapshot);
+    },
+    /** Test helper: how many listeners are still subscribed. */
+    listenerCount: () => handlers.length,
+  };
 }
 
-// Helper: create a mock NotificationService
+/** Build a snapshot with a single "monthly" window at the given used/limit. */
+function monthlySnapshot(used: number, limit: number | null): UsageSnapshot {
+  return {
+    adapter: "claude",
+    plan: { kind: "pay-per-token" },
+    capturedAt: new Date(),
+    windows: [
+      {
+        id: "local-telemetry:monthly",
+        label: "This month",
+        scope: "monthly",
+        used,
+        limit,
+        unit: "usd",
+        resetsAt: null,
+        confidence: "measured",
+      },
+    ],
+  };
+}
+
 function makeNotificationService() {
   return {
     notifyUsageWarning: vi.fn(),
   } as unknown as import("../../src/services/NotificationService").NotificationService;
 }
 
-// Helper: create a mock StatusBarManager
-function makeStatusBar() {
-  return {
-    showUsage: vi.fn(),
-    hideUsage: vi.fn(),
-  } as unknown as import("../../src/utils/statusBar").StatusBarManager;
-}
-
 describe("UsageLimitsService", () => {
   beforeEach(() => {
-    vi.useFakeTimers();
-    // Reset mock settings to defaults
     mockLimitsSettings.monthlyBudgetUsd = 10;
     mockLimitsSettings.warningThresholdPct = 80;
     mockLimitsSettings.criticalThresholdPct = 90;
@@ -108,197 +103,200 @@ describe("UsageLimitsService", () => {
     }));
   });
 
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
   describe("initialize()", () => {
-    it("does not start polling when monthlyBudgetUsd = 0 (disabled)", () => {
+    it("does not subscribe when monthlyBudgetUsd = 0 (disabled)", () => {
       mockLimitsSettings.monthlyBudgetUsd = 0;
-      const state = makeDashboardState(5);
+      const usage = makeUsageService();
       const notif = makeNotificationService();
-      const bar = makeStatusBar();
-      const service = new UsageLimitsService(state as any, notif as any, bar as any);
+      const service = new UsageLimitsService(usage as any, notif as any);
 
       service.initialize();
 
-      // Advance time — no poll should happen
-      vi.advanceTimersByTime(60_000);
-
-      expect(state.getAggregates).not.toHaveBeenCalled();
+      expect(usage.onDidChangeUsage).not.toHaveBeenCalled();
       expect(notif.notifyUsageWarning).not.toHaveBeenCalled();
-      expect(bar.showUsage).not.toHaveBeenCalled();
-
-      service.dispose();
     });
 
-    it("polls immediately on initialize when budget > 0", () => {
-      const state = makeDashboardState(1); // 10% of $10
+    it("evaluates the already-cached snapshot immediately", () => {
+      const usage = makeUsageService();
+      usage.setCached(monthlySnapshot(8, 10)); // 80%
       const notif = makeNotificationService();
-      const bar = makeStatusBar();
-      const service = new UsageLimitsService(state as any, notif as any, bar as any);
+      const service = new UsageLimitsService(usage as any, notif as any);
 
       service.initialize();
 
-      expect(state.getAggregates).toHaveBeenCalledTimes(1);
-      expect(bar.showUsage).toHaveBeenCalledWith(1, 10);
+      expect(notif.notifyUsageWarning).toHaveBeenCalledWith("warning", 80, 8, 10);
+    });
 
-      service.dispose();
+    it("does nothing on initialize when there is no cached snapshot yet", () => {
+      const usage = makeUsageService();
+      const notif = makeNotificationService();
+      const service = new UsageLimitsService(usage as any, notif as any);
+
+      service.initialize();
+
+      expect(notif.notifyUsageWarning).not.toHaveBeenCalled();
     });
   });
 
   describe("threshold alerts", () => {
-    it("fires warning when usage ≥ 80%", () => {
-      const state = makeDashboardState(8); // 80% of $10
+    it("fires warning when usage >= 80% of the monthly window's limit", () => {
+      const usage = makeUsageService();
       const notif = makeNotificationService();
-      const bar = makeStatusBar();
-      const service = new UsageLimitsService(state as any, notif as any, bar as any);
-
+      const service = new UsageLimitsService(usage as any, notif as any);
       service.initialize();
+
+      usage.fire(monthlySnapshot(8, 10)); // 80%
 
       expect(notif.notifyUsageWarning).toHaveBeenCalledOnce();
       expect(notif.notifyUsageWarning).toHaveBeenCalledWith("warning", 80, 8, 10);
-
-      service.dispose();
     });
 
-    it("fires critical when usage ≥ 90%", () => {
-      const state = makeDashboardState(9.5); // 95% of $10
+    it("fires critical when usage >= 90%", () => {
+      const usage = makeUsageService();
       const notif = makeNotificationService();
-      const bar = makeStatusBar();
-      const service = new UsageLimitsService(state as any, notif as any, bar as any);
-
+      const service = new UsageLimitsService(usage as any, notif as any);
       service.initialize();
+
+      usage.fire(monthlySnapshot(9.5, 10)); // 95%
 
       expect(notif.notifyUsageWarning).toHaveBeenCalledOnce();
       expect(notif.notifyUsageWarning).toHaveBeenCalledWith("critical", 95, 9.5, 10);
-
-      service.dispose();
     });
 
-    it("does not fire when usage is below warning threshold", () => {
-      const state = makeDashboardState(5); // 50% of $10
+    it("does not fire when usage is below the warning threshold", () => {
+      const usage = makeUsageService();
       const notif = makeNotificationService();
-      const bar = makeStatusBar();
-      const service = new UsageLimitsService(state as any, notif as any, bar as any);
-
+      const service = new UsageLimitsService(usage as any, notif as any);
       service.initialize();
 
-      expect(notif.notifyUsageWarning).not.toHaveBeenCalled();
+      usage.fire(monthlySnapshot(5, 10)); // 50%
 
-      service.dispose();
+      expect(notif.notifyUsageWarning).not.toHaveBeenCalled();
+    });
+
+    it("does not fire when the monthly window has no configured limit", () => {
+      const usage = makeUsageService();
+      const notif = makeNotificationService();
+      const service = new UsageLimitsService(usage as any, notif as any);
+      service.initialize();
+
+      usage.fire(monthlySnapshot(500, null)); // no budget configured on this window
+
+      expect(notif.notifyUsageWarning).not.toHaveBeenCalled();
     });
   });
 
-  describe("deduplication", () => {
-    it("does not fire duplicate warning when polling twice at same threshold", () => {
-      const state = makeDashboardState(8.2); // 82% — warning
+  describe("deduplication and escalation", () => {
+    it("does not fire a duplicate warning on a second change event at the same level", () => {
+      const usage = makeUsageService();
       const notif = makeNotificationService();
-      const bar = makeStatusBar();
-      const service = new UsageLimitsService(state as any, notif as any, bar as any);
-
+      const service = new UsageLimitsService(usage as any, notif as any);
       service.initialize();
-      // First poll fired warning
+
+      usage.fire(monthlySnapshot(8.2, 10)); // 82% — warning
       expect(notif.notifyUsageWarning).toHaveBeenCalledOnce();
 
-      // Advance to trigger second poll
-      vi.advanceTimersByTime(300_000);
-      // Still at 82% — should NOT fire again
+      usage.fire(monthlySnapshot(8.3, 10)); // still warning-band
       expect(notif.notifyUsageWarning).toHaveBeenCalledOnce();
-
-      service.dispose();
     });
 
     it("escalates from warning to critical correctly", () => {
-      let cost = 8.2; // 82% — warning
-      const state = {
-        getAggregates: vi.fn(() => ({
-          totalCostUsd: cost,
-          sessionCostUsd: 0,
-          totalRuns: 0,
-          sessionRuns: 0,
-          totalTimeSavedMs: 0,
-          sessionTimeSavedMs: 0,
-          successRate: 1,
-          avgCostPerRun: 0,
-          avgTimeSavedPerRun: 0,
-          stageAverages: [],
-          epics: [],
-        })),
-      };
+      const usage = makeUsageService();
       const notif = makeNotificationService();
-      const bar = makeStatusBar();
-      const service = new UsageLimitsService(state as any, notif as any, bar as any);
-
+      const service = new UsageLimitsService(usage as any, notif as any);
       service.initialize();
-      // First poll: warning at 82%
+
+      usage.fire(monthlySnapshot(8.2, 10)); // 82%
+      expect(notif.notifyUsageWarning).toHaveBeenLastCalledWith("warning", 82, 8.2, 10);
+
+      usage.fire(monthlySnapshot(9.3, 10)); // 93%
+      expect(notif.notifyUsageWarning).toHaveBeenCalledTimes(2);
+      expect(notif.notifyUsageWarning).toHaveBeenLastCalledWith("critical", 93, 9.3, 10);
+    });
+  });
+
+  describe("bidirectional thresholds (#683 AC)", () => {
+    it("un-latches the alert level once usage drops back below warning, re-firing on a later rise", () => {
+      const usage = makeUsageService();
+      const notif = makeNotificationService();
+      const service = new UsageLimitsService(usage as any, notif as any);
+      service.initialize();
+
+      usage.fire(monthlySnapshot(8.5, 10)); // 85% — warning fires
       expect(notif.notifyUsageWarning).toHaveBeenCalledTimes(1);
-      expect(notif.notifyUsageWarning).toHaveBeenLastCalledWith(
-        "warning",
-        expect.closeTo(82, 0),
-        8.2,
-        10
-      );
 
-      // Cost increases to 93%
-      cost = 9.3;
-      vi.advanceTimersByTime(300_000);
+      // Calendar rolls over to a fresh month — the monthly window resets to 0.
+      usage.fire(monthlySnapshot(0, 10)); // 0% — should not fire, and should un-latch
+      expect(notif.notifyUsageWarning).toHaveBeenCalledTimes(1);
 
-      // Second poll: critical at 93%
+      // Usage climbs past the warning threshold again this month.
+      usage.fire(monthlySnapshot(8.1, 10)); // 81%
       expect(notif.notifyUsageWarning).toHaveBeenCalledTimes(2);
       expect(notif.notifyUsageWarning).toHaveBeenLastCalledWith(
-        "critical",
-        expect.closeTo(93, 0),
-        9.3,
+        "warning",
+        expect.closeTo(81, 0),
+        8.1,
         10
       );
+    });
+  });
 
-      service.dispose();
+  describe("getEffectiveCostUsd()", () => {
+    it("reads the monthly window's used figure, not an all-time total", () => {
+      const usage = makeUsageService();
+      const notif = makeNotificationService();
+      const service = new UsageLimitsService(usage as any, notif as any);
+      service.initialize();
+
+      usage.fire(monthlySnapshot(3.5, 10));
+
+      expect(service.getEffectiveCostUsd()).toBe(3.5);
+    });
+
+    it("returns 0 before any snapshot has arrived", () => {
+      const usage = makeUsageService();
+      const notif = makeNotificationService();
+      const service = new UsageLimitsService(usage as any, notif as any);
+
+      expect(service.getEffectiveCostUsd()).toBe(0);
     });
   });
 
   describe("resetCounter()", () => {
-    it("sets offset so effective cost = 0 and resets alert level", () => {
-      const state = makeDashboardState(8); // 80% — warning fires
+    it("re-arms alerts without changing getEffectiveCostUsd()", () => {
+      const usage = makeUsageService();
       const notif = makeNotificationService();
-      const bar = makeStatusBar();
-      const service = new UsageLimitsService(state as any, notif as any, bar as any);
-
+      const service = new UsageLimitsService(usage as any, notif as any);
       service.initialize();
+
+      usage.fire(monthlySnapshot(8, 10)); // 80% — warning fires
       expect(notif.notifyUsageWarning).toHaveBeenCalledOnce();
 
-      // Reset the counter — total is $8, offset becomes 8
       service.resetCounter();
-      expect(bar.hideUsage).toHaveBeenCalled();
+      // The monthly figure is untouched by a manual reset — there is no
+      // second offset to apply (see the class doc comment on resetCounter).
+      expect(service.getEffectiveCostUsd()).toBe(8);
 
-      // Effective cost is now 0, alert level reset
-      expect(service.getEffectiveCostUsd()).toBe(0);
-
-      // Poll again — no warning should fire since effective cost = 0
-      vi.advanceTimersByTime(300_000);
-      expect(notif.notifyUsageWarning).toHaveBeenCalledOnce(); // still just once
-
-      service.dispose();
+      // Same 80% snapshot fires again because the alert level was cleared.
+      usage.fire(monthlySnapshot(8, 10));
+      expect(notif.notifyUsageWarning).toHaveBeenCalledTimes(2);
     });
   });
 
   describe("dispose()", () => {
-    it("clears polling interval and hides usage item", () => {
-      const state = makeDashboardState(1);
+    it("unsubscribes from the change event", () => {
+      const usage = makeUsageService();
       const notif = makeNotificationService();
-      const bar = makeStatusBar();
-      const service = new UsageLimitsService(state as any, notif as any, bar as any);
-
+      const service = new UsageLimitsService(usage as any, notif as any);
       service.initialize();
-      const callCountBefore = (state.getAggregates as ReturnType<typeof vi.fn>).mock.calls.length;
+      expect(usage.listenerCount()).toBe(1);
 
       service.dispose();
-      expect(bar.hideUsage).toHaveBeenCalled();
+      expect(usage.listenerCount()).toBe(0);
 
-      // After dispose, polling should not continue
-      vi.advanceTimersByTime(300_000 * 3);
-      const callCountAfter = (state.getAggregates as ReturnType<typeof vi.fn>).mock.calls.length;
-      expect(callCountAfter).toBe(callCountBefore);
+      // Further changes must not evaluate — dispose fully detaches.
+      usage.fire(monthlySnapshot(9.9, 10));
+      expect(notif.notifyUsageWarning).not.toHaveBeenCalled();
     });
   });
 });

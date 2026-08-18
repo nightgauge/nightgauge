@@ -578,6 +578,11 @@ export const MANIFEST_CONTRIBUTES: ManifestContributes = {
       icon: "$(refresh)",
     },
     {
+      command: "nightgauge.cycleUsageMetric",
+      title: "Nightgauge: Cycle Usage Metric",
+      icon: "$(flame)",
+    },
+    {
       command: "nightgauge.searchKnowledge",
       title: "Nightgauge: Search Knowledge",
       icon: "$(search)",
