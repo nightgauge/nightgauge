@@ -36,6 +36,13 @@ type PRMergeInfoFetcher interface {
 
 // PostMergeResult holds the outcome of the post-merge hook.
 type PostMergeResult struct {
+	// IssueClosed is true when the issue is closed after this hook ran —
+	// whether it was closed by this hook's own CloseIssue call, or was
+	// already closed before the hook ran (e.g. via GitHub's Closes-keyword
+	// auto-close racing ahead of the hook, #686). It intentionally does NOT
+	// mean "this hook's CloseIssue call itself succeeded"; downstream
+	// reconciliation (board-Done sync, survival eligibility) cares about the
+	// issue's actual state, not about who closed it.
 	IssueClosed bool `json:"issueClosed"`
 	// IssueDoneSynced is true when the merged issue's own project-board Status
 	// was synced to "Done" (#3981). Only attempted when a board syncer is wired
@@ -90,7 +97,11 @@ type BoardSyncer interface {
 // Closing the issue explicitly ensures it is closed even when GitHub's
 // auto-close keyword mechanism did not fire (e.g., the PR body lacked a
 // "Fixes #N" keyword or GitHub's automation was temporarily unavailable).
-// If the issue is already closed, the close call is a no-op.
+// If the issue is already closed — most commonly because GitHub's own
+// auto-close keyword won the race and closed it first (#686) — the close
+// call returns a GraphQL error rather than a no-op; EvaluatePostMerge
+// recovers from that using the issue state fetched before the call, so
+// downstream reconciliation still treats the issue as closed.
 //
 // When input.PRNumber > 0 and prVerifier is non-nil, the PR's state is
 // verified to be MERGED before closing the issue. This prevents the issue
@@ -153,15 +164,34 @@ func EvaluatePostMerge(ctx context.Context, issueSvc IssueFetcher, issueCloser I
 	}
 
 	// Explicitly close the issue. This is the fallback in case GitHub's
-	// auto-close keyword mechanism did not fire. Already-closed issues are
-	// a no-op at the GraphQL level.
-	issueClosed := false
+	// auto-close keyword mechanism did not fire before this hook runs. When
+	// the keyword mechanism DID already fire (e.g. the merged PR body said
+	// "Closes #N" and GitHub closed the issue as part of the merge), this
+	// call races against — and typically loses to — that auto-close: it
+	// returns a GraphQL error because the issue is already closed, NOT a
+	// no-op (github.IssueService.CloseIssue has no already-closed special
+	// case; any GraphQL error propagates verbatim).
+	//
+	// `alreadyClosed` recovers from that race using the issue.State fetched
+	// above — before this call, so it reflects whatever GitHub had already
+	// done by fetch time. The issue is considered closed when EITHER this
+	// call succeeded OR it was already CLOSED at fetch time, so downstream
+	// reconciliation (board-Done sync, survival eligibility) runs in both
+	// the closed-by-us and closed-by-keyword-race cases (#686) — not just
+	// the case where this hook's own call happened to win the race.
+	alreadyClosed := strings.EqualFold(issue.State, "CLOSED")
+	closedByUs := false
 	if closeErr := issueCloser.CloseIssue(ctx, issue.NodeID); closeErr != nil {
-		fmt.Fprintf(os.Stderr, "Warning: post-merge issue close failed for #%d: %v\n", input.IssueNumber, closeErr)
+		if alreadyClosed {
+			fmt.Fprintf(os.Stderr, "Post-merge: issue #%d was already closed (likely GitHub's Closes-keyword auto-close winning the race) — CloseIssue call was redundant: %v\n", input.IssueNumber, closeErr)
+		} else {
+			fmt.Fprintf(os.Stderr, "Warning: post-merge issue close failed for #%d: %v\n", input.IssueNumber, closeErr)
+		}
 	} else {
-		issueClosed = true
+		closedByUs = true
 		fmt.Fprintf(os.Stderr, "Post-merge: closed issue #%d\n", input.IssueNumber)
 	}
+	issueClosed := closedByUs || alreadyClosed
 
 	out := PostMergeResult{IssueClosed: issueClosed, MergedCommitSha: mergedSha, MergedAt: mergedAt}
 

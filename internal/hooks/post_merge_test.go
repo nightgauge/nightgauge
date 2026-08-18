@@ -797,6 +797,155 @@ func TestPostMergeNonEpicSkipsOrphanClose(t *testing.T) {
 	}
 }
 
+// --- Board sync / issue-closed race (#686) ---
+//
+// GitHub's Closes-keyword auto-close and this hook's own CloseIssue call race
+// to close the same issue. GetIssue (called before CloseIssue) captures
+// issue.State as of fetch time; when the keyword mechanism already won, that
+// pre-fetched State already reads CLOSED and the hook's own CloseIssue call
+// then errors (issues.go has no already-closed special case — see
+// mockIssueCloser err below simulating that GraphQL error). The board-Done
+// sync and SurvivalEligible must both key off "is the issue actually
+// closed", not "did this hook's own CloseIssue call succeed".
+
+// TestPostMergeBoardSyncFiresWhenClosedByKeywordRace reproduces the actual
+// production race (#686): the merged PR body contained a Closes-keyword and
+// GitHub closed the issue as part of the merge, before this hook ran. The
+// pre-fetched issue.State already reads CLOSED, and the hook's own
+// CloseIssue call errors (racing against — and losing to — the already-
+// applied close). The board-Done sync must still fire.
+func TestPostMergeBoardSyncFiresWhenClosedByKeywordRace(t *testing.T) {
+	fetcher := &mockFetcher{issues: map[string]*types.Issue{
+		"nightgauge/nightgauge#700": {
+			NodeID:            "I_node700",
+			Number:            700,
+			State:             "CLOSED", // already closed via Closes-keyword before the hook ran
+			ParentIssueNumber: 0,
+		},
+	}}
+	issueCloser := &mockIssueCloser{err: fmt.Errorf("GraphQL: Validation Failed: Could not close issue: already closed")}
+	epicCloser := &mockEpicAutoCloser{}
+	board := &mockBoardSyncer{}
+
+	result := EvaluatePostMerge(context.Background(), fetcher, issueCloser, epicCloser, nil, board, PostMergeInput{
+		IssueNumber:     700,
+		RepositoryOwner: "nightgauge",
+		RepositoryName:  "nightgauge",
+		ProjectNumber:   6,
+	})
+
+	if !board.called {
+		t.Fatal("expected board SyncStatus to fire when the issue is already closed (Closes-keyword race), even though the hook's own CloseIssue call errored")
+	}
+	if board.calledWith.number != 700 || board.calledWith.status != "Done" {
+		t.Errorf("SyncStatus called with (#%d, %q), want (#700, Done)", board.calledWith.number, board.calledWith.status)
+	}
+	if !result.IssueDoneSynced {
+		t.Error("expected IssueDoneSynced=true for the closed-by-keyword race case")
+	}
+	if !result.IssueClosed {
+		t.Error("expected IssueClosed=true — the issue IS closed, regardless of who closed it")
+	}
+}
+
+// TestPostMergeSurvivalEligibleWhenClosedByKeywordRace extends the same race
+// to SurvivalEligible: a single-issue merge that closed via the keyword race
+// (this hook's own CloseIssue call errors) must still be eligible to seed a
+// survival record when a merge breadcrumb was captured.
+func TestPostMergeSurvivalEligibleWhenClosedByKeywordRace(t *testing.T) {
+	fetcher := &mockFetcher{issues: map[string]*types.Issue{
+		"nightgauge/nightgauge#702": {
+			NodeID: "I_node702",
+			Number: 702,
+			State:  "CLOSED",
+		},
+	}}
+	issueCloser := &mockIssueCloser{err: fmt.Errorf("already closed")}
+	epicCloser := &mockEpicAutoCloser{}
+	verifier := &mockPRVerifierWithMerge{
+		state:    "MERGED",
+		sha:      "racesha",
+		mergedAt: "2026-06-26T12:00:00Z",
+	}
+
+	result := EvaluatePostMerge(context.Background(), fetcher, issueCloser, epicCloser, verifier, nil, PostMergeInput{
+		IssueNumber:     702,
+		RepositoryOwner: "nightgauge",
+		RepositoryName:  "nightgauge",
+		PRNumber:        150,
+	})
+
+	if !result.SurvivalEligible {
+		t.Error("expected SurvivalEligible=true when the issue closed via the keyword race, breadcrumb captured, non-epic merge")
+	}
+}
+
+// TestPostMergeBoardSyncFiresWhenHookClosesIssueItself preserves the
+// pre-existing behaviour for the other arm: the issue is genuinely OPEN at
+// fetch time (GitHub's keyword mechanism did NOT fire) and this hook's own
+// CloseIssue call is what closes it. The board sync must still fire.
+func TestPostMergeBoardSyncFiresWhenHookClosesIssueItself(t *testing.T) {
+	fetcher := &mockFetcher{issues: map[string]*types.Issue{
+		"nightgauge/nightgauge#703": {
+			NodeID: "I_node703",
+			Number: 703,
+			State:  "OPEN", // genuinely open before the hook runs
+		},
+	}}
+	issueCloser := &mockIssueCloser{} // succeeds
+	epicCloser := &mockEpicAutoCloser{}
+	board := &mockBoardSyncer{}
+
+	result := EvaluatePostMerge(context.Background(), fetcher, issueCloser, epicCloser, nil, board, PostMergeInput{
+		IssueNumber:     703,
+		RepositoryOwner: "nightgauge",
+		RepositoryName:  "nightgauge",
+		ProjectNumber:   6,
+	})
+
+	if !board.called {
+		t.Fatal("expected board SyncStatus to fire when the hook's own CloseIssue call closes the issue")
+	}
+	if !result.IssueClosed {
+		t.Error("expected IssueClosed=true when the hook's own close call succeeds")
+	}
+}
+
+// TestPostMergeBoardSyncSkippedWhenIssueGenuinelyOpenAndCloseFails preserves
+// the sane, documented behaviour for a real failure: the issue is genuinely
+// still OPEN at fetch time AND the close attempt genuinely fails (e.g. a
+// network timeout, not an already-closed race). The board sync must NOT
+// fire — there is nothing to reconcile because the issue never closed.
+func TestPostMergeBoardSyncSkippedWhenIssueGenuinelyOpenAndCloseFails(t *testing.T) {
+	fetcher := &mockFetcher{issues: map[string]*types.Issue{
+		"nightgauge/nightgauge#701": {
+			NodeID: "I_node701",
+			Number: 701,
+			State:  "OPEN",
+		},
+	}}
+	issueCloser := &mockIssueCloser{err: fmt.Errorf("network timeout")}
+	epicCloser := &mockEpicAutoCloser{}
+	board := &mockBoardSyncer{}
+
+	result := EvaluatePostMerge(context.Background(), fetcher, issueCloser, epicCloser, nil, board, PostMergeInput{
+		IssueNumber:     701,
+		RepositoryOwner: "nightgauge",
+		RepositoryName:  "nightgauge",
+		ProjectNumber:   6,
+	})
+
+	if board.called {
+		t.Error("board SyncStatus must NOT fire when the issue is genuinely still open and the close attempt genuinely failed")
+	}
+	if result.IssueDoneSynced {
+		t.Error("expected IssueDoneSynced=false")
+	}
+	if result.IssueClosed {
+		t.Error("expected IssueClosed=false — the issue is not actually closed")
+	}
+}
+
 // TestPostMergeEpicUmbrellaNotSurvivalEligible asserts the #4151 attribution
 // boundary: an epic-umbrella merge (N issues → 1 commit) is NOT survival-eligible
 // even when a merge breadcrumb is captured, because the N→1 mapping makes
