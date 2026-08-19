@@ -307,6 +307,33 @@ describe("MyModule", () => {
 });
 ```
 
+> **Vitest 4 trap — `restoreAllMocks()` clears implementations set in a
+> `vi.mock` factory.** The pattern above is safe only when every mock
+> implementation is installed per-test. If a shared stub is set inside the
+> `vi.mock` factory, the first test that calls `mockImplementation` leaves
+> **every later test in the file** with a mock returning `undefined`. The
+> failure surfaces far from its cause — as "spawn was never called" in an
+> unrelated `describe` — and one override once took out 132 tests.
+>
+> Reinstall shared stubs in a top-level `beforeEach`, not only in the factory.
+
+### Where extension tests must live
+
+`packages/nightgauge-vscode/vitest.config.ts` sets
+`include: ["tests/**/*.test.ts"]`. **A test placed anywhere else is silently
+never run** — it is not skipped, not reported, and not counted; it simply does
+not exist as far as CI is concerned.
+
+| Package             | Tests live in | Also collected from `src/**/__tests__/`? |
+| ------------------- | ------------- | ---------------------------------------- |
+| `nightgauge-vscode` | `tests/**`    | **No**                                   |
+| `nightgauge-sdk`    | `tests/**`    | **Yes**                                  |
+
+The two configs differ, which is exactly how the mistake gets made. Nine
+`.test.ts` files currently sit under `packages/nightgauge-vscode/src/**/__tests__/`
+and none of them has ever run. Before adding a test to the extension, confirm it
+appears in the run count; a green suite is not evidence that your file was in it.
+
 ### Mock Factories
 
 Mock factories are located in `tests/mocks/` and provide consistent test data:
@@ -405,6 +432,66 @@ const issue = createMockIssueWithMappedFields({
 
 expect(issue.priority).toBe("P1"); // Auto-mapped from priority:high
 expect(issue.size).toBe("M"); // Auto-mapped from size:M
+```
+
+### Mutation testing — the only proof an assertion is load-bearing
+
+A passing test proves nothing about whether it would catch the bug. **Mutation-
+test every new assertion**: stub the fix out, confirm the test fails, restore,
+then `diff` against a saved copy to prove the tree is byte-identical.
+
+Three rules, each learned from a survivor that looked like a weak assertion and
+was not:
+
+1. **Verify the mutation actually applied.** A substitution that did not land
+   looks exactly like a weak test. Anchor on an exact string and assert the
+   anchor was found. A mutation that does not APPLY is never a pass.
+2. **When a mutation SURVIVES, suspect the fixture before the assertion.** Of
+   15 mutations run against #334, four survived and every one was a fixture that
+   did not reproduce production. The sharpest: deleting the "keep the default
+   branch" guard survived because the fixture left the primary checkout _on_
+   `main`, and git refuses `branch -D main` unaided — the very state the bug
+   requires was missing. Reproduce the production **layout**, not just a
+   directory: `filepath.Join(t.TempDir(), "skills")`, not a bare `t.TempDir()`,
+   when the code under test keys off a path segment.
+3. **Pick fixture values that are not substrings of the fallback.** An "ignores
+   the envelope, always returns the default" mutation survived because the
+   asserted tool list `Read,Write,Edit,Glob,Grep` is a prefix of the default
+   `Read,Write,Edit,Glob,Grep,Bash,Task`. Assert equality, not containment.
+
+### Prefer an assertion the bug would actually fail
+
+Error-only assertions pass against whole classes of real defects. #296's
+teardown returned no error _while destroying volumes_; #298's handler returned
+`"ok"` _while wiping the wrong tree_; #323's `cleanup` returned no error _while
+tearing the stack down_. One error-only assertion passes all three.
+
+**Assert the side effect** — add a test seam if that is the only way to reach it.
+
+Two corollaries:
+
+- **A new refusal path needs a test for "nothing to refuse."** #325 fired its
+  guard on zero projects and turned an ordinary no-op into a non-zero exit.
+  Every existing test supplied at least one item, so nothing caught it.
+- **Run the built binary after touching a CLI's control flow.** #325 was found
+  that way and by nothing else — the suite was green.
+- **After a migration, a test that still passes is not evidence.** Two
+  `skillRunner.test.ts` tests went green against a new stub while asserting
+  things that no longer existed, including a fallback path that had never
+  existed on disk (its own `fs` mock invented it). Read every test in a migrated
+  area and ask what would have to break for it to fail; delete the ones whose
+  answer is "nothing."
+
+### Assert against CI's git config, not yours
+
+`status.showUntrackedFiles=all` is set globally on some maintainer machines.
+Porcelain's default collapses an untracked directory to a single entry, so a
+fixture asserting on bare `git status --porcelain` passes locally and fails in
+CI. **Pin `--untracked-files=all` in tests**, exactly as the production code
+does (#223). To reproduce CI locally:
+
+```bash
+git config --global --unset status.showUntrackedFiles
 ```
 
 ### Coverage Goals
