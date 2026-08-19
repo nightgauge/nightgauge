@@ -7,6 +7,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/nightgauge/nightgauge/internal/workspacemanifest"
+	"github.com/nightgauge/nightgauge/internal/workspacemanifest/wsmfixture"
 )
 
 // newWorkspace builds a throwaway workspace rooted at a temp dir, chdirs into
@@ -53,7 +56,7 @@ func runRepo(t *testing.T, args ...string) (string, error) {
 }
 
 func TestRepoList(t *testing.T) {
-	newWorkspace(t, realisticManifest)
+	newWorkspace(t, wsmfixture.Realistic)
 
 	out, err := runRepo(t, "list")
 	if err != nil {
@@ -67,7 +70,7 @@ func TestRepoList(t *testing.T) {
 }
 
 func TestRepoListJSON(t *testing.T) {
-	newWorkspace(t, realisticManifest)
+	newWorkspace(t, wsmfixture.Realistic)
 
 	out, err := runRepo(t, "list", "--json")
 	if err != nil {
@@ -91,7 +94,7 @@ func TestRepoListJSON(t *testing.T) {
 // TestRepoAddRejectsZeroProject is the footgun this command exists to close: a
 // zero project number resolves to project 0 and silently misroutes issues.
 func TestRepoAddRejectsZeroProject(t *testing.T) {
-	path := newWorkspace(t, realisticManifest, "delta")
+	path := newWorkspace(t, wsmfixture.Realistic, "delta")
 	before, _ := os.ReadFile(path)
 
 	out, err := runRepo(t, "add", "--name", "delta", "--path", "./delta", "--project", "0")
@@ -102,20 +105,20 @@ func TestRepoAddRejectsZeroProject(t *testing.T) {
 		t.Errorf("unhelpful error for --project 0: %v", err)
 	}
 	after, _ := os.ReadFile(path)
-	if !bytesEqual(before, after) {
+	if !bytes.Equal(before, after) {
 		t.Error("manifest was modified by a rejected add")
 	}
 }
 
 func TestRepoAddRejectsNegativeProject(t *testing.T) {
-	newWorkspace(t, realisticManifest, "delta")
+	newWorkspace(t, wsmfixture.Realistic, "delta")
 	if _, err := runRepo(t, "add", "--name", "delta", "--path", "./delta", "--project", "-3"); err == nil {
 		t.Fatal("--project -3 was accepted")
 	}
 }
 
 func TestRepoAddRejectsDuplicateName(t *testing.T) {
-	path := newWorkspace(t, realisticManifest, "beta")
+	path := newWorkspace(t, wsmfixture.Realistic, "beta")
 	before, _ := os.ReadFile(path)
 
 	_, err := runRepo(t, "add", "--name", "beta", "--path", "./beta", "--project", "7")
@@ -126,13 +129,13 @@ func TestRepoAddRejectsDuplicateName(t *testing.T) {
 		t.Errorf("unhelpful duplicate error: %v", err)
 	}
 	after, _ := os.ReadFile(path)
-	if !bytesEqual(before, after) {
+	if !bytes.Equal(before, after) {
 		t.Error("manifest was modified by a rejected add")
 	}
 }
 
 func TestRepoAddRejectsMissingPath(t *testing.T) {
-	newWorkspace(t, realisticManifest)
+	newWorkspace(t, wsmfixture.Realistic)
 	_, err := runRepo(t, "add", "--name", "delta", "--path", "./nowhere", "--project", "9")
 	if err == nil {
 		t.Fatal("a non-existent path was accepted")
@@ -150,7 +153,7 @@ func TestRepoAddRejectsNonGitPath(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(root, ".vscode", "nightgauge-workspace.yaml"),
-		[]byte(realisticManifest), 0o644); err != nil {
+		[]byte(wsmfixture.Realistic), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.MkdirAll(filepath.Join(root, "notarepo"), 0o755); err != nil {
@@ -172,7 +175,7 @@ func TestRepoAddRejectsNonGitPath(t *testing.T) {
 }
 
 func TestRepoAddRejectsBadRole(t *testing.T) {
-	newWorkspace(t, realisticManifest, "delta")
+	newWorkspace(t, wsmfixture.Realistic, "delta")
 	_, err := runRepo(t, "add", "--name", "delta", "--path", "./delta", "--project", "9", "--role", "overlord")
 	if err == nil {
 		t.Fatal("an invalid role was accepted")
@@ -183,18 +186,18 @@ func TestRepoAddRejectsBadRole(t *testing.T) {
 }
 
 func TestRepoAddWritesValidatedEntry(t *testing.T) {
-	path := newWorkspace(t, realisticManifest, "delta")
+	path := newWorkspace(t, wsmfixture.Realistic, "delta")
 
 	out, err := runRepo(t, "add", "--name", "delta", "--path", "./delta", "--role", "secondary", "--project", "9")
 	if err != nil {
 		t.Fatalf("add: %v\n%s", err, out)
 	}
 	data, _ := os.ReadFile(path)
-	m, err := parseManifest(path, data)
+	m, err := workspacemanifest.Parse(path, data)
 	if err != nil {
 		t.Fatalf("written manifest does not parse: %v", err)
 	}
-	e, ok := m.find("delta")
+	e, ok := m.Find("delta")
 	if !ok {
 		t.Fatalf("delta not in manifest:\n%s", data)
 	}
@@ -214,7 +217,7 @@ func TestRepoRemoveRefusesRoutingReference(t *testing.T) {
 		{"gamma", "routing.patterns[web].preferred_repo"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			path := newWorkspace(t, realisticManifest)
+			path := newWorkspace(t, wsmfixture.Realistic)
 			before, _ := os.ReadFile(path)
 
 			_, err := runRepo(t, "remove", "--name", tc.name)
@@ -225,7 +228,7 @@ func TestRepoRemoveRefusesRoutingReference(t *testing.T) {
 				t.Errorf("error does not name the reference %q: %v", tc.wantRef, err)
 			}
 			after, _ := os.ReadFile(path)
-			if !bytesEqual(before, after) {
+			if !bytes.Equal(before, after) {
 				t.Error("manifest was modified by a refused remove")
 			}
 		})
@@ -233,7 +236,7 @@ func TestRepoRemoveRefusesRoutingReference(t *testing.T) {
 }
 
 func TestRepoRemoveForceOverridesRoutingReference(t *testing.T) {
-	path := newWorkspace(t, realisticManifest)
+	path := newWorkspace(t, wsmfixture.Realistic)
 
 	out, err := runRepo(t, "remove", "--name", "gamma", "--force")
 	if err != nil {
@@ -251,7 +254,7 @@ func TestRepoRemoveForceOverridesRoutingReference(t *testing.T) {
 // TestRepoRemoveReportsRetainedComment surfaces the comment-ownership decision
 // to the operator instead of silently relocating text.
 func TestRepoRemoveReportsRetainedComment(t *testing.T) {
-	path := newWorkspace(t, realisticManifest)
+	path := newWorkspace(t, wsmfixture.Realistic)
 
 	out, err := runRepo(t, "remove", "--name", "alpha", "--force")
 	if err != nil {
@@ -267,7 +270,7 @@ func TestRepoRemoveReportsRetainedComment(t *testing.T) {
 }
 
 func TestRepoRemoveUnknownName(t *testing.T) {
-	newWorkspace(t, realisticManifest)
+	newWorkspace(t, wsmfixture.Realistic)
 	_, err := runRepo(t, "remove", "--name", "nosuchrepo")
 	if err == nil {
 		t.Fatal("removing an unknown repository succeeded")
@@ -278,7 +281,7 @@ func TestRepoRemoveUnknownName(t *testing.T) {
 }
 
 func TestRepoRequiresFlags(t *testing.T) {
-	newWorkspace(t, realisticManifest)
+	newWorkspace(t, wsmfixture.Realistic)
 	if _, err := runRepo(t, "add", "--path", "./x", "--project", "1"); err == nil {
 		t.Error("add without --name succeeded")
 	}

@@ -1,52 +1,13 @@
-package workspacecmd
+package workspacemanifest
 
 import (
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/nightgauge/nightgauge/internal/workspacemanifest/wsmfixture"
 )
-
-// realisticManifest mirrors the shape of this repository's own manifest: head
-// comment, a comment block owned by the FIRST repositories entry, blank-line
-// separators, a trailing NOTE block, and a routing section. Every formatting
-// feature here is one a marshal-based writer would destroy.
-const realisticManifest = `# Workspace Configuration
-#
-# Paths are relative to this file's location.
-
-workspace:
-  name: "Test Workspace"
-  description: "fixture"
-
-repositories:
-  # ` + "`project_number`" + ` — explicit repo→project mapping. Without it,
-  # defaults caused silent cross-repo misroutes.
-  - name: alpha
-    path: .
-    role: primary
-    project_number: 3
-
-  - name: beta
-    path: ../beta
-    role: primary
-    project_number: 4
-
-  - name: gamma
-    path: ../gamma
-    role: secondary
-    project_number: 5
-
-# NOTE: delta is deliberately NOT listed — it carries no project board, and
-# project_number has no zero-value guard.
-
-routing:
-  default_repository: alpha
-  patterns:
-    - id: web
-      keywords: [angular, web]
-      preferred_repo: gamma
-`
 
 func writeFixture(t *testing.T, body string) string {
 	t.Helper()
@@ -63,18 +24,18 @@ func writeFixture(t *testing.T, body string) string {
 }
 
 func TestParseManifest_StructureAndLayout(t *testing.T) {
-	m, err := parseManifest("test.yaml", []byte(realisticManifest))
+	m, err := Parse("test.yaml", []byte(wsmfixture.Realistic))
 	if err != nil {
-		t.Fatalf("parseManifest: %v", err)
+		t.Fatalf("Parse: %v", err)
 	}
-	if len(m.entries) != 3 {
-		t.Fatalf("entries = %d, want 3", len(m.entries))
+	if len(m.Entries) != 3 {
+		t.Fatalf("entries = %d, want 3", len(m.Entries))
 	}
-	if m.entries[0].Name != "alpha" || m.entries[0].ProjectNumber != 3 {
-		t.Errorf("entry[0] = %+v", m.entries[0])
+	if m.Entries[0].Name != "alpha" || m.Entries[0].ProjectNumber != 3 {
+		t.Errorf("entry[0] = %+v", m.Entries[0])
 	}
-	if m.entries[2].Role != "secondary" {
-		t.Errorf("entry[2].Role = %q, want secondary", m.entries[2].Role)
+	if m.Entries[2].Role != "secondary" {
+		t.Errorf("entry[2].Role = %q, want secondary", m.Entries[2].Role)
 	}
 	if !m.blankSeparated {
 		t.Error("blankSeparated = false, want true — fixture separates entries with blank lines")
@@ -84,11 +45,11 @@ func TestParseManifest_StructureAndLayout(t *testing.T) {
 	}
 	// The comment block belongs to the FIRST entry, which is the whole reason
 	// removal must not delete an entry's leading comment.
-	if m.entries[0].commentStart == 0 {
+	if m.Entries[0].commentStart == 0 {
 		t.Error("entry[0].commentStart = 0, want the project_number comment block")
 	}
-	if m.entries[1].commentStart != 0 {
-		t.Errorf("entry[1].commentStart = %d, want 0", m.entries[1].commentStart)
+	if m.Entries[1].commentStart != 0 {
+		t.Errorf("entry[1].commentStart = %d, want 0", m.Entries[1].commentStart)
 	}
 	if m.routingDefault != "alpha" {
 		t.Errorf("routingDefault = %q, want alpha", m.routingDefault)
@@ -102,28 +63,28 @@ func TestParseManifest_StructureAndLayout(t *testing.T) {
 // a line splicer instead of yaml.Marshal. A marshal-based writer fails this on
 // the first write by dropping every blank line.
 func TestAddRemoveRoundTripIsByteIdentical(t *testing.T) {
-	original := []byte(realisticManifest)
+	original := []byte(wsmfixture.Realistic)
 
-	m, err := parseManifest("test.yaml", original)
+	m, err := Parse("test.yaml", original)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := m.addEntry(manifestEntry{Name: "delta", Path: "../delta", Role: "primary", ProjectNumber: 9}); err != nil {
+	if err := m.AddEntry(Entry{Name: "delta", Path: "../delta", Role: "primary", ProjectNumber: 9}); err != nil {
 		t.Fatal(err)
 	}
 	added := m.render()
 	if bytesEqual(added, original) {
 		t.Fatal("add produced an identical file — nothing was written")
 	}
-	if err := validateManifestBytes(added); err != nil {
+	if err := ValidateBytes(added); err != nil {
 		t.Fatalf("added document does not validate: %v", err)
 	}
 
-	m2, err := parseManifest("test.yaml", added)
+	m2, err := Parse("test.yaml", added)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := m2.removeEntry("delta"); err != nil {
+	if _, err := m2.RemoveEntry("delta"); err != nil {
 		t.Fatal(err)
 	}
 	back := m2.render()
@@ -134,11 +95,11 @@ func TestAddRemoveRoundTripIsByteIdentical(t *testing.T) {
 }
 
 func TestAddPreservesCommentsAndFormatting(t *testing.T) {
-	m, err := parseManifest("test.yaml", []byte(realisticManifest))
+	m, err := Parse("test.yaml", []byte(wsmfixture.Realistic))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := m.addEntry(manifestEntry{Name: "delta", Path: "../delta", ProjectNumber: 9}); err != nil {
+	if err := m.AddEntry(Entry{Name: "delta", Path: "../delta", ProjectNumber: 9}); err != nil {
 		t.Fatal(err)
 	}
 	out := string(m.render())
@@ -168,8 +129,8 @@ func TestAddPreservesCommentsAndFormatting(t *testing.T) {
 }
 
 func TestAddRejectsDuplicateName(t *testing.T) {
-	m, _ := parseManifest("test.yaml", []byte(realisticManifest))
-	err := m.addEntry(manifestEntry{Name: "beta", Path: "../beta2", ProjectNumber: 7})
+	m, _ := Parse("test.yaml", []byte(wsmfixture.Realistic))
+	err := m.AddEntry(Entry{Name: "beta", Path: "../beta2", ProjectNumber: 7})
 	if err == nil {
 		t.Fatal("adding a duplicate name succeeded")
 	}
@@ -182,13 +143,13 @@ func TestAddRejectsDuplicateName(t *testing.T) {
 // four-line block belongs to entry[0] but documents the whole list, so removing
 // entry[0] must not delete it.
 func TestRemoveRetainsOwnedCommentBlock(t *testing.T) {
-	m, _ := parseManifest("test.yaml", []byte(realisticManifest))
-	kept, err := m.removeEntry("alpha")
+	m, _ := Parse("test.yaml", []byte(wsmfixture.Realistic))
+	kept, err := m.RemoveEntry("alpha")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !kept {
-		t.Error("removeEntry reported no retained comment, want true")
+		t.Error("RemoveEntry reported no retained comment, want true")
 	}
 	out := string(m.render())
 	if strings.Contains(out, "- name: alpha") {
@@ -197,7 +158,7 @@ func TestRemoveRetainsOwnedCommentBlock(t *testing.T) {
 	if !strings.Contains(out, "# `project_number`") {
 		t.Errorf("the comment block documenting the list was deleted with the entry:\n%s", out)
 	}
-	if err := validateManifestBytes(m.render()); err != nil {
+	if err := ValidateBytes(m.render()); err != nil {
 		t.Errorf("result does not validate: %v", err)
 	}
 }
@@ -205,8 +166,8 @@ func TestRemoveRetainsOwnedCommentBlock(t *testing.T) {
 func TestRemoveMiddleAndLastEntry(t *testing.T) {
 	for _, name := range []string{"beta", "gamma"} {
 		t.Run(name, func(t *testing.T) {
-			m, _ := parseManifest("test.yaml", []byte(realisticManifest))
-			if _, err := m.removeEntry(name); err != nil {
+			m, _ := Parse("test.yaml", []byte(wsmfixture.Realistic))
+			if _, err := m.RemoveEntry(name); err != nil {
 				t.Fatal(err)
 			}
 			out := string(m.render())
@@ -219,23 +180,23 @@ func TestRemoveMiddleAndLastEntry(t *testing.T) {
 			if !strings.Contains(out, "routing:") {
 				t.Error("routing section was damaged")
 			}
-			if err := validateManifestBytes([]byte(out)); err != nil {
+			if err := ValidateBytes([]byte(out)); err != nil {
 				t.Errorf("result does not validate: %v\n%s", err, out)
 			}
-			m2, err := parseManifest("t", []byte(out))
+			m2, err := Parse("t", []byte(out))
 			if err != nil {
 				t.Fatalf("result does not re-parse: %v", err)
 			}
-			if len(m2.entries) != 2 {
-				t.Errorf("entries after removal = %d, want 2", len(m2.entries))
+			if len(m2.Entries) != 2 {
+				t.Errorf("entries after removal = %d, want 2", len(m2.Entries))
 			}
 		})
 	}
 }
 
 func TestRemoveUnknownName(t *testing.T) {
-	m, _ := parseManifest("test.yaml", []byte(realisticManifest))
-	if _, err := m.removeEntry("nope"); err == nil {
+	m, _ := Parse("test.yaml", []byte(wsmfixture.Realistic))
+	if _, err := m.RemoveEntry("nope"); err == nil {
 		t.Fatal("removing an absent entry succeeded")
 	}
 }
@@ -296,12 +257,12 @@ func TestValidateManifestBytes(t *testing.T) {
 		},
 		{
 			name: "valid",
-			yaml: realisticManifest,
+			yaml: wsmfixture.Realistic,
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			err := validateManifestBytes([]byte(tc.yaml))
+			err := ValidateBytes([]byte(tc.yaml))
 			if tc.wantErr == "" {
 				if err != nil {
 					t.Fatalf("unexpected error: %v", err)
@@ -321,20 +282,20 @@ func TestValidateManifestBytes(t *testing.T) {
 // TestWriteAtomicRefusesInvalidResult proves the original file survives when
 // the would-be result fails validation.
 func TestWriteAtomicRefusesInvalidResult(t *testing.T) {
-	path := writeFixture(t, realisticManifest)
-	m, err := loadManifest(path)
+	path := writeFixture(t, wsmfixture.Realistic)
+	m, err := Load(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// A duplicate name bypassing addEntry's own guard — the writer must still
+	// A duplicate name bypassing AddEntry's own guard — the writer must still
 	// refuse, because validation is the last line of defence for every caller.
 	m.lines = append(m.lines, "  - name: alpha", "    path: ../alpha-dup")
 
-	if err := m.writeAtomic(); err == nil {
-		t.Fatal("writeAtomic accepted an invalid document")
+	if err := m.Write(); err == nil {
+		t.Fatal("Write accepted an invalid document")
 	}
 	on, _ := os.ReadFile(path)
-	if string(on) != realisticManifest {
+	if string(on) != wsmfixture.Realistic {
 		t.Errorf("original file was modified despite the refusal:\n%s", on)
 	}
 	entries, _ := os.ReadDir(filepath.Dir(path))
@@ -346,15 +307,15 @@ func TestWriteAtomicRefusesInvalidResult(t *testing.T) {
 }
 
 // TestWriteAtomicLeavesNoTempOnFailure simulates an unwritable destination:
-// the rename fails, and neither a truncated manifest nor a stray temp file may
+// the rename fails, and neither a truncated Manifest nor a stray temp file may
 // remain.
 func TestWriteAtomicLeavesNoTempOnFailure(t *testing.T) {
-	path := writeFixture(t, realisticManifest)
-	m, err := loadManifest(path)
+	path := writeFixture(t, wsmfixture.Realistic)
+	m, err := Load(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := m.addEntry(manifestEntry{Name: "delta", Path: "../delta", ProjectNumber: 9}); err != nil {
+	if err := m.AddEntry(Entry{Name: "delta", Path: "../delta", ProjectNumber: 9}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -368,8 +329,8 @@ func TestWriteAtomicLeavesNoTempOnFailure(t *testing.T) {
 		t.Skip("running as root — a read-only directory does not block writes")
 	}
 
-	if err := m.writeAtomic(); err == nil {
-		t.Fatal("writeAtomic succeeded against a read-only directory")
+	if err := m.Write(); err == nil {
+		t.Fatal("Write succeeded against a read-only directory")
 	}
 	_ = os.Chmod(dir, 0o755)
 
@@ -377,7 +338,7 @@ func TestWriteAtomicLeavesNoTempOnFailure(t *testing.T) {
 	if readErr != nil {
 		t.Fatalf("manifest is gone after a failed write: %v", readErr)
 	}
-	if string(on) != realisticManifest {
+	if string(on) != wsmfixture.Realistic {
 		t.Error("manifest was modified by a failed write")
 	}
 	entries, _ := os.ReadDir(dir)
@@ -389,18 +350,18 @@ func TestWriteAtomicLeavesNoTempOnFailure(t *testing.T) {
 }
 
 func TestWriteAtomicPreservesFileMode(t *testing.T) {
-	path := writeFixture(t, realisticManifest)
+	path := writeFixture(t, wsmfixture.Realistic)
 	if err := os.Chmod(path, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	m, err := loadManifest(path)
+	m, err := Load(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := m.addEntry(manifestEntry{Name: "delta", Path: "../delta", ProjectNumber: 9}); err != nil {
+	if err := m.AddEntry(Entry{Name: "delta", Path: "../delta", ProjectNumber: 9}); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.writeAtomic(); err != nil {
+	if err := m.Write(); err != nil {
 		t.Fatal(err)
 	}
 	st, err := os.Stat(path)
@@ -412,18 +373,18 @@ func TestWriteAtomicPreservesFileMode(t *testing.T) {
 	}
 }
 
-// TestAddWithoutBlankSeparators covers a compact manifest, where an added entry
+// TestAddWithoutBlankSeparators covers a compact Manifest, where an added entry
 // must NOT invent a blank line the file's own style does not use.
 func TestAddWithoutBlankSeparators(t *testing.T) {
 	compact := "workspace:\n  name: w\nrepositories:\n  - name: a\n    path: .\n    project_number: 1\n  - name: b\n    path: ../b\n    project_number: 2\n"
-	m, err := parseManifest("t", []byte(compact))
+	m, err := Parse("t", []byte(compact))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if m.blankSeparated {
 		t.Fatal("blankSeparated = true for a compact manifest")
 	}
-	if err := m.addEntry(manifestEntry{Name: "c", Path: "../c", ProjectNumber: 3}); err != nil {
+	if err := m.AddEntry(Entry{Name: "c", Path: "../c", ProjectNumber: 3}); err != nil {
 		t.Fatal(err)
 	}
 	want := compact + "  - name: c\n    path: ../c\n    project_number: 3\n"
@@ -436,14 +397,14 @@ func TestAddWithoutBlankSeparators(t *testing.T) {
 // removes the file's final newline.
 func TestManifestWithoutTrailingNewline(t *testing.T) {
 	src := "workspace:\n  name: w\nrepositories:\n  - name: a\n    path: .\n    project_number: 1"
-	m, err := parseManifest("t", []byte(src))
+	m, err := Parse("t", []byte(src))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if m.trailingNewline {
 		t.Fatal("trailingNewline = true for a file that has none")
 	}
-	if err := m.addEntry(manifestEntry{Name: "b", Path: "../b", ProjectNumber: 2}); err != nil {
+	if err := m.AddEntry(Entry{Name: "b", Path: "../b", ProjectNumber: 2}); err != nil {
 		t.Fatal(err)
 	}
 	if strings.HasSuffix(string(m.render()), "\n") {
@@ -452,22 +413,22 @@ func TestManifestWithoutTrailingNewline(t *testing.T) {
 }
 
 func TestQuotedScalarsSurvive(t *testing.T) {
-	m, _ := parseManifest("t", []byte(realisticManifest))
+	m, _ := Parse("t", []byte(wsmfixture.Realistic))
 	// A name needing quotes must be emitted quoted, or the file stops parsing.
-	if err := m.addEntry(manifestEntry{Name: "yes", Path: "./a b", ProjectNumber: 2}); err != nil {
+	if err := m.AddEntry(Entry{Name: "yes", Path: "./a b", ProjectNumber: 2}); err != nil {
 		t.Fatal(err)
 	}
 	out := m.render()
-	if err := validateManifestBytes(out); err != nil {
+	if err := ValidateBytes(out); err != nil {
 		t.Fatalf("document with quote-needing scalars does not validate: %v\n%s", err, out)
 	}
-	m2, err := parseManifest("t", out)
+	m2, err := Parse("t", out)
 	if err != nil {
 		t.Fatalf("re-parse failed: %v", err)
 	}
-	e, ok := m2.find("yes")
+	e, ok := m2.Find("yes")
 	if !ok {
-		t.Fatalf("entry %q not found after round trip; got %+v", "yes", m2.entries)
+		t.Fatalf("entry %q not found after round trip; got %+v", "yes", m2.Entries)
 	}
 	if e.Path != "./a b" {
 		t.Errorf("path = %q, want %q", e.Path, "./a b")
@@ -478,12 +439,12 @@ func TestQuotedScalarsSurvive(t *testing.T) {
 // validateWorkspaceConfig in agreement. The issue calls a divergence a defect,
 // and nothing else in CI compares them.
 func TestRoleEnumMatchesExtension(t *testing.T) {
-	src, err := os.ReadFile(filepath.Join("..", "..", "..",
+	src, err := os.ReadFile(filepath.Join("..", "..",
 		"packages", "nightgauge-vscode", "src", "utils", "workspaceDetection.ts"))
 	if err != nil {
 		t.Skipf("extension source unavailable: %v", err)
 	}
-	for _, role := range validRoles {
+	for _, role := range ValidRoles {
 		if !strings.Contains(string(src), `"`+role+`"`) {
 			t.Errorf("role %q is accepted by Go but not present in the extension validator", role)
 		}
@@ -494,43 +455,43 @@ func TestRoleEnumMatchesExtension(t *testing.T) {
 }
 
 // TestRealRepositoryManifestRoundTrip runs the splicer against THIS repository's
-// own manifest rather than a fixture. That file is the concrete artifact the
+// own Manifest rather than a fixture. That file is the concrete artifact the
 // acceptance criterion names: it carries a comment block owned by its first
 // entry, a NOTE block explaining why a repo is deliberately absent, and blank
 // separators — the exact combination a marshal-based writer destroys.
 func TestRealRepositoryManifestRoundTrip(t *testing.T) {
-	real := filepath.Join("..", "..", "..", ".vscode", "nightgauge-workspace.yaml")
+	real := filepath.Join("..", "..", ".vscode", "nightgauge-workspace.yaml")
 	original, err := os.ReadFile(real)
 	if err != nil {
 		t.Skipf("repository manifest unavailable: %v", err)
 	}
 
-	m, err := parseManifest(real, original)
+	m, err := Parse(real, original)
 	if err != nil {
 		t.Fatalf("this repository's own manifest does not parse: %v", err)
 	}
-	if len(m.entries) == 0 {
+	if len(m.Entries) == 0 {
 		t.Fatal("no repositories parsed from the real manifest")
 	}
-	if err := validateManifestBytes(original); err != nil {
+	if err := ValidateBytes(original); err != nil {
 		t.Fatalf("this repository's own manifest fails our validator: %v", err)
 	}
 
-	if err := m.addEntry(manifestEntry{
+	if err := m.AddEntry(Entry{
 		Name: "nightgauge-roundtrip-probe", Path: "../probe", Role: "secondary", ProjectNumber: 99,
 	}); err != nil {
 		t.Fatal(err)
 	}
 	added := m.render()
-	if err := validateManifestBytes(added); err != nil {
+	if err := ValidateBytes(added); err != nil {
 		t.Fatalf("real manifest + entry does not validate: %v", err)
 	}
 
-	m2, err := parseManifest(real, added)
+	m2, err := Parse(real, added)
 	if err != nil {
 		t.Fatalf("real manifest + entry does not re-parse: %v", err)
 	}
-	if _, err := m2.removeEntry("nightgauge-roundtrip-probe"); err != nil {
+	if _, err := m2.RemoveEntry("nightgauge-roundtrip-probe"); err != nil {
 		t.Fatal(err)
 	}
 	if back := m2.render(); !bytesEqual(back, original) {

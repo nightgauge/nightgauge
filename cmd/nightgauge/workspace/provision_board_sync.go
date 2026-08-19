@@ -12,6 +12,7 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/config"
 	workspace "github.com/nightgauge/nightgauge/internal/knowledge/workspace"
+	"github.com/nightgauge/nightgauge/internal/workspacemanifest"
 	"github.com/spf13/cobra"
 	yaml "gopkg.in/yaml.v3"
 )
@@ -176,7 +177,7 @@ func runProvisionBoardSync(cmd *cobra.Command, opts provisionOpts) error {
 // buildBoardSyncPlan resolves the workspace members and renders every workflow
 // file, returning a deterministic plan (members and files are sorted).
 func buildBoardSyncPlan(root string, opts provisionOpts) (boardSyncPlan, error) {
-	manifestPath := filepath.Join(root, ".vscode", "nightgauge-workspace.yaml")
+	manifestPath := workspacemanifest.ManifestPath(root)
 	data, err := os.ReadFile(manifestPath)
 	if err != nil {
 		return boardSyncPlan{}, fmt.Errorf("read manifest %s: %w", manifestPath, err)

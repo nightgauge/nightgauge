@@ -12,11 +12,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"text/tabwriter"
 
 	"github.com/nightgauge/nightgauge/internal/config"
 	workspace "github.com/nightgauge/nightgauge/internal/knowledge/workspace"
+	"github.com/nightgauge/nightgauge/internal/workspacemanifest"
 	"github.com/spf13/cobra"
 )
 
@@ -37,7 +39,7 @@ formatting — the manifest carries explanatory comments that are load-bearing
 }
 
 // resolveManifest locates the workspace manifest from the current directory.
-func resolveManifest() (*manifest, error) {
+func resolveManifest() (*workspacemanifest.Manifest, error) {
 	wd, err := os.Getwd()
 	if err != nil {
 		return nil, err
@@ -46,7 +48,7 @@ func resolveManifest() (*manifest, error) {
 	if err != nil {
 		return nil, fmt.Errorf("no workspace manifest found from %s (this command is for multi-repo workspaces): %w", wd, err)
 	}
-	return loadManifest(manifestPath(root))
+	return workspacemanifest.Load(workspacemanifest.ManifestPath(root))
 }
 
 type repoListItem struct {
@@ -66,8 +68,8 @@ func repoListCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			items := make([]repoListItem, 0, len(m.entries))
-			for _, e := range m.entries {
+			items := make([]repoListItem, 0, len(m.Entries))
+			for _, e := range m.Entries {
 				items = append(items, repoListItem{
 					Name:          e.Name,
 					Path:          e.Path,
@@ -120,21 +122,21 @@ A zero project number is rejected from every path: it would resolve to project
 			if strings.TrimSpace(path) == "" {
 				return fmt.Errorf("--path is required")
 			}
-			if role != "" && !containsString(validRoles, role) {
-				return fmt.Errorf("--role must be one of: %s", strings.Join(validRoles, ", "))
+			if role != "" && !slices.Contains(workspacemanifest.ValidRoles, role) {
+				return fmt.Errorf("--role must be one of: %s", strings.Join(workspacemanifest.ValidRoles, ", "))
 			}
 
 			m, err := resolveManifest()
 			if err != nil {
 				return err
 			}
-			if _, exists := m.find(name); exists {
+			if _, exists := m.Find(name); exists {
 				return fmt.Errorf("repository %q is already in the manifest — names must be unique", name)
 			}
 
 			// The path is resolved relative to the manifest's own directory,
 			// matching how every reader resolves repositories[].path.
-			base := filepath.Dir(filepath.Dir(m.path)) // strip /.vscode
+			base := filepath.Dir(filepath.Dir(m.Path())) // strip /.vscode
 			abs := path
 			if !filepath.IsAbs(abs) {
 				abs = filepath.Join(base, path)
@@ -160,7 +162,7 @@ A zero project number is rejected from every path: it would resolve to project
 				project = resolved
 			}
 
-			if err := m.addEntry(manifestEntry{
+			if err := m.AddEntry(workspacemanifest.Entry{
 				Name:          name,
 				Path:          path,
 				Role:          role,
@@ -168,16 +170,16 @@ A zero project number is rejected from every path: it would resolve to project
 			}); err != nil {
 				return err
 			}
-			if err := m.writeAtomic(); err != nil {
+			if err := m.Write(); err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Added %s (path %s, project %d) to %s\n", name, path, project, m.path)
+			fmt.Fprintf(cmd.OutOrStdout(), "Added %s (path %s, project %d) to %s\n", name, path, project, m.Path())
 			return nil
 		},
 	}
 	cmd.Flags().StringVar(&name, "name", "", "Repository name (must be unique)")
 	cmd.Flags().StringVar(&path, "path", "", "Path to the repository, relative to the workspace root")
-	cmd.Flags().StringVar(&role, "role", "", fmt.Sprintf("Repository role (%s)", strings.Join(validRoles, "|")))
+	cmd.Flags().StringVar(&role, "role", "", fmt.Sprintf("Repository role (%s)", strings.Join(workspacemanifest.ValidRoles, "|")))
 	cmd.Flags().IntVar(&project, "project", 0, "Project board number (resolved automatically when omitted)")
 	return cmd
 }
@@ -237,15 +239,15 @@ comment that documents the whole list.`,
 			if err != nil {
 				return err
 			}
-			if _, ok := m.find(name); !ok {
+			if _, ok := m.Find(name); !ok {
 				return fmt.Errorf("repository %q is not in the manifest", name)
 			}
 
 			var refs []string
-			if m.routingDefault == name {
+			if m.RoutingDefault() == name {
 				refs = append(refs, "routing.default_repository")
 			}
-			for _, patternID := range m.routingPreferred[name] {
+			for _, patternID := range m.RoutingPatternsFor(name) {
 				refs = append(refs, fmt.Sprintf("routing.patterns[%s].preferred_repo", patternID))
 			}
 			if len(refs) > 0 && !force {
@@ -255,14 +257,14 @@ comment that documents the whole list.`,
 					name, strings.Join(refs, ", "))
 			}
 
-			keptComment, err := m.removeEntry(name)
+			keptComment, err := m.RemoveEntry(name)
 			if err != nil {
 				return err
 			}
-			if err := m.writeAtomic(); err != nil {
+			if err := m.Write(); err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Removed %s from %s\n", name, m.path)
+			fmt.Fprintf(cmd.OutOrStdout(), "Removed %s from %s\n", name, m.Path())
 			if keptComment {
 				fmt.Fprintf(cmd.OutOrStdout(),
 					"NOTE: a comment block above %s was retained — yaml attaches comments to the entry\n"+
