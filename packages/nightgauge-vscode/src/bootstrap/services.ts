@@ -4122,7 +4122,7 @@ export async function initializeServices(
       agentHeartbeatTokenStorage,
       logger,
       onDemandTokenRefresher,
-      // Opt-in adapter usage reporting (Issue #736). The level is re-read on
+      // Adapter usage reporting (Issues #736, #738). The level is re-read on
       // every beat rather than captured here, so turning reporting off takes
       // effect on the next 30s tick instead of at the next window reload —
       // a privacy switch the operator has to restart to honour is not one
@@ -4132,7 +4132,10 @@ export async function initializeServices(
       // panel read: what gets reported is exactly what the operator can
       // already see locally, never a separate derivation.
       async () => {
-        const level = getUsageReportingLevel();
+        // Consent is resolved by the service that owns it, not re-derived
+        // here: TelemetryConsentService.isEnabled() folds in VSCode's own
+        // telemetry kill switch and the nightgauge.telemetry.enabled setting.
+        const level = getUsageReportingLevel(telemetryConsentService.isEnabled());
         if (level === "off" || adapterUsageService === null) {
           return null;
         }

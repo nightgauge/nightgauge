@@ -11,8 +11,9 @@
  *  - every cloud/account command is hidden behind `nightgauge.cloudEnabled`
  *    in the command palette,
  *  - local commands are NOT hidden (the free product stays fully reachable),
- *  - telemetry stays opt-in (default false) — a guardrail so a future change
- *    cannot silently flip it on.
+ *  - telemetry is opt-out (default true) AND the setting discloses that in its
+ *    own description — a guardrail so the default can never be on without the
+ *    operator being told, which is the only thing that makes it defensible.
  */
 
 import { describe, it, expect } from "vitest";
@@ -123,10 +124,35 @@ describe("cloud master switch — command palette gating", () => {
   });
 });
 
-describe("telemetry stays opt-in (guardrail)", () => {
-  it("nightgauge.telemetry.enabled defaults to false", () => {
+describe("telemetry is opt-out, and says so (guardrail, #738)", () => {
+  it("nightgauge.telemetry.enabled defaults to true", () => {
     const prop = readConfigProperty("nightgauge.telemetry.enabled");
     expect(prop.type).toBe("boolean");
-    expect(prop.default).toBe(false);
+    expect(prop.default).toBe(true);
+  });
+
+  // The default is only defensible because it is disclosed. This pins the
+  // disclosure to the same place as the default, so a future edit cannot quietly
+  // drop the wording and leave an undisclosed on-by-default switch behind.
+  it("says it is on by default and how to opt out", () => {
+    const prop = readConfigProperty("nightgauge.telemetry.enabled") as {
+      description?: string;
+      markdownDescription?: string;
+    };
+    for (const text of [prop.description, prop.markdownDescription]) {
+      expect(text, "both description forms must be present").toBeTruthy();
+      expect(String(text)).toMatch(/on by default/i);
+      expect(String(text)).toMatch(/opt out|turn it off|set .*false/i);
+    }
+  });
+
+  // The list of things we promise never to collect belongs where an operator
+  // reading the setting will actually see it, not only in a doc they must find.
+  it("names what is never collected", () => {
+    const prop = readConfigProperty("nightgauge.telemetry.enabled") as {
+      description?: string;
+    };
+    expect(String(prop.description)).toMatch(/source code/i);
+    expect(String(prop.description)).toMatch(/secrets/i);
   });
 });

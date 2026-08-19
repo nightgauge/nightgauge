@@ -1199,8 +1199,8 @@ function getPlatformCostEmptyStateHtml(): string {
   return `
     <div class="platform-cost-empty">
       <div class="platform-cost-empty-icon">📊</div>
-      <p class="platform-cost-empty-title">Telemetry pending — opt in under settings</p>
-      <p class="platform-cost-empty-hint">Enable telemetry to see server-aggregated cost data for your workspace.</p>
+      <p class="platform-cost-empty-title">No server-aggregated cost data yet</p>
+      <p class="platform-cost-empty-hint">This fills in once runs have been reported. If telemetry is turned off, it stays empty by design.</p>
     </div>
   `;
 }
@@ -1310,7 +1310,7 @@ function getPlatformCostSparklineHtml(data: CostAnalyticsResult, dateRange: Cost
 
 /**
  * Render the full platform cost tab panel HTML.
- * When data is null, renders an empty state with telemetry opt-in prompt.
+ * When data is null, renders an empty state explaining why it is empty.
  */
 export function getCostTabHtml(
   data: CostAnalyticsResult | null,

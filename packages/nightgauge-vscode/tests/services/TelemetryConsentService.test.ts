@@ -1,12 +1,13 @@
 /**
- * Tests for TelemetryConsentService (#3327).
+ * Tests for TelemetryConsentService (#3327, revised by #738).
  *
  * Covers:
- * - Default state and read accessors
+ * - Opt-out default state and read accessors
  * - VSCode-config-as-source-of-truth via getConfiguration()/update()
  * - inspect()-based "explicitly set" detection
- * - First-run modal: order of buttons (Decline first), branch outcomes,
- *   "Decide later" 7-day reschedule, Esc-dismiss equivalence
+ * - First-run **disclosure notice**: button order (Turn off first), branch
+ *   outcomes, Esc-dismiss leaving the default standing
+ * - The old prompt-seen flag not suppressing the new notice
  * - Per-stream gating (master off short-circuits)
  * - lastUploadAt round-trip via globalState
  */
@@ -45,7 +46,7 @@ vi.mock("vscode", () => {
           if (key === "telemetry.enabled") {
             return {
               key,
-              defaultValue: false,
+              defaultValue: true,
               globalValue: configStore.globalEnabled,
               workspaceValue: configStore.workspaceEnabled,
               workspaceFolderValue: undefined,
@@ -152,9 +153,19 @@ describe("TelemetryConsentService — read accessors", () => {
     vi.mocked(vscode.env).isTelemetryEnabled = true;
   });
 
-  it("isEnabled() returns false by default", () => {
+  // Telemetry is opt-out (#738). `configStore.enabled` is undefined here,
+  // standing in for a fresh install where nothing has been configured.
+  it("isEnabled() returns true by default", () => {
     const { ctx } = makeContext();
     const svc = new TelemetryConsentService(ctx, makeLogger() as any);
+    expect(svc.isEnabled()).toBe(true);
+  });
+
+  // The guarantee the flip must not break.
+  it("isEnabled() returns false after an explicit setEnabled(false)", async () => {
+    const { ctx } = makeContext();
+    const svc = new TelemetryConsentService(ctx, makeLogger() as any);
+    await svc.setEnabled(false);
     expect(svc.isEnabled()).toBe(false);
   });
 
@@ -203,14 +214,20 @@ describe("TelemetryConsentService — read accessors", () => {
     expect(svc.getUploadIntervalMinutes()).toBe(30);
   });
 
+  it("isStreamEnabled() honours the stream list while the master is on", async () => {
+    const { ctx } = makeContext();
+    const svc = new TelemetryConsentService(ctx, makeLogger() as any);
+    await svc.setStreams(["pipeline-run"]);
+    expect(svc.isStreamEnabled("pipeline-run")).toBe(true);
+    expect(svc.isStreamEnabled("health")).toBe(false);
+  });
+
   it("isStreamEnabled() returns false when master is off, even if stream is in array", async () => {
     const { ctx } = makeContext();
     const svc = new TelemetryConsentService(ctx, makeLogger() as any);
     await svc.setStreams(["pipeline-run"]);
+    await svc.setEnabled(false);
     expect(svc.isStreamEnabled("pipeline-run")).toBe(false);
-    await svc.setEnabled(true);
-    expect(svc.isStreamEnabled("pipeline-run")).toBe(true);
-    expect(svc.isStreamEnabled("health")).toBe(false);
   });
 
   it("getLastUploadAt() returns null until recordUploadAt() is called", async () => {
@@ -222,14 +239,27 @@ describe("TelemetryConsentService — read accessors", () => {
   });
 });
 
-describe("TelemetryConsentService.maybeShowFirstRunPrompt", () => {
+describe("TelemetryConsentService.maybeShowFirstRunPrompt — disclosure notice (#738)", () => {
+  const NOTICE_KEY = "nightgauge.telemetry.optOutNoticeSeen";
+
+  /**
+   * Count only modal notices. `showInformationMessage` also carries the
+   * non-modal confirmation toast after "Turn off", and counting raw calls would
+   * make a working confirmation look like a duplicate notice.
+   */
+  function modalCallCount(): number {
+    return vi
+      .mocked(vscode.window.showInformationMessage)
+      .mock.calls.filter((c) => (c[1] as { modal?: boolean } | undefined)?.modal === true).length;
+  }
+
   beforeEach(() => {
     resetConfig();
     vi.mocked(vscode.env).isTelemetryEnabled = true;
     vi.mocked(vscode.window.showInformationMessage).mockReset();
   });
 
-  it("does not show modal when VSCode global telemetry is off", async () => {
+  it("does not show the notice when VSCode global telemetry is off", async () => {
     vi.mocked(vscode.env).isTelemetryEnabled = false;
     const { ctx } = makeContext();
     const svc = new TelemetryConsentService(ctx, makeLogger() as any);
@@ -237,91 +267,116 @@ describe("TelemetryConsentService.maybeShowFirstRunPrompt", () => {
     expect(vscode.window.showInformationMessage).not.toHaveBeenCalled();
   });
 
-  it("does not show modal when consent is already explicitly set globally", async () => {
+  it("does not show the notice when consent is already explicitly set", async () => {
     configStore.globalEnabled = true;
     const { ctx, globalStore } = makeContext();
     const svc = new TelemetryConsentService(ctx, makeLogger() as any);
     await svc.maybeShowFirstRunPrompt();
     expect(vscode.window.showInformationMessage).not.toHaveBeenCalled();
-    expect(globalStore.get("nightgauge.telemetry.firstRunPromptSeen")).toBe(true);
+    expect(globalStore.get(NOTICE_KEY)).toBe(true);
   });
 
-  it("shows modal once and passes Decline as the first action (default focus)", async () => {
+  // The notice states a fact and offers the off switch. It must not read as a
+  // request — "Turn off" / "Keep on", never "Enable".
+  it("states rather than asks, and puts Turn off in default focus", async () => {
     vi.mocked(vscode.window.showInformationMessage).mockResolvedValue(undefined as any);
     const { ctx } = makeContext();
     const svc = new TelemetryConsentService(ctx, makeLogger() as any);
     await svc.maybeShowFirstRunPrompt();
     expect(vscode.window.showInformationMessage).toHaveBeenCalledTimes(1);
     const args = vi.mocked(vscode.window.showInformationMessage).mock.calls[0];
-    // [message, options, ...actions]
     expect(args[0]).toMatch(/anonymous usage data/i);
+    expect(args[0]).not.toMatch(/\?$/); // a statement, not a question
     expect(args[1]).toMatchObject({ modal: true });
-    expect(args.slice(2)).toEqual(["Decline", "Decide later", "Enable"]);
+    expect(args.slice(2)).toEqual(["Turn off", "Keep on"]);
+    expect(String((args[1] as { detail: string }).detail)).toMatch(/on by default/i);
   });
 
-  it("Enable → setEnabled(true)", async () => {
-    vi.mocked(vscode.window.showInformationMessage).mockResolvedValueOnce("Enable" as any);
+  it("Turn off → setEnabled(false)", async () => {
+    vi.mocked(vscode.window.showInformationMessage).mockResolvedValueOnce("Turn off" as any);
     const { ctx } = makeContext();
     const svc = new TelemetryConsentService(ctx, makeLogger() as any);
     await svc.maybeShowFirstRunPrompt();
-    expect(svc.isEnabled()).toBe(true);
-  });
-
-  it("Decline → setEnabled(false)", async () => {
-    vi.mocked(vscode.window.showInformationMessage).mockResolvedValueOnce("Decline" as any);
-    const { ctx } = makeContext();
-    const svc = new TelemetryConsentService(ctx, makeLogger() as any);
-    await svc.maybeShowFirstRunPrompt();
-    expect(svc.isEnabled()).toBe(false);
     expect(configStore.enabled).toBe(false);
+    expect(svc.isEnabled()).toBe(false);
   });
 
-  it("Decide later → schedules nextPromptAt 7 days out and does NOT change enabled", async () => {
-    vi.mocked(vscode.window.showInformationMessage).mockResolvedValueOnce("Decide later" as any);
-    const { ctx, globalStore } = makeContext();
-    const before = Date.now();
+  // Recording the choice explicitly keeps this operator out of any future
+  // disclosure aimed at people who never decided.
+  it("Keep on → writes an explicit true rather than leaning on the default", async () => {
+    vi.mocked(vscode.window.showInformationMessage).mockResolvedValueOnce("Keep on" as any);
+    const { ctx } = makeContext();
     const svc = new TelemetryConsentService(ctx, makeLogger() as any);
     await svc.maybeShowFirstRunPrompt();
-    const next = globalStore.get("nightgauge.telemetry.nextPromptAtMs") as number | undefined;
-    expect(typeof next).toBe("number");
-    expect(next!).toBeGreaterThanOrEqual(before + 7 * 24 * 60 * 60 * 1000 - 1000);
-    expect(configStore.enabled).toBeUndefined();
+    expect(configStore.enabled).toBe(true);
   });
 
-  it("Esc-dismissed modal behaves like Decide later (schedules re-prompt)", async () => {
+  // There is no question outstanding, so dismissal defers nothing: the notice
+  // was displayed, the default stands, and nothing is written.
+  it("Esc-dismissed leaves the default standing and writes nothing", async () => {
     vi.mocked(vscode.window.showInformationMessage).mockResolvedValueOnce(undefined as any);
     const { ctx, globalStore } = makeContext();
     const svc = new TelemetryConsentService(ctx, makeLogger() as any);
     await svc.maybeShowFirstRunPrompt();
-    expect(globalStore.has("nightgauge.telemetry.nextPromptAtMs")).toBe(true);
     expect(configStore.enabled).toBeUndefined();
+    expect(svc.isEnabled()).toBe(true);
+    expect(globalStore.get(NOTICE_KEY)).toBe(true);
   });
 
   it("does not double-show when called twice in the same session", async () => {
-    vi.mocked(vscode.window.showInformationMessage).mockResolvedValue("Decline" as any);
+    vi.mocked(vscode.window.showInformationMessage).mockResolvedValue("Turn off" as any);
     const { ctx } = makeContext();
     const svc = new TelemetryConsentService(ctx, makeLogger() as any);
     await svc.maybeShowFirstRunPrompt();
     await svc.maybeShowFirstRunPrompt();
-    expect(vscode.window.showInformationMessage).toHaveBeenCalledTimes(1);
+    expect(modalCallCount()).toBe(1);
   });
 
-  it("re-shows after nextPromptAtMs has elapsed and consent is still unset", async () => {
-    vi.mocked(vscode.window.showInformationMessage).mockResolvedValue("Decline" as any);
+  it("does not re-show once the notice has been seen on this machine", async () => {
     const { ctx, globalStore } = makeContext();
-    globalStore.set("nightgauge.telemetry.firstRunPromptSeen", true);
-    globalStore.set("nightgauge.telemetry.nextPromptAtMs", Date.now() - 1000);
-    const svc = new TelemetryConsentService(ctx, makeLogger() as any);
-    await svc.maybeShowFirstRunPrompt();
-    expect(vscode.window.showInformationMessage).toHaveBeenCalledTimes(1);
-  });
-
-  it("does not re-show when promptSeen=true and no reschedule was set", async () => {
-    const { ctx, globalStore } = makeContext();
-    globalStore.set("nightgauge.telemetry.firstRunPromptSeen", true);
+    globalStore.set(NOTICE_KEY, true);
     const svc = new TelemetryConsentService(ctx, makeLogger() as any);
     await svc.maybeShowFirstRunPrompt();
     expect(vscode.window.showInformationMessage).not.toHaveBeenCalled();
+  });
+
+  // The whole reason the notice uses a new globalState key. Someone who saw the
+  // old permission dialog and never answered is exactly the population the
+  // default just moved, and is the last group that should be switched silently.
+  it("still shows to an operator who saw the OLD prompt but never answered", async () => {
+    vi.mocked(vscode.window.showInformationMessage).mockResolvedValue(undefined as any);
+    const { ctx, globalStore } = makeContext();
+    globalStore.set("nightgauge.telemetry.firstRunPromptSeen", true);
+    globalStore.set("nightgauge.telemetry.nextPromptAtMs", Date.now() + 86_400_000);
+    const svc = new TelemetryConsentService(ctx, makeLogger() as any);
+    await svc.maybeShowFirstRunPrompt();
+    expect(vscode.window.showInformationMessage).toHaveBeenCalledTimes(1);
+  });
+
+  // An operator who actively declined under the old prompt has `false` written
+  // in config. They must never see the notice, and never be re-enabled.
+  it("never re-enables someone who declined under the old prompt", async () => {
+    configStore.enabled = false;
+    configStore.globalEnabled = false;
+    const { ctx } = makeContext();
+    const svc = new TelemetryConsentService(ctx, makeLogger() as any);
+    await svc.maybeShowFirstRunPrompt();
+    expect(vscode.window.showInformationMessage).not.toHaveBeenCalled();
+    expect(svc.isEnabled()).toBe(false);
+  });
+
+  // Marked seen before the modal is awaited, so a window closed mid-notice does
+  // not re-show it on every subsequent activation.
+  it("records the notice as seen before awaiting the operator's answer", async () => {
+    const { ctx, globalStore } = makeContext();
+    let seenDuringModal: unknown;
+    vi.mocked(vscode.window.showInformationMessage).mockImplementation((() => {
+      seenDuringModal = globalStore.get(NOTICE_KEY);
+      return Promise.resolve(undefined);
+    }) as any);
+    const svc = new TelemetryConsentService(ctx, makeLogger() as any);
+    await svc.maybeShowFirstRunPrompt();
+    expect(seenDuringModal).toBe(true);
   });
 
   it("collapses concurrent invocations to a single prompt", async () => {
@@ -337,8 +392,8 @@ describe("TelemetryConsentService.maybeShowFirstRunPrompt", () => {
     // Allow the first invocation to reach the modal call (microtask flush).
     await Promise.resolve();
     await Promise.resolve();
-    resolvePrompt("Decline");
+    resolvePrompt("Turn off");
     await Promise.all([a, b]);
-    expect(vscode.window.showInformationMessage).toHaveBeenCalledTimes(1);
+    expect(modalCallCount()).toBe(1);
   });
 });

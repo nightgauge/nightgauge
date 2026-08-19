@@ -209,8 +209,10 @@ export class TelemetrySettingsPanel implements vscode.Disposable {
 <body>
   <h1>Telemetry Settings</h1>
   <p class="meta">
-    Telemetry is opt-in. Anonymous usage data is never sent until you enable
-    it. <button class="link" id="privacyLink" type="button">Read the Privacy Document</button>.
+    Telemetry is opt-out — anonymous usage data is sent unless you turn it off
+    here. It never includes source code, file contents, secrets, branch names,
+    or commit SHAs.
+    <button class="link" id="privacyLink" type="button">Read the Privacy Document</button>.
   </p>
 
   <div class="section">

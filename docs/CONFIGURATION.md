@@ -6245,20 +6245,20 @@ platform:
     backoff_ms: 1000 # Initial backoff delay (ms)
     backoff_multiplier: 2 # Exponential backoff multiplier
   telemetry:
-    enabled: false # Opt-in. Send anonymized telemetry to the platform
+    enabled: true # Opt-out. Send anonymized telemetry to the platform
   feature_flags: {} # Platform feature flag overrides
 ```
 
-| Key                               | Type              | Default                        | Description                                                                        |
-| --------------------------------- | ----------------- | ------------------------------ | ---------------------------------------------------------------------------------- |
-| `enabled`                         | boolean           | `false`                        | Opt-in master switch. `false` disables config-derived platform communication       |
-| `api_url`                         | string (URL)      | `'https://api.nightgauge.dev'` | Platform API base URL. Override for dev/staging environments                       |
-| `connection_timeout_ms`           | integer (≥0)      | `30000`                        | Connection timeout in milliseconds. `0` disables timeout                           |
-| `retry_policy.attempts`           | integer (1–10)    | `3`                            | Number of retry attempts before giving up on a failed request                      |
-| `retry_policy.backoff_ms`         | integer (≥0)      | `1000`                         | Initial backoff delay in milliseconds before the first retry                       |
-| `retry_policy.backoff_multiplier` | number (1–10)     | `2`                            | Multiplier applied to `backoff_ms` on each subsequent retry (exponential backoff)  |
-| `telemetry.enabled`               | boolean           | `false`                        | Opt-in. Enable sending anonymized usage telemetry to the platform (off by default) |
-| `feature_flags`                   | record (str→bool) | `{}`                           | Platform feature flag map. Keys are flag names, values enable/disable the flag     |
+| Key                               | Type              | Default                        | Description                                                                       |
+| --------------------------------- | ----------------- | ------------------------------ | --------------------------------------------------------------------------------- |
+| `enabled`                         | boolean           | `false`                        | Opt-in master switch. `false` disables config-derived platform communication      |
+| `api_url`                         | string (URL)      | `'https://api.nightgauge.dev'` | Platform API base URL. Override for dev/staging environments                      |
+| `connection_timeout_ms`           | integer (≥0)      | `30000`                        | Connection timeout in milliseconds. `0` disables timeout                          |
+| `retry_policy.attempts`           | integer (1–10)    | `3`                            | Number of retry attempts before giving up on a failed request                     |
+| `retry_policy.backoff_ms`         | integer (≥0)      | `1000`                         | Initial backoff delay in milliseconds before the first retry                      |
+| `retry_policy.backoff_multiplier` | number (1–10)     | `2`                            | Multiplier applied to `backoff_ms` on each subsequent retry (exponential backoff) |
+| `telemetry.enabled`               | boolean           | `true`                         | Opt-out. Set `false` to stop sending anonymized usage telemetry to the platform   |
+| `feature_flags`                   | record (str→bool) | `{}`                           | Platform feature flag map. Keys are flag names, values enable/disable the flag    |
 
 ### Who Reads Platform Config
 
@@ -6293,7 +6293,7 @@ through the Go binary via IPC.
 | `NIGHTGAUGE_PLATFORM_CONNECTION_TIMEOUT_MS`   | `30000`                      | Override `platform.connection_timeout_ms`                |
 | `NIGHTGAUGE_PLATFORM_RETRY_POLICY_ATTEMPTS`   | `3`                          | Override `platform.retry_policy.attempts`                |
 | `NIGHTGAUGE_PLATFORM_RETRY_POLICY_BACKOFF_MS` | `1000`                       | Override `platform.retry_policy.backoff_ms`              |
-| `NIGHTGAUGE_PLATFORM_TELEMETRY_ENABLED`       | `false`                      | Override `platform.telemetry.enabled`                    |
+| `NIGHTGAUGE_PLATFORM_TELEMETRY_ENABLED`       | `true`                       | Override `platform.telemetry.enabled`                    |
 
 ---
 

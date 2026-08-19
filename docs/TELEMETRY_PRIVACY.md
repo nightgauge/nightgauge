@@ -1,21 +1,39 @@
 # Telemetry Privacy
 
-Nightgauge telemetry is **opt-in**. No data is sent until you enable it,
-and you can change your mind at any time from **Nightgauge: Telemetry
-Settings** (Command Palette).
+Nightgauge telemetry is **opt-out**. It is on by default, you are told so the
+first time it runs, and you can turn it off at any time from **Nightgauge:
+Telemetry Settings** (Command Palette) or with one line of config.
+
+## Turn it off
+
+```yaml
+# .nightgauge/config.yaml
+platform:
+  telemetry:
+    enabled: false
+```
+
+Or in VSCode settings, set `nightgauge.telemetry.enabled` to `false`. Either
+one stops everything on this page.
 
 ## TL;DR
 
-- Default: **off on every surface**. Telemetry is opt-in whether you run the
-  VSCode extension or the CLI/Go scheduler — nothing is sent until you turn it
-  on. The extension's `nightgauge.telemetry.enabled` defaults `false`, and the
-  CLI/scheduler's `platform.telemetry.enabled` defaults `false` (see
-  [CONFIGURATION.md](CONFIGURATION.md)). The first time you activate the
-  extension in a workspace, you'll see a modal with three actions: Decline,
-  Decide later, Enable.
+- Default: **on, on every surface** (changed in #738). The extension's
+  `nightgauge.telemetry.enabled` defaults `true`, and the CLI/scheduler's
+  `platform.telemetry.enabled` defaults `true` (see
+  [CONFIGURATION.md](CONFIGURATION.md)).
+- **You are told before you have to go looking.** The first time you activate
+  the extension you get a modal that states what is shared and offers _Turn
+  off_ / _Keep on_. The CLI prints the equivalent notice to stderr on its first
+  run. Neither asks permission, because the answer is already yes — pretending
+  otherwise would be the dishonest version of this design.
+- **An explicit `false` is never overridden.** If you previously declined, that
+  decision was written to your config and this change did not touch it. Only
+  operators who had never configured telemetry were moved by the new default.
 - VSCode's global `telemetry.telemetryLevel = "off"` is honored as a hard
   kill-switch — Nightgauge never sends data when VSCode telemetry is
-  disabled, regardless of the per-extension setting.
+  disabled, regardless of the per-extension setting. This now covers **every**
+  stream including `adapter-usage`, which was not checking it before #738.
 - No payload ever carries source code, file contents, secrets, branch names,
   commit SHAs, or free-form input. The `pipeline-run` stream does include the
   repository slug (`owner/name`) and issue number as correlation keys, so the
@@ -80,23 +98,29 @@ a separate channel.
 You can toggle any stream off in the Telemetry Settings panel without
 disabling telemetry overall.
 
-### Adapter usage — separately opt-in, and tiered
+### Adapter usage — tiered, and reported to your own account
 
 The footer and the dashboard webview show how much of your AI provider's
 allowance is left (for a Claude Max plan, the five-hour and weekly windows).
-That figure is read from your own machine and, by default, **never leaves it**.
 
-Some operators run the pipeline on more than one machine and want the whole
-picture in the hosted dashboard. `platform.telemetry.usage_reporting` turns
-that on. It is its own switch with its own default, because "I share pipeline
-outcomes" and "I share how much of my Claude plan I have used" are different
-decisions:
+`platform.telemetry.usage_reporting` controls whether that picture also reaches
+the hosted dashboard, so you can see your allowance across every machine you
+run. **This report goes to your own account, not to Nightgauge as product
+analytics** — it is the multi-machine view of your own data. That is why it
+defaults to `full` rather than off, and it is a materially different disclosure
+from the aggregate product telemetry above.
 
-| Tier                | What is sent                                                |
-| ------------------- | ----------------------------------------------------------- |
-| `off` (**default**) | Nothing. The agent heartbeat carries no body at all.        |
-| `minimal`           | Allowance windows only — **no monetary figure ever leaves** |
-| `full`              | Additionally the locally-derived per-adapter dollar spend   |
+It remains its own switch, because "I share pipeline outcomes" and "I share how
+much of my Claude plan I have used" are still different decisions:
+
+| Tier                 | What is sent                                                |
+| -------------------- | ----------------------------------------------------------- |
+| `off`                | Nothing. The agent heartbeat carries no body at all.        |
+| `minimal`            | Allowance windows only — **no monetary figure ever leaves** |
+| `full` (**default**) | Additionally the locally-derived per-adapter dollar spend   |
+
+If you want the allowance view across machines but would rather your spend
+stayed local, `minimal` is that setting exactly.
 
 `minimal` is defined by what it withholds — money — rather than by which part
 of Nightgauge produced a window. Today that split is exact: the dollar figures
@@ -104,9 +128,9 @@ are Nightgauge's own rate-card reduction of this workspace's pipeline history,
 and the percentages are the provider's own statement of your account's
 allowance.
 
-Both switches must permit it. If `platform.telemetry.enabled` is `false`, or
-the one-time consent prompt has not been answered, nothing is reported
-regardless of the tier — an unanswered question is not a yes.
+Every switch above it must permit it. If VSCode telemetry is off, or
+`platform.telemetry.enabled` is explicitly `false`, nothing is reported
+regardless of the tier.
 
 The tier is re-read on every heartbeat, so turning reporting off takes effect
 within 30 seconds rather than at the next window reload.
@@ -191,12 +215,16 @@ within 30 days of the request.
 
 ## Settings reference
 
-| Setting                                      | Type    | Default                                        | Description                                            |
-| -------------------------------------------- | ------- | ---------------------------------------------- | ------------------------------------------------------ |
-| `nightgauge.telemetry.enabled`               | boolean | `false`                                        | Master switch — must be `true` for any data to be sent |
-| `nightgauge.telemetry.streams`               | array   | `["pipeline-run", "health", "recommendation"]` | Streams that may submit data when enabled              |
-| `nightgauge.telemetry.uploadIntervalMinutes` | integer | `15`                                           | How often the queue flushes (1–1440 min)               |
-| `platform.telemetry.usage_reporting`         | enum    | `off`                                          | Allowance reporting: `off` / `minimal` / `full`        |
+| Setting                                      | Type    | Default                                        | Description                                     |
+| -------------------------------------------- | ------- | ---------------------------------------------- | ----------------------------------------------- |
+| `nightgauge.telemetry.enabled`               | boolean | `true`                                         | Master switch — set `false` to stop all sending |
+| `platform.telemetry.enabled`                 | boolean | `true`                                         | Same switch for the CLI / Go scheduler          |
+| `nightgauge.telemetry.streams`               | array   | `["pipeline-run", "health", "recommendation"]` | Streams that may submit data when enabled       |
+| `nightgauge.telemetry.uploadIntervalMinutes` | integer | `15`                                           | How often the queue flushes (1–1440 min)        |
+| `platform.telemetry.usage_reporting`         | enum    | `full`                                         | Allowance reporting: `off` / `minimal` / `full` |
+
+VSCode's own `telemetry.telemetryLevel` sits above every row in this table. When
+it is `"off"`, none of these settings can cause anything to be sent.
 
 ## Questions?
 
