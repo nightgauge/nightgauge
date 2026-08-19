@@ -3308,6 +3308,19 @@ Override via project.size_to_estimate in .nightgauge/config.yaml.`,
 	return cmd
 }
 
+// validateSetFieldDates validates the --start-date and --target-date flags for
+// "project set-field" before any API call is made. Both are optional; an empty
+// string skips validation for that flag.
+func validateSetFieldDates(startDate, targetDate string) error {
+	if startDate != "" && !isValidDate(startDate) {
+		return fmt.Errorf("--start-date %q is not a valid YYYY-MM-DD date", startDate)
+	}
+	if targetDate != "" && !isValidDate(targetDate) {
+		return fmt.Errorf("--target-date %q is not a valid YYYY-MM-DD date", targetDate)
+	}
+	return nil
+}
+
 func projectSetFieldCmd() *cobra.Command {
 	var (
 		owner         string
@@ -3350,11 +3363,8 @@ This is the fallback for when 'project add' does not set fields automatically
 			}
 
 			// Validate date flags before making any API calls
-			if startDate != "" && !isValidDate(startDate) {
-				return fmt.Errorf("--start-date %q is not a valid YYYY-MM-DD date", startDate)
-			}
-			if targetDate != "" && !isValidDate(targetDate) {
-				return fmt.Errorf("--target-date %q is not a valid YYYY-MM-DD date", targetDate)
+			if err := validateSetFieldDates(startDate, targetDate); err != nil {
+				return err
 			}
 
 			if len(fields) == 0 && startDate == "" && targetDate == "" {

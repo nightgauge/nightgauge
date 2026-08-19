@@ -1709,6 +1709,12 @@ func TestProjectSetFieldDateFlags(t *testing.T) {
 	}
 }
 
+// TestProjectSetFieldDateValidation exercises validateSetFieldDates directly
+// (the same function "project set-field" calls before it makes any API call)
+// rather than driving the command to completion. Cases that would pass
+// validation must never reach cmd.Execute(): doing so would fall through to
+// the live GitHub client and, unauthenticated, back off past Go's test
+// timeout and panic the whole package (#699).
 func TestProjectSetFieldDateValidation(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -1724,22 +1730,15 @@ func TestProjectSetFieldDateValidation(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cmd := rootCmd()
-			args := []string{"project", "set-field", "42"}
-			if tt.startDate != "" {
-				args = append(args, "--start-date", tt.startDate)
-			} else {
-				// Need at least one field flag to avoid "required" error
-				args = append(args, "--priority", "P1")
-			}
-			cmd.SetArgs(args)
-			err := cmd.Execute()
+			err := validateSetFieldDates(tt.startDate, "")
 			if tt.wantErr {
 				if err == nil {
 					t.Errorf("expected error containing %q, got nil", tt.errContains)
 				} else if tt.errContains != "" && !strings.Contains(err.Error(), tt.errContains) {
 					t.Errorf("error %q should contain %q", err.Error(), tt.errContains)
 				}
+			} else if err != nil {
+				t.Errorf("expected no error for start-date %q, got %v", tt.startDate, err)
 			}
 		})
 	}
