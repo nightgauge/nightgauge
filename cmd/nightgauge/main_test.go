@@ -1862,3 +1862,82 @@ func TestIsValidDate(t *testing.T) {
 		}
 	}
 }
+
+// runCost executes `cost` with the given args and returns stdout. The command
+// prints via fmt.Printf to os.Stdout, so redirect it through a pipe.
+func runCost(t *testing.T, args ...string) string {
+	t.Helper()
+	prev := os.Stdout
+	rPipe, wPipe, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	os.Stdout = wPipe
+	t.Cleanup(func() { os.Stdout = prev })
+
+	cmd := rootCmd()
+	cmd.SetArgs(append([]string{"cost"}, args...))
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	if execErr := cmd.Execute(); execErr != nil {
+		t.Fatalf("cost %v: %v", args, execErr)
+	}
+
+	wPipe.Close()
+	out, _ := io.ReadAll(rPipe)
+	os.Stdout = prev
+	return string(out)
+}
+
+// TestCostHeadlineAgreesWithStageTable pins the CALL SITE, not just
+// ModelForProviderBand. The router is provider-blind, so "Model
+// recommendation" was printed as an anthropic id directly above a stage table
+// of the serving provider's models — output that contradicted itself
+// ("provider xai" / "claude-sonnet-5" over grok-4.6 rows, #696).
+//
+// A unit test of the helper alone would stay green if the call site reverted
+// to printing rec.Model, which is exactly how the contradiction shipped.
+func TestCostHeadlineAgreesWithStageTable(t *testing.T) {
+	out := runCost(t, "--adapter", "grok")
+
+	if !strings.Contains(out, "→ provider xai") {
+		t.Fatalf("expected the grok adapter to resolve to provider xai, got:\n%s", out)
+	}
+
+	var rec string
+	for _, line := range strings.Split(out, "\n") {
+		if strings.HasPrefix(line, "Model recommendation:") {
+			rec = strings.TrimSpace(strings.TrimPrefix(line, "Model recommendation:"))
+			break
+		}
+	}
+	if rec == "" {
+		t.Fatalf("no model recommendation line in:\n%s", out)
+	}
+
+	// The headline must name a model this adapter can actually dispatch. An
+	// anthropic id here is the defect, whatever else the output says.
+	if strings.HasPrefix(rec, "claude-") {
+		t.Errorf("model recommendation %q is an anthropic model, but the forecast is priced for provider xai:\n%s", rec, out)
+	}
+	if !strings.Contains(out, "\n"+strings.Repeat("-", 65)) {
+		t.Fatalf("expected a stage table in:\n%s", out)
+	}
+	if !strings.Contains(out, rec+" ") {
+		t.Errorf("model recommendation %q appears nowhere in the stage table:\n%s", rec, out)
+	}
+}
+
+// TestCostUnpricedTotalIsNotRenderedAsZero guards the stamped contract at the
+// total line: an entirely unpriceable forecast must not print "$0.0000", which
+// renders the ABSENCE of a price as a price of zero.
+func TestCostUnpricedTotalIsNotRenderedAsZero(t *testing.T) {
+	out := runCost(t, "--adapter", "vendor-mystery-cli")
+
+	if strings.Contains(out, "$  0.0000") {
+		t.Errorf("a fully unpriced forecast rendered a dollar total:\n%s", out)
+	}
+	if !strings.Contains(out, "TOTAL (unpriced)") {
+		t.Errorf("expected an explicitly unpriced total, got:\n%s", out)
+	}
+}

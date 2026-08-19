@@ -307,9 +307,14 @@ type FailureClassifyParams struct {
 }
 
 // CostEstimateParams are parameters for intelligence.cost.
+//
+// Adapter names the execution adapter that will serve the run; the forecast is
+// priced through THAT provider's rate card (#696). Omitted means "the server
+// resolves it from config/env" — never "assume anthropic".
 type CostEstimateParams struct {
 	Stages          []string `json:"stages"`
 	ComplexityScore int      `json:"complexityScore"`
+	Adapter         string   `json:"adapter,omitempty"`
 }
 
 // --- Board mutation methods ---
