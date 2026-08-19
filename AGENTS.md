@@ -246,6 +246,15 @@ VSCode tests → SDK tests → Prettier → ESLint), or run them all at once wit
 `bash scripts/ci-local.sh`, before every `git push`. Do NOT mark work as
 complete until all checks pass.
 
+**`ci-local.sh` is the gate, not the loop.** Run it once, when you believe you
+are done — not to find out what you broke. It rebuilds Go, runs `go test ./...`
+plus `-race`, regenerates the plugin skills mirror and makes network calls, so
+using it as an iteration loop spends ~15 minutes to learn what a single test
+file or one package suite would have told you in seconds. Iterate on the
+narrowest run that answers the question, then gate once.
+[docs/GIT_WORKFLOW.md § The gate is not the loop](docs/GIT_WORKFLOW.md#the-gate-is-not-the-loop)
+has the rungs and the cases where a wider sweep genuinely is required.
+
 **This rule binds whoever pushes — not every stage that touches code.** In the
 pipeline that is `feature-validate` (and any interactive session about to push).
 `feature-dev` does not commit or push (#1608); it verifies what it changed and
