@@ -291,3 +291,83 @@ describe("getUsagePanelSectionHtml — a subscription-window plan (Issue #709)",
     expect(html).not.toContain("/hour");
   });
 });
+
+/**
+ * Issue #730 — the panel says which billing arrangement its windows describe,
+ * and offers the Claude Max feed when it is looking at the wrong kind.
+ */
+describe("plan badge and the Claude Max feed prompt (#730)", () => {
+  function render(snapshot: UsageSnapshot): string {
+    return getUsagePanelSectionHtml(buildUsagePanelState(snapshot, [], NOW), NOW);
+  }
+
+  const subscriptionWindow = makeWindow({
+    id: "claude-rate-limit:rolling",
+    label: "Session (5h)",
+    scope: "rolling",
+    used: 44,
+    limit: 100,
+    unit: "percent",
+    confidence: "estimated",
+    observedAt: new Date(NOW.getTime() - 20 * 60 * 1000),
+  });
+
+  it("badges a subscription snapshot as a plan, not as spend", () => {
+    const html = render({
+      adapter: "claude",
+      plan: { kind: "subscription-window" },
+      capturedAt: NOW,
+      windows: [subscriptionWindow],
+    });
+
+    expect(html).toContain("Subscription plan");
+    expect(html).not.toContain("Pay per token");
+  });
+
+  it("badges a dollar snapshot as pay-per-token", () => {
+    const html = render(makeSnapshot([makeWindow()]));
+
+    expect(html).toContain("Pay per token");
+    expect(html).not.toContain("Subscription plan");
+  });
+
+  it("offers the feed when claude is reporting dollars", () => {
+    const html = render(makeSnapshot([makeWindow({ used: 178.61, limit: null })]));
+
+    expect(html).toContain("enableClaudeUsageFeed");
+    expect(html).toContain("Show my 5-hour and weekly limits");
+  });
+
+  it("stops offering it once a subscription window is reported", () => {
+    const html = render({
+      adapter: "claude",
+      plan: { kind: "subscription-window" },
+      capturedAt: NOW,
+      windows: [subscriptionWindow],
+    });
+
+    expect(html).not.toContain("enableClaudeUsageFeed");
+  });
+
+  // Another adapter's dollars are the right answer for it, so the offer would
+  // be noise — and the feed would do nothing for it anyway.
+  it("does not offer it for another adapter", () => {
+    const html = render({
+      adapter: "codex",
+      plan: { kind: "pay-per-token" },
+      capturedAt: NOW,
+      windows: [makeWindow()],
+    });
+
+    expect(html).not.toContain("enableClaudeUsageFeed");
+  });
+
+  // The unknown plan renders its own empty state and returns before the badge.
+  it("does not badge an unknown snapshot", () => {
+    const html = render(unknownUsageSnapshot("claude", NOW));
+
+    expect(html).toContain("Unknown");
+    expect(html).not.toContain("Pay per token");
+    expect(html).not.toContain("Subscription plan");
+  });
+});

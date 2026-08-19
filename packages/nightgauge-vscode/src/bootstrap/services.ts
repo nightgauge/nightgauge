@@ -2800,15 +2800,20 @@ export async function initializeServices(
   // rather than wired against a path that cannot exist.
   //
   // The Claude subscription-window provider (Issue #709) needs a place to
-  // persist the `rate_limit_event` readings it can only observe mid-run, so
-  // the store is created here and handed to two collaborators: this service
-  // reads it, and PipelineBridge writes to it from the CLI stream. One store
-  // instance, exactly like the one AdapterUsageService instance below — two
-  // would let the meter read readings the pipeline never wrote.
-  let claudeRateLimitStore: ClaudeRateLimitStore | null = null;
+  // persist the rate-limit readings it cannot observe at rest, so the store is
+  // created here and handed to two collaborators: this service reads it, and
+  // PipelineBridge writes to it from the CLI stream. One store instance,
+  // exactly like the one AdapterUsageService instance below — two would let
+  // the meter read readings the pipeline never wrote.
+  //
+  // Account-scoped, not workspace-scoped (Issue #730): the utilization is one
+  // allowance shared by every Claude Code session the operator runs, and the
+  // `nightgauge hook claude-statusline` writer that keeps it current at rest
+  // runs outside any particular workspace. Constructed before the incrediRoot
+  // gate for the same reason — it needs no workspace to exist.
+  const claudeRateLimitStore = ClaudeRateLimitStore.forAccount();
   let adapterUsageService: AdapterUsageService | null = null;
   if (incrediRoot) {
-    claudeRateLimitStore = new ClaudeRateLimitStore(incrediRoot);
     adapterUsageService = AdapterUsageService.forWorkspace(
       incrediRoot,
       dashboard.getState(),

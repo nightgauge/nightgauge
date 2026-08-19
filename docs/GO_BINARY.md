@@ -2813,6 +2813,7 @@ nightgauge hook notify              # Notification hook (stdin JSON)
 nightgauge hook inject-context
 nightgauge hook check-deps
 nightgauge hook check-version
+nightgauge hook claude-statusline   # statusLine command — feeds the VS Code usage meter (#730)
 ```
 
 **Every hook subcommand reads its payload from stdin and takes no required
@@ -2827,6 +2828,70 @@ nightgauge hook format --file <path>            # manual: format one file
 nightgauge hook sanitize-prompt --input <text>  # manual: screen raw text
 nightgauge hook notify --message <msg>          # manual: send a notification
 ```
+
+#### `claude-statusline` — the Claude Max usage feed (Issue #730)
+
+The one hook verb that is not a Claude Code _hook_. It is wired into the
+`statusLine` setting, and it exists because of a gap in what nightgauge can
+observe about its own provider.
+
+The VS Code footer's usage meter renders a `UsageSnapshot`
+([ADR 018](decisions/018-adapter-usage-quota-model.md)). For a Claude Max
+subscriber the useful window is the five-hour or weekly allowance, and
+`ClaudeRateLimitUsageProvider` (#709) produces exactly that — from the
+`rate_limit_event` envelope on nightgauge's own `claude -p` stream. That
+envelope is only observable **while a pipeline stage is streaming**. Between
+runs there is no reading, the provider returns `null`, and the meter falls
+through to `LocalTelemetryUsageProvider`'s dollar windows — figures that
+describe pay-per-token billing, which is not how the operator's plan bills.
+
+Claude Code's statusLine payload carries the same account-wide figure at rest:
+
+```jsonc
+"rate_limits": {   // subscribers only, after the session's first API response
+  "five_hour": { "used_percentage": number, "resets_at": number },
+  "seven_day": { "used_percentage": number, "resets_at": number }
+}
+```
+
+Wiring this verb in as the `statusLine` command turns an occasional reading into
+a continuous one, because Claude Code renders a status line constantly, in every
+session, in every repository — including sessions nightgauge is not driving.
+Unlike `rate_limit_event`, this is a documented input contract.
+
+```bash
+nightgauge hook claude-statusline                        # nightgauge's own line
+nightgauge hook claude-statusline --delegate '<command>' # keep yours, still record
+```
+
+`--delegate` runs the operator's existing status line with the same stdin
+payload and prints its stdout instead, so adopting the feed never costs a status
+line they already had. The VS Code command
+**Nightgauge: Show Claude Max Plan Usage in the Footer**
+(`nightgauge.enableClaudeUsageStatusLine`) writes the setting, moving any prior
+command into `--delegate`, and unwires by lifting it back out.
+
+**Storage.** Readings land in `~/.nightgauge/usage/claude-rate-limits.json` —
+**account-scoped, not workspace-scoped**, because the allowance is one
+account-wide pool and this writer runs in whatever directory the operator
+happens to be in. `internal/usagestore` and the extension's
+`ClaudeRateLimitStore` share that one file byte for byte; neither is
+authoritative, so both merge per bucket on `observedAt` (newest wins) and both
+write via temp-file + rename. A blind rewrite from either side would delete
+buckets the other had recorded.
+
+**It never fails a render.** A malformed payload, an absent `rate_limits` block
+(the normal state for a non-subscriber, and for a subscriber before the
+session's first API response), an unwritable store, and a delegate that exits
+non-zero all log to stderr, print a best-effort line, and exit 0. A status line
+that errors is a status line the operator turns off.
+
+**Confidence.** A statusline reading is never `measured`: it is observed outside
+any streaming run, so it hydrates as `estimated` with an `observedAt` the
+surfaces print as "as of HH:MM". Only the `rate_limit_event` path, mid-stream,
+can claim to describe the present. A reading past its own `resetsAt` is dropped
+rather than aged — that window has refilled, and nightgauge cannot know the
+post-reset utilization.
 
 #### PreToolUse output contract (#354)
 

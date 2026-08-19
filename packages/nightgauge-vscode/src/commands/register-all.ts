@@ -72,6 +72,7 @@ import type { ProjectBoardProviders } from "./index";
 // Additional register functions imported individually
 import { registerResetUsageCounterCommand } from "./resetUsageCounter";
 import { registerCycleUsageMetricCommand } from "./cycleUsageMetric";
+import { registerEnableClaudeUsageStatusLineCommand } from "./enableClaudeUsageStatusLine";
 import { registerClearCompletedIssuesCommand } from "./clearCompletedIssues";
 import { registerClearFailedIssuesCommand } from "./clearFailedIssues";
 import { registerRetryFailedIssueCommand } from "./retryFailedIssue";
@@ -863,6 +864,7 @@ export function registerAllCommands(deps: AllCommandDeps): void {
 
     // Usage meter click-to-cycle (Issue #659)
     registerCycleUsageMetricCommand(context, statusBar),
+    registerEnableClaudeUsageStatusLineCommand(),
 
     // Auto-merge guard command (Issue #2720)
     ...(repositorySettingsService

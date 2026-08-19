@@ -5056,7 +5056,61 @@ func hookCmd() *cobra.Command {
 		hookSkillUsageCmd(),
 		hookCarefulGateCmd(),
 		hookStageGateCmd(),
+		hookClaudeStatusLineCmd(),
 	)
+	return cmd
+}
+
+func hookClaudeStatusLineCmd() *cobra.Command {
+	var delegate string
+
+	cmd := &cobra.Command{
+		Use:   "claude-statusline",
+		Short: "Claude Code statusLine command that feeds the VS Code usage meter (reads JSON from stdin)",
+		Long: `Render a Claude Code status line, recording the session's subscription
+rate-limit utilization on the way past.
+
+Claude Code hands its configured statusLine command a JSON payload that, for
+Claude subscribers, carries the account-wide five-hour and seven-day allowance:
+
+  "rate_limits": {
+    "five_hour": { "used_percentage": number, "resets_at": number },
+    "seven_day": { "used_percentage": number, "resets_at": number }
+  }
+
+That is the only channel which reports the figure at rest — the ` + "`" + `rate_limit_event` + "`" + `
+envelope nightgauge already parses is observable only while a pipeline stage is
+streaming (Issue #709). Wiring this verb in as the statusLine command keeps
+~/.nightgauge/usage/claude-rate-limits.json current, which is what lets the VS
+Code footer show "session (5h) 44% · 56% left · resets 2h 14m" instead of a
+locally-derived dollar total (Issue #730).
+
+Use --delegate to keep an existing status line: the given command receives the
+same stdin payload and its stdout is printed instead of nightgauge's own line.
+
+This verb never fails a render. A malformed payload, an absent rate_limits
+block (the normal state for a non-subscriber), an unwritable store, or a
+failing delegate all log to stderr and still exit 0.
+
+  claude-statusline                              # nightgauge's own line
+  claude-statusline --delegate "~/.claude/sl.sh" # keep yours, still record`,
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			line, err := hooks.ClaudeStatusLine(readHookInput(cmd), hooks.ClaudeStatusLineOptions{
+				Delegate: delegate,
+			}, time.Now())
+			if err != nil {
+				// Unreachable in practice (see ClaudeStatusLine's contract), but
+				// a status line must not surface a stack trace to the operator.
+				fmt.Fprintf(os.Stderr, "warn: claude-statusline: %v\n", err)
+				return nil
+			}
+			fmt.Fprintln(cmd.OutOrStdout(), line)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&delegate, "delegate", "",
+		"Existing statusLine command to run with the same payload; its output is printed instead")
 	return cmd
 }
 

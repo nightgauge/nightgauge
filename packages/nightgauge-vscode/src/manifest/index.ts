@@ -583,6 +583,11 @@ export const MANIFEST_CONTRIBUTES: ManifestContributes = {
       icon: "$(flame)",
     },
     {
+      command: "nightgauge.enableClaudeUsageStatusLine",
+      title: "Nightgauge: Show Claude Max Plan Usage in the Footer",
+      icon: "$(flame)",
+    },
+    {
       command: "nightgauge.searchKnowledge",
       title: "Nightgauge: Search Knowledge",
       icon: "$(search)",
