@@ -52,6 +52,13 @@ jobs:
         run: bash scripts/test-issue-body-contract.sh
       - name: Issue-body heading contract
         run: python3 scripts/check-issue-body-contract.py
+      # Stale-visibility-prose reintroduction gate (#697): fails on a tracked
+      # artifact unconditionally asserting this repository is private — the
+      # exact shape all four #697 instances took. Legitimate conditional
+      # prose ("...while the repo is private", codeql.yml/release.yml) is
+      # exempt; only a flat assertion of the current value goes stale.
+      - name: Visibility-prose reintroduction gate
+        run: python3 scripts/check-visibility-prose.py
       # Proves the gate below still FAILS CLOSED rather than passing vacuously
       # — the defect #539 exists to fix — and that it fails only on the
       # invariant it names (#546). Without this step, reverting the gate to

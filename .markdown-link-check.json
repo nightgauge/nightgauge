@@ -1,9 +1,21 @@
 {
-  "_comment": "Config for the markdown-link-check CI gate (docs link-checker, #135). Scope is root *.md + docs/**. External http(s) URLs are intentionally NOT checked: the repository is private, so every canonical github.com/nightgauge/* URL 404s to an unauthenticated checker (revisit when the repo goes public, #63). Image assets are skipped: this gate validates cross-document reference integrity, not binary asset presence, and some operator-runbook screenshots are committed in follow-up PRs (see docs/images/*/README.md). Pure in-page #anchors are not resolved as files.",
+  "_comment": "Config for the markdown-link-check CI gate (docs link-checker, #135). Scope is root *.md + docs/**. External http(s) URLs ARE checked: the repository has been public since 2026-07-22 (#697), so canonical github.com/nightgauge/* URLs resolve to an unauthenticated checker like any other public repo. Image assets are skipped: this gate validates cross-document reference integrity, not binary asset presence, and some operator-runbook screenshots are committed in follow-up PRs (see docs/images/*/README.md). Pure in-page #anchors are not resolved as files. aliveStatusCodes covers common bot-walling on third-party doc sites (401/403/429 from a WAF or rate limiter, 307 from a Next.js prefetch redirect with no Location header) -- a live site answering oddly to a headless checker is not a dead link.",
   "ignorePatterns": [
-    { "pattern": "^https?://" },
     { "pattern": "^mailto:" },
     { "pattern": "^#" },
-    { "pattern": "\\.(png|jpe?g|gif|svg|webp)$" }
-  ]
+    { "pattern": "\\.(png|jpe?g|gif|svg|webp)$" },
+    {
+      "pattern": "^https://docs\\.openai\\.com/codex$",
+      "comment": "Confirmed NXDOMAIN (#697 re-enablement sweep, 2026-08-18) -- docs.openai.com does not resolve at all. Genuinely dead; the doc should point at platform.openai.com/docs/codex or similar. Content fix is a separate, out-of-scope change; this ignore is deliberately URL-scoped, not a blanket exclusion."
+    },
+    {
+      "pattern": "^https://github\\.com/nightgauge/nightgauge/blob/main/AI_SMART_SETUP\\.md$",
+      "comment": "Confirmed HTTP 404 (#697 re-enablement sweep, 2026-08-18) -- this file does not exist on main. Content fix is a separate, out-of-scope change."
+    },
+    {
+      "pattern": "^https://github\\.com/orgs/nightgauge/projects/10$",
+      "comment": "Confirmed HTTP 404 (#697 re-enablement sweep, 2026-08-18) -- project 10 does not exist under this org. Content fix is a separate, out-of-scope change."
+    }
+  ],
+  "aliveStatusCodes": [200, 206, 301, 302, 307, 308, 401, 403, 429]
 }
