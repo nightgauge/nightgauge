@@ -82,6 +82,28 @@ const (
 	// verb is allowed to resolve a target.
 	VerbDependabotEnableAlerts Verb = "dependabot.enableAlerts"
 
+	// VerbWorkspaceAddRepo brings ONE repository that is present in the
+	// workspace but absent from the manifest under management (#706).
+	//
+	// coverage-gap ships without a repair verb by design: its comment recorded
+	// that no registered verb could edit the workspace manifest, and a button
+	// that silently does nothing is worse than no button (Invariant 3). #703
+	// inverted that reasoning by giving the manifest a deterministic writer, so
+	// the condition is now exactly the shape the registry is for — one bounded
+	// operation, no judgement, and a card that is otherwise a dead end. Same
+	// argument as VerbDependabotEnableAlerts above.
+	//
+	// The argument surface is EMPTY, which is the security property and not a
+	// convenience. The target is read from the persisted request's Context.Repo
+	// — what the producer declared — so the resolving surface cannot name a
+	// repository. See ExecuteAddRepo, the only place the verb resolves a target.
+	//
+	// Its configured-set check is the INVERSE of every other verb's: this verb
+	// exists to act on a repository that is NOT yet configured, so a target
+	// already in the list is refused as nothing-to-do rather than required to be
+	// present.
+	VerbWorkspaceAddRepo Verb = "workspace.addRepo"
+
 	// VerbNoop is the explicit "do nothing but resolve" choice — the registry
 	// binding for the ADR's leave / keep-paused / wait / halt options, where the
 	// operator deliberately declines to mutate the fleet. Registry-gated like any
@@ -104,6 +126,7 @@ var registry = map[Verb]struct{}{
 	VerbRunRetryWithEscalation:       {},
 	VerbIssueApproveArchitecture:     {},
 	VerbDependabotEnableAlerts:       {},
+	VerbWorkspaceAddRepo:             {},
 	VerbNoop:                         {},
 }
 
@@ -119,6 +142,13 @@ func IsRegisteredVerb(v string) bool {
 // (cmd/nightgauge/attention.go). Every other registered verb needs the live
 // scheduler/GitHub clients only the daemon (or the VSCode extension's private
 // IPC connection) holds.
+//
+// workspace.addRepo is deliberately NOT here despite writing a file. Resolving
+// the repository's project board goes through the authoritative repo→project
+// resolver, which reads config and can reach the forge; a standalone CLI
+// process would either duplicate that resolution or write an entry with no
+// project number — the `project_number: 0` misroute the writer exists to
+// prevent. It is daemon-executed for the resolver, not for the write.
 var cliExecutableVerbs = map[Verb]struct{}{
 	VerbNoop:                   {},
 	VerbBudgetRaiseCeiling:     {},
@@ -317,4 +347,64 @@ func ExecuteEnableAlerts(ctx context.Context, enabler DependabotAlertEnabler, re
 		return fmt.Errorf("attention: %s is not available on this surface", VerbDependabotEnableAlerts)
 	}
 	return enabler.EnableSecurityAlerts(ctx, owner, name)
+}
+
+// --- workspace.addRepo (#706) -----------------------------------------------
+
+// ErrVerbTargetAlreadyConfigured reports a workspace.addRepo resolution whose
+// target repository is already in the configured repo list.
+//
+// It is the inverse of ErrVerbTargetNotConfigured and, unlike it, is a
+// nothing-to-do refusal rather than a security one: the card exists only while
+// the repository is uncovered, so a target that is already configured means the
+// condition was repaired by something else between the sweep and the click.
+// Refusing keeps the store from CAS-resolving a card whose repair never ran.
+var ErrVerbTargetAlreadyConfigured = errors.New("attention: verb target repository is already in the configured repo list")
+
+// WorkspaceRepoAdder is the single capability workspace.addRepo needs.
+//
+// One method rather than a whole manifest client, for the same reason
+// DependabotAlertEnabler is: an executor that can bring a repository under
+// management cannot, through this seam, also remove one or rewrite routing.
+// The daemon passes an implementation backed by the deterministic manifest
+// writer; tests pass a recorder.
+type WorkspaceRepoAdder interface {
+	AddWorkspaceRepo(ctx context.Context, repo string) error
+}
+
+// ExecuteAddRepo performs workspace.addRepo against the request's declared
+// target, enforcing the four properties the verb promises:
+//
+//  1. the option carries no arguments,
+//  2. the target comes from the persisted request's Context.Repo and nowhere
+//     else,
+//  3. that target must NOT already be in the configured repo list, and
+//  4. a surface without the capability fails loudly rather than succeeding.
+//
+// (4) matters more here than it reads: the store CAS-resolves only after the
+// verb returns nil, so a silent success would consume the card and leave the
+// repository exactly as unwatched as before — with the one affordance that
+// could have fixed it now gone.
+func ExecuteAddRepo(ctx context.Context, adder WorkspaceRepoAdder, req *DecisionRequest, opt Option, configuredRepos []string) error {
+	if req == nil {
+		return fmt.Errorf("attention: %s requires the persisted request", VerbWorkspaceAddRepo)
+	}
+	if opt.Verb != VerbWorkspaceAddRepo {
+		return fmt.Errorf("attention: %s executor invoked for verb %q", VerbWorkspaceAddRepo, opt.Verb)
+	}
+	if len(opt.Args) > 0 {
+		return fmt.Errorf("%w: %s was given %d", ErrVerbArgsNotAccepted, VerbWorkspaceAddRepo, len(opt.Args))
+	}
+
+	repo := strings.TrimSpace(req.Context.Repo)
+	if repo == "" {
+		return fmt.Errorf("attention: %s: request %s names no repository", VerbWorkspaceAddRepo, req.ID)
+	}
+	if RepoInConfiguredSet(configuredRepos, repo) {
+		return fmt.Errorf("%w: %q", ErrVerbTargetAlreadyConfigured, repo)
+	}
+	if adder == nil {
+		return fmt.Errorf("attention: %s is not available on this surface", VerbWorkspaceAddRepo)
+	}
+	return adder.AddWorkspaceRepo(ctx, repo)
 }

@@ -279,6 +279,17 @@ func (s *Sweeper) SweepWorkspace(ctx context.Context, configuredRepos []string) 
 //
 // Returns nil when nothing can be read — the caller decides what to do with
 // "no configuration found", which is not the same as "nothing is configured".
+// ConfiguredRepos exposes workspaceConfiguredRepos to verb executors.
+//
+// The coverage-gap card is raised for repos this function does NOT cover, and
+// workspace.addRepo refuses targets it DOES cover. Both sides must therefore
+// read the same list: if the executor consulted a different one, the producer
+// could raise a card whose repair button the executor then refuses — a dead
+// affordance on the one card that exists to have a working one.
+func ConfiguredRepos(workspaceRoot string) []string {
+	return workspaceConfiguredRepos(workspaceRoot)
+}
+
 func workspaceConfiguredRepos(workspaceRoot string) []string {
 	if strings.TrimSpace(workspaceRoot) == "" {
 		return nil

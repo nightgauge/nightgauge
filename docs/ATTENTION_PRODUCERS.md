@@ -261,6 +261,26 @@ nothing changes, and the next card they see is one they have already learned to
 distrust. Use `VerbNoop` for an honest dismiss and put the real next action in
 `Context.URL`, which surfaces render as a first-class affordance.
 
+**The rule is about the registry's contents, not about the card — so it can
+expire.** `coverage-gap` shipped dismiss-only and said so in a code comment:
+"no registered verb can edit the workspace manifest or config." That stopped
+being true when #703 gave the manifest a deterministic writer, and #706 added
+`workspace.addRepo` to the registry and a repair option to the card. If you are
+writing a producer whose condition is unrepairable today, record **why** in the
+comment the way `coverage-gap` did, naming the missing capability rather than
+just its absence — that is what makes the reasoning re-checkable when the
+capability lands.
+
+A repair verb added this way must be **bounded the same way the producer is**.
+`workspace.addRepo` takes no arguments at all: its target is read from the
+persisted request's `Context.Repo`, so the resolving surface cannot redirect the
+write at another repository. And its coverage check is the _inverse_ of every
+other verb's — it acts only on a repo that is NOT configured — which makes the
+producer's matcher and the executor's matcher the same question asked twice.
+They therefore share one implementation (`sweep.ConfiguredRepos`); if they
+diverged, the producer would raise a card whose button the executor refuses on
+click, which is precisely the dead affordance this invariant exists to prevent.
+
 ## Choosing a severity
 
 | Severity         | Means                            | Use when                                            |

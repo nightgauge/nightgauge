@@ -11,8 +11,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
-	"slices"
 	"strings"
 	"text/tabwriter"
 
@@ -122,58 +120,24 @@ A zero project number is rejected from every path: it would resolve to project
 			if strings.TrimSpace(path) == "" {
 				return fmt.Errorf("--path is required")
 			}
-			if role != "" && !slices.Contains(workspacemanifest.ValidRoles, role) {
-				return fmt.Errorf("--role must be one of: %s", strings.Join(workspacemanifest.ValidRoles, ", "))
-			}
-
 			m, err := resolveManifest()
 			if err != nil {
 				return err
 			}
-			if _, exists := m.Find(name); exists {
-				return fmt.Errorf("repository %q is already in the manifest — names must be unique", name)
+			if cmd.Flags().Changed("project") && project <= 0 {
+				return fmt.Errorf("--project must be a positive integer: %d would resolve to project 0 and silently misroute issues", project)
 			}
-
-			// The path is resolved relative to the manifest's own directory,
-			// matching how every reader resolves repositories[].path.
-			base := filepath.Dir(filepath.Dir(m.Path())) // strip /.vscode
-			abs := path
-			if !filepath.IsAbs(abs) {
-				abs = filepath.Join(base, path)
-			}
-			st, statErr := os.Stat(abs)
-			if statErr != nil || !st.IsDir() {
-				return fmt.Errorf("--path %q does not resolve to a directory (looked at %s)", path, abs)
-			}
-			if _, gitErr := os.Stat(filepath.Join(abs, ".git")); gitErr != nil {
-				return fmt.Errorf("--path %q is not a git repository: no .git found at %s", path, abs)
-			}
-
-			if cmd.Flags().Changed("project") {
-				if project <= 0 {
-					return fmt.Errorf("--project must be a positive integer: %d would resolve to project 0 and silently misroute issues", project)
-				}
-			} else {
-				resolved, rerr := resolveProjectForRepo(name)
-				if rerr != nil {
-					return fmt.Errorf("--project was omitted and no project could be resolved for %q: %w\n"+
-						"Pass --project <n> explicitly, or provision a board for this repository first", name, rerr)
-				}
-				project = resolved
-			}
-
-			if err := m.AddEntry(workspacemanifest.Entry{
+			added, err := workspacemanifest.AddRepo(m, workspacemanifest.Entry{
 				Name:          name,
 				Path:          path,
 				Role:          role,
 				ProjectNumber: project,
-			}); err != nil {
+			}, resolveProjectForRepo)
+			if err != nil {
 				return err
 			}
-			if err := m.Write(); err != nil {
-				return err
-			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Added %s (path %s, project %d) to %s\n", name, path, project, m.Path())
+
+			fmt.Fprintf(cmd.OutOrStdout(), "Added %s (path %s, project %d) to %s\n", added.Name, added.Path, added.ProjectNumber, m.Path())
 			return nil
 		},
 	}
