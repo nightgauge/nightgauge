@@ -10,7 +10,7 @@ import {
   DEFAULT_FILTER_STATE,
   PRIORITY_OPTIONS,
   SIZE_OPTIONS,
-  COMPONENT_OPTIONS,
+  deriveComponentOptions,
 } from "../../src/types/FilterConfig";
 
 describe("FilterConfig", () => {
@@ -238,15 +238,42 @@ describe("FilterConfig", () => {
       expect(SIZE_OPTIONS).toHaveLength(6);
       expect(SIZE_OPTIONS.map((o) => o.value)).toEqual(["all", "XS", "S", "M", "L", "XL"]);
     });
+  });
 
-    it("COMPONENT_OPTIONS should contain expected components", () => {
-      expect(COMPONENT_OPTIONS).toContain("pattern-mining");
-      expect(COMPONENT_OPTIONS).toContain("configs");
-      expect(COMPONENT_OPTIONS).toContain("platform");
-      expect(COMPONENT_OPTIONS).toContain("smart-setup");
-      expect(COMPONENT_OPTIONS).toContain("standards");
-      // 'nightgauge' is not a real component label in the repo
-      expect(COMPONENT_OPTIONS).not.toContain("nightgauge");
+  describe("deriveComponentOptions", () => {
+    it("extracts component: suffixes from the issues in view", () => {
+      expect(
+        deriveComponentOptions([
+          { labels: ["type:bug", "component:vscode"] },
+          { labels: ["component:go-binary", "priority:high"] },
+        ])
+      ).toEqual(["go-binary", "vscode"]);
+    });
+
+    it("de-duplicates and sorts alphabetically", () => {
+      expect(
+        deriveComponentOptions([
+          { labels: ["component:sdk"] },
+          { labels: ["component:ci"] },
+          { labels: ["component:sdk"] },
+        ])
+      ).toEqual(["ci", "sdk"]);
+    });
+
+    it("ignores non-component labels, bare prefixes and missing label arrays", () => {
+      expect(
+        deriveComponentOptions([
+          { labels: ["type:epic", "area:vscode", "component:", "component:   "] },
+          {},
+        ])
+      ).toEqual([]);
+    });
+
+    it("returns nothing when no issue carries a component label", () => {
+      // The old hardcoded list returned five options here, every one of which
+      // filtered to an empty set. Callers use an empty result to omit the
+      // Component section entirely.
+      expect(deriveComponentOptions([{ labels: ["type:bug"] }])).toEqual([]);
     });
   });
 });

@@ -28,7 +28,7 @@ vi.mock("../../src/types/FilterConfig", () => ({
     { label: "All", value: "all" },
     { label: "Small", value: "small" },
   ],
-  COMPONENT_OPTIONS: ["sdk", "extension"],
+  deriveComponentOptions: () => [],
   hasActiveFilters: vi.fn(() => false),
 }));
 

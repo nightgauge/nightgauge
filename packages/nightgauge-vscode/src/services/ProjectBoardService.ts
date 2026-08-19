@@ -18,6 +18,7 @@ import type { StatusCounts } from "./IpcClientBase";
 import { getGitHubUser } from "../utils/incrediConfig";
 import type { IWorkItemProvider } from "./types/WorkItemProvider";
 import type { EpicInfo } from "../views/items/EpicGroupTreeItem";
+import { deriveComponentOptions } from "../types/FilterConfig";
 
 // ---------------------------------------------------------------------------
 // Output channel
@@ -498,6 +499,22 @@ export class ProjectBoardService implements vscode.Disposable, IWorkItemProvider
 
   async getReadyIssues(sortBy?: SortBy): Promise<ReadyIssue[]> {
     return this.getIssuesByStatus("ready", sortBy);
+  }
+
+  /**
+   * Distinct `component:*` suffixes across every issue currently cached.
+   *
+   * Reads only the caches this service already holds — never the network — so
+   * a filter QuickPick can be built synchronously. Callers open it from a tree
+   * that has already loaded issues, so the caches are warm; an empty result
+   * means the repository genuinely carries no component labels, and the caller
+   * should omit the Component section rather than offer options that match
+   * nothing.
+   */
+  getObservedComponents(): string[] {
+    const pools: ReadyIssue[][] = [...this.cache.values()];
+    if (this.allItemsCache) pools.push(this.allItemsCache);
+    return deriveComponentOptions(pools.flat());
   }
 
   async getAllItems(): Promise<ReadyIssue[]> {

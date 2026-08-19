@@ -164,6 +164,17 @@ export class RepositoriesTreeProvider
 
   private workspaceManager: WorkspaceManager;
   private disposables: vscode.Disposable[] = [];
+  /**
+   * Distinct `component:*` label suffixes among the issues cached for one
+   * repository. Drives the Component section of the per-repo filter
+   * QuickPick, which is per-repo by nature — each repository defines its own
+   * component set.
+   */
+  getObservedComponents(repoName: string): string[] {
+    this.ensurePerRepoServices();
+    return this.perRepoServices.get(repoName)?.getObservedComponents?.() ?? [];
+  }
+
   private cachedRepositories: Map<string, RepositoryTreeItem> = new Map();
   /** One IWorkItemProvider per repo for live count fetching */
   private perRepoServices: Map<string, IWorkItemProvider> = new Map();

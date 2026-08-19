@@ -12,7 +12,6 @@ import { IssueSummaryTreeItem } from "../views/items/IssueSummaryTreeItem";
 import {
   PRIORITY_OPTIONS,
   SIZE_OPTIONS,
-  COMPONENT_OPTIONS,
   hasActiveFilters,
   type FilterPriority,
   type FilterSize,
@@ -105,26 +104,31 @@ export function registerFilterRepositoriesViewCommand(
         });
       }
 
-      // Component
-      quickPickItems.push({
-        label: "Component",
-        kind: vscode.QuickPickItemKind.Separator,
-      } as SeparatorItem);
-      const componentAllCurrent = currentFilters.component === "all";
-      quickPickItems.push({
-        label: `${componentAllCurrent ? "$(check) " : "      "}All Components`,
-        description: "Show all components",
-        filterType: "component",
-        filterValue: "all",
-      });
-      for (const component of COMPONENT_OPTIONS) {
-        const isCurrent = currentFilters.component === component;
+      // Component — options come from the labels actually present on this
+      // repository's cached issues. The section is omitted entirely when there
+      // are none, rather than offering options that match nothing.
+      const componentOptions = provider.getObservedComponents(item.repoName);
+      if (componentOptions.length > 0) {
         quickPickItems.push({
-          label: `${isCurrent ? "$(check) " : "      "}${component}`,
-          description: `Filter to component:${component} issues only`,
+          label: "Component",
+          kind: vscode.QuickPickItemKind.Separator,
+        } as SeparatorItem);
+        const componentAllCurrent = currentFilters.component === "all";
+        quickPickItems.push({
+          label: `${componentAllCurrent ? "$(check) " : "      "}All Components`,
+          description: "Show all components",
           filterType: "component",
-          filterValue: component,
+          filterValue: "all",
         });
+        for (const component of componentOptions) {
+          const isCurrent = currentFilters.component === component;
+          quickPickItems.push({
+            label: `${isCurrent ? "$(check) " : "      "}${component}`,
+            description: `Filter to component:${component} issues only`,
+            filterType: "component",
+            filterValue: component,
+          });
+        }
       }
 
       // Hide blocked
