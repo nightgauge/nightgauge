@@ -5,35 +5,98 @@
 # cannot tell is worse than no guard: it manufactures confidence.
 #
 # So these tests do not check that the guard passes on a clean tree (CI proves
-# that on every PR anyway). They check that it FAILS when it is blinded:
+# that on every PR anyway, and ci-local.sh runs the guard against the live tree
+# one step before this one). They check that it FAILS when it is blinded:
 # manifest corrupt, manifest missing, manifest vacuous, decisions still open,
 # and a planted private file.
+#
+# ── Why every case runs in a throwaway worktree (#707) ───────────────────────
+#
+# Several cases assert `expect_exit 0`: plant a BENIGN fixture, require the
+# whole checker to pass, and so prove the guard does not cry wolf. Those cases
+# are only meaningful when the fixture is the ONLY thing the checker can see
+# that it did not see a moment ago.
+#
+# That held for free until the `issue_references` rule landed (#701). Two of the
+# guard's rule families read the WORKING TREE rather than a commit:
+#
+#   * `issue_references` is diff-scoped by design — it reads the lines this tree
+#     ADDS over a base commit. That is the correct shape for the rule, and it
+#     makes every `expect_exit 0` case a function of whatever is uncommitted at
+#     that instant.
+#   * the content and hashed-token rules read each tracked path off disk, so an
+#     in-flight edit to an already-tracked file is in scope too.
+#
+# The failure that produces is the expensive kind: an unrelated case ("benign
+# token does not trip the denylist") goes red and names the wrong rule, so the
+# reader debugs the denylist. It cost real time during #553.
+#
+# The fix is to give the suite a fixed corpus instead of the developer's desk: a
+# detached worktree at HEAD, in a temp dir, with the working copy's manifest
+# copied in. Then
+#
+#   * tracked paths and file contents are HEAD's, not the working tree's;
+#   * NG_BOUNDARY_DIFF_BASE=HEAD makes the planted fixture the entire diff;
+#   * `git add -f` stages into the SANDBOX index, so an interrupted run can no
+#     longer leave planted fixtures staged in the real checkout.
+#
+# No rule is disabled or stubbed anywhere: all ten issue-reference cases still
+# run the real rule against a real diff — the diff is just the fixture and
+# nothing else. What the suite gives up is noticing a violation the developer
+# has not committed yet, which was never this suite's job: the live-tree
+# invocation of the guard (CI, and ci-local.sh step 5) covers that, and it names
+# the offending rule correctly when it fires.
+#
+# The guard is still exercised as the WORKING COPY defines it — the checker is
+# invoked from its working-copy path and the working-copy manifest is copied in
+# — so an uncommitted change to either is under test, which is the whole reason
+# to run this before committing.
 #
 # Run: bash scripts/test-publication-boundary.sh
 
 set -uo pipefail
-cd "$(git rev-parse --show-toplevel)"
+REPO="$(git rev-parse --show-toplevel)"
+cd "$REPO"
 
-MANIFEST=".github/publication-boundary.yaml"
-CHECK="scripts/publication-boundary-check.py"
+# Absolute, because the checker is invoked from the working copy but WITH THE
+# SANDBOX AS ITS CWD: every path it resolves (manifest, tracked paths, git
+# history) is relative to the process's directory, not to the script's.
+CHECK="$REPO/scripts/publication-boundary-check.py"
+MANIFEST_SRC="$REPO/.github/publication-boundary.yaml"
+MANIFEST=".github/publication-boundary.yaml" # relative — inside the sandbox
 
 # The unresolvable-issue-reference rule (#673) scans the lines this working tree
-# ADDS over a base commit. Pin that base to HEAD so every planted violation is
-# exactly the diff, whatever branch the suite runs on.
+# ADDS over a base commit. The sandbox is checked out AT HEAD, so pinning the
+# base to HEAD makes every planted violation exactly the diff — whatever branch
+# the suite runs on, and whatever is uncommitted next door.
 export NG_BOUNDARY_DIFF_BASE="HEAD"
-BACKUP="$(mktemp)"
+
+SANDBOX=""
+TREE=""
+BACKUP=""
 PLANTED=""
 PASS=0
 FAIL=0
 
 cleanup() {
-  cp "$BACKUP" "$MANIFEST"
-  rmdir packages/nightgauge-vscode/tests/_boundary_probe 2>/dev/null
-  [ -n "$PLANTED" ] && rm -f "$PLANTED" && git rm --cached -q "$PLANTED" 2>/dev/null
-  rm -f "$BACKUP"
+  cd "$REPO" 2>/dev/null || return
+  [ -n "$TREE" ] && git worktree remove --force "$TREE" >/dev/null 2>&1
+  [ -n "$SANDBOX" ] && rm -rf "$SANDBOX"
+  git worktree prune >/dev/null 2>&1
 }
-trap cleanup EXIT
+trap cleanup EXIT INT TERM
 
+SANDBOX="$(mktemp -d)" || exit 2
+TREE="$SANDBOX/tree"
+if ! git worktree add --detach --quiet "$TREE" HEAD >/dev/null 2>&1; then
+  printf '\033[31msetup: cannot create the sandbox worktree at HEAD.\033[0m\n' >&2
+  printf 'Refusing to fall back to the live checkout — the results would depend on\n' >&2
+  printf 'uncommitted work and would name the wrong rule when they failed.\n' >&2
+  exit 2
+fi
+cd "$TREE" || exit 2
+cp "$MANIFEST_SRC" "$MANIFEST"
+BACKUP="$SANDBOX/manifest.bak"
 cp "$MANIFEST" "$BACKUP"
 
 expect_exit() {
@@ -63,7 +126,22 @@ expect_exit_with_base() {
 }
 
 echo "publication-boundary guard — fail-closed tests"
+printf 'sandbox: detached worktree at %s + the working-copy manifest\n' "$(git rev-parse --short HEAD)"
 echo ""
+
+# ── Precondition: the empty sandbox must be clean ────────────────────────────
+# Not a test case — the control that keeps every `expect_exit 0` case honest. If
+# the guard already rejects HEAD's tree under this manifest, all of those cases
+# go red and each blames its own fixture. Say the real cause once, print what the
+# checker actually said, and stop rather than emit a page of wrong diagnoses.
+if ! BASELINE="$(python3 "$CHECK" 2>&1)"; then
+  printf '\033[31msetup: the guard does not pass on a pristine HEAD worktree with this manifest.\033[0m\n' >&2
+  printf 'Every "no false positives" case below would fail and blame its own fixture, so\n' >&2
+  printf 'the suite stops here. This is a finding about the guard or the manifest — not\n' >&2
+  printf 'about any fixture, and not about uncommitted work (the sandbox has none):\n\n' >&2
+  printf '%s\n' "$BASELINE" >&2
+  exit 2
+fi
 
 # ── The guard must FAIL when it cannot see ──────────────────────────────────
 printf 'allow: [\n  - path: "unclosed\n' > "$MANIFEST"
@@ -281,9 +359,10 @@ PLANTED=""
 # NOTE: there is deliberately no "clean tree passes" case here. CI runs the guard
 # against the real tree on every pull request, which proves that continuously and
 # for real. Asserting it a second time here would only couple this test to
-# whatever the tree happens to look like today.
+# whatever the tree happens to look like today. The sandbox precondition above is
+# a different claim: it is about HEAD, which CI already validated, and it exists
+# so a broken baseline is reported once instead of misattributed 6 times.
 
-cp "$BACKUP" "$MANIFEST"
 echo ""
 if [ "$FAIL" -gt 0 ]; then
   printf '\033[31m%s passed, %s FAILED\033[0m\n' "$PASS" "$FAIL"
