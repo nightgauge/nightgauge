@@ -2,6 +2,19 @@ import * as vscode from "vscode";
 import type { ITokenStorage } from "../platform/TokenStorage";
 import type { Logger } from "../utils/logger";
 import type { IOnDemandTokenRefresher } from "../platform/TokenRefreshManager";
+import type { ReportedUsage } from "./usage/usageReporting";
+
+/**
+ * Supplies the adapter usage report to attach to a beat, or `null` to send
+ * none (Issue #736).
+ *
+ * A callback rather than a service reference so this class keeps knowing
+ * nothing about the usage model: it transports whatever it is handed, and
+ * every decision about what may leave the machine stays in
+ * `usageReporting.ts`. Returning `null` — which is the default configuration —
+ * leaves the heartbeat exactly as it was before reporting existed.
+ */
+export type UsageReportProvider = () => Promise<ReportedUsage | null>;
 
 const HEARTBEAT_INTERVAL_MS = 30_000;
 const RETRY_DELAY_MS = 5_000;
@@ -21,7 +34,12 @@ export class AgentHeartbeatService implements vscode.Disposable {
     private readonly tokenStorage: ITokenStorage,
     private readonly logger: Logger,
     // Centralized refresh (#3751) — see AgentRegistrationService for rationale.
-    private readonly tokenRefresher?: IOnDemandTokenRefresher
+    private readonly tokenRefresher?: IOnDemandTokenRefresher,
+    /**
+     * Optional. Absent, or returning null, means the bodiless PUT — the only
+     * behaviour that existed before Issue #736 and still the default.
+     */
+    private readonly getUsageReport?: UsageReportProvider
   ) {}
 
   /** Call once agentId is available from registration. No-op if already started. */
@@ -81,14 +99,37 @@ export class AgentHeartbeatService implements vscode.Disposable {
     }
   }
 
-  private putHeartbeat(token: string): Promise<Response> {
+  private async putHeartbeat(token: string): Promise<Response> {
     return fetch(`${this.getPlatformUrl()}/v1/agents/${this.agentId!}/heartbeat`, {
       method: "PUT",
       headers: {
         Authorization: `Bearer ${token}`,
         "Content-Type": "application/json",
       },
+      ...(await this.usageBody()),
     });
+  }
+
+  /**
+   * The request body for this beat: `{ body }` when a report is due, and an
+   * empty object — no `body` key at all — otherwise.
+   *
+   * A usage report must never cost the operator agent presence, so a provider
+   * that throws is swallowed: the beat proceeds bodiless and the dashboard
+   * keeps whatever it was last told. Losing one sample is a far better trade
+   * than flipping a machine offline over telemetry.
+   */
+  private async usageBody(): Promise<{ body?: string }> {
+    if (!this.getUsageReport) {
+      return {};
+    }
+    try {
+      const usage = await this.getUsageReport();
+      return usage === null ? {} : { body: JSON.stringify({ usage }) };
+    } catch (error) {
+      this.logger.warn(`AgentHeartbeatService: usage report skipped — ${String(error)}`);
+      return {};
+    }
   }
 
   private refreshAccessToken(): Promise<string | null> {
