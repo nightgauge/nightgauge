@@ -716,6 +716,52 @@ generated files must be regenerated before the TypeScript build, and the build
 must succeed before tests can run. `format:check` is the #1 cause of avoidable
 CI failures — always run `npm run format` before committing.
 
+### The gate is not the loop
+
+`ci-local.sh` is a **pre-push gate**, not an iteration loop. Run it once, when
+you believe you are done. Running it to find out what you broke is the single
+most expensive way to ask that question: it rebuilds Go, runs `go test ./...`
+plus `-race` on the orchestrator, regenerates the plugin skills mirror, and
+makes network calls for the markdown link check — on the order of fifteen
+minutes, most of it re-verifying code you did not touch.
+
+Climb the cheapest rung that can answer the question in front of you:
+
+| Rung         | Command                                      | Use it when                             |
+| ------------ | -------------------------------------------- | --------------------------------------- |
+| **Targeted** | `npx -w nightgauge-vscode vitest run <file>` | Fixing a failure you can already name   |
+|              | `go test ./internal/<pkg>/`                  | Same, on the Go side                    |
+| **Package**  | `npm run test -w nightgauge-vscode`          | Discovering what a batch of edits broke |
+|              | `go test ./internal/...`                     | Same, when the edits were in Go         |
+| **Gate**     | `bash scripts/ci-local.sh`                   | Once, immediately before `git push`     |
+
+**Discovery needs breadth, but rarely the whole repo.** Some checks are
+repo-wide by design and will not fire from the test file you edited —
+`configRegressionGuard` scans every source file for config-system bypasses,
+snapshot suites cover rendered HTML far from the component you changed, and the
+publication-boundary and plugin-mirror checks read the whole tree. That is a
+real argument for a sweep after a substantive change; it is not an argument for
+the _full_ gate. A change confined to one package is almost always caught by
+that package's own suite, which costs minutes rather than a quarter of an hour.
+
+The failure mode this replaces: fix a test, re-run the whole gate, discover one
+new failure, fix it, re-run the whole gate. Three passes of that spends most of
+an hour and leaves the tree no greener than a single gate run at the end would
+have. **Re-running the gate does not make the tree more correct — it only tells
+you again what a narrower run already told you.**
+
+Two things this does not license:
+
+- **Skipping the gate.** It still runs before every push, in full, and it still
+  has to pass. Narrow runs during development are how you _arrive_ at a green
+  gate, never a substitute for it — a package suite cannot see the cross-cutting
+  checks above, which is exactly why the gate exists.
+- **Trusting a narrow run's silence.** A targeted run proves the file you named
+  passes; it proves nothing about the file you did not think of. When a change
+  touches shared types, generated files, config schemas, or anything under
+  `src/manifest/`, go straight to the package rung — those edits break things at
+  a distance by their nature.
+
 ### Quick Validation Script
 
 Run `/pr-preflight` locally if you have the skill installed, or run these checks
