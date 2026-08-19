@@ -107,9 +107,7 @@ def _line_has_denied_token(line, word, salt, token_hashes):
 # "owner/repo#N" for any OTHER repository is deliberately not matched: those
 # numbers belong to a sequence this manifest knows nothing about, and the
 # private ones are already covered by `private-repository-issue-reference`.
-ISSUE_REF = re.compile(
-    r"(?<![0-9A-Za-z_/&#-])(?:nightgauge/nightgauge|nightgauge)?#([0-9]+)"
-)
+ISSUE_REF = re.compile(r"(?<![0-9A-Za-z_/&#-])(?:nightgauge/nightgauge|nightgauge)?#([0-9]+)")
 HEX_RUN = re.compile(r"[0-9a-fA-F]+")
 
 # Widths a CSS/SVG hex colour can take that this repository cannot produce as an
@@ -163,11 +161,8 @@ def resolve_diff_base() -> tuple[str, str] | tuple[None, None]:
         # An explicit base that does not resolve is an error, not an invitation
         # to quietly measure against something else.
         if not _rev_ok(override):
-            die(
-                2,
-                f"NG_BOUNDARY_DIFF_BASE={override!r} does not resolve to a commit. "
-                "Failing closed rather than silently diffing against a different base.",
-            )
+            die(2, f"NG_BOUNDARY_DIFF_BASE={override!r} does not resolve to a commit. "
+                   "Failing closed rather than silently diffing against a different base.")
         candidates.append(override)
     base_ref = os.environ.get("GITHUB_BASE_REF")
     if base_ref:
@@ -179,7 +174,9 @@ def resolve_diff_base() -> tuple[str, str] | tuple[None, None]:
     for cand in candidates:
         if not _rev_ok(cand):
             continue
-        found = subprocess.run(["git", "merge-base", cand, "HEAD"], capture_output=True)
+        found = subprocess.run(
+            ["git", "merge-base", cand, "HEAD"], capture_output=True
+        )
         if found.returncode == 0 and found.stdout.strip():
             return cand, found.stdout.decode().strip()
     return None, None
@@ -193,15 +190,8 @@ def added_lines(base: str):
     violations with `git add` and never commits them.
     """
     out = subprocess.run(
-        [
-            "git",
-            "diff",
-            "--no-color",
-            "--no-ext-diff",
-            "--unified=0",
-            "--diff-filter=ACMR",
-            base,
-        ],
+        ["git", "diff", "--no-color", "--no-ext-diff", "--unified=0",
+         "--diff-filter=ACMR", base],
         capture_output=True,
         check=True,
     ).stdout.decode(errors="ignore")
@@ -211,13 +201,7 @@ def added_lines(base: str):
     for raw in out.splitlines():
         if raw.startswith("+++ "):
             target = raw[4:]
-            path = (
-                None
-                if target == "/dev/null"
-                else target[2:]
-                if target.startswith("b/")
-                else target
-            )
+            path = None if target == "/dev/null" else target[2:] if target.startswith("b/") else target
         elif raw.startswith("@@"):
             hunk = re.match(r"@@ -\S+ \+(\d+)", raw)
             lineno = int(hunk.group(1)) if hunk else 0
@@ -246,18 +230,12 @@ def observed_high_water() -> int:
 
 def main() -> int:
     if not MANIFEST.exists():
-        die(
-            2,
-            f"manifest not found: {MANIFEST}\n  The guard cannot verify anything. Failing closed.",
-        )
+        die(2, f"manifest not found: {MANIFEST}\n  The guard cannot verify anything. Failing closed.")
 
     try:
         import yaml  # noqa: PLC0415
     except ImportError:
-        die(
-            2,
-            "PyYAML is not available. The guard cannot parse the manifest. Failing closed.",
-        )
+        die(2, "PyYAML is not available. The guard cannot parse the manifest. Failing closed.")
 
     try:
         manifest = yaml.safe_load(MANIFEST.read_text())
@@ -273,27 +251,18 @@ def main() -> int:
     pending = manifest.get("needs_decision") or []
 
     if not allow:
-        die(
-            2,
-            "manifest has no `allow` rules. Every path would be rejected; this is "
-            "almost certainly a broken manifest rather than an empty repo. Failing closed.",
-        )
+        die(2, "manifest has no `allow` rules. Every path would be rejected; this is "
+               "almost certainly a broken manifest rather than an empty repo. Failing closed.")
 
     refs_rule = manifest.get("issue_references")
     if not isinstance(refs_rule, dict):
-        die(
-            2,
-            "manifest has no `issue_references` block. The unresolvable-reference rule "
-            "cannot know this repository's high-water mark, so it would silently check "
-            "nothing. Failing closed.",
-        )
+        die(2, "manifest has no `issue_references` block. The unresolvable-reference rule "
+               "cannot know this repository's high-water mark, so it would silently check "
+               "nothing. Failing closed.")
     mark = refs_rule.get("high_water_mark")
     slack = refs_rule.get("slack")
     if isinstance(mark, bool) or not isinstance(mark, int) or mark < 1:
-        die(
-            2,
-            "issue_references.high_water_mark must be a positive integer. Failing closed.",
-        )
+        die(2, "issue_references.high_water_mark must be a positive integer. Failing closed.")
     if isinstance(slack, bool) or not isinstance(slack, int) or slack < 0:
         die(2, "issue_references.slack must be a non-negative integer. Failing closed.")
     ceiling = mark + slack
@@ -305,14 +274,11 @@ def main() -> int:
     # false positives.
     observed = observed_high_water()
     if observed > ceiling:
-        die(
-            2,
-            f"issue_references.high_water_mark ({mark}) is stale.\n"
-            f"  This repository has already merged #{observed}, above the ceiling "
-            f"{ceiling} (= {mark} + slack {slack}).\n"
-            f"  Bump `high_water_mark` in {MANIFEST} to the repository's current highest\n"
-            f"  issue/PR number. Until then this rule would reject real references.",
-        )
+        die(2, f"issue_references.high_water_mark ({mark}) is stale.\n"
+               f"  This repository has already merged #{observed}, above the ceiling "
+               f"{ceiling} (= {mark} + slack {slack}).\n"
+               f"  Bump `high_water_mark` in {MANIFEST} to the repository's current highest\n"
+               f"  issue/PR number. Until then this rule would reject real references.")
 
     violations: list[str] = []
     paths = tracked_paths()
@@ -354,10 +320,7 @@ def main() -> int:
             # inline (?-i:...) group.
             pattern = re.compile(rule["pattern"], re.IGNORECASE)
         except re.error as exc:
-            die(
-                2,
-                f"forbidden_content rule '{rid}' has an invalid regex: {exc}. Failing closed.",
-            )
+            die(2, f"forbidden_content rule '{rid}' has an invalid regex: {exc}. Failing closed.")
         exempt = rule.get("allow_paths") or []
         for p in paths:
             if any(matches(p, e) for e in exempt):
@@ -369,7 +332,8 @@ def main() -> int:
             for n, line in enumerate(text.splitlines(), 1):
                 if pattern.search(line):
                     violations.append(
-                        f"FORBIDDEN CONTENT [{rid}]: {p}:{n}\n    {line.strip()[:100]}"
+                        f"FORBIDDEN CONTENT [{rid}]: {p}:{n}\n"
+                        f"    {line.strip()[:100]}"
                     )
                     break  # one hit per file is enough to fail it
 
@@ -413,13 +377,10 @@ def main() -> int:
     # See the module header for why the scope is a diff rather than the tree.
     base_ref, base = resolve_diff_base()
     if base is None:
-        die(
-            2,
-            "cannot resolve a base commit to diff against, so the "
-            "unresolvable-reference rule would check nothing.\n"
-            "  Fetch the default branch, or set NG_BOUNDARY_DIFF_BASE to a "
-            "revision. Failing closed.",
-        )
+        die(2, "cannot resolve a base commit to diff against, so the "
+               "unresolvable-reference rule would check nothing.\n"
+               "  Fetch the default branch, or set NG_BOUNDARY_DIFF_BASE to a "
+               "revision. Failing closed.")
 
     ref_exempt = refs_rule.get("allow_paths") or []
     added = list(added_lines(base))
@@ -447,34 +408,21 @@ def main() -> int:
 
     # ── Report ───────────────────────────────────────────────────────────────
     if violations:
-        print(
-            f"\n\033[31m✗ publication boundary: {len(violations)} violation(s)\033[0m\n",
-            file=sys.stderr,
-        )
+        print(f"\n\033[31m✗ publication boundary: {len(violations)} violation(s)\033[0m\n",
+              file=sys.stderr)
         for v in violations:
             print(f"  • {v}\n", file=sys.stderr)
-        print(
-            "This repository is maintained as a public-safe tree regardless of its current",
-            file=sys.stderr,
-        )
-        print(
-            "visibility setting -- treat every violation above as a real leak. Fix the above,",
-            file=sys.stderr,
-        )
-        print(
-            f"or classify the path in {MANIFEST} if it is genuinely publishable.\n",
-            file=sys.stderr,
-        )
+        print("This repository is maintained as a public-safe tree regardless of its current",
+              file=sys.stderr)
+        print("visibility setting -- treat every violation above as a real leak. Fix the above,",
+              file=sys.stderr)
+        print(f"or classify the path in {MANIFEST} if it is genuinely publishable.\n", file=sys.stderr)
         return 1
 
-    print(
-        f"\033[32m✓ publication boundary clean\033[0m — {len(paths)} tracked paths, "
-        f"all classified; no denied paths, no forbidden content, no open decisions."
-    )
-    print(
-        f"  issue references: {len(added)} added line(s) over {base_ref} "
-        f"({base[:12]}) carry no #N above {ceiling}."
-    )
+    print(f"\033[32m✓ publication boundary clean\033[0m — {len(paths)} tracked paths, "
+          f"all classified; no denied paths, no forbidden content, no open decisions.")
+    print(f"  issue references: {len(added)} added line(s) over {base_ref} "
+          f"({base[:12]}) carry no #N above {ceiling}.")
     return 0
 
 
