@@ -159,6 +159,9 @@ var contractTestedMethods = map[string]bool{
 	// Workspace
 	"workspace.setRoot":                true,
 	"workspace.registerRepo":           true,
+	"workspace.repoList":               true,
+	"workspace.repoAdd":                true,
+	"workspace.repoRemove":             true,
 	"workspace.configureForgeInstance": true,
 	// Wave orchestration
 	"wave.status": true,
@@ -285,6 +288,32 @@ func TestContract_Workspace(t *testing.T) {
 			"kind":  "github",
 		})
 		assertMethodRegistered(t, h.readResponseFor(id, nil), "workspace.configureForgeInstance")
+	})
+
+	// Workspace repository management (#705). The harness has no workspace
+	// manifest, so these fail internally — which is the point: a -32603 proves
+	// the method ran, and only -32601 (method not found) is a contract break.
+	t.Run("workspace.repoList/registered", func(t *testing.T) {
+		id := h.sendRequest("workspace.repoList", map[string]interface{}{"folders": []string{}})
+		assertMethodRegistered(t, h.readResponseFor(id, nil), "workspace.repoList")
+	})
+
+	t.Run("workspace.repoAdd/registered", func(t *testing.T) {
+		id := h.sendRequest("workspace.repoAdd", map[string]interface{}{
+			"name":    "contract-probe",
+			"path":    "../contract-probe",
+			"role":    "primary",
+			"project": 1,
+		})
+		assertMethodRegistered(t, h.readResponseFor(id, nil), "workspace.repoAdd")
+	})
+
+	t.Run("workspace.repoRemove/registered", func(t *testing.T) {
+		id := h.sendRequest("workspace.repoRemove", map[string]interface{}{
+			"name":  "contract-probe",
+			"force": false,
+		})
+		assertMethodRegistered(t, h.readResponseFor(id, nil), "workspace.repoRemove")
 	})
 }
 

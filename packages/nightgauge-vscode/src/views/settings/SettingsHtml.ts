@@ -23,6 +23,7 @@ import type { DefaultModel } from "../../utils/incrediConfig";
 import { CODEX_DEFAULT_BASE_MODEL, EFFORT_LEVELS } from "@nightgauge/sdk";
 import type { ClaudeEffort } from "../../utils/resolvers/stageResolver";
 import type { RepositoryProjectSettingsState } from "../../services/RepositoryProjectSettingsService";
+import type { WorkspaceRepoState } from "../../services/WorkspaceRepoSettingsService";
 
 /**
  * Pre-computed mode-aware preview row supplied by `SettingsPanel`.
@@ -68,6 +69,8 @@ export interface SettingsHtmlOptions {
   driftBannerDismissed?: boolean;
   /** Repository-aware GitHub Project assignments and linked-project discovery. */
   repositoryProjects?: RepositoryProjectSettingsState;
+  /** Workspace manifest membership — configured repos and unlisted candidates (#705). */
+  workspaceRepos?: WorkspaceRepoState;
   /** Tier currently rendered; project/local support explicit global inheritance. */
   currentTier?: ViewTier;
   /** Whether ui.core.adapter exists in the raw tier being rendered. */
@@ -786,6 +789,117 @@ function getListInputHtml(
 /**
  * Generate Project section HTML
  */
+/**
+ * Workspace Repositories section (#705).
+ *
+ * The panel could configure a repository but not change WHICH repositories
+ * exist: the one repo-shaped control chose among entries already listed. Every
+ * mutation here goes through the Go writer over IPC — nothing in this file
+ * parses or edits manifest YAML.
+ */
+function getWorkspaceReposSectionHtml(disabled: boolean, options?: SettingsHtmlOptions): string {
+  const state = options?.workspaceRepos;
+  if (!state) {
+    return `<div class="section-content"><p class="section-note">Loading workspace repositories…</p></div>`;
+  }
+  if (state.unmanaged) {
+    return `
+      <div class="section-content">
+        <p class="section-note">
+          This workspace has no <code>.vscode/nightgauge-workspace.yaml</code>, so Nightgauge is in
+          single-repository mode and manages only the folder it is running in. Creating a manifest
+          switches to multi-repository mode; it takes effect immediately, with no window reload.
+        </p>
+      </div>`;
+  }
+
+  const errorHtml = state.error
+    ? `<p class="setting-error workspace-repo-error">${escapeHtml(state.error)}</p>`
+    : "";
+  const noticeHtml = state.notice
+    ? `<p class="section-note workspace-repo-notice">${escapeHtml(state.notice)}</p>`
+    : "";
+
+  const rows = state.configured
+    .map((repo) => {
+      // The manifest's number and the resolver's answer are shown separately
+      // when they disagree — that drift is what `nightgauge doctor` fails on,
+      // and collapsing it into one number would hide it here.
+      const drift =
+        repo.resolvedProject > 0 && repo.resolvedProject !== repo.projectNumber
+          ? `<span class="workspace-repo-drift" title="The manifest and the repo→project resolver disagree">manifest #${repo.projectNumber} vs resolved #${repo.resolvedProject}</span>`
+          : `<span class="workspace-repo-board">Board #${repo.projectNumber}</span>`;
+      const missing = repo.exists
+        ? ""
+        : `<span class="workspace-repo-missing" title="Listed in the manifest but the directory is not there">directory missing</span>`;
+      const refs = (repo.routingRefs ?? []).length
+        ? `<span class="workspace-repo-refs" title="${escapeHtml((repo.routingRefs ?? []).join(", "))}">referenced by routing</span>`
+        : "";
+      return `
+        <li class="workspace-repo-row" data-repo="${escapeHtml(repo.name)}">
+          <div class="workspace-repo-main">
+            <span class="workspace-repo-name">${escapeHtml(repo.name)}</span>
+            <span class="workspace-repo-path">${escapeHtml(repo.path)}</span>
+          </div>
+          <div class="workspace-repo-meta">
+            <span class="workspace-repo-role">${escapeHtml(repo.role || "primary")}</span>
+            ${drift}
+            ${missing}
+            ${refs}
+          </div>
+          <button class="workspace-repo-remove" data-repo="${escapeHtml(repo.name)}" ${disabled ? "disabled" : ""}>Remove</button>
+        </li>`;
+    })
+    .join("");
+
+  const configuredHtml = state.configured.length
+    ? `<ul class="workspace-repo-list">${rows}</ul>`
+    : `<p class="section-note">The manifest declares no repositories.</p>`;
+
+  const candidates = state.candidates
+    .map((c) => {
+      // A candidate with no resolvable board cannot be added: the form says so
+      // and refuses, rather than accepting an entry that would carry
+      // project_number: 0 and misroute every issue the repo produces.
+      const blocked = Boolean(c.boardUnavailable);
+      const detail = blocked
+        ? `<span class="workspace-repo-blocked">${escapeHtml(c.boardUnavailable)}</span>`
+        : `<span class="workspace-repo-board">Board #${c.suggestedProject}${c.projectTitle ? ` — ${escapeHtml(c.projectTitle)}` : ""}</span>`;
+      return `
+        <li class="workspace-repo-candidate" data-candidate="${escapeHtml(c.name)}">
+          <div class="workspace-repo-main">
+            <span class="workspace-repo-name">${escapeHtml(c.name)}</span>
+            <span class="workspace-repo-path">${escapeHtml(c.path)}</span>
+          </div>
+          <div class="workspace-repo-meta">${detail}</div>
+          <button class="workspace-repo-add"
+                  data-candidate="${escapeHtml(c.name)}"
+                  data-path="${escapeHtml(c.path)}"
+                  data-project="${c.suggestedProject}"
+                  ${blocked || disabled ? "disabled" : ""}>Add to workspace</button>
+        </li>`;
+    })
+    .join("");
+
+  const candidatesHtml = state.candidates.length
+    ? `<h4 class="subsection-title">Folders not under management</h4>
+       <p class="section-note">Git checkouts in this workspace that the manifest does not list. Nightgauge evaluates none of them — they appear in no tree and no attention producer looks at them.</p>
+       <ul class="workspace-repo-list">${candidates}</ul>`
+    : `<h4 class="subsection-title">Folders not under management</h4>
+       <p class="section-note">Every git checkout in this workspace is configured.</p>`;
+
+  return `
+    <div class="section-content">
+      ${errorHtml}
+      ${noticeHtml}
+      <h4 class="subsection-title">Configured repositories</h4>
+      <p class="section-note">Written to <code>${escapeHtml(state.manifestPath)}</code>. Changes apply immediately — no window reload.</p>
+      ${configuredHtml}
+      ${candidatesHtml}
+      <button class="workspace-repo-refresh" ${disabled ? "disabled" : ""}>Refresh</button>
+    </div>`;
+}
+
 function getProjectSectionHtml(
   config: IncrediConfig,
   disabled: boolean,
@@ -2609,6 +2723,8 @@ function getSectionContentHtml(
       return getCoreSectionHtml(config, disabled, sources, showBadges, options);
     case "platform":
       return getPlatformSectionHtml(config, disabled, sources, showBadges, options);
+    case "workspace_repos":
+      return getWorkspaceReposSectionHtml(disabled, options);
     case "project":
       return getProjectSectionHtml(config, disabled, sources, showBadges, options);
     case "pull_request":
@@ -3834,6 +3950,37 @@ function getScript(): string {
           action: 'project-select-repository',
           payload: { repository: event.target.value },
         });
+      });
+
+      // --- Workspace Repositories (#705) ---
+      // Delegated: the list re-renders after every mutation, so listeners bound
+      // to individual rows would be dropped on the first change.
+      document.addEventListener('click', (event) => {
+        const add = event.target.closest?.('.workspace-repo-add');
+        if (add && !add.disabled) {
+          vscode.postMessage({
+            type: 'action',
+            action: 'workspace-repo-add',
+            payload: {
+              name: add.dataset.candidate,
+              path: add.dataset.path,
+              project: Number(add.dataset.project),
+            },
+          });
+          return;
+        }
+        const remove = event.target.closest?.('.workspace-repo-remove');
+        if (remove && !remove.disabled) {
+          vscode.postMessage({
+            type: 'action',
+            action: 'workspace-repo-remove',
+            payload: { name: remove.dataset.repo },
+          });
+          return;
+        }
+        if (event.target.closest?.('.workspace-repo-refresh')) {
+          vscode.postMessage({ type: 'action', action: 'workspace-repo-refresh' });
+        }
       });
 
       // Per-stage adapter reset buttons

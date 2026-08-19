@@ -168,6 +168,14 @@ export const SETTINGS_SECTIONS: SettingsSectionMeta[] = [
     docLink: "docs/CONFIGURATION.md#platform-configuration",
   },
   {
+    id: "workspace_repos",
+    title: "Workspace Repositories",
+    icon: "repo",
+    description:
+      "Which repositories Nightgauge manages. Adds and removes entries in .vscode/nightgauge-workspace.yaml.",
+    docLink: "docs/MULTI_REPO_WORKSPACE.md#workspace-repositories-section",
+  },
+  {
     id: "project",
     title: "Project Board",
     icon: "project",

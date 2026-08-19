@@ -85,7 +85,16 @@ describe("settings surface inventory", () => {
       SETTINGS_SECTIONS.map(({ id }) => id).sort()
     );
     for (const entry of inventory.custom_sections) {
-      expect(schemaHasPath(entry.schema_path), entry.section).toBe(true);
+      // A section may be backed by the canonical config schema OR declare a
+      // different backing store, the same escape hatch vscode_namespaces uses.
+      // `workspace_repos` edits .vscode/nightgauge-workspace.yaml, which is a
+      // different file with a different writer, so demanding a schema path
+      // would force a fictional one.
+      if ("schema_path" in entry && entry.schema_path) {
+        expect(schemaHasPath(entry.schema_path), entry.section).toBe(true);
+      } else {
+        expect("classification" in entry, entry.section).toBe(true);
+      }
     }
   });
 

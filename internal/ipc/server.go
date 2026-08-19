@@ -4886,6 +4886,17 @@ func (s *Server) registerMethods() {
 
 	//ipc:method agentAcknowledgeCommand params:AgentAcknowledgeCommandParams result:AgentAcknowledgeCommandResult
 	s.methods["agent.acknowledgeCommand"] = s.handleAgentAcknowledgeCommand
+
+	// --- Workspace repository management (#705) ---
+
+	//ipc:method workspaceRepoList params:WorkspaceRepoListParams result:WorkspaceRepoListResult
+	s.methods["workspace.repoList"] = s.handleWorkspaceRepoList
+
+	//ipc:method workspaceRepoAdd params:WorkspaceRepoAddParams result:WorkspaceRepoAddResult
+	s.methods["workspace.repoAdd"] = s.handleWorkspaceRepoAdd
+
+	//ipc:method workspaceRepoRemove params:WorkspaceRepoRemoveParams result:WorkspaceRepoRemoveResult
+	s.methods["workspace.repoRemove"] = s.handleWorkspaceRepoRemove
 }
 
 // resolveAutonomousAllowlist computes the final repo allowlist for

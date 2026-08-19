@@ -297,6 +297,52 @@ Key features:
 
 ## Repository Management
 
+### Workspace Repositories section
+
+Nightgauge Settings → **Workspace Repositories** is the supported way to change
+which repositories Nightgauge manages. It lists every configured entry with its
+path, role and resolved board, offers per-row removal, and presents git
+checkouts in the workspace that the manifest does **not** list as one-click
+"Add to workspace" candidates.
+
+Before this section existed the only way to bring a repository under management
+was to hand-edit `.vscode/nightgauge-workspace.yaml` and reload the window,
+which was documented nowhere in the UI. The specific confusion it removes: a
+folder open in the VSCode workspace but absent from the manifest is invisible to
+Nightgauge — it appears in no tree and **no attention producer evaluates it** —
+because `WorkspaceManager` populates its repository map exclusively from the
+manifest once one exists.
+
+**Every mutation goes through the Go writer** (`workspace.repoAdd` /
+`workspace.repoRemove` over IPC → `internal/workspacemanifest`). The panel never
+parses, serializes or edits the YAML: the manifest carries load-bearing comments
+— the `project_number: 0` footgun is documented only there — and a second writer
+would reflow them. Validation failures are surfaced verbatim; the panel never
+reports success for a write the binary rejected.
+
+**A board is required at entry.** The add path refuses a repository with no
+resolvable project board, in the UI _and_ in the daemon, and says a board must
+be provisioned first rather than accepting the entry. There is no path from this
+section that produces `project_number: 0`, which would resolve to project 0 and
+silently misroute every issue the repository produces.
+
+**Removal warns before orphaning routing.** If `routing.default_repository` or a
+`routing.patterns[].preferred_repo` still names the repository, removal is
+refused once with the references named, and proceeds only on explicit
+confirmation.
+
+After any change the section and the Repositories tree both reflect it with **no
+window reload** — the manifest watcher fires unconditionally, and the panel also
+reloads `WorkspaceManager` explicitly so the tree updates on the same click.
+
+Adding a repository does **not** install board-sync automation into it. Those
+workflows are generated from the manifest, so re-run
+`nightgauge workspace provision-board-sync --write` afterwards; the panel says so
+on every successful add.
+
+The equivalent CLI is `nightgauge workspace repo add|remove|list`, and the
+`coverage-gap` attention card offers the same repair as a one-click verb.
+
 ### Repository Roles
 
 Roles classify repositories for routing and display purposes:

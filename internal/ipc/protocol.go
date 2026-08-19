@@ -1703,3 +1703,92 @@ type IssueRemoveBlockedByParams struct {
 	BlockerNumber int    `json:"blockerNumber"`
 	GitHubUser    string `json:"githubUser,omitempty"`
 }
+
+// --- Workspace repository management (#705) ---------------------------------
+
+// WorkspaceRepoDescriptor is one configured repositories[] entry, enriched with
+// the board the repo→project resolver actually returns for it.
+//
+// ProjectNumber is what the manifest declares; ResolvedProject is what the
+// authoritative resolver answers. They are reported separately on purpose — a
+// disagreement is the drift `nightgauge doctor` fails on, and hiding it behind
+// one number would make the panel the place that number goes to die.
+type WorkspaceRepoDescriptor struct {
+	Name            string   `json:"name"`
+	Path            string   `json:"path"`
+	Role            string   `json:"role"`
+	ProjectNumber   int      `json:"projectNumber"`
+	ResolvedProject int      `json:"resolvedProject"`
+	ProjectTitle    string   `json:"projectTitle"`
+	Exists          bool     `json:"exists"`
+	RoutingRefs     []string `json:"routingRefs"`
+}
+
+// WorkspaceRepoCandidate is a git checkout present in the workspace but absent
+// from the manifest — the "add this folder" rows.
+type WorkspaceRepoCandidate struct {
+	Name             string `json:"name"`
+	Spec             string `json:"spec"`
+	Path             string `json:"path"`
+	SuggestedProject int    `json:"suggestedProject"`
+	ProjectTitle     string `json:"projectTitle"`
+	// BoardUnavailable carries the resolver's own reason when no board could be
+	// resolved. The panel must refuse to submit in that state rather than write
+	// project_number: 0, so it needs the reason to say WHY.
+	BoardUnavailable string `json:"boardUnavailable"`
+}
+
+// WorkspaceRepoListParams are parameters for workspace.repoList.
+type WorkspaceRepoListParams struct {
+	// Folders are absolute paths the caller knows about — the VSCode
+	// workspace's own folder list.
+	//
+	// The daemon's sibling scan finds checkouts beside the workspace root,
+	// which covers the common layout but NOT a workspace folder added from
+	// somewhere else on disk. Such a folder is exactly as unwatched as any
+	// other uncovered repo, so the caller supplies what it can see and the
+	// daemon resolves both sets identically.
+	Folders []string `json:"folders"`
+}
+
+// WorkspaceRepoListResult is the result for workspace.repoList.
+type WorkspaceRepoListResult struct {
+	ManifestPath string                    `json:"manifestPath"`
+	Configured   []WorkspaceRepoDescriptor `json:"configured"`
+	Candidates   []WorkspaceRepoCandidate  `json:"candidates"`
+	// Unmanaged reports that no manifest exists, so the workspace is in
+	// single-repo mode and there is nothing to list yet.
+	Unmanaged bool `json:"unmanaged"`
+}
+
+// WorkspaceRepoAddParams are parameters for workspace.repoAdd.
+type WorkspaceRepoAddParams struct {
+	Name    string `json:"name"`
+	Path    string `json:"path"`
+	Role    string `json:"role"`
+	Project int    `json:"project"`
+}
+
+// WorkspaceRepoAddResult is the result for workspace.repoAdd.
+type WorkspaceRepoAddResult struct {
+	OK    bool                    `json:"ok"`
+	Entry WorkspaceRepoDescriptor `json:"entry"`
+	// BoardSyncNote tells the operator that board-sync automation may need
+	// re-provisioning; the write succeeded regardless.
+	BoardSyncNote string `json:"boardSyncNote"`
+}
+
+// WorkspaceRepoRemoveParams are parameters for workspace.repoRemove.
+type WorkspaceRepoRemoveParams struct {
+	Name string `json:"name"`
+	// Force removes the entry even when routing still references it. Without
+	// it, such a removal is refused and the references are named.
+	Force bool `json:"force"`
+}
+
+// WorkspaceRepoRemoveResult is the result for workspace.repoRemove.
+type WorkspaceRepoRemoveResult struct {
+	OK           bool   `json:"ok"`
+	KeptComment  bool   `json:"keptComment"`
+	ManifestPath string `json:"manifestPath"`
+}

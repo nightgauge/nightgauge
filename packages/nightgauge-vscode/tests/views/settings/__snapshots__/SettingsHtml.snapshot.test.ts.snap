@@ -1866,6 +1866,24 @@ exports[`getSettingsHtml snapshots (Issue #1242) > default config render 1`] = `
 
       </div>
 
+      <div class="section " id="section-workspace_repos">
+
+    <div class="section-header" data-section="workspace_repos">
+      <div class="section-title-row">
+        <span class="section-chevron codicon codicon-chevron-down"></span>
+        <span class="codicon codicon-repo section-icon"></span>
+        <h3 class="section-title">Workspace Repositories</h3>
+
+        <a href="#" class="doc-link" data-doc="docs/MULTI_REPO_WORKSPACE.md#workspace-repositories-section" title="View documentation">
+         <span class="codicon codicon-link-external"></span>
+       </a>
+      </div>
+      <p class="section-description">Which repositories Nightgauge manages. Adds and removes entries in .vscode/nightgauge-workspace.yaml.</p>
+    </div>
+
+        <div class="section-content"><p class="section-note">Loading workspace repositories…</p></div>
+      </div>
+
       <div class="section " id="section-project">
 
     <div class="section-header" data-section="project">
@@ -3958,6 +3976,37 @@ exports[`getSettingsHtml snapshots (Issue #1242) > default config render 1`] = `
         });
       });
 
+      // --- Workspace Repositories (#705) ---
+      // Delegated: the list re-renders after every mutation, so listeners bound
+      // to individual rows would be dropped on the first change.
+      document.addEventListener('click', (event) => {
+        const add = event.target.closest?.('.workspace-repo-add');
+        if (add && !add.disabled) {
+          vscode.postMessage({
+            type: 'action',
+            action: 'workspace-repo-add',
+            payload: {
+              name: add.dataset.candidate,
+              path: add.dataset.path,
+              project: Number(add.dataset.project),
+            },
+          });
+          return;
+        }
+        const remove = event.target.closest?.('.workspace-repo-remove');
+        if (remove && !remove.disabled) {
+          vscode.postMessage({
+            type: 'action',
+            action: 'workspace-repo-remove',
+            payload: { name: remove.dataset.repo },
+          });
+          return;
+        }
+        if (event.target.closest?.('.workspace-repo-refresh')) {
+          vscode.postMessage({ type: 'action', action: 'workspace-repo-refresh' });
+        }
+      });
+
       // Per-stage adapter reset buttons
       document.querySelectorAll('.reset-stage-adapter-btn').forEach(btn => {
         btn.addEventListener('click', (e) => {
@@ -5944,6 +5993,24 @@ exports[`getSettingsHtml snapshots (Issue #1242) > global tier view 1`] = `
       </div>
     </div>
 
+      </div>
+
+      <div class="section " id="section-workspace_repos">
+
+    <div class="section-header" data-section="workspace_repos">
+      <div class="section-title-row">
+        <span class="section-chevron codicon codicon-chevron-down"></span>
+        <span class="codicon codicon-repo section-icon"></span>
+        <h3 class="section-title">Workspace Repositories</h3>
+
+        <a href="#" class="doc-link" data-doc="docs/MULTI_REPO_WORKSPACE.md#workspace-repositories-section" title="View documentation">
+         <span class="codicon codicon-link-external"></span>
+       </a>
+      </div>
+      <p class="section-description">Which repositories Nightgauge manages. Adds and removes entries in .vscode/nightgauge-workspace.yaml.</p>
+    </div>
+
+        <div class="section-content"><p class="section-note">Loading workspace repositories…</p></div>
       </div>
 
       <div class="section " id="section-project">
@@ -8034,6 +8101,37 @@ exports[`getSettingsHtml snapshots (Issue #1242) > global tier view 1`] = `
           action: 'project-select-repository',
           payload: { repository: event.target.value },
         });
+      });
+
+      // --- Workspace Repositories (#705) ---
+      // Delegated: the list re-renders after every mutation, so listeners bound
+      // to individual rows would be dropped on the first change.
+      document.addEventListener('click', (event) => {
+        const add = event.target.closest?.('.workspace-repo-add');
+        if (add && !add.disabled) {
+          vscode.postMessage({
+            type: 'action',
+            action: 'workspace-repo-add',
+            payload: {
+              name: add.dataset.candidate,
+              path: add.dataset.path,
+              project: Number(add.dataset.project),
+            },
+          });
+          return;
+        }
+        const remove = event.target.closest?.('.workspace-repo-remove');
+        if (remove && !remove.disabled) {
+          vscode.postMessage({
+            type: 'action',
+            action: 'workspace-repo-remove',
+            payload: { name: remove.dataset.repo },
+          });
+          return;
+        }
+        if (event.target.closest?.('.workspace-repo-refresh')) {
+          vscode.postMessage({ type: 'action', action: 'workspace-repo-refresh' });
+        }
       });
 
       // Per-stage adapter reset buttons
@@ -10024,6 +10122,24 @@ exports[`getSettingsHtml snapshots (Issue #1242) > local tier view 1`] = `
 
       </div>
 
+      <div class="section " id="section-workspace_repos">
+
+    <div class="section-header" data-section="workspace_repos">
+      <div class="section-title-row">
+        <span class="section-chevron codicon codicon-chevron-down"></span>
+        <span class="codicon codicon-repo section-icon"></span>
+        <h3 class="section-title">Workspace Repositories</h3>
+
+        <a href="#" class="doc-link" data-doc="docs/MULTI_REPO_WORKSPACE.md#workspace-repositories-section" title="View documentation">
+         <span class="codicon codicon-link-external"></span>
+       </a>
+      </div>
+      <p class="section-description">Which repositories Nightgauge manages. Adds and removes entries in .vscode/nightgauge-workspace.yaml.</p>
+    </div>
+
+        <div class="section-content"><p class="section-note">Loading workspace repositories…</p></div>
+      </div>
+
       <div class="section " id="section-project">
 
     <div class="section-header" data-section="project">
@@ -12112,6 +12228,37 @@ exports[`getSettingsHtml snapshots (Issue #1242) > local tier view 1`] = `
           action: 'project-select-repository',
           payload: { repository: event.target.value },
         });
+      });
+
+      // --- Workspace Repositories (#705) ---
+      // Delegated: the list re-renders after every mutation, so listeners bound
+      // to individual rows would be dropped on the first change.
+      document.addEventListener('click', (event) => {
+        const add = event.target.closest?.('.workspace-repo-add');
+        if (add && !add.disabled) {
+          vscode.postMessage({
+            type: 'action',
+            action: 'workspace-repo-add',
+            payload: {
+              name: add.dataset.candidate,
+              path: add.dataset.path,
+              project: Number(add.dataset.project),
+            },
+          });
+          return;
+        }
+        const remove = event.target.closest?.('.workspace-repo-remove');
+        if (remove && !remove.disabled) {
+          vscode.postMessage({
+            type: 'action',
+            action: 'workspace-repo-remove',
+            payload: { name: remove.dataset.repo },
+          });
+          return;
+        }
+        if (event.target.closest?.('.workspace-repo-refresh')) {
+          vscode.postMessage({ type: 'action', action: 'workspace-repo-refresh' });
+        }
       });
 
       // Per-stage adapter reset buttons
@@ -14116,6 +14263,24 @@ exports[`getSettingsHtml snapshots (Issue #1242) > locked section — pipeline r
       </div>
     </div>
 
+      </div>
+
+      <div class="section " id="section-workspace_repos">
+
+    <div class="section-header" data-section="workspace_repos">
+      <div class="section-title-row">
+        <span class="section-chevron codicon codicon-chevron-down"></span>
+        <span class="codicon codicon-repo section-icon"></span>
+        <h3 class="section-title">Workspace Repositories</h3>
+
+        <a href="#" class="doc-link" data-doc="docs/MULTI_REPO_WORKSPACE.md#workspace-repositories-section" title="View documentation">
+         <span class="codicon codicon-link-external"></span>
+       </a>
+      </div>
+      <p class="section-description">Which repositories Nightgauge manages. Adds and removes entries in .vscode/nightgauge-workspace.yaml.</p>
+    </div>
+
+        <div class="section-content"><p class="section-note">Loading workspace repositories…</p></div>
       </div>
 
       <div class="section " id="section-project">
@@ -16210,6 +16375,37 @@ exports[`getSettingsHtml snapshots (Issue #1242) > locked section — pipeline r
         });
       });
 
+      // --- Workspace Repositories (#705) ---
+      // Delegated: the list re-renders after every mutation, so listeners bound
+      // to individual rows would be dropped on the first change.
+      document.addEventListener('click', (event) => {
+        const add = event.target.closest?.('.workspace-repo-add');
+        if (add && !add.disabled) {
+          vscode.postMessage({
+            type: 'action',
+            action: 'workspace-repo-add',
+            payload: {
+              name: add.dataset.candidate,
+              path: add.dataset.path,
+              project: Number(add.dataset.project),
+            },
+          });
+          return;
+        }
+        const remove = event.target.closest?.('.workspace-repo-remove');
+        if (remove && !remove.disabled) {
+          vscode.postMessage({
+            type: 'action',
+            action: 'workspace-repo-remove',
+            payload: { name: remove.dataset.repo },
+          });
+          return;
+        }
+        if (event.target.closest?.('.workspace-repo-refresh')) {
+          vscode.postMessage({ type: 'action', action: 'workspace-repo-refresh' });
+        }
+      });
+
       // Per-stage adapter reset buttons
       document.querySelectorAll('.reset-stage-adapter-btn').forEach(btn => {
         btn.addEventListener('click', (e) => {
@@ -18196,6 +18392,24 @@ exports[`getSettingsHtml snapshots (Issue #1242) > project tier view 1`] = `
       </div>
     </div>
 
+      </div>
+
+      <div class="section " id="section-workspace_repos">
+
+    <div class="section-header" data-section="workspace_repos">
+      <div class="section-title-row">
+        <span class="section-chevron codicon codicon-chevron-down"></span>
+        <span class="codicon codicon-repo section-icon"></span>
+        <h3 class="section-title">Workspace Repositories</h3>
+
+        <a href="#" class="doc-link" data-doc="docs/MULTI_REPO_WORKSPACE.md#workspace-repositories-section" title="View documentation">
+         <span class="codicon codicon-link-external"></span>
+       </a>
+      </div>
+      <p class="section-description">Which repositories Nightgauge manages. Adds and removes entries in .vscode/nightgauge-workspace.yaml.</p>
+    </div>
+
+        <div class="section-content"><p class="section-note">Loading workspace repositories…</p></div>
       </div>
 
       <div class="section " id="section-project">
@@ -20286,6 +20500,37 @@ exports[`getSettingsHtml snapshots (Issue #1242) > project tier view 1`] = `
           action: 'project-select-repository',
           payload: { repository: event.target.value },
         });
+      });
+
+      // --- Workspace Repositories (#705) ---
+      // Delegated: the list re-renders after every mutation, so listeners bound
+      // to individual rows would be dropped on the first change.
+      document.addEventListener('click', (event) => {
+        const add = event.target.closest?.('.workspace-repo-add');
+        if (add && !add.disabled) {
+          vscode.postMessage({
+            type: 'action',
+            action: 'workspace-repo-add',
+            payload: {
+              name: add.dataset.candidate,
+              path: add.dataset.path,
+              project: Number(add.dataset.project),
+            },
+          });
+          return;
+        }
+        const remove = event.target.closest?.('.workspace-repo-remove');
+        if (remove && !remove.disabled) {
+          vscode.postMessage({
+            type: 'action',
+            action: 'workspace-repo-remove',
+            payload: { name: remove.dataset.repo },
+          });
+          return;
+        }
+        if (event.target.closest?.('.workspace-repo-refresh')) {
+          vscode.postMessage({ type: 'action', action: 'workspace-repo-refresh' });
+        }
       });
 
       // Per-stage adapter reset buttons
