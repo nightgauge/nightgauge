@@ -302,8 +302,8 @@ export class IpcClientGenerated extends IpcClientBase {
     return this.call<FailureClassification>('intelligence.classify', { stage, exitCode, stderr });
   }
 
-  async intelligenceCost(stages: string[], complexityScore: number): Promise<CostEstimate> {
-    return this.call<CostEstimate>('intelligence.cost', { stages, complexityScore });
+  async intelligenceCost(stages: string[], complexityScore: number, adapter?: string): Promise<CostEstimate> {
+    return this.call<CostEstimate>('intelligence.cost', { stages, complexityScore, adapter });
   }
 
   async healthAnalyze(workspaceRoot: string): Promise<HealthAnalysis> {

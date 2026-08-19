@@ -532,6 +532,22 @@ func (s *Server) workspaceRootPath() string {
 	return s.workspaceRoot
 }
 
+// resolvedEstimateAdapter is the execution adapter a cost forecast is priced
+// against when the client pinned none (#696). It runs the canonical adapter
+// precedence chain (#54) over "feature-dev" — the representative stage the
+// estimate's model routing is already based on — and falls back to the Go
+// layer's own default adapter rather than to an unstated anthropic assumption.
+func (s *Server) resolvedEstimateAdapter() string {
+	cfg, err := config.Load(s.workspaceRootPath())
+	if err != nil {
+		cfg = nil
+	}
+	if r := config.ResolveStageAdapter(cfg, "feature-dev", os.Getenv); r.Adapter != "" {
+		return r.Adapter
+	}
+	return "claude-headless"
+}
+
 // setWorkspaceRoot is THE ONLY WRITER of either field. It takes no other lock,
 // so it cannot participate in a lock cycle.
 //
@@ -1562,7 +1578,14 @@ func (s *Server) registerMethods() {
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, fmt.Errorf("invalid params: %w", err)
 		}
-		return tokens.EstimateCost(p.Stages, p.ComplexityScore), nil
+		// The forecast is priced through the serving adapter's provider
+		// (#696). A client that did not pin one gets the workspace's own
+		// resolved adapter, never a silent anthropic assumption.
+		adapter := strings.TrimSpace(p.Adapter)
+		if adapter == "" {
+			adapter = s.resolvedEstimateAdapter()
+		}
+		return tokens.EstimateCost(adapter, p.Stages, p.ComplexityScore), nil
 	}
 
 	// --- Platform methods ---

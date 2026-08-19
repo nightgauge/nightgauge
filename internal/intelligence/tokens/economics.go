@@ -117,7 +117,18 @@ func (b *Budget) Summary() string {
 
 // CostEstimate predicts total cost for remaining stages.
 type CostEstimate struct {
-	TotalCostUSD   float64             `json:"totalCostUsd"`
+	// Adapter is the execution adapter this forecast was priced for; ""
+	// means the anthropic default (see EstimateCost).
+	Adapter string `json:"adapter,omitempty"`
+	// Provider is the registry provider Adapter maps to — the rate card
+	// every figure below was priced from.
+	Provider     string  `json:"provider,omitempty"`
+	TotalCostUSD float64 `json:"totalCostUsd"`
+	// Stamped is false when at least one stage could not be priced for this
+	// adapter's provider. TotalCostUSD then excludes those stages and is a
+	// FLOOR, not the forecast — mirroring CalculateCostForAdapter's contract
+	// (#585): report the gap, never substitute another provider's rates.
+	Stamped        bool                `json:"stamped"`
 	TotalDuration  int                 `json:"totalDurationMinutes"`
 	StageBreakdown []StageCostEstimate `json:"stageBreakdown"`
 	Confidence     string              `json:"confidence"`
@@ -125,32 +136,58 @@ type CostEstimate struct {
 
 // StageCostEstimate is a per-stage cost prediction.
 type StageCostEstimate struct {
-	Stage   string  `json:"stage"`
-	Model   string  `json:"model"`
+	Stage string `json:"stage"`
+	Model string `json:"model"`
+	// CostUSD is meaningful only when Stamped is true. An unstamped stage
+	// carries 0 — the absence of a price, not a price of zero.
 	CostUSD float64 `json:"costUsd"`
+	Stamped bool    `json:"stamped"`
 	Minutes float64 `json:"minutes"`
 }
 
-// EstimateCost predicts the cost for a set of stages.
-func EstimateCost(stages []string, complexityScore int) CostEstimate {
+// EstimateCost predicts the cost for a set of stages served by adapter.
+//
+// The forecast is priced through the PROVIDER the serving adapter maps to —
+// the same resolution CalculateCostForAdapter (#585) gave the recording side.
+// Before #696 this function took no adapter at all: it resolved every routing
+// tier through the registry's anthropic default and priced it with
+// CalculateCost, so a grok run was FORECAST at claude-sonnet's $3/$15 and
+// RECORDED at grok-4.6's $0.34/$1.02. Forecast-vs-actual variance was then not
+// merely noisy but biased by the ratio between two rate cards (~11x on run
+// 01a007d5, #583), with both numbers individually plausible.
+//
+// adapter == "" keeps the anthropic default, matching CalculateCostForAdapter,
+// because the Go layer's own default adapter (claude-headless) is an anthropic
+// one.
+//
+// A stage whose (provider, tier) pair carries no registry rate is reported with
+// Stamped=false and contributes nothing to the total: an unpriceable
+// combination says so instead of returning a confident anthropic-rate number.
+func EstimateCost(adapter string, stages []string, complexityScore int) CostEstimate {
+	provider := pricingProvider(adapter)
 	var total float64
 	var totalMinutes float64
+	allStamped := true
 	breakdown := make([]StageCostEstimate, 0, len(stages))
 
 	for _, stage := range stages {
-		model := defaultModelForEstimate(stage, complexityScore)
+		model := defaultModelForEstimate(provider, stage, complexityScore)
 		tokens := estimateStageTokens(stage, complexityScore)
 		// Estimation has no cache model: the projection is per-stage fresh
 		// context, so there is nothing cached to read or write.
-		cost := CalculateCost(model, TokenCounts{Input: tokens.Input, Output: tokens.Output})
+		cost, stamped := CalculateCostForAdapter(adapter, model, TokenCounts{Input: tokens.Input, Output: tokens.Output})
 		minutes := estimateMinutes(stage, complexityScore)
 
+		if !stamped {
+			allStamped = false
+		}
 		total += cost
 		totalMinutes += minutes
 		breakdown = append(breakdown, StageCostEstimate{
 			Stage:   stage,
 			Model:   model,
 			CostUSD: cost,
+			Stamped: stamped,
 			Minutes: minutes,
 		})
 	}
@@ -163,35 +200,43 @@ func EstimateCost(stages []string, complexityScore int) CostEstimate {
 	}
 
 	return CostEstimate{
+		Adapter:        adapter,
+		Provider:       provider,
 		TotalCostUSD:   total,
+		Stamped:        allStamped,
 		TotalDuration:  int(totalMinutes),
 		StageBreakdown: breakdown,
 		Confidence:     confidence,
 	}
 }
 
-func defaultModelForEstimate(stage string, complexity int) string {
+// defaultModelForEstimate picks the routing tier a stage runs at and resolves
+// it against provider — the one that will actually serve the run — so the
+// forecast names a model that adapter can dispatch rather than the anthropic
+// model of the same band.
+func defaultModelForEstimate(provider, stage string, complexity int) string {
 	switch stage {
 	case "issue-pickup", "pr-create", "pr-merge":
-		return concreteForTier(models.BandHaiku)
+		return concreteForTier(provider, models.BandHaiku)
 	default:
 		if complexity <= 3 {
-			return concreteForTier(models.BandHaiku)
+			return concreteForTier(provider, models.BandHaiku)
 		} else if complexity <= 6 {
-			return concreteForTier(models.BandSonnet)
+			return concreteForTier(provider, models.BandSonnet)
 		}
-		return concreteForTier(models.BandOpus)
+		return concreteForTier(provider, models.BandOpus)
 	}
 }
 
 // concreteForTier resolves a routing tier to the current non-deprecated model
-// serving that band. Hardcoding concrete ids here is how this layer drifted a
-// full model generation behind the registry (#74): the ids kept naming
-// superseded models long after the band moved on, and nothing failed loudly.
-// An unknown tier returns the tier name itself, which costs $0 via the
-// unknown-model default rather than fabricating a price.
-func concreteForTier(tier string) string {
-	if m, ok := models.Get(tier); ok {
+// serving that band FOR provider. Hardcoding concrete ids here is how this
+// layer drifted a full model generation behind the registry (#74): the ids
+// kept naming superseded models long after the band moved on, and nothing
+// failed loudly. A tier the provider does not serve returns the tier name
+// itself, which prices as unstamped (or as an honest $0 for the local
+// providers) rather than fabricating a price.
+func concreteForTier(provider, tier string) string {
+	if m, ok := models.Resolve(provider, tier); ok {
 		return m.ID
 	}
 	return tier
@@ -305,10 +350,7 @@ func CalculateCost(model string, t TokenCounts) float64 {
 //     fabricate $0 as if it were a priced answer, and never fall back to
 //     another provider's rates (matches #528's cost criterion).
 func CalculateCostForAdapter(adapter, model string, t TokenCounts) (cost float64, stamped bool) {
-	provider := "anthropic"
-	if adapter != "" {
-		provider = models.ProviderForAdapter(adapter)
-	}
+	provider := pricingProvider(adapter)
 	if d, ok := models.Resolve(provider, model); ok {
 		return priceCounts(d, t), true
 	}
@@ -316,6 +358,20 @@ func CalculateCostForAdapter(adapter, model string, t TokenCounts) (cost float64
 		return 0, true
 	}
 	return 0, false
+}
+
+// pricingProvider is the single adapter→rate-card mapping this package prices
+// through — shared by CalculateCostForAdapter (recording) and EstimateCost
+// (forecasting) so the two halves of one run cannot resolve to two different
+// providers, which is exactly the asymmetry #696 reported. "" is the anthropic
+// default: the Go layer's own default adapter (claude-headless) is an
+// anthropic one, so a caller carrying no adapter context keeps the historical
+// behavior instead of silently degrading to the providerless "other" path.
+func pricingProvider(adapter string) string {
+	if adapter == "" {
+		return "anthropic"
+	}
+	return models.ProviderForAdapter(adapter)
 }
 
 // priceCounts prices every billable pool for an already-resolved model

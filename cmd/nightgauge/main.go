@@ -4854,12 +4854,14 @@ func healthGateMetricsCmd() *cobra.Command {
 
 func costCmd() *cobra.Command {
 	var complexityScore int
+	var adapter string
 
 	cmd := &cobra.Command{
 		Use:   "cost",
 		Short: "Estimate pipeline cost for an issue",
 		Example: `  nightgauge cost --complexity 5
-  nightgauge cost --complexity 8`,
+  nightgauge cost --complexity 8
+  nightgauge cost --adapter grok`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			stages := []string{
 				"issue-pickup", "feature-planning", "feature-dev",
@@ -4875,20 +4877,54 @@ func costCmd() *cobra.Command {
 			router := routing.NewRouter(nil, cwd)
 			rec := router.Route(cmd.Context(), "feature-dev", cplx)
 
-			est := tokens.EstimateCost(stages, complexityScore)
+			// The forecast must be priced against the adapter that will
+			// actually serve the run (#696), so resolve real adapter context
+			// instead of letting the estimator assume anthropic. --adapter
+			// outranks config; otherwise the canonical precedence chain runs
+			// against feature-dev, the same representative stage the model
+			// recommendation above is routed for.
+			resolvedAdapter := strings.TrimSpace(adapter)
+			adapterSource := "flag"
+			if resolvedAdapter == "" {
+				cfg, cfgErr := config.Load(cwd)
+				if cfgErr != nil {
+					cfg = nil
+				}
+				r := config.ResolveStageAdapter(cfg, "feature-dev", os.Getenv)
+				resolvedAdapter, adapterSource = r.Adapter, r.Source
+			}
+			if resolvedAdapter == "" {
+				// Nothing configured: the Go layer's own default adapter.
+				resolvedAdapter, adapterSource = "claude-headless", "layer-default"
+			}
+
+			est := tokens.EstimateCost(resolvedAdapter, stages, complexityScore)
 
 			fmt.Printf("Cost Estimate (complexity: %d/10)\n", complexityScore)
 			fmt.Printf("================================\n\n")
+			fmt.Printf("Adapter: %s (%s) → provider %s\n", est.Adapter, adapterSource, est.Provider)
 			fmt.Printf("Model recommendation: %s\n", rec.Model)
 			fmt.Printf("Reasoning: %s\n\n", rec.Reasoning)
 
 			fmt.Printf("%-20s %-25s %10s %8s\n", "Stage", "Model", "Cost", "Minutes")
 			fmt.Println(strings.Repeat("-", 65))
 			for _, s := range est.StageBreakdown {
+				if !s.Stamped {
+					fmt.Printf("%-20s %-25s %10s %7.1f\n", s.Stage, s.Model, "unpriced", s.Minutes)
+					continue
+				}
 				fmt.Printf("%-20s %-25s $%8.4f %7.1f\n", s.Stage, s.Model, s.CostUSD, s.Minutes)
 			}
 			fmt.Println(strings.Repeat("-", 65))
-			fmt.Printf("%-45s $%8.4f %7d\n", "TOTAL", est.TotalCostUSD, est.TotalDuration)
+			label := "TOTAL"
+			if !est.Stamped {
+				label = "TOTAL (partial)"
+			}
+			fmt.Printf("%-45s $%8.4f %7d\n", label, est.TotalCostUSD, est.TotalDuration)
+			if !est.Stamped {
+				fmt.Printf("\nWARNING: provider %q has no registry rate for one or more stages;\n"+
+					"the total above omits them and is a floor, not the forecast.\n", est.Provider)
+			}
 			fmt.Printf("\nConfidence: %s\n", est.Confidence)
 
 			return nil
@@ -4896,6 +4932,8 @@ func costCmd() *cobra.Command {
 	}
 
 	cmd.Flags().IntVar(&complexityScore, "complexity", 5, "Complexity score (1-10)")
+	cmd.Flags().StringVar(&adapter, "adapter", "",
+		"Execution adapter that will serve the run (default: resolved from config/env)")
 	cmd.AddCommand(costByClassCmd())
 	return cmd
 }
