@@ -5810,8 +5810,8 @@ exports[`getDashboardHtml snapshots (Issue #1242) > active pipeline state — cu
         
     <div class="platform-cost-empty">
       <div class="platform-cost-empty-icon">📊</div>
-      <p class="platform-cost-empty-title">Telemetry pending — opt in under settings</p>
-      <p class="platform-cost-empty-hint">Enable telemetry to see server-aggregated cost data for your workspace.</p>
+      <p class="platform-cost-empty-title">No server-aggregated cost data yet</p>
+      <p class="platform-cost-empty-hint">This fills in once runs have been reported. If telemetry is turned off, it stays empty by design.</p>
     </div>
   
       </div>
@@ -12657,8 +12657,8 @@ exports[`getDashboardHtml snapshots (Issue #1242) > completed run with tool call
         
     <div class="platform-cost-empty">
       <div class="platform-cost-empty-icon">📊</div>
-      <p class="platform-cost-empty-title">Telemetry pending — opt in under settings</p>
-      <p class="platform-cost-empty-hint">Enable telemetry to see server-aggregated cost data for your workspace.</p>
+      <p class="platform-cost-empty-title">No server-aggregated cost data yet</p>
+      <p class="platform-cost-empty-hint">This fills in once runs have been reported. If telemetry is turned off, it stays empty by design.</p>
     </div>
   
       </div>
@@ -19349,8 +19349,8 @@ exports[`getDashboardHtml snapshots (Issue #1242) > empty state — no current r
         
     <div class="platform-cost-empty">
       <div class="platform-cost-empty-icon">📊</div>
-      <p class="platform-cost-empty-title">Telemetry pending — opt in under settings</p>
-      <p class="platform-cost-empty-hint">Enable telemetry to see server-aggregated cost data for your workspace.</p>
+      <p class="platform-cost-empty-title">No server-aggregated cost data yet</p>
+      <p class="platform-cost-empty-hint">This fills in once runs have been reported. If telemetry is turned off, it stays empty by design.</p>
     </div>
   
       </div>
@@ -26269,8 +26269,8 @@ exports[`getDashboardHtml snapshots (Issue #1242) > pagination controls rendered
         
     <div class="platform-cost-empty">
       <div class="platform-cost-empty-icon">📊</div>
-      <p class="platform-cost-empty-title">Telemetry pending — opt in under settings</p>
-      <p class="platform-cost-empty-hint">Enable telemetry to see server-aggregated cost data for your workspace.</p>
+      <p class="platform-cost-empty-title">No server-aggregated cost data yet</p>
+      <p class="platform-cost-empty-hint">This fills in once runs have been reported. If telemetry is turned off, it stays empty by design.</p>
     </div>
   
       </div>

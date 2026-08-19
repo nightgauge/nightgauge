@@ -1,18 +1,22 @@
 /**
- * What leaves the machine (Issue #736).
+ * What leaves the machine (Issues #736, #738).
  *
  * These cases are the enforcement of a privacy promise, not a formatting
  * check. Each one pins a claim made to the operator in the setting's own
- * documentation: off means off, minimal means no money, and an unanswered
- * consent prompt is not consent.
+ * documentation: off means off, minimal means no money, an explicit refusal
+ * survives a change of default, and the editor's kill switch outranks every
+ * Nightgauge setting.
  */
 
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildUsageReport,
+  getUsageReportingLevel,
   resolveUsageReportingLevel,
+  DEFAULT_USAGE_REPORTING_LEVEL,
   type UsageReportingLevel,
 } from "../../../src/services/usage/usageReporting";
+import { ConfigBridge } from "../../../src/services/ConfigBridge";
 import type { UsageSnapshot, UsageWindow } from "../../../src/services/usage/types";
 
 const CAPTURED = new Date("2026-08-19T15:00:00.000Z");
@@ -146,31 +150,99 @@ describe("buildUsageReport — the tier decides what leaves", () => {
   });
 });
 
-describe("resolveUsageReportingLevel — consent is authoritative", () => {
+describe("resolveUsageReportingLevel — opt-out, with two vetoes (#738)", () => {
   const tiers: UsageReportingLevel[] = ["off", "minimal", "full"];
 
-  it("forces off when telemetry is declined, whatever the tier says", () => {
+  // The resolved extension consent is not ours to reinterpret. No merged-config
+  // value — not an explicit YAML consent, not an explicit tier — may send over
+  // the top of an operator who refused at the extension or editor level.
+  it("forces off when extension consent is denied, whatever the config says", () => {
     for (const tier of tiers) {
-      expect(resolveUsageReportingLevel(tier, false)).toBe("off");
+      expect(resolveUsageReportingLevel(tier, true, false)).toBe("off");
+      expect(resolveUsageReportingLevel(tier, undefined, false)).toBe("off");
     }
   });
 
-  // null is the one-time consent prompt still unanswered. An unanswered
-  // question must never be read as a yes.
-  it("forces off while the consent prompt is unanswered", () => {
+  // Changing a default is not the same act as overriding an answer.
+  it("forces off when telemetry is explicitly declined, whatever the tier says", () => {
     for (const tier of tiers) {
-      expect(resolveUsageReportingLevel(tier, null)).toBe("off");
-      expect(resolveUsageReportingLevel(tier, undefined)).toBe("off");
+      expect(resolveUsageReportingLevel(tier, false, true)).toBe("off");
     }
   });
 
-  it("honours the configured tier once telemetry is enabled", () => {
-    expect(resolveUsageReportingLevel("minimal", true)).toBe("minimal");
-    expect(resolveUsageReportingLevel("full", true)).toBe("full");
-    expect(resolveUsageReportingLevel("off", true)).toBe("off");
+  // undefined = never configured; null = the legacy prompt-pending state.
+  // Neither is a refusal, and under an opt-out default neither blocks.
+  it("reports when consent was never configured", () => {
+    expect(resolveUsageReportingLevel(undefined, undefined, true)).toBe("full");
+    expect(resolveUsageReportingLevel(undefined, null, true)).toBe("full");
+    expect(resolveUsageReportingLevel("minimal", null, true)).toBe("minimal");
   });
 
-  it("defaults to off when no tier is configured", () => {
-    expect(resolveUsageReportingLevel(undefined, true)).toBe("off");
+  it("honours the configured tier", () => {
+    expect(resolveUsageReportingLevel("minimal", true, true)).toBe("minimal");
+    expect(resolveUsageReportingLevel("full", true, true)).toBe("full");
+    expect(resolveUsageReportingLevel("off", true, true)).toBe("off");
+  });
+
+  it("defaults to full when no tier is configured", () => {
+    expect(resolveUsageReportingLevel(undefined, true, true)).toBe("full");
+    expect(DEFAULT_USAGE_REPORTING_LEVEL).toBe("full");
+  });
+
+  // An explicit `off` tier is still a refusal of *this* stream even though
+  // product telemetry is on — the two switches stay independent.
+  it("keeps the tier independent of the consent flag", () => {
+    expect(resolveUsageReportingLevel("off", true, true)).toBe("off");
+  });
+});
+
+describe("getUsageReportingLevel — consent is supplied, the tier is read (#738)", () => {
+  const platform = { telemetry: { usage_reporting: "full" as const, enabled: true } };
+
+  beforeEach(() => {
+    vi.mocked(ConfigBridge.getInstance).mockReturnValue({
+      isInitialized: () => true,
+      getPlatform: () => platform,
+    } as unknown as ReturnType<typeof ConfigBridge.getInstance>);
+  });
+
+  it("reports the configured tier when consent is granted", () => {
+    expect(getUsageReportingLevel(true)).toBe("full");
+  });
+
+  // The caller's boolean is TelemetryConsentService.isEnabled(), which already
+  // covers VSCode's telemetry.telemetryLevel kill switch and the
+  // nightgauge.telemetry.enabled setting. Either one refusing lands here as
+  // false, and nothing in the merged config may override it.
+  it("sends nothing when consent is denied, even with an explicit full tier", () => {
+    expect(getUsageReportingLevel(false)).toBe("off");
+  });
+
+  // The YAML store is a separate key from the extension setting, and a refusal
+  // in it is equally binding.
+  it("sends nothing when the YAML consent is explicitly false", () => {
+    vi.mocked(ConfigBridge.getInstance).mockReturnValue({
+      isInitialized: () => true,
+      getPlatform: () => ({ telemetry: { usage_reporting: "full", enabled: false } }),
+    } as unknown as ReturnType<typeof ConfigBridge.getInstance>);
+    expect(getUsageReportingLevel(true)).toBe("off");
+  });
+
+  // The one absence that still fails closed: an unread config may contain an
+  // explicit `false` we have no way to see yet.
+  it("fails closed while the config bridge is uninitialised", () => {
+    vi.mocked(ConfigBridge.getInstance).mockReturnValue({
+      isInitialized: () => false,
+      getPlatform: () => undefined,
+    } as unknown as ReturnType<typeof ConfigBridge.getInstance>);
+    expect(getUsageReportingLevel(true)).toBe("off");
+  });
+
+  it("defaults to full when the platform block is absent entirely", () => {
+    vi.mocked(ConfigBridge.getInstance).mockReturnValue({
+      isInitialized: () => true,
+      getPlatform: () => undefined,
+    } as unknown as ReturnType<typeof ConfigBridge.getInstance>);
+    expect(getUsageReportingLevel(true)).toBe("full");
   });
 });

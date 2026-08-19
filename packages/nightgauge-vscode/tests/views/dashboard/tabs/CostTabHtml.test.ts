@@ -2,7 +2,7 @@
  * Tests for platform cost tab functions (Issue #3317)
  *
  * Covers:
- * 1. null data → empty state with "Telemetry pending" message
+ * 1. null data → empty state explaining why it is empty
  * 2. data present → renders total cost card
  * 3. data present → renders per-model breakdown
  * 4. data present → renders daily sparkline
@@ -52,10 +52,14 @@ function makeData(overrides: Partial<CostAnalyticsResult> = {}): CostAnalyticsRe
 // ---------------------------------------------------------------------------
 
 describe("getCostTabHtml", () => {
-  it("null data → contains empty state message", () => {
+  // The empty state must not read as an instruction to opt in: telemetry is
+  // opt-out (#738), so "enable telemetry" would be wrong for most operators
+  // seeing this panel. It explains the absence instead.
+  it("null data → explains the absence without telling the operator to opt in", () => {
     const html = getCostTabHtml(null, "7d");
-    expect(html).toContain("Telemetry pending");
-    expect(html).toContain("opt in under settings");
+    expect(html).toContain("No server-aggregated cost data yet");
+    expect(html).not.toContain("opt in");
+    expect(html).not.toMatch(/Enable telemetry/i);
   });
 
   it("null data → renders date range selector", () => {

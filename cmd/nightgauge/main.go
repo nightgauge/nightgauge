@@ -61,6 +61,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/runstate"
 	"github.com/nightgauge/nightgauge/internal/scan"
 	"github.com/nightgauge/nightgauge/internal/state"
+	"github.com/nightgauge/nightgauge/internal/telemetrynotice"
 	"github.com/nightgauge/nightgauge/internal/validation"
 	"github.com/nightgauge/nightgauge/pkg/types"
 	"github.com/spf13/cobra"
@@ -4453,10 +4454,23 @@ func serveCmd() *cobra.Command {
 					sched.WithSkillService(platform.NewSkillService(platformClient))
 				}
 
-				// Wire platform telemetry (push completed run records)
+				// Wire platform telemetry (push completed run records).
+				// Telemetry is opt-out (#738), so the first run that is on
+				// purely because nobody has said otherwise owes the operator a
+				// disclosure — the CLI has no consent dialog to carry it.
 				if platformClient != nil && cfg != nil {
+					telemetryEnabled := cfg.Telemetry.IsEnabled()
+					if notifier, nerr := telemetrynotice.ForAccount(); nerr == nil {
+						if _, werr := notifier.MaybePrint(
+							os.Stderr, telemetryEnabled, cfg.Telemetry.IsExplicitlySet(),
+						); werr != nil {
+							// The notice was delivered; only the marker failed,
+							// so the sole consequence is showing it again.
+							fmt.Fprintf(os.Stderr, "warning: could not record telemetry notice: %v\n", werr)
+						}
+					}
 					telemetrySvc := platform.NewTelemetryService(platformClient)
-					sched.WithTelemetryService(telemetrySvc, cfg.Telemetry.IsEnabled())
+					sched.WithTelemetryService(telemetrySvc, telemetryEnabled)
 					telemetrySvc.StartAutoFlush(context.Background())
 				}
 

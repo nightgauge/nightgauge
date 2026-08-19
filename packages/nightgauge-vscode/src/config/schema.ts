@@ -2923,10 +2923,16 @@ export type PlatformRetryPolicy = z.infer<typeof PlatformRetryPolicySchema>;
  */
 export const PlatformTelemetrySchema = z.object({
   /**
-   * Telemetry consent state.
-   * null  = prompt pending (one-time prompt shown to paid-tier users)
-   * true  = opted in
-   * false = opted out
+   * Telemetry consent state. Opt-out since #738: only an explicit `false`
+   * disables.
+   *
+   * undefined = never configured → telemetry is on (the default)
+   * null      = legacy prompt-pending state → treated as undefined
+   * true      = explicitly kept on
+   * false     = opted out; never overridden by a default change
+   *
+   * VSCode's `telemetry.telemetryLevel` is a hard kill switch above all of
+   * these — no value here can re-enable sending when the editor says no.
    */
   enabled: z.boolean().nullable().optional(),
 
@@ -2934,22 +2940,21 @@ export const PlatformTelemetrySchema = z.object({
    * How much of the active adapter's usage this machine reports to the hosted
    * dashboard (Issue #736).
    *
-   * Default `off` — nothing about your AI-provider allowance leaves the
-   * machine, and the agent heartbeat stays the bodiless PUT it has always
-   * been.
+   * Default `full` (#738) — the dashboard shows your allowance across every
+   * machine you run. This report goes to **your own account**, not to
+   * Nightgauge as product analytics, which is why it defaults on.
    *
-   * - `off`     — nothing is sent.
+   * - `off`     — nothing is sent; the agent heartbeat stays a bodiless PUT.
    * - `minimal` — allowance windows only. **No monetary figure ever leaves**:
    *   the Claude subscription percentages travel, the locally-derived
    *   per-adapter dollar spend does not.
    * - `full`    — additionally the dollar windows, so the dashboard can show
    *   spend per adapter across your machines.
    *
-   * Gated by `enabled` above: an operator who declined telemetry, or who has
-   * not yet answered the consent prompt, reports nothing regardless of this
-   * value. An unanswered question is not a yes.
+   * Gated by `enabled` above and by VSCode's own telemetry kill switch: an
+   * operator who set either to off reports nothing regardless of this value.
    *
-   * @default 'off'
+   * @default 'full'
    * @see docs/decisions/018-adapter-usage-quota-model.md
    */
   usage_reporting: z.enum(["off", "minimal", "full"]).optional(),

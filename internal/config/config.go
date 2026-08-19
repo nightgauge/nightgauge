@@ -37,18 +37,34 @@ func (r *RemoteCommandsConfig) IsEnabled() bool {
 // TelemetryConfig holds platform telemetry settings.
 type TelemetryConfig struct {
 	// Enabled controls whether the Go scheduler pushes run records to the platform.
-	// Defaults to false when unset — telemetry is opt-in on every surface
-	// (see docs/TELEMETRY_PRIVACY.md).
+	// Defaults to true when unset — telemetry is opt-out on every surface
+	// (see docs/TELEMETRY_PRIVACY.md). A pointer, not a bare bool, precisely so
+	// "never configured" stays distinguishable from an explicit `false`: the
+	// first is a default this code may change, the second is an operator's
+	// answer that it may not.
 	Enabled *bool `yaml:"enabled" json:"enabled,omitempty"`
 }
 
-// IsEnabled reports whether platform telemetry is enabled. Telemetry is opt-in:
-// it returns false unless explicitly turned on.
+// IsEnabled reports whether platform telemetry is enabled. Telemetry is
+// opt-out: it returns true unless explicitly turned off.
+//
+// The CLI has no consent dialog to disclose through, so the default-on case is
+// paired with a one-time notice — see internal/telemetrynotice. Defaulting on
+// silently would leave a CLI-only operator with no moment at which they were
+// told, which is the part of opt-out that has to be earned rather than assumed.
 func (t *TelemetryConfig) IsEnabled() bool {
 	if t == nil || t.Enabled == nil {
-		return false // opt-in: off unless explicitly enabled
+		return true // opt-out: on unless explicitly disabled
 	}
 	return *t.Enabled
+}
+
+// IsExplicitlySet reports whether an operator has answered the telemetry
+// question either way. Callers use it to tell "on because nobody has said
+// otherwise" from "on because someone chose it" — only the former warrants a
+// disclosure notice.
+func (t *TelemetryConfig) IsExplicitlySet() bool {
+	return t != nil && t.Enabled != nil
 }
 
 // FeedbackLoopConfig holds health monitoring and feedback loop settings.

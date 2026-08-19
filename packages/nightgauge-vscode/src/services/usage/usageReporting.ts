@@ -8,27 +8,46 @@
  * that decides what a report contains, so "what does Nightgauge send?" has one
  * answer that can be read in one file.
  *
- * ## Off is the default, and it is a real off
+ * ## Full is the default, and off is one switch away
  *
- * `docs/ECOSYSTEM.md`: telemetry is disabled unless explicitly enabled. There
- * is no implicit reporting, no sampling, and no "anonymous" middle state. With
- * no configuration the return value here is `null` and `AgentHeartbeatService`
- * sends the bodiless PUT it always sent.
+ * Reporting is opt-out (#738): with no configuration this returns a `full`
+ * report. That default is defensible here for a reason worth stating plainly —
+ * an adapter usage report goes to the operator's **own account dashboard**, so
+ * they can see their allowance across the machines they run. It is the
+ * multi-machine view of their own data, not product analytics sent to a vendor.
  *
- * Two independent switches must both permit a report:
+ * Four switches can each veto a report:
  *
- * - `platform.telemetry.enabled` — the account-wide consent. An operator who
- *   opted out of telemetry has opted out of this too, whatever the tier says.
- *   Anything else would make a global "no" mean "no except this".
- * - `platform.telemetry.usage_reporting` — the tier, default `off`.
+ * - `telemetry.telemetryLevel` — VSCode's own kill switch. A platform contract,
+ *   not a Nightgauge preference: an operator who set it to `"off"` has told
+ *   VSCode that no extension sends anything, and honouring it is unconditional.
+ * - `nightgauge.telemetry.enabled` — the VSCode-side consent, written by the
+ *   first-run notice and the Telemetry Settings panel.
+ * - `platform.telemetry.enabled` — the YAML-side consent, which is what the CLI
+ *   and the Go scheduler read.
+ * - `platform.telemetry.usage_reporting` — the tier, default `full`.
+ *
+ * The first two are resolved by `TelemetryConsentService.isEnabled()` and
+ * arrive here as a single boolean; the last two are read from the merged
+ * config. That split is deliberate — one component owns what consent means, and
+ * this one owns what a report contains.
+ *
+ * The two consent stores are separate keys and neither can speak for the other,
+ * so both are checked. Reading only the YAML one produced an off switch that
+ * did not switch anything off: the notice's "Turn off" writes the VSCode
+ * setting, and usage would have kept flowing.
+ *
+ * Note the asymmetry: absent config means yes, but an explicit `false` always
+ * means no. Changing a default is not the same act as overriding an answer, and
+ * this module never does the second.
  *
  * ## The tiers
  *
- * | Tier      | What is sent                                                  |
- * | --------- | ------------------------------------------------------------- |
- * | `off`     | Nothing. No body at all.                                      |
- * | `minimal` | Allowance windows only — no monetary figure ever leaves.      |
- * | `full`    | Every window, including locally-derived per-adapter spend.     |
+ * | Tier                 | What is sent                                       |
+ * | -------------------- | -------------------------------------------------- |
+ * | `off`                | Nothing. No body at all.                           |
+ * | `minimal`            | Allowance windows only — no monetary figure leaves. |
+ * | `full` (**default**) | Every window, including per-adapter spend.          |
  *
  * `minimal` is defined by what it withholds — **money** — rather than by which
  * provider produced a window, because that is the property an operator is
@@ -48,7 +67,8 @@
  * locally — absence must never be presented as zero.
  *
  * @see docs/decisions/018-adapter-usage-quota-model.md
- * @see Issue #736 - Opt-in adapter usage reporting
+ * @see Issue #736 - Tiered adapter usage reporting
+ * @see Issue #738 - Telemetry is opt-out
  */
 
 import { ConfigBridge } from "../ConfigBridge";
@@ -117,9 +137,9 @@ function toReportedWindow(window: UsageWindow): ReportedUsageWindow {
  * Build the report for a snapshot at a given tier, or `null` when nothing
  * should be sent.
  *
- * `null` is returned for `off` and for a disabled telemetry consent — the two
- * cases where the operator has said no. It is deliberately **not** returned for
- * a snapshot with no windows: an operator who turned reporting on and whose
+ * `null` is returned for `off` — the case where the operator, or their editor,
+ * has said no. It is deliberately **not** returned for a snapshot with no
+ * windows: an operator who turned reporting on and whose
  * adapter cannot be described is telling the dashboard something real ("this
  * machine is reporting, and there is nothing to report"), which a silent
  * absence could not distinguish from reporting being off.
@@ -146,36 +166,64 @@ export function buildUsageReport(
   };
 }
 
+/** The tier applied when nothing has been configured. */
+export const DEFAULT_USAGE_REPORTING_LEVEL: UsageReportingLevel = "full";
+
 /**
- * Resolve the effective tier from the two switches.
+ * Resolve the effective tier from the two consents and the tier itself.
  *
- * `telemetryEnabled` is the account-wide consent and is authoritative: `false`
- * forces `off`. `null` means the one-time consent prompt has not been answered
- * yet, which is not consent, so it also forces `off` — an unanswered question
- * must never be read as a yes.
+ * `extensionConsent` is already-resolved: `TelemetryConsentService.isEnabled()`
+ * answers it, having folded in VSCode's own `telemetry.telemetryLevel` kill
+ * switch and the `nightgauge.telemetry.enabled` setting. It arrives here as a
+ * plain boolean rather than being re-derived, so there is exactly one place
+ * that decides what "the operator consented" means — and this module is not it.
+ *
+ * `platformConsent` is the YAML-side `platform.telemetry.enabled`, which is
+ * what the CLI and the Go scheduler read. It is a separate store from the
+ * extension setting and neither can speak for the other, so both are checked.
+ * Only an explicit `false` disables: `undefined` (never configured) and `null`
+ * (the legacy prompt-pending state) both permit reporting, because the default
+ * is on. An operator who wrote `false` keeps it — that is an answer, not a
+ * default, and changing a default must never override one.
  */
 export function resolveUsageReportingLevel(
   configured: UsageReportingLevel | undefined,
-  telemetryEnabled: boolean | null | undefined
+  platformConsent: boolean | null | undefined,
+  extensionConsent: boolean
 ): UsageReportingLevel {
-  if (telemetryEnabled !== true) {
+  if (!extensionConsent) {
     return "off";
   }
-  return configured ?? "off";
+  if (platformConsent === false) {
+    return "off";
+  }
+  return configured ?? DEFAULT_USAGE_REPORTING_LEVEL;
 }
 
 /**
- * The tier currently in force, read from the 6-tier merged config.
+ * The tier currently in force.
  *
- * Fails closed on every uncertainty: an uninitialised ConfigBridge, an absent
- * `platform.telemetry` block, and an unanswered consent prompt all resolve to
- * `off`. Reporting starts only when the configuration positively says so.
+ * `extensionConsent` is supplied by the caller — in practice
+ * `TelemetryConsentService.isEnabled()` — rather than read here. Reading the
+ * VSCode setting directly from this module would put a second, independent
+ * answer to "has the operator consented?" in the codebase, and the two would
+ * drift; it would also reach around the 6-tier config system that
+ * `tests/integration/configRegressionGuard.test.ts` exists to protect.
+ *
+ * One uncertainty still fails closed: an uninitialised ConfigBridge returns
+ * `off`, because at that point we cannot see an operator's explicit `false` and
+ * must not report over the top of one we simply have not read yet. Every other
+ * absence — no `platform` block, no `telemetry` block, no tier — resolves to
+ * the default, which is the point of an opt-out default.
  */
-export function getUsageReportingLevel(): UsageReportingLevel {
+export function getUsageReportingLevel(extensionConsent: boolean): UsageReportingLevel {
+  if (!extensionConsent) {
+    return "off";
+  }
   const configBridge = ConfigBridge.getInstance();
   if (!configBridge.isInitialized()) {
     return "off";
   }
   const telemetry = configBridge.getPlatform()?.telemetry;
-  return resolveUsageReportingLevel(telemetry?.usage_reporting, telemetry?.enabled);
+  return resolveUsageReportingLevel(telemetry?.usage_reporting, telemetry?.enabled, true);
 }

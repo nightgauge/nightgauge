@@ -1838,9 +1838,9 @@
         },
         "nightgauge.telemetry.enabled": {
           "type": "boolean",
-          "default": false,
-          "description": "Send anonymous usage data to help improve Nightgauge. Opt-in only — no data is sent until you enable this. See docs/TELEMETRY_PRIVACY.md for what is collected.",
-          "markdownDescription": "Send anonymous usage data to help improve Nightgauge. **Opt-in only** — no data is sent until you enable this. See [TELEMETRY_PRIVACY.md](command:nightgauge.openTelemetrySettingsPanel) for what is collected."
+          "default": true,
+          "description": "Send anonymous usage data to help improve Nightgauge. On by default — set to false to opt out. Never includes source code, file contents, secrets, branch names, or commit SHAs. Honors VS Code's telemetry.telemetryLevel as a hard kill switch. See docs/TELEMETRY_PRIVACY.md for what is collected.",
+          "markdownDescription": "Send anonymous usage data to help improve Nightgauge. **On by default** — set to `false` to opt out. Never includes source code, file contents, secrets, branch names, or commit SHAs, and VS Code's `#telemetry.telemetryLevel#` is honored as a hard kill switch. See [TELEMETRY_PRIVACY.md](command:nightgauge.openTelemetrySettingsPanel) for what is collected."
         },
         "nightgauge.telemetry.streams": {
           "type": "array",

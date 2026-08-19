@@ -186,6 +186,11 @@ vi.mock("vscode", () => ({
       public pattern: string
     ) {}
   },
+  // VSCode's own telemetry kill switch. Defaults on so tests exercise the
+  // normal path; a test that cares flips it via vi.mocked(vscode.env).
+  env: {
+    isTelemetryEnabled: true,
+  },
   workspace: {
     getConfiguration: vi.fn(() => ({
       get: vi.fn(),

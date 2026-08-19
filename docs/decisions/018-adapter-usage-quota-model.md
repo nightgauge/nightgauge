@@ -447,3 +447,103 @@ This ADR's audit table asked, member by member, _what produces this?_ It should
 also have asked _when, and is that when the surface reads?_ A field with a real
 producer on a cadence the consumer never samples is, from the operator's chair,
 indistinguishable from a field with no producer at all.
+
+## Amendment (#738) — the default flips, and the disclosure moves with it
+
+`usage_reporting` shipped in #736 with a default of `off` and a design note that
+"off is the default, and it is a real off". That default is now `full`, on an
+operator decision that Nightgauge should be opt-out.
+
+Flipping a default is cheap. What this amendment records is the part that is
+not: **what a default has to be paired with before it is honest.**
+
+### Why `full` is defensible here specifically
+
+An adapter usage report goes to the operator's **own account dashboard**. It is
+the multi-machine view of their own allowance, not product analytics forwarded
+to a vendor. Default-on for "show me my own data on my own dashboard" is a
+different claim from default-on for "send us aggregate counts", and the docs now
+say which of the two each stream is rather than leaving a reader to infer it
+from a shared `telemetry` prefix.
+
+The `minimal` tier keeps its exact meaning and its reason for existing. An
+operator who wants the allowance view across machines but would rather their
+spend stayed local now has a setting that says precisely that.
+
+### The two defects a default-on flip exposed
+
+Neither was reachable while the default was `off`. Both were latent, and both
+are the kind that only become visible when a switch's _default_ changes rather
+than its _logic_ — which is worth noting on its own, because it means "the code
+did not change" is not evidence that behaviour did not.
+
+**1. The editor kill switch was never checked on this path.**
+`getUsageReportingLevel()` consulted the merged YAML config and nothing else,
+while `docs/TELEMETRY_PRIVACY.md` promised that VSCode's
+`telemetry.telemetryLevel = "off"` stopped every stream. That promise was
+already false for `adapter-usage`; it was simply unfalsifiable, because nothing
+was sent by default. `vscode.env.isTelemetryEnabled` is now checked first and
+unconditionally. It is a separate parameter from Nightgauge's own consent rather
+than folded into it, because the two say different things — one is the
+operator's instruction to _the editor_ about every extension, the other is their
+instruction to _this_ extension — and collapsing them would let a
+Nightgauge-level `true` appear capable of overriding an editor-level `false`.
+
+**2. Two consent switches, only one of which the consent UX writes.**
+`nightgauge.telemetry.enabled` (VSCode setting, written by the first-run modal
+and the settings panel) and `platform.telemetry.enabled` (merged YAML, read by
+usage reporting) are distinct keys in distinct stores. Usage reporting consulted
+only the second, so the off switch an operator actually reaches would not have
+stopped it: clicking "Turn off" writes the VSCode setting, and adapter usage
+would have kept flowing. Harmless at a default of `off`, because nothing was
+flowing to keep flowing; at a default of `full` it is an off switch that does
+not switch anything off — which is worse than no off switch, because the
+operator believes they have stopped it.
+
+`getUsageReportingLevel()` now reads both, and treats a `false` in **either** as
+a refusal that the other cannot override. The resolution deliberately lives in
+the module that decides what leaves the machine, rather than in whichever
+surface happened to run, so a future third consent surface inherits it instead
+of having to remember it.
+
+### Changing a default is not overriding an answer
+
+The distinction the implementation is built around: `undefined` means nobody has
+decided and a default may move it; `false` means someone decided and nothing
+may. Go models this by keeping `Enabled` a `*bool` and adding
+`IsExplicitlySet()`; TypeScript by testing `!== false` rather than `?? true`. An
+operator who declined under the old prompt keeps their `false` and never sees
+the new notice.
+
+The awkward middle case is the operator who saw the old modal and chose "Decide
+later" — asked, and silent. Nothing was written to their config, so the new
+default reaches them. That is why the disclosure notice uses a **new**
+`globalState` key instead of reusing `firstRunPromptSeen`: suppressing it for
+people who had seen a _different_ message would silently switch on exactly the
+population most entitled to be told.
+
+### The consent UX had to stop asking
+
+The old modal read "Help improve Nightgauge by sharing anonymous usage data?"
+with Decline / Decide later / Enable. Under an opt-out default that dialog is
+false in two ways at once: it presents an accomplished fact as a pending
+request, and "Decide later" implies nothing is flowing while something is.
+
+It is now a notice — it states what is happening and offers `Turn off` /
+`Keep on`, with `Turn off` in default focus so a reflexive Enter never enables
+something unread. "Decide later" is gone, because deferral was an answer to a
+question and there is no question outstanding.
+
+The CLI got the equivalent treatment for the same reason: it has no modal, so
+`internal/telemetrynotice` prints a one-time stderr disclosure on the first run
+that is on purely by default. Without it a CLI-only operator would be switched
+on by a release note they never read.
+
+### The general lesson
+
+The #730 amendment's lesson was about _when_ a field is produced. This one is
+about what a default obliges you to do elsewhere. **A default nobody is informed
+of is not opt-out; it is undisclosed collection.** The notice is the
+consideration paid for the default, not a nicety bolted on beside it — and if
+the disclosure is too awkward to write honestly, that is evidence about the
+default, not about the wording.

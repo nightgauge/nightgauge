@@ -47,7 +47,8 @@ the public client contract needed to build or operate the open-source side.
 
 ### Telemetry
 
-Telemetry is disabled unless explicitly enabled. The allowed event schema,
+Telemetry is enabled unless explicitly disabled, and its first run says so.
+The allowed event schema,
 redaction rules, and user controls are documented in
 [TELEMETRY_PRIVACY.md](TELEMETRY_PRIVACY.md).
 
