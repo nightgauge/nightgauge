@@ -2,8 +2,9 @@ name: publication-boundary
 
 # Blocks private-class content from entering the tree.
 #
-# This repository is PRIVATE today. The guard exists so that flipping it to
-# public stays a one-click decision rather than becoming a project again.
+# This repository is maintained as a public-safe tree regardless of its current
+# visibility setting, so flipping visibility never needs to become a project
+# of its own.
 #
 # It replaces two controls that both failed:
 #

@@ -412,11 +412,11 @@ def main() -> int:
               file=sys.stderr)
         for v in violations:
             print(f"  • {v}\n", file=sys.stderr)
-        print("The repository is PRIVATE, so nothing has leaked. This guard exists so that",
+        print("This repository is maintained as a public-safe tree regardless of its current",
               file=sys.stderr)
-        print("flipping it to public stays a one-click decision. Fix the above, or classify",
+        print("visibility setting -- treat every violation above as a real leak. Fix the above,",
               file=sys.stderr)
-        print(f"the path in {MANIFEST} if it is genuinely publishable.\n", file=sys.stderr)
+        print(f"or classify the path in {MANIFEST} if it is genuinely publishable.\n", file=sys.stderr)
         return 1
 
     print(f"\033[32m✓ publication boundary clean\033[0m — {len(paths)} tracked paths, "

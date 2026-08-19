@@ -128,6 +128,13 @@ if [ -f scripts/test-band-vocabulary-check.sh ]; then
   run_step "Band-vocabulary gate regression suite" bash scripts/test-band-vocabulary-check.sh
 fi
 
+# 5e. Stale-visibility-prose reintroduction gate (#697) — fails on a tracked
+#     artifact unconditionally asserting this repository is private, the
+#     exact shape all four #697 instances took.
+if [ -f scripts/check-visibility-prose.py ]; then
+  run_step "visibility-prose reintroduction gate" python3 scripts/check-visibility-prose.py
+fi
+
 # 4b. Cache-boundary measurement smoke test
 if [ -f scripts/test-measure-cache-boundary-loss.sh ]; then
   run_step "Cache-boundary measurement smoke" bash scripts/test-measure-cache-boundary-loss.sh
