@@ -714,21 +714,67 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }
   }
 
-  // Re-register agent when workspace config changes (#3546, #3668).
-  // Mirrors IncrediYamlService debounce pattern with 500ms delay for workspace-level changes.
-  if (services.sessionManager && services.agentRegistrationService && workspaceManager) {
-    const workspaceConfigPattern = new vscode.RelativePattern(
-      vscode.workspace.workspaceFolders?.[0]?.uri ?? vscode.Uri.file(incrediRoot ?? "."),
-      ".vscode/nightgauge-workspace.yaml"
-    );
-    const workspaceConfigWatcher = vscode.workspace.createFileSystemWatcher(workspaceConfigPattern);
+  // Workspace-config hot reload (#704).
+  //
+  // The manifest watcher used to live inside the platformEnabled-gated block
+  // below, where reload() was incidental to agent re-registration. That made
+  // `.vscode/nightgauge-workspace.yaml` take effect only for
+  // operators signed in to the hosted service; local-only installs — the
+  // documented headline mode — needed a window reload. Watching is now
+  // unconditional and re-registration subscribes to the result.
+  if (workspaceManager) {
+    // Anchor to the RESOLVED workspace root, not workspaceFolders[0]: a
+    // manifest in any folder but the first was silently never watched.
+    const watchRoot = vscode.Uri.file(workspaceManager.getWorkspaceRoot());
 
-    let reRegisterTimer: ReturnType<typeof setTimeout> | undefined;
-    const scheduleReRegister = () => {
-      clearTimeout(reRegisterTimer);
-      reRegisterTimer = setTimeout(async () => {
+    const manifestWatcher = vscode.workspace.createFileSystemWatcher(
+      new vscode.RelativePattern(watchRoot, ".vscode/nightgauge-workspace.yaml")
+    );
+    // Per-repo config changes affect the repos array too.
+    const repoConfigWatcher = vscode.workspace.createFileSystemWatcher(
+      new vscode.RelativePattern(watchRoot, "**/.nightgauge/config.yaml")
+    );
+
+    // Fires after a debounced reload has completed, so subscribers act on the
+    // new repository set rather than racing it.
+    const onWorkspaceConfigReloaded = new vscode.EventEmitter<void>();
+
+    let reloadTimer: ReturnType<typeof setTimeout> | undefined;
+    const scheduleReload = () => {
+      clearTimeout(reloadTimer);
+      reloadTimer = setTimeout(() => {
+        void (async () => {
+          try {
+            // reload() retains the previous repository set when the manifest is
+            // malformed mid-edit, so a burst of saves cannot tear the tree down.
+            await workspaceManager.reload();
+            onWorkspaceConfigReloaded.fire();
+          } catch (err) {
+            logger.warn("Workspace config reload failed", {
+              error: err instanceof Error ? err.message : String(err),
+            });
+          }
+        })();
+      }, 500);
+    };
+
+    for (const watcher of [manifestWatcher, repoConfigWatcher]) {
+      // create and delete matter as much as change: creating a manifest in a
+      // single-repo workspace transitions to multi-workspace mode live, and
+      // deleting it transitions back.
+      watcher.onDidChange(scheduleReload);
+      watcher.onDidCreate(scheduleReload);
+      watcher.onDidDelete(scheduleReload);
+    }
+    context.subscriptions.push(manifestWatcher, repoConfigWatcher, onWorkspaceConfigReloaded, {
+      dispose: () => clearTimeout(reloadTimer),
+    });
+
+    // Agent re-registration stays gated on the hosted service — it is the
+    // concern that genuinely needs an account — but no longer owns the watcher.
+    if (services.sessionManager && services.agentRegistrationService) {
+      const reRegisterAfterReload = async () => {
         try {
-          await workspaceManager.reload();
           await context.globalState.update("nightgauge.agentId", undefined);
 
           if (services!.sessionManager?.state === "authenticated") {
@@ -790,31 +836,24 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           workspaceSyncStatusItem.setStatus("failed", 0, errMsg);
           syncSidebarStatus("failed", 0, errMsg);
         }
-      }, 500);
-    };
+      };
 
-    workspaceConfigWatcher.onDidChange(scheduleReRegister);
-    workspaceConfigWatcher.onDidCreate(scheduleReRegister);
-    workspaceConfigWatcher.onDidDelete(scheduleReRegister);
-    context.subscriptions.push(workspaceConfigWatcher);
+      context.subscriptions.push(
+        onWorkspaceConfigReloaded.event(() => {
+          void reRegisterAfterReload();
+        })
+      );
 
-    // Watch per-repo .nightgauge/config.yaml — changes affect the repos array (#3668).
-    const repoConfigPattern = new vscode.RelativePattern(
-      vscode.workspace.workspaceFolders?.[0]?.uri ?? vscode.Uri.file(incrediRoot ?? "."),
-      "**/.nightgauge/config.yaml"
-    );
-    const repoConfigWatcher = vscode.workspace.createFileSystemWatcher(repoConfigPattern);
-    repoConfigWatcher.onDidChange(scheduleReRegister);
-    repoConfigWatcher.onDidCreate(scheduleReRegister);
-    repoConfigWatcher.onDidDelete(scheduleReRegister);
-    context.subscriptions.push(repoConfigWatcher);
-
-    // Allow status item click to trigger immediate re-registration.
-    context.subscriptions.push(
-      vscode.commands.registerCommand("nightgauge.retryWorkspaceSyncInternal", () => {
-        scheduleReRegister();
-      })
-    );
+      // Status-item click retries the whole sequence. It routes through
+      // scheduleReload rather than calling re-registration directly so the
+      // behavior matches the pre-#704 command exactly: reload the workspace
+      // config first, then re-register against the set that produced.
+      context.subscriptions.push(
+        vscode.commands.registerCommand("nightgauge.retryWorkspaceSyncInternal", () => {
+          scheduleReload();
+        })
+      );
+    }
   }
 
   logger.info("Nightgauge extension activated");

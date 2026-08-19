@@ -699,3 +699,138 @@ project:
     });
   });
 });
+
+/**
+ * Manifest hot-reload hardening (#704).
+ *
+ * reload() is driven by a file watcher, which changes what "failure" means.
+ * A watcher fires on every save, so it observes the manifest mid-edit — and
+ * before #704, initialize()'s catch block responded to that by setting
+ * _mode = "single" and dropping every loaded repository. An operator typing a
+ * quote into a valid manifest lost their whole workspace until a window reload.
+ */
+describe("reload() hardening (#704)", () => {
+  const workspaceRoot = "/test/workspace";
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    WorkspaceManager.resetInstance();
+    vi.mocked(fs.access).mockResolvedValue(undefined);
+  });
+
+  afterEach(() => {
+    WorkspaceManager.resetInstance();
+  });
+
+  const multiConfig = {
+    workspace: { name: "W" },
+    repositories: [
+      { name: "alpha", path: "/test/alpha" },
+      { name: "beta", path: "/test/beta" },
+    ],
+  };
+
+  const okDetection = {
+    type: "multi-workspace" as const,
+    config: multiConfig,
+    detection_method: "workspace-yaml",
+  };
+
+  it("retains the loaded repositories when the manifest is malformed mid-edit", async () => {
+    vi.mocked(detectWorkspaceType).mockResolvedValue(okDetection);
+
+    const manager = WorkspaceManager.getInstance(workspaceRoot);
+    await manager.initialize();
+    const before = manager.getAllRepositories().map((r) => r.name);
+    expect(before.length).toBeGreaterThan(0);
+
+    // Next detection throws, as it does for a half-written YAML document.
+    vi.mocked(detectWorkspaceType).mockRejectedValueOnce(
+      new Error("bad indentation of a mapping entry at line 7")
+    );
+    await manager.reload();
+
+    expect(manager.getAllRepositories().map((r) => r.name)).toEqual(before);
+    expect(manager.isMultiWorkspace()).toBe(true);
+  });
+
+  it("does not fire onWorkspaceChanged when a failed reload retained prior state", async () => {
+    vi.mocked(detectWorkspaceType).mockResolvedValue(okDetection);
+
+    const manager = WorkspaceManager.getInstance(workspaceRoot);
+    await manager.initialize();
+
+    let fired = 0;
+    manager.onWorkspaceChanged(() => {
+      fired++;
+    });
+
+    vi.mocked(detectWorkspaceType).mockRejectedValueOnce(new Error("parse error"));
+    await manager.reload();
+
+    // Subscribers already hold a good set; re-firing with unchanged content
+    // only churns the tree.
+    expect(fired).toBe(0);
+  });
+
+  it("recovers on the next good save after a malformed one", async () => {
+    vi.mocked(detectWorkspaceType).mockResolvedValue(okDetection);
+    const manager = WorkspaceManager.getInstance(workspaceRoot);
+    await manager.initialize();
+
+    vi.mocked(detectWorkspaceType).mockRejectedValueOnce(new Error("parse error"));
+    await manager.reload();
+
+    vi.mocked(detectWorkspaceType).mockResolvedValue({
+      ...okDetection,
+      config: {
+        workspace: { name: "W" },
+        repositories: [
+          { name: "alpha", path: "/test/alpha" },
+          { name: "beta", path: "/test/beta" },
+          { name: "gamma", path: "/test/gamma" },
+        ],
+      },
+    });
+    await manager.reload();
+
+    expect(manager.getAllRepositories().map((r) => r.name)).toContain("gamma");
+  });
+
+  it("still falls back to single-repo mode when the FIRST detection fails", async () => {
+    // Nothing loaded yet means there is no good state to preserve, so the
+    // pre-#704 fallback is still the right behavior here.
+    vi.mocked(detectWorkspaceType).mockRejectedValue(new Error("no config anywhere"));
+
+    const manager = WorkspaceManager.getInstance(workspaceRoot);
+    await manager.initialize();
+
+    expect(manager.isMultiWorkspace()).toBe(false);
+  });
+
+  it("coalesces concurrent reloads into one detection pass", async () => {
+    // reload() clears _initialized before calling initialize(), whose only
+    // guard was that same flag — so a debounced watcher and an explicit
+    // command could both proceed and race two detections against one map.
+    vi.mocked(detectWorkspaceType).mockResolvedValue(okDetection);
+    const manager = WorkspaceManager.getInstance(workspaceRoot);
+    await manager.initialize();
+
+    vi.mocked(detectWorkspaceType).mockClear();
+
+    let resolveDetection: ((v: typeof okDetection) => void) | undefined;
+    vi.mocked(detectWorkspaceType).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveDetection = resolve;
+        })
+    );
+
+    const first = manager.reload();
+    const second = manager.reload();
+    resolveDetection!(okDetection);
+    await Promise.all([first, second]);
+
+    expect(vi.mocked(detectWorkspaceType)).toHaveBeenCalledTimes(1);
+  });
+});
