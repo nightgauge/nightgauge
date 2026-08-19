@@ -34,7 +34,9 @@ FAIL-CLOSED. Exit codes:
 
 from __future__ import annotations
 
+import json
 import re
+from pathlib import Path
 import subprocess
 import sys
 
@@ -108,6 +110,53 @@ def scan_file(path: str) -> list[str]:
     return violations
 
 
+# ── Live-effect pin ──────────────────────────────────────────────────────────
+# Prose is the symptom; a gate that only reads prose can be satisfied by
+# rewording. The #697 instance that actually mattered was not a sentence — it
+# was `.markdown-link-check.json` blanket-ignoring every external URL on the
+# strength of the (false) privacy claim, which silently disabled external link
+# checking for ~27 days. Rewriting that file's `_comment` to something neutral
+# while keeping the blanket ignore passes the prose scan and re-opens exactly
+# the hole this issue was filed to close.
+#
+# So pin the BEHAVIOUR too, not just the words.
+LINK_CHECK_CONFIG = "/.markdown-link-check.json"
+BLANKET_EXTERNAL_IGNORE = re.compile(r"\^https\??://|\^https\?\\?://")
+
+
+def check_link_check_config() -> list[str]:
+    """Fail if the link-check config blanket-ignores external URLs.
+
+    A URL-scoped ignore (one specific dead link, with a reason) is fine and
+    expected. What is banned is the catch-all pattern that disables the whole
+    external-link gate.
+    """
+    path = LINK_CHECK_CONFIG.lstrip("/")
+    if not Path(path).exists():
+        return []
+    try:
+        cfg = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as e:
+        return [f"{path}: could not be parsed, so its gate cannot be verified: {e}"]
+
+    out = []
+    for entry in cfg.get("ignorePatterns") or []:
+        pat = (entry or {}).get("pattern", "")
+        # A blanket external ignore is one that matches on scheme alone —
+        # i.e. nothing after the protocol constrains WHICH url is skipped.
+        stripped = pat.replace("\\", "")
+        if stripped in ("^https?://", "^http://", "^https://"):
+            out.append(
+                f"{path}: ignorePatterns contains the blanket external-URL "
+                f"pattern {pat!r}, which disables external link checking "
+                f"entirely.\n"
+                "    This repository is public, so canonical URLs resolve to an\n"
+                "    unauthenticated checker. Ignore specific dead URLs with a\n"
+                "    reason instead of excluding every external link (#697)."
+            )
+    return out
+
+
 def main() -> int:
     try:
         paths = tracked_paths()
@@ -121,6 +170,8 @@ def main() -> int:
         if path == "scripts/check-visibility-prose.py":
             continue  # this file necessarily quotes the banned shape in its docstring
         violations.extend(scan_file(path))
+
+    violations.extend(check_link_check_config())
 
     if violations:
         print(
