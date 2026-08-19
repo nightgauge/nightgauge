@@ -47,8 +47,25 @@ func TestCoverageGap_UncoveredRepo_RaisesExactlyOneCard(t *testing.T) {
 	if r.IdempotencyKey != ProducerCoverageGap+":acme/unwatched" {
 		t.Errorf("unexpected idempotency key %q", r.IdempotencyKey)
 	}
-	if len(r.Options) != 1 || r.Options[0].Verb != attention.VerbNoop {
-		t.Errorf("no registered verb can edit the manifest — expect a lone no-op dismiss; got %+v", r.Options)
+	// Since #706 the card is no longer a dead end: it offers the bounded
+	// workspace.addRepo repair alongside dismiss. Dismiss must survive — a
+	// deliberate omission is still a first-class answer.
+	if len(r.Options) != 2 {
+		t.Fatalf("want a repair option and a dismiss option; got %+v", r.Options)
+	}
+	repair, dismiss := r.Options[0], r.Options[1]
+	if repair.Verb != attention.VerbWorkspaceAddRepo {
+		t.Errorf("first option should repair via workspace.addRepo; got %q", repair.Verb)
+	}
+	// The verb reads its target from Context.Repo. An option carrying args
+	// would hand the resolving surface a way to redirect the write, and
+	// ExecuteAddRepo rejects args outright — so a card that shipped them would
+	// be a guaranteed-failing button.
+	if len(repair.Args) != 0 {
+		t.Errorf("the repair option must carry no args; got %+v", repair.Args)
+	}
+	if dismiss.Verb != attention.VerbNoop {
+		t.Errorf("dismiss must remain a no-op; got %q", dismiss.Verb)
 	}
 }
 
@@ -459,5 +476,44 @@ func TestSweepWorkspace_NoConfig_FallsBackToInvocationList(t *testing.T) {
 	}
 	if !cap.got.Covers("acme/web") {
 		t.Errorf("want the invocation list as fallback, got %v", cap.got.ConfiguredRepos)
+	}
+}
+
+// The producer and the repair verb MUST agree about coverage.
+//
+// The producer cards a repo it considers uncovered; ExecuteAddRepo refuses a
+// target it considers covered. If the two matchers disagreed, the card would
+// ship a button the executor rejects on click — a dead affordance on the one
+// card that exists to have a working one (#706). This walks every card the
+// producer raises through the executor's own gate.
+func TestCoverageGap_EveryCardedRepoIsAcceptedByTheRepairVerb(t *testing.T) {
+	configured := []string{"acme/web", "shared"}
+	p := gapProducer([]string{"acme/web", "acme/unwatched", "shared", "acme/docs"}, nil)
+
+	reqs, err := p.Evaluate(context.Background(), gapInput(configured...))
+	if err != nil {
+		t.Fatalf("Evaluate: %v", err)
+	}
+	if len(reqs) == 0 {
+		t.Fatal("expected at least one card to exercise the gate")
+	}
+
+	for _, r := range reqs {
+		req := r
+		if attention.RepoInConfiguredSet(configured, req.Context.Repo) {
+			t.Errorf("producer carded %q but the verb considers it already configured — "+
+				"the card's repair button would be refused on click", req.Context.Repo)
+		}
+	}
+}
+
+// The inverse: a repo the producer does NOT card is one the verb refuses, so a
+// stale card cannot re-add a repository somebody already configured.
+func TestCoverageGap_CoveredReposAreRefusedByTheRepairVerb(t *testing.T) {
+	configured := []string{"acme/web", "shared"}
+	for _, covered := range []string{"acme/web", "shared", "web"} {
+		if !attention.RepoInConfiguredSet(configured, covered) {
+			t.Errorf("%q is covered by config but the verb would accept re-adding it", covered)
+		}
 	}
 }

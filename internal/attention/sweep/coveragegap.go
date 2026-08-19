@@ -239,8 +239,9 @@ func (p *CoverageGap) request(repo string, allUncovered []string, fingerprint st
 			"covered repos and \"unwatched\" for this one, which is the distinction this card exists "+
 			"to restore.\n\n"+
 			"If the omission is deliberate, dismiss this — it will stay dismissed until the set of "+
-			"uncovered repos changes. To cover it, add the repo to the workspace manifest "+
-			"(.vscode/nightgauge-workspace.yaml) or to autonomous.enabled_repos.",
+			"uncovered repos changes. To cover it, choose \"Add to the workspace manifest\": the "+
+			"repository is appended to .vscode/nightgauge-workspace.yaml with its resolved project "+
+			"board, and this card clears itself once the sweep sees it covered.",
 		repo)
 	if len(allUncovered) > 1 {
 		body += fmt.Sprintf("\n\nUncovered in this workspace: %s.", strings.Join(allUncovered, ", "))
@@ -255,9 +256,19 @@ func (p *CoverageGap) request(repo string, allUncovered []string, fingerprint st
 		Fingerprint:    fingerprint,
 		Context:        attention.Context{Repo: repo, Blocker: "not in the configured repo list"},
 		Options: []attention.Option{
-			// No repair verb: no registered verb can edit the workspace
-			// manifest or config, and offering a button that silently does
-			// nothing is worse than offering none (Invariant 3).
+			// #703 gave the workspace manifest a deterministic writer, so the
+			// repair this card describes became a bounded registered verb
+			// (#706). Before that there was no repair option here at all: no
+			// registered verb could edit the manifest, and a button that
+			// silently does nothing is worse than none (Invariant 3).
+			//
+			// The option carries NO args. The verb reads its target from this
+			// request's Context.Repo, so the resolving surface cannot redirect
+			// the write at another repository.
+			{ID: "add", Label: "Add to the workspace manifest", Verb: attention.VerbWorkspaceAddRepo, Style: attention.StylePrimary},
+			// Dismiss stays first-class: a deliberate omission is a legitimate
+			// and common answer (this very workspace excludes a private repo on
+			// purpose), and it mutes until the SET of uncovered repos changes.
 			{ID: "dismiss", Label: "Dismiss — the omission is deliberate", Verb: attention.VerbNoop, Style: attention.StyleDefault},
 		},
 		DefaultAction: attention.ExpireNoop,

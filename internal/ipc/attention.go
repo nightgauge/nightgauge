@@ -12,12 +12,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strings"
 
 	"github.com/nightgauge/nightgauge/internal/attention"
+	"github.com/nightgauge/nightgauge/internal/attention/sweep"
 	"github.com/nightgauge/nightgauge/internal/config"
 	gh "github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/internal/orchestrator"
 	"github.com/nightgauge/nightgauge/internal/platform"
+	"github.com/nightgauge/nightgauge/internal/workspacemanifest"
 )
 
 // AttentionListResult is the attention.list response — the materialized read
@@ -267,6 +270,13 @@ func (s *Server) ExecuteVerb(ctx context.Context, req *attention.DecisionRequest
 		}
 		return gh.NewProjectService(c, owner, 0, gh.OwnerTypeUser).RemoveBlockedByNumber(ctx, owner, name, issue, blocker)
 
+	case attention.VerbWorkspaceAddRepo:
+		// The workspace root, not s.repoRoot(repo): the manifest lives once at
+		// the workspace root, and repo is by definition NOT yet a configured
+		// repository, so it has no root of its own to resolve.
+		root := s.workspaceRootPath()
+		return attention.ExecuteAddRepo(ctx, workspaceRepoAdder{root: root}, req, opt, sweep.ConfiguredRepos(root))
+
 	case attention.VerbIssueApproveArchitecture:
 		return s.approveArchitecture(ctx, key, repo, owner, name, issue)
 
@@ -477,4 +487,54 @@ func argInt(m map[string]any, k string) int {
 		}
 	}
 	return 0
+}
+
+// workspaceRepoAdder backs attention.VerbWorkspaceAddRepo with the
+// deterministic manifest writer (#703/#706).
+//
+// It holds only the workspace root: the target repository arrives from the
+// card's own Context.Repo through ExecuteAddRepo, never from this struct, so
+// there is no field here a surface could influence.
+type workspaceRepoAdder struct{ root string }
+
+// AddWorkspaceRepo appends repo to the workspace manifest, resolving its
+// project board through the single authoritative repo→project resolver.
+//
+// Role is "primary" rather than caller-supplied. The verb takes no arguments,
+// so there is nothing to derive a role from, and "primary" is what every entry
+// a human writes into a real manifest uses; an operator who wants "secondary"
+// edits the entry afterwards. Guessing from a card would be judgement, which is
+// the one thing a registry verb may not do.
+func (a workspaceRepoAdder) AddWorkspaceRepo(_ context.Context, repo string) error {
+	m, err := workspacemanifest.Load(workspacemanifest.ManifestPath(a.root))
+	if err != nil {
+		return err
+	}
+	entry, err := workspacemanifest.DeriveEntry(m, repo, "primary")
+	if err != nil {
+		return err
+	}
+	// The card may name the repo as "owner/name" or bare. Prefer the owner it
+	// declared; fall back to the workspace's own owner when it gave none.
+	cardOwner := ""
+	if i := strings.Index(repo, "/"); i > 0 {
+		cardOwner = repo[:i]
+	}
+
+	_, err = workspacemanifest.AddRepo(m, entry, func(name string) (int, error) {
+		cfg, cerr := config.Load(a.root)
+		if cerr != nil || cfg == nil {
+			return 0, fmt.Errorf("no config loaded for repo→project resolution: %w", cerr)
+		}
+		owner := cardOwner
+		if owner == "" {
+			owner = cfg.Owner
+		}
+		return config.ResolveRepoProjectNumber(cfg, config.RepoProjectQuery{
+			Owner:    owner,
+			Repo:     name,
+			StartDir: a.root,
+		})
+	})
+	return err
 }

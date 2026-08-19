@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -12,7 +13,8 @@ func TestRegistryIsClosedAllowlist(t *testing.T) {
 		VerbQueueAdd, VerbIssueRemoveBlockedBy, VerbAutonomousResume, VerbAutonomousRescan,
 		VerbAutonomousComplete, VerbAutonomousClearIssueFailures, VerbProjectSyncStatus,
 		VerbIssueClose, VerbBudgetRaiseCeiling, VerbRunRetryWithEscalation,
-		VerbIssueApproveArchitecture, VerbDependabotEnableAlerts, VerbNoop,
+		VerbIssueApproveArchitecture, VerbDependabotEnableAlerts,
+		VerbWorkspaceAddRepo, VerbNoop,
 	}
 	for _, v := range registered {
 		if !IsRegisteredVerb(v) {
@@ -34,6 +36,11 @@ func TestRegistryIsClosedAllowlist(t *testing.T) {
 	if !IsRegisteredVerb(VerbDependabotEnableAlerts) {
 		t.Error("dependabot.enableAlerts must be registered")
 	}
+	// The coverage-gap card's repair button (#706), allowed once #703 gave the
+	// workspace manifest a deterministic writer.
+	if !IsRegisteredVerb(VerbWorkspaceAddRepo) {
+		t.Error("workspace.addRepo must be registered")
+	}
 	// Anything not on the allowlist is rejected — the security boundary. The
 	// near-miss spellings of the approval verb must NOT resolve: the executor
 	// resolves the label name from config, so a surface cannot reach a
@@ -43,7 +50,11 @@ func TestRegistryIsClosedAllowlist(t *testing.T) {
 	for _, v := range []string{"rm", "shell.exec", "queue.remove", "", "budget.raise",
 		"issue.addLabel", "issue.approveArchitecture ", "issue.approve",
 		"dependabot.enableAlerts ", "dependabot.enable", "dependabot.disableAlerts",
-		"repo.updateSettings", "security.enable"} {
+		"repo.updateSettings", "security.enable",
+		// Nothing generic or adjacent to the manifest writer is reachable by
+		// guessing: the card can add a repo and nothing else.
+		"workspace.addRepo ", "workspace.removeRepo", "workspace.write",
+		"workspace.setRouting", "manifest.write"} {
 		if IsRegisteredVerb(v) {
 			t.Errorf("verb %q must NOT be registered", v)
 		}
@@ -65,7 +76,7 @@ func TestIsCLIExecutableVerb(t *testing.T) {
 		VerbQueueAdd, VerbIssueRemoveBlockedBy, VerbAutonomousResume, VerbAutonomousRescan,
 		VerbAutonomousComplete, VerbAutonomousClearIssueFailures, VerbProjectSyncStatus,
 		VerbIssueClose, VerbIssueApproveArchitecture, VerbDependabotEnableAlerts,
-		"unregistered.verb",
+		VerbWorkspaceAddRepo, "unregistered.verb",
 	}
 	for _, v := range daemonOnly {
 		if IsCLIExecutableVerb(v) {
@@ -238,5 +249,140 @@ func TestRepoInConfiguredSet(t *testing.T) {
 		if RepoInConfiguredSet(configured, repo) {
 			t.Errorf("RepoInConfiguredSet(%q) = true, want false", repo)
 		}
+	}
+}
+
+// --- workspace.addRepo (#706) -----------------------------------------------
+
+type recordingAdder struct {
+	targets []string
+	err     error
+}
+
+func (a *recordingAdder) AddWorkspaceRepo(_ context.Context, repo string) error {
+	a.targets = append(a.targets, repo)
+	return a.err
+}
+
+func coverageGapCard(repo string) *DecisionRequest {
+	return &DecisionRequest{
+		ID:             "dr_gap",
+		IdempotencyKey: "coverage-gap:" + repo,
+		Producer:       "coverage-gap",
+		Context:        Context{Repo: repo},
+		Options: []Option{
+			{ID: "add", Verb: VerbWorkspaceAddRepo},
+			{ID: "dismiss", Verb: VerbNoop},
+		},
+	}
+}
+
+var addRepoOpt = Option{ID: "add", Verb: VerbWorkspaceAddRepo}
+
+func TestWorkspaceAddRepo_IsRegistered(t *testing.T) {
+	if !IsRegisteredVerb(VerbWorkspaceAddRepo) {
+		t.Fatal("workspace.addRepo must be in the closed allowlist or no card can bind it")
+	}
+	// Daemon-executed: resolving the project board goes through the
+	// authoritative resolver, which a standalone CLI process does not hold.
+	if IsCLIExecutableVerb(VerbWorkspaceAddRepo) {
+		t.Error("workspace.addRepo must NOT be CLI-executable — the CLI cannot resolve a project board")
+	}
+}
+
+func TestExecuteAddRepo_AddsAnUncoveredRepo(t *testing.T) {
+	// Configured list covers something else entirely, so the card's target is
+	// genuinely uncovered.
+	for _, configured := range [][]string{
+		{"acme/web"},
+		{"web"},
+		nil,
+	} {
+		a := &recordingAdder{}
+		if err := ExecuteAddRepo(context.Background(), a, coverageGapCard("acme/docs"), addRepoOpt, configured); err != nil {
+			t.Fatalf("configured=%v: ExecuteAddRepo() error: %v", configured, err)
+		}
+		if len(a.targets) != 1 || a.targets[0] != "acme/docs" {
+			t.Errorf("configured=%v: targets = %v, want [acme/docs]", configured, a.targets)
+		}
+	}
+}
+
+// The target comes from the persisted request and nowhere else: the option
+// cannot name a repository, so a resolving surface cannot redirect the write.
+func TestExecuteAddRepo_TargetComesFromTheRequestOnly(t *testing.T) {
+	a := &recordingAdder{}
+	opt := Option{ID: "add", Verb: VerbWorkspaceAddRepo, Args: map[string]any{"repo": "acme/evil"}}
+
+	err := ExecuteAddRepo(context.Background(), a, coverageGapCard("acme/docs"), opt, nil)
+
+	if !errors.Is(err, ErrVerbArgsNotAccepted) {
+		t.Fatalf("error = %v, want ErrVerbArgsNotAccepted — args must be rejected, not ignored", err)
+	}
+	if len(a.targets) != 0 {
+		t.Errorf("adder was called with %v; a rejected resolution must not mutate", a.targets)
+	}
+}
+
+// Inverse of every other verb's check: this one exists to act on a repository
+// that is NOT configured, so an already-configured target is nothing-to-do.
+func TestExecuteAddRepo_RefusesAnAlreadyConfiguredRepo(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		cardRepo   string
+		configured []string
+	}{
+		{"exact spec", "acme/docs", []string{"acme/docs"}},
+		{"bare name in config", "acme/docs", []string{"docs"}},
+		{"bare name on card", "docs", []string{"acme/docs"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a := &recordingAdder{}
+			err := ExecuteAddRepo(context.Background(), a, coverageGapCard(tc.cardRepo), addRepoOpt, tc.configured)
+			if !errors.Is(err, ErrVerbTargetAlreadyConfigured) {
+				t.Fatalf("error = %v, want ErrVerbTargetAlreadyConfigured", err)
+			}
+			if len(a.targets) != 0 {
+				t.Errorf("adder called with %v; the repo was already covered", a.targets)
+			}
+		})
+	}
+}
+
+func TestExecuteAddRepo_RefusesAnEmptyTarget(t *testing.T) {
+	if err := ExecuteAddRepo(context.Background(), &recordingAdder{}, coverageGapCard(""), addRepoOpt, nil); err == nil {
+		t.Fatal("a request naming no repository must fail")
+	}
+}
+
+func TestExecuteAddRepo_RefusesTheWrongVerb(t *testing.T) {
+	opt := Option{ID: "add", Verb: VerbNoop}
+	if err := ExecuteAddRepo(context.Background(), &recordingAdder{}, coverageGapCard("acme/docs"), opt, nil); err == nil {
+		t.Fatal("the executor must refuse an option bound to a different verb")
+	}
+}
+
+// A surface without the capability must fail loudly: the store CAS-resolves
+// only after the verb returns nil, so a silent success would consume the card
+// and leave the repository exactly as unwatched as before.
+func TestExecuteAddRepo_RefusesWhenTheSurfaceCannotPerformIt(t *testing.T) {
+	err := ExecuteAddRepo(context.Background(), nil, coverageGapCard("acme/docs"), addRepoOpt, nil)
+	if err == nil {
+		t.Fatal("a surface with no adder must fail rather than silently succeed")
+	}
+	if !strings.Contains(err.Error(), "not available on this surface") {
+		t.Errorf("error = %q, want it to say the surface cannot perform the verb", err)
+	}
+}
+
+// A failing writer must propagate, for the same CAS reason.
+func TestExecuteAddRepo_PropagatesWriterFailure(t *testing.T) {
+	a := &recordingAdder{err: errors.New("no project board exists for acme/docs")}
+	err := ExecuteAddRepo(context.Background(), a, coverageGapCard("acme/docs"), addRepoOpt, nil)
+	if err == nil {
+		t.Fatal("a writer failure must propagate so the card stays open")
+	}
+	if !strings.Contains(err.Error(), "no project board") {
+		t.Errorf("error = %q, want the writer's own message preserved", err)
 	}
 }
