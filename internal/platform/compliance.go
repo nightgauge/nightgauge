@@ -84,8 +84,8 @@ func (s *ComplianceService) GenerateReport(ctx context.Context, reportType, star
 		return nil, fmt.Errorf("create generate report request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if s.client.apiKey != "" {
-		req.Header.Set("Authorization", "Bearer "+s.client.apiKey)
+	if bearer := s.client.bearer(); bearer != "" {
+		req.Header.Set("Authorization", "Bearer "+bearer)
 	}
 
 	resp, err := http.DefaultClient.Do(req)
@@ -125,8 +125,8 @@ func (s *ComplianceService) ListReports(ctx context.Context, cursor string, limi
 	if err != nil {
 		return nil, fmt.Errorf("create list reports request: %w", err)
 	}
-	if s.client.apiKey != "" {
-		req.Header.Set("Authorization", "Bearer "+s.client.apiKey)
+	if bearer := s.client.bearer(); bearer != "" {
+		req.Header.Set("Authorization", "Bearer "+bearer)
 	}
 
 	resp, err := http.DefaultClient.Do(req)
@@ -160,8 +160,8 @@ func (s *ComplianceService) GetReport(ctx context.Context, reportID string) (*Co
 	if err != nil {
 		return nil, fmt.Errorf("create get report request: %w", err)
 	}
-	if s.client.apiKey != "" {
-		req.Header.Set("Authorization", "Bearer "+s.client.apiKey)
+	if bearer := s.client.bearer(); bearer != "" {
+		req.Header.Set("Authorization", "Bearer "+bearer)
 	}
 
 	resp, err := http.DefaultClient.Do(req)

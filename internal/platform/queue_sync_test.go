@@ -185,8 +185,8 @@ func TestNewClient_APIKeyWinsOverLicense(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.apiKey != "api-key" {
-		t.Errorf("resolved bearer = %q, want api-key", c.apiKey)
+	if got := c.bearer(); got != "api-key" {
+		t.Errorf("resolved bearer = %q, want api-key", got)
 	}
 }
 

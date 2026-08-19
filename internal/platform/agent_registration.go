@@ -21,9 +21,9 @@ import (
 // creates the `agents` row the FK requires, and returns the platform-assigned
 // UUID the sync + command poller must use instead of the machine id.
 //
-// This rides the same license-key bearer auth and raw-HTTP shape the sync uses
-// (see attention_sync.go): the platform's pipelineAuth accepts the license key
-// (client.apiKey) as the bearer. POST /v1/agents/register upserts by machine_id
+// This rides the same bearer auth and raw-HTTP shape the sync uses
+// (see attention_sync.go): the platform's pipelineAuth accepts whatever
+// client.bearer() resolves to. POST /v1/agents/register upserts by machine_id
 // per account, so calling it on every daemon start is idempotent (re-register =
 // revival).
 
@@ -95,8 +95,8 @@ func (s *AgentRegistrationService) RegisterAgent(ctx context.Context) (AgentRegi
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
-	if s.client.apiKey != "" {
-		req.Header.Set("Authorization", "Bearer "+s.client.apiKey)
+	if bearer := s.client.bearer(); bearer != "" {
+		req.Header.Set("Authorization", "Bearer "+bearer)
 	}
 
 	resp, err := http.DefaultClient.Do(req)
@@ -136,8 +136,8 @@ func (s *AgentRegistrationService) Heartbeat(ctx context.Context, agentID string
 		return fmt.Errorf("agent heartbeat: request: %w", err)
 	}
 	req.Header.Set("Accept", "application/json")
-	if s.client.apiKey != "" {
-		req.Header.Set("Authorization", "Bearer "+s.client.apiKey)
+	if bearer := s.client.bearer(); bearer != "" {
+		req.Header.Set("Authorization", "Bearer "+bearer)
 	}
 
 	resp, err := http.DefaultClient.Do(req)

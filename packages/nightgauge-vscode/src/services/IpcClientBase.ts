@@ -20,6 +20,8 @@ import { BinaryResolver } from "./BinaryResolver";
 import { getActiveCallSource, setActiveCallSource } from "./callSource";
 import { getGitHubAuthToken, getGitHubAuthTokens } from "../utils/incrediConfig";
 import { SecretStorageService, SECRET_KEYS } from "./SecretStorageService";
+import { TokenStorage } from "../platform/TokenStorage";
+import { PlatformCredentialBridge } from "../platform/PlatformCredentialBridge";
 import { redactSecrets } from "../utils/redaction";
 
 // ---------------------------------------------------------------------------
@@ -1360,6 +1362,8 @@ export abstract class IpcClientBase implements vscode.Disposable {
   private resolvedGitHubToken: string | null = null;
   private resolvedTokenSource: string | null = null;
   private resolvedLicenseKey: string | null = null;
+  /** Keeps the daemon's platform credential equal to the current session (#742). */
+  private credentialBridge: PlatformCredentialBridge | null = null;
   private readonly tokenCache = new Map<string, string>();
   private outputChannel: vscode.OutputChannel | null = null;
   private logFileStream: fs.WriteStream | null = null;
@@ -1409,6 +1413,10 @@ export abstract class IpcClientBase implements vscode.Disposable {
       await this.resolveGitHubToken();
       await this.resolveLicenseKey();
       this.spawnProcess();
+      // A freshly spawned daemon knows only the license key it was handed in
+      // its environment. Hand it the signed-in user's JWT as well, and keep
+      // doing so for every later rotation (#742).
+      this.syncPlatformSessionToken();
       this._onDidChangeStatus.fire(true);
     } finally {
       this.starting = false;
@@ -1613,6 +1621,8 @@ export abstract class IpcClientBase implements vscode.Disposable {
 
   dispose(): void {
     this.disposed = true;
+    this.credentialBridge?.dispose();
+    this.credentialBridge = null;
     if (this.restartTimer) {
       clearTimeout(this.restartTimer);
     }
@@ -2035,6 +2045,36 @@ export abstract class IpcClientBase implements vscode.Disposable {
       this.resolvedLicenseKey = key;
       this.log("[IpcClientBase] Resolved license key from SecretStorage");
     }
+  }
+
+  /**
+   * Give the daemon the signed-in user's session token, and keep giving it one
+   * for as long as the extension lives.
+   *
+   * The license key forwarded at spawn authenticates an *account*; the hosted
+   * API's analytics and audit routes authorise a *user* and 401 anything else,
+   * which is why Health, Trends, Cost and Compliance were dead for signed-in
+   * users (#742). The bridge is created once and then follows TokenStorage —
+   * sign-in, every refresh-manager rotation, and sign-out — because a
+   * credential handed over only at spawn expires with the first access token
+   * and regresses silently. Each start() re-syncs, since a restarted daemon has
+   * forgotten what it was told.
+   */
+  private syncPlatformSessionToken(): void {
+    const tokenStorage = TokenStorage.getInstance();
+    if (!tokenStorage) return; // Platform disabled, or tests without bootstrap.
+    if (!this.credentialBridge) {
+      this.credentialBridge = new PlatformCredentialBridge(
+        {
+          setSessionToken: async (token: string) => {
+            await this.call<{ ok: boolean }>("platform.setSessionToken", { token });
+          },
+        },
+        tokenStorage,
+        (message) => this.log(message)
+      );
+    }
+    void this.credentialBridge.sync();
   }
 
   private async resolveBinaryPath(): Promise<string | null> {

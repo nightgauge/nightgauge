@@ -69,8 +69,8 @@ func (s *CommandService) PollCommands(ctx context.Context) ([]PendingCommand, er
 		return nil, fmt.Errorf("poll commands: %w", err)
 	}
 	req.Header.Set("Accept", "application/json")
-	if s.client.apiKey != "" {
-		req.Header.Set("Authorization", "Bearer "+s.client.apiKey)
+	if bearer := s.client.bearer(); bearer != "" {
+		req.Header.Set("Authorization", "Bearer "+bearer)
 	}
 
 	resp, err := http.DefaultClient.Do(req)
@@ -120,8 +120,8 @@ func (s *CommandService) AcknowledgeCommand(ctx context.Context, cmdID string, r
 	req.Header.Set("Accept", "application/json")
 
 	// Inject auth header using the same pattern as the generated client.
-	if s.client.apiKey != "" {
-		req.Header.Set("Authorization", "Bearer "+s.client.apiKey)
+	if bearer := s.client.bearer(); bearer != "" {
+		req.Header.Set("Authorization", "Bearer "+bearer)
 	}
 
 	resp, err := http.DefaultClient.Do(req)
@@ -164,8 +164,8 @@ func (s *CommandService) AcknowledgeAgentCommand(ctx context.Context, agentId, c
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
-	if s.client.apiKey != "" {
-		req.Header.Set("Authorization", "Bearer "+s.client.apiKey)
+	if bearer := s.client.bearer(); bearer != "" {
+		req.Header.Set("Authorization", "Bearer "+bearer)
 	}
 
 	resp, err := http.DefaultClient.Do(req)

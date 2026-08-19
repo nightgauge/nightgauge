@@ -122,6 +122,7 @@ var contractTestedMethods = map[string]bool{
 	"platform.authGithub":          true,
 	"platform.authRefresh":         true,
 	"platform.authSignout":         true,
+	"platform.setSessionToken":     true,
 	"platform.createPortalSession": true,
 	"platform.getTeamMembers":      true,
 	"platform.getUsageSummary":     true,
@@ -1051,6 +1052,13 @@ func TestContract_Platform(t *testing.T) {
 			"refreshToken": "rt_test",
 		})
 		assertMethodRegistered(t, h.readResponseFor(id, nil), "platform.authSignout")
+	})
+
+	t.Run("platform.setSessionToken/registered", func(t *testing.T) {
+		id := h.sendRequest("platform.setSessionToken", map[string]interface{}{
+			"token": "jwt_test",
+		})
+		assertMethodRegistered(t, h.readResponseFor(id, nil), "platform.setSessionToken")
 	})
 
 	t.Run("platform.getCostAnalytics/registered", func(t *testing.T) {

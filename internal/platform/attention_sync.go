@@ -264,8 +264,8 @@ func (s *AttentionSyncService) pushBatch(ctx context.Context, reqs []attention.D
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "application/json")
-	if s.client.apiKey != "" {
-		httpReq.Header.Set("Authorization", "Bearer "+s.client.apiKey)
+	if bearer := s.client.bearer(); bearer != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+bearer)
 	}
 
 	resp, err := http.DefaultClient.Do(httpReq)

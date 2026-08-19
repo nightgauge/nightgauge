@@ -2000,6 +2000,36 @@ func (s *Server) registerMethods() {
 		return resp.JSON200, nil
 	}
 
+	// Hand the daemon the signed-in user's JWT (#742).
+	//
+	// The extension signs a user in and keeps the access token in
+	// SecretStorage, but the daemon is spawned with a *license key* in its
+	// environment and resolved its credential once, at construction. A license
+	// key identifies an account, not a user, so every user-scoped route
+	// (/v1/analytics/{health,trends,cost}, /v1/audit/reports) answered 401 for a
+	// signed-in user — the Health, Trends, Cost and Compliance tabs failed by
+	// construction.
+	//
+	// This is a push rather than another spawn-time env var on purpose: access
+	// tokens expire, TokenRefreshManager rotates them for the life of the
+	// session, and an env var frozen at spawn would work for exactly one token
+	// lifetime and then regress silently. An empty token clears the credential,
+	// which is what sign-out sends.
+	//ipc:method platformSetSessionToken params:PlatformSetSessionTokenParams result:StatusOK
+	s.methods["platform.setSessionToken"] = func(_ context.Context, params json.RawMessage) (interface{}, error) {
+		if s.platformClient == nil {
+			return nil, fmt.Errorf("platform client not configured")
+		}
+		var p PlatformSetSessionTokenParams
+		if len(params) > 0 && string(params) != "null" {
+			if err := json.Unmarshal(params, &p); err != nil {
+				return nil, fmt.Errorf("invalid params: %w", err)
+			}
+		}
+		s.platformClient.SetSessionToken(p.Token)
+		return map[string]bool{"ok": true}, nil
+	}
+
 	// --- Auth methods ---
 
 	//ipc:method authExchangeGitHub params:AuthExchangeGitHubParams result:AuthTokenResponse

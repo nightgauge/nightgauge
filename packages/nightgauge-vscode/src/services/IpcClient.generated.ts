@@ -411,6 +411,10 @@ export class IpcClientGenerated extends IpcClientBase {
     return this.call<{message:string;status:string}>('platform.authSignout', { refreshToken });
   }
 
+  async platformSetSessionToken(token: string): Promise<StatusOK> {
+    return this.call<StatusOK>('platform.setSessionToken', { token });
+  }
+
 
   // -------------------------------------------------------------------------
   // Project
