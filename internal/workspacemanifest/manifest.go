@@ -1,4 +1,4 @@
-package workspacecmd
+package workspacemanifest
 
 // Workspace-manifest writer (#703).
 //
@@ -48,15 +48,15 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// validRoles mirrors the role enum in the extension's validateWorkspaceConfig
+// ValidRoles mirrors the role enum in the extension's validateWorkspaceConfig
 // (packages/nightgauge-vscode/src/utils/workspaceDetection.ts). The two
 // validators must agree; a divergence is a defect, so this list is asserted
 // against the TypeScript source by TestRoleEnumMatchesExtension.
-var validRoles = []string{"primary", "secondary", "shared"}
+var ValidRoles = []string{"primary", "secondary", "shared"}
 
-// manifestEntry is one repositories[] element plus the physical line range it
+// Entry is one repositories[] element plus the physical line range it
 // occupies in the source file.
-type manifestEntry struct {
+type Entry struct {
 	Name          string
 	Path          string
 	Role          string
@@ -72,15 +72,15 @@ type manifestEntry struct {
 	commentStart int
 }
 
-// manifest is a parsed workspace manifest that remembers its own source text.
-type manifest struct {
+// Manifest is a parsed workspace manifest that remembers its own source text.
+type Manifest struct {
 	path  string
 	lines []string
 	// trailingNewline records whether the source ended with "\n", so a splice
 	// cannot silently add or remove one.
 	trailingNewline bool
 
-	entries []manifestEntry
+	Entries []Entry
 
 	// seqKeyLine is the 1-indexed line of the `repositories:` key.
 	seqKeyLine int
@@ -98,21 +98,21 @@ type manifest struct {
 	routingPreferred map[string][]string // repo name -> pattern ids referencing it
 }
 
-func manifestPath(root string) string {
+func ManifestPath(root string) string {
 	return filepath.Join(root, ".vscode", "nightgauge-workspace.yaml")
 }
 
-// loadManifest reads and parses the manifest, recording both its structure and
+// Load reads and parses the manifest, recording both its structure and
 // the physical layout a splice needs.
-func loadManifest(path string) (*manifest, error) {
+func Load(path string) (*Manifest, error) {
 	src, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read workspace manifest %s: %w", path, err)
 	}
-	return parseManifest(path, src)
+	return Parse(path, src)
 }
 
-func parseManifest(path string, src []byte) (*manifest, error) {
+func Parse(path string, src []byte) (*Manifest, error) {
 	var root yaml.Node
 	if err := yaml.Unmarshal(src, &root); err != nil {
 		return nil, fmt.Errorf("parse workspace manifest %s: %w", path, err)
@@ -122,7 +122,7 @@ func parseManifest(path string, src []byte) (*manifest, error) {
 	}
 
 	text := string(src)
-	m := &manifest{
+	m := &Manifest{
 		path:             path,
 		trailingNewline:  strings.HasSuffix(text, "\n"),
 		dashIndent:       2,
@@ -148,7 +148,7 @@ func parseManifest(path string, src []byte) (*manifest, error) {
 	}
 
 	for _, item := range seq.Content {
-		e := manifestEntry{startLine: item.Line}
+		e := Entry{startLine: item.Line}
 		for j := 0; j+1 < len(item.Content); j += 2 {
 			k, v := item.Content[j], item.Content[j+1]
 			switch k.Value {
@@ -178,12 +178,12 @@ func parseManifest(path string, src []byte) (*manifest, error) {
 		}
 		e.endLine = m.entryEndLine(e.startLine)
 		e.commentStart = m.commentBlockStart(e.startLine)
-		m.entries = append(m.entries, e)
+		m.Entries = append(m.Entries, e)
 	}
 
-	if len(m.entries) >= 2 {
-		gapStart := m.entries[0].endLine // 1-indexed last body line of entry 0
-		next := m.entries[1]
+	if len(m.Entries) >= 2 {
+		gapStart := m.Entries[0].endLine // 1-indexed last body line of entry 0
+		next := m.Entries[1]
 		firstOwned := next.startLine
 		if next.commentStart > 0 {
 			firstOwned = next.commentStart
@@ -199,7 +199,7 @@ func parseManifest(path string, src []byte) (*manifest, error) {
 	return m, nil
 }
 
-func (m *manifest) readRouting(node *yaml.Node) {
+func (m *Manifest) readRouting(node *yaml.Node) {
 	if node == nil || node.Kind != yaml.MappingNode {
 		return
 	}
@@ -235,7 +235,7 @@ func (m *manifest) readRouting(node *yaml.Node) {
 }
 
 // line returns the 1-indexed line, or "" when out of range.
-func (m *manifest) line(n int) string {
+func (m *Manifest) line(n int) string {
 	if n < 1 || n > len(m.lines) {
 		return ""
 	}
@@ -250,7 +250,7 @@ func indentOf(s string) int {
 // last line belonging to that item, excluding trailing blanks. A continuation
 // line is any line indented deeper than the dash; the next item's dash, or any
 // dedent out of the sequence, terminates the entry.
-func (m *manifest) entryEndLine(startLine int) int {
+func (m *Manifest) entryEndLine(startLine int) int {
 	last := startLine
 	for ln := startLine + 1; ln <= len(m.lines); ln++ {
 		raw := m.line(ln)
@@ -269,7 +269,7 @@ func (m *manifest) entryEndLine(startLine int) int {
 // commentBlockStart returns the first line of the contiguous `#` block directly
 // above startLine, or 0 when there is none. Derived from the raw text rather
 // than yaml's HeadComment attribution so the physical extent is exact.
-func (m *manifest) commentBlockStart(startLine int) int {
+func (m *Manifest) commentBlockStart(startLine int) int {
 	first := 0
 	for ln := startLine - 1; ln >= 1; ln-- {
 		trimmed := strings.TrimSpace(m.line(ln))
@@ -282,17 +282,31 @@ func (m *manifest) commentBlockStart(startLine int) int {
 	return first
 }
 
-func (m *manifest) find(name string) (manifestEntry, bool) {
-	for _, e := range m.entries {
+// Path is the absolute path of the manifest file this Manifest was read from.
+func (m *Manifest) Path() string { return m.path }
+
+// RoutingDefault is routing.default_repository, or "" when unset. Exposed so
+// callers can warn before removing a repository the routing section still
+// points at.
+func (m *Manifest) RoutingDefault() string { return m.routingDefault }
+
+// RoutingPatternsFor returns the ids of routing.patterns entries whose
+// preferred_repo is name. Nil when nothing references it.
+func (m *Manifest) RoutingPatternsFor(name string) []string {
+	return m.routingPreferred[name]
+}
+
+func (m *Manifest) Find(name string) (Entry, bool) {
+	for _, e := range m.Entries {
 		if e.Name == name {
 			return e, true
 		}
 	}
-	return manifestEntry{}, false
+	return Entry{}, false
 }
 
 // render produces the current line buffer as file bytes.
-func (m *manifest) render() []byte {
+func (m *Manifest) render() []byte {
 	out := strings.Join(m.lines, "\n")
 	if m.trailingNewline {
 		out += "\n"
@@ -311,7 +325,7 @@ func yamlScalar(v string) string {
 }
 
 // renderEntry formats a new repositories[] element at the file's own indent.
-func (m *manifest) renderEntry(e manifestEntry) []string {
+func (m *Manifest) renderEntry(e Entry) []string {
 	dash := strings.Repeat(" ", m.dashIndent)
 	body := strings.Repeat(" ", m.contentIndent)
 	lines := []string{
@@ -325,18 +339,18 @@ func (m *manifest) renderEntry(e manifestEntry) []string {
 	return lines
 }
 
-// addEntry splices a new entry in after the last existing one.
-func (m *manifest) addEntry(e manifestEntry) error {
-	if _, exists := m.find(e.Name); exists {
+// AddEntry splices a new entry in after the last existing one.
+func (m *Manifest) AddEntry(e Entry) error {
+	if _, exists := m.Find(e.Name); exists {
 		return fmt.Errorf("repository %q is already in the manifest — names must be unique", e.Name)
 	}
 	block := m.renderEntry(e)
 
 	insertAfter := m.seqKeyLine
-	if len(m.entries) > 0 {
-		insertAfter = m.entries[len(m.entries)-1].endLine
+	if len(m.Entries) > 0 {
+		insertAfter = m.Entries[len(m.Entries)-1].endLine
 	}
-	if m.blankSeparated && len(m.entries) > 0 {
+	if m.blankSeparated && len(m.Entries) > 0 {
 		block = append([]string{""}, block...)
 	}
 
@@ -348,10 +362,10 @@ func (m *manifest) addEntry(e manifestEntry) error {
 	return nil
 }
 
-// removeEntry splices out an entry's own body lines. Its leading comment block
+// RemoveEntry splices out an entry's own body lines. Its leading comment block
 // is deliberately retained — see the file header on comment ownership.
-func (m *manifest) removeEntry(name string) (keptComment bool, err error) {
-	e, ok := m.find(name)
+func (m *Manifest) RemoveEntry(name string) (keptComment bool, err error) {
+	e, ok := m.Find(name)
 	if !ok {
 		return false, fmt.Errorf("repository %q is not in the manifest", name)
 	}
@@ -372,12 +386,12 @@ func (m *manifest) removeEntry(name string) (keptComment bool, err error) {
 	return e.commentStart > 0, nil
 }
 
-// writeAtomic validates the rendered document and then replaces the file via a
+// Write validates the rendered document and then replaces the file via a
 // temp-file rename, so an interrupted write cannot truncate the manifest and an
 // invalid document never reaches disk at all.
-func (m *manifest) writeAtomic() error {
+func (m *Manifest) Write() error {
 	data := m.render()
-	if err := validateManifestBytes(data); err != nil {
+	if err := ValidateBytes(data); err != nil {
 		return fmt.Errorf("refusing to write: the result would be an invalid workspace manifest (original left untouched): %w", err)
 	}
 
@@ -414,9 +428,9 @@ func (m *manifest) writeAtomic() error {
 	return nil
 }
 
-// validateManifestBytes applies the same rules the readers apply. It mirrors
+// ValidateBytes applies the same rules the readers apply. It mirrors
 // validateWorkspaceConfig in the extension; the two must agree.
-func validateManifestBytes(data []byte) error {
+func ValidateBytes(data []byte) error {
 	var doc struct {
 		Workspace *struct {
 			Name                string `yaml:"name"`
@@ -463,8 +477,8 @@ func validateManifestBytes(data []byte) error {
 		if strings.TrimSpace(r.Path) == "" {
 			errs = append(errs, fmt.Sprintf("repositories[%d].path: required field is missing", i))
 		}
-		if r.Role != "" && !containsString(validRoles, r.Role) {
-			errs = append(errs, fmt.Sprintf("repositories[%d].role: must be one of: %s", i, strings.Join(validRoles, ", ")))
+		if r.Role != "" && !containsString(ValidRoles, r.Role) {
+			errs = append(errs, fmt.Sprintf("repositories[%d].role: must be one of: %s", i, strings.Join(ValidRoles, ", ")))
 		}
 		// A zero project_number resolves to project 0 and silently misroutes
 		// issues. Until #703 this was enforced only by a YAML comment.
