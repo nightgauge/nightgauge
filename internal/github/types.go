@@ -921,6 +921,23 @@ type deleteLabelMutation struct {
 	} `graphql:"deleteLabel(input: $input)"`
 }
 
+// UpdateLabelInput is the named input type for the updateLabel mutation.
+// Name, Description and Color are pointers because updateLabel treats an
+// omitted field as "leave unchanged" but an empty string as "set to empty" —
+// sending a zero-value Description would silently clear the label's text.
+type UpdateLabelInput struct {
+	ID          graphql.ID      `json:"id"`
+	Name        *graphql.String `json:"name,omitempty"`
+	Description *graphql.String `json:"description,omitempty"`
+	Color       *graphql.String `json:"color,omitempty"`
+}
+
+type updateLabelMutation struct {
+	UpdateLabel struct {
+		Label labelDetailNode
+	} `graphql:"updateLabel(input: $input)"`
+}
+
 // --- View Queries ---
 
 // viewNode holds the fields returned by the projectV2.views GraphQL query.
