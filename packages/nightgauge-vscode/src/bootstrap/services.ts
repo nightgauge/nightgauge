@@ -106,6 +106,7 @@ import { TelemetryService } from "../services/TelemetryService";
 import { TelemetryConsentService } from "../services/TelemetryConsentService";
 import { TelemetryUploaderService } from "../services/TelemetryUploaderService";
 import { AgentHeartbeatService } from "../services/AgentHeartbeatService";
+import { buildUsageReport, getUsageReportingLevel } from "../services/usage/usageReporting";
 import { AgentCommandStreamService } from "../services/AgentCommandStreamService";
 import type { CommandHandler } from "../services/AgentCommandStreamService";
 import { TriggerCommandHandler } from "../services/TriggerCommandHandler";
@@ -4120,7 +4121,23 @@ export async function initializeServices(
       getPlatformUrl,
       agentHeartbeatTokenStorage,
       logger,
-      onDemandTokenRefresher
+      onDemandTokenRefresher,
+      // Opt-in adapter usage reporting (Issue #736). The level is re-read on
+      // every beat rather than captured here, so turning reporting off takes
+      // effect on the next 30s tick instead of at the next window reload —
+      // a privacy switch the operator has to restart to honour is not one
+      // they can trust.
+      //
+      // The same AdapterUsageService instance the footer and the dashboard
+      // panel read: what gets reported is exactly what the operator can
+      // already see locally, never a separate derivation.
+      async () => {
+        const level = getUsageReportingLevel();
+        if (level === "off" || adapterUsageService === null) {
+          return null;
+        }
+        return buildUsageReport(await adapterUsageService.getSnapshot(), level);
+      }
     );
     context.subscriptions.push(agentHeartbeatService);
   }

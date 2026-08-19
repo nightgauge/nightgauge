@@ -265,3 +265,99 @@ describe("AgentHeartbeatService", () => {
     });
   });
 });
+
+/**
+ * Opt-in usage reporting rides on the heartbeat (Issue #736). Two properties
+ * matter here and neither is about formatting: the default must be
+ * indistinguishable from the pre-#736 heartbeat, and a usage problem must
+ * never cost the operator agent presence.
+ */
+describe("AgentHeartbeatService — adapter usage reporting (#736)", () => {
+  const REPORT = {
+    level: "minimal" as const,
+    adapter: "claude",
+    plan: "subscription-window" as const,
+    captured_at: "2026-08-19T15:00:00.000Z",
+    windows: [],
+  };
+
+  let tokenStorage: ReturnType<typeof makeTokenStorage>;
+  let logger: ReturnType<typeof makeLogger>;
+  let service: AgentHeartbeatService;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.stubGlobal("fetch", vi.fn());
+    tokenStorage = makeTokenStorage();
+    logger = makeLogger();
+  });
+
+  afterEach(() => {
+    service.dispose();
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  function startWith(provider: (() => Promise<unknown>) | undefined): void {
+    service = new AgentHeartbeatService(
+      () => PLATFORM_URL,
+      tokenStorage,
+      logger,
+      undefined,
+      provider as never
+    );
+    vi.mocked(fetch).mockResolvedValue(makeResponse(200));
+    service.start(AGENT_ID);
+  }
+
+  function lastInit(): RequestInit {
+    return vi.mocked(fetch).mock.calls.at(-1)?.[1] as RequestInit;
+  }
+
+  it("sends no body when no provider is wired", async () => {
+    startWith(undefined);
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    expect(Object.hasOwn(lastInit(), "body")).toBe(false);
+  });
+
+  it("sends no body when the provider declines — the default configuration", async () => {
+    startWith(async () => null);
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    // Not an empty body, not `{}`: byte-for-byte the request the heartbeat
+    // made before reporting existed.
+    expect(Object.hasOwn(lastInit(), "body")).toBe(false);
+  });
+
+  it("attaches the report when one is produced", async () => {
+    startWith(async () => REPORT);
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    expect(JSON.parse(lastInit().body as string)).toEqual({ usage: REPORT });
+  });
+
+  it("still beats when the provider throws", async () => {
+    startWith(async () => {
+      throw new Error("snapshot derivation failed");
+    });
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    // Presence is worth more than a usage sample: the beat goes out bodiless
+    // and the dashboard keeps whatever it was last told.
+    expect(fetch).toHaveBeenCalled();
+    expect(Object.hasOwn(lastInit(), "body")).toBe(false);
+    expect(logger.warn).toHaveBeenCalled();
+  });
+
+  it("re-asks the provider on every beat", async () => {
+    const provider = vi.fn().mockResolvedValue(REPORT);
+    startWith(provider);
+    await vi.advanceTimersByTimeAsync(90_000);
+
+    // The level is re-read per beat, so turning reporting off takes effect on
+    // the next tick rather than at the next window reload. A privacy switch
+    // that needs a restart is not one an operator can trust.
+    expect(provider.mock.calls.length).toBeGreaterThan(1);
+  });
+});

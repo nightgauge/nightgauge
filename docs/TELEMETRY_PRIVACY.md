@@ -75,9 +75,51 @@ a separate channel.
 | `pipeline-run`   | Per-repository (`owner/name`) outcomes and durations from the Issue → PR pipeline |
 | `health`         | Queue, retry, and error counters for self-improvement loops                       |
 | `recommendation` | Effectiveness of self-recommendations (accept vs. ignore)                         |
+| `adapter-usage`  | How much of your AI provider's allowance is left — see below                      |
 
 You can toggle any stream off in the Telemetry Settings panel without
 disabling telemetry overall.
+
+### Adapter usage — separately opt-in, and tiered
+
+The footer and the dashboard webview show how much of your AI provider's
+allowance is left (for a Claude Max plan, the five-hour and weekly windows).
+That figure is read from your own machine and, by default, **never leaves it**.
+
+Some operators run the pipeline on more than one machine and want the whole
+picture in the hosted dashboard. `platform.telemetry.usage_reporting` turns
+that on. It is its own switch with its own default, because "I share pipeline
+outcomes" and "I share how much of my Claude plan I have used" are different
+decisions:
+
+| Tier                | What is sent                                                |
+| ------------------- | ----------------------------------------------------------- |
+| `off` (**default**) | Nothing. The agent heartbeat carries no body at all.        |
+| `minimal`           | Allowance windows only — **no monetary figure ever leaves** |
+| `full`              | Additionally the locally-derived per-adapter dollar spend   |
+
+`minimal` is defined by what it withholds — money — rather than by which part
+of Nightgauge produced a window. Today that split is exact: the dollar figures
+are Nightgauge's own rate-card reduction of this workspace's pipeline history,
+and the percentages are the provider's own statement of your account's
+allowance.
+
+Both switches must permit it. If `platform.telemetry.enabled` is `false`, or
+the one-time consent prompt has not been answered, nothing is reported
+regardless of the tier — an unanswered question is not a yes.
+
+The tier is re-read on every heartbeat, so turning reporting off takes effect
+within 30 seconds rather than at the next window reload.
+
+**What a report contains**: the adapter name, the billing arrangement observed,
+and for each window a period label, the figure, the ceiling if one is known,
+the reset time, and how much the figure can be trusted. The tier itself travels
+with the payload, so a surface reading it can tell "no dollar spend" from
+"dollar spend withheld" and never present the second as the first.
+
+**What it does not contain**: any account identifier for your AI provider, any
+model or prompt detail, and nothing from the
+[What we never collect](#what-we-never-collect) list above.
 
 ### Local skill-usage log (not transmitted)
 
@@ -154,6 +196,7 @@ within 30 days of the request.
 | `nightgauge.telemetry.enabled`               | boolean | `false`                                        | Master switch — must be `true` for any data to be sent |
 | `nightgauge.telemetry.streams`               | array   | `["pipeline-run", "health", "recommendation"]` | Streams that may submit data when enabled              |
 | `nightgauge.telemetry.uploadIntervalMinutes` | integer | `15`                                           | How often the queue flushes (1–1440 min)               |
+| `platform.telemetry.usage_reporting`         | enum    | `off`                                          | Allowance reporting: `off` / `minimal` / `full`        |
 
 ## Questions?
 

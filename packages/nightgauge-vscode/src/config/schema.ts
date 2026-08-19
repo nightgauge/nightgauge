@@ -2929,6 +2929,30 @@ export const PlatformTelemetrySchema = z.object({
    * false = opted out
    */
   enabled: z.boolean().nullable().optional(),
+
+  /**
+   * How much of the active adapter's usage this machine reports to the hosted
+   * dashboard (Issue #736).
+   *
+   * Default `off` — nothing about your AI-provider allowance leaves the
+   * machine, and the agent heartbeat stays the bodiless PUT it has always
+   * been.
+   *
+   * - `off`     — nothing is sent.
+   * - `minimal` — allowance windows only. **No monetary figure ever leaves**:
+   *   the Claude subscription percentages travel, the locally-derived
+   *   per-adapter dollar spend does not.
+   * - `full`    — additionally the dollar windows, so the dashboard can show
+   *   spend per adapter across your machines.
+   *
+   * Gated by `enabled` above: an operator who declined telemetry, or who has
+   * not yet answered the consent prompt, reports nothing regardless of this
+   * value. An unanswered question is not a yes.
+   *
+   * @default 'off'
+   * @see docs/decisions/018-adapter-usage-quota-model.md
+   */
+  usage_reporting: z.enum(["off", "minimal", "full"]).optional(),
 });
 export type PlatformTelemetry = z.infer<typeof PlatformTelemetrySchema>;
 
