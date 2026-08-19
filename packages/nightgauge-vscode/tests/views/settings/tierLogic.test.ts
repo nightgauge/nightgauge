@@ -20,9 +20,9 @@ import {
   UX_TIER_LABELS,
   UX_TIER_TOOLTIPS,
   techTierToUxTier,
-} from "../TierBadge";
-import type { ViewTier } from "../types";
-import { TIER_TABS } from "../types";
+} from "../../../src/views/settings/TierBadge";
+import type { ViewTier } from "../../../src/views/settings/types";
+import { TIER_TABS } from "../../../src/views/settings/types";
 
 describe("TierBadge", () => {
   describe("TIER_BADGE_LABELS", () => {
@@ -269,7 +269,7 @@ describe("techTierToUxTier (Issue #3339)", () => {
 describe("TierViewState type", () => {
   it("has correct shape", () => {
     // Type test - this will fail to compile if TierViewState is wrong
-    const state: import("../types").TierViewState = {
+    const state: import("../../../src/views/settings/types").TierViewState = {
       currentTier: "merged",
       defaultEditTier: "project",
       hasGlobalConfig: true,

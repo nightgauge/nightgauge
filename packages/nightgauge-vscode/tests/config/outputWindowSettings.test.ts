@@ -7,12 +7,15 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { getOutputWindowSettings, DEFAULT_OUTPUT_WINDOW_SETTINGS } from "../outputWindowSettings";
-import { ConfigBridge } from "../../services/ConfigBridge";
-import { DEFAULT_CONFIG } from "../schema";
+import {
+  getOutputWindowSettings,
+  DEFAULT_OUTPUT_WINDOW_SETTINGS,
+} from "../../src/config/outputWindowSettings";
+import { ConfigBridge } from "../../src/services/ConfigBridge";
+import { DEFAULT_CONFIG } from "../../src/config/schema";
 
 // Mock ConfigBridge
-vi.mock("../../services/ConfigBridge", () => ({
+vi.mock("../../src/services/ConfigBridge", () => ({
   ConfigBridge: {
     getInstance: vi.fn(),
   },

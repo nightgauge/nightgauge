@@ -357,10 +357,27 @@ not exist as far as CI is concerned.
 | `nightgauge-vscode` | `tests/**`    | **No**                                   |
 | `nightgauge-sdk`    | `tests/**`    | **Yes**                                  |
 
-The two configs differ, which is exactly how the mistake gets made. Nine
-`.test.ts` files currently sit under `packages/nightgauge-vscode/src/**/__tests__/`
-and none of them has ever run. Before adding a test to the extension, confirm it
-appears in the run count; a green suite is not evidence that your file was in it.
+The two configs differ, which is exactly how the mistake gets made (Issue
+#732: nine `.test.ts` files sat under
+`packages/nightgauge-vscode/src/**/__tests__/`, never collected, until they
+were moved into `tests/**` and made to pass). Before adding a test to the
+extension, confirm it appears in the run count; a green suite is not evidence
+that your file was in it.
+
+`packages/nightgauge-vscode/scripts/check-test-collection.sh` makes the class
+unrepeatable: it fails if any `*.test.ts` file exists under
+`packages/nightgauge-vscode/` outside `tests/**`, and runs automatically as
+`pretest` before `npm run test -w nightgauge-vscode` (and therefore as part of
+`bash scripts/ci-local.sh`). Its own coverage lives in
+`scripts/test-check-test-collection.sh`, which plants a fixture file outside
+`tests/` and asserts the guard catches it before asserting the clean-tree case
+passes — per the #539/#549 lesson that a gate nothing exercises degrades into
+an unconditional pass. This guard only enforces the location convention; it
+does not verify that everything under `tests/` is actually matched by a
+runner's include/exclude globs (a file could sit in `tests/` under a directory
+excluded from `vitest.config.ts` and unmatched by `playwright.config.ts`'s
+`testMatch`) — that broader zero-runner check is tracked separately
+(Issue #744).
 
 ### Mock Factories
 
