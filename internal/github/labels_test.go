@@ -2,6 +2,12 @@ package github
 
 import (
 	"context"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync"
 	"testing"
 )
 
@@ -186,5 +192,148 @@ func TestLabelDelete(t *testing.T) {
 	svc := NewLabelService(client, "nightgauge", "nightgauge")
 	if err := svc.Delete(context.Background(), "MDU6TGFiZWwx"); err != nil {
 		t.Fatalf("Delete() error: %v", err)
+	}
+}
+
+// recordingGraphQLServer replays responses in order (repeating the last) and
+// captures every request body, so a test can assert which operations actually
+// reached the API — the only way to prove the idempotent path mutates nothing.
+func recordingGraphQLServer(t *testing.T, bodies *[]string, responses ...string) (*Client, func()) {
+	t.Helper()
+	var mu sync.Mutex
+	var callIdx int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		*bodies = append(*bodies, string(raw))
+		idx := callIdx
+		callIdx++
+		mu.Unlock()
+		if idx >= len(responses) {
+			idx = len(responses) - 1
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, responses[idx])
+	}))
+	return NewClientWithURL("test-token", srv.URL), srv.Close
+}
+
+func labelListResp(entries string) string {
+	return `{"data":{"repository":{"labels":{"nodes":[` + entries + `]}}}}`
+}
+
+const areaVscodeNode = `{"id":"LA_old","name":"area:vscode","description":"VS Code extension","color":"c5def5"}`
+
+func TestLabelRename_PreservesNodeID(t *testing.T) {
+	updateResp := `{"data":{"updateLabel":{"label":{"id":"LA_old","name":"component:vscode","description":"VS Code extension","color":"7057ff"}}}}`
+	var bodies []string
+	client, cleanup := recordingGraphQLServer(t, &bodies, labelListResp(areaVscodeNode), updateResp)
+	defer cleanup()
+
+	svc := NewLabelService(client, "nightgauge", "nightgauge")
+	label, err := svc.Rename(context.Background(), "area:vscode", "component:vscode", "", "7057ff")
+	if err != nil {
+		t.Fatalf("Rename() error: %v", err)
+	}
+	if label.Name != "component:vscode" {
+		t.Errorf("Name = %q, want %q", label.Name, "component:vscode")
+	}
+	// The whole point of rename-over-recreate: the node ID is unchanged, so
+	// every issue carrying the label stays labelled.
+	if label.ID != "LA_old" {
+		t.Errorf("ID = %q, want the original %q — a new ID means issues were detached", label.ID, "LA_old")
+	}
+	if label.Color != "7057ff" {
+		t.Errorf("Color = %q, want %q", label.Color, "7057ff")
+	}
+	if len(bodies) != 2 {
+		t.Fatalf("made %d API calls, want 2 (list + update)", len(bodies))
+	}
+	if !strings.Contains(bodies[1], "updateLabel") {
+		t.Errorf("second call was not updateLabel: %s", bodies[1])
+	}
+	// Description was not supplied, so it must not appear in the mutation at
+	// all — sending an empty string would wipe the label's text.
+	if strings.Contains(bodies[1], `"description"`) {
+		t.Errorf("omitted --description leaked into the mutation and would clear it: %s", bodies[1])
+	}
+}
+
+func TestLabelRename_AlreadyRenamedIsIdempotent(t *testing.T) {
+	renamed := `{"id":"LA_old","name":"component:vscode","description":"VS Code extension","color":"7057ff"}`
+	var bodies []string
+	client, cleanup := recordingGraphQLServer(t, &bodies, labelListResp(renamed))
+	defer cleanup()
+
+	svc := NewLabelService(client, "nightgauge", "nightgauge")
+	label, err := svc.Rename(context.Background(), "area:vscode", "component:vscode", "", "")
+	if err != nil {
+		t.Fatalf("Rename() on an already-renamed label must succeed, got: %v", err)
+	}
+	if label.Name != "component:vscode" {
+		t.Errorf("Name = %q, want %q", label.Name, "component:vscode")
+	}
+	if len(bodies) != 1 {
+		t.Fatalf("made %d API calls, want 1 (list only) — the idempotent path must not mutate", len(bodies))
+	}
+}
+
+func TestLabelRename_TargetNameOccupied(t *testing.T) {
+	occupied := `{"id":"LA_new","name":"component:vscode","description":"","color":"7057ff"}`
+	var bodies []string
+	client, cleanup := recordingGraphQLServer(t, &bodies, labelListResp(areaVscodeNode+","+occupied))
+	defer cleanup()
+
+	svc := NewLabelService(client, "nightgauge", "nightgauge")
+	_, err := svc.Rename(context.Background(), "area:vscode", "component:vscode", "", "")
+	if err == nil {
+		t.Fatal("Rename() onto an occupied name must fail rather than silently merge")
+	}
+	if !strings.Contains(err.Error(), "already exists") {
+		t.Errorf("error = %q, want it to name the collision", err)
+	}
+	if len(bodies) != 1 {
+		t.Errorf("made %d API calls, want 1 (list only) — a rejected rename must not mutate", len(bodies))
+	}
+}
+
+func TestLabelRename_NotFound(t *testing.T) {
+	var bodies []string
+	client, cleanup := recordingGraphQLServer(t, &bodies, labelListResp(""))
+	defer cleanup()
+
+	svc := NewLabelService(client, "nightgauge", "nightgauge")
+	_, err := svc.Rename(context.Background(), "area:vscode", "component:vscode", "", "")
+	if err == nil {
+		t.Fatal("Rename() of a missing label must fail")
+	}
+	if !strings.Contains(err.Error(), "not found") {
+		t.Errorf("error = %q, want a not-found message", err)
+	}
+}
+
+func TestLabelRename_SameNameUpdatesColorOnly(t *testing.T) {
+	updateResp := `{"data":{"updateLabel":{"label":{"id":"LA_old","name":"area:vscode","description":"VS Code extension","color":"7057ff"}}}}`
+	var bodies []string
+	client, cleanup := recordingGraphQLServer(t, &bodies, labelListResp(areaVscodeNode), updateResp)
+	defer cleanup()
+
+	svc := NewLabelService(client, "nightgauge", "nightgauge")
+	label, err := svc.Rename(context.Background(), "area:vscode", "area:vscode", "", "7057ff")
+	if err != nil {
+		t.Fatalf("Rename() to the same name must be allowed for a colour-only edit: %v", err)
+	}
+	if label.Color != "7057ff" {
+		t.Errorf("Color = %q, want %q", label.Color, "7057ff")
+	}
+}
+
+func TestLabelRename_RequiresBothNames(t *testing.T) {
+	svc := NewLabelService(NewClientWithToken("t"), "nightgauge", "nightgauge")
+	if _, err := svc.Rename(context.Background(), "", "component:vscode", "", ""); err == nil {
+		t.Error("empty old name must be rejected")
+	}
+	if _, err := svc.Rename(context.Background(), "area:vscode", "", "", ""); err == nil {
+		t.Error("empty new name must be rejected")
 	}
 }

@@ -7441,11 +7441,12 @@ func cleanupClosedIssueBranch(svc *gitpkg.Service, branch string) (action, reaso
 func labelCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "label",
-		Short: "Repository label operations (list, create, delete)",
+		Short: "Repository label operations (list, create, rename, delete)",
 	}
 	cmd.AddCommand(
 		labelListCmd(),
 		labelCreateCmd(),
+		labelRenameCmd(),
 		labelDeleteCmd(),
 	)
 	return cmd
@@ -7544,6 +7545,72 @@ func labelCreateCmd() *cobra.Command {
 	cmd.Flags().StringVar(&name, "name", "", "Label name (required)")
 	cmd.Flags().StringVar(&description, "description", "", "Label description")
 	cmd.Flags().StringVar(&color, "color", "", "Hex color without # (default: cccccc)")
+	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output as JSON")
+	return cmd
+}
+
+func labelRenameCmd() *cobra.Command {
+	var (
+		owner       string
+		repo        string
+		name        string
+		newName     string
+		description string
+		color       string
+		outputJSON  bool
+	)
+
+	cmd := &cobra.Command{
+		Use:   "rename",
+		Short: "Rename a label, preserving its issue associations (idempotent)",
+		Long: `Rename a label in place via GitHub's updateLabel mutation.
+
+The label keeps its node ID, so every issue and pull request that carries it
+stays labelled. This is the only non-destructive way to change a label's name:
+delete-then-create yields a same-named label with a NEW node ID and silently
+strips the label from every issue it was on.
+
+Idempotent — re-running a rename that already applied succeeds without
+mutating, so a partially-applied batch is safe to repeat. --color and
+--description are optional and leave the current values untouched when
+omitted.`,
+		Example: `  nightgauge label rename --name "area:vscode" --new-name "component:vscode"
+  nightgauge label rename --name "area:ci" --new-name "component:ci" --color cfd3d7 --json`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if name == "" {
+				return fmt.Errorf("--name is required")
+			}
+			if newName == "" {
+				return fmt.Errorf("--new-name is required")
+			}
+
+			client, err := clientFromConfig()
+			if err != nil {
+				return err
+			}
+
+			ownerPart, repoPart := splitRepo(owner, repo)
+			svc := gh.NewLabelService(client, ownerPart, repoPart)
+			label, err := svc.Rename(cmd.Context(), name, newName, description, color)
+			if err != nil {
+				return err
+			}
+
+			if outputJSON {
+				return printJSON(label)
+			}
+
+			fmt.Printf("Label: %s -> %s (color: #%s)\n", name, label.Name, label.Color)
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&owner, "owner", "nightgauge", "GitHub organization or user")
+	repoNameFlag(cmd, &repo, "nightgauge", "Repository name (owner/name or name)")
+	cmd.Flags().StringVar(&name, "name", "", "Current label name (required)")
+	cmd.Flags().StringVar(&newName, "new-name", "", "New label name (required)")
+	cmd.Flags().StringVar(&description, "description", "", "New description (unchanged when omitted)")
+	cmd.Flags().StringVar(&color, "color", "", "New hex color without # (unchanged when omitted)")
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output as JSON")
 	return cmd
 }

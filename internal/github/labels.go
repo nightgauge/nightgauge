@@ -116,3 +116,83 @@ func (s *LabelService) Delete(ctx context.Context, labelID string) error {
 	}
 	return nil
 }
+
+// Rename renames a label in place, preserving every issue and pull-request
+// association. GitHub's updateLabel mutation mutates the existing node, so the
+// label keeps its ID and stays attached to every item that carries it. This is
+// the only non-destructive way to change a label's name: a delete-then-create
+// cycle produces a label with the same text but a new node ID, silently
+// detaching it from every issue it was on.
+//
+// Idempotent by design so a partially-applied batch can be re-run: if oldName
+// is absent but newName already exists, the existing label is returned without
+// error. Passing oldName == newName is allowed and updates only color and
+// description.
+//
+// description and color are optional — empty values leave the current value
+// untouched rather than clearing it.
+func (s *LabelService) Rename(ctx context.Context, oldName, newName, description, color string) (*Label, error) {
+	if oldName == "" {
+		return nil, fmt.Errorf("old label name is required")
+	}
+	if newName == "" {
+		return nil, fmt.Errorf("new label name is required")
+	}
+
+	existing, err := s.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	var current, target *Label
+	for _, l := range existing {
+		switch l.Name {
+		case oldName:
+			current = l
+		case newName:
+			target = l
+		}
+	}
+
+	// Already renamed by an earlier run — report success without mutating.
+	if current == nil {
+		if target != nil {
+			return target, nil
+		}
+		return nil, fmt.Errorf("label %q not found in %s/%s", oldName, s.owner, s.repo)
+	}
+
+	// Renaming onto an occupied name would merge two label sets. GitHub rejects
+	// it, and doing it by hand (relabel every issue, delete the old label) is a
+	// different, lossy operation that this verb deliberately does not perform.
+	if target != nil && oldName != newName {
+		return nil, fmt.Errorf(
+			"cannot rename %q to %q in %s/%s: a label named %q already exists; "+
+				"merging two labels is not supported — relabel its issues first, then delete it",
+			oldName, newName, s.owner, s.repo, newName)
+	}
+
+	name := graphql.String(newName)
+	input := UpdateLabelInput{ID: graphql.ID(current.ID), Name: &name}
+	if description != "" {
+		d := graphql.String(description)
+		input.Description = &d
+	}
+	if color != "" {
+		c := graphql.String(color)
+		input.Color = &c
+	}
+
+	var m updateLabelMutation
+	if err := s.client.mutate(ctx, &m, map[string]interface{}{"input": input}); err != nil {
+		return nil, fmt.Errorf("rename label %q to %q in %s/%s: %w", oldName, newName, s.owner, s.repo, err)
+	}
+
+	node := m.UpdateLabel.Label
+	return &Label{
+		ID:          idToString(node.ID),
+		Name:        string(node.Name),
+		Description: string(node.Description),
+		Color:       string(node.Color),
+	}, nil
+}

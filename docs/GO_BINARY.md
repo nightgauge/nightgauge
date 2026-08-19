@@ -633,6 +633,10 @@ nightgauge label list [--owner ORG] [--repo REPO] [--json]
 nightgauge label create --name "priority:critical" --color ff0000 \
   [--description "..."] [--owner ORG] [--repo REPO] [--json]
 
+# Rename a label in place, preserving its issue associations (idempotent)
+nightgauge label rename --name "area:vscode" --new-name "component:vscode" \
+  [--color 7057ff] [--description "..."] [--owner ORG] [--repo REPO] [--json]
+
 # Delete a label by node ID
 nightgauge label delete --label-id <node-id> [--owner ORG] [--repo REPO] [--json]
 ```
@@ -641,6 +645,23 @@ nightgauge label delete --label-id <node-id> [--owner ORG] [--repo REPO] [--json
 defaults to `cccccc` if omitted. All label operations use GraphQL — no `gh` CLI
 required. JSON output from `label list` is an array of `{id, name, description, color}`
 objects.
+
+**label rename notes**: `rename` is the ONLY non-destructive way to change a
+label's name. It issues GraphQL `updateLabel`, which mutates the existing node,
+so the label keeps its ID and every issue and pull request carrying it stays
+labelled. **Do not use `delete` + `create` to rename** — that yields a
+same-named label with a _new_ node ID and silently strips the label from every
+issue it was on. Renaming the seven `area:*` labels on this repository to
+`component:*` moved 249 issues' labels with zero relabelling for exactly this
+reason.
+
+`--color` and `--description` are optional and leave the current value
+untouched when omitted (they are sent only when set, so an omitted
+`--description` cannot blank an existing one). The verb is idempotent: a rename
+that already applied succeeds without mutating, so a partially-applied batch is
+safe to re-run. Renaming onto an existing label name is refused rather than
+merged — merging is a lossy relabel-then-delete operation this verb
+deliberately does not perform.
 
 ### Repository Operations
 
