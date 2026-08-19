@@ -69,6 +69,23 @@ export class WorkspaceManager implements vscode.Disposable {
   /** Whether initialization has completed */
   private _initialized: boolean = false;
 
+  /**
+   * In-flight initialize(), or null. reload() clears _initialized before
+   * calling initialize(), whose only guard is that same flag — so a debounced
+   * watcher and an explicit command could both observe false and both proceed,
+   * racing two detections against one repository map (#704). Concurrent callers
+   * now await the same promise instead.
+   */
+  private _initializing: Promise<void> | null = null;
+
+  /**
+   * Last workspace-detection error message that was surfaced to the user.
+   * A file watcher fires on every save, so a manifest that is malformed
+   * mid-edit would otherwise report the same parse error on each keystroke-
+   * triggered save (#704).
+   */
+  private _lastDetectionError: string | null = null;
+
   // Event emitters
   private _onWorkspaceChanged = new vscode.EventEmitter<Repository[]>();
 
@@ -118,6 +135,29 @@ export class WorkspaceManager implements vscode.Disposable {
     if (this._initialized) {
       return;
     }
+    if (this._initializing) {
+      // Coalesce: a second caller awaits the run already in progress rather
+      // than starting a competing detection (#704).
+      return this._initializing;
+    }
+    this._initializing = this.runInitialize().finally(() => {
+      this._initializing = null;
+    });
+    return this._initializing;
+  }
+
+  private async runInitialize(): Promise<void> {
+    // Snapshot every field a failed detection could have half-updated.
+    // loadRepositories() clears the map before repopulating it, so "keep the
+    // previous state" cannot simply mean "don't overwrite" — by the time a
+    // failure surfaces the map may already be empty, and the manager would
+    // report zero repositories while subscribers still render the last set
+    // they were handed. Restoring from the snapshot keeps the two in step.
+    const previousRepositories = new Map(this._repositories);
+    const previousMode = this._mode;
+    const previousConfig = this._workspaceConfig;
+    const previousDetectionMethod = this._detectionMethod;
+    const hadRepositories = previousRepositories.size > 0;
 
     try {
       // Detect workspace type
@@ -130,11 +170,38 @@ export class WorkspaceManager implements vscode.Disposable {
       await this.loadRepositories();
 
       this._initialized = true;
+      this._lastDetectionError = null;
     } catch (error) {
-      console.error(`[Nightgauge] WorkspaceManager initialization failed: ${error}`);
-      // Initialize with single-repo fallback
+      const message = error instanceof Error ? error.message : String(error);
+
+      // A reload triggered by a file watcher sees the manifest mid-edit, so a
+      // transient parse error is expected and must NOT tear down a working
+      // repository set. Collapsing to single-repo mode here (the pre-#704
+      // behavior) discarded every loaded repository the moment a save landed
+      // on an unbalanced quote, and only a window reload brought them back.
+      if (hadRepositories) {
+        this._repositories = previousRepositories;
+        this._mode = previousMode;
+        this._workspaceConfig = previousConfig;
+        this._detectionMethod = previousDetectionMethod;
+
+        if (this._lastDetectionError !== message) {
+          console.error(
+            `[Nightgauge] Workspace detection failed; keeping the previously loaded ` +
+              `repositories. Fix the manifest and save again: ${message}`
+          );
+          this._lastDetectionError = message;
+        }
+        this._initialized = true;
+        return; // no event — subscribers keep the state they already have
+      }
+
+      // Nothing loaded yet, so there is no good state to preserve: fall back to
+      // single-repo mode as before, and let subscribers see the empty set.
+      console.error(`[Nightgauge] WorkspaceManager initialization failed: ${message}`);
       this._mode = "single";
       this._initialized = true;
+      this._lastDetectionError = message;
     }
 
     this._onWorkspaceChanged.fire(this.getAllRepositories());

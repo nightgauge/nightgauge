@@ -4631,7 +4631,24 @@ func serveCmd() *cobra.Command {
 				// edits to the YAML silently no-op until the user restarts
 				// autonomous or toggles a repo checkbox in the extension UI
 				// (which fires autonomous.updateAllowlist over IPC).
-				go orchestrator.WatchAutonomousConfig(ctx, autoSched, workspaceRoot)
+				// Also watch .vscode/nightgauge-workspace.yaml (#704). The
+				// extension hot-reloads it; without the daemon doing the same,
+				// the Repositories tree would list a repo the scheduler is not
+				// processing. The resolver is injected because it lives here —
+				// internal/orchestrator cannot import package main — and it
+				// reuses the exact same call the startup path used, so a
+				// hot-reloaded repo set is resolved identically to a cold one.
+				resolveManifestRepos := func() []depgraph.RepoConfig {
+					c, cerr := config.Load(workspaceRoot)
+					if cerr != nil || c == nil {
+						return nil
+					}
+					ident := resolveSchedulerIdentity(workspaceRoot, c)
+					return reposFromWorkspaceManifest(c, workspaceRoot, ident.Owner, ident.ProjectNumber)
+				}
+				go orchestrator.WatchAutonomousConfigWithManifest(
+					ctx, autoSched, workspaceRoot, resolveManifestRepos,
+				)
 			}
 
 			// Action Center platform bridge (ADR 015 §C/§E, #330). The local

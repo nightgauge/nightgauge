@@ -1599,6 +1599,77 @@ func (as *AutonomousScheduler) FilterRepos(workspaceRepos []string) {
 	as.pruneStateToRepos(allowed)
 }
 
+// ReplaceRepos swaps the scheduler's pristine repo list for a newly resolved
+// one, then re-applies any active allowlist on top (#704).
+//
+// FilterRepos cannot do this job. It filters against allRepos — the list
+// captured at construction — so it can re-include a repo it already knows but
+// can never introduce one it has not seen. A repository added to the workspace
+// manifest while the daemon runs is exactly that case: FilterRepos would match
+// zero entries, log "keeping all to avoid empty scan", and the new repo would
+// silently never be scheduled while the extension's tree happily displayed it.
+// That divergence between surfaces is the thing #704 exists to prevent.
+//
+// Returns true when the resolved set differs from the current pristine list, so
+// callers can stay quiet on a no-op poll.
+func (as *AutonomousScheduler) ReplaceRepos(repos []depgraph.RepoConfig) bool {
+	if len(repos) == 0 {
+		// An empty resolution means "could not read the manifest", never
+		// "the workspace has no repositories". Narrowing to nothing on a
+		// transient read error would stop all scanning until restart.
+		return false
+	}
+
+	if sameRepoSet(as.allRepos, repos) {
+		return false
+	}
+
+	pristine := make([]depgraph.RepoConfig, len(repos))
+	copy(pristine, repos)
+	as.allRepos = pristine
+
+	active := make([]depgraph.RepoConfig, len(repos))
+	copy(active, repos)
+	as.repos = active
+
+	log.Printf("autonomous: repo set replaced from workspace manifest (%d repos)", len(repos))
+
+	// Re-apply the allowlist against the NEW pristine list. Without this a
+	// manifest change would silently widen the scheduler past the operator's
+	// autonomous.enabled_repos scoping.
+	if len(as.enabledRepos) > 0 {
+		allowlist := make([]string, len(as.enabledRepos))
+		copy(allowlist, as.enabledRepos)
+		as.FilterRepos(allowlist)
+	}
+	return true
+}
+
+// sameRepoSet reports whether two repo lists describe the same set, ignoring
+// order. Used to keep a polling watcher from churning subscribers on every tick.
+func sameRepoSet(a, b []depgraph.RepoConfig) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	seen := make(map[string]int, len(a))
+	for _, r := range a {
+		seen[strings.ToLower(r.FullName())+"#"+strconv.Itoa(r.Project)]++
+	}
+	for _, r := range b {
+		k := strings.ToLower(r.FullName()) + "#" + strconv.Itoa(r.Project)
+		seen[k]--
+		if seen[k] < 0 {
+			return false
+		}
+	}
+	for _, n := range seen {
+		if n != 0 {
+			return false
+		}
+	}
+	return true
+}
+
 // pruneStateToRepos removes completed, failed, and running entries whose repo
 // is not in the allowed set. Also cleans per-issue backoff and failure maps.
 func (as *AutonomousScheduler) pruneStateToRepos(allowed map[string]bool) {
