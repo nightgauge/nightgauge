@@ -583,6 +583,15 @@ describe("formatCooldownRemaining (#3446)", () => {
     expect(formatCooldownRemaining(until, now)).toBe("1h 1m");
   });
 
+  // Unreachable for a quota cooldown, but the Claude weekly usage window
+  // resets days out and renders through this same formatter (#730).
+  it("rolls over to days past 24 hours", () => {
+    const now = new Date("2026-08-19T10:00:00Z");
+    expect(formatCooldownRemaining(new Date("2026-08-24T01:06:00Z"), now)).toBe("4d 15h");
+    expect(formatCooldownRemaining(new Date("2026-08-21T10:00:00Z"), now)).toBe("2d");
+    expect(formatCooldownRemaining(new Date("2026-08-20T09:59:00Z"), now)).toBe("23h 59m");
+  });
+
   it("renders minute-grade remainders as 'Ym Zs'", () => {
     const until = new Date("2026-05-11T03:01:30Z");
     const now = new Date("2026-05-11T03:00:00Z");
@@ -852,6 +861,54 @@ describe("usageThresholdColor (#659)", () => {
 
   it("returns undefined when limit is zero (not a valid ceiling)", () => {
     expect(usageThresholdColor({ ...base, used: 5, limit: 0 })).toBeUndefined();
+  });
+});
+
+describe("buildUsageTooltip — Claude Max feed offer (#730)", () => {
+  it("offers the plan feed when the claude adapter reports pay-per-token", () => {
+    const tooltip = buildUsageTooltip(makeSnapshot([makeWindow({ used: 178.61 })], "claude"));
+
+    expect(tooltip.value).toContain("command:nightgauge.enableClaudeUsageStatusLine");
+    expect(tooltip.value).toContain("not your plan's allowance");
+  });
+
+  it("offers it on an unknown snapshot too", () => {
+    const tooltip = buildUsageTooltip(makeSnapshot([], "claude"));
+
+    expect(tooltip.value).toContain("command:nightgauge.enableClaudeUsageStatusLine");
+  });
+
+  it("says nothing once a subscription window is being reported", () => {
+    const snapshot: UsageSnapshot = {
+      ...makeSnapshot([
+        makeWindow({
+          id: "claude-rate-limit:rolling",
+          label: "Session (5h)",
+          scope: "rolling",
+          used: 44,
+          limit: 100,
+          unit: "percent",
+        }),
+      ]),
+      plan: { kind: "subscription-window" },
+    };
+
+    const tooltip = buildUsageTooltip(snapshot);
+
+    expect(tooltip.value).not.toContain("enableClaudeUsageStatusLine");
+  });
+
+  it("says nothing for another adapter, whose dollars are the right answer", () => {
+    const tooltip = buildUsageTooltip(makeSnapshot([makeWindow()], "codex"));
+
+    expect(tooltip.value).not.toContain("enableClaudeUsageStatusLine");
+  });
+
+  // The offer sits above the dashboard link rather than replacing it.
+  it("keeps the dashboard link reachable", () => {
+    const tooltip = buildUsageTooltip(makeSnapshot([makeWindow()], "claude"));
+
+    expect(tooltip.value).toContain("command:nightgauge.showDashboard");
   });
 });
 

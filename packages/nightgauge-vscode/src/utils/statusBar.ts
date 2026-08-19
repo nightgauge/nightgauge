@@ -876,6 +876,15 @@ export function formatCooldownRemaining(until: Date, now: Date = new Date()): st
   const hours = Math.floor(totalSeconds / 3600);
   const minutes = Math.floor((totalSeconds % 3600) / 60);
   const seconds = totalSeconds % 60;
+  // Days roll over above 24h (Issue #730). A quota cooldown never reaches a
+  // day, so this tier was unreachable until the Claude weekly usage window
+  // started rendering through the same formatter — and "resets 111h 6m" is a
+  // number an operator has to do arithmetic on before it means anything.
+  if (hours >= 24) {
+    const days = Math.floor(hours / 24);
+    const remainderHours = hours % 24;
+    return remainderHours > 0 ? `${days}d ${remainderHours}h` : `${days}d`;
+  }
   if (hours > 0) {
     return `${hours}h ${minutes}m`;
   }
@@ -1066,6 +1075,38 @@ export function buildUsageTooltip(snapshot: UsageSnapshot): vscode.MarkdownStrin
     }
     tooltip.appendMarkdown("\n");
   }
+  appendClaudeSubscriptionHint(tooltip, snapshot);
   tooltip.appendMarkdown("[Open Dashboard](command:nightgauge.showDashboard)");
   return tooltip;
+}
+
+/**
+ * Offer the Max-plan feed when the `claude` adapter is answering with anything
+ * other than a subscription window (Issue #730).
+ *
+ * A subscriber whose feed is not wired up sees `LocalTelemetryUsageProvider`'s
+ * dollar windows — nightgauge's own rate-card-derived spend. Those are honest
+ * figures, but they answer a question a subscription operator did not ask, and
+ * nothing on the meter says a better number is one command away. Without this
+ * line the only cue is the absence of a percentage, which reads as "nightgauge
+ * cannot know" rather than "nightgauge has not been told how to look".
+ *
+ * Deliberately conditional on the *observed plan kind*, never on the adapter
+ * name alone: an API-key user on the same `claude` adapter is genuinely
+ * pay-per-token, and the dollar windows are the right answer for them. They
+ * see the offer too — the extension cannot tell the two apart without a
+ * reading, and ADR 018 forbids inferring a plan from the adapter id — so the
+ * wording asks rather than asserts.
+ */
+function appendClaudeSubscriptionHint(
+  tooltip: vscode.MarkdownString,
+  snapshot: UsageSnapshot
+): void {
+  if (snapshot.adapter !== "claude" || snapshot.plan.kind === "subscription-window") {
+    return;
+  }
+  tooltip.appendMarkdown(
+    "_On a Claude Max or Pro plan? These are locally-derived costs, not your plan's allowance._\n\n" +
+      "[Show my plan's 5h / weekly limits](command:nightgauge.enableClaudeUsageStatusLine)\n\n"
+  );
 }

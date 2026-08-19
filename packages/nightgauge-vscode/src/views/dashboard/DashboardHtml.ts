@@ -671,6 +671,13 @@ function getScript(): string {
         vscode.postMessage({ type: 'executeCommand', command: 'nightgauge.exportTelemetry' });
       });
 
+      // Usage & Quota panel: wire the Claude Max feed (#730). Shown only while
+      // the claude adapter is reporting something other than a subscription
+      // window, so this listener is usually attached to nothing.
+      document.getElementById('enableClaudeUsageFeed')?.addEventListener('click', () => {
+        vscode.postMessage({ type: 'executeCommand', command: 'nightgauge.enableClaudeUsageStatusLine' });
+      });
+
       // Scope + mode toggle buttons (Issue #3218 added mode-toggle)
       document.querySelectorAll('.toggle-btn').forEach(btn => {
         btn.addEventListener('click', (e) => {

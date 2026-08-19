@@ -2222,6 +2222,40 @@ exports[`getDashboardHtml snapshots (Issue #1242) > active pipeline state — cu
       margin-bottom: 0;
     }
 /* Adapter Usage & Quota panel (Issue #661) */
+
+    /*
+     * Plan badge (Issue #730). badge-info is already defined by the cost tab,
+     * whose styles ship on the same page; only the pay-per-token variant is new,
+     * and it is deliberately quieter — a subscription window is the state worth
+     * drawing the eye to, since it is the one an operator can run out of.
+     */
+    .badge-muted {
+      background: var(--vscode-badge-background);
+      color: var(--vscode-badge-foreground);
+      border-radius: 3px;
+      padding: 1px 6px;
+      font-size: 0.8em;
+    }
+
+    /*
+     * The "wire up my plan's limits" call to action (Issue #730). Styled as a
+     * link rather than a button: it sits inside a sentence, and it opens a
+     * confirmation dialog rather than doing anything on its own.
+     */
+    .usage-feed-prompt .link-button {
+      background: none;
+      border: none;
+      padding: 0;
+      font: inherit;
+      color: var(--vscode-textLink-foreground);
+      cursor: pointer;
+      text-decoration: underline;
+    }
+
+    .usage-feed-prompt .link-button:hover {
+      color: var(--vscode-textLink-activeForeground);
+    }
+
     .usage-window-row {
       padding: var(--spacing-sm) 0;
       border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.15));
@@ -5906,6 +5940,13 @@ exports[`getDashboardHtml snapshots (Issue #1242) > active pipeline state — cu
         vscode.postMessage({ type: 'executeCommand', command: 'nightgauge.exportTelemetry' });
       });
 
+      // Usage & Quota panel: wire the Claude Max feed (#730). Shown only while
+      // the claude adapter is reporting something other than a subscription
+      // window, so this listener is usually attached to nothing.
+      document.getElementById('enableClaudeUsageFeed')?.addEventListener('click', () => {
+        vscode.postMessage({ type: 'executeCommand', command: 'nightgauge.enableClaudeUsageStatusLine' });
+      });
+
       // Scope + mode toggle buttons (Issue #3218 added mode-toggle)
       document.querySelectorAll('.toggle-btn').forEach(btn => {
         btn.addEventListener('click', (e) => {
@@ -8980,6 +9021,40 @@ exports[`getDashboardHtml snapshots (Issue #1242) > completed run with tool call
       margin-bottom: 0;
     }
 /* Adapter Usage & Quota panel (Issue #661) */
+
+    /*
+     * Plan badge (Issue #730). badge-info is already defined by the cost tab,
+     * whose styles ship on the same page; only the pay-per-token variant is new,
+     * and it is deliberately quieter — a subscription window is the state worth
+     * drawing the eye to, since it is the one an operator can run out of.
+     */
+    .badge-muted {
+      background: var(--vscode-badge-background);
+      color: var(--vscode-badge-foreground);
+      border-radius: 3px;
+      padding: 1px 6px;
+      font-size: 0.8em;
+    }
+
+    /*
+     * The "wire up my plan's limits" call to action (Issue #730). Styled as a
+     * link rather than a button: it sits inside a sentence, and it opens a
+     * confirmation dialog rather than doing anything on its own.
+     */
+    .usage-feed-prompt .link-button {
+      background: none;
+      border: none;
+      padding: 0;
+      font: inherit;
+      color: var(--vscode-textLink-foreground);
+      cursor: pointer;
+      text-decoration: underline;
+    }
+
+    .usage-feed-prompt .link-button:hover {
+      color: var(--vscode-textLink-activeForeground);
+    }
+
     .usage-window-row {
       padding: var(--spacing-sm) 0;
       border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.15));
@@ -12712,6 +12787,13 @@ exports[`getDashboardHtml snapshots (Issue #1242) > completed run with tool call
         vscode.postMessage({ type: 'executeCommand', command: 'nightgauge.exportTelemetry' });
       });
 
+      // Usage & Quota panel: wire the Claude Max feed (#730). Shown only while
+      // the claude adapter is reporting something other than a subscription
+      // window, so this listener is usually attached to nothing.
+      document.getElementById('enableClaudeUsageFeed')?.addEventListener('click', () => {
+        vscode.postMessage({ type: 'executeCommand', command: 'nightgauge.enableClaudeUsageStatusLine' });
+      });
+
       // Scope + mode toggle buttons (Issue #3218 added mode-toggle)
       document.querySelectorAll('.toggle-btn').forEach(btn => {
         btn.addEventListener('click', (e) => {
@@ -15786,6 +15868,40 @@ exports[`getDashboardHtml snapshots (Issue #1242) > empty state — no current r
       margin-bottom: 0;
     }
 /* Adapter Usage & Quota panel (Issue #661) */
+
+    /*
+     * Plan badge (Issue #730). badge-info is already defined by the cost tab,
+     * whose styles ship on the same page; only the pay-per-token variant is new,
+     * and it is deliberately quieter — a subscription window is the state worth
+     * drawing the eye to, since it is the one an operator can run out of.
+     */
+    .badge-muted {
+      background: var(--vscode-badge-background);
+      color: var(--vscode-badge-foreground);
+      border-radius: 3px;
+      padding: 1px 6px;
+      font-size: 0.8em;
+    }
+
+    /*
+     * The "wire up my plan's limits" call to action (Issue #730). Styled as a
+     * link rather than a button: it sits inside a sentence, and it opens a
+     * confirmation dialog rather than doing anything on its own.
+     */
+    .usage-feed-prompt .link-button {
+      background: none;
+      border: none;
+      padding: 0;
+      font: inherit;
+      color: var(--vscode-textLink-foreground);
+      cursor: pointer;
+      text-decoration: underline;
+    }
+
+    .usage-feed-prompt .link-button:hover {
+      color: var(--vscode-textLink-activeForeground);
+    }
+
     .usage-window-row {
       padding: var(--spacing-sm) 0;
       border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.15));
@@ -19363,6 +19479,13 @@ exports[`getDashboardHtml snapshots (Issue #1242) > empty state — no current r
         vscode.postMessage({ type: 'executeCommand', command: 'nightgauge.exportTelemetry' });
       });
 
+      // Usage & Quota panel: wire the Claude Max feed (#730). Shown only while
+      // the claude adapter is reporting something other than a subscription
+      // window, so this listener is usually attached to nothing.
+      document.getElementById('enableClaudeUsageFeed')?.addEventListener('click', () => {
+        vscode.postMessage({ type: 'executeCommand', command: 'nightgauge.enableClaudeUsageStatusLine' });
+      });
+
       // Scope + mode toggle buttons (Issue #3218 added mode-toggle)
       document.querySelectorAll('.toggle-btn').forEach(btn => {
         btn.addEventListener('click', (e) => {
@@ -22437,6 +22560,40 @@ exports[`getDashboardHtml snapshots (Issue #1242) > pagination controls rendered
       margin-bottom: 0;
     }
 /* Adapter Usage & Quota panel (Issue #661) */
+
+    /*
+     * Plan badge (Issue #730). badge-info is already defined by the cost tab,
+     * whose styles ship on the same page; only the pay-per-token variant is new,
+     * and it is deliberately quieter — a subscription window is the state worth
+     * drawing the eye to, since it is the one an operator can run out of.
+     */
+    .badge-muted {
+      background: var(--vscode-badge-background);
+      color: var(--vscode-badge-foreground);
+      border-radius: 3px;
+      padding: 1px 6px;
+      font-size: 0.8em;
+    }
+
+    /*
+     * The "wire up my plan's limits" call to action (Issue #730). Styled as a
+     * link rather than a button: it sits inside a sentence, and it opens a
+     * confirmation dialog rather than doing anything on its own.
+     */
+    .usage-feed-prompt .link-button {
+      background: none;
+      border: none;
+      padding: 0;
+      font: inherit;
+      color: var(--vscode-textLink-foreground);
+      cursor: pointer;
+      text-decoration: underline;
+    }
+
+    .usage-feed-prompt .link-button:hover {
+      color: var(--vscode-textLink-activeForeground);
+    }
+
     .usage-window-row {
       padding: var(--spacing-sm) 0;
       border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.15));
@@ -26240,6 +26397,13 @@ exports[`getDashboardHtml snapshots (Issue #1242) > pagination controls rendered
       document.getElementById('exportAnalyticsCustom')?.addEventListener('click', () => {
         // Trigger the full command palette command for custom date range + format options
         vscode.postMessage({ type: 'executeCommand', command: 'nightgauge.exportTelemetry' });
+      });
+
+      // Usage & Quota panel: wire the Claude Max feed (#730). Shown only while
+      // the claude adapter is reporting something other than a subscription
+      // window, so this listener is usually attached to nothing.
+      document.getElementById('enableClaudeUsageFeed')?.addEventListener('click', () => {
+        vscode.postMessage({ type: 'executeCommand', command: 'nightgauge.enableClaudeUsageStatusLine' });
       });
 
       // Scope + mode toggle buttons (Issue #3218 added mode-toggle)
