@@ -29,7 +29,7 @@ package workspacecmd
 // COMMENT OWNERSHIP
 //
 // yaml.v3 attaches a comment block to the node BELOW it. In this repository the
-// four-line `project_number (#3232)` block — which documents the whole list —
+// four-line `project_number` block — which documents the whole list —
 // is therefore owned by repositories[0], so a naive removal of that one entry
 // would delete guidance meant for every entry. Removal deletes an entry's own
 // body lines and never its leading comment block: the comment stays where it
@@ -42,6 +42,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -339,11 +340,11 @@ func (m *manifest) addEntry(e manifestEntry) error {
 		block = append([]string{""}, block...)
 	}
 
-	next := make([]string, 0, len(m.lines)+len(block))
-	next = append(next, m.lines[:insertAfter]...)
-	next = append(next, block...)
-	next = append(next, m.lines[insertAfter:]...)
-	m.lines = next
+	// slices.Insert rather than a hand-rolled three-append with a
+	// len(a)+len(b) capacity hint: that arithmetic is what CodeQL's
+	// go/allocation-size-overflow flags, and the stdlib does the same job
+	// without an size computation of our own to get wrong.
+	m.lines = slices.Insert(m.lines, insertAfter, block...)
 	return nil
 }
 
@@ -366,10 +367,7 @@ func (m *manifest) removeEntry(name string) (keptComment bool, err error) {
 		from--
 	}
 
-	next := make([]string, 0, len(m.lines))
-	next = append(next, m.lines[:from-1]...)
-	next = append(next, m.lines[to:]...)
-	m.lines = next
+	m.lines = slices.Delete(m.lines, from-1, to)
 
 	return e.commentStart > 0, nil
 }

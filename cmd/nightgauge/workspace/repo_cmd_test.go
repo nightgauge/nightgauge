@@ -261,7 +261,7 @@ func TestRepoRemoveReportsRetainedComment(t *testing.T) {
 		t.Errorf("removal did not report the retained comment:\n%s", out)
 	}
 	data, _ := os.ReadFile(path)
-	if !strings.Contains(string(data), "# `project_number` (#3232)") {
+	if !strings.Contains(string(data), "# `project_number`") {
 		t.Error("the list-level comment was deleted along with the entry")
 	}
 }

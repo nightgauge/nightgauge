@@ -20,7 +20,7 @@ workspace:
   description: "fixture"
 
 repositories:
-  # ` + "`project_number`" + ` (#3232) — explicit repo→project mapping. Without it,
+  # ` + "`project_number`" + ` — explicit repo→project mapping. Without it,
   # defaults caused silent cross-repo misroutes.
   - name: alpha
     path: .
@@ -145,7 +145,7 @@ func TestAddPreservesCommentsAndFormatting(t *testing.T) {
 
 	for _, want := range []string{
 		"# Workspace Configuration",
-		"# `project_number` (#3232) — explicit repo→project mapping. Without it,",
+		"# `project_number` — explicit repo→project mapping. Without it,",
 		"# NOTE: delta is deliberately NOT listed",
 		`  default_repository: alpha`,
 		`      preferred_repo: gamma`,
@@ -194,7 +194,7 @@ func TestRemoveRetainsOwnedCommentBlock(t *testing.T) {
 	if strings.Contains(out, "- name: alpha") {
 		t.Error("entry alpha was not removed")
 	}
-	if !strings.Contains(out, "# `project_number` (#3232)") {
+	if !strings.Contains(out, "# `project_number`") {
 		t.Errorf("the comment block documenting the list was deleted with the entry:\n%s", out)
 	}
 	if err := validateManifestBytes(m.render()); err != nil {
