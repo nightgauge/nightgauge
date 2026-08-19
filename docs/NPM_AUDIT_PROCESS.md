@@ -145,6 +145,22 @@ For `critical` severity findings:
 
 ---
 
+## Applying a Fix — never `npm audit fix`
+
+`npm audit fix` overreaches: it pulls unrelated major versions along with the
+patch you wanted. Move exactly the named packages instead:
+
+```bash
+npm update <pkg> --package-lock-only
+```
+
+**Land the bump as its own PR, before feature work.** An advisory failure blocks
+CI on every other open branch until it is fixed, so a bump carried inside a
+feature PR holds up the whole queue (#317 and #320 both did this).
+
+`.gitattributes` marks `package-lock.json` as `-diff`, so review the result with
+`git diff --text package-lock.json`.
+
 ## Local Validation
 
 Before pushing, verify your changes pass the audit check:

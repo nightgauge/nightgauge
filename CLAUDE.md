@@ -28,6 +28,19 @@ one source of truth:
   a parallel one.
 - **Per-issue working context** → the `.nightgauge/knowledge/` base, which
   graduates to `docs/` (see [docs/KNOWLEDGE_BASE.md](docs/KNOWLEDGE_BASE.md)).
+- **Where the last session left off** (in-flight work, pending maintainer
+  decisions, the next pick) → **`nightgauge-internal/runbooks/handoffs/`**, one
+  file per repo, updated in place. Read
+  `nightgauge-internal/runbooks/handoffs/README.md` first; the core repo's file
+  is `handoffs/nightgauge.md`. Handoffs are execution logs and are private by
+  default (`AGENTS.md` § _Public Core Boundary_), so they never land in this
+  repo — and never at the workspace root or in a session scratchpad, both of
+  which are unreachable from the next conversation. **Verify a handoff's state
+  block against reality before trusting it.**
+
+Note that `.nightgauge/session-handoff.md` and
+`.nightgauge/backlog-orchestrator-prompt.md` are gitignored per-machine runtime
+state, **not** handoffs, and their state blocks are routinely stale.
 
 When you learn something worth keeping, edit the appropriate repo file in a
 branch/PR — never a side-channel memory store.

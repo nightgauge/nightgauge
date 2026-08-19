@@ -1032,6 +1032,91 @@ so they are reported as `unowned` and left for you to decide on.
 
 ---
 
+## Local Validation Traps
+
+Failures that read as success, and successes that read as failure. Every one
+below has cost a session at least once.
+
+### `ci-local.sh`'s exit code is meaningless — assert the success marker
+
+The script emits no `REAL_EXIT` line and its exit code does not reflect whether
+the checks passed. Failures render as `✗ N check(s) failed`, which a
+`grep FAIL` is silent on. Assert the explicit marker and treat its absence as
+failure:
+
+```bash
+grep -q "All CI-parity checks passed" <log> && echo PASS || echo FAIL
+```
+
+The run takes roughly three minutes (the `-race` step alone adds ~40s), which
+exceeds the foreground tool-call timeout in most agent harnesses. **Background
+it and poll.** A foreground timeout SIGKILLs the job, and a SIGKILLed run leaks
+a worktree registration that `git worktree prune` structurally cannot clear —
+prune only removes entries whose directory is gone, and on SIGKILL the directory
+survives.
+
+### `vitest` in a worktree fails until the SDK is built
+
+`packages/nightgauge-vscode/tests/setup.ts` imports `@nightgauge/sdk` from
+`dist`, not from source. A fresh worktree has no `dist`:
+
+```bash
+npm run build --workspaces --if-present
+```
+
+The same applies after any `cp`-restore of SDK `src` during mutation testing —
+that makes `dist` stale, and the pretest freshness hook will correctly block the
+run until you rebuild with `npm run build -w @nightgauge/sdk`.
+
+### File mtimes tell you nothing about who last edited a file
+
+Pull and rebase run with `--autostash`, which rewrites the mtime of every file
+in the tree on every pull. An mtime-based "who touched this last" hypothesis is
+worthless here; use `git log` instead.
+
+### `gh` sometimes 503s _after_ succeeding
+
+A failed `gh pr create` may still have created the PR. **Check before
+retrying** — a blind retry produces a duplicate.
+
+Relatedly, `gh issue list/view --json` is GraphQL-backed and shares the hourly
+5,000-point GraphQL budget; two agents can exhaust it in about ten minutes, and
+an exhausted budget returns mid-stream HTML that breaks `jq` rather than a clean
+error. `gh api /repos/{owner}/{repo}/issues` is REST, on a separate and much
+larger budget. Never `--paginate` a whole project-items connection.
+
+### Never `git fetch --prune` before `git branch -d`
+
+Pruning drops the remote-tracking ref that lets `-d` recognize a squash merge.
+After a prune, `-d` refuses, and since `git branch -D` is blocked by the
+destructive-operation guard, prune-first turns routine teardown into an operator
+ask. Delete the branch first, prune second.
+
+See [GIT_WORKFLOW.md § After Merge](GIT_WORKFLOW.md#after-merge) and
+`scripts/branch-merged-check.sh` for deciding whether a branch is safe to delete
+at all.
+
+### Mojibake is a shipped defect, and nothing else in the toolchain catches it
+
+`internal/preflight/source_encoding_test.go` guards this. Text that was UTF-8,
+read back as Latin-1, and re-encoded (`—` = `e2 80 94` → `c3 a2 c2 80 c2 94`)
+produces **valid UTF-8**, so `gofmt`, `go vet`, ESLint, Prettier and the entire
+test suite pass. It is invisible until a human reads the output. Sixteen such
+characters once survived 25 commits in `internal/orchestrator/`, two of them in
+operator-facing runtime strings — so every attention card down that path shipped
+a corrupted character to a person.
+
+- `TestSourceFilesAreCleanUTF8` keys on a **C1 control (U+0080–U+009F)**, which
+  is what the Latin-1 round trip always produces and which real source never
+  contains. That makes it proof, not a heuristic. Its failure message reverses
+  the round trip so it tells you what the text was meant to say.
+- `TestGoCommentsHaveNoLiteralUnicodeEscapes` catches the ASCII-only variant (a
+  literal `\u2014` in comment prose), scoped to comments via `go/parser`
+  because the same escape inside a string literal is ordinary Go.
+
+**If one fails, repair the bytes** (utf-8 decode → latin-1 encode → utf-8
+decode). Do not retype the line by hand, and do not exempt the file.
+
 ## Getting Help
 
 If you can't resolve an issue:
