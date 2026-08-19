@@ -43,10 +43,22 @@
  */
 
 import * as fs from "node:fs/promises";
+import * as os from "node:os";
 import * as path from "node:path";
 import type { RateLimitEventData } from "../../utils/tokenParser";
 
-/** Relative path from the workspace root to the persisted readings. */
+/**
+ * Path to the persisted readings, relative to the **account** root (the user's
+ * home directory), not a workspace root.
+ *
+ * Account-scoped because the figure is account-wide. Claude's five-hour and
+ * seven-day allowances are consumed by every Claude Code session the operator
+ * runs, in every repository, plus nightgauge's own pipeline stages. A
+ * workspace-scoped file would give each VS Code window a different partial view
+ * of one shared allowance, and would leave the statusline writer's readings
+ * (Issue #730 — a process running in whatever directory the operator happens to
+ * be in) somewhere no particular workspace would look.
+ */
 const CLAUDE_RATE_LIMIT_FILE = ".nightgauge/usage/claude-rate-limits.json";
 
 /**
@@ -146,68 +158,114 @@ export function readingHasExpired(reading: RateLimitReading, now: Date): boolean
 }
 
 /**
- * Last-seen `rate_limit_event` readings for one workspace.
+ * Last-seen subscription rate-limit readings for the account.
  *
- * Reads are synchronous and in-memory so `UsageProvider.getSnapshot` never
- * blocks on I/O; the disk is touched once at `load()` and once per observed
- * event. Writes are best-effort: a failed write costs the meter its at-rest
- * reading after a restart, and is never allowed to fail a pipeline run.
+ * ## Two writers, neither authoritative
+ *
+ * This file has two producers and they cannot see each other's channel:
+ *
+ * - **This class**, from the `rate_limit_event` envelope on nightgauge's own
+ *   `claude -p` stream (Issue #709). Only observable while a pipeline stage is
+ *   streaming, but it is the only channel that can be `measured` — the vendor
+ *   states the figure as the run is happening.
+ * - **`nightgauge hook claude-statusline`** (Issue #730), a separate process
+ *   wired in as Claude Code's `statusLine` command. It sees the same
+ *   account-wide figure on Claude Code's documented statusline payload, on
+ *   every render of every session, including sessions nightgauge knows nothing
+ *   about. This is what makes a reading available *at rest*, which is the
+ *   whole reason the meter can show a Max allowance rather than falling
+ *   through to dollar windows.
+ *
+ * Since neither writer is authoritative, both merge per bucket on
+ * `observedAt`: whoever saw the newer reading wins. A blind rewrite from
+ * memory would let whichever process wrote last erase the other's fresher
+ * number, and would drop buckets the writer had never heard of.
+ *
+ * ## Consequences of the second writer
+ *
+ * `load()` re-reads when the file has changed on disk rather than hydrating
+ * once and caching forever. Without that, a VS Code window that had already
+ * read the file would serve the same percentage until it was reloaded, no
+ * matter how many status lines had since updated it — which is exactly the
+ * "stale percentage rendered as current" this model refuses to do.
+ *
+ * Writes go through a temp file and a rename, so the Go reader never observes
+ * a half-written document, and vice versa.
+ *
+ * Reads stay synchronous and in-memory so `UsageProvider.getSnapshot` never
+ * blocks on I/O; the disk is touched in `load()` and once per observed event.
+ * Writes are best-effort: a failed write costs the meter its at-rest reading
+ * after a restart, and is never allowed to fail a pipeline run.
  */
 export class ClaudeRateLimitStore {
   private readonly buckets = new Map<string, RateLimitReading>();
-  private loaded = false;
   /** Serialises writes so two events in flight cannot interleave a file rewrite. */
   private writeChain: Promise<void> = Promise.resolve();
 
-  constructor(private readonly workspaceRoot: string) {}
+  /**
+   * @param accountRoot Directory the store path is resolved beneath. Production
+   *   passes the user's home directory via {@link forAccount}; tests pass a
+   *   temp directory.
+   */
+  constructor(private readonly accountRoot: string) {}
+
+  /**
+   * The store for the current account.
+   *
+   * Every VS Code window, every workspace, and the `claude-statusline` verb all
+   * resolve to this one file — see `CLAUDE_RATE_LIMIT_FILE` for why the figure
+   * is account-scoped rather than workspace-scoped.
+   */
+  static forAccount(): ClaudeRateLimitStore {
+    return new ClaudeRateLimitStore(os.homedir());
+  }
 
   /** Absolute path of the backing file. */
   get filePath(): string {
-    return path.join(this.workspaceRoot, CLAUDE_RATE_LIMIT_FILE);
+    return path.join(this.accountRoot, CLAUDE_RATE_LIMIT_FILE);
   }
 
   /**
-   * Hydrate from disk. Safe to call more than once; only the first call reads.
+   * Hydrate from disk. Re-reads every call, because the file has a second
+   * writer in another process (Issue #730) and this is how its readings arrive.
+   *
+   * Unconditional rather than gated on a stat: the document is well under a
+   * kilobyte and `load()` runs once per snapshot derivation — every 300s on the
+   * refresh timer, or on demand — so a stat costs the same syscall as the read
+   * it would be avoiding. Gating on `mtime` would buy nothing and would inherit
+   * the mtime granularity of whatever filesystem `$HOME` is on, where two
+   * same-second writes of equal length are indistinguishable.
    *
    * Never throws: a missing file is the normal first-run state, and an
    * unreadable or malformed one is treated as "no readings" rather than as an
    * activation failure.
    */
   async load(): Promise<void> {
-    if (this.loaded) {
-      return;
-    }
-    this.loaded = true;
     let text: string;
     try {
       text = await fs.readFile(this.filePath, "utf8");
     } catch {
+      // No file yet, or it went away. Whatever is already in memory stands: a
+      // reading this process observed is not invalidated by the absence of its
+      // cache.
       return;
     }
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(text);
-    } catch {
-      return;
-    }
-    if (typeof parsed !== "object" || parsed === null) {
-      return;
-    }
-    const store = parsed as Partial<PersistedStore>;
-    if (store.version !== STORE_VERSION || typeof store.buckets !== "object") {
-      return;
-    }
-    for (const value of Object.values(store.buckets ?? {})) {
-      const reading = parseReading(value);
-      if (reading === null) {
-        continue;
-      }
-      // An in-memory reading always wins. Hydration is lazy — the first
-      // `getSnapshot` triggers it — so a run that streamed a `rate_limit_event`
-      // before anything read the meter would otherwise have its live reading
-      // overwritten by the older, `live: false` copy the write path had just
-      // persisted, silently downgrading a same-run figure to `estimated`.
-      if (this.buckets.has(reading.rateLimitType)) {
+    this.mergeFromDisk(parseStore(text));
+  }
+
+  /**
+   * Merge persisted readings into memory, newest `observedAt` per bucket
+   * winning.
+   *
+   * A tie keeps the in-memory copy, which is how a same-run reading holds its
+   * `live` flag across the re-read triggered by its own persist: the two
+   * copies carry the same `observedAt`, and only the in-memory one knows the
+   * run is still streaming.
+   */
+  private mergeFromDisk(readings: RateLimitReading[]): void {
+    for (const reading of readings) {
+      const existing = this.buckets.get(reading.rateLimitType);
+      if (existing !== undefined && existing.observedAt >= reading.observedAt) {
         continue;
       }
       this.buckets.set(reading.rateLimitType, reading);
@@ -284,8 +342,14 @@ export class ClaudeRateLimitStore {
   }
 
   /**
-   * Write the current buckets out, dropping expired ones so the file does not
-   * accumulate windows that can never be served again.
+   * Merge the current buckets with whatever is on disk and write the result
+   * out atomically, dropping expired ones so the file does not accumulate
+   * windows that can never be served again.
+   *
+   * The re-read inside the write chain is not belt-and-braces: the statusline
+   * writer may have recorded a bucket this process has never seen, or a newer
+   * reading for one it has, between the last `load()` and now. Serialising
+   * from memory alone would delete the first and overwrite the second.
    *
    * The in-memory update in `record` has already happened by the time this is
    * called, so observing an event stays synchronous on the stream's hot path:
@@ -293,28 +357,104 @@ export class ClaudeRateLimitStore {
    * and the pipeline never awaits it.
    */
   private persist(): Promise<void> {
-    const snapshot: PersistedStore = { version: STORE_VERSION, buckets: {} };
-    const now = new Date();
-    for (const reading of this.buckets.values()) {
-      if (readingHasExpired(reading, now)) {
-        continue;
-      }
-      snapshot.buckets[reading.rateLimitType] = {
-        rateLimitType: reading.rateLimitType,
-        utilization: reading.utilization,
-        resetsAt: reading.resetsAt,
-        status: reading.status,
-        observedAt: reading.observedAt.toISOString(),
-      };
-    }
     this.writeChain = this.writeChain
       .then(async () => {
-        await fs.mkdir(path.dirname(this.filePath), { recursive: true });
-        await fs.writeFile(this.filePath, `${JSON.stringify(snapshot, null, 2)}\n`, "utf8");
+        let onDisk: RateLimitReading[] = [];
+        try {
+          onDisk = parseStore(await fs.readFile(this.filePath, "utf8"));
+        } catch {
+          // Missing or unreadable: this process's readings are the whole file.
+        }
+        this.mergeFromDisk(onDisk);
+
+        const snapshot: PersistedStore = { version: STORE_VERSION, buckets: {} };
+        const now = new Date();
+        for (const reading of this.buckets.values()) {
+          if (readingHasExpired(reading, now)) {
+            continue;
+          }
+          snapshot.buckets[reading.rateLimitType] = {
+            rateLimitType: reading.rateLimitType,
+            utilization: reading.utilization,
+            resetsAt: reading.resetsAt,
+            status: reading.status,
+            observedAt: reading.observedAt.toISOString(),
+          };
+        }
+        await writeStoreAtomically(this.filePath, snapshot);
       })
       .catch((error) => {
         console.warn("[Nightgauge] failed to persist Claude rate-limit readings:", error);
       });
     return this.writeChain;
+  }
+}
+
+/**
+ * Parse a persisted store document into readings, discarding anything
+ * unrecognised.
+ *
+ * A file carrying a different `version` is discarded whole rather than
+ * migrated: this is a cache of a figure that will be re-observed within
+ * minutes, not user data.
+ */
+function parseStore(text: string): RateLimitReading[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return [];
+  }
+  if (typeof parsed !== "object" || parsed === null) {
+    return [];
+  }
+  const store = parsed as Partial<PersistedStore>;
+  if (store.version !== STORE_VERSION || typeof store.buckets !== "object") {
+    return [];
+  }
+  const readings: RateLimitReading[] = [];
+  for (const value of Object.values(store.buckets ?? {})) {
+    const reading = parseReading(value);
+    if (reading !== null) {
+      readings.push(reading);
+    }
+  }
+  return readings;
+}
+
+/**
+ * Monotonic suffix for temp filenames.
+ *
+ * A counter rather than `Date.now()`: the process id makes the name unique
+ * across processes, and this makes it unique within one. A clock does neither
+ * reliably — two writes in the same millisecond collide, and under a test's
+ * fake timers *every* write collides, which turns a queued write into a file
+ * another queued write has already renamed away.
+ */
+let tempCounter = 0;
+function nextTempId(): number {
+  tempCounter += 1;
+  return tempCounter;
+}
+
+/**
+ * Write via a temp file in the target directory plus a rename, so a concurrent
+ * reader — the Go `claude-statusline` verb reads this same file — never
+ * observes a partially written document. The temp file is a sibling so the
+ * rename stays atomic on every platform.
+ *
+ * Two-space indent and a trailing newline, matched byte for byte by the Go
+ * writer in `internal/usagestore`.
+ */
+async function writeStoreAtomically(filePath: string, snapshot: PersistedStore): Promise<void> {
+  const dir = path.dirname(filePath);
+  await fs.mkdir(dir, { recursive: true });
+  const tempPath = path.join(dir, `.claude-rate-limits-${process.pid}-${nextTempId()}.json`);
+  try {
+    await fs.writeFile(tempPath, `${JSON.stringify(snapshot, null, 2)}\n`, "utf8");
+    await fs.rename(tempPath, filePath);
+  } catch (error) {
+    await fs.rm(tempPath, { force: true }).catch(() => undefined);
+    throw error;
   }
 }

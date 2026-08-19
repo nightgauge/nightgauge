@@ -26,6 +26,7 @@
 
 import { escapeHtml, formatDuration, formatTokenCount } from "../DashboardComponents";
 import { formatUsageValue } from "../../../services/usage/format";
+import type { UsagePlanKind } from "../../../services/usage/types";
 import type {
   UsagePanelBurnRateView,
   UsagePanelFamilyGroup,
@@ -314,18 +315,57 @@ export function getUsagePanelSectionHtml(
   <details class="collapsible-section" id="section-adapter-usage" open>
     <summary class="section-toggle">
       <span class="toggle-icon">▼</span>
-      <h3>Adapter Usage &amp; Quota &mdash; ${escapeHtml(state.adapter)}</h3>
+      <h3>Adapter Usage &amp; Quota &mdash; ${escapeHtml(state.adapter)} ${planBadgeHtml(state.planKind)}</h3>
     </summary>
     <div class="section-content">
       <div class="usage-limits-card">
         ${windows}
       </div>
+      ${claudeFeedPromptHtml(state)}
       ${familyBreakdownHtml(state.familyGroups, now)}
       ${burnRateHtml(state, now)}
       ${recentRunsHtml(state)}
       ${captured}
     </div>
   </details>`;
+}
+
+/**
+ * Badge naming the billing arrangement the windows below describe.
+ *
+ * Two window lists can look identical — a bar, a figure, a reset time — and
+ * mean completely different things: a subscription window is an allowance that
+ * refills, a pay-per-token window is spend that accumulates against a budget
+ * the operator set. Naming which one is on screen is the difference between
+ * "62% of my week is gone" and "$178.61 of an open-ended total".
+ *
+ * `unknown` never reaches here — that plan renders its own empty state above.
+ */
+function planBadgeHtml(planKind: UsagePlanKind): string {
+  if (planKind === "subscription-window") {
+    return '<span class="badge badge-info">Subscription plan</span>';
+  }
+  return '<span class="badge badge-muted">Pay per token</span>';
+}
+
+/**
+ * Offer the Claude Max feed when the `claude` adapter is answering with
+ * anything other than a subscription window (Issue #730).
+ *
+ * The webview counterpart of the status-bar tooltip's link, and shown under the
+ * same condition — on the *observed plan kind*, never on the adapter name. An
+ * API-key user on the same adapter really is pay-per-token and the dollar
+ * windows above are their right answer, so this asks rather than asserts.
+ */
+function claudeFeedPromptHtml(state: UsagePanelState): string {
+  if (state.adapter !== "claude" || state.planKind === "subscription-window") {
+    return "";
+  }
+  return `
+      <p class="usage-panel-note usage-feed-prompt">
+        On a Claude Max or Pro plan? These are locally-derived costs, not your plan's allowance.
+        <button type="button" id="enableClaudeUsageFeed" class="link-button">Show my 5-hour and weekly limits</button>
+      </p>`;
 }
 
 /**
@@ -336,6 +376,40 @@ export function getUsagePanelSectionHtml(
 export function getUsagePanelStyles(): string {
   return `
     /* Adapter Usage & Quota panel (Issue #661) */
+
+    /*
+     * Plan badge (Issue #730). badge-info is already defined by the cost tab,
+     * whose styles ship on the same page; only the pay-per-token variant is new,
+     * and it is deliberately quieter — a subscription window is the state worth
+     * drawing the eye to, since it is the one an operator can run out of.
+     */
+    .badge-muted {
+      background: var(--vscode-badge-background);
+      color: var(--vscode-badge-foreground);
+      border-radius: 3px;
+      padding: 1px 6px;
+      font-size: 0.8em;
+    }
+
+    /*
+     * The "wire up my plan's limits" call to action (Issue #730). Styled as a
+     * link rather than a button: it sits inside a sentence, and it opens a
+     * confirmation dialog rather than doing anything on its own.
+     */
+    .usage-feed-prompt .link-button {
+      background: none;
+      border: none;
+      padding: 0;
+      font: inherit;
+      color: var(--vscode-textLink-foreground);
+      cursor: pointer;
+      text-decoration: underline;
+    }
+
+    .usage-feed-prompt .link-button:hover {
+      color: var(--vscode-textLink-activeForeground);
+    }
+
     .usage-window-row {
       padding: var(--spacing-sm) 0;
       border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.15));

@@ -90,7 +90,10 @@ describe("rate_limit_event → status bar (Issue #709)", () => {
 
     // 2. PipelineBridge's onRateLimitEvent hands it to the store.
     const store = new ClaudeRateLimitStore(workspace);
-    store.record(parsed!.rateLimitEvent!, NOW);
+    // Awaited so the queued write cannot outlive the test and race the
+    // temp-directory teardown. `record` updates memory synchronously, so
+    // this changes nothing about what the assertions below observe.
+    await store.record(parsed!.rateLimitEvent!, NOW);
 
     // 3. The service resolves the subscription provider ahead of the dollar one.
     const snapshot = await serviceFor(store).getSnapshot();
@@ -137,7 +140,7 @@ describe("rate_limit_event → status bar (Issue #709)", () => {
 
   it("stops reporting a window once it has refilled, rather than serving a known-wrong number", async () => {
     const store = new ClaudeRateLimitStore(workspace);
-    store.record(parseStreamJsonLine(WIRE_LINE)!.rateLimitEvent!, NOW);
+    await store.record(parseStreamJsonLine(WIRE_LINE)!.rateLimitEvent!, NOW);
     store.settle();
 
     // Jump past the bucket's own reset. The 44% described a window that has

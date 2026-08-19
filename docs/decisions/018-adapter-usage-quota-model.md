@@ -361,3 +361,89 @@ path instead of corrupting it.
 **Unchanged:** `LocalTelemetryUsageProvider`, `monthlyBudgetUsd` and its
 threshold alerts, and the fast-fail path's reading of the same event. This
 added a provider; it removed nothing.
+
+---
+
+## Amendment (#730): the reading has to exist at rest, or the model never runs
+
+#709 built the right provider on the wrong cadence, and the gap only showed up
+in use. `ClaudeRateLimitUsageProvider` produced correct five-hour and weekly
+windows; `formatUsageWindowText` rendered them; the dashboard panel read the
+same snapshot. On a real Max-plan workspace none of it appeared — the footer
+showed `$(flame) claude $178.61 this month`, and cycling offered "today" and
+"this session". Dollar windows, on a plan that does not bill in dollars.
+
+Nothing was broken. `.nightgauge/usage/claude-rate-limits.json` simply did not
+exist, so the provider returned `null` and the fall-through this ADR designed
+did exactly what it was designed to do.
+
+**The finding: a provider whose only signal is mid-stream cannot answer a
+surface that samples at rest.** `rate_limit_event` arrives while a stage is
+streaming. The status bar is read between runs — mostly by an operator who has
+been using Claude Code interactively and has not dispatched a pipeline in
+hours. #709 anticipated this and built `ClaudeRateLimitStore` to remember the
+last reading, which is the right mechanism; what it could not fix is that
+there is no _first_ reading until nightgauge itself runs a claude stage. On a
+workspace where the pipeline runs occasionally, "occasionally" is how often the
+meter is right.
+
+This ADR's own text carried the assumption. `ClaudeRateLimitStore`'s header
+stated it outright — _"There is no command that returns the current utilization
+at rest — `/usage` reports it but is an interactive slash command"_ — and the
+spike agreed. **That was true of the channels we had examined, not of the
+product.** Claude Code's `statusLine` contract hands its configured command a
+`rate_limits` object carrying `five_hour` and `seven_day` as
+`used_percentage` + `resets_at`, on every render, in every session. It is
+documented in the CLI's own statusline setup text, unlike `rate_limit_event`.
+
+### What changed
+
+**A second writer, not a second data path.** `nightgauge hook
+claude-statusline` records into the store this ADR already defined, in the shape
+it already used. No new provider, no new snapshot type, no `UsageWindow` field.
+`ClaudeRateLimitUsageProvider` was not modified. The rendering that finally
+appears — `claude session (5h) ███▌░░░░ 44% · 56% left · resets 1h 29m · as of
+09:41` — is #709's code running for the first time on a corpus that exists.
+
+**The store is account-scoped now.** It was workspace-scoped, which was already
+wrong for an account-wide figure and became untenable with a writer that runs in
+whatever directory the operator is standing in. `~/.nightgauge/usage/` is the
+one file every VS Code window, every workspace, and the statusline verb resolve
+to.
+
+**Neither writer is authoritative, so both merge.** They cannot see each other's
+channel: the extension sees a stream envelope, the verb sees a statusline
+payload, and either may hold the newer number for a bucket the other has never
+observed. Both merge per bucket on `observedAt` and write via temp-file +
+rename. `ClaudeRateLimitStore.load()` re-reads when the file has moved instead
+of hydrating once — without that, a window that had already read the file would
+serve the same percentage until reload, which is precisely the stale-figure
+laundering the confidence contract forbids.
+
+**Confidence is unchanged, and the statusline path lands on the cautious side of
+it.** A statusline reading is observed outside any streaming run, so it is
+`estimated` with an `observedAt`, never `measured`. `measured` stays reserved
+for the run that is still streaming. The rule that produced that split in #709 —
+_a vendor's confident statement about an hour ago is an estimate of now_ —
+decides this case without being restated.
+
+### What this does not do
+
+The dollar windows are untouched and still answer for API-key users on the same
+`claude` adapter, every other adapter, and any subscriber who has not wired the
+feed in. Plan kind still follows the **observed signal**, never the adapter
+name.
+
+`statusLine` is the operator's setting in the operator's file, so nothing is
+written without an explicit command and a shown diff, an existing status line is
+carried into `--delegate` rather than replaced, and unwiring restores it. The
+footer tooltip links to that command whenever the `claude` adapter is answering
+with something other than a subscription window — the moment the operator is
+looking at the number that prompted this ADR's amendment in the first place.
+
+### The general lesson
+
+This ADR's audit table asked, member by member, _what produces this?_ It should
+also have asked _when, and is that when the surface reads?_ A field with a real
+producer on a cadence the consumer never samples is, from the operator's chair,
+indistinguishable from a field with no producer at all.
