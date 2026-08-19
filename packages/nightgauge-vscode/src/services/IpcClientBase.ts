@@ -70,6 +70,65 @@ export interface WorkspaceRegisterRepoResult {
   ok: boolean;
 }
 
+/**
+ * One configured repositories[] entry, enriched by the daemon (#705).
+ *
+ * `projectNumber` is what the manifest declares; `resolvedProject` is what the
+ * authoritative repo→project resolver answers. They are separate on purpose —
+ * a disagreement is the drift `nightgauge doctor` fails on, and collapsing them
+ * into one number would hide it.
+ */
+export interface WorkspaceRepoDescriptor {
+  name: string;
+  path: string;
+  role: string;
+  projectNumber: number;
+  resolvedProject: number;
+  projectTitle: string;
+  /** False when the manifest lists the repo but its directory is gone. */
+  exists: boolean;
+  /** routing.* references naming this repo; removal warns when non-empty. */
+  routingRefs: string[] | null;
+}
+
+/** A git checkout present in the workspace but absent from the manifest. */
+export interface WorkspaceRepoCandidate {
+  name: string;
+  spec: string;
+  path: string;
+  suggestedProject: number;
+  projectTitle: string;
+  /**
+   * The resolver's reason when no board could be resolved. The panel must
+   * refuse to submit in this state rather than write project_number: 0.
+   */
+  boardUnavailable: string;
+}
+
+/** Result from workspace.repoList. */
+export interface WorkspaceRepoListResult {
+  manifestPath: string;
+  configured: WorkspaceRepoDescriptor[] | null;
+  candidates: WorkspaceRepoCandidate[] | null;
+  /** No manifest exists — single-repo mode, nothing to list. */
+  unmanaged: boolean;
+}
+
+/** Result from workspace.repoAdd. */
+export interface WorkspaceRepoAddResult {
+  ok: boolean;
+  entry: WorkspaceRepoDescriptor;
+  /** Reminder that board-sync automation needs re-provisioning. */
+  boardSyncNote: string;
+}
+
+/** Result from workspace.repoRemove. */
+export interface WorkspaceRepoRemoveResult {
+  ok: boolean;
+  keptComment: boolean;
+  manifestPath: string;
+}
+
 /** Result from workspace.configureForgeInstance. */
 export interface ConfigureForgeInstanceResult {
   ok: boolean;

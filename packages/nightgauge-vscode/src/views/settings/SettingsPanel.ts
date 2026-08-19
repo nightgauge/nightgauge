@@ -48,6 +48,11 @@ import {
   type ProjectAssignment,
   type RepositoryProjectSettingsState,
 } from "../../services/RepositoryProjectSettingsService";
+import {
+  WorkspaceRepoSettingsService,
+  EMPTY_WORKSPACE_REPO_STATE,
+  type WorkspaceRepoState,
+} from "../../services/WorkspaceRepoSettingsService";
 
 /**
  * Dotted-path config keys that are owned by the runtime tier (Phase 3 of
@@ -111,6 +116,8 @@ export class SettingsPanel implements vscode.Disposable {
   private codexModels: string[] = [];
   private forgeInstances: ForgeInstanceRow[] = [];
   private readonly repositoryProjectService = new RepositoryProjectSettingsService();
+  private readonly workspaceRepoService = new WorkspaceRepoSettingsService();
+  private workspaceRepoState: WorkspaceRepoState = { ...EMPTY_WORKSPACE_REPO_STATE };
   private repositoryProjectState: RepositoryProjectSettingsState = {
     repositories: [],
     assignments: [],
@@ -269,6 +276,7 @@ export class SettingsPanel implements vscode.Disposable {
     // Load all config tiers
     await this.loadAllTiers();
     await this.loadRepositoryProjectState();
+    await this.loadWorkspaceRepoState();
 
     // A project config is no longer a prerequisite for opening Settings.
     // Repository-aware project discovery can bootstrap an empty repository and
@@ -431,12 +439,99 @@ export class SettingsPanel implements vscode.Disposable {
         tierAuditEntries: this.tierAuditEntries,
         driftBannerDismissed: this.driftBannerDismissed,
         repositoryProjects: this.repositoryProjectState,
+        workspaceRepos: this.workspaceRepoState,
         currentTier: this.tierState.currentTier,
         adapterConfiguredInTier: getConfigValue(configForView, "ui.core.adapter") !== undefined,
         inheritedGlobalAdapter: this.globalConfig.ui?.core?.adapter ?? "claude",
         effectiveAdapter: this.currentConfig.ui?.core?.adapter ?? "claude",
       }
     );
+  }
+
+  /**
+   * Refresh the Workspace Repositories section from the daemon.
+   *
+   * Never throws: the section renders its own error state, and a failure here
+   * must not take down the rest of the settings panel.
+   */
+  private async loadWorkspaceRepoState(): Promise<void> {
+    this.workspaceRepoState = { ...this.workspaceRepoState, loading: true };
+    // The VSCode workspace's own folders, so a folder added from outside the
+    // workspace root's parent is still offered as a candidate.
+    const folders = (vscode.workspace.workspaceFolders ?? []).map((f) => f.uri.fsPath);
+    this.workspaceRepoState = await this.workspaceRepoService.load(folders);
+  }
+
+  /**
+   * Add a repository, then refresh BOTH this section and the Repositories tree.
+   *
+   * The tree refresh is the point of the feature: the acceptance criterion is
+   * that a newly added repository appears without a window reload, and the tree
+   * reads WorkspaceManager rather than this panel's state.
+   */
+  private async addWorkspaceRepo(name: string, path: string, project: number): Promise<void> {
+    const res = await this.workspaceRepoService.add({ name, path, role: "primary", project });
+    await this.loadWorkspaceRepoState();
+    if (!res.ok) {
+      // Surfaced verbatim — the binary is the authority on why it refused.
+      this.workspaceRepoState = { ...this.workspaceRepoState, error: res.error };
+    } else {
+      this.workspaceRepoState = { ...this.workspaceRepoState, notice: res.notice };
+      await this.reloadWorkspaceAfterManifestChange();
+    }
+    this.updatePanel();
+  }
+
+  /**
+   * Remove a repository. A routing reference is refused once, with the
+   * references named; the operator then confirms to force it.
+   */
+  private async removeWorkspaceRepo(name: string): Promise<void> {
+    const first = await this.workspaceRepoService.remove(name, false);
+    if (!first.ok && /still referenced by/.test(first.error)) {
+      const choice = await vscode.window.showWarningMessage(
+        first.error,
+        { modal: true },
+        "Remove anyway"
+      );
+      if (choice !== "Remove anyway") {
+        return;
+      }
+      const forced = await this.workspaceRepoService.remove(name, true);
+      await this.loadWorkspaceRepoState();
+      if (!forced.ok) {
+        this.workspaceRepoState = { ...this.workspaceRepoState, error: forced.error };
+      } else {
+        await this.reloadWorkspaceAfterManifestChange();
+      }
+      this.updatePanel();
+      return;
+    }
+
+    await this.loadWorkspaceRepoState();
+    if (!first.ok) {
+      this.workspaceRepoState = { ...this.workspaceRepoState, error: first.error };
+    } else {
+      await this.reloadWorkspaceAfterManifestChange();
+    }
+    this.updatePanel();
+  }
+
+  /**
+   * Make the manifest change visible everywhere without a window reload.
+   *
+   * #704 made the manifest watcher fire unconditionally, so an on-disk change
+   * already triggers a reload — but the watcher is debounced, and an operator
+   * who clicks Add and sees nothing change has been told the write failed. This
+   * reloads explicitly so the tree updates on the same interaction.
+   */
+  private async reloadWorkspaceAfterManifestChange(): Promise<void> {
+    try {
+      await WorkspaceManager.getInstance(this.workspaceRoot).reload();
+      await vscode.commands.executeCommand("nightgauge.refreshRepositories");
+    } catch {
+      // The watcher still catches it; a failed explicit refresh is not fatal.
+    }
   }
 
   private async loadRepositoryProjectState(selectedName?: string): Promise<void> {
@@ -1100,6 +1195,25 @@ export class SettingsPanel implements vscode.Disposable {
         break;
       case "edit-team-config": {
         await vscode.commands.executeCommand("nightgauge.editTeamConfig");
+        break;
+      }
+      case "workspace-repo-add": {
+        const name = typeof payload?.name === "string" ? payload.name : "";
+        const path = typeof payload?.path === "string" ? payload.path : "";
+        const project = typeof payload?.project === "number" ? payload.project : 0;
+        if (!name) break;
+        await this.addWorkspaceRepo(name, path, project);
+        break;
+      }
+      case "workspace-repo-remove": {
+        const name = typeof payload?.name === "string" ? payload.name : "";
+        if (!name) break;
+        await this.removeWorkspaceRepo(name);
+        break;
+      }
+      case "workspace-repo-refresh": {
+        await this.loadWorkspaceRepoState();
+        this.updatePanel();
         break;
       }
       case "project-select-repository": {

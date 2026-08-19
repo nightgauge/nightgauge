@@ -164,23 +164,81 @@
     }
   ],
   "custom_sections": [
-    { "section": "core", "schema_path": "ui.core" },
-    { "section": "platform", "schema_path": "platform" },
-    { "section": "project", "schema_path": "project" },
-    { "section": "pull_request", "schema_path": "pull_request" },
-    { "section": "branch", "schema_path": "branch" },
-    { "section": "issue", "schema_path": "issue" },
-    { "section": "pipeline", "schema_path": "pipeline" },
-    { "section": "routing", "schema_path": "routing" },
-    { "section": "enforcement", "schema_path": "enforcement" },
-    { "section": "commands", "schema_path": "commands" },
-    { "section": "validation", "schema_path": "validation" },
-    { "section": "sanitization", "schema_path": "sanitization" },
-    { "section": "human_in_the_loop", "schema_path": "human_in_the_loop" },
-    { "section": "ralph_loop", "schema_path": "ralph_loop" },
-    { "section": "automations", "schema_path": "automations" },
-    { "section": "autonomous", "schema_path": "autonomous" },
-    { "section": "forges", "schema_path": "forges" }
+    {
+      "section": "core",
+      "schema_path": "ui.core"
+    },
+    {
+      "section": "platform",
+      "schema_path": "platform"
+    },
+    {
+      "section": "workspace_repos",
+      "classification": "manifest-backed",
+      "backing_file": ".vscode/nightgauge-workspace.yaml",
+      "runtime_consumer": "src/services/WorkspaceRepoSettingsService.ts",
+      "note": "Not schema-backed: this section edits the workspace manifest, not .nightgauge/config.yaml. Every mutation routes through the Go writer over workspace.repoAdd/repoRemove."
+    },
+    {
+      "section": "project",
+      "schema_path": "project"
+    },
+    {
+      "section": "pull_request",
+      "schema_path": "pull_request"
+    },
+    {
+      "section": "branch",
+      "schema_path": "branch"
+    },
+    {
+      "section": "issue",
+      "schema_path": "issue"
+    },
+    {
+      "section": "pipeline",
+      "schema_path": "pipeline"
+    },
+    {
+      "section": "routing",
+      "schema_path": "routing"
+    },
+    {
+      "section": "enforcement",
+      "schema_path": "enforcement"
+    },
+    {
+      "section": "commands",
+      "schema_path": "commands"
+    },
+    {
+      "section": "validation",
+      "schema_path": "validation"
+    },
+    {
+      "section": "sanitization",
+      "schema_path": "sanitization"
+    },
+    {
+      "section": "human_in_the_loop",
+      "schema_path": "human_in_the_loop"
+    },
+    {
+      "section": "ralph_loop",
+      "schema_path": "ralph_loop"
+    },
+    {
+      "section": "automations",
+      "schema_path": "automations"
+    },
+    {
+      "section": "autonomous",
+      "schema_path": "autonomous"
+    },
+    {
+      "section": "forges",
+      "schema_path": "forges"
+    }
   ],
   "intentional_omissions": [
     {

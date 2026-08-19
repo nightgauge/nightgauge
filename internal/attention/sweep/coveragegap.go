@@ -143,6 +143,18 @@ func (p *CoverageGap) discoverBoard(ctx context.Context, in WorkspaceInput) ([]s
 // inside one member repo and its peers next to it (`path: ../other-repo`), so
 // scanning only below the root would miss every peer — including, in the
 // motivating case, the one nobody was watching.
+// DiscoverLocalCheckouts exposes the sibling-repository scan to surfaces that
+// need the same answer the coverage-gap producer computes.
+//
+// The Settings panel's "add an unlisted folder" list is the same question this
+// producer already answers — which git checkouts sit beside the workspace root
+// — and a second scanner written in TypeScript would drift from this one, so
+// the two surfaces would disagree about what exists. Returns canonical
+// "owner/name" specs read from each checkout's git remote.
+func DiscoverLocalCheckouts(workspaceRoot string) ([]string, error) {
+	return discoverLocalCheckouts(workspaceRoot)
+}
+
 func discoverLocalCheckouts(workspaceRoot string) ([]string, error) {
 	if strings.TrimSpace(workspaceRoot) == "" {
 		return nil, fmt.Errorf("coverage-gap: no workspace root")
@@ -181,6 +193,17 @@ func discoverLocalCheckouts(workspaceRoot string) ([]string, error) {
 // "owner/name". Reads the file directly rather than shelling out to git: this
 // runs inside the daemon's sweep, once per candidate directory, and a process
 // spawn per sibling is a poor trade for a string that is one grep away.
+// RepoSpecForDir resolves one checkout's canonical "owner/name" from its git
+// remote, without shelling out to git.
+//
+// Exposed alongside DiscoverLocalCheckouts so a surface can identify a
+// directory the sibling scan would not reach — a VSCode workspace folder that
+// lives outside the workspace root's parent — using the same resolution the
+// producer uses, rather than a second parser.
+func RepoSpecForDir(dir string) (string, bool) {
+	return originRepoSpec(dir)
+}
+
 func originRepoSpec(dir string) (string, bool) {
 	data, err := os.ReadFile(filepath.Join(dir, ".git", "config"))
 	if err != nil {

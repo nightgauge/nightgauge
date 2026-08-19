@@ -365,6 +365,9 @@ func collectImportTypes(methods []MethodDef) []string {
 		"CachedSkill": true, "StatusOK": true, "UsageSummaryResult": true,
 		"TeamMemberResult": true, "PortalSessionResult": true, "HealthResponse": true,
 		"WorkspaceSetRootResult": true, "WorkspaceRegisterRepoResult": true,
+		// Workspace repository management (#705)
+		"WorkspaceRepoListResult": true, "WorkspaceRepoAddResult": true,
+		"WorkspaceRepoRemoveResult":       true,
 		"ConfigureForgeInstanceResult":    true, // Issue #3365
 		"ForgeListResult":                 true, // Issue #3364
 		"ForgeConnectionTestResult":       true, // Issue #3364

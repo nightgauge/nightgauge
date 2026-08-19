@@ -89,6 +89,9 @@ import type {
   UsageSummaryResult,
   WorkflowQuotaStateResult,
   WorkspaceRegisterRepoResult,
+  WorkspaceRepoAddResult,
+  WorkspaceRepoListResult,
+  WorkspaceRepoRemoveResult,
   WorkspaceSetRootResult,
 } from './IpcClientBase';
 
@@ -758,6 +761,18 @@ export class IpcClientGenerated extends IpcClientBase {
 
   async workspaceConfigureForgeInstance(owner: string, repo: string, kind: string, host?: string, token?: string): Promise<ConfigureForgeInstanceResult> {
     return this.call<ConfigureForgeInstanceResult>('workspace.configureForgeInstance', { owner, repo, kind, host, token });
+  }
+
+  async workspaceRepoList(folders: string[]): Promise<WorkspaceRepoListResult> {
+    return this.call<WorkspaceRepoListResult>('workspace.repoList', { folders });
+  }
+
+  async workspaceRepoAdd(name: string, path: string, role: string, project: number): Promise<WorkspaceRepoAddResult> {
+    return this.call<WorkspaceRepoAddResult>('workspace.repoAdd', { name, path, role, project });
+  }
+
+  async workspaceRepoRemove(name: string, force: boolean): Promise<WorkspaceRepoRemoveResult> {
+    return this.call<WorkspaceRepoRemoveResult>('workspace.repoRemove', { name, force });
   }
 
 }
