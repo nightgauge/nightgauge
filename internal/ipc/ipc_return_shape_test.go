@@ -19,6 +19,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+
+	"github.com/nightgauge/nightgauge/internal/intelligence/tokens"
 )
 
 // assertResultShape verifies that result (after JSON round-trip) contains all
@@ -134,6 +136,54 @@ func TestShape_Intelligence_Cost(t *testing.T) {
 
 	// tokens.CostEstimate fields: totalCostUsd, totalDurationMinutes, stageBreakdown, confidence
 	assertResultShape(t, resp.Result, nil, []string{"totalCostUsd", "confidence"})
+}
+
+// #696: the adapter the client names must reach the pricing layer. A grok
+// forecast requested over IPC has to be priced from xai's rate card, not from
+// the registry's anthropic default — otherwise the extension shows a forecast
+// biased by the ratio between two rate cards against its own recorded actuals.
+func TestShape_Intelligence_Cost_HonorsAdapter(t *testing.T) {
+	h := newIpcTestHarness(t)
+	h.awaitReady()
+
+	stages := []string{"feature-dev", "feature-validate"}
+	const complexityScore = 5
+
+	id := h.sendRequest("intelligence.cost", map[string]interface{}{
+		"stages":          stages,
+		"complexityScore": complexityScore,
+		"adapter":         "grok",
+	})
+	resp := h.readResponseFor(id, nil)
+	if resp.Error != nil {
+		t.Fatalf("intelligence.cost error: %+v", resp.Error)
+	}
+
+	var got struct {
+		Adapter  string  `json:"adapter"`
+		Provider string  `json:"provider"`
+		Stamped  bool    `json:"stamped"`
+		Total    float64 `json:"totalCostUsd"`
+	}
+	assertResultShape(t, resp.Result, &got, []string{"adapter", "provider", "stamped", "totalCostUsd"})
+
+	if got.Adapter != "grok" {
+		t.Errorf("adapter = %q, want grok — the wire param was dropped", got.Adapter)
+	}
+	if got.Provider != "xai" {
+		t.Errorf("provider = %q, want xai", got.Provider)
+	}
+	if !got.Stamped {
+		t.Error("grok estimate unstamped, want priced")
+	}
+
+	want := tokens.EstimateCost("grok", stages, complexityScore)
+	if got.Total != want.TotalCostUSD {
+		t.Errorf("total = $%.6f, want $%.6f (xai rate card)", got.Total, want.TotalCostUSD)
+	}
+	if anthropic := tokens.EstimateCost("claude", stages, complexityScore); got.Total == anthropic.TotalCostUSD {
+		t.Errorf("grok total $%.6f equals the anthropic-priced total — adapter never reached the estimator", got.Total)
+	}
 }
 
 func TestShape_Intelligence_Health(t *testing.T) {

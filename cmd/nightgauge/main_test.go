@@ -1709,37 +1709,86 @@ func TestProjectSetFieldDateFlags(t *testing.T) {
 	}
 }
 
+// TestProjectSetFieldDateValidation exercises validateSetFieldDates directly —
+// the same function "project set-field" calls before it makes any API call.
+// The command is deliberately NOT driven here: a case that PASSES validation
+// would fall through to the live GitHub client and, unauthenticated, back off
+// past Go's test timeout and panic the whole package (#699).
+//
+// Wiring — that the command actually calls this validator ahead of the API —
+// is covered by TestProjectSetFieldRejectsInvalidDatesBeforeAPICall below.
+// Both halves are needed: this test alone would stay green if the command
+// stopped validating entirely.
 func TestProjectSetFieldDateValidation(t *testing.T) {
 	tests := []struct {
 		name        string
 		startDate   string
+		targetDate  string
 		wantErr     bool
 		errContains string
 	}{
-		{"valid date", "2026-05-01", false, ""},
-		{"invalid format", "05/01/2026", true, "not a valid YYYY-MM-DD"},
-		{"invalid date", "2026-13-01", true, "not a valid YYYY-MM-DD"},
-		{"empty string", "", false, ""},
+		{"valid start date", "2026-05-01", "", false, ""},
+		{"valid target date", "", "2026-05-01", false, ""},
+		{"valid both", "2026-05-01", "2026-06-01", false, ""},
+		{"both empty", "", "", false, ""},
+		{"invalid start format", "05/01/2026", "", true, "--start-date"},
+		{"invalid start date", "2026-13-01", "", true, "--start-date"},
+		{"invalid target format", "", "05/01/2026", true, "--target-date"},
+		{"invalid target date", "", "2026-13-01", true, "--target-date"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateSetFieldDates(tt.startDate, tt.targetDate)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("expected error containing %q, got nil", tt.errContains)
+				}
+				if !strings.Contains(err.Error(), tt.errContains) {
+					t.Errorf("error %q should contain %q", err.Error(), tt.errContains)
+				}
+				if !strings.Contains(err.Error(), "not a valid YYYY-MM-DD") {
+					t.Errorf("error %q should name the expected format", err.Error())
+				}
+			} else if err != nil {
+				t.Errorf("expected no error for start=%q target=%q, got %v", tt.startDate, tt.targetDate, err)
+			}
+		})
+	}
+}
+
+// TestProjectSetFieldRejectsInvalidDatesBeforeAPICall drives the real command
+// to prove it wires validateSetFieldDates in AHEAD of the GitHub client.
+//
+// Only invalid dates are used, which is what keeps this hermetic: validation
+// rejects them before any API call, so the live-network path #699 is about is
+// never reached. A valid date here would hang and panic the package.
+//
+// Without this test the suite has a hole: validation could be deleted from
+// projectSetFieldCmd entirely and TestProjectSetFieldDateValidation would
+// still pass, since it calls the validator directly.
+func TestProjectSetFieldRejectsInvalidDatesBeforeAPICall(t *testing.T) {
+	tests := []struct {
+		name string
+		flag string
+	}{
+		{"start-date is validated by the command", "--start-date"},
+		{"target-date is validated by the command", "--target-date"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cmd := rootCmd()
-			args := []string{"project", "set-field", "42"}
-			if tt.startDate != "" {
-				args = append(args, "--start-date", tt.startDate)
-			} else {
-				// Need at least one field flag to avoid "required" error
-				args = append(args, "--priority", "P1")
-			}
-			cmd.SetArgs(args)
+			cmd.SetArgs([]string{"project", "set-field", "42", tt.flag, "05/01/2026"})
+			cmd.SetOut(io.Discard)
+			cmd.SetErr(io.Discard)
+
 			err := cmd.Execute()
-			if tt.wantErr {
-				if err == nil {
-					t.Errorf("expected error containing %q, got nil", tt.errContains)
-				} else if tt.errContains != "" && !strings.Contains(err.Error(), tt.errContains) {
-					t.Errorf("error %q should contain %q", err.Error(), tt.errContains)
-				}
+			if err == nil {
+				t.Fatalf("%s: expected the command to reject an invalid date, got nil", tt.flag)
+			}
+			if !strings.Contains(err.Error(), "not a valid YYYY-MM-DD") {
+				t.Errorf("%s: error %q should be the date-validation error, not a downstream failure", tt.flag, err.Error())
 			}
 		})
 	}
@@ -1811,5 +1860,84 @@ func TestIsValidDate(t *testing.T) {
 		if got != tt.want {
 			t.Errorf("isValidDate(%q) = %v, want %v", tt.input, got, tt.want)
 		}
+	}
+}
+
+// runCost executes `cost` with the given args and returns stdout. The command
+// prints via fmt.Printf to os.Stdout, so redirect it through a pipe.
+func runCost(t *testing.T, args ...string) string {
+	t.Helper()
+	prev := os.Stdout
+	rPipe, wPipe, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	os.Stdout = wPipe
+	t.Cleanup(func() { os.Stdout = prev })
+
+	cmd := rootCmd()
+	cmd.SetArgs(append([]string{"cost"}, args...))
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	if execErr := cmd.Execute(); execErr != nil {
+		t.Fatalf("cost %v: %v", args, execErr)
+	}
+
+	wPipe.Close()
+	out, _ := io.ReadAll(rPipe)
+	os.Stdout = prev
+	return string(out)
+}
+
+// TestCostHeadlineAgreesWithStageTable pins the CALL SITE, not just
+// ModelForProviderBand. The router is provider-blind, so "Model
+// recommendation" was printed as an anthropic id directly above a stage table
+// of the serving provider's models — output that contradicted itself
+// ("provider xai" / "claude-sonnet-5" over grok-4.6 rows, #696).
+//
+// A unit test of the helper alone would stay green if the call site reverted
+// to printing rec.Model, which is exactly how the contradiction shipped.
+func TestCostHeadlineAgreesWithStageTable(t *testing.T) {
+	out := runCost(t, "--adapter", "grok")
+
+	if !strings.Contains(out, "→ provider xai") {
+		t.Fatalf("expected the grok adapter to resolve to provider xai, got:\n%s", out)
+	}
+
+	var rec string
+	for _, line := range strings.Split(out, "\n") {
+		if strings.HasPrefix(line, "Model recommendation:") {
+			rec = strings.TrimSpace(strings.TrimPrefix(line, "Model recommendation:"))
+			break
+		}
+	}
+	if rec == "" {
+		t.Fatalf("no model recommendation line in:\n%s", out)
+	}
+
+	// The headline must name a model this adapter can actually dispatch. An
+	// anthropic id here is the defect, whatever else the output says.
+	if strings.HasPrefix(rec, "claude-") {
+		t.Errorf("model recommendation %q is an anthropic model, but the forecast is priced for provider xai:\n%s", rec, out)
+	}
+	if !strings.Contains(out, "\n"+strings.Repeat("-", 65)) {
+		t.Fatalf("expected a stage table in:\n%s", out)
+	}
+	if !strings.Contains(out, rec+" ") {
+		t.Errorf("model recommendation %q appears nowhere in the stage table:\n%s", rec, out)
+	}
+}
+
+// TestCostUnpricedTotalIsNotRenderedAsZero guards the stamped contract at the
+// total line: an entirely unpriceable forecast must not print "$0.0000", which
+// renders the ABSENCE of a price as a price of zero.
+func TestCostUnpricedTotalIsNotRenderedAsZero(t *testing.T) {
+	out := runCost(t, "--adapter", "vendor-mystery-cli")
+
+	if strings.Contains(out, "$  0.0000") {
+		t.Errorf("a fully unpriced forecast rendered a dollar total:\n%s", out)
+	}
+	if !strings.Contains(out, "TOTAL (unpriced)") {
+		t.Errorf("expected an explicitly unpriced total, got:\n%s", out)
 	}
 }
