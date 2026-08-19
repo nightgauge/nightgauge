@@ -16,7 +16,6 @@ import {
   type FilterComponent,
   PRIORITY_OPTIONS,
   SIZE_OPTIONS,
-  COMPONENT_OPTIONS,
   hasActiveFilters,
 } from "../types/FilterConfig";
 
@@ -64,12 +63,15 @@ function getCurrentFilters(): {
 /**
  * Build QuickPick items for filter selection
  */
-function buildQuickPickItems(currentFilters: {
-  priority: FilterPriority;
-  size: FilterSize;
-  component: FilterComponent;
-  hideBlocked: boolean;
-}): QuickPickItem[] {
+function buildQuickPickItems(
+  currentFilters: {
+    priority: FilterPriority;
+    size: FilterSize;
+    component: FilterComponent;
+    hideBlocked: boolean;
+  },
+  componentOptions: readonly string[]
+): QuickPickItem[] {
   const items: QuickPickItem[] = [];
 
   // Clear filters option (only show if filters are active)
@@ -122,28 +124,32 @@ function buildQuickPickItems(currentFilters: {
   }
 
   // Component separator
-  items.push({
-    label: "Component",
-    kind: vscode.QuickPickItemKind.Separator,
-  } as SeparatorItem);
-
-  // Component options
-  const componentAllCurrent = currentFilters.component === "all";
-  items.push({
-    label: `${componentAllCurrent ? "$(check) " : "      "}All Components`,
-    description: "Show all components",
-    filterType: "component",
-    filterValue: "all",
-  });
-
-  for (const component of COMPONENT_OPTIONS) {
-    const isCurrent = currentFilters.component === component;
+  // Component section is omitted entirely when the loaded issues carry no
+  // component:* labels — offering options that match nothing is worse than
+  // offering none.
+  if (componentOptions.length > 0) {
     items.push({
-      label: `${isCurrent ? "$(check) " : "      "}${component}`,
-      description: `Filter to component:${component} issues only`,
+      label: "Component",
+      kind: vscode.QuickPickItemKind.Separator,
+    } as SeparatorItem);
+
+    const componentAllCurrent = currentFilters.component === "all";
+    items.push({
+      label: `${componentAllCurrent ? "$(check) " : "      "}All Components`,
+      description: "Show all components",
       filterType: "component",
-      filterValue: component,
+      filterValue: "all",
     });
+
+    for (const component of componentOptions) {
+      const isCurrent = currentFilters.component === component;
+      items.push({
+        label: `${isCurrent ? "$(check) " : "      "}${component}`,
+        description: `Filter to component:${component} issues only`,
+        filterType: "component",
+        filterValue: component,
+      });
+    }
   }
 
   // Hide blocked separator (Issue #822)
@@ -204,8 +210,18 @@ export function registerFilterProjectBoardCommand(
     // Get current filter settings
     const currentFilters = getCurrentFilters();
 
+    // Component options come from the labels actually present on loaded
+    // issues, unioned across every board tab.
+    const observed = new Set<string>();
+    for (const provider of providers.values()) {
+      for (const component of provider.getProjectBoardService().getObservedComponents?.() ?? []) {
+        observed.add(component);
+      }
+    }
+    const componentOptions = [...observed].sort((a, b) => a.localeCompare(b));
+
     // Build QuickPick items
-    const items = buildQuickPickItems(currentFilters);
+    const items = buildQuickPickItems(currentFilters, componentOptions);
 
     // Show QuickPick
     const selected = await vscode.window.showQuickPick(items, {

@@ -89,6 +89,7 @@ function createMockProvider(
     }),
     setFilterForStatus: vi.fn(),
     setSearchForStatus: vi.fn(),
+    getObservedComponents: vi.fn().mockReturnValue([]),
     ...overrides,
   } as unknown as RepositoriesTreeProvider;
 }

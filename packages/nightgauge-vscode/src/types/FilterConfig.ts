@@ -35,13 +35,36 @@ export interface FilterState {
  * Component options available for filtering
  * These are the common component labels used in the project
  */
-export const COMPONENT_OPTIONS = [
-  "pattern-mining",
-  "configs",
-  "platform",
-  "smart-setup",
-  "standards",
-] as const;
+export const COMPONENT_LABEL_PREFIX = "component:";
+
+/**
+ * Derive the selectable component filter values from the labels actually
+ * present on the issues in view.
+ *
+ * This used to be a hardcoded five-entry list ("pattern-mining", "configs",
+ * "platform", "smart-setup", "standards") that matched nothing in any
+ * workspace repository — every option filtered to an empty list, in both the
+ * Repositories view and the Project Board view. A component set is per-repo by
+ * definition, so the only list that can be correct is the one read off the
+ * issues themselves.
+ *
+ * Returns de-duplicated suffixes in stable alphabetical order. Labels without
+ * the `component:` prefix are ignored, as is a bare `component:` with no
+ * suffix.
+ */
+export function deriveComponentOptions(
+  issues: Iterable<{ readonly labels?: readonly string[] }>
+): string[] {
+  const seen = new Set<string>();
+  for (const issue of issues) {
+    for (const label of issue.labels ?? []) {
+      if (!label.startsWith(COMPONENT_LABEL_PREFIX)) continue;
+      const suffix = label.slice(COMPONENT_LABEL_PREFIX.length).trim();
+      if (suffix) seen.add(suffix);
+    }
+  }
+  return [...seen].sort((a, b) => a.localeCompare(b));
+}
 
 /**
  * Default filter state - shows all issues

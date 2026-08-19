@@ -112,6 +112,13 @@ export interface IWorkItemProvider {
   /** Fetch ALL items across all statuses (for epic grouping and search) */
   getAllItems(): Promise<WorkItem[]>;
 
+  /**
+   * Distinct `component:*` label suffixes across cached items (no network
+   * call). Drives the Component filter's option list, which must reflect the
+   * repository's real labels rather than a hardcoded guess.
+   */
+  getObservedComponents?(): string[];
+
   /** Read-only cache access for a status (no network call) */
   getItemsByStatusFromCache(
     status: string,
