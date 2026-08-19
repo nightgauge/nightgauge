@@ -61,6 +61,34 @@ including cross-surface effects when the feature spans surfaces (e.g. resolve
 on the dashboard → card disappears in the extension). Capture screenshots or
 traces as evidence in the PR or issue. Operator rule, 2026-07-20.
 
+#### The VSCode extension is verified by the operator, not by Playwright
+
+`verify-ui` drives a browser. The extension's views render inside a VSCode
+window, so the Playwright flow above does not reach them, and neither does
+`ci-local.sh` — **no automated check in this repo exercises extension UI.**
+
+The loop that does is human-in-the-loop, and it works: the Claude usage meter
+rendering incorrectly was caught this way, and no suite would have caught it.
+
+1. Land the change and **rebuild the VSIX** (`dev-install.sh`).
+2. **Say so explicitly, and name what to look at** — which view, the expected
+   state, and what would count as wrong. "Rebuilt, please check" is not
+   actionable; the operator should not have to reverse-engineer the intent of
+   the change to know where to point their eyes.
+3. The operator reloads the window and exercises the surface.
+4. **Ask whether it behaved as expected, and wait for the answer.** A green
+   suite is not a substitute. An unanswered ask is an open question, not a pass
+   — do not mark the work verified or move on until it is answered.
+
+Step 4 is the one that gets skipped. The failure mode is not that nobody looks;
+it is finishing a UI change, reporting it as done, and leaving the operator to
+guess that a check was wanted.
+
+**Never carry forward a list of "unverified" surfaces.** Verification state goes
+stale the moment the operator looks at something, and a stale list copied across
+handoffs reads as an outstanding backlog long after the work is done. Ask about
+the change in front of you; do not reconstruct an inventory.
+
 ### Stage Parity Validation
 
 Validate core issue-to-PR stage parity between the Codex/Gemini adapters, Claude
