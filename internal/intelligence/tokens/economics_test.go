@@ -350,3 +350,33 @@ func TestCalculateCostForAdapter_UnresolvedRealProviderIsUnstamped(t *testing.T)
 		t.Error("unstamped cost accidentally matches anthropic's rate — cross-provider fallback regression")
 	}
 }
+
+func TestModelForProviderBand(t *testing.T) {
+	tests := []struct {
+		name     string
+		provider string
+		model    string
+		want     string
+		wantOK   bool
+	}{
+		{"anthropic model translated to xai same band", "xai", "claude-sonnet-5", "grok-4.6", true},
+		{"opus band translated to xai", "xai", "claude-opus-5", "grok-4.6", true},
+		{"same provider is unchanged", "anthropic", "claude-sonnet-5", "claude-sonnet-5", true},
+		{"empty provider is unchanged", "", "claude-sonnet-5", "claude-sonnet-5", true},
+		{"empty model is unchanged", "xai", "", "", true},
+		{"unknown model is left alone, not guessed", "xai", "some-local-model", "some-local-model", true},
+		// "other" is the registry's bucket for unrecognised adapters and has
+		// no tier bands, so there is nothing to translate to.
+		{"provider serving no model in the band reports the band", "other", "claude-sonnet-5", "sonnet", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := ModelForProviderBand(tt.provider, tt.model)
+			if got != tt.want || ok != tt.wantOK {
+				t.Errorf("ModelForProviderBand(%q, %q) = (%q, %v), want (%q, %v)",
+					tt.provider, tt.model, got, ok, tt.want, tt.wantOK)
+			}
+		})
+	}
+}

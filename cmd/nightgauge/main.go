@@ -4903,7 +4903,16 @@ func costCmd() *cobra.Command {
 			fmt.Printf("Cost Estimate (complexity: %d/10)\n", complexityScore)
 			fmt.Printf("================================\n\n")
 			fmt.Printf("Adapter: %s (%s) → provider %s\n", est.Adapter, adapterSource, est.Provider)
-			fmt.Printf("Model recommendation: %s\n", rec.Model)
+			// routing.Router.Route is provider-blind, so rec.Model is an
+			// anthropic id whatever adapter serves the run. Left as-is it
+			// contradicts the adapter line above and the stage table below
+			// (#696).
+			if recModel, ok := tokens.ModelForProviderBand(est.Provider, rec.Model); ok {
+				fmt.Printf("Model recommendation: %s\n", recModel)
+			} else {
+				fmt.Printf("Model recommendation: unresolved — provider %s serves no %s-band model\n",
+					est.Provider, recModel)
+			}
 			fmt.Printf("Reasoning: %s\n\n", rec.Reasoning)
 
 			fmt.Printf("%-20s %-25s %10s %8s\n", "Stage", "Model", "Cost", "Minutes")
@@ -4916,11 +4925,18 @@ func costCmd() *cobra.Command {
 				fmt.Printf("%-20s %-25s $%8.4f %7.1f\n", s.Stage, s.Model, s.CostUSD, s.Minutes)
 			}
 			fmt.Println(strings.Repeat("-", 65))
-			label := "TOTAL"
-			if !est.Stamped {
-				label = "TOTAL (partial)"
+			switch {
+			case est.Stamped:
+				fmt.Printf("%-45s $%8.4f %7d\n", "TOTAL", est.TotalCostUSD, est.TotalDuration)
+			case est.TotalCostUSD == 0:
+				// Nothing priced at all. "$0.0000" would render the ABSENCE of
+				// a price as a price of zero — the exact shape the stamped
+				// contract exists to avoid, and what the stage rows already
+				// avoid by printing "unpriced".
+				fmt.Printf("%-45s %9s %7d\n", "TOTAL (unpriced)", "unpriced", est.TotalDuration)
+			default:
+				fmt.Printf("%-45s $%8.4f %7d\n", "TOTAL (partial)", est.TotalCostUSD, est.TotalDuration)
 			}
-			fmt.Printf("%-45s $%8.4f %7d\n", label, est.TotalCostUSD, est.TotalDuration)
 			if !est.Stamped {
 				fmt.Printf("\nWARNING: provider %q has no registry rate for one or more stages;\n"+
 					"the total above omits them and is a floor, not the forecast.\n", est.Provider)

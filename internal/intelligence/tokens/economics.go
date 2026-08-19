@@ -374,6 +374,39 @@ func pricingProvider(adapter string) string {
 	return models.ProviderForAdapter(adapter)
 }
 
+// ModelForProviderBand translates a model id chosen by a PROVIDER-BLIND caller
+// into the model the given provider actually serves for the same capability
+// band.
+//
+// internal/intelligence/routing.Router.Route takes no adapter, so it recommends
+// an anthropic model id whatever adapter will serve the run — the same defect
+// shape #696 fixed for pricing. Printing that recommendation next to an
+// adapter-aware stage breakdown produced output that contradicted itself:
+// "provider xai" and "claude-sonnet-5" over a table of grok-4.6 rows.
+//
+// ok=false means the provider serves NO model in that band; the returned string
+// is then the BAND, not a model id, so the caller can say so rather than name a
+// model the adapter cannot dispatch. Mirrors the stamped contract: report the
+// gap, never substitute another provider's answer.
+func ModelForProviderBand(provider, model string) (string, bool) {
+	if provider == "" || model == "" {
+		return model, true
+	}
+	d, ok := models.Get(model)
+	if !ok || len(d.Tiers) == 0 {
+		// Not a registry model (a local/ollama id, say): nothing to translate,
+		// and inventing a band for it would be a guess.
+		return model, true
+	}
+	if d.Provider == provider {
+		return model, true
+	}
+	if pm, ok := models.Resolve(provider, d.Tiers[0]); ok {
+		return pm.ID, true
+	}
+	return d.Tiers[0], false
+}
+
 // priceCounts prices every billable pool for an already-resolved model
 // descriptor. Shared by CalculateCost and CalculateCostForAdapter so the two
 // resolution strategies (anthropic-default vs. adapter-provider-aware) cannot
