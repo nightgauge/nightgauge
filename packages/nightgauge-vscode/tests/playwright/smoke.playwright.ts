@@ -21,7 +21,13 @@ test("webview loader renders HTML and captures postMessage calls", async ({ page
   expect(messages[0]).toEqual({ type: "ready", payload: "hello" });
 });
 
-test("acquireVsCodeApi setState and getState are stubs", async ({ page }) => {
+test("acquireVsCodeApi setState/getState is a real in-memory store, not a no-op stub (#751)", async ({
+  page,
+}) => {
+  // Upgraded from a no-op stub (getState() always returned {}) so
+  // DashboardHtml.ts's tab-restoration logic — which reads
+  // vscode.getState().activeTab back after vscode.setState() — is
+  // actually exercisable under test. See TabActivation.playwright.ts.
   const html = `
     <!DOCTYPE html>
     <html>
@@ -38,5 +44,25 @@ test("acquireVsCodeApi setState and getState are stubs", async ({ page }) => {
   await loadWebview(page, html);
 
   const state = await page.evaluate(() => (window as any).__state);
-  expect(state).toEqual({});
+  expect(state).toEqual({ key: "value" });
+});
+
+test("acquireVsCodeApi getState() can be seeded via loadWebview()'s initialState", async ({
+  page,
+}) => {
+  const html = `
+    <!DOCTYPE html>
+    <html>
+      <body>
+        <script>
+          window.__seededState = acquireVsCodeApi().getState();
+        </script>
+      </body>
+    </html>
+  `;
+
+  await loadWebview(page, html, { activeTab: "runs" });
+
+  const state = await page.evaluate(() => (window as any).__seededState);
+  expect(state).toEqual({ activeTab: "runs" });
 });

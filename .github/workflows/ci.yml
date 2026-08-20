@@ -309,6 +309,20 @@ jobs:
       - name: Test (Playwright)
         if: ${{ needs.changes.outputs.run_heavy != 'false' }}
         run: npm run -w nightgauge-vscode test:e2e
+      # Dashboard fixture screenshots (tests/playwright/dashboard/Screenshots.playwright.ts,
+      # Issue #751) — one per tab/state fixture, uploaded unconditionally so a
+      # visual regression is reviewable on a GREEN run too, not only a failed
+      # one. Deliberately a separate step from the failure-only upload below:
+      # that one is Playwright's own screenshot/trace/video-on-failure output,
+      # this one is the always-captured tab/state matrix.
+      - name: Upload dashboard fixture screenshots
+        if: ${{ always() && needs.changes.outputs.run_heavy != 'false' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: dashboard-fixture-screenshots
+          path: packages/nightgauge-vscode/test-results/dashboard-screenshots/
+          retention-days: 14
+          if-no-files-found: ignore
       - name: Upload Playwright failure artifacts (screenshots, traces, video)
         if: ${{ failure() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
