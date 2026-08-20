@@ -44,8 +44,8 @@ func (s *AuditRetentionService) GetRetentionConfig(ctx context.Context) (*Retent
 	if err != nil {
 		return nil, fmt.Errorf("create get retention config request: %w", err)
 	}
-	if s.client.apiKey != "" {
-		req.Header.Set("Authorization", "Bearer "+s.client.apiKey)
+	if bearer := s.client.bearer(); bearer != "" {
+		req.Header.Set("Authorization", "Bearer "+bearer)
 	}
 
 	resp, err := http.DefaultClient.Do(req)
@@ -86,8 +86,8 @@ func (s *AuditRetentionService) UpdateRetentionConfig(ctx context.Context, reten
 		return nil, fmt.Errorf("create update retention config request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if s.client.apiKey != "" {
-		req.Header.Set("Authorization", "Bearer "+s.client.apiKey)
+	if bearer := s.client.bearer(); bearer != "" {
+		req.Header.Set("Authorization", "Bearer "+bearer)
 	}
 
 	resp, err := http.DefaultClient.Do(req)
@@ -129,8 +129,8 @@ func (s *AuditRetentionService) VerifyIntegrity(ctx context.Context, windowDays 
 		return nil, fmt.Errorf("create verify integrity request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if s.client.apiKey != "" {
-		req.Header.Set("Authorization", "Bearer "+s.client.apiKey)
+	if bearer := s.client.bearer(); bearer != "" {
+		req.Header.Set("Authorization", "Bearer "+bearer)
 	}
 
 	resp, err := http.DefaultClient.Do(req)

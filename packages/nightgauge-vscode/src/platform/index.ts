@@ -24,6 +24,8 @@ export { TokenStorage } from "./TokenStorage";
 export type { ITokenStorage, TokenKey, TokenChangeEvent } from "./TokenStorage";
 export { TokenRefreshManager } from "./TokenRefreshManager";
 export type { IOnDemandTokenRefresher } from "./TokenRefreshManager";
+export { PlatformCredentialBridge } from "./PlatformCredentialBridge";
+export type { SessionTokenTransport } from "./PlatformCredentialBridge";
 export { SessionManager } from "./SessionManager";
 export type { SessionState, SessionData, SessionStateEvent } from "./SessionManager";
 export { MachineFingerprint } from "./MachineFingerprint";

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -31,10 +32,17 @@ type Client struct {
 	mu   sync.RWMutex
 	mode ConnectivityMode
 
-	// Auth
-	apiKey     string
-	licenseKey string
-	agentID    string
+	// Auth. The credential is read on every request from an arbitrary
+	// goroutine (health poller, analytics push, IPC handlers) and the session
+	// token is swapped at runtime by platform.setSessionToken (#742), so the
+	// three sources live behind credMu instead of being collapsed into one
+	// value at construction. Read them through bearer(); never directly.
+	credMu       sync.RWMutex
+	sessionToken string
+	staticAPIKey string
+	licenseKey   string
+
+	agentID string
 
 	// Health polling
 	pollInterval time.Duration
@@ -67,20 +75,20 @@ func NewClient(cfg Config) (*Client, error) {
 		cfg.PollInterval = 60 * time.Second
 	}
 
-	// Resolve the bearer token: an explicit API key (env NIGHTGAUGE_API_KEY)
-	// wins, but fall back to the license key (config.yaml license_key) so a
-	// provisioned license authenticates the pipeline without a separate
-	// NIGHTGAUGE_API_KEY export. The platform's pipelineAuth accepts either
-	// a JWT or a license key as the bearer (license keys carry no dots), so the
-	// fallback is transparent to the server. Stored on apiKey so every raw-HTTP
-	// push (analytics.go) uses the same resolved credential.
-	bearer := cfg.APIKey
-	if bearer == "" {
-		bearer = cfg.LicenseKey
+	c := &Client{
+		base:         cfg.BaseURL,
+		mode:         ModeOffline, // Start offline until first health check
+		staticAPIKey: cfg.APIKey,
+		licenseKey:   cfg.LicenseKey,
+		agentID:      cfg.AgentID,
+		pollInterval: cfg.PollInterval,
 	}
 
-	authEditor := func(ctx context.Context, req *http.Request) error {
-		if bearer != "" {
+	// The editor closes over the client rather than over a bearer resolved once
+	// here: a session token pushed after construction has to reach the
+	// generated api client too, not only the raw-HTTP paths (#742).
+	authEditor := func(_ context.Context, req *http.Request) error {
+		if bearer := c.bearer(); bearer != "" {
 			req.Header.Set("Authorization", "Bearer "+bearer)
 		}
 		return nil
@@ -93,16 +101,61 @@ func NewClient(cfg Config) (*Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create platform client: %w", err)
 	}
+	c.api = apiClient
 
-	return &Client{
-		api:          apiClient,
-		base:         cfg.BaseURL,
-		mode:         ModeOffline, // Start offline until first health check
-		apiKey:       bearer,
-		licenseKey:   cfg.LicenseKey,
-		agentID:      cfg.AgentID,
-		pollInterval: cfg.PollInterval,
-	}, nil
+	return c, nil
+}
+
+// bearer returns the credential to present on the next request.
+//
+// Precedence, highest first:
+//
+//  1. the signed-in user's session JWT, pushed at runtime over IPC
+//     (platform.setSessionToken) and re-pushed on every token refresh;
+//  2. an explicit API key (env NIGHTGAUGE_API_KEY);
+//  3. the license key (config license_key / NIGHTGAUGE_LICENSE_KEY).
+//
+// The session token has to win. Several hosted routes — /v1/analytics/health,
+// /v1/analytics/trends, /v1/analytics/cost, /v1/audit/reports — authorise a
+// *user*, not an account, and answer 401 to a license key no matter how valid
+// it is. The license key stays as the fallback so headless CLI runs, which have
+// no session at all, keep working on the routes that do accept one.
+//
+// The platform's pipelineAuth accepts either a JWT or a license key as the
+// bearer (license keys carry no dots), so the fallback is transparent.
+func (c *Client) bearer() string {
+	c.credMu.RLock()
+	defer c.credMu.RUnlock()
+	if c.sessionToken != "" {
+		return c.sessionToken
+	}
+	if c.staticAPIKey != "" {
+		return c.staticAPIKey
+	}
+	return c.licenseKey
+}
+
+// SetSessionToken installs the signed-in user's JWT as the credential for every
+// subsequent request, on the generated api client and the raw-HTTP paths alike.
+// An empty (or whitespace-only) token clears it, which is what sign-out does:
+// the client then falls back to the API key or license key, behaving exactly as
+// a process that was never signed in.
+//
+// Safe to call concurrently with in-flight requests. A request whose
+// Authorization header has already been written keeps the credential it was
+// built with; the next one picks up the new value.
+func (c *Client) SetSessionToken(token string) {
+	token = strings.TrimSpace(token)
+	c.credMu.Lock()
+	c.sessionToken = token
+	c.credMu.Unlock()
+}
+
+// HasSessionToken reports whether a user-scoped JWT is currently installed.
+func (c *Client) HasSessionToken() bool {
+	c.credMu.RLock()
+	defer c.credMu.RUnlock()
+	return c.sessionToken != ""
 }
 
 // AgentID returns the machine/agent identifier this client reports to the

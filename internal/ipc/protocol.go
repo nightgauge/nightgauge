@@ -870,6 +870,13 @@ type PlatformAuthSignoutParams struct {
 	RefreshToken string `json:"refreshToken"`
 }
 
+// PlatformSetSessionTokenParams are parameters for platform.setSessionToken.
+// An empty Token clears the credential (sign-out), leaving the client on its
+// API-key/license-key fallback.
+type PlatformSetSessionTokenParams struct {
+	Token string `json:"token"`
+}
+
 // --- Auth methods ---
 
 // AuthExchangeGitHubParams are parameters for auth.exchangeGitHub.

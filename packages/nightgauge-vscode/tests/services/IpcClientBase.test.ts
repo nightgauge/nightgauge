@@ -131,6 +131,7 @@ vi.mock("../../src/utils/incrediConfig", () => ({
 import * as vscode from "vscode";
 import { IpcClientBase } from "../../src/services/IpcClientBase";
 import { getGitHubAuthToken, getGitHubAuthTokens } from "../../src/utils/incrediConfig";
+import { TokenStorage, type TokenChangeEvent } from "../../src/platform/TokenStorage";
 
 // ─── Concrete test subclass ───────────────────────────────────────────────────
 
@@ -683,6 +684,166 @@ describe("IpcClientBase", () => {
       } finally {
         client2.dispose();
       }
+    });
+  });
+
+  // ─── Platform session token forwarding (#742) ──────────────────────────────
+  //
+  // The daemon is spawned with a license key in its environment, which
+  // identifies an account. The hosted analytics and audit routes authorise a
+  // *user*, so a signed-in user's JWT has to reach the Go process — at spawn,
+  // and again on every rotation, because a credential frozen at spawn expires
+  // with the first access token.
+
+  describe("platform session token forwarding", () => {
+    let tokenChangeListener: ((evt: TokenChangeEvent) => void) | null;
+    let storedAccessToken: string | null;
+
+    beforeEach(() => {
+      tokenChangeListener = null;
+      storedAccessToken = "jwt.signed.in";
+      const fakeStorage = {
+        store: vi.fn(async () => {}),
+        retrieve: vi.fn(async (key: string) => (key === "accessToken" ? storedAccessToken : null)),
+        delete: vi.fn(async () => {}),
+        clear: vi.fn(async () => {}),
+        onTokenChanged: (listener: (evt: TokenChangeEvent) => void) => {
+          tokenChangeListener = listener;
+          return { dispose: () => (tokenChangeListener = null) };
+        },
+        dispose: vi.fn(),
+      };
+      vi.spyOn(TokenStorage, "getInstance").mockReturnValue(fakeStorage as never);
+    });
+
+    afterEach(() => {
+      vi.mocked(TokenStorage.getInstance).mockRestore();
+    });
+
+    /** Every platform.setSessionToken token written to the daemon, in order. */
+    function pushedTokens(): string[] {
+      return capturedStdinWrites
+        .map((w) => JSON.parse(w.trimEnd()))
+        .filter((r) => r.method === "platform.setSessionToken")
+        .map((r) => r.params.token as string);
+    }
+
+    /**
+     * Answer every outstanding setSessionToken request. The bridge keeps at most
+     * one push in flight, so the next one is only issued once this one lands.
+     */
+    const answered = new Set<number>();
+    async function settlePushes(): Promise<void> {
+      await flushPromises();
+      for (const write of [...capturedStdinWrites]) {
+        const req = JSON.parse(write.trimEnd());
+        if (req.method !== "platform.setSessionToken" || answered.has(req.id)) continue;
+        answered.add(req.id);
+        simulateResponse({ id: req.id, result: { ok: true } });
+      }
+      await flushPromises();
+    }
+
+    beforeEach(() => answered.clear());
+
+    it("pushes the stored session token to the daemon on start", async () => {
+      await startTestClient(client);
+      await settlePushes();
+
+      expect(pushedTokens()).toEqual(["jwt.signed.in"]);
+    });
+
+    it("pushes the rotated token when the refresh manager stores a new one", async () => {
+      await startTestClient(client);
+      await settlePushes();
+      expect(pushedTokens()).toEqual(["jwt.signed.in"]);
+
+      // TokenRefreshManager stores the rotated access token.
+      storedAccessToken = "jwt.rotated";
+      tokenChangeListener?.({ key: "accessToken", action: "stored" });
+      await settlePushes();
+
+      expect(pushedTokens()).toEqual(["jwt.signed.in", "jwt.rotated"]);
+    });
+
+    it("clears the daemon credential on sign-out", async () => {
+      await startTestClient(client);
+      await settlePushes();
+
+      // TokenStorage.clear() fires a bulk 'cleared' event.
+      storedAccessToken = null;
+      tokenChangeListener?.({ key: "all", action: "cleared" });
+      await settlePushes();
+
+      expect(pushedTokens()).toEqual(["jwt.signed.in", ""]);
+    });
+
+    it("clears the daemon credential when the access token alone is deleted", async () => {
+      await startTestClient(client);
+      await settlePushes();
+
+      storedAccessToken = null;
+      tokenChangeListener?.({ key: "accessToken", action: "deleted" });
+      await settlePushes();
+
+      expect(pushedTokens()).toEqual(["jwt.signed.in", ""]);
+    });
+
+    it("ignores token changes that are not the access token", async () => {
+      await startTestClient(client);
+      await settlePushes();
+
+      tokenChangeListener?.({ key: "userEmail", action: "stored" });
+      tokenChangeListener?.({ key: "refreshToken", action: "stored" });
+      await settlePushes();
+
+      expect(pushedTokens()).toEqual(["jwt.signed.in"]);
+    });
+
+    it("pushes an empty token when no session exists, so a stale credential cannot linger", async () => {
+      storedAccessToken = null;
+
+      await startTestClient(client);
+      await settlePushes();
+
+      expect(pushedTokens()).toEqual([""]);
+    });
+
+    it("still forwards the license key at spawn — headless runs keep working", async () => {
+      process.env.NIGHTGAUGE_LICENSE_KEY = "lic-123";
+      const { spawn } = await import("child_process");
+
+      await startTestClient(client);
+      await settlePushes();
+
+      const env = vi.mocked(spawn).mock.calls[0]?.[2]?.env as Record<string, string>;
+      expect(env.NIGHTGAUGE_LICENSE_KEY).toBe("lic-123");
+      expect(pushedTokens()).toEqual(["jwt.signed.in"]);
+    });
+
+    it("re-pushes after a restart — a new process has forgotten the credential", async () => {
+      await startTestClient(client);
+      await settlePushes();
+      expect(pushedTokens()).toEqual(["jwt.signed.in"]);
+
+      // Process dies; the auto-restart backoff fires and start() runs again.
+      // capturedStdinWrites is reset by the new mock process, so anything seen
+      // afterwards was written to the replacement daemon.
+      mockProc.emit("exit", 1);
+      await flushPromises();
+      await vi.advanceTimersByTimeAsync(2000);
+      await settlePushes();
+
+      expect(pushedTokens()).toEqual(["jwt.signed.in"]);
+    });
+
+    it("does not create a bridge when TokenStorage is not initialised", async () => {
+      vi.mocked(TokenStorage.getInstance).mockReturnValue(null);
+
+      await startTestClient(client);
+      await flushPromises();
+
+      expect(pushedTokens()).toEqual([]);
     });
   });
 });

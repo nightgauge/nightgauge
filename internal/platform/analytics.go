@@ -395,8 +395,8 @@ func (s *AnalyticsService) pushPipelineRunSync(ctx context.Context, run Executio
 			return fmt.Errorf("create push pipeline run request: %w", err)
 		}
 		req.Header.Set("Content-Type", "application/json")
-		if s.client.apiKey != "" {
-			req.Header.Set("Authorization", "Bearer "+s.client.apiKey)
+		if bearer := s.client.bearer(); bearer != "" {
+			req.Header.Set("Authorization", "Bearer "+bearer)
 		}
 
 		resp, err := http.DefaultClient.Do(req)
@@ -618,8 +618,8 @@ func (s *AnalyticsService) emitPipelineEventSync(ctx context.Context, event Pipe
 		return fmt.Errorf("create emit pipeline event request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if s.client.apiKey != "" {
-		req.Header.Set("Authorization", "Bearer "+s.client.apiKey)
+	if bearer := s.client.bearer(); bearer != "" {
+		req.Header.Set("Authorization", "Bearer "+bearer)
 	}
 
 	resp, err := http.DefaultClient.Do(req)
@@ -669,8 +669,8 @@ func (s *AnalyticsService) syncQueueSync(ctx context.Context, payload QueueSyncP
 		return fmt.Errorf("create queue sync request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if s.client.apiKey != "" {
-		req.Header.Set("Authorization", "Bearer "+s.client.apiKey)
+	if bearer := s.client.bearer(); bearer != "" {
+		req.Header.Set("Authorization", "Bearer "+bearer)
 	}
 
 	resp, err := http.DefaultClient.Do(req)
@@ -796,8 +796,8 @@ func (s *AnalyticsService) GetCostAnalytics(ctx context.Context, startDate, endD
 	if err != nil {
 		return nil, fmt.Errorf("create cost analytics request: %w", err)
 	}
-	if s.client.apiKey != "" {
-		req.Header.Set("Authorization", "Bearer "+s.client.apiKey)
+	if bearer := s.client.bearer(); bearer != "" {
+		req.Header.Set("Authorization", "Bearer "+bearer)
 	}
 
 	resp, err := http.DefaultClient.Do(req)
@@ -857,8 +857,8 @@ func (s *AnalyticsService) GetAnalyticsHealth(ctx context.Context) (*AnalyticsHe
 	if err != nil {
 		return nil, fmt.Errorf("create analytics health request: %w", err)
 	}
-	if s.client.apiKey != "" {
-		req.Header.Set("Authorization", "Bearer "+s.client.apiKey)
+	if bearer := s.client.bearer(); bearer != "" {
+		req.Header.Set("Authorization", "Bearer "+bearer)
 	}
 
 	resp, err := http.DefaultClient.Do(req)
@@ -948,8 +948,8 @@ func (s *AnalyticsService) GetAnalyticsRuns(ctx context.Context, startDate, endD
 	if err != nil {
 		return nil, fmt.Errorf("create analytics runs request: %w", err)
 	}
-	if s.client.apiKey != "" {
-		req.Header.Set("Authorization", "Bearer "+s.client.apiKey)
+	if bearer := s.client.bearer(); bearer != "" {
+		req.Header.Set("Authorization", "Bearer "+bearer)
 	}
 
 	resp, err := http.DefaultClient.Do(req)
@@ -998,8 +998,8 @@ func (s *AnalyticsService) GetAnalyticsTrends(ctx context.Context, period string
 	if err != nil {
 		return nil, fmt.Errorf("create analytics trends request: %w", err)
 	}
-	if s.client.apiKey != "" {
-		req.Header.Set("Authorization", "Bearer "+s.client.apiKey)
+	if bearer := s.client.bearer(); bearer != "" {
+		req.Header.Set("Authorization", "Bearer "+bearer)
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {

@@ -248,8 +248,8 @@ func streamAgentCommands(ctx context.Context, client *Client, consumer *Attentio
 	}
 	req.Header.Set("Accept", "text/event-stream")
 	req.Header.Set("Cache-Control", "no-cache")
-	if client.apiKey != "" {
-		req.Header.Set("Authorization", "Bearer "+client.apiKey)
+	if bearer := client.bearer(); bearer != "" {
+		req.Header.Set("Authorization", "Bearer "+bearer)
 	}
 
 	resp, doErr := attentionStreamHTTPClient.Do(req)

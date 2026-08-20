@@ -42,8 +42,8 @@ func (s *BillingService) CreatePortalSession(ctx context.Context) (*PortalSessio
 	req.Header.Set("Accept", "application/json")
 
 	// Inject auth header using the same pattern as the generated client.
-	if s.client.apiKey != "" {
-		req.Header.Set("Authorization", "Bearer "+s.client.apiKey)
+	if bearer := s.client.bearer(); bearer != "" {
+		req.Header.Set("Authorization", "Bearer "+bearer)
 	}
 
 	resp, err := http.DefaultClient.Do(req)
