@@ -987,7 +987,10 @@ export function getDashboardHtml(
   dependabotData?: DependabotTabState | null,
   // Issue #661 — adapter usage & quota panel, derived from the same
   // AdapterUsageService snapshot the status-bar meter renders.
-  usagePanelState?: UsagePanelState | null
+  usagePanelState?: UsagePanelState | null,
+  // #777 — message from a failed telemetry-store load, so the history tab can
+  // distinguish "no runs" from "could not read the index".
+  historyLoadFailure?: string | null
 ): string {
   const nonce = getNonce();
   const renderTs = Date.now();
@@ -1156,7 +1159,7 @@ export function getDashboardHtml(
           <h3>Pipeline History</h3>
         </summary>
         <div class="section-content">
-          ${getHistoryHtml(history, historyPagination)}
+          ${getHistoryHtml(history, historyPagination, historyLoadFailure)}
         </div>
       </details>
 

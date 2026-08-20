@@ -266,39 +266,76 @@ describe("arrival: Cost tab (platform.getCostAnalytics)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Cross-tab: the signed-out path is not the same on all five
+// Cross-tab: the signed-out path is the same on all five
 // ---------------------------------------------------------------------------
 
-describe("arrival: signed-out behaviour differs across the platform tabs", () => {
-  // FINDING, pinned rather than fixed (#746 is test-only).
+describe("arrival: every platform tab short-circuits when signed out", () => {
+  // #746 pinned this as a FINDING rather than a fix: `checkPlatformTokenState()`
+  // was called only by Health and Runs, so with no session those two rendered
+  // "sign in" from a locally known fact while Cost, Trends and Compliance spent
+  // a doomed round trip and rendered whatever the daemon's refusal classified
+  // as — accurate copy naming the wrong remedy. #777 routed all five through
+  // one gate; this test is the asymmetry's replacement, and it fails the moment
+  // a tab stops using the gate.
   //
-  // `checkPlatformTokenState()` short-circuits a refresh before any IPC when
-  // no session is stored. Health and Runs call it; Cost, Trends and Compliance
-  // do not. So with no session, two tabs render "sign in" from a locally known
-  // fact while the other three spend a doomed round trip and render whatever
-  // the daemon's refusal happens to classify as. This test does not assert
-  // which is correct — it asserts the split exists, so the asymmetry is
-  // visible in the suite instead of living only in a code reading.
-  it("Health and Runs short-circuit; Cost, Trends and Compliance still call IPC", async () => {
+  // The IPC methods are stubbed to RESOLVE with real fixtures on purpose: if a
+  // tab still called out, it would succeed and render data, so "not called" is
+  // the only thing being measured.
+  const drive: Record<string, () => Promise<void>> = {
+    health: () => dashboard.refreshHealthAnalyticsData(),
+    runs: () => dashboard.refreshRunsData(),
+    cost: () => dashboard.refreshCostData(),
+    trends: () =>
+      (dashboard as unknown as { fetchTrendsData: () => Promise<void> }).fetchTrendsData(),
+    compliance: () =>
+      (
+        dashboard as unknown as { refreshComplianceData: (c?: string) => Promise<void> }
+      ).refreshComplianceData(),
+  };
+
+  const stateField: Record<string, string> = {
+    health: "healthAnalyticsData",
+    runs: "runsData",
+    cost: "platformCostData",
+    trends: "trendsData",
+    compliance: "complianceData",
+  };
+
+  const ipcMethod: Record<string, keyof typeof ipcStub> = {
+    health: "platformGetAnalyticsHealth",
+    runs: "platformGetAnalyticsRuns",
+    cost: "platformGetCostAnalytics",
+    trends: "platformGetAnalyticsTrends",
+    compliance: "platformAuditListReports",
+  };
+
+  beforeEach(() => {
     signOut();
+    ipcStub.platformGetAnalyticsHealth.mockResolvedValue(arrivalFixtures.analyticsHealth());
+    ipcStub.platformGetAnalyticsRuns.mockResolvedValue(arrivalFixtures.analyticsRuns());
     ipcStub.platformGetCostAnalytics.mockResolvedValue(arrivalFixtures.costAnalytics());
     ipcStub.platformGetAnalyticsTrends.mockResolvedValue(arrivalFixtures.analyticsTrends());
     ipcStub.platformAuditListReports.mockResolvedValue(arrivalFixtures.complianceReports());
-
-    await dashboard.refreshHealthAnalyticsData();
-    await dashboard.refreshRunsData();
-    await dashboard.refreshCostData();
-    await (dashboard as unknown as { fetchTrendsData: () => Promise<void> }).fetchTrendsData();
-    await (
-      dashboard as unknown as { refreshComplianceData: (c?: string) => Promise<void> }
-    ).refreshComplianceData();
-
-    expect(ipcStub.platformGetAnalyticsHealth).not.toHaveBeenCalled();
-    expect(ipcStub.platformGetAnalyticsRuns).not.toHaveBeenCalled();
-    expect(ipcStub.platformGetCostAnalytics).toHaveBeenCalledTimes(1);
-    expect(ipcStub.platformGetAnalyticsTrends).toHaveBeenCalledTimes(1);
-    expect(ipcStub.platformAuditListReports).toHaveBeenCalledTimes(1);
   });
+
+  it.each(Object.keys(drive))(
+    "%s makes no IPC call and reports unauthorized, not a transport failure",
+    async (tab) => {
+      await drive[tab]();
+
+      expect(ipcStub[ipcMethod[tab]]).not.toHaveBeenCalled();
+
+      const state = (dashboard as unknown as Record<string, { failure?: { kind: string } }>)[
+        stateField[tab]
+      ];
+      expect(state.failure?.kind).toBe("unauthorized");
+
+      // The rendered remedy must be "sign in", not "the platform errored".
+      const text = tabText(tab).toLowerCase();
+      expect(text).toContain("sign-in required");
+      expect(text).not.toContain("platform error");
+    }
+  );
 });
 
 // ---------------------------------------------------------------------------

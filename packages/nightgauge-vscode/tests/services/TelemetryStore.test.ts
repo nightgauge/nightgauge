@@ -330,17 +330,32 @@ describe("TelemetryStore", () => {
       }
     );
 
-    it("should write index atomically", async () => {
+    it("should write index atomically, through a temp path unique per write", async () => {
       vi.mocked(fs.readdir).mockResolvedValue([] as any);
       vi.mocked(fs.mkdir).mockResolvedValue(undefined);
       vi.mocked(fs.writeFile).mockResolvedValue(undefined);
       vi.mocked(fs.rename).mockResolvedValue(undefined);
 
       await store.rebuildIndex();
+      const firstTemp = vi.mocked(fs.writeFile).mock.calls[0][0] as string;
 
-      // Should write to temp file first, then rename
-      expect(fs.writeFile).toHaveBeenCalledWith(indexPath + ".tmp", expect.any(String), "utf-8");
-      expect(fs.rename).toHaveBeenCalledWith(indexPath + ".tmp", indexPath);
+      // Should write to temp file first, then rename. Asserted structurally
+      // rather than by building a RegExp out of `indexPath`: a path is not a
+      // safe regex source. Escaping only `/` (which needs no escaping in a
+      // RegExp constructor) leaves every `.` as a match-anything wildcard, so
+      // the assertion reads stricter than it is — and on Windows the `\`
+      // separators would be read as escapes. Splitting the suffix off and
+      // comparing the prefix with `toBe` has no such failure mode.
+      expect(firstTemp.startsWith(`${indexPath}.`)).toBe(true);
+      expect(firstTemp.slice(indexPath.length)).toMatch(/^\.\d+\.[0-9a-f]+\.tmp$/);
+      expect(fs.writeFile).toHaveBeenCalledWith(firstTemp, expect.any(String), "utf-8");
+      expect(fs.rename).toHaveBeenCalledWith(firstTemp, indexPath);
+
+      // The suffix must differ per write, or concurrent rebuilds still rename
+      // each other's file out from under themselves (#777).
+      await store.rebuildIndex();
+      const secondTemp = vi.mocked(fs.writeFile).mock.calls[1][0] as string;
+      expect(secondTemp).not.toBe(firstTemp);
     });
   });
 

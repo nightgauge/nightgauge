@@ -469,8 +469,13 @@ export class Dashboard implements vscode.Disposable {
    * then updates when TelemetryStore index loads.
    */
   private async loadHistoryFromTelemetryStore(): Promise<void> {
-    const loaded = await this.state.loadFromTelemetryStore();
-    if (loaded > 0 && this.panel) {
+    const result = await this.state.loadFromTelemetryStore();
+    if (!this.panel) return;
+    // Re-render on failure too. The old `loaded > 0` gate skipped the render
+    // for both "nothing to show" and "the read threw", so a raced index write
+    // left the panel sitting on the untouched "No pipeline runs recorded"
+    // empty state — the failure had nowhere to appear. (#777)
+    if (!result.ok || result.count > 0) {
       this.updatePanel("telemetryStoreLoad");
     }
   }
@@ -1562,7 +1567,8 @@ export class Dashboard implements vscode.Disposable {
         this.complianceData,
         this.retentionIntegrityData,
         this.dependabotData,
-        this.getUsagePanelState()
+        this.getUsagePanelState(),
+        this.state.getHistoryLoadFailure()
       );
 
       // Restore scroll position if we had one saved (Issue #923)
@@ -2911,27 +2917,25 @@ export class Dashboard implements vscode.Disposable {
   }
 
   /**
-   * Refresh platform cost analytics data via IPC (Issue #3317).
+   * Refresh platform cost analytics data via IPC.
    * Lazy-loaded on first cost tab activation. Re-fetches on date range change.
    * Never throws — PlatformCostService returns a typed PlatformResult (#748).
    */
   async refreshCostData(): Promise<void> {
     const endpoint = "platform.getCostAnalytics";
     try {
+      if (!(await this.platformTokenGate(endpoint, (f) => this.applyCostFailure(f)))) return;
       const ipc = (await import("../../services/IpcClient")).IpcClient.getInstance();
       this.platformCostService ??= new PlatformCostService(ipc);
       const costResult = await this.platformCostService.fetchAndCache(this.costDateRange);
-      this.platformCostData = costResult.ok
-        ? { result: costResult.value, isLoading: false }
-        : { result: null, isLoading: false, failure: costResult };
+      if (!costResult.ok) {
+        this.applyCostFailure(costResult);
+        return;
+      }
+      this.platformCostData = { result: costResult.value, isLoading: false };
       this.updatePanel("costRefresh");
     } catch (err) {
-      this.platformCostData = {
-        result: null,
-        isLoading: false,
-        failure: classifyPlatformError(err, endpoint),
-      };
-      this.updatePanel("costRefresh");
+      this.applyCostFailure(classifyPlatformError(err, endpoint));
     }
   }
 
@@ -2969,7 +2973,92 @@ export class Dashboard implements vscode.Disposable {
   }
 
   /**
-   * Refresh platform analytics health data via IPC (Issue #3318).
+   * The single entry point every platform-backed tab uses to decide whether a
+   * fetch is worth attempting. Returns false when the caller must stop.
+   *
+   * Only Health and Runs used to precheck the token; Cost, Trends and
+   * Compliance went straight to IPC, spent a doomed round trip while signed
+   * out, and rendered whatever the daemon's refusal classified as — telling
+   * the user the platform had errored when the real remedy was "sign in".
+   * That is the same shape as the bug this epic started from: accurate copy
+   * naming the wrong cause.
+   *
+   * The precheck lives here rather than being copied into each refresh method
+   * because the copies are what drifted in the first place; a sixth tab is one
+   * call, not another three lines to keep in sync. The per-tab difference —
+   * the shape of that tab's own failure state — is all the caller supplies.
+   * (#777)
+   */
+  private async platformTokenGate(
+    endpoint: string,
+    applyFailure: (failure: PlatformFailure) => void
+  ): Promise<boolean> {
+    const tokenFailure = await this.checkPlatformTokenState(endpoint);
+    if (!tokenFailure) return true;
+    applyFailure(tokenFailure);
+    return false;
+  }
+
+  // Per-tab failure appliers. Each renders one tab's failure state and is the
+  // only place that shape is built, so the token precheck, the typed
+  // PlatformResult failure and the catch-all all land identically (#777).
+
+  private applyHealthFailure(failure: PlatformFailure): void {
+    this.healthAnalyticsData = { result: null, hasAccess: false, isLoading: false, failure };
+    this.logger.info("platform:health-tab-error", { kind: failure.kind, status: failure.status });
+    this.updatePanel("healthRefresh");
+  }
+
+  private applyRunsFailure(failure: PlatformFailure): void {
+    this.runsData = {
+      entries: [],
+      filters: this.runsFilters,
+      pagination: this.runsPagination,
+      isLoading: false,
+      hasAccess: false,
+      failure,
+    };
+    this.logger.info("platform:runs-tab-error", { kind: failure.kind, status: failure.status });
+    this.updatePanel("runsRefresh");
+  }
+
+  private applyTrendsFailure(failure: PlatformFailure): void {
+    this.trendsData = {
+      result: null,
+      isLoading: false,
+      hasAccess: false,
+      showComparison: this.trendsShowComparison,
+      failure,
+    };
+    this.logger.info("platform:trends-tab-error", { kind: failure.kind, status: failure.status });
+    this.updatePanel("trendsRefresh");
+  }
+
+  private applyCostFailure(failure: PlatformFailure): void {
+    this.platformCostData = { result: null, isLoading: false, failure };
+    this.logger.info("platform:cost-tab-error", { kind: failure.kind, status: failure.status });
+    this.updatePanel("costRefresh");
+  }
+
+  private applyComplianceFailure(failure: PlatformFailure): void {
+    this.complianceData = {
+      reports: [],
+      filters: {},
+      pagination: { hasMore: false },
+      isLoading: false,
+      hasAccess: false,
+      isGenerating: false,
+      failure,
+    };
+    this.logger.info("platform:compliance-tab-error", {
+      kind: failure.kind,
+      status: failure.status,
+    });
+    this.updatePanel("complianceRefresh");
+  }
+
+  /**
+   * Refresh platform analytics health data via IPC.
    * Lazy-loaded on first health tab activation. Re-fetches on healthRefresh message.
    * Never throws — PlatformAnalyticsHealthService returns a typed PlatformResult (#748).
    *
@@ -2990,18 +3079,7 @@ export class Dashboard implements vscode.Disposable {
     this.healthAnalyticsData = { result: null, hasAccess: true, isLoading: true };
     this.updatePanel("healthRefresh");
     try {
-      const tokenFailure = await this.checkPlatformTokenState(endpoint);
-      if (tokenFailure) {
-        this.healthAnalyticsData = {
-          result: null,
-          hasAccess: false,
-          isLoading: false,
-          failure: tokenFailure,
-        };
-        this.logger.info("platform:health-tab-error", { kind: tokenFailure.kind });
-        this.updatePanel("healthRefresh");
-        return;
-      }
+      if (!(await this.platformTokenGate(endpoint, (f) => this.applyHealthFailure(f)))) return;
       const ipc = (await import("../../services/IpcClient")).IpcClient.getInstance();
       this.platformAnalyticsHealthService ??= new PlatformAnalyticsHealthService(ipc);
 
@@ -3015,48 +3093,26 @@ export class Dashboard implements vscode.Disposable {
 
       const result = await this.platformAnalyticsHealthService.fetchAndCache();
       if (!result.ok) {
-        this.healthAnalyticsData = {
-          result: null,
-          hasAccess: false,
-          isLoading: false,
-          failure: result,
-        };
-        this.logger.info("platform:health-tab-error", { kind: result.kind, status: result.status });
-      } else {
-        this.healthAnalyticsData = { result: result.value, hasAccess: true, isLoading: false };
-        this.healthAnalyticsFetchedAt = new Date();
+        this.applyHealthFailure(result);
+        return;
       }
+      this.healthAnalyticsData = { result: result.value, hasAccess: true, isLoading: false };
+      this.healthAnalyticsFetchedAt = new Date();
       this.updatePanel("healthRefresh");
     } catch (err) {
-      const failure = classifyPlatformError(err, endpoint);
-      this.healthAnalyticsData = { result: null, hasAccess: false, isLoading: false, failure };
-      this.logger.info("platform:health-tab-error", { kind: failure.kind });
-      this.updatePanel("healthRefresh");
+      this.applyHealthFailure(classifyPlatformError(err, endpoint));
     }
   }
 
   /**
-   * Refresh pipeline runs data via IPC (Issue #3319).
+   * Refresh pipeline runs data via IPC.
    * Lazy-loaded on first runs tab activation. Re-fetches on filter/page change.
    * Never throws — PlatformRunsService returns a typed PlatformResult (#748).
    */
   async refreshRunsData(cursor?: string): Promise<void> {
     const endpoint = "platform.getAnalyticsRuns";
     try {
-      const tokenFailure = await this.checkPlatformTokenState(endpoint);
-      if (tokenFailure) {
-        this.runsData = {
-          entries: [],
-          filters: this.runsFilters,
-          pagination: this.runsPagination,
-          isLoading: false,
-          hasAccess: false,
-          failure: tokenFailure,
-        };
-        this.logger.info("platform:runs-tab-error", { kind: tokenFailure.kind });
-        this.updatePanel("runsRefresh");
-        return;
-      }
+      if (!(await this.platformTokenGate(endpoint, (f) => this.applyRunsFailure(f)))) return;
       const ipc = (await import("../../services/IpcClient")).IpcClient.getInstance();
       this.platformRunsService ??= new PlatformRunsService(ipc);
 
@@ -3073,61 +3129,45 @@ export class Dashboard implements vscode.Disposable {
       const result = await this.platformRunsService.fetchAndCache(this.runsFilters, cursor, 20);
 
       if (!result.ok) {
-        this.runsData = {
-          entries: [],
-          filters: this.runsFilters,
-          pagination: this.runsPagination,
-          isLoading: false,
-          hasAccess: false,
-          failure: result,
-        };
-        this.logger.info("platform:runs-tab-error", { kind: result.kind, status: result.status });
-      } else {
-        const data = result.value;
-        // Store next cursor in the stack for the next page
-        const updatedStack = [...this.runsPagination.cursorStack];
-        const nextPage = this.runsPagination.page + 1;
-        if (data.has_more && data.next_cursor) {
-          updatedStack[nextPage] = data.next_cursor;
-        }
-        this.runsPagination = {
-          ...this.runsPagination,
-          totalCount: data.total_count,
-          hasMore: data.has_more,
-          cursorStack: updatedStack,
-        };
-        this.runsData = {
-          entries: data.entries,
-          filters: this.runsFilters,
-          pagination: this.runsPagination,
-          isLoading: false,
-          hasAccess: true,
-        };
+        this.applyRunsFailure(result);
+        return;
       }
-      this.updatePanel("runsRefresh");
-    } catch (err) {
-      const failure = classifyPlatformError(err, endpoint);
+
+      const data = result.value;
+      // Store next cursor in the stack for the next page
+      const updatedStack = [...this.runsPagination.cursorStack];
+      const nextPage = this.runsPagination.page + 1;
+      if (data.has_more && data.next_cursor) {
+        updatedStack[nextPage] = data.next_cursor;
+      }
+      this.runsPagination = {
+        ...this.runsPagination,
+        totalCount: data.total_count,
+        hasMore: data.has_more,
+        cursorStack: updatedStack,
+      };
       this.runsData = {
-        entries: [],
+        entries: data.entries,
         filters: this.runsFilters,
         pagination: this.runsPagination,
         isLoading: false,
-        hasAccess: false,
-        failure,
+        hasAccess: true,
       };
-      this.logger.info("platform:runs-tab-error", { kind: failure.kind });
       this.updatePanel("runsRefresh");
+    } catch (err) {
+      this.applyRunsFailure(classifyPlatformError(err, endpoint));
     }
   }
 
   /**
-   * Fetch platform trends data for the Trends tab (Issue #3320).
+   * Fetch platform trends data for the Trends tab.
    * Mirrors refreshRunsData() — lazy-loaded on first tab activation.
    * Never throws — PlatformTrendsService returns a typed PlatformResult (#748).
    */
   private async fetchTrendsData(): Promise<void> {
     const endpoint = "platform.getAnalyticsTrends";
     try {
+      if (!(await this.platformTokenGate(endpoint, (f) => this.applyTrendsFailure(f)))) return;
       const ipc = (await import("../../services/IpcClient")).IpcClient.getInstance();
       this.platformTrendsService ??= new PlatformTrendsService(ipc);
 
@@ -3143,42 +3183,30 @@ export class Dashboard implements vscode.Disposable {
       const result = await this.platformTrendsService.fetchAndCache(this.trendsDateRange);
 
       if (!result.ok) {
-        this.trendsData = {
-          result: null,
-          isLoading: false,
-          hasAccess: false,
-          showComparison: this.trendsShowComparison,
-          failure: result,
-        };
-      } else {
-        this.trendsData = {
-          result: result.value,
-          isLoading: false,
-          hasAccess: true,
-          showComparison: this.trendsShowComparison,
-        };
+        this.applyTrendsFailure(result);
+        return;
       }
-      this.updatePanel("trendsRefresh");
-    } catch (err) {
       this.trendsData = {
-        result: null,
+        result: result.value,
         isLoading: false,
-        hasAccess: false,
+        hasAccess: true,
         showComparison: this.trendsShowComparison,
-        failure: classifyPlatformError(err, endpoint),
       };
       this.updatePanel("trendsRefresh");
+    } catch (err) {
+      this.applyTrendsFailure(classifyPlatformError(err, endpoint));
     }
   }
 
   /**
-   * Refresh compliance reports list via IPC (Issue #3322).
+   * Refresh compliance reports list via IPC.
    * Lazy-loaded on first compliance tab activation. Re-fetches on page change or refresh.
    * Never throws — PlatformComplianceService returns a typed PlatformResult (#748).
    */
   private async refreshComplianceData(cursor?: string): Promise<void> {
     const endpoint = "platform.auditListReports";
     try {
+      if (!(await this.platformTokenGate(endpoint, (f) => this.applyComplianceFailure(f)))) return;
       const ipc = (await import("../../services/IpcClient")).IpcClient.getInstance();
       this.platformComplianceService ??= new PlatformComplianceService(ipc);
 
@@ -3196,41 +3224,24 @@ export class Dashboard implements vscode.Disposable {
       const result = await this.platformComplianceService.fetchAndCache(cursor, 20);
 
       if (!result.ok) {
-        this.complianceData = {
-          reports: [],
-          filters: {},
-          pagination: { hasMore: false },
-          isLoading: false,
-          hasAccess: false,
-          isGenerating: false,
-          failure: result,
-        };
-      } else {
-        this.complianceData = {
-          reports: result.value.reports,
-          filters: {},
-          pagination: {
-            cursor,
-            nextCursor: result.value.nextCursor,
-            hasMore: result.value.hasMore,
-          },
-          isLoading: false,
-          hasAccess: true,
-          isGenerating: this.complianceData?.isGenerating ?? false,
-        };
+        this.applyComplianceFailure(result);
+        return;
       }
-      this.updatePanel("complianceRefresh");
-    } catch (err) {
       this.complianceData = {
-        reports: [],
+        reports: result.value.reports,
         filters: {},
-        pagination: { hasMore: false },
+        pagination: {
+          cursor,
+          nextCursor: result.value.nextCursor,
+          hasMore: result.value.hasMore,
+        },
         isLoading: false,
-        hasAccess: false,
-        isGenerating: false,
-        failure: classifyPlatformError(err, endpoint),
+        hasAccess: true,
+        isGenerating: this.complianceData?.isGenerating ?? false,
       };
       this.updatePanel("complianceRefresh");
+    } catch (err) {
+      this.applyComplianceFailure(classifyPlatformError(err, endpoint));
     }
   }
 

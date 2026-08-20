@@ -75,7 +75,7 @@ let workspaceRoot: string;
 let recordedTitles: string[];
 let recordedIssueNumbers: number[];
 
-beforeAll(async () => {
+beforeAll(() => {
   workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ng-arrival-local-"));
   fs.mkdirSync(path.join(workspaceRoot, ".nightgauge"), { recursive: true });
   fs.writeFileSync(
@@ -118,15 +118,14 @@ beforeAll(async () => {
   recordedIssueNumbers = records.map((r) => Number(r["issue_number"]));
   expect(recordedTitles.length).toBeGreaterThan(0);
 
-  // Build the index up front.
+  // No index is primed here on purpose.
   //
-  // NOT a convenience: `TelemetryStore.writeIndex` renames a fixed
-  // `index.json.tmp`, so two rebuilds racing on one workspace make the loser's
-  // rename ENOENT — and `loadFromTelemetryStore` swallows that and returns 0
-  // runs. The Dashboard constructor starts a background load while the test
-  // awaits its own, which is exactly two rebuilds. Priming a *fresh* index
-  // means both calls read rather than rebuild. See the finding on #746.
-  await new TelemetryStore(workspaceRoot).rebuildIndex();
+  // #746 had to prime one: `writeIndex` renamed a fixed `index.json.tmp`, so
+  // the Dashboard constructor's background load and the test's own awaited
+  // load — two rebuilds on one workspace — made the loser's rename ENOENT, and
+  // `loadFromTelemetryStore` swallowed that and reported zero runs. #777 gave
+  // each write its own temp path, so letting both calls rebuild concurrently
+  // is now the point rather than the hazard.
 });
 
 afterAll(() => {
@@ -147,7 +146,7 @@ async function newDashboardWithTelemetry(): Promise<Dashboard> {
   // The constructor kicks off loadHistoryFromTelemetryStore() in the
   // background; await the same load so the assertion is not a race.
   await (
-    d as unknown as { state: { loadFromTelemetryStore: () => Promise<number> } }
+    d as unknown as { state: { loadFromTelemetryStore: () => Promise<unknown> } }
   ).state.loadFromTelemetryStore();
   return d;
 }
@@ -201,7 +200,7 @@ describe("arrival: History tab (.nightgauge/pipeline/history/*.jsonl)", () => {
       );
       dashboard.show();
       await (
-        dashboard as unknown as { state: { loadFromTelemetryStore: () => Promise<number> } }
+        dashboard as unknown as { state: { loadFromTelemetryStore: () => Promise<unknown> } }
       ).state.loadFromTelemetryStore();
 
       const text = tabText("history");
