@@ -50,12 +50,32 @@ const errSchedulerNotConfigured = "scheduler not configured — no workspace-roo
 
 // Server handles JSON-over-stdio IPC communication with VSCode.
 type Server struct {
-	client            *gh.Client
-	writer            io.Writer
-	mu                sync.Mutex
-	methods           map[string]Handler
-	execMgr           *execution.Manager
-	scheduler         *orchestrator.Scheduler
+	client    *gh.Client
+	writer    io.Writer
+	mu        sync.Mutex
+	methods   map[string]Handler
+	execMgr   *execution.Manager
+	scheduler *orchestrator.Scheduler
+
+	// platformClient and every service built on it (below) are normally set
+	// once, before Run(), by WithPlatformClient — safe to read unguarded
+	// after that point since nothing mutates them again.
+	//
+	// #756 breaks that invariant: a signed-in session alone must be enough to
+	// talk to the platform, even when the daemon was spawned with no
+	// api_url/api_key/license_key at all (nothing for the eager path to
+	// construct from). ensurePlatformClient lazily builds the default client
+	// the first time platform.setSessionToken sees a real token — from a
+	// request-handling goroutine, since IPC requests are dispatched one
+	// goroutine per call (see handleRequest). That write has to be visible to
+	// every OTHER handler goroutine reading these same fields, so both the
+	// write and every read go through platformClientMu — see
+	// setPlatformServicesLocked and the getPlatformClient/getXSvc getters.
+	//
+	// authSvc is deliberately NOT part of this group: it drives the daemon's
+	// own device-code / GitHub sign-in flow, i.e. it is how a session gets
+	// created, not something a session's arrival should construct.
+	platformClientMu  sync.RWMutex
 	platformClient    *platform.Client
 	licenseSvc        *platform.LicenseService
 	authSvc           *platform.AuthService
@@ -282,15 +302,134 @@ func WithScheduler(sched *orchestrator.Scheduler) ServerOption {
 // WithPlatformClient attaches a platform client to the IPC server.
 func WithPlatformClient(pc *platform.Client) ServerOption {
 	return func(s *Server) {
-		s.platformClient = pc
-		s.licenseSvc = platform.NewLicenseService(pc)
-		s.skillSvc = platform.NewSkillService(pc)
-		s.analyticsSvc = platform.NewAnalyticsService(pc)
-		s.complianceSvc = platform.NewComplianceService(pc)
-		s.auditRetentionSvc = platform.NewAuditRetentionService(pc)
-		s.teamSvc = platform.NewTeamService(pc)
-		s.billingSvc = platform.NewBillingService(pc)
+		s.attachPlatformClient(pc)
 	}
+}
+
+// setPlatformServicesLocked wires pc and every service built on it onto the
+// server, replacing whatever was there before. Callers must hold
+// platformClientMu for writing.
+func (s *Server) setPlatformServicesLocked(pc *platform.Client) {
+	s.platformClient = pc
+	s.licenseSvc = platform.NewLicenseService(pc)
+	s.skillSvc = platform.NewSkillService(pc)
+	s.analyticsSvc = platform.NewAnalyticsService(pc)
+	s.complianceSvc = platform.NewComplianceService(pc)
+	s.auditRetentionSvc = platform.NewAuditRetentionService(pc)
+	s.teamSvc = platform.NewTeamService(pc)
+	s.billingSvc = platform.NewBillingService(pc)
+}
+
+// attachPlatformClient installs pc (and its dependent services) under
+// platformClientMu. Used both by WithPlatformClient (before Run(), where the
+// lock is uncontended) and by ensurePlatformClient (from a request goroutine
+// during Run()).
+func (s *Server) attachPlatformClient(pc *platform.Client) {
+	s.platformClientMu.Lock()
+	defer s.platformClientMu.Unlock()
+	s.setPlatformServicesLocked(pc)
+}
+
+// ensurePlatformClient lazily builds the default platform client — and every
+// service on top of it — the first time a signed-in session token arrives on
+// a daemon that was never given a platform URL, API key, or license key at
+// startup (#756). A signed-in session is itself proof a platform exists; the
+// session token carries no URL of its own, so this defaults to
+// platform.DefaultConfig()'s base URL exactly as the eagerly-configured path
+// in cmd/nightgauge/main.go does when api_url is unset.
+//
+// Double-checked under platformClientMu: two setSessionToken calls racing on
+// a cold daemon (e.g. a stale sign-in event replayed alongside a fresh one)
+// must not each build their own client. The loser reuses whatever the winner
+// built and applies its own token to that one client.
+//
+// StartHealthPolling is started in its own goroutine, not inline: its first
+// check runs synchronously before it returns (see platform.Client), and
+// running that here would hold platformClientMu.Lock() — blocking every
+// OTHER platform.* request on this daemon — for the length of a real network
+// round trip to the platform. The eager path in cmd/nightgauge/main.go can
+// afford that cost inline because it runs once at startup, before the IPC
+// server accepts any request; this path runs mid-Run(), under contention.
+// sessionOnlyPlatformConfig is the config the lazy path builds from when a
+// session token arrives and no client exists yet. A signed-in session carries
+// no api_url, so the base URL can only come from the default.
+//
+// It is a named function rather than an inline platform.DefaultConfig() so a
+// test can assert what the lazy path resolves to WITHOUT reading Client.base —
+// that field has exactly one sanctioned reader (Client.newRequest, #750), and
+// re-exposing it through an accessor would put a second URL source back in
+// reach of the very code the guard exists to constrain.
+func sessionOnlyPlatformConfig() platform.Config {
+	return platform.DefaultConfig()
+}
+
+func (s *Server) ensurePlatformClient() (*platform.Client, error) {
+	s.platformClientMu.Lock()
+	defer s.platformClientMu.Unlock()
+	if s.platformClient != nil {
+		return s.platformClient, nil
+	}
+	pc, err := platform.NewClient(sessionOnlyPlatformConfig())
+	if err != nil {
+		return nil, err
+	}
+	go pc.StartHealthPolling(context.Background())
+	s.setPlatformServicesLocked(pc)
+	return pc, nil
+}
+
+// getPlatformClient returns the current platform client, or nil when none has
+// been configured (eagerly at startup) or constructed yet (lazily, on the
+// first signed-in session — see ensurePlatformClient). Every handler must
+// read the field through this getter rather than s.platformClient directly:
+// IPC requests are dispatched one goroutine per call, and ensurePlatformClient
+// can write this field from any of them at any time.
+func (s *Server) getPlatformClient() *platform.Client {
+	s.platformClientMu.RLock()
+	defer s.platformClientMu.RUnlock()
+	return s.platformClient
+}
+
+func (s *Server) getLicenseSvc() *platform.LicenseService {
+	s.platformClientMu.RLock()
+	defer s.platformClientMu.RUnlock()
+	return s.licenseSvc
+}
+
+func (s *Server) getSkillSvc() *platform.SkillService {
+	s.platformClientMu.RLock()
+	defer s.platformClientMu.RUnlock()
+	return s.skillSvc
+}
+
+func (s *Server) getAnalyticsSvc() *platform.AnalyticsService {
+	s.platformClientMu.RLock()
+	defer s.platformClientMu.RUnlock()
+	return s.analyticsSvc
+}
+
+func (s *Server) getComplianceSvc() *platform.ComplianceService {
+	s.platformClientMu.RLock()
+	defer s.platformClientMu.RUnlock()
+	return s.complianceSvc
+}
+
+func (s *Server) getAuditRetentionSvc() *platform.AuditRetentionService {
+	s.platformClientMu.RLock()
+	defer s.platformClientMu.RUnlock()
+	return s.auditRetentionSvc
+}
+
+func (s *Server) getTeamSvc() *platform.TeamService {
+	s.platformClientMu.RLock()
+	defer s.platformClientMu.RUnlock()
+	return s.teamSvc
+}
+
+func (s *Server) getBillingSvc() *platform.BillingService {
+	s.platformClientMu.RLock()
+	defer s.platformClientMu.RUnlock()
+	return s.billingSvc
 }
 
 // WithAuthService attaches an auth service to the IPC server.
@@ -811,8 +950,8 @@ func (s *Server) invalidateOnAuth401(err error, owner, repo string) {
 // Run starts the IPC server, reading from stdin and writing to stdout.
 func (s *Server) Run(ctx context.Context) error {
 	// Start periodic flush of buffered analytics (runs, events) in the background.
-	if s.analyticsSvc != nil {
-		s.analyticsSvc.StartAutoFlush(ctx)
+	if s.getAnalyticsSvc() != nil {
+		s.getAnalyticsSvc().StartAutoFlush(ctx)
 	}
 
 	// Close out platform rows orphaned by runs that died with this server's
@@ -1537,7 +1676,7 @@ func (s *Server) registerMethods() {
 	// --- Intelligence methods ---
 
 	complexityEstimator := complexity.NewEstimator()
-	modelRouter := routing.NewRouter(s.platformClient, s.workspaceRootPath())
+	modelRouter := routing.NewRouter(s.getPlatformClient(), s.workspaceRootPath())
 	failureClassifier := failure.NewClassifier()
 	//ipc:method intelligenceComplexity params:ComplexityEstimateParams result:ComplexityResult skip
 	s.methods["intelligence.complexity"] = func(_ context.Context, params json.RawMessage) (interface{}, error) {
@@ -1592,27 +1731,27 @@ func (s *Server) registerMethods() {
 
 	//ipc:method platformStatus params:none result:PlatformStatus
 	s.methods["platform.status"] = func(_ context.Context, _ json.RawMessage) (interface{}, error) {
-		if s.platformClient == nil {
+		if s.getPlatformClient() == nil {
 			return map[string]interface{}{
 				"mode":    string(platform.ModeOffline),
 				"message": "platform client not configured",
 			}, nil
 		}
 		result := map[string]interface{}{
-			"mode": string(s.platformClient.Mode()),
+			"mode": string(s.getPlatformClient().Mode()),
 		}
-		if s.licenseSvc != nil {
-			result["tier"] = s.licenseSvc.CurrentTier()
+		if s.getLicenseSvc() != nil {
+			result["tier"] = s.getLicenseSvc().CurrentTier()
 		}
 		return result, nil
 	}
 
 	//ipc:method platformLicense params:none result:LicenseInfo
 	s.methods["platform.license"] = func(ctx context.Context, _ json.RawMessage) (interface{}, error) {
-		if s.licenseSvc == nil {
+		if s.getLicenseSvc() == nil {
 			return platform.CommunityLicenseInfo(), nil
 		}
-		info, err := s.licenseSvc.Validate(ctx)
+		info, err := s.getLicenseSvc().Validate(ctx)
 		if err != nil {
 			return nil, err
 		}
@@ -1621,14 +1760,14 @@ func (s *Server) registerMethods() {
 
 	//ipc:method platformResolveSkill params:PlatformResolveSkillParams result:CachedSkill
 	s.methods["platform.resolveSkill"] = func(ctx context.Context, params json.RawMessage) (interface{}, error) {
-		if s.skillSvc == nil {
+		if s.getSkillSvc() == nil {
 			return nil, fmt.Errorf("platform client not configured")
 		}
 		var p PlatformResolveSkillParams
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, fmt.Errorf("invalid params: %w", err)
 		}
-		return s.skillSvc.Resolve(ctx, p.SkillID, &platform.SkillResolveOptions{
+		return s.getSkillSvc().Resolve(ctx, p.SkillID, &platform.SkillResolveOptions{
 			ComplexityScore: p.ComplexityScore,
 			IssueType:       p.IssueType,
 			SizeLabel:       p.SizeLabel,
@@ -1637,7 +1776,7 @@ func (s *Server) registerMethods() {
 
 	//ipc:method platformValidateLicense params:PlatformValidateLicenseParams result:LicenseInfo
 	s.methods["platform.validateLicense"] = func(ctx context.Context, params json.RawMessage) (interface{}, error) {
-		if s.licenseSvc == nil {
+		if s.getLicenseSvc() == nil {
 			return nil, fmt.Errorf("platform client not configured")
 		}
 		var p PlatformValidateLicenseParams
@@ -1649,15 +1788,15 @@ func (s *Server) registerMethods() {
 		// "Activate License" flow verifying a key before it's persisted — validate
 		// that arbitrary key directly, bypassing the session cache so the result
 		// reflects the entered key, not the current session license.
-		if p.LicenseKey != "" && p.LicenseKey != s.licenseSvc.ConfiguredKey() {
-			return s.licenseSvc.ValidateKey(ctx, p.LicenseKey)
+		if p.LicenseKey != "" && p.LicenseKey != s.getLicenseSvc().ConfiguredKey() {
+			return s.getLicenseSvc().ValidateKey(ctx, p.LicenseKey)
 		}
-		return s.licenseSvc.Validate(ctx)
+		return s.getLicenseSvc().Validate(ctx)
 	}
 
 	//ipc:method platformStartTrial params:PlatformStartTrialParams result:TrialResult
 	s.methods["platform.startTrial"] = func(ctx context.Context, params json.RawMessage) (interface{}, error) {
-		if s.licenseSvc == nil {
+		if s.getLicenseSvc() == nil {
 			return nil, fmt.Errorf("platform client not configured")
 		}
 		var p PlatformStartTrialParams
@@ -1667,7 +1806,7 @@ func (s *Server) registerMethods() {
 		// The device-flow JWT is applied as a per-call bearer inside StartTrial and
 		// is never logged here. A typed *platform.TrialError (NOT_ELIGIBLE / 401 /
 		// transport) propagates to the TS command for a precise message.
-		return s.licenseSvc.StartTrial(ctx, p.AccessToken)
+		return s.getLicenseSvc().StartTrial(ctx, p.AccessToken)
 	}
 
 	//ipc:method platformSubmitAnalytics params:PlatformSubmitAnalyticsParams result:StatusOK
@@ -1676,9 +1815,9 @@ func (s *Server) registerMethods() {
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, fmt.Errorf("invalid params: %w", err)
 		}
-		if s.analyticsSvc != nil {
+		if s.getAnalyticsSvc() != nil {
 			// Fire-and-forget: buffer locally, return immediately
-			s.analyticsSvc.Ingest(ctx, "", 0, []platform.AnalyticsEvent{{
+			s.getAnalyticsSvc().Ingest(ctx, "", 0, []platform.AnalyticsEvent{{
 				Type:      p.EventType,
 				Timestamp: time.Now(),
 				Data:      p.Payload,
@@ -1689,43 +1828,43 @@ func (s *Server) registerMethods() {
 
 	//ipc:method platformGetUsageSummary params:none result:UsageSummaryResult
 	s.methods["platform.getUsageSummary"] = func(ctx context.Context, _ json.RawMessage) (interface{}, error) {
-		if s.analyticsSvc == nil {
+		if s.getAnalyticsSvc() == nil {
 			return nil, fmt.Errorf("platform client not configured")
 		}
-		return s.analyticsSvc.GetUsageSummary(ctx)
+		return s.getAnalyticsSvc().GetUsageSummary(ctx)
 	}
 
 	//ipc:method platformGetCostAnalytics params:PlatformCostAnalyticsParams result:CostAnalyticsResult
 	s.methods["platform.getCostAnalytics"] = func(ctx context.Context, params json.RawMessage) (interface{}, error) {
-		if s.analyticsSvc == nil {
+		if s.getAnalyticsSvc() == nil {
 			return nil, fmt.Errorf("analytics service unavailable")
 		}
 		var p PlatformCostAnalyticsParams
 		_ = json.Unmarshal(params, &p)
-		return s.analyticsSvc.GetCostAnalytics(ctx, p.StartDate, p.EndDate)
+		return s.getAnalyticsSvc().GetCostAnalytics(ctx, p.StartDate, p.EndDate)
 	}
 
 	//ipc:method platformGetAnalyticsHealth params:none result:AnalyticsHealthResult
 	s.methods["platform.getAnalyticsHealth"] = func(ctx context.Context, _ json.RawMessage) (interface{}, error) {
-		if s.analyticsSvc == nil {
+		if s.getAnalyticsSvc() == nil {
 			return nil, fmt.Errorf("analytics service unavailable")
 		}
-		return s.analyticsSvc.GetAnalyticsHealth(ctx)
+		return s.getAnalyticsSvc().GetAnalyticsHealth(ctx)
 	}
 
 	//ipc:method platformGetAnalyticsRuns params:PlatformAnalyticsRunsParams result:AnalyticsRunsResult
 	s.methods["platform.getAnalyticsRuns"] = func(ctx context.Context, params json.RawMessage) (interface{}, error) {
-		if s.analyticsSvc == nil {
+		if s.getAnalyticsSvc() == nil {
 			return nil, fmt.Errorf("analytics service unavailable")
 		}
 		var p PlatformAnalyticsRunsParams
 		_ = json.Unmarshal(params, &p)
-		return s.analyticsSvc.GetAnalyticsRuns(ctx, p.StartDate, p.EndDate, p.Cursor, p.Outcome, p.Branch, p.Limit)
+		return s.getAnalyticsSvc().GetAnalyticsRuns(ctx, p.StartDate, p.EndDate, p.Cursor, p.Outcome, p.Branch, p.Limit)
 	}
 
 	//ipc:method platformGetAnalyticsTrends params:PlatformGetAnalyticsTrendsParams result:AnalyticsTrendsResult
 	s.methods["platform.getAnalyticsTrends"] = func(ctx context.Context, params json.RawMessage) (interface{}, error) {
-		if s.analyticsSvc == nil {
+		if s.getAnalyticsSvc() == nil {
 			return nil, fmt.Errorf("analytics service unavailable")
 		}
 		var p PlatformGetAnalyticsTrendsParams
@@ -1733,56 +1872,56 @@ func (s *Server) registerMethods() {
 		if p.Period == "" {
 			p.Period = "30d"
 		}
-		return s.analyticsSvc.GetAnalyticsTrends(ctx, p.Period)
+		return s.getAnalyticsSvc().GetAnalyticsTrends(ctx, p.Period)
 	}
 
 	//ipc:method platformAuditGenerateReport params:PlatformAuditGenerateReportParams result:ComplianceReportResult
 	s.methods["platform.auditGenerateReport"] = func(ctx context.Context, params json.RawMessage) (interface{}, error) {
-		if s.complianceSvc == nil {
+		if s.getComplianceSvc() == nil {
 			return nil, fmt.Errorf("compliance service unavailable")
 		}
 		var p PlatformAuditGenerateReportParams
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, fmt.Errorf("invalid params: %w", err)
 		}
-		return s.complianceSvc.GenerateReport(ctx, p.ReportType, p.StartDate, p.EndDate, p.Format)
+		return s.getComplianceSvc().GenerateReport(ctx, p.ReportType, p.StartDate, p.EndDate, p.Format)
 	}
 
 	//ipc:method platformAuditListReports params:PlatformAuditListReportsParams result:ComplianceReportsPage
 	s.methods["platform.auditListReports"] = func(ctx context.Context, params json.RawMessage) (interface{}, error) {
-		if s.complianceSvc == nil {
+		if s.getComplianceSvc() == nil {
 			return nil, fmt.Errorf("compliance service unavailable")
 		}
 		var p PlatformAuditListReportsParams
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, fmt.Errorf("invalid params: %w", err)
 		}
-		return s.complianceSvc.ListReports(ctx, p.Cursor, p.Limit)
+		return s.getComplianceSvc().ListReports(ctx, p.Cursor, p.Limit)
 	}
 
 	//ipc:method platformAuditGetReport params:PlatformAuditGetReportParams result:ComplianceReportDetail
 	s.methods["platform.auditGetReport"] = func(ctx context.Context, params json.RawMessage) (interface{}, error) {
-		if s.complianceSvc == nil {
+		if s.getComplianceSvc() == nil {
 			return nil, fmt.Errorf("compliance service unavailable")
 		}
 		var p PlatformAuditGetReportParams
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, fmt.Errorf("invalid params: %w", err)
 		}
-		return s.complianceSvc.GetReport(ctx, p.ReportID)
+		return s.getComplianceSvc().GetReport(ctx, p.ReportID)
 	}
 
 	//ipc:method auditGetRetentionConfig params:AuditGetRetentionConfigParams result:RetentionConfig
 	s.methods["audit.getRetentionConfig"] = func(ctx context.Context, params json.RawMessage) (interface{}, error) {
-		if s.auditRetentionSvc == nil {
+		if s.getAuditRetentionSvc() == nil {
 			return nil, fmt.Errorf("audit retention service unavailable")
 		}
-		return s.auditRetentionSvc.GetRetentionConfig(ctx)
+		return s.getAuditRetentionSvc().GetRetentionConfig(ctx)
 	}
 
 	//ipc:method auditUpdateRetentionConfig params:AuditUpdateRetentionConfigParams result:RetentionConfig
 	s.methods["audit.updateRetentionConfig"] = func(ctx context.Context, params json.RawMessage) (interface{}, error) {
-		if s.auditRetentionSvc == nil {
+		if s.getAuditRetentionSvc() == nil {
 			return nil, fmt.Errorf("audit retention service unavailable")
 		}
 		var p AuditUpdateRetentionConfigParams
@@ -1792,12 +1931,12 @@ func (s *Server) registerMethods() {
 		if p.RetentionDays < 1 || p.RetentionDays > 3650 {
 			return nil, fmt.Errorf("retentionDays must be between 1 and 3650")
 		}
-		return s.auditRetentionSvc.UpdateRetentionConfig(ctx, p.RetentionDays)
+		return s.getAuditRetentionSvc().UpdateRetentionConfig(ctx, p.RetentionDays)
 	}
 
 	//ipc:method auditVerifyIntegrity params:AuditVerifyIntegrityParams result:IntegrityResult
 	s.methods["audit.verifyIntegrity"] = func(ctx context.Context, params json.RawMessage) (interface{}, error) {
-		if s.auditRetentionSvc == nil {
+		if s.getAuditRetentionSvc() == nil {
 			return nil, fmt.Errorf("audit retention service unavailable")
 		}
 		var p AuditVerifyIntegrityParams
@@ -1807,7 +1946,7 @@ func (s *Server) registerMethods() {
 		if p.WindowDays != 30 && p.WindowDays != 90 && p.WindowDays != 365 {
 			return nil, fmt.Errorf("windowDays must be 30, 90, or 365")
 		}
-		return s.auditRetentionSvc.VerifyIntegrity(ctx, p.WindowDays)
+		return s.getAuditRetentionSvc().VerifyIntegrity(ctx, p.WindowDays)
 	}
 
 	//ipc:method platformSyncTelemetry params:PlatformSyncTelemetryParams result:PlatformSyncTelemetryResult
@@ -1816,7 +1955,7 @@ func (s *Server) registerMethods() {
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, fmt.Errorf("invalid params: %w", err)
 		}
-		if s.analyticsSvc == nil {
+		if s.getAnalyticsSvc() == nil {
 			return nil, fmt.Errorf("platform client not configured")
 		}
 		if s.workspaceRootPath() == "" {
@@ -1844,7 +1983,7 @@ func (s *Server) registerMethods() {
 		syncCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 		defer cancel()
 
-		res := s.analyticsSvc.SyncTelemetry(syncCtx, records, p.Repo)
+		res := s.getAnalyticsSvc().SyncTelemetry(syncCtx, records, p.Repo)
 		return PlatformSyncTelemetryResult{
 			Synced: res.Synced,
 			Failed: res.Failed,
@@ -1854,26 +1993,26 @@ func (s *Server) registerMethods() {
 
 	//ipc:method platformGetTeamMembers params:none result:TeamMemberResult[] nullable
 	s.methods["platform.getTeamMembers"] = func(ctx context.Context, _ json.RawMessage) (interface{}, error) {
-		if s.teamSvc == nil {
+		if s.getTeamSvc() == nil {
 			return nil, fmt.Errorf("platform client not configured")
 		}
-		return s.teamSvc.GetMembers(ctx)
+		return s.getTeamSvc().GetMembers(ctx)
 	}
 
 	//ipc:method platformCreatePortalSession params:none result:PortalSessionResult
 	s.methods["platform.createPortalSession"] = func(ctx context.Context, _ json.RawMessage) (interface{}, error) {
-		if s.billingSvc == nil {
+		if s.getBillingSvc() == nil {
 			return nil, fmt.Errorf("platform client not configured")
 		}
-		return s.billingSvc.CreatePortalSession(ctx)
+		return s.getBillingSvc().CreatePortalSession(ctx)
 	}
 
 	//ipc:method platformHealthCheck params:none result:HealthResponse
 	s.methods["platform.healthCheck"] = func(ctx context.Context, _ json.RawMessage) (interface{}, error) {
-		if s.platformClient == nil {
+		if s.getPlatformClient() == nil {
 			return map[string]interface{}{"status": "offline", "mode": "offline"}, nil
 		}
-		resp, err := s.platformClient.API().GetHealthWithResponse(ctx)
+		resp, err := s.getPlatformClient().API().GetHealthWithResponse(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("health check failed: %w", err)
 		}
@@ -1885,10 +2024,10 @@ func (s *Server) registerMethods() {
 
 	//ipc:method platformAuthDeviceCode params:none result:{device_code:string;expires_in:number;interval:number;user_code:string;verification_uri:string}
 	s.methods["platform.authDeviceCode"] = func(ctx context.Context, _ json.RawMessage) (interface{}, error) {
-		if s.platformClient == nil {
+		if s.getPlatformClient() == nil {
 			return nil, fmt.Errorf("platform client not configured")
 		}
-		resp, err := s.platformClient.API().AuthDeviceCodeWithResponse(ctx)
+		resp, err := s.getPlatformClient().API().AuthDeviceCodeWithResponse(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("authDeviceCode: %w", err)
 		}
@@ -1900,7 +2039,7 @@ func (s *Server) registerMethods() {
 
 	//ipc:method platformAuthDeviceToken params:PlatformAuthDeviceTokenParams result:unknown
 	s.methods["platform.authDeviceToken"] = func(ctx context.Context, params json.RawMessage) (interface{}, error) {
-		if s.platformClient == nil {
+		if s.getPlatformClient() == nil {
 			return nil, fmt.Errorf("platform client not configured")
 		}
 		var p PlatformAuthDeviceTokenParams
@@ -1910,7 +2049,7 @@ func (s *Server) registerMethods() {
 		if p.DeviceCode == "" {
 			return nil, fmt.Errorf("deviceCode is required")
 		}
-		resp, err := s.platformClient.API().AuthDeviceTokenWithResponse(ctx, platformapi.AuthDeviceTokenJSONRequestBody{
+		resp, err := s.getPlatformClient().API().AuthDeviceTokenWithResponse(ctx, platformapi.AuthDeviceTokenJSONRequestBody{
 			DeviceCode: p.DeviceCode,
 		})
 		if err != nil {
@@ -1930,7 +2069,7 @@ func (s *Server) registerMethods() {
 
 	//ipc:method platformAuthGithub params:PlatformAuthGithubParams result:{access_token:string;expires_in:number;refresh_token:string;status:string;token_type:string}
 	s.methods["platform.authGithub"] = func(ctx context.Context, params json.RawMessage) (interface{}, error) {
-		if s.platformClient == nil {
+		if s.getPlatformClient() == nil {
 			return nil, fmt.Errorf("platform client not configured")
 		}
 		var p PlatformAuthGithubParams
@@ -1940,7 +2079,7 @@ func (s *Server) registerMethods() {
 		if p.GithubAccessToken == "" {
 			return nil, fmt.Errorf("githubAccessToken is required")
 		}
-		resp, err := s.platformClient.API().AuthGithubWithResponse(ctx, platformapi.AuthGithubJSONRequestBody{
+		resp, err := s.getPlatformClient().API().AuthGithubWithResponse(ctx, platformapi.AuthGithubJSONRequestBody{
 			GithubAccessToken: p.GithubAccessToken,
 		})
 		if err != nil {
@@ -1954,7 +2093,7 @@ func (s *Server) registerMethods() {
 
 	//ipc:method platformAuthRefresh params:PlatformAuthRefreshParams result:{access_token:string;expires_in:number;refresh_token:string;status:string;token_type:string}
 	s.methods["platform.authRefresh"] = func(ctx context.Context, params json.RawMessage) (interface{}, error) {
-		if s.platformClient == nil {
+		if s.getPlatformClient() == nil {
 			return nil, fmt.Errorf("platform client not configured")
 		}
 		var p PlatformAuthRefreshParams
@@ -1964,7 +2103,7 @@ func (s *Server) registerMethods() {
 		if p.RefreshToken == "" {
 			return nil, fmt.Errorf("refreshToken is required")
 		}
-		resp, err := s.platformClient.API().AuthRefreshWithResponse(ctx, platformapi.AuthRefreshJSONRequestBody{
+		resp, err := s.getPlatformClient().API().AuthRefreshWithResponse(ctx, platformapi.AuthRefreshJSONRequestBody{
 			RefreshToken: p.RefreshToken,
 		})
 		if err != nil {
@@ -1978,7 +2117,7 @@ func (s *Server) registerMethods() {
 
 	//ipc:method platformAuthSignout params:PlatformAuthSignoutParams result:{message:string;status:string}
 	s.methods["platform.authSignout"] = func(ctx context.Context, params json.RawMessage) (interface{}, error) {
-		if s.platformClient == nil {
+		if s.getPlatformClient() == nil {
 			return nil, fmt.Errorf("platform client not configured")
 		}
 		var p PlatformAuthSignoutParams
@@ -1988,7 +2127,7 @@ func (s *Server) registerMethods() {
 		if p.RefreshToken == "" {
 			return nil, fmt.Errorf("refreshToken is required")
 		}
-		resp, err := s.platformClient.API().AuthSignoutWithResponse(ctx, platformapi.AuthSignoutJSONRequestBody{
+		resp, err := s.getPlatformClient().API().AuthSignoutWithResponse(ctx, platformapi.AuthSignoutJSONRequestBody{
 			RefreshToken: p.RefreshToken,
 		})
 		if err != nil {
@@ -2015,18 +2154,39 @@ func (s *Server) registerMethods() {
 	// session, and an env var frozen at spawn would work for exactly one token
 	// lifetime and then regress silently. An empty token clears the credential,
 	// which is what sign-out sends.
+	//
+	// A signed-in session is itself proof a platform exists (#756): a daemon
+	// spawned with no api_url/api_key/license_key at all — the state a
+	// brand-new user is in the instant they sign in — otherwise never gets a
+	// platform client to receive this push, and every platform.* method
+	// (including this one) answers "not configured" forever. So a REAL token
+	// (not the empty one sign-out/an unauthenticated startup sync sends)
+	// lazily builds the default client here instead of erroring. An empty
+	// token on a still-nil client is left alone: there is nothing to clear,
+	// and the daemon genuinely has no platform configured, which is exactly
+	// the state platform.status and friends must keep reporting accurately
+	// (pairs with #748's not_configured classification, which keys off the
+	// "not configured" text below — keep it if this message ever changes).
 	//ipc:method platformSetSessionToken params:PlatformSetSessionTokenParams result:StatusOK
 	s.methods["platform.setSessionToken"] = func(_ context.Context, params json.RawMessage) (interface{}, error) {
-		if s.platformClient == nil {
-			return nil, fmt.Errorf("platform client not configured")
-		}
 		var p PlatformSetSessionTokenParams
 		if len(params) > 0 && string(params) != "null" {
 			if err := json.Unmarshal(params, &p); err != nil {
 				return nil, fmt.Errorf("invalid params: %w", err)
 			}
 		}
-		s.platformClient.SetSessionToken(p.Token)
+		pc := s.getPlatformClient()
+		if pc == nil {
+			if strings.TrimSpace(p.Token) == "" {
+				return nil, fmt.Errorf("platform client not configured")
+			}
+			var err error
+			pc, err = s.ensurePlatformClient()
+			if err != nil {
+				return nil, fmt.Errorf("platform client: %w", err)
+			}
+		}
+		pc.SetSessionToken(p.Token)
 		return map[string]bool{"ok": true}, nil
 	}
 
@@ -3376,7 +3536,7 @@ func (s *Server) registerMethods() {
 			// so this server-side push is safe alongside that best-effort
 			// uploader. Fire-and-forget: PushPipelineRun buffers + retries
 			// internally and never blocks the pipeline.
-			if s.analyticsSvc != nil {
+			if s.getAnalyticsSvc() != nil {
 				repoForPush := record.Repo
 				if repoForPush == "" {
 					repoForPush = p.Repo
@@ -3387,7 +3547,7 @@ func (s *Server) registerMethods() {
 				if mapErr != nil {
 					log.Printf("notifyComplete: map RunRecord for platform push failed (non-fatal): %v", mapErr)
 				} else {
-					s.analyticsSvc.PushPipelineRun(context.Background(), runRecord)
+					s.getAnalyticsSvc().PushPipelineRun(context.Background(), runRecord)
 				}
 			}
 		} else {

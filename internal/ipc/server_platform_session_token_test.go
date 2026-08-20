@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"sync"
 	"testing"
 
 	"github.com/nightgauge/nightgauge/internal/platform"
@@ -113,17 +115,117 @@ func TestPlatformSetSessionToken_ChangesTheWireCredential(t *testing.T) {
 	}
 }
 
-// TestPlatformSetSessionToken_NoPlatformClient keeps the nil guard honest: a
-// community build with no platform configured must answer with an error rather
-// than panic when the extension pushes a token at it.
-func TestPlatformSetSessionToken_NoPlatformClient(t *testing.T) {
+// TestPlatformSetSessionToken_ConstructsClientFromSessionAlone is #756: a
+// daemon spawned with no platform_url, no api_key, and no license_key — the
+// state a brand-new user is in the instant they sign in through the
+// extension — must still accept the session token instead of answering
+// "platform client not configured" forever. The signed-in session is itself
+// proof a platform exists.
+func TestPlatformSetSessionToken_ConstructsClientFromSessionAlone(t *testing.T) {
+	s := NewServer(nil)
+	s.writer = &bytes.Buffer{}
+
+	if s.platformClient != nil {
+		t.Fatal("test setup: server should start with no platform client")
+	}
+
+	if _, err := callHandler(t, s, "platform.setSessionToken", PlatformSetSessionTokenParams{
+		Token: "jwt.session.token",
+	}); err != nil {
+		t.Fatalf("setSessionToken on an unconfigured daemon: %v", err)
+	}
+
+	if s.platformClient == nil {
+		t.Fatal("a signed-in session did not construct the platform client")
+	}
+	if !s.platformClient.HasSessionToken() {
+		t.Error("the constructed client did not receive the session token")
+	}
+}
+
+// TestPlatformSetSessionToken_LazyClientUsesDefaultBaseURL locks in the other
+// half of #756's acceptance criteria: the lazily-built client defaults to
+// platform.DefaultConfig()'s base URL, because the session token carries no
+// URL of its own and none was configured at startup.
+func TestPlatformSetSessionToken_LazyClientUsesDefaultBaseURL(t *testing.T) {
+	s := NewServer(nil)
+	s.writer = &bytes.Buffer{}
+
+	if _, err := callHandler(t, s, "platform.setSessionToken", PlatformSetSessionTokenParams{
+		Token: "jwt.session.token",
+	}); err != nil {
+		t.Fatalf("setSessionToken: %v", err)
+	}
+
+	want := platform.DefaultConfig().BaseURL
+	if want == "" {
+		t.Fatal("platform.DefaultConfig().BaseURL is empty — the lazy path would build a client with no host")
+	}
+	if got := sessionOnlyPlatformConfig().BaseURL; got != want {
+		t.Errorf("lazy-path base URL = %q, want the default %q", got, want)
+	}
+}
+
+// TestPlatformSetSessionToken_EmptyTokenNoClientStaysUnconfigured is the
+// other side of #756: a daemon that never had api_url/api_key/license_key at
+// startup AND has no signed-in session (an empty token — sign-out, or the
+// extension's startup sync finding nothing in SecretStorage) must still get
+// no client at all, with an accurate "not configured" message rather than a
+// spuriously constructed, unauthenticated one.
+func TestPlatformSetSessionToken_EmptyTokenNoClientStaysUnconfigured(t *testing.T) {
 	s := NewServer(nil)
 	s.writer = &bytes.Buffer{}
 
 	_, err := callHandler(t, s, "platform.setSessionToken", PlatformSetSessionTokenParams{
-		Token: "jwt.session.token",
+		Token: "",
 	})
 	if err == nil {
-		t.Fatal("expected an error when no platform client is configured")
+		t.Fatal("expected an error when no session and no platform config is present")
+	}
+	if !strings.Contains(err.Error(), "not configured") {
+		t.Errorf("error = %q, want it to say the platform is not configured (see #748's classification)", err.Error())
+	}
+	if s.platformClient != nil {
+		t.Error("an empty token must not construct a platform client")
+	}
+}
+
+// TestPlatformSetSessionToken_ConcurrentSignInBuildsOneClient exercises the
+// exact ordering hazard #756 called out: IPC requests are dispatched one
+// goroutine per call (see handleRequest), so nothing guarantees a single
+// setSessionToken call lands before any other platform.* request reaches a
+// cold daemon. Firing many setSessionToken calls at once must still leave
+// exactly one platform client installed — never a second one built (and
+// health-polling) after the first, and never two goroutines racing the
+// nil check and each losing the assignment. Run with -race.
+func TestPlatformSetSessionToken_ConcurrentSignInBuildsOneClient(t *testing.T) {
+	s := NewServer(nil)
+	s.writer = &bytes.Buffer{}
+
+	const n = 32
+	var wg sync.WaitGroup
+	errs := make([]error, n)
+	wg.Add(n)
+	for i := 0; i < n; i++ {
+		go func(i int) {
+			defer wg.Done()
+			_, err := callHandler(t, s, "platform.setSessionToken", PlatformSetSessionTokenParams{
+				Token: "jwt.session.token",
+			})
+			errs[i] = err
+		}(i)
+	}
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Errorf("goroutine %d: setSessionToken: %v", i, err)
+		}
+	}
+	if s.platformClient == nil {
+		t.Fatal("no platform client was constructed")
+	}
+	if !s.platformClient.HasSessionToken() {
+		t.Error("the surviving client never received the session token")
 	}
 }
