@@ -187,6 +187,14 @@ export const MANIFEST_CONTRIBUTES: ManifestContributes = {
       icon: "$(refresh)",
     },
     {
+      // Registered since pipeline completion for pr-merge already opens it
+      // automatically; this is the manual entry point the command's own
+      // registration comment always intended for the palette (#766).
+      command: "nightgauge.showPipelineSummary",
+      title: "Nightgauge: Show Pipeline Summary",
+      icon: "$(checklist)",
+    },
+    {
       command: "nightgauge.viewContext",
       title: "View Context File",
       icon: "$(json)",
@@ -282,6 +290,14 @@ export const MANIFEST_CONTRIBUTES: ManifestContributes = {
       icon: "$(settings-gear)",
     },
     {
+      // One-time config-key migration; this is the manual
+      // re-run entry point its own registration comment calls a "Palette
+      // command" (#766) but that never got a contribution.
+      command: "nightgauge.runSettingsMigration",
+      title: "Nightgauge: Run Settings Migration",
+      icon: "$(sync)",
+    },
+    {
       command: "nightgauge.editTeamConfig",
       title: "Nightgauge: Edit Team Config",
       icon: "$(edit)",
@@ -356,11 +372,6 @@ export const MANIFEST_CONTRIBUTES: ManifestContributes = {
       icon: "$(collapse-all)",
     },
     {
-      command: "nightgauge.selectAll",
-      title: "Nightgauge: Select All Issues",
-      icon: "$(check-all)",
-    },
-    {
       command: "nightgauge.runEpicBatch",
       title: "Nightgauge: Run All Issues in Epic",
       icon: "$(run-all)",
@@ -414,6 +425,11 @@ export const MANIFEST_CONTRIBUTES: ManifestContributes = {
       command: "nightgauge.configureMattermostWorkspace",
       title: "Nightgauge: Configure Mattermost Workspace",
       icon: "$(settings-gear)",
+    },
+    {
+      command: "nightgauge.showNotifierSettings",
+      title: "Nightgauge: Notifier Settings",
+      icon: "$(bell-dot)",
     },
     {
       command: "nightgauge.telemetrySettings",
@@ -518,6 +534,39 @@ export const MANIFEST_CONTRIBUTES: ManifestContributes = {
       icon: "$(bookmark)",
     },
     {
+      // Saves an arbitrary query string, not necessarily the currently
+      // active one — distinct from `saveQuery` above, which always saves
+      // whatever is currently running (#766).
+      command: "nightgauge.saveQueryAs",
+      title: "Nightgauge: Save Query As...",
+      icon: "$(bookmark)",
+    },
+    // The four hosted-dashboard commands (#766). Each opens a route on
+    // dashboard.nightgauge.dev via vscode.env.openExternal. Every route was
+    // verified against the deployed SPA's own router table before being
+    // contributed — "/cost" was NOT a route (the catch-all redirects to
+    // /login), which is why openCostForecast now targets /analytics/forecast.
+    {
+      command: "nightgauge.openAnalyticsDashboard",
+      title: "Nightgauge: Open Analytics Dashboard",
+      icon: "$(graph)",
+    },
+    {
+      command: "nightgauge.openAuditDashboard",
+      title: "Nightgauge: Open Audit Dashboard",
+      icon: "$(law)",
+    },
+    {
+      command: "nightgauge.openComplianceReports",
+      title: "Nightgauge: Open Compliance Reports",
+      icon: "$(verified)",
+    },
+    {
+      command: "nightgauge.openCostForecast",
+      title: "Nightgauge: Open Cost Forecast",
+      icon: "$(graph-line)",
+    },
+    {
       command: "nightgauge.loadSavedQuery",
       title: "Nightgauge: Load Saved Query",
       icon: "$(folder-opened)",
@@ -591,6 +640,21 @@ export const MANIFEST_CONTRIBUTES: ManifestContributes = {
       command: "nightgauge.searchKnowledge",
       title: "Nightgauge: Search Knowledge",
       icon: "$(search)",
+      category: "Nightgauge Knowledge",
+    },
+    {
+      // Both views auto-refresh via a file watcher; these are the manual
+      // force-refresh fallbacks, previously registered with no way to
+      // invoke them (#766).
+      command: "nightgauge.refreshKnowledgeView",
+      title: "Nightgauge: Refresh Knowledge View",
+      icon: "$(refresh)",
+      category: "Nightgauge Knowledge",
+    },
+    {
+      command: "nightgauge.activeKnowledge.refresh",
+      title: "Nightgauge: Refresh Active Issue Knowledge",
+      icon: "$(refresh)",
       category: "Nightgauge Knowledge",
     },
     {
@@ -743,6 +807,15 @@ export const MANIFEST_CONTRIBUTES: ManifestContributes = {
       title: "Autonomous: Clear Quota Cooldown",
       category: "Nightgauge",
       icon: "$(watch)",
+    },
+    {
+      // Manual escape hatch for the per-issue lifetime failure cap,
+      // same shape as the quota-cooldown escape hatch above but previously
+      // missing its own contribution (#766).
+      command: "nightgauge.autonomousClearIssueFailures",
+      title: "Autonomous: Clear Issue Failures",
+      category: "Nightgauge",
+      icon: "$(clear-all)",
     },
     {
       command: "nightgauge.repositoriesToggleAutoRefresh",

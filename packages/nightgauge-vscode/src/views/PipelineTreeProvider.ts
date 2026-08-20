@@ -38,6 +38,27 @@ import type { QueueState } from "../types/queue";
 
 import type { PipelineStateService, PipelineState } from "../services/PipelineStateService";
 import type { StagePhase } from "../schemas/pipelineState";
+import { getPrefixedMainChannel } from "../utils/logger";
+
+// Folded into the shared main channel behind a "pipeline-tree" tag (#749)
+// rather than a dedicated destination. Lazy + guarded so importing this
+// module never touches the VS Code API outside a real extension host.
+let _outputChannel: vscode.OutputChannel | null = null;
+function logPipelineTreeWarning(message: string): void {
+  if (!_outputChannel) {
+    try {
+      _outputChannel = getPrefixedMainChannel("pipeline-tree");
+    } catch {
+      // Not in a VS Code host
+    }
+  }
+  const line = `[${new Date().toISOString()}] [WARN] ${message}`;
+  if (_outputChannel) {
+    _outputChannel.appendLine(line);
+  } else {
+    console.warn(line);
+  }
+}
 import type { CompletedIssuesService } from "../services/CompletedIssuesService";
 import type { CompletedIssuesState } from "../types/completedIssues";
 import { IpcClient } from "../services/IpcClient";
@@ -298,12 +319,24 @@ export class PipelineTreeProvider
     });
     this.disposables.push(disposable);
 
-    // Initial sync
-    queueService.getQueue().then((state) => {
-      if (state) {
-        this.syncQueueFromState(state);
-      }
-    });
+    // Initial sync. Not awaited (setQueueService is synchronous) — with no
+    // Go daemon running (every first launch, every CI runner) this rejects,
+    // and an un-caught .then() is an unhandled rejection escaping activation
+    // (#765). The queue section simply stays empty until onQueueChanged
+    // fires from a later, successful call.
+    queueService
+      .getQueue()
+      .then((state) => {
+        if (state) {
+          this.syncQueueFromState(state);
+        }
+      })
+      .catch((error) => {
+        logPipelineTreeWarning(
+          `Initial queue sync failed, queue section left empty until the next update: ` +
+            `${error instanceof Error ? error.message : String(error)}`
+        );
+      });
   }
 
   /**

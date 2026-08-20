@@ -30,6 +30,27 @@ import type {
   AttentionListResult,
 } from "../../services/IpcClientBase";
 import { AttentionGroupTreeItem, AttentionTreeItem, compareRequests } from "./attentionTreeItems";
+import { getPrefixedMainChannel } from "../../utils/logger";
+
+// Folded into the shared main channel behind an "attention" tag (#749) rather
+// than a dedicated destination. Lazy + guarded so importing this module never
+// touches the VS Code API outside a real extension host.
+let _outputChannel: vscode.OutputChannel | null = null;
+function logAttentionWarning(message: string): void {
+  if (!_outputChannel) {
+    try {
+      _outputChannel = getPrefixedMainChannel("attention");
+    } catch {
+      // Not in a VS Code host
+    }
+  }
+  const line = `[${new Date().toISOString()}] [WARN] ${message}`;
+  if (_outputChannel) {
+    _outputChannel.appendLine(line);
+  } else {
+    console.warn(line);
+  }
+}
 
 /** Minimal slice of IpcClient this provider needs — eases testing. */
 export interface AttentionIpcSource {
@@ -89,12 +110,28 @@ export class AttentionTreeProvider
     void this.refresh();
   }
 
-  /** Re-fetch the open request list from the attached IPC source. */
+  /**
+   * Re-fetch the open request list from the attached IPC source.
+   *
+   * Never rejects: with no Go daemon running (every first launch, every CI
+   * runner) `attentionList()` rejects, and every caller here — the initial
+   * fetch in `attach()`, and the repo-scoped sweep's `onChanged` callback —
+   * fires this without awaiting the result. Swallowing here, once, is what
+   * keeps that an inert degradation instead of an unhandled rejection
+   * escaping activation (#765).
+   */
   async refresh(): Promise<void> {
     if (!this.attachedSource) return;
-    const result = await this.attachedSource.attentionList(false);
-    this.requests = (result.requests ?? []).filter((r) => !isTerminalState(r.lifecycle.state));
-    this._onDidChangeTreeData.fire();
+    try {
+      const result = await this.attachedSource.attentionList(false);
+      this.requests = (result.requests ?? []).filter((r) => !isTerminalState(r.lifecycle.state));
+      this._onDidChangeTreeData.fire();
+    } catch (error) {
+      logAttentionWarning(
+        `AttentionTreeProvider.refresh() failed, Action Center left showing its last known ` +
+          `state: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
   }
 
   /** Fold one `attention.event` push into local state (create/update/drop) and refresh. */

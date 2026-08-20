@@ -135,13 +135,21 @@ describe("registerAuditDashboardCommands", () => {
     );
   });
 
-  it("openCostForecast calls openExternal with /cost URL", async () => {
+  // Was "calls openExternal with /cost URL" — an assertion that locked in the
+  // bug. The dashboard SPA has no /cost route; its router declares
+  // `analytics/forecast` (breadcrumb "Cost Forecast") and its catch-all is
+  // `{path:"**", redirectTo:"/login"}`, so the old URL bounced a signed-in
+  // user to the login page. Verified against the deployed bundle.
+  it("openCostForecast opens the real /analytics/forecast route, not /cost", async () => {
     registerAuditDashboardCommands(() => undefined);
     const call = mockRegisterCommand.mock.calls.find(
       ([id]) => id === "nightgauge.openCostForecast"
     );
     await call![1]();
     expect(mockOpenExternal).toHaveBeenCalledWith(
+      expect.objectContaining({ _url: "https://dashboard.nightgauge.dev/analytics/forecast" })
+    );
+    expect(mockOpenExternal).not.toHaveBeenCalledWith(
       expect.objectContaining({ _url: "https://dashboard.nightgauge.dev/cost" })
     );
   });

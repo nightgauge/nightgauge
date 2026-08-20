@@ -11,8 +11,18 @@
 
 import * as vscode from "vscode";
 import type { PipelineStage } from "@nightgauge/sdk";
-import type { PipelineState } from "../../services/PipelineStateService";
+import type { PipelineState, ExtendedStageState } from "../../services/PipelineStateService";
 import { getStageBudget } from "../../utils/incrediConfig";
+
+/**
+ * `PipelineState.stages` is a `Record<string, ExtendedStageState>` with no
+ * guarantee it carries all six hardcoded stage names — a run still in
+ * flight, a partially written state file, or a skipped stage can omit any of
+ * them. Missing stages render as "not started" (the same pending/circle
+ * treatment `getStatusIcon`/`getStatusClass` already give any unrecognized
+ * status) rather than throwing after the panel has been created (#767).
+ */
+const NOT_STARTED_STAGE: ExtendedStageState = { status: "pending" };
 
 /**
  * Generate nonce for script security
@@ -629,7 +639,7 @@ function getStageTimelineHtml(state: PipelineState): string {
   ];
 
   const stageItems = stageOrder.map((stageName) => {
-    const stageData = state.stages[stageName as keyof typeof state.stages];
+    const stageData = state.stages[stageName as keyof typeof state.stages] ?? NOT_STARTED_STAGE;
     const statusClass = getStatusClass(stageData.status);
     const statusIcon = getStatusIcon(stageData.status);
 

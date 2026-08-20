@@ -6,7 +6,13 @@ const DASHBOARD_ROUTES: Record<string, string> = {
   audit: "/audit",
   analytics: "/analytics",
   compliance: "/compliance",
-  cost: "/cost",
+  // NOT "/cost". The dashboard SPA has no such route — its router declares
+  // `analytics/forecast` with breadcrumb "Cost Forecast", and its own nav links
+  // `{label:"Cost Forecast", route:"/analytics/forecast"}`. The catch-all is
+  // `{path:"**", redirectTo:"/login"}`, so "/cost" bounced a signed-in user to
+  // the login page — a dead command that looked wired up. Verified against the
+  // deployed bundle, not assumed.
+  cost: "/analytics/forecast",
 };
 
 function getDashboardBaseUrl(): string {
