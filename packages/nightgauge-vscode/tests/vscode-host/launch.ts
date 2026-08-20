@@ -92,9 +92,25 @@ async function main(): Promise<void> {
         "--disable-workspace-trust",
       ],
     });
-  } catch {
-    // runTests rejects on a non-zero exit; the in-host reporter has already
-    // printed the detail, so do not bury it under a stack trace from here.
+  } catch (err) {
+    // runTests rejects for two very different reasons and they need different
+    // treatment.
+    //
+    // If VSCode STARTED and a test failed, the in-host reporter has already
+    // printed the detail and a stack trace from here would bury it.
+    //
+    // If VSCode never started — the download failed, the archive was corrupt,
+    // the platform build is unavailable — there is no in-host reporter and
+    // this rejection carries the ONLY description of what went wrong.
+    // Swallowing it leaves "the in-host test module never wrote its
+    // transcript" as the sole output, which says a failure happened and
+    // nothing about why. That cost a red `main` and a blind investigation.
+    //
+    // The transcript is the discriminator: absent means we never got that far.
+    if (!fs.existsSync(transcript)) {
+      console.error("ERROR: VSCode failed to launch. Underlying error:");
+      console.error(err instanceof Error ? (err.stack ?? err.message) : String(err));
+    }
     exitCode = 1;
   }
 
