@@ -7,12 +7,12 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { getCoreSettings, DEFAULT_CORE_SETTINGS } from "../coreSettings";
-import { ConfigBridge } from "../../services/ConfigBridge";
-import { DEFAULT_CONFIG } from "../schema";
+import { getCoreSettings, DEFAULT_CORE_SETTINGS } from "../../src/config/coreSettings";
+import { ConfigBridge } from "../../src/services/ConfigBridge";
+import { DEFAULT_CONFIG } from "../../src/config/schema";
 
 // Mock ConfigBridge
-vi.mock("../../services/ConfigBridge", () => ({
+vi.mock("../../src/services/ConfigBridge", () => ({
   ConfigBridge: {
     getInstance: vi.fn(),
   },
@@ -22,12 +22,17 @@ describe("coreSettings", () => {
   let mockConfigBridge: {
     isInitialized: ReturnType<typeof vi.fn>;
     getUI: ReturnType<typeof vi.fn>;
+    getLmStudio: ReturnType<typeof vi.fn>;
   };
 
   beforeEach(() => {
     mockConfigBridge = {
       isInitialized: vi.fn(),
       getUI: vi.fn(),
+      // getCoreSettings() reads LM Studio settings via ConfigBridge.getLmStudio()
+      // (Issue #2058); stub it alongside getUI() so the mock matches the real
+      // interface.
+      getLmStudio: vi.fn(),
     };
     vi.mocked(ConfigBridge.getInstance).mockReturnValue(
       mockConfigBridge as unknown as ConfigBridge
@@ -88,6 +93,7 @@ describe("coreSettings", () => {
     it("handles undefined ui config gracefully", () => {
       mockConfigBridge.isInitialized.mockReturnValue(true);
       mockConfigBridge.getUI.mockReturnValue(undefined);
+      mockConfigBridge.getLmStudio.mockReturnValue(DEFAULT_CONFIG.lm_studio);
 
       const settings = getCoreSettings();
 

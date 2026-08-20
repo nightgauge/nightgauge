@@ -1,5 +1,5 @@
 /**
- * Unit tests for pipelineUISettings
+ * Unit tests for sidebarSettings
  *
  * Tests ConfigBridge integration and fallback behavior.
  *
@@ -7,18 +7,18 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { getPipelineUISettings, DEFAULT_PIPELINE_UI_SETTINGS } from "../pipelineUISettings";
-import { ConfigBridge } from "../../services/ConfigBridge";
-import { DEFAULT_CONFIG } from "../schema";
+import { getSidebarSettings, DEFAULT_SIDEBAR_SETTINGS } from "../../src/config/sidebarSettings";
+import { ConfigBridge } from "../../src/services/ConfigBridge";
+import { DEFAULT_CONFIG } from "../../src/config/schema";
 
 // Mock ConfigBridge
-vi.mock("../../services/ConfigBridge", () => ({
+vi.mock("../../src/services/ConfigBridge", () => ({
   ConfigBridge: {
     getInstance: vi.fn(),
   },
 }));
 
-describe("pipelineUISettings", () => {
+describe("sidebarSettings", () => {
   let mockConfigBridge: {
     isInitialized: ReturnType<typeof vi.fn>;
     getUI: ReturnType<typeof vi.fn>;
@@ -38,13 +38,13 @@ describe("pipelineUISettings", () => {
     vi.clearAllMocks();
   });
 
-  describe("getPipelineUISettings", () => {
+  describe("getSidebarSettings", () => {
     it("returns defaults when ConfigBridge is not initialized", () => {
       mockConfigBridge.isInitialized.mockReturnValue(false);
 
-      const settings = getPipelineUISettings();
+      const settings = getSidebarSettings();
 
-      expect(settings).toEqual(DEFAULT_PIPELINE_UI_SETTINGS);
+      expect(settings).toEqual(DEFAULT_SIDEBAR_SETTINGS);
       expect(mockConfigBridge.isInitialized).toHaveBeenCalled();
       expect(mockConfigBridge.getUI).not.toHaveBeenCalled();
     });
@@ -52,49 +52,42 @@ describe("pipelineUISettings", () => {
     it("returns values from ConfigBridge when initialized", () => {
       mockConfigBridge.isInitialized.mockReturnValue(true);
       mockConfigBridge.getUI.mockReturnValue({
-        pipeline: {
-          auto_continue: false,
-          auto_continue_delay: 2000,
+        sidebar: {
+          hide_empty_sections: true,
         },
       });
 
-      const settings = getPipelineUISettings();
+      const settings = getSidebarSettings();
 
-      expect(settings.autoContinue).toBe(false);
-      expect(settings.autoContinueDelay).toBe(2000);
+      expect(settings.hideEmptySections).toBe(true);
     });
 
     it("falls back to defaults for missing config values", () => {
       mockConfigBridge.isInitialized.mockReturnValue(true);
       mockConfigBridge.getUI.mockReturnValue({
-        pipeline: {
-          auto_continue: false,
-          // auto_continue_delay undefined
-        },
+        sidebar: {},
       });
 
-      const settings = getPipelineUISettings();
+      const settings = getSidebarSettings();
 
-      expect(settings.autoContinue).toBe(false);
-      expect(settings.autoContinueDelay).toBe(DEFAULT_CONFIG.ui!.pipeline!.auto_continue_delay);
+      expect(settings.hideEmptySections).toBe(DEFAULT_CONFIG.ui!.sidebar!.hide_empty_sections);
     });
 
     it("handles undefined ui config gracefully", () => {
       mockConfigBridge.isInitialized.mockReturnValue(true);
       mockConfigBridge.getUI.mockReturnValue(undefined);
 
-      const settings = getPipelineUISettings();
+      const settings = getSidebarSettings();
 
-      expect(settings).toEqual(DEFAULT_PIPELINE_UI_SETTINGS);
+      expect(settings).toEqual(DEFAULT_SIDEBAR_SETTINGS);
     });
   });
 
-  describe("DEFAULT_PIPELINE_UI_SETTINGS", () => {
-    it("matches DEFAULT_CONFIG.ui.pipeline values", () => {
-      const defaults = DEFAULT_CONFIG.ui!.pipeline!;
+  describe("DEFAULT_SIDEBAR_SETTINGS", () => {
+    it("matches DEFAULT_CONFIG.ui.sidebar values", () => {
+      const defaults = DEFAULT_CONFIG.ui!.sidebar!;
 
-      expect(DEFAULT_PIPELINE_UI_SETTINGS.autoContinue).toBe(defaults.auto_continue);
-      expect(DEFAULT_PIPELINE_UI_SETTINGS.autoContinueDelay).toBe(defaults.auto_continue_delay);
+      expect(DEFAULT_SIDEBAR_SETTINGS.hideEmptySections).toBe(defaults.hide_empty_sections);
     });
   });
 });

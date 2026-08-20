@@ -7,12 +7,15 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { getReadyItemsSettings, DEFAULT_READY_ITEMS_SETTINGS } from "../readyItemsSettings";
-import { ConfigBridge } from "../../services/ConfigBridge";
-import { DEFAULT_CONFIG } from "../schema";
+import {
+  getReadyItemsSettings,
+  DEFAULT_READY_ITEMS_SETTINGS,
+} from "../../src/config/readyItemsSettings";
+import { ConfigBridge } from "../../src/services/ConfigBridge";
+import { DEFAULT_CONFIG } from "../../src/config/schema";
 
 // Mock ConfigBridge
-vi.mock("../../services/ConfigBridge", () => ({
+vi.mock("../../src/services/ConfigBridge", () => ({
   ConfigBridge: {
     getInstance: vi.fn(),
   },

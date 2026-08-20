@@ -7,12 +7,15 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { getProjectBoardSettings, DEFAULT_PROJECT_BOARD_SETTINGS } from "../projectBoardSettings";
-import { ConfigBridge } from "../../services/ConfigBridge";
-import { DEFAULT_CONFIG } from "../schema";
+import {
+  getProjectBoardSettings,
+  DEFAULT_PROJECT_BOARD_SETTINGS,
+} from "../../src/config/projectBoardSettings";
+import { ConfigBridge } from "../../src/services/ConfigBridge";
+import { DEFAULT_CONFIG } from "../../src/config/schema";
 
 // Mock ConfigBridge
-vi.mock("../../services/ConfigBridge", () => ({
+vi.mock("../../src/services/ConfigBridge", () => ({
   ConfigBridge: {
     getInstance: vi.fn(),
   },

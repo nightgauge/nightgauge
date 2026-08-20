@@ -588,7 +588,7 @@ issue_references:
   # The highest number this repository has issued (issues and pull requests
   # share one sequence). Bump this as the repository grows; the guard tells you
   # when it must be bumped, so it cannot silently rot.
-  high_water_mark: 717
+  high_water_mark: 755
   # Numbers that may be issued while a pull request is open. Deliberately tight:
   # the whole point of #673 is that the margin between a dead reference and a
   # wrong live one is a handful of issue numbers, and a generous slack reopens
