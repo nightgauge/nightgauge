@@ -1879,7 +1879,8 @@ export class Dashboard implements vscode.Disposable {
         break;
 
       case "selectTab": {
-        // Webview reports active tab for server-side pre-rendering (Issue #1539).
+        // The webview reports its active tab so the next server-side render
+        // pre-renders the right one.
         // The allowlist is DashboardHtml.ts's VALID_TABS — the same list the tab
         // bar renders from. A local copy lived here until #776 and had drifted a
         // tab short of the bar ("epics"), so the tab the user clicked was
