@@ -21,24 +21,56 @@
  * `package.json contributes.commands`) with no `registerCommand` anywhere in
  * `src/`.
  *
- * `nightgauge.selectAll` — the only implementation is
- * `ProjectBoardTreeProvider.selectAll()`, a method that no command binds to.
- * The palette entry "Nightgauge: Select All Issues" throws
- * `command 'nightgauge.selectAll' not found` when a user picks it. This is
- * the exact failure #745 predicted, found on the tier's first run.
+ * Empty: `nightgauge.selectAll` was the only entry (#764) — its contribution
+ * and orphaned `ProjectBoardTreeProvider.selectAll()` implementation were
+ * both deleted rather than wired up, since the provider they belonged to is
+ * never instantiated post-#2184 (the top-level project board views it
+ * rendered were removed; status groups now live under each repository in the
+ * Repositories view).
  */
-export const CONTRIBUTED_WITHOUT_REGISTRATION: readonly string[] = ["nightgauge.selectAll"];
+export const CONTRIBUTED_WITHOUT_REGISTRATION: readonly string[] = [];
+
+/** Why a registered command carries no `contributes.commands` entry. */
+export type UncontributedReason =
+  /** Invoked by clicking a `TreeItem` whose `command` field names it directly. */
+  | "tree-item"
+  /** Invoked by clicking a `StatusBarItem` whose `command` field names it. */
+  | "status-bar"
+  /** Invoked via `executeCommand` from inside one of our own webview panels
+   * (a button, a link) — reachable, just not from the palette. */
+  | "webview-internal"
+  /** Invoked via `executeCommand` as the action button on a notification or
+   * a follow-up prompt, never directly by name. */
+  | "notification"
+  /** NOT classified as deliberate — genuinely unreachable, but resolving it
+   * (contribute or delete) depends on a fact this repo cannot check. Kept in
+   * the baseline as a tracked finding rather than silently mislabeled. */
+  | "unverified-external";
+
+export interface UncontributedCommand {
+  readonly id: string;
+  readonly reason: UncontributedReason;
+  /** Where the binding actually lives, so the classification is checkable. */
+  readonly note: string;
+}
 
 /**
  * Registered at runtime but absent from `contributes.commands`.
  *
  * These are invisible to the palette and to the `generate-package-contributions --check`
- * drift gate, so nothing else in the repository can see them at all. Most look
- * deliberate — a command bound to a tree item, a status-bar item, or a
- * notification button does not need a palette entry — but "deliberate" is a
- * judgement no tool has ever made about this list, and a few (`saveQueryAs`,
- * `openAnalyticsDashboard`, `openAuditDashboard`, `openComplianceReports`,
- * `openCostForecast`) read like user-facing features with no way to reach them.
+ * drift gate, so nothing else in the repository can see them at all.
+ * `commands.suite.ts` asserts on the `id`s below — every entry is classified,
+ * not merely counted, and `nightgauge.autonomousClearQuotaCooldown`-shaped
+ * bugs (a real UI-facing feature with nothing wiring it up) are not allowed to
+ * hide behind "most of this list looks deliberate" (#766).
+ *
+ * Fixed in #766: `saveQueryAs`, `autonomousClearIssueFailures`,
+ * `refreshKnowledgeView`, `activeKnowledge.refresh`, `runSettingsMigration`,
+ * `showNotifierSettings`, and `showPipelineSummary` were all genuinely
+ * unreachable (no tree item, status bar, webview, or notification bound any
+ * of them) and are now contributed. `openAnalyticsDashboard`,
+ * `openAuditDashboard`, `openComplianceReports`, and `openCostForecast` are
+ * NOT fixed — see the note on each below.
  *
  * Excluded from this list, structurally rather than by name: the five
  * commands VSCode synthesizes for every contributed view
@@ -46,48 +78,53 @@ export const CONTRIBUTED_WITHOUT_REGISTRATION: readonly string[] = ["nightgauge.
  * `.toggleVisibility`). Those are the platform's, not ours — see
  * `syntheticViewCommandIds()` in `commands.suite.ts`.
  */
-export const REGISTERED_WITHOUT_CONTRIBUTION: readonly string[] = [
-  "nightgauge.activeKnowledge.openFile",
-  "nightgauge.activeKnowledge.refresh",
-  "nightgauge.autonomousClearIssueFailures",
-  "nightgauge.configureForgeInstance",
-  "nightgauge.fixAutoMergeSetting",
-  "nightgauge.openAnalyticsDashboard",
-  "nightgauge.openAuditDashboard",
-  "nightgauge.openComplianceReports",
-  "nightgauge.openCostForecast",
-  "nightgauge.openCurrentTabInBrowser",
-  "nightgauge.pipelineConnectivityAction",
-  "nightgauge.platform.switchEnvironment",
-  "nightgauge.reconnectEventStreams",
-  "nightgauge.refreshKnowledgeView",
-  "nightgauge.retryWorkspaceSync",
-  "nightgauge.runSettingsMigration",
-  "nightgauge.saveQueryAs",
-  "nightgauge.showNotifierSettings",
-  "nightgauge.showPipelineSummary",
-  "nightgauge.showPlatformStatus",
+export const REGISTERED_WITHOUT_CONTRIBUTION: readonly UncontributedCommand[] = [
+  {
+    id: "nightgauge.activeKnowledge.openFile",
+    reason: "tree-item",
+    note: "ActiveIssueKnowledgeTreeItem.ts — clicking a knowledge file row opens it.",
+  },
+  {
+    id: "nightgauge.configureForgeInstance",
+    reason: "webview-internal",
+    note: "views/settings/SettingsPanel.ts — invoked from the Settings webview's forge section.",
+  },
+  {
+    id: "nightgauge.fixAutoMergeSetting",
+    reason: "notification",
+    note: "bootstrap/services.ts — action button on the auto-merge-misconfigured notification.",
+  },
+  {
+    id: "nightgauge.openCurrentTabInBrowser",
+    reason: "webview-internal",
+    note: 'views/dashboard/Dashboard.ts — invoked from a dashboard webview "open in browser" action.',
+  },
+  {
+    id: "nightgauge.pipelineConnectivityAction",
+    reason: "status-bar",
+    note: "PipelineConnectivityStatusItem — its default commandId, bound on click.",
+  },
+  {
+    id: "nightgauge.platform.switchEnvironment",
+    reason: "status-bar",
+    note: "PlatformEnvironmentStatusBarItem — its default commandId, bound on click.",
+  },
+  {
+    id: "nightgauge.reconnectEventStreams",
+    reason: "status-bar",
+    note: "EventStreamStatusBarItem — its default commandId, bound on click.",
+  },
+  {
+    id: "nightgauge.retryWorkspaceSync",
+    reason: "status-bar",
+    note: "WorkspaceSyncStatusItem's RETRY_COMMAND — bound on click.",
+  },
+  {
+    id: "nightgauge.showPlatformStatus",
+    reason: "status-bar",
+    note: "PlatformStatusBarItem / PlatformStatusBar — both set it as their status bar command.",
+  },
 ];
-
-/**
- * Not enforced by an assertion — recorded here because the smoke tier is how
- * it was found, and the next person to read this file should know.
- *
- * `getStageTimelineHtml()` in `src/views/summary/PipelineSummaryHtml.ts`
- * indexes `state.stages[name].status` for each of six hardcoded stage names
- * with no guard, but `PipelineState.stages` is a `Record<string, …>` with no
- * such guarantee. Any state missing one key — a run still in flight, a
- * partially written state file, a stage that was skipped — throws a
- * TypeError inside `updatePanel()`, after the panel has already been
- * created. The user gets an empty Pipeline Summary tab and no error.
- *
- * Out of scope for #745 (do not fix the product from the tier that found the
- * bug); the smoke fixture supplies all six keys so the case exercises the
- * panel rather than this defect.
- */
-export const PIPELINE_SUMMARY_PARTIAL_STATE_NOTE =
-  "PipelineSummaryHtml.getStageTimelineHtml() throws on a PipelineState missing any of its " +
-  "six hardcoded stage keys; the panel renders blank.";
 
 export interface KnownFault {
   /** Matched against the fault's stringified reason/stack. */
@@ -98,25 +135,11 @@ export interface KnownFault {
 /**
  * Unhandled rejections that escape during startup.
  *
- * Two are product defects; one is an artefact of the host VSCode refusing
- * modal dialogs in test mode. They are listed together because the assertion
- * is the same either way — anything NOT listed fails the run.
+ * The one remaining entry is an artefact of the host VSCode refusing modal
+ * dialogs in test mode, not a product defect — recorded here because the
+ * assertion is the same either way: anything NOT listed fails the run.
  */
 export const KNOWN_STARTUP_REJECTIONS: readonly KnownFault[] = [
-  {
-    signature: /Go backend not connected[\s\S]*AttentionTreeProvider\.refresh/,
-    note:
-      "PRODUCT BUG: the attention sweep started 4s into activate() calls " +
-      "AttentionTreeProvider.refresh() without awaiting or catching it. With no Go " +
-      "backend (any first launch, and every CI runner) the IPC call rejects and the " +
-      "rejection is unhandled.",
-  },
-  {
-    signature: /Go backend not connected[\s\S]*IssueQueueService\.getQueue/,
-    note:
-      "PRODUCT BUG: same shape as the attention sweep — IssueQueueService.getQueue() " +
-      "is invoked during startup with no catch, and rejects when the Go backend is absent.",
-  },
   {
     signature: /DialogService: refused to show dialog in tests/,
     note:

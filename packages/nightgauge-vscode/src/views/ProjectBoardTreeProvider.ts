@@ -1022,16 +1022,6 @@ export class ProjectBoardTreeProvider
   }
 
   /**
-   * Select all visible issues
-   */
-  selectAll(): void {
-    for (const item of this.cachedItems) {
-      this.selectedIssueNumbers.add(item.issueNumber);
-    }
-    this.refreshDisplay();
-  }
-
-  /**
    * Clear all selections
    */
   clearSelection(): void {

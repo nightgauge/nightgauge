@@ -129,18 +129,37 @@ suite("commands", () => {
     );
   });
 
-  test("registered commands with no contribution match the recorded baseline", async () => {
+  test("registered commands with no contribution match the recorded, classified baseline", async () => {
     const contributed = contributedCommandIds();
     const contributedSet = new Set(contributed);
     const registered = await registeredOwnCommandIds(contributed);
     const uncontributed = registered.filter((id) => !contributedSet.has(id));
     assert.deepEqual(
       uncontributed,
-      [...REGISTERED_WITHOUT_CONTRIBUTION],
+      REGISTERED_WITHOUT_CONTRIBUTION.map((entry) => entry.id),
       `Registered-but-uncontributed commands changed. These are invisible to the palette and ` +
         `to the manifest drift gate. If the list GREW, contribute the new command in ` +
-        `src/manifest/index.ts or confirm it is meant to be programmatic-only; if it SHRANK, ` +
-        `delete the id from REGISTERED_WITHOUT_CONTRIBUTION in tests/vscode-host/known-issues.ts.`
+        `src/manifest/index.ts or add a classified entry to REGISTERED_WITHOUT_CONTRIBUTION; ` +
+        `if it SHRANK, delete the entry from tests/vscode-host/known-issues.ts.`
     );
+  });
+
+  test("every uncontributed command carries a real classification, not a bare id", () => {
+    for (const entry of REGISTERED_WITHOUT_CONTRIBUTION) {
+      assert.ok(
+        entry.reason && entry.reason.length > 0,
+        `${entry.id} in REGISTERED_WITHOUT_CONTRIBUTION has no \`reason\` — a bare id is a ` +
+          `count, not a classification (#766). Every entry must say WHY it has no ` +
+          `contribution: bound to a tree item, a status bar item, a webview, a ` +
+          `notification — or, when none of those apply, "unverified-external" with a note ` +
+          `explaining what would need confirming.`
+      );
+      assert.ok(
+        entry.note && entry.note.trim().length > 10,
+        `${entry.id} in REGISTERED_WITHOUT_CONTRIBUTION has no substantive \`note\` — the ` +
+          `classification must point at the actual binding (file/class), not just assert a ` +
+          `category.`
+      );
+    }
   });
 });
