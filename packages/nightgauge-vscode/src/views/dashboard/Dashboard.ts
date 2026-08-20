@@ -131,7 +131,6 @@ type WebViewMessage =
     }
   | { type: "firewallResetFilters" }
   | { type: "refreshProjectBoard" }
-  | { type: "selectProject"; projectName: string | null }
   | { type: "healthToggle"; collapsed: boolean }
   | { type: "healthTrendRange"; range: string }
   | {
@@ -196,11 +195,7 @@ type WebViewMessage =
   | { type: "mergeDependabotPR"; prNodeId: string; owner: string; repo: string }
   | { type: "dependabotRefresh" }
   | { type: "openInBrowser"; tab?: string }
-  | { type: "signInWithPlatform" }
-  | { type: "retryHealthTab" }
-  | { type: "retryRunsTab" }
-  | { type: "retryTrendsTab" }
-  | { type: "retryComplianceTab" };
+  | { type: "signInWithPlatform" };
 
 type HistoricalRunTarget = HistoricalRunIdentity & { issueNumber: number };
 
@@ -1767,16 +1762,6 @@ export class Dashboard implements vscode.Disposable {
         this.updatePanel("msg:refreshProjectBoard");
         break;
 
-      case "selectProject":
-        // Multi-project mode: switch project selection
-        // setSelectedProject is ProjectBoardService-specific (not on IWorkItemProvider)
-        if (this.projectBoardService instanceof ProjectBoardService) {
-          this.projectBoardService.setSelectedProject(message.projectName ?? "");
-          await this.refreshProjectBoardData();
-          this.updatePanel("msg:selectProject");
-        }
-        break;
-
       case "healthToggle":
         // Health widget collapse/expand toggle (Issue #655)
         // Persist state so widget remembers collapse across refreshes
@@ -2092,22 +2077,6 @@ export class Dashboard implements vscode.Disposable {
 
       case "signInWithPlatform":
         await vscode.commands.executeCommand("nightgauge.signIn");
-        break;
-
-      case "retryHealthTab":
-        await this.refreshHealthAnalyticsData();
-        break;
-
-      case "retryRunsTab":
-        await this.refreshRunsData();
-        break;
-
-      case "retryTrendsTab":
-        await this.fetchTrendsData();
-        break;
-
-      case "retryComplianceTab":
-        await this.refreshComplianceData();
         break;
 
       case "openInBrowser": {
@@ -3008,6 +2977,12 @@ export class Dashboard implements vscode.Disposable {
    * Refresh platform analytics health data via IPC (Issue #3318).
    * Lazy-loaded on first health tab activation. Re-fetches on healthRefresh message.
    * Never throws — PlatformAnalyticsHealthService returns a typed PlatformResult (#748).
+   *
+   * Sets an explicit `isLoading` state and renders it before the fetch resolves
+   * (#752) — mirroring refreshRunsData/fetchTrendsData/refreshComplianceData,
+   * which already did this. Without it, pressing Retry on an identical failure
+   * re-rendered byte-identical HTML: nothing on screen moved, so the button
+   * read as broken even though the request did fire.
    */
   async refreshHealthAnalyticsData(): Promise<void> {
     const endpoint = "platform.getAnalyticsHealth";
@@ -3026,6 +3001,15 @@ export class Dashboard implements vscode.Disposable {
       }
       const ipc = (await import("../../services/IpcClient")).IpcClient.getInstance();
       this.platformAnalyticsHealthService ??= new PlatformAnalyticsHealthService(ipc);
+
+      const loading: AnalyticsHealthData = {
+        result: null,
+        hasAccess: true,
+        isLoading: true,
+      };
+      this.healthAnalyticsData = loading;
+      this.updatePanel("healthRefresh");
+
       const result = await this.platformAnalyticsHealthService.fetchAndCache();
       if (!result.ok) {
         this.healthAnalyticsData = {

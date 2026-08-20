@@ -77,6 +77,22 @@ describe("getHealthTabHtml", () => {
     expect(html).toContain("Refresh");
   });
 
+  it("isLoading = true → renders the loading state, not the error/empty state (#752)", () => {
+    const html = getHealthTabHtml({ result: null, hasAccess: true, isLoading: true }, null);
+    expect(html).toContain("Loading health data");
+    expect(html).not.toContain("Health data unavailable");
+  });
+
+  it("isLoading = true with a prior result still present → renders loading, not the stale result (#752)", () => {
+    // A retry starts from a populated tab (isLoading flips to true while the
+    // old result/failure is still on the object) — the loading state must
+    // win, or a retry on a tab that already has data renders no visible
+    // change at all.
+    const html = getHealthTabHtml({ ...makeData(), isLoading: true }, null);
+    expect(html).toContain("Loading health data");
+    expect(html).not.toContain("Overall Score");
+  });
+
   it("data present → renders overall score", () => {
     const html = getHealthTabHtml(makeData(), null);
     expect(html).toContain("72");

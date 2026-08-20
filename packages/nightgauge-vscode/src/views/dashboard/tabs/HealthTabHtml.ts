@@ -202,6 +202,23 @@ function getHealthCheckReportHtml(report: HealthCheckReport | null | undefined):
 // ---------------------------------------------------------------------------
 
 /**
+ * Render the health tab's loading state. Shown whenever `healthData.isLoading`
+ * is true — including a retry, so a retry that fails again still produces a
+ * visibly different render than the state before it was pressed: loading,
+ * then the (possibly identical) error, rather than one static render with no
+ * observable change in between (#752).
+ */
+function getHealthLoadingHtml(): string {
+  return `
+    <div class="health-tab">
+      <div class="health-empty-state">
+        <div class="health-empty-icon">⏳</div>
+        <p class="health-empty-title">Loading health data…</p>
+      </div>
+    </div>`;
+}
+
+/**
  * Render the health empty/error state from the classified `PlatformFailure`
  * the service actually reported — never a guess (#748, replacing the prior
  * string-keyed `PlatformErrorType` switch, which always rendered
@@ -235,12 +252,16 @@ function getHealthErrorState(failure: PlatformFailure | undefined): {
 
 /**
  * Render the full health tab HTML.
- * When healthData is null or has no result, renders a contextual error state (#3679).
+ * While a fetch is in flight, renders the loading state (#752). When
+ * healthData is null or has no result, renders a contextual error state (#748).
  */
 export function getHealthTabHtml(
   healthData: AnalyticsHealthData | null,
   fetchedAt: Date | null
 ): string {
+  if (healthData?.isLoading) {
+    return getHealthLoadingHtml();
+  }
   const data = healthData?.result ?? null;
   if (data === null) {
     const { icon, title, hint, cta } = getHealthErrorState(healthData?.failure);
