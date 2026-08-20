@@ -16,6 +16,7 @@ import {
   getPipelineSlotsSectionHtml,
   getAnalyticsSectionHtml,
   getToolCallsHtml,
+  VALID_TABS,
   type FirewallDashboardData,
   type AdapterStatusData,
   type UsageLimitsData,
@@ -1878,22 +1879,12 @@ export class Dashboard implements vscode.Disposable {
         break;
 
       case "selectTab": {
-        // Webview reports active tab for server-side pre-rendering (Issue #1539)
-        const VALID_TABS = [
-          "overview",
-          "pipeline",
-          "analytics",
-          "history",
-          "audit",
-          "discovery",
-          "cost",
-          "health",
-          "runs",
-          "trends",
-          "compliance",
-          "dependencies",
-        ];
-        if (VALID_TABS.includes(message.tab)) {
+        // Webview reports active tab for server-side pre-rendering (Issue #1539).
+        // The allowlist is DashboardHtml.ts's VALID_TABS — the same list the tab
+        // bar renders from. A local copy lived here until #776 and had drifted a
+        // tab short of the bar ("epics"), so the tab the user clicked was
+        // silently dropped and the next re-render pre-rendered the stale one.
+        if ((VALID_TABS as readonly string[]).includes(message.tab)) {
           this.activeTab = message.tab;
           // Lazy-load audit data on first tab activation (ADR-001)
           if (message.tab === "audit" && this.auditLogData === null) {
