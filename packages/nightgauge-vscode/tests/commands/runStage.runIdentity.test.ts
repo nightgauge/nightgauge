@@ -25,11 +25,13 @@ const {
   mockRegisterCommand,
   mockShowErrorMessage,
   mockShowInformationMessage,
+  mockShowInputBox,
   mockRunStageSkillHeadless,
 } = vi.hoisted(() => ({
   mockRegisterCommand: vi.fn(),
   mockShowErrorMessage: vi.fn(),
   mockShowInformationMessage: vi.fn(),
+  mockShowInputBox: vi.fn(),
   mockRunStageSkillHeadless: vi.fn(),
 }));
 
@@ -39,7 +41,7 @@ vi.mock("vscode", () => ({
     showInformationMessage: mockShowInformationMessage,
     showWarningMessage: vi.fn(),
     showQuickPick: vi.fn(),
-    showInputBox: vi.fn(),
+    showInputBox: mockShowInputBox,
   },
   commands: { registerCommand: mockRegisterCommand, executeCommand: vi.fn() },
   workspace: {
@@ -212,4 +214,37 @@ describe("nightgauge.runStage — receives or mints, and books ONE running trans
     expect(svc.endRun).toHaveBeenCalledTimes(1);
     expect(svc._installed()).toBeNull();
   });
+
+  it("dispatches with a strictly valid prompted issue number", async () => {
+    const svc = makeStateService();
+    mockShowInputBox.mockResolvedValue("793");
+    mockRunStageSkillHeadless.mockReturnValue({ process: { pid: CHILD_PID } });
+
+    const { handler, deps } = register(svc);
+    deps.treeProvider.getCurrentIssueNumber.mockReturnValue(undefined);
+    await handler("feature-dev" as PipelineStage);
+
+    expect(mockRunStageSkillHeadless.mock.calls[0]?.slice(0, 3)).toEqual([
+      "feature-dev",
+      793,
+      expect.any(Object),
+    ]);
+  });
+
+  it.each(["12junk", "1.5", "-4"])(
+    "rejects malformed prompted issue number %s without dispatching",
+    async (input) => {
+      const svc = makeStateService();
+      mockShowInputBox.mockResolvedValue(input);
+
+      const { handler, deps } = register(svc);
+      deps.treeProvider.getCurrentIssueNumber.mockReturnValue(undefined);
+      await handler("feature-dev" as PipelineStage);
+
+      expect(mockRunStageSkillHeadless).not.toHaveBeenCalled();
+      expect(mockShowErrorMessage).toHaveBeenCalledWith(
+        "Please enter a valid positive issue number"
+      );
+    }
+  );
 });

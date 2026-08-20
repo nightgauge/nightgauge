@@ -15,40 +15,14 @@ import * as vscode from "vscode";
 import type { RecoveryAction, RecoveryRequiredPayload } from "@nightgauge/sdk";
 
 const ACTION_LABELS: Record<RecoveryAction, string> = {
-  "resume-from-paused-stage": "Resume from paused stage",
-  "run-producing-stage": "Run producing stage now",
-  "restart-from-beginning": "Restart from beginning",
-  "discard-run": "Discard run",
   "open-run-state-directory": "Open run-state directory",
   cancel: "Cancel",
 };
 
 const ACTION_ICONS: Record<RecoveryAction, string> = {
-  "resume-from-paused-stage": "codicon-debug-continue",
-  "run-producing-stage": "codicon-play",
-  "restart-from-beginning": "codicon-debug-restart",
-  "discard-run": "codicon-trash",
   "open-run-state-directory": "codicon-folder-opened",
   cancel: "codicon-close",
 };
-
-const DESTRUCTIVE_ACTIONS: ReadonlySet<RecoveryAction> = new Set(["discard-run"]);
-
-/**
- * Whether `restart-from-beginning` should require confirmation. Computed
- * from the run state — destructive only when an existing paused state
- * would be archived.
- */
-function isRestartDestructive(payload: RecoveryRequiredPayload): boolean {
-  return payload.runState === "paused";
-}
-
-function buttonClass(action: RecoveryAction, payload: RecoveryRequiredPayload): string {
-  if (DESTRUCTIVE_ACTIONS.has(action)) return "danger";
-  if (action === "restart-from-beginning" && isRestartDestructive(payload)) return "danger";
-  if (action === "resume-from-paused-stage" || action === "run-producing-stage") return "primary";
-  return "secondary";
-}
 
 /**
  * Generate HTML for the Recovery Dialog webview.
@@ -66,11 +40,7 @@ export function getRecoveryDialogHtml(
     .map((action) => {
       const label = escapeHtml(ACTION_LABELS[action] ?? action);
       const icon = ACTION_ICONS[action] ?? "codicon-circle-outline";
-      const cls = buttonClass(action, payload);
-      const destructive =
-        DESTRUCTIVE_ACTIONS.has(action) ||
-        (action === "restart-from-beginning" && isRestartDestructive(payload));
-      return `      <button class="action-button ${cls}" data-action="${action}" data-destructive="${destructive ? "true" : "false"}">
+      return `      <button class="action-button secondary" data-action="${escapeHtml(action)}">
         <span class="codicon ${icon}"></span>
         <span class="action-label">${label}</span>
       </button>`;
@@ -134,7 +104,7 @@ function renderSubtitle(payload: RecoveryRequiredPayload): string {
   const producer = payload.producingStage
     ? `Producer: <strong>${escapeHtml(formatStageName(payload.producingStage))}</strong>. `
     : "";
-  return `${producer}Choose how to recover from this failure.`;
+  return `${producer}Inspect the run state or close this dialog.`;
 }
 
 function getStyles(): string {
@@ -282,15 +252,6 @@ function getStyles(): string {
       outline-offset: 2px;
     }
 
-    .action-button.primary {
-      background: var(--vscode-button-background);
-      color: var(--vscode-button-foreground);
-    }
-
-    .action-button.primary:hover:not(:disabled) {
-      background: var(--vscode-button-hoverBackground);
-    }
-
     .action-button.secondary {
       background: var(--vscode-button-secondaryBackground);
       color: var(--vscode-button-secondaryForeground);
@@ -300,27 +261,12 @@ function getStyles(): string {
       background: var(--vscode-button-secondaryHoverBackground);
     }
 
-    .action-button.danger {
-      background: var(--vscode-inputValidation-errorBackground);
-      color: var(--vscode-inputValidation-errorForeground);
-      border: 1px solid var(--vscode-inputValidation-errorBorder);
-    }
-
-    .action-button.danger.confirming {
-      background: var(--vscode-errorForeground, #ff5555);
-      color: var(--vscode-button-foreground);
-    }
-
     .codicon::before {
       font-family: codicon;
       font-size: 14px;
     }
 
     .codicon-warning::before { content: "\\ea6c"; }
-    .codicon-debug-continue::before { content: "\\eacf"; }
-    .codicon-play::before { content: "\\eb2c"; }
-    .codicon-debug-restart::before { content: "\\ead4"; }
-    .codicon-trash::before { content: "\\ea81"; }
     .codicon-folder-opened::before { content: "\\eaf7"; }
     .codicon-close::before { content: "\\ea76"; }
     .codicon-circle-outline::before { content: "\\eabc"; }
@@ -336,57 +282,30 @@ function getScript(): string {
   return `
     (function() {
       const vscode = acquireVsCodeApi();
-      let pendingConfirm = null;
-      let pendingResetTimer = null;
 
       function send(action) {
         vscode.postMessage({ type: 'action', action: action, confirmed: true });
         document.querySelectorAll('.action-button').forEach(b => b.setAttribute('disabled', 'true'));
       }
 
-      function clearPending() {
-        if (pendingConfirm) {
-          const button = document.querySelector('[data-action="' + pendingConfirm + '"]');
-          if (button) {
-            const labelEl = button.querySelector('.action-label');
-            if (labelEl) labelEl.textContent = button.getAttribute('data-original-label') || labelEl.textContent;
-            button.classList.remove('confirming');
-          }
-          pendingConfirm = null;
-        }
-        if (pendingResetTimer) {
-          clearTimeout(pendingResetTimer);
-          pendingResetTimer = null;
-        }
-      }
-
       document.querySelectorAll('.action-button').forEach(button => {
-        const labelEl = button.querySelector('.action-label');
-        if (labelEl) button.setAttribute('data-original-label', labelEl.textContent);
-
         button.addEventListener('click', () => {
           const action = button.getAttribute('data-action');
-          const destructive = button.getAttribute('data-destructive') === 'true';
           if (!action) return;
-
-          if (destructive && pendingConfirm !== action) {
-            clearPending();
-            pendingConfirm = action;
-            const labelEl2 = button.querySelector('.action-label');
-            if (labelEl2) labelEl2.textContent = 'Click again to confirm';
-            button.classList.add('confirming');
-            pendingResetTimer = setTimeout(clearPending, 5000);
-            return;
-          }
-
-          clearPending();
           send(action);
         });
       });
 
+      window.addEventListener('message', (event) => {
+        if (event.data && event.data.type === 'recoveryActionComplete') {
+          document.querySelectorAll('.action-button').forEach(button => {
+            button.removeAttribute('disabled');
+          });
+        }
+      });
+
       document.addEventListener('keydown', (e) => {
         if (e.key === 'Escape') {
-          clearPending();
           send('cancel');
         }
       });

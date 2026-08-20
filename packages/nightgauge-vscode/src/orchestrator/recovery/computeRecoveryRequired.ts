@@ -28,13 +28,10 @@ import {
 
 /**
  * Inputs derived from `run-state.json` that gate which actions are
- * presentable. `pausedContextIntact` distinguishes "paused with usable
- * resume_from_stage state" (Resume button enabled) from "paused but the
- * context file the resume stage needs is gone" (Resume omitted).
+ * presentable.
  */
 export interface RecoveryRunStateView {
   lifecycle: RecoveryRunState;
-  pausedContextIntact: boolean;
 }
 
 /**
@@ -58,11 +55,7 @@ export function computeRecoveryRequired(
     ? (stageGraph.getProducingStage(classified.missingFile)?.stage ?? null)
     : null;
 
-  const availableActions = computeAvailableActions(
-    classified.kind,
-    runStateView,
-    producingStage !== null
-  );
+  const availableActions = computeAvailableActions();
 
   return {
     issueNumber,
@@ -123,53 +116,18 @@ function classifyError(error: unknown): ClassifiedError | null {
   return null;
 }
 
+/** Whether the Recovery Dialog owns presentation of this failure. */
+export function isRecoveryRequiredError(error: unknown): boolean {
+  return classifyError(error) !== null;
+}
+
 /**
  * Compute the available actions per the AC matrix in PLAN.md.
  *
- * | run state                 | Resume | Run prod | Restart | Discard | Open dir | Cancel |
- * | ------------------------- | ------ | -------- | ------- | ------- | -------- | ------ |
- * | paused (ctx intact)       |   Y    |    Y     |    Y    |    Y    |    Y     |   Y    |
- * | paused (ctx stale)        |   N    |    Y     |    Y    |    Y    |    Y     |   Y    |
- * | running (orphaned/stuck)  |   N    |    Y     |    Y    |    N    |    Y     |   Y    |
- * | aborted                   |   N    |    Y     |    Y    |    Y    |    Y     |   Y    |
- * | none (no run-state)       |   N    | Y if known prod | Y |    N    |    Y     |   Y    |
- *
- * `Run producing stage` is omitted when the producer is unknown.
+ * State-changing recovery requires an identity-bound cross-process lease that
+ * the extension host does not yet have. Until that transaction exists, the
+ * dialog is intentionally observational for every run-state shape.
  */
-export function computeAvailableActions(
-  errorKind: RecoveryErrorKind,
-  runStateView: RecoveryRunStateView,
-  hasProducer: boolean
-): RecoveryAction[] {
-  const actions: RecoveryAction[] = [];
-
-  const { lifecycle, pausedContextIntact } = runStateView;
-
-  if (lifecycle === "paused" && pausedContextIntact) {
-    actions.push("resume-from-paused-stage");
-  }
-
-  if (hasProducer) {
-    actions.push("run-producing-stage");
-  }
-
-  // Restart is always offered for recoverable error kinds — it is the
-  // universal fallback. SCHEMA_VERSION_MISMATCH is non-recoverable, so we
-  // gate it here to avoid offering a destructive action that won't help.
-  if (errorKind !== "SCHEMA_VERSION_MISMATCH") {
-    actions.push("restart-from-beginning");
-  }
-
-  // Discard requires a paused/aborted state OR an existing run-state with
-  // a worktree to clean up. We omit it when the pipeline was running
-  // (orphaned) because the destination of "discard" — branch+worktree —
-  // may already be in a partial-cleanup state from the prior crash.
-  if (lifecycle !== "running" && lifecycle !== "none") {
-    actions.push("discard-run");
-  }
-
-  actions.push("open-run-state-directory");
-  actions.push("cancel");
-
-  return actions;
+export function computeAvailableActions(): RecoveryAction[] {
+  return ["open-run-state-directory", "cancel"];
 }

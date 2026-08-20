@@ -15,8 +15,10 @@
  * copy of the module, bundled into this test, not the copy inside
  * `dist/extension.cjs`. They still answer the smoke question — the class
  * builds a panel and renders HTML — but they do not prove the wiring that
- * would call them in production exists. `RecoveryDialog` in particular has
- * no non-test call site anywhere in `src/`.
+ * would call them in production exists. `RecoveryDialog` is now constructed
+ * from `registerRetryCommands`, but that path only opens after a
+ * recovery-shaped retry failure, so this suite still constructs the panel
+ * directly rather than invoking `nightgauge.retryStage`.
  *
  * What is deliberately NOT here: any assertion about the *content* of the
  * rendered body. "Does it come up with the right data" is the data-arrival
@@ -190,7 +192,7 @@ const PANEL_CASES: PanelCase[] = [
         errorKind: "MISSING_INPUT_FILE",
         errorDetail: "vscode-host smoke tier",
         runState: "paused",
-        availableActions: ["run-producing-stage", "cancel"],
+        availableActions: ["open-run-state-directory", "cancel"],
       });
       await delay(0);
     },

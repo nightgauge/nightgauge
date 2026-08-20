@@ -110,6 +110,17 @@ describe("StageTreeItem — phase child management (Issue #1028)", () => {
       expect(children[1].phaseName).toBe("read-planning-context");
     });
 
+    it("assigns the owning stage to every phase child", () => {
+      item.setPhases(makePhases(3));
+
+      const children = item.getChildren() as PhaseTreeItem[];
+      expect(children.map((child) => child.stage)).toEqual([
+        "feature-dev",
+        "feature-dev",
+        "feature-dev",
+      ]);
+    });
+
     it("replaces existing phases when called a second time", () => {
       item.setPhases(makePhases(5));
       // Now replace with a completely different set.

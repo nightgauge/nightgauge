@@ -25,8 +25,6 @@ import {
   registerResumePipelineCommand,
   registerRefreshPipelineCommand,
   registerViewContextCommand,
-  registerRetryStageCommand,
-  registerRetryFromPhaseCommand,
   registerRefreshProjectBoardCommands,
   registerSortProjectBoardCommand,
   registerFilterProjectBoardCommand,
@@ -87,6 +85,7 @@ import { registerFocusProjectBoardViewCommand } from "./focusProjectBoardView";
 import { registerAttentionCommands } from "./attentionCommands";
 import type { AttentionTreeProvider, AttentionTreeItem } from "../views/attention";
 import type { AttentionSweepService } from "../services/AttentionSweepService";
+import { registerRetryCommands } from "./register-retry-commands";
 import { registerConfigureForgeInstanceCommand } from "./configureForgeInstance";
 import { registerConfigureDiscordWebhookCommand } from "./configureDiscordWebhook";
 import { registerConfigureMattermostWebhookCommand } from "./configureMattermostWebhook";
@@ -263,7 +262,6 @@ export function registerAllCommands(deps: AllCommandDeps): void {
   // (constructed separately in bootstrap over the same globalState) and the
   // trial/activation/sign-out commands below (#1138).
   const trialStore = new TrialStateStore(context.globalState);
-
   // ── Inline commands ──────────────────────────────────────────────────
 
   // Show output window — explicit user action from the command palette,
@@ -654,20 +652,14 @@ export function registerAllCommands(deps: AllCommandDeps): void {
     registerViewContextCommand(contextViewer, treeProvider, logger, concurrentPipelineManager),
 
     // Retry commands
-    registerRetryStageCommand(
-      headlessOrchestrator,
-      pipelineStateService ?? null,
+    ...registerRetryCommands({
+      context,
+      orchestrator: headlessOrchestrator,
+      stateService: pipelineStateService ?? null,
       logger,
       statusBar,
-      outputWindow
-    ),
-    registerRetryFromPhaseCommand(
-      headlessOrchestrator,
-      pipelineStateService ?? null,
-      logger,
-      statusBar,
-      outputWindow
-    ),
+      outputWindow,
+    }),
 
     // Tree view refresh commands
     ...registerRefreshProjectBoardCommands(projectBoardProviders, logger),
@@ -901,7 +893,6 @@ export function registerAllCommands(deps: AllCommandDeps): void {
     openUpgradeUrlCommand,
     openManageSubscriptionCommand,
     openSubscriptionUrlCommand,
-
     // Dashboard deep-link commands (Issue #3325)
     // accountId not yet in TokenStorage — ADR-002 in decisions.md
     ...registerAuditDashboardCommands(() => undefined, tierGate, licensePreflight)

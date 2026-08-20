@@ -11,32 +11,23 @@
  */
 
 import * as vscode from "vscode";
-import { PipelineStateError, type PipelineStage } from "@nightgauge/sdk";
+import type { PipelineStage } from "@nightgauge/sdk";
 import type { Logger } from "../utils/logger";
 import type { StatusBarManager } from "../utils/statusBar";
 import type { StageTreeItem, OutputWindow } from "../views";
-import type { HeadlessOrchestrator, StageRunResult } from "../services/HeadlessOrchestrator";
+import type {
+  HeadlessOrchestrator,
+  PipelineCallbacks,
+  StageRunResult,
+} from "../services/HeadlessOrchestrator";
 import type { PipelineStateService } from "../services/PipelineStateService";
-
-/**
- * Codes for failures the Recovery Dialog handles. When a stage retry
- * surfaces one of these, the dispatcher already emitted
- * `onRecoveryRequired` — we suppress the duplicate flat-error toast.
- */
-const RECOVERY_ERROR_CODES = new Set([
-  "MISSING_INPUT_FILE",
-  "CONTEXT_SCHEMA_ERROR",
-  "WORKTREE_MISSING",
-  "RUN_STATE_MISSING",
-]);
-
-function isRecoveryShapedError(err: unknown): boolean {
-  return err instanceof PipelineStateError && RECOVERY_ERROR_CODES.has(err.code);
-}
 import { MAX_STAGE_RETRIES } from "../utils/stageTransitionValidator";
-import { getNextStage, getStageLabel } from "../utils/skillRunner";
 import { createStreamOutputHandler } from "../utils/streamOutputHandler";
 import { createPhaseTracker } from "../utils/phaseTracker";
+import { parsePositiveIssueNumber, validatePositiveIssueNumber } from "../utils/issue-number-input";
+import { getRetryStatusMessage, isRecoveryShapedError } from "./retry-error-presentation";
+import type { RecoveryPresenter } from "../orchestrator/recovery/RecoveryCoordinator";
+import { completeSuccessfulRetry } from "./retry-success";
 
 /**
  * Register the Retry Stage command
@@ -52,7 +43,8 @@ export function registerRetryStageCommand(
   stateService: PipelineStateService | null,
   logger: Logger,
   statusBar: StatusBarManager,
-  outputWindow?: OutputWindow | null
+  outputWindow?: OutputWindow | null,
+  presentRecovery?: RecoveryPresenter
 ): vscode.Disposable {
   return vscode.commands.registerCommand("nightgauge.retryStage", async (item?: StageTreeItem) => {
     // Check if orchestrator is available
@@ -148,20 +140,19 @@ export function registerRetryStageCommand(
       const input = await vscode.window.showInputBox({
         prompt: "Enter issue number",
         placeHolder: "42",
-        validateInput: (value) => {
-          const num = parseInt(value, 10);
-          if (isNaN(num) || num <= 0) {
-            return "Please enter a valid positive issue number";
-          }
-          return null;
-        },
+        validateInput: validatePositiveIssueNumber,
       });
 
       if (!input) {
         return;
       }
 
-      issueNumber = parseInt(input, 10);
+      const parsedIssueNumber = parsePositiveIssueNumber(input);
+      if (parsedIssueNumber === null) {
+        vscode.window.showErrorMessage("Please enter a valid positive issue number");
+        return;
+      }
+      issueNumber = parsedIssueNumber;
     }
 
     // Clear stage error before retry (if item was provided)
@@ -172,6 +163,18 @@ export function registerRetryStageCommand(
     logger.info("Retrying stage", { stage, issueNumber });
     statusBar.showRunning(stage);
 
+    let recoveryPresented = false;
+    let presentDerivedRecovery = (_error: unknown): boolean => false;
+    const finishSuccess = (durationMs?: number) =>
+      completeSuccessfulRetry({
+        stage,
+        issueNumber,
+        durationMs,
+        stateService,
+        logger,
+        statusBar,
+        source: "retry",
+      });
     try {
       // Phase tracking for pipeline tree view progress (@see Issue #1115)
       const phaseTracker = stateService ? createPhaseTracker(stateService) : null;
@@ -182,7 +185,7 @@ export function registerRetryStageCommand(
         : null;
 
       // Use HeadlessOrchestrator.runStage for proper execution
-      const result = await orchestrator.runStage(stage, issueNumber, {
+      const callbacks: PipelineCallbacks = {
         onStageStart: (s: PipelineStage) => {
           logger.debug("Retry stage started", { stage: s, issueNumber });
         },
@@ -219,102 +222,50 @@ export function registerRetryStageCommand(
           );
           return selection === "Continue";
         },
-      });
+        onRecoveryRequired: presentRecovery
+          ? (payload) => {
+              presentRecovery(payload);
+              recoveryPresented = true;
+            }
+          : undefined,
+      };
+      presentDerivedRecovery = (error: unknown): boolean => {
+        if (!presentRecovery) return false;
+        try {
+          const payload = orchestrator.getRecoveryShape(error, issueNumber, stage);
+          if (!payload) return false;
+          presentRecovery(payload);
+          recoveryPresented = true;
+          return true;
+        } catch (shapeError) {
+          logger.warn("Failed to derive retry recovery shape", { error: shapeError });
+          return false;
+        }
+      };
+      const result = await orchestrator.runStage(stage, issueNumber, callbacks);
 
       if (result.success) {
-        logger.info("Stage retry completed successfully", {
-          stage,
-          issueNumber,
-          durationMs: result.durationMs,
-        });
-        statusBar.showComplete(stage);
-
-        // Auto-continue to next stage, respecting execution mode
-        // This mirrors the logic in runStage.ts so retried stages
-        // resume the pipeline instead of stopping after one stage.
-        const nextStage = getNextStage(stage);
-        if (stateService && nextStage && nextStage !== "pipeline-finish") {
-          const autoContinue = vscode.workspace
-            .getConfiguration("nightgauge.pipeline")
-            .get("autoContinue", true);
-
-          if (autoContinue) {
-            const isPaused = await stateService.isPaused();
-            if (!isPaused) {
-              const executionMode = await stateService.getExecutionMode();
-              const delay = vscode.workspace
-                .getConfiguration("nightgauge.pipeline")
-                .get("autoContinueDelay", 1000);
-
-              if (executionMode === "automatic") {
-                logger.info("Auto-continuing after retry (automatic mode)", {
-                  stage,
-                  nextStage,
-                  issueNumber,
-                });
-                setTimeout(() => {
-                  vscode.commands.executeCommand("nightgauge.runStage", nextStage);
-                }, delay);
-              } else {
-                logger.info("Auto-continuing after retry (manual mode)", {
-                  stage,
-                  nextStage,
-                  issueNumber,
-                });
-                setTimeout(() => {
-                  vscode.window
-                    .showInformationMessage(
-                      `${getStageLabel(stage)} complete. Continue to ${getStageLabel(nextStage)}?`,
-                      "Run Now",
-                      "Yes to All",
-                      "Pause"
-                    )
-                    .then(async (selection) => {
-                      if (selection === "Run Now") {
-                        await stateService.resumePipeline();
-                        vscode.commands.executeCommand("nightgauge.runStage", nextStage);
-                      } else if (selection === "Yes to All") {
-                        await stateService.setExecutionMode("automatic");
-                        await stateService.resumePipeline();
-                        vscode.commands.executeCommand("nightgauge.runStage", nextStage);
-                      } else {
-                        await stateService.pausePipeline();
-                        vscode.window.showInformationMessage(
-                          `Pipeline paused. Run "${getStageLabel(nextStage)}" to continue.`
-                        );
-                      }
-                    });
-                }, delay);
-              }
-            } else {
-              vscode.window.showInformationMessage(
-                `Stage "${stage}" completed successfully. Pipeline is paused.`
-              );
-            }
-          } else {
-            vscode.window.showInformationMessage(`Stage "${stage}" completed successfully`);
-          }
-        } else {
-          vscode.window.showInformationMessage(`Stage "${stage}" completed successfully`);
-        }
+        await finishSuccess(result.durationMs);
       } else {
-        // Recovery-shaped failures (MissingInputFile, ContextSchemaError,
-        // WorktreeMissing, RunStateMissing) are surfaced via the Recovery
-        // Dialog by HeadlessOrchestrator's dispatcher. Suppress the flat
-        // error toast here to avoid duplicate UI noise (Issue #3239).
+        // Recovery-shaped failures are surfaced through the callback when the
+        // orchestrator emits it, or derived from the returned error below.
+        // Suppress the flat toast to avoid duplicate UI noise.
         const recoveryShaped = isRecoveryShapedError(result.error);
+        if (recoveryShaped && !recoveryPresented) {
+          presentDerivedRecovery(result.error);
+        }
         logger.warn("Stage retry failed", {
           stage,
           issueNumber,
           error: result.error,
           recoveryShaped,
         });
-        statusBar.showError(
-          result.error instanceof Error
-            ? result.error.message
-            : String(result.error ?? "Stage failed")
-        );
-        if (!recoveryShaped) {
+        statusBar.showError(getRetryStatusMessage(result.error, "Stage failed"));
+        if (recoveryShaped && !recoveryPresented) {
+          vscode.window.showErrorMessage(
+            `Stage "${stage}" requires recovery. Check extension logs for details.`
+          );
+        } else if (!recoveryShaped) {
           vscode.window.showErrorMessage(
             `Stage "${stage}" failed: ${result.error || "Unknown error"}`
           );
@@ -323,14 +274,21 @@ export function registerRetryStageCommand(
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown error occurred";
       const recoveryShaped = isRecoveryShapedError(error);
+      if (recoveryShaped && !recoveryPresented) {
+        presentDerivedRecovery(error);
+      }
       logger.error("Stage retry error", {
         stage,
         issueNumber,
         error: message,
         recoveryShaped,
       });
-      statusBar.showError(message);
-      if (!recoveryShaped) {
+      statusBar.showError(getRetryStatusMessage(error, message));
+      if (recoveryShaped && !recoveryPresented) {
+        vscode.window.showErrorMessage(
+          "Stage retry requires recovery. Check extension logs for details."
+        );
+      } else if (!recoveryShaped) {
         vscode.window.showErrorMessage(`Stage retry error: ${message}`);
       }
     }

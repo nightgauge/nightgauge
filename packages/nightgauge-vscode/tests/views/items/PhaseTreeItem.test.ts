@@ -16,6 +16,12 @@ describe("PhaseTreeItem", () => {
       expect(item.phaseName).toBe("load-context");
     });
 
+    it("preserves owning stage identity when supplied", () => {
+      const item = new PhaseTreeItem("load-context", "failed", "feature-dev");
+
+      expect(item.stage).toBe("feature-dev");
+    });
+
     it("should always have TreeItemCollapsibleState.None", () => {
       const item = new PhaseTreeItem("load-context");
 

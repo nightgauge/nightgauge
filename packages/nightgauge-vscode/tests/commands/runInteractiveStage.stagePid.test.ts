@@ -26,21 +26,27 @@ import type { PipelineStage } from "@nightgauge/sdk";
 
 const CHILD_PID = 626262;
 
-const { mockRegisterCommand, mockRunStageSkillInteractive, mockGetExecutionAdapter } = vi.hoisted(
-  () => ({
-    mockRegisterCommand: vi.fn(),
-    mockRunStageSkillInteractive: vi.fn(),
-    mockGetExecutionAdapter: vi.fn(() => "claude"),
-  })
-);
+const {
+  mockRegisterCommand,
+  mockRunStageSkillInteractive,
+  mockGetExecutionAdapter,
+  mockShowErrorMessage,
+  mockShowInputBox,
+} = vi.hoisted(() => ({
+  mockRegisterCommand: vi.fn(),
+  mockRunStageSkillInteractive: vi.fn(),
+  mockGetExecutionAdapter: vi.fn(() => "claude"),
+  mockShowErrorMessage: vi.fn(),
+  mockShowInputBox: vi.fn(),
+}));
 
 vi.mock("vscode", () => ({
   window: {
-    showErrorMessage: vi.fn(),
+    showErrorMessage: mockShowErrorMessage,
     showInformationMessage: vi.fn(() => ({ then: (cb: (v?: string) => void) => cb(undefined) })),
     showWarningMessage: vi.fn(),
     showQuickPick: vi.fn(),
-    showInputBox: vi.fn(),
+    showInputBox: mockShowInputBox,
   },
   commands: { registerCommand: mockRegisterCommand, executeCommand: vi.fn() },
   workspace: {
@@ -217,4 +223,40 @@ describe("nightgauge.runInteractiveStage — the running transition carries the 
     expect(svc.startStage).toHaveBeenCalledTimes(1);
     expect(svc.startStage.mock.calls[0][1]).toEqual({});
   });
+
+  it("dispatches with a strictly valid prompted issue number", async () => {
+    const svc = makeStateService();
+    mockShowInputBox.mockResolvedValue("793");
+    mockRunStageSkillInteractive.mockReturnValue({
+      process: { pid: CHILD_PID },
+      writeToStdin: vi.fn(),
+    });
+
+    const { handler, deps } = register(svc);
+    deps.treeProvider.getCurrentIssueNumber.mockReturnValue(undefined);
+    await handler("feature-dev" as PipelineStage);
+
+    expect(mockRunStageSkillInteractive).toHaveBeenCalledWith(
+      "feature-dev",
+      793,
+      expect.any(Object)
+    );
+  });
+
+  it.each(["12junk", "1.5", "-4"])(
+    "rejects malformed prompted issue number %s without dispatching",
+    async (input) => {
+      const svc = makeStateService();
+      mockShowInputBox.mockResolvedValue(input);
+
+      const { handler, deps } = register(svc);
+      deps.treeProvider.getCurrentIssueNumber.mockReturnValue(undefined);
+      await handler("feature-dev" as PipelineStage);
+
+      expect(mockRunStageSkillInteractive).not.toHaveBeenCalled();
+      expect(mockShowErrorMessage).toHaveBeenCalledWith(
+        "Please enter a valid positive issue number"
+      );
+    }
+  );
 });
