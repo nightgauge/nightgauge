@@ -10,7 +10,8 @@
  *   2. Create a throwaway workspace folder — empty, so nothing in
  *      `activationEvents` matches and the extension stays inert until the
  *      activation suite says otherwise.
- *   3. Download and launch VSCode with `--extensionDevelopmentPath` at this
+ *   3. Acquire VSCode — resolve the version and download the build — with a
+ *      bounded retry, then launch it with `--extensionDevelopmentPath` at this
  *      package and `--extensionTestsPath` at the bundled entry point.
  *   4. Verify the in-host module actually ran. A window that dies before
  *      loading it can still exit 0; without this check, that is a green tier
@@ -27,7 +28,8 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { runTests } from "@vscode/test-electron";
+import { downloadAndUnzipVSCode, runTests } from "@vscode/test-electron";
+import { ACQUIRE_ATTEMPTS, acquireVSCode } from "../launcher/acquireVSCode";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const packageRoot = path.resolve(here, "..", "..");
@@ -65,9 +67,27 @@ async function main(): Promise<void> {
 
   console.log(`VSCode host smoke tier: workspace ${workspace}`);
 
+  let vscodeExecutablePath: string;
+  try {
+    vscodeExecutablePath = await acquireVSCode({
+      download: () => downloadAndUnzipVSCode(),
+      sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+      log: (message) => console.log(message),
+      warn: (message) => console.error(`WARN: ${message}`),
+    });
+  } catch (err) {
+    console.error(
+      `ERROR: could not acquire VSCode after ${ACQUIRE_ATTEMPTS} attempts. ` +
+        "The smoke tier never ran."
+    );
+    console.error(err instanceof Error ? (err.stack ?? err.message) : String(err));
+    process.exit(1);
+  }
+
   let exitCode = 0;
   try {
     await runTests({
+      vscodeExecutablePath,
       extensionDevelopmentPath: packageRoot,
       extensionTestsPath: TESTS_BUNDLE,
       extensionTestsEnv: {
@@ -99,9 +119,10 @@ async function main(): Promise<void> {
     // If VSCode STARTED and a test failed, the in-host reporter has already
     // printed the detail and a stack trace from here would bury it.
     //
-    // If VSCode never started — the download failed, the archive was corrupt,
-    // the platform build is unavailable — there is no in-host reporter and
-    // this rejection carries the ONLY description of what went wrong.
+    // If VSCode never started — the window died on launch, Electron could not
+    // reach a display, the bundle threw before the reporter loaded — there is
+    // no in-host reporter and this rejection carries the ONLY description of
+    // what went wrong.
     // Swallowing it leaves "the in-host test module never wrote its
     // transcript" as the sole output, which says a failure happened and
     // nothing about why. That cost a red `main` and a blind investigation.

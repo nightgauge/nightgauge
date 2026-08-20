@@ -1032,6 +1032,45 @@ so they are reported as `unowned` and left for you to decide on.
 
 ---
 
+### VSCode host tier dies at "Resolving version…" (#770)
+
+Symptom, from the host smoke job:
+
+```
+VSCode host smoke tier: workspace /tmp/nightgauge-host-XXXXXX
+- Resolving version...
+ERROR: VSCode failed to launch. Underlying error:
+AggregateError [ETIMEDOUT]:
+    at internalConnectMultiple (node:net:1339:18)
+    at Timeout.internalConnectMultipleTimeout (node:net:1969:5)
+ERROR: the in-host test module never wrote its transcript.
+```
+
+**Root cause**: the runner could not open a TCP connection to
+`update.code.visualstudio.com`, which `@vscode/test-electron` contacts to
+resolve the VSCode version before downloading it. Roughly 300ms elapses between
+the two lines — that is the Happy Eyeballs attempt timeout expiring with every
+candidate address unreachable, not a slow or truncated download. Nothing in the
+repository is at fault and the change under test is irrelevant.
+
+**Mitigation already in place**: `tests/launcher/acquireVSCode.ts` retries the
+acquisition three times (2s then 6s backoff) and logs each failed attempt.
+`runTests()` is handed the resolved executable and performs no network I/O, so
+it is **not** retried — a retry there could turn a failing assertion into a
+green run, which is the failure mode this tier exists to prevent.
+
+**Therefore**: a single `WARN: acquiring VSCode failed` line followed by a pass
+is this working as designed and needs no action. Three of them followed by
+`ERROR: could not acquire VSCode after 3 attempts` is a real outage — check
+whether the update service is reachable before re-running, and do not treat it
+as a flaky test.
+
+**Deliberately not done**: caching or pinning the VSCode build. Neither helps.
+The version is resolved over the network on every run before the cache is
+consulted, so a cache does not remove the failing call; pinning would remove it
+but would also stop the tier from answering the question it exists to answer —
+does the extension come up in the VSCode people actually have.
+
 ## Local Validation Traps
 
 Failures that read as success, and successes that read as failure. Every one
