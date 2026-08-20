@@ -262,6 +262,14 @@ jobs:
       - name: Install
         if: ${{ needs.changes.outputs.run_heavy != 'false' }}
         run: npm ci
+      # `test:e2e` runs generate-dashboard-html.ts, which imports the real tab
+      # renderers — and those import @nightgauge/sdk. Without a build the SDK
+      # has no dist/, so tsx dies on ERR_MODULE_NOT_FOUND before Playwright
+      # ever starts. It passes locally only because a previous build left
+      # dist/ behind; a clean runner has nothing.
+      - name: Build
+        if: ${{ needs.changes.outputs.run_heavy != 'false' }}
+        run: npm run build
       # The browser binary (not the npm package) is the expensive part of
       # `playwright install`, so it is cached by Playwright's own version —
       # a version bump invalidates the cache and re-downloads, exactly what
