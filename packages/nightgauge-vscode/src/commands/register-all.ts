@@ -458,7 +458,7 @@ export function registerAllCommands(deps: AllCommandDeps): void {
   );
 
   // #3437 — diagnostic dump of all autonomous-toggle state. Prints to the
-  // "Nightgauge Pipeline" Output channel so the user can capture
+  // shared "Nightgauge" Output channel (#749) so the user can capture
   // before/after a toggle and we can compare. Temporary while we hunt
   // the toggle-cascade bug.
   const debugDumpAutonomousStateCommand = vscode.commands.registerCommand(
@@ -476,7 +476,7 @@ export function registerAllCommands(deps: AllCommandDeps): void {
         ).dumpAutonomousState?.();
         logger.info("[debug-dump] autonomous state", dump ?? { error: "no dump method" });
         vscode.window.showInformationMessage(
-          "Autonomous state dumped to 'Nightgauge Pipeline' output channel."
+          "Autonomous state dumped to 'Nightgauge' output channel."
         );
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);

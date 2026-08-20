@@ -19,16 +19,19 @@ import { getGitHubUser } from "../utils/incrediConfig";
 import type { IWorkItemProvider } from "./types/WorkItemProvider";
 import type { EpicInfo } from "../views/items/EpicGroupTreeItem";
 import { deriveComponentOptions } from "../types/FilterConfig";
+import { getPrefixedMainChannel } from "../utils/logger";
 
 // ---------------------------------------------------------------------------
 // Output channel
 // ---------------------------------------------------------------------------
 
+// Folded into the shared main channel behind a "pipeline" tag rather than its
+// own "Nightgauge Pipeline" destination — retired six-channel split (#749).
 let _outputChannel: vscode.OutputChannel | null = null;
 function log(message: string): void {
   if (!_outputChannel) {
     try {
-      _outputChannel = vscode.window.createOutputChannel("Nightgauge Pipeline");
+      _outputChannel = getPrefixedMainChannel("pipeline");
     } catch {
       // Not in a VS Code host
     }
