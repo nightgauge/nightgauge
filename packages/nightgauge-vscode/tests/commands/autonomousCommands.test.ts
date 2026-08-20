@@ -472,7 +472,10 @@ describe("registerAutonomousCommands", () => {
       await handler();
 
       const channel = getMockChannel();
-      expect(channel.clear).toHaveBeenCalled();
+      // The channel is the shared main "Nightgauge" destination now (#749) —
+      // a dry-run refresh must not wipe every other subsystem's history, so
+      // clear() is a deliberate no-op there.
+      expect(channel.clear).not.toHaveBeenCalled();
       expect(channel.show).toHaveBeenCalled();
       expect(channel.appendLine).toHaveBeenCalledWith(expect.stringContaining("Dry Run Preview"));
     });
@@ -850,14 +853,17 @@ describe("registerAutonomousCommands", () => {
       registerAutonomousCommands(mockLogger, mockStatusBar, null);
     });
 
-    it("clears and populates the output channel with status, then shows it", async () => {
+    it("populates the output channel with status and shows it, without clearing shared history", async () => {
       mockIpc.autonomousStatus.mockResolvedValue(createMockStatus());
 
       const handler = getHandlerById("nightgauge.autonomousStatus");
       await handler();
 
       const channel = getMockChannel();
-      expect(channel.clear).toHaveBeenCalled();
+      // The channel is the shared main "Nightgauge" destination now (#749) —
+      // a status refresh must not wipe every other subsystem's history, so
+      // clear() is a deliberate no-op there.
+      expect(channel.clear).not.toHaveBeenCalled();
       expect(channel.show).toHaveBeenCalled();
       expect(channel.appendLine).toHaveBeenCalledWith(expect.stringContaining("Status"));
     });
@@ -1115,7 +1121,7 @@ describe("registerAutonomousCommands", () => {
   // ── disposeAutonomousOutputChannel ────────────────────────────────────
 
   describe("disposeAutonomousOutputChannel", () => {
-    it("disposes the output channel if it was created", async () => {
+    it("drops the cached wrapper without tearing down the shared Nightgauge channel (#749)", async () => {
       // Trigger lazy channel creation by running a command
       registerAutonomousCommands(mockLogger, mockStatusBar, null);
       mockIpc.autonomousStatus.mockResolvedValue(createMockStatus());
@@ -1126,7 +1132,10 @@ describe("registerAutonomousCommands", () => {
       expect(channel).toBeDefined();
 
       disposeAutonomousOutputChannel();
-      expect(channel.dispose).toHaveBeenCalled();
+      // The channel is the shared main "Nightgauge" destination — the
+      // autonomous module doesn't own it, so disposal must not kill it out
+      // from under every other subsystem still writing to it.
+      expect(channel.dispose).not.toHaveBeenCalled();
     });
 
     it("is a no-op when no output channel was created", () => {

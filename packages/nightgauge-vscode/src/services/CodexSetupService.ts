@@ -11,6 +11,7 @@ import * as path from "path";
 import * as os from "os";
 import { exec } from "child_process";
 import { promisify } from "util";
+import { getPrefixedMainChannel } from "../utils/logger";
 
 const execAsync = promisify(exec);
 
@@ -32,7 +33,9 @@ export class CodexSetupService implements vscode.Disposable {
 
   constructor(context: vscode.ExtensionContext) {
     this.context = context;
-    this.outputChannel = vscode.window.createOutputChannel("Nightgauge Codex Setup");
+    // Folded into the shared main channel behind a "codex-setup" tag rather
+    // than its own destination — retired six-channel split (#749).
+    this.outputChannel = getPrefixedMainChannel("codex-setup");
   }
 
   async checkAndPromptSetup(): Promise<void> {

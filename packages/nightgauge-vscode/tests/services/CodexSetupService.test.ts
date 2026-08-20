@@ -7,6 +7,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { resetMainChannelForTests } from "../../src/utils/logger";
 
 // ── hoisted mocks ──────────────────────────────────────────────────────────
 const mockExecAsync = vi.hoisted(() => vi.fn());
@@ -73,6 +74,10 @@ function makeMockContext(overrides?: { dismissed?: boolean; installed?: boolean 
 describe("CodexSetupService", () => {
   beforeEach(async () => {
     vi.clearAllMocks();
+    // CodexSetupService now shares the memoized main "Nightgauge" channel
+    // (#749) — drop it between tests so each one sees its own mocked
+    // createOutputChannel() rather than a channel cached by an earlier test.
+    resetMainChannelForTests();
     // Default: codex CLI available
     mockExecAsync.mockResolvedValue({ stdout: "codex 1.0.0", stderr: "" });
 
@@ -261,7 +266,7 @@ describe("CodexSetupService", () => {
   });
 
   describe("dispose()", () => {
-    it("disposes output channel", async () => {
+    it("does not tear down the shared Nightgauge channel it no longer owns (#749)", async () => {
       const vscode = await import("vscode");
       const mockDispose = vi.fn();
       vi.mocked(vscode.window.createOutputChannel).mockReturnValue({
@@ -274,7 +279,10 @@ describe("CodexSetupService", () => {
       const service = new CodexSetupService(makeMockContext() as never);
       service.dispose();
 
-      expect(mockDispose).toHaveBeenCalled();
+      // Codex Setup is folded into the shared main channel behind a
+      // "codex-setup" prefix — disposing this service must not kill the
+      // channel every other subsystem still writes to.
+      expect(mockDispose).not.toHaveBeenCalled();
     });
   });
 });

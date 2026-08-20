@@ -23,6 +23,7 @@ import { SecretStorageService, SECRET_KEYS } from "./SecretStorageService";
 import { TokenStorage } from "../platform/TokenStorage";
 import { PlatformCredentialBridge } from "../platform/PlatformCredentialBridge";
 import { redactSecrets } from "../utils/redaction";
+import { logDiagnosticMirror } from "../utils/logger";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -1351,7 +1352,45 @@ export interface RecordStageExitResult {
 // IpcClientBase
 // ---------------------------------------------------------------------------
 
+/** A transport-level IPC failure, as last observed for a given method (#749). */
+export interface TransportErrorSnapshot {
+  status?: number;
+  message: string;
+  timestamp: string;
+}
+
 export abstract class IpcClientBase implements vscode.Disposable {
+  /**
+   * Last transport failure per IPC method — read by `Nightgauge: Show
+   * Diagnostics` to report "last error per platform surface" without the
+   * diagnostics command needing a live instance. Shared across every
+   * IpcClientBase (there is only ever one live instance in practice), and
+   * intentionally not cleared on success: a stale-but-real last error is
+   * more useful for diagnosis than silently forgetting it once traffic
+   * flows again.
+   *
+   * @see logDiagnosticMirror in ../utils/logger.ts — same failure, mirrored
+   * into the main channel with endpoint + status.
+   */
+  private static readonly lastTransportErrors = new Map<string, TransportErrorSnapshot>();
+
+  /** Read-only snapshot of the last transport error observed per IPC method. */
+  static getLastTransportErrors(): ReadonlyMap<string, TransportErrorSnapshot> {
+    return IpcClientBase.lastTransportErrors;
+  }
+
+  private static recordTransportError(method: string, err: unknown): void {
+    const message = err instanceof Error ? err.message : String(err);
+    const statusMatch = message.match(/\b([1-5]\d{2})\b/);
+    const status = statusMatch ? Number(statusMatch[1]) : undefined;
+    IpcClientBase.lastTransportErrors.set(method, {
+      status,
+      message,
+      timestamp: new Date().toISOString(),
+    });
+    logDiagnosticMirror(method, status, message);
+  }
+
   protected process: ChildProcess | null = null;
   private readline: ReadlineInterface | null = null;
   private pending = new Map<number, PendingRequest>();
@@ -1686,8 +1725,27 @@ export abstract class IpcClientBase implements vscode.Disposable {
     setActiveCallSource(source);
   }
 
-  /** Send a request and await a typed response. */
+  /**
+   * Send a request and await a typed response.
+   *
+   * Any rejection — timeout, disconnected backend, a Go-side error — is
+   * mirrored into the main diagnostics channel with the failing method and
+   * (when parseable) HTTP status before rethrowing unchanged, so a caller
+   * whose fetch fails silently still leaves a trace where an operator will
+   * actually look (#749). The raw transport log on `this.log()` is
+   * unaffected — this only adds a second, filtered destination for the
+   * failures that matter.
+   */
   async call<T>(method: string, params?: unknown): Promise<T> {
+    try {
+      return await this.callInternal<T>(method, params);
+    } catch (err) {
+      IpcClientBase.recordTransportError(method, err);
+      throw err;
+    }
+  }
+
+  private async callInternal<T>(method: string, params?: unknown): Promise<T> {
     if (IpcClientBase.GITHUB_API_METHODS.has(method)) {
       const source = getActiveCallSource() ?? "unknown";
       const ts = new Date().toISOString();

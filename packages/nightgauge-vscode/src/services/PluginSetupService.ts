@@ -14,6 +14,7 @@ import { exec, execFile } from "child_process";
 import { promisify } from "util";
 import { ConfigBridge } from "./ConfigBridge";
 import { type UIPluginsConfig, DEFAULT_CONFIG } from "../config/schema";
+import { getPrefixedMainChannel } from "../utils/logger";
 
 const execAsync = promisify(exec);
 const execFileAsync = promisify(execFile);
@@ -108,7 +109,9 @@ export class PluginSetupService implements vscode.Disposable {
   ) {
     this.context = context;
     this.marketplace = marketplace;
-    this.outputChannel = vscode.window.createOutputChannel("Nightgauge Plugin Setup");
+    // Folded into the shared main channel behind a "plugin-setup" tag rather
+    // than its own destination — retired six-channel split (#749).
+    this.outputChannel = getPrefixedMainChannel("plugin-setup");
   }
 
   /**

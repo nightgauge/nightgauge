@@ -613,6 +613,20 @@ describe("IpcClientBase", () => {
       await expect(p1).rejects.toThrow("IPC client disposed");
       await expect(p2).rejects.toThrow("IPC client disposed");
     });
+
+    it("mirrors a rejected call's endpoint into the last-transport-error snapshot (#749)", async () => {
+      await startTestClient(client);
+
+      const rejected = client.call("test.gamma");
+      client.dispose();
+      await expect(rejected).rejects.toThrow("IPC client disposed");
+
+      const errors = IpcClientBase.getLastTransportErrors();
+      const entry = errors.get("test.gamma");
+      expect(entry).toBeDefined();
+      expect(entry?.message).toContain("IPC client disposed");
+      expect(entry?.timestamp).toBeTruthy();
+    });
   });
 
   // ── Multiple independent instances ────────────────────────────────────────

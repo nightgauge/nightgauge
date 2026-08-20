@@ -1117,6 +1117,53 @@ a corrupted character to a person.
 **If one fails, repair the bytes** (utf-8 decode → latin-1 encode → utf-8
 decode). Do not retype the line by hand, and do not exempt the file.
 
+## VSCode Extension Diagnostics
+
+### Where to look when something fails
+
+**Look in the "Nightgauge" output channel first — it is the one destination
+every extension-side diagnostic now folds into (#749).** Before this, the
+extension split diagnostics across six separately-named channels, and
+knowing which one carried a given failure was implicit tribal knowledge: a
+failed platform dashboard tab logged to `Nightgauge`, IPC transport errors
+logged to `Nightgauge Go Backend`, and `Nightgauge Pipeline` — the name an
+operator reaches for first — carried neither. That gap is exactly how a
+structural auth failure (#742, the Go daemon never receiving the signed-in
+session token) survived to a release candidate: the maintainer hit a failed
+tab, checked the output window, found nothing there, and reasonably
+concluded the retry button was dead.
+
+**Command Palette → `Nightgauge: Show Diagnostics`** reveals the channel and
+prints a one-shot snapshot:
+
+- platform connectivity (connected / degraded / offline / disabled)
+- which **kind** of credential the Go daemon is currently using — `session
+(signed in)`, `license key`, or `none configured` — **never the value**
+- the resolved Go binary's path and version
+- the last transport error recorded for each platform-backed dashboard
+  surface (Health, Trends, Cost, Runs, Compliance, Quota/Usage)
+
+Every line printed to the channel — including the snapshot — passes through
+`redactSecrets()` (see `packages/nightgauge-vscode/src/utils/redaction.ts`)
+before it reaches the output window, so a token or license key cannot appear
+there even if it leaked into an upstream error string.
+
+### What happened to the six channels
+
+| Former channel            | Now                                                                                                                                                                                                                                                                                                                    |
+| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Nightgauge`              | Unchanged — this **is** the shared main channel everything else now folds into.                                                                                                                                                                                                                                        |
+| `Nightgauge Autonomous`   | Folded in, tagged `[autonomous]`.                                                                                                                                                                                                                                                                                      |
+| `Nightgauge Codex Setup`  | Folded in, tagged `[codex-setup]`.                                                                                                                                                                                                                                                                                     |
+| `Nightgauge Pipeline`     | Folded in, tagged `[pipeline]` (project board sync / autonomous debug dumps).                                                                                                                                                                                                                                          |
+| `Nightgauge Plugin Setup` | Folded in, tagged `[plugin-setup]`.                                                                                                                                                                                                                                                                                    |
+| `Nightgauge Go Backend`   | **Kept separate** — the raw, unfiltered Go IPC transport log. Any error from a `call()` that a user-visible surface can hit is _also_ mirrored into `Nightgauge`, tagged `[ipc]`, with the failing endpoint and (when parseable) HTTP status — so you don't need to already know to open the transport log to find it. |
+
+If a fix needs the raw, unfiltered process I/O — a hung spawn, a malformed
+JSON-RPC frame, restart backoff timing — that detail is still only in
+`Nightgauge Go Backend`. Everything else — dashboard fetch failures, setup
+flows, autonomous mode, project board sync — is in `Nightgauge`.
+
 ## Getting Help
 
 If you can't resolve an issue:
