@@ -22,11 +22,11 @@ func (s *Server) handleAgentAcknowledgeCommand(ctx context.Context, raw json.Raw
 	if p.CommandID == "" {
 		return nil, fmt.Errorf("agent.acknowledgeCommand: commandId is required")
 	}
-	if s.platformClient == nil {
+	if s.getPlatformClient() == nil {
 		return nil, fmt.Errorf("agent.acknowledgeCommand: platform client not configured")
 	}
 
-	runID, err := platform.NewCommandService(s.platformClient).AcknowledgeAgentCommand(ctx, p.AgentID, p.CommandID)
+	runID, err := platform.NewCommandService(s.getPlatformClient()).AcknowledgeAgentCommand(ctx, p.AgentID, p.CommandID)
 	if err != nil {
 		return nil, fmt.Errorf("agent.acknowledgeCommand: %w", err)
 	}
