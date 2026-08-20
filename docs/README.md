@@ -13,6 +13,7 @@ repository.
 | [CODE_STANDARDS.md](./CODE_STANDARDS.md)             | Standards for contributing to this repository      |
 | [TESTING.md](./TESTING.md)                           | How to test plugins and configurations             |
 | [GIT_WORKFLOW.md](./GIT_WORKFLOW.md)                 | Branch naming, commit messages, PR guidelines      |
+| [RELEASE_CHECKLIST.md](./RELEASE_CHECKLIST.md)       | VS Code RC go/no-go from the 2026-08-20 run        |
 | [PROJECT_SETUP.md](./PROJECT_SETUP.md)               | GitHub Project configuration and views             |
 | [SPRINT_WORKFLOW.md](./SPRINT_WORKFLOW.md)           | Sprint/iteration support and planning              |
 | [ESTIMATION.md](./ESTIMATION.md)                     | Story points, size labels, and velocity tracking   |
