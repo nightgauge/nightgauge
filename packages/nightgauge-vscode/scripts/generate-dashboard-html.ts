@@ -807,6 +807,10 @@ writeFixture("health--empty", {
   activeTab: "health",
   healthAnalyticsData: { result: null, hasAccess: true, isLoading: false },
 });
+writeFixture("health--loading", {
+  activeTab: "health",
+  healthAnalyticsData: { result: null, hasAccess: true, isLoading: true },
+});
 for (const kind of ["not_configured", "server_error"] as FailureKind[]) {
   writeFixture(`health--failure-${kind}`, {
     activeTab: "health",
@@ -841,6 +845,10 @@ writeFixture("cost--populated", {
 writeFixture("cost--empty", {
   activeTab: "cost",
   platformCostData: { result: null, isLoading: false },
+});
+writeFixture("cost--loading", {
+  activeTab: "cost",
+  platformCostData: { result: null, isLoading: true },
 });
 for (const kind of ["unauthorized", "offline"] as FailureKind[]) {
   writeFixture(`cost--failure-${kind}`, {
@@ -1141,5 +1149,5 @@ for (const tabId of ALL_TAB_IDS) {
 }
 
 console.log(
-  `Dashboard fixture matrix: 42 tab/state files + ${ALL_TAB_IDS.length} tab-activation files written to ${FIXTURES_DIR}`
+  `Dashboard fixture matrix: 44 tab/state files + ${ALL_TAB_IDS.length} tab-activation files written to ${FIXTURES_DIR}`
 );

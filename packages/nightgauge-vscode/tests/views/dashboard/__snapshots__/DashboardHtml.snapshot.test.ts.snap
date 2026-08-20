@@ -5850,7 +5850,7 @@ exports[`getDashboardHtml snapshots (Issue #1242) > active pipeline state — cu
     <div class="tab-panel" id="tab-panel-runs" role="tabpanel" aria-labelledby="tab-runs">
       <!-- Pipeline Runs History (Issue #3319) — paginated run list with drill-down -->
       
-    <div class="runs-loading">
+    <div class="runs-loading" role="status" aria-live="polite" aria-atomic="true">
       <div class="empty-icon">⏳</div>
       <p>Loading pipeline runs…</p>
     </div>
@@ -5860,7 +5860,7 @@ exports[`getDashboardHtml snapshots (Issue #1242) > active pipeline state — cu
     <div class="tab-panel" id="tab-panel-trends" role="tabpanel" aria-labelledby="tab-trends">
       <!-- Longitudinal Trends (Issue #3320) — success rate, cost, runs over time -->
       
-    <div class="trends-empty">
+    <div class="trends-empty" role="status" aria-live="polite" aria-atomic="true">
       <div class="trends-empty-icon">⏳</div>
       <p class="trends-empty-title">Loading trends…</p>
     </div>
@@ -5870,7 +5870,7 @@ exports[`getDashboardHtml snapshots (Issue #1242) > active pipeline state — cu
     <div class="tab-panel" id="tab-panel-compliance" role="tabpanel" aria-labelledby="tab-compliance">
       <!-- Compliance Report Generation (Issue #3322) — SOC2/ISO27001 report generation and download -->
       
-    <div class="compliance-loading">
+    <div class="compliance-loading" role="status" aria-live="polite" aria-atomic="true">
       <div class="empty-icon">⏳</div>
       <p>Loading compliance reports…</p>
     </div>
@@ -12788,7 +12788,7 @@ exports[`getDashboardHtml snapshots (Issue #1242) > completed run with tool call
     <div class="tab-panel" id="tab-panel-runs" role="tabpanel" aria-labelledby="tab-runs">
       <!-- Pipeline Runs History (Issue #3319) — paginated run list with drill-down -->
       
-    <div class="runs-loading">
+    <div class="runs-loading" role="status" aria-live="polite" aria-atomic="true">
       <div class="empty-icon">⏳</div>
       <p>Loading pipeline runs…</p>
     </div>
@@ -12798,7 +12798,7 @@ exports[`getDashboardHtml snapshots (Issue #1242) > completed run with tool call
     <div class="tab-panel" id="tab-panel-trends" role="tabpanel" aria-labelledby="tab-trends">
       <!-- Longitudinal Trends (Issue #3320) — success rate, cost, runs over time -->
       
-    <div class="trends-empty">
+    <div class="trends-empty" role="status" aria-live="polite" aria-atomic="true">
       <div class="trends-empty-icon">⏳</div>
       <p class="trends-empty-title">Loading trends…</p>
     </div>
@@ -12808,7 +12808,7 @@ exports[`getDashboardHtml snapshots (Issue #1242) > completed run with tool call
     <div class="tab-panel" id="tab-panel-compliance" role="tabpanel" aria-labelledby="tab-compliance">
       <!-- Compliance Report Generation (Issue #3322) — SOC2/ISO27001 report generation and download -->
       
-    <div class="compliance-loading">
+    <div class="compliance-loading" role="status" aria-live="polite" aria-atomic="true">
       <div class="empty-icon">⏳</div>
       <p>Loading compliance reports…</p>
     </div>
@@ -19571,7 +19571,7 @@ exports[`getDashboardHtml snapshots (Issue #1242) > empty state — no current r
     <div class="tab-panel" id="tab-panel-runs" role="tabpanel" aria-labelledby="tab-runs">
       <!-- Pipeline Runs History (Issue #3319) — paginated run list with drill-down -->
       
-    <div class="runs-loading">
+    <div class="runs-loading" role="status" aria-live="polite" aria-atomic="true">
       <div class="empty-icon">⏳</div>
       <p>Loading pipeline runs…</p>
     </div>
@@ -19581,7 +19581,7 @@ exports[`getDashboardHtml snapshots (Issue #1242) > empty state — no current r
     <div class="tab-panel" id="tab-panel-trends" role="tabpanel" aria-labelledby="tab-trends">
       <!-- Longitudinal Trends (Issue #3320) — success rate, cost, runs over time -->
       
-    <div class="trends-empty">
+    <div class="trends-empty" role="status" aria-live="polite" aria-atomic="true">
       <div class="trends-empty-icon">⏳</div>
       <p class="trends-empty-title">Loading trends…</p>
     </div>
@@ -19591,7 +19591,7 @@ exports[`getDashboardHtml snapshots (Issue #1242) > empty state — no current r
     <div class="tab-panel" id="tab-panel-compliance" role="tabpanel" aria-labelledby="tab-compliance">
       <!-- Compliance Report Generation (Issue #3322) — SOC2/ISO27001 report generation and download -->
       
-    <div class="compliance-loading">
+    <div class="compliance-loading" role="status" aria-live="polite" aria-atomic="true">
       <div class="empty-icon">⏳</div>
       <p>Loading compliance reports…</p>
     </div>
@@ -26582,7 +26582,7 @@ exports[`getDashboardHtml snapshots (Issue #1242) > pagination controls rendered
     <div class="tab-panel" id="tab-panel-runs" role="tabpanel" aria-labelledby="tab-runs">
       <!-- Pipeline Runs History (Issue #3319) — paginated run list with drill-down -->
       
-    <div class="runs-loading">
+    <div class="runs-loading" role="status" aria-live="polite" aria-atomic="true">
       <div class="empty-icon">⏳</div>
       <p>Loading pipeline runs…</p>
     </div>
@@ -26592,7 +26592,7 @@ exports[`getDashboardHtml snapshots (Issue #1242) > pagination controls rendered
     <div class="tab-panel" id="tab-panel-trends" role="tabpanel" aria-labelledby="tab-trends">
       <!-- Longitudinal Trends (Issue #3320) — success rate, cost, runs over time -->
       
-    <div class="trends-empty">
+    <div class="trends-empty" role="status" aria-live="polite" aria-atomic="true">
       <div class="trends-empty-icon">⏳</div>
       <p class="trends-empty-title">Loading trends…</p>
     </div>
@@ -26602,7 +26602,7 @@ exports[`getDashboardHtml snapshots (Issue #1242) > pagination controls rendered
     <div class="tab-panel" id="tab-panel-compliance" role="tabpanel" aria-labelledby="tab-compliance">
       <!-- Compliance Report Generation (Issue #3322) — SOC2/ISO27001 report generation and download -->
       
-    <div class="compliance-loading">
+    <div class="compliance-loading" role="status" aria-live="polite" aria-atomic="true">
       <div class="empty-icon">⏳</div>
       <p>Loading compliance reports…</p>
     </div>

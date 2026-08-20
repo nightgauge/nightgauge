@@ -1216,6 +1216,15 @@ function getPlatformCostEmptyStateHtml(): string {
   `;
 }
 
+function getPlatformCostLoadingHtml(): string {
+  return `
+    <div class="platform-cost-empty platform-cost-loading" role="status" aria-live="polite" aria-atomic="true">
+      <div class="platform-cost-empty-icon">⏳</div>
+      <p class="platform-cost-empty-title">Loading cost data…</p>
+    </div>
+  `;
+}
+
 /**
  * Render the cost tab's failure state from the classified `PlatformFailure`
  * the service actually reported. Previously any failure — auth, offline,
@@ -1351,7 +1360,8 @@ function getPlatformCostSparklineHtml(data: CostAnalyticsResult, dateRange: Cost
 /**
  * Render the full platform cost tab panel HTML.
  *
- * Three distinct states, previously conflated into one (#748):
+ * Four distinct states, previously conflated into one (#748, #785):
+ *   - `data.isLoading` — a request is visibly in flight.
  *   - `data === null` — never fetched yet.
  *   - `data.failure` set — the last fetch failed; renders the classified
  *     cause, never the generic "no data yet" copy.
@@ -1362,6 +1372,15 @@ export function getCostTabHtml(
   data: PlatformCostTabData | null,
   dateRange: CostDateRange = "7d"
 ): string {
+  if (data?.isLoading) {
+    return `
+      <div class="platform-cost-tab">
+        ${getPlatformCostDateRangeHtml(dateRange)}
+        ${getPlatformCostLoadingHtml()}
+      </div>
+    `;
+  }
+
   if (data === null) {
     return `
       <div class="platform-cost-tab">

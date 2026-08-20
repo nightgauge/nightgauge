@@ -314,7 +314,7 @@ export function getComplianceTabStyles(): string {
 
 function getComplianceLoadingHtml(): string {
   return `
-    <div class="compliance-loading">
+    <div class="compliance-loading" role="status" aria-live="polite" aria-atomic="true">
       <div class="empty-icon">⏳</div>
       <p>Loading compliance reports…</p>
     </div>

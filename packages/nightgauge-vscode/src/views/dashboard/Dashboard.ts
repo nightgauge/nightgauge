@@ -200,6 +200,8 @@ type WebViewMessage =
 
 type HistoricalRunTarget = HistoricalRunIdentity & { issueNumber: number };
 
+type PlatformTabKey = "cost" | "health" | "runs" | "trends" | "compliance";
+
 /**
  * Dashboard class manages the WebView panel for pipeline metrics
  *
@@ -393,6 +395,15 @@ export class Dashboard implements vscode.Disposable {
   private activeTab: string = "overview";
   /** Number of history items currently displayed — incremented by "Load More" (Issue #983) */
   private historyDisplayCount: number = 20;
+  /**
+   * One platform read per tab at a time. Besides preventing stale responses
+   * from racing, this bounds refresh messages from the webview: a duplicate
+   * cannot force another full loading render or another IPC call while the
+   * owning request is unsettled.
+   */
+  private readonly platformRefreshesInFlight = new Set<PlatformTabKey>();
+  /** Latest user action received while a tab refresh is active, bounded to one per tab. */
+  private readonly pendingPlatformRefreshMessages = new Map<PlatformTabKey, WebViewMessage>();
 
   constructor(
     private readonly extensionUri: vscode.Uri,
@@ -1406,7 +1417,31 @@ export class Dashboard implements vscode.Disposable {
   }
 
   /**
-   * Render the panel content (called by debounced updatePanel)
+   * Render a user-initiated loading state before an async refresh can suspend.
+   * A normal debounced update can be canceled by a fast failure or cached
+   * success, leaving the previous panel visible for the entire request (#785).
+   */
+  private renderPanelImmediately(trigger: string): void {
+    if (!this.panel) return;
+
+    if (this.updatePanelTimer) {
+      clearTimeout(this.updatePanelTimer);
+      this.updatePanelTimer = undefined;
+    }
+    this.lastUpdateTrigger = trigger;
+    this.logger.debug("updatePanel:immediate", { trigger });
+    try {
+      this.renderPanel();
+    } catch (err) {
+      // Loading feedback is best-effort. A renderer failure must not prevent
+      // the refresh itself from reaching token validation and IPC: each
+      // platform refresh deliberately keeps a never-throws contract.
+      this.logger.debug("updatePanel:immediate-error", { trigger, error: String(err) });
+    }
+  }
+
+  /**
+   * Render the panel content (called by debounced updates and immediate loading feedback)
    *
    * Includes a render-in-progress guard to prevent overlapping renders
    * and structured diagnostic logging for every render cycle (Issue #780).
@@ -1969,17 +2004,25 @@ export class Dashboard implements vscode.Disposable {
         break;
 
       case "costDateRangeChange":
+        if (this.platformRefreshesInFlight.has("cost")) {
+          if (message.range !== this.costDateRange) {
+            this.pendingPlatformRefreshMessages.set("cost", message);
+          } else {
+            this.pendingPlatformRefreshMessages.delete("cost");
+          }
+          break;
+        }
         this.costDateRange = message.range;
-        this.platformCostData = null; // invalidate cache for new range
-        this.updatePanel("costDateRangeChange");
         this.refreshCostData().catch(() => {});
         break;
 
       case "healthRefresh":
+        if (this.platformRefreshesInFlight.has("health")) break;
         this.refreshHealthAnalyticsData().catch(() => {});
         break;
 
       case "runsFilter":
+        if (this.deferPlatformRefreshMessage("runs", message)) break;
         this.runsFilters = message.filters;
         this.runsPagination = getDefaultRunsPagination();
         this.runsData = null;
@@ -1987,6 +2030,7 @@ export class Dashboard implements vscode.Disposable {
         break;
 
       case "runsPageChange": {
+        if (this.deferPlatformRefreshMessage("runs", message)) break;
         const targetPage = message.page;
         const cursor = targetPage > 0 ? this.runsPagination.cursorStack[targetPage] : undefined;
         this.runsPagination = { ...this.runsPagination, page: targetPage };
@@ -1999,12 +2043,14 @@ export class Dashboard implements vscode.Disposable {
         break;
 
       case "runsRefresh":
+        if (this.platformRefreshesInFlight.has("runs")) break;
         this.runsData = null;
         this.runsPagination = getDefaultRunsPagination();
         this.refreshRunsData().catch(() => {});
         break;
 
       case "runsResetFilters":
+        if (this.deferPlatformRefreshMessage("runs", message)) break;
         this.runsFilters = getDefaultRunsFilters();
         this.runsPagination = getDefaultRunsPagination();
         this.runsData = null;
@@ -2012,6 +2058,14 @@ export class Dashboard implements vscode.Disposable {
         break;
 
       case "trendsDateRangeChange":
+        if (this.platformRefreshesInFlight.has("trends")) {
+          if (message.range !== this.trendsDateRange) {
+            this.pendingPlatformRefreshMessages.set("trends", message);
+          } else {
+            this.pendingPlatformRefreshMessages.delete("trends");
+          }
+          break;
+        }
         if (message.range === "30d" || message.range === "90d" || message.range === "180d") {
           this.trendsDateRange = message.range;
           this.trendsData = null;
@@ -2028,11 +2082,13 @@ export class Dashboard implements vscode.Disposable {
         break;
 
       case "trendsRefresh":
+        if (this.platformRefreshesInFlight.has("trends")) break;
         this.trendsData = null;
         this.fetchTrendsData().catch(() => {});
         break;
 
       case "complianceRefresh":
+        if (this.platformRefreshesInFlight.has("compliance")) break;
         this.complianceData = null;
         this.refreshComplianceData().catch(() => {});
         break;
@@ -2051,6 +2107,7 @@ export class Dashboard implements vscode.Disposable {
         break;
 
       case "compliancePageChange":
+        if (this.deferPlatformRefreshMessage("compliance", message)) break;
         this.refreshComplianceData(message.cursor || undefined).catch(() => {});
         break;
 
@@ -2904,6 +2961,28 @@ export class Dashboard implements vscode.Disposable {
   }
 
   /**
+   * Coalesce refresh actions received while a tab request is unsettled. The
+   * newest action replaces the previous pending one, so message floods stay
+   * bounded while a genuine range/filter change is not lost.
+   */
+  private deferPlatformRefreshMessage(tab: PlatformTabKey, message: WebViewMessage): boolean {
+    if (!this.platformRefreshesInFlight.has(tab)) return false;
+    this.pendingPlatformRefreshMessages.set(tab, message);
+    return true;
+  }
+
+  /** Release a tab lock and immediately start its newest queued user action. */
+  private finishPlatformRefresh(tab: PlatformTabKey): void {
+    this.platformRefreshesInFlight.delete(tab);
+    const pending = this.pendingPlatformRefreshMessages.get(tab);
+    if (!pending) return;
+    this.pendingPlatformRefreshMessages.delete(tab);
+    void this.handleMessage(pending).catch((err) => {
+      this.logger.debug("platform:queued-refresh-error", { tab, error: String(err) });
+    });
+  }
+
+  /**
    * Refresh discovery activity data from local state files (Issue #2434).
    * Reads creation-log.json and improvement-runs/latest.json written by GitHub Actions.
    * Never throws — all errors are handled internally by DiscoveryActivityService.
@@ -2922,7 +3001,11 @@ export class Dashboard implements vscode.Disposable {
    * Never throws — PlatformCostService returns a typed PlatformResult (#748).
    */
   async refreshCostData(): Promise<void> {
+    if (this.platformRefreshesInFlight.has("cost")) return;
+    this.platformRefreshesInFlight.add("cost");
     const endpoint = "platform.getCostAnalytics";
+    this.platformCostData = { result: null, isLoading: true };
+    this.renderPanelImmediately("costRefresh");
     try {
       if (!(await this.platformTokenGate(endpoint, (f) => this.applyCostFailure(f)))) return;
       const ipc = (await import("../../services/IpcClient")).IpcClient.getInstance();
@@ -2936,6 +3019,8 @@ export class Dashboard implements vscode.Disposable {
       this.updatePanel("costRefresh");
     } catch (err) {
       this.applyCostFailure(classifyPlatformError(err, endpoint));
+    } finally {
+      this.finishPlatformRefresh("cost");
     }
   }
 
@@ -3062,13 +3147,15 @@ export class Dashboard implements vscode.Disposable {
    * Lazy-loaded on first health tab activation. Re-fetches on healthRefresh message.
    * Never throws — PlatformAnalyticsHealthService returns a typed PlatformResult (#748).
    *
-   * Sets an explicit `isLoading` state and renders it before the fetch resolves
-   * (#752) — mirroring refreshRunsData/fetchTrendsData/refreshComplianceData,
-   * which already did this. Without it, pressing Retry on an identical failure
-   * re-rendered byte-identical HTML: nothing on screen moved, so the button
-   * read as broken even though the request did fire.
+   * Sets an explicit `isLoading` state and renders it before the first await
+   * (#752, #775, #785), matching the other platform-backed tabs. Without it,
+   * pressing Retry on an identical failure re-rendered byte-identical HTML:
+   * nothing on screen moved, so the button read as broken even though the
+   * request did fire.
    */
   async refreshHealthAnalyticsData(): Promise<void> {
+    if (this.platformRefreshesInFlight.has("health")) return;
+    this.platformRefreshesInFlight.add("health");
     const endpoint = "platform.getAnalyticsHealth";
     // Render loading BEFORE the first await, not after (#775). #752 set this
     // state further down, past `checkPlatformTokenState` and a dynamic import
@@ -3077,19 +3164,11 @@ export class Dashboard implements vscode.Disposable {
     // the panel stayed byte-identical, and the button read as dead: the exact
     // symptom #752 was filed to remove.
     this.healthAnalyticsData = { result: null, hasAccess: true, isLoading: true };
-    this.updatePanel("healthRefresh");
+    this.renderPanelImmediately("healthRefresh");
     try {
       if (!(await this.platformTokenGate(endpoint, (f) => this.applyHealthFailure(f)))) return;
       const ipc = (await import("../../services/IpcClient")).IpcClient.getInstance();
       this.platformAnalyticsHealthService ??= new PlatformAnalyticsHealthService(ipc);
-
-      const loading: AnalyticsHealthData = {
-        result: null,
-        hasAccess: true,
-        isLoading: true,
-      };
-      this.healthAnalyticsData = loading;
-      this.updatePanel("healthRefresh");
 
       const result = await this.platformAnalyticsHealthService.fetchAndCache();
       if (!result.ok) {
@@ -3101,6 +3180,8 @@ export class Dashboard implements vscode.Disposable {
       this.updatePanel("healthRefresh");
     } catch (err) {
       this.applyHealthFailure(classifyPlatformError(err, endpoint));
+    } finally {
+      this.finishPlatformRefresh("health");
     }
   }
 
@@ -3110,21 +3191,21 @@ export class Dashboard implements vscode.Disposable {
    * Never throws — PlatformRunsService returns a typed PlatformResult (#748).
    */
   async refreshRunsData(cursor?: string): Promise<void> {
+    if (this.platformRefreshesInFlight.has("runs")) return;
+    this.platformRefreshesInFlight.add("runs");
     const endpoint = "platform.getAnalyticsRuns";
+    this.runsData = {
+      entries: [],
+      filters: this.runsFilters,
+      pagination: this.runsPagination,
+      isLoading: true,
+      hasAccess: true,
+    };
+    this.renderPanelImmediately("runsRefresh");
     try {
       if (!(await this.platformTokenGate(endpoint, (f) => this.applyRunsFailure(f)))) return;
       const ipc = (await import("../../services/IpcClient")).IpcClient.getInstance();
       this.platformRunsService ??= new PlatformRunsService(ipc);
-
-      const loading: RunsListData = {
-        entries: [],
-        filters: this.runsFilters,
-        pagination: this.runsPagination,
-        isLoading: true,
-        hasAccess: true,
-      };
-      this.runsData = loading;
-      this.updatePanel("runsRefresh");
 
       const result = await this.platformRunsService.fetchAndCache(this.runsFilters, cursor, 20);
 
@@ -3156,6 +3237,8 @@ export class Dashboard implements vscode.Disposable {
       this.updatePanel("runsRefresh");
     } catch (err) {
       this.applyRunsFailure(classifyPlatformError(err, endpoint));
+    } finally {
+      this.finishPlatformRefresh("runs");
     }
   }
 
@@ -3165,20 +3248,20 @@ export class Dashboard implements vscode.Disposable {
    * Never throws — PlatformTrendsService returns a typed PlatformResult (#748).
    */
   private async fetchTrendsData(): Promise<void> {
+    if (this.platformRefreshesInFlight.has("trends")) return;
+    this.platformRefreshesInFlight.add("trends");
     const endpoint = "platform.getAnalyticsTrends";
+    this.trendsData = {
+      result: null,
+      isLoading: true,
+      hasAccess: true,
+      showComparison: this.trendsShowComparison,
+    };
+    this.renderPanelImmediately("trendsRefresh");
     try {
       if (!(await this.platformTokenGate(endpoint, (f) => this.applyTrendsFailure(f)))) return;
       const ipc = (await import("../../services/IpcClient")).IpcClient.getInstance();
       this.platformTrendsService ??= new PlatformTrendsService(ipc);
-
-      const loading: TrendsData = {
-        result: null,
-        isLoading: true,
-        hasAccess: true,
-        showComparison: this.trendsShowComparison,
-      };
-      this.trendsData = loading;
-      this.updatePanel("trendsRefresh");
 
       const result = await this.platformTrendsService.fetchAndCache(this.trendsDateRange);
 
@@ -3195,6 +3278,8 @@ export class Dashboard implements vscode.Disposable {
       this.updatePanel("trendsRefresh");
     } catch (err) {
       this.applyTrendsFailure(classifyPlatformError(err, endpoint));
+    } finally {
+      this.finishPlatformRefresh("trends");
     }
   }
 
@@ -3204,22 +3289,22 @@ export class Dashboard implements vscode.Disposable {
    * Never throws — PlatformComplianceService returns a typed PlatformResult (#748).
    */
   private async refreshComplianceData(cursor?: string): Promise<void> {
+    if (this.platformRefreshesInFlight.has("compliance")) return;
+    this.platformRefreshesInFlight.add("compliance");
     const endpoint = "platform.auditListReports";
+    this.complianceData = {
+      reports: [],
+      filters: {},
+      pagination: { hasMore: false },
+      isLoading: true,
+      hasAccess: true,
+      isGenerating: this.complianceData?.isGenerating ?? false,
+    };
+    this.renderPanelImmediately("complianceRefresh");
     try {
       if (!(await this.platformTokenGate(endpoint, (f) => this.applyComplianceFailure(f)))) return;
       const ipc = (await import("../../services/IpcClient")).IpcClient.getInstance();
       this.platformComplianceService ??= new PlatformComplianceService(ipc);
-
-      const loading: ComplianceData = {
-        reports: [],
-        filters: {},
-        pagination: { hasMore: false },
-        isLoading: true,
-        hasAccess: true,
-        isGenerating: this.complianceData?.isGenerating ?? false,
-      };
-      this.complianceData = loading;
-      this.updatePanel("complianceRefresh");
 
       const result = await this.platformComplianceService.fetchAndCache(cursor, 20);
 
@@ -3242,6 +3327,8 @@ export class Dashboard implements vscode.Disposable {
       this.updatePanel("complianceRefresh");
     } catch (err) {
       this.applyComplianceFailure(classifyPlatformError(err, endpoint));
+    } finally {
+      this.finishPlatformRefresh("compliance");
     }
   }
 

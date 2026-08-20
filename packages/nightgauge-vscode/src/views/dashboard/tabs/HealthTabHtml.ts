@@ -211,7 +211,7 @@ function getHealthCheckReportHtml(report: HealthCheckReport | null | undefined):
 function getHealthLoadingHtml(): string {
   return `
     <div class="health-tab">
-      <div class="health-empty-state">
+      <div class="health-empty-state" role="status" aria-live="polite" aria-atomic="true">
         <div class="health-empty-icon">⏳</div>
         <p class="health-empty-title">Loading health data…</p>
       </div>

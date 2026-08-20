@@ -44,7 +44,9 @@ vi.mock("../../src/services/ProjectIterationService", async () =>
 import { Dashboard } from "../../src/views/dashboard/Dashboard";
 import {
   ipcStub,
+  capturedPanels,
   resetHarness,
+  signIn,
   signOut,
   renderDashboardHtml,
   renderedText,
@@ -85,6 +87,26 @@ function tabText(tabId: string): string {
   return renderedText(tabPanelHtml(renderDashboardHtml(dashboard), tabId));
 }
 
+/** Text from the actual webview document, without forcing a render. */
+function capturedTabPanelHtml(tabId: string): string {
+  const panel = capturedPanels.at(-1);
+  if (!panel) throw new Error("arrival harness: no captured dashboard panel");
+  return tabPanelHtml(panel.webview.html, tabId);
+}
+
+interface Deferred<T> {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+}
+
+function deferred<T>(): Deferred<T> {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
 /**
  * The Go layer's error text for each failure kind, verbatim in the shapes
  * `classifyPlatformError` parses (see src/services/platformResult.ts). The
@@ -101,6 +123,340 @@ const TRANSPORT_ERRORS: Record<PlatformFailureKind, string> = {
 };
 
 const ALL_KINDS = Object.keys(TRANSPORT_ERRORS) as PlatformFailureKind[];
+
+// ---------------------------------------------------------------------------
+// Cross-tab: loading is rendered before the first await
+// ---------------------------------------------------------------------------
+
+interface LoadingCase {
+  tabId: string;
+  loadingText: string;
+  ipcMethod: keyof typeof ipcStub;
+  stage: (response: Promise<unknown>) => void;
+  message: Record<string, unknown>;
+  fixture: () => unknown;
+  arrivalText: string;
+  retryButtonId: string;
+}
+
+const LOADING_CASES: LoadingCase[] = [
+  {
+    tabId: "health",
+    loadingText: "Loading health data…",
+    ipcMethod: "platformGetAnalyticsHealth",
+    stage: (response) => ipcStub.platformGetAnalyticsHealth.mockImplementation(() => response),
+    message: { type: "healthRefresh" },
+    fixture: () => arrivalFixtures.analyticsHealth(),
+    arrivalText: "Needs attention",
+    retryButtonId: "healthRefreshBtn",
+  },
+  {
+    tabId: "runs",
+    loadingText: "Loading pipeline runs…",
+    ipcMethod: "platformGetAnalyticsRuns",
+    stage: (response) => ipcStub.platformGetAnalyticsRuns.mockImplementation(() => response),
+    message: { type: "runsRefresh" },
+    fixture: () => arrivalFixtures.analyticsRuns(),
+    arrivalText: "Dashboard health tab renders a blank panel",
+    retryButtonId: "runsRetryBtn",
+  },
+  {
+    tabId: "trends",
+    loadingText: "Loading trends…",
+    ipcMethod: "platformGetAnalyticsTrends",
+    stage: (response) => ipcStub.platformGetAnalyticsTrends.mockImplementation(() => response),
+    message: { type: "trendsRefresh" },
+    fixture: () => arrivalFixtures.analyticsTrends(),
+    arrivalText: "2026-08-04",
+    retryButtonId: "trendsRetryBtn",
+  },
+  {
+    tabId: "cost",
+    loadingText: "Loading cost data…",
+    ipcMethod: "platformGetCostAnalytics",
+    stage: (response) => ipcStub.platformGetCostAnalytics.mockImplementation(() => response),
+    message: { type: "costDateRangeChange", range: "7d" },
+    fixture: () => arrivalFixtures.costAnalytics(),
+    arrivalText: "claude-sonnet-4-6",
+    retryButtonId: "costRetryBtn",
+  },
+  {
+    tabId: "compliance",
+    loadingText: "Loading compliance reports…",
+    ipcMethod: "platformAuditListReports",
+    stage: (response) => ipcStub.platformAuditListReports.mockImplementation(() => response),
+    message: { type: "complianceRefresh" },
+    fixture: () => arrivalFixtures.complianceReports(),
+    arrivalText: "2026-07-01",
+    retryButtonId: "complianceRetryBtn",
+  },
+];
+
+describe("arrival: every platform tab acknowledges refresh before awaiting", () => {
+  it.each(LOADING_CASES)(
+    "$tabId renders loading synchronously and keeps it visible until arrival",
+    async ({ tabId, loadingText, ipcMethod, stage, message, fixture, arrivalText }) => {
+      const response = deferred<unknown>();
+      stage(response.promise);
+
+      const panel = capturedPanels.at(-1);
+      if (!panel) throw new Error("arrival harness: no captured dashboard panel");
+      await panel.dispatchMessage(message);
+
+      // Read the captured webview document directly. Calling tabText() here
+      // would force renderPanel() and let an unscheduled state change pass.
+      const immediatePanel = capturedTabPanelHtml(tabId);
+      expect(renderedText(immediatePanel)).toContain(loadingText);
+      expect(immediatePanel).toContain('role="status"');
+      expect(immediatePanel).toContain('aria-live="polite"');
+      expect(immediatePanel).toContain('aria-atomic="true"');
+      expect(ipcStub[ipcMethod]).not.toHaveBeenCalled();
+
+      await vi.waitFor(() => expect(ipcStub[ipcMethod]).toHaveBeenCalledTimes(1));
+      expect(renderedText(capturedTabPanelHtml(tabId))).toContain(loadingText);
+
+      response.resolve(fixture());
+
+      await vi.waitFor(() =>
+        expect(renderedText(capturedTabPanelHtml(tabId))).toContain(arrivalText)
+      );
+      await vi.waitFor(() =>
+        expect(renderedText(capturedTabPanelHtml(tabId))).not.toContain(loadingText)
+      );
+    }
+  );
+
+  it.each(LOADING_CASES)(
+    "$tabId releases its refresh lock after success",
+    async ({ tabId, ipcMethod, stage, message, fixture, arrivalText }) => {
+      stage(Promise.resolve(fixture()));
+      const panel = capturedPanels.at(-1);
+      if (!panel) throw new Error("arrival harness: no captured dashboard panel");
+
+      await panel.dispatchMessage(message);
+      await vi.waitFor(() => expect(ipcStub[ipcMethod]).toHaveBeenCalledTimes(1));
+      await vi.waitFor(() =>
+        expect(renderedText(capturedTabPanelHtml(tabId))).toContain(arrivalText)
+      );
+
+      await panel.dispatchMessage(message);
+      await vi.waitFor(() => expect(ipcStub[ipcMethod]).toHaveBeenCalledTimes(2));
+    }
+  );
+
+  it.each(LOADING_CASES)(
+    "$tabId keeps the active tab visible through failure, Retry, loading, and success",
+    async ({ tabId, loadingText, ipcMethod, message, fixture, arrivalText, retryButtonId }) => {
+      const retryResponse = deferred<unknown>();
+      ipcStub[ipcMethod]
+        .mockRejectedValueOnce(new Error(TRANSPORT_ERRORS.offline))
+        .mockImplementationOnce(() => retryResponse.promise);
+      const panel = capturedPanels.at(-1);
+      if (!panel) throw new Error("arrival harness: no captured dashboard panel");
+
+      // Selecting the tab exercises its real lazy-load path. The first wire
+      // response creates the Retry CTA through the production classifier.
+      await panel.dispatchMessage({ type: "selectTab", tab: tabId });
+      await vi.waitFor(() => expect(ipcStub[ipcMethod]).toHaveBeenCalledTimes(1));
+      await vi.waitFor(() => {
+        expect(panel.webview.html).toContain(`class="tab-panel active" id="tab-panel-${tabId}"`);
+        expect(capturedTabPanelHtml(tabId)).toContain(`id="${retryButtonId}"`);
+      });
+
+      // Dispatch the same message emitted by that rendered Retry control.
+      // The active panel must acknowledge it before the second IPC can settle.
+      await panel.dispatchMessage(message);
+      expect(panel.webview.html).toContain(`class="tab-panel active" id="tab-panel-${tabId}"`);
+      expect(renderedText(capturedTabPanelHtml(tabId))).toContain(loadingText);
+      await vi.waitFor(() => expect(ipcStub[ipcMethod]).toHaveBeenCalledTimes(2));
+
+      retryResponse.resolve(fixture());
+      await vi.waitFor(() =>
+        expect(renderedText(capturedTabPanelHtml(tabId))).toContain(arrivalText)
+      );
+      expect(panel.webview.html).toContain(`class="tab-panel active" id="tab-panel-${tabId}"`);
+    }
+  );
+
+  it("continues the refresh when the immediate loading render fails", async () => {
+    const response = deferred<unknown>();
+    ipcStub.platformGetAnalyticsHealth.mockImplementation(() => response.promise);
+    vi.spyOn(
+      dashboard as unknown as { renderPanel: () => void },
+      "renderPanel"
+    ).mockImplementationOnce(() => {
+      throw new Error("synthetic webview assignment failure");
+    });
+
+    const refreshPromise = dashboard.refreshHealthAnalyticsData();
+
+    await vi.waitFor(() => expect(ipcStub.platformGetAnalyticsHealth).toHaveBeenCalledTimes(1));
+    response.resolve(arrivalFixtures.analyticsHealth());
+    await expect(refreshPromise).resolves.toBeUndefined();
+  });
+
+  it("coalesces duplicate refresh messages while a tab is already loading", async () => {
+    const response = deferred<unknown>();
+    ipcStub.platformGetAnalyticsRuns.mockImplementation(() => response.promise);
+    const renderSpy = vi.spyOn(dashboard as unknown as { renderPanel: () => void }, "renderPanel");
+    const panel = capturedPanels.at(-1);
+    if (!panel) throw new Error("arrival harness: no captured dashboard panel");
+
+    await panel.dispatchMessage({ type: "runsRefresh" });
+    await panel.dispatchMessage({ type: "runsRefresh" });
+
+    expect(renderSpy).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(ipcStub.platformGetAnalyticsRuns).toHaveBeenCalledTimes(1));
+    expect(renderedText(capturedTabPanelHtml("runs"))).toContain("Loading pipeline runs…");
+    response.resolve(arrivalFixtures.analyticsRuns());
+    await vi.waitFor(() =>
+      expect(renderedText(capturedTabPanelHtml("runs"))).toContain(
+        "Dashboard health tab renders a blank panel"
+      )
+    );
+  });
+
+  it("queues the newest cost range without allowing out-of-order responses", async () => {
+    const first = deferred<unknown>();
+    const second = deferred<unknown>();
+    ipcStub.platformGetCostAnalytics
+      .mockImplementationOnce(() => first.promise)
+      .mockImplementationOnce(() => second.promise);
+    const panel = capturedPanels.at(-1);
+    if (!panel) throw new Error("arrival harness: no captured dashboard panel");
+
+    await panel.dispatchMessage({ type: "costDateRangeChange", range: "7d" });
+    await vi.waitFor(() => expect(ipcStub.platformGetCostAnalytics).toHaveBeenCalledTimes(1));
+    await panel.dispatchMessage({ type: "costDateRangeChange", range: "30d" });
+    expect(ipcStub.platformGetCostAnalytics).toHaveBeenCalledTimes(1);
+
+    first.resolve(arrivalFixtures.costAnalytics());
+    await vi.waitFor(() => expect(ipcStub.platformGetCostAnalytics).toHaveBeenCalledTimes(2));
+    const queuedLoading = capturedTabPanelHtml("cost");
+    expect(renderedText(queuedLoading)).toContain("Loading cost data…");
+    expect(queuedLoading).toContain('class="toggle-btn active" data-cost-range="30d"');
+
+    second.resolve(arrivalFixtures.costAnalytics());
+    await vi.waitFor(() =>
+      expect(renderedText(capturedTabPanelHtml("cost"))).toContain("claude-sonnet-4-6")
+    );
+  });
+
+  it("cancels a queued cost range when the user returns to the active range", async () => {
+    const response = deferred<unknown>();
+    ipcStub.platformGetCostAnalytics.mockImplementation(() => response.promise);
+    const panel = capturedPanels.at(-1);
+    if (!panel) throw new Error("arrival harness: no captured dashboard panel");
+
+    await panel.dispatchMessage({ type: "costDateRangeChange", range: "7d" });
+    await vi.waitFor(() => expect(ipcStub.platformGetCostAnalytics).toHaveBeenCalledTimes(1));
+    await panel.dispatchMessage({ type: "costDateRangeChange", range: "30d" });
+    await panel.dispatchMessage({ type: "costDateRangeChange", range: "7d" });
+
+    response.resolve(arrivalFixtures.costAnalytics());
+    await vi.waitFor(() =>
+      expect(renderedText(capturedTabPanelHtml("cost"))).toContain("claude-sonnet-4-6")
+    );
+    expect(ipcStub.platformGetCostAnalytics).toHaveBeenCalledTimes(1);
+    expect(capturedTabPanelHtml("cost")).toContain(
+      'class="toggle-btn active" data-cost-range="7d"'
+    );
+  });
+
+  it.each([
+    {
+      label: "filter",
+      message: {
+        type: "runsFilter",
+        filters: {
+          dateFrom: "2026-07-01",
+          dateTo: "2026-08-01",
+          outcomeFilter: "failed",
+          branchFilter: "main",
+        },
+      },
+      expectedArgs: ["2026-07-01", "2026-08-01", undefined, "failed", "main", 20],
+    },
+    {
+      label: "page",
+      message: { type: "runsPageChange", page: 1 },
+      expectedArgs: [undefined, undefined, "eyJvIjoyMH0", undefined, undefined, 20],
+    },
+    {
+      label: "reset",
+      message: { type: "runsResetFilters" },
+      expectedArgs: [undefined, undefined, undefined, undefined, undefined, 20],
+    },
+  ])("replays the newest queued Runs $label action with exact arguments", async (testCase) => {
+    const first = deferred<unknown>();
+    const second = deferred<unknown>();
+    ipcStub.platformGetAnalyticsRuns
+      .mockImplementationOnce(() => first.promise)
+      .mockImplementationOnce(() => second.promise);
+    const panel = capturedPanels.at(-1);
+    if (!panel) throw new Error("arrival harness: no captured dashboard panel");
+
+    await panel.dispatchMessage({ type: "runsRefresh" });
+    await vi.waitFor(() => expect(ipcStub.platformGetAnalyticsRuns).toHaveBeenCalledTimes(1));
+    await panel.dispatchMessage(testCase.message);
+    expect(ipcStub.platformGetAnalyticsRuns).toHaveBeenCalledTimes(1);
+
+    first.resolve(arrivalFixtures.analyticsRuns());
+    await vi.waitFor(() => expect(ipcStub.platformGetAnalyticsRuns).toHaveBeenCalledTimes(2));
+    expect(ipcStub.platformGetAnalyticsRuns).toHaveBeenLastCalledWith(...testCase.expectedArgs);
+
+    second.resolve(arrivalFixtures.analyticsRuns());
+    await vi.waitFor(() =>
+      expect(renderedText(capturedTabPanelHtml("runs"))).toContain(
+        "Dashboard health tab renders a blank panel"
+      )
+    );
+  });
+
+  it("replays a queued Trends range with the selected period", async () => {
+    const first = deferred<unknown>();
+    const second = deferred<unknown>();
+    ipcStub.platformGetAnalyticsTrends
+      .mockImplementationOnce(() => first.promise)
+      .mockImplementationOnce(() => second.promise);
+    const panel = capturedPanels.at(-1);
+    if (!panel) throw new Error("arrival harness: no captured dashboard panel");
+
+    await panel.dispatchMessage({ type: "trendsRefresh" });
+    await vi.waitFor(() => expect(ipcStub.platformGetAnalyticsTrends).toHaveBeenCalledTimes(1));
+    await panel.dispatchMessage({ type: "trendsDateRangeChange", range: "90d" });
+    first.resolve(arrivalFixtures.analyticsTrends());
+
+    await vi.waitFor(() => expect(ipcStub.platformGetAnalyticsTrends).toHaveBeenCalledTimes(2));
+    expect(ipcStub.platformGetAnalyticsTrends).toHaveBeenLastCalledWith("90d");
+    second.resolve(arrivalFixtures.analyticsTrends());
+    await vi.waitFor(() =>
+      expect(renderedText(capturedTabPanelHtml("trends"))).toContain("2026-08-04")
+    );
+  });
+
+  it("replays a queued Compliance page cursor", async () => {
+    const first = deferred<unknown>();
+    const second = deferred<unknown>();
+    ipcStub.platformAuditListReports
+      .mockImplementationOnce(() => first.promise)
+      .mockImplementationOnce(() => second.promise);
+    const panel = capturedPanels.at(-1);
+    if (!panel) throw new Error("arrival harness: no captured dashboard panel");
+
+    await panel.dispatchMessage({ type: "complianceRefresh" });
+    await vi.waitFor(() => expect(ipcStub.platformAuditListReports).toHaveBeenCalledTimes(1));
+    await panel.dispatchMessage({ type: "compliancePageChange", cursor: "cursor-2" });
+    first.resolve(arrivalFixtures.complianceReports());
+
+    await vi.waitFor(() => expect(ipcStub.platformAuditListReports).toHaveBeenCalledTimes(2));
+    expect(ipcStub.platformAuditListReports).toHaveBeenLastCalledWith("cursor-2", 20);
+    second.resolve(arrivalFixtures.complianceReports());
+    await vi.waitFor(() =>
+      expect(renderedText(capturedTabPanelHtml("compliance"))).toContain("2026-07-01")
+    );
+  });
+});
 
 // ---------------------------------------------------------------------------
 // Health
@@ -334,6 +690,12 @@ describe("arrival: every platform tab short-circuits when signed out", () => {
       const text = tabText(tab).toLowerCase();
       expect(text).toContain("sign-in required");
       expect(text).not.toContain("platform error");
+
+      // The token-gate early return must release the same per-tab lock used by
+      // a real request; otherwise signing in would leave Retry dead forever.
+      signIn();
+      await drive[tab]();
+      expect(ipcStub[ipcMethod[tab]]).toHaveBeenCalledTimes(1);
     }
   );
 });

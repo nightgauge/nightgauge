@@ -52,17 +52,22 @@ export interface CapturedPanel {
   dispose: ReturnType<typeof vi.fn>;
   visible: boolean;
   title: string;
+  dispatchMessage: (message: unknown) => Promise<void>;
 }
 
 /** Every panel created since the last `resetHarness()`. */
 export const capturedPanels: CapturedPanel[] = [];
 
 function makePanel(): CapturedPanel {
+  let messageHandler: ((message: unknown) => unknown) | undefined;
   return {
     webview: {
       html: "",
       cspSource: "vscode-resource:",
-      onDidReceiveMessage: vi.fn(() => ({ dispose: vi.fn() })),
+      onDidReceiveMessage: vi.fn((handler: (message: unknown) => unknown) => {
+        messageHandler = handler;
+        return { dispose: vi.fn() };
+      }),
       postMessage: vi.fn(),
       asWebviewUri: vi.fn((u: unknown) => u),
     },
@@ -71,6 +76,11 @@ function makePanel(): CapturedPanel {
     dispose: vi.fn(),
     visible: true,
     title: "Nightgauge Dashboard",
+    dispatchMessage: async (message: unknown) => {
+      if (!messageHandler)
+        throw new Error("arrival harness: no webview message handler registered");
+      await messageHandler(message);
+    },
   };
 }
 
