@@ -339,10 +339,15 @@ describe("TelemetryStore", () => {
       await store.rebuildIndex();
       const firstTemp = vi.mocked(fs.writeFile).mock.calls[0][0] as string;
 
-      // Should write to temp file first, then rename.
-      expect(firstTemp).toMatch(
-        new RegExp(`^${indexPath.replace(/\//g, "\\/")}\\.\\d+\\.[0-9a-f]+\\.tmp$`)
-      );
+      // Should write to temp file first, then rename. Asserted structurally
+      // rather than by building a RegExp out of `indexPath`: a path is not a
+      // safe regex source. Escaping only `/` (which needs no escaping in a
+      // RegExp constructor) leaves every `.` as a match-anything wildcard, so
+      // the assertion reads stricter than it is — and on Windows the `\`
+      // separators would be read as escapes. Splitting the suffix off and
+      // comparing the prefix with `toBe` has no such failure mode.
+      expect(firstTemp.startsWith(`${indexPath}.`)).toBe(true);
+      expect(firstTemp.slice(indexPath.length)).toMatch(/^\.\d+\.[0-9a-f]+\.tmp$/);
       expect(fs.writeFile).toHaveBeenCalledWith(firstTemp, expect.any(String), "utf-8");
       expect(fs.rename).toHaveBeenCalledWith(firstTemp, indexPath);
 
