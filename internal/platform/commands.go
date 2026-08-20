@@ -1,7 +1,6 @@
 package platform
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -9,6 +8,8 @@ import (
 	"net/http"
 	"net/url"
 	"time"
+
+	api "github.com/nightgauge/nightgauge/api/generated/go/platform"
 )
 
 // CommandResult holds the outcome of executing a remote command.
@@ -63,14 +64,13 @@ func (s *CommandService) PollCommands(ctx context.Context) ([]PendingCommand, er
 		return nil, fmt.Errorf("poll commands: agentId not configured")
 	}
 
-	endpoint := s.client.base + "/v1/commands/pending?agentId=" + url.QueryEscape(s.client.agentID)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	req, err := s.client.newRequest(ctx, requestSpec{
+		Op:      api.OpCommandsPending,
+		Query:   url.Values{"agentId": []string{s.client.agentID}},
+		Headers: map[string]string{"Accept": "application/json"},
+	})
 	if err != nil {
 		return nil, fmt.Errorf("poll commands: %w", err)
-	}
-	req.Header.Set("Accept", "application/json")
-	if bearer := s.client.bearer(); bearer != "" {
-		req.Header.Set("Authorization", "Bearer "+bearer)
 	}
 
 	resp, err := http.DefaultClient.Do(req)
@@ -111,17 +111,17 @@ func (s *CommandService) AcknowledgeCommand(ctx context.Context, cmdID string, r
 		return fmt.Errorf("marshal command result: %w", err)
 	}
 
-	reqURL := s.client.base + "/v1/commands/" + url.PathEscape(cmdID) + "/ack"
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, reqURL, bytes.NewReader(body))
+	req, err := s.client.newRequest(ctx, requestSpec{
+		Op:       api.OpCommandsAck,
+		PathArgs: []string{cmdID},
+		Body:     body,
+		Headers: map[string]string{
+			"Content-Type": "application/json",
+			"Accept":       "application/json",
+		},
+	})
 	if err != nil {
 		return fmt.Errorf("create acknowledge request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json")
-
-	// Inject auth header using the same pattern as the generated client.
-	if bearer := s.client.bearer(); bearer != "" {
-		req.Header.Set("Authorization", "Bearer "+bearer)
 	}
 
 	resp, err := http.DefaultClient.Do(req)
@@ -157,15 +157,17 @@ func (s *CommandService) AcknowledgeAgentCommand(ctx context.Context, agentId, c
 		return "", fmt.Errorf("acknowledge agent command: marshal body: %w", err)
 	}
 
-	reqURL := s.client.base + "/v1/agents/" + url.PathEscape(agentId) + "/commands/" + url.PathEscape(commandId) + "/ack"
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, reqURL, bytes.NewReader(body))
+	req, err := s.client.newRequest(ctx, requestSpec{
+		Op:       api.OpAgentsAckCommand,
+		PathArgs: []string{agentId, commandId},
+		Body:     body,
+		Headers: map[string]string{
+			"Content-Type": "application/json",
+			"Accept":       "application/json",
+		},
+	})
 	if err != nil {
 		return "", fmt.Errorf("acknowledge agent command: create request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json")
-	if bearer := s.client.bearer(); bearer != "" {
-		req.Header.Set("Authorization", "Bearer "+bearer)
 	}
 
 	resp, err := http.DefaultClient.Do(req)

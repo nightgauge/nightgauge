@@ -1,12 +1,12 @@
 package platform
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -389,14 +389,13 @@ func (s *AnalyticsService) pushPipelineRunSync(ctx context.Context, run Executio
 	}
 
 	for attempt := 0; attempt < pushPipelineRunMaxAttempts; attempt++ {
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-			s.client.base+"/v1/telemetry/pipeline-run", bytes.NewReader(data))
+		req, err := s.client.newRequest(ctx, requestSpec{
+			Op:      api.OpTelemetryIngestPipelineRun,
+			Body:    data,
+			Headers: map[string]string{"Content-Type": "application/json"},
+		})
 		if err != nil {
 			return fmt.Errorf("create push pipeline run request: %w", err)
-		}
-		req.Header.Set("Content-Type", "application/json")
-		if bearer := s.client.bearer(); bearer != "" {
-			req.Header.Set("Authorization", "Bearer "+bearer)
 		}
 
 		resp, err := http.DefaultClient.Do(req)
@@ -612,14 +611,13 @@ func (s *AnalyticsService) emitPipelineEventSync(ctx context.Context, event Pipe
 		return fmt.Errorf("marshal pipeline event: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		s.client.base+"/v1/pipelines/events", bytes.NewReader(data))
+	req, err := s.client.newRequest(ctx, requestSpec{
+		Op:      api.OpPipelineIngestEvent,
+		Body:    data,
+		Headers: map[string]string{"Content-Type": "application/json"},
+	})
 	if err != nil {
 		return fmt.Errorf("create emit pipeline event request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	if bearer := s.client.bearer(); bearer != "" {
-		req.Header.Set("Authorization", "Bearer "+bearer)
 	}
 
 	resp, err := http.DefaultClient.Do(req)
@@ -663,14 +661,13 @@ func (s *AnalyticsService) syncQueueSync(ctx context.Context, payload QueueSyncP
 		return fmt.Errorf("marshal queue sync payload: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut,
-		s.client.base+"/v1/queue/sync", bytes.NewReader(data))
+	req, err := s.client.newRequest(ctx, requestSpec{
+		Op:      api.OpQueueSync,
+		Body:    data,
+		Headers: map[string]string{"Content-Type": "application/json"},
+	})
 	if err != nil {
 		return fmt.Errorf("create queue sync request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	if bearer := s.client.bearer(); bearer != "" {
-		req.Header.Set("Authorization", "Bearer "+bearer)
 	}
 
 	resp, err := http.DefaultClient.Do(req)
@@ -782,22 +779,17 @@ func (s *AnalyticsService) GetCostAnalytics(ctx context.Context, startDate, endD
 		return &CostAnalyticsResult{}, nil
 	}
 
-	url := s.client.base + "/v1/analytics/cost"
-	sep := "?"
+	query := url.Values{}
 	if startDate != "" {
-		url += sep + "startDate=" + startDate
-		sep = "&"
+		query.Set("startDate", startDate)
 	}
 	if endDate != "" {
-		url += sep + "endDate=" + endDate
+		query.Set("endDate", endDate)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	req, err := s.client.newRequest(ctx, requestSpec{Op: api.OpAnalyticsCost, Query: query})
 	if err != nil {
 		return nil, fmt.Errorf("create cost analytics request: %w", err)
-	}
-	if bearer := s.client.bearer(); bearer != "" {
-		req.Header.Set("Authorization", "Bearer "+bearer)
 	}
 
 	resp, err := http.DefaultClient.Do(req)
@@ -844,21 +836,20 @@ type AnalyticsHealthResult struct {
 }
 
 // GetAnalyticsHealth fetches the 7-dimension health score from GET /v1/analytics/health.
-// Uses a raw HTTP GET because the generated OpenAPI client does not yet include this endpoint.
-// TODO: replace with generated client method when platform spec is regenerated.
 // Returns an empty result if offline.
+//
+// The operation is behind the platform's jwtMiddleware (api.OpAnalyticsHealth
+// declares api.SecurityUserJWT), so a client holding only a license key is
+// refused by newRequest with ErrCredentialInsufficient rather than being sent
+// to collect a 401.
 func (s *AnalyticsService) GetAnalyticsHealth(ctx context.Context) (*AnalyticsHealthResult, error) {
 	if !s.client.IsOnline() {
 		return &AnalyticsHealthResult{}, nil
 	}
 
-	url := s.client.base + "/v1/analytics/health"
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	req, err := s.client.newRequest(ctx, requestSpec{Op: api.OpAnalyticsHealth})
 	if err != nil {
 		return nil, fmt.Errorf("create analytics health request: %w", err)
-	}
-	if bearer := s.client.bearer(); bearer != "" {
-		req.Header.Set("Authorization", "Bearer "+bearer)
 	}
 
 	resp, err := http.DefaultClient.Do(req)
@@ -911,45 +902,40 @@ type AnalyticsRunsResult struct {
 }
 
 // GetAnalyticsRuns fetches paginated pipeline run history from GET /v1/analytics/runs.
-// Uses a raw HTTP GET because the generated OpenAPI client does not yet include this endpoint.
 // Returns an empty result if offline.
+//
+// Unlike health/cost/trends this operation sits behind the platform's
+// pipelineAuth (api.SecurityPipeline), so it is reachable on the license-key
+// path too — the contract records that difference instead of leaving it to a
+// code comment.
 func (s *AnalyticsService) GetAnalyticsRuns(ctx context.Context, startDate, endDate, cursor, outcome, branch string, limit int) (*AnalyticsRunsResult, error) {
 	if !s.client.IsOnline() {
 		return &AnalyticsRunsResult{Entries: []RunsEntry{}}, nil
 	}
 
-	url := s.client.base + "/v1/analytics/runs"
-	sep := "?"
+	query := url.Values{}
 	if startDate != "" {
-		url += sep + "startDate=" + startDate
-		sep = "&"
+		query.Set("startDate", startDate)
 	}
 	if endDate != "" {
-		url += sep + "endDate=" + endDate
-		sep = "&"
+		query.Set("endDate", endDate)
 	}
 	if cursor != "" {
-		url += sep + "cursor=" + cursor
-		sep = "&"
+		query.Set("cursor", cursor)
 	}
 	if outcome != "" {
-		url += sep + "outcome=" + outcome
-		sep = "&"
+		query.Set("outcome", outcome)
 	}
 	if branch != "" {
-		url += sep + "branch=" + branch
-		sep = "&"
+		query.Set("branch", branch)
 	}
 	if limit > 0 {
-		url += fmt.Sprintf("%slimit=%d", sep, limit)
+		query.Set("limit", strconv.Itoa(limit))
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	req, err := s.client.newRequest(ctx, requestSpec{Op: api.OpAnalyticsRuns, Query: query})
 	if err != nil {
 		return nil, fmt.Errorf("create analytics runs request: %w", err)
-	}
-	if bearer := s.client.bearer(); bearer != "" {
-		req.Header.Set("Authorization", "Bearer "+bearer)
 	}
 
 	resp, err := http.DefaultClient.Do(req)
@@ -993,13 +979,12 @@ func (s *AnalyticsService) GetAnalyticsTrends(ctx context.Context, period string
 	if !s.client.IsOnline() {
 		return &AnalyticsTrendsResult{Current: []AnalyticsTrendEntry{}, Previous: []AnalyticsTrendEntry{}}, nil
 	}
-	url := s.client.base + "/v1/analytics/trends?period=" + period
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	req, err := s.client.newRequest(ctx, requestSpec{
+		Op:    api.OpAnalyticsTrends,
+		Query: url.Values{"period": []string{period}},
+	})
 	if err != nil {
 		return nil, fmt.Errorf("create analytics trends request: %w", err)
-	}
-	if bearer := s.client.bearer(); bearer != "" {
-		req.Header.Set("Authorization", "Bearer "+bearer)
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {

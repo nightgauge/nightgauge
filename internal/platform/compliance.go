@@ -1,12 +1,13 @@
 package platform
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
+
+	api "github.com/nightgauge/nightgauge/api/generated/go/platform"
 )
 
 // ComplianceService wraps the platform API compliance report endpoints.
@@ -78,14 +79,13 @@ func (s *ComplianceService) GenerateReport(ctx context.Context, reportType, star
 		return nil, fmt.Errorf("marshal generate report request: %w", err)
 	}
 
-	url := s.client.base + "/v1/audit/reports"
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(bodyBytes))
+	req, err := s.client.newRequest(ctx, requestSpec{
+		Op:      api.OpAuditReportsGenerate,
+		Body:    bodyBytes,
+		Headers: map[string]string{"Content-Type": "application/json"},
+	})
 	if err != nil {
 		return nil, fmt.Errorf("create generate report request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	if bearer := s.client.bearer(); bearer != "" {
-		req.Header.Set("Authorization", "Bearer "+bearer)
 	}
 
 	resp, err := http.DefaultClient.Do(req)
@@ -111,22 +111,17 @@ func (s *ComplianceService) ListReports(ctx context.Context, cursor string, limi
 		return &ComplianceReportsPage{Reports: []ComplianceReportEntry{}}, nil
 	}
 
-	baseURL := s.client.base + "/v1/audit/reports"
-	params := make(map[string]string)
+	query := url.Values{}
 	if cursor != "" {
-		params["cursor"] = cursor
+		query.Set("cursor", cursor)
 	}
 	if limit > 0 {
-		params["limit"] = fmt.Sprintf("%d", limit)
+		query.Set("limit", fmt.Sprintf("%d", limit))
 	}
-	listURL := buildURL(baseURL, params)
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, listURL, nil)
+	req, err := s.client.newRequest(ctx, requestSpec{Op: api.OpAuditReportsList, Query: query})
 	if err != nil {
 		return nil, fmt.Errorf("create list reports request: %w", err)
-	}
-	if bearer := s.client.bearer(); bearer != "" {
-		req.Header.Set("Authorization", "Bearer "+bearer)
 	}
 
 	resp, err := http.DefaultClient.Do(req)
@@ -155,13 +150,12 @@ func (s *ComplianceService) GetReport(ctx context.Context, reportID string) (*Co
 		return nil, fmt.Errorf("compliance reports not yet available: platform client offline")
 	}
 
-	reportURL := s.client.base + "/v1/audit/reports/" + url.PathEscape(reportID)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reportURL, nil)
+	req, err := s.client.newRequest(ctx, requestSpec{
+		Op:       api.OpAuditReportsGet,
+		PathArgs: []string{reportID},
+	})
 	if err != nil {
 		return nil, fmt.Errorf("create get report request: %w", err)
-	}
-	if bearer := s.client.bearer(); bearer != "" {
-		req.Header.Set("Authorization", "Bearer "+bearer)
 	}
 
 	resp, err := http.DefaultClient.Do(req)
@@ -179,16 +173,4 @@ func (s *ComplianceService) GetReport(ctx context.Context, reportID string) (*Co
 		return nil, fmt.Errorf("decode get report response: %w", err)
 	}
 	return &result, nil
-}
-
-// buildURL constructs a URL with the given base and query params, safely escaping values.
-func buildURL(base string, params map[string]string) string {
-	if len(params) == 0 {
-		return base
-	}
-	q := url.Values{}
-	for k, v := range params {
-		q.Set(k, v)
-	}
-	return base + "?" + q.Encode()
 }

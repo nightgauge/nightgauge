@@ -37,6 +37,7 @@ fragile bash + python3 + sed chains in skills/pr-preflight/SKILL.md
 	cmd.AddCommand(preflightSecretsCmd())
 	cmd.AddCommand(preflightSkillIncludesCmd())
 	cmd.AddCommand(preflightSkillNoDirectGHCmd())
+	cmd.AddCommand(preflightPlatformRawHTTPCmd())
 	cmd.AddCommand(preflightSkillAntiPatternsCmd())
 	cmd.AddCommand(preflightSkillPortabilityCmd())
 	cmd.AddCommand(preflightDependencyGuardCmd())
@@ -367,6 +368,81 @@ func printPreflightSkillAntiPatternsHuman(r *preflight.SkillAntiPatternsResult) 
 	}
 	if len(r.Findings) == 0 {
 		fmt.Println("no skill anti-patterns found ✓")
+	}
+}
+
+// preflightPlatformRawHTTPCmd wraps `internal/preflight.RunPlatformRawHTTPCheck`
+// and exits 1 when internal/platform builds a request against the platform base
+// URL outside Client.newRequest (#750).
+func preflightPlatformRawHTTPCmd() *cobra.Command {
+	var (
+		jsonOutput bool
+		root       string
+		dir        string
+	)
+	cmd := &cobra.Command{
+		Use:   "platform-raw-http",
+		Short: "Fail when internal/platform hand-rolls a request to the platform base URL",
+		Long: `Parse every non-test .go file in internal/platform and emit a finding for
+each http.NewRequest* call and each read of the platform Client's base
+field outside request.go.
+
+internal/platform reaches the platform through exactly two doors: the
+oapi-codegen client in api/generated/go/platform, or Client.newRequest,
+which builds the URL from the operation contract in
+api/platform-operations.yaml and enforces the credential requirement that
+contract declares. A hand-rolled request is a third door with no contract
+behind it — which is how the license-key/JWT mismatch in #741 went
+undetected across twenty-odd endpoints.
+
+Schema version 1 — field names (v, root, dir, files_checked, findings,
+warnings) are stable and consumed by callers via fixed jq paths.
+
+Exit codes:
+  0  no hand-rolled platform request found
+  1  one or more findings (gate fails)
+  2  hard error (e.g. unresolvable root, missing scan directory)`,
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			result, err := preflight.RunPlatformRawHTTPCheck(cmd.Context(), preflight.PlatformRawHTTPOptions{
+				Root: root,
+				Dir:  dir,
+			})
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "preflight platform-raw-http: %v\n", err)
+				os.Exit(2)
+			}
+			if jsonOutput {
+				if err := printJSON(result); err != nil {
+					fmt.Fprintf(os.Stderr, "warning: failed to encode JSON output: %v\n", err)
+				}
+			} else {
+				printPreflightPlatformRawHTTPHuman(result)
+			}
+			if len(result.Findings) > 0 {
+				os.Exit(1)
+			}
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Output result as JSON (parsed by skills)")
+	cmd.Flags().StringVar(&root, "root", "", "Repository root (default: current working directory)")
+	cmd.Flags().StringVar(&dir, "dir", "", "Directory to scan, relative to root (default: internal/platform)")
+	return cmd
+}
+
+func printPreflightPlatformRawHTTPHuman(r *preflight.PlatformRawHTTPResult) {
+	fmt.Printf("nightgauge preflight platform-raw-http — schema v%d\n", r.V)
+	fmt.Printf("root: %s\n", r.Root)
+	fmt.Printf("dir: %s  files checked: %d  findings: %d\n", r.Dir, r.FilesChecked, len(r.Findings))
+	for _, f := range r.Findings {
+		fmt.Printf("  ✗ [%s] %s:%d  %s\n      → %s\n", f.Kind, f.File, f.Line, f.Match, f.Detail)
+	}
+	for _, w := range r.Warnings {
+		fmt.Printf("  ! %s\n", w)
+	}
+	if len(r.Findings) == 0 {
+		fmt.Println("no hand-rolled platform requests found ✓")
 	}
 }
 

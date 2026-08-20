@@ -8,9 +8,10 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
+
+	api "github.com/nightgauge/nightgauge/api/generated/go/platform"
 )
 
 // Action Center resolution consumption — platform → client (ADR 015 §E,
@@ -241,15 +242,16 @@ func runAttentionCommandStream(ctx context.Context, client *Client, consumer *At
 // at least one command frame was dispatched (used to reset the reconnect
 // backoff). A ctx-cancelled read is not an error.
 func streamAgentCommands(ctx context.Context, client *Client, consumer *AttentionCommandConsumer, agentID string) (agentGone bool, gotFrame bool, err error) {
-	endpoint := client.base + "/v1/agents/" + url.PathEscape(agentID) + "/commands"
-	req, reqErr := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	req, reqErr := client.newRequest(ctx, requestSpec{
+		Op:       api.OpAgentsStreamCommands,
+		PathArgs: []string{agentID},
+		Headers: map[string]string{
+			"Accept":        "text/event-stream",
+			"Cache-Control": "no-cache",
+		},
+	})
 	if reqErr != nil {
 		return false, false, fmt.Errorf("attention command stream: request: %w", reqErr)
-	}
-	req.Header.Set("Accept", "text/event-stream")
-	req.Header.Set("Cache-Control", "no-cache")
-	if bearer := client.bearer(); bearer != "" {
-		req.Header.Set("Authorization", "Bearer "+bearer)
 	}
 
 	resp, doErr := attentionStreamHTTPClient.Do(req)

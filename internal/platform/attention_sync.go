@@ -1,7 +1,6 @@
 package platform
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
@@ -12,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	api "github.com/nightgauge/nightgauge/api/generated/go/platform"
 	"github.com/nightgauge/nightgauge/internal/attention"
 )
 
@@ -258,14 +258,16 @@ func (s *AttentionSyncService) pushBatch(ctx context.Context, reqs []attention.D
 		return fmt.Errorf("attention sync: marshal: %w", err)
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPut, s.client.base+"/v1/attention/sync", bytes.NewReader(data))
+	httpReq, err := s.client.newRequest(ctx, requestSpec{
+		Op:   api.OpAttentionSync,
+		Body: data,
+		Headers: map[string]string{
+			"Content-Type": "application/json",
+			"Accept":       "application/json",
+		},
+	})
 	if err != nil {
 		return fmt.Errorf("attention sync: request: %w", err)
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Accept", "application/json")
-	if bearer := s.client.bearer(); bearer != "" {
-		httpReq.Header.Set("Authorization", "Bearer "+bearer)
 	}
 
 	resp, err := http.DefaultClient.Do(httpReq)

@@ -1,14 +1,14 @@
 package platform
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
+
+	api "github.com/nightgauge/nightgauge/api/generated/go/platform"
 )
 
 // Action Center agent registration — the daemon self-registers as a platform
@@ -89,14 +89,16 @@ func (s *AgentRegistrationService) RegisterAgent(ctx context.Context) (AgentRegi
 		return AgentRegistration{}, fmt.Errorf("agent registration: marshal: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.client.base+"/v1/agents/register", bytes.NewReader(data))
+	req, err := s.client.newRequest(ctx, requestSpec{
+		Op:   api.OpAgentsRegister,
+		Body: data,
+		Headers: map[string]string{
+			"Content-Type": "application/json",
+			"Accept":       "application/json",
+		},
+	})
 	if err != nil {
 		return AgentRegistration{}, fmt.Errorf("agent registration: request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json")
-	if bearer := s.client.bearer(); bearer != "" {
-		req.Header.Set("Authorization", "Bearer "+bearer)
 	}
 
 	resp, err := http.DefaultClient.Do(req)
@@ -130,14 +132,13 @@ func (s *AgentRegistrationService) Heartbeat(ctx context.Context, agentID string
 	if agentID == "" {
 		return fmt.Errorf("agent heartbeat: agentId not set")
 	}
-	endpoint := s.client.base + "/v1/agents/" + url.PathEscape(agentID) + "/heartbeat"
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut, endpoint, nil)
+	req, err := s.client.newRequest(ctx, requestSpec{
+		Op:       api.OpAgentsHeartbeat,
+		PathArgs: []string{agentID},
+		Headers:  map[string]string{"Accept": "application/json"},
+	})
 	if err != nil {
 		return fmt.Errorf("agent heartbeat: request: %w", err)
-	}
-	req.Header.Set("Accept", "application/json")
-	if bearer := s.client.bearer(); bearer != "" {
-		req.Header.Set("Authorization", "Bearer "+bearer)
 	}
 
 	resp, err := http.DefaultClient.Do(req)

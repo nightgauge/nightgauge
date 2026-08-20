@@ -1,28 +1,67 @@
 .PHONY: generate generate-go generate-ts install-codegen \
 	build-cli test-go test-integration vet lint-go build-all generate-ipc-client \
+	generate-platform-operations check-platform-operations require-openapi-spec \
 	generate-terminal-kind-table check-terminal-kind-table \
 	test-platform-integration test-e2e-docker integration-gitlab \
 	integration-gitlab-up integration-gitlab-down test-parity \
 	integration-mattermost integration-mattermost-up integration-mattermost-down
 
-# Install codegen tools
+# The platform OpenAPI document these two targets read.
+#
+# It is NOT in this repository and never has been: `git log --all -- $(OPENAPI_SPEC)`
+# is empty, yet api/generated/go/platform/types.gen.go and
+# api/generated/ts/platform-api.ts are both committed. The outputs were vendored
+# without their input, so neither target below can run here or in CI, and no
+# operation can be added to the oapi-codegen client until the document is
+# vendored or fetched. The guard makes that fail loudly instead of as an
+# obscure "file not found" from the generator. See api/platform-operations.yaml.
+OPENAPI_SPEC := api/openapi.yaml
+
+require-openapi-spec:
+	@test -f $(OPENAPI_SPEC) || { \
+		echo "error: $(OPENAPI_SPEC) is missing."; \
+		echo "  The vendored clients under api/generated/ were committed without their"; \
+		echo "  source document, so this target cannot run. Vendor the platform OpenAPI"; \
+		echo "  document at $(OPENAPI_SPEC) first. Operations the binary calls outside"; \
+		echo "  the generated client are declared in api/platform-operations.yaml."; \
+		exit 1; \
+	}
+
+# Install codegen tools. Pinned: an unpinned @latest makes the generated client
+# a function of the day it was generated, which turns any drift check into a
+# coin flip. Keep in step with the version in types.gen.go's header.
+OAPI_CODEGEN_VERSION := v2.6.0
+
 install-codegen:
-	go install github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@latest
+	go install github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@$(OAPI_CODEGEN_VERSION)
 
 # Generate Go client types from OpenAPI spec
-generate-go: install-codegen
+generate-go: require-openapi-spec install-codegen
 	mkdir -p api/generated/go/platform
 	oapi-codegen -generate types,client -package platform \
-		-o api/generated/go/platform/types.gen.go api/openapi.yaml
+		-o api/generated/go/platform/types.gen.go $(OPENAPI_SPEC)
 
 # Generate TypeScript types from OpenAPI spec
-generate-ts:
-	npx openapi-typescript api/openapi.yaml -o api/generated/ts/platform-api.ts
+generate-ts: require-openapi-spec
+	npx openapi-typescript $(OPENAPI_SPEC) -o api/generated/ts/platform-api.ts
+
+# Generate the platform operation registry from api/platform-operations.yaml
+# (#750). This is the artifact internal/platform builds every non-oapi-codegen
+# request from, and the one that carries each operation's credential
+# requirement — the thing the OpenAPI document cannot express.
+generate-platform-operations:
+	go run ./cmd/platform-opsgen \
+		--in api/platform-operations.yaml \
+		--out api/generated/go/platform/operations.gen.go
+
+# Drift check for the above — used by scripts/ci-local.sh, mirroring the
+# generated-IPC-client check. A hand-edited operations.gen.go is a contract
+# nobody reviewed, which is how the class of bug in #741 gets back in.
+check-platform-operations: generate-platform-operations
+	git diff --exit-code api/generated/go/platform/operations.gen.go
 
 # Generate all client types
-generate: generate-go generate-ts
-
-# Validate OpenAPI spec
+generate: generate-go generate-ts generate-platform-operations
 
 # Generate TypeScript IPC client from Go method signatures
 generate-ipc-client:
