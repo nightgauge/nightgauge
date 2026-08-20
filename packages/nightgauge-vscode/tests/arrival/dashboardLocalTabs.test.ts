@@ -54,6 +54,7 @@ vi.mock(
 );
 
 import { Dashboard } from "../../src/views/dashboard/Dashboard";
+import { VALID_TABS } from "../../src/views/dashboard/DashboardHtml";
 import { TelemetryStore } from "../../src/services/TelemetryStore";
 import { PlatformQuotaService } from "../../src/services/PlatformQuotaService";
 import {
@@ -284,22 +285,22 @@ describe("arrival: Epics tab (issue.list over IPC)", () => {
     expect(text).toContain("Epic: multi-repo workspace lifecycle");
   });
 
-  // PRODUCT BUG, found by this tier and deliberately NOT fixed here (#746 is
-  // test-only; the scope boundary keeps it out of src/**).
+  // Was an `it.fails` pin in #746 for a product bug that tier found: `VALID_TABS`
+  // was declared twice — once in DashboardHtml.ts (thirteen tabs) and once
+  // inside the `selectTab` handler in Dashboard.ts (twelve; "epics" missing).
+  // Clicking Epics never updated `this.activeTab`, so the next full re-render
+  // pre-rendered the previously active tab and the panel silently snapped back.
+  // Client-side `activateTab()` swapped the panel immediately, which is why it
+  // looked fine right up until a refresh landed. Fixed in #776 by deleting the
+  // handler's copy and importing the one declaration.
   //
-  // `VALID_TABS` is declared twice. DashboardHtml.ts:269 lists thirteen tabs;
-  // the `selectTab` message handler in Dashboard.ts:1894 has its own copy with
-  // twelve — "epics" is missing. Clicking Epics therefore never updates
-  // `this.activeTab`, so the next full re-render (any refresh, any pipeline
-  // event) silently snaps the visible panel back to whichever tab the server
-  // still believes is active. Client-side `activateTab()` works, which is why
-  // it looks fine until something triggers a re-render.
-  //
-  // Marked `.fails` rather than skipped so it is a live detector in both
-  // directions: it fails the suite if the drift is reintroduced after a fix,
-  // and it fails *as written* the moment someone adds "epics" to the handler's
-  // list — at which point delete the `.fails` and keep the assertion.
-  it.fails("selectTab accepts 'epics' — it does not; the handler's tab list has drifted", () => {
+  // Kept as a live guard rather than deleted with the bug, and written to fail
+  // in every direction the drift can return:
+  //   - a tab the bar renders that `selectTab` rejects → the loop fails;
+  //   - an allowlist entry with no button → the bar-set comparison fails;
+  //   - a tab with no panel to reveal → the panel-set comparison fails;
+  //   - an allowlist that accepts anything → the unknown-tab case fails.
+  it("every tab the bar renders is one selectTab accepts, and nothing else is", () => {
     dashboard = new Dashboard(
       { fsPath: "/mock/extension" } as never,
       createMockMemento(),
@@ -307,12 +308,32 @@ describe("arrival: Epics tab (issue.list over IPC)", () => {
     );
     dashboard.show();
 
-    (dashboard as unknown as { handleMessage: (m: unknown) => void }).handleMessage({
-      type: "selectTab",
-      tab: "epics",
-    });
+    // Read the tabs back out of the rendered HTML rather than restating them,
+    // so the comparison is against what the webview actually ships.
+    const html = renderDashboardHtml(dashboard);
+    const renderedButtons = [...html.matchAll(/data-tab="([^"]+)"/g)].map((m) => m[1]);
+    const renderedPanels = [...html.matchAll(/id="tab-panel-([^"]+)"/g)].map((m) => m[1]);
 
-    expect((dashboard as unknown as { activeTab: string }).activeTab).toBe("epics");
+    expect(renderedButtons).toEqual([...VALID_TABS]);
+    expect(new Set(renderedPanels)).toEqual(new Set(VALID_TABS));
+
+    const select = (tab: string): void =>
+      (dashboard as unknown as { handleMessage: (m: unknown) => void }).handleMessage({
+        type: "selectTab",
+        tab,
+      });
+    const activeTab = (): string => (dashboard as unknown as { activeTab: string }).activeTab;
+
+    for (const tab of VALID_TABS) {
+      select(tab);
+      expect(activeTab()).toBe(tab);
+    }
+
+    // The allowlist is a guard, not a formality: an unrecognized tab must leave
+    // the last valid selection standing.
+    const last = activeTab();
+    select("not-a-tab");
+    expect(activeTab()).toBe(last);
   });
 
   it("a transport failure renders no epics rather than a stale list", async () => {

@@ -266,7 +266,22 @@ function getStyles(): string {
 // Tab navigation (Issue #1539)
 // ---------------------------------------------------------------------------
 
-const VALID_TABS = [
+/**
+ * The dashboard's tabs, in bar order.
+ *
+ * The single source of truth — the tab bar renders from it, and Dashboard.ts's
+ * `selectTab` handler validates against this import rather than a list of its
+ * own (#776). It used to keep a private copy, and the copies drifted: the
+ * handler's was missing "epics", so clicking Epics never set `activeTab` and
+ * the next full re-render snapped the panel back to whatever the extension
+ * host still believed was active. Client-side `activateTab()` masked it until
+ * a refresh landed.
+ *
+ * `scripts/check-arrival-coverage.sh` parses this literal by name out of this
+ * file to enumerate dashboard tabs — keep the `const VALID_TABS = [ … ] as
+ * const;` shape if you move or reformat it.
+ */
+export const VALID_TABS = [
   "overview",
   "pipeline",
   "analytics",
@@ -281,24 +296,31 @@ const VALID_TABS = [
   "compliance",
   "dependencies",
 ] as const;
-type TabId = (typeof VALID_TABS)[number];
+export type TabId = (typeof VALID_TABS)[number];
+
+/**
+ * Bar labels. `Record<TabId, string>` is exhaustive by construction, so a new
+ * tab id cannot reach the bar unlabelled — and no second ordered list of tabs
+ * exists for the bar to drift away from `VALID_TABS`.
+ */
+const TAB_LABELS: Record<TabId, string> = {
+  overview: "Overview",
+  pipeline: "Pipeline",
+  analytics: "Analytics",
+  history: "History",
+  epics: "Epics",
+  audit: "Audit Trail",
+  discovery: "Discovery",
+  cost: "Cost",
+  health: "Health",
+  runs: "Runs",
+  trends: "Trends",
+  compliance: "Compliance",
+  dependencies: "Dependencies",
+};
 
 function getTabBarHtml(activeTab: string): string {
-  const tabs: { id: TabId; label: string }[] = [
-    { id: "overview", label: "Overview" },
-    { id: "pipeline", label: "Pipeline" },
-    { id: "analytics", label: "Analytics" },
-    { id: "history", label: "History" },
-    { id: "epics", label: "Epics" },
-    { id: "audit", label: "Audit Trail" },
-    { id: "discovery", label: "Discovery" },
-    { id: "cost", label: "Cost" },
-    { id: "health", label: "Health" },
-    { id: "runs", label: "Runs" },
-    { id: "trends", label: "Trends" },
-    { id: "compliance", label: "Compliance" },
-    { id: "dependencies", label: "Dependencies" },
-  ];
+  const tabs = VALID_TABS.map((id) => ({ id, label: TAB_LABELS[id] }));
   return `<div class="tab-bar" role="tablist" aria-label="Dashboard sections">${tabs
     .map((t) => {
       const isActive = t.id === activeTab;
