@@ -14,7 +14,7 @@ import * as path from "node:path";
 import { type PipelineStage, parsePhaseMarker, uuidV7 } from "@nightgauge/sdk";
 import type { NotifyStageProgressParams } from "../services/ipcNotifyParams";
 import { handleIpcRejection } from "../services/ipcRejection";
-import { Logger } from "../utils/logger";
+import { Logger, createMainLogger } from "../utils/logger";
 import { StatusBarManager } from "../utils/statusBar";
 import { resolveActiveRepository } from "../utils/resolveActiveRepository";
 import {
@@ -139,6 +139,7 @@ import type { NotifierRoutingRule } from "../config/schema";
 import { resolvePlatformBaseUrl, resolvePlatformHostKey } from "../config/schema";
 import { registerShowPlatformStatusCommand } from "../commands/showPlatformStatus";
 import { registerShowMachineBindingCommand } from "../commands/showMachineBinding";
+import { registerShowDiagnosticsCommand } from "../commands/showDiagnostics";
 import { ConcurrentPipelineManager } from "../services/ConcurrentPipelineManager";
 import {
   CliPipelineReconciliationService,
@@ -577,8 +578,9 @@ export async function initializeServices(
     })
   );
 
-  // Initialize logger
-  const logger = new Logger("Nightgauge");
+  // Initialize logger — bound to the shared main channel every retired
+  // channel now folds into behind a subsystem prefix (#749).
+  const logger = createMainLogger();
   logger.info("Activating Nightgauge extension");
 
   // Initialize status bar
@@ -4326,6 +4328,10 @@ export async function initializeServices(
   // from the same LicensePreflight result. Entry points: sidebar Subscription
   // section row and the command palette.
   context.subscriptions.push(registerShowMachineBindingCommand(licensePreflight));
+  // One-shot diagnostics snapshot into the main channel (#749): platform
+  // connectivity, which credential kind is in use, Go binary path/version,
+  // and the last transport error per platform surface.
+  context.subscriptions.push(registerShowDiagnosticsCommand({ logger, platformStatusBarItem }));
 
   // Pipeline-aware connectivity badge (Issue #3203). Shown only when a
   // pipeline stage is running and ConnectivityStateBus reports degraded or

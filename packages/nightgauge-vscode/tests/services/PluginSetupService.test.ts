@@ -9,6 +9,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { ConfigBridge } from "../../src/services/ConfigBridge";
 import { DEFAULT_CONFIG } from "../../src/config/schema";
+import { resetMainChannelForTests } from "../../src/utils/logger";
 
 // Mock ConfigBridge
 vi.mock("../../src/services/ConfigBridge", () => ({
@@ -67,6 +68,10 @@ describe("PluginSetupService", () => {
     );
     vi.spyOn(console, "warn").mockImplementation(() => {});
     vi.spyOn(console, "debug").mockImplementation(() => {});
+    // PluginSetupService now shares the memoized main "Nightgauge" channel
+    // (#749) — drop it between tests so each one sees its own mocked
+    // createOutputChannel() rather than a channel cached by an earlier test.
+    resetMainChannelForTests();
   });
 
   afterEach(() => {
@@ -241,7 +246,7 @@ describe("PluginSetupService", () => {
   });
 
   describe("dispose", () => {
-    it("disposes output channel", async () => {
+    it("does not tear down the shared Nightgauge channel it no longer owns (#749)", async () => {
       const { PluginSetupService } = await import("../../src/services/PluginSetupService");
       const vscode = await import("vscode");
 
@@ -262,7 +267,10 @@ describe("PluginSetupService", () => {
       const service = new PluginSetupService(mockContext as never);
       service.dispose();
 
-      expect(mockDispose).toHaveBeenCalled();
+      // Plugin Setup is folded into the shared main channel behind a
+      // "plugin-setup" prefix — disposing this service must not kill the
+      // channel every other subsystem still writes to.
+      expect(mockDispose).not.toHaveBeenCalled();
     });
   });
 });

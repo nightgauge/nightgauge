@@ -16,6 +16,7 @@ import { IpcClient } from "../services/IpcClient";
 import { IpcClientBase } from "../services/IpcClient";
 import type { AutonomousStatusResult } from "../services/IpcClientBase";
 import type { Logger } from "../utils/logger";
+import { getPrefixedMainChannel } from "../utils/logger";
 import {
   formatCooldownLabel,
   formatCooldownRemaining,
@@ -195,7 +196,9 @@ let lastBreakerSkipLoggedAt = 0;
 
 function getOutputChannel(): vscode.OutputChannel {
   if (!autonomousOutputChannel) {
-    autonomousOutputChannel = vscode.window.createOutputChannel("Nightgauge Autonomous");
+    // Folded into the shared main channel behind an "autonomous" tag rather
+    // than its own destination — retired six-channel split (#749).
+    autonomousOutputChannel = getPrefixedMainChannel("autonomous");
   }
   return autonomousOutputChannel;
 }
@@ -2090,10 +2093,10 @@ async function pickAutonomousRepos(
  * Called during extension deactivation.
  */
 export function disposeAutonomousOutputChannel(): void {
-  if (autonomousOutputChannel) {
-    autonomousOutputChannel.dispose();
-    autonomousOutputChannel = null;
-  }
+  // The shared "Nightgauge" channel is owned by bootstrap, not this module
+  // (#749) — nothing to dispose here beyond dropping the cached wrapper so a
+  // later call re-wraps it.
+  autonomousOutputChannel = null;
 }
 
 /**

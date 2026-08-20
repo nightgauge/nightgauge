@@ -668,6 +668,11 @@ export const MANIFEST_CONTRIBUTES: ManifestContributes = {
       icon: "$(vm)",
     },
     {
+      command: "nightgauge.showDiagnostics",
+      title: "Nightgauge: Show Diagnostics",
+      icon: "$(pulse)",
+    },
+    {
       command: "nightgauge.stopSlot",
       title: "Nightgauge: Stop Issue Pipeline",
       icon: "$(debug-stop)",
