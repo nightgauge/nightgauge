@@ -89,6 +89,41 @@ stale the moment the operator looks at something, and a stale list copied across
 handoffs reads as an outstanding backlog long after the work is done. Ask about
 the change in front of you; do not reconstruct an inventory.
 
+### VSCode Extension Test Tiers
+
+The extension package (`packages/nightgauge-vscode/`) has two test tiers,
+each with its own directory, naming convention, and runner. A file's
+extension says which runner owns it — there is no third convention and no
+file matched by both or by neither (enforced by
+`scripts/check-test-runner-coverage.sh`, below).
+
+| Tier                                         | Directory                                  | Naming convention | Runner                                      | CI job                                    |
+| -------------------------------------------- | ------------------------------------------ | ----------------- | ------------------------------------------- | ----------------------------------------- |
+| Unit / integration (Node, mocked VSCode API) | `tests/**` (excluding `tests/playwright/`) | `*.test.ts`       | `vitest` (`vitest.config.ts`)               | `vscode` (`.github/workflows/ci.yml`)     |
+| Browser-driven webview (real Chromium)       | `tests/playwright/**`                      | `*.playwright.ts` | `@playwright/test` (`playwright.config.ts`) | `playwright` (`.github/workflows/ci.yml`) |
+
+Run each tier locally:
+
+```bash
+# Unit / integration
+npx -w nightgauge-vscode vitest run
+
+# Browser-driven webview (generates the real dashboard HTML fixture first —
+# a bare `playwright test` skips that and ~30% of the suite fails on a
+# missing file)
+npm run -w nightgauge-vscode test:e2e
+```
+
+Both tiers previously existed without full coverage: three files under a
+now-deleted `tests/e2e-playwright/dashboard/` matched neither runner (wrong
+directory for vitest's exclude, wrong extension for Playwright's testMatch),
+and the 61-test Playwright suite that _did_ collect ran in no CI workflow at
+all — a regression in any of those tests reached `main` unnoticed. Both were
+fixed in #744: every browser-driven file was consolidated into
+`tests/playwright/**` under the single `*.playwright.ts` convention, and the
+`playwright` CI job above runs the full suite on every PR and push to `main`,
+with the Chromium binary cached by Playwright's own version.
+
 ### Stage Parity Validation
 
 Validate core issue-to-PR stage parity between the Codex/Gemini adapters, Claude
@@ -373,11 +408,28 @@ unrepeatable: it fails if any `*.test.ts` file exists under
 `tests/` and asserts the guard catches it before asserting the clean-tree case
 passes — per the #539/#549 lesson that a gate nothing exercises degrades into
 an unconditional pass. This guard only enforces the location convention; it
-does not verify that everything under `tests/` is actually matched by a
-runner's include/exclude globs (a file could sit in `tests/` under a directory
-excluded from `vitest.config.ts` and unmatched by `playwright.config.ts`'s
-`testMatch`) — that broader zero-runner check is tracked separately
-(Issue #744).
+does not verify that a file already inside `tests/` is actually matched by a
+runner's include/exclude globs.
+
+That broader check is `scripts/check-test-runner-coverage.sh` (Issue #744,
+also wired into `pretest`): it fails if a `*.test.ts` file sits under
+`tests/playwright/` (vitest excludes that whole directory, and Playwright's
+`testMatch` never matches `.test.ts`) or a `*.playwright.ts` file sits
+outside `tests/` (Playwright's `testDir` never reaches it, and vitest's
+extension never matches it). The two scripts compose rather than overlap:
+`check-test-collection.sh` owns the location rule for `*.test.ts` files
+outside `tests/` entirely; `check-test-runner-coverage.sh` owns runner
+reachability for files that already obey it, plus the `*.playwright.ts`
+convention `check-test-collection.sh` never covered. Its own coverage lives
+in `scripts/test-check-test-runner-coverage.sh`, following the same
+plant-detect-clean pattern.
+
+This is the check that would have caught #744's four real orphans: three
+files under a now-deleted `tests/e2e-playwright/dashboard/` (excluded
+directory, wrong extension) and `tests/playwright/smoke.test.ts` (right
+directory, wrong extension for that directory's runner) — see
+[VSCode Extension Test Tiers](#vscode-extension-test-tiers) above for where
+they live now.
 
 ### Mock Factories
 

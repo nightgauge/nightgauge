@@ -182,13 +182,6 @@ test("Skill failure: error state is shown when pipeline pipelineStatus returns f
 test("Skill failure: retry succeeds and pipeline transitions to running state", async ({
   page,
 }) => {
-  const failedStatus = makeMockPipelineStatus({
-    issueNumber: 700,
-    status: "failed",
-    stage: "feature-dev",
-    error: "Skill execution timed out",
-  });
-
   // After retry, pipelineStatus returns running
   const runningStatus = makeMockPipelineStatus({
     issueNumber: 700,

@@ -238,6 +238,76 @@ jobs:
         if: ${{ needs.changes.outputs.run_heavy != 'false' }}
         run: node packages/nightgauge-vscode/scripts/check-engine-types.mjs
 
+  # Browser-driven webview tests (tests/playwright/**, *.playwright.ts). Split
+  # from `vscode` rather than folded into its `npm run test` step: vitest and
+  # Playwright are different runners with different collection rules (#744 —
+  # before this job existed, 61 Playwright tests and 3 more-orphaned e2e-only
+  # files ran in NO CI workflow at all, so a regression across any of them
+  # reached `main` unnoticed). Same triggers and same changes-gate shape as
+  # `vscode`; only the browser install differs.
+  playwright:
+    name: Playwright webview tests
+    runs-on: ubuntu-latest
+    needs: changes
+    if: ${{ !cancelled() }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        if: ${{ needs.changes.outputs.run_heavy != 'false' }}
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Install
+        if: ${{ needs.changes.outputs.run_heavy != 'false' }}
+        run: npm ci
+      # `test:e2e` runs generate-dashboard-html.ts, which imports the real tab
+      # renderers — and those import @nightgauge/sdk. Without a build the SDK
+      # has no dist/, so tsx dies on ERR_MODULE_NOT_FOUND before Playwright
+      # ever starts. It passes locally only because a previous build left
+      # dist/ behind; a clean runner has nothing.
+      - name: Build
+        if: ${{ needs.changes.outputs.run_heavy != 'false' }}
+        run: npm run build
+      # The browser binary (not the npm package) is the expensive part of
+      # `playwright install`, so it is cached by Playwright's own version —
+      # a version bump invalidates the cache and re-downloads, exactly what
+      # is wanted. `install-deps` (apt-level OS libraries) is NOT cached: the
+      # runner image is ephemeral per job regardless of cache-hit, so it must
+      # run every time — only the browser binary download is conditional.
+      - name: Get Playwright version
+        if: ${{ needs.changes.outputs.run_heavy != 'false' }}
+        id: playwright-version
+        run: echo "version=$(node -p "require('./packages/nightgauge-vscode/package.json').devDependencies['@playwright/test']")" >> "$GITHUB_OUTPUT"
+      - name: Cache Playwright browser binary
+        if: ${{ needs.changes.outputs.run_heavy != 'false' }}
+        id: playwright-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-browsers-${{ runner.os }}-${{ steps.playwright-version.outputs.version }}
+      - name: Install Playwright browser (chromium, cache miss)
+        if: ${{ needs.changes.outputs.run_heavy != 'false' && steps.playwright-cache.outputs.cache-hit != 'true' }}
+        run: npx -w nightgauge-vscode playwright install --with-deps chromium
+      - name: Install Playwright OS dependencies (cache hit)
+        if: ${{ needs.changes.outputs.run_heavy != 'false' && steps.playwright-cache.outputs.cache-hit == 'true' }}
+        run: npx -w nightgauge-vscode playwright install-deps chromium
+      # test:e2e generates the real dashboard HTML fixture
+      # (DashboardInteractions.playwright.ts loads it from /tmp) before
+      # running the suite — a bare `playwright test` skips that prerequisite
+      # and 23 of the 80 tests fail on a missing file.
+      - name: Test (Playwright)
+        if: ${{ needs.changes.outputs.run_heavy != 'false' }}
+        run: npm run -w nightgauge-vscode test:e2e
+      - name: Upload Playwright failure artifacts (screenshots, traces, video)
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: playwright-test-results
+          path: packages/nightgauge-vscode/test-results/
+          retention-days: 7
+
   # Security & license gates. Runs on every PR, including forks — a fork cannot
   # ship a vulnerable stdlib or a copyleft/proprietary dependency into a release
   # without this job going red.
