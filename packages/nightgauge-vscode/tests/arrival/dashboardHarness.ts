@@ -433,16 +433,28 @@ export function renderDashboardHtml(dashboard: unknown): string {
  * arrival test; the value disappearing should.
  */
 export function renderedText(html: string): string {
-  return html
-    .replace(/<script[\s\S]*?<\/script>/g, " ")
-    .replace(/<style[\s\S]*?<\/style>/g, " ")
-    .replace(/<[^>]+>/g, " ")
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/\s+/g, " ");
+  return (
+    html
+      // Case-insensitive, and tolerant of attributes on the closing tag.
+      // Browsers accept `<SCRIPT>` and `</script foo="bar">`; a stripper that
+      // only matches lower-case `</script>` leaves script *source* in the
+      // extracted text, and an arrival assertion can then match against code
+      // instead of rendered output — passing for the wrong reason.
+      .replace(/<script[\s\S]*?<\/script[^>]*>/gi, " ")
+      .replace(/<style[\s\S]*?<\/style[^>]*>/gi, " ")
+      .replace(/<[^>]+>/g, " ")
+      // Unescape `&amp;` LAST. Doing it first double-unescapes: `&amp;lt;`
+      // becomes `&lt;` and then `<`, so text that legitimately renders the
+      // characters "&lt;" reads back as "<" and the assertion compares a
+      // string the user never saw. The escape character must be unescaped
+      // last for the same reason it must be escaped first.
+      .replace(/&lt;/g, "<")
+      .replace(/&gt;/g, ">")
+      .replace(/&quot;/g, '"')
+      .replace(/&#39;/g, "'")
+      .replace(/&amp;/g, "&")
+      .replace(/\s+/g, " ")
+  );
 }
 
 /** The HTML of one tab panel, so a value found in another tab cannot pass. */
