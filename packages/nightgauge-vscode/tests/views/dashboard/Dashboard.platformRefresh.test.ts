@@ -344,6 +344,44 @@ describe("Dashboard.refreshHealthAnalyticsData", () => {
     expect(healthData.isLoading).toBe(false);
     expect(healthData.result).toEqual(mockResult);
   });
+
+  it("sets isLoading = true before the fetch resolves, so a retry is always visibly acknowledged (#752)", async () => {
+    mockGetTokenInstance.mockReturnValue(makeValidTokenStorage());
+    // Pre-fix, refreshHealthAnalyticsData() never set a loading state at all —
+    // the fetch re-ran and re-rendered byte-identical HTML on retry. Hold the
+    // service promise open so we can observe the state in between the token
+    // check and the fetch resolving.
+    let resolveFetch!: (value: unknown) => void;
+    mockHealthFetchAndCache.mockReturnValue(
+      new Promise((resolve) => {
+        resolveFetch = resolve;
+      })
+    );
+
+    const refreshPromise = dashboard.refreshHealthAnalyticsData();
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const loadingState = (dashboard as any).healthAnalyticsData;
+    expect(loadingState).not.toBeNull();
+    expect(loadingState.isLoading).toBe(true);
+    expect(loadingState.result).toBeNull();
+
+    resolveFetch({
+      ok: true,
+      value: {
+        overall_score: 92,
+        dimensions: [],
+        generated_at: "2026-03-14T10:00:00Z",
+        period_days: 30,
+        total_runs: 50,
+      },
+    });
+    await refreshPromise;
+
+    const finalState = (dashboard as any).healthAnalyticsData;
+    expect(finalState.isLoading).toBe(false);
+    expect(finalState.result).not.toBeNull();
+  });
 });
 
 describe("Dashboard.refreshRunsData", () => {
