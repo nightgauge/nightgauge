@@ -73,6 +73,13 @@ export default [
       "skills/*/dist/**",
       "packages/*/dist/**",
       "coverage/**",
+      // The VSCode build the host smoke tier (#745) downloads. It is a whole
+      // application, and its bundled extensions ship their own
+      // `eslint.config.mjs` importing packages we do not have — flat config
+      // tries to load those and dies with ERR_MODULE_NOT_FOUND, so this is a
+      // hard failure rather than noise. `.gitignore` does not help: flat
+      // config does not read it.
+      "**/.vscode-test/**",
     ],
   },
 

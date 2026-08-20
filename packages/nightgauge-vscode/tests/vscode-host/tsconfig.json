@@ -1,0 +1,23 @@
+{
+  // esbuild bundles this tier and does not typecheck, so without this config
+  // a type error here would only ever surface as a runtime TypeError inside a
+  // VSCode window — the slowest possible way to learn about it. Run via the
+  // `pretest:host` script.
+  //
+  // Separate from the package tsconfig.json because that one has
+  // `rootDir: ./src` and emits declarations; this one only checks.
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "preserve",
+    "moduleResolution": "bundler",
+    "lib": ["ES2022"],
+    "types": ["node"],
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "forceConsistentCasingInFileNames": true,
+    "noEmit": true
+  },
+  "include": ["**/*.ts"]
+}

@@ -39,6 +39,10 @@
 # *.playwright.ts placement in full, since no existing guard touches that
 # convention at all.
 #
+# A third convention joined in #745: *.host.ts / *.suite.ts, the VSCode host
+# smoke tier. Its reachability rule is not a glob — see the section at the
+# bottom of this file.
+#
 # Called automatically as pretest in the VSCode extension package (alongside
 # check-test-collection.sh), and therefore as part of `bash scripts/ci-local.sh`.
 set -euo pipefail
@@ -97,6 +101,73 @@ if [ -n "$ORPHANED_PLAYWRIGHT_TS" ]; then
   echo "$ORPHANED_PLAYWRIGHT_TS" | sed "s|^|  |" >&2
   echo "Move each file under tests/playwright/ (mirroring its src/ location) or delete it if obsolete." >&2
   FAILED=1
+fi
+
+# ── VSCode host smoke tier (#745): *.host.ts and *.suite.ts ─────────────────
+# A third runner joined the two above: a headless VSCode window launched by
+# tests/vscode-host/launch.ts, whose entry point is a single esbuild bundle
+# rooted at tests/vscode-host/index.host.ts.
+#
+# That bundle is why this tier needs its own rules. Neither vitest nor
+# playwright matches a *.host.ts or *.suite.ts file, so "which runner picks
+# this up" is not answered by a glob at all — it is answered by whether the
+# bundle reaches the file through an import. A suite nobody imports compiles
+# into nothing and runs nowhere, which is #732's and #744's failure with a
+# different file extension.
+HOST_DIR="$TESTS_DIR/vscode-host"
+HOST_ENTRY="$HOST_DIR/index.host.ts"
+
+if [ -d "$HOST_DIR" ]; then
+  grep -qF 'esbuild tests/vscode-host/index.host.ts' "$PACKAGE_DIR/package.json" ||
+    fail_assumption "the build:host-tests script no longer bundles tests/vscode-host/index.host.ts"
+
+  [ -f "$HOST_ENTRY" ] ||
+    fail_assumption "tests/vscode-host/ exists but its index.host.ts entry point does not"
+
+  # A *.host.ts anywhere but the tier's own directory is bundled by nothing.
+  ORPHANED_HOST_TS=$(find "$PACKAGE_DIR" -name "*.host.ts" \
+    -not -path "$PACKAGE_DIR/node_modules/*" \
+    -not -path "$PACKAGE_DIR/dist/*" \
+    -not -path "$PACKAGE_DIR/out/*" \
+    -not -path "$HOST_DIR/*" \
+    2>/dev/null || true)
+  if [ -n "$ORPHANED_HOST_TS" ]; then
+    echo "ERROR: *.host.ts file(s) found outside tests/vscode-host/ — the host tier bundles exactly one entry point from that directory, and no other runner matches the extension, so these run under NO runner:" >&2
+    echo "$ORPHANED_HOST_TS" | sed "s|^|  |" >&2
+    echo "Move the file under tests/vscode-host/ and import it from index.host.ts, or delete it if obsolete." >&2
+    FAILED=1
+  fi
+
+  # A *.suite.ts the entry point never imports is dead weight in the tree and
+  # zero cases in the run — and, unlike a missing glob match, completely
+  # invisible: the bundle builds and the tier reports green.
+  while IFS= read -r suite_file; do
+    [ -n "$suite_file" ] || continue
+    rel="${suite_file#"$HOST_DIR"/}"
+    # index.host.ts imports suites as "./suites/<name>.suite.js" (TS/ESM
+    # rewrites the extension); match on the extension-less path.
+    import_path="./${rel%.ts}"
+    if ! grep -qF "\"${import_path}.js\"" "$HOST_ENTRY"; then
+      echo "ERROR: $rel is not imported by tests/vscode-host/index.host.ts — the host tier is a single esbuild bundle, so a suite the entry point does not import is compiled into nothing and runs under NO runner:" >&2
+      echo "  $suite_file" >&2
+      echo "Add an import of \"${import_path}.js\" to index.host.ts, or delete the file if obsolete." >&2
+      FAILED=1
+    fi
+  done <<EOF
+$(find "$HOST_DIR" -name "*.suite.ts" 2>/dev/null | sort || true)
+EOF
+
+  # A *.test.ts under tests/vscode-host/ IS collected by vitest (nothing
+  # excludes the directory) and will die on `require("vscode")`, which only
+  # resolves inside an extension host. Wrong runner, not no runner — but the
+  # same "the naming convention lied about who runs this" shape.
+  MISNAMED_HOST_TEST=$(find "$HOST_DIR" -name "*.test.ts" 2>/dev/null || true)
+  if [ -n "$MISNAMED_HOST_TEST" ]; then
+    echo "ERROR: *.test.ts file(s) found under tests/vscode-host/ — vitest collects tests/**/*.test.ts, and these need a real VSCode extension host (the 'vscode' module does not resolve under vitest):" >&2
+    echo "$MISNAMED_HOST_TEST" | sed "s|^|  |" >&2
+    echo "Rename to *.suite.ts and import it from index.host.ts, or move it to a directory vitest should collect." >&2
+    FAILED=1
+  fi
 fi
 
 if [ "$FAILED" -ne 0 ]; then

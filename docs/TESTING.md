@@ -91,16 +91,17 @@ the change in front of you; do not reconstruct an inventory.
 
 ### VSCode Extension Test Tiers
 
-The extension package (`packages/nightgauge-vscode/`) has two test tiers,
+The extension package (`packages/nightgauge-vscode/`) has three test tiers,
 each with its own directory, naming convention, and runner. A file's
-extension says which runner owns it — there is no third convention and no
-file matched by both or by neither (enforced by
+extension says which runner owns it — there is no fourth convention and no
+file matched by more than one runner or by none (enforced by
 `scripts/check-test-runner-coverage.sh`, below).
 
-| Tier                                         | Directory                                  | Naming convention | Runner                                      | CI job                                    |
-| -------------------------------------------- | ------------------------------------------ | ----------------- | ------------------------------------------- | ----------------------------------------- |
-| Unit / integration (Node, mocked VSCode API) | `tests/**` (excluding `tests/playwright/`) | `*.test.ts`       | `vitest` (`vitest.config.ts`)               | `vscode` (`.github/workflows/ci.yml`)     |
-| Browser-driven webview (real Chromium)       | `tests/playwright/**`                      | `*.playwright.ts` | `@playwright/test` (`playwright.config.ts`) | `playwright` (`.github/workflows/ci.yml`) |
+| Tier                                         | Directory                                  | Naming convention                               | Runner                                                    | CI job                                     |
+| -------------------------------------------- | ------------------------------------------ | ----------------------------------------------- | --------------------------------------------------------- | ------------------------------------------ |
+| Unit / integration (Node, mocked VSCode API) | `tests/**` (excluding `tests/playwright/`) | `*.test.ts`                                     | `vitest` (`vitest.config.ts`)                             | `vscode` (`.github/workflows/ci.yml`)      |
+| Browser-driven webview (real Chromium)       | `tests/playwright/**`                      | `*.playwright.ts`                               | `@playwright/test` (`playwright.config.ts`)               | `playwright` (`.github/workflows/ci.yml`)  |
+| Extension host smoke (real headless VSCode)  | `tests/vscode-host/**`                     | `*.host.ts` (entry point), `*.suite.ts` (cases) | `@vscode/test-electron` via `tests/vscode-host/launch.ts` | `vscode-host` (`.github/workflows/ci.yml`) |
 
 Run each tier locally:
 
@@ -112,6 +113,12 @@ npx -w nightgauge-vscode vitest run
 # a bare `playwright test` skips that and ~30% of the suite fails on a
 # missing file)
 npm run -w nightgauge-vscode test:e2e
+
+# Extension host smoke (downloads VSCode on first run and opens a real
+# window; `npm run build` must have run, because the host loads
+# dist/extension.cjs rather than src/). On Linux, prefix with
+# `xvfb-run --auto-servernum`.
+npm run -w nightgauge-vscode test:host
 ```
 
 Both tiers previously existed without full coverage: three files under a
@@ -123,6 +130,56 @@ fixed in #744: every browser-driven file was consolidated into
 `tests/playwright/**` under the single `*.playwright.ts` convention, and the
 `playwright` CI job above runs the full suite on every PR and push to `main`,
 with the Chromium binary cached by Playwright's own version.
+
+#### The host smoke tier (#745)
+
+The third tier answers a question the other two structurally cannot: **does
+the extension come up at all?** Both vitest and Playwright mock or bypass the
+VSCode API — vitest replaces the `vscode` module wholesale, Playwright renders
+a webview's HTML string in a browser with no extension host behind it. So
+until #745 no test in this repository ever called `activate()`, and
+activation failures, missing command registrations, tree views that throw on
+construction, and panels that never open were all invisible. A view can be a
+perfectly correct rendering function and still never open.
+
+The tier launches one real, headless VSCode via `@vscode/test-electron`,
+opens a throwaway empty folder as the workspace, and inside that window:
+
+- activates the extension explicitly and fails on any unhandled rejection or
+  ERROR-level output-channel line during startup, including the work
+  `activate()` defers to `setTimeout` up to five seconds in;
+- reconciles `contributes.commands` against `vscode.commands.getCommands()`
+  **in both directions** — counts are read from `package.json` at runtime, never
+  hardcoded;
+- opens all twelve webview panels, asserting each creates, renders a non-empty
+  body, and disposes cleanly;
+- resolves `getChildren()` on all seven tree data providers, first against the
+  empty workspace and then after copying
+  `tests/fixtures/vscode-host/populated/` into it.
+
+Three implementation notes that are load-bearing rather than incidental:
+
+1. **No Mocha.** `@vscode/test-cli` would bring it, and with it a high-severity
+   `serialize-javascript` advisory that `scripts/npm-audit-check.js` fails the
+   `security` job on. `@vscode/test-electron` alone audits clean, so the tier
+   ships a ~130-line runner (`tests/vscode-host/harness.ts`) instead.
+2. **The tier observes the real extension, not a copy.** A module loaded via
+   `--extensionTestsPath` from inside the `--extensionDevelopmentPath` tree
+   shares the extension's `vscode` API object, so patching
+   `vscode.window.createWebviewPanel` there is visible to `src/**`. That is
+   what lets the panels and providers under test be the ones the extension
+   actually built. `installObservers()` throws if a patch does not take —
+   silently observing nothing would read as green.
+3. **It cannot skip.** There is no "no display, skipping" branch; CI wraps the
+   command in `xvfb-run --auto-servernum`. The launcher also fails when the
+   in-host module wrote no transcript, so a VSCode that dies before running
+   the tests cannot exit 0.
+
+Findings the tier recorded on its first run — real defects, deliberately not
+fixed in the PR that found them — live in
+`packages/nightgauge-vscode/tests/vscode-host/known-issues.ts` as shrinking
+baselines: a new occurrence fails the run, and each listed entry is expected
+to be deleted when its issue is fixed.
 
 ### Stage Parity Validation
 
@@ -430,6 +487,17 @@ directory, wrong extension) and `tests/playwright/smoke.test.ts` (right
 directory, wrong extension for that directory's runner) — see
 [VSCode Extension Test Tiers](#vscode-extension-test-tiers) above for where
 they live now.
+
+The same guard was extended in #745 to cover the host smoke tier, where
+reachability is not a glob question at all. That tier is a single esbuild bundle rooted at
+`tests/vscode-host/index.host.ts`, so what runs is what the entry point
+imports. The guard therefore fails on a `*.host.ts` outside
+`tests/vscode-host/` (bundled by nothing, matched by no other runner), on a
+`*.suite.ts` that `index.host.ts` never imports (compiles into nothing and
+reports green having run zero of its cases), and on a `*.test.ts` under
+`tests/vscode-host/` (vitest _would_ collect it and then die on
+`require("vscode")`, which only resolves inside an extension host). All three
+shapes are exercised by `scripts/test-check-test-runner-coverage.sh`.
 
 ### Mock Factories
 
