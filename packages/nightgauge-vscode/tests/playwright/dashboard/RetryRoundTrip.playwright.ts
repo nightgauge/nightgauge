@@ -110,8 +110,14 @@ test.describe("Cost tab retry round trip", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Real product bugs found while building this suite (Issue #751 asks these
-// be reported, not silently fixed — src/** is out of scope for this issue).
+// These two tabs are why this suite exists. Building it surfaced that neither
+// Health nor Dependencies rendered anything when Retry was clicked: their
+// refresh paths pushed no loading state before the first await, so the DOM sat
+// on the stale failure until the fetch resolved. Fixed in #775 (merged as
+// #778); these assertions are the regression guard for the rendering half.
+// The Dashboard.ts half — that the loading state is actually pushed before the
+// await — is asserted by the data-arrival tier (#746), which drives the real
+// class instead of a fixture.
 // ---------------------------------------------------------------------------
 
 test.describe("Health tab retry round trip", () => {
@@ -122,22 +128,6 @@ test.describe("Health tab retry round trip", () => {
   });
 
   test("click retry renders an observable loading state", async ({ page }) => {
-    test.fixme(
-      true,
-      "Real product bug found by this suite (Issue #751): Dashboard.ts's " +
-        '"healthRefresh" case calls refreshHealthAnalyticsData() with no ' +
-        "synchronous updatePanel() first, and refreshHealthAnalyticsData() " +
-        "itself pushes no intermediate isLoading:true state before its await " +
-        "— unlike refreshRunsData()/fetchTrendsData()/refreshComplianceData(), " +
-        "which all render an explicit loading state before the fetch starts. " +
-        "Clicking Retry on the Health tab therefore renders NOTHING observable " +
-        "until the fetch resolves — the exact defect #751 was filed to catch. " +
-        "File a follow-up issue against src/views/dashboard/Dashboard.ts " +
-        "(refreshHealthAnalyticsData) rather than fixing it here (out of scope: " +
-        "this issue may only touch tests/playwright/**, generate-dashboard-html.ts, " +
-        "and the playwright CI job)."
-    );
-
     await loadTabFixture(page, "health--failure-server_error");
     await page.click("#healthRefreshBtn");
     await loadTabFixture(page, "health--empty");
@@ -153,21 +143,6 @@ test.describe("Dependencies (Dependabot) tab retry round trip", () => {
   });
 
   test("click retry renders an observable loading state", async ({ page }) => {
-    test.fixme(
-      true,
-      "Real product bug found by this suite (Issue #751): Dashboard.ts's " +
-        '"dependabotRefresh" case sets `this.dependabotData = null` and calls ' +
-        "refreshDependabotData() with NO synchronous updatePanel() call at all — " +
-        "not even the bare re-render Cost gets. refreshDependabotData() itself " +
-        "also renders only once, after its fetch resolves. Clicking Retry on the " +
-        "Dependencies tab therefore changes nothing in the DOM until the fetch " +
-        "completes — the exact defect #751 was filed to catch, and the one that " +
-        "most literally matches DependabotTabHtml.ts's own `state === undefined` " +
-        "loading branch never being reached from a retry. File a follow-up issue " +
-        "against src/views/dashboard/Dashboard.ts (refreshDependabotData / the " +
-        '"dependabotRefresh" case) rather than fixing it here (out of scope for #751).'
-    );
-
     await loadTabFixture(page, "dependencies--fetch-error");
     await page.click("#dependabotRetryBtn");
     await loadTabFixture(page, "dependencies--loading");
