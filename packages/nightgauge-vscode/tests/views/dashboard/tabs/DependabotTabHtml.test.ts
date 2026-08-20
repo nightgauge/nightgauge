@@ -5,6 +5,7 @@ import {
   getDependabotTabStyles,
 } from "../../../../src/views/dashboard/tabs/DependabotTabHtml";
 import type { DependabotPRData, DependabotPR } from "../../../../src/services/DependabotPRService";
+import type { DependabotTabState } from "../../../../src/views/dashboard/DashboardState";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -29,7 +30,7 @@ function makePR(overrides: Partial<DependabotPR> = {}): DependabotPR {
   };
 }
 
-function makeData(overrides: Partial<DependabotPRData> = {}): DependabotPRData {
+function makePRData(overrides: Partial<DependabotPRData> = {}): DependabotPRData {
   return {
     prs: [],
     staleCount: 0,
@@ -37,6 +38,11 @@ function makeData(overrides: Partial<DependabotPRData> = {}): DependabotPRData {
     fetchedAt: "2026-05-16T00:00:00Z",
     ...overrides,
   };
+}
+
+/** Wraps a successful fetch's data into the tab-state shape (#748). */
+function makeData(overrides: Partial<DependabotPRData> = {}): DependabotTabState {
+  return { data: makePRData(overrides) };
 }
 
 // ---------------------------------------------------------------------------
@@ -49,12 +55,12 @@ describe("getDependabotTabHtml", () => {
     expect(html).toContain("Loading dependabot");
   });
 
-  it("renders empty state when data is null", () => {
+  it("renders empty state when data is null (not yet fetched)", () => {
     const html = getDependabotTabHtml(null);
     expect(html).toContain("No open dependabot PRs");
   });
 
-  it("renders empty state when data.prs is empty", () => {
+  it("renders empty state when data.data.prs is empty (a genuine success with zero PRs)", () => {
     const html = getDependabotTabHtml(makeData());
     expect(html).toContain("No open dependabot PRs");
   });
@@ -126,12 +132,64 @@ describe("getDependabotTabHtml", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// fetchError vs genuine empty state (#748) — previously a fetch failure
+// (rate limit, network error, GitHub API error) rendered as the identical
+// "No open dependabot PRs found." message as a repo that genuinely has none
+// open, silently. This is the regression detector for that gap.
+// ---------------------------------------------------------------------------
+
+describe("getDependabotTabHtml — fetch failure (#748)", () => {
+  it("fetchError set → distinct failure message, not the generic empty-PRs copy", () => {
+    const state: DependabotTabState = {
+      data: makePRData(),
+      fetchError: "GitHub API rate limit exceeded",
+    };
+    const html = getDependabotTabHtml(state);
+    expect(html).not.toContain("No open dependabot PRs found.");
+    expect(html).toContain("Could not load Dependabot PRs");
+    expect(html).toContain("GitHub API rate limit exceeded");
+    expect(html).toContain("dependabotRetryBtn");
+  });
+
+  it("fetchError set with stale cached PRs → still shows the failure, not the stale table as if fresh", () => {
+    const state: DependabotTabState = {
+      data: makePRData({ prs: [makePR()] }),
+      fetchError: "Network error",
+    };
+    const html = getDependabotTabHtml(state);
+    expect(html).toContain("Could not load Dependabot PRs");
+    expect(html).not.toContain("dependabot-table");
+  });
+
+  it("genuine zero-PR success (no fetchError) → the ordinary empty message, not a failure banner", () => {
+    const html = getDependabotTabHtml(makeData());
+    expect(html).toContain("No open dependabot PRs found.");
+    expect(html).not.toContain("Could not load Dependabot PRs");
+  });
+
+  it("XSS: fetchError text is escaped", () => {
+    const state: DependabotTabState = {
+      data: makePRData(),
+      fetchError: "<script>alert(1)</script>",
+    };
+    const html = getDependabotTabHtml(state);
+    expect(html).not.toContain("<script>alert(1)</script>");
+    expect(html).toContain("&lt;script&gt;");
+  });
+});
+
 describe("getDependabotTabScript", () => {
   it("returns non-empty script with expected message types", () => {
     const script = getDependabotTabScript();
     expect(script.length).toBeGreaterThan(0);
     expect(script).toContain("mergeDependabotPR");
     expect(script).toContain("dependabotRefresh");
+  });
+
+  it("wires the shared platform-retry delegated handler (#748)", () => {
+    const script = getDependabotTabScript();
+    expect(script).toContain("platform-retry");
   });
 });
 

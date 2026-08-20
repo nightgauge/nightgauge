@@ -19,6 +19,12 @@ import {
 } from "../DashboardComponents";
 import type { RunsListData } from "../DashboardState";
 import type { RunsEntry, RunsStageEntry } from "../../../services/IpcClientBase";
+import {
+  renderPlatformFailure,
+  getPlatformRetryButtonHtml,
+  getPlatformSignInButtonHtml,
+  getPlatformFailureScript,
+} from "./PlatformFailureHtml";
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -34,7 +40,7 @@ export function getRunsTabHtml(data: RunsListData | undefined, _nonce?: string):
     return getRunsLoadingHtml();
   }
   if (!data.hasAccess) {
-    return getRunsNoAccessHtml();
+    return getRunsNoAccessHtml(data.failure);
   }
   if (data.isLoading) {
     return getRunsLoadingHtml();
@@ -42,7 +48,6 @@ export function getRunsTabHtml(data: RunsListData | undefined, _nonce?: string):
 
   return `
     <div class="runs-tab">
-      ${data.errorMessage ? `<div class="runs-error-banner">${escapeHtml(data.errorMessage)}</div>` : ""}
       ${getRunsFiltersHtml(data)}
       ${getRunsTableHtml(data.entries)}
       ${getRunsPaginationHtml(data)}
@@ -61,6 +66,7 @@ export function getRunsTabScript(): string {
       if (!runsPanel) return;
 
       runsPanel.addEventListener('click', function(e) {
+        ${getPlatformFailureScript()}
         // Row expand/collapse
         var row = e.target.closest('[data-action="toggle-runs-detail"]');
         if (row) {
@@ -386,12 +392,33 @@ function getRunsLoadingHtml(): string {
   `;
 }
 
-function getRunsNoAccessHtml(): string {
+/**
+ * Render the runs no-access state from the classified `PlatformFailure` the
+ * service actually reported — never a fixed "Connect to the platform"
+ * message regardless of cause (#748).
+ */
+function getRunsNoAccessHtml(failure: RunsListData["failure"]): string {
+  if (!failure) {
+    return `
+      <div class="runs-no-access">
+        <div class="empty-icon">🔒</div>
+        <h3>No Access</h3>
+        <p>Connect to the platform to view pipeline run history.</p>
+      </div>
+    `;
+  }
+  const rendered = renderPlatformFailure(failure);
+  const cta = rendered.showSignIn
+    ? getPlatformSignInButtonHtml("runsSignInBtn")
+    : rendered.showRetry
+      ? getPlatformRetryButtonHtml("runsRetryBtn", { type: "runsRefresh" })
+      : "";
   return `
     <div class="runs-no-access">
-      <div class="empty-icon">🔒</div>
-      <h3>No Access</h3>
-      <p>Connect to the platform to view pipeline run history.</p>
+      <div class="empty-icon">${rendered.icon}</div>
+      <h3>${escapeHtml(rendered.title)}</h3>
+      <p>${rendered.hintHtml}</p>
+      ${cta}
     </div>
   `;
 }

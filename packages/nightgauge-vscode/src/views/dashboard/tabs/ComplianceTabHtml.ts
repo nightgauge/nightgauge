@@ -14,6 +14,12 @@
 
 import { escapeHtml, formatRelativeTime } from "../DashboardComponents";
 import type { ComplianceData, ComplianceReportEntry } from "../DashboardState";
+import {
+  renderPlatformFailure,
+  getPlatformRetryButtonHtml,
+  getPlatformSignInButtonHtml,
+  getPlatformFailureScript,
+} from "./PlatformFailureHtml";
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -28,15 +34,22 @@ export function getComplianceTabHtml(data: ComplianceData | undefined): string {
     return getComplianceLoadingHtml();
   }
   if (!data.hasAccess) {
-    return getComplianceNoAccessHtml();
+    return getComplianceNoAccessHtml(data.failure);
   }
   if (data.isLoading) {
     return getComplianceLoadingHtml();
   }
 
+  // hasAccess is true here, so a `failure` means a mutation (e.g. generate
+  // report) failed while the list itself is still showing — render it as a
+  // banner rather than replacing the whole tab (#748).
+  const banner = data.failure
+    ? `<div class="compliance-error-banner">${renderPlatformFailure(data.failure).hintHtml}</div>`
+    : "";
+
   return `
     <div class="compliance-tab">
-      ${data.errorMessage ? `<div class="compliance-error-banner">${escapeHtml(data.errorMessage)}</div>` : ""}
+      ${banner}
       ${getComplianceGenerateFormHtml(data)}
       ${getComplianceReportsTableHtml(data)}
     </div>
@@ -54,6 +67,7 @@ export function getComplianceTabScript(): string {
       if (!compPanel) return;
 
       compPanel.addEventListener('click', function(e) {
+        ${getPlatformFailureScript()}
         // Generate report
         var genBtn = e.target.closest('#complianceGenerateBtn');
         if (genBtn) {
@@ -307,15 +321,36 @@ function getComplianceLoadingHtml(): string {
   `;
 }
 
-function getComplianceNoAccessHtml(): string {
+/**
+ * Render the compliance no-access state from the classified `PlatformFailure`
+ * the service actually reported (#748). This replaces the fixed "Access
+ * Required — available to owner and admin roles on eligible plans" copy that
+ * used to render for *every* failure kind, including a rejected credential —
+ * the bug reported in #748, verified live against an account owner on a pro
+ * plan whose 401 was told to "upgrade your plan."
+ */
+function getComplianceNoAccessHtml(failure: ComplianceData["failure"]): string {
+  if (!failure) {
+    return `
+      <div class="compliance-no-access">
+        <div class="empty-icon">🔒</div>
+        <h3>Access Required</h3>
+        <p>Connect to the platform to generate compliance reports.</p>
+      </div>
+    `;
+  }
+  const rendered = renderPlatformFailure(failure);
+  const cta = rendered.showSignIn
+    ? getPlatformSignInButtonHtml("complianceSignInBtn")
+    : rendered.showRetry
+      ? getPlatformRetryButtonHtml("complianceRetryBtn", { type: "complianceRefresh" })
+      : "";
   return `
     <div class="compliance-no-access">
-      <div class="empty-icon">🔒</div>
-      <h3>Access Required</h3>
-      <p>Compliance report generation is available to <strong>owner</strong> and <strong>admin</strong> roles on eligible plans.</p>
-      <p style="font-size:0.85em; color: var(--vscode-descriptionForeground);">
-        Contact your team owner to request access, or upgrade your plan.
-      </p>
+      <div class="empty-icon">${rendered.icon}</div>
+      <h3>${escapeHtml(rendered.title)}</h3>
+      <p>${rendered.hintHtml}</p>
+      ${cta}
     </div>
   `;
 }

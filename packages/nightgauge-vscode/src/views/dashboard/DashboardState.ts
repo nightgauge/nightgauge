@@ -33,6 +33,12 @@ import {
   isOrchestratorCrashRecord,
   ORCHESTRATOR_CRASH_TERMINAL_KIND,
 } from "../../utils/orchestratorCrashRecord";
+import type { PlatformFailure } from "../../services/platformResult";
+import type { CostAnalyticsResult } from "../../services/IpcClientBase";
+import type { DependabotPRData } from "../../services/DependabotPRService";
+
+/** Re-exported for tab renderers that only need the failure shape (#748). */
+export type { PlatformFailure } from "../../services/platformResult";
 
 /**
  * Time savings configuration (user-configurable via VS Code settings)
@@ -326,23 +332,16 @@ export interface AuditPaginationInfo {
   hasPrevPage: boolean;
 }
 
-/** Discriminated error type for platform-connected dashboard tabs (#3679). */
-export type PlatformErrorType =
-  | "not_signed_in" // TokenStorage has no accessToken
-  | "token_expired" // expiresAt is in the past
-  | "no_permission" // 401/403 from platform
-  | "ipc_unavailable" // "Go backend not connected"
-  | "ipc_timeout" // "IPC request ... timed out"
-  | "server_error" // 5xx or service returned null with valid token
-  | "unknown"; // catch-all
-
-/** Data bundle for the Health tab (replaces bare AnalyticsHealthResult | null) (#3679). */
+/**
+ * Data bundle for the Health tab (replaces bare AnalyticsHealthResult | null).
+ * `failure` carries the classified cause the service actually reported — render
+ * copy from `failure.kind`, never from a guess (#748).
+ */
 export interface AnalyticsHealthData {
   result: import("../../services/IpcClientBase").AnalyticsHealthResult | null;
   hasAccess: boolean;
   isLoading: boolean;
-  errorType?: PlatformErrorType;
-  errorMessage?: string;
+  failure?: PlatformFailure;
 }
 
 /** Data bundle passed to AuditTabHtml renderer. */
@@ -352,8 +351,6 @@ export interface AuditLogData {
   pagination: AuditPaginationInfo;
   isLoading: boolean;
   errorMessage?: string;
-  /** Structured error type for contextual error UI (#3679). */
-  errorType?: PlatformErrorType;
   /** false = hide tab entirely (user has no access) */
   hasAccess: boolean;
   /** true when serving local telemetry because the platform API is unreachable (Issue #3324) */
@@ -399,9 +396,8 @@ export interface RunsListData {
   pagination: RunsPaginationInfo;
   isLoading: boolean;
   hasAccess: boolean;
-  errorMessage?: string;
-  /** Structured error type for contextual error UI (#3679). */
-  errorType?: PlatformErrorType;
+  /** The classified cause of the last failed fetch, if any (#748). */
+  failure?: PlatformFailure;
 }
 
 /** Date range selection for the Trends tab (#3320). */
@@ -413,9 +409,8 @@ export interface TrendsData {
   isLoading: boolean;
   hasAccess: boolean;
   showComparison: boolean;
-  errorMessage?: string;
-  /** Structured error type for contextual error UI (#3679). */
-  errorType?: PlatformErrorType;
+  /** The classified cause of the last failed fetch, if any (#748). */
+  failure?: PlatformFailure;
 }
 
 /** Filter state for compliance report list (#3322). */
@@ -434,11 +429,13 @@ export interface RetentionIntegrityData {
   integrityResult: import("../../services/IpcClientBase").IntegrityResult | null;
   isLoading: boolean;
   isVerifying: boolean;
-  /** false when license tier is below enterprise */
+  /** false only when the platform reported `forbidden` for this endpoint (#748). */
   hasAccess: boolean;
+  /** The classified cause of the last failed *fetch* (used for the no-access panel), if any (#748). */
+  failure?: PlatformFailure;
+  /** Raw error text from a failed update/verify *action* — an explicit user-triggered
+   * mutation, not the tab's load state, so it is shown as-is rather than reclassified (#748). */
   errorMessage?: string;
-  /** Structured error type for contextual error UI (#3679). */
-  errorType?: PlatformErrorType;
 }
 
 /** Data bundle passed to ComplianceTabHtml renderer (#3322). */
@@ -449,9 +446,28 @@ export interface ComplianceData {
   isLoading: boolean;
   hasAccess: boolean;
   isGenerating: boolean;
-  errorMessage?: string;
-  /** Structured error type for contextual error UI (#3679). */
-  errorType?: PlatformErrorType;
+  /** The classified cause of the last failed fetch, if any (#748). */
+  failure?: PlatformFailure;
+}
+
+/** Data bundle passed to CostTabHtml renderer. Replaces bare CostAnalyticsResult|null,
+ * which could not distinguish "no data yet" from every failure kind (#748). */
+export interface PlatformCostTabData {
+  result: CostAnalyticsResult | null;
+  isLoading: boolean;
+  /** The classified cause of the last failed fetch, if any (#748). */
+  failure?: PlatformFailure;
+}
+
+/** Data bundle passed to DependabotTabHtml renderer. Distinguishes a genuinely
+ * empty PR list from a fetch that failed and left stale/empty data (#748). */
+export interface DependabotTabState {
+  data: DependabotPRData;
+  /** Raw error text from the last failed fetch; unset when the fetch succeeded
+   * (even if it returned zero PRs). DependabotPRService has no typed failure
+   * kind (it wraps the GitHub PR list, not a platform.* IPC call), so this is
+   * the raw message rather than a classified `PlatformFailure` (#748). */
+  fetchError?: string;
 }
 
 /**

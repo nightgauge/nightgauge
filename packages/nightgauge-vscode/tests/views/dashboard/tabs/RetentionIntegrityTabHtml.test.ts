@@ -25,6 +25,7 @@ import {
 import type {
   AuditLogData,
   RetentionIntegrityData,
+  PlatformFailure,
 } from "../../../../src/views/dashboard/DashboardState";
 import type { RetentionConfig, IntegrityResult } from "../../../../src/services/IpcClientBase";
 
@@ -173,5 +174,65 @@ describe("Retention & Integrity Panel", () => {
     expect(styles).toContain(".integrity-result-valid");
     expect(styles).toContain(".integrity-result-invalid");
     expect(styles).toContain(".retention-no-access");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// failure (fetch failure) vs errorMessage (action failure) (#748)
+//
+// `internal/platform/audit_retention.go` returns a real 403 with
+// "enterprise only: ..." text for a genuine plan gate (that's what
+// hasAccess=false above already covers, honestly, since it's evidenced Go
+// text) — but every OTHER cause (offline, a real server_error, a rejected
+// credential) used to be silently folded into the SAME generic form-with-a-
+// stale-default-value, with no banner at all. `failure` fixes that.
+// ---------------------------------------------------------------------------
+
+function makeFailure(overrides: Partial<PlatformFailure> = {}): PlatformFailure {
+  return {
+    ok: false,
+    kind: "server_error",
+    endpoint: "platform.auditGetRetentionConfig",
+    message: "get retention config: server returned 500",
+    ...overrides,
+  };
+}
+
+describe("Retention & Integrity Panel — fetch failure (#748)", () => {
+  it("failure set, hasAccess=true → panel shell renders WITH an honest banner (previously silent)", () => {
+    const html = getAuditTabHtml(
+      makeAuditData(),
+      makeRetentionData({ hasAccess: true, failure: makeFailure({ kind: "offline" }) })
+    );
+    expect(html).toContain("retention-integrity-panel");
+    expect(html).toContain("audit-error-banner");
+    expect(html).toContain("could not reach the platform backend");
+    expect(html).not.toContain("retention-no-access");
+  });
+
+  it("failure set to unauthorized → banner offers sign-in language, not a plan claim", () => {
+    const html = getAuditTabHtml(
+      makeAuditData(),
+      makeRetentionData({
+        hasAccess: true,
+        failure: makeFailure({ kind: "unauthorized", status: 401 }),
+      })
+    );
+    expect(html).toContain("audit-error-banner");
+    expect(html).toContain("credential was rejected");
+    expect(html.toLowerCase()).not.toContain("enterprise");
+  });
+
+  it("failure takes priority over a stale errorMessage from a prior action", () => {
+    const html = getAuditTabHtml(
+      makeAuditData(),
+      makeRetentionData({
+        hasAccess: true,
+        failure: makeFailure({ kind: "server_error", status: 500 }),
+        errorMessage: "stale action message",
+      })
+    );
+    expect(html).toContain("audit-error-banner");
+    expect(html).not.toContain("stale action message");
   });
 });

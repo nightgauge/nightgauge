@@ -12,7 +12,8 @@ import type {
   AnalyticsHealthResult,
   AnalyticsHealthDimension,
 } from "../../../services/IpcClientBase";
-import type { AnalyticsHealthData } from "../DashboardState";
+import type { AnalyticsHealthData, PlatformFailure } from "../DashboardState";
+import { renderPlatformFailure } from "./PlatformFailureHtml";
 import {
   getHealthWidgetHtml,
   getHealthWidgetStyles,
@@ -200,60 +201,32 @@ function getHealthCheckReportHtml(report: HealthCheckReport | null | undefined):
 // Error state helpers (#3679)
 // ---------------------------------------------------------------------------
 
-function getHealthErrorState(errorType: string | undefined): {
+/**
+ * Render the health empty/error state from the classified `PlatformFailure`
+ * the service actually reported — never a guess (#748, replacing the prior
+ * string-keyed `PlatformErrorType` switch, which always rendered
+ * "Platform server error... likely a temporary issue" for a real failure
+ * regardless of whether it actually was temporary).
+ */
+function getHealthErrorState(failure: PlatformFailure | undefined): {
   icon: string;
   title: string;
   hint: string;
   cta: string;
 } {
-  switch (errorType) {
-    case "not_signed_in":
-      return {
-        icon: "🔑",
-        title: "Sign in to view health data",
-        hint: "Connect your Nightgauge account to see 7-dimension pipeline scoring.",
-        cta: `<button class="action-btn" id="healthSignInBtn">Sign in to Nightgauge</button>`,
-      };
-    case "token_expired":
-      return {
-        icon: "🔒",
-        title: "Session expired",
-        hint: "Your authentication token has expired. Sign in again to restore access.",
-        cta: `<button class="action-btn" id="healthSignInBtn">Re-authenticate</button>`,
-      };
-    case "no_permission":
-      return {
-        icon: "🚫",
-        title: "Access denied",
-        hint: "Your account does not have permission to view health analytics. Check your role or license tier.",
-        cta: `<button class="action-btn" id="healthRefreshBtn">Retry</button>`,
-      };
-    case "ipc_unavailable":
-    case "ipc_timeout":
-      return {
-        icon: "⚡",
-        title: "Go backend unavailable",
-        hint:
-          errorType === "ipc_timeout"
-            ? "The IPC request timed out. The Go backend may be busy — retry in a moment."
-            : "The Go backend is not connected. Reload the window to restart it.",
-        cta: `<button class="action-btn" id="healthRefreshBtn">Retry</button>`,
-      };
-    case "server_error":
-      return {
-        icon: "🏥",
-        title: "Platform server error",
-        hint: "The Nightgauge platform returned an error. This is likely a temporary issue — retry shortly.",
-        cta: `<button class="action-btn" id="healthRefreshBtn">Retry</button>`,
-      };
-    default:
-      return {
-        icon: "🏥",
-        title: "Health data unavailable — connect to Nightgauge platform",
-        hint: "Platform health analysis provides 7-dimension pipeline scoring with findings and recommendations.",
-        cta: `<button class="action-btn" id="healthRefreshBtn">Refresh</button>`,
-      };
+  if (!failure) {
+    return {
+      icon: "🏥",
+      title: "Health data unavailable — connect to Nightgauge platform",
+      hint: "Platform health analysis provides 7-dimension pipeline scoring with findings and recommendations.",
+      cta: `<button class="action-btn" id="healthRefreshBtn">Refresh</button>`,
+    };
   }
+  const rendered = renderPlatformFailure(failure);
+  const cta = rendered.showSignIn
+    ? `<button class="action-btn" id="healthSignInBtn">Sign in to Nightgauge</button>`
+    : `<button class="action-btn" id="healthRefreshBtn">Retry</button>`;
+  return { icon: rendered.icon, title: rendered.title, hint: rendered.hintHtml, cta };
 }
 
 // ---------------------------------------------------------------------------
@@ -270,14 +243,13 @@ export function getHealthTabHtml(
 ): string {
   const data = healthData?.result ?? null;
   if (data === null) {
-    const errorType = healthData?.errorType;
-    const { icon, title, hint, cta } = getHealthErrorState(errorType);
+    const { icon, title, hint, cta } = getHealthErrorState(healthData?.failure);
     return `
       <div class="health-tab">
         <div class="health-empty-state">
           <div class="health-empty-icon">${icon}</div>
           <p class="health-empty-title">${escapeHtml(title)}</p>
-          <p class="health-empty-hint">${escapeHtml(hint)}</p>
+          <p class="health-empty-hint">${hint}</p>
           ${cta}
         </div>
       </div>`;

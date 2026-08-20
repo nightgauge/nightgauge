@@ -1,17 +1,31 @@
 import { escapeHtml } from "../DashboardComponents";
-import type { DependabotPRData, DependabotPR } from "../../../services/DependabotPRService";
+import type { DependabotPR, DependabotPRData } from "../../../services/DependabotPRService";
+import type { DependabotTabState } from "../DashboardState";
+import { getPlatformRetryButtonHtml, getPlatformFailureScript } from "./PlatformFailureHtml";
 
-export function getDependabotTabHtml(data: DependabotPRData | null | undefined): string {
-  if (data === undefined) {
+/**
+ * Render the Dependencies tab. `state.fetchError` distinguishes a genuinely
+ * empty PR list (a real success — the repo just has none open) from a fetch
+ * that failed and left stale/empty data — previously both rendered the
+ * identical "No open dependabot PRs found." message (#748).
+ */
+export function getDependabotTabHtml(state: DependabotTabState | null | undefined): string {
+  if (state === undefined) {
     return getDependabotLoadingHtml();
   }
-  if (data === null || data.prs.length === 0) {
+  if (state === null) {
+    return getDependabotEmptyHtml();
+  }
+  if (state.fetchError) {
+    return getDependabotFetchErrorHtml(state.fetchError);
+  }
+  if (state.data.prs.length === 0) {
     return getDependabotEmptyHtml();
   }
   return `
     <div class="dependabot-tab">
-      ${getDependabotSummaryHtml(data)}
-      ${getDependabotTableHtml(data.prs)}
+      ${getDependabotSummaryHtml(state.data)}
+      ${getDependabotTableHtml(state.data.prs)}
     </div>
   `;
 }
@@ -22,6 +36,22 @@ function getDependabotLoadingHtml(): string {
 
 function getDependabotEmptyHtml(): string {
   return `<div class="dependabot-empty"><p>No open dependabot PRs found.</p></div>`;
+}
+
+/**
+ * DependabotPRService wraps the GitHub PR list (not a platform.* IPC call),
+ * so there is no typed `PlatformFailureKind` here — the raw error text is
+ * the most honest thing available, shown as-is rather than reclassified.
+ */
+function getDependabotFetchErrorHtml(fetchError: string): string {
+  return `
+    <div class="dependabot-fetch-error">
+      <div class="dependabot-fetch-error-icon">⚠️</div>
+      <p class="dependabot-fetch-error-title">Could not load Dependabot PRs</p>
+      <p class="dependabot-fetch-error-hint">${escapeHtml(fetchError)}</p>
+      ${getPlatformRetryButtonHtml("dependabotRetryBtn", { type: "dependabotRefresh" })}
+    </div>
+  `;
 }
 
 function getDependabotSummaryHtml(data: DependabotPRData): string {
@@ -102,6 +132,7 @@ export function getDependabotTabScript(): string {
       if (!depPanel) return;
 
       depPanel.addEventListener('click', function(e) {
+        ${getPlatformFailureScript()}
         var mergeBtn = e.target.closest('[data-action="mergeDependabotPR"]');
         if (mergeBtn) {
           mergeBtn.disabled = true;

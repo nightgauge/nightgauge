@@ -101,7 +101,6 @@ import { PlatformAnalyticsHealthService } from "../../services/PlatformAnalytics
 import { PlatformRunsService } from "../../services/PlatformRunsService";
 import { PlatformTrendsService } from "../../services/PlatformTrendsService";
 import { PlatformComplianceService } from "../../services/PlatformComplianceService";
-import type { CostAnalyticsResult } from "../../services/IpcClientBase";
 import type {
   RunsFilterState,
   RunsListData,
@@ -111,9 +110,11 @@ import type {
   ComplianceData,
   RetentionIntegrityData,
   AnalyticsHealthData,
-  PlatformErrorType,
+  PlatformCostTabData,
+  DependabotTabState,
 } from "./DashboardState";
 import { getDefaultRunsFilters, getDefaultRunsPagination } from "./DashboardState";
+import { classifyPlatformError, type PlatformFailure } from "../../services/platformResult";
 
 /**
  * Message from WebView to extension
@@ -282,7 +283,7 @@ export class Dashboard implements vscode.Disposable {
   private discoveryActivityData: DiscoveryActivityData | null = null;
   /** Platform cost analytics service and cached data (Issue #3317) */
   private platformCostService: PlatformCostService | null = null;
-  private platformCostData: CostAnalyticsResult | null = null;
+  private platformCostData: PlatformCostTabData | null = null;
   private costDateRange: CostDateRange = "7d";
   /** Platform analytics health service and cached data (Issue #3318) */
   private platformAnalyticsHealthService: PlatformAnalyticsHealthService | null = null;
@@ -308,8 +309,7 @@ export class Dashboard implements vscode.Disposable {
   /** Dependabot PR service and cached data (Issue #3116) */
   private dependabotService:
     import("../../services/DependabotPRService").DependabotPRService | null = null;
-  private dependabotData: import("../../services/DependabotPRService").DependabotPRData | null =
-    null;
+  private dependabotData: DependabotTabState | null = null;
   /** User-selected historical run issue number for Analytics tab (Issue #2580) */
   private selectedRunIssueNumber: number | null = null;
   /** Platform runId (UUID) for the selected run — used to filter SSE pipeline events (#3714) */
@@ -2702,7 +2702,7 @@ export class Dashboard implements vscode.Disposable {
       this.healthWidgetData = await this.state.getHealthData(
         undefined,
         this.healthTrendRange,
-        this.dependabotData
+        this.dependabotData?.data ?? null
       );
     } catch {
       this.healthWidgetData = null;
@@ -2949,64 +2949,78 @@ export class Dashboard implements vscode.Disposable {
   /**
    * Refresh platform cost analytics data via IPC (Issue #3317).
    * Lazy-loaded on first cost tab activation. Re-fetches on date range change.
-   * Never throws — errors are handled by PlatformCostService.
+   * Never throws — PlatformCostService returns a typed PlatformResult (#748).
    */
   async refreshCostData(): Promise<void> {
+    const endpoint = "platform.getCostAnalytics";
     try {
       const ipc = (await import("../../services/IpcClient")).IpcClient.getInstance();
       this.platformCostService ??= new PlatformCostService(ipc);
       const costResult = await this.platformCostService.fetchAndCache(this.costDateRange);
-      this.platformCostData = costResult.ok ? costResult.value : null;
+      this.platformCostData = costResult.ok
+        ? { result: costResult.value, isLoading: false }
+        : { result: null, isLoading: false, failure: costResult };
       this.updatePanel("costRefresh");
-    } catch {
-      // IPC unavailable — leave data null, don't throw
+    } catch (err) {
+      this.platformCostData = {
+        result: null,
+        isLoading: false,
+        failure: classifyPlatformError(err, endpoint),
+      };
+      this.updatePanel("costRefresh");
     }
-  }
-
-  /** Classify an IPC/platform error into a structured PlatformErrorType (#3679). */
-  private classifyPlatformError(err: unknown): PlatformErrorType {
-    if (err instanceof Error) {
-      if (err.message.includes("Go backend not connected")) return "ipc_unavailable";
-      if (err.message.includes("Failed to write to Go backend")) return "ipc_unavailable";
-      if (err.message.includes("timed out")) return "ipc_timeout";
-    }
-    return "server_error";
   }
 
   /**
-   * Check token state before making a platform call (#3679).
-   * Returns a PlatformErrorType if the token is missing/expired, or null if valid.
+   * Check token state before making a platform call, so a missing/expired
+   * credential short-circuits without a round trip. Synthesizes a real
+   * `PlatformFailure` from a locally-verified fact (no throw, no guess) —
+   * distinct from the `unauthorized` kind the platform itself reports, but
+   * rendered identically since both mean "sign in" (#748).
    */
-  private async checkPlatformTokenState(): Promise<PlatformErrorType | null> {
+  private async checkPlatformTokenState(endpoint: string): Promise<PlatformFailure | null> {
     const tokenStorage = TokenStorage.getInstance();
-    if (!tokenStorage) return "not_signed_in";
+    if (!tokenStorage) {
+      return {
+        ok: false,
+        kind: "unauthorized",
+        endpoint,
+        message: "No platform session is signed in",
+      };
+    }
     const accessToken = await tokenStorage.retrieve("accessToken");
-    if (!accessToken) return "not_signed_in";
+    if (!accessToken) {
+      return { ok: false, kind: "unauthorized", endpoint, message: "No stored session token" };
+    }
     const expiresAt = await tokenStorage.retrieve("expiresAt");
-    if (expiresAt && new Date(expiresAt) < new Date()) return "token_expired";
+    if (expiresAt && new Date(expiresAt) < new Date()) {
+      return {
+        ok: false,
+        kind: "unauthorized",
+        endpoint,
+        message: "Stored session token has expired",
+      };
+    }
     return null;
   }
 
   /**
    * Refresh platform analytics health data via IPC (Issue #3318).
    * Lazy-loaded on first health tab activation. Re-fetches on healthRefresh message.
-   * Never throws — errors are handled by PlatformAnalyticsHealthService.
+   * Never throws — PlatformAnalyticsHealthService returns a typed PlatformResult (#748).
    */
   async refreshHealthAnalyticsData(): Promise<void> {
+    const endpoint = "platform.getAnalyticsHealth";
     try {
-      const tokenError = await this.checkPlatformTokenState();
-      if (tokenError) {
+      const tokenFailure = await this.checkPlatformTokenState(endpoint);
+      if (tokenFailure) {
         this.healthAnalyticsData = {
           result: null,
           hasAccess: false,
           isLoading: false,
-          errorType: tokenError,
-          errorMessage:
-            tokenError === "not_signed_in"
-              ? "Sign in to view health data"
-              : "Session expired — sign in again",
+          failure: tokenFailure,
         };
-        this.logger.info("platform:health-tab-error", { errorType: tokenError });
+        this.logger.info("platform:health-tab-error", { kind: tokenFailure.kind });
         this.updatePanel("healthRefresh");
         return;
       }
@@ -3014,30 +3028,22 @@ export class Dashboard implements vscode.Disposable {
       this.platformAnalyticsHealthService ??= new PlatformAnalyticsHealthService(ipc);
       const result = await this.platformAnalyticsHealthService.fetchAndCache();
       if (!result.ok) {
-        const errorType: PlatformErrorType = "server_error";
         this.healthAnalyticsData = {
           result: null,
           hasAccess: false,
           isLoading: false,
-          errorType,
-          errorMessage: "Platform health API returned an error",
+          failure: result,
         };
-        this.logger.info("platform:health-tab-error", { errorType, kind: result.kind });
+        this.logger.info("platform:health-tab-error", { kind: result.kind, status: result.status });
       } else {
         this.healthAnalyticsData = { result: result.value, hasAccess: true, isLoading: false };
         this.healthAnalyticsFetchedAt = new Date();
       }
       this.updatePanel("healthRefresh");
     } catch (err) {
-      const errorType = this.classifyPlatformError(err);
-      this.healthAnalyticsData = {
-        result: null,
-        hasAccess: false,
-        isLoading: false,
-        errorType,
-        errorMessage: "Failed to load health data",
-      };
-      this.logger.info("platform:health-tab-error", { errorType });
+      const failure = classifyPlatformError(err, endpoint);
+      this.healthAnalyticsData = { result: null, hasAccess: false, isLoading: false, failure };
+      this.logger.info("platform:health-tab-error", { kind: failure.kind });
       this.updatePanel("healthRefresh");
     }
   }
@@ -3045,21 +3051,22 @@ export class Dashboard implements vscode.Disposable {
   /**
    * Refresh pipeline runs data via IPC (Issue #3319).
    * Lazy-loaded on first runs tab activation. Re-fetches on filter/page change.
-   * Never throws — errors are handled by PlatformRunsService.
+   * Never throws — PlatformRunsService returns a typed PlatformResult (#748).
    */
   async refreshRunsData(cursor?: string): Promise<void> {
+    const endpoint = "platform.getAnalyticsRuns";
     try {
-      const tokenError = await this.checkPlatformTokenState();
-      if (tokenError) {
+      const tokenFailure = await this.checkPlatformTokenState(endpoint);
+      if (tokenFailure) {
         this.runsData = {
           entries: [],
           filters: this.runsFilters,
           pagination: this.runsPagination,
           isLoading: false,
           hasAccess: false,
-          errorType: tokenError,
+          failure: tokenFailure,
         };
-        this.logger.info("platform:runs-tab-error", { errorType: tokenError });
+        this.logger.info("platform:runs-tab-error", { kind: tokenFailure.kind });
         this.updatePanel("runsRefresh");
         return;
       }
@@ -3079,16 +3086,15 @@ export class Dashboard implements vscode.Disposable {
       const result = await this.platformRunsService.fetchAndCache(this.runsFilters, cursor, 20);
 
       if (!result.ok) {
-        const errorType: PlatformErrorType = "server_error";
         this.runsData = {
           entries: [],
           filters: this.runsFilters,
           pagination: this.runsPagination,
           isLoading: false,
           hasAccess: false,
-          errorType,
+          failure: result,
         };
-        this.logger.info("platform:runs-tab-error", { errorType, kind: result.kind });
+        this.logger.info("platform:runs-tab-error", { kind: result.kind, status: result.status });
       } else {
         const data = result.value;
         // Store next cursor in the stack for the next page
@@ -3113,17 +3119,16 @@ export class Dashboard implements vscode.Disposable {
       }
       this.updatePanel("runsRefresh");
     } catch (err) {
-      const errorType = this.classifyPlatformError(err);
+      const failure = classifyPlatformError(err, endpoint);
       this.runsData = {
         entries: [],
         filters: this.runsFilters,
         pagination: this.runsPagination,
         isLoading: false,
         hasAccess: false,
-        errorType,
-        errorMessage: "Failed to load runs data",
+        failure,
       };
-      this.logger.info("platform:runs-tab-error", { errorType });
+      this.logger.info("platform:runs-tab-error", { kind: failure.kind });
       this.updatePanel("runsRefresh");
     }
   }
@@ -3131,8 +3136,10 @@ export class Dashboard implements vscode.Disposable {
   /**
    * Fetch platform trends data for the Trends tab (Issue #3320).
    * Mirrors refreshRunsData() — lazy-loaded on first tab activation.
+   * Never throws — PlatformTrendsService returns a typed PlatformResult (#748).
    */
   private async fetchTrendsData(): Promise<void> {
+    const endpoint = "platform.getAnalyticsTrends";
     try {
       const ipc = (await import("../../services/IpcClient")).IpcClient.getInstance();
       this.platformTrendsService ??= new PlatformTrendsService(ipc);
@@ -3154,7 +3161,7 @@ export class Dashboard implements vscode.Disposable {
           isLoading: false,
           hasAccess: false,
           showComparison: this.trendsShowComparison,
-          errorMessage: "Failed to load trends data. Ensure the platform is connected.",
+          failure: result,
         };
       } else {
         this.trendsData = {
@@ -3165,13 +3172,13 @@ export class Dashboard implements vscode.Disposable {
         };
       }
       this.updatePanel("trendsRefresh");
-    } catch {
+    } catch (err) {
       this.trendsData = {
         result: null,
         isLoading: false,
         hasAccess: false,
         showComparison: this.trendsShowComparison,
-        errorMessage: "Failed to load trends data. Ensure the platform is connected.",
+        failure: classifyPlatformError(err, endpoint),
       };
       this.updatePanel("trendsRefresh");
     }
@@ -3180,9 +3187,10 @@ export class Dashboard implements vscode.Disposable {
   /**
    * Refresh compliance reports list via IPC (Issue #3322).
    * Lazy-loaded on first compliance tab activation. Re-fetches on page change or refresh.
-   * Never throws — errors are surfaced in complianceData.errorMessage.
+   * Never throws — PlatformComplianceService returns a typed PlatformResult (#748).
    */
   private async refreshComplianceData(cursor?: string): Promise<void> {
+    const endpoint = "platform.auditListReports";
     try {
       const ipc = (await import("../../services/IpcClient")).IpcClient.getInstance();
       this.platformComplianceService ??= new PlatformComplianceService(ipc);
@@ -3208,6 +3216,7 @@ export class Dashboard implements vscode.Disposable {
           isLoading: false,
           hasAccess: false,
           isGenerating: false,
+          failure: result,
         };
       } else {
         this.complianceData = {
@@ -3224,7 +3233,7 @@ export class Dashboard implements vscode.Disposable {
         };
       }
       this.updatePanel("complianceRefresh");
-    } catch {
+    } catch (err) {
       this.complianceData = {
         reports: [],
         filters: {},
@@ -3232,7 +3241,7 @@ export class Dashboard implements vscode.Disposable {
         isLoading: false,
         hasAccess: false,
         isGenerating: false,
-        errorMessage: "Failed to load compliance reports. Ensure the platform is connected.",
+        failure: classifyPlatformError(err, endpoint),
       };
       this.updatePanel("complianceRefresh");
     }
@@ -3268,12 +3277,12 @@ export class Dashboard implements vscode.Disposable {
         format
       );
       reportId = result.id;
-    } catch {
+    } catch (err) {
       if (this.complianceData) {
         this.complianceData = {
           ...this.complianceData,
           isGenerating: false,
-          errorMessage: "Failed to generate compliance report. Check your plan and permissions.",
+          failure: classifyPlatformError(err, "platform.auditGenerateReport"),
         };
         this.updatePanel("complianceGenerate");
       }
@@ -3339,10 +3348,33 @@ export class Dashboard implements vscode.Disposable {
   }
 
   /**
+   * Classify a retention/integrity endpoint error into a PlatformFailure.
+   * `internal/platform/audit_retention.go` returns two phrasings the shared
+   * `classifyPlatformError` corpus does not recognize (no HTTP-status digits
+   * to pattern-match): "enterprise only: ..." on a real 403, and "... platform
+   * client offline" when the Go layer never reached the network. Both are
+   * evidenced Go-reported text, not a guess — everything else falls through
+   * to the shared classifier (#748, was the `isEnterpriseOnly`/`includes("403")`
+   * heuristic from the prior retention panel, which silently mis-classified
+   * any other 403 text).
+   */
+  private classifyRetentionError(err: unknown, endpoint: string): PlatformFailure {
+    const message = err instanceof Error ? err.message : String(err);
+    if (/enterprise only/i.test(message)) {
+      return { ok: false, kind: "forbidden", status: 403, endpoint, message };
+    }
+    if (/platform client offline/i.test(message)) {
+      return { ok: false, kind: "offline", endpoint, message };
+    }
+    return classifyPlatformError(err, endpoint);
+  }
+
+  /**
    * Fetch current retention config and populate retentionIntegrityData (Issue #3323).
-   * Never throws — errors are surfaced in retentionIntegrityData.errorMessage.
+   * Never throws — the fetch failure is surfaced in retentionIntegrityData.failure (#748).
    */
   private async refreshRetentionData(): Promise<void> {
+    const endpoint = "platform.auditGetRetentionConfig";
     const ipc = (await import("../../services/IpcClient")).IpcClient.getInstance();
     const loading: RetentionIntegrityData = {
       retentionConfig: this.retentionIntegrityData?.retentionConfig ?? null,
@@ -3363,15 +3395,16 @@ export class Dashboard implements vscode.Disposable {
         hasAccess: true,
       };
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      const isEnterpriseOnly = msg.includes("enterprise only") || msg.includes("403");
+      const failure = this.classifyRetentionError(err, endpoint);
       this.retentionIntegrityData = {
         retentionConfig: null,
         integrityResult: null,
         isLoading: false,
         isVerifying: false,
-        hasAccess: !isEnterpriseOnly,
-        errorMessage: isEnterpriseOnly ? undefined : msg,
+        // Only a genuine plan gate hides the panel entirely; every other
+        // cause still shows the panel shell with an honest error banner.
+        hasAccess: failure.kind !== "forbidden",
+        failure,
       };
     }
     this.updatePanel("retentionRefresh");
@@ -3403,8 +3436,12 @@ export class Dashboard implements vscode.Disposable {
   }
 
   /**
-   * Trigger audit log integrity verification (Issue #3323).
-   * Shows spinner while in progress. Never throws.
+   * Refresh Dependabot PR data for the Dependencies tab.
+   * Never throws — a failed fetch is surfaced via `fetchError` rather than
+   * silently rendering as "zero open PRs" (#748). DependabotPRService wraps
+   * the GitHub PR list (not a platform.* IPC call), so there is no typed
+   * PlatformFailureKind here — the raw message is the most honest thing
+   * available.
    */
   private async refreshDependabotData(): Promise<void> {
     const ipc = (await import("../../services/IpcClient")).IpcClient.getInstance();
@@ -3419,9 +3456,19 @@ export class Dashboard implements vscode.Disposable {
       this.dependabotService = new DependabotPRService(ipc, owner, repo, this.logger);
     }
     try {
-      this.dependabotData = await this.dependabotService.getData(true);
-    } catch {
-      this.dependabotData = { prs: [], staleCount: 0, securityCount: 0, fetchedAt: "" };
+      const data = await this.dependabotService.getData(true);
+      this.dependabotData = { data };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.dependabotData = {
+        data: this.dependabotData?.data ?? {
+          prs: [],
+          staleCount: 0,
+          securityCount: 0,
+          fetchedAt: "",
+        },
+        fetchError: message,
+      };
     }
     this.updatePanel("dependabotRefresh");
   }
