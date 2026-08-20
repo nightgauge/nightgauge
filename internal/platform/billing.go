@@ -1,12 +1,13 @@
 package platform
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+
+	api "github.com/nightgauge/nightgauge/api/generated/go/platform"
 )
 
 // PortalSessionResult holds the URL for a Stripe Customer Portal session.
@@ -15,8 +16,9 @@ type PortalSessionResult struct {
 }
 
 // BillingService wraps the platform API's billing endpoints.
-// POST /v1/billing/portal-session is not in the OpenAPI spec, so this service
-// makes a raw HTTP request with the platform client's auth headers.
+// POST /v1/billing/portal-session has no operation in the oapi-codegen client
+// (api/openapi.yaml is absent from this repo — see api/platform-operations.yaml),
+// so it is issued through the operation contract instead: api.OpBillingPortalSession.
 type BillingService struct {
 	client *Client
 }
@@ -33,17 +35,16 @@ func (s *BillingService) CreatePortalSession(ctx context.Context) (*PortalSessio
 		return nil, fmt.Errorf("billing portal requires online platform connectivity")
 	}
 
-	url := s.client.base + "/v1/billing/portal-session"
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader([]byte("{}")))
+	req, err := s.client.newRequest(ctx, requestSpec{
+		Op:   api.OpBillingPortalSession,
+		Body: []byte("{}"),
+		Headers: map[string]string{
+			"Content-Type": "application/json",
+			"Accept":       "application/json",
+		},
+	})
 	if err != nil {
 		return nil, fmt.Errorf("create portal request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json")
-
-	// Inject auth header using the same pattern as the generated client.
-	if bearer := s.client.bearer(); bearer != "" {
-		req.Header.Set("Authorization", "Bearer "+bearer)
 	}
 
 	resp, err := http.DefaultClient.Do(req)

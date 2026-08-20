@@ -123,6 +123,15 @@ jobs:
       # for this package (internal/preflight is in cmd/nightgauge's graph).
       - name: Working-tree content guards (encoding, skill includes, portability)
         run: go test ./internal/preflight/ -count=1
+      # DELIBERATELY UNGATED, same reasoning as the two steps above: the drift
+      # this catches is introduced by editing api/platform-operations.yaml or
+      # hand-editing the generated registry, and neither is guaranteed to trip
+      # run_heavy. operations.gen.go carries each platform operation's credential
+      # requirement — the fact the platform's OpenAPI document cannot express and
+      # the one the conformance test in internal/platform checks call sites
+      # against (#750). A stale copy silently weakens that check. ~2s.
+      - name: Platform operation registry in sync
+        run: make check-platform-operations
       - name: Build
         if: ${{ needs.changes.outputs.run_heavy != 'false' }}
         run: go build ./...

@@ -1,0 +1,220 @@
+# Platform operation contract — the local core's declared view of the
+# nightgauge platform HTTP boundary (#750).
+#
+# WHAT THIS IS
+# ------------
+# One entry per platform operation the Go binary invokes outside the
+# oapi-codegen client in api/generated/go/platform/types.gen.go. It is the
+# single place a platform endpoint's method, path and *credential
+# requirement* are written down, and it is compiled into
+# api/generated/go/platform/operations.gen.go by cmd/platform-opsgen.
+#
+# WHAT THIS IS NOT
+# ----------------
+# This is NOT an OpenAPI document and must not grow into one. It carries no
+# request or response schemas: those stay in types.gen.go, generated from the
+# platform's own spec. This file exists because of two facts recorded below.
+#
+# WHY IT EXISTS — fact 1: the OpenAPI document is not in this repository.
+#
+#   The Makefile's `generate-go` / `generate-ts` targets both read
+#   `api/openapi.yaml`. That file has never existed in this repository's git
+#   history (`git log --all -- api/openapi.yaml` is empty) — only its outputs
+#   were committed. Codegen is therefore not reproducible here, and until it
+#   is, no operation can be added to types.gen.go. See docs note in the issue.
+#
+# WHY IT EXISTS — fact 2: OpenAPI security cannot express this boundary.
+#
+#   The platform document declares exactly ONE security scheme, `bearerAuth`,
+#   described as "License key (ib_live_*, ib_ci_*) or JWT session token", and
+#   applies it uniformly to 188 of its 194 operations. It has no vendor
+#   extension distinguishing the two. So the contract's own security
+#   requirement is satisfied by *any* bearer, and a conformance check built
+#   only on it would have passed the bug that motivated this work: user-scoped
+#   routes being called with an account-scoped license key.
+#
+#   The distinction is real and lives in the platform's route middleware:
+#
+#     jwtMiddleware  -> user-scoped JWT only; a license key gets 401.
+#     pipelineAuth   -> either a JWT or a license key.
+#
+#   Every `security:` value below is transcribed from that middleware, which
+#   is the ground truth the OpenAPI document omits. When the platform gains a
+#   second security scheme, this column should be generated from the spec and
+#   this file reduced to a call-site list.
+#
+# FIELDS
+#   id          Stable identifier. Matches the platform's OpenAPI operationId
+#               where one exists, so the two can be reconciled mechanically.
+#   go_name     Exported Go const emitted into operations.gen.go.
+#   method      HTTP method.
+#   path        Path template. `{name}` placeholders are substituted
+#               positionally and percent-escaped by Client.newRequest.
+#   security    user_jwt | pipeline   (see above)
+#   upstream    declared | undeclared — whether the platform OpenAPI document
+#               declares this path+method. `undeclared` entries are called by
+#               this binary but absent from the contract; each one is a live
+#               drift finding, and TestOperationUpstreamDriftIsKnown fails when
+#               the set changes.
+#
+# Keep entries sorted by id.
+
+version: 1
+
+operations:
+  - id: agents.ackCommand
+    go_name: OpAgentsAckCommand
+    method: POST
+    path: /v1/agents/{agentId}/commands/{commandId}/ack
+    security: pipeline
+    upstream: declared
+
+  - id: agents.register
+    go_name: OpAgentsRegister
+    method: POST
+    path: /v1/agents/register
+    security: pipeline
+    upstream: declared
+
+  - id: agents.heartbeat
+    go_name: OpAgentsHeartbeat
+    method: PUT
+    path: /v1/agents/{agentId}/heartbeat
+    security: pipeline
+    upstream: declared
+
+  - id: agents.streamCommands
+    go_name: OpAgentsStreamCommands
+    method: GET
+    path: /v1/agents/{agentId}/commands
+    security: pipeline
+    upstream: declared
+
+  - id: analytics.getCostSummary
+    go_name: OpAnalyticsCost
+    method: GET
+    path: /v1/analytics/cost
+    security: user_jwt
+    upstream: declared
+
+  - id: analytics.getHealthScore
+    go_name: OpAnalyticsHealth
+    method: GET
+    path: /v1/analytics/health
+    security: user_jwt
+    upstream: declared
+
+  - id: analytics.getTrends
+    go_name: OpAnalyticsTrends
+    method: GET
+    path: /v1/analytics/trends
+    security: user_jwt
+    upstream: declared
+
+  - id: analytics.listRuns
+    go_name: OpAnalyticsRuns
+    method: GET
+    path: /v1/analytics/runs
+    security: pipeline
+    upstream: declared
+
+  - id: attention.sync
+    go_name: OpAttentionSync
+    method: PUT
+    path: /v1/attention/sync
+    security: pipeline
+    upstream: declared
+
+  # DRIFT: the platform mounts audit integrity at POST /v1/audit/integrity
+  # (routes/audit-integrity.ts `app.post('/')` under `app.route('/v1/audit/
+  # integrity', ...)`). This binary calls /v1/audit/integrity/verify, which the
+  # document does not declare. The path is transcribed as-is rather than
+  # "corrected" here: changing the URL is a behaviour change that belongs in
+  # its own issue, and recording the drift is what makes it visible at all.
+  - id: audit.verifyIntegrity
+    go_name: OpAuditIntegrityVerify
+    method: POST
+    path: /v1/audit/integrity/verify
+    security: user_jwt
+    upstream: undeclared
+
+  - id: audit.getRetentionConfig
+    go_name: OpAuditRetentionGet
+    method: GET
+    path: /v1/audit/retention
+    security: user_jwt
+    upstream: declared
+
+  - id: audit.updateRetentionConfig
+    go_name: OpAuditRetentionUpdate
+    method: PUT
+    path: /v1/audit/retention
+    security: user_jwt
+    upstream: declared
+
+  - id: auditReports.generate
+    go_name: OpAuditReportsGenerate
+    method: POST
+    path: /v1/audit/reports
+    security: user_jwt
+    upstream: declared
+
+  - id: auditReports.get
+    go_name: OpAuditReportsGet
+    method: GET
+    path: /v1/audit/reports/{id}
+    security: user_jwt
+    upstream: declared
+
+  - id: auditReports.list
+    go_name: OpAuditReportsList
+    method: GET
+    path: /v1/audit/reports
+    security: user_jwt
+    upstream: declared
+
+  - id: billing.createPortalSession
+    go_name: OpBillingPortalSession
+    method: POST
+    path: /v1/billing/portal-session
+    security: user_jwt
+    upstream: declared
+
+  # DRIFT: the platform exposes agent command delivery at
+  # GET /v1/agents/{agentId}/commands and POST /v1/agents/{agentId}/commands/
+  # {commandId}/ack. The flat /v1/commands/* pair below is called by
+  # CommandService and is absent from the document entirely.
+  - id: commands.ack
+    go_name: OpCommandsAck
+    method: POST
+    path: /v1/commands/{commandId}/ack
+    security: pipeline
+    upstream: undeclared
+
+  - id: commands.listPending
+    go_name: OpCommandsPending
+    method: GET
+    path: /v1/commands/pending
+    security: pipeline
+    upstream: undeclared
+
+  - id: pipeline-ingestEvent
+    go_name: OpPipelineIngestEvent
+    method: POST
+    path: /v1/pipelines/events
+    security: pipeline
+    upstream: declared
+
+  - id: queue.sync
+    go_name: OpQueueSync
+    method: PUT
+    path: /v1/queue/sync
+    security: pipeline
+    upstream: declared
+
+  - id: telemetry.ingestPipelineRun
+    go_name: OpTelemetryIngestPipelineRun
+    method: POST
+    path: /v1/telemetry/pipeline-run
+    security: pipeline
+    upstream: declared

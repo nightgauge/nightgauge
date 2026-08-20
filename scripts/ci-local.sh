@@ -94,6 +94,21 @@ if [ -f Makefile ] && grep -q '^check-terminal-kind-table:' Makefile; then
   run_step "terminal-kind table consumers in sync" make check-terminal-kind-table
 fi
 
+# 2c. Platform operation registry (#750) — api/generated/go/platform/operations.gen.go
+#     must be exactly what api/platform-operations.yaml renders. That file carries
+#     each operation's credential requirement, which is what the conformance test
+#     in internal/platform checks call sites against; a hand-edited copy is a
+#     contract nobody reviewed.
+if [ -f Makefile ] && grep -q '^check-platform-operations:' Makefile; then
+  run_step "platform operation registry in sync" make check-platform-operations
+fi
+
+# No step here for the hand-rolled-platform-request gate (#750): it is enforced
+# by TestPlatformRawHTTP_RealPackageIsClean, which step 1's `go test ./...`
+# already runs — and which ci.yml runs UNGATED via `go test ./internal/preflight/`.
+# `nightgauge preflight platform-raw-http` is the human/skill-facing entry point
+# for the same check, not a second gate.
+
 # 3. npm audit allow-list
 if [ -f scripts/npm-audit-check.js ]; then
   run_step "npm audit allow-list" node scripts/npm-audit-check.js

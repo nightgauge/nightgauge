@@ -1,11 +1,12 @@
 package platform
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
+
+	api "github.com/nightgauge/nightgauge/api/generated/go/platform"
 )
 
 // AuditRetentionService wraps the platform API audit retention + integrity endpoints.
@@ -39,13 +40,9 @@ func (s *AuditRetentionService) GetRetentionConfig(ctx context.Context) (*Retent
 		return nil, fmt.Errorf("audit retention not available: platform client offline")
 	}
 
-	url := s.client.base + "/v1/audit/retention"
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	req, err := s.client.newRequest(ctx, requestSpec{Op: api.OpAuditRetentionGet})
 	if err != nil {
 		return nil, fmt.Errorf("create get retention config request: %w", err)
-	}
-	if bearer := s.client.bearer(); bearer != "" {
-		req.Header.Set("Authorization", "Bearer "+bearer)
 	}
 
 	resp, err := http.DefaultClient.Do(req)
@@ -80,14 +77,13 @@ func (s *AuditRetentionService) UpdateRetentionConfig(ctx context.Context, reten
 		return nil, fmt.Errorf("marshal update retention config request: %w", err)
 	}
 
-	url := s.client.base + "/v1/audit/retention"
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut, url, bytes.NewReader(bodyBytes))
+	req, err := s.client.newRequest(ctx, requestSpec{
+		Op:      api.OpAuditRetentionUpdate,
+		Body:    bodyBytes,
+		Headers: map[string]string{"Content-Type": "application/json"},
+	})
 	if err != nil {
 		return nil, fmt.Errorf("create update retention config request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	if bearer := s.client.bearer(); bearer != "" {
-		req.Header.Set("Authorization", "Bearer "+bearer)
 	}
 
 	resp, err := http.DefaultClient.Do(req)
@@ -123,14 +119,13 @@ func (s *AuditRetentionService) VerifyIntegrity(ctx context.Context, windowDays 
 		return nil, fmt.Errorf("marshal verify integrity request: %w", err)
 	}
 
-	url := s.client.base + "/v1/audit/integrity/verify"
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(bodyBytes))
+	req, err := s.client.newRequest(ctx, requestSpec{
+		Op:      api.OpAuditIntegrityVerify,
+		Body:    bodyBytes,
+		Headers: map[string]string{"Content-Type": "application/json"},
+	})
 	if err != nil {
 		return nil, fmt.Errorf("create verify integrity request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	if bearer := s.client.bearer(); bearer != "" {
-		req.Header.Set("Authorization", "Bearer "+bearer)
 	}
 
 	resp, err := http.DefaultClient.Do(req)
