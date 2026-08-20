@@ -269,7 +269,7 @@ export function getTrendsTabStyles(): string {
 
 function getTrendsLoadingHtml(): string {
   return `
-    <div class="trends-empty">
+    <div class="trends-empty" role="status" aria-live="polite" aria-atomic="true">
       <div class="trends-empty-icon">⏳</div>
       <p class="trends-empty-title">Loading trends…</p>
     </div>

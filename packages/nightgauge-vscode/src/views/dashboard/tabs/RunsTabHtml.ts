@@ -385,7 +385,7 @@ export function getRunsTabStyles(): string {
 
 function getRunsLoadingHtml(): string {
   return `
-    <div class="runs-loading">
+    <div class="runs-loading" role="status" aria-live="polite" aria-atomic="true">
       <div class="empty-icon">⏳</div>
       <p>Loading pipeline runs…</p>
     </div>

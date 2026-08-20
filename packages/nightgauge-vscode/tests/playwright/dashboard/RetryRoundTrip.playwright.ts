@@ -2,14 +2,14 @@
  * Round-trip tests for retry buttons: click → outbound message posted →
  * simulated extension response → asserted DOM change (Issue #751). Retry
  * buttons are the priority case named in the issue — "a retry that renders
- * nothing observable is the defect that started this" — and #752 specifically
- * added a loading render to every platform-tab refresh so the round trip has
- * a visible middle step.
+ * nothing observable is the defect that started this" — and #752, #775, and
+ * #785 added or correctly ordered loading renders so every platform-tab retry
+ * has a visible middle step before transport completion.
  *
  * Every platform-backed tab's refresh is a FULL webview re-render, not a
- * postMessage-driven DOM patch: Dashboard.ts's refresh*Data() methods call
- * `this.updatePanel(trigger)`, which (for these non-incremental triggers)
- * reassigns `panel.webview.html` — a real navigation, not a live DOM mutation.
+ * postMessage-driven DOM patch: Dashboard.ts renders loading immediately and
+ * schedules final states through `updatePanel(trigger)`; both paths reassign
+ * `panel.webview.html` — a real navigation, not a live DOM mutation.
  * `vscode.getState()`/`setState()` are the only thing that survives it (that
  * survival is exactly why DashboardHtml.ts's tab-restoration script exists).
  * So the "simulated response" step here is a second `loadTabFixture()` call
@@ -93,18 +93,8 @@ test.describe("Cost tab retry round trip", () => {
       range: "7d",
     });
 
-    // Dashboard.ts's "costDateRangeChange" case invalidates the cache
-    // (platformCostData = null) and re-renders synchronously BEFORE the
-    // fetch — but unlike Runs/Trends/Compliance/Audit it does not push an
-    // explicit isLoading:true state, so the observable middle step is the
-    // generic empty-state copy, not a dedicated loading indicator. Still an
-    // observable change (the failure panel disappears), so this is a real
-    // if suboptimal pass — see the fixme test below for tabs where NOTHING
-    // observable happens.
-    await loadTabFixture(page, "cost--empty");
-    await expect(page.locator(".platform-cost-empty-title")).toContainText(
-      "No server-aggregated cost data yet"
-    );
+    await loadTabFixture(page, "cost--loading");
+    await expect(page.locator(".platform-cost-loading")).toContainText("Loading cost data");
     await expect(page.locator(".platform-cost-failure")).toHaveCount(0);
   });
 });
@@ -130,8 +120,10 @@ test.describe("Health tab retry round trip", () => {
   test("click retry renders an observable loading state", async ({ page }) => {
     await loadTabFixture(page, "health--failure-server_error");
     await page.click("#healthRefreshBtn");
-    await loadTabFixture(page, "health--empty");
-    await expect(page.locator(".health-empty-state")).toBeVisible();
+    await loadTabFixture(page, "health--loading");
+    await expect(page.locator('.health-empty-state[role="status"]')).toContainText(
+      "Loading health data"
+    );
   });
 });
 

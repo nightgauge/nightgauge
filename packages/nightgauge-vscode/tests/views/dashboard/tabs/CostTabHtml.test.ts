@@ -15,6 +15,7 @@
  * 11. (#748) data.failure set → renders the classified failure, distinct
  *     from both "never fetched" and a genuine empty/success result
  * 12. (#748) every PlatformFailureKind renders distinct copy
+ * 13. (#785) isLoading renders an accessible loading state
  */
 
 import { describe, it, expect } from "vitest";
@@ -88,6 +89,17 @@ describe("getCostTabHtml", () => {
     expect(html).toContain('data-cost-range="7d"');
     expect(html).toContain('data-cost-range="30d"');
     expect(html).toContain('data-cost-range="90d"');
+  });
+
+  it("loading data → renders an announced loading state and preserves the date range", () => {
+    const html = getCostTabHtml({ result: null, isLoading: true }, "30d");
+
+    expect(html).toContain("Loading cost data…");
+    expect(html).toContain('role="status"');
+    expect(html).toContain('aria-live="polite"');
+    expect(html).toContain('aria-atomic="true"');
+    expect(html).toMatch(/class="toggle-btn active"[^>]*data-cost-range="30d"/);
+    expect(html).not.toContain("No server-aggregated cost data yet");
   });
 
   it("data.result present → renders total cost card with formatted value", () => {
