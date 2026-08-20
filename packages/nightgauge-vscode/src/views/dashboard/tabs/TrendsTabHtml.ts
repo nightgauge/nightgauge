@@ -15,6 +15,12 @@
 import { escapeHtml } from "../DashboardComponents";
 import type { TrendsData, TrendsDateRange } from "../DashboardState";
 import type { TrendEntry } from "../../../services/IpcClientBase";
+import {
+  renderPlatformFailure,
+  getPlatformRetryButtonHtml,
+  getPlatformSignInButtonHtml,
+  getPlatformFailureScript,
+} from "./PlatformFailureHtml";
 
 const SPARSE_THRESHOLD = 7;
 
@@ -31,7 +37,7 @@ export function getTrendsTabHtml(data: TrendsData | null | undefined): string {
     return getTrendsLoadingHtml();
   }
   if (!data.hasAccess) {
-    return getTrendsNoAccessHtml();
+    return getTrendsNoAccessHtml(data.failure);
   }
   if (data.result === null) {
     return getTrendsEmptyHtml();
@@ -47,7 +53,6 @@ export function getTrendsTabHtml(data: TrendsData | null | undefined): string {
 
   return `
     <div class="trends-tab">
-      ${data.errorMessage ? `<div class="trends-error-banner">${escapeHtml(data.errorMessage)}</div>` : ""}
       ${getTrendsDateRangeHtml(dateRange)}
       <div class="trends-comparison-row">
         <label class="trends-comparison-label">
@@ -85,6 +90,7 @@ export function getTrendsTabScript(): string {
       if (!trendsPanel) return;
 
       trendsPanel.addEventListener('click', function(e) {
+        ${getPlatformFailureScript()}
         // Date range toggle
         var rangeBtn = e.target.closest('[data-trends-range]');
         if (rangeBtn) {
@@ -270,10 +276,31 @@ function getTrendsLoadingHtml(): string {
   `;
 }
 
-function getTrendsNoAccessHtml(): string {
+/**
+ * Render the trends no-access state from the classified `PlatformFailure`
+ * the service actually reported — never a fixed "Sign in" message for a
+ * user who is already signed in but hit a different failure (#748).
+ */
+function getTrendsNoAccessHtml(failure: TrendsData["failure"]): string {
+  if (!failure) {
+    return `
+      <div class="trends-no-access">
+        <p>Trends data requires a connected platform account. Sign in to enable longitudinal pipeline analytics.</p>
+      </div>
+    `;
+  }
+  const rendered = renderPlatformFailure(failure);
+  const cta = rendered.showSignIn
+    ? getPlatformSignInButtonHtml("trendsSignInBtn")
+    : rendered.showRetry
+      ? getPlatformRetryButtonHtml("trendsRetryBtn", { type: "trendsRefresh" })
+      : "";
   return `
     <div class="trends-no-access">
-      <p>Trends data requires a connected platform account. Sign in to enable longitudinal pipeline analytics.</p>
+      <div class="trends-empty-icon">${rendered.icon}</div>
+      <p class="trends-empty-title">${escapeHtml(rendered.title)}</p>
+      <p>${rendered.hintHtml}</p>
+      ${cta}
     </div>
   `;
 }

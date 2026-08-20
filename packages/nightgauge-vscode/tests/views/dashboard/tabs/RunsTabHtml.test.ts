@@ -19,7 +19,7 @@ import {
   getRunsTabScript,
   getRunsTabStyles,
 } from "../../../../src/views/dashboard/tabs/RunsTabHtml";
-import type { RunsListData } from "../../../../src/views/dashboard/DashboardState";
+import type { RunsListData, PlatformFailure } from "../../../../src/views/dashboard/DashboardState";
 import type { RunsEntry } from "../../../../src/services/IpcClientBase";
 
 // ---------------------------------------------------------------------------
@@ -84,7 +84,7 @@ describe("getRunsTabHtml", () => {
     expect(html).toContain("Loading pipeline runs");
   });
 
-  it("hasAccess: false → renders no-access message", () => {
+  it("hasAccess: false, no failure (never fetched) → generic connect message", () => {
     const html = getRunsTabHtml(makeData({ hasAccess: false }));
     expect(html).toContain("No Access");
     expect(html).toContain("Connect to the platform");
@@ -98,12 +98,6 @@ describe("getRunsTabHtml", () => {
   it("empty entries → renders empty-state HTML", () => {
     const html = getRunsTabHtml(makeData());
     expect(html).toContain("No Runs Found");
-  });
-
-  it("errorMessage set → renders error banner above table", () => {
-    const html = getRunsTabHtml(makeData({ errorMessage: "Platform runs API not available" }));
-    expect(html).toContain("runs-error-banner");
-    expect(html).toContain("Platform runs API not available");
   });
 
   it("entries present → renders table rows with correct field values", () => {
@@ -272,5 +266,89 @@ describe("getRunsTabStyles", () => {
   it("contains .runs-pagination selector", () => {
     const css = getRunsTabStyles();
     expect(css).toContain(".runs-pagination");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Failure-kind enumeration (#748) — the regression detector for this class
+// of bug.
+// ---------------------------------------------------------------------------
+
+function makeFailure(overrides: Partial<PlatformFailure> = {}): PlatformFailure {
+  return {
+    ok: false,
+    kind: "server_error",
+    endpoint: "platform.getAnalyticsRuns",
+    message: "get analytics runs: server returned 500",
+    ...overrides,
+  };
+}
+
+describe("getRunsTabHtml — failure kinds (#748)", () => {
+  it("unauthorized → sign-in copy, no role/plan claim", () => {
+    const html = getRunsTabHtml(
+      makeData({ hasAccess: false, failure: makeFailure({ kind: "unauthorized", status: 401 }) })
+    );
+    expect(html).toContain("Sign-in required");
+    expect(html).toContain("runsSignInBtn");
+    expect(html.toLowerCase()).not.toContain("role");
+    expect(html.toLowerCase()).not.toContain("upgrade");
+  });
+
+  it("forbidden → the only kind that may mention role/plan, quoting the real message", () => {
+    const html = getRunsTabHtml(
+      makeData({
+        hasAccess: false,
+        failure: makeFailure({
+          kind: "forbidden",
+          status: 403,
+          message: "get analytics runs: server returned 403",
+        }),
+      })
+    );
+    expect(html).toContain("Access denied");
+    expect(html).toContain("server returned 403");
+    expect(html).toContain("runsRetryBtn");
+  });
+
+  it("server_error → retry copy, distinct from unauthorized/forbidden", () => {
+    const html = getRunsTabHtml(
+      makeData({ hasAccess: false, failure: makeFailure({ kind: "server_error", status: 500 }) })
+    );
+    expect(html).toContain("Platform error");
+    expect(html).toContain("runsRetryBtn");
+  });
+
+  it("offline → unreachable copy", () => {
+    const html = getRunsTabHtml(
+      makeData({ hasAccess: false, failure: makeFailure({ kind: "offline" }) })
+    );
+    expect(html).toContain("Platform unreachable");
+  });
+
+  it("not_configured → not-connected copy with sign-in", () => {
+    const html = getRunsTabHtml(
+      makeData({ hasAccess: false, failure: makeFailure({ kind: "not_configured" }) })
+    );
+    expect(html).toContain("Not connected");
+    expect(html).toContain("runsSignInBtn");
+  });
+
+  it("unrecognized kind → neutral message naming endpoint and status, never a guess", () => {
+    const html = getRunsTabHtml(
+      makeData({
+        hasAccess: false,
+        failure: makeFailure({
+          // @ts-expect-error — deliberately outside the known union to exercise the fallback
+          kind: "something_new",
+          status: 418,
+          endpoint: "platform.getAnalyticsRuns",
+          message: "unrecognized failure",
+        }),
+      })
+    );
+    expect(html).toContain("Unable to load data");
+    expect(html).toContain("platform.getAnalyticsRuns");
+    expect(html).toContain("418");
   });
 });

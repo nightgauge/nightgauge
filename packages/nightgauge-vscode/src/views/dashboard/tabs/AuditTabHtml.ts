@@ -14,6 +14,7 @@
 import { escapeHtml, formatRelativeTime } from "../DashboardComponents";
 import { AUDIT_ACTIONS } from "@nightgauge/sdk";
 import type { AuditLogData, AuditLogEntry, RetentionIntegrityData } from "../DashboardState";
+import { renderPlatformFailure } from "./PlatformFailureHtml";
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -745,8 +746,17 @@ function getRetentionIntegrityPanelHtml(data: RetentionIntegrityData | undefined
 
   const verifyDisabled = data.isVerifying ? "disabled" : "";
   const spinnerStyle = data.isVerifying ? "display:inline" : "display:none";
-  const errorHtml = data.errorMessage
-    ? `<div class="audit-error-banner" style="margin-top:var(--spacing-sm)">${escapeHtml(data.errorMessage)}</div>`
+  // `failure` (the last fetch's classified cause) takes priority over
+  // `errorMessage` (a raw action-level message from update/verify) — both
+  // are honest, but the fetch failure means the form below is showing
+  // stale/default values, which is the more important thing to flag (#748).
+  const errorBannerText = data.failure
+    ? renderPlatformFailure(data.failure).hintHtml
+    : data.errorMessage
+      ? escapeHtml(data.errorMessage)
+      : "";
+  const errorHtml = errorBannerText
+    ? `<div class="audit-error-banner" style="margin-top:var(--spacing-sm)">${errorBannerText}</div>`
     : "";
 
   return `

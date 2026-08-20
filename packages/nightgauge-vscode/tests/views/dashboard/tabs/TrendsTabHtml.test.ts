@@ -20,7 +20,7 @@ import {
   getTrendsTabScript,
   getTrendsTabStyles,
 } from "../../../../src/views/dashboard/tabs/TrendsTabHtml";
-import type { TrendsData } from "../../../../src/views/dashboard/DashboardState";
+import type { TrendsData, PlatformFailure } from "../../../../src/views/dashboard/DashboardState";
 import type { AnalyticsTrendsResult, TrendEntry } from "../../../../src/services/IpcClientBase";
 
 // ---------------------------------------------------------------------------
@@ -143,11 +143,6 @@ describe("getTrendsTabHtml", () => {
     expect(html).not.toContain("<script>alert(1)</script>");
     expect(html).toContain("&lt;script&gt;");
   });
-
-  it("error message is displayed when present", () => {
-    const html = getTrendsTabHtml(makeTrendsData({ errorMessage: "Platform unavailable" }));
-    expect(html).toContain("Platform unavailable");
-  });
 });
 
 describe("getTrendsTabScript", () => {
@@ -179,5 +174,96 @@ describe("getTrendsTabStyles", () => {
 
   it("contains .trends-charts-grid selector", () => {
     expect(getTrendsTabStyles()).toContain(".trends-charts-grid");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Failure-kind enumeration (#748) — the regression detector for this class
+// of bug. Verified live: a signed-in user was told "requires a connected
+// platform account. Sign in..." regardless of the real cause.
+// ---------------------------------------------------------------------------
+
+function makeFailure(overrides: Partial<PlatformFailure> = {}): PlatformFailure {
+  return {
+    ok: false,
+    kind: "server_error",
+    endpoint: "platform.getAnalyticsTrends",
+    message: "get analytics trends: server returned 500",
+    ...overrides,
+  };
+}
+
+describe("getTrendsTabHtml — failure kinds (#748)", () => {
+  it("unauthorized → sign-in copy, no role/plan claim", () => {
+    const html = getTrendsTabHtml(
+      makeTrendsData({
+        hasAccess: false,
+        failure: makeFailure({ kind: "unauthorized", status: 401 }),
+      })
+    );
+    expect(html).toContain("Sign-in required");
+    expect(html).toContain("trendsSignInBtn");
+    expect(html.toLowerCase()).not.toContain("role");
+    expect(html.toLowerCase()).not.toContain("upgrade");
+  });
+
+  it("forbidden → the only kind that may mention role/plan, quoting the real message", () => {
+    const html = getTrendsTabHtml(
+      makeTrendsData({
+        hasAccess: false,
+        failure: makeFailure({
+          kind: "forbidden",
+          status: 403,
+          message: "get analytics trends: server returned 403",
+        }),
+      })
+    );
+    expect(html).toContain("Access denied");
+    expect(html).toContain("server returned 403");
+    expect(html).toContain("trendsRetryBtn");
+  });
+
+  it("server_error → retry copy, not the generic 'sign in' message a signed-in user was shown before #748", () => {
+    const html = getTrendsTabHtml(
+      makeTrendsData({
+        hasAccess: false,
+        failure: makeFailure({ kind: "server_error", status: 500 }),
+      })
+    );
+    expect(html).toContain("Platform error");
+    expect(html).not.toContain("requires a connected platform account");
+  });
+
+  it("offline → unreachable copy", () => {
+    const html = getTrendsTabHtml(
+      makeTrendsData({ hasAccess: false, failure: makeFailure({ kind: "offline" }) })
+    );
+    expect(html).toContain("Platform unreachable");
+  });
+
+  it("not_configured → not-connected copy with sign-in", () => {
+    const html = getTrendsTabHtml(
+      makeTrendsData({ hasAccess: false, failure: makeFailure({ kind: "not_configured" }) })
+    );
+    expect(html).toContain("Not connected");
+    expect(html).toContain("trendsSignInBtn");
+  });
+
+  it("unrecognized kind → neutral message naming endpoint and status, never a guess", () => {
+    const html = getTrendsTabHtml(
+      makeTrendsData({
+        hasAccess: false,
+        failure: makeFailure({
+          // @ts-expect-error — deliberately outside the known union to exercise the fallback
+          kind: "something_new",
+          status: 418,
+          endpoint: "platform.getAnalyticsTrends",
+          message: "unrecognized failure",
+        }),
+      })
+    );
+    expect(html).toContain("Unable to load data");
+    expect(html).toContain("platform.getAnalyticsTrends");
+    expect(html).toContain("418");
   });
 });

@@ -86,7 +86,7 @@ import {
 } from "./tabs/CostTabHtml";
 import { getUsagePanelSectionHtml, getUsagePanelStyles } from "./tabs/UsagePanelHtml";
 import type { UsagePanelState } from "./usagePanel";
-import type { CostAnalyticsResult } from "../../services/IpcClientBase";
+import type { PlatformCostTabData } from "./DashboardState";
 import type { CostDateRange } from "../../services/PlatformCostService";
 import {
   getPerformanceMetricsSectionHtml,
@@ -135,7 +135,7 @@ import {
   getDependabotTabScript,
   getDependabotTabStyles,
 } from "./tabs/DependabotTabHtml";
-import type { DependabotPRData } from "../../services/DependabotPRService";
+import type { DependabotTabState } from "./DashboardState";
 
 // Re-exports for backward compatibility
 export type {
@@ -948,7 +948,7 @@ export function getDashboardHtml(
   // Issue #3269 — budget vs actual stats
   budgetVsActualStats?: BudgetVsActualStageStat[],
   // Issue #3317 — platform cost analytics tab
-  platformCostData?: CostAnalyticsResult | null,
+  platformCostData?: PlatformCostTabData | null,
   costDateRange: CostDateRange = "7d",
   // Issue #3318 — platform analytics health tab
   healthAnalyticsData?: AnalyticsHealthData | null,
@@ -962,7 +962,7 @@ export function getDashboardHtml(
   // Issue #3323 — audit retention & integrity panel
   retentionIntegrityData?: RetentionIntegrityData | null,
   // Issue #3116 — dependabot PR dependencies tab
-  dependabotData?: DependabotPRData | null,
+  dependabotData?: DependabotTabState | null,
   // Issue #661 — adapter usage & quota panel, derived from the same
   // AdapterUsageService snapshot the status-bar meter renders.
   usagePanelState?: UsagePanelState | null

@@ -1,17 +1,20 @@
 /**
- * Tests for platform cost tab functions (Issue #3317)
+ * Tests for platform cost tab functions (Issue #3317, restructured #748)
  *
  * Covers:
- * 1. null data → empty state explaining why it is empty
- * 2. data present → renders total cost card
- * 3. data present → renders per-model breakdown
- * 4. data present → renders daily sparkline
+ * 1. null data → empty state explaining why it is empty (never fetched)
+ * 2. data.result present → renders total cost card
+ * 3. data.result present → renders per-model breakdown
+ * 4. data.result present → renders daily sparkline
  * 5. date range selector renders with active range
  * 6. XSS: model id strings are escaped
  * 7. getCostTabScript → returns script string with postMessage
  * 8. getPlatformCostTabStyles → returns non-empty CSS string
  * 9. empty byModel array → renders no-data message
  * 10. empty byDay array → renders no-data message
+ * 11. (#748) data.failure set → renders the classified failure, distinct
+ *     from both "never fetched" and a genuine empty/success result
+ * 12. (#748) every PlatformFailureKind renders distinct copy
  */
 
 import { describe, it, expect } from "vitest";
@@ -21,12 +24,16 @@ import {
   getPlatformCostTabStyles,
 } from "../../../../src/views/dashboard/tabs/CostTabHtml";
 import type { CostAnalyticsResult } from "../../../../src/services/IpcClientBase";
+import type {
+  PlatformCostTabData,
+  PlatformFailure,
+} from "../../../../src/views/dashboard/DashboardState";
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-function makeData(overrides: Partial<CostAnalyticsResult> = {}): CostAnalyticsResult {
+function makeResult(overrides: Partial<CostAnalyticsResult> = {}): CostAnalyticsResult {
   return {
     totalInputTokens: 1000,
     totalOutputTokens: 500,
@@ -47,6 +54,20 @@ function makeData(overrides: Partial<CostAnalyticsResult> = {}): CostAnalyticsRe
   };
 }
 
+function makeData(overrides: Partial<CostAnalyticsResult> = {}): PlatformCostTabData {
+  return { result: makeResult(overrides), isLoading: false };
+}
+
+function makeFailure(overrides: Partial<PlatformFailure> = {}): PlatformFailure {
+  return {
+    ok: false,
+    kind: "server_error",
+    endpoint: "platform.getCostAnalytics",
+    message: "get cost analytics: server returned 500",
+    ...overrides,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -55,7 +76,7 @@ describe("getCostTabHtml", () => {
   // The empty state must not read as an instruction to opt in: telemetry is
   // opt-out (#738), so "enable telemetry" would be wrong for most operators
   // seeing this panel. It explains the absence instead.
-  it("null data → explains the absence without telling the operator to opt in", () => {
+  it("null data (never fetched) → explains the absence without telling the operator to opt in", () => {
     const html = getCostTabHtml(null, "7d");
     expect(html).toContain("No server-aggregated cost data yet");
     expect(html).not.toContain("opt in");
@@ -69,20 +90,20 @@ describe("getCostTabHtml", () => {
     expect(html).toContain('data-cost-range="90d"');
   });
 
-  it("data present → renders total cost card with formatted value", () => {
+  it("data.result present → renders total cost card with formatted value", () => {
     const html = getCostTabHtml(makeData(), "7d");
     expect(html).toContain("$0.0123");
     expect(html).toContain("1,500");
   });
 
-  it("data present → renders per-model breakdown", () => {
+  it("data.result present → renders per-model breakdown", () => {
     const html = getCostTabHtml(makeData(), "7d");
     expect(html).toContain("claude-sonnet-4-6");
     expect(html).toContain("claude-haiku-4-5");
     expect(html).toContain("$0.0100");
   });
 
-  it("data present → renders sparkline SVG for daily trend", () => {
+  it("data.result present → renders sparkline SVG for daily trend", () => {
     const html = getCostTabHtml(makeData(), "7d");
     expect(html).toContain("<polyline");
     expect(html).toContain("2026-05-06");
@@ -144,5 +165,111 @@ describe("getPlatformCostTabStyles", () => {
     expect(css.trim().length).toBeGreaterThan(0);
     expect(css).toContain(".platform-cost-tab");
     expect(css).toContain(".platform-cost-total-card");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Failure-kind enumeration (#748) — previously ANY failure (401, 403, 500,
+// offline) rendered as the identical "No server-aggregated cost data yet"
+// copy as a genuinely empty account, indistinguishable from success. This is
+// the regression detector for that whole class of bug.
+// ---------------------------------------------------------------------------
+
+describe("getCostTabHtml — failure kinds (#748)", () => {
+  it("failure set → distinct from the never-fetched empty state", () => {
+    const html = getCostTabHtml(
+      { result: null, isLoading: false, failure: makeFailure({ kind: "offline" }) },
+      "7d"
+    );
+    expect(html).not.toContain("No server-aggregated cost data yet");
+    expect(html).toContain("Platform unreachable");
+  });
+
+  it("unauthorized → sign-in copy, no role/plan claim", () => {
+    const html = getCostTabHtml(
+      {
+        result: null,
+        isLoading: false,
+        failure: makeFailure({ kind: "unauthorized", status: 401 }),
+      },
+      "7d"
+    );
+    expect(html).toContain("Sign-in required");
+    expect(html).toContain("costSignInBtn");
+    expect(html.toLowerCase()).not.toContain("role or plan");
+    expect(html.toLowerCase()).not.toContain("upgrade");
+  });
+
+  it("forbidden → the only kind that may mention role/plan, quoting the real message", () => {
+    const html = getCostTabHtml(
+      {
+        result: null,
+        isLoading: false,
+        failure: makeFailure({
+          kind: "forbidden",
+          status: 403,
+          message: "get cost analytics: server returned 403",
+        }),
+      },
+      "7d"
+    );
+    expect(html).toContain("Access denied");
+    expect(html).toContain("server returned 403");
+    expect(html).toContain("costRetryBtn");
+  });
+
+  it("server_error → retry copy naming the endpoint", () => {
+    const html = getCostTabHtml(
+      {
+        result: null,
+        isLoading: false,
+        failure: makeFailure({ kind: "server_error", status: 500 }),
+      },
+      "7d"
+    );
+    expect(html).toContain("Platform error");
+    expect(html).toContain("platform.getCostAnalytics");
+  });
+
+  it("not_configured → not-connected copy with sign-in", () => {
+    const html = getCostTabHtml(
+      { result: null, isLoading: false, failure: makeFailure({ kind: "not_configured" }) },
+      "7d"
+    );
+    expect(html).toContain("Not connected");
+    expect(html).toContain("costSignInBtn");
+  });
+
+  it("unrecognized kind → neutral message naming endpoint and status, never a guess", () => {
+    const html = getCostTabHtml(
+      {
+        result: null,
+        isLoading: false,
+        failure: makeFailure({
+          // @ts-expect-error — deliberately outside the known union to exercise the fallback
+          kind: "something_new",
+          status: 418,
+          endpoint: "platform.getCostAnalytics",
+          message: "unrecognized failure",
+        }),
+      },
+      "7d"
+    );
+    expect(html).toContain("Unable to load data");
+    expect(html).toContain("platform.getCostAnalytics");
+    expect(html).toContain("418");
+  });
+
+  it("a genuine all-zero success result is not mistaken for a failure or the never-fetched state", () => {
+    const zeroResult = makeResult({
+      totalCostUsd: "0.0000",
+      totalTokens: 0,
+      breakdown: { byModel: [], byProject: [], byDay: [] },
+    });
+    const html = getCostTabHtml({ result: zeroResult, isLoading: false }, "7d");
+    expect(html).toContain("$0.0000");
+    expect(html).not.toContain("No server-aggregated cost data yet");
+    expect(html).not.toContain("Platform error");
+    expect(html).not.toContain("Sign-in required");
   });
 });

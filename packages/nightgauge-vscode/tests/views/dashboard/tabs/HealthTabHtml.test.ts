@@ -21,7 +21,10 @@ import {
   getHealthTabStyles,
 } from "../../../../src/views/dashboard/tabs/HealthTabHtml";
 import type { AnalyticsHealthResult } from "../../../../src/services/IpcClientBase";
-import type { AnalyticsHealthData } from "../../../../src/views/dashboard/DashboardState";
+import type {
+  AnalyticsHealthData,
+  PlatformFailure,
+} from "../../../../src/views/dashboard/DashboardState";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -181,6 +184,134 @@ describe("getHealthTabHtml", () => {
   it("snapshot: overall HTML structure for null data", () => {
     const html = getHealthTabHtml(null, null);
     expect(html).toMatchSnapshot();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Failure-kind enumeration (#748) — the regression detector for this class
+// of bug: every kind must render distinct, honest copy sourced from the
+// classified failure, never a fixed guess.
+// ---------------------------------------------------------------------------
+
+function makeFailure(overrides: Partial<PlatformFailure> = {}): PlatformFailure {
+  return {
+    ok: false,
+    kind: "server_error",
+    endpoint: "platform.getAnalyticsHealth",
+    message: "get analytics health: server returned 500",
+    ...overrides,
+  };
+}
+
+describe("getHealthTabHtml — failure kinds (#748)", () => {
+  it("unauthorized → sign-in copy, no role/plan claim", () => {
+    const html = getHealthTabHtml(
+      {
+        result: null,
+        hasAccess: false,
+        isLoading: false,
+        failure: makeFailure({ kind: "unauthorized", status: 401 }),
+      },
+      null
+    );
+    expect(html).toContain("Sign-in required");
+    expect(html).toContain("healthSignInBtn");
+    expect(html).not.toContain("healthRefreshBtn");
+    expect(html.toLowerCase()).not.toContain("role");
+    expect(html.toLowerCase()).not.toContain("upgrade");
+  });
+
+  it("forbidden → the only kind that may mention role/plan, quoting the real message", () => {
+    const html = getHealthTabHtml(
+      {
+        result: null,
+        hasAccess: false,
+        isLoading: false,
+        failure: makeFailure({
+          kind: "forbidden",
+          status: 403,
+          message: "get analytics health: server returned 403",
+        }),
+      },
+      null
+    );
+    expect(html).toContain("Access denied");
+    expect(html).toContain("server returned 403");
+    expect(html).toContain("healthRefreshBtn");
+  });
+
+  it("server_error → retry copy naming a transient issue, not permanent", () => {
+    const html = getHealthTabHtml(
+      {
+        result: null,
+        hasAccess: false,
+        isLoading: false,
+        failure: makeFailure({ kind: "server_error", status: 500 }),
+      },
+      null
+    );
+    expect(html).toContain("Platform error");
+    expect(html).toContain("healthRefreshBtn");
+    expect(html.toLowerCase()).not.toContain("role");
+  });
+
+  it("offline → unreachable copy, not the old 'likely temporary' server_error framing", () => {
+    const html = getHealthTabHtml(
+      {
+        result: null,
+        hasAccess: false,
+        isLoading: false,
+        failure: makeFailure({ kind: "offline" }),
+      },
+      null
+    );
+    expect(html).toContain("Platform unreachable");
+    expect(html).not.toContain("likely a temporary issue");
+  });
+
+  it("not_configured → not-connected copy with sign-in", () => {
+    const html = getHealthTabHtml(
+      {
+        result: null,
+        hasAccess: false,
+        isLoading: false,
+        failure: makeFailure({ kind: "not_configured" }),
+      },
+      null
+    );
+    expect(html).toContain("Not connected");
+    expect(html).toContain("healthSignInBtn");
+  });
+
+  it("unrecognized kind → neutral message naming endpoint and status, never a guess", () => {
+    const html = getHealthTabHtml(
+      {
+        result: null,
+        hasAccess: false,
+        isLoading: false,
+        failure: makeFailure({
+          // @ts-expect-error — deliberately outside the known union to exercise the fallback
+          kind: "something_new",
+          status: 418,
+          endpoint: "platform.getAnalyticsHealth",
+          message: "unrecognized failure",
+        }),
+      },
+      null
+    );
+    expect(html).toContain("Unable to load data");
+    expect(html).toContain("platform.getAnalyticsHealth");
+    expect(html).toContain("418");
+    expect(html.toLowerCase()).not.toContain("role");
+    expect(html.toLowerCase()).not.toContain("upgrade");
+  });
+
+  it("no failure and no result (never fetched) → generic connect copy, distinct from every failure kind", () => {
+    const html = getHealthTabHtml({ result: null, hasAccess: false, isLoading: false }, null);
+    expect(html).toContain("connect to Nightgauge platform");
+    expect(html).not.toContain("Sign-in required");
+    expect(html).not.toContain("Access denied");
+    expect(html).not.toContain("Platform error");
   });
 });
 

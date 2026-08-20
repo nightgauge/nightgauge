@@ -8,7 +8,18 @@
 import { escapeHtml, formatStageName, formatTokenCount } from "../DashboardComponents";
 import type { CostAnalyticsResult } from "../../../services/IpcClientBase";
 import type { CostDateRange } from "../../../services/PlatformCostService";
-import type { ModelRoutingMetrics, UsageLimitsData, PlatformQuotaData } from "../DashboardState";
+import type {
+  ModelRoutingMetrics,
+  UsageLimitsData,
+  PlatformQuotaData,
+  PlatformCostTabData,
+} from "../DashboardState";
+import {
+  renderPlatformFailure,
+  getPlatformRetryButtonHtml,
+  getPlatformSignInButtonHtml,
+  getPlatformFailureScript,
+} from "./PlatformFailureHtml";
 import type {
   CostSummary,
   CostHistoryEntry,
@@ -1205,6 +1216,35 @@ function getPlatformCostEmptyStateHtml(): string {
   `;
 }
 
+/**
+ * Render the cost tab's failure state from the classified `PlatformFailure`
+ * the service actually reported. Previously any failure — auth, offline,
+ * server error — rendered as the *same* "No server-aggregated cost data yet"
+ * copy as a genuinely empty account, indistinguishable from success (#748).
+ */
+function getPlatformCostFailureHtml(
+  failure: NonNullable<PlatformCostTabData["failure"]>,
+  dateRange: CostDateRange
+): string {
+  const rendered = renderPlatformFailure(failure);
+  const cta = rendered.showSignIn
+    ? getPlatformSignInButtonHtml("costSignInBtn")
+    : rendered.showRetry
+      ? getPlatformRetryButtonHtml("costRetryBtn", {
+          type: "costDateRangeChange",
+          range: dateRange,
+        })
+      : "";
+  return `
+    <div class="platform-cost-empty platform-cost-failure">
+      <div class="platform-cost-empty-icon">${rendered.icon}</div>
+      <p class="platform-cost-empty-title">${escapeHtml(rendered.title)}</p>
+      <p class="platform-cost-empty-hint">${rendered.hintHtml}</p>
+      ${cta}
+    </div>
+  `;
+}
+
 function getPlatformCostDateRangeHtml(dateRange: CostDateRange): string {
   const ranges: CostDateRange[] = ["7d", "30d", "90d"];
   const labels: Record<CostDateRange, string> = {
@@ -1310,10 +1350,16 @@ function getPlatformCostSparklineHtml(data: CostAnalyticsResult, dateRange: Cost
 
 /**
  * Render the full platform cost tab panel HTML.
- * When data is null, renders an empty state explaining why it is empty.
+ *
+ * Three distinct states, previously conflated into one (#748):
+ *   - `data === null` — never fetched yet.
+ *   - `data.failure` set — the last fetch failed; renders the classified
+ *     cause, never the generic "no data yet" copy.
+ *   - `data.result` present (even all-zero) — a real success; each section
+ *     already renders its own "no data" sub-message where applicable.
  */
 export function getCostTabHtml(
-  data: CostAnalyticsResult | null,
+  data: PlatformCostTabData | null,
   dateRange: CostDateRange = "7d"
 ): string {
   if (data === null) {
@@ -1325,19 +1371,39 @@ export function getCostTabHtml(
     `;
   }
 
+  if (data.failure) {
+    return `
+      <div class="platform-cost-tab">
+        ${getPlatformCostDateRangeHtml(dateRange)}
+        ${getPlatformCostFailureHtml(data.failure, dateRange)}
+      </div>
+    `;
+  }
+
+  if (data.result === null) {
+    return `
+      <div class="platform-cost-tab">
+        ${getPlatformCostDateRangeHtml(dateRange)}
+        ${getPlatformCostEmptyStateHtml()}
+      </div>
+    `;
+  }
+
+  const result = data.result;
+
   return `
     <div class="platform-cost-tab">
       ${getPlatformCostDateRangeHtml(dateRange)}
-      ${getPlatformCostTotalCardHtml(data)}
+      ${getPlatformCostTotalCardHtml(result)}
 
       <div class="platform-cost-section">
         <h3 class="platform-cost-section-title">Cost by Model</h3>
-        ${getPlatformCostModelBreakdownHtml(data)}
+        ${getPlatformCostModelBreakdownHtml(result)}
       </div>
 
       <div class="platform-cost-section">
         <h3 class="platform-cost-section-title">Daily Trend</h3>
-        ${getPlatformCostSparklineHtml(data, dateRange)}
+        ${getPlatformCostSparklineHtml(result, dateRange)}
       </div>
     </div>
   `;
@@ -1353,6 +1419,7 @@ export function getCostTabScript(): string {
       var costPanel = document.getElementById('tab-panel-cost');
       if (!costPanel) return;
       costPanel.addEventListener('click', function(e) {
+        ${getPlatformFailureScript()}
         var btn = e.target.closest('[data-cost-range]');
         if (!btn) return;
         var range = btn.getAttribute('data-cost-range');

@@ -22,7 +22,10 @@ import {
   getComplianceTabScript,
   getComplianceTabStyles,
 } from "../../../../src/views/dashboard/tabs/ComplianceTabHtml";
-import type { ComplianceData } from "../../../../src/views/dashboard/DashboardState";
+import type {
+  ComplianceData,
+  PlatformFailure,
+} from "../../../../src/views/dashboard/DashboardState";
 import type { ComplianceReportEntry } from "../../../../src/services/IpcClientBase";
 
 // ---------------------------------------------------------------------------
@@ -65,12 +68,13 @@ describe("getComplianceTabHtml", () => {
     expect(html).toContain("Loading compliance reports");
   });
 
-  it("hasAccess=false → access-required state with lock icon", () => {
+  it("hasAccess=false, no failure (never fetched) → generic access-required state, no role/plan claim", () => {
     const html = getComplianceTabHtml(makeData({ hasAccess: false }));
     expect(html).toContain("🔒");
     expect(html).toContain("Access Required");
-    expect(html).toContain("owner");
-    expect(html).toContain("admin");
+    expect(html.toLowerCase()).not.toContain("owner");
+    expect(html.toLowerCase()).not.toContain("admin");
+    expect(html.toLowerCase()).not.toContain("upgrade");
   });
 
   it("isLoading=true → loading state", () => {
@@ -115,10 +119,21 @@ describe("getComplianceTabHtml", () => {
     expect(html).toContain("Report in progress");
   });
 
-  it("errorMessage → renders error banner", () => {
-    const html = getComplianceTabHtml(makeData({ errorMessage: "Something went wrong" }));
+  it("hasAccess=true with a failure (e.g. a failed generate-report attempt) → renders banner, not the full no-access page", () => {
+    const html = getComplianceTabHtml(
+      makeData({
+        failure: {
+          ok: false,
+          kind: "server_error",
+          status: 500,
+          endpoint: "platform.auditGenerateReport",
+          message: "generate report: server returned 500",
+        },
+      })
+    );
     expect(html).toContain("compliance-error-banner");
-    expect(html).toContain("Something went wrong");
+    expect(html).toContain("returned an error");
+    expect(html).not.toContain("Access Required");
   });
 
   it("XSS: report type with <script> is escaped", () => {
@@ -170,5 +185,101 @@ describe("getComplianceTabStyles", () => {
     expect(css).toContain(".status-pending");
     expect(css).toContain(".status-ready");
     expect(css).toContain(".status-failed");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Failure-kind enumeration (#748) — the exact bug reported: an account
+// owner on a pro plan, hit by a rejected credential (401), was told
+// "Compliance report generation is available to owner and admin roles on
+// eligible plans... Contact your team owner... or upgrade your plan." This
+// is the regression detector for that whole class of bug.
+// ---------------------------------------------------------------------------
+
+function makeFailure(overrides: Partial<PlatformFailure> = {}): PlatformFailure {
+  return {
+    ok: false,
+    kind: "server_error",
+    endpoint: "platform.auditListReports",
+    message: "get compliance reports: server returned 500",
+    ...overrides,
+  };
+}
+
+describe("getComplianceTabHtml — failure kinds (#748)", () => {
+  it("unauthorized (the reported bug) → sign-in copy, never a role/plan claim", () => {
+    const html = getComplianceTabHtml(
+      makeData({
+        hasAccess: false,
+        failure: makeFailure({
+          kind: "unauthorized",
+          status: 401,
+          message: "get compliance reports: server returned 401",
+        }),
+      })
+    );
+    expect(html).toContain("Sign-in required");
+    expect(html).toContain("complianceSignInBtn");
+    // The exact wording from the reported bug must never appear for a 401.
+    expect(html).not.toContain("Contact your team owner");
+    expect(html).not.toContain("upgrade your plan");
+    expect(html.toLowerCase()).not.toContain("role");
+  });
+
+  it("forbidden → the only kind that may mention role/plan, quoting the real message", () => {
+    const html = getComplianceTabHtml(
+      makeData({
+        hasAccess: false,
+        failure: makeFailure({
+          kind: "forbidden",
+          status: 403,
+          message: "get compliance reports: server returned 403",
+        }),
+      })
+    );
+    expect(html).toContain("Access denied");
+    expect(html).toContain("server returned 403");
+    expect(html).toContain("complianceRetryBtn");
+  });
+
+  it("server_error → retry copy, not an access-required page", () => {
+    const html = getComplianceTabHtml(
+      makeData({ hasAccess: false, failure: makeFailure({ kind: "server_error", status: 500 }) })
+    );
+    expect(html).toContain("Platform error");
+    expect(html).not.toContain("Access Required");
+  });
+
+  it("offline → unreachable copy", () => {
+    const html = getComplianceTabHtml(
+      makeData({ hasAccess: false, failure: makeFailure({ kind: "offline" }) })
+    );
+    expect(html).toContain("Platform unreachable");
+  });
+
+  it("not_configured → not-connected copy with sign-in", () => {
+    const html = getComplianceTabHtml(
+      makeData({ hasAccess: false, failure: makeFailure({ kind: "not_configured" }) })
+    );
+    expect(html).toContain("Not connected");
+    expect(html).toContain("complianceSignInBtn");
+  });
+
+  it("unrecognized kind → neutral message naming endpoint and status, never a guess", () => {
+    const html = getComplianceTabHtml(
+      makeData({
+        hasAccess: false,
+        failure: makeFailure({
+          // @ts-expect-error — deliberately outside the known union to exercise the fallback
+          kind: "something_new",
+          status: 418,
+          endpoint: "platform.auditListReports",
+          message: "unrecognized failure",
+        }),
+      })
+    );
+    expect(html).toContain("Unable to load data");
+    expect(html).toContain("platform.auditListReports");
+    expect(html).toContain("418");
   });
 });

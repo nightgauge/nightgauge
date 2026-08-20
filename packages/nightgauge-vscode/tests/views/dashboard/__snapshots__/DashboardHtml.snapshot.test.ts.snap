@@ -6575,6 +6575,21 @@ exports[`getDashboardHtml snapshots (Issue #1242) > active pipeline state — cu
       var costPanel = document.getElementById('tab-panel-cost');
       if (!costPanel) return;
       costPanel.addEventListener('click', function(e) {
+        
+        var platformRetryBtn = e.target.closest('[data-action="platform-retry"]');
+        if (platformRetryBtn) {
+          var retryMessage = platformRetryBtn.getAttribute('data-retry-message');
+          if (retryMessage) {
+            try { vscode.postMessage(JSON.parse(retryMessage)); } catch (err) { /* malformed — no-op */ }
+          }
+          return;
+        }
+        var platformSignInBtn = e.target.closest('[data-action="platform-sign-in"]');
+        if (platformSignInBtn) {
+          vscode.postMessage({ type: 'signInWithPlatform' });
+          return;
+        }
+  
         var btn = e.target.closest('[data-cost-range]');
         if (!btn) return;
         var range = btn.getAttribute('data-cost-range');
@@ -6609,6 +6624,21 @@ exports[`getDashboardHtml snapshots (Issue #1242) > active pipeline state — cu
       if (!runsPanel) return;
 
       runsPanel.addEventListener('click', function(e) {
+        
+        var platformRetryBtn = e.target.closest('[data-action="platform-retry"]');
+        if (platformRetryBtn) {
+          var retryMessage = platformRetryBtn.getAttribute('data-retry-message');
+          if (retryMessage) {
+            try { vscode.postMessage(JSON.parse(retryMessage)); } catch (err) { /* malformed — no-op */ }
+          }
+          return;
+        }
+        var platformSignInBtn = e.target.closest('[data-action="platform-sign-in"]');
+        if (platformSignInBtn) {
+          vscode.postMessage({ type: 'signInWithPlatform' });
+          return;
+        }
+  
         // Row expand/collapse
         var row = e.target.closest('[data-action="toggle-runs-detail"]');
         if (row) {
@@ -6686,6 +6716,21 @@ exports[`getDashboardHtml snapshots (Issue #1242) > active pipeline state — cu
       if (!trendsPanel) return;
 
       trendsPanel.addEventListener('click', function(e) {
+        
+        var platformRetryBtn = e.target.closest('[data-action="platform-retry"]');
+        if (platformRetryBtn) {
+          var retryMessage = platformRetryBtn.getAttribute('data-retry-message');
+          if (retryMessage) {
+            try { vscode.postMessage(JSON.parse(retryMessage)); } catch (err) { /* malformed — no-op */ }
+          }
+          return;
+        }
+        var platformSignInBtn = e.target.closest('[data-action="platform-sign-in"]');
+        if (platformSignInBtn) {
+          vscode.postMessage({ type: 'signInWithPlatform' });
+          return;
+        }
+  
         // Date range toggle
         var rangeBtn = e.target.closest('[data-trends-range]');
         if (rangeBtn) {
@@ -6723,6 +6768,21 @@ exports[`getDashboardHtml snapshots (Issue #1242) > active pipeline state — cu
       if (!compPanel) return;
 
       compPanel.addEventListener('click', function(e) {
+        
+        var platformRetryBtn = e.target.closest('[data-action="platform-retry"]');
+        if (platformRetryBtn) {
+          var retryMessage = platformRetryBtn.getAttribute('data-retry-message');
+          if (retryMessage) {
+            try { vscode.postMessage(JSON.parse(retryMessage)); } catch (err) { /* malformed — no-op */ }
+          }
+          return;
+        }
+        var platformSignInBtn = e.target.closest('[data-action="platform-sign-in"]');
+        if (platformSignInBtn) {
+          vscode.postMessage({ type: 'signInWithPlatform' });
+          return;
+        }
+  
         // Generate report
         var genBtn = e.target.closest('#complianceGenerateBtn');
         if (genBtn) {
@@ -6773,6 +6833,21 @@ exports[`getDashboardHtml snapshots (Issue #1242) > active pipeline state — cu
       if (!depPanel) return;
 
       depPanel.addEventListener('click', function(e) {
+        
+        var platformRetryBtn = e.target.closest('[data-action="platform-retry"]');
+        if (platformRetryBtn) {
+          var retryMessage = platformRetryBtn.getAttribute('data-retry-message');
+          if (retryMessage) {
+            try { vscode.postMessage(JSON.parse(retryMessage)); } catch (err) { /* malformed — no-op */ }
+          }
+          return;
+        }
+        var platformSignInBtn = e.target.closest('[data-action="platform-sign-in"]');
+        if (platformSignInBtn) {
+          vscode.postMessage({ type: 'signInWithPlatform' });
+          return;
+        }
+  
         var mergeBtn = e.target.closest('[data-action="mergeDependabotPR"]');
         if (mergeBtn) {
           mergeBtn.disabled = true;
@@ -13422,6 +13497,21 @@ exports[`getDashboardHtml snapshots (Issue #1242) > completed run with tool call
       var costPanel = document.getElementById('tab-panel-cost');
       if (!costPanel) return;
       costPanel.addEventListener('click', function(e) {
+        
+        var platformRetryBtn = e.target.closest('[data-action="platform-retry"]');
+        if (platformRetryBtn) {
+          var retryMessage = platformRetryBtn.getAttribute('data-retry-message');
+          if (retryMessage) {
+            try { vscode.postMessage(JSON.parse(retryMessage)); } catch (err) { /* malformed — no-op */ }
+          }
+          return;
+        }
+        var platformSignInBtn = e.target.closest('[data-action="platform-sign-in"]');
+        if (platformSignInBtn) {
+          vscode.postMessage({ type: 'signInWithPlatform' });
+          return;
+        }
+  
         var btn = e.target.closest('[data-cost-range]');
         if (!btn) return;
         var range = btn.getAttribute('data-cost-range');
@@ -13456,6 +13546,21 @@ exports[`getDashboardHtml snapshots (Issue #1242) > completed run with tool call
       if (!runsPanel) return;
 
       runsPanel.addEventListener('click', function(e) {
+        
+        var platformRetryBtn = e.target.closest('[data-action="platform-retry"]');
+        if (platformRetryBtn) {
+          var retryMessage = platformRetryBtn.getAttribute('data-retry-message');
+          if (retryMessage) {
+            try { vscode.postMessage(JSON.parse(retryMessage)); } catch (err) { /* malformed — no-op */ }
+          }
+          return;
+        }
+        var platformSignInBtn = e.target.closest('[data-action="platform-sign-in"]');
+        if (platformSignInBtn) {
+          vscode.postMessage({ type: 'signInWithPlatform' });
+          return;
+        }
+  
         // Row expand/collapse
         var row = e.target.closest('[data-action="toggle-runs-detail"]');
         if (row) {
@@ -13533,6 +13638,21 @@ exports[`getDashboardHtml snapshots (Issue #1242) > completed run with tool call
       if (!trendsPanel) return;
 
       trendsPanel.addEventListener('click', function(e) {
+        
+        var platformRetryBtn = e.target.closest('[data-action="platform-retry"]');
+        if (platformRetryBtn) {
+          var retryMessage = platformRetryBtn.getAttribute('data-retry-message');
+          if (retryMessage) {
+            try { vscode.postMessage(JSON.parse(retryMessage)); } catch (err) { /* malformed — no-op */ }
+          }
+          return;
+        }
+        var platformSignInBtn = e.target.closest('[data-action="platform-sign-in"]');
+        if (platformSignInBtn) {
+          vscode.postMessage({ type: 'signInWithPlatform' });
+          return;
+        }
+  
         // Date range toggle
         var rangeBtn = e.target.closest('[data-trends-range]');
         if (rangeBtn) {
@@ -13570,6 +13690,21 @@ exports[`getDashboardHtml snapshots (Issue #1242) > completed run with tool call
       if (!compPanel) return;
 
       compPanel.addEventListener('click', function(e) {
+        
+        var platformRetryBtn = e.target.closest('[data-action="platform-retry"]');
+        if (platformRetryBtn) {
+          var retryMessage = platformRetryBtn.getAttribute('data-retry-message');
+          if (retryMessage) {
+            try { vscode.postMessage(JSON.parse(retryMessage)); } catch (err) { /* malformed — no-op */ }
+          }
+          return;
+        }
+        var platformSignInBtn = e.target.closest('[data-action="platform-sign-in"]');
+        if (platformSignInBtn) {
+          vscode.postMessage({ type: 'signInWithPlatform' });
+          return;
+        }
+  
         // Generate report
         var genBtn = e.target.closest('#complianceGenerateBtn');
         if (genBtn) {
@@ -13620,6 +13755,21 @@ exports[`getDashboardHtml snapshots (Issue #1242) > completed run with tool call
       if (!depPanel) return;
 
       depPanel.addEventListener('click', function(e) {
+        
+        var platformRetryBtn = e.target.closest('[data-action="platform-retry"]');
+        if (platformRetryBtn) {
+          var retryMessage = platformRetryBtn.getAttribute('data-retry-message');
+          if (retryMessage) {
+            try { vscode.postMessage(JSON.parse(retryMessage)); } catch (err) { /* malformed — no-op */ }
+          }
+          return;
+        }
+        var platformSignInBtn = e.target.closest('[data-action="platform-sign-in"]');
+        if (platformSignInBtn) {
+          vscode.postMessage({ type: 'signInWithPlatform' });
+          return;
+        }
+  
         var mergeBtn = e.target.closest('[data-action="mergeDependabotPR"]');
         if (mergeBtn) {
           mergeBtn.disabled = true;
@@ -20114,6 +20264,21 @@ exports[`getDashboardHtml snapshots (Issue #1242) > empty state — no current r
       var costPanel = document.getElementById('tab-panel-cost');
       if (!costPanel) return;
       costPanel.addEventListener('click', function(e) {
+        
+        var platformRetryBtn = e.target.closest('[data-action="platform-retry"]');
+        if (platformRetryBtn) {
+          var retryMessage = platformRetryBtn.getAttribute('data-retry-message');
+          if (retryMessage) {
+            try { vscode.postMessage(JSON.parse(retryMessage)); } catch (err) { /* malformed — no-op */ }
+          }
+          return;
+        }
+        var platformSignInBtn = e.target.closest('[data-action="platform-sign-in"]');
+        if (platformSignInBtn) {
+          vscode.postMessage({ type: 'signInWithPlatform' });
+          return;
+        }
+  
         var btn = e.target.closest('[data-cost-range]');
         if (!btn) return;
         var range = btn.getAttribute('data-cost-range');
@@ -20148,6 +20313,21 @@ exports[`getDashboardHtml snapshots (Issue #1242) > empty state — no current r
       if (!runsPanel) return;
 
       runsPanel.addEventListener('click', function(e) {
+        
+        var platformRetryBtn = e.target.closest('[data-action="platform-retry"]');
+        if (platformRetryBtn) {
+          var retryMessage = platformRetryBtn.getAttribute('data-retry-message');
+          if (retryMessage) {
+            try { vscode.postMessage(JSON.parse(retryMessage)); } catch (err) { /* malformed — no-op */ }
+          }
+          return;
+        }
+        var platformSignInBtn = e.target.closest('[data-action="platform-sign-in"]');
+        if (platformSignInBtn) {
+          vscode.postMessage({ type: 'signInWithPlatform' });
+          return;
+        }
+  
         // Row expand/collapse
         var row = e.target.closest('[data-action="toggle-runs-detail"]');
         if (row) {
@@ -20225,6 +20405,21 @@ exports[`getDashboardHtml snapshots (Issue #1242) > empty state — no current r
       if (!trendsPanel) return;
 
       trendsPanel.addEventListener('click', function(e) {
+        
+        var platformRetryBtn = e.target.closest('[data-action="platform-retry"]');
+        if (platformRetryBtn) {
+          var retryMessage = platformRetryBtn.getAttribute('data-retry-message');
+          if (retryMessage) {
+            try { vscode.postMessage(JSON.parse(retryMessage)); } catch (err) { /* malformed — no-op */ }
+          }
+          return;
+        }
+        var platformSignInBtn = e.target.closest('[data-action="platform-sign-in"]');
+        if (platformSignInBtn) {
+          vscode.postMessage({ type: 'signInWithPlatform' });
+          return;
+        }
+  
         // Date range toggle
         var rangeBtn = e.target.closest('[data-trends-range]');
         if (rangeBtn) {
@@ -20262,6 +20457,21 @@ exports[`getDashboardHtml snapshots (Issue #1242) > empty state — no current r
       if (!compPanel) return;
 
       compPanel.addEventListener('click', function(e) {
+        
+        var platformRetryBtn = e.target.closest('[data-action="platform-retry"]');
+        if (platformRetryBtn) {
+          var retryMessage = platformRetryBtn.getAttribute('data-retry-message');
+          if (retryMessage) {
+            try { vscode.postMessage(JSON.parse(retryMessage)); } catch (err) { /* malformed — no-op */ }
+          }
+          return;
+        }
+        var platformSignInBtn = e.target.closest('[data-action="platform-sign-in"]');
+        if (platformSignInBtn) {
+          vscode.postMessage({ type: 'signInWithPlatform' });
+          return;
+        }
+  
         // Generate report
         var genBtn = e.target.closest('#complianceGenerateBtn');
         if (genBtn) {
@@ -20312,6 +20522,21 @@ exports[`getDashboardHtml snapshots (Issue #1242) > empty state — no current r
       if (!depPanel) return;
 
       depPanel.addEventListener('click', function(e) {
+        
+        var platformRetryBtn = e.target.closest('[data-action="platform-retry"]');
+        if (platformRetryBtn) {
+          var retryMessage = platformRetryBtn.getAttribute('data-retry-message');
+          if (retryMessage) {
+            try { vscode.postMessage(JSON.parse(retryMessage)); } catch (err) { /* malformed — no-op */ }
+          }
+          return;
+        }
+        var platformSignInBtn = e.target.closest('[data-action="platform-sign-in"]');
+        if (platformSignInBtn) {
+          vscode.postMessage({ type: 'signInWithPlatform' });
+          return;
+        }
+  
         var mergeBtn = e.target.closest('[data-action="mergeDependabotPR"]');
         if (mergeBtn) {
           mergeBtn.disabled = true;
@@ -27034,6 +27259,21 @@ exports[`getDashboardHtml snapshots (Issue #1242) > pagination controls rendered
       var costPanel = document.getElementById('tab-panel-cost');
       if (!costPanel) return;
       costPanel.addEventListener('click', function(e) {
+        
+        var platformRetryBtn = e.target.closest('[data-action="platform-retry"]');
+        if (platformRetryBtn) {
+          var retryMessage = platformRetryBtn.getAttribute('data-retry-message');
+          if (retryMessage) {
+            try { vscode.postMessage(JSON.parse(retryMessage)); } catch (err) { /* malformed — no-op */ }
+          }
+          return;
+        }
+        var platformSignInBtn = e.target.closest('[data-action="platform-sign-in"]');
+        if (platformSignInBtn) {
+          vscode.postMessage({ type: 'signInWithPlatform' });
+          return;
+        }
+  
         var btn = e.target.closest('[data-cost-range]');
         if (!btn) return;
         var range = btn.getAttribute('data-cost-range');
@@ -27068,6 +27308,21 @@ exports[`getDashboardHtml snapshots (Issue #1242) > pagination controls rendered
       if (!runsPanel) return;
 
       runsPanel.addEventListener('click', function(e) {
+        
+        var platformRetryBtn = e.target.closest('[data-action="platform-retry"]');
+        if (platformRetryBtn) {
+          var retryMessage = platformRetryBtn.getAttribute('data-retry-message');
+          if (retryMessage) {
+            try { vscode.postMessage(JSON.parse(retryMessage)); } catch (err) { /* malformed — no-op */ }
+          }
+          return;
+        }
+        var platformSignInBtn = e.target.closest('[data-action="platform-sign-in"]');
+        if (platformSignInBtn) {
+          vscode.postMessage({ type: 'signInWithPlatform' });
+          return;
+        }
+  
         // Row expand/collapse
         var row = e.target.closest('[data-action="toggle-runs-detail"]');
         if (row) {
@@ -27145,6 +27400,21 @@ exports[`getDashboardHtml snapshots (Issue #1242) > pagination controls rendered
       if (!trendsPanel) return;
 
       trendsPanel.addEventListener('click', function(e) {
+        
+        var platformRetryBtn = e.target.closest('[data-action="platform-retry"]');
+        if (platformRetryBtn) {
+          var retryMessage = platformRetryBtn.getAttribute('data-retry-message');
+          if (retryMessage) {
+            try { vscode.postMessage(JSON.parse(retryMessage)); } catch (err) { /* malformed — no-op */ }
+          }
+          return;
+        }
+        var platformSignInBtn = e.target.closest('[data-action="platform-sign-in"]');
+        if (platformSignInBtn) {
+          vscode.postMessage({ type: 'signInWithPlatform' });
+          return;
+        }
+  
         // Date range toggle
         var rangeBtn = e.target.closest('[data-trends-range]');
         if (rangeBtn) {
@@ -27182,6 +27452,21 @@ exports[`getDashboardHtml snapshots (Issue #1242) > pagination controls rendered
       if (!compPanel) return;
 
       compPanel.addEventListener('click', function(e) {
+        
+        var platformRetryBtn = e.target.closest('[data-action="platform-retry"]');
+        if (platformRetryBtn) {
+          var retryMessage = platformRetryBtn.getAttribute('data-retry-message');
+          if (retryMessage) {
+            try { vscode.postMessage(JSON.parse(retryMessage)); } catch (err) { /* malformed — no-op */ }
+          }
+          return;
+        }
+        var platformSignInBtn = e.target.closest('[data-action="platform-sign-in"]');
+        if (platformSignInBtn) {
+          vscode.postMessage({ type: 'signInWithPlatform' });
+          return;
+        }
+  
         // Generate report
         var genBtn = e.target.closest('#complianceGenerateBtn');
         if (genBtn) {
@@ -27232,6 +27517,21 @@ exports[`getDashboardHtml snapshots (Issue #1242) > pagination controls rendered
       if (!depPanel) return;
 
       depPanel.addEventListener('click', function(e) {
+        
+        var platformRetryBtn = e.target.closest('[data-action="platform-retry"]');
+        if (platformRetryBtn) {
+          var retryMessage = platformRetryBtn.getAttribute('data-retry-message');
+          if (retryMessage) {
+            try { vscode.postMessage(JSON.parse(retryMessage)); } catch (err) { /* malformed — no-op */ }
+          }
+          return;
+        }
+        var platformSignInBtn = e.target.closest('[data-action="platform-sign-in"]');
+        if (platformSignInBtn) {
+          vscode.postMessage({ type: 'signInWithPlatform' });
+          return;
+        }
+  
         var mergeBtn = e.target.closest('[data-action="mergeDependabotPR"]');
         if (mergeBtn) {
           mergeBtn.disabled = true;

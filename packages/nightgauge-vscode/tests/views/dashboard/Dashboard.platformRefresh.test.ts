@@ -24,12 +24,14 @@ const {
   mockTokenRetrieve,
   mockHealthFetchAndCache,
   mockRunsFetchAndCache,
+  mockCostFetchAndCache,
   mockOpenTextDocument,
 } = vi.hoisted(() => ({
   mockGetTokenInstance: vi.fn(),
   mockTokenRetrieve: vi.fn<[string], Promise<string | null>>(),
   mockHealthFetchAndCache: vi.fn(),
   mockRunsFetchAndCache: vi.fn(),
+  mockCostFetchAndCache: vi.fn(),
   mockOpenTextDocument: vi.fn(),
 }));
 
@@ -142,6 +144,13 @@ vi.mock("../../../src/services/PlatformRunsService", () => ({
   }),
 }));
 
+vi.mock("../../../src/services/PlatformCostService", () => ({
+  PlatformCostService: vi.fn(function (this: Record<string, unknown>) {
+    this.fetchAndCache = mockCostFetchAndCache;
+    this.dispose = vi.fn();
+  }),
+}));
+
 // Mock vscode module — must include createOutputChannel for Dashboard's Logger
 vi.mock("vscode", () => ({
   EventEmitter: class EventEmitter {
@@ -248,7 +257,7 @@ describe("Dashboard.refreshHealthAnalyticsData", () => {
     dashboard.dispose();
   });
 
-  it("missing token (not_signed_in) → healthAnalyticsData.hasAccess = false with correct errorType", async () => {
+  it("missing token → healthAnalyticsData.hasAccess = false with failure.kind = unauthorized (#748)", async () => {
     mockGetTokenInstance.mockReturnValue({
       retrieve: vi.fn().mockResolvedValue(null), // no accessToken
     });
@@ -258,11 +267,11 @@ describe("Dashboard.refreshHealthAnalyticsData", () => {
     const healthData = (dashboard as any).healthAnalyticsData;
     expect(healthData).not.toBeNull();
     expect(healthData.hasAccess).toBe(false);
-    expect(healthData.errorType).toBe("not_signed_in");
+    expect(healthData.failure.kind).toBe("unauthorized");
     expect(healthData.isLoading).toBe(false);
   });
 
-  it("expired token (token_expired) → healthAnalyticsData.hasAccess = false with token_expired errorType", async () => {
+  it("expired token → healthAnalyticsData.hasAccess = false with failure.kind = unauthorized (#748)", async () => {
     mockGetTokenInstance.mockReturnValue({
       retrieve: vi.fn(async (key: string) => {
         if (key === "accessToken") return "tok-expired";
@@ -275,10 +284,11 @@ describe("Dashboard.refreshHealthAnalyticsData", () => {
 
     const healthData = (dashboard as any).healthAnalyticsData;
     expect(healthData.hasAccess).toBe(false);
-    expect(healthData.errorType).toBe("token_expired");
+    expect(healthData.failure.kind).toBe("unauthorized");
+    expect(healthData.failure.message).toMatch(/expired/i);
   });
 
-  it("service returns a failure → healthAnalyticsData.hasAccess = false with server_error errorType", async () => {
+  it("service returns unauthorized → healthAnalyticsData carries the real kind, not a hardcoded server_error (#748)", async () => {
     mockGetTokenInstance.mockReturnValue(makeValidTokenStorage());
     mockHealthFetchAndCache.mockResolvedValue({
       ok: false,
@@ -292,8 +302,28 @@ describe("Dashboard.refreshHealthAnalyticsData", () => {
 
     const healthData = (dashboard as any).healthAnalyticsData;
     expect(healthData.hasAccess).toBe(false);
-    expect(healthData.errorType).toBe("server_error");
+    // Regression guard for #748: the pre-fix code always hardcoded
+    // errorType: "server_error" here regardless of the real `kind`.
+    expect(healthData.failure.kind).toBe("unauthorized");
+    expect(healthData.failure.status).toBe(401);
     expect(healthData.result).toBeNull();
+  });
+
+  it("service returns forbidden → healthAnalyticsData carries kind = forbidden (#748)", async () => {
+    mockGetTokenInstance.mockReturnValue(makeValidTokenStorage());
+    mockHealthFetchAndCache.mockResolvedValue({
+      ok: false,
+      kind: "forbidden",
+      status: 403,
+      endpoint: "platform.getAnalyticsHealth",
+      message: "get analytics health: server returned 403",
+    });
+
+    await dashboard.refreshHealthAnalyticsData();
+
+    const healthData = (dashboard as any).healthAnalyticsData;
+    expect(healthData.hasAccess).toBe(false);
+    expect(healthData.failure.kind).toBe("forbidden");
   });
 
   it("service returns data → healthAnalyticsData.hasAccess = true with result populated", async () => {
@@ -332,7 +362,7 @@ describe("Dashboard.refreshRunsData", () => {
     dashboard.dispose();
   });
 
-  it("missing token → runsData.hasAccess = false with not_signed_in errorType", async () => {
+  it("missing token → runsData.hasAccess = false with failure.kind = unauthorized (#748)", async () => {
     mockGetTokenInstance.mockReturnValue({
       retrieve: vi.fn().mockResolvedValue(null),
     });
@@ -342,11 +372,11 @@ describe("Dashboard.refreshRunsData", () => {
     const runsData = (dashboard as any).runsData;
     expect(runsData).not.toBeNull();
     expect(runsData.hasAccess).toBe(false);
-    expect(runsData.errorType).toBe("not_signed_in");
+    expect(runsData.failure.kind).toBe("unauthorized");
     expect(runsData.isLoading).toBe(false);
   });
 
-  it("service returns a failure → runsData.hasAccess = false with server_error errorType", async () => {
+  it("service returns server_error → runsData carries kind = server_error (#748)", async () => {
     mockGetTokenInstance.mockReturnValue(makeValidTokenStorage());
     mockRunsFetchAndCache.mockResolvedValue({
       ok: false,
@@ -360,19 +390,38 @@ describe("Dashboard.refreshRunsData", () => {
 
     const runsData = (dashboard as any).runsData;
     expect(runsData.hasAccess).toBe(false);
-    expect(runsData.errorType).toBe("server_error");
+    expect(runsData.failure.kind).toBe("server_error");
+    expect(runsData.failure.status).toBe(500);
     expect(runsData.entries).toEqual([]);
   });
 
-  it("IPC throws 'Go backend not connected' → runsData.hasAccess = false with ipc_unavailable errorType", async () => {
+  it("service returns forbidden → runsData carries kind = forbidden, not server_error (#748)", async () => {
     mockGetTokenInstance.mockReturnValue(makeValidTokenStorage());
-    mockRunsFetchAndCache.mockRejectedValue(new Error("Go backend not connected"));
+    mockRunsFetchAndCache.mockResolvedValue({
+      ok: false,
+      kind: "forbidden",
+      status: 403,
+      endpoint: "platform.getAnalyticsRuns",
+      message: "get analytics runs: server returned 403",
+    });
 
     await dashboard.refreshRunsData();
 
     const runsData = (dashboard as any).runsData;
     expect(runsData.hasAccess).toBe(false);
-    expect(runsData.errorType).toBe("ipc_unavailable");
+    // Regression guard: the pre-fix code always hardcoded server_error here.
+    expect(runsData.failure.kind).toBe("forbidden");
+  });
+
+  it("IPC throws 'Go backend exited with code 1' → runsData.hasAccess = false with failure.kind = offline (#748)", async () => {
+    mockGetTokenInstance.mockReturnValue(makeValidTokenStorage());
+    mockRunsFetchAndCache.mockRejectedValue(new Error("Go backend exited with code 1"));
+
+    await dashboard.refreshRunsData();
+
+    const runsData = (dashboard as any).runsData;
+    expect(runsData.hasAccess).toBe(false);
+    expect(runsData.failure.kind).toBe("offline");
     expect(runsData.isLoading).toBe(false);
   });
 
@@ -438,5 +487,66 @@ describe("Dashboard.refreshRunsData", () => {
     const [{ content }] = mockOpenTextDocument.mock.calls[0];
     expect(content).toContain('"Undetermined, ""branch""",(branch not determined)');
     expect(content).toContain('Resolved branch,"fix/450,branch"');
+  });
+});
+
+describe("Dashboard.refreshCostData (#748)", () => {
+  let dashboard: Dashboard;
+  const mockExtensionUri = { fsPath: "/mock/extension" } as vscode.Uri;
+  const workspaceRoot = "/test/workspace";
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    const workspaceState = createMockMemento();
+    dashboard = new Dashboard(mockExtensionUri, workspaceState, workspaceRoot);
+  });
+
+  afterEach(async () => {
+    await new Promise((resolve) => setImmediate(resolve));
+    dashboard.dispose();
+  });
+
+  it("service returns a failure → platformCostData.failure carries the real kind, result stays null", async () => {
+    mockCostFetchAndCache.mockResolvedValue({
+      ok: false,
+      kind: "unauthorized",
+      status: 401,
+      endpoint: "platform.getCostAnalytics",
+      message: "get cost analytics: server returned 401",
+    });
+
+    await dashboard.refreshCostData();
+
+    const costData = (dashboard as any).platformCostData;
+    expect(costData.result).toBeNull();
+    expect(costData.failure.kind).toBe("unauthorized");
+    expect(costData.isLoading).toBe(false);
+  });
+
+  it("service returns success → platformCostData.result populated, no failure", async () => {
+    const mockResult = {
+      totalInputTokens: 100,
+      totalOutputTokens: 50,
+      totalTokens: 150,
+      totalCostUsd: "1.2345",
+      breakdown: { byModel: [], byProject: [], byDay: [] },
+    };
+    mockCostFetchAndCache.mockResolvedValue({ ok: true, value: mockResult });
+
+    await dashboard.refreshCostData();
+
+    const costData = (dashboard as any).platformCostData;
+    expect(costData.result).toEqual(mockResult);
+    expect(costData.failure).toBeUndefined();
+  });
+
+  it("IPC throws → platformCostData.failure is classified rather than silently leaving data null (#748)", async () => {
+    mockCostFetchAndCache.mockRejectedValue(new Error("Go backend exited with code 1"));
+
+    await dashboard.refreshCostData();
+
+    const costData = (dashboard as any).platformCostData;
+    expect(costData.result).toBeNull();
+    expect(costData.failure.kind).toBe("offline");
   });
 });
