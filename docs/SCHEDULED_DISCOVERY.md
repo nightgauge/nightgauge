@@ -251,9 +251,18 @@ secrets. Without it the workflows run in **detection-only mode**: the release is
 detected, last-seen advances, and the run is recorded, but no relevance
 assessment or issue creation occurs.
 
+**On `nightgauge/nightgauge` this secret is configured**, verified by a
+`dry_run=true` dispatch of `release-watchdog.yml`. A fork or a new workspace repo
+starts without it and runs detection-only until it is set:
+
 ```bash
 gh secret set ANTHROPIC_API_KEY --body "<your-api-key>"
 ```
+
+Note that detection-only mode **exits 0**, so a green run is not evidence the key
+was used. The discriminator is the log line
+`no ANTHROPIC_API_KEY configured — recorded without a review`: present means
+degraded, absent means the key was picked up.
 
 `GITHUB_TOKEN` is supplied by Actions; the jobs request `contents: write` (to
 push the state branch) and `issues: write` (for the skills).
