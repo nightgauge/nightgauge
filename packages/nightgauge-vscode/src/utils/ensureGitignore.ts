@@ -17,7 +17,7 @@ import { loadWorkspaceConfig } from "./workspaceDetection";
  * Bump this when adding new patterns so the extension knows to update
  * existing .gitignore files that were written with an older version.
  */
-const GITIGNORE_VERSION = 9;
+const GITIGNORE_VERSION = 10;
 const VERSION_MARKER = `# nightgauge-gitignore-version: ${GITIGNORE_VERSION}`;
 
 /**
@@ -135,12 +135,18 @@ pipeline/queue-state.json
 /modernization-plan.json
 /dep-modernize-report.json
 
-# ─── Release watch state and reports ────────────────────────
-# Tracked: last-seen.json (state file — shared across team)
-# Ignored: reports/ (transient analysis files)
-/release-watch/reports/
-!/release-watch/
-!/release-watch/last-seen.json
+# ─── Scheduled discovery state (release-watch, improvement runs) ─────
+# Produced on a GitHub Actions runner by release-watchdog.yml and
+# continuous-improvement.yml, published to the discovery-state branch, and
+# fetched into a checkout by scripts/discovery-state-sync.sh. Same runtime
+# class as /health/ and /attention/: local copies of state owned elsewhere.
+#
+# These lines used to un-ignore /release-watch/ with the note "state file —
+# shared across team", which described a design that could not work: the main
+# branch requires a pull request, so no workflow can push a daily state commit,
+# and no producer for these files existed at all until #753.
+/release-watch/
+/improvement-runs/
 `;
 
 /**

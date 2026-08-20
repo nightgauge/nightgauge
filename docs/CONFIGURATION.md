@@ -6810,12 +6810,12 @@ Controls the scheduled autonomous self-improvement loop. See
 
 ### `autonomous_discovery`
 
-| Key                  | Type            | Default                           | Description                                                                  |
-| -------------------- | --------------- | --------------------------------- | ---------------------------------------------------------------------------- |
-| `enabled`            | boolean         | `true`                            | Master switch. Set `false` to disable all scheduled runs.                    |
-| `kill_switch`        | boolean         | `false`                           | Pause issue creation without disabling infrastructure. Monitoring continues. |
-| `score_threshold`    | integer (0-100) | `70`                              | Minimum relevance score to auto-create a GitHub issue.                       |
-| `auto_created_label` | string          | `"type:chore,area:release-watch"` | Labels applied to auto-created issues.                                       |
+| Key                  | Type            | Default                           | Description                                                                 |
+| -------------------- | --------------- | --------------------------------- | --------------------------------------------------------------------------- |
+| `enabled`            | boolean         | `false`                           | Master switch. Both this and `scheduled_tasks.<task>.enabled` must be true. |
+| `kill_switch`        | boolean         | `true`                            | Pause issue creation without disabling detection or run recording.          |
+| `score_threshold`    | integer (0-100) | `70`                              | Minimum relevance score to auto-create a GitHub issue.                      |
+| `auto_created_label` | string          | `"type:chore,area:release-watch"` | Labels applied to auto-created issues.                                      |
 
 ```yaml
 autonomous_discovery:
@@ -6825,15 +6825,23 @@ autonomous_discovery:
   auto_created_label: "type:chore,area:release-watch"
 ```
 
-**Kill-switch behavior**: When `kill_switch: true`, detection and skill runs
-continue normally but `--create-issues` is not passed. No issues are created.
-The dashboard Discovery tab still shows all activity. Use this to temporarily
-pause issue creation (e.g., before a release freeze) without dismantling the
-scheduled infrastructure.
+These switches are resolved in exactly one place —
+`scripts/discovery-config-gate.py`, which both scheduled workflows call before
+doing any work. It **fails closed**: every switch defaults to off (and
+`kill_switch` to on) when absent, and a config that cannot be read or parsed
+disables the run rather than falling back to defaults. An autonomous loop that
+files issues because it could not find its own off switch is worse than one
+that does nothing.
 
-**Disable all runs**: Set `enabled: false` to skip both the release-watch skill
-invocation and the continuous-improvement run entirely. Detection still runs
-(release-watchdog.yml detects versions), but no AI assessment is performed.
+**Kill-switch behavior**: When `kill_switch: true`, detection still runs, the
+`last-seen` pointer still advances and the run record is still written and
+published — only `--create-issues` is withheld. The dashboard Discovery tab
+still shows the run. Use this to pause issue creation (e.g., before a release
+freeze) without dismantling the scheduled infrastructure.
+
+**Disable all runs**: Set `enabled: false` (or the per-task switch) and the
+scheduled workflow stops after its gate job, which reports in the run summary
+which switch stopped it.
 
 ---
 
@@ -6857,26 +6865,27 @@ discovery_budget:
 
 ### `scheduled_tasks`
 
-Informational documentation of scheduled task cadences. Actual execution is
-driven by GitHub Actions workflows — these entries do not directly control
-scheduling.
+Per-task switches for the two scheduled discovery workflows. A run happens only
+when `autonomous_discovery.enabled` **and** the matching switch below are both
+true.
 
-| Key                               | Type    | Default       | Description                                   |
-| --------------------------------- | ------- | ------------- | --------------------------------------------- |
-| `release_watch.enabled`           | boolean | `true`        | Document that release-watch runs are enabled. |
-| `release_watch.schedule`          | string  | `"0 9 * * *"` | Cron schedule (documentation only).           |
-| `continuous_improvement.enabled`  | boolean | `true`        | Document that CI review runs are enabled.     |
-| `continuous_improvement.schedule` | string  | `"0 8 * * 1"` | Cron schedule (documentation only).           |
+| Key                              | Type    | Default | Description                                                                    |
+| -------------------------------- | ------- | ------- | ------------------------------------------------------------------------------ |
+| `release_watch.enabled`          | boolean | `false` | Allow `.github/workflows/release-watchdog.yml` to do work when it fires.       |
+| `continuous_improvement.enabled` | boolean | `false` | Allow `.github/workflows/continuous-improvement.yml` to do work when it fires. |
 
 ```yaml
 scheduled_tasks:
   release_watch:
     enabled: true
-    schedule: "0 9 * * *" # Daily at 9 AM UTC
   continuous_improvement:
     enabled: true
-    schedule: "0 8 * * 1" # Weekly on Monday 8 AM UTC
 ```
+
+There is no `schedule` key. The cadence lives in each workflow's `cron`
+expression, because GitHub resolves `on: schedule` before any repository file is
+read — a cron in config could never take effect, and one that disagreed with the
+workflow would be actively misleading.
 
 ---
 
