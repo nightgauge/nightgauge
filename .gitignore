@@ -106,6 +106,10 @@ answer-log-*.md
 
 # Nested .nightgauge directories (should never exist in packages/)
 packages/**/.nightgauge/
+# ...except the VSCode host smoke tier's committed fixture (#745). It is inert
+# test data, copied into a throwaway temp workspace mid-run — never runtime
+# state, and never read from this location by the extension.
+!packages/nightgauge-vscode/tests/fixtures/vscode-host/populated/.nightgauge/
 
 # Pipeline debug logs (may be large)
 nightgauge-output-*.json
@@ -120,6 +124,8 @@ reports/
 artifacts/
 test-results/
 .playwright-mcp/
+# VSCode instances downloaded by @vscode/test-electron for the host smoke tier
+.vscode-test/
 pipeline.png
 
 # Social media drafts (personal content, not product code)

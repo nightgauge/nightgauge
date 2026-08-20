@@ -1,0 +1,15 @@
+{
+  "issue_number": 745,
+  "title": "VSCode host smoke tests",
+  "branch": "feat/745-vscode-host-smoke-tests",
+  "started_at": "2026-08-19T00:00:00Z",
+  "updated_at": "2026-08-19T01:00:00Z",
+  "stages": {
+    "issue-pickup": { "status": "complete" },
+    "feature-planning": { "status": "complete" },
+    "feature-dev": { "status": "complete" },
+    "feature-validate": { "status": "complete" },
+    "pr-create": { "status": "complete" },
+    "pr-merge": { "status": "complete" }
+  }
+}

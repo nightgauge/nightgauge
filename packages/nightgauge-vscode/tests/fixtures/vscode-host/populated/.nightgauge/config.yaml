@@ -1,0 +1,15 @@
+# Populated fixture for the VSCode host smoke tier.
+#
+# Copied into the throwaway workspace folder mid-run, after the tree views
+# have already been exercised against the empty state. Nothing here is
+# asserted on — the tier only asks whether each surface resolves against a
+# workspace that has content, not whether it renders that content correctly
+# (that is the data-arrival tier, #746).
+schema_version: 2
+github:
+  owner: nightgauge
+  repo: nightgauge
+pipeline:
+  max_concurrent: 1
+knowledge:
+  enabled: true
