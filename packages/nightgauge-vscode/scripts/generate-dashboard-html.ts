@@ -44,7 +44,8 @@ const _load = (Module as any)._load.bind(Module);
 
 // 2. Now safe to import dashboard modules
 import { getDashboardHtml } from "../src/views/dashboard/DashboardHtml.js";
-import { writeFileSync } from "fs";
+import { writeFileSync, mkdirSync } from "fs";
+import { join } from "path";
 
 // 3. Build minimal mock webview (only cspSource used; CSP meta stripped below)
 const mockWebview = { cspSource: "https://mock.vscode-cdn.net" } as any;
@@ -390,44 +391,28 @@ const mockHistoryPagination = {
   hasMore: true,
 };
 
-// 5. Generate real HTML using getDashboardHtml()
-let html = getDashboardHtml(
-  mockWebview,
-  null,
-  mockHistory as any,
-  mockAggregates as any,
-  mockTimeSavingsConfig,
-  "all",
-  mockFirewallData as any,
-  null,
-  mockHealthWidgetData,
-  null,
-  [],
-  null,
-  [],
-  null,
-  mockHistoryPagination,
-  null,
-  null,
-  null,
-  [],
-  [],
-  null,
-  "overview"
-);
+// ---------------------------------------------------------------------------
+// 5. postProcess() — the transforms every generated fixture needs to be
+//    loadable and visible outside a real VS Code host (Issue #1757). Shared
+//    by the original single-fixture output below and the tab/state matrix
+//    added for Issue #751.
+// ---------------------------------------------------------------------------
 
-// 6. Strip CSP meta tag (blocks inline scripts when loaded via file://)
-html = html.replace(/<meta http-equiv="Content-Security-Policy"[^>]*>/i, "");
+function postProcess(rawHtml: string, opts: { embedApiMock: boolean }): string {
+  let out = rawHtml;
 
-// 7. Remove nonce attributes from script tags (nonce enforcement not active without CSP)
-html = html.replace(/ nonce="[^"]*"/g, "");
+  // Strip CSP meta tag (blocks inline scripts when loaded via file://)
+  out = out.replace(/<meta http-equiv="Content-Security-Policy"[^>]*>/i, "");
 
-// 8. file:// has no VS Code host supplying theme variables. Give visual
-// verification representative contrast so visibility means perceptibility,
-// not merely a non-empty white-on-white DOM box.
-html = html.replace(
-  "<style>",
-  `<style>
+  // Remove nonce attributes from script tags (nonce enforcement not active without CSP)
+  out = out.replace(/ nonce="[^"]*"/g, "");
+
+  // file:// has no VS Code host supplying theme variables. Give visual
+  // verification representative contrast so visibility means perceptibility,
+  // not merely a non-empty white-on-white DOM box.
+  out = out.replace(
+    "<style>",
+    `<style>
     :root {
       --vscode-foreground: #cccccc;
       --vscode-editor-background: #1e1e1e;
@@ -442,10 +427,22 @@ html = html.replace(
     }
     body { background: var(--vscode-editor-background); color: var(--vscode-foreground); }
   `
-);
+  );
 
-// 9. Inject acquireVsCodeApi mock BEFORE closing </head>
-const apiMock = `<script>
+  // The original single-fixture path embeds a basic acquireVsCodeApi mock
+  // directly in the file for backward compatibility with
+  // DashboardInteractions.playwright.ts, which loads it bare via
+  // page.goto('file://...') with no loader helper of its own.
+  //
+  // The tab/state matrix added for Issue #751 deliberately skips this: an
+  // embedded <script> here executes AFTER Playwright's addInitScript-injected
+  // mock (page scripts always run after init scripts) and would silently
+  // overwrite it — including the real setState()/getState() the tab
+  // state-restoration tests depend on
+  // (tests/playwright/helpers/webview-loader.ts's loadWebviewFromFile()).
+  // Those fixtures rely on the loader for the mock instead.
+  if (opts.embedApiMock) {
+    const apiMock = `<script>
   window.__vscodeMessages = [];
   window.acquireVsCodeApi = function() {
     return {
@@ -455,10 +452,694 @@ const apiMock = `<script>
     };
   };
 </script>`;
-html = html.replace("</head>", apiMock + "\n</head>");
+    out = out.replace("</head>", apiMock + "\n</head>");
+  }
 
-// 10. Write output
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// 6. buildHtml() — getDashboardHtml() has 42 positional parameters; this
+//    wraps it with the same fixed "rich mock data" prefix generate-dashboard-
+//    html.ts has always used, and exposes only the parameters relevant to
+//    tab/state fixtures (Issue #751) as a named `overrides` object. Omitted
+//    overrides render each tab's own "not yet loaded" state, matching what
+//    the real dashboard shows before its first lazy-load fetch.
+// ---------------------------------------------------------------------------
+
+interface DashboardHtmlOverrides {
+  activeTab?: string;
+  auditLogData?: unknown;
+  discoveryActivityData?: unknown;
+  platformCostData?: unknown;
+  healthAnalyticsData?: unknown;
+  runsData?: unknown;
+  trendsData?: unknown;
+  complianceData?: unknown;
+  retentionIntegrityData?: unknown;
+  dependabotData?: unknown;
+}
+
+// getDependabotTabHtml() distinguishes state === undefined (loading) from
+// state === null (empty) — the ONE tab data field in this matrix where that
+// distinction is load-bearing (every other tab's renderer treats `!data` as
+// a single "not loaded yet" branch, so `?? null` is safe for those). A plain
+// `overrides.dependabotData ?? null` would collapse an explicit
+// `{ dependabotData: undefined }` fixture override back into `null`, since
+// `??` cannot tell "key present with value undefined" from "key absent" —
+// only the `in` operator can. Fixtures that don't mention dependabotData at
+// all still default to `null` (empty), the neutral choice for a fixture that
+// isn't testing the Dependencies tab.
+function resolveDependabotData(overrides: DashboardHtmlOverrides): unknown {
+  return "dependabotData" in overrides ? overrides.dependabotData : null;
+}
+
+function buildHtml(overrides: DashboardHtmlOverrides, opts: { embedApiMock: boolean }): string {
+  const raw = getDashboardHtml(
+    mockWebview,
+    null,
+    mockHistory as any,
+    mockAggregates as any,
+    mockTimeSavingsConfig,
+    "all",
+    mockFirewallData as any,
+    null,
+    mockHealthWidgetData,
+    null,
+    [],
+    null,
+    [],
+    null,
+    mockHistoryPagination,
+    null,
+    null,
+    null,
+    [],
+    [],
+    null,
+    overrides.activeTab ?? "overview",
+    null, // platformQuotaData
+    (overrides.auditLogData ?? null) as any,
+    (overrides.discoveryActivityData ?? null) as any,
+    null, // pipelineSlotsView
+    "all", // modeFilter
+    null, // perModeRollup
+    [], // stallThresholdRows
+    null, // modeMismatchAdvisory
+    [], // costCapWarningRows
+    [], // budgetVsActualStats
+    (overrides.platformCostData ?? null) as any,
+    "7d", // costDateRange
+    (overrides.healthAnalyticsData ?? null) as any,
+    null, // healthFetchedAt
+    (overrides.runsData ?? null) as any,
+    (overrides.trendsData ?? null) as any,
+    (overrides.complianceData ?? null) as any,
+    (overrides.retentionIntegrityData ?? null) as any,
+    resolveDependabotData(overrides) as any,
+    null // usagePanelState
+  );
+  return postProcess(raw, opts);
+}
+
+// 7. Write the original single fixture — unchanged output, unchanged callers
+// (DashboardInteractions.playwright.ts).
 const OUTPUT_PATH = "/tmp/dashboard-test.html";
-writeFileSync(OUTPUT_PATH, html, "utf8");
+const defaultHtml = buildHtml({}, { embedApiMock: true });
+writeFileSync(OUTPUT_PATH, defaultHtml, "utf8");
 console.log(`Dashboard HTML written to ${OUTPUT_PATH}`);
-console.log(`File size: ${(html.length / 1024).toFixed(1)} KB`);
+console.log(`File size: ${(defaultHtml.length / 1024).toFixed(1)} KB`);
+
+// ---------------------------------------------------------------------------
+// 8. Tab/state fixture matrix (Issue #751) — populated / empty / loading /
+//    each PlatformFailureKind for every platform-backed tab, plus one
+//    "everything populated" fixture per tab (all 13) for the tab-activation
+//    and screenshot suites. Written to /tmp/dashboard-fixtures/.
+// ---------------------------------------------------------------------------
+
+const FIXTURES_DIR = "/tmp/dashboard-fixtures";
+mkdirSync(FIXTURES_DIR, { recursive: true });
+
+function writeFixture(name: string, overrides: DashboardHtmlOverrides): void {
+  const out = buildHtml(overrides, { embedApiMock: false });
+  writeFileSync(join(FIXTURES_DIR, `${name}.html`), out, "utf8");
+}
+
+// --- Shared failure builder -------------------------------------------------
+
+type FailureKind = "unauthorized" | "forbidden" | "server_error" | "offline" | "not_configured";
+
+function makeFailure(kind: FailureKind, endpoint: string, status?: number) {
+  const messages: Record<FailureKind, string> = {
+    unauthorized: "Stored session token has expired",
+    forbidden: "Your role does not include the analytics:read scope",
+    server_error: "Internal Server Error",
+    offline: "connect ECONNREFUSED 127.0.0.1:8443",
+    not_configured: "No platform credential is configured",
+  };
+  return { ok: false, kind, endpoint, status, message: messages[kind] };
+}
+
+const ALL_FAILURE_KINDS: FailureKind[] = [
+  "unauthorized",
+  "forbidden",
+  "server_error",
+  "offline",
+  "not_configured",
+];
+
+// --- Runs tab (full 5-kind matrix — the tab named in #751 as the priority
+//     case: a retry that renders nothing observable is the defect that
+//     started this issue) -----------------------------------------------
+
+const runsFilters = { dateFrom: "", dateTo: "", outcomeFilter: "", branchFilter: "" };
+const runsPagination = { page: 0, totalCount: 0, hasMore: false, cursorStack: [] };
+const runsEntry = (n: number, stages: unknown[] = []) => ({
+  issue_number: n,
+  title: `Fix flaky retry test #${n}`,
+  branch: `fix/${n}-flaky-retry`,
+  outcome: n % 2 === 0 ? "productive" : "verify-and-close",
+  duration_ms: 480_000 + n * 1000,
+  total_cost_usd: "0.0421",
+  started_at: new Date(now.getTime() - n * 3_600_000).toISOString(),
+  stages,
+});
+
+// Entry 701 carries a stage row so the InboundRendering suite has a real
+// [data-stage-name] target for the runDetailLiveUpdate inbound message.
+const runs701Stages = [
+  {
+    name: "feature-dev",
+    model: "claude-sonnet-5",
+    duration_ms: 42_000,
+    input_tokens: 8_000,
+    output_tokens: 1_200,
+    cost_usd: "0.0210",
+    retry_count: 0,
+  },
+];
+
+writeFixture("runs--populated", {
+  activeTab: "runs",
+  runsData: {
+    entries: [runsEntry(701, runs701Stages), runsEntry(702), runsEntry(703)],
+    filters: runsFilters,
+    pagination: { ...runsPagination, totalCount: 3 },
+    isLoading: false,
+    hasAccess: true,
+  },
+});
+writeFixture("runs--empty", {
+  activeTab: "runs",
+  runsData: {
+    entries: [],
+    filters: runsFilters,
+    pagination: runsPagination,
+    isLoading: false,
+    hasAccess: true,
+  },
+});
+writeFixture("runs--loading", {
+  activeTab: "runs",
+  runsData: {
+    entries: [],
+    filters: runsFilters,
+    pagination: runsPagination,
+    isLoading: true,
+    hasAccess: true,
+  },
+});
+for (const kind of ALL_FAILURE_KINDS) {
+  writeFixture(`runs--failure-${kind}`, {
+    activeTab: "runs",
+    runsData: {
+      entries: [],
+      filters: runsFilters,
+      pagination: runsPagination,
+      isLoading: false,
+      hasAccess: false,
+      failure: makeFailure(kind, "platform.getAnalyticsRuns", kind === "forbidden" ? 403 : 500),
+    },
+  });
+}
+
+// --- Compliance tab (full 5-kind matrix — the tab PlatformFailureHtml.ts's
+//     own docstring names as the motivating bug: a rejected credential told
+//     to "upgrade your plan") ------------------------------------------
+
+const compliancePagination = { hasMore: false };
+const complianceReport = (id: string, status: string) => ({
+  id,
+  reportType: "soc2",
+  status,
+  startDate: "2026-07-01",
+  endDate: "2026-07-31",
+  format: "pdf",
+  downloadUrl: status === "ready" ? `https://platform.example/reports/${id}.pdf` : undefined,
+  createdAt: new Date(now.getTime() - 86_400_000).toISOString(),
+});
+
+writeFixture("compliance--populated", {
+  activeTab: "compliance",
+  complianceData: {
+    reports: [complianceReport("rep-1", "ready"), complianceReport("rep-2", "processing")],
+    filters: {},
+    pagination: compliancePagination,
+    isLoading: false,
+    hasAccess: true,
+    isGenerating: false,
+  },
+});
+writeFixture("compliance--empty", {
+  activeTab: "compliance",
+  complianceData: {
+    reports: [],
+    filters: {},
+    pagination: compliancePagination,
+    isLoading: false,
+    hasAccess: true,
+    isGenerating: false,
+  },
+});
+writeFixture("compliance--loading", {
+  activeTab: "compliance",
+  complianceData: {
+    reports: [],
+    filters: {},
+    pagination: compliancePagination,
+    isLoading: true,
+    hasAccess: true,
+    isGenerating: false,
+  },
+});
+for (const kind of ALL_FAILURE_KINDS) {
+  writeFixture(`compliance--failure-${kind}`, {
+    activeTab: "compliance",
+    complianceData: {
+      reports: [],
+      filters: {},
+      pagination: compliancePagination,
+      isLoading: false,
+      hasAccess: false,
+      isGenerating: false,
+      failure: makeFailure(kind, "platform.auditListReports", kind === "forbidden" ? 403 : 500),
+    },
+  });
+}
+
+// --- Trends tab (populated needs >= 7 entries per tab's SPARSE_THRESHOLD;
+//     unauthorized + server_error as representative sign-in vs retry CTAs) -
+
+const trendEntry = (daysAgo: number) => ({
+  date: new Date(now.getTime() - daysAgo * 86_400_000).toISOString().slice(0, 10),
+  successRate: 0.8 + (daysAgo % 3) * 0.05,
+  costPerRun: 0.03 + (daysAgo % 4) * 0.002,
+  totalRuns: 4 + (daysAgo % 5),
+});
+const trendSeries = (offset: number) =>
+  Array.from({ length: 10 }, (_, i) => trendEntry(offset + i));
+
+writeFixture("trends--populated", {
+  activeTab: "trends",
+  trendsData: {
+    result: { current: trendSeries(0), previous: trendSeries(30), period: "30d" },
+    isLoading: false,
+    hasAccess: true,
+    showComparison: true,
+  },
+});
+writeFixture("trends--empty", {
+  activeTab: "trends",
+  trendsData: { result: null, isLoading: false, hasAccess: true, showComparison: false },
+});
+writeFixture("trends--loading", {
+  activeTab: "trends",
+  trendsData: { result: null, isLoading: true, hasAccess: true, showComparison: false },
+});
+for (const kind of ["unauthorized", "server_error"] as FailureKind[]) {
+  writeFixture(`trends--failure-${kind}`, {
+    activeTab: "trends",
+    trendsData: {
+      result: null,
+      isLoading: false,
+      hasAccess: false,
+      showComparison: false,
+      failure: makeFailure(kind, "platform.getAnalyticsTrends"),
+    },
+  });
+}
+
+// --- Health (analytics) tab -------------------------------------------------
+
+const healthDimension = (name: string, score: number) => ({
+  name,
+  label: name.charAt(0).toUpperCase() + name.slice(1),
+  score,
+  findings:
+    score < 70
+      ? [
+          {
+            severity: "warning",
+            title: `${name} needs attention`,
+            description: `${name} has been trending below target for the selected period.`,
+            recommendation: null,
+            issue_number: null,
+          },
+        ]
+      : [],
+});
+
+writeFixture("health--populated", {
+  activeTab: "health",
+  healthAnalyticsData: {
+    result: {
+      overall_score: 82,
+      dimensions: [healthDimension("velocity", 90), healthDimension("stability", 65)],
+      generated_at: new Date(now.getTime() - 3_600_000).toISOString(),
+      period_days: 30,
+      total_runs: 41,
+    },
+    hasAccess: true,
+    isLoading: false,
+  },
+});
+writeFixture("health--empty", {
+  activeTab: "health",
+  healthAnalyticsData: { result: null, hasAccess: true, isLoading: false },
+});
+for (const kind of ["not_configured", "server_error"] as FailureKind[]) {
+  writeFixture(`health--failure-${kind}`, {
+    activeTab: "health",
+    healthAnalyticsData: {
+      result: null,
+      hasAccess: false,
+      isLoading: false,
+      failure: makeFailure(kind, "platform.getAnalyticsHealth"),
+    },
+  });
+}
+
+// --- Cost (platform) tab ----------------------------------------------------
+
+writeFixture("cost--populated", {
+  activeTab: "cost",
+  platformCostData: {
+    result: {
+      totalInputTokens: 120_000,
+      totalOutputTokens: 30_000,
+      totalTokens: 150_000,
+      totalCostUsd: "3.4210",
+      breakdown: {
+        byModel: [{ modelId: "claude-sonnet-5", costUsd: "3.4210", tokens: 150_000 }],
+        byProject: [{ projectId: null, costUsd: "3.4210" }],
+        byDay: [{ date: "2026-08-18", costUsd: "0.5100" }],
+      },
+    },
+    isLoading: false,
+  },
+});
+writeFixture("cost--empty", {
+  activeTab: "cost",
+  platformCostData: { result: null, isLoading: false },
+});
+for (const kind of ["unauthorized", "offline"] as FailureKind[]) {
+  writeFixture(`cost--failure-${kind}`, {
+    activeTab: "cost",
+    platformCostData: {
+      result: null,
+      isLoading: false,
+      failure: makeFailure(kind, "platform.getAnalyticsCost"),
+    },
+  });
+}
+
+// --- Dependabot (Dependencies) tab — no PlatformFailureKind classification;
+//     state === undefined (loading) / null (empty) / fetchError (string) ---
+
+const dependabotPR = (n: number) => ({
+  number: n,
+  title: `chore(deps): bump left-pad to 2.0.${n}`,
+  url: `https://github.com/nightgauge/nightgauge/pull/${n}`,
+  nodeId: `pr-node-${n}`,
+  repo: "nightgauge/nightgauge",
+  prType: "security",
+  checkStatus: "SUCCESS",
+  isStale: false,
+  staleDays: 1,
+});
+
+writeFixture("dependencies--loading", { activeTab: "dependencies", dependabotData: undefined });
+writeFixture("dependencies--empty", { activeTab: "dependencies", dependabotData: null });
+writeFixture("dependencies--populated", {
+  activeTab: "dependencies",
+  dependabotData: {
+    data: { prs: [dependabotPR(801), dependabotPR(802)], securityCount: 1, staleCount: 0 },
+  },
+});
+writeFixture("dependencies--fetch-error", {
+  activeTab: "dependencies",
+  dependabotData: {
+    data: { prs: [], securityCount: 0, staleCount: 0 },
+    fetchError: "GitHub API rate limit exceeded",
+  },
+});
+
+// --- Audit tab (+ Retention & Integrity panel) ------------------------------
+
+const auditFilters = { dateFrom: "", dateTo: "", actionFilter: "", userFilter: "" };
+const auditPagination = { page: 0, totalCount: 0, hasMore: false };
+const auditEntry = (n: number) => ({
+  id: `audit-${n}`,
+  timestamp: new Date(now.getTime() - n * 60_000).toISOString(),
+  action: "pipeline.run",
+  userEmail: "operator@example.com",
+  status: "success",
+  resourceType: "issue",
+  resourceId: String(700 + n),
+});
+
+writeFixture("audit--populated", {
+  activeTab: "audit",
+  auditLogData: {
+    entries: [auditEntry(1), auditEntry(2)],
+    filters: auditFilters,
+    pagination: { ...auditPagination, totalCount: 2 },
+    isLoading: false,
+    hasAccess: true,
+  },
+});
+writeFixture("audit--empty", {
+  activeTab: "audit",
+  auditLogData: {
+    entries: [],
+    filters: auditFilters,
+    pagination: auditPagination,
+    isLoading: false,
+    hasAccess: true,
+  },
+});
+writeFixture("audit--loading", { activeTab: "audit", auditLogData: undefined });
+writeFixture("audit--no-access", {
+  activeTab: "audit",
+  auditLogData: {
+    entries: [],
+    filters: auditFilters,
+    pagination: auditPagination,
+    isLoading: false,
+    hasAccess: false,
+  },
+});
+writeFixture("audit--local-fallback", {
+  activeTab: "audit",
+  auditLogData: {
+    entries: [auditEntry(1)],
+    filters: auditFilters,
+    pagination: { ...auditPagination, totalCount: 1 },
+    isLoading: false,
+    hasAccess: true,
+    isLocalFallback: true,
+    localDataLabel: "Showing local telemetry — platform unreachable",
+  },
+});
+
+writeFixture("retention--populated", {
+  activeTab: "audit",
+  auditLogData: {
+    entries: [auditEntry(1)],
+    filters: auditFilters,
+    pagination: { ...auditPagination, totalCount: 1 },
+    isLoading: false,
+    hasAccess: true,
+  },
+  retentionIntegrityData: {
+    retentionConfig: { retentionDays: 730, updatedAt: "2026-06-01" },
+    integrityResult: null,
+    isLoading: false,
+    isVerifying: false,
+    hasAccess: true,
+  },
+});
+writeFixture("retention--loading", {
+  activeTab: "audit",
+  auditLogData: {
+    entries: [auditEntry(1)],
+    filters: auditFilters,
+    pagination: { ...auditPagination, totalCount: 1 },
+    isLoading: false,
+    hasAccess: true,
+  },
+  retentionIntegrityData: {
+    retentionConfig: null,
+    integrityResult: null,
+    isLoading: true,
+    isVerifying: false,
+    hasAccess: true,
+  },
+});
+writeFixture("retention--no-access", {
+  activeTab: "audit",
+  auditLogData: {
+    entries: [auditEntry(1)],
+    filters: auditFilters,
+    pagination: { ...auditPagination, totalCount: 1 },
+    isLoading: false,
+    hasAccess: true,
+  },
+  retentionIntegrityData: {
+    retentionConfig: null,
+    integrityResult: null,
+    isLoading: false,
+    isVerifying: false,
+    hasAccess: false,
+  },
+});
+
+// --- Discovery tab (local-file-based; no PlatformFailureKind) --------------
+
+writeFixture("discovery--populated", {
+  activeTab: "discovery",
+  discoveryActivityData: {
+    releaseWatch: {
+      triggered_by: "schedule",
+      new_version: "0.42.0",
+      since_version: "0.41.0",
+      status: "completed",
+      issues_created: [
+        {
+          number: 900,
+          title: "Adopt new SDK feature",
+          url: "https://github.com/nightgauge/nightgauge/issues/900",
+        },
+      ],
+      issues_backlogged: [],
+      issues_deduped: [],
+      completed_at: new Date(now.getTime() - 3_600_000).toISOString(),
+      error: null,
+    },
+    continuousImprovement: null,
+    backlog: [],
+    summary: {
+      issuesCreatedThisWeek: 1,
+      proposalsCreatedThisWeek: 0,
+      pendingBacklogCount: 0,
+      lastReleaseWatchAt: new Date(now.getTime() - 3_600_000).toISOString(),
+      lastContinuousImprovementAt: null,
+    },
+  },
+});
+writeFixture("discovery--empty", {
+  activeTab: "discovery",
+  discoveryActivityData: {
+    releaseWatch: null,
+    continuousImprovement: null,
+    backlog: [],
+    summary: {
+      issuesCreatedThisWeek: 0,
+      proposalsCreatedThisWeek: 0,
+      pendingBacklogCount: 0,
+      lastReleaseWatchAt: null,
+      lastContinuousImprovementAt: null,
+    },
+  },
+});
+writeFixture("discovery--unavailable", { activeTab: "discovery", discoveryActivityData: null });
+
+// --- Tab activation matrix: one "everything populated" fixture per tab, for
+//     the 13-tab activation/lazy-load/screenshot suite. Reuses the populated
+//     variants above so every platform tab shows realistic content
+//     regardless of which tab is active. ------------------------------------
+
+const ALL_POPULATED: DashboardHtmlOverrides = {
+  auditLogData: {
+    entries: [auditEntry(1), auditEntry(2)],
+    filters: auditFilters,
+    pagination: { ...auditPagination, totalCount: 2 },
+    isLoading: false,
+    hasAccess: true,
+  },
+  discoveryActivityData: {
+    releaseWatch: null,
+    continuousImprovement: null,
+    backlog: [],
+    summary: {
+      issuesCreatedThisWeek: 2,
+      proposalsCreatedThisWeek: 1,
+      pendingBacklogCount: 3,
+      lastReleaseWatchAt: null,
+      lastContinuousImprovementAt: null,
+    },
+  },
+  platformCostData: {
+    result: {
+      totalInputTokens: 120_000,
+      totalOutputTokens: 30_000,
+      totalTokens: 150_000,
+      totalCostUsd: "3.4210",
+      breakdown: {
+        byModel: [{ modelId: "claude-sonnet-5", costUsd: "3.4210", tokens: 150_000 }],
+        byProject: [{ projectId: null, costUsd: "3.4210" }],
+        byDay: [{ date: "2026-08-18", costUsd: "0.5100" }],
+      },
+    },
+    isLoading: false,
+  },
+  healthAnalyticsData: {
+    result: {
+      overall_score: 82,
+      dimensions: [healthDimension("velocity", 90), healthDimension("stability", 65)],
+      generated_at: new Date(now.getTime() - 3_600_000).toISOString(),
+      period_days: 30,
+      total_runs: 41,
+    },
+    hasAccess: true,
+    isLoading: false,
+  },
+  runsData: {
+    entries: [runsEntry(701), runsEntry(702)],
+    filters: runsFilters,
+    pagination: { ...runsPagination, totalCount: 2 },
+    isLoading: false,
+    hasAccess: true,
+  },
+  trendsData: {
+    result: { current: trendSeries(0), previous: trendSeries(30), period: "30d" },
+    isLoading: false,
+    hasAccess: true,
+    showComparison: false,
+  },
+  complianceData: {
+    reports: [complianceReport("rep-1", "ready")],
+    filters: {},
+    pagination: compliancePagination,
+    isLoading: false,
+    hasAccess: true,
+    isGenerating: false,
+  },
+  dependabotData: {
+    data: { prs: [dependabotPR(801)], securityCount: 1, staleCount: 0 },
+  },
+};
+
+const ALL_TAB_IDS = [
+  "overview",
+  "pipeline",
+  "analytics",
+  "history",
+  "epics",
+  "audit",
+  "discovery",
+  "cost",
+  "health",
+  "runs",
+  "trends",
+  "compliance",
+  "dependencies",
+];
+
+for (const tabId of ALL_TAB_IDS) {
+  writeFixture(`tab-activation--${tabId}`, { ...ALL_POPULATED, activeTab: tabId });
+}
+
+console.log(
+  `Dashboard fixture matrix: 42 tab/state files + ${ALL_TAB_IDS.length} tab-activation files written to ${FIXTURES_DIR}`
+);
