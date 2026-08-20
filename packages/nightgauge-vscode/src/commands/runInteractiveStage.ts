@@ -34,6 +34,7 @@ import { createToolCallData, type ToolCallData } from "../views/outputWindow/Too
 import { getExecutionAdapter } from "../utils/incrediConfig";
 import { uuidV7 } from "@nightgauge/sdk";
 import { getRepoIdentity } from "../utils/configPathResolver";
+import { parsePositiveIssueNumber, validatePositiveIssueNumber } from "../utils/issue-number-input";
 
 /**
  * The "owner/name" a manually dispatched interactive stage belongs to. Same
@@ -155,20 +156,19 @@ export function registerRunInteractiveStageCommand(
         const input = await vscode.window.showInputBox({
           prompt: "Enter issue number",
           placeHolder: "42",
-          validateInput: (value) => {
-            const num = parseInt(value, 10);
-            if (isNaN(num) || num <= 0) {
-              return "Please enter a valid positive issue number";
-            }
-            return null;
-          },
+          validateInput: validatePositiveIssueNumber,
         });
 
         if (!input) {
           return;
         }
 
-        issueNumber = parseInt(input, 10);
+        const parsedIssueNumber = parsePositiveIssueNumber(input);
+        if (parsedIssueNumber === null) {
+          vscode.window.showErrorMessage("Please enter a valid positive issue number");
+          return;
+        }
+        issueNumber = parsedIssueNumber;
       }
 
       // Guard: bookend stages cannot be run

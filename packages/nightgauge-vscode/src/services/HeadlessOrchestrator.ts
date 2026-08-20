@@ -4714,68 +4714,28 @@ export class HeadlessOrchestrator implements vscode.Disposable {
    */
   private readRecoveryRunStateView(issueNumber: number): {
     lifecycle: "running" | "paused" | "aborted" | "none";
-    pausedContextIntact: boolean;
   } {
     const ws = this.getWorkingDirectory();
     const runStatePath = path.join(ws, ".nightgauge", "pipeline", "run-state.json");
     if (!fs.existsSync(runStatePath)) {
-      return { lifecycle: "none", pausedContextIntact: false };
+      return { lifecycle: "none" };
     }
     let parsed: {
       state?: string;
-      resume_from_stage?: string;
-      completed_stages?: string[];
       issue_number?: number;
     } | null;
     try {
       const raw = fs.readFileSync(runStatePath, "utf-8");
       parsed = JSON.parse(raw);
     } catch {
-      return { lifecycle: "none", pausedContextIntact: false };
+      return { lifecycle: "none" };
     }
-    if (!parsed) return { lifecycle: "none", pausedContextIntact: false };
-    if (parsed.issue_number !== undefined && parsed.issue_number !== issueNumber) {
-      return { lifecycle: "none", pausedContextIntact: false };
+    if (!parsed || parsed.issue_number !== issueNumber) {
+      return { lifecycle: "none" };
     }
 
     const lifecycle = mapLifecycle(parsed.state);
-
-    let pausedContextIntact = false;
-    if (lifecycle === "paused" && parsed.resume_from_stage) {
-      const resumeStage = parsed.resume_from_stage as PipelineStage;
-      const prereq = STAGE_INPUT_PREREQUISITES[resumeStage];
-      if (prereq) {
-        const ctxPath = this.getContextPath(prereq.contextType, issueNumber);
-        pausedContextIntact = fs.existsSync(ctxPath);
-      } else {
-        pausedContextIntact = true;
-      }
-    }
-
-    return { lifecycle, pausedContextIntact };
-  }
-
-  /**
-   * Read `resume_from_stage` from the durable run-state.json. Returns null
-   * when the file is missing, malformed, belongs to a different issue, or
-   * does not declare a resume target.
-   */
-  private readResumeFromStage(issueNumber: number): PipelineStage | null {
-    const ws = this.getWorkingDirectory();
-    const runStatePath = path.join(ws, ".nightgauge", "pipeline", "run-state.json");
-    if (!fs.existsSync(runStatePath)) return null;
-    try {
-      const parsed = JSON.parse(fs.readFileSync(runStatePath, "utf-8")) as {
-        resume_from_stage?: string;
-        issue_number?: number;
-      };
-      if (parsed.issue_number !== undefined && parsed.issue_number !== issueNumber) {
-        return null;
-      }
-      return (parsed.resume_from_stage ?? null) as PipelineStage | null;
-    } catch {
-      return null;
-    }
+    return { lifecycle };
   }
 
   /**
@@ -4823,22 +4783,10 @@ export class HeadlessOrchestrator implements vscode.Disposable {
    * Execute a chosen recovery action. Single entry point so the dialog
    * has one call irrespective of how the action is implemented.
    *
-   * Open / cancel are no-ops. Resume, run-producer, restart, and discard
-   * are routed to the existing primitives in PipelineStateService /
-   * runStage / runPipeline. Returns true when the action ran without
-   * throwing; the caller decides whether to chain into a follow-up
-   * recovery dialog if a new error surfaces.
+   * The reachable action set is intentionally observational until the
+   * deterministic layer can provide a cross-process recovery lease.
    */
-  async runRecoveryAction(
-    action: RecoveryAction,
-    issueNumber: number,
-    options: {
-      triggeringStage: PipelineStage;
-      producingStage?: PipelineStage | null;
-      callbacks?: PipelineCallbacks;
-    }
-  ): Promise<{ success: boolean; error?: Error }> {
-    const { triggeringStage, producingStage, callbacks } = options;
+  async runRecoveryAction(action: RecoveryAction): Promise<{ success: boolean; error?: Error }> {
     try {
       switch (action) {
         case "cancel":
@@ -4851,39 +4799,6 @@ export class HeadlessOrchestrator implements vscode.Disposable {
           return { success: true };
         }
 
-        case "resume-from-paused-stage": {
-          if (!this.stateService) {
-            return {
-              success: false,
-              error: new Error("Cannot resume: PipelineStateService not initialized"),
-            };
-          }
-          await this.stateService.resumePipeline();
-          const resumeStage = this.readResumeFromStage(issueNumber) ?? triggeringStage;
-          const result = await this.runStage(resumeStage, issueNumber, callbacks);
-          return { success: result.success };
-        }
-
-        case "run-producing-stage": {
-          if (!producingStage) {
-            return {
-              success: false,
-              error: new Error("Cannot run producing stage: producer is unknown"),
-            };
-          }
-          const result = await this.runStage(producingStage, issueNumber, callbacks);
-          return { success: result.success };
-        }
-
-        case "restart-from-beginning": {
-          await this.archiveExistingRunState(issueNumber);
-          const result = await this.runPipeline(issueNumber, callbacks);
-          return { success: result.success };
-        }
-
-        case "discard-run":
-          return await this.discardRunForRecovery(issueNumber);
-
         default:
           return { success: false, error: new Error(`Unknown recovery action: ${action}`) };
       }
@@ -4893,98 +4808,6 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         error: err instanceof Error ? err : new Error(String(err)),
       };
     }
-  }
-
-  /**
-   * Archive the current run-state.json + per-stage context files under
-   * `history/<runId>/` so a restart can run cleanly without losing audit
-   * data. Best-effort: archival failures do not block restart.
-   */
-  private async archiveExistingRunState(issueNumber: number): Promise<void> {
-    const ws = this.getWorkingDirectory();
-    const pipelineDir = path.join(ws, ".nightgauge", "pipeline");
-    const runStatePath = path.join(pipelineDir, "run-state.json");
-    if (!fs.existsSync(runStatePath)) return;
-
-    let runId = `unknown-${Date.now()}`;
-    try {
-      const raw = fs.readFileSync(runStatePath, "utf-8");
-      const parsed = JSON.parse(raw) as { run_id?: string };
-      if (parsed.run_id) runId = parsed.run_id;
-    } catch {
-      /* keep timestamp fallback */
-    }
-
-    const archiveDir = path.join(pipelineDir, "history", runId);
-    try {
-      fs.mkdirSync(archiveDir, { recursive: true });
-    } catch (err) {
-      this.logger.warn("Recovery archive: failed to create archive directory", {
-        archiveDir,
-        error: err instanceof Error ? err.message : String(err),
-      });
-      return;
-    }
-
-    const candidates = [
-      "run-state.json",
-      `issue-${issueNumber}.json`,
-      `planning-${issueNumber}.json`,
-      `dev-${issueNumber}.json`,
-      `validate-${issueNumber}.json`,
-      `pr-${issueNumber}.json`,
-    ];
-    for (const filename of candidates) {
-      const src = path.join(pipelineDir, filename);
-      if (!fs.existsSync(src)) continue;
-      try {
-        fs.renameSync(src, path.join(archiveDir, filename));
-      } catch (err) {
-        this.logger.warn("Recovery archive: failed to move file", {
-          file: filename,
-          error: err instanceof Error ? err.message : String(err),
-        });
-      }
-    }
-  }
-
-  /**
-   * Discard a run by deleting branch + worktree + per-issue context
-   * files. Best-effort cleanup; errors are reported back to the caller
-   * so the dialog can surface them.
-   */
-  private async discardRunForRecovery(
-    issueNumber: number
-  ): Promise<{ success: boolean; error?: Error }> {
-    const ws = this.getWorkingDirectory();
-    const pipelineDir = path.join(ws, ".nightgauge", "pipeline");
-    const errors: string[] = [];
-
-    for (const filename of [
-      "run-state.json",
-      `issue-${issueNumber}.json`,
-      `planning-${issueNumber}.json`,
-      `dev-${issueNumber}.json`,
-      `validate-${issueNumber}.json`,
-      `pr-${issueNumber}.json`,
-    ]) {
-      const target = path.join(pipelineDir, filename);
-      if (fs.existsSync(target)) {
-        try {
-          fs.unlinkSync(target);
-        } catch (err) {
-          errors.push(`${filename}: ${err instanceof Error ? err.message : String(err)}`);
-        }
-      }
-    }
-
-    if (errors.length > 0) {
-      return {
-        success: false,
-        error: new Error(`Discard partially failed: ${errors.join("; ")}`),
-      };
-    }
-    return { success: true };
   }
 
   /**

@@ -2,9 +2,9 @@
  * Structured error contract for the pipeline state machine.
  *
  * The recovery UX (Gap 2 / separate issue) consumes these errors to render
- * dialogs and quick-picks. The contract is `recoverable: boolean` plus
- * `recovery_actions: string[]` — both are surfaced to the UX without
- * additional translation.
+ * dialogs and quick-picks. The `recoverable` flag and human-readable
+ * `recovery_actions` describe possible remediation; interactive clients
+ * compute their own reachable action contract from current safety guarantees.
  *
  * @see ADR-005 in .nightgauge/knowledge/features/3238-graceful-pipeline-stop-with-durable/decisions.md
  */
@@ -113,8 +113,8 @@ export class SchemaVersionMismatch extends PipelineStateError {
 /**
  * Raised when a stage cannot start because its required input context file
  * (the previous stage's handoff JSON) is missing on disk. Drives the
- * Recovery Dialog (Issue #3239): the producing stage is named so the user
- * can choose to run it now, restart from earlier, or discard the run.
+ * Recovery Dialog: the producer is named for diagnosis while
+ * the interactive client computes which actions are currently safe.
  */
 export class MissingInputFile extends PipelineStateError {
   constructor(
@@ -137,7 +137,7 @@ export class MissingInputFile extends PipelineStateError {
 
 /**
  * Raised when run-state.json is expected but absent — typically a clobbered
- * worktree or first-run after manual cleanup. Recoverable via restart.
+ * worktree or first-run after manual cleanup.
  */
 export class RunStateMissing extends PipelineStateError {
   constructor(public readonly issue_number: number) {
@@ -145,7 +145,7 @@ export class RunStateMissing extends PipelineStateError {
       `No run-state.json found for issue #${issue_number} — pipeline lifecycle cannot be resumed.`,
       "RUN_STATE_MISSING",
       true,
-      ["Restart from beginning", "Discard run"]
+      ["Open run-state directory"]
     );
     this.name = "RunStateMissing";
   }
@@ -176,22 +176,10 @@ export type RecoveryErrorKind =
  * computes the subset valid for the current on-disk state; the dialog
  * renders the resulting array verbatim.
  *
- * - `resume-from-paused-stage` — re-enter the paused stage with intact context.
- * - `run-producing-stage` — invoke the missing context's producer, then
- *   continue downstream.
- * - `restart-from-beginning` — archive existing state under
- *   `history/<runId>/` and start a fresh run.
- * - `discard-run` — destructive: delete branch + worktree + context files.
  * - `open-run-state-directory` — reveal the on-disk pipeline directory.
  * - `cancel` — close the dialog without acting.
  */
-export type RecoveryAction =
-  | "resume-from-paused-stage"
-  | "run-producing-stage"
-  | "restart-from-beginning"
-  | "discard-run"
-  | "open-run-state-directory"
-  | "cancel";
+export type RecoveryAction = "open-run-state-directory" | "cancel";
 
 /**
  * Payload emitted by `OrchestratorEventDispatcher.onRecoveryRequired`.

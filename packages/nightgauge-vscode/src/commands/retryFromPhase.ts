@@ -9,13 +9,19 @@ import * as vscode from "vscode";
 import type { PipelineStage } from "@nightgauge/sdk";
 import type { Logger } from "../utils/logger";
 import type { StatusBarManager } from "../utils/statusBar";
-import type { StageTreeItem, OutputWindow } from "../views";
-import type { HeadlessOrchestrator, StageRunResult } from "../services/HeadlessOrchestrator";
+import type { OutputWindow } from "../views";
+import type {
+  HeadlessOrchestrator,
+  PipelineCallbacks,
+  StageRunResult,
+} from "../services/HeadlessOrchestrator";
 import type { PipelineStateService } from "../services/PipelineStateService";
 import type { PhaseTreeItem } from "../views/items/PhaseTreeItem";
-import { getNextStage, getStageLabel } from "../utils/skillRunner";
 import { createStreamOutputHandler } from "../utils/streamOutputHandler";
 import { createPhaseTracker } from "../utils/phaseTracker";
+import { getRetryStatusMessage, isRecoveryShapedError } from "./retry-error-presentation";
+import type { RecoveryPresenter } from "../orchestrator/recovery/RecoveryCoordinator";
+import { completeSuccessfulRetry } from "./retry-success";
 
 /**
  * Register the Retry From Phase command (Issue #1187)
@@ -35,7 +41,8 @@ export function registerRetryFromPhaseCommand(
   stateService: PipelineStateService | null,
   logger: Logger,
   statusBar: StatusBarManager,
-  outputWindow?: OutputWindow | null
+  outputWindow?: OutputWindow | null,
+  presentRecovery?: RecoveryPresenter
 ): vscode.Disposable {
   return vscode.commands.registerCommand(
     "nightgauge.retryFromPhase",
@@ -63,6 +70,13 @@ export function registerRetryFromPhaseCommand(
       }
 
       const phaseName = item.phaseName;
+      const targetStage = item.stage;
+      if (!targetStage) {
+        vscode.window.showErrorMessage(
+          `Could not determine the owning stage for phase "${phaseName}".`
+        );
+        return;
+      }
 
       // Find which stage the failed phase belongs to using state service
       if (!stateService) {
@@ -72,7 +86,23 @@ export function registerRetryFromPhaseCommand(
         return;
       }
 
-      const state = await stateService.getState();
+      let state: Awaited<ReturnType<PipelineStateService["getState"]>>;
+      let recoveryPresented = false;
+      try {
+        state = await stateService.getState();
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Unknown error occurred";
+        logger.error("Retry from phase state error", {
+          stage: targetStage,
+          phase: phaseName,
+          error: message,
+        });
+        statusBar.showError("Unable to read pipeline state");
+        vscode.window.showErrorMessage(
+          "Unable to read pipeline state. Check extension logs for details."
+        );
+        return;
+      }
       if (!state) {
         vscode.window.showErrorMessage(
           "No pipeline state found. Cannot determine stage for phase."
@@ -80,16 +110,11 @@ export function registerRetryFromPhaseCommand(
         return;
       }
 
-      let targetStage: PipelineStage | undefined;
-      for (const [stageName, stageState] of Object.entries(state.stages)) {
-        if (stageState.phases?.some((p) => p.name === phaseName)) {
-          targetStage = stageName as PipelineStage;
-          break;
-        }
-      }
-
-      if (!targetStage) {
-        vscode.window.showErrorMessage(`Could not find stage containing phase "${phaseName}".`);
+      const targetStageState = state.stages[targetStage];
+      if (!targetStageState?.phases?.some((phase) => phase.name === phaseName)) {
+        vscode.window.showErrorMessage(
+          `Could not find phase "${phaseName}" in stage "${targetStage}".`
+        );
         return;
       }
 
@@ -107,6 +132,17 @@ export function registerRetryFromPhaseCommand(
       });
       statusBar.showRunning(targetStage);
 
+      let presentDerivedRecovery = (_error: unknown): boolean => false;
+      const finishSuccess = (durationMs?: number) =>
+        completeSuccessfulRetry({
+          stage: targetStage,
+          issueNumber,
+          durationMs,
+          stateService,
+          logger,
+          statusBar,
+          source: "retry-from-phase",
+        });
       try {
         // Phase tracking for pipeline tree view progress (@see Issue #1115)
         const phaseTracker = stateService ? createPhaseTracker(stateService) : null;
@@ -117,156 +153,117 @@ export function registerRetryFromPhaseCommand(
           : null;
 
         // Use HeadlessOrchestrator.runStage with skipToPhase
-        const result = await orchestrator.runStage(
-          targetStage,
-          issueNumber,
-          {
-            onStageStart: (s: PipelineStage) => {
-              logger.debug("Retry-from-phase stage started", {
-                stage: s,
-                phase: phaseName,
-                issueNumber,
-              });
-            },
-            onStageComplete: (s: PipelineStage, r: StageRunResult) => {
-              // Flush stream buffer and complete phases before marking done
-              streamHandler?.flushStage(s);
-              phaseTracker?.completeStagePhases(s);
-
-              logger.debug("Retry-from-phase stage completed", {
-                stage: s,
-                phase: phaseName,
-                issueNumber,
-                success: r.success,
-              });
-            },
-            onStdout: (s: PipelineStage, data: string) => {
-              streamHandler?.onStdout(s, data);
-            },
-            onStderr: (s: PipelineStage, data: string) => {
-              streamHandler?.onStderr(s, data);
-            },
-            onStageError: (s: PipelineStage, error: Error) => {
-              logger.error("Retry-from-phase stage error", {
-                stage: s,
-                phase: phaseName,
-                issueNumber,
-                error: error instanceof Error ? error.message : String(error ?? "Unknown error"),
-              });
-            },
-            onBackwardTransitionConfirm: async (s: PipelineStage, message: string) => {
-              const selection = await vscode.window.showWarningMessage(
-                message,
-                { modal: true },
-                "Continue"
-              );
-              return selection === "Continue";
-            },
+        const callbacks: PipelineCallbacks = {
+          onStageStart: (s: PipelineStage) => {
+            logger.debug("Retry-from-phase stage started", {
+              stage: s,
+              phase: phaseName,
+              issueNumber,
+            });
           },
-          phaseName
-        );
+          onStageComplete: (s: PipelineStage, r: StageRunResult) => {
+            // Flush stream buffer and complete phases before marking done
+            streamHandler?.flushStage(s);
+            phaseTracker?.completeStagePhases(s);
+
+            logger.debug("Retry-from-phase stage completed", {
+              stage: s,
+              phase: phaseName,
+              issueNumber,
+              success: r.success,
+            });
+          },
+          onStdout: (s: PipelineStage, data: string) => {
+            streamHandler?.onStdout(s, data);
+          },
+          onStderr: (s: PipelineStage, data: string) => {
+            streamHandler?.onStderr(s, data);
+          },
+          onStageError: (s: PipelineStage, error: Error) => {
+            logger.error("Retry-from-phase stage error", {
+              stage: s,
+              phase: phaseName,
+              issueNumber,
+              error: error instanceof Error ? error.message : String(error ?? "Unknown error"),
+            });
+          },
+          onBackwardTransitionConfirm: async (s: PipelineStage, message: string) => {
+            const selection = await vscode.window.showWarningMessage(
+              message,
+              { modal: true },
+              "Continue"
+            );
+            return selection === "Continue";
+          },
+          onRecoveryRequired: presentRecovery
+            ? (payload) => {
+                presentRecovery(payload);
+                recoveryPresented = true;
+              }
+            : undefined,
+        };
+        presentDerivedRecovery = (error: unknown): boolean => {
+          if (!presentRecovery) return false;
+          try {
+            const payload = orchestrator.getRecoveryShape(error, issueNumber, targetStage);
+            if (!payload) return false;
+            presentRecovery(payload);
+            recoveryPresented = true;
+            return true;
+          } catch (shapeError) {
+            logger.warn("Failed to derive phase retry recovery shape", { error: shapeError });
+            return false;
+          }
+        };
+
+        const result = await orchestrator.runStage(targetStage, issueNumber, callbacks, phaseName);
 
         if (result.success) {
-          logger.info("Retry from phase completed successfully", {
-            stage: targetStage,
-            phase: phaseName,
-            issueNumber,
-            durationMs: result.durationMs,
-          });
-          statusBar.showComplete(targetStage);
-
-          // Auto-continue to next stage, respecting execution mode
-          const nextStage = getNextStage(targetStage);
-          if (stateService && nextStage && nextStage !== "pipeline-finish") {
-            const autoContinue = vscode.workspace
-              .getConfiguration("nightgauge.pipeline")
-              .get("autoContinue", true);
-
-            if (autoContinue) {
-              const isPaused = await stateService.isPaused();
-              if (!isPaused) {
-                const executionMode = await stateService.getExecutionMode();
-                const delay = vscode.workspace
-                  .getConfiguration("nightgauge.pipeline")
-                  .get("autoContinueDelay", 1000);
-
-                if (executionMode === "automatic") {
-                  logger.info("Auto-continuing after retry-from-phase (automatic mode)", {
-                    stage: targetStage,
-                    nextStage,
-                    issueNumber,
-                  });
-                  setTimeout(() => {
-                    vscode.commands.executeCommand("nightgauge.runStage", nextStage);
-                  }, delay);
-                } else {
-                  logger.info("Auto-continuing after retry-from-phase (manual mode)", {
-                    stage: targetStage,
-                    nextStage,
-                    issueNumber,
-                  });
-                  setTimeout(() => {
-                    vscode.window
-                      .showInformationMessage(
-                        `${getStageLabel(targetStage)} complete. Continue to ${getStageLabel(nextStage)}?`,
-                        "Run Now",
-                        "Yes to All",
-                        "Pause"
-                      )
-                      .then(async (selection) => {
-                        if (selection === "Run Now") {
-                          await stateService.resumePipeline();
-                          vscode.commands.executeCommand("nightgauge.runStage", nextStage);
-                        } else if (selection === "Yes to All") {
-                          await stateService.setExecutionMode("automatic");
-                          await stateService.resumePipeline();
-                          vscode.commands.executeCommand("nightgauge.runStage", nextStage);
-                        } else {
-                          await stateService.pausePipeline();
-                          vscode.window.showInformationMessage(
-                            `Pipeline paused. Run "${getStageLabel(nextStage)}" to continue.`
-                          );
-                        }
-                      });
-                  }, delay);
-                }
-              } else {
-                vscode.window.showInformationMessage(
-                  `Stage "${targetStage}" completed successfully. Pipeline is paused.`
-                );
-              }
-            } else {
-              vscode.window.showInformationMessage(`Stage "${targetStage}" completed successfully`);
-            }
-          } else {
-            vscode.window.showInformationMessage(`Stage "${targetStage}" completed successfully`);
-          }
+          await finishSuccess(result.durationMs);
         } else {
+          const recoveryShaped = isRecoveryShapedError(result.error);
+          if (recoveryShaped && !recoveryPresented) {
+            presentDerivedRecovery(result.error);
+          }
           logger.warn("Retry from phase failed", {
             stage: targetStage,
             phase: phaseName,
             issueNumber,
             error: result.error,
+            recoveryShaped,
           });
-          statusBar.showError(
-            result.error instanceof Error
-              ? result.error.message
-              : String(result.error ?? "Stage failed")
-          );
-          vscode.window.showErrorMessage(
-            `Stage "${targetStage}" failed: ${result.error || "Unknown error"}`
-          );
+          statusBar.showError(getRetryStatusMessage(result.error, "Stage failed"));
+          if (recoveryShaped && !recoveryPresented) {
+            vscode.window.showErrorMessage(
+              `Stage "${targetStage}" requires recovery. Check extension logs for details.`
+            );
+          } else if (!recoveryShaped) {
+            vscode.window.showErrorMessage(
+              `Stage "${targetStage}" failed: ${result.error || "Unknown error"}`
+            );
+          }
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : "Unknown error occurred";
+        const recoveryShaped = isRecoveryShapedError(error);
+        if (recoveryShaped && !recoveryPresented) {
+          presentDerivedRecovery(error);
+        }
         logger.error("Retry from phase error", {
           stage: targetStage,
           phase: phaseName,
           issueNumber,
           error: message,
+          recoveryShaped,
         });
-        statusBar.showError(message);
-        vscode.window.showErrorMessage(`Retry from phase error: ${message}`);
+        statusBar.showError(getRetryStatusMessage(error, message));
+        if (recoveryShaped && !recoveryPresented) {
+          vscode.window.showErrorMessage(
+            "Retry from phase requires recovery. Check extension logs for details."
+          );
+        } else if (!recoveryShaped) {
+          vscode.window.showErrorMessage(`Retry from phase error: ${message}`);
+        }
       }
     }
   );

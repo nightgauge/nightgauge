@@ -1,10 +1,5 @@
 /**
- * Production-handler tests for the Retry Stage command.
- *
- * These tests intentionally capture the handler registered by
- * registerRetryStageCommand. A local simulator previously duplicated an older
- * version of the command and could stay green while the production handler had
- * no coverage.
+ * Production-handler tests for the Retry From Phase command.
  *
  * @see Issue #793
  */
@@ -12,7 +7,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as vscode from "vscode";
 import { SchemaVersionMismatch, type PipelineStage, WorktreeMissing } from "@nightgauge/sdk";
-import { registerRetryStageCommand } from "../../src/commands/retryStage";
+import { registerRetryFromPhaseCommand } from "../../src/commands/retryFromPhase";
 import type {
   HeadlessOrchestrator,
   PipelineCallbacks,
@@ -20,19 +15,16 @@ import type {
 import type { PipelineStateService } from "../../src/services/PipelineStateService";
 import type { Logger } from "../../src/utils/logger";
 import type { StatusBarManager } from "../../src/utils/statusBar";
-import type { OutputWindow, StageTreeItem } from "../../src/views";
+import type { OutputWindow } from "../../src/views";
+import type { PhaseTreeItem } from "../../src/views/items/PhaseTreeItem";
 import type { RecoveryPresenter } from "../../src/orchestrator/recovery/RecoveryCoordinator";
-import { MAX_STAGE_RETRIES } from "../../src/utils/stageTransitionValidator";
 import { createPhaseTracker } from "../../src/utils/phaseTracker";
 import { createStreamOutputHandler } from "../../src/utils/streamOutputHandler";
-import { getNextStage } from "../../src/utils/skillRunner";
 
 const mocks = vi.hoisted(() => ({
   showErrorMessage: vi.fn(),
   showWarningMessage: vi.fn(),
   showInformationMessage: vi.fn(),
-  showQuickPick: vi.fn(),
-  showInputBox: vi.fn(),
   registerCommand: vi.fn(),
   executeCommand: vi.fn(),
   getConfiguration: vi.fn(),
@@ -48,8 +40,6 @@ vi.mock("vscode", () => ({
     showErrorMessage: mocks.showErrorMessage,
     showWarningMessage: mocks.showWarningMessage,
     showInformationMessage: mocks.showInformationMessage,
-    showQuickPick: mocks.showQuickPick,
-    showInputBox: mocks.showInputBox,
   },
   commands: {
     registerCommand: mocks.registerCommand,
@@ -73,7 +63,26 @@ vi.mock("../../src/utils/skillRunner", () => ({
   getStageLabel: mocks.getStageLabel,
 }));
 
-type RetryStageHandler = (item?: StageTreeItem) => Promise<void>;
+type RetryFromPhaseHandler = (item?: PhaseTreeItem) => Promise<void>;
+
+function pipelineState(issueNumber = 42) {
+  return {
+    issue_number: issueNumber,
+    stages: {
+      "feature-dev": {
+        status: "error",
+        phases: [
+          { name: "implementation", status: "complete" },
+          { name: "quality-review", status: "error" },
+        ],
+      },
+      "feature-validate": {
+        status: "pending",
+        phases: [],
+      },
+    },
+  };
+}
 
 function createOrchestrator(): HeadlessOrchestrator {
   return {
@@ -89,7 +98,7 @@ function createOrchestrator(): HeadlessOrchestrator {
 
 function createStateService(): PipelineStateService {
   return {
-    getState: vi.fn().mockResolvedValue({ issue_number: 42 }),
+    getState: vi.fn().mockResolvedValue(pipelineState()),
     isPaused: vi.fn().mockResolvedValue(false),
     getExecutionMode: vi.fn().mockResolvedValue("automatic"),
     resumePipeline: vi.fn().mockResolvedValue(undefined),
@@ -115,14 +124,11 @@ function createStatusBar(): StatusBarManager {
   } as unknown as StatusBarManager;
 }
 
-function createStageItem(overrides: Partial<StageTreeItem> = {}): StageTreeItem {
-  return {
-    stage: "feature-dev" as PipelineStage,
-    clearError: vi.fn(),
-    isRetryable: vi.fn().mockReturnValue(true),
-    getRetryCount: vi.fn().mockReturnValue(1),
-    ...overrides,
-  } as unknown as StageTreeItem;
+function phaseItem(
+  phaseName = "quality-review",
+  stage: PipelineStage | undefined = "feature-dev"
+): PhaseTreeItem {
+  return { phaseName, stage } as unknown as PhaseTreeItem;
 }
 
 function firstCallbacks(orchestrator: HeadlessOrchestrator): PipelineCallbacks {
@@ -133,23 +139,23 @@ function firstCallbacks(orchestrator: HeadlessOrchestrator): PipelineCallbacks {
   return callbacks;
 }
 
-describe("registerRetryStageCommand", () => {
+describe("registerRetryFromPhaseCommand", () => {
   let orchestrator: HeadlessOrchestrator;
   let stateService: PipelineStateService;
   let logger: Logger;
   let statusBar: StatusBarManager;
   let outputWindow: OutputWindow;
   let presentRecovery: RecoveryPresenter;
-  let handler: RetryStageHandler;
+  let handler: RetryFromPhaseHandler;
 
   const register = (
     orchestratorOverride: HeadlessOrchestrator | null = orchestrator,
     stateServiceOverride: PipelineStateService | null = stateService,
     outputOverride: OutputWindow | null = outputWindow,
     recoveryOverride: RecoveryPresenter | undefined = presentRecovery
-  ): RetryStageHandler => {
-    handler = undefined as unknown as RetryStageHandler;
-    registerRetryStageCommand(
+  ): RetryFromPhaseHandler => {
+    handler = undefined as unknown as RetryFromPhaseHandler;
+    registerRetryFromPhaseCommand(
       orchestratorOverride,
       stateServiceOverride,
       logger,
@@ -158,7 +164,7 @@ describe("registerRetryStageCommand", () => {
       recoveryOverride
     );
     if (!handler) {
-      throw new Error("Retry Stage command handler was not registered");
+      throw new Error("Retry From Phase command handler was not registered");
     }
     return handler;
   };
@@ -172,15 +178,17 @@ describe("registerRetryStageCommand", () => {
     outputWindow = { appendLine: vi.fn() } as unknown as OutputWindow;
     presentRecovery = vi.fn();
 
-    mocks.registerCommand.mockImplementation((_command: string, registered: RetryStageHandler) => {
-      handler = registered;
-      return { dispose: vi.fn() };
-    });
+    mocks.registerCommand.mockImplementation(
+      (_command: string, registered: RetryFromPhaseHandler) => {
+        handler = registered;
+        return { dispose: vi.fn() };
+      }
+    );
     mocks.getConfiguration.mockReturnValue({ get: mocks.configGet });
     mocks.configGet.mockImplementation((key: string, fallback: unknown) =>
       key === "autoContinue" ? false : fallback
     );
-    mocks.getNextStage.mockReturnValue("feature-validate");
+    mocks.getNextStage.mockReturnValue("feature-validate" as PipelineStage);
     mocks.getStageLabel.mockImplementation((stage: string) => stage);
     mocks.createPhaseTracker.mockReturnValue({
       onPhaseDetected: vi.fn(),
@@ -200,120 +208,138 @@ describe("registerRetryStageCommand", () => {
     vi.useRealTimers();
   });
 
-  it("registers and invokes the production command handler", async () => {
-    const item = createStageItem();
-
-    await handler(item);
+  it("finds the owning stage and passes skipToPhase to production runStage", async () => {
+    await handler(phaseItem());
 
     expect(mocks.registerCommand).toHaveBeenCalledWith(
-      "nightgauge.retryStage",
+      "nightgauge.retryFromPhase",
       expect.any(Function)
     );
-    expect(orchestrator.runStage).toHaveBeenCalledWith("feature-dev", 42, expect.any(Object));
-    expect(stateService.getState).toHaveBeenCalledOnce();
-    expect(mocks.showInputBox).not.toHaveBeenCalled();
+    expect(orchestrator.runStage).toHaveBeenCalledWith(
+      "feature-dev",
+      42,
+      expect.any(Object),
+      "quality-review"
+    );
+    expect(statusBar.showRunning).toHaveBeenCalledWith("feature-dev");
     expect(statusBar.showComplete).toHaveBeenCalledWith("feature-dev");
   });
 
-  it("falls back to validated issue input when state lookup fails", async () => {
-    vi.mocked(stateService.getState).mockRejectedValue(new Error("state unavailable"));
-    mocks.showInputBox.mockResolvedValue("99");
+  it("uses the clicked item's stage when phase names repeat", async () => {
+    const state = pipelineState();
+    vi.mocked(stateService.getState).mockResolvedValue({
+      ...state,
+      stages: {
+        "feature-planning": {
+          status: "complete",
+          phases: [{ name: "quality-review", status: "complete" }],
+        },
+        ...state.stages,
+      },
+    } as never);
 
-    await handler(createStageItem());
+    await handler(phaseItem("quality-review", "feature-dev"));
 
-    expect(logger.warn).toHaveBeenCalledWith(
-      "Failed to get issue number from state service",
-      expect.objectContaining({ error: expect.any(Error) })
+    expect(orchestrator.runStage).toHaveBeenCalledWith(
+      "feature-dev",
+      42,
+      expect.any(Object),
+      "quality-review"
     );
-    expect(orchestrator.runStage).toHaveBeenCalledWith("feature-dev", 99, expect.any(Object));
-    const options = mocks.showInputBox.mock.calls[0]?.[0];
-    expect(options.validateInput("0")).toBe("Please enter a valid positive issue number");
-    expect(options.validateInput("12")).toBeNull();
-  });
-
-  it("treats empty issue input as cancellation", async () => {
-    vi.mocked(stateService.getState).mockResolvedValue(null);
-    mocks.showInputBox.mockResolvedValue("");
-
-    await handler(createStageItem());
-
-    expect(orchestrator.runStage).not.toHaveBeenCalled();
-    expect(mocks.showErrorMessage).not.toHaveBeenCalled();
-  });
-
-  it.each([" ", "+12", "-1", "12.5", "12junk", "0", "9007199254740992"])(
-    "does not dispatch malformed issue input %j",
-    async (input) => {
-      vi.mocked(stateService.getState).mockResolvedValue(null);
-      mocks.showInputBox.mockResolvedValue(input);
-
-      await handler(createStageItem());
-
-      const options = mocks.showInputBox.mock.calls[0]?.[0];
-      expect(options.validateInput(input)).toBe("Please enter a valid positive issue number");
-      expect(orchestrator.runStage).not.toHaveBeenCalled();
-      expect(mocks.showErrorMessage).toHaveBeenCalledWith(
-        "Please enter a valid positive issue number"
-      );
-    }
-  );
-
-  it("supports command-palette stage selection and cancellation", async () => {
-    mocks.showQuickPick.mockResolvedValueOnce({
-      label: "Feature Validation",
-      value: "feature-validate",
-    });
-    await handler();
-    expect(orchestrator.runStage).toHaveBeenCalledWith("feature-validate", 42, expect.any(Object));
+    expect(orchestrator.runStage).not.toHaveBeenCalledWith(
+      "feature-planning",
+      expect.anything(),
+      expect.anything(),
+      expect.anything()
+    );
 
     vi.mocked(orchestrator.runStage).mockClear();
-    mocks.showQuickPick.mockResolvedValueOnce(undefined);
-    await handler();
-    expect(orchestrator.runStage).not.toHaveBeenCalled();
+    await handler(phaseItem("quality-review", "feature-planning"));
+    expect(orchestrator.runStage).toHaveBeenCalledWith(
+      "feature-planning",
+      42,
+      expect.any(Object),
+      "quality-review"
+    );
+    expect(orchestrator.runStage).not.toHaveBeenCalledWith(
+      "feature-dev",
+      expect.anything(),
+      expect.anything(),
+      expect.anything()
+    );
   });
 
-  it("blocks unavailable, active, and non-retryable executions", async () => {
-    const noOrchestrator = register(null);
-    await noOrchestrator();
+  it("rejects unavailable services, active runs, and invalid invocations", async () => {
+    await register(null)(phaseItem());
     expect(mocks.showErrorMessage).toHaveBeenCalledWith(
       "Nightgauge orchestrator not initialized. Check extension logs for details."
     );
 
     handler = register();
     vi.mocked(orchestrator.getIsRunning).mockReturnValue(true);
-    await handler(createStageItem());
+    await handler(phaseItem());
     expect(mocks.showWarningMessage).toHaveBeenCalledWith(
       "Pipeline is already running. Stop it first or wait for completion."
     );
 
     vi.mocked(orchestrator.getIsRunning).mockReturnValue(false);
-    const item = createStageItem({
-      isRetryable: vi.fn().mockReturnValue(false),
-      getRetryCount: vi.fn().mockReturnValue(MAX_STAGE_RETRIES),
-    });
-    await handler(item);
+    await handler();
     expect(mocks.showErrorMessage).toHaveBeenCalledWith(
-      expect.stringContaining(`Maximum retries (${MAX_STAGE_RETRIES}) exceeded`)
+      "Retry From Phase must be invoked from a phase tree item."
+    );
+
+    await handler({ phaseName: "quality-review" } as PhaseTreeItem);
+    expect(mocks.showErrorMessage).toHaveBeenCalledWith(
+      'Could not determine the owning stage for phase "quality-review".'
+    );
+
+    await register(orchestrator, null)(phaseItem());
+    expect(mocks.showErrorMessage).toHaveBeenCalledWith(
+      "Pipeline state service not available. Cannot determine stage for phase."
     );
     expect(orchestrator.runStage).not.toHaveBeenCalled();
   });
 
-  it("clears the tree error and marks running before dispatch", async () => {
-    const item = createStageItem();
+  it("rejects missing state, unknown phases, and missing issue identity", async () => {
+    vi.mocked(stateService.getState).mockResolvedValueOnce(null);
+    await handler(phaseItem());
+    expect(mocks.showErrorMessage).toHaveBeenCalledWith(
+      "No pipeline state found. Cannot determine stage for phase."
+    );
 
-    await handler(item);
+    vi.mocked(stateService.getState).mockResolvedValueOnce(pipelineState());
+    await handler(phaseItem("not-a-real-phase"));
+    expect(mocks.showErrorMessage).toHaveBeenCalledWith(
+      'Could not find phase "not-a-real-phase" in stage "feature-dev".'
+    );
 
-    const clearError = vi.mocked(item.clearError);
-    const runStage = vi.mocked(orchestrator.runStage);
-    expect(clearError).toHaveBeenCalledOnce();
-    expect(statusBar.showRunning).toHaveBeenCalledWith("feature-dev");
-    expect(clearError.mock.invocationCallOrder[0]).toBeLessThan(
-      runStage.mock.invocationCallOrder[0]
+    vi.mocked(stateService.getState).mockResolvedValueOnce(pipelineState(0));
+    await handler(phaseItem());
+    expect(mocks.showErrorMessage).toHaveBeenCalledWith("No issue number found in pipeline state.");
+    expect(orchestrator.runStage).not.toHaveBeenCalled();
+  });
+
+  it("contains rejected state reads and shows a path-safe error", async () => {
+    vi.mocked(stateService.getState).mockRejectedValue(
+      new Error("Unable to read /Users/alice/private/state.json")
+    );
+
+    await expect(handler(phaseItem())).resolves.toBeUndefined();
+
+    expect(orchestrator.runStage).not.toHaveBeenCalled();
+    expect(statusBar.showError).toHaveBeenCalledWith("Unable to read pipeline state");
+    expect(mocks.showErrorMessage).toHaveBeenCalledWith(
+      "Unable to read pipeline state. Check extension logs for details."
+    );
+    expect(mocks.showErrorMessage).not.toHaveBeenCalledWith(expect.stringContaining("/Users/"));
+    expect(logger.error).toHaveBeenCalledWith(
+      "Retry from phase state error",
+      expect.objectContaining({ error: expect.stringContaining("state.json") })
     );
   });
 
-  it("wires stream and phase callbacks into the real runStage dispatch", async () => {
-    await handler(createStageItem());
+  it("wires stream and phase lifecycle callbacks", async () => {
+    await handler(phaseItem());
     const callbacks = firstCallbacks(orchestrator);
     const tracker = vi.mocked(createPhaseTracker).mock.results[0]?.value;
     const stream = vi.mocked(createStreamOutputHandler).mock.results[0]?.value;
@@ -336,98 +362,97 @@ describe("registerRetryStageCommand", () => {
     expect(stream.onStderr).toHaveBeenCalledWith("feature-dev", "stderr");
     expect(stream.flushStage).toHaveBeenCalledWith("feature-dev");
     expect(tracker.completeStagePhases).toHaveBeenCalledWith("feature-dev");
-    expect(logger.debug).toHaveBeenCalledWith("Retry stage started", {
-      stage: "feature-dev",
-      issueNumber: 42,
-    });
+    expect(logger.debug).toHaveBeenCalledWith(
+      "Retry-from-phase stage started",
+      expect.objectContaining({ phase: "quality-review", issueNumber: 42 })
+    );
     expect(logger.error).toHaveBeenCalledWith(
-      "Retry stage error",
+      "Retry-from-phase stage error",
       expect.objectContaining({ error: "stream failed" })
     );
   });
 
   it("honors backward-transition confirmation", async () => {
-    await handler(createStageItem());
+    await handler(phaseItem());
     const confirm = firstCallbacks(orchestrator).onBackwardTransitionConfirm;
     mocks.showWarningMessage.mockResolvedValueOnce("Continue");
 
-    await expect(confirm?.("feature-dev", "Go backward?")).resolves.toBe(true);
+    await expect(confirm?.("feature-dev", "Retry backward?")).resolves.toBe(true);
     expect(mocks.showWarningMessage).toHaveBeenCalledWith(
-      "Go backward?",
+      "Retry backward?",
       { modal: true },
       "Continue"
     );
 
     mocks.showWarningMessage.mockResolvedValueOnce(undefined);
-    await expect(confirm?.("feature-dev", "Go backward?")).resolves.toBe(false);
+    await expect(confirm?.("feature-dev", "Retry backward?")).resolves.toBe(false);
     mocks.showWarningMessage.mockResolvedValueOnce("Cancel");
-    await expect(confirm?.("feature-dev", "Go backward?")).resolves.toBe(false);
+    await expect(confirm?.("feature-dev", "Retry backward?")).resolves.toBe(false);
   });
 
-  it("auto-continues to the next stage in automatic mode", async () => {
+  it("auto-continues after phase retry in automatic mode", async () => {
     vi.useFakeTimers();
     mocks.configGet.mockImplementation((key: string, fallback: unknown) => {
       if (key === "autoContinue") return true;
-      if (key === "autoContinueDelay") return 25;
+      if (key === "autoContinueDelay") return 20;
       return fallback;
     });
 
-    await handler(createStageItem());
-    expect(getNextStage).toHaveBeenCalledWith("feature-dev");
-    expect(stateService.isPaused).toHaveBeenCalledOnce();
-    expect(stateService.getExecutionMode).toHaveBeenCalledOnce();
+    await handler(phaseItem());
     expect(vscode.commands.executeCommand).not.toHaveBeenCalled();
 
-    await vi.advanceTimersByTimeAsync(24);
+    await vi.advanceTimersByTimeAsync(19);
     expect(vscode.commands.executeCommand).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
+
+    expect(stateService.isPaused).toHaveBeenCalledOnce();
+    expect(stateService.getExecutionMode).toHaveBeenCalledOnce();
     expect(vscode.commands.executeCommand).toHaveBeenCalledWith(
       "nightgauge.runStage",
       "feature-validate"
     );
   });
 
-  it("applies the manual Yes to All continuation choice", async () => {
+  it("pauses after a manual continuation is declined", async () => {
     vi.useFakeTimers();
     mocks.configGet.mockImplementation((key: string, fallback: unknown) => {
       if (key === "autoContinue") return true;
-      if (key === "autoContinueDelay") return 10;
+      if (key === "autoContinueDelay") return 20;
       return fallback;
     });
     vi.mocked(stateService.getExecutionMode).mockResolvedValue("manual");
-    mocks.showInformationMessage.mockResolvedValue("Yes to All");
+    mocks.showInformationMessage.mockResolvedValue(undefined);
 
-    await handler(createStageItem());
-    await vi.advanceTimersByTimeAsync(10);
+    await handler(phaseItem());
+    await vi.advanceTimersByTimeAsync(20);
 
-    expect(stateService.setExecutionMode).toHaveBeenCalledWith("automatic");
-    expect(stateService.resumePipeline).toHaveBeenCalledOnce();
-    expect(vscode.commands.executeCommand).toHaveBeenCalledWith(
-      "nightgauge.runStage",
-      "feature-validate"
+    expect(stateService.pausePipeline).toHaveBeenCalledOnce();
+    expect(mocks.showInformationMessage).toHaveBeenCalledWith(
+      'Pipeline paused. Run "feature-validate" to continue.'
     );
+    expect(vscode.commands.executeCommand).not.toHaveBeenCalled();
   });
 
-  it("reports ordinary failures from resolved and rejected stage runs", async () => {
+  it("reports resolved failures and rejected dispatches", async () => {
     vi.mocked(orchestrator.runStage).mockResolvedValueOnce({
       success: false,
       stage: "feature-dev",
       durationMs: 20,
-      error: new Error("stage failed"),
+      error: new Error("phase failed"),
     });
-    await handler(createStageItem());
-    expect(statusBar.showError).toHaveBeenCalledWith("stage failed");
+    await handler(phaseItem());
+    expect(statusBar.showError).toHaveBeenCalledWith("phase failed");
     expect(mocks.showErrorMessage).toHaveBeenCalledWith(
-      'Stage "feature-dev" failed: Error: stage failed'
+      'Stage "feature-dev" failed: Error: phase failed'
     );
 
     vi.mocked(orchestrator.runStage).mockRejectedValueOnce(new Error("dispatch failed"));
-    await handler(createStageItem());
+    await handler(phaseItem());
     expect(statusBar.showError).toHaveBeenCalledWith("dispatch failed");
-    expect(mocks.showErrorMessage).toHaveBeenCalledWith("Stage retry error: dispatch failed");
+    expect(mocks.showErrorMessage).toHaveBeenCalledWith("Retry from phase error: dispatch failed");
   });
 
-  it("suppresses duplicate toasts for recovery-shaped errors", async () => {
+  it("suppresses path-bearing recovery errors in resolved and rejected runs", async () => {
     const recoveryError = new WorktreeMissing(
       "/Users/alice/private/release-worktree",
       "fix/private-branch"
@@ -450,30 +475,30 @@ describe("registerRetryStageCommand", () => {
       };
     });
 
-    await handler(createStageItem());
+    await handler(phaseItem());
 
     expect(statusBar.showError).toHaveBeenCalledWith("Recovery required");
     expect(mocks.showErrorMessage).not.toHaveBeenCalled();
     expect(presentRecovery).toHaveBeenCalledOnce();
     expect(presentRecovery).toHaveBeenCalledWith(payload);
     expect(logger.warn).toHaveBeenCalledWith(
-      "Stage retry failed",
+      "Retry from phase failed",
       expect.objectContaining({ recoveryShaped: true })
     );
 
     mocks.showErrorMessage.mockClear();
     vi.mocked(statusBar.showError).mockClear();
     vi.mocked(orchestrator.runStage).mockRejectedValueOnce(recoveryError);
-    await handler(createStageItem());
+    await handler(phaseItem());
     expect(statusBar.showError).toHaveBeenCalledOnce();
     expect(statusBar.showError).toHaveBeenLastCalledWith("Recovery required");
     expect(statusBar.showError).not.toHaveBeenCalledWith(expect.stringContaining("/Users/"));
     expect(mocks.showErrorMessage).toHaveBeenCalledWith(
-      "Stage retry requires recovery. Check extension logs for details."
+      "Retry from phase requires recovery. Check extension logs for details."
     );
     expect(mocks.showErrorMessage).not.toHaveBeenCalledWith(expect.stringContaining("/Users/"));
     expect(logger.error).toHaveBeenCalledWith(
-      "Stage retry error",
+      "Retry from phase error",
       expect.objectContaining({ recoveryShaped: true })
     );
   });
@@ -496,7 +521,7 @@ describe("registerRetryStageCommand", () => {
       error: recoveryError,
     });
 
-    await handler(createStageItem());
+    await handler(phaseItem());
 
     expect(orchestrator.getRecoveryShape).toHaveBeenCalledWith(recoveryError, 42, "feature-dev");
     expect(presentRecovery).toHaveBeenCalledOnce();
@@ -517,7 +542,7 @@ describe("registerRetryStageCommand", () => {
     vi.mocked(orchestrator.getRecoveryShape).mockReturnValue(payload);
     vi.mocked(orchestrator.runStage).mockRejectedValueOnce(recoveryError);
 
-    await handler(createStageItem());
+    await handler(phaseItem());
 
     expect(orchestrator.getRecoveryShape).toHaveBeenCalledWith(recoveryError, 42, "feature-dev");
     expect(presentRecovery).toHaveBeenCalledOnce();
@@ -544,7 +569,7 @@ describe("registerRetryStageCommand", () => {
       };
     });
 
-    await handler(createStageItem());
+    await handler(phaseItem());
 
     expect(statusBar.showError).toHaveBeenCalledWith("Recovery required");
     expect(mocks.showErrorMessage).not.toHaveBeenCalled();
@@ -553,12 +578,12 @@ describe("registerRetryStageCommand", () => {
     mocks.showErrorMessage.mockClear();
     vi.mocked(statusBar.showError).mockClear();
     vi.mocked(orchestrator.runStage).mockRejectedValueOnce(recoveryError);
-    await handler(createStageItem());
+    await handler(phaseItem());
     expect(statusBar.showError).toHaveBeenCalledOnce();
     expect(statusBar.showError).toHaveBeenLastCalledWith("Recovery required");
     expect(statusBar.showError).not.toHaveBeenCalledWith(expect.stringContaining("/Users/"));
     expect(mocks.showErrorMessage).toHaveBeenCalledWith(
-      "Stage retry requires recovery. Check extension logs for details."
+      "Retry from phase requires recovery. Check extension logs for details."
     );
     expect(mocks.showErrorMessage).not.toHaveBeenCalledWith(expect.stringContaining("/Users/"));
   });

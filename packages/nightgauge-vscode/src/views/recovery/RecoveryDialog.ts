@@ -3,8 +3,7 @@
  *
  * Mirrors the `ApprovalDialog` lifecycle (panel + onDidReceiveMessage +
  * `Promise<Result>`) but with a recovery-specific action set, in-dialog
- * confirmation flow for destructive actions, and chained re-render
- * support for follow-up failures.
+ * strict action validation and repeatable observational actions.
  *
  * Action computation lives in `HeadlessOrchestrator.computeRecoveryRequired`
  * — this class is a thin renderer.
@@ -27,17 +26,18 @@ interface WebViewMessage {
   confirmed: boolean;
 }
 
-/** Maximum chained re-render depth — prevents unbounded recovery loops. */
-const MAX_CHAIN_DEPTH = 3;
+const RECOVERY_ACTIONS: ReadonlySet<RecoveryAction> = new Set([
+  "open-run-state-directory",
+  "cancel",
+]);
 
 export class RecoveryDialog implements vscode.Disposable {
   private panel: vscode.WebviewPanel | undefined;
   private disposables: vscode.Disposable[] = [];
   private resultPromise: {
     resolve: (result: RecoveryResult) => void;
-    reject: (error: Error) => void;
   } | null = null;
-  private chainDepth = 0;
+  private currentPayload: RecoveryRequiredPayload | null = null;
 
   constructor(private readonly extensionUri: vscode.Uri) {}
 
@@ -45,24 +45,14 @@ export class RecoveryDialog implements vscode.Disposable {
    * Show the Recovery Dialog with the given payload.
    *
    * Returns a promise that resolves with the chosen action. Closing the
-   * panel resolves with `cancel`. Subsequent calls on the same instance
-   * re-render in the same panel and increment chain depth; once the
-   * depth cap is reached the dialog auto-closes with `cancel`.
+   * panel resolves with `cancel`. Subsequent calls on the same live instance
+   * update the panel contents.
    */
   async show(payload: RecoveryRequiredPayload): Promise<RecoveryResult> {
-    if (this.chainDepth >= MAX_CHAIN_DEPTH) {
-      vscode.window.showWarningMessage(
-        `Recovery aborted after ${MAX_CHAIN_DEPTH} chained failures — manual intervention required.`
-      );
-      this.dispose();
-      return { action: "cancel" };
-    }
-
+    this.currentPayload = payload;
     if (this.panel) {
-      this.chainDepth += 1;
       this.panel.webview.html = getRecoveryDialogHtml(this.panel.webview, payload);
     } else {
-      this.chainDepth = 1;
       this.panel = vscode.window.createWebviewPanel(
         "incrediRecoveryDialog",
         `Recovery Required #${payload.issueNumber}`,
@@ -76,29 +66,30 @@ export class RecoveryDialog implements vscode.Disposable {
       this.panel.webview.html = getRecoveryDialogHtml(this.panel.webview, payload);
 
       this.panel.webview.onDidReceiveMessage(
-        (message: WebViewMessage) => this.handleMessage(message),
+        (message: unknown) => void this.handleMessage(message),
         undefined,
         this.disposables
       );
       this.panel.onDidDispose(() => this.handlePanelClosed(), undefined, this.disposables);
     }
 
-    return new Promise<RecoveryResult>((resolve, reject) => {
-      this.resultPromise = { resolve, reject };
+    return this.waitForNextAction();
+  }
+
+  /** Re-enable the panel and wait for another observational action. */
+  waitForNextAction(): Promise<RecoveryResult> {
+    if (!this.panel) {
+      return Promise.resolve({ action: "cancel" });
+    }
+    void this.panel.webview.postMessage({ type: "recoveryActionComplete" });
+    return new Promise<RecoveryResult>((resolve) => {
+      this.resultPromise = { resolve };
     });
   }
 
-  /**
-   * Re-render with a follow-up payload (chained recovery). Returns the
-   * promise for the next user choice.
-   */
-  rerender(payload: RecoveryRequiredPayload): Promise<RecoveryResult> {
-    return this.show(payload);
-  }
-
-  private handleMessage(message: WebViewMessage): void {
-    if (message.type !== "action" || !this.resultPromise) return;
-    if (!message.confirmed) return;
+  private handleMessage(message: unknown): void {
+    if (!isWebViewMessage(message) || !this.resultPromise || !this.currentPayload) return;
+    if (!this.currentPayload.availableActions.includes(message.action)) return;
     const pending = this.resultPromise;
     this.resultPromise = null;
     pending.resolve({ action: message.action });
@@ -110,6 +101,7 @@ export class RecoveryDialog implements vscode.Disposable {
       this.resultPromise = null;
     }
     this.panel = undefined;
+    this.currentPayload = null;
   }
 
   dispose(): void {
@@ -121,10 +113,18 @@ export class RecoveryDialog implements vscode.Disposable {
       const d = this.disposables.pop();
       if (d) d.dispose();
     }
+    this.currentPayload = null;
   }
+}
 
-  /** Test-only: read the chain depth. */
-  getChainDepth(): number {
-    return this.chainDepth;
-  }
+function isWebViewMessage(message: unknown): message is WebViewMessage {
+  if (!message || typeof message !== "object") return false;
+  const value = message as Record<string, unknown>;
+  if (Object.keys(value).sort().join(",") !== "action,confirmed,type") return false;
+  return (
+    value.type === "action" &&
+    typeof value.action === "string" &&
+    RECOVERY_ACTIONS.has(value.action as RecoveryAction) &&
+    value.confirmed === true
+  );
 }

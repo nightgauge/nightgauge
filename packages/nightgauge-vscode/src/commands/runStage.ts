@@ -40,6 +40,7 @@ import { createPhaseTracker } from "../utils/phaseTracker";
 import { createToolCallData, type ToolCallData } from "../views/outputWindow/ToolCallIndicator";
 import { validateAskUserQuestionPayload, formatResponseForStdin } from "../types/askUserQuestion";
 import { getRepoIdentity } from "../utils/configPathResolver";
+import { parsePositiveIssueNumber, validatePositiveIssueNumber } from "../utils/issue-number-input";
 
 /**
  * The "owner/name" a manually dispatched stage belongs to. Same resolver
@@ -365,20 +366,19 @@ export function registerRunStageCommand(
         const input = await vscode.window.showInputBox({
           prompt: "Enter issue number",
           placeHolder: "42",
-          validateInput: (value) => {
-            const num = parseInt(value, 10);
-            if (isNaN(num) || num <= 0) {
-              return "Please enter a valid positive issue number";
-            }
-            return null;
-          },
+          validateInput: validatePositiveIssueNumber,
         });
 
         if (!input) {
           return; // User cancelled
         }
 
-        issueNumber = parseInt(input, 10);
+        const parsedIssueNumber = parsePositiveIssueNumber(input);
+        if (parsedIssueNumber === null) {
+          vscode.window.showErrorMessage("Please enter a valid positive issue number");
+          return;
+        }
+        issueNumber = parsedIssueNumber;
       }
 
       // Guard: pipeline-start bookend stage must not run manually.

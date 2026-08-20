@@ -10,6 +10,7 @@
  */
 
 import * as vscode from "vscode";
+import type { PipelineStage } from "@nightgauge/sdk";
 import { BaseTreeItem } from "./BaseTreeItem";
 
 export type PhaseStatus = "pending" | "running" | "complete" | "skipped" | "failed";
@@ -51,12 +52,14 @@ function toTitleCase(kebab: string): string {
  */
 export class PhaseTreeItem extends BaseTreeItem {
   readonly phaseName: string;
+  readonly stage: PipelineStage | undefined;
   private status: PhaseStatus;
 
-  constructor(name: string, status: PhaseStatus = "pending") {
+  constructor(name: string, status: PhaseStatus = "pending", stage?: PipelineStage) {
     super(toTitleCase(name), vscode.TreeItemCollapsibleState.None);
 
     this.phaseName = name;
+    this.stage = stage;
     this.status = status;
 
     this.updateDisplay();
