@@ -304,7 +304,10 @@ export class Dashboard implements vscode.Disposable {
   /** Dependabot PR service and cached data (Issue #3116) */
   private dependabotService:
     import("../../services/DependabotPRService").DependabotPRService | null = null;
-  private dependabotData: DependabotTabState | null = null;
+  // `undefined` is the loading sentinel getDependabotTabHtml already honours;
+  // `null` means fetched-and-empty. The field was typed `| null` only, so the
+  // state could not express the loading render the tab already supported (#775).
+  private dependabotData: DependabotTabState | null | undefined = null;
   /** User-selected historical run issue number for Analytics tab (Issue #2580) */
   private selectedRunIssueNumber: number | null = null;
   /** Platform runId (UUID) for the selected run — used to filter SSE pipeline events (#3714) */
@@ -2986,6 +2989,14 @@ export class Dashboard implements vscode.Disposable {
    */
   async refreshHealthAnalyticsData(): Promise<void> {
     const endpoint = "platform.getAnalyticsHealth";
+    // Render loading BEFORE the first await, not after (#775). #752 set this
+    // state further down, past `checkPlatformTokenState` and a dynamic import
+    // — so the one path that matters most, a rejected credential, returned at
+    // the token check having rendered nothing at all. The user pressed Retry,
+    // the panel stayed byte-identical, and the button read as dead: the exact
+    // symptom #752 was filed to remove.
+    this.healthAnalyticsData = { result: null, hasAccess: true, isLoading: true };
+    this.updatePanel("healthRefresh");
     try {
       const tokenFailure = await this.checkPlatformTokenState(endpoint);
       if (tokenFailure) {
@@ -3428,6 +3439,13 @@ export class Dashboard implements vscode.Disposable {
    * available.
    */
   private async refreshDependabotData(): Promise<void> {
+    // Loading first, before any await (#775) — this method had no loading
+    // render at all, so a Dependencies-tab refresh was completely silent until
+    // it resolved. `undefined` is already the tab's loading sentinel
+    // (getDependabotTabHtml renders getDependabotLoadingHtml for it, with
+    // `null` meaning "fetched, empty"); the refresh path simply never used it.
+    this.dependabotData = undefined;
+    this.updatePanel("dependabotRefresh");
     const ipc = (await import("../../services/IpcClient")).IpcClient.getInstance();
     if (!this.workspaceRoot) return;
     const { getRepoIdentity } = await import("../../utils/configPathResolver");
