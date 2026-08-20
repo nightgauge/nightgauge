@@ -1,0 +1,25 @@
+{
+  "reports": [
+    {
+      "id": "rpt_01J8QK3M2C9V0X4TQZ",
+      "reportType": "soc2",
+      "status": "ready",
+      "startDate": "2026-07-01",
+      "endDate": "2026-07-31",
+      "format": "pdf",
+      "downloadUrl": "https://platform.example.test/v1/audit/reports/rpt_01J8QK3M2C9V0X4TQZ/download",
+      "createdAt": "2026-08-01T02:14:09Z"
+    },
+    {
+      "id": "rpt_01J8QK4A7B2N6H1WPD",
+      "reportType": "access_review",
+      "status": "processing",
+      "startDate": "2026-08-01",
+      "endDate": "2026-08-10",
+      "format": "csv",
+      "createdAt": "2026-08-10T19:52:41Z"
+    }
+  ],
+  "nextCursor": "cmVwdF8wMUo4UUs0QTdC",
+  "hasMore": true
+}

@@ -1,0 +1,22 @@
+{
+  "totalInputTokens": 4812004,
+  "totalOutputTokens": 391755,
+  "totalTokens": 5203759,
+  "totalCostUsd": "412.6700",
+  "breakdown": {
+    "byModel": [
+      { "modelId": "claude-sonnet-4-6", "costUsd": "268.1900", "tokens": 3901220 },
+      { "modelId": "claude-opus-4-1", "costUsd": "128.4400", "tokens": 981233 },
+      { "modelId": "claude-haiku-4-5", "costUsd": "16.0400", "tokens": 321306 }
+    ],
+    "byProject": [
+      { "projectId": "nightgauge/nightgauge", "costUsd": "331.0200" },
+      { "projectId": null, "costUsd": "81.6500" }
+    ],
+    "byDay": [
+      { "date": "2026-08-04", "costUsd": "51.3300" },
+      { "date": "2026-08-05", "costUsd": "72.8100" },
+      { "date": "2026-08-06", "costUsd": "63.7000" }
+    ]
+  }
+}

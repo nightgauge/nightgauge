@@ -1,0 +1,20 @@
+{
+  "schema_version": "1",
+  "run_started_at": "__RECENT_MINUS_2D__",
+  "triggered_by": "workflow_dispatch",
+  "mode": "dogfood",
+  "create_issues": true,
+  "dry_run": false,
+  "status": "completed",
+  "proposals_created": [
+    {
+      "number": 4140,
+      "title": "Stage-exit diagnostics should capture the last bash stderr tail",
+      "url": "https://github.com/nightgauge/nightgauge/issues/4140",
+      "score": 0.83
+    }
+  ],
+  "proposals_backlogged": [],
+  "completed_at": "__RECENT_MINUS_2D__",
+  "error": null
+}

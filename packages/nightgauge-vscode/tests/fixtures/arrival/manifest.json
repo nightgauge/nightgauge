@@ -1,0 +1,145 @@
+{
+  "$comment": [
+    "Provenance + contract binding for the data-arrival fixture store (#746).",
+    "Every fixture under tests/fixtures/arrival/ has exactly one entry here.",
+    "`contract` binds the fixture to the struct that actually serialises the",
+    "payload on the wire; tests/arrival/fixtureContract.test.ts reads the Go",
+    "source, extracts its json tags, and fails when a fixture and the boundary",
+    "disagree. That is what stops a hand-written fixture from drifting into",
+    "fiction while every renderer test stays green.",
+    "See PROVENANCE.md for how each payload was obtained and re-recorded."
+  ],
+  "fixtures": [
+    {
+      "path": "platform/analytics-health.json",
+      "transport": "ipc",
+      "method": "platform.getAnalyticsHealth",
+      "upstream": "GET /v1/analytics/health",
+      "contract": {
+        "goFile": "internal/platform/analytics.go",
+        "checks": [
+          { "at": "", "type": "AnalyticsHealthResult" },
+          { "at": "dimensions/[]", "type": "AnalyticsHealthDimension" },
+          { "at": "dimensions/[]/findings/[]", "type": "AnalyticsHealthFinding" }
+        ]
+      }
+    },
+    {
+      "path": "platform/analytics-runs.json",
+      "transport": "ipc",
+      "method": "platform.getAnalyticsRuns",
+      "upstream": "GET /v1/analytics/runs",
+      "contract": {
+        "goFile": "internal/platform/analytics.go",
+        "checks": [
+          { "at": "", "type": "AnalyticsRunsResult" },
+          { "at": "entries/[]", "type": "RunsEntry" },
+          { "at": "entries/[]/stages/[]", "type": "RunsStageEntry" }
+        ]
+      }
+    },
+    {
+      "path": "platform/analytics-trends.json",
+      "transport": "ipc",
+      "method": "platform.getAnalyticsTrends",
+      "upstream": "GET /v1/analytics/trends",
+      "contract": {
+        "goFile": "internal/platform/analytics.go",
+        "checks": [
+          { "at": "", "type": "AnalyticsTrendsResult" },
+          { "at": "current/[]", "type": "AnalyticsTrendEntry" },
+          { "at": "previous/[]", "type": "AnalyticsTrendEntry" }
+        ]
+      }
+    },
+    {
+      "path": "platform/cost-analytics.json",
+      "transport": "ipc",
+      "method": "platform.getCostAnalytics",
+      "upstream": "GET /v1/analytics/cost",
+      "contract": {
+        "goFile": "internal/platform/analytics.go",
+        "checks": [{ "at": "", "type": "CostAnalyticsResult" }],
+        "note": "breakdown.* are anonymous nested structs; the extractor only reads depth-1 tags, so the nested shape is covered by the render assertions instead."
+      }
+    },
+    {
+      "path": "platform/compliance-reports.json",
+      "transport": "ipc",
+      "method": "platform.auditListReports",
+      "upstream": "GET /v1/audit/reports",
+      "contract": {
+        "goFile": "internal/platform/compliance.go",
+        "checks": [
+          { "at": "", "type": "ComplianceReportsPage" },
+          { "at": "reports/[]", "type": "ComplianceReportEntry" }
+        ]
+      }
+    },
+    {
+      "path": "platform/usage-summary.json",
+      "transport": "ipc",
+      "method": "platform.getUsageSummary",
+      "upstream": "GET /v1/analytics/dashboard",
+      "contract": {
+        "goFile": "internal/platform/analytics.go",
+        "checks": [{ "at": "", "type": "UsageSummaryResult" }]
+      }
+    },
+    {
+      "path": "platform/audit-log.json",
+      "transport": "https",
+      "method": "GET /v1/audit-log",
+      "upstream": "GET /v1/audit-log",
+      "contract": null,
+      "note": "AuditLogService calls the platform over HTTPS directly with the session JWT — the payload never passes through a Go struct, so there is no in-repo artifact to check against. Keys are transcribed from the platform response and consumed by parseCanonicalItems() in src/services/AuditLogService.ts."
+    },
+    {
+      "path": "github/pr-list.json",
+      "transport": "ipc",
+      "method": "pr.list",
+      "upstream": "GitHub GraphQL pullRequests",
+      "contract": {
+        "goFile": "pkg/types/types.go",
+        "checks": [{ "at": "[]", "type": "PullRequest" }]
+      }
+    },
+    {
+      "path": "github/issue-list-epics.json",
+      "transport": "ipc",
+      "method": "issue.list",
+      "upstream": "GitHub GraphQL issues (label: type:epic)",
+      "contract": {
+        "goFile": "pkg/types/types.go",
+        "checks": [
+          { "at": "[]", "type": "Issue" },
+          { "at": "[]/subIssues/[]", "type": "SubIssueRef" }
+        ]
+      }
+    },
+    {
+      "path": "discovery/creation-log.json",
+      "transport": "filesystem",
+      "method": ".nightgauge/release-watch/creation-log.json",
+      "upstream": "release-watch GitHub Actions workflow",
+      "contract": null,
+      "note": "Written by CI, read by DiscoveryActivityService. The shape's only declaration is the TS interface ReleaseWatchRunData; __RECENT_MINUS_*__ placeholders are substituted at load time so the 'this week' rollup is not date-fragile."
+    },
+    {
+      "path": "discovery/improvement-runs-latest.json",
+      "transport": "filesystem",
+      "method": ".nightgauge/improvement-runs/latest.json",
+      "upstream": "continuous-improvement GitHub Actions workflow",
+      "contract": null,
+      "note": "Written by CI, read by DiscoveryActivityService. The shape's only declaration is the TS interface ContinuousImprovementRunData."
+    },
+    {
+      "path": "discovery/backlog.json",
+      "transport": "filesystem",
+      "method": ".nightgauge/release-watch/backlog.json",
+      "upstream": "release-watch GitHub Actions workflow",
+      "contract": null,
+      "note": "Written by CI, read by DiscoveryActivityService.readBacklog(). The shape's only declaration is the TS interface BacklogEntry."
+    }
+  ]
+}

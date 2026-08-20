@@ -1,0 +1,46 @@
+{
+  "entries": [
+    {
+      "issue_number": 4127,
+      "title": "Dashboard health tab renders a blank panel",
+      "branch": "fix/4127-health-tab-blank",
+      "outcome": "complete",
+      "duration_ms": 1842000,
+      "total_cost_usd": "2.4130",
+      "started_at": "2026-08-10T13:02:11Z",
+      "stages": [
+        {
+          "name": "feature-dev",
+          "model": "claude-sonnet-4-6",
+          "duration_ms": 921000,
+          "input_tokens": 184320,
+          "output_tokens": 21044,
+          "cost_usd": "1.2200",
+          "retry_count": 0
+        },
+        {
+          "name": "feature-validate",
+          "model": "claude-sonnet-4-6",
+          "duration_ms": 512000,
+          "input_tokens": 96110,
+          "output_tokens": 8032,
+          "cost_usd": "0.7410",
+          "retry_count": 1,
+          "failure_category": "test_failure"
+        }
+      ]
+    },
+    {
+      "issue_number": 4109,
+      "title": "Reclaim leaked worktrees after squash merge",
+      "branch": "fix/4109-worktree-sweep",
+      "outcome": "failed",
+      "duration_ms": 604000,
+      "total_cost_usd": "0.8815",
+      "started_at": "2026-08-09T08:41:53Z"
+    }
+  ],
+  "total_count": 214,
+  "next_cursor": "eyJvIjoyMH0",
+  "has_more": true
+}

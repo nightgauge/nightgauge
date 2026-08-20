@@ -1,0 +1,33 @@
+{
+  "schema_version": "1",
+  "run_started_at": "__RECENT_MINUS_1D__",
+  "triggered_by": "schedule",
+  "new_version": "v2.1.14",
+  "since_version": "v2.1.9",
+  "status": "completed",
+  "issues_created": [
+    {
+      "number": 4131,
+      "title": "Adopt esbuild 0.25 metafile output for bundle-size tracking",
+      "url": "https://github.com/nightgauge/nightgauge/issues/4131",
+      "score": 0.78
+    },
+    {
+      "number": 4132,
+      "title": "Surface Go 1.24 loopvar semantics in the migration runbook",
+      "url": "https://github.com/nightgauge/nightgauge/issues/4132",
+      "score": 0.64
+    }
+  ],
+  "issues_backlogged": [
+    {
+      "title": "Evaluate pnpm workspaces for the extension monorepo",
+      "score": 0.41,
+      "reason": "Below creation threshold (0.60)",
+      "created_at": "__RECENT_MINUS_1D__"
+    }
+  ],
+  "issues_deduped": ["Bump minimum VSCode engine to 1.95"],
+  "completed_at": "__RECENT_MINUS_1D__",
+  "error": null
+}

@@ -91,23 +91,28 @@ the change in front of you; do not reconstruct an inventory.
 
 ### VSCode Extension Test Tiers
 
-The extension package (`packages/nightgauge-vscode/`) has three test tiers,
-each with its own directory, naming convention, and runner. A file's
-extension says which runner owns it — there is no fourth convention and no
-file matched by more than one runner or by none (enforced by
-`scripts/check-test-runner-coverage.sh`, below).
+The extension package (`packages/nightgauge-vscode/`) has four test tiers
+across three runners. A file's extension says which runner owns it — there is
+no fourth convention and no file matched by more than one runner or by none
+(enforced by `scripts/check-test-runner-coverage.sh`, below). The data-arrival
+tier shares vitest's runner and `*.test.ts` convention; it is a separate tier
+because of what it asserts, not how it runs.
 
-| Tier                                         | Directory                                  | Naming convention                               | Runner                                                    | CI job                                     |
-| -------------------------------------------- | ------------------------------------------ | ----------------------------------------------- | --------------------------------------------------------- | ------------------------------------------ |
-| Unit / integration (Node, mocked VSCode API) | `tests/**` (excluding `tests/playwright/`) | `*.test.ts`                                     | `vitest` (`vitest.config.ts`)                             | `vscode` (`.github/workflows/ci.yml`)      |
-| Browser-driven webview (real Chromium)       | `tests/playwright/**`                      | `*.playwright.ts`                               | `@playwright/test` (`playwright.config.ts`)               | `playwright` (`.github/workflows/ci.yml`)  |
-| Extension host smoke (real headless VSCode)  | `tests/vscode-host/**`                     | `*.host.ts` (entry point), `*.suite.ts` (cases) | `@vscode/test-electron` via `tests/vscode-host/launch.ts` | `vscode-host` (`.github/workflows/ci.yml`) |
+| Tier                                                  | Directory                                  | Naming convention                               | Runner                                                    | CI job                                     |
+| ----------------------------------------------------- | ------------------------------------------ | ----------------------------------------------- | --------------------------------------------------------- | ------------------------------------------ |
+| Unit / integration (Node, mocked VSCode API)          | `tests/**` (excluding `tests/playwright/`) | `*.test.ts`                                     | `vitest` (`vitest.config.ts`)                             | `vscode` (`.github/workflows/ci.yml`)      |
+| Data arrival (real transport stubbed at its boundary) | `tests/arrival/**`                         | `*.test.ts`                                     | `vitest` (`vitest.config.ts`)                             | `vscode` (`.github/workflows/ci.yml`)      |
+| Browser-driven webview (real Chromium)                | `tests/playwright/**`                      | `*.playwright.ts`                               | `@playwright/test` (`playwright.config.ts`)               | `playwright` (`.github/workflows/ci.yml`)  |
+| Extension host smoke (real headless VSCode)           | `tests/vscode-host/**`                     | `*.host.ts` (entry point), `*.suite.ts` (cases) | `@vscode/test-electron` via `tests/vscode-host/launch.ts` | `vscode-host` (`.github/workflows/ci.yml`) |
 
 Run each tier locally:
 
 ```bash
 # Unit / integration
 npx -w nightgauge-vscode vitest run
+
+# Data arrival only
+npx -w nightgauge-vscode vitest run tests/arrival
 
 # Browser-driven webview (generates the real dashboard HTML fixture first —
 # a bare `playwright test` skips that and ~30% of the suite fails on a
@@ -180,6 +185,94 @@ fixed in the PR that found them — live in
 `packages/nightgauge-vscode/tests/vscode-host/known-issues.ts` as shrinking
 baselines: a new occurrence fails the run, and each listed entry is expected
 to be deleted when its issue is fixed.
+
+#### The data-arrival tier (#746)
+
+The host smoke tier answers "does every surface open". This one answers **"does
+it open with the right data"** — and it exists because that question had no
+answer at all.
+
+Every dashboard test in this repository is the same shape: build a fixture,
+render it, assert on the HTML.
+
+```ts
+const html = getHealthTabHtml(makeResult({ overall_score: 72 }));
+expect(html).toContain("72");
+```
+
+That proves the renderer works _if_ data arrives. Whether it arrives was
+untested — and that is exactly what was broken, on four tabs at once, for
+months, behind ~1,600 passing test files (epic #741). No renderer test can
+detect it: the fixture is created after the boundary the bug lives at.
+
+An arrival test inverts that. It stubs the view's **real transport** — the
+layer the data actually crosses — runs the real service, the real refresh
+method and the real renderer, and asserts a value from the transport response
+appears in the rendered document.
+
+Two tests per view at minimum:
+
+1. **Arrival** — a recorded transport response produces a populated view.
+   Assertions read the rendered HTML, never the fixture object.
+2. **Failure fidelity** — each failure kind produces the state that matches
+   that cause, and specifically _not_ a populated-looking empty one. For
+   platform-backed views that is all five `PlatformFailureKind`s, injected as
+   the Go layer's own error text so `classifyPlatformError` runs too.
+
+##### Stub the transport, not the service
+
+This is the whole discipline, and it is easy to get subtly wrong.
+`tests/views/dashboard/Dashboard.platformRefresh.test.ts` replaces
+`PlatformAnalyticsHealthService.fetchAndCache` with a `vi.fn()` returning a
+`PlatformResult`. That is a fine test of the panel's branching, and it is blind
+to everything between the wire and that value. The arrival tier stubs one layer
+lower — `IpcClient.getInstance()` — so the service is real code under test.
+
+| View group                                    | Boundary that gets stubbed                      |
+| --------------------------------------------- | ----------------------------------------------- |
+| Health, Runs, Trends, Cost, Compliance, quota | `IpcClient` (`platformGet*` / `platformAudit*`) |
+| Audit                                         | `globalThis.fetch` (HTTPS + session JWT)        |
+| Dependencies, Epics                           | `IpcClient` (`prList` / `issueList`)            |
+| Discovery                                     | nothing — real files in a real temp workspace   |
+| Overview, Pipeline, Analytics, History        | nothing — real JSONL in a real temp workspace   |
+
+`tests/arrival/dashboardHarness.ts` builds a Dashboard whose peripheral
+services are mocked and whose **renderer is not**, and returns the HTML the
+panel set. A stub there must be at least as complete as the thing it replaces:
+a `getAggregates()` returning `{}` or a `getConfiguration().get()` that ignores
+its default value produces failures that belong to the harness, not the
+product.
+
+##### Fixtures are recorded, not written
+
+A hand-written fixture that disagrees with the API is how a renderer test
+passes while the product is broken, so fixtures live in one place —
+`tests/fixtures/arrival/` — with `manifest.json` binding each to the struct
+that serialises it, and `PROVENANCE.md` documenting how to re-record every one.
+`tests/arrival/fixtureContract.test.ts` reads those Go structs' `json` tags and
+fails when a fixture has a key the boundary does not emit or omits one it
+always does.
+
+##### A view added without an arrival test fails CI
+
+`scripts/check-arrival-coverage.sh` (pretest, so also `scripts/ci-local.sh`)
+enumerates views from the product — dashboard tabs from `VALID_TABS`, webview
+panels from the `createWebviewPanel(` call sites, tree views from
+`contributes.views` — and requires each to appear in `tests/arrival/views.json`
+with either an arrival test or an explicit `pending` reason. Dashboard tabs may
+not be pending. `scripts/test-check-arrival-coverage.sh` plants one fault per
+rule so the guard is never merely assumed to work.
+
+##### When to add to this tier
+
+Add an arrival test when a view acquires a new data source, when a service
+changes which transport method it calls, or when a bug report is "the panel is
+empty / shows zeros / says the wrong thing about why". Do **not** add renderer
+assertions here — those belong in `tests/views/`; this tier's assertions exist
+to prove the data got there.
+
+Slices still open at the time of writing, tracked in `views.json`: the eleven
+non-dashboard webview panels and the seven tree views.
 
 ### Stage Parity Validation
 

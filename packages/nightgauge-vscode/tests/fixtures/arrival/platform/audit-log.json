@@ -1,0 +1,29 @@
+{
+  "items": [
+    {
+      "id": "aud_01J8R2V4K7X3P9NBQE",
+      "createdAt": "2026-08-11T14:22:06Z",
+      "accountId": "acct_01J7YB3D5N2K8Q",
+      "action": "pipeline.run.started",
+      "resourceType": "pipeline_run",
+      "resourceId": "run_4127_01J8R2V3",
+      "ipAddress": "203.0.113.24",
+      "userAgent": "nightgauge-vscode/0.1.0",
+      "correlationId": "corr_01J8R2V4K7",
+      "metadata": { "issueNumber": 4127, "mode": "automatic" }
+    },
+    {
+      "id": "aud_01J8R2X8M1B6T4LWZC",
+      "createdAt": "2026-08-11T14:53:48Z",
+      "accountId": "acct_01J7YB3D5N2K8Q",
+      "action": "license.validated",
+      "resourceType": "license",
+      "resourceId": "lic_01J7YB3F2M",
+      "ipAddress": "203.0.113.24",
+      "userAgent": "nightgauge/0.1.0 (go)",
+      "correlationId": "corr_01J8R2X8M1"
+    }
+  ],
+  "totalCount": 1284,
+  "nextCursor": "YXVkXzAxSjhSMlg4TTE"
+}
