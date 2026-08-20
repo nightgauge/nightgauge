@@ -1145,6 +1145,21 @@ exports[`getDashboardHtml snapshots (Issue #1242) > active pipeline state — cu
       padding: var(--spacing-md);
     }
 
+    .history-load-error {
+      background: var(--vscode-inputValidation-errorBackground);
+      border: 1px solid var(--vscode-inputValidation-errorBorder);
+      border-radius: var(--border-radius);
+      padding: var(--spacing-sm);
+      margin-bottom: var(--spacing-sm);
+    }
+
+    .history-load-error-detail {
+      font-family: var(--vscode-editor-font-family);
+      font-size: 0.85em;
+      opacity: 0.8;
+      word-break: break-all;
+    }
+
     .history-list {
       min-height: 150px;
       overflow-y: auto;
@@ -5754,6 +5769,7 @@ exports[`getDashboardHtml snapshots (Issue #1242) > active pipeline state — cu
         <div class="section-header">
           <h3>Pipeline History</h3>
         </div>
+        
         <div class="empty-state">
           <p>No pipeline runs recorded. Run a pipeline to see history and metrics.</p>
         </div>
@@ -8017,6 +8033,21 @@ exports[`getDashboardHtml snapshots (Issue #1242) > completed run with tool call
       border: 1px solid var(--vscode-panel-border);
       border-radius: var(--border-radius);
       padding: var(--spacing-md);
+    }
+
+    .history-load-error {
+      background: var(--vscode-inputValidation-errorBackground);
+      border: 1px solid var(--vscode-inputValidation-errorBorder);
+      border-radius: var(--border-radius);
+      padding: var(--spacing-sm);
+      margin-bottom: var(--spacing-sm);
+    }
+
+    .history-load-error-detail {
+      font-family: var(--vscode-editor-font-family);
+      font-size: 0.85em;
+      opacity: 0.8;
+      word-break: break-all;
     }
 
     .history-list {
@@ -12660,6 +12691,7 @@ exports[`getDashboardHtml snapshots (Issue #1242) > completed run with tool call
         <h3>Pipeline History</h3>
         <span class="history-count">Showing 1 of 1</span>
       </div>
+      
       <div class="history-list">
         
           <div class="history-item" data-issue="42" data-started-at="2026-01-01T10:00:00.000Z" data-action="select-history-run">
@@ -14939,6 +14971,21 @@ exports[`getDashboardHtml snapshots (Issue #1242) > empty state — no current r
       border: 1px solid var(--vscode-panel-border);
       border-radius: var(--border-radius);
       padding: var(--spacing-md);
+    }
+
+    .history-load-error {
+      background: var(--vscode-inputValidation-errorBackground);
+      border: 1px solid var(--vscode-inputValidation-errorBorder);
+      border-radius: var(--border-radius);
+      padding: var(--spacing-sm);
+      margin-bottom: var(--spacing-sm);
+    }
+
+    .history-load-error-detail {
+      font-family: var(--vscode-editor-font-family);
+      font-size: 0.85em;
+      opacity: 0.8;
+      word-break: break-all;
     }
 
     .history-list {
@@ -19443,6 +19490,7 @@ exports[`getDashboardHtml snapshots (Issue #1242) > empty state — no current r
         <div class="section-header">
           <h3>Pipeline History</h3>
         </div>
+        
         <div class="empty-state">
           <p>No pipeline runs recorded. Run a pipeline to see history and metrics.</p>
         </div>
@@ -21706,6 +21754,21 @@ exports[`getDashboardHtml snapshots (Issue #1242) > pagination controls rendered
       border: 1px solid var(--vscode-panel-border);
       border-radius: var(--border-radius);
       padding: var(--spacing-md);
+    }
+
+    .history-load-error {
+      background: var(--vscode-inputValidation-errorBackground);
+      border: 1px solid var(--vscode-inputValidation-errorBorder);
+      border-radius: var(--border-radius);
+      padding: var(--spacing-sm);
+      margin-bottom: var(--spacing-sm);
+    }
+
+    .history-load-error-detail {
+      font-family: var(--vscode-editor-font-family);
+      font-size: 0.85em;
+      opacity: 0.8;
+      word-break: break-all;
     }
 
     .history-list {
@@ -26362,6 +26425,7 @@ exports[`getDashboardHtml snapshots (Issue #1242) > pagination controls rendered
         <h3>Pipeline History</h3>
         <span class="history-count">Showing 5 of 5</span>
       </div>
+      
       <div class="history-list">
         
           <div class="history-item" data-issue="1" data-started-at="2026-01-01T10:00:00.000Z" data-action="select-history-run">

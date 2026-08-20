@@ -330,17 +330,27 @@ describe("TelemetryStore", () => {
       }
     );
 
-    it("should write index atomically", async () => {
+    it("should write index atomically, through a temp path unique per write", async () => {
       vi.mocked(fs.readdir).mockResolvedValue([] as any);
       vi.mocked(fs.mkdir).mockResolvedValue(undefined);
       vi.mocked(fs.writeFile).mockResolvedValue(undefined);
       vi.mocked(fs.rename).mockResolvedValue(undefined);
 
       await store.rebuildIndex();
+      const firstTemp = vi.mocked(fs.writeFile).mock.calls[0][0] as string;
 
-      // Should write to temp file first, then rename
-      expect(fs.writeFile).toHaveBeenCalledWith(indexPath + ".tmp", expect.any(String), "utf-8");
-      expect(fs.rename).toHaveBeenCalledWith(indexPath + ".tmp", indexPath);
+      // Should write to temp file first, then rename.
+      expect(firstTemp).toMatch(
+        new RegExp(`^${indexPath.replace(/\//g, "\\/")}\\.\\d+\\.[0-9a-f]+\\.tmp$`)
+      );
+      expect(fs.writeFile).toHaveBeenCalledWith(firstTemp, expect.any(String), "utf-8");
+      expect(fs.rename).toHaveBeenCalledWith(firstTemp, indexPath);
+
+      // The suffix must differ per write, or concurrent rebuilds still rename
+      // each other's file out from under themselves (#777).
+      await store.rebuildIndex();
+      const secondTemp = vi.mocked(fs.writeFile).mock.calls[1][0] as string;
+      expect(secondTemp).not.toBe(firstTemp);
     });
   });
 

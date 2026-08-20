@@ -794,9 +794,23 @@ const STAGE_TO_CONFIG_KEY: Record<PipelineStage, keyof TimeSavingsConfig> = {
  * state.completeRun();
  * ```
  */
+/**
+ * Outcome of a TelemetryStore-backed history load.
+ *
+ * `loadFromTelemetryStore` used to return a bare `number` and answer `0` for
+ * both "this workspace has no runs" and "reading the index threw" — the two
+ * states the dashboard most needs to tell apart, since only one of them is
+ * the user's fault. A raced index write therefore rendered as a clean, empty
+ * history. Same discriminated-union shape as `PlatformResult` (#743), for the
+ * same reason: the failure has to survive the return. (#777)
+ */
+export type HistoryLoadResult = { ok: true; count: number } | { ok: false; message: string };
+
 export class DashboardState {
   private currentRun: PipelineRunSummary | null = null;
   private history: PipelineRunSummary[] = [];
+  /** Message from the last failed telemetry load; null once one succeeds. */
+  private historyLoadFailure: string | null = null;
   private workspaceState: vscode.Memento | null = null;
   private sessionStartTime: Date;
   private timeSavingsConfig: TimeSavingsConfig;
@@ -1061,10 +1075,11 @@ export class DashboardState {
    *
    * After loading, writes through to Memento as a cache for fast startup.
    *
-   * @returns Number of runs loaded
+   * @returns The number of runs loaded, or the message of the failure that
+   *   stopped the load — never a bare `0` standing in for both (#777).
    */
-  async loadFromTelemetryStore(): Promise<number> {
-    if (!this.telemetryStore) return 0;
+  async loadFromTelemetryStore(): Promise<HistoryLoadResult> {
+    if (!this.telemetryStore) return { ok: true, count: 0 };
 
     try {
       // Invalidate cached index so we re-read from disk and pick up
@@ -1101,14 +1116,29 @@ export class DashboardState {
       // Write through to Memento as cache
       await this.saveHistory();
 
-      return runs.length;
+      this.historyLoadFailure = null;
+      return { ok: true, count: runs.length };
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      // Keep whatever Memento already hydrated — but record WHY it is all the
+      // caller is getting, so the history tab can say the list is incomplete
+      // instead of presenting it as the whole truth (#777).
+      this.historyLoadFailure = message;
       console.warn(
         "[Nightgauge] Failed to load from TelemetryStore, falling back to Memento:",
         error
       );
-      return 0;
+      return { ok: false, message };
     }
+  }
+
+  /**
+   * The message of the last failed telemetry-store load, or null if the most
+   * recent load succeeded. The history renderer uses this to distinguish an
+   * empty history from an unreadable one (#777).
+   */
+  getHistoryLoadFailure(): string | null {
+    return this.historyLoadFailure;
   }
 
   /**
@@ -2454,7 +2484,8 @@ export class DashboardState {
       if (options.rescrub) {
         await this.telemetryStore.rebuildIndex();
       }
-      return this.loadFromTelemetryStore();
+      const result = await this.loadFromTelemetryStore();
+      return result.ok ? result.count : 0;
     }
 
     if (!this.workspaceRoot) return 0;

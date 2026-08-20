@@ -171,20 +171,41 @@ function getRunIdentityAttributes(identity?: HistoricalRunIdentity): string {
  *
  * @param history - The paginated history items to display
  * @param pagination - Optional pagination metadata (total count, hasMore flag)
+ * @param loadFailure - Message from a failed telemetry-store load, if the list
+ *   below is known to be incomplete (#777)
  */
 export function getHistoryHtml(
   history: PipelineRunSummary[],
-  pagination?: HistoryPaginationInfo
+  pagination?: HistoryPaginationInfo,
+  loadFailure?: string | null
 ): string {
+  // A failed index read used to arrive here as an empty `history` and render
+  // the same "no runs recorded" copy as a genuinely fresh workspace — the
+  // dashboard confidently reporting nothing had ever run. The banner renders
+  // above the list too, because a load can fail with Memento's stale cache
+  // still populated: those rows are real but no longer the whole history.
+  const failureHtml = loadFailure
+    ? `<div class="history-load-error">
+        <p><strong>⚠️ Pipeline history could not be read.</strong> This list is
+        incomplete — it is not evidence that no pipelines have run.</p>
+        <p class="history-load-error-detail">${escapeHtml(loadFailure)}</p>
+      </div>`
+    : "";
+
   if (history.length === 0) {
     return `
       <div class="history-section">
         <div class="section-header">
           <h3>Pipeline History</h3>
         </div>
-        <div class="empty-state">
+        ${failureHtml}
+        ${
+          loadFailure
+            ? ""
+            : `<div class="empty-state">
           <p>No pipeline runs recorded. Run a pipeline to see history and metrics.</p>
-        </div>
+        </div>`
+        }
       </div>
     `;
   }
@@ -198,6 +219,7 @@ export function getHistoryHtml(
         <h3>Pipeline History</h3>
         <span class="history-count">Showing ${history.length} of ${totalCount}</span>
       </div>
+      ${failureHtml}
       <div class="history-list">
         ${history
           .map(
@@ -534,6 +556,21 @@ export function getPipelineTabStyles(): string {
       border: 1px solid var(--vscode-panel-border);
       border-radius: var(--border-radius);
       padding: var(--spacing-md);
+    }
+
+    .history-load-error {
+      background: var(--vscode-inputValidation-errorBackground);
+      border: 1px solid var(--vscode-inputValidation-errorBorder);
+      border-radius: var(--border-radius);
+      padding: var(--spacing-sm);
+      margin-bottom: var(--spacing-sm);
+    }
+
+    .history-load-error-detail {
+      font-family: var(--vscode-editor-font-family);
+      font-size: 0.85em;
+      opacity: 0.8;
+      word-break: break-all;
     }
 
     .history-list {

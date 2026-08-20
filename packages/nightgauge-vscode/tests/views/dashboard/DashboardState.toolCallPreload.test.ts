@@ -87,9 +87,9 @@ describe("DashboardState.loadFromTelemetryStore - tool call preload (Issue #2578
     });
     const state = new DashboardState(workspaceState, undefined, store as never);
 
-    const count = await state.loadFromTelemetryStore();
+    const result = await state.loadFromTelemetryStore();
 
-    expect(count).toBe(1);
+    expect(result).toEqual({ ok: true, count: 1 });
     const history = state.getHistory();
     expect(history[0].issueNumber).toBe(2578);
     expect(history[0].toolCalls).toHaveLength(2);
@@ -132,7 +132,7 @@ describe("DashboardState.loadFromTelemetryStore - tool call preload (Issue #2578
     const state = new DashboardState(workspaceState, undefined, store as never);
 
     // Must not throw — dashboard load is non-critical
-    await expect(state.loadFromTelemetryStore()).resolves.toBe(1);
+    await expect(state.loadFromTelemetryStore()).resolves.toEqual({ ok: true, count: 1 });
 
     const history = state.getHistory();
     expect(history[0].toolCalls).toHaveLength(0);

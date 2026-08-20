@@ -17,6 +17,7 @@
  * @see docs/ARCHITECTURE.md for service patterns
  */
 
+import { randomBytes } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
@@ -253,10 +254,28 @@ export class TelemetryStore {
     // Ensure directory exists
     await fs.mkdir(historyDir, { recursive: true });
 
-    // Write atomically (temp file + rename)
-    const tempPath = indexPath + ".tmp";
-    await fs.writeFile(tempPath, JSON.stringify(index, null, 2), "utf-8");
-    await fs.rename(tempPath, indexPath);
+    // Write atomically (temp file + rename), to a temp path unique per write.
+    //
+    // A fixed `index.json.tmp` is only atomic for a single writer. Two
+    // rebuildIndex() calls on one workspace write the SAME temp file and then
+    // both rename it: the first rename moves the file out from under the
+    // second, and the loser fails with
+    // `ENOENT: no such file or directory, rename '.../index.json.tmp' -> '.../index.json'`.
+    // DashboardState.loadFromTelemetryStore swallowed that and reported zero
+    // runs, so the dashboard rendered an empty history with nothing to say a
+    // write had raced. Two concurrent rebuilds are the normal case, not an
+    // exotic one — the Dashboard constructor starts a background load that any
+    // second load overlaps. (#777)
+    const tempPath = `${indexPath}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
+    try {
+      await fs.writeFile(tempPath, JSON.stringify(index, null, 2), "utf-8");
+      await fs.rename(tempPath, indexPath);
+    } catch (err) {
+      // Per-write temp names only stay leak-free if a failed write removes its
+      // own file; the fixed name at least got overwritten by the next attempt.
+      await fs.rm(tempPath, { force: true }).catch(() => {});
+      throw err;
+    }
   }
 }
 
