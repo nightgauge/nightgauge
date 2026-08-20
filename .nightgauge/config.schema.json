@@ -287,13 +287,13 @@
       "properties": {
         "enabled": {
           "type": "boolean",
-          "default": true,
-          "description": "Master switch for autonomous discovery. Set false to disable all scheduled runs."
+          "default": false,
+          "description": "Master switch for autonomous discovery. Both this and the matching scheduled_tasks.<task>.enabled must be true for a scheduled run to do anything. Defaults to false: a workspace does not acquire an autonomous loop by upgrading."
         },
         "kill_switch": {
           "type": "boolean",
-          "default": false,
-          "description": "Kill switch: when true, monitoring continues but no GitHub issues are created. Use to pause issue creation without disabling infrastructure."
+          "default": true,
+          "description": "Kill switch: when true, detection and run recording continue but no GitHub issues are created. Defaults to true so an unconfigured repository never files issues on its own."
         },
         "score_threshold": {
           "type": "integer",
@@ -327,29 +327,21 @@
     },
     "scheduled_tasks": {
       "type": "object",
-      "description": "Scheduled task definitions (informational). Execution is driven by GitHub Actions workflows.",
+      "description": "Per-task switches for the scheduled discovery workflows. The cadence itself lives in the workflow files' cron expressions — GitHub resolves on.schedule before any repository file is read — so only enablement is configurable here.",
       "properties": {
         "release_watch": {
           "type": "object",
-          "description": "Release-watch daily detection and assessment task.",
+          "description": "Release-watch daily detection and assessment task (.github/workflows/release-watchdog.yml).",
           "properties": {
-            "enabled": { "type": "boolean", "default": true },
-            "schedule": {
-              "type": "string",
-              "description": "Cron schedule string (for documentation purposes)."
-            },
+            "enabled": { "type": "boolean", "default": false },
             "description": { "type": "string" }
           }
         },
         "continuous_improvement": {
           "type": "object",
-          "description": "Weekly continuous-improvement review task.",
+          "description": "Weekly continuous-improvement review task (.github/workflows/continuous-improvement.yml).",
           "properties": {
-            "enabled": { "type": "boolean", "default": true },
-            "schedule": {
-              "type": "string",
-              "description": "Cron schedule string (for documentation purposes)."
-            },
+            "enabled": { "type": "boolean", "default": false },
             "description": { "type": "string" }
           }
         }

@@ -1,0 +1,222 @@
+name: Continuous Improvement
+
+# Weekly pipeline-effectiveness review, and the producer of
+# `.nightgauge/improvement-runs/latest.json` — the second file the VSCode
+# dashboard's Discovery tab reads.
+#
+# Like its daily sibling (release-watchdog.yml), this workflow was documented
+# in docs/SCHEDULED_DISCOVERY.md before it existed. It never did (#753), so
+# `DiscoveryActivityService` read `improvement-runs/latest.json` from a
+# directory no producer had ever created.
+#
+# The run record is written even when the review itself is skipped, because
+# "the weekly review ran and proposed nothing" and "the weekly review has never
+# run" are different facts and the dashboard has to be able to tell them apart.
+#
+# State reaches a developer's checkout via the `discovery-state` branch; the
+# reasoning is in scripts/discovery-state-sync.sh.
+
+on:
+  schedule:
+    # Weekly, Monday at 8 AM UTC — the cadence docs/SCHEDULED_DISCOVERY.md
+    # documents. An hour before the daily watchdog so the two never contend
+    # for the state branch.
+    - cron: "0 8 * * 1"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Review lens"
+        type: choice
+        options:
+          - dogfood
+          - customer
+        required: false
+        default: dogfood
+      dry_run:
+        description: "Produce proposals without filing issues"
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: continuous-improvement
+  cancel-in-progress: false
+
+env:
+  TZ: UTC
+
+jobs:
+  gate:
+    name: Resolve the autonomous_discovery switches
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      enabled: ${{ steps.gate.outputs.enabled }}
+      create_issues: ${{ steps.gate.outputs.create_issues }}
+      reason: ${{ steps.gate.outputs.reason }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Install the gate's pinned parser dependency
+        # Hosted runner images do not promise PyYAML, and the gate fails closed
+        # if it cannot parse the config — so an unpinned import error would
+        # silently mean "never run" rather than "run with defaults".
+        run: |
+          set -euo pipefail
+          python3 -m pip install --disable-pip-version-check PyYAML==6.0.3
+
+      - name: Read .nightgauge/config.yaml
+        id: gate
+        run: python3 scripts/discovery-config-gate.py --task continuous_improvement
+
+      - name: Explain a skipped run in the job summary
+        if: ${{ steps.gate.outputs.enabled != 'true' }}
+        env:
+          GATE_REASON: ${{ steps.gate.outputs.reason }}
+        run: |
+          {
+            echo "### Continuous improvement skipped"
+            echo
+            echo "\`$GATE_REASON\`"
+            echo
+            echo "Set \`autonomous_discovery.enabled\` and"
+            echo "\`scheduled_tasks.continuous_improvement.enabled\` in \`.nightgauge/config.yaml\`."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  review:
+    name: Review, propose, and record
+    needs: gate
+    if: ${{ needs.gate.outputs.enabled == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      # Push the run record to the `discovery-state` branch.
+      contents: write
+      # The skill files issues for accepted proposals.
+      issues: write
+    env:
+      # Dispatch inputs are bound here and referenced as "$VAR" inside `run:`,
+      # never interpolated into the script text — interpolation splices the
+      # value into the shell source before bash sees it.
+      MODE: ${{ inputs.mode || 'dogfood' }}
+      DRY_RUN: ${{ inputs.dry_run || false }}
+      TRIGGERED_BY: ${{ github.event_name }}
+      CREATE_ISSUES: ${{ needs.gate.outputs.create_issues }}
+      # `secrets` is not one of the contexts available to a step-level `if:`.
+      HAS_API_KEY: ${{ secrets.ANTHROPIC_API_KEY != '' }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          # The review reads recent pipeline history to judge effectiveness, so
+          # a shallow clone would have it grading a week it cannot see.
+          fetch-depth: 0
+
+      - name: Carry forward the previous run's state
+        run: bash scripts/discovery-state-sync.sh
+
+      - name: Open the run record
+        # Before the model runs, for the same reason the watchdog does it: a
+        # run that dies mid-review must not be indistinguishable from a run
+        # that never happened.
+        run: |
+          set -euo pipefail
+          ARGS=""
+          if [ "$CREATE_ISSUES" = "true" ] && [ "$DRY_RUN" != "true" ]; then
+            ARGS="--create-issues"
+          fi
+          if [ "$DRY_RUN" = "true" ]; then
+            ARGS="$ARGS --dry-run"
+          fi
+          # shellcheck disable=SC2086 # ARGS is a deliberate flag list
+          python3 scripts/discovery-run-record.py open \
+            --kind continuous-improvement \
+            --mode "$MODE" \
+            --triggered-by "$TRIGGERED_BY" \
+            $ARGS
+
+      - name: Run the continuous-improvement review
+        id: review
+        # Degrades to a recorded no-op rather than a failure when no API key is
+        # configured: the review is the only part of this workflow that needs a
+        # model, so a key-less repository still gets an honest "ran, proposed
+        # nothing" record instead of a red run every Monday.
+        if: ${{ env.HAS_API_KEY == 'true' }}
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          npm install --global --no-fund --no-audit @anthropic-ai/claude-code
+
+          CREATE_FLAG=""
+          if [ "$CREATE_ISSUES" = "true" ] && [ "$DRY_RUN" != "true" ]; then
+            CREATE_FLAG="--create-issues"
+          fi
+
+          # Prompt on stdin with `-p`, matching the pipeline's own Claude
+          # adapter (internal/execution/adapters/claude.go). Not the
+          # `/nightgauge:continuous-improvement` slash command: that resolves
+          # through the plugin marketplace, which is not installed on a hosted
+          # runner. --allowedTools mirrors the SKILL.md frontmatter.
+          claude -p \
+            --no-session-persistence \
+            --allowedTools "Bash,Read,Write,Glob,Grep" \
+            --max-turns 80 <<PROMPT
+          Execute the skill at skills/nightgauge-continuous-improvement/SKILL.md
+          in this repository, headlessly, with these arguments:
+
+            --mode ${MODE} ${CREATE_FLAG}
+
+          Record the outcome in .nightgauge/improvement-runs/latest.json,
+          preserving the keys already in that file.
+          PROMPT
+
+      - name: Close the run record
+        if: ${{ always() }}
+        env:
+          REVIEW_OUTCOME: ${{ steps.review.outcome }}
+        run: |
+          set -euo pipefail
+          STATUS=completed
+          ERROR=""
+          case "$REVIEW_OUTCOME" in
+            failure)
+              STATUS=failed
+              ERROR="continuous-improvement review failed — see the workflow run log"
+              ;;
+            skipped)
+              # Not an error: the review is opt-in on a configured API key.
+              ERROR="no ANTHROPIC_API_KEY configured — recorded without a review"
+              ;;
+          esac
+          python3 scripts/discovery-run-record.py close \
+            --kind continuous-improvement \
+            --mode "$MODE" \
+            --triggered-by "$TRIGGERED_BY" \
+            --status "$STATUS" \
+            --error "$ERROR"
+
+      - name: Publish state to the discovery-state branch
+        if: ${{ always() }}
+        run: |
+          bash scripts/discovery-state-publish.sh \
+            --message "chore(discovery): continuous-improvement ${MODE}"
+
+      - name: Summarize the run
+        if: ${{ always() }}
+        env:
+          GATE_REASON: ${{ needs.gate.outputs.reason }}
+          REVIEW_OUTCOME: ${{ steps.review.outcome }}
+        run: |
+          {
+            echo "### Continuous improvement"
+            echo
+            echo "- mode: \`$MODE\`"
+            echo "- review: \`$REVIEW_OUTCOME\`"
+            echo "- issue creation: \`$CREATE_ISSUES\` ($GATE_REASON)"
+            echo
+            echo "Run \`scripts/discovery-state-sync.sh\` locally to see this in the Discovery tab."
+          } >> "$GITHUB_STEP_SUMMARY"

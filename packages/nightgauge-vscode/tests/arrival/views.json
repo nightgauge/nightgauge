@@ -64,9 +64,10 @@
     {
       "id": "discovery",
       "kind": "dashboard-tab",
-      "transport": "filesystem (.nightgauge/release-watch, improvement-runs)",
-      "arrivalTest": "tests/arrival/dashboardExternalTabs.test.ts",
-      "failureFidelity": true
+      "transport": "filesystem (.nightgauge/release-watch, improvement-runs), published by the scheduled workflows to the discovery-state branch",
+      "arrivalTest": "tests/arrival/dashboardDiscoveryTab.test.ts",
+      "failureFidelity": true,
+      "note": "Moved off dashboardExternalTabs.test.ts, which writes hand-authored fixtures to disk. A fixture written to match the reader cannot detect that no producer exists — which is what had actually happened (#753). The named test runs scripts/discovery-run-record.py and the discovery-state publish/sync pair instead. The fixture-based render coverage remains in dashboardExternalTabs.test.ts."
     },
     {
       "id": "cost",
