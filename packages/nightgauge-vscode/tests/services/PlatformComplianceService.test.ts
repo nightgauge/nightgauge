@@ -1,15 +1,15 @@
 /**
- * Tests for PlatformComplianceService (Issue #3322)
+ * Tests for PlatformComplianceService (Issue #3322, updated for #743)
  *
  * Covers:
  * 1. fetchAndCache → calls platformAuditListReports with correct params
- * 2. fetchAndCache → caches result and returns same on second call
- * 3. fetchAndCache → returns cache on concurrent calls (single-inflight guard)
- * 4. fetchAndCache → returns null on IPC error (falls back to cache)
- * 5. generateReport → calls platformAuditGenerateReport with correct params
- * 6. getReport → calls platformAuditGetReport with correct reportId
- * 7. getCached → returns cached value synchronously
- * 8. dispose → clears cache
+ * 2. fetchAndCache → returns { ok: true, value } and caches the result
+ * 3. fetchAndCache → each failure kind (unauthorized/forbidden/server_error/
+ *    offline/not_configured) → { ok: false, kind, status, endpoint, message }
+ * 4. generateReport → calls platformAuditGenerateReport with correct params
+ * 5. getReport → calls platformAuditGetReport with correct reportId
+ * 6. getCached → returns cached value synchronously
+ * 7. dispose → clears cache
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -20,6 +20,8 @@ import type {
   ComplianceReportResult,
   ComplianceReportDetail,
 } from "../../src/services/IpcClientBase";
+
+const ENDPOINT = "platform.auditListReports";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -64,6 +66,10 @@ function makeIpcClient(overrides: Partial<IpcClientGenerated> = {}): IpcClientGe
 // ---------------------------------------------------------------------------
 
 describe("PlatformComplianceService.fetchAndCache", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
   it("calls platformAuditListReports with correct params", async () => {
     const ipc = makeIpcClient();
     const svc = new PlatformComplianceService(ipc);
@@ -71,40 +77,113 @@ describe("PlatformComplianceService.fetchAndCache", () => {
     expect(ipc.platformAuditListReports).toHaveBeenCalledWith("cursor-1", 10);
   });
 
-  it("caches result and returns it on second call", async () => {
+  it("returns { ok: true, value } and caches the result", async () => {
     const page = makeReportsPage({ hasMore: true });
     const ipc = makeIpcClient({
       platformAuditListReports: vi.fn().mockResolvedValue(page),
     });
     const svc = new PlatformComplianceService(ipc);
-    const first = await svc.fetchAndCache();
-    const second = await svc.fetchAndCache();
-    expect(first).toEqual(page);
-    expect(second).toEqual(page);
-    expect(ipc.platformAuditListReports).toHaveBeenCalledTimes(2);
+
+    const outcome = await svc.fetchAndCache();
+
+    expect(outcome).toEqual({ ok: true, value: page });
+    expect(svc.getCached()).toEqual(page);
   });
 
-  it("returns stale cache on IPC error", async () => {
-    const page = makeReportsPage();
+  it("unauthorized (401) survives as kind + status", async () => {
     const ipc = makeIpcClient({
       platformAuditListReports: vi
         .fn()
-        .mockResolvedValueOnce(page)
-        .mockRejectedValueOnce(new Error("network error")),
+        .mockRejectedValue(
+          new Error("IPC error -32000: list compliance reports: server returned 401")
+        ),
     });
     const svc = new PlatformComplianceService(ipc);
-    await svc.fetchAndCache();
-    const result = await svc.fetchAndCache();
-    expect(result).toEqual(page);
+
+    const outcome = await svc.fetchAndCache();
+
+    expect(outcome).toMatchObject({
+      ok: false,
+      kind: "unauthorized",
+      status: 401,
+      endpoint: ENDPOINT,
+    });
   });
 
-  it("returns null initially on IPC error (no cache)", async () => {
+  it("forbidden (403) survives as kind + status — no access for this role/tier", async () => {
+    const ipc = makeIpcClient({
+      platformAuditListReports: vi
+        .fn()
+        .mockRejectedValue(
+          new Error("IPC error -32000: list compliance reports: server returned 403")
+        ),
+    });
+    const svc = new PlatformComplianceService(ipc);
+
+    const outcome = await svc.fetchAndCache();
+
+    expect(outcome).toMatchObject({
+      ok: false,
+      kind: "forbidden",
+      status: 403,
+      endpoint: ENDPOINT,
+    });
+  });
+
+  it("server_error (500) survives as kind + status", async () => {
+    const ipc = makeIpcClient({
+      platformAuditListReports: vi
+        .fn()
+        .mockRejectedValue(
+          new Error("IPC error -32000: list compliance reports: server returned 500")
+        ),
+    });
+    const svc = new PlatformComplianceService(ipc);
+
+    const outcome = await svc.fetchAndCache();
+
+    expect(outcome).toMatchObject({
+      ok: false,
+      kind: "server_error",
+      status: 500,
+      endpoint: ENDPOINT,
+    });
+  });
+
+  it("offline (network error) has no status", async () => {
+    const ipc = makeIpcClient({
+      platformAuditListReports: vi
+        .fn()
+        .mockRejectedValue(new Error("Go backend exited with code 1")),
+    });
+    const svc = new PlatformComplianceService(ipc);
+
+    const outcome = await svc.fetchAndCache();
+
+    expect(outcome).toMatchObject({ ok: false, kind: "offline", endpoint: ENDPOINT });
+    if (!outcome.ok) expect(outcome.status).toBeUndefined();
+  });
+
+  it("not_configured (no compliance credential) has no status", async () => {
+    const ipc = makeIpcClient({
+      platformAuditListReports: vi
+        .fn()
+        .mockRejectedValue(new Error("IPC error -32000: compliance service unavailable")),
+    });
+    const svc = new PlatformComplianceService(ipc);
+
+    const outcome = await svc.fetchAndCache();
+
+    expect(outcome).toMatchObject({ ok: false, kind: "not_configured", endpoint: ENDPOINT });
+  });
+
+  it("does not throw on a rejected IPC call", async () => {
     const ipc = makeIpcClient({
       platformAuditListReports: vi.fn().mockRejectedValue(new Error("not configured")),
     });
     const svc = new PlatformComplianceService(ipc);
-    const result = await svc.fetchAndCache();
-    expect(result).toBeNull();
+
+    await expect(svc.fetchAndCache()).resolves.toMatchObject({ ok: false });
   });
 });
 

@@ -2,9 +2,9 @@
  * PlatformComplianceService — Fetches and caches compliance report data via IPC.
  *
  * Single-inflight guard prevents duplicate concurrent list requests.
- * Role/tier check: returns null when the user lacks access (owner/admin required).
  *
  * @see Issue #3322 — Add Compliance Report Generation UI in Extension
+ * @see Issue 743 - typed failures instead of a swallowed catch{}
  * @see PlatformRunsService — pattern reference
  */
 
@@ -15,29 +15,40 @@ import type {
   ComplianceReportResult,
   ComplianceReportDetail,
 } from "./IpcClientBase";
+import { Logger } from "../utils/logger";
+import { platformOk, reportPlatformFailure, type PlatformResult } from "./platformResult";
+
+const LIST_ENDPOINT = "platform.auditListReports";
 
 export class PlatformComplianceService implements vscode.Disposable {
   private cache: ComplianceReportsPage | null = null;
   private inFlight = false;
+  private readonly logger = new Logger("Nightgauge Platform: Compliance");
 
   constructor(private readonly ipcClient: IpcClientGenerated) {}
 
   /**
    * Fetch paginated compliance report list via IPC, cache, and return.
-   * Single-inflight guard — concurrent calls return current cache.
-   * Returns null on auth failure (401/403 → no access).
+   * Single-inflight guard — concurrent calls return current cache wrapped as
+   * a success (or a failure if there is nothing cached yet).
+   * Returns a typed failure on error (401/403 → no access, etc.). Never throws.
    */
-  async fetchAndCache(cursor?: string, limit?: number): Promise<ComplianceReportsPage | null> {
+  async fetchAndCache(
+    cursor?: string,
+    limit?: number
+  ): Promise<PlatformResult<ComplianceReportsPage>> {
     if (this.inFlight) {
-      return this.cache;
+      return this.cache !== null
+        ? platformOk(this.cache)
+        : reportPlatformFailure(this.logger, new Error("fetch already in progress"), LIST_ENDPOINT);
     }
     this.inFlight = true;
     try {
       const result = await this.ipcClient.platformAuditListReports(cursor, limit);
       this.cache = result;
-      return result;
-    } catch {
-      return this.cache;
+      return platformOk(result);
+    } catch (err) {
+      return reportPlatformFailure(this.logger, err, LIST_ENDPOINT);
     } finally {
       this.inFlight = false;
     }
@@ -65,5 +76,6 @@ export class PlatformComplianceService implements vscode.Disposable {
 
   dispose(): void {
     this.cache = null;
+    this.logger.dispose();
   }
 }

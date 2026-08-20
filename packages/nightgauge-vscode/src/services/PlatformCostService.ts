@@ -6,14 +6,19 @@
  * in-flight requests.
  *
  * @see Issue #3317 - Add Cost Tab to Pipeline Dashboard
+ * @see Issue 743 - typed failures instead of a swallowed catch{}
  * @see PlatformQuotaService — pattern reference
  */
 
 import * as vscode from "vscode";
 import type { IpcClientGenerated } from "./IpcClient.generated";
 import type { CostAnalyticsResult } from "./IpcClientBase";
+import { Logger } from "../utils/logger";
+import { platformOk, reportPlatformFailure, type PlatformResult } from "./platformResult";
 
 export type CostDateRange = "7d" | "30d" | "90d";
+
+const ENDPOINT = "platform.getCostAnalytics";
 
 function dateRangeToParams(range: CostDateRange): { startDate: string; endDate: string } {
   const end = new Date();
@@ -29,17 +34,23 @@ function dateRangeToParams(range: CostDateRange): { startDate: string; endDate: 
 export class PlatformCostService implements vscode.Disposable {
   private cache = new Map<CostDateRange, CostAnalyticsResult>();
   private inFlight = new Set<CostDateRange>();
+  private readonly logger = new Logger("Nightgauge Platform: Cost");
 
   constructor(private readonly ipcClient: IpcClientGenerated) {}
 
   /**
    * Fetch cost analytics via IPC for the given date range, cache, and return.
-   * Single-inflight guard per range — concurrent calls return the current cache.
-   * On error: returns null.
+   * Single-inflight guard per range — a concurrent call returns the current
+   * cache for that range wrapped as a success (or a failure if there is
+   * nothing cached yet).
+   * On error: logs once and returns a typed PlatformFailure. Never throws.
    */
-  async fetchAndCache(range: CostDateRange): Promise<CostAnalyticsResult | null> {
+  async fetchAndCache(range: CostDateRange): Promise<PlatformResult<CostAnalyticsResult>> {
     if (this.inFlight.has(range)) {
-      return this.cache.get(range) ?? null;
+      const cached = this.cache.get(range);
+      return cached !== undefined
+        ? platformOk(cached)
+        : reportPlatformFailure(this.logger, new Error("fetch already in progress"), ENDPOINT);
     }
     this.inFlight.add(range);
 
@@ -47,9 +58,9 @@ export class PlatformCostService implements vscode.Disposable {
       const { startDate, endDate } = dateRangeToParams(range);
       const result = await this.ipcClient.platformGetCostAnalytics(startDate, endDate);
       this.cache.set(range, result);
-      return result;
-    } catch {
-      return this.cache.get(range) ?? null;
+      return platformOk(result);
+    } catch (err) {
+      return reportPlatformFailure(this.logger, err, ENDPOINT);
     } finally {
       this.inFlight.delete(range);
     }
@@ -62,5 +73,6 @@ export class PlatformCostService implements vscode.Disposable {
 
   dispose(): void {
     this.cache.clear();
+    this.logger.dispose();
   }
 }

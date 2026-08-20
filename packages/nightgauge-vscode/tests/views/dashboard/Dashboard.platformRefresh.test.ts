@@ -278,9 +278,15 @@ describe("Dashboard.refreshHealthAnalyticsData", () => {
     expect(healthData.errorType).toBe("token_expired");
   });
 
-  it("service returns null → healthAnalyticsData.hasAccess = false with server_error errorType", async () => {
+  it("service returns a failure → healthAnalyticsData.hasAccess = false with server_error errorType", async () => {
     mockGetTokenInstance.mockReturnValue(makeValidTokenStorage());
-    mockHealthFetchAndCache.mockResolvedValue(null);
+    mockHealthFetchAndCache.mockResolvedValue({
+      ok: false,
+      kind: "unauthorized",
+      status: 401,
+      endpoint: "platform.getAnalyticsHealth",
+      message: "get analytics health: server returned 401",
+    });
 
     await dashboard.refreshHealthAnalyticsData();
 
@@ -299,7 +305,7 @@ describe("Dashboard.refreshHealthAnalyticsData", () => {
       period_days: 30,
       total_runs: 50,
     };
-    mockHealthFetchAndCache.mockResolvedValue(mockResult);
+    mockHealthFetchAndCache.mockResolvedValue({ ok: true, value: mockResult });
 
     await dashboard.refreshHealthAnalyticsData();
 
@@ -340,9 +346,15 @@ describe("Dashboard.refreshRunsData", () => {
     expect(runsData.isLoading).toBe(false);
   });
 
-  it("service returns null → runsData.hasAccess = false with server_error errorType", async () => {
+  it("service returns a failure → runsData.hasAccess = false with server_error errorType", async () => {
     mockGetTokenInstance.mockReturnValue(makeValidTokenStorage());
-    mockRunsFetchAndCache.mockResolvedValue(null);
+    mockRunsFetchAndCache.mockResolvedValue({
+      ok: false,
+      kind: "server_error",
+      status: 500,
+      endpoint: "platform.getAnalyticsRuns",
+      message: "get analytics runs: server returned 500",
+    });
 
     await dashboard.refreshRunsData();
 
@@ -383,7 +395,7 @@ describe("Dashboard.refreshRunsData", () => {
       has_more: false,
       next_cursor: undefined,
     };
-    mockRunsFetchAndCache.mockResolvedValue(mockRunsResult);
+    mockRunsFetchAndCache.mockResolvedValue({ ok: true, value: mockRunsResult });
 
     await dashboard.refreshRunsData();
 
