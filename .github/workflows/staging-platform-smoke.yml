@@ -1,0 +1,73 @@
+# Staging platform smoke — signed-in canary against a REAL deployment.
+#
+# nightgauge/nightgauge#754, part of epic #741. Every other tier that exercises
+# the platform integration (unit tests, the vitest/go mocks, the docker-compose
+# E2E tier in scripts/test-e2e-platform.sh) runs against a stub — something
+# WE built to encode what WE believe the API does. The epic's root cause was
+# exactly that belief being wrong: user-scoped routes (/v1/analytics/health,
+# /trends, /cost, /v1/audit/reports) were called with an account-scoped
+# license key and answered 401, while the extension told the user to upgrade
+# their plan. A suite built entirely on our own assumptions cannot catch the
+# next one of those. This workflow talks to the real staging API instead.
+#
+# Why a sibling file and not an extension of staging.yml: staging.yml is the
+# release-candidate DRY-RUN — it builds the full VSIX/CLI release artifact set
+# on an `vX.Y.Z-rc.N` tag push and publishes nothing. It shares the word
+# "staging" but not the concept: it never makes a network call to the staging
+# API, has no credential, and is tag-triggered rather than scheduled. Folding
+# a scheduled, credentialed API canary into a tag-triggered artifact-build job
+# would conflate two unrelated meanings of "staging" in one file and force the
+# artifact build to carry a credential it does not need. A sibling workflow
+# keeps each concept single-purpose.
+#
+# What it exercises (sourced from internal/platform/*.go — the Go daemon's own
+# platform client, not a guess): agent registration + heartbeat, the analytics
+# dashboard/usage-summary, health, runs, trends and cost endpoints, the audit
+# reports list, the audit retention config + integrity verification, and the
+# Action Center attention sync. See scripts/staging-platform-smoke.sh for the
+# exact endpoint list and scripts/test-staging-platform-smoke.sh for its
+# mock-server regression suite.
+#
+# Deliberately OFF the PR path: this is a scheduled canary plus a pre-release
+# gate, not a check every PR waits on (a signed-in staging credential has no
+# business being reachable from a fork's PR run). Wiring this workflow into
+# release.yml as an actual pre-release gate is tracked separately — release.yml
+# is out of this change's scope (see nightgauge/nightgauge#754 for why).
+#
+# Required repository configuration — see docs/STAGING_PLATFORM_SMOKE.md for
+# what to provision and how to rotate it:
+#   secrets.STAGING_SESSION_TOKEN     signed-in JWT for a DEDICATED staging
+#                                      test account (never a personal one).
+#   vars.STAGING_PLATFORM_BASE_URL    base URL of the staging platform API.
+#
+# A missing value for either FAILS this job — it does not skip. A silently
+# skipped canary reads as green, which is worse than none (see #732, #744).
+name: Staging Platform Smoke
+
+on:
+  workflow_dispatch: {}
+  schedule:
+    # Daily, 06:41 UTC — an off-peak, non-round minute (avoids the top-of-hour
+    # scheduling stampede other scheduled workflows in this repo also avoid).
+    - cron: "41 6 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: staging-platform-smoke
+  cancel-in-progress: false
+
+jobs:
+  smoke:
+    name: Probe every platform-backed surface
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Run staging platform smoke
+        env:
+          STAGING_PLATFORM_BASE_URL: ${{ vars.STAGING_PLATFORM_BASE_URL }}
+          STAGING_SESSION_TOKEN: ${{ secrets.STAGING_SESSION_TOKEN }}
+        run: bash scripts/staging-platform-smoke.sh
