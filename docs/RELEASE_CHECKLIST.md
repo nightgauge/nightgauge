@@ -12,21 +12,21 @@ observation. Do not tag until that post-merge observation is green.
 
 ## Verdict
 
-**Conditional GO for `v0.2.0-rc.24`.**
+**GO for `v0.2.0-rc.24`.**
 
-Ship after squash-merging
-[PR #795](https://github.com/nightgauge/nightgauge/pull/795) (`fix(#793)`),
-verifying that merge commit's own checks (including both CodeQL languages),
-and running the post-merge hook. No remaining VS Code runtime blocker was
-found in this run.
+[PR #795](https://github.com/nightgauge/nightgauge/pull/795) is squash-merged
+as `c9598c4f`. That merge commit's own checks are green (13/13, including
+CodeQL `go` and `javascript-typescript`). The post-merge hook moved #793 to
+Done. No remaining VS Code runtime blocker was found in this run. This is
+not a GO to cut a stable `v0.2.0`.
 
 ## What this run closed
 
-| Item                                | Evidence                                                                                                                                                                                                                 |
-| ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Publication-boundary headroom       | Policy-maintenance PR #790 landed before release work continued. Ceiling at the end of this run is `high_water_mark` 789 + slack 25 = 814.                                                                               |
-| #785 dashboard loading              | PR #792 squash-merged. The prior session verified all 13 checks on the merge commit, including both CodeQL languages, then ran the post-merge hook and cleaned the branch/worktree.                                      |
-| #793 retry command false confidence | PR #795. Tests now invoke the shipped `retryStage` / `retryFromPhase` handlers. Local `bash scripts/ci-local.sh` passed (12,407 VS Code tests). PR checks all passed, including CodeQL `go` and `javascript-typescript`. |
+| Item                                | Evidence                                                                                                                                                                                                                                                                                            |
+| ----------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Publication-boundary headroom       | Policy-maintenance PR #790 landed before release work continued. Ceiling at the end of this run is `high_water_mark` 789 + slack 25 = 814.                                                                                                                                                          |
+| #785 dashboard loading              | PR #792 squash-merged. The prior session verified all 13 checks on the merge commit, including both CodeQL languages, then ran the post-merge hook and cleaned the branch/worktree.                                                                                                                 |
+| #793 retry command false confidence | PR #795 squash-merged as `c9598c4f`. Tests invoke the shipped `retryStage` / `retryFromPhase` handlers. Local `bash scripts/ci-local.sh` passed (12,407 VS Code tests). PR checks all passed, including CodeQL `go` and `javascript-typescript`. Post-merge hook closed #793 and synced it to Done. |
 
 ## Known-issues baseline
 
@@ -75,43 +75,29 @@ to have the same simulator-vs-production split in this run.
 | [#673](https://github.com/nightgauge/nightgauge/issues/673) | Tree cites many issue numbers that do not exist here. Publication-boundary now blocks _newly added_ out-of-range `#N` citations. The remaining corpus is a mechanical sweep that must land alone.                           | Defer. Do not mix with a logic RC.                                     |
 | [#545](https://github.com/nightgauge/nightgauge/issues/545) | Docs/ADRs still name `skills-smoke.yml`, `claude-plugin-validation.yml`, and `synthetic-regression.yml`, which have never existed. Docs honesty, not a VS Code runtime failure.                                             | Defer. Do not claim those workflows enforce anything in release notes. |
 
-## Pre-tag sequence (execute, do not skip)
+## Pre-tag sequence
 
-1. Squash-merge PR #795. Never `--admin`, never `--auto`:
+Executed:
 
-   ```bash
-   GH_TOKEN=$(gh auth token) gh pr merge 795 --repo nightgauge/nightgauge --squash
-   ```
+1. Squash-merged PR #795 (no `--admin`, no `--auto`). Merge commit:
+   `c9598c4f`.
+2. Fetched `main`; squash SHA is `c9598c4f`.
+3. Post-merge hook (`--issue 793 --pr 795 --project 3`):
+   closed #793, synced board status to Done, no parent epic.
+4. Confirmed #793 is closed. The follow-up lease issue (794) is in Ready.
+   GitHub's closer regex treated a negation in PR #795's body as a closer;
+   794 was reopened and the board row put back on Ready.
 
-2. Fetch `main` and identify the squash SHA.
+5. Merge-commit checks on `c9598c4f`: 13 completed, 0 non-success. Both
+   CodeQL language jobs (`Analyze (go)` and
+   `Analyze (javascript-typescript)`) succeeded.
+6. `scripts/branch-merged-check.sh fix/793-production-retry-command-tests`
+   reported SAFE-DELETE after the worktree was removed. Local branch deleted.
+   Remote branch was already gone.
 
-3. Wait for **that commit's** checks, including both CodeQL languages:
+Still required before tagging:
 
-   ```bash
-   gh api "repos/nightgauge/nightgauge/commits/<merge-sha>/check-runs" \
-     --jq '[.check_runs[]|select(.conclusion!="success" and .conclusion!="skipped" and .conclusion!="neutral")]|length'
-   ```
-
-   Non-zero means `main` is red. Fix that before tagging.
-
-4. Run the post-merge hook (read its output; exit 0 is not proof):
-
-   ```bash
-   nightgauge project resolve --repo nightgauge/nightgauge --json
-   nightgauge hook post-merge --issue 793 --owner nightgauge --repo nightgauge \
-     --pr 795 --project <PROJECT>
-   ```
-
-5. Confirm #793 is closed and on Done. Do **not** close #794.
-
-6. Delete the merged branch/worktree only after
-   `scripts/branch-merged-check.sh` reports SAFE-DELETE:
-
-   ```bash
-   bash scripts/branch-merged-check.sh fix/793-production-retry-command-tests
-   ```
-
-7. Tag `v0.2.0-rc.24` only after steps 3–6. Follow
+7. Tag `v0.2.0-rc.24`. Follow
    [RELEASE_RUNBOOK.md](../RELEASE_RUNBOOK.md) for the actual tag/publish
    procedure; this checklist does not replace it.
 
