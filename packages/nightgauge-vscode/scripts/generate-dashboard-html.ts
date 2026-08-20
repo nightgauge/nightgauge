@@ -393,9 +393,9 @@ const mockHistoryPagination = {
 
 // ---------------------------------------------------------------------------
 // 5. postProcess() — the transforms every generated fixture needs to be
-//    loadable and visible outside a real VS Code host (Issue #1757). Shared
-//    by the original single-fixture output below and the tab/state matrix
-//    added for Issue #751.
+//    loadable and visible outside a real VS Code host. Shared by the
+//    original single-fixture output below and the tab/state matrix added
+//    for Issue #751.
 // ---------------------------------------------------------------------------
 
 function postProcess(rawHtml: string, opts: { embedApiMock: boolean }): string {
