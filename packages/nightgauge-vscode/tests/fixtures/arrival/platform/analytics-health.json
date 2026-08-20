@@ -1,0 +1,41 @@
+{
+  "overall_score": 78.4,
+  "dimensions": [
+    {
+      "name": "reliability",
+      "score": 82.1,
+      "label": "Good",
+      "findings": [
+        {
+          "severity": "warning",
+          "title": "Retry rate above target",
+          "description": "12% of runs required at least one stage retry over the period.",
+          "recommendation": "Investigate feature-validate flakes before raising concurrency.",
+          "issue_number": 612
+        }
+      ]
+    },
+    {
+      "name": "cost_efficiency",
+      "score": 64.5,
+      "label": "Needs attention",
+      "findings": [
+        {
+          "severity": "info",
+          "title": "Opus share rising",
+          "description": "Opus handled 31% of feature-dev stages, up from 18%.",
+          "recommendation": "Review stage model pins for medium-complexity issues."
+        }
+      ]
+    },
+    {
+      "name": "velocity",
+      "score": 91,
+      "label": "Excellent",
+      "findings": []
+    }
+  ],
+  "generated_at": "2026-08-11T17:04:22Z",
+  "period_days": 30,
+  "total_runs": 214
+}

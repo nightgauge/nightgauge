@@ -1,0 +1,36 @@
+[
+  {
+    "nodeId": "I_kwDOM1c9Ns6bT4xQ",
+    "number": 741,
+    "title": "Epic: dashboard surfaces that never receive data",
+    "body": "Four tabs render blank while ~1,600 tests pass.",
+    "state": "OPEN",
+    "labels": ["type:epic", "component:vscode"],
+    "repo": "nightgauge/nightgauge",
+    "url": "https://github.com/nightgauge/nightgauge/issues/741",
+    "assignees": [],
+    "isEpic": true,
+    "subIssues": [
+      {
+        "nodeId": "I_kwDOM1c9Ns6bT5aB",
+        "number": 746,
+        "title": "data-arrival test tier",
+        "state": "OPEN",
+        "repo": "nightgauge/nightgauge",
+        "labels": ["component:vscode", "type:feature"]
+      }
+    ]
+  },
+  {
+    "nodeId": "I_kwDOM1c9Ns6bU1nP",
+    "number": 705,
+    "title": "Epic: multi-repo workspace lifecycle",
+    "body": "Provisioning, sweeping and board sync across workspace repositories.",
+    "state": "OPEN",
+    "labels": ["type:epic"],
+    "repo": "nightgauge/nightgauge",
+    "url": "https://github.com/nightgauge/nightgauge/issues/705",
+    "assignees": ["octocat"],
+    "isEpic": true
+  }
+]

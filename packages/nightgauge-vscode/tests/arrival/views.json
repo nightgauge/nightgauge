@@ -1,0 +1,250 @@
+{
+  "$comment": [
+    "The view register for the data-arrival tier (#746).",
+    "",
+    "scripts/check-arrival-coverage.sh enumerates every view from the product",
+    "itself — dashboard tabs from VALID_TABS in DashboardHtml.ts, webview panels",
+    "from the createWebviewPanel() call sites under src/, tree views from",
+    "package.json's contributes.views — and requires each to appear here exactly",
+    "once. Adding a view therefore cannot be done silently: the guard fails until",
+    "the view is either given an arrival test or explicitly recorded as pending.",
+    "",
+    "A `dashboard-tab` entry may NOT be pending. Those are the surfaces epic #741",
+    "found broken, and this issue's slice covers all thirteen.",
+    "",
+    "`arrivalTest` names the file, and `marker` the string that file must contain",
+    "(`arrival:<id>`) — so deleting or renaming the tests for one view fails the",
+    "guard instead of leaving a registry entry pointing at a file that no longer",
+    "covers it."
+  ],
+  "views": [
+    {
+      "id": "overview",
+      "kind": "dashboard-tab",
+      "transport": "local telemetry (JSONL) + platform.getUsageSummary",
+      "arrivalTest": "tests/arrival/dashboardLocalTabs.test.ts",
+      "failureFidelity": true
+    },
+    {
+      "id": "pipeline",
+      "kind": "dashboard-tab",
+      "transport": "local telemetry (JSONL) + PipelineStateService events",
+      "arrivalTest": "tests/arrival/dashboardLocalTabs.test.ts",
+      "failureFidelity": false,
+      "note": "No failure kind exists for a local read beyond 'no runs yet', which the History empty-state test covers."
+    },
+    {
+      "id": "analytics",
+      "kind": "dashboard-tab",
+      "transport": "local telemetry (JSONL)",
+      "arrivalTest": "tests/arrival/dashboardLocalTabs.test.ts",
+      "failureFidelity": false
+    },
+    {
+      "id": "history",
+      "kind": "dashboard-tab",
+      "transport": "local telemetry (JSONL)",
+      "arrivalTest": "tests/arrival/dashboardLocalTabs.test.ts",
+      "failureFidelity": true
+    },
+    {
+      "id": "epics",
+      "kind": "dashboard-tab",
+      "transport": "issue.list over IPC (GitHub)",
+      "arrivalTest": "tests/arrival/dashboardLocalTabs.test.ts",
+      "failureFidelity": true
+    },
+    {
+      "id": "audit",
+      "kind": "dashboard-tab",
+      "transport": "HTTPS GET /v1/audit-log with the session JWT",
+      "arrivalTest": "tests/arrival/dashboardExternalTabs.test.ts",
+      "failureFidelity": true
+    },
+    {
+      "id": "discovery",
+      "kind": "dashboard-tab",
+      "transport": "filesystem (.nightgauge/release-watch, improvement-runs)",
+      "arrivalTest": "tests/arrival/dashboardExternalTabs.test.ts",
+      "failureFidelity": true
+    },
+    {
+      "id": "cost",
+      "kind": "dashboard-tab",
+      "transport": "platform.getCostAnalytics over IPC",
+      "arrivalTest": "tests/arrival/dashboardPlatformTabs.test.ts",
+      "failureFidelity": true
+    },
+    {
+      "id": "health",
+      "kind": "dashboard-tab",
+      "transport": "platform.getAnalyticsHealth over IPC",
+      "arrivalTest": "tests/arrival/dashboardPlatformTabs.test.ts",
+      "failureFidelity": true
+    },
+    {
+      "id": "runs",
+      "kind": "dashboard-tab",
+      "transport": "platform.getAnalyticsRuns over IPC",
+      "arrivalTest": "tests/arrival/dashboardPlatformTabs.test.ts",
+      "failureFidelity": true
+    },
+    {
+      "id": "trends",
+      "kind": "dashboard-tab",
+      "transport": "platform.getAnalyticsTrends over IPC",
+      "arrivalTest": "tests/arrival/dashboardPlatformTabs.test.ts",
+      "failureFidelity": true
+    },
+    {
+      "id": "compliance",
+      "kind": "dashboard-tab",
+      "transport": "platform.auditListReports over IPC",
+      "arrivalTest": "tests/arrival/dashboardPlatformTabs.test.ts",
+      "failureFidelity": true
+    },
+    {
+      "id": "dependencies",
+      "kind": "dashboard-tab",
+      "transport": "pr.list over IPC (GitHub)",
+      "arrivalTest": "tests/arrival/dashboardExternalTabs.test.ts",
+      "failureFidelity": true
+    },
+
+    {
+      "id": "src/views/dashboard/Dashboard.ts",
+      "kind": "webview-panel",
+      "transport": "see the thirteen dashboard-tab entries above",
+      "arrivalTest": "tests/arrival/dashboardPlatformTabs.test.ts",
+      "failureFidelity": true,
+      "marker": "arrival:health"
+    },
+    {
+      "id": "src/views/settings/SettingsPanel.ts",
+      "kind": "webview-panel",
+      "transport": "ConfigBridge + workspace config files",
+      "arrivalTest": null,
+      "pending": "#746 slice 2 — non-dashboard webview panels"
+    },
+    {
+      "id": "src/views/outputWindow/OutputWindow.ts",
+      "kind": "webview-panel",
+      "transport": "SlotOutputManager stream events",
+      "arrivalTest": null,
+      "pending": "#746 slice 2 — non-dashboard webview panels"
+    },
+    {
+      "id": "src/views/brownfield/BrownfieldDashboard.ts",
+      "kind": "webview-panel",
+      "transport": "BrownfieldDataService (local analysis output)",
+      "arrivalTest": null,
+      "pending": "#746 slice 2 — non-dashboard webview panels"
+    },
+    {
+      "id": "src/views/approval/ApprovalDialog.ts",
+      "kind": "webview-panel",
+      "transport": "pipeline approval IPC events",
+      "arrivalTest": null,
+      "pending": "#746 slice 2 — non-dashboard webview panels"
+    },
+    {
+      "id": "src/views/onboarding/GettingStartedPanel.ts",
+      "kind": "webview-panel",
+      "transport": "workspace probe (config, binary, auth state)",
+      "arrivalTest": null,
+      "pending": "#746 slice 2 — non-dashboard webview panels"
+    },
+    {
+      "id": "src/views/doctor/AdapterDoctorPanel.ts",
+      "kind": "webview-panel",
+      "transport": "doctor --adapters over IPC",
+      "arrivalTest": null,
+      "pending": "#746 slice 2 — non-dashboard webview panels"
+    },
+    {
+      "id": "src/views/notifier/NotifierSettingsPanel.ts",
+      "kind": "webview-panel",
+      "transport": "ConfigBridge notifier config",
+      "arrivalTest": null,
+      "pending": "#746 slice 2 — non-dashboard webview panels"
+    },
+    {
+      "id": "src/views/telemetry/TelemetrySettingsPanel.ts",
+      "kind": "webview-panel",
+      "transport": "ConfigBridge telemetry config",
+      "arrivalTest": null,
+      "pending": "#746 slice 2 — non-dashboard webview panels"
+    },
+    {
+      "id": "src/views/summary/PipelineSummary.ts",
+      "kind": "webview-panel",
+      "transport": "local telemetry (run record)",
+      "arrivalTest": null,
+      "pending": "#746 slice 2 — non-dashboard webview panels"
+    },
+    {
+      "id": "src/views/recovery/RecoveryDialog.ts",
+      "kind": "webview-panel",
+      "transport": "recovery registry over IPC",
+      "arrivalTest": null,
+      "pending": "#746 slice 2 — non-dashboard webview panels"
+    },
+    {
+      "id": "src/views/dashboard/KnowledgeValueDashboard.ts",
+      "kind": "webview-panel",
+      "transport": "filesystem (.nightgauge/knowledge)",
+      "arrivalTest": null,
+      "pending": "#746 slice 2 — non-dashboard webview panels"
+    },
+
+    {
+      "id": "nightgauge.pipelineView",
+      "kind": "tree-view",
+      "transport": "PipelineStateService + IPC events",
+      "arrivalTest": null,
+      "pending": "#746 slice 3 — tree views"
+    },
+    {
+      "id": "nightgauge.workflowView",
+      "kind": "tree-view",
+      "transport": "workflow journal over IPC",
+      "arrivalTest": null,
+      "pending": "#746 slice 3 — tree views"
+    },
+    {
+      "id": "nightgauge.repositoriesView",
+      "kind": "tree-view",
+      "transport": "workspace manifest + board counts over IPC",
+      "arrivalTest": null,
+      "pending": "#746 slice 3 — tree views"
+    },
+    {
+      "id": "nightgauge.queryResults",
+      "kind": "tree-view",
+      "transport": "QueryService over IPC",
+      "arrivalTest": null,
+      "pending": "#746 slice 3 — tree views"
+    },
+    {
+      "id": "nightgauge.knowledgeView",
+      "kind": "tree-view",
+      "transport": "filesystem (.nightgauge/knowledge)",
+      "arrivalTest": null,
+      "pending": "#746 slice 3 — tree views"
+    },
+    {
+      "id": "nightgauge.activeIssueKnowledgeView",
+      "kind": "tree-view",
+      "transport": "filesystem (.nightgauge/knowledge for the active issue)",
+      "arrivalTest": null,
+      "pending": "#746 slice 3 — tree views"
+    },
+    {
+      "id": "nightgauge.attentionView",
+      "kind": "tree-view",
+      "transport": "attention sweep over IPC",
+      "arrivalTest": null,
+      "pending": "#746 slice 3 — tree views"
+    }
+  ]
+}
