@@ -3,7 +3,9 @@ import { defineConfig, devices } from "@playwright/test";
 const isCI = !!process.env.CI;
 
 export default defineConfig({
-  // Include both legacy tests/playwright and new tests/e2e-playwright
+  // All browser-driven webview tests live under tests/playwright/ and are
+  // named *.playwright.ts — the single tier, single convention consolidated
+  // by #744 (tests/e2e-playwright/ no longer exists).
   testDir: "./tests",
   testMatch: ["**/*.playwright.ts"],
 

@@ -30,7 +30,13 @@ export default defineConfig({
     // under runner load are a real (separate) failure mode. NOT the #173 fix.
     teardownTimeout: 10_000,
     include: ["tests/**/*.test.ts"],
-    exclude: ["tests/playwright/**", "tests/e2e-playwright/**"],
+    // Browser-driven webview tests live under tests/playwright/ and use the
+    // *.playwright.ts naming convention exclusively (never *.test.ts) — see
+    // playwright.config.ts's testMatch. Excluding the whole directory keeps
+    // that tier out of vitest's collection even if a stray *.test.ts ever
+    // lands there; scripts/check-test-runner-coverage.sh (#744) is what
+    // actually catches that case and fails CI on it.
+    exclude: ["tests/playwright/**"],
     setupFiles: ["tests/setup.ts"],
     coverage: {
       provider: "v8",
