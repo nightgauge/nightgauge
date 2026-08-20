@@ -7,6 +7,7 @@
  *
  * @see Issue #1479 - Add usage metering and quota display
  * @see Issue #2091 - Migrated from PlatformApiClient HTTP to Go IPC
+ * @see Issue 743 - typed failures instead of a swallowed catch{}
  */
 
 import * as vscode from "vscode";
@@ -15,8 +16,12 @@ import type { UsageSummaryResult } from "./IpcClientBase";
 import type { NotificationService } from "./NotificationService";
 import type { PlatformQuotaData } from "../views/dashboard/DashboardState";
 import { getLimitsSettings } from "../config/limitsSettings";
+import { Logger } from "../utils/logger";
+import { platformOk, reportPlatformFailure, type PlatformResult } from "./platformResult";
 
 type AlertLevel = "none" | "warning" | "critical";
+
+const ENDPOINT = "platform.getUsageSummary";
 
 /** Transform IPC UsageSummaryResult into display-ready PlatformQuotaData */
 function toQuotaData(summary: UsageSummaryResult, fetchedAt: string): PlatformQuotaData {
@@ -42,6 +47,7 @@ export class PlatformQuotaService implements vscode.Disposable {
   private cached: PlatformQuotaData | null = null;
   private lastAlertLevel: AlertLevel = "none";
   private fetchInProgress = false;
+  private readonly logger = new Logger("Nightgauge Platform: Quota");
 
   constructor(
     private readonly ipcClient: IpcClientGenerated,
@@ -50,13 +56,18 @@ export class PlatformQuotaService implements vscode.Disposable {
 
   /**
    * Fetch usage summary via IPC, transform, cache, and return.
-   * On error: returns stale cached data with isStale=true.
-   * On first-fetch failure with no cache: returns null.
+   * On error with a cache already populated: logs the failure, marks the
+   * cache stale, and returns it — the dashboard footer shows "Showing cached
+   * data" rather than losing the numbers over a transient blip.
+   * On error with no cache yet: logs the failure and returns a typed
+   * PlatformFailure (never `null`) so the caller knows why. Never throws.
    */
-  async fetchAndCache(): Promise<PlatformQuotaData | null> {
+  async fetchAndCache(): Promise<PlatformResult<PlatformQuotaData>> {
     // Single in-flight request guard
     if (this.fetchInProgress) {
-      return this.cached;
+      return this.cached !== null
+        ? platformOk(this.cached)
+        : reportPlatformFailure(this.logger, new Error("fetch already in progress"), ENDPOINT);
     }
     this.fetchInProgress = true;
 
@@ -66,15 +77,18 @@ export class PlatformQuotaService implements vscode.Disposable {
       const data = toQuotaData(summary, fetchedAt);
       this.cached = data;
       this.maybeNotify(data);
-      return data;
-    } catch {
-      // IPC or network error — return stale cache if available
+      return platformOk(data);
+    } catch (err) {
+      const failure = reportPlatformFailure(this.logger, err, ENDPOINT);
+      // IPC or network error — degrade to stale cache if available, rather
+      // than losing the last-known numbers over a transient failure. The
+      // failure itself is still logged above with its real kind/status.
       if (this.cached !== null) {
         const stale: PlatformQuotaData = { ...this.cached, isStale: true };
         this.cached = stale;
-        return stale;
+        return platformOk(stale);
       }
-      return null;
+      return failure;
     } finally {
       this.fetchInProgress = false;
     }
@@ -103,6 +117,6 @@ export class PlatformQuotaService implements vscode.Disposable {
   }
 
   dispose(): void {
-    // No timers or subscriptions to clean up
+    this.logger.dispose();
   }
 }

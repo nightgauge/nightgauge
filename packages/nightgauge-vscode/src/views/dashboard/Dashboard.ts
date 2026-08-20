@@ -2955,7 +2955,8 @@ export class Dashboard implements vscode.Disposable {
     try {
       const ipc = (await import("../../services/IpcClient")).IpcClient.getInstance();
       this.platformCostService ??= new PlatformCostService(ipc);
-      this.platformCostData = await this.platformCostService.fetchAndCache(this.costDateRange);
+      const costResult = await this.platformCostService.fetchAndCache(this.costDateRange);
+      this.platformCostData = costResult.ok ? costResult.value : null;
       this.updatePanel("costRefresh");
     } catch {
       // IPC unavailable — leave data null, don't throw
@@ -3012,7 +3013,7 @@ export class Dashboard implements vscode.Disposable {
       const ipc = (await import("../../services/IpcClient")).IpcClient.getInstance();
       this.platformAnalyticsHealthService ??= new PlatformAnalyticsHealthService(ipc);
       const result = await this.platformAnalyticsHealthService.fetchAndCache();
-      if (result === null) {
+      if (!result.ok) {
         const errorType: PlatformErrorType = "server_error";
         this.healthAnalyticsData = {
           result: null,
@@ -3021,9 +3022,9 @@ export class Dashboard implements vscode.Disposable {
           errorType,
           errorMessage: "Platform health API returned an error",
         };
-        this.logger.info("platform:health-tab-error", { errorType });
+        this.logger.info("platform:health-tab-error", { errorType, kind: result.kind });
       } else {
-        this.healthAnalyticsData = { result, hasAccess: true, isLoading: false };
+        this.healthAnalyticsData = { result: result.value, hasAccess: true, isLoading: false };
         this.healthAnalyticsFetchedAt = new Date();
       }
       this.updatePanel("healthRefresh");
@@ -3077,7 +3078,7 @@ export class Dashboard implements vscode.Disposable {
 
       const result = await this.platformRunsService.fetchAndCache(this.runsFilters, cursor, 20);
 
-      if (result === null) {
+      if (!result.ok) {
         const errorType: PlatformErrorType = "server_error";
         this.runsData = {
           entries: [],
@@ -3087,22 +3088,23 @@ export class Dashboard implements vscode.Disposable {
           hasAccess: false,
           errorType,
         };
-        this.logger.info("platform:runs-tab-error", { errorType });
+        this.logger.info("platform:runs-tab-error", { errorType, kind: result.kind });
       } else {
+        const data = result.value;
         // Store next cursor in the stack for the next page
         const updatedStack = [...this.runsPagination.cursorStack];
         const nextPage = this.runsPagination.page + 1;
-        if (result.has_more && result.next_cursor) {
-          updatedStack[nextPage] = result.next_cursor;
+        if (data.has_more && data.next_cursor) {
+          updatedStack[nextPage] = data.next_cursor;
         }
         this.runsPagination = {
           ...this.runsPagination,
-          totalCount: result.total_count,
-          hasMore: result.has_more,
+          totalCount: data.total_count,
+          hasMore: data.has_more,
           cursorStack: updatedStack,
         };
         this.runsData = {
-          entries: result.entries,
+          entries: data.entries,
           filters: this.runsFilters,
           pagination: this.runsPagination,
           isLoading: false,
@@ -3146,7 +3148,7 @@ export class Dashboard implements vscode.Disposable {
 
       const result = await this.platformTrendsService.fetchAndCache(this.trendsDateRange);
 
-      if (result === null) {
+      if (!result.ok) {
         this.trendsData = {
           result: null,
           isLoading: false,
@@ -3156,7 +3158,7 @@ export class Dashboard implements vscode.Disposable {
         };
       } else {
         this.trendsData = {
-          result,
+          result: result.value,
           isLoading: false,
           hasAccess: true,
           showComparison: this.trendsShowComparison,
@@ -3198,7 +3200,7 @@ export class Dashboard implements vscode.Disposable {
 
       const result = await this.platformComplianceService.fetchAndCache(cursor, 20);
 
-      if (result === null) {
+      if (!result.ok) {
         this.complianceData = {
           reports: [],
           filters: {},
@@ -3209,12 +3211,12 @@ export class Dashboard implements vscode.Disposable {
         };
       } else {
         this.complianceData = {
-          reports: result.reports,
+          reports: result.value.reports,
           filters: {},
           pagination: {
             cursor,
-            nextCursor: result.nextCursor,
-            hasMore: result.hasMore,
+            nextCursor: result.value.nextCursor,
+            hasMore: result.value.hasMore,
           },
           isLoading: false,
           hasAccess: true,

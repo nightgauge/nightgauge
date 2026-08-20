@@ -260,6 +260,45 @@ export default [
     },
   },
 
+  // Issue 743: no bare `catch {}` in the platform services — each of the six
+  // Platform*Service.ts classes used to swallow its IPC error with a
+  // parameter-less catch and silently return null or a stale cache. Forbid
+  // reintroducing that shape here; a caught error must be classified via
+  // reportPlatformFailure()/classifyPlatformError() (see platformResult.ts),
+  // which requires binding the error (`catch (err)`).
+  //
+  // "no-restricted-syntax" is not merged across config objects — the whole
+  // array from the last matching block wins — so this restates the
+  // sync-subprocess-ban substr/execFileSync/execSync selectors these files
+  // already inherit, rather than silently dropping them for just this glob.
+  {
+    files: ["packages/nightgauge-vscode/src/services/Platform*Service.ts"],
+    rules: {
+      "no-restricted-syntax": [
+        "error",
+        {
+          selector: "CallExpression[callee.property.name='substr']",
+          message: "String.prototype.substr() is deprecated. Use .slice() or .substring() instead.",
+        },
+        {
+          selector: "CallExpression[callee.name='execFileSync']",
+          message:
+            'execFileSync blocks the VSCode extension host event loop ("Window is not responding"). Use `await execFileAsync(...)` instead — see ContextAssembler.ts or HeadlessOrchestrator.ts for the promisify(execFile) pattern.',
+        },
+        {
+          selector: "CallExpression[callee.name='execSync']",
+          message:
+            'execSync blocks the VSCode extension host event loop ("Window is not responding"). Use `await execAsync(...)` instead.',
+        },
+        {
+          selector: "CatchClause:not([param])",
+          message:
+            "Bare `catch {}` discards the real IPC/HTTP error (issue 743). Bind it (`catch (err)`) and classify it with reportPlatformFailure()/classifyPlatformError() from ./platformResult instead of dropping it.",
+        },
+      ],
+    },
+  },
+
   // CommonJS Node.js scripts (postinstall, platform detection, etc.)
   {
     files: ["packages/*/scripts/**/*.js"],
