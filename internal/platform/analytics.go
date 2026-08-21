@@ -827,12 +827,154 @@ type AnalyticsHealthDimension struct {
 }
 
 // AnalyticsHealthResult is the IPC-facing representation of GET /v1/analytics/health (#3318).
+//
+// This is the dashboard/webview shape (overall_score + a dimensions array).
+// It is NOT the platform wire: GET /v1/analytics/health returns PipelineHealthScore
+// (compositeScore + seven named camelCase dimensions). GetAnalyticsHealth maps
+// the wire into this struct. Decoding the wire straight into these tags yields
+// zeros and a nil dimensions slice, which used to leave the Health tab stuck
+// on its loading state.
 type AnalyticsHealthResult struct {
 	OverallScore float64                    `json:"overall_score"`
 	Dimensions   []AnalyticsHealthDimension `json:"dimensions"`
 	GeneratedAt  string                     `json:"generated_at"`
 	PeriodDays   int                        `json:"period_days"`
 	TotalRuns    int                        `json:"total_runs"`
+}
+
+// healthDimensionWire is one named dimension on the platform PipelineHealthScore.
+type healthDimensionWire struct {
+	Score           float64  `json:"score"`
+	Grade           string   `json:"grade"`
+	Findings        []string `json:"findings"`
+	Recommendations []string `json:"recommendations"`
+}
+
+// pipelineHealthScoreWire is the live GET /v1/analytics/health body
+// (OpenAPI PipelineHealthScore). Dimension fields are pointers so a
+// response that only carries the composite fields still decodes.
+type pipelineHealthScoreWire struct {
+	CompositeScore      float64              `json:"compositeScore"`
+	CompositeGrade      string               `json:"compositeGrade"`
+	ComputedAt          string               `json:"computedAt"`
+	PeriodDays          int                  `json:"periodDays"`
+	TotalRunsAnalyzed   int                  `json:"totalRunsAnalyzed"`
+	TokenEconomics      *healthDimensionWire `json:"tokenEconomics"`
+	CostHealth          *healthDimensionWire `json:"costHealth"`
+	StageEffectiveness  *healthDimensionWire `json:"stageEffectiveness"`
+	ModelRouting        *healthDimensionWire `json:"modelRouting"`
+	Reliability         *healthDimensionWire `json:"reliability"`
+	SelfImprovementLoop *healthDimensionWire `json:"selfImprovementLoop"`
+	PipelineVelocity    *healthDimensionWire `json:"pipelineVelocity"`
+}
+
+// healthDimensionOrder is the seven-dimension order the platform documents
+// (and the dashboard Health tab renders). Keep it in this file so a new
+// dimension cannot be added to the wire struct and silently dropped from IPC.
+var healthDimensionOrder = []struct {
+	name  string
+	label string
+	get   func(pipelineHealthScoreWire) *healthDimensionWire
+}{
+	{
+		name:  "token_economics",
+		label: "Token Economics",
+		get:   func(w pipelineHealthScoreWire) *healthDimensionWire { return w.TokenEconomics },
+	},
+	{
+		name:  "cost_health",
+		label: "Cost Health",
+		get:   func(w pipelineHealthScoreWire) *healthDimensionWire { return w.CostHealth },
+	},
+	{
+		name:  "stage_effectiveness",
+		label: "Stage Effectiveness",
+		get:   func(w pipelineHealthScoreWire) *healthDimensionWire { return w.StageEffectiveness },
+	},
+	{
+		name:  "model_routing",
+		label: "Model Routing",
+		get:   func(w pipelineHealthScoreWire) *healthDimensionWire { return w.ModelRouting },
+	},
+	{
+		name:  "reliability",
+		label: "Reliability",
+		get:   func(w pipelineHealthScoreWire) *healthDimensionWire { return w.Reliability },
+	},
+	{
+		name:  "self_improvement_loop",
+		label: "Self-Improvement Loop",
+		get:   func(w pipelineHealthScoreWire) *healthDimensionWire { return w.SelfImprovementLoop },
+	},
+	{
+		name:  "pipeline_velocity",
+		label: "Pipeline Velocity",
+		get:   func(w pipelineHealthScoreWire) *healthDimensionWire { return w.PipelineVelocity },
+	},
+}
+
+func healthGradeSeverity(grade string) string {
+	switch strings.ToUpper(strings.TrimSpace(grade)) {
+	case "F":
+		return "critical"
+	case "D":
+		return "high"
+	case "C":
+		return "warning"
+	default:
+		return "info"
+	}
+}
+
+func mapHealthFindings(dim healthDimensionWire) []AnalyticsHealthFinding {
+	n := len(dim.Findings)
+	if len(dim.Recommendations) > n {
+		n = len(dim.Recommendations)
+	}
+	out := make([]AnalyticsHealthFinding, 0, n)
+	severity := healthGradeSeverity(dim.Grade)
+	for i := 0; i < n; i++ {
+		finding := AnalyticsHealthFinding{Severity: severity}
+		if i < len(dim.Findings) {
+			finding.Title = dim.Findings[i]
+			finding.Description = dim.Findings[i]
+		}
+		if i < len(dim.Recommendations) {
+			finding.Recommendation = dim.Recommendations[i]
+			if finding.Title == "" {
+				finding.Title = dim.Recommendations[i]
+				finding.Description = dim.Recommendations[i]
+			}
+		}
+		if finding.Title == "" {
+			continue
+		}
+		out = append(out, finding)
+	}
+	return out
+}
+
+func mapPipelineHealthScore(wire pipelineHealthScoreWire) AnalyticsHealthResult {
+	dims := make([]AnalyticsHealthDimension, 0, len(healthDimensionOrder))
+	for _, meta := range healthDimensionOrder {
+		src := meta.get(wire)
+		if src == nil {
+			continue
+		}
+		dims = append(dims, AnalyticsHealthDimension{
+			Name:     meta.name,
+			Score:    src.Score,
+			Label:    meta.label,
+			Findings: mapHealthFindings(*src),
+		})
+	}
+	return AnalyticsHealthResult{
+		OverallScore: wire.CompositeScore,
+		Dimensions:   dims,
+		GeneratedAt:  wire.ComputedAt,
+		PeriodDays:   wire.PeriodDays,
+		TotalRuns:    wire.TotalRunsAnalyzed,
+	}
 }
 
 // GetAnalyticsHealth fetches the 7-dimension health score from GET /v1/analytics/health.
@@ -844,7 +986,7 @@ type AnalyticsHealthResult struct {
 // to collect a 401.
 func (s *AnalyticsService) GetAnalyticsHealth(ctx context.Context) (*AnalyticsHealthResult, error) {
 	if !s.client.IsOnline() {
-		return &AnalyticsHealthResult{}, nil
+		return &AnalyticsHealthResult{Dimensions: []AnalyticsHealthDimension{}}, nil
 	}
 
 	req, err := s.client.newRequest(ctx, requestSpec{Op: api.OpAnalyticsHealth})
@@ -862,10 +1004,11 @@ func (s *AnalyticsService) GetAnalyticsHealth(ctx context.Context) (*AnalyticsHe
 		return nil, fmt.Errorf("get analytics health: server returned %d", resp.StatusCode)
 	}
 
-	var result AnalyticsHealthResult
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	var wire pipelineHealthScoreWire
+	if err := json.NewDecoder(resp.Body).Decode(&wire); err != nil {
 		return nil, fmt.Errorf("decode analytics health response: %w", err)
 	}
+	result := mapPipelineHealthScore(wire)
 	return &result, nil
 }
 

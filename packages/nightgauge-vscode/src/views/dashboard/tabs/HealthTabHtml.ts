@@ -69,7 +69,7 @@ function formatFreshnessLabel(fetchedAt: Date | null): string {
 function getDimensionCardHtml(dim: AnalyticsHealthDimension): string {
   const score = Math.round(dim.score);
   const colorClass = scoreColorClass(dim.score);
-  const findingCount = dim.findings.length;
+  const findingCount = Array.isArray(dim.findings) ? dim.findings.length : 0;
   const label = escapeHtml(dim.label || dim.name);
   return `
     <div class="health-dim-card">
@@ -280,12 +280,15 @@ export function getHealthTabHtml(
   const overallColorClass = scoreColorClass(data.overall_score);
   const freshnessLabel = formatFreshnessLabel(fetchedAt);
 
-  const dimCardsHtml = data.dimensions.map(getDimensionCardHtml).join("");
+  // A live 200 that failed to map used to arrive with `dimensions: null`.
+  // `.map` threw during render and left the tab stuck on "Loading health data…".
+  const dimensions = Array.isArray(data.dimensions) ? data.dimensions : [];
+  const dimCardsHtml = dimensions.map(getDimensionCardHtml).join("");
 
   // Collect all findings across all dimensions, sorted by severity
   const severityOrder = ["critical", "high", "warning", "info"];
-  const allFindings = data.dimensions.flatMap((dim) =>
-    dim.findings.map((f) => ({ ...f, dimName: dim.name }))
+  const allFindings = dimensions.flatMap((dim) =>
+    (Array.isArray(dim.findings) ? dim.findings : []).map((f) => ({ ...f, dimName: dim.name }))
   );
   allFindings.sort((a, b) => severityOrder.indexOf(a.severity) - severityOrder.indexOf(b.severity));
 

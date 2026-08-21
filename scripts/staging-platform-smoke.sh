@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Staging platform smoke — calls every platform-backed surface against a real
-# deployment with a real signed-in credential and asserts on status codes.
+# deployment with a real signed-in credential and asserts on status codes
+# plus the Health response's live PipelineHealthScore keys. A 200 whose body
+# is the wrong contract still blanks the VSCode Health tab.
 #
 # Why this exists (nightgauge/nightgauge#754, part of epic #741): every other
 # test tier for the platform integration runs against a stub, and stubs only
@@ -147,6 +149,37 @@ call() {
   LAST_BODY_FILE="$body_file"
 }
 
+# assert_object_keys LABEL KEY [KEY...]
+# After a 2xx, require the JSON object to carry these top-level keys. A 200
+# whose body is the wrong contract is the blank-dashboard-tab class of bug:
+# status-only probes stay green while the Health tab never renders scores.
+assert_object_keys() {
+  local label="$1"
+  shift
+  case "$LAST_STATUS" in
+    2??) ;;
+    *) return 0 ;;
+  esac
+  if ! jq -e 'type == "object"' "$LAST_BODY_FILE" >/dev/null 2>&1; then
+    OVERALL_STATUS=1
+    echo "::error::${label} returned ${LAST_STATUS} but the body is not a JSON object. The dashboard maps this payload; a 200 with the wrong shape is a blank tab."
+    printf '%s\t%s\t%s\t%s\n' "${label} body shape" "-" "$LAST_STATUS" "FAIL (shape)" >> "$RESULTS_FILE"
+    return 0
+  fi
+  local missing=()
+  local key
+  for key in "$@"; do
+    if ! jq -e --arg k "$key" 'has($k)' "$LAST_BODY_FILE" >/dev/null 2>&1; then
+      missing+=("$key")
+    fi
+  done
+  if [ "${#missing[@]}" -gt 0 ]; then
+    OVERALL_STATUS=1
+    echo "::error::${label} returned ${LAST_STATUS} but is missing required keys: ${missing[*]}. Status-only probes miss this; the VSCode Health tab maps compositeScore from GET /v1/analytics/health."
+    printf '%s\t%s\t%s\t%s\n' "${label} body shape" "-" "$LAST_STATUS" "FAIL (shape)" >> "$RESULTS_FILE"
+  fi
+}
+
 record_skipped() {
   local label="$1" endpoint="$2" reason="$3"
   printf '%s\t%s\t-\tFAIL (%s)\n' "$label" "$endpoint" "$reason" >> "$RESULTS_FILE"
@@ -176,6 +209,7 @@ fi
 # --- Analytics ---------------------------------------------------------------
 call GET "/v1/analytics/dashboard?range=7d" "Analytics dashboard / usage summary"
 call GET "/v1/analytics/health" "Analytics health"
+assert_object_keys "Analytics health" compositeScore compositeGrade computedAt periodDays totalRunsAnalyzed
 call GET "/v1/analytics/runs?limit=1" "Analytics runs"
 call GET "/v1/analytics/trends?period=week" "Analytics trends"
 call GET "/v1/analytics/cost" "Analytics cost"

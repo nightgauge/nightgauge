@@ -4,8 +4,10 @@
 `scripts/staging-platform-smoke.sh` on a daily schedule and on
 `workflow_dispatch`. It authenticates against the **real** staging platform
 API with a real signed-in credential and calls every platform-backed surface
-the Go daemon talks to, asserting on HTTP status codes — not just that a
-response body is non-empty.
+the Go daemon talks to, asserting on HTTP status codes and — for Health —
+that the 200 body is a `PipelineHealthScore` (`compositeScore`,
+`compositeGrade`, `computedAt`, `periodDays`, `totalRunsAnalyzed`). A 200
+whose body is some other contract still blanks the VSCode Health tab.
 
 This exists because every other test tier for the platform integration
 (unit tests, the Go/vitest mocks, the docker-compose E2E tier in
@@ -145,6 +147,11 @@ against a local mock server:
   step summary.
 - A single `401` fails the whole run: non-zero exit, a loud `::error::`
   annotation, and a `FAIL (auth)` summary row.
+- A `200` on `GET /v1/analytics/health` whose body is not
+  `PipelineHealthScore` (for example the invented `{overall_score,
+dimensions}` the Health tab used to decode) fails the run as
+  `FAIL (shape)`. Status-only probes stay green through that class of
+  defect.
 - A missing `STAGING_SESSION_TOKEN` or `STAGING_PLATFORM_BASE_URL` fails
   immediately, before any HTTP call is attempted (the mock server sees zero
   requests in that case), with a message that says "fail", not "skip".
@@ -153,11 +160,13 @@ against a local mock server:
 
 **Not verified by this suite, and not verifiable without a maintainer
 supplying the real secrets and dispatching the workflow**: that the real
-staging deployment is reachable, that its response _shapes_ match what
-`internal/platform/*.go` expects (the mock only returns `{}` bodies), that the
-`STAGING_SESSION_TOKEN` a maintainer provisions actually carries the right
-scopes/role for every route (in particular the audit endpoints' owner/admin
-role requirement), and that the dedicated staging account is on the enterprise
+staging deployment is reachable, that every endpoint's response _shape_
+matches what `internal/platform/*.go` expects (the mock returns `{}` except
+for Health, which is asserted as `PipelineHealthScore` on both the mock and
+a real dispatch), that the `STAGING_SESSION_TOKEN` a maintainer provisions
+actually carries the right scopes/role for every route (in particular the
+audit endpoints' owner/admin role requirement), and that the dedicated
+staging account is on the enterprise
 plan tier the retention/integrity endpoints require. Do not treat a merged PR
 implementing this workflow as proof the staging canary works — treat it as
 proof the canary is correctly _wired_. It is proven only by a green
