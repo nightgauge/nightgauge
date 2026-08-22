@@ -47,15 +47,39 @@ bad() {
   FAIL=$((FAIL + 1))
 }
 
-# Reap by PID, always: a `jobs`-based kill would match nothing from any later
-# shell, and the suite spawns python children that must not outlive this script.
+# Reap by process GROUP, and never by `jobs`: a `jobs`-based kill matches nothing
+# from any later shell, and killing the suite's bash alone leaves its in-flight
+# `git` and `python3` children running.
+#
+# Those orphans are not a tidiness problem, they are a correctness one. A harness
+# timeout kills the whole group; killing only the parent leaves children that go
+# on writing into the sandbox -- and on the Linux runner one of them re-created
+# the sandbox directory AFTER the next run's sweep had removed it, turning a
+# green macOS run into a red CI one with the sweep wrongly accused. `set -m`
+# gives the background job its own process group on both platforms, so
+# `-$SUITE_PID` addresses the whole tree.
+kill_suite_group() {
+  local pid="$1" i
+  kill -9 -"$pid" 2>/dev/null || kill -9 "$pid" 2>/dev/null
+  wait "$pid" 2>/dev/null
+  # Bounded settle: no descendant may outlive the kill, or the assertions below
+  # race whatever it is still writing.
+  for i in $(seq 1 100); do
+    pgrep -g "$pid" >/dev/null 2>&1 || return 0
+    sleep 0.1
+  done
+  return 1
+}
+
 cleanup() {
-  if [ -n "$SUITE_PID" ] && kill -0 "$SUITE_PID" 2>/dev/null; then
-    kill -9 "$SUITE_PID" 2>/dev/null
-    wait "$SUITE_PID" 2>/dev/null
+  if [ -n "$SUITE_PID" ]; then
+    kill_suite_group "$SUITE_PID" >/dev/null 2>&1
   fi
 }
 trap cleanup EXIT INT TERM
+
+# Job control: each background job becomes its own process group leader.
+set -m
 
 # Physical paths throughout. On macOS $TMPDIR is /var/folders/... which is a
 # symlink to /private/var/folders/...; `git worktree list` reports the resolved
@@ -106,8 +130,11 @@ if [ -z "$KILLED_SANDBOX" ]; then
   exit 2
 fi
 
-kill -9 "$SUITE_PID" 2>/dev/null
-wait "$SUITE_PID" 2>/dev/null
+if ! kill_suite_group "$SUITE_PID"; then
+  printf '\033[31msetup: a suite descendant outlived the kill; it would race the assertions.\033[0m\n' >&2
+  SUITE_PID=""
+  exit 2
+fi
 SUITE_PID=""
 
 # ── 2. #713 — the operator's checkout is untouched ───────────────────────────
@@ -155,6 +182,10 @@ if [ ! -d "$KILLED_SANDBOX" ]; then
   ok "the next suite run removes the leaked sandbox directory too (#722)"
 else
   bad "the leaked sandbox directory survived the next suite run (#722)"
+  printf '    leaked: %s\n' "$KILLED_SANDBOX"
+  find "$KILLED_SANDBOX" -maxdepth 2 2>/dev/null | sed 's/^/      /' | head -20
+  printf '    sandbox root now:\n'
+  sandbox_dirs | sed 's/^/      /'
 fi
 
 # The sweep is scoped to this suite's own root and prefix. A byte-identical
