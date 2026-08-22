@@ -457,27 +457,49 @@ export interface RunsEntry {
   stages?: RunsStageEntry[];
 }
 
-/** Paginated result from platform.getAnalyticsRuns (#3319). */
+/**
+ * Paginated result from platform.getAnalyticsRuns.
+ *
+ * There is no total: GET /v1/analytics/runs paginates by keyset and signals
+ * "another page exists" solely by emitting a cursor, so `has_more` is derived
+ * from `next_cursor`. The `total_count` this interface used to declare was
+ * never sent by the endpoint and was rendered as "0 runs" (#801).
+ */
 export interface AnalyticsRunsResult {
   entries: RunsEntry[];
-  total_count: number;
   next_cursor?: string;
   has_more: boolean;
 }
 
-/** A single time-bucketed trend data point from GET /v1/analytics/trends (#3320). */
+/**
+ * A single time-bucketed trend data point from GET /v1/analytics/trends.
+ *
+ * One entry per timestamp, summed across every repo in that bucket.
+ */
 export interface TrendEntry {
   date: string;
+  /** A PERCENTAGE (0-100), matching the endpoint's own success_rate metric. */
   successRate: number;
-  costPerRun: number;
   totalRuns: number;
+  totalTokens: number;
 }
 
-/** Platform analytics trends result from GET /v1/analytics/trends (#3320). */
+/**
+ * Platform analytics trends result from GET /v1/analytics/trends.
+ *
+ * No `previous` series: the endpoint documents its comparison window as an
+ * unimplemented follow-up and returns nothing for it, so a comparison field
+ * could only ever have been empty (#801). The resolved window is reported
+ * instead — the client asks for a period, and these say what it got.
+ */
 export interface AnalyticsTrendsResult {
-  current: TrendEntry[];
-  previous: TrendEntry[];
-  period: string;
+  entries: TrendEntry[];
+  granularity: string;
+  dateFrom: string;
+  dateTo: string;
+  repos: string[];
+  /** The success-rate target the platform plots against (percent). */
+  targetSuccessRate: number;
 }
 
 /** Single compliance report entry in a list result (#3322). */

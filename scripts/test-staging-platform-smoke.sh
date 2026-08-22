@@ -121,8 +121,8 @@ all_green_routes() {
   {"method":"PUT","path":"/v1/agents/agent-123/heartbeat","status":204,"body":{}},
   {"method":"GET","path":"/v1/analytics/dashboard","status":200,"body":{}},
   {"method":"GET","path":"/v1/analytics/health","status":200,"body":{"compositeScore":87.5,"compositeGrade":"B","computedAt":"2026-04-16T12:00:00Z","periodDays":30,"totalRunsAnalyzed":24}},
-  {"method":"GET","path":"/v1/analytics/runs","status":200,"body":{}},
-  {"method":"GET","path":"/v1/analytics/trends","status":200,"body":{}},
+  {"method":"GET","path":"/v1/analytics/runs","status":200,"body":{"runs":[],"nextCursor":null}},
+  {"method":"GET","path":"/v1/analytics/trends","status":200,"body":{"granularity":"daily","dateFrom":"2026-07-23T00:00:00.000Z","dateTo":"2026-08-22T00:00:00.000Z","repos":[],"targetSuccessRate":95,"data":[]}},
   {"method":"GET","path":"/v1/analytics/cost","status":200,"body":{}},
   {"method":"GET","path":"/v1/audit/reports","status":200,"body":{}},
   {"method":"GET","path":"/v1/audit/retention","status":200,"body":{}},
@@ -275,6 +275,71 @@ RC=$?
 check "wrong health body shape exits non-zero" "$([ "$RC" -ne 0 ] && echo 0 || echo 1)"
 check "wrong health body shape emits ::error:: naming compositeScore" "$(contains "$OUT" "compositeScore" && echo 0 || echo 1)"
 check "summary marks the shape failure FAIL (shape)" "$(contains "$SUMMARY" "FAIL (shape)" && echo 0 || echo 1)"
+
+stop_server
+
+# --- Scenario 6: a 200 with the PUBLISHED-SPEC Runs shape fails -------------
+# The platform's OpenAPI document declares GET /v1/analytics/runs as
+# {items, has_more, next_cursor}; the route returns {runs, nextCursor}, and
+# the platform's own route tests assert the latter. The Go client decodes the
+# route's shape, so this canary must reject the documented one — a canary
+# written from the spec would agree with the spec and stay green while the
+# Runs tab renders nothing (#801).
+#
+# This is the scenario-5 lesson one level up: there, the client had invented a
+# shape; here, the SPEC has.
+ROUTES_RUNS_SPEC=$(all_green_routes | python3 -c '
+import json, sys
+routes = json.load(sys.stdin)
+for r in routes:
+    if r["method"] == "GET" and r["path"] == "/v1/analytics/runs":
+        r["body"] = {
+            "items": [{"id": "00000000-0000-4000-8000-000000000001", "issueNumber": 123}],
+            "has_more": False,
+            "next_cursor": None,
+        }
+print(json.dumps(routes))
+')
+start_server "$ROUTES_RUNS_SPEC"
+
+OUT="$TMP/scenario6.out"
+SUMMARY="$TMP/scenario6.summary"
+: > "$SUMMARY"
+STAGING_PLATFORM_BASE_URL="http://127.0.0.1:${PORT}" \
+STAGING_SESSION_TOKEN="$FAKE_TOKEN" \
+GITHUB_STEP_SUMMARY="$SUMMARY" \
+  bash "$SCRIPT" > "$OUT" 2>&1
+RC=$?
+check "spec-shaped runs body exits non-zero" "$([ "$RC" -ne 0 ] && echo 0 || echo 1)"
+check "spec-shaped runs body emits ::error:: naming runs" "$(contains "$OUT" "missing required keys: runs" && echo 0 || echo 1)"
+
+stop_server
+
+# --- Scenario 7: a trends 200 built from the ignored `period` fails ---------
+# /trends has no `period` parameter and its query schema is .passthrough(), so
+# the old canary call (`?period=week`) got a 200 built from the server default
+# and asserted nothing about the body. A body missing the envelope keys the Go
+# client decodes must now fail.
+ROUTES_TRENDS_BAD=$(all_green_routes | python3 -c '
+import json, sys
+routes = json.load(sys.stdin)
+for r in routes:
+    if r["method"] == "GET" and r["path"] == "/v1/analytics/trends":
+        r["body"] = {"current": [], "previous": [], "period": "week"}
+print(json.dumps(routes))
+')
+start_server "$ROUTES_TRENDS_BAD"
+
+OUT="$TMP/scenario7.out"
+SUMMARY="$TMP/scenario7.summary"
+: > "$SUMMARY"
+STAGING_PLATFORM_BASE_URL="http://127.0.0.1:${PORT}" \
+STAGING_SESSION_TOKEN="$FAKE_TOKEN" \
+GITHUB_STEP_SUMMARY="$SUMMARY" \
+  bash "$SCRIPT" > "$OUT" 2>&1
+RC=$?
+check "pre-#801 trends body exits non-zero" "$([ "$RC" -ne 0 ] && echo 0 || echo 1)"
+check "pre-#801 trends body emits ::error:: naming the envelope keys" "$(contains "$OUT" "missing required keys" && echo 0 || echo 1)"
 
 stop_server
 

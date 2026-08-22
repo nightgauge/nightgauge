@@ -4,9 +4,9 @@
  * Covers:
  * 1. undefined data → loading state
  * 2. null result in data → empty state
- * 3. data with < 7 current entries → sparse state message
+ * 3. data with < 7 entries → sparse state message
  * 4. data with 10+ entries → renders charts (polyline, rect elements)
- * 5. data with showComparison=true → dashed comparison polyline present
+ * 5. the resolved server window is surfaced, not the requested period (#801)
  * 6. XSS: date strings with <script> are escaped
  * 7. getTrendsTabScript → returns non-empty script with expected message types
  * 8. getTrendsTabStyles → returns non-empty CSS string
@@ -27,25 +27,28 @@ import type { AnalyticsTrendsResult, TrendEntry } from "../../../../src/services
 // Helpers
 // ---------------------------------------------------------------------------
 
+// successRate is a PERCENTAGE here, as the endpoint reports it — not the 0-1
+// fraction this file used to assume (#801).
 function makeEntry(date: string, i: number): TrendEntry {
   return {
     date,
-    successRate: 0.8 + i * 0.01,
-    costPerRun: 0.05 + i * 0.001,
+    successRate: 80 + i,
     totalRuns: 5 + i,
+    totalTokens: 120_000 + i * 1_000,
   };
 }
 
-function makeTrendsResult(count: number, withPrevious = false): AnalyticsTrendsResult {
-  const current = Array.from({ length: count }, (_, i) =>
-    makeEntry(`2026-04-${String(i + 1).padStart(2, "0")}`, i)
-  );
-  const previous = withPrevious
-    ? Array.from({ length: count }, (_, i) =>
-        makeEntry(`2026-03-${String(i + 1).padStart(2, "0")}`, i)
-      )
-    : [];
-  return { current, previous, period: "30d" };
+function makeTrendsResult(count: number): AnalyticsTrendsResult {
+  return {
+    entries: Array.from({ length: count }, (_, i) =>
+      makeEntry(`2026-04-${String(i + 1).padStart(2, "0")}`, i)
+    ),
+    granularity: "daily",
+    dateFrom: "2026-03-30T00:00:00.000Z",
+    dateTo: "2026-04-29T00:00:00.000Z",
+    repos: ["nightgauge/nightgauge"],
+    targetSuccessRate: 95,
+  };
 }
 
 function makeTrendsData(overrides: Partial<TrendsData> = {}): TrendsData {
@@ -53,7 +56,7 @@ function makeTrendsData(overrides: Partial<TrendsData> = {}): TrendsData {
     result: makeTrendsResult(10),
     isLoading: false,
     hasAccess: true,
-    showComparison: false,
+    dateRange: "30d",
     ...overrides,
   };
 }
@@ -101,9 +104,31 @@ describe("getTrendsTabHtml", () => {
     expect(html).toContain('data-trends-range="180d"');
   });
 
-  it("10+ entries → renders SVG polylines for success rate and cost", () => {
+  it("10+ entries → renders SVG polylines for success rate and tokens", () => {
     const html = getTrendsTabHtml(makeTrendsData());
     expect(html).toContain("<polyline");
+    expect(html).toContain("Success Rate");
+    expect(html).toContain("Tokens");
+    // The endpoint has no cost metric; a "Cost per Run" chart could only ever
+    // have plotted zeros (#801).
+    expect(html).not.toContain("Cost per Run");
+  });
+
+  // The selector the user picked and the window the server used were allowed
+  // to disagree silently — the client sent an undeclared `period` parameter
+  // and always got the default 30 days back. Surfacing the resolved window
+  // makes a recurrence visible in the UI (#801).
+  it("surfaces the window the server resolved, not just the requested range", () => {
+    const html = getTrendsTabHtml(makeTrendsData({ dateRange: "90d" }));
+    expect(html).toContain("2026-03-30 → 2026-04-29");
+    expect(html).toContain("daily");
+    // The selector still reflects what the user chose.
+    expect(html).toContain('data-trends-range="90d"');
+  });
+
+  it("plots the success-rate target the platform reports", () => {
+    const html = getTrendsTabHtml(makeTrendsData());
+    expect(html).toContain("Target 95%");
   });
 
   it("10+ entries → renders bar chart for total runs", () => {
@@ -111,33 +136,27 @@ describe("getTrendsTabHtml", () => {
     expect(html).toContain("trends-bar-current");
   });
 
-  it("showComparison=true → dashed comparison polyline present", () => {
-    const html = getTrendsTabHtml(
-      makeTrendsData({ result: makeTrendsResult(10, true), showComparison: true })
-    );
-    expect(html).toContain("stroke-dasharray");
-  });
-
-  it("showComparison=false → no dashed line", () => {
-    const html = getTrendsTabHtml(
-      makeTrendsData({ result: makeTrendsResult(10, true), showComparison: false })
-    );
-    expect(html).not.toContain("stroke-dasharray");
+  // The endpoint documents its comparison window as an unimplemented
+  // follow-up and returns nothing for it, so the toggle offered a control that
+  // could only ever reveal an empty series (#801).
+  it("offers no comparison toggle", () => {
+    const html = getTrendsTabHtml(makeTrendsData());
+    expect(html).not.toContain("trendsComparisonToggle");
+    expect(html).not.toContain("vs. previous period");
   });
 
   it("XSS: date strings with <script> are escaped", () => {
     const xssEntry: TrendEntry = {
       date: "<script>alert(1)</script>",
-      successRate: 0.9,
-      costPerRun: 0.05,
+      successRate: 90,
       totalRuns: 5,
+      totalTokens: 1000,
     };
     const result: AnalyticsTrendsResult = {
-      current: Array.from({ length: 10 }, (_, i) =>
+      ...makeTrendsResult(10),
+      entries: Array.from({ length: 10 }, (_, i) =>
         i === 0 ? xssEntry : makeEntry(`2026-04-${String(i + 1).padStart(2, "0")}`, i)
       ),
-      previous: [],
-      period: "30d",
     };
     const html = getTrendsTabHtml(makeTrendsData({ result }));
     expect(html).not.toContain("<script>alert(1)</script>");
@@ -152,10 +171,6 @@ describe("getTrendsTabScript", () => {
 
   it("contains trendsDateRangeChange message type", () => {
     expect(getTrendsTabScript()).toContain("trendsDateRangeChange");
-  });
-
-  it("contains trendsToggleComparison message type", () => {
-    expect(getTrendsTabScript()).toContain("trendsToggleComparison");
   });
 
   it("contains trendsRefresh message type", () => {

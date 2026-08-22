@@ -18,9 +18,18 @@
       "contract": {
         "goFile": "internal/platform/analytics.go",
         "checks": [
-          { "at": "", "type": "AnalyticsHealthResult" },
-          { "at": "dimensions/[]", "type": "AnalyticsHealthDimension" },
-          { "at": "dimensions/[]/findings/[]", "type": "AnalyticsHealthFinding" }
+          {
+            "at": "",
+            "type": "AnalyticsHealthResult"
+          },
+          {
+            "at": "dimensions/[]",
+            "type": "AnalyticsHealthDimension"
+          },
+          {
+            "at": "dimensions/[]/findings/[]",
+            "type": "AnalyticsHealthFinding"
+          }
         ]
       }
     },
@@ -32,9 +41,18 @@
       "contract": {
         "goFile": "internal/platform/analytics.go",
         "checks": [
-          { "at": "", "type": "AnalyticsRunsResult" },
-          { "at": "entries/[]", "type": "RunsEntry" },
-          { "at": "entries/[]/stages/[]", "type": "RunsStageEntry" }
+          {
+            "at": "",
+            "type": "AnalyticsRunsResult"
+          },
+          {
+            "at": "entries/[]",
+            "type": "RunsEntry"
+          },
+          {
+            "at": "entries/[]/stages/[]",
+            "type": "RunsStageEntry"
+          }
         ]
       }
     },
@@ -46,9 +64,14 @@
       "contract": {
         "goFile": "internal/platform/analytics.go",
         "checks": [
-          { "at": "", "type": "AnalyticsTrendsResult" },
-          { "at": "current/[]", "type": "AnalyticsTrendEntry" },
-          { "at": "previous/[]", "type": "AnalyticsTrendEntry" }
+          {
+            "at": "",
+            "type": "AnalyticsTrendsResult"
+          },
+          {
+            "at": "entries/[]",
+            "type": "AnalyticsTrendEntry"
+          }
         ]
       }
     },
@@ -59,7 +82,12 @@
       "upstream": "GET /v1/analytics/cost",
       "contract": {
         "goFile": "internal/platform/analytics.go",
-        "checks": [{ "at": "", "type": "CostAnalyticsResult" }],
+        "checks": [
+          {
+            "at": "",
+            "type": "CostAnalyticsResult"
+          }
+        ],
         "note": "breakdown.* are anonymous nested structs; the extractor only reads depth-1 tags, so the nested shape is covered by the render assertions instead."
       }
     },
@@ -71,8 +99,14 @@
       "contract": {
         "goFile": "internal/platform/compliance.go",
         "checks": [
-          { "at": "", "type": "ComplianceReportsPage" },
-          { "at": "reports/[]", "type": "ComplianceReportEntry" }
+          {
+            "at": "",
+            "type": "ComplianceReportsPage"
+          },
+          {
+            "at": "reports/[]",
+            "type": "ComplianceReportEntry"
+          }
         ]
       }
     },
@@ -83,7 +117,12 @@
       "upstream": "GET /v1/analytics/dashboard",
       "contract": {
         "goFile": "internal/platform/analytics.go",
-        "checks": [{ "at": "", "type": "UsageSummaryResult" }]
+        "checks": [
+          {
+            "at": "",
+            "type": "UsageSummaryResult"
+          }
+        ]
       }
     },
     {
@@ -92,7 +131,7 @@
       "method": "GET /v1/audit-log",
       "upstream": "GET /v1/audit-log",
       "contract": null,
-      "note": "AuditLogService calls the platform over HTTPS directly with the session JWT — the payload never passes through a Go struct, so there is no in-repo artifact to check against. Keys are transcribed from the platform response and consumed by parseCanonicalItems() in src/services/AuditLogService.ts."
+      "note": "AuditLogService calls the platform over HTTPS directly with the session JWT \u2014 the payload never passes through a Go struct, so there is no in-repo artifact to check against. Keys are transcribed from the platform response and consumed by parseCanonicalItems() in src/services/AuditLogService.ts."
     },
     {
       "path": "github/pr-list.json",
@@ -101,7 +140,12 @@
       "upstream": "GitHub GraphQL pullRequests",
       "contract": {
         "goFile": "pkg/types/types.go",
-        "checks": [{ "at": "[]", "type": "PullRequest" }]
+        "checks": [
+          {
+            "at": "[]",
+            "type": "PullRequest"
+          }
+        ]
       }
     },
     {
@@ -112,8 +156,14 @@
       "contract": {
         "goFile": "pkg/types/types.go",
         "checks": [
-          { "at": "[]", "type": "Issue" },
-          { "at": "[]/subIssues/[]", "type": "SubIssueRef" }
+          {
+            "at": "[]",
+            "type": "Issue"
+          },
+          {
+            "at": "[]/subIssues/[]",
+            "type": "SubIssueRef"
+          }
         ]
       }
     },

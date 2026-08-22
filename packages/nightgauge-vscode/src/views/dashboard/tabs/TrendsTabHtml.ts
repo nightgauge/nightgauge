@@ -6,15 +6,22 @@
  *   getTrendsTabScript()  — returns JS string (event handlers)
  *   getTrendsTabStyles()  — returns CSS string (scoped)
  *
- * Renders week-over-week success rate, cost-per-run, and total-run trends
- * as inline SVG polylines/bars. No external charting library.
+ * Renders success-rate, total-run, and token trends as inline SVG
+ * polylines/bars. No external charting library.
+ *
+ * The three series are exactly what GET /v1/analytics/trends returns. It used
+ * to render a cost-per-run chart and a "vs. previous period" comparison; the
+ * endpoint supplies neither (it has no cost metric, and documents its
+ * comparison window as an unimplemented follow-up), so both plotted a series
+ * that could only ever be empty — see #801.
  *
  * @see Issue #3320 — Add Trends Tab to Pipeline Dashboard
+ * @see Issue 801 — render what the endpoint actually returns
  */
 
 import { escapeHtml } from "../DashboardComponents";
 import type { TrendsData, TrendsDateRange } from "../DashboardState";
-import type { TrendEntry } from "../../../services/IpcClientBase";
+import type { AnalyticsTrendsResult, TrendEntry } from "../../../services/IpcClientBase";
 import {
   renderPlatformFailure,
   getPlatformRetryButtonHtml,
@@ -43,40 +50,51 @@ export function getTrendsTabHtml(data: TrendsData | null | undefined): string {
     return getTrendsEmptyHtml();
   }
 
-  const { result, showComparison } = data;
+  const { result } = data;
 
-  if (result.current.length < SPARSE_THRESHOLD) {
-    return getTrendsSparseHtml(result.current.length);
+  if (result.entries.length < SPARSE_THRESHOLD) {
+    return getTrendsSparseHtml(result.entries.length);
   }
-
-  const dateRange = (result.period as TrendsDateRange) ?? "30d";
 
   return `
     <div class="trends-tab">
-      ${getTrendsDateRangeHtml(dateRange)}
+      ${getTrendsDateRangeHtml(data.dateRange)}
       <div class="trends-comparison-row">
-        <label class="trends-comparison-label">
-          <input type="checkbox" id="trendsComparisonToggle"${showComparison ? " checked" : ""}>
-          Show comparison (vs. previous period)
-        </label>
+        <span class="trends-window-label">${getTrendsWindowLabel(result)}</span>
         <button class="action-btn action-btn-sm" id="trendsRefreshBtn">Refresh</button>
       </div>
       <div class="trends-charts-grid">
         <div class="trends-chart-card">
           <h4 class="trends-chart-title">Success Rate</h4>
-          ${getSuccessRateChartHtml(result.current, showComparison ? result.previous : [])}
-        </div>
-        <div class="trends-chart-card">
-          <h4 class="trends-chart-title">Cost per Run</h4>
-          ${getCostPerRunChartHtml(result.current, showComparison ? result.previous : [])}
+          ${getSuccessRateChartHtml(result.entries, result.targetSuccessRate)}
         </div>
         <div class="trends-chart-card">
           <h4 class="trends-chart-title">Total Runs</h4>
-          ${getTotalRunsChartHtml(result.current, showComparison ? result.previous : [])}
+          ${getTotalRunsChartHtml(result.entries)}
+        </div>
+        <div class="trends-chart-card">
+          <h4 class="trends-chart-title">Tokens</h4>
+          ${getTokensChartHtml(result.entries)}
         </div>
       </div>
     </div>
   `;
+}
+
+/**
+ * The window the SERVER resolved, not the one the client asked for.
+ *
+ * These differed silently until #801: the client sent a `period` parameter the
+ * endpoint does not declare, so every request got the default 30-day window no
+ * matter which range was selected. Showing the resolved bounds makes a
+ * recurrence visible instead of invisible.
+ */
+function getTrendsWindowLabel(result: AnalyticsTrendsResult): string {
+  const from = result.dateFrom.substring(0, 10);
+  const to = result.dateTo.substring(0, 10);
+  if (!from || !to) return "";
+  const repos = result.repos.length === 1 ? result.repos[0] : `${result.repos.length} repos`;
+  return escapeHtml(`${from} → ${to} · ${result.granularity} · ${repos}`);
 }
 
 /**
@@ -111,13 +129,6 @@ export function getTrendsTabScript(): string {
         }
       });
 
-      // Comparison toggle checkbox
-      var comparisonToggle = trendsPanel.querySelector('#trendsComparisonToggle');
-      if (comparisonToggle) {
-        comparisonToggle.addEventListener('change', function(e) {
-          vscode.postMessage({ type: 'trendsToggleComparison', show: e.target.checked });
-        });
-      }
     })();
   `;
 }
@@ -147,12 +158,9 @@ export function getTrendsTabStyles(): string {
       justify-content: space-between;
       margin-bottom: var(--spacing-md, 12px);
     }
-    .trends-comparison-label {
-      display: flex;
-      align-items: center;
-      gap: var(--spacing-sm, 8px);
-      font-size: 0.9em;
-      cursor: pointer;
+    .trends-window-label {
+      font-size: 0.85em;
+      color: var(--vscode-descriptionForeground);
     }
     .trends-charts-grid {
       display: grid;
@@ -199,19 +207,9 @@ export function getTrendsTabStyles(): string {
       justify-content: flex-end;
       margin-top: 4px;
     }
-    .trends-delta-badge {
+    .trends-target-note {
       font-size: 0.75em;
-      font-weight: 600;
-      padding: 1px 6px;
-      border-radius: 3px;
-    }
-    .trends-delta-positive {
-      background: color-mix(in srgb, var(--vscode-terminal-ansiGreen) 20%, transparent);
-      color: var(--vscode-terminal-ansiGreen);
-    }
-    .trends-delta-negative {
-      background: color-mix(in srgb, var(--vscode-terminal-ansiRed) 20%, transparent);
-      color: var(--vscode-terminal-ansiRed);
+      color: var(--vscode-descriptionForeground);
     }
     .trends-bar-group {
       display: flex;
@@ -235,7 +233,6 @@ export function getTrendsTabStyles(): string {
       min-height: 2px;
     }
     .trends-bar-current { background: var(--vscode-charts-purple, #b267e6); }
-    .trends-bar-previous { background: color-mix(in srgb, var(--vscode-charts-purple, #b267e6) 40%, transparent); }
     .trends-empty {
       display: flex;
       flex-direction: column;
@@ -369,107 +366,85 @@ function getXLabels(entries: TrendEntry[]): string {
   return `<div class="trends-x-labels"><span>${first}</span><span>${last}</span></div>`;
 }
 
-function getDeltaBadge(current: number[], previous: number[]): string {
-  if (previous.length === 0 || current.length === 0) return "";
-  const avgCurrent = current.reduce((a, b) => a + b, 0) / current.length;
-  const avgPrevious = previous.reduce((a, b) => a + b, 0) / previous.length;
-  if (avgPrevious === 0) return "";
-  const delta = ((avgCurrent - avgPrevious) / avgPrevious) * 100;
-  const sign = delta >= 0 ? "+" : "";
-  const cls = delta >= 0 ? "trends-delta-positive" : "trends-delta-negative";
-  return `<div class="trends-delta-row"><span class="trends-delta-badge ${cls}">${sign}${delta.toFixed(1)}% vs prev</span></div>`;
-}
-
-function getSuccessRateChartHtml(current: TrendEntry[], previous: TrendEntry[]): string {
+function getSuccessRateChartHtml(entries: TrendEntry[], target: number): string {
   const W = 300;
   const H = 80;
-  const curVals = current.map((e) => e.successRate * 100);
-  const prevVals = previous.map((e) => e.successRate * 100);
-  const allVals = [...curVals, ...prevVals, 0];
-  const minVal = 0;
-  const maxVal = Math.max(...allVals, 100);
-
-  const curPoints = escapeHtml(buildPolylinePoints(curVals, W, H, minVal, maxVal));
-  const prevPoints =
-    prevVals.length > 1 ? escapeHtml(buildPolylinePoints(prevVals, W, H, minVal, maxVal)) : "";
+  // successRate is already a percentage (0-100) — the endpoint's own
+  // success_rate metric and its targetSuccessRate companion are both in those
+  // units. This used to multiply by 100 on the assumption it was a fraction,
+  // which pinned every point to the top of the chart (#801).
+  const vals = entries.map((e) => e.successRate);
+  const maxVal = Math.max(...vals, target, 100);
+  const points = escapeHtml(buildPolylinePoints(vals, W, H, 0, maxVal));
+  const targetY = target > 0 ? H - (target / maxVal) * H : -1;
 
   return `
     <div class="trends-svg-wrap">
       <svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg" aria-label="Success rate trend" role="img">
         ${
-          prevPoints
-            ? `<polyline points="${prevPoints}" fill="none" stroke="var(--vscode-charts-green, #4ec9b0)" stroke-width="1.5" stroke-dasharray="4 2" stroke-linecap="round" stroke-linejoin="round" opacity="0.5"/>`
+          targetY >= 0
+            ? `<line x1="0" y1="${targetY.toFixed(1)}" x2="${W}" y2="${targetY.toFixed(1)}" stroke="var(--vscode-charts-green, #4ec9b0)" stroke-width="1" stroke-dasharray="4 2" opacity="0.5"><title>Target ${escapeHtml(String(target))}%</title></line>`
             : ""
         }
-        <polyline points="${curPoints}" fill="none" stroke="var(--vscode-charts-green, #4ec9b0)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        <polyline points="${points}" fill="none" stroke="var(--vscode-charts-green, #4ec9b0)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
       </svg>
-      ${getXLabels(current)}
+      ${getXLabels(entries)}
     </div>
-    ${getDeltaBadge(curVals, prevVals)}
+    ${target > 0 ? `<div class="trends-delta-row"><span class="trends-target-note">Target ${escapeHtml(String(target))}%</span></div>` : ""}
   `;
 }
 
-function getCostPerRunChartHtml(current: TrendEntry[], previous: TrendEntry[]): string {
+/**
+ * Token volume per bucket.
+ *
+ * Ingested runs carry tokens as a single per-stage total with no
+ * input/output/cacheRead split, so this is the whole amount rather than a
+ * stacked breakdown.
+ */
+function getTokensChartHtml(entries: TrendEntry[]): string {
   const W = 300;
   const H = 80;
-  const curVals = current.map((e) => e.costPerRun);
-  const prevVals = previous.map((e) => e.costPerRun);
-  const allVals = [...curVals, ...prevVals, 0];
-  const minVal = 0;
-  const maxVal = Math.max(...allVals, 0.0001);
-
-  const curPoints = escapeHtml(buildPolylinePoints(curVals, W, H, minVal, maxVal));
-  const prevPoints =
-    prevVals.length > 1 ? escapeHtml(buildPolylinePoints(prevVals, W, H, minVal, maxVal)) : "";
+  const vals = entries.map((e) => e.totalTokens);
+  const maxVal = Math.max(...vals, 1);
+  const points = escapeHtml(buildPolylinePoints(vals, W, H, 0, maxVal));
 
   return `
     <div class="trends-svg-wrap">
-      <svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg" aria-label="Cost per run trend" role="img">
-        ${
-          prevPoints
-            ? `<polyline points="${prevPoints}" fill="none" stroke="var(--vscode-charts-blue, #569cd6)" stroke-width="1.5" stroke-dasharray="4 2" stroke-linecap="round" stroke-linejoin="round" opacity="0.5"/>`
-            : ""
-        }
-        <polyline points="${curPoints}" fill="none" stroke="var(--vscode-charts-blue, #569cd6)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+      <svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg" aria-label="Token usage trend" role="img">
+        <polyline points="${points}" fill="none" stroke="var(--vscode-charts-blue, #569cd6)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
       </svg>
-      ${getXLabels(current)}
+      ${getXLabels(entries)}
     </div>
-    ${getDeltaBadge(curVals, prevVals)}
+    <div class="trends-delta-row"><span class="trends-target-note">Peak ${escapeHtml(formatTokenCount(maxVal))}</span></div>
   `;
 }
 
-function getTotalRunsChartHtml(current: TrendEntry[], previous: TrendEntry[]): string {
-  const maxRuns = Math.max(
-    ...current.map((e) => e.totalRuns),
-    ...previous.map((e) => e.totalRuns),
-    1
-  );
+/** Compact token count for a chart caption (1_234_000 -> "1.2M"). */
+function formatTokenCount(tokens: number): string {
+  if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1)}M`;
+  if (tokens >= 1_000) return `${(tokens / 1_000).toFixed(1)}K`;
+  return String(tokens);
+}
+
+function getTotalRunsChartHtml(entries: TrendEntry[]): string {
+  const maxRuns = Math.max(...entries.map((e) => e.totalRuns), 1);
   const H = 80;
 
-  const bars = current
-    .map((entry, i) => {
-      const curH = Math.max(2, Math.round((entry.totalRuns / maxRuns) * H));
-      const prevEntry = previous[i];
-      const prevH = prevEntry ? Math.max(2, Math.round((prevEntry.totalRuns / maxRuns) * H)) : 0;
+  const bars = entries
+    .map((entry) => {
+      const h = Math.max(2, Math.round((entry.totalRuns / maxRuns) * H));
       return `
         <div class="trends-bar-wrap">
-          ${prevH > 0 ? `<div class="trends-bar trends-bar-previous" style="height:${prevH}px" title="${prevEntry?.totalRuns ?? 0} (prev)"></div>` : ""}
-          <div class="trends-bar trends-bar-current" style="height:${curH}px" title="${escapeHtml(String(entry.totalRuns))} runs on ${escapeHtml(entry.date)}"></div>
+          <div class="trends-bar trends-bar-current" style="height:${h}px" title="${escapeHtml(String(entry.totalRuns))} runs on ${escapeHtml(entry.date)}"></div>
         </div>
       `;
     })
     .join("");
 
-  const deltaVals = {
-    cur: current.map((e) => e.totalRuns),
-    prev: previous.map((e) => e.totalRuns),
-  };
-
   return `
     <div class="trends-bar-group" aria-label="Total runs bar chart">
       ${bars}
     </div>
-    ${getXLabels(current)}
-    ${getDeltaBadge(deltaVals.cur, deltaVals.prev)}
+    ${getXLabels(entries)}
   `;
 }

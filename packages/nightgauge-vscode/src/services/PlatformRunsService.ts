@@ -6,13 +6,13 @@
  *
  * @see Issue #3319 - Add Runs Tab to Pipeline Dashboard
  * @see Issue 743 - typed failures instead of a swallowed catch{}
+ * @see Issue 801 - the endpoint takes cursor and limit only
  * @see PlatformAnalyticsHealthService — pattern reference
  */
 
 import * as vscode from "vscode";
 import type { IpcClientGenerated } from "./IpcClient.generated";
 import type { AnalyticsRunsResult } from "./IpcClientBase";
-import type { RunsFilterState } from "../views/dashboard/DashboardState";
 import { Logger } from "../utils/logger";
 import { platformOk, reportPlatformFailure, type PlatformResult } from "./platformResult";
 
@@ -26,13 +26,17 @@ export class PlatformRunsService implements vscode.Disposable {
   constructor(private readonly ipcClient: IpcClientGenerated) {}
 
   /**
-   * Fetch analytics runs via IPC with optional filters and cursor, cache, and return.
+   * Fetch one page of analytics runs via IPC, cache, and return.
    * Single-inflight guard — a concurrent call returns the current cache
    * wrapped as a success (or a failure if there is nothing cached yet).
    * On error: logs once and returns a typed PlatformFailure. Never throws.
+   *
+   * Cursor and limit are the only inputs the endpoint honours. This method
+   * used to take a date/outcome/branch filter set and forward it; the endpoint
+   * declares none of those and dropped them, so the tab labelled an unfiltered
+   * page as filtered (#801).
    */
   async fetchAndCache(
-    filters: RunsFilterState,
     cursor?: string,
     limit?: number
   ): Promise<PlatformResult<AnalyticsRunsResult>> {
@@ -43,14 +47,7 @@ export class PlatformRunsService implements vscode.Disposable {
     }
     this.inFlight = true;
     try {
-      const result = await this.ipcClient.platformGetAnalyticsRuns(
-        filters.dateFrom || undefined,
-        filters.dateTo || undefined,
-        cursor,
-        filters.outcomeFilter || undefined,
-        filters.branchFilter || undefined,
-        limit
-      );
+      const result = await this.ipcClient.platformGetAnalyticsRuns(cursor, limit);
       this.cache = result;
       return platformOk(result);
     } catch (err) {

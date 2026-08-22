@@ -4652,12 +4652,9 @@ exports[`getDashboardHtml snapshots (Issue #1242) > active pipeline state — cu
       justify-content: space-between;
       margin-bottom: var(--spacing-md, 12px);
     }
-    .trends-comparison-label {
-      display: flex;
-      align-items: center;
-      gap: var(--spacing-sm, 8px);
-      font-size: 0.9em;
-      cursor: pointer;
+    .trends-window-label {
+      font-size: 0.85em;
+      color: var(--vscode-descriptionForeground);
     }
     .trends-charts-grid {
       display: grid;
@@ -4704,19 +4701,9 @@ exports[`getDashboardHtml snapshots (Issue #1242) > active pipeline state — cu
       justify-content: flex-end;
       margin-top: 4px;
     }
-    .trends-delta-badge {
+    .trends-target-note {
       font-size: 0.75em;
-      font-weight: 600;
-      padding: 1px 6px;
-      border-radius: 3px;
-    }
-    .trends-delta-positive {
-      background: color-mix(in srgb, var(--vscode-terminal-ansiGreen) 20%, transparent);
-      color: var(--vscode-terminal-ansiGreen);
-    }
-    .trends-delta-negative {
-      background: color-mix(in srgb, var(--vscode-terminal-ansiRed) 20%, transparent);
-      color: var(--vscode-terminal-ansiRed);
+      color: var(--vscode-descriptionForeground);
     }
     .trends-bar-group {
       display: flex;
@@ -4740,7 +4727,6 @@ exports[`getDashboardHtml snapshots (Issue #1242) > active pipeline state — cu
       min-height: 2px;
     }
     .trends-bar-current { background: var(--vscode-charts-purple, #b267e6); }
-    .trends-bar-previous { background: color-mix(in srgb, var(--vscode-charts-purple, #b267e6) 40%, transparent); }
     .trends-empty {
       display: flex;
       flex-direction: column;
@@ -6681,8 +6667,7 @@ exports[`getDashboardHtml snapshots (Issue #1242) > active pipeline state — cu
         // Export CSV
         var exportBtn = e.target.closest('#runsExportCsv');
         if (exportBtn) {
-          var filters = collectRunsFilters();
-          vscode.postMessage({ type: 'runsExportCsv', filters: filters });
+          vscode.postMessage({ type: 'runsExportCsv' });
           return;
         }
 
@@ -6693,35 +6678,7 @@ exports[`getDashboardHtml snapshots (Issue #1242) > active pipeline state — cu
           return;
         }
 
-        // Reset filters
-        var resetBtn = e.target.closest('#runsResetFilters');
-        if (resetBtn) {
-          var df = document.getElementById('runsDateFrom'); if (df) df.value = '';
-          var dt = document.getElementById('runsDateTo'); if (dt) dt.value = '';
-          var of = document.getElementById('runsOutcomeFilter'); if (of) of.value = '';
-          var bf = document.getElementById('runsBranchFilter'); if (bf) bf.value = '';
-          vscode.postMessage({ type: 'runsResetFilters' });
-          return;
-        }
       });
-
-      // Apply filters button
-      var applyBtn = document.getElementById('runsApplyFilters');
-      if (applyBtn) {
-        applyBtn.addEventListener('click', function() {
-          var filters = collectRunsFilters();
-          vscode.postMessage({ type: 'runsFilter', filters: filters });
-        });
-      }
-
-      function collectRunsFilters() {
-        return {
-          dateFrom: document.getElementById('runsDateFrom')?.value || '',
-          dateTo: document.getElementById('runsDateTo')?.value || '',
-          outcomeFilter: document.getElementById('runsOutcomeFilter')?.value || '',
-          branchFilter: document.getElementById('runsBranchFilter')?.value || '',
-        };
-      }
     })();
   
 
@@ -6767,13 +6724,6 @@ exports[`getDashboardHtml snapshots (Issue #1242) > active pipeline state — cu
         }
       });
 
-      // Comparison toggle checkbox
-      var comparisonToggle = trendsPanel.querySelector('#trendsComparisonToggle');
-      if (comparisonToggle) {
-        comparisonToggle.addEventListener('change', function(e) {
-          vscode.postMessage({ type: 'trendsToggleComparison', show: e.target.checked });
-        });
-      }
     })();
   
 
@@ -11542,12 +11492,9 @@ exports[`getDashboardHtml snapshots (Issue #1242) > completed run with tool call
       justify-content: space-between;
       margin-bottom: var(--spacing-md, 12px);
     }
-    .trends-comparison-label {
-      display: flex;
-      align-items: center;
-      gap: var(--spacing-sm, 8px);
-      font-size: 0.9em;
-      cursor: pointer;
+    .trends-window-label {
+      font-size: 0.85em;
+      color: var(--vscode-descriptionForeground);
     }
     .trends-charts-grid {
       display: grid;
@@ -11594,19 +11541,9 @@ exports[`getDashboardHtml snapshots (Issue #1242) > completed run with tool call
       justify-content: flex-end;
       margin-top: 4px;
     }
-    .trends-delta-badge {
+    .trends-target-note {
       font-size: 0.75em;
-      font-weight: 600;
-      padding: 1px 6px;
-      border-radius: 3px;
-    }
-    .trends-delta-positive {
-      background: color-mix(in srgb, var(--vscode-terminal-ansiGreen) 20%, transparent);
-      color: var(--vscode-terminal-ansiGreen);
-    }
-    .trends-delta-negative {
-      background: color-mix(in srgb, var(--vscode-terminal-ansiRed) 20%, transparent);
-      color: var(--vscode-terminal-ansiRed);
+      color: var(--vscode-descriptionForeground);
     }
     .trends-bar-group {
       display: flex;
@@ -11630,7 +11567,6 @@ exports[`getDashboardHtml snapshots (Issue #1242) > completed run with tool call
       min-height: 2px;
     }
     .trends-bar-current { background: var(--vscode-charts-purple, #b267e6); }
-    .trends-bar-previous { background: color-mix(in srgb, var(--vscode-charts-purple, #b267e6) 40%, transparent); }
     .trends-empty {
       display: flex;
       flex-direction: column;
@@ -13619,8 +13555,7 @@ exports[`getDashboardHtml snapshots (Issue #1242) > completed run with tool call
         // Export CSV
         var exportBtn = e.target.closest('#runsExportCsv');
         if (exportBtn) {
-          var filters = collectRunsFilters();
-          vscode.postMessage({ type: 'runsExportCsv', filters: filters });
+          vscode.postMessage({ type: 'runsExportCsv' });
           return;
         }
 
@@ -13631,35 +13566,7 @@ exports[`getDashboardHtml snapshots (Issue #1242) > completed run with tool call
           return;
         }
 
-        // Reset filters
-        var resetBtn = e.target.closest('#runsResetFilters');
-        if (resetBtn) {
-          var df = document.getElementById('runsDateFrom'); if (df) df.value = '';
-          var dt = document.getElementById('runsDateTo'); if (dt) dt.value = '';
-          var of = document.getElementById('runsOutcomeFilter'); if (of) of.value = '';
-          var bf = document.getElementById('runsBranchFilter'); if (bf) bf.value = '';
-          vscode.postMessage({ type: 'runsResetFilters' });
-          return;
-        }
       });
-
-      // Apply filters button
-      var applyBtn = document.getElementById('runsApplyFilters');
-      if (applyBtn) {
-        applyBtn.addEventListener('click', function() {
-          var filters = collectRunsFilters();
-          vscode.postMessage({ type: 'runsFilter', filters: filters });
-        });
-      }
-
-      function collectRunsFilters() {
-        return {
-          dateFrom: document.getElementById('runsDateFrom')?.value || '',
-          dateTo: document.getElementById('runsDateTo')?.value || '',
-          outcomeFilter: document.getElementById('runsOutcomeFilter')?.value || '',
-          branchFilter: document.getElementById('runsBranchFilter')?.value || '',
-        };
-      }
     })();
   
 
@@ -13705,13 +13612,6 @@ exports[`getDashboardHtml snapshots (Issue #1242) > completed run with tool call
         }
       });
 
-      // Comparison toggle checkbox
-      var comparisonToggle = trendsPanel.querySelector('#trendsComparisonToggle');
-      if (comparisonToggle) {
-        comparisonToggle.addEventListener('change', function(e) {
-          vscode.postMessage({ type: 'trendsToggleComparison', show: e.target.checked });
-        });
-      }
     })();
   
 
@@ -18480,12 +18380,9 @@ exports[`getDashboardHtml snapshots (Issue #1242) > empty state — no current r
       justify-content: space-between;
       margin-bottom: var(--spacing-md, 12px);
     }
-    .trends-comparison-label {
-      display: flex;
-      align-items: center;
-      gap: var(--spacing-sm, 8px);
-      font-size: 0.9em;
-      cursor: pointer;
+    .trends-window-label {
+      font-size: 0.85em;
+      color: var(--vscode-descriptionForeground);
     }
     .trends-charts-grid {
       display: grid;
@@ -18532,19 +18429,9 @@ exports[`getDashboardHtml snapshots (Issue #1242) > empty state — no current r
       justify-content: flex-end;
       margin-top: 4px;
     }
-    .trends-delta-badge {
+    .trends-target-note {
       font-size: 0.75em;
-      font-weight: 600;
-      padding: 1px 6px;
-      border-radius: 3px;
-    }
-    .trends-delta-positive {
-      background: color-mix(in srgb, var(--vscode-terminal-ansiGreen) 20%, transparent);
-      color: var(--vscode-terminal-ansiGreen);
-    }
-    .trends-delta-negative {
-      background: color-mix(in srgb, var(--vscode-terminal-ansiRed) 20%, transparent);
-      color: var(--vscode-terminal-ansiRed);
+      color: var(--vscode-descriptionForeground);
     }
     .trends-bar-group {
       display: flex;
@@ -18568,7 +18455,6 @@ exports[`getDashboardHtml snapshots (Issue #1242) > empty state — no current r
       min-height: 2px;
     }
     .trends-bar-current { background: var(--vscode-charts-purple, #b267e6); }
-    .trends-bar-previous { background: color-mix(in srgb, var(--vscode-charts-purple, #b267e6) 40%, transparent); }
     .trends-empty {
       display: flex;
       flex-direction: column;
@@ -20402,8 +20288,7 @@ exports[`getDashboardHtml snapshots (Issue #1242) > empty state — no current r
         // Export CSV
         var exportBtn = e.target.closest('#runsExportCsv');
         if (exportBtn) {
-          var filters = collectRunsFilters();
-          vscode.postMessage({ type: 'runsExportCsv', filters: filters });
+          vscode.postMessage({ type: 'runsExportCsv' });
           return;
         }
 
@@ -20414,35 +20299,7 @@ exports[`getDashboardHtml snapshots (Issue #1242) > empty state — no current r
           return;
         }
 
-        // Reset filters
-        var resetBtn = e.target.closest('#runsResetFilters');
-        if (resetBtn) {
-          var df = document.getElementById('runsDateFrom'); if (df) df.value = '';
-          var dt = document.getElementById('runsDateTo'); if (dt) dt.value = '';
-          var of = document.getElementById('runsOutcomeFilter'); if (of) of.value = '';
-          var bf = document.getElementById('runsBranchFilter'); if (bf) bf.value = '';
-          vscode.postMessage({ type: 'runsResetFilters' });
-          return;
-        }
       });
-
-      // Apply filters button
-      var applyBtn = document.getElementById('runsApplyFilters');
-      if (applyBtn) {
-        applyBtn.addEventListener('click', function() {
-          var filters = collectRunsFilters();
-          vscode.postMessage({ type: 'runsFilter', filters: filters });
-        });
-      }
-
-      function collectRunsFilters() {
-        return {
-          dateFrom: document.getElementById('runsDateFrom')?.value || '',
-          dateTo: document.getElementById('runsDateTo')?.value || '',
-          outcomeFilter: document.getElementById('runsOutcomeFilter')?.value || '',
-          branchFilter: document.getElementById('runsBranchFilter')?.value || '',
-        };
-      }
     })();
   
 
@@ -20488,13 +20345,6 @@ exports[`getDashboardHtml snapshots (Issue #1242) > empty state — no current r
         }
       });
 
-      // Comparison toggle checkbox
-      var comparisonToggle = trendsPanel.querySelector('#trendsComparisonToggle');
-      if (comparisonToggle) {
-        comparisonToggle.addEventListener('change', function(e) {
-          vscode.postMessage({ type: 'trendsToggleComparison', show: e.target.checked });
-        });
-      }
     })();
   
 
@@ -25263,12 +25113,9 @@ exports[`getDashboardHtml snapshots (Issue #1242) > pagination controls rendered
       justify-content: space-between;
       margin-bottom: var(--spacing-md, 12px);
     }
-    .trends-comparison-label {
-      display: flex;
-      align-items: center;
-      gap: var(--spacing-sm, 8px);
-      font-size: 0.9em;
-      cursor: pointer;
+    .trends-window-label {
+      font-size: 0.85em;
+      color: var(--vscode-descriptionForeground);
     }
     .trends-charts-grid {
       display: grid;
@@ -25315,19 +25162,9 @@ exports[`getDashboardHtml snapshots (Issue #1242) > pagination controls rendered
       justify-content: flex-end;
       margin-top: 4px;
     }
-    .trends-delta-badge {
+    .trends-target-note {
       font-size: 0.75em;
-      font-weight: 600;
-      padding: 1px 6px;
-      border-radius: 3px;
-    }
-    .trends-delta-positive {
-      background: color-mix(in srgb, var(--vscode-terminal-ansiGreen) 20%, transparent);
-      color: var(--vscode-terminal-ansiGreen);
-    }
-    .trends-delta-negative {
-      background: color-mix(in srgb, var(--vscode-terminal-ansiRed) 20%, transparent);
-      color: var(--vscode-terminal-ansiRed);
+      color: var(--vscode-descriptionForeground);
     }
     .trends-bar-group {
       display: flex;
@@ -25351,7 +25188,6 @@ exports[`getDashboardHtml snapshots (Issue #1242) > pagination controls rendered
       min-height: 2px;
     }
     .trends-bar-current { background: var(--vscode-charts-purple, #b267e6); }
-    .trends-bar-previous { background: color-mix(in srgb, var(--vscode-charts-purple, #b267e6) 40%, transparent); }
     .trends-empty {
       display: flex;
       flex-direction: column;
@@ -27413,8 +27249,7 @@ exports[`getDashboardHtml snapshots (Issue #1242) > pagination controls rendered
         // Export CSV
         var exportBtn = e.target.closest('#runsExportCsv');
         if (exportBtn) {
-          var filters = collectRunsFilters();
-          vscode.postMessage({ type: 'runsExportCsv', filters: filters });
+          vscode.postMessage({ type: 'runsExportCsv' });
           return;
         }
 
@@ -27425,35 +27260,7 @@ exports[`getDashboardHtml snapshots (Issue #1242) > pagination controls rendered
           return;
         }
 
-        // Reset filters
-        var resetBtn = e.target.closest('#runsResetFilters');
-        if (resetBtn) {
-          var df = document.getElementById('runsDateFrom'); if (df) df.value = '';
-          var dt = document.getElementById('runsDateTo'); if (dt) dt.value = '';
-          var of = document.getElementById('runsOutcomeFilter'); if (of) of.value = '';
-          var bf = document.getElementById('runsBranchFilter'); if (bf) bf.value = '';
-          vscode.postMessage({ type: 'runsResetFilters' });
-          return;
-        }
       });
-
-      // Apply filters button
-      var applyBtn = document.getElementById('runsApplyFilters');
-      if (applyBtn) {
-        applyBtn.addEventListener('click', function() {
-          var filters = collectRunsFilters();
-          vscode.postMessage({ type: 'runsFilter', filters: filters });
-        });
-      }
-
-      function collectRunsFilters() {
-        return {
-          dateFrom: document.getElementById('runsDateFrom')?.value || '',
-          dateTo: document.getElementById('runsDateTo')?.value || '',
-          outcomeFilter: document.getElementById('runsOutcomeFilter')?.value || '',
-          branchFilter: document.getElementById('runsBranchFilter')?.value || '',
-        };
-      }
     })();
   
 
@@ -27499,13 +27306,6 @@ exports[`getDashboardHtml snapshots (Issue #1242) > pagination controls rendered
         }
       });
 
-      // Comparison toggle checkbox
-      var comparisonToggle = trendsPanel.querySelector('#trendsComparisonToggle');
-      if (comparisonToggle) {
-        comparisonToggle.addEventListener('change', function(e) {
-          vscode.postMessage({ type: 'trendsToggleComparison', show: e.target.checked });
-        });
-      }
     })();
   
 

@@ -354,8 +354,8 @@ export class IpcClientGenerated extends IpcClientBase {
     return this.call<AnalyticsHealthResult>('platform.getAnalyticsHealth');
   }
 
-  async platformGetAnalyticsRuns(startDate?: string, endDate?: string, cursor?: string, outcome?: string, branch?: string, limit?: number): Promise<AnalyticsRunsResult> {
-    return this.call<AnalyticsRunsResult>('platform.getAnalyticsRuns', { startDate, endDate, cursor, outcome, branch, limit });
+  async platformGetAnalyticsRuns(cursor?: string, limit?: number): Promise<AnalyticsRunsResult> {
+    return this.call<AnalyticsRunsResult>('platform.getAnalyticsRuns', { cursor, limit });
   }
 
   async platformGetAnalyticsTrends(period?: string): Promise<AnalyticsTrendsResult> {

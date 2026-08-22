@@ -26,23 +26,12 @@ import type { RunsEntry } from "../../../../src/services/IpcClientBase";
 // Helpers
 // ---------------------------------------------------------------------------
 
-function makeFilters(overrides: Partial<RunsListData["filters"]> = {}): RunsListData["filters"] {
-  return {
-    dateFrom: "",
-    dateTo: "",
-    outcomeFilter: "",
-    branchFilter: "",
-    ...overrides,
-  };
-}
-
 function makePagination(
   overrides: Partial<RunsListData["pagination"]> = {}
 ): RunsListData["pagination"] {
   return {
     page: 0,
     pageSize: 20,
-    totalCount: 0,
     hasMore: false,
     cursorStack: [undefined],
     ...overrides,
@@ -52,7 +41,6 @@ function makePagination(
 function makeData(overrides: Partial<RunsListData> = {}): RunsListData {
   return {
     entries: [],
-    filters: makeFilters(),
     pagination: makePagination(),
     isLoading: false,
     hasAccess: true,
@@ -105,7 +93,7 @@ describe("getRunsTabHtml", () => {
     const html = getRunsTabHtml(
       makeData({
         entries: [entry],
-        pagination: makePagination({ totalCount: 1 }),
+        pagination: makePagination(),
       })
     );
     expect(html).toContain("runs-row");
@@ -135,7 +123,7 @@ describe("getRunsTabHtml", () => {
     const html = getRunsTabHtml(
       makeData({
         entries: [makeEntry()],
-        pagination: makePagination({ page: 0, hasMore: false, totalCount: 1 }),
+        pagination: makePagination({ page: 0, hasMore: false }),
       })
     );
     expect(html).not.toContain("runs-pagination");
@@ -145,7 +133,7 @@ describe("getRunsTabHtml", () => {
     const html = getRunsTabHtml(
       makeData({
         entries: [makeEntry()],
-        pagination: makePagination({ page: 0, hasMore: true, totalCount: 25 }),
+        pagination: makePagination({ page: 0, hasMore: true }),
       })
     );
     expect(html).toContain("runs-pagination");
@@ -156,7 +144,7 @@ describe("getRunsTabHtml", () => {
     const html = getRunsTabHtml(
       makeData({
         entries: [makeEntry()],
-        pagination: makePagination({ page: 1, hasMore: false, totalCount: 5 }),
+        pagination: makePagination({ page: 1, hasMore: false }),
       })
     );
     expect(html).toContain("runs-pagination");
@@ -199,19 +187,9 @@ describe("getRunsTabScript", () => {
     expect(script).toContain("runsPageChange");
   });
 
-  it("contains runsFilter message type", () => {
-    const script = getRunsTabScript();
-    expect(script).toContain("runsFilter");
-  });
-
   it("contains runsExportCsv message type", () => {
     const script = getRunsTabScript();
     expect(script).toContain("runsExportCsv");
-  });
-
-  it("contains runsResetFilters message type", () => {
-    const script = getRunsTabScript();
-    expect(script).toContain("runsResetFilters");
   });
 
   it("uses event delegation on tab-panel-runs", () => {
@@ -220,18 +198,47 @@ describe("getRunsTabScript", () => {
     expect(script).toContain("toggle-runs-detail");
   });
 
-  it("reset button clears all filter inputs", () => {
+  // GET /v1/analytics/runs accepts limit and cursor only. The date/outcome/
+  // branch controls that used to live here sent four parameters the endpoint
+  // discards, so the tab presented an unfiltered page as filtered (#801).
+  // These assertions pin their absence: a filter must not come back until the
+  // endpoint can honour one.
+  it("offers no filter controls the endpoint cannot honour", () => {
+    const html = getRunsTabHtml(makeData({ entries: [makeEntry()] }));
+    for (const id of [
+      "runsDateFrom",
+      "runsDateTo",
+      "runsOutcomeFilter",
+      "runsBranchFilter",
+      "runsApplyFilters",
+      "runsResetFilters",
+    ]) {
+      expect(html).not.toContain(id);
+    }
+  });
+
+  it("posts no filter message types", () => {
     const script = getRunsTabScript();
-    const resetBlockMatch = script.match(
-      /closest\('#runsResetFilters'\)[\s\S]*?vscode\.postMessage\(\s*\{[^}]*runsResetFilters[^}]*\}\s*\)/
+    expect(script).not.toContain("runsFilter");
+    expect(script).not.toContain("runsResetFilters");
+  });
+
+  // The script is a template-literal string, so a call to a helper deleted
+  // alongside the filter UI would typecheck and then throw in the webview.
+  it("calls no helper the filter removal deleted", () => {
+    expect(getRunsTabScript()).not.toContain("collectRunsFilters");
+  });
+
+  // The endpoint reports no total, so the indicator shows the page alone. It
+  // used to append a count decoded from a `total_count` field that was never
+  // sent, rendering a permanent "0 runs" (#801).
+  it("pagination shows the page number without a fabricated total", () => {
+    const html = getRunsTabHtml(
+      makeData({ entries: [makeEntry()], pagination: makePagination({ hasMore: true }) })
     );
-    expect(resetBlockMatch).not.toBeNull();
-    const resetBlock = resetBlockMatch![0];
-    expect(resetBlock).toContain("runsDateFrom");
-    expect(resetBlock).toContain("runsDateTo");
-    expect(resetBlock).toContain("runsOutcomeFilter");
-    expect(resetBlock).toContain("runsBranchFilter");
-    expect(resetBlock).toContain(".value = ''");
+    expect(html).toContain("Page 1");
+    expect(html).not.toContain("0 runs");
+    expect(html).not.toMatch(/\d+ runs</);
   });
 
   it("refresh button posts runsRefresh (not runsResetFilters)", () => {

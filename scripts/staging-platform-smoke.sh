@@ -153,6 +153,11 @@ call() {
 # After a 2xx, require the JSON object to carry these top-level keys. A 200
 # whose body is the wrong contract is the blank-dashboard-tab class of bug:
 # status-only probes stay green while the Health tab never renders scores.
+#
+# Assert the keys the CLIENT DECODES, sourced from the platform's route rather
+# than from its published OpenAPI document. The two can disagree — for
+# /v1/analytics/runs they do — and a canary written from the document would
+# then confirm the spec while production stays broken (#801).
 assert_object_keys() {
   local label="$1"
   shift
@@ -210,8 +215,32 @@ fi
 call GET "/v1/analytics/dashboard?range=7d" "Analytics dashboard / usage summary"
 call GET "/v1/analytics/health" "Analytics health"
 assert_object_keys "Analytics health" compositeScore compositeGrade computedAt periodDays totalRunsAnalyzed
+# Runs and trends are called the way the extension calls them, and their
+# bodies are shape-checked. Both were previously probed for status only, and
+# both returned 200 with a body no client key matched — the Runs tab and the
+# Trends tab rendered nothing while this canary stayed green (#801).
+#
+# The keys asserted below are the ones the Go client decodes. They are taken
+# from the platform's ROUTE, not from its published OpenAPI document: the
+# document declares this operation's body as {items, has_more, next_cursor}
+# and the route returns {runs, nextCursor}. Asserting the documented shape
+# here would have made the canary agree with the spec and disagree with
+# production — exactly the failure the canary exists to catch.
 call GET "/v1/analytics/runs?limit=1" "Analytics runs"
-call GET "/v1/analytics/trends?period=week" "Analytics trends"
+assert_object_keys "Analytics runs" runs nextCursor
+
+# `period` is not a parameter of /trends and never was; the route's query
+# schema is .passthrough(), so sending it produced a 200 built from the
+# server's default window instead of a 422. The canary now sends the documented
+# parameters, one call per metric, since the endpoint answers exactly one.
+TRENDS_FROM="$(date -u -v-30d '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || date -u -d '30 days ago' '+%Y-%m-%dT%H:%M:%SZ')"
+TRENDS_TO="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+call GET "/v1/analytics/trends?metric=tokens&granularity=daily&dateFrom=${TRENDS_FROM}&dateTo=${TRENDS_TO}" \
+  "Analytics trends (tokens, as the Trends tab sends)"
+assert_object_keys "Analytics trends (tokens)" granularity dateFrom dateTo repos data
+call GET "/v1/analytics/trends?metric=success_rate&granularity=daily&dateFrom=${TRENDS_FROM}&dateTo=${TRENDS_TO}" \
+  "Analytics trends (success_rate, as the Trends tab sends)"
+assert_object_keys "Analytics trends (success_rate)" granularity dateFrom dateTo repos targetSuccessRate data
 
 # Call /cost the way the VSCode Cost tab actually calls it — with the window
 # bounds the extension sends, not bare. A bare call was the whole coverage gap

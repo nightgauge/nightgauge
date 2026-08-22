@@ -1,21 +1,51 @@
 {
-  "current": [
-    { "date": "2026-08-04", "successRate": 0.82, "costPerRun": 1.94, "totalRuns": 17 },
-    { "date": "2026-08-05", "successRate": 0.88, "costPerRun": 1.71, "totalRuns": 25 },
-    { "date": "2026-08-06", "successRate": 0.91, "costPerRun": 1.66, "totalRuns": 22 },
-    { "date": "2026-08-07", "successRate": 0.86, "costPerRun": 1.83, "totalRuns": 19 },
-    { "date": "2026-08-08", "successRate": 0.94, "costPerRun": 1.52, "totalRuns": 31 },
-    { "date": "2026-08-09", "successRate": 0.89, "costPerRun": 1.6, "totalRuns": 28 },
-    { "date": "2026-08-10", "successRate": 0.93, "costPerRun": 1.47, "totalRuns": 34 }
+  "entries": [
+    {
+      "date": "2026-08-04",
+      "successRate": 82.4,
+      "totalRuns": 17,
+      "totalTokens": 1840000
+    },
+    {
+      "date": "2026-08-05",
+      "successRate": 88.0,
+      "totalRuns": 25,
+      "totalTokens": 2410000
+    },
+    {
+      "date": "2026-08-06",
+      "successRate": 90.9,
+      "totalRuns": 22,
+      "totalTokens": 2050000
+    },
+    {
+      "date": "2026-08-07",
+      "successRate": 84.2,
+      "totalRuns": 19,
+      "totalTokens": 1720000
+    },
+    {
+      "date": "2026-08-08",
+      "successRate": 93.5,
+      "totalRuns": 31,
+      "totalTokens": 3120000
+    },
+    {
+      "date": "2026-08-09",
+      "successRate": 89.3,
+      "totalRuns": 28,
+      "totalTokens": 2680000
+    },
+    {
+      "date": "2026-08-10",
+      "successRate": 94.1,
+      "totalRuns": 34,
+      "totalTokens": 3390000
+    }
   ],
-  "previous": [
-    { "date": "2026-07-28", "successRate": 0.74, "costPerRun": 2.31, "totalRuns": 14 },
-    { "date": "2026-07-29", "successRate": 0.79, "costPerRun": 2.12, "totalRuns": 19 },
-    { "date": "2026-07-30", "successRate": 0.77, "costPerRun": 2.2, "totalRuns": 16 },
-    { "date": "2026-07-31", "successRate": 0.81, "costPerRun": 2.04, "totalRuns": 21 },
-    { "date": "2026-08-01", "successRate": 0.72, "costPerRun": 2.44, "totalRuns": 11 },
-    { "date": "2026-08-02", "successRate": 0.8, "costPerRun": 2.09, "totalRuns": 18 },
-    { "date": "2026-08-03", "successRate": 0.83, "costPerRun": 1.98, "totalRuns": 23 }
-  ],
-  "period": "7d"
+  "granularity": "daily",
+  "dateFrom": "2026-07-11T00:00:00.000Z",
+  "dateTo": "2026-08-10T00:00:00.000Z",
+  "repos": ["nightgauge/nightgauge"],
+  "targetSuccessRate": 95
 }

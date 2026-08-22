@@ -774,25 +774,26 @@ type PlatformCostAnalyticsParams struct {
 	EndDate string `json:"endDate,omitempty"`
 }
 
-// PlatformAnalyticsRunsParams are parameters for platform.getAnalyticsRuns (#3319).
+// PlatformAnalyticsRunsParams are parameters for platform.getAnalyticsRuns.
+//
+// Cursor and Limit are the only parameters GET /v1/analytics/runs declares.
+// The date/outcome/branch filters that used to live here were accepted by this
+// method, forwarded to the endpoint, and dropped by its query schema — the
+// Runs tab labelled an unfiltered page as filtered. They are removed rather
+// than emulated client-side, which would only filter the current page.
 type PlatformAnalyticsRunsParams struct {
-	// StartDate filters results to this start date (YYYY-MM-DD). Empty = no lower bound.
-	StartDate string `json:"startDate,omitempty"`
-	// EndDate filters results to this end date (YYYY-MM-DD). Empty = no upper bound.
-	EndDate string `json:"endDate,omitempty"`
 	// Cursor is the pagination cursor from the previous page response.
 	Cursor string `json:"cursor,omitempty"`
-	// Outcome filters to a specific run outcome (productive, failed, cancelled, verify-and-close).
-	Outcome string `json:"outcome,omitempty"`
-	// Branch filters to runs on a specific branch (substring match).
-	Branch string `json:"branch,omitempty"`
 	// Limit is the maximum number of entries to return per page.
 	Limit int `json:"limit,omitempty"`
 }
 
-// PlatformGetAnalyticsTrendsParams are parameters for platform.getAnalyticsTrends (#3320).
+// PlatformGetAnalyticsTrendsParams are parameters for platform.getAnalyticsTrends.
 type PlatformGetAnalyticsTrendsParams struct {
-	// Period is the date range: "30d" | "90d" | "180d". Defaults to "30d".
+	// Period is the date range the Trends tab offers: "30d" | "90d" | "180d",
+	// defaulting to "30d". It is a UI-level selector, NOT a wire parameter —
+	// GET /v1/analytics/trends has no `period`; the service translates this
+	// into the dateFrom/dateTo bounds the endpoint does declare.
 	Period string `json:"period,omitempty"`
 }
 
