@@ -60,8 +60,16 @@ export interface AdapterUsageServiceOptions {
    */
   resolveAdapter: () => ExecutionAdapter;
   /**
-   * Reports the Claude usage feed's health (#810). Defaults to the real probe;
-   * injected so tests can drive every health state without a home directory.
+   * Reports the Claude usage feed's health (#810).
+   *
+   * Required to be explicit, with NO default: defaulting to the real probe made
+   * every service constructed in a test read the developer's own
+   * ~/.claude/settings.json on each refresh. Hidden filesystem IO behind a
+   * default is worth avoiding on its own, and here it also broke a fake-timer
+   * test whose refresh could no longer resolve inside an advanced tick.
+   *
+   * Omitted, snapshots carry no health — which every surface already renders as
+   * "not known yet".
    */
   probeClaudeFeedHealth?: () => Promise<ClaudeFeedHealth>;
 }
@@ -147,10 +155,8 @@ export class AdapterUsageService implements vscode.Disposable {
       resolveAdapter: () => getGlobalAdapterWithSource(workspaceRoot).adapter,
       // Same store the readings are written to, so "when did this last work"
       // and "what does it say" can never disagree (#810).
-      probeClaudeFeedHealth:
-        claudeRateLimitStore === null
-          ? undefined
-          : () => probeClaudeFeedHealth({ store: claudeRateLimitStore }),
+      probeClaudeFeedHealth: () =>
+        probeClaudeFeedHealth(claudeRateLimitStore === null ? {} : { store: claudeRateLimitStore }),
     });
   }
 
@@ -275,7 +281,10 @@ export class AdapterUsageService implements vscode.Disposable {
     if (snapshot.adapter !== "claude") {
       return snapshot;
     }
-    const probe = this.options.probeClaudeFeedHealth ?? probeClaudeFeedHealth;
+    const probe = this.options.probeClaudeFeedHealth;
+    if (probe === undefined) {
+      return snapshot;
+    }
     try {
       return { ...snapshot, claudeFeedHealth: await probe() };
     } catch {

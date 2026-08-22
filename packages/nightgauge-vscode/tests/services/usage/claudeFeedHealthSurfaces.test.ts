@@ -17,6 +17,10 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { ClaudeRateLimitStore } from "../../../src/services/usage/ClaudeRateLimitStore";
+import {
+  AdapterUsageService,
+  UsageProviderRegistry,
+} from "../../../src/services/usage/AdapterUsageService";
 import { buildUsagePanelState } from "../../../src/views/dashboard/usagePanel";
 import { getUsagePanelSectionHtml } from "../../../src/views/dashboard/tabs/UsagePanelHtml";
 import type { ClaudeFeedHealth } from "../../../src/services/usage/claudeStatusLineSetup";
@@ -154,5 +158,66 @@ describe("ClaudeRateLimitStore.lastObservedAt", () => {
 
     expect(s.readings()).toHaveLength(0);
     expect(s.lastObservedAt()?.toISOString()).toBe(observed.toISOString());
+  });
+});
+
+describe("AdapterUsageService decorates claude snapshots with the verdict", () => {
+  /** A provider that returns a fixed snapshot for whatever adapter it is asked. */
+  function providerFor(adapter: string) {
+    return {
+      id: "test",
+      supports: () => true,
+      getSnapshot: async () => ({
+        adapter,
+        plan: { kind: "pay-per-token" },
+        capturedAt: CAPTURED,
+        windows: [],
+      }),
+    };
+  }
+
+  async function derive(adapter: string, probe?: () => Promise<ClaudeFeedHealth>) {
+    const registry = new UsageProviderRegistry();
+    registry.register(providerFor(adapter) as never);
+    const service = new AdapterUsageService(registry, {
+      resolveAdapter: () => adapter as never,
+      probeClaudeFeedHealth: probe,
+    });
+    try {
+      return await service.refresh();
+    } finally {
+      service.dispose();
+    }
+  }
+
+  it("attaches the verdict to a claude snapshot", async () => {
+    const snapshot = await derive("claude", async () => BROKEN);
+    expect(snapshot.claudeFeedHealth).toEqual(BROKEN);
+  });
+
+  it("leaves other adapters alone", async () => {
+    let probes = 0;
+    const snapshot = await derive("codex", async () => {
+      probes += 1;
+      return BROKEN;
+    });
+    expect(snapshot.claudeFeedHealth).toBeUndefined();
+    expect(probes).toBe(0);
+  });
+
+  it("does not probe at all when no prober is wired", async () => {
+    // The default used to be the real probe, which made every service built in
+    // a test read the developer's own ~/.claude/settings.json on each refresh.
+    const snapshot = await derive("claude");
+    expect(snapshot.claudeFeedHealth).toBeUndefined();
+  });
+
+  it("keeps the meter alive when the probe throws", async () => {
+    const snapshot = await derive("claude", async () => {
+      throw new Error("settings unreadable");
+    });
+    // One broken source must not take the whole meter down.
+    expect(snapshot.adapter).toBe("claude");
+    expect(snapshot.claudeFeedHealth).toBeUndefined();
   });
 });
