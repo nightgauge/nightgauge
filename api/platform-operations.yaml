@@ -152,6 +152,13 @@ operations:
     security: user_jwt
     upstream: declared
 
+  - id: auditReports.download
+    go_name: OpAuditReportsDownload
+    method: GET
+    path: /v1/audit/reports/{id}/download
+    security: user_jwt
+    upstream: declared
+
   - id: auditReports.generate
     go_name: OpAuditReportsGenerate
     method: POST

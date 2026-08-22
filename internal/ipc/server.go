@@ -1887,16 +1887,12 @@ func (s *Server) registerMethods() {
 		return s.getComplianceSvc().GenerateReport(ctx, p.ReportType, p.StartDate, p.EndDate, p.Format)
 	}
 
-	//ipc:method platformAuditListReports params:PlatformAuditListReportsParams result:ComplianceReportsPage
-	s.methods["platform.auditListReports"] = func(ctx context.Context, params json.RawMessage) (interface{}, error) {
+	//ipc:method platformAuditListReports params:PlatformAuditListReportsParams result:ComplianceReportsResult
+	s.methods["platform.auditListReports"] = func(ctx context.Context, _ json.RawMessage) (interface{}, error) {
 		if s.getComplianceSvc() == nil {
 			return nil, fmt.Errorf("compliance service unavailable")
 		}
-		var p PlatformAuditListReportsParams
-		if err := json.Unmarshal(params, &p); err != nil {
-			return nil, fmt.Errorf("invalid params: %w", err)
-		}
-		return s.getComplianceSvc().ListReports(ctx, p.Cursor, p.Limit)
+		return s.getComplianceSvc().ListReports(ctx)
 	}
 
 	//ipc:method platformAuditGetReport params:PlatformAuditGetReportParams result:ComplianceReportDetail
@@ -1909,6 +1905,18 @@ func (s *Server) registerMethods() {
 			return nil, fmt.Errorf("invalid params: %w", err)
 		}
 		return s.getComplianceSvc().GetReport(ctx, p.ReportID)
+	}
+
+	//ipc:method platformAuditDownloadReport params:PlatformAuditDownloadReportParams result:ComplianceReportDownload
+	s.methods["platform.auditDownloadReport"] = func(ctx context.Context, params json.RawMessage) (interface{}, error) {
+		if s.getComplianceSvc() == nil {
+			return nil, fmt.Errorf("compliance service unavailable")
+		}
+		var p PlatformAuditDownloadReportParams
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, fmt.Errorf("invalid params: %w", err)
+		}
+		return s.getComplianceSvc().DownloadReport(ctx, p.ReportID)
 	}
 
 	//ipc:method auditGetRetentionConfig params:AuditGetRetentionConfigParams result:RetentionConfig

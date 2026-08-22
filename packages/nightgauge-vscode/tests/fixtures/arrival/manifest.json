@@ -101,7 +101,7 @@
         "checks": [
           {
             "at": "",
-            "type": "ComplianceReportsPage"
+            "type": "ComplianceReportsResult"
           },
           {
             "at": "reports/[]",

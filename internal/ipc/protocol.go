@@ -810,16 +810,22 @@ type PlatformAuditGenerateReportParams struct {
 }
 
 // PlatformAuditListReportsParams are parameters for platform.auditListReports (#3322).
-type PlatformAuditListReportsParams struct {
-	// Cursor is the pagination cursor from the previous page response.
-	Cursor string `json:"cursor,omitempty"`
-	// Limit is the maximum number of entries to return.
-	Limit int `json:"limit,omitempty"`
-}
+//
+// Deliberately empty: GET /v1/audit/reports takes no parameters. It returns the
+// account's newest 50 reports, and the cursor and limit this carried were
+// dropped on the floor by the route while the tab rendered pagination controls
+// from a has-more flag the response never contained (#803).
+type PlatformAuditListReportsParams struct{}
 
 // PlatformAuditGetReportParams are parameters for platform.auditGetReport (#3322).
 type PlatformAuditGetReportParams struct {
 	// ReportID is the ID of the report to fetch.
+	ReportID string `json:"reportId"`
+}
+
+// PlatformAuditDownloadReportParams are parameters for platform.auditDownloadReport (#803).
+type PlatformAuditDownloadReportParams struct {
+	// ReportID is the ID of the report whose artifact is requested.
 	ReportID string `json:"reportId"`
 }
 

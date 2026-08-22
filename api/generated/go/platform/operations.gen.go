@@ -159,6 +159,15 @@ var OpAuditIntegrityVerify = Operation{
 	Upstream: UpstreamUndeclared,
 }
 
+// OpAuditReportsDownload is GET /v1/audit/reports/{id}/download.
+var OpAuditReportsDownload = Operation{
+	ID:       "auditReports.download",
+	Method:   "GET",
+	Path:     "/v1/audit/reports/{id}/download",
+	Security: SecurityUserJWT,
+	Upstream: UpstreamDeclared,
+}
+
 // OpAuditReportsGenerate is POST /v1/audit/reports.
 var OpAuditReportsGenerate = Operation{
 	ID:       "auditReports.generate",
@@ -272,6 +281,7 @@ var Operations = []Operation{
 	OpAnalyticsTrends,
 	OpAttentionSync,
 	OpAuditIntegrityVerify,
+	OpAuditReportsDownload,
 	OpAuditReportsGenerate,
 	OpAuditReportsGet,
 	OpAuditReportsList,

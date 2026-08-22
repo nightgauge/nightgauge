@@ -664,24 +664,31 @@ for (const kind of ALL_FAILURE_KINDS) {
 //     own docstring names as the motivating bug: a rejected credential told
 //     to "upgrade your plan") ------------------------------------------
 
-const compliancePagination = { hasMore: false };
-const complianceReport = (id: string, status: string) => ({
+// Shaped from GET /v1/audit/reports' own rows: reportType is the platform's
+// SOC2/ISO27001 casing, status is pending|complete|failed, dates are ISO, and
+// there is no downloadUrl on a list row — the artifact is resolved on demand
+// (#803). This generator is typechecked by nothing (issue 499), so a payload
+// that drifts from ComplianceData is only caught when a renderer throws.
+const complianceReport = (id: string, status: string, errorMessage?: string) => ({
   id,
-  reportType: "soc2",
+  reportType: "SOC2",
   status,
-  startDate: "2026-07-01",
-  endDate: "2026-07-31",
+  startDate: "2026-07-01T00:00:00.000Z",
+  endDate: "2026-07-31T00:00:00.000Z",
   format: "pdf",
-  downloadUrl: status === "ready" ? `https://platform.example/reports/${id}.pdf` : undefined,
+  errorMessage,
   createdAt: new Date(now.getTime() - 86_400_000).toISOString(),
 });
 
 writeFixture("compliance--populated", {
   activeTab: "compliance",
   complianceData: {
-    reports: [complianceReport("rep-1", "ready"), complianceReport("rep-2", "processing")],
+    reports: [
+      complianceReport("rep-1", "complete"),
+      complianceReport("rep-2", "pending"),
+      complianceReport("rep-3", "failed", "Report generation timed out"),
+    ],
     filters: {},
-    pagination: compliancePagination,
     isLoading: false,
     hasAccess: true,
     isGenerating: false,
@@ -692,7 +699,6 @@ writeFixture("compliance--empty", {
   complianceData: {
     reports: [],
     filters: {},
-    pagination: compliancePagination,
     isLoading: false,
     hasAccess: true,
     isGenerating: false,
@@ -703,7 +709,6 @@ writeFixture("compliance--loading", {
   complianceData: {
     reports: [],
     filters: {},
-    pagination: compliancePagination,
     isLoading: true,
     hasAccess: true,
     isGenerating: false,
@@ -715,7 +720,6 @@ for (const kind of ALL_FAILURE_KINDS) {
     complianceData: {
       reports: [],
       filters: {},
-      pagination: compliancePagination,
       isLoading: false,
       hasAccess: false,
       isGenerating: false,
@@ -1122,7 +1126,6 @@ const ALL_POPULATED: DashboardHtmlOverrides = {
   complianceData: {
     reports: [complianceReport("rep-1", "ready")],
     filters: {},
-    pagination: compliancePagination,
     isLoading: false,
     hasAccess: true,
     isGenerating: false,

@@ -94,9 +94,14 @@ test.describe("Compliance tab — inbound rendering per state", () => {
     // The report id (rep-1/rep-2) is only in a data-report-id attribute, not
     // visible text — assert on what the row actually renders: type and status.
     await expect(page.locator("body")).toContainText("SOC2");
-    await expect(page.locator("body")).toContainText("processing");
+    await expect(page.locator("body")).toContainText("pending");
+    // The download button exists for a `complete` report on the strength of
+    // its status alone — list rows carry no download URL (#803).
     await expect(page.locator('[data-report-id="rep-1"]')).toBeVisible();
+    await expect(page.locator('[data-report-id="rep-2"]')).toHaveCount(0);
     await expect(page.locator(".compliance-empty-state")).toHaveCount(0);
+    // The endpoint is unpaginated, so no controls are rendered for any list.
+    await expect(page.locator("#complianceNextPage")).toHaveCount(0);
   });
 
   test("empty: renders the empty-table message inline, not a failure panel", async ({ page }) => {

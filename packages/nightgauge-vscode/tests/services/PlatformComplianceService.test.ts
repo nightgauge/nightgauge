@@ -2,12 +2,13 @@
  * Tests for PlatformComplianceService (Issue #3322, updated for #743)
  *
  * Covers:
- * 1. fetchAndCache → calls platformAuditListReports with correct params
+ * 1. fetchAndCache → calls platformAuditListReports with no arguments (#803)
  * 2. fetchAndCache → returns { ok: true, value } and caches the result
  * 3. fetchAndCache → each failure kind (unauthorized/forbidden/server_error/
  *    offline/not_configured) → { ok: false, kind, status, endpoint, message }
  * 4. generateReport → calls platformAuditGenerateReport with correct params
  * 5. getReport → calls platformAuditGetReport with correct reportId
+ * 5b. downloadReport → calls platformAuditDownloadReport with correct reportId
  * 6. getCached → returns cached value synchronously
  * 7. dispose → clears cache
  */
@@ -16,9 +17,10 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { PlatformComplianceService } from "../../src/services/PlatformComplianceService";
 import type { IpcClientGenerated } from "../../src/services/IpcClient.generated";
 import type {
-  ComplianceReportsPage,
+  ComplianceReportsResult,
   ComplianceReportResult,
   ComplianceReportDetail,
+  ComplianceReportDownload,
 } from "../../src/services/IpcClientBase";
 
 const ENDPOINT = "platform.auditListReports";
@@ -27,10 +29,11 @@ const ENDPOINT = "platform.auditListReports";
 // Helpers
 // ---------------------------------------------------------------------------
 
-function makeReportsPage(overrides: Partial<ComplianceReportsPage> = {}): ComplianceReportsPage {
+function makeReportsPage(
+  overrides: Partial<ComplianceReportsResult> = {}
+): ComplianceReportsResult {
   return {
     reports: [],
-    hasMore: false,
     ...overrides,
   };
 }
@@ -49,14 +52,19 @@ function makeIpcClient(overrides: Partial<IpcClientGenerated> = {}): IpcClientGe
     } satisfies ComplianceReportResult),
     platformAuditGetReport: vi.fn().mockResolvedValue({
       id: "rpt-1",
-      reportType: "soc2",
-      status: "ready",
-      startDate: "2026-01-01",
-      endDate: "2026-03-31",
+      reportType: "SOC2",
+      status: "complete",
+      startDate: "2026-01-01T00:00:00.000Z",
+      endDate: "2026-03-31T00:00:00.000Z",
       format: "pdf",
-      downloadUrl: "https://example.com/rpt-1.pdf",
+      generatedAt: "2026-05-01T00:00:00.000Z",
       createdAt: "2026-05-01T00:00:00Z",
     } satisfies ComplianceReportDetail),
+    platformAuditDownloadReport: vi.fn().mockResolvedValue({
+      url: "https://storage.example.test/signed",
+      expiresIn: 3600,
+      pending: false,
+    } satisfies ComplianceReportDownload),
     ...overrides,
   } as unknown as IpcClientGenerated;
 }
@@ -70,15 +78,18 @@ describe("PlatformComplianceService.fetchAndCache", () => {
     vi.clearAllMocks();
   });
 
-  it("calls platformAuditListReports with correct params", async () => {
+  // The endpoint declares no parameters — a cursor and a limit were being sent
+  // and discarded by the server, while the tab paged on a flag the response
+  // never carried (#803).
+  it("calls platformAuditListReports with no arguments", async () => {
     const ipc = makeIpcClient();
     const svc = new PlatformComplianceService(ipc);
-    await svc.fetchAndCache("cursor-1", 10);
-    expect(ipc.platformAuditListReports).toHaveBeenCalledWith("cursor-1", 10);
+    await svc.fetchAndCache();
+    expect(ipc.platformAuditListReports).toHaveBeenCalledWith();
   });
 
   it("returns { ok: true, value } and caches the result", async () => {
-    const page = makeReportsPage({ hasMore: true });
+    const page = makeReportsPage({ reports: [] });
     const ipc = makeIpcClient({
       platformAuditListReports: vi.fn().mockResolvedValue(page),
     });
@@ -217,12 +228,30 @@ describe("PlatformComplianceService.getReport", () => {
     expect(ipc.platformAuditGetReport).toHaveBeenCalledWith("rpt-1");
   });
 
-  it("returns detail with downloadUrl for ready report", async () => {
+  it("returns detail carrying the platform's own status vocabulary", async () => {
     const ipc = makeIpcClient();
     const svc = new PlatformComplianceService(ipc);
     const detail = await svc.getReport("rpt-1");
-    expect(detail.status).toBe("ready");
-    expect(detail.downloadUrl).toBeTruthy();
+    expect(detail.status).toBe("complete");
+  });
+});
+
+// The artifact lives behind its own endpoint; the detail response has never
+// carried a download URL (#803).
+describe("PlatformComplianceService.downloadReport", () => {
+  it("calls platformAuditDownloadReport with correct reportId", async () => {
+    const ipc = makeIpcClient();
+    const svc = new PlatformComplianceService(ipc);
+    await svc.downloadReport("rpt-1");
+    expect(ipc.platformAuditDownloadReport).toHaveBeenCalledWith("rpt-1");
+  });
+
+  it("returns the signed URL and its TTL", async () => {
+    const ipc = makeIpcClient();
+    const svc = new PlatformComplianceService(ipc);
+    const artifact = await svc.downloadReport("rpt-1");
+    expect(artifact.url).toBe("https://storage.example.test/signed");
+    expect(artifact.pending).toBe(false);
   });
 });
 
@@ -234,7 +263,7 @@ describe("PlatformComplianceService.getCached", () => {
   });
 
   it("returns cached value after fetch", async () => {
-    const page = makeReportsPage({ hasMore: true });
+    const page = makeReportsPage({ reports: [] });
     const ipc = makeIpcClient({
       platformAuditListReports: vi.fn().mockResolvedValue(page),
     });

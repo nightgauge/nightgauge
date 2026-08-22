@@ -37,8 +37,9 @@ import type {
   CancelActiveForNetworkOutageResult,
   CheckAuthorizationResult,
   ComplianceReportDetail,
+  ComplianceReportDownload,
   ComplianceReportResult,
-  ComplianceReportsPage,
+  ComplianceReportsResult,
   ConfigGetHealthThresholdsResult,
   ConfigGetProjectResult,
   ConfigTierAuditResult,
@@ -366,12 +367,16 @@ export class IpcClientGenerated extends IpcClientBase {
     return this.call<ComplianceReportResult>('platform.auditGenerateReport', { reportType, startDate, endDate, format });
   }
 
-  async platformAuditListReports(cursor?: string, limit?: number): Promise<ComplianceReportsPage> {
-    return this.call<ComplianceReportsPage>('platform.auditListReports', { cursor, limit });
+  async platformAuditListReports(): Promise<ComplianceReportsResult> {
+    return this.call<ComplianceReportsResult>('platform.auditListReports');
   }
 
   async platformAuditGetReport(reportId: string): Promise<ComplianceReportDetail> {
     return this.call<ComplianceReportDetail>('platform.auditGetReport', { reportId });
+  }
+
+  async platformAuditDownloadReport(reportId: string): Promise<ComplianceReportDownload> {
+    return this.call<ComplianceReportDownload>('platform.auditDownloadReport', { reportId });
   }
 
   async platformSyncTelemetry(limit?: number, daysBack?: number, repo?: string): Promise<PlatformSyncTelemetryResult> {

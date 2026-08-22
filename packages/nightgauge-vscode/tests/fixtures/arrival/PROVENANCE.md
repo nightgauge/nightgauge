@@ -40,8 +40,8 @@ method named in `manifest.json`.
 > tree were produced without a live platform account: each is a redacted,
 > structurally faithful instance of the boundary struct named in
 > `manifest.json`, with values chosen to exercise the render paths (a `null`
-> `projectId`, a failed run with no `stages`, a `processing` report with no
-> `downloadUrl`, a `next_cursor`). That is weaker provenance than a capture,
+> `projectId`, a failed run with no `stages`, a `pending` compliance report with
+> no `generatedAt`, a `failed` one carrying its `errorMessage`, a `next_cursor`). That is weaker provenance than a capture,
 > and the contract test is what stands in for it — it is a mechanical check
 > against the same Go source the daemon serialises from, so the fixture cannot
 > disagree with the boundary in shape, only in content. Re-record against a
@@ -86,7 +86,7 @@ record "$F/platform/usage-summary.json"      platform.getUsageSummary
 record "$F/platform/analytics-runs.json"     platform.getAnalyticsRuns    '{"limit":20}'
 record "$F/platform/analytics-trends.json"   platform.getAnalyticsTrends  '{"period":"7d"}'
 record "$F/platform/cost-analytics.json"     platform.getCostAnalytics    '{"startDate":"2026-08-04","endDate":"2026-08-11"}'
-record "$F/platform/compliance-reports.json" platform.auditListReports    '{"limit":20}'
+record "$F/platform/compliance-reports.json" platform.auditListReports
 record "$F/github/pr-list.json"              pr.list                      '{"owner":"nightgauge","repo":"nightgauge","state":"OPEN"}'
 ```
 

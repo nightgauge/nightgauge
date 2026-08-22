@@ -153,7 +153,11 @@ var contractCallSites = []callSite{
 		return err
 	}},
 	{api.OpAuditReportsList, func(ctx context.Context, c *Client) error {
-		_, err := NewComplianceService(c).ListReports(ctx, "", 0)
+		_, err := NewComplianceService(c).ListReports(ctx)
+		return err
+	}},
+	{api.OpAuditReportsDownload, func(ctx context.Context, c *Client) error {
+		_, err := NewComplianceService(c).DownloadReport(ctx, "report-1")
 		return err
 	}},
 	{api.OpBillingPortalSession, func(ctx context.Context, c *Client) error {

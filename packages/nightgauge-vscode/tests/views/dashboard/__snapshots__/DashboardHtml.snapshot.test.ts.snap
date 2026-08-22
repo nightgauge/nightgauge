@@ -5232,6 +5232,13 @@ exports[`getDashboardHtml snapshots (Issue #1242) > active pipeline state — cu
       font-weight: 600;
     }
 
+    /* The endpoint returns the newest 50 rows and no cursor, so the cap is
+       stated rather than paged around (#803). */
+    .compliance-table-note {
+      font-weight: 400;
+      color: var(--vscode-descriptionForeground);
+    }
+
     .compliance-table-container {
       overflow-x: auto;
       border: 1px solid var(--vscode-panel-border);
@@ -5280,13 +5287,12 @@ exports[`getDashboardHtml snapshots (Issue #1242) > active pipeline state — cu
       font-weight: 600;
     }
 
-    .status-pending,
-    .status-processing {
+    .status-pending {
       background: rgba(255, 206, 86, 0.2);
       color: rgba(255, 206, 86, 1);
     }
 
-    .status-ready {
+    .status-complete {
       background: rgba(75, 192, 75, 0.2);
       color: rgba(75, 192, 75, 1);
     }
@@ -5308,21 +5314,6 @@ exports[`getDashboardHtml snapshots (Issue #1242) > active pipeline state — cu
 
     @keyframes compliance-spin {
       to { transform: rotate(360deg); }
-    }
-
-    /* Pagination */
-    .compliance-pagination {
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      gap: var(--spacing-md);
-      font-size: 0.85em;
-      color: var(--vscode-descriptionForeground);
-    }
-
-    .compliance-pagination button:disabled {
-      opacity: 0.4;
-      cursor: default;
     }
 .dependabot-tab { padding: 8px 0; }
     .dependabot-loading, .dependabot-empty { padding: 24px; text-align: center; opacity: 0.7; }
@@ -6782,19 +6773,6 @@ exports[`getDashboardHtml snapshots (Issue #1242) > active pipeline state — cu
           return;
         }
 
-        // Page change
-        var prevBtn = e.target.closest('#compliancePrevPage');
-        if (prevBtn) {
-          var cursor = prevBtn.getAttribute('data-cursor') || '';
-          vscode.postMessage({ type: 'compliancePageChange', cursor: cursor });
-          return;
-        }
-        var nextBtn = e.target.closest('#complianceNextPage');
-        if (nextBtn) {
-          var cursor = nextBtn.getAttribute('data-cursor') || '';
-          vscode.postMessage({ type: 'compliancePageChange', cursor: cursor });
-          return;
-        }
       });
     })();
   
@@ -12079,6 +12057,13 @@ exports[`getDashboardHtml snapshots (Issue #1242) > completed run with tool call
       font-weight: 600;
     }
 
+    /* The endpoint returns the newest 50 rows and no cursor, so the cap is
+       stated rather than paged around (#803). */
+    .compliance-table-note {
+      font-weight: 400;
+      color: var(--vscode-descriptionForeground);
+    }
+
     .compliance-table-container {
       overflow-x: auto;
       border: 1px solid var(--vscode-panel-border);
@@ -12127,13 +12112,12 @@ exports[`getDashboardHtml snapshots (Issue #1242) > completed run with tool call
       font-weight: 600;
     }
 
-    .status-pending,
-    .status-processing {
+    .status-pending {
       background: rgba(255, 206, 86, 0.2);
       color: rgba(255, 206, 86, 1);
     }
 
-    .status-ready {
+    .status-complete {
       background: rgba(75, 192, 75, 0.2);
       color: rgba(75, 192, 75, 1);
     }
@@ -12155,21 +12139,6 @@ exports[`getDashboardHtml snapshots (Issue #1242) > completed run with tool call
 
     @keyframes compliance-spin {
       to { transform: rotate(360deg); }
-    }
-
-    /* Pagination */
-    .compliance-pagination {
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      gap: var(--spacing-md);
-      font-size: 0.85em;
-      color: var(--vscode-descriptionForeground);
-    }
-
-    .compliance-pagination button:disabled {
-      opacity: 0.4;
-      cursor: default;
     }
 .dependabot-tab { padding: 8px 0; }
     .dependabot-loading, .dependabot-empty { padding: 24px; text-align: center; opacity: 0.7; }
@@ -13677,19 +13646,6 @@ exports[`getDashboardHtml snapshots (Issue #1242) > completed run with tool call
           return;
         }
 
-        // Page change
-        var prevBtn = e.target.closest('#compliancePrevPage');
-        if (prevBtn) {
-          var cursor = prevBtn.getAttribute('data-cursor') || '';
-          vscode.postMessage({ type: 'compliancePageChange', cursor: cursor });
-          return;
-        }
-        var nextBtn = e.target.closest('#complianceNextPage');
-        if (nextBtn) {
-          var cursor = nextBtn.getAttribute('data-cursor') || '';
-          vscode.postMessage({ type: 'compliancePageChange', cursor: cursor });
-          return;
-        }
       });
     })();
   
@@ -18974,6 +18930,13 @@ exports[`getDashboardHtml snapshots (Issue #1242) > empty state — no current r
       font-weight: 600;
     }
 
+    /* The endpoint returns the newest 50 rows and no cursor, so the cap is
+       stated rather than paged around (#803). */
+    .compliance-table-note {
+      font-weight: 400;
+      color: var(--vscode-descriptionForeground);
+    }
+
     .compliance-table-container {
       overflow-x: auto;
       border: 1px solid var(--vscode-panel-border);
@@ -19022,13 +18985,12 @@ exports[`getDashboardHtml snapshots (Issue #1242) > empty state — no current r
       font-weight: 600;
     }
 
-    .status-pending,
-    .status-processing {
+    .status-pending {
       background: rgba(255, 206, 86, 0.2);
       color: rgba(255, 206, 86, 1);
     }
 
-    .status-ready {
+    .status-complete {
       background: rgba(75, 192, 75, 0.2);
       color: rgba(75, 192, 75, 1);
     }
@@ -19050,21 +19012,6 @@ exports[`getDashboardHtml snapshots (Issue #1242) > empty state — no current r
 
     @keyframes compliance-spin {
       to { transform: rotate(360deg); }
-    }
-
-    /* Pagination */
-    .compliance-pagination {
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      gap: var(--spacing-md);
-      font-size: 0.85em;
-      color: var(--vscode-descriptionForeground);
-    }
-
-    .compliance-pagination button:disabled {
-      opacity: 0.4;
-      cursor: default;
     }
 .dependabot-tab { padding: 8px 0; }
     .dependabot-loading, .dependabot-empty { padding: 24px; text-align: center; opacity: 0.7; }
@@ -20417,19 +20364,6 @@ exports[`getDashboardHtml snapshots (Issue #1242) > empty state — no current r
           return;
         }
 
-        // Page change
-        var prevBtn = e.target.closest('#compliancePrevPage');
-        if (prevBtn) {
-          var cursor = prevBtn.getAttribute('data-cursor') || '';
-          vscode.postMessage({ type: 'compliancePageChange', cursor: cursor });
-          return;
-        }
-        var nextBtn = e.target.closest('#complianceNextPage');
-        if (nextBtn) {
-          var cursor = nextBtn.getAttribute('data-cursor') || '';
-          vscode.postMessage({ type: 'compliancePageChange', cursor: cursor });
-          return;
-        }
       });
     })();
   
@@ -25714,6 +25648,13 @@ exports[`getDashboardHtml snapshots (Issue #1242) > pagination controls rendered
       font-weight: 600;
     }
 
+    /* The endpoint returns the newest 50 rows and no cursor, so the cap is
+       stated rather than paged around (#803). */
+    .compliance-table-note {
+      font-weight: 400;
+      color: var(--vscode-descriptionForeground);
+    }
+
     .compliance-table-container {
       overflow-x: auto;
       border: 1px solid var(--vscode-panel-border);
@@ -25762,13 +25703,12 @@ exports[`getDashboardHtml snapshots (Issue #1242) > pagination controls rendered
       font-weight: 600;
     }
 
-    .status-pending,
-    .status-processing {
+    .status-pending {
       background: rgba(255, 206, 86, 0.2);
       color: rgba(255, 206, 86, 1);
     }
 
-    .status-ready {
+    .status-complete {
       background: rgba(75, 192, 75, 0.2);
       color: rgba(75, 192, 75, 1);
     }
@@ -25790,21 +25730,6 @@ exports[`getDashboardHtml snapshots (Issue #1242) > pagination controls rendered
 
     @keyframes compliance-spin {
       to { transform: rotate(360deg); }
-    }
-
-    /* Pagination */
-    .compliance-pagination {
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      gap: var(--spacing-md);
-      font-size: 0.85em;
-      color: var(--vscode-descriptionForeground);
-    }
-
-    .compliance-pagination button:disabled {
-      opacity: 0.4;
-      cursor: default;
     }
 .dependabot-tab { padding: 8px 0; }
     .dependabot-loading, .dependabot-empty { padding: 24px; text-align: center; opacity: 0.7; }
@@ -27385,19 +27310,6 @@ exports[`getDashboardHtml snapshots (Issue #1242) > pagination controls rendered
           return;
         }
 
-        // Page change
-        var prevBtn = e.target.closest('#compliancePrevPage');
-        if (prevBtn) {
-          var cursor = prevBtn.getAttribute('data-cursor') || '';
-          vscode.postMessage({ type: 'compliancePageChange', cursor: cursor });
-          return;
-        }
-        var nextBtn = e.target.closest('#complianceNextPage');
-        if (nextBtn) {
-          var cursor = nextBtn.getAttribute('data-cursor') || '';
-          vscode.postMessage({ type: 'compliancePageChange', cursor: cursor });
-          return;
-        }
       });
     })();
   

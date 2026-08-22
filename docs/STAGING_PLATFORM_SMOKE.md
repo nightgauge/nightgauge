@@ -169,6 +169,13 @@ dimensions}` the Health tab used to decode) fails the run as
   spec.** Both are hand-authored artifacts and either can drift; only the
   route decides what a client receives.
 
+- A `200` on `GET /v1/audit/reports` carrying the pre-#803 client-side belief
+  (`{reports, nextCursor, hasMore}`) fails the run. The route returns a single
+  `items` envelope and offers no pagination at all — it takes no parameters and
+  answers with the account's newest 50 rows. The old probe sent `?limit=1` and
+  asserted status only, so it stayed green while the Compliance tab rendered
+  "no reports" for an account that had them.
+
 - A missing `STAGING_SESSION_TOKEN` or `STAGING_PLATFORM_BASE_URL` fails
   immediately, before any HTTP call is attempted (the mock server sees zero
   requests in that case), with a message that says "fail", not "skip".

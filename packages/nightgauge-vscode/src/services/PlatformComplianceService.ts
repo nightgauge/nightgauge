@@ -11,9 +11,10 @@
 import * as vscode from "vscode";
 import type { IpcClientGenerated } from "./IpcClient.generated";
 import type {
-  ComplianceReportsPage,
+  ComplianceReportsResult,
   ComplianceReportResult,
   ComplianceReportDetail,
+  ComplianceReportDownload,
 } from "./IpcClientBase";
 import { Logger } from "../utils/logger";
 import { platformOk, reportPlatformFailure, type PlatformResult } from "./platformResult";
@@ -21,22 +22,21 @@ import { platformOk, reportPlatformFailure, type PlatformResult } from "./platfo
 const LIST_ENDPOINT = "platform.auditListReports";
 
 export class PlatformComplianceService implements vscode.Disposable {
-  private cache: ComplianceReportsPage | null = null;
+  private cache: ComplianceReportsResult | null = null;
   private inFlight = false;
   private readonly logger = new Logger("Nightgauge Platform: Compliance");
 
   constructor(private readonly ipcClient: IpcClientGenerated) {}
 
   /**
-   * Fetch paginated compliance report list via IPC, cache, and return.
+   * Fetch the account's compliance report list via IPC, cache, and return.
    * Single-inflight guard — concurrent calls return current cache wrapped as
    * a success (or a failure if there is nothing cached yet).
    * Returns a typed failure on error (401/403 → no access, etc.). Never throws.
+   *
+   * Takes no cursor or limit: the endpoint has neither (#803).
    */
-  async fetchAndCache(
-    cursor?: string,
-    limit?: number
-  ): Promise<PlatformResult<ComplianceReportsPage>> {
+  async fetchAndCache(): Promise<PlatformResult<ComplianceReportsResult>> {
     if (this.inFlight) {
       return this.cache !== null
         ? platformOk(this.cache)
@@ -44,7 +44,7 @@ export class PlatformComplianceService implements vscode.Disposable {
     }
     this.inFlight = true;
     try {
-      const result = await this.ipcClient.platformAuditListReports(cursor, limit);
+      const result = await this.ipcClient.platformAuditListReports();
       this.cache = result;
       return platformOk(result);
     } catch (err) {
@@ -64,13 +64,21 @@ export class PlatformComplianceService implements vscode.Disposable {
     return this.ipcClient.platformAuditGenerateReport(reportType, startDate, endDate, format);
   }
 
-  /** Fetch a single report by ID (for polling status + download URL). */
+  /** Fetch a single report by ID (for polling generation status). */
   async getReport(reportId: string): Promise<ComplianceReportDetail> {
     return this.ipcClient.platformAuditGetReport(reportId);
   }
 
+  /**
+   * Resolve a report's artifact — a signed URL, the JSON payload inline, or
+   * "still generating". The detail endpoint carries no download URL (#803).
+   */
+  async downloadReport(reportId: string): Promise<ComplianceReportDownload> {
+    return this.ipcClient.platformAuditDownloadReport(reportId);
+  }
+
   /** Returns the last cached list result (synchronous, for render use). */
-  getCached(): ComplianceReportsPage | null {
+  getCached(): ComplianceReportsResult | null {
     return this.cache;
   }
 
