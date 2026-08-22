@@ -361,6 +361,16 @@ function claudeFeedPromptHtml(state: UsagePanelState): string {
   if (state.adapter !== "claude" || state.planKind === "subscription-window") {
     return "";
   }
+  // (#810) One verdict, shared with the status-bar tooltip and the enable
+  // command. Inferring "the feed is off" from planKind alone is what let this
+  // panel offer to enable a feed the command called already enabled.
+  if (state.claudeFeedHealth !== undefined && state.claudeFeedHealth !== "not-wired") {
+    return `
+      <p class="usage-panel-note usage-feed-prompt">
+        The Claude usage feed is enabled but is not reporting your plan's allowance.
+        <button type="button" id="enableClaudeUsageFeed" class="link-button">Check the Claude usage feed</button>
+      </p>`;
+  }
   return `
       <p class="usage-panel-note usage-feed-prompt">
         On a Claude Max or Pro plan? These are locally-derived costs, not your plan's allowance.

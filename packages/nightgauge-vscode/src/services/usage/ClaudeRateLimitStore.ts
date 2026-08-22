@@ -329,6 +329,28 @@ export class ClaudeRateLimitStore {
    * per bucket name. Expired readings are dropped (see the class doc): the
    * window they describe has refilled and their number is known-wrong.
    */
+  /**
+   * When the feed last recorded anything, across every bucket — INCLUDING
+   * readings whose window has already refilled.
+   *
+   * `readings()` deliberately drops expired readings, because their numbers are
+   * known-wrong. Their timestamps are not: "the last thing this feed wrote was
+   * two days ago" is exactly the signal that distinguishes a feed which is
+   * working from one that stopped (#810), and dropping it is what made a dead
+   * feed indistinguishable from a quiet one.
+   *
+   * Null when nothing has ever been recorded.
+   */
+  lastObservedAt(): Date | null {
+    let newest: Date | null = null;
+    for (const reading of this.buckets.values()) {
+      if (newest === null || reading.observedAt > newest) {
+        newest = reading.observedAt;
+      }
+    }
+    return newest === null ? null : new Date(newest.getTime());
+  }
+
   readings(now: Date = new Date()): RateLimitReading[] {
     // Copies, so a caller holding a reading cannot see `settle()` flip its
     // `live` flag underneath it mid-render.

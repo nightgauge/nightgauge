@@ -100,7 +100,26 @@ cleanup() {
   [ -n "$SANDBOX" ] && rm -rf "$SANDBOX"
   git worktree prune >/dev/null 2>&1
 }
-trap cleanup EXIT INT TERM
+# A signalled run must STOP, not resume.
+#
+# `trap cleanup INT TERM` alone is a trap in both senses: bash runs the handler
+# and then RESUMES the script at the point it was interrupted. cleanup() has by
+# then `cd`-ed back to the real repository and deleted the sandbox -- and
+# MANIFEST is a RELATIVE path. So every remaining arm writes its fixture into
+# the operator's own checkout, and the arm that plants a vacuous manifest
+# overwrites the tracked .github/publication-boundary.yaml outright.
+#
+# Observed exactly that way: a suite run killed by a harness timeout left the
+# real manifest replaced by `allow: [ path: "**" ]`, 623 lines deleted. That is
+# the #713 failure class -- the suite dirtying the repository it tests --
+# surviving the sandbox work in a shape the SIGKILL-only test could not see,
+# because SIGKILL runs no handler at all and therefore never resumes anything.
+#
+# `trap - EXIT` first so cleanup does not run twice, then exit with the
+# conventional 128+signal.
+trap cleanup EXIT
+trap 'trap - EXIT; cleanup; exit 130' INT
+trap 'trap - EXIT; cleanup; exit 143' TERM
 
 # Sweep sandboxes abandoned by an earlier run. Scoped to this suite's own root
 # and prefix, so an unrelated worktree is never a candidate (and the byte-level
@@ -121,14 +140,29 @@ sweep_abandoned_sandboxes() {
     d="$(cd "$d" && pwd -P)" || continue
     pid=""
     [ -f "$d/owner.pid" ] && pid="$(cat "$d/owner.pid" 2>/dev/null)"
+    # Only a plausible PID gets liveness credit. `kill -0 0` signals the CURRENT
+    # PROCESS GROUP and therefore SUCCEEDS, so an absent, empty, malformed or
+    # zero owner.pid would otherwise read as "a concurrent run owns this" and
+    # the sandbox would never be reclaimed. Anything unparseable means the run
+    # died before it could claim ownership: reclaim it.
+    case "$pid" in
+    "" | *[!0-9]* | 0) pid="" ;;
+    esac
     if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null &&
       [ -z "$(find "$d" -maxdepth 0 -mmin +60 2>/dev/null)" ]; then
       continue # a concurrent run owns it
     fi
-    # Remove the registration and the directory. `worktree remove` does both
-    # when it succeeds; `rm -rf` + `prune` is the fallback for a sandbox whose
-    # tree was already half-deleted, which is the state a SIGKILL can leave.
-    git worktree remove --force "$d/tree" >/dev/null 2>&1
+    # Unlock BEFORE removing. A SIGKILL landing inside `git worktree add`
+    # leaves the entry marked `locked initializing`, and a locked worktree is
+    # skipped by `prune` and refused by a single `--force`. Observed in CI:
+    # the directory went, the registration stayed.
+    #
+    # This is where a single `--force` is genuinely not enough, and it does not
+    # contradict the note on #722 -- that note is about `cleanup()`, whose
+    # sandbox is unclean but never locked because the run got far enough to
+    # finish creating it. The sweep exists precisely for the runs that did not.
+    git worktree unlock "$d/tree" >/dev/null 2>&1
+    git worktree remove --force --force "$d/tree" >/dev/null 2>&1
     rm -rf "$d"
     swept=$((swept + 1))
   done
