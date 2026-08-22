@@ -31,6 +31,7 @@
  */
 
 import type { ExecutionAdapter } from "../../config/schema";
+import type { ClaudeFeedHealth } from "./claudeStatusLineSetup";
 
 /**
  * How the active adapter is billed, as far as the resolved provider can tell.
@@ -171,6 +172,18 @@ export interface UsageSnapshot {
   capturedAt: Date;
   /** Empty exactly when `plan.kind === "unknown"`. */
   windows: UsageWindow[];
+  /**
+   * How the Claude usage feed is doing, when the adapter is `claude` (#810).
+   *
+   * Carried on the snapshot so the status-bar tooltip, the Dashboard Usage
+   * panel and the enable command all read ONE verdict. They used to infer the
+   * feed's state independently from `plan.kind`, which is why two of them could
+   * offer to enable a feed while the third called it already enabled, in the
+   * same session.
+   *
+   * Undefined for every other adapter, and while the first probe is in flight.
+   */
+  claudeFeedHealth?: ClaudeFeedHealth;
 }
 
 /**

@@ -47,6 +47,7 @@ import type {
 } from "../../services/usage/types";
 import type { PipelineRunStatus, PipelineRunSummary } from "./DashboardState";
 import { BurnRateProjector } from "../../utils/budgetIntelligence";
+import type { ClaudeFeedHealthState } from "../../services/usage/claudeStatusLineSetup";
 
 /**
  * How far back the burn rate looks.
@@ -175,6 +176,12 @@ export interface UsagePanelRunView {
 export interface UsagePanelState {
   adapter: ExecutionAdapter;
   planKind: UsagePlanKind;
+  /**
+   * The Claude usage feed's health, carried straight through from the snapshot
+   * (#810) so this panel and the status-bar tooltip cannot disagree about
+   * whether the feed is on. Undefined for non-Claude adapters.
+   */
+  claudeFeedHealth?: ClaudeFeedHealthState;
   /** When the snapshot was derived — the input to the operator's staleness call. */
   capturedAt: Date;
   /** Windows covering every model the adapter ran. Empty on an unknown plan. */
@@ -423,6 +430,7 @@ export function buildUsagePanelState(
   return {
     adapter: snapshot.adapter,
     planKind: snapshot.plan.kind,
+    claudeFeedHealth: snapshot.claudeFeedHealth?.state,
     capturedAt: snapshot.capturedAt,
     windows: overallWindows.map(toWindowView),
     familyGroups,

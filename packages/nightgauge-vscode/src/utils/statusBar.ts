@@ -1105,6 +1105,17 @@ function appendClaudeSubscriptionHint(
   if (snapshot.adapter !== "claude" || snapshot.plan.kind === "subscription-window") {
     return;
   }
+  // (#810) Same verdict the Dashboard panel and the enable command read. This
+  // used to infer "the feed is off" from plan.kind alone, so it offered to
+  // enable a feed the command simultaneously called already enabled.
+  const health = snapshot.claudeFeedHealth;
+  if (health !== undefined && health.state !== "not-wired") {
+    tooltip.appendMarkdown(
+      "_The Claude usage feed is enabled but is not reporting your plan's allowance._\n\n" +
+        "[Check the Claude usage feed](command:nightgauge.enableClaudeUsageStatusLine)\n\n"
+    );
+    return;
+  }
   tooltip.appendMarkdown(
     "_On a Claude Max or Pro plan? These are locally-derived costs, not your plan's allowance._\n\n" +
       "[Show my plan's 5h / weekly limits](command:nightgauge.enableClaudeUsageStatusLine)\n\n"

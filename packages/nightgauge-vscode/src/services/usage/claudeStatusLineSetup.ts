@@ -269,6 +269,98 @@ export async function repairStatusLineBinary(
   };
 }
 
+/** How the feed is actually doing, as opposed to whether a command mentions it. */
+export type ClaudeFeedHealthState =
+  /** No nightgauge status line is configured. */
+  | "not-wired"
+  /** Wired, the binary runs, and a reading has arrived recently. */
+  | "healthy"
+  /** Wired and the binary runs, but nothing has been recorded lately. */
+  | "silent"
+  /** Wired and structurally unable to run. */
+  | "broken";
+
+export type ClaudeFeedHealthReason =
+  | "not-wired"
+  | "producing"
+  | "no-readings"
+  | "stale-readings"
+  | "binary-missing"
+  | "unrecognized-command";
+
+export interface ClaudeFeedHealth {
+  state: ClaudeFeedHealthState;
+  reason: ClaudeFeedHealthReason;
+  /** The binary the wired command names, when the command is a shape we wrote. */
+  binary: string | null;
+  /** When the feed last recorded anything, across every bucket. */
+  lastObservedAt: Date | null;
+}
+
+/**
+ * How long the feed may go quiet before it is worth mentioning.
+ *
+ * Readings arrive on Claude Code renders, so silence means "no Claude Code
+ * sessions", which is an ordinary way to spend a few days. Long enough that a
+ * normal week off does not raise an alarm; short enough that a feed which
+ * stopped writing is not mistaken for a holiday indefinitely.
+ */
+export const CLAUDE_FEED_STALE_AFTER_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * Decide the feed's health from facts the caller has already gathered.
+ *
+ * Pure, so every state is directly testable. `readStatusLineState` answers
+ * "does a command mention our verb", which is what let the enable command tell
+ * an operator "The Claude usage feed is already enabled" about a wiring that
+ * had not produced a reading in two days and named a deleted binary (#810).
+ * That question is not the same as "is the feed working", and this is the one
+ * that is.
+ *
+ * `binaryExecutable` is null when there is no binary to test — either nothing
+ * is wired, or the command is in a shape this module did not write.
+ */
+export function decideClaudeFeedHealth(input: {
+  settings: Record<string, unknown>;
+  binaryExecutable: boolean | null;
+  lastObservedAt: Date | null;
+  now?: Date;
+  staleAfterMs?: number;
+}): ClaudeFeedHealth {
+  const { settings, binaryExecutable, lastObservedAt } = input;
+  const now = input.now ?? new Date();
+  const staleAfterMs = input.staleAfterMs ?? CLAUDE_FEED_STALE_AFTER_MS;
+
+  const state = readStatusLineState(settings);
+  if (!state.wired || state.command === null) {
+    return { state: "not-wired", reason: "not-wired", binary: null, lastObservedAt };
+  }
+
+  const binary = parseStatusLineBinary(state.command);
+  if (binary === null) {
+    // Wired by the verb, but wrapped in something we cannot reason about. Not
+    // claimed as healthy: we genuinely do not know, and this guard exists so
+    // "we cannot tell" never renders as "it is fine".
+    return {
+      state: "broken",
+      reason: "unrecognized-command",
+      binary: null,
+      lastObservedAt,
+    };
+  }
+  if (binaryExecutable === false) {
+    return { state: "broken", reason: "binary-missing", binary, lastObservedAt };
+  }
+
+  if (lastObservedAt === null) {
+    return { state: "silent", reason: "no-readings", binary, lastObservedAt };
+  }
+  if (now.getTime() - lastObservedAt.getTime() > staleAfterMs) {
+    return { state: "silent", reason: "stale-readings", binary, lastObservedAt };
+  }
+  return { state: "healthy", reason: "producing", binary, lastObservedAt };
+}
+
 /**
  * Parse a settings document, tolerating an absent or unreadable file.
  *
