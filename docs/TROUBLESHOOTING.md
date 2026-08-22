@@ -1187,6 +1187,51 @@ Every line printed to the channel — including the snapshot — passes through
 before it reaches the output window, so a token or license key cannot appear
 there even if it leaked into an upstream error string.
 
+### "credential insufficient" on Health / Trends / Cost / Compliance
+
+**Symptom.** A signed-in user sees the analytics tabs fail, and the
+`Nightgauge` channel carries an `[ipc]` line like:
+
+```text
+[WARN] [ipc] platform.getAnalyticsHealth: IPC error -32603: ...
+  credential insufficient for operation:
+  holding a license_key, operation requires a user-scoped session token
+```
+
+Signing out and back in fixes it — until the next window, when it returns.
+
+**What the message actually proves.** These four routes are user-scoped and
+reject an account-scoped license key. The Go client picks its bearer in the
+order sessionToken → staticAPIKey → licenseKey, so this exact wording means the
+daemon's in-memory `sessionToken` is the **empty string**. An _expired_ JWT
+would still classify as a user token and fail differently. So this is not a
+refresh-expiry problem; something pushed an empty credential.
+
+**Root cause (fixed, #797).** Platform credentials are stored per host, under `nightgauge.platform.{hostKey}.{field}`. `resolvePlatformHostKey()`
+returned the preset _name_ when `platform.environment` was set explicitly, but
+fell through to the endpoint _hostname_ otherwise — so one endpoint had two
+keys, `production` and `api.nightgauge.dev`. `TokenStorage` is constructed
+during bootstrap **before** `ConfigBridge` has loaded any config, so a read in
+that window resolved to the other bucket, returned `null`, and
+`PlatformCredentialBridge` pushed `""` to the daemon. Nothing re-pushed
+afterwards — the bridge only listened for token _writes_ — so the daemon stayed
+on its license key until a manual sign-out/sign-in wrote a token again.
+
+The same divergence fired `onPlatformHostChanged` on every activation, which
+`SessionManager` turns into an `unauthenticated` transition — the spurious
+sign-outs users saw alongside the failing tabs.
+
+The fix makes the key a pure function of the resolved endpoint (any config
+resolving to a preset URL yields that preset's name), has `TokenStorage`
+announce a re-key when the host genuinely moves, and has the credential bridge
+re-read storage on that signal. Tokens stranded in a hostname-keyed bucket are
+migrated on activation, so the fix does not itself force a re-login.
+
+**If you see this on a build that has the fix**, check
+`Nightgauge: Show Diagnostics` — the credential line reports `license key`
+rather than `session (signed in)` whenever the daemon lacks a session token,
+which distinguishes a credential-plumbing failure from a genuine 401.
+
 ### What happened to the six channels
 
 | Former channel            | Now                                                                                                                                                                                                                                                                                                                    |

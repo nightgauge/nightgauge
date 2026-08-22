@@ -925,6 +925,27 @@ export async function initializeServices(
     context.subscriptions.push(configBridge);
     logger.info("ConfigBridge initialized");
 
+    // Platform credentials are stored per host, and the host key is
+    // derived from config — which is only readable from here on, since
+    // TokenStorage was constructed before the first reload() above. Tell
+    // storage whenever the effective host moves, so everything holding a value
+    // read from it re-reads against the new bucket. Without this the Go daemon
+    // keeps whatever credential it was handed during the unloaded-config
+    // window, and the user-scoped analytics routes fail until a manual
+    // sign-out/sign-in (#797).
+    const tokenStorageForHostChanges = TokenStorage.getInstance();
+    if (tokenStorageForHostChanges) {
+      context.subscriptions.push(
+        configBridge.onPlatformHostChanged((evt) => {
+          logger.info("Platform host changed — re-keying platform credentials", {
+            previousHost: evt.previousHost,
+            newHost: evt.newHost,
+          });
+          tokenStorageForHostChanges.notifyHostChanged();
+        })
+      );
+    }
+
     // #3641 — autonomous policy services. After Phase 3 (#3336) routed
     // writes through RuntimeStateStore (workspaceState memento), #3641
     // reclassified these keys to Machine tier because workspaceState is

@@ -170,8 +170,54 @@ describe("resolvePlatformHostKey", () => {
     ).toBe("my.platform.example.com");
   });
 
-  it("returns production hostname for undefined config (derives from default URL)", () => {
-    expect(resolvePlatformHostKey(undefined)).toBe("api.nightgauge.dev");
+  // The key names a SecretStorage bucket, so it must depend only on the
+  // endpoint a config resolves to — never on how that config spelled it. When
+  // it did, a token written while config was still loading (host key
+  // "api.nightgauge.dev") could not be read once it had loaded (key
+  // "production"), the daemon was handed an empty credential, and every
+  // user-scoped route 401'd until a manual sign-out/sign-in (#797).
+  it("returns 'production' for undefined config, matching the explicit preset", () => {
+    expect(resolvePlatformHostKey(undefined)).toBe("production");
+    expect(resolvePlatformHostKey(undefined)).toBe(
+      resolvePlatformHostKey({ environment: "production" })
+    );
+  });
+
+  it("returns 'production' when environment is unset but api_url is the production URL", () => {
+    expect(resolvePlatformHostKey({ api_url: PLATFORM_ENV_PRESETS.production })).toBe("production");
+  });
+
+  it("returns the preset name when a custom env names a preset URL", () => {
+    // Same endpoint, spelled as custom — it must not fork into a second bucket.
+    expect(
+      resolvePlatformHostKey({ environment: "custom", api_url: PLATFORM_ENV_PRESETS.canary })
+    ).toBe("canary");
+  });
+
+  it("ignores trailing slashes and case when matching a preset", () => {
+    expect(
+      resolvePlatformHostKey({ environment: "custom", api_url: "https://API.Nightgauge.dev/" })
+    ).toBe("production");
+  });
+
+  it("every preset resolves to a key equal to its own name", () => {
+    for (const env of ["production", "canary", "local"] as const) {
+      expect(resolvePlatformHostKey({ environment: env })).toBe(env);
+    }
+  });
+
+  it("keys a rejected non-HTTPS custom URL by its hostname, not production", () => {
+    // resolvePlatformBaseUrl throws for these. Falling back to "production"
+    // would let an unusable config read the real production credentials.
+    expect(
+      resolvePlatformHostKey({ environment: "custom", api_url: "http://insecure.example.com" })
+    ).toBe("insecure.example.com");
+  });
+
+  it("keys localhost custom URLs by hostname (exempt from HTTPS enforcement)", () => {
+    expect(
+      resolvePlatformHostKey({ environment: "custom", api_url: "http://localhost:9999" })
+    ).toBe("localhost");
   });
 });
 

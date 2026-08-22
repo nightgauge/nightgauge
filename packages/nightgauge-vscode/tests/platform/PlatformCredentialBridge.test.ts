@@ -71,6 +71,10 @@ class FakeTokenStorage implements ITokenStorage {
     else this.values.set(key, value);
   }
 
+  notifyHostChanged(): void {
+    this.fire({ key: "all", action: "rekeyed" });
+  }
+
   fire(evt: TokenChangeEvent): void {
     for (const l of [...this.listeners]) l(evt);
   }
@@ -226,6 +230,40 @@ describe("PlatformCredentialBridge", () => {
 
     await expect(bridge.sync()).resolves.toBeUndefined();
     expect(transport.pushed).toEqual([]);
+  });
+
+  // ── host re-keying (#797) ────────────────────────────────────────────────
+
+  it("re-reads storage when the platform host is re-keyed", async () => {
+    // Credentials are stored per host. A host switch changes what every key
+    // resolves to without any token being written, so nothing in the
+    // store/delete/clear vocabulary fires — the daemon would otherwise keep a
+    // credential belonging to the previous host indefinitely.
+    storage.setQuietly("accessToken", "jwt.hostA");
+    await bridge.sync();
+    expect(transport.pushed).toEqual(["jwt.hostA"]);
+
+    storage.setQuietly("accessToken", "jwt.hostB");
+    storage.notifyHostChanged();
+    await flush();
+
+    expect(transport.pushed).toEqual(["jwt.hostA", "jwt.hostB"]);
+  });
+
+  it("recovers the daemon credential when a re-key exposes a token that was there all along", async () => {
+    // The #797 failure in miniature: the first read lands while config has not
+    // loaded, so the key resolves to an empty bucket and the daemon is handed
+    // "" — dropping it to its license key, which the user-scoped analytics
+    // routes reject. Once config loads and the host is re-keyed, the real token
+    // must be pushed without the user signing out and back in.
+    await bridge.sync();
+    expect(transport.pushed).toEqual([""]);
+
+    storage.setQuietly("accessToken", "jwt.real");
+    storage.notifyHostChanged();
+    await flush();
+
+    expect(transport.pushed).toEqual(["", "jwt.real"]);
   });
 
   it("stops pushing once disposed", async () => {

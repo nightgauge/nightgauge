@@ -80,6 +80,7 @@ function createMockTokenStorage(): ITokenStorage & {
     delete: vi.fn(async () => {}),
     clear: vi.fn(async () => {}),
     dispose: vi.fn(),
+    notifyHostChanged: vi.fn(() => emitter.fire({ key: "all", action: "rekeyed" } as never)),
     migrateFromLegacy: vi.fn(async () => {}),
   } as unknown as ITokenStorage & { _fireChange: (evt: { key: string; action: string }) => void };
 }
