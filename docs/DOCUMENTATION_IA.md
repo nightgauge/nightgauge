@@ -58,11 +58,17 @@ The guard's own fail-closed regression suite
 (`scripts/test-publication-boundary.sh`) runs both in CI
 (`.github/workflows/publication-boundary.yml`) and locally via
 `scripts/ci-local.sh`, so a weakened rule (e.g. a deleted denylist entry)
-surfaces before a push, not only after CI rejects it.
+surfaces before a push, not only after CI rejects it. That suite plants
+deliberately-forbidden fixtures, so a companion check
+(`scripts/test-publication-boundary-hermeticity.sh`) asserts it cannot dirty
+the repository it tests: a run killed with `SIGKILL` leaves
+`git status --porcelain` byte-identical, and the sandbox worktree such a run
+leaks is reclaimed by the next run.
 
-Note this scan covers the tracked **tree** only — GitHub issue and epic
-bodies are not in the tree, so nothing mechanical catches private content
-written there; see `AGENTS.md` § Public Core Boundary & Content Hygiene.
+Note this scan covers the **files on disk** — tracked paths plus untracked,
+non-`.gitignore`d ones — but GitHub issue and epic bodies are not files, so
+nothing mechanical catches private content written there; see `AGENTS.md`
+§ Public Core Boundary & Content Hygiene.
 
 When uncertain, document the public contract here and keep the business or
 private implementation rationale internal.

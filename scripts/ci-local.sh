@@ -137,6 +137,18 @@ if [ -f scripts/test-publication-boundary.sh ]; then
   run_step "Publication boundary regression suite" bash scripts/test-publication-boundary.sh
 fi
 
+# 5b-ii. Publication boundary suite hermeticity (#713, #722) — the suite plants
+#     deliberately-forbidden fixtures, so two properties have to hold and
+#     neither is self-evident from reading it: a SIGKILLed run leaves the
+#     operator's checkout byte-identical, and the worktree registration such a
+#     run leaks (trap cannot catch SIGKILL, and prune cannot remove an entry
+#     whose directory survives) is reclaimed by the NEXT run. Both are asserted
+#     by doing it for real, which costs one extra full suite run.
+if [ -f scripts/test-publication-boundary-hermeticity.sh ]; then
+  run_step "Publication boundary suite hermeticity" \
+    bash scripts/test-publication-boundary-hermeticity.sh
+fi
+
 # 5c. Band-vocabulary reintroduction gate (#582) — fails on hand-inlined band
 #     closed sets / regex alternations in production source, outside the
 #     allowed surfaces (spike #568 §5).

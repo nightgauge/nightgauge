@@ -69,6 +69,14 @@ jobs:
         #   - the guard itself being unable to run (missing/malformed manifest)
         run: python3 scripts/publication-boundary-check.py
 
+      - name: Prove the suite cannot dirty the repository it tests
+        # The suite plants deliberately-forbidden fixtures. It must be safe to
+        # interrupt (#713) and must not accumulate worktree registrations when
+        # it is killed hard (#722) -- `trap` cannot catch SIGKILL, and
+        # `git worktree prune` cannot remove an entry whose directory survives,
+        # which is why the reclaim happens at the start of the next run.
+        run: bash scripts/test-publication-boundary-hermeticity.sh
+
       - name: Prove the guard still fails closed
         # A guard that has never rejected anything has not been tested. This
         # corrupts, deletes and empties the manifest, opens a decision, and
