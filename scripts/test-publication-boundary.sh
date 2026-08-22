@@ -71,6 +71,22 @@ MANIFEST=".github/publication-boundary.yaml" # relative — inside the sandbox
 # the suite runs on, and whatever is uncommitted next door.
 export NG_BOUNDARY_DIFF_BASE="HEAD"
 
+# ── Where sandboxes live, and why it is a fixed root (#722) ──────────────────
+#
+# `trap` cannot catch SIGKILL, and a harness timeout or an OOM kill is exactly
+# how a long suite run dies. When cleanup never runs the leak is PERMANENT: the
+# sandbox directory survives, and `git worktree prune` only removes entries
+# whose directory is GONE -- so the surviving directory is precisely what makes
+# the registration unprunable. Stale entries then accumulate in the real
+# repository, which is also where this project's own worktree-reclamation and
+# active-worktree scanners look.
+#
+# Prune structurally cannot fix that, so the only reliable moment is the START
+# of the NEXT run. Sandboxes therefore live under one known root with one known
+# prefix, and each records the PID that owns it.
+SANDBOX_ROOT="${TMPDIR:-/tmp}/nightgauge-pubboundary-sandboxes"
+SANDBOX_PREFIX="run."
+
 SANDBOX=""
 TREE=""
 BACKUP=""
@@ -86,7 +102,48 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-SANDBOX="$(mktemp -d)" || exit 2
+# Sweep sandboxes abandoned by an earlier run. Scoped to this suite's own root
+# and prefix, so an unrelated worktree is never a candidate (and the byte-level
+# `git worktree list` assertion in test-publication-boundary-hermeticity.sh
+# holds it to that).
+#
+# A sandbox is abandoned when the process that created it is gone. `kill -0`
+# treats another user's live process as alive, which is the conservative
+# direction. PID reuse could make a dead run look alive; the age fallback
+# bounds that, since no run of this suite lasts an hour.
+sweep_abandoned_sandboxes() {
+  local swept=0 d pid
+  [ -d "$SANDBOX_ROOT" ] || return 0
+  for d in "$SANDBOX_ROOT/$SANDBOX_PREFIX"*; do
+    [ -d "$d" ] || continue
+    # Physical path: on macOS $TMPDIR is a symlink (/var -> /private/var) and
+    # `git worktree` records the resolved form.
+    d="$(cd "$d" && pwd -P)" || continue
+    pid=""
+    [ -f "$d/owner.pid" ] && pid="$(cat "$d/owner.pid" 2>/dev/null)"
+    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null &&
+      [ -z "$(find "$d" -maxdepth 0 -mmin +60 2>/dev/null)" ]; then
+      continue # a concurrent run owns it
+    fi
+    # Remove the registration and the directory. `worktree remove` does both
+    # when it succeeds; `rm -rf` + `prune` is the fallback for a sandbox whose
+    # tree was already half-deleted, which is the state a SIGKILL can leave.
+    git worktree remove --force "$d/tree" >/dev/null 2>&1
+    rm -rf "$d"
+    swept=$((swept + 1))
+  done
+  if [ "$swept" -gt 0 ]; then
+    git worktree prune >/dev/null 2>&1
+    printf 'swept %s abandoned sandbox(es) from a previously killed run\n' "$swept"
+  fi
+}
+sweep_abandoned_sandboxes
+
+mkdir -p "$SANDBOX_ROOT" || exit 2
+SANDBOX="$(mktemp -d "$SANDBOX_ROOT/${SANDBOX_PREFIX}XXXXXXXX")" || exit 2
+# Written before the worktree is registered, so a kill between the two still
+# leaves the next run something to reclaim by.
+printf '%s\n' "$$" > "$SANDBOX/owner.pid"
 TREE="$SANDBOX/tree"
 if ! git worktree add --detach --quiet "$TREE" HEAD >/dev/null 2>&1; then
   printf '\033[31msetup: cannot create the sandbox worktree at HEAD.\033[0m\n' >&2
@@ -259,8 +316,68 @@ PLANTED=""
 # Enforcement must be identical to a plaintext rule — so prove it. The probe
 # values are read from an env var so THIS FILE does not name them either.
 #
-# NG_BOUNDARY_PROBE_TOKENS: space-separated. Unset -> the case is skipped and
-# says so, rather than silently passing.
+# ── The positive case is SYNTHETIC, so it never needs a real secret (#723) ──
+#
+# This case used to run only when NG_BOUNDARY_PROBE_TOKENS was set. Nothing in
+# the repository ever set it -- not this suite, not ci-local.sh, not
+# publication-boundary.yml -- so the only rule whose plaintext CANNOT be
+# committed here was the one rule whose firing was verified nowhere. It printed
+# a yellow dash and the suite reported success, which reads as "ran and passed".
+# Deleting the rule outright would have left the suite green.
+#
+# The fix removes the dependency rather than documenting it: hash a token this
+# test invents, inject that hash into the SANDBOX manifest (already copied and
+# mutated per run, so the tracked manifest is untouched), and require the
+# checker to reject a file containing it.
+cp "$BACKUP" "$MANIFEST"
+
+# No hyphens or dots: `_stem_prefixes` splits on those, and a single-candidate
+# token keeps the assertion about the whole-token hash and nothing else.
+SYNTHETIC_TOKEN="ngsyntheticdenylistprobe$$"
+if ! python3 - "$MANIFEST" "$SYNTHETIC_TOKEN" <<'PYEOF'; then
+import hashlib, sys, yaml
+
+manifest, token = sys.argv[1], sys.argv[2]
+text = open(manifest).read()
+salt = ((yaml.safe_load(text) or {}).get("forbidden_tokens") or {}).get("salt")
+if not isinstance(salt, str) or not salt:
+    sys.exit(1)
+digest = hashlib.sha256((salt + token.lower()).encode()).hexdigest()
+# Appended under the existing `hashes:` key so the rule under test is the real
+# one, configured the real way.
+lines = text.splitlines(keepends=True)
+for i, line in enumerate(lines):
+    if line.rstrip() == "  hashes:":
+        lines.insert(i + 1, f'    - "{digest}"\n')
+        break
+else:
+    sys.exit(1)
+open(manifest, "w").write("".join(lines))
+PYEOF
+  printf '  \033[31m✗\033[0m could not inject a synthetic hash into the sandbox manifest\n'
+  FAIL=$((FAIL + 1))
+else
+  PLANTED="docs/_synthetic_token_probe.md"
+  printf 'contact: %s\n' "$SYNTHETIC_TOKEN" > "$PLANTED"
+  git add -f "$PLANTED" 2>/dev/null
+  expect_exit 1 "hashed denylist rejects a synthetic token added to the manifest (#723)"
+  git rm --cached -q "$PLANTED" 2>/dev/null
+  rm -f "$PLANTED"
+  PLANTED=""
+
+  # The same manifest must NOT reject a near-miss: proves the arm above fired on
+  # the hash and not merely on the presence of an extra manifest entry.
+  PLANTED="docs/_synthetic_token_nearmiss_probe.md"
+  printf 'contact: %sx\n' "$SYNTHETIC_TOKEN" > "$PLANTED"
+  git add -f "$PLANTED" 2>/dev/null
+  expect_exit 0 "a one-character-off synthetic token does NOT trip the denylist (#723)"
+  git rm --cached -q "$PLANTED" 2>/dev/null
+  rm -f "$PLANTED"
+  PLANTED=""
+fi
+
+# NG_BOUNDARY_PROBE_TOKENS remains available for probing REAL tokens, but it is
+# now purely additive: its absence no longer skips any assertion.
 cp "$BACKUP" "$MANIFEST"
 if [ -n "${NG_BOUNDARY_PROBE_TOKENS:-}" ]; then
   for tok in ${NG_BOUNDARY_PROBE_TOKENS}; do
@@ -272,8 +389,6 @@ if [ -n "${NG_BOUNDARY_PROBE_TOKENS:-}" ]; then
     rm -f "$PLANTED"
     PLANTED=""
   done
-else
-  printf '  \033[33m—\033[0m hashed-denylist probe skipped (NG_BOUNDARY_PROBE_TOKENS unset)\n'
 fi
 
 # A benign token must NOT trip it — a guard that cries wolf gets disabled.
