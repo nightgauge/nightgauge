@@ -17,6 +17,8 @@ import type { ExecutionAdapter } from "../../config/schema";
 import { getLimitsSettings } from "../../config/limitsSettings";
 import { getGlobalAdapterWithSource } from "../../utils/resolvers/adapterResolver";
 import { LocalTelemetryUsageProvider, type UsageSessionClock } from "./LocalTelemetryUsageProvider";
+import { probeClaudeFeedHealth } from "./claudeFeedHealth";
+import type { ClaudeFeedHealth } from "./claudeStatusLineSetup";
 import { ClaudeRateLimitUsageProvider } from "./ClaudeRateLimitUsageProvider";
 import type { ClaudeRateLimitStore } from "./ClaudeRateLimitStore";
 import { unknownUsageSnapshot, type UsageProvider, type UsageSnapshot } from "./types";
@@ -57,6 +59,11 @@ export interface AdapterUsageServiceOptions {
    * the workspace config files in that order.
    */
   resolveAdapter: () => ExecutionAdapter;
+  /**
+   * Reports the Claude usage feed's health (#810). Defaults to the real probe;
+   * injected so tests can drive every health state without a home directory.
+   */
+  probeClaudeFeedHealth?: () => Promise<ClaudeFeedHealth>;
 }
 
 /**
@@ -138,6 +145,12 @@ export class AdapterUsageService implements vscode.Disposable {
     registry.register(LocalTelemetryUsageProvider.forWorkspace(workspaceRoot, sessionClock));
     return new AdapterUsageService(registry, {
       resolveAdapter: () => getGlobalAdapterWithSource(workspaceRoot).adapter,
+      // Same store the readings are written to, so "when did this last work"
+      // and "what does it say" can never disagree (#810).
+      probeClaudeFeedHealth:
+        claudeRateLimitStore === null
+          ? undefined
+          : () => probeClaudeFeedHealth({ store: claudeRateLimitStore }),
     });
   }
 
@@ -237,13 +250,37 @@ export class AdapterUsageService implements vscode.Disposable {
       try {
         const snapshot = await provider.getSnapshot(adapter);
         if (snapshot !== null) {
-          return snapshot;
+          return this.withClaudeFeedHealth(snapshot);
         }
       } catch (error) {
         console.warn(`[Nightgauge] usage provider ${provider.id} failed for ${adapter}:`, error);
       }
     }
-    return unknownUsageSnapshot(adapter, new Date());
+    return this.withClaudeFeedHealth(unknownUsageSnapshot(adapter, new Date()));
+  }
+
+  /**
+   * Attach the Claude usage feed's health to a snapshot (#810).
+   *
+   * Decorating here rather than inside each provider is deliberate: it is one
+   * place, so every consumer of a `claude` snapshot sees the SAME verdict.
+   * They used to infer the feed's state independently from `plan.kind`, which
+   * is how the Dashboard panel and the status-bar tooltip could offer to enable
+   * a feed the enable command called already enabled.
+   *
+   * Non-blocking: the probe reads two small files, and a failure leaves the
+   * field undefined rather than taking the meter down with it.
+   */
+  private async withClaudeFeedHealth(snapshot: UsageSnapshot): Promise<UsageSnapshot> {
+    if (snapshot.adapter !== "claude") {
+      return snapshot;
+    }
+    const probe = this.options.probeClaudeFeedHealth ?? probeClaudeFeedHealth;
+    try {
+      return { ...snapshot, claudeFeedHealth: await probe() };
+    } catch {
+      return snapshot;
+    }
   }
 
   dispose(): void {
