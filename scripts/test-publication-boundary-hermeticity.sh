@@ -198,6 +198,127 @@ else
   printf '    before: %s\n    after:  %s\n' "$WORKTREES_BEFORE" "$WORKTREES_AFTER"
 fi
 
+# ── 3b. SIGTERM, which runs the trap and must NOT resume ────────────────────
+#
+# SIGKILL runs no handler, so step 1 can never observe what a handler does
+# afterwards. SIGTERM can, and what it used to do was: run cleanup (which
+# `cd`s back to the real repository and deletes the sandbox) and then RESUME
+# the script -- whose MANIFEST path is relative. Every remaining arm then wrote
+# its fixture into the real checkout, and one of them replaced the tracked
+# .github/publication-boundary.yaml with a vacuous manifest.
+#
+# Kill mid-run, then assert the tracked tree is untouched. This is the arm that
+# would have caught it.
+bash "$SUITE" >/dev/null 2>&1 &
+SUITE_PID=$!
+TERM_SANDBOX=""
+for _ in $(seq 1 120); do
+  TERM_SANDBOX="$(sandbox_dirs | head -1)"
+  if [ -n "$TERM_SANDBOX" ] && [ -e "$TERM_SANDBOX/tree/.git" ]; then
+    break
+  fi
+  TERM_SANDBOX=""
+  sleep 0.5
+done
+# Give the suite a moment to be INSIDE an arm rather than still in setup, so
+# the "resume" path has somewhere to resume to.
+sleep 2
+
+# TERM the suite's own process, NOT its group. A group kill also kills the
+# in-flight python3, which can stop the shell for reasons unrelated to the trap
+# and so hide the behaviour under test; a harness terminating a job signals the
+# leader, which is what this models.
+kill -TERM "$SUITE_PID" 2>/dev/null
+
+# A signalled run must not hang. This arm is a liveness bound, NOT the
+# regression arm: a resumed run whose sandbox cleanup() already deleted fails
+# its remaining cases quickly and exits anyway, so it passes either way. The
+# tree assertion below is the one that discriminates -- keep both, but do not
+# read a green here as evidence the trap is right.
+TERM_STOPPED=false
+for _ in $(seq 1 150); do
+  if ! kill -0 "$SUITE_PID" 2>/dev/null; then
+    TERM_STOPPED=true
+    break
+  fi
+  sleep 0.2
+done
+wait "$SUITE_PID" 2>/dev/null
+if [ "$TERM_STOPPED" = true ]; then
+  ok "a SIGTERMed suite run stops rather than resuming after its trap (#713)"
+else
+  bad "a SIGTERMed suite run kept going — the trap ran and execution resumed"
+  kill -9 -"$SUITE_PID" 2>/dev/null || kill -9 "$SUITE_PID" 2>/dev/null
+  wait "$SUITE_PID" 2>/dev/null
+fi
+for _ in $(seq 1 100); do
+  pgrep -g "$SUITE_PID" >/dev/null 2>&1 || break
+  sleep 0.1
+done
+SUITE_PID=""
+
+# ...and the consequence that makes it matter. cleanup() `cd`s back to the real
+# repository and MANIFEST is a RELATIVE path, so a resumed run writes every
+# remaining fixture into the operator's checkout -- including the arm that
+# plants a vacuous manifest over the tracked one.
+STATUS_AFTER_TERM="$(git status --porcelain --untracked-files=all)"
+if [ "$STATUS_AFTER_TERM" = "$STATUS_BEFORE" ]; then
+  ok "a SIGTERMed suite run leaves the tracked tree byte-identical (#713)"
+else
+  bad "a SIGTERMed suite run modified the real tree"
+  printf '    changed: %s\n' "$STATUS_AFTER_TERM"
+  # Never leave the operator's checkout damaged by a test.
+  git checkout -- .github/publication-boundary.yaml 2>/dev/null
+fi
+
+# ── 4. A LOCKED leaked registration, deterministically ──────────────────────
+#
+# Step 1's kill lands wherever it lands. When it lands inside
+# `git worktree add`, git leaves the entry marked `locked initializing` -- and a
+# locked worktree is SKIPPED by `git worktree prune` and REFUSED by a single
+# `--force`. That is how CI went red on a change that had nothing to do with
+# the boundary guard, while the same code passed locally.
+#
+# Waiting for the kill to land in the right microsecond is not a test, so this
+# arm constructs the state directly.
+LOCKED_SANDBOX="$SANDBOX_ROOT/${SANDBOX_PREFIX}lockedprobe"
+rm -rf "$LOCKED_SANDBOX"
+mkdir -p "$LOCKED_SANDBOX"
+LOCKED_SANDBOX="$(cd "$LOCKED_SANDBOX" && pwd -P)"
+# No owner.pid: the state a run killed between creating its sandbox directory
+# and claiming it leaves behind. The sweep must treat an unclaimed sandbox as
+# abandoned, or nothing ever reclaims it.
+if git worktree add --detach --quiet "$LOCKED_SANDBOX/tree" HEAD >/dev/null 2>&1 &&
+  git worktree lock "$LOCKED_SANDBOX/tree" >/dev/null 2>&1; then
+  git worktree prune >/dev/null 2>&1
+  if git worktree list --porcelain | grep -qF "$LOCKED_SANDBOX/tree"; then
+    ok "a locked leaked registration survives 'git worktree prune' (the CI failure)"
+  else
+    bad "expected a locked registration to survive prune; nothing to reclaim"
+  fi
+
+  bash "$SUITE" >/dev/null 2>&1
+
+  if ! git worktree list --porcelain | grep -qF "$LOCKED_SANDBOX/tree"; then
+    ok "the next suite run reclaims a LOCKED leaked registration too"
+  else
+    bad "a locked leaked registration survived the next suite run"
+    git worktree list --porcelain | grep -A3 -F "$LOCKED_SANDBOX/tree" | sed 's/^/      /'
+  fi
+  if [ ! -d "$LOCKED_SANDBOX" ]; then
+    ok "the locked sandbox directory is removed too"
+  else
+    bad "the locked sandbox directory survived"
+  fi
+else
+  bad "setup: could not construct a locked sandbox worktree"
+fi
+# Belt and braces: never leave the probe behind, whatever the outcome above.
+git worktree unlock "$LOCKED_SANDBOX/tree" >/dev/null 2>&1
+git worktree remove --force --force "$LOCKED_SANDBOX/tree" >/dev/null 2>&1
+rm -rf "$LOCKED_SANDBOX"
+git worktree prune >/dev/null 2>&1
+
 STATUS_AFTER="$(git status --porcelain --untracked-files=all)"
 if [ "$STATUS_AFTER" = "$STATUS_BEFORE" ]; then
   ok "the whole exercise left the real tree byte-identical (#713)"
