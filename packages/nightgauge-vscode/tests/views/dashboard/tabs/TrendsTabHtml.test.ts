@@ -86,6 +86,16 @@ describe("getTrendsTabHtml", () => {
     expect(html).toContain("Sign in");
   });
 
+  // The generator that builds the Playwright fixtures is not covered by any
+  // typechecker (tsconfig includes src/ only), so a stale payload reached this
+  // renderer and threw AFTER the webview existed — a blank tab with no error
+  // anywhere. Degrade to the empty state instead (#801).
+  it("result with no entries array → empty state, not a throw", () => {
+    const stale = { granularity: "daily", repos: [] } as unknown as AnalyticsTrendsResult;
+    expect(() => getTrendsTabHtml(makeTrendsData({ result: stale }))).not.toThrow();
+    expect(getTrendsTabHtml(makeTrendsData({ result: stale }))).toContain("No trends data");
+  });
+
   it("null result → empty state", () => {
     const html = getTrendsTabHtml(makeTrendsData({ result: null }));
     expect(html).toContain("No trends data");

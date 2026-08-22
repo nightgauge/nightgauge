@@ -52,6 +52,14 @@ export function getTrendsTabHtml(data: TrendsData | null | undefined): string {
 
   const { result } = data;
 
+  // A result whose entries are missing renders as empty rather than throwing.
+  // The throw happened after the webview was created, so it surfaced as a
+  // blank tab with no error anywhere — the shape of #767, and what a stale
+  // pre-#801 payload produced here.
+  if (!Array.isArray(result.entries)) {
+    return getTrendsEmptyHtml();
+  }
+
   if (result.entries.length < SPARSE_THRESHOLD) {
     return getTrendsSparseHtml(result.entries.length);
   }
