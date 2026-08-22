@@ -131,8 +131,23 @@ export interface UsageWindow {
    * Consumption in `unit` — an absolute figure the producer observed, never a
    * ratio this model derived. When `unit` is `"percent"` the figure is one the
    * provider itself reported.
+   *
+   * `null` means the window EXISTS but nothing has been observed for it yet
+   * (#808): the operator has declared a subscription plan, so we know which
+   * windows their plan has, and no reading has arrived to fill them.
+   *
+   * This was widened from a bare `number` deliberately, and #808 asked for the
+   * finding before the reshape. It is the finding: a declared-but-unobserved
+   * window is not representable otherwise. `used: 0` renders as "0% used",
+   * which is a fabricated utilization — precisely what ADR 018 and
+   * `ClaudeRateLimitStore`'s drop-expired-readings rule exist to prevent — and
+   * `limit: null` alone only suppresses the BAR, not the figure beside it.
+   * Making the illegal state unrepresentable beats flagging it.
+   *
+   * `null` MUST render as "awaiting a reading" or an equivalent absence. It is
+   * never a zero, never a full bar, and never an input to a percentage.
    */
-  used: number;
+  used: number | null;
   /**
    * Ceiling in `unit`, or `null` when no ceiling is known. Carries either a
    * locally configured budget or a provider-reported allowance; consumers must
@@ -170,7 +185,14 @@ export interface UsageSnapshot {
   plan: UsagePlan;
   /** When this snapshot was derived — the input to staleness checks. */
   capturedAt: Date;
-  /** Empty exactly when `plan.kind === "unknown"`. */
+  /**
+   * Empty exactly when `plan.kind === "unknown"`.
+   *
+   * A declared subscription plan with no reading yet is NOT empty: it carries
+   * its plan's windows with `used: null` (#808), because "your plan has a
+   * 5-hour and a 7-day allowance and we have not measured them" is a different
+   * statement from "we know nothing".
+   */
   windows: UsageWindow[];
   /**
    * How the Claude usage feed is doing, when the adapter is `claude` (#810).

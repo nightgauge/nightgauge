@@ -328,6 +328,31 @@ is skipped for the same reason.
 
 **Plan kind follows the observed signal, never the adapter name.**
 
+**Amended (#808): declared, not inferred.** The rule above is about
+_inference_ — deriving a plan from the adapter id, which this decision refuses
+because `claude` is the adapter of both a Max subscriber and an API-key user
+and nothing about the id distinguishes them.
+
+An operator **telling** Nightgauge which plan they are on is not an inference,
+and the gap the rule left open is real: a subscription allowance is only
+observable once a `rate_limit_event` has arrived, so on a fresh install, or any
+machine where the usage feed has never been wired, a Max operator is shown
+dollar windows — a different _billing model_ from the one they are on.
+
+The `nightgauge.usage.claudePlan` setting (default `not-declared`, which
+preserves this decision's behaviour exactly) therefore decides the plan kind
+and **which windows exist**. It never decides what is in them:
+
+- an observed reading always outranks the declaration for utilization;
+- a declared plan with no reading yet carries windows with `used: null`,
+  rendered as _awaiting first reading_.
+
+`UsageWindow.used` was widened from `number` to `number | null` for that last
+point, and it is the stronger form of this decision's no-fabricated-figure
+rule: `used: 0` renders as "0% used", and `limit: null` alone suppresses only
+the bar, not the figure beside it. The absence is now unrepresentable as a
+number rather than merely discouraged.
+
 **2. The figure is only observable mid-stream, so it has to be persisted.**
 The envelope arrives on a live `claude -p` stdout stream and nothing returns
 it at rest, but the status bar samples between runs. `ClaudeRateLimitStore`

@@ -91,7 +91,8 @@ export interface ReportedUsageWindow {
   id: string;
   label: string;
   scope: UsageWindow["scope"];
-  used: number;
+  /** `null` when the window exists but nothing has been observed for it (#808). */
+  used: number | null;
   limit: number | null;
   unit: UsageWindow["unit"];
   resets_at: string | null;
@@ -121,6 +122,8 @@ function toReportedWindow(window: UsageWindow): ReportedUsageWindow {
     id: window.id,
     label: window.label,
     scope: window.scope,
+    // Reported as an explicit null, never coerced to 0: the wire must carry
+    // "not observed" as distinctly as the local model does (#808).
     used: window.used,
     limit: window.limit,
     unit: window.unit,

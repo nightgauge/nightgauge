@@ -89,23 +89,22 @@ export class UsageLimitsService implements vscode.Disposable {
       return;
     }
     const monthly = snapshot.windows.find((w) => w.scope === "monthly");
-    if (!monthly || monthly.limit === null || monthly.limit <= 0) {
-      return; // No priced monthly window yet, or the adapter isn't metered.
+    if (!monthly || monthly.limit === null || monthly.limit <= 0 || monthly.used === null) {
+      // No priced monthly window yet, the adapter isn't metered, or nothing has
+      // been observed for it (#808). Alerting on an unobserved figure would
+      // mean either a false all-clear or a warning about a number nobody has.
+      return;
     }
 
-    const usagePct = (monthly.used / monthly.limit) * 100;
+    const used = monthly.used;
+    const usagePct = (used / monthly.limit) * 100;
 
     if (usagePct >= settings.criticalThresholdPct && this.lastAlertLevel !== "critical") {
       this.lastAlertLevel = "critical";
-      this.notificationService.notifyUsageWarning(
-        "critical",
-        usagePct,
-        monthly.used,
-        monthly.limit
-      );
+      this.notificationService.notifyUsageWarning("critical", usagePct, used, monthly.limit);
     } else if (usagePct >= settings.warningThresholdPct && this.lastAlertLevel === "none") {
       this.lastAlertLevel = "warning";
-      this.notificationService.notifyUsageWarning("warning", usagePct, monthly.used, monthly.limit);
+      this.notificationService.notifyUsageWarning("warning", usagePct, used, monthly.limit);
     } else if (usagePct < settings.warningThresholdPct && this.lastAlertLevel !== "none") {
       this.lastAlertLevel = "none";
     }

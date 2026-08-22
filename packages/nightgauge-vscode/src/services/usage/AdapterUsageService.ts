@@ -18,6 +18,7 @@ import { getLimitsSettings } from "../../config/limitsSettings";
 import { getGlobalAdapterWithSource } from "../../utils/resolvers/adapterResolver";
 import { LocalTelemetryUsageProvider, type UsageSessionClock } from "./LocalTelemetryUsageProvider";
 import { probeClaudeFeedHealth } from "./claudeFeedHealth";
+import { readClaudePlanDeclaration } from "./claudePlanDeclaration";
 import type { ClaudeFeedHealth } from "./claudeStatusLineSetup";
 import { ClaudeRateLimitUsageProvider } from "./ClaudeRateLimitUsageProvider";
 import type { ClaudeRateLimitStore } from "./ClaudeRateLimitStore";
@@ -148,7 +149,9 @@ export class AdapterUsageService implements vscode.Disposable {
   ): AdapterUsageService {
     const registry = new UsageProviderRegistry();
     if (claudeRateLimitStore !== null) {
-      registry.register(new ClaudeRateLimitUsageProvider(claudeRateLimitStore));
+      registry.register(
+        new ClaudeRateLimitUsageProvider(claudeRateLimitStore, readClaudePlanDeclaration)
+      );
     }
     registry.register(LocalTelemetryUsageProvider.forWorkspace(workspaceRoot, sessionClock));
     return new AdapterUsageService(registry, {

@@ -48,6 +48,7 @@ import type {
 import type { PipelineRunStatus, PipelineRunSummary } from "./DashboardState";
 import { BurnRateProjector } from "../../utils/budgetIntelligence";
 import type { ClaudeFeedHealthState } from "../../services/usage/claudeStatusLineSetup";
+import { readClaudePlanDeclaration } from "../../services/usage/claudePlanDeclaration";
 
 /**
  * How far back the burn rate looks.
@@ -108,7 +109,8 @@ export interface UsagePanelWindowView {
   label: string;
   scope: UsageWindowScope;
   modelFamily?: string;
-  used: number;
+  /** `null` when the window exists but nothing has been observed for it (#808). */
+  used: number | null;
   limit: number | null;
   unit: UsageUnit;
   resetsAt: Date | null;
@@ -182,6 +184,11 @@ export interface UsagePanelState {
    * whether the feed is on. Undefined for non-Claude adapters.
    */
   claudeFeedHealth?: ClaudeFeedHealthState;
+  /**
+   * True when the operator has declared a Claude plan (#808). The prompt that
+   * asks which plan they are on stops asking once they have answered.
+   */
+  claudePlanDeclared?: boolean;
   /** When the snapshot was derived — the input to the operator's staleness call. */
   capturedAt: Date;
   /** Windows covering every model the adapter ran. Empty on an unknown plan. */
@@ -209,7 +216,10 @@ function runTokens(run: PipelineRunSummary): number {
 /** Prepare one snapshot window for rendering. Quota figures pass through untouched. */
 export function toWindowView(window: UsageWindow): UsagePanelWindowView {
   const hasCeiling = window.limit !== null && window.limit > 0;
-  const pct = hasCeiling ? (window.used / (window.limit as number)) * 100 : null;
+  // `used: null` is a declared window nothing has measured yet (#808): no
+  // percentage, no bar, no severity derived from an absent figure.
+  const pct =
+    hasCeiling && window.used !== null ? (window.used / (window.limit as number)) * 100 : null;
   const usedIsFloor = window.confidence === "unknown";
 
   let severity: UsageWindowSeverity;
@@ -347,6 +357,12 @@ export function computeUsageBurnRate(
   }
 
   const usdPerMinute = projector.getBurnRatePerMinute();
+  // A burn-rate projection needs a figure to project FROM. An unobserved
+  // window has none, and projecting from an assumed zero would put a
+  // reassuring "days remaining" beside a number nobody measured (#808).
+  if (window.used === null) {
+    return null;
+  }
   const alreadyExhausted = ceilingUsd > 0 && window.used >= ceilingUsd;
   const projection = alreadyExhausted ? null : projector.getProjection(window.used);
   const minutesToExhaustion =
@@ -431,6 +447,10 @@ export function buildUsagePanelState(
     adapter: snapshot.adapter,
     planKind: snapshot.plan.kind,
     claudeFeedHealth: snapshot.claudeFeedHealth?.state,
+    // (#808) Read here rather than in the renderer so the panel stays a pure
+    // string builder with no vscode import.
+    claudePlanDeclared:
+      snapshot.adapter === "claude" ? readClaudePlanDeclaration() !== "not-declared" : false,
     capturedAt: snapshot.capturedAt,
     windows: overallWindows.map(toWindowView),
     familyGroups,

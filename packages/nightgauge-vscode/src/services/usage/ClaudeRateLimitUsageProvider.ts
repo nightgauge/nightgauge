@@ -54,6 +54,11 @@
  */
 
 import type { ExecutionAdapter } from "../../config/schema";
+import {
+  declaredPlanWindows,
+  isSubscriptionDeclaration,
+  type ClaudePlanDeclaration,
+} from "./claudePlanDeclaration";
 import type { ClaudeRateLimitStore, RateLimitReading } from "./ClaudeRateLimitStore";
 import type { UsageProvider, UsageSnapshot, UsageWindow, UsageWindowScope } from "./types";
 
@@ -119,7 +124,17 @@ export function readingToWindow(providerId: string, reading: RateLimitReading): 
 export class ClaudeRateLimitUsageProvider implements UsageProvider {
   readonly id = "claude-rate-limit";
 
-  constructor(private readonly store: ClaudeRateLimitStore) {}
+  /**
+   * @param store The reading store.
+   * @param readDeclaration The operator's declared plan (#808). Read on every
+   *   snapshot rather than captured once, so changing the setting takes effect
+   *   on the next refresh instead of at the next window reload. Defaults to
+   *   "not-declared", which is exactly the pre-#808 behaviour.
+   */
+  constructor(
+    private readonly store: ClaudeRateLimitStore,
+    private readonly readDeclaration: () => ClaudePlanDeclaration = () => "not-declared"
+  ) {}
 
   /**
    * Claims `claude` only.
@@ -147,9 +162,23 @@ export class ClaudeRateLimitUsageProvider implements UsageProvider {
       .sort((a, b) => SCOPE_ORDER.indexOf(a.scope) - SCOPE_ORDER.indexOf(b.scope));
 
     // No usable reading — every bucket has refilled, or none was ever
-    // observed. Returning null hands the adapter to the next provider rather
-    // than asserting a subscription plan we have no evidence for.
+    // observed.
     if (windows.length === 0) {
+      const declaration = this.readDeclaration();
+      if (isSubscriptionDeclaration(declaration)) {
+        // Evidence is exactly what a declaration supplies (#808), and it is
+        // evidence about which WINDOWS EXIST, not about what is in them. So
+        // the plan kind flips and the shells render as awaiting a reading.
+        return {
+          adapter,
+          plan: { kind: "subscription-window" },
+          capturedAt: now,
+          windows: declaredPlanWindows(this.id),
+        };
+      }
+      // Undeclared, or declared as pay-per-token: hand the adapter to the next
+      // provider rather than asserting a subscription we have no evidence for.
+      // Dollar windows are the RIGHT answer for an API-key operator.
       return null;
     }
 

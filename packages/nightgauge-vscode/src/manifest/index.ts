@@ -637,6 +637,11 @@ export const MANIFEST_CONTRIBUTES: ManifestContributes = {
       icon: "$(flame)",
     },
     {
+      command: "nightgauge.declareClaudePlan",
+      title: "Nightgauge: Tell Nightgauge Which Claude Plan I'm On",
+      icon: "$(flame)",
+    },
+    {
       command: "nightgauge.searchKnowledge",
       title: "Nightgauge: Search Knowledge",
       icon: "$(search)",

@@ -82,6 +82,11 @@ function asOfText(view: UsagePanelWindowView): string {
 
 /** The used/limit line: a floor is stated as one, a missing ceiling as one. */
 function figureText(view: UsagePanelWindowView): string {
+  // A declared window nothing has measured yet (#808). Say so; do not print a
+  // number, and do not let a zero stand in for an absence.
+  if (view.used === null) {
+    return "<em>awaiting first reading</em>";
+  }
   const used = formatUsageValue(view.used, view.unit);
   const usedText = view.usedIsFloor ? `at least ${used}` : used;
   if (view.limit === null || view.limit <= 0) {
@@ -361,6 +366,11 @@ function claudeFeedPromptHtml(state: UsagePanelState): string {
   if (state.adapter !== "claude" || state.planKind === "subscription-window") {
     return "";
   }
+  // (#808) They have answered. Declaring API/pay-per-token means the dollar
+  // windows ARE their right answer.
+  if (state.claudePlanDeclared === true) {
+    return "";
+  }
   // (#810) One verdict, shared with the status-bar tooltip and the enable
   // command. Inferring "the feed is off" from planKind alone is what let this
   // panel offer to enable a feed the command called already enabled.
@@ -375,6 +385,7 @@ function claudeFeedPromptHtml(state: UsagePanelState): string {
       <p class="usage-panel-note usage-feed-prompt">
         On a Claude Max or Pro plan? These are locally-derived costs, not your plan's allowance.
         <button type="button" id="enableClaudeUsageFeed" class="link-button">Show my 5-hour and weekly limits</button>
+        <button type="button" id="declareClaudePlan" class="link-button">Tell Nightgauge which plan I'm on</button>
       </p>`;
 }
 
