@@ -2,6 +2,7 @@ package hooks
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -44,12 +45,15 @@ type PostMergeResult struct {
 	// reconciliation (board-Done sync, survival eligibility) cares about the
 	// issue's actual state, not about who closed it.
 	IssueClosed bool `json:"issueClosed"`
-	// IssueDoneSynced is true when the merged issue's own project-board Status
-	// was synced to "Done" (#3981). Only attempted when a board syncer is wired
-	// and ProjectNumber > 0.
-	IssueDoneSynced bool `json:"issueDoneSynced"`
-	EpicNumber      int  `json:"epicNumber,omitempty"`
-	AutoClosed      bool `json:"autoClosed"`
+	// IssueDoneSync reports what happened to the merged issue's own
+	// project-board Status (#691). It replaces a boolean that conflated
+	// "there was nothing to sync" with "the sync failed" -- both read as false,
+	// so a caller could not tell a configuration gap from a broken board, and
+	// the hook's exit code says nothing either (it is deliberately
+	// non-blocking).
+	IssueDoneSync BoardSyncOutcome `json:"issueDoneSync"`
+	EpicNumber    int              `json:"epicNumber,omitempty"`
+	AutoClosed    bool             `json:"autoClosed"`
 	// OrphanSubsClosed counts sub-issues closed because the merged issue was
 	// itself an epic that shipped via an umbrella PR without enumerating
 	// `Closes #sub` for each sub (#3979).
@@ -71,6 +75,29 @@ type PostMergeResult struct {
 	SurvivalEligible bool `json:"survivalEligible,omitempty"`
 }
 
+// BoardSyncOutcome is what the post-merge board-Done sync actually did.
+type BoardSyncOutcome string
+
+const (
+	// BoardSyncNotAttempted: no board syncer wired, no project configured, or
+	// the issue is not closed. Nothing to sync, and nothing wrong.
+	BoardSyncNotAttempted BoardSyncOutcome = "not_attempted"
+	// BoardSyncSynced: the issue already had a board row; its Status is Done.
+	BoardSyncSynced BoardSyncOutcome = "synced"
+	// BoardSyncRepaired: the issue had no board row, so one was created and then
+	// set to Done. The end state is identical to BoardSyncSynced; the
+	// distinction is kept because a repair means an upstream creation path
+	// skipped the board, which is worth seeing.
+	BoardSyncRepaired BoardSyncOutcome = "repaired"
+	// BoardSyncFailed: a sync was attempted and the board is NOT Done.
+	BoardSyncFailed BoardSyncOutcome = "failed"
+)
+
+// Done reports whether the board row ends up at Done.
+func (o BoardSyncOutcome) Done() bool {
+	return o == BoardSyncSynced || o == BoardSyncRepaired
+}
+
 // IssueCloser abstracts closing a single issue by node ID for testability.
 type IssueCloser interface {
 	CloseIssue(ctx context.Context, issueID string) error
@@ -84,11 +111,60 @@ type EpicAutoCloser interface {
 	CloseOrphanSubs(ctx context.Context, owner, repo string, epicNumber, projectNumber int, ownerType ...gh.OwnerType) (*gh.OrphanCloseResult, error)
 }
 
-// BoardSyncer abstracts syncing a single issue's project-board Status field.
-// Implemented by *github.ProjectService. Optional: when nil, the merged issue's
-// board Status is left untouched (the reconcile sweep is the backstop).
+// BoardSyncer abstracts syncing a single issue's project-board Status field and
+// adding a missing row. Implemented by *github.ProjectService. Optional: when
+// nil, the merged issue's board Status is left untouched (the reconcile sweep is
+// the backstop).
+//
+// AddIssueByNumber is part of the REQUIRED surface rather than an optional
+// type-assertion (#691). The defect being fixed is a hook that reported success
+// while its board half silently did nothing; making the repair capability
+// optional would reproduce that as "self-heal happens wherever someone
+// remembered to wire it". It is idempotent, so a caller may invoke it on a row
+// that already exists.
 type BoardSyncer interface {
 	SyncStatus(ctx context.Context, owner, repo string, issueNumber int, status string) error
+	AddIssueByNumber(ctx context.Context, owner, repo string, number int) (string, error)
+}
+
+// syncIssueDone drives the merged issue's board Status to Done, adding the row
+// first when there is not one.
+//
+// The missing row is the common case, not an edge case: issues filed ad-hoc with
+// `gh issue create` never reach the board, and the hook then looked up a row that
+// did not exist, logged a warning, and exited 0 -- so the issue closed on the
+// tracker while the board showed nothing (#691). The repair is one verb away and
+// idempotent, so attempt it rather than reporting a warning nobody reads.
+//
+// Only ErrIssueNotOnBoard is repaired. An auth or network failure is not made
+// better by writing to the board, and retrying it as if it were would turn a
+// clear error into a confusing one.
+func syncIssueDone(ctx context.Context, boardSvc BoardSyncer, input PostMergeInput) BoardSyncOutcome {
+	owner, repo, num := input.RepositoryOwner, input.RepositoryName, input.IssueNumber
+
+	syncErr := boardSvc.SyncStatus(ctx, owner, repo, num, "Done")
+	if syncErr == nil {
+		fmt.Fprintf(os.Stderr, "Post-merge: synced issue #%d board status to Done\n", num)
+		return BoardSyncSynced
+	}
+
+	if !errors.Is(syncErr, gh.ErrIssueNotOnBoard) {
+		fmt.Fprintf(os.Stderr, "Warning: post-merge board sync to Done failed for #%d: %v\n", num, syncErr)
+		return BoardSyncFailed
+	}
+
+	fmt.Fprintf(os.Stderr, "Post-merge: issue #%d was never added to project board %s/%d — adding it\n",
+		num, owner, input.ProjectNumber)
+	if _, addErr := boardSvc.AddIssueByNumber(ctx, owner, repo, num); addErr != nil {
+		fmt.Fprintf(os.Stderr, "Warning: post-merge board repair failed for #%d: %v\n", num, addErr)
+		return BoardSyncFailed
+	}
+	if retryErr := boardSvc.SyncStatus(ctx, owner, repo, num, "Done"); retryErr != nil {
+		fmt.Fprintf(os.Stderr, "Warning: post-merge board sync to Done failed for #%d after adding it: %v\n", num, retryErr)
+		return BoardSyncFailed
+	}
+	fmt.Fprintf(os.Stderr, "Post-merge: added issue #%d to the board and set its status to Done\n", num)
+	return BoardSyncRepaired
 }
 
 // EvaluatePostMerge closes the merged issue and runs the post-merge epic
@@ -205,13 +281,9 @@ func EvaluatePostMerge(ctx context.Context, issueSvc IssueFetcher, issueCloser I
 	// (#3981) Sync the merged issue's own board Status to Done. The board
 	// auto-close keyword does not touch the project board, so a just-closed
 	// issue otherwise lingers as "In progress"/"Ready" on the board.
+	out.IssueDoneSync = BoardSyncNotAttempted
 	if boardSvc != nil && input.ProjectNumber > 0 && issueClosed {
-		if syncErr := boardSvc.SyncStatus(ctx, input.RepositoryOwner, input.RepositoryName, input.IssueNumber, "Done"); syncErr != nil {
-			fmt.Fprintf(os.Stderr, "Warning: post-merge board sync to Done failed for #%d: %v\n", input.IssueNumber, syncErr)
-		} else {
-			out.IssueDoneSynced = true
-			fmt.Fprintf(os.Stderr, "Post-merge: synced issue #%d board status to Done\n", input.IssueNumber)
-		}
+		out.IssueDoneSync = syncIssueDone(ctx, boardSvc, input)
 	}
 
 	// (#3979) If the merged issue is itself an epic, an umbrella PR may have

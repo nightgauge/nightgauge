@@ -63,8 +63,10 @@ func (s *Scheduler) checkEpicCompletion(ctx context.Context, item types.BoardIte
 		}
 	}
 
-	log.Printf("#%d: post-merge hook: issueClosed=%v autoClosed=%v epic=#%d reason=%s",
-		item.Number, result.IssueClosed, result.AutoClosed, result.EpicNumber, result.Reason)
+	// boardSync is logged because the hook is non-blocking: a board that failed
+	// to reach Done is otherwise invisible on this path too (#691).
+	log.Printf("#%d: post-merge hook: issueClosed=%v autoClosed=%v epic=#%d reason=%s boardSync=%s",
+		item.Number, result.IssueClosed, result.AutoClosed, result.EpicNumber, result.Reason, result.IssueDoneSync)
 	return result
 }
 

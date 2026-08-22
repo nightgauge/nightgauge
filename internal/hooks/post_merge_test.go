@@ -59,21 +59,60 @@ func (m *mockEpicAutoCloser) CloseOrphanSubs(_ context.Context, _, _ string, epi
 	return m.orphanResult, m.orphanErr
 }
 
-// mockBoardSyncer implements BoardSyncer for testing.
+// mockBoardSyncer is a fake project board, not a call recorder: it models
+// whether an issue HAS a row, because that is the distinction #691 turns on.
+// A row-less issue fails SyncStatus with ErrIssueNotOnBoard exactly as
+// *github.ProjectService does, so the repair path is exercised end to end
+// rather than asserted about.
+//
+// `rows` nil means "every issue is already on the board" -- the shape every
+// pre-#691 test assumed.
 type mockBoardSyncer struct {
-	err        error
+	rows       map[int]bool
+	err        error // forced SyncStatus failure, e.g. a network error
+	addErr     error // forced AddIssueByNumber failure
+	adds       []int
 	called     bool
+	syncs      int
 	calledWith struct {
 		number int
 		status string
 	}
 }
 
+func (m *mockBoardSyncer) onBoard(number int) bool {
+	if m.rows == nil {
+		return true
+	}
+	return m.rows[number]
+}
+
 func (m *mockBoardSyncer) SyncStatus(_ context.Context, _, _ string, issueNumber int, status string) error {
 	m.called = true
+	m.syncs++
 	m.calledWith.number = issueNumber
 	m.calledWith.status = status
-	return m.err
+	if m.err != nil {
+		return m.err
+	}
+	if !m.onBoard(issueNumber) {
+		// Wrapped the same way ProjectService.findItemID wraps it, so a test
+		// that stopped matching the real error would fail here too.
+		return fmt.Errorf("%w: issue #%d", gh.ErrIssueNotOnBoard, issueNumber)
+	}
+	return nil
+}
+
+func (m *mockBoardSyncer) AddIssueByNumber(_ context.Context, _, _ string, number int) (string, error) {
+	m.adds = append(m.adds, number)
+	if m.addErr != nil {
+		return "", m.addErr
+	}
+	if m.rows == nil {
+		m.rows = map[int]bool{}
+	}
+	m.rows[number] = true
+	return "PVTI_fake", nil
 }
 
 func TestPostMergeIssueIsClosedAfterMerge(t *testing.T) {
@@ -714,8 +753,8 @@ func TestPostMergeSyncsClosedIssueToDone(t *testing.T) {
 	if board.calledWith.number != 500 || board.calledWith.status != "Done" {
 		t.Errorf("SyncStatus called with (#%d, %q), want (#500, Done)", board.calledWith.number, board.calledWith.status)
 	}
-	if !result.IssueDoneSynced {
-		t.Error("expected IssueDoneSynced=true")
+	if result.IssueDoneSync != BoardSyncSynced {
+		t.Errorf("IssueDoneSync = %q, want %q", result.IssueDoneSync, BoardSyncSynced)
 	}
 }
 
@@ -735,8 +774,8 @@ func TestPostMergeBoardSyncSkippedWithoutProject(t *testing.T) {
 	if board.called {
 		t.Error("board SyncStatus must NOT be called when ProjectNumber=0")
 	}
-	if result.IssueDoneSynced {
-		t.Error("IssueDoneSynced must be false when no project is configured")
+	if result.IssueDoneSync != BoardSyncNotAttempted {
+		t.Errorf("IssueDoneSync = %q, want %q when no project is configured", result.IssueDoneSync, BoardSyncNotAttempted)
 	}
 }
 
@@ -840,8 +879,8 @@ func TestPostMergeBoardSyncFiresWhenClosedByKeywordRace(t *testing.T) {
 	if board.calledWith.number != 700 || board.calledWith.status != "Done" {
 		t.Errorf("SyncStatus called with (#%d, %q), want (#700, Done)", board.calledWith.number, board.calledWith.status)
 	}
-	if !result.IssueDoneSynced {
-		t.Error("expected IssueDoneSynced=true for the closed-by-keyword race case")
+	if result.IssueDoneSync != BoardSyncSynced {
+		t.Errorf("IssueDoneSync = %q, want %q for the closed-by-keyword race case", result.IssueDoneSync, BoardSyncSynced)
 	}
 	if !result.IssueClosed {
 		t.Error("expected IssueClosed=true — the issue IS closed, regardless of who closed it")
@@ -938,8 +977,9 @@ func TestPostMergeBoardSyncSkippedWhenIssueGenuinelyOpenAndCloseFails(t *testing
 	if board.called {
 		t.Error("board SyncStatus must NOT fire when the issue is genuinely still open and the close attempt genuinely failed")
 	}
-	if result.IssueDoneSynced {
-		t.Error("expected IssueDoneSynced=false")
+	if result.IssueDoneSync != BoardSyncNotAttempted {
+		t.Errorf("IssueDoneSync = %q, want %q — the issue never closed, so there was nothing to sync",
+			result.IssueDoneSync, BoardSyncNotAttempted)
 	}
 	if result.IssueClosed {
 		t.Error("expected IssueClosed=false — the issue is not actually closed")
@@ -982,5 +1022,179 @@ func TestPostMergeEpicUmbrellaNotSurvivalEligible(t *testing.T) {
 	// ...but survival attribution is skipped for the umbrella PR.
 	if result.SurvivalEligible {
 		t.Error("epic-umbrella merge must NOT be survival-eligible (ambiguous N→1 attribution)")
+	}
+}
+
+// --- #691: the board row that was never created ---------------------------
+//
+// Issues filed ad-hoc with `gh issue create` never reach the project board. The
+// hook then looked up a row that did not exist, logged a warning, and still
+// exited 0: the issue closed on the tracker while the board showed nothing.
+// Observed three times in production on #675, #801 and again on #722/#723.
+
+func TestPostMergeAddsMissingBoardRowThenSyncsDone(t *testing.T) {
+	fetcher := &mockFetcher{issues: map[string]*types.Issue{
+		"nightgauge/nightgauge#722": {NodeID: "I_node722", Number: 722},
+	}}
+	// The issue exists but has no board row — the ad-hoc-creation shape.
+	board := &mockBoardSyncer{rows: map[int]bool{}}
+
+	result := EvaluatePostMerge(context.Background(), fetcher, &mockIssueCloser{}, &mockEpicAutoCloser{}, nil, board, PostMergeInput{
+		IssueNumber:     722,
+		RepositoryOwner: "nightgauge",
+		RepositoryName:  "nightgauge",
+		ProjectNumber:   3,
+	})
+
+	if len(board.adds) != 1 || board.adds[0] != 722 {
+		t.Fatalf("AddIssueByNumber calls = %v, want exactly [722] — a missing row must be repaired, not warned about", board.adds)
+	}
+	if !board.onBoard(722) {
+		t.Error("issue #722 is still not on the board after the hook ran")
+	}
+	if board.syncs != 2 {
+		t.Errorf("SyncStatus calls = %d, want 2 (the failing probe, then the retry after the row exists)", board.syncs)
+	}
+	if result.IssueDoneSync != BoardSyncRepaired {
+		t.Errorf("IssueDoneSync = %q, want %q", result.IssueDoneSync, BoardSyncRepaired)
+	}
+	if !result.IssueDoneSync.Done() {
+		t.Error("a repaired sync must report Done() — the board row IS at Done")
+	}
+}
+
+// The three outcomes a caller has to be able to tell apart. Before #691 the
+// last two were both `IssueDoneSynced=false`, and the hook's exit code is 0 in
+// every one of these cases by design, so the result field is the only signal
+// there is.
+func TestPostMergeBoardSyncOutcomesAreDistinguishable(t *testing.T) {
+	run := func(t *testing.T, board *mockBoardSyncer, project int) PostMergeResult {
+		t.Helper()
+		fetcher := &mockFetcher{issues: map[string]*types.Issue{
+			"nightgauge/nightgauge#900": {NodeID: "I_node900", Number: 900},
+		}}
+		return EvaluatePostMerge(context.Background(), fetcher, &mockIssueCloser{}, &mockEpicAutoCloser{}, nil, board, PostMergeInput{
+			IssueNumber:     900,
+			RepositoryOwner: "nightgauge",
+			RepositoryName:  "nightgauge",
+			ProjectNumber:   project,
+		})
+	}
+
+	tests := []struct {
+		name  string
+		board *mockBoardSyncer
+		proj  int
+		want  BoardSyncOutcome
+		done  bool
+	}{
+		{"row exists", &mockBoardSyncer{rows: map[int]bool{900: true}}, 3, BoardSyncSynced, true},
+		{"row missing, repaired", &mockBoardSyncer{rows: map[int]bool{}}, 3, BoardSyncRepaired, true},
+		{"nothing to sync", &mockBoardSyncer{}, 0, BoardSyncNotAttempted, false},
+		{"sync genuinely failed", &mockBoardSyncer{err: fmt.Errorf("network timeout")}, 3, BoardSyncFailed, false},
+		{"row missing and add failed", &mockBoardSyncer{rows: map[int]bool{}, addErr: fmt.Errorf("forbidden")}, 3, BoardSyncFailed, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := run(t, tc.board, tc.proj)
+			if got.IssueDoneSync != tc.want {
+				t.Errorf("IssueDoneSync = %q, want %q", got.IssueDoneSync, tc.want)
+			}
+			if got.IssueDoneSync.Done() != tc.done {
+				t.Errorf("Done() = %v, want %v", got.IssueDoneSync.Done(), tc.done)
+			}
+		})
+	}
+}
+
+// The four outcomes must be four DISTINCT values.
+//
+// Every other assertion in this file compares a result against these constants,
+// which makes them all tautological if two constants collapse to the same
+// string — collapsing `failed` into `not_attempted` (precisely the conflation
+// #691 is about) leaves the table test above green. This is the arm that
+// notices.
+func TestBoardSyncOutcomesAreDistinctValues(t *testing.T) {
+	all := map[string]BoardSyncOutcome{
+		"BoardSyncNotAttempted": BoardSyncNotAttempted,
+		"BoardSyncSynced":       BoardSyncSynced,
+		"BoardSyncRepaired":     BoardSyncRepaired,
+		"BoardSyncFailed":       BoardSyncFailed,
+	}
+	seen := map[BoardSyncOutcome]string{}
+	for name, v := range all {
+		if v == "" {
+			t.Errorf("%s has the empty value, which is indistinguishable from an unset field", name)
+		}
+		if other, dup := seen[v]; dup {
+			t.Errorf("%s and %s share the value %q — a caller cannot tell them apart", name, other, v)
+		}
+		seen[v] = name
+	}
+	if len(seen) != len(all) {
+		t.Errorf("got %d distinct outcome values, want %d", len(seen), len(all))
+	}
+
+	// Done() must partition them, not merely be true for one.
+	for name, v := range all {
+		want := name == "BoardSyncSynced" || name == "BoardSyncRepaired"
+		if v.Done() != want {
+			t.Errorf("%s.Done() = %v, want %v", name, v.Done(), want)
+		}
+	}
+}
+
+// A non-repairable failure must NOT be retried as if the row were missing:
+// writing to the board does not fix an auth or network error, and doing so
+// would turn a clear failure into a confusing one.
+func TestPostMergeDoesNotAddRowOnUnrelatedSyncError(t *testing.T) {
+	fetcher := &mockFetcher{issues: map[string]*types.Issue{
+		"nightgauge/nightgauge#901": {NodeID: "I_node901", Number: 901},
+	}}
+	board := &mockBoardSyncer{err: fmt.Errorf("401 Bad credentials")}
+
+	result := EvaluatePostMerge(context.Background(), fetcher, &mockIssueCloser{}, &mockEpicAutoCloser{}, nil, board, PostMergeInput{
+		IssueNumber:     901,
+		RepositoryOwner: "nightgauge",
+		RepositoryName:  "nightgauge",
+		ProjectNumber:   3,
+	})
+
+	if len(board.adds) != 0 {
+		t.Errorf("AddIssueByNumber calls = %v, want none for a non-repairable error", board.adds)
+	}
+	if board.syncs != 1 {
+		t.Errorf("SyncStatus calls = %d, want 1 (no retry)", board.syncs)
+	}
+	if result.IssueDoneSync != BoardSyncFailed {
+		t.Errorf("IssueDoneSync = %q, want %q", result.IssueDoneSync, BoardSyncFailed)
+	}
+}
+
+// The repair keys off the real sentinel, not off message text. If
+// ProjectService stopped wrapping ErrIssueNotOnBoard, this is the test that
+// notices — the hook would silently go back to warning instead of repairing.
+func TestPostMergeRepairMatchesTheRealSentinel(t *testing.T) {
+	fetcher := &mockFetcher{issues: map[string]*types.Issue{
+		"nightgauge/nightgauge#902": {NodeID: "I_node902", Number: 902},
+	}}
+	// Verbatim shape of what findItemID returns, sentinel and all.
+	board := &mockBoardSyncer{err: fmt.Errorf("%w: issue #%d (%s/%s) on project board %s/%d",
+		gh.ErrIssueNotOnBoard, 902, "nightgauge", "nightgauge", "nightgauge", 3)}
+
+	result := EvaluatePostMerge(context.Background(), fetcher, &mockIssueCloser{}, &mockEpicAutoCloser{}, nil, board, PostMergeInput{
+		IssueNumber:     902,
+		RepositoryOwner: "nightgauge",
+		RepositoryName:  "nightgauge",
+		ProjectNumber:   3,
+	})
+
+	if len(board.adds) != 1 {
+		t.Fatalf("AddIssueByNumber calls = %v, want exactly one — the sentinel was not recognised", board.adds)
+	}
+	// `err` is forced, so the retry fails too; the point is that the repair was
+	// ATTEMPTED, which is what the sentinel match decides.
+	if result.IssueDoneSync != BoardSyncFailed {
+		t.Errorf("IssueDoneSync = %q, want %q", result.IssueDoneSync, BoardSyncFailed)
 	}
 }
