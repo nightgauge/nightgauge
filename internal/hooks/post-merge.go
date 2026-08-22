@@ -46,7 +46,7 @@ type PostMergeResult struct {
 	// issue's actual state, not about who closed it.
 	IssueClosed bool `json:"issueClosed"`
 	// IssueDoneSync reports what happened to the merged issue's own
-	// project-board Status (#3981, #691). It replaces a boolean that conflated
+	// project-board Status (#691). It replaces a boolean that conflated
 	// "there was nothing to sync" with "the sync failed" -- both read as false,
 	// so a caller could not tell a configuration gap from a broken board, and
 	// the hook's exit code says nothing either (it is deliberately
