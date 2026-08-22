@@ -138,6 +138,13 @@ git push -u origin feat/description-of-change
   evidence that the rollup happened. See
   [docs/GIT_WORKFLOW.md § After Merge](docs/GIT_WORKFLOW.md#after-merge).
 
+  With `--project`, an issue that was never added to the board no longer needs a
+  hand repair (#691): the hook adds the row and then sets it to Done, reporting
+  `added it and set it to Done`. That is a repair, not a substitute for filing
+  issues onto the board — see `.claude/rules/scripts.md` — and it only fires on
+  the post-merge path, so an issue that never merges is still invisible to the
+  board until someone adds it.
+
 - **Clean up on merge — branch and worktree, remote and local, every forge.** A
   merge is not finished until its branch and any worktree are gone on both
   sides. Squash merges need `git branch -D` (the squash commit is not the branch

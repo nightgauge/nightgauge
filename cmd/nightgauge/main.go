@@ -5455,6 +5455,27 @@ cause the command to exit non-zero.`,
 				return printJSON(result)
 			}
 
+			// (#691) Say what happened to the board. The hook is deliberately
+			// non-blocking, so exit 0 carries no information about the board
+			// half — which is exactly how a closed issue with no board row went
+			// unnoticed three times. "not attempted" is reported only when a
+			// project WAS configured, so the common no-project invocation stays
+			// quiet.
+			switch result.IssueDoneSync {
+			case hooks.BoardSyncRepaired:
+				fmt.Printf("Issue #%d was not on project board %s/%d — added it and set it to Done.\n",
+					issueNumber, ownerPart, projectNumber)
+			case hooks.BoardSyncFailed:
+				fmt.Fprintf(os.Stderr,
+					"Warning: issue #%d is closed but its board status is NOT Done — the board is out of date.\n",
+					issueNumber)
+			case hooks.BoardSyncNotAttempted:
+				if projectNumber > 0 {
+					fmt.Fprintf(os.Stderr,
+						"Note: no board sync was attempted for #%d (the issue is not closed).\n", issueNumber)
+				}
+			}
+
 			switch result.Reason {
 			case "no_parent":
 				fmt.Printf("Issue #%d has no parent epic — skipping auto-close check.\n", issueNumber)

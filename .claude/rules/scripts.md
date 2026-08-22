@@ -36,6 +36,12 @@ labels.
 **Never create issues without syncing to the project board.** Issues not in the
 project board are invisible to the team's workflow.
 
+This includes ad-hoc `gh issue create` — that path is exactly how #675, #801,
+#722 and #723 reached `main` with no board row. `nightgauge hook post-merge
+--project <N>` now repairs a missing row at merge time (#691), but the repair
+only runs when the issue merges: until then an unsynced issue is invisible to
+the scheduler, to the tree views, and to every board query.
+
 ### Multi-Repo Routing (MANDATORY for Epics — #3232)
 
 When creating an epic with sub-issues in a multi-repo workspace, EVERY

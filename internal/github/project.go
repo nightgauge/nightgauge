@@ -2,6 +2,7 @@ package github
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"sort"
@@ -12,6 +13,15 @@ import (
 	"github.com/nightgauge/nightgauge/pkg/types"
 	"github.com/shurcooL/graphql"
 )
+
+// ErrIssueNotOnBoard reports that an issue has no row on the project board.
+//
+// It is a distinct, matchable condition rather than one string among many
+// because it is REPAIRABLE and the others are not: adding the row and retrying
+// turns it into a success, whereas an auth or network failure does not. The
+// post-merge hook (#691) branches on exactly that, and matching on message text
+// would make the repair silently stop working the day this wording changes.
+var ErrIssueNotOnBoard = errors.New("issue not found on project board")
 
 // ProjectService manages GitHub Project V2 board operations:
 // adding items, syncing field values, drift detection, and epic estimates.
@@ -695,7 +705,8 @@ func (p *ProjectService) findItemID(ctx context.Context, owner, repo string, iss
 		}
 	}
 
-	return "", fmt.Errorf("issue #%d (%s/%s) not found on project board %s/%d", issueNumber, owner, repo, p.owner, p.projectNumber)
+	return "", fmt.Errorf("%w: issue #%d (%s/%s) on project board %s/%d",
+		ErrIssueNotOnBoard, issueNumber, owner, repo, p.owner, p.projectNumber)
 }
 
 // --- GraphQL mutation helpers ---

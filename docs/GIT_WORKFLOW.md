@@ -334,10 +334,22 @@ indistinguishable by exit status alone. Expected lines:
 | `Epic #N: <reason>`                       | siblings still open — nothing to do yet  |
 | `Warning: post-merge check failed: …`     | **it did not run**; re-run once resolved |
 
+The board half of the hook reports itself separately, because exit `0` says
+nothing about it either (#691):
+
+| Output                                               | Meaning                                                                 |
+| ---------------------------------------------------- | ----------------------------------------------------------------------- |
+| `synced issue #N board status to Done`               | the row existed and is now Done                                         |
+| `was not on project board … — added it and set …`    | the row was **missing** and was repaired; the issue was filed off-board |
+| `Warning: issue #N is closed but its board status …` | the board is out of date and needs a look — this is the one to act on   |
+
 **Both optional flags change what actually happens:**
 
 - **`--project`** — omit it and `boardSyncer` is never wired, so the board-Done
-  sync silently no-ops. The epic closes on the issue tracker while its board row
+  sync silently no-ops. Passing it also enables the missing-row repair (#691):
+  an issue filed ad-hoc with `gh issue create` has no board row at all, and the
+  hook now adds one rather than warning and exiting 0. The epic closes on the
+  issue tracker while its board row
   stays in Ready, which is the confusing half-state this step exists to prevent.
   Resolve the number with `nightgauge project resolve --repo <owner/repo> --json`
   rather than reading it out of the workspace YAML.
