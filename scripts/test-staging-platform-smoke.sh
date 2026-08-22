@@ -124,7 +124,7 @@ all_green_routes() {
   {"method":"GET","path":"/v1/analytics/runs","status":200,"body":{"runs":[],"nextCursor":null}},
   {"method":"GET","path":"/v1/analytics/trends","status":200,"body":{"granularity":"daily","dateFrom":"2026-07-23T00:00:00.000Z","dateTo":"2026-08-22T00:00:00.000Z","repos":[],"targetSuccessRate":95,"data":[]}},
   {"method":"GET","path":"/v1/analytics/cost","status":200,"body":{}},
-  {"method":"GET","path":"/v1/audit/reports","status":200,"body":{}},
+  {"method":"GET","path":"/v1/audit/reports","status":200,"body":{"items":[]}},
   {"method":"GET","path":"/v1/audit/retention","status":200,"body":{}},
   {"method":"POST","path":"/v1/audit/integrity/verify","status":200,"body":{}},
   {"method":"PUT","path":"/v1/attention/sync","status":200,"body":{}}
@@ -340,6 +340,38 @@ GITHUB_STEP_SUMMARY="$SUMMARY" \
 RC=$?
 check "pre-#801 trends body exits non-zero" "$([ "$RC" -ne 0 ] && echo 0 || echo 1)"
 check "pre-#801 trends body emits ::error:: naming the envelope keys" "$(contains "$OUT" "missing required keys" && echo 0 || echo 1)"
+
+stop_server
+
+# --- Scenario 8: the pre-#803 compliance-list body fails ---------------------
+# GET /v1/audit/reports returns {items: [...]}. The Go client decoded
+# {reports, nextCursor, hasMore} — three keys the route has never emitted — so
+# a 200 rendered an empty Compliance tab while this canary, which probed the
+# endpoint for status only, stayed green (#803).
+ROUTES_REPORTS_BAD=$(all_green_routes | python3 -c '
+import json, sys
+routes = json.load(sys.stdin)
+for r in routes:
+    if r["method"] == "GET" and r["path"] == "/v1/audit/reports":
+        r["body"] = {
+            "reports": [{"id": "rpt-1", "status": "ready"}],
+            "nextCursor": None,
+            "hasMore": False,
+        }
+print(json.dumps(routes))
+')
+start_server "$ROUTES_REPORTS_BAD"
+
+OUT="$TMP/scenario8.out"
+SUMMARY="$TMP/scenario8.summary"
+: > "$SUMMARY"
+STAGING_PLATFORM_BASE_URL="http://127.0.0.1:${PORT}" \
+STAGING_SESSION_TOKEN="$FAKE_TOKEN" \
+GITHUB_STEP_SUMMARY="$SUMMARY" \
+  bash "$SCRIPT" > "$OUT" 2>&1
+RC=$?
+check "pre-#803 compliance body exits non-zero" "$([ "$RC" -ne 0 ] && echo 0 || echo 1)"
+check "pre-#803 compliance body emits ::error:: naming items" "$(contains "$OUT" "missing required keys: items" && echo 0 || echo 1)"
 
 stop_server
 

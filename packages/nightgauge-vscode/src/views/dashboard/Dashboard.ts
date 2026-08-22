@@ -185,7 +185,6 @@ type WebViewMessage =
     }
   | { type: "complianceDownloadReport"; reportId: string }
   | { type: "complianceRefresh" }
-  | { type: "compliancePageChange"; cursor: string }
   | { type: "retentionRefresh" }
   | { type: "retentionUpdate"; retentionDays: number }
   | { type: "retentionVerifyIntegrity"; windowDays: number }
@@ -2094,11 +2093,6 @@ export class Dashboard implements vscode.Disposable {
         this.downloadComplianceReport(message.reportId).catch(() => {});
         break;
 
-      case "compliancePageChange":
-        if (this.deferPlatformRefreshMessage("compliance", message)) break;
-        this.refreshComplianceData(message.cursor || undefined).catch(() => {});
-        break;
-
       case "retentionRefresh":
         this.refreshRetentionData().catch(() => {});
         break;
@@ -3150,7 +3144,6 @@ export class Dashboard implements vscode.Disposable {
     this.complianceData = {
       reports: [],
       filters: {},
-      pagination: { hasMore: false },
       isLoading: false,
       hasAccess: false,
       isGenerating: false,
@@ -3303,17 +3296,16 @@ export class Dashboard implements vscode.Disposable {
 
   /**
    * Refresh compliance reports list via IPC.
-   * Lazy-loaded on first compliance tab activation. Re-fetches on page change or refresh.
+   * Lazy-loaded on first compliance tab activation. Re-fetches on refresh.
    * Never throws — PlatformComplianceService returns a typed PlatformResult (#748).
    */
-  private async refreshComplianceData(cursor?: string): Promise<void> {
+  private async refreshComplianceData(): Promise<void> {
     if (this.platformRefreshesInFlight.has("compliance")) return;
     this.platformRefreshesInFlight.add("compliance");
     const endpoint = "platform.auditListReports";
     this.complianceData = {
       reports: [],
       filters: {},
-      pagination: { hasMore: false },
       isLoading: true,
       hasAccess: true,
       isGenerating: this.complianceData?.isGenerating ?? false,
@@ -3324,7 +3316,7 @@ export class Dashboard implements vscode.Disposable {
       const ipc = (await import("../../services/IpcClient")).IpcClient.getInstance();
       this.platformComplianceService ??= new PlatformComplianceService(ipc);
 
-      const result = await this.platformComplianceService.fetchAndCache(cursor, 20);
+      const result = await this.platformComplianceService.fetchAndCache();
 
       if (!result.ok) {
         this.applyComplianceFailure(result);
@@ -3333,11 +3325,6 @@ export class Dashboard implements vscode.Disposable {
       this.complianceData = {
         reports: result.value.reports,
         filters: {},
-        pagination: {
-          cursor,
-          nextCursor: result.value.nextCursor,
-          hasMore: result.value.hasMore,
-        },
         isLoading: false,
         hasAccess: true,
         isGenerating: this.complianceData?.isGenerating ?? false,
@@ -3405,7 +3392,7 @@ export class Dashboard implements vscode.Disposable {
       this.compliancePollingTimer = setTimeout(async () => {
         try {
           const detail = await this.platformComplianceService!.getReport(reportId);
-          if (detail.status === "ready" || detail.status === "failed") {
+          if (detail.status === "complete" || detail.status === "failed") {
             this.stopCompliancePolling();
             if (this.complianceData) {
               this.complianceData = { ...this.complianceData, isGenerating: false };
@@ -3432,21 +3419,45 @@ export class Dashboard implements vscode.Disposable {
   }
 
   /**
-   * Open the compliance report download URL in the browser (Issue #3322).
+   * Resolve and open a compliance report artifact (Issue 3322, fixed in #803).
+   *
+   * The report detail carries no download URL and never has — this used to ask
+   * for one and tell the operator to "try again shortly" forever. The artifact
+   * lives behind GET /v1/audit/reports/{id}/download, which answers with a
+   * signed object-storage URL, the rendered JSON payload inline (the fallback
+   * for the default `json` format, which stores no file), or 202 while the
+   * report is still being generated. All three are surfaced distinctly: a
+   * shared "not available" message for two of them would hide which happened.
    */
   private async downloadComplianceReport(reportId: string): Promise<void> {
     if (!this.platformComplianceService) {
       return;
     }
     try {
-      const detail = await this.platformComplianceService.getReport(reportId);
-      if (detail.downloadUrl) {
-        await vscode.env.openExternal(vscode.Uri.parse(detail.downloadUrl));
-      } else {
-        vscode.window.showInformationMessage("Download URL not yet available. Try again shortly.");
+      const artifact = await this.platformComplianceService.downloadReport(reportId);
+      if (artifact.url) {
+        await vscode.env.openExternal(vscode.Uri.parse(artifact.url));
+        return;
       }
-    } catch {
-      vscode.window.showErrorMessage("Failed to fetch report download URL.");
+      if (artifact.data !== undefined) {
+        const document = await vscode.workspace.openTextDocument({
+          content: JSON.stringify(artifact.data, null, 2),
+          language: "json",
+        });
+        await vscode.window.showTextDocument(document, { preview: false });
+        return;
+      }
+      if (artifact.pending) {
+        vscode.window.showInformationMessage(
+          "Report generation is still in progress. Try again shortly."
+        );
+        return;
+      }
+      vscode.window.showInformationMessage("This report has no downloadable artifact.");
+    } catch (err) {
+      vscode.window.showErrorMessage(
+        `Failed to download compliance report: ${err instanceof Error ? err.message : String(err)}`
+      );
     }
   }
 

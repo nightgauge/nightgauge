@@ -52,6 +52,7 @@ import {
   renderedText,
   tabPanelHtml,
 } from "./dashboardHarness";
+import * as vscodeMock from "vscode";
 import { arrivalFixtures } from "./fixtures";
 import type { PlatformFailureKind } from "../../src/services/platformResult";
 
@@ -422,26 +423,97 @@ describe("arrival: every platform tab acknowledges refresh before awaiting", () 
     );
   });
 
-  it("replays a queued Compliance page cursor", async () => {
+  // Compliance has no page to replay: GET /v1/audit/reports takes no cursor and
+  // returns the account's newest 50 rows, so the only user action is a refresh
+  // — and one dispatched while a fetch is in flight is dropped, not queued
+  // behind it (#803). The tab must still arrive at a populated state.
+  it("drops a Compliance refresh dispatched while one is in flight", async () => {
     const first = deferred<unknown>();
-    const second = deferred<unknown>();
-    ipcStub.platformAuditListReports
-      .mockImplementationOnce(() => first.promise)
-      .mockImplementationOnce(() => second.promise);
+    ipcStub.platformAuditListReports.mockImplementationOnce(() => first.promise);
     const panel = capturedPanels.at(-1);
     if (!panel) throw new Error("arrival harness: no captured dashboard panel");
 
     await panel.dispatchMessage({ type: "complianceRefresh" });
     await vi.waitFor(() => expect(ipcStub.platformAuditListReports).toHaveBeenCalledTimes(1));
-    await panel.dispatchMessage({ type: "compliancePageChange", cursor: "cursor-2" });
+    expect(ipcStub.platformAuditListReports).toHaveBeenLastCalledWith();
+
+    await panel.dispatchMessage({ type: "complianceRefresh" });
     first.resolve(arrivalFixtures.complianceReports());
 
-    await vi.waitFor(() => expect(ipcStub.platformAuditListReports).toHaveBeenCalledTimes(2));
-    expect(ipcStub.platformAuditListReports).toHaveBeenLastCalledWith("cursor-2", 20);
-    second.resolve(arrivalFixtures.complianceReports());
     await vi.waitFor(() =>
       expect(renderedText(capturedTabPanelHtml("compliance"))).toContain("2026-07-01")
     );
+    expect(ipcStub.platformAuditListReports).toHaveBeenCalledTimes(1);
+  });
+
+  // The Download button's whole job. The artifact is resolved by its own
+  // endpoint, which answers in three shapes; before #803 the dashboard asked
+  // the DETAIL endpoint for a `downloadUrl` it has never returned, so every
+  // press produced "Download URL not yet available. Try again shortly." — a
+  // message that was never going to stop being true.
+  describe("compliance download", () => {
+    const vs = vscodeMock as unknown as {
+      env: { openExternal: ReturnType<typeof vi.fn> };
+      window: {
+        showInformationMessage: ReturnType<typeof vi.fn>;
+        showTextDocument: ReturnType<typeof vi.fn>;
+      };
+      workspace: { openTextDocument: ReturnType<typeof vi.fn> };
+    };
+
+    async function loadedPanel() {
+      ipcStub.platformAuditListReports.mockResolvedValue(arrivalFixtures.complianceReports());
+      const panel = capturedPanels.at(-1);
+      if (!panel) throw new Error("arrival harness: no captured dashboard panel");
+      await panel.dispatchMessage({ type: "complianceRefresh" });
+      await vi.waitFor(() => expect(ipcStub.platformAuditListReports).toHaveBeenCalled());
+      return panel;
+    }
+
+    it("opens a signed object-storage URL in the browser", async () => {
+      ipcStub.platformAuditDownloadReport.mockResolvedValue({
+        url: "https://storage.example.test/signed",
+        expiresIn: 3600,
+        pending: false,
+      });
+      const panel = await loadedPanel();
+
+      await panel.dispatchMessage({ type: "complianceDownloadReport", reportId: "rpt-1" });
+
+      await vi.waitFor(() =>
+        expect(ipcStub.platformAuditDownloadReport).toHaveBeenCalledWith("rpt-1")
+      );
+      await vi.waitFor(() => expect(vs.env.openExternal).toHaveBeenCalled());
+      expect(vs.window.showInformationMessage).not.toHaveBeenCalled();
+    });
+
+    it("opens the inline JSON payload as a document when there is no artifact URL", async () => {
+      ipcStub.platformAuditDownloadReport.mockResolvedValue({
+        data: { controls: 12 },
+        pending: false,
+      });
+      const panel = await loadedPanel();
+
+      await panel.dispatchMessage({ type: "complianceDownloadReport", reportId: "rpt-2" });
+
+      await vi.waitFor(() => expect(vs.workspace.openTextDocument).toHaveBeenCalled());
+      expect(vs.workspace.openTextDocument).toHaveBeenCalledWith(
+        expect.objectContaining({ language: "json" })
+      );
+      expect(vs.env.openExternal).not.toHaveBeenCalled();
+    });
+
+    it("says the report is still generating on a 202, not that it is unavailable", async () => {
+      ipcStub.platformAuditDownloadReport.mockResolvedValue({ pending: true });
+      const panel = await loadedPanel();
+
+      await panel.dispatchMessage({ type: "complianceDownloadReport", reportId: "rpt-3" });
+
+      await vi.waitFor(() => expect(vs.window.showInformationMessage).toHaveBeenCalled());
+      const message = String(vs.window.showInformationMessage.mock.calls.at(-1)?.[0]);
+      expect(message).toContain("still in progress");
+      expect(vs.env.openExternal).not.toHaveBeenCalled();
+    });
   });
 });
 

@@ -7,8 +7,8 @@
  * 3. isLoading=true → loading state
  * 4. hasAccess=true, empty reports → empty state
  * 5. hasAccess=true, reports → renders table rows with status badges
- * 6. status='ready' report → renders download button
- * 7. status='processing' report → renders spinner
+ * 6. status='complete' report → renders download button
+ * 7. status='pending' report → renders spinner
  * 8. isGenerating=true → generate button disabled, spinner shown
  * 9. errorMessage → renders error banner
  * 10. XSS: report type with <script> is escaped
@@ -33,14 +33,17 @@ import type { ComplianceReportEntry } from "../../../../src/services/IpcClientBa
 // ---------------------------------------------------------------------------
 
 function makeReport(overrides: Partial<ComplianceReportEntry> = {}): ComplianceReportEntry {
+  // Shaped like a row of GET /v1/audit/reports: the platform's SOC2/ISO27001
+  // casing, its pending|complete|failed status vocabulary, and no downloadUrl —
+  // list rows have never carried one (#803).
   return {
     id: "rpt-1",
-    reportType: "soc2",
-    status: "ready",
-    startDate: "2026-01-01",
-    endDate: "2026-03-31",
+    reportType: "SOC2",
+    status: "complete",
+    startDate: "2026-01-01T00:00:00.000Z",
+    endDate: "2026-03-31T00:00:00.000Z",
     format: "pdf",
-    downloadUrl: "https://example.com/rpt-1.pdf",
+    generatedAt: "2026-05-01T00:00:00.000Z",
     createdAt: "2026-05-01T00:00:00Z",
     ...overrides,
   };
@@ -50,7 +53,6 @@ function makeData(overrides: Partial<ComplianceData> = {}): ComplianceData {
   return {
     reports: [],
     filters: {},
-    pagination: { hasMore: false },
     isLoading: false,
     hasAccess: true,
     isGenerating: false,
@@ -89,28 +91,42 @@ describe("getComplianceTabHtml", () => {
 
   it("reports → renders table rows", () => {
     const reports = [
-      makeReport({ id: "rpt-1", reportType: "soc2", status: "ready" }),
-      makeReport({ id: "rpt-2", reportType: "iso27001", status: "pending" }),
+      makeReport({ id: "rpt-1", reportType: "SOC2", status: "complete" }),
+      makeReport({ id: "rpt-2", reportType: "ISO27001", status: "pending" }),
     ];
     const html = getComplianceTabHtml(makeData({ reports }));
     expect(html).toContain("SOC2");
     expect(html).toContain("ISO27001");
-    expect(html).toContain("status-ready");
+    expect(html).toContain("status-complete");
     expect(html).toContain("status-pending");
   });
 
-  it("status=ready report → renders download button", () => {
-    const reports = [makeReport({ status: "ready", downloadUrl: "https://example.com/r.pdf" })];
+  // A finished report is downloadable on the strength of its status alone.
+  // The button used to require a downloadUrl on the row, which the list has
+  // never carried — so it rendered for no report at all (#803).
+  it("status=complete report → renders download button with no URL on the row", () => {
+    const reports = [makeReport({ status: "complete" })];
     const html = getComplianceTabHtml(makeData({ reports }));
-    expect(html).toContain("Download PDF");
+    expect(html).toContain(">Download<");
     expect(html).toContain("compliance-download");
   });
 
-  it("status=processing report → no download button, spinner present", () => {
-    const reports = [makeReport({ status: "processing", downloadUrl: undefined })];
+  it("status=pending report → no download button, spinner present", () => {
+    const reports = [makeReport({ status: "pending", generatedAt: undefined })];
     const html = getComplianceTabHtml(makeData({ reports }));
     expect(html).toContain("compliance-spinner");
-    expect(html).not.toContain("Download PDF");
+    expect(html).not.toContain("compliance-download");
+  });
+
+  // The list endpoint returns errorMessage precisely so the grid can show why
+  // a report failed without a per-row detail fetch (#803).
+  it("status=failed report → surfaces the platform's reason, escaped", () => {
+    const reports = [makeReport({ status: "failed", errorMessage: '<b>render "timed out"</b>' })];
+    const html = getComplianceTabHtml(makeData({ reports }));
+    expect(html).toContain("status-failed");
+    expect(html).toContain("render &quot;timed out&quot;");
+    expect(html).not.toContain("<b>render");
+    expect(html).not.toContain("compliance-download");
   });
 
   it("isGenerating=true → generate button disabled, generating indicator shown", () => {
@@ -164,8 +180,16 @@ describe("getComplianceTabScript", () => {
     expect(getComplianceTabScript()).toContain("complianceRefresh");
   });
 
-  it("includes compliancePageChange message type", () => {
-    expect(getComplianceTabScript()).toContain("compliancePageChange");
+  // The endpoint has no cursor and no has-more flag, so there is nothing to
+  // page: the controls and their message type are gone (#803).
+  it("has no pagination message type", () => {
+    expect(getComplianceTabScript()).not.toContain("compliancePageChange");
+  });
+
+  it("renders no pagination controls for a populated list", () => {
+    const html = getComplianceTabHtml(makeData({ reports: [makeReport()] }));
+    expect(html).not.toContain("compliancePrevPage");
+    expect(html).not.toContain("complianceNextPage");
   });
 });
 
@@ -183,7 +207,7 @@ describe("getComplianceTabStyles", () => {
   it("includes status badge variants", () => {
     const css = getComplianceTabStyles();
     expect(css).toContain(".status-pending");
-    expect(css).toContain(".status-ready");
+    expect(css).toContain(".status-complete");
     expect(css).toContain(".status-failed");
   });
 });

@@ -140,6 +140,7 @@ var contractTestedMethods = map[string]bool{
 	"platform.getAnalyticsTrends":  true,
 	"platform.auditGenerateReport": true,
 	"platform.auditListReports":    true,
+	"platform.auditDownloadReport": true,
 	"platform.auditGetReport":      true,
 	"audit.getRetentionConfig":     true,
 	"audit.updateRetentionConfig":  true,
@@ -1099,6 +1100,13 @@ func TestContract_Platform(t *testing.T) {
 			"reportId": "rpt-test",
 		})
 		assertMethodRegistered(t, h.readResponseFor(id, nil), "platform.auditGetReport")
+	})
+
+	t.Run("platform.auditDownloadReport/registered", func(t *testing.T) {
+		id := h.sendRequest("platform.auditDownloadReport", map[string]interface{}{
+			"reportId": "rpt-test",
+		})
+		assertMethodRegistered(t, h.readResponseFor(id, nil), "platform.auditDownloadReport")
 	})
 
 	t.Run("audit.getRetentionConfig/registered", func(t *testing.T) {

@@ -502,15 +502,26 @@ export interface AnalyticsTrendsResult {
   targetSuccessRate: number;
 }
 
+/**
+ * The status vocabulary `compliance_reports.status` actually uses. The client
+ * previously declared "processing" and "ready", neither of which the platform
+ * has ever written — so the download affordance gated on "ready" was
+ * unreachable for every finished report (#803).
+ */
+export type ComplianceReportStatus = "pending" | "complete" | "failed";
+
 /** Single compliance report entry in a list result (#3322). */
 export interface ComplianceReportEntry {
   id: string;
   reportType: string;
-  status: "pending" | "processing" | "ready" | "failed";
+  status: ComplianceReportStatus;
   startDate: string;
   endDate: string;
   format: string;
-  downloadUrl?: string;
+  /** ISO 8601; absent while the report is still being generated. */
+  generatedAt?: string;
+  /** Why generation failed. Present only on a `failed` row. */
+  errorMessage?: string;
   createdAt: string;
 }
 
@@ -525,23 +536,46 @@ export interface ComplianceReportResult {
   createdAt: string;
 }
 
-/** Paginated list of compliance reports from platform.auditListReports (#3322). */
-export interface ComplianceReportsPage {
+/**
+ * The account's compliance reports from platform.auditListReports (issue 3322).
+ *
+ * Unpaginated on purpose: GET /v1/audit/reports takes no cursor or limit and
+ * returns the newest 50 rows. The `nextCursor`/`hasMore` this used to declare
+ * were never sent by the server, so the tab's pagination controls were inert
+ * (#803).
+ */
+export interface ComplianceReportsResult {
   reports: ComplianceReportEntry[];
-  nextCursor?: string;
-  hasMore: boolean;
 }
 
 /** Detail of a single compliance report from platform.auditGetReport (#3322). */
 export interface ComplianceReportDetail {
   id: string;
   reportType: string;
-  status: string;
+  status: ComplianceReportStatus;
   startDate: string;
   endDate: string;
   format: string;
-  downloadUrl?: string;
+  generatedAt?: string;
+  errorMessage?: string;
+  /** When the stored artifact is purged by the retention policy. */
+  expiresAt?: string;
   createdAt: string;
+}
+
+/**
+ * A report artifact resolved from platform.auditDownloadReport (#803).
+ *
+ * Exactly one of these is meaningful per response: `url` for a signed
+ * object-storage link, `data` for the JSON payload served inline (the fallback
+ * whenever the report was generated in the default `json` format, which stores
+ * no artifact), or `pending` while generation is still running.
+ */
+export interface ComplianceReportDownload {
+  url?: string;
+  expiresIn?: number;
+  data?: unknown;
+  pending: boolean;
 }
 
 /** Audit retention configuration from audit.getRetentionConfig (#3323). */

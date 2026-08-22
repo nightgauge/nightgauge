@@ -94,19 +94,6 @@ export function getComplianceTabScript(): string {
           return;
         }
 
-        // Page change
-        var prevBtn = e.target.closest('#compliancePrevPage');
-        if (prevBtn) {
-          var cursor = prevBtn.getAttribute('data-cursor') || '';
-          vscode.postMessage({ type: 'compliancePageChange', cursor: cursor });
-          return;
-        }
-        var nextBtn = e.target.closest('#complianceNextPage');
-        if (nextBtn) {
-          var cursor = nextBtn.getAttribute('data-cursor') || '';
-          vscode.postMessage({ type: 'compliancePageChange', cursor: cursor });
-          return;
-        }
       });
     })();
   `;
@@ -213,6 +200,13 @@ export function getComplianceTabStyles(): string {
       font-weight: 600;
     }
 
+    /* The endpoint returns the newest 50 rows and no cursor, so the cap is
+       stated rather than paged around (#803). */
+    .compliance-table-note {
+      font-weight: 400;
+      color: var(--vscode-descriptionForeground);
+    }
+
     .compliance-table-container {
       overflow-x: auto;
       border: 1px solid var(--vscode-panel-border);
@@ -261,13 +255,12 @@ export function getComplianceTabStyles(): string {
       font-weight: 600;
     }
 
-    .status-pending,
-    .status-processing {
+    .status-pending {
       background: rgba(255, 206, 86, 0.2);
       color: rgba(255, 206, 86, 1);
     }
 
-    .status-ready {
+    .status-complete {
       background: rgba(75, 192, 75, 0.2);
       color: rgba(75, 192, 75, 1);
     }
@@ -291,20 +284,6 @@ export function getComplianceTabStyles(): string {
       to { transform: rotate(360deg); }
     }
 
-    /* Pagination */
-    .compliance-pagination {
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      gap: var(--spacing-md);
-      font-size: 0.85em;
-      color: var(--vscode-descriptionForeground);
-    }
-
-    .compliance-pagination button:disabled {
-      opacity: 0.4;
-      cursor: default;
-    }
   `;
 }
 
@@ -395,16 +374,20 @@ function getComplianceGenerateFormHtml(data: ComplianceData): string {
   `;
 }
 
-function getStatusBadgeHtml(status: string): string {
-  const spinnerHtml =
-    status === "pending" || status === "processing"
-      ? `<span class="compliance-spinner"></span>`
-      : "";
-  return `<span class="compliance-status-badge status-${escapeHtml(status)}">${spinnerHtml}${escapeHtml(status)}</span>`;
+/**
+ * Status badge over the platform's own vocabulary — pending | complete |
+ * failed. A failed row carries the reason on the badge's tooltip: the list
+ * endpoint returns `errorMessage` precisely so the grid can show it without a
+ * per-row detail fetch, and a bare "failed" tells the operator nothing (#803).
+ */
+function getStatusBadgeHtml(entry: ComplianceReportEntry): string {
+  const spinnerHtml = entry.status === "pending" ? `<span class="compliance-spinner"></span>` : "";
+  const title = entry.errorMessage ? ` title="${escapeHtml(entry.errorMessage)}"` : "";
+  return `<span class="compliance-status-badge status-${escapeHtml(entry.status)}"${title}>${spinnerHtml}${escapeHtml(entry.status)}</span>`;
 }
 
 function getComplianceReportsTableHtml(data: ComplianceData): string {
-  const { reports, pagination } = data;
+  const { reports } = data;
 
   const tableRows =
     reports.length === 0
@@ -412,15 +395,19 @@ function getComplianceReportsTableHtml(data: ComplianceData): string {
       : reports
           .map((r: ComplianceReportEntry) => {
             const relTime = r.createdAt ? formatRelativeTime(new Date(r.createdAt)) : "—";
+            // A finished report is downloadable, full stop: the artifact is
+            // resolved on demand by platform.auditDownloadReport, which serves
+            // a signed URL or the JSON payload. Gating on a `downloadUrl` the
+            // list never carried hid the button from every report (#803).
             const downloadCell =
-              r.status === "ready" && r.downloadUrl
-                ? `<button class="action-btn" data-action="compliance-download" data-report-id="${escapeHtml(r.id)}">Download PDF</button>`
+              r.status === "complete"
+                ? `<button class="action-btn" data-action="compliance-download" data-report-id="${escapeHtml(r.id)}">Download</button>`
                 : "—";
             return `
               <tr>
                 <td>${escapeHtml(r.reportType.toUpperCase())}</td>
                 <td>${escapeHtml(r.startDate)} — ${escapeHtml(r.endDate)}</td>
-                <td>${getStatusBadgeHtml(r.status)}</td>
+                <td>${getStatusBadgeHtml(r)}</td>
                 <td><span title="${escapeHtml(r.createdAt)}">${escapeHtml(relTime)}</span></td>
                 <td>${escapeHtml(r.format.toUpperCase())}</td>
                 <td>${downloadCell}</td>
@@ -429,27 +416,9 @@ function getComplianceReportsTableHtml(data: ComplianceData): string {
           })
           .join("");
 
-  const paginationHtml =
-    pagination.hasMore || pagination.cursor
-      ? `
-        <div class="compliance-pagination">
-          <button class="action-btn" id="compliancePrevPage"
-            data-cursor=""
-            ${!pagination.cursor ? "disabled" : ""}>
-            &lsaquo; Prev
-          </button>
-          <button class="action-btn" id="complianceNextPage"
-            data-cursor="${escapeHtml(pagination.nextCursor ?? "")}"
-            ${!pagination.hasMore ? "disabled" : ""}>
-            Next &rsaquo;
-          </button>
-        </div>
-      `
-      : "";
-
   return `
     <div class="compliance-table-header">
-      <div class="compliance-table-title">Past Reports</div>
+      <div class="compliance-table-title">Past Reports<span class="compliance-table-note"> (newest 50)</span></div>
       <button class="action-btn" id="complianceRefreshBtn" title="Refresh">&#8635;</button>
     </div>
     <div class="compliance-table-container">
@@ -469,6 +438,5 @@ function getComplianceReportsTableHtml(data: ComplianceData): string {
         </tbody>
       </table>
     </div>
-    ${paginationHtml}
   `;
 }

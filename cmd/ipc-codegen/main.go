@@ -391,7 +391,8 @@ func collectImportTypes(methods []MethodDef) []string {
 		"AnalyticsRunsResult":                true, // Issue #3319
 		"AnalyticsTrendsResult":              true, // Issue #3320
 		"ComplianceReportResult":             true, // Issue #3322
-		"ComplianceReportsPage":              true, // Issue #3322
+		"ComplianceReportsResult":            true, // Issue 3322, renamed in #803
+		"ComplianceReportDownload":           true, // Issue #803
 		"ComplianceReportDetail":             true, // Issue #3322
 		"CheckAuthorizationResult":           true, // Issue #3377
 		"RetentionConfig":                    true, // Issue #3323

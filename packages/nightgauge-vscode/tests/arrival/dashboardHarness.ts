@@ -102,6 +102,7 @@ const IPC_METHODS = [
   "platformAuditListReports",
   "platformAuditGenerateReport",
   "platformAuditGetReport",
+  "platformAuditDownloadReport",
   "platformGetUsageSummary",
   "auditGetRetentionConfig",
   "auditUpdateRetentionConfig",

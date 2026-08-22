@@ -255,7 +255,14 @@ call GET "/v1/analytics/cost?startDate=${COST_START}&endDate=${COST_END}" \
   "Analytics cost (windowed, as the Cost tab sends)"
 
 # --- Audit --------------------------------------------------------------------
-call GET "/v1/audit/reports?limit=1" "Audit reports"
+# The Compliance tab's list. `limit` was never a parameter of this endpoint —
+# it takes none and returns the account's newest 50 rows — and the probe was
+# status-only, so it stayed green while the tab decoded {reports, nextCursor,
+# hasMore} against a body that carries only `items` and rendered "no reports"
+# for every account (#803). The key asserted is the one the Go client decodes,
+# taken from the route.
+call GET "/v1/audit/reports" "Audit reports"
+assert_object_keys "Audit reports" items
 call GET "/v1/audit/retention" "Audit log retention config"
 call POST "/v1/audit/integrity/verify" "Audit integrity verify" \
   "$(jq -nc '{windowDays: 30}')"

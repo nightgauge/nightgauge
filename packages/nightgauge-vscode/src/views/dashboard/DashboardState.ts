@@ -437,11 +437,15 @@ export interface RetentionIntegrityData {
   errorMessage?: string;
 }
 
-/** Data bundle passed to ComplianceTabHtml renderer (#3322). */
+/**
+ * Data bundle passed to ComplianceTabHtml renderer (issue 3322).
+ *
+ * No pagination state: GET /v1/audit/reports returns the account's newest 50
+ * reports and offers neither a cursor nor a has-more flag (#803).
+ */
 export interface ComplianceData {
   reports: import("../../services/IpcClientBase").ComplianceReportEntry[];
   filters: ComplianceFilterState;
-  pagination: { cursor?: string; nextCursor?: string; hasMore: boolean };
   isLoading: boolean;
   hasAccess: boolean;
   isGenerating: boolean;
