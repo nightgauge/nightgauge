@@ -152,6 +152,23 @@ against a local mock server:
 dimensions}` the Health tab used to decode) fails the run as
   `FAIL (shape)`. Status-only probes stay green through that class of
   defect.
+- A `200` on `GET /v1/analytics/runs` carrying the shape the platform's
+  **published OpenAPI document** declares (`{items, has_more, next_cursor}`)
+  fails the run. The route returns `{runs, nextCursor}` and the platform's own
+  route tests assert that, so the document is what drifted. Asserting the
+  documented shape here would make the canary agree with the spec and
+  disagree with production — the exact failure it exists to catch (#801).
+- A `200` on `GET /v1/analytics/trends` carrying the pre-#801 client-side
+  belief (`{current, previous, period}`) fails the run. Both trends calls are
+  made the way the Trends tab makes them — one per metric, with the documented
+  `metric`/`granularity`/`dateFrom`/`dateTo` parameters. The old canary sent
+  `?period=week`, a parameter the endpoint does not declare and its
+  `.passthrough()` schema silently discarded.
+
+  **Write shape assertions from the platform's route, not from its published
+  spec.** Both are hand-authored artifacts and either can drift; only the
+  route decides what a client receives.
+
 - A missing `STAGING_SESSION_TOKEN` or `STAGING_PLATFORM_BASE_URL` fails
   immediately, before any HTTP call is attempted (the mock server sees zero
   requests in that case), with a message that says "fail", not "skip".

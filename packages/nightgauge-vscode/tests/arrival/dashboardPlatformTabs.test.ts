@@ -363,29 +363,16 @@ describe("arrival: every platform tab acknowledges refresh before awaiting", () 
     );
   });
 
+  // Paging is the only queued Runs action left. The filter/reset cases that
+  // used to sit alongside it asserted that four filter arguments reached the
+  // IPC call — they did, and GET /v1/analytics/runs discarded every one of
+  // them, so the assertion held while the tab showed unfiltered data under a
+  // filtered heading (#801). The controls are gone; so are the cases.
   it.each([
-    {
-      label: "filter",
-      message: {
-        type: "runsFilter",
-        filters: {
-          dateFrom: "2026-07-01",
-          dateTo: "2026-08-01",
-          outcomeFilter: "failed",
-          branchFilter: "main",
-        },
-      },
-      expectedArgs: ["2026-07-01", "2026-08-01", undefined, "failed", "main", 20],
-    },
     {
       label: "page",
       message: { type: "runsPageChange", page: 1 },
-      expectedArgs: [undefined, undefined, "eyJvIjoyMH0", undefined, undefined, 20],
-    },
-    {
-      label: "reset",
-      message: { type: "runsResetFilters" },
-      expectedArgs: [undefined, undefined, undefined, undefined, undefined, 20],
+      expectedArgs: ["eyJvIjoyMH0", 20],
     },
   ])("replays the newest queued Runs $label action with exact arguments", async (testCase) => {
     const first = deferred<unknown>();

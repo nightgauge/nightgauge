@@ -122,7 +122,7 @@ var contractCallSites = []callSite{
 		return err
 	}},
 	{api.OpAnalyticsRuns, func(ctx context.Context, c *Client) error {
-		_, err := NewAnalyticsService(c).GetAnalyticsRuns(ctx, "", "", "", "", "", 0)
+		_, err := NewAnalyticsService(c).GetAnalyticsRuns(ctx, "", 0)
 		return err
 	}},
 	{api.OpAnalyticsTrends, func(ctx context.Context, c *Client) error {
@@ -439,7 +439,7 @@ func TestConformanceHarnessDetectsAMismatch(t *testing.T) {
 			Upstream: api.UpstreamDeclared,
 		},
 		Invoke: func(ctx context.Context, c *Client) error {
-			_, err := NewAnalyticsService(c).GetAnalyticsRuns(ctx, "", "", "", "", "", 0)
+			_, err := NewAnalyticsService(c).GetAnalyticsRuns(ctx, "", 0)
 			return err
 		},
 	}

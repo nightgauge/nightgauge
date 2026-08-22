@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -1042,7 +1044,12 @@ func (s *AnalyticsService) GetAnalyticsHealth(ctx context.Context) (*AnalyticsHe
 	return &result, nil
 }
 
-// RunsStageEntry holds per-stage detail for a single pipeline run (#3319).
+// RunsStageEntry holds per-stage detail for a single pipeline run.
+//
+// GET /v1/analytics/runs is a list projection and carries no per-stage
+// breakdown, so this stays empty on that path. The type is retained because
+// the IPC result shape is shared with the run-detail rendering in the Runs
+// tab's expandable row.
 type RunsStageEntry struct {
 	Name            string `json:"name"`
 	Model           string `json:"model"`
@@ -1054,7 +1061,7 @@ type RunsStageEntry struct {
 	FailureCategory string `json:"failure_category,omitempty"`
 }
 
-// RunsEntry is a single row in the runs list returned by GET /v1/analytics/runs (#3319).
+// RunsEntry is a single row in the runs list returned by GET /v1/analytics/runs.
 type RunsEntry struct {
 	IssueNumber  int              `json:"issue_number"`
 	Title        string           `json:"title"`
@@ -1066,41 +1073,141 @@ type RunsEntry struct {
 	Stages       []RunsStageEntry `json:"stages,omitempty"`
 }
 
-// AnalyticsRunsResult is the IPC-facing representation of GET /v1/analytics/runs (#3319).
+// AnalyticsRunsResult is the IPC-facing representation of GET /v1/analytics/runs.
+//
+// HasMore is DERIVED from NextCursor rather than read off the wire: the
+// endpoint's keyset pagination signals "there is another page" solely by
+// emitting a cursor, and there is no total — see the decode note on
+// analyticsRunsWire for why the previous `total_count` field could never have
+// been populated.
 type AnalyticsRunsResult struct {
 	Entries    []RunsEntry `json:"entries"`
-	TotalCount int         `json:"total_count"`
 	NextCursor string      `json:"next_cursor,omitempty"`
 	HasMore    bool        `json:"has_more"`
+}
+
+// analyticsRunsWire is the live GET /v1/analytics/runs body.
+//
+// IMPORTANT — the platform's published OpenAPI document is WRONG for this
+// operation, and this struct deliberately follows the implementation instead.
+//
+// `/docs/openapi.json` declares the 200 body as
+// `{items: [...], has_more: bool, next_cursor: string|null}`. The route does
+// not build that envelope: it returns its query service's ListRunsResult
+// verbatim, which is `{runs: [...], nextCursor: string|null}`. The platform's
+// own route tests assert `json.runs` and `json.nextCursor`, so the spec — a
+// hand-authored overlay, not a generated one — is the artifact that drifted.
+//
+// This matters beyond one field rename. The working rule that produced the
+// preceding fixes in this class was "trust the published contract over our
+// stubs"; that rule is necessary but not sufficient. A hand-written spec is a
+// stub too, and the only authority that cannot drift is what the server
+// actually returns. Decoding `items` here would have left the Runs tab exactly
+// as empty as decoding `entries` did.
+type analyticsRunsWire struct {
+	Runs       []runListItemWire `json:"runs"`
+	NextCursor *string           `json:"nextCursor"`
+}
+
+// runListItemWire is one row of the runs list projection (the platform's
+// RunListItem). Nullable columns are pointers so a partially-populated row
+// still decodes rather than failing the whole page.
+type runListItemWire struct {
+	RunID           string  `json:"runId"`
+	IssueNumber     int     `json:"issueNumber"`
+	RepoFullName    string  `json:"repoFullName"`
+	Branch          *string `json:"branch"`
+	Status          *string `json:"status"`
+	OutcomeType     *string `json:"outcomeType"`
+	StartedAt       string  `json:"startedAt"`
+	CompletedAt     *string `json:"completedAt"`
+	TotalDurationMs *int64  `json:"totalDurationMs"`
+	Cost            *int64  `json:"cost"`
+	IssueTitle      *string `json:"issueTitle"`
+}
+
+// runsMicroDollarsPerUSD is the platform's cost encoding on pipeline_runs.cost
+// (INTEGER micro-dollars, 1 USD = 1_000_000).
+const runsMicroDollarsPerUSD = 1_000_000.0
+
+// mapRunOutcome resolves the badge vocabulary the Runs tab renders.
+//
+// The platform stores two related columns: `status` (success | failure |
+// cancelled, plus `running` for a run the live event stream created but no
+// terminal record has closed) and `outcome_type`, which refines a failed run
+// into a first-class needs-human outcome (today "blocked"). The refinement is
+// the more specific answer, so it wins when present; otherwise the status
+// stands. A row carrying neither renders as "unknown" rather than as an empty
+// badge, for the same reason an absent branch renders as a label: a blank cell
+// reads as a rendering fault instead of as information.
+func mapRunOutcome(item runListItemWire) string {
+	if item.OutcomeType != nil && strings.TrimSpace(*item.OutcomeType) != "" {
+		return *item.OutcomeType
+	}
+	if item.Status != nil && strings.TrimSpace(*item.Status) != "" {
+		return *item.Status
+	}
+	return "unknown"
+}
+
+// mapAnalyticsRuns projects the live runs page onto the IPC result.
+func mapAnalyticsRuns(wire analyticsRunsWire) AnalyticsRunsResult {
+	entries := make([]RunsEntry, 0, len(wire.Runs))
+	for _, item := range wire.Runs {
+		entry := RunsEntry{
+			IssueNumber: item.IssueNumber,
+			Outcome:     mapRunOutcome(item),
+			StartedAt:   item.StartedAt,
+		}
+		if item.IssueTitle != nil {
+			entry.Title = *item.IssueTitle
+		}
+		if entry.Title == "" {
+			entry.Title = fmt.Sprintf("#%d", item.IssueNumber)
+		}
+		if item.Branch != nil {
+			entry.Branch = *item.Branch
+		}
+		if item.TotalDurationMs != nil {
+			entry.DurationMs = *item.TotalDurationMs
+		}
+		if item.Cost != nil {
+			entry.TotalCostUsd = strconv.FormatFloat(
+				float64(*item.Cost)/runsMicroDollarsPerUSD, 'f', 2, 64)
+		}
+		entries = append(entries, entry)
+	}
+
+	result := AnalyticsRunsResult{Entries: entries}
+	if wire.NextCursor != nil && *wire.NextCursor != "" {
+		result.NextCursor = *wire.NextCursor
+		result.HasMore = true
+	}
+	return result
 }
 
 // GetAnalyticsRuns fetches paginated pipeline run history from GET /v1/analytics/runs.
 // Returns an empty result if offline.
 //
+// The endpoint accepts `limit` and `cursor` and NOTHING ELSE. It previously
+// also received startDate/endDate/outcome/branch, which its query schema does
+// not declare and therefore dropped on the floor — the Runs tab presented an
+// unfiltered list as a filtered one, which is a wrong answer rather than a
+// missing feature. Those filters are gone from the call site and from the UI;
+// re-adding them is a platform change first.
+//
 // Unlike health/cost/trends this operation sits behind the platform's
 // pipelineAuth (api.SecurityPipeline), so it is reachable on the license-key
 // path too — the contract records that difference instead of leaving it to a
 // code comment.
-func (s *AnalyticsService) GetAnalyticsRuns(ctx context.Context, startDate, endDate, cursor, outcome, branch string, limit int) (*AnalyticsRunsResult, error) {
+func (s *AnalyticsService) GetAnalyticsRuns(ctx context.Context, cursor string, limit int) (*AnalyticsRunsResult, error) {
 	if !s.client.IsOnline() {
 		return &AnalyticsRunsResult{Entries: []RunsEntry{}}, nil
 	}
 
 	query := url.Values{}
-	if startDate != "" {
-		query.Set("startDate", startDate)
-	}
-	if endDate != "" {
-		query.Set("endDate", endDate)
-	}
 	if cursor != "" {
 		query.Set("cursor", cursor)
-	}
-	if outcome != "" {
-		query.Set("outcome", outcome)
-	}
-	if branch != "" {
-		query.Set("branch", branch)
 	}
 	if limit > 0 {
 		query.Set("limit", strconv.Itoa(limit))
@@ -1121,62 +1228,238 @@ func (s *AnalyticsService) GetAnalyticsRuns(ctx context.Context, startDate, endD
 		return nil, fmt.Errorf("get analytics runs: server returned %d", resp.StatusCode)
 	}
 
-	var result AnalyticsRunsResult
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	var wire analyticsRunsWire
+	if err := json.NewDecoder(resp.Body).Decode(&wire); err != nil {
 		return nil, fmt.Errorf("decode analytics runs response: %w", err)
 	}
-	if result.Entries == nil {
-		result.Entries = []RunsEntry{}
-	}
+	result := mapAnalyticsRuns(wire)
 	return &result, nil
 }
 
-// AnalyticsTrendEntry is a single time-bucketed data point from GET /v1/analytics/trends (#3320).
+// AnalyticsTrendEntry is a single time-bucketed data point from GET /v1/analytics/trends.
+//
+// One entry per timestamp, summed across every repo in the bucket — the
+// endpoint buckets by (timestamp, repo) but the Trends tab plots one series
+// over time.
 type AnalyticsTrendEntry struct {
-	Date        string  `json:"date"`
+	Date string `json:"date"`
+	// SuccessRate is a PERCENTAGE (0-100), matching the endpoint's own
+	// success_rate metric and its targetSuccessRate companion.
 	SuccessRate float64 `json:"successRate"`
-	CostPerRun  float64 `json:"costPerRun"`
 	TotalRuns   int     `json:"totalRuns"`
+	// TotalTokens is the bucket's token total. Ingested runs carry tokens as a
+	// single per-stage total with no input/output/cacheRead split, so the
+	// endpoint reports the whole amount as outputTokens and leaves the other
+	// two at zero; summing all three keeps this correct if that ever changes.
+	TotalTokens int `json:"totalTokens"`
 }
 
-// AnalyticsTrendsResult is the IPC-facing representation of GET /v1/analytics/trends (#3320).
+// AnalyticsTrendsResult is the IPC-facing representation of GET /v1/analytics/trends.
+//
+// There is no `previous` series and no comparison window: the endpoint
+// documents `compare=previous` as an unimplemented follow-up and returns
+// nothing for it, so the field (and the tab's comparison toggle) would have
+// been permanently empty. Reporting the window the server actually resolved
+// (DateFrom/DateTo/Granularity) is the honest substitute — the client asked
+// for a period, and these say what it got.
 type AnalyticsTrendsResult struct {
-	Current  []AnalyticsTrendEntry `json:"current"`
-	Previous []AnalyticsTrendEntry `json:"previous"`
-	Period   string                `json:"period"`
+	Entries     []AnalyticsTrendEntry `json:"entries"`
+	Granularity string                `json:"granularity"`
+	DateFrom    string                `json:"dateFrom"`
+	DateTo      string                `json:"dateTo"`
+	Repos       []string              `json:"repos"`
+	// TargetSuccessRate is the success-rate target the platform plots against.
+	TargetSuccessRate float64 `json:"targetSuccessRate"`
+}
+
+// trendsTokensWire is the live GET /v1/analytics/trends?metric=tokens body.
+type trendsTokensWire struct {
+	Granularity string   `json:"granularity"`
+	DateFrom    string   `json:"dateFrom"`
+	DateTo      string   `json:"dateTo"`
+	Repos       []string `json:"repos"`
+	Data        []struct {
+		Timestamp       string `json:"timestamp"`
+		Repo            string `json:"repo"`
+		InputTokens     int    `json:"inputTokens"`
+		OutputTokens    int    `json:"outputTokens"`
+		CacheReadTokens int    `json:"cacheReadTokens"`
+	} `json:"data"`
+}
+
+// trendsSuccessRateWire is the live GET /v1/analytics/trends?metric=success_rate body.
+type trendsSuccessRateWire struct {
+	Granularity       string   `json:"granularity"`
+	DateFrom          string   `json:"dateFrom"`
+	DateTo            string   `json:"dateTo"`
+	Repos             []string `json:"repos"`
+	TargetSuccessRate float64  `json:"targetSuccessRate"`
+	Data              []struct {
+		Timestamp      string  `json:"timestamp"`
+		Repo           string  `json:"repo"`
+		SuccessCount   int     `json:"successCount"`
+		FailureCount   int     `json:"failureCount"`
+		CancelledCount int     `json:"cancelledCount"`
+		SuccessRate    float64 `json:"successRate"`
+	} `json:"data"`
+}
+
+// trendsWindow resolves the Trends tab's period selector into the RFC 3339
+// [dateFrom, dateTo] the endpoint declares.
+//
+// The endpoint has no `period` parameter — the client used to send one, which
+// its query schema tolerated via .passthrough() and then ignored, so every
+// request silently received the server's default 30-day window no matter which
+// range the user picked. An unrecognised period keeps that 30-day default,
+// but now says so on the wire instead of by accident.
+func trendsWindow(period string, now time.Time) (from, to time.Time) {
+	days := 30
+	switch period {
+	case "90d":
+		days = 90
+	case "180d":
+		days = 180
+	}
+	to = now.UTC()
+	return to.AddDate(0, 0, -days), to
+}
+
+// trendsBucket accumulates one timestamp across every repo in that bucket.
+type trendsBucket struct {
+	tokens         int
+	successCount   int
+	failureCount   int
+	cancelledCount int
+	seenSuccess    bool
+}
+
+// mapAnalyticsTrends merges the two per-metric envelopes into one series.
+//
+// The endpoint answers ONE metric per call — tokens or success_rate — and the
+// tab plots both, so the caller issues both requests and this joins them on
+// timestamp. Success rate is recomputed from the summed counts rather than
+// averaged across the per-repo rows: averaging percentages would weight a repo
+// with one run the same as a repo with a hundred.
+//
+// The success-rate envelope is the authority for the window metadata, since it
+// carries targetSuccessRate; the tokens envelope fills in when a caller has
+// only that one.
+func mapAnalyticsTrends(tokens trendsTokensWire, success trendsSuccessRateWire) AnalyticsTrendsResult {
+	buckets := map[string]*trendsBucket{}
+	order := []string{}
+	at := func(ts string) *trendsBucket {
+		b, ok := buckets[ts]
+		if !ok {
+			b = &trendsBucket{}
+			buckets[ts] = b
+			order = append(order, ts)
+		}
+		return b
+	}
+
+	for _, d := range tokens.Data {
+		b := at(d.Timestamp)
+		b.tokens += d.InputTokens + d.OutputTokens + d.CacheReadTokens
+	}
+	for _, d := range success.Data {
+		b := at(d.Timestamp)
+		b.seenSuccess = true
+		b.successCount += d.SuccessCount
+		b.failureCount += d.FailureCount
+		b.cancelledCount += d.CancelledCount
+	}
+
+	sort.Strings(order)
+	entries := make([]AnalyticsTrendEntry, 0, len(order))
+	for _, ts := range order {
+		b := buckets[ts]
+		entry := AnalyticsTrendEntry{
+			Date:        ts,
+			TotalRuns:   b.successCount + b.failureCount + b.cancelledCount,
+			TotalTokens: b.tokens,
+		}
+		if b.seenSuccess && entry.TotalRuns > 0 {
+			entry.SuccessRate = math.Round(
+				float64(b.successCount)/float64(entry.TotalRuns)*1000) / 10
+		}
+		entries = append(entries, entry)
+	}
+
+	result := AnalyticsTrendsResult{
+		Entries:           entries,
+		Granularity:       success.Granularity,
+		DateFrom:          success.DateFrom,
+		DateTo:            success.DateTo,
+		Repos:             success.Repos,
+		TargetSuccessRate: success.TargetSuccessRate,
+	}
+	if result.Granularity == "" {
+		result.Granularity = tokens.Granularity
+	}
+	if result.DateFrom == "" {
+		result.DateFrom = tokens.DateFrom
+	}
+	if result.DateTo == "" {
+		result.DateTo = tokens.DateTo
+	}
+	if len(result.Repos) == 0 {
+		result.Repos = tokens.Repos
+	}
+	if result.Repos == nil {
+		result.Repos = []string{}
+	}
+	return result
+}
+
+// fetchTrendsMetric performs one GET /v1/analytics/trends call and decodes it
+// into out.
+func (s *AnalyticsService) fetchTrendsMetric(ctx context.Context, metric string, from, to time.Time, out interface{}) error {
+	query := url.Values{}
+	query.Set("metric", metric)
+	query.Set("granularity", "daily")
+	query.Set("dateFrom", from.Format(time.RFC3339))
+	query.Set("dateTo", to.Format(time.RFC3339))
+
+	req, err := s.client.newRequest(ctx, requestSpec{Op: api.OpAnalyticsTrends, Query: query})
+	if err != nil {
+		return fmt.Errorf("create analytics trends request: %w", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("get analytics trends: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("get analytics trends: server returned %d", resp.StatusCode)
+	}
+	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+		return fmt.Errorf("decode analytics trends response: %w", err)
+	}
+	return nil
 }
 
 // GetAnalyticsTrends fetches longitudinal pipeline trends from GET /v1/analytics/trends.
 // Returns an empty offline result when the platform is unreachable.
+//
+// Two calls, one per metric: the endpoint answers exactly one of tokens or
+// success_rate per request, and the tab plots both.
 func (s *AnalyticsService) GetAnalyticsTrends(ctx context.Context, period string) (*AnalyticsTrendsResult, error) {
 	if !s.client.IsOnline() {
-		return &AnalyticsTrendsResult{Current: []AnalyticsTrendEntry{}, Previous: []AnalyticsTrendEntry{}}, nil
+		return &AnalyticsTrendsResult{Entries: []AnalyticsTrendEntry{}, Repos: []string{}}, nil
 	}
-	req, err := s.client.newRequest(ctx, requestSpec{
-		Op:    api.OpAnalyticsTrends,
-		Query: url.Values{"period": []string{period}},
-	})
-	if err != nil {
-		return nil, fmt.Errorf("create analytics trends request: %w", err)
+
+	from, to := trendsWindow(period, time.Now())
+
+	var tokens trendsTokensWire
+	if err := s.fetchTrendsMetric(ctx, "tokens", from, to, &tokens); err != nil {
+		return nil, err
 	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("get analytics trends: %w", err)
+	var success trendsSuccessRateWire
+	if err := s.fetchTrendsMetric(ctx, "success_rate", from, to, &success); err != nil {
+		return nil, err
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("get analytics trends: server returned %d", resp.StatusCode)
-	}
-	var result AnalyticsTrendsResult
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("decode analytics trends response: %w", err)
-	}
-	if result.Current == nil {
-		result.Current = []AnalyticsTrendEntry{}
-	}
-	if result.Previous == nil {
-		result.Previous = []AnalyticsTrendEntry{}
-	}
+
+	result := mapAnalyticsTrends(tokens, success)
 	return &result, nil
 }
 

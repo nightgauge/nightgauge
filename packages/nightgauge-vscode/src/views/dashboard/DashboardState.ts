@@ -361,38 +361,30 @@ export interface AuditLogData {
   lastPlatformSync?: string;
 }
 
-/** Filter state for the Runs tab (#3319). */
-export interface RunsFilterState {
-  dateFrom: string;
-  dateTo: string;
-  outcomeFilter: string;
-  branchFilter: string;
-}
-
-/** Pagination info for the Runs tab using cursor-stack translation (#3319). */
+/**
+ * Pagination info for the Runs tab using cursor-stack translation.
+ *
+ * No total: GET /v1/analytics/runs paginates by keyset and reports no count,
+ * so the page indicator shows the page number alone. The `totalCount` this
+ * carried was decoded from a `total_count` field the endpoint never sent, and
+ * rendered as a permanent "0 runs" (#801).
+ */
 export interface RunsPaginationInfo {
   page: number;
   pageSize: number;
-  totalCount: number;
   hasMore: boolean;
   /** cursorStack[i] holds the cursor for page i; page 0 is always undefined. */
   cursorStack: (string | undefined)[];
 }
 
-/** Default filter state for the Runs tab. */
-export function getDefaultRunsFilters(): RunsFilterState {
-  return { dateFrom: "", dateTo: "", outcomeFilter: "", branchFilter: "" };
-}
-
 /** Default pagination state for the Runs tab. */
 export function getDefaultRunsPagination(): RunsPaginationInfo {
-  return { page: 0, pageSize: 20, totalCount: 0, hasMore: false, cursorStack: [undefined] };
+  return { page: 0, pageSize: 20, hasMore: false, cursorStack: [undefined] };
 }
 
 /** Data bundle passed to RunsTabHtml renderer (#3319). */
 export interface RunsListData {
   entries: import("../../services/IpcClientBase").RunsEntry[];
-  filters: RunsFilterState;
   pagination: RunsPaginationInfo;
   isLoading: boolean;
   hasAccess: boolean;
@@ -408,7 +400,14 @@ export interface TrendsData {
   result: import("../../services/IpcClientBase").AnalyticsTrendsResult | null;
   isLoading: boolean;
   hasAccess: boolean;
-  showComparison: boolean;
+  /**
+   * The range the user selected. It is view state, not a property of the
+   * result: the endpoint has no `period` parameter and echoes none back, so
+   * reading it off the response yielded undefined and pinned the selector to
+   * "30d" whatever was clicked (#801). The window the SERVER resolved is
+   * reported separately, from the result's own dateFrom/dateTo.
+   */
+  dateRange: TrendsDateRange;
   /** The classified cause of the last failed fetch, if any (#748). */
   failure?: PlatformFailure;
 }

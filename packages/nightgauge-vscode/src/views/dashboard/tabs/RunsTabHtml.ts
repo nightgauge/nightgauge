@@ -48,7 +48,7 @@ export function getRunsTabHtml(data: RunsListData | undefined, _nonce?: string):
 
   return `
     <div class="runs-tab">
-      ${getRunsFiltersHtml(data)}
+      ${getRunsToolbarHtml()}
       ${getRunsTableHtml(data.entries)}
       ${getRunsPaginationHtml(data)}
     </div>
@@ -93,8 +93,7 @@ export function getRunsTabScript(): string {
         // Export CSV
         var exportBtn = e.target.closest('#runsExportCsv');
         if (exportBtn) {
-          var filters = collectRunsFilters();
-          vscode.postMessage({ type: 'runsExportCsv', filters: filters });
+          vscode.postMessage({ type: 'runsExportCsv' });
           return;
         }
 
@@ -105,35 +104,7 @@ export function getRunsTabScript(): string {
           return;
         }
 
-        // Reset filters
-        var resetBtn = e.target.closest('#runsResetFilters');
-        if (resetBtn) {
-          var df = document.getElementById('runsDateFrom'); if (df) df.value = '';
-          var dt = document.getElementById('runsDateTo'); if (dt) dt.value = '';
-          var of = document.getElementById('runsOutcomeFilter'); if (of) of.value = '';
-          var bf = document.getElementById('runsBranchFilter'); if (bf) bf.value = '';
-          vscode.postMessage({ type: 'runsResetFilters' });
-          return;
-        }
       });
-
-      // Apply filters button
-      var applyBtn = document.getElementById('runsApplyFilters');
-      if (applyBtn) {
-        applyBtn.addEventListener('click', function() {
-          var filters = collectRunsFilters();
-          vscode.postMessage({ type: 'runsFilter', filters: filters });
-        });
-      }
-
-      function collectRunsFilters() {
-        return {
-          dateFrom: document.getElementById('runsDateFrom')?.value || '',
-          dateTo: document.getElementById('runsDateTo')?.value || '',
-          outcomeFilter: document.getElementById('runsOutcomeFilter')?.value || '',
-          branchFilter: document.getElementById('runsBranchFilter')?.value || '',
-        };
-      }
     })();
   `;
 }
@@ -423,45 +394,20 @@ function getRunsNoAccessHtml(failure: RunsListData["failure"]): string {
   `;
 }
 
-function getRunsFiltersHtml(data: RunsListData): string {
-  const { filters } = data;
-  const outcomes = ["productive", "verify-and-close", "failed", "cancelled"];
-  const outcomeOptions = [
-    `<option value="">All Outcomes</option>`,
-    ...outcomes.map(
-      (o) =>
-        `<option value="${escapeHtml(o)}" ${filters.outcomeFilter === o ? "selected" : ""}>${escapeHtml(o)}</option>`
-    ),
-  ].join("");
-
+/**
+ * Runs toolbar.
+ *
+ * There are no filters here any more. GET /v1/analytics/runs accepts `limit`
+ * and `cursor` and nothing else; the date/outcome/branch controls that used to
+ * live here sent four parameters its query schema discards, so the tab
+ * presented an unfiltered page as a filtered one — a wrong answer rather than
+ * a missing feature (#801). Restoring them is a platform change first.
+ */
+function getRunsToolbarHtml(): string {
   return `
     <div class="runs-filters">
-      <div class="runs-filter-group">
-        <label class="runs-filter-label" for="runsDateFrom">From:</label>
-        <input type="date" id="runsDateFrom" class="runs-filter-input"
-          value="${escapeHtml(filters.dateFrom.substring(0, 10))}" />
-      </div>
-      <div class="runs-filter-group">
-        <label class="runs-filter-label" for="runsDateTo">To:</label>
-        <input type="date" id="runsDateTo" class="runs-filter-input"
-          value="${escapeHtml(filters.dateTo.substring(0, 10))}" />
-      </div>
-      <div class="runs-filter-group">
-        <label class="runs-filter-label" for="runsOutcomeFilter">Outcome:</label>
-        <select id="runsOutcomeFilter" class="runs-filter-select">
-          ${outcomeOptions}
-        </select>
-      </div>
-      <div class="runs-filter-group">
-        <label class="runs-filter-label" for="runsBranchFilter">Branch:</label>
-        <input type="text" id="runsBranchFilter" class="runs-filter-input"
-          placeholder="Branch name"
-          value="${escapeHtml(filters.branchFilter)}" />
-      </div>
       <div class="runs-filters-actions">
-        <button class="action-btn" id="runsApplyFilters">Apply</button>
-        <button class="action-btn" id="runsResetFilters">Reset</button>
-        <button class="action-btn" id="runsExportCsv" title="Export filtered results as CSV">Export CSV</button>
+        <button class="action-btn" id="runsExportCsv" title="Export the current page as CSV">Export CSV</button>
         <button class="action-btn" id="runsRefreshBtn" title="Force refresh">&#8635;</button>
       </div>
     </div>
@@ -559,9 +505,9 @@ function getRunsTableHtml(entries: RunsEntry[]): string {
       <div class="runs-empty-state">
         <div class="empty-icon">🏃</div>
         <h3>No Runs Found</h3>
-        <p>No pipeline runs match the selected filters.</p>
+        <p>No pipeline runs recorded yet.</p>
         <p style="font-size:0.85em; color: var(--vscode-descriptionForeground);">
-          Adjust your date range or outcome filter, or connect to the platform.
+          Runs appear here once the pipeline reports them to the platform.
         </p>
       </div>
     `;
@@ -634,7 +580,7 @@ function getRunsPaginationHtml(data: RunsListData): string {
         ${!hasPrev ? "disabled" : ""}>
         &lsaquo; Prev
       </button>
-      <span>Page ${displayPage}${pagination.totalCount > 0 ? ` &nbsp;&middot;&nbsp; ${pagination.totalCount} runs` : ""}</span>
+      <span>Page ${displayPage}</span>
       <button class="action-btn" id="runsNextPage"
         data-page="${pagination.page + 1}"
         ${!hasNext ? "disabled" : ""}>

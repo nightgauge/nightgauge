@@ -103,7 +103,6 @@ import { PlatformRunsService } from "../../services/PlatformRunsService";
 import { PlatformTrendsService } from "../../services/PlatformTrendsService";
 import { PlatformComplianceService } from "../../services/PlatformComplianceService";
 import type {
-  RunsFilterState,
   RunsListData,
   RunsPaginationInfo,
   TrendsData,
@@ -114,7 +113,7 @@ import type {
   PlatformCostTabData,
   DependabotTabState,
 } from "./DashboardState";
-import { getDefaultRunsFilters, getDefaultRunsPagination } from "./DashboardState";
+import { getDefaultRunsPagination } from "./DashboardState";
 import { classifyPlatformError, type PlatformFailure } from "../../services/platformResult";
 
 /**
@@ -172,13 +171,10 @@ type WebViewMessage =
       type: "setModeFilter";
       mode: "efficiency" | "elevated" | "maximum" | "frontier" | "all";
     }
-  | { type: "runsFilter"; filters: RunsFilterState }
   | { type: "runsPageChange"; page: number }
-  | { type: "runsExportCsv"; filters: RunsFilterState }
+  | { type: "runsExportCsv" }
   | { type: "runsRefresh" }
-  | { type: "runsResetFilters" }
   | { type: "trendsDateRangeChange"; range: TrendsDateRange }
-  | { type: "trendsToggleComparison"; show: boolean }
   | { type: "trendsRefresh" }
   | {
       type: "complianceGenerateReport";
@@ -290,13 +286,11 @@ export class Dashboard implements vscode.Disposable {
   /** Platform runs service and cached data (Issue #3319) */
   private platformRunsService: PlatformRunsService | null = null;
   private runsData: RunsListData | null = null;
-  private runsFilters: RunsFilterState = getDefaultRunsFilters();
   private runsPagination: RunsPaginationInfo = getDefaultRunsPagination();
   /** Platform trends service and cached data (Issue #3320) */
   private platformTrendsService: PlatformTrendsService | null = null;
   private trendsData: TrendsData | null = null;
   private trendsDateRange: TrendsDateRange = "30d";
-  private trendsShowComparison = false;
   /** Platform compliance service and cached data (Issue #3322) */
   private platformComplianceService: PlatformComplianceService | null = null;
   private complianceData: ComplianceData | null = null;
@@ -2021,14 +2015,6 @@ export class Dashboard implements vscode.Disposable {
         this.refreshHealthAnalyticsData().catch(() => {});
         break;
 
-      case "runsFilter":
-        if (this.deferPlatformRefreshMessage("runs", message)) break;
-        this.runsFilters = message.filters;
-        this.runsPagination = getDefaultRunsPagination();
-        this.runsData = null;
-        this.refreshRunsData().catch(() => {});
-        break;
-
       case "runsPageChange": {
         if (this.deferPlatformRefreshMessage("runs", message)) break;
         const targetPage = message.page;
@@ -2039,21 +2025,13 @@ export class Dashboard implements vscode.Disposable {
       }
 
       case "runsExportCsv":
-        this.exportRunsCsv(message.filters).catch(() => {});
+        this.exportRunsCsv().catch(() => {});
         break;
 
       case "runsRefresh":
         if (this.platformRefreshesInFlight.has("runs")) break;
         this.runsData = null;
         this.runsPagination = getDefaultRunsPagination();
-        this.refreshRunsData().catch(() => {});
-        break;
-
-      case "runsResetFilters":
-        if (this.deferPlatformRefreshMessage("runs", message)) break;
-        this.runsFilters = getDefaultRunsFilters();
-        this.runsPagination = getDefaultRunsPagination();
-        this.runsData = null;
         this.refreshRunsData().catch(() => {});
         break;
 
@@ -2071,14 +2049,6 @@ export class Dashboard implements vscode.Disposable {
           this.trendsData = null;
           this.fetchTrendsData().catch(() => {});
         }
-        break;
-
-      case "trendsToggleComparison":
-        this.trendsShowComparison = message.show;
-        if (this.trendsData) {
-          this.trendsData = { ...this.trendsData, showComparison: message.show };
-        }
-        this.updatePanel("trendsToggleComparison");
         break;
 
       case "trendsRefresh":
@@ -3097,7 +3067,6 @@ export class Dashboard implements vscode.Disposable {
   private applyRunsFailure(failure: PlatformFailure): void {
     this.runsData = {
       entries: [],
-      filters: this.runsFilters,
       pagination: this.runsPagination,
       isLoading: false,
       hasAccess: false,
@@ -3112,7 +3081,7 @@ export class Dashboard implements vscode.Disposable {
       result: null,
       isLoading: false,
       hasAccess: false,
-      showComparison: this.trendsShowComparison,
+      dateRange: this.trendsDateRange,
       failure,
     };
     this.logger.info("platform:trends-tab-error", { kind: failure.kind, status: failure.status });
@@ -3196,7 +3165,6 @@ export class Dashboard implements vscode.Disposable {
     const endpoint = "platform.getAnalyticsRuns";
     this.runsData = {
       entries: [],
-      filters: this.runsFilters,
       pagination: this.runsPagination,
       isLoading: true,
       hasAccess: true,
@@ -3207,7 +3175,7 @@ export class Dashboard implements vscode.Disposable {
       const ipc = (await import("../../services/IpcClient")).IpcClient.getInstance();
       this.platformRunsService ??= new PlatformRunsService(ipc);
 
-      const result = await this.platformRunsService.fetchAndCache(this.runsFilters, cursor, 20);
+      const result = await this.platformRunsService.fetchAndCache(cursor, 20);
 
       if (!result.ok) {
         this.applyRunsFailure(result);
@@ -3223,13 +3191,11 @@ export class Dashboard implements vscode.Disposable {
       }
       this.runsPagination = {
         ...this.runsPagination,
-        totalCount: data.total_count,
         hasMore: data.has_more,
         cursorStack: updatedStack,
       };
       this.runsData = {
         entries: data.entries,
-        filters: this.runsFilters,
         pagination: this.runsPagination,
         isLoading: false,
         hasAccess: true,
@@ -3255,7 +3221,7 @@ export class Dashboard implements vscode.Disposable {
       result: null,
       isLoading: true,
       hasAccess: true,
-      showComparison: this.trendsShowComparison,
+      dateRange: this.trendsDateRange,
     };
     this.renderPanelImmediately("trendsRefresh");
     try {
@@ -3273,7 +3239,7 @@ export class Dashboard implements vscode.Disposable {
         result: result.value,
         isLoading: false,
         hasAccess: true,
-        showComparison: this.trendsShowComparison,
+        dateRange: this.trendsDateRange,
       };
       this.updatePanel("trendsRefresh");
     } catch (err) {
@@ -3612,7 +3578,7 @@ export class Dashboard implements vscode.Disposable {
   /**
    * Export runs as CSV and open in VS Code (Issue #3319).
    */
-  private async exportRunsCsv(filters: RunsFilterState): Promise<void> {
+  private async exportRunsCsv(): Promise<void> {
     if (!this.runsData || this.runsData.entries.length === 0) {
       vscode.window.showInformationMessage("No runs to export.");
       return;
@@ -3639,7 +3605,6 @@ export class Dashboard implements vscode.Disposable {
       language: "plaintext",
     });
     await vscode.window.showTextDocument(doc);
-    void filters; // intentionally unused — filter state already applied to entries
   }
 
   /**

@@ -592,8 +592,9 @@ const ALL_FAILURE_KINDS: FailureKind[] = [
 //     case: a retry that renders nothing observable is the defect that
 //     started this issue) -----------------------------------------------
 
-const runsFilters = { dateFrom: "", dateTo: "", outcomeFilter: "", branchFilter: "" };
-const runsPagination = { page: 0, totalCount: 0, hasMore: false, cursorStack: [] };
+// No filters and no total: GET /v1/analytics/runs accepts limit/cursor only
+// and paginates by keyset (#801).
+const runsPagination = { page: 0, pageSize: 20, hasMore: false, cursorStack: [] };
 const runsEntry = (n: number, stages: unknown[] = []) => ({
   issue_number: n,
   title: `Fix flaky retry test #${n}`,
@@ -623,8 +624,7 @@ writeFixture("runs--populated", {
   activeTab: "runs",
   runsData: {
     entries: [runsEntry(701, runs701Stages), runsEntry(702), runsEntry(703)],
-    filters: runsFilters,
-    pagination: { ...runsPagination, totalCount: 3 },
+    pagination: runsPagination,
     isLoading: false,
     hasAccess: true,
   },
@@ -633,7 +633,6 @@ writeFixture("runs--empty", {
   activeTab: "runs",
   runsData: {
     entries: [],
-    filters: runsFilters,
     pagination: runsPagination,
     isLoading: false,
     hasAccess: true,
@@ -643,7 +642,6 @@ writeFixture("runs--loading", {
   activeTab: "runs",
   runsData: {
     entries: [],
-    filters: runsFilters,
     pagination: runsPagination,
     isLoading: true,
     hasAccess: true,
@@ -654,7 +652,6 @@ for (const kind of ALL_FAILURE_KINDS) {
     activeTab: "runs",
     runsData: {
       entries: [],
-      filters: runsFilters,
       pagination: runsPagination,
       isLoading: false,
       hasAccess: false,
@@ -730,31 +727,39 @@ for (const kind of ALL_FAILURE_KINDS) {
 // --- Trends tab (populated needs >= 7 entries per tab's SPARSE_THRESHOLD;
 //     unauthorized + server_error as representative sign-in vs retry CTAs) -
 
+// successRate is a percentage (0-100), as the endpoint reports it; there is no
+// cost metric and no comparison series (#801).
 const trendEntry = (daysAgo: number) => ({
   date: new Date(now.getTime() - daysAgo * 86_400_000).toISOString().slice(0, 10),
-  successRate: 0.8 + (daysAgo % 3) * 0.05,
-  costPerRun: 0.03 + (daysAgo % 4) * 0.002,
+  successRate: 80 + (daysAgo % 3) * 5,
   totalRuns: 4 + (daysAgo % 5),
+  totalTokens: 120_000 + (daysAgo % 7) * 10_000,
 });
-const trendSeries = (offset: number) =>
-  Array.from({ length: 10 }, (_, i) => trendEntry(offset + i));
+const trendsResult = () => ({
+  entries: Array.from({ length: 10 }, (_, i) => trendEntry(i)),
+  granularity: "daily",
+  dateFrom: new Date(now.getTime() - 30 * 86_400_000).toISOString(),
+  dateTo: new Date(now.getTime()).toISOString(),
+  repos: ["nightgauge/nightgauge"],
+  targetSuccessRate: 95,
+});
 
 writeFixture("trends--populated", {
   activeTab: "trends",
   trendsData: {
-    result: { current: trendSeries(0), previous: trendSeries(30), period: "30d" },
+    result: trendsResult(),
     isLoading: false,
     hasAccess: true,
-    showComparison: true,
+    dateRange: "30d",
   },
 });
 writeFixture("trends--empty", {
   activeTab: "trends",
-  trendsData: { result: null, isLoading: false, hasAccess: true, showComparison: false },
+  trendsData: { result: null, isLoading: false, hasAccess: true, dateRange: "30d" },
 });
 writeFixture("trends--loading", {
   activeTab: "trends",
-  trendsData: { result: null, isLoading: true, hasAccess: true, showComparison: false },
+  trendsData: { result: null, isLoading: true, hasAccess: true, dateRange: "30d" },
 });
 for (const kind of ["unauthorized", "server_error"] as FailureKind[]) {
   writeFixture(`trends--failure-${kind}`, {
@@ -763,7 +768,7 @@ for (const kind of ["unauthorized", "server_error"] as FailureKind[]) {
       result: null,
       isLoading: false,
       hasAccess: false,
-      showComparison: false,
+      dateRange: "30d",
       failure: makeFailure(kind, "platform.getAnalyticsTrends"),
     },
   });
@@ -1104,16 +1109,15 @@ const ALL_POPULATED: DashboardHtmlOverrides = {
   },
   runsData: {
     entries: [runsEntry(701), runsEntry(702)],
-    filters: runsFilters,
-    pagination: { ...runsPagination, totalCount: 2 },
+    pagination: runsPagination,
     isLoading: false,
     hasAccess: true,
   },
   trendsData: {
-    result: { current: trendSeries(0), previous: trendSeries(30), period: "30d" },
+    result: trendsResult(),
     isLoading: false,
     hasAccess: true,
-    showComparison: false,
+    dateRange: "30d",
   },
   complianceData: {
     reports: [complianceReport("rep-1", "ready")],

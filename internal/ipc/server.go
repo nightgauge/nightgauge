@@ -1859,7 +1859,7 @@ func (s *Server) registerMethods() {
 		}
 		var p PlatformAnalyticsRunsParams
 		_ = json.Unmarshal(params, &p)
-		return s.getAnalyticsSvc().GetAnalyticsRuns(ctx, p.StartDate, p.EndDate, p.Cursor, p.Outcome, p.Branch, p.Limit)
+		return s.getAnalyticsSvc().GetAnalyticsRuns(ctx, p.Cursor, p.Limit)
 	}
 
 	//ipc:method platformGetAnalyticsTrends params:PlatformGetAnalyticsTrendsParams result:AnalyticsTrendsResult
