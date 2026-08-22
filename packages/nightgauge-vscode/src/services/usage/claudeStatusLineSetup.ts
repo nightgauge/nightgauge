@@ -34,11 +34,17 @@
  *   `enable` → `disable` is a round trip rather than a deletion.
  * - **Nothing else in the file is touched.** The settings document is parsed,
  *   one key is changed, and everything else is re-serialised as it was.
+ * - **The wired path is re-resolved when it dies.** The command names an
+ *   absolute, version-stamped bundle path, and an extension update installs a
+ *   new directory and removes the old one -- so the wiring outlives the binary
+ *   it names and every Claude Code render since the update has invoked a dead
+ *   path (#807). {@link repairStatusLineBinary} is the repair.
  *
  * @see docs/decisions/018-adapter-usage-quota-model.md
  * @see Issue #730 - Claude Max usage at rest
  */
 
+import { constants as fsConstants } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -128,6 +134,139 @@ export function buildStatusLineCommand(binaryPath: string, existingCommand: stri
   return delegate === null || delegate.trim() === ""
     ? base
     : `${base} --delegate ${quoteDelegate(delegate)}`;
+}
+
+/**
+ * Extract the nightgauge binary path out of a wired `statusLine.command`.
+ *
+ * Only the head -- everything before the verb -- is examined, so a `--delegate`
+ * payload containing quotes cannot be mistaken for the binary.
+ *
+ * Returns null for any head this module did not write. That is the whole point:
+ * an operator may have wrapped the invocation (`/usr/bin/env`, a `nice`, a
+ * wrapper script), and rewriting a shape we do not understand would replace one
+ * broken command with a differently broken one.
+ */
+export function parseStatusLineBinary(command: string): string | null {
+  const verbAt = command.indexOf(STATUS_LINE_VERB);
+  if (verbAt < 0) {
+    return null;
+  }
+  const head = command.slice(0, verbAt).trim();
+  if (head === "") {
+    return null;
+  }
+  const quoted = head.match(/^'((?:[^']|'\\'')*)'$/);
+  if (quoted !== null) {
+    return quoted[1].replace(/'\\''/g, "'");
+  }
+  // A bare, unquoted path is the only other shape we recognise. Anything with
+  // whitespace in it is a wrapper, not a path.
+  return /\s/.test(head) ? null : head;
+}
+
+/** What {@link repairStatusLineBinary} did, and why. */
+export type StatusLineRepairOutcome =
+  /** No nightgauge status line is configured. Nothing to repair. */
+  | "not-wired"
+  /** The wired binary is still there. */
+  | "healthy"
+  /** Wired, but the command's head is not a shape this module wrote. */
+  | "unrecognized"
+  /** The wired binary was gone and the command now names a live one. */
+  | "repaired"
+  /** The wired binary was gone and no binary could be resolved. Left alone. */
+  | "unresolvable";
+
+export interface StatusLineRepairResult {
+  outcome: StatusLineRepairOutcome;
+  /** The dead path that was wired, when there was one. */
+  staleBinary: string | null;
+  /** The path now wired, when a repair happened. */
+  binary: string | null;
+  /** The document to write. Reference-identical to the input when unchanged. */
+  settings: Record<string, unknown>;
+  changed: boolean;
+}
+
+export interface StatusLineRepairDeps {
+  /**
+   * Resolve the nightgauge binary the extension would use right now.
+   *
+   * Called only when a repair is actually needed, so the common healthy path
+   * costs one `stat` and no PATH lookup.
+   */
+  resolveBinary: () => Promise<string | null>;
+  /** True when the path exists and is executable. Defaults to a real check. */
+  isExecutable?: (binaryPath: string) => Promise<boolean>;
+}
+
+async function defaultIsExecutable(binaryPath: string): Promise<boolean> {
+  try {
+    await fs.access(binaryPath, fsConstants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Re-point a wired status line whose binary no longer exists.
+ *
+ * `readStatusLineState` matches on the verb, never on the path, so it happily
+ * reports `wired: true` for a command naming a bundle that was deleted two
+ * updates ago. Recognising a command is not the same as knowing it runs, and
+ * this closes that gap.
+ *
+ * Refuses to act in the two cases where acting would be worse than a dead
+ * command: a head this module did not write, and no resolvable binary to point
+ * at. In both the settings document is returned untouched and the caller logs
+ * the condition.
+ *
+ * Idempotent: a second call finds the binary executable and reports "healthy".
+ */
+export async function repairStatusLineBinary(
+  settings: Record<string, unknown>,
+  deps: StatusLineRepairDeps
+): Promise<StatusLineRepairResult> {
+  const unchanged = (
+    outcome: StatusLineRepairOutcome,
+    staleBinary: string | null = null
+  ): StatusLineRepairResult => ({ outcome, staleBinary, binary: null, settings, changed: false });
+
+  const state = readStatusLineState(settings);
+  if (!state.wired || state.command === null) {
+    return unchanged("not-wired");
+  }
+
+  const wiredBinary = parseStatusLineBinary(state.command);
+  if (wiredBinary === null) {
+    return unchanged("unrecognized");
+  }
+
+  const isExecutable = deps.isExecutable ?? defaultIsExecutable;
+  if (await isExecutable(wiredBinary)) {
+    return unchanged("healthy", wiredBinary);
+  }
+
+  const resolved = await deps.resolveBinary();
+  // Resolving to the same dead path is not a repair; the resolver's own
+  // existence checks should prevent it, and if they ever do not, rewriting the
+  // command to itself would report success for a still-broken feed.
+  if (resolved === null || resolved === wiredBinary) {
+    return unchanged("unresolvable", wiredBinary);
+  }
+
+  return {
+    outcome: "repaired",
+    staleBinary: wiredBinary,
+    binary: resolved,
+    // buildStatusLineCommand carries the existing --delegate payload across:
+    // it parses the delegate out (unescaping) and re-quotes it, which is a
+    // round trip, so the operator's own command survives byte-for-byte.
+    settings: withStatusLineWired(settings, resolved),
+    changed: true,
+  };
 }
 
 /**

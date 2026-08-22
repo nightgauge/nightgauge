@@ -125,6 +125,7 @@ import { AutomationService } from "../services/AutomationService";
 import { UsageLimitsService } from "../services/UsageLimitsService";
 import { AdapterUsageService } from "../services/usage/AdapterUsageService";
 import { ClaudeRateLimitStore } from "../services/usage/ClaudeRateLimitStore";
+import { repairStaleClaudeStatusLine } from "../services/usage/claudeStatusLineRepair";
 import { USAGE_WINDOW_STATE_KEY } from "../commands/cycleUsageMetric";
 import { PlatformQuotaService } from "../services/PlatformQuotaService";
 import { BrownfieldDataService } from "../services/BrownfieldDataService";
@@ -2836,6 +2837,19 @@ export async function initializeServices(
   // runs outside any particular workspace. Constructed before the incrediRoot
   // gate for the same reason — it needs no workspace to exist.
   const claudeRateLimitStore = ClaudeRateLimitStore.forAccount();
+
+  // (#807) Re-point a status line whose binary an extension update deleted.
+  // Fire-and-forget: this reads and possibly rewrites a file outside the
+  // workspace, and neither a slow disk nor an unreadable settings.json is a
+  // reason to hold up activation. Placed next to the store because the store is
+  // the thing that goes stale when the wiring dies — since 2026-08-20 on the
+  // machine this was found on, with nothing reporting it.
+  void repairStaleClaudeStatusLine({
+    logger: {
+      info: (message) => logger.info(message),
+      warn: (message) => logger.warn(message),
+    },
+  });
   let adapterUsageService: AdapterUsageService | null = null;
   if (incrediRoot) {
     adapterUsageService = AdapterUsageService.forWorkspace(
