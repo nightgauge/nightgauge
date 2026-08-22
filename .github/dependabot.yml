@@ -13,8 +13,7 @@ updates:
   - package-ecosystem: gomod
     directory: /
     schedule:
-      interval: weekly
-      day: monday
+      interval: daily
       time: "09:00"
       timezone: America/Chicago
     labels:
@@ -35,8 +34,7 @@ updates:
       - "/skills/nightgauge-product-audit"
       - "/claude-plugins/nightgauge/skills/product-audit"
     schedule:
-      interval: weekly
-      day: monday
+      interval: daily
       time: "09:00"
       timezone: America/Chicago
     labels:
@@ -52,8 +50,7 @@ updates:
   - package-ecosystem: github-actions
     directory: /
     schedule:
-      interval: weekly
-      day: monday
+      interval: daily
       time: "09:00"
       timezone: America/Chicago
     labels:
