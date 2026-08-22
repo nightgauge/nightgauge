@@ -9,10 +9,7 @@ import type { PipelineStage } from "@nightgauge/sdk";
 import type { StageExecutionMode } from "./incrediConfig";
 import { DEFAULT_PERFORMANCE_MODE, MODE_PROFILES, type PerformanceMode } from "./modeProfiles";
 import type { ExecutionAdapter } from "../config/schema";
-import {
-  CLAUDE_PLAN_SETTING,
-  readClaudePlanDeclaration,
-} from "../services/usage/claudePlanDeclaration";
+import { CLAUDE_PLAN_SETTING } from "../services/usage/claudePlanDeclaration";
 import type { UsageSnapshot, UsageWindow } from "../services/usage/types";
 import { formatUsageValue } from "../services/usage/format";
 
@@ -1124,7 +1121,7 @@ function appendClaudeSubscriptionHint(
   // API/pay-per-token means dollar windows ARE their right answer, so asking
   // again is noise — and a hint that keeps asking after being told is how an
   // operator learns to ignore it.
-  if (readClaudePlanDeclaration() !== "not-declared") {
+  if (snapshot.claudePlanDeclared === true) {
     return;
   }
   // (#810) Same verdict the Dashboard panel and the enable command read. This

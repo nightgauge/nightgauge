@@ -206,6 +206,15 @@ export interface UsageSnapshot {
    * Undefined for every other adapter, and while the first probe is in flight.
    */
   claudeFeedHealth?: ClaudeFeedHealth;
+  /**
+   * True when the operator has declared a Claude plan (#808).
+   *
+   * Carried here for the same reason as `claudeFeedHealth`: the status-bar
+   * tooltip and the Dashboard Usage panel are pure renderers, and having them
+   * read VS Code configuration directly would both couple them to a live host
+   * and let them answer the question differently.
+   */
+  claudePlanDeclared?: boolean;
 }
 
 /**

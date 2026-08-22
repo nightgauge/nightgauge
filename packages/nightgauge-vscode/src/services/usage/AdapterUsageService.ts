@@ -18,7 +18,7 @@ import { getLimitsSettings } from "../../config/limitsSettings";
 import { getGlobalAdapterWithSource } from "../../utils/resolvers/adapterResolver";
 import { LocalTelemetryUsageProvider, type UsageSessionClock } from "./LocalTelemetryUsageProvider";
 import { probeClaudeFeedHealth } from "./claudeFeedHealth";
-import { readClaudePlanDeclaration } from "./claudePlanDeclaration";
+import { readClaudePlanDeclaration, type ClaudePlanDeclaration } from "./claudePlanDeclaration";
 import type { ClaudeFeedHealth } from "./claudeStatusLineSetup";
 import { ClaudeRateLimitUsageProvider } from "./ClaudeRateLimitUsageProvider";
 import type { ClaudeRateLimitStore } from "./ClaudeRateLimitStore";
@@ -73,6 +73,11 @@ export interface AdapterUsageServiceOptions {
    * "not known yet".
    */
   probeClaudeFeedHealth?: () => Promise<ClaudeFeedHealth>;
+  /**
+   * Reads the operator's declared Claude plan (#808). Explicit for the same
+   * reason as the probe above: no hidden host access behind a default.
+   */
+  readClaudePlanDeclaration?: () => ClaudePlanDeclaration;
 }
 
 /**
@@ -158,6 +163,7 @@ export class AdapterUsageService implements vscode.Disposable {
       resolveAdapter: () => getGlobalAdapterWithSource(workspaceRoot).adapter,
       // Same store the readings are written to, so "when did this last work"
       // and "what does it say" can never disagree (#810).
+      readClaudePlanDeclaration,
       probeClaudeFeedHealth: () =>
         probeClaudeFeedHealth(claudeRateLimitStore === null ? {} : { store: claudeRateLimitStore }),
     });
@@ -284,14 +290,17 @@ export class AdapterUsageService implements vscode.Disposable {
     if (snapshot.adapter !== "claude") {
       return snapshot;
     }
+    const declared = this.options.readClaudePlanDeclaration?.() ?? "not-declared";
+    const decorated = { ...snapshot, claudePlanDeclared: declared !== "not-declared" };
+
     const probe = this.options.probeClaudeFeedHealth;
     if (probe === undefined) {
-      return snapshot;
+      return decorated;
     }
     try {
-      return { ...snapshot, claudeFeedHealth: await probe() };
+      return { ...decorated, claudeFeedHealth: await probe() };
     } catch {
-      return snapshot;
+      return decorated;
     }
   }
 

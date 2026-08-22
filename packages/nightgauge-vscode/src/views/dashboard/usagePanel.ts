@@ -48,7 +48,6 @@ import type {
 import type { PipelineRunStatus, PipelineRunSummary } from "./DashboardState";
 import { BurnRateProjector } from "../../utils/budgetIntelligence";
 import type { ClaudeFeedHealthState } from "../../services/usage/claudeStatusLineSetup";
-import { readClaudePlanDeclaration } from "../../services/usage/claudePlanDeclaration";
 
 /**
  * How far back the burn rate looks.
@@ -447,10 +446,9 @@ export function buildUsagePanelState(
     adapter: snapshot.adapter,
     planKind: snapshot.plan.kind,
     claudeFeedHealth: snapshot.claudeFeedHealth?.state,
-    // (#808) Read here rather than in the renderer so the panel stays a pure
-    // string builder with no vscode import.
-    claudePlanDeclared:
-      snapshot.adapter === "claude" ? readClaudePlanDeclaration() !== "not-declared" : false,
+    // (#808) Straight through from the snapshot, like claudeFeedHealth: this
+    // module is a pure derivation and must not reach for the VS Code host.
+    claudePlanDeclared: snapshot.claudePlanDeclared === true,
     capturedAt: snapshot.capturedAt,
     windows: overallWindows.map(toWindowView),
     familyGroups,
