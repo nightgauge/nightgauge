@@ -219,7 +219,24 @@ export class Dashboard implements vscode.Disposable {
   private static readonly TOOL_CALL_PRELOAD_DELAY_MS = 500;
 
   private panel: vscode.WebviewPanel | undefined;
+  /**
+   * Service-lifetime subscriptions. Released only when the extension itself
+   * shuts down — the next `show()` depends on every one of them.
+   */
   private disposables: vscode.Disposable[] = [];
+  /**
+   * Panel-lifetime subscriptions: everything bound to the webview that is
+   * created fresh by each `show()` and is dead the moment the tab closes.
+   *
+   * Two collections rather than one ordered collection (#809). These used to
+   * share `disposables`, so closing the tab ran the SERVICE teardown --
+   * disposing the diagnostic logger's OutputChannel, the recommendation
+   * applier and the IncrediYaml service. Dashboard is a singleton captured by
+   * the `nightgauge.showDashboard` closure, so the next invocation called
+   * `show()` on a gutted object and VS Code reported
+   * "Channel has been closed"; only an extension host restart recovered.
+   */
+  private panelDisposables: vscode.Disposable[] = [];
   private state: DashboardState;
   private currentScope: "session" | "all" = "all";
   /** Active mode filter for cost / stall / mismatch views (Issue #3218). */
@@ -1375,11 +1392,12 @@ export class Dashboard implements vscode.Disposable {
     this.panel.webview.onDidReceiveMessage(
       (message: WebViewMessage) => this.handleMessage(message),
       undefined,
-      this.disposables
+      this.panelDisposables
     );
 
-    // Handle panel disposal
-    this.panel.onDidDispose(() => this.handlePanelClosed(), undefined, this.disposables);
+    // Handle panel disposal. Panel-scoped, like the subscription above: both
+    // belong to THIS panel and are re-registered by the next show() (#809).
+    this.panel.onDidDispose(() => this.handlePanelClosed(), undefined, this.panelDisposables);
   }
 
   /**
@@ -2431,11 +2449,45 @@ export class Dashboard implements vscode.Disposable {
   }
 
   /**
-   * Handle panel closed by user
+   * Handle panel closed by user.
+   *
+   * Panel teardown only. This used to call the service-lifetime `dispose()`,
+   * which took the diagnostic logger, the recommendation applier and the
+   * IncrediYaml service down with the tab — and since Dashboard is a singleton
+   * captured by the `nightgauge.showDashboard` closure, the next invocation ran
+   * `show()` against a gutted object (#809).
    */
   private handlePanelClosed(): void {
     this.panel = undefined;
-    this.dispose();
+    this.disposePanelScoped();
+  }
+
+  /**
+   * Release everything that belongs to the panel that just went away.
+   *
+   * Safe to call with no panel, and safe to call twice: every timer handle is
+   * cleared to undefined and the disposable array is drained, so `dispose()`
+   * calling this after a close is a no-op rather than a double-dispose.
+   *
+   * `slotsTracker` is deliberately NOT here. It is constructed once in the
+   * constructor and accumulates per-issue runtime state the next panel needs;
+   * only the TICKER that pushes its state into a webview is panel-scoped.
+   */
+  private disposePanelScoped(): void {
+    if (this.updatePanelTimer) {
+      clearTimeout(this.updatePanelTimer);
+      this.updatePanelTimer = undefined;
+    }
+    if (this._epicRefreshTimer !== null) {
+      clearTimeout(this._epicRefreshTimer);
+      this._epicRefreshTimer = null;
+    }
+    this.stopCompliancePolling();
+    this.stopSlotsTicker();
+
+    while (this.panelDisposables.length) {
+      this.panelDisposables.pop()?.dispose();
+    }
   }
 
   /**
@@ -3973,24 +4025,24 @@ export class Dashboard implements vscode.Disposable {
   /**
    * Dispose of the dashboard and clean up resources
    */
+  /**
+   * Extension-lifetime teardown: the panel half, then everything the next
+   * `show()` would have needed.
+   *
+   * Only the extension's own deactivation calls this. Closing the tab calls
+   * `disposePanelScoped()` instead (#809).
+   */
   dispose(): void {
-    // Clear debounce timers
-    if (this.updatePanelTimer) {
-      clearTimeout(this.updatePanelTimer);
-      this.updatePanelTimer = undefined;
-    }
-    if (this._epicRefreshTimer !== null) {
-      clearTimeout(this._epicRefreshTimer);
-      this._epicRefreshTimer = null;
-    }
+    // The panel half first: its timers post into a webview that is about to go.
+    this.disposePanelScoped();
 
-    this.stopCompliancePolling();
-    this.stopSlotsTicker();
     this.slotsTracker?.dispose();
     this.slotsTracker = null;
 
     // Dispose of the panel
     if (this.panel) {
+      // Fires onDidDispose -> handlePanelClosed -> disposePanelScoped, which is
+      // idempotent by construction.
       this.panel.dispose();
       this.panel = undefined;
     }
