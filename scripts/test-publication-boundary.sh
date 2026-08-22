@@ -186,6 +186,53 @@ git rm --cached -q "$PLANTED" 2>/dev/null
 rm -f "$PLANTED"
 PLANTED=""
 
+# ── Untracked files are in scope (#716) ─────────────────────────────────────
+# The guard read `git ls-files` alone, so a file the author had written but not
+# yet staged was invisible to it. That is the newest content in any change, and
+# the pre-push gate reported an unqualified "clean" about material it never
+# opened -- then CI failed on exactly that material.
+#
+# Every arm below plants its fixture WITHOUT `git add`. Each one exits 0 against
+# the pre-#716 guard, which is what makes them a regression test rather than a
+# restatement.
+PLANTED="untracked-unclassified-probe.txt"
+echo "nobody classified this, and nobody staged it either" > "$PLANTED"
+expect_exit 1 "an UNTRACKED file in an unclassified path is rejected (#716)"
+rm -f "$PLANTED"
+PLANTED=""
+
+mkdir -p docs/spikes
+PLANTED="docs/spikes/_untracked_probe.md"
+echo "unreviewed company research" > "$PLANTED"
+expect_exit 1 "an UNTRACKED file in a DENIED path is rejected (#716)"
+rm -f "$PLANTED"
+PLANTED=""
+
+PLANTED="docs/_untracked_cogs_probe.md"
+echo "Voice minutes have real COGS to meter." > "$PLANTED"
+expect_exit 1 "forbidden content in an UNTRACKED file is rejected (#716)"
+rm -f "$PLANTED"
+PLANTED=""
+
+# The issue-reference rule is doubly blind to untracked content: the file is
+# neither tracked nor part of any diff. Its lines must still count as added.
+PLANTED="docs/_untracked_issue_ref_probe.md"
+printf 'Superseded by the work in #4072.\n' > "$PLANTED"
+expect_exit 1 "an unresolvable reference in an UNTRACKED file is rejected (#716)"
+rm -f "$PLANTED"
+PLANTED=""
+
+# ...and the bound that keeps the widened scope usable: .gitignore still wins.
+# docs/strategy/ is both gitignored AND a deny rule, so if the exclusion ever
+# broke, this arm goes red on the deny rule and says so.
+mkdir -p docs/strategy
+PLANTED="docs/strategy/_ignored_probe.md"
+echo "internal positioning content that must never ship" > "$PLANTED"
+expect_exit 0 "a GITIGNORED untracked file stays out of scope (build output is not source)"
+rm -f "$PLANTED"
+rmdir docs/strategy 2>/dev/null
+PLANTED=""
+
 # Generated company artifacts are private unless explicitly reviewed.
 mkdir -p docs/spikes
 PLANTED="docs/spikes/9999-private-research.md"

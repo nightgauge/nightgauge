@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 """Publication boundary guard for nightgauge/nightgauge.
 
-Enforces .github/publication-boundary.yaml against the tracked tree.
+Enforces .github/publication-boundary.yaml against the tracked tree PLUS the
+untracked, non-ignored files git would add next (#716).
 
 FAIL-CLOSED. Every exit path that is not an explicit, fully-verified pass is a
 failure:
 
   * manifest missing, unreadable, or malformed  -> FAIL (never "skip")
-  * a tracked path matching no `allow` rule     -> FAIL (not warn, not ignore)
-  * a tracked path matching a `deny` rule       -> FAIL
+  * a path matching no `allow` rule             -> FAIL (not warn, not ignore)
+  * a path matching a `deny` rule               -> FAIL
   * forbidden content outside its allow_paths   -> FAIL
   * a NEWLY ADDED line citing an issue number
     above the repository's high-water mark      -> FAIL
@@ -46,6 +47,27 @@ def die(code: int, msg: str) -> None:
 def tracked_paths() -> list[str]:
     out = subprocess.run(
         ["git", "ls-files", "-z"], capture_output=True, check=True
+    ).stdout.decode()
+    return [p for p in out.split("\0") if p]
+
+
+def untracked_paths() -> list[str]:
+    """Files git would add next: untracked, and not excluded by .gitignore.
+
+    The guard used to read `git ls-files` alone, which meant the newest content
+    in a change -- the files the author has just written and not yet staged --
+    was the one thing it never examined (#716). It printed an unqualified
+    "clean" and CI then failed on exactly that content, which is the
+    vacuous-pass shape this guard exists to prevent.
+
+    `--exclude-standard` applies .gitignore/.git/info/exclude, so build output
+    and scratch space stay out of scope; the target is untracked source that is
+    on its way into a commit.
+    """
+    out = subprocess.run(
+        ["git", "ls-files", "-z", "--others", "--exclude-standard"],
+        capture_output=True,
+        check=True,
     ).stdout.decode()
     return [p for p in out.split("\0") if p]
 
@@ -211,6 +233,22 @@ def added_lines(base: str):
             lineno += 1
 
 
+def untracked_added_lines(paths):
+    """Yield (path, lineno, text) for every line of an untracked file.
+
+    A file that is not in the index appears in no diff, so `added_lines` cannot
+    see it. Every one of its lines is nevertheless a line this change adds --
+    that is what "new file" means -- so the diff-scoped rules get them here.
+    """
+    for p in paths:
+        try:
+            text = Path(p).read_text(errors="ignore")
+        except (OSError, UnicodeDecodeError):
+            continue  # binary or unreadable; line rules are text-only
+        for n, line in enumerate(text.splitlines(), 1):
+            yield p, n, line
+
+
 def observed_high_water() -> int:
     """Largest "(#N)" in first-parent commit subjects.
 
@@ -281,7 +319,26 @@ def main() -> int:
                f"  issue/PR number. Until then this rule would reject real references.")
 
     violations: list[str] = []
-    paths = tracked_paths()
+    tracked = tracked_paths()
+    untracked = untracked_paths()
+    untracked_set = set(untracked)
+    # One corpus. Every path rule below asks the same question of both halves:
+    # "would this content be a violation once committed?" -- and for an
+    # untracked file the answer is knowable now, which is the whole point of a
+    # PRE-push gate.
+    paths = tracked + untracked
+
+    def untracked_note(p: str) -> str:
+        """Suffix, never an infix: `path:line` stays clickable and greppable.
+
+        Not named `mark` -- that is already this scope's high_water_mark, and
+        shadowing it silently rendered a function object into the ceiling
+        message instead of the number.
+        """
+        return "  [UNTRACKED -- not yet `git add`-ed]" if p in untracked_set else ""
+
+    def where(p: str) -> str:
+        return p + untracked_note(p)
 
     # ── 1. Denied paths ──────────────────────────────────────────────────────
     deny_except = {e for r in deny for e in (r.get("except") or [])}
@@ -292,7 +349,7 @@ def main() -> int:
                 continue
             if matches(p, pat):
                 violations.append(
-                    f"PRIVATE path is tracked: {p}\n"
+                    f"PRIVATE path is present: {where(p)}\n"
                     f"    matched deny rule: {pat}\n"
                     f"    {(rule.get('rationale') or '').strip().splitlines()[0] if rule.get('rationale') else ''}"
                 )
@@ -305,7 +362,7 @@ def main() -> int:
             continue  # already reported above
         if not any(matches(p, pat) for pat in allow_pats):
             violations.append(
-                f"UNCLASSIFIED path: {p}\n"
+                f"UNCLASSIFIED path: {where(p)}\n"
                 f"    No allow rule matches it, so it is rejected by default.\n"
                 f"    Classify it in {MANIFEST} before adding it."
             )
@@ -332,7 +389,7 @@ def main() -> int:
             for n, line in enumerate(text.splitlines(), 1):
                 if pattern.search(line):
                     violations.append(
-                        f"FORBIDDEN CONTENT [{rid}]: {p}:{n}\n"
+                        f"FORBIDDEN CONTENT [{rid}]: {p}:{n}{untracked_note(p)}\n"
                         f"    {line.strip()[:100]}"
                     )
                     break  # one hit per file is enough to fail it
@@ -364,7 +421,7 @@ def main() -> int:
             for n, line in enumerate(text.splitlines(), 1):
                 if _line_has_denied_token(line, word, salt, token_hashes):
                     violations.append(
-                        f"FORBIDDEN TOKEN: {p}:{n}\n"
+                        f"FORBIDDEN TOKEN: {p}:{n}{untracked_note(p)}\n"
                         f"    A token on this line is on the private-identifier denylist.\n"
                         f"    It is matched by hash, so it is not named here. See\n"
                         f"    nightgauge-internal (strategy/) for the plaintext list."
@@ -383,13 +440,16 @@ def main() -> int:
                "revision. Failing closed.")
 
     ref_exempt = refs_rule.get("allow_paths") or []
-    added = list(added_lines(base))
+    # `git diff <commit>` compares the commit to the working tree via the index,
+    # so it covers staged-new files but never untracked ones. Their lines are
+    # appended explicitly -- every line of a new file is an added line.
+    added = list(added_lines(base)) + list(untracked_added_lines(untracked))
     for p, n, line in added:
         if any(matches(p, e) for e in ref_exempt):
             continue
         for num, token in unresolvable_refs(line, ceiling):
             violations.append(
-                f"UNRESOLVABLE ISSUE REFERENCE: {p}:{n}\n"
+                f"UNRESOLVABLE ISSUE REFERENCE: {p}:{n}{untracked_note(p)}\n"
                 f"    {token} is above this repository's high-water mark "
                 f"({mark} + slack {slack} = {ceiling}), so it cannot resolve here.\n"
                 f"    {line.strip()[:100]}\n"
@@ -419,10 +479,19 @@ def main() -> int:
         print(f"or classify the path in {MANIFEST} if it is genuinely publishable.\n", file=sys.stderr)
         return 1
 
-    print(f"\033[32m✓ publication boundary clean\033[0m — {len(paths)} tracked paths, "
+    scope = f"{len(tracked)} tracked path(s)"
+    if untracked:
+        scope += f" + {len(untracked)} untracked, not-yet-added path(s)"
+    print(f"\033[32m✓ publication boundary clean\033[0m — {scope}, "
           f"all classified; no denied paths, no forbidden content, no open decisions.")
     print(f"  issue references: {len(added)} added line(s) over {base_ref} "
           f"({base[:12]}) carry no #N above {ceiling}.")
+    if untracked:
+        # Naming them is the point: the pass is only as good as the corpus, and
+        # a reader who cannot see the corpus cannot judge the pass (#716).
+        print(f"  scanned as new content (untracked, not ignored): "
+              f"{', '.join(sorted(untracked)[:10])}"
+              f"{f' and {len(untracked) - 10} more' if len(untracked) > 10 else ''}")
     return 0
 
 
