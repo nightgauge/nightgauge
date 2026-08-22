@@ -161,6 +161,13 @@
       "classification": "extension-only",
       "runtime_consumer": "src/services/AttentionSweepService.ts",
       "storage": "vscode"
+    },
+    {
+      "setting": "nightgauge.usage.*",
+      "classification": "extension-only",
+      "runtime_consumer": "src/services/usage/claudePlanDeclaration.ts",
+      "storage": "vscode",
+      "rationale": "The operator's declared Claude plan (#808) describes their ACCOUNT, not the repository, so it has no canonical config.yaml path: two checkouts on one machine share the plan, and one checkout shared between two people does not."
     }
   ],
   "custom_sections": [

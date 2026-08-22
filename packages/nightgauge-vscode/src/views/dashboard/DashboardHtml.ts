@@ -700,6 +700,13 @@ function getScript(): string {
         vscode.postMessage({ type: 'executeCommand', command: 'nightgauge.enableClaudeUsageStatusLine' });
       });
 
+      // ...and the other way to answer the same question (#808): declare the
+      // plan, for the operator whose feed cannot report one yet. Disappears
+      // once they have answered, like the button above it.
+      document.getElementById('declareClaudePlan')?.addEventListener('click', () => {
+        vscode.postMessage({ type: 'executeCommand', command: 'nightgauge.declareClaudePlan' });
+      });
+
       // Scope + mode toggle buttons (Issue #3218 added mode-toggle)
       document.querySelectorAll('.toggle-btn').forEach(btn => {
         btn.addEventListener('click', (e) => {

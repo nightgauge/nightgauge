@@ -9,6 +9,7 @@ import type { PipelineStage } from "@nightgauge/sdk";
 import type { StageExecutionMode } from "./incrediConfig";
 import { DEFAULT_PERFORMANCE_MODE, MODE_PROFILES, type PerformanceMode } from "./modeProfiles";
 import type { ExecutionAdapter } from "../config/schema";
+import { CLAUDE_PLAN_SETTING } from "../services/usage/claudePlanDeclaration";
 import type { UsageSnapshot, UsageWindow } from "../services/usage/types";
 import { formatUsageValue } from "../services/usage/format";
 
@@ -934,11 +935,17 @@ export function renderUsageBar(pct: number, segments = 8): string {
  * "No fabricated fill, no implied percentage").
  */
 function usagePercent(window: UsageWindow): number | null {
-  if (window.limit === null || window.limit <= 0) {
+  // `used: null` is a declared window nothing has measured yet (#808). A
+  // percentage of an unobserved figure is the fabricated fill this function
+  // exists to refuse.
+  if (window.used === null || window.limit === null || window.limit <= 0) {
     return null;
   }
   return (window.used / window.limit) * 100;
 }
+
+/** Copy for a window whose plan is known but whose figure is not (#808). */
+const AWAITING_READING = "awaiting first reading";
 
 /**
  * Status-bar background colour for a window, matching the pre-#659
@@ -1023,6 +1030,9 @@ export function formatUsageWindowText(
   now: Date = new Date()
 ): string {
   const pct = usagePercent(window);
+  if (window.used === null) {
+    return `${USAGE_METER_ICON} ${adapter} ${window.label.toLowerCase()} — ${AWAITING_READING}`;
+  }
   if (pct === null) {
     return `${USAGE_METER_ICON} ${adapter} ${formatUsageValue(window.used, window.unit)} ${window.label.toLowerCase()}`;
   }
@@ -1034,7 +1044,7 @@ export function formatUsageWindowText(
     // `used > limit` is legal on an overage-enabled plan, and "-4% left" is
     // not a thing — past the ceiling there is nothing left, and the used
     // figure beside it already says by how much it was passed.
-    const remaining = Math.max(0, (window.limit ?? 0) - window.used);
+    const remaining = Math.max(0, (window.limit ?? 0) - (window.used ?? 0));
     return (
       `${USAGE_METER_ICON} ${adapter} ${window.label.toLowerCase()} ${bar} ` +
       `${Math.round(pct)}% · ${Math.round(remaining)}% left${resetSuffix}${formatAsOfSuffix(window)}`
@@ -1070,7 +1080,9 @@ export function buildUsageTooltip(snapshot: UsageSnapshot): vscode.MarkdownStrin
           ? `, as of ${window.observedAt.toLocaleString()}`
           : "";
       tooltip.appendMarkdown(
-        `- **${window.label}**: ${formatUsageValue(window.used, window.unit)} / ${limitText} — resets ${resetText} _(${window.confidence}${asOfText})_\n`
+        `- **${window.label}**: ${
+          window.used === null ? AWAITING_READING : formatUsageValue(window.used, window.unit)
+        } / ${limitText} — resets ${resetText} _(${window.confidence}${asOfText})_\n`
       );
     }
     tooltip.appendMarkdown("\n");
@@ -1105,6 +1117,13 @@ function appendClaudeSubscriptionHint(
   if (snapshot.adapter !== "claude" || snapshot.plan.kind === "subscription-window") {
     return;
   }
+  // (#808) The operator has already answered this question. Declaring
+  // API/pay-per-token means dollar windows ARE their right answer, so asking
+  // again is noise — and a hint that keeps asking after being told is how an
+  // operator learns to ignore it.
+  if (snapshot.claudePlanDeclared === true) {
+    return;
+  }
   // (#810) Same verdict the Dashboard panel and the enable command read. This
   // used to infer "the feed is off" from plan.kind alone, so it offered to
   // enable a feed the command simultaneously called already enabled.
@@ -1118,6 +1137,9 @@ function appendClaudeSubscriptionHint(
   }
   tooltip.appendMarkdown(
     "_On a Claude Max or Pro plan? These are locally-derived costs, not your plan's allowance._\n\n" +
-      "[Show my plan's 5h / weekly limits](command:nightgauge.enableClaudeUsageStatusLine)\n\n"
+      "[Show my plan's 5h / weekly limits](command:nightgauge.enableClaudeUsageStatusLine)\n\n" +
+      // (#808) The other way to answer: declare the plan, for the operator
+      // whose feed cannot report one yet.
+      `[Tell Nightgauge which plan I'm on](command:workbench.action.openSettings?%22${CLAUDE_PLAN_SETTING}%22)\n\n`
   );
 }

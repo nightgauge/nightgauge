@@ -5054,6 +5054,38 @@ ui:
 
 ---
 
+### VS Code setting: `nightgauge.usage.claudePlan`
+
+Which Claude plan you are on. A **VS Code setting**, not a `config.yaml` key —
+it describes the operator's account, not the repository.
+
+| Value          | Meaning                                                                                    |
+| -------------- | ------------------------------------------------------------------------------------------ |
+| `not-declared` | Default. Nightgauge reports whatever it has observed — today's behaviour, unchanged.       |
+| `max-20x`      | Claude Max 20x — a subscription with 5-hour and weekly allowances.                         |
+| `max-5x`       | Claude Max 5x — same window shape.                                                         |
+| `pro`          | Claude Pro — same window shape.                                                            |
+| `api`          | API key / pay-per-token. Dollar windows are the right answer, and Nightgauge stops asking. |
+
+**Why it exists.** Nightgauge can only _observe_ a subscription allowance once a
+`rate_limit_event` reading has arrived, which requires the Claude usage feed to
+be wired and a Claude Code session to have rendered its status line. Until then
+the footer falls through to locally-derived dollar windows — describing
+pay-per-token billing to an operator who is on a subscription.
+
+**What it does not do.** A declaration decides **which windows exist**, never
+the numbers in them:
+
+- An observed reading always outranks the declaration for utilization.
+- A declared plan with no reading yet renders as _awaiting first reading_ —
+  never as `0%`, and never as a bar drawn at a made-up fill.
+
+`docs/decisions/018-adapter-usage-quota-model.md` forbids _inferring_ a plan
+from the adapter id. A declaration is not an inference; this is the gap that
+decision deliberately left open.
+
+---
+
 ### ui.notifications
 
 Notification and sound settings.

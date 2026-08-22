@@ -632,6 +632,11 @@
         "icon": "$(flame)"
       },
       {
+        "command": "nightgauge.declareClaudePlan",
+        "title": "Nightgauge: Tell Nightgauge Which Claude Plan I'm On",
+        "icon": "$(flame)"
+      },
+      {
         "command": "nightgauge.searchKnowledge",
         "title": "Nightgauge: Search Knowledge",
         "icon": "$(search)",
@@ -2072,6 +2077,25 @@
           "default": 15,
           "minimum": 0,
           "description": "How often to re-check repositories for standing blockers while this window is open. The conditions it finds persist for hours, so a long interval costs almost nothing in freshness and saves API quota; values between 1 and 5 are raised to 5. Set to 0 to check only on activation, on refresh, and after a run finishes."
+        },
+        "nightgauge.usage.claudePlan": {
+          "type": "string",
+          "enum": [
+            "not-declared",
+            "max-20x",
+            "max-5x",
+            "pro",
+            "api"
+          ],
+          "enumDescriptions": [
+            "Nightgauge reports whatever it has observed. This is today's behaviour exactly.",
+            "Claude Max 20x — a subscription with 5-hour and weekly allowances.",
+            "Claude Max 5x — a subscription with 5-hour and weekly allowances.",
+            "Claude Pro — a subscription with 5-hour and weekly allowances.",
+            "API key / pay-per-token — dollar windows are the right answer, and Nightgauge stops asking about plans."
+          ],
+          "default": "not-declared",
+          "markdownDescription": "Which Claude plan you are on.\n\nNightgauge can only *observe* a subscription allowance once a `rate_limit_event` reading has arrived, so on a fresh install — or any window where the usage feed has never been wired — the footer falls through to locally-derived dollar windows that describe pay-per-token billing. Declaring your plan tells Nightgauge which windows your plan has.\n\nIt never supplies the numbers in them: an observed reading always outranks this setting for utilization, and a declared plan with no reading yet renders as *awaiting first reading* rather than as zero."
         }
       }
     }
