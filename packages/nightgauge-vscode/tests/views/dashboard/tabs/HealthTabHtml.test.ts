@@ -182,6 +182,17 @@ describe("getHealthTabHtml", () => {
     expect(html).toContain("No findings");
   });
 
+  it("null dimensions → still renders overall score instead of throwing", () => {
+    const html = getHealthTabHtml(
+      makeData({ overall_score: 87.5, dimensions: null as unknown as [] }),
+      null
+    );
+    expect(html).toContain("88");
+    expect(html).toContain("Overall Score");
+    expect(html).toContain("No findings");
+    expect(html).not.toContain("Loading health data");
+  });
+
   it("overall score ≥80 → renders health-score-good class", () => {
     const html = getHealthTabHtml(makeData({ overall_score: 85 }), null);
     expect(html).toContain("health-score-good");

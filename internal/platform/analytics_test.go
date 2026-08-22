@@ -1068,3 +1068,174 @@ func TestPushPipelineRunSync_RetriesOn429(t *testing.T) {
 		t.Errorf("expected 2 POST attempts (429 then 201), got %d", got)
 	}
 }
+
+func livePipelineHealthScore() map[string]interface{} {
+	dim := func(score float64, grade string, finding, rec string) map[string]interface{} {
+		return map[string]interface{}{
+			"score":           score,
+			"grade":           grade,
+			"findings":        []string{finding},
+			"recommendations": []string{rec},
+		}
+	}
+	return map[string]interface{}{
+		"compositeScore":      87.5,
+		"compositeGrade":      "B",
+		"computedAt":          "2026-04-16T12:00:00Z",
+		"periodDays":          30,
+		"totalRunsAnalyzed":   24,
+		"tokenEconomics":      dim(90, "A", "Cache hit rate is 62%", "Keep prompt prefixes stable"),
+		"costHealth":          dim(70, "C", "Cost per run is rising", "Pin cheaper models on medium issues"),
+		"stageEffectiveness":  dim(92, "A", "Stage success rate is 96%", "Consider increasing parallelism"),
+		"modelRouting":        dim(81, "B", "Routing mostly matches complexity", "Review frontier pins"),
+		"reliability":         dim(88, "B", "Retry rate is 8%", "Triage feature-validate flakes"),
+		"selfImprovementLoop": dim(75, "C", "Few outcomes recorded", "Run retro after each batch"),
+		"pipelineVelocity":    dim(94, "A", "Median cycle time is under target", "Hold the current batch size"),
+	}
+}
+
+func TestMapPipelineHealthScore_LivePlatformShape(t *testing.T) {
+	raw, err := json.Marshal(livePipelineHealthScore())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wire pipelineHealthScoreWire
+	if err := json.Unmarshal(raw, &wire); err != nil {
+		t.Fatalf("decode live shape: %v", err)
+	}
+	got := mapPipelineHealthScore(wire)
+	if got.OverallScore != 87.5 {
+		t.Errorf("OverallScore = %v, want 87.5 (compositeScore)", got.OverallScore)
+	}
+	if got.GeneratedAt != "2026-04-16T12:00:00Z" {
+		t.Errorf("GeneratedAt = %q, want computedAt", got.GeneratedAt)
+	}
+	if got.PeriodDays != 30 {
+		t.Errorf("PeriodDays = %d, want 30", got.PeriodDays)
+	}
+	if got.TotalRuns != 24 {
+		t.Errorf("TotalRuns = %d, want 24 (totalRunsAnalyzed)", got.TotalRuns)
+	}
+	if len(got.Dimensions) != 7 {
+		t.Fatalf("Dimensions len = %d, want 7", len(got.Dimensions))
+	}
+	if got.Dimensions[0].Name != "token_economics" || got.Dimensions[0].Label != "Token Economics" {
+		t.Errorf("first dimension = %+v, want token_economics / Token Economics", got.Dimensions[0])
+	}
+	cost := got.Dimensions[1]
+	if cost.Name != "cost_health" || cost.Score != 70 {
+		t.Errorf("cost_health = %+v, want score 70", cost)
+	}
+	if len(cost.Findings) != 1 {
+		t.Fatalf("cost_health findings = %d, want 1", len(cost.Findings))
+	}
+	if cost.Findings[0].Severity != "warning" {
+		t.Errorf("grade C severity = %q, want warning", cost.Findings[0].Severity)
+	}
+	if cost.Findings[0].Title != "Cost per run is rising" {
+		t.Errorf("finding title = %q", cost.Findings[0].Title)
+	}
+	if cost.Findings[0].Recommendation != "Pin cheaper models on medium issues" {
+		t.Errorf("recommendation = %q", cost.Findings[0].Recommendation)
+	}
+}
+
+func TestMapPipelineHealthScore_FictionalSnakeCaseDoesNotPopulate(t *testing.T) {
+	// The shape the Health tab used to decode. A 200 body like this must not
+	// be mistaken for a live PipelineHealthScore — that is how the tab
+	// rendered zeros / hung on loading against production.
+	raw := []byte(`{
+		"overall_score": 78.4,
+		"dimensions": [{"name":"reliability","score":82.1,"label":"Good","findings":[]}],
+		"generated_at": "2026-08-11T17:04:22Z",
+		"period_days": 30,
+		"total_runs": 214
+	}`)
+	var wire pipelineHealthScoreWire
+	if err := json.Unmarshal(raw, &wire); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	got := mapPipelineHealthScore(wire)
+	if got.OverallScore != 0 || got.TotalRuns != 0 || len(got.Dimensions) != 0 {
+		t.Errorf("fictional shape mapped to %+v; want zeros and no dimensions", got)
+	}
+}
+
+func TestAnalyticsService_GetAnalyticsHealth_MapsLivePlatformShape(t *testing.T) {
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		if r.URL.Path != "/v1/analytics/health" {
+			http.NotFound(w, r)
+			return
+		}
+		jsonResponse(w, livePipelineHealthScore())
+	}))
+	defer srv.Close()
+
+	c, err := NewClient(Config{BaseURL: srv.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.setMode(ModeOnline)
+	c.SetSessionToken("header.payload.signature")
+
+	svc := NewAnalyticsService(c)
+	got, err := svc.GetAnalyticsHealth(context.Background())
+	if err != nil {
+		t.Fatalf("GetAnalyticsHealth: %v", err)
+	}
+	if gotPath != "/v1/analytics/health" {
+		t.Errorf("path = %q, want /v1/analytics/health", gotPath)
+	}
+	if got.OverallScore != 87.5 {
+		t.Errorf("OverallScore = %v, want 87.5", got.OverallScore)
+	}
+	if got.TotalRuns != 24 {
+		t.Errorf("TotalRuns = %d, want 24", got.TotalRuns)
+	}
+	if len(got.Dimensions) != 7 {
+		t.Errorf("Dimensions len = %d, want 7", len(got.Dimensions))
+	}
+	if got.Dimensions[0].Findings == nil {
+		t.Error("first dimension findings is nil; IPC would serialize null and crash the tab renderer")
+	}
+}
+
+func TestAnalyticsService_GetAnalyticsHealth_Offline(t *testing.T) {
+	c, err := NewClient(Config{BaseURL: "http://unreachable:9999"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc := NewAnalyticsService(c)
+	got, err := svc.GetAnalyticsHealth(context.Background())
+	if err != nil {
+		t.Fatalf("offline: %v", err)
+	}
+	if got.OverallScore != 0 {
+		t.Errorf("OverallScore = %v, want 0", got.OverallScore)
+	}
+	if got.Dimensions == nil {
+		t.Error("offline Dimensions is nil")
+	}
+}
+
+func TestAnalyticsService_GetAnalyticsHealth_LicenseKeyRefused(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Error("request must not leave the process with only a license key")
+	}))
+	defer srv.Close()
+
+	c, err := NewClient(Config{BaseURL: srv.URL, LicenseKey: "ib_live_conformance0000000000"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.setMode(ModeOnline)
+	_, err = NewAnalyticsService(c).GetAnalyticsHealth(context.Background())
+	if err == nil {
+		t.Fatal("expected ErrCredentialInsufficient")
+	}
+	if !strings.Contains(err.Error(), "credential insufficient") {
+		t.Errorf("error = %v, want credential insufficient", err)
+	}
+}

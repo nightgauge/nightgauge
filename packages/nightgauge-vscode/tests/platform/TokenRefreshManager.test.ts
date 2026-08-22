@@ -89,6 +89,7 @@ function createMockTokenStorage(
       values.clear();
       emitter.fire({ key: "all", action: "cleared" });
     }),
+    notifyHostChanged: vi.fn(() => emitter.fire({ key: "all", action: "rekeyed" })),
     dispose: vi.fn(() => emitter.dispose()),
   };
 

@@ -459,6 +459,98 @@ describe("TokenStorage", () => {
 
   // ── migrateFromLegacy() ───────────────────────────────────────────────
 
+  // ── hostname-keyed preset migration (#797) ────────────────────────────
+
+  describe("migrateFromLegacy() — hostname-keyed preset buckets (#797)", () => {
+    const HOST_ACCESS = "nightgauge.platform.api.nightgauge.dev.accessToken";
+    const HOST_REFRESH = "nightgauge.platform.api.nightgauge.dev.refreshToken";
+    const PROD_ACCESS = "nightgauge.platform.production.accessToken";
+    const PROD_REFRESH = "nightgauge.platform.production.refreshToken";
+
+    it("moves a token stranded under the production hostname to the preset key", async () => {
+      const mockSecrets = createMockSecretStorage();
+      await (mockSecrets.store as ReturnType<typeof vi.fn>)(HOST_ACCESS, "stranded-access");
+      await (mockSecrets.store as ReturnType<typeof vi.fn>)(HOST_REFRESH, "stranded-refresh");
+
+      SecretStorageService.initialize(mockSecrets);
+      TokenStorage.initialize(SecretStorageService.getInstance()!, () => "production");
+      const tokenStorage = TokenStorage.getInstance()!;
+
+      await tokenStorage.migrateFromLegacy();
+
+      // The signed-in user stays signed in — this is the whole point of the
+      // migration; without it the correctness fix reads as a forced sign-out.
+      expect(await tokenStorage.retrieve("accessToken")).toBe("stranded-access");
+      expect(await tokenStorage.retrieve("refreshToken")).toBe("stranded-refresh");
+      expect(mockSecrets.delete).toHaveBeenCalledWith(HOST_ACCESS);
+      expect(mockSecrets.delete).toHaveBeenCalledWith(HOST_REFRESH);
+    });
+
+    it("never overwrites a token already under the preset key", async () => {
+      const mockSecrets = createMockSecretStorage();
+      await (mockSecrets.store as ReturnType<typeof vi.fn>)(HOST_ACCESS, "older-stranded");
+      await (mockSecrets.store as ReturnType<typeof vi.fn>)(PROD_ACCESS, "current-session");
+      await (mockSecrets.store as ReturnType<typeof vi.fn>)(PROD_REFRESH, "current-refresh");
+
+      SecretStorageService.initialize(mockSecrets);
+      TokenStorage.initialize(SecretStorageService.getInstance()!, () => "production");
+      const tokenStorage = TokenStorage.getInstance()!;
+
+      await tokenStorage.migrateFromLegacy();
+
+      // The current session wins; the stale bucket is still cleaned up.
+      expect(await tokenStorage.retrieve("accessToken")).toBe("current-session");
+      expect(await tokenStorage.retrieve("refreshToken")).toBe("current-refresh");
+      expect(mockSecrets.delete).toHaveBeenCalledWith(HOST_ACCESS);
+    });
+
+    it("is idempotent — a second run is a no-op", async () => {
+      const mockSecrets = createMockSecretStorage();
+      await (mockSecrets.store as ReturnType<typeof vi.fn>)(HOST_ACCESS, "stranded-access");
+
+      SecretStorageService.initialize(mockSecrets);
+      TokenStorage.initialize(SecretStorageService.getInstance()!, () => "production");
+      const tokenStorage = TokenStorage.getInstance()!;
+
+      await tokenStorage.migrateFromLegacy();
+      await tokenStorage.migrateFromLegacy();
+
+      expect(await tokenStorage.retrieve("accessToken")).toBe("stranded-access");
+    });
+
+    it("leaves an unrelated custom-host bucket untouched", async () => {
+      const CUSTOM = "nightgauge.platform.my.platform.example.com.accessToken";
+      const mockSecrets = createMockSecretStorage();
+      await (mockSecrets.store as ReturnType<typeof vi.fn>)(CUSTOM, "custom-token");
+
+      SecretStorageService.initialize(mockSecrets);
+      TokenStorage.initialize(SecretStorageService.getInstance()!, () => "production");
+
+      await TokenStorage.getInstance()!.migrateFromLegacy();
+
+      expect(mockSecrets.delete).not.toHaveBeenCalledWith(CUSTOM);
+      expect(await mockSecrets.get(CUSTOM)).toBe("custom-token");
+    });
+  });
+
+  // ── notifyHostChanged() (#3723 / #797) ────────────────────────────────
+
+  describe("notifyHostChanged()", () => {
+    it("fires a rekeyed event so cached credentials are re-read", async () => {
+      const mockSecrets = createMockSecretStorage();
+      SecretStorageService.initialize(mockSecrets);
+      TokenStorage.initialize(SecretStorageService.getInstance()!, () => "production");
+      const tokenStorage = TokenStorage.getInstance()!;
+
+      const events: TokenChangeEvent[] = [];
+      tokenStorage.onTokenChanged((e) => events.push(e));
+
+      tokenStorage.notifyHostChanged();
+
+      expect(events).toEqual([{ key: "all", action: "rekeyed" }]);
+    });
+  });
+
   describe("migrateFromLegacy()", () => {
     it("copies all legacy unscoped tokens to production-scoped keys", async () => {
       const mockSecrets = createMockSecretStorage();

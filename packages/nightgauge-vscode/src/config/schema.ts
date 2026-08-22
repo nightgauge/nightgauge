@@ -3128,22 +3128,76 @@ export function resolvePlatformBaseUrl(cfg: PlatformConfig | undefined): string 
 
 /**
  * Returns the storage key identifier for the given platform config.
- * Returns the PlatformEnvironment string for preset envs ("production", "canary", "local"),
- * or the normalized hostname for the "custom" env.
+ *
+ * The key is a pure function of the **effective endpoint**, never of how that
+ * endpoint happened to be spelled in config. Every config that resolves to a
+ * named preset returns that preset's name ("production" | "canary" | "local");
+ * anything else returns the normalized hostname.
+ *
+ * That equivalence is the whole point. The key names a SecretStorage bucket
+ * (see {@link platformTokenKey}), so a config which resolves to the production
+ * API must produce "production" whether `environment` is set explicitly, left
+ * unset, or the whole config object is undefined because it has not loaded yet.
+ * The previous implementation returned the preset name for an explicit
+ * `environment` but fell through to the *hostname* otherwise — so an unloaded
+ * config wrote/read `api.nightgauge.dev` while a loaded one used `production`.
+ * A token stored under one key then read back under the other came back null,
+ * the credential bridge pushed an empty string, the Go daemon fell back to its
+ * license key, and every user-scoped route (Health, Trends, Cost, Compliance)
+ * 401'd until the user signed out and back in.
  *
  * @see Issue #3722 - Scope auth cookies/tokens per host
+ * @see Issue #797 - One endpoint, one token key
  */
 export function resolvePlatformHostKey(cfg: PlatformConfig | undefined): string {
-  const env = cfg?.environment;
-  if (env && env !== "custom") {
-    return env; // "production" | "canary" | "local"
-  }
-  // custom or unset with api_url: derive from resolved URL hostname
+  let baseUrl: string;
   try {
-    const url = new URL(resolvePlatformBaseUrl(cfg));
-    return url.hostname.toLowerCase();
+    baseUrl = resolvePlatformBaseUrl(cfg);
   } catch {
-    return "production"; // safe fallback
+    // A rejected custom URL (non-HTTPS, non-localhost) has no valid endpoint.
+    // Key it by its own hostname rather than "production" — an unusable custom
+    // config must not share a bucket with the real production credentials.
+    return normalizeHostname(cfg?.api_url) ?? "production";
+  }
+
+  const preset = matchPlatformEnvPreset(baseUrl);
+  if (preset) {
+    return preset;
+  }
+
+  return normalizeHostname(baseUrl) ?? "production";
+}
+
+/**
+ * Returns the preset name whose URL denotes the same endpoint as `url`, or null.
+ * Compared by origin so a trailing slash or case difference cannot fork the key.
+ */
+function matchPlatformEnvPreset(url: string): PlatformEnvironment | null {
+  const origin = originOf(url);
+  if (!origin) return null;
+  for (const [name, presetUrl] of Object.entries(PLATFORM_ENV_PRESETS)) {
+    if (!presetUrl) continue; // "custom" has no preset URL
+    if (originOf(presetUrl) === origin) {
+      return name as PlatformEnvironment;
+    }
+  }
+  return null;
+}
+
+function originOf(url: string): string | null {
+  try {
+    return new URL(url).origin.toLowerCase();
+  } catch {
+    return null;
+  }
+}
+
+function normalizeHostname(url: string | undefined): string | null {
+  if (!url) return null;
+  try {
+    return new URL(url).hostname.toLowerCase();
+  } catch {
+    return null;
   }
 }
 

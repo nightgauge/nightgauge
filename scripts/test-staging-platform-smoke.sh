@@ -120,7 +120,7 @@ all_green_routes() {
   {"method":"POST","path":"/v1/agents/register","status":201,"body":{"agentId":"agent-123","commandsUrl":"/v1/agents/agent-123/commands","ttl_seconds":90}},
   {"method":"PUT","path":"/v1/agents/agent-123/heartbeat","status":204,"body":{}},
   {"method":"GET","path":"/v1/analytics/dashboard","status":200,"body":{}},
-  {"method":"GET","path":"/v1/analytics/health","status":200,"body":{}},
+  {"method":"GET","path":"/v1/analytics/health","status":200,"body":{"compositeScore":87.5,"compositeGrade":"B","computedAt":"2026-04-16T12:00:00Z","periodDays":30,"totalRunsAnalyzed":24}},
   {"method":"GET","path":"/v1/analytics/runs","status":200,"body":{}},
   {"method":"GET","path":"/v1/analytics/trends","status":200,"body":{}},
   {"method":"GET","path":"/v1/analytics/cost","status":200,"body":{}},
@@ -240,6 +240,41 @@ check "the mock server actually received the bearer token" "$(contains "$TMP/ser
 
 cat "$OUT" "$SUMMARY" > "$TMP/scenario4.combined"
 check "the token never appears in stdout/stderr/summary" "$(not_contains "$TMP/scenario4.combined" "$FAKE_TOKEN" && echo 0 || echo 1)"
+
+stop_server
+
+# --- Scenario 5: a 200 with the fictional Health-tab shape fails ------------
+# Production GET /v1/analytics/health returns PipelineHealthScore
+# (compositeScore, ...). The VSCode Health tab used to decode overall_score /
+# dimensions, so a 200 of that invented body still left the tab blank. A
+# status-only probe cannot catch that; this canary must.
+ROUTES_SHAPE=$(all_green_routes | python3 -c '
+import json, sys
+routes = json.load(sys.stdin)
+for r in routes:
+    if r["method"] == "GET" and r["path"] == "/v1/analytics/health":
+        r["body"] = {
+            "overall_score": 78.4,
+            "dimensions": [],
+            "generated_at": "2026-08-11T17:04:22Z",
+            "period_days": 30,
+            "total_runs": 214,
+        }
+print(json.dumps(routes))
+')
+start_server "$ROUTES_SHAPE"
+
+OUT="$TMP/scenario5.out"
+SUMMARY="$TMP/scenario5.summary"
+: > "$SUMMARY"
+STAGING_PLATFORM_BASE_URL="http://127.0.0.1:${PORT}" \
+STAGING_SESSION_TOKEN="$FAKE_TOKEN" \
+GITHUB_STEP_SUMMARY="$SUMMARY" \
+  bash "$SCRIPT" > "$OUT" 2>&1
+RC=$?
+check "wrong health body shape exits non-zero" "$([ "$RC" -ne 0 ] && echo 0 || echo 1)"
+check "wrong health body shape emits ::error:: naming compositeScore" "$(contains "$OUT" "compositeScore" && echo 0 || echo 1)"
+check "summary marks the shape failure FAIL (shape)" "$(contains "$SUMMARY" "FAIL (shape)" && echo 0 || echo 1)"
 
 stop_server
 

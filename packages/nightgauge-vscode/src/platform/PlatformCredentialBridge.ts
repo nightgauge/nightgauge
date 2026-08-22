@@ -62,8 +62,12 @@ export class PlatformCredentialBridge implements vscode.Disposable {
     private readonly log: (message: string) => void = () => {}
   ) {
     this._subscription = tokenStorage.onTokenChanged((evt) => {
-      // 'cleared' is the bulk sign-out; otherwise only the access token matters.
-      if (evt.action !== "cleared" && evt.key !== "accessToken") return;
+      // 'cleared' is the bulk sign-out and 'rekeyed' is a host switch — both
+      // change what storage answers for every key. Otherwise only the access
+      // token matters.
+      if (evt.action !== "cleared" && evt.action !== "rekeyed" && evt.key !== "accessToken") {
+        return;
+      }
       this._markStale();
     });
   }
