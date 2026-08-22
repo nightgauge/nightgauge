@@ -121,6 +121,12 @@ fi
 
 # 5. Publication boundary — allowlist, fail-closed. Catches private-class content
 #    before it is pushed rather than after CI rejects it.
+#
+#    Scope is the tracked tree PLUS untracked, non-ignored files (#716). Those
+#    are the newest content in a change and the guard used to skip them
+#    silently, so this step handed back a pass it had not earned and CI failed
+#    on the very files it never opened. A run that scanned untracked files says
+#    so on its success line; one that exits non-zero names them inline.
 if [ -f scripts/publication-boundary-check.py ]; then
   run_step "publication boundary" python3 scripts/publication-boundary-check.py
 fi

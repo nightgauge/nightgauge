@@ -53,8 +53,14 @@ jobs:
           python3 -c 'import yaml; assert yaml.__version__ == "6.0.3"'
 
       - name: Enforce the publication boundary
+        # Scope is the tracked tree PLUS untracked, non-ignored files (#716):
+        # locally those are the newest content in a change and skipping them
+        # let the pre-push gate hand back a pass it had not earned. On a fresh
+        # CI checkout the untracked set is empty, so this widens the local gate
+        # to match what CI already sees rather than the reverse.
+        #
         # Fails the build on:
-        #   - any tracked path with no `allow` rule  (the fail-closed core)
+        #   - any path with no `allow` rule  (the fail-closed core)
         #   - any path matching a `deny` rule
         #   - forbidden content outside its allow_paths
         #   - a newly added line citing an issue number this repository has
