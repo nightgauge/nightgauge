@@ -212,7 +212,18 @@ call GET "/v1/analytics/health" "Analytics health"
 assert_object_keys "Analytics health" compositeScore compositeGrade computedAt periodDays totalRunsAnalyzed
 call GET "/v1/analytics/runs?limit=1" "Analytics runs"
 call GET "/v1/analytics/trends?period=week" "Analytics trends"
-call GET "/v1/analytics/cost" "Analytics cost"
+
+# Call /cost the way the VSCode Cost tab actually calls it — with the window
+# bounds the extension sends, not bare. A bare call was the whole coverage gap
+# behind #800: startDate/endDate are declared `format: date-time`, the extension
+# sent bare calendar dates, and the server answered 422 on every request while
+# this canary stayed green because it never sent the parameters at all. An
+# endpoint that is only ever exercised without its query string is not covered.
+COST_START="$(date -u -v-30d '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || date -u -d '30 days ago' '+%Y-%m-%dT%H:%M:%SZ')"
+COST_END="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+call GET "/v1/analytics/cost" "Analytics cost (no window)"
+call GET "/v1/analytics/cost?startDate=${COST_START}&endDate=${COST_END}" \
+  "Analytics cost (windowed, as the Cost tab sends)"
 
 # --- Audit --------------------------------------------------------------------
 call GET "/v1/audit/reports?limit=1" "Audit reports"

@@ -22,6 +22,7 @@ import type { Logger } from "../utils/logger";
 export type PlatformFailureKind =
   | "unauthorized" // HTTP 401 — credential rejected
   | "forbidden" // HTTP 403 — credential valid, access denied
+  | "bad_request" // HTTP 4xx — the request itself is wrong; retrying cannot fix it
   | "server_error" // any other bad HTTP response, or an unclassified error
   | "offline" // the Go backend / network path is unreachable
   | "not_configured"; // no platform credential/service wired up at all
@@ -97,6 +98,13 @@ export function classifyPlatformError(err: unknown, endpoint: string): PlatformF
     kind = "unauthorized";
   } else if (status === 403) {
     kind = "forbidden";
+  } else if (status !== undefined && status >= 400 && status < 500) {
+    // A 4xx is a defect in the request we sent — a malformed parameter, an
+    // unsupported filter. Calling it a server error and inviting a retry sends
+    // the user to press a button that cannot ever succeed: #800 shipped a
+    // bare calendar date into a `format: date-time` query parameter and every
+    // Cost tab load answered 422 under the banner "This may be transient".
+    kind = "bad_request";
   } else if (status !== undefined) {
     kind = "server_error";
   } else if (NOT_CONFIGURED_RE.test(message)) {

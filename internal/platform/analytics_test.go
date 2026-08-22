@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"regexp"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -1237,5 +1239,153 @@ func TestAnalyticsService_GetAnalyticsHealth_LicenseKeyRefused(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "credential insufficient") {
 		t.Errorf("error = %v, want credential insufficient", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// GetCostAnalytics — query contract (#800)
+// ---------------------------------------------------------------------------
+//
+// /v1/analytics/cost declares startDate and endDate as `format: date-time`.
+// The extension asks for whole days, and the bare "2026-07-23" it used to send
+// failed that validation with 422 — reported to the user as a transient error
+// worth retrying, which it never was. These tests assert on what actually
+// reaches the wire, because the staging smoke only ever called this endpoint
+// with no query string at all and so could not see the defect.
+
+func newCostTestServer(t *testing.T, capture *url.Values) (*AnalyticsService, func()) {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		*capture = q
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"totalTokens":1}`))
+	}))
+	c := &Client{base: srv.URL, sessionToken: "jwt.test", mode: ModeOnline}
+	return &AnalyticsService{client: c}, srv.Close
+}
+
+func TestGetCostAnalyticsSendsRFC3339Bounds(t *testing.T) {
+	var got url.Values
+	svc, closeFn := newCostTestServer(t, &got)
+	defer closeFn()
+
+	if _, err := svc.GetCostAnalytics(context.Background(), "2026-07-23", "2026-08-22"); err != nil {
+		t.Fatalf("GetCostAnalytics: %v", err)
+	}
+
+	start := got.Get("startDate")
+	end := got.Get("endDate")
+
+	if _, err := time.Parse(time.RFC3339Nano, start); err != nil {
+		t.Errorf("startDate %q is not RFC3339 date-time: %v", start, err)
+	}
+	if _, err := time.Parse(time.RFC3339Nano, end); err != nil {
+		t.Errorf("endDate %q is not RFC3339 date-time: %v", end, err)
+	}
+
+	// The requested window must stay inclusive at both ends: a 7d range that
+	// silently drops its final day is a data bug rather than a validation one.
+	if !strings.HasPrefix(start, "2026-07-23T00:00:00") {
+		t.Errorf("startDate %q should be the first instant of the requested day", start)
+	}
+	if !strings.HasPrefix(end, "2026-08-22T23:59:59") {
+		t.Errorf("endDate %q should be the last instant of the requested day", end)
+	}
+}
+
+func TestGetCostAnalyticsPassesThroughExplicitTimestamps(t *testing.T) {
+	var got url.Values
+	svc, closeFn := newCostTestServer(t, &got)
+	defer closeFn()
+
+	const ts = "2026-07-23T11:22:33Z"
+	if _, err := svc.GetCostAnalytics(context.Background(), ts, ts); err != nil {
+		t.Fatalf("GetCostAnalytics: %v", err)
+	}
+	if got.Get("startDate") != ts || got.Get("endDate") != ts {
+		t.Errorf("explicit timestamps must pass through untouched, got start=%q end=%q",
+			got.Get("startDate"), got.Get("endDate"))
+	}
+}
+
+func TestGetCostAnalyticsOmitsEmptyBounds(t *testing.T) {
+	var got url.Values
+	svc, closeFn := newCostTestServer(t, &got)
+	defer closeFn()
+
+	if _, err := svc.GetCostAnalytics(context.Background(), "", ""); err != nil {
+		t.Fatalf("GetCostAnalytics: %v", err)
+	}
+	if _, ok := got["startDate"]; ok {
+		t.Error("an empty startDate must be omitted, not sent as an empty value")
+	}
+	if _, ok := got["endDate"]; ok {
+		t.Error("an empty endDate must be omitted, not sent as an empty value")
+	}
+}
+
+func TestGetCostAnalyticsSurfacesServerStatus(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnprocessableEntity)
+		_, _ = w.Write([]byte(`{"code":"VALIDATION_ERROR","message":"invalid startDate"}`))
+	}))
+	defer srv.Close()
+	svc := &AnalyticsService{client: &Client{base: srv.URL, sessionToken: "j", mode: ModeOnline}}
+
+	_, err := svc.GetCostAnalytics(context.Background(), "2026-07-23", "2026-08-22")
+	if err == nil {
+		t.Fatal("a 422 must be reported, not swallowed")
+	}
+	if !strings.Contains(err.Error(), "422") {
+		t.Errorf("error must carry the status so the UI can classify it, got %q", err)
+	}
+}
+
+// rfc3339QueryRe mirrors the RFC 3339 date-time the platform validates
+// startDate/endDate against on /v1/analytics/cost.
+var rfc3339QueryRe = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}[Tt]\d{2}:\d{2}:\d{2}(\.\d+)?([Zz]|[+-]\d{2}:\d{2})$`)
+
+// TestCostAnalyticsAgainstContractEnforcingServer is the regression test for
+// #800, driven end to end through the same call the Cost tab makes.
+//
+// The stub here validates the way the platform documents itself rather than the
+// way we assumed it behaves: startDate and endDate are `format: date-time`, and
+// anything else is the documented 422. That distinction is the entire bug — the
+// previous stubs accepted whatever we sent, so they agreed with the client and
+// disagreed with production. Reverting toRFC3339Bound turns every case below
+// into "server returned 422", which is verbatim what users saw.
+func TestCostAnalyticsAgainstContractEnforcingServer(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		for _, k := range []string{"startDate", "endDate"} {
+			if v := q.Get(k); v != "" && !rfc3339QueryRe.MatchString(v) {
+				w.WriteHeader(http.StatusUnprocessableEntity)
+				_, _ = w.Write([]byte(`{"code":"VALIDATION_ERROR","message":"invalid ` + k + `"}`))
+				return
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"totalTokens":160000,"totalCostUsd":"12.34"}`))
+	}))
+	defer srv.Close()
+
+	svc := &AnalyticsService{client: &Client{base: srv.URL, sessionToken: "jwt", mode: ModeOnline}}
+
+	// The windows the Cost tab's 7d / 30d / 90d selectors actually produce.
+	for _, tc := range []struct{ name, start, end string }{
+		{"7d", "2026-08-15", "2026-08-22"},
+		{"30d", "2026-07-23", "2026-08-22"},
+		{"90d", "2026-05-24", "2026-08-22"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			res, err := svc.GetCostAnalytics(context.Background(), tc.start, tc.end)
+			if err != nil {
+				t.Fatalf("Cost tab %s range rejected by the real contract: %v", tc.name, err)
+			}
+			if res.TotalTokens != 160000 {
+				t.Fatalf("response decoded wrong: %+v", res)
+			}
+		})
 	}
 }

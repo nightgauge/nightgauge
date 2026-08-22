@@ -771,6 +771,36 @@ type CostAnalyticsResult struct {
 	} `json:"breakdown"`
 }
 
+// toRFC3339Bound normalises a caller-supplied window bound to the RFC 3339
+// date-time the platform's /v1/analytics/cost schema declares for startDate and
+// endDate.
+//
+// The endpoint validates both as `format: date-time`, so a bare calendar date
+// ("2026-07-23") is rejected with 422 — which the extension surfaced to the
+// user as "The platform returned an error (HTTP 422) ... This may be transient
+// — retry", a retry that could never succeed because nothing about it was
+// transient. The dashboard genuinely wants whole days, so widen rather than
+// truncate: a start bound becomes the first instant of that day and an end
+// bound the last, keeping the requested day inclusive at both ends.
+//
+// A value that already carries a time is passed through untouched, and an
+// unparseable one is passed through as well — the server is the authority on
+// its own contract, and silently dropping a filter would answer the wrong
+// question rather than report an error.
+func toRFC3339Bound(value string, endOfDay bool) string {
+	if value == "" {
+		return ""
+	}
+	day, err := time.Parse("2006-01-02", value)
+	if err != nil {
+		return value
+	}
+	if endOfDay {
+		day = day.Add(24*time.Hour - time.Nanosecond)
+	}
+	return day.UTC().Format(time.RFC3339Nano)
+}
+
 // GetCostAnalytics fetches cost analytics from GET /v1/analytics/cost.
 // startDate and endDate are optional ISO 8601 date strings (e.g., "2026-04-01").
 // Returns an empty result if offline.
@@ -780,11 +810,11 @@ func (s *AnalyticsService) GetCostAnalytics(ctx context.Context, startDate, endD
 	}
 
 	query := url.Values{}
-	if startDate != "" {
-		query.Set("startDate", startDate)
+	if v := toRFC3339Bound(startDate, false); v != "" {
+		query.Set("startDate", v)
 	}
-	if endDate != "" {
-		query.Set("endDate", endDate)
+	if v := toRFC3339Bound(endDate, true); v != "" {
+		query.Set("endDate", v)
 	}
 
 	req, err := s.client.newRequest(ctx, requestSpec{Op: api.OpAnalyticsCost, Query: query})
