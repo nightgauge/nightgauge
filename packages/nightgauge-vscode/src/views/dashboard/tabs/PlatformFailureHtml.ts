@@ -72,6 +72,21 @@ export function renderPlatformFailure(failure: PlatformFailure): RenderedPlatfor
         showSignIn: false,
         showRetry: true,
       };
+    case "bad_request":
+      // Deliberately offers no retry: the request itself is malformed, so the
+      // same button would fail identically every time. Naming the endpoint and
+      // quoting the platform's own message is what actually gets this fixed.
+      return {
+        icon: "⚠️",
+        title: "Request rejected",
+        hintHtml: `The platform rejected this request (${escapeHtml(
+          statusLabel(failure.status)
+        )}) for <code>${escapeHtml(failure.endpoint)}</code>: ${escapeHtml(
+          failure.message
+        )}. This is a bug in Nightgauge rather than a temporary outage — retrying will not help. Please report it with the endpoint above.`,
+        showSignIn: false,
+        showRetry: false,
+      };
     case "server_error":
       return {
         icon: "⚠️",

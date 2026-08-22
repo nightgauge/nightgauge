@@ -163,3 +163,31 @@ describe("getPlatformFailureScript", () => {
     expect(script).toContain("JSON.parse");
   });
 });
+
+describe("bad_request (#800)", () => {
+  const failure = {
+    ok: false as const,
+    kind: "bad_request" as const,
+    status: 422,
+    endpoint: "platform.getCostAnalytics",
+    message: "get cost analytics: server returned 422",
+  };
+
+  it("does not offer a retry, because retrying a malformed request cannot succeed", () => {
+    expect(renderPlatformFailure(failure).showRetry).toBe(false);
+  });
+
+  it("does not claim the failure may be transient", () => {
+    expect(renderPlatformFailure(failure).hintHtml).not.toMatch(/transient/i);
+  });
+
+  it("names the endpoint and the status so the bug can be reported", () => {
+    const { hintHtml } = renderPlatformFailure(failure);
+    expect(hintHtml).toContain("platform.getCostAnalytics");
+    expect(hintHtml).toContain("422");
+  });
+
+  it("does not send the user to sign in again for a request-shape bug", () => {
+    expect(renderPlatformFailure(failure).showSignIn).toBe(false);
+  });
+});

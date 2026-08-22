@@ -1232,6 +1232,43 @@ migrated on activation, so the fix does not itself force a re-login.
 rather than `session (signed in)` whenever the daemon lacks a session token,
 which distinguishes a credential-plumbing failure from a genuine 401.
 
+### HTTP 422 on a platform tab ("may be transient — retry")
+
+**Symptom.** A signed-in user sees, most visibly on the Cost tab:
+
+```text
+The platform returned an error (HTTP 422) for platform.getCostAnalytics.
+This may be transient — retry.
+```
+
+Retrying never works.
+
+**The message was wrong, and that matters.** A 422 is _Validation error_ — the
+request we sent is malformed. It is a Nightgauge bug, not an outage, and no
+number of retries can fix it. Every non-401/403 status used to be bucketed as
+`server_error`, whose copy invites a retry; 4xx now classifies as `bad_request`,
+renders no retry button, and names the endpoint and status so it can be
+reported.
+
+**Root cause (fixed, #800).** `/v1/analytics/cost` declares `startDate` and
+`endDate` as `format: date-time`. The Cost tab built them with
+`.toISOString().slice(0, 10)`, sending a bare calendar date (`2026-07-23`),
+which fails that validation. The Go client now normalises both bounds to
+RFC 3339, widening to whole days so the requested window stays inclusive at
+both ends.
+
+**Why nothing caught it.** `GetCostAnalytics` had no unit test, and
+`scripts/staging-platform-smoke.sh` called `/v1/analytics/cost` with **no query
+string at all** — so the live canary exercised a request the extension never
+makes, and stayed green while every real Cost tab load failed.
+
+> **An endpoint exercised only without its parameters is not covered.** When a
+> tab fails against the real platform but every test tier is green, compare what
+> the client puts on the wire against the platform's published contract at
+> `/docs/openapi.json` — not against our stubs, which encode what we _believe_
+> the API does. That belief being wrong is the recurring root cause here: it was
+> #742 (credential class), then the Health tab response shape, then this.
+
 ### What happened to the six channels
 
 | Former channel            | Now                                                                                                                                                                                                                                                                                                                    |

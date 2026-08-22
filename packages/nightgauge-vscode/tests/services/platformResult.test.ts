@@ -45,6 +45,49 @@ describe("classifyPlatformError", () => {
     expect(failure.status).toBe(500);
   });
 
+  // #800: a 422 from /v1/analytics/cost was bucketed as server_error and the
+  // Cost tab told the user "This may be transient — retry". It was not
+  // transient — the extension was sending a bare calendar date into a
+  // `format: date-time` query parameter — so the retry button could never
+  // succeed. A 4xx is our bug, and must be named as one.
+  it("maps a 422 to bad_request, not server_error", () => {
+    const failure = classifyPlatformError(
+      new Error("IPC error -32603: get cost analytics: server returned 422"),
+      "platform.getCostAnalytics"
+    );
+    expect(failure.kind).toBe("bad_request");
+    expect(failure.status).toBe(422);
+  });
+
+  it("maps other 4xx client errors to bad_request", () => {
+    for (const status of [400, 404, 409, 422]) {
+      const failure = classifyPlatformError(
+        new Error(`IPC error -32000: get cost analytics: server returned ${status}`),
+        "platform.getCostAnalytics"
+      );
+      expect(failure.kind).toBe("bad_request");
+      expect(failure.status).toBe(status);
+    }
+  });
+
+  it("keeps 401 and 403 on their own kinds rather than folding them into bad_request", () => {
+    expect(
+      classifyPlatformError(new Error("server returned 401"), "platform.getCostAnalytics").kind
+    ).toBe("unauthorized");
+    expect(
+      classifyPlatformError(new Error("server returned 403"), "platform.getCostAnalytics").kind
+    ).toBe("forbidden");
+  });
+
+  it("keeps 5xx on server_error, which is genuinely worth retrying", () => {
+    for (const status of [500, 502, 503]) {
+      expect(
+        classifyPlatformError(new Error(`server returned ${status}`), "platform.getCostAnalytics")
+          .kind
+      ).toBe("server_error");
+    }
+  });
+
   it("maps 'unexpected response 401' (usage summary's own phrasing) to unauthorized", () => {
     const failure = classifyPlatformError(
       new Error("IPC error -32000: get analytics dashboard: unexpected response 401"),
