@@ -73,7 +73,10 @@ function makeStateService(overrides: Record<string, unknown> = {}) {
   let installed: string | null = null;
   const svc = {
     getRunId: vi.fn(() => installed),
-    beginRun: vi.fn((runId: string) => {
+    // PipelineStateService.beginRun is (runId, repo, issueNumber); the double
+    // declared only the first parameter, so a faithful three-argument call
+    // read as an arity error the moment this file was typechecked (#499).
+    beginRun: vi.fn((runId: string, _repo: string, _issueNumber: number) => {
       if (installed !== null) throw new Error(`Issue #370 is already running (run x…).`);
       installed = runId;
     }),
@@ -111,7 +114,7 @@ function makeDeps() {
       showIdle: vi.fn(),
     },
     treeProvider: {
-      getCurrentIssueNumber: vi.fn(() => 370),
+      getCurrentIssueNumber: vi.fn((): number | undefined => 370),
       updateStageStatus: vi.fn(),
     },
     outputWindow: {

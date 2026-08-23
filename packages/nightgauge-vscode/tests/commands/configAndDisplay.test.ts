@@ -156,7 +156,7 @@ describe("showSettings Command", () => {
     const { getWorkspaceRoot } = await import("../../src/config/settings");
     vi.mocked(getWorkspaceRoot).mockReturnValue(undefined);
 
-    registerShowSettingsCommand(createMockExtensionUri(), mockStateService, mockLogger, null);
+    registerShowSettingsCommand(createMockExtensionUri(), mockStateService, mockLogger, null, null);
     const handler = getLastHandler();
 
     await handler();
@@ -171,7 +171,7 @@ describe("showSettings Command", () => {
     vi.mocked(getWorkspaceRoot).mockReturnValue("/mock/workspace");
     const { SettingsPanel } = await import("../../src/views/settings");
 
-    registerShowSettingsCommand(createMockExtensionUri(), mockStateService, mockLogger, null);
+    registerShowSettingsCommand(createMockExtensionUri(), mockStateService, mockLogger, null, null);
     const handler = getLastHandler();
 
     await handler();

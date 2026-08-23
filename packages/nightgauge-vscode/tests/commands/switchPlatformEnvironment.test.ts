@@ -45,7 +45,7 @@ vi.mock("vscode", () => ({
   },
 }));
 
-const mockWriteLocal = vi.fn(() => Promise.resolve({ success: true }));
+const mockWriteLocal = vi.fn((): Promise<WriteResult> => Promise.resolve({ success: true }));
 const mockDispose = vi.fn();
 
 vi.mock("../../src/views/settings/IncrediYamlService", () => ({
@@ -56,7 +56,9 @@ vi.mock("../../src/views/settings/IncrediYamlService", () => ({
 }));
 
 const mockReload = vi.fn(() => Promise.resolve());
-const mockGetPlatform = vi.fn(() => ({ environment: "production" as const }));
+const mockGetPlatform = vi.fn((): { environment: PlatformEnvironment } => ({
+  environment: "production",
+}));
 
 vi.mock("../../src/services/ConfigBridge", () => ({
   ConfigBridge: {
@@ -100,6 +102,8 @@ vi.mock("../../src/platform/TokenStorage", () => ({
 }));
 
 import { registerSwitchPlatformEnvironmentCommand } from "../../src/commands/switchPlatformEnvironment";
+import type { PlatformEnvironment } from "../../src/config/schema";
+import type { WriteResult } from "../../src/views/settings/IncrediYamlService";
 
 async function invokeCommand(): Promise<void> {
   const vscode = await import("vscode");
@@ -122,7 +126,7 @@ describe("switchPlatformEnvironment command", () => {
     quickPickCallIndex = 0;
     inputBoxResponse = undefined;
     mockWriteLocal.mockResolvedValue({ success: true });
-    mockGetPlatform.mockReturnValue({ environment: "production" as const });
+    mockGetPlatform.mockReturnValue({ environment: "production" });
     mockIsConnected.mockReturnValue(false);
   });
 
@@ -237,7 +241,7 @@ describe("switchPlatformEnvironment command", () => {
   it("triggers SSE disconnect and reconnect when subscriber is connected", async () => {
     quickPickResponses = [{ label: "Canary", value: "canary" }];
     mockIsConnected.mockReturnValue(true);
-    mockGetPlatform.mockReturnValue({ environment: "canary" as const });
+    mockGetPlatform.mockReturnValue({ environment: "canary" });
 
     registerSwitchPlatformEnvironmentCommand(mockLogger as never, null);
     await invokeCommand();
@@ -261,7 +265,7 @@ describe("switchPlatformEnvironment command", () => {
   });
 
   it("marks current environment with check icon in quick pick items", async () => {
-    mockGetPlatform.mockReturnValue({ environment: "canary" as const });
+    mockGetPlatform.mockReturnValue({ environment: "canary" });
     quickPickResponses = [undefined]; // cancel after inspecting
 
     const vscode = await import("vscode");

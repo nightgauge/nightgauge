@@ -106,7 +106,7 @@ function makeDeps() {
       showIdle: vi.fn(),
     },
     treeProvider: {
-      getCurrentIssueNumber: vi.fn(() => 370),
+      getCurrentIssueNumber: vi.fn((): number | undefined => 370),
       updateStageStatus: vi.fn(),
     },
     outputWindow: {

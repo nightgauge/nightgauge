@@ -2,8 +2,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RecoveryRequiredPayload } from "@nightgauge/sdk";
 
 const mocks = vi.hoisted(() => ({
-  registerRetryStage: vi.fn(() => ({ dispose: vi.fn() })),
-  registerRetryFromPhase: vi.fn(() => ({ dispose: vi.fn() })),
+  registerRetryStage: vi.fn((..._args: unknown[]) => ({ dispose: vi.fn() })),
+  registerRetryFromPhase: vi.fn((..._args: unknown[]) => ({ dispose: vi.fn() })),
   dialogShow: vi.fn(),
   dialogWaitForNextAction: vi.fn(),
   dialogDispose: vi.fn(),
@@ -62,8 +62,10 @@ describe("registerRetryCommands", () => {
       outputWindow: {} as never,
     });
 
-    const stagePresenter = mocks.registerRetryStage.mock.calls[0]?.[5] as RecoveryPresenter;
-    const phasePresenter = mocks.registerRetryFromPhase.mock.calls[0]?.[5] as RecoveryPresenter;
+    const stagePresenter = mocks.registerRetryStage.mock
+      .calls[0]?.[5] as unknown as RecoveryPresenter;
+    const phasePresenter = mocks.registerRetryFromPhase.mock
+      .calls[0]?.[5] as unknown as RecoveryPresenter;
     expect(stagePresenter).toBeTypeOf("function");
     expect(phasePresenter).toBe(stagePresenter);
     expect(disposables).toHaveLength(3);
