@@ -99,20 +99,7 @@ vi.mock("../../src/services/RepositoryContextLoader", () => ({
 
 import { runStageSkillHeadless } from "../../src/utils/skillRunner";
 import { CONTAINMENT_DIR, CONTAINMENT_ERROR_MARKER } from "../../src/utils/worktreeContainment";
-
-function createMockChildProcess(): ChildProcess {
-  const proc = new EventEmitter() as ChildProcess;
-  proc.stdout = new EventEmitter() as NodeJS.ReadableStream;
-  proc.stderr = new EventEmitter() as NodeJS.ReadableStream;
-  proc.stdin = {
-    write: vi.fn(),
-    end: vi.fn(),
-    destroyed: false,
-  } as unknown as NodeJS.WritableStream;
-  proc.kill = vi.fn();
-  proc.killed = false;
-  return proc;
-}
+import { createMockChildProcess } from "../mocks/child-process";
 
 function git(args: string[], cwd: string): string {
   return execFileSync("git", args, { cwd, encoding: "utf-8" });

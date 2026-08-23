@@ -155,6 +155,7 @@ import {
   getStageModel,
   getGeminiModel,
 } from "../../src/utils/incrediConfig";
+import { createMockChildProcess } from "../mocks/child-process";
 
 const MOCK_SKILL_CONTENT = `---
 name: test-skill
@@ -164,20 +165,6 @@ allowed-tools: Read Write Edit
 
 Test content.
 `;
-
-function createMockChildProcess(): ChildProcess {
-  const proc = new EventEmitter() as ChildProcess;
-  proc.stdout = new EventEmitter() as NodeJS.ReadableStream;
-  proc.stderr = new EventEmitter() as NodeJS.ReadableStream;
-  proc.stdin = {
-    write: vi.fn(),
-    end: vi.fn(),
-    destroyed: false,
-  } as unknown as NodeJS.WritableStream;
-  proc.kill = vi.fn();
-  proc.killed = false;
-  return proc;
-}
 
 function setExistsForAdapter(adapter: "gemini" | "gemini-sdk" | "copilot" | "lm-studio") {
   vi.mocked(fs.existsSync).mockImplementation((p: unknown) => {

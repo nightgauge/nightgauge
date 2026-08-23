@@ -6,15 +6,8 @@
  * @see Issue #236 - Queue Issues When Pipeline Active
  */
 
-import type {
-  QueueItem,
-  QueueBatchItem,
-  QueueState,
-  QueueStatus,
-  QueueConfig,
-} from "../../src/types/queue";
+import type { QueueItem, QueueState, QueueStatus, QueueConfig } from "../../src/types/queue";
 import { DEFAULT_QUEUE_CONFIG } from "../../src/types/queue";
-import type { BatchStrategy, IssueGroup } from "@nightgauge/sdk";
 
 /**
  * Create a mock queue item with sensible defaults
@@ -78,37 +71,4 @@ export function createPopulatedQueueState(
     status,
     items: createMockQueueItems(itemCount),
   });
-}
-
-/**
- * Create a mock batch queue item
- *
- * @see Issue #803 - Queue Integration for Epic-Level Batching
- */
-export function createMockQueueBatchItem(overrides: Partial<QueueBatchItem> = {}): QueueBatchItem {
-  return {
-    issueNumber: 799,
-    title: "Epic #799 — 3 issues (batch)",
-    position: 1,
-    status: "pending",
-    addedAt: new Date().toISOString(),
-    isBatch: true,
-    epicNumber: 799,
-    issueNumbers: [800, 801, 802],
-    batchStrategy: "batch" as BatchStrategy,
-    groups: [
-      {
-        issueNumbers: [800, 801, 802],
-        groupReason: "High file overlap enables batching",
-        sharedFiles: ["src/services/Pipeline.ts"],
-        estimatedTokens: 90000,
-      },
-    ] as IssueGroup[],
-    estimatedSavings: {
-      tokensSaved: 100000,
-      costUsd: 0.66,
-      runsReduced: 2,
-    },
-    ...overrides,
-  };
 }

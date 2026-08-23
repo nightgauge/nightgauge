@@ -16,7 +16,7 @@ import { isIssueJsonPath } from "../helpers/issueFilePredicates";
 // ---------------------------------------------------------------------------
 
 vi.mock("vscode", () => {
-  const EventEmitter = vi.fn(function () {
+  const EventEmitter = vi.fn(function (this: Record<string, unknown>) {
     return {
       event: vi.fn(),
       fire: vi.fn(),
@@ -26,14 +26,18 @@ vi.mock("vscode", () => {
   return {
     EventEmitter,
     TreeItemCollapsibleState: { None: 0, Collapsed: 1, Expanded: 2 },
-    TreeItem: vi.fn(function (label: string, collapsibleState: number) {
+    TreeItem: vi.fn(function (
+      this: Record<string, unknown>,
+      label: string,
+      collapsibleState: number
+    ) {
       this.label = label;
       this.collapsibleState = collapsibleState;
     }),
-    ThemeIcon: vi.fn(function (id: string) {
+    ThemeIcon: vi.fn(function (this: Record<string, unknown>, id: string) {
       this.id = id;
     }),
-    ThemeColor: vi.fn(function (id: string) {
+    ThemeColor: vi.fn(function (this: Record<string, unknown>, id: string) {
       this.id = id;
     }),
     Uri: {
@@ -47,7 +51,7 @@ vi.mock("vscode", () => {
         dispose: vi.fn(),
       })),
     },
-    RelativePattern: vi.fn(function (base: string, pattern: string) {
+    RelativePattern: vi.fn(function (this: Record<string, unknown>, base: string, pattern: string) {
       this.base = base;
       this.pattern = pattern;
     }),

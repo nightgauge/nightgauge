@@ -47,21 +47,6 @@ vi.mock("fs", () => ({
   readFileSync: vi.fn(),
 }));
 
-// Create mock process factory
-function createMockChildProcess(): ChildProcess {
-  const proc = new EventEmitter() as ChildProcess;
-  proc.stdout = new EventEmitter() as NodeJS.ReadableStream;
-  proc.stderr = new EventEmitter() as NodeJS.ReadableStream;
-  proc.stdin = {
-    write: vi.fn(),
-    end: vi.fn(),
-    destroyed: false,
-  } as unknown as NodeJS.WritableStream;
-  proc.kill = vi.fn();
-  proc.killed = false;
-  return proc;
-}
-
 // Mock child_process module
 vi.mock("child_process", async () => {
   // Since #79 the extension composes no skill text of its own: it shells out
@@ -194,6 +179,7 @@ import {
   getGitHubAuthTokens,
   getGitHubUser,
 } from "../../src/utils/incrediConfig";
+import { createMockChildProcess } from "../mocks/child-process";
 
 // Reinstall the `skill render` stub before every test. Vitest 4's
 // restoreAllMocks() — which several describes below call in afterEach — clears

@@ -51,20 +51,6 @@ vi.mock("fs", () => ({
   rmSync: vi.fn(),
 }));
 
-function createMockChildProcess(): ChildProcess {
-  const proc = new EventEmitter() as ChildProcess;
-  proc.stdout = new EventEmitter() as NodeJS.ReadableStream;
-  proc.stderr = new EventEmitter() as NodeJS.ReadableStream;
-  proc.stdin = {
-    write: vi.fn(),
-    end: vi.fn(),
-    destroyed: false,
-  } as unknown as NodeJS.WritableStream;
-  proc.kill = vi.fn();
-  proc.killed = false;
-  return proc;
-}
-
 vi.mock("child_process", async () => {
   const { isSkillRenderCall, skillRenderStdout } = await import("../helpers/skillRender");
   return {
@@ -171,6 +157,7 @@ vi.mock("../../src/services/RepositoryContextLoader", () => ({
 import { runStageSkillHeadless } from "../../src/utils/skillRunner";
 import { resolveStageAdapter } from "../../src/utils/resolvers/adapterResolver";
 import { getStageMcpTools, getMcpToolsConfig } from "../../src/utils/incrediConfig";
+import { createMockChildProcess } from "../mocks/child-process";
 
 describe("Mixed-adapter pipeline (Issue #3223)", () => {
   beforeEach(() => {

@@ -52,20 +52,6 @@ allowed-tools: Read Write Edit Bash
   ),
 }));
 
-function createMockChildProcess(): ChildProcess {
-  const proc = new EventEmitter() as ChildProcess;
-  proc.stdout = new EventEmitter() as any;
-  proc.stderr = new EventEmitter() as any;
-  proc.stdin = {
-    write: vi.fn(),
-    end: vi.fn(),
-    destroyed: false,
-  } as any;
-  proc.kill = vi.fn();
-  proc.killed = false;
-  return proc;
-}
-
 vi.mock("child_process", async () => {
   // Since #79 the extension composes no skill text of its own: it shells out
   // to `nightgauge skill render`. Answer that one call with the shared
@@ -90,6 +76,7 @@ vi.mock("child_process", async () => {
 });
 
 import { runStageSkillHeadless, resumeSessionWithResponse } from "../../src/utils/skillRunner";
+import { createMockChildProcess } from "../mocks/child-process";
 
 describe("skillRunner — tool call observation across delivery shapes (#169)", () => {
   let mockProcess: ChildProcess;

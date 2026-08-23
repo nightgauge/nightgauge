@@ -101,6 +101,7 @@ vi.mock("../../src/services/RepositoryContextLoader", () => ({
 }));
 
 import { runStageSkillHeadless } from "../../src/utils/skillRunner";
+import { createMockChildProcess } from "../mocks/child-process";
 
 const MOCK_SKILL_CONTENT = `---
 name: test-skill
@@ -110,20 +111,6 @@ allowed-tools: Read Write Edit
 
 Test content.
 `;
-
-function createMockChildProcess(): ChildProcess {
-  const proc = new EventEmitter() as ChildProcess;
-  proc.stdout = new EventEmitter() as NodeJS.ReadableStream;
-  proc.stderr = new EventEmitter() as NodeJS.ReadableStream;
-  proc.stdin = {
-    write: vi.fn(),
-    end: vi.fn(),
-    destroyed: false,
-  } as unknown as NodeJS.WritableStream;
-  proc.kill = vi.fn();
-  proc.killed = false;
-  return proc;
-}
 
 function setExistsForGrok() {
   vi.mocked(fs.existsSync).mockImplementation((p: unknown) => {
