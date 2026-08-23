@@ -3493,6 +3493,7 @@ export class Dashboard implements vscode.Disposable {
     const loading: RetentionIntegrityData = {
       retentionConfig: this.retentionIntegrityData?.retentionConfig ?? null,
       integrityResult: this.retentionIntegrityData?.integrityResult ?? null,
+      verifiedWindowDays: this.retentionIntegrityData?.verifiedWindowDays ?? null,
       isLoading: true,
       isVerifying: this.retentionIntegrityData?.isVerifying ?? false,
       hasAccess: this.retentionIntegrityData?.hasAccess ?? true,
@@ -3504,6 +3505,7 @@ export class Dashboard implements vscode.Disposable {
       this.retentionIntegrityData = {
         retentionConfig: config,
         integrityResult: this.retentionIntegrityData?.integrityResult ?? null,
+        verifiedWindowDays: this.retentionIntegrityData?.verifiedWindowDays ?? null,
         isLoading: false,
         isVerifying: false,
         hasAccess: true,
@@ -3513,6 +3515,7 @@ export class Dashboard implements vscode.Disposable {
       this.retentionIntegrityData = {
         retentionConfig: null,
         integrityResult: null,
+        verifiedWindowDays: null,
         isLoading: false,
         isVerifying: false,
         // Only a genuine plan gate hides the panel entirely; every other
@@ -3620,6 +3623,7 @@ export class Dashboard implements vscode.Disposable {
         this.retentionIntegrityData = {
           ...this.retentionIntegrityData,
           integrityResult: result,
+          verifiedWindowDays: windowDays,
           isVerifying: false,
           errorMessage: undefined,
         };

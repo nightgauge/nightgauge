@@ -4387,6 +4387,13 @@ exports[`getDashboardHtml snapshots (Issue #1242) > active pipeline state — cu
       font-size: 0.85em;
     }
 
+    .integrity-broken-links {
+      margin: var(--spacing-sm) 0 0;
+      padding-left: 1.4em;
+      font-size: 0.85em;
+      color: var(--vscode-descriptionForeground);
+    }
+
     .retention-no-access {
       margin-top: var(--spacing-lg, 24px);
       padding: var(--spacing-md);
@@ -11210,6 +11217,13 @@ exports[`getDashboardHtml snapshots (Issue #1242) > completed run with tool call
       color: rgba(255, 99, 132, 1);
       font-weight: 600;
       font-size: 0.85em;
+    }
+
+    .integrity-broken-links {
+      margin: var(--spacing-sm) 0 0;
+      padding-left: 1.4em;
+      font-size: 0.85em;
+      color: var(--vscode-descriptionForeground);
     }
 
     .retention-no-access {
@@ -18085,6 +18099,13 @@ exports[`getDashboardHtml snapshots (Issue #1242) > empty state — no current r
       font-size: 0.85em;
     }
 
+    .integrity-broken-links {
+      margin: var(--spacing-sm) 0 0;
+      padding-left: 1.4em;
+      font-size: 0.85em;
+      color: var(--vscode-descriptionForeground);
+    }
+
     .retention-no-access {
       margin-top: var(--spacing-lg, 24px);
       padding: var(--spacing-md);
@@ -24801,6 +24822,13 @@ exports[`getDashboardHtml snapshots (Issue #1242) > pagination controls rendered
       color: rgba(255, 99, 132, 1);
       font-weight: 600;
       font-size: 0.85em;
+    }
+
+    .integrity-broken-links {
+      margin: var(--spacing-sm) 0 0;
+      padding-left: 1.4em;
+      font-size: 0.85em;
+      color: var(--vscode-descriptionForeground);
     }
 
     .retention-no-access {

@@ -426,6 +426,13 @@ export type { ComplianceReportEntry } from "../../services/IpcClientBase";
 export interface RetentionIntegrityData {
   retentionConfig: import("../../services/IpcClientBase").RetentionConfig | null;
   integrityResult: import("../../services/IpcClientBase").IntegrityResult | null;
+  /** The window the operator asked `integrityResult` for, in days.
+   *
+   * Client-owned: the route takes a start/end instant pair and returns no
+   * window at all, so the only honest source for "over the last 30 days" is
+   * the button that was pressed. The panel used to read a `windowDays` off the
+   * response, which the platform has never sent (#822). */
+  verifiedWindowDays: number | null;
   isLoading: boolean;
   isVerifying: boolean;
   /** false only when the platform reported `forbidden` for this endpoint (#748). */

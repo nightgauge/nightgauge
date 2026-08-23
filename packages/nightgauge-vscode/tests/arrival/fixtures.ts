@@ -98,6 +98,8 @@ export const arrivalFixtures = {
   costAnalytics: () => loadFixture<Record<string, unknown>>("platform/cost-analytics.json"),
   /** platform.auditListReports → Compliance tab */
   complianceReports: () => loadFixture<Record<string, unknown>>("platform/compliance-reports.json"),
+  /** audit.verifyIntegrity → Audit tab's Retention & Integrity panel */
+  auditIntegrity: () => loadFixture<Record<string, unknown>>("platform/audit-integrity.json"),
   /** platform.getUsageSummary → Overview tab quota panel */
   usageSummary: () => loadFixture<Record<string, unknown>>("platform/usage-summary.json"),
   /** GET /v1/audit-log (HTTPS + session JWT) → Audit tab */

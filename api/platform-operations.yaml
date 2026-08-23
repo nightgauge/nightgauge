@@ -125,18 +125,17 @@ operations:
     security: pipeline
     upstream: declared
 
-  # DRIFT: the platform mounts audit integrity at POST /v1/audit/integrity
-  # (routes/audit-integrity.ts `app.post('/')` under `app.route('/v1/audit/
-  # integrity', ...)`). This binary calls /v1/audit/integrity/verify, which the
-  # document does not declare. The path is transcribed as-is rather than
-  # "corrected" here: changing the URL is a behaviour change that belongs in
-  # its own issue, and recording the drift is what makes it visible at all.
+  # Was DRIFT until #822: this binary called /v1/audit/integrity/verify, a path
+  # the platform never mounted (routes/audit-integrity.ts is `app.post('/')`
+  # under `app.route('/v1/audit/integrity', ...)`). The call now uses the
+  # mounted path and the operation is declared upstream, so the entry no longer
+  # carries `upstream: undeclared` — that deletion is the acknowledgement.
   - id: audit.verifyIntegrity
     go_name: OpAuditIntegrityVerify
     method: POST
-    path: /v1/audit/integrity/verify
+    path: /v1/audit/integrity
     security: user_jwt
-    upstream: undeclared
+    upstream: declared
 
   - id: audit.getRetentionConfig
     go_name: OpAuditRetentionGet

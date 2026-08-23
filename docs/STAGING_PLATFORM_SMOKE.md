@@ -23,19 +23,19 @@ for the full rationale.
 Sourced directly from `internal/platform/*.go` (the Go daemon's own platform
 client) — not guessed:
 
-| Surface                             | Method + path                     | Source                                               |
-| ----------------------------------- | --------------------------------- | ---------------------------------------------------- |
-| Agent registration                  | `POST /v1/agents/register`        | `internal/platform/agent_registration.go`            |
-| Agent heartbeat                     | `PUT /v1/agents/:id/heartbeat`    | `internal/platform/agent_registration.go`            |
-| Analytics dashboard / usage summary | `GET /v1/analytics/dashboard`     | `internal/platform/analytics.go` (`GetUsageSummary`) |
-| Analytics health                    | `GET /v1/analytics/health`        | `internal/platform/analytics.go`                     |
-| Analytics runs                      | `GET /v1/analytics/runs`          | `internal/platform/analytics.go`                     |
-| Analytics trends                    | `GET /v1/analytics/trends`        | `internal/platform/analytics.go`                     |
-| Analytics cost                      | `GET /v1/analytics/cost`          | `internal/platform/analytics.go`                     |
-| Audit reports                       | `GET /v1/audit/reports`           | `internal/platform/compliance.go`                    |
-| Audit log retention config          | `GET /v1/audit/retention`         | `internal/platform/audit_retention.go`               |
-| Audit integrity verification        | `POST /v1/audit/integrity/verify` | `internal/platform/audit_retention.go`               |
-| Attention (Action Center) sync      | `PUT /v1/attention/sync`          | `internal/platform/attention_sync.go`                |
+| Surface                             | Method + path                  | Source                                               |
+| ----------------------------------- | ------------------------------ | ---------------------------------------------------- |
+| Agent registration                  | `POST /v1/agents/register`     | `internal/platform/agent_registration.go`            |
+| Agent heartbeat                     | `PUT /v1/agents/:id/heartbeat` | `internal/platform/agent_registration.go`            |
+| Analytics dashboard / usage summary | `GET /v1/analytics/dashboard`  | `internal/platform/analytics.go` (`GetUsageSummary`) |
+| Analytics health                    | `GET /v1/analytics/health`     | `internal/platform/analytics.go`                     |
+| Analytics runs                      | `GET /v1/analytics/runs`       | `internal/platform/analytics.go`                     |
+| Analytics trends                    | `GET /v1/analytics/trends`     | `internal/platform/analytics.go`                     |
+| Analytics cost                      | `GET /v1/analytics/cost`       | `internal/platform/analytics.go`                     |
+| Audit reports                       | `GET /v1/audit/reports`        | `internal/platform/compliance.go`                    |
+| Audit log retention config          | `GET /v1/audit/retention`      | `internal/platform/audit_retention.go`               |
+| Audit integrity verification        | `POST /v1/audit/integrity`     | `internal/platform/audit_retention.go`               |
+| Attention (Action Center) sync      | `PUT /v1/attention/sync`       | `internal/platform/attention_sync.go`                |
 
 Any endpoint here that starts accepting an extra parameter, moving to a new
 path, or a new platform-backed surface being added to `internal/platform/`
@@ -60,7 +60,7 @@ original incident). Every other non-2xx status is also a failure, just not
 called out with the same urgency.
 
 **Caveat — plan-gated endpoints.** `GET /v1/audit/retention` and
-`POST /v1/audit/integrity/verify` are intentionally **enterprise-plan-gated**
+`POST /v1/audit/integrity` are intentionally **enterprise-plan-gated**
 on the platform (see `internal/platform/audit_retention.go`): a non-enterprise
 account gets a 403 by product design, not by bug. This script does not
 special-case that 403 away — the whole point of this canary is that a 403 is
@@ -175,6 +175,18 @@ dimensions}` the Health tab used to decode) fails the run as
   answers with the account's newest 50 rows. The old probe sent `?limit=1` and
   asserted status only, so it stayed green while the Compliance tab rendered
   "no reports" for an account that had them.
+
+- A `200` on `POST /v1/audit/integrity` carrying the pre-#822 client-side
+  belief (`windowDays`, `message` and `checkedAt` alongside `valid` and
+  `checkedCount`) fails the run. The route returns `valid`, `checkedCount` and
+  `brokenLinks`, and has never sent the other three.
+- Probing the old `/v1/audit/integrity/verify` path fails the run. Until #822
+  that is what this script sent, with a `{windowDays: 30}` body the route's
+  schema rejects — neither could ever have returned a useful 2xx. Nothing here
+  caught it because this workflow has never been dispatched against a real
+  staging deployment with real secrets (see the caveat at the end of this
+  section); against the mock, an unmapped path answers an empty `200`, which a
+  status-only probe called `PASS`. The shape assertion is what makes it red.
 
 - A missing `STAGING_SESSION_TOKEN` or `STAGING_PLATFORM_BASE_URL` fails
   immediately, before any HTTP call is attempted (the mock server sees zero

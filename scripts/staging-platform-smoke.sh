@@ -38,7 +38,7 @@
 #
 # The dedicated staging account MUST be on a plan tier that has access to
 # EVERY surface under test. Two routes — GET /v1/audit/retention and
-# POST /v1/audit/integrity/verify — are intentionally enterprise-plan-gated on
+# POST /v1/audit/integrity — are intentionally enterprise-plan-gated on
 # the platform (see internal/platform/audit_retention.go: both return 403 with
 # "enterprise only" for a non-enterprise account, by product design, not by
 # bug). This script does not special-case that 403 away, on purpose: the whole
@@ -264,8 +264,21 @@ call GET "/v1/analytics/cost?startDate=${COST_START}&endDate=${COST_END}" \
 call GET "/v1/audit/reports" "Audit reports"
 assert_object_keys "Audit reports" items
 call GET "/v1/audit/retention" "Audit log retention config"
-call POST "/v1/audit/integrity/verify" "Audit integrity verify" \
-  "$(jq -nc '{windowDays: 30}')"
+# The Retention & Integrity panel's verify buttons. Until #822 this probe sent
+# {windowDays: 30} to /v1/audit/integrity/verify — a path the platform has never
+# mounted, with a body its schema has never accepted. Neither could ever have
+# returned a useful 2xx; it went unnoticed because this workflow has never run
+# against a real staging deployment. Send what the client sends: the mounted
+# path, and the RFC 3339 bounds VerifyIntegritySchema requires.
+INTEGRITY_START="$(date -u -v-30d '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || date -u -d '30 days ago' '+%Y-%m-%dT%H:%M:%SZ')"
+INTEGRITY_END="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+call POST "/v1/audit/integrity" "Audit integrity verify" \
+  "$(jq -nc --arg s "$INTEGRITY_START" --arg e "$INTEGRITY_END" \
+    '{startDate: $s, endDate: $e}')"
+# The keys internal/platform.IntegrityResult decodes, taken from the route.
+# A status-only probe cannot see the response-shape half of #822: the client
+# decoded windowDays/message/checkedAt, which this endpoint has never sent.
+assert_object_keys "Audit integrity verify" valid checkedCount brokenLinks
 
 # --- Attention Center sync ----------------------------------------------------
 # agent_id is omitted (not sent as an empty string) when registration above

@@ -793,3 +793,68 @@ describe("arrival: Compliance tab (platform.auditListReports)", () => {
     expect(tabText("compliance").toLowerCase()).not.toContain("soc2");
   });
 });
+
+// ---------------------------------------------------------------------------
+// arrival:integrity — the Retention & Integrity panel's verify buttons (#822)
+//
+// The half no renderer test can see: the window the operator pressed is
+// client-owned state that has to survive the round trip, because the route
+// returns no window at all. Before #822 the panel read a `windowDays` off the
+// response and the response has never carried one — so a verification that
+// reached the route would have rendered "over last 0 days" — and the request
+// went to a path the platform does not mount, so none ever did.
+// ---------------------------------------------------------------------------
+describe("arrival: Retention & Integrity verify (audit.verifyIntegrity)", () => {
+  async function verifyPanel(windowDays: number) {
+    ipcStub.auditGetRetentionConfig.mockResolvedValue({
+      retentionDays: 730,
+      updatedAt: "2026-06-01T00:00:00Z",
+    });
+    ipcStub.auditVerifyIntegrity.mockResolvedValue(arrivalFixtures.auditIntegrity());
+    // getAuditTabHtml returns a loading placeholder INSTEAD of the whole tab —
+    // retention panel included — while the audit log is in flight. That log is
+    // HTTPS, not IPC, and has its own arrival coverage in
+    // dashboardExternalTabs.test.ts; park it in a settled empty state so this
+    // test is about the integrity payload and nothing else.
+    (dashboard as unknown as { auditLogData: unknown }).auditLogData = {
+      entries: [],
+      filters: { dateFrom: "", dateTo: "", actionFilter: "", userFilter: "" },
+      pagination: { page: 0, pageSize: 20, totalCount: 0, hasPrevPage: false, hasNextPage: false },
+      isLoading: false,
+      hasAccess: true,
+    };
+    const panel = capturedPanels.at(-1);
+    if (!panel) throw new Error("arrival harness: no captured dashboard panel");
+
+    await panel.dispatchMessage({ type: "selectTab", tab: "audit" });
+    await vi.waitFor(() => expect(ipcStub.auditGetRetentionConfig).toHaveBeenCalled());
+    await panel.dispatchMessage({ type: "retentionVerifyIntegrity", windowDays });
+    await vi.waitFor(() => expect(ipcStub.auditVerifyIntegrity).toHaveBeenCalled());
+    return panel;
+  }
+
+  it("reaches a populated state from a recorded IPC response", async () => {
+    await verifyPanel(90);
+
+    expect(ipcStub.auditVerifyIntegrity).toHaveBeenCalledWith(90);
+
+    const text = tabText("audit");
+    expect(text).toContain("✗ Invalid");
+    expect(text).toContain("1284 entries checked");
+    // The broken links are the finding; the old panel decoded a `message` the
+    // route never sends and dropped these on the floor.
+    expect(text).toContain("aud_01J8QK7F4E5R2M9ZCV");
+    expect(text).toContain("position 417");
+  });
+
+  it("renders the window the operator pressed, which the response does not carry", async () => {
+    await verifyPanel(365);
+
+    const text = tabText("audit");
+    expect(text).toContain("over last 365 days");
+    // The fixture IS the wire payload, so this is the assertion that the panel
+    // is not reading a window off it.
+    expect(Object.keys(arrivalFixtures.auditIntegrity())).not.toContain("windowDays");
+    expect(text).not.toContain("over last 0 days");
+  });
+});

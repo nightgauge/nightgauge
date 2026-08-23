@@ -48,13 +48,14 @@ function makeRetentionConfig(overrides: Partial<RetentionConfig> = {}): Retentio
   return { retentionDays: 730, updatedAt: "2026-01-01T00:00:00Z", ...overrides };
 }
 
+// The three fields POST /v1/audit/integrity returns, copied from
+// audit-integrity.test.ts. windowDays/message/checkedAt used to be here and
+// the route has never sent any of them (#822).
 function makeIntegrityResult(overrides: Partial<IntegrityResult> = {}): IntegrityResult {
   return {
     valid: true,
     checkedCount: 500,
-    windowDays: 30,
-    message: "All entries valid",
-    checkedAt: "2026-05-01T00:00:00Z",
+    brokenLinks: [],
     ...overrides,
   };
 }
@@ -65,6 +66,7 @@ function makeRetentionData(
   return {
     retentionConfig: makeRetentionConfig(),
     integrityResult: null,
+    verifiedWindowDays: null,
     isLoading: false,
     isVerifying: false,
     hasAccess: true,
@@ -122,16 +124,55 @@ describe("Retention & Integrity Panel", () => {
     expect(html).toContain("500 entries");
   });
 
-  it("7. invalid integrity result badge rendered", () => {
+  it("7. invalid integrity result badge rendered, with the broken links named", () => {
     const html = getAuditTabHtml(
       makeAuditData(),
       makeRetentionData({
-        integrityResult: makeIntegrityResult({ valid: false, message: "Hash mismatch detected" }),
+        integrityResult: makeIntegrityResult({
+          valid: false,
+          brokenLinks: [{ entryId: "entry-7", position: 7 }],
+        }),
       })
     );
     expect(html).toContain("integrity-result-invalid");
     expect(html).toContain("✗ Invalid");
-    expect(html).toContain("Hash mismatch detected");
+    // brokenLinks is the finding the endpoint exists to report; the panel
+    // decoded a `message` that was never sent and dropped this entirely (#822).
+    expect(html).toContain("entry-7");
+    expect(html).toContain("position 7");
+  });
+
+  it("7b. the window comes from the button pressed, not from the response", () => {
+    const withWindow = getAuditTabHtml(
+      makeAuditData(),
+      makeRetentionData({ integrityResult: makeIntegrityResult(), verifiedWindowDays: 90 })
+    );
+    expect(withWindow).toContain("over last 90 days");
+
+    // No window recorded → the panel says nothing about one. It must never
+    // reach for a windowDays on the result: the route does not send one, so
+    // the old code rendered "over last 0 days" on every verification (#822).
+    const withoutWindow = getAuditTabHtml(
+      makeAuditData(),
+      makeRetentionData({ integrityResult: makeIntegrityResult() })
+    );
+    expect(withoutWindow).toContain("500 entries checked");
+    expect(withoutWindow).not.toContain("over last");
+    expect(withoutWindow).not.toContain("Checked at:");
+  });
+
+  it("7c. XSS: a broken link's entry id is escaped", () => {
+    const html = getAuditTabHtml(
+      makeAuditData(),
+      makeRetentionData({
+        integrityResult: makeIntegrityResult({
+          valid: false,
+          brokenLinks: [{ entryId: '<img src=x onerror="alert(1)">', position: 1 }],
+        }),
+      })
+    );
+    expect(html).not.toContain("<img src=x");
+    expect(html).toContain("&lt;img src=x");
   });
 
   it("8. isVerifying=true — buttons disabled, spinner visible", () => {
