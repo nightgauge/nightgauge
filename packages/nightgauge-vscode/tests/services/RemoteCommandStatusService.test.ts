@@ -34,6 +34,7 @@ import type {
   RemoteGetCommandHistoryResult,
   RemotePollingStatus,
 } from "../../src/services/IpcClientBase";
+import type { ConfigBridge } from "../../src/services/ConfigBridge";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -74,14 +75,21 @@ function makeIpcClient(
   };
 }
 
-function makeConfigBridge(notifyOnPipelineRun: boolean) {
+/**
+ * RemoteCommandStatusService reads exactly one thing off the bridge:
+ * `getEffectiveConfig().config.remote.notifyOnPipelineRun`. `ConfigBridge` is
+ * a class with private members, so no object literal can structurally satisfy
+ * it however complete — the cast is stated once here rather than inferred
+ * silently at eight call sites, which is what the tree did before #499.
+ */
+function makeConfigBridge(notifyOnPipelineRun: boolean): ConfigBridge {
   return {
     getEffectiveConfig: () => ({
       config: {
         remote: { notifyOnPipelineRun },
       },
     }),
-  };
+  } as unknown as ConfigBridge;
 }
 
 // ---------------------------------------------------------------------------

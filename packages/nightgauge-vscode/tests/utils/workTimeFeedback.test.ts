@@ -25,7 +25,6 @@ import type { PipelineStage } from "@nightgauge/sdk";
 describe("calculateWorkTime", () => {
   it("should sum duration_ms for all completed stages", () => {
     const state: PipelineState = {
-      schema_version: "1.0",
       issue_number: 310,
       title: "Test Issue",
       branch: "feat/310-test",
@@ -79,6 +78,8 @@ describe("calculateWorkTime", () => {
         },
       },
       tokens: {
+        input: 8000,
+        output: 5000,
         total_input: 10000,
         total_output: 5000,
         total_cache_read: 2000,
@@ -95,7 +96,6 @@ describe("calculateWorkTime", () => {
 
   it("should return 0 when no stages are complete", () => {
     const state: PipelineState = {
-      schema_version: "1.0",
       issue_number: 310,
       title: "Test Issue",
       branch: "feat/310-test",
@@ -115,6 +115,8 @@ describe("calculateWorkTime", () => {
         "pipeline-finish": { status: "pending" },
       },
       tokens: {
+        input: 0,
+        output: 0,
         total_input: 0,
         total_output: 0,
         total_cache_read: 0,
@@ -128,7 +130,6 @@ describe("calculateWorkTime", () => {
 
   it("should exclude failed and skipped stages", () => {
     const state: PipelineState = {
-      schema_version: "1.0",
       issue_number: 310,
       title: "Test Issue",
       branch: "feat/310-test",
@@ -165,6 +166,8 @@ describe("calculateWorkTime", () => {
         "pipeline-finish": { status: "pending" },
       },
       tokens: {
+        input: 8000,
+        output: 5000,
         total_input: 10000,
         total_output: 5000,
         total_cache_read: 2000,
@@ -181,7 +184,6 @@ describe("calculateWorkTime", () => {
 
   it("should skip stages with missing duration_ms", () => {
     const state: PipelineState = {
-      schema_version: "1.0",
       issue_number: 310,
       title: "Test Issue",
       branch: "feat/310-test",
@@ -213,6 +215,8 @@ describe("calculateWorkTime", () => {
         "pipeline-finish": { status: "pending" },
       },
       tokens: {
+        input: 8000,
+        output: 5000,
         total_input: 10000,
         total_output: 5000,
         total_cache_read: 2000,
@@ -231,7 +235,6 @@ describe("calculateWorkTime", () => {
 describe("getCompletedStages", () => {
   it("should return only completed stages", () => {
     const state: PipelineState = {
-      schema_version: "1.0",
       issue_number: 310,
       title: "Test Issue",
       branch: "feat/310-test",
@@ -251,6 +254,8 @@ describe("getCompletedStages", () => {
         "pipeline-finish": { status: "pending" },
       },
       tokens: {
+        input: 0,
+        output: 0,
         total_input: 0,
         total_output: 0,
         total_cache_read: 0,
@@ -266,7 +271,6 @@ describe("getCompletedStages", () => {
 
   it("should return empty array when no stages complete", () => {
     const state: PipelineState = {
-      schema_version: "1.0",
       issue_number: 310,
       title: "Test Issue",
       branch: "feat/310-test",
@@ -286,6 +290,8 @@ describe("getCompletedStages", () => {
         "pipeline-finish": { status: "pending" },
       },
       tokens: {
+        input: 0,
+        output: 0,
         total_input: 0,
         total_output: 0,
         total_cache_read: 0,
@@ -301,7 +307,6 @@ describe("getCompletedStages", () => {
 describe("createObservation", () => {
   it("should create observation with all fields", () => {
     const state: PipelineState = {
-      schema_version: "1.0",
       issue_number: 310,
       title: "Test Issue",
       branch: "feat/310-test",
@@ -321,6 +326,8 @@ describe("createObservation", () => {
         "pipeline-finish": { status: "complete", duration_ms: 10000 },
       },
       tokens: {
+        input: 8000,
+        output: 5000,
         total_input: 10000,
         total_output: 5000,
         total_cache_read: 2000,
@@ -350,7 +357,6 @@ describe("createObservation", () => {
 
   it("should handle null/undefined optional fields", () => {
     const state: PipelineState = {
-      schema_version: "1.0",
       issue_number: 310,
       title: "Test Issue",
       branch: "feat/310-test",
@@ -370,6 +376,8 @@ describe("createObservation", () => {
         "pipeline-finish": { status: "pending" },
       },
       tokens: {
+        input: 0,
+        output: 0,
         total_input: 0,
         total_output: 0,
         total_cache_read: 0,
