@@ -489,6 +489,68 @@ expect_exit 1 "self-qualified nightgauge/nightgauge#4500 is rejected"
 git rm --cached -q "$PLANTED" 2>/dev/null
 rm -f "$PLANTED"
 
+# ── Tree-wide burn-down ratchet (ADR-005 0.3) ───────────────────────────────
+# The diff-scoped rule above answers "did this change introduce one?". The
+# ratchet answers "how many are there?" and forbids the number rising. Before
+# it existed the tree-wide count had never been measured -- the guard printed
+# "clean" while docs/ADAPTER_MATRIX.md carried #2595 against a mark of 789.
+cp "$BACKUP" "$MANIFEST"
+python3 - "$MANIFEST" <<'PYRATCHET'
+import re, sys
+p = sys.argv[1]
+s = open(p).read()
+s = re.sub(r"^  tree_baseline: \d+$", "  tree_baseline: 0", s, count=1, flags=re.M)
+open(p, "w").write(s)
+PYRATCHET
+expect_exit 1 "tree-wide count above the recorded baseline fails the build (ratchet)"
+cp "$BACKUP" "$MANIFEST"
+
+python3 - "$MANIFEST" <<'PYNOBASE'
+import re, sys
+p = sys.argv[1]
+s = open(p).read()
+s = re.sub(r"^  tree_baseline: \d+\n", "", s, count=1, flags=re.M)
+open(p, "w").write(s)
+PYNOBASE
+expect_exit 2 "a missing tree_baseline fails CLOSED, not open"
+cp "$BACKUP" "$MANIFEST"
+
+# ── Pre-existing references are carried over, not charged (#822) ────────────
+# Editing a line that already carried a dead number is not the introduction of
+# a dead number. Without this, 6,257 pre-existing references become a toll on
+# every future edit that lands near one -- which is what #822 actually paid.
+CARRY="internal/ipc/protocol.go"
+if grep -q '#3323' "$CARRY"; then
+  cp "$CARRY" "$CARRY.bak"
+  # Rewrite the line in place: the diff reports it as ADDED, and the number is
+  # present in the same file at base.
+  python3 - "$CARRY" <<'PYCARRY'
+import sys
+p = sys.argv[1]
+lines = open(p).readlines()
+for i, l in enumerate(lines):
+    if "#3323" in l:
+        lines[i] = l.rstrip("\n") + "  // reflowed\n"
+        break
+open(p, "w").write("".join(lines))
+PYCARRY
+  expect_exit 0 "a pre-existing reference on an EDITED line is carried over, not charged"
+  mv "$CARRY.bak" "$CARRY"
+else
+  printf '  \033[33m-\033[0m carry-over case skipped: no #3323 fixture in %s\n' "$CARRY"
+fi
+
+# A number that is NOT in the base version of the file it appears on is still
+# newly introduced, even in a file that carries other dead references. The
+# carry-over exemption is per-number, not per-file -- a per-file exemption would
+# make any file with one dead reference a permanent free pass.
+if [ -f "$CARRY" ]; then
+  cp "$CARRY" "$CARRY.bak"
+  printf '\n// unrelated: superseded by #7777\n' >> "$CARRY"
+  expect_exit 1 "a NEW dead reference in a file that already has one is still rejected"
+  mv "$CARRY.bak" "$CARRY"
+fi
+
 # ── ...and the false positives that would make it unusable ──────────────────
 # A guard that cries wolf gets disabled, so each exclusion is proven, not
 # assumed. These are the classes measured on the real tree in #673.

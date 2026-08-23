@@ -160,6 +160,58 @@ def unresolvable_refs(line: str, ceiling: int):
             yield n, m.group(0)
 
 
+def _file_unresolvable_numbers(text: str, ceiling: int) -> set[int]:
+    """Every unresolvable #N appearing anywhere in `text`."""
+    out: set[int] = set()
+    for line in text.splitlines():
+        for num, _ in unresolvable_refs(line, ceiling):
+            out.add(num)
+    return out
+
+
+def base_file_numbers(base: str, path: str, ceiling: int) -> set[int]:
+    """Unresolvable #N present in `path` AS OF `base`.
+
+    This is what separates "you wrote a dead reference" from "you edited a line
+    that already carried one". Touching a doc-comment whose text contains a
+    pre-existing dead number is not the introduction of a dead number, and
+    failing the build for it turns 9,003 pre-existing references into a toll on
+    every future edit that happens to land near one (#822 paid it).
+
+    A file that did not exist at `base` yields the empty set, so every reference
+    in a genuinely new file is genuinely new.
+    """
+    r = subprocess.run(
+        ["git", "show", f"{base}:{path}"], capture_output=True
+    )
+    if r.returncode != 0:
+        return set()
+    try:
+        return _file_unresolvable_numbers(r.stdout.decode("utf-8", "replace"), ceiling)
+    except Exception:
+        return set()
+
+
+def tree_unresolvable_refs(paths: list[str], ceiling: int, exempt: list[str]):
+    """Yield (path, lineno, number, token) for every unresolvable ref in the TREE.
+
+    The diff-scoped rule above answers "did this change introduce one?". This
+    answers "how many are there?", which is the question a burn-down needs and
+    the one the guard could not previously ask -- docs/ADAPTER_MATRIX.md carried
+    `#2595` against a high-water mark of 789 and the guard reported clean.
+    """
+    for path in paths:
+        if any(matches(path, e) for e in exempt):
+            continue
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                for lineno, line in enumerate(fh, 1):
+                    for num, token in unresolvable_refs(line, ceiling):
+                        yield path, lineno, num, token
+        except (UnicodeDecodeError, OSError):
+            continue  # binary or unreadable: not prose, not a citation
+
+
 def _rev_ok(ref: str) -> bool:
     return (
         subprocess.run(
@@ -444,10 +496,21 @@ def main() -> int:
     # so it covers staged-new files but never untracked ones. Their lines are
     # appended explicitly -- every line of a new file is an added line.
     added = list(added_lines(base)) + list(untracked_added_lines(untracked))
+    # Cache per path: `git show base:path` once, not once per matching line.
+    _base_nums: dict[str, set[int]] = {}
+    carried_over = 0
     for p, n, line in added:
         if any(matches(p, e) for e in ref_exempt):
             continue
         for num, token in unresolvable_refs(line, ceiling):
+            if p not in _base_nums:
+                _base_nums[p] = base_file_numbers(base, p, ceiling)
+            if num in _base_nums[p]:
+                # Pre-existing in this same file at base: the edit moved or
+                # rewrapped a line that already carried it. Counted in the
+                # tree-wide burn-down below, not charged to this change.
+                carried_over += 1
+                continue
             violations.append(
                 f"UNRESOLVABLE ISSUE REFERENCE: {p}:{n}{untracked_note(p)}\n"
                 f"    {token} is above this repository's high-water mark "
@@ -457,6 +520,41 @@ def main() -> int:
                 f"    now -- bump issue_references.high_water_mark in {MANIFEST}.\n"
                 f"    (measured against {base_ref} @ {base[:12]})"
             )
+
+    # ── 3d. Unresolvable issue references, TREE-WIDE (burn-down) ─────────────
+    # 3c answers "did this change introduce one?". This answers "how many are
+    # there?" -- the question the guard could not previously ask at all, because
+    # its scope was the diff. docs/ADAPTER_MATRIX.md carried `#2595` against a
+    # high-water mark of 789 and the guard printed "clean".
+    #
+    # The gate is MONOTONIC, not absolute: the count may not rise above the
+    # recorded baseline. That is what lets the guard ship before the sweep --
+    # the ordering the module header correctly refuses to invert -- while still
+    # making the debt visible and one-directional.
+    tree_baseline = refs_rule.get("tree_baseline")
+    tree_hits = list(tree_unresolvable_refs(tracked, ceiling, ref_exempt))
+    tree_count = len(tree_hits)
+    tree_files = len({h[0] for h in tree_hits})
+
+    if tree_baseline is None:
+        die(2, "issue_references.tree_baseline is missing. The tree-wide burn-down\n"
+               f"  cannot be enforced without it. Observed right now: {tree_count} "
+               f"reference(s) across {tree_files} file(s).\n"
+               f"  Record `tree_baseline: {tree_count}` in {MANIFEST}. Failing closed.")
+    if not isinstance(tree_baseline, int) or tree_baseline < 0:
+        die(2, "issue_references.tree_baseline must be a non-negative integer. Failing closed.")
+
+    if tree_count > tree_baseline:
+        worst = sorted(tree_hits, key=lambda h: (h[0], h[1]))[:10]
+        sample = "\n".join(f"      {h[0]}:{h[1]}  {h[3]}" for h in worst)
+        violations.append(
+            f"UNRESOLVABLE REFERENCE COUNT ROSE: {tree_count} > baseline {tree_baseline}\n"
+            f"    The tree-wide count of references above the high-water mark "
+            f"({ceiling}) may only go DOWN.\n"
+            f"    {tree_count - tree_baseline} more than the recorded baseline, "
+            f"across {tree_files} file(s). First few:\n{sample}\n"
+            f"    Fix the new ones. Do not raise `tree_baseline`."
+        )
 
     # ── 4. NEEDS-DECISION must be empty ──────────────────────────────────────
     for item in pending:
@@ -484,6 +582,17 @@ def main() -> int:
         scope += f" + {len(untracked)} untracked, not-yet-added path(s)"
     print(f"\033[32m✓ publication boundary clean\033[0m — {scope}, "
           f"all classified; no denied paths, no forbidden content, no open decisions.")
+    if tree_count < tree_baseline:
+        print(f"  issue references: tree-wide count is {tree_count}, BELOW the recorded "
+              f"baseline of {tree_baseline}.\n"
+              f"    Lower `issue_references.tree_baseline` to {tree_count} in {MANIFEST} "
+              f"so the ratchet holds.")
+    else:
+        print(f"  issue references: {tree_count} unresolvable reference(s) tree-wide "
+              f"across {tree_files} file(s), at the recorded baseline.")
+    if carried_over:
+        print(f"    {carried_over} pre-existing reference(s) on edited lines were "
+              f"carried over, not charged to this change.")
     print(f"  issue references: {len(added)} added line(s) over {base_ref} "
           f"({base[:12]}) carry no #N above {ceiling}.")
     if untracked:

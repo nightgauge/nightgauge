@@ -27,6 +27,17 @@ version: 1
 
 # Any tracked path matching none of these is REJECTED (fail-closed).
 allow:
+  # ─── Capability registry: the graph's one authored layer ──────────────────
+  - path: "capabilities.yaml"
+    class: PUBLIC
+    rationale: >-
+      The capability registry (ADR-005). Declares each capability's status,
+      surfaces, docs, owned implementation globs, and open-core disposition.
+      Public by construction: it describes what the open-source product does
+      and where each capability lives. A `hosted` disposition names the
+      BOUNDARY, never the hosted implementation -- no endpoint, topology, or
+      commercial detail belongs in this file.
+
   # ─── Go source: the deterministic layer ───────────────────────────────────
   - path: "cmd/**"
     class: PUBLIC
@@ -594,6 +605,19 @@ issue_references:
   # wrong live one is a handful of issue numbers, and a generous slack reopens
   # exactly that hole.
   slack: 25
+  # Tree-wide burn-down ratchet. The count of unresolvable references in the
+  # TRACKED TREE may only go DOWN; the guard fails when it rises and tells you
+  # to lower this number when it falls.
+  #
+  # This is what lets the guard ship before the sweep rather than after -- the
+  # ordering the checker's module header correctly refuses to invert. Until this
+  # key existed the tree-wide count had never been measured: the rule was
+  # diff-scoped, and docs/ADAPTER_MATRIX.md carried `#2595` against a
+  # high-water mark of 789 while the guard printed "clean".
+  #
+  # 2026-08-23: first measurement, 6,257 references across 997 files.
+  # NEVER raise this number. Lower it as the sweep progresses.
+  tree_baseline: 6257
   allow_paths:
     # Files that DEFINE or TEST the rule must contain example violations.
     - ".github/publication-boundary.yaml"
