@@ -1,0 +1,9 @@
+NODE capability:alpha [capabilities@capabilities.yaml:3] label=Alpha capability disposition=core status=ga surfaces=cli
+NODE capability:beta [capabilities@capabilities.yaml:15] label=Beta capability disposition=core status=ga surfaces=cli
+EDGE consumes capability:alpha -> capability:beta [capabilities@capabilities.yaml:3]
+EDGE owns-file capability:alpha -> file:internal/alpha/a.go [capabilities@capabilities.yaml:3]
+EDGE owns-file capability:alpha -> file:internal/alpha/b.go [capabilities@capabilities.yaml:3]
+EDGE owns-file capability:beta -> file:internal/nothing-here/** [capabilities@capabilities.yaml:15]
+EDGE documents doc:docs/ALPHA.md -> capability:alpha [capabilities@capabilities.yaml:3]
+EDGE documents doc:docs/BETA.md -> capability:beta [capabilities@capabilities.yaml:15]
+EDGE documents doc:docs/DELETED.md -> capability:alpha [capabilities@capabilities.yaml:3]
