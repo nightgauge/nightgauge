@@ -90,7 +90,7 @@ vi.mock("../../../src/views/outputWindow/contentFormatter", () => ({
 
 // Reasoning detection is controlled per-test via this mock so interleaving
 // scenarios can precisely mark which lines should buffer as "reasoning".
-const isReasoningLineMock = vi.fn(() => false);
+const isReasoningLineMock = vi.fn((_text: string) => false);
 vi.mock("../../../src/views/outputWindow/reasoningDetector", () => ({
   isReasoningLine: (text: string) => isReasoningLineMock(text),
 }));
@@ -259,7 +259,6 @@ describe("OutputWindow concurrent slot state isolation (#157)", () => {
     ow.appendLine("r-b2", "info", undefined, { slotIndex: 1 });
 
     ow.setActiveSlot(0);
-    // @ts-expect-error — clearActive is private; exercised via the public
     // clearWithConfirmation() path is async/gated, so call it directly for
     // deterministic sync assertions in this white-box regression test.
     ow["clearActive"]();
@@ -307,19 +306,19 @@ describe("OutputWindow concurrent slot state isolation (#157)", () => {
     const markCompleteSpy = vi.spyOn(ow, "markToolComplete");
 
     ow.logToolIndicator(
-      { id: "tool-A", tool: "Read", target: "a.ts", isActive: true, startedAt: Date.now() },
+      { id: "tool-A", tool: "Read", target: "a.ts", isActive: true, startedAt: new Date() },
       undefined,
       0
     );
 
     // Slot B starts and (via its own next indicator) completes tool Y.
     ow.logToolIndicator(
-      { id: "tool-B1", tool: "Read", target: "b.ts", isActive: true, startedAt: Date.now() },
+      { id: "tool-B1", tool: "Read", target: "b.ts", isActive: true, startedAt: new Date() },
       undefined,
       1
     );
     ow.logToolIndicator(
-      { id: "tool-B2", tool: "Write", target: "b2.ts", isActive: true, startedAt: Date.now() },
+      { id: "tool-B2", tool: "Write", target: "b2.ts", isActive: true, startedAt: new Date() },
       undefined,
       1
     );

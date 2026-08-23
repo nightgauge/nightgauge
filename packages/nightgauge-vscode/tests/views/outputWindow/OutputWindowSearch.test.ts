@@ -139,7 +139,6 @@ describe("OutputWindow Search (Issue #158)", () => {
           },
         });
 
-        // @ts-expect-error Testing invalid input
         handler.handleMessage({ type: "search-text-change", text: 123 });
         expect(callbackCalled).toBe(false);
       });
@@ -152,7 +151,6 @@ describe("OutputWindow Search (Issue #158)", () => {
           },
         });
 
-        // @ts-expect-error Testing invalid input
         handler.handleMessage({ type: "search-text-change" });
         expect(callbackCalled).toBe(false);
       });
@@ -188,7 +186,6 @@ describe("OutputWindow Search (Issue #158)", () => {
           },
         });
 
-        // @ts-expect-error Testing invalid input
         handler.handleMessage({
           type: "toggle-search-case-sensitive",
           enabled: "true",
@@ -227,7 +224,6 @@ describe("OutputWindow Search (Issue #158)", () => {
           },
         });
 
-        // @ts-expect-error Testing invalid input
         handler.handleMessage({
           type: "toggle-search-use-regex",
           enabled: "false",

@@ -327,7 +327,7 @@ describe("configMergeEngine.behavior", () => {
         project: { project: { number: 10 } },
         local: { pr: { delete_branch: true } },
         env: { pipeline: { auto_fix: false } },
-        cli: { batch: { max_issues: 5 } },
+        cli: { knowledge: { enabled: true } },
       };
 
       const result = mergeConfigs(tiers, { skipEnvResolution: true });
@@ -362,7 +362,7 @@ describe("configMergeEngine.behavior", () => {
       const tiers: ConfigTiers = {
         global: { pr: {} }, // Partial pr
         project: { pipeline: {} }, // Partial pipeline
-        local: { batch: {} }, // Partial batch
+        local: { knowledge: {} }, // Partial knowledge
       };
       const result = mergeConfigs(tiers, { skipEnvResolution: true });
 
@@ -418,8 +418,8 @@ describe("configMergeEngine.behavior", () => {
 
     it("handles zero values correctly", () => {
       const tiers: ConfigTiers = {
-        project: { batch: { max_issues: 10 } },
-        local: { batch: { max_issues: 0 } }, // 0 should override (but may fail validation)
+        project: { project: { number: 10 } },
+        local: { project: { number: 0 } }, // 0 should override (but may fail validation)
       };
       const result = mergeConfigs(tiers, { skipEnvResolution: true });
 
