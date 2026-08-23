@@ -37,6 +37,14 @@ func TestServiceGitIsIsolatedFromAmbientConfig(t *testing.T) {
 		t.Fatalf("write hostile global config: %v", err)
 	}
 	t.Setenv("HOME", hostileHome)
+	// user.useConfigOnly=true makes git REFUSE to invent an identity from
+	// username@hostname instead of merely warning — which is how the Linux CI
+	// runner behaves and how macOS does not. Without this the test passes
+	// locally while the same code fails in CI, which is exactly what happened
+	// on this issue's first push.
+	t.Setenv("GIT_CONFIG_COUNT", "1")
+	t.Setenv("GIT_CONFIG_KEY_0", "user.useConfigOnly")
+	t.Setenv("GIT_CONFIG_VALUE_0", "true")
 
 	svc, dir := setupTestRepo(t)
 	if err := os.WriteFile(filepath.Join(dir, "ambient.txt"), []byte("hi\n"), 0o644); err != nil {

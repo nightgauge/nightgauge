@@ -158,6 +158,20 @@ func IsolateProcess() {
 		"GIT_CONFIG_GLOBAL":   os.DevNull,
 		"GIT_CONFIG_SYSTEM":   os.DevNull,
 		"GIT_CONFIG_NOSYSTEM": "1",
+		// Identity MUST come with the neutralisation, for the reason Env()
+		// already documents: with no config source left, `git commit` has
+		// nowhere to read user.name/user.email from.
+		//
+		// Leaving these out passed locally and failed in CI, which is the
+		// whole lesson. macOS git AUTO-DERIVES an identity from
+		// username@hostname and merely warns; the Linux CI runner refuses with
+		// "Author identity unknown" and exit 128. A local green run is not
+		// evidence here — the two platforms disagree about whether a missing
+		// identity is fatal.
+		"GIT_AUTHOR_NAME":     "nightgauge-test",
+		"GIT_AUTHOR_EMAIL":    "nightgauge-test@example.invalid",
+		"GIT_COMMITTER_NAME":  "nightgauge-test",
+		"GIT_COMMITTER_EMAIL": "nightgauge-test@example.invalid",
 	} {
 		// Setenv only fails on an invalid key; these are literals.
 		_ = os.Setenv(k, v)
