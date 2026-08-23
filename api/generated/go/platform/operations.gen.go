@@ -150,13 +150,13 @@ var OpAttentionSync = Operation{
 	Upstream: UpstreamDeclared,
 }
 
-// OpAuditIntegrityVerify is POST /v1/audit/integrity/verify.
+// OpAuditIntegrityVerify is POST /v1/audit/integrity.
 var OpAuditIntegrityVerify = Operation{
 	ID:       "audit.verifyIntegrity",
 	Method:   "POST",
-	Path:     "/v1/audit/integrity/verify",
+	Path:     "/v1/audit/integrity",
 	Security: SecurityUserJWT,
-	Upstream: UpstreamUndeclared,
+	Upstream: UpstreamDeclared,
 }
 
 // OpAuditReportsDownload is GET /v1/audit/reports/{id}/download.

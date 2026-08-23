@@ -111,6 +111,25 @@
       }
     },
     {
+      "path": "platform/audit-integrity.json",
+      "transport": "ipc",
+      "method": "audit.verifyIntegrity",
+      "upstream": "POST /v1/audit/integrity",
+      "contract": {
+        "goFile": "internal/platform/audit_retention.go",
+        "checks": [
+          {
+            "at": "",
+            "type": "IntegrityResult"
+          },
+          {
+            "at": "brokenLinks/[]",
+            "type": "IntegrityBrokenLink"
+          }
+        ]
+      }
+    },
+    {
       "path": "platform/usage-summary.json",
       "transport": "ipc",
       "method": "platform.getUsageSummary",

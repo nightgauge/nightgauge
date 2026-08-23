@@ -545,15 +545,17 @@ func TestOpaqueAndAbsentCredentialsArePassedThrough(t *testing.T) {
 // TestOperationUpstreamDriftIsKnown freezes the set of operations this binary
 // calls that the platform's OpenAPI document does not declare.
 //
-// These are live findings, not decoration: /v1/audit/integrity/verify is
-// mounted at /v1/audit/integrity upstream, and the flat /v1/commands/* pair is
+// These are live findings, not decoration: the flat /v1/commands/* pair is
 // absent entirely while agent command delivery lives under
 // /v1/agents/{agentId}/commands. Freezing the set means a NEW undeclared route
 // cannot be added quietly, and fixing one of these requires deleting its entry
 // here — which is the visible acknowledgement that was missing before.
+//
+// audit.verifyIntegrity was the third entry until #822 moved the call to
+// /v1/audit/integrity, the path the platform actually mounts. Its deletion
+// from this list is that fix's acknowledgement.
 func TestOperationUpstreamDriftIsKnown(t *testing.T) {
 	known := []string{
-		"audit.verifyIntegrity",
 		"commands.ack",
 		"commands.listPending",
 	}

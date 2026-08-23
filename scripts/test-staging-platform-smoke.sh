@@ -126,7 +126,7 @@ all_green_routes() {
   {"method":"GET","path":"/v1/analytics/cost","status":200,"body":{}},
   {"method":"GET","path":"/v1/audit/reports","status":200,"body":{"items":[]}},
   {"method":"GET","path":"/v1/audit/retention","status":200,"body":{}},
-  {"method":"POST","path":"/v1/audit/integrity/verify","status":200,"body":{}},
+  {"method":"POST","path":"/v1/audit/integrity","status":200,"body":{"valid":true,"checkedCount":12,"brokenLinks":[]}},
   {"method":"PUT","path":"/v1/attention/sync","status":200,"body":{}}
 ]
 EOF
@@ -372,6 +372,70 @@ GITHUB_STEP_SUMMARY="$SUMMARY" \
 RC=$?
 check "pre-#803 compliance body exits non-zero" "$([ "$RC" -ne 0 ] && echo 0 || echo 1)"
 check "pre-#803 compliance body emits ::error:: naming items" "$(contains "$OUT" "missing required keys: items" && echo 0 || echo 1)"
+
+stop_server
+
+# --- Scenario 9: the pre-#822 integrity body fails ---------------------------
+# POST /v1/audit/integrity returns {valid, checkedCount, brokenLinks}. The Go
+# client decoded {valid, checkedCount, windowDays, message, checkedAt} — three
+# of those five have never been sent — and it posted to /v1/audit/integrity/
+# verify, a path the platform never mounted. The probe checked status only, so
+# neither half was visible here (#822).
+ROUTES_INTEGRITY_BAD=$(all_green_routes | python3 -c '
+import json, sys
+routes = json.load(sys.stdin)
+for r in routes:
+    if r["method"] == "POST" and r["path"] == "/v1/audit/integrity":
+        r["body"] = {
+            "valid": True,
+            "checkedCount": 12,
+            "windowDays": 30,
+            "message": "All entries valid",
+            "checkedAt": "2026-05-01T00:00:00Z",
+        }
+print(json.dumps(routes))
+')
+start_server "$ROUTES_INTEGRITY_BAD"
+
+OUT="$TMP/scenario9.out"
+SUMMARY="$TMP/scenario9.summary"
+: > "$SUMMARY"
+STAGING_PLATFORM_BASE_URL="http://127.0.0.1:${PORT}" \
+STAGING_SESSION_TOKEN="$FAKE_TOKEN" \
+GITHUB_STEP_SUMMARY="$SUMMARY" \
+  bash "$SCRIPT" > "$OUT" 2>&1
+RC=$?
+check "pre-#822 integrity body exits non-zero" "$([ "$RC" -ne 0 ] && echo 0 || echo 1)"
+check "pre-#822 integrity body emits ::error:: naming brokenLinks" "$(contains "$OUT" "missing required keys: brokenLinks" && echo 0 || echo 1)"
+
+stop_server
+
+# --- Scenario 10: a platform mounting only the old verify path fails ---------
+# The arm that goes red if the path is ever reverted. The mock answers an
+# unmapped path with an empty 200 — the friendliest possible wrong answer, and
+# still redder than what the real platform would send — so what catches this is
+# the shape assertion, not the status. That is the point: a status-only probe
+# would call an empty 200 from a path nobody mounts a PASS.
+ROUTES_NO_VERIFY_ALIAS=$(all_green_routes | python3 -c '
+import json, sys
+routes = json.load(sys.stdin)
+for r in routes:
+    if r["method"] == "POST" and r["path"] == "/v1/audit/integrity":
+        r["path"] = "/v1/audit/integrity/verify"
+print(json.dumps(routes))
+')
+start_server "$ROUTES_NO_VERIFY_ALIAS"
+
+OUT="$TMP/scenario10.out"
+SUMMARY="$TMP/scenario10.summary"
+: > "$SUMMARY"
+STAGING_PLATFORM_BASE_URL="http://127.0.0.1:${PORT}" \
+STAGING_SESSION_TOKEN="$FAKE_TOKEN" \
+GITHUB_STEP_SUMMARY="$SUMMARY" \
+  bash "$SCRIPT" > "$OUT" 2>&1
+RC=$?
+check "a platform that mounts only the old verify path exits non-zero" "$([ "$RC" -ne 0 ] && echo 0 || echo 1)"
+check "the integrity row names every key the empty body is missing" "$(contains "$OUT" "missing required keys: valid checkedCount brokenLinks" && echo 0 || echo 1)"
 
 stop_server
 

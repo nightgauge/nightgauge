@@ -971,6 +971,7 @@ writeFixture("retention--populated", {
   retentionIntegrityData: {
     retentionConfig: { retentionDays: 730, updatedAt: "2026-06-01" },
     integrityResult: null,
+    verifiedWindowDays: null,
     isLoading: false,
     isVerifying: false,
     hasAccess: true,
@@ -988,6 +989,7 @@ writeFixture("retention--loading", {
   retentionIntegrityData: {
     retentionConfig: null,
     integrityResult: null,
+    verifiedWindowDays: null,
     isLoading: true,
     isVerifying: false,
     hasAccess: true,
@@ -1005,6 +1007,7 @@ writeFixture("retention--no-access", {
   retentionIntegrityData: {
     retentionConfig: null,
     integrityResult: null,
+    verifiedWindowDays: null,
     isLoading: false,
     isVerifying: false,
     hasAccess: false,

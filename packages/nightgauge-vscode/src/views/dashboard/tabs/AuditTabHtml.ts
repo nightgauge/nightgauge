@@ -685,6 +685,13 @@ export function getAuditTabStyles(): string {
       font-size: 0.85em;
     }
 
+    .integrity-broken-links {
+      margin: var(--spacing-sm) 0 0;
+      padding-left: 1.4em;
+      font-size: 0.85em;
+      color: var(--vscode-descriptionForeground);
+    }
+
     .retention-no-access {
       margin-top: var(--spacing-lg, 24px);
       padding: var(--spacing-md);
@@ -731,15 +738,38 @@ function getRetentionIntegrityPanelHtml(data: RetentionIntegrityData | undefined
 
   let integrityHtml = "";
   if (data.integrityResult) {
-    const { valid, checkedCount, windowDays, message, checkedAt } = data.integrityResult;
+    const { valid, checkedCount, brokenLinks } = data.integrityResult;
     const badgeClass = valid ? "integrity-result-valid" : "integrity-result-invalid";
     const badgeLabel = valid ? "✓ Valid" : "✗ Invalid";
+    // The window comes from the button the operator pressed, not from the
+    // response: POST /v1/audit/integrity answers {valid, checkedCount,
+    // brokenLinks} and nothing else. This line used to render a windowDays,
+    // a message and a checkedAt off that response, so it said "0 days" and
+    // "Checked at: " on every verification (#822).
+    // `== null` on purpose: the field is absent, not null, in any panel state
+    // restored from before it existed.
+    const window =
+      data.verifiedWindowDays == null
+        ? ""
+        : ` over last ${escapeHtml(data.verifiedWindowDays.toString())} days`;
+    // A broken chain is the finding this endpoint exists to report. Listing
+    // the entries is the difference between "something is wrong" and a row an
+    // operator can go look at.
+    const brokenHtml = brokenLinks.length
+      ? `<ul class="integrity-broken-links">${brokenLinks
+          .map(
+            (link) =>
+              `<li>Entry <code>${escapeHtml(link.entryId)}</code> at position ${escapeHtml(
+                link.position.toString()
+              )}</li>`
+          )
+          .join("")}</ul>`
+      : "";
     integrityHtml = `
       <div class="integrity-result">
         <span class="${badgeClass}">${badgeLabel}</span>
-        &nbsp;${escapeHtml(checkedCount.toString())} entries checked over last ${escapeHtml(windowDays.toString())} days
-        — ${escapeHtml(message)}
-        <span class="retention-last-updated">Checked at: ${escapeHtml(checkedAt)}</span>
+        &nbsp;${escapeHtml(checkedCount.toString())} entries checked${window}
+        ${brokenHtml}
       </div>
     `;
   }

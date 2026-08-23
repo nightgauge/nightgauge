@@ -584,13 +584,23 @@ export interface RetentionConfig {
   updatedAt?: string;
 }
 
-/** Result from audit.verifyIntegrity — hash-chain verification result (#3323). */
+/** One audit entry whose stored hash does not match the chain (#822). */
+export interface IntegrityBrokenLink {
+  entryId: string;
+  position: number;
+}
+
+/**
+ * Result from audit.verifyIntegrity — hash-chain verification result (#3323).
+ *
+ * These are the three fields POST /v1/audit/integrity returns, and only those.
+ * `windowDays`, `message` and `checkedAt` were declared here for a year and
+ * the route has never sent any of them (#822).
+ */
 export interface IntegrityResult {
   valid: boolean;
   checkedCount: number;
-  windowDays: number;
-  message: string;
-  checkedAt: string;
+  brokenLinks: IntegrityBrokenLink[];
 }
 
 /** Result of platform.syncTelemetry (matches Go ipc.PlatformSyncTelemetryResult). */
