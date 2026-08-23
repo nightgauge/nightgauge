@@ -489,6 +489,40 @@ expect_exit 1 "self-qualified nightgauge/nightgauge#4500 is rejected"
 git rm --cached -q "$PLANTED" 2>/dev/null
 rm -f "$PLANTED"
 
+# ── forbidden_content file_baseline ratchet (ADR-005 0.4) ───────────────────
+# The former-brand rule matches 248 files, so it ships ratcheted rather than
+# absolute. A rule WITHOUT file_baseline keeps its original all-or-nothing
+# semantics -- proven by the COGS and pricing cases above, which have none.
+cp "$BACKUP" "$MANIFEST"
+python3 - "$MANIFEST" <<'PYBRAND'
+import re, sys
+p = sys.argv[1]
+s = open(p).read()
+s = re.sub(r"^    file_baseline: \d+$", "    file_baseline: 0", s, count=1, flags=re.M)
+open(p, "w").write(s)
+PYBRAND
+expect_exit 1 "forbidden_content count above file_baseline fails the build (ratchet)"
+cp "$BACKUP" "$MANIFEST"
+
+python3 - "$MANIFEST" <<'PYBRANDBAD'
+import re, sys
+p = sys.argv[1]
+s = open(p).read()
+s = re.sub(r"^    file_baseline: \d+$", '    file_baseline: "many"', s, count=1, flags=re.M)
+open(p, "w").write(s)
+PYBRANDBAD
+expect_exit 2 "a non-integer file_baseline fails CLOSED, not open"
+cp "$BACKUP" "$MANIFEST"
+
+# The stem must match the derived forms, not just the brand name. This is the
+# gap that kept the guard green while 248 files violated the rule's intent.
+PLANTED="docs/_brand_stem_probe.md"
+printf 'const IncrediConfig = loadIncrediYaml();\n' > "$PLANTED"
+git add -f "$PLANTED" 2>/dev/null
+expect_exit 1 "an abbreviated brand form (IncrediConfig) is rejected, not just the full name"
+git rm --cached -q "$PLANTED" 2>/dev/null
+rm -f "$PLANTED"
+
 # ── Tree-wide burn-down ratchet (ADR-005 0.3) ───────────────────────────────
 # The diff-scoped rule above answers "did this change introduce one?". The
 # ratchet answers "how many are there?" and forbids the number rising. Before

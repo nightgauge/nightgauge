@@ -364,6 +364,9 @@ def main() -> int:
     allow = manifest.get("allow") or []
     deny = manifest.get("deny") or []
     forbidden = manifest.get("forbidden_content") or []
+    # (rule id, matching file count, baseline) for every ratcheted rule, so the
+    # clean report still states the outstanding debt rather than hiding it.
+    content_notes: list[tuple[str, int, int]] = []
     pending = manifest.get("needs_decision") or []
 
     if not allow:
@@ -457,6 +460,24 @@ def main() -> int:
         except re.error as exc:
             die(2, f"forbidden_content rule '{rid}' has an invalid regex: {exc}. Failing closed.")
         exempt = rule.get("allow_paths") or []
+        # A rule may declare `file_baseline: N` to land while the tree still
+        # violates it. The gate then becomes MONOTONIC over the number of
+        # matching FILES rather than absolute: it fails when the count rises and
+        # says so when it falls. A rule WITHOUT the key behaves exactly as
+        # before -- every matching file is a violation -- so this changes no
+        # existing rule's semantics.
+        #
+        # This exists because a rule written against a brand NAME does not match
+        # the brand's abbreviated forms, and narrowing the rule to keep the
+        # build green is how a gate ends up green for months while 248 files
+        # violate its intent.
+        rule_baseline = rule.get("file_baseline")
+        if rule_baseline is not None and (
+            not isinstance(rule_baseline, int) or rule_baseline < 0
+        ):
+            die(2, f"forbidden_content rule '{rid}' has a non-integer "
+                   f"file_baseline. Failing closed.")
+        rule_hits = []
         for p in paths:
             if any(matches(p, e) for e in exempt):
                 continue
@@ -466,11 +487,31 @@ def main() -> int:
                 continue  # binary or unreadable; content rules are text-only
             for n, line in enumerate(text.splitlines(), 1):
                 if pattern.search(line):
-                    violations.append(
-                        f"FORBIDDEN CONTENT [{rid}]: {p}:{n}{untracked_note(p)}\n"
-                        f"    {line.strip()[:100]}"
-                    )
+                    if rule_baseline is None:
+                        violations.append(
+                            f"FORBIDDEN CONTENT [{rid}]: {p}:{n}{untracked_note(p)}\n"
+                            f"    {line.strip()[:100]}"
+                        )
+                    else:
+                        rule_hits.append((p, n, line.strip()[:100]))
                     break  # one hit per file is enough to fail it
+
+        if rule_baseline is not None:
+            if len(rule_hits) > rule_baseline:
+                sample = "\n".join(
+                    f"      {h[0]}:{h[1]}  {h[2]}" for h in sorted(rule_hits)[:8]
+                )
+                violations.append(
+                    f"FORBIDDEN CONTENT COUNT ROSE [{rid}]: "
+                    f"{len(rule_hits)} file(s) > baseline {rule_baseline}\n"
+                    f"    This rule's matching-file count may only go DOWN.\n"
+                    f"    First few:\n{sample}\n"
+                    f"    Fix the new ones. Do not raise `file_baseline`."
+                )
+            else:
+                content_notes.append(
+                    (rid, len(rule_hits), rule_baseline)
+                )
 
     # ── 3b. Forbidden tokens, matched by HASH ────────────────────────────────
     # The portfolio identifiers cannot be listed in plaintext: this manifest is
@@ -608,6 +649,16 @@ def main() -> int:
         scope += f" + {len(untracked)} untracked, not-yet-added path(s)"
     print(f"\033[32m✓ publication boundary clean\033[0m — {scope}, "
           f"all classified; no denied paths, no forbidden content, no open decisions.")
+    # NOT `base` — that name holds the diff base commit and is read again
+    # below. Shadowing it here made the report crash into the fail-closed
+    # handler with an unhelpful TypeError.
+    for rid, count, rule_base in content_notes:
+        if count < rule_base:
+            print(f"  {rid}: {count} file(s), BELOW the recorded baseline of {rule_base}.\n"
+                  f"    Lower `file_baseline` to {count} in {MANIFEST} so the ratchet holds.")
+        else:
+            print(f"  {rid}: {count} file(s) still match, at the recorded baseline.")
+
     if tree_count < tree_baseline:
         print(f"  issue references: tree-wide count is {tree_count}, BELOW the recorded "
               f"baseline of {tree_baseline}.\n"

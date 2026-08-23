@@ -425,7 +425,18 @@ forbidden_content:
       - "scripts/test-publication-boundary.sh"
 
   - id: former-brand
-    pattern: "[Ii]ncredibuilders"
+    pattern: "[Ii]ncredi"
+    # 2026-08-23: widened from the full word to the STEM. The full-word rule had
+    # succeeded -- zero occurrences outside this file -- while 248 files carried
+    # the abbreviated forms it could not see: IncrediConfig (482 hits),
+    # incrediConfig (209), IncrediYamlService (187), incrediRoot (141),
+    # IncrediAdapter (135), and ~40 more spellings. The guard was green
+    # throughout. A rule written against a brand name does not match the brand's
+    # derived forms, and that gap is invisible precisely because the rule passes.
+    #
+    # Ratcheted rather than absolute so the rule can land before the rename
+    # sweep. NEVER raise this number.
+    file_baseline: 248
     rationale: >-
       The former product name and the archived private historical record
       (EdibuLLC/incredibuilders, 4,222 issues). That repository is preserved and
