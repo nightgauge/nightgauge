@@ -128,6 +128,7 @@ describe("runStage - Queue Auto-Start (Issue #518)", () => {
     issueNumber: 101,
     title: "Add dark mode feature",
     position: 1,
+    status: "pending" as const,
     labels: ["type:feature", "priority:high"],
     addedAt: new Date().toISOString(),
   };
@@ -371,6 +372,7 @@ describe("Queue Auto-Start - Parity with HeadlessOrchestrator", () => {
       issueNumber: 99,
       title: "Implement user auth",
       position: 1,
+      status: "pending" as const,
       labels: [],
       addedAt: new Date().toISOString(),
     };
@@ -390,6 +392,7 @@ describe("Queue Auto-Start - Parity with HeadlessOrchestrator", () => {
       issueNumber: 200,
       title: "Test issue",
       position: 1,
+      status: "pending" as const,
       labels: [],
       addedAt: new Date().toISOString(),
     };

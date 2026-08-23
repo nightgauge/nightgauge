@@ -286,7 +286,18 @@ describe("HeadlessOrchestrator deterministic merge fallback (Issue #3259)", () =
     vi.mocked(getSkipAuthPreflight).mockReturnValueOnce(false);
     vi.mocked(runAdapterAuthPreflight).mockResolvedValueOnce({
       ok: false,
-      failures: [{ adapter: "codex", reason: "not logged in", suggestedFix: "Run `codex login`" }],
+      // AdapterPreflightAggregateResult carries the per-adapter results
+      // alongside the failure list; omitting it left the mock a shape the
+      // real preflight never returns.
+      results: { codex: { ok: false, reason: "not logged in" } },
+      failures: [
+        {
+          adapter: "codex",
+          reason: "not logged in",
+          suggestedFix: "Run `codex login`",
+          timedOut: false,
+        },
+      ],
     });
 
     try {

@@ -112,7 +112,7 @@ describe("startPipelineForIssue Command", () => {
     it("should register the nightgauge.startPipelineForIssue command", () => {
       const orchestrator = createMockOrchestrator();
 
-      registerStartPipelineForIssueCommand(mockLogger, orchestrator);
+      registerStartPipelineForIssueCommand(mockLogger, orchestrator, null);
 
       expect(vscode.commands.registerCommand).toHaveBeenCalledWith(
         "nightgauge.startPipelineForIssue",
@@ -129,7 +129,7 @@ describe("startPipelineForIssue Command", () => {
     it("should return early if no tree item provided", async () => {
       const orchestrator = createMockOrchestrator();
 
-      const disposable = registerStartPipelineForIssueCommand(mockLogger, orchestrator);
+      const disposable = registerStartPipelineForIssueCommand(mockLogger, orchestrator, null);
 
       const callback = extractCommandCallback(disposable);
       await callback(undefined);
@@ -144,7 +144,7 @@ describe("startPipelineForIssue Command", () => {
     it("should return early if tree item is not a ReadyIssueTreeItem", async () => {
       const orchestrator = createMockOrchestrator();
 
-      const disposable = registerStartPipelineForIssueCommand(mockLogger, orchestrator);
+      const disposable = registerStartPipelineForIssueCommand(mockLogger, orchestrator, null);
 
       const callback = extractCommandCallback(disposable);
       await callback({ notAReadyIssue: true } as any);
@@ -158,7 +158,7 @@ describe("startPipelineForIssue Command", () => {
     it("should NOT show confirmation dialog when no pipeline is running", async () => {
       const orchestrator = createMockOrchestrator();
 
-      const disposable = registerStartPipelineForIssueCommand(mockLogger, orchestrator);
+      const disposable = registerStartPipelineForIssueCommand(mockLogger, orchestrator, null);
 
       const item = createTestItem({ number: 42, title: "Add dark mode" });
       const callback = extractCommandCallback(disposable);
@@ -171,7 +171,7 @@ describe("startPipelineForIssue Command", () => {
     it("should execute nightgauge.pickupIssue immediately without confirmation", async () => {
       const orchestrator = createMockOrchestrator();
 
-      const disposable = registerStartPipelineForIssueCommand(mockLogger, orchestrator);
+      const disposable = registerStartPipelineForIssueCommand(mockLogger, orchestrator, null);
 
       const item = createTestItem({ number: 42, title: "Add dark mode" });
       const callback = extractCommandCallback(disposable);
@@ -190,7 +190,7 @@ describe("startPipelineForIssue Command", () => {
     it("should enqueue issue regardless of running state (no conflict dialog)", async () => {
       const orchestrator = createMockOrchestrator({ isRunning: true });
 
-      const disposable = registerStartPipelineForIssueCommand(mockLogger, orchestrator);
+      const disposable = registerStartPipelineForIssueCommand(mockLogger, orchestrator, null);
 
       const callback = extractCommandCallback(disposable);
       await callback(createTestItem({ number: 99 }));
