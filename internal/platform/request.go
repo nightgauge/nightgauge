@@ -3,6 +3,7 @@ package platform
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -196,4 +197,91 @@ func expandPath(tmpl string, args []string) string {
 		i += open + closeAt + 1
 	}
 	return out.String()
+}
+
+// platformErrorBody is the envelope every 4xx/5xx from the platform API
+// carries — `makeErrorBody(code, message, requestId, details)` in
+// `packages/api/src/utils/api-error.ts`. `details.fields` is populated for a
+// VALIDATION_ERROR with the Zod issues, each naming the path it rejected.
+type platformErrorBody struct {
+	Error struct {
+		Code    string `json:"code"`
+		Message string `json:"message"`
+		Details struct {
+			Fields []struct {
+				Path    []json.RawMessage `json:"path"`
+				Message string            `json:"message"`
+			} `json:"fields"`
+		} `json:"details"`
+	} `json:"error"`
+}
+
+// errorResponseBodyLimit caps how much of an error body is read. Enough for
+// the envelope and its field list; a runaway body cannot be pulled into an
+// error string.
+const errorResponseBodyLimit = 8 << 10
+
+// describeErrorResponse renders a failed platform response as the text of a Go
+// error: always the status, plus whatever the platform said about WHY.
+//
+// The status alone is what this package used to report, and #821 is what that
+// costs. Generating a compliance report sent a lowercase reportType and bare
+// calendar dates into a route validating `z.enum(['SOC2','ISO27001'])` and
+// `z.string().datetime()`, so every attempt answered 422 — and the dashboard
+// rendered "The platform rejected this request (HTTP 422)" with no hint of
+// which of the four fields was wrong. The route had already named them all in
+// `details.fields`; nothing read it.
+//
+// The response body is consumed by this call. A body that is not the platform
+// envelope (an empty 502 from a proxy, HTML from a load balancer) degrades to
+// the bare status rather than quoting bytes of unknown provenance.
+func describeErrorResponse(resp *http.Response) string {
+	status := fmt.Sprintf("server returned %d", resp.StatusCode)
+
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, errorResponseBodyLimit))
+	if err != nil || len(raw) == 0 {
+		return status
+	}
+	var parsed platformErrorBody
+	if err := json.Unmarshal(raw, &parsed); err != nil || parsed.Error.Code == "" {
+		return status
+	}
+
+	detail := parsed.Error.Code
+	if parsed.Error.Message != "" {
+		detail += ": " + parsed.Error.Message
+	}
+	if fields := describeErrorFields(parsed); fields != "" {
+		detail += " (" + fields + ")"
+	}
+	return status + ": " + detail
+}
+
+// describeErrorFields flattens the Zod issue list into "path: message" pairs.
+// Path segments are raw JSON because Zod mixes property names and array
+// indices in one array; both render the way they appear on the wire, minus
+// the quotes on strings.
+func describeErrorFields(parsed platformErrorBody) string {
+	var pairs []string
+	for _, f := range parsed.Error.Details.Fields {
+		var segments []string
+		for _, seg := range f.Path {
+			var name string
+			if err := json.Unmarshal(seg, &name); err == nil {
+				segments = append(segments, name)
+				continue
+			}
+			segments = append(segments, string(seg))
+		}
+		path := strings.Join(segments, ".")
+		switch {
+		case path != "" && f.Message != "":
+			pairs = append(pairs, path+": "+f.Message)
+		case f.Message != "":
+			pairs = append(pairs, f.Message)
+		case path != "":
+			pairs = append(pairs, path)
+		}
+	}
+	return strings.Join(pairs, "; ")
 }

@@ -44,7 +44,7 @@ function makeIpcClient(overrides: Partial<IpcClientGenerated> = {}): IpcClientGe
     platformAuditGenerateReport: vi.fn().mockResolvedValue({
       id: "rpt-1",
       status: "pending",
-      reportType: "soc2",
+      reportType: "SOC2",
       startDate: "2026-01-01",
       endDate: "2026-03-31",
       format: "pdf",
@@ -202,9 +202,9 @@ describe("PlatformComplianceService.generateReport", () => {
   it("calls platformAuditGenerateReport with correct params", async () => {
     const ipc = makeIpcClient();
     const svc = new PlatformComplianceService(ipc);
-    await svc.generateReport("iso27001", "2026-01-01", "2026-03-31", "pdf");
+    await svc.generateReport("ISO27001", "2026-01-01", "2026-03-31", "pdf");
     expect(ipc.platformAuditGenerateReport).toHaveBeenCalledWith(
-      "iso27001",
+      "ISO27001",
       "2026-01-01",
       "2026-03-31",
       "pdf"
@@ -214,7 +214,7 @@ describe("PlatformComplianceService.generateReport", () => {
   it("returns report result with id and status", async () => {
     const ipc = makeIpcClient();
     const svc = new PlatformComplianceService(ipc);
-    const result = await svc.generateReport("soc2", "2026-01-01", "2026-03-31", "pdf");
+    const result = await svc.generateReport("SOC2", "2026-01-01", "2026-03-31", "pdf");
     expect(result.id).toBe("rpt-1");
     expect(result.status).toBe("pending");
   });

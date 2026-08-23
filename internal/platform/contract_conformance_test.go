@@ -145,7 +145,7 @@ var contractCallSites = []callSite{
 		return err
 	}},
 	{api.OpAuditReportsGenerate, func(ctx context.Context, c *Client) error {
-		_, err := NewComplianceService(c).GenerateReport(ctx, "soc2", "2026-01-01", "2026-01-31", "pdf")
+		_, err := NewComplianceService(c).GenerateReport(ctx, "SOC2", "2026-01-01", "2026-01-31", "pdf")
 		return err
 	}},
 	{api.OpAuditReportsGet, func(ctx context.Context, c *Client) error {

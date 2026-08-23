@@ -71,10 +71,10 @@ export function getComplianceTabScript(): string {
         // Generate report
         var genBtn = e.target.closest('#complianceGenerateBtn');
         if (genBtn) {
-          var reportType = document.getElementById('complianceReportType')?.value || 'soc2';
+          var reportType = document.getElementById('complianceReportType')?.value || 'SOC2';
           var startDate = document.getElementById('complianceStartDate')?.value || '';
           var endDate = document.getElementById('complianceEndDate')?.value || '';
-          var format = document.getElementById('complianceFormat')?.value || 'pdf';
+          var format = document.getElementById('complianceFormat')?.value || 'json';
           vscode.postMessage({ type: 'complianceGenerateReport', reportType: reportType, startDate: startDate, endDate: endDate, format: format });
           return;
         }
@@ -334,6 +334,18 @@ function getComplianceNoAccessHtml(failure: ComplianceData["failure"]): string {
   `;
 }
 
+/**
+ * The generate form. Every option value is the literal the route's own enum
+ * declares — `z.enum(['SOC2','ISO27001'])` and `z.enum(['pdf','json','both'])`
+ * in `packages/api/src/routes/audit-reports.ts` — because the value is sent to
+ * the platform verbatim. It used to offer `soc2` / `iso27001`, which failed
+ * validation, so the button 422'd on every click (#821).
+ *
+ * The format list is the route's whole enum rather than PDF alone. `json` is
+ * the platform's own default and the only format that stores no object and
+ * answers the download with an inline payload — the path #803 built and that
+ * nothing could reach while PDF was the only choice.
+ */
 function getComplianceGenerateFormHtml(data: ComplianceData): string {
   const isGenerating = data.isGenerating;
   return `
@@ -343,8 +355,8 @@ function getComplianceGenerateFormHtml(data: ComplianceData): string {
         <div class="compliance-form-group">
           <label class="compliance-form-label" for="complianceReportType">Report Type</label>
           <select id="complianceReportType" class="compliance-form-select">
-            <option value="soc2">SOC 2</option>
-            <option value="iso27001">ISO 27001</option>
+            <option value="SOC2">SOC 2</option>
+            <option value="ISO27001">ISO 27001</option>
           </select>
         </div>
         <div class="compliance-form-group">
@@ -360,7 +372,9 @@ function getComplianceGenerateFormHtml(data: ComplianceData): string {
         <div class="compliance-form-group">
           <label class="compliance-form-label" for="complianceFormat">Format</label>
           <select id="complianceFormat" class="compliance-form-select">
+            <option value="json">JSON</option>
             <option value="pdf">PDF</option>
+            <option value="both">Both</option>
           </select>
         </div>
         <div class="compliance-form-group" style="justify-content: flex-end;">
