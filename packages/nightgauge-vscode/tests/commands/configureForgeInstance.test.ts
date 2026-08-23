@@ -11,7 +11,7 @@
  * @see Issue #3364 - VSCode extension settings UI for managing forge instances
  */
 
-import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, vi, afterEach, type Mock } from "vitest";
 import * as vscode from "vscode";
 
 // ── Hoisted mock factories ────────────────────────────────────────────────────
@@ -113,7 +113,7 @@ import { registerConfigureForgeInstanceCommand } from "../../src/commands/config
 import { validatePemFile } from "../../src/utils/pemValidator";
 
 function getLastCommandHandler(): (...args: unknown[]) => Promise<void> {
-  const calls = (mockRegisterCommand as ReturnType<typeof vi.fn>).mock.calls;
+  const calls = (mockRegisterCommand as Mock).mock.calls;
   return calls[calls.length - 1][1];
 }
 

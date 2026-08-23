@@ -6,7 +6,7 @@
  * and abort propagation after disconnect().
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from "vitest";
 import * as vscode from "vscode";
 import { PlatformSseClient } from "../../src/services/PlatformSseClient";
 import type { PlatformSseClientOptions } from "../../src/services/PlatformSseClient";
@@ -138,13 +138,13 @@ async function flushMicrotasks(n = 8): Promise<void> {
 /** Build a client with sensible defaults; caller can override any option. */
 function makeClient(overrides: Partial<PlatformSseClientOptions> = {}): {
   client: PlatformSseClient;
-  onEvent: ReturnType<typeof vi.fn>;
-  onStatusChanged: ReturnType<typeof vi.fn>;
-  onAuthRequired: ReturnType<typeof vi.fn>;
+  onEvent: Mock;
+  onStatusChanged: Mock;
+  onAuthRequired: Mock;
 } {
   const onEvent = vi.fn();
   const onStatusChanged = vi.fn();
-  const onAuthRequired = vi.fn<[], Promise<string | null>>().mockResolvedValue(null);
+  const onAuthRequired = vi.fn<() => Promise<string | null>>().mockResolvedValue(null);
 
   const client = new PlatformSseClient({
     context: mockContext,
@@ -159,9 +159,9 @@ function makeClient(overrides: Partial<PlatformSseClientOptions> = {}): {
   // Return the ACTUAL callbacks used by the client (respect overrides).
   return {
     client,
-    onEvent: (overrides.onEvent as ReturnType<typeof vi.fn>) ?? onEvent,
-    onStatusChanged: (overrides.onStatusChanged as ReturnType<typeof vi.fn>) ?? onStatusChanged,
-    onAuthRequired: (overrides.onAuthRequired as ReturnType<typeof vi.fn>) ?? onAuthRequired,
+    onEvent: (overrides.onEvent as Mock) ?? onEvent,
+    onStatusChanged: (overrides.onStatusChanged as Mock) ?? onStatusChanged,
+    onAuthRequired: (overrides.onAuthRequired as Mock) ?? onAuthRequired,
   };
 }
 
@@ -385,7 +385,7 @@ describe("PlatformSseClient", () => {
   describe("401 handling", () => {
     it("calls onAuthRequired on 401, reconnects with new token on success", async () => {
       const newToken = "refreshed-token";
-      const onAuthRequired = vi.fn<[], Promise<string | null>>().mockResolvedValue(newToken);
+      const onAuthRequired = vi.fn<() => Promise<string | null>>().mockResolvedValue(newToken);
 
       mockFetch
         .mockResolvedValueOnce(make401Response())
@@ -410,7 +410,7 @@ describe("PlatformSseClient", () => {
     });
 
     it("surfaces disconnected when onAuthRequired returns null", async () => {
-      const onAuthRequired = vi.fn<[], Promise<string | null>>().mockResolvedValue(null);
+      const onAuthRequired = vi.fn<() => Promise<string | null>>().mockResolvedValue(null);
       const onStatusChanged = vi.fn();
 
       mockFetch.mockResolvedValueOnce(make401Response());
@@ -429,7 +429,7 @@ describe("PlatformSseClient", () => {
 
     it("surfaces disconnected after two consecutive 401s — no infinite loop", async () => {
       const newToken = "refreshed-token";
-      const onAuthRequired = vi.fn<[], Promise<string | null>>().mockResolvedValue(newToken);
+      const onAuthRequired = vi.fn<() => Promise<string | null>>().mockResolvedValue(newToken);
       const onStatusChanged = vi.fn();
 
       mockFetch
@@ -451,7 +451,7 @@ describe("PlatformSseClient", () => {
 
     it("resets consecutive auth error counter after a successful connect", async () => {
       const newToken = "refreshed-token";
-      const onAuthRequired = vi.fn<[], Promise<string | null>>().mockResolvedValue(newToken);
+      const onAuthRequired = vi.fn<() => Promise<string | null>>().mockResolvedValue(newToken);
       const onStatusChanged = vi.fn();
 
       // First cycle: 401 → refresh → success

@@ -12,7 +12,7 @@
  * @see Issue #1010 - Telemetry Analytics Export
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, type Mock } from "vitest";
 import * as path from "node:path";
 
 // ============================================================================
@@ -102,17 +102,17 @@ describe("exportTelemetry integration — multi-run fixture", () => {
     vi.clearAllMocks();
 
     // Restore writeFile mock after clearAllMocks
-    (vscode.workspace.fs.writeFile as ReturnType<typeof vi.fn>).mockImplementation(
+    (vscode.workspace.fs.writeFile as Mock).mockImplementation(
       (uri: { fsPath: string }, data: Buffer) => {
         writtenFiles.set(uri.fsPath, data);
         return Promise.resolve();
       }
     );
-    (vscode.window.showSaveDialog as ReturnType<typeof vi.fn>).mockResolvedValue(mockSaveUri);
+    (vscode.window.showSaveDialog as Mock).mockResolvedValue(mockSaveUri);
 
     // Register the command and capture the handler
     const disposable = registerExportTelemetryCommand(workspaceRoot, mockLogger());
-    const calls = (vscode.commands.registerCommand as ReturnType<typeof vi.fn>).mock.calls;
+    const calls = (vscode.commands.registerCommand as Mock).mock.calls;
     handler = calls[calls.length - 1]?.[1] ?? null;
   });
 
@@ -121,7 +121,7 @@ describe("exportTelemetry integration — multi-run fixture", () => {
     vi.spyOn(ExecutionHistoryReader, "readAll").mockResolvedValue(
       await ExecutionHistoryReader.parseJsonlFile(MULTI_RUN_FIXTURE)
     );
-    (vscode.window.showQuickPick as ReturnType<typeof vi.fn>)
+    (vscode.window.showQuickPick as Mock)
       .mockResolvedValueOnce({ label: "JSON (full records)", format: "json" })
       .mockResolvedValueOnce({ label: "All time", value: "all" });
 
@@ -142,7 +142,7 @@ describe("exportTelemetry integration — multi-run fixture", () => {
     vi.spyOn(ExecutionHistoryReader, "readAll").mockResolvedValue(
       await ExecutionHistoryReader.parseJsonlFile(MULTI_RUN_FIXTURE)
     );
-    (vscode.window.showQuickPick as ReturnType<typeof vi.fn>)
+    (vscode.window.showQuickPick as Mock)
       .mockResolvedValueOnce({ label: "CSV (one row per run)", format: "csv-runs" })
       .mockResolvedValueOnce({ label: "All time", value: "all" });
 
@@ -164,7 +164,7 @@ describe("exportTelemetry integration — multi-run fixture", () => {
     vi.spyOn(ExecutionHistoryReader, "readAll").mockResolvedValue(
       await ExecutionHistoryReader.parseJsonlFile(MULTI_RUN_FIXTURE)
     );
-    (vscode.window.showQuickPick as ReturnType<typeof vi.fn>)
+    (vscode.window.showQuickPick as Mock)
       .mockResolvedValueOnce({ label: "CSV (one row per stage)", format: "csv-stages" })
       .mockResolvedValueOnce({ label: "All time", value: "all" });
 
@@ -187,7 +187,7 @@ describe("exportTelemetry integration — multi-run fixture", () => {
       .mockResolvedValue(await ExecutionHistoryReader.parseJsonlFile(MULTI_RUN_FIXTURE));
     vi.spyOn(ExecutionHistoryReader, "readAll").mockResolvedValue([]);
 
-    (vscode.window.showQuickPick as ReturnType<typeof vi.fn>)
+    (vscode.window.showQuickPick as Mock)
       .mockResolvedValueOnce({ label: "CSV (one row per run)", format: "csv-runs" })
       .mockResolvedValueOnce({ label: "Last 7 days", value: "7d" });
 
@@ -202,7 +202,7 @@ describe("exportTelemetry integration — multi-run fixture", () => {
 
   it("shows warning when no records found", async () => {
     vi.spyOn(ExecutionHistoryReader, "readAll").mockResolvedValue([]);
-    (vscode.window.showQuickPick as ReturnType<typeof vi.fn>)
+    (vscode.window.showQuickPick as Mock)
       .mockResolvedValueOnce({ label: "JSON (full records)", format: "json" })
       .mockResolvedValueOnce({ label: "All time", value: "all" });
 
@@ -214,7 +214,7 @@ describe("exportTelemetry integration — multi-run fixture", () => {
   });
 
   it("returns early when format selection is cancelled", async () => {
-    (vscode.window.showQuickPick as ReturnType<typeof vi.fn>).mockResolvedValueOnce(undefined);
+    (vscode.window.showQuickPick as Mock).mockResolvedValueOnce(undefined);
 
     await handler!();
 
@@ -222,7 +222,7 @@ describe("exportTelemetry integration — multi-run fixture", () => {
   });
 
   it("returns early when date range selection is cancelled", async () => {
-    (vscode.window.showQuickPick as ReturnType<typeof vi.fn>)
+    (vscode.window.showQuickPick as Mock)
       .mockResolvedValueOnce({ label: "JSON (full records)", format: "json" })
       .mockResolvedValueOnce(undefined);
 
@@ -235,10 +235,10 @@ describe("exportTelemetry integration — multi-run fixture", () => {
     vi.spyOn(ExecutionHistoryReader, "readAll").mockResolvedValue(
       await ExecutionHistoryReader.parseJsonlFile(MULTI_RUN_FIXTURE)
     );
-    (vscode.window.showQuickPick as ReturnType<typeof vi.fn>)
+    (vscode.window.showQuickPick as Mock)
       .mockResolvedValueOnce({ label: "JSON (full records)", format: "json" })
       .mockResolvedValueOnce({ label: "All time", value: "all" });
-    (vscode.window.showSaveDialog as ReturnType<typeof vi.fn>).mockResolvedValueOnce(undefined);
+    (vscode.window.showSaveDialog as Mock).mockResolvedValueOnce(undefined);
 
     await handler!();
 
@@ -254,16 +254,16 @@ describe("exportTelemetry integration — edge-cases fixture", () => {
     writtenFiles.clear();
     vi.clearAllMocks();
 
-    (vscode.workspace.fs.writeFile as ReturnType<typeof vi.fn>).mockImplementation(
+    (vscode.workspace.fs.writeFile as Mock).mockImplementation(
       (uri: { fsPath: string }, data: Buffer) => {
         writtenFiles.set(uri.fsPath, data);
         return Promise.resolve();
       }
     );
-    (vscode.window.showSaveDialog as ReturnType<typeof vi.fn>).mockResolvedValue(mockSaveUri);
+    (vscode.window.showSaveDialog as Mock).mockResolvedValue(mockSaveUri);
 
     const disposable = registerExportTelemetryCommand(workspaceRoot, mockLogger());
-    const calls = (vscode.commands.registerCommand as ReturnType<typeof vi.fn>).mock.calls;
+    const calls = (vscode.commands.registerCommand as Mock).mock.calls;
     handler = calls[calls.length - 1]?.[1] ?? null;
   });
 
@@ -271,7 +271,7 @@ describe("exportTelemetry integration — edge-cases fixture", () => {
     vi.spyOn(ExecutionHistoryReader, "readAll").mockResolvedValue(
       await ExecutionHistoryReader.parseJsonlFile(EDGE_CASES_FIXTURE)
     );
-    (vscode.window.showQuickPick as ReturnType<typeof vi.fn>)
+    (vscode.window.showQuickPick as Mock)
       .mockResolvedValueOnce({ label: "CSV (one row per run)", format: "csv-runs" })
       .mockResolvedValueOnce({ label: "All time", value: "all" });
 
@@ -286,7 +286,7 @@ describe("exportTelemetry integration — edge-cases fixture", () => {
     vi.spyOn(ExecutionHistoryReader, "readAll").mockResolvedValue(
       await ExecutionHistoryReader.parseJsonlFile(EDGE_CASES_FIXTURE)
     );
-    (vscode.window.showQuickPick as ReturnType<typeof vi.fn>)
+    (vscode.window.showQuickPick as Mock)
       .mockResolvedValueOnce({ label: "CSV (one row per run)", format: "csv-runs" })
       .mockResolvedValueOnce({ label: "All time", value: "all" });
 
@@ -305,7 +305,7 @@ describe("exportTelemetry integration — edge-cases fixture", () => {
     vi.spyOn(ExecutionHistoryReader, "readAll").mockResolvedValue(
       await ExecutionHistoryReader.parseJsonlFile(EDGE_CASES_FIXTURE)
     );
-    (vscode.window.showQuickPick as ReturnType<typeof vi.fn>)
+    (vscode.window.showQuickPick as Mock)
       .mockResolvedValueOnce({ label: "CSV (one row per run)", format: "csv-runs" })
       .mockResolvedValueOnce({ label: "All time", value: "all" });
 

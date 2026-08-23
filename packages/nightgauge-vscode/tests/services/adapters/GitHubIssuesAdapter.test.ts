@@ -16,7 +16,7 @@
  * @see Issue #2566
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, type Mock } from "vitest";
 import { GitHubIssuesAdapter } from "../../../src/services/adapters/GitHubIssuesAdapter";
 import type { IssueDetail } from "../../../src/services/IpcClientBase";
 
@@ -52,7 +52,7 @@ vi.mock("vscode", () => ({
 // IpcClient mock factory
 // ---------------------------------------------------------------------------
 
-function makeIpcMock(details: IssueDetail[]): { issueList: ReturnType<typeof vi.fn> } {
+function makeIpcMock(details: IssueDetail[]): { issueList: Mock } {
   return {
     issueList: vi.fn().mockResolvedValue(details),
   };

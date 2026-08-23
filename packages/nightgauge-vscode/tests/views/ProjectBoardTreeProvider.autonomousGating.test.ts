@@ -5,7 +5,7 @@
  * all — an idle workspace makes zero background GitHub traffic. With autonomous
  * ON the timer runs (its rate-limit-pause behavior is covered separately).
  */
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from "vitest";
 import * as vscode from "vscode";
 import { ProjectBoardTreeProvider } from "../../src/views/ProjectBoardTreeProvider";
 import type { ReadyIssue, SortBy, SortDirection } from "../../src/services/ProjectBoardService";
@@ -46,7 +46,7 @@ function makeEmitter<T>() {
 
 function createFakeProvider(): {
   provider: IWorkItemProvider;
-  clearCache: ReturnType<typeof vi.fn>;
+  clearCache: Mock;
 } {
   const rateLimit = makeEmitter<never>();
   const itemsUpdated = makeEmitter<void>();

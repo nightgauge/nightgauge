@@ -12,7 +12,7 @@
  * @see Issue #330 - Epic Dashboard with Cross-Repo Progress
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from "vitest";
 import {
   EpicDashboard,
   type CrossRepoEpicProgress,
@@ -714,7 +714,7 @@ describe("EpicDashboard", () => {
 
     it("should return empty array when no current repository", async () => {
       const manager = createMockWorkspaceManager([]);
-      (manager.getCurrentRepository as ReturnType<typeof vi.fn>).mockReturnValue(null);
+      (manager.getCurrentRepository as Mock).mockReturnValue(null);
       const dashboard = new EpicDashboard(manager);
 
       const result = await dashboard.getAllCrossRepoProgress();

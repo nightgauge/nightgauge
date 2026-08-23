@@ -19,7 +19,7 @@
  * @see internal/orchestrator/testdata/terminal_behaviors.json — the parity row
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from "vitest";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 
@@ -147,8 +147,8 @@ function createMockLogger() {
 interface SlotHandle {
   resolveRun: (result: any) => void;
   rejectRun: (error: Error) => void;
-  getState: ReturnType<typeof vi.fn>;
-  stateDispose: ReturnType<typeof vi.fn>;
+  getState: Mock;
+  stateDispose: Mock;
   /**
    * When set, `stateService.getState()` never settles. That is the ONE await
    * inside `runSlotPipeline` that sits AFTER terminal boundary 1 takes the
@@ -268,10 +268,10 @@ describe("ConcurrentPipelineManager force-clear raises the abandoned-dispatch ca
   let mockQueue: ReturnType<typeof createMockQueueService>;
   let mockLogger: ReturnType<typeof createMockLogger>;
   let callbacks: {
-    onSlotFailed: ReturnType<typeof vi.fn>;
-    onSlotCompleted: ReturnType<typeof vi.fn>;
-    onSlotDeferred: ReturnType<typeof vi.fn>;
-    onSlotCleaned: ReturnType<typeof vi.fn>;
+    onSlotFailed: Mock;
+    onSlotCompleted: Mock;
+    onSlotDeferred: Mock;
+    onSlotCleaned: Mock;
   };
 
   beforeEach(() => {

@@ -8,7 +8,7 @@
  * @see Issue #3337 — Phase 4: Promote Machine Tier to First-Class
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, type Mock } from "vitest";
 import * as vscode from "vscode";
 
 // ── Hoisted mocks ─────────────────────────────────────────────────────────────
@@ -137,7 +137,7 @@ describe("registerEditTeamConfigCommand", () => {
 
     const statusItem = mockCreateStatusBarItem.mock.results[0]?.value as {
       text: string;
-      show: ReturnType<typeof vi.fn>;
+      show: Mock;
     };
     expect(statusItem).toBeDefined();
     expect(statusItem.show).toHaveBeenCalled();

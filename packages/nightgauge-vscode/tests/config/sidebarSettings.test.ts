@@ -6,7 +6,7 @@
  * @see Issue #476 - Refactor tree providers to use ConfigBridge
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from "vitest";
 import { getSidebarSettings, DEFAULT_SIDEBAR_SETTINGS } from "../../src/config/sidebarSettings";
 import { ConfigBridge } from "../../src/services/ConfigBridge";
 import { DEFAULT_CONFIG } from "../../src/config/schema";
@@ -20,8 +20,8 @@ vi.mock("../../src/services/ConfigBridge", () => ({
 
 describe("sidebarSettings", () => {
   let mockConfigBridge: {
-    isInitialized: ReturnType<typeof vi.fn>;
-    getUI: ReturnType<typeof vi.fn>;
+    isInitialized: Mock;
+    getUI: Mock;
   };
 
   beforeEach(() => {

@@ -1,23 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { AgentRegistrationService } from "../../src/services/AgentRegistrationService";
 import type { AgentRegistrationPayload } from "../../src/services/AgentRegistrationService";
+import { makeMockTokenStorage } from "../mocks/token-storage";
+import { makeMockLogger } from "../mocks/logger";
 
 vi.mock("vscode", () => ({}));
 
 vi.stubGlobal("fetch", vi.fn());
-
-const makeTokenStorage = (token: string | null = "test-token") => ({
-  retrieve: vi.fn().mockResolvedValue(token),
-  store: vi.fn(),
-  delete: vi.fn(),
-});
-
-const makeLogger = () => ({
-  info: vi.fn(),
-  warn: vi.fn(),
-  error: vi.fn(),
-  debug: vi.fn(),
-});
 
 const PLATFORM_URL = "https://api.nightgauge.dev";
 
@@ -38,13 +27,13 @@ function makeResponse(status: number, body: unknown): Response {
 }
 
 describe("AgentRegistrationService", () => {
-  let tokenStorage: ReturnType<typeof makeTokenStorage>;
-  let logger: ReturnType<typeof makeLogger>;
+  let tokenStorage: ReturnType<typeof makeMockTokenStorage>;
+  let logger: ReturnType<typeof makeMockLogger>;
   let service: AgentRegistrationService;
 
   beforeEach(() => {
-    tokenStorage = makeTokenStorage();
-    logger = makeLogger();
+    tokenStorage = makeMockTokenStorage();
+    logger = makeMockLogger();
     service = new AgentRegistrationService(() => PLATFORM_URL, tokenStorage, logger);
     vi.mocked(fetch).mockReset();
   });
@@ -112,7 +101,7 @@ describe("AgentRegistrationService", () => {
   });
 
   it("returns null and never calls fetch when no accessToken", async () => {
-    tokenStorage = makeTokenStorage(null);
+    tokenStorage = makeMockTokenStorage(null);
     service = new AgentRegistrationService(() => PLATFORM_URL, tokenStorage, logger);
 
     const result = await service.register(PAYLOAD);
@@ -240,7 +229,7 @@ describe("AgentRegistrationService", () => {
     });
 
     it("skips fetch and logs warning when no accessToken", async () => {
-      tokenStorage = makeTokenStorage(null);
+      tokenStorage = makeMockTokenStorage(null);
       service = new AgentRegistrationService(() => PLATFORM_URL, tokenStorage, logger);
 
       await service.deregister(AGENT_ID);

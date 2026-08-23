@@ -9,7 +9,7 @@
  * @see Issue #2867 — cross-repo issue lookups
  */
 
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, vi, type Mock } from "vitest";
 import {
   updateProjectItemStatus,
   getProjectItemStatus,
@@ -100,18 +100,18 @@ function createMockLogger(): Logger {
 }
 
 function setupConfigMocks(configOverride?: unknown) {
-  (fsPromises.readFile as ReturnType<typeof vi.fn>).mockImplementation((filePath: string) => {
+  (fsPromises.readFile as Mock).mockImplementation((filePath: string) => {
     if (filePath.includes("config.yaml")) return Promise.resolve("mock yaml");
     return Promise.reject(new Error("File not found"));
   });
 
-  (resolveConfigPath as ReturnType<typeof vi.fn>).mockResolvedValue({
+  (resolveConfigPath as Mock).mockResolvedValue({
     path: `${MOCK_CWD}/.nightgauge/config.yaml`,
     isLegacy: false,
     exists: true,
   });
 
-  (yamlParse as ReturnType<typeof vi.fn>).mockReturnValue(configOverride ?? MOCK_YAML_CONFIG);
+  (yamlParse as Mock).mockReturnValue(configOverride ?? MOCK_YAML_CONFIG);
 }
 
 /** Build a projectItems response for the new single-query lookup. */
@@ -165,7 +165,7 @@ function contentNodeResponse(opts: {
 }
 
 function setupExecMockSequential(responses: unknown[]) {
-  const execMock = exec as unknown as ReturnType<typeof vi.fn>;
+  const execMock = exec as unknown as Mock;
   let callIndex = 0;
 
   execMock.mockImplementation((cmd: string, opts: unknown, callback?: Function) => {
@@ -214,7 +214,7 @@ describe("projectFieldWriter", () => {
 
     describe("config loading", () => {
       it("fails when config.yaml is missing", async () => {
-        (resolveConfigPath as ReturnType<typeof vi.fn>).mockResolvedValue({
+        (resolveConfigPath as Mock).mockResolvedValue({
           path: `${MOCK_CWD}/.nightgauge/config.yaml`,
           isLegacy: false,
           exists: false,

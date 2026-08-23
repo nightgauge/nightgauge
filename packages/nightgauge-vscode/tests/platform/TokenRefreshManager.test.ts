@@ -13,7 +13,7 @@
  * @see Issue #1466 - Implement token refresh lifecycle and automatic renewal
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from "vitest";
 import type { ConnectionStateEvent, TokenChangeEvent } from "../../src/platform/types";
 
 // ---------------------------------------------------------------------------
@@ -153,7 +153,7 @@ describe("TokenRefreshManager", () => {
     vi.useFakeTimers();
     // showWarningMessage is a module-level mock shared across tests — reset its
     // call history so per-test count/absence assertions aren't polluted.
-    (vscode.window.showWarningMessage as ReturnType<typeof vi.fn>).mockClear();
+    (vscode.window.showWarningMessage as Mock).mockClear();
   });
 
   afterEach(() => {
@@ -184,7 +184,7 @@ describe("TokenRefreshManager", () => {
       );
 
       // Mock a successful refresh response
-      (ipcClient.platformAuthRefresh as ReturnType<typeof vi.fn>).mockResolvedValue({
+      (ipcClient.platformAuthRefresh as Mock).mockResolvedValue({
         access_token: "new-access",
         refresh_token: "new-refresh",
         token_type: "Bearer",
@@ -216,7 +216,7 @@ describe("TokenRefreshManager", () => {
       const onSignOut = vi.fn().mockResolvedValue(undefined);
       const logger = createMockLogger();
 
-      (ipcClient.platformAuthRefresh as ReturnType<typeof vi.fn>).mockResolvedValue({
+      (ipcClient.platformAuthRefresh as Mock).mockResolvedValue({
         access_token: "new-access",
         refresh_token: "new-refresh",
         token_type: "Bearer",
@@ -256,7 +256,7 @@ describe("TokenRefreshManager", () => {
       const onSignOut = vi.fn().mockResolvedValue(undefined);
       const logger = createMockLogger();
 
-      (ipcClient.platformAuthRefresh as ReturnType<typeof vi.fn>).mockResolvedValue({
+      (ipcClient.platformAuthRefresh as Mock).mockResolvedValue({
         access_token: "new-access",
         refresh_token: "new-refresh",
         token_type: "Bearer",
@@ -318,7 +318,7 @@ describe("TokenRefreshManager", () => {
       const onSignOut = vi.fn().mockResolvedValue(undefined);
       const logger = createMockLogger();
 
-      (ipcClient.platformAuthRefresh as ReturnType<typeof vi.fn>).mockResolvedValue({
+      (ipcClient.platformAuthRefresh as Mock).mockResolvedValue({
         access_token: "new-access",
         refresh_token: "new-refresh",
         token_type: "Bearer",
@@ -339,7 +339,7 @@ describe("TokenRefreshManager", () => {
       expect(tokenStorage.store).toHaveBeenCalledWith("accessToken", "new-access");
       expect(tokenStorage.store).toHaveBeenCalledWith("refreshToken", "new-refresh");
       // expiresAt stored as ISO string
-      const expiresAtCalls = (tokenStorage.store as ReturnType<typeof vi.fn>).mock.calls.filter(
+      const expiresAtCalls = (tokenStorage.store as Mock).mock.calls.filter(
         (c: unknown[]) => c[0] === "expiresAt"
       );
       expect(expiresAtCalls).toHaveLength(1);
@@ -358,7 +358,7 @@ describe("TokenRefreshManager", () => {
       const onSignOut = vi.fn().mockResolvedValue(undefined);
       const logger = createMockLogger();
 
-      (ipcClient.platformAuthRefresh as ReturnType<typeof vi.fn>).mockResolvedValue({
+      (ipcClient.platformAuthRefresh as Mock).mockResolvedValue({
         access_token: "new-access",
         refresh_token: "new-refresh",
         token_type: "Bearer",
@@ -394,7 +394,7 @@ describe("TokenRefreshManager", () => {
       const onSignOut = vi.fn().mockResolvedValue(undefined);
       const logger = createMockLogger();
 
-      (ipcClient.platformAuthRefresh as ReturnType<typeof vi.fn>).mockResolvedValue({
+      (ipcClient.platformAuthRefresh as Mock).mockResolvedValue({
         access_token: "new-access",
         refresh_token: "new-refresh",
         token_type: "Bearer",
@@ -432,9 +432,7 @@ describe("TokenRefreshManager", () => {
       const onSignOut = vi.fn().mockResolvedValue(undefined);
       const logger = createMockLogger();
 
-      (ipcClient.platformAuthRefresh as ReturnType<typeof vi.fn>).mockRejectedValue(
-        new Error("401 Unauthorized")
-      );
+      (ipcClient.platformAuthRefresh as Mock).mockRejectedValue(new Error("401 Unauthorized"));
 
       const mgr = new TokenRefreshManager(
         tokenStorage as unknown as ITokenStorage,
@@ -465,7 +463,7 @@ describe("TokenRefreshManager", () => {
       // Realistic auth-fatal rejection: the platform returns 403 for an expired
       // refresh token, surfaced by the Go IPC layer as "unexpected status 403".
       const refreshError = new Error("IPC error FORBIDDEN: authRefresh: unexpected status 403");
-      (ipcClient.platformAuthRefresh as ReturnType<typeof vi.fn>).mockRejectedValue(refreshError);
+      (ipcClient.platformAuthRefresh as Mock).mockRejectedValue(refreshError);
 
       const mgr = new TokenRefreshManager(
         tokenStorage as unknown as ITokenStorage,
@@ -497,9 +495,7 @@ describe("TokenRefreshManager", () => {
       const onSignOut = vi.fn().mockResolvedValue(undefined);
       const logger = createMockLogger();
 
-      (ipcClient.platformAuthRefresh as ReturnType<typeof vi.fn>).mockRejectedValue(
-        new Error("401 Unauthorized")
-      );
+      (ipcClient.platformAuthRefresh as Mock).mockRejectedValue(new Error("401 Unauthorized"));
 
       const mgr = new TokenRefreshManager(
         tokenStorage as unknown as ITokenStorage,
@@ -531,9 +527,7 @@ describe("TokenRefreshManager", () => {
       const onSignOut = vi.fn().mockResolvedValue(undefined);
       const logger = createMockLogger();
 
-      (ipcClient.platformAuthRefresh as ReturnType<typeof vi.fn>).mockRejectedValue(
-        new Error("401 Unauthorized")
-      );
+      (ipcClient.platformAuthRefresh as Mock).mockRejectedValue(new Error("401 Unauthorized"));
 
       const mgr = new TokenRefreshManager(
         tokenStorage as unknown as ITokenStorage,
@@ -572,9 +566,7 @@ describe("TokenRefreshManager", () => {
         await tokenStorage.clear();
       });
 
-      (ipcClient.platformAuthRefresh as ReturnType<typeof vi.fn>).mockRejectedValue(
-        new Error("401 Unauthorized")
-      );
+      (ipcClient.platformAuthRefresh as Mock).mockRejectedValue(new Error("401 Unauthorized"));
 
       const mgr = new TokenRefreshManager(
         tokenStorage as unknown as ITokenStorage,
@@ -610,7 +602,7 @@ describe("TokenRefreshManager", () => {
       const onSignOut = vi.fn().mockResolvedValue(undefined);
       const logger = createMockLogger();
 
-      (ipcClient.platformAuthRefresh as ReturnType<typeof vi.fn>).mockResolvedValue({
+      (ipcClient.platformAuthRefresh as Mock).mockResolvedValue({
         access_token: "new-access",
         refresh_token: "new-refresh",
         token_type: "Bearer",
@@ -716,7 +708,7 @@ describe("TokenRefreshManager", () => {
       const onSignOut = vi.fn().mockResolvedValue(undefined);
       const logger = createMockLogger();
 
-      (ipcClient.platformAuthRefresh as ReturnType<typeof vi.fn>).mockResolvedValue({
+      (ipcClient.platformAuthRefresh as Mock).mockResolvedValue({
         access_token: "new-access",
         refresh_token: "new-refresh",
         token_type: "Bearer",
@@ -844,7 +836,7 @@ describe("TokenRefreshManager", () => {
       const logger = createMockLogger();
 
       // First attempt: transient network error. Second attempt (after backoff): success.
-      (ipcClient.platformAuthRefresh as ReturnType<typeof vi.fn>)
+      (ipcClient.platformAuthRefresh as Mock)
         .mockRejectedValueOnce(new Error("connect ECONNREFUSED 127.0.0.1:443"))
         .mockResolvedValueOnce(SUCCESS_RESPONSE);
 
@@ -883,7 +875,7 @@ describe("TokenRefreshManager", () => {
       const onSignOut = vi.fn().mockResolvedValue(undefined);
       const logger = createMockLogger();
 
-      (ipcClient.platformAuthRefresh as ReturnType<typeof vi.fn>).mockRejectedValue(
+      (ipcClient.platformAuthRefresh as Mock).mockRejectedValue(
         new Error("IPC error INTERNAL: authRefresh: unexpected status 503")
       );
 
@@ -902,9 +894,7 @@ describe("TokenRefreshManager", () => {
         await vi.advanceTimersByTimeAsync(5 * MINUTE);
       }
 
-      expect(
-        (ipcClient.platformAuthRefresh as ReturnType<typeof vi.fn>).mock.calls.length
-      ).toBeGreaterThan(2);
+      expect((ipcClient.platformAuthRefresh as Mock).mock.calls.length).toBeGreaterThan(2);
       expect(onSignOut).not.toHaveBeenCalled();
       expect(vscode.window.showWarningMessage).not.toHaveBeenCalled();
 
@@ -928,7 +918,7 @@ describe("TokenRefreshManager", () => {
 
       // Hold the refresh in-flight via a deferred promise so both callers overlap.
       let resolveRefresh!: (v: unknown) => void;
-      (ipcClient.platformAuthRefresh as ReturnType<typeof vi.fn>).mockReturnValue(
+      (ipcClient.platformAuthRefresh as Mock).mockReturnValue(
         new Promise((res) => {
           resolveRefresh = res;
         })
@@ -977,7 +967,7 @@ describe("TokenRefreshManager", () => {
       const onSignOut = vi.fn().mockResolvedValue(undefined);
       const logger = createMockLogger();
 
-      (ipcClient.platformAuthRefresh as ReturnType<typeof vi.fn>).mockRejectedValue(
+      (ipcClient.platformAuthRefresh as Mock).mockRejectedValue(
         new Error("fetch failed: ETIMEDOUT")
       );
 
@@ -1003,7 +993,7 @@ describe("TokenRefreshManager", () => {
       const onSignOut = vi.fn().mockResolvedValue(undefined);
       const logger = createMockLogger();
 
-      (ipcClient.platformAuthRefresh as ReturnType<typeof vi.fn>).mockRejectedValue(
+      (ipcClient.platformAuthRefresh as Mock).mockRejectedValue(
         new Error("IPC error UNAUTHORIZED: authRefresh: unexpected status 401")
       );
 

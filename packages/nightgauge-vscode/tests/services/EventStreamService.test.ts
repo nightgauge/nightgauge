@@ -38,8 +38,8 @@ vi.mock("vscode", () => {
 });
 
 const mockGlobalState = {
-  get: vi.fn<[string], string | undefined>().mockReturnValue(undefined),
-  update: vi.fn<[string, unknown], Promise<void>>().mockResolvedValue(undefined),
+  get: vi.fn<(a0: string) => string | undefined>().mockReturnValue(undefined),
+  update: vi.fn<(a0: string, a1: unknown) => Promise<void>>().mockResolvedValue(undefined),
 };
 
 const mockContext = {
@@ -54,7 +54,7 @@ const mockLogger: Logger = {
 } as unknown as Logger;
 
 const mockTokenRefreshManager = {
-  forceRefresh: vi.fn<[], Promise<string | null>>().mockResolvedValue(null),
+  forceRefresh: vi.fn<() => Promise<string | null>>().mockResolvedValue(null),
 } as unknown as TokenRefreshManager;
 
 const mockFetch = vi.fn();
@@ -466,7 +466,7 @@ describe("EventStreamService", () => {
       const newToken = "refreshed-token";
       const emptyStream = makeSseStream("");
       const refreshManager = {
-        forceRefresh: vi.fn<[], Promise<string | null>>().mockResolvedValue(newToken),
+        forceRefresh: vi.fn<() => Promise<string | null>>().mockResolvedValue(newToken),
       } as unknown as TokenRefreshManager;
 
       mockFetch

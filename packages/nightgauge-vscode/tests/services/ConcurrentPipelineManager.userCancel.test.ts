@@ -7,7 +7,7 @@
  * `userCancelled` flag that suppresses the failure-as-such bookkeeping.
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, type Mock } from "vitest";
 
 vi.mock("vscode", () => ({
   EventEmitter: class {
@@ -93,7 +93,7 @@ function makeQueueItem(issueNumber: number): QueueItem {
 
 function createControllableFactory() {
   const resolvers = new Map<number, (result: any) => void>();
-  const stops = new Map<number, ReturnType<typeof vi.fn>>();
+  const stops = new Map<number, Mock>();
   const factory = vi.fn().mockImplementation((_workDir: string, issueNumber: number) => {
     const promise = new Promise((resolve) => resolvers.set(issueNumber, resolve));
     const stop = vi.fn();

@@ -10,7 +10,7 @@
  * @see Issue #164 - Pipeline stages stuck in 'running' status after completion
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from "vitest";
 import type { PipelineStage } from "@nightgauge/sdk";
 
 // Mock vscode module
@@ -417,18 +417,18 @@ describe("runStage - Stage Completion (Issue #164)", () => {
  */
 describe("runStage Command - Additional Coverage (Issue #273)", () => {
   let mockStateService: MockPipelineStateService & {
-    startStage: ReturnType<typeof vi.fn>;
-    validateStageTransition: ReturnType<typeof vi.fn>;
+    startStage: Mock;
+    validateStageTransition: Mock;
   };
   let mockLogger: MockLogger;
   let mockOutputWindow: MockOutputWindow & {
-    show: ReturnType<typeof vi.fn>;
-    setIssueNumber: ReturnType<typeof vi.fn>;
+    show: Mock;
+    setIssueNumber: Mock;
   };
   let mockStatusBar: MockStatusBar;
   let mockTreeProvider: {
-    getCurrentIssueNumber: ReturnType<typeof vi.fn>;
-    updateStageStatus: ReturnType<typeof vi.fn>;
+    getCurrentIssueNumber: Mock;
+    updateStageStatus: Mock;
   };
 
   beforeEach(() => {

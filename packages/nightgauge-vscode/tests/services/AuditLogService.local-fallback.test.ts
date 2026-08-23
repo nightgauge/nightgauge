@@ -10,7 +10,7 @@
  * - Successful platform fetch → isLocalFallback is undefined/false
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from "vitest";
 import { AuditLogService, getDefaultAuditFilters } from "../../src/services/AuditLogService";
 import type { LocalAuditFallbackService } from "../../src/services/LocalAuditFallbackService";
 import type { AuditLogData, AuditFilterState } from "../../src/views/dashboard/DashboardState";
@@ -79,7 +79,7 @@ describe("AuditLogService — local fallback activation", () => {
   });
 
   it("404 response → activates local fallback and returns local data", async () => {
-    (fetch as ReturnType<typeof vi.fn>).mockResolvedValue(makeFetchResponse(404));
+    (fetch as Mock).mockResolvedValue(makeFetchResponse(404));
     const localFallback = makeLocalFallback();
     const svc = new AuditLogService(
       makeTokenStorage(),
@@ -97,7 +97,7 @@ describe("AuditLogService — local fallback activation", () => {
   });
 
   it("503 response → activates local fallback", async () => {
-    (fetch as ReturnType<typeof vi.fn>).mockResolvedValue(makeFetchResponse(503));
+    (fetch as Mock).mockResolvedValue(makeFetchResponse(503));
     const localFallback = makeLocalFallback();
     const svc = new AuditLogService(
       makeTokenStorage(),
@@ -113,9 +113,7 @@ describe("AuditLogService — local fallback activation", () => {
   });
 
   it("network error (DNS failure) → activates local fallback", async () => {
-    (fetch as ReturnType<typeof vi.fn>).mockRejectedValue(
-      new Error("getaddrinfo ENOTFOUND api.example.com")
-    );
+    (fetch as Mock).mockRejectedValue(new Error("getaddrinfo ENOTFOUND api.example.com"));
     const localFallback = makeLocalFallback();
     const svc = new AuditLogService(
       makeTokenStorage(),
@@ -131,7 +129,7 @@ describe("AuditLogService — local fallback activation", () => {
   });
 
   it("401 response → returns noAccessState, does NOT activate local fallback (ADR-002)", async () => {
-    (fetch as ReturnType<typeof vi.fn>).mockResolvedValue(makeFetchResponse(401));
+    (fetch as Mock).mockResolvedValue(makeFetchResponse(401));
     const localFallback = makeLocalFallback();
     const svc = new AuditLogService(
       makeTokenStorage(),
@@ -148,7 +146,7 @@ describe("AuditLogService — local fallback activation", () => {
   });
 
   it("403 response → returns noAccessState, does NOT activate local fallback", async () => {
-    (fetch as ReturnType<typeof vi.fn>).mockResolvedValue(makeFetchResponse(403));
+    (fetch as Mock).mockResolvedValue(makeFetchResponse(403));
     const localFallback = makeLocalFallback();
     const svc = new AuditLogService(
       makeTokenStorage(),
@@ -165,7 +163,7 @@ describe("AuditLogService — local fallback activation", () => {
   });
 
   it("no localFallback injected + 404 → returns original error state (backward compat)", async () => {
-    (fetch as ReturnType<typeof vi.fn>).mockResolvedValue(makeFetchResponse(404));
+    (fetch as Mock).mockResolvedValue(makeFetchResponse(404));
     const svc = new AuditLogService(
       makeTokenStorage(),
       () => "https://api.example.com",
@@ -193,7 +191,7 @@ describe("AuditLogService — local fallback activation", () => {
       totalCount: 1,
       nextCursor: null,
     };
-    (fetch as ReturnType<typeof vi.fn>).mockResolvedValue(makeFetchResponse(200, platformResponse));
+    (fetch as Mock).mockResolvedValue(makeFetchResponse(200, platformResponse));
     const localFallback = makeLocalFallback();
     const svc = new AuditLogService(
       makeTokenStorage(),

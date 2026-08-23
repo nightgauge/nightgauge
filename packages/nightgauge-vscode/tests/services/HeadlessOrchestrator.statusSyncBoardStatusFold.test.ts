@@ -28,7 +28,7 @@
  * @see packages/nightgauge-vscode/src/utils/projectFieldMapping.ts — boardStatusEquals
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, type Mock } from "vitest";
 
 vi.mock("../../src/utils/projectFieldWriter", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../src/utils/projectFieldWriter")>();
@@ -57,10 +57,10 @@ const writeStatus = vi.mocked(updateProjectItemStatus);
 interface Harness {
   sync: (stage: string, issueNumber: number) => Promise<void>;
   logger: {
-    info: ReturnType<typeof vi.fn>;
-    warn: ReturnType<typeof vi.fn>;
-    debug: ReturnType<typeof vi.fn>;
-    error: ReturnType<typeof vi.fn>;
+    info: Mock;
+    warn: Mock;
+    debug: Mock;
+    error: Mock;
   };
 }
 

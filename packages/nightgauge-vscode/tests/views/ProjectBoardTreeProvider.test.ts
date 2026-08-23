@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from "vitest";
 import * as vscode from "vscode";
 import { ProjectBoardTreeProvider } from "../../src/views/ProjectBoardTreeProvider";
 import { ProjectBoardService } from "../../src/services/ProjectBoardService";
@@ -717,12 +717,12 @@ describe("ProjectBoardTreeProvider", () => {
 
   describe("setStateService() - Issue #151", () => {
     let mockStateService: {
-      onStageComplete: ReturnType<typeof vi.fn>;
-      onStateChanged: ReturnType<typeof vi.fn>;
-      onBacktrackTriggered: ReturnType<typeof vi.fn>;
+      onStageComplete: Mock;
+      onStateChanged: Mock;
+      onBacktrackTriggered: Mock;
     };
     let stageCompleteCallback: ((event: { stage: string; issueNumber: number }) => void) | null;
-    let mockDisposable: { dispose: ReturnType<typeof vi.fn> };
+    let mockDisposable: { dispose: Mock };
 
     beforeEach(() => {
       stageCompleteCallback = null;

@@ -13,7 +13,7 @@
  * @see Issue #1831 - Unify pipeline worktree path
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from "vitest";
 import type { PipelineStage } from "@nightgauge/sdk";
 import type { QueueItem, QueueConfig } from "../../src/types/queue";
 
@@ -56,10 +56,10 @@ interface MockIssueQueueService {
 }
 
 interface MockLogger {
-  info: ReturnType<typeof vi.fn>;
-  warn: ReturnType<typeof vi.fn>;
-  error: ReturnType<typeof vi.fn>;
-  debug: ReturnType<typeof vi.fn>;
+  info: Mock;
+  warn: Mock;
+  error: Mock;
+  debug: Mock;
 }
 
 /**

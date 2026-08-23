@@ -11,7 +11,7 @@
  * @see Issue #2567 - Implement CompositeAdapter for issue discovery with board enrichment
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from "vitest";
 import { CompositeAdapter } from "../../src/services/adapters/CompositeAdapter";
 import type { WorkItem, IWorkItemProvider } from "../../src/services/types/WorkItemProvider";
 
@@ -287,7 +287,7 @@ describe("CompositeAdapter", () => {
   describe("graceful board degradation", () => {
     it("returns repo items when board source getAllItems rejects", async () => {
       const failingBoard = makeMockProvider([]);
-      (failingBoard.getAllItems as ReturnType<typeof vi.fn>).mockRejectedValue(
+      (failingBoard.getAllItems as Mock).mockRejectedValue(
         new Error("GitHub API rate limit exceeded")
       );
       const repoSource = makeMockProvider([
@@ -304,13 +304,9 @@ describe("CompositeAdapter", () => {
 
     it("returns empty array when both sources fail", async () => {
       const failingBoard = makeMockProvider([]);
-      (failingBoard.getAllItems as ReturnType<typeof vi.fn>).mockRejectedValue(
-        new Error("board failed")
-      );
+      (failingBoard.getAllItems as Mock).mockRejectedValue(new Error("board failed"));
       const failingRepo = makeMockProvider([]);
-      (failingRepo.getAllItems as ReturnType<typeof vi.fn>).mockRejectedValue(
-        new Error("repo failed")
-      );
+      (failingRepo.getAllItems as Mock).mockRejectedValue(new Error("repo failed"));
 
       adapter = new CompositeAdapter("/workspace", failingBoard, failingRepo);
       const all = await adapter.getAllItems();
@@ -320,7 +316,7 @@ describe("CompositeAdapter", () => {
 
     it("returns empty array when repo identity cannot be resolved (lazy-init path)", async () => {
       const { getRepoIdentity } = await import("../../src/utils/configPathResolver");
-      (getRepoIdentity as ReturnType<typeof vi.fn>).mockResolvedValueOnce(null);
+      (getRepoIdentity as Mock).mockResolvedValueOnce(null);
 
       // No injected repoSource — triggers lazy init which will find null identity
       adapter = new CompositeAdapter("/workspace", null);

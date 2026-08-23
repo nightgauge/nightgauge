@@ -7,7 +7,7 @@
  * @see Issue #2170 — Add IPC bridge for remote command status
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from "vitest";
 
 // ---------------------------------------------------------------------------
 // VSCode mock
@@ -138,7 +138,7 @@ describe("RemoteCommandStatusService", () => {
     svc.start();
     await vi.advanceTimersByTimeAsync(0);
 
-    expect(vscode.window.showInformationMessage as ReturnType<typeof vi.fn>).toHaveBeenCalledWith(
+    expect(vscode.window.showInformationMessage as Mock).toHaveBeenCalledWith(
       expect.stringContaining("pipeline.run")
     );
     svc.dispose();
@@ -156,7 +156,7 @@ describe("RemoteCommandStatusService", () => {
     svc.start();
     await vi.advanceTimersByTimeAsync(0);
 
-    expect(vscode.window.showInformationMessage as ReturnType<typeof vi.fn>).not.toHaveBeenCalled();
+    expect(vscode.window.showInformationMessage as Mock).not.toHaveBeenCalled();
     svc.dispose();
   });
 
@@ -167,14 +167,12 @@ describe("RemoteCommandStatusService", () => {
     svc.start();
     await vi.advanceTimersByTimeAsync(0);
     // First poll — notification fires
-    expect(vscode.window.showInformationMessage as ReturnType<typeof vi.fn>).toHaveBeenCalledTimes(
-      1
-    );
-    (vscode.window.showInformationMessage as ReturnType<typeof vi.fn>).mockClear();
+    expect(vscode.window.showInformationMessage as Mock).toHaveBeenCalledTimes(1);
+    (vscode.window.showInformationMessage as Mock).mockClear();
 
     // Second poll with same command ID — no duplicate notification
     await vi.advanceTimersByTimeAsync(5_000);
-    expect(vscode.window.showInformationMessage as ReturnType<typeof vi.fn>).not.toHaveBeenCalled();
+    expect(vscode.window.showInformationMessage as Mock).not.toHaveBeenCalled();
 
     svc.dispose();
   });
@@ -187,7 +185,7 @@ describe("RemoteCommandStatusService", () => {
     svc.start();
     await vi.advanceTimersByTimeAsync(0);
 
-    expect(vscode.window.showInformationMessage as ReturnType<typeof vi.fn>).not.toHaveBeenCalled();
+    expect(vscode.window.showInformationMessage as Mock).not.toHaveBeenCalled();
     svc.dispose();
   });
 
@@ -216,11 +214,9 @@ describe("RemoteCommandStatusService", () => {
     );
     svc.start();
     await vi.advanceTimersByTimeAsync(0);
-    const callsBefore = (ipc.remoteGetCommandHistory as ReturnType<typeof vi.fn>).mock.calls.length;
+    const callsBefore = (ipc.remoteGetCommandHistory as Mock).mock.calls.length;
     svc.dispose();
     await vi.advanceTimersByTimeAsync(10_000);
-    expect((ipc.remoteGetCommandHistory as ReturnType<typeof vi.fn>).mock.calls.length).toBe(
-      callsBefore
-    );
+    expect((ipc.remoteGetCommandHistory as Mock).mock.calls.length).toBe(callsBefore);
   });
 });

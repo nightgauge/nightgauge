@@ -1,20 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { AgentHeartbeatService } from "../../src/services/AgentHeartbeatService";
+import { makeMockTokenStorage } from "../mocks/token-storage";
+import { makeMockLogger } from "../mocks/logger";
 
 vi.mock("vscode", () => ({}));
-
-const makeTokenStorage = (token: string | null = "test-token") => ({
-  retrieve: vi.fn().mockResolvedValue(token),
-  store: vi.fn(),
-  delete: vi.fn(),
-});
-
-const makeLogger = () => ({
-  info: vi.fn(),
-  warn: vi.fn(),
-  error: vi.fn(),
-  debug: vi.fn(),
-});
 
 function makeResponse(status: number): Response {
   return {
@@ -28,15 +17,15 @@ const PLATFORM_URL = "https://api.nightgauge.dev";
 const AGENT_ID = "agent-heartbeat-001";
 
 describe("AgentHeartbeatService", () => {
-  let tokenStorage: ReturnType<typeof makeTokenStorage>;
-  let logger: ReturnType<typeof makeLogger>;
+  let tokenStorage: ReturnType<typeof makeMockTokenStorage>;
+  let logger: ReturnType<typeof makeMockLogger>;
   let service: AgentHeartbeatService;
 
   beforeEach(() => {
     vi.useFakeTimers();
     vi.stubGlobal("fetch", vi.fn());
-    tokenStorage = makeTokenStorage();
-    logger = makeLogger();
+    tokenStorage = makeMockTokenStorage();
+    logger = makeMockLogger();
     service = new AgentHeartbeatService(() => PLATFORM_URL, tokenStorage, logger);
   });
 
@@ -177,7 +166,7 @@ describe("AgentHeartbeatService", () => {
     });
 
     it("does not send heartbeat if no accessToken", async () => {
-      tokenStorage = makeTokenStorage(null);
+      tokenStorage = makeMockTokenStorage(null);
       service = new AgentHeartbeatService(() => PLATFORM_URL, tokenStorage, logger);
 
       service.start(AGENT_ID);
@@ -197,7 +186,7 @@ describe("AgentHeartbeatService", () => {
 
     it("refreshes token and retries on 401 — succeeds on retry", async () => {
       const tokenRefresher = makeTokenRefresher("new-token");
-      tokenStorage = makeTokenStorage("old-token");
+      tokenStorage = makeMockTokenStorage("old-token");
       service = new AgentHeartbeatService(() => PLATFORM_URL, tokenStorage, logger, tokenRefresher);
 
       vi.mocked(fetch)
@@ -229,7 +218,7 @@ describe("AgentHeartbeatService", () => {
 
     it("counts failure when refresh yields no token on 401", async () => {
       const tokenRefresher = makeTokenRefresher(null);
-      tokenStorage = makeTokenStorage("old-token");
+      tokenStorage = makeMockTokenStorage("old-token");
       service = new AgentHeartbeatService(() => PLATFORM_URL, tokenStorage, logger, tokenRefresher);
 
       // Every attempt returns 401 and refresh yields no usable token.
@@ -281,15 +270,15 @@ describe("AgentHeartbeatService — adapter usage reporting (#736)", () => {
     windows: [],
   };
 
-  let tokenStorage: ReturnType<typeof makeTokenStorage>;
-  let logger: ReturnType<typeof makeLogger>;
+  let tokenStorage: ReturnType<typeof makeMockTokenStorage>;
+  let logger: ReturnType<typeof makeMockLogger>;
   let service: AgentHeartbeatService;
 
   beforeEach(() => {
     vi.useFakeTimers();
     vi.stubGlobal("fetch", vi.fn());
-    tokenStorage = makeTokenStorage();
-    logger = makeLogger();
+    tokenStorage = makeMockTokenStorage();
+    logger = makeMockLogger();
   });
 
   afterEach(() => {

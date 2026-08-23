@@ -29,7 +29,7 @@
  * force-clear arms.
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from "vitest";
 
 const { worktreeGate } = vi.hoisted(() => ({
   worktreeGate: { blockCreate: null as Promise<void> | null },
@@ -141,7 +141,7 @@ function createMockLogger() {
 
 interface SlotHandle {
   resolveRun: (result: any) => void;
-  beginRun: ReturnType<typeof vi.fn>;
+  beginRun: Mock;
 }
 
 /** Factory whose runPipeline promise is held open until the test settles it. */
@@ -200,10 +200,10 @@ describe("ConcurrentPipelineManager — the dispatch generation is the run ident
   let mockQueue: ReturnType<typeof createMockQueueService>;
   let mockLogger: ReturnType<typeof createMockLogger>;
   let callbacks: {
-    onSlotFailed: ReturnType<typeof vi.fn>;
-    onSlotCompleted: ReturnType<typeof vi.fn>;
-    onSlotDeferred: ReturnType<typeof vi.fn>;
-    onSlotCleaned: ReturnType<typeof vi.fn>;
+    onSlotFailed: Mock;
+    onSlotCompleted: Mock;
+    onSlotDeferred: Mock;
+    onSlotCleaned: Mock;
   };
 
   beforeEach(() => {

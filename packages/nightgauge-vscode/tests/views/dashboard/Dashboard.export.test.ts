@@ -13,7 +13,7 @@
  * @see Issue #1010 - Telemetry Analytics Export
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, type Mock } from "vitest";
 import { createMockMemento } from "../../mocks/memento";
 import * as vscode from "vscode";
 
@@ -506,7 +506,7 @@ describe("Dashboard.handleExportAnalytics", () => {
   });
 
   it("exports all-time CSV runs with non-zero cost values", async () => {
-    (ExecutionHistoryReader.readAll as ReturnType<typeof vi.fn>).mockResolvedValue([
+    (ExecutionHistoryReader.readAll as Mock).mockResolvedValue([
       makeFullRecord(100),
       makeFullRecord(101),
     ]);
@@ -524,9 +524,7 @@ describe("Dashboard.handleExportAnalytics", () => {
   });
 
   it("exports stage CSV with non-zero per-stage input tokens", async () => {
-    (ExecutionHistoryReader.readAll as ReturnType<typeof vi.fn>).mockResolvedValue([
-      makeFullRecord(100),
-    ]);
+    (ExecutionHistoryReader.readAll as Mock).mockResolvedValue([makeFullRecord(100)]);
 
     await asDashboardPrivate(dashboard).handleExportAnalytics("csv-stages", "all");
 
@@ -540,7 +538,7 @@ describe("Dashboard.handleExportAnalytics", () => {
   });
 
   it("shows warning when no records in date range", async () => {
-    (ExecutionHistoryReader.readAll as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    (ExecutionHistoryReader.readAll as Mock).mockResolvedValue([]);
 
     await asDashboardPrivate(dashboard).handleExportAnalytics("csv-runs", "all");
 
@@ -550,27 +548,25 @@ describe("Dashboard.handleExportAnalytics", () => {
   });
 
   it("uses readDateRange for last7 with correct 7-day window", async () => {
-    (ExecutionHistoryReader.readDateRange as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    (ExecutionHistoryReader.readDateRange as Mock).mockResolvedValue([]);
     vi.mocked(vscode.window.showSaveDialog).mockResolvedValue(undefined); // cancel save to skip write
 
     await asDashboardPrivate(dashboard).handleExportAnalytics("csv-runs", "last7");
 
     expect(ExecutionHistoryReader.readDateRange).toHaveBeenCalled();
-    const [, start, end] = (ExecutionHistoryReader.readDateRange as ReturnType<typeof vi.fn>).mock
-      .calls[0];
+    const [, start, end] = (ExecutionHistoryReader.readDateRange as Mock).mock.calls[0];
     const diffDays = (end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24);
     expect(diffDays).toBeGreaterThanOrEqual(6.9);
     expect(diffDays).toBeLessThanOrEqual(7.1);
   });
 
   it("uses readDateRange for last30 with correct 30-day window", async () => {
-    (ExecutionHistoryReader.readDateRange as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    (ExecutionHistoryReader.readDateRange as Mock).mockResolvedValue([]);
     vi.mocked(vscode.window.showSaveDialog).mockResolvedValue(undefined);
 
     await asDashboardPrivate(dashboard).handleExportAnalytics("csv-runs", "last30");
 
-    const [, start, end] = (ExecutionHistoryReader.readDateRange as ReturnType<typeof vi.fn>).mock
-      .calls[0];
+    const [, start, end] = (ExecutionHistoryReader.readDateRange as Mock).mock.calls[0];
     const diffDays = (end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24);
     expect(diffDays).toBeGreaterThanOrEqual(29.9);
     expect(diffDays).toBeLessThanOrEqual(30.1);

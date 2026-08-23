@@ -4,7 +4,7 @@
  * @see Issue #1138 - Commercialization: in-extension license activation
  */
 
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, vi, type Mock } from "vitest";
 import * as vscode from "vscode";
 import { registerActivateLicenseCommand } from "../../src/commands/activateLicense";
 import { IpcClient } from "../../src/services/IpcClient";
@@ -39,10 +39,10 @@ describe("activateLicense", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    (IpcClient.getInstance as ReturnType<typeof vi.fn>).mockReturnValue({
+    (IpcClient.getInstance as Mock).mockReturnValue({
       platformValidateLicense,
     });
-    (SecretStorageService.getInstance as ReturnType<typeof vi.fn>).mockReturnValue({ setSecret });
+    (SecretStorageService.getInstance as Mock).mockReturnValue({ setSecret });
     // The shared vscode mock omits these two — add them for this command.
     (vscode.window as unknown as Record<string, unknown>)["withProgress"] = vi.fn(
       async (_opts: unknown, task: () => Promise<unknown>) => task()
@@ -65,13 +65,9 @@ describe("activateLicense", () => {
   });
 
   it("stores a valid paid key and offers a reload", async () => {
-    (vscode.window.showInputBox as ReturnType<typeof vi.fn>).mockResolvedValue(
-      "  IB-REAL-KEY-1234  "
-    );
+    (vscode.window.showInputBox as Mock).mockResolvedValue("  IB-REAL-KEY-1234  ");
     platformValidateLicense.mockResolvedValue({ valid: true, tier: "pro" });
-    (vscode.window.showInformationMessage as ReturnType<typeof vi.fn>).mockResolvedValue(
-      "Reload Window"
-    );
+    (vscode.window.showInformationMessage as Mock).mockResolvedValue("Reload Window");
 
     await handlerFor()();
 
@@ -91,7 +87,7 @@ describe("activateLicense", () => {
   });
 
   it("does not store a key the platform rejects as invalid", async () => {
-    (vscode.window.showInputBox as ReturnType<typeof vi.fn>).mockResolvedValue("BAD-KEY");
+    (vscode.window.showInputBox as Mock).mockResolvedValue("BAD-KEY");
     platformValidateLicense.mockResolvedValue({ valid: false, tier: "" });
 
     await handlerFor()();
@@ -103,7 +99,7 @@ describe("activateLicense", () => {
   });
 
   it("treats a community-tier result as not accepted (no store)", async () => {
-    (vscode.window.showInputBox as ReturnType<typeof vi.fn>).mockResolvedValue("SOME-KEY");
+    (vscode.window.showInputBox as Mock).mockResolvedValue("SOME-KEY");
     platformValidateLicense.mockResolvedValue({
       valid: true,
       tier: "community",
@@ -116,7 +112,7 @@ describe("activateLicense", () => {
   });
 
   it("does nothing when the input box is cancelled", async () => {
-    (vscode.window.showInputBox as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+    (vscode.window.showInputBox as Mock).mockResolvedValue(undefined);
 
     await handlerFor()();
 
@@ -125,7 +121,7 @@ describe("activateLicense", () => {
   });
 
   it("surfaces a verification error without storing", async () => {
-    (vscode.window.showInputBox as ReturnType<typeof vi.fn>).mockResolvedValue("IB-KEY");
+    (vscode.window.showInputBox as Mock).mockResolvedValue("IB-KEY");
     platformValidateLicense.mockRejectedValue(new Error("network down"));
 
     await handlerFor()();

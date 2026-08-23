@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, type Mock } from "vitest";
 import * as vscode from "vscode";
 import { registerViewIssueOnGitHubCommand } from "../../src/commands/pickupIssue";
 import { ReadyIssueTreeItem } from "../../src/views/items/ReadyIssueTreeItem";
@@ -8,7 +8,7 @@ import type { Logger } from "../../src/utils/logger";
 
 describe("viewIssueOnGitHub command", () => {
   let mockLogger: Logger;
-  let mockOpenExternal: ReturnType<typeof vi.fn>;
+  let mockOpenExternal: Mock;
 
   beforeEach(() => {
     mockLogger = {

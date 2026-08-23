@@ -13,7 +13,7 @@
  * @see Issue #275 - Add ContextWatcherService unit tests
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from "vitest";
 import * as path from "node:path";
 import { ContextWatcherService } from "../../src/services/ContextWatcherService";
 
@@ -45,7 +45,7 @@ vi.mock("vscode", () => {
       onChange: ((uri: any) => void) | null;
       onDelete: ((uri: any) => void) | null;
     };
-    dispose: ReturnType<typeof vi.fn>;
+    dispose: Mock;
   }> = [];
 
   return {

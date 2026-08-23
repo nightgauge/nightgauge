@@ -3,14 +3,14 @@
  * cancel-on-close, and repeatable observational actions.
  */
 
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import type { RecoveryRequiredPayload } from "@nightgauge/sdk";
 
 let capturedMessageHandler: ((msg: any) => void) | null;
 let capturedDisposeHandler: (() => void) | null;
-let mockPanelDispose: ReturnType<typeof vi.fn>;
-let createWebviewPanelMock: ReturnType<typeof vi.fn>;
-let mockWebviewPostMessage: ReturnType<typeof vi.fn>;
+let mockPanelDispose: Mock;
+let createWebviewPanelMock: Mock;
+let mockWebviewPostMessage: Mock;
 
 function buildMockPanel() {
   mockPanelDispose = vi.fn();

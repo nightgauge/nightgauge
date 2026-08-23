@@ -20,7 +20,7 @@
  * @see docs/decisions/017-runtime-identity-keying.md — Decision 10, F23
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, type Mock } from "vitest";
 import type { PipelineStage } from "@nightgauge/sdk";
 
 const {
@@ -118,7 +118,7 @@ const failedIssue = {
 describe("retryFailedIssue — the retry releases the identity it installed", () => {
   let commandHandler: (arg?: number) => Promise<void>;
   let stateService: PipelineStateService;
-  let runStage: ReturnType<typeof vi.fn>;
+  let runStage: Mock;
 
   beforeEach(() => {
     vi.clearAllMocks();

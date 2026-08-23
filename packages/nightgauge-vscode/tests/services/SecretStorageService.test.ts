@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, type Mock } from "vitest";
 import * as vscode from "vscode";
 
 vi.mock("vscode", () => ({
@@ -208,7 +208,7 @@ describe("SecretStorageService", () => {
     it("returns false for an empty string value", async () => {
       const mockSecrets = createMockSecretStorage();
       // Override get to return an empty string for this test
-      (mockSecrets.get as ReturnType<typeof vi.fn>).mockResolvedValueOnce("");
+      (mockSecrets.get as Mock).mockResolvedValueOnce("");
       SecretStorageService.initialize(mockSecrets);
       const service = SecretStorageService.getInstance()!;
 

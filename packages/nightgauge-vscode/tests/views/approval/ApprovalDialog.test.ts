@@ -11,7 +11,7 @@
  * @see Issue #1241 - Add Vitest unit tests for OutputWindow and ApprovalDialog
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from "vitest";
 
 // ---------------------------------------------------------------------------
 // Captured webview message handler and dispose handler
@@ -19,8 +19,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 let capturedMessageHandler: ((msg: any) => void) | null;
 let capturedDisposeHandler: (() => void) | null;
-let mockPostMessage: ReturnType<typeof vi.fn>;
-let mockPanelDispose: ReturnType<typeof vi.fn>;
+let mockPostMessage: Mock;
+let mockPanelDispose: Mock;
 
 function buildMockPanel() {
   mockPostMessage = vi.fn();
@@ -141,7 +141,7 @@ describe("ApprovalDialog — panel creation", () => {
   it("registers onDidReceiveMessage and onDidDispose handlers", async () => {
     const { window } = await import("vscode");
     const panel = buildMockPanel();
-    (window.createWebviewPanel as ReturnType<typeof vi.fn>).mockReturnValueOnce(panel);
+    (window.createWebviewPanel as Mock).mockReturnValueOnce(panel);
 
     const dialog = makeDialog();
     const showPromise = dialog.show("feature-dev", 99, "plan");
@@ -218,7 +218,7 @@ describe("ApprovalDialog — onDidDispose cleanup", () => {
   it("dispose() on the dialog disposes the panel", async () => {
     const { window } = await import("vscode");
     const panel = buildMockPanel();
-    (window.createWebviewPanel as ReturnType<typeof vi.fn>).mockReturnValueOnce(panel);
+    (window.createWebviewPanel as Mock).mockReturnValueOnce(panel);
 
     const dialog = makeDialog();
     const showPromise = dialog.show("feature-dev", 5, "plan");

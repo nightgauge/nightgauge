@@ -11,7 +11,7 @@
  * @see Issue #870 - Retry failed issue should auto-clear completed pipeline lock
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, type Mock } from "vitest";
 import type { PipelineStage } from "@nightgauge/sdk";
 
 // Hoisted mocks — these are available inside vi.mock factories
@@ -83,19 +83,19 @@ interface MockPipelineState {
 describe("retryFailedIssue command", () => {
   let commandHandler: (arg?: number) => Promise<void>;
   let mockOrchestrator: {
-    runStage: ReturnType<typeof vi.fn>;
-    getIsRunning: ReturnType<typeof vi.fn>;
+    runStage: Mock;
+    getIsRunning: Mock;
   };
   let mockStateService: {
-    getState: ReturnType<typeof vi.fn>;
-    isPipelineComplete: ReturnType<typeof vi.fn>;
-    clearPipeline: ReturnType<typeof vi.fn>;
-    initializePipeline: ReturnType<typeof vi.fn>;
+    getState: Mock;
+    isPipelineComplete: Mock;
+    clearPipeline: Mock;
+    initializePipeline: Mock;
   };
   let mockContext: {
     workspaceState: {
-      get: ReturnType<typeof vi.fn>;
-      update: ReturnType<typeof vi.fn>;
+      get: Mock;
+      update: Mock;
     };
   };
 

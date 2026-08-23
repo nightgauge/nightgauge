@@ -4,7 +4,7 @@
  * @see Issue #1138 - Commercialization: in-extension free trial
  */
 
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, vi, type Mock } from "vitest";
 import * as vscode from "vscode";
 import { registerStartTrialCommand } from "../../src/commands/startTrial";
 import { IpcClient } from "../../src/services/IpcClient";
@@ -65,10 +65,10 @@ describe("startTrial", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    (IpcClient.getInstance as ReturnType<typeof vi.fn>).mockReturnValue({
+    (IpcClient.getInstance as Mock).mockReturnValue({
       platformStartTrial,
     });
-    (SecretStorageService.getInstance as ReturnType<typeof vi.fn>).mockReturnValue({ setSecret });
+    (SecretStorageService.getInstance as Mock).mockReturnValue({ setSecret });
     (vscode.window as unknown as Record<string, unknown>)["withProgress"] = vi.fn(
       async (_opts: unknown, task: () => Promise<unknown>) => task()
     );
@@ -97,9 +97,7 @@ describe("startTrial", () => {
     isAuthenticated.mockResolvedValue(true);
     getAccessToken.mockResolvedValue("jwt-token");
     platformStartTrial.mockResolvedValue(TRIAL_RESULT);
-    (vscode.window.showInformationMessage as ReturnType<typeof vi.fn>).mockResolvedValue(
-      "Reload Window"
-    );
+    (vscode.window.showInformationMessage as Mock).mockResolvedValue("Reload Window");
 
     await handlerFor()();
 
@@ -123,7 +121,7 @@ describe("startTrial", () => {
 
   it("prompts sign-in when not authenticated (no trial call)", async () => {
     isAuthenticated.mockResolvedValue(false);
-    (vscode.window.showInformationMessage as ReturnType<typeof vi.fn>).mockResolvedValue("Sign In");
+    (vscode.window.showInformationMessage as Mock).mockResolvedValue("Sign In");
 
     await handlerFor()();
 
@@ -139,7 +137,7 @@ describe("startTrial", () => {
         "IPC error: this account already has a license and is not eligible for a free trial"
       )
     );
-    (vscode.window.showInformationMessage as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+    (vscode.window.showInformationMessage as Mock).mockResolvedValue(undefined);
 
     await handlerFor()();
 
@@ -158,7 +156,7 @@ describe("startTrial", () => {
       .mockRejectedValueOnce(new Error("IPC error 401 unauthorized"))
       .mockResolvedValueOnce(TRIAL_RESULT);
     forceRefresh.mockResolvedValue("fresh-jwt");
-    (vscode.window.showInformationMessage as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+    (vscode.window.showInformationMessage as Mock).mockResolvedValue(undefined);
 
     await handlerFor()();
 

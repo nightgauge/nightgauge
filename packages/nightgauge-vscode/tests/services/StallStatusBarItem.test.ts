@@ -7,7 +7,7 @@
  * @see Issue #2655 — Persistent stall indicators in status bar and output panel
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from "vitest";
 
 // Mock vscode before imports
 vi.mock("vscode", () => ({
@@ -28,9 +28,9 @@ describe("StallStatusBarItem", () => {
     text: string;
     tooltip: string;
     command: string | undefined;
-    show: ReturnType<typeof vi.fn>;
-    hide: ReturnType<typeof vi.fn>;
-    dispose: ReturnType<typeof vi.fn>;
+    show: Mock;
+    hide: Mock;
+    dispose: Mock;
   };
 
   beforeEach(() => {

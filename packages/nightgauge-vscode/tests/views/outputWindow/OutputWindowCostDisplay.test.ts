@@ -10,7 +10,7 @@
  * 3. OutputWindow only appended the cost line when inputTokens > 0 || outputTokens > 0
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from "vitest";
 import { createMockMemento } from "../../mocks/memento";
 import type * as vscode from "vscode";
 
@@ -18,9 +18,9 @@ import type * as vscode from "vscode";
 // Mock vscode
 // ---------------------------------------------------------------------------
 
-let mockPostMessage: ReturnType<typeof vi.fn>;
-let mockOnDidReceiveMessage: ReturnType<typeof vi.fn>;
-let mockOnDidDispose: ReturnType<typeof vi.fn>;
+let mockPostMessage: Mock;
+let mockOnDidReceiveMessage: Mock;
+let mockOnDidDispose: Mock;
 
 function buildMockPanel() {
   mockPostMessage = vi.fn();

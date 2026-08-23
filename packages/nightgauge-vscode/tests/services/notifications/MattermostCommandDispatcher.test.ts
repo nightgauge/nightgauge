@@ -9,7 +9,7 @@
  * use `vi.fn()` to mock global `fetch` so no network calls happen.
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from "vitest";
 
 vi.mock("vscode", () => ({
   window: {
@@ -51,15 +51,15 @@ import { makeLogger } from "./_helpers";
 interface StubIpc {
   emitter: { event: (h: (d: unknown) => void) => { dispose: () => void } };
   fire: (event: MattermostSlashEvent) => void;
-  queueAdd: ReturnType<typeof vi.fn>;
-  queueRemove: ReturnType<typeof vi.fn>;
-  queueList: ReturnType<typeof vi.fn>;
-  pipelineSetPaused: ReturnType<typeof vi.fn>;
-  pipelineStop: ReturnType<typeof vi.fn>;
-  pipelineStatus: ReturnType<typeof vi.fn>;
-  executionList: ReturnType<typeof vi.fn>;
-  healthAnalyze: ReturnType<typeof vi.fn>;
-  configGetProjectConfig: ReturnType<typeof vi.fn>;
+  queueAdd: Mock;
+  queueRemove: Mock;
+  queueList: Mock;
+  pipelineSetPaused: Mock;
+  pipelineStop: Mock;
+  pipelineStatus: Mock;
+  executionList: Mock;
+  healthAnalyze: Mock;
+  configGetProjectConfig: Mock;
 }
 
 function makeStubIpc(): StubIpc {
@@ -133,7 +133,7 @@ async function flush(): Promise<void> {
 }
 
 describe("MattermostCommandDispatcher", () => {
-  let fetchMock: ReturnType<typeof vi.fn>;
+  let fetchMock: Mock;
   let originalFetch: typeof globalThis.fetch;
 
   beforeEach(() => {

@@ -4,7 +4,7 @@
  * @see Issue #1104 - Pipeline Health VSCode Command & Dashboard Integration
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, type Mock } from "vitest";
 
 // Mock vscode before any imports that touch it
 vi.mock("vscode", () => ({
@@ -60,7 +60,7 @@ describe("registerRunPipelineHealthCommand", () => {
     vi.clearAllMocks();
 
     // Restore registerCommand mock after clearAllMocks
-    (vscode.commands.registerCommand as ReturnType<typeof vi.fn>).mockImplementation(
+    (vscode.commands.registerCommand as Mock).mockImplementation(
       (_command: string, _handler: (...args: unknown[]) => unknown) => ({
         dispose: vi.fn(),
       })
@@ -86,7 +86,7 @@ describe("registerRunPipelineHealthCommand", () => {
   it("registers the command with a callback function", () => {
     registerRunPipelineHealthCommand("/workspace", mockLogger, mockDashboard);
 
-    const calls = (vscode.commands.registerCommand as ReturnType<typeof vi.fn>).mock.calls;
+    const calls = (vscode.commands.registerCommand as Mock).mock.calls;
     const registeredCallback = calls[calls.length - 1][1];
 
     expect(typeof registeredCallback).toBe("function");

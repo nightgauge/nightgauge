@@ -8,7 +8,7 @@
  * @see Issue #2090 - Migrate to IPC
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, type Mock } from "vitest";
 
 // Mock vscode before imports
 vi.mock("vscode", () => {
@@ -132,9 +132,7 @@ describe("GitHubAuthService", () => {
         mockSession as vscode.AuthenticationSession
       );
       const tokenResponse = makeTokenResponse();
-      vi.mocked(ipcClient.platformAuthGithub as ReturnType<typeof vi.fn>).mockResolvedValue(
-        tokenResponse
-      );
+      vi.mocked(ipcClient.platformAuthGithub as Mock).mockResolvedValue(tokenResponse);
 
       const onSignedInFired = vi.fn();
       service.onSignedIn(onSignedInFired);
@@ -172,9 +170,7 @@ describe("GitHubAuthService", () => {
         mockSession as vscode.AuthenticationSession
       );
       const ipcError = new Error("Invalid GitHub token");
-      vi.mocked(ipcClient.platformAuthGithub as ReturnType<typeof vi.fn>).mockRejectedValue(
-        ipcError
-      );
+      vi.mocked(ipcClient.platformAuthGithub as Mock).mockRejectedValue(ipcError);
 
       const onSignedInFired = vi.fn();
       service.onSignedIn(onSignedInFired);
@@ -197,9 +193,7 @@ describe("GitHubAuthService", () => {
       vi.mocked(vscode.authentication.getSession).mockResolvedValue(
         mockSession as vscode.AuthenticationSession
       );
-      vi.mocked(ipcClient.platformAuthGithub as ReturnType<typeof vi.fn>).mockResolvedValue(
-        makeTokenResponse()
-      );
+      vi.mocked(ipcClient.platformAuthGithub as Mock).mockResolvedValue(makeTokenResponse());
 
       // Simulate TokenStorage not initialized
       mockTokenStorageInstance = null;

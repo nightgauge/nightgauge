@@ -5,7 +5,7 @@
  * NEW dispatches.
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, type Mock } from "vitest";
 
 vi.mock("vscode", () => ({
   EventEmitter: class {
@@ -58,7 +58,7 @@ import { ConcurrentPipelineManager } from "../../src/services/ConcurrentPipeline
 
 function makeManager(opts: { dequeue?: any[] } = {}): {
   manager: ConcurrentPipelineManager;
-  dequeueSpy: ReturnType<typeof vi.fn>;
+  dequeueSpy: Mock;
 } {
   // Default to empty dequeue so fillSlots exits cleanly after the gate check
   // and dequeue call. We only need to assert WHETHER dequeue was reached, not

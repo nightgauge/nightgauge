@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from "vitest";
 import {
   outcomeDisplay,
   determineAction,
@@ -307,7 +307,7 @@ describe("DiscordService retry and flush", () => {
   let service: InstanceType<typeof DiscordService>;
   let pss: ReturnType<typeof makePipelineStateService>;
   let logger: ReturnType<typeof makeLogger>;
-  let fetchMock: ReturnType<typeof vi.fn>;
+  let fetchMock: Mock;
   const originalEnv = process.env.DISCORD_WEBHOOK_URL;
 
   beforeEach(() => {

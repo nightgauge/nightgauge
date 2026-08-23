@@ -13,20 +13,20 @@
  *   vi.mock("../../src/services/IpcClient", () => makeIpcClientModule(mockBoardList, ...));
  */
 
-import { vi } from "vitest";
+import { vi, type Mock } from "vitest";
 import type { BoardItem } from "../../src/services/IpcClient";
 
 /** All mock functions exposed by the IPC client mock. */
 export interface IpcMockHandle {
-  mockBoardList: ReturnType<typeof vi.fn>;
-  mockBoardCounts: ReturnType<typeof vi.fn>;
-  mockConfigGetProjectConfig: ReturnType<typeof vi.fn>;
-  mockPipelineRun: ReturnType<typeof vi.fn>;
-  mockPipelineGetState: ReturnType<typeof vi.fn>;
-  mockStart: ReturnType<typeof vi.fn>;
-  mockStop: ReturnType<typeof vi.fn>;
-  mockOn: ReturnType<typeof vi.fn>;
-  mockCall: ReturnType<typeof vi.fn>;
+  mockBoardList: Mock;
+  mockBoardCounts: Mock;
+  mockConfigGetProjectConfig: Mock;
+  mockPipelineRun: Mock;
+  mockPipelineGetState: Mock;
+  mockStart: Mock;
+  mockStop: Mock;
+  mockOn: Mock;
+  mockCall: Mock;
 }
 
 /**

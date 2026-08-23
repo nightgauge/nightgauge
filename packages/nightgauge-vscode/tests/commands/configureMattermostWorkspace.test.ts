@@ -4,7 +4,7 @@
  * @see Issue #3378 - VSCode command: Nightgauge: Configure Mattermost Workspace
  */
 
-import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, vi, afterEach, type Mock } from "vitest";
 import * as vscode from "vscode";
 import { registerConfigureMattermostWorkspaceCommand } from "../../src/commands/configureMattermostWorkspace";
 import {
@@ -77,7 +77,7 @@ function createMockSecretService() {
 describe("registerConfigureMattermostWorkspaceCommand", () => {
   let mockSecretService: ReturnType<typeof createMockSecretService>;
   let commandHandler: () => Promise<void>;
-  let fetchMock: ReturnType<typeof vi.fn>;
+  let fetchMock: Mock;
 
   beforeEach(() => {
     vi.clearAllMocks();

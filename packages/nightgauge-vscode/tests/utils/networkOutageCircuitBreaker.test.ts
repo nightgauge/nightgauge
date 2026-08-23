@@ -10,7 +10,7 @@
  *   5. Auto-recovery (success-shaped observation resets counter).
  *   6. Best-effort behavior (IPC failure doesn't throw).
  */
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, vi, type Mock } from "vitest";
 import {
   isConnectivityError,
   observeWatchdogResult,
@@ -194,12 +194,12 @@ describe("observeWatchdogResult — auto-recovery", () => {
 
     // Pure success — no prior failures, no info log.
     await observeWatchdogResult(null, logger);
-    expect((logger.info as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(0);
+    expect((logger.info as Mock).mock.calls).toHaveLength(0);
 
     // After failures, success logs the recovery.
     await observeWatchdogResult(new Error("ENOTFOUND"), logger);
     await observeWatchdogResult(null, logger);
-    expect((logger.info as ReturnType<typeof vi.fn>).mock.calls.length).toBeGreaterThan(0);
+    expect((logger.info as Mock).mock.calls.length).toBeGreaterThan(0);
   });
 });
 

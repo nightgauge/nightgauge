@@ -15,7 +15,7 @@
  * 11. Watermark isolation — health/recommendation keys don't collide with pipeline-run
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, type Mock } from "vitest";
 import {
   TelemetryUploaderService,
   MAX_FILE_BYTES,
@@ -283,7 +283,7 @@ function setupMultiRootFs(
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
 describe("TelemetryUploaderService", () => {
-  let fetchMock: ReturnType<typeof vi.fn>;
+  let fetchMock: Mock;
 
   beforeEach(() => {
     vi.clearAllMocks();

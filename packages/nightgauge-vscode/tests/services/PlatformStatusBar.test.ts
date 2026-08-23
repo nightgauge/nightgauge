@@ -7,7 +7,7 @@
  * @see Issue #1461 - Platform connection status indicator
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from "vitest";
 
 // Mock vscode before imports
 vi.mock("vscode", () => ({
@@ -32,9 +32,9 @@ describe("PlatformStatusBar", () => {
     tooltip: string | vscode.MarkdownString;
     backgroundColor: vscode.ThemeColor | undefined;
     command: string | undefined;
-    show: ReturnType<typeof vi.fn>;
-    hide: ReturnType<typeof vi.fn>;
-    dispose: ReturnType<typeof vi.fn>;
+    show: Mock;
+    hide: Mock;
+    dispose: Mock;
   };
 
   beforeEach(() => {

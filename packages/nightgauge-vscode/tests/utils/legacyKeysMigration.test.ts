@@ -13,7 +13,7 @@
  *   - no-op on clean config (STATE_KEY still set, no notification)
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, type Mock } from "vitest";
 
 // ── vscode mock ───────────────────────────────────────────────────────────────
 
@@ -414,7 +414,7 @@ describe("runLegacyKeysMigration", () => {
     expect(ctx.globalState.update).toHaveBeenCalledWith(DISMISSED_KEY_V2, true);
 
     // Reset STATE_KEY to simulate forceRun (but DISMISSED_KEY remains)
-    (ctx.globalState.get as ReturnType<typeof vi.fn>).mockImplementation((key: string) => {
+    (ctx.globalState.get as Mock).mockImplementation((key: string) => {
       if (key === DISMISSED_KEY_V2) return true;
       return undefined;
     });

@@ -5,7 +5,7 @@
  * connectivity status bar item.
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from "vitest";
 
 // ---------------------------------------------------------------------------
 // vscode mock with createStatusBarItem + registerCommand
@@ -76,9 +76,9 @@ type MockItem = {
   tooltip: string;
   backgroundColor: unknown;
   command: unknown;
-  show: ReturnType<typeof vi.fn>;
-  hide: ReturnType<typeof vi.fn>;
-  dispose: ReturnType<typeof vi.fn>;
+  show: Mock;
+  hide: Mock;
+  dispose: Mock;
 };
 
 function lastCreatedItem(): MockItem {

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, type Mock } from "vitest";
 import * as path from "node:path";
 
 // Mock the SDK modules before imports
@@ -42,12 +42,8 @@ describe("PromptTemplateService", () => {
     vi.clearAllMocks();
     service = new PromptTemplateService(extensionPath);
     // Get the mock instances created by the constructor
-    mockRegistry = (TemplateRegistry as unknown as ReturnType<typeof vi.fn>).mock.results.at(
-      -1
-    )!.value;
-    mockRenderer = (PromptRenderer as unknown as ReturnType<typeof vi.fn>).mock.results.at(
-      -1
-    )!.value;
+    mockRegistry = (TemplateRegistry as unknown as Mock).mock.results.at(-1)!.value;
+    mockRenderer = (PromptRenderer as unknown as Mock).mock.results.at(-1)!.value;
   });
 
   describe("initialize()", () => {
@@ -62,9 +58,7 @@ describe("PromptTemplateService", () => {
     it("uses provided workspaceRoot when given", async () => {
       const customRoot = "/custom/workspace";
       const s = new PromptTemplateService(extensionPath, customRoot);
-      const reg = (TemplateRegistry as unknown as ReturnType<typeof vi.fn>).mock.results.at(
-        -1
-      )!.value;
+      const reg = (TemplateRegistry as unknown as Mock).mock.results.at(-1)!.value;
       await s.initialize();
       expect(reg.loadTemplates).toHaveBeenCalledWith(path.join(customRoot, "skills", "templates"), {
         ignore: true,

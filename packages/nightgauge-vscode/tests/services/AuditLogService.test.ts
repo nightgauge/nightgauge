@@ -14,7 +14,7 @@ import type { AuditFilterState } from "../../src/views/dashboard/DashboardState"
 // Mocks
 // ---------------------------------------------------------------------------
 
-const mockRetrieve = vi.fn<[string], Promise<string | null>>();
+const mockRetrieve = vi.fn<(a0: string) => Promise<string | null>>();
 const mockTokenStorage = {
   retrieve: mockRetrieve,
 } as unknown as import("../../src/platform/TokenStorage").TokenStorage;
