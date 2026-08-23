@@ -6750,10 +6750,10 @@ exports[`getDashboardHtml snapshots (Issue #1242) > active pipeline state — cu
         // Generate report
         var genBtn = e.target.closest('#complianceGenerateBtn');
         if (genBtn) {
-          var reportType = document.getElementById('complianceReportType')?.value || 'soc2';
+          var reportType = document.getElementById('complianceReportType')?.value || 'SOC2';
           var startDate = document.getElementById('complianceStartDate')?.value || '';
           var endDate = document.getElementById('complianceEndDate')?.value || '';
-          var format = document.getElementById('complianceFormat')?.value || 'pdf';
+          var format = document.getElementById('complianceFormat')?.value || 'json';
           vscode.postMessage({ type: 'complianceGenerateReport', reportType: reportType, startDate: startDate, endDate: endDate, format: format });
           return;
         }
@@ -13623,10 +13623,10 @@ exports[`getDashboardHtml snapshots (Issue #1242) > completed run with tool call
         // Generate report
         var genBtn = e.target.closest('#complianceGenerateBtn');
         if (genBtn) {
-          var reportType = document.getElementById('complianceReportType')?.value || 'soc2';
+          var reportType = document.getElementById('complianceReportType')?.value || 'SOC2';
           var startDate = document.getElementById('complianceStartDate')?.value || '';
           var endDate = document.getElementById('complianceEndDate')?.value || '';
-          var format = document.getElementById('complianceFormat')?.value || 'pdf';
+          var format = document.getElementById('complianceFormat')?.value || 'json';
           vscode.postMessage({ type: 'complianceGenerateReport', reportType: reportType, startDate: startDate, endDate: endDate, format: format });
           return;
         }
@@ -20341,10 +20341,10 @@ exports[`getDashboardHtml snapshots (Issue #1242) > empty state — no current r
         // Generate report
         var genBtn = e.target.closest('#complianceGenerateBtn');
         if (genBtn) {
-          var reportType = document.getElementById('complianceReportType')?.value || 'soc2';
+          var reportType = document.getElementById('complianceReportType')?.value || 'SOC2';
           var startDate = document.getElementById('complianceStartDate')?.value || '';
           var endDate = document.getElementById('complianceEndDate')?.value || '';
-          var format = document.getElementById('complianceFormat')?.value || 'pdf';
+          var format = document.getElementById('complianceFormat')?.value || 'json';
           vscode.postMessage({ type: 'complianceGenerateReport', reportType: reportType, startDate: startDate, endDate: endDate, format: format });
           return;
         }
@@ -27287,10 +27287,10 @@ exports[`getDashboardHtml snapshots (Issue #1242) > pagination controls rendered
         // Generate report
         var genBtn = e.target.closest('#complianceGenerateBtn');
         if (genBtn) {
-          var reportType = document.getElementById('complianceReportType')?.value || 'soc2';
+          var reportType = document.getElementById('complianceReportType')?.value || 'SOC2';
           var startDate = document.getElementById('complianceStartDate')?.value || '';
           var endDate = document.getElementById('complianceEndDate')?.value || '';
-          var format = document.getElementById('complianceFormat')?.value || 'pdf';
+          var format = document.getElementById('complianceFormat')?.value || 'json';
           vscode.postMessage({ type: 'complianceGenerateReport', reportType: reportType, startDate: startDate, endDate: endDate, format: format });
           return;
         }
