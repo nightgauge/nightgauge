@@ -94,6 +94,7 @@ function createFakeProvider(): {
     onItemsUpdated: itemsUpdated.event as any,
     onRateLimitState: rateLimit.event as any,
     getRateLimitState: () => null,
+    softInvalidate: vi.fn(),
   };
 
   return { provider, fireRateLimit: rateLimit.fire, clearCache };

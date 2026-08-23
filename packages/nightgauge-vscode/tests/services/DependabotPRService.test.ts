@@ -12,7 +12,7 @@ vi.mock("../../src/utils/rateLimitCircuitBreaker", () => ({
   tripBreakerIfRateLimited: vi.fn().mockResolvedValue(false),
 }));
 
-const mockPrList = vi.fn<(a0: string, a1: string, a2: object?) => Promise<PullRequestDetail[]>>();
+const mockPrList = vi.fn<(a0: string, a1: string, a2?: object) => Promise<PullRequestDetail[]>>();
 
 const mockIpc = {
   prList: mockPrList,

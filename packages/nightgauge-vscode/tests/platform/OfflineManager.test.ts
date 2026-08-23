@@ -46,7 +46,8 @@ vi.mock("vscode", () => {
 // ---------------------------------------------------------------------------
 // Global fetch mock
 // ---------------------------------------------------------------------------
-const fetchMock = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>();
+const fetchMock =
+  vi.fn<(input: string | URL | Request | URL, init?: RequestInit) => Promise<Response>>();
 vi.stubGlobal("fetch", fetchMock);
 
 // Import after mocks

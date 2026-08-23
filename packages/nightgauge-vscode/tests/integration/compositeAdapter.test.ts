@@ -154,6 +154,7 @@ function makeMockProvider(items: WorkItem[]): IWorkItemProvider {
     invalidateAndRefresh: vi.fn(),
     onDidChangeTreeData: noopEvent as unknown as import("vscode").Event<void>,
     onItemsUpdated: noopEvent as unknown as import("vscode").Event<void>,
+    softInvalidate: vi.fn(),
   };
 }
 

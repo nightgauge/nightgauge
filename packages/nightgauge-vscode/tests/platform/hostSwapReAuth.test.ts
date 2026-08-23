@@ -74,7 +74,7 @@ function createMockTokenStorage(): ITokenStorage & {
   const emitter = new vscode.EventEmitter<{ key: string; action: string }>();
   return {
     onTokenChanged: emitter.event,
-    _fireChange: (evt) => emitter.fire(evt as never),
+    _fireChange: (evt: unknown) => emitter.fire(evt as never),
     store: vi.fn(async () => {}),
     retrieve: vi.fn(async () => null),
     delete: vi.fn(async () => {}),

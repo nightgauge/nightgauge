@@ -154,7 +154,7 @@ describe("showSettings Command", () => {
 
   it("should show error when no workspace is open", async () => {
     const { getWorkspaceRoot } = await import("../../src/config/settings");
-    vi.mocked(getWorkspaceRoot).mockReturnValue(null);
+    vi.mocked(getWorkspaceRoot).mockReturnValue(undefined);
 
     registerShowSettingsCommand(createMockExtensionUri(), mockStateService, mockLogger, null);
     const handler = getLastHandler();

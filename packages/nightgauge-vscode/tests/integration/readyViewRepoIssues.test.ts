@@ -91,6 +91,7 @@ function makeProviderMock(items: WorkItem[]): IWorkItemProvider {
     prefetchAllItems: vi.fn().mockResolvedValue(undefined),
     clearCache: vi.fn(),
     invalidateAndRefresh: vi.fn(),
+    softInvalidate: vi.fn(),
   };
 }
 
