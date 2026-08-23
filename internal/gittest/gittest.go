@@ -24,6 +24,25 @@
 // repository — including the `git init` that creates it — is already
 // covered, and a new test cannot forget the step because there is no step to
 // forget: it just calls Run.
+//
+// # That covers the fixtures, not the code under test
+//
+// Env() applies to git commands THIS package spawns. It does nothing for a
+// package whose production code shells out to git itself — internal/git's
+// Service.gitExec and commitAll build a bare exec.Command and inherit
+// os.Environ() by design, because a real run must honour the operator's hooks
+// and signing. Those children still read ~/.gitconfig through HOME.
+//
+// This was invisible for exactly the reason #542 is worth remembering: this
+// package's own #542 regression test passed, so the guard was green while the
+// tree was not. Poisoning HOME with commit.gpgsign and a refusing
+// core.hooksPath left internal/gittest green and internal/git red on nine
+// tests. A green guard is evidence about the guard's pattern, not about the
+// tree.
+//
+// IsolateProcess() closes that half: call it from a package's TestMain and the
+// ambient-config neutralisation applies to every child of the test binary,
+// code under test included.
 package gittest
 
 import (
@@ -108,6 +127,41 @@ func Env() []string {
 		"GIT_AUTHOR_NAME=nightgauge-test", "GIT_AUTHOR_EMAIL=nightgauge-test@example.invalid",
 		"GIT_COMMITTER_NAME=nightgauge-test", "GIT_COMMITTER_EMAIL=nightgauge-test@example.invalid",
 	)
+}
+
+// IsolateProcess applies the ambient-config half of Env() to the CURRENT
+// process, so that git commands spawned by the CODE UNDER TEST — not just the
+// ones this package spawns — are also isolated. Call it from a package's
+// TestMain.
+//
+// This exists because Env() alone does not close #542. Env() covers every
+// fixture command a test issues through Run/Command, which made this package's
+// own #542 regression test pass and made the gap look closed. But a service
+// under test that shells out to git itself — Service.gitExec in internal/git
+// builds a bare exec.Command and inherits os.Environ() by design, because in
+// PRODUCTION it must respect the operator's hooks and signing config — picks
+// up the ambient global config through HOME regardless of what the fixture
+// helper did. Poison ~/.gitconfig with commit.gpgsign and a refusing
+// core.hooksPath and internal/git still fails, while internal/gittest passes:
+// a guard that is green about its own commands says nothing about the tree.
+//
+// Only the ambient-config keys are set here. The gc/maintenance disarming in
+// Env() is deliberately NOT applied process-wide: it exists to stop background
+// writes racing t.TempDir() cleanup for repos this package creates, and
+// forcing it onto every child of the code under test would change the
+// behaviour being tested rather than isolate it.
+//
+// Test-only. Never call this from production code — respecting the operator's
+// git configuration is correct behaviour outside a test binary.
+func IsolateProcess() {
+	for k, v := range map[string]string{
+		"GIT_CONFIG_GLOBAL":   os.DevNull,
+		"GIT_CONFIG_SYSTEM":   os.DevNull,
+		"GIT_CONFIG_NOSYSTEM": "1",
+	} {
+		// Setenv only fails on an invalid key; these are literals.
+		_ = os.Setenv(k, v)
+	}
 }
 
 // Command builds "git <args...>" run in dir with Env() applied. Use this
