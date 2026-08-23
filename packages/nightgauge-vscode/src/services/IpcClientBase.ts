@@ -591,7 +591,7 @@ export interface IntegrityBrokenLink {
 }
 
 /**
- * Result from audit.verifyIntegrity — hash-chain verification result (#3323).
+ * Result from audit.verifyIntegrity — hash-chain verification result.
  *
  * These are the three fields POST /v1/audit/integrity returns, and only those.
  * `windowDays`, `message` and `checkedAt` were declared here for a year and
