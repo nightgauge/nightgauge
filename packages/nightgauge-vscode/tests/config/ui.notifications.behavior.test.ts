@@ -17,6 +17,7 @@ import {
   ErrorSoundSchema,
   DEFAULT_CONFIG,
 } from "../../src/config/schema";
+import type { UINotificationsConfig, UINotificationSoundsConfig } from "../../src/config/schema";
 
 // ============================================================================
 // Mock Fixtures
@@ -25,13 +26,18 @@ import {
 /**
  * Default notifications configuration for tests
  */
-export const DEFAULT_UI_NOTIFICATIONS_CONFIG = {
+export const DEFAULT_UI_NOTIFICATIONS_CONFIG: UINotificationsConfig = {
   enabled: true,
   sounds: {
+    // No `as const` here: pinning these to their default literals made the
+    // fixture's type "Glass" rather than AlertSound, so every test that
+    // selects a DIFFERENT sound — which is what this file is for — failed to
+    // typecheck, and the `=== "none"` guards read as impossible comparisons
+    // (#499).
     enabled: true,
-    alert: "Glass" as const,
-    success: "Hero" as const,
-    error: "Basso" as const,
+    alert: "Glass",
+    success: "Hero",
+    error: "Basso",
     volume: 0.5,
   },
   banner_enabled: true,
@@ -43,8 +49,12 @@ export const DEFAULT_UI_NOTIFICATIONS_CONFIG = {
  * Create a mock notifications configuration with optional overrides
  */
 export function createMockUINotificationsConfig(
-  overrides?: Partial<typeof DEFAULT_UI_NOTIFICATIONS_CONFIG>
-) {
+  // `sounds` is merged field-by-field below, so it accepts a partial of its
+  // own; a flat Partial<> would demand the whole sounds object.
+  overrides?: Partial<Omit<UINotificationsConfig, "sounds">> & {
+    sounds?: Partial<UINotificationSoundsConfig>;
+  }
+): UINotificationsConfig {
   // Deep merge sounds separately to preserve enabled when only changing alert/success/error
   const mergedSounds = overrides?.sounds
     ? { ...DEFAULT_UI_NOTIFICATIONS_CONFIG.sounds, ...overrides.sounds }
@@ -80,7 +90,7 @@ describe("ui.notifications.behavior", () => {
       });
 
       const shouldShowBanner = (cfg: typeof config): boolean => {
-        return cfg.enabled && cfg.banner_enabled;
+        return cfg.enabled === true && cfg.banner_enabled === true;
       };
 
       expect(shouldShowBanner(config)).toBe(false);
@@ -102,7 +112,7 @@ describe("ui.notifications.behavior", () => {
       });
 
       const shouldPlaySound = (cfg: typeof config): boolean => {
-        return cfg.enabled && cfg.sounds?.enabled === true;
+        return cfg.enabled === true && cfg.sounds?.enabled === true;
       };
 
       expect(shouldPlaySound(config)).toBe(false);
@@ -278,7 +288,7 @@ describe("ui.notifications.behavior", () => {
       const config = createMockUINotificationsConfig({ banner_enabled: false });
 
       const shouldShowBanner = (cfg: typeof config): boolean => {
-        return cfg.enabled && cfg.banner_enabled;
+        return cfg.enabled === true && cfg.banner_enabled === true;
       };
 
       expect(shouldShowBanner(config)).toBe(false);
@@ -300,7 +310,7 @@ describe("ui.notifications.behavior", () => {
       });
 
       const shouldBounceDock = (cfg: typeof config): boolean => {
-        return cfg.enabled && cfg.dock_bounce_enabled;
+        return cfg.enabled === true && cfg.dock_bounce_enabled === true;
       };
 
       expect(shouldBounceDock(config)).toBe(false);
@@ -325,7 +335,7 @@ describe("ui.notifications.behavior", () => {
         if (cfg.respect_do_not_disturb && isDNDActive) {
           return false;
         }
-        return cfg.enabled;
+        return cfg.enabled === true;
       };
 
       expect(shouldNotify(config, true)).toBe(false);
@@ -341,7 +351,7 @@ describe("ui.notifications.behavior", () => {
         if (cfg.respect_do_not_disturb && isDNDActive) {
           return false;
         }
-        return cfg.enabled;
+        return cfg.enabled === true;
       };
 
       expect(shouldNotify(config, true)).toBe(true);

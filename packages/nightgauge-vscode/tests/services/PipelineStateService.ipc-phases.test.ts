@@ -16,6 +16,7 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { uuidV7 } from "@nightgauge/sdk";
+import type { PipelineState } from "../../src/services/PipelineStateService";
 
 // ---------------------------------------------------------------------------
 // IPC event handler capture
@@ -89,7 +90,10 @@ async function makeService(issueNumber: number | null = null) {
   return svc;
 }
 
-function makeState(issueNumber = 42, stage = "feature-dev") {
+// Typed as PipelineState rather than as its own literal: the tests below
+// assign `phases` onto a stage, which the inferred literal type
+// ({ status; startTime }) has no room for (#499).
+function makeState(issueNumber = 42, stage = "feature-dev"): PipelineState {
   return {
     issue_number: issueNumber,
     title: `Issue #${issueNumber}`,
@@ -404,9 +408,9 @@ describe("PipelineStateService — IPC phase handlers", () => {
         status: "running",
         startTime: Date.now(),
         phases: [
-          { name: "load-context", index: 0, status: "complete" },
-          { name: "analyze", index: 1, status: "complete" },
-          { name: "implement", index: 2, status: "running" },
+          { name: "load-context", index: 0, total: 16, status: "complete" },
+          { name: "analyze", index: 1, total: 16, status: "complete" },
+          { name: "implement", index: 2, total: 16, status: "running" },
         ],
         current_phase: "implement",
         total_phases: 16,
@@ -563,8 +567,8 @@ describe("PipelineStateService — IPC phase handlers", () => {
         status: "running",
         startTime: Date.now(),
         phases: [
-          { name: "validate-environment", index: 0, status: "complete" },
-          { name: "self-assessment", index: 13, status: "running" },
+          { name: "validate-environment", index: 0, total: 14, status: "complete" },
+          { name: "self-assessment", index: 13, total: 14, status: "running" },
         ],
         current_phase: "self-assessment",
         total_phases: 14,
@@ -664,8 +668,8 @@ describe("PipelineStateService — IPC phase handlers", () => {
         status: "running",
         startTime: Date.now(),
         phases: [
-          { name: "load-context", index: 0, status: "complete" },
-          { name: "implementation", index: 7, status: "running" },
+          { name: "load-context", index: 0, total: 17, status: "complete" },
+          { name: "implementation", index: 7, total: 17, status: "running" },
         ],
         current_phase: "implementation",
         total_phases: 17,
@@ -706,7 +710,7 @@ describe("PipelineStateService — IPC phase handlers", () => {
       ] = {
         status: "running",
         startTime: Date.now(),
-        phases: [{ name: "tests", index: 0, status: "running" }],
+        phases: [{ name: "tests", index: 0, total: 1, status: "running" }],
         current_phase: "tests",
         total_phases: 1,
       };
@@ -746,7 +750,7 @@ describe("PipelineStateService — IPC phase handlers", () => {
       ] = {
         status: "running",
         startTime: Date.now(),
-        phases: [{ name: "implementation", index: 7, status: "running" }],
+        phases: [{ name: "implementation", index: 7, total: 17, status: "running" }],
         current_phase: "implementation",
         total_phases: 17,
       };
