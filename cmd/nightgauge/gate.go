@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/config"
+	"github.com/nightgauge/nightgauge/internal/execution/adapters"
+	"github.com/nightgauge/nightgauge/internal/ipc"
 	"github.com/nightgauge/nightgauge/internal/orchestrator/gates"
 	"github.com/nightgauge/nightgauge/internal/state"
 	"github.com/spf13/cobra"
@@ -94,6 +96,7 @@ func gateVerifyCmd() *cobra.Command {
 		outputJSON bool
 		timeoutSec int
 		record     bool
+		runID      string
 	)
 	cmd := &cobra.Command{
 		Use:   "verify <stage> <issue-number>",
@@ -143,20 +146,25 @@ func gateVerifyCmd() *cobra.Command {
 
 			result := gate.Verify(ctx, issueNumber, workspace)
 
-			// Issue #210: persist the gate result onto the run record for
+			// Issue #210 / #377: persist the gate result onto the run record for
 			// orchestration paths that call this CLI seam rather than the
-			// in-process Go scheduler loop (HeadlessOrchestrator.ts). The
-			// scheduler's own in-process append (scheduler.go) is unaffected —
-			// this only adds a second writer for the --record-flagged path.
-			// Additive and best-effort: a persistence failure is logged but
-			// never changes the gate's pass/fail exit-code contract.
+			// in-process Go scheduler loop (HeadlessOrchestrator.ts).
+			//
+			// TWO ROUTES, AND THE POINT OF #377 IS THAT ONLY ONE OF THEM WRITES
+			// THE FILE. This process is the one snapshot writer that lives
+			// outside the IPC server, so the server's in-memory terminal latch
+			// cannot cover it; ADR-017 Decision 5 narrowed that to a rename race
+			// and named the residual R-1. When a `nightgauge serve` daemon is
+			// reachable the result now goes through it, making the server the
+			// SINGLE AUTHORITATIVE WRITER whenever it is alive (#316's
+			// discipline). The direct write is reserved for the no-server path,
+			// where there is exactly one writer by definition.
+			//
+			// Best-effort throughout: a persistence failure is logged and NEVER
+			// changes the gate's pass/fail exit-code contract. The verdict is
+			// the command's product; the record is bookkeeping.
 			if record {
-				stateDir := filepath.Join(workspace, ".nightgauge", "pipeline")
-				if recErr := state.AppendStageGateResultToDisk(
-					stateDir, issueNumber, state.PipelineStage(stageName), result.ToStageGateResult(),
-				); recErr != nil {
-					fmt.Fprintf(os.Stderr, "gate verify --record: failed to persist gate result: %v\n", recErr)
-				}
+				recordGateResult(ctx, workspace, issueNumber, stageName, runID, result.ToStageGateResult())
 			}
 
 			if outputJSON {
@@ -194,6 +202,8 @@ func gateVerifyCmd() *cobra.Command {
 	cmd.Flags().IntVar(&timeoutSec, "timeout", 60, "Gate timeout in seconds (0 = no timeout)")
 	cmd.Flags().BoolVar(&record, "record", false,
 		"Persist the gate result onto the run record's stageGateResults map (Issue #210)")
+	cmd.Flags().StringVar(&runID, "run-id", "",
+		"Run identity to record against (default: $NIGHTGAUGE_RUN_ID, exported into every stage environment)")
 	return cmd
 }
 
@@ -238,5 +248,83 @@ func renderGateHuman(stage string, r gates.GateResult) {
 	}
 	if r.DurationMs > 0 {
 		fmt.Printf("(%dms)\n", r.DurationMs)
+	}
+}
+
+// recordGateResult persists one gate verdict onto the run's snapshot, through
+// the IPC server when one is reachable and directly to disk when it is not
+// (#377, ADR-017 R-1).
+//
+// WHY THE PREFERENCE ORDER IS THE WHOLE FIX. The runtime snapshot has five
+// writers in three processes sharing Persist's whole-file last-write-wins
+// contract, and this CLI is the one that lives outside the IPC server — so the
+// server's in-memory terminal latch cannot cover it. ADR-017 Decision 5 closed
+// the cross-process half as far as a foreign process can: load-or-skip, refuse
+// a terminal snapshot, and write through PersistExisting so a read-modify-write
+// cannot re-create a file that was removed between the load and the write. What
+// it could not close is the rename race in that window — the residual it names
+// R-1 — because a second process cannot participate in a latch it cannot see.
+//
+// Posting through the server does not narrow that window; it removes this
+// process from the set of writers entirely whenever a server is alive, which is
+// the only way the residual actually goes away.
+//
+// THE FALLBACK IS NOT A DEGRADED MODE. With no daemon there is no second
+// writer, so the direct path is not racing anything; it keeps every one of
+// Decision 5's three rules. What it lacks is exact addressing — it resolves by
+// issue number and picks the newest non-terminal snapshot, which mis-attributes
+// only under two truly concurrent dispatches of one issue, and only when no
+// server is running to route around it.
+//
+// A run id is REQUIRED for the IPC route and the server refuses a call without
+// one (run_id_required). NIGHTGAUGE_RUN_ID is exported into every stage
+// environment by every adapter, and the gate CLI is spawned as a stage
+// subprocess, so the id is normally present without anyone passing a flag. When
+// it is genuinely absent — a hand-run gate, or a dispatch that predates the
+// export — there is nothing to address the server with, and the direct path is
+// the honest answer rather than an invented identity.
+func recordGateResult(
+	ctx context.Context,
+	workspace string,
+	issueNumber int,
+	stageName string,
+	runID string,
+	result state.StageGateResult,
+) {
+	if runID == "" {
+		runID = os.Getenv(adapters.RunIDEnvVar)
+	}
+
+	if runID != "" {
+		if client, dialErr := ipc.DialClient(ctx, ipc.DaemonSocketPath(workspace), daemonDialTimeout); dialErr == nil {
+			defer client.Close()
+			params := ipc.PipelineRecordStageGateResultParams{
+				IssueNumber: issueNumber,
+				Stage:       stageName,
+				RunID:       runID,
+				Result:      result,
+			}
+			if callErr := client.Call(ctx, "pipeline.recordStageGateResult", params, nil); callErr != nil {
+				// The server REFUSED it — a closed run, a wrong owner, a
+				// non-canonical id. Do NOT fall back to the direct write: a
+				// refusal is the single authoritative writer saying this record
+				// does not belong on that run, and writing it to the file
+				// anyway would reintroduce exactly the second writer this
+				// routing exists to remove. The verdict is already the caller's.
+				fmt.Fprintf(os.Stderr,
+					"gate verify --record: the daemon refused the gate record for #%d run %s (verdict still returned, record NOT written): %v\n",
+					issueNumber, runID, callErr)
+			}
+			return
+		}
+	}
+
+	// No daemon reachable (or no run identity to address one with): write
+	// directly, under Decision 5's three rules.
+	stateDir := filepath.Join(workspace, ".nightgauge", "pipeline")
+	if recErr := state.AppendStageGateResultToDisk(
+		stateDir, issueNumber, state.PipelineStage(stageName), result,
+	); recErr != nil {
+		fmt.Fprintf(os.Stderr, "gate verify --record: failed to persist gate result: %v\n", recErr)
 	}
 }

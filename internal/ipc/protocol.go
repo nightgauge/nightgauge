@@ -8,6 +8,7 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/diagnostics"
+	"github.com/nightgauge/nightgauge/internal/state"
 )
 
 // Request is an incoming IPC request from VSCode.
@@ -996,6 +997,43 @@ type PipelineNotifyStageProgressParams struct {
 	// restart, and the per-id singleflight is what keeps the two from building
 	// two runtimes.
 	RunID string `json:"runId,omitempty"`
+}
+
+// PipelineRecordStageGateResultParams are parameters for
+// pipeline.recordStageGateResult (#377, ADR-017 R-1).
+//
+// THIS VERB EXISTS TO REMOVE A WRITER, NOT TO ADD A FEATURE. `nightgauge gate
+// verify --record` is the one writer of a run's snapshot that lives in a
+// DIFFERENT OS PROCESS from the IPC server, so the server's in-memory terminal
+// latch cannot cover it. ADR-017 Decision 5 narrowed that exposure to a rename
+// race — load-or-skip, terminal-refusal, and PersistExisting — and named the
+// residual R-1. This verb closes the residual by routing the gate's result
+// through the server whenever one is reachable, mirroring #316's discipline:
+// the IPC server becomes the SINGLE AUTHORITATIVE WRITER of the runtime
+// snapshot whenever it is alive, and the direct file write is reserved for the
+// no-server path.
+//
+// RUN-PROGRESS CLASS (Decision 3): the gate CLI is spawned BY the run whose
+// verdict it is recording, so it is a caller describing its OWN run — the same
+// class as the transition and progress verbs, and adoption is safe for the same
+// reason.
+type PipelineRecordStageGateResultParams struct {
+	Repo        string `json:"repo,omitempty"`
+	IssueNumber int    `json:"issueNumber"`
+	Stage       string `json:"stage"`
+	// RunID is the run identity the server keys on (ADR-017 Decision 1).
+	// REQUIRED, like every other pipeline.* run message: absent is
+	// run_id_required and non-canonical is run_id_invalid.
+	//
+	// The gate CLI gets it from NIGHTGAUGE_RUN_ID, which every adapter exports
+	// into the stage environment, or from an explicit --run-id. This is the
+	// EXACT ADDRESSING ADR-017 Decision 5 says the direct-write path still
+	// lacks: AppendStageGateResultToDisk resolves by issue number and picks the
+	// newest non-terminal snapshot, which mis-attributes under two truly
+	// concurrent dispatches of one issue. A run id resolves that case exactly.
+	RunID string `json:"runId"`
+	// Result is the gate verdict, in the same shape the run record stores.
+	Result state.StageGateResult `json:"result"`
 }
 
 // PipelineNotifyCompleteParams are parameters for pipeline.notifyComplete.
