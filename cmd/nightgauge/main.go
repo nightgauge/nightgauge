@@ -466,6 +466,7 @@ func rootCmd() *cobra.Command {
 	root.AddCommand(
 		adapterCmd(),
 		backlogCmd(),
+		capabilitiesCmd(),
 		boardCmd(),
 		issueCmd(),
 		epicCmd(),

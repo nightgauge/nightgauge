@@ -2,7 +2,6 @@
 
 **Version:** 1.1
 **Updated:** 2026-07-21
-**Issue:** #2595
 **Author:** nightgauge
 
 ---
