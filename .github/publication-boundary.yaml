@@ -452,6 +452,11 @@ forbidden_content:
     allow_paths:
       - ".github/publication-boundary.yaml"
       - "scripts/publication-boundary-check.py"
+      # The suite plants a real IncrediConfig fixture to prove the stem matches
+      # the derived forms and not only the brand name. A rule's own test must be
+      # allowed to contain the thing it tests, exactly as `issue_references`
+      # already allows this file.
+      - "scripts/test-publication-boundary.sh"
       - "docs/DOCUMENTATION_IA.md"
       # The credential allowlist pins findings by fingerprint
       # (commit:file:rule:line). For historical blobs the `file` component IS a
