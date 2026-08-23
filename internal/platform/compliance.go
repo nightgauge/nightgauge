@@ -157,6 +157,18 @@ func mapComplianceSummary(wire complianceSummaryWire) ComplianceReportEntry {
 }
 
 // GenerateReport requests generation of a new compliance report via POST /v1/audit/reports.
+//
+// The window bounds are normalised to RFC 3339 the same way the cost window is
+// (toRFC3339Bound): the route validates both with `z.string().datetime()`, and
+// the dashboard's `<input type="date">` yields a bare calendar date, so every
+// generate attempt used to 422 before a report was ever created (#821). The
+// end bound widens to the last instant of its day, keeping the operator's
+// chosen end date inside the window rather than truncating it away.
+//
+// reportType and format are passed through verbatim. The route's enums
+// (`SOC2` | `ISO27001`, `pdf` | `json` | `both`) are the vocabulary the caller
+// is expected to speak; translating a second casing here would put the
+// contract in two places and hide the next mismatch instead of reporting it.
 func (s *ComplianceService) GenerateReport(ctx context.Context, reportType, startDate, endDate, format string) (*ComplianceReportResult, error) {
 	if !s.client.IsOnline() {
 		return nil, fmt.Errorf("compliance reports not yet available: platform client offline")
@@ -164,8 +176,8 @@ func (s *ComplianceService) GenerateReport(ctx context.Context, reportType, star
 
 	body := map[string]string{
 		"reportType": reportType,
-		"startDate":  startDate,
-		"endDate":    endDate,
+		"startDate":  toRFC3339Bound(startDate, false),
+		"endDate":    toRFC3339Bound(endDate, true),
 		"format":     format,
 	}
 	bodyBytes, err := json.Marshal(body)
@@ -189,7 +201,10 @@ func (s *ComplianceService) GenerateReport(ctx context.Context, reportType, star
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("generate compliance report: server returned %d", resp.StatusCode)
+		// Quote the platform's own rejection — for a 422 that is
+		// VALIDATION_ERROR plus the field each Zod issue names, which is the
+		// difference between a legible bug report and "HTTP 422" (#821).
+		return nil, fmt.Errorf("generate compliance report: %s", describeErrorResponse(resp))
 	}
 
 	var wire complianceSummaryWire

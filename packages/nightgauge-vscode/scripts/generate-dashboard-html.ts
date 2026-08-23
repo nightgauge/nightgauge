@@ -1124,7 +1124,7 @@ const ALL_POPULATED: DashboardHtmlOverrides = {
     dateRange: "30d",
   },
   complianceData: {
-    reports: [complianceReport("rep-1", "ready")],
+    reports: [complianceReport("rep-1", "complete")],
     filters: {},
     isLoading: false,
     hasAccess: true,

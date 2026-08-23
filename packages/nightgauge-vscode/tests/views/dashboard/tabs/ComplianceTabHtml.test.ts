@@ -307,3 +307,74 @@ describe("getComplianceTabHtml — failure kinds (#748)", () => {
     expect(html).toContain("418");
   });
 });
+
+// ---------------------------------------------------------------------------
+// The generate form's option values ARE the outgoing request body (#821)
+// ---------------------------------------------------------------------------
+//
+// Dashboard.ts forwards each <select>'s value verbatim through
+// platform.auditGenerateReport, so an option value that is not one of the
+// route's enum members is a 422 the operator can never work around. These are
+// the literals from `GenerateReportBody` in
+// `packages/api/src/routes/audit-reports.ts` — not from anything in this repo.
+const ROUTE_REPORT_TYPES = ["SOC2", "ISO27001"];
+const ROUTE_FORMATS = ["pdf", "json", "both"];
+
+function optionValues(html: string, selectId: string): string[] {
+  const select = html.slice(html.indexOf(`id="${selectId}"`));
+  const body = select.slice(0, select.indexOf("</select>"));
+  return [...body.matchAll(/<option value="([^"]*)"/g)].map((m) => m[1]);
+}
+
+describe("compliance generate form — option values match the route's enums", () => {
+  it("report types are the platform's casing, not lowercase slugs", () => {
+    const values = optionValues(getComplianceTabHtml(makeData()), "complianceReportType");
+    expect(values).toEqual(ROUTE_REPORT_TYPES);
+    // Stated separately from the equality above so a regression reads as the
+    // defect it is: `soc2` fails z.enum(['SOC2','ISO27001']) and every
+    // Generate click 422s before a report exists.
+    for (const value of values) {
+      expect(ROUTE_REPORT_TYPES).toContain(value);
+    }
+  });
+
+  it("formats are the route's whole enum, so the JSON path #803 built is reachable", () => {
+    const values = optionValues(getComplianceTabHtml(makeData()), "complianceFormat");
+    expect([...values].sort()).toEqual([...ROUTE_FORMATS].sort());
+    // json is the platform's own default and the only format that answers the
+    // download with an inline payload rather than an object-storage URL.
+    expect(values).toContain("json");
+  });
+
+  it("the script's fallbacks are route-valid too — an unset select must not send a 422", () => {
+    const script = getComplianceTabScript();
+    const reportTypeFallback = /complianceReportType'\)\?\.value \|\| '([^']*)'/.exec(script)?.[1];
+    const formatFallback = /complianceFormat'\)\?\.value \|\| '([^']*)'/.exec(script)?.[1];
+    expect(ROUTE_REPORT_TYPES).toContain(reportTypeFallback);
+    expect(ROUTE_FORMATS).toContain(formatFallback);
+  });
+});
+
+// The banner for a rejected generate quotes what the platform said. The Go
+// client now carries VALIDATION_ERROR and the field each Zod issue named into
+// the error text (#821); this asserts the tab renders it rather than replacing
+// it with copy of its own.
+describe("compliance generate failure banner", () => {
+  it("renders the platform's VALIDATION_ERROR detail, and offers no retry", () => {
+    const html = getComplianceTabHtml(
+      makeData({
+        failure: makeFailure({
+          kind: "bad_request",
+          status: 422,
+          endpoint: "platform.auditGenerateReport",
+          message:
+            "generate compliance report: server returned 422: VALIDATION_ERROR: Invalid request body (reportType: Invalid enum value. Expected 'SOC2' | 'ISO27001', received 'soc2')",
+        }),
+      })
+    );
+    expect(html).toContain("compliance-error-banner");
+    expect(html).toContain("VALIDATION_ERROR");
+    expect(html).toContain("reportType");
+    expect(html).not.toContain("complianceRetryBtn");
+  });
+});

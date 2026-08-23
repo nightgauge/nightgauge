@@ -11,8 +11,10 @@ package platform
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -312,4 +314,189 @@ func TestComplianceService_DownloadReport(t *testing.T) {
 				"report has no artifact rather than that it is still being built")
 		}
 	})
+}
+
+// bodyRecordingServer serves one response and keeps the request body it was
+// sent. complianceServer's `*seen = *r` cannot do this: the handler has
+// returned by the time the test reads it, and r.Body is closed.
+func bodyRecordingServer(t *testing.T, body string, status int, sent *[]byte) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read request body: %v", err)
+		}
+		*sent = raw
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		if _, err := w.Write([]byte(body)); err != nil {
+			t.Errorf("write body: %v", err)
+		}
+	}))
+}
+
+// generatedReportBody is the route's 201: `{...toSummary(report), reportData}`.
+const generatedReportBody = `{
+  "reportId": "rpt-9",
+  "status": "pending",
+  "reportType": "SOC2",
+  "format": "json",
+  "schedule": null,
+  "generatedAt": null,
+  "startDate": "2026-04-01T00:00:00.000Z",
+  "endDate": "2026-04-30T23:59:59.999Z",
+  "errorMessage": null,
+  "s3Key": null,
+  "createdAt": "2026-05-20T10:00:00.000Z",
+  "reportData": null
+}`
+
+// TestComplianceService_GenerateReport_SendsRFC3339Bounds asserts the OUTGOING
+// body against the route's own validator (#821).
+//
+// `GenerateReportBody` declares startDate and endDate as
+// `z.string().datetime()`, and the dashboard's date inputs produce a bare
+// calendar date — so the body this client used to send was rejected 422 before
+// a report was ever created. Revert either bound to a passthrough and the
+// assertions below reproduce exactly what the route sees when it rejects.
+func TestComplianceService_GenerateReport_SendsRFC3339Bounds(t *testing.T) {
+	var sent []byte
+	srv := bodyRecordingServer(t, generatedReportBody, http.StatusCreated, &sent)
+	defer srv.Close()
+
+	if _, err := complianceSvc(t, srv.URL).GenerateReport(
+		context.Background(), "SOC2", "2026-04-01", "2026-04-30", "json"); err != nil {
+		t.Fatalf("GenerateReport: %v", err)
+	}
+
+	var body map[string]string
+	if err := json.Unmarshal(sent, &body); err != nil {
+		t.Fatalf("decode sent body: %v (%s)", err, sent)
+	}
+
+	// The route parses these with `new Date(...)`; a bare "2026-04-01" fails
+	// z.string().datetime() outright, which is the whole defect.
+	if got, want := body["startDate"], "2026-04-01T00:00:00Z"; got != want {
+		t.Errorf("startDate = %q, want %q — z.string().datetime() rejects a bare calendar date", got, want)
+	}
+	// The end bound covers the operator's chosen day rather than collapsing it
+	// to that day's first instant, which would exclude the day they picked.
+	if got, want := body["endDate"], "2026-04-30T23:59:59.999999999Z"; got != want {
+		t.Errorf("endDate = %q, want %q — the chosen end day must stay inside the window", got, want)
+	}
+	// reportType and format go out verbatim: the route's enum is the only
+	// vocabulary, and a second one here would hide the next mismatch.
+	if got, want := body["reportType"], "SOC2"; got != want {
+		t.Errorf("reportType = %q, want %q — z.enum(['SOC2','ISO27001']) is case-sensitive", got, want)
+	}
+	if got, want := body["format"], "json"; got != want {
+		t.Errorf("format = %q, want %q", got, want)
+	}
+}
+
+// A bound that already carries a time is the platform's contract already met —
+// widening it would move a window the caller stated precisely.
+func TestComplianceService_GenerateReport_PassesThroughDateTimeBounds(t *testing.T) {
+	var sent []byte
+	srv := bodyRecordingServer(t, generatedReportBody, http.StatusCreated, &sent)
+	defer srv.Close()
+
+	if _, err := complianceSvc(t, srv.URL).GenerateReport(
+		context.Background(), "ISO27001",
+		"2026-04-01T09:30:00Z", "2026-04-30T17:00:00Z", "pdf"); err != nil {
+		t.Fatalf("GenerateReport: %v", err)
+	}
+
+	var body map[string]string
+	if err := json.Unmarshal(sent, &body); err != nil {
+		t.Fatalf("decode sent body: %v (%s)", err, sent)
+	}
+	if body["startDate"] != "2026-04-01T09:30:00Z" || body["endDate"] != "2026-04-30T17:00:00Z" {
+		t.Errorf("bounds = %q..%q, want them untouched", body["startDate"], body["endDate"])
+	}
+}
+
+// TestComplianceService_GenerateReport_SurfacesValidationDetail — the 422 body
+// is a literal from the route: `makeErrorBody('VALIDATION_ERROR', 'Invalid
+// request body', requestId, {fields: parsed.error.issues})`, with the Zod
+// issues a lowercase reportType and a bare startDate actually produce.
+//
+// Reporting the status alone is what the Compliance tab did before #821: the
+// operator saw "The platform rejected this request (HTTP 422)" while the route
+// had already named every field it refused.
+func TestComplianceService_GenerateReport_SurfacesValidationDetail(t *testing.T) {
+	body := `{
+	  "error": {
+	    "code": "VALIDATION_ERROR",
+	    "message": "Invalid request body",
+	    "details": {
+	      "fields": [
+	        {
+	          "received": "soc2",
+	          "code": "invalid_enum_value",
+	          "options": ["SOC2", "ISO27001"],
+	          "path": ["reportType"],
+	          "message": "Invalid enum value. Expected 'SOC2' | 'ISO27001', received 'soc2'"
+	        },
+	        {
+	          "code": "invalid_string",
+	          "validation": "datetime",
+	          "path": ["startDate"],
+	          "message": "Invalid datetime"
+	        }
+	      ]
+	    },
+	    "request_id": "req-1"
+	  }
+	}`
+	var sent []byte
+	srv := bodyRecordingServer(t, body, http.StatusUnprocessableEntity, &sent)
+	defer srv.Close()
+
+	_, err := complianceSvc(t, srv.URL).GenerateReport(
+		context.Background(), "soc2", "2026-04-01T00:00:00Z", "2026-04-30T00:00:00Z", "json")
+	if err == nil {
+		t.Fatal("GenerateReport: want an error on 422")
+	}
+	msg := err.Error()
+	// "server returned 422" is the shape platformResult.ts's STATUS_RE parses
+	// into a bad_request failure; losing it downgrades the tab's banner to a
+	// retry invitation for a request that can never succeed.
+	for _, want := range []string{
+		"server returned 422",
+		"VALIDATION_ERROR",
+		"Invalid request body",
+		"reportType: Invalid enum value",
+		"startDate: Invalid datetime",
+	} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("error %q missing %q", msg, want)
+		}
+	}
+}
+
+// A non-envelope error body must not be quoted back: an HTML page from a proxy
+// or an empty 502 says nothing about the request, and pasting bytes of unknown
+// provenance into an error is how a diagnostic becomes noise.
+func TestDescribeErrorResponse_NonEnvelopeBodyDegradesToStatus(t *testing.T) {
+	for name, body := range map[string]string{
+		"html":  "<html><body>502 Bad Gateway</body></html>",
+		"empty": "",
+		"json":  `{"unexpected": "shape"}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			var sent []byte
+			srv := bodyRecordingServer(t, body, http.StatusBadGateway, &sent)
+			defer srv.Close()
+
+			_, err := complianceSvc(t, srv.URL).GenerateReport(
+				context.Background(), "SOC2", "2026-04-01", "2026-04-30", "json")
+			if err == nil {
+				t.Fatal("want an error on 502")
+			}
+			if got, want := err.Error(), "generate compliance report: server returned 502"; got != want {
+				t.Errorf("error = %q, want %q", got, want)
+			}
+		})
+	}
 }
