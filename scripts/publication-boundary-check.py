@@ -29,6 +29,7 @@ Exit codes:
 
 from __future__ import annotations
 
+import bisect
 import hashlib
 import os
 import re
@@ -140,13 +141,19 @@ HEX_RUN = re.compile(r"[0-9a-fA-F]+")
 HEX_COLOR_WIDTHS = frozenset({6, 8})
 
 
-def unresolvable_refs(line: str, ceiling: int):
-    """Yield (number, matched_text) for each #N on `line` that cannot resolve."""
-    for m in ISSUE_REF.finditer(line):
+def _unresolvable_in_text(text: str, ceiling: int):
+    """Yield (number, matched_text, start_offset) for each unresolvable #N.
+
+    The single implementation of the rule. `unresolvable_refs` (line-scoped) and
+    `tree_unresolvable_refs` (file-scoped) both route through it, so the
+    hex-colour exclusions cannot drift apart between the two scopes -- which is
+    the whole reason this is one function and not two.
+    """
+    for m in ISSUE_REF.finditer(text):
         digits = m.group(1)
         # "#5865f2" -> ISSUE_REF sees "#5865". A reference is never followed by
         # a hex letter, so a longer hex run means this is a colour.
-        run = HEX_RUN.match(line, m.start(1))
+        run = HEX_RUN.match(text, m.start(1))
         if run and run.end() > m.end(1):
             continue
         if len(digits) in HEX_COLOR_WIDTHS:
@@ -157,7 +164,13 @@ def unresolvable_refs(line: str, ceiling: int):
             continue
         n = int(digits)
         if n > ceiling:
-            yield n, m.group(0)
+            yield n, m.group(0), m.start()
+
+
+def unresolvable_refs(line: str, ceiling: int):
+    """Yield (number, matched_text) for each #N on `line` that cannot resolve."""
+    for n, token, _ in _unresolvable_in_text(line, ceiling):
+        yield n, token
 
 
 def _file_unresolvable_numbers(text: str, ceiling: int) -> set[int]:
@@ -205,11 +218,24 @@ def tree_unresolvable_refs(paths: list[str], ceiling: int, exempt: list[str]):
             continue
         try:
             with open(path, "r", encoding="utf-8") as fh:
-                for lineno, line in enumerate(fh, 1):
-                    for num, token in unresolvable_refs(line, ceiling):
-                        yield path, lineno, num, token
+                text = fh.read()
         except (UnicodeDecodeError, OSError):
             continue  # binary or unreadable: not prose, not a citation
+        # Cheap reject first. Scanning ~4,100 files line-by-line cost ~9s per
+        # invocation, and the boundary suite runs the guard dozens of times --
+        # a gate slow enough to be skipped is a gate that does not exist.
+        if "#" not in text:
+            continue
+        hits = list(_unresolvable_in_text(text, ceiling))
+        if not hits:
+            continue
+        # Line numbers are computed only for files that actually have hits.
+        starts = [0]
+        for i, ch in enumerate(text):
+            if ch == "\n":
+                starts.append(i + 1)
+        for num, token, pos in hits:
+            yield path, bisect.bisect_right(starts, pos), num, token
 
 
 def _rev_ok(ref: str) -> bool:
