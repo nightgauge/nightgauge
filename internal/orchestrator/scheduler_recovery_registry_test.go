@@ -197,16 +197,27 @@ func TestRecoveryRegistry_PRMergeSelfHeal(t *testing.T) {
 	// pr-merge succeeds; in tests we have no live PR, so leave PrUrl empty
 	// — the post-stage check skips gracefully.
 	item := types.BoardItem{Number: 9001, Repo: "nightgauge/test", ID: "item-9001"}
+
+	// Read the run's state from the TERMINAL SNAPSHOT the completion callback
+	// is handed, not from disk. Since #440 the Go scheduler latches terminal
+	// and seals — the snapshot file is written with `terminal: true` and then
+	// REMOVED at the end of runPipeline, exactly as the extension path has
+	// always done, so a post-run PickPersistedStateForIssue finds nothing.
+	// onPipelineComplete fires inside the terminal defer, before the seal, and
+	// carries the same content the file used to be read for.
+	var completed *state.RuntimeState
+	s.OnPipelineComplete(func(_ string, _ int, rt *state.RuntimeState, _ bool) {
+		completed = rt
+	})
+
 	s.runPipeline(context.Background(), item)
 
-	// Recovery attempt must have been recorded on the pr-merge stage.
-	// The run mints its own identity, so the snapshot is DISCOVERED by issue
-	// rather than composed by name (ADR-017 Decision 8).
-	rs, err := state.PickPersistedStateForIssue(filepath.Join(root, ".nightgauge", "pipeline"), item.Number)
-	if err != nil {
-		t.Fatalf("load persisted state: %v", err)
+	if completed == nil {
+		t.Fatal("onPipelineComplete never fired — the terminal defer did not run")
 	}
-	attempts := rs.StageRecoveryAttemptsFor(state.StagePRMerge)
+
+	// Recovery attempt must have been recorded on the pr-merge stage.
+	attempts := completed.StageRecoveryAttemptsFor(state.StagePRMerge)
 	if len(attempts) != 1 {
 		t.Fatalf("expected 1 recovery attempt on pr-merge, got %d (%+v)", len(attempts), attempts)
 	}

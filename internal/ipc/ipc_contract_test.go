@@ -103,6 +103,7 @@ var contractTestedMethods = map[string]bool{
 	"pipeline.notifyComplete":               true,
 	"pipeline.notifyPhaseTransition":        true,
 	"pipeline.notifyStageProgress":          true,
+	"pipeline.recordStageGateResult":        true, // Issue #377
 	"pipeline.notifyStageTransition":        true,
 	"pipeline.pause":                        true,
 	"pipeline.resume":                       true,
@@ -728,6 +729,25 @@ func TestContract_Pipeline(t *testing.T) {
 			"costUsd":         0.42,
 		})
 		assertMethodRegistered(t, h.readResponseFor(id, nil), "pipeline.notifyStageProgress")
+	})
+
+	// pipeline.recordStageGateResult — the gate CLI's route to the single
+	// authoritative writer (#377). Registration only: the call is REFUSED here
+	// (no such run), which is the correct answer and still proves the method is
+	// in the binary.
+	t.Run("pipeline.recordStageGateResult/registered", func(t *testing.T) {
+		id := h.sendRequest("pipeline.recordStageGateResult", map[string]interface{}{
+			"repo":        "test-repo",
+			"issueNumber": 8890,
+			"stage":       "pr-create",
+			"runId":       "01a02f24-498e-7364-bb8a-c96fa3739902",
+			"result": map[string]interface{}{
+				"gate_name": "pr-create",
+				"passed":    true,
+				"timestamp": "2026-08-23T00:00:00Z",
+			},
+		})
+		assertMethodRegistered(t, h.readResponseFor(id, nil), "pipeline.recordStageGateResult")
 	})
 }
 

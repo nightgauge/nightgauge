@@ -117,6 +117,11 @@ func TestRunPipeline_SnapshotLandsUnderTheIdentityKeyedName(t *testing.T) {
 	item := types.BoardItem{Number: 8802, Repo: "nightgauge/nightgauge", ID: "item-8802", Title: "snapshot name"}
 	var stateDir string
 	var midRun []*state.RuntimeState
+	// The composed-path check has to happen MID-RUN, because since #440 the
+	// terminal defer seals and removes the snapshot before runPipeline
+	// returns. Statting after the run would assert the absence the seal
+	// creates, not the naming this test is about.
+	var midRunComposedPathErr error
 	runner.onStage = func() {
 		if len(midRun) > 0 {
 			return
@@ -125,6 +130,13 @@ func TestRunPipeline_SnapshotLandsUnderTheIdentityKeyedName(t *testing.T) {
 		found, err := state.FindPersistedStatesForIssue(stateDir, item.Number)
 		if err == nil {
 			midRun = found
+			if len(found) == 1 && found[0].RunID != "" {
+				// The name the run wrote is the name the composer produces —
+				// the pin that keeps the reconciler's discovery regex and
+				// Persist in agreement.
+				_, midRunComposedPathErr = os.Stat(
+					filepath.Join(stateDir, state.SnapshotFilename(item.Number, found[0].RunID)))
+			}
 		}
 	}
 	s.runPipeline(context.Background(), item)
@@ -136,9 +148,15 @@ func TestRunPipeline_SnapshotLandsUnderTheIdentityKeyedName(t *testing.T) {
 	if midRun[0].RunID == "" {
 		t.Fatal("the discovered snapshot carries no run identity")
 	}
-	// The name the run wrote is the name the composer produces — this is the
-	// pin that keeps the reconciler's discovery regex and Persist in agreement.
-	if _, err := os.Stat(filepath.Join(stateDir, state.SnapshotFilename(item.Number, midRun[0].RunID))); err != nil {
-		t.Errorf("snapshot is not at the composed path: %v", err)
+	if midRunComposedPathErr != nil {
+		t.Errorf("mid-run the snapshot is not at the composed path: %v", midRunComposedPathErr)
+	}
+
+	// #440: and the terminal defer SEALED it away. The Go path now has the
+	// same latch-and-seal contract the extension path has always had, so a
+	// finished run leaves no non-terminal snapshot behind for the reconciler
+	// to collect fourteen days later.
+	if _, err := os.Stat(filepath.Join(stateDir, state.SnapshotFilename(item.Number, midRun[0].RunID))); !os.IsNotExist(err) {
+		t.Errorf("after the run the seal must have removed the snapshot, but stat returned %v", err)
 	}
 }

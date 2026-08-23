@@ -3203,6 +3203,94 @@ func (s *Server) registerMethods() {
 		return map[string]string{"status": "ok"}, nil
 	}
 
+	// pipeline.recordStageGateResult is the single-authoritative-writer route
+	// for `nightgauge gate verify --record` (#377, ADR-017 R-1).
+	//
+	// THE POINT IS TO REMOVE A WRITER. The gate CLI is a DIFFERENT OS PROCESS,
+	// so the server's in-memory terminal latch cannot cover its writes. Decision
+	// 5 narrowed that cross-process exposure to a rename race — load-or-skip,
+	// terminal-refusal, PersistExisting — and named the residual R-1: the file
+	// can be sealed and removed between the CLI's load and its write. Routing
+	// the result through here makes the IPC server the SINGLE writer of the
+	// runtime snapshot whenever it is alive, which is what actually closes the
+	// race rather than narrowing it further. The CLI keeps its direct path for
+	// when no server is reachable; that path has one writer by definition.
+	//
+	// Generation is SKIPPED for the TypeScript client on purpose: this verb's
+	// only caller is the Go CLI. The extension records gate results through the
+	// run's own transitions.
+	//
+	//ipc:method pipelineRecordStageGateResult params:PipelineRecordStageGateResultParams result:void skip
+	s.methods["pipeline.recordStageGateResult"] = func(_ context.Context, params json.RawMessage) (interface{}, error) {
+		var p PipelineRecordStageGateResultParams
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, fmt.Errorf("invalid params: %w", err)
+		}
+		if p.Stage == "" {
+			return nil, fmt.Errorf("invalid params: stage is required")
+		}
+
+		// RUN-PROGRESS CLASS (Decision 3): the gate CLI is spawned BY the run
+		// whose verdict this is, so it describes its OWN run. Adoption is safe
+		// for that reason — an adopting caller re-creates its own run under its
+		// own key, where every write it makes lands on its own record. The run
+		// id is carried explicitly (NIGHTGAUGE_RUN_ID or --run-id), so this
+		// resolves EXACTLY rather than by the direct path's newest-non-terminal
+		// pick, which mis-attributes under two concurrent dispatches of one
+		// issue.
+		//
+		// A terminal or closed run is refused here — codeRunClosed — which is
+		// the same answer the direct path's terminal-refusal gives, except that
+		// this one consults the live registry rather than a file that may be
+		// mid-seal.
+		res, err := s.resolveRun("pipeline.recordStageGateResult", verbRunProgress, p.RunID, p.Repo, p.IssueNumber)
+		if err != nil {
+			return nil, err
+		}
+		rt := res.rs
+		rt.AppendStageGateResult(state.PipelineStage(p.Stage), p.Result)
+
+		// Persist so the result is durable even if the run never reaches another
+		// stage boundary. Persist is latch-aware: after the terminal claim's
+		// seal it returns ErrRunSealed WITHOUT writing, so this cannot resurrect
+		// a snapshot the claim removed (F27) — the exact failure the CLI's
+		// direct write can still produce in its rename-race window, and the
+		// reason this route exists.
+		//
+		// A SCHEDULER-OWNED run is served read-through and NOT persisted from
+		// here: the scheduler owns that snapshot's whole lifecycle and persists
+		// it at every stage boundary, so the append lands on the live runtime
+		// and reaches disk through its owner. A second writer aiming at a
+		// directory derived from the CALLER's repo param is exactly the
+		// split-brain Decision 11 separates the registries to avoid.
+		repo := rt.TargetRepo()
+		if repo == "" {
+			repo = p.Repo
+		}
+		if res.schedulerOwned {
+			return map[string]string{"status": "ok"}, nil
+		}
+		if repo == "" {
+			// Gated on a known repo for the same reason the transition's persist
+			// is (#307): pipelineStateDir("") resolves the shared launch root,
+			// and persisting there strands a stub in a repo that never ran the
+			// issue.
+			log.Printf("recordStageGateResult: #%d run %s carries no repo — the result is on the live runtime but was not persisted (#307)",
+				p.IssueNumber, rt.RunID)
+			return map[string]string{"status": "ok"}, nil
+		}
+		if stateDir := s.pipelineStateDir(repo); stateDir != "" {
+			if err := rt.Persist(stateDir); err != nil {
+				// Non-fatal, and EXPECTED after a terminal claim: the gate's
+				// verdict is already returned to its caller by the CLI, and a
+				// sealed run refusing a late write is the latch working.
+				log.Printf("recordStageGateResult: #%d persist failed (non-fatal): %v", p.IssueNumber, err)
+			}
+		}
+
+		return map[string]string{"status": "ok"}, nil
+	}
+
 	//ipc:method pipelineNotifyComplete params:PipelineNotifyCompleteParams result:void skip
 	s.methods["pipeline.notifyComplete"] = func(_ context.Context, params json.RawMessage) (interface{}, error) {
 		var p PipelineNotifyCompleteParams
