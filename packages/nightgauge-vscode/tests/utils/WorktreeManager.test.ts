@@ -185,7 +185,7 @@ describe("WorktreeManager", () => {
       await manager.create(42, "feat/42-test", { npmInstall: false });
 
       const npmCalls = execAsyncMock.mock.calls.filter(
-        ([cmd]: [string]) => typeof cmd === "string" && cmd.includes("npm install")
+        ([cmd]: unknown[]) => typeof cmd === "string" && cmd.includes("npm install")
       );
       expect(npmCalls).toHaveLength(0);
     });
@@ -320,7 +320,7 @@ describe("WorktreeManager", () => {
       );
       expect(
         execAsyncMock.mock.calls.some(
-          ([cmd]: [string]) => typeof cmd === "string" && cmd.includes("worktree remove")
+          ([cmd]: unknown[]) => typeof cmd === "string" && cmd.includes("worktree remove")
         )
       ).toBe(false);
       expect(execFileAsyncMock).not.toHaveBeenCalledWith(
@@ -396,7 +396,7 @@ describe("WorktreeManager", () => {
       );
       expect(
         execAsyncMock.mock.calls.some(
-          ([cmd]: [string]) => typeof cmd === "string" && cmd.includes("worktree remove")
+          ([cmd]: unknown[]) => typeof cmd === "string" && cmd.includes("worktree remove")
         )
       ).toBe(false);
     });
@@ -925,7 +925,7 @@ describe("WorktreeManager", () => {
       expect(fsMock.cp).not.toHaveBeenCalled();
       expect(
         execAsyncMock.mock.calls.some(
-          ([cmd]: [string]) => typeof cmd === "string" && cmd.includes("@nightgauge/sdk")
+          ([cmd]: unknown[]) => typeof cmd === "string" && cmd.includes("@nightgauge/sdk")
         )
       ).toBe(false);
     });
