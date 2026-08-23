@@ -135,6 +135,11 @@ docs/social-media/
 # Knowledge recall cache (auto-generated BM25 index; do not commit)
 .nightgauge/knowledge/.recall-cache/
 
+# Workspace knowledge graph (derived; rebuilt from the tree and the forge).
+# ADR-005 Decision 1: the graph is derived and never authored — committing it
+# would create exactly the second, hand-maintained copy the program abolishes.
+.nightgauge/graph/
+
 # ─── Publication boundary (see .github/publication-boundary.yaml) ────────────
 # These paths are PRIVATE-class: they must never be tracked in this repository.
 #
