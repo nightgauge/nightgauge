@@ -1,0 +1,7 @@
+NODE file:README.md [files@git ls-files]
+NODE file:docs/ALPHA.md [files@git ls-files]
+NODE file:internal/alpha/a.go [files@git ls-files]
+NODE package:docs [files@git ls-files]
+NODE package:internal [files@git ls-files]
+EDGE part-of file:docs/ALPHA.md -> package:docs [files@git ls-files]
+EDGE part-of file:internal/alpha/a.go -> package:internal [files@git ls-files]

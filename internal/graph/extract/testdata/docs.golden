@@ -1,0 +1,6 @@
+NODE doc:docs/A.md [docs@docs/A.md:1] label=A
+NODE doc:docs/B.md [docs@docs/B.md:1] label=B
+EDGE documents doc:docs/A.md -> doc:docs/B.md [docs@docs/A.md:3]
+EDGE documents doc:docs/A.md -> doc:docs/GONE.md [docs@docs/A.md:5]
+EDGE documents doc:docs/A.md -> file:Makefile [docs@docs/A.md:3]
+EDGE documents doc:docs/A.md -> file:docs/C [docs@docs/A.md:3]
