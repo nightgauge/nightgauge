@@ -13,6 +13,17 @@ vi.mock("node:fs/promises");
 
 import { SkillEffectivenessWriter } from "../../src/utils/SkillEffectivenessWriter";
 
+/**
+ * `fs.readFile` is overloaded: with an encoding it resolves a string, without
+ * one a Buffer. `vi.mocked` picks the Buffer overload, so every call site here
+ * used to write `content as unknown as Buffer` — a cast that says the code
+ * under test receives a Buffer when it receives a string.
+ *
+ * The code calls `fs.readFile(path, "utf-8")`. Narrowing the mock to that
+ * overload once states the truth and drops eight casts (#499).
+ */
+const readFileUtf8 = vi.mocked(fs.readFile as (path: string, encoding: string) => Promise<string>);
+
 const WORKSPACE = "/workspace";
 const EXPECTED_FILE = path.join(WORKSPACE, ".nightgauge/health/skill-effectiveness.jsonl");
 
@@ -39,7 +50,7 @@ beforeEach(() => {
   vi.resetAllMocks();
   vi.mocked(fs.mkdir).mockResolvedValue(undefined);
   vi.mocked(fs.appendFile).mockResolvedValue(undefined);
-  vi.mocked(fs.readFile).mockRejectedValue(new Error("ENOENT"));
+  readFileUtf8.mockRejectedValue(new Error("ENOENT"));
   vi.mocked(fs.writeFile).mockResolvedValue(undefined);
 });
 
@@ -86,18 +97,14 @@ describe("SkillEffectivenessWriter", () => {
 
   describe("readAll()", () => {
     it("returns empty array when file does not exist", async () => {
-      vi.mocked(fs.readFile).mockRejectedValue(
-        Object.assign(new Error("ENOENT"), { code: "ENOENT" })
-      );
+      readFileUtf8.mockRejectedValue(Object.assign(new Error("ENOENT"), { code: "ENOENT" }));
       const records = await SkillEffectivenessWriter.readAll(WORKSPACE);
       expect(records).toEqual([]);
     });
 
     it("returns parsed records from valid JSONL content", async () => {
       const record = makeRecord();
-      vi.mocked(fs.readFile).mockResolvedValue(
-        (JSON.stringify(record) + "\n") as unknown as Buffer
-      );
+      readFileUtf8.mockResolvedValue(JSON.stringify(record) + "\n");
 
       const records = await SkillEffectivenessWriter.readAll(WORKSPACE);
       expect(records).toHaveLength(1);
@@ -107,7 +114,7 @@ describe("SkillEffectivenessWriter", () => {
     it("skips malformed JSON lines silently", async () => {
       const record = makeRecord();
       const content = "not-valid-json\n" + JSON.stringify(record) + "\n{bad\n";
-      vi.mocked(fs.readFile).mockResolvedValue(content as unknown as Buffer);
+      readFileUtf8.mockResolvedValue(content);
 
       const records = await SkillEffectivenessWriter.readAll(WORKSPACE);
       expect(records).toHaveLength(1);
@@ -117,7 +124,7 @@ describe("SkillEffectivenessWriter", () => {
       const valid = makeRecord();
       const invalid = { schema_version: "99", stage: "unknown" };
       const content = JSON.stringify(invalid) + "\n" + JSON.stringify(valid) + "\n";
-      vi.mocked(fs.readFile).mockResolvedValue(content as unknown as Buffer);
+      readFileUtf8.mockResolvedValue(content);
 
       const records = await SkillEffectivenessWriter.readAll(WORKSPACE);
       expect(records).toHaveLength(1);
@@ -127,7 +134,7 @@ describe("SkillEffectivenessWriter", () => {
     it("skips empty lines", async () => {
       const record = makeRecord();
       const content = "\n" + JSON.stringify(record) + "\n\n";
-      vi.mocked(fs.readFile).mockResolvedValue(content as unknown as Buffer);
+      readFileUtf8.mockResolvedValue(content);
 
       const records = await SkillEffectivenessWriter.readAll(WORKSPACE);
       expect(records).toHaveLength(1);
@@ -136,9 +143,7 @@ describe("SkillEffectivenessWriter", () => {
 
   describe("enforceRetention()", () => {
     it("returns early when file does not exist", async () => {
-      vi.mocked(fs.readFile).mockRejectedValue(
-        Object.assign(new Error("ENOENT"), { code: "ENOENT" })
-      );
+      readFileUtf8.mockRejectedValue(Object.assign(new Error("ENOENT"), { code: "ENOENT" }));
       await expect(SkillEffectivenessWriter.enforceRetention(WORKSPACE)).resolves.toBeUndefined();
       expect(fs.writeFile).not.toHaveBeenCalled();
     });
@@ -147,9 +152,7 @@ describe("SkillEffectivenessWriter", () => {
       const recent = makeRecord({
         analyzed_at: new Date().toISOString(),
       });
-      vi.mocked(fs.readFile).mockResolvedValue(
-        (JSON.stringify(recent) + "\n") as unknown as Buffer
-      );
+      readFileUtf8.mockResolvedValue(JSON.stringify(recent) + "\n");
 
       await SkillEffectivenessWriter.enforceRetention(WORKSPACE, 90);
 
@@ -168,7 +171,7 @@ describe("SkillEffectivenessWriter", () => {
         analyzed_at: new Date().toISOString(),
       });
       const content = JSON.stringify(old) + "\n" + JSON.stringify(recent) + "\n";
-      vi.mocked(fs.readFile).mockResolvedValue(content as unknown as Buffer);
+      readFileUtf8.mockResolvedValue(content);
 
       await SkillEffectivenessWriter.enforceRetention(WORKSPACE, 90);
 
@@ -179,7 +182,7 @@ describe("SkillEffectivenessWriter", () => {
 
     it("writes empty string when all entries are pruned", async () => {
       const old = makeRecord({ analyzed_at: "2020-01-01T00:00:00Z" });
-      vi.mocked(fs.readFile).mockResolvedValue((JSON.stringify(old) + "\n") as unknown as Buffer);
+      readFileUtf8.mockResolvedValue(JSON.stringify(old) + "\n");
 
       await SkillEffectivenessWriter.enforceRetention(WORKSPACE, 90);
 
@@ -188,9 +191,7 @@ describe("SkillEffectivenessWriter", () => {
     });
 
     it("does not throw on filesystem errors", async () => {
-      vi.mocked(fs.readFile).mockResolvedValue(
-        (JSON.stringify(makeRecord()) + "\n") as unknown as Buffer
-      );
+      readFileUtf8.mockResolvedValue(JSON.stringify(makeRecord()) + "\n");
       vi.mocked(fs.writeFile).mockRejectedValue(new Error("Disk full"));
 
       await expect(SkillEffectivenessWriter.enforceRetention(WORKSPACE)).resolves.toBeUndefined();

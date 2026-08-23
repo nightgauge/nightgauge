@@ -132,7 +132,7 @@ describe("IpcClient — protocol version hard-fail (ADR-017 Migration)", () => {
     const fs = await import("fs");
     vi.mocked(fs.existsSync).mockReturnValue(true);
 
-    (vscode.workspace.getConfiguration as MockInstance).mockReturnValue({
+    (vscode.workspace.getConfiguration as unknown as MockInstance).mockReturnValue({
       get: vi.fn(<T>(key: string, defaultValue?: T): T | undefined => {
         if (key === "binaryPath") return "" as unknown as T;
         if (key === "timeoutSeconds") return 30 as unknown as T;
@@ -140,8 +140,8 @@ describe("IpcClient — protocol version hard-fail (ADR-017 Migration)", () => {
       }),
     });
 
-    (vscode.window.showErrorMessage as MockInstance).mockResolvedValue(undefined);
-    (vscode.window.showWarningMessage as MockInstance).mockResolvedValue(undefined);
+    (vscode.window.showErrorMessage as unknown as MockInstance).mockResolvedValue(undefined);
+    (vscode.window.showWarningMessage as unknown as MockInstance).mockResolvedValue(undefined);
 
     process.env.GITHUB_TOKEN = "test_token";
     vi.useFakeTimers();
@@ -167,7 +167,8 @@ describe("IpcClient — protocol version hard-fail (ADR-017 Migration)", () => {
 
     // Blocking modal naming binary version, expected version, and the action.
     expect(vscode.window.showErrorMessage).toHaveBeenCalled();
-    const [message, options] = (vscode.window.showErrorMessage as MockInstance).mock.calls[0];
+    const [message, options] = (vscode.window.showErrorMessage as unknown as MockInstance).mock
+      .calls[0];
     expect(String(message)).toContain(String(IPC_PROTOCOL_VERSION + 1));
     expect(String(message)).toContain(String(IPC_PROTOCOL_VERSION));
     expect(options).toMatchObject({ modal: true });

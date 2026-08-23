@@ -222,7 +222,7 @@ describe("IpcClientBase", () => {
       }
     );
 
-    (vscode.workspace.getConfiguration as MockInstance).mockReturnValue({
+    (vscode.workspace.getConfiguration as unknown as MockInstance).mockReturnValue({
       get: vi.fn(<T>(key: string, defaultValue?: T): T | undefined => {
         if (key === "binaryPath") return "" as unknown as T;
         if (key === "timeoutSeconds") return 30 as unknown as T;
@@ -230,8 +230,8 @@ describe("IpcClientBase", () => {
       }),
     });
 
-    (vscode.window.showErrorMessage as MockInstance).mockResolvedValue(undefined);
-    (vscode.window.showWarningMessage as MockInstance).mockResolvedValue(undefined);
+    (vscode.window.showErrorMessage as unknown as MockInstance).mockResolvedValue(undefined);
+    (vscode.window.showWarningMessage as unknown as MockInstance).mockResolvedValue(undefined);
 
     process.env.GITHUB_TOKEN = "test_token";
     // Clean up platform env vars that may bleed between tests.
