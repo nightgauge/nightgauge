@@ -35,9 +35,13 @@ export const DEFAULT_UI_DASHBOARD_CONFIG = {
 /**
  * Create a mock dashboard configuration with optional overrides
  */
-export function createMockUIDashboardConfig(
-  overrides?: Partial<typeof DEFAULT_UI_DASHBOARD_CONFIG>
-) {
+export function createMockUIDashboardConfig(overrides?: {
+  // The body spreads overrides?.time_savings over the defaults, so a caller
+  // may override ONE stage. Partial<typeof DEFAULT> only made time_savings
+  // itself optional, leaving every stage inside it required — a signature that
+  // understated what the helper accepts.
+  time_savings?: Partial<typeof DEFAULT_UI_DASHBOARD_CONFIG.time_savings>;
+}) {
   return {
     ...DEFAULT_UI_DASHBOARD_CONFIG,
     time_savings: {

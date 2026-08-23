@@ -16,6 +16,7 @@ import {
   DEFAULT_CONFIG,
 } from "../../src/config/schema";
 import { applyEnvOverrides } from "../mocks/config-fixtures";
+import type { UICoreConfig } from "../../src/config/schema";
 
 // ============================================================================
 // Mock Fixtures
@@ -24,10 +25,10 @@ import { applyEnvOverrides } from "../mocks/config-fixtures";
 /**
  * Default core UI configuration for tests
  */
-export const DEFAULT_UI_CORE_CONFIG = {
-  adapter: "claude" as const,
-  auth_provider: "max" as const,
-  default_model: "sonnet" as const,
+export const DEFAULT_UI_CORE_CONFIG: UICoreConfig = {
+  adapter: "claude",
+  auth_provider: "max",
+  default_model: "sonnet",
   context_path: ".nightgauge/pipeline",
   plans_path: ".nightgauge/plans",
 };
@@ -35,7 +36,7 @@ export const DEFAULT_UI_CORE_CONFIG = {
 /**
  * Create a mock core UI configuration with optional overrides
  */
-export function createMockUICoreConfig(overrides?: Partial<typeof DEFAULT_UI_CORE_CONFIG>) {
+export function createMockUICoreConfig(overrides?: Partial<UICoreConfig>): UICoreConfig {
   return {
     ...DEFAULT_UI_CORE_CONFIG,
     ...overrides,
