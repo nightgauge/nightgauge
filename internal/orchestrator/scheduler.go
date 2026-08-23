@@ -3033,6 +3033,33 @@ func RecoverUncommittedWork(worktreePath string, issueNumber int, stage string) 
 	return nil
 }
 
+// schedulerTerminalOutcome derives the terminal outcome string the Go
+// scheduler latches into RuntimeState.TerminalOutcome (#440).
+//
+// IT IS DELIBERATELY THE SAME THREE STRINGS the extension path's outcomeFor
+// closure produces at internal/ipc/server.go's pipeline.notifyComplete —
+// "complete", "cancelled", "failed". The marker is read by the orphan
+// reconciler and by every consumer of a sealed snapshot, none of which know
+// which dispatch path produced the run; a fourth spelling here would be a
+// path-dependent vocabulary in a field whose whole purpose is to be
+// path-independent. That is the same one-corpus-one-meaning rule the outcome
+// recorder states for `success` and `costUsd`.
+//
+// A DEFERRAL IS "cancelled", NOT "failed". blocked_dependency means no AI
+// stage ran and nothing was attempted — the scheduler already excludes it from
+// outcome recording for exactly this reason, and the extension path maps its
+// Deferred flag to "cancelled" rather than to a failure.
+func schedulerTerminalOutcome(success bool, terminalFailureKind string) string {
+	switch {
+	case success:
+		return "complete"
+	case terminalFailureKind == TerminalKindBlockedDependency:
+		return "cancelled"
+	default:
+		return "failed"
+	}
+}
+
 // loadWorktreePath resolves the worktree directory for an issue's pipeline run.
 // Prefers the durable run-state.json record (worktree_path); falls back to the
 // workspace root, which is what the Go scheduler passes to RunStage as
@@ -3537,6 +3564,35 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 			}
 		}
 
+		// TERMINAL LATCH — the durable half (ADR-017 Decision 5 step 1c, #440).
+		//
+		// The latch and the seal were EXTENSION-PATH-ONLY until this line. The
+		// IPC funnel latches in ClaimTerminal and seals in SealAndRemove; this
+		// path had neither, so a finished or crashed Go-scheduler run left a
+		// NON-TERMINAL snapshot on disk indefinitely and only the orphan
+		// reconciler's 14-day cap ever collected it. Every reader of the
+		// canonical snapshots then had to special-case this path — #410's
+		// ActiveIssuesFromSnapshots reader is liveness-bounded rather than
+		// terminality-based for exactly this reason — and ADR-017 §7.4's
+		// disposition reasoning, which assumes terminality is meaningful, was
+		// simply not true here. The two dispatch paths silently disagreed
+		// about what a snapshot on disk means; they no longer do.
+		//
+		// LATCHED HERE, at outcome determination, because this is the first
+		// point where terminalFailureKind is final: the classification block
+		// above is what turns a bare `pipelineSuccess == false` into the kind
+		// the outcome string is derived from. Latching earlier would stamp an
+		// outcome the run had not finished deciding.
+		//
+		// The latch does NOT freeze the runtime — markTerminalLocked sets the
+		// durable marker and nothing else. The bookkeeping below (outcome
+		// recording, the V3 record, cleanup) still mutates and still persists;
+		// what changes is that every Persist from here on marshals
+		// `terminal: true`, so even a snapshot that lands between this line and
+		// the seal is one adoption refuses and the reconciler removes without
+		// emitting. Writes stop at the seal, not here.
+		runtime.MarkTerminal(schedulerTerminalOutcome(pipelineSuccess, terminalFailureKind))
+
 		// Two terminal kinds record NOTHING, and the extension path skips the
 		// same two (internal/ipc/outcome_record.go) — one corpus, one meaning
 		// per field, or `success` and `costUsd` carry two meanings across the
@@ -3702,6 +3758,62 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 				log.Printf("#%d: pipeline failed — moved issue back to %s on project board", item.Number, targetStatus)
 			} else {
 				log.Printf("#%d: pipeline failed — issue is In Review, leaving board status unchanged", item.Number)
+			}
+		}
+
+		// SEAL AND REMOVE — claim step 4 (ADR-017 Decision 5, #440), the second
+		// half of the parity this path was missing. LAST in the defer, after
+		// every piece of terminal bookkeeping above has run: the record, the
+		// outcome, the branch and worktree cleanup and the board revert all
+		// still need a runtime they can persist, and the seal is the operation
+		// that ends writing. Sealing earlier would turn each of those persists
+		// into an ErrRunSealed no-op.
+		//
+		// THE PATH IS THE IDENTITY. SnapshotFilename composes this run's own
+		// runId, so the remove cannot take a successor's file even in
+		// principle — the property that makes this safe to do on a path where
+		// a re-dispatch of the same issue may already be running.
+		//
+		// Rooted at workspaceRoot, which in runPipeline is s.runRoot(item.Repo)
+		// — the run's OWN repo root, not the scheduler's launch root. That is
+		// the directory every other persist on this path writes to, and since
+		// #410 it is also the in-flight source ActiveIssuesFromSnapshots scans.
+		// Sealing anywhere else would leave the real snapshot behind and remove
+		// nothing.
+		//
+		// Best-effort with three distinct outcomes, kept distinct in the log
+		// because they leave three different things on disk (the extension
+		// path's seal at internal/ipc/server.go makes the same three-way
+		// distinction, and for the same reason).
+		if stateDir := filepath.Join(workspaceRoot, ".nightgauge", "pipeline"); workspaceRoot != "" {
+			if err := runtime.SealAndRemove(stateDir); err != nil {
+				switch {
+				case errors.Is(err, state.ErrNotRunOwner):
+					// NOT A FAILURE — the correct refusal (#557). The snapshot
+					// belongs to a live foreign process; sealing would remove a
+					// file whose owner re-creates it at its next persist,
+					// resurrecting the run.
+					log.Printf("#%d: DECLINED to seal run %s — its snapshot belongs to a live owner process, not to this one: %v",
+						item.Number, snap.RunID, err)
+				case errors.Is(err, state.ErrSealWriteFailed):
+					// The terminal marker never reached disk, but the seal is
+					// latched and the stale NON-TERMINAL snapshot was removed
+					// rather than left for a restart to rehydrate.
+					log.Printf("#%d: seal for run %s could NOT WRITE the terminal marker; the stale snapshot was removed instead (non-fatal): %v",
+						item.Number, snap.RunID, err)
+				case errors.Is(err, state.ErrNoRunIdentity):
+					// A run refused at the identity preflight never persisted a
+					// snapshot under a composed name, so there is nothing to
+					// seal. Expected, not a defect.
+					log.Printf("#%d: no run identity — nothing to seal (the run was refused before it persisted): %v",
+						item.Number, err)
+				default:
+					// The file on disk DOES carry `terminal: true`; only its
+					// removal failed. Adoption refuses that snapshot and the
+					// reconciler removes it without emitting.
+					log.Printf("#%d: seal-and-remove for run %s failed AFTER the snapshot was terminal-marked (non-fatal): %v",
+						item.Number, snap.RunID, err)
+				}
 			}
 		}
 	}()
