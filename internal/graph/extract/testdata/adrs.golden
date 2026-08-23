@@ -1,0 +1,8 @@
+NODE adr:001-first.md [adrs@docs/decisions/001-first.md:1] label=ADR-001 — First path=docs/decisions/001-first.md
+NODE adr:002-second.md [adrs@docs/decisions/002-second.md:1] label=ADR-002 — Second path=docs/decisions/002-second.md
+NODE adr:003-third.md [adrs@docs/decisions/003-third.md:1] label=ADR-003 — Third path=docs/decisions/003-third.md
+EDGE documents adr:001-first.md -> doc:docs/decisions/001-first.md [adrs@docs/decisions/001-first.md:1]
+EDGE supersedes adr:002-second.md -> adr:001 [adrs@docs/decisions/002-second.md:3]
+EDGE documents adr:002-second.md -> doc:docs/decisions/002-second.md [adrs@docs/decisions/002-second.md:1]
+EDGE supersedes adr:003-third.md -> adr:099 [adrs@docs/decisions/003-third.md:3]
+EDGE documents adr:003-third.md -> doc:docs/decisions/003-third.md [adrs@docs/decisions/003-third.md:1]

@@ -1,0 +1,9 @@
+NODE model:claude-haiku-4-5 [models@internal/models/model-registry.json] label=Haiku 4.5 band=efficiency provider=anthropic registry_version=test-1 status=ga
+NODE model:claude-opus-5 [models@internal/models/model-registry.json] label=Opus 5 band=frontier provider=anthropic registry_version=test-1 status=ga
+NODE provider:anthropic [models@internal/models/model-registry.json]
+NODE stage:band/efficiency [models@internal/models/model-registry.json] label=band efficiency kind=band
+NODE stage:band/frontier [models@internal/models/model-registry.json] label=band frontier kind=band
+EDGE runs-on model:claude-haiku-4-5 -> provider:anthropic [models@internal/models/model-registry.json]
+EDGE serves-band model:claude-haiku-4-5 -> stage:band/efficiency [models@internal/models/model-registry.json]
+EDGE runs-on model:claude-opus-5 -> provider:anthropic [models@internal/models/model-registry.json]
+EDGE serves-band model:claude-opus-5 -> stage:band/frontier [models@internal/models/model-registry.json]
