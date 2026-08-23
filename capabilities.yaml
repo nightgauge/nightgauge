@@ -1,0 +1,269 @@
+# Nightgauge capability registry.
+#
+# This is the ONE authored layer of the workspace knowledge graph (ADR-005,
+# Decision 2). Everything else in the graph is derived; this file is written by
+# hand and read by the machine.
+#
+# docs/CAPABILITIES_MAP.md is GENERATED from this file. Edit here, not there.
+#
+# Validation (internal/capabilities) refuses:
+#   - an unknown status, disposition, or surface
+#   - a `docs:` entry that does not exist
+#   - an `owns:` glob that matches no tracked path  <- the anti-rot mechanism
+#   - a `depends_on:` id that is not defined here
+schema_version: 1
+
+capabilities:
+  - id: issue-to-pr-pipeline
+    title: Issue-to-PR pipeline
+    status: ga
+    disposition: core
+    surfaces: [skills, cli, sdk]
+    docs: [docs/ISSUE_TO_PR_WORKFLOW.md, docs/PIPELINE_EXECUTION.md]
+    owns:
+      - skills/nightgauge-feature-*/**
+      - skills/nightgauge-issue-*/**
+      - skills/nightgauge-pr-*/**
+      - internal/execution/**
+    depends_on: [stage-gates, context-handoff, model-adapters]
+
+  - id: stage-gates
+    title: Deterministic stage gates
+    status: ga
+    disposition: core
+    surfaces: [cli]
+    docs: [docs/STAGE_GATES.md, docs/HOOK_CONTRACT.md]
+    owns:
+      - internal/hooks/**
+      - internal/preflight/**
+    depends_on: []
+
+  - id: autonomous-scheduling
+    title: Autonomous scheduling
+    status: beta
+    disposition: core
+    surfaces: [cli]
+    docs: [docs/AUTONOMOUS_ORCHESTRATOR.md]
+    owns:
+      - internal/orchestrator/**
+      - internal/depgraph/**
+    depends_on: [issue-to-pr-pipeline, guardrails-and-budgets, forge-abstraction]
+
+  - id: context-handoff
+    title: Context handoff between stages
+    status: ga
+    disposition: core
+    surfaces: [sdk, cli]
+    docs: [docs/CONTEXT_ARCHITECTURE.md]
+    owns:
+      - packages/nightgauge-sdk/src/context/**
+      - internal/state/**
+      - internal/runstate/**
+    depends_on: []
+
+  - id: knowledge-base
+    title: Repository knowledge base
+    status: beta
+    disposition: core
+    surfaces: [cli, sdk]
+    docs: [docs/KNOWLEDGE_BASE.md]
+    owns:
+      - internal/knowledge/**
+    depends_on: []
+
+  - id: forge-abstraction
+    title: GitHub and GitLab support
+    status: ga
+    disposition: core
+    surfaces: [cli]
+    docs: [docs/FORGE_ABSTRACTION.md, docs/SELF_HOSTED_GITLAB_SETUP.md]
+    owns:
+      - internal/forge/**
+      - internal/github/**
+      - internal/gitlab/**
+    depends_on: []
+
+  - id: model-adapters
+    title: Model adapters
+    status: ga
+    disposition: core
+    surfaces: [sdk]
+    docs: [docs/ADAPTER_MATRIX.md, docs/ADAPTER_GUIDE.md, docs/ADAPTER_DOCTOR.md]
+    owns:
+      - packages/nightgauge-sdk/src/cli/adapters/**
+      - internal/models/**
+      - internal/doctor/**
+    depends_on: []
+
+  - id: model-evaluation
+    title: Model evaluation harness
+    status: beta
+    disposition: core
+    surfaces: [sdk, cli]
+    docs: [docs/MODEL_EVALUATION.md, docs/SKILL_EVALUATION.md]
+    owns:
+      - evals/**
+      - packages/nightgauge-sdk/src/eval/**
+    depends_on: [model-adapters]
+
+  - id: guardrails-and-budgets
+    title: Safety guardrails and budgets
+    status: ga
+    disposition: core
+    surfaces: [cli]
+    docs: [docs/GUARDRAILS_AND_BUDGETS.md, docs/CASCADE_CIRCUIT_BREAKER.md]
+    owns:
+      - internal/config/**
+    depends_on: []
+
+  - id: audit-and-outcomes
+    title: Audit trail and outcome recording
+    status: ga
+    disposition: core
+    surfaces: [cli]
+    docs: [docs/AUDIT_TRAIL.md, docs/OUTCOME_RECORDING.md, docs/STAGE_EXIT_DIAGNOSTIC.md]
+    owns:
+      - internal/audit/**
+      - internal/trace/**
+      - internal/history/**
+    depends_on: []
+
+  - id: vscode-extension
+    title: VS Code interface
+    status: beta
+    disposition: core
+    surfaces: [vscode]
+    docs: [docs/VSCODE_EXTENSION_GUIDE.md]
+    owns:
+      - packages/nightgauge-vscode/src/**
+    depends_on: [issue-to-pr-pipeline, attention-action-center]
+
+  - id: sdk-embedding
+    title: Programmatic embedding
+    status: beta
+    disposition: core
+    surfaces: [sdk]
+    docs: [docs/SDK_COOKBOOK.md]
+    owns:
+      - packages/nightgauge-sdk/src/index.ts
+      - packages/nightgauge-sdk/src/orchestrator/**
+    depends_on: [context-handoff]
+
+  - id: telemetry-controls
+    title: Telemetry and privacy controls
+    status: ga
+    disposition: core
+    surfaces: [sdk, vscode, cli]
+    docs: [docs/TELEMETRY_PRIVACY.md]
+    owns:
+      - internal/telemetrynotice/**
+    depends_on: []
+
+  - id: multi-repo-workspace
+    title: Multi-repository workspace
+    status: ga
+    disposition: core
+    surfaces: [cli, vscode]
+    docs: [docs/MULTI_REPO_WORKSPACE.md]
+    owns:
+      - internal/workspacemanifest/**
+      - internal/scan/**
+    depends_on: [forge-abstraction]
+
+  - id: attention-action-center
+    title: Action Center and attention producers
+    status: beta
+    disposition: core
+    surfaces: [cli, vscode]
+    docs: [docs/ATTENTION_PRODUCERS.md, docs/decisions/015-decision-requests.md]
+    owns:
+      - internal/attention/**
+    depends_on: []
+
+  - id: workflow-orchestration
+    title: Workflow orchestration and fan-out
+    status: alpha
+    disposition: core
+    surfaces: [sdk, cli]
+    docs: [docs/WORKFLOW_ORCHESTRATION.md, docs/security/WORKFLOW_FANOUT_SECURITY.md]
+    owns:
+      - packages/nightgauge-sdk/src/orchestrator/**
+    depends_on: [model-adapters]
+
+  - id: usage-and-quota
+    title: Adapter usage metering and quota
+    status: beta
+    disposition: core
+    surfaces: [cli, vscode]
+    docs: [docs/decisions/018-adapter-usage-quota-model.md]
+    owns:
+      - internal/usagestore/**
+    depends_on: [model-adapters]
+
+  - id: health-monitoring
+    title: Pipeline and codebase health monitoring
+    status: beta
+    disposition: core
+    surfaces: [cli, skills]
+    docs: [docs/HEALTH_MONITORING.md]
+    owns:
+      - internal/intelligence/health/**
+      - skills/nightgauge-health-check/**
+      - skills/nightgauge-pipeline-health/**
+    depends_on: [audit-and-outcomes]
+
+  - id: self-improvement-loop
+    title: Self-improvement and learning loop
+    status: beta
+    disposition: core
+    surfaces: [cli, skills]
+    docs: [docs/SELF_IMPROVEMENT_LOOP.md, docs/SELF_IMPROVEMENT_BOUNDARIES.md]
+    owns:
+      - internal/intelligence/learning/**
+      - skills/nightgauge-continuous-improvement/**
+    depends_on: [audit-and-outcomes]
+
+  - id: failure-recovery
+    title: Failure taxonomy and auto-triage
+    status: beta
+    disposition: core
+    surfaces: [cli]
+    docs: [docs/AUTO_TRIAGE.md, docs/FAILURE_TAXONOMY.md]
+    owns:
+      - internal/heal/**
+      - internal/intelligence/failure/**
+      - internal/terminalkind/**
+    depends_on: [audit-and-outcomes]
+
+  - id: skill-portability
+    title: Skill composition and portability
+    status: ga
+    disposition: core
+    surfaces: [skills, cli]
+    docs: [docs/SKILL_PORTABILITY.md, docs/SKILL_PROGRESSIVE_DISCLOSURE.md]
+    owns:
+      - internal/skillrender/**
+      - skills/_shared/**
+    depends_on: []
+
+  - id: publication-boundary
+    title: Publication boundary enforcement
+    status: ga
+    disposition: core
+    surfaces: [ci]
+    docs: [docs/DOCUMENTATION_IA.md, docs/PUBLIC_CORE_BOUNDARY.md]
+    owns:
+      - scripts/publication-boundary-check.py
+      - .github/publication-boundary.yaml
+    depends_on: []
+
+  - id: platform-integration
+    title: Hosted platform client contract
+    status: beta
+    disposition: both
+    surfaces: [cli, sdk, vscode]
+    docs: [docs/ECOSYSTEM.md]
+    owns:
+      - api/generated/**
+      - internal/platform/**
+    depends_on: []
