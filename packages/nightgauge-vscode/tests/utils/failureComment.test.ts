@@ -67,7 +67,10 @@ function makeResult(overrides?: Partial<PipelineRunResult>): PipelineRunResult {
     error: new Error(
       "Stage feature-dev terminated: budget exceeded. Cost $302.06 exceeded the hard limit ($150.00)."
     ),
-    outcomeType: "failure" as unknown as PipelineRunResult["outcomeType"],
+    outcomeType: "failure",
+    // Required member the base fixture omitted, so spreading Partial<> left it
+    // possibly-undefined and the object was not a PipelineRunResult.
+    deferredStages: [],
     ...overrides,
   };
 }

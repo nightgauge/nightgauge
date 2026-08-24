@@ -41,6 +41,10 @@ function createMockAnalysis(overrides: Partial<ChangeAnalysis> = {}): ChangeAnal
     skipStages: [],
     rationale: "Standard path selected",
     estimatedTimeMinutes: 30,
+    // Required members added after this fixture was written (#1318, #4093).
+    foundationTask: false,
+    riskHigh: false,
+    riskReasons: [],
     ...overrides,
   };
 }

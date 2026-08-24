@@ -50,7 +50,7 @@ describe("Context File Size Measurement (Issue #1009)", () => {
         context_file_size_alert_threshold_bytes: 204800,
       });
       expect(result.success).toBe(true);
-      expect(result.data.context_file_size_alert_threshold_bytes).toBe(204800);
+      expect(result.data?.context_file_size_alert_threshold_bytes).toBe(204800);
     });
 
     it("should reject negative threshold", () => {
