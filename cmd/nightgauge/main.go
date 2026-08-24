@@ -10139,8 +10139,13 @@ func doctorCmd() *cobra.Command {
   - GitHub API rate limit
   - .nightgauge/config.yaml validity
   - Project number and owner configuration
+  - At least one usable AI coding agent (Issue #862)
 
-Pass --adapters to also report per-adapter health (Issue #4031):
+The AI-agent row answers one question: can this machine run a stage at all?
+Zero usable adapters is a warning (degraded), never a hard failure — see
+below.
+
+Pass --adapters to also report PER-ADAPTER health (Issue #4031):
   - CLI binary presence + version (with the min-known-version floor)
   - SDK adapter API-key configuration / local-server model env
   - Codex MCP managed-block presence in $CODEX_HOME/config.toml
@@ -10185,6 +10190,7 @@ Use --json for machine-readable output (skills parse this format).`,
 			// skipped below.
 			checkOrder := []string{
 				"binary", "gh", "github_auth", "api_user", "scopes", "rate_limit", "config", "project",
+				"ai_adapter",
 				"compose_orphans", "worktree_leaks", "pipeline_stashes", "orphaned_processes",
 			}
 			for _, key := range checkOrder {
@@ -10256,7 +10262,15 @@ Use --json for machine-readable output (skills parse this format).`,
 			if result.ExitCode == 0 {
 				fmt.Println("Status: healthy — environment ready for pipeline operations")
 			} else if result.ExitCode == 1 {
-				fmt.Println("Status: degraded — pipeline will run but some features may be limited")
+				// The generic degraded line asserts "pipeline will run", which
+				// is false in exactly one degraded case: no usable adapter
+				// means no stage can run at all (#862). Saying so beats a
+				// summary that contradicts the row printed just above it.
+				if item, ok := result.Checks["ai_adapter"]; ok && !item.OK {
+					fmt.Println("Status: degraded — no AI coding agent, so no pipeline stage can run; other checks passed")
+				} else {
+					fmt.Println("Status: degraded — pipeline will run but some features may be limited")
+				}
 			} else {
 				fmt.Println("Status: broken — fix the errors above before running pipeline skills")
 			}

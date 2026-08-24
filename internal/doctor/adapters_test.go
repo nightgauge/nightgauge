@@ -1065,3 +1065,68 @@ func equalStrings(a, b []string) bool {
 	}
 	return true
 }
+
+// TestCheckAIAdapterAvailable_ZeroUsable guards #862's core defect: before the
+// fix, a machine with no coding agent and no API key reported
+// "healthy — environment ready for pipeline operations" and exited 0, because
+// the default check list never asked whether a stage could run at all.
+func TestCheckAIAdapterAvailable_ZeroUsable(t *testing.T) {
+	// Nothing on PATH, no API keys, no local model env.
+	item, warning := checkAIAdapterAvailable(fakeProbe{}.toProbe())
+
+	if item.OK {
+		t.Fatalf("expected the check to fail with no usable adapter, got %+v", item)
+	}
+	if warning == "" {
+		t.Error("expected a warning so the verdict degrades instead of reading healthy")
+	}
+	if item.Error != warning {
+		t.Errorf("row error and warning should be the same text, got %q vs %q", item.Error, warning)
+	}
+	for _, want := range []string{"claude", "--adapters all"} {
+		if !strings.Contains(item.Error, want) {
+			t.Errorf("expected remediation to name %q, got %q", want, item.Error)
+		}
+	}
+}
+
+// TestCheckAIAdapterAvailable_OneUsableIsEnough verifies the check asks "can
+// this machine run a stage", not "is every adapter installed" — one usable
+// adapter passes even though the other eight are absent.
+func TestCheckAIAdapterAvailable_OneUsableIsEnough(t *testing.T) {
+	fp := fakeProbe{paths: map[string]string{"claude": "/opt/claude"}}
+
+	item, warning := checkAIAdapterAvailable(fp.toProbe())
+
+	if !item.OK {
+		t.Fatalf("expected OK with claude usable, got %+v", item)
+	}
+	if warning != "" {
+		t.Errorf("a usable adapter must add no warning, got %q", warning)
+	}
+	if !strings.Contains(item.Detail, "claude") {
+		t.Errorf("expected the detail to name the usable adapter, got %q", item.Detail)
+	}
+}
+
+// TestCheckAIAdapterAvailable_ShortCircuits guards the cost half of the fix:
+// the probe must stop at the first usable adapter rather than probing all nine
+// on every doctor run. `claude` is first in AllAdapterNames(), so a usable
+// claude means no later adapter is looked up.
+func TestCheckAIAdapterAvailable_ShortCircuits(t *testing.T) {
+	var lookedUp []string
+	probe := fakeProbe{paths: map[string]string{"claude": "/opt/claude"}}.toProbe()
+	inner := probe.lookPath
+	probe.lookPath = func(bin string) (string, error) {
+		lookedUp = append(lookedUp, bin)
+		return inner(bin)
+	}
+
+	if item, _ := checkAIAdapterAvailable(probe); !item.OK {
+		t.Fatalf("precondition: expected claude to be usable, got %+v", item)
+	}
+
+	if len(lookedUp) != 1 || lookedUp[0] != "claude" {
+		t.Errorf("expected exactly one lookup (claude), got %v", lookedUp)
+	}
+}

@@ -66,6 +66,43 @@ nightgauge doctor --adapters all
 See [GO_BINARY.md → Doctor → Per-adapter health](GO_BINARY.md#per-adapter-health---adapters)
 for the `adapters[]` schema and the per-kind semantics.
 
+### The always-on `ai_adapter` row (#862)
+
+`--adapters` reports per-adapter DETAIL and stays opt-in. But one question is
+part of environment health and is asked on **every** `doctor` run, with or
+without the flag: **can this machine run a pipeline stage at all?**
+
+The `ai_adapter` check answers it. It walks `AllAdapterNames()` and
+short-circuits on the first usable adapter, so the common case costs one
+`lookPath` plus one `--version` spawn rather than nine.
+
+| Outcome                     | Row | Verdict                                          |
+| --------------------------- | --- | ------------------------------------------------ |
+| At least one adapter usable | ✓   | unchanged — no warning, no exit-code change      |
+| Zero adapters usable        | ✗   | warning → `degraded` (exit 1). **Never exit 2.** |
+
+Before this row existed, a machine with no coding agent and no API key reported
+
+```
+Status: healthy — environment ready for pipeline operations
+```
+
+and exited 0, then failed at the first stage. Adapter health was reachable only
+through `--adapters`, which a first-run user has no reason to pass.
+
+**Why it is warning-only, and why that is not timidity.**
+[`skills/_shared/PREFLIGHT.md`](../skills/_shared/PREFLIGHT.md) halts a skill
+immediately on exit 2, and PREFLIGHT runs _inside_ an agent session. If it is
+executing, an adapter is already running — so the only way this check can fire
+mid-run is a **probe false negative**: a CLI below the known-version floor, or
+one that does not answer `--version` the way the probe expects. Under exit 2
+that would halt a run that was working fine. The defect being fixed is the
+false `healthy`, not the exit code.
+
+The degraded summary line is special-cased for this row, because the generic
+one ("pipeline will run but some features may be limited") is false in exactly
+this case.
+
 ### Local-server reachability (`http` kind, #57)
 
 `ollama` / `lm-studio` health includes a bounded (2 s) HTTP probe of the
