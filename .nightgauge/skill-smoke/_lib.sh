@@ -1,8 +1,8 @@
 # Shared helpers for skill-smoke scripts. Sourced by every per-skill script
 # under .nightgauge/skill-smoke/. Defines:
 #   - skip_unless_gitlab_e2e: exits 0 with a clear log line when GITLAB_E2E_URL
-#     is unset, so the skills-smoke matrix renders the slot as "skipped"
-#     rather than "failed" on PRs that haven't booted the harness.
+#     is unset, so a skill-smoke run renders the slot as "skipped"
+#     rather than "failed" when the harness has not been booted.
 #   - locate_binary: prints the path to the nightgauge CLI, preferring
 #     ./bin/nightgauge.
 #   - smoke_log: prefix log lines with the calling script name.

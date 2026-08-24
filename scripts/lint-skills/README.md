@@ -10,7 +10,8 @@ Fails when any `skills/*/SKILL.md` file contains a direct `gh ` invocation.
 
 **Rationale**: Skills target the `nightgauge forge` abstraction
 (ADR-008). Direct `gh` calls bypass the cross-forge boundary and break the
-GitLab matrix slot of the `.github/workflows/skills-smoke.yml` workflow.
+GitLab slot of the `.nightgauge/skill-smoke/` harness (run by hand — no CI
+workflow executes it).
 
 **Migration table**: See `docs/decisions/008-skill-forge-cli.md`. The short
 version:

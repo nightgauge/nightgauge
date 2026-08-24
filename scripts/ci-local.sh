@@ -177,6 +177,16 @@ if [ -f scripts/check-visibility-prose.py ]; then
   run_step "visibility-prose reintroduction gate" python3 scripts/check-visibility-prose.py
 fi
 
+# 5f. Nonexistent-workflow-reference gate (#545) — fails when a tracked file
+# names a `.github/workflows/*.yml` path that does not exist. Self-test first:
+# a gate nothing exercises degrades into an unconditional pass.
+if [ -f scripts/test-workflow-refs-check.sh ]; then
+  run_step "Workflow-reference gate regression suite" bash scripts/test-workflow-refs-check.sh
+fi
+if [ -f scripts/check-workflow-refs.py ]; then
+  run_step "nonexistent-workflow-reference gate" python3 scripts/check-workflow-refs.py
+fi
+
 # 4b. Cache-boundary measurement smoke test
 if [ -f scripts/test-measure-cache-boundary-loss.sh ]; then
   run_step "Cache-boundary measurement smoke" bash scripts/test-measure-cache-boundary-loss.sh

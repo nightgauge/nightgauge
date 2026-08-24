@@ -464,7 +464,7 @@ func preflightSkillNoDirectGHCmd() *cobra.Command {
 		Long: `Walk skills/*/SKILL.md and emit a finding for each line containing the
 \bgh  pattern. Skills target the 'nightgauge forge' abstraction
 (ADR-008) — direct gh calls bypass the cross-forge boundary and break
-the GitLab matrix slot of the skills-smoke CI workflow.
+the GitLab slot of the .nightgauge/skill-smoke/ harness.
 
 Schema version 1 — field names (v, root, skills_checked, skills_exempted,
 findings, warnings) are stable and consumed by callers via fixed jq paths.

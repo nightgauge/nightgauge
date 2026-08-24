@@ -125,9 +125,10 @@ works end-to-end across these skills.
   the new `.github/workflows/lint.yml` workflow. The allowlist
   (`scripts/lint-skills/allowlist.txt`) tracks the un-migrated tail (~10
   skills with ≤4 calls each), filed as a follow-up under #3349.
-- **Smoke matrix**: `.github/workflows/skills-smoke.yml` runs a
-  `forge × skill` matrix (15 skills × 2 forges) — the GitLab slot consumes
-  the W5-2 Dockerized GitLab CE harness once it lands.
+- **Smoke harness**: `.nightgauge/skill-smoke/` holds a per-skill
+  `forge × skill` smoke script (15 skills × 2 forges), run by hand — the
+  GitLab slot consumes the W5-2 Dockerized GitLab CE harness once it lands.
+  No CI workflow runs the harness.
 - **JSON shape parity**: `cmd/nightgauge/forge/skill_parity_test.go`
   asserts every `gh ... --json` path the migrated skills extract is also
   present in the corresponding `forge ... --json` output.
