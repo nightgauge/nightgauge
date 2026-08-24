@@ -189,7 +189,7 @@ describe("NotificationService", () => {
 
     it("should execute viewContext command when Review Plan is clicked", async () => {
       vi.mocked(vscode.window.showWarningMessage).mockResolvedValue(
-        "Review Plan" as unknown as string | undefined
+        "Review Plan" as unknown as vscode.MessageItem
       );
 
       await service.notifyUserInputNeeded("feature-planning", 42);
@@ -269,7 +269,7 @@ describe("NotificationService", () => {
 
     it("should execute showDashboard command when View Dashboard is clicked", async () => {
       vi.mocked(vscode.window.showInformationMessage).mockResolvedValue(
-        "View Dashboard" as unknown as string | undefined
+        "View Dashboard" as unknown as vscode.MessageItem
       );
 
       await service.notifyPipelineComplete(42);
@@ -323,7 +323,7 @@ describe("NotificationService", () => {
 
     it("should execute showOutputWindow command when View Output is clicked", async () => {
       vi.mocked(vscode.window.showErrorMessage).mockResolvedValue(
-        "View Output" as unknown as string | undefined
+        "View Output" as unknown as vscode.MessageItem
       );
 
       await service.notifyPipelineError("feature-dev", "Build failed");
