@@ -404,11 +404,11 @@ describe("IpcClient.generated — auto-generated methods", () => {
       const client = IpcClient.getInstance();
 
       const p = client.platformStatus();
-      simulateResponse({ id: 1, result: { connected: true } });
+      simulateResponse({ id: 1, result: { mode: "connected" } });
       await flushPromises();
 
       const result = await p;
-      expect(result.connected).toBe(true);
+      expect(result.mode).toBe("connected");
 
       const req = lastRequest();
       expect(req.method).toBe("platform.status");

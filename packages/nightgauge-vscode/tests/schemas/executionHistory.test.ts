@@ -520,8 +520,15 @@ describe("ExecutionHistory Schemas", () => {
     });
 
     it("should remain valid when run_id is absent — backward compatible (Issue #3558)", () => {
-      const record = { ...validV2RunRecord };
-      delete (record as Partial<typeof record>).run_id;
+      // validV2RunRecord carries no run_id, so deleting the key removed
+      // nothing and this test re-parsed an unmodified fixture — vacuously
+      // green (#499). Add the field first, so dropping it proves the schema
+      // accepts a record both with and without it.
+      const withRunId = { ...validV2RunRecord, run_id: "run-abc123" };
+      expect(ExecutionHistoryRunRecordV2Schema.safeParse(withRunId).success).toBe(true);
+
+      const record: Partial<typeof withRunId> = { ...withRunId };
+      delete record.run_id;
       const result = ExecutionHistoryRunRecordV2Schema.safeParse(record);
       expect(result.success).toBe(true);
     });

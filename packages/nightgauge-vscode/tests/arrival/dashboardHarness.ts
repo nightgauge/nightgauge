@@ -189,7 +189,9 @@ export function resetHarness(): void {
 
 export function vscodeMockModule() {
   class MockEventEmitter {
-    private listeners: ((data: unknown) => void)[] = [];
+    // Not `private`: this class is returned from an exported function, so its
+    // inferred type cannot name a private member (TS4094).
+    listeners: ((data: unknown) => void)[] = [];
     get event() {
       return (listener: (data: unknown) => void) => {
         this.listeners.push(listener);
