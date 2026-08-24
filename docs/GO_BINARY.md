@@ -3695,11 +3695,25 @@ aggregation, silently divergent the first time either side changes; and serving
 `GetItem` from a board-wide list would answer "not on the board" for an item
 added since the snapshot — the one answer callers act on destructively.
 
-**One caveat on the instrument itself:** the ledger attributes a call to the
-first stack frame outside `internal/github`, which is now the cache rather than
-the producer that triggered the miss. The remaining board reads are at their
-floor of one per board per window, but per-producer attribution for board reads
-is gone. Restore it before using `--by caller` to judge #846/#847.
+**Attribution through the cache (#860).** Inserting the cache initially moved
+every board read's attribution off the producers and onto `boardcache` — a
+silent regression in the one instrument the rest of #842 depends on, since
+`--by caller` could no longer answer "which producer is costing me points?" for
+the most expensive call in the product.
+
+`ledgerCaller` now skips the cache the same way it already skipped `net/http`,
+the GraphQL client and `oauth2`: those layers **forward** a request rather than
+originate one, and the field exists to name code an operator can delete or
+throttle. Nobody can delete a cache. `isPassThroughFrame` holds that list, with
+a table test pinning both directions — the layers that must be skipped, and the
+producers and near-miss package names that must never be.
+
+One property to understand when reading the output: with a cache in place, a
+board read is attributed to **the producer that missed first** and therefore
+caused the fetch; the second producer gets a hit and issues nothing. So
+`StrandedReadyItems` owning 68 points does not mean `CoverageGap` is free — it
+means `StrandedReadyItems` asked first. Attribution is per *call*, and after
+#845 there is only one call to attribute.
 
 ### Doctor — Environment Health Check
 

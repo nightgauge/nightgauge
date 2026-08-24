@@ -45,9 +45,12 @@ type APILedgerRecord struct {
 	// Op is the GraphQL operation name when the body declared one, else the
 	// first selected field. Empty for REST.
 	Op string `json:"op,omitempty"`
-	// Caller is the first stack frame outside this package — the code that
-	// asked for the call, which is what an operator needs in order to delete
-	// or throttle it.
+	// Caller is the first stack frame outside this package AND outside the
+	// pass-through layers between it and real code — the frame an operator can
+	// actually delete or throttle. A layer that merely forwards a request
+	// (net/http, the GraphQL client, oauth2, the board cache) is skipped: it is
+	// never the answer to "what is costing me points?", and leaving one in
+	// silently retires the ledger's whole purpose (#860).
 	Caller string `json:"caller,omitempty"`
 	Status int    `json:"status"`
 	// Cost is points billed, derived from the drop in X-RateLimit-Remaining
@@ -156,13 +159,7 @@ func ledgerCaller() string {
 			}
 			continue
 		}
-		switch {
-		case strings.Contains(fr.Function, "/internal/github."),
-			strings.HasPrefix(fr.Function, "net/http."),
-			strings.HasPrefix(fr.Function, "net/http/"),
-			strings.Contains(fr.Function, "shurcooL"),
-			strings.Contains(fr.Function, "golang.org/x/oauth2"):
-		default:
+		if !isPassThroughFrame(fr.Function) {
 			return trimCallerFunc(fr.Function) + " " + filepath.Base(fr.File) + ":" + strconv.Itoa(fr.Line)
 		}
 		if !more {
@@ -170,6 +167,37 @@ func ledgerCaller() string {
 		}
 	}
 	return ""
+}
+
+// isPassThroughFrame reports whether a stack frame merely FORWARDS a request
+// rather than originating one.
+//
+// This predicate is the whole meaning of the Caller field: the ledger exists to
+// answer "what is costing me points, and can I delete or throttle it?", and a
+// layer nobody can delete is never that answer. Each entry is here because it
+// sits between real code and the wire:
+//
+//   - internal/github — this package: the adapter and the transport itself.
+//   - net/http, shurcooL/graphql, oauth2 — the HTTP and GraphQL plumbing.
+//   - internal/forge/boardcache — the board snapshot cache (#845). Added after
+//     it silently became the attributed caller for every board read, which is
+//     the single most expensive call in the product (#860).
+//
+// Matching is on the package path with its trailing dot ("…/boardcache.") so a
+// different package that merely shares a prefix is not swallowed. Attribution
+// that silently drops real callers is the same defect as attribution that names
+// a cache — both leave an operator reading a confident, wrong answer.
+func isPassThroughFrame(fn string) bool {
+	switch {
+	case strings.Contains(fn, "/internal/github."),
+		strings.HasPrefix(fn, "net/http."),
+		strings.HasPrefix(fn, "net/http/"),
+		strings.Contains(fn, "shurcooL"),
+		strings.Contains(fn, "golang.org/x/oauth2"),
+		strings.Contains(fn, "/internal/forge/boardcache."):
+		return true
+	}
+	return false
 }
 
 // trimCallerFunc shortens a fully-qualified function name to the last two

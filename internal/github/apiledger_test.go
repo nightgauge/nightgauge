@@ -243,3 +243,49 @@ func TestLedgerWriteFailureNeverBreaksTheRequest(t *testing.T) {
 		t.Errorf("body = %q, want %q", body, state.body)
 	}
 }
+
+// The ledger's Caller field answers "what is costing me points, and can I
+// delete or throttle it?" A layer that only forwards a request is never that
+// answer — and #845 proved the failure is silent: adding the board cache moved
+// every board read's attribution off the producers and onto the cache, with
+// nothing to notice (#860).
+//
+// The table is written as REAL frame names, including the producers whose
+// attribution was lost, so it fails if a future skip entry swallows them.
+func TestIsPassThroughFrame(t *testing.T) {
+	for _, tc := range []struct {
+		fn   string
+		skip bool
+		why  string
+	}{
+		// Layers between real code and the wire.
+		{"github.com/nightgauge/nightgauge/internal/github.(*Client).graphQL", true, "the adapter itself"},
+		{"net/http.(*Client).Do", true, "HTTP plumbing"},
+		{"net/http/httputil.DumpRequest", true, "HTTP plumbing"},
+		{"github.com/shurcooL/graphql.(*Client).do", true, "GraphQL client"},
+		{"golang.org/x/oauth2.(*Transport).RoundTrip", true, "auth plumbing"},
+		{"github.com/nightgauge/nightgauge/internal/forge/boardcache.(*cachedBoard).ListOpenItems", true, "#860: a cache cannot be deleted or throttled"},
+		{"github.com/nightgauge/nightgauge/internal/forge/boardcache.(*Cache).get.func1", true, "#860: the fetch closure is still the cache"},
+
+		// The frames an operator can actually act on. These are the exact
+		// callers #845 hid; naming them is the point of the field.
+		{"github.com/nightgauge/nightgauge/internal/attention/sweep.(*CoverageGap).discoverBoard", false, "a producer — deletable, throttleable"},
+		{"github.com/nightgauge/nightgauge/internal/attention/sweep.(*StrandedReadyItems).boardUnreachable", false, "a producer"},
+		{"github.com/nightgauge/nightgauge/internal/orchestrator.(*Scheduler).poll", false, "the scheduler"},
+
+		// Near-misses. A skip entry that overmatches drops real callers, which
+		// is the same defect as naming a cache: a confident, wrong answer.
+		{"github.com/nightgauge/nightgauge/internal/forge/boardcachexyz.(*T).M", false, "different package, shared prefix"},
+		{"github.com/nightgauge/nightgauge/internal/forgeboardcache.(*T).M", false, "different package, no separator"},
+		{"github.com/nightgauge/nightgauge/internal/forge.(*Router).For", false, "forge itself is not the cache"},
+		{"github.com/nightgauge/nightgauge/internal/githubactions.Run", false, "shares the 'github' prefix but is not this package"},
+	} {
+		if got := isPassThroughFrame(tc.fn); got != tc.skip {
+			verb := "skipped"
+			if !tc.skip {
+				verb = "attributed"
+			}
+			t.Errorf("isPassThroughFrame(%q) = %v, want %v — it should be %s (%s)", tc.fn, got, tc.skip, verb, tc.why)
+		}
+	}
+}
