@@ -39,23 +39,25 @@ prevent those mistakes.
 Every mechanism in the pipeline learning system is classified below. When adding
 a new mechanism, add it to this table before implementing.
 
-| Mechanism                           | Beneficiary | Modifies Code?                            | Data Location                                 | Status                 |
-| ----------------------------------- | ----------- | ----------------------------------------- | --------------------------------------------- | ---------------------- |
-| Skill Self-Assessment Epilogue      | INTERNAL    | No (writes assessment records)            | `.nightgauge/pipeline/assessments/`           | Phase 1 complete       |
-| Skill Drift Synthesis               | INTERNAL    | No (creates GitHub issues)                | GitHub Issues                                 | Active                 |
-| Retro Skill                         | INTERNAL    | No (analysis only)                        | Output window                                 | Active                 |
-| Feedback Loops (backtrack/escalate) | INTERNAL    | No (runtime recovery)                     | Context handoff files                         | Active                 |
-| Outcome Recording                   | SHARED      | No                                        | `.nightgauge/pipeline/history/outcomes.jsonl` | Active (see note)      |
-| Complexity Calibration              | SHARED      | No (updates prediction model)             | `.nightgauge/complexity-model.yaml`           | Active                 |
-| Post-Pipeline Analysis              | SHARED      | No (read-only insights)                   | `.nightgauge/analysis/`                       | Active                 |
-| Health Dashboard (8 dims)           | EXTERNAL    | No (read-only display)                    | `.nightgauge/health/`                         | Active                 |
-| Learning Effectiveness Dimension    | EXTERNAL    | No (measures learning system health)      | `.nightgauge/health/`                         | Active                 |
-| Gate Metrics                        | EXTERNAL    | No (observability)                        | `.nightgauge/gate-metrics.jsonl`              | Active                 |
-| Skill Effectiveness Tracking        | EXTERNAL    | No (before/after comparison)              | `.nightgauge/skill-effectiveness.jsonl`       | Active                 |
-| Skill Drift Dashboard Dimension     | EXTERNAL    | No (read-only display)                    | `.nightgauge/health/`                         | Active                 |
-| Skill Drift Auto-Issue Creation     | INTERNAL    | No (creates GitHub issues)                | GitHub Issues                                 | Active (config-gated)  |
-| Continuous Improvement Skill        | SHARED      | No (read-only analysis + optional issues) | `.nightgauge/pipeline/`                       | Active                 |
-| Adaptive Policy Engine              | DISABLED    | Was: yes (`config.yaml`)                  | N/A (SDK-only)                                | Removed from extension |
+| Mechanism                           | Beneficiary | Modifies Code?                            | Data Location                                 | Status                  |
+| ----------------------------------- | ----------- | ----------------------------------------- | --------------------------------------------- | ----------------------- |
+| Skill Self-Assessment Epilogue      | INTERNAL    | No (writes assessment records)            | `.nightgauge/pipeline/assessments/`           | Phase 1 complete        |
+| Skill Drift Synthesis               | INTERNAL    | No (creates GitHub issues)                | GitHub Issues                                 | Active                  |
+| Retro Skill                         | INTERNAL    | No (analysis only)                        | Output window                                 | Active                  |
+| Feedback Loops (backtrack/escalate) | INTERNAL    | No (runtime recovery)                     | Context handoff files                         | Active                  |
+| Outcome Recording                   | SHARED      | No                                        | `.nightgauge/pipeline/history/outcomes.jsonl` | Active (see note)       |
+| Complexity Calibration              | SHARED      | No (updates prediction model)             | `.nightgauge/complexity-model.yaml`           | Active                  |
+| Post-Pipeline Analysis              | SHARED      | No (read-only insights)                   | `.nightgauge/analysis/`                       | Active                  |
+| Health Dashboard (8 dims)           | EXTERNAL    | No (read-only display)                    | `.nightgauge/health/`                         | Active                  |
+| Learning Effectiveness Dimension    | EXTERNAL    | No (measures learning system health)      | `.nightgauge/health/`                         | Active                  |
+| Gate Metrics                        | EXTERNAL    | No (observability)                        | `.nightgauge/gate-metrics.jsonl`              | Active                  |
+| Skill Effectiveness Tracking        | EXTERNAL    | No (before/after comparison)              | `.nightgauge/skill-effectiveness.jsonl`       | Active                  |
+| Skill Drift Dashboard Dimension     | EXTERNAL    | No (read-only display)                    | `.nightgauge/health/`                         | Active                  |
+| Skill Drift Auto-Issue Creation     | INTERNAL    | No (creates GitHub issues)                | GitHub Issues                                 | Active (config-gated)   |
+| Scheduled Discovery Loops           | SHARED      | No (creates GitHub issues)                | GitHub Issues + `.nightgauge/` records        | Active (off by default) |
+| Spike Materialization               | SHARED      | No (creates GitHub issues)                | GitHub Issues                                 | Active (ungated)        |
+| Continuous Improvement Skill        | SHARED      | No (read-only analysis + optional issues) | `.nightgauge/pipeline/`                       | Active                  |
+| Adaptive Policy Engine              | DISABLED    | Was: yes (`config.yaml`)                  | N/A (SDK-only)                                | Removed from extension  |
 
 **Note — Outcome Recording (#304).** Both writers are wired and the corpus is
 written on every terminal run, but one of its consumers is currently inert:
@@ -110,6 +112,71 @@ Before implementing any new feedback or learning mechanism, classify it:
 
 Document the classification in this file before implementing.
 
+### Rule 5: Autonomous Issue Filing Is Governed
+
+A mechanism that opens GitHub issues without a human in the loop spends the
+maintainer's attention, not just tokens. Backlog **mass** — not count — is the
+tracked metric, and `created` vs `closed` is the convergence gauge; a filer that
+outruns closure quietly destroys that gauge. Every such mechanism, existing or
+new, must satisfy all five conditions below. Adding a filer that cannot is a
+design defect, not a configuration choice.
+
+1. **Priority and Size at creation.** Never "triage later" — an unsized issue
+   adds mass that no one can weigh. The spike materializer enforces this at the
+   schema layer: `ValidateSchema` in `internal/cmd/spike/materialize.go` rejects
+   a recommendation whose `priority` or `size` is missing or out of enum, before
+   any GraphQL mutation runs.
+2. **Dedup before create.** Check the open backlog first and skip a match.
+   Spike materialization keys on an idempotency marker
+   (`<!-- spike-recommendation: id=… spike=#N -->`) looked up across the spike's
+   sub-issues, so re-running the stage is a no-op. The continuous-improvement
+   skill matches on the `continuous-improvement` label plus a title prefix.
+3. **A bounded per-run volume that refuses loudly.** Truncating silently at a
+   cap is as bad as no cap: the operator cannot tell "nothing found" from
+   "twelve found, two filed". Today the only volume bound anywhere is
+   release-watch's `score_threshold`, which routes sub-threshold changes to
+   `.nightgauge/release-watch/backlog.json` instead of dropping them. **No
+   mechanism currently enforces a per-run count cap** — a new filer must ship
+   one.
+4. **A kill switch that fails closed.** `autonomous_discovery.kill_switch`
+   defaults to _on_, and `scripts/discovery-config-gate.py` resolves a missing,
+   unreadable or unparseable config to "disabled" rather than to defaults: a
+   loop that cannot find its own off switch must not file. Spike materialization
+   has no such switch — its only gate is that the `spike-materialize` stage runs
+   solely for `type:spike` issues, after merge. That is a narrower blast radius,
+   not an equivalent control, and it does not generalize to a filer that any run
+   can reach.
+5. **Report-only outside the dogfood repo.** Filing is opt-in for anyone who is
+   not us. `--create-issues` defaults to `false` (`--dry-run` is the default) on
+   the continuous-improvement skill, and its customer mode additionally refuses
+   to create `skill-fix`, `doc-update`, `code-change`, or `architecture` issues
+   at all. See
+   [Future: Customer Codebase Improvement](#future-customer-codebase-improvement).
+
+#### Who can file today
+
+| Filer                  | Trigger                                             | Gate                                                | Dedup key                  |
+| ---------------------- | --------------------------------------------------- | --------------------------------------------------- | -------------------------- |
+| Spike materialization  | `spike-materialize` stage, post-merge, `type:spike` | None (stage runs whenever a spike merges)           | Recommendation `id` marker |
+| Release-watch          | `release-watchdog.yml`, daily                       | `autonomous_discovery` + `kill_switch` + threshold  | Per-provider `last-seen`   |
+| Continuous improvement | `continuous-improvement.yml`, weekly                | Same gate, plus `--create-issues` (default `false`) | Label + title prefix       |
+| Skill drift synthesis  | Retro synthesis                                     | `--create-issues` + threshold config                | `skill-drift` label        |
+
+`nightgauge spike materialize` is also runnable by hand; a hand-run is a human
+in the loop and is not governed by this rule.
+
+Two of those four do not meet the bar yet, and the gaps are recorded here rather
+than left to be rediscovered:
+
+- **Spike materialization has no kill switch and no per-run cap.** A merged
+  spike files however many recommendations its artifact carries.
+- **Skill drift synthesis does not set Size at creation.** The retro path
+  creates with `--label "skill-drift,priority:medium"`
+  (`skills/nightgauge-retro/SKILL.md`) and never touches the board, so those
+  issues arrive unsized — Rule 1 is unmet on that path.
+  [SKILL_SELF_ASSESSMENT.md § Phase 4](SKILL_SELF_ASSESSMENT.md) describes a
+  `size:S` label that the retro path does not apply.
+
 ## Future: Customer Codebase Improvement
 
 A future capability may analyze customer codebases and recommend improvements
@@ -122,6 +189,17 @@ recommendations. Key constraints:
 - User explicitly opts in and approves each recommendation
 - No code modifications without explicit pipeline execution
 
+The same constraints bind the **in-run** counterpart: a pipeline stage that
+notices real-but-out-of-scope work mid-run and wants it recorded rather than
+absorbed or dropped. That mechanism does not exist yet — it is tracked as epic
+#477, and until it lands the only routes for a mid-run discovery are the
+`SCOPE_DISCOVERED` backtrack (which widens the current run, so it is correct
+only when the discovery blocks the run's own acceptance criteria) and a human
+filing the issue. When it does land, it is a filer under
+[Rule 5](#rule-5-autonomous-issue-filing-is-governed) like any other: dogfood
+repos may file, and customer-mode default is report-only with explicit opt-in
+required before anything is created.
+
 ## Related Documentation
 
 - [docs/SELF_IMPROVEMENT_LOOP.md](SELF_IMPROVEMENT_LOOP.md) — Pipeline learning
@@ -129,6 +207,10 @@ recommendations. Key constraints:
 - [docs/SKILL_SELF_ASSESSMENT.md](SKILL_SELF_ASSESSMENT.md) — Skill friction
   detection
 - [docs/FEEDBACK_LOOPS.md](FEEDBACK_LOOPS.md) — In-pipeline feedback signals
+- [docs/SCHEDULED_DISCOVERY.md](SCHEDULED_DISCOVERY.md) — The scheduled
+  discovery loops, their config gate and kill switch
+- [docs/SPIKE_CONTRACT.md](SPIKE_CONTRACT.md) — The spike artifact contract the
+  materializer files from
 - [docs/HEALTH_MONITORING.md](HEALTH_MONITORING.md) — 8-dimension health
   analysis
 - [docs/ADAPTIVE_PIPELINE.md](ADAPTIVE_PIPELINE.md) — Deprecated auto-tune
