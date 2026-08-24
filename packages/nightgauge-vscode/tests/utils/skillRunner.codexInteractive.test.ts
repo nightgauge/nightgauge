@@ -229,7 +229,7 @@ describe("runStageSkillInteractive - Codex TUI branch (#4024)", () => {
     runStageSkillInteractive("feature-dev", 42, { onMode, onStderr });
 
     expect(vi.mocked(vscode.window.createTerminal)).toHaveBeenCalledTimes(1);
-    const createArg = vi.mocked(vscode.window.createTerminal).mock.calls[0][0] as {
+    const createArg = vi.mocked(vscode.window.createTerminal).mock.calls[0][0] as unknown as {
       name: string;
       cwd: string;
     };

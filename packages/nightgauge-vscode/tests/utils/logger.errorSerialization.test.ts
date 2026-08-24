@@ -37,7 +37,7 @@ describe("Logger — Error serialization in formatMessage", () => {
       show: vi.fn(),
       clear: vi.fn(),
       dispose: vi.fn(),
-    } as unknown as vscode.OutputChannel);
+    } as unknown as vscode.LogOutputChannel);
     logger = new Logger("Test");
   });
 

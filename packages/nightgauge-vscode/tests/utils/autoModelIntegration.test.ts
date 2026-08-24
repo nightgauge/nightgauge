@@ -80,7 +80,7 @@ function getMockAutoModelSelector(): {
   const MockClass = vi.mocked(AutoModelSelector);
   // Get the last constructed instance
   const lastCall = MockClass.mock.results[MockClass.mock.results.length - 1];
-  return lastCall?.value as Mock;
+  return lastCall?.value as { selectModel: Mock };
 }
 
 const defaultMetadata: IssueMetadata = {
