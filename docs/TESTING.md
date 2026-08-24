@@ -416,15 +416,39 @@ _Part of the `docs` plugin_
 
 ## CI/CD Validation
 
-The repository includes GitHub Actions workflows for automated validation:
-
-### claude-plugin-validation.yml
-
-Validates:
+Plugin-manifest validation is **not** wired into CI. These checks —
 
 - JSON syntax in plugin manifests
 - Required fields in plugin.json
 - Markdown structure in command files
+
+— are scripted in
+[.github/validation/plugin-validation.md](../.github/validation/plugin-validation.md)
+and must be run by hand. `.github/workflows/lint.yml` covers Prettier, ESLint,
+SKILL.md metadata and the plugin-mirror drift gate.
+
+### Nonexistent-workflow-reference gate
+
+`scripts/check-workflow-refs.py` fails when a tracked file names a
+`.github/workflows/<name>.yml` path that does not exist in this repository. It
+exists because three workflows — `skills-smoke.yml`,
+`claude-plugin-validation.yml` and `synthetic-regression.yml` — were asserted
+across docs, an ADR, Go comments and two shell libraries while never having
+existed on any ref, so readers skipped the manual step those files described.
+
+Two escape hatches, both in `scripts/workflow-refs-allowlist.txt`:
+
+| Bucket    | Meaning                                                                 |
+| --------- | ----------------------------------------------------------------------- |
+| `example` | A workflow the reader is told to create in their own repo, or a fixture |
+| `stale`   | A false claim about this repo whose correction is a wider sweep         |
+
+The `stale` bucket is debt and may only shrink. An allowlist entry that matches
+nothing — path gone, reference deleted, or the workflow since created — fails
+the gate, so a fixed claim cannot leave a dead exemption behind.
+
+`scripts/test-workflow-refs-check.sh` is the gate's own regression suite; both
+run in `.github/workflows/lint.yml` and `scripts/ci-local.sh`, self-test first.
 
 ### Viewing CI Results
 
@@ -1829,19 +1853,13 @@ sub-tests for `pr-create` and `pr-merge` make `gh pr view` calls and may be
 slow (~3 s each) when no GitHub credentials are present; they will still pass
 because those gates return `KindFail` (not `KindNoOp`) on network failure.
 
-### CI Workflow
+### CI coverage
 
-**`.github/workflows/synthetic-regression.yml`** triggers on PRs that touch:
-
-- `internal/orchestrator/**`
-- `packages/nightgauge-vscode/src/services/HeadlessOrchestrator.ts`
-- `skills/**`
-- `tests/fixtures/pipeline/**`
-- `tests/synthetic/**`
-
-It builds the Go binary and runs `TestSyntheticNoOpRegression` with a 120-second
-timeout. The job uses `cancel-in-progress: true` so stale runs are evicted when
-a new commit is pushed.
+There is **no** dedicated synthetic-regression workflow. `tests/synthetic/` is a
+normal Go package, so `TestSyntheticNoOpRegression` runs inside the `go test ./...`
+step of the `Go build & test` job in
+[.github/workflows/ci.yml](../.github/workflows/ci.yml) — it gates every pull
+request, with no path filter of its own to keep in sync.
 
 ### Adding a New Regression Class
 
@@ -1851,9 +1869,10 @@ When a new failure class is eliminated and needs a guard:
    function or a new sub-case in `TestSyntheticNoOpRegression`).
 2. Update `tests/fixtures/pipeline/synthetic-noop.json` if the fixture needs new
    fields (bump `schema_version` if required).
-3. Extend the path filter in `.github/workflows/synthetic-regression.yml` if the
-   new guard covers a different code path.
-4. Document the new invariant in this section.
+3. Document the new invariant in this section.
+
+No workflow path filter needs extending: `go test ./...` already picks up
+anything added to `tests/synthetic/`.
 
 ## Author
 

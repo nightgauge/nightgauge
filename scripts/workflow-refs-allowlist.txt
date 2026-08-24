@@ -1,0 +1,62 @@
+# Allowlist for scripts/check-workflow-refs.py (#545).
+#
+# The gate fails when a tracked file names a `.github/workflows/<name>.yml`
+# path that does not exist in this repository. Three workflows —
+# skills-smoke.yml, claude-plugin-validation.yml and synthetic-regression.yml —
+# were asserted across docs, an ADR, Go comments and two shell libraries while
+# never having existed on any ref; #545 deleted those claims and added this
+# gate so the class cannot recur silently.
+#
+# FORMAT: three whitespace-separated fields, optional `# reason` comment.
+#
+#     <bucket>  <tracked-path>  <workflow-basename>   # why
+#
+# Buckets:
+#
+#   example  A sample workflow the reader is expected to create in THEIR OWN
+#            repository, or a test fixture. Not a claim about this repository,
+#            so it can never go stale. Permanent.
+#
+#   stale    A claim about THIS repository that is false today, whose correction
+#            is a larger sweep than the entry's own file. Every entry here is
+#            debt. THIS BUCKET MAY ONLY SHRINK — adding to it needs an explicit
+#            reviewer decision, and the gate fails on an entry that no longer
+#            matches anything so a fixed claim cannot leave a dead entry behind.
+#
+# An entry that matches nothing (path gone, reference removed, or the workflow
+# has since been created) is itself a failure: remove it.
+
+# ── example ──────────────────────────────────────────────────────────────────
+# Sample workflows for the reader's own repository.
+example docs/CI_CD_RUNBOOK.md pipeline.yml
+example docs/CONFIGURATION.md pipeline.yml
+# JSON schema example value.
+example docs/PRODUCT_AUDIT_SCHEMA.md test.yml
+# "CI Integration Example" for a target repo, plus its generated mirror.
+example skills/nightgauge-product-audit/SKILL.md product-audit.yml
+example claude-plugins/nightgauge/skills/product-audit/SKILL.md product-audit.yml
+# Teaching examples of a relative-link fix, plus their generated mirror.
+example skills/update-docs/SKILL.md file.yml
+example skills/update-docs/SKILL.md review.yml
+example claude-plugins/nightgauge/skills/update-docs/SKILL.md file.yml
+example claude-plugins/nightgauge/skills/update-docs/SKILL.md review.yml
+# Test fixtures: an acceptance-criterion string and audit-dimension inputs.
+example internal/intelligence/baselineGate/classifier_test.go integration-e2e.yaml
+example packages/nightgauge-sdk/tests/analysis/product-audit/dimensions/dimension-8.test.ts bad.yml
+example packages/nightgauge-sdk/tests/analysis/product-audit/dimensions/dimension-8.test.ts deploy.yml
+
+# ── stale ────────────────────────────────────────────────────────────────────
+# Both claims below are the same defect #545 fixed, but their corrections reach
+# past documentation. `baseline-defer-sweep` is asserted in TypeScript source
+# and a user-facing tree-item tooltip as well; `skill-eval.yml` is described as
+# a required status check across a doc section and an ADR. #545 is a
+# documentation sweep, and per AGENTS.md a mechanical sweep lands alone —
+# pulling TS source and UI strings in would make it un-reviewable. Recorded
+# here so the claims stay visible and counted rather than silently passing.
+#
+# A daily cron asserted in docs, TS source and a tooltip; never existed.
+stale skills/nightgauge-issue-pickup/_includes/issue-selection-and-gates.md baseline-defer-sweep.yml
+stale claude-plugins/nightgauge/skills/issue-pickup/_includes/issue-selection-and-gates.md baseline-defer-sweep.yml
+# Described as a required status check; never existed.
+stale docs/SKILL_EVALUATION.md skill-eval.yml
+stale docs/decisions/011-model-eval-system.md skill-eval.yml

@@ -59,6 +59,15 @@ jobs:
       # exempt; only a flat assertion of the current value goes stale.
       - name: Visibility-prose reintroduction gate
         run: python3 scripts/check-visibility-prose.py
+      # Nonexistent-workflow-reference gate (#545): three workflows were named
+      # across docs, an ADR, Go comments and two shell libraries as though they
+      # enforced something in CI, and none had ever existed. Self-test first —
+      # a gate nothing exercises degrades into an unconditional pass (the
+      # #539/#549 lesson).
+      - name: Workflow-reference gate self-test
+        run: bash scripts/test-workflow-refs-check.sh
+      - name: Nonexistent-workflow-reference gate
+        run: python3 scripts/check-workflow-refs.py
       # Proves the gate below still FAILS CLOSED rather than passing vacuously
       # — the defect #539 exists to fix — and that it fails only on the
       # invariant it names (#546). Without this step, reverting the gate to

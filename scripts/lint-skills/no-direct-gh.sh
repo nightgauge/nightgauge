@@ -2,8 +2,8 @@
 # scripts/lint-skills/no-direct-gh.sh — fail when any non-allowlisted
 # skill SKILL.md contains a direct `gh ` token. Skills target the
 # `nightgauge forge` abstraction (ADR-008); direct `gh` calls
-# bypass the cross-forge boundary and break the GitLab matrix slot of
-# the skills-smoke CI workflow.
+# bypass the cross-forge boundary and break the GitLab slot of the
+# .nightgauge/skill-smoke/ harness (run by hand; no CI workflow runs it).
 #
 # Scope: skills/*/SKILL.md only. Tests, _shared/, and templates/ are
 # exempted by glob — a follow-up issue migrates those.
