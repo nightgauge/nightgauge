@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from "vitest";
 import * as vscode from "vscode";
 import { ProjectBoardTreeProvider } from "../../src/views/ProjectBoardTreeProvider";
 import { ProjectBoardService } from "../../src/services/ProjectBoardService";
@@ -85,6 +85,20 @@ describe("ProjectBoardTreeProvider", () => {
     }
   });
 
+  /**
+   * `provider` is declared nullable because afterEach disposes and nulls it.
+   * Test bodies inside a `describe` whose beforeEach constructs one cannot
+   * show that to the compiler, so this states the invariant — and fails
+   * loudly if a future test forgets the beforeEach, which a `!` would not
+   * (#499).
+   */
+  function activeProvider(): ProjectBoardTreeProvider {
+    if (!provider) {
+      throw new Error("provider was not constructed by beforeEach");
+    }
+    return provider;
+  }
+
   describe("constructor", () => {
     it("should initialize with valid tab ID", () => {
       provider = new ProjectBoardTreeProvider(mockService, "ready");
@@ -163,7 +177,7 @@ describe("ProjectBoardTreeProvider", () => {
       const issues = [createMockReadyIssue()];
       vi.mocked(mockService.getIssuesByStatus).mockResolvedValue(issues);
 
-      await provider.getChildren();
+      await activeProvider().getChildren();
 
       expect(mockService.getIssuesByStatus).toHaveBeenCalledWith("Ready", "board", "asc");
     });
@@ -172,7 +186,7 @@ describe("ProjectBoardTreeProvider", () => {
       const issue = createMockBlockedIssue();
       const treeItem = new ReadyIssueTreeItem(issue);
 
-      const children = await provider.getChildren(treeItem);
+      const children = await activeProvider().getChildren(treeItem);
 
       // Now returns DependencySectionTreeItem ("Blocked by" section)
       expect(children).toHaveLength(1);
@@ -183,7 +197,7 @@ describe("ProjectBoardTreeProvider", () => {
       const unblockedIssue = createMockReadyIssue({ blockedBy: undefined });
       const treeItem = new ReadyIssueTreeItem(unblockedIssue);
 
-      const children = await provider.getChildren(treeItem);
+      const children = await activeProvider().getChildren(treeItem);
 
       expect(children).toHaveLength(0);
     });
@@ -191,7 +205,7 @@ describe("ProjectBoardTreeProvider", () => {
     it("should return action item when no issues found", async () => {
       vi.mocked(mockService.getIssuesByStatus).mockResolvedValue([]);
 
-      const children = await provider.getChildren();
+      const children = await activeProvider().getChildren();
 
       expect(children).toHaveLength(1);
       expect(children[0].label).toContain("No ready issues found");
@@ -200,7 +214,7 @@ describe("ProjectBoardTreeProvider", () => {
     it("should return error items on fetch failure", async () => {
       vi.mocked(mockService.getIssuesByStatus).mockRejectedValue(new Error("API error"));
 
-      const children = await provider.getChildren();
+      const children = await activeProvider().getChildren();
 
       expect(children).toHaveLength(2);
       expect(children[0].label).toContain("Error: API error");
@@ -336,7 +350,7 @@ describe("ProjectBoardTreeProvider", () => {
       provider = new ProjectBoardTreeProvider(mockService, "ready");
 
       // Should not throw
-      expect(() => provider.dispose()).not.toThrow();
+      expect(() => activeProvider().dispose()).not.toThrow();
     });
   });
 
@@ -717,12 +731,12 @@ describe("ProjectBoardTreeProvider", () => {
 
   describe("setStateService() - Issue #151", () => {
     let mockStateService: {
-      onStageComplete: ReturnType<typeof vi.fn>;
-      onStateChanged: ReturnType<typeof vi.fn>;
-      onBacktrackTriggered: ReturnType<typeof vi.fn>;
+      onStageComplete: Mock;
+      onStateChanged: Mock;
+      onBacktrackTriggered: Mock;
     };
     let stageCompleteCallback: ((event: { stage: string; issueNumber: number }) => void) | null;
-    let mockDisposable: { dispose: ReturnType<typeof vi.fn> };
+    let mockDisposable: { dispose: Mock };
 
     beforeEach(() => {
       stageCompleteCallback = null;

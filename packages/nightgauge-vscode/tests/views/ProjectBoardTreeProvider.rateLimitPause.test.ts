@@ -5,7 +5,7 @@
  * Regression test for issue #2834 — multi-workspace rate-limit exhaustion.
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from "vitest";
 import * as vscode from "vscode";
 import { ProjectBoardTreeProvider } from "../../src/views/ProjectBoardTreeProvider";
 import type {
@@ -70,7 +70,7 @@ function makeEmitter<T>(): {
 function createFakeProvider(): {
   provider: IWorkItemProvider;
   fireRateLimit: (state: RateLimitState) => void;
-  clearCache: ReturnType<typeof vi.fn>;
+  clearCache: Mock;
 } {
   const rateLimit = makeEmitter<RateLimitState>();
   const itemsUpdated = makeEmitter<void>();
@@ -94,6 +94,7 @@ function createFakeProvider(): {
     onItemsUpdated: itemsUpdated.event as any,
     onRateLimitState: rateLimit.event as any,
     getRateLimitState: () => null,
+    softInvalidate: vi.fn(),
   };
 
   return { provider, fireRateLimit: rateLimit.fire, clearCache };

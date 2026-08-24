@@ -10,6 +10,7 @@ import * as vscode from "vscode";
 import { PipelineTreeProvider } from "../../src/views/PipelineTreeProvider";
 import type { IssueQueueService } from "../../src/services/IssueQueueService";
 import type { QueueState } from "../../src/types/queue";
+import { createMockQueueItem, createMockQueueState } from "../mocks/queue";
 
 vi.mock("../../src/services/IpcClient", () => ({
   IpcClient: {
@@ -76,14 +77,14 @@ describe("PipelineTreeProvider - Count Display", () => {
 
       // Simulate queue with 3 items by calling syncQueueFromState
       // (normally called via IssueQueueService.onQueueChanged)
-      const mockQueueState: QueueState = {
+      const mockQueueState: QueueState = createMockQueueState({
         items: [
-          { issueNumber: 1, title: "Issue 1", addedAt: Date.now() },
-          { issueNumber: 2, title: "Issue 2", addedAt: Date.now() },
-          { issueNumber: 3, title: "Issue 3", addedAt: Date.now() },
+          createMockQueueItem({ issueNumber: 1, title: "Issue 1" }),
+          createMockQueueItem({ issueNumber: 2, title: "Issue 2" }),
+          createMockQueueItem({ issueNumber: 3, title: "Issue 3" }),
         ],
-        status: "running",
-      };
+        status: "processing",
+      });
 
       // Access private method for testing (normally called internally)
       // @ts-ignore - accessing private method for testing
@@ -107,10 +108,10 @@ describe("PipelineTreeProvider - Count Display", () => {
       provider = new PipelineTreeProvider();
       provider.setTreeView(mockTreeView);
 
-      const emptyQueueState: QueueState = {
+      const emptyQueueState: QueueState = createMockQueueState({
         items: [],
         status: "idle",
-      };
+      });
 
       // @ts-ignore - accessing private method for testing
       provider.syncQueueFromState(emptyQueueState);
@@ -128,13 +129,13 @@ describe("PipelineTreeProvider - Count Display", () => {
       expect(mockTreeView.title).toBe("Pipeline (0)");
 
       // Add items to queue
-      const queueState: QueueState = {
+      const queueState: QueueState = createMockQueueState({
         items: [
-          { issueNumber: 10, title: "Issue 10", addedAt: Date.now() },
-          { issueNumber: 11, title: "Issue 11", addedAt: Date.now() },
+          createMockQueueItem({ issueNumber: 10, title: "Issue 10" }),
+          createMockQueueItem({ issueNumber: 11, title: "Issue 11" }),
         ],
-        status: "running",
-      };
+        status: "processing",
+      });
 
       // @ts-ignore
       provider.syncQueueFromState(queueState);
@@ -147,27 +148,27 @@ describe("PipelineTreeProvider - Count Display", () => {
       provider.setTreeView(mockTreeView);
 
       // Start with 3 items
-      const initialState: QueueState = {
+      const initialState: QueueState = createMockQueueState({
         items: [
-          { issueNumber: 1, title: "Issue 1", addedAt: Date.now() },
-          { issueNumber: 2, title: "Issue 2", addedAt: Date.now() },
-          { issueNumber: 3, title: "Issue 3", addedAt: Date.now() },
+          createMockQueueItem({ issueNumber: 1, title: "Issue 1" }),
+          createMockQueueItem({ issueNumber: 2, title: "Issue 2" }),
+          createMockQueueItem({ issueNumber: 3, title: "Issue 3" }),
         ],
-        status: "running",
-      };
+        status: "processing",
+      });
 
       // @ts-ignore
       provider.syncQueueFromState(initialState);
       expect(mockTreeView.title).toBe("Pipeline (3)");
 
       // Remove one item (simulating queue processing)
-      const updatedState: QueueState = {
+      const updatedState: QueueState = createMockQueueState({
         items: [
-          { issueNumber: 2, title: "Issue 2", addedAt: Date.now() },
-          { issueNumber: 3, title: "Issue 3", addedAt: Date.now() },
+          createMockQueueItem({ issueNumber: 2, title: "Issue 2" }),
+          createMockQueueItem({ issueNumber: 3, title: "Issue 3" }),
         ],
-        status: "running",
-      };
+        status: "processing",
+      });
 
       // @ts-ignore
       provider.syncQueueFromState(updatedState);
@@ -179,13 +180,13 @@ describe("PipelineTreeProvider - Count Display", () => {
       provider.setTreeView(mockTreeView);
 
       // Start with items
-      const initialState: QueueState = {
+      const initialState: QueueState = createMockQueueState({
         items: [
-          { issueNumber: 1, title: "Issue 1", addedAt: Date.now() },
-          { issueNumber: 2, title: "Issue 2", addedAt: Date.now() },
+          createMockQueueItem({ issueNumber: 1, title: "Issue 1" }),
+          createMockQueueItem({ issueNumber: 2, title: "Issue 2" }),
         ],
-        status: "running",
-      };
+        status: "processing",
+      });
 
       // @ts-ignore
       provider.syncQueueFromState(initialState);
@@ -203,10 +204,10 @@ describe("PipelineTreeProvider - Count Display", () => {
       provider = new PipelineTreeProvider();
       provider.setTreeView(mockTreeView);
 
-      const queueState: QueueState = {
-        items: [{ issueNumber: 5, title: "Issue 5", addedAt: Date.now() }],
-        status: "running",
-      };
+      const queueState: QueueState = createMockQueueState({
+        items: [createMockQueueItem({ issueNumber: 5, title: "Issue 5" })],
+        status: "processing",
+      });
 
       // @ts-ignore
       provider.syncQueueFromState(queueState);
@@ -224,14 +225,12 @@ describe("PipelineTreeProvider - Count Display", () => {
       provider.setTreeView(mockTreeView);
 
       // Create queue with 50 items
-      const largeQueue: QueueState = {
-        items: Array.from({ length: 50 }, (_, i) => ({
-          issueNumber: i + 1,
-          title: `Issue ${i + 1}`,
-          addedAt: Date.now(),
-        })),
-        status: "running",
-      };
+      const largeQueue: QueueState = createMockQueueState({
+        items: Array.from({ length: 50 }, (_, i) =>
+          createMockQueueItem({ issueNumber: i + 1, title: `Issue ${i + 1}` })
+        ),
+        status: "processing",
+      });
 
       // @ts-ignore
       provider.syncQueueFromState(largeQueue);
@@ -253,14 +252,12 @@ describe("PipelineTreeProvider - Count Display", () => {
 
       // Simulate rapid queue updates
       for (let i = 1; i <= 10; i++) {
-        const state: QueueState = {
-          items: Array.from({ length: i }, (_, j) => ({
-            issueNumber: j + 1,
-            title: `Issue ${j + 1}`,
-            addedAt: Date.now(),
-          })),
-          status: "running",
-        };
+        const state: QueueState = createMockQueueState({
+          items: Array.from({ length: i }, (_, j) =>
+            createMockQueueItem({ issueNumber: j + 1, title: `Issue ${j + 1}` })
+          ),
+          status: "processing",
+        });
 
         // @ts-ignore
         provider.syncQueueFromState(state);

@@ -17,7 +17,7 @@ import {
   ExecutionHistoryWriter,
   HISTORY_INDEX_SCHEMA_VERSION,
 } from "../../src/utils/executionHistoryWriter";
-import type { HistoryIndex } from "../../src/utils/executionHistoryWriter";
+import type { HistoryIndex, HistoryIndexEntry } from "../../src/utils/executionHistoryWriter";
 
 // Mock node:fs/promises
 vi.mock("node:fs/promises");
@@ -39,12 +39,38 @@ describe("TelemetryStore", () => {
   });
 
   /** Build a valid index for tests */
-  function buildIndex(entries: HistoryIndex["entries"] = []): HistoryIndex {
+  /**
+   * Fill the token totals every HistoryIndexEntry requires but that most of
+   * these cases do not care about, so a fixture states only what its assertion
+   * is about. They are required fields, not optional ones — a literal that
+   * omits them is not a valid entry, which is what #499 surfaced.
+   */
+  function indexEntry(e: Partial<HistoryIndexEntry>): HistoryIndexEntry {
+    return {
+      issue_number: 0,
+      title: "",
+      outcome: "complete",
+      cost_usd: 0,
+      duration_ms: 0,
+      stage_count: 0,
+      started_at: "2026-01-01T00:00:00.000Z",
+      recorded_at: "2026-01-01T00:00:00.000Z",
+      branch: "",
+      total_input_tokens: 0,
+      total_output_tokens: 0,
+      total_cache_read_tokens: 0,
+      total_cache_creation_tokens: 0,
+      ...e,
+    };
+  }
+
+  function buildIndex(entries: Partial<HistoryIndexEntry>[] = []): HistoryIndex {
+    const full = entries.map(indexEntry);
     return {
       schema_version: HISTORY_INDEX_SCHEMA_VERSION,
       updated_at: new Date().toISOString(),
-      total_runs: entries.length,
-      entries,
+      total_runs: full.length,
+      entries: full,
     };
   }
 

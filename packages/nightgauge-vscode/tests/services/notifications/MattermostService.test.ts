@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from "vitest";
 
 // Capture event listeners for direct firing
 let stageStartHandler: ((e: { stage: string; issueNumber: number }) => void) | null = null;
@@ -242,7 +242,7 @@ describe("MattermostService lifecycle", () => {
   let service: InstanceType<typeof MattermostService>;
   let pss: ReturnType<typeof makePipelineStateService>;
   let logger: ReturnType<typeof makeLogger>;
-  let fetchMock: ReturnType<typeof vi.fn>;
+  let fetchMock: Mock;
   const originalEnv = process.env.MATTERMOST_WEBHOOK_URL;
 
   beforeEach(() => {

@@ -55,8 +55,15 @@ import { makeEmptyAggregates } from "./fixtures/aggregates";
 const emptyAggregates: DashboardAggregates = makeEmptyAggregates();
 
 const timeSavingsConfig: TimeSavingsConfig = {
-  estimatedManualMinutes: {},
-  hourlyRate: 50,
+  // TimeSavingsConfig is a flat per-stage minutes record (#499).
+  pipelineStart: 0,
+  issuePickup: 5,
+  featurePlanning: 30,
+  featureDev: 120,
+  featureValidate: 15,
+  prCreate: 10,
+  prMerge: 5,
+  pipelineFinish: 0,
 };
 
 describe("Tool call lazy rendering (Issue #716)", () => {

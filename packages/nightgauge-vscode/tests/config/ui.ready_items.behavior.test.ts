@@ -275,14 +275,14 @@ describe("ui.ready_items.behavior", () => {
     ];
 
     it("shows all priorities when set to all", () => {
-      const filter = "all";
+      const filter: string = "all";
       const filtered = mockIssues.filter((i) => filter === "all" || i.priority === filter);
 
       expect(filtered.length).toBe(3);
     });
 
     it("filters to P0 only", () => {
-      const filter = "P0";
+      const filter: string = "P0";
       const filtered = mockIssues.filter((i) => filter === "all" || i.priority === filter);
 
       expect(filtered.length).toBe(1);
@@ -318,14 +318,14 @@ describe("ui.ready_items.behavior", () => {
     ];
 
     it("shows all sizes when set to all", () => {
-      const filter = "all";
+      const filter: string = "all";
       const filtered = mockIssues.filter((i) => filter === "all" || i.size === filter);
 
       expect(filtered.length).toBe(3);
     });
 
     it("filters to specific size", () => {
-      const filter = "M";
+      const filter: string = "M";
       const filtered = mockIssues.filter((i) => filter === "all" || i.size === filter);
 
       expect(filtered.length).toBe(1);
@@ -383,14 +383,14 @@ describe("ui.ready_items.behavior", () => {
     ];
 
     it("shows all components when set to all", () => {
-      const filter = "all";
+      const filter: string = "all";
       const filtered = mockIssues.filter((i) => filter === "all" || i.component === filter);
 
       expect(filtered.length).toBe(3);
     });
 
     it("filters to specific component", () => {
-      const filter = "frontend";
+      const filter: string = "frontend";
       const filtered = mockIssues.filter((i) => filter === "all" || i.component === filter);
 
       expect(filtered.length).toBe(1);
@@ -460,7 +460,7 @@ describe("ui.ready_items.behavior", () => {
     });
 
     it("shows all when empty", () => {
-      const search = "";
+      const search: string = "";
       const filtered = mockIssues.filter(
         (i) => search === "" || i.title.toLowerCase().includes(search.toLowerCase())
       );

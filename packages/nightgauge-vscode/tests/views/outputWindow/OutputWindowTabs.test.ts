@@ -24,6 +24,15 @@ function createSlot(overrides: Partial<SlotInfo> = {}): SlotInfo {
     slotIndex: 0,
     issueNumber: 100,
     title: "Test Issue",
+    // Required per-slot members since #2814.
+    stages: new Map(),
+    tokenUsage: {
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheCreationTokens: 0,
+      costUsd: 0,
+    },
     ...overrides,
   };
 }

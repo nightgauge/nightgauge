@@ -60,6 +60,7 @@ import {
   type CommandHandler,
   type ReceivedCommand,
 } from "../../src/services/AgentCommandStreamService";
+import { makeMockTokenStorage } from "../mocks/token-storage";
 
 // ── Test helpers ──────────────────────────────────────────────────────────────
 
@@ -74,14 +75,6 @@ function makeLogger() {
     error: vi.fn(),
     debug: vi.fn(),
   } as unknown as import("../../src/utils/logger").Logger;
-}
-
-function makeTokenStorage(token: string | null = "test-token") {
-  return {
-    retrieve: vi.fn().mockResolvedValue(token),
-    store: vi.fn(),
-    delete: vi.fn(),
-  };
 }
 
 function makeHandler(): CommandHandler & { received: ReceivedCommand[] } {
@@ -126,7 +119,7 @@ describe("AgentCommandStreamService", () => {
 
     const svc = new AgentCommandStreamService(
       () => "https://api.example.com",
-      makeTokenStorage(),
+      makeMockTokenStorage(),
       makeContext(),
       makeLogger(),
       makeHandler()
@@ -147,7 +140,7 @@ describe("AgentCommandStreamService", () => {
   it("start() is a no-op when agentId is empty string", async () => {
     const svc = new AgentCommandStreamService(
       () => "https://api.example.com",
-      makeTokenStorage(),
+      makeMockTokenStorage(),
       makeContext(),
       makeLogger(),
       makeHandler()
@@ -168,7 +161,7 @@ describe("AgentCommandStreamService", () => {
 
     const svc = new AgentCommandStreamService(
       () => "https://api.example.com",
-      makeTokenStorage(),
+      makeMockTokenStorage(),
       makeContext(),
       makeLogger(),
       makeHandler()
@@ -193,7 +186,7 @@ describe("AgentCommandStreamService", () => {
     const handler: CommandHandler = { handle: vi.fn(), setAgentId };
     const svc = new AgentCommandStreamService(
       () => "https://api.example.com",
-      makeTokenStorage(),
+      makeMockTokenStorage(),
       makeContext(),
       makeLogger(),
       handler
@@ -219,7 +212,7 @@ describe("AgentCommandStreamService", () => {
     const handler: CommandHandler = { handle: vi.fn() }; // setAgentId is optional
     const svc = new AgentCommandStreamService(
       () => "https://api.example.com",
-      makeTokenStorage(),
+      makeMockTokenStorage(),
       makeContext(),
       makeLogger(),
       handler
@@ -240,7 +233,7 @@ describe("AgentCommandStreamService", () => {
 
     const svc = new AgentCommandStreamService(
       () => "https://api.example.com",
-      makeTokenStorage(),
+      makeMockTokenStorage(),
       makeContext(),
       makeLogger(),
       makeHandler()
@@ -272,7 +265,7 @@ describe("AgentCommandStreamService", () => {
     const handler = makeHandler();
     const svc = new AgentCommandStreamService(
       () => "https://api.example.com",
-      makeTokenStorage(),
+      makeMockTokenStorage(),
       makeContext(),
       makeLogger(),
       handler
@@ -306,7 +299,7 @@ describe("AgentCommandStreamService", () => {
     const handler = makeHandler();
     const svc = new AgentCommandStreamService(
       () => "https://api.example.com",
-      makeTokenStorage(),
+      makeMockTokenStorage(),
       makeContext(),
       makeLogger(),
       handler
@@ -335,7 +328,7 @@ describe("AgentCommandStreamService", () => {
     const handler = makeHandler();
     const svc = new AgentCommandStreamService(
       () => "https://api.example.com",
-      makeTokenStorage(),
+      makeMockTokenStorage(),
       makeContext(),
       makeLogger(),
       handler
@@ -358,7 +351,7 @@ describe("AgentCommandStreamService", () => {
 
     const svc = new AgentCommandStreamService(
       () => "https://api.example.com",
-      makeTokenStorage(),
+      makeMockTokenStorage(),
       makeContext(),
       makeLogger(),
       makeHandler()
@@ -388,7 +381,7 @@ describe("AgentCommandStreamService", () => {
 
     const svc = new AgentCommandStreamService(
       () => "https://api.example.com",
-      makeTokenStorage(),
+      makeMockTokenStorage(),
       makeContext(),
       makeLogger(),
       makeHandler()
@@ -416,7 +409,7 @@ describe("AgentCommandStreamService", () => {
     const logger = makeLogger();
     const svc = new AgentCommandStreamService(
       () => "https://api.example.com",
-      makeTokenStorage(),
+      makeMockTokenStorage(),
       makeContext(),
       logger,
       handler
@@ -441,7 +434,7 @@ describe("AgentCommandStreamService", () => {
     const handler = makeHandler();
     const svc = new AgentCommandStreamService(
       () => "https://api.example.com",
-      makeTokenStorage(),
+      makeMockTokenStorage(),
       makeContext(),
       makeLogger(),
       handler
@@ -471,7 +464,7 @@ describe("AgentCommandStreamService", () => {
     const handler = makeHandler();
     const svc = new AgentCommandStreamService(
       () => "https://api.example.com",
-      makeTokenStorage(),
+      makeMockTokenStorage(),
       makeContext(),
       makeLogger(),
       handler
@@ -487,7 +480,7 @@ describe("AgentCommandStreamService", () => {
     const logger = makeLogger();
     const svc = new AgentCommandStreamService(
       () => "https://api.example.com",
-      makeTokenStorage(null),
+      makeMockTokenStorage(null),
       makeContext(),
       logger,
       makeHandler()
@@ -524,7 +517,7 @@ describe("AgentCommandStreamService", () => {
 
       const svc = new AgentCommandStreamService(
         () => "https://api.example.com",
-        makeTokenStorage(),
+        makeMockTokenStorage(),
         makeContext(),
         makeLogger(),
         makeHandler()
@@ -561,7 +554,7 @@ describe("AgentCommandStreamService", () => {
       const randLow = vi.spyOn(Math, "random").mockReturnValue(0);
       const svcLow = new AgentCommandStreamService(
         () => "https://api.example.com",
-        makeTokenStorage(),
+        makeMockTokenStorage(),
         makeContext(),
         makeLogger(),
         makeHandler()
@@ -585,7 +578,7 @@ describe("AgentCommandStreamService", () => {
       const randHigh = vi.spyOn(Math, "random").mockReturnValue(0.999999);
       const svcHigh = new AgentCommandStreamService(
         () => "https://api.example.com",
-        makeTokenStorage(),
+        makeMockTokenStorage(),
         makeContext(),
         makeLogger(),
         makeHandler()
@@ -623,7 +616,7 @@ describe("AgentCommandStreamService", () => {
 
       const svc = new AgentCommandStreamService(
         () => "https://api.example.com",
-        makeTokenStorage(),
+        makeMockTokenStorage(),
         makeContext(),
         makeLogger(),
         makeHandler()
@@ -667,7 +660,7 @@ describe("AgentCommandStreamService", () => {
       const logger = makeLogger();
       const svc = new AgentCommandStreamService(
         () => "https://api.example.com",
-        makeTokenStorage(),
+        makeMockTokenStorage(),
         makeContext(),
         logger,
         makeHandler()
@@ -714,7 +707,7 @@ describe("AgentCommandStreamService", () => {
 
       const svc = new AgentCommandStreamService(
         () => "https://api.example.com",
-        makeTokenStorage(),
+        makeMockTokenStorage(),
         makeContext(),
         makeLogger(),
         makeHandler()
@@ -747,7 +740,7 @@ describe("AgentCommandStreamService", () => {
 
       const svc = new AgentCommandStreamService(
         () => "https://api.example.com",
-        makeTokenStorage(),
+        makeMockTokenStorage(),
         makeContext(),
         makeLogger(),
         makeHandler()

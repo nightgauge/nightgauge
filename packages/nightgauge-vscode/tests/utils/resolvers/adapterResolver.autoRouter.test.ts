@@ -72,7 +72,7 @@ describe("resolveStageAdapter Step 2.5 (auto-router) — Issue #3230", () => {
       rationale: "adapter=codex selected for stage=feature-dev (test rationale)",
       confidence: 0.8,
     });
-    const enumerate = vi.fn(() => ["claude" as const, "codex" as const]);
+    const enumerate = vi.fn(() => ["claude-sdk" as const, "codex" as const]);
     const options: AutoRouterOptions = {
       enumerateAvailableAdapters: enumerate,
       complexity: "M",
@@ -97,7 +97,7 @@ describe("resolveStageAdapter Step 2.5 (auto-router) — Issue #3230", () => {
       confidence: 0.9,
     });
     const options: AutoRouterOptions = {
-      enumerateAvailableAdapters: () => ["claude", "codex"],
+      enumerateAvailableAdapters: () => ["claude-sdk", "codex"],
       complexity: "M",
       router: stub,
     };
@@ -123,7 +123,7 @@ describe("resolveStageAdapter Step 2.5 (auto-router) — Issue #3230", () => {
       confidence: 0.9,
     });
     const options: AutoRouterOptions = {
-      enumerateAvailableAdapters: () => ["claude", "codex"],
+      enumerateAvailableAdapters: () => ["claude-sdk", "codex"],
       complexity: "M",
       router: stub,
     };
@@ -136,7 +136,7 @@ describe("resolveStageAdapter Step 2.5 (auto-router) — Issue #3230", () => {
   it("falls through to default when router abstains and no global config", () => {
     const stub = makeStubRouter(null); // abstain
     const options: AutoRouterOptions = {
-      enumerateAvailableAdapters: () => ["claude", "codex"],
+      enumerateAvailableAdapters: () => ["claude-sdk", "codex"],
       complexity: "M",
       router: stub,
     };
@@ -161,7 +161,7 @@ describe("resolveStageAdapter Step 2.5 (auto-router) — Issue #3230", () => {
       confidence: 0.99,
     });
     const options: AutoRouterOptions = {
-      enumerateAvailableAdapters: () => ["claude", "codex"],
+      enumerateAvailableAdapters: () => ["claude-sdk", "codex"],
       complexity: "M",
       router: stub,
     };
@@ -186,7 +186,7 @@ describe("resolveStageAdapter Step 2.5 (auto-router) — Issue #3230", () => {
       confidence: 0.9,
     });
     const options: AutoRouterOptions = {
-      enumerateAvailableAdapters: () => ["claude", "codex"],
+      enumerateAvailableAdapters: () => ["claude-sdk", "codex"],
       complexity: "M",
       router: stub,
     };

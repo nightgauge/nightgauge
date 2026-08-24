@@ -133,7 +133,7 @@ describe("PlatformQuotaService", () => {
     expect(service.getCached()).not.toBeNull();
 
     // Second fetch fails
-    ipcClient.platformGetUsageSummary.mockRejectedValueOnce(
+    vi.mocked(ipcClient.platformGetUsageSummary).mockRejectedValueOnce(
       new Error("IPC error -32000: get analytics dashboard: unexpected response 500")
     );
     const outcome = await service.fetchAndCache();

@@ -2,7 +2,7 @@
  * Tests for PR detection helpers
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from "vitest";
 import { exec } from "child_process";
 import {
   parsePRFromGHCLI,
@@ -28,7 +28,7 @@ type ExecCallback = (err: unknown, result: { stdout: string; stderr: string }) =
 
 /** Queue one canned result for the next `exec()` call. */
 function mockExecOnce(run: (cb: ExecCallback) => void): void {
-  (exec as unknown as ReturnType<typeof vi.fn>).mockImplementationOnce(
+  (exec as unknown as Mock).mockImplementationOnce(
     (_cmd: string, optsOrCb: unknown, cb?: unknown) => {
       const callback = (typeof optsOrCb === "function" ? optsOrCb : cb) as ExecCallback;
       run(callback);

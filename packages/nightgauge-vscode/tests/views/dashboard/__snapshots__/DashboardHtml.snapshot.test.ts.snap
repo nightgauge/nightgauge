@@ -12390,14 +12390,14 @@ exports[`getDashboardHtml snapshots (Issue #1242) > completed run with tool call
         </div>
         <div class="progress-badges">
           
-          <span class="status-badge" style="background: var(--vscode-descriptionForeground);">Completed</span>
+          <span class="status-badge" style="background: var(--vscode-charts-green);">Complete</span>
         </div>
       </div>
       <div class="progress-bar-container">
-        <div class="progress-bar" style="width: 0%;"></div>
+        <div class="progress-bar" style="width: 100%;"></div>
       </div>
       <div class="progress-info">
-        <span class="progress-percent">0%</span>
+        <span class="progress-percent">100%</span>
         <span class="progress-branch" title="feat/42-add-feature-x">Branch: feat/42-add-feature-x</span>
         <span class="progress-stage">
           Completed
@@ -12406,7 +12406,7 @@ exports[`getDashboardHtml snapshots (Issue #1242) > completed run with tool call
         
       </div>
       <div class="stage-indicators">
-        <div class="stage-dot pending" title="Issue Pickup: completed"></div><div class="stage-dot pending" title="Feature Development: completed"></div>
+        <div class="stage-dot complete" title="Issue Pickup: complete"></div><div class="stage-dot complete" title="Feature Development: complete"></div>
       </div>
     </div>
   
@@ -12628,7 +12628,7 @@ exports[`getDashboardHtml snapshots (Issue #1242) > completed run with tool call
             </div>
             <div class="history-item-stats">
               <div class="history-progress">
-                <span class="history-dot pending"></span><span class="history-dot pending"></span>
+                <span class="history-dot complete"></span><span class="history-dot complete"></span>
               </div>
               <span class="history-cost">$0.15</span>
               <span class="history-time">N days ago</span>
@@ -25995,14 +25995,14 @@ exports[`getDashboardHtml snapshots (Issue #1242) > pagination controls rendered
         </div>
         <div class="progress-badges">
           
-          <span class="status-badge" style="background: var(--vscode-descriptionForeground);">Completed</span>
+          <span class="status-badge" style="background: var(--vscode-charts-green);">Complete</span>
         </div>
       </div>
       <div class="progress-bar-container">
-        <div class="progress-bar" style="width: 0%;"></div>
+        <div class="progress-bar" style="width: 100%;"></div>
       </div>
       <div class="progress-info">
-        <span class="progress-percent">0%</span>
+        <span class="progress-percent">100%</span>
         <span class="progress-branch" title="feat/42-add-feature-x">Branch: feat/42-add-feature-x</span>
         <span class="progress-stage">
           Completed
@@ -26011,7 +26011,7 @@ exports[`getDashboardHtml snapshots (Issue #1242) > pagination controls rendered
         
       </div>
       <div class="stage-indicators">
-        <div class="stage-dot pending" title="Issue Pickup: completed"></div><div class="stage-dot pending" title="Feature Development: completed"></div>
+        <div class="stage-dot complete" title="Issue Pickup: complete"></div><div class="stage-dot complete" title="Feature Development: complete"></div>
       </div>
     </div>
   
@@ -26233,7 +26233,7 @@ exports[`getDashboardHtml snapshots (Issue #1242) > pagination controls rendered
     <div class="history-section">
       <div class="section-header">
         <h3>Pipeline History</h3>
-        <span class="history-count">Showing 5 of 5</span>
+        <span class="history-count">Showing 5 of 15</span>
       </div>
       
       <div class="history-list">
@@ -26246,7 +26246,7 @@ exports[`getDashboardHtml snapshots (Issue #1242) > pagination controls rendered
             </div>
             <div class="history-item-stats">
               <div class="history-progress">
-                <span class="history-dot pending"></span><span class="history-dot pending"></span>
+                <span class="history-dot complete"></span><span class="history-dot complete"></span>
               </div>
               <span class="history-cost">$0.15</span>
               <span class="history-time">N days ago</span>
@@ -26261,7 +26261,7 @@ exports[`getDashboardHtml snapshots (Issue #1242) > pagination controls rendered
             </div>
             <div class="history-item-stats">
               <div class="history-progress">
-                <span class="history-dot pending"></span><span class="history-dot pending"></span>
+                <span class="history-dot complete"></span><span class="history-dot complete"></span>
               </div>
               <span class="history-cost">$0.15</span>
               <span class="history-time">N days ago</span>
@@ -26276,7 +26276,7 @@ exports[`getDashboardHtml snapshots (Issue #1242) > pagination controls rendered
             </div>
             <div class="history-item-stats">
               <div class="history-progress">
-                <span class="history-dot pending"></span><span class="history-dot pending"></span>
+                <span class="history-dot complete"></span><span class="history-dot complete"></span>
               </div>
               <span class="history-cost">$0.15</span>
               <span class="history-time">N days ago</span>
@@ -26291,7 +26291,7 @@ exports[`getDashboardHtml snapshots (Issue #1242) > pagination controls rendered
             </div>
             <div class="history-item-stats">
               <div class="history-progress">
-                <span class="history-dot pending"></span><span class="history-dot pending"></span>
+                <span class="history-dot complete"></span><span class="history-dot complete"></span>
               </div>
               <span class="history-cost">$0.15</span>
               <span class="history-time">N days ago</span>
@@ -26306,7 +26306,7 @@ exports[`getDashboardHtml snapshots (Issue #1242) > pagination controls rendered
             </div>
             <div class="history-item-stats">
               <div class="history-progress">
-                <span class="history-dot pending"></span><span class="history-dot pending"></span>
+                <span class="history-dot complete"></span><span class="history-dot complete"></span>
               </div>
               <span class="history-cost">$0.15</span>
               <span class="history-time">N days ago</span>
@@ -26314,7 +26314,9 @@ exports[`getDashboardHtml snapshots (Issue #1242) > pagination controls rendered
           </div>
         
       </div>
-      
+      <div class="history-load-more">
+          <button class="load-more-btn" data-action="load-more-history">Load More</button>
+        </div>
     </div>
   
         </div>

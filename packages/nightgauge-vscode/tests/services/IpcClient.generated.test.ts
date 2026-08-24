@@ -110,7 +110,7 @@ describe("IpcClient.generated — auto-generated methods", () => {
     const fs = await import("fs");
     vi.mocked(fs.existsSync).mockReturnValue(true);
 
-    (vscode.workspace.getConfiguration as MockInstance).mockReturnValue({
+    (vscode.workspace.getConfiguration as unknown as MockInstance).mockReturnValue({
       get: vi.fn(<T>(key: string, defaultValue?: T): T | undefined => {
         if (key === "binaryPath") return "" as unknown as T;
         if (key === "timeoutSeconds") return 30 as unknown as T;
@@ -118,8 +118,8 @@ describe("IpcClient.generated — auto-generated methods", () => {
       }),
     });
 
-    (vscode.window.showErrorMessage as MockInstance).mockResolvedValue(undefined);
-    (vscode.window.showWarningMessage as MockInstance).mockResolvedValue(undefined);
+    (vscode.window.showErrorMessage as unknown as MockInstance).mockResolvedValue(undefined);
+    (vscode.window.showWarningMessage as unknown as MockInstance).mockResolvedValue(undefined);
 
     process.env.GITHUB_TOKEN = "test_token";
     vi.useFakeTimers();
@@ -404,11 +404,11 @@ describe("IpcClient.generated — auto-generated methods", () => {
       const client = IpcClient.getInstance();
 
       const p = client.platformStatus();
-      simulateResponse({ id: 1, result: { connected: true } });
+      simulateResponse({ id: 1, result: { mode: "connected" } });
       await flushPromises();
 
       const result = await p;
-      expect(result.connected).toBe(true);
+      expect(result.mode).toBe("connected");
 
       const req = lastRequest();
       expect(req.method).toBe("platform.status");

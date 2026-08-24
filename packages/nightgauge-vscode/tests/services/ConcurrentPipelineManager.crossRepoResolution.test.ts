@@ -19,7 +19,7 @@
  * @see Issue #4117 - Agent runner gated on a single incrediRoot
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, type Mock } from "vitest";
 
 // Mock vscode
 vi.mock("vscode", () => ({
@@ -181,7 +181,7 @@ function makeLogger() {
 
 describe("ConcurrentPipelineManager — per-command cross-repo worktree resolution (#4117)", () => {
   beforeEach(() => {
-    (WorktreeManager as unknown as ReturnType<typeof vi.fn>).mockClear();
+    (WorktreeManager as unknown as Mock).mockClear();
   });
 
   it("dispatches each queued item into ITS target repo's worktree, not the manager's fixed default root", async () => {
@@ -249,7 +249,7 @@ describe("ConcurrentPipelineManager — per-command cross-repo worktree resoluti
       const call = factory.mock.calls.findIndex((c: unknown[]) => c[1] === issueNumber);
       expect(call).toBeGreaterThanOrEqual(0);
       const built = factory.mock.results[call].value as {
-        orchestrator: { setRunRepoRoot: ReturnType<typeof vi.fn> };
+        orchestrator: { setRunRepoRoot: Mock };
       };
       expect(built.orchestrator.setRunRepoRoot).toHaveBeenCalledTimes(1);
       return built.orchestrator.setRunRepoRoot.mock.calls[0][0];

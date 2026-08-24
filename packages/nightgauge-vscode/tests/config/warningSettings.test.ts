@@ -6,7 +6,7 @@
  * @see Issue #475 - Refactor notification, warning, and plugin services to use ConfigBridge
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from "vitest";
 import { getWarningSettings, DEFAULT_WARNING_SETTINGS } from "../../src/config/warningSettings";
 import { ConfigBridge } from "../../src/services/ConfigBridge";
 import { DEFAULT_CONFIG } from "../../src/config/schema";
@@ -20,8 +20,8 @@ vi.mock("../../src/services/ConfigBridge", () => ({
 
 describe("warningSettings", () => {
   let mockConfigBridge: {
-    isInitialized: ReturnType<typeof vi.fn>;
-    getUI: ReturnType<typeof vi.fn>;
+    isInitialized: Mock;
+    getUI: Mock;
   };
 
   beforeEach(() => {

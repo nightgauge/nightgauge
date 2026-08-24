@@ -11,7 +11,7 @@
  * - Graceful degradation when watcher creation fails
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from "vitest";
 import { KnowledgeTreeProvider } from "../../src/views/KnowledgeTreeProvider";
 import type { PipelineStateService } from "../../src/services/PipelineStateService";
 import type { IpcClient } from "../../src/services/IpcClient";
@@ -45,7 +45,7 @@ const watcherCallbacks = {
   onDelete: null as ((uri: any) => void) | null,
 };
 
-let mockWatcherDispose: ReturnType<typeof vi.fn>;
+let mockWatcherDispose: Mock;
 
 // Local vscode mock with callback capture support
 vi.mock("vscode", () => {

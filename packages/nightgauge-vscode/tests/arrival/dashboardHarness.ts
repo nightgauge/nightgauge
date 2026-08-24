@@ -33,7 +33,7 @@
  * and reads the same module instance this file exports.
  */
 
-import { vi } from "vitest";
+import { vi, type Mock } from "vitest";
 
 // ---------------------------------------------------------------------------
 // Captured webview panels
@@ -43,13 +43,13 @@ export interface CapturedPanel {
   webview: {
     html: string;
     cspSource: string;
-    onDidReceiveMessage: ReturnType<typeof vi.fn>;
-    postMessage: ReturnType<typeof vi.fn>;
-    asWebviewUri: ReturnType<typeof vi.fn>;
+    onDidReceiveMessage: Mock;
+    postMessage: Mock;
+    asWebviewUri: Mock;
   };
-  reveal: ReturnType<typeof vi.fn>;
-  onDidDispose: ReturnType<typeof vi.fn>;
-  dispose: ReturnType<typeof vi.fn>;
+  reveal: Mock;
+  onDidDispose: Mock;
+  dispose: Mock;
   visible: boolean;
   title: string;
   dispatchMessage: (message: unknown) => Promise<void>;
@@ -118,11 +118,11 @@ const IPC_METHODS = [
 
 export type IpcMethodName = (typeof IPC_METHODS)[number];
 
-export type IpcStub = Record<IpcMethodName, ReturnType<typeof vi.fn>> & {
-  on: ReturnType<typeof vi.fn>;
-  off: ReturnType<typeof vi.fn>;
-  dispose: ReturnType<typeof vi.fn>;
-  call: ReturnType<typeof vi.fn>;
+export type IpcStub = Record<IpcMethodName, Mock> & {
+  on: Mock;
+  off: Mock;
+  dispose: Mock;
+  call: Mock;
 };
 
 function makeIpcStub(): IpcStub {
@@ -189,7 +189,9 @@ export function resetHarness(): void {
 
 export function vscodeMockModule() {
   class MockEventEmitter {
-    private listeners: ((data: unknown) => void)[] = [];
+    // Not `private`: this class is returned from an exported function, so its
+    // inferred type cannot name a private member (TS4094).
+    listeners: ((data: unknown) => void)[] = [];
     get event() {
       return (listener: (data: unknown) => void) => {
         this.listeners.push(listener);

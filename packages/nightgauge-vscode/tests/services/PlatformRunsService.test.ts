@@ -13,21 +13,18 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { PlatformRunsService } from "../../src/services/PlatformRunsService";
 import type { IpcClientGenerated } from "../../src/services/IpcClient.generated";
 import type { AnalyticsRunsResult } from "../../src/services/IpcClientBase";
-import type { RunsFilterState } from "../../src/views/dashboard/DashboardState";
 
 const ENDPOINT = "platform.getAnalyticsRuns";
 
-const noFilters: RunsFilterState = {
-  dateFrom: "",
-  dateTo: "",
-  outcomeFilter: "",
-  branchFilter: "",
-};
+// fetchAndCache takes (cursor?, limit?) — it has never taken a filter object.
+// The RunsFilterState this file imported does not exist anywhere in src, and
+// passing it as the first argument meant handing an object to a `cursor?:
+// string` parameter. The mock ignored its arguments, so the suite stayed green
+// while exercising a signature the service does not have (#499).
 
 function makeRunsResult(overrides: Partial<AnalyticsRunsResult> = {}): AnalyticsRunsResult {
   return {
     entries: [],
-    total_count: 0,
     has_more: false,
     ...overrides,
   };
@@ -50,11 +47,11 @@ describe("PlatformRunsService.fetchAndCache", () => {
   });
 
   it("returns { ok: true, value } on success and caches it", async () => {
-    const result = makeRunsResult({ total_count: 5 });
+    const result = makeRunsResult({ has_more: true });
     const ipc = makeIpcClient({ platformGetAnalyticsRuns: vi.fn().mockResolvedValue(result) });
     const svc = new PlatformRunsService(ipc);
 
-    const outcome = await svc.fetchAndCache(noFilters);
+    const outcome = await svc.fetchAndCache();
 
     expect(outcome).toEqual({ ok: true, value: result });
     expect(svc.getCached()).toEqual(result);
@@ -68,7 +65,7 @@ describe("PlatformRunsService.fetchAndCache", () => {
     });
     const svc = new PlatformRunsService(ipc);
 
-    const outcome = await svc.fetchAndCache(noFilters);
+    const outcome = await svc.fetchAndCache();
 
     expect(outcome).toMatchObject({
       ok: false,
@@ -86,7 +83,7 @@ describe("PlatformRunsService.fetchAndCache", () => {
     });
     const svc = new PlatformRunsService(ipc);
 
-    const outcome = await svc.fetchAndCache(noFilters);
+    const outcome = await svc.fetchAndCache();
 
     expect(outcome).toMatchObject({
       ok: false,
@@ -104,7 +101,7 @@ describe("PlatformRunsService.fetchAndCache", () => {
     });
     const svc = new PlatformRunsService(ipc);
 
-    const outcome = await svc.fetchAndCache(noFilters);
+    const outcome = await svc.fetchAndCache();
 
     expect(outcome).toMatchObject({
       ok: false,
@@ -122,7 +119,7 @@ describe("PlatformRunsService.fetchAndCache", () => {
     });
     const svc = new PlatformRunsService(ipc);
 
-    const outcome = await svc.fetchAndCache(noFilters);
+    const outcome = await svc.fetchAndCache();
 
     expect(outcome).toMatchObject({ ok: false, kind: "offline", endpoint: ENDPOINT });
     if (!outcome.ok) expect(outcome.status).toBeUndefined();
@@ -136,7 +133,7 @@ describe("PlatformRunsService.fetchAndCache", () => {
     });
     const svc = new PlatformRunsService(ipc);
 
-    const outcome = await svc.fetchAndCache(noFilters);
+    const outcome = await svc.fetchAndCache();
 
     expect(outcome).toMatchObject({ ok: false, kind: "not_configured", endpoint: ENDPOINT });
   });
@@ -147,7 +144,7 @@ describe("PlatformRunsService.fetchAndCache", () => {
     });
     const svc = new PlatformRunsService(ipc);
 
-    await expect(svc.fetchAndCache(noFilters)).resolves.toMatchObject({ ok: false });
+    await expect(svc.fetchAndCache()).resolves.toMatchObject({ ok: false });
   });
 
   it("getCached() returns null before first fetch", () => {
@@ -159,7 +156,7 @@ describe("PlatformRunsService.fetchAndCache", () => {
   it("dispose() clears the cache", async () => {
     const ipc = makeIpcClient();
     const svc = new PlatformRunsService(ipc);
-    await svc.fetchAndCache(noFilters);
+    await svc.fetchAndCache();
     svc.dispose();
     expect(svc.getCached()).toBeNull();
   });

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import {
   LmStudioService,
   normalizeManagementBaseUrl,
@@ -41,7 +41,7 @@ describe("LmStudioService", () => {
   });
 
   it("lists models from the CLI and marks loaded models first", async () => {
-    const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>;
+    const fetchMock = fetch as unknown as Mock;
     fetchMock.mockResolvedValue({
       ok: true,
       status: 200,
@@ -122,7 +122,7 @@ describe("LmStudioService", () => {
       throw new Error(`unexpected args: ${args.join(" ")}`);
     };
 
-    const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>;
+    const fetchMock = fetch as unknown as Mock;
     fetchMock.mockResolvedValue({
       ok: true,
       status: 200,
@@ -152,7 +152,7 @@ describe("LmStudioService", () => {
       throw new Error(`unexpected args: ${args.join(" ")}`);
     };
 
-    const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>;
+    const fetchMock = fetch as unknown as Mock;
     fetchMock
       .mockRejectedValueOnce(new Error("connect ECONNREFUSED"))
       .mockRejectedValueOnce(new Error("connect ECONNREFUSED"))
@@ -178,7 +178,7 @@ describe("LmStudioService", () => {
     execFileHandler = async () => {
       throw new Error("cli unavailable");
     };
-    const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>;
+    const fetchMock = fetch as unknown as Mock;
     fetchMock.mockResolvedValue({
       ok: true,
       status: 200,
@@ -217,7 +217,7 @@ describe("LmStudioService", () => {
     execFileHandler = async () => {
       throw new Error("cli unavailable");
     };
-    const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>;
+    const fetchMock = fetch as unknown as Mock;
     fetchMock
       .mockResolvedValueOnce({
         ok: false,

@@ -656,7 +656,7 @@ describe("ProjectEventSubscriber", () => {
         .mockResolvedValueOnce(make401Response())
         .mockResolvedValueOnce(makeOkResponse(emptyStream));
 
-      const onAuthRequired = vi.fn<[], Promise<string | null>>().mockResolvedValue(newToken);
+      const onAuthRequired = vi.fn<() => Promise<string | null>>().mockResolvedValue(newToken);
 
       const sub = ProjectEventSubscriber.getInstance({
         context: makeContext(),
@@ -680,7 +680,7 @@ describe("ProjectEventSubscriber", () => {
     it("surfaces disconnected when onAuthRequired returns null on 401", async () => {
       mockFetch.mockResolvedValueOnce(make401Response());
 
-      const onAuthRequired = vi.fn<[], Promise<string | null>>().mockResolvedValue(null);
+      const onAuthRequired = vi.fn<() => Promise<string | null>>().mockResolvedValue(null);
 
       const sub = ProjectEventSubscriber.getInstance({
         context: makeContext(),

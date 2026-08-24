@@ -28,7 +28,7 @@ const {
   mockOpenTextDocument,
 } = vi.hoisted(() => ({
   mockGetTokenInstance: vi.fn(),
-  mockTokenRetrieve: vi.fn<[string], Promise<string | null>>(),
+  mockTokenRetrieve: vi.fn<(a0: string) => Promise<string | null>>(),
   mockHealthFetchAndCache: vi.fn(),
   mockRunsFetchAndCache: vi.fn(),
   mockCostFetchAndCache: vi.fn(),

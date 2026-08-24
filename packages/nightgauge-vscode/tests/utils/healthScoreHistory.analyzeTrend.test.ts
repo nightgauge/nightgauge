@@ -9,7 +9,9 @@
  * disagreed.
  */
 import { describe, it, expect } from "vitest";
-import { HealthScoreHistoryReader, type TrendChartDay } from "../../src/utils/healthScoreHistory";
+import { HealthScoreHistoryReader } from "../../src/utils/healthScoreHistory";
+// TrendChartDay is imported BY healthScoreHistory, not re-exported from it.
+import type { TrendChartDay } from "../../src/views/dashboard/HealthWidgetTypes";
 
 function bucket(date: string, avgScore: number, count = 1): TrendChartDay {
   return { date, avgScore, count };

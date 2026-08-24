@@ -33,6 +33,14 @@ import {
   DEFAULT_QUOTA_SIGNAL_IDLE_MS,
   shouldQuotaFastFail,
 } from "../../src/utils/resolvers/monitoringResolver";
+/**
+ * `fs.readFileSync` is overloaded: with an encoding it returns a string,
+ * without one a Buffer. `vi.mocked` resolves to the Buffer overload, so these
+ * sites cast a string through `as unknown as Buffer` — claiming the code under
+ * test reads bytes when it reads text. It calls `readFileSync(path, "utf-8")`;
+ * narrowing the mock to that overload says so (#499).
+ */
+const readFileSyncUtf8 = vi.mocked(fs.readFileSync as (path: string, encoding: string) => string);
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -80,9 +88,7 @@ describe("getQuotaSignalIdleMs (#3702)", () => {
       exists: true,
       isLegacy: false,
     });
-    vi.mocked(fs.readFileSync).mockReturnValue(
-      "pipeline:\n  quota_signal_idle_ms: 300000\n" as unknown as Buffer
-    );
+    readFileSyncUtf8.mockReturnValue("pipeline:\n  quota_signal_idle_ms: 300000\n");
     expect(getQuotaSignalIdleMs("/test/workspace")).toBe(300000);
   });
 
@@ -93,9 +99,7 @@ describe("getQuotaSignalIdleMs (#3702)", () => {
       exists: true,
       isLegacy: false,
     });
-    vi.mocked(fs.readFileSync).mockReturnValue(
-      "pipeline:\n  quota_signal_idle_ms: 480000\n" as unknown as Buffer
-    );
+    readFileSyncUtf8.mockReturnValue("pipeline:\n  quota_signal_idle_ms: 480000\n");
     expect(getQuotaSignalIdleMs("/test/workspace")).toBe(120000);
   });
 
@@ -105,9 +109,7 @@ describe("getQuotaSignalIdleMs (#3702)", () => {
       exists: true,
       isLegacy: false,
     });
-    vi.mocked(fs.readFileSync).mockReturnValue(
-      "pipeline:\n  stall_kill_multiplier: 4\n" as unknown as Buffer
-    );
+    readFileSyncUtf8.mockReturnValue("pipeline:\n  stall_kill_multiplier: 4\n");
     expect(getQuotaSignalIdleMs("/test/workspace")).toBe(DEFAULT_QUOTA_SIGNAL_IDLE_MS);
   });
 

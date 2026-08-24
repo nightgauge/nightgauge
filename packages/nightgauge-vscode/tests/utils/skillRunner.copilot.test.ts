@@ -126,20 +126,6 @@ vi.mock("../../src/utils/resolvers/adapterResolver", async () => {
 // Helpers
 // ---------------------------------------------------------------------------
 
-function createMockChildProcess(): ChildProcess {
-  const proc = new EventEmitter() as ChildProcess;
-  proc.stdout = new EventEmitter() as NodeJS.ReadableStream;
-  proc.stderr = new EventEmitter() as NodeJS.ReadableStream;
-  proc.stdin = {
-    write: vi.fn(),
-    end: vi.fn(),
-    destroyed: false,
-  } as unknown as NodeJS.WritableStream;
-  proc.kill = vi.fn();
-  proc.killed = false;
-  return proc;
-}
-
 /** Default skill file content returned by readFileSync mock. */
 const MOCK_SKILL_CONTENT = `---
 name: test-skill
@@ -170,6 +156,7 @@ function mockSkillFileExists() {
 import { runStageSkillHeadless, runStageSkillInteractive } from "../../src/utils/skillRunner";
 import { getCopilotModel } from "../../src/utils/incrediConfig";
 import { resolveConfigPathSync } from "../../src/utils/configPathResolver";
+import { createMockChildProcess } from "../mocks/child-process";
 
 // `runStageSkillHeadless` is callback-based rather than promise-returning, so
 // every test below dispatches it fire-and-forget and asserts on `spawn`

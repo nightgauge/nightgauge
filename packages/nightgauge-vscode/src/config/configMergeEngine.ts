@@ -131,12 +131,12 @@ export interface MergeOptions {
  * @param source - Object to merge into target (wins on conflict)
  * @returns New merged object
  */
-export function deepMerge<T extends Record<string, unknown>>(
+export function deepMerge<T extends Record<string, unknown>, S extends Record<string, unknown>>(
   target: T,
-  source: Partial<T> | undefined | null
-): T {
+  source: S | undefined | null
+): T & S {
   if (!source) {
-    return { ...target };
+    return { ...target } as T & S;
   }
 
   const result = { ...target } as Record<string, unknown>;
@@ -184,7 +184,7 @@ export function deepMerge<T extends Record<string, unknown>>(
     result[key] = sourceValue;
   }
 
-  return result as T;
+  return result as T & S;
 }
 
 /**

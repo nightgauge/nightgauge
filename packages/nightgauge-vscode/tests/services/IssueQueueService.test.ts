@@ -244,9 +244,15 @@ describe("IssueQueueService (IPC delegation)", () => {
         },
       ]);
 
-      const items = await service.dequeueIndependent(2, [10, 20]);
+      const items = await service.dequeueIndependent(2, [
+        { repo: "acme/repo", number: 10 },
+        { repo: "acme/repo", number: 20 },
+      ]);
 
-      expect(mockQueueDequeueIndependent).toHaveBeenCalledWith(2, [10, 20]);
+      expect(mockQueueDequeueIndependent).toHaveBeenCalledWith(2, [
+        { repo: "acme/repo", number: 10 },
+        { repo: "acme/repo", number: 20 },
+      ]);
       expect(items).toHaveLength(1);
       expect(items[0].issueNumber).toBe(42);
       expect(items[0].title).toBe("Dequeued item");

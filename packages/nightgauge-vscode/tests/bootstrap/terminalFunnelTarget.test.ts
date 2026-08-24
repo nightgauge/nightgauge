@@ -33,7 +33,7 @@
  * @see Issue #302 — four small silent-no-op guards
  */
 
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, type Mock } from "vitest";
 
 import {
   TERMINAL_FUNNEL_CONSEQUENCE,
@@ -41,12 +41,12 @@ import {
   type TerminalFunnelLogger,
 } from "../../src/bootstrap/services";
 
-function spyLogger(): TerminalFunnelLogger & { warn: ReturnType<typeof vi.fn> } {
+function spyLogger(): TerminalFunnelLogger & { warn: Mock } {
   return { warn: vi.fn() };
 }
 
 /** Every warn() call flattened to one searchable string. */
-function warnText(log: { warn: ReturnType<typeof vi.fn> }): string {
+function warnText(log: { warn: Mock }): string {
   return log.warn.mock.calls.map((args) => JSON.stringify(args)).join("\n");
 }
 

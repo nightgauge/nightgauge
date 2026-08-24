@@ -8,7 +8,7 @@
  */
 
 import { describe, it, expect } from "vitest";
-import type { WorkflowEvent, WorkflowAgentUsage } from "@nightgauge/sdk";
+import type { WorkflowEvent, WorkflowAgentUsage, WorkflowRun } from "@nightgauge/sdk";
 import {
   WorkflowTreeModel,
   aggregateRun,
@@ -29,11 +29,14 @@ function usage(costUsd: number, estimated = false): WorkflowAgentUsage {
 const ISSUE = 42;
 const RUN_ID = `run:${ISSUE}`;
 
+// Returns the run VARIANT, not the whole union: spreading a union-typed value
+// leaves TypeScript unable to narrow, so adding runId read as an excess
+// property against an unrelated member (#499).
 function runEvent(
   seq: number,
   status: WorkflowEvent["status"],
   backend = "sdk-fanout"
-): WorkflowEvent {
+): WorkflowRun {
   return {
     schemaVersion: 4,
     kind: "run",

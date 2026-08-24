@@ -7,7 +7,7 @@
  * @see Issue #2720 — Detect and disable repo auto-merge
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, type Mock } from "vitest";
 
 // ── VSCode mock ───────────────────────────────────────────────────────────────
 
@@ -77,7 +77,7 @@ vi.mock("fs", () => ({
 import { execFile } from "child_process";
 import { RepositorySettingsService } from "../../src/services/RepositorySettingsService";
 
-const execMock = execFile as unknown as ReturnType<typeof vi.fn>;
+const execMock = execFile as unknown as Mock;
 
 // ── helper: make a minimal Logger stub ───────────────────────────────────────
 

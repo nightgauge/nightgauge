@@ -1,0 +1,19 @@
+{
+  // The browser-driven webview tier (#499).
+  //
+  // Split from tsconfig.test.json for one reason: this code runs in a page.
+  // `page.evaluate` callbacks touch `document` and `window`, so the tier needs
+  // the DOM lib — and giving the DOM to the node-side vitest tree would hide
+  // exactly the environment confusion a typecheck is supposed to surface.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": ".",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["ES2022", "DOM"],
+    "types": ["node"]
+  },
+  "include": ["tests/playwright/**/*.ts"],
+  "exclude": ["node_modules", "dist"]
+}

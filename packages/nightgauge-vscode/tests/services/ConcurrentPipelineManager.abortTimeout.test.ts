@@ -21,7 +21,7 @@
  * per-issue lifetime cap, Go running-seat release).
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from "vitest";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 
@@ -175,8 +175,8 @@ function createMockLogger() {
 interface SlotHandle {
   resolveRun: (result: any) => void;
   rejectRun: (error: Error) => void;
-  getState: ReturnType<typeof vi.fn>;
-  stateDispose: ReturnType<typeof vi.fn>;
+  getState: Mock;
+  stateDispose: Mock;
 }
 
 /**
@@ -259,10 +259,10 @@ describe("ConcurrentPipelineManager.abortAll — deadline (#3111) and force-clea
   let mockQueue: ReturnType<typeof createMockQueueService>;
   let mockLogger: ReturnType<typeof createMockLogger>;
   let callbacks: {
-    onSlotFailed: ReturnType<typeof vi.fn>;
-    onSlotCompleted: ReturnType<typeof vi.fn>;
-    onSlotDeferred: ReturnType<typeof vi.fn>;
-    onSlotCleaned: ReturnType<typeof vi.fn>;
+    onSlotFailed: Mock;
+    onSlotCompleted: Mock;
+    onSlotDeferred: Mock;
+    onSlotCleaned: Mock;
   };
 
   beforeEach(() => {

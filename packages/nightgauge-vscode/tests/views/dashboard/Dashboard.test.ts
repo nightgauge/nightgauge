@@ -1193,7 +1193,7 @@ describe("Dashboard - Tab Selection (Issue #1539)", () => {
 
     // Get the message handler registered via onDidReceiveMessage
     const vscodeModule = vi.mocked(await import("vscode"));
-    const panel = vscodeModule.window.createWebviewPanel.mock.results[0]?.value;
+    const panel = vi.mocked(vscodeModule.window.createWebviewPanel).mock.results[0]?.value;
     const messageHandler = panel?.webview?.onDidReceiveMessage?.mock?.calls[0]?.[0];
     expect(messageHandler).toBeDefined();
 
@@ -1215,7 +1215,7 @@ describe("Dashboard - Tab Selection (Issue #1539)", () => {
     dashboard.show();
 
     const vscodeModule = vi.mocked(await import("vscode"));
-    const panel = vscodeModule.window.createWebviewPanel.mock.results[0]?.value;
+    const panel = vi.mocked(vscodeModule.window.createWebviewPanel).mock.results[0]?.value;
     const messageHandler = panel?.webview?.onDidReceiveMessage?.mock?.calls[0]?.[0];
     expect(messageHandler).toBeDefined();
 
@@ -1284,7 +1284,7 @@ describe("Dashboard - Analytics Run Selection (Issue #2580)", () => {
     // Open the panel so message handler is registered
     dashboard.show();
     const vscodeModule = vi.mocked(await import("vscode"));
-    const panel = vscodeModule.window.createWebviewPanel.mock.results[0]?.value;
+    const panel = vi.mocked(vscodeModule.window.createWebviewPanel).mock.results[0]?.value;
     const messageHandler = panel?.webview?.onDidReceiveMessage?.mock?.calls[0]?.[0];
     expect(messageHandler).toBeDefined();
 
@@ -1302,7 +1302,7 @@ describe("Dashboard - Analytics Run Selection (Issue #2580)", () => {
     // Open the panel
     dashboard.show();
     const vscodeModule = vi.mocked(await import("vscode"));
-    const panel = vscodeModule.window.createWebviewPanel.mock.results[0]?.value;
+    const panel = vi.mocked(vscodeModule.window.createWebviewPanel).mock.results[0]?.value;
     const messageHandler = panel?.webview?.onDidReceiveMessage?.mock?.calls[0]?.[0];
     expect(messageHandler).toBeDefined();
 
@@ -1328,7 +1328,7 @@ describe("Dashboard - Analytics Run Selection (Issue #2580)", () => {
 
     dashboard.show();
     const vscodeModule = vi.mocked(await import("vscode"));
-    const panel = vscodeModule.window.createWebviewPanel.mock.results[0]?.value;
+    const panel = vi.mocked(vscodeModule.window.createWebviewPanel).mock.results[0]?.value;
     const messageHandler = panel?.webview?.onDidReceiveMessage?.mock?.calls[0]?.[0];
 
     messageHandler({

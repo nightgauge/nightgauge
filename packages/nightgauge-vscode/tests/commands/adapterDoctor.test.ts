@@ -93,7 +93,12 @@ describe("mergeAdapterRows (#4031)", () => {
       ["codex"],
       [stale],
       authResult({ codex: { ok: false, reason: "not logged in" } }, [
-        { adapter: "codex", reason: "not logged in", suggestedFix: "Run `codex login`." },
+        {
+          adapter: "codex",
+          reason: "not logged in",
+          suggestedFix: "Run `codex login`.",
+          timedOut: false,
+        },
       ]),
       true
     );
@@ -199,7 +204,12 @@ describe("finalizeStageRows (#4031)", () => {
       ["codex", "claude-headless"],
       [codexHealthy],
       authResult({ codex: { ok: true }, "claude-headless": { ok: false, reason: "no auth" } }, [
-        { adapter: "claude-headless", reason: "no auth", suggestedFix: "Run `claude auth login`." },
+        {
+          adapter: "claude-headless",
+          reason: "no auth",
+          suggestedFix: "Run `claude auth login`.",
+          timedOut: false,
+        },
       ]),
       true
     );

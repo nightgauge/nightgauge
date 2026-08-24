@@ -181,7 +181,7 @@ describe("OutputWindow spawn-instant slot identity (#307 follow-up)", () => {
     // its OWN issue number — never dashboard's stale 96, never crossed
     // between the two slots.
     for (const call of appendSpy.mock.calls) {
-      const [root, issue] = call as [string, number | null];
+      const [root, issue] = call as unknown as [string, number | null];
       if (root === "/workspace/infra") {
         expect(issue).toBe(163);
       } else if (root === "/workspace/flutter") {

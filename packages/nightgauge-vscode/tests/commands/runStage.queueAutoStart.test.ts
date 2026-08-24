@@ -13,7 +13,7 @@
  * @see Issue #1831 - Unify pipeline worktree path
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from "vitest";
 import type { PipelineStage } from "@nightgauge/sdk";
 import type { QueueItem, QueueConfig } from "../../src/types/queue";
 
@@ -56,10 +56,10 @@ interface MockIssueQueueService {
 }
 
 interface MockLogger {
-  info: ReturnType<typeof vi.fn>;
-  warn: ReturnType<typeof vi.fn>;
-  error: ReturnType<typeof vi.fn>;
-  debug: ReturnType<typeof vi.fn>;
+  info: Mock;
+  warn: Mock;
+  error: Mock;
+  debug: Mock;
 }
 
 /**
@@ -128,6 +128,7 @@ describe("runStage - Queue Auto-Start (Issue #518)", () => {
     issueNumber: 101,
     title: "Add dark mode feature",
     position: 1,
+    status: "pending" as const,
     labels: ["type:feature", "priority:high"],
     addedAt: new Date().toISOString(),
   };
@@ -371,6 +372,7 @@ describe("Queue Auto-Start - Parity with HeadlessOrchestrator", () => {
       issueNumber: 99,
       title: "Implement user auth",
       position: 1,
+      status: "pending" as const,
       labels: [],
       addedAt: new Date().toISOString(),
     };
@@ -390,6 +392,7 @@ describe("Queue Auto-Start - Parity with HeadlessOrchestrator", () => {
       issueNumber: 200,
       title: "Test issue",
       position: 1,
+      status: "pending" as const,
       labels: [],
       addedAt: new Date().toISOString(),
     };

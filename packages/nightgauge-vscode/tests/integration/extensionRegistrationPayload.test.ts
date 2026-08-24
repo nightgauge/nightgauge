@@ -7,16 +7,16 @@
  * And the workspace config file watcher re-registration trigger.
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, type Mock } from "vitest";
 import { WorkspaceRegistrationPayloadBuilder } from "../../src/services/WorkspaceRegistrationPayloadBuilder";
 import type { WorkspaceConfig } from "../../src/types/WorkspaceConfig";
 
 vi.mock("vscode", () => {
   const watchers: Array<{
-    onDidChange: ReturnType<typeof vi.fn>;
-    onDidCreate: ReturnType<typeof vi.fn>;
-    onDidDelete: ReturnType<typeof vi.fn>;
-    dispose: ReturnType<typeof vi.fn>;
+    onDidChange: Mock;
+    onDidCreate: Mock;
+    onDidDelete: Mock;
+    dispose: Mock;
   }> = [];
 
   const mockWatcher = {

@@ -8,7 +8,7 @@
  * @see Issue #3722 - Scope auth cookies/tokens per host
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, type Mock } from "vitest";
 
 // ---------------------------------------------------------------------------
 // VSCode mock — factory must be self-contained (vi.mock is hoisted)
@@ -469,8 +469,8 @@ describe("TokenStorage", () => {
 
     it("moves a token stranded under the production hostname to the preset key", async () => {
       const mockSecrets = createMockSecretStorage();
-      await (mockSecrets.store as ReturnType<typeof vi.fn>)(HOST_ACCESS, "stranded-access");
-      await (mockSecrets.store as ReturnType<typeof vi.fn>)(HOST_REFRESH, "stranded-refresh");
+      await (mockSecrets.store as Mock)(HOST_ACCESS, "stranded-access");
+      await (mockSecrets.store as Mock)(HOST_REFRESH, "stranded-refresh");
 
       SecretStorageService.initialize(mockSecrets);
       TokenStorage.initialize(SecretStorageService.getInstance()!, () => "production");
@@ -488,9 +488,9 @@ describe("TokenStorage", () => {
 
     it("never overwrites a token already under the preset key", async () => {
       const mockSecrets = createMockSecretStorage();
-      await (mockSecrets.store as ReturnType<typeof vi.fn>)(HOST_ACCESS, "older-stranded");
-      await (mockSecrets.store as ReturnType<typeof vi.fn>)(PROD_ACCESS, "current-session");
-      await (mockSecrets.store as ReturnType<typeof vi.fn>)(PROD_REFRESH, "current-refresh");
+      await (mockSecrets.store as Mock)(HOST_ACCESS, "older-stranded");
+      await (mockSecrets.store as Mock)(PROD_ACCESS, "current-session");
+      await (mockSecrets.store as Mock)(PROD_REFRESH, "current-refresh");
 
       SecretStorageService.initialize(mockSecrets);
       TokenStorage.initialize(SecretStorageService.getInstance()!, () => "production");
@@ -506,7 +506,7 @@ describe("TokenStorage", () => {
 
     it("is idempotent — a second run is a no-op", async () => {
       const mockSecrets = createMockSecretStorage();
-      await (mockSecrets.store as ReturnType<typeof vi.fn>)(HOST_ACCESS, "stranded-access");
+      await (mockSecrets.store as Mock)(HOST_ACCESS, "stranded-access");
 
       SecretStorageService.initialize(mockSecrets);
       TokenStorage.initialize(SecretStorageService.getInstance()!, () => "production");
@@ -521,7 +521,7 @@ describe("TokenStorage", () => {
     it("leaves an unrelated custom-host bucket untouched", async () => {
       const CUSTOM = "nightgauge.platform.my.platform.example.com.accessToken";
       const mockSecrets = createMockSecretStorage();
-      await (mockSecrets.store as ReturnType<typeof vi.fn>)(CUSTOM, "custom-token");
+      await (mockSecrets.store as Mock)(CUSTOM, "custom-token");
 
       SecretStorageService.initialize(mockSecrets);
       TokenStorage.initialize(SecretStorageService.getInstance()!, () => "production");
@@ -555,24 +555,12 @@ describe("TokenStorage", () => {
     it("copies all legacy unscoped tokens to production-scoped keys", async () => {
       const mockSecrets = createMockSecretStorage();
       // Seed legacy keys
-      await (mockSecrets.store as ReturnType<typeof vi.fn>)(
-        SECRET_KEYS.platformAccessToken,
-        "old-access"
-      );
-      await (mockSecrets.store as ReturnType<typeof vi.fn>)(
-        SECRET_KEYS.platformRefreshToken,
-        "old-refresh"
-      );
-      await (mockSecrets.store as ReturnType<typeof vi.fn>)(
-        SECRET_KEYS.platformTokenExpiresAt,
-        "2026-01-01T00:00:00Z"
-      );
-      await (mockSecrets.store as ReturnType<typeof vi.fn>)(
-        SECRET_KEYS.platformUserEmail,
-        "user@example.com"
-      );
-      await (mockSecrets.store as ReturnType<typeof vi.fn>)(SECRET_KEYS.platformUserTier, "pro");
-      await (mockSecrets.store as ReturnType<typeof vi.fn>)(SECRET_KEYS.platformUserRole, "admin");
+      await (mockSecrets.store as Mock)(SECRET_KEYS.platformAccessToken, "old-access");
+      await (mockSecrets.store as Mock)(SECRET_KEYS.platformRefreshToken, "old-refresh");
+      await (mockSecrets.store as Mock)(SECRET_KEYS.platformTokenExpiresAt, "2026-01-01T00:00:00Z");
+      await (mockSecrets.store as Mock)(SECRET_KEYS.platformUserEmail, "user@example.com");
+      await (mockSecrets.store as Mock)(SECRET_KEYS.platformUserTier, "pro");
+      await (mockSecrets.store as Mock)(SECRET_KEYS.platformUserRole, "admin");
 
       SecretStorageService.initialize(mockSecrets);
       TokenStorage.initialize(SecretStorageService.getInstance()!, () => "production");
@@ -609,10 +597,7 @@ describe("TokenStorage", () => {
 
     it("deletes legacy keys after migration", async () => {
       const mockSecrets = createMockSecretStorage();
-      await (mockSecrets.store as ReturnType<typeof vi.fn>)(
-        SECRET_KEYS.platformAccessToken,
-        "old-access"
-      );
+      await (mockSecrets.store as Mock)(SECRET_KEYS.platformAccessToken, "old-access");
 
       SecretStorageService.initialize(mockSecrets);
       TokenStorage.initialize(SecretStorageService.getInstance()!, () => "production");
@@ -645,10 +630,7 @@ describe("TokenStorage", () => {
 
     it("is idempotent — second call cleans up remaining legacy keys without overwriting new ones", async () => {
       const mockSecrets = createMockSecretStorage();
-      await (mockSecrets.store as ReturnType<typeof vi.fn>)(
-        SECRET_KEYS.platformAccessToken,
-        "old-access"
-      );
+      await (mockSecrets.store as Mock)(SECRET_KEYS.platformAccessToken, "old-access");
 
       SecretStorageService.initialize(mockSecrets);
       TokenStorage.initialize(SecretStorageService.getInstance()!, () => "production");
@@ -659,12 +641,9 @@ describe("TokenStorage", () => {
       vi.clearAllMocks();
 
       // Simulate legacy key still present (e.g. partial cleanup)
-      await (mockSecrets.store as ReturnType<typeof vi.fn>)(
-        SECRET_KEYS.platformAccessToken,
-        "old-access"
-      );
+      await (mockSecrets.store as Mock)(SECRET_KEYS.platformAccessToken, "old-access");
       // But production key also exists now
-      await (mockSecrets.store as ReturnType<typeof vi.fn>)(
+      await (mockSecrets.store as Mock)(
         "nightgauge.platform.production.accessToken",
         "migrated-access"
       );

@@ -7,7 +7,7 @@
  * now records the REAL cause (status + body) so the workspace-sync UI can name
  * it, and that a success clears the detail so a recovered sync isn't sticky.
  */
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from "vitest";
 import { AgentRegistrationService } from "../../src/services/AgentRegistrationService";
 
 vi.mock("vscode", () => ({
@@ -36,7 +36,7 @@ const PAYLOAD = {
 };
 
 describe("AgentRegistrationService failure detail (#360)", () => {
-  let mockFetch: ReturnType<typeof vi.fn>;
+  let mockFetch: Mock;
 
   beforeEach(() => {
     mockFetch = vi.fn();

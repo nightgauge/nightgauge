@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi, type Mock } from "vitest";
 import { OutputWindowState } from "../../../src/views/outputWindow/OutputWindowState";
 
 /**
@@ -11,7 +11,7 @@ import { OutputWindowState } from "../../../src/views/outputWindow/OutputWindowS
  * See docs/EXTENSION_HOST_CRASH_DIAGNOSIS.md — Suspect 2.
  */
 describe("OutputWindowState — debounced persistence", () => {
-  let memento: { update: ReturnType<typeof vi.fn>; get: ReturnType<typeof vi.fn> };
+  let memento: { update: Mock; get: Mock };
 
   beforeEach(() => {
     vi.useFakeTimers();

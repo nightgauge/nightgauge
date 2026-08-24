@@ -39,20 +39,6 @@ vi.mock("fs", () => ({
   readFileSync: vi.fn(),
 }));
 
-function createMockChildProcess(): ChildProcess {
-  const proc = new EventEmitter() as ChildProcess;
-  proc.stdout = new EventEmitter() as NodeJS.ReadableStream;
-  proc.stderr = new EventEmitter() as NodeJS.ReadableStream;
-  proc.stdin = {
-    write: vi.fn(),
-    end: vi.fn(),
-    destroyed: false,
-  } as unknown as NodeJS.WritableStream;
-  proc.kill = vi.fn();
-  proc.killed = false;
-  return proc;
-}
-
 vi.mock("child_process", async () => {
   // Since #79 the extension composes no skill text of its own: it shells out
   // to `nightgauge skill render`. Answer that one call with the shared
@@ -146,6 +132,7 @@ vi.mock("../../src/utils/resolvers/adapterResolver", async () => {
 });
 
 import { runStageSkillHeadless } from "../../src/utils/skillRunner";
+import { createMockChildProcess } from "../mocks/child-process";
 
 let mockProcess: ChildProcess;
 

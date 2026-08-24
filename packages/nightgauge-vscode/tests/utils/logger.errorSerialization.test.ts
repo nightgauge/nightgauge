@@ -9,7 +9,7 @@
  * @see Issue #1491 - Batch progress/result persistence always fails with empty error
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, type Mock } from "vitest";
 import { Logger } from "../../src/utils/logger";
 
 // Mock vscode module
@@ -28,7 +28,7 @@ import * as vscode from "vscode";
 
 describe("Logger — Error serialization in formatMessage", () => {
   let logger: Logger;
-  let mockAppendLine: ReturnType<typeof vi.fn>;
+  let mockAppendLine: Mock;
 
   beforeEach(() => {
     mockAppendLine = vi.fn();
@@ -37,7 +37,7 @@ describe("Logger — Error serialization in formatMessage", () => {
       show: vi.fn(),
       clear: vi.fn(),
       dispose: vi.fn(),
-    } as unknown as vscode.OutputChannel);
+    } as unknown as vscode.LogOutputChannel);
     logger = new Logger("Test");
   });
 

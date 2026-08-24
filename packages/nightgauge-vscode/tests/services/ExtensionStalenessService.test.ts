@@ -26,7 +26,7 @@ function silentLogger() {
     warn: () => {},
     error: () => {},
     debug: () => {},
-  } as unknown as Parameters<typeof ExtensionStalenessService.prototype.constructor>[2];
+  } as unknown as ConstructorParameters<typeof ExtensionStalenessService>[2];
 }
 
 async function gitInit(dir: string): Promise<void> {

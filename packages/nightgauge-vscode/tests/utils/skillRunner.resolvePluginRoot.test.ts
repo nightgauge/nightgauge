@@ -36,8 +36,9 @@ vi.mock("child_process", () => ({
 const HOOKS = "hooks/hooks.json";
 
 function setWorkspaceFolders(paths: string[]): void {
-  (vscode.workspace as { workspaceFolders: Array<{ uri: { fsPath: string } }> }).workspaceFolders =
-    paths.map((p) => ({ uri: { fsPath: p } }));
+  (
+    vscode.workspace as unknown as { workspaceFolders: Array<{ uri: { fsPath: string } }> }
+  ).workspaceFolders = paths.map((p) => ({ uri: { fsPath: p } }));
 }
 
 describe("resolvePluginRoot", () => {

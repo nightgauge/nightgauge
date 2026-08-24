@@ -5,7 +5,7 @@
  * @see Issue #2091 - Migrated from PlatformApiClient HTTP to Go IPC
  */
 
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, vi, type Mock } from "vitest";
 import * as vscode from "vscode";
 import { registerManageSubscriptionCommand } from "../../src/commands/manageSubscription";
 import { IpcClient } from "../../src/services/IpcClient";
@@ -194,7 +194,7 @@ describe("registerManageSubscriptionCommand", () => {
   // the user their session expired, and defers the terminal "session expired"
   // prompt to TokenRefreshManager to avoid double-prompting (#3754).
   describe("auth-error handling (#3754)", () => {
-    let mockTokenRefresher: { forceRefresh: ReturnType<typeof vi.fn> };
+    let mockTokenRefresher: { forceRefresh: Mock };
 
     /** Re-register the command with a refresher and return its handler. */
     function handlerWithRefresher(): () => Promise<void> {

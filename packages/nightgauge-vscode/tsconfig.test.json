@@ -1,0 +1,27 @@
+{
+  // Typecheck the test tree — the thing nothing did until #499.
+  //
+  // `tsconfig.json` covers `src/**` only, vitest transforms through esbuild
+  // (transpile-only, so `import type` is erased unresolved), and eslint
+  // registers the TS parser for tests without a `project`, so no type-aware
+  // rule ever runs. The result was that a type-only import could name an
+  // export that no longer exists and the suite stayed green.
+  //
+  // `src` is included as well, not to check it twice — `npm run build:types`
+  // already does that — but because a test's imports must resolve against the
+  // real source, not against stale `dist/*.d.ts`.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": ".",
+    // vitest and playwright load these through esbuild/tsx as ES modules, so
+    // `import.meta` is legal in them and CommonJS resolution is not what runs.
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    // `globals: true` in vitest.config.ts — describe/it/expect are ambient.
+    "types": ["node", "vitest/globals"]
+  },
+  "include": ["src/**/*", "tests/**/*.ts", "scripts/**/*.ts"],
+  // The browser tier needs the DOM lib and has its own config.
+  "exclude": ["node_modules", "dist", "tests/playwright/**"]
+}

@@ -8,7 +8,7 @@
  * @see Issue #3337 — Phase 4: Promote Machine Tier to First-Class
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, type Mock } from "vitest";
 import * as vscode from "vscode";
 
 // ── Hoisted mocks ─────────────────────────────────────────────────────────────
@@ -82,11 +82,11 @@ vi.mock("vscode", () => ({
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 async function getCommandHandler(): Promise<() => Promise<void>> {
-  const { registerEditTeamConfigCommand } = await import("../../../src/commands/editTeamConfig");
+  const { registerEditTeamConfigCommand } = await import("../../src/commands/editTeamConfig");
   registerEditTeamConfigCommand();
   const handler = (
-    mockRegisterCommand as unknown as Record<string, unknown>
-  )._getLastHandler() as () => Promise<void>;
+    mockRegisterCommand as unknown as { _getLastHandler: () => () => Promise<void> }
+  )._getLastHandler();
   return handler;
 }
 
@@ -113,7 +113,7 @@ describe("registerEditTeamConfigCommand", () => {
   });
 
   it("registers the command with the correct ID", async () => {
-    const { registerEditTeamConfigCommand } = await import("../../../src/commands/editTeamConfig");
+    const { registerEditTeamConfigCommand } = await import("../../src/commands/editTeamConfig");
     registerEditTeamConfigCommand();
     expect(mockRegisterCommand).toHaveBeenCalledWith(
       "nightgauge.editTeamConfig",
@@ -137,7 +137,7 @@ describe("registerEditTeamConfigCommand", () => {
 
     const statusItem = mockCreateStatusBarItem.mock.results[0]?.value as {
       text: string;
-      show: ReturnType<typeof vi.fn>;
+      show: Mock;
     };
     expect(statusItem).toBeDefined();
     expect(statusItem.show).toHaveBeenCalled();

@@ -9,7 +9,7 @@
  * commands update the correct repo's state even in a multi-repo workspace.
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, type Mock } from "vitest";
 import * as vscode from "vscode";
 import { registerSortRepositoriesViewCommand } from "../../src/commands/sortRepositoriesView";
 import { registerFilterRepositoriesViewCommand } from "../../src/commands/filterRepositoriesView";
@@ -358,7 +358,7 @@ describe("searchRepositoriesView command", () => {
   });
 
   it("reads current search text from the correct repo on open", async () => {
-    (provider.getFilterForStatus as ReturnType<typeof vi.fn>).mockReturnValue({
+    (provider.getFilterForStatus as Mock).mockReturnValue({
       priority: "all",
       size: "all",
       component: "all",

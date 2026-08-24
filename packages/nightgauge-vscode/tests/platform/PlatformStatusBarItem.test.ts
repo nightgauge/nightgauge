@@ -13,7 +13,7 @@
  * @see Issue #2091 - Remove PlatformApiClient HTTP code and consolidate types
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, type Mock } from "vitest";
 
 // ---------------------------------------------------------------------------
 // VSCode mock — factory must be self-contained (vi.mock is hoisted)
@@ -102,9 +102,9 @@ type MockItem = {
   tooltip: string;
   backgroundColor: unknown;
   command: unknown;
-  show: ReturnType<typeof vi.fn>;
-  hide: ReturnType<typeof vi.fn>;
-  dispose: ReturnType<typeof vi.fn>;
+  show: Mock;
+  hide: Mock;
+  dispose: Mock;
 };
 
 function createMockItem(): MockItem {
@@ -157,9 +157,7 @@ describe("PlatformStatusBarItem", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     currentMockItem = createMockItem();
-    (vscode.window.createStatusBarItem as ReturnType<typeof vi.fn>).mockReturnValue(
-      currentMockItem
-    );
+    (vscode.window.createStatusBarItem as Mock).mockReturnValue(currentMockItem);
   });
 
   describe("initial state", () => {

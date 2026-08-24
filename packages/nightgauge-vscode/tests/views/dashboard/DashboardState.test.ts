@@ -25,6 +25,20 @@ vi.mock("vscode", () => ({
 
 import { DashboardState } from "../../../src/views/dashboard/DashboardState";
 
+/**
+ * `DashboardState.sessionStartTime` is private, and this file asserts on it
+ * directly 28 times — the session-rollover behaviour has no public surface.
+ *
+ * #499 turned that reach-in into 28 type errors when the test tree came under
+ * `tsc`. Naming it once here keeps the reach-in deliberate and greppable
+ * instead of scattering an inline cast at every call site: if the field is
+ * renamed, exactly one line needs updating and the failure points at this
+ * comment.
+ */
+function sessionStartTime(state: DashboardState): Date {
+  return (state as unknown as { sessionStartTime: Date }).sessionStartTime;
+}
+
 describe("DashboardState - Session Initialization", () => {
   let workspaceState: vscode.Memento;
 
@@ -47,7 +61,7 @@ describe("DashboardState - Session Initialization", () => {
 
       // Session should start at midnight of current day
       const expectedMidnight = new Date(2026, 1, 4, 0, 0, 0, 0);
-      expect(state.sessionStartTime.getTime()).toBe(expectedMidnight.getTime());
+      expect(sessionStartTime(state).getTime()).toBe(expectedMidnight.getTime());
     });
 
     it("should restore session when stored session is within current calendar day", () => {
@@ -62,7 +76,7 @@ describe("DashboardState - Session Initialization", () => {
       const state = new DashboardState(workspaceState);
 
       // Should restore the 9 AM session start
-      expect(state.sessionStartTime.getTime()).toBe(storedTime.getTime());
+      expect(sessionStartTime(state).getTime()).toBe(storedTime.getTime());
     });
 
     it("should start new session when stored session is from previous day", () => {
@@ -79,7 +93,7 @@ describe("DashboardState - Session Initialization", () => {
 
       // Should start new session at midnight today
       const expectedMidnight = new Date(2026, 1, 4, 0, 0, 0, 0);
-      expect(state.sessionStartTime.getTime()).toBe(expectedMidnight.getTime());
+      expect(sessionStartTime(state).getTime()).toBe(expectedMidnight.getTime());
     });
 
     it("should handle midnight boundary correctly (11:59 PM → 12:01 AM = new session)", () => {
@@ -96,7 +110,7 @@ describe("DashboardState - Session Initialization", () => {
 
       // Should start new session at midnight today
       const expectedMidnight = new Date(2026, 1, 4, 0, 0, 0, 0);
-      expect(state.sessionStartTime.getTime()).toBe(expectedMidnight.getTime());
+      expect(sessionStartTime(state).getTime()).toBe(expectedMidnight.getTime());
     });
   });
 
@@ -116,7 +130,7 @@ describe("DashboardState - Session Initialization", () => {
       const state = new DashboardState(workspaceState);
 
       // Should migrate and restore the 8 AM session
-      expect(state.sessionStartTime.getTime()).toBe(oldSessionTime.getTime());
+      expect(sessionStartTime(state).getTime()).toBe(oldSessionTime.getTime());
 
       // Should have written V2 key
       const v2Key = workspaceState.get<string>("nightgauge.dashboard.sessionStart.v2");
@@ -137,7 +151,7 @@ describe("DashboardState - Session Initialization", () => {
 
       // Should start new session at midnight today
       const expectedMidnight = new Date(2026, 1, 4, 0, 0, 0, 0);
-      expect(state.sessionStartTime.getTime()).toBe(expectedMidnight.getTime());
+      expect(sessionStartTime(state).getTime()).toBe(expectedMidnight.getTime());
     });
 
     it("should not migrate if V2 key already exists", () => {
@@ -156,7 +170,7 @@ describe("DashboardState - Session Initialization", () => {
       const state = new DashboardState(workspaceState);
 
       // Should use V2 value, not V1
-      expect(state.sessionStartTime.getTime()).toBe(v2Time.getTime());
+      expect(sessionStartTime(state).getTime()).toBe(v2Time.getTime());
     });
   });
 
@@ -173,7 +187,7 @@ describe("DashboardState - Session Initialization", () => {
 
       // Should fall back to midnight today
       const expectedMidnight = new Date(2026, 1, 4, 0, 0, 0, 0);
-      expect(state.sessionStartTime.getTime()).toBe(expectedMidnight.getTime());
+      expect(sessionStartTime(state).getTime()).toBe(expectedMidnight.getTime());
     });
 
     it("should handle null workspaceState gracefully (in-memory only mode)", () => {
@@ -183,8 +197,8 @@ describe("DashboardState - Session Initialization", () => {
       expect(() => {
         const state = new DashboardState(undefined as any);
         // Verify session start time is initialized
-        expect(state.sessionStartTime).toBeInstanceOf(Date);
-        expect(!isNaN(state.sessionStartTime.getTime())).toBe(true);
+        expect(sessionStartTime(state)).toBeInstanceOf(Date);
+        expect(!isNaN(sessionStartTime(state).getTime())).toBe(true);
       }).not.toThrow();
     });
 
@@ -200,7 +214,7 @@ describe("DashboardState - Session Initialization", () => {
 
       // Should fall back to midnight today
       const expectedMidnight = new Date(2026, 1, 4, 0, 0, 0, 0);
-      expect(state.sessionStartTime.getTime()).toBe(expectedMidnight.getTime());
+      expect(sessionStartTime(state).getTime()).toBe(expectedMidnight.getTime());
     });
   });
 });
@@ -225,13 +239,13 @@ describe("DashboardState - Session Reset", () => {
 
     // Initial session start is at midnight
     const initialMidnight = new Date(2026, 1, 4, 0, 0, 0, 0);
-    expect(state.sessionStartTime.getTime()).toBe(initialMidnight.getTime());
+    expect(sessionStartTime(state).getTime()).toBe(initialMidnight.getTime());
 
     // Reset session
     await state.resetSession();
 
     // Should still be at midnight (same day)
-    expect(state.sessionStartTime.getTime()).toBe(initialMidnight.getTime());
+    expect(sessionStartTime(state).getTime()).toBe(initialMidnight.getTime());
   });
 
   it("should persist to SESSION_START_KEY_V2", async () => {
@@ -289,7 +303,7 @@ describe("DashboardState - Helper Methods", () => {
       const state = new DashboardState(createMockMemento());
       const expectedMidnight = new Date(2026, 1, 4, 0, 0, 0, 0);
 
-      expect(state.sessionStartTime.getTime()).toBe(expectedMidnight.getTime());
+      expect(sessionStartTime(state).getTime()).toBe(expectedMidnight.getTime());
     });
 
     it("should handle edge case at exact midnight", () => {
@@ -298,7 +312,7 @@ describe("DashboardState - Helper Methods", () => {
 
       const state = new DashboardState(createMockMemento());
 
-      expect(state.sessionStartTime.getTime()).toBe(midnight.getTime());
+      expect(sessionStartTime(state).getTime()).toBe(midnight.getTime());
     });
 
     it("should handle edge case near midnight (23:59:59)", () => {
@@ -308,7 +322,7 @@ describe("DashboardState - Helper Methods", () => {
       const state = new DashboardState(createMockMemento());
       const expectedMidnight = new Date(2026, 1, 4, 0, 0, 0, 0);
 
-      expect(state.sessionStartTime.getTime()).toBe(expectedMidnight.getTime());
+      expect(sessionStartTime(state).getTime()).toBe(expectedMidnight.getTime());
     });
   });
 
@@ -326,7 +340,7 @@ describe("DashboardState - Helper Methods", () => {
       const state = new DashboardState(workspaceState);
 
       // Should restore the morning session (same day)
-      expect(state.sessionStartTime.getTime()).toBe(morningSession.getTime());
+      expect(sessionStartTime(state).getTime()).toBe(morningSession.getTime());
     });
 
     it("should return false for dates from previous days", () => {
@@ -343,7 +357,7 @@ describe("DashboardState - Helper Methods", () => {
 
       // Should NOT restore yesterday's session
       const expectedMidnight = new Date(2026, 1, 4, 0, 0, 0, 0);
-      expect(state.sessionStartTime.getTime()).toBe(expectedMidnight.getTime());
+      expect(sessionStartTime(state).getTime()).toBe(expectedMidnight.getTime());
     });
 
     it("should return false for dates from future days", () => {
@@ -360,7 +374,7 @@ describe("DashboardState - Helper Methods", () => {
 
       // Should NOT use future session
       const expectedMidnight = new Date(2026, 1, 4, 0, 0, 0, 0);
-      expect(state.sessionStartTime.getTime()).toBe(expectedMidnight.getTime());
+      expect(sessionStartTime(state).getTime()).toBe(expectedMidnight.getTime());
     });
 
     it("should handle midnight boundary (23:59 same day, 00:01 next day)", () => {
@@ -372,7 +386,7 @@ describe("DashboardState - Helper Methods", () => {
       workspaceState.update("nightgauge.dashboard.sessionStart.v2", almostMidnight.toISOString());
 
       let state = new DashboardState(workspaceState);
-      expect(state.sessionStartTime.getTime()).toBe(almostMidnight.getTime());
+      expect(sessionStartTime(state).getTime()).toBe(almostMidnight.getTime());
 
       // Test 00:01 next day
       const afterMidnight = new Date(2026, 1, 5, 0, 1, 0);
@@ -385,7 +399,7 @@ describe("DashboardState - Helper Methods", () => {
 
       // Should start new session at midnight of Feb 5
       const expectedMidnight = new Date(2026, 1, 5, 0, 0, 0, 0);
-      expect(state.sessionStartTime.getTime()).toBe(expectedMidnight.getTime());
+      expect(sessionStartTime(state).getTime()).toBe(expectedMidnight.getTime());
     });
   });
 });
@@ -409,7 +423,7 @@ describe("DashboardState - Session Filtering", () => {
     const state = new DashboardState(workspaceState);
 
     // Session starts at midnight
-    expect(state.sessionStartTime.getTime()).toBe(new Date(2026, 1, 4, 0, 0, 0, 0).getTime());
+    expect(sessionStartTime(state).getTime()).toBe(new Date(2026, 1, 4, 0, 0, 0, 0).getTime());
 
     // getSessionRuns() would filter based on sessionStartTime
     // (Full test requires mock history, which is tested in integration)
@@ -423,7 +437,7 @@ describe("DashboardState - Session Filtering", () => {
 
     // Session should start at midnight of current day
     const midnight = new Date(2026, 1, 4, 0, 0, 0, 0);
-    expect(state.sessionStartTime.getTime()).toBe(midnight.getTime());
+    expect(sessionStartTime(state).getTime()).toBe(midnight.getTime());
 
     // Runs before midnight should be excluded by getSessionRuns()
   });
@@ -434,7 +448,7 @@ describe("DashboardState - Session Filtering", () => {
     vi.setSystemTime(morning);
 
     let state = new DashboardState(workspaceState);
-    const initialSession = state.sessionStartTime;
+    const initialSession = sessionStartTime(state);
 
     // Simulate VSCode restart: 3 PM same day
     const afternoon = new Date(2026, 1, 4, 15, 0, 0);
@@ -444,7 +458,7 @@ describe("DashboardState - Session Filtering", () => {
     state = new DashboardState(workspaceState);
 
     // Should restore the same session start time
-    expect(state.sessionStartTime.getTime()).toBe(initialSession.getTime());
+    expect(sessionStartTime(state).getTime()).toBe(initialSession.getTime());
   });
 });
 
@@ -470,7 +484,7 @@ describe("DashboardState - Backward Compatibility", () => {
     const state = new DashboardState(workspaceState);
 
     // Should restore from old key
-    expect(state.sessionStartTime.getTime()).toBe(oldSessionTime.getTime());
+    expect(sessionStartTime(state).getTime()).toBe(oldSessionTime.getTime());
   });
 
   it("should migrate data if old session is within current day", () => {
@@ -486,7 +500,7 @@ describe("DashboardState - Backward Compatibility", () => {
     // Should have migrated to V2 key
     const v2Value = workspaceState.get<string>("nightgauge.dashboard.sessionStart.v2");
     expect(v2Value).toBe(oldSessionTime.toISOString());
-    expect(state.sessionStartTime.getTime()).toBe(oldSessionTime.getTime());
+    expect(sessionStartTime(state).getTime()).toBe(oldSessionTime.getTime());
   });
 
   it("should not break existing users on upgrade", () => {
@@ -503,7 +517,7 @@ describe("DashboardState - Backward Compatibility", () => {
 
     // Should start fresh session today
     const expectedMidnight = new Date(2026, 1, 4, 0, 0, 0, 0);
-    expect(state.sessionStartTime.getTime()).toBe(expectedMidnight.getTime());
+    expect(sessionStartTime(state).getTime()).toBe(expectedMidnight.getTime());
   });
 });
 

@@ -9,7 +9,7 @@
  * tabs. These tests assert Path 3 now no-ops when the merged config is
  * unchanged, and still fires when it actually changes.
  */
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from "vitest";
 import { RepositoriesTreeProvider } from "../../src/views/RepositoriesTreeProvider";
 import type { WorkspaceManager } from "../../src/services/WorkspaceManager";
 import type { IWorkItemProvider } from "../../src/services/types/WorkItemProvider";
@@ -119,7 +119,7 @@ function makeWorkspaceManager(): WorkspaceManager {
   } as unknown as WorkspaceManager;
 }
 
-function makeService(): { service: IWorkItemProvider; clearCache: ReturnType<typeof vi.fn> } {
+function makeService(): { service: IWorkItemProvider; clearCache: Mock } {
   const items = new MockEventEmitter<void>();
   const clearCache = vi.fn();
   const service = {

@@ -76,7 +76,9 @@ describe("logger.ts — shared channel consolidation (#749)", () => {
 
     expect(vscode.window.createOutputChannel).toHaveBeenCalledTimes(1);
     expect(main.appendLine).toHaveBeenCalledTimes(1);
-    expect(main.appendLine.mock.calls[0][0]).toContain("Activating Nightgauge extension");
+    expect(vi.mocked(main.appendLine).mock.calls[0][0]).toContain(
+      "Activating Nightgauge extension"
+    );
   });
 
   it("redacts secrets on the prefixed wrapper before they reach the channel", () => {
@@ -86,7 +88,7 @@ describe("logger.ts — shared channel consolidation (#749)", () => {
 
     prefixed.appendLine(`Installed with token ${token}`);
 
-    const written = main.appendLine.mock.calls[0][0] as string;
+    const written = vi.mocked(main.appendLine).mock.calls[0][0] as string;
     expect(written).not.toContain(token);
     expect(written).toContain("[REDACTED:GH_TOKEN]");
   });
@@ -127,7 +129,7 @@ describe("logger.ts — shared channel consolidation (#749)", () => {
     logDiagnosticMirror("platform.getCostAnalytics", 401, `unauthorized: Bearer ${token}`);
 
     expect(vscode.window.createOutputChannel).toHaveBeenCalledTimes(1);
-    const written = main.appendLine.mock.calls[0][0] as string;
+    const written = vi.mocked(main.appendLine).mock.calls[0][0] as string;
     expect(written).toContain("platform.getCostAnalytics");
     expect(written).toContain("status=401");
     expect(written).not.toContain(token);

@@ -5,7 +5,7 @@
  * for a given slot index.
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, type Mock } from "vitest";
 
 vi.mock("vscode", () => ({
   window: {
@@ -57,7 +57,7 @@ describe("SlotOutputManager - revealSlotChannel", () => {
 // idempotent per stage.
 describe("SlotOutputManager - updateStage idempotency (#230)", () => {
   let manager: SlotOutputManager;
-  let onStageChanged: ReturnType<typeof vi.fn>;
+  let onStageChanged: Mock;
 
   beforeEach(() => {
     manager = new SlotOutputManager();
@@ -100,7 +100,7 @@ describe("SlotOutputManager - updateStage idempotency (#230)", () => {
 // appendOutput/appendError to the aggregation callback verbatim.
 describe("SlotOutputManager - stage threading (#283)", () => {
   let manager: SlotOutputManager;
-  let onOutput: ReturnType<typeof vi.fn>;
+  let onOutput: Mock;
 
   beforeEach(() => {
     manager = new SlotOutputManager();

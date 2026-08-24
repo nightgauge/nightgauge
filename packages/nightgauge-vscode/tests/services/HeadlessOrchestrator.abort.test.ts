@@ -11,7 +11,7 @@
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { HeadlessOrchestrator } from "../../src/services/HeadlessOrchestrator";
-import type { PipelineStateService } from "../../src/services/PipelineStateService";
+import type { PipelineStateService, PipelineState } from "../../src/services/PipelineStateService";
 import type { Logger } from "../../src/utils/logger";
 import type { SkillRunResult } from "../../src/utils/skillRunner";
 import {
@@ -68,9 +68,12 @@ vi.mock("child_process", async () => {
   };
 });
 
-const ALL_STAGES_STATE = {
-  schema_version: "1.0",
+const ALL_STAGES_STATE: PipelineState = {
   issue_number: 42,
+  // Required PipelineState members this fixture omitted.
+  title: "Test issue",
+  branch: "feat/42-test",
+  started_at: "2026-01-01T00:00:00.000Z",
   stages: {
     "pipeline-start": { status: "complete", auto_retry_count: 0 },
     "issue-pickup": { status: "complete", auto_retry_count: 0 },
@@ -82,6 +85,9 @@ const ALL_STAGES_STATE = {
     "pipeline-finish": { status: "complete", auto_retry_count: 0 },
   },
   tokens: {
+    // Required members of PipelineStateTokens the fixture omitted.
+    input: 0,
+    output: 0,
     total_input: 0,
     total_output: 0,
     total_cache_read: 0,

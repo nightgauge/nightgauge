@@ -38,21 +38,6 @@ allowed-tools: Read Write Edit Bash
   ),
 }));
 
-// Create mock process factory
-function createMockChildProcess(): ChildProcess {
-  const proc = new EventEmitter() as ChildProcess;
-  proc.stdout = new EventEmitter() as any;
-  proc.stderr = new EventEmitter() as any;
-  proc.stdin = {
-    write: vi.fn(),
-    end: vi.fn(),
-    destroyed: false,
-  } as any;
-  proc.kill = vi.fn();
-  proc.killed = false;
-  return proc;
-}
-
 // Mock child_process module
 vi.mock("child_process", async () => {
   // Since #79 the extension composes no skill text of its own: it shells out
@@ -79,6 +64,7 @@ vi.mock("child_process", async () => {
 
 // Import after mocks
 import { runStageSkillHeadless } from "../../src/utils/skillRunner";
+import { createMockChildProcess } from "../mocks/child-process";
 
 describe("skillRunner - AskUserQuestion Loop Detection", () => {
   let mockProcess: ChildProcess;

@@ -136,20 +136,7 @@ import { Logger } from "../../src/utils/logger";
 import { getPerformanceMode, getStageEffort } from "../../src/utils/incrediConfig";
 import type { ClaudeEffort } from "../../src/utils/resolvers/stageResolver";
 import type { PipelineStage } from "@nightgauge/sdk";
-
-function createMockChildProcess(): ChildProcess {
-  const proc = new EventEmitter() as ChildProcess;
-  proc.stdout = new EventEmitter() as NodeJS.ReadableStream;
-  proc.stderr = new EventEmitter() as NodeJS.ReadableStream;
-  proc.stdin = {
-    write: vi.fn(),
-    end: vi.fn(),
-    destroyed: false,
-  } as unknown as NodeJS.WritableStream;
-  proc.kill = vi.fn();
-  proc.killed = false;
-  return proc;
-}
+import { createMockChildProcess } from "../mocks/child-process";
 
 function params(overrides: Partial<RunStageParams> = {}): RunStageParams {
   return {

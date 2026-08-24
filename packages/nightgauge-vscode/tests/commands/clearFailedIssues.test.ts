@@ -10,7 +10,7 @@
  * @see Issue #150
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, type Mock } from "vitest";
 import * as vscode from "vscode";
 import { registerClearFailedIssuesCommand } from "../../src/commands/clearFailedIssues";
 import { IpcClient } from "../../src/services/IpcClient";
@@ -43,8 +43,8 @@ vi.mock("../../src/services/CompletedIssuesService", () => ({
 }));
 
 describe("clearFailedIssues Command", () => {
-  let mockIpc: { autonomousClearIssueFailures: ReturnType<typeof vi.fn> };
-  let mockService: { getFailed: ReturnType<typeof vi.fn>; clearFailed: ReturnType<typeof vi.fn> };
+  let mockIpc: { autonomousClearIssueFailures: Mock };
+  let mockService: { getFailed: Mock; clearFailed: Mock };
   let commandHandler: () => Promise<void>;
 
   beforeEach(() => {

@@ -120,10 +120,18 @@ export interface HistoryIndexEntry {
   /** Active focus lens name when this run started, if any (Issue #2460) */
   focus_lens_active?: string;
   cost_usd: number;
-  total_input_tokens: number;
-  total_output_tokens: number;
-  total_cache_read_tokens: number;
-  total_cache_creation_tokens: number;
+  /**
+   * Token totals. OPTIONAL because entries written before these fields existed
+   * are still on disk and still read — `isGhostEntry` has always coalesced them
+   * with `?? 0`, which was dead code while the type declared them required.
+   * Surfaced by #499: a test constructing a legacy entry could not typecheck
+   * against a type that denied legacy entries exist. The writer always sets
+   * them; only historical readers see them absent.
+   */
+  total_input_tokens?: number;
+  total_output_tokens?: number;
+  total_cache_read_tokens?: number;
+  total_cache_creation_tokens?: number;
   duration_ms: number;
   stage_count: number;
   /** Total stage-detail count, including failed stages (restart dedupe). Always written on v2 indexes. */

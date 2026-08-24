@@ -114,6 +114,7 @@ vi.mock("child_process", async () => {
 });
 
 import { runStageSkillHeadless, type ToolCallLogEntry } from "../../src/utils/skillRunner";
+import { createMockChildProcess } from "../mocks/child-process";
 
 // ─────────────────────────── captured stdout ────────────────────────────────
 //
@@ -167,20 +168,6 @@ const BATCHED_RESULTS_ENVELOPE = String.raw`{"type":"user","message":{"role":"us
 const BATCHED_PHASE_ENVELOPE = String.raw`{"type":"user","message":{"role":"user","content":[{"tool_use_id":"toolu_0155EMVoQQQgsgmpqXhe46Fy","type":"tool_result","content":"<!-- phase:start name=\"verify\" index=2 total=3 stage=\"feature-validate\" -->","is_error":false},{"tool_use_id":"toolu_012do5Z799oyEA7e8v41vWMB","type":"tool_result","content":"<!-- phase:start name=\"build\" index=1 total=3 stage=\"feature-validate\" -->","is_error":false}]},"parent_tool_use_id":null,"session_id":"sess-phase-0000","uuid":"00000000-0000-0000-0000-000000000000","timestamp":"2026-08-16T17:15:21.829Z"}`;
 
 // ───────────────────────────── harness ──────────────────────────────────────
-
-function createMockChildProcess(): ChildProcess {
-  const proc = new EventEmitter() as ChildProcess;
-  proc.stdout = new EventEmitter() as NodeJS.ReadableStream;
-  proc.stderr = new EventEmitter() as NodeJS.ReadableStream;
-  proc.stdin = {
-    write: vi.fn(),
-    end: vi.fn(),
-    destroyed: false,
-  } as unknown as NodeJS.WritableStream;
-  proc.kill = vi.fn();
-  proc.killed = false;
-  return proc;
-}
 
 interface StageObservation {
   /** The wire-shape `tool_calls` array this stage would forward to Go. */

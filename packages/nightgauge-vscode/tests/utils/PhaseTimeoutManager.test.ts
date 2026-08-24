@@ -37,7 +37,12 @@ vi.mock("vscode", () => ({
 
 vi.mock("@nightgauge/sdk", () => ({}));
 
-type PipelineStage = string;
+// The RUNTIME module is mocked away above (PhaseTimeoutManager imports it only
+// for `import type`), but the TYPE must be the real one. This file used to
+// declare `type PipelineStage = string` here, which typechecked every stage
+// name in the file against `string` and so checked nothing — #499 is what
+// surfaced it.
+import type { PipelineStage } from "@nightgauge/sdk";
 
 import {
   classifyPhase,

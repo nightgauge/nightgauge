@@ -207,7 +207,7 @@ describe("HeadlessOrchestrator deterministic-first issue-pickup (Issue #2614)", 
     vi.mocked(execSync).mockReturnValue(
       "Logged in to github.com account testuser (keyring)\n  Token: gho_fake\n  Token scopes: 'gist', 'read:org', 'repo', 'workflow'"
     );
-    vi.mocked(execFileSync).mockImplementation((cmd: string, args: unknown[]) => {
+    vi.mocked(execFileSync).mockImplementation(((cmd: string, args?: readonly string[]) => {
       const argsArr = args as string[];
       if (cmd === "git" && argsArr[0] === "branch") return "feat/2614-test\n";
       if (cmd === "gh" && argsArr[0] === "issue")
@@ -218,7 +218,7 @@ describe("HeadlessOrchestrator deterministic-first issue-pickup (Issue #2614)", 
         });
       if (cmd === "gh" && argsArr[0] === "repo") return "TestOrg/test-repo";
       return "";
-    });
+    }) as unknown as typeof execFileSync);
   });
 
   it("skips LLM subagent when deterministic context generation succeeds", async () => {

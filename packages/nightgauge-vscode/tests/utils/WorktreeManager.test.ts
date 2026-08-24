@@ -116,13 +116,13 @@ describe("WorktreeManager", () => {
         // against a guard placed AFTER the destructive cleanup.
         expect(
           execFileAsyncMock.mock.calls.some(
-            ([, args]: [string, string[]]) =>
+            ([, args]: any[]) =>
               Array.isArray(args) && args[0] === "branch" && args.includes(branch)
           )
         ).toBe(false);
         expect(
           execFileAsyncMock.mock.calls.some(
-            ([, args]: [string, string[]]) => Array.isArray(args) && args[0] === "worktree"
+            ([, args]: any[]) => Array.isArray(args) && args[0] === "worktree"
           )
         ).toBe(false);
       }
@@ -185,7 +185,7 @@ describe("WorktreeManager", () => {
       await manager.create(42, "feat/42-test", { npmInstall: false });
 
       const npmCalls = execAsyncMock.mock.calls.filter(
-        ([cmd]: [string]) => typeof cmd === "string" && cmd.includes("npm install")
+        ([cmd]: unknown[]) => typeof cmd === "string" && cmd.includes("npm install")
       );
       expect(npmCalls).toHaveLength(0);
     });
@@ -266,7 +266,7 @@ describe("WorktreeManager", () => {
 
       await manager.create(42, "feat/42-test", { npmInstall: false });
 
-      const localWrites = fsMock.writeFile.mock.calls.filter(([p]: [string]) =>
+      const localWrites = fsMock.writeFile.mock.calls.filter(([p]: any[]) =>
         String(p).endsWith("config.local.yaml")
       );
       expect(localWrites).toHaveLength(0);
@@ -320,7 +320,7 @@ describe("WorktreeManager", () => {
       );
       expect(
         execAsyncMock.mock.calls.some(
-          ([cmd]: [string]) => typeof cmd === "string" && cmd.includes("worktree remove")
+          ([cmd]: unknown[]) => typeof cmd === "string" && cmd.includes("worktree remove")
         )
       ).toBe(false);
       expect(execFileAsyncMock).not.toHaveBeenCalledWith(
@@ -396,7 +396,7 @@ describe("WorktreeManager", () => {
       );
       expect(
         execAsyncMock.mock.calls.some(
-          ([cmd]: [string]) => typeof cmd === "string" && cmd.includes("worktree remove")
+          ([cmd]: unknown[]) => typeof cmd === "string" && cmd.includes("worktree remove")
         )
       ).toBe(false);
     });
@@ -664,7 +664,7 @@ describe("WorktreeManager", () => {
       );
       expect(
         execFileAsyncMock.mock.calls.some(
-          ([, args]: [string, string[]]) =>
+          ([, args]: any[]) =>
             Array.isArray(args) &&
             args[0] === "diff" &&
             args[1] === "--stat" &&
@@ -925,7 +925,7 @@ describe("WorktreeManager", () => {
       expect(fsMock.cp).not.toHaveBeenCalled();
       expect(
         execAsyncMock.mock.calls.some(
-          ([cmd]: [string]) => typeof cmd === "string" && cmd.includes("@nightgauge/sdk")
+          ([cmd]: unknown[]) => typeof cmd === "string" && cmd.includes("@nightgauge/sdk")
         )
       ).toBe(false);
     });

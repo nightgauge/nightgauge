@@ -22,6 +22,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { AgentRegistrationService } from "../../src/services/AgentRegistrationService";
 import type { AgentRegistrationPayload } from "../../src/services/AgentRegistrationService";
 import { AgentHeartbeatService } from "../../src/services/AgentHeartbeatService";
+import { makeMockTokenStorage } from "../mocks/token-storage";
+import { makeMockLogger } from "../mocks/logger";
 
 vi.mock("vscode", () => ({}));
 
@@ -33,23 +35,6 @@ type RecordedRequest = {
   body: unknown;
   headers: Record<string, string | string[] | undefined>;
 };
-
-function makeTokenStorage(token: string | null = "test-token") {
-  return {
-    retrieve: vi.fn().mockResolvedValue(token),
-    store: vi.fn(),
-    delete: vi.fn(),
-  };
-}
-
-function makeLogger() {
-  return {
-    info: vi.fn(),
-    warn: vi.fn(),
-    error: vi.fn(),
-    debug: vi.fn(),
-  };
-}
 
 function readBody(req: http.IncomingMessage): Promise<string> {
   return new Promise((resolve) => {
@@ -134,8 +119,8 @@ describe("agent lifecycle integration", () => {
   });
 
   it("completes register → heartbeat × 2 → deregister sequence", async () => {
-    const tokenStorage = makeTokenStorage();
-    const logger = makeLogger();
+    const tokenStorage = makeMockTokenStorage();
+    const logger = makeMockLogger();
 
     const registrationService = new AgentRegistrationService(
       () => platformUrl,
@@ -187,8 +172,8 @@ describe("agent lifecycle integration", () => {
   it("includes repos field in registration payload (workspace repo sync)", async () => {
     const registrationService = new AgentRegistrationService(
       () => platformUrl,
-      makeTokenStorage(),
-      makeLogger()
+      makeMockTokenStorage(),
+      makeMockLogger()
     );
 
     await registrationService.register(REGISTRATION_PAYLOAD);
@@ -201,8 +186,8 @@ describe("agent lifecycle integration", () => {
   });
 
   it("does not send heartbeats after dispose()", async () => {
-    const tokenStorage = makeTokenStorage();
-    const logger = makeLogger();
+    const tokenStorage = makeMockTokenStorage();
+    const logger = makeMockLogger();
 
     const registrationService = new AgentRegistrationService(
       () => platformUrl,

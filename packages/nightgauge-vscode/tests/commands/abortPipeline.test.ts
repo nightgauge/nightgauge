@@ -128,7 +128,7 @@ describe("abortPipeline Command", () => {
   describe("Prerequisites Validation", () => {
     it("should return early if no workspace folder is open", async () => {
       const { getWorkspaceRoot } = await import("../../src/config/settings");
-      vi.mocked(getWorkspaceRoot).mockReturnValue(null);
+      vi.mocked(getWorkspaceRoot).mockReturnValue(undefined);
 
       await commandHandler();
 

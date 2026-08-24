@@ -17,26 +17,31 @@ import {
   ActiveIssueKnowledgeFileItem,
 } from "../../src/providers/items/ActiveIssueKnowledgeTreeItem";
 import type { PipelineStateService } from "../../src/services/PipelineStateService";
+import type { IpcClient } from "../../src/services/IpcClient";
 
 // ---------------------------------------------------------------------------
 // VSCode mock (same as unit tests)
 // ---------------------------------------------------------------------------
 
 vi.mock("vscode", () => {
-  const EventEmitter = vi.fn(function () {
+  const EventEmitter = vi.fn(function (this: Record<string, unknown>) {
     return { event: vi.fn(), fire: vi.fn(), dispose: vi.fn() };
   });
   return {
     EventEmitter,
     TreeItemCollapsibleState: { None: 0, Collapsed: 1, Expanded: 2 },
-    TreeItem: vi.fn(function (label: string, collapsibleState: number) {
+    TreeItem: vi.fn(function (
+      this: Record<string, unknown>,
+      label: string,
+      collapsibleState: number
+    ) {
       this.label = label;
       this.collapsibleState = collapsibleState;
     }),
-    ThemeIcon: vi.fn(function (id: string) {
+    ThemeIcon: vi.fn(function (this: Record<string, unknown>, id: string) {
       this.id = id;
     }),
-    ThemeColor: vi.fn(function (id: string) {
+    ThemeColor: vi.fn(function (this: Record<string, unknown>, id: string) {
       this.id = id;
     }),
     Uri: { file: (p: string) => ({ fsPath: p }) },
@@ -48,7 +53,7 @@ vi.mock("vscode", () => {
         dispose: vi.fn(),
       })),
     },
-    RelativePattern: vi.fn(function (base: string, pattern: string) {
+    RelativePattern: vi.fn(function (this: Record<string, unknown>, base: string, pattern: string) {
       this.base = base;
       this.pattern = pattern;
     }),
@@ -140,7 +145,13 @@ describe("ActiveIssueKnowledgeProvider — integration", () => {
     const provider = new ActiveIssueKnowledgeProvider(
       fixtureRoot,
       pss,
-      () => undefined // no binary — recall returns empty
+      // No binary: the IPC call rejects and fetchRecallItems' catch renders
+      // the empty state. This argument used to be `() => undefined`, written
+      // for a signature that took a factory; the constructor has taken an
+      // IpcClient for a while and nothing checked (#499).
+      {
+        knowledgeRelatedToIssue: () => Promise.reject(new Error("no binary")),
+      } as unknown as IpcClient
     );
 
     const sections = await provider.getChildren();

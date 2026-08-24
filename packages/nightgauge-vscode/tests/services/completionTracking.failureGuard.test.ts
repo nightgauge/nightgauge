@@ -12,14 +12,14 @@
  * @see Issue #1502 - Pipeline failures show as Completed in sidebar
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, type Mock } from "vitest";
 
 // ── minimal stubs ─────────────────────────────────────────────────────────────
 
 interface MockCompletedIssuesService {
-  addCompleted: ReturnType<typeof vi.fn>;
-  addFailed: ReturnType<typeof vi.fn>;
-  removeFromFailed: ReturnType<typeof vi.fn>;
+  addCompleted: Mock;
+  addFailed: Mock;
+  removeFromFailed: Mock;
 }
 
 function makeService(): MockCompletedIssuesService {

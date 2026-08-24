@@ -14,7 +14,7 @@
  * @see Issue #2090 - Migrate to IPC
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, type Mock } from "vitest";
 
 // Mock vscode (required because MachineFingerprint imports vscode)
 vi.mock("vscode", () => {
@@ -57,7 +57,7 @@ function createMockMachineFingerprint(): MachineFingerprint {
 
 function createMockIpcClient(): {
   client: IpcClient;
-  platformValidateLicense: ReturnType<typeof vi.fn>;
+  platformValidateLicense: Mock;
 } {
   const platformValidateLicense = vi.fn();
   const client = {

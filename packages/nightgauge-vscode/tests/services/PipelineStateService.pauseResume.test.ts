@@ -8,7 +8,7 @@
  * 3. pipeline.stateChanged converter reads paused from Go state
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, type Mock } from "vitest";
 
 // ---------------------------------------------------------------------------
 // Mock vscode before any imports that use it
@@ -34,8 +34,8 @@ vi.mock("vscode", () => ({
 // ---------------------------------------------------------------------------
 
 interface MockIpc {
-  call: ReturnType<typeof vi.fn>;
-  on: ReturnType<typeof vi.fn>;
+  call: Mock;
+  on: Mock;
 }
 
 function makeMockIpc(): MockIpc {

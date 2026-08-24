@@ -10,7 +10,7 @@
  * @see Issue #164 - Pipeline stages stuck in 'running' status after completion
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from "vitest";
 import type { PipelineStage } from "@nightgauge/sdk";
 
 // Mock vscode module
@@ -40,15 +40,20 @@ vi.mock("vscode", () => ({
   },
 }));
 
-// Mock types for testing
+// Mock types for testing.
+//
+// Every member is a vi.fn: the tests drive them with `.mockResolvedValue()`
+// and assert with `.toHaveBeenCalledWith()`. Declaring them as bare function
+// types made both of those properties that "do not exist" the moment the tree
+// came under tsc (#499).
 interface MockPipelineStateService {
-  completeStage: (stage: PipelineStage) => Promise<void>;
-  failStage: (stage: PipelineStage, error: string) => Promise<void>;
-  getExecutionMode: () => Promise<"automatic" | "manual" | null>;
-  isPaused: () => Promise<boolean>;
-  pausePipeline: () => Promise<void>;
-  resumePipeline: () => Promise<void>;
-  setExecutionMode: (mode: "automatic" | "manual") => Promise<void>;
+  completeStage: Mock<(stage: PipelineStage) => Promise<void>>;
+  failStage: Mock<(stage: PipelineStage, error: string) => Promise<void>>;
+  getExecutionMode: Mock<() => Promise<"automatic" | "manual" | null>>;
+  isPaused: Mock<() => Promise<boolean>>;
+  pausePipeline: Mock<() => Promise<void>>;
+  resumePipeline: Mock<() => Promise<void>>;
+  setExecutionMode: Mock<(mode: "automatic" | "manual") => Promise<void>>;
 }
 
 interface MockLogger {
@@ -417,18 +422,18 @@ describe("runStage - Stage Completion (Issue #164)", () => {
  */
 describe("runStage Command - Additional Coverage (Issue #273)", () => {
   let mockStateService: MockPipelineStateService & {
-    startStage: ReturnType<typeof vi.fn>;
-    validateStageTransition: ReturnType<typeof vi.fn>;
+    startStage: Mock;
+    validateStageTransition: Mock;
   };
   let mockLogger: MockLogger;
   let mockOutputWindow: MockOutputWindow & {
-    show: ReturnType<typeof vi.fn>;
-    setIssueNumber: ReturnType<typeof vi.fn>;
+    show: Mock;
+    setIssueNumber: Mock;
   };
   let mockStatusBar: MockStatusBar;
   let mockTreeProvider: {
-    getCurrentIssueNumber: ReturnType<typeof vi.fn>;
-    updateStageStatus: ReturnType<typeof vi.fn>;
+    getCurrentIssueNumber: Mock;
+    updateStageStatus: Mock;
   };
 
   beforeEach(() => {

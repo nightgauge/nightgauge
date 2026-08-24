@@ -4,13 +4,13 @@
  * graceful handling of a rejected refresh. Mirrors the RecoveryDialog mock.
  */
 
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import type { AdapterDoctorReport } from "../../../src/views/doctor/AdapterDoctorHtml";
 
 let capturedMessageHandler: ((msg: any) => void) | null;
 let capturedDisposeHandler: (() => void) | null;
-let createWebviewPanelMock: ReturnType<typeof vi.fn>;
-let showErrorMessageMock: ReturnType<typeof vi.fn>;
+let createWebviewPanelMock: Mock;
+let showErrorMessageMock: Mock;
 
 function buildMockPanel() {
   capturedMessageHandler = null;

@@ -13,7 +13,7 @@
  * @see Issue #1010 - Telemetry Analytics Export
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, type Mock } from "vitest";
 import { createMockMemento } from "../../mocks/memento";
 import * as vscode from "vscode";
 
@@ -21,7 +21,9 @@ import * as vscode from "vscode";
 // vscode mock
 // ============================================================================
 
-const writtenFiles = new Map<string, Buffer>();
+// writeFile hands back a Uint8Array, not a Buffer — Buffer is a subclass, so
+// the Map must hold the wider type the VS Code API actually delivers.
+const writtenFiles = new Map<string, Uint8Array>();
 
 vi.mock("vscode", () => ({
   EventEmitter: class {
@@ -59,7 +61,7 @@ vi.mock("vscode", () => ({
     showWarningMessage: vi.fn(),
     showInformationMessage: vi.fn(),
     showErrorMessage: vi.fn(),
-    showSaveDialog: vi.fn().mockResolvedValue({ fsPath: "/tmp/test-export.csv" }),
+    showSaveDialog: vi.fn().mockResolvedValue({ fsPath: "/tmp/test-export.csv" } as vscode.Uri),
     createOutputChannel: vi.fn(() => ({
       appendLine: vi.fn(),
       show: vi.fn(),
@@ -70,7 +72,7 @@ vi.mock("vscode", () => ({
   workspace: {
     getConfiguration: vi.fn(() => ({ get: vi.fn().mockReturnValue(undefined) })),
     fs: {
-      writeFile: vi.fn((uri: { fsPath: string }, data: Buffer) => {
+      writeFile: vi.fn((uri: vscode.Uri, data: Uint8Array) => {
         writtenFiles.set(uri.fsPath, data);
         return Promise.resolve();
       }),
@@ -302,7 +304,8 @@ function asDashboardPrivate(d: Dashboard): DashboardPrivate {
 function getWrittenContent(): string {
   const buf = writtenFiles.get("/tmp/test-export.csv");
   if (!buf) throw new Error("No file written to /tmp/test-export.csv");
-  return buf.toString("utf-8");
+  // Uint8Array.toString() takes no encoding argument; decode explicitly.
+  return new TextDecoder("utf-8").decode(buf);
 }
 
 function historyTarget(issueNumber = 100): {
@@ -350,12 +353,14 @@ describe("Dashboard.handleExport — post-fix (#2794)", () => {
 
     // Re-apply writeFile mock (clearAllMocks would strip it)
     vi.mocked(vscode.workspace.fs.writeFile).mockImplementation(
-      (uri: { fsPath: string }, data: Buffer) => {
+      (uri: vscode.Uri, data: Uint8Array) => {
         writtenFiles.set(uri.fsPath, data);
         return Promise.resolve();
       }
     );
-    vi.mocked(vscode.window.showSaveDialog).mockResolvedValue({ fsPath: "/tmp/test-export.csv" });
+    vi.mocked(vscode.window.showSaveDialog).mockResolvedValue({
+      fsPath: "/tmp/test-export.csv",
+    } as vscode.Uri);
 
     const workspaceState = createMockMemento();
     // Build a plain mock object rather than using new TelemetryStore() (mock is not constructable)
@@ -494,19 +499,21 @@ describe("Dashboard.handleExportAnalytics", () => {
     vi.clearAllMocks();
 
     vi.mocked(vscode.workspace.fs.writeFile).mockImplementation(
-      (uri: { fsPath: string }, data: Buffer) => {
+      (uri: vscode.Uri, data: Uint8Array) => {
         writtenFiles.set(uri.fsPath, data);
         return Promise.resolve();
       }
     );
-    vi.mocked(vscode.window.showSaveDialog).mockResolvedValue({ fsPath: "/tmp/test-export.csv" });
+    vi.mocked(vscode.window.showSaveDialog).mockResolvedValue({
+      fsPath: "/tmp/test-export.csv",
+    } as vscode.Uri);
 
     const workspaceState = createMockMemento();
     dashboard = new Dashboard(mockExtensionUri, workspaceState, workspaceRoot);
   });
 
   it("exports all-time CSV runs with non-zero cost values", async () => {
-    (ExecutionHistoryReader.readAll as ReturnType<typeof vi.fn>).mockResolvedValue([
+    (ExecutionHistoryReader.readAll as Mock).mockResolvedValue([
       makeFullRecord(100),
       makeFullRecord(101),
     ]);
@@ -524,9 +531,7 @@ describe("Dashboard.handleExportAnalytics", () => {
   });
 
   it("exports stage CSV with non-zero per-stage input tokens", async () => {
-    (ExecutionHistoryReader.readAll as ReturnType<typeof vi.fn>).mockResolvedValue([
-      makeFullRecord(100),
-    ]);
+    (ExecutionHistoryReader.readAll as Mock).mockResolvedValue([makeFullRecord(100)]);
 
     await asDashboardPrivate(dashboard).handleExportAnalytics("csv-stages", "all");
 
@@ -540,7 +545,7 @@ describe("Dashboard.handleExportAnalytics", () => {
   });
 
   it("shows warning when no records in date range", async () => {
-    (ExecutionHistoryReader.readAll as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    (ExecutionHistoryReader.readAll as Mock).mockResolvedValue([]);
 
     await asDashboardPrivate(dashboard).handleExportAnalytics("csv-runs", "all");
 
@@ -550,27 +555,25 @@ describe("Dashboard.handleExportAnalytics", () => {
   });
 
   it("uses readDateRange for last7 with correct 7-day window", async () => {
-    (ExecutionHistoryReader.readDateRange as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    (ExecutionHistoryReader.readDateRange as Mock).mockResolvedValue([]);
     vi.mocked(vscode.window.showSaveDialog).mockResolvedValue(undefined); // cancel save to skip write
 
     await asDashboardPrivate(dashboard).handleExportAnalytics("csv-runs", "last7");
 
     expect(ExecutionHistoryReader.readDateRange).toHaveBeenCalled();
-    const [, start, end] = (ExecutionHistoryReader.readDateRange as ReturnType<typeof vi.fn>).mock
-      .calls[0];
+    const [, start, end] = (ExecutionHistoryReader.readDateRange as Mock).mock.calls[0];
     const diffDays = (end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24);
     expect(diffDays).toBeGreaterThanOrEqual(6.9);
     expect(diffDays).toBeLessThanOrEqual(7.1);
   });
 
   it("uses readDateRange for last30 with correct 30-day window", async () => {
-    (ExecutionHistoryReader.readDateRange as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    (ExecutionHistoryReader.readDateRange as Mock).mockResolvedValue([]);
     vi.mocked(vscode.window.showSaveDialog).mockResolvedValue(undefined);
 
     await asDashboardPrivate(dashboard).handleExportAnalytics("csv-runs", "last30");
 
-    const [, start, end] = (ExecutionHistoryReader.readDateRange as ReturnType<typeof vi.fn>).mock
-      .calls[0];
+    const [, start, end] = (ExecutionHistoryReader.readDateRange as Mock).mock.calls[0];
     const diffDays = (end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24);
     expect(diffDays).toBeGreaterThanOrEqual(29.9);
     expect(diffDays).toBeLessThanOrEqual(30.1);

@@ -6,7 +6,7 @@
  * @see Issue #2571 - Add work item source configuration and provider selection wiring
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from "vitest";
 import { getWorkItemSourceConfig } from "../../src/config/workItemSourceSettings";
 import { ConfigBridge } from "../../src/services/ConfigBridge";
 import { DEFAULT_CONFIG } from "../../src/config/schema";
@@ -20,8 +20,8 @@ vi.mock("../../src/services/ConfigBridge", () => ({
 
 describe("getWorkItemSourceConfig", () => {
   let mockConfigBridge: {
-    isInitialized: ReturnType<typeof vi.fn>;
-    getValue: ReturnType<typeof vi.fn>;
+    isInitialized: Mock;
+    getValue: Mock;
   };
 
   beforeEach(() => {

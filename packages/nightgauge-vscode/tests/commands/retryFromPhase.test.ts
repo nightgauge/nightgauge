@@ -20,6 +20,7 @@ import type { PhaseTreeItem } from "../../src/views/items/PhaseTreeItem";
 import type { RecoveryPresenter } from "../../src/orchestrator/recovery/RecoveryCoordinator";
 import { createPhaseTracker } from "../../src/utils/phaseTracker";
 import { createStreamOutputHandler } from "../../src/utils/streamOutputHandler";
+import type { PipelineState } from "../../src/services/PipelineStateService";
 
 const mocks = vi.hoisted(() => ({
   showErrorMessage: vi.fn(),
@@ -65,15 +66,24 @@ vi.mock("../../src/utils/skillRunner", () => ({
 
 type RetryFromPhaseHandler = (item?: PhaseTreeItem) => Promise<void>;
 
-function pipelineState(issueNumber = 42) {
+function pipelineState(issueNumber = 42): PipelineState {
   return {
     issue_number: issueNumber,
+    // PipelineState requires title, branch and started_at; the fixture
+    // omitted all three and was typed as its own literal (#499).
+    title: "Test issue",
+    branch: `feat/${issueNumber}-test`,
+    started_at: "2026-08-01T00:00:00.000Z",
     stages: {
       "feature-dev": {
-        status: "error",
+        // "error" was never a member of PipelineStageStatus; the union is
+        // pending | running | complete | failed | skipped | deferred, and
+        // StagePhase requires index/total. retryFromPhase matches phases by
+        // NAME, so none of this changes what the tests exercise (#499).
+        status: "failed",
         phases: [
-          { name: "implementation", status: "complete" },
-          { name: "quality-review", status: "error" },
+          { name: "implementation", index: 0, total: 2, status: "complete" },
+          { name: "quality-review", index: 1, total: 2, status: "failed" },
         ],
       },
       "feature-validate": {

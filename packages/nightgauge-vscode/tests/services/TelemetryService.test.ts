@@ -9,7 +9,7 @@
  * - lastUploadAt recorded after a successful flush (#3327)
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from "vitest";
 import { TelemetryService } from "../../src/services/TelemetryService";
 import type { PipelineExecutionInput } from "../../src/utils/telemetryEventBuilder";
 import type { PipelineState } from "../../src/services/PipelineStateService";
@@ -52,9 +52,9 @@ function makeIpcClient() {
 }
 
 interface ConsentMock {
-  isEnabled: ReturnType<typeof vi.fn>;
-  isStreamEnabled: ReturnType<typeof vi.fn>;
-  recordUploadAt: ReturnType<typeof vi.fn>;
+  isEnabled: Mock;
+  isStreamEnabled: Mock;
+  recordUploadAt: Mock;
 }
 
 function makeConsent(

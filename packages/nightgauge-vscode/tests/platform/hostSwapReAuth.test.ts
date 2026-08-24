@@ -9,7 +9,7 @@
  * - PlatformSseClient does not call onSignInRequired on second consecutive 401 (no-loop)
  */
 
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, type Mock } from "vitest";
 
 // ---------------------------------------------------------------------------
 // vscode mock
@@ -74,7 +74,7 @@ function createMockTokenStorage(): ITokenStorage & {
   const emitter = new vscode.EventEmitter<{ key: string; action: string }>();
   return {
     onTokenChanged: emitter.event,
-    _fireChange: (evt) => emitter.fire(evt as never),
+    _fireChange: (evt: unknown) => emitter.fire(evt as never),
     store: vi.fn(async () => {}),
     retrieve: vi.fn(async () => null),
     delete: vi.fn(async () => {}),
@@ -107,7 +107,7 @@ describe("SessionManager — host-swap re-auth", () => {
     const configBridge = createMockConfigBridge();
     const tokenStorage = createMockTokenStorage();
     // Pre-load access token so restore() sets authenticated
-    (tokenStorage.retrieve as ReturnType<typeof vi.fn>).mockResolvedValueOnce("tok");
+    (tokenStorage.retrieve as Mock).mockResolvedValueOnce("tok");
 
     const tokenRefreshManager = createMockEventService();
     const oauthService = createMockEventService();
@@ -173,7 +173,7 @@ describe("TokenRefreshManager — host-swap re-auth", () => {
   }) {
     const tokenStorage = createMockTokenStorage();
     if (opts.retrieve) {
-      (tokenStorage.retrieve as ReturnType<typeof vi.fn>).mockImplementation(opts.retrieve);
+      (tokenStorage.retrieve as Mock).mockImplementation(opts.retrieve);
     }
 
     const offlineManager = {
@@ -238,7 +238,7 @@ describe("TokenRefreshManager — host-swap re-auth", () => {
 
     const ipcClient = { platformAuthRefresh: vi.fn(() => refreshPromise) } as unknown as IpcClient;
     const tokenStorage = createMockTokenStorage();
-    (tokenStorage.retrieve as ReturnType<typeof vi.fn>).mockResolvedValue("refresh-tok");
+    (tokenStorage.retrieve as Mock).mockResolvedValue("refresh-tok");
 
     const offlineManager = {
       state: "online" as const,

@@ -176,7 +176,7 @@ describe("CodexSetupService", () => {
 
       const fs = await import("fs");
       // Commands dir exists so resolveCommandsSourceDir finds the bundled source
-      vi.mocked(fs.existsSync).mockImplementation((p: fs.PathLike) => {
+      vi.mocked(fs.existsSync).mockImplementation((p: import("node:fs").PathLike) => {
         const pathStr = p.toString();
         // Bundled resources dir exists; command files do not (so prompt fires)
         return pathStr.endsWith("/resources/codex/commands");

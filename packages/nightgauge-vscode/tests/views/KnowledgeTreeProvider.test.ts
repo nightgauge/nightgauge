@@ -18,21 +18,25 @@ import type { IpcClient } from "../../src/services/IpcClient";
 import type { KnowledgeRecallHit } from "../../src/services/IpcClientBase";
 
 vi.mock("vscode", () => {
-  const EventEmitter = vi.fn(function () {
+  const EventEmitter = vi.fn(function (this: Record<string, unknown>) {
     return { event: vi.fn(), fire: vi.fn(), dispose: vi.fn() };
   });
   return {
     EventEmitter,
     TreeItemCollapsibleState: { None: 0, Collapsed: 1, Expanded: 2 },
-    TreeItem: vi.fn(function (label: string, collapsibleState: number) {
+    TreeItem: vi.fn(function (
+      this: Record<string, unknown>,
+      label: string,
+      collapsibleState: number
+    ) {
       this.label = label;
       this.collapsibleState = collapsibleState;
     }),
-    ThemeIcon: vi.fn(function (id: string, color?: any) {
+    ThemeIcon: vi.fn(function (this: Record<string, unknown>, id: string, color?: any) {
       this.id = id;
       this.color = color;
     }),
-    ThemeColor: vi.fn(function (id: string) {
+    ThemeColor: vi.fn(function (this: Record<string, unknown>, id: string) {
       this.id = id;
     }),
     Uri: { file: (p: string) => ({ fsPath: p }) },
@@ -44,7 +48,7 @@ vi.mock("vscode", () => {
         dispose: vi.fn(),
       })),
     },
-    RelativePattern: vi.fn(function (base: string, pattern: string) {
+    RelativePattern: vi.fn(function (this: Record<string, unknown>, base: string, pattern: string) {
       this.base = base;
       this.pattern = pattern;
     }),

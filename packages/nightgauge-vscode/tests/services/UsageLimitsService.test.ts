@@ -21,7 +21,7 @@
  * @see Issue #683
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, type Mock } from "vitest";
 
 vi.mock("vscode", () => ({}));
 
@@ -98,7 +98,7 @@ describe("UsageLimitsService", () => {
     mockLimitsSettings.warningThresholdPct = 80;
     mockLimitsSettings.criticalThresholdPct = 90;
     mockLimitsSettings.pollingIntervalSeconds = 300;
-    (getLimitsSettings as ReturnType<typeof vi.fn>).mockImplementation(() => ({
+    (getLimitsSettings as Mock).mockImplementation(() => ({
       ...mockLimitsSettings,
     }));
   });

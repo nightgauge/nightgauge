@@ -173,6 +173,14 @@ if [ -f scripts/test-measure-cache-boundary-loss.sh ]; then
   run_step "Cache-boundary measurement smoke" bash scripts/test-measure-cache-boundary-loss.sh
 fi
 
+# 4b. Test-tree typecheck (#499).
+# tsconfig.json covers src/** only, vitest transforms through esbuild
+# (transpile-only, so `import type` is erased unresolved), and eslint registers
+# the TS parser for tests without a `project` — so nothing typechecked tests/**
+# or the Playwright fixtures. A type-only import could name an export that no
+# longer exists and the suite stayed green.
+run_step "VSCode test-tree typecheck" npm run typecheck:tests -w nightgauge-vscode
+
 # 5. ESLint
 if grep -q '"lint"' package.json 2>/dev/null; then
   run_step "ESLint" npm run lint

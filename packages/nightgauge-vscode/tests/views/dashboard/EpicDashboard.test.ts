@@ -12,7 +12,7 @@
  * @see Issue #330 - Epic Dashboard with Cross-Repo Progress
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from "vitest";
 import {
   EpicDashboard,
   type CrossRepoEpicProgress,
@@ -712,9 +712,13 @@ describe("EpicDashboard", () => {
       expect(allProgress[1].epicNumber).toBeDefined();
     });
 
-    it("should return empty array when no current repository", async () => {
+    // Renamed and de-mocked (#499). This asserted "no current repository" by
+    // stubbing getCurrentRepository — a method WorkspaceManager does not have
+    // and EpicDashboard never calls (it uses getAllRepositories only). The stub
+    // was inert; the empty repository list is what actually drove the result,
+    // so the test passed for a reason unrelated to its name.
+    it("should return empty array when the workspace has no repositories", async () => {
       const manager = createMockWorkspaceManager([]);
-      (manager.getCurrentRepository as ReturnType<typeof vi.fn>).mockReturnValue(null);
       const dashboard = new EpicDashboard(manager);
 
       const result = await dashboard.getAllCrossRepoProgress();

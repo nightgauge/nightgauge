@@ -47,21 +47,6 @@ vi.mock("fs", () => ({
   readFileSync: vi.fn(),
 }));
 
-// Create mock process factory
-function createMockChildProcess(): ChildProcess {
-  const proc = new EventEmitter() as ChildProcess;
-  proc.stdout = new EventEmitter() as NodeJS.ReadableStream;
-  proc.stderr = new EventEmitter() as NodeJS.ReadableStream;
-  proc.stdin = {
-    write: vi.fn(),
-    end: vi.fn(),
-    destroyed: false,
-  } as unknown as NodeJS.WritableStream;
-  proc.kill = vi.fn();
-  proc.killed = false;
-  return proc;
-}
-
 // Mock child_process module
 vi.mock("child_process", async () => {
   // Since #79 the extension composes no skill text of its own: it shells out
@@ -194,6 +179,7 @@ import {
   getGitHubAuthTokens,
   getGitHubUser,
 } from "../../src/utils/incrediConfig";
+import { createMockChildProcess } from "../mocks/child-process";
 
 // Reinstall the `skill render` stub before every test. Vitest 4's
 // restoreAllMocks() — which several describes below call in afterEach — clears
@@ -1976,7 +1962,7 @@ describe("skillRunner - Edge Cases", () => {
 
   it("should handle process without stdin", () => {
     const processWithoutStdin = createMockChildProcess();
-    processWithoutStdin.stdin = null as unknown as NodeJS.WritableStream;
+    processWithoutStdin.stdin = null as unknown as import("node:stream").Writable;
     vi.mocked(spawn).mockReturnValue(processWithoutStdin);
 
     const onError = vi.fn();
@@ -3028,7 +3014,7 @@ describe("skillRunner - Repo Identity (Issue #1306)", () => {
     vi.mocked(spawn).mockReturnValue(mockProcess);
     vi.mocked(fs.existsSync).mockReturnValue(true);
     // Mock fs.readFileSync to return config content for config.yaml, skill content for SKILL.md
-    vi.mocked(fs.readFileSync).mockImplementation((path: string | number | Buffer) => {
+    vi.mocked(fs.readFileSync).mockImplementation(((path: unknown) => {
       const pathStr = String(path);
       if (pathStr.endsWith("config.yaml")) {
         // Return minimal valid YAML config (empty or with minimal model_routing)
@@ -3036,7 +3022,7 @@ describe("skillRunner - Repo Identity (Issue #1306)", () => {
       }
       // Default to SKILL.md content for other files
       return `---\nname: test-skill\nallowed-tools: Read Write\n---\n\n# Test Skill`;
-    });
+    }) as unknown as typeof fs.readFileSync);
   });
 
   afterEach(() => {

@@ -737,9 +737,9 @@ describe("RepositoriesTreeProvider", () => {
       status: "Ready",
       blockedBy: [],
       blocks: [],
-      epicRef: null,
+      epicRef: undefined,
       isEpic: false,
-      subIssues: [],
+      subIssueNumbers: [],
     });
 
     beforeEach(() => {
@@ -868,7 +868,7 @@ describe("RepositoriesTreeProvider", () => {
   });
 
   describe("epic grouping in getIssueSummaryChildren()", () => {
-    const createMockIssue = (number: number, epicRef: number | null = null): ReadyIssue => ({
+    const createMockIssue = (number: number, epicRef?: number): ReadyIssue => ({
       number,
       title: `Issue ${number}`,
       url: `https://github.com/org/repo/issues/${number}`,
@@ -880,7 +880,7 @@ describe("RepositoriesTreeProvider", () => {
       blocks: [],
       epicRef,
       isEpic: false,
-      subIssues: [],
+      subIssueNumbers: [],
     });
 
     beforeEach(() => {
@@ -958,10 +958,10 @@ describe("RepositoriesTreeProvider", () => {
       mockGroupIssuesByEpic.mockReturnValue({
         groups: [
           { epic: epicInfo, issues: [createMockIssue(1, 100)] },
-          { epic: null, issues: [createMockIssue(2, null)] },
+          { epic: null, issues: [createMockIssue(2)] },
         ],
       });
-      mockGetIssuesByStatus.mockResolvedValue([createMockIssue(1, 100), createMockIssue(2, null)]);
+      mockGetIssuesByStatus.mockResolvedValue([createMockIssue(1, 100), createMockIssue(2)]);
 
       const repo = createMockRepository({ name: "test-repo" });
       mockWorkspaceManager = createMockWorkspaceManager({

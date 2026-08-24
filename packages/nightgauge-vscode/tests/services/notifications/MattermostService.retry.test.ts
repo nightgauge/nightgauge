@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, type Mock } from "vitest";
 import { vi } from "vitest";
 import { makeConfigBridge, makeLogger, makeState } from "./_helpers";
 
@@ -64,7 +64,7 @@ describe("MattermostService.retry — in-flight POST retries (FETCH_RETRY_DELAYS
   let service: InstanceType<typeof MattermostService>;
   let pss: ReturnType<typeof makePipelineStateService>;
   let logger: ReturnType<typeof makeLogger>;
-  let fetchMock: ReturnType<typeof vi.fn>;
+  let fetchMock: Mock;
   const origEnv = process.env.MATTERMOST_WEBHOOK_URL;
 
   beforeEach(() => {
@@ -172,7 +172,7 @@ describe("MattermostService.retry — final PATCH retries (FINAL_PATCH_RETRY_DEL
   let service: InstanceType<typeof MattermostService>;
   let pss: ReturnType<typeof makePipelineStateService>;
   let logger: ReturnType<typeof makeLogger>;
-  let fetchMock: ReturnType<typeof vi.fn>;
+  let fetchMock: Mock;
   const origEnv = process.env.MATTERMOST_WEBHOOK_URL;
 
   async function setupWithPost(issueNumber: number): Promise<void> {

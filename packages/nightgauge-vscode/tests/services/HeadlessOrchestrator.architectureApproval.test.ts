@@ -11,7 +11,7 @@
  * @see Issue #4222 - approval gate should halt at feature-dev, not leak into validate
  */
 
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, vi, type Mock } from "vitest";
 import { HeadlessOrchestrator } from "../../src/services/HeadlessOrchestrator";
 import { ARCHITECTURE_APPROVAL_REQUIRED_MARKER } from "../../src/utils/failureComment";
 import type { Logger } from "../../src/utils/logger";
@@ -184,9 +184,7 @@ describe("HeadlessOrchestrator.verifyArchitectureApproval (Issue #4222)", () => 
     scenario.value = "disabled-plain-text";
     const orch = new HeadlessOrchestrator(null as any, logger, { contextFileWaitMs: 0 });
     expect(await (orch as any).verifyArchitectureApproval(237)).toBeNull();
-    const debugCalls = (logger.debug as ReturnType<typeof vi.fn>).mock.calls.map((c) =>
-      String(c[0])
-    );
+    const debugCalls = (logger.debug as Mock).mock.calls.map((c) => String(c[0]));
     expect(debugCalls.some((m) => m.includes("binary error"))).toBe(false);
   });
 });

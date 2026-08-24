@@ -9,7 +9,7 @@
  * @see Issue #4024 - Codex interactive-mode parity in the VSCode extension
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from "vitest";
 
 vi.mock("vscode", () => {
   const terminal = {
@@ -139,9 +139,9 @@ import * as vscode from "vscode";
 
 const vscodeHooks = vscode as unknown as {
   __terminal: {
-    sendText: ReturnType<typeof vi.fn>;
-    show: ReturnType<typeof vi.fn>;
-    dispose: ReturnType<typeof vi.fn>;
+    sendText: Mock;
+    show: Mock;
+    dispose: Mock;
     exitStatus: { code: number | undefined } | undefined;
   };
   __closeListeners: Array<(t: unknown) => void>;
@@ -229,7 +229,7 @@ describe("runStageSkillInteractive - Codex TUI branch (#4024)", () => {
     runStageSkillInteractive("feature-dev", 42, { onMode, onStderr });
 
     expect(vi.mocked(vscode.window.createTerminal)).toHaveBeenCalledTimes(1);
-    const createArg = vi.mocked(vscode.window.createTerminal).mock.calls[0][0] as {
+    const createArg = vi.mocked(vscode.window.createTerminal).mock.calls[0][0] as unknown as {
       name: string;
       cwd: string;
     };

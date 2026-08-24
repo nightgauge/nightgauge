@@ -8,7 +8,7 @@
  * @see Issue #2503 - Add tests for autonomous commands
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, type Mock } from "vitest";
 import * as vscode from "vscode";
 import {
   registerAutonomousCommands,
@@ -1991,7 +1991,7 @@ describe("autonomousRun queue drain follows the returned status (#405)", () => {
   let mockLogger: Logger;
   let mockStatusBar: StatusBarManager;
   let mockIpc: any;
-  let drain: ReturnType<typeof vi.fn>;
+  let drain: Mock;
 
   beforeEach(() => {
     vi.clearAllMocks();

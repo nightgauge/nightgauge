@@ -11,7 +11,7 @@
  * Also tests: confidence threshold, minimum model floor, graceful fallback.
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from "vitest";
 import * as fs from "node:fs";
 
 // Mock vscode before importing modules
@@ -75,12 +75,12 @@ function mockConfigFile(content: string): void {
 }
 
 function getMockAutoModelSelector(): {
-  selectModel: ReturnType<typeof vi.fn>;
+  selectModel: Mock;
 } {
   const MockClass = vi.mocked(AutoModelSelector);
   // Get the last constructed instance
   const lastCall = MockClass.mock.results[MockClass.mock.results.length - 1];
-  return lastCall?.value as ReturnType<typeof vi.fn>;
+  return lastCall?.value as { selectModel: Mock };
 }
 
 const defaultMetadata: IssueMetadata = {

@@ -65,9 +65,18 @@ import { makeEmptyAggregates } from "./fixtures/aggregates";
 
 const emptyAggregates: DashboardAggregates = makeEmptyAggregates();
 
+// TimeSavingsConfig is a flat per-stage minutes record, not
+// {estimatedManualMinutes, hourlyRate} — that shape no longer exists anywhere
+// in the tree (#499).
 const timeSavingsConfig: TimeSavingsConfig = {
-  estimatedManualMinutes: {},
-  hourlyRate: 50,
+  pipelineStart: 0,
+  issuePickup: 5,
+  featurePlanning: 30,
+  featureDev: 120,
+  featureValidate: 15,
+  prCreate: 10,
+  prMerge: 5,
+  pipelineFinish: 0,
 };
 
 function createRun(overrides: Partial<PipelineRunSummary> = {}): PipelineRunSummary {
@@ -75,18 +84,18 @@ function createRun(overrides: Partial<PipelineRunSummary> = {}): PipelineRunSumm
     issueNumber: 42,
     title: "Add feature X",
     branch: "feat/42-add-feature-x",
-    status: "completed" as any,
+    status: "complete",
     stages: [
       {
         stage: "issue-pickup",
-        status: "completed",
+        status: "complete",
         durationMs: 5000,
         startedAt: new Date("2026-01-01T10:00:00Z"),
         completedAt: new Date("2026-01-01T10:00:05Z"),
       },
       {
         stage: "feature-dev",
-        status: "completed",
+        status: "complete",
         durationMs: 120000,
         startedAt: new Date("2026-01-01T10:00:05Z"),
         completedAt: new Date("2026-01-01T10:02:05Z"),
@@ -180,11 +189,11 @@ describe("getDashboardHtml snapshots (Issue #1242)", () => {
       createRun({ issueNumber: i + 1, title: `Issue ${i + 1}` })
     );
 
+    // HistoryPaginationInfo is {totalCount, hasMore} — the page/pageSize shape
+    // this fixture described does not exist (#499).
     const pagination: HistoryPaginationInfo = {
-      currentPage: 2,
-      totalPages: 3,
-      pageSize: 5,
-      totalItems: 15,
+      totalCount: 15,
+      hasMore: true,
     };
 
     const html = getDashboardHtml(

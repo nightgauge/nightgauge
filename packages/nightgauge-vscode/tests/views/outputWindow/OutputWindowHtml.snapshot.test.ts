@@ -78,7 +78,7 @@ describe("getOutputWindowHtml snapshots (Issue #1242)", () => {
       }),
       createEntry({
         id: "e3",
-        level: "success",
+        level: "info",
         text: "Stage completed successfully",
       }),
     ];
@@ -92,7 +92,7 @@ describe("getOutputWindowHtml snapshots (Issue #1242)", () => {
       createEntry({ id: "e1", level: "info", text: "Analyzing codebase..." }),
       createEntry({
         id: "e2",
-        level: "question",
+        level: "user",
         text: "Should I proceed with the refactor? (y/n)",
         stage: "feature-dev" as any,
       }),
@@ -135,6 +135,15 @@ describe("getOutputWindowHtml snapshots (Issue #1242)", () => {
         issueNumber: 42,
         title: "Fix truncation bug",
         repoSlug: "nightgauge/nightgauge",
+        // Required per-slot members since #2814.
+        stages: new Map(),
+        tokenUsage: {
+          inputTokens: 0,
+          outputTokens: 0,
+          cacheReadTokens: 0,
+          cacheCreationTokens: 0,
+          costUsd: 0,
+        },
       },
     ];
 

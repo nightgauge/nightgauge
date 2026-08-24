@@ -69,7 +69,7 @@ function mockFsPresent(present: string[]) {
 
 function flutterCalls() {
   return execAsyncMock.mock.calls.filter(
-    ([cmd]: [string]) =>
+    ([cmd]: unknown[]) =>
       typeof cmd === "string" &&
       (cmd.includes("flutter pub get") ||
         cmd.includes("flutter pub run build_runner") ||
@@ -102,22 +102,20 @@ describe("WorktreeManager — Flutter codegen hook", () => {
     mockFsPresent(["pubspec.yaml", ".gitignore"]);
 
     // grep returns a match → codegen needed
-    execAsyncMock.mockImplementation((cmd: string) => {
+    execAsyncMock.mockImplementation((cmd: unknown) => {
       if (isCodegenDetectionCommand(cmd)) {
         return Promise.resolve({ stdout: "lib/db.dart\n", stderr: "" });
       }
       return Promise.resolve({ stdout: "", stderr: "" });
     });
 
-    await manager.create(42, "feat/42-flutter-test", {
-      _adapterResolver: () => "claude",
-    });
+    await manager.create(42, "feat/42-flutter-test");
 
     const pubGet = execAsyncMock.mock.calls.find(
-      ([cmd]: [string]) => typeof cmd === "string" && cmd === "flutter pub get"
+      ([cmd]: unknown[]) => typeof cmd === "string" && cmd === "flutter pub get"
     );
     const buildRunner = execAsyncMock.mock.calls.find(
-      ([cmd]: [string]) =>
+      ([cmd]: unknown[]) =>
         typeof cmd === "string" &&
         cmd === "flutter pub run build_runner build --delete-conflicting-outputs"
     );
@@ -129,22 +127,20 @@ describe("WorktreeManager — Flutter codegen hook", () => {
 
   it("uses `fvm flutter` when .fvmrc is present", async () => {
     mockFsPresent(["pubspec.yaml", ".fvmrc", ".gitignore"]);
-    execAsyncMock.mockImplementation((cmd: string) => {
+    execAsyncMock.mockImplementation((cmd: unknown) => {
       if (isCodegenDetectionCommand(cmd)) {
         return Promise.resolve({ stdout: "lib/db.dart\n", stderr: "" });
       }
       return Promise.resolve({ stdout: "", stderr: "" });
     });
 
-    await manager.create(42, "feat/42-fvm-test", {
-      _adapterResolver: () => "claude",
-    });
+    await manager.create(42, "feat/42-fvm-test");
 
     const pubGet = execAsyncMock.mock.calls.find(
-      ([cmd]: [string]) => typeof cmd === "string" && cmd === "fvm flutter pub get"
+      ([cmd]: unknown[]) => typeof cmd === "string" && cmd === "fvm flutter pub get"
     );
     const buildRunner = execAsyncMock.mock.calls.find(
-      ([cmd]: [string]) =>
+      ([cmd]: unknown[]) =>
         typeof cmd === "string" &&
         cmd === "fvm flutter pub run build_runner build --delete-conflicting-outputs"
     );
@@ -155,20 +151,18 @@ describe("WorktreeManager — Flutter codegen hook", () => {
 
   it("uses `fvm flutter` when .fvm/ directory is present", async () => {
     mockFsPresent(["pubspec.yaml", ".fvm", ".gitignore"]);
-    execAsyncMock.mockImplementation((cmd: string) => {
+    execAsyncMock.mockImplementation((cmd: unknown) => {
       if (isCodegenDetectionCommand(cmd)) {
         return Promise.resolve({ stdout: "lib/db.dart\n", stderr: "" });
       }
       return Promise.resolve({ stdout: "", stderr: "" });
     });
 
-    await manager.create(42, "feat/42-fvm-dir-test", {
-      _adapterResolver: () => "claude",
-    });
+    await manager.create(42, "feat/42-fvm-dir-test");
 
     expect(
       execAsyncMock.mock.calls.some(
-        ([cmd]: [string]) => typeof cmd === "string" && cmd === "fvm flutter pub get"
+        ([cmd]: unknown[]) => typeof cmd === "string" && cmd === "fvm flutter pub get"
       )
     ).toBe(true);
   });
@@ -176,16 +170,14 @@ describe("WorktreeManager — Flutter codegen hook", () => {
   it("skips codegen when pubspec.yaml is present but no .dart files reference .g.dart", async () => {
     mockFsPresent(["pubspec.yaml", ".gitignore"]);
     // grep returns empty → no codegen needed
-    execAsyncMock.mockImplementation((cmd: string) => {
+    execAsyncMock.mockImplementation((cmd: unknown) => {
       if (isCodegenDetectionCommand(cmd)) {
         return Promise.resolve({ stdout: "", stderr: "" });
       }
       return Promise.resolve({ stdout: "", stderr: "" });
     });
 
-    await manager.create(42, "feat/42-no-codegen", {
-      _adapterResolver: () => "claude",
-    });
+    await manager.create(42, "feat/42-no-codegen");
 
     expect(flutterCalls()).toHaveLength(0);
   });
@@ -194,20 +186,18 @@ describe("WorktreeManager — Flutter codegen hook", () => {
     // Only .gitignore exists — no pubspec.yaml, no package.json
     mockFsPresent([".gitignore"]);
 
-    await manager.create(42, "feat/42-plain", {
-      _adapterResolver: () => "claude",
-    });
+    await manager.create(42, "feat/42-plain");
 
     // No flutter commands issued at all, and grep should not run either
     expect(flutterCalls()).toHaveLength(0);
-    expect(execAsyncMock.mock.calls.some(([cmd]: [string]) => isCodegenDetectionCommand(cmd))).toBe(
-      false
-    );
+    expect(
+      execAsyncMock.mock.calls.some(([cmd]: unknown[]) => isCodegenDetectionCommand(cmd))
+    ).toBe(false);
   });
 
   it("logs a warning and does NOT throw when `flutter pub run build_runner build` fails", async () => {
     mockFsPresent(["pubspec.yaml", ".gitignore"]);
-    execAsyncMock.mockImplementation((cmd: string) => {
+    execAsyncMock.mockImplementation((cmd: unknown) => {
       if (isCodegenDetectionCommand(cmd)) {
         return Promise.resolve({ stdout: "lib/db.dart\n", stderr: "" });
       }
@@ -219,9 +209,7 @@ describe("WorktreeManager — Flutter codegen hook", () => {
 
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
-    const result = await manager.create(42, "feat/42-codegen-fails", {
-      _adapterResolver: () => "claude",
-    });
+    const result = await manager.create(42, "feat/42-codegen-fails");
 
     expect(result.path).toBe("/repo/.worktrees/issue-42");
     expect(result.exists).toBe(true);
@@ -232,7 +220,7 @@ describe("WorktreeManager — Flutter codegen hook", () => {
 
   it("logs a warning and does NOT throw when `flutter pub get` itself fails (flutter not installed)", async () => {
     mockFsPresent(["pubspec.yaml", ".gitignore"]);
-    execAsyncMock.mockImplementation((cmd: string) => {
+    execAsyncMock.mockImplementation((cmd: unknown) => {
       if (isCodegenDetectionCommand(cmd)) {
         return Promise.resolve({ stdout: "lib/db.dart\n", stderr: "" });
       }
@@ -244,11 +232,7 @@ describe("WorktreeManager — Flutter codegen hook", () => {
 
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
-    await expect(
-      manager.create(42, "feat/42-no-flutter", {
-        _adapterResolver: () => "claude",
-      })
-    ).resolves.toBeDefined();
+    await expect(manager.create(42, "feat/42-no-flutter")).resolves.toBeDefined();
 
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("Flutter codegen failed"));
 
@@ -257,7 +241,7 @@ describe("WorktreeManager — Flutter codegen hook", () => {
 
   it("skips Flutter codegen entirely when npmInstall is false", async () => {
     mockFsPresent(["pubspec.yaml", ".gitignore"]);
-    execAsyncMock.mockImplementation((cmd: string) => {
+    execAsyncMock.mockImplementation((cmd: unknown) => {
       if (isCodegenDetectionCommand(cmd)) {
         return Promise.resolve({ stdout: "lib/db.dart\n", stderr: "" });
       }
@@ -266,7 +250,6 @@ describe("WorktreeManager — Flutter codegen hook", () => {
 
     await manager.create(42, "feat/42-no-install", {
       npmInstall: false,
-      _adapterResolver: () => "claude",
     });
 
     expect(flutterCalls()).toHaveLength(0);

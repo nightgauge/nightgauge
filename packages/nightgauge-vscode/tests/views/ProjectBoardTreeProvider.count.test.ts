@@ -101,9 +101,9 @@ describe("ProjectBoardTreeProvider - Count Display", () => {
 
       // Mock service to return 3 issues
       vi.mocked(mockService.getIssuesByStatus).mockResolvedValue([
-        createMockReadyIssue(1),
-        createMockReadyIssue(2),
-        createMockReadyIssue(3),
+        createMockReadyIssue({ number: 1 }),
+        createMockReadyIssue({ number: 2 }),
+        createMockReadyIssue({ number: 3 }),
       ]);
 
       provider.setTreeView(mockTreeView);
@@ -132,7 +132,9 @@ describe("ProjectBoardTreeProvider - Count Display", () => {
       // Test "In Progress" tab
       provider = new ProjectBoardTreeProvider(mockService, "in-progress");
 
-      vi.mocked(mockService.getIssuesByStatus).mockResolvedValue([createMockReadyIssue(10)]);
+      vi.mocked(mockService.getIssuesByStatus).mockResolvedValue([
+        createMockReadyIssue({ number: 10 }),
+      ]);
 
       provider.setTreeView(mockTreeView);
       await provider.getChildren();
@@ -147,8 +149,8 @@ describe("ProjectBoardTreeProvider - Count Display", () => {
 
       // Initial load with 2 issues
       vi.mocked(mockService.getIssuesByStatus).mockResolvedValue([
-        createMockReadyIssue(1),
-        createMockReadyIssue(2),
+        createMockReadyIssue({ number: 1 }),
+        createMockReadyIssue({ number: 2 }),
       ]);
 
       provider.setTreeView(mockTreeView);
@@ -169,8 +171,8 @@ describe("ProjectBoardTreeProvider - Count Display", () => {
 
       // Initial load with 2 issues
       vi.mocked(mockService.getIssuesByStatus).mockResolvedValue([
-        createMockReadyIssue(1),
-        createMockReadyIssue(2),
+        createMockReadyIssue({ number: 1 }),
+        createMockReadyIssue({ number: 2 }),
       ]);
 
       provider.setTreeView(mockTreeView);
@@ -180,9 +182,9 @@ describe("ProjectBoardTreeProvider - Count Display", () => {
 
       // Simulate API returning updated count
       vi.mocked(mockService.getIssuesByStatus).mockResolvedValue([
-        createMockReadyIssue(1),
-        createMockReadyIssue(2),
-        createMockReadyIssue(3),
+        createMockReadyIssue({ number: 1 }),
+        createMockReadyIssue({ number: 2 }),
+        createMockReadyIssue({ number: 3 }),
       ]);
 
       provider.refresh();
@@ -194,7 +196,9 @@ describe("ProjectBoardTreeProvider - Count Display", () => {
     it("should update count when forceRefreshAll() is called", async () => {
       provider = new ProjectBoardTreeProvider(mockService, "ready");
 
-      vi.mocked(mockService.getIssuesByStatus).mockResolvedValue([createMockReadyIssue(1)]);
+      vi.mocked(mockService.getIssuesByStatus).mockResolvedValue([
+        createMockReadyIssue({ number: 1 }),
+      ]);
 
       provider.setTreeView(mockTreeView);
       await provider.getChildren();
@@ -216,7 +220,9 @@ describe("ProjectBoardTreeProvider - Count Display", () => {
       provider = new ProjectBoardTreeProvider(mockService, "ready");
 
       // Create 100 issues
-      const manyIssues = Array.from({ length: 100 }, (_, i) => createMockReadyIssue(i + 1));
+      const manyIssues = Array.from({ length: 100 }, (_, i) =>
+        createMockReadyIssue({ number: i + 1 })
+      );
 
       vi.mocked(mockService.getIssuesByStatus).mockResolvedValue(manyIssues);
 

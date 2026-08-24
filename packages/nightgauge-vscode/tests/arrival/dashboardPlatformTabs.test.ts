@@ -14,7 +14,7 @@
  * @see tests/fixtures/arrival/PROVENANCE.md
  */
 
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi, type Mock } from "vitest";
 import { createMockMemento } from "../mocks/memento";
 
 vi.mock("vscode", async () => (await import("./dashboardHarness")).vscodeMockModule());
@@ -116,6 +116,7 @@ function deferred<T>(): Deferred<T> {
  * panel pre-built.
  */
 const TRANSPORT_ERRORS: Record<PlatformFailureKind, string> = {
+  bad_request: "get analytics health: server returned 400",
   unauthorized: "get analytics health: server returned 401",
   forbidden: "get analytics health: server returned 403",
   server_error: "get analytics health: server returned 503",
@@ -453,12 +454,12 @@ describe("arrival: every platform tab acknowledges refresh before awaiting", () 
   // message that was never going to stop being true.
   describe("compliance download", () => {
     const vs = vscodeMock as unknown as {
-      env: { openExternal: ReturnType<typeof vi.fn> };
+      env: { openExternal: Mock };
       window: {
-        showInformationMessage: ReturnType<typeof vi.fn>;
-        showTextDocument: ReturnType<typeof vi.fn>;
+        showInformationMessage: Mock;
+        showTextDocument: Mock;
       };
-      workspace: { openTextDocument: ReturnType<typeof vi.fn> };
+      workspace: { openTextDocument: Mock };
     };
 
     async function loadedPanel() {

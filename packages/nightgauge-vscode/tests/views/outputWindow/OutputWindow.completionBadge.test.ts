@@ -17,7 +17,7 @@
  * onSlotCompleted and onSlotFailed.
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from "vitest";
 import { createMockMemento } from "../../mocks/memento";
 import type * as vscode from "vscode";
 
@@ -25,11 +25,11 @@ import type * as vscode from "vscode";
 // Mock vscode panel & webview
 // ---------------------------------------------------------------------------
 
-let mockPostMessage: ReturnType<typeof vi.fn>;
-let mockPanelDispose: ReturnType<typeof vi.fn>;
-let mockPanelReveal: ReturnType<typeof vi.fn>;
-let mockOnDidReceiveMessage: ReturnType<typeof vi.fn>;
-let mockOnDidDispose: ReturnType<typeof vi.fn>;
+let mockPostMessage: Mock;
+let mockPanelDispose: Mock;
+let mockPanelReveal: Mock;
+let mockOnDidReceiveMessage: Mock;
+let mockOnDidDispose: Mock;
 
 function buildMockPanel() {
   mockPostMessage = vi.fn();

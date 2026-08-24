@@ -44,7 +44,6 @@ function buildDataset(overrides?: Partial<AggregatedDataset>): AggregatedDataset
     },
     executionHistory: [],
     healthScores: [],
-    selfTuningLog: [],
     analysisReports: [],
     experimentResults: [],
     healthReports: [],

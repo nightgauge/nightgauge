@@ -106,7 +106,13 @@ import {
   type RejectionLogger,
 } from "../../src/services/ipcRejection";
 
-class TestableIpcClient extends IpcClientBase {}
+class TestableIpcClient extends IpcClientBase {
+  // IpcClientBase's constructor is protected to enforce the singleton; a test
+  // double has to widen it to be instantiable directly.
+  public constructor() {
+    super();
+  }
+}
 
 function makeLogger(): RejectionLogger & {
   lines: Array<{ level: string; message: string; meta?: Record<string, unknown> }>;

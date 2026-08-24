@@ -14,7 +14,7 @@
  * @see Issue #325
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, type Mock } from "vitest";
 import * as vscode from "vscode";
 import { registerAttentionCommands } from "../../src/commands/attentionCommands";
 import {
@@ -146,20 +146,20 @@ const createLogger = (): Logger =>
   ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }) as unknown as Logger;
 
 describe("registerAttentionCommands", () => {
-  let attentionResolve: ReturnType<typeof vi.fn>;
-  let attentionMute: ReturnType<typeof vi.fn>;
-  let attentionUnmute: ReturnType<typeof vi.fn>;
+  let attentionResolve: Mock;
+  let attentionMute: Mock;
+  let attentionUnmute: Mock;
   let logger: Logger;
   let provider: AttentionTreeProvider;
   let treeView: { badge?: { value: number; tooltip: string }; description?: string };
-  let sweep: { sweep: ReturnType<typeof vi.fn> };
+  let sweep: { sweep: Mock };
 
   beforeEach(() => {
     vi.clearAllMocks();
     attentionResolve = vi.fn().mockResolvedValue({ ok: true, alreadyResolved: false });
     attentionMute = vi.fn().mockResolvedValue({ ok: true, muted: true });
     attentionUnmute = vi.fn().mockResolvedValue({ ok: true, muted: false });
-    (IpcClient.getInstance as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
+    (IpcClient.getInstance as unknown as Mock).mockReturnValue({
       attentionResolve,
       attentionMute,
       attentionUnmute,
@@ -230,9 +230,7 @@ describe("registerAttentionCommands", () => {
     source.emit({ action: "updated", request: request({ severity: "blocking_fleet" }) });
     expect(vscode.window.showWarningMessage).not.toHaveBeenCalled();
 
-    (vscode.window.showWarningMessage as ReturnType<typeof vi.fn>).mockResolvedValue(
-      "Open Action Center"
-    );
+    (vscode.window.showWarningMessage as Mock).mockResolvedValue("Open Action Center");
     source.emit({
       action: "created",
       request: request({ severity: "blocking_fleet", title: "Fleet stopped" }),
@@ -251,7 +249,7 @@ describe("registerAttentionCommands", () => {
     const item = new AttentionRequestTreeItem(request());
     const handler = getHandler("nightgauge.attentionResolve");
 
-    (vscode.window.showQuickPick as ReturnType<typeof vi.fn>).mockImplementation(
+    (vscode.window.showQuickPick as Mock).mockImplementation(
       (items: Array<{ optionId?: string }>) =>
         Promise.resolve(items.find((i) => i.optionId === "raise"))
     );
@@ -272,12 +270,10 @@ describe("registerAttentionCommands", () => {
     const item = new AttentionRequestTreeItem(request()); // default_action: "halt", steer.enabled
     const handler = getHandler("nightgauge.attentionResolve");
 
-    (vscode.window.showQuickPick as ReturnType<typeof vi.fn>).mockImplementation(
+    (vscode.window.showQuickPick as Mock).mockImplementation(
       (items: Array<{ isSteer?: boolean }>) => Promise.resolve(items.find((i) => i.isSteer))
     );
-    (vscode.window.showInputBox as ReturnType<typeof vi.fn>).mockResolvedValue(
-      "  skip this wave, flaky test  "
-    );
+    (vscode.window.showInputBox as Mock).mockResolvedValue("  skip this wave, flaky test  ");
 
     await handler(item);
 
@@ -292,7 +288,7 @@ describe("registerAttentionCommands", () => {
     const item = new AttentionRequestTreeItem(request({ default_action: "expire_noop" }));
     const handler = getHandler("nightgauge.attentionResolve");
 
-    (vscode.window.showQuickPick as ReturnType<typeof vi.fn>).mockImplementation(
+    (vscode.window.showQuickPick as Mock).mockImplementation(
       (items: Array<{ isSteer?: boolean }>) => Promise.resolve(items.find((i) => i.isSteer))
     );
 
@@ -310,7 +306,7 @@ describe("registerAttentionCommands", () => {
     const handler = getHandler("nightgauge.attentionResolve");
 
     let offered: Array<{ isSteer?: boolean }> = [];
-    (vscode.window.showQuickPick as ReturnType<typeof vi.fn>).mockImplementation(
+    (vscode.window.showQuickPick as Mock).mockImplementation(
       (items: Array<{ isSteer?: boolean }>) => {
         offered = items;
         return Promise.resolve(undefined);
@@ -325,7 +321,7 @@ describe("registerAttentionCommands", () => {
   it("does nothing when the quick-pick is dismissed", async () => {
     const item = new AttentionRequestTreeItem(request());
     const handler = getHandler("nightgauge.attentionResolve");
-    (vscode.window.showQuickPick as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+    (vscode.window.showQuickPick as Mock).mockResolvedValue(undefined);
 
     await handler(item);
 
@@ -392,12 +388,10 @@ describe("registerAttentionCommands", () => {
   it("offers the link FIRST for a card whose only option changes nothing", async () => {
     const handler = getHandler("nightgauge.attentionResolve");
     let offered: Array<{ label: string }> = [];
-    (vscode.window.showQuickPick as ReturnType<typeof vi.fn>).mockImplementation(
-      (items: Array<{ label: string }>) => {
-        offered = items;
-        return Promise.resolve(items[0]);
-      }
-    );
+    (vscode.window.showQuickPick as Mock).mockImplementation((items: Array<{ label: string }>) => {
+      offered = items;
+      return Promise.resolve(items[0]);
+    });
 
     await handler(new AttentionRequestTreeItem(repoCard()));
 
@@ -410,7 +404,7 @@ describe("registerAttentionCommands", () => {
   it("describes a standing dismiss honestly rather than as 'takes no action'", async () => {
     const handler = getHandler("nightgauge.attentionResolve");
     let offered: Array<{ label: string; description?: string }> = [];
-    (vscode.window.showQuickPick as ReturnType<typeof vi.fn>).mockImplementation(
+    (vscode.window.showQuickPick as Mock).mockImplementation(
       (items: Array<{ label: string; description?: string }>) => {
         offered = items;
         return Promise.resolve(undefined);
@@ -427,7 +421,7 @@ describe("registerAttentionCommands", () => {
     const handler = getHandler("nightgauge.attentionResolve");
     const capture = async (req: AttentionRequestView) => {
       let offered: Array<{ label: string }> = [];
-      (vscode.window.showQuickPick as ReturnType<typeof vi.fn>).mockImplementation(
+      (vscode.window.showQuickPick as Mock).mockImplementation(
         (items: Array<{ label: string }>) => {
           offered = items;
           return Promise.resolve(undefined);

@@ -7,7 +7,7 @@
  * resolves on its own because paused autonomous never makes new GitHub calls.
  */
 
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 
 const autonomousStatus = vi.fn();
 const autonomousResume = vi.fn();
@@ -36,8 +36,8 @@ const mockLogger = {
 beforeEach(() => {
   autonomousStatus.mockReset();
   autonomousResume.mockReset();
-  (mockLogger.info as ReturnType<typeof vi.fn>).mockReset();
-  (mockLogger.warn as ReturnType<typeof vi.fn>).mockReset();
+  (mockLogger.info as Mock).mockReset();
+  (mockLogger.warn as Mock).mockReset();
 });
 
 afterEach(() => {

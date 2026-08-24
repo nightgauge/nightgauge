@@ -16,6 +16,7 @@ import * as fs from "fs/promises";
 import * as vscode from "vscode";
 import { WorkspaceManager } from "../../src/services/WorkspaceManager";
 import { Repository } from "../../src/models/Repository";
+import type { WorkspaceDetectionResult } from "../../src/types/WorkspaceConfig";
 
 // Mock fs/promises
 vi.mock("fs/promises");
@@ -730,10 +731,10 @@ describe("reload() hardening (#704)", () => {
     ],
   };
 
-  const okDetection = {
-    type: "multi-workspace" as const,
+  const okDetection: WorkspaceDetectionResult = {
+    type: "multi-workspace",
     config: multiConfig,
-    detection_method: "workspace-yaml",
+    detection_method: "explicit",
   };
 
   it("retains the loaded repositories when the manifest is malformed mid-edit", async () => {

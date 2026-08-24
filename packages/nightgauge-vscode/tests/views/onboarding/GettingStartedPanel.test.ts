@@ -5,12 +5,12 @@
  * AdapterDoctorPanel test pattern.
  */
 
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import type { GettingStartedAction } from "../../../src/views/onboarding/GettingStartedPanel";
 
 let capturedMessageHandler: ((msg: any) => void) | null;
 let capturedDisposeHandler: (() => void) | null;
-let createWebviewPanelMock: ReturnType<typeof vi.fn>;
+let createWebviewPanelMock: Mock;
 
 function buildMockPanel() {
   capturedMessageHandler = null;

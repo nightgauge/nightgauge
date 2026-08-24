@@ -5,7 +5,7 @@
  * asserts the workspace block is present with the correct slug/display_name.
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from "vitest";
 import { AgentRegistrationService } from "../../src/services/AgentRegistrationService";
 import { WorkspaceRegistrationPayloadBuilder } from "../../src/services/WorkspaceRegistrationPayloadBuilder";
 import type { WorkspaceConfig } from "../../src/types/WorkspaceConfig";
@@ -33,7 +33,7 @@ function makeWorkspaceConfig(name: string, repoCount = 2): WorkspaceConfig {
 }
 
 describe("workspace sync payload → platform register endpoint (#3668)", () => {
-  let mockFetch: ReturnType<typeof vi.fn>;
+  let mockFetch: Mock;
   const PLATFORM_URL = "https://api.nightgauge.dev";
 
   beforeEach(() => {

@@ -21,7 +21,7 @@
  * shared `debouncedStageRefresh()` so one gate edge produces one board
  * refresh, not N concurrent cache clears.
  */
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from "vitest";
 import * as vscode from "vscode";
 import { ProjectBoardTreeProvider } from "../../src/views/ProjectBoardTreeProvider";
 import {
@@ -53,7 +53,7 @@ function makeEmitter<T>() {
 
 function createFakeProvider(): {
   provider: IWorkItemProvider;
-  clearCache: ReturnType<typeof vi.fn>;
+  clearCache: Mock;
   fireRateLimit: (state: { exhausted: boolean; low: boolean; resetAt: number }) => void;
 } {
   const rateLimit = makeEmitter<{ exhausted: boolean; low: boolean; resetAt: number }>();
@@ -76,6 +76,7 @@ function createFakeProvider(): {
     onItemsUpdated: itemsUpdated.event as never,
     onRateLimitState: rateLimit.event as never,
     getRateLimitState: () => null,
+    softInvalidate: vi.fn(),
   };
   return { provider, clearCache, fireRateLimit: rateLimit.fire };
 }

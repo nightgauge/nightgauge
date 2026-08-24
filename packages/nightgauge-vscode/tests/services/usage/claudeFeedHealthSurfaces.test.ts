@@ -39,7 +39,7 @@ function snapshot(health: ClaudeFeedHealth | undefined): UsageSnapshot {
       {
         id: "local:monthly",
         label: "This month",
-        kind: "calendar",
+        scope: "monthly",
         used: 12,
         limit: 100,
         unit: "usd",
