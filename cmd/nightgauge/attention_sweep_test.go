@@ -50,7 +50,7 @@ func withRegisteredProducer(t *testing.T, reqs ...attention.DecisionRequest) {
 	})
 	sweep.Default = sweep.NewRegistry()
 	sweep.Default.Register(&cliProducer{name: "test-producer", reqs: reqs})
-	sweepForgeClient = func(string) (forge.ForgeClient, error) { return nilForge{}, nil }
+	sweepForgeClient = func(string, string) (forge.ForgeClient, error) { return nilForge{}, nil }
 }
 
 func cliObservation(key, fingerprint, title string) attention.DecisionRequest {
@@ -134,7 +134,7 @@ func TestAttentionSweepWithNoProducersReportsCleanly(t *testing.T) {
 	prevRegistry, prevClient := sweep.Default, sweepForgeClient
 	t.Cleanup(func() { sweep.Default, sweepForgeClient = prevRegistry, prevClient })
 	sweep.Default = sweep.NewRegistry()
-	sweepForgeClient = func(string) (forge.ForgeClient, error) { return nilForge{}, nil }
+	sweepForgeClient = func(string, string) (forge.ForgeClient, error) { return nilForge{}, nil }
 
 	out, err := runSweep(t, dir)
 	if err != nil {

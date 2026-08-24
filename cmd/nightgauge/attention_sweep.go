@@ -18,49 +18,105 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
 	forgecmd "github.com/nightgauge/nightgauge/cmd/nightgauge/forge"
 	"github.com/nightgauge/nightgauge/internal/attention"
 	"github.com/nightgauge/nightgauge/internal/attention/sweep"
+	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/forge"
 	"github.com/spf13/cobra"
 )
 
 // sweepForgeClient is swapped by tests to avoid constructing a live adapter.
-var sweepForgeClient = func(repo string) (forge.ForgeClient, error) {
-	router, err := forgecmd.BuildRouter("", 0, "")
+// It takes the sweep's root so the CLI resolves the target repo's board the
+// same way the daemon does: `--repo <sibling>` run from one checkout used to be
+// answered with the INVOKING repo's board, because
+// the router bound whatever project number the working directory's config
+// carried (#844).
+var sweepForgeClient = func(root, repo string) (forge.ForgeClient, error) {
+	cfg, err := config.Load(root)
 	if err != nil {
-		return nil, err
+		// Nil config is a resolvable state, not a failure: a member repo's own
+		// config.yaml still answers for it through the query's StartDir.
+		cfg = nil
 	}
-	return router.For("", repo)
+	return cachedSweepForgeClient(root, cfg)(repo)
 }
 
-// cachedSweepForgeClient returns a resolver that builds the router at most
-// once. The CLI path rebuilds per invocation because it runs one sweep and
+// cachedSweepForgeClient returns a resolver that builds at most one router per
+// board. The CLI path rebuilds per invocation because it runs one sweep and
 // exits; the serve daemon sweeps every workspace repo on a timer, and
 // BuildRouter re-reads config and re-runs the token chain (which can shell out
 // to `gh`) each time. A failed build is not cached — a daemon that started
 // before the operator authenticated must be able to recover without a restart.
-func cachedSweepForgeClient() func(repo string) (forge.ForgeClient, error) {
+//
+// One router per BOARD, not one for the workspace (#844). A router binds a
+// single project number, so a workspace router answers every repo with the
+// primary repo's board — a sibling repo's own board is never queried. Worse,
+// the daemon has no repo for a working directory, so the number the
+// old `BuildRouter("", 0, "")` resolved was 0: every board read failed with
+// "Could not resolve to a ProjectV2 with the number 0", once per repo per
+// sweep, and each failure was billed the same points as a success.
+//
+// Resolution is anchored to the daemon's workspace root and goes through
+// config.ResolveRepoProject, the one implementation of "which board does repo X
+// use?" (#271/#313). This is a READING caller, so a repo covered by the
+// workspace-wide default board is swept against it — that is what a shared-board
+// workspace means. Only an UNMAPPED repo (number 0, nothing declared and no
+// default) is refused, and it is refused here rather than at the API: the
+// resolver already knows the request cannot succeed, so issuing it would spend
+// points to be told so.
+func cachedSweepForgeClient(workspaceRoot string, cfg *config.Config) func(repo string) (forge.ForgeClient, error) {
+	type routerKey struct {
+		owner   string
+		project int
+	}
 	var (
-		mu     sync.Mutex
-		router *forge.Router
+		mu      sync.Mutex
+		routers = map[routerKey]*forge.Router{}
 	)
 	return func(repo string) (forge.ForgeClient, error) {
+		project := config.ResolveRepoProject(cfg, config.RepoProjectQuery{
+			Repo:     repo,
+			StartDir: workspaceRoot,
+		})
+		if project.Number <= 0 {
+			return nil, fmt.Errorf("no project board resolves for %s (%s): skipped without issuing a request", repo, project.Source)
+		}
+		// The repo spec's own owner outranks the workspace config's, for the
+		// same reason the board does: a router is built per target, not per
+		// workspace. A bare slug carries no owner and falls back to the config.
+		var owner string
+		if idx := strings.Index(repo, "/"); idx > 0 {
+			owner = repo[:idx]
+		}
+		key := routerKey{owner: owner, project: project.Number}
+
 		mu.Lock()
 		defer mu.Unlock()
+		router := routers[key]
 		if router == nil {
-			r, err := forgecmd.BuildRouter("", 0, "")
+			r, err := buildSweepRouter(workspaceRoot, owner, project.Number, "")
 			if err != nil {
 				return nil, err
 			}
+			routers[key] = r
 			router = r
 		}
 		return router.For("", repo)
 	}
 }
+
+// buildSweepRouter is forgecmd.BuildRouterAt behind a variable so a test can
+// observe whether a router was constructed at all. That distinction is the
+// whole point of #844's third acceptance criterion: an unresolvable board must
+// cost ZERO requests, and the only way to state "no request was issued" as a
+// property rather than a hope is to assert that the thing which holds the token
+// and the transport was never built.
+var buildSweepRouter = forgecmd.BuildRouterAt
 
 func attentionSweepCmd() *cobra.Command {
 	var (
@@ -96,7 +152,7 @@ to exit non-zero on a degraded sweep instead.`,
 			if err != nil {
 				return err
 			}
-			client, err := sweepForgeClient(repo)
+			client, err := sweepForgeClient(root, repo)
 			if err != nil {
 				return fmt.Errorf("resolve forge client for %s: %w", repo, err)
 			}

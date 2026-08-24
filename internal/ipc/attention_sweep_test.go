@@ -313,6 +313,22 @@ func TestAttentionSweepFoldsForgeResolutionFailureIntoTheRepoResult(t *testing.T
 	if res.Repos[0].Error == "" {
 		t.Error("the unresolvable repo must report its error")
 	}
+	// No producer may run for a repo whose client did not resolve. This is the
+	// zero-cost half of #844: an unresolvable board must cost no requests, and a
+	// producer that ran is a producer that queried. Before the fix EVERY repo
+	// landed here, because the daemon's client was bound to project 0.
+	//
+	// The invariant is defended TWICE — sweepOneRepo returns early, and
+	// Sweeper.Sweep refuses a nil Forge — so removing either guard alone leaves
+	// this green. It reds only when BOTH are removed, which is the honest
+	// statement of what it pins: not one code path, but the property that no
+	// producer runs without a client.
+	if len(res.Repos[0].Evaluated) != 0 {
+		t.Errorf("evaluated %v for a repo with no client — a producer that runs is a producer that spends points", res.Repos[0].Evaluated)
+	}
+	if res.Repos[0].Created != 0 || res.Repos[0].AutoResolved != 0 {
+		t.Errorf("a repo that was never swept must reconcile nothing, got %+v", res.Repos[0])
+	}
 	if res.Created != 1 {
 		t.Errorf("created = %d — the healthy repo must still be swept", res.Created)
 	}
