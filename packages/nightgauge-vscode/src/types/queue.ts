@@ -44,8 +44,9 @@ export type QueueItemPausedReason =
       /**
        * Issue acceptance criteria require a CI baseline that is currently red on
        * `main`. The baseline-CI gate (Issue #3004) emits this variant during
-       * issue-pickup Phase 2.8. The daily `baseline-defer-sweep.yml` cron resumes
-       * the item when the last `green_threshold` runs are all `success`.
+       * issue-pickup Phase 2.8. Nothing resumes the item automatically: an
+       * operator runs `nightgauge baseline-gate promote`, which releases it when
+       * the last `green_threshold` runs on `main` are all `success`.
        */
       kind: "baseline_ci_red";
       /** Human-readable summary surfaced in the dashboard's paused-items panel. */
@@ -198,8 +199,8 @@ export interface QueueState {
  * 2.1 → 2.2 (Issue #3004): added `baseline_ci_red` discriminated variant to
  * `QueueItemPausedReason`. Additive — 2.1 readers ignore the unknown `kind`
  * value (it parses as a generic paused item) and 2.2 readers gain the
- * baseline-CI fields. The daily `baseline-defer-sweep` cron resumes 2.2 items
- * when the baseline goes green.
+ * baseline-CI fields. `baseline-gate promote` — an operator-invoked sweep —
+ * resumes 2.2 items when the baseline goes green.
  *
  * 2.2 → 2.3 (Issue #231): added `blocked_dependency` discriminated variant to
  * `QueueItemPausedReason` (with `blockingIssues`). Additive — 2.2 readers ignore

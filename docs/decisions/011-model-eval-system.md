@@ -25,14 +25,14 @@ isolation, and where results are stored.
 ## Context
 
 The existing harness (`src/eval/schemas.ts`) evaluates **skills** with a binary
-pass/fail assertion engine on synthetic prompts, and a CI gate
-(`.github/workflows/skill-eval.yml`) depends on its `baseline.jsonl`. It does
-not measure cost, latency, or quality, and its scenarios are not realistic
-tasks. Separately, `ModelPerformanceAnalyzer` aggregates passive live-run
+pass/fail assertion engine on synthetic prompts, diffed by hand against its
+committed `baseline.jsonl`. (This ADR originally described that diff as a CI
+gate; no such workflow exists — corrected in #881.) It does not measure cost,
+latency, or quality, and its scenarios are not realistic tasks. Separately, `ModelPerformanceAnalyzer` aggregates passive live-run
 telemetry but never runs a controlled "same task, many models" comparison.
 
 We need the controlled comparison and a quality axis, without disturbing the
-working skill-eval gate.
+working skill-eval harness.
 
 ---
 

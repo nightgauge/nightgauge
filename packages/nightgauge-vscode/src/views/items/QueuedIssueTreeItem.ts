@@ -242,7 +242,7 @@ export class QueuedIssueTreeItem extends BaseTreeItem {
         if (r.summary) {
           text += `Summary: ${r.summary}\n`;
         }
-        text += `\nDaily \`baseline-defer-sweep\` cron auto-resumes this item when the baseline goes green.\n\n`;
+        text += `\nThis item does **not** resume on its own. Once the baseline is green, run \`nightgauge baseline-gate promote\` in this workspace to release it.\n\n`;
       } else if (r.kind === "blocked_dependency") {
         text += `Reason: blocked by open dependency\n`;
         for (const b of r.blockingIssues) {

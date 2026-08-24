@@ -218,9 +218,10 @@ but \`main\`'s recent runs are currently red:
 - **Failed**: $FAILED of last $SAMPLED runs
 - **Reason**: $REASON
 
-The pipeline has paused this item ([\`baseline-ci-deferred\`](../../docs/FAILURE_TAXONOMY.md#infrastructure))
-and will automatically resume dispatch when the baseline goes green (daily
-\`baseline-defer-sweep\` cron). No operator action required."
+The pipeline has paused this item ([\`baseline-ci-deferred\`](../../docs/FAILURE_TAXONOMY.md#infrastructure)).
+**It will not resume on its own.** Once \`main\`'s runs of this workflow are green
+again, an operator must run \`nightgauge baseline-gate promote\` in the workspace
+to release it back into the queue."
 
     nightgauge forge issue comment --subject-id "$ISSUE_NUMBER" -b "$COMMENT_BODY" 2>/dev/null || \
       echo "warning: failed to post deferral comment to #$ISSUE_NUMBER"
@@ -255,9 +256,12 @@ When the gate decides to defer:
 - `signal=deferred` is printed to stdout so the orchestrator short-circuits
   remaining stages, mirroring the AC reconciliation `signal=verify-and-close`
   pattern from feature-planning.
-- The daily `.github/workflows/baseline-defer-sweep.yml` cron re-evaluates
-  every paused-baseline-CI item and resumes those whose last
-  `green_threshold` (default 2) consecutive runs on `main` are all `success`.
+- Resuming is an **operator action**, not an automation. Running
+  `nightgauge baseline-gate promote` re-evaluates every paused-baseline-CI item
+  and resumes those whose last `green_threshold` (default 2) consecutive runs on
+  `main` are all `success`. Nothing invokes it on a schedule — the queue is local
+  state (`.nightgauge/pipeline/queue-state.json`, gitignored), so no CI job can
+  reach it.
 
 When the gate cannot extract a workflow path from the AC text (decision
 `unparseable`), exit code is 0 and dispatch proceeds — best-effort design per
