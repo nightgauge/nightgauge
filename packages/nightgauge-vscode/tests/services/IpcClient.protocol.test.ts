@@ -577,16 +577,17 @@ describe("IpcClient — IPC protocol", () => {
     it("falls back to gh auth token when GITHUB_TOKEN env var is absent", async () => {
       delete process.env.GITHUB_TOKEN;
       const { exec } = await import("child_process");
-      vi.mocked(exec).mockImplementation(
-        (
-          _cmd: string,
-          _opts: any,
-          cb?: (err: Error | null, stdout: string, stderr: string) => void
-        ) => {
-          cb?.(null, "ghp_from_gh_auth\n", "");
-          return {} as any;
-        }
-      );
+      // exec has many overloads; the mock only needs to invoke the callback,
+      // so it is cast to the module's own type rather than matching one
+      // overload exactly.
+      vi.mocked(exec).mockImplementation(((
+        _cmd: string,
+        _opts: unknown,
+        cb?: (err: Error | null, stdout: string, stderr: string) => void
+      ) => {
+        cb?.(null, "ghp_from_gh_auth\n", "");
+        return {} as never;
+      }) as unknown as typeof exec);
 
       await startClient();
 
@@ -599,16 +600,17 @@ describe("IpcClient — IPC protocol", () => {
     it("warns but continues when both GITHUB_TOKEN and gh auth fail", async () => {
       delete process.env.GITHUB_TOKEN;
       const { exec } = await import("child_process");
-      vi.mocked(exec).mockImplementation(
-        (
-          _cmd: string,
-          _opts: any,
-          cb?: (err: Error | null, stdout: string, stderr: string) => void
-        ) => {
-          cb?.(new Error("gh not found"), "", "");
-          return {} as any;
-        }
-      );
+      // exec has many overloads; the mock only needs to invoke the callback,
+      // so it is cast to the module's own type rather than matching one
+      // overload exactly.
+      vi.mocked(exec).mockImplementation(((
+        _cmd: string,
+        _opts: unknown,
+        cb?: (err: Error | null, stdout: string, stderr: string) => void
+      ) => {
+        cb?.(new Error("gh not found"), "", "");
+        return {} as never;
+      }) as unknown as typeof exec);
 
       await expect(startClient()).resolves.toBeUndefined();
     });

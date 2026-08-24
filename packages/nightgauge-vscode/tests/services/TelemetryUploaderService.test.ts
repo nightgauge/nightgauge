@@ -485,7 +485,7 @@ describe("TelemetryUploaderService", () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(3);
 
-    const batchSizes = fetchMock.mock.calls.map(([, init]: [string, RequestInit]) => {
+    const batchSizes = fetchMock.mock.calls.map(([, init]: any[]) => {
       const body = JSON.parse(init.body as string) as unknown[];
       return body.length;
     });

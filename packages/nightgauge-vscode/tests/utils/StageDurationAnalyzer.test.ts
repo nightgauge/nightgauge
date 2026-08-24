@@ -54,7 +54,17 @@ function makeRunRecord(opts: {
     recordedAt = RECENT_BASE_DATE,
   } = opts;
 
-  const stages: Record<string, { status: "complete" | "failed"; duration_ms?: number }> = {};
+  // The local declaration understated the record this fixture builds: it also
+  // sets started_at/completed_at, which the analyzer reads.
+  const stages: Record<
+    string,
+    {
+      status: "complete" | "failed";
+      duration_ms?: number;
+      started_at?: string;
+      completed_at?: string;
+    }
+  > = {};
   for (const [stage, durationMs] of Object.entries(stageDurations)) {
     stages[stage] = {
       status: "complete",
