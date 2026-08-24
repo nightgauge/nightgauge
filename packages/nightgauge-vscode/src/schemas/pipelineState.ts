@@ -173,13 +173,13 @@ export const StageStateSchema = z.object({
    */
   skip_reason: z.string().optional(),
   // `model_selection` used to sit here, carrying a THIRD copy of the selection
-  // vocabulary (already drifted: it never gained "auto-router"). Nothing writes
-  // a model_selection into state.json — PipelineStateService.setStageModelSelection
-  // is an empty stub — and this schema's only validator, validatePipelineState
-  // below, has no callers, so the enum guarded nothing. Deleted with #446;
-  // history attribution lives on the history record
-  // (`HistoryStageDetailSchema.model_selection`), and the in-memory shape the
-  // tree view reads is PipelineStateService's own `ExtendedStageState`.
+  // vocabulary (already drifted: it never gained "auto-router"). Nothing wrote
+  // a model_selection into state.json — its writer,
+  // PipelineStateService.setStageModelSelection, was an empty stub, since
+  // deleted with #465 — and this schema's only validator, validatePipelineState,
+  // had no callers, so the enum guarded nothing; that validator is gone too
+  // (#467). Deleted with #446; history attribution lives on the history record
+  // (`HistoryStageDetailSchema.model_selection`).
   /** Context handoff file size in bytes (Issue #1009) */
   context_file_size_bytes: z.number().int().min(0).optional(),
   /**
@@ -370,41 +370,12 @@ export const PauseResolutionSchema = z.object({
 });
 export type PauseResolution = z.infer<typeof PauseResolutionSchema>;
 
-/**
- * Validation result with detailed error information
- */
-export interface ValidationResult {
-  success: boolean;
-  data?: PipelineState;
-  error?: string;
-  /** Specific field that failed validation */
-  failedField?: string;
-}
-
-/**
- * Validate a parsed JSON object against the PipelineState schema
- *
- * Returns a ValidationResult with either the validated data or error details.
- * This should be called after JSON.parse() succeeds.
- *
- * @param data - The parsed JSON data to validate
- * @returns ValidationResult with success/data or error details
- */
-export function validatePipelineState(data: unknown): ValidationResult {
-  const result = PipelineStateSchema.safeParse(data);
-
-  if (result.success) {
-    return { success: true, data: result.data };
-  }
-
-  // Extract first error for debugging
-  const firstError = result.error.issues[0];
-  const failedField = firstError?.path.join(".");
-  const errorMessage = firstError?.message || "Unknown validation error";
-
-  return {
-    success: false,
-    error: `Schema validation failed: ${errorMessage}${failedField ? ` at '${failedField}'` : ""}`,
-    failedField,
-  };
-}
+// `validatePipelineState` and its `ValidationResult` used to sit here: a
+// `safeParse` wrapper that flattened Zod's first issue into a string. It had
+// ZERO callers in src — this schema is consumed for types only — so it guarded
+// nothing while looking like a guard, which is precisely how the drifted
+// `model_selection` field survived here unnoticed until #446. Deleted with
+// #467; the two tests that reached for it now call `PipelineStateSchema.safeParse`
+// directly, as the rest of the schema tests already did. If a read site ever
+// genuinely needs validation, call `safeParse` at that site, where its result
+// can actually change what the code does.
