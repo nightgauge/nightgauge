@@ -94,7 +94,7 @@ autonomous_discovery:
   score_threshold: 70 # Minimum score for auto-issue creation
 ```
 
-See [docs/SCHEDULED_DISCOVERY.md](../../docs/SCHEDULED_DISCOVERY.md) for full
+See [docs/SCHEDULED_DISCOVERY.md](../../../../docs/SCHEDULED_DISCOVERY.md) for full
 documentation on the scheduled discovery workflow.
 
 ---
@@ -279,7 +279,7 @@ Scoring logic (quick-pass):
 
 For changes scoring ≥ 50 on quick-pass, apply the **Feature Assessment Engine** framework:
 
-**Reference:** [assessment-engine.md](./assessment-engine.md)
+**Reference:** [assessment-engine.md](assessment-engine.md)
 
 The engine scores changes across six dimensions (Pipeline Stage Impact, Automation Potential, Safety & Reliability, Developer Experience, Implementation Complexity, Cross-Repo Applicability) producing a composite 0–100 score.
 
@@ -748,7 +748,7 @@ PYTHON_EOF
 
 Only executes when `--create-issues` flag is passed.
 
-**Reference:** All auto-issue-creation logic is documented in **[auto-issue-creation.md](./auto-issue-creation.md)**.
+**Reference:** All auto-issue-creation logic is documented in **[auto-issue-creation.md](auto-issue-creation.md)**.
 
 This phase:
 
@@ -817,18 +817,18 @@ The complete workflow is implemented by:
 
 For complete implementation details, see:
 
-- **Trigger Criteria:** [auto-issue-creation.md § Trigger Criteria](./auto-issue-creation.md#trigger-criteria)
-- **Issue Templates:** [auto-issue-creation.md § Issue Template by Feature Type](./auto-issue-creation.md#issue-template-by-feature-type)
+- **Trigger Criteria:** [auto-issue-creation.md § Trigger Criteria](auto-issue-creation.md#trigger-criteria)
+- **Issue Templates:** [auto-issue-creation.md § Issue Template by Feature Type](auto-issue-creation.md#issue-template-by-feature-type)
   - Single-stage feature (1–2 stages)
   - Multi-stage feature (3+ stages, create epic)
   - Breaking change
   - Deprecation
-- **Deduplication Logic:** [auto-issue-creation.md § Deduplication Logic](./auto-issue-creation.md#deduplication-logic)
-- **Label Selection:** [auto-issue-creation.md § Label Selection Strategy](./auto-issue-creation.md#label-selection-strategy)
-- **Board Sync:** [auto-issue-creation.md § Board Sync Process](./auto-issue-creation.md#board-sync-process)
-- **Safety Rails:** [auto-issue-creation.md § Safety Rails](./auto-issue-creation.md#safety-rails)
-- **Dry-Run Mode:** [auto-issue-creation.md § Dry-Run Mode](./auto-issue-creation.md#dry-run-mode)
-- **Creation Log:** [auto-issue-creation.md § Creation Log for Auditability](./auto-issue-creation.md#safety-rails) (in Rail 4 section)
+- **Deduplication Logic:** [auto-issue-creation.md § Deduplication Logic](auto-issue-creation.md#deduplication-logic)
+- **Label Selection:** [auto-issue-creation.md § Label Selection Strategy](auto-issue-creation.md#label-selection-strategy)
+- **Board Sync:** [auto-issue-creation.md § Board Sync Process](auto-issue-creation.md#board-sync-process)
+- **Safety Rails:** [auto-issue-creation.md § Safety Rails](auto-issue-creation.md#safety-rails)
+- **Dry-Run Mode:** [auto-issue-creation.md § Dry-Run Mode](auto-issue-creation.md#dry-run-mode)
+- **Creation Log:** [auto-issue-creation.md § Creation Log for Auditability](auto-issue-creation.md#safety-rails) (in Rail 4 section)
 
 #### Step 8.4: Error Handling
 
@@ -838,7 +838,7 @@ If any step fails:
 2. Print clear error message with remediation steps
 3. STOP (do not continue creating remaining issues)
 
-**Common errors and fixes:** See [auto-issue-creation.md § Error Handling & Troubleshooting](./auto-issue-creation.md#error-handling--troubleshooting)
+**Common errors and fixes:** See [auto-issue-creation.md § Error Handling & Troubleshooting](auto-issue-creation.md#error-handling--troubleshooting)
 
 ---
 

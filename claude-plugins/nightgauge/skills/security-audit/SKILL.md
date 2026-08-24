@@ -311,7 +311,7 @@ This skill declares an `orchestration:` frontmatter block (`mode: fanout`) that
 fans the seven security dimensions out as parallel worker units, one per
 dimension, each adversarially checked by a per-unit judge before its score is
 accepted. The block is consumed by the capability-routed `WorkflowEngine` (see
-[docs/WORKFLOW_ORCHESTRATION.md](../../docs/WORKFLOW_ORCHESTRATION.md)) on
+[docs/WORKFLOW_ORCHESTRATION.md](../../../../docs/WORKFLOW_ORCHESTRATION.md)) on
 providers that declare an orchestration capability.
 
 The prose **Workflow** below is the **single-agent portability floor**: each
@@ -613,7 +613,7 @@ filters, same per-pattern file-extension allowlists, same line-count
 semantics. AI reduces false positives based on file type and surrounding
 context in the scoring step (Phase 2.4).
 
-See [docs/GO_BINARY.md](../../docs/GO_BINARY.md#scan--secret-pattern-detection)
+See [docs/GO_BINARY.md](../../../../docs/GO_BINARY.md#scan--secret-pattern-detection)
 for the full pattern table and JSON shape (audit row B41).
 
 ```bash

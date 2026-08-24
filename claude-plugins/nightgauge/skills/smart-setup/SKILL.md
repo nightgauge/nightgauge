@@ -964,7 +964,7 @@ fi
 safety (`[ ! -f ]` skip), Node-version detection from `package.json`
 `engines.node`, devDep probing for vitest/eslint/prettier, and byte-for-
 byte template emission — see
-[docs/GO_BINARY.md → Setup Operations](../../docs/GO_BINARY.md#setup-operations)
+[docs/GO_BINARY.md → Setup Operations](../../../../docs/GO_BINARY.md#setup-operations)
 for the schema, exit codes, and template provenance.
 
 ```bash

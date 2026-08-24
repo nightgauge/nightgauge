@@ -4,7 +4,7 @@ Full config schema consulted across the validation phases. Read this when you
 need a config key default or an environment-override name.
 
 This skill reads configuration from `.nightgauge/config.yaml`. See
-[docs/CONFIGURATION.md](../../../docs/CONFIGURATION.md) for the full schema
+[docs/CONFIGURATION.md](../../../../../docs/CONFIGURATION.md) for the full schema
 reference.
 
 | Config Key                         | Default    | Description                                                       |

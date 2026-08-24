@@ -361,7 +361,7 @@ echo "Manifest written: $MANIFEST_PATH"
 
 The manifest schema (`CreationManifestSchema`) is defined in
 `packages/nightgauge-sdk/src/context/schemas/creation-manifest.ts` and
-documented in [docs/ISSUE_AUDIT.md](../../../docs/ISSUE_AUDIT.md). Each entry
+documented in [docs/ISSUE_AUDIT.md](../../../../../docs/ISSUE_AUDIT.md). Each entry
 records: `repo`, `number`, `type`, `priority`, `size`, `status`,
 `parent_epic` (sub-issues only), `sub_issues` (epic only), `blocked_by`,
 `body_sections`, `component_labels`, `knowledge_path`, `spike_artifact`

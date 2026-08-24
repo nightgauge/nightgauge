@@ -419,10 +419,10 @@ assert_equals(
 
 ## References
 
-- **docs-watch Skill:** [skills/nightgauge-docs-watch/SKILL.md](./SKILL.md)
-- **release-watch Skill:** [skills/nightgauge-release-watch/SKILL.md](../nightgauge-release-watch/SKILL.md)
-- **Assessment Engine:** [skills/nightgauge-release-watch/assessment-engine.md](../nightgauge-release-watch/assessment-engine.md)
-- **Relevance Categories:** [skills/nightgauge-docs-watch/reference.md](./reference.md)
+- **docs-watch Skill:** [skills/nightgauge-docs-watch/SKILL.md](SKILL.md)
+- **release-watch Skill:** [skills/nightgauge-release-watch/SKILL.md](../release-watch/SKILL.md)
+- **Assessment Engine:** [skills/nightgauge-release-watch/assessment-engine.md](../release-watch/assessment-engine.md)
+- **Relevance Categories:** [skills/nightgauge-docs-watch/reference.md](reference.md)
 
 ---
 

@@ -374,7 +374,7 @@ catches the quality-of-_reasoning_ defects the deterministic build/test gates
 cannot. The **judgment is the critics'**; the gate stays deterministic — the
 verdict reaches `FeatureValidateGate` via gate-metrics, per the
 "network/LLM checks are NOT StageGates" precedent in
-[docs/STAGE_GATES.md](../../../docs/STAGE_GATES.md).
+[docs/STAGE_GATES.md](../../../../../docs/STAGE_GATES.md).
 
 ```bash
 ADV_ENABLED=$(yq -r '.pipeline.adversarial_review.enabled // "true"' .nightgauge/config.yaml 2>/dev/null || echo "true")
