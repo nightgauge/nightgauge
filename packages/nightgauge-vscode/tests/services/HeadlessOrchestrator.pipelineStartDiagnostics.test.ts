@@ -97,7 +97,6 @@ function makePipelineStateMock(): PipelineStateService {
     deferStage: vi.fn().mockResolvedValue(undefined),
     setExecutionMode: vi.fn().mockResolvedValue(undefined),
     setStageExecutionMode: vi.fn().mockResolvedValue(undefined),
-    setStageModelSelection: vi.fn().mockResolvedValue(undefined),
     setStageContextFileSize: vi.fn().mockResolvedValue(undefined),
     updateTokens: vi.fn().mockResolvedValue(undefined),
     validateStageTransition: vi.fn().mockResolvedValue({ allowed: true }),

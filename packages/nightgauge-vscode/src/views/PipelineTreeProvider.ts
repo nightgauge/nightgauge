@@ -589,18 +589,6 @@ export class PipelineTreeProvider
           (stageState as { execution_mode?: "headless" | "interactive" }).execution_mode ?? null;
         stageItem.setExecutionMode(executionMode);
 
-        // Sync model selection metadata for tooltip display
-        if (stageState.model_selection) {
-          stageItem.setModelInfo({
-            model: stageState.model_selection.model,
-            source: stageState.model_selection.source,
-            confidence: stageState.model_selection.confidence,
-            complexity: stageState.model_selection.complexity,
-            mode: stageState.model_selection.mode,
-            effort: stageState.model_selection.effort,
-          });
-        }
-
         // Sync phase data from state (Issue #1028)
         // Handles extension reload / recovery from persisted state
         if (stageState.phases && stageState.phases.length > 0) {
