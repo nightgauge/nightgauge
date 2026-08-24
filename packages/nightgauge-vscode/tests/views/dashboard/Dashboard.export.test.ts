@@ -21,7 +21,9 @@ import * as vscode from "vscode";
 // vscode mock
 // ============================================================================
 
-const writtenFiles = new Map<string, Buffer>();
+// writeFile hands back a Uint8Array, not a Buffer — Buffer is a subclass, so
+// the Map must hold the wider type the VS Code API actually delivers.
+const writtenFiles = new Map<string, Uint8Array>();
 
 vi.mock("vscode", () => ({
   EventEmitter: class {
@@ -59,7 +61,7 @@ vi.mock("vscode", () => ({
     showWarningMessage: vi.fn(),
     showInformationMessage: vi.fn(),
     showErrorMessage: vi.fn(),
-    showSaveDialog: vi.fn().mockResolvedValue({ fsPath: "/tmp/test-export.csv" }),
+    showSaveDialog: vi.fn().mockResolvedValue({ fsPath: "/tmp/test-export.csv" } as vscode.Uri),
     createOutputChannel: vi.fn(() => ({
       appendLine: vi.fn(),
       show: vi.fn(),
@@ -70,7 +72,7 @@ vi.mock("vscode", () => ({
   workspace: {
     getConfiguration: vi.fn(() => ({ get: vi.fn().mockReturnValue(undefined) })),
     fs: {
-      writeFile: vi.fn((uri: { fsPath: string }, data: Buffer) => {
+      writeFile: vi.fn((uri: vscode.Uri, data: Uint8Array) => {
         writtenFiles.set(uri.fsPath, data);
         return Promise.resolve();
       }),
@@ -302,7 +304,8 @@ function asDashboardPrivate(d: Dashboard): DashboardPrivate {
 function getWrittenContent(): string {
   const buf = writtenFiles.get("/tmp/test-export.csv");
   if (!buf) throw new Error("No file written to /tmp/test-export.csv");
-  return buf.toString("utf-8");
+  // Uint8Array.toString() takes no encoding argument; decode explicitly.
+  return new TextDecoder("utf-8").decode(buf);
 }
 
 function historyTarget(issueNumber = 100): {
@@ -350,12 +353,14 @@ describe("Dashboard.handleExport — post-fix (#2794)", () => {
 
     // Re-apply writeFile mock (clearAllMocks would strip it)
     vi.mocked(vscode.workspace.fs.writeFile).mockImplementation(
-      (uri: { fsPath: string }, data: Buffer) => {
+      (uri: vscode.Uri, data: Uint8Array) => {
         writtenFiles.set(uri.fsPath, data);
         return Promise.resolve();
       }
     );
-    vi.mocked(vscode.window.showSaveDialog).mockResolvedValue({ fsPath: "/tmp/test-export.csv" });
+    vi.mocked(vscode.window.showSaveDialog).mockResolvedValue({
+      fsPath: "/tmp/test-export.csv",
+    } as vscode.Uri);
 
     const workspaceState = createMockMemento();
     // Build a plain mock object rather than using new TelemetryStore() (mock is not constructable)
@@ -494,12 +499,14 @@ describe("Dashboard.handleExportAnalytics", () => {
     vi.clearAllMocks();
 
     vi.mocked(vscode.workspace.fs.writeFile).mockImplementation(
-      (uri: { fsPath: string }, data: Buffer) => {
+      (uri: vscode.Uri, data: Uint8Array) => {
         writtenFiles.set(uri.fsPath, data);
         return Promise.resolve();
       }
     );
-    vi.mocked(vscode.window.showSaveDialog).mockResolvedValue({ fsPath: "/tmp/test-export.csv" });
+    vi.mocked(vscode.window.showSaveDialog).mockResolvedValue({
+      fsPath: "/tmp/test-export.csv",
+    } as vscode.Uri);
 
     const workspaceState = createMockMemento();
     dashboard = new Dashboard(mockExtensionUri, workspaceState, workspaceRoot);
