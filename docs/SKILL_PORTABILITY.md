@@ -64,7 +64,7 @@ where no host exports `NIGHTGAUGE_BIN`. The shared steps stay mirrored
 between guard.sh and PREFLIGHT.md (#3262); only the vscode glob is guard.sh-only.
 guard.sh is **not** scanned by the portability gate.
 
-## 2. Model-tier frontmatter is advisory
+## 2. Model-tier frontmatter is advisory; the resolved model is not
 
 `model: haiku|sonnet|opus` in a SKILL.md is a **Claude tier name** and is
 **advisory only** for pipeline execution — it is never read by the Go or
@@ -95,6 +95,39 @@ declares `model: haiku`, but `DEFAULT_STAGE_MODELS` resolves it to `sonnet`
 only. This divergence is intentional, not drift — frontmatter is deliberately
 left untouched here so **Claude invocation is unchanged** (a native
 `/nightgauge:*` slash-command invocation may still read it).
+
+### The resolved model is behaviorally significant (ADR 016)
+
+The `model:` field stays advisory. What changed with model-aware skill overlays
+is the other end of the chain: the **resolved** model now selects overlay
+fragments at render time, so skill rendering is no longer model-independent.
+`nightgauge skill render --stage <stage> --model <id>` composes the base
+`SKILL.md` with any matching fragments from `_shared/_overlays/` and
+`<skill>/_overlays/`. See [MODEL_ADAPTATION.md](MODEL_ADAPTATION.md).
+
+**The portability contract still holds, and holds by construction:**
+
+- Overlays are **additive**. They add a `## Model Adaptation` section; they
+  never rewrite the procedure. A base skill and its overlay-composed form
+  describe the same stage.
+- Resolution is **host-side**, in the Go binary. No adapter has to implement
+  anything, and no skill file contains adapter-conditional syntax.
+- **Base-only is the fallback, and it is a correct rendering.** An unknown
+  model, a tier name that resolves to no descriptor, a provider with no registry
+  entries by design (ollama, lm-studio), an unreadable fragment, or no `--model`
+  at all: every one of these renders the base document and exits 0. That is
+  byte-for-byte the behavior that predates overlays.
+
+**Acknowledged gap.** Adaptation is applied by the render path only. A skill
+read _directly_ — opened by hand, or loaded by the harness when a user types
+`/nightgauge:<name>`, which since the slash-command/skill unification loads
+`claude-plugins/nightgauge/skills/<name>/SKILL.md` with no wrapper to interpose
+— sees the base document with no adaptation. `_overlays/` directories are
+mirrored into the plugin tree by `scripts/install-agent-skills.sh` but are never
+resolved there. This is tolerable exactly because base-only is correct: the
+skill is unadapted, never wrong. It is closed for one class of caller —
+anything rendering through `nightgauge skill render`, which is every path the
+pipeline dispatches.
 
 ## 3. Phase markers are no-op-safe
 

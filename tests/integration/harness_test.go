@@ -39,7 +39,8 @@ const (
 
 // TestMain waits for GitLab to become healthy, runs the fixture seeder, and
 // only then dispatches t.Run. When GITLAB_E2E_URL is unset the suite skips
-// entirely — this is the behavior the skills-smoke matrix relies on.
+// entirely — this is the behavior the .nightgauge/skill-smoke/ harness
+// relies on.
 func TestMain(m *testing.M) {
 	gitlabURL = strings.TrimRight(os.Getenv(envGITLABURL), "/")
 	if gitlabURL == "" {

@@ -234,7 +234,7 @@ and the `.gitignore` block above. Do **not** re-emit a YAML heredoc here.
 
 If `nightgauge config init` is unavailable (binary not on PATH for any
 reason), fall back to the canonical template at
-[docs/GO_BINARY.md#configuration](../../../docs/GO_BINARY.md#configuration);
+[docs/GO_BINARY.md#configuration](../../../../../docs/GO_BINARY.md#configuration);
 copy that block verbatim and replace each `<PLACEHOLDER>` with the IDs
 discovered in Phase 4.
 

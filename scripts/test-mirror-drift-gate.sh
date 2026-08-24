@@ -32,6 +32,8 @@ set -uo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
 GATE="scripts/install-agent-skills.sh"
+# The generator delegates mirror link re-basing to this helper (#831).
+HELPER="scripts/lib/mirror_links.py"
 MIRROR="claude-plugins/nightgauge/skills"
 PASS=0
 FAIL=0
@@ -68,6 +70,12 @@ seed_repo() {
   TMP="$(mktemp -d)"
   git archive HEAD skills claude-plugins scripts .gitignore | tar -x -C "$TMP"
   cp "$GATE" "$TMP/$GATE"
+  # Overlay the helper for the same reason as the gate itself: it is part of the
+  # generator under test, so archiving HEAD's copy would validate a generator
+  # half of which is not the one on disk. On the commit that INTRODUCES the
+  # helper, HEAD has no copy at all and every arm dies on a missing file.
+  mkdir -p "$TMP/$(dirname "$HELPER")"
+  cp "$HELPER" "$TMP/$HELPER"
   git -C "$TMP" init -q
   git -C "$TMP" add -A
   git -C "$TMP" -c user.email=test@invalid -c user.name=test commit -qm "fixture"

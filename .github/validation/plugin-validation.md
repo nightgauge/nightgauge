@@ -212,10 +212,11 @@ fi
 
 ## CI Integration
 
-These checks are integrated into `.github/workflows/claude-plugin-validation.yml` and run automatically on:
-
-- Pull requests touching `claude-plugins/**`, `skills/**`, or `configs/**`
-- Pushes to main branch
+**These checks are not wired into CI.** No workflow runs them — run the script
+above by hand before opening a pull request that touches `claude-plugins/**`,
+`skills/**`, or `configs/**`. `.github/workflows/lint.yml` covers Prettier,
+ESLint, SKILL.md metadata and the plugin-mirror drift gate, but not the plugin
+manifest checks on this page.
 
 ## Related
 

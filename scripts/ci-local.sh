@@ -177,6 +177,16 @@ if [ -f scripts/check-visibility-prose.py ]; then
   run_step "visibility-prose reintroduction gate" python3 scripts/check-visibility-prose.py
 fi
 
+# 5f. Nonexistent-workflow-reference gate (#545) — fails when a tracked file
+# names a `.github/workflows/*.yml` path that does not exist. Self-test first:
+# a gate nothing exercises degrades into an unconditional pass.
+if [ -f scripts/test-workflow-refs-check.sh ]; then
+  run_step "Workflow-reference gate regression suite" bash scripts/test-workflow-refs-check.sh
+fi
+if [ -f scripts/check-workflow-refs.py ]; then
+  run_step "nonexistent-workflow-reference gate" python3 scripts/check-workflow-refs.py
+fi
+
 # 4b. Cache-boundary measurement smoke test
 if [ -f scripts/test-measure-cache-boundary-loss.sh ]; then
   run_step "Cache-boundary measurement smoke" bash scripts/test-measure-cache-boundary-loss.sh
@@ -278,6 +288,21 @@ fi
 if [ -f scripts/install-agent-skills.sh ]; then
   run_step "Plugin skills mirror in sync" \
     bash scripts/install-agent-skills.sh --check-mirror
+fi
+
+# 11c. Mirror link integrity — the question 11b structurally cannot ask. The
+#      drift gate compares the mirror to the generator's own output, so when the
+#      generator copied `../../docs/X.md` verbatim into a directory two levels
+#      deeper, both sides carried the same ~90 dead links and 11b was green by
+#      construction (#831). This gate resolves each link against the file that
+#      contains it, which is a fact about the tree rather than about the copy.
+#      Self-test first, same reasoning as 11 and 5b.
+if [ -f scripts/test-mirror-link-check.sh ]; then
+  run_step "Mirror link gate regression suite" \
+    bash scripts/test-mirror-link-check.sh
+fi
+if [ -f scripts/check-mirror-links.py ]; then
+  run_step "Mirror link integrity" python3 scripts/check-mirror-links.py
 fi
 
 echo ""

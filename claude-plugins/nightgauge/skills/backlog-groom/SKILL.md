@@ -178,9 +178,8 @@ Set `RUN_COUNTS` (e.g. `{"stale":N,"duplicates":N,"priority_fixes":N}`) and
 
 ---
 
-See the CLI wrapper documentation at
-[claude-plugins/nightgauge/commands/backlog-groom.md](../../claude-plugins/nightgauge/commands/backlog-groom.md)
-for complete workflow details including all phases:
+This skill IS the `/nightgauge:backlog-groom` command (ADR 007) — there is no
+separate wrapper document. The full workflow is the phases above:
 
 - Phase 0: Setup & Configuration
 - Phase 1: Data Collection

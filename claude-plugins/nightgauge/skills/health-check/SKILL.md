@@ -273,7 +273,7 @@ Run the deterministic Go verb `nightgauge scan ecosystem` (audit row
 **B1**) to detect language ecosystems and workspace structure in a single
 binary call. Replaces the bash + jq file-existence chain that used to live
 across two phases here. Schema is stable v1 — see
-[docs/GO_BINARY.md](../../docs/GO_BINARY.md#scan--ecosystem-detection).
+[docs/GO_BINARY.md](../../../../docs/GO_BINARY.md#scan--ecosystem-detection).
 
 ```bash
 cd "$ASSESS_PATH"
@@ -388,7 +388,7 @@ fi
 ```
 
 The unified scan output at `/tmp/hc_scan_deps.json` follows the schema
-documented in [docs/GO_BINARY.md](../../docs/GO_BINARY.md#scan--dependency-audit).
+documented in [docs/GO_BINARY.md](../../../../docs/GO_BINARY.md#scan--dependency-audit).
 Step 1.3 reads this file directly via `jq` (e.g.
 `jq '.totals' /tmp/hc_scan_deps.json`,
 `jq '.ecosystems.nodejs.outdated' /tmp/hc_scan_deps.json`).
@@ -471,7 +471,7 @@ Delegate to the Go binary verb. `nightgauge scan tests` walks the workdir
 counting test files (matching `*.test.*`, `*.spec.*`, `*_test.*`, `test_*`)
 and source files (same extension allowlist as Step 3.1, minus tests). Pure
 path classification — no file content read. Schema version 1; field names
-are stable. See [docs/GO_BINARY.md](../../docs/GO_BINARY.md#scan--testsource-ratio).
+are stable. See [docs/GO_BINARY.md](../../../../docs/GO_BINARY.md#scan--testsource-ratio).
 
 ```bash
 TESTS_JSON=$(nightgauge scan tests --workdir "$ASSESS_PATH" --json)
@@ -530,7 +530,7 @@ source-extension allowlist (`.ts`, `.tsx`, `.js`, `.jsx`, `.py`, `.go`,
 `.rs`, `.java`, `.kt`). Counts are line-based — each marker increments at
 most once per matching line, mirroring `grep -cE ... | awk '{sum+=$NF}'`
 semantics so existing scoring rubrics stay calibrated. See
-[docs/GO_BINARY.md](../../docs/GO_BINARY.md#scan--debt-markers-todofixmehackxxx).
+[docs/GO_BINARY.md](../../../../docs/GO_BINARY.md#scan--debt-markers-todofixmehackxxx).
 
 ```bash
 DEBT_JSON=$(nightgauge scan debt --workdir "$ASSESS_PATH" --json)
@@ -551,7 +551,7 @@ the workdir root for canonical linter / formatter config files and reads
 sections. Linter keys: `eslint`, `ruff`, `golangci`, `clippy`, `flake8`,
 `pylint`, `checkstyle`. Formatter keys: `prettier`, `editorconfig`,
 `black`, `ruff_format`. See
-[docs/GO_BINARY.md](../../docs/GO_BINARY.md#scan--linter--formatter-tooling).
+[docs/GO_BINARY.md](../../../../docs/GO_BINARY.md#scan--linter--formatter-tooling).
 
 ```bash
 TOOLING_JSON=$(nightgauge scan tooling --workdir "$ASSESS_PATH" --json)

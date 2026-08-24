@@ -28,7 +28,7 @@ internal validation documents in your `.github/validation/` directory.
 
 Checks 1, 2, 3, 5, and 9 below are implemented by the deterministic
 `nightgauge preflight` Go verb family — see
-[docs/GO_BINARY.md#preflight-operations](../../docs/GO_BINARY.md) for the full
+[docs/GO_BINARY.md#preflight-operations](../../../../docs/GO_BINARY.md) for the full
 CLI reference. Checks 4, 6, 7, 8 remain inline bash because they are not yet
 covered by the binary (audit row B40 scope).
 
