@@ -20,10 +20,31 @@ outputs; provider behavior and manual review remain part of the trust model.
 
 ## Quick Start
 
+### Before you start
+
+Nightgauge drives real tools on your machine, so three things must be in place
+before the pipeline can run a single stage. See
+[Requirements](#requirements) for versions.
+
+- **`git`**, and a repository with a GitHub remote.
+- **The [`gh` CLI](https://cli.github.com), signed in** — run `gh auth login`.
+  This is how the pipeline authenticates to GitHub. Signing in to Nightgauge
+  inside VS Code (step 2 below) does **not** replace it.
+- **An AI coding agent** — the [`claude`
+  CLI](https://docs.claude.com/en/docs/claude-code/overview) is the supported
+  default. Other adapters are available but less exercised; see
+  [Settings](#settings).
+
+Run `nightgauge doctor --adapters all` at any point to check all three.
+
+### Steps
+
 1. **Install** — Install **Nightgauge** from the VS Code Marketplace. The
    Marketplace serves the build matching your platform automatically.
-2. **Sign in** — Run **Nightgauge: Sign In with GitHub** from the
-   Command Palette to connect your GitHub account.
+2. **Sign in (optional)** — Run **Nightgauge: Sign In with GitHub** from the
+   Command Palette. This connects a Nightgauge account for hosted features. It
+   is **not** how the pipeline reaches GitHub — that is `gh auth login` above,
+   or a token in `.nightgauge/config.yaml`.
 3. **Initialize the repo** — Open the Nightgauge sidebar in a repository
    you want to automate. If it hasn't been set up yet, click **Initialize
    Repository** in the welcome view — this writes
@@ -419,8 +440,22 @@ in the warning notification that appears on workspace load.
 
 ## Requirements
 
-- VS Code 1.85.0 or higher
-- Node.js 18.0.0 or higher
+| Requirement                                       | Notes                                                                                                                                                                                                                                                         |
+| ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| VS Code 1.85.0 or higher                          |                                                                                                                                                                                                                                                               |
+| Node.js 18.0.0 or higher                          |                                                                                                                                                                                                                                                               |
+| `git`                                             | With a GitHub remote configured on the repository you point Nightgauge at.                                                                                                                                                                                    |
+| [`gh` CLI](https://cli.github.com), authenticated | `gh auth login`. The pipeline resolves its GitHub token from `.nightgauge/config.yaml`, `GITHUB_TOKEN`, or `gh auth token` — in that order. The extension's **Sign In with GitHub** command authenticates a Nightgauge account and is not part of that chain. |
+| An AI coding agent                                | The [`claude` CLI](https://docs.claude.com/en/docs/claude-code/overview) is the supported default path. Adapters for other CLIs and for API keys exist and are less exercised.                                                                                |
+
+macOS (Apple Silicon and Intel) and Linux x64 only — see
+[Installing](#installing).
+
+Verify all of it in one command:
+
+```bash
+nightgauge doctor --adapters all
+```
 
 ## License
 
