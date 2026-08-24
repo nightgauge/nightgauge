@@ -114,6 +114,85 @@ On `/tmp/nightgauge-793.S45yA2/tree` at commit
 PR #795 then passed the full GitHub matrix, including CodeQL for Go and
 JavaScript/TypeScript.
 
+## The clean-machine install gate
+
+Added 2026-08-24. The sections above record a **code**-readiness run: what
+merged, what CI observed, which issues were deferred. None of it walks the
+install path a first-time user walks, and until this section existed that gate
+had no written procedure at all — it was named as the thing standing between
+the repo and a release, and then left to whoever remembered it.
+
+This is the procedure. Run it against the packaged artifact, never a dev
+install (`scripts/dev-install.sh` is explicitly not a release-validation path).
+
+### The steps
+
+```bash
+# 1. Package from a clean tree at the release commit.
+npm run package -w nightgauge-vscode
+#    → packages/nightgauge-vscode/nightgauge-vscode-<version>.vsix
+
+# 2. Install into a profile that shares nothing with your dev setup.
+code --extensions-dir /tmp/ng-clean/ext --user-data-dir /tmp/ng-clean/user \
+     --install-extension packages/nightgauge-vscode/nightgauge-vscode-<version>.vsix
+
+# 3. Point it at a repository with no Nightgauge state.
+# 4. Follow the Marketplace README's Quick Start EXACTLY — no shortcuts an
+#    author would take, no environment variables a maintainer already has.
+# 5. Drive one issue to a merged PR.
+```
+
+Step 4 is the load-bearing one. The failures this gate catches are almost all
+of the form "the docs describe a path the product does not have", and they are
+invisible to anyone who knows the product well enough to route around them.
+
+### What a real clean machine adds that a clean profile cannot
+
+An isolated `--extensions-dir` / `--user-data-dir` is a good approximation and
+worth running first — it is cheap and it catches most of it. It does **not**
+isolate:
+
+| Leaks through a clean profile | Why it matters                                                                                                                        |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `gh` keyring credentials      | The maintainer is already authenticated; a new user is not. Scrubbing `PATH` simulates absence but not a fresh login flow.            |
+| `~/.vscode/extensions`        | The binary-resolution cascade scans it, so a dev bundle can be resolved instead of the one just installed — with a different version. |
+| `~/.claude`, `~/.codex`, etc. | Adapter config and auth the user will not have.                                                                                       |
+| Homebrew / toolchain state    | `git`, `gh`, `node` and the agent CLI are all present on a developer machine by definition.                                           |
+
+So: run the clean-profile pass on every release candidate, and a genuine
+second-machine pass before the first public release.
+
+### Findings from the 2026-08-24 clean-profile pass
+
+Run against `main` @ `051b74d4`, packaged as `nightgauge-vscode-0.1.0.vsix`
+(28.82 MB, 1341 files; binary reports `0.2.0-rc.24`). Packaging itself was
+green, and `doctor`'s per-adapter remediation lines were good — every failure
+below is about what the product _claims_, not what it does.
+
+| Finding                                                                                              | Status                                                              |
+| ---------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
+| `doctor` reported `healthy` / exit 0 with zero usable AI adapters                                    | Fixed — [#862](https://github.com/nightgauge/nightgauge/issues/862) |
+| README Requirements omitted `gh` and an AI agent; "Sign In with GitHub" read as pipeline GitHub auth | Fixed — [#863](https://github.com/nightgauge/nightgauge/issues/863) |
+| Every docs-only PR failed CI — the ungated test-tree typecheck ran without `npm ci`                  | Fixed — [#865](https://github.com/nightgauge/nightgauge/issues/865) |
+
+Two observations left unfiled, both judged cosmetic:
+
+- The `.vsix` ships `tsconfig.test.json` and `tsconfig.playwright.json`. Dev
+  files in a Marketplace artifact; harmless, untidy.
+- `doctor` on a repository with no `origin` prints a raw four-line
+  `git fatal: Could not read from remote repository` to stderr before its
+  report. Alarming on a first run, and the sweep's warning already says what
+  happened.
+
+### Still not walked
+
+**Steps 3–5 above have not been executed end to end.** The pass that produced
+the findings covered packaging, install, and the first-run diagnostic surface;
+it stopped short of driving an issue to a merged PR as a fresh user. That
+remains the release gate, and no amount of green CI substitutes for it — every
+finding above came from running the packaged artifact, and none of them was
+visible to the test suite.
+
 ## What this checklist is not
 
 - It is not a GO to cut a stable `v0.2.0`.
