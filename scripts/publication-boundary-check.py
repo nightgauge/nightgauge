@@ -36,6 +36,7 @@ import os
 import re
 import subprocess
 import sys
+from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
 MANIFEST = Path(".github/publication-boundary.yaml")
@@ -231,6 +232,113 @@ def base_file_numbers(base: str, path: str, ceiling: int) -> set[int]:
         return _file_unresolvable_numbers(r.stdout.decode("utf-8", "replace"), ceiling)
     except Exception:
         return set()
+
+
+# ── The scan worker (#850) ───────────────────────────────────────────────────
+#
+# Module level and configured through an initializer so the parent can run it
+# either in-process or across a process pool. Everything it returns is plain
+# data -- no formatted strings -- because the report's wording depends on
+# `untracked_note`, which is a closure over the parent's path sets.
+_SCAN: dict = {}
+
+
+def _scan_init(rule_specs, token_hashes, salt, token_allow, manifest_path,
+               ref_exempt, ceiling, enc, tracked):
+    """Compile per-worker state once, not once per chunk."""
+    global _SCAN
+    _SCAN = {
+        # Patterns are shipped as SOURCE and compiled here: a compiled pattern
+        # survives pickling, but sending the source keeps the worker's regex
+        # flags explicit and identical to the serial path.
+        "rules": [(rid, re.compile(src, re.IGNORECASE), exempt)
+                  for rid, src, exempt in rule_specs],
+        "token_hashes": token_hashes,
+        "salt": salt,
+        "token_allow": token_allow,
+        "manifest": manifest_path,
+        "ref_exempt": ref_exempt,
+        "ceiling": ceiling,
+        "enc": enc,
+        "tracked": tracked,
+        "word": re.compile(r"[A-Za-z0-9_.-]+"),
+        # Per-worker memo. Each worker sees a slice of the tree, and source
+        # tokens repeat inside any slice, so the cache still pays for itself.
+        "memo": {},
+    }
+
+
+def _scan_chunk(chunk):
+    """Scan a contiguous slice of paths. Returns plain tuples, in path order."""
+    c = _SCAN
+    rule_hits = []
+    token_hits = []
+    tree_hits = []
+    for p in chunk:
+        active = [r for r in c["rules"] if not any(matches(p, e) for e in r[2])]
+        want_tokens = bool(c["token_hashes"]) and not (
+            p == c["manifest"]
+            or p == "scripts/publication-boundary-check.py"
+            or p in c["token_allow"]
+        )
+        want_tree = p in c["tracked"] and not any(
+            matches(p, e) for e in c["ref_exempt"]
+        )
+        if not active and not want_tokens and not want_tree:
+            continue
+        try:
+            raw = Path(p).read_bytes()
+        except OSError:
+            continue  # unreadable; every rule skipped it before, too
+
+        if active or want_tokens:
+            lines = raw.decode(c["enc"], errors="ignore").splitlines()
+            for rid, pattern, _exempt in active:
+                for n, line in enumerate(lines, 1):
+                    if pattern.search(line):
+                        rule_hits.append((rid, p, n, line.strip()[:100]))
+                        break  # one hit per file is enough to fail it
+            if want_tokens:
+                for n, line in enumerate(lines, 1):
+                    if _line_has_denied_token(
+                        line, c["word"], c["salt"], c["token_hashes"], c["memo"]
+                    ):
+                        token_hits.append((p, n))
+                        break  # one hit per file is enough to fail it
+
+        if want_tree:
+            try:
+                strict = raw.decode("utf-8")
+            except UnicodeDecodeError:
+                continue  # binary or unreadable: not prose, not a citation
+            if "#" not in strict:
+                continue  # cheap reject before the line-by-line walk
+            hits = list(_unresolvable_in_text(strict, c["ceiling"]))
+            if not hits:
+                continue
+            starts = [0]
+            for i, ch in enumerate(strict):
+                if ch == "\n":
+                    starts.append(i + 1)
+            for num, token, pos in hits:
+                tree_hits.append((p, bisect.bisect_right(starts, pos), num, token))
+    return rule_hits, token_hits, tree_hits
+
+
+def _scan_jobs(path_count: int) -> int:
+    """How many worker processes to use. 1 means "run in this process"."""
+    override = os.environ.get("NG_BOUNDARY_JOBS")
+    if override:
+        try:
+            n = int(override)
+        except ValueError:
+            die(2, f"NG_BOUNDARY_JOBS must be an integer, got {override!r}. Failing closed.")
+        return max(1, n)
+    # Below this the pool costs more than it saves, and the suite runs this
+    # guard dozens of times in a row.
+    if path_count < 500:
+        return 1
+    return max(1, min(os.cpu_count() or 1, 8))
 
 
 # `tree_unresolvable_refs` used to live here, walking the whole tree itself.
@@ -535,63 +643,47 @@ def main() -> int:
     # section order, so the report is byte-identical to the multi-pass form.
     _enc = locale.getpreferredencoding(False)
     tracked_set = set(tracked)
+    _rule_specs = [(rid, pat.pattern, exempt)
+                   for rid, pat, exempt, _b in compiled_rules]
+    _init_args = (_rule_specs, token_hashes, salt, token_allow_paths,
+                  str(MANIFEST), ref_exempt, ceiling, _enc, tracked_set)
+
     rule_hits: dict[str, list] = {rid: [] for rid, _p, _e, _b in compiled_rules}
     token_violations: list[str] = []
     tree_hits: list = []
 
-    for p in paths:
-        active = [c for c in compiled_rules if not any(matches(p, e) for e in c[2])]
-        want_tokens = bool(token_hashes) and not (
-            p == str(MANIFEST)
-            or p == "scripts/publication-boundary-check.py"
-            or p in token_allow_paths
-        )
-        # The tree-wide burn-down counts TRACKED files only.
-        want_tree = p in tracked_set and not any(matches(p, e) for e in ref_exempt)
-        if not active and not want_tokens and not want_tree:
-            continue
+    jobs = _scan_jobs(len(paths))
+    if jobs > 1:
+        # Contiguous slices, merged in slice order, so the report is identical
+        # to the serial walk. Striding would interleave and reorder it.
+        size = (len(paths) + jobs - 1) // jobs
+        chunks = [paths[i:i + size] for i in range(0, len(paths), size)]
         try:
-            raw = Path(p).read_bytes()
-        except OSError:
-            continue  # unreadable; every rule skipped it before, too
+            with ProcessPoolExecutor(
+                max_workers=jobs, initializer=_scan_init, initargs=_init_args
+            ) as pool:
+                results = list(pool.map(_scan_chunk, chunks))
+        except Exception as exc:  # noqa: BLE001
+            # A worker that dies must never look like a clean tree. main()'s
+            # caller turns this into exit 2; the one thing it must not do is
+            # fall through to a report built from partial results.
+            die(2, f"the parallel scan failed ({exc!r}). Failing closed.\n"
+                   f"  Re-run with NG_BOUNDARY_JOBS=1 to scan in this process.")
+    else:
+        _scan_init(*_init_args)
+        results = [_scan_chunk(paths)]
 
-        if active or want_tokens:
-            text = raw.decode(_enc, errors="ignore")
-            lines = text.splitlines()
-            for rid, pattern, _exempt, _baseline in active:
-                for n, line in enumerate(lines, 1):
-                    if pattern.search(line):
-                        rule_hits[rid].append((p, n, line.strip()[:100]))
-                        break  # one hit per file is enough to fail it
-            if want_tokens:
-                for n, line in enumerate(lines, 1):
-                    if _line_has_denied_token(line, word, salt, token_hashes, token_memo):
-                        token_violations.append(
-                            f"FORBIDDEN TOKEN: {p}:{n}{untracked_note(p)}\n"
-                            f"    A token on this line is on the private-identifier denylist.\n"
-                            f"    It is matched by hash, so it is not named here. See\n"
-                            f"    nightgauge-internal (strategy/) for the plaintext list."
-                        )
-                        break  # one hit per file is enough to fail it
-
-        if want_tree:
-            try:
-                strict = raw.decode("utf-8")
-            except UnicodeDecodeError:
-                strict = None  # binary or unreadable: not prose, not a citation
-            # Cheap reject before the line-by-line walk.
-            if strict is not None and "#" in strict:
-                hits = list(_unresolvable_in_text(strict, ceiling))
-                if hits:
-                    # Line numbers only for files that actually have hits.
-                    starts = [0]
-                    for i, ch in enumerate(strict):
-                        if ch == "\n":
-                            starts.append(i + 1)
-                    for num, token, pos in hits:
-                        tree_hits.append(
-                            (p, bisect.bisect_right(starts, pos), num, token)
-                        )
+    for chunk_rules, chunk_tokens, chunk_tree in results:
+        for rid, hp, hn, snippet in chunk_rules:
+            rule_hits[rid].append((hp, hn, snippet))
+        for hp, hn in chunk_tokens:
+            token_violations.append(
+                f"FORBIDDEN TOKEN: {hp}:{hn}{untracked_note(hp)}\n"
+                f"    A token on this line is on the private-identifier denylist.\n"
+                f"    It is matched by hash, so it is not named here. See\n"
+                f"    nightgauge-internal (strategy/) for the plaintext list."
+            )
+        tree_hits.extend(chunk_tree)
 
     # ── 3 (emit). Forbidden content ──────────────────────────────────────────
     for rid, _pattern, _exempt, rule_baseline in compiled_rules:
