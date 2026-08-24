@@ -483,6 +483,63 @@ func FilterHeadlessTools(tools []string) []string {
 // A second root that cannot match is not a harmless fallback: it is a
 // documented-looking answer to "where else do we look?" that costs a stat per
 // stage and hides the fact that there is no second source.
+//
+// THE BUNDLE IS A SECOND SOURCE, AND IT CAN MATCH (#874). The paragraph above
+// is still right about `claude-plugins/.../commands`, but its conclusion — one
+// root, always — was generalised from that one dead layout to "there is no
+// second source", and that is false. The VSCode extension ships the pipeline
+// skills at `dist/skills/` beside the binary at `dist/bin/nightgauge`, and the
+// TypeScript host already searches both (`resolveSkillRoots`, skillRunner.ts).
+// Only the Go-direct path did not, so `nightgauge queue run` and the Go
+// autonomous scheduler could not render a single stage skill in any repository
+// that does not vendor this repo's `skills/` tree — i.e. every user's repo,
+// while the file they needed sat one directory over from the running binary.
+//
+// ADR 016 §4 makes skill LOCATION the host's job because the bundle path
+// depends on the extension host. That holds for the IPC path, where the host
+// passes roots explicitly. The Go-direct path has no host to ask, so it asks
+// the one thing it does know: where its own executable lives.
+//
+// The objection above is answered rather than ignored: the bundle root is
+// appended ONLY when it resolves to a real directory, so the returned list
+// never contains a root that cannot match.
 func DefaultRoots(workspaceRoot string) []string {
-	return []string{filepath.Join(workspaceRoot, "skills")}
+	exe, err := os.Executable()
+	if err != nil {
+		exe = ""
+	}
+	return defaultRoots(workspaceRoot, exe)
+}
+
+// defaultRoots is DefaultRoots with the executable path injected, so the
+// bundle arm is testable without a real bundle on disk.
+func defaultRoots(workspaceRoot, exe string) []string {
+	roots := []string{filepath.Join(workspaceRoot, "skills")}
+	if bundle := bundleSkillsRoot(exe); bundle != "" {
+		roots = append(roots, bundle)
+	}
+	return roots
+}
+
+// bundleSkillsRoot returns the skills tree shipped alongside this binary, or
+// "" when there is not one — a plain `go build` output, or a binary installed
+// somewhere without the bundle layout, both of which must keep working.
+//
+// The layout is fixed by the extension's packaging: `<bundle>/dist/bin/nightgauge`
+// and `<bundle>/dist/skills/`, so the tree is the executable's grandparent plus
+// "skills". Symlinks are resolved first — a binary reached through a symlink
+// (a PATH shim, Homebrew) would otherwise compute the root from the link's
+// directory instead of the real bundle's.
+func bundleSkillsRoot(exe string) string {
+	if exe == "" {
+		return ""
+	}
+	if resolved, err := filepath.EvalSymlinks(exe); err == nil {
+		exe = resolved
+	}
+	candidate := filepath.Join(filepath.Dir(filepath.Dir(exe)), "skills")
+	if info, err := os.Stat(candidate); err == nil && info.IsDir() {
+		return candidate
+	}
+	return ""
 }
