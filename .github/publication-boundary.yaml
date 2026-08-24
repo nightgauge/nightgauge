@@ -640,8 +640,10 @@ issue_references:
   # high-water mark of 789 while the guard printed "clean".
   #
   # 2026-08-23: first measurement, 6,257 references across 997 files.
+  # 2026-08-23: 6,255 after R.1 (#836) dropped two archived-repo citations that
+  # a file rename made newly visible to the diff-scoped rule.
   # NEVER raise this number. Lower it as the sweep progresses.
-  tree_baseline: 6257
+  tree_baseline: 6255
   allow_paths:
     # Files that DEFINE or TEST the rule must contain example violations.
     - ".github/publication-boundary.yaml"
