@@ -1392,8 +1392,9 @@ export const PipelineConfigSchema = z.object({
    *
    * Defers dispatch of issues whose acceptance criteria require promoting a
    * CI check on `main` when `main`'s recent runs of that check are failing.
-   * Daily `baseline-defer-sweep` cron auto-resumes deferred items when the
-   * baseline goes green.
+   * Deferred items do not resume on their own — an operator runs
+   * `nightgauge baseline-gate promote`, which releases those whose baseline
+   * has gone green.
    *
    * @see docs/CONFIGURATION.md - Baseline-CI gate configuration reference
    */

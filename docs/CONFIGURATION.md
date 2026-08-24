@@ -2226,9 +2226,16 @@ pipeline:
 
 Defers dispatch of issues whose acceptance criteria require promoting a CI
 check on `main` when `main`'s recent runs of that check are failing. Runs in
-`issue-pickup` Phase 2.8 (after the size gate). A daily
-`baseline-defer-sweep.yml` cron resumes deferred items when the baseline goes
-green.
+`issue-pickup` Phase 2.8 (after the size gate).
+
+**A deferred item does not resume on its own.** Releasing it is an operator
+action — run `nightgauge baseline-gate promote` in the workspace, which
+re-evaluates every item paused with `kind=baseline_ci_red` and resumes those
+whose last `green_threshold` runs on `main` are all `success`. This cannot be a
+CI cron: the queue lives at `<repo>/.nightgauge/pipeline/queue-state.json` on
+the operator's machine and is gitignored, so a GitHub Actions runner has no
+queue to promote. If auto-resume is wanted, its home is the local autonomous
+daemon's sweep loop — where the `blocked_dependency` promote already runs.
 
 ```yaml
 pipeline:
@@ -2241,7 +2248,7 @@ pipeline:
 
 | Field             | Type    | Default | Description                                                                                                                                   |
 | ----------------- | ------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| `enabled`         | boolean | `true`  | Master toggle. When `false`, the gate is skipped during issue-pickup and the daily promote sweep is a no-op.                                  |
+| `enabled`         | boolean | `true`  | Master toggle. When `false`, the gate is skipped during issue-pickup and `baseline-gate promote` is a no-op.                                  |
 | `lookback_runs`   | number  | `5`     | How many recent _completed_ runs of the referenced workflow on `main` to inspect when computing the failure rate. Capped at 20 by the binary. |
 | `red_threshold`   | number  | `2`     | Defer dispatch when at least this many of the last `lookback_runs` failed.                                                                    |
 | `green_threshold` | number  | `2`     | Promote (resume) a deferred item when the most-recent N completed runs are all `success`.                                                     |

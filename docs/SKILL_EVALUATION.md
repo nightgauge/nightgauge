@@ -138,9 +138,7 @@ Two tiers, mirroring the `PLATFORM_TEST_URL` pattern from #2092:
   matching `ClaudeHeadlessAdapter`'s invocation shape. Selecting `--mode live`
   without the env var is refused (guards against accidental API cost). Live mode
   uses ambient `claude` auth (`claude auth status`); **no API keys are read,
-  stored, or logged**. Runs only in the optional, disabled-by-default
-  `skill-eval-live` job (schedule/dispatch + repo var
-  `ENABLE_SKILL_EVAL_LIVE=true`).
+  stored, or logged**. Invoked by hand only — nothing schedules it.
 
 Because invocation is by **tier alias**, a concrete-version bump (Opus 4.8 →
 4.9) is exactly the kind of change the harness is designed to catch as a
@@ -218,29 +216,29 @@ cp .nightgauge/skill-evals/multi-*.jsonl .nightgauge/skill-evals/baseline.jsonl
 **Out of scope**: a VSCode UI; a Go binary subcommand; non-Claude adapters; and
 statistical/quality scoring beyond binary pass/fail.
 
-## CI gate (#4092)
+## CI gate — none exists (#881)
 
-`.github/workflows/skill-eval.yml` runs the harness as a **required status
-check** on PRs that touch the eval surface (`evals/**`,
-`packages/nightgauge-sdk/src/eval/**`, `scripts/evaluate-skills.ts`, the
-committed baseline, or the workflow itself):
+**Nothing runs this harness on a PR.** There is no skill-eval workflow, and the
+baseline diff is not a required status check; earlier revisions of this document
+and of [ADR 011](decisions/011-model-eval-system.md) said otherwise, which is the
+#539/#545 defect class — an asserted enforcement that does not exist makes the
+manual step it describes get skipped.
 
-- **`skill-eval-baseline`** (PR/push, mock mode) — diffs against
-  `.nightgauge/skill-evals/baseline.jsonl` and exits non-zero on any
-  verdict regression. The runner **fails CLOSED** when the baseline is
-  missing/empty, so the gate can never silently pass against a non-existent
-  baseline. A negative self-test injects a wrong fixture answer and asserts the
-  gate fires (mirrors the positive/negative discipline in `lint.yml`).
-- **`skill-eval-live`** (schedule/dispatch) — optional cross-model LIVE run,
-  shipped **disabled**; enable with repo variable `ENABLE_SKILL_EVAL_LIVE=true`.
-  Never a required PR check (needs API budget + ambient auth).
+Running it is therefore a **manual step**, and it is on you when you touch the
+eval surface (`evals/**`, `packages/nightgauge-sdk/src/eval/**`,
+`scripts/evaluate-skills.ts`, or the committed baseline):
+
+```bash
+npx tsx scripts/evaluate-skills.ts --baseline .nightgauge/skill-evals/baseline.jsonl
+```
+
+The runner **fails CLOSED** when the baseline is missing or empty, so it cannot
+silently pass against a non-existent baseline — but only if someone runs it.
 
 **Regenerating the baseline** (intentionally, when scenarios/fixtures change):
 run `npx tsx scripts/evaluate-skills.ts`, then copy the run record to
 `.nightgauge/skill-evals/baseline.jsonl` (see "Establishing a baseline"
-above) and commit it **in the same PR** as the scenario/fixture change — the
-path filter re-runs the gate, and a fixture change without a matching baseline
-update will regress the gate.
+above) and commit it **in the same PR** as the scenario/fixture change.
 
 ## Cross-adapter portability (#4029)
 
