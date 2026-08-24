@@ -1,0 +1,102 @@
+package main
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+)
+
+func writeLedger(t *testing.T, lines ...string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "api.jsonl")
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
+		t.Fatalf("write ledger: %v", err)
+	}
+	return path
+}
+
+func TestReadAPIUsageSkipsMalformedLines(t *testing.T) {
+	// A live daemon appends to this file, so the last line can be a partial
+	// write. Refusing to read the whole ledger over one torn record would make
+	// the tool useless exactly when it is needed — during a live burn.
+	path := writeLedger(t,
+		`{"ts":"2026-08-24T11:00:00Z","kind":"graphql","cost":17,"caller":"a"}`,
+		`{"ts":"2026-08-24T11:00:01Z","kind":"graphql","cost":1,"calle`,
+		``,
+		`{"ts":"2026-08-24T11:00:02Z","kind":"core","cost":1,"caller":"b"}`,
+	)
+	recs, err := readAPIUsage(path, 0)
+	if err != nil {
+		t.Fatalf("readAPIUsage: %v", err)
+	}
+	if len(recs) != 2 {
+		t.Fatalf("got %d records, want 2 (the torn and blank lines skipped)", len(recs))
+	}
+}
+
+func TestReadAPIUsageSinceFiltersOldRecords(t *testing.T) {
+	recent := time.Now().Add(-5 * time.Minute).UTC().Format(time.RFC3339Nano)
+	old := time.Now().Add(-3 * time.Hour).UTC().Format(time.RFC3339Nano)
+	path := writeLedger(t,
+		`{"ts":"`+old+`","kind":"graphql","cost":99,"caller":"old"}`,
+		`{"ts":"`+recent+`","kind":"graphql","cost":17,"caller":"new"}`,
+	)
+	recs, err := readAPIUsage(path, time.Hour)
+	if err != nil {
+		t.Fatalf("readAPIUsage: %v", err)
+	}
+	if len(recs) != 1 || recs[0].Caller != "new" {
+		t.Fatalf("got %+v, want only the record inside the window", recs)
+	}
+}
+
+func TestReadAPIUsageMissingFileNamesTheEnvVar(t *testing.T) {
+	_, err := readAPIUsage(filepath.Join(t.TempDir(), "absent.jsonl"), 0)
+	if err == nil {
+		t.Fatal("expected an error for a missing ledger")
+	}
+	// The failure mode this tool will hit most often is "nobody turned it on".
+	// The error has to say how, or the operator is left guessing.
+	if !strings.Contains(err.Error(), "NIGHTGAUGE_GITHUB_API_LOG") {
+		t.Errorf("error %q does not tell the operator how to enable the ledger", err)
+	}
+}
+
+func TestGroupAPIUsageRanksByPointsNotCalls(t *testing.T) {
+	// The whole point of the ledger: 2 board reads outrank 11 REST calls.
+	// A report that ranked by call count would hide the actual bill.
+	recs := []apiUsageRecord{
+		{Caller: "board", Cost: 17, Kind: "graphql"},
+		{Caller: "board", Cost: 17, Kind: "graphql"},
+		{Caller: "alerts", Cost: 1, Kind: "core"},
+		{Caller: "alerts", Cost: 1, Kind: "core"},
+		{Caller: "alerts", Cost: 1, Kind: "core", Cached: true},
+		{Caller: "alerts", Cost: 0, Kind: "core", Status: 404},
+	}
+	groups, total := groupAPIUsage(recs, "caller")
+	if total != 37 {
+		t.Errorf("total = %d, want 37", total)
+	}
+	if groups[0].Key != "board" {
+		t.Errorf("top row = %q, want the caller with the most POINTS", groups[0].Key)
+	}
+	if groups[0].Points != 34 || groups[0].Calls != 2 {
+		t.Errorf("board row = %d pts / %d calls, want 34/2", groups[0].Points, groups[0].Calls)
+	}
+	if groups[1].Cached != 1 || groups[1].Errors != 1 {
+		t.Errorf("alerts row cached=%d errors=%d, want 1/1", groups[1].Cached, groups[1].Errors)
+	}
+}
+
+func TestAPIUsageKeyAlwaysAttributes(t *testing.T) {
+	// Unattributed points are the ones worth chasing, so no grouping may drop
+	// a record for lacking the field it groups on.
+	bare := apiUsageRecord{Method: "GET", Path: "/repos/o/r"}
+	for _, by := range []string{"caller", "op", "resource", "path"} {
+		if got := apiUsageKey(bare, by); got == "" {
+			t.Errorf("apiUsageKey(by=%q) returned an empty key", by)
+		}
+	}
+}

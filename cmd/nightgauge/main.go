@@ -525,6 +525,7 @@ func rootCmd() *cobra.Command {
 		traceCmd(),
 		attentionCmd(),
 		budgetStatsCmd(),
+		apiUsageCmd(),
 		docsCmd(),
 		buildCmd(),
 		e2eCmd(),

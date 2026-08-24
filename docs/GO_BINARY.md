@@ -3550,6 +3550,60 @@ computes hit rates. Output is deterministically sorted by gate name.
 ]
 ```
 
+### API Usage — The GitHub Request Ledger (Issue #843)
+
+```bash
+NIGHTGAUGE_GITHUB_API_LOG=1 nightgauge serve --workspace .   # record
+nightgauge api-usage --since 1h                              # read it back
+nightgauge api-usage --by op --top 5 --json
+```
+
+Every attempt to cut this product's GitHub API consumption before #842 reasoned
+from a code audit: count the call sites, multiply by an assumed cadence. That
+method cannot price a call, and the price is the whole story — **a ProjectV2
+board read costs 17 GraphQL points per 100-item page, and almost everything
+else costs 1**. An audit that treats both as "a call" is off by 17× on the only
+line item that matters.
+
+The ledger records at the one place that sees every request with its real
+price: `rateLimitHeaderTransport.RoundTrip`, which already wraps both REST and
+GraphQL for the ETag layer (#486). Each JSONL record carries:
+
+| Field | Meaning |
+| --- | --- |
+| `kind` | The resource GitHub billed, from `X-RateLimit-Resource` — its truth, not our guess from the URL |
+| `cost` | Points billed: the drop in `X-RateLimit-Remaining` since this process's previous call on that resource |
+| `caller` | The first stack frame outside `internal/github` — the code an operator can delete or throttle |
+| `op` | GraphQL operation name, or the first selected field for the anonymous documents the struct client sends |
+| `cached` | The request was answered `304` from the ETag cache: free |
+
+`cost` is 0 for the first call on a resource (no baseline) and for a window
+reset (remaining goes up — not a refund). `cached` is stamped where the 304 is
+still visible, because the transport rewrites it to 200 before the response
+reaches the caller.
+
+Disabled, the whole path is one nil check per request. Enabled, a write failure
+is swallowed: instrumentation that can fail a pipeline run is worse than none.
+
+Reading it back, grouped by caller, is what turned #842 from a theory into a
+worklist:
+
+```
+GitHub API ledger — 25 requests, 84 points billed
+
+By resource:
+  graphql                78 pts     15 calls
+  core                    6 pts     10 calls
+
+By caller:
+      34 pts 40.5%     2 calls  CoverageGap.discoverBoard coveragegap.go:122
+      34 pts 40.5%     2 calls  StrandedReadyItems.boardUnreachable strandedready.go:210
+      10 pts 11.9%    11 calls  DependabotCoverage.listAlerts dependabotcoverage.go:210
+```
+
+Two producers, the same board, one sweep, 81% of the bill — the finding that
+`--by caller` makes unmissable and a call-site count cannot show at all.
+
 ### Doctor — Environment Health Check
 
 ```bash
