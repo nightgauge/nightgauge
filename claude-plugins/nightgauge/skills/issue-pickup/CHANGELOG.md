@@ -46,7 +46,7 @@ project adheres to [Semantic Versioning](https://semver.org/).
   - Opt-in via `.nightgauge/config.yaml` with `project.sprint.auto_assign: true`
   - Supports @current, @next, or specific iteration ID
   - Graceful handling when no iteration field exists
-  - See [docs/SPRINT_WORKFLOW.md](../../docs/SPRINT_WORKFLOW.md) for setup
+  - See [docs/SPRINT_WORKFLOW.md](../../../../docs/SPRINT_WORKFLOW.md) for setup
 
 ### Fixed
 

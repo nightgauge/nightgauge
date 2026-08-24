@@ -24,7 +24,7 @@ block on a single human-only spike that may never be authored.
 
 The skill MUST route each dependent group through exactly one of the three
 paths defined in
-[docs/SPIKE_CONTRACT.md](../../../docs/SPIKE_CONTRACT.md#choosing-between-path-a-b-and-c):
+[docs/SPIKE_CONTRACT.md](../../../../../docs/SPIKE_CONTRACT.md#choosing-between-path-a-b-and-c):
 
 | Path                                                            | Use when                                                                                                                    | Result                                                                                                                                                                                                                               |
 | --------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -328,7 +328,7 @@ For Path C:
 > **Reviewer note**: Document in the preview that the ADR-bearing first
 > ticket's PR review will be larger than a typical implementation review
 > (code + ADR in one PR). This is a known and accepted trade-off — see
-> [docs/SPIKE_CONTRACT.md#trade-offs](../../../docs/SPIKE_CONTRACT.md#trade-offs).
+> [docs/SPIKE_CONTRACT.md#trade-offs](../../../../../docs/SPIKE_CONTRACT.md#trade-offs).
 
 ## Phase 2.X: Spike Artifact Path Selection
 

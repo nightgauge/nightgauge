@@ -943,12 +943,12 @@ gh auth login
 
 ## References
 
-- **Release-Watch SKILL.md:** [skills/nightgauge-release-watch/SKILL.md](./SKILL.md)
-- **Feature Assessment Engine:** [skills/nightgauge-release-watch/assessment-engine.md](./assessment-engine.md)
-- **Assessment Template:** [skills/nightgauge-release-watch/assessments/TEMPLATE.md](./assessments/TEMPLATE.md)
-- **Issue-Create SKILL.md:** [skills/nightgauge-issue-create/SKILL.md](../nightgauge-issue-create/SKILL.md)
-- **Configuration Reference:** [docs/CONFIGURATION.md](../../docs/CONFIGURATION.md)
-- **Project Board Sync:** [docs/PROJECT_SETUP.md](../../docs/PROJECT_SETUP.md)
+- **Release-Watch SKILL.md:** [skills/nightgauge-release-watch/SKILL.md](SKILL.md)
+- **Feature Assessment Engine:** [skills/nightgauge-release-watch/assessment-engine.md](assessment-engine.md)
+- **Assessment Template:** [skills/nightgauge-release-watch/assessments/TEMPLATE.md](assessments/TEMPLATE.md)
+- **Issue-Create SKILL.md:** [skills/nightgauge-issue-create/SKILL.md](../issue-create/SKILL.md)
+- **Configuration Reference:** [docs/CONFIGURATION.md](../../../../docs/CONFIGURATION.md)
+- **Project Board Sync:** [docs/PROJECT_SETUP.md](../../../../docs/PROJECT_SETUP.md)
 
 ---
 

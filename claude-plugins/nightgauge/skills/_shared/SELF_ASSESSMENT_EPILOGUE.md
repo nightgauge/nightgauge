@@ -4,7 +4,7 @@
 this execution. This phase is **non-blocking** — skip entirely if any main phase
 failed. A perfectly working skill produces **no output** from this phase.
 
-> See [docs/SKILL_SELF_ASSESSMENT.md](../../docs/SKILL_SELF_ASSESSMENT.md) for
+> See [docs/SKILL_SELF_ASSESSMENT.md](../../../../docs/SKILL_SELF_ASSESSMENT.md) for
 > the full strategy, synthesis algorithm, and integration architecture.
 
 #### When to Skip

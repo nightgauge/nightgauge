@@ -280,6 +280,21 @@ if [ -f scripts/install-agent-skills.sh ]; then
     bash scripts/install-agent-skills.sh --check-mirror
 fi
 
+# 11c. Mirror link integrity — the question 11b structurally cannot ask. The
+#      drift gate compares the mirror to the generator's own output, so when the
+#      generator copied `../../docs/X.md` verbatim into a directory two levels
+#      deeper, both sides carried the same ~90 dead links and 11b was green by
+#      construction (#831). This gate resolves each link against the file that
+#      contains it, which is a fact about the tree rather than about the copy.
+#      Self-test first, same reasoning as 11 and 5b.
+if [ -f scripts/test-mirror-link-check.sh ]; then
+  run_step "Mirror link gate regression suite" \
+    bash scripts/test-mirror-link-check.sh
+fi
+if [ -f scripts/check-mirror-links.py ]; then
+  run_step "Mirror link integrity" python3 scripts/check-mirror-links.py
+fi
+
 echo ""
 echo "-------------------------------------------------------------------------"
 if [ "$FAIL_COUNT" -eq 0 ]; then

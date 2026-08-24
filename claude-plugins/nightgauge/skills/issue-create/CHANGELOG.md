@@ -159,7 +159,7 @@ add-blocked-by <later> <earlier>`. Directory-only overlaps stay parallel
   is genuinely too open to commit code without a separate research pass.
 - Step 2.7.2 decision tree rewritten to select among A/B/C in the order
   defined in
-  [docs/SPIKE_CONTRACT.md](../../docs/SPIKE_CONTRACT.md#choosing-between-path-a-b-and-c).
+  [docs/SPIKE_CONTRACT.md](../../../../docs/SPIKE_CONTRACT.md#choosing-between-path-a-b-and-c).
 - Step 2.7.3 preview format extended to record the ADR-bearing first ticket
   and planned ADR path for Path C, and to record Path B guard
   acknowledgement.

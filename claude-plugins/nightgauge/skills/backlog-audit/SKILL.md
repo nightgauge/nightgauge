@@ -20,7 +20,7 @@ Semantic re-assessment of the open backlog: is each issue still **valid**
 against current `main`, still **worth doing**, and **ranked** where it
 belongs? Structural checks (labels, board fields, headings, `blockedBy`
 wiring) are `/nightgauge:issue-audit`'s job — see
-[docs/ISSUE_AUDIT.md](../../docs/ISSUE_AUDIT.md#boundary-issue-audit-vs-backlog-audit)
+[docs/ISSUE_AUDIT.md](../../../../docs/ISSUE_AUDIT.md#boundary-issue-audit-vs-backlog-audit)
 for the boundary. This skill reuses issue-audit's deterministic checks as
 riders rather than duplicating them; its own verdicts are judgment calls that
 issue-audit never makes.
@@ -87,7 +87,7 @@ those wastes pipeline cycles when dispatched as-filed.
    immediately per the neutral-referent pattern (#140) — replace the private
    detail with a neutral capability-level reference — regardless of mode, and
    report the redaction explicitly. See
-   [docs/PUBLIC_CORE_BOUNDARY.md](../../docs/PUBLIC_CORE_BOUNDARY.md).
+   [docs/PUBLIC_CORE_BOUNDARY.md](../../../../docs/PUBLIC_CORE_BOUNDARY.md).
 
 ## Priority Rubric (fixed)
 

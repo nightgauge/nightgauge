@@ -258,9 +258,9 @@ The skill uses Python comparison logic to correctly handle all version formats
 
 ## Related Skills & Tools
 
-- **[nightgauge-docs-watch](../nightgauge-docs-watch/SKILL.md)** — Monitor Claude Code **documentation** (different from releases)
-- **[nightgauge-pipeline-audit](../nightgauge-pipeline-audit/SKILL.md)** — Analyze pipeline efficiency metrics
-- **[nightgauge-continuous-improvement](../nightgauge-continuous-improvement/SKILL.md)** — Unified improvement review
+- **[nightgauge-docs-watch](../docs-watch/SKILL.md)** — Monitor Claude Code **documentation** (different from releases)
+- **[nightgauge-pipeline-audit](../pipeline-audit/SKILL.md)** — Analyze pipeline efficiency metrics
+- **[nightgauge-continuous-improvement](../continuous-improvement/SKILL.md)** — Unified improvement review
 
 ---
 

@@ -24,7 +24,7 @@ runs after `pr-merge` for `type:spike` issues only and:
 
 1. Locates the spike artifact at `docs/spikes/<N>-*.md`.
 2. Parses the `yaml recommendations` fenced block per
-   [docs/SPIKE_CONTRACT.md](../../docs/SPIKE_CONTRACT.md).
+   [docs/SPIKE_CONTRACT.md](../../../../docs/SPIKE_CONTRACT.md).
 3. Validates the schema (action/type/priority/size enums, kebab-case ids,
    no cycles, no duplicate ids).
 4. Creates one issue per `adopt` (Status=Ready) and `defer` (Status=Backlog)
