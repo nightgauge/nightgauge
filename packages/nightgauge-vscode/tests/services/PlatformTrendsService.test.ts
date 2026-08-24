@@ -17,10 +17,16 @@ import type { AnalyticsTrendsResult } from "../../src/services/IpcClientBase";
 const ENDPOINT = "platform.getAnalyticsTrends";
 
 function makeTrendsResult(overrides: Partial<AnalyticsTrendsResult> = {}): AnalyticsTrendsResult {
+  // AnalyticsTrendsResult is {entries, granularity, dateFrom, dateTo, repos,
+  // targetSuccessRate} — the {current, previous, period} shape this fixture
+  // described does not exist (#499).
   return {
-    current: [],
-    previous: [],
-    period: "30d",
+    entries: [],
+    granularity: "day",
+    dateFrom: "2026-01-01",
+    dateTo: "2026-01-31",
+    repos: [],
+    targetSuccessRate: 90,
     ...overrides,
   };
 }
@@ -42,7 +48,7 @@ describe("PlatformTrendsService.fetchAndCache", () => {
   });
 
   it("returns { ok: true, value } on success and caches it per period", async () => {
-    const result = makeTrendsResult({ period: "90d" });
+    const result = makeTrendsResult({ granularity: "week" });
     const ipc = makeIpcClient({ platformGetAnalyticsTrends: vi.fn().mockResolvedValue(result) });
     const svc = new PlatformTrendsService(ipc);
 

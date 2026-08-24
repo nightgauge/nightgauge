@@ -32,8 +32,8 @@ import { TemplateRegistry, PromptRenderer } from "@nightgauge/sdk";
 
 describe("PromptTemplateService", () => {
   let service: PromptTemplateService;
-  let mockRegistry: ReturnType<(typeof TemplateRegistry)["prototype"]["constructor"]>;
-  let mockRenderer: ReturnType<(typeof PromptRenderer)["prototype"]["constructor"]>;
+  let mockRegistry: TemplateRegistry;
+  let mockRenderer: PromptRenderer;
 
   const extensionPath = "/workspace/packages/nightgauge-vscode";
   const expectedWorkspaceRoot = path.resolve(extensionPath, "..", "..");
@@ -78,7 +78,7 @@ describe("PromptTemplateService", () => {
     });
 
     it("looks up template with -system suffix appended", () => {
-      mockRegistry.getTemplate.mockReturnValueOnce({
+      vi.mocked(mockRegistry.getTemplate).mockReturnValueOnce({
         name: "feature-planning-system",
         version: "1.0.0",
         layer: "skill",
@@ -97,7 +97,7 @@ describe("PromptTemplateService", () => {
     });
 
     it("returns null when template is not found", () => {
-      mockRegistry.getTemplate.mockReturnValue(null);
+      vi.mocked(mockRegistry.getTemplate).mockReturnValue(null);
       expect(service.renderSystemPrompt("unknown-stage", {})).toBeNull();
     });
   });
@@ -127,15 +127,20 @@ describe("PromptTemplateService", () => {
   describe("hasTemplate()", () => {
     it("returns false when template is not found", async () => {
       await service.initialize();
-      mockRegistry.getTemplate.mockReturnValue(null);
+      vi.mocked(mockRegistry.getTemplate).mockReturnValue(null);
       expect(service.hasTemplate("unknown")).toBe(false);
     });
 
     it("returns true when template is found", async () => {
       await service.initialize();
-      mockRegistry.getTemplate.mockReturnValue({
+      vi.mocked(mockRegistry.getTemplate).mockReturnValue({
         name: "found",
         version: "1.0.0",
+        layer: "extension",
+        description: "",
+        params: [],
+        content: "",
+        filePath: "/templates/found.md",
       });
       expect(service.hasTemplate("found")).toBe(true);
     });
