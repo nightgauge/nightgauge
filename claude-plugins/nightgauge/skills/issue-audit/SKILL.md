@@ -18,7 +18,7 @@ allowed-tools: Read Write Edit Glob Grep Bash Task AskUserQuestion
 # Issue Audit
 
 Deterministic post-creation gate for every issue-creation flow. See
-[docs/ISSUE_AUDIT.md](../../docs/ISSUE_AUDIT.md) for the finding taxonomy,
+[docs/ISSUE_AUDIT.md](../../../../docs/ISSUE_AUDIT.md) for the finding taxonomy,
 severity rules, manifest schema, and repair-primitive table. This skill
 encodes the orchestration; the doc encodes the spec.
 
@@ -217,7 +217,7 @@ Findings:
 The table below is the **canonical body-section contract** for this repository.
 `nightgauge-issue-create` authors bodies against it rather than restating a
 shape of its own (see that skill's `_includes/environment-and-content.md`,
-Phase 2), and [docs/ISSUE_AUDIT.md](../../docs/ISSUE_AUDIT.md) mirrors it for
+Phase 2), and [docs/ISSUE_AUDIT.md](../../../../docs/ISSUE_AUDIT.md) mirrors it for
 readers. All three copies are pinned against each other by
 `scripts/check-issue-body-contract.py` — edit this table and that gate stays red
 until the other two follow. Before #711 the three disagreed on every row, so
@@ -278,7 +278,7 @@ The `MISSING_SPIKE_RECS_BLOCK` finding has **no repair primitive**. Even with
 
 CRITICAL in strict (`--manifest`) mode, WARNING everywhere else. The split is
 deliberate and was re-decided in #711 — the reasoning is recorded in
-[docs/ISSUE_AUDIT.md](../../docs/ISSUE_AUDIT.md#severity-tiers).
+[docs/ISSUE_AUDIT.md](../../../../docs/ISSUE_AUDIT.md#severity-tiers).
 
 In strict mode the manifest was written moments earlier by `issue-create`,
 which authors against the table above. A missing heading there is not a

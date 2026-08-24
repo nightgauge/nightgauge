@@ -120,7 +120,7 @@ This skill implements features by:
 For `type:spike` issues, the deliverable is a Markdown research artifact at
 `docs/spikes/<N>-*.md` containing a `## Recommendations` section with a
 fenced `yaml recommendations` block per
-[docs/SPIKE_CONTRACT.md](../../docs/SPIKE_CONTRACT.md). No production code
+[docs/SPIKE_CONTRACT.md](../../../../docs/SPIKE_CONTRACT.md). No production code
 changes are expected. Author each recommendation with a stable kebab-case `id`
 field — these ids are the idempotency key for the post-merge spike-materialize
 stage.
@@ -130,7 +130,7 @@ stage.
 ## Configuration
 
 This skill reads configuration from `.nightgauge/config.yaml`. See
-[docs/CONFIGURATION.md](../../docs/CONFIGURATION.md) for full schema reference.
+[docs/CONFIGURATION.md](../../../../docs/CONFIGURATION.md) for full schema reference.
 
 | Config Key           | Default | Description                            |
 | -------------------- | ------- | -------------------------------------- |
@@ -157,7 +157,7 @@ This skill requires `.nightgauge/pipeline/planning-{N}.json` from
 `/nightgauge-feature-planning`.
 
 **Schema**: See
-[docs/CONTEXT_ARCHITECTURE.md](../../docs/CONTEXT_ARCHITECTURE.md) for full
+[docs/CONTEXT_ARCHITECTURE.md](../../../../docs/CONTEXT_ARCHITECTURE.md) for full
 schema documentation.
 
 ---
@@ -457,7 +457,7 @@ On a provider with an orchestration capability the `WorkflowEngine` fans the six
 units out concurrently and a judge unit merges their verdicts; on a provider
 without one, run the same six reviews sequentially in this agent — the prose
 below is the portability floor. See
-[docs/WORKFLOW_ORCHESTRATION.md](../../docs/WORKFLOW_ORCHESTRATION.md).
+[docs/WORKFLOW_ORCHESTRATION.md](../../../../docs/WORKFLOW_ORCHESTRATION.md).
 
 > **Read `skills/nightgauge-feature-dev/_includes/review-and-correction.md` now and follow its instructions before continuing this phase.**
 
@@ -562,7 +562,7 @@ This skill outputs:
    pipeline
 
 **Schema**: See
-[docs/CONTEXT_ARCHITECTURE.md](../../docs/CONTEXT_ARCHITECTURE.md) for full
+[docs/CONTEXT_ARCHITECTURE.md](../../../../docs/CONTEXT_ARCHITECTURE.md) for full
 schema documentation.
 
 **Next stage**: `/nightgauge-feature-validate`

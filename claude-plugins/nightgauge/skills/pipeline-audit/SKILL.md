@@ -305,7 +305,7 @@ When `DATA_SOURCE="history"`, invoke the deterministic Go verb
 `nightgauge pipeline aggregate` (audit row **B2**). The verb replaces
 ~230 lines of inline-Python aggregation with a single binary call that emits
 a stable JSON schema (v1) — see
-[docs/GO_BINARY.md](../../docs/GO_BINARY.md#pipeline-analysis) for the schema
+[docs/GO_BINARY.md](../../../../docs/GO_BINARY.md#pipeline-analysis) for the schema
 reference and flag list.
 
 ```bash

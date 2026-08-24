@@ -2,7 +2,8 @@
 
 **Date:** 2026-07-25
 **Author:** nightgauge
-**Status:** Decided
+**Status:** Decided — partially implemented (see
+[Implementation tracking](#implementation-tracking))
 **Builds on:** ADR 010 (progressive disclosure / `_includes`), ADR 011 (model
 eval system + `ModelDescriptor` registry), [docs/SKILL_PORTABILITY.md](../SKILL_PORTABILITY.md)
 
@@ -351,7 +352,25 @@ not silently running last generation's model with last generation's prompts.
 
 ## Implementation tracking
 
-Epic and sub-issues track: registry/effort correctness fixes, the `behavior`
-schema, `nightgauge skill render`, consumer migration, the preflight gate,
-authoring the shared overlays, base-skill prose extraction, `nightgauge-model-watch`,
-eval validation, and documentation.
+Epic #73 and its sub-issues track: registry/effort correctness fixes, the
+`behavior` schema, `nightgauge skill render`, consumer migration, the preflight
+gate, authoring the shared overlays, base-skill prose extraction,
+`nightgauge-model-watch`, eval validation, and documentation.
+
+**Shipped** (2026-08): the registry/effort corrections (#74, #75, #76), the
+`behavior` block on `ModelDescriptor` (#77), the composer
+`nightgauge skill render` (#78), the migration of `skillRunner.ts` onto it
+(#79), and the Haiku preamble fold-in (#384). The mechanism this ADR chose is
+therefore live: overlays resolve, compose, and inject on every path the pipeline
+dispatches.
+
+**Outstanding** — Decisions 5 and 6 are not yet enforced, and the overlay corpus
+is not yet authored: the `preflight skill-overlays` gate including the size
+budget and the `<!-- overlay-exempt -->` marker (#80), the shared overlays
+(#81), base-skill prose extraction (#82), `nightgauge-model-watch` (#83), and
+the overlay-delta evals (#84, #383). Until #80 lands, base-skill purity, key
+validity, and the size budget are review conventions rather than gates.
+
+The status line above stays `Decided` rather than `Implemented` for that reason.
+Operational guidance for what _is_ live lives in
+[docs/MODEL_ADAPTATION.md](../MODEL_ADAPTATION.md).

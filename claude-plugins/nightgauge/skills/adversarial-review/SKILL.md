@@ -148,4 +148,4 @@ Summarize: rounds run, findings fixed (by lens/severity), remaining nitpicks
 ## Source
 
 Part of the [Nightgauge](https://github.com/nightgauge/nightgauge) Issue-to-PR pipeline.
-See [docs/WORKFLOW_ORCHESTRATION.md](../../docs/WORKFLOW_ORCHESTRATION.md) for the orchestration spine.
+See [docs/WORKFLOW_ORCHESTRATION.md](../../../../docs/WORKFLOW_ORCHESTRATION.md) for the orchestration spine.

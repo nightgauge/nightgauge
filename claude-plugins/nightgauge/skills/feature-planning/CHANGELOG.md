@@ -48,7 +48,7 @@ project adheres to [Semantic Versioning](https://semver.org/).
 ### Documentation
 
 - Added
-  [docs/ADAPTIVE_DOCUMENTATION_READING.md](../../docs/ADAPTIVE_DOCUMENTATION_READING.md)
+  [docs/ADAPTIVE_DOCUMENTATION_READING.md](../../../../docs/ADAPTIVE_DOCUMENTATION_READING.md)
   design doc explaining the feature
 
 ## [1.7.0] - 2026-02-02

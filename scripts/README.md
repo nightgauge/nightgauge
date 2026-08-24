@@ -33,6 +33,37 @@ Runs automatically as part of the VS Code extension `dev-install.sh` (set
 `NIGHTGAUGE_SKIP_SKILL_SYNC=1` to skip). The extension itself bundles the
 pipeline skills into the `.vsix` separately.
 
+#### Relative links are re-based on the way into the mirror (#831)
+
+`claude-plugins/nightgauge/skills/<short>/` is two levels deeper than
+`skills/<name>/` and drops the `nightgauge-` prefix from the directory name.
+A verbatim copy therefore breaks two kinds of relative link at once: a doc
+reference written as `../../docs/X.md` lands on `claude-plugins/nightgauge/`,
+which has no `docs/`, and a sibling reference such as
+`../nightgauge-issue-audit/SKILL.md` names a directory that does not exist under
+the mirror. `scripts/lib/mirror_links.py` re-bases both during generation, using
+only path arithmetic — so the generator emits identical output whether it writes
+the real mirror or the temp directory `--check-mirror` compares against.
+
+Two gates, asking different questions:
+
+| Gate                                     | Question                                  |
+| ---------------------------------------- | ----------------------------------------- |
+| `install-agent-skills.sh --check-mirror` | Does the mirror equal generator output?   |
+| `check-mirror-links.py`                  | Does each mirrored link name a real file? |
+
+Only the second can see this class. The drift gate compares the mirror against
+the generator's own output, so while the generator copied links verbatim both
+sides carried the identical dead links and it was green **by construction** — a
+green guard is evidence about the guard's pattern, not about the tree.
+`scripts/test-mirror-link-check.sh` pins that the link gate still fails closed.
+
+This is unrelated to the skill-composition **path rewrite** documented in
+[../docs/GO_BINARY.md](../docs/GO_BINARY.md#skill-composition-issue-78--adr-016).
+That rewrite resolves `skills/_shared/` include directives to absolute paths in
+a rendered prompt at run time; it has never looked at markdown doc links, and it
+never touches the committed mirror. Nothing regressed there.
+
 ### run-stage.sh
 
 Unified stage entry point for non-Claude adapters. Used by `skillRunner.ts` and

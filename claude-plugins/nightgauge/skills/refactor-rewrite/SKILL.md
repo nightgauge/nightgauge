@@ -417,7 +417,7 @@ team & effort), then a merge judge runs the decision engine (Phase 7) over their
 scores to produce the confidence-rated refactor-vs-rewrite recommendation. For a
 monorepo the same fan-out runs per package (Phase 9). The block is consumed by
 the capability-routed `WorkflowEngine` (epic #3899); see
-[docs/WORKFLOW_ORCHESTRATION.md](../../docs/WORKFLOW_ORCHESTRATION.md). Each
+[docs/WORKFLOW_ORCHESTRATION.md](../../../../docs/WORKFLOW_ORCHESTRATION.md). Each
 unit's `promptRef` points at the SAME dimension phase the prose **Workflow**
 below walks, so providers without an orchestration capability run the dimensions
 sequentially in one agent — the prose stays the portability floor.

@@ -1000,13 +1000,13 @@ The agent appends `$GRADUATION_SECTION` to the retro summary output when set.
 When `CAND_COUNT == 0`, the section is omitted entirely — no static
 "Graduation checklist" blockquote is emitted. The candidate threshold and
 scoring rubric live in
-[docs/GO_BINARY.md](../../docs/GO_BINARY.md#knowledge-graduate-candidates).
+[docs/GO_BINARY.md](../../../../docs/GO_BINARY.md#knowledge-graduate-candidates).
 
 > **Manual fallback**: When the binary is unavailable on stale checkouts the
 > command silently returns an empty list; reviewers can still scan
 > `decisions.md` manually and run `nightgauge knowledge graduate <issue>
 --section <docs-path> --adr ADR-NNN` to start the ritual. See
-> [docs/KNOWLEDGE_BASE.md#graduation-workflow](../../docs/KNOWLEDGE_BASE.md#graduation-workflow).
+> [docs/KNOWLEDGE_BASE.md#graduation-workflow](../../../../docs/KNOWLEDGE_BASE.md#graduation-workflow).
 
 **Content guidelines** — the agent fills in the narrative fields:
 

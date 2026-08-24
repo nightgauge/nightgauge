@@ -246,6 +246,10 @@ the Go scheduler calls the package directly and every other host calls this
 verb. Adding overlay resolution to a second implementation is the drift
 liability the verb exists to remove.
 
+Authoring guidance — the cascade in prose, the `<!-- overlay -->` anchor, the
+authoring rules, and how to add a model — lives in
+[MODEL_ADAPTATION.md](MODEL_ADAPTATION.md). What follows is the CLI reference.
+
 ```bash
 # Base-only render — no model resolves no overlay keys
 nightgauge skill render --stage feature-dev --skills-root ./skills
