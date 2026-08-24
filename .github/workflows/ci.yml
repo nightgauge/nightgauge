@@ -225,15 +225,28 @@ jobs:
           git config --global user.name "Nightgauge CI"
           git config --global init.defaultBranch main
           echo "GIT_CONFIG_GLOBAL=$GIT_CONFIG_GLOBAL" >> "$GITHUB_ENV"
+      # #865: setup-node, Install and the SDK build are DELIBERATELY UNGATED,
+      # because the typecheck step below is ungated and cannot run without
+      # them. Gating them while leaving the typecheck ungated made every
+      # docs-only PR fail on `TS2688: Cannot find type definition file for
+      # 'node'` — the step that exists to survive a docs-only classification
+      # was guaranteed to fail on exactly that classification.
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        if: ${{ needs.changes.outputs.run_heavy != 'false' }}
         with:
           node-version: 24
           cache: npm
           cache-dependency-path: package-lock.json
       - name: Install
-        if: ${{ needs.changes.outputs.run_heavy != 'false' }}
         run: npm ci
+      # `typecheck:tests` resolves `@nightgauge/sdk` from the SDK's built
+      # `dist/**` type declarations, so the types must exist even when the
+      # full build below is skipped. Without this the docs-only path trades
+      # the TS2688 failures for a wall of TS2307 "Cannot find module
+      # '@nightgauge/sdk'" — the same failure, one layer down.
+      - name: Build SDK types (needed by the ungated test-tree typecheck)
+        run: npm run build --workspace=@nightgauge/sdk
+      # The full root build — extension bundle, marketplace assets, notices —
+      # stays gated. That is the expensive part fast-track exists to skip.
       - name: Build
         if: ${{ needs.changes.outputs.run_heavy != 'false' }}
         run: npm run build
