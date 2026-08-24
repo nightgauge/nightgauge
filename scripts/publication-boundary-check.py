@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import bisect
 import hashlib
+import locale
 import os
 import re
 import subprocess
@@ -103,12 +104,39 @@ def _stem_prefixes(token):
             yield tok[:i]
 
 
-def _line_has_denied_token(line, word, salt, token_hashes):
-    """True if any token on this line (or its stem) hashes into the denylist."""
+def _line_has_denied_token(line, word, salt, token_hashes, memo):
+    """True if any token on this line (or its stem) hashes into the denylist.
+
+    `memo` caches token -> verdict. The denylist is stored as salted SHA-256 so
+    a PUBLIC manifest never spells out the private names in plaintext; that
+    property is untouched here — same salt, same digests, same set membership,
+    just hashed once per DISTINCT token instead of once per occurrence.
+
+    Source text repeats itself enormously: on this tree the scan tokenises
+    ~1.38M lines into ~11.5M stem candidates and hashed every one, for a few
+    tens of thousands of distinct tokens. Profiling put 58% of this checker's
+    runtime in this function, 6.3M of the calls in sha256 alone. The checker
+    runs ~153 times per CI job (once per suite assertion, and the suite itself
+    runs 4x inside the hermeticity harness), so this constant factor reaches
+    the wall clock multiplied by two orders of magnitude. See #850.
+
+    The cache is a PARAMETER, not module state, so its lifetime is exactly the
+    lifetime of the (salt, token_hashes) pair it was built for. A second
+    denylist with a different salt would get its own cache by construction
+    rather than silently inheriting verdicts computed against the first — the
+    failure a module-global memo would make invisible.
+    """
     for tok in word.findall(line):
-        for cand in _stem_prefixes(tok):
-            if hashlib.sha256((salt + cand).encode()).hexdigest() in token_hashes:
-                return True
+        denied = memo.get(tok)
+        if denied is None:
+            denied = False
+            for cand in _stem_prefixes(tok):
+                if hashlib.sha256((salt + cand).encode()).hexdigest() in token_hashes:
+                    denied = True
+                    break
+            memo[tok] = denied
+        if denied:
+            return True
     return False
 
 
@@ -145,7 +173,7 @@ def _unresolvable_in_text(text: str, ceiling: int):
     """Yield (number, matched_text, start_offset) for each unresolvable #N.
 
     The single implementation of the rule. `unresolvable_refs` (line-scoped) and
-    `tree_unresolvable_refs` (file-scoped) both route through it, so the
+    the tree-wide burn-down (file-scoped) both route through it, so the
     hex-colour exclusions cannot drift apart between the two scopes -- which is
     the whole reason this is one function and not two.
     """
@@ -205,37 +233,9 @@ def base_file_numbers(base: str, path: str, ceiling: int) -> set[int]:
         return set()
 
 
-def tree_unresolvable_refs(paths: list[str], ceiling: int, exempt: list[str]):
-    """Yield (path, lineno, number, token) for every unresolvable ref in the TREE.
-
-    The diff-scoped rule above answers "did this change introduce one?". This
-    answers "how many are there?", which is the question a burn-down needs and
-    the one the guard could not previously ask -- docs/ADAPTER_MATRIX.md carried
-    `#2595` against a high-water mark of 789 and the guard reported clean.
-    """
-    for path in paths:
-        if any(matches(path, e) for e in exempt):
-            continue
-        try:
-            with open(path, "r", encoding="utf-8") as fh:
-                text = fh.read()
-        except (UnicodeDecodeError, OSError):
-            continue  # binary or unreadable: not prose, not a citation
-        # Cheap reject first. Scanning ~4,100 files line-by-line cost ~9s per
-        # invocation, and the boundary suite runs the guard dozens of times --
-        # a gate slow enough to be skipped is a gate that does not exist.
-        if "#" not in text:
-            continue
-        hits = list(_unresolvable_in_text(text, ceiling))
-        if not hits:
-            continue
-        # Line numbers are computed only for files that actually have hits.
-        starts = [0]
-        for i, ch in enumerate(text):
-            if ch == "\n":
-                starts.append(i + 1)
-        for num, token, pos in hits:
-            yield path, bisect.bisect_right(starts, pos), num, token
+# `tree_unresolvable_refs` used to live here, walking the whole tree itself.
+# The tree-wide burn-down is now collected in main()'s single pass, which reads
+# each file once for every rule instead of once per rule (#850).
 
 
 def _rev_ok(ref: str) -> bool:
@@ -449,6 +449,11 @@ def main() -> int:
             )
 
     # ── 3. Forbidden content ─────────────────────────────────────────────────
+    # Rules are COMPILED here and the tree is scanned once, further down, in the
+    # single pass shared with the token rule and the tree-wide reference count.
+    # Scanning per rule meant re-reading and re-decoding all ~4,150 files once
+    # per rule -- seven full passes over the tree for five rules (#850).
+    compiled_rules = []
     for rule in forbidden:
         rid = rule.get("id", "<unnamed>")
         try:
@@ -477,41 +482,7 @@ def main() -> int:
         ):
             die(2, f"forbidden_content rule '{rid}' has a non-integer "
                    f"file_baseline. Failing closed.")
-        rule_hits = []
-        for p in paths:
-            if any(matches(p, e) for e in exempt):
-                continue
-            try:
-                text = Path(p).read_text(errors="ignore")
-            except (OSError, UnicodeDecodeError):
-                continue  # binary or unreadable; content rules are text-only
-            for n, line in enumerate(text.splitlines(), 1):
-                if pattern.search(line):
-                    if rule_baseline is None:
-                        violations.append(
-                            f"FORBIDDEN CONTENT [{rid}]: {p}:{n}{untracked_note(p)}\n"
-                            f"    {line.strip()[:100]}"
-                        )
-                    else:
-                        rule_hits.append((p, n, line.strip()[:100]))
-                    break  # one hit per file is enough to fail it
-
-        if rule_baseline is not None:
-            if len(rule_hits) > rule_baseline:
-                sample = "\n".join(
-                    f"      {h[0]}:{h[1]}  {h[2]}" for h in sorted(rule_hits)[:8]
-                )
-                violations.append(
-                    f"FORBIDDEN CONTENT COUNT ROSE [{rid}]: "
-                    f"{len(rule_hits)} file(s) > baseline {rule_baseline}\n"
-                    f"    This rule's matching-file count may only go DOWN.\n"
-                    f"    First few:\n{sample}\n"
-                    f"    Fix the new ones. Do not raise `file_baseline`."
-                )
-            else:
-                content_notes.append(
-                    (rid, len(rule_hits), rule_baseline)
-                )
+        compiled_rules.append((rid, pattern, exempt, rule_baseline))
 
     # ── 3b. Forbidden tokens, matched by HASH ────────────────────────────────
     # The portfolio identifiers cannot be listed in plaintext: this manifest is
@@ -526,26 +497,13 @@ def main() -> int:
             die(2, "forbidden_tokens has hashes but no salt. Failing closed.")
         token_allow_paths = set(tokens_rule.get("allow_paths") or [])
         word = re.compile(r"[A-Za-z0-9_.-]+")
-        for p in paths:
-            if (
-                p == str(MANIFEST)
-                or p == "scripts/publication-boundary-check.py"
-                or p in token_allow_paths
-            ):
-                continue  # these two describe the rule; they carry no plaintext token
-            try:
-                text = Path(p).read_text(errors="ignore")
-            except (OSError, UnicodeDecodeError):
-                continue
-            for n, line in enumerate(text.splitlines(), 1):
-                if _line_has_denied_token(line, word, salt, token_hashes):
-                    violations.append(
-                        f"FORBIDDEN TOKEN: {p}:{n}{untracked_note(p)}\n"
-                        f"    A token on this line is on the private-identifier denylist.\n"
-                        f"    It is matched by hash, so it is not named here. See\n"
-                        f"    nightgauge-internal (strategy/) for the plaintext list."
-                    )
-                    break  # one hit per file is enough to fail it
+        # Built here so its lifetime matches this (salt, token_hashes) pair.
+        token_memo: dict[str, bool] = {}
+    else:
+        salt = None
+        token_allow_paths = set()
+        word = None
+        token_memo = {}
 
     # ── 3c. Unresolvable issue references, on NEWLY ADDED lines ──────────────
     # "#N above the high-water mark" is a definition, not a heuristic: such a
@@ -559,6 +517,107 @@ def main() -> int:
                "revision. Failing closed.")
 
     ref_exempt = refs_rule.get("allow_paths") or []
+
+    # ── THE SINGLE PASS ──────────────────────────────────────────────────────
+    # Every content rule, the token rule and the tree-wide reference count each
+    # used to walk the whole tree themselves, so the tree was read and decoded
+    # SEVEN times for five rules (#850). They are all per-file and independent,
+    # so one read feeds all of them.
+    #
+    # Two decodes, deliberately, because the rules do not agree on encoding and
+    # collapsing them would silently change what is scanned: the content and
+    # token rules used `read_text(errors="ignore")`, which yields text for a
+    # binary file, while the tree-wide scan used a STRICT utf-8 open and skipped
+    # anything that failed to decode. Both behaviours are preserved here against
+    # the same bytes.
+    #
+    # Violations are collected per section and appended below in the original
+    # section order, so the report is byte-identical to the multi-pass form.
+    _enc = locale.getpreferredencoding(False)
+    tracked_set = set(tracked)
+    rule_hits: dict[str, list] = {rid: [] for rid, _p, _e, _b in compiled_rules}
+    token_violations: list[str] = []
+    tree_hits: list = []
+
+    for p in paths:
+        active = [c for c in compiled_rules if not any(matches(p, e) for e in c[2])]
+        want_tokens = bool(token_hashes) and not (
+            p == str(MANIFEST)
+            or p == "scripts/publication-boundary-check.py"
+            or p in token_allow_paths
+        )
+        # The tree-wide burn-down counts TRACKED files only.
+        want_tree = p in tracked_set and not any(matches(p, e) for e in ref_exempt)
+        if not active and not want_tokens and not want_tree:
+            continue
+        try:
+            raw = Path(p).read_bytes()
+        except OSError:
+            continue  # unreadable; every rule skipped it before, too
+
+        if active or want_tokens:
+            text = raw.decode(_enc, errors="ignore")
+            lines = text.splitlines()
+            for rid, pattern, _exempt, _baseline in active:
+                for n, line in enumerate(lines, 1):
+                    if pattern.search(line):
+                        rule_hits[rid].append((p, n, line.strip()[:100]))
+                        break  # one hit per file is enough to fail it
+            if want_tokens:
+                for n, line in enumerate(lines, 1):
+                    if _line_has_denied_token(line, word, salt, token_hashes, token_memo):
+                        token_violations.append(
+                            f"FORBIDDEN TOKEN: {p}:{n}{untracked_note(p)}\n"
+                            f"    A token on this line is on the private-identifier denylist.\n"
+                            f"    It is matched by hash, so it is not named here. See\n"
+                            f"    nightgauge-internal (strategy/) for the plaintext list."
+                        )
+                        break  # one hit per file is enough to fail it
+
+        if want_tree:
+            try:
+                strict = raw.decode("utf-8")
+            except UnicodeDecodeError:
+                strict = None  # binary or unreadable: not prose, not a citation
+            # Cheap reject before the line-by-line walk.
+            if strict is not None and "#" in strict:
+                hits = list(_unresolvable_in_text(strict, ceiling))
+                if hits:
+                    # Line numbers only for files that actually have hits.
+                    starts = [0]
+                    for i, ch in enumerate(strict):
+                        if ch == "\n":
+                            starts.append(i + 1)
+                    for num, token, pos in hits:
+                        tree_hits.append(
+                            (p, bisect.bisect_right(starts, pos), num, token)
+                        )
+
+    # ── 3 (emit). Forbidden content ──────────────────────────────────────────
+    for rid, _pattern, _exempt, rule_baseline in compiled_rules:
+        hits = rule_hits[rid]
+        if rule_baseline is None:
+            for hp, hn, snippet in hits:
+                violations.append(
+                    f"FORBIDDEN CONTENT [{rid}]: {hp}:{hn}{untracked_note(hp)}\n"
+                    f"    {snippet}"
+                )
+        elif len(hits) > rule_baseline:
+            sample = "\n".join(
+                f"      {h[0]}:{h[1]}  {h[2]}" for h in sorted(hits)[:8]
+            )
+            violations.append(
+                f"FORBIDDEN CONTENT COUNT ROSE [{rid}]: "
+                f"{len(hits)} file(s) > baseline {rule_baseline}\n"
+                f"    This rule's matching-file count may only go DOWN.\n"
+                f"    First few:\n{sample}\n"
+                f"    Fix the new ones. Do not raise `file_baseline`."
+            )
+        else:
+            content_notes.append((rid, len(hits), rule_baseline))
+
+    # ── 3b (emit). Forbidden tokens ──────────────────────────────────────────
+    violations.extend(token_violations)
     # `git diff <commit>` compares the commit to the working tree via the index,
     # so it covers staged-new files but never untracked ones. Their lines are
     # appended explicitly -- every line of a new file is an added line.
@@ -599,7 +658,7 @@ def main() -> int:
     # the ordering the module header correctly refuses to invert -- while still
     # making the debt visible and one-directional.
     tree_baseline = refs_rule.get("tree_baseline")
-    tree_hits = list(tree_unresolvable_refs(tracked, ceiling, ref_exempt))
+    # Collected in the single pass above (#850).
     tree_count = len(tree_hits)
     tree_files = len({h[0] for h in tree_hits})
 
