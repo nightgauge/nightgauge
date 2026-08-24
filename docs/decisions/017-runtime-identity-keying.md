@@ -1813,6 +1813,13 @@ issueNumber)` (Decision 10) **before** `resumePipeline()`, and
    third: **a new-scheme file with no identity in its name or body → delete**.
    It does **not** classify legacy `runtime-{N}.json` at all — see Migration.
 
+   > **As shipped (#381, 2026-08-26):** this step landed only in part. The
+   > name-first gate `runtimeSweepVerdict` exists and keeps every new-scheme
+   > name unconditionally, but the legacy pattern was **not** removed — a legacy
+   > name still gets the classifier's verdict, because the Go sweep that
+   > Migration hands legacy disposition to was never built. See the amendment on
+   > [Migration](#migration).
+
 #### Consume-on-claim: the rename IS the exclusion (C15)
 
 Decision 1's entire safety argument is that _a producer that must supply an
@@ -2292,6 +2299,31 @@ terminates runs that are in flight. This ADR makes no attempt to carry a run
 across the upgrade, and there is no hidden cost in saying so: an extension host
 update already tears down the IPC server and every slot today. The worktree,
 branch, and queue state survive; the run does not, and is re-queued.
+
+> **AMENDED — superseded by #381 (2026-08-26). The three paragraphs below
+> record a decision that was never implemented; they are kept for their
+> reasoning, not as a description of the tree.**
+>
+> No Go sweep was built. #370 closed without step 8, which made follow-up row
+> **L-1** — "remove the one-shot Go legacy sweep one release later" — a request
+> to delete something that does not exist. #381 re-decided the arc and chose the
+> other branch: **legacy `runtime-{N}.json` files are abandoned unswept.**
+>
+> The reasoning below turns entirely on not stranding phantom `running` rows
+> _across an upgrade_. That premise never became true: the tag lineage is
+> `v0.2.0-rc.*` with zero published GitHub Releases, so no installed build ever
+> wrote the legacy name and there is no upgrade path to protect. Building a
+> migration for a population of zero would be exactly the open-ended
+> compatibility path the repo's pre-customer no-compat rule forbids.
+>
+> What is actually true in the tree: Go never reads or deletes a legacy file
+> (`state.ParseSnapshotFilename` matches the new scheme only, deliberately), and
+> the TypeScript activation sweep — which this section says was narrowed away
+> from legacy names — is still the only thing that touches one. The race the
+> third paragraph guards against cannot occur, because there is only one sweep.
+>
+> If a legacy file is ever observed on a real machine, that is a new finding and
+> deserves a new issue; none exists anywhere in the workspace today.
 
 **Legacy `runtime-{N}.json` on disk: reconcile-then-delete, once, and the Go
 sweep owns it exclusively.** The alternative — ignore-and-delete — creates
@@ -2890,14 +2922,14 @@ listed here with the scope each one carries, so the issues can be filed from
 this section rather than reconstructed from prose. None of them gates #370; the
 A-1 verification gates one **step** of it, as noted.
 
-| Ref     | Title                                                                        | Scope                                                                                                                                                                                                                                                                                                                                  |
-| ------- | ---------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **R-1** | Give the runtime snapshot a single authoritative writer                      | Five writers in three processes share `Persist`'s whole-file last-write-wins contract. After #370 the residual is same-run field loss between the IPC server and `nightgauge gate verify --record`, narrowed to a rename race. Fix: the gate CLI posts its result through IPC when a server is reachable, mirroring #316's discipline. |
-| **R-2** | Authenticate the IPC socket                                                  | #370 closes the **addressing** half of ADR 015 §N's residual and explicitly not the **forgery** half: a writer that can reach the socket can still mint an id and drive a run of its own. §N is amended in #370's PR to say which half; this issue closes the other.                                                                   |
-| **R-5** | Re-key `Scheduler.activeRuntimes` on `RunID`                                 | Decision 11 guards its one externally-reachable write site on identity instead of re-keying — a compensating check, which this ADR elsewhere calls the signature of a wrong key. Re-keying it also gives scheduler runs a real IPC abandon/pause route, which Decision 3 currently refuses with `run_wrong_owner`.                     |
-| **A-1** | Verify the platform's `pipeline_runs` idempotency contract                   | Confirm two `pipeline_done` events for one `run_id` update one row and the later outcome wins. **Precondition on the plan step that ships `pipeline.abandonRun`** (step 6 in the current order); if it fails, apply the A-1-false variant in [Assumptions](#assumptions).                                                              |
-| **L-1** | Remove the one-shot Go legacy `runtime-{N}.json` sweep                       | Ships in #370 to avoid stranding phantom `running` rows across the upgrade; lands one release later so it cannot become an open-ended compatibility path.                                                                                                                                                                              |
-| **O-1** | Give the five bare `PipelineStateService` catches a shared rejection handler | #370 adds a `logger.warn` to each of `:717, 741, 787, 828, 966`. They should share one handler that classifies the JSON-RPC code, because five copies of a warn will drift. Observability follow-up, not a mechanism.                                                                                                                  |
+| Ref         | Title                                                                          | Scope                                                                                                                                                                                                                                                                                                                                  |
+| ----------- | ------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **R-1**     | Give the runtime snapshot a single authoritative writer                        | Five writers in three processes share `Persist`'s whole-file last-write-wins contract. After #370 the residual is same-run field loss between the IPC server and `nightgauge gate verify --record`, narrowed to a rename race. Fix: the gate CLI posts its result through IPC when a server is reachable, mirroring #316's discipline. |
+| **R-2**     | Authenticate the IPC socket                                                    | #370 closes the **addressing** half of ADR 015 §N's residual and explicitly not the **forgery** half: a writer that can reach the socket can still mint an id and drive a run of its own. §N is amended in #370's PR to say which half; this issue closes the other.                                                                   |
+| **R-5**     | Re-key `Scheduler.activeRuntimes` on `RunID`                                   | Decision 11 guards its one externally-reachable write site on identity instead of re-keying — a compensating check, which this ADR elsewhere calls the signature of a wrong key. Re-keying it also gives scheduler runs a real IPC abandon/pause route, which Decision 3 currently refuses with `run_wrong_owner`.                     |
+| **A-1**     | Verify the platform's `pipeline_runs` idempotency contract                     | Confirm two `pipeline_done` events for one `run_id` update one row and the later outcome wins. **Precondition on the plan step that ships `pipeline.abandonRun`** (step 6 in the current order); if it fails, apply the A-1-false variant in [Assumptions](#assumptions).                                                              |
+| ~~**L-1**~~ | ~~Remove the one-shot Go legacy `runtime-{N}.json` sweep~~ **RESOLVED (#381)** | **The sweep was never built**, so there was nothing to remove: #370 closed without step 8. #381 re-decided the arc and abandoned legacy files unswept — the premise (an upgrade to strand rows across) never held, since there are zero published releases. See the amendment on [Migration](#migration).                              |
+| **O-1**     | Give the five bare `PipelineStateService` catches a shared rejection handler   | #370 adds a `logger.warn` to each of `:717, 741, 787, 828, 966`. They should share one handler that classifies the JSON-RPC code, because five copies of a warn will drift. Observability follow-up, not a mechanism.                                                                                                                  |
 
 ---
 
