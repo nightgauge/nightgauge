@@ -143,15 +143,15 @@ export interface ToolCallRecordedEvent {
   error?: string;
 }
 
-/** Model selection details persisted per-stage for analytics. */
-export interface ModelStageSelection {
-  model: string;
-  source: string;
-  confidence?: number;
-  complexity?: string;
-  mode?: string;
-  effort?: string;
-}
+// `ModelStageSelection` and `ExtendedStageState.model_selection` used to sit
+// here, the in-memory fourth copy of the selection vocabulary. Their only
+// writer, `setStageModelSelection`, was an empty stub, so every reader took its
+// undefined branch on every run; deleted with #465. Per-stage model attribution
+// travels to the Go recorder as `StageAttribution` on `completeStage` (#268)
+// and is read back from the history record's
+// `HistoryStageDetailSchema.model_selection`. The live IN-MEMORY source is
+// `PipelineState.tokens.per_stage[stage].model`, stamped from the runtime
+// snapshot. Do not add a TS-side stage-state model writer back here.
 
 /**
  * Per-stage served-model + adapter attribution threaded into completeStage
@@ -180,14 +180,6 @@ export type ExtendedStageState = {
   phases?: StagePhase[];
   current_phase?: string;
   total_phases?: number;
-  model_selection?: {
-    model: string;
-    source: string;
-    confidence?: number;
-    complexity?: string;
-    mode?: string;
-    effort?: string;
-  };
   /** Performance mode active at this stage's start (Issue #3215). */
   performance_mode?: "efficiency" | "elevated" | "maximum" | "frontier";
   auto_retry_count?: number;
@@ -1780,7 +1772,6 @@ export class PipelineStateService implements vscode.Disposable {
   // calibration is written by PostPipelineAnalyzer. Do not add a TS-side
   // outcome writer back here.
   async setLabels(_labels: string[]): Promise<void> {}
-  async setStageModelSelection(_stage: string, _selection: ModelStageSelection): Promise<void> {}
   recordToolCall(
     _stageOrRecord: string | ToolCallRecordedEvent,
     _toolName?: string,

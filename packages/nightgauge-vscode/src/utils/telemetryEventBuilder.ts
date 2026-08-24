@@ -105,9 +105,12 @@ export function buildPipelineExecutionEvent(input: PipelineExecutionInput): Anal
   const outcomeType = state.outcome_type;
   const outcome = outcomeType && SUCCESS_OUTCOMES.includes(outcomeType) ? "success" : "failure";
 
-  // Extract primary model from first completed stage with a model_selection
-  const firstModel = Object.values(state.stages).find((s) => s.model_selection)?.model_selection;
-  const modelUsed = firstModel?.model ?? null;
+  // Primary model = the first per-stage token block carrying a model. This used
+  // to read `stages[*].model_selection`, whose only writer was an empty stub, so
+  // `model_used` shipped null on every event (#465). `tokens.per_stage[*].model`
+  // is the live in-memory attribution, stamped from the runtime snapshot.
+  const modelUsed =
+    Object.values(state.tokens?.per_stage ?? {}).find((t) => t.model)?.model ?? null;
 
   // Backtrack and escalation counts
   const backtracks = state.backtracks?.length ?? state.backtrack_count ?? 0;
