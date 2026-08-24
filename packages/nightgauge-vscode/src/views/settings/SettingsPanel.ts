@@ -81,8 +81,13 @@ export const MACHINE_TIER_KEY_PATHS = new Set<string>([
   "ui.core.default_model",
   "ui.core.fallback_model",
   "ui.core.auth_provider",
-  "ui.notifications.discord.webhook_env",
-  "ui.notifications.mattermost.webhook_env",
+  // Discord and Mattermost live under the TOP-LEVEL `notifications:` key, not
+  // under `ui.notifications` — UINotificationsConfigSchema holds only the
+  // VSCode-native sounds/banners and has no discord or mattermost member. The
+  // old paths could never match, so these webhook env names were never
+  // stripped as machine-tier keys. Found by #499.
+  "notifications.discord.webhook_env",
+  "notifications.mattermost.webhook_env",
   "platform.license_key",
 ]);
 

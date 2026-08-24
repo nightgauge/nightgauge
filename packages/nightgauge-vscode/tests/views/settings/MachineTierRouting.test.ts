@@ -95,8 +95,8 @@ describe("MACHINE_TIER_KEY_PATHS routing (via configUtils)", () => {
     "ui.core.default_model",
     "ui.core.fallback_model",
     "ui.core.auth_provider",
-    "ui.notifications.discord.webhook_env",
-    "ui.notifications.mattermost.webhook_env",
+    "notifications.discord.webhook_env",
+    "notifications.mattermost.webhook_env",
   ]);
 
   function removeConfigValue(config: IncrediConfig, path: string): void {
@@ -153,9 +153,9 @@ describe("MACHINE_TIER_KEY_PATHS routing (via configUtils)", () => {
         ui: {
           core: {
             adapter: "claude",
-            default_model: "claude-opus-4-7",
-            fallback_model: "claude-sonnet-4-6",
-            auth_provider: "claude-ai",
+            default_model: "opus",
+            fallback_model: "sonnet",
+            auth_provider: "max",
           },
         },
       };
@@ -163,9 +163,9 @@ describe("MACHINE_TIER_KEY_PATHS routing (via configUtils)", () => {
       const captured = partitionMachineTierKeys(config);
 
       expect(captured.size).toBe(3);
-      expect(captured.get("ui.core.default_model")).toBe("claude-opus-4-7");
-      expect(captured.get("ui.core.fallback_model")).toBe("claude-sonnet-4-6");
-      expect(captured.get("ui.core.auth_provider")).toBe("claude-ai");
+      expect(captured.get("ui.core.default_model")).toBe("opus");
+      expect(captured.get("ui.core.fallback_model")).toBe("sonnet");
+      expect(captured.get("ui.core.auth_provider")).toBe("max");
 
       // All stripped from config
       expect(getConfigValue(config, "ui.core.adapter")).toBe("claude");
@@ -174,20 +174,16 @@ describe("MACHINE_TIER_KEY_PATHS routing (via configUtils)", () => {
 
     it("captures webhook_env paths", () => {
       const config: IncrediConfig = {
-        ui: {
-          notifications: {
-            discord: { webhook_env: "DISCORD_WEBHOOK_URL" },
-            mattermost: { webhook_env: "MATTERMOST_WEBHOOK_URL" },
-          },
+        notifications: {
+          discord: { webhook_env: "DISCORD_WEBHOOK_URL" },
+          mattermost: { webhook_env: "MATTERMOST_WEBHOOK_URL" },
         },
       };
 
       const captured = partitionMachineTierKeys(config);
 
-      expect(captured.get("ui.notifications.discord.webhook_env")).toBe("DISCORD_WEBHOOK_URL");
-      expect(captured.get("ui.notifications.mattermost.webhook_env")).toBe(
-        "MATTERMOST_WEBHOOK_URL"
-      );
+      expect(captured.get("notifications.discord.webhook_env")).toBe("DISCORD_WEBHOOK_URL");
+      expect(captured.get("notifications.mattermost.webhook_env")).toBe("MATTERMOST_WEBHOOK_URL");
     });
 
     it("does not capture machine-tier keys absent from the config", () => {
@@ -226,12 +222,14 @@ describe("MACHINE_TIER_KEY_PATHS routing (via configUtils)", () => {
 
     it("handles webhook env reconstruction", () => {
       const captured = new Map<string, unknown>([
-        ["ui.notifications.discord.webhook_env", "MY_DISCORD_ENV"],
+        ["notifications.discord.webhook_env", "MY_DISCORD_ENV"],
       ]);
 
       const machineConfig = buildMachineConfig(captured);
 
-      expect((machineConfig as IncrediConfig).ui?.notifications?.discord?.webhook_env).toBe(
+      // Reconstructed at the TOP-LEVEL notifications key, matching the schema
+      // and the corrected MACHINE_TIER_KEY_PATHS entry.
+      expect((machineConfig as IncrediConfig).notifications?.discord?.webhook_env).toBe(
         "MY_DISCORD_ENV"
       );
     });
