@@ -111,6 +111,15 @@ describe("OutputWindow Responsive Header (Issue #850)", () => {
         issueNumber: 9999,
         title: "A Very Long Issue Title That Might Cause Wrapping in Narrow Viewports",
         repoSlug: "nightgauge/nightgauge",
+        // Required per-slot members since #2814.
+        stages: new Map(),
+        tokenUsage: {
+          inputTokens: 0,
+          outputTokens: 0,
+          cacheReadTokens: 0,
+          cacheCreationTokens: 0,
+          costUsd: 0,
+        },
       };
       const html = getOutputWindowHtml(
         mockWebview,

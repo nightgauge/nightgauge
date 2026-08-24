@@ -36,7 +36,8 @@ describe("SettingsHtml per-section lock", () => {
         )
     );
     for (const section of SETTINGS_SECTIONS) {
-      if (!section.docLink.startsWith("docs/CONFIGURATION.md#")) continue;
+      // docLink is optional on a section.
+      if (!section.docLink?.startsWith("docs/CONFIGURATION.md#")) continue;
       const anchor = section.docLink.split("#")[1];
       expect(slugs.has(anchor), `${section.id}: ${anchor}`).toBe(true);
     }
