@@ -477,3 +477,88 @@ func TestReadOrgWarning(t *testing.T) {
 		})
 	}
 }
+
+// withAdapterProbe swaps the always-on adapter probe for the duration of a
+// test, so a RunDoctor assertion depends on the injected environment rather
+// than on whether the developer happens to have a coding agent installed.
+func withAdapterProbe(t *testing.T, p adapterProbe) {
+	t.Helper()
+	prev := newAdapterProbe
+	newAdapterProbe = func() adapterProbe { return p }
+	t.Cleanup(func() { newAdapterProbe = prev })
+}
+
+// TestRunDoctor_NoUsableAdapterDegradesButNeverBreaks is #862's regression
+// guard, and it asserts BOTH halves of the fix.
+//
+// The defect: with no coding agent installed the verdict read
+// "healthy — environment ready for pipeline operations" at exit 0.
+//
+// The correction that is just as load-bearing: it must NOT become exit 2.
+// PREFLIGHT halts a skill immediately on exit 2 and runs inside an agent
+// session, so the only way this fires mid-run is a probe false negative — and
+// under exit 2 that would halt a pipeline that was working fine.
+func TestRunDoctor_NoUsableAdapterDegradesButNeverBreaks(t *testing.T) {
+	ctx := context.Background()
+	withAdapterProbe(t, fakeProbe{}.toProbe()) // nothing installed, no keys
+
+	result := RunDoctor(ctx, nil, nil, nil)
+
+	item, ok := result.Checks["ai_adapter"]
+	if !ok {
+		t.Fatal("expected an ai_adapter row on the DEFAULT run, with no --adapters passed")
+	}
+	if item.OK {
+		t.Errorf("expected the row to fail with no usable adapter, got %+v", item)
+	}
+	// The invariant is not "exit code != 2" — this scenario already exits 2 on
+	// the nil-client auth failure. It is that the adapter row never CHANGES the
+	// exit code: the same environment with a usable adapter must land on the
+	// same verdict. That is what keeps a probe false negative from halting a
+	// working run through PREFLIGHT's exit-2 gate.
+	withAdapterProbe(t, fakeProbe{paths: map[string]string{"claude": "/opt/claude"}}.toProbe())
+	control := RunDoctor(ctx, nil, nil, nil)
+	if result.ExitCode != control.ExitCode {
+		t.Errorf("adapter availability must not move the exit code: %d without an adapter vs %d with one",
+			result.ExitCode, control.ExitCode)
+	}
+
+	for _, name := range result.FailedChecks {
+		if name == "ai_adapter" {
+			t.Error("ai_adapter must not appear in FailedChecks — it is warning-only")
+		}
+	}
+	found := false
+	for _, w := range result.Warnings {
+		if strings.Contains(w, "no usable AI coding agent") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected the adapter warning to reach Warnings, got %v", result.Warnings)
+	}
+}
+
+// TestRunDoctor_UsableAdapterAddsNoWarning verifies the other direction: a
+// machine that can run a stage is unchanged by this check — the row passes and
+// contributes no warning, so an otherwise-healthy environment still reads
+// healthy.
+func TestRunDoctor_UsableAdapterAddsNoWarning(t *testing.T) {
+	ctx := context.Background()
+	withAdapterProbe(t, fakeProbe{paths: map[string]string{"claude": "/opt/claude"}}.toProbe())
+
+	result := RunDoctor(ctx, nil, nil, nil)
+
+	item, ok := result.Checks["ai_adapter"]
+	if !ok {
+		t.Fatal("expected an ai_adapter row")
+	}
+	if !item.OK {
+		t.Errorf("expected the row to pass with claude usable, got %+v", item)
+	}
+	for _, w := range result.Warnings {
+		if strings.Contains(w, "AI coding agent") {
+			t.Errorf("a usable adapter must add no adapter warning, got %q", w)
+		}
+	}
+}

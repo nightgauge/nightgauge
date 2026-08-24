@@ -356,6 +356,16 @@ func RunDoctor(ctx context.Context, cfg *config.Config, client *gh.Client, adapt
 		warnings = append(warnings, processWarning)
 	}
 
+	// --- AI adapter availability (#862, always) ---
+	// "Can this machine run a stage at all?" is part of environment health, so
+	// it is asked on every run rather than only when --adapters is passed.
+	// Per-adapter DETAIL stays opt-in below; this row is the one-bit answer.
+	aiAdapter, aiAdapterWarning := checkAIAdapterAvailable(newAdapterProbe())
+	result.Checks["ai_adapter"] = aiAdapter
+	if aiAdapterWarning != "" {
+		warnings = append(warnings, aiAdapterWarning)
+	}
+
 	// --- per-adapter health (Issue #4031, opt-in) ---
 	// Deterministic binary/version/MCP facts for the requested adapters. An
 	// unhealthy adapter is surfaced as a warning (degraded, ExitCode 1) — never

@@ -3,6 +3,7 @@ package doctor
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -282,6 +283,48 @@ func resolveCodexHome() string {
 		return ".codex"
 	}
 	return filepath.Join(home, ".codex")
+}
+
+// newAdapterProbe constructs the probe used by the always-on adapter
+// availability check. It is a variable so tests can substitute a fake without
+// spawning real binaries or reading the developer's own environment.
+var newAdapterProbe = defaultAdapterProbe
+
+// checkAIAdapterAvailable answers one question for the DEFAULT doctor run: can
+// this machine run a pipeline stage at all?
+//
+// Before #862 the answer was never asked. The default check list covered the
+// binary, gh, GitHub auth, config, the board and leaked machine state, but
+// nothing about the agent that actually executes a stage — adapter health was
+// reachable only through the opt-in `--adapters` flag, which a first-run user
+// has no reason to pass. So a machine with no coding agent and no API key
+// reported `Status: healthy — environment ready for pipeline operations` and
+// exited 0, then failed at the first stage.
+//
+// Warning-only, never a required failure, for the same reason the per-adapter
+// section is: `skills/_shared/PREFLIGHT.md` halts a skill immediately on exit
+// 2, and PREFLIGHT runs INSIDE an agent session. If it is executing, an adapter
+// is already running, so the only way this check could fire mid-run is a probe
+// false negative — a CLI below the known-version floor, or one that does not
+// answer `--version` the way the probe expects. Under exit 2 that would halt a
+// run that was working. The defect being fixed is the false `healthy`, not the
+// exit code.
+//
+// The probe short-circuits on the first usable adapter, so the common case
+// costs one `lookPath` plus one `--version` spawn rather than nine.
+func checkAIAdapterAvailable(probe adapterProbe) (CheckItem, string) {
+	for _, name := range AllAdapterNames() {
+		if h := checkAdapter(name, probe); h.OK {
+			return CheckItem{
+				OK:     true,
+				Detail: fmt.Sprintf("%s is usable", h.Adapter),
+			}, ""
+		}
+	}
+	const msg = "no usable AI coding agent found — the pipeline cannot run a stage. " +
+		"Install the claude CLI (the supported default) or configure an adapter, " +
+		"then run `nightgauge doctor --adapters all` for per-adapter detail."
+	return CheckItem{OK: false, Error: msg}, msg
 }
 
 // CheckAdapters returns deterministic health for each requested adapter, in the
