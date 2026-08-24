@@ -181,11 +181,11 @@ function loadSavedQueries(workingDir: string): SavedQueriesFile | null {
  */
 function saveQuery(workingDir: string, name: string, query: string): void {
   const filepath = path.join(workingDir, ".nightgauge", "saved-queries.yaml");
-  const incrediDir = path.join(workingDir, ".nightgauge");
+  const nightgaugeDir = path.join(workingDir, ".nightgauge");
 
   // Ensure .nightgauge directory exists
-  if (!fs.existsSync(incrediDir)) {
-    fs.mkdirSync(incrediDir, { recursive: true });
+  if (!fs.existsSync(nightgaugeDir)) {
+    fs.mkdirSync(nightgaugeDir, { recursive: true });
   }
 
   // Load existing or create new

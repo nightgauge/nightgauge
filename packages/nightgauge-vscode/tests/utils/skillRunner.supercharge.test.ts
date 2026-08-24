@@ -21,9 +21,9 @@ vi.mock("vscode", () => ({
   },
 }));
 
-vi.mock("../../src/utils/incrediConfig", async () => {
-  const actual = await vi.importActual<typeof import("../../src/utils/incrediConfig")>(
-    "../../src/utils/incrediConfig"
+vi.mock("../../src/utils/nightgaugeConfig", async () => {
+  const actual = await vi.importActual<typeof import("../../src/utils/nightgaugeConfig")>(
+    "../../src/utils/nightgaugeConfig"
   );
   return {
     ...actual,
@@ -41,7 +41,7 @@ vi.mock("../../src/utils/incrediConfig", async () => {
 });
 
 import { resolveModel } from "../../src/utils/skillRunner";
-import { getPerformanceMode, getStageEffort } from "../../src/utils/incrediConfig";
+import { getPerformanceMode, getStageEffort } from "../../src/utils/nightgaugeConfig";
 
 describe("resolveModel — Maximum mode (replaces legacy Supercharge from #2433)", () => {
   beforeEach(() => {

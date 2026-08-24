@@ -14,15 +14,15 @@ import type { PipelineStateService } from "../../src/services/PipelineStateServi
 import type { Logger } from "../../src/utils/logger";
 import type { SkillRunResult } from "../../src/utils/skillRunner";
 import { runStageSkillHeadless } from "../../src/utils/skillRunner";
-import { getSkipAuthPreflight } from "../../src/utils/incrediConfig";
+import { getSkipAuthPreflight } from "../../src/utils/nightgaugeConfig";
 import { runAdapterAuthPreflight } from "@nightgauge/sdk";
 
 // #4044: the live adapter auth gate now injects a real preflight runner, so it
 // probes CLI auth. The merge-path tests skip the gate (skip_auth_preflight) so
 // they exercise merge behavior; the regression test below flips both mocks to
 // exercise the gate itself. Controllable vi.fns so per-test overrides work.
-vi.mock("../../src/utils/incrediConfig", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../src/utils/incrediConfig")>()),
+vi.mock("../../src/utils/nightgaugeConfig", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../src/utils/nightgaugeConfig")>()),
   getSkipAuthPreflight: vi.fn(() => true),
 }));
 

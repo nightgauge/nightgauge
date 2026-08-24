@@ -217,7 +217,7 @@ describe("OutputWindow — panel lifecycle", () => {
     ow.show();
     expect(window.createWebviewPanel).toHaveBeenCalledOnce();
     expect(window.createWebviewPanel).toHaveBeenCalledWith(
-      "incrediOutputWindow",
+      "nightgaugeOutputWindow",
       "Nightgauge Output",
       expect.anything(),
       expect.objectContaining({

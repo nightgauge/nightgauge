@@ -21,8 +21,8 @@ import type { Logger } from "../../src/utils/logger";
 import type { SkillRunResult } from "../../src/utils/skillRunner";
 import { runStageSkillHeadless } from "../../src/utils/skillRunner";
 
-vi.mock("../../src/utils/incrediConfig", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../src/utils/incrediConfig")>()),
+vi.mock("../../src/utils/nightgaugeConfig", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../src/utils/nightgaugeConfig")>()),
   getSkipAuthPreflight: () => true,
 }));
 

@@ -86,7 +86,7 @@ export class TelemetrySettingsPanel implements vscode.Disposable {
     }
 
     this.panel = vscode.window.createWebviewPanel(
-      "incrediTelemetrySettings",
+      "nightgaugeTelemetrySettings",
       "Nightgauge: Telemetry Settings",
       vscode.ViewColumn.One,
       { enableScripts: true, retainContextWhenHidden: true }

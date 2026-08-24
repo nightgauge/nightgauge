@@ -7,7 +7,7 @@ import {
   GROK_MODELS,
 } from "../../../cli/adapters/modelPreflight.js";
 import { AdapterError } from "../../../cli/adapters/errors.js";
-import type { IncrediAdapter } from "../../../cli/adapters/ICliAdapter.js";
+import type { NightgaugeAdapter } from "../../../cli/adapters/ICliAdapter.js";
 import { checkTransportServed } from "../../../eval/modelRegistry.js";
 
 /**
@@ -122,7 +122,7 @@ describe("validateModelForAdapter — open adapters never reject", () => {
 
 describe("validateModelForAdapter — empty input", () => {
   it("returns an empty model (no override) for undefined/empty across all adapters", () => {
-    for (const adapter of Object.keys(ADAPTER_MODEL_POLICY) as IncrediAdapter[]) {
+    for (const adapter of Object.keys(ADAPTER_MODEL_POLICY) as NightgaugeAdapter[]) {
       expect(validateModelForAdapter(adapter, undefined).model).toBe("");
       expect(validateModelForAdapter(adapter, "   ").model).toBe("");
     }
@@ -142,8 +142,8 @@ describe("resolveAndValidateModel", () => {
 });
 
 describe("ADAPTER_MODEL_POLICY invariant", () => {
-  it("covers every IncrediAdapter union member (no silent open-by-default)", () => {
-    const adapters: IncrediAdapter[] = [
+  it("covers every NightgaugeAdapter union member (no silent open-by-default)", () => {
+    const adapters: NightgaugeAdapter[] = [
       "claude-sdk",
       "claude-headless",
       "codex",
@@ -154,7 +154,7 @@ describe("ADAPTER_MODEL_POLICY invariant", () => {
       "copilot",
       "grok",
     ];
-    // The Record<IncrediAdapter, …> type guards this at compile time; assert at
+    // The Record<NightgaugeAdapter, …> type guards this at compile time; assert at
     // runtime too so adding a union member forces a policy entry (a new adapter
     // cannot silently fall through to "open").
     expect(Object.keys(ADAPTER_MODEL_POLICY).sort()).toEqual([...adapters].sort());

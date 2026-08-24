@@ -76,8 +76,8 @@ vi.mock("../../src/utils/configPathResolver", () => ({
   logDeprecationWarning: vi.fn(),
 }));
 
-vi.mock("../../src/utils/incrediConfig", async () => {
-  const actual = await vi.importActual<Record<string, unknown>>("../../src/utils/incrediConfig");
+vi.mock("../../src/utils/nightgaugeConfig", async () => {
+  const actual = await vi.importActual<Record<string, unknown>>("../../src/utils/nightgaugeConfig");
   return {
     ...actual,
     precomputeCalibratedStallThresholds: vi.fn().mockResolvedValue(undefined),
@@ -152,7 +152,7 @@ import {
   getPerformanceMode,
   getStageEffort,
   getSuperchargeCodexModel,
-} from "../../src/utils/incrediConfig";
+} from "../../src/utils/nightgaugeConfig";
 import type { PipelineStage } from "@nightgauge/sdk";
 import { createMockChildProcess } from "../mocks/child-process";
 

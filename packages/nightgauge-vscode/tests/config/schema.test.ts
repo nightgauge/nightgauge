@@ -9,7 +9,7 @@ import { describe, it, expect } from "vitest";
 import {
   resolvePlatformBaseUrl,
   PLATFORM_ENV_PRESETS,
-  IncrediConfigSchema,
+  NightgaugeConfigSchema,
   validateConfig,
   parseConfig,
   mergeWithDefaults,
@@ -41,7 +41,7 @@ import {
   BaselineCIGateConfigSchema,
 } from "../../src/config/schema";
 
-describe("IncrediConfigSchema", () => {
+describe("NightgaugeConfigSchema", () => {
   // ============================================================================
   // Valid Config Tests
   // ============================================================================
@@ -1091,9 +1091,9 @@ describe("SafetyRailsConfigSchema", () => {
   });
 });
 
-describe("IncrediConfigSchema autonomous section (Issue #2536)", () => {
+describe("NightgaugeConfigSchema autonomous section (Issue #2536)", () => {
   it("accepts autonomous section in top-level config", () => {
-    const result = IncrediConfigSchema.safeParse({
+    const result = NightgaugeConfigSchema.safeParse({
       autonomous: {
         auto_actionable: false,
         refinement_enabled: true,
@@ -1110,7 +1110,7 @@ describe("IncrediConfigSchema autonomous section (Issue #2536)", () => {
   });
 
   it("autonomous section is optional in top-level config", () => {
-    const result = IncrediConfigSchema.safeParse({ project: { number: 1 } });
+    const result = NightgaugeConfigSchema.safeParse({ project: { number: 1 } });
     expect(result.success).toBe(true);
     if (result.success) {
       expect(result.data.autonomous).toBeUndefined();
@@ -1118,7 +1118,7 @@ describe("IncrediConfigSchema autonomous section (Issue #2536)", () => {
   });
 
   it("rejects invalid refinement_max_concurrent in top-level config", () => {
-    const result = IncrediConfigSchema.safeParse({
+    const result = NightgaugeConfigSchema.safeParse({
       autonomous: { refinement_max_concurrent: 5 },
     });
     expect(result.success).toBe(false);
@@ -1189,7 +1189,7 @@ describe("GitHubAuthConfigSchema", () => {
   });
 
   it("accepts github_auth embedded in top-level config", () => {
-    const result = IncrediConfigSchema.safeParse({
+    const result = NightgaugeConfigSchema.safeParse({
       github_auth: {
         token: "env:GITHUB_TOKEN_NIGHTGAUGE",
         tokens: { nightgauge: "env:GITHUB_TOKEN_NIGHTGAUGE" },

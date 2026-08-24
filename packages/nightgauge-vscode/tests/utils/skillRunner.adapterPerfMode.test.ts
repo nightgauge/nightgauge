@@ -73,8 +73,8 @@ vi.mock("../../src/utils/configPathResolver", () => ({
 
 // Partial mock: keep getModeStageAdapterModel/MODE_PROFILES real so the
 // translation tables exercise actual code; override the runtime getters.
-vi.mock("../../src/utils/incrediConfig", async () => {
-  const actual = await vi.importActual<Record<string, unknown>>("../../src/utils/incrediConfig");
+vi.mock("../../src/utils/nightgaugeConfig", async () => {
+  const actual = await vi.importActual<Record<string, unknown>>("../../src/utils/nightgaugeConfig");
   return {
     ...actual,
     getAuthProvider: vi.fn(() => "max"),
@@ -154,7 +154,7 @@ import {
   getCopilotModel,
   getStageModel,
   getGeminiModel,
-} from "../../src/utils/incrediConfig";
+} from "../../src/utils/nightgaugeConfig";
 import { createMockChildProcess } from "../mocks/child-process";
 
 const MOCK_SKILL_CONTENT = `---

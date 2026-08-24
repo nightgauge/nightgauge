@@ -52,7 +52,7 @@ import {
 } from "../../eval/modelRegistry.js";
 import { isTierBand, TIER_BAND_ALTERNATION, type TierBand } from "../../eval/tierBands.js";
 import { AdapterError } from "./errors.js";
-import type { IncrediAdapter } from "./ICliAdapter.js";
+import type { NightgaugeAdapter } from "./ICliAdapter.js";
 
 /** Whether an adapter has a finite, validatable model set. */
 export type ModelSetKind = "closed" | "open";
@@ -210,12 +210,12 @@ const CODEX_DOCS_URL = "https://developers.openai.com/codex";
 const GEMINI_DOCS_URL = "https://ai.google.dev/gemini-api/docs";
 
 /**
- * Per-adapter model policy. Every {@link IncrediAdapter} union member MUST have
- * an entry — the `Record<IncrediAdapter, …>` type makes a missing adapter a
+ * Per-adapter model policy. Every {@link NightgaugeAdapter} union member MUST have
+ * an entry — the `Record<NightgaugeAdapter, …>` type makes a missing adapter a
  * compile error, and `modelPreflight.test.ts` asserts it at runtime so adding a
  * new adapter forces a policy decision (no silent open-by-default fallthrough).
  */
-export const ADAPTER_MODEL_POLICY: Record<IncrediAdapter, AdapterModelPolicy> = {
+export const ADAPTER_MODEL_POLICY: Record<NightgaugeAdapter, AdapterModelPolicy> = {
   "claude-sdk": {
     kind: "open",
     displayName: "Claude SDK",
@@ -397,7 +397,7 @@ function buildTransportUnreachableError(
  * preflight call sites use.
  */
 export function validateModelForAdapter(
-  adapter: IncrediAdapter,
+  adapter: NightgaugeAdapter,
   model: string | undefined
 ): ModelValidationResult {
   const policy = ADAPTER_MODEL_POLICY[adapter];
@@ -455,7 +455,7 @@ export function validateModelForAdapter(
  * {@link validateModelForAdapter}.
  */
 export function resolveAndValidateModel(
-  adapter: IncrediAdapter,
+  adapter: NightgaugeAdapter,
   model: string | undefined
 ): string | undefined {
   const result = validateModelForAdapter(adapter, model);

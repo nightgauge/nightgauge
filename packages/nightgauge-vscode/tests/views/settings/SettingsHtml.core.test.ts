@@ -1,11 +1,11 @@
 import { describe, it, expect } from "vitest";
 import { getSettingsHtml } from "../../../src/views/settings/SettingsHtml";
 import { getDefaultConfig } from "../../../src/config/schema";
-import type { IncrediConfig } from "../../../src/views/settings/types";
+import type { NightgaugeConfig } from "../../../src/views/settings/types";
 
 describe("SettingsHtml core section", () => {
   it("renders execution adapter control in Nightgauge Settings view", () => {
-    const config = getDefaultConfig() as IncrediConfig;
+    const config = getDefaultConfig() as NightgaugeConfig;
     const html = getSettingsHtml(
       { cspSource: "test-csp" } as any,
       config,
@@ -44,7 +44,7 @@ describe("SettingsHtml core section", () => {
   });
 
   it("renders LM Studio models into the dropdown", () => {
-    const config = getDefaultConfig() as IncrediConfig;
+    const config = getDefaultConfig() as NightgaugeConfig;
     config.ui = {
       ...config.ui,
       core: {
@@ -86,7 +86,7 @@ describe("SettingsHtml core section", () => {
   });
 
   it("shows codex selected with codex-specific controls and hides Claude-only fields", () => {
-    const config = getDefaultConfig() as IncrediConfig;
+    const config = getDefaultConfig() as NightgaugeConfig;
     config.ui = {
       ...config.ui,
       core: {

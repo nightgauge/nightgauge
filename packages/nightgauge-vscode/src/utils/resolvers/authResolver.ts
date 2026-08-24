@@ -1,11 +1,11 @@
 /**
  * Auth Resolver - Auth provider and GitHub authentication config reading
  *
- * Extracted from incrediConfig.ts as part of the config module decomposition.
+ * Extracted from nightgaugeConfig.ts as part of the config module decomposition.
  * Provides utilities for reading auth provider and GitHub auth settings from
  * the nightgauge config file.
  *
- * @see Issue #2742 - Refactor VSCode: extract incrediConfig.ts
+ * @see Issue #2742 - Refactor VSCode: extract nightgaugeConfig.ts
  */
 
 import * as fs from "node:fs";

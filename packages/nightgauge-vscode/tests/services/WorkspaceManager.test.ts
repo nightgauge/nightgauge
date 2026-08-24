@@ -591,12 +591,12 @@ github:
     });
   });
 
-  describe("hasIncrediConfig()", () => {
+  describe("hasNightgaugeConfig()", () => {
     it("should return true when config file exists", async () => {
       vi.mocked(fs.access).mockResolvedValue(undefined);
 
       const repo = new Repository("test", repoPath);
-      const hasConfig = await repo.hasIncrediConfig();
+      const hasConfig = await repo.hasNightgaugeConfig();
 
       expect(hasConfig).toBe(true);
     });
@@ -610,7 +610,7 @@ github:
       vi.mocked(fs.access).mockRejectedValue(new Error("ENOENT"));
 
       const repo = new Repository("test", repoPath);
-      const hasConfig = await repo.hasIncrediConfig();
+      const hasConfig = await repo.hasNightgaugeConfig();
 
       expect(hasConfig).toBe(false);
     });

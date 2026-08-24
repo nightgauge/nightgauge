@@ -23,7 +23,7 @@ export type { ExecutionAdapter, AuthProvider, ModelSelection };
 /**
  * Nightgauge extension settings interface
  */
-export interface IncrediSettings {
+export interface NightgaugeSettings {
   /** Execution adapter for pipeline stage orchestration */
   executionAdapter: ExecutionAdapter;
   /** Authentication provider for Claude API */
@@ -42,7 +42,7 @@ export interface IncrediSettings {
  * @deprecated Use DEFAULT_CORE_SETTINGS from coreSettings.ts instead.
  * Kept for backward compatibility.
  */
-export const DEFAULT_SETTINGS: IncrediSettings = {
+export const DEFAULT_SETTINGS: NightgaugeSettings = {
   executionAdapter: "claude",
   authProvider: "max",
   defaultModel: "sonnet",
@@ -55,7 +55,7 @@ export const DEFAULT_SETTINGS: IncrediSettings = {
  *
  * @see Issue #476 - Now uses ConfigBridge instead of direct VSCode reads
  */
-export function getSettings(): IncrediSettings {
+export function getSettings(): NightgaugeSettings {
   const coreSettings = getCoreSettings();
 
   return {
@@ -127,7 +127,7 @@ export async function getGitRoot(workspaceRoot: string): Promise<string | null> 
  * @param workspaceRoot - The current workspace root path
  * @returns The effective root path for .nightgauge files
  */
-export async function getIncrediRoot(workspaceRoot: string): Promise<string> {
+export async function getNightgaugeRoot(workspaceRoot: string): Promise<string> {
   const gitRoot = await getGitRoot(workspaceRoot);
 
   if (gitRoot) {

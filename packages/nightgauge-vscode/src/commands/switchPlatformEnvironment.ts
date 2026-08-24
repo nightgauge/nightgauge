@@ -1,13 +1,13 @@
 import * as vscode from "vscode";
 import type { Logger } from "../utils/logger";
 import type { SessionManager } from "../platform/SessionManager";
-import type { IncrediConfig } from "../views/settings/types";
+import type { NightgaugeConfig } from "../views/settings/types";
 import {
   type PlatformEnvironment,
   PLATFORM_ENV_PRESETS,
   resolvePlatformBaseUrl,
 } from "../config/schema";
-import { IncrediYamlService } from "../views/settings/IncrediYamlService";
+import { NightgaugeYamlService } from "../views/settings/NightgaugeYamlService";
 import { ConfigBridge } from "../services/ConfigBridge";
 import { ProjectEventSubscriber } from "../services/ProjectEventSubscriber";
 import { TokenStorage } from "../platform/TokenStorage";
@@ -88,14 +88,14 @@ export function registerSwitchPlatformEnvironmentCommand(
       }
     }
 
-    const delta: IncrediConfig = {
+    const delta: NightgaugeConfig = {
       platform: {
         environment: selectedEnv,
         ...(selectedEnv === "custom" ? { api_url: customUrl } : {}),
       },
-    } as IncrediConfig;
+    } as NightgaugeConfig;
 
-    const yamlService = new IncrediYamlService(workspaceRoot);
+    const yamlService = new NightgaugeYamlService(workspaceRoot);
     try {
       const writeResult = await yamlService.writeLocal(delta);
       if (!writeResult.success) {

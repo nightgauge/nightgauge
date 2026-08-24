@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { IncrediConfigSchema, getDefaultConfig } from "../../src/config/schema";
+import { NightgaugeConfigSchema, getDefaultConfig } from "../../src/config/schema";
 import { getSettingsHtml } from "../../src/views/settings/SettingsHtml";
 
 describe("deprecated decorative settings", () => {
   it("accepts legacy files without advertising settings that have no consumer", () => {
     expect(() =>
-      IncrediConfigSchema.parse({
+      NightgaugeConfigSchema.parse({
         pr: { draft_by_default: true },
         branch: { prefixes: { feature: "feature/" } },
         issue: { auto_assign: true, default_labels: ["triage"] },

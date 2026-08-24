@@ -2,7 +2,7 @@
  * Tests for WorkItemSource configuration schema from issue #2571
  *
  * Covers WorkItemSourceModeSchema, WorkItemSourceConfigSchema,
- * IncrediConfigSchema.work_item_source field, and DEFAULT_CONFIG defaults.
+ * NightgaugeConfigSchema.work_item_source field, and DEFAULT_CONFIG defaults.
  *
  * @see Issue #2571 - Add work item source configuration and provider selection wiring
  * @see packages/nightgauge-vscode/src/config/schema.ts
@@ -12,7 +12,7 @@ import { describe, it, expect } from "vitest";
 import {
   WorkItemSourceModeSchema,
   WorkItemSourceConfigSchema,
-  IncrediConfigSchema,
+  NightgaugeConfigSchema,
   DEFAULT_CONFIG,
 } from "../../src/config/schema";
 
@@ -105,24 +105,24 @@ describe("WorkItemSourceConfigSchema", () => {
 });
 
 // ============================================================================
-// IncrediConfigSchema.work_item_source
+// NightgaugeConfigSchema.work_item_source
 // ============================================================================
 
-describe("IncrediConfigSchema work_item_source field", () => {
+describe("NightgaugeConfigSchema work_item_source field", () => {
   it("allows config without work_item_source (backward compat)", () => {
-    const result = IncrediConfigSchema.safeParse({});
+    const result = NightgaugeConfigSchema.safeParse({});
     expect(result.success).toBe(true);
   });
 
   it("accepts valid work_item_source config", () => {
-    const result = IncrediConfigSchema.safeParse({
+    const result = NightgaugeConfigSchema.safeParse({
       work_item_source: { mode: "github" },
     });
     expect(result.success).toBe(true);
   });
 
   it("rejects invalid mode in work_item_source", () => {
-    const result = IncrediConfigSchema.safeParse({
+    const result = NightgaugeConfigSchema.safeParse({
       work_item_source: { mode: "invalid-mode" },
     });
     expect(result.success).toBe(false);

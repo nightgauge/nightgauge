@@ -18,7 +18,7 @@ import { createInterface, Interface as ReadlineInterface } from "readline";
 import * as vscode from "vscode";
 import { BinaryResolver } from "./BinaryResolver";
 import { getActiveCallSource, setActiveCallSource } from "./callSource";
-import { getGitHubAuthToken, getGitHubAuthTokens } from "../utils/incrediConfig";
+import { getGitHubAuthToken, getGitHubAuthTokens } from "../utils/nightgaugeConfig";
 import { SecretStorageService, SECRET_KEYS } from "./SecretStorageService";
 import { TokenStorage } from "../platform/TokenStorage";
 import { PlatformCredentialBridge } from "../platform/PlatformCredentialBridge";

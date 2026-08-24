@@ -16,7 +16,7 @@ import type { Logger } from "../../src/utils/logger";
 import type { SkillRunResult } from "../../src/utils/skillRunner";
 import { runStageSkillHeadless } from "../../src/utils/skillRunner";
 import { existsSync, readFileSync } from "fs";
-import * as incrediConfig from "../../src/utils/incrediConfig";
+import * as nightgaugeConfig from "../../src/utils/nightgaugeConfig";
 
 // Mock skillRunner
 vi.mock("../../src/utils/skillRunner", () => ({
@@ -201,7 +201,7 @@ describe("HeadlessOrchestrator context schema repair (Issue #2552)", () => {
 
   it("attempts repair when config is enabled and validation fails", async () => {
     // Mock repair config as enabled
-    vi.spyOn(incrediConfig, "getContextSchemaRepairConfig").mockReturnValue({
+    vi.spyOn(nightgaugeConfig, "getContextSchemaRepairConfig").mockReturnValue({
       enabled: true,
       max_attempts: 1,
     });
@@ -243,7 +243,7 @@ describe("HeadlessOrchestrator context schema repair (Issue #2552)", () => {
   });
 
   it("clears validation errors when repair succeeds", async () => {
-    vi.spyOn(incrediConfig, "getContextSchemaRepairConfig").mockReturnValue({
+    vi.spyOn(nightgaugeConfig, "getContextSchemaRepairConfig").mockReturnValue({
       enabled: true,
       max_attempts: 1,
     });
@@ -301,7 +301,7 @@ describe("HeadlessOrchestrator context schema repair (Issue #2552)", () => {
   });
 
   it("falls through to warn-and-continue when repair fails", async () => {
-    vi.spyOn(incrediConfig, "getContextSchemaRepairConfig").mockReturnValue({
+    vi.spyOn(nightgaugeConfig, "getContextSchemaRepairConfig").mockReturnValue({
       enabled: true,
       max_attempts: 1,
     });
@@ -339,7 +339,7 @@ describe("HeadlessOrchestrator context schema repair (Issue #2552)", () => {
   });
 
   it("respects max_attempts limit", async () => {
-    vi.spyOn(incrediConfig, "getContextSchemaRepairConfig").mockReturnValue({
+    vi.spyOn(nightgaugeConfig, "getContextSchemaRepairConfig").mockReturnValue({
       enabled: true,
       max_attempts: 1,
     });

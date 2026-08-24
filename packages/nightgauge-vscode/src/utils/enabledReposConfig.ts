@@ -8,7 +8,7 @@
  * propagated across them. Machine tier is the only tier the Go binary reads
  * directly from inside a worktree.
  *
- * This module now writes to machine YAML via `IncrediYamlService.writeGlobal()`
+ * This module now writes to machine YAML via `NightgaugeYamlService.writeGlobal()`
  * and best-effort clears the legacy runtime-memento entry so it can't shadow
  * the new machine value through the merge engine's runtime tier.
  *
@@ -27,8 +27,8 @@
 
 import type { ConfigBridge } from "../services/ConfigBridge";
 import type { RuntimeStateStore } from "../config/RuntimeStateStore";
-import type { IncrediYamlService } from "../views/settings/IncrediYamlService";
-import type { IncrediConfig } from "../config/schema";
+import type { NightgaugeYamlService } from "../views/settings/NightgaugeYamlService";
+import type { NightgaugeConfig } from "../config/schema";
 
 /** Path used for the runtime-tier cleanup — also the schema location. */
 const ENABLED_REPOS_PATH = "autonomous.enabled_repos";
@@ -55,11 +55,11 @@ export interface ConfigBridgeLike {
 }
 
 /**
- * Subset of `IncrediYamlService` this module writes through. Only the
+ * Subset of `NightgaugeYamlService` this module writes through. Only the
  * machine-tier writer is needed.
  */
 export interface MachineYamlWriterLike {
-  writeGlobal(partial: Partial<IncrediConfig>): Promise<{ success: boolean; error?: string }>;
+  writeGlobal(partial: Partial<NightgaugeConfig>): Promise<{ success: boolean; error?: string }>;
 }
 
 /**
@@ -73,13 +73,13 @@ export interface EnabledReposConfigService {
 
 /**
  * Factory: capture a `RuntimeStateStore` for legacy-memento cleanup, a
- * `ConfigBridge` for merged reads, and an `IncrediYamlService` (or stub)
+ * `ConfigBridge` for merged reads, and an `NightgaugeYamlService` (or stub)
  * for machine-tier writes.
  */
 export function createEnabledReposConfigService(
   runtimeStore: RuntimeStateStoreLike | RuntimeStateStore,
   configBridge: ConfigBridgeLike | ConfigBridge,
-  machineYamlWriter: MachineYamlWriterLike | IncrediYamlService
+  machineYamlWriter: MachineYamlWriterLike | NightgaugeYamlService
 ): EnabledReposConfigService {
   const store = runtimeStore as RuntimeStateStoreLike;
   const bridge = configBridge as ConfigBridgeLike;
@@ -98,7 +98,7 @@ export function createEnabledReposConfigService(
       // being absent (the autonomous scheduler treats both equivalently).
       await writer.writeGlobal({
         autonomous: { enabled_repos: selected },
-      } as Partial<IncrediConfig>);
+      } as Partial<NightgaugeConfig>);
       // Best-effort clear of any legacy runtime-memento entries so they
       // can't shadow the new machine value through the merge engine's
       // runtime tier. Pre-#3641 the UI wrote here, and stale entries may

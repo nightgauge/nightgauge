@@ -117,20 +117,20 @@ vi.mock("fs", () => ({
   readFileSync: vi.fn(() => ""),
 }));
 
-// Mock incrediConfig so tests can control what getGitHubAuthToken returns without
-// relying on the real file system (incrediConfig uses "node:fs" which is a
+// Mock nightgaugeConfig so tests can control what getGitHubAuthToken returns without
+// relying on the real file system (nightgaugeConfig uses "node:fs" which is a
 // separate module specifier from "fs" and is not covered by the vi.mock("fs") above).
-vi.mock("../../src/utils/incrediConfig", () => ({
+vi.mock("../../src/utils/nightgaugeConfig", () => ({
   getGitHubAuthToken: vi.fn(() => null),
   getGitHubAuthTokens: vi.fn(() => ({})),
-  // Other functions used by incrediConfig are not needed by IpcClientBase
+  // Other functions used by nightgaugeConfig are not needed by IpcClientBase
 }));
 
 // ─── Import under test ───────────────────────────────────────────────────────
 
 import * as vscode from "vscode";
 import { IpcClientBase } from "../../src/services/IpcClientBase";
-import { getGitHubAuthToken, getGitHubAuthTokens } from "../../src/utils/incrediConfig";
+import { getGitHubAuthToken, getGitHubAuthTokens } from "../../src/utils/nightgaugeConfig";
 import { TokenStorage, type TokenChangeEvent } from "../../src/platform/TokenStorage";
 
 // ─── Concrete test subclass ───────────────────────────────────────────────────

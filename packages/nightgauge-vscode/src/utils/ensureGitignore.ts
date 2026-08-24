@@ -161,15 +161,15 @@ pipeline/queue-state.json
  * the ignore rules have something to anchor to.
  */
 export async function ensureGitignore(
-  incrediRoot: string
+  nightgaugeRoot: string
 ): Promise<{ created: boolean; updated: boolean }> {
-  const incrediDir = path.join(incrediRoot, ".nightgauge");
-  const gitignorePath = path.join(incrediDir, ".gitignore");
+  const nightgaugeDir = path.join(nightgaugeRoot, ".nightgauge");
+  const gitignorePath = path.join(nightgaugeDir, ".gitignore");
 
   // Ensure .nightgauge/ and standard subdirectories exist
   const subdirs = ["pipeline/history", "plans", "logs"];
   for (const sub of subdirs) {
-    const dir = path.join(incrediDir, sub);
+    const dir = path.join(nightgaugeDir, sub);
     await fs.mkdir(dir, { recursive: true });
     // Create .gitkeep if missing
     const gitkeep = path.join(dir, ".gitkeep");
@@ -180,7 +180,7 @@ export async function ensureGitignore(
     }
   }
   // Also ensure top-level .gitkeep in pipeline/
-  const pipelineGitkeep = path.join(incrediDir, "pipeline", ".gitkeep");
+  const pipelineGitkeep = path.join(nightgaugeDir, "pipeline", ".gitkeep");
   try {
     await fs.access(pipelineGitkeep);
   } catch {
@@ -233,7 +233,7 @@ export interface WorkspaceGitignoreResult {
  * `.nightgauge/.gitignore`, not just the primary one.
  *
  * #326 made this file generated-from-one-source, but only the primary root
- * ever received it: `services.ts` called `ensureGitignore(incrediRoot)` and
+ * ever received it: `services.ts` called `ensureGitignore(nightgaugeRoot)` and
  * nothing walked `.vscode/nightgauge-workspace.yaml`. Every sibling repo was
  * left with whatever hand-written copy predated the generator — in a real
  * four-repo workspace, one carried a copy with no version marker at all and

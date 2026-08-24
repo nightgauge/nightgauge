@@ -20,7 +20,7 @@ vi.mock("vscode", () => ({
 import { getSkipAuthPreflight } from "../../../src/utils/resolvers/otherResolver";
 
 function withTempConfig(yaml: string): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "incredi-sap-"));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "nightgauge-sap-"));
   fs.mkdirSync(path.join(dir, ".nightgauge"), { recursive: true });
   fs.writeFileSync(path.join(dir, ".nightgauge", "config.yaml"), yaml, "utf-8");
   return dir;
@@ -39,7 +39,7 @@ describe("getSkipAuthPreflight", () => {
   });
 
   it("returns false when config.yaml is missing", () => {
-    tmp = fs.mkdtempSync(path.join(os.tmpdir(), "incredi-sap-empty-"));
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), "nightgauge-sap-empty-"));
     expect(getSkipAuthPreflight(tmp)).toBe(false);
   });
 

@@ -11,7 +11,7 @@
 
 import * as vscode from "vscode";
 import type { ConfigBridge } from "../../services/ConfigBridge";
-import { IncrediYamlService } from "../settings/IncrediYamlService";
+import { NightgaugeYamlService } from "../settings/NightgaugeYamlService";
 import { SecretStorageService, SECRET_KEYS } from "../../services/SecretStorageService";
 import {
   NotifierStatusTracker,
@@ -38,7 +38,7 @@ export class NotifierSettingsPanel implements vscode.Disposable {
   private constructor(
     private readonly context: vscode.ExtensionContext,
     private readonly configBridge: ConfigBridge,
-    private readonly yamlService: IncrediYamlService
+    private readonly yamlService: NightgaugeYamlService
   ) {
     this.messageHandler = new NotifierSettingsMessageHandler({
       onGetState: () => this.loadNotifiers(),
@@ -68,7 +68,7 @@ export class NotifierSettingsPanel implements vscode.Disposable {
   static show(
     context: vscode.ExtensionContext,
     configBridge: ConfigBridge,
-    yamlService: IncrediYamlService
+    yamlService: NightgaugeYamlService
   ): NotifierSettingsPanel {
     if (!NotifierSettingsPanel.currentPanel) {
       NotifierSettingsPanel.currentPanel = new NotifierSettingsPanel(
@@ -93,7 +93,7 @@ export class NotifierSettingsPanel implements vscode.Disposable {
     }
 
     this.panel = vscode.window.createWebviewPanel(
-      "incrediNotifierSettings",
+      "nightgaugeNotifierSettings",
       "Nightgauge: Notifier Settings",
       vscode.ViewColumn.One,
       { enableScripts: true, retainContextWhenHidden: true }

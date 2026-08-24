@@ -1,7 +1,7 @@
 /**
- * incrediConfig.test.ts
+ * nightgaugeConfig.test.ts
  *
- * Unit tests for getStageBudget() and getBudgetEnforcementConfig() in incrediConfig.ts.
+ * Unit tests for getStageBudget() and getBudgetEnforcementConfig() in nightgaugeConfig.ts.
  *
  * @see Issue #638 - Pipeline token efficiency
  * @see Issue #835 - Enforce hard budget limits
@@ -38,7 +38,7 @@ import {
   supportedEffortsFor,
   conformEffortForFable,
   getMcpToolsConfig,
-} from "../../src/utils/incrediConfig";
+} from "../../src/utils/nightgaugeConfig";
 import { resolveConfigPathSync } from "../../src/utils/configPathResolver";
 
 describe("getStageBudget", () => {

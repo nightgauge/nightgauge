@@ -16,7 +16,7 @@ import {
   trackObjectSources,
   getSource,
 } from "../../src/config/schema";
-import type { IncrediConfig } from "../../src/views/settings/types";
+import type { NightgaugeConfig } from "../../src/views/settings/types";
 
 describe("local.behavior", () => {
   // Store original env vars
@@ -42,13 +42,13 @@ describe("local.behavior", () => {
 
   describe("precedence", () => {
     /**
-     * Simulates the config merge that IncrediYamlService.readMerged() performs
+     * Simulates the config merge that NightgaugeYamlService.readMerged() performs
      */
     function simulateMerge(
-      globalConfig: IncrediConfig,
-      projectConfig: IncrediConfig,
-      localConfig: IncrediConfig
-    ): IncrediConfig {
+      globalConfig: NightgaugeConfig,
+      projectConfig: NightgaugeConfig,
+      localConfig: NightgaugeConfig
+    ): NightgaugeConfig {
       function deepMerge<T extends Record<string, unknown>>(target: T, source: Partial<T>): T {
         const result = { ...target } as Record<string, unknown>;
 
@@ -85,10 +85,10 @@ describe("local.behavior", () => {
     }
 
     it("local overrides project config", () => {
-      const projectConfig: IncrediConfig = {
+      const projectConfig: NightgaugeConfig = {
         pr: { delete_branch: false },
       };
-      const localConfig: IncrediConfig = {
+      const localConfig: NightgaugeConfig = {
         pr: { delete_branch: true },
       };
 
@@ -98,10 +98,10 @@ describe("local.behavior", () => {
     });
 
     it("local overrides global config", () => {
-      const globalConfig: IncrediConfig = {
+      const globalConfig: NightgaugeConfig = {
         pr: { merge_strategy: "rebase" },
       };
-      const localConfig: IncrediConfig = {
+      const localConfig: NightgaugeConfig = {
         pr: { merge_strategy: "squash" },
       };
 
@@ -111,10 +111,10 @@ describe("local.behavior", () => {
     });
 
     it("project still wins where local is not set", () => {
-      const projectConfig: IncrediConfig = {
+      const projectConfig: NightgaugeConfig = {
         pr: { delete_branch: false },
       };
-      const localConfig: IncrediConfig = {
+      const localConfig: NightgaugeConfig = {
         pr: { delete_branch: true },
         // delete_branch not set in local
       };
@@ -143,7 +143,7 @@ describe("local.behavior", () => {
     it("tracks local source correctly", () => {
       const sources: ConfigSourceMap = {};
 
-      const localConfig: IncrediConfig = {
+      const localConfig: NightgaugeConfig = {
         pr: { delete_branch: true },
         human_in_the_loop: { auto_accept_stages: true },
       };
@@ -158,7 +158,7 @@ describe("local.behavior", () => {
       const sources: ConfigSourceMap = {};
 
       // First project sets it
-      const projectConfig: IncrediConfig = {
+      const projectConfig: NightgaugeConfig = {
         pr: { delete_branch: false },
       };
       trackObjectSources(sources, projectConfig as Record<string, unknown>, "", "project");
@@ -166,7 +166,7 @@ describe("local.behavior", () => {
       expect(getSource(sources, "pr.delete_branch")).toBe("project");
 
       // Then local overrides
-      const localConfig: IncrediConfig = {
+      const localConfig: NightgaugeConfig = {
         pr: { delete_branch: true },
       };
       trackObjectSources(sources, localConfig as Record<string, unknown>, "", "local");
@@ -182,12 +182,12 @@ describe("local.behavior", () => {
   describe("common use cases", () => {
     it("developer enables auto_accept_stages locally for faster iteration", () => {
       // Team disables auto-accept in project config
-      const projectConfig: IncrediConfig = {
+      const projectConfig: NightgaugeConfig = {
         human_in_the_loop: { auto_accept_stages: false },
       };
 
       // Developer enables it locally
-      const localConfig: IncrediConfig = {
+      const localConfig: NightgaugeConfig = {
         human_in_the_loop: { auto_accept_stages: true },
       };
 
@@ -199,11 +199,11 @@ describe("local.behavior", () => {
     });
 
     it("developer skips lint locally for quick prototyping", () => {
-      const projectConfig: IncrediConfig = {
+      const projectConfig: NightgaugeConfig = {
         pipeline: { skip: { lint: false } },
       };
 
-      const localConfig: IncrediConfig = {
+      const localConfig: NightgaugeConfig = {
         pipeline: { skip: { lint: true } },
       };
 
@@ -215,11 +215,11 @@ describe("local.behavior", () => {
     });
 
     it("developer uses different reviewers locally", () => {
-      const projectConfig: IncrediConfig = {
+      const projectConfig: NightgaugeConfig = {
         pr: { reviewers: ["team-lead", "senior-dev"] },
       };
 
-      const localConfig: IncrediConfig = {
+      const localConfig: NightgaugeConfig = {
         pr: { reviewers: ["pair-partner"] },
       };
 
@@ -271,7 +271,7 @@ describe("local.behavior", () => {
 
     it("local can override critical settings (warns but allows)", () => {
       // The system warns but doesn't block
-      const localConfig: IncrediConfig = {
+      const localConfig: NightgaugeConfig = {
         project: { number: 999 },
       };
 
@@ -295,7 +295,7 @@ describe("local.behavior", () => {
       process.env.NIGHTGAUGE_PR_DELETE_BRANCH = "true";
 
       // Even if local config says false
-      const localConfig: IncrediConfig = {
+      const localConfig: NightgaugeConfig = {
         pr: { delete_branch: false },
       };
 

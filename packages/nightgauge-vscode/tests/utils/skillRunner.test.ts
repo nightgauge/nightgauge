@@ -81,11 +81,13 @@ vi.mock("../../src/utils/configPathResolver", () => ({
   logDeprecationWarning: vi.fn(),
 }));
 
-// Mock incrediConfig for new CLI flag tests (Issue #626)
+// Mock nightgaugeConfig for new CLI flag tests (Issue #626)
 // getExecutionAdapter and getAuthProvider use dynamic implementations
 // to preserve existing tests that set env vars.
-vi.mock("../../src/utils/incrediConfig", async () => {
-  const _actual = await vi.importActual<Record<string, unknown>>("../../src/utils/incrediConfig");
+vi.mock("../../src/utils/nightgaugeConfig", async () => {
+  const _actual = await vi.importActual<Record<string, unknown>>(
+    "../../src/utils/nightgaugeConfig"
+  );
   return {
     ..._actual,
     getAuthProvider: vi.fn((): string => {
@@ -178,7 +180,7 @@ import {
   getGitHubAuthToken,
   getGitHubAuthTokens,
   getGitHubUser,
-} from "../../src/utils/incrediConfig";
+} from "../../src/utils/nightgaugeConfig";
 import { createMockChildProcess } from "../mocks/child-process";
 
 // Reinstall the `skill render` stub before every test. Vitest 4's

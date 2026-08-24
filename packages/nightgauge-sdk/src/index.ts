@@ -1079,7 +1079,7 @@ export {
 export { createDefaultPreflightRunner, type PreflightCommandRunner } from "./cli/codexPreflight.js";
 
 // Adapter type re-export for consumers wiring per-stage adapter lists.
-export type { IncrediAdapter } from "./cli/adapters/ICliAdapter.js";
+export type { NightgaugeAdapter } from "./cli/adapters/ICliAdapter.js";
 // Agentic truth-gate for pipeline dispatch (#57)
 export { isAgenticAdapter } from "./cli/adapters/AdapterRegistry.js";
 

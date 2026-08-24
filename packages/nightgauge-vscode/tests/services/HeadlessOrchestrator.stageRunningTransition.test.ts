@@ -28,7 +28,7 @@ import type { PipelineStateService } from "../../src/services/PipelineStateServi
 import type { Logger } from "../../src/utils/logger";
 import type { SkillRunResult } from "../../src/utils/skillRunner";
 import { runStageSkillHeadless } from "../../src/utils/skillRunner";
-import * as incrediConfig from "../../src/utils/incrediConfig";
+import * as nightgaugeConfig from "../../src/utils/nightgaugeConfig";
 import type { PipelineCeilingConfig } from "../../src/utils/pipelineBudgetCeiling";
 
 const CHILD_PID = 424242;
@@ -176,7 +176,7 @@ describe("HeadlessOrchestrator — exactly one `running` transition per stage at
       error: vi.fn(),
       debug: vi.fn(),
     } as unknown as Logger;
-    vi.spyOn(incrediConfig, "getPipelineCeilingConfig").mockReturnValue(ceilingConfig(1000));
+    vi.spyOn(nightgaugeConfig, "getPipelineCeilingConfig").mockReturnValue(ceilingConfig(1000));
   });
 
   it("sends ONE running transition, carrying the pid the spawn callback captured", async () => {
@@ -215,7 +215,7 @@ describe("HeadlessOrchestrator — exactly one `running` transition per stage at
     // `markStageRunning()` Go would receive a `failed` for a stage it never
     // saw begin.
     const mockState = createMockStateService(makeState(500));
-    vi.spyOn(incrediConfig, "getPipelineCeilingConfig").mockReturnValue(ceilingConfig(10));
+    vi.spyOn(nightgaugeConfig, "getPipelineCeilingConfig").mockReturnValue(ceilingConfig(10));
 
     vi.mocked(runStageSkillHeadless).mockImplementation(() => {
       throw new Error("the spawn must never be reached on the ceiling-refusal path");

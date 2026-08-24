@@ -7,7 +7,7 @@
  * Also provides shared config file reading utilities to eliminate
  * boilerplate across resolver modules.
  *
- * @see Issue #2742 - Extract incrediConfig.ts resolver classes
+ * @see Issue #2742 - Extract nightgaugeConfig.ts resolver classes
  */
 
 import * as fs from "node:fs";

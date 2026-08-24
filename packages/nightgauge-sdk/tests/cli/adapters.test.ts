@@ -69,7 +69,7 @@ describe("adapter constructors", () => {
     }
   });
 
-  it("each adapter name is a valid IncrediAdapter value", () => {
+  it("each adapter name is a valid NightgaugeAdapter value", () => {
     const validNames = new Set([
       "claude-sdk",
       "claude-headless",

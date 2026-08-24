@@ -77,7 +77,7 @@ export type {
   AutomationsConfig,
 
   // Root configuration
-  IncrediConfig,
+  NightgaugeConfig,
 } from "../../config/schema";
 
 // Re-export validation types

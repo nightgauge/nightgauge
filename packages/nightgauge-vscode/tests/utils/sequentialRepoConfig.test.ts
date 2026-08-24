@@ -5,7 +5,7 @@
  *   - reads resolve against `concurrency.{per_repo_max,repository_overrides}`
  *     via `ConfigBridge.getEffectiveConfig()`
  *   - the effective cap is `repository_overrides[repo] ?? per_repo_max ?? 1`
- *   - writes route through `IncrediYamlService.writeGlobal()` to
+ *   - writes route through `NightgaugeYamlService.writeGlobal()` to
  *     `concurrency.repository_overrides.<repo>` (machine tier)
  *   - legacy runtime memento entries are best-effort cleared on every write
  *   - the pre-#3781 keys (autonomous.repositories.*) are gone — nothing here

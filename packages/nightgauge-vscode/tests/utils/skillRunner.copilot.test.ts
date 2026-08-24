@@ -2,7 +2,7 @@
  * skillRunner.copilot.test.ts
  *
  * Unit tests for Copilot adapter support added in issue #1946:
- * - getCopilotModel() getter in incrediConfig.ts
+ * - getCopilotModel() getter in nightgaugeConfig.ts
  * - validateAdapterPrerequisites() Copilot branch in skillRunner.ts
  * - copilotEnv block propagated to spawn env
  *
@@ -72,8 +72,8 @@ vi.mock("../../src/utils/configPathResolver", () => ({
 
 // Partial mock: keep real implementations for most getters; override only
 // getExecutionAdapter so we can switch to 'copilot' via env var.
-vi.mock("../../src/utils/incrediConfig", async () => {
-  const actual = await vi.importActual<Record<string, unknown>>("../../src/utils/incrediConfig");
+vi.mock("../../src/utils/nightgaugeConfig", async () => {
+  const actual = await vi.importActual<Record<string, unknown>>("../../src/utils/nightgaugeConfig");
   return {
     ...actual,
     getAuthProvider: vi.fn(() => "max"),
@@ -154,7 +154,7 @@ function mockSkillFileExists() {
 // ---------------------------------------------------------------------------
 
 import { runStageSkillHeadless, runStageSkillInteractive } from "../../src/utils/skillRunner";
-import { getCopilotModel } from "../../src/utils/incrediConfig";
+import { getCopilotModel } from "../../src/utils/nightgaugeConfig";
 import { resolveConfigPathSync } from "../../src/utils/configPathResolver";
 import { createMockChildProcess } from "../mocks/child-process";
 

@@ -60,7 +60,7 @@ export class BrownfieldDashboard implements vscode.Disposable {
     }
 
     this.panel = vscode.window.createWebviewPanel(
-      "incrediBrownfieldDashboard",
+      "nightgaugeBrownfieldDashboard",
       "Brownfield Modernization Dashboard",
       vscode.ViewColumn.One,
       {

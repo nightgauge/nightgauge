@@ -67,7 +67,7 @@ export class RefreshTriggerService implements vscode.Disposable {
       this.watcher = vscode.workspace.createFileSystemWatcher(pattern);
 
       // Use unified event handler for onCreate and onChange (delete not needed)
-      // Follows IncrediYamlService pattern
+      // Follows NightgaugeYamlService pattern
       const handleTrigger = (uri: vscode.Uri) => this.handleRefreshTrigger(uri);
       this.watcher.onDidCreate(handleTrigger);
       this.watcher.onDidChange(handleTrigger);

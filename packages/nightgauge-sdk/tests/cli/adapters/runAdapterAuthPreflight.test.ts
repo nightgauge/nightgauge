@@ -2,9 +2,12 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { runAdapterAuthPreflight } from "../../../src/cli/adapters/runAdapterAuthPreflight.js";
 import { resetAuthPreflightCache } from "../../../src/cli/adapters/authPreflightCache.js";
 import { AdapterError } from "../../../src/cli/adapters/errors.js";
-import type { ICliAdapter, IncrediAdapter } from "../../../src/cli/adapters/ICliAdapter.js";
+import type { ICliAdapter, NightgaugeAdapter } from "../../../src/cli/adapters/ICliAdapter.js";
 
-function fakeAdapter(name: IncrediAdapter, validateImpl: ICliAdapter["validateAuth"]): ICliAdapter {
+function fakeAdapter(
+  name: NightgaugeAdapter,
+  validateImpl: ICliAdapter["validateAuth"]
+): ICliAdapter {
   return {
     name,
     displayName: name,
@@ -20,12 +23,12 @@ function fakeAdapter(name: IncrediAdapter, validateImpl: ICliAdapter["validateAu
 function buildRegistry(adapters: ICliAdapter[]) {
   const map = new Map(adapters.map((a) => [a.name, a]));
   return {
-    get(name: IncrediAdapter): ICliAdapter {
+    get(name: NightgaugeAdapter): ICliAdapter {
       const a = map.get(name);
       if (!a) throw new Error(`Unknown adapter '${name}'`);
       return a;
     },
-    has(name: IncrediAdapter): boolean {
+    has(name: NightgaugeAdapter): boolean {
       return map.has(name);
     },
   };
@@ -126,7 +129,7 @@ describe("runAdapterAuthPreflight", () => {
   });
 
   it("populates suggestedFix for every known adapter", async () => {
-    const known: IncrediAdapter[] = [
+    const known: NightgaugeAdapter[] = [
       "claude-sdk",
       "claude-headless",
       "codex",

@@ -28,7 +28,7 @@ import type { PipelineStateService } from "../../src/services/PipelineStateServi
 import type { Logger } from "../../src/utils/logger";
 import type { SkillRunResult } from "../../src/utils/skillRunner";
 import { runStageSkillHeadless } from "../../src/utils/skillRunner";
-import * as incrediConfig from "../../src/utils/incrediConfig";
+import * as nightgaugeConfig from "../../src/utils/nightgaugeConfig";
 import type { PipelineCeilingConfig } from "../../src/utils/pipelineBudgetCeiling";
 
 vi.mock("../../src/utils/skillRunner", () => ({
@@ -318,7 +318,7 @@ describe("HeadlessOrchestrator run-scoped attention raises (Issue #305)", () => 
       mergeable: "MERGEABLE",
       mergeStateStatus: "CLEAN",
     };
-    vi.spyOn(incrediConfig, "getPipelineCeilingConfig").mockImplementation(
+    vi.spyOn(nightgaugeConfig, "getPipelineCeilingConfig").mockImplementation(
       () => ceilingConfigRef.current
     );
   });

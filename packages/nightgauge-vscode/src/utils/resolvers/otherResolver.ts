@@ -1,11 +1,11 @@
 /**
- * Pipeline control configuration resolvers extracted from incrediConfig.ts.
+ * Pipeline control configuration resolvers extracted from nightgaugeConfig.ts.
  *
  * Covers human-in-the-loop, retry, PR CI check, budget enforcement, output
  * token limits, context budgets, pipeline ceiling, backtracks, escalations,
  * epic merge, concurrent pipelines, and context schema repair.
  *
- * @see Issue #2742 - Refactor VSCode incrediConfig.ts into focused domain modules
+ * @see Issue #2742 - Refactor VSCode nightgaugeConfig.ts into focused domain modules
  */
 
 import * as fs from "node:fs";

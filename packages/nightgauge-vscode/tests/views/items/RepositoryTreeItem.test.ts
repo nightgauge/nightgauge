@@ -128,7 +128,7 @@ describe("RepositoryTreeItem — branch + unified cap suffix (Issue #3051)", () 
   it("description no longer contains role or owner/repo (those moved to tooltip)", () => {
     const repo = buildRepo();
     // Seed the backing config so the github getter resolves to acme/my-repo.
-    (repo as any)._incrediConfig = { owner: "acme", repo: "my-repo" };
+    (repo as any)._nightgaugeConfig = { owner: "acme", repo: "my-repo" };
     const item = new RepositoryTreeItem(repo, false, true, false, undefined, "main");
     expect(item.description).toBe("main");
     expect(item.description).not.toMatch(/primary/);

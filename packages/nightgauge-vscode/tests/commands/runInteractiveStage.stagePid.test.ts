@@ -61,7 +61,7 @@ vi.mock("../../src/utils/skillRunner", () => ({
   getNextStage: vi.fn(() => undefined),
 }));
 
-vi.mock("../../src/utils/incrediConfig", () => ({
+vi.mock("../../src/utils/nightgaugeConfig", () => ({
   getExecutionAdapter: mockGetExecutionAdapter,
 }));
 

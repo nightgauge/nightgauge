@@ -287,7 +287,7 @@ export class OutputWindow implements vscode.Disposable {
 
     // Create the WebView panel
     this.panel = vscode.window.createWebviewPanel(
-      "incrediOutputWindow",
+      "nightgaugeOutputWindow",
       "Nightgauge Output",
       { viewColumn: vscode.ViewColumn.Two, preserveFocus: true },
       {

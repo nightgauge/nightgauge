@@ -28,11 +28,11 @@ const DOCS_URL = "https://github.com/nightgauge/nightgauge#readme";
 const GETTING_STARTED_SHOWN_KEY = "nightgauge.gettingStarted.shown";
 
 /**
- * Checks whether `.nightgauge/config.yaml` exists at `incrediRoot`.
+ * Checks whether `.nightgauge/config.yaml` exists at `nightgaugeRoot`.
  * This is the canonical signal that `/nightgauge:repo-init` has run.
  */
-export async function isRepoInitialized(incrediRoot: string): Promise<boolean> {
-  const configPath = path.join(incrediRoot, ".nightgauge", "config.yaml");
+export async function isRepoInitialized(nightgaugeRoot: string): Promise<boolean> {
+  const configPath = path.join(nightgaugeRoot, ".nightgauge", "config.yaml");
   try {
     const stat = await fs.stat(configPath);
     return stat.isFile();
@@ -46,12 +46,12 @@ export async function isRepoInitialized(incrediRoot: string): Promise<boolean> {
  * views and menus can react. Safe to call repeatedly.
  */
 export async function refreshRepoInitializedContext(
-  incrediRoot: string | null,
+  nightgaugeRoot: string | null,
   logger?: Logger
 ): Promise<boolean> {
-  const initialized = incrediRoot ? await isRepoInitialized(incrediRoot) : false;
+  const initialized = nightgaugeRoot ? await isRepoInitialized(nightgaugeRoot) : false;
   await vscode.commands.executeCommand("setContext", "nightgauge.repoInitialized", initialized);
-  logger?.info("Refreshed repoInitialized context", { incrediRoot, initialized });
+  logger?.info("Refreshed repoInitialized context", { nightgaugeRoot, initialized });
   return initialized;
 }
 
@@ -118,7 +118,7 @@ export async function maybeShowGettingStartedOnActivate(
 
 export function registerQuickstartCommands(
   context: vscode.ExtensionContext,
-  incrediRoot: string | null,
+  nightgaugeRoot: string | null,
   logger: Logger
 ): void {
   const repoInit = vscode.commands.registerCommand("nightgauge.quickstartRepoInit", async () => {
@@ -153,7 +153,7 @@ export function registerQuickstartCommands(
   const refreshContext = vscode.commands.registerCommand(
     "nightgauge.refreshRepoInitializedContext",
     async () => {
-      await refreshRepoInitializedContext(incrediRoot, logger);
+      await refreshRepoInitializedContext(nightgaugeRoot, logger);
     }
   );
 

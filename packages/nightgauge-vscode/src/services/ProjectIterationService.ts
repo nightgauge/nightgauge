@@ -25,7 +25,7 @@ import type {
   GraphQLPageInfo,
 } from "./types/iteration";
 import { resolveConfigPath, logDeprecationWarning } from "../utils/configPathResolver";
-import { getGitHubUser } from "../utils/incrediConfig";
+import { getGitHubUser } from "../utils/nightgaugeConfig";
 import { execFile } from "child_process";
 
 const execAsync = promisify(exec);

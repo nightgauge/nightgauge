@@ -1,6 +1,6 @@
 {
   "schema_version": "1",
-  "canonical_schema": "src/config/schema.ts#IncrediConfigSchema",
+  "canonical_schema": "src/config/schema.ts#NightgaugeConfigSchema",
   "generated_contributions": "package.json#contributes.configuration.properties",
   "custom_settings": "src/views/settings/SettingsHtml.ts",
   "custom_control_mapping": "rendered [data-path] attributes -> canonical schema paths",

@@ -35,8 +35,8 @@ vi.mock("vscode", () => ({
   RelativePattern: vi.fn(),
 }));
 
-vi.mock("../../../src/views/settings/IncrediYamlService", () => ({
-  IncrediYamlService: class IncrediYamlServiceMock {
+vi.mock("../../../src/views/settings/NightgaugeYamlService", () => ({
+  NightgaugeYamlService: class NightgaugeYamlServiceMock {
     onDidChange = vi.fn(() => ({ dispose: vi.fn() }));
     dispose = vi.fn();
     readEffective = vi.fn().mockResolvedValue({

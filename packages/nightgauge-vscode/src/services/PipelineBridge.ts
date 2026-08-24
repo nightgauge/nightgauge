@@ -35,7 +35,7 @@ import {
   calculateBackoffDelay,
   isRateLimitError,
 } from "../utils/retryHelpers";
-import { getRetryConfig } from "../utils/incrediConfig";
+import { getRetryConfig } from "../utils/nightgaugeConfig";
 import { StallStatusBarItem } from "./StallStatusBarItem";
 import type { StallEscalationLevel, PauseForStallPayload } from "../schemas/pipelineState";
 // D9's compile-time guard on the key names step 4 starts refusing on. These

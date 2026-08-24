@@ -1,12 +1,12 @@
 import { describe, it, expect } from "vitest";
 import { getSettingsHtml } from "../../../src/views/settings/SettingsHtml";
 import { getDefaultConfig } from "../../../src/config/schema";
-import type { IncrediConfig } from "../../../src/views/settings/types";
+import type { NightgaugeConfig } from "../../../src/views/settings/types";
 import type { ConfigSourceMap } from "../../../src/config/schema";
 
 describe("SettingsHtml automations section", () => {
   it("renders automations section controls", () => {
-    const config = getDefaultConfig() as IncrediConfig;
+    const config = getDefaultConfig() as NightgaugeConfig;
     const html = getSettingsHtml({ cspSource: "test-csp" } as any, config);
 
     expect(html).toContain('id="section-automations"');
@@ -30,7 +30,7 @@ describe("SettingsHtml automations section", () => {
   });
 
   it("renders correct default values", () => {
-    const config = {} as IncrediConfig;
+    const config = {} as NightgaugeConfig;
     const html = getSettingsHtml({ cspSource: "test-csp" } as any, config);
 
     // enabled defaults to true (checked)
@@ -49,7 +49,7 @@ describe("SettingsHtml automations section", () => {
   });
 
   it("renders custom config values", () => {
-    const config = getDefaultConfig() as IncrediConfig;
+    const config = getDefaultConfig() as NightgaugeConfig;
     config.automations = {
       enabled: false,
       dry_run: true,
@@ -84,7 +84,7 @@ describe("SettingsHtml automations section", () => {
   });
 
   it("renders tier badges when showBadges is true", () => {
-    const config = getDefaultConfig() as IncrediConfig;
+    const config = getDefaultConfig() as NightgaugeConfig;
     const sources: ConfigSourceMap = {
       "automations.enabled": "project",
       "automations.log_file": "local",

@@ -26,7 +26,7 @@ import {
 import { getPRForIssue } from "../utils/prDetection";
 import type { BlockingIssue } from "../services/ProjectBoardService";
 import { filterEligibleSubIssues, summarizeSkipped } from "../services/EpicQueueFilter";
-import { getEpicQueueFilterConfig } from "../utils/incrediConfig";
+import { getEpicQueueFilterConfig } from "../utils/nightgaugeConfig";
 import { updateProjectItemStatus, type ProjectStatusValue } from "../utils/projectFieldWriter";
 import { Logger } from "../utils/logger";
 import { IpcClient } from "../services/IpcClient";

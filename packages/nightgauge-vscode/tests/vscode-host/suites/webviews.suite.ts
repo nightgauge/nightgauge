@@ -84,25 +84,25 @@ const SMOKE_PIPELINE_STATE: PipelineState = {
 const PANEL_CASES: PanelCase[] = [
   {
     name: "Dashboard",
-    viewType: "incrediDashboard",
+    viewType: "nightgaugeDashboard",
     viaCommand: "nightgauge.showDashboard",
     open: () => run("nightgauge.showDashboard"),
   },
   {
     name: "SettingsPanel",
-    viewType: "incrediSettings",
+    viewType: "nightgaugeSettings",
     viaCommand: "nightgauge.showSettings",
     open: () => run("nightgauge.showSettings"),
   },
   {
     name: "OutputWindow",
-    viewType: "incrediOutputWindow",
+    viewType: "nightgaugeOutputWindow",
     viaCommand: "nightgauge.showOutputWindow",
     open: () => run("nightgauge.showOutputWindow"),
   },
   {
     name: "BrownfieldDashboard",
-    viewType: "incrediBrownfieldDashboard",
+    viewType: "nightgaugeBrownfieldDashboard",
     viaCommand: "nightgauge.showBrownfieldDashboard",
     // Refuses with a warning when the workspace has no `.nightgauge/`, which
     // is why the populated fixture is materialized before this suite runs.
@@ -110,31 +110,31 @@ const PANEL_CASES: PanelCase[] = [
   },
   {
     name: "GettingStartedPanel",
-    viewType: "incrediGettingStarted",
+    viewType: "nightgaugeGettingStarted",
     viaCommand: "nightgauge.showGettingStarted",
     open: () => run("nightgauge.showGettingStarted"),
   },
   {
     name: "NotifierSettingsPanel",
-    viewType: "incrediNotifierSettings",
+    viewType: "nightgaugeNotifierSettings",
     viaCommand: "nightgauge.showNotifierSettings",
     open: () => run("nightgauge.showNotifierSettings"),
   },
   {
     name: "TelemetrySettingsPanel",
-    viewType: "incrediTelemetrySettings",
+    viewType: "nightgaugeTelemetrySettings",
     viaCommand: "nightgauge.openTelemetrySettingsPanel",
     open: () => run("nightgauge.openTelemetrySettingsPanel"),
   },
   {
     name: "KnowledgeValueDashboard",
-    viewType: "incrediKnowledgeValueDashboard",
+    viewType: "nightgaugeKnowledgeValueDashboard",
     viaCommand: "nightgauge.openKnowledgeValueDashboard",
     open: () => run("nightgauge.openKnowledgeValueDashboard"),
   },
   {
     name: "AdapterDoctorPanel",
-    viewType: "incrediAdapterDoctor",
+    viewType: "nightgaugeAdapterDoctor",
     // `nightgauge.adapterDoctor` probes every adapter binary before it shows
     // anything; that is a data question, and on a CI runner with no adapters
     // installed it is a slow one. The panel's own contract is what this tier
@@ -160,7 +160,7 @@ const PANEL_CASES: PanelCase[] = [
   },
   {
     name: "PipelineSummary",
-    viewType: "incrediPipelineSummary",
+    viewType: "nightgaugePipelineSummary",
     // `nightgauge.showPipelineSummary` bails with a warning unless
     // PipelineStateService can read real completed-run state.
     open: async () => {
@@ -169,7 +169,7 @@ const PANEL_CASES: PanelCase[] = [
   },
   {
     name: "ApprovalDialog",
-    viewType: "incrediApprovalDialog",
+    viewType: "nightgaugeApprovalDialog",
     // `show()` resolves only when the user acts, so it is intentionally not
     // awaited here; the case disposes the panel, which settles it.
     open: async () => {
@@ -183,7 +183,7 @@ const PANEL_CASES: PanelCase[] = [
   },
   {
     name: "RecoveryDialog",
-    viewType: "incrediRecoveryDialog",
+    viewType: "nightgaugeRecoveryDialog",
     open: async () => {
       void new RecoveryDialog(extensionUri()).show({
         issueNumber: 745,

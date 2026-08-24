@@ -17,7 +17,7 @@ import {
   mergeWithDefaults,
   DEFAULT_CONFIG,
 } from "../../../src/config/schema";
-import type { IncrediConfig } from "../../../src/views/settings/types";
+import type { NightgaugeConfig } from "../../../src/views/settings/types";
 
 describe("Local Config Merge", () => {
   describe("Source Tracking with Local", () => {
@@ -134,11 +134,11 @@ describe("Local Config Merge", () => {
     }
 
     it("should apply local config over project config", () => {
-      const projectConfig: IncrediConfig = {
+      const projectConfig: NightgaugeConfig = {
         pr: { delete_branch: false },
       };
 
-      const localConfig: IncrediConfig = {
+      const localConfig: NightgaugeConfig = {
         pr: { delete_branch: true },
       };
 
@@ -148,23 +148,23 @@ describe("Local Config Merge", () => {
     });
 
     it("should handle four-way merge correctly", () => {
-      const defaultConfig: IncrediConfig = {
+      const defaultConfig: NightgaugeConfig = {
         pr: { merge_strategy: "squash", delete_branch: true, reviewers: [] },
         branch: { base: "main" },
         human_in_the_loop: { auto_accept_stages: false },
       };
 
-      const globalConfig: IncrediConfig = {
+      const globalConfig: NightgaugeConfig = {
         pr: { merge_strategy: "rebase" },
         project: { number: 10 },
       };
 
-      const projectConfig: IncrediConfig = {
+      const projectConfig: NightgaugeConfig = {
         pr: { delete_branch: false },
         project: { number: 20 },
       };
 
-      const localConfig: IncrediConfig = {
+      const localConfig: NightgaugeConfig = {
         human_in_the_loop: { auto_accept_stages: true },
         pr: { draft_by_default: true },
       };
@@ -184,13 +184,13 @@ describe("Local Config Merge", () => {
     });
 
     it("should replace arrays in local config (not merge them)", () => {
-      const projectConfig: IncrediConfig = {
+      const projectConfig: NightgaugeConfig = {
         human_in_the_loop: {
           trusted_stages: ["feature-dev", "pr-create"],
         },
       };
 
-      const localConfig: IncrediConfig = {
+      const localConfig: NightgaugeConfig = {
         human_in_the_loop: {
           trusted_stages: ["issue-pickup"],
         },
@@ -203,11 +203,11 @@ describe("Local Config Merge", () => {
     });
 
     it("should not merge undefined values from local", () => {
-      const projectConfig: IncrediConfig = {
+      const projectConfig: NightgaugeConfig = {
         pr: { delete_branch: true },
       };
 
-      const localConfig: IncrediConfig = {
+      const localConfig: NightgaugeConfig = {
         pr: { delete_branch: undefined },
       };
 
@@ -223,27 +223,27 @@ describe("Local Config Merge", () => {
       const sources: ConfigSourceMap = {};
 
       // 1. Track defaults
-      const defaultConfig: IncrediConfig = {
+      const defaultConfig: NightgaugeConfig = {
         pr: { merge_strategy: "squash", delete_branch: true },
         branch: { base: "main" },
       };
       trackObjectSources(sources, defaultConfig as Record<string, unknown>, "", "default");
 
       // 2. Track global config
-      const globalConfig: IncrediConfig = {
+      const globalConfig: NightgaugeConfig = {
         pr: { merge_strategy: "rebase" },
       };
       trackObjectSources(sources, globalConfig as Record<string, unknown>, "", "global");
 
       // 3. Track project config
-      const projectConfig: IncrediConfig = {
+      const projectConfig: NightgaugeConfig = {
         pr: { delete_branch: false },
         project: { number: 10 },
       };
       trackObjectSources(sources, projectConfig as Record<string, unknown>, "", "project");
 
       // 4. Track local config (overwrites some project)
-      const localConfig: IncrediConfig = {
+      const localConfig: NightgaugeConfig = {
         pr: { draft_by_default: true },
         human_in_the_loop: { auto_accept_stages: true },
       };
@@ -277,13 +277,13 @@ describe("Local Config Merge", () => {
       const sources: ConfigSourceMap = {};
 
       // Team disables auto-accept in project config
-      const projectConfig: IncrediConfig = {
+      const projectConfig: NightgaugeConfig = {
         human_in_the_loop: { auto_accept_stages: false },
       };
       trackObjectSources(sources, projectConfig as Record<string, unknown>, "", "project");
 
       // Developer enables it locally for faster iteration
-      const localConfig: IncrediConfig = {
+      const localConfig: NightgaugeConfig = {
         human_in_the_loop: { auto_accept_stages: true },
       };
       trackObjectSources(sources, localConfig as Record<string, unknown>, "", "local");
@@ -295,13 +295,13 @@ describe("Local Config Merge", () => {
       const sources: ConfigSourceMap = {};
 
       // Project config requires lint
-      const projectConfig: IncrediConfig = {
+      const projectConfig: NightgaugeConfig = {
         pipeline: { skip: { lint: false } },
       };
       trackObjectSources(sources, projectConfig as Record<string, unknown>, "", "project");
 
       // Developer skips lint locally for quick iteration
-      const localConfig: IncrediConfig = {
+      const localConfig: NightgaugeConfig = {
         pipeline: { skip: { lint: true } },
       };
       trackObjectSources(sources, localConfig as Record<string, unknown>, "", "local");

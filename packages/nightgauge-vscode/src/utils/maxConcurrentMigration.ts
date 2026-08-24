@@ -12,7 +12,7 @@
  * @see Issue #3195
  */
 import * as vscode from "vscode";
-import { IncrediYamlService } from "../views/settings/IncrediYamlService";
+import { NightgaugeYamlService } from "../views/settings/NightgaugeYamlService";
 import type { Logger } from "./logger";
 
 const STATE_KEY = "nightgauge.maxConcurrentMigrationCompleted";
@@ -36,7 +36,7 @@ export async function runMaxConcurrentMigration(
     return false;
   }
 
-  const yaml = new IncrediYamlService(workspaceRoot);
+  const yaml = new NightgaugeYamlService(workspaceRoot);
   try {
     const projectRead = await yaml.read();
     const localRead = await yaml.readLocal();
@@ -136,7 +136,7 @@ function pickMaxConcurrent(raw: unknown): number | undefined {
  * the legacy key from that tier.
  */
 async function consolidateInto(
-  yaml: IncrediYamlService,
+  yaml: NightgaugeYamlService,
   projectCfg: Record<string, unknown> | null,
   localCfg: Record<string, unknown> | null,
   value: number
@@ -156,7 +156,7 @@ async function consolidateInto(
  * pipeline.max_concurrent untouched.
  */
 async function dropAutonomousMaxConcurrent(
-  yaml: IncrediYamlService,
+  yaml: NightgaugeYamlService,
   projectCfg: Record<string, unknown> | null,
   localCfg: Record<string, unknown> | null
 ): Promise<void> {
@@ -171,7 +171,7 @@ async function dropAutonomousMaxConcurrent(
 }
 
 async function writeTier(
-  yaml: IncrediYamlService,
+  yaml: NightgaugeYamlService,
   cfg: Record<string, unknown> | null,
   keepValue: number | undefined,
   tier: "project" | "local"

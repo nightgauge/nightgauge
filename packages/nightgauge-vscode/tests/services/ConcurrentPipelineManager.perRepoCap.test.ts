@@ -94,7 +94,7 @@ let deferredCreate: {
   resolve: ((v: unknown) => void) | null;
 } = { promise: null, resolve: null };
 
-vi.mock("../../src/utils/incrediConfig", () => ({
+vi.mock("../../src/utils/nightgaugeConfig", () => ({
   getConcurrentPipelineConfig: vi.fn().mockReturnValue({
     maxConcurrent: 3,
     worktreeBase: ".worktrees",

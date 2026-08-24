@@ -43,7 +43,7 @@ const ASSESSMENT_FILES = {
  * ```
  */
 export class BrownfieldDataService implements vscode.Disposable {
-  private readonly incrediDir: string;
+  private readonly nightgaugeDir: string;
   private readonly historyDir: string;
   private readonly historyFile: string;
   private readonly disposables: vscode.Disposable[] = [];
@@ -52,8 +52,8 @@ export class BrownfieldDataService implements vscode.Disposable {
   readonly onDataChanged = this._onDataChanged.event;
 
   constructor(private readonly workspaceRoot: string) {
-    this.incrediDir = path.join(workspaceRoot, ".nightgauge");
-    this.historyDir = path.join(this.incrediDir, "history");
+    this.nightgaugeDir = path.join(workspaceRoot, ".nightgauge");
+    this.historyDir = path.join(this.nightgaugeDir, "history");
     this.historyFile = path.join(this.historyDir, "brownfield-snapshots.json");
 
     this.initializeWatchers();
@@ -64,7 +64,7 @@ export class BrownfieldDataService implements vscode.Disposable {
    */
   private initializeWatchers(): void {
     const pattern = new vscode.RelativePattern(
-      this.incrediDir,
+      this.nightgaugeDir,
       "{health-report.json,security-audit.json,modernization-plan.json,dep-modernize-report.json}"
     );
 
@@ -205,7 +205,7 @@ export class BrownfieldDataService implements vscode.Disposable {
    */
   private async loadJsonFile<T>(filename: string): Promise<T | null> {
     try {
-      const filePath = path.join(this.incrediDir, filename);
+      const filePath = path.join(this.nightgaugeDir, filename);
       const content = await fs.readFile(filePath, "utf-8");
       return JSON.parse(content) as T;
     } catch {

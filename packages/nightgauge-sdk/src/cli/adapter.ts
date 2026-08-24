@@ -1,7 +1,7 @@
 /**
  * Adapter resolution and type re-exports.
  *
- * The canonical IncrediAdapter type now lives in adapters/ICliAdapter.ts.
+ * The canonical NightgaugeAdapter type now lives in adapters/ICliAdapter.ts.
  * This module re-exports it and provides the resolution logic.
  *
  * @see Issue #627 - Extract ICliAdapter interface & unify types
@@ -12,10 +12,10 @@ import { AdapterError } from "./adapters/errors.js";
 import { readAdapterFileConfig } from "./adapterConfig.js";
 
 // Re-export the canonical type from the adapters module
-export type { IncrediAdapter } from "./adapters/ICliAdapter.js";
-import type { IncrediAdapter } from "./adapters/ICliAdapter.js";
+export type { NightgaugeAdapter } from "./adapters/ICliAdapter.js";
+import type { NightgaugeAdapter } from "./adapters/ICliAdapter.js";
 
-const ADAPTER_ALIASES: Record<string, IncrediAdapter> = {
+const ADAPTER_ALIASES: Record<string, NightgaugeAdapter> = {
   claude: "claude-sdk",
   "claude-sdk": "claude-sdk",
   "claude-headless": "claude-headless",
@@ -45,7 +45,7 @@ export interface ResolveAdapterOptions {
   cwd?: string;
 }
 
-function aliasOrThrow(value: string, sourceLabel: string): IncrediAdapter {
+function aliasOrThrow(value: string, sourceLabel: string): NightgaugeAdapter {
   const resolved = ADAPTER_ALIASES[value.trim().toLowerCase()];
   if (!resolved) {
     throw new AdapterError(
@@ -81,7 +81,7 @@ function aliasOrThrow(value: string, sourceLabel: string): IncrediAdapter {
 export function resolveAdapter(
   env: NodeJS.ProcessEnv = process.env,
   options: ResolveAdapterOptions = {}
-): IncrediAdapter {
+): NightgaugeAdapter {
   if (options.stage) {
     const stageEnvKey = `NIGHTGAUGE_PIPELINE_STAGE_ADAPTER_${options.stage.toUpperCase().replace(/-/g, "_")}`;
     const stageEnv = (env[stageEnvKey] ?? "").trim();
@@ -127,7 +127,7 @@ export function resolveAdapter(
  * Check if adapter requires a direct API key.
  * Delegates to the registry for the answer.
  */
-export function requiresDirectApiKey(adapter: IncrediAdapter): boolean {
+export function requiresDirectApiKey(adapter: NightgaugeAdapter): boolean {
   return defaultRegistry.get(adapter).requiresDirectApiKey();
 }
 

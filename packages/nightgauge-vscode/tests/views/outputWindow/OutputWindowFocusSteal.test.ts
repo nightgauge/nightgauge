@@ -86,7 +86,7 @@ describe("OutputWindow focus-steal fix (Issue #1403)", () => {
     outputWindow.show();
 
     expect(vscode.window.createWebviewPanel).toHaveBeenCalledWith(
-      "incrediOutputWindow",
+      "nightgaugeOutputWindow",
       "Nightgauge Output",
       expect.objectContaining({ viewColumn: 2, preserveFocus: true }),
       expect.objectContaining({ enableScripts: true })

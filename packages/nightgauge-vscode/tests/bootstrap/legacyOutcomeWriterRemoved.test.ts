@@ -3,7 +3,7 @@
  *
  * Regression guard for Issue #319: the Issue #649 "outcome record" writer
  * appended a second, separate history record on pr-merge context-cleanup,
- * keyed off bootstrap-level shared state (`incrediRoot`/`telemetryStore`)
+ * keyed off bootstrap-level shared state (`nightgaugeRoot`/`telemetryStore`)
  * instead of the completing run's own identity. In a multi-repo/multi-run
  * workspace that shared state can resolve to a DIFFERENT repo than the one
  * that just finished, so the record landed in a sibling repo's history file

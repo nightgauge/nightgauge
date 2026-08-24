@@ -56,15 +56,15 @@ vi.mock("vscode", () => {
   };
 });
 
-// Track mock calls for IncrediYamlService
+// Track mock calls for NightgaugeYamlService
 let mockReadEffective = vi.fn();
 let mockOnDidChangeCallback: (() => void) | null = null;
 let mockYamlServiceDispose = vi.fn();
 
-// Mock IncrediYamlService
-vi.mock("../../src/views/settings/IncrediYamlService", () => {
+// Mock NightgaugeYamlService
+vi.mock("../../src/views/settings/NightgaugeYamlService", () => {
   return {
-    IncrediYamlService: vi.fn(function () {
+    NightgaugeYamlService: vi.fn(function () {
       return {
         readEffective: mockReadEffective,
         onDidChange: vi.fn((callback: () => void) => {
@@ -139,7 +139,7 @@ describe("ConfigBridge File Watching", () => {
   });
 
   describe("File Change Detection", () => {
-    it("should subscribe to IncrediYamlService onDidChange", async () => {
+    it("should subscribe to NightgaugeYamlService onDidChange", async () => {
       const bridge = ConfigBridge.getInstance();
       await bridge.initialize(mockWorkspaceManager as any, workspaceRoot);
 
@@ -297,7 +297,7 @@ describe("ConfigBridge File Watching", () => {
   });
 
   describe("Explicit repository re-targeting", () => {
-    it("recreates IncrediYamlService and reloads on retargetToRepository()", async () => {
+    it("recreates NightgaugeYamlService and reloads on retargetToRepository()", async () => {
       const bridge = ConfigBridge.getInstance();
       await bridge.initialize(mockWorkspaceManager as any, workspaceRoot);
 
@@ -405,7 +405,7 @@ describe("ConfigBridge File Watching", () => {
       expect(mockReadEffective).not.toHaveBeenCalled();
     });
 
-    it("should dispose IncrediYamlService on dispose", async () => {
+    it("should dispose NightgaugeYamlService on dispose", async () => {
       const bridge = ConfigBridge.getInstance();
       await bridge.initialize(mockWorkspaceManager as any, workspaceRoot);
       mockYamlServiceDispose.mockClear();
@@ -461,7 +461,7 @@ describe("ConfigBridge File Watching", () => {
       await bridge.initialize(mockWorkspaceManager as any, workspaceRoot);
       mockReadEffective.mockClear();
 
-      // IncrediYamlService handles all file types (config.yaml, config.local.yaml, etc.)
+      // NightgaugeYamlService handles all file types (config.yaml, config.local.yaml, etc.)
       // ConfigBridge just subscribes to onDidChange which fires for any of them
 
       mockOnDidChangeCallback?.();

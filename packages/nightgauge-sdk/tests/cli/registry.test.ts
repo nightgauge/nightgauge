@@ -4,20 +4,20 @@
  *
  * Complements adapterRegistry.test.ts with additional multi-tool validation
  * scenarios: concurrent registration, getAll() ordering, and cross-validation
- * between the registry and the IncrediAdapter type union.
+ * between the registry and the NightgaugeAdapter type union.
  *
  * @see Issue #2275 - Add CLI adapter tests for multi-tool support validation
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { AdapterRegistry, defaultRegistry } from "../../src/cli/adapters/AdapterRegistry.js";
-import type { ICliAdapter, IncrediAdapter } from "../../src/cli/adapters/ICliAdapter.js";
+import type { ICliAdapter, NightgaugeAdapter } from "../../src/cli/adapters/ICliAdapter.js";
 
 // ---------------------------------------------------------------------------
 // Helper: mock adapter factory
 // ---------------------------------------------------------------------------
 
-function createMockAdapter(name: IncrediAdapter, overrides?: Partial<ICliAdapter>): ICliAdapter {
+function createMockAdapter(name: NightgaugeAdapter, overrides?: Partial<ICliAdapter>): ICliAdapter {
   return {
     name,
     displayName: overrides?.displayName ?? `Mock ${name}`,
@@ -38,7 +38,7 @@ function createMockAdapter(name: IncrediAdapter, overrides?: Partial<ICliAdapter
 describe("AdapterRegistry registration", () => {
   it("should support registering and retrieving all adapter names", () => {
     const registry = new AdapterRegistry();
-    const names: IncrediAdapter[] = [
+    const names: NightgaugeAdapter[] = [
       "claude-sdk",
       "claude-headless",
       "codex",
@@ -63,7 +63,7 @@ describe("AdapterRegistry registration", () => {
 
   it("getAll() returns adapters in registration order", () => {
     const registry = new AdapterRegistry();
-    const order: IncrediAdapter[] = ["gemini", "codex", "claude-sdk"];
+    const order: NightgaugeAdapter[] = ["gemini", "codex", "claude-sdk"];
 
     for (const name of order) {
       registry.register(createMockAdapter(name));
@@ -138,7 +138,7 @@ describe("AdapterRegistry error messages", () => {
 // ---------------------------------------------------------------------------
 
 describe("defaultRegistry completeness", () => {
-  const ALL_ADAPTER_NAMES: IncrediAdapter[] = [
+  const ALL_ADAPTER_NAMES: NightgaugeAdapter[] = [
     "claude-sdk",
     "claude-headless",
     "codex",
@@ -154,13 +154,13 @@ describe("defaultRegistry completeness", () => {
     expect(defaultRegistry.getAll()).toHaveLength(9);
   });
 
-  it("has() returns true for every IncrediAdapter name", () => {
+  it("has() returns true for every NightgaugeAdapter name", () => {
     for (const name of ALL_ADAPTER_NAMES) {
       expect(defaultRegistry.has(name)).toBe(true);
     }
   });
 
-  it("get() returns an adapter for every IncrediAdapter name", () => {
+  it("get() returns an adapter for every NightgaugeAdapter name", () => {
     for (const name of ALL_ADAPTER_NAMES) {
       const adapter = defaultRegistry.get(name);
       expect(adapter.name).toBe(name);

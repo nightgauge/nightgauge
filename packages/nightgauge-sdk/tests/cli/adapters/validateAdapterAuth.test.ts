@@ -4,9 +4,12 @@ import {
   DEFAULT_AUTH_TIMEOUT_MS,
 } from "../../../src/cli/adapters/validateAdapterAuth.js";
 import { AdapterError } from "../../../src/cli/adapters/errors.js";
-import type { ICliAdapter, IncrediAdapter } from "../../../src/cli/adapters/ICliAdapter.js";
+import type { ICliAdapter, NightgaugeAdapter } from "../../../src/cli/adapters/ICliAdapter.js";
 
-function fakeAdapter(name: IncrediAdapter, validateImpl: ICliAdapter["validateAuth"]): ICliAdapter {
+function fakeAdapter(
+  name: NightgaugeAdapter,
+  validateImpl: ICliAdapter["validateAuth"]
+): ICliAdapter {
   return {
     name,
     displayName: name,
@@ -21,7 +24,7 @@ function fakeAdapter(name: IncrediAdapter, validateImpl: ICliAdapter["validateAu
 
 function fakeRegistry(adapters: Record<string, ICliAdapter>) {
   return {
-    get(name: IncrediAdapter): ICliAdapter {
+    get(name: NightgaugeAdapter): ICliAdapter {
       const a = adapters[name];
       if (!a) {
         throw new Error(
@@ -30,7 +33,7 @@ function fakeRegistry(adapters: Record<string, ICliAdapter>) {
       }
       return a;
     },
-    has(name: IncrediAdapter): boolean {
+    has(name: NightgaugeAdapter): boolean {
       return Boolean(adapters[name]);
     },
   };

@@ -10,7 +10,7 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { getConfigValue, setConfigValue } from "../../../src/views/settings/configUtils";
-import type { IncrediConfig } from "../../../src/views/settings/types";
+import type { NightgaugeConfig } from "../../../src/views/settings/types";
 
 // ── Hoisted mocks ────────────────────────────────────────────────────────────
 
@@ -99,7 +99,7 @@ describe("MACHINE_TIER_KEY_PATHS routing (via configUtils)", () => {
     "notifications.mattermost.webhook_env",
   ]);
 
-  function removeConfigValue(config: IncrediConfig, path: string): void {
+  function removeConfigValue(config: NightgaugeConfig, path: string): void {
     const parts = path.split(".");
     let current: Record<string, unknown> = config as Record<string, unknown>;
     for (let i = 0; i < parts.length - 1; i++) {
@@ -110,7 +110,7 @@ describe("MACHINE_TIER_KEY_PATHS routing (via configUtils)", () => {
     delete current[parts[parts.length - 1]];
   }
 
-  function partitionMachineTierKeys(config: IncrediConfig): Map<string, unknown> {
+  function partitionMachineTierKeys(config: NightgaugeConfig): Map<string, unknown> {
     const captured = new Map<string, unknown>();
     for (const path of MACHINE_TIER_KEY_PATHS) {
       const value = getConfigValue(config, path);
@@ -122,10 +122,10 @@ describe("MACHINE_TIER_KEY_PATHS routing (via configUtils)", () => {
     return captured;
   }
 
-  function buildMachineConfig(captured: Map<string, unknown>): Partial<IncrediConfig> {
-    const machineConfig: Partial<IncrediConfig> = {};
+  function buildMachineConfig(captured: Map<string, unknown>): Partial<NightgaugeConfig> {
+    const machineConfig: Partial<NightgaugeConfig> = {};
     for (const [dotPath, value] of captured) {
-      setConfigValue(machineConfig as IncrediConfig, dotPath, value);
+      setConfigValue(machineConfig as NightgaugeConfig, dotPath, value);
     }
     return machineConfig;
   }
@@ -136,7 +136,7 @@ describe("MACHINE_TIER_KEY_PATHS routing (via configUtils)", () => {
 
   describe("key partitioning", () => {
     it("preserves ui.core.adapter as a project/local override", () => {
-      const config: IncrediConfig = {
+      const config: NightgaugeConfig = {
         ui: { core: { adapter: "gemini" } },
         project: { number: 42 },
       };
@@ -149,7 +149,7 @@ describe("MACHINE_TIER_KEY_PATHS routing (via configUtils)", () => {
     });
 
     it("strips multiple machine-tier keys in a single pass", () => {
-      const config: IncrediConfig = {
+      const config: NightgaugeConfig = {
         ui: {
           core: {
             adapter: "claude",
@@ -173,7 +173,7 @@ describe("MACHINE_TIER_KEY_PATHS routing (via configUtils)", () => {
     });
 
     it("captures webhook_env paths", () => {
-      const config: IncrediConfig = {
+      const config: NightgaugeConfig = {
         notifications: {
           discord: { webhook_env: "DISCORD_WEBHOOK_URL" },
           mattermost: { webhook_env: "MATTERMOST_WEBHOOK_URL" },
@@ -187,7 +187,7 @@ describe("MACHINE_TIER_KEY_PATHS routing (via configUtils)", () => {
     });
 
     it("does not capture machine-tier keys absent from the config", () => {
-      const config: IncrediConfig = { project: { number: 7 } };
+      const config: NightgaugeConfig = { project: { number: 7 } };
 
       const captured = partitionMachineTierKeys(config);
 
@@ -195,7 +195,7 @@ describe("MACHINE_TIER_KEY_PATHS routing (via configUtils)", () => {
     });
 
     it("preserves non-machine-tier keys untouched", () => {
-      const config: IncrediConfig = {
+      const config: NightgaugeConfig = {
         ui: { core: { adapter: "claude" } },
         project: { number: 100 },
         pipeline: { auto_fix: true },
@@ -216,8 +216,8 @@ describe("MACHINE_TIER_KEY_PATHS routing (via configUtils)", () => {
 
       const machineConfig = buildMachineConfig(captured);
 
-      expect((machineConfig as IncrediConfig).ui?.core?.adapter).toBeUndefined();
-      expect((machineConfig as IncrediConfig).ui?.core?.default_model).toBe("gemini-2.5-pro");
+      expect((machineConfig as NightgaugeConfig).ui?.core?.adapter).toBeUndefined();
+      expect((machineConfig as NightgaugeConfig).ui?.core?.default_model).toBe("gemini-2.5-pro");
     });
 
     it("handles webhook env reconstruction", () => {
@@ -229,7 +229,7 @@ describe("MACHINE_TIER_KEY_PATHS routing (via configUtils)", () => {
 
       // Reconstructed at the TOP-LEVEL notifications key, matching the schema
       // and the corrected MACHINE_TIER_KEY_PATHS entry.
-      expect((machineConfig as IncrediConfig).notifications?.discord?.webhook_env).toBe(
+      expect((machineConfig as NightgaugeConfig).notifications?.discord?.webhook_env).toBe(
         "MY_DISCORD_ENV"
       );
     });
@@ -252,13 +252,16 @@ describe("MACHINE_TIER_KEY_PATHS routing (via configUtils)", () => {
 });
 
 describe("GLOBAL_CONFIG_HEADER content (source verification)", () => {
-  it("IncrediYamlService source includes the required header text", async () => {
+  it("NightgaugeYamlService source includes the required header text", async () => {
     // Verify the header constant text is present in the source file.
     // Dynamic mocking of globalConfigExists() across module boundaries is
     // fragile in Vitest; the source-read approach is authoritative enough.
     const fs = await import("fs");
     const path = await import("path");
-    const sourcePath = path.resolve(__dirname, "../../../src/views/settings/IncrediYamlService.ts");
+    const sourcePath = path.resolve(
+      __dirname,
+      "../../../src/views/settings/NightgaugeYamlService.ts"
+    );
     const source = fs.readFileSync(sourcePath, "utf-8");
 
     expect(source).toContain("Machine-tier configuration");

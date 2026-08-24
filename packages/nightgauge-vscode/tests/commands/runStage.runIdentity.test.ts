@@ -57,7 +57,7 @@ vi.mock("../../src/utils/skillRunner", () => ({
   sendInputToActiveProcess: vi.fn(),
 }));
 
-vi.mock("../../src/utils/incrediConfig", () => ({
+vi.mock("../../src/utils/nightgaugeConfig", () => ({
   getDefaultStageExecutionMode: vi.fn(() => "headless"),
   getExecutionAdapter: vi.fn(() => "claude"),
 }));

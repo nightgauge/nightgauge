@@ -3,7 +3,7 @@
  *
  * Covers LmStudioConfigSchema, LmStudioStreamOptionsSchema,
  * ExecutionAdapterSchema 'lm-studio' value, and top-level lm_studio
- * in IncrediConfigSchema.
+ * in NightgaugeConfigSchema.
  *
  * @see Issue #2057 - Route pipeline stage execution through LM Studio
  * @see packages/nightgauge-vscode/src/config/schema.ts
@@ -15,7 +15,7 @@ import {
   LmStudioStreamOptionsSchema,
   ExecutionAdapterSchema,
   UICoreConfigSchema,
-  IncrediConfigSchema,
+  NightgaugeConfigSchema,
 } from "../../src/config/schema";
 
 // ============================================================================
@@ -208,13 +208,13 @@ describe("UICoreConfigSchema", () => {
 });
 
 // ============================================================================
-// IncrediConfigSchema — top-level lm_studio section
+// NightgaugeConfigSchema — top-level lm_studio section
 // ============================================================================
 
-describe("IncrediConfigSchema", () => {
+describe("NightgaugeConfigSchema", () => {
   describe("lm_studio section", () => {
     it("accepts config with lm_studio section", () => {
-      const result = IncrediConfigSchema.safeParse({
+      const result = NightgaugeConfigSchema.safeParse({
         lm_studio: {
           model: "my-model",
           base_url: "http://localhost:1234/v1",
@@ -226,19 +226,19 @@ describe("IncrediConfigSchema", () => {
     });
 
     it("accepts config with empty lm_studio section", () => {
-      const result = IncrediConfigSchema.safeParse({
+      const result = NightgaugeConfigSchema.safeParse({
         lm_studio: {},
       });
       expect(result.success).toBe(true);
     });
 
     it("accepts config without lm_studio section", () => {
-      const result = IncrediConfigSchema.safeParse({});
+      const result = NightgaugeConfigSchema.safeParse({});
       expect(result.success).toBe(true);
     });
 
     it("rejects lm_studio with invalid base_url", () => {
-      const result = IncrediConfigSchema.safeParse({
+      const result = NightgaugeConfigSchema.safeParse({
         lm_studio: {
           base_url: "not-a-url",
         },

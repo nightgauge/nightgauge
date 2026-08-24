@@ -51,7 +51,7 @@ vi.mock("vscode", () => {
   };
 });
 
-vi.mock("../../src/utils/incrediConfig", () => ({
+vi.mock("../../src/utils/nightgaugeConfig", () => ({
   getExecutionAdapter: vi.fn(() => "claude"),
   getCodexModel: vi.fn(() => "gpt-5.4"),
 }));
@@ -65,7 +65,7 @@ vi.mock("../../src/services/CodexModelCatalogService", () => ({
 }));
 
 import { registerRunPipelineWithModelCommand } from "../../src/commands/runPipelineWithModel";
-import { getExecutionAdapter, getCodexModel } from "../../src/utils/incrediConfig";
+import { getExecutionAdapter, getCodexModel } from "../../src/utils/nightgaugeConfig";
 
 describe("runPipelineWithModel command", () => {
   const logger = {

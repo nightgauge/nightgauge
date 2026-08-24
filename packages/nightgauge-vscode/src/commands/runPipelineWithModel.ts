@@ -18,7 +18,7 @@ import {
   getExecutionAdapter,
   getCodexModel,
   type PipelineModelOverride,
-} from "../utils/incrediConfig";
+} from "../utils/nightgaugeConfig";
 import { CODEX_RECOMMENDED_DEFAULT_MODEL } from "@nightgauge/sdk";
 import { CodexModelCatalogService } from "../services/CodexModelCatalogService";
 

@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import packageJson from "../../package.json";
 import inventory from "../../src/config/settings-surface-inventory.json";
-import { DEFAULT_CONFIG, IncrediConfigSchema } from "../../src/config/schema";
+import { DEFAULT_CONFIG, NightgaugeConfigSchema } from "../../src/config/schema";
 import { getSettingsHtml } from "../../src/views/settings/SettingsHtml";
 import { SETTINGS_SECTIONS } from "../../src/views/settings/types";
 
@@ -20,7 +20,7 @@ function matches(setting: string, rule: InventoryRule): boolean {
 
 function schemaHasPath(path: string): boolean {
   const segments = path.replace(/\.\*$/, "").split(".");
-  let schema: unknown = IncrediConfigSchema;
+  let schema: unknown = NightgaugeConfigSchema;
 
   for (const segment of segments) {
     while (

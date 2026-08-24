@@ -31,7 +31,7 @@ import {
   type SkillRunCallbacks,
 } from "../utils/skillRunner";
 import { createToolCallData, type ToolCallData } from "../views/outputWindow/ToolCallIndicator";
-import { getExecutionAdapter } from "../utils/incrediConfig";
+import { getExecutionAdapter } from "../utils/nightgaugeConfig";
 import { uuidV7 } from "@nightgauge/sdk";
 import { getRepoIdentity } from "../utils/configPathResolver";
 import { parsePositiveIssueNumber, validatePositiveIssueNumber } from "../utils/issue-number-input";

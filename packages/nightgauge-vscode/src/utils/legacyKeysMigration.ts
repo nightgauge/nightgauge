@@ -31,7 +31,7 @@
  * @see docs/SETTINGS_ARCHITECTURE.md — Migrations sub-table
  */
 import * as vscode from "vscode";
-import { IncrediYamlService } from "../views/settings/IncrediYamlService";
+import { NightgaugeYamlService } from "../views/settings/NightgaugeYamlService";
 import type { RuntimeStateStore } from "../config/RuntimeStateStore";
 import type { Logger } from "./logger";
 
@@ -131,7 +131,7 @@ function hasAtPath(obj: Record<string, unknown>, dottedPath: string): boolean {
 
 /**
  * Build a nested object for a dotted path with a leaf value. Used to
- * assemble the partial Partial<IncrediConfig> argument to writeGlobal().
+ * assemble the partial Partial<NightgaugeConfig> argument to writeGlobal().
  */
 function nestForPath(dottedPath: string, value: unknown): Record<string, unknown> {
   const parts = dottedPath.split(".");
@@ -168,7 +168,7 @@ function sanitizeRepoSlug(slug: string): string {
 async function migrateRepoScopedKeys(
   projectCfg: Record<string, unknown>,
   context: vscode.ExtensionContext,
-  yaml: IncrediYamlService
+  yaml: NightgaugeYamlService
 ): Promise<string[]> {
   const migrated: string[] = [];
   const accumulated: Record<string, Record<string, unknown>> = {};
@@ -241,7 +241,7 @@ async function migrateRepoScopedKeys(
  */
 async function promoteV1MementoToMachine(
   context: vscode.ExtensionContext,
-  yaml: IncrediYamlService
+  yaml: NightgaugeYamlService
 ): Promise<string[]> {
   const migrated: string[] = [];
   for (const descriptor of LEGACY_KEYS) {
@@ -286,7 +286,7 @@ export async function runLegacyKeysMigration(
     return;
   }
 
-  const yaml = new IncrediYamlService(workspaceRoot);
+  const yaml = new NightgaugeYamlService(workspaceRoot);
   try {
     const projectRead = await yaml.read();
     const projectCfg = (projectRead.success ? projectRead.config : null) ?? {};

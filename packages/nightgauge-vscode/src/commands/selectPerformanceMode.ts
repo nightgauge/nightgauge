@@ -26,7 +26,7 @@ import {
   PERFORMANCE_MODES,
   MODE_PROFILES,
   type PerformanceMode,
-} from "../utils/incrediConfig";
+} from "../utils/nightgaugeConfig";
 import {
   CUSTOM_SELECTABLE_STAGES,
   STAGE_MODEL_CHOICES,

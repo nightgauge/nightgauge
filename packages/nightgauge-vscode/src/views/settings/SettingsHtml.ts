@@ -11,15 +11,15 @@
 
 import * as vscode from "vscode";
 import { TIER_BANDS, type TierBand } from "@nightgauge/sdk";
-import type { IncrediConfig, ViewTier, TierViewState } from "./types";
+import type { NightgaugeConfig, ViewTier, TierViewState } from "./types";
 import { SETTINGS_SECTIONS, DEFAULT_CONFIG, TIER_TABS, PIPELINE_LOCKED_SECTIONS } from "./types";
 import { getForgeInstancesSectionHtml } from "./ForgeInstancesSection";
-import { mergeWithDefaults, getConfigValue } from "./IncrediYamlService";
+import { mergeWithDefaults, getConfigValue } from "./NightgaugeYamlService";
 import type { ConfigSourceMap, TrustedStage } from "../../config/schema";
 import { getTierBadgeHtml, getTierBadgeStyles, getUxTierBadgeHtml } from "./TierBadge";
 import type { TierAuditEntry } from "../../services/IpcClientBase";
-import { modelSupportsEffort } from "../../utils/incrediConfig";
-import type { DefaultModel } from "../../utils/incrediConfig";
+import { modelSupportsEffort } from "../../utils/nightgaugeConfig";
+import type { DefaultModel } from "../../utils/nightgaugeConfig";
 import { CODEX_DEFAULT_BASE_MODEL, EFFORT_LEVELS } from "@nightgauge/sdk";
 import type { ClaudeEffort } from "../../utils/resolvers/stageResolver";
 import type { RepositoryProjectSettingsState } from "../../services/RepositoryProjectSettingsService";
@@ -901,7 +901,7 @@ function getWorkspaceReposSectionHtml(disabled: boolean, options?: SettingsHtmlO
 }
 
 function getProjectSectionHtml(
-  config: IncrediConfig,
+  config: NightgaugeConfig,
   disabled: boolean,
   sources: ConfigSourceMap,
   showBadges: boolean,
@@ -1051,7 +1051,7 @@ ${repositoryRoutingHtml}${
  * Generate Pull Request section HTML
  */
 function getPullRequestSectionHtml(
-  config: IncrediConfig,
+  config: NightgaugeConfig,
   disabled: boolean,
   sources: ConfigSourceMap,
   showBadges: boolean,
@@ -1141,7 +1141,7 @@ function getPullRequestSectionHtml(
  * Generate Branch section HTML
  */
 function getBranchSectionHtml(
-  config: IncrediConfig,
+  config: NightgaugeConfig,
   disabled: boolean,
   sources: ConfigSourceMap,
   showBadges: boolean,
@@ -1192,7 +1192,7 @@ function getBranchSectionHtml(
  * Generate Issue section HTML
  */
 function getIssueSectionHtml(
-  config: IncrediConfig,
+  config: NightgaugeConfig,
   disabled: boolean,
   sources: ConfigSourceMap,
   showBadges: boolean,
@@ -1236,7 +1236,7 @@ function getIssueSectionHtml(
  * @see Issue #3225 - VSCode settings UI per-stage adapter selector
  */
 function getStageAdapterMatrixHtml(
-  config: IncrediConfig,
+  config: NightgaugeConfig,
   disabled: boolean,
   sources: ConfigSourceMap,
   showBadges: boolean,
@@ -1383,7 +1383,7 @@ function getStageAdapterMatrixHtml(
  * Generate Core section HTML
  */
 function getCoreSectionHtml(
-  config: IncrediConfig,
+  config: NightgaugeConfig,
   disabled: boolean,
   sources: ConfigSourceMap,
   showBadges: boolean,
@@ -1738,7 +1738,7 @@ function getCoreSectionHtml(
  * Generate Pipeline section HTML
  */
 function getPipelineSectionHtml(
-  config: IncrediConfig,
+  config: NightgaugeConfig,
   disabled: boolean,
   sources: ConfigSourceMap,
   showBadges: boolean,
@@ -1849,7 +1849,7 @@ function getPipelineSectionHtml(
  * Generate Commands section HTML
  */
 function getCommandsSectionHtml(
-  config: IncrediConfig,
+  config: NightgaugeConfig,
   disabled: boolean,
   sources: ConfigSourceMap,
   showBadges: boolean,
@@ -1924,7 +1924,7 @@ function getCommandsSectionHtml(
  * Generate Validation section HTML
  */
 function getValidationSectionHtml(
-  config: IncrediConfig,
+  config: NightgaugeConfig,
   disabled: boolean,
   sources: ConfigSourceMap,
   showBadges: boolean,
@@ -1989,7 +1989,7 @@ function getValidationSectionHtml(
  * Generate Sanitization section HTML
  */
 function getSanitizationSectionHtml(
-  config: IncrediConfig,
+  config: NightgaugeConfig,
   disabled: boolean,
   sources: ConfigSourceMap,
   showBadges: boolean,
@@ -2070,7 +2070,7 @@ function getSanitizationSectionHtml(
  * Generate Enforcement section HTML
  */
 function getEnforcementSectionHtml(
-  config: IncrediConfig,
+  config: NightgaugeConfig,
   disabled: boolean,
   sources: ConfigSourceMap,
   showBadges: boolean,
@@ -2145,7 +2145,7 @@ const EFFORT_LABELS: Record<ClaudeEffort, string> = {
  * Generate Routing section HTML
  */
 function getRoutingSectionHtml(
-  config: IncrediConfig,
+  config: NightgaugeConfig,
   disabled: boolean,
   sources: ConfigSourceMap,
   showBadges: boolean,
@@ -2265,7 +2265,7 @@ function getRoutingSectionHtml(
  * Generate Ralph Loop section HTML
  */
 function getRalphLoopSectionHtml(
-  config: IncrediConfig,
+  config: NightgaugeConfig,
   disabled: boolean,
   sources: ConfigSourceMap,
   showBadges: boolean,
@@ -2410,7 +2410,7 @@ function getRalphLoopSectionHtml(
  * Generate Automations section HTML
  */
 function getAutomationsSectionHtml(
-  config: IncrediConfig,
+  config: NightgaugeConfig,
   disabled: boolean,
   sources: ConfigSourceMap,
   showBadges: boolean,
@@ -2481,7 +2481,7 @@ function getAutomationsSectionHtml(
  * Generate Autonomous section HTML
  */
 function getAutonomousSectionHtml(
-  config: IncrediConfig,
+  config: NightgaugeConfig,
   disabled: boolean,
   sources: ConfigSourceMap,
   showBadges: boolean,
@@ -2550,7 +2550,7 @@ function getAutonomousSectionHtml(
  * Generate Human-in-the-Loop section HTML
  */
 function getHumanInTheLoopSectionHtml(
-  config: IncrediConfig,
+  config: NightgaugeConfig,
   disabled: boolean,
   sources: ConfigSourceMap,
   showBadges: boolean,
@@ -2637,7 +2637,7 @@ function getHumanInTheLoopSectionHtml(
  * Generate section content based on section ID
  */
 function getPlatformSectionHtml(
-  config: IncrediConfig,
+  config: NightgaugeConfig,
   disabled: boolean,
   sources: ConfigSourceMap,
   showBadges: boolean,
@@ -2712,7 +2712,7 @@ function getPlatformSectionHtml(
 
 function getSectionContentHtml(
   sectionId: string,
-  config: IncrediConfig,
+  config: NightgaugeConfig,
   disabled: boolean,
   sources: ConfigSourceMap,
   showBadges: boolean,
@@ -4214,7 +4214,7 @@ function getReadOnlyNoticeHtml(currentTier: ViewTier): string {
  */
 export function getSettingsHtml(
   webview: vscode.Webview,
-  config: IncrediConfig,
+  config: NightgaugeConfig,
   lockedSections: Set<string> = new Set(),
   sources: ConfigSourceMap = {},
   tierState?: TierViewState,

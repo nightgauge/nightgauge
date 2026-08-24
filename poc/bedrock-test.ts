@@ -22,7 +22,7 @@ import { spawn, type ChildProcess } from "child_process";
  */
 type AuthProvider = "max" | "bedrock" | "vertex";
 
-interface IncrediConfig {
+interface NightgaugeConfig {
   ui?: {
     core?: {
       auth_provider?: AuthProvider;
@@ -39,7 +39,7 @@ interface IncrediConfig {
  *
  * This is the key change needed in skillRunner.ts
  */
-function buildClaudeArgs(config: IncrediConfig): string[] {
+function buildClaudeArgs(config: NightgaugeConfig): string[] {
   const args = ["-p", "--output-format", "stream-json", "--verbose"];
 
   // Add backend flag based on config
@@ -64,7 +64,11 @@ function buildClaudeArgs(config: IncrediConfig): string[] {
 /**
  * Example: Spawn Claude CLI with Bedrock backend
  */
-function spawnClaudeWithBackend(config: IncrediConfig, prompt: string, cwd: string): ChildProcess {
+function spawnClaudeWithBackend(
+  config: NightgaugeConfig,
+  prompt: string,
+  cwd: string
+): ChildProcess {
   const args = buildClaudeArgs(config);
 
   const proc = spawn("claude", args, {
@@ -94,7 +98,7 @@ function spawnClaudeWithBackend(config: IncrediConfig, prompt: string, cwd: stri
  * Example: Using Bedrock backend
  */
 async function exampleBedrockUsage(): Promise<void> {
-  const config: IncrediConfig = {
+  const config: NightgaugeConfig = {
     ui: {
       core: {
         auth_provider: "bedrock",

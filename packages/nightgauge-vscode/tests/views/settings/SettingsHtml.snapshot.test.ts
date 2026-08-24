@@ -11,7 +11,7 @@
 import { describe, it, expect } from "vitest";
 import { getSettingsHtml } from "../../../src/views/settings/SettingsHtml";
 import { getDefaultConfig } from "../../../src/config/schema";
-import type { IncrediConfig } from "../../../src/views/settings/types";
+import type { NightgaugeConfig } from "../../../src/views/settings/types";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -32,20 +32,20 @@ function normalize(html: string): string {
 
 describe("getSettingsHtml snapshots (Issue #1242)", () => {
   it("default config render", () => {
-    const config = getDefaultConfig() as IncrediConfig;
+    const config = getDefaultConfig() as NightgaugeConfig;
     const html = getSettingsHtml(mockWebview, config);
     expect(normalize(html)).toMatchSnapshot();
   });
 
   it("locked section — pipeline running", () => {
-    const config = getDefaultConfig() as IncrediConfig;
+    const config = getDefaultConfig() as NightgaugeConfig;
     const lockedSections = new Set(["pipeline", "routing"]);
     const html = getSettingsHtml(mockWebview, config, lockedSections);
     expect(normalize(html)).toMatchSnapshot();
   });
 
   it("global tier view", () => {
-    const config = getDefaultConfig() as IncrediConfig;
+    const config = getDefaultConfig() as NightgaugeConfig;
     const html = getSettingsHtml(
       mockWebview,
       config,
@@ -64,7 +64,7 @@ describe("getSettingsHtml snapshots (Issue #1242)", () => {
   });
 
   it("project tier view", () => {
-    const config = getDefaultConfig() as IncrediConfig;
+    const config = getDefaultConfig() as NightgaugeConfig;
     const html = getSettingsHtml(
       mockWebview,
       config,
@@ -83,7 +83,7 @@ describe("getSettingsHtml snapshots (Issue #1242)", () => {
   });
 
   it("local tier view", () => {
-    const config = getDefaultConfig() as IncrediConfig;
+    const config = getDefaultConfig() as NightgaugeConfig;
     const html = getSettingsHtml(
       mockWebview,
       config,

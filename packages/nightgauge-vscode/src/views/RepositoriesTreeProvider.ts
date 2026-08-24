@@ -288,7 +288,7 @@ export class RepositoriesTreeProvider
    *      `handleCheckboxChange` (so the read-back is fresh and the
    *      checkbox doesn't bounce — #3429).
    *   2. A debounced echo ~100ms later from the runtime-store write
-   *      flowing through `IncrediYamlService.handleFileChange()` →
+   *      flowing through `NightgaugeYamlService.handleFileChange()` →
    *      `ConfigBridge.handleConfigFileChange()` → 100ms debounced
    *      `reload()`.
    *

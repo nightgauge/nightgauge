@@ -24,7 +24,7 @@ import {
   getValueAtPath,
   type ConfigTiers,
 } from "../../src/config/configMergeEngine";
-import { DEFAULT_CONFIG, type IncrediConfig, getSource } from "../../src/config/schema";
+import { DEFAULT_CONFIG, type NightgaugeConfig, getSource } from "../../src/config/schema";
 
 describe("configMergeEngine", () => {
   // Store original env vars
@@ -271,7 +271,7 @@ describe("configMergeEngine", () => {
 
     it("all 6 tiers in order produces correct precedence", () => {
       const tiers: ConfigTiers = {
-        defaults: { pr: { merge_strategy: "merge" } } as IncrediConfig,
+        defaults: { pr: { merge_strategy: "merge" } } as NightgaugeConfig,
         global: { pr: { merge_strategy: "rebase" } },
         project: { pr: { merge_strategy: "squash" } },
         local: { pr: { delete_branch: false } },
@@ -610,7 +610,7 @@ describe("configMergeEngine", () => {
         label: "global wins over defaults",
         tiers: {
           defaults: DEFAULT_CONFIG,
-          global: { pipeline: { max_concurrent: 10 } } as Partial<IncrediConfig>,
+          global: { pipeline: { max_concurrent: 10 } } as Partial<NightgaugeConfig>,
         },
         expectedValue: 10,
         expectedSource: "global",
@@ -619,8 +619,8 @@ describe("configMergeEngine", () => {
         label: "project wins over global",
         tiers: {
           defaults: DEFAULT_CONFIG,
-          global: { pipeline: { max_concurrent: 10 } } as Partial<IncrediConfig>,
-          project: { pipeline: { max_concurrent: 20 } } as Partial<IncrediConfig>,
+          global: { pipeline: { max_concurrent: 10 } } as Partial<NightgaugeConfig>,
+          project: { pipeline: { max_concurrent: 20 } } as Partial<NightgaugeConfig>,
         },
         expectedValue: 20,
         expectedSource: "project",
@@ -629,8 +629,8 @@ describe("configMergeEngine", () => {
         label: "local wins over project",
         tiers: {
           defaults: DEFAULT_CONFIG,
-          project: { pipeline: { max_concurrent: 20 } } as Partial<IncrediConfig>,
-          local: { pipeline: { max_concurrent: 30 } } as Partial<IncrediConfig>,
+          project: { pipeline: { max_concurrent: 20 } } as Partial<NightgaugeConfig>,
+          local: { pipeline: { max_concurrent: 30 } } as Partial<NightgaugeConfig>,
         },
         expectedValue: 30,
         expectedSource: "local",
@@ -639,8 +639,8 @@ describe("configMergeEngine", () => {
         label: "runtime wins over local",
         tiers: {
           defaults: DEFAULT_CONFIG,
-          local: { pipeline: { max_concurrent: 30 } } as Partial<IncrediConfig>,
-          runtime: { pipeline: { max_concurrent: 40 } } as Partial<IncrediConfig>,
+          local: { pipeline: { max_concurrent: 30 } } as Partial<NightgaugeConfig>,
+          runtime: { pipeline: { max_concurrent: 40 } } as Partial<NightgaugeConfig>,
         },
         expectedValue: 40,
         expectedSource: "runtime",
@@ -649,8 +649,8 @@ describe("configMergeEngine", () => {
         label: "env wins over runtime",
         tiers: {
           defaults: DEFAULT_CONFIG,
-          runtime: { pipeline: { max_concurrent: 40 } } as Partial<IncrediConfig>,
-          env: { pipeline: { max_concurrent: 50 } } as Partial<IncrediConfig>,
+          runtime: { pipeline: { max_concurrent: 40 } } as Partial<NightgaugeConfig>,
+          env: { pipeline: { max_concurrent: 50 } } as Partial<NightgaugeConfig>,
         },
         expectedValue: 50,
         expectedSource: "env",
@@ -659,12 +659,12 @@ describe("configMergeEngine", () => {
         label: "cli wins over env (all 7 tiers set, cli wins)",
         tiers: {
           defaults: DEFAULT_CONFIG,
-          global: { pipeline: { max_concurrent: 10 } } as Partial<IncrediConfig>,
-          project: { pipeline: { max_concurrent: 20 } } as Partial<IncrediConfig>,
-          local: { pipeline: { max_concurrent: 30 } } as Partial<IncrediConfig>,
-          runtime: { pipeline: { max_concurrent: 40 } } as Partial<IncrediConfig>,
-          env: { pipeline: { max_concurrent: 50 } } as Partial<IncrediConfig>,
-          cli: { pipeline: { max_concurrent: 99 } } as Partial<IncrediConfig>,
+          global: { pipeline: { max_concurrent: 10 } } as Partial<NightgaugeConfig>,
+          project: { pipeline: { max_concurrent: 20 } } as Partial<NightgaugeConfig>,
+          local: { pipeline: { max_concurrent: 30 } } as Partial<NightgaugeConfig>,
+          runtime: { pipeline: { max_concurrent: 40 } } as Partial<NightgaugeConfig>,
+          env: { pipeline: { max_concurrent: 50 } } as Partial<NightgaugeConfig>,
+          cli: { pipeline: { max_concurrent: 99 } } as Partial<NightgaugeConfig>,
         },
         expectedValue: 99,
         expectedSource: "cli",
@@ -682,12 +682,12 @@ describe("configMergeEngine", () => {
     it("each tier contributes a distinct key with correct source in full-chain merge", () => {
       const tiers: ConfigTiers = {
         defaults: DEFAULT_CONFIG,
-        global: { pr: { merge_strategy: "rebase" } } as Partial<IncrediConfig>,
-        project: { project: { number: 42 } } as Partial<IncrediConfig>,
-        local: { pr: { delete_branch: true } } as Partial<IncrediConfig>,
-        runtime: { pipeline: { max_concurrent: 7 } } as Partial<IncrediConfig>,
-        env: { pipeline: { auto_fix: false } } as Partial<IncrediConfig>,
-        cli: { batch: { max_issues: 5 } } as Partial<IncrediConfig>,
+        global: { pr: { merge_strategy: "rebase" } } as Partial<NightgaugeConfig>,
+        project: { project: { number: 42 } } as Partial<NightgaugeConfig>,
+        local: { pr: { delete_branch: true } } as Partial<NightgaugeConfig>,
+        runtime: { pipeline: { max_concurrent: 7 } } as Partial<NightgaugeConfig>,
+        env: { pipeline: { auto_fix: false } } as Partial<NightgaugeConfig>,
+        cli: { batch: { max_issues: 5 } } as Partial<NightgaugeConfig>,
       };
       const result = mergeConfigs(tiers, { skipEnvResolution: true });
 

@@ -116,7 +116,7 @@ vi.mock("vscode", () => ({
 }));
 
 import * as vscode from "vscode";
-import { IncrediYamlService } from "../../src/views/settings/IncrediYamlService";
+import { NightgaugeYamlService } from "../../src/views/settings/NightgaugeYamlService";
 
 describe("Config File Watcher Reactivity (Issue #477)", () => {
   beforeEach(() => {
@@ -129,7 +129,7 @@ describe("Config File Watcher Reactivity (Issue #477)", () => {
 
   describe("file watcher setup", () => {
     it("creates watchers for primary, legacy, local, and global config files", () => {
-      const service = new IncrediYamlService("/test/workspace");
+      const service = new NightgaugeYamlService("/test/workspace");
 
       // Should have created 4 watchers (primary, legacy, local, global)
       expect(watcherPatterns).toHaveLength(4);
@@ -143,7 +143,7 @@ describe("Config File Watcher Reactivity (Issue #477)", () => {
     });
 
     it("registers onChange, onCreate, and onDelete handlers", () => {
-      const service = new IncrediYamlService("/test/workspace");
+      const service = new NightgaugeYamlService("/test/workspace");
 
       // Each watcher should have all three handlers registered
       expect(primaryWatcherCallbacks.onChange.length).toBeGreaterThan(0);
@@ -166,7 +166,7 @@ describe("Config File Watcher Reactivity (Issue #477)", () => {
         Buffer.from(JSON.stringify(mockConfig))
       );
 
-      const service = new IncrediYamlService("/test/workspace");
+      const service = new NightgaugeYamlService("/test/workspace");
 
       // Track change events
       const receivedConfigs: unknown[] = [];
@@ -196,7 +196,7 @@ describe("Config File Watcher Reactivity (Issue #477)", () => {
         Buffer.from(JSON.stringify(mockConfig))
       );
 
-      const service = new IncrediYamlService("/test/workspace");
+      const service = new NightgaugeYamlService("/test/workspace");
 
       const receivedConfigs: unknown[] = [];
       service.onDidChange((config) => {
@@ -228,7 +228,7 @@ describe("Config File Watcher Reactivity (Issue #477)", () => {
         Buffer.from(JSON.stringify(mockConfig))
       );
 
-      const service = new IncrediYamlService("/test/workspace");
+      const service = new NightgaugeYamlService("/test/workspace");
 
       // Verify local watcher was set up
       expect(localWatcherCallbacks.onChange.length).toBeGreaterThan(0);
@@ -242,7 +242,7 @@ describe("Config File Watcher Reactivity (Issue #477)", () => {
         Buffer.from(JSON.stringify(mockConfig))
       );
 
-      const service = new IncrediYamlService("/test/workspace");
+      const service = new NightgaugeYamlService("/test/workspace");
 
       // Verify legacy watcher was set up
       expect(legacyWatcherCallbacks.onChange.length).toBeGreaterThan(0);
@@ -253,7 +253,7 @@ describe("Config File Watcher Reactivity (Issue #477)", () => {
 
   describe("config file creation and deletion", () => {
     it("handles config file creation", () => {
-      const service = new IncrediYamlService("/test/workspace");
+      const service = new NightgaugeYamlService("/test/workspace");
 
       // Verify onCreate handlers are registered
       expect(primaryWatcherCallbacks.onCreate.length).toBeGreaterThan(0);
@@ -263,7 +263,7 @@ describe("Config File Watcher Reactivity (Issue #477)", () => {
     });
 
     it("handles config file deletion", () => {
-      const service = new IncrediYamlService("/test/workspace");
+      const service = new NightgaugeYamlService("/test/workspace");
 
       // Verify onDelete handlers are registered
       expect(primaryWatcherCallbacks.onDelete.length).toBeGreaterThan(0);
@@ -275,7 +275,7 @@ describe("Config File Watcher Reactivity (Issue #477)", () => {
 
   describe("service lifecycle", () => {
     it("disposes file watchers on service dispose", () => {
-      const service = new IncrediYamlService("/test/workspace");
+      const service = new NightgaugeYamlService("/test/workspace");
 
       service.dispose();
 
@@ -284,7 +284,7 @@ describe("Config File Watcher Reactivity (Issue #477)", () => {
     });
 
     it("disposes event emitters on service dispose", () => {
-      const service = new IncrediYamlService("/test/workspace");
+      const service = new NightgaugeYamlService("/test/workspace");
 
       // Subscribe to change events
       const disposable = service.onDidChange(() => {});

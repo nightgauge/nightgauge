@@ -36,12 +36,12 @@
 
 import * as vscode from "vscode";
 import type { WorkspaceManager } from "./WorkspaceManager";
-import { IncrediYamlService } from "../views/settings/IncrediYamlService";
+import { NightgaugeYamlService } from "../views/settings/NightgaugeYamlService";
 import { type ConfigMergeResult, getValueAtPath } from "../config/configMergeEngine";
 import type { ConfigSource } from "../config/schema";
 import type { RuntimeStateStore } from "../config/RuntimeStateStore";
 import type {
-  IncrediConfig,
+  NightgaugeConfig,
   ProjectConfig,
   PullRequestConfig,
   BranchConfig,
@@ -69,7 +69,7 @@ export interface PlatformHostChangedEvent {
 }
 
 /**
- * Debounce delay for file watcher events (matches IncrediYamlService)
+ * Debounce delay for file watcher events (matches NightgaugeYamlService)
  */
 const FILE_WATCHER_DEBOUNCE_MS = 100;
 
@@ -78,7 +78,7 @@ const FILE_WATCHER_DEBOUNCE_MS = 100;
  *
  * Responsibilities:
  * - Initialize with WorkspaceManager and workspace root
- * - Load effective config via IncrediYamlService.readEffective()
+ * - Load effective config via NightgaugeYamlService.readEffective()
  * - Cache merged config with source annotations
  * - Watch config files for changes (primary, legacy, local)
  * - Fire onConfigChanged events on updates
@@ -90,7 +90,7 @@ export class ConfigBridge implements vscode.Disposable {
 
   private workspaceRoot: string | null = null;
   private workspaceManager: WorkspaceManager | null = null;
-  private yamlService: IncrediYamlService | null = null;
+  private yamlService: NightgaugeYamlService | null = null;
   private runtimeStore: RuntimeStateStore | null = null;
   private disposables: vscode.Disposable[] = [];
 
@@ -170,11 +170,11 @@ export class ConfigBridge implements vscode.Disposable {
     this.workspaceRoot = workspaceRoot;
     this.runtimeStore = runtimeStore ?? null;
 
-    // Create IncrediYamlService for file I/O (with runtime tier wired in)
-    this.yamlService = new IncrediYamlService(workspaceRoot, runtimeStore);
+    // Create NightgaugeYamlService for file I/O (with runtime tier wired in)
+    this.yamlService = new NightgaugeYamlService(workspaceRoot, runtimeStore);
     this.disposables.push(this.yamlService);
 
-    // Subscribe to file changes from IncrediYamlService
+    // Subscribe to file changes from NightgaugeYamlService
     const fileChangeSubscription = this.yamlService.onDidChange(
       this.handleConfigFileChange.bind(this)
     );
@@ -202,7 +202,7 @@ export class ConfigBridge implements vscode.Disposable {
    * Reload configuration from all sources
    *
    * Called on initialization and when file changes are detected.
-   * Uses IncrediYamlService.readEffective() which internally uses
+   * Uses NightgaugeYamlService.readEffective() which internally uses
    * the 6-tier merge engine.
    */
   async reload(): Promise<void> {
@@ -245,7 +245,7 @@ export class ConfigBridge implements vscode.Disposable {
   /**
    * Handle config file change (debounced)
    *
-   * Called when IncrediYamlService detects a file change.
+   * Called when NightgaugeYamlService detects a file change.
    */
   private handleConfigFileChange(): void {
     // Debounce rapid changes
@@ -271,7 +271,7 @@ export class ConfigBridge implements vscode.Disposable {
     // Update workspace root
     this.workspaceRoot = repoPath;
 
-    // Recreate IncrediYamlService for the new repository
+    // Recreate NightgaugeYamlService for the new repository
     if (this.yamlService) {
       // Find and remove old yaml service from disposables
       const idx = this.disposables.indexOf(this.yamlService);
@@ -281,10 +281,10 @@ export class ConfigBridge implements vscode.Disposable {
       this.yamlService.dispose();
     }
 
-    this.yamlService = new IncrediYamlService(repoPath, this.runtimeStore ?? undefined);
+    this.yamlService = new NightgaugeYamlService(repoPath, this.runtimeStore ?? undefined);
     this.disposables.push(this.yamlService);
 
-    // Subscribe to file changes from new IncrediYamlService
+    // Subscribe to file changes from new NightgaugeYamlService
     const fileChangeSubscription = this.yamlService.onDidChange(
       this.handleConfigFileChange.bind(this)
     );

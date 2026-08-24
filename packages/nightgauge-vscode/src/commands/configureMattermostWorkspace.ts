@@ -4,7 +4,7 @@
  * Collects server URL, bot token, incoming webhook URL, and per-channel
  * signing tokens. Verifies connectivity with a live test-connection, then
  * atomically writes credentials to SecretStorage and updates config.yaml:
- *   - notifications.mattermost block via IncrediYamlService (schema path)
+ *   - notifications.mattermost block via NightgaugeYamlService (schema path)
  *   - notifiers.mattermost.channels block via raw YAML Document API
  *     (avoids coupling TS schema to Go-owned config keys — see ADR-001)
  *
@@ -18,7 +18,7 @@ import {
   SECRET_KEYS,
   mattermostSigningKey,
 } from "../services/SecretStorageService";
-import { IncrediYamlService } from "../views/settings/IncrediYamlService";
+import { NightgaugeYamlService } from "../views/settings/NightgaugeYamlService";
 
 const MATTERMOST_WEBHOOK_PATTERN = /^https?:\/\/[^/\s]+\/hooks\/[A-Za-z0-9]+\/?$/;
 const SERVER_URL_PATTERN = /^https:\/\/[^/\s]+/;
@@ -108,7 +108,7 @@ async function testConnection(
 /**
  * Write the notifiers.mattermost.channels block to config.yaml using the raw
  * YAML Document API. This avoids schema stripping since notifiers is a
- * Go-owned config key not present in IncrediConfigSchema (ADR-001).
+ * Go-owned config key not present in NightgaugeConfigSchema (ADR-001).
  */
 async function writeNotifiersBlock(configPath: string, channels: Channel[]): Promise<void> {
   let rawContent = "";
@@ -248,12 +248,12 @@ export function registerConfigureMattermostWorkspaceCommand(): vscode.Disposable
       await secretService.setSecret(mattermostSigningKey(channelId), token);
     }
 
-    // ── Write notifications block via IncrediYamlService ──────────────────
+    // ── Write notifications block via NightgaugeYamlService ──────────────────
     const workspaceFolders = vscode.workspace.workspaceFolders;
     const workspaceRoot = workspaceFolders?.[0]?.uri.fsPath;
 
     if (workspaceRoot) {
-      const yamlService = new IncrediYamlService(workspaceRoot);
+      const yamlService = new NightgaugeYamlService(workspaceRoot);
       try {
         const readResult = await yamlService.read();
         const existing = readResult.config ?? {};

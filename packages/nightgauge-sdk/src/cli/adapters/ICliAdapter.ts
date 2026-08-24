@@ -28,7 +28,7 @@ export type { OrchestrationCapability } from "../workflow/index.js";
  * Single source of truth for both SDK and VSCode layers.
  * The VSCode ExecutionAdapter type is derived from this.
  */
-export type IncrediAdapter =
+export type NightgaugeAdapter =
   | "claude-sdk"
   | "claude-headless"
   | "codex"
@@ -66,7 +66,7 @@ export interface ValidateAuthOptions {
  */
 export interface ICliAdapter {
   /** Canonical adapter identifier */
-  readonly name: IncrediAdapter;
+  readonly name: NightgaugeAdapter;
 
   /** Human-readable display name */
   readonly displayName: string;

@@ -98,7 +98,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     tokenRefreshManager,
     tierGate,
     licensePreflight,
-    incrediRoot,
+    nightgaugeRoot,
     projectBoardViews,
     treeView,
     telemetryService,
@@ -146,7 +146,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       tokenRefreshManager,
       tierGate,
       licensePreflight,
-      incrediRoot,
+      nightgaugeRoot,
       telemetryService,
       telemetryConsentService,
       repositorySettingsService,
@@ -290,9 +290,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // unified pipeline.max_concurrent key (Issue #3195). Best-effort: never
   // blocks activation, surfaces a modal only when both keys are set with
   // disagreeing values.
-  if (incrediRoot) {
+  if (nightgaugeRoot) {
     setTimeout(() => {
-      runMaxConcurrentMigration(context, incrediRoot, logger).catch((err) => {
+      runMaxConcurrentMigration(context, nightgaugeRoot, logger).catch((err) => {
         logger.warn("Max-concurrent migration threw", {
           error: err instanceof Error ? err.message : String(err),
         });
@@ -302,10 +302,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   // One-time migration of legacy project-tier keys to runtime/machine tiers (Issue #3338).
   // Runs slightly after the max-concurrent migration to avoid concurrent YAML writes.
-  if (incrediRoot && runtimeStateStore) {
+  if (nightgaugeRoot && runtimeStateStore) {
     const capturedStore = runtimeStateStore;
     setTimeout(() => {
-      runLegacyKeysMigration(context, incrediRoot, capturedStore, logger).catch((err) => {
+      runLegacyKeysMigration(context, nightgaugeRoot, capturedStore, logger).catch((err) => {
         logger.warn("Legacy keys migration threw", {
           error: err instanceof Error ? err.message : String(err),
         });
@@ -315,11 +315,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     // Palette command: force-run the migration regardless of completion state
     context.subscriptions.push(
       vscode.commands.registerCommand("nightgauge.runSettingsMigration", () => {
-        runLegacyKeysMigration(context, incrediRoot, capturedStore, logger, true).catch((err) => {
-          logger.warn("Manual legacy keys migration threw", {
-            error: err instanceof Error ? err.message : String(err),
-          });
-        });
+        runLegacyKeysMigration(context, nightgaugeRoot, capturedStore, logger, true).catch(
+          (err) => {
+            logger.warn("Manual legacy keys migration threw", {
+              error: err instanceof Error ? err.message : String(err),
+            });
+          }
+        );
       })
     );
   }
@@ -362,7 +364,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             (
               services as unknown as {
                 configBridge?: {
-                  getEffectiveConfig(): { config?: import("./config/schema").IncrediConfig } | null;
+                  getEffectiveConfig(): {
+                    config?: import("./config/schema").NightgaugeConfig;
+                  } | null;
                 };
               }
             ).configBridge
@@ -416,7 +420,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           ? (
               services as unknown as {
                 configBridge?: {
-                  getEffectiveConfig(): { config?: import("./config/schema").IncrediConfig } | null;
+                  getEffectiveConfig(): {
+                    config?: import("./config/schema").NightgaugeConfig;
+                  } | null;
                 };
               }
             ).configBridge
@@ -493,7 +499,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       const configBridge = (
         services as unknown as {
           configBridge?: {
-            getEffectiveConfig(): { config?: import("./config/schema").IncrediConfig } | null;
+            getEffectiveConfig(): { config?: import("./config/schema").NightgaugeConfig } | null;
           };
         }
       ).configBridge;
@@ -607,7 +613,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
               services as unknown as {
                 configBridge?: {
                   getEffectiveConfig(): {
-                    config?: import("./config/schema").IncrediConfig;
+                    config?: import("./config/schema").NightgaugeConfig;
                   } | null;
                 };
               }

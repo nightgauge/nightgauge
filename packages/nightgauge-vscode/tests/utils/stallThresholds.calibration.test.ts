@@ -55,7 +55,7 @@ import {
   getStallCalibrationMinRuns,
   precomputeCalibratedStallThresholds,
   getCalibratedStallData,
-} from "../../src/utils/incrediConfig";
+} from "../../src/utils/nightgaugeConfig";
 import { resolveConfigPathSync } from "../../src/utils/configPathResolver";
 import { StageDurationAnalyzer } from "../../src/utils/StageDurationAnalyzer";
 import type { PerformanceMode } from "../../src/utils/modeProfiles";

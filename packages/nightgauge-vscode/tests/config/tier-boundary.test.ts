@@ -24,7 +24,7 @@ import {
   getPathsFromSource,
   type ConfigTiers,
 } from "../../src/config/configMergeEngine";
-import { DEFAULT_CONFIG, type IncrediConfig } from "../../src/config/schema";
+import { DEFAULT_CONFIG, type NightgaugeConfig } from "../../src/config/schema";
 
 describe("configMergeEngine — 7-tier boundary scenarios", () => {
   const originalEnv = { ...process.env };
@@ -47,12 +47,12 @@ describe("configMergeEngine — 7-tier boundary scenarios", () => {
     it("CLI wins over all other tiers", () => {
       const tiers: ConfigTiers = {
         defaults: DEFAULT_CONFIG,
-        global: { pipeline: { auto_fix: false } } as Partial<IncrediConfig>,
-        project: { pipeline: { auto_fix: false } } as Partial<IncrediConfig>,
-        local: { pipeline: { auto_fix: false } } as Partial<IncrediConfig>,
-        runtime: { pipeline: { auto_fix: false } } as Partial<IncrediConfig>,
-        env: { pipeline: { auto_fix: false } } as Partial<IncrediConfig>,
-        cli: { pipeline: { auto_fix: true } } as Partial<IncrediConfig>,
+        global: { pipeline: { auto_fix: false } } as Partial<NightgaugeConfig>,
+        project: { pipeline: { auto_fix: false } } as Partial<NightgaugeConfig>,
+        local: { pipeline: { auto_fix: false } } as Partial<NightgaugeConfig>,
+        runtime: { pipeline: { auto_fix: false } } as Partial<NightgaugeConfig>,
+        env: { pipeline: { auto_fix: false } } as Partial<NightgaugeConfig>,
+        cli: { pipeline: { auto_fix: true } } as Partial<NightgaugeConfig>,
       };
       const result = mergeConfigs(tiers, { skipEnvResolution: true });
       expect(result.config.pipeline?.auto_fix).toBe(true);
@@ -63,12 +63,12 @@ describe("configMergeEngine — 7-tier boundary scenarios", () => {
       // Use different keys per tier so all can coexist in the source map
       const tiers: ConfigTiers = {
         defaults: DEFAULT_CONFIG,
-        global: { pull_request: { merge_strategy: "rebase" } } as Partial<IncrediConfig>,
-        project: { project: { number: 10 } } as Partial<IncrediConfig>,
-        local: { pipeline: { ci_timeout: 20 } } as Partial<IncrediConfig>,
-        runtime: { pipeline: { auto_fix: false } } as Partial<IncrediConfig>,
-        env: { pipeline: { default_mode: "interactive" } } as Partial<IncrediConfig>,
-        cli: { branch: { base: "develop" } } as Partial<IncrediConfig>,
+        global: { pull_request: { merge_strategy: "rebase" } } as Partial<NightgaugeConfig>,
+        project: { project: { number: 10 } } as Partial<NightgaugeConfig>,
+        local: { pipeline: { ci_timeout: 20 } } as Partial<NightgaugeConfig>,
+        runtime: { pipeline: { auto_fix: false } } as Partial<NightgaugeConfig>,
+        env: { pipeline: { default_mode: "interactive" } } as Partial<NightgaugeConfig>,
+        cli: { branch: { base: "develop" } } as Partial<NightgaugeConfig>,
       };
       const result = mergeConfigs(tiers, { skipEnvResolution: true });
 
@@ -83,12 +83,12 @@ describe("configMergeEngine — 7-tier boundary scenarios", () => {
     it("all TierMetadata flags are set when all tiers are supplied", () => {
       const tiers: ConfigTiers = {
         defaults: DEFAULT_CONFIG,
-        global: { pull_request: { merge_strategy: "rebase" } } as Partial<IncrediConfig>,
-        project: { project: { number: 10 } } as Partial<IncrediConfig>,
-        local: { pipeline: { ci_timeout: 20 } } as Partial<IncrediConfig>,
-        runtime: { pipeline: { auto_fix: false } } as Partial<IncrediConfig>,
-        env: { pipeline: { default_mode: "interactive" } } as Partial<IncrediConfig>,
-        cli: { branch: { base: "develop" } } as Partial<IncrediConfig>,
+        global: { pull_request: { merge_strategy: "rebase" } } as Partial<NightgaugeConfig>,
+        project: { project: { number: 10 } } as Partial<NightgaugeConfig>,
+        local: { pipeline: { ci_timeout: 20 } } as Partial<NightgaugeConfig>,
+        runtime: { pipeline: { auto_fix: false } } as Partial<NightgaugeConfig>,
+        env: { pipeline: { default_mode: "interactive" } } as Partial<NightgaugeConfig>,
+        cli: { branch: { base: "develop" } } as Partial<NightgaugeConfig>,
       };
       const result = mergeConfigs(tiers, { skipEnvResolution: true });
 
@@ -108,7 +108,7 @@ describe("configMergeEngine — 7-tier boundary scenarios", () => {
     it("pair 1: global overrides defaults", () => {
       const tiers: ConfigTiers = {
         defaults: DEFAULT_CONFIG,
-        global: { pull_request: { merge_strategy: "rebase" } } as Partial<IncrediConfig>,
+        global: { pull_request: { merge_strategy: "rebase" } } as Partial<NightgaugeConfig>,
       };
       const result = mergeConfigs(tiers, { skipEnvResolution: true });
       // DEFAULT_CONFIG has merge_strategy: 'squash'
@@ -119,8 +119,8 @@ describe("configMergeEngine — 7-tier boundary scenarios", () => {
     it("pair 2: project overrides global", () => {
       const tiers: ConfigTiers = {
         defaults: DEFAULT_CONFIG,
-        global: { pull_request: { merge_strategy: "rebase" } } as Partial<IncrediConfig>,
-        project: { pull_request: { merge_strategy: "merge" } } as Partial<IncrediConfig>,
+        global: { pull_request: { merge_strategy: "rebase" } } as Partial<NightgaugeConfig>,
+        project: { pull_request: { merge_strategy: "merge" } } as Partial<NightgaugeConfig>,
       };
       const result = mergeConfigs(tiers, { skipEnvResolution: true });
       expect(result.config.pull_request?.merge_strategy).toBe("merge");
@@ -130,8 +130,8 @@ describe("configMergeEngine — 7-tier boundary scenarios", () => {
     it("pair 3: local overrides project", () => {
       const tiers: ConfigTiers = {
         defaults: DEFAULT_CONFIG,
-        project: { pull_request: { merge_strategy: "merge" } } as Partial<IncrediConfig>,
-        local: { pull_request: { merge_strategy: "squash" } } as Partial<IncrediConfig>,
+        project: { pull_request: { merge_strategy: "merge" } } as Partial<NightgaugeConfig>,
+        local: { pull_request: { merge_strategy: "squash" } } as Partial<NightgaugeConfig>,
       };
       const result = mergeConfigs(tiers, { skipEnvResolution: true });
       expect(result.config.pull_request?.merge_strategy).toBe("squash");
@@ -141,8 +141,8 @@ describe("configMergeEngine — 7-tier boundary scenarios", () => {
     it("pair 4: runtime overrides local", () => {
       const tiers: ConfigTiers = {
         defaults: DEFAULT_CONFIG,
-        local: { pull_request: { merge_strategy: "squash" } } as Partial<IncrediConfig>,
-        runtime: { pull_request: { merge_strategy: "rebase" } } as Partial<IncrediConfig>,
+        local: { pull_request: { merge_strategy: "squash" } } as Partial<NightgaugeConfig>,
+        runtime: { pull_request: { merge_strategy: "rebase" } } as Partial<NightgaugeConfig>,
       };
       const result = mergeConfigs(tiers, { skipEnvResolution: true });
       expect(result.config.pull_request?.merge_strategy).toBe("rebase");
@@ -152,8 +152,8 @@ describe("configMergeEngine — 7-tier boundary scenarios", () => {
     it("pair 5: env overrides runtime", () => {
       const tiers: ConfigTiers = {
         defaults: DEFAULT_CONFIG,
-        runtime: { pull_request: { merge_strategy: "rebase" } } as Partial<IncrediConfig>,
-        env: { pull_request: { merge_strategy: "merge" } } as Partial<IncrediConfig>,
+        runtime: { pull_request: { merge_strategy: "rebase" } } as Partial<NightgaugeConfig>,
+        env: { pull_request: { merge_strategy: "merge" } } as Partial<NightgaugeConfig>,
       };
       const result = mergeConfigs(tiers, { skipEnvResolution: true });
       expect(result.config.pull_request?.merge_strategy).toBe("merge");
@@ -163,8 +163,8 @@ describe("configMergeEngine — 7-tier boundary scenarios", () => {
     it("pair 6: CLI overrides env", () => {
       const tiers: ConfigTiers = {
         defaults: DEFAULT_CONFIG,
-        env: { pull_request: { merge_strategy: "merge" } } as Partial<IncrediConfig>,
-        cli: { pull_request: { merge_strategy: "squash" } } as Partial<IncrediConfig>,
+        env: { pull_request: { merge_strategy: "merge" } } as Partial<NightgaugeConfig>,
+        cli: { pull_request: { merge_strategy: "squash" } } as Partial<NightgaugeConfig>,
       };
       const result = mergeConfigs(tiers, { skipEnvResolution: true });
       expect(result.config.pull_request?.merge_strategy).toBe("squash");
@@ -178,7 +178,7 @@ describe("configMergeEngine — 7-tier boundary scenarios", () => {
     it("hasRuntime=true when runtime tier has values", () => {
       const tiers: ConfigTiers = {
         defaults: DEFAULT_CONFIG,
-        runtime: { pipeline: { ci_timeout: 99 } } as Partial<IncrediConfig>,
+        runtime: { pipeline: { ci_timeout: 99 } } as Partial<NightgaugeConfig>,
       };
       const result = mergeConfigs(tiers, { skipEnvResolution: true });
       expect(result.tiers.hasRuntime).toBe(true);
@@ -200,7 +200,7 @@ describe("configMergeEngine — 7-tier boundary scenarios", () => {
     it("runtime values are reflected in the effective config but not in other tier flags", () => {
       const tiers: ConfigTiers = {
         defaults: DEFAULT_CONFIG,
-        runtime: { pipeline: { ci_timeout: 42 } } as Partial<IncrediConfig>,
+        runtime: { pipeline: { ci_timeout: 42 } } as Partial<NightgaugeConfig>,
       };
       const result = mergeConfigs(tiers, { skipEnvResolution: true });
       // Runtime value is effective
@@ -220,8 +220,8 @@ describe("configMergeEngine — 7-tier boundary scenarios", () => {
     it("runtime value wins over project value, source is runtime not project", () => {
       const tiers: ConfigTiers = {
         defaults: DEFAULT_CONFIG,
-        project: { project: { number: 1 } } as Partial<IncrediConfig>,
-        runtime: { project: { number: 2 } } as Partial<IncrediConfig>,
+        project: { project: { number: 1 } } as Partial<NightgaugeConfig>,
+        runtime: { project: { number: 2 } } as Partial<NightgaugeConfig>,
       };
       const result = mergeConfigs(tiers, { skipEnvResolution: true });
       expect(result.config.project?.number).toBe(2);
@@ -233,8 +233,8 @@ describe("configMergeEngine — 7-tier boundary scenarios", () => {
     it("project-only key remains project-sourced when runtime does not override it", () => {
       const tiers: ConfigTiers = {
         defaults: DEFAULT_CONFIG,
-        project: { project: { number: 5 } } as Partial<IncrediConfig>,
-        runtime: { pipeline: { ci_timeout: 30 } } as Partial<IncrediConfig>,
+        project: { project: { number: 5 } } as Partial<NightgaugeConfig>,
+        runtime: { pipeline: { ci_timeout: 30 } } as Partial<NightgaugeConfig>,
       };
       const result = mergeConfigs(tiers, { skipEnvResolution: true });
       expect(result.sources["project.number"]).toBe("project");
@@ -243,8 +243,8 @@ describe("configMergeEngine — 7-tier boundary scenarios", () => {
     it("wasOverridden(project) returns true when runtime provides the value", () => {
       const tiers: ConfigTiers = {
         defaults: DEFAULT_CONFIG,
-        project: { project: { number: 1 } } as Partial<IncrediConfig>,
-        runtime: { project: { number: 2 } } as Partial<IncrediConfig>,
+        project: { project: { number: 1 } } as Partial<NightgaugeConfig>,
+        runtime: { project: { number: 2 } } as Partial<NightgaugeConfig>,
       };
       const result = mergeConfigs(tiers, { skipEnvResolution: true });
       expect(wasOverridden(result, "project.number", "project")).toBe(true);
@@ -257,7 +257,7 @@ describe("configMergeEngine — 7-tier boundary scenarios", () => {
     it("global overrides defaults for branch.base", () => {
       const tiers: ConfigTiers = {
         defaults: DEFAULT_CONFIG, // branch.base = 'main'
-        global: { branch: { base: "trunk" } } as Partial<IncrediConfig>,
+        global: { branch: { base: "trunk" } } as Partial<NightgaugeConfig>,
       };
       const result = mergeConfigs(tiers, { skipEnvResolution: true });
       expect(result.config.branch?.base).toBe("trunk");
@@ -267,8 +267,8 @@ describe("configMergeEngine — 7-tier boundary scenarios", () => {
     it("local overrides global for branch.base", () => {
       const tiers: ConfigTiers = {
         defaults: DEFAULT_CONFIG,
-        global: { branch: { base: "trunk" } } as Partial<IncrediConfig>,
-        local: { branch: { base: "my-local-base" } } as Partial<IncrediConfig>,
+        global: { branch: { base: "trunk" } } as Partial<NightgaugeConfig>,
+        local: { branch: { base: "my-local-base" } } as Partial<NightgaugeConfig>,
       };
       const result = mergeConfigs(tiers, { skipEnvResolution: true });
       expect(result.config.branch?.base).toBe("my-local-base");
@@ -280,8 +280,8 @@ describe("configMergeEngine — 7-tier boundary scenarios", () => {
         defaults: DEFAULT_CONFIG,
         global: {
           pull_request: { merge_strategy: "rebase", delete_branch: false },
-        } as Partial<IncrediConfig>,
-        local: { pull_request: { draft_by_default: true } } as Partial<IncrediConfig>,
+        } as Partial<NightgaugeConfig>,
+        local: { pull_request: { draft_by_default: true } } as Partial<NightgaugeConfig>,
       };
       const result = mergeConfigs(tiers, { skipEnvResolution: true });
       // global key untouched by local
@@ -294,8 +294,8 @@ describe("configMergeEngine — 7-tier boundary scenarios", () => {
     it("wasOverridden(global) returns true when local overrides it", () => {
       const tiers: ConfigTiers = {
         defaults: DEFAULT_CONFIG,
-        global: { branch: { base: "trunk" } } as Partial<IncrediConfig>,
-        local: { branch: { base: "dev" } } as Partial<IncrediConfig>,
+        global: { branch: { base: "trunk" } } as Partial<NightgaugeConfig>,
+        local: { branch: { base: "dev" } } as Partial<NightgaugeConfig>,
       };
       const result = mergeConfigs(tiers, { skipEnvResolution: true });
       expect(wasOverridden(result, "branch.base", "global")).toBe(true);
@@ -304,7 +304,7 @@ describe("configMergeEngine — 7-tier boundary scenarios", () => {
     it("wasOverridden(global) returns false when global itself supplied the value", () => {
       const tiers: ConfigTiers = {
         defaults: DEFAULT_CONFIG,
-        global: { branch: { base: "trunk" } } as Partial<IncrediConfig>,
+        global: { branch: { base: "trunk" } } as Partial<NightgaugeConfig>,
       };
       const result = mergeConfigs(tiers, { skipEnvResolution: true });
       expect(wasOverridden(result, "branch.base", "global")).toBe(false);
@@ -323,7 +323,7 @@ describe("configMergeEngine — 7-tier boundary scenarios", () => {
     it("global-sourced keys show 'global' in sources", () => {
       const tiers: ConfigTiers = {
         defaults: DEFAULT_CONFIG,
-        global: { issue: { auto_assign: false } } as Partial<IncrediConfig>,
+        global: { issue: { auto_assign: false } } as Partial<NightgaugeConfig>,
       };
       const result = mergeConfigs(tiers, { skipEnvResolution: true });
       expect(result.sources["issue.auto_assign"]).toBe("global");
@@ -332,7 +332,7 @@ describe("configMergeEngine — 7-tier boundary scenarios", () => {
     it("project-sourced keys show 'project' in sources", () => {
       const tiers: ConfigTiers = {
         defaults: DEFAULT_CONFIG,
-        project: { issue: { default_status: "ready" } } as Partial<IncrediConfig>,
+        project: { issue: { default_status: "ready" } } as Partial<NightgaugeConfig>,
       };
       const result = mergeConfigs(tiers, { skipEnvResolution: true });
       expect(result.sources["issue.default_status"]).toBe("project");
@@ -341,7 +341,7 @@ describe("configMergeEngine — 7-tier boundary scenarios", () => {
     it("local-sourced keys show 'local' in sources", () => {
       const tiers: ConfigTiers = {
         defaults: DEFAULT_CONFIG,
-        local: { pipeline: { auto_fix: false } } as Partial<IncrediConfig>,
+        local: { pipeline: { auto_fix: false } } as Partial<NightgaugeConfig>,
       };
       const result = mergeConfigs(tiers, { skipEnvResolution: true });
       expect(result.sources["pipeline.auto_fix"]).toBe("local");
@@ -350,7 +350,7 @@ describe("configMergeEngine — 7-tier boundary scenarios", () => {
     it("runtime-sourced keys show 'runtime' in sources", () => {
       const tiers: ConfigTiers = {
         defaults: DEFAULT_CONFIG,
-        runtime: { pipeline: { default_mode: "interactive" } } as Partial<IncrediConfig>,
+        runtime: { pipeline: { default_mode: "interactive" } } as Partial<NightgaugeConfig>,
       };
       const result = mergeConfigs(tiers, { skipEnvResolution: true });
       expect(result.sources["pipeline.default_mode"]).toBe("runtime");
@@ -359,7 +359,7 @@ describe("configMergeEngine — 7-tier boundary scenarios", () => {
     it("env-sourced keys show 'env' in sources", () => {
       const tiers: ConfigTiers = {
         defaults: DEFAULT_CONFIG,
-        env: { branch: { base: "env-base" } } as Partial<IncrediConfig>,
+        env: { branch: { base: "env-base" } } as Partial<NightgaugeConfig>,
       };
       const result = mergeConfigs(tiers, { skipEnvResolution: true });
       expect(result.sources["branch.base"]).toBe("env");
@@ -368,7 +368,7 @@ describe("configMergeEngine — 7-tier boundary scenarios", () => {
     it("cli-sourced keys show 'cli' in sources", () => {
       const tiers: ConfigTiers = {
         defaults: DEFAULT_CONFIG,
-        cli: { branch: { base: "cli-base" } } as Partial<IncrediConfig>,
+        cli: { branch: { base: "cli-base" } } as Partial<NightgaugeConfig>,
       };
       const result = mergeConfigs(tiers, { skipEnvResolution: true });
       expect(result.sources["branch.base"]).toBe("cli");
@@ -378,9 +378,9 @@ describe("configMergeEngine — 7-tier boundary scenarios", () => {
       // Set merge_strategy in 4 tiers; project should be overridden by local
       const tiers: ConfigTiers = {
         defaults: DEFAULT_CONFIG,
-        global: { pull_request: { merge_strategy: "rebase" } } as Partial<IncrediConfig>,
-        project: { pull_request: { merge_strategy: "merge" } } as Partial<IncrediConfig>,
-        local: { pull_request: { merge_strategy: "squash" } } as Partial<IncrediConfig>,
+        global: { pull_request: { merge_strategy: "rebase" } } as Partial<NightgaugeConfig>,
+        project: { pull_request: { merge_strategy: "merge" } } as Partial<NightgaugeConfig>,
+        local: { pull_request: { merge_strategy: "squash" } } as Partial<NightgaugeConfig>,
       };
       const result = mergeConfigs(tiers, { skipEnvResolution: true });
       // local is tier 4, wins over global (2) and project (3)
@@ -397,7 +397,7 @@ describe("configMergeEngine — 7-tier boundary scenarios", () => {
     it("wasOverridden(default) returns true when global provides the value", () => {
       const tiers: ConfigTiers = {
         defaults: DEFAULT_CONFIG,
-        global: { pull_request: { merge_strategy: "rebase" } } as Partial<IncrediConfig>,
+        global: { pull_request: { merge_strategy: "rebase" } } as Partial<NightgaugeConfig>,
       };
       const result = mergeConfigs(tiers, { skipEnvResolution: true });
       expect(wasOverridden(result, key, "default")).toBe(true);
@@ -411,8 +411,8 @@ describe("configMergeEngine — 7-tier boundary scenarios", () => {
     it("wasOverridden(global) returns true when project provides the value", () => {
       const tiers: ConfigTiers = {
         defaults: DEFAULT_CONFIG,
-        global: { pull_request: { merge_strategy: "rebase" } } as Partial<IncrediConfig>,
-        project: { pull_request: { merge_strategy: "merge" } } as Partial<IncrediConfig>,
+        global: { pull_request: { merge_strategy: "rebase" } } as Partial<NightgaugeConfig>,
+        project: { pull_request: { merge_strategy: "merge" } } as Partial<NightgaugeConfig>,
       };
       const result = mergeConfigs(tiers, { skipEnvResolution: true });
       expect(wasOverridden(result, key, "global")).toBe(true);
@@ -421,8 +421,8 @@ describe("configMergeEngine — 7-tier boundary scenarios", () => {
     it("wasOverridden(project) returns true when local provides the value", () => {
       const tiers: ConfigTiers = {
         defaults: DEFAULT_CONFIG,
-        project: { pull_request: { merge_strategy: "merge" } } as Partial<IncrediConfig>,
-        local: { pull_request: { merge_strategy: "squash" } } as Partial<IncrediConfig>,
+        project: { pull_request: { merge_strategy: "merge" } } as Partial<NightgaugeConfig>,
+        local: { pull_request: { merge_strategy: "squash" } } as Partial<NightgaugeConfig>,
       };
       const result = mergeConfigs(tiers, { skipEnvResolution: true });
       expect(wasOverridden(result, key, "project")).toBe(true);
@@ -431,8 +431,8 @@ describe("configMergeEngine — 7-tier boundary scenarios", () => {
     it("wasOverridden(local) returns true when runtime provides the value", () => {
       const tiers: ConfigTiers = {
         defaults: DEFAULT_CONFIG,
-        local: { pull_request: { merge_strategy: "squash" } } as Partial<IncrediConfig>,
-        runtime: { pull_request: { merge_strategy: "rebase" } } as Partial<IncrediConfig>,
+        local: { pull_request: { merge_strategy: "squash" } } as Partial<NightgaugeConfig>,
+        runtime: { pull_request: { merge_strategy: "rebase" } } as Partial<NightgaugeConfig>,
       };
       const result = mergeConfigs(tiers, { skipEnvResolution: true });
       expect(wasOverridden(result, key, "local")).toBe(true);
@@ -441,8 +441,8 @@ describe("configMergeEngine — 7-tier boundary scenarios", () => {
     it("wasOverridden(runtime) returns true when env provides the value", () => {
       const tiers: ConfigTiers = {
         defaults: DEFAULT_CONFIG,
-        runtime: { pull_request: { merge_strategy: "rebase" } } as Partial<IncrediConfig>,
-        env: { pull_request: { merge_strategy: "merge" } } as Partial<IncrediConfig>,
+        runtime: { pull_request: { merge_strategy: "rebase" } } as Partial<NightgaugeConfig>,
+        env: { pull_request: { merge_strategy: "merge" } } as Partial<NightgaugeConfig>,
       };
       const result = mergeConfigs(tiers, { skipEnvResolution: true });
       expect(wasOverridden(result, key, "runtime")).toBe(true);
@@ -451,8 +451,8 @@ describe("configMergeEngine — 7-tier boundary scenarios", () => {
     it("wasOverridden(env) returns true when CLI provides the value", () => {
       const tiers: ConfigTiers = {
         defaults: DEFAULT_CONFIG,
-        env: { pull_request: { merge_strategy: "merge" } } as Partial<IncrediConfig>,
-        cli: { pull_request: { merge_strategy: "squash" } } as Partial<IncrediConfig>,
+        env: { pull_request: { merge_strategy: "merge" } } as Partial<NightgaugeConfig>,
+        cli: { pull_request: { merge_strategy: "squash" } } as Partial<NightgaugeConfig>,
       };
       const result = mergeConfigs(tiers, { skipEnvResolution: true });
       // wasOverridden only checks ConfigSource tiers (not 'cli'), so check via source map
@@ -465,7 +465,7 @@ describe("configMergeEngine — 7-tier boundary scenarios", () => {
     it("wasOverridden returns false when the lower tier itself wins (no higher tier set)", () => {
       const tiers: ConfigTiers = {
         defaults: DEFAULT_CONFIG,
-        global: { pull_request: { merge_strategy: "rebase" } } as Partial<IncrediConfig>,
+        global: { pull_request: { merge_strategy: "rebase" } } as Partial<NightgaugeConfig>,
       };
       const result = mergeConfigs(tiers, { skipEnvResolution: true });
       // global is the winning tier — nothing higher was set
@@ -490,7 +490,7 @@ describe("configMergeEngine — 7-tier boundary scenarios", () => {
         defaults: DEFAULT_CONFIG,
         global: {
           pull_request: { merge_strategy: "rebase", delete_branch: false },
-        } as Partial<IncrediConfig>,
+        } as Partial<NightgaugeConfig>,
       };
       const result = mergeConfigs(tiers, { skipEnvResolution: true });
       const globalPaths = getPathsFromSource(result, "global");
@@ -503,7 +503,7 @@ describe("configMergeEngine — 7-tier boundary scenarios", () => {
     it("returns project paths for keys set only at the project tier", () => {
       const tiers: ConfigTiers = {
         defaults: DEFAULT_CONFIG,
-        project: { project: { number: 42 } } as Partial<IncrediConfig>,
+        project: { project: { number: 42 } } as Partial<NightgaugeConfig>,
       };
       const result = mergeConfigs(tiers, { skipEnvResolution: true });
       const projectPaths = getPathsFromSource(result, "project");
@@ -513,7 +513,7 @@ describe("configMergeEngine — 7-tier boundary scenarios", () => {
     it("returns local paths for keys set only at the local tier", () => {
       const tiers: ConfigTiers = {
         defaults: DEFAULT_CONFIG,
-        local: { pipeline: { auto_fix: false, ci_timeout: 99 } } as Partial<IncrediConfig>,
+        local: { pipeline: { auto_fix: false, ci_timeout: 99 } } as Partial<NightgaugeConfig>,
       };
       const result = mergeConfigs(tiers, { skipEnvResolution: true });
       const localPaths = getPathsFromSource(result, "local");
@@ -527,7 +527,7 @@ describe("configMergeEngine — 7-tier boundary scenarios", () => {
         runtime: {
           pipeline: { default_mode: "interactive" },
           branch: { base: "runtime-base" },
-        } as Partial<IncrediConfig>,
+        } as Partial<NightgaugeConfig>,
       };
       const result = mergeConfigs(tiers, { skipEnvResolution: true });
       const runtimePaths = getPathsFromSource(result, "runtime");
@@ -538,7 +538,7 @@ describe("configMergeEngine — 7-tier boundary scenarios", () => {
     it("returns env paths for keys set only at the env tier", () => {
       const tiers: ConfigTiers = {
         defaults: DEFAULT_CONFIG,
-        env: { issue: { auto_assign: false } } as Partial<IncrediConfig>,
+        env: { issue: { auto_assign: false } } as Partial<NightgaugeConfig>,
       };
       const result = mergeConfigs(tiers, { skipEnvResolution: true });
       const envPaths = getPathsFromSource(result, "env");
@@ -551,7 +551,7 @@ describe("configMergeEngine — 7-tier boundary scenarios", () => {
         cli: {
           branch: { base: "cli-base" },
           pipeline: { ci_timeout: 5 },
-        } as Partial<IncrediConfig>,
+        } as Partial<NightgaugeConfig>,
       };
       const result = mergeConfigs(tiers, { skipEnvResolution: true });
       const cliPaths = getPathsFromSource(result, "cli");
@@ -562,8 +562,8 @@ describe("configMergeEngine — 7-tier boundary scenarios", () => {
     it("a key overridden by a higher tier does not appear in the lower tier's path list", () => {
       const tiers: ConfigTiers = {
         defaults: DEFAULT_CONFIG,
-        global: { branch: { base: "trunk" } } as Partial<IncrediConfig>,
-        local: { branch: { base: "dev" } } as Partial<IncrediConfig>,
+        global: { branch: { base: "trunk" } } as Partial<NightgaugeConfig>,
+        local: { branch: { base: "dev" } } as Partial<NightgaugeConfig>,
       };
       const result = mergeConfigs(tiers, { skipEnvResolution: true });
       const globalPaths = getPathsFromSource(result, "global");

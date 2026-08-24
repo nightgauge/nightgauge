@@ -17,7 +17,7 @@
  *
  * Every repo therefore has a defined cap — there is no "unlimited per repo"
  * state; the most a single repo can run is `workspace_max`. Writes route
- * through `IncrediYamlService.writeGlobal()` (machine tier — the only tier
+ * through `NightgaugeYamlService.writeGlobal()` (machine tier — the only tier
  * the Go binary reads from inside a worktree) and best-effort clear any
  * stale legacy runtime-memento entries.
  *
@@ -32,8 +32,8 @@
 
 import type { ConfigBridge } from "../services/ConfigBridge";
 import type { RuntimeStateStore } from "../config/RuntimeStateStore";
-import type { IncrediYamlService } from "../views/settings/IncrediYamlService";
-import type { IncrediConfig } from "../config/schema";
+import type { NightgaugeYamlService } from "../views/settings/NightgaugeYamlService";
+import type { NightgaugeConfig } from "../config/schema";
 
 /** Fallback when `concurrency.per_repo_max` is unset. Mirrors Go `DefaultPerRepoMax`. */
 export const DEFAULT_PER_REPO_MAX = 1;
@@ -66,10 +66,10 @@ export interface ConfigBridgeLike {
 }
 
 /**
- * Subset of `IncrediYamlService` this module writes through.
+ * Subset of `NightgaugeYamlService` this module writes through.
  */
 export interface MachineYamlWriterLike {
-  writeGlobal(partial: Partial<IncrediConfig>): Promise<{ success: boolean; error?: string }>;
+  writeGlobal(partial: Partial<NightgaugeConfig>): Promise<{ success: boolean; error?: string }>;
 }
 
 /**
@@ -90,13 +90,13 @@ export interface SequentialRepoConfigService {
 
 /**
  * Factory: capture a `RuntimeStateStore` for legacy-memento cleanup, a
- * `ConfigBridge` for merged reads, and an `IncrediYamlService` (or stub)
+ * `ConfigBridge` for merged reads, and an `NightgaugeYamlService` (or stub)
  * for machine-tier writes.
  */
 export function createSequentialRepoConfigService(
   runtimeStore: RuntimeStateStoreLike | RuntimeStateStore,
   configBridge: ConfigBridgeLike | ConfigBridge,
-  machineYamlWriter: MachineYamlWriterLike | IncrediYamlService
+  machineYamlWriter: MachineYamlWriterLike | NightgaugeYamlService
 ): SequentialRepoConfigService {
   const store = runtimeStore as RuntimeStateStoreLike;
   const bridge = configBridge as ConfigBridgeLike;
@@ -167,7 +167,7 @@ export function createSequentialRepoConfigService(
             [repoName]: value,
           },
         },
-      } as Partial<IncrediConfig>);
+      } as Partial<NightgaugeConfig>);
       // Drop any stale pre-#3781 runtime mementos for this repo.
       await clearLegacyMemento("sequential", repoName);
       await clearLegacyMemento("max_concurrent", repoName);

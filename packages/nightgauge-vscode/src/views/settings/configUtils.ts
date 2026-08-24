@@ -11,7 +11,7 @@
  * @see Issue #432 - Comprehensive Zod Schema for Config Fields
  */
 
-import type { IncrediConfig, ValidationResult } from "./types";
+import type { NightgaugeConfig, ValidationResult } from "./types";
 import {
   validateConfig as zodValidateConfig,
   mergeWithDefaults as zodMergeWithDefaults,
@@ -19,12 +19,12 @@ import {
 } from "../../config/schema";
 
 /**
- * Validate a IncrediConfig object using Zod schema
+ * Validate a NightgaugeConfig object using Zod schema
  *
  * @param config - Configuration to validate
  * @returns Validation result with any errors (legacy format for backward compatibility)
  */
-export function validateConfig(config: IncrediConfig): ValidationResult {
+export function validateConfig(config: NightgaugeConfig): ValidationResult {
   const result: ConfigValidationResult = zodValidateConfig(config);
 
   return {
@@ -42,7 +42,7 @@ export function validateConfig(config: IncrediConfig): ValidationResult {
  * @param config - User configuration (partial)
  * @returns Complete configuration with defaults applied
  */
-export function mergeWithDefaults(config: IncrediConfig): IncrediConfig {
+export function mergeWithDefaults(config: NightgaugeConfig): NightgaugeConfig {
   return zodMergeWithDefaults(config);
 }
 
@@ -113,7 +113,7 @@ export function removeUndefined<T extends object>(obj: T): T {
  * @param path - Dot-notation path (e.g., 'project.number')
  * @returns The value at the path, or undefined
  */
-export function getConfigValue(config: IncrediConfig, path: string): unknown {
+export function getConfigValue(config: NightgaugeConfig, path: string): unknown {
   const parts = path.split(".");
   if (parts.some((part) => ["__proto__", "prototype", "constructor"].includes(part))) {
     throw new Error("Unsafe configuration path");
@@ -137,7 +137,7 @@ export function getConfigValue(config: IncrediConfig, path: string): unknown {
  * @param path - Dot-notation path (e.g., 'project.number')
  * @param value - Value to set
  */
-export function setConfigValue(config: IncrediConfig, path: string, value: unknown): void {
+export function setConfigValue(config: NightgaugeConfig, path: string, value: unknown): void {
   const parts = path.split(".");
   for (const part of parts) {
     if (part === "__proto__" || part === "prototype" || part === "constructor") {

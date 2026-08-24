@@ -1,10 +1,10 @@
 /**
- * Monitoring and observability configuration resolvers extracted from incrediConfig.ts.
+ * Monitoring and observability configuration resolvers extracted from nightgaugeConfig.ts.
  *
  * Covers stall detection, alerting, experiments, MCP tools, audit, supercharge
  * mode, large diff threshold, and context file size alerting.
  *
- * @see Issue #2742 - Refactor VSCode incrediConfig.ts into focused domain modules
+ * @see Issue #2742 - Refactor VSCode nightgaugeConfig.ts into focused domain modules
  */
 
 import * as fs from "node:fs";

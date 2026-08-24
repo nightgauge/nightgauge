@@ -490,35 +490,54 @@ git rm --cached -q "$PLANTED" 2>/dev/null
 rm -f "$PLANTED"
 
 # ── forbidden_content file_baseline ratchet (ADR-005 0.4) ───────────────────
-# The former-brand rule matches 248 files, so it ships ratcheted rather than
-# absolute. A rule WITHOUT file_baseline keeps its original all-or-nothing
-# semantics -- proven by the COGS and pricing cases above, which have none.
-cp "$BACKUP" "$MANIFEST"
-python3 - "$MANIFEST" <<'PYBRAND'
+# The ratchet is a general mechanism any forbidden_content rule may opt into: it
+# turns the rule MONOTONIC over the number of matching files instead of
+# absolute, so a rule can land while the tree still violates it.
+#
+# These cases INJECT the key rather than borrowing it from whatever rule happens
+# to carry one in the shipped manifest. They used to rewrite `former-brand`'s
+# own `file_baseline: 248` in place, which silently became a no-op the moment
+# R.1 (#836) cleaned the tree and the key was removed -- a substitution that
+# matches nothing leaves the manifest untouched, the check passes, and the
+# assertion fails for a reason that has nothing to do with the ratchet. A test
+# that depends on a DEBT still existing expires when the debt is paid.
+inject_file_baseline() {
+  python3 - "$MANIFEST" "$1" <<'PYINJECT'
 import re, sys
-p = sys.argv[1]
-s = open(p).read()
-s = re.sub(r"^    file_baseline: \d+$", "    file_baseline: 0", s, count=1, flags=re.M)
-open(p, "w").write(s)
-PYBRAND
+path, value = sys.argv[1], sys.argv[2]
+s = open(path).read()
+# Insert directly beneath the former-brand rule's `pattern:` line.
+s, n = re.subn(r'^(  - id: former-brand\n    pattern: .*\n)',
+               r'\g<1>    file_baseline: ' + value + '\n', s, count=1, flags=re.M)
+if n != 1:
+    sys.exit("could not inject file_baseline into the former-brand rule")
+open(path, "w").write(s)
+PYINJECT
+}
+
+# The tree is clean of the stem since #836, so the ratchet needs something to
+# count. Plant one file and set the baseline below it.
+PLANTED="docs/_brand_stem_probe.md"
+printf 'const IncrediConfig = loadIncrediYaml();\n' > "$PLANTED"
+git add -f "$PLANTED" 2>/dev/null
+
+cp "$BACKUP" "$MANIFEST"
+inject_file_baseline 0
 expect_exit 1 "forbidden_content count above file_baseline fails the build (ratchet)"
 cp "$BACKUP" "$MANIFEST"
 
-python3 - "$MANIFEST" <<'PYBRANDBAD'
-import re, sys
-p = sys.argv[1]
-s = open(p).read()
-s = re.sub(r"^    file_baseline: \d+$", '    file_baseline: "many"', s, count=1, flags=re.M)
-open(p, "w").write(s)
-PYBRANDBAD
+inject_file_baseline 1
+expect_exit 0 "forbidden_content count AT file_baseline passes (the ratchet is not absolute)"
+cp "$BACKUP" "$MANIFEST"
+
+inject_file_baseline '"many"'
 expect_exit 2 "a non-integer file_baseline fails CLOSED, not open"
 cp "$BACKUP" "$MANIFEST"
 
 # The stem must match the derived forms, not just the brand name. This is the
 # gap that kept the guard green while 248 files violated the rule's intent.
-PLANTED="docs/_brand_stem_probe.md"
-printf 'const IncrediConfig = loadIncrediYaml();\n' > "$PLANTED"
-git add -f "$PLANTED" 2>/dev/null
+# With `file_baseline` gone from the shipped rule this also pins the ABSOLUTE
+# path: one matching file is one violation, no counting involved.
 expect_exit 1 "an abbreviated brand form (IncrediConfig) is rejected, not just the full name"
 git rm --cached -q "$PLANTED" 2>/dev/null
 rm -f "$PLANTED"

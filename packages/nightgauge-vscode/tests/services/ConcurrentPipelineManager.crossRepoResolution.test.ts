@@ -16,7 +16,7 @@
  * branch was previously untested).
  *
  * @see Issue #2245 - Cross-repo pipeline worktree creation (resolveWorktreeManager)
- * @see Issue #4117 - Agent runner gated on a single incrediRoot
+ * @see Issue #4117 - Agent runner gated on a single nightgaugeRoot
  */
 
 import { describe, it, expect, vi, beforeEach, type Mock } from "vitest";
@@ -74,7 +74,7 @@ vi.mock("../../src/utils/WorktreeManager", () => ({
   }),
 }));
 
-vi.mock("../../src/utils/incrediConfig", () => ({
+vi.mock("../../src/utils/nightgaugeConfig", () => ({
   getConcurrentPipelineConfig: vi.fn().mockReturnValue({
     maxConcurrent: 3,
     worktreeBase: ".worktrees",

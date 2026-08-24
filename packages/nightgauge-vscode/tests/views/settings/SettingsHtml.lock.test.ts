@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { getSettingsHtml } from "../../../src/views/settings/SettingsHtml";
 import { getDefaultConfig } from "../../../src/config/schema";
 import { PIPELINE_LOCKED_SECTIONS, SETTINGS_SECTIONS } from "../../../src/views/settings/types";
-import type { IncrediConfig } from "../../../src/views/settings/types";
+import type { NightgaugeConfig } from "../../../src/views/settings/types";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
@@ -43,7 +43,7 @@ describe("SettingsHtml per-section lock", () => {
     }
   });
   it("renders locked sections with disabled inputs when pipeline is running", () => {
-    const config = getDefaultConfig() as IncrediConfig;
+    const config = getDefaultConfig() as NightgaugeConfig;
     const lockedSections = new Set(PIPELINE_LOCKED_SECTIONS);
     const html = getSettingsHtml(mockWebview, config, lockedSections, {}, editableTierState);
 
@@ -55,7 +55,7 @@ describe("SettingsHtml per-section lock", () => {
   });
 
   it("renders unlocked sections with enabled inputs during pipeline", () => {
-    const config = getDefaultConfig() as IncrediConfig;
+    const config = getDefaultConfig() as NightgaugeConfig;
     const lockedSections = new Set(PIPELINE_LOCKED_SECTIONS);
     const html = getSettingsHtml(mockWebview, config, lockedSections, {}, editableTierState);
 
@@ -80,7 +80,7 @@ describe("SettingsHtml per-section lock", () => {
   });
 
   it("shows locked notice when sections are locked", () => {
-    const config = getDefaultConfig() as IncrediConfig;
+    const config = getDefaultConfig() as NightgaugeConfig;
     const lockedSections = new Set(PIPELINE_LOCKED_SECTIONS);
     const html = getSettingsHtml(mockWebview, config, lockedSections);
 
@@ -89,14 +89,14 @@ describe("SettingsHtml per-section lock", () => {
   });
 
   it("hides locked notice when no sections are locked", () => {
-    const config = getDefaultConfig() as IncrediConfig;
+    const config = getDefaultConfig() as NightgaugeConfig;
     const html = getSettingsHtml(mockWebview, config);
 
     expect(html).toContain('class="locked-notice hidden"');
   });
 
   it("shows lock indicator on section headers for locked sections", () => {
-    const config = getDefaultConfig() as IncrediConfig;
+    const config = getDefaultConfig() as NightgaugeConfig;
     const lockedSections = new Set(PIPELINE_LOCKED_SECTIONS);
     const html = getSettingsHtml(mockWebview, config, lockedSections);
 
@@ -112,7 +112,7 @@ describe("SettingsHtml per-section lock", () => {
   });
 
   it("does not show lock indicator on unlocked section headers", () => {
-    const config = getDefaultConfig() as IncrediConfig;
+    const config = getDefaultConfig() as NightgaugeConfig;
     const lockedSections = new Set(PIPELINE_LOCKED_SECTIONS);
     const html = getSettingsHtml(mockWebview, config, lockedSections);
 
@@ -123,7 +123,7 @@ describe("SettingsHtml per-section lock", () => {
   });
 
   it("keeps search input enabled during lock", () => {
-    const config = getDefaultConfig() as IncrediConfig;
+    const config = getDefaultConfig() as NightgaugeConfig;
     const lockedSections = new Set(PIPELINE_LOCKED_SECTIONS);
     const html = getSettingsHtml(mockWebview, config, lockedSections);
 
@@ -133,7 +133,7 @@ describe("SettingsHtml per-section lock", () => {
   });
 
   it("renders all sections without lock styling when no lock is active", () => {
-    const config = getDefaultConfig() as IncrediConfig;
+    const config = getDefaultConfig() as NightgaugeConfig;
     const html = getSettingsHtml(mockWebview, config);
 
     // No section div should have section-locked class (check section elements, not CSS)
@@ -152,7 +152,7 @@ describe("SettingsHtml per-section lock", () => {
   });
 
   it("disables inputs in locked pipeline section", () => {
-    const config = getDefaultConfig() as IncrediConfig;
+    const config = getDefaultConfig() as NightgaugeConfig;
     const lockedSections = new Set(PIPELINE_LOCKED_SECTIONS);
     const html = getSettingsHtml(mockWebview, config, lockedSections, {}, editableTierState);
 

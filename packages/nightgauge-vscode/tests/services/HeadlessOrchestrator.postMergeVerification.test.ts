@@ -22,8 +22,8 @@ import { runStageSkillHeadless } from "../../src/utils/skillRunner";
 // tests run with no CLI auth in the env; skip the gate (the
 // pipeline.skip_auth_preflight escape hatch) so they exercise the merge behavior
 // they target rather than failing fast at pipeline-start.
-vi.mock("../../src/utils/incrediConfig", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../src/utils/incrediConfig")>()),
+vi.mock("../../src/utils/nightgaugeConfig", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../src/utils/nightgaugeConfig")>()),
   getSkipAuthPreflight: () => true,
 }));
 

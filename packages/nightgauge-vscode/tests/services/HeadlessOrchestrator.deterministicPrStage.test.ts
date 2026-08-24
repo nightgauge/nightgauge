@@ -24,8 +24,8 @@ import type { SkillRunResult } from "../../src/utils/skillRunner";
 import { runStageSkillHeadless } from "../../src/utils/skillRunner";
 
 // Skip the live-adapter auth preflight (no CLI auth in the test env).
-vi.mock("../../src/utils/incrediConfig", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../src/utils/incrediConfig")>()),
+vi.mock("../../src/utils/nightgaugeConfig", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../src/utils/nightgaugeConfig")>()),
   getSkipAuthPreflight: () => true,
 }));
 

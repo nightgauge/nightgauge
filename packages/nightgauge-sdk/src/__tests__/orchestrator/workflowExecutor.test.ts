@@ -50,7 +50,7 @@ import {
   type ResolvedOrchestrationConfig,
   type OrchestrationStage,
 } from "../../cli/workflow/index.js";
-import type { ICliAdapter, IncrediAdapter } from "../../cli/adapters/ICliAdapter.js";
+import type { ICliAdapter, NightgaugeAdapter } from "../../cli/adapters/ICliAdapter.js";
 import { TokenTracker } from "../../tracking/TokenTracker.js";
 
 // ---------------------------------------------------------------------------
@@ -114,7 +114,7 @@ function fakeAdapter(opts: {
   onRunWorkflow?: ICliAdapter["runWorkflow"];
 }): ICliAdapter {
   const adapter: ICliAdapter = {
-    name: "claude-sdk" as IncrediAdapter,
+    name: "claude-sdk" as NightgaugeAdapter,
     displayName: "Fake",
     cliCommand: "fake",
     agentic: true,

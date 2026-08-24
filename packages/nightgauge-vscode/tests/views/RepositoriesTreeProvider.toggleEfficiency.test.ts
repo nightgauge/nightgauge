@@ -48,7 +48,7 @@ function fireConfigChanged(result: unknown = {}): void {
 
 // Tracks the debounced echoes that production fires ~100ms after every
 // runtime-store write (chain: runtimeStore.onDidChange →
-// IncrediYamlService.handleFileChange → 100ms debounced ConfigBridge
+// NightgaugeYamlService.handleFileChange → 100ms debounced ConfigBridge
 // .reload() → _onConfigChanged.fire). Each `reload()` schedules a second
 // echo so the test simulates the real two-event-per-write pattern. Pre-
 // #3435 the test only fired ONE echo, the counter absorbed it, and the
@@ -80,7 +80,7 @@ vi.mock("../../src/services/ConfigBridge", () => ({
       // Fire `onConfigChanged` from inside `reload()` to match the real
       // implementation's synchronous echo. Then schedule a debounced echo
       // matching production's `runtimeStore.onDidChange` →
-      // `IncrediYamlService.handleFileChange` → 100ms timer chain. Tests
+      // `NightgaugeYamlService.handleFileChange` → 100ms timer chain. Tests
       // call `flushDebouncedEchoes()` to fast-forward past the debounce.
       reload: vi.fn(async () => {
         fireConfigChanged({});

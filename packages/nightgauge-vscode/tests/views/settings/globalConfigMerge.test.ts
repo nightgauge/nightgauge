@@ -17,7 +17,7 @@ import {
   mergeWithDefaults,
   DEFAULT_CONFIG,
 } from "../../../src/config/schema";
-import type { IncrediConfig } from "../../../src/views/settings/types";
+import type { NightgaugeConfig } from "../../../src/views/settings/types";
 
 describe("Global Config Merge", () => {
   describe("Source Tracking", () => {
@@ -156,7 +156,7 @@ describe("Global Config Merge", () => {
       });
 
       it("should preserve user values over defaults", () => {
-        const config: IncrediConfig = {
+        const config: NightgaugeConfig = {
           project: { number: 42 },
         };
 
@@ -167,7 +167,7 @@ describe("Global Config Merge", () => {
       });
 
       it("should deep merge nested objects", () => {
-        const config: IncrediConfig = {
+        const config: NightgaugeConfig = {
           branch: {
             base: "develop",
             // Other values should come from defaults
@@ -182,13 +182,13 @@ describe("Global Config Merge", () => {
       });
 
       it("should handle null input", () => {
-        const result = mergeWithDefaults(null as unknown as IncrediConfig);
+        const result = mergeWithDefaults(null as unknown as NightgaugeConfig);
 
         expect(result).toEqual(DEFAULT_CONFIG);
       });
 
       it("should handle undefined input", () => {
-        const result = mergeWithDefaults(undefined as unknown as IncrediConfig);
+        const result = mergeWithDefaults(undefined as unknown as NightgaugeConfig);
 
         expect(result).toEqual(DEFAULT_CONFIG);
       });
@@ -229,11 +229,11 @@ describe("Global Config Merge", () => {
       }
 
       it("should apply global config over defaults", () => {
-        const defaultConfig: IncrediConfig = {
+        const defaultConfig: NightgaugeConfig = {
           pr: { merge_strategy: "squash", delete_branch: true },
         };
 
-        const globalConfig: IncrediConfig = {
+        const globalConfig: NightgaugeConfig = {
           pr: { merge_strategy: "rebase" },
         };
 
@@ -244,11 +244,11 @@ describe("Global Config Merge", () => {
       });
 
       it("should apply project config over global config", () => {
-        const globalConfig: IncrediConfig = {
+        const globalConfig: NightgaugeConfig = {
           pr: { merge_strategy: "rebase", delete_branch: false },
         };
 
-        const projectConfig: IncrediConfig = {
+        const projectConfig: NightgaugeConfig = {
           pr: { merge_strategy: "squash" },
         };
 
@@ -259,17 +259,17 @@ describe("Global Config Merge", () => {
       });
 
       it("should handle three-way merge correctly", () => {
-        const defaultConfig: IncrediConfig = {
+        const defaultConfig: NightgaugeConfig = {
           pr: { merge_strategy: "squash", delete_branch: true, reviewers: [] },
           branch: { base: "main" },
         };
 
-        const globalConfig: IncrediConfig = {
+        const globalConfig: NightgaugeConfig = {
           pr: { merge_strategy: "rebase" },
           project: { number: 10 },
         };
 
-        const projectConfig: IncrediConfig = {
+        const projectConfig: NightgaugeConfig = {
           pr: { delete_branch: false },
           project: { number: 20 },
         };
@@ -286,11 +286,11 @@ describe("Global Config Merge", () => {
       });
 
       it("should replace arrays (not merge them)", () => {
-        const globalConfig: IncrediConfig = {
+        const globalConfig: NightgaugeConfig = {
           pr: { reviewers: ["alice", "bob"] },
         };
 
-        const projectConfig: IncrediConfig = {
+        const projectConfig: NightgaugeConfig = {
           pr: { reviewers: ["charlie"] },
         };
 
@@ -301,11 +301,11 @@ describe("Global Config Merge", () => {
       });
 
       it("should not merge undefined values", () => {
-        const globalConfig: IncrediConfig = {
+        const globalConfig: NightgaugeConfig = {
           pr: { merge_strategy: "rebase" },
         };
 
-        const projectConfig: IncrediConfig = {
+        const projectConfig: NightgaugeConfig = {
           pr: { merge_strategy: undefined },
         };
 
@@ -322,20 +322,20 @@ describe("Global Config Merge", () => {
       const sources: ConfigSourceMap = {};
 
       // 1. Track defaults
-      const defaultConfig: IncrediConfig = {
+      const defaultConfig: NightgaugeConfig = {
         pr: { merge_strategy: "squash", delete_branch: true },
         branch: { base: "main" },
       };
       trackObjectSources(sources, defaultConfig as Record<string, unknown>, "", "default");
 
       // 2. Track global config (overwrites some defaults)
-      const globalConfig: IncrediConfig = {
+      const globalConfig: NightgaugeConfig = {
         pr: { merge_strategy: "rebase" },
       };
       trackObjectSources(sources, globalConfig as Record<string, unknown>, "", "global");
 
       // 3. Track project config (overwrites some global)
-      const projectConfig: IncrediConfig = {
+      const projectConfig: NightgaugeConfig = {
         pr: { delete_branch: false },
       };
       trackObjectSources(sources, projectConfig as Record<string, unknown>, "", "project");

@@ -3,7 +3,7 @@
  *
  * Verifies the orchestration config schema accepts the documented shape, ships
  * the off-by-default baseline in DEFAULT_CONFIG, parses cleanly under the full
- * IncrediConfigSchema, and rejects invalid caps / single-agent offload stages.
+ * NightgaugeConfigSchema, and rejects invalid caps / single-agent offload stages.
  * Mirrors the SDK OrchestrationConfig contract.
  *
  * @see Issue #3901 - Orchestration config knobs
@@ -14,7 +14,7 @@
 import { describe, it, expect } from "vitest";
 import {
   OrchestrationConfigSchema,
-  IncrediConfigSchema,
+  NightgaugeConfigSchema,
   DEFAULT_CONFIG,
 } from "../../src/config/schema";
 
@@ -76,7 +76,7 @@ describe("DEFAULT_CONFIG.orchestration", () => {
 
   it("is a valid orchestration block under the full config schema", () => {
     expect(() =>
-      IncrediConfigSchema.parse({ orchestration: DEFAULT_CONFIG.orchestration })
+      NightgaugeConfigSchema.parse({ orchestration: DEFAULT_CONFIG.orchestration })
     ).not.toThrow();
   });
 });

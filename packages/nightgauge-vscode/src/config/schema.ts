@@ -1742,11 +1742,11 @@ export type AuthProvider = z.infer<typeof AuthProviderSchema>;
 /**
  * Execution adapter for pipeline stage orchestration (UI-facing).
  *
- * Maps to SDK's IncrediAdapter type:
+ * Maps to SDK's NightgaugeAdapter type:
  * - 'claude' → 'claude-sdk' (with API key) or 'claude-headless' (CLI auth)
  * - 'codex'  → 'codex'
  *
- * @see packages/nightgauge-sdk/src/cli/adapters/ICliAdapter.ts - Canonical IncrediAdapter type
+ * @see packages/nightgauge-sdk/src/cli/adapters/ICliAdapter.ts - Canonical NightgaugeAdapter type
  * @see Issue #627 - Unify adapter type systems
  */
 export const ExecutionAdapterSchema = z.enum([
@@ -3531,7 +3531,7 @@ export const ForgeConfigSchema = z.object({
 });
 export type ForgeConfig = z.infer<typeof ForgeConfigSchema>;
 
-export const IncrediConfigSchema = z.object({
+export const NightgaugeConfigSchema = z.object({
   // Config file format version ("1" or "2"). Missing version implies v1.
   schema_version: z.string().optional(),
 
@@ -3644,7 +3644,7 @@ export const IncrediConfigSchema = z.object({
     .optional(),
 });
 
-export type IncrediConfig = z.infer<typeof IncrediConfigSchema>;
+export type NightgaugeConfig = z.infer<typeof NightgaugeConfigSchema>;
 
 // ============================================================================
 // Default Values (applied separately from validation)
@@ -3656,7 +3656,7 @@ export type IncrediConfig = z.infer<typeof IncrediConfigSchema>;
  * These are applied via mergeWithDefaults(), not during Zod parsing.
  * This maintains backward compatibility with code expecting undefined.
  */
-export const DEFAULT_CONFIG: IncrediConfig = {
+export const DEFAULT_CONFIG: NightgaugeConfig = {
   project: {
     number: undefined,
     auto_dates: true,
@@ -4029,11 +4029,11 @@ function warnIfPresent(
 }
 
 /**
- * Wraps `IncrediConfigSchema` with `superRefine` deprecation checks.
+ * Wraps `NightgaugeConfigSchema` with `superRefine` deprecation checks.
  * Used internally by `validateConfig()` so the exported ZodObject schema
  * type is unchanged for callers that rely on `.shape`, `.partial()`, etc.
  */
-const IncrediConfigWithDeprecationsSchema = IncrediConfigSchema.superRefine(
+const NightgaugeConfigWithDeprecationsSchema = NightgaugeConfigSchema.superRefine(
   warnIfPresent(
     "github_user",
     "github_user is deprecated (Phase 5 / #3338). Migrate to the machine tier: ~/.nightgauge/config.yaml"
@@ -4130,7 +4130,7 @@ export interface ConfigValidationResult {
   /** Deprecation warnings — present even when valid is true */
   warnings: ConfigValidationWarning[];
   /** Validated config (only if valid) */
-  config?: IncrediConfig;
+  config?: NightgaugeConfig;
 }
 
 /**
@@ -4175,7 +4175,7 @@ function formatZodWarnings(error: z.ZodError): ConfigValidationWarning[] {
  * @returns Validation result with errors and deprecation warnings
  */
 export function validateConfig(config: unknown): ConfigValidationResult {
-  const result = IncrediConfigWithDeprecationsSchema.safeParse(config);
+  const result = NightgaugeConfigWithDeprecationsSchema.safeParse(config);
 
   if (result.success) {
     return {
@@ -4192,12 +4192,12 @@ export function validateConfig(config: unknown): ConfigValidationResult {
   // When all issues are warnings (no real errors), config is still valid.
   // Re-parse with the base schema (no deprecation effects) to get typed data.
   if (errors.length === 0) {
-    const baseResult = IncrediConfigSchema.safeParse(config);
+    const baseResult = NightgaugeConfigSchema.safeParse(config);
     return {
       valid: true,
       errors: [],
       warnings,
-      config: baseResult.success ? baseResult.data : (config as IncrediConfig),
+      config: baseResult.success ? baseResult.data : (config as NightgaugeConfig),
     };
   }
 
@@ -4218,8 +4218,8 @@ export function validateConfig(config: unknown): ConfigValidationResult {
  * @returns Validated config
  * @throws ZodError if validation fails
  */
-export function parseConfig(config: unknown): IncrediConfig {
-  return IncrediConfigSchema.parse(config);
+export function parseConfig(config: unknown): NightgaugeConfig {
+  return NightgaugeConfigSchema.parse(config);
 }
 
 /**
@@ -4278,8 +4278,8 @@ export function deepMerge<T extends Record<string, unknown>>(target: T, source: 
  * @returns Complete configuration with defaults
  */
 export function mergeWithDefaults(
-  config: Partial<IncrediConfig> | null | undefined
-): IncrediConfig {
+  config: Partial<NightgaugeConfig> | null | undefined
+): NightgaugeConfig {
   return deepMerge(DEFAULT_CONFIG, config ?? {});
 }
 
@@ -4288,7 +4288,7 @@ export function mergeWithDefaults(
  *
  * Returns a copy of DEFAULT_CONFIG.
  */
-export function getDefaultConfig(): IncrediConfig {
+export function getDefaultConfig(): NightgaugeConfig {
   return { ...DEFAULT_CONFIG };
 }
 
@@ -4341,7 +4341,7 @@ export type ConfigSourceMap = Record<string, ConfigSource>;
  */
 export interface MergedConfigResult {
   /** The merged configuration */
-  config: IncrediConfig;
+  config: NightgaugeConfig;
   /** Source annotations for each value */
   sources: ConfigSourceMap;
   /** Whether global config was loaded */

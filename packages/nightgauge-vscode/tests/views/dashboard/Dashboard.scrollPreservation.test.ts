@@ -148,9 +148,9 @@ vi.mock("../../../src/services/SanitizationLogService", () => ({
   }),
 }));
 
-// Mock IncrediYamlService (Issue #786)
-vi.mock("../../../src/views/settings/IncrediYamlService", () => ({
-  IncrediYamlService: vi.fn(function () {
+// Mock NightgaugeYamlService (Issue #786)
+vi.mock("../../../src/views/settings/NightgaugeYamlService", () => ({
+  NightgaugeYamlService: vi.fn(function () {
     return {
       read: vi.fn().mockResolvedValue({
         success: true,

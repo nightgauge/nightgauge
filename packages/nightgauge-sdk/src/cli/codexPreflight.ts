@@ -10,7 +10,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { spawn } from "node:child_process";
-import { resolveAdapter, type IncrediAdapter } from "./adapter.js";
+import { resolveAdapter, type NightgaugeAdapter } from "./adapter.js";
 import { defaultRegistry, isAgenticAdapter } from "./adapters/AdapterRegistry.js";
 import { validateModelForAdapter } from "./adapters/modelPreflight.js";
 import { AdapterError } from "./adapters/errors.js";
@@ -58,7 +58,7 @@ const DEFAULT_REQUIRED_DOCS: string[] = [];
  * model for the active adapter. Adapters with no model env (claude-*) fall back
  * to the generic NIGHTGAUGE_MODEL.
  */
-const MODEL_ENV_BY_ADAPTER: Partial<Record<IncrediAdapter, string>> = {
+const MODEL_ENV_BY_ADAPTER: Partial<Record<NightgaugeAdapter, string>> = {
   codex: "NIGHTGAUGE_CODEX_MODEL",
   gemini: "NIGHTGAUGE_GEMINI_MODEL",
   "gemini-sdk": "NIGHTGAUGE_GEMINI_MODEL",
@@ -73,7 +73,7 @@ const MODEL_ENV_BY_ADAPTER: Partial<Record<IncrediAdapter, string>> = {
  * during preflight rather than as an opaque CLI error at spawn time. A no-op for
  * adapters with OPEN model sets (claude-*, ollama, lm-studio, copilot).
  */
-function validateModelEnvForAdapter(adapter: IncrediAdapter, env: NodeJS.ProcessEnv): void {
+function validateModelEnvForAdapter(adapter: NightgaugeAdapter, env: NodeJS.ProcessEnv): void {
   const modelEnvVar = MODEL_ENV_BY_ADAPTER[adapter];
   const configuredModel = modelEnvVar ? env[modelEnvVar] : env.NIGHTGAUGE_MODEL;
   try {
@@ -268,7 +268,7 @@ async function validateGithubAuthForCodex(
 }
 
 export async function runAdapterPreflightChecks(options?: {
-  adapter?: IncrediAdapter;
+  adapter?: NightgaugeAdapter;
   cwd?: string;
   runner?: PreflightCommandRunner;
   env?: NodeJS.ProcessEnv;

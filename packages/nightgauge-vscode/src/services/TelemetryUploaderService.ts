@@ -95,7 +95,7 @@ interface WatermarkStore {
 
 interface StreamConfig {
   stream: TelemetryStream;
-  /** Relative path from incrediRoot to the JSONL file. */
+  /** Relative path from nightgaugeRoot to the JSONL file. */
   filePath: string;
   /** Absolute path segment appended to platformUrl (e.g. "/v1/telemetry/health-snapshot"). */
   endpoint: string;
@@ -272,7 +272,7 @@ export class TelemetryUploaderService implements vscode.Disposable {
     private readonly getLicenseKey: () => string | null | undefined,
     private readonly consentService: TelemetryConsentService,
     private readonly getPlatformUrl: () => string,
-    private readonly incrediRoot: string,
+    private readonly nightgaugeRoot: string,
     private readonly logger: Logger | null,
     // Fallback when no license key is configured: the OAuth access token (JWT).
     // The platform's telemetry ingest accepts either credential. Without this,
@@ -286,25 +286,25 @@ export class TelemetryUploaderService implements vscode.Disposable {
      * The Go binary's interactive-run writer lands per-run history/trace
      * JSONL under the run's TARGET repo root (`repoRoot(p.Repo)`,
      * `internal/ipc/server.go`), which in a multi-repo workspace is not
-     * always `incrediRoot` (the primary workspace root) — so the
+     * always `nightgaugeRoot` (the primary workspace root) — so the
      * pipeline-run and trace streams scan every root this returns, not just
-     * `incrediRoot` (#247). Optional and defaults to `[incrediRoot]` alone
+     * `nightgaugeRoot` (#247). Optional and defaults to `[nightgaugeRoot]` alone
      * for single-repo workspaces or callers that predate #247. The
      * consolidated health/recommendation streams are whole-workspace
-     * concepts written only under `incrediRoot` and are unaffected.
+     * concepts written only under `nightgaugeRoot` and are unaffected.
      */
     private readonly getWorkspaceRoots?: () => string[]
   ) {}
 
   /**
    * Resolve every repo root to scan for the pipeline-run and trace streams.
-   * `incrediRoot` is always included (defensive — some workspace-root
+   * `nightgaugeRoot` is always included (defensive — some workspace-root
    * resolutions may not enumerate the primary root explicitly); duplicates
    * are deduped via `Set`.
    */
   private resolveHistoryScanRoots(): string[] {
     const extraRoots = this.getWorkspaceRoots?.() ?? [];
-    return Array.from(new Set([this.incrediRoot, ...extraRoots]));
+    return Array.from(new Set([this.nightgaugeRoot, ...extraRoots]));
   }
 
   /** Start the 15-minute periodic timer and run an immediate upload cycle. */
@@ -492,7 +492,7 @@ export class TelemetryUploaderService implements vscode.Disposable {
   /**
    * Upload the pipeline-run stream across every workspace repo root
    * (#247) — the Go binary's history writer lands interactive-run records
-   * under the run's TARGET repo root, not necessarily `incrediRoot`, so
+   * under the run's TARGET repo root, not necessarily `nightgaugeRoot`, so
    * scanning only the primary root silently missed target-repo runs in a
    * multi-repo workspace. Stops scanning further roots once a root reports
    * an aborted upload (endpoint down/unreachable) — every other root would
@@ -787,7 +787,7 @@ export class TelemetryUploaderService implements vscode.Disposable {
    * filename; server-side (run_id, producer, seq) idempotency makes any
    * re-send harmless). Scans every workspace repo root (#247) — trace files
    * land under the run's target repo root just like pipeline-run history, so
-   * a multi-repo workspace can have trace files outside `incrediRoot`. Bails
+   * a multi-repo workspace can have trace files outside `nightgaugeRoot`. Bails
    * on the first failed file — an unreachable endpoint should cost one retry
    * cycle, not one per trace file (and not one per root).
    */
@@ -839,13 +839,13 @@ export class TelemetryUploaderService implements vscode.Disposable {
     token: string,
     cfg: StreamConfig,
     /**
-     * Repo root the stream's file lives under. Defaults to `incrediRoot` —
+     * Repo root the stream's file lives under. Defaults to `nightgaugeRoot` —
      * the health and recommendation streams are whole-workspace concepts
      * written only there. The trace stream (#247) passes the per-run
      * target-repo root explicitly since trace files can live in any
      * workspace repo, not just the primary one.
      */
-    root: string = this.incrediRoot
+    root: string = this.nightgaugeRoot
   ): Promise<StreamSummary> {
     const watermarkUri = vscode.Uri.file(path.join(root, WATERMARK_SUBDIR, WATERMARK_FILENAME));
     const fileUri = vscode.Uri.file(path.join(root, cfg.filePath));

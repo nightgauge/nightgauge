@@ -6,7 +6,7 @@
 
 import * as vscode from "vscode";
 import { ConfigBridge } from "../services/ConfigBridge";
-import { IncrediYamlService } from "../views/settings/IncrediYamlService";
+import { NightgaugeYamlService } from "../views/settings/NightgaugeYamlService";
 import { NotifierSettingsPanel } from "../views/notifier/NotifierSettingsPanel";
 import { getWorkspaceRoot } from "../config/settings";
 
@@ -23,7 +23,7 @@ export function registerShowNotifierSettingsCommand(
     }
 
     const configBridge = ConfigBridge.getInstance();
-    const yamlService = new IncrediYamlService(workspaceRoot);
+    const yamlService = new NightgaugeYamlService(workspaceRoot);
 
     NotifierSettingsPanel.show(context, configBridge, yamlService);
   });

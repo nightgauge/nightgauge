@@ -5,7 +5,7 @@
  * by directly calling vscode.workspace.getConfiguration('nightgauge').
  *
  * The proper pattern is to use:
- * - IncrediYamlService.readEffective() for full 6-tier merge
+ * - NightgaugeYamlService.readEffective() for full 6-tier merge
  * - getBatchConfig() for batch configuration
  * - mergeConfigs() for programmatic config access
  *
@@ -205,7 +205,7 @@ describe("Config Regression Guard (Issue #477)", () => {
         throw new Error(
           `Found ${allIssues.length} getConfiguration calls that may bypass the 6-tier config system:\n\n${issueReport}\n\n` +
             `Please use the 6-tier config system instead:\n` +
-            `  - IncrediYamlService.readEffective() for full config merge\n` +
+            `  - NightgaugeYamlService.readEffective() for full config merge\n` +
             `  - getBatchConfig(mergedConfig.batch) for batch config\n` +
             `  - mergeConfigs() for programmatic access\n\n` +
             `If this is intentionally a VSCode-only setting, add the config section to ALLOWED_CONFIG_SECTIONS.`

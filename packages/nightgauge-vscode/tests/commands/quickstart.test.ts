@@ -59,7 +59,7 @@ describe("quickstart helpers", () => {
   });
 
   describe("refreshRepoInitializedContext", () => {
-    it("sets context to false when incrediRoot is null", async () => {
+    it("sets context to false when nightgaugeRoot is null", async () => {
       const result = await refreshRepoInitializedContext(null);
       expect(result).toBe(false);
       expect(vscode.commands.executeCommand).toHaveBeenCalledWith(
