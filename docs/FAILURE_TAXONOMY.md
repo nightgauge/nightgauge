@@ -662,6 +662,81 @@ for capture provenance and the redaction rules.
 
 ---
 
+## Attribution: the first cause, not the last symptom (#875, #878)
+
+A run's `terminal_failure_kind` is not a label — it is what
+[`OUTCOME_RECORDING.md`](OUTCOME_RECORDING.md) and the retro path consume. A kind
+that names a downstream symptom is corpus poisoning, and two observed runs did
+exactly that:
+
+| What actually stopped the run      | What was recorded      | Where the symptom came from                           |
+| ---------------------------------- | ---------------------- | ----------------------------------------------------- |
+| stage SKILL.md would not render    | `worktree_uncommitted` | the pre-dispatch rescue found bookkeeping files dirty |
+| `git push` — `invalid auth method` | `premature_turn_end`   | the post-condition check found no output context      |
+
+Both symptoms are real observations. Neither is why the run could not proceed,
+and in both the FIRST cause was already in the log.
+
+**The rule: a later refusal is context, never a replacement.**
+
+- `refusePreDispatch` keeps the refusal's own kind. The #3542 uncommitted-work
+  rescue no longer renames the failure after itself; it records that the work
+  survived and leaves the diagnosis alone. The recovery marker stays in the
+  stage error prose, because that is what the autonomous path re-derives "did
+  the work survive" from — a separate question from "why did this fail", now
+  answered by a separate mechanism.
+- `skipBoardRevert` reads the run's `workRecovered` flag instead of inferring
+  recovery from the kind. Reverting the board is harmful whenever a recovery
+  commit exists — the re-dispatch regenerates the work in a fresh worktree while
+  the preserved commit sits on a branch nobody re-runs — and that is true
+  whatever name the failure ended up with.
+- The post-stage output check (#2870) composes its reason as
+  `<first cause> — then <post-condition symptom>` when the stage's captured
+  output tail names a permission-class cause. The symptom is retained: it is
+  still the fastest way to see where in the stage the run died.
+
+**Known gap.** There is no terminal kind that says "this stage's skill would not
+compose" or "the push had no credentials". A render refusal records
+`validation_error` and a credential-less push still classifies
+`premature_turn_end` from the retained symptom phrase. Adding either kind is a
+cross-surface change (`internal/terminalkind/table.json` + the generated SDK
+mirror + the corpus + this document) and is tracked separately.
+
+---
+
+## Escalation is for capability shortfalls only (#878)
+
+Model escalation answers one question: _would a stronger model have got this
+right?_ A permission failure is not a capability shortfall. The observed run
+failed on a credential-less `git push`, escalated `haiku → sonnet`, re-dispatched
+an identical 67,610-character prompt, and failed at the same line 44 seconds
+later.
+
+`orchestrator.EscalationBlockedByCategory` gates every escalation site — the
+scheduler's stage-failure and missing-output paths and `IpcStageRunner`, so the
+gate does not depend on which execution path the operator is running. It blocks
+on `failure.CatPermission` and nothing else:
+
+- **`CatInfra` is deliberately NOT blocked.** On the scheduler's paths the
+  escalation branch is also the retry branch, so blocking it there would
+  silently remove a retry from genuinely transient network failures.
+- **Matching is per line**, because the classifier ladder is first-match-wins
+  over the whole string: one line mentioning `timeout` in a 200-line tail would
+  otherwise claim the verdict and hide the auth failure underneath it.
+- **The bare HTTP codes `401`/`403` do not trigger the gate.** They are correct
+  clauses for the curated stderr `failure.Classifier` was written for, and
+  catastrophic against a raw output tail full of issue numbers and temp paths —
+  the first version of this gate refused to escalate two of three issues in a
+  wave test purely because they were numbered #401 and #403. The codes are
+  honored in their written forms (`http 403`, `403 forbidden`) instead.
+
+The git-transport spellings (`invalid auth method`, `authentication required`,
+`could not read Username`, `Bad credentials`, …) were added to
+`failure.Classifier` for the same issue: before that, the observed push failure
+matched nothing and classified `CatUnknown`.
+
+---
+
 ## Informational Outcomes
 
 Some pipeline events are not failures but are worth surfacing in dashboards

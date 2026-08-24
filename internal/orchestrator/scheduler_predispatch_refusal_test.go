@@ -420,17 +420,28 @@ func dropStageContextAfter(runner *refusalCapturingStageRunner, stage state.Pipe
 // It pins the composite the #3365 incident and the #3542 recovery exist to
 // prevent, and which setting a terminal kind at these sites had silently
 // switched back on: the defer's rescue is gated on `terminalFailureKind == ""`,
-// so a site that books a kind and returns disables it, and validation_error is
-// NOT in the defer's skipBoardRevert set — so the work was stranded in the
-// worktree AND the board went back to Ready for a re-dispatch that would redo
-// it from scratch in a fresh worktree.
+// so a site that books a kind and returns disables it — so the work was
+// stranded in the worktree AND the board went back to Ready for a re-dispatch
+// that would redo it from scratch in a fresh worktree.
 //
-// The kind assertion is the board-revert assertion. skipBoardRevert lives
-// inside the #257 content-pinned terminal-defer fence and cannot be called
-// directly, and s.stateSvc is a concrete *state.BoardStateService with no seam
-// to observe FailPipeline through — but worktree_uncommitted is a member of
-// that set (and budget_ceiling_hit, branch_forked, commit_orphaned are the
-// others), so booking it is precisely what stops the revert.
+// #875 SPLIT THE TWO FACTS THIS USED TO CONFLATE. Before it, the only way to
+// keep the board-revert protection was to RENAME the run's failure
+// worktree_uncommitted, because skipBoardRevert was keyed on the terminal kind
+// — which is how a run that could not compose its SKILL.md came to file its
+// post-mortem under a hygiene condition that had nothing to do with why it
+// stopped. skipBoardRevert now reads the run's `workRecovered` flag, so:
+//
+//   - the terminal KIND is the first cause (assertion 4) — what the record,
+//     docs/OUTCOME_RECORDING.md and the retro path consume;
+//   - the recovery MARKER stays in the stage error prose (assertions 2 and 3)
+//     — what the autonomous path re-derives "did the work survive" from, and
+//     what suppresses the LifetimeIssueFailures increment;
+//   - the board-revert skip reads neither, and is unconditional on a rescue.
+//
+// The revert itself is still not directly observable here (skipBoardRevert
+// lives inside the #257 content-pinned fence, and this fixture leaves
+// s.stateSvc nil), which is exactly why it must no longer be inferred from the
+// kind.
 func assertRefusalRescuedTheWork(t *testing.T, root string, runner *refusalCapturingStageRunner,
 	refusedStage state.PipelineStage, commitsBefore int, workFile string, wantReasonFragments []string) {
 	t.Helper()
@@ -469,25 +480,31 @@ func assertRefusalRescuedTheWork(t *testing.T, root string, runner *refusalCaptu
 		}
 	}
 
-	// 3. Every independent re-derivation of the kind from that prose agrees
-	//    with the kind the scheduler booked. internal/terminalkind/table.json
-	//    orders the worktree-uncommitted rule ahead of validation-error, so the
-	//    prefix wins for autonomous.go's onPipelineComplete wrapper and
-	//    NotifyComplete's defense-in-depth re-classify.
+	// 3. The RECOVERABILITY marker still survives prose re-derivation.
+	//    internal/terminalkind/table.json orders the worktree-uncommitted rule
+	//    ahead of validation-error, so autonomous.go's onPipelineComplete
+	//    wrapper and NotifyComplete's defense-in-depth re-classify still see
+	//    "the work survived" and still skip the LifetimeIssueFailures
+	//    increment. #875 changed which fact the KIND carries, not this one.
 	if got := ClassifyTerminalKind(gotReason); got != TerminalKindWorktreeUncommitted {
 		t.Errorf("ClassifyTerminalKind(%q) = %q, want %q — the recovered run must not read as a "+
-			"plain validation_error to the readers that re-derive the kind from text",
+			"plain validation_error to the readers that re-derive recoverability from text",
 			gotReason, got, TerminalKindWorktreeUncommitted)
 	}
 
-	// 4. The recorded kind. See the doc comment: this IS the board-revert
-	//    assertion.
+	// 4. The recorded kind is the FIRST CAUSE — the refusal that stopped the
+	//    run — not the condition the rescue happened to find on its way out
+	//    (#875). This is the record docs/OUTCOME_RECORDING.md and the retro
+	//    path read; a downstream symptom booked here is corpus poisoning.
 	rec := recordForIssue(t, root, 620)
-	if rec.TerminalFailureKind != TerminalKindWorktreeUncommitted {
-		t.Errorf("rec.TerminalFailureKind = %q, want %q — validation_error is not in the terminal "+
-			"defer's skipBoardRevert set, so booking it here sends the issue back to Ready and the "+
-			"re-dispatch regenerates the work that was just rescued",
-			rec.TerminalFailureKind, TerminalKindWorktreeUncommitted)
+	if rec.TerminalFailureKind == TerminalKindWorktreeUncommitted {
+		t.Errorf("rec.TerminalFailureKind = %q — the rescue overwrote the cause again. The "+
+			"uncommitted work is not why this run could not proceed; the refusal above is",
+			rec.TerminalFailureKind)
+	}
+	if rec.TerminalFailureKind != TerminalKindValidationError {
+		t.Errorf("rec.TerminalFailureKind = %q, want %q (the refusal's own kind)",
+			rec.TerminalFailureKind, TerminalKindValidationError)
 	}
 }
 

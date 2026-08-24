@@ -1681,7 +1681,22 @@ func (s *Scheduler) runEpicBackstopSweep(ctx context.Context) {
 }
 
 // RunQueue processes all queued issues sequentially.
-func (s *Scheduler) RunQueue(ctx context.Context) error {
+//
+// The returned QueueRunSummary accounts for EVERY entry the pass consumed, and
+// the error is non-nil only when the pass itself could not proceed (a cancelled
+// context). A per-issue terminal failure does not abort the batch — that part
+// is deliberate — but it is recorded in the summary so the caller can report it
+// and, in `queue run`'s case, exit non-zero (#875). Before this, the failure was
+// swallowed with no return value carrying it: the whole visible output of a run
+// where nothing succeeded was "Processing 1 queued issues..." and exit 0.
+//
+// The summary is a RETURN VALUE rather than a log line on purpose. RunQueue has
+// three callers on two very different surfaces — the CLI, the IPC server's
+// pipeline.run verb, and the autonomous scheduler's per-candidate spawn — and
+// only the CLI has a stdout an operator is reading. Printing here would put the
+// summary on a daemon's log for the other two and still leave the CLI with no
+// way to derive an exit status from it.
+func (s *Scheduler) RunQueue(ctx context.Context) (QueueRunSummary, error) {
 	s.mu.Lock()
 	queue := make([]QueueItem, len(s.queue))
 	copy(queue, s.queue)
@@ -1690,10 +1705,21 @@ func (s *Scheduler) RunQueue(ctx context.Context) error {
 	s.emitQueueChangedUnlocked()
 	s.mu.Unlock()
 
+	summary := QueueRunSummary{}
+	record := func(entry QueueItem, kind QueueOutcomeKind, terminalKind, detail string) {
+		summary.Outcomes = append(summary.Outcomes, QueueOutcome{
+			Repo:         entry.Repo,
+			IssueNumber:  entry.IssueNumber,
+			Kind:         kind,
+			TerminalKind: terminalKind,
+			Detail:       detail,
+		})
+	}
+
 	for _, entry := range queue {
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return summary, ctx.Err()
 		default:
 		}
 
@@ -1702,6 +1728,7 @@ func (s *Scheduler) RunQueue(ctx context.Context) error {
 		items, err := s.boardSvc.ListItems(ctx, "")
 		if err != nil {
 			log.Printf("queue: failed to fetch board: %v", err)
+			record(entry, QueueOutcomeNotDispatched, "", fmt.Sprintf("board fetch failed: %v", err))
 			continue
 		}
 
@@ -1714,6 +1741,7 @@ func (s *Scheduler) RunQueue(ctx context.Context) error {
 		}
 		if item == nil {
 			log.Printf("queue: issue #%d not found on board", entry.IssueNumber)
+			record(entry, QueueOutcomeNotDispatched, "", "not found on project board")
 			continue
 		}
 
@@ -1721,17 +1749,24 @@ func (s *Scheduler) RunQueue(ctx context.Context) error {
 		blocked, err := s.isBlocked(ctx, *item)
 		if err != nil {
 			log.Printf("queue: failed to check blocking for #%d: %v", entry.IssueNumber, err)
+			record(entry, QueueOutcomeNotDispatched, "", fmt.Sprintf("blocking check failed: %v", err))
 			continue
 		}
 		if blocked {
 			log.Printf("queue: skipping #%d — has open blockers", entry.IssueNumber)
+			record(entry, QueueOutcomeBlocked, "", "has open blockers")
 			continue
 		}
 
-		s.runPipeline(ctx, *item)
+		ok, terminalKind := s.runPipeline(ctx, *item)
+		if ok {
+			record(entry, QueueOutcomeCompleted, "", "")
+		} else {
+			record(entry, QueueOutcomeFailed, terminalKind, "")
+		}
 	}
 
-	return nil
+	return summary, nil
 }
 
 // QueueAdd adds issues to the execution queue.
@@ -3135,12 +3170,12 @@ func (s *Scheduler) refusePreDispatch(
 	tracer *trace.Writer,
 	source string,
 	reason string,
-) string {
+) (kind string, workRecovered bool) {
 	log.Printf("#%d: %s", item.Number, reason)
 	runtime.BeginStage(stage)
 	runtime.SetStageError(stage, reason)
 
-	kind := TerminalKindValidationError
+	kind = TerminalKindValidationError
 	// loadWorktreePath, not stageWorkspace: the defer's rescue resolves the
 	// tree this way, and the two must never disagree about which tree gets
 	// rescued.
@@ -3151,11 +3186,31 @@ func (s *Scheduler) refusePreDispatch(
 			log.Printf("#%d: uncommitted work recovery failed: %v — worktree preserved at %s",
 				item.Number, recErr, worktreePath)
 		} else {
-			log.Printf("#%d: uncommitted work recovered — setting terminal_failure_kind=%s",
-				item.Number, TerminalKindWorktreeUncommitted)
-			kind = TerminalKindWorktreeUncommitted
-			runtime.SetStageError(stage, fmt.Sprintf("%s: work auto-recovered after %s failure — %s",
-				TerminalKindWorktreeUncommitted, stage, reason))
+			// THE RESCUE IS NOT THE CAUSE (#875). Pre-fix this line read
+			// `kind = TerminalKindWorktreeUncommitted`, and a run that could
+			// never have proceeded — no SKILL.md to dispatch — was filed under
+			// the hygiene condition the rescue happened to find. In the observed
+			// run the "uncommitted work" was two pipeline-owned bookkeeping
+			// files; it was not why the stage was refused and no operator acting
+			// on it would have got anywhere. The kind is what
+			// docs/OUTCOME_RECORDING.md and the retro path consume, so booking
+			// the downstream condition there is corpus poisoning, not a
+			// mislabel. The refusal reason came first and it stays the kind.
+			log.Printf("#%d: uncommitted work recovered — retaining terminal_failure_kind=%s (first cause), work-recovered recorded as context",
+				item.Number, kind)
+			workRecovered = true
+			// Reason FIRST, marker second. The marker is retained because it is
+			// load-bearing in a way the kind is not: the autonomous path
+			// re-derives recoverability by classifying THIS TEXT
+			// (autonomous.go's onPipelineComplete wrapper, NotifyComplete's
+			// defense-in-depth re-classify), and worktree_uncommitted is what
+			// tells it the work survived — no LifetimeIssueFailures increment,
+			// fixed backoff. The two answers are to different questions: the
+			// kind answers "why did this run fail", the marker answers "did the
+			// work survive", and after this fix each is recorded by whichever
+			// mechanism actually knows.
+			runtime.SetStageError(stage, fmt.Sprintf("%s — %s: work auto-recovered after %s failure",
+				reason, TerminalKindWorktreeUncommitted, stage))
 		}
 	}
 
@@ -3164,7 +3219,7 @@ func (s *Scheduler) refusePreDispatch(
 		Source: source,
 		Reason: reason,
 	})
-	return kind
+	return kind, workRecovered
 }
 
 // PipelineBudgetCeilingUSD resolves pipeline.token_budget_ceiling.ceiling_usd
@@ -3241,7 +3296,11 @@ var newRunID = runstate.NewRunID
 // paths reaches this, and is the other intentionally excluded? Then record it
 // in internal/orchestrator/testdata/terminal_behaviors.json — the parity
 // tests (terminal_parity_test.go and the TS twin) fail until you do.
-func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
+// The return pair is the run's own terminal accounting: `success` mirrors the
+// pipeline.complete callback's flag and `terminalKind` the terminal_failure_kind
+// written to the run record. RunQueue needs both to build its end-of-run summary
+// and its exit status (#875); every other caller may ignore them.
+func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (success bool, terminalKind string) {
 	// Track repo concurrency
 	s.mu.Lock()
 	s.repoRunning[item.Repo]++
@@ -3452,6 +3511,13 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 	// "no terminal-kind reason was identified" — recordV2History writes a V2
 	// record in that case.
 	var terminalFailureKind string
+	// workRecovered is set by either #3542 rescue site when uncommitted work
+	// was preserved into a recovery commit. Separate from terminalFailureKind
+	// on purpose (#875): "work survived" and "why the run failed" are different
+	// facts, and encoding the first as the second is what made a run that could
+	// not compose its SKILL.md file its post-mortem under worktree_uncommitted.
+	// The consumers below that mean "work survived" read THIS.
+	workRecovered := false
 	// stallRetryCount tracks the number of adaptive stall-recovery rewinds
 	// already taken in this run (Issue #3005). At most 1 — the second
 	// stall-kill is terminal regardless of which stage stalls.
@@ -3465,6 +3531,15 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 	// applied to the V3 record. Used by adaptive stall-recovery (Issue #3005)
 	// to mark second-stall stages as `stall-killed-after-retry`.
 	stageFailureCategories := make(map[string]string)
+	// Publish the run's outcome to the caller. Registered BEFORE the terminal
+	// defer below so it runs AFTER it (defers are LIFO) and therefore observes
+	// the final values that defer settles — the #3542 rescue's reclassification
+	// included. Deliberately outside the content-pinned fence: it reads the
+	// terminal state, it does not participate in producing it.
+	defer func() {
+		success = pipelineSuccess
+		terminalKind = terminalFailureKind
+	}()
 	// terminal-parity:begin runPipeline-terminal-defer (#257 — this region is
 	// content-pinned by testdata/terminal_behaviors.json; any edit fails
 	// terminal_parity_test.go until the manifest is updated, which is the
@@ -3492,6 +3567,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 					log.Printf("#%d: uncommitted work recovered — setting terminal_failure_kind=%s",
 						item.Number, TerminalKindWorktreeUncommitted)
 					terminalFailureKind = TerminalKindWorktreeUncommitted
+					workRecovered = true
 					// Overwrite the failed stage's error text with the recovery
 					// marker so the autonomous onPipelineComplete wrapper — which
 					// re-derives the terminal kind via ClassifyTerminalKind — sees
@@ -3739,7 +3815,15 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 		// (by the CleanupWorktree/CleanupLocalBranch ahead-of-base guard) on a
 		// branch nobody re-runs against automatically. The way back in is the
 		// Action Center card, not an automatic retry.
-		skipBoardRevert := terminalFailureKind == TerminalKindWorktreeUncommitted ||
+		// workRecovered, not the kind (#875). The revert is harmful whenever a
+		// recovery commit exists — re-dispatch regenerates the work in a fresh
+		// worktree while the preserved commit sits on a branch nobody re-runs —
+		// and that is true regardless of what NAME the run's failure ended up
+		// with. Keying it on terminalFailureKind meant the protection could only
+		// be kept by also renaming the failure after the rescue. Strictly wider
+		// than the previous condition: every kind listed below still skips.
+		skipBoardRevert := workRecovered ||
+			terminalFailureKind == TerminalKindWorktreeUncommitted ||
 			terminalFailureKind == TerminalKindBudgetCeiling ||
 			terminalFailureKind == TerminalKindBranchForked ||
 			terminalFailureKind == TerminalKindCommitOrphaned
@@ -4066,7 +4150,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 				// three, and rescues any uncommitted work first: booking a kind
 				// is what disables the defer's own #3542 rescue, so the rescue
 				// has to happen on this side of the return.
-				terminalFailureKind = s.refusePreDispatch(item, runtime, workspaceRoot, stage, tracer,
+				terminalFailureKind, workRecovered = s.refusePreDispatch(item, runtime, workspaceRoot, stage, tracer,
 					"prerequisite-preflight", reason)
 				return // Pipeline failed — missing prerequisite
 			}
@@ -4178,7 +4262,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 			// but it is a cross-surface change (terminalkind table + TS schema
 			// + generated SDK mirror + FAILURE_TAXONOMY) and belongs in its own
 			// issue.
-			terminalFailureKind = s.refusePreDispatch(item, runtime, workspaceRoot, stage, tracer,
+			terminalFailureKind, workRecovered = s.refusePreDispatch(item, runtime, workspaceRoot, stage, tracer,
 				"skill-render", reason)
 			return
 		}
@@ -5680,7 +5764,24 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 			// Skipped on an auth-shaped failure for the same reason (#591):
 			// escalation is for capability-shaped failures, and a stronger
 			// model cannot fix a CLI that isn't logged in.
-			if !modelRejected && !authFailed {
+			//
+			// #878 generalizes that last one past the adapter's own login.
+			// authFailed above is keyed on TerminalKindAdapterAuthFailed — the
+			// pipeline-start auth gate and the adapter CLI's "not signed in".
+			// A CREDENTIAL failure inside the stage's own work (the observed
+			// case: `git push` refused with `invalid auth method`) carries none
+			// of those markers, so it read as a plain stage failure and bought
+			// a second full dispatch at a higher tier. The category classifier
+			// answers the general question — is this a permission failure? —
+			// over everything we know about the failure, the captured output
+			// tail included, because the cause is usually several lines above
+			// whatever symptom ended the stage.
+			catBlocked, catReason := EscalationBlockedByCategory(failText, runtime.StageOutputTail(stage))
+			if catBlocked {
+				log.Printf("#%d: stage %s failed — NOT escalating model: %s (no model can supply a missing credential)",
+					item.Number, stage, catReason)
+			}
+			if !modelRejected && !authFailed && !catBlocked {
 				escalation := s.retryEngine.EvaluateEscalation(string(stage), model)
 				if escalation.ShouldEscalate {
 					log.Printf("#%d: stage %s failed — escalating model to %s",
@@ -5735,6 +5836,13 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 		// retry / recovery / reconcile is written to the V3 record as
 		// `complete` while StageOutputTails still holds the FAILED attempt's
 		// crash tail — a successful stage carrying someone else's evidence.
+		//
+		// Captured first (#878): the tail is the ONLY place a failure the stage
+		// logged but did not exit on survives, and the post-condition check
+		// immediately below reports a symptom whose cause lives there. Clearing
+		// it before that check ran is what left the observed run attributing a
+		// credential-less `git push` to "issue context file missing".
+		outputTailBeforeClear := runtime.StageOutputTail(stage)
 		runtime.ClearStageOutputTail(stage)
 
 		// #2870: A stage exit code 0 doesn't guarantee the skill produced its
@@ -5753,9 +5861,29 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 		// signal survives with a different label. Deliberately scoped to that
 		// one stage; every other stage in the run still gets the #2870 check.
 		if outputErr := validateStageOutput(stage, stageWorkspace(runtime, workspaceRoot), item.Number); outputErr != nil && !reconciledNonTerminal {
-			runtime.SetStageError(stage, outputErr.Error())
+			// FIRST CAUSE FIRST (#878, same defect class as #875). This check is
+			// a post-condition: it can only ever report that the output is
+			// absent, never why. When the stage's own output already named a
+			// cause — a push that could not authenticate, a command that could
+			// not reach the forge — that cause is the run's terminal reason and
+			// the missing context is its consequence, not a second, competing
+			// explanation. The observed run recorded "issue context file
+			// missing" for a `git push` that had failed with `invalid auth
+			// method` immediately above, sending whoever read the record at the
+			// wrong problem.
+			//
+			// The symptom is RETAINED as trailing context rather than dropped:
+			// "which post-condition tripped" is still the fastest way to see
+			// where in the stage the run died.
+			stageFailReason := outputErr.Error()
+			if firstCause := firstCauseFromOutputTail(outputTailBeforeClear); firstCause != "" {
+				stageFailReason = firstCause + " — then " + outputErr.Error()
+				log.Printf("#%d: stage %s post-condition failed, but its first cause is upstream: %s",
+					item.Number, stage, firstCause)
+			}
+			runtime.SetStageError(stage, stageFailReason)
 			s.emitStateChanged(item.Repo, item.Number, runtime)
-			log.Printf("#%d: %v", item.Number, outputErr)
+			log.Printf("#%d: %s", item.Number, stageFailReason)
 			if s.telemetrySvc != nil && s.telemetryEnabled {
 				s.telemetrySvc.EmitPipelineEvent(ctx, platform.PipelineEvent{
 					RunID:       runtime.RunID,
@@ -5764,7 +5892,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 					Stage:       string(stage),
 					Timestamp:   time.Now(),
 					Metadata: map[string]interface{}{
-						"error":     outputErr.Error(),
+						"error":     stageFailReason,
 						"exit_code": 0,
 						"model":     model,
 						"reason":    "missing_output_context",
@@ -5773,9 +5901,20 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 				})
 			}
 			// Stronger model may produce the missing context — try escalation
-			// before giving up, mirroring the regular failure path.
+			// before giving up, mirroring the regular failure path. UNLESS the
+			// stage's own output already named a permission failure (#878):
+			// this site is a POST-CONDITION check, so it reports the symptom
+			// ("no output context") for a cause that happened earlier and is
+			// sitting in the tail. The observed run's cause was a
+			// credential-less `git push`; escalating re-sent the whole prompt
+			// at a higher tier to reach the identical failure.
+			catBlocked, catReason := EscalationBlockedByCategory(outputTailBeforeClear, outputErr.Error())
+			if catBlocked {
+				log.Printf("#%d: stage %s missing output — NOT escalating model: %s (no model can supply a missing credential)",
+					item.Number, stage, catReason)
+			}
 			escalation := s.retryEngine.EvaluateEscalation(string(stage), model)
-			if escalation.ShouldEscalate {
+			if !catBlocked && escalation.ShouldEscalate {
 				log.Printf("#%d: stage %s missing output — escalating model to %s",
 					item.Number, stage, escalation.NewModel)
 				s.retryEngine.RecordEscalation(string(stage), escalation.NewModel)
@@ -5965,6 +6104,9 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 	// verification above, so we do not call checkEpicCompletion again here —
 	// double-firing would be a harmless no-op but pollutes logs.
 	pipelineSuccess = true
+	// The named returns are settled by the publish defer above, which runs
+	// after every other terminal defer.
+	return
 }
 
 // RunPipelineForItem executes the full pipeline for a known BoardItem.

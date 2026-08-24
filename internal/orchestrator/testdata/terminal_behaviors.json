@@ -67,7 +67,7 @@
     },
     {
       "name": "board-status-failure-sync",
-      "note": "Terminal board status intentionally differs today: Go moves to Ready/Backlog (FailPipeline), the extension moves to In review with the autonomous layer re-reverting to Ready. Parity here asserts both paths sync SOMETHING, not that the target status matches.",
+      "note": "Terminal board status intentionally differs today: Go moves to Ready/Backlog (FailPipeline), the extension moves to In review with the autonomous layer re-reverting to Ready. Parity here asserts both paths sync SOMETHING, not that the target status matches.\n\n#875 changed WHEN the Go side skips the revert, not whether it syncs. skipBoardRevert now reads the run's `workRecovered` flag instead of inferring recovery from terminalFailureKind == worktree_uncommitted. The revert is harmful whenever a recovery commit exists \u2014 a re-dispatch regenerates the work in a fresh worktree while the preserved commit sits on a branch nobody re-runs \u2014 and that is true whatever NAME the failure ended up with. Keying it on the kind meant the protection could only be kept by RENAMING the run's failure after a rescue, which is how a run that could not compose its SKILL.md came to file its post-mortem under a hygiene condition. Strictly wider than before: every kind previously listed still skips.\n\nNO EXTENSION CHANGE IS OWED. The extension has no equivalent coupling to break: its rescue (HeadlessOrchestrator.recoverStrandedWork, #223) never reclassifies the terminal kind \u2014 it recovers and deliberately leaves the gate's own diagnosis intact \u2014 and its terminal board sync is not conditioned on worktree_uncommitted. The extension already behaved the way #875 asks; this brings Go into line with it.",
       "go": {
         "file": "internal/orchestrator/scheduler.go",
         "anchor": "s.stateSvc.FailPipeline(context.Background(), item.ID, targetStatus)"
@@ -501,7 +501,7 @@
       "file": "internal/orchestrator/scheduler.go",
       "begin": "terminal-parity:begin runPipeline-terminal-defer",
       "end": "terminal-parity:end runPipeline-terminal-defer",
-      "sha256": "c0f37d23f118546a188e442f53a299d080ea5e25c79d97d4563e7ae1bedf281b"
+      "sha256": "d7e3a16dd0ab278c48d8d31eecd57b9965b5b0f26c319e044d5d0d77f5020912"
     },
     {
       "id": "extension-runSlotPipeline-finally",

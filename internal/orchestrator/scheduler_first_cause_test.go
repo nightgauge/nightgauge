@@ -1,0 +1,156 @@
+package orchestrator
+
+import (
+	"context"
+	"strings"
+	"sync"
+	"testing"
+
+	"github.com/nightgauge/nightgauge/internal/state"
+	"github.com/nightgauge/nightgauge/pkg/types"
+)
+
+// firstCauseStageRunner exits 0 WITHOUT writing the stage's output context —
+// the shape that reaches #2870's post-condition check — and reports whatever
+// output tail the test hands it.
+//
+// This is the #878 shape exactly: the stage's real failure (a `git push` with
+// no credentials) happened inside the stage and was logged; the stage still
+// ended its turn cleanly, so the only thing the scheduler observes directly is
+// "the output context is missing".
+type firstCauseStageRunner struct {
+	mu     sync.Mutex
+	tail   string
+	models []string
+	rt     *state.RuntimeState
+}
+
+func (r *firstCauseStageRunner) RunStage(_ context.Context, params StageRunParams) (*StageRunResult, error) {
+	r.mu.Lock()
+	r.models = append(r.models, params.Model)
+	if r.rt == nil {
+		r.rt = params.Runtime
+	}
+	r.mu.Unlock()
+	// Deliberately does NOT write params.OutputFile.
+	return &StageRunResult{ExitCode: 0, LastOutputLines: r.tail}, nil
+}
+
+func (r *firstCauseStageRunner) dispatches() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]string, len(r.models))
+	copy(out, r.models)
+	return out
+}
+
+// authFailureTail is a trimmed capture of the observed #878 run's stage output:
+// the push failure, then the ordinary trailing chatter that follows it.
+const authFailureTail = `Running pre-submission validation...
+All checks passed.
+$ git push -u origin fix/878-example
+error: failed to push some refs: invalid auth method
+The stage could not publish the branch.
+`
+
+func newFirstCauseScheduler(root string, runner StageRunner) *Scheduler {
+	s := newRefusalScheduler(root, runner)
+	// The DEFAULT retry config, not a hand-rolled one: escalation needs a model
+	// ladder, and a config without one makes every "did not escalate" assertion
+	// below pass for the wrong reason.
+	cfg := DefaultRetryConfig()
+	cfg.MaxBacktracks = 0
+	cfg.MaxEscalationsPerStage = 1
+	s.retryEngine = NewRetryEngine(cfg)
+	return s
+}
+
+// TestAuthFailureDoesNotEscalateModel is the #878 regression.
+//
+// The observed run failed on a credential-less `git push`, and the pipeline
+// answered by escalating haiku → sonnet and re-dispatching an identical
+// 67,610-character prompt, which failed at the same line 44 seconds later.
+// Escalation is for CAPABILITY shortfalls; no model can supply a credential the
+// machine does not have. The assertion is on DISPATCH COUNT, not on a log line:
+// the cost of this bug is a second full stage dispatch, so that is the thing
+// that must not happen.
+func TestAuthFailureDoesNotEscalateModel(t *testing.T) {
+	root := t.TempDir()
+	seedRefusalRepo(t, root, allRefusalStageSkills)
+
+	runner := &firstCauseStageRunner{tail: authFailureTail}
+	s := newFirstCauseScheduler(root, runner)
+	s.runPipeline(context.Background(), types.BoardItem{Number: 878, Repo: "nightgauge/nightgauge", ID: "item-878"})
+
+	got := runner.dispatches()
+	if len(got) != 1 {
+		t.Fatalf("stage dispatched %d time(s) (models %v), want exactly 1 — a permission failure is not "+
+			"a capability shortfall, and the second dispatch re-sends the whole prompt to fail at the "+
+			"identical line", len(got), got)
+	}
+}
+
+// TestCapabilityFailureStillEscalates is the discriminator for the test above.
+//
+// Identical setup, identical post-condition failure, and the ONLY difference is
+// that the stage's output tail names no credential problem. Escalation must
+// still happen here — otherwise the assertion above would pass on a build that
+// had simply removed escalation, and would prove nothing about the gate.
+func TestCapabilityFailureStillEscalates(t *testing.T) {
+	root := t.TempDir()
+	seedRefusalRepo(t, root, allRefusalStageSkills)
+
+	runner := &firstCauseStageRunner{tail: "the stage ran out of ideas and stopped writing\n"}
+	s := newFirstCauseScheduler(root, runner)
+	s.runPipeline(context.Background(), types.BoardItem{Number: 879, Repo: "nightgauge/nightgauge", ID: "item-879"})
+
+	got := runner.dispatches()
+	if len(got) != 2 {
+		t.Fatalf("stage dispatched %d time(s) (models %v), want 2 — a capability-shaped failure must "+
+			"still get its escalation retry; the #878 gate is scoped to permission failures only",
+			len(got), got)
+	}
+	if got[0] == got[1] {
+		t.Errorf("both dispatches used model %q — the retry was not an escalation", got[0])
+	}
+}
+
+// TestPostConditionFailureRecordsTheFirstCause is the #878 attribution
+// regression (the same defect class as #875).
+//
+// The post-condition check can only ever observe that the output context is
+// absent; it cannot observe why. When the stage's own output already named a
+// cause, that cause is the run's terminal reason and the missing context is its
+// consequence. The observed run recorded "issue context file missing" for a
+// `git push` that had failed with `invalid auth method` immediately above,
+// which sends whoever reads the record at the wrong problem — and the record is
+// what docs/OUTCOME_RECORDING.md and the retro path consume.
+func TestPostConditionFailureRecordsTheFirstCause(t *testing.T) {
+	root := t.TempDir()
+	seedRefusalRepo(t, root, allRefusalStageSkills)
+
+	runner := &firstCauseStageRunner{tail: authFailureTail}
+	s := newFirstCauseScheduler(root, runner)
+	s.runPipeline(context.Background(), types.BoardItem{Number: 880, Repo: "nightgauge/nightgauge", ID: "item-880"})
+
+	if runner.rt == nil {
+		t.Fatal("stage runner never captured a *state.RuntimeState")
+	}
+	snap := runner.rt.Snapshot()
+	reason := snap.StageErrors[string(snap.Stage)]
+	if reason == "" {
+		t.Fatalf("no stage error recorded for stage %q", snap.Stage)
+	}
+	if !strings.Contains(reason, "invalid auth method") {
+		t.Errorf("recorded reason = %q\nwant it to NAME the push failure that actually stopped the "+
+			"stage; the missing output context is the symptom, not the cause", reason)
+	}
+	// The symptom is retained, not dropped: "which post-condition tripped" is
+	// still the fastest way to see where in the stage the run died.
+	if !strings.Contains(reason, "did not write expected output context") {
+		t.Errorf("recorded reason = %q\nwant the post-condition symptom retained as trailing context", reason)
+	}
+	if strings.HasPrefix(reason, "stage ") && !strings.Contains(reason[:40], "auth") {
+		t.Errorf("recorded reason still LEADS with the symptom: %q", reason)
+	}
+}

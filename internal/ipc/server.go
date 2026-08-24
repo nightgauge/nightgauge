@@ -2633,7 +2633,7 @@ func (s *Server) registerMethods() {
 			Priority:    0,
 		})
 		go func() {
-			if err := s.scheduler.RunQueue(ctx); err != nil {
+			if _, err := s.scheduler.RunQueue(ctx); err != nil {
 				s.Emit("pipeline.error", map[string]interface{}{
 					"issueNumber": p.IssueNumber,
 					"error":       err.Error(),
