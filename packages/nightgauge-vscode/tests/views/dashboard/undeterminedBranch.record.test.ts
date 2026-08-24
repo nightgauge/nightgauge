@@ -371,7 +371,6 @@ describe("undetermined-branch history record (#397)", () => {
         pagination: {
           page: 0,
           pageSize: 20,
-          totalCount: 1,
           hasMore: false,
           cursorStack: [undefined],
         },

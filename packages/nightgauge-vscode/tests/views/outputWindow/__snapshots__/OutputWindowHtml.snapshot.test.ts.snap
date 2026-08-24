@@ -13901,11 +13901,11 @@ exports[`getOutputWindowHtml snapshots (Issue #1242) > with question prompt acti
               <span class="stage-group-count">1 entry</span>
             </summary>
             
-    <div class="output-entry level-info" data-entry-id="e2">
+    <div class="output-entry level-user" data-entry-id="e2">
       
     <div class="entry-header">
       <span class="entry-time">TIME</span>
-      <span class="entry-badge level-info">INFO</span>
+      <span class="entry-badge level-user">USER</span>
       <span class="entry-stage">[Feature Development]</span>
     </div>
     <div class="entry-content markdown-body" data-raw-text="Should I proceed with the refactor? (y/n)"></div>
