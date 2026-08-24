@@ -61,7 +61,7 @@ vi.mock("vscode", () => ({
   },
 }));
 
-// ── IncrediYamlService mock ───────────────────────────────────────────────────
+// ── NightgaugeYamlService mock ───────────────────────────────────────────────────
 
 const { mockRead, mockWriteGlobal, mockDispose } = vi.hoisted(() => ({
   mockRead: vi.fn(),
@@ -69,8 +69,8 @@ const { mockRead, mockWriteGlobal, mockDispose } = vi.hoisted(() => ({
   mockDispose: vi.fn(),
 }));
 
-vi.mock("../../src/views/settings/IncrediYamlService", () => ({
-  IncrediYamlService: class {
+vi.mock("../../src/views/settings/NightgaugeYamlService", () => ({
+  NightgaugeYamlService: class {
     read = mockRead;
     writeGlobal = mockWriteGlobal;
     dispose = mockDispose;

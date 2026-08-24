@@ -9,7 +9,7 @@
  */
 
 import type {
-  IncrediConfig,
+  NightgaugeConfig,
   ProjectConfig,
   IssueConfig,
   CommandsConfig,
@@ -231,12 +231,14 @@ export const FULL_COMMANDS_CONFIG: CommandsConfig = {
  * @returns Complete Nightgauge configuration
  *
  * @example
- * const config = createMockIncrediConfig({
+ * const config = createMockNightgaugeConfig({
  *   project: { number: 20 },
  *   issue: { auto_assign: false }
  * });
  */
-export function createMockIncrediConfig(overrides?: Partial<IncrediConfig>): IncrediConfig {
+export function createMockNightgaugeConfig(
+  overrides?: Partial<NightgaugeConfig>
+): NightgaugeConfig {
   return {
     project: overrides?.project ? createMockProjectConfig(overrides.project) : undefined,
     issue: overrides?.issue ? createMockIssueConfig(overrides.issue) : undefined,
@@ -342,7 +344,7 @@ export function generateMinimalConfigYaml(projectNumber: number): string {
 /**
  * Generate a full config.yaml content with all sections
  */
-export function generateFullConfigYaml(config: Partial<IncrediConfig>): string {
+export function generateFullConfigYaml(config: Partial<NightgaugeConfig>): string {
   const lines: string[] = [];
 
   if (config.project) {

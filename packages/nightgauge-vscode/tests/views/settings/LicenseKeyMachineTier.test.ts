@@ -78,12 +78,12 @@ vi.mock("vscode", () => ({
 }));
 
 // Use the real configUtils helpers so nested path get/set behave correctly.
-vi.mock("../../../src/views/settings/IncrediYamlService", async () => {
+vi.mock("../../../src/views/settings/NightgaugeYamlService", async () => {
   const actual = await vi.importActual<typeof import("../../../src/views/settings/configUtils")>(
     "../../../src/views/settings/configUtils"
   );
   return {
-    IncrediYamlService: class IncrediYamlServiceMock {
+    NightgaugeYamlService: class NightgaugeYamlServiceMock {
       onDidChange = vi.fn(() => ({ dispose: vi.fn() }));
       dispose = vi.fn();
       readEffective = mockReadEffective;

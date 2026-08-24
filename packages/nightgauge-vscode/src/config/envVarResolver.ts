@@ -19,7 +19,7 @@
  * @see docs/CONFIGURATION.md - Environment variable documentation
  */
 
-import { IncrediConfigSchema, type IncrediConfig } from "./schema";
+import { NightgaugeConfigSchema, type NightgaugeConfig } from "./schema";
 import { z } from "zod";
 
 /**
@@ -32,7 +32,7 @@ export const ENV_VAR_PREFIX = "NIGHTGAUGE_";
  */
 export interface EnvVarResolutionResult {
   /** Partial config from environment variables */
-  config: Partial<IncrediConfig>;
+  config: Partial<NightgaugeConfig>;
   /** List of NIGHTGAUGE_* env vars that were applied */
   appliedVars: string[];
   /** Errors encountered during resolution (non-fatal) */
@@ -99,7 +99,7 @@ export function getSchemaType(
   // Schema traversal requires the internal Zod v4 base type ($ZodType) because ZodObject.shape
   // returns Record<string, $ZodType>, which does not extend the public ZodType interface.
   // We use unknown + type assertions scoped to the narrowest possible points.
-  let schema: unknown = IncrediConfigSchema;
+  let schema: unknown = NightgaugeConfigSchema;
 
   for (const part of parts) {
     if (!schema) return null;
@@ -370,7 +370,7 @@ const KNOWN_CONFIG_PATHS: string[] = [
   // Pipeline - Output Token Limits (Issue #842)
   // Note: output_token_limits is a record type; individual stage overrides
   // are handled via NIGHTGAUGE_PIPELINE_OUTPUT_TOKEN_LIMIT_{STAGE}
-  // in incrediConfig.ts, not through the generic resolver.
+  // in nightgaugeConfig.ts, not through the generic resolver.
   // Routing
   "routing.trivial_max_complexity",
   "routing.extensive_min_complexity",
@@ -518,9 +518,9 @@ export function resolveEnvVars(env: NodeJS.ProcessEnv = process.env): EnvVarReso
   const errors: EnvVarError[] = [];
 
   // Find all NIGHTGAUGE_* env vars
-  const incrediVars = Object.keys(env).filter((key) => key.startsWith(ENV_VAR_PREFIX));
+  const nightgaugeVars = Object.keys(env).filter((key) => key.startsWith(ENV_VAR_PREFIX));
 
-  for (const envVar of incrediVars) {
+  for (const envVar of nightgaugeVars) {
     const value = env[envVar];
     if (value === undefined || value === "") {
       continue;
@@ -555,7 +555,7 @@ export function resolveEnvVars(env: NodeJS.ProcessEnv = process.env): EnvVarReso
   }
 
   return {
-    config: config as Partial<IncrediConfig>,
+    config: config as Partial<NightgaugeConfig>,
     appliedVars,
     errors,
   };

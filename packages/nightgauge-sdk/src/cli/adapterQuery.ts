@@ -10,7 +10,7 @@
  */
 
 import type { SDKQueryFunction } from "../orchestrator/StageExecutor.js";
-import type { IncrediAdapter } from "./adapter.js";
+import type { NightgaugeAdapter } from "./adapter.js";
 import type { QueryFunctionOptions } from "./adapters/ICliAdapter.js";
 import { defaultRegistry } from "./adapters/AdapterRegistry.js";
 
@@ -535,7 +535,7 @@ export function summarizeCopilotOutput(
  * Delegates to the adapter's own createQueryFunction() via the registry.
  */
 export async function createAdapterQueryFunction(
-  adapter: IncrediAdapter,
+  adapter: NightgaugeAdapter,
   options?: QueryFunctionOptions
 ): Promise<SDKQueryFunction> {
   return defaultRegistry.get(adapter).createQueryFunction(options);

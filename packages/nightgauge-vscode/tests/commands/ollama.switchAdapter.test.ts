@@ -47,12 +47,12 @@ vi.mock("vscode", () => ({
   },
 }));
 
-vi.mock("../../src/utils/incrediConfig", () => ({
+vi.mock("../../src/utils/nightgaugeConfig", () => ({
   getExecutionAdapter: vi.fn(() => "claude"),
 }));
 
-vi.mock("../../src/views/settings/IncrediYamlService", () => ({
-  IncrediYamlService: vi.fn(function () {
+vi.mock("../../src/views/settings/NightgaugeYamlService", () => ({
+  NightgaugeYamlService: vi.fn(function () {
     return {
       read: vi.fn(() => Promise.resolve({ success: true, config: {} })),
       readLocal: vi.fn(() => Promise.resolve({ success: true, config: {} })),

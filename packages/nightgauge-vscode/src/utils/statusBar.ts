@@ -6,7 +6,7 @@
 
 import * as vscode from "vscode";
 import type { PipelineStage } from "@nightgauge/sdk";
-import type { StageExecutionMode } from "./incrediConfig";
+import type { StageExecutionMode } from "./nightgaugeConfig";
 import { DEFAULT_PERFORMANCE_MODE, MODE_PROFILES, type PerformanceMode } from "./modeProfiles";
 import type { ExecutionAdapter } from "../config/schema";
 import { CLAUDE_PLAN_SETTING } from "../services/usage/claudePlanDeclaration";

@@ -1550,7 +1550,7 @@ pipeline:
 
 **Used by:**
 
-- `packages/nightgauge-vscode/src/utils/incrediConfig.ts` —
+- `packages/nightgauge-vscode/src/utils/nightgaugeConfig.ts` —
   `getStageMcpTools()`
 - `packages/nightgauge-vscode/src/utils/skillRunner.ts` —
   `runStageSkillHeadless()`, `runStageSkillInteractive()`
@@ -2448,7 +2448,7 @@ when both are present, all tool lists are merged.
 
 **Used by:**
 
-- `incrediConfig.ts` — `getMcpToolsConfig()`
+- `nightgaugeConfig.ts` — `getMcpToolsConfig()`
 - `skillRunner.ts` — `runStageSkillHeadless()`, `runStageSkillInteractive()`
 
 **See also:**
@@ -2619,7 +2619,7 @@ multiplier-derived values.
 
 **Used by:**
 
-- `incrediConfig.ts` — `getBudgetEnforcementConfig()` reads and applies
+- `nightgaugeConfig.ts` — `getBudgetEnforcementConfig()` reads and applies
   multipliers
 - `AdaptivePolicyEngine` (SDK) — Writes multipliers based on execution history
 

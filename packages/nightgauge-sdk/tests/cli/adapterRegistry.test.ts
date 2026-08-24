@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { AdapterRegistry, defaultRegistry } from "../../src/cli/adapters/AdapterRegistry.js";
-import type { ICliAdapter, IncrediAdapter } from "../../src/cli/adapters/ICliAdapter.js";
+import type { ICliAdapter, NightgaugeAdapter } from "../../src/cli/adapters/ICliAdapter.js";
 import { ClaudeSdkAdapter } from "../../src/cli/adapters/ClaudeSdkAdapter.js";
 import { ClaudeHeadlessAdapter } from "../../src/cli/adapters/ClaudeHeadlessAdapter.js";
 import { CodexAdapter } from "../../src/cli/adapters/CodexAdapter.js";
@@ -10,7 +10,7 @@ import { LmStudioAdapter } from "../../src/cli/adapters/LmStudioAdapter.js";
 import { OllamaAdapter } from "../../src/cli/adapters/OllamaAdapter.js";
 import { CopilotCliAdapter } from "../../src/cli/adapters/CopilotCliAdapter.js";
 
-function createMockAdapter(name: IncrediAdapter, displayName = "Mock"): ICliAdapter {
+function createMockAdapter(name: NightgaugeAdapter, displayName = "Mock"): ICliAdapter {
   return {
     name,
     displayName,
@@ -92,7 +92,7 @@ describe("AdapterRegistry", () => {
 });
 
 describe("defaultRegistry", () => {
-  const expectedNames: IncrediAdapter[] = [
+  const expectedNames: NightgaugeAdapter[] = [
     "claude-sdk",
     "claude-headless",
     "codex",

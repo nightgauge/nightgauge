@@ -190,7 +190,7 @@ export interface AllCommandDeps {
   tokenRefreshManager: IOnDemandTokenRefresher | null;
   tierGate: TierGate | null;
   licensePreflight: LicensePreflight | null;
-  incrediRoot: string | null;
+  nightgaugeRoot: string | null;
   telemetryService: TelemetryService | null;
   telemetryConsentService: TelemetryConsentService | null;
   repositorySettingsService: RepositorySettingsService | null;
@@ -248,7 +248,7 @@ export function registerAllCommands(deps: AllCommandDeps): void {
     tokenRefreshManager,
     tierGate,
     licensePreflight,
-    incrediRoot,
+    nightgaugeRoot,
     telemetryConsentService,
     repositorySettingsService,
     sequentialRepoConfigService,
@@ -305,7 +305,7 @@ export function registerAllCommands(deps: AllCommandDeps): void {
   const cleanupSessionLogsCommand = vscode.commands.registerCommand(
     "nightgauge.cleanupSessionLogs",
     async () => {
-      if (!incrediRoot) {
+      if (!nightgaugeRoot) {
         vscode.window.showWarningMessage(
           "Nightgauge: No workspace root detected; cannot clean session logs."
         );
@@ -318,7 +318,7 @@ export function registerAllCommands(deps: AllCommandDeps): void {
       );
       if (confirmed !== "Delete") return;
       const { LogFileWriter } = await import("../utils/log-file-writer");
-      const result = await LogFileWriter.cleanupLogs(incrediRoot, {
+      const result = await LogFileWriter.cleanupLogs(nightgaugeRoot, {
         max_count: 10,
         max_age_days: 1,
       });
@@ -610,12 +610,12 @@ export function registerAllCommands(deps: AllCommandDeps): void {
     registerShowDashboardCommand(dashboard, logger),
     registerRescrubDashboardCommand(dashboard, logger),
 
-    // Telemetry / health commands (require incrediRoot)
-    ...(incrediRoot
+    // Telemetry / health commands (require nightgaugeRoot)
+    ...(nightgaugeRoot
       ? [
-          registerExportTelemetryCommand(incrediRoot, logger),
-          registerRunPipelineHealthCommand(incrediRoot, logger, dashboard),
-          registerRecalibrateHealthCommand(incrediRoot, logger),
+          registerExportTelemetryCommand(nightgaugeRoot, logger),
+          registerRunPipelineHealthCommand(nightgaugeRoot, logger, dashboard),
+          registerRecalibrateHealthCommand(nightgaugeRoot, logger),
         ]
       : []),
 
@@ -868,7 +868,7 @@ export function registerAllCommands(deps: AllCommandDeps): void {
     // Concurrent slots — on-the-fly control from the pipeline view title bar
     registerSetConcurrentSlotsCommand(
       concurrentPipelineManager,
-      incrediRoot,
+      nightgaugeRoot,
       tierGate,
       licensePreflight
     ),

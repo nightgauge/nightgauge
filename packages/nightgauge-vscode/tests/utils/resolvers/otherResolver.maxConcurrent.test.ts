@@ -31,7 +31,7 @@ import {
 } from "../../../src/utils/resolvers/otherResolver";
 
 function withTempConfig(yaml: string): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "incredi-mc-"));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "nightgauge-mc-"));
   fs.mkdirSync(path.join(dir, ".nightgauge"), { recursive: true });
   fs.writeFileSync(path.join(dir, ".nightgauge", "config.yaml"), yaml, "utf-8");
   return dir;

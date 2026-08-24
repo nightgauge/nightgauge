@@ -29,8 +29,8 @@ vi.mock("../../src/services/SecretStorageService", async (importOriginal) => {
   };
 });
 
-vi.mock("../../src/views/settings/IncrediYamlService", () => ({
-  IncrediYamlService: vi.fn(function () {
+vi.mock("../../src/views/settings/NightgaugeYamlService", () => ({
+  NightgaugeYamlService: vi.fn(function () {
     return {
       read: vi.fn().mockResolvedValue({ config: {}, success: true }),
       write: vi.fn().mockResolvedValue({ success: true }),
@@ -359,13 +359,14 @@ describe("registerConfigureMattermostWorkspaceCommand", () => {
 
   // ── Case 14: YAML round-trip preserves existing config ──────────────────
   it("merges notifications block with existing config when writing YAML", async () => {
-    const { IncrediYamlService } = await import("../../src/views/settings/IncrediYamlService");
+    const { NightgaugeYamlService } =
+      await import("../../src/views/settings/NightgaugeYamlService");
     const mockWrite = vi.fn().mockResolvedValue({ success: true });
     const mockRead = vi.fn().mockResolvedValue({
       config: { project: { number: 42 } },
       success: true,
     });
-    (IncrediYamlService as any).mockImplementation(function () {
+    (NightgaugeYamlService as any).mockImplementation(function () {
       return {
         read: mockRead,
         write: mockWrite,

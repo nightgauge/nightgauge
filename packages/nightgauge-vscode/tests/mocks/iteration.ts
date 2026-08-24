@@ -229,7 +229,7 @@ export function createMockProjectItemsOutput(
 /**
  * Create mock nightgauge.yaml content
  */
-export function createMockIncrediYaml(config: Partial<IterationConfig>): string {
+export function createMockNightgaugeYaml(config: Partial<IterationConfig>): string {
   const lines: string[] = ["project:"];
 
   if (config.projectNumber !== undefined) {

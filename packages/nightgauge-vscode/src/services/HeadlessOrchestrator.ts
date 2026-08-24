@@ -81,7 +81,7 @@ import {
   runAdapterAuthPreflight,
   createDefaultPreflightRunner,
   uuidV7,
-  type IncrediAdapter,
+  type NightgaugeAdapter,
   type RecoveryAction,
   type RecoveryRequiredPayload,
 } from "@nightgauge/sdk";
@@ -138,7 +138,7 @@ import {
   isAdaptiveBudgetEnabled,
   type ContextSchemaRepairConfig,
   type PipelineModelOverride,
-} from "../utils/incrediConfig";
+} from "../utils/nightgaugeConfig";
 import { formatZodErrorsForPrompt } from "../utils/zodErrorFormatter";
 import {
   BudgetEnforcer,
@@ -821,17 +821,17 @@ export function reconcileBookkeepingFromDiskState(
  */
 
 /**
- * Convert a VSCode `ExecutionAdapter` into the SDK `IncrediAdapter` form.
+ * Convert a VSCode `ExecutionAdapter` into the SDK `NightgaugeAdapter` form.
  *
  * Centralized so the per-stage resolver landing in epic #3212 (B2) can swap
  * its single call site without touching the auth pre-flight.
  *
  * @see Issue #3222 - validateAdapterAuth pre-flight checker per adapter
  */
-export function toIncrediAdapter(
+export function toNightgaugeAdapter(
   adapter: ExecutionAdapter,
   _env: NodeJS.ProcessEnv = process.env
-): IncrediAdapter {
+): NightgaugeAdapter {
   switch (adapter) {
     case "claude":
       // The Marketplace extension never embeds Anthropic's commercially
@@ -991,7 +991,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
   /** Per-stage model overrides set by escalation (Issue #1343) or user override (Issue #1610) */
   private stageModelOverrides = new Map<
     PipelineStage,
-    import("../utils/incrediConfig").DefaultModel
+    import("../utils/nightgaugeConfig").DefaultModel
   >();
 
   /**
@@ -4876,7 +4876,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
   private getContextFileSizeAlertThreshold(): number {
     try {
       const { getContextFileSizeAlertThreshold } =
-        require("../utils/incrediConfig") as typeof import("../utils/incrediConfig");
+        require("../utils/nightgaugeConfig") as typeof import("../utils/nightgaugeConfig");
       return getContextFileSizeAlertThreshold();
     } catch {
       return 102400; // Default: 100KB
@@ -4891,7 +4891,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
   private getActivePerformanceMode(): "efficiency" | "elevated" | "maximum" | "frontier" {
     try {
       const { getPerformanceMode } =
-        require("../utils/incrediConfig") as typeof import("../utils/incrediConfig");
+        require("../utils/nightgaugeConfig") as typeof import("../utils/nightgaugeConfig");
       return getPerformanceMode(this.getPersistentRoot());
     } catch {
       return "elevated";
@@ -7566,10 +7566,10 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     signal: PipelineFeedbackSignal,
     issueNumber: number,
     callbacks?: PipelineCallbacks
-  ): import("../utils/incrediConfig").DefaultModel | null {
+  ): import("../utils/nightgaugeConfig").DefaultModel | null {
     const currentModel = (this.stageModelOverrides.get(stage) ??
       resolveModel(stage, this.getWorkingDirectory())
-        .model) as import("../utils/incrediConfig").DefaultModel;
+        .model) as import("../utils/nightgaugeConfig").DefaultModel;
 
     const nextModel = getEscalatedModel(currentModel);
 
@@ -7611,7 +7611,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
   private async executeEscalation(
     stage: PipelineStage,
     signal: PipelineFeedbackSignal,
-    nextModel: import("../utils/incrediConfig").DefaultModel,
+    nextModel: import("../utils/nightgaugeConfig").DefaultModel,
     issueNumber: number,
     callbacks?: PipelineCallbacks
   ): Promise<void> {
@@ -7812,7 +7812,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     stage: PipelineStage,
     issueNumber: number,
     callbacks?: PipelineCallbacks
-  ): import("../utils/incrediConfig").DefaultModel | null {
+  ): import("../utils/nightgaugeConfig").DefaultModel | null {
     // Guard: already used proactive escalation this run
     if (this.proactiveEscalationApplied) return null;
 
@@ -7832,7 +7832,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     // 3. Compute escalated model
     const currentModel = (this.stageModelOverrides.get(stage) ??
       resolveModel(stage, this.getWorkingDirectory())
-        .model) as import("../utils/incrediConfig").DefaultModel;
+        .model) as import("../utils/nightgaugeConfig").DefaultModel;
     const nextModel = getEscalatedModel(currentModel);
     if (!nextModel) return null; // Already at ceiling
 
@@ -8401,7 +8401,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       for (const stage of SKILL_STAGES) {
         this.stageModelOverrides.set(
           stage,
-          modelOverride as import("../utils/incrediConfig").DefaultModel
+          modelOverride as import("../utils/nightgaugeConfig").DefaultModel
         );
       }
       this.logger.info("User model override applied to all stages", {
@@ -8800,7 +8800,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         issueNumber,
       });
     } else {
-      const adapters = [toIncrediAdapter(executionAdapter, process.env)];
+      const adapters = [toNightgaugeAdapter(executionAdapter, process.env)];
       // Inject the real preflight runner so CLI adapters (claude-headless /
       // codex / copilot) actually probe auth (`codex login status`,
       // `claude auth status`, …) instead of short-circuiting to "passed". Without
@@ -8815,7 +8815,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       if (!preflight.ok) {
         const bullets = preflight.failures
           .map(
-            (f: { adapter: IncrediAdapter; reason: string; suggestedFix: string }) =>
+            (f: { adapter: NightgaugeAdapter; reason: string; suggestedFix: string }) =>
               `- **${f.adapter}**: ${f.reason}\n  Fix: ${f.suggestedFix}`
           )
           .join("\n");
@@ -8836,7 +8836,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
           issueNumber,
           timedOut: allTimedOut,
           failures: preflight.failures.map(
-            (f: { adapter: IncrediAdapter; reason: string; timedOut: boolean }) => ({
+            (f: { adapter: NightgaugeAdapter; reason: string; timedOut: boolean }) => ({
               adapter: f.adapter,
               reason: f.reason,
               timedOut: f.timedOut,
@@ -8855,7 +8855,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         };
 
         const adapterList = preflight.failures
-          .map((f: { adapter: IncrediAdapter; reason: string }) => `${f.adapter}=${f.reason}`)
+          .map((f: { adapter: NightgaugeAdapter; reason: string }) => `${f.adapter}=${f.reason}`)
           .join("; ");
         this.eventDispatcher.onStderr(
           "pipeline-start",
@@ -8931,7 +8931,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         if (superchargeActive) {
           try {
             const { getSuperchargeModel } =
-              require("../utils/incrediConfig") as typeof import("../utils/incrediConfig");
+              require("../utils/nightgaugeConfig") as typeof import("../utils/nightgaugeConfig");
             superchargeModel = getSuperchargeModel(this.getPersistentRoot());
           } catch {
             superchargeModel = undefined;
@@ -9038,7 +9038,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
             if (!isBookendStage(s) && s !== "issue-pickup") {
               const current = (this.stageModelOverrides.get(s) ??
                 resolveModel(s, this.getWorkingDirectory())
-                  .model) as import("../utils/incrediConfig").DefaultModel;
+                  .model) as import("../utils/nightgaugeConfig").DefaultModel;
               const escalated = getEscalatedModel(current);
               if (escalated) {
                 this.stageModelOverrides.set(s, escalated);

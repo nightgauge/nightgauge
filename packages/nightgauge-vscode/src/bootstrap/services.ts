@@ -26,7 +26,7 @@ import {
 import {
   getSettings,
   getWorkspaceRoot,
-  getIncrediRoot,
+  getNightgaugeRoot,
   getWorkItemSourceConfig,
 } from "../config/settings";
 import type { IWorkItemProvider } from "../services/types/WorkItemProvider";
@@ -44,7 +44,7 @@ import {
   OutputWindow,
   PipelineSummary,
   SettingsPanel,
-  IncrediYamlService,
+  NightgaugeYamlService,
   RepositoriesTreeProvider,
   QueryResultsTreeProvider,
   BaseTreeItem,
@@ -83,7 +83,7 @@ import {
 } from "../utils/enabledReposConfig";
 import { QueryService } from "../services/QueryService";
 import { SavedQueriesService } from "../services/SavedQueriesService";
-import { getInitialExecutionMode } from "../utils/incrediConfig";
+import { getInitialExecutionMode } from "../utils/nightgaugeConfig";
 import { createStreamOutputHandler } from "../utils/streamOutputHandler";
 import { classifyTerminalKindForSignal } from "../services/terminalKindSignal";
 import { createPhaseTracker } from "../utils/phaseTracker";
@@ -147,7 +147,7 @@ import {
   type RegisteredPipelineRoot,
 } from "../services/CliPipelineReconciliationService";
 import { SlotOutputManager } from "../views/SlotOutputManager";
-import { getConcurrentPipelineConfig, getPerformanceMode } from "../utils/incrediConfig";
+import { getConcurrentPipelineConfig, getPerformanceMode } from "../utils/nightgaugeConfig";
 import { hasCustomStageOverrides } from "../utils/customStageModels";
 import { migrateSuperchargeToPerformanceMode } from "../utils/migratePerformanceMode";
 import { KnowledgeDocumentLinkProvider } from "../views/KnowledgeDocumentLinkProvider";
@@ -245,7 +245,7 @@ export interface ExtensionServices {
   agentRegistrationService: AgentRegistrationService | null;
   tierGate: TierGate | null;
   licensePreflight: LicensePreflight | null;
-  incrediRoot: string | null;
+  nightgaugeRoot: string | null;
   projectBoardViews: vscode.TreeView<BaseTreeItem>[];
   treeView: vscode.TreeView<BaseTreeItem>;
   platformStatusBarItem: PlatformStatusBarItem;
@@ -298,7 +298,7 @@ let debouncedFillSlotsTimer: ReturnType<typeof setTimeout> | null = null;
  * Resolved git root for .nightgauge directory placement.
  * Ensures pipeline files are always at repository root, not subdirectories.
  */
-let incrediRoot: string | null = null;
+let nightgaugeRoot: string | null = null;
 
 /**
  * Lazy-initialized PipelineSummary panel, created on first pipeline completion.
@@ -314,11 +314,11 @@ let settingsPanel: SettingsPanel;
  * Resolve the root path used to construct the agent runner (IssueQueueService /
  * ConcurrentPipelineManager / transitively AgentCommandStreamService).
  *
- * Previously these were gated strictly on `incrediRoot` — the git root of
+ * Previously these were gated strictly on `nightgaugeRoot` — the git root of
  * `workspaceFolders[0]` — which meant a multi-root `.code-workspace` where the
  * first folder isn't the intended target repo (or isn't resolvable at all)
  * could leave the runner unconstructed even though `WorkspaceManager` already
- * discovered every repo in the workspace. Prefer `incrediRoot` when it
+ * discovered every repo in the workspace. Prefer `nightgaugeRoot` when it
  * resolved (no behavior change for the common single-root case); otherwise
  * fall back to the first repository `WorkspaceManager` discovered, so the
  * runner still constructs whenever there is at least one known repo.
@@ -333,13 +333,13 @@ let settingsPanel: SettingsPanel;
  * no discovered repositories) — callers should skip runner construction
  * entirely in that case, matching prior behavior for the no-workspace case.
  *
- * @see Issue #4117 — agent runner gated on a single incrediRoot
+ * @see Issue #4117 — agent runner gated on a single nightgaugeRoot
  */
 export function resolveAgentRunnerRoot(
-  incrediRootValue: string | null,
+  nightgaugeRootValue: string | null,
   workspaceManagerValue: WorkspaceManager | null
 ): string | null {
-  return incrediRootValue ?? workspaceManagerValue?.getAllRepositories()[0]?.path ?? null;
+  return nightgaugeRootValue ?? workspaceManagerValue?.getAllRepositories()[0]?.path ?? null;
 }
 
 /** The subset of {@link Logger} {@link resolveTerminalFunnelTarget} needs. */
@@ -425,11 +425,16 @@ export const TERMINAL_FUNNEL_CONSEQUENCE = {
  * Returns undefined (graceful fallback) when the file is absent or malformed.
  */
 export function readIssueLabels(issueNumber: number): string[] | undefined {
-  if (!incrediRoot) {
+  if (!nightgaugeRoot) {
     return undefined;
   }
   try {
-    const filePath = path.join(incrediRoot, ".nightgauge", "pipeline", `issue-${issueNumber}.json`);
+    const filePath = path.join(
+      nightgaugeRoot,
+      ".nightgauge",
+      "pipeline",
+      `issue-${issueNumber}.json`
+    );
     const raw = readFileSync(filePath, "utf8");
     const parsed = JSON.parse(raw) as { labels?: unknown };
     if (Array.isArray(parsed.labels)) {
@@ -626,9 +631,9 @@ export async function initializeServices(
   // Hydrate the custom per-stage-model badge from config (Issue #20) so the
   // status bar shows "Custom" on activation when pins are active.
   try {
-    const incrediRootForCustom = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-    if (incrediRootForCustom) {
-      statusBar.setCustomOverridesActive(hasCustomStageOverrides(incrediRootForCustom));
+    const nightgaugeRootForCustom = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    if (nightgaugeRootForCustom) {
+      statusBar.setCustomOverridesActive(hasCustomStageOverrides(nightgaugeRootForCustom));
     }
   } catch {
     // Non-critical — badge stays off if config cannot be read.
@@ -661,10 +666,10 @@ export async function initializeServices(
   // VSCode workspace is opened in a subdirectory.
   const workspaceRootForNightgauge = getWorkspaceRoot();
   if (workspaceRootForNightgauge) {
-    incrediRoot = await getIncrediRoot(workspaceRootForNightgauge);
+    nightgaugeRoot = await getNightgaugeRoot(workspaceRootForNightgauge);
     logger.info("Resolved nightgauge root", {
       workspaceRoot: workspaceRootForNightgauge,
-      incrediRoot,
+      nightgaugeRoot,
     });
 
     // Only scaffold .nightgauge/.gitignore and its subdirectories after
@@ -673,14 +678,14 @@ export async function initializeServices(
     // folder to appear in every workspace the extension touched — even ones
     // the user never intended to onboard. Now the user opts in by running
     // /nightgauge:repo-init from the welcome view.
-    const alreadyInitialized = await isRepoInitialized(incrediRoot);
+    const alreadyInitialized = await isRepoInitialized(nightgaugeRoot);
     await vscode.commands.executeCommand(
       "setContext",
       "nightgauge.repoInitialized",
       alreadyInitialized
     );
     if (alreadyInitialized) {
-      ensureGitignore(incrediRoot)
+      ensureGitignore(nightgaugeRoot)
         .then((result) => {
           if (result.created) {
             logger.info("Created .nightgauge/.gitignore");
@@ -697,7 +702,7 @@ export async function initializeServices(
       // .gitignore predating the #326 generator — with no `/knowledge/` rule,
       // which is what turned the pipeline's own scaffold into a permanent
       // "uncommitted changes" verdict and deadlocked nine worktrees.
-      ensureWorkspaceGitignores(incrediRoot)
+      ensureWorkspaceGitignores(nightgaugeRoot)
         .then((results) => {
           for (const r of results) {
             if (r.error) {
@@ -739,7 +744,7 @@ export async function initializeServices(
         ".nightgauge/config.yaml"
       );
       const watcher = vscode.workspace.createFileSystemWatcher(configGlob);
-      const onChange = () => refreshRepoInitializedContext(incrediRoot, logger);
+      const onChange = () => refreshRepoInitializedContext(nightgaugeRoot, logger);
       watcher.onDidCreate(onChange);
       watcher.onDidDelete(onChange);
       context.subscriptions.push(watcher);
@@ -749,7 +754,7 @@ export async function initializeServices(
   }
 
   // Register quickstart onboarding commands (usable even before init).
-  registerQuickstartCommands(context, incrediRoot, logger);
+  registerQuickstartCommands(context, nightgaugeRoot, logger);
 
   // ── 3. Setup services ────────────────────────────────────────────────
 
@@ -795,9 +800,9 @@ export async function initializeServices(
   const getPlatformUrl = () => resolvePlatformBaseUrl(ConfigBridge.getInstance().getPlatform());
 
   // Initialize PipelineStateService for unified state management (Issue #154)
-  // Use incrediRoot (git root) instead of workspace root for correct file placement
-  if (incrediRoot) {
-    pipelineStateService = PipelineStateService.getInstance(incrediRoot);
+  // Use nightgaugeRoot (git root) instead of workspace root for correct file placement
+  if (nightgaugeRoot) {
+    pipelineStateService = PipelineStateService.getInstance(nightgaugeRoot);
 
     // Check for crash recovery on startup
     pipelineStateService.recoverFromCrash().catch((error) => {
@@ -849,7 +854,7 @@ export async function initializeServices(
     // Clean up old execution history JSONL files (Issue #649)
     // Retention is read from pipeline.logs.history_retention_days (config.yaml),
     // defaulting to 90 days when unset (Issue #674)
-    ExecutionHistoryWriter.cleanupOldFiles(incrediRoot)
+    ExecutionHistoryWriter.cleanupOldFiles(nightgaugeRoot)
       .then((result) => {
         if (result.deleted.length > 0) {
           logger.info("Cleaned old execution history files", {
@@ -867,8 +872,8 @@ export async function initializeServices(
     // Skip on uninitialized repos — initialize() calls fs.mkdir on
     // .nightgauge/logs which would resurrect the folder we just
     // intentionally skipped in ensureGitignore.
-    if (await isRepoInitialized(incrediRoot)) {
-      automationService = new AutomationService(pipelineStateService, incrediRoot);
+    if (await isRepoInitialized(nightgaugeRoot)) {
+      automationService = new AutomationService(pipelineStateService, nightgaugeRoot);
       automationService.initialize().catch((error) => {
         logger.warn("AutomationService initialization failed", { error });
       });
@@ -876,8 +881,8 @@ export async function initializeServices(
     }
 
     // Initialize WorkspaceManager for multi-repository support (Issue #324)
-    // Uses incrediRoot as workspace root and workspaceState for session persistence
-    workspaceManager = WorkspaceManager.getInstance(incrediRoot, context.workspaceState);
+    // Uses nightgaugeRoot as workspace root and workspaceState for session persistence
+    workspaceManager = WorkspaceManager.getInstance(nightgaugeRoot, context.workspaceState);
     // initialize() is intentionally NOT awaited here so the rest of the
     // synchronous service setup can proceed immediately. The onWorkspaceChanged
     // handler (registered in section 10) will fire once initialize() completes.
@@ -919,7 +924,7 @@ export async function initializeServices(
     // and fires onConfigChanged events when config files change
     configBridge = ConfigBridge.getInstance();
     try {
-      await configBridge.initialize(workspaceManager, incrediRoot, runtimeStateStoreInstance);
+      await configBridge.initialize(workspaceManager, nightgaugeRoot, runtimeStateStoreInstance);
     } catch (error) {
       logger.warn("ConfigBridge initialization failed", { error });
     }
@@ -952,10 +957,10 @@ export async function initializeServices(
     // reclassified these keys to Machine tier because workspaceState is
     // per-workspace-folder-URI and therefore breaks under git worktrees.
     // Writes now target ~/.nightgauge/config.yaml via
-    // IncrediYamlService.writeGlobal(); reads still come through the
+    // NightgaugeYamlService.writeGlobal(); reads still come through the
     // 7-tier merge engine via ConfigBridge. The RuntimeStateStore is
     // retained for best-effort cleanup of legacy memento entries.
-    const machineYamlWriter = new IncrediYamlService(incrediRoot ?? "");
+    const machineYamlWriter = new NightgaugeYamlService(nightgaugeRoot ?? "");
     context.subscriptions.push(machineYamlWriter);
     sequentialRepoConfigService = createSequentialRepoConfigService(
       runtimeStateStoreInstance,
@@ -1258,14 +1263,14 @@ export async function initializeServices(
   // not match the repo that contains it, is cross-contamination from a
   // concurrent multi-repo run — ignore it AND delete it so it can never be
   // resurrected as a zombie run in a repo that never ran the issue.
-  if (incrediRoot) {
-    const pipelineDir = path.join(incrediRoot, ".nightgauge", "pipeline");
+  if (nightgaugeRoot) {
+    const pipelineDir = path.join(nightgaugeRoot, ".nightgauge", "pipeline");
     // Best-effort: the "owner/repo" (or short name) of the repo that owns this
     // pipeline dir, for the repo-mismatch check. Undefined → mismatch check is
     // skipped (empty-identity check still applies).
     const containingRepo = workspaceManager
       ?.getAllRepositories()
-      .find((r) => r.path === incrediRoot);
+      .find((r) => r.path === nightgaugeRoot);
     const gh = containingRepo?.github;
     const containingRepoSlug = gh ? `${gh.owner}/${gh.repo}` : containingRepo?.name;
     (async () => {
@@ -1386,13 +1391,13 @@ export async function initializeServices(
   let projectBoardService: ProjectBoardService;
 
   // Initialize IssueQueueService for queue management (Issue #236, #305)
-  // Use incrediRoot (git root) for correct .nightgauge directory location,
+  // Use nightgaugeRoot (git root) for correct .nightgauge directory location,
   // falling back to the first repo WorkspaceManager discovered when no single
-  // incrediRoot resolved (multi-root .code-workspace) — see #4117. Gating on
-  // `runnerRoot` instead of `incrediRoot` alone means the agent runner still
+  // nightgaugeRoot resolved (multi-root .code-workspace) — see #4117. Gating on
+  // `runnerRoot` instead of `nightgaugeRoot` alone means the agent runner still
   // constructs whenever WorkspaceManager knows about at least one repository.
   // Pass workspaceState for cross-session persistence (Issue #305)
-  const runnerRoot = resolveAgentRunnerRoot(incrediRoot, workspaceManager);
+  const runnerRoot = resolveAgentRunnerRoot(nightgaugeRoot, workspaceManager);
   if (runnerRoot) {
     issueQueueService = IssueQueueService.getInstance(
       runnerRoot,
@@ -1776,9 +1781,9 @@ export async function initializeServices(
         );
         if (funnelTarget) {
           const { owner: failOwner, repo: failRepo } = funnelTarget;
-          const signalPath = incrediRoot
+          const signalPath = nightgaugeRoot
             ? path.join(
-                incrediRoot,
+                nightgaugeRoot,
                 ".nightgauge",
                 "pipeline",
                 `conflict-restart-${issueNumber}.json`
@@ -2415,9 +2420,9 @@ export async function initializeServices(
   let savedQueriesService: SavedQueriesService | null = null;
   let queryResultsProvider: QueryResultsTreeProvider | null = null;
 
-  if (incrediRoot) {
+  if (nightgaugeRoot) {
     queryService = new QueryService(projectBoardService, context.workspaceState);
-    savedQueriesService = new SavedQueriesService(incrediRoot);
+    savedQueriesService = new SavedQueriesService(nightgaugeRoot);
     context.subscriptions.push(queryService);
     context.subscriptions.push(savedQueriesService);
 
@@ -2551,10 +2556,10 @@ export async function initializeServices(
   }
 
   // Register KnowledgeDocumentLinkProvider for [[wiki-link]] support (Issue #1687)
-  // Scoped to incrediRoot so we pass the correct workspace root for knowledge resolution
-  if (incrediRoot) {
+  // Scoped to nightgaugeRoot so we pass the correct workspace root for knowledge resolution
+  if (nightgaugeRoot) {
     const knowledgeDocumentLinkProvider = new KnowledgeDocumentLinkProvider(
-      incrediRoot,
+      nightgaugeRoot,
       logger,
       workspaceManager?.getWorkspaceConfig() ?? undefined
     );
@@ -2651,7 +2656,7 @@ export async function initializeServices(
       if (!active) return;
 
       // If the active repo is the same as the startup root, no sync needed.
-      if (active.path === incrediRoot) return;
+      if (active.path === nightgaugeRoot) return;
 
       logger.info("Startup sync: event handler missed, syncing manually", {
         repo: active.name,
@@ -2687,8 +2692,10 @@ export async function initializeServices(
   // ── 11. Context viewer ────────────────────────────────────────────────
 
   // Initialize context file viewer
-  // Use incrediRoot (git root) for correct .nightgauge directory location
-  const contextPath = incrediRoot ? `${incrediRoot}/${settings.contextPath}` : settings.contextPath;
+  // Use nightgaugeRoot (git root) for correct .nightgauge directory location
+  const contextPath = nightgaugeRoot
+    ? `${nightgaugeRoot}/${settings.contextPath}`
+    : settings.contextPath;
   const contextViewer = new ContextFileViewer(contextPath);
 
   // ── 12. Dashboard & output ────────────────────────────────────────────
@@ -2696,8 +2703,8 @@ export async function initializeServices(
   // Initialize TelemetryStore for JSONL-based history (Issue #1007)
   // Must be initialized before Dashboard so it can be passed as dependency.
   let telemetryStore: TelemetryStore | null = null;
-  if (incrediRoot) {
-    telemetryStore = new TelemetryStore(incrediRoot);
+  if (nightgaugeRoot) {
+    telemetryStore = new TelemetryStore(nightgaugeRoot);
     container.register("telemetryStore", telemetryStore);
   }
 
@@ -2803,13 +2810,13 @@ export async function initializeServices(
   }
 
   // Initialize dashboard
-  // Pass incrediRoot so Dashboard can subscribe to PipelineStateService
+  // Pass nightgaugeRoot so Dashboard can subscribe to PipelineStateService
   // and receive real-time pipeline updates.
   // Pass TelemetryStore for JSONL-sourced history (Issue #1007).
   const dashboard = new Dashboard(
     context.extensionUri,
     context.workspaceState,
-    incrediRoot ?? undefined,
+    nightgaugeRoot ?? undefined,
     telemetryStore ?? undefined,
     container
   );
@@ -2820,7 +2827,7 @@ export async function initializeServices(
 
   // Adapter usage meter (Issue #659) — the first production consumer of
   // AdapterUsageService (#658 shipped it with none; see ADR 018's
-  // Consequences). Requires incrediRoot: with no workspace/git root there is
+  // Consequences). Requires nightgaugeRoot: with no workspace/git root there is
   // no `.nightgauge/pipeline/history/` to read, so the meter stays hidden
   // rather than wired against a path that cannot exist.
   //
@@ -2834,7 +2841,7 @@ export async function initializeServices(
   // Account-scoped, not workspace-scoped (Issue #730): the utilization is one
   // allowance shared by every Claude Code session the operator runs, and the
   // `nightgauge hook claude-statusline` writer that keeps it current at rest
-  // runs outside any particular workspace. Constructed before the incrediRoot
+  // runs outside any particular workspace. Constructed before the nightgaugeRoot
   // gate for the same reason — it needs no workspace to exist.
   const claudeRateLimitStore = ClaudeRateLimitStore.forAccount();
 
@@ -2851,9 +2858,9 @@ export async function initializeServices(
     },
   });
   let adapterUsageService: AdapterUsageService | null = null;
-  if (incrediRoot) {
+  if (nightgaugeRoot) {
     adapterUsageService = AdapterUsageService.forWorkspace(
-      incrediRoot,
+      nightgaugeRoot,
       dashboard.getState(),
       claudeRateLimitStore
     );
@@ -2908,8 +2915,8 @@ export async function initializeServices(
 
   // Initialize Brownfield Modernization Dashboard (Issue #1163)
   let brownfieldDashboard: BrownfieldDashboard | null = null;
-  if (incrediRoot) {
-    const brownfieldDataService = new BrownfieldDataService(incrediRoot);
+  if (nightgaugeRoot) {
+    const brownfieldDataService = new BrownfieldDataService(nightgaugeRoot);
     brownfieldDashboard = new BrownfieldDashboard(context.extensionUri, brownfieldDataService);
     context.subscriptions.push(brownfieldDataService, brownfieldDashboard);
   }
@@ -3132,9 +3139,9 @@ export async function initializeServices(
 
   // Configure disk logging and pipeline settings from config.yaml
   // Reads pipeline.logs config and pr.auto_merge for pipeline execution behavior
-  if (incrediRoot) {
-    const workspaceRootForLogs = incrediRoot; // Capture for closure
-    const yamlService = new IncrediYamlService(workspaceRootForLogs);
+  if (nightgaugeRoot) {
+    const workspaceRootForLogs = nightgaugeRoot; // Capture for closure
+    const yamlService = new NightgaugeYamlService(workspaceRootForLogs);
     yamlService
       .read()
       .then((result) => {
@@ -3175,9 +3182,9 @@ export async function initializeServices(
 
   // Initialize context watcher for Ready Issues → Pipeline integration
   // This watches .nightgauge/pipeline/ for context files created by Claude Code terminal
-  // Use incrediRoot (git root) so we watch the correct directory
-  if (incrediRoot) {
-    const contextWatcher = new ContextWatcherService(incrediRoot, logger);
+  // Use nightgaugeRoot (git root) so we watch the correct directory
+  if (nightgaugeRoot) {
+    const contextWatcher = new ContextWatcherService(nightgaugeRoot, logger);
 
     /**
      * The "owner/repo" the singleton state service's runs belong to.
@@ -3190,7 +3197,7 @@ export async function initializeServices(
      */
     const resolveWorkspaceRepoSlug = (): string => {
       for (const repository of workspaceManager?.getAllRepositories() ?? []) {
-        if (incrediRoot && repository.path !== incrediRoot) continue;
+        if (nightgaugeRoot && repository.path !== nightgaugeRoot) continue;
         const gh = repository.github;
         if (gh?.owner && gh.repo) return `${gh.owner}/${gh.repo}`;
       }
@@ -3756,9 +3763,9 @@ export async function initializeServices(
     };
 
     // Reset pipeline state and context files
-    // Uses incrediRoot (git root) for correct .nightgauge directory location
+    // Uses nightgaugeRoot (git root) for correct .nightgauge directory location
     const resetPipeline = async (issueNumber?: number) => {
-      if (!incrediRoot) {
+      if (!nightgaugeRoot) {
         return;
       }
 
@@ -3767,8 +3774,8 @@ export async function initializeServices(
         await pipelineStateService?.clearPipeline();
 
         // Delete context files
-        const contextDir = `${incrediRoot}/.nightgauge/pipeline`;
-        const plansDir = `${incrediRoot}/.nightgauge/plans`;
+        const contextDir = `${nightgaugeRoot}/.nightgauge/pipeline`;
+        const plansDir = `${nightgaugeRoot}/.nightgauge/plans`;
 
         if (issueNumber) {
           // Clean up specific issue files
@@ -3896,7 +3903,7 @@ export async function initializeServices(
 
           // Set execution mode based on config.yaml auto_accept_stages config
           // If true, pipeline will auto-progress without showing notifications
-          const configuredMode = getInitialExecutionMode(incrediRoot ?? undefined);
+          const configuredMode = getInitialExecutionMode(nightgaugeRoot ?? undefined);
           await pipelineStateService.setExecutionMode(configuredMode);
           logger.debug("Pipeline execution mode set from config", {
             executionMode: configuredMode,
@@ -3947,7 +3954,7 @@ export async function initializeServices(
 
       // Issue #649's outcome-record writer used to append a second, separate
       // "outcome" record here on pr-merge cleanup, keyed off bootstrap-level
-      // shared state (`incrediRoot`/`telemetryStore`) rather than the
+      // shared state (`nightgaugeRoot`/`telemetryStore`) rather than the
       // completing run's own identity. In a multi-repo/multi-run workspace
       // that shared state can point at a DIFFERENT repo's active slot than
       // the run that just finished, so the record landed in the wrong
@@ -4024,8 +4031,8 @@ export async function initializeServices(
   // Initialize RefreshTriggerService for CLI-triggered refresh (Issue #308)
   // Watches .nightgauge/.refresh-trigger file to auto-refresh tree views when
   // CLI tools create/update issues
-  if (incrediRoot) {
-    const refreshTriggerService = new RefreshTriggerService(incrediRoot, logger);
+  if (nightgaugeRoot) {
+    const refreshTriggerService = new RefreshTriggerService(nightgaugeRoot, logger);
 
     // Register all tree providers to refresh on trigger
     refreshTriggerService.registerTreeProvider(treeProvider);
@@ -4071,12 +4078,12 @@ export async function initializeServices(
   // Initialize TelemetryUploaderService — ships local JSONL history to the
   // platform's POST /v1/telemetry/pipeline-run endpoint (#3315).
   let telemetryUploaderService: TelemetryUploaderService | null = null;
-  if (incrediRoot) {
+  if (nightgaugeRoot) {
     telemetryUploaderService = new TelemetryUploaderService(
       () => cachedLicenseKey ?? null,
       telemetryConsentService,
       getPlatformUrl,
-      incrediRoot,
+      nightgaugeRoot,
       logger,
       // JWT fallback so device-flow / community accounts (no license key) can
       // still upload telemetry — platform ingest accepts either credential.
@@ -4590,7 +4597,7 @@ export async function initializeServices(
     machineFingerprint,
     tierGate,
     licensePreflight,
-    incrediRoot,
+    nightgaugeRoot,
     projectBoardViews,
     treeView,
     platformStatusBarItem,

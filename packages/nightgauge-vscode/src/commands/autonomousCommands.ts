@@ -25,7 +25,7 @@ import {
 import { getRepoIdentity } from "../utils/configPathResolver";
 import type { WorkspaceManager } from "../services/WorkspaceManager";
 import { entryMatchesRepo, type EnabledReposConfigService } from "../utils/enabledReposConfig";
-import { getAutonomousStallConfig } from "../utils/incrediConfig";
+import { getAutonomousStallConfig } from "../utils/nightgaugeConfig";
 import {
   getOpenPRsForRepo,
   findPRForIssueInList,

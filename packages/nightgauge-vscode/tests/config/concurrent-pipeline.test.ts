@@ -100,7 +100,7 @@ describe("getConcurrentPipelineConfig", () => {
 
   it("returns defaults when no config or env", async () => {
     // Lazy import to get the fresh module
-    const { getConcurrentPipelineConfig } = await import("../../src/utils/incrediConfig");
+    const { getConcurrentPipelineConfig } = await import("../../src/utils/nightgaugeConfig");
     const config = getConcurrentPipelineConfig("/nonexistent");
     expect(config.maxConcurrent).toBe(3);
     expect(config.worktreeBase).toBe(".worktrees");
@@ -108,14 +108,14 @@ describe("getConcurrentPipelineConfig", () => {
 
   it("respects NIGHTGAUGE_PIPELINE_MAX_CONCURRENT env var", async () => {
     process.env.NIGHTGAUGE_PIPELINE_MAX_CONCURRENT = "5";
-    const { getConcurrentPipelineConfig } = await import("../../src/utils/incrediConfig");
+    const { getConcurrentPipelineConfig } = await import("../../src/utils/nightgaugeConfig");
     const config = getConcurrentPipelineConfig("/nonexistent");
     expect(config.maxConcurrent).toBe(5);
   });
 
   it("ignores invalid env var values", async () => {
     process.env.NIGHTGAUGE_PIPELINE_MAX_CONCURRENT = "99";
-    const { getConcurrentPipelineConfig } = await import("../../src/utils/incrediConfig");
+    const { getConcurrentPipelineConfig } = await import("../../src/utils/nightgaugeConfig");
     const config = getConcurrentPipelineConfig("/nonexistent");
     expect(config.maxConcurrent).toBe(3); // Falls back to default
   });

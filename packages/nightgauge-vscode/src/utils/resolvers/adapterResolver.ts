@@ -928,7 +928,7 @@ export function tryAutoRouter(
 
 /**
  * Map the UI-facing `ExecutionAdapter` to the SDK's canonical
- * `RouterExecutionAdapter` (= `IncrediAdapter`). The Marketplace extension
+ * `RouterExecutionAdapter` (= `NightgaugeAdapter`). The Marketplace extension
  * deliberately routes bare `"claude"` through the user's external Claude CLI.
  * It does not embed or auto-select the optional Claude Agent SDK based on an
  * ambient API key. Every other UI adapter id is identical to its SDK id.

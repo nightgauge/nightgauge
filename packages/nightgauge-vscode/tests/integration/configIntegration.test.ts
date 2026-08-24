@@ -71,7 +71,7 @@ import {
   mergeFileConfigs,
   type ConfigTiers,
 } from "../../src/config/configMergeEngine";
-import { validateConfig, getSource, type IncrediConfig } from "../../src/config/schema";
+import { validateConfig, getSource, type NightgaugeConfig } from "../../src/config/schema";
 
 describe("Config Integration Tests (Issue #477)", () => {
   // Store original env vars
@@ -99,7 +99,7 @@ describe("Config Integration Tests (Issue #477)", () => {
   describe("config file → service behavior", () => {
     describe("pipeline config integration", () => {
       it("should flow pipeline.auto_fix from config to services", () => {
-        const projectConfig: Partial<IncrediConfig> = {
+        const projectConfig: Partial<NightgaugeConfig> = {
           pipeline: {
             auto_fix: false,
             ci_timeout: 600,
@@ -113,7 +113,7 @@ describe("Config Integration Tests (Issue #477)", () => {
       });
 
       it("should flow pipeline.skip settings correctly", () => {
-        const projectConfig: Partial<IncrediConfig> = {
+        const projectConfig: Partial<NightgaugeConfig> = {
           pipeline: {
             skip: {
               tests: true,
@@ -134,7 +134,7 @@ describe("Config Integration Tests (Issue #477)", () => {
 
     describe("PR config integration", () => {
       it("should flow pr.merge_strategy to PR creation", () => {
-        const projectConfig: Partial<IncrediConfig> = {
+        const projectConfig: Partial<NightgaugeConfig> = {
           pr: {
             merge_strategy: "rebase",
             delete_branch: true,
@@ -150,7 +150,7 @@ describe("Config Integration Tests (Issue #477)", () => {
       });
 
       it("should use pull_request alias correctly", () => {
-        const projectConfig: Partial<IncrediConfig> = {
+        const projectConfig: Partial<NightgaugeConfig> = {
           pull_request: {
             merge_strategy: "squash",
             delete_branch: false,
@@ -334,7 +334,7 @@ describe("Config Integration Tests (Issue #477)", () => {
   describe("real-world scenarios", () => {
     it("CI environment enables auto-accept via env vars", () => {
       // Project config: standard settings
-      const projectConfig: Partial<IncrediConfig> = {
+      const projectConfig: Partial<NightgaugeConfig> = {
         human_in_the_loop: {
           auto_accept_stages: false,
           auto_accept_permissions: false,
@@ -354,7 +354,7 @@ describe("Config Integration Tests (Issue #477)", () => {
 
     it("global user preferences apply across repositories", () => {
       // User's global preference for squash
-      const globalConfig: Partial<IncrediConfig> = {
+      const globalConfig: Partial<NightgaugeConfig> = {
         pr: {
           merge_strategy: "squash",
           delete_branch: true,
@@ -362,7 +362,7 @@ describe("Config Integration Tests (Issue #477)", () => {
       };
 
       // Project has different reviewers
-      const projectConfig: Partial<IncrediConfig> = {
+      const projectConfig: Partial<NightgaugeConfig> = {
         pr: {
           reviewers: ["project-lead"],
         },

@@ -30,7 +30,7 @@ import {
   type WorkflowAgentUsage,
 } from "../../cli/workflow/index.js";
 import { createSuccessQueryFn } from "../integration/helpers/query-mocks.js";
-import type { ICliAdapter, IncrediAdapter } from "../../cli/adapters/ICliAdapter.js";
+import type { ICliAdapter, NightgaugeAdapter } from "../../cli/adapters/ICliAdapter.js";
 
 // ---------------------------------------------------------------------------
 // Fakes
@@ -51,7 +51,7 @@ class FakeFs implements JournalFs {
 
 function fakeAdapter(capability: "native-workflow" | "sdk-fanout" = "sdk-fanout"): ICliAdapter {
   return {
-    name: "claude-sdk" as IncrediAdapter,
+    name: "claude-sdk" as NightgaugeAdapter,
     displayName: "Fake",
     cliCommand: "fake",
     agentic: true,

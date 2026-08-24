@@ -61,7 +61,7 @@ import {
   getFormattedEntries,
   formatConfigDisplay,
 } from "../../src/config/configMergeEngine";
-import { DEFAULT_CONFIG, type IncrediConfig } from "../../src/config/schema";
+import { DEFAULT_CONFIG, type NightgaugeConfig } from "../../src/config/schema";
 
 describe("UI Config Section Integration (Issue #477)", () => {
   // Store original env vars
@@ -86,7 +86,7 @@ describe("UI Config Section Integration (Issue #477)", () => {
 
   describe("pipeline UI integration", () => {
     it("should provide pipeline settings for stage display", () => {
-      const projectConfig: Partial<IncrediConfig> = {
+      const projectConfig: Partial<NightgaugeConfig> = {
         pipeline: {
           ci_timeout: 600,
           auto_fix: true,
@@ -107,7 +107,7 @@ describe("UI Config Section Integration (Issue #477)", () => {
     });
 
     it("should provide retry settings for error display", () => {
-      const projectConfig: Partial<IncrediConfig> = {
+      const projectConfig: Partial<NightgaugeConfig> = {
         pipeline: {
           retry: {
             max_auto_attempts: 5,
@@ -124,7 +124,7 @@ describe("UI Config Section Integration (Issue #477)", () => {
     });
 
     it("should provide log settings for log display", () => {
-      const projectConfig: Partial<IncrediConfig> = {
+      const projectConfig: Partial<NightgaugeConfig> = {
         pipeline: {
           logs: {
             retain: true,
@@ -147,7 +147,7 @@ describe("UI Config Section Integration (Issue #477)", () => {
 
   describe("PR UI integration", () => {
     it("should provide PR settings for PR creation display", () => {
-      const projectConfig: Partial<IncrediConfig> = {
+      const projectConfig: Partial<NightgaugeConfig> = {
         pr: {
           merge_strategy: "squash",
           delete_branch: true,
@@ -182,7 +182,7 @@ describe("UI Config Section Integration (Issue #477)", () => {
 
   describe("project board UI integration", () => {
     it("should provide project settings for board display", () => {
-      const projectConfig: Partial<IncrediConfig> = {
+      const projectConfig: Partial<NightgaugeConfig> = {
         project: {
           number: 42,
           owner: "nightgauge",
@@ -198,7 +198,7 @@ describe("UI Config Section Integration (Issue #477)", () => {
     });
 
     it("should provide sync settings for sync status display", () => {
-      const projectConfig: Partial<IncrediConfig> = {
+      const projectConfig: Partial<NightgaugeConfig> = {
         project: {
           number: 10,
           sync: {
@@ -216,7 +216,7 @@ describe("UI Config Section Integration (Issue #477)", () => {
     });
 
     it("should provide sprint settings for sprint display", () => {
-      const projectConfig: Partial<IncrediConfig> = {
+      const projectConfig: Partial<NightgaugeConfig> = {
         project: {
           number: 10,
           sprint: {
@@ -303,7 +303,7 @@ describe("UI Config Section Integration (Issue #477)", () => {
 
   describe("human-in-the-loop UI integration", () => {
     it("should provide auto-accept settings for confirmation dialogs", () => {
-      const projectConfig: Partial<IncrediConfig> = {
+      const projectConfig: Partial<NightgaugeConfig> = {
         human_in_the_loop: {
           auto_accept_stages: false,
           auto_accept_permissions: false,
@@ -321,7 +321,7 @@ describe("UI Config Section Integration (Issue #477)", () => {
     it("should allow env override for CI automation", () => {
       process.env.NIGHTGAUGE_HUMAN_IN_THE_LOOP_AUTO_ACCEPT_STAGES = "true";
 
-      const projectConfig: Partial<IncrediConfig> = {
+      const projectConfig: Partial<NightgaugeConfig> = {
         human_in_the_loop: {
           auto_accept_stages: false,
         },
@@ -340,7 +340,7 @@ describe("UI Config Section Integration (Issue #477)", () => {
 
   describe("routing UI integration", () => {
     it("should provide routing settings for stage skip display", () => {
-      const projectConfig: Partial<IncrediConfig> = {
+      const projectConfig: Partial<NightgaugeConfig> = {
         routing: {
           trivial_max_complexity: 2,
           extensive_min_complexity: 5,
@@ -362,7 +362,7 @@ describe("UI Config Section Integration (Issue #477)", () => {
 
   describe("validation UI integration", () => {
     it("should provide validation settings for PR checks display", () => {
-      const projectConfig: Partial<IncrediConfig> = {
+      const projectConfig: Partial<NightgaugeConfig> = {
         validation: {
           require_tests: true,
           require_changelog: true,

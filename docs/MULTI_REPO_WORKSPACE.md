@@ -283,7 +283,7 @@ interface Repository {
   name: string; // Unique identifier within workspace
   path: string; // Absolute path to repository root
   role?: "primary" | "secondary" | "shared";
-  incrediConfig?: IncrediConfig; // Lazy-loaded from .nightgauge/config.yaml
+  nightgaugeConfig?: NightgaugeConfig; // Lazy-loaded from .nightgauge/config.yaml
 }
 ```
 

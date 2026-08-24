@@ -38,8 +38,8 @@ async function getBranchSuggestions(cwd: string): Promise<string[]> {
       logDeprecationWarning(pathResult.path);
     }
 
-    const incrediFile = vscode.Uri.file(pathResult.path);
-    const content = await vscode.workspace.fs.readFile(incrediFile);
+    const nightgaugeFile = vscode.Uri.file(pathResult.path);
+    const content = await vscode.workspace.fs.readFile(nightgaugeFile);
     const text = new TextDecoder().decode(content);
 
     // Simple YAML parsing for branch.suggestions array
@@ -78,8 +78,8 @@ export async function getProtectedBranches(cwd: string): Promise<string[]> {
       logDeprecationWarning(pathResult.path);
     }
 
-    const incrediFile = vscode.Uri.file(pathResult.path);
-    const content = await vscode.workspace.fs.readFile(incrediFile);
+    const nightgaugeFile = vscode.Uri.file(pathResult.path);
+    const content = await vscode.workspace.fs.readFile(nightgaugeFile);
     const text = new TextDecoder().decode(content);
 
     // Simple YAML parsing for branch.protected array
@@ -117,8 +117,8 @@ async function getDefaultBaseBranch(cwd: string): Promise<string> {
       logDeprecationWarning(pathResult.path);
     }
 
-    const incrediFile = vscode.Uri.file(pathResult.path);
-    const content = await vscode.workspace.fs.readFile(incrediFile);
+    const nightgaugeFile = vscode.Uri.file(pathResult.path);
+    const content = await vscode.workspace.fs.readFile(nightgaugeFile);
     const text = new TextDecoder().decode(content);
 
     // Look for branch.base setting

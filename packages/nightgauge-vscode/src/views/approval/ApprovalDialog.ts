@@ -181,7 +181,7 @@ export class ApprovalDialog implements vscode.Disposable {
 
     // Create the WebView panel
     this.panel = vscode.window.createWebviewPanel(
-      "incrediApprovalDialog",
+      "nightgaugeApprovalDialog",
       `Review Plan #${issueNumber}`,
       vscode.ViewColumn.One,
       {

@@ -1407,7 +1407,7 @@ describe("TelemetryUploaderService", () => {
   // The Go binary's interactive-run writer lands history/trace JSONL under
   // the run's TARGET repo root (`repoRoot(p.Repo)`, internal/ipc/server.go),
   // not necessarily the primary workspace root. Before #247 the uploader only
-  // ever scanned `incrediRoot`, so target-repo runs in a multi-repo workspace
+  // ever scanned `nightgaugeRoot`, so target-repo runs in a multi-repo workspace
   // silently never uploaded. `getWorkspaceRoots` (7th constructor arg) is how
   // the uploader learns about the other roots to scan — wired in
   // bootstrap/services.ts from `WorkspaceManager.getAllRepositories()`.
@@ -1433,7 +1433,7 @@ describe("TelemetryUploaderService", () => {
       );
     }
 
-    it("scans pipeline-run history across every workspace repo root, not just incrediRoot", async () => {
+    it("scans pipeline-run history across every workspace repo root, not just nightgaugeRoot", async () => {
       setupMultiRootFs([
         {
           root: PRIMARY_ROOT,
@@ -1523,8 +1523,8 @@ describe("TelemetryUploaderService", () => {
       expect(totalEvents).toBe(5);
     });
 
-    it("still scans incrediRoot when getWorkspaceRoots omits it", async () => {
-      // incrediRoot is always unioned in — a getWorkspaceRoots callback that
+    it("still scans nightgaugeRoot when getWorkspaceRoots omits it", async () => {
+      // nightgaugeRoot is always unioned in — a getWorkspaceRoots callback that
       // reports only target repos must not cause the primary root to be
       // dropped from the scan.
       setupMultiRootFs([

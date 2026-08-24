@@ -2,12 +2,12 @@ import { describe, it, expect } from "vitest";
 import { EFFORT_LEVELS } from "@nightgauge/sdk";
 import { getSettingsHtml } from "../../../src/views/settings/SettingsHtml";
 import { getDefaultConfig } from "../../../src/config/schema";
-import type { IncrediConfig } from "../../../src/views/settings/types";
+import type { NightgaugeConfig } from "../../../src/views/settings/types";
 import type { ConfigSourceMap } from "../../../src/config/schema";
 
 describe("SettingsHtml routing section", () => {
   it("renders routing section controls", () => {
-    const config = getDefaultConfig() as IncrediConfig;
+    const config = getDefaultConfig() as NightgaugeConfig;
     const html = getSettingsHtml({ cspSource: "test-csp" } as any, config);
 
     expect(html).toContain('id="section-routing"');
@@ -27,7 +27,7 @@ describe("SettingsHtml routing section", () => {
   });
 
   it("renders correct default values", () => {
-    const config = {} as IncrediConfig;
+    const config = {} as NightgaugeConfig;
     const html = getSettingsHtml({ cspSource: "test-csp" } as any, config);
 
     // mode defaults to automatic (selected)
@@ -50,7 +50,7 @@ describe("SettingsHtml routing section", () => {
   });
 
   it("renders custom config values", () => {
-    const config = getDefaultConfig() as IncrediConfig;
+    const config = getDefaultConfig() as NightgaugeConfig;
     config.model_routing = {
       mode: "hybrid",
       complexity_thresholds: {
@@ -80,7 +80,7 @@ describe("SettingsHtml routing section", () => {
   });
 
   it("renders tier badges when showBadges is true", () => {
-    const config = getDefaultConfig() as IncrediConfig;
+    const config = getDefaultConfig() as NightgaugeConfig;
     const sources: ConfigSourceMap = {
       "model_routing.mode": "project",
       "model_routing.auto_tune": "local",
@@ -104,7 +104,7 @@ describe("SettingsHtml routing section", () => {
 });
 
 describe("SettingsHtml default_effort select — effort vocabulary (#394)", () => {
-  function effortSelectHtml(config: IncrediConfig): string {
+  function effortSelectHtml(config: NightgaugeConfig): string {
     const html = getSettingsHtml({ cspSource: "test-csp" } as any, config);
     const match = html.match(/<select id="model_routing\.default_effort"[\s\S]*?<\/select>/);
     expect(match, "default_effort select should be rendered").toBeTruthy();
@@ -112,7 +112,7 @@ describe("SettingsHtml default_effort select — effort vocabulary (#394)", () =
   }
 
   it("offers every level in EFFORT_LEVELS, including max", () => {
-    const select = effortSelectHtml(getDefaultConfig() as IncrediConfig);
+    const select = effortSelectHtml(getDefaultConfig() as NightgaugeConfig);
 
     for (const level of EFFORT_LEVELS) {
       expect(select).toContain(`<option value="${level}"`);
@@ -122,7 +122,7 @@ describe("SettingsHtml default_effort select — effort vocabulary (#394)", () =
   });
 
   it("marks 'max' selected when the config carries default_effort: max", () => {
-    const config = getDefaultConfig() as IncrediConfig;
+    const config = getDefaultConfig() as NightgaugeConfig;
     config.model_routing = { ...(config.model_routing ?? {}), default_effort: "max" };
 
     const select = effortSelectHtml(config);
@@ -133,7 +133,7 @@ describe("SettingsHtml default_effort select — effort vocabulary (#394)", () =
   });
 
   it("marks 'xhigh' selected when the config carries default_effort: xhigh", () => {
-    const config = getDefaultConfig() as IncrediConfig;
+    const config = getDefaultConfig() as NightgaugeConfig;
     config.model_routing = { ...(config.model_routing ?? {}), default_effort: "xhigh" };
 
     expect(effortSelectHtml(config)).toContain('<option value="xhigh" selected>');

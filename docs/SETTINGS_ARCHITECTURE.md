@@ -76,7 +76,7 @@ Per-tier justification:
 | 7   | CLI flags | `--config-*`                               | Highest priority — explicit, transient, scoped to a single command invocation.                                                                                      |
 
 The original sin this spike diagnosed still holds: the four offending writers
-(`sequentialRepoConfig.ts`, `enabledReposConfig.ts`, `IncrediYamlService.ts`,
+(`sequentialRepoConfig.ts`, `enabledReposConfig.ts`, `NightgaugeYamlService.ts`,
 `SettingsPanel.ts`) defaulted to writing the team tier and dirtied the tree.
 The remedies shipped since: runtime tier + `RuntimeStateStore` (phase 2),
 machine-tier routing for identity/credential keys (phase 4), and — completing
@@ -199,7 +199,7 @@ the YAML and produces a normal commit.
 Per-developer preferences. Never appropriate to commit. The UI's **default
 write target** for any non-ephemeral key. File:
 `~/.nightgauge/config.yaml`. Plumbing already exists in
-`globalConfigResolver.ts` and is watched by `IncrediYamlService.ts`.
+`globalConfigResolver.ts` and is watched by `NightgaugeYamlService.ts`.
 
 | Key Path                                                           | Current Location                               | Target Tier | Rationale                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | ------------------------------------------------------------------ | ---------------------------------------------- | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -463,7 +463,7 @@ recommendations:
     size: S
     labels: ["component:config", "phase:3"]
     body: |
-      Replace UI write path in SettingsPanel.ts / IncrediYamlService.ts
+      Replace UI write path in SettingsPanel.ts / NightgaugeYamlService.ts
       with a runtime-tier write. Pipeline dispatch reads the merged value.
     depends_on: ["memento-namespace", "runtime-tier-merge-engine"]
 
@@ -500,7 +500,7 @@ recommendations:
     size: M
     labels: ["component:config", "phase:4"]
     body: |
-      SettingsPanel.handleSave() and IncrediYamlService.write() default to
+      SettingsPanel.handleSave() and NightgaugeYamlService.write() default to
       machine tier. Add explicit "Edit team config" affordance that opens
       the YAML and shows a "this will modify a tracked file" confirmation
       before saving.

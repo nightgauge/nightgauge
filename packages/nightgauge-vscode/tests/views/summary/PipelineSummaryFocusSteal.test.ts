@@ -77,7 +77,7 @@ describe("PipelineSummary focus-steal fix (Issue #1403)", () => {
     await summary.show(mockState);
 
     expect(vscode.window.createWebviewPanel).toHaveBeenCalledWith(
-      "incrediPipelineSummary",
+      "nightgaugePipelineSummary",
       `Pipeline Complete - Issue #${mockState.issue_number}`,
       expect.objectContaining({ viewColumn: 1, preserveFocus: true }),
       expect.objectContaining({ enableScripts: true })

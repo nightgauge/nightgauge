@@ -164,9 +164,9 @@ import {
   type ExecutionAdapter,
   type DefaultModel,
   type PipelineModelOverride,
-} from "./incrediConfig";
+} from "./nightgaugeConfig";
 // Direct resolver import (#569): the registry effort gate for non-Claude
-// adapter dispatches. Deliberately not routed through the incrediConfig
+// adapter dispatches. Deliberately not routed through the nightgaugeConfig
 // barrel — this is dispatch preflight, not configuration reading.
 import {
   checkAdapterEffortSupported,

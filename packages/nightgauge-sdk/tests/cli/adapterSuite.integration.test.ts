@@ -14,7 +14,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { defaultRegistry } from "../../src/cli/adapters/AdapterRegistry.js";
-import type { ICliAdapter, IncrediAdapter } from "../../src/cli/adapters/ICliAdapter.js";
+import type { ICliAdapter, NightgaugeAdapter } from "../../src/cli/adapters/ICliAdapter.js";
 import { AdapterError } from "../../src/cli/adapters/errors.js";
 
 // ---------------------------------------------------------------------------
@@ -22,7 +22,7 @@ import { AdapterError } from "../../src/cli/adapters/errors.js";
 // ---------------------------------------------------------------------------
 
 /** All canonical adapter names registered in defaultRegistry. */
-const ALL_ADAPTER_NAMES: IncrediAdapter[] = [
+const ALL_ADAPTER_NAMES: NightgaugeAdapter[] = [
   "claude-sdk",
   "claude-headless",
   "codex",
@@ -98,7 +98,7 @@ describe("defaultRegistry: registration", () => {
   });
 
   it("get() throws a descriptive error for unregistered names", () => {
-    expect(() => defaultRegistry.get("unknown-adapter" as IncrediAdapter)).toThrow(
+    expect(() => defaultRegistry.get("unknown-adapter" as NightgaugeAdapter)).toThrow(
       /Unknown adapter/
     );
   });
@@ -278,7 +278,7 @@ describe.each(ALL_ADAPTER_NAMES)("createQueryFunction() — %s", (name) => {
 // ---------------------------------------------------------------------------
 
 describe("requiresDirectApiKey() cross-adapter invariant", () => {
-  const API_KEY_ADAPTERS = new Set<IncrediAdapter>(["claude-sdk", "gemini-sdk"]);
+  const API_KEY_ADAPTERS = new Set<NightgaugeAdapter>(["claude-sdk", "gemini-sdk"]);
 
   it.each(ALL_ADAPTER_NAMES)("%s: requiresDirectApiKey() matches expected value", (name) => {
     const adapter = defaultRegistry.get(name);
@@ -423,7 +423,7 @@ describe("cross-adapter invariants", () => {
 // ---------------------------------------------------------------------------
 
 describe("cross-adapter error type invariant — CLI adapters throw AdapterError on missing binary", () => {
-  const CLI_ADAPTERS: IncrediAdapter[] = ["claude-headless", "codex", "gemini", "copilot"];
+  const CLI_ADAPTERS: NightgaugeAdapter[] = ["claude-headless", "codex", "gemini", "copilot"];
   let envSnapshot: EnvSnapshot;
 
   beforeEach(() => {
@@ -458,7 +458,7 @@ describe("cross-adapter error type invariant — CLI adapters throw AdapterError
 });
 
 describe("cross-adapter error type invariant — SDK adapters throw AdapterError on missing key", () => {
-  const SDK_ADAPTERS: Array<[IncrediAdapter, string]> = [
+  const SDK_ADAPTERS: Array<[NightgaugeAdapter, string]> = [
     ["claude-sdk", "ANTHROPIC_API_KEY"],
     ["gemini-sdk", "GEMINI_API_KEY"],
   ];

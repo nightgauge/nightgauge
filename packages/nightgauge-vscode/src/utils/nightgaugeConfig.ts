@@ -1,8 +1,8 @@
 /**
- * IncrediConfig Utilities — Facade / Re-export Module
+ * NightgaugeConfig Utilities — Facade / Re-export Module
  *
  * This file re-exports all configuration utilities from their focused domain modules.
- * All existing import paths (`from "...incrediConfig"`) continue to work unchanged.
+ * All existing import paths (`from "...nightgaugeConfig"`) continue to work unchanged.
  *
  * Domain modules:
  * - resolvers/authResolver      — GitHub auth, tokens, auth providers
@@ -11,7 +11,7 @@
  * - resolvers/otherResolver     — Pipeline control, budget enforcement, concurrent, epic merge
  * - resolvers/monitoringResolver — Stall detection, alerting, MCP, supercharge, audit
  *
- * @see Issue #2742 - Extract incrediConfig.ts resolver classes
+ * @see Issue #2742 - Extract nightgaugeConfig.ts resolver classes
  * @see Issue #195 - auto_accept_stages not respected for stage transitions
  * @see Issue #433 - config.yaml (formerly nightgauge.yaml)
  */
@@ -201,7 +201,7 @@ export {
 } from "./resolvers/monitoringResolver";
 
 // Re-export performance-mode primitives so consumers can import from
-// `utils/incrediConfig` consistently (Issue #3009).
+// `utils/nightgaugeConfig` consistently (Issue #3009).
 export {
   type PerformanceMode,
   PERFORMANCE_MODES,

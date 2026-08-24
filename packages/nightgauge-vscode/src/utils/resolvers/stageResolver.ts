@@ -1,11 +1,11 @@
 /**
- * Stage Resolver — stage-scoped configuration resolvers extracted from incrediConfig.ts
+ * Stage Resolver — stage-scoped configuration resolvers extracted from nightgaugeConfig.ts
  *
  * Provides utilities for resolving stage execution mode, stage budgets,
  * stage models, stage model overrides, stage models matrix, type overrides,
  * task type stage overrides, and stage effort levels from config/env.
  *
- * @see Issue #2742 - Refactor VSCode extract incrediConfig.ts
+ * @see Issue #2742 - Refactor VSCode extract nightgaugeConfig.ts
  */
 
 import * as fs from "node:fs";

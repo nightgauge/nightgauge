@@ -9,7 +9,7 @@
 
 import type { PipelineConfig } from "../orchestrator/PipelineOrchestrator.js";
 import { isTierBand, type TierBand } from "../eval/tierBands.js";
-import { requiresDirectApiKey, resolveAdapter, type IncrediAdapter } from "./adapter.js";
+import { requiresDirectApiKey, resolveAdapter, type NightgaugeAdapter } from "./adapter.js";
 import {
   DEFAULT_ORCHESTRATION_CONFIG,
   DISABLE_WORKFLOWS_ENV,
@@ -21,7 +21,7 @@ import {
  */
 export interface CLIConfig extends PipelineConfig {
   /** Execution adapter */
-  adapter: IncrediAdapter;
+  adapter: NightgaugeAdapter;
   /** Skip approval prompts (for CI) */
   autoApprove: boolean;
   /** Output format */

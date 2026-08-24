@@ -20,7 +20,7 @@ import {
   getPathsFromSource,
   type ConfigTiers,
 } from "../../src/config/configMergeEngine";
-import { DEFAULT_CONFIG, type IncrediConfig } from "../../src/config/schema";
+import { DEFAULT_CONFIG, type NightgaugeConfig } from "../../src/config/schema";
 
 describe("configMergeEngine — runtime tier", () => {
   const originalEnv = { ...process.env };
@@ -42,7 +42,7 @@ describe("configMergeEngine — runtime tier", () => {
   it("runtime overrides default", () => {
     const tiers: ConfigTiers = {
       defaults: DEFAULT_CONFIG,
-      runtime: { pipeline: { max_concurrent: 7 } } as Partial<IncrediConfig>,
+      runtime: { pipeline: { max_concurrent: 7 } } as Partial<NightgaugeConfig>,
     };
     const result = mergeConfigs(tiers, { skipEnvResolution: true });
     expect(result.config.pipeline?.max_concurrent).toBe(7);
@@ -52,8 +52,8 @@ describe("configMergeEngine — runtime tier", () => {
   it("runtime overrides global", () => {
     const tiers: ConfigTiers = {
       defaults: DEFAULT_CONFIG,
-      global: { pipeline: { max_concurrent: 2 } } as Partial<IncrediConfig>,
-      runtime: { pipeline: { max_concurrent: 4 } } as Partial<IncrediConfig>,
+      global: { pipeline: { max_concurrent: 2 } } as Partial<NightgaugeConfig>,
+      runtime: { pipeline: { max_concurrent: 4 } } as Partial<NightgaugeConfig>,
     };
     const result = mergeConfigs(tiers, { skipEnvResolution: true });
     expect(result.config.pipeline?.max_concurrent).toBe(4);
@@ -63,8 +63,8 @@ describe("configMergeEngine — runtime tier", () => {
   it("runtime overrides project", () => {
     const tiers: ConfigTiers = {
       defaults: DEFAULT_CONFIG,
-      project: { project: { number: 1 } } as Partial<IncrediConfig>,
-      runtime: { project: { number: 2 } } as Partial<IncrediConfig>,
+      project: { project: { number: 1 } } as Partial<NightgaugeConfig>,
+      runtime: { project: { number: 2 } } as Partial<NightgaugeConfig>,
     };
     const result = mergeConfigs(tiers, { skipEnvResolution: true });
     expect(result.config.project?.number).toBe(2);
@@ -74,8 +74,8 @@ describe("configMergeEngine — runtime tier", () => {
   it("runtime overrides local", () => {
     const tiers: ConfigTiers = {
       defaults: DEFAULT_CONFIG,
-      local: { pipeline: { auto_fix: true } } as Partial<IncrediConfig>,
-      runtime: { pipeline: { auto_fix: false } } as Partial<IncrediConfig>,
+      local: { pipeline: { auto_fix: true } } as Partial<NightgaugeConfig>,
+      runtime: { pipeline: { auto_fix: false } } as Partial<NightgaugeConfig>,
     };
     const result = mergeConfigs(tiers, { skipEnvResolution: true });
     expect(result.config.pipeline?.auto_fix).toBe(false);
@@ -85,8 +85,8 @@ describe("configMergeEngine — runtime tier", () => {
   it("env overrides runtime", () => {
     const tiers: ConfigTiers = {
       defaults: DEFAULT_CONFIG,
-      runtime: { pipeline: { max_concurrent: 4 } } as Partial<IncrediConfig>,
-      env: { pipeline: { max_concurrent: 8 } } as Partial<IncrediConfig>,
+      runtime: { pipeline: { max_concurrent: 4 } } as Partial<NightgaugeConfig>,
+      env: { pipeline: { max_concurrent: 8 } } as Partial<NightgaugeConfig>,
     };
     const result = mergeConfigs(tiers, { skipEnvResolution: true });
     expect(result.config.pipeline?.max_concurrent).toBe(8);
@@ -96,8 +96,8 @@ describe("configMergeEngine — runtime tier", () => {
   it("cli overrides runtime", () => {
     const tiers: ConfigTiers = {
       defaults: DEFAULT_CONFIG,
-      runtime: { pipeline: { max_concurrent: 4 } } as Partial<IncrediConfig>,
-      cli: { pipeline: { max_concurrent: 16 } } as Partial<IncrediConfig>,
+      runtime: { pipeline: { max_concurrent: 4 } } as Partial<NightgaugeConfig>,
+      cli: { pipeline: { max_concurrent: 16 } } as Partial<NightgaugeConfig>,
     };
     const result = mergeConfigs(tiers, { skipEnvResolution: true });
     expect(result.config.pipeline?.max_concurrent).toBe(16);
@@ -107,12 +107,12 @@ describe("configMergeEngine — runtime tier", () => {
   it("preserves the full precedence chain end-to-end", () => {
     const tiers: ConfigTiers = {
       defaults: DEFAULT_CONFIG,
-      global: { pipeline: { max_concurrent: 1 } } as Partial<IncrediConfig>,
-      project: { pipeline: { max_concurrent: 2 } } as Partial<IncrediConfig>,
-      local: { pipeline: { max_concurrent: 3 } } as Partial<IncrediConfig>,
-      runtime: { pipeline: { max_concurrent: 4 } } as Partial<IncrediConfig>,
-      env: { pipeline: { max_concurrent: 5 } } as Partial<IncrediConfig>,
-      cli: { pipeline: { max_concurrent: 6 } } as Partial<IncrediConfig>,
+      global: { pipeline: { max_concurrent: 1 } } as Partial<NightgaugeConfig>,
+      project: { pipeline: { max_concurrent: 2 } } as Partial<NightgaugeConfig>,
+      local: { pipeline: { max_concurrent: 3 } } as Partial<NightgaugeConfig>,
+      runtime: { pipeline: { max_concurrent: 4 } } as Partial<NightgaugeConfig>,
+      env: { pipeline: { max_concurrent: 5 } } as Partial<NightgaugeConfig>,
+      cli: { pipeline: { max_concurrent: 6 } } as Partial<NightgaugeConfig>,
     };
     const result = mergeConfigs(tiers, { skipEnvResolution: true });
     expect(result.config.pipeline?.max_concurrent).toBe(6);
@@ -124,7 +124,7 @@ describe("configMergeEngine — runtime tier", () => {
   it("sets hasRuntime=true when a non-empty runtime tier is supplied", () => {
     const tiers: ConfigTiers = {
       defaults: DEFAULT_CONFIG,
-      runtime: { pipeline: { max_concurrent: 4 } } as Partial<IncrediConfig>,
+      runtime: { pipeline: { max_concurrent: 4 } } as Partial<NightgaugeConfig>,
     };
     const result = mergeConfigs(tiers, { skipEnvResolution: true });
     expect(result.tiers.hasRuntime).toBe(true);
@@ -146,8 +146,8 @@ describe("configMergeEngine — runtime tier", () => {
   it("wasOverridden(local) returns true when runtime supplied the value", () => {
     const tiers: ConfigTiers = {
       defaults: DEFAULT_CONFIG,
-      local: { pipeline: { max_concurrent: 2 } } as Partial<IncrediConfig>,
-      runtime: { pipeline: { max_concurrent: 4 } } as Partial<IncrediConfig>,
+      local: { pipeline: { max_concurrent: 2 } } as Partial<NightgaugeConfig>,
+      runtime: { pipeline: { max_concurrent: 4 } } as Partial<NightgaugeConfig>,
     };
     const result = mergeConfigs(tiers, { skipEnvResolution: true });
     expect(wasOverridden(result, "pipeline.max_concurrent", "local")).toBe(true);
@@ -156,8 +156,8 @@ describe("configMergeEngine — runtime tier", () => {
   it("wasOverridden(runtime) returns true when env or cli supplied the value", () => {
     const tiers: ConfigTiers = {
       defaults: DEFAULT_CONFIG,
-      runtime: { pipeline: { max_concurrent: 4 } } as Partial<IncrediConfig>,
-      env: { pipeline: { max_concurrent: 8 } } as Partial<IncrediConfig>,
+      runtime: { pipeline: { max_concurrent: 4 } } as Partial<NightgaugeConfig>,
+      env: { pipeline: { max_concurrent: 8 } } as Partial<NightgaugeConfig>,
     };
     const result = mergeConfigs(tiers, { skipEnvResolution: true });
     expect(wasOverridden(result, "pipeline.max_concurrent", "runtime")).toBe(true);
@@ -166,7 +166,7 @@ describe("configMergeEngine — runtime tier", () => {
   it("wasOverridden(runtime) returns false when only lower tiers supplied the value", () => {
     const tiers: ConfigTiers = {
       defaults: DEFAULT_CONFIG,
-      local: { pipeline: { max_concurrent: 2 } } as Partial<IncrediConfig>,
+      local: { pipeline: { max_concurrent: 2 } } as Partial<NightgaugeConfig>,
     };
     const result = mergeConfigs(tiers, { skipEnvResolution: true });
     expect(wasOverridden(result, "pipeline.max_concurrent", "runtime")).toBe(false);
@@ -180,7 +180,7 @@ describe("configMergeEngine — runtime tier", () => {
       runtime: {
         pipeline: { max_concurrent: 4, auto_fix: false },
         project: { number: 99 },
-      } as Partial<IncrediConfig>,
+      } as Partial<NightgaugeConfig>,
     };
     const result = mergeConfigs(tiers, { skipEnvResolution: true });
     const runtimePaths = getPathsFromSource(result, "runtime").sort();
@@ -194,7 +194,7 @@ describe("configMergeEngine — runtime tier", () => {
   it("schema validation passes when runtime supplies a valid integer for an integer field", () => {
     const tiers: ConfigTiers = {
       defaults: DEFAULT_CONFIG,
-      runtime: { pipeline: { max_concurrent: 4 } } as Partial<IncrediConfig>,
+      runtime: { pipeline: { max_concurrent: 4 } } as Partial<NightgaugeConfig>,
     };
     const result = mergeConfigs(tiers, { skipEnvResolution: true });
     expect(result.validation.valid).toBe(true);
@@ -205,7 +205,7 @@ describe("configMergeEngine — runtime tier", () => {
   it("does not mark default-only paths as runtime", () => {
     const tiers: ConfigTiers = {
       defaults: DEFAULT_CONFIG,
-      runtime: { pipeline: { max_concurrent: 4 } } as Partial<IncrediConfig>,
+      runtime: { pipeline: { max_concurrent: 4 } } as Partial<NightgaugeConfig>,
     };
     const result = mergeConfigs(tiers, { skipEnvResolution: true });
     // Some unrelated default path should still be 'default'

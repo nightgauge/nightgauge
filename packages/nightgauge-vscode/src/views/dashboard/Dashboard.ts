@@ -57,7 +57,7 @@ import { IssueQueueService } from "../../services/IssueQueueService";
 import { CompletedIssuesService } from "../../services/CompletedIssuesService";
 import { RecommendationApplier } from "../../services/RecommendationApplier";
 import { AllowlistSuggestionService } from "../../services/AllowlistSuggestionService";
-import { IncrediYamlService } from "../settings/IncrediYamlService";
+import { NightgaugeYamlService } from "../settings/NightgaugeYamlService";
 import type { ProjectBoardData, StatusCounts } from "./ProjectBoardTypes";
 import type { AllowlistSuggestion } from "./FirewallTypes";
 import { Logger } from "../../utils/logger";
@@ -65,7 +65,7 @@ import { getCoreSettings } from "../../config/coreSettings";
 import type { Container } from "../../bootstrap/Container";
 import type { TelemetryStore } from "../../services/TelemetryStore";
 import { ExecutionHistoryReader } from "../../utils/executionHistoryReader";
-import { getPerformanceMode } from "../../utils/incrediConfig";
+import { getPerformanceMode } from "../../utils/nightgaugeConfig";
 import { PERFORMANCE_MODES, type PerformanceMode as ModeProfile } from "../../utils/modeProfiles";
 import {
   getCalibratedStallData,
@@ -230,7 +230,7 @@ export class Dashboard implements vscode.Disposable {
    * Two collections rather than one ordered collection (#809). These used to
    * share `disposables`, so closing the tab ran the SERVICE teardown --
    * disposing the diagnostic logger's OutputChannel, the recommendation
-   * applier and the IncrediYaml service. Dashboard is a singleton captured by
+   * applier and the NightgaugeYaml service. Dashboard is a singleton captured by
    * the `nightgauge.showDashboard` closure, so the next invocation called
    * `show()` on a gutted object and VS Code reported
    * "Channel has been closed"; only an extension host restart recovered.
@@ -264,8 +264,8 @@ export class Dashboard implements vscode.Disposable {
   private recommendationApplier: RecommendationApplier | null = null;
   /** Allowlist suggestion service (Issue #786) */
   private allowlistSuggestionService = new AllowlistSuggestionService();
-  /** IncrediYaml service for config writes (Issue #786) */
-  private incrediYamlService: IncrediYamlService | null = null;
+  /** NightgaugeYaml service for config writes (Issue #786) */
+  private nightgaugeYamlService: NightgaugeYamlService | null = null;
   /** Cached sanitization config for synchronous render access (Issue #786) */
   private cachedAllowlist: string[] = [];
   private cachedSafeDirs: string[] = [];
@@ -457,7 +457,7 @@ export class Dashboard implements vscode.Disposable {
         );
       }
       this.recommendationApplier = new RecommendationApplier(workspaceRoot);
-      this.incrediYamlService = new IncrediYamlService(workspaceRoot);
+      this.nightgaugeYamlService = new NightgaugeYamlService(workspaceRoot);
       this.refreshSanitizationConfigCache();
       this.discoveryActivityService = new DiscoveryActivityService(workspaceRoot);
 
@@ -602,7 +602,7 @@ export class Dashboard implements vscode.Disposable {
    */
   private async refreshSanitizationConfigCache(): Promise<void> {
     try {
-      const result = await this.incrediYamlService?.read();
+      const result = await this.nightgaugeYamlService?.read();
       this.cachedAllowlist = result?.config?.sanitization?.allowlist ?? [];
       this.cachedSafeDirs = result?.config?.sanitization?.safe_directories ?? [];
     } catch {
@@ -1346,7 +1346,7 @@ export class Dashboard implements vscode.Disposable {
 
     // Create the WebView panel
     this.panel = vscode.window.createWebviewPanel(
-      "incrediDashboard",
+      "nightgaugeDashboard",
       "Nightgauge Dashboard",
       vscode.ViewColumn.One,
       {
@@ -1878,7 +1878,7 @@ export class Dashboard implements vscode.Disposable {
       case "firewallAddAllowlist":
         // Add a suggested pattern to config.yaml (Issue #786)
         if (
-          this.incrediYamlService &&
+          this.nightgaugeYamlService &&
           typeof message.pattern === "string" &&
           message.pattern.length > 0 &&
           message.pattern.length <= 500 &&
@@ -1893,8 +1893,8 @@ export class Dashboard implements vscode.Disposable {
           }
           const addResult =
             message.suggestionType === "safe_directory"
-              ? await this.incrediYamlService.addToSanitizationSafeDirectories(message.pattern)
-              : await this.incrediYamlService.addToSanitizationAllowlist(message.pattern);
+              ? await this.nightgaugeYamlService.addToSanitizationSafeDirectories(message.pattern)
+              : await this.nightgaugeYamlService.addToSanitizationAllowlist(message.pattern);
           if (addResult.success) {
             vscode.window.showInformationMessage(
               `Added to ${message.suggestionType === "safe_directory" ? "safe_directories" : "allowlist"}: ${message.pattern}`
@@ -2447,7 +2447,7 @@ export class Dashboard implements vscode.Disposable {
    *
    * Panel teardown only. This used to call the service-lifetime `dispose()`,
    * which took the diagnostic logger, the recommendation applier and the
-   * IncrediYaml service down with the tab — and since Dashboard is a singleton
+   * NightgaugeYaml service down with the tab — and since Dashboard is a singleton
    * captured by the `nightgauge.showDashboard` closure, the next invocation ran
    * `show()` against a gutted object (#809).
    */
@@ -4073,8 +4073,8 @@ export class Dashboard implements vscode.Disposable {
     // Dispose recommendation applier (Issue #787)
     this.recommendationApplier?.dispose();
 
-    // Dispose IncrediYaml service (Issue #786)
-    this.incrediYamlService?.dispose();
+    // Dispose NightgaugeYaml service (Issue #786)
+    this.nightgaugeYamlService?.dispose();
 
     // Dispose diagnostic logger (Issue #780)
     this.logger.dispose();

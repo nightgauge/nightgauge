@@ -10,14 +10,14 @@
  */
 
 import * as vscode from "vscode";
-import type { IncrediConfig, ViewTier, EditableTier, TierViewState } from "./types";
+import type { NightgaugeConfig, ViewTier, EditableTier, TierViewState } from "./types";
 import { PIPELINE_LOCKED_SECTIONS } from "./types";
-import { IncrediYamlService, setConfigValue, getConfigValue } from "./IncrediYamlService";
+import { NightgaugeYamlService, setConfigValue, getConfigValue } from "./NightgaugeYamlService";
 import { getSettingsHtml, STAGE_ADAPTER_STAGES, type StageAdapterPreviewRow } from "./SettingsHtml";
 import { resolveStageAdapter } from "../../utils/resolvers/adapterResolver";
 import { getModeStageAdapterModel } from "../../utils/modeProfiles";
 import { getPerformanceMode } from "../../utils/resolvers/monitoringResolver";
-import { toIncrediAdapter } from "../../services/HeadlessOrchestrator";
+import { toNightgaugeAdapter } from "../../services/HeadlessOrchestrator";
 import { validateAdapterAuth } from "@nightgauge/sdk";
 import type { PipelineStage } from "@nightgauge/sdk";
 import type { ExecutionAdapter } from "../../utils/resolvers/modelResolver";
@@ -109,9 +109,9 @@ export class SettingsPanel implements vscode.Disposable {
   private static currentPanel: SettingsPanel | undefined;
   private panel: vscode.WebviewPanel | undefined;
   private disposables: vscode.Disposable[] = [];
-  private yamlService: IncrediYamlService;
+  private yamlService: NightgaugeYamlService;
   private messageHandler: SettingsMessageHandler;
-  private currentConfig: IncrediConfig = {};
+  private currentConfig: NightgaugeConfig = {};
   private stateService: PipelineStateService | null = null;
   private lockedSections: Set<string> = new Set();
   private readonly lmStudioLogger = new Logger("Nightgauge LM Studio");
@@ -149,12 +149,12 @@ export class SettingsPanel implements vscode.Disposable {
     hasProjectConfig: false,
     activeEnvVars: [],
   };
-  private projectConfig: IncrediConfig = {};
-  private localConfig: IncrediConfig = {};
+  private projectConfig: NightgaugeConfig = {};
+  private localConfig: NightgaugeConfig = {};
   // Machine-tier working config (~/.nightgauge/config.yaml). Edited when
   // the Global tab is active so machine-tier keys (e.g. the license key) can be
   // saved through the UI (#3997).
-  private globalConfig: IncrediConfig = {};
+  private globalConfig: NightgaugeConfig = {};
   private hasUnsavedChanges = false;
   private externalReloadPrompt: Promise<void> | null = null;
 
@@ -180,7 +180,7 @@ export class SettingsPanel implements vscode.Disposable {
     private readonly extensionUri: vscode.Uri,
     private readonly workspaceRoot: string
   ) {
-    this.yamlService = new IncrediYamlService(workspaceRoot);
+    this.yamlService = new NightgaugeYamlService(workspaceRoot);
     this.disposables.push(this.lmStudioLogger);
 
     // Set up message handler with tier-aware callbacks
@@ -298,7 +298,7 @@ export class SettingsPanel implements vscode.Disposable {
 
     // Create the WebView panel
     this.panel = vscode.window.createWebviewPanel(
-      "incrediSettings",
+      "nightgaugeSettings",
       "Nightgauge Settings",
       vscode.ViewColumn.One,
       {
@@ -574,7 +574,7 @@ export class SettingsPanel implements vscode.Disposable {
     const repository = manager.getRepository(selectedRepository);
     const descriptor = descriptors.find((entry) => entry.name === selectedRepository);
     if (!repository || !descriptor) return;
-    const yamlService = new IncrediYamlService(repository.path);
+    const yamlService = new NightgaugeYamlService(repository.path);
     try {
       const [teamResult, localResult] = await Promise.all([
         yamlService.read(),
@@ -623,7 +623,7 @@ export class SettingsPanel implements vscode.Disposable {
     if (!repository) return;
     const targetTier: "project" | "local" =
       this.tierState.currentTier === "project" ? "project" : "local";
-    const service = new IncrediYamlService(repository.path);
+    const service = new NightgaugeYamlService(repository.path);
     const cleanAssignments = assignments.map(({ source: _source, ...entry }) => entry);
     try {
       const result = await service.writeProjectAssignments(cleanAssignments, targetTier);
@@ -690,7 +690,7 @@ export class SettingsPanel implements vscode.Disposable {
   /**
    * Get the config object for a specific tier view
    */
-  private getConfigForTier(tier: ViewTier): IncrediConfig {
+  private getConfigForTier(tier: ViewTier): NightgaugeConfig {
     switch (tier) {
       case "merged":
         return this.currentConfig;
@@ -713,7 +713,7 @@ export class SettingsPanel implements vscode.Disposable {
   /**
    * Get the working config object for a target tier
    */
-  private getWorkingConfigForTier(tier: EditableTier): IncrediConfig {
+  private getWorkingConfigForTier(tier: EditableTier): NightgaugeConfig {
     switch (tier) {
       case "local":
         return this.localConfig;
@@ -941,9 +941,9 @@ export class SettingsPanel implements vscode.Disposable {
       // warn but do not fail the save — the YAML write already persisted
       // everything else (Phase 4 of #3337).
       if (machineTierCaptured.size > 0) {
-        const machineConfig: Partial<import("./types").IncrediConfig> = {};
+        const machineConfig: Partial<import("./types").NightgaugeConfig> = {};
         for (const [dotPath, value] of machineTierCaptured) {
-          setConfigValue(machineConfig as import("./types").IncrediConfig, dotPath, value);
+          setConfigValue(machineConfig as import("./types").NightgaugeConfig, dotPath, value);
         }
         const machineResult = await this.yamlService.writeGlobal(machineConfig);
         if (!machineResult.success) {
@@ -1449,7 +1449,7 @@ export class SettingsPanel implements vscode.Disposable {
     let status: "ok" | "error" | "warn" = "error";
     let reason: string | undefined;
     try {
-      const sdkAdapter = toIncrediAdapter(adapter as ExecutionAdapter, process.env);
+      const sdkAdapter = toNightgaugeAdapter(adapter as ExecutionAdapter, process.env);
       const result = await validateAdapterAuth(sdkAdapter);
       if (result.ok) {
         status = "ok";
@@ -1721,7 +1721,7 @@ export class SettingsPanel implements vscode.Disposable {
   /**
    * Remove a value at a config path
    */
-  private removeConfigValue(config: IncrediConfig, path: string): void {
+  private removeConfigValue(config: NightgaugeConfig, path: string): void {
     const parts = path.split(".");
     let current: Record<string, unknown> = config as Record<string, unknown>;
 

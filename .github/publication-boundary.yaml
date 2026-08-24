@@ -434,9 +434,17 @@ forbidden_content:
     # throughout. A rule written against a brand name does not match the brand's
     # derived forms, and that gap is invisible precisely because the rule passes.
     #
-    # Ratcheted rather than absolute so the rule can land before the rename
-    # sweep. NEVER raise this number.
-    file_baseline: 248
+    # The `file_baseline: 248` ratchet that used to sit here is GONE, and the
+    # rule is absolute again. It existed for exactly one reason -- to let the
+    # widened stem rule land BEFORE the rename sweep that would satisfy it --
+    # and R.1 (#836) is that sweep: ~1,300 symbols and six files across the
+    # extension, the SDK, four docs and one POC, taking the count 248 -> 0.
+    #
+    # Removed rather than lowered to 0. The two are equally strict, but a
+    # ratchet at zero leaves a knob whose only remaining use is to be raised,
+    # and an absolute rule reports the offending path:line instead of a count.
+    # If this rule ever goes red again, the answer is to rename the symbol --
+    # there is no number to edit.
     rationale: >-
       The former product name and the archived private historical record
       (EdibuLLC/incredibuilders, 4,222 issues). That repository is preserved and

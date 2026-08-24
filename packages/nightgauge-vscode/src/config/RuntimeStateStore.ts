@@ -17,7 +17,7 @@
  */
 
 import * as vscode from "vscode";
-import type { IncrediConfig } from "./schema";
+import type { NightgaugeConfig } from "./schema";
 import { setConfigValue } from "../views/settings/configUtils";
 
 /**
@@ -208,7 +208,7 @@ export class RuntimeStateStore implements vscode.Disposable {
   }
 
   /**
-   * Reconstruct a nested Partial<IncrediConfig> snapshot for merge-engine
+   * Reconstruct a nested Partial<NightgaugeConfig> snapshot for merge-engine
    * consumption.
    *
    * - Global keys (`nightgauge.runtime.<path>`) become `<path>` directly.
@@ -226,7 +226,7 @@ export class RuntimeStateStore implements vscode.Disposable {
    * Workspace-scoped values win over global-scoped values when both set the
    * same path — workspaceState is read after globalState.
    */
-  snapshot(): Partial<IncrediConfig> {
+  snapshot(): Partial<NightgaugeConfig> {
     const result: Record<string, unknown> = {};
 
     for (const memento of [this.globalState, this.workspaceState]) {
@@ -240,13 +240,13 @@ export class RuntimeStateStore implements vscode.Disposable {
         }
         const stripped = fullKey.slice(RUNTIME_PREFIX.length);
         const targetPath = remapRepoScopedKey(stripped);
-        // Note: setConfigValue is typed for IncrediConfig but operates on a
-        // plain Record — passing `result` (cast to IncrediConfig) is safe.
-        setConfigValue(result as IncrediConfig, targetPath, value);
+        // Note: setConfigValue is typed for NightgaugeConfig but operates on a
+        // plain Record — passing `result` (cast to NightgaugeConfig) is safe.
+        setConfigValue(result as NightgaugeConfig, targetPath, value);
       }
     }
 
-    return result as Partial<IncrediConfig>;
+    return result as Partial<NightgaugeConfig>;
   }
 
   /**

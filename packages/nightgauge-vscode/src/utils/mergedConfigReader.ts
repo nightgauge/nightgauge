@@ -32,7 +32,7 @@
  * - authResolver.getGitHubUser — implements custom per-tier identity rules
  *   (`github_user` is repo-scoped by design and must never be inherited from
  *   the machine config in multi-account workspaces, #2487).
- * - Any read-to-WRITE path (customStageModels write/clear, IncrediYamlService
+ * - Any read-to-WRITE path (customStageModels write/clear, NightgaugeYamlService
  *   writers) — writes must edit the raw tier file, never the merged view,
  *   or machine/local values would be materialized into committed files.
  *

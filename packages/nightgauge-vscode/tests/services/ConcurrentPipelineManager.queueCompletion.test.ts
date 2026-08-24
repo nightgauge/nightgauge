@@ -69,7 +69,7 @@ vi.mock("../../src/utils/WorktreeManager", () => ({
   }),
 }));
 
-vi.mock("../../src/utils/incrediConfig", () => ({
+vi.mock("../../src/utils/nightgaugeConfig", () => ({
   getConcurrentPipelineConfig: vi
     .fn()
     .mockReturnValue({ maxConcurrent: 1, worktreeBase: ".worktrees" }),

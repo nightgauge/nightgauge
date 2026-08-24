@@ -3416,7 +3416,7 @@ export class DashboardState {
     skipStages?: string[]
   ): Promise<import("@nightgauge/sdk").PipelineCostEstimate> {
     const { AutoModelSelector, StageModelCalibrationService } = await import("@nightgauge/sdk");
-    const { getStageModelsMatrix } = await import("../../utils/incrediConfig");
+    const { getStageModelsMatrix } = await import("../../utils/nightgaugeConfig");
     const { toModelEnvelope } = await import("../../utils/modeProfiles");
     const stageMatrix = getStageModelsMatrix(this.workspaceRoot);
     const selector = new AutoModelSelector(

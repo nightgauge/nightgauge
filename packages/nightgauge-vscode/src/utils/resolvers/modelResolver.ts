@@ -1,9 +1,9 @@
 /**
  * Model Resolver — model selection, execution adapter, and model routing config.
  *
- * Extracted from incrediConfig.ts as part of the config-module decomposition.
+ * Extracted from nightgaugeConfig.ts as part of the config-module decomposition.
  *
- * @see Issue #2742 - Refactor VSCode incrediConfig.ts into focused domain modules
+ * @see Issue #2742 - Refactor VSCode nightgaugeConfig.ts into focused domain modules
  */
 
 import * as fs from "node:fs";

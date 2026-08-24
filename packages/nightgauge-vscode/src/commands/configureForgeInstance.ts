@@ -3,7 +3,7 @@
  *
  * Stores credentials in VSCode SecretStorage (OS keychain). Writes forge metadata
  * (kind, base_url, auth_method, ca_bundle) to .nightgauge/config.yaml via
- * IncrediYamlService. Supports GitHub and GitLab forge kinds with PAT, OAuth2,
+ * NightgaugeYamlService. Supports GitHub and GitLab forge kinds with PAT, OAuth2,
  * CI job token, and deploy token auth methods.
  *
  * @see Issue #3364 - VSCode extension settings UI for managing forge instances
@@ -13,7 +13,7 @@ import * as vscode from "vscode";
 import * as path from "path";
 import { SecretStorageService } from "../services/SecretStorageService";
 import { IpcClient } from "../services/IpcClient";
-import { IncrediYamlService } from "../views/settings/IncrediYamlService";
+import { NightgaugeYamlService } from "../views/settings/NightgaugeYamlService";
 import { validatePemFile } from "../utils/pemValidator";
 
 const INSTANCE_ID_PATTERN = /^[a-z0-9][a-z0-9-]*[a-z0-9]$|^[a-z0-9]$/;
@@ -252,7 +252,7 @@ export function registerConfigureForgeInstanceCommand(): vscode.Disposable {
         async () => {
           try {
             // Build temp config so the test can run before saving
-            const yamlService = new IncrediYamlService(workspaceRoot);
+            const yamlService = new NightgaugeYamlService(workspaceRoot);
             const { config: currentCfg } = await yamlService.read();
             const tempCfg = currentCfg ?? {};
             if (!tempCfg.forges) tempCfg.forges = {};
@@ -312,7 +312,7 @@ export function registerConfigureForgeInstanceCommand(): vscode.Disposable {
         }
 
         // Write forge metadata to config.yaml
-        const yamlService = new IncrediYamlService(workspaceRoot);
+        const yamlService = new NightgaugeYamlService(workspaceRoot);
         const { config: currentCfg } = await yamlService.read();
         const cfg = currentCfg ?? {};
         if (!cfg.forges) cfg.forges = {};

@@ -124,11 +124,11 @@ export class SavedQueriesService implements vscode.Disposable {
    */
   private async saveToFile(): Promise<void> {
     const filePath = this.getFilePath();
-    const incrediDir = path.dirname(filePath);
+    const nightgaugeDir = path.dirname(filePath);
 
     // Ensure .nightgauge directory exists
-    if (!fs.existsSync(incrediDir)) {
-      fs.mkdirSync(incrediDir, { recursive: true });
+    if (!fs.existsSync(nightgaugeDir)) {
+      fs.mkdirSync(nightgaugeDir, { recursive: true });
     }
 
     // Filter out built-in queries

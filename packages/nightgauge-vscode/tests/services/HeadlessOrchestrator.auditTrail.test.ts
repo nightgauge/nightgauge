@@ -17,7 +17,7 @@ import { AuditEventClient, AuditEventSchema, AUDIT_ACTIONS } from "@nightgauge/s
 import type { AuditConfig } from "@nightgauge/sdk";
 
 // ---------------------------------------------------------------------------
-// Minimal vscode mock (required for any file that imports from incrediConfig)
+// Minimal vscode mock (required for any file that imports from nightgaugeConfig)
 // ---------------------------------------------------------------------------
 vi.mock("vscode", () => ({
   workspace: {
@@ -438,13 +438,13 @@ describe("AuditEventClient — enqueue behaviour", () => {
 describe("getAuditConfig — returns safe defaults when no config file present", () => {
   it("returns enabled=false by default", async () => {
     // Dynamic import so vscode mock is applied before module loads
-    const { getAuditConfig } = await import("../../src/utils/incrediConfig");
+    const { getAuditConfig } = await import("../../src/utils/nightgaugeConfig");
     const config = getAuditConfig("/nonexistent/workspace");
     expect(config.enabled).toBe(false);
   });
 
   it("returns all required AuditConfig fields", async () => {
-    const { getAuditConfig } = await import("../../src/utils/incrediConfig");
+    const { getAuditConfig } = await import("../../src/utils/nightgaugeConfig");
     const config = getAuditConfig("/nonexistent/workspace");
     expect(config).toMatchObject({
       enabled: expect.any(Boolean),

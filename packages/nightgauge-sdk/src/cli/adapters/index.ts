@@ -6,7 +6,7 @@
 
 export type {
   ICliAdapter,
-  IncrediAdapter,
+  NightgaugeAdapter,
   QueryFunctionOptions,
   ValidateAuthOptions,
 } from "./ICliAdapter.js";

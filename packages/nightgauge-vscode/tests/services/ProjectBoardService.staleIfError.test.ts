@@ -70,7 +70,7 @@ vi.mock("vscode", () => ({
   },
 }));
 
-vi.mock("../../src/utils/incrediConfig", () => ({
+vi.mock("../../src/utils/nightgaugeConfig", () => ({
   getGitHubUser: vi.fn().mockReturnValue("test-user"),
 }));
 

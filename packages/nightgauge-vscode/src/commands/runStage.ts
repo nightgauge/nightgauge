@@ -33,7 +33,7 @@ import {
   getDefaultStageExecutionMode,
   getExecutionAdapter,
   type StageExecutionMode,
-} from "../utils/incrediConfig";
+} from "../utils/nightgaugeConfig";
 import { isStreamJsonEnvelope, isEnvelopeFragment } from "../utils/streamJsonFilter";
 import { parsePhaseMarker, uuidV7 } from "@nightgauge/sdk";
 import { createPhaseTracker } from "../utils/phaseTracker";

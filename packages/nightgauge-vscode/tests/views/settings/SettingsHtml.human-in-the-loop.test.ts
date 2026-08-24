@@ -1,12 +1,12 @@
 import { describe, it, expect } from "vitest";
 import { getSettingsHtml } from "../../../src/views/settings/SettingsHtml";
 import { getDefaultConfig } from "../../../src/config/schema";
-import type { IncrediConfig } from "../../../src/views/settings/types";
+import type { NightgaugeConfig } from "../../../src/views/settings/types";
 import type { ConfigSourceMap } from "../../../src/config/schema";
 
 describe("SettingsHtml human_in_the_loop section", () => {
   it("renders human_in_the_loop section controls", () => {
-    const config = getDefaultConfig() as IncrediConfig;
+    const config = getDefaultConfig() as NightgaugeConfig;
     const html = getSettingsHtml({ cspSource: "test-csp" } as any, config);
 
     expect(html).toContain('id="section-human_in_the_loop"');
@@ -42,7 +42,7 @@ describe("SettingsHtml human_in_the_loop section", () => {
   });
 
   it("renders correct default values", () => {
-    const config = {} as IncrediConfig;
+    const config = {} as NightgaugeConfig;
     const html = getSettingsHtml({ cspSource: "test-csp" } as any, config);
 
     // auto_accept_stages defaults to true (checked)
@@ -67,7 +67,7 @@ describe("SettingsHtml human_in_the_loop section", () => {
   });
 
   it("renders custom config values", () => {
-    const config = getDefaultConfig() as IncrediConfig;
+    const config = getDefaultConfig() as NightgaugeConfig;
     config.human_in_the_loop = {
       auto_accept_stages: true,
       auto_accept_permissions: true,
@@ -100,7 +100,7 @@ describe("SettingsHtml human_in_the_loop section", () => {
   });
 
   it("renders tier badges when showBadges is true", () => {
-    const config = getDefaultConfig() as IncrediConfig;
+    const config = getDefaultConfig() as NightgaugeConfig;
     const sources: ConfigSourceMap = {
       "human_in_the_loop.auto_accept_stages": "project",
       "human_in_the_loop.trusted_stages": "local",
@@ -123,7 +123,7 @@ describe("SettingsHtml human_in_the_loop section", () => {
   });
 
   it("handles empty/undefined config gracefully", () => {
-    const config = { human_in_the_loop: {} } as IncrediConfig;
+    const config = { human_in_the_loop: {} } as NightgaugeConfig;
     const html = getSettingsHtml({ cspSource: "test-csp" } as any, config);
 
     // Should render without errors

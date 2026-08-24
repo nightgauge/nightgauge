@@ -59,7 +59,7 @@ vi.mock("../../src/utils/skillRunner", () => ({
 }));
 
 // Mock precomputeCalibratedStallThresholds so it doesn't require fs/StageDurationAnalyzer
-vi.mock("../../src/utils/incrediConfig", () => ({
+vi.mock("../../src/utils/nightgaugeConfig", () => ({
   precomputeCalibratedStallThresholds: vi.fn().mockResolvedValue(undefined),
 }));
 

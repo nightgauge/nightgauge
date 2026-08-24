@@ -33,7 +33,7 @@
  */
 import type { ModelEnvelope, PipelineStage } from "@nightgauge/sdk";
 import { resolveModelForAdapter } from "@nightgauge/sdk";
-import type { ClaudeEffort, DefaultModel } from "./incrediConfig";
+import type { ClaudeEffort, DefaultModel } from "./nightgaugeConfig";
 import type { ExecutionAdapter } from "./resolvers/modelResolver";
 
 export type PerformanceMode = "efficiency" | "elevated" | "maximum" | "frontier";

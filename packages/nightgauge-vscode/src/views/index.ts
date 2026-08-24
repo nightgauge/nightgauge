@@ -62,9 +62,9 @@ export { PipelineSummary, getPipelineSummaryHtml } from "./summary";
 // Settings Panel
 export {
   SettingsPanel,
-  IncrediYamlService,
+  NightgaugeYamlService,
   validateConfig,
-  type IncrediConfig,
+  type NightgaugeConfig,
   DEFAULT_CONFIG,
 } from "./settings";
 

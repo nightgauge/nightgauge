@@ -36,7 +36,7 @@ export type WorkspaceMode = "single" | "multi-workspace";
  *
  * @example
  * ```typescript
- * const manager = WorkspaceManager.getInstance(incrediRoot);
+ * const manager = WorkspaceManager.getInstance(nightgaugeRoot);
  * await manager.initialize();
  *
  * // Iterate over all loaded repositories

@@ -19,8 +19,8 @@ import { runStageSkillHeadless } from "../../src/utils/skillRunner";
 // probes CLI auth. These pr-merge-path tests run with no CLI auth in the env;
 // skip the gate (pipeline.skip_auth_preflight) so they exercise the branch-guard
 // behavior they target rather than failing fast at pipeline-start.
-vi.mock("../../src/utils/incrediConfig", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../src/utils/incrediConfig")>()),
+vi.mock("../../src/utils/nightgaugeConfig", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../src/utils/nightgaugeConfig")>()),
   getSkipAuthPreflight: () => true,
 }));
 

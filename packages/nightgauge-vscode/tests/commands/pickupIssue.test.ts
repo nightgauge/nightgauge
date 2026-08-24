@@ -51,8 +51,8 @@ vi.mock("../../src/utils/skillRunner", () => ({
   }),
 }));
 
-// Mock incrediConfig
-vi.mock("../../src/utils/incrediConfig", () => ({
+// Mock nightgaugeConfig
+vi.mock("../../src/utils/nightgaugeConfig", () => ({
   getInitialExecutionMode: vi.fn(() => "manual"),
 }));
 

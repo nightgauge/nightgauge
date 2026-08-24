@@ -128,7 +128,7 @@ describe("ApprovalDialog — panel creation", () => {
 
     expect(window.createWebviewPanel).toHaveBeenCalledOnce();
     expect(window.createWebviewPanel).toHaveBeenCalledWith(
-      "incrediApprovalDialog",
+      "nightgaugeApprovalDialog",
       "Review Plan #42",
       expect.anything(),
       expect.objectContaining({

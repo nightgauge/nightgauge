@@ -54,7 +54,7 @@ export class RecoveryDialog implements vscode.Disposable {
       this.panel.webview.html = getRecoveryDialogHtml(this.panel.webview, payload);
     } else {
       this.panel = vscode.window.createWebviewPanel(
-        "incrediRecoveryDialog",
+        "nightgaugeRecoveryDialog",
         `Recovery Required #${payload.issueNumber}`,
         vscode.ViewColumn.One,
         {

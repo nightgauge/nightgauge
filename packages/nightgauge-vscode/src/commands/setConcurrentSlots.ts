@@ -1,12 +1,12 @@
 import * as vscode from "vscode";
 import type { ConcurrentPipelineManager } from "../services/ConcurrentPipelineManager";
-import { IncrediYamlService } from "../views/settings/IncrediYamlService";
+import { NightgaugeYamlService } from "../views/settings/NightgaugeYamlService";
 import type { TierGate } from "../platform/TierGate";
 import type { LicensePreflight } from "../platform/LicensePreflight";
 
 export function registerSetConcurrentSlotsCommand(
   concurrentPipelineManager: ConcurrentPipelineManager | null,
-  incrediRoot: string | null,
+  nightgaugeRoot: string | null,
   tierGate?: TierGate | null,
   licensePreflight?: LicensePreflight | null
 ): vscode.Disposable {
@@ -53,8 +53,8 @@ export function registerSetConcurrentSlotsCommand(
     // both the TS slot manager and the Go autonomous scheduler. We deliberately
     // no longer write autonomous.max_concurrent, which is deprecated. Local
     // config is gitignored — safe for user-specific tuning. See Issue #3195.
-    if (incrediRoot) {
-      const yaml = new IncrediYamlService(incrediRoot);
+    if (nightgaugeRoot) {
+      const yaml = new NightgaugeYamlService(nightgaugeRoot);
       try {
         await yaml.writeLocal({
           pipeline: { max_concurrent: n },

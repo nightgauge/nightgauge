@@ -2,7 +2,7 @@
  * RecommendationApplier.test.ts
  *
  * Unit tests for RecommendationApplier service, focusing on:
- * - Applying config patches via IncrediYamlService
+ * - Applying config patches via NightgaugeYamlService
  * - Error handling when writes fail
  * - 30-second revert window management
  * - Applied categories tracking
@@ -13,7 +13,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
-// Mock vscode module (required because IncrediYamlService imports it)
+// Mock vscode module (required because NightgaugeYamlService imports it)
 vi.mock("vscode", () => ({
   workspace: { workspaceFolders: [] },
   EventEmitter: vi.fn(function () {
@@ -23,13 +23,13 @@ vi.mock("vscode", () => ({
   Disposable: { from: vi.fn() },
 }));
 
-// Mock IncrediYamlService
+// Mock NightgaugeYamlService
 const mockRead = vi.fn();
 const mockWrite = vi.fn();
 const mockDispose = vi.fn();
 
-vi.mock("../../src/views/settings/IncrediYamlService", () => ({
-  IncrediYamlService: vi.fn(function () {
+vi.mock("../../src/views/settings/NightgaugeYamlService", () => ({
+  NightgaugeYamlService: vi.fn(function () {
     return { read: mockRead, write: mockWrite, dispose: mockDispose };
   }),
 }));

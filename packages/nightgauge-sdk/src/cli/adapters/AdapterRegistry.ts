@@ -6,7 +6,7 @@
  * @see Issue #627 - Extract ICliAdapter interface & unify types
  */
 
-import type { ICliAdapter, IncrediAdapter } from "./ICliAdapter.js";
+import type { ICliAdapter, NightgaugeAdapter } from "./ICliAdapter.js";
 import { ClaudeSdkAdapter } from "./ClaudeSdkAdapter.js";
 import { ClaudeHeadlessAdapter } from "./ClaudeHeadlessAdapter.js";
 import { CodexAdapter } from "./CodexAdapter.js";
@@ -21,13 +21,13 @@ import { GrokAdapter } from "./GrokAdapter.js";
  * Registry that maps adapter names to their implementations.
  */
 export class AdapterRegistry {
-  private readonly adapters = new Map<IncrediAdapter, ICliAdapter>();
+  private readonly adapters = new Map<NightgaugeAdapter, ICliAdapter>();
 
   register(adapter: ICliAdapter): void {
     this.adapters.set(adapter.name, adapter);
   }
 
-  get(name: IncrediAdapter): ICliAdapter {
+  get(name: NightgaugeAdapter): ICliAdapter {
     const adapter = this.adapters.get(name);
     if (!adapter) {
       throw new Error(
@@ -37,7 +37,7 @@ export class AdapterRegistry {
     return adapter;
   }
 
-  has(name: IncrediAdapter): boolean {
+  has(name: NightgaugeAdapter): boolean {
     return this.adapters.has(name);
   }
 
@@ -45,7 +45,7 @@ export class AdapterRegistry {
     return [...this.adapters.values()];
   }
 
-  getNames(): IncrediAdapter[] {
+  getNames(): NightgaugeAdapter[] {
     return [...this.adapters.keys()];
   }
 }
@@ -91,6 +91,6 @@ export const defaultRegistry: AdapterRegistry = new Proxy({} as AdapterRegistry,
  * summarization surfaces intentionally accept chat-only adapters.
  */
 export function isAgenticAdapter(adapter: string): boolean {
-  const canonical = (adapter === "claude" ? "claude-sdk" : adapter) as IncrediAdapter;
+  const canonical = (adapter === "claude" ? "claude-sdk" : adapter) as NightgaugeAdapter;
   return defaultRegistry.has(canonical) && defaultRegistry.get(canonical).agentic;
 }

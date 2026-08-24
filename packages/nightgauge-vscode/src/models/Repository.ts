@@ -32,7 +32,7 @@ export interface GitHubConfig {
 /**
  * Nightgauge configuration from .nightgauge/config.yaml
  */
-export interface IncrediConfig {
+export interface NightgaugeConfig {
   github?: GitHubConfig;
   /** Flat-config form: top-level `owner:` instead of nested under `github:`. */
   owner?: string;
@@ -65,8 +65,8 @@ export interface IncrediConfig {
  * const config = await repo.loadConfig();
  *
  * // Check if config is already loaded
- * if (repo.incrediConfig) {
- *   console.log(`GitHub: ${repo.incrediConfig.github?.owner}/${repo.incrediConfig.github?.repo}`);
+ * if (repo.nightgaugeConfig) {
+ *   console.log(`GitHub: ${repo.nightgaugeConfig.github?.owner}/${repo.nightgaugeConfig.github?.repo}`);
  * }
  * ```
  */
@@ -81,10 +81,10 @@ export class Repository {
   readonly role: "primary" | "secondary" | "shared" | undefined;
 
   /** Cached nightgauge configuration (null = not loaded, undefined = load failed) */
-  private _incrediConfig: IncrediConfig | null | undefined = null;
+  private _nightgaugeConfig: NightgaugeConfig | null | undefined = null;
 
   /** Loading promise for deduplication */
-  private _loadingPromise: Promise<IncrediConfig | null> | null = null;
+  private _loadingPromise: Promise<NightgaugeConfig | null> | null = null;
 
   /**
    * Project number seeded from the workspace manifest (WorkspaceRepository.project_number).
@@ -113,8 +113,8 @@ export class Repository {
    * Returns null if not yet loaded.
    * Returns undefined if loading failed.
    */
-  get incrediConfig(): IncrediConfig | null | undefined {
-    return this._incrediConfig;
+  get nightgaugeConfig(): NightgaugeConfig | null | undefined {
+    return this._nightgaugeConfig;
   }
 
   /**
@@ -125,7 +125,7 @@ export class Repository {
    * config).
    */
   get github(): GitHubConfig | undefined {
-    const cfg = this._incrediConfig;
+    const cfg = this._nightgaugeConfig;
     if (!cfg) return undefined;
     if (cfg.github) {
       // Merge workspace-manifest project_number when config doesn't already supply it.
@@ -153,7 +153,7 @@ export class Repository {
    * Check if nightgauge configuration has been loaded
    */
   get isConfigLoaded(): boolean {
-    return this._incrediConfig !== null;
+    return this._nightgaugeConfig !== null;
   }
 
   /**
@@ -164,10 +164,10 @@ export class Repository {
    *
    * @returns Parsed nightgauge configuration, or null if not found/invalid
    */
-  async loadConfig(): Promise<IncrediConfig | null> {
+  async loadConfig(): Promise<NightgaugeConfig | null> {
     // Return cached config if already loaded
-    if (this._incrediConfig !== null) {
-      return this._incrediConfig === undefined ? null : this._incrediConfig;
+    if (this._nightgaugeConfig !== null) {
+      return this._nightgaugeConfig === undefined ? null : this._nightgaugeConfig;
     }
 
     // Deduplicate concurrent loads
@@ -179,7 +179,7 @@ export class Repository {
 
     try {
       const config = await this._loadingPromise;
-      this._incrediConfig = config === null ? undefined : config;
+      this._nightgaugeConfig = config === null ? undefined : config;
       return config;
     } finally {
       this._loadingPromise = null;
@@ -189,7 +189,7 @@ export class Repository {
   /**
    * Internal config loading implementation
    */
-  private async _doLoadConfig(): Promise<IncrediConfig | null> {
+  private async _doLoadConfig(): Promise<NightgaugeConfig | null> {
     // Resolve config path with fallback to legacy
     const pathResult = await resolveConfigPath(this.path);
 
@@ -214,7 +214,7 @@ export class Repository {
         return null;
       }
 
-      return parsed as IncrediConfig;
+      return parsed as NightgaugeConfig;
     } catch (error) {
       if (error instanceof yaml.YAMLParseError) {
         console.warn(`[Nightgauge] Failed to parse config in ${this.name}: ${error.message}`);
@@ -232,8 +232,8 @@ export class Repository {
    *
    * @returns Freshly parsed nightgauge configuration
    */
-  async reloadConfig(): Promise<IncrediConfig | null> {
-    this._incrediConfig = null;
+  async reloadConfig(): Promise<NightgaugeConfig | null> {
+    this._nightgaugeConfig = null;
     this._loadingPromise = null;
     return this.loadConfig();
   }
@@ -244,7 +244,7 @@ export class Repository {
    * Next call to loadConfig() will read from disk.
    */
   clearCache(): void {
-    this._incrediConfig = null;
+    this._nightgaugeConfig = null;
     this._loadingPromise = null;
   }
 
@@ -256,7 +256,7 @@ export class Repository {
    *
    * @returns true if nightgauge config file exists
    */
-  async hasIncrediConfig(): Promise<boolean> {
+  async hasNightgaugeConfig(): Promise<boolean> {
     const pathResult = await resolveConfigPath(this.path);
     return pathResult.exists;
   }

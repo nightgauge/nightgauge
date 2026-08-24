@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { getSettingsHtml } from "../../../src/views/settings/SettingsHtml";
 import { getDefaultConfig } from "../../../src/config/schema";
-import type { IncrediConfig } from "../../../src/views/settings/types";
+import type { NightgaugeConfig } from "../../../src/views/settings/types";
 
 const STAGES = [
   "issue-pickup",
@@ -24,7 +24,7 @@ const ADAPTER_VALUES = [
 
 describe("SettingsHtml per-stage adapter matrix (Issue #3225)", () => {
   it("renders all six stage rows with adapter selects bound to pipeline.stage_adapters.<stage>", () => {
-    const config = getDefaultConfig() as IncrediConfig;
+    const config = getDefaultConfig() as NightgaugeConfig;
     const html = getSettingsHtml({ cspSource: "test-csp" } as any, config);
 
     expect(html).toContain('id="stage-adapter-matrix"');
@@ -37,7 +37,7 @@ describe("SettingsHtml per-stage adapter matrix (Issue #3225)", () => {
   });
 
   it("includes the global-default option plus the seven adapter ids in each stage select", () => {
-    const config = getDefaultConfig() as IncrediConfig;
+    const config = getDefaultConfig() as NightgaugeConfig;
     const html = getSettingsHtml({ cspSource: "test-csp" } as any, config);
 
     expect(html).toContain("(Use global default)");
@@ -48,7 +48,7 @@ describe("SettingsHtml per-stage adapter matrix (Issue #3225)", () => {
   });
 
   it("defaults every stage row to the empty (global default) option when no overrides are set", () => {
-    const config = getDefaultConfig() as IncrediConfig;
+    const config = getDefaultConfig() as NightgaugeConfig;
     const html = getSettingsHtml({ cspSource: "test-csp" } as any, config);
 
     for (const stage of STAGES) {
@@ -61,7 +61,7 @@ describe("SettingsHtml per-stage adapter matrix (Issue #3225)", () => {
   });
 
   it("selects the configured override for a stage and leaves siblings on the empty option", () => {
-    const config = getDefaultConfig() as IncrediConfig;
+    const config = getDefaultConfig() as NightgaugeConfig;
     config.pipeline = {
       ...(config.pipeline ?? {}),
       stage_adapters: { "feature-dev": "codex" },
@@ -85,7 +85,7 @@ describe("SettingsHtml per-stage adapter matrix (Issue #3225)", () => {
   });
 
   it("renders per-row auth indicator with data-status='unknown' and reset buttons", () => {
-    const config = getDefaultConfig() as IncrediConfig;
+    const config = getDefaultConfig() as NightgaugeConfig;
     config.pipeline = {
       ...(config.pipeline ?? {}),
       stage_adapters: { "feature-dev": "codex" },
@@ -139,7 +139,7 @@ describe("SettingsHtml per-stage adapter matrix (Issue #3225)", () => {
   });
 
   it("places the matrix immediately after the global ui.core.adapter row", () => {
-    const config = getDefaultConfig() as IncrediConfig;
+    const config = getDefaultConfig() as NightgaugeConfig;
     const html = getSettingsHtml({ cspSource: "test-csp" } as any, config);
 
     const globalAdapterIdx = html.indexOf('id="ui.core.adapter"');
@@ -152,7 +152,7 @@ describe("SettingsHtml per-stage adapter matrix (Issue #3225)", () => {
   });
 
   it("renders the mode-aware preview when stageAdapterPreview is supplied", () => {
-    const config = getDefaultConfig() as IncrediConfig;
+    const config = getDefaultConfig() as NightgaugeConfig;
     const html = getSettingsHtml(
       { cspSource: "test-csp" } as any,
       config,
@@ -179,7 +179,7 @@ describe("SettingsHtml per-stage adapter matrix (Issue #3225)", () => {
   });
 
   it("hides the preview when stageAdapterPreview is empty/undefined", () => {
-    const config = getDefaultConfig() as IncrediConfig;
+    const config = getDefaultConfig() as NightgaugeConfig;
     const html = getSettingsHtml({ cspSource: "test-csp" } as any, config);
 
     expect(html).not.toContain("Mode-aware Resolution Preview");
@@ -187,7 +187,7 @@ describe("SettingsHtml per-stage adapter matrix (Issue #3225)", () => {
   });
 
   it("flags model mismatches in the preview table", () => {
-    const config = getDefaultConfig() as IncrediConfig;
+    const config = getDefaultConfig() as NightgaugeConfig;
     const html = getSettingsHtml(
       { cspSource: "test-csp" } as any,
       config,
@@ -217,7 +217,7 @@ const MODEL_TIERS = ["haiku", "sonnet", "opus", "fable"];
 
 describe("SettingsHtml per-stage model selector (Issue #4030)", () => {
   it("renders a model select bound to pipeline.stage_models.<stage> for every stage", () => {
-    const config = getDefaultConfig() as IncrediConfig;
+    const config = getDefaultConfig() as NightgaugeConfig;
     const html = getSettingsHtml({ cspSource: "test-csp" } as any, config);
 
     for (const stage of STAGES) {
@@ -227,7 +227,7 @@ describe("SettingsHtml per-stage model selector (Issue #4030)", () => {
   });
 
   it("offers the canonical model tiers plus a global-default option", () => {
-    const config = getDefaultConfig() as IncrediConfig;
+    const config = getDefaultConfig() as NightgaugeConfig;
     const html = getSettingsHtml({ cspSource: "test-csp" } as any, config);
 
     const m = html.match(
@@ -241,7 +241,7 @@ describe("SettingsHtml per-stage model selector (Issue #4030)", () => {
   });
 
   it("selects the configured per-stage model and leaves siblings on global default", () => {
-    const config = getDefaultConfig() as IncrediConfig;
+    const config = getDefaultConfig() as NightgaugeConfig;
     config.pipeline = {
       ...(config.pipeline ?? {}),
       stage_models: { "feature-dev": "opus" },

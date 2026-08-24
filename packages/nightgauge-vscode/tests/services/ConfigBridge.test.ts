@@ -4,7 +4,7 @@
  * Unit tests for ConfigBridge service, focusing on:
  * - Singleton pattern (getInstance, resetInstance)
  * - Initialization lifecycle
- * - Configuration loading via IncrediYamlService
+ * - Configuration loading via NightgaugeYamlService
  * - Typed section getters
  * - Source tracking (getSource)
  * - Error handling for missing/invalid config files
@@ -56,10 +56,10 @@ vi.mock("vscode", () => {
   };
 });
 
-// Mock IncrediYamlService
-vi.mock("../../src/views/settings/IncrediYamlService", () => {
+// Mock NightgaugeYamlService
+vi.mock("../../src/views/settings/NightgaugeYamlService", () => {
   return {
-    IncrediYamlService: vi.fn(function () {
+    NightgaugeYamlService: vi.fn(function () {
       return {
         readEffective: vi.fn().mockResolvedValue({
           config: {
@@ -169,7 +169,7 @@ describe("ConfigBridge", () => {
       expect(bridge.isInitialized()).toBe(true);
     });
 
-    it("should load config via IncrediYamlService on initialize", async () => {
+    it("should load config via NightgaugeYamlService on initialize", async () => {
       const bridge = ConfigBridge.getInstance();
       await bridge.initialize(mockWorkspaceManager as any, workspaceRoot);
 
@@ -299,8 +299,9 @@ describe("ConfigBridge", () => {
   describe("Error Handling", () => {
     it("should handle missing config files gracefully", async () => {
       // Mock readEffective to return empty config
-      const { IncrediYamlService } = await import("../../src/views/settings/IncrediYamlService");
-      (IncrediYamlService as any).mockImplementation(function () {
+      const { NightgaugeYamlService } =
+        await import("../../src/views/settings/NightgaugeYamlService");
+      (NightgaugeYamlService as any).mockImplementation(function () {
         return {
           readEffective: vi.fn().mockResolvedValue({
             config: {},
@@ -335,8 +336,9 @@ describe("ConfigBridge", () => {
     it("should fire onValidationError for invalid config", async () => {
       const validationErrors = [{ field: "project.number", message: "Must be a positive integer" }];
 
-      const { IncrediYamlService } = await import("../../src/views/settings/IncrediYamlService");
-      (IncrediYamlService as any).mockImplementation(function () {
+      const { NightgaugeYamlService } =
+        await import("../../src/views/settings/NightgaugeYamlService");
+      (NightgaugeYamlService as any).mockImplementation(function () {
         return {
           readEffective: vi.fn().mockResolvedValue({
             config: { project: { number: -1 } },

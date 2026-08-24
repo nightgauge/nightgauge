@@ -3,12 +3,12 @@
  *
  * Unit tests for the agent-runner root gating logic in bootstrap/services.ts.
  * #4117: the agent runner must no longer be gated solely on a single resolved
- * `incrediRoot` — a multi-root `.code-workspace` where WorkspaceManager has
+ * `nightgaugeRoot` — a multi-root `.code-workspace` where WorkspaceManager has
  * discovered at least one repository, but folders[0] didn't resolve to a git
  * root, must still construct the runner.
  *
  * What is actually covered here: the five behavioral cases pin the exported
- * helper's resolution order (incrediRoot → first discovered repository →
+ * helper's resolution order (nightgaugeRoot → first discovered repository →
  * null), and the source-pin arm at the end pins that the bootstrap's runner
  * gate binds and reads that helper's result. The construction wiring itself —
  * IssueQueueService / ConcurrentPipelineManager / AgentCommandStreamService —
@@ -16,7 +16,7 @@
  *
  * This file imports the real `resolveAgentRunnerRoot` exported from
  * bootstrap/services.ts rather than reimplementing it. The point of the guard
- * is what the SHIPPED code does when `incrediRoot` is null, and a
+ * is what the SHIPPED code does when `nightgaugeRoot` is null, and a
  * reimplementation cannot witness a regression in shipped code: this file
  * previously carried its own copy of the one-line fallback, so gutting
  * `resolveAgentRunnerRoot` to `return null` left every case here green while
@@ -30,7 +30,7 @@
  * `resolveAgentRunnerRoot` is a pure exported function — the module graph
  * loads under the global mock and nothing in it runs.
  *
- * @see Issue #4117 — Agent runner gated on a single incrediRoot
+ * @see Issue #4117 — Agent runner gated on a single nightgaugeRoot
  * @see Issue #404 — mirror tests replaced by imports of the real symbol
  */
 
@@ -70,20 +70,20 @@ function makeWorkspaceManager(repos: Array<{ path: string }>): WorkspaceManager 
 // ---------------------------------------------------------------------------
 
 describe("resolveAgentRunnerRoot (#4117)", () => {
-  it("prefers incrediRoot when it resolved — no behavior change for single-root workspaces", () => {
+  it("prefers nightgaugeRoot when it resolved — no behavior change for single-root workspaces", () => {
     const workspaceManager = makeWorkspaceManager([{ path: "/other-repo" }]);
     expect(resolveAgentRunnerRoot("/resolved-git-root", workspaceManager)).toBe(
       "/resolved-git-root"
     );
   });
 
-  it("prefers incrediRoot even when WorkspaceManager is null (pre-#4117 single-root path)", () => {
+  it("prefers nightgaugeRoot even when WorkspaceManager is null (pre-#4117 single-root path)", () => {
     expect(resolveAgentRunnerRoot("/resolved-git-root", null)).toBe("/resolved-git-root");
   });
 
-  it("falls back to the first discovered repository when incrediRoot did not resolve", () => {
+  it("falls back to the first discovered repository when nightgaugeRoot did not resolve", () => {
     // Multi-root .code-workspace: folders[0] isn't a git repo (or isn't the
-    // intended target), so incrediRoot is null — but WorkspaceManager already
+    // intended target), so nightgaugeRoot is null — but WorkspaceManager already
     // discovered every open folder as a repository (registration is
     // multi-repo aware). The runner should still construct against the first
     // discovered repo instead of never existing.
@@ -94,13 +94,13 @@ describe("resolveAgentRunnerRoot (#4117)", () => {
     expect(resolveAgentRunnerRoot(null, workspaceManager)).toBe("/workspace/repo-a");
   });
 
-  it("returns null when incrediRoot is absent and WorkspaceManager is null — graceful no-op, no crash", () => {
-    // No workspace folders open at all. Matches prior `if (incrediRoot)`
+  it("returns null when nightgaugeRoot is absent and WorkspaceManager is null — graceful no-op, no crash", () => {
+    // No workspace folders open at all. Matches prior `if (nightgaugeRoot)`
     // behavior: the runner simply doesn't construct.
     expect(resolveAgentRunnerRoot(null, null)).toBeNull();
   });
 
-  it("returns null when incrediRoot is absent and WorkspaceManager discovered zero repositories — graceful no-op", () => {
+  it("returns null when nightgaugeRoot is absent and WorkspaceManager discovered zero repositories — graceful no-op", () => {
     // e.g. explicit .vscode/nightgauge-workspace.yaml lists zero repos,
     // or N:1 shared-project derivation failed. Nothing to run against — the
     // runner must not construct, and this must not throw.
@@ -108,20 +108,20 @@ describe("resolveAgentRunnerRoot (#4117)", () => {
     expect(resolveAgentRunnerRoot(null, workspaceManager)).toBeNull();
   });
 
-  it("treats an empty-string incrediRoot as resolved — nullish coalescing, not truthiness", () => {
+  it("treats an empty-string nightgaugeRoot as resolved — nullish coalescing, not truthiness", () => {
     // Pins `??` against an accidental `||`. Ship deliberately does not fall
-    // through on a falsy-but-present incrediRoot; the rest of services.ts
-    // truthiness-checks incrediRoot, so the divergence is pinned here on purpose.
+    // through on a falsy-but-present nightgaugeRoot; the rest of services.ts
+    // truthiness-checks nightgaugeRoot, so the divergence is pinned here on purpose.
     const workspaceManager = makeWorkspaceManager([{ path: "/workspace/repo-a" }]);
     expect(resolveAgentRunnerRoot("", workspaceManager)).toBe("");
   });
 
-  it("the bootstrap gates the agent runner on resolveAgentRunnerRoot, not incrediRoot alone", () => {
+  it("the bootstrap gates the agent runner on resolveAgentRunnerRoot, not nightgaugeRoot alone", () => {
     // The helper above is pure and fully covered; its ONLY production consumer is
     // the runner gate in registerServices(). Without this pin, reverting #4117 there
-    // (`const runnerRoot = incrediRoot;`) leaves every case above green.
+    // (`const runnerRoot = nightgaugeRoot;`) leaves every case above green.
     expect(servicesSource).toMatch(
-      /const runnerRoot = resolveAgentRunnerRoot\(\s*incrediRoot,\s*workspaceManager\s*\);\s*\n\s*if \(runnerRoot\) \{/
+      /const runnerRoot = resolveAgentRunnerRoot\(\s*nightgaugeRoot,\s*workspaceManager\s*\);\s*\n\s*if \(runnerRoot\) \{/
     );
   });
 });

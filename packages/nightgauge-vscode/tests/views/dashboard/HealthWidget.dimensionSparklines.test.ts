@@ -49,9 +49,9 @@ vi.mock("../../../src/config/schema", () => ({
   },
 }));
 
-// Mock IncrediYamlService
-vi.mock("../../../src/views/settings/IncrediYamlService", () => ({
-  IncrediYamlService: vi.fn(function () {
+// Mock NightgaugeYamlService
+vi.mock("../../../src/views/settings/NightgaugeYamlService", () => ({
+  NightgaugeYamlService: vi.fn(function () {
     return {
       read: vi.fn().mockResolvedValue({ success: false }),
       dispose: vi.fn(),

@@ -12,7 +12,7 @@
 import * as vscode from "vscode";
 import type { PipelineStage } from "@nightgauge/sdk";
 import type { PipelineState, ExtendedStageState } from "../../services/PipelineStateService";
-import { getStageBudget } from "../../utils/incrediConfig";
+import { getStageBudget } from "../../utils/nightgaugeConfig";
 
 /**
  * `PipelineState.stages` is a `Record<string, ExtendedStageState>` with no

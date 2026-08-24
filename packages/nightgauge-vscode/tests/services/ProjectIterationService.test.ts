@@ -27,7 +27,7 @@ import {
   createMockFieldListOutput,
   createMockIterationQueryOutput,
   createMockProjectItemsOutput,
-  createMockIncrediYaml,
+  createMockNightgaugeYaml,
 } from "../mocks/iteration";
 import { isSyncSuccess, isSyncSkipped } from "../../src/services/types/iteration";
 
@@ -86,7 +86,7 @@ vi.mock("fs", () => ({
 }));
 
 // Mock getGitHubUser — returns null (no per-repo auth) in tests
-vi.mock("../../src/utils/incrediConfig", () => ({
+vi.mock("../../src/utils/nightgaugeConfig", () => ({
   getGitHubUser: vi.fn(() => null),
 }));
 
@@ -324,7 +324,7 @@ describe("ProjectIterationService - syncIteration()", () => {
     });
 
     it("should skip when sprint feature is disabled", async () => {
-      const configContent = createMockIncrediYaml({
+      const configContent = createMockNightgaugeYaml({
         projectNumber: 10,
         sprintEnabled: false,
       });
@@ -342,7 +342,7 @@ describe("ProjectIterationService - syncIteration()", () => {
 
   describe("Repository info checks", () => {
     it("should skip when owner cannot be determined", async () => {
-      const configContent = createMockIncrediYaml({
+      const configContent = createMockNightgaugeYaml({
         projectNumber: 10,
         sprintEnabled: true,
       });
@@ -365,7 +365,7 @@ describe("ProjectIterationService - syncIteration()", () => {
 
   describe("Full sync flow", () => {
     it("should successfully assign @current iteration", async () => {
-      const configContent = createMockIncrediYaml({
+      const configContent = createMockNightgaugeYaml({
         projectNumber: 10,
         sprintEnabled: true,
         fieldName: "Sprint",
@@ -438,7 +438,7 @@ describe("ProjectIterationService - syncIteration()", () => {
     });
 
     it("should successfully clear iteration with none target", async () => {
-      const configContent = createMockIncrediYaml({
+      const configContent = createMockNightgaugeYaml({
         projectNumber: 10,
         sprintEnabled: true,
         fieldName: "Sprint",
@@ -490,7 +490,7 @@ describe("ProjectIterationService - syncIteration()", () => {
 
   describe("Error scenarios", () => {
     it("should skip when issue not in project", async () => {
-      const configContent = createMockIncrediYaml({
+      const configContent = createMockNightgaugeYaml({
         projectNumber: 10,
         sprintEnabled: true,
         fieldName: "Sprint",
@@ -527,7 +527,7 @@ describe("ProjectIterationService - syncIteration()", () => {
     });
 
     it("should skip when iteration field not found", async () => {
-      const configContent = createMockIncrediYaml({
+      const configContent = createMockNightgaugeYaml({
         projectNumber: 10,
         sprintEnabled: true,
         fieldName: "Sprint",
@@ -581,7 +581,7 @@ describe("ProjectIterationService - getIterations()", () => {
   });
 
   it("should return empty array when sprint disabled", async () => {
-    const configContent = createMockIncrediYaml({
+    const configContent = createMockNightgaugeYaml({
       projectNumber: 10,
       sprintEnabled: false,
     });
@@ -594,7 +594,7 @@ describe("ProjectIterationService - getIterations()", () => {
   });
 
   it("should return iterations from GraphQL query", async () => {
-    const configContent = createMockIncrediYaml({
+    const configContent = createMockNightgaugeYaml({
       projectNumber: 10,
       sprintEnabled: true,
       fieldName: "Sprint",
@@ -640,7 +640,7 @@ describe("ProjectIterationService - Pagination", () => {
   });
 
   it("should handle paginated project items", async () => {
-    const configContent = createMockIncrediYaml({
+    const configContent = createMockNightgaugeYaml({
       projectNumber: 10,
       sprintEnabled: true,
       fieldName: "Sprint",

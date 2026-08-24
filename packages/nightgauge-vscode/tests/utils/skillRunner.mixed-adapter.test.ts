@@ -84,10 +84,10 @@ vi.mock("../../src/utils/configPathResolver", () => ({
   logDeprecationWarning: vi.fn(),
 }));
 
-// Mock incrediConfig — non-MCP getters return defaults, MCP-related getters
+// Mock nightgaugeConfig — non-MCP getters return defaults, MCP-related getters
 // are the focus of the leakage-regression assertion below.
-vi.mock("../../src/utils/incrediConfig", async () => {
-  const actual = await vi.importActual<Record<string, unknown>>("../../src/utils/incrediConfig");
+vi.mock("../../src/utils/nightgaugeConfig", async () => {
+  const actual = await vi.importActual<Record<string, unknown>>("../../src/utils/nightgaugeConfig");
   return {
     ...actual,
     getAuthProvider: vi.fn(() => "max"),
@@ -156,7 +156,7 @@ vi.mock("../../src/services/RepositoryContextLoader", () => ({
 
 import { runStageSkillHeadless } from "../../src/utils/skillRunner";
 import { resolveStageAdapter } from "../../src/utils/resolvers/adapterResolver";
-import { getStageMcpTools, getMcpToolsConfig } from "../../src/utils/incrediConfig";
+import { getStageMcpTools, getMcpToolsConfig } from "../../src/utils/nightgaugeConfig";
 import { createMockChildProcess } from "../mocks/child-process";
 
 describe("Mixed-adapter pipeline (Issue #3223)", () => {

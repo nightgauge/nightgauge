@@ -2,13 +2,13 @@
  * RecommendationApplier - Applies actionable recommendations to config
  *
  * Maps recommendation categories to config patches, applies them via
- * IncrediYamlService, and manages a 30-second revert window.
+ * NightgaugeYamlService, and manages a 30-second revert window.
  *
  * @see Issue #787 - Actionable Dashboard Recommendations
  */
 
-import { IncrediYamlService } from "../views/settings/IncrediYamlService";
-import type { IncrediConfig } from "../config/schema";
+import { NightgaugeYamlService } from "../views/settings/NightgaugeYamlService";
+import type { NightgaugeConfig } from "../config/schema";
 
 interface RevertState {
   configPath: string;
@@ -31,19 +31,19 @@ export interface RevertResult {
 const REVERT_WINDOW_MS = 30_000;
 
 export class RecommendationApplier {
-  private readonly yamlService: IncrediYamlService;
+  private readonly yamlService: NightgaugeYamlService;
   private revertState: Map<string, RevertState> = new Map();
   private appliedCategories: Set<string> = new Set();
 
   constructor(workspaceRoot: string) {
-    this.yamlService = new IncrediYamlService(workspaceRoot);
+    this.yamlService = new NightgaugeYamlService(workspaceRoot);
   }
 
   async apply(category: string, configPath: string, value: unknown): Promise<ApplyResult> {
     try {
       // Read current config
       const readResult = await this.yamlService.read();
-      const currentConfig: IncrediConfig = readResult.config ?? {};
+      const currentConfig: NightgaugeConfig = readResult.config ?? {};
 
       // Get current value at path for revert
       const previousValue = getNestedValue(currentConfig, configPath);
@@ -99,7 +99,7 @@ export class RecommendationApplier {
     try {
       // Read current config
       const readResult = await this.yamlService.read();
-      const currentConfig: IncrediConfig = readResult.config ?? {};
+      const currentConfig: NightgaugeConfig = readResult.config ?? {};
 
       // Build patch with original value
       const patch = buildPartialConfig(state.configPath, state.previousValue);

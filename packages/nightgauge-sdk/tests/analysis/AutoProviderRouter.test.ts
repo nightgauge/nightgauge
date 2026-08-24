@@ -15,7 +15,7 @@ import {
 } from "../../src/analysis/AutoProviderRouter.js";
 import { WORKFLOW_SUBSCORE_WEIGHT } from "../../src/analysis/auto-router-types.js";
 import { defaultRegistry } from "../../src/cli/adapters/AdapterRegistry.js";
-import type { IncrediAdapter } from "../../src/cli/adapters/ICliAdapter.js";
+import type { NightgaugeAdapter } from "../../src/cli/adapters/ICliAdapter.js";
 import type { ComplexityLabel } from "../../src/analysis/AutoModelSelector.js";
 
 function makeCtx(overrides: Partial<AutoRouterContext> = {}): AutoRouterContext {
@@ -306,12 +306,12 @@ describe("AutoProviderRouter — confidence threshold abstain", () => {
   });
 });
 
-// ── #3912 — RouterExecutionAdapter derived from IncrediAdapter ────────────────
+// ── #3912 — RouterExecutionAdapter derived from NightgaugeAdapter ────────────────
 
 describe("AutoProviderRouter — RouterExecutionAdapter derivation (#3912)", () => {
-  it("every router adapter id is a real registered IncrediAdapter (no bare 'claude')", () => {
+  it("every router adapter id is a real registered NightgaugeAdapter (no bare 'claude')", () => {
     // Compile-time: `RouterExecutionAdapter[]` is assignable to
-    // `IncrediAdapter[]` — they are the same union. Runtime: each id resolves
+    // `NightgaugeAdapter[]` — they are the same union. Runtime: each id resolves
     // to a registered adapter, so the capability hook can be called on it.
     const adapters: RouterExecutionAdapter[] = [
       "claude-sdk",
@@ -323,8 +323,8 @@ describe("AutoProviderRouter — RouterExecutionAdapter derivation (#3912)", () 
       "ollama",
       "copilot",
     ];
-    const asIncredi: IncrediAdapter[] = adapters;
-    for (const adapter of asIncredi) {
+    const asNightgauge: NightgaugeAdapter[] = adapters;
+    for (const adapter of asNightgauge) {
       expect(defaultRegistry.has(adapter)).toBe(true);
     }
   });

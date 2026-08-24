@@ -82,8 +82,8 @@ vi.mock("../../src/utils/configPathResolver", () => ({
 // chain, which these tests never reach — modelOverride + effortOverride skip
 // it) real; only the getters that would otherwise touch disk/CLI state need
 // stubbing for a clean grok dispatch.
-vi.mock("../../src/utils/incrediConfig", async () => {
-  const actual = await vi.importActual<Record<string, unknown>>("../../src/utils/incrediConfig");
+vi.mock("../../src/utils/nightgaugeConfig", async () => {
+  const actual = await vi.importActual<Record<string, unknown>>("../../src/utils/nightgaugeConfig");
   return {
     ...actual,
     getAuthProvider: vi.fn(() => "max"),

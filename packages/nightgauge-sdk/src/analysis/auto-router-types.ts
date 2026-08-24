@@ -11,12 +11,12 @@
  */
 
 import type { ComplexityLabel, RoutingIssueType } from "./AutoModelSelector.js";
-import type { IncrediAdapter } from "../cli/adapters/ICliAdapter.js";
+import type { NightgaugeAdapter } from "../cli/adapters/ICliAdapter.js";
 
 /**
  * Adapter identifiers supported by the router.
  *
- * Derived from the canonical {@link IncrediAdapter} — single source of truth.
+ * Derived from the canonical {@link NightgaugeAdapter} — single source of truth.
  * This disambiguates the two Claude backends (`claude-sdk` vs
  * `claude-headless`) that the old bare-`"claude"` collapse hid, so "route to
  * the native runner" is no longer ambiguous between them (#3912). The capability
@@ -24,7 +24,7 @@ import type { IncrediAdapter } from "../cli/adapters/ICliAdapter.js";
  * adapter registry uses, and the router can call each adapter's
  * `getOrchestrationCapability()` directly.
  */
-export type RouterExecutionAdapter = IncrediAdapter;
+export type RouterExecutionAdapter = NightgaugeAdapter;
 
 /**
  * Routing mode that governs how aggressive the router should be.

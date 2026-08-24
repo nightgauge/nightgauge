@@ -41,8 +41,8 @@ const { writeMock, writeLocalMock, validateAdapterAuthMock } = vi.hoisted(() => 
   validateAdapterAuthMock: vi.fn(),
 }));
 
-vi.mock("../../../src/views/settings/IncrediYamlService", () => ({
-  IncrediYamlService: class IncrediYamlServiceMock {
+vi.mock("../../../src/views/settings/NightgaugeYamlService", () => ({
+  NightgaugeYamlService: class NightgaugeYamlServiceMock {
     onDidChange = vi.fn(() => ({ dispose: vi.fn() }));
     dispose = vi.fn();
     readEffective = vi.fn().mockResolvedValue({
@@ -122,7 +122,7 @@ vi.mock("../../../src/utils/resolvers/monitoringResolver", () => ({
 }));
 
 vi.mock("../../../src/services/HeadlessOrchestrator", () => ({
-  toIncrediAdapter: vi.fn((adapter: string) =>
+  toNightgaugeAdapter: vi.fn((adapter: string) =>
     adapter === "claude" ? "claude-headless" : adapter
   ),
 }));

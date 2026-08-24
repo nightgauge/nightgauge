@@ -1,5 +1,5 @@
 /**
- * IncrediYamlService - YAML read/write/validate service for .nightgauge/config.yaml
+ * NightgaugeYamlService - YAML read/write/validate service for .nightgauge/config.yaml
  *
  * Handles parsing, serialization, validation, and file watching for the
  * Nightgauge configuration file. Supports both primary (.nightgauge/config.yaml)
@@ -16,7 +16,7 @@
 import * as path from "path";
 import * as vscode from "vscode";
 import { parse as parseYaml, stringify as stringifyYaml, YAMLParseError } from "yaml";
-import type { IncrediConfig } from "./types";
+import type { NightgaugeConfig } from "./types";
 import {
   resolveConfigPath,
   getConfigPaths,
@@ -66,7 +66,7 @@ import { validateConfig, removeUndefined } from "./configUtils";
  */
 export interface ReadResult {
   success: boolean;
-  config: IncrediConfig | null;
+  config: NightgaugeConfig | null;
   error?: string;
   /** True if file doesn't exist (vs parse error) */
   notFound?: boolean;
@@ -87,14 +87,14 @@ export interface WriteResult {
 }
 
 /**
- * IncrediYamlService - Service for managing .nightgauge/config.yaml configuration
+ * NightgaugeYamlService - Service for managing .nightgauge/config.yaml configuration
  *
  * Supports both primary (.nightgauge/config.yaml) and legacy (.nightgauge/nightgauge.yaml)
  * paths with automatic fallback. Watches both paths during the transition period.
  *
  * @example
  * ```typescript
- * const service = new IncrediYamlService('/path/to/workspace');
+ * const service = new NightgaugeYamlService('/path/to/workspace');
  *
  * // Read configuration
  * const result = await service.read();
@@ -115,7 +115,7 @@ export interface WriteResult {
  * });
  * ```
  */
-export class IncrediYamlService implements vscode.Disposable {
+export class NightgaugeYamlService implements vscode.Disposable {
   /** Primary config path (.nightgauge/config.yaml) */
   private readonly primaryConfigPath: string;
   /** Legacy config path (.nightgauge/nightgauge.yaml) */
@@ -130,7 +130,7 @@ export class IncrediYamlService implements vscode.Disposable {
   private legacyFileWatcher: vscode.FileSystemWatcher | null = null;
   private localFileWatcher: vscode.FileSystemWatcher | null = null;
   private globalFileWatcher: vscode.FileSystemWatcher | null = null;
-  private readonly _onDidChange = new vscode.EventEmitter<IncrediConfig | null>();
+  private readonly _onDidChange = new vscode.EventEmitter<NightgaugeConfig | null>();
   readonly onDidChange = this._onDidChange.event;
   private debounceTimer: ReturnType<typeof setTimeout> | null = null;
   private disposables: vscode.Disposable[] = [];
@@ -306,7 +306,7 @@ export class IncrediYamlService implements vscode.Disposable {
         // This allows partial configs to still be loaded with warnings
         return {
           success: true,
-          config: rawConfig as IncrediConfig,
+          config: rawConfig as NightgaugeConfig,
           isLegacy: pathResult.isLegacy,
           validationErrors: validation.errors.map((e) => ({
             field: e.field,
@@ -323,7 +323,7 @@ export class IncrediYamlService implements vscode.Disposable {
 
       return {
         success: true,
-        config: validation.config ?? (rawConfig as IncrediConfig),
+        config: validation.config ?? (rawConfig as NightgaugeConfig),
         isLegacy: pathResult.isLegacy,
         ...(validation.warnings.length > 0 && {
           validationWarnings: validation.warnings.map((w) => ({
@@ -372,7 +372,7 @@ export class IncrediYamlService implements vscode.Disposable {
    *
    * @see Issue #3337 — Phase 4: machine-tier routing
    */
-  async write(config: IncrediConfig, tier: "project"): Promise<WriteResult> {
+  async write(config: NightgaugeConfig, tier: "project"): Promise<WriteResult> {
     try {
       const mergedConfig = await this.mergeWithExistingFile(this.primaryConfigPath, config);
 
@@ -419,14 +419,14 @@ export class IncrediYamlService implements vscode.Disposable {
    */
   async create(projectNumber?: number): Promise<WriteResult> {
     // Ensure .nightgauge directory exists
-    const incrediDir = vscode.Uri.file(`${this.workspaceRoot}/.nightgauge`);
+    const nightgaugeDir = vscode.Uri.file(`${this.workspaceRoot}/.nightgauge`);
     try {
-      await vscode.workspace.fs.createDirectory(incrediDir);
+      await vscode.workspace.fs.createDirectory(nightgaugeDir);
     } catch {
       // Directory may already exist, which is fine
     }
 
-    const config: IncrediConfig = {
+    const config: NightgaugeConfig = {
       project: {
         number: projectNumber,
       },
@@ -524,7 +524,7 @@ export class IncrediYamlService implements vscode.Disposable {
       if (!validation.valid) {
         return {
           success: true,
-          config: rawConfig as IncrediConfig,
+          config: rawConfig as NightgaugeConfig,
           validationErrors: validation.errors.map((e) => ({
             field: e.field,
             message: e.message,
@@ -540,7 +540,7 @@ export class IncrediYamlService implements vscode.Disposable {
 
       return {
         success: true,
-        config: validation.config ?? (rawConfig as IncrediConfig),
+        config: validation.config ?? (rawConfig as NightgaugeConfig),
         ...(validation.warnings.length > 0 && {
           validationWarnings: validation.warnings.map((w) => ({
             field: w.field,
@@ -586,7 +586,7 @@ export class IncrediYamlService implements vscode.Disposable {
    * @see Issue #435 - Add local config override
    * @see Issue #440 - Multi-tier config GUI support
    */
-  async writeLocal(config: IncrediConfig): Promise<WriteResult> {
+  async writeLocal(config: NightgaugeConfig): Promise<WriteResult> {
     try {
       const mergedConfig = await this.mergeWithExistingFile(this.localConfigPath, config);
 
@@ -621,9 +621,9 @@ export class IncrediYamlService implements vscode.Disposable {
       });
 
       // Ensure .nightgauge directory exists
-      const incrediDir = vscode.Uri.file(`${this.workspaceRoot}/.nightgauge`);
+      const nightgaugeDir = vscode.Uri.file(`${this.workspaceRoot}/.nightgauge`);
       try {
-        await vscode.workspace.fs.createDirectory(incrediDir);
+        await vscode.workspace.fs.createDirectory(nightgaugeDir);
       } catch {
         // Directory may already exist
       }
@@ -650,12 +650,12 @@ export class IncrediYamlService implements vscode.Disposable {
    * unknown YAML keys are preserved.
    */
   async writeProjectAssignments(
-    projects: NonNullable<IncrediConfig["projects"]>,
+    projects: NonNullable<NightgaugeConfig["projects"]>,
     tier: "project" | "local"
   ): Promise<WriteResult> {
     try {
       const filePath = tier === "project" ? this.primaryConfigPath : this.localConfigPath;
-      const existing = ((await this.readRawConfigFile(filePath)) ?? {}) as IncrediConfig;
+      const existing = ((await this.readRawConfigFile(filePath)) ?? {}) as NightgaugeConfig;
       if (existing.project) {
         delete existing.project.number;
         if (Object.keys(existing.project).length === 0) delete existing.project;
@@ -727,7 +727,7 @@ export class IncrediYamlService implements vscode.Disposable {
       if (!validation.valid) {
         return {
           success: true,
-          config: rawConfig as IncrediConfig,
+          config: rawConfig as NightgaugeConfig,
           validationErrors: validation.errors.map((e) => ({
             field: e.field,
             message: e.message,
@@ -743,7 +743,7 @@ export class IncrediYamlService implements vscode.Disposable {
 
       return {
         success: true,
-        config: validation.config ?? (rawConfig as IncrediConfig),
+        config: validation.config ?? (rawConfig as NightgaugeConfig),
         ...(validation.warnings.length > 0 && {
           validationWarnings: validation.warnings.map((w) => ({
             field: w.field,
@@ -819,7 +819,7 @@ export class IncrediYamlService implements vscode.Disposable {
    * @see Issue #3337 — Phase 4: machine-tier routing
    * @see Issue #3338 — Phase 5 legacy-key migration writes machine-tier keys
    */
-  async writeGlobal(config: Partial<IncrediConfig>): Promise<WriteResult> {
+  async writeGlobal(config: Partial<NightgaugeConfig>): Promise<WriteResult> {
     try {
       const globalPath = getGlobalConfigPath();
       const globalDir = path.dirname(globalPath);
@@ -827,7 +827,7 @@ export class IncrediYamlService implements vscode.Disposable {
       // Check existence before the merge so we know whether to add the header.
       const previouslyExisted = await this.globalConfigExists();
 
-      const mergedConfig = await this.mergeWithExistingFile(globalPath, config as IncrediConfig);
+      const mergedConfig = await this.mergeWithExistingFile(globalPath, config as NightgaugeConfig);
 
       const validation = validateConfig(mergedConfig);
       if (!validation.valid) {
@@ -862,7 +862,9 @@ export class IncrediYamlService implements vscode.Disposable {
         // Directory may already exist
       }
 
-      const finalYaml = previouslyExisted ? yaml : IncrediYamlService.GLOBAL_CONFIG_HEADER + yaml;
+      const finalYaml = previouslyExisted
+        ? yaml
+        : NightgaugeYamlService.GLOBAL_CONFIG_HEADER + yaml;
 
       const uri = vscode.Uri.file(globalPath);
       await vscode.workspace.fs.writeFile(uri, Buffer.from(finalYaml, "utf-8"));
@@ -961,7 +963,7 @@ export class IncrediYamlService implements vscode.Disposable {
    * @see Issue #436 - Config Merge Engine with 6-Tier Precedence Chain
    */
   async readEffective(
-    cliOverrides?: Partial<IncrediConfig>,
+    cliOverrides?: Partial<NightgaugeConfig>,
     options: MergeOptions = {}
   ): Promise<ConfigMergeResult> {
     // Read all file-based configs
@@ -1012,11 +1014,11 @@ export class IncrediYamlService implements vscode.Disposable {
    * @returns Merged configuration
    */
   private deepMergeConfigs(
-    defaultConfig: IncrediConfig,
-    globalConfig: IncrediConfig,
-    projectConfig: IncrediConfig,
-    localConfig: IncrediConfig = {}
-  ): IncrediConfig {
+    defaultConfig: NightgaugeConfig,
+    globalConfig: NightgaugeConfig,
+    projectConfig: NightgaugeConfig,
+    localConfig: NightgaugeConfig = {}
+  ): NightgaugeConfig {
     // Use the same deep merge logic as zodMergeWithDefaults
     // Merge order: defaults <- global <- project <- local
     return this.deepMerge(
@@ -1065,14 +1067,14 @@ export class IncrediYamlService implements vscode.Disposable {
    */
   private async mergeWithExistingFile(
     filePath: string,
-    updates: IncrediConfig
-  ): Promise<IncrediConfig> {
+    updates: NightgaugeConfig
+  ): Promise<NightgaugeConfig> {
     const existing = await this.readRawConfigFile(filePath);
     if (!existing) {
       return updates;
     }
 
-    return this.deepMerge(existing as IncrediConfig, updates);
+    return this.deepMerge(existing as NightgaugeConfig, updates);
   }
 
   /**
@@ -1123,7 +1125,7 @@ export class IncrediYamlService implements vscode.Disposable {
    *
    * @param localConfig - The local configuration object
    */
-  private warnAboutCriticalLocalOverrides(localConfig: IncrediConfig): void {
+  private warnAboutCriticalLocalOverrides(localConfig: NightgaugeConfig): void {
     const criticalOverrides: string[] = [];
 
     if (localConfig.project?.number !== undefined) {

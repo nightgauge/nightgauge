@@ -8,7 +8,7 @@
 export { SettingsPanel } from "./SettingsPanel";
 
 // YAML Service
-export { IncrediYamlService, type ReadResult, type WriteResult } from "./IncrediYamlService";
+export { NightgaugeYamlService, type ReadResult, type WriteResult } from "./NightgaugeYamlService";
 
 // Config Utilities (pure functions, no VSCode dependency)
 export {
@@ -36,7 +36,7 @@ export {
 
 // Types
 export {
-  type IncrediConfig,
+  type NightgaugeConfig,
   type ProjectConfig,
   type PullRequestConfig,
   type BranchConfig,

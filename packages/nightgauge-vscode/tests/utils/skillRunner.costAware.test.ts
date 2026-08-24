@@ -15,9 +15,9 @@ vi.mock("vscode", () => ({
   workspace: { workspaceFolders: [{ uri: { fsPath: "/test/workspace" } }] },
 }));
 
-vi.mock("../../src/utils/incrediConfig", async () => {
-  const actual = await vi.importActual<typeof import("../../src/utils/incrediConfig")>(
-    "../../src/utils/incrediConfig"
+vi.mock("../../src/utils/nightgaugeConfig", async () => {
+  const actual = await vi.importActual<typeof import("../../src/utils/nightgaugeConfig")>(
+    "../../src/utils/nightgaugeConfig"
   );
   return {
     ...actual,
@@ -45,7 +45,7 @@ vi.mock("../../src/utils/costAwareRouting", () => ({
 }));
 
 import { resolveModel } from "../../src/utils/skillRunner";
-import { getPerformanceMode } from "../../src/utils/incrediConfig";
+import { getPerformanceMode } from "../../src/utils/nightgaugeConfig";
 
 const L = { labels: ["size:L"], title: "Large change" };
 

@@ -60,7 +60,7 @@ export class AdapterDoctorPanel implements vscode.Disposable {
     }
 
     this.panel = vscode.window.createWebviewPanel(
-      "incrediAdapterDoctor",
+      "nightgaugeAdapterDoctor",
       "Nightgauge: Adapter Doctor",
       vscode.ViewColumn.One,
       { enableScripts: true, retainContextWhenHidden: true, localResourceRoots: [] }

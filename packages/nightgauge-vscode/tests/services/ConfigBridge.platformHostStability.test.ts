@@ -61,8 +61,8 @@ vi.mock("vscode", () => ({
 /** The platform section the merge engine yields; overridden per test. */
 let platformSection: Record<string, unknown> | undefined;
 
-vi.mock("../../src/views/settings/IncrediYamlService", () => ({
-  IncrediYamlService: vi.fn(function () {
+vi.mock("../../src/views/settings/NightgaugeYamlService", () => ({
+  NightgaugeYamlService: vi.fn(function () {
     return {
       readEffective: vi.fn(async () => ({
         config: { platform: platformSection },

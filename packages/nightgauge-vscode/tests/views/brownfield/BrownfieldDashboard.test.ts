@@ -123,7 +123,7 @@ describe("BrownfieldDashboard", () => {
     dashboard.show();
 
     expect(vscode.window.createWebviewPanel).toHaveBeenCalledWith(
-      "incrediBrownfieldDashboard",
+      "nightgaugeBrownfieldDashboard",
       "Brownfield Modernization Dashboard",
       1,
       expect.objectContaining({

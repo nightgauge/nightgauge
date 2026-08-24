@@ -1,12 +1,12 @@
 import { describe, it, expect } from "vitest";
 import { getSettingsHtml } from "../../../src/views/settings/SettingsHtml";
 import { getDefaultConfig } from "../../../src/config/schema";
-import type { IncrediConfig } from "../../../src/views/settings/types";
+import type { NightgaugeConfig } from "../../../src/views/settings/types";
 import type { ConfigSourceMap } from "../../../src/config/schema";
 
 describe("SettingsHtml enforcement section", () => {
   it("renders enforcement section controls", () => {
-    const config = getDefaultConfig() as IncrediConfig;
+    const config = getDefaultConfig() as NightgaugeConfig;
     const html = getSettingsHtml({ cspSource: "test-csp" } as any, config);
 
     expect(html).toContain('id="section-enforcement"');
@@ -22,7 +22,7 @@ describe("SettingsHtml enforcement section", () => {
   });
 
   it("renders correct default values", () => {
-    const config = {} as IncrediConfig;
+    const config = {} as NightgaugeConfig;
     const html = getSettingsHtml({ cspSource: "test-csp" } as any, config);
 
     // enabled defaults to true (checked)
@@ -41,7 +41,7 @@ describe("SettingsHtml enforcement section", () => {
   });
 
   it("renders custom config values", () => {
-    const config = getDefaultConfig() as IncrediConfig;
+    const config = getDefaultConfig() as NightgaugeConfig;
     config.enforcement = {
       dependencies: {
         enabled: false,
@@ -65,7 +65,7 @@ describe("SettingsHtml enforcement section", () => {
   });
 
   it("renders tier badges when showBadges is true", () => {
-    const config = getDefaultConfig() as IncrediConfig;
+    const config = getDefaultConfig() as NightgaugeConfig;
     const sources: ConfigSourceMap = {
       "enforcement.dependencies.enabled": "project",
       "enforcement.dependencies.mode": "local",

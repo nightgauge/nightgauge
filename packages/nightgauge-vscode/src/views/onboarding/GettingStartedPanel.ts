@@ -63,7 +63,7 @@ export class GettingStartedPanel implements vscode.Disposable {
     }
 
     this.panel = vscode.window.createWebviewPanel(
-      "incrediGettingStarted",
+      "nightgaugeGettingStarted",
       "Nightgauge: Getting Started",
       vscode.ViewColumn.One,
       { enableScripts: true, retainContextWhenHidden: true, localResourceRoots: [] }

@@ -57,7 +57,7 @@ export class KnowledgeValueDashboard implements vscode.Disposable {
     }
 
     this.panel = vscode.window.createWebviewPanel(
-      "incrediKnowledgeValueDashboard",
+      "nightgaugeKnowledgeValueDashboard",
       "Knowledge Value",
       vscode.ViewColumn.One,
       {

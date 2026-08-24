@@ -4,7 +4,7 @@
  * Handles coercing string values from YAML config and env vars
  * to typed values (numbers, booleans, enums).
  *
- * @see Issue #2742 - Extract incrediConfig.ts resolver classes
+ * @see Issue #2742 - Extract nightgaugeConfig.ts resolver classes
  */
 
 export class SchemaValidator {

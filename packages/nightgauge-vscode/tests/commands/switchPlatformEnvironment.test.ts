@@ -48,8 +48,8 @@ vi.mock("vscode", () => ({
 const mockWriteLocal = vi.fn((): Promise<WriteResult> => Promise.resolve({ success: true }));
 const mockDispose = vi.fn();
 
-vi.mock("../../src/views/settings/IncrediYamlService", () => ({
-  IncrediYamlService: vi.fn(function (this: any) {
+vi.mock("../../src/views/settings/NightgaugeYamlService", () => ({
+  NightgaugeYamlService: vi.fn(function (this: any) {
     this.writeLocal = mockWriteLocal;
     this.dispose = mockDispose;
   }),
@@ -103,7 +103,7 @@ vi.mock("../../src/platform/TokenStorage", () => ({
 
 import { registerSwitchPlatformEnvironmentCommand } from "../../src/commands/switchPlatformEnvironment";
 import type { PlatformEnvironment } from "../../src/config/schema";
-import type { WriteResult } from "../../src/views/settings/IncrediYamlService";
+import type { WriteResult } from "../../src/views/settings/NightgaugeYamlService";
 
 async function invokeCommand(): Promise<void> {
   const vscode = await import("vscode");

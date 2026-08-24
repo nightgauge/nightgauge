@@ -55,7 +55,7 @@ export class PipelineSummary implements vscode.Disposable {
 
     // Create the WebView panel
     this.panel = vscode.window.createWebviewPanel(
-      "incrediPipelineSummary",
+      "nightgaugePipelineSummary",
       `Pipeline Complete - Issue #${state.issue_number}`,
       { viewColumn: vscode.ViewColumn.One, preserveFocus: true },
       {

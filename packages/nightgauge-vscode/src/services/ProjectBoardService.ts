@@ -15,7 +15,7 @@ import * as vscode from "vscode";
 import { IpcClient, type BoardItem } from "./IpcClient";
 import { IpcClientBase } from "./IpcClient";
 import type { StatusCounts } from "./IpcClientBase";
-import { getGitHubUser } from "../utils/incrediConfig";
+import { getGitHubUser } from "../utils/nightgaugeConfig";
 import type { IWorkItemProvider } from "./types/WorkItemProvider";
 import type { EpicInfo } from "../views/items/EpicGroupTreeItem";
 import { deriveComponentOptions } from "../types/FilterConfig";

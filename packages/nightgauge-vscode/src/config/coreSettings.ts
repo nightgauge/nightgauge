@@ -26,7 +26,7 @@ export type AuthProvider = "max" | "bedrock" | "vertex";
 /**
  * Execution adapter options (UI-facing).
  *
- * Maps to SDK's IncrediAdapter:
+ * Maps to SDK's NightgaugeAdapter:
  * - 'claude' → 'claude-sdk' or 'claude-headless'
  * - 'codex'  → 'codex'
  *

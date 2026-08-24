@@ -1,5 +1,5 @@
 /**
- * incrediConfig.token.test.ts
+ * nightgaugeConfig.token.test.ts
  *
  * Unit tests for the GitHub auth token functions added in Issue #2670:
  *   - expandEnvVar()
@@ -36,7 +36,7 @@ import {
   expandEnvVar,
   getGitHubAuthToken,
   getGitHubAuthTokens,
-} from "../../src/utils/incrediConfig";
+} from "../../src/utils/nightgaugeConfig";
 import { resolveConfigPathSync } from "../../src/utils/configPathResolver";
 
 const mockResolveConfigPathSync = vi.mocked(resolveConfigPathSync);

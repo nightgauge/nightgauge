@@ -518,9 +518,9 @@ async function getResolveModel() {
   // Dynamic import to get fresh module with current mocks
   // resolveModel is not exported, so we test through the module's behavior
   // by importing the functions it uses
-  // Test resolveModel logic through the incrediConfig functions
+  // Test resolveModel logic through the nightgaugeConfig functions
   // since resolveModel is a module-private function in skillRunner
-  const config = await import("../../src/utils/incrediConfig");
+  const config = await import("../../src/utils/nightgaugeConfig");
   const { AutoModelSelector: MockSelector } = await import("@nightgauge/sdk");
 
   // Simulated diff line count for testing diff-size escalation.

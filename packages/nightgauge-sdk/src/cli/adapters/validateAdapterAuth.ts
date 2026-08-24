@@ -8,7 +8,7 @@
  */
 
 import { defaultRegistry, type AdapterRegistry } from "./AdapterRegistry.js";
-import type { IncrediAdapter, ValidateAuthOptions } from "./ICliAdapter.js";
+import type { NightgaugeAdapter, ValidateAuthOptions } from "./ICliAdapter.js";
 import { AdapterError, type AdapterErrorCategory } from "./errors.js";
 
 export const DEFAULT_AUTH_TIMEOUT_MS = 5_000;
@@ -33,7 +33,7 @@ export interface ValidateAdapterAuthOptions extends ValidateAuthOptions {
  *   so a misconfigured stage cannot crash the pre-flight runner.
  */
 export async function validateAdapterAuth(
-  adapter: IncrediAdapter,
+  adapter: NightgaugeAdapter,
   opts: ValidateAdapterAuthOptions = {}
 ): Promise<AdapterAuthResult> {
   const registry = opts.registry ?? defaultRegistry;

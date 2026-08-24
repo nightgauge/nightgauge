@@ -1,5 +1,5 @@
 /**
- * IncrediYamlService Unit Tests
+ * NightgaugeYamlService Unit Tests
  *
  * Tests for YAML parsing, validation, and serialization functions.
  * Focuses on pure functions that don't require VSCode API mocking.
@@ -12,10 +12,10 @@ import {
   getConfigValue,
   setConfigValue,
 } from "../../../src/views/settings/configUtils";
-import type { IncrediConfig } from "../../../src/views/settings/types";
+import type { NightgaugeConfig } from "../../../src/views/settings/types";
 import { DEFAULT_CONFIG } from "../../../src/views/settings/types";
 
-describe("IncrediYamlService", () => {
+describe("NightgaugeYamlService", () => {
   describe("validateConfig", () => {
     it("should validate empty config as valid", () => {
       const result = validateConfig({});
@@ -24,7 +24,7 @@ describe("IncrediYamlService", () => {
     });
 
     it("should validate config with all valid fields", () => {
-      const config: IncrediConfig = {
+      const config: NightgaugeConfig = {
         project: {
           number: 123,
           auto_dates: true,
@@ -75,7 +75,7 @@ describe("IncrediYamlService", () => {
     });
 
     it("should reject negative project number", () => {
-      const config: IncrediConfig = {
+      const config: NightgaugeConfig = {
         project: { number: -1 },
       };
 
@@ -86,7 +86,7 @@ describe("IncrediYamlService", () => {
     });
 
     it("should reject zero project number", () => {
-      const config: IncrediConfig = {
+      const config: NightgaugeConfig = {
         project: { number: 0 },
       };
 
@@ -109,7 +109,7 @@ describe("IncrediYamlService", () => {
 
     it("should accept all valid merge strategies", () => {
       for (const strategy of ["squash", "merge", "rebase"] as const) {
-        const config: IncrediConfig = {
+        const config: NightgaugeConfig = {
           pull_request: { merge_strategy: strategy },
         };
 
@@ -119,7 +119,7 @@ describe("IncrediYamlService", () => {
     });
 
     it("should reject negative ci_timeout", () => {
-      const config: IncrediConfig = {
+      const config: NightgaugeConfig = {
         pipeline: { ci_timeout: -5 },
       };
 
@@ -131,7 +131,7 @@ describe("IncrediYamlService", () => {
     });
 
     it("should accept zero ci_timeout (0 means unlimited)", () => {
-      const config: IncrediConfig = {
+      const config: NightgaugeConfig = {
         pipeline: { ci_timeout: 0 },
       };
 
@@ -152,7 +152,7 @@ describe("IncrediYamlService", () => {
     });
 
     it("should reject negative max_files_changed", () => {
-      const config: IncrediConfig = {
+      const config: NightgaugeConfig = {
         validation: { max_files_changed: -10 },
       };
 
@@ -164,7 +164,7 @@ describe("IncrediYamlService", () => {
     });
 
     it("should reject negative max_lines_changed", () => {
-      const config: IncrediConfig = {
+      const config: NightgaugeConfig = {
         validation: { max_lines_changed: -100 },
       };
 
@@ -213,7 +213,7 @@ describe("IncrediYamlService", () => {
     });
 
     it("should preserve user values over defaults", () => {
-      const config: IncrediConfig = {
+      const config: NightgaugeConfig = {
         project: { number: 42 },
       };
 
@@ -223,7 +223,7 @@ describe("IncrediYamlService", () => {
     });
 
     it("should deep merge nested objects", () => {
-      const config: IncrediConfig = {
+      const config: NightgaugeConfig = {
         branch: {
           base: "develop",
           // Other values should come from defaults
@@ -237,7 +237,7 @@ describe("IncrediYamlService", () => {
     });
 
     it("should not mutate the original config", () => {
-      const config: IncrediConfig = {
+      const config: NightgaugeConfig = {
         project: { number: 42 },
       };
       const original = JSON.parse(JSON.stringify(config));
@@ -247,7 +247,7 @@ describe("IncrediYamlService", () => {
     });
 
     it("should handle deeply nested merges", () => {
-      const config: IncrediConfig = {
+      const config: NightgaugeConfig = {
         branch: {
           prefixes: {
             feature: "feature/",
@@ -262,7 +262,7 @@ describe("IncrediYamlService", () => {
     });
 
     it("should preserve arrays from user config", () => {
-      const config: IncrediConfig = {
+      const config: NightgaugeConfig = {
         branch: {
           protected: ["main", "develop", "staging"],
         },
@@ -275,7 +275,7 @@ describe("IncrediYamlService", () => {
 
   describe("getConfigValue", () => {
     it("should get top-level value", () => {
-      const config: IncrediConfig = {
+      const config: NightgaugeConfig = {
         project: { number: 123 },
       };
 
@@ -284,7 +284,7 @@ describe("IncrediYamlService", () => {
     });
 
     it("should get nested value", () => {
-      const config: IncrediConfig = {
+      const config: NightgaugeConfig = {
         project: { number: 123 },
       };
 
@@ -293,7 +293,7 @@ describe("IncrediYamlService", () => {
     });
 
     it("should get deeply nested value", () => {
-      const config: IncrediConfig = {
+      const config: NightgaugeConfig = {
         branch: {
           prefixes: {
             feature: "feat/",
@@ -306,14 +306,14 @@ describe("IncrediYamlService", () => {
     });
 
     it("should return undefined for missing path", () => {
-      const config: IncrediConfig = {};
+      const config: NightgaugeConfig = {};
 
       const result = getConfigValue(config, "project.number");
       expect(result).toBeUndefined();
     });
 
     it("should return undefined for partially missing path", () => {
-      const config: IncrediConfig = {
+      const config: NightgaugeConfig = {
         project: {},
       };
 
@@ -324,7 +324,7 @@ describe("IncrediYamlService", () => {
     it("should handle null values in path", () => {
       const config = {
         project: null,
-      } as unknown as IncrediConfig;
+      } as unknown as NightgaugeConfig;
 
       const result = getConfigValue(config, "project.number");
       expect(result).toBeUndefined();
@@ -333,14 +333,14 @@ describe("IncrediYamlService", () => {
 
   describe("setConfigValue", () => {
     it("should set top-level value", () => {
-      const config: IncrediConfig = {};
+      const config: NightgaugeConfig = {};
 
       setConfigValue(config, "project", { number: 123 });
       expect(config.project).toEqual({ number: 123 });
     });
 
     it("should set nested value", () => {
-      const config: IncrediConfig = {
+      const config: NightgaugeConfig = {
         project: {},
       };
 
@@ -349,14 +349,14 @@ describe("IncrediYamlService", () => {
     });
 
     it("should create intermediate objects", () => {
-      const config: IncrediConfig = {};
+      const config: NightgaugeConfig = {};
 
       setConfigValue(config, "branch.prefixes.feature", "feature/");
       expect(config.branch?.prefixes?.feature).toBe("feature/");
     });
 
     it("should preserve existing sibling values", () => {
-      const config: IncrediConfig = {
+      const config: NightgaugeConfig = {
         project: {
           number: 123,
           auto_dates: true,
@@ -369,14 +369,14 @@ describe("IncrediYamlService", () => {
     });
 
     it("should handle setting array values", () => {
-      const config: IncrediConfig = {};
+      const config: NightgaugeConfig = {};
 
       setConfigValue(config, "pull_request.reviewers", ["user1", "user2"]);
       expect(config.pull_request?.reviewers).toEqual(["user1", "user2"]);
     });
 
     it("should handle setting boolean values", () => {
-      const config: IncrediConfig = {};
+      const config: NightgaugeConfig = {};
 
       setConfigValue(config, "sanitization.enabled", false);
       expect(config.sanitization?.enabled).toBe(false);
@@ -385,7 +385,7 @@ describe("IncrediYamlService", () => {
     it.each(["__proto__.polluted", "constructor.prototype.polluted", "prototype.polluted"])(
       "should reject unsafe path %s",
       (path) => {
-        const config: IncrediConfig = {};
+        const config: NightgaugeConfig = {};
 
         expect(() => setConfigValue(config, path, true)).toThrow("Unsafe configuration path");
       }

@@ -17,7 +17,7 @@ import { CopilotCliAdapter } from "../../src/cli/adapters/CopilotCliAdapter.js";
 import { GrokAdapter } from "../../src/cli/adapters/GrokAdapter.js";
 import type {
   ICliAdapter,
-  IncrediAdapter,
+  NightgaugeAdapter,
   OrchestrationCapability,
 } from "../../src/cli/adapters/ICliAdapter.js";
 
@@ -28,7 +28,7 @@ import type {
 interface AdapterTestCase {
   adapter: ICliAdapter;
   expected: {
-    name: IncrediAdapter;
+    name: NightgaugeAdapter;
     displayName: string;
     cliCommand: string;
     requiresDirectApiKey: boolean;
@@ -158,7 +158,7 @@ describe("adapter compliance", () => {
   describe.each(ADAPTER_TABLE.map((tc) => ({ label: tc.expected.name, ...tc })))(
     "$label",
     ({ adapter, expected }) => {
-      it("name matches expected IncrediAdapter value", () => {
+      it("name matches expected NightgaugeAdapter value", () => {
         expect(adapter.name).toBe(expected.name);
       });
 

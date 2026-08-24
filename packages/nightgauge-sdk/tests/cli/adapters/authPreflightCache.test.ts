@@ -17,9 +17,9 @@ import {
 } from "../../../src/cli/adapters/authPreflightCache.js";
 import { runAdapterAuthPreflight } from "../../../src/cli/adapters/runAdapterAuthPreflight.js";
 import { AdapterError } from "../../../src/cli/adapters/errors.js";
-import type { IncrediAdapter } from "../../../src/cli/adapters/ICliAdapter.js";
+import type { NightgaugeAdapter } from "../../../src/cli/adapters/ICliAdapter.js";
 
-const ADAPTER: IncrediAdapter = "claude-headless";
+const ADAPTER: NightgaugeAdapter = "claude-headless";
 
 const tick = (ms = 0): Promise<void> => new Promise((r) => setTimeout(r, ms));
 

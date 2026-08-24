@@ -229,14 +229,14 @@ describe("switchPlatformEnvironment — command wiring", () => {
   it("writes config delta with environment key on env switch", () => {
     // Verify the config delta shape the command constructs when switching to canary.
     // This mirrors the exact delta built in registerSwitchPlatformEnvironmentCommand.
-    type IncrediConfig = { platform?: { environment?: string; api_url?: string } };
-    function buildDelta(selectedEnv: string, customUrl?: string): IncrediConfig {
+    type NightgaugeConfig = { platform?: { environment?: string; api_url?: string } };
+    function buildDelta(selectedEnv: string, customUrl?: string): NightgaugeConfig {
       return {
         platform: {
           environment: selectedEnv as "production" | "canary" | "local" | "custom",
           ...(selectedEnv === "custom" ? { api_url: customUrl } : {}),
         },
-      } as IncrediConfig;
+      } as NightgaugeConfig;
     }
 
     const canaryDelta = buildDelta("canary");

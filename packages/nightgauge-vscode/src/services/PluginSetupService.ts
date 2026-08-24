@@ -62,7 +62,7 @@ function getPluginConfig(): PluginConfig {
 export interface PluginStatus {
   claudeCliAvailable: boolean;
   marketplaceAdded: boolean;
-  incrediPluginInstalled: boolean;
+  nightgaugePluginInstalled: boolean;
   smartSetupPluginInstalled: boolean;
   docsPluginInstalled: boolean;
 }
@@ -148,7 +148,7 @@ export class PluginSetupService implements vscode.Disposable {
     if (installed) {
       // Verify it's still installed
       const status = await this.getPluginStatus();
-      if (status.incrediPluginInstalled) {
+      if (status.nightgaugePluginInstalled) {
         return;
       }
       // Reset if somehow uninstalled
@@ -162,7 +162,7 @@ export class PluginSetupService implements vscode.Disposable {
       return;
     }
 
-    if (!status.incrediPluginInstalled) {
+    if (!status.nightgaugePluginInstalled) {
       await this.promptPluginInstall(status);
     }
   }
@@ -174,7 +174,7 @@ export class PluginSetupService implements vscode.Disposable {
     const status: PluginStatus = {
       claudeCliAvailable: false,
       marketplaceAdded: false,
-      incrediPluginInstalled: false,
+      nightgaugePluginInstalled: false,
       smartSetupPluginInstalled: false,
       docsPluginInstalled: false,
     };
@@ -198,7 +198,7 @@ export class PluginSetupService implements vscode.Disposable {
     // Check installed plugins
     try {
       const { stdout } = await execAsync("claude plugin list");
-      status.incrediPluginInstalled = stdout.includes("nightgauge");
+      status.nightgaugePluginInstalled = stdout.includes("nightgauge");
       status.smartSetupPluginInstalled = stdout.includes("smart-setup");
       status.docsPluginInstalled = stdout.includes("docs");
     } catch {
@@ -310,7 +310,7 @@ export class PluginSetupService implements vscode.Disposable {
       const pluginsToInstall = this.marketplace.plugins.filter((plugin) => {
         switch (plugin) {
           case "nightgauge":
-            return !status.incrediPluginInstalled;
+            return !status.nightgaugePluginInstalled;
           case "smart-setup":
             return !status.smartSetupPluginInstalled;
           case "docs":

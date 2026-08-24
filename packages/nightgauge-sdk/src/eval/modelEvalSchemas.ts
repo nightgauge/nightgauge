@@ -167,7 +167,7 @@ export type Transport = z.infer<typeof TransportSchema>;
  * The single-authority per-adapter transport-axis mapping (#600): which
  * transport's reachability facts gate a CLOSED-set adapter's model preflight.
  * Keyed by raw adapter name (not {@link Transport} itself) so this schema
- * never has to import the `IncrediAdapter` union — mirrors the
+ * never has to import the `NightgaugeAdapter` union — mirrors the
  * `providerForAdapter`/`ProviderForAdapter` precedent of taking a plain
  * string. Mirrors Go's `AdapterTransports` (`registry.go`).
  */

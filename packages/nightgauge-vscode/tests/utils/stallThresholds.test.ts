@@ -49,11 +49,11 @@ import {
   getStallCalibrationMinRuns,
   precomputeCalibratedStallThresholds,
   getCalibratedStallData,
-} from "../../src/utils/incrediConfig";
+} from "../../src/utils/nightgaugeConfig";
 import { resolveConfigPathSync } from "../../src/utils/configPathResolver";
 import { StageDurationAnalyzer } from "../../src/utils/StageDurationAnalyzer";
 
-describe("incrediConfig - Stall Thresholds", () => {
+describe("nightgaugeConfig - Stall Thresholds", () => {
   const originalEnv = process.env;
 
   beforeEach(() => {

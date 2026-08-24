@@ -29,7 +29,7 @@ import {
 } from "../utils/skillRunner";
 import type { StallEvent } from "../schemas/stallEvents";
 import type { StallEscalationLevel, PauseForStallPayload } from "../schemas/pipelineState";
-import { precomputeCalibratedStallThresholds } from "../utils/incrediConfig";
+import { precomputeCalibratedStallThresholds } from "../utils/nightgaugeConfig";
 import type { Logger } from "../utils/logger";
 import type { IpcClient } from "./IpcClient";
 

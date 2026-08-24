@@ -32,7 +32,7 @@
  */
 
 import {
-  type IncrediConfig,
+  type NightgaugeConfig,
   type ConfigSourceMap,
   type ConfigValidationResult,
   type ConfigSource,
@@ -52,19 +52,19 @@ import { resolveEnvVars, type EnvVarResolutionResult, type EnvVarError } from ".
  */
 export interface ConfigTiers {
   /** Built-in defaults (tier 1 - lowest) */
-  defaults?: Partial<IncrediConfig>;
+  defaults?: Partial<NightgaugeConfig>;
   /** Global user config ~/.nightgauge/config.yaml (tier 2) */
-  global?: Partial<IncrediConfig>;
+  global?: Partial<NightgaugeConfig>;
   /** Project config .nightgauge/config.yaml (tier 3) */
-  project?: Partial<IncrediConfig>;
+  project?: Partial<NightgaugeConfig>;
   /** Local developer config .nightgauge/config.local.yaml (tier 4) */
-  local?: Partial<IncrediConfig>;
+  local?: Partial<NightgaugeConfig>;
   /** Runtime memento store snapshot (tier 5) — VSCode globalState/workspaceState */
-  runtime?: Partial<IncrediConfig>;
+  runtime?: Partial<NightgaugeConfig>;
   /** Environment variables NIGHTGAUGE_* (tier 6) - or pre-resolved config */
-  env?: Partial<IncrediConfig>;
+  env?: Partial<NightgaugeConfig>;
   /** CLI flags --config-* (tier 7 - highest) */
-  cli?: Partial<IncrediConfig>;
+  cli?: Partial<NightgaugeConfig>;
 }
 
 /**
@@ -85,7 +85,7 @@ export interface TierMetadata {
  */
 export interface ConfigMergeResult {
   /** Effective configuration after all merges */
-  config: IncrediConfig;
+  config: NightgaugeConfig;
   /** Source annotations for each field (dot-notation paths) */
   sources: ConfigSourceMap;
   /** Validation result */
@@ -245,7 +245,7 @@ export function mergeConfigs(tiers: ConfigTiers, options: MergeOptions = {}): Co
 
   // 1. Start with defaults
   const defaults = tiers.defaults ?? DEFAULT_CONFIG;
-  let merged = { ...defaults } as IncrediConfig;
+  let merged = { ...defaults } as NightgaugeConfig;
   trackObjectSources(sources, defaults as Record<string, unknown>, "", "default");
 
   // 2. Merge global config
@@ -512,12 +512,12 @@ export function formatConfigDisplay(
  * Create a simple merged config from file-based tiers only
  *
  * Convenience function that skips CLI tier and uses default env resolution.
- * This is what IncrediYamlService.readMerged() uses internally.
+ * This is what NightgaugeYamlService.readMerged() uses internally.
  */
 export function mergeFileConfigs(
-  globalConfig: Partial<IncrediConfig> | null | undefined,
-  projectConfig: Partial<IncrediConfig> | null | undefined,
-  localConfig: Partial<IncrediConfig> | null | undefined,
+  globalConfig: Partial<NightgaugeConfig> | null | undefined,
+  projectConfig: Partial<NightgaugeConfig> | null | undefined,
+  localConfig: Partial<NightgaugeConfig> | null | undefined,
   options: MergeOptions = {}
 ): ConfigMergeResult {
   return mergeConfigs(

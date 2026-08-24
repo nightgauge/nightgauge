@@ -4,7 +4,7 @@
  * Handles reading env vars and expanding `env:VAR_NAME` placeholders
  * found in config values.
  *
- * @see Issue #2742 - Extract incrediConfig.ts resolver classes
+ * @see Issue #2742 - Extract nightgaugeConfig.ts resolver classes
  */
 
 export class EnvVarResolver {

@@ -11,7 +11,7 @@
 import { describe, it, expect } from "vitest";
 import { getSettingsHtml } from "../../../src/views/settings/SettingsHtml";
 import { getDefaultConfig } from "../../../src/config/schema";
-import type { IncrediConfig } from "../../../src/views/settings/types";
+import type { NightgaugeConfig } from "../../../src/views/settings/types";
 import type { TierAuditEntry } from "../../../src/services/IpcClientBase";
 
 const mockWebview = { cspSource: "test-csp" } as any;
@@ -45,7 +45,7 @@ const DRIFT_MOVE_SENTINEL = ">Move to";
 
 describe("Drift banner", () => {
   it("renders when drift entries present and banner not dismissed", () => {
-    const config = getDefaultConfig() as IncrediConfig;
+    const config = getDefaultConfig() as NightgaugeConfig;
     const html = getSettingsHtml(mockWebview, config, new Set(), {}, undefined, {
       tierAuditEntries: [makeDriftEntry("pipeline.auto_fix", "machine", "project")],
       driftBannerDismissed: false,
@@ -56,7 +56,7 @@ describe("Drift banner", () => {
   });
 
   it("renders plural count for multiple drift entries", () => {
-    const config = getDefaultConfig() as IncrediConfig;
+    const config = getDefaultConfig() as NightgaugeConfig;
     const html = getSettingsHtml(mockWebview, config, new Set(), {}, undefined, {
       tierAuditEntries: [
         makeDriftEntry("pipeline.auto_fix", "machine", "project"),
@@ -70,7 +70,7 @@ describe("Drift banner", () => {
   });
 
   it("is absent when no drift entries present", () => {
-    const config = getDefaultConfig() as IncrediConfig;
+    const config = getDefaultConfig() as NightgaugeConfig;
     const html = getSettingsHtml(mockWebview, config, new Set(), {}, undefined, {
       tierAuditEntries: [makeOkEntry("pipeline.auto_fix", "project")],
       driftBannerDismissed: false,
@@ -80,7 +80,7 @@ describe("Drift banner", () => {
   });
 
   it("is absent when tierAuditEntries is empty", () => {
-    const config = getDefaultConfig() as IncrediConfig;
+    const config = getDefaultConfig() as NightgaugeConfig;
     const html = getSettingsHtml(mockWebview, config, new Set(), {}, undefined, {
       tierAuditEntries: [],
       driftBannerDismissed: false,
@@ -90,7 +90,7 @@ describe("Drift banner", () => {
   });
 
   it("is absent when dismissed", () => {
-    const config = getDefaultConfig() as IncrediConfig;
+    const config = getDefaultConfig() as NightgaugeConfig;
     const html = getSettingsHtml(mockWebview, config, new Set(), {}, undefined, {
       tierAuditEntries: [makeDriftEntry("pipeline.auto_fix", "machine", "project")],
       driftBannerDismissed: true,
@@ -100,14 +100,14 @@ describe("Drift banner", () => {
   });
 
   it("is absent when no options provided", () => {
-    const config = getDefaultConfig() as IncrediConfig;
+    const config = getDefaultConfig() as NightgaugeConfig;
     const html = getSettingsHtml(mockWebview, config, new Set(), {}, undefined, {});
 
     expect(html).not.toContain(DRIFT_BANNER_SENTINEL);
   });
 
   it("includes dismiss button posting dismissDriftBanner message", () => {
-    const config = getDefaultConfig() as IncrediConfig;
+    const config = getDefaultConfig() as NightgaugeConfig;
     const html = getSettingsHtml(mockWebview, config, new Set(), {}, undefined, {
       tierAuditEntries: [makeDriftEntry("pipeline.auto_fix", "machine", "project")],
       driftBannerDismissed: false,
@@ -118,7 +118,7 @@ describe("Drift banner", () => {
   });
 
   it("includes showDriftedKeysOnly button", () => {
-    const config = getDefaultConfig() as IncrediConfig;
+    const config = getDefaultConfig() as NightgaugeConfig;
     const html = getSettingsHtml(mockWebview, config, new Set(), {}, undefined, {
       tierAuditEntries: [makeDriftEntry("pipeline.auto_fix", "machine", "project")],
       driftBannerDismissed: false,
@@ -130,7 +130,7 @@ describe("Drift banner", () => {
 
 describe("Drift badge per-key", () => {
   it("renders drift badge with tooltip text for a DRIFT key", () => {
-    const config = getDefaultConfig() as IncrediConfig;
+    const config = getDefaultConfig() as NightgaugeConfig;
     const html = getSettingsHtml(mockWebview, config, new Set(), {}, undefined, {
       tierAuditEntries: [makeDriftEntry("pipeline.auto_fix", "machine", "project")],
     });
@@ -140,7 +140,7 @@ describe("Drift badge per-key", () => {
   });
 
   it("does not render drift badge for OK-status entry", () => {
-    const config = getDefaultConfig() as IncrediConfig;
+    const config = getDefaultConfig() as NightgaugeConfig;
     const html = getSettingsHtml(mockWebview, config, new Set(), {}, undefined, {
       tierAuditEntries: [makeOkEntry("pipeline.auto_fix", "project")],
     });
@@ -149,7 +149,7 @@ describe("Drift badge per-key", () => {
   });
 
   it("does not render drift badge when no audit entries provided", () => {
-    const config = getDefaultConfig() as IncrediConfig;
+    const config = getDefaultConfig() as NightgaugeConfig;
     const html = getSettingsHtml(mockWebview, config, new Set(), {}, undefined, {});
 
     expect(html).not.toContain(DRIFT_BADGE_SENTINEL);
@@ -158,7 +158,7 @@ describe("Drift badge per-key", () => {
 
 describe("Move action", () => {
   it("renders moveTierKey button for a drifted key", () => {
-    const config = getDefaultConfig() as IncrediConfig;
+    const config = getDefaultConfig() as NightgaugeConfig;
     const html = getSettingsHtml(mockWebview, config, new Set(), {}, undefined, {
       tierAuditEntries: [makeDriftEntry("pipeline.auto_fix", "machine", "project")],
     });
@@ -168,7 +168,7 @@ describe("Move action", () => {
   });
 
   it("Move button includes correct key and targetTier in message payload", () => {
-    const config = getDefaultConfig() as IncrediConfig;
+    const config = getDefaultConfig() as NightgaugeConfig;
     const html = getSettingsHtml(mockWebview, config, new Set(), {}, undefined, {
       tierAuditEntries: [makeDriftEntry("pipeline.auto_fix", "machine", "project")],
     });
@@ -178,7 +178,7 @@ describe("Move action", () => {
   });
 
   it("does not render Move button for OK-status entry", () => {
-    const config = getDefaultConfig() as IncrediConfig;
+    const config = getDefaultConfig() as NightgaugeConfig;
     const html = getSettingsHtml(mockWebview, config, new Set(), {}, undefined, {
       tierAuditEntries: [makeOkEntry("pipeline.auto_fix", "project")],
     });

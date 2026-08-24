@@ -15,7 +15,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { SDKMessage, SDKQueryFunction } from "../../orchestrator/StageExecutor.js";
-import type { IncrediAdapter } from "./ICliAdapter.js";
+import type { NightgaugeAdapter } from "./ICliAdapter.js";
 import { applyCodexSandboxProfile } from "./codexSandbox.js";
 import { curateChildEnv } from "./childEnv.js";
 import {
@@ -123,7 +123,7 @@ export function selectCodexOutput(
 export function createCliQueryFn(options: {
   command: string;
   args: string[];
-  adapter: IncrediAdapter;
+  adapter: NightgaugeAdapter;
   promptDelivery?: PromptDelivery;
 }): SDKQueryFunction {
   const delivery = options.promptDelivery ?? "stdin";

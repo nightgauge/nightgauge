@@ -84,7 +84,7 @@ import type { Logger } from "../utils/logger";
 import type { ActiveSlot, QueueItem } from "../types/queue";
 import { updateProjectItemStatus } from "../utils/projectFieldWriter";
 import { postFailureComment } from "../utils/failureComment";
-import { getConcurrentPipelineConfig } from "../utils/incrediConfig";
+import { getConcurrentPipelineConfig } from "../utils/nightgaugeConfig";
 import type { WorkspaceManager } from "./WorkspaceManager";
 import { IpcClient } from "./IpcClient";
 import type { AbandonedDispatchSituation } from "./IpcClientBase";
@@ -869,13 +869,13 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
    * This is the PER-COMMAND target-root resolution path: it runs at dispatch
    * time (fillSlots → startSlot), independent of the fixed `repoRoot` passed
    * to the constructor, so a multi-root `.code-workspace` with no single
-   * resolvable `incrediRoot` still dispatches each item to the correct repo
+   * resolvable `nightgaugeRoot` still dispatches each item to the correct repo
    * as long as `workspaceManager` was provided. Returns null (item rejected,
    * see caller) when the item targets a repo not present in this workspace —
    * this is the "unmatched repo" graceful-failure path.
    *
    * @see Issue #2245 - Cross-repo worktree creation
-   * @see Issue #4117 - Agent runner gated on a single incrediRoot
+   * @see Issue #4117 - Agent runner gated on a single nightgaugeRoot
    */
   private resolveWorktreeManager(item: QueueItem): WorktreeManager | null {
     if (!item.repoName || !this.workspaceManager) {

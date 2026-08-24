@@ -86,8 +86,8 @@ vi.mock("../../src/utils/configPathResolver", () => ({
   logDeprecationWarning: vi.fn(),
 }));
 
-vi.mock("../../src/utils/incrediConfig", async () => {
-  const actual = await vi.importActual<Record<string, unknown>>("../../src/utils/incrediConfig");
+vi.mock("../../src/utils/nightgaugeConfig", async () => {
+  const actual = await vi.importActual<Record<string, unknown>>("../../src/utils/nightgaugeConfig");
   return {
     ...actual,
     precomputeCalibratedStallThresholds: vi.fn().mockResolvedValue(undefined),
@@ -133,7 +133,7 @@ vi.mock("../../src/services/RepositoryContextLoader", () => ({
 import { SkillRunner, type RunStageParams, type StageResult } from "../../src/services/SkillRunner";
 import { killAllActiveProcesses } from "../../src/utils/skillRunner";
 import { Logger } from "../../src/utils/logger";
-import { getPerformanceMode, getStageEffort } from "../../src/utils/incrediConfig";
+import { getPerformanceMode, getStageEffort } from "../../src/utils/nightgaugeConfig";
 import type { ClaudeEffort } from "../../src/utils/resolvers/stageResolver";
 import type { PipelineStage } from "@nightgauge/sdk";
 import { createMockChildProcess } from "../mocks/child-process";

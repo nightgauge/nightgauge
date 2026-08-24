@@ -9,7 +9,7 @@
  */
 
 import * as vscode from "vscode";
-import { IncrediYamlService } from "../views/settings/IncrediYamlService";
+import { NightgaugeYamlService } from "../views/settings/NightgaugeYamlService";
 import type { Logger } from "../utils/logger";
 
 /**
@@ -28,7 +28,7 @@ export function registerDisableAutoAcceptCommand(logger: Logger): vscode.Disposa
     }
 
     try {
-      const yamlService = new IncrediYamlService(workspaceRoot);
+      const yamlService = new NightgaugeYamlService(workspaceRoot);
       const result = await yamlService.readLocal();
 
       if (!result.success) {

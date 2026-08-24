@@ -48,7 +48,7 @@ import {
   DEFAULT_COMPLEXITY_THRESHOLDS,
   DEFAULT_CONFIDENCE_THRESHOLD,
   DEFAULT_STAGE_EFFORTS,
-} from "../../src/utils/incrediConfig";
+} from "../../src/utils/nightgaugeConfig";
 import { resolveConfigPathSync } from "../../src/utils/configPathResolver";
 
 // ============================================================================

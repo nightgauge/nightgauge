@@ -27,7 +27,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { parseDocument } from "yaml";
 import { TIER_BANDS, type PipelineStage } from "@nightgauge/sdk";
-import type { DefaultModel } from "./incrediConfig";
+import type { DefaultModel } from "./nightgaugeConfig";
 import { resolveConfigPathSync, getConfigPaths } from "./configPathResolver";
 import { readEffectiveConfigTextSync } from "./mergedConfigReader";
 

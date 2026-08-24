@@ -21,7 +21,7 @@ import {
   resolveCodexModelAlias,
   PIPELINE_STAGE_ORDER,
   PHASE_REGISTRY,
-  type IncrediAdapter,
+  type NightgaugeAdapter,
   type AdapterPreflightAggregateResult,
   type PipelineStage,
 } from "@nightgauge/sdk";
@@ -32,7 +32,7 @@ import { BinaryResolver } from "../services/BinaryResolver";
 import { resolveStageAdapter } from "../utils/resolvers/adapterResolver";
 import { getStageModel } from "../utils/resolvers/stageResolver";
 import { getExecutionAdapter, type ExecutionAdapter } from "../utils/resolvers/modelResolver";
-import { toIncrediAdapter } from "../services/HeadlessOrchestrator";
+import { toNightgaugeAdapter } from "../services/HeadlessOrchestrator";
 import { AdapterDoctorPanel } from "../views/doctor/AdapterDoctorPanel";
 import type {
   AdapterDoctorReport,
@@ -98,7 +98,7 @@ const LOCAL_HTTP_ADAPTERS: ReadonlySet<string> = new Set(["ollama", "lm-studio"]
 export interface StageRouting {
   stage: PipelineStage;
   adapter: ExecutionAdapter;
-  sdkAdapter: IncrediAdapter;
+  sdkAdapter: NightgaugeAdapter;
   source: string;
   model: string; // tier, or "(auto / router)" when deferred to the router
 }
@@ -129,7 +129,7 @@ export function resolveStageRouting(
     return {
       stage,
       adapter: decision.adapter,
-      sdkAdapter: toIncrediAdapter(decision.adapter, env),
+      sdkAdapter: toNightgaugeAdapter(decision.adapter, env),
       source: decision.source,
       model: model ?? "(auto / router)",
     };
@@ -142,10 +142,10 @@ export function resolveStageRouting(
  */
 export function collectDistinctSdkAdapters(
   routing: StageRouting[],
-  globalSdkAdapter: IncrediAdapter
-): IncrediAdapter[] {
-  const seen = new Set<IncrediAdapter>();
-  const out: IncrediAdapter[] = [];
+  globalSdkAdapter: NightgaugeAdapter
+): NightgaugeAdapter[] {
+  const seen = new Set<NightgaugeAdapter>();
+  const out: NightgaugeAdapter[] = [];
   for (const a of [...routing.map((r) => r.sdkAdapter), globalSdkAdapter]) {
     if (!seen.has(a)) {
       seen.add(a);
@@ -202,7 +202,7 @@ export function runGoDoctorAdapters(
  * auth probe itself surfaces a missing CLI as a BINARY_NOT_FOUND failure).
  */
 export function mergeAdapterRows(
-  sdkAdapters: IncrediAdapter[],
+  sdkAdapters: NightgaugeAdapter[],
   goHealth: GoAdapterHealth[],
   auth: AdapterPreflightAggregateResult,
   binaryResolved: boolean
@@ -309,7 +309,7 @@ export interface BuildReportDeps {
   env?: NodeJS.ProcessEnv;
   resolveBinary: () => Promise<string | null>;
   runGoAdapters: (binary: string, adapters: string[], cwd: string) => Promise<GoAdapterHealth[]>;
-  runAuth: (adapters: IncrediAdapter[]) => Promise<AdapterPreflightAggregateResult>;
+  runAuth: (adapters: NightgaugeAdapter[]) => Promise<AdapterPreflightAggregateResult>;
   globalAdapter: () => ExecutionAdapter;
   now: () => string;
   /** Override per-stage routing resolution (defaults to the live resolvers). */
@@ -325,7 +325,7 @@ export async function buildAdapterDoctorReport(
 ): Promise<AdapterDoctorReport> {
   const env = deps.env ?? process.env;
   const routing = (deps.resolveRouting ?? resolveStageRouting)(deps.workspaceRoot, env);
-  const globalSdkAdapter = toIncrediAdapter(deps.globalAdapter(), env);
+  const globalSdkAdapter = toNightgaugeAdapter(deps.globalAdapter(), env);
   const sdkAdapters = collectDistinctSdkAdapters(routing, globalSdkAdapter);
 
   const notes: string[] = [];

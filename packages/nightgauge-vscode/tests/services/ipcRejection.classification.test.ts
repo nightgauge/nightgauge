@@ -93,7 +93,7 @@ vi.mock("fs", () => ({
   readFileSync: vi.fn(() => ""),
 }));
 
-vi.mock("../../src/utils/incrediConfig", () => ({
+vi.mock("../../src/utils/nightgaugeConfig", () => ({
   getGitHubAuthToken: vi.fn(() => null),
   getGitHubAuthTokens: vi.fn(() => ({})),
 }));

@@ -1,12 +1,12 @@
 import { describe, it, expect } from "vitest";
 import { getSettingsHtml } from "../../../src/views/settings/SettingsHtml";
 import { getDefaultConfig } from "../../../src/config/schema";
-import type { IncrediConfig } from "../../../src/views/settings/types";
+import type { NightgaugeConfig } from "../../../src/views/settings/types";
 import type { ConfigSourceMap } from "../../../src/config/schema";
 
 describe("SettingsHtml autonomous section", () => {
   it("renders autonomous section with all four controls", () => {
-    const config = getDefaultConfig() as IncrediConfig;
+    const config = getDefaultConfig() as NightgaugeConfig;
     const html = getSettingsHtml({ cspSource: "test-csp" } as any, config);
 
     expect(html).toContain('id="section-autonomous"');
@@ -25,7 +25,7 @@ describe("SettingsHtml autonomous section", () => {
   });
 
   it("renders correct default values", () => {
-    const config = {} as IncrediConfig;
+    const config = {} as NightgaugeConfig;
     const html = getSettingsHtml({ cspSource: "test-csp" } as any, config);
 
     // refinement_enabled defaults to true (checked)
@@ -44,7 +44,7 @@ describe("SettingsHtml autonomous section", () => {
   });
 
   it("renders number input with min=1 max=3 for refinement_max_concurrent", () => {
-    const config = getDefaultConfig() as IncrediConfig;
+    const config = getDefaultConfig() as NightgaugeConfig;
     const html = getSettingsHtml({ cspSource: "test-csp" } as any, config);
 
     expect(html).toMatch(/id="autonomous\.refinement_max_concurrent"[^>]*min="1"/);
@@ -52,7 +52,7 @@ describe("SettingsHtml autonomous section", () => {
   });
 
   it("renders disabled attribute on all inputs when disabled=true", () => {
-    const config = getDefaultConfig() as IncrediConfig;
+    const config = getDefaultConfig() as NightgaugeConfig;
     // Simulate pipeline running by using a locked section context
     // We pass a running pipeline set that includes "autonomous"
     const runningPipeline = new Set(["autonomous"]);
@@ -65,7 +65,7 @@ describe("SettingsHtml autonomous section", () => {
   });
 
   it("renders correct values when autonomous config is explicitly set", () => {
-    const config = getDefaultConfig() as IncrediConfig;
+    const config = getDefaultConfig() as NightgaugeConfig;
     config.autonomous = {
       refinement_enabled: false,
       refinement_interval: "5m",
@@ -90,7 +90,7 @@ describe("SettingsHtml autonomous section", () => {
   });
 
   it("renders tier badges when showBadges is true", () => {
-    const config = getDefaultConfig() as IncrediConfig;
+    const config = getDefaultConfig() as NightgaugeConfig;
     const sources: ConfigSourceMap = {
       "autonomous.refinement_enabled": "project",
       "autonomous.auto_actionable": "local",

@@ -97,8 +97,8 @@ const mockYamlInstance = {
   dispose: vi.fn(),
 };
 
-vi.mock("../../src/views/settings/IncrediYamlService", () => ({
-  IncrediYamlService: vi.fn(function () {
+vi.mock("../../src/views/settings/NightgaugeYamlService", () => ({
+  NightgaugeYamlService: vi.fn(function () {
     return mockYamlInstance;
   }),
 }));

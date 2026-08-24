@@ -297,7 +297,7 @@ at runtime. `ConfigBridge.getSanitization()` is never called. The
 `SanitizationLogService` reads log files but does not read sanitization config
 to change behavior.
 
-The `IncrediYamlService` has methods `addToAllowlist()` and `addSafeDirectory()`
+The `NightgaugeYamlService` has methods `addToAllowlist()` and `addSafeDirectory()`
 that write to config, but nothing reads these values to enforce sanitization
 rules.
 

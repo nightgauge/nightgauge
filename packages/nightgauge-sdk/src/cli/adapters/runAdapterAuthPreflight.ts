@@ -10,12 +10,12 @@
  * @see Issue #3222 - validateAdapterAuth pre-flight checker per adapter
  */
 
-import type { IncrediAdapter } from "./ICliAdapter.js";
+import type { NightgaugeAdapter } from "./ICliAdapter.js";
 import { type AdapterAuthResult, type ValidateAdapterAuthOptions } from "./validateAdapterAuth.js";
 import { probeAdapterAuthCached, type AuthPreflightCacheOptions } from "./authPreflightCache.js";
 
 export interface AdapterAuthFailure {
-  adapter: IncrediAdapter;
+  adapter: NightgaugeAdapter;
   reason: string;
   suggestedFix: string;
   /**
@@ -29,7 +29,7 @@ export interface AdapterAuthFailure {
 
 export interface AdapterPreflightAggregateResult {
   ok: boolean;
-  results: Partial<Record<IncrediAdapter, AdapterAuthResult>>;
+  results: Partial<Record<NightgaugeAdapter, AdapterAuthResult>>;
   failures: AdapterAuthFailure[];
 }
 
@@ -46,7 +46,7 @@ export interface RunAdapterAuthPreflightOptions
  * the failure-comment renderer in the VSCode layer does not need to duplicate
  * provider-specific install advice.
  */
-const SUGGESTED_FIX: Record<IncrediAdapter, string> = {
+const SUGGESTED_FIX: Record<NightgaugeAdapter, string> = {
   "claude-sdk": "Set ANTHROPIC_API_KEY in your environment, or run `claude auth login`.",
   "claude-headless": "Run `claude auth login` (install via `brew install claude` if missing).",
   codex: "Run `codex login` (install via `npm install -g @openai/codex` if missing).",
@@ -60,7 +60,7 @@ const SUGGESTED_FIX: Record<IncrediAdapter, string> = {
   grok: "Run `grok login`, or set XAI_API_KEY (install via `curl -fsSL https://x.ai/cli/install.sh | bash`).",
 };
 
-function suggestedFixFor(adapter: IncrediAdapter): string {
+function suggestedFixFor(adapter: NightgaugeAdapter): string {
   return SUGGESTED_FIX[adapter] ?? `Re-check authentication for adapter '${adapter}'.`;
 }
 
@@ -78,11 +78,11 @@ function suggestedFixFor(adapter: IncrediAdapter): string {
  * @param opts - Per-probe options plus cache / retry controls.
  */
 export async function runAdapterAuthPreflight(
-  adapters: IncrediAdapter[],
+  adapters: NightgaugeAdapter[],
   opts: RunAdapterAuthPreflightOptions = {}
 ): Promise<AdapterPreflightAggregateResult> {
-  const distinct: IncrediAdapter[] = [];
-  const seen = new Set<IncrediAdapter>();
+  const distinct: NightgaugeAdapter[] = [];
+  const seen = new Set<NightgaugeAdapter>();
   for (const a of adapters) {
     if (!seen.has(a)) {
       seen.add(a);
@@ -101,7 +101,7 @@ export async function runAdapterAuthPreflight(
     })
   );
 
-  const results: Partial<Record<IncrediAdapter, AdapterAuthResult>> = {};
+  const results: Partial<Record<NightgaugeAdapter, AdapterAuthResult>> = {};
   const failures: AdapterAuthFailure[] = [];
   for (const { adapter, result } of probes) {
     results[adapter] = result;

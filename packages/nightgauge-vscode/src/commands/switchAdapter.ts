@@ -1,8 +1,8 @@
 import * as vscode from "vscode";
 import type { Logger } from "../utils/logger";
-import type { IncrediConfig } from "../views/settings/types";
-import { IncrediYamlService } from "../views/settings/IncrediYamlService";
-import { getExecutionAdapter, type ExecutionAdapter } from "../utils/incrediConfig";
+import type { NightgaugeConfig } from "../views/settings/types";
+import { NightgaugeYamlService } from "../views/settings/NightgaugeYamlService";
+import { getExecutionAdapter, type ExecutionAdapter } from "../utils/nightgaugeConfig";
 import { ConfigBridge } from "../services/ConfigBridge";
 
 interface AdapterOption extends vscode.QuickPickItem {
@@ -14,8 +14,8 @@ interface AdapterOption extends vscode.QuickPickItem {
  * writeLocal() merges this onto the existing local config file, so all
  * other keys are preserved as-is.
  */
-function adapterDelta(adapter: ExecutionAdapter): IncrediConfig {
-  return { ui: { core: { adapter } } } as IncrediConfig;
+function adapterDelta(adapter: ExecutionAdapter): NightgaugeConfig {
+  return { ui: { core: { adapter } } } as NightgaugeConfig;
 }
 
 export function registerSwitchAdapterCommand(logger: Logger): vscode.Disposable {
@@ -106,7 +106,7 @@ export function registerSwitchAdapterCommand(logger: Logger): vscode.Disposable 
     // The adapter is a personal developer preference — different developers
     // on the same project may use different providers. It should never be
     // committed to the project config.
-    const yamlService = new IncrediYamlService(workspaceRoot);
+    const yamlService = new NightgaugeYamlService(workspaceRoot);
 
     try {
       const writeResult = await yamlService.writeLocal(adapterDelta(adapterSelection.value));

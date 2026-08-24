@@ -3,7 +3,7 @@
  *
  * `handlePanelClosed()` was bound to `panel.onDidDispose` and called the
  * service-lifetime `dispose()`, which tore down the diagnostic logger's
- * OutputChannel, the recommendation applier and the IncrediYaml service.
+ * OutputChannel, the recommendation applier and the NightgaugeYaml service.
  * Dashboard is a singleton captured by the `nightgauge.showDashboard` closure,
  * so the next invocation ran `show()` against a gutted object and VS Code
  * surfaced `Error running command nightgauge.showDashboard: Channel has been

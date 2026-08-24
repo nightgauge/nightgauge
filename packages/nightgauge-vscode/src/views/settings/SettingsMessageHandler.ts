@@ -9,7 +9,7 @@
  */
 
 import type {
-  IncrediConfig,
+  NightgaugeConfig,
   ViewTier,
   EditableTier,
   TierViewState,
@@ -21,10 +21,10 @@ import type {
  * Messages sent from extension to WebView
  */
 export type ExtensionToWebViewMessage =
-  | { type: "update"; config: IncrediConfig }
+  | { type: "update"; config: NightgaugeConfig }
   | {
       type: "update-tiered";
-      config: IncrediConfig;
+      config: NightgaugeConfig;
       sources: ConfigSourceMap;
       tierState: TierViewState;
       tiers: TierMetadata;
@@ -373,7 +373,7 @@ export class SettingsMessageHandler {
 /**
  * Create an update message for the WebView
  */
-export function createUpdateMessage(config: IncrediConfig): ExtensionToWebViewMessage {
+export function createUpdateMessage(config: NightgaugeConfig): ExtensionToWebViewMessage {
   return { type: "update", config };
 }
 
@@ -407,7 +407,7 @@ export function createLockedMessage(lockedSections: string[]): ExtensionToWebVie
  * @param tiers - Metadata about which tiers are present
  */
 export function createTieredUpdateMessage(
-  config: IncrediConfig,
+  config: NightgaugeConfig,
   sources: ConfigSourceMap,
   tierState: TierViewState,
   tiers: TierMetadata
