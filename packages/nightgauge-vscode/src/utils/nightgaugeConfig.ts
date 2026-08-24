@@ -11,7 +11,7 @@
  * - resolvers/otherResolver     — Pipeline control, budget enforcement, concurrent, epic merge
  * - resolvers/monitoringResolver — Stall detection, alerting, MCP, supercharge, audit
  *
- * @see Issue #2742 - Extract nightgaugeConfig.ts resolver classes
+ * @see The resolver-class extraction that produced the modules above.
  * @see Issue #195 - auto_accept_stages not respected for stage transitions
  * @see Issue #433 - config.yaml (formerly nightgauge.yaml)
  */
@@ -201,7 +201,7 @@ export {
 } from "./resolvers/monitoringResolver";
 
 // Re-export performance-mode primitives so consumers can import from
-// `utils/nightgaugeConfig` consistently (Issue #3009).
+// `utils/nightgaugeConfig` consistently.
 export {
   type PerformanceMode,
   PERFORMANCE_MODES,
