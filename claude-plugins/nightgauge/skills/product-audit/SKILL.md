@@ -167,7 +167,7 @@ fans the eight audit dimensions out as parallel worker units (Phase 2), then a
 merge judge synthesizes their per-dimension scores into the weighted composite
 (Phase 3). The block is consumed by the capability-routed `WorkflowEngine` (epic
 #3899); see
-[docs/WORKFLOW_ORCHESTRATION.md](../../docs/WORKFLOW_ORCHESTRATION.md). Each
+[docs/WORKFLOW_ORCHESTRATION.md](../../../../docs/WORKFLOW_ORCHESTRATION.md). Each
 unit's `promptRef` points at the SAME dimension-audit phase the prose
 **Workflow** below walks, so providers without an orchestration capability run
 the eight dimensions sequentially in one agent (bounded by `--max-parallel`) —

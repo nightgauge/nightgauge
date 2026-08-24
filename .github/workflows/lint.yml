@@ -84,6 +84,15 @@ jobs:
       # check like this at all.
       - name: Plugin skills mirror in sync
         run: bash scripts/install-agent-skills.sh --check-mirror
+      # The question the step above structurally cannot ask (#831): it compares
+      # the mirror to the generator's own output, so a link the generator copied
+      # verbatim into a directory two levels deeper was dead on BOTH sides and
+      # the gate stayed green. Self-test first, so a gate that stopped failing
+      # closed is caught before its verdict is believed.
+      - name: Mirror link gate self-test
+        run: bash scripts/test-mirror-link-check.sh
+      - name: Mirror link integrity
+        run: python3 scripts/check-mirror-links.py
 
   link-check:
     # Validates cross-document reference integrity across root *.md + docs/**

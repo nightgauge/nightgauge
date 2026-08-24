@@ -67,7 +67,7 @@ If prerequisites fail, stop with exact remediation command.
    contract, not a style preference** — Phase 6 runs
    `/nightgauge:issue-audit` as this skill's terminal gate, and its Phase 5
    checks these exact headings. The canonical per-type table lives in
-   [`nightgauge-issue-audit`'s SKILL.md, Phase 5](../../nightgauge-issue-audit/SKILL.md#phase-5-body-section-completeness);
+   [`nightgauge-issue-audit`'s SKILL.md, Phase 5](../../issue-audit/SKILL.md#phase-5-body-section-completeness);
    it is reproduced here so the author does not have to open it, and
    `scripts/check-issue-body-contract.py` fails CI if the two ever drift apart.
 
@@ -106,7 +106,7 @@ If prerequisites fail, stop with exact remediation command.
      `- [ ] <owner>/<repo>#<n> — <title>` once created, or as titled bullets
      when the epic body is written before Phase 3 creates them.
    - **Recommendations** (`spike`): the fenced `yaml recommendations` block
-     required by [docs/SPIKE_CONTRACT.md](../../../docs/SPIKE_CONTRACT.md).
+     required by [docs/SPIKE_CONTRACT.md](../../../../../docs/SPIKE_CONTRACT.md).
      Phase 2.X scaffolds this automatically.
 
 4. For implementation issues:
@@ -123,7 +123,7 @@ If prerequisites fail, stop with exact remediation command.
    - do NOT mix broad implementation work into the same issue
    - The deliverable artifact at `docs/spikes/<N>-*.md` MUST contain a single
      fenced `yaml recommendations` block per
-     [docs/SPIKE_CONTRACT.md](../../../docs/SPIKE_CONTRACT.md). The block lists
+     [docs/SPIKE_CONTRACT.md](../../../../../docs/SPIKE_CONTRACT.md). The block lists
      each follow-up with stable kebab-case `id`, `action`
      (`adopt`/`defer`/`skip`), `title`, `type`, `priority`, `size`, optional
      `labels`, optional `body`, and optional `depends_on`. The post-merge

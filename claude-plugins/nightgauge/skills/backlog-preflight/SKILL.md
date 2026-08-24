@@ -571,8 +571,8 @@ When `--fix` is provided, apply deterministic fixes:
   and adds the inferred label. The verb skips apply silently when
   `source == "default"` unless `--apply-default` is also passed — that
   safety net replaces the prior "Confirm before applying" prose. See
-  [docs/GO_BINARY.md](../../docs/GO_BINARY.md#issue-operations) and audit row
-  B12 in [docs/SKILL_DETERMINISM_AUDIT.md](../../docs/SKILL_DETERMINISM_AUDIT.md).
+  [docs/GO_BINARY.md](../../../../docs/GO_BINARY.md#issue-operations) and audit row
+  B12 in [docs/SKILL_DETERMINISM_AUDIT.md](../../../../docs/SKILL_DETERMINISM_AUDIT.md).
 - **Missing Size/Priority fields**: Cannot be auto-fixed via labels — report the
   fix command for the project board.
 

@@ -155,6 +155,20 @@ if lines and lines[0].strip() == "---":
             lines.insert(end, "disable-model-invocation: true")
 open(p, "w", encoding="utf-8").write("\n".join(lines))
 PY
+    # Relative markdown links must be re-based for the mirror's depth and for
+    # the stripped directory names (#831). A canonical SKILL.md sits two levels
+    # under the repo root and reaches docs as `../../docs/X.md`; its mirrored
+    # copy sits FOUR levels down, where `../../` is `claude-plugins/nightgauge/`
+    # — a directory with no `docs/` in it. Copying the link text verbatim left
+    # ~90 dead doc links in the published plugin, and the drift gate below could
+    # never see them: it compares the mirror to this generator's own output, so
+    # both sides carried the identical breakage and it stayed green by
+    # construction. `scripts/check-mirror-links.py` is the gate that CAN see it.
+    #
+    # The same pass fixes sibling-skill references: `../nightgauge-issue-audit/`
+    # names a directory that exists canonically but not in the mirror, where the
+    # prefix has been stripped to `issue-audit/`.
+    python3 "$REPO_ROOT/scripts/lib/mirror_links.py" --dest "$dest" --name "$name"
     count=$((count + 1))
   done
 
@@ -165,6 +179,10 @@ PY
   # "in sync" — the gate's assertion is only as unconditional as this sync is.
   if [ -d "$SKILLS_SRC/_shared" ]; then
     rsync -a --delete "$SKILLS_SRC/_shared/" "$plugin_skills/_shared/"
+    # `_shared` is copied outside the per-skill loop, so it needs its own link
+    # re-base — its files carry `../../docs/...` links too.
+    python3 "$REPO_ROOT/scripts/lib/mirror_links.py" \
+      --dest "$plugin_skills/_shared" --name "_shared"
   else
     rm -rf "$plugin_skills/_shared"
   fi

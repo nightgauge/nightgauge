@@ -213,7 +213,7 @@ JSON reports include a `release_correlation` summary section (when
 
 For detailed documentation on how release correlation works, confidence scoring,
 and deduplication with release-watch, see:
-[correlation-reference.md](./correlation-reference.md)
+[correlation-reference.md](correlation-reference.md)
 
 ---
 

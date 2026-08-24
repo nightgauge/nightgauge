@@ -410,7 +410,7 @@ This skill outputs `.nightgauge/pipeline/issue-{N}.json` for use by
 downstream skills.
 
 **Schema**: See
-[docs/CONTEXT_ARCHITECTURE.md](../../docs/CONTEXT_ARCHITECTURE.md) for full
+[docs/CONTEXT_ARCHITECTURE.md](../../../../docs/CONTEXT_ARCHITECTURE.md) for full
 schema documentation.
 
 **Read by**: `/nightgauge-feature-planning`

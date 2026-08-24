@@ -22,10 +22,11 @@
 
 ## Overview
 
-Nightgauge maintains a tamper-resistant audit trail for every security-
+Nightgauge maintains a tamper-evident audit trail for every security-
 relevant action across the platform and its developer tooling. Events are
 captured client-side by the SDK, transmitted over TLS to the Nightgauge
-platform API, and stored in an append-only audit log in the platform database.
+platform API, and stored in an append-only, hash-chained audit log in the
+platform database.
 
 The audit trail covers:
 
@@ -34,11 +35,14 @@ The audit trail covers:
   revocation
 - **Team administration** — user invitations, role changes, removals
 - **API key and webhook management** — creation and revocation of credentials
-- **Pipeline activity** — every pipeline stage start, completion, and failure
+- **Pipeline activity** — pipeline and stage lifecycle, skill invocation,
+  commits the pipeline creates, and recorded AI token cost
 - **Compliance operations** — report generation and data purges
 
 Every event record is immutable once written. The platform does not support
-in-place updates to audit entries.
+in-place updates to audit entries, and each entry's hash is chained to the
+entry before it — so a retroactive edit is _detectable_, not merely
+disallowed. See [Tamper Evidence](#tamper-evidence).
 
 ---
 
@@ -108,7 +112,7 @@ reporting.
 | **AuditEventClient** (SDK) | Validates, batches, and ships events from developer machines. Written in TypeScript. Source: `packages/nightgauge-sdk/src/audit/AuditEventClient.ts` |
 | **Offline Queue**          | JSON file on disk that buffers events when the platform is unreachable. Retried on the next pipeline completion.                                     |
 | **Platform API**           | Authenticated HTTPS endpoint that receives event batches and writes them to storage.                                                                 |
-| **Platform Database**      | PostgreSQL append-only table that stores the authoritative audit log.                                                                                |
+| **Platform Database**      | PostgreSQL append-only table that stores the authoritative audit log as a hash chain.                                                                |
 | **Audit Log Viewer**       | VSCode Dashboard tab that queries the platform API and presents events with filtering and CSV export.                                                |
 
 ---
@@ -136,9 +140,29 @@ Every audit event stored in the platform contains the following fields.
 
 The following action types are recognized. The `action` field in every event
 must be one of these values. The platform rejects events with unrecognized
-action types.
+action types, and the SDK validates every event against the same set before
+transmission (`packages/nightgauge-sdk/src/audit/schemas.ts`).
 
-#### Authentication
+Each table below names the **emitter** — the component that produces the event:
+
+| Emitter      | Meaning                                                                                                           |
+| ------------ | ----------------------------------------------------------------------------------------------------------------- |
+| **Client**   | Produced by the developer-side pipeline orchestrator and shipped through the SDK's `AuditEventClient`.            |
+| **Platform** | Recorded server-side when the corresponding operation is performed. The developer-side tooling never emits these. |
+
+Recognizing an action is not the same as emitting it. `pr.created` and
+`pr.merged` are accepted by the schema but are **not currently emitted** by any
+component in this repository; they are called out as such below so that an
+auditor does not go looking for events that never arrive.
+
+Pipeline and stage lifecycle events are audit-log events — the orchestrator
+enqueues them through the same `AuditEventClient`, and they are submitted to
+the same endpoint as every other action. The Audit Log Viewer can also fall
+back to _local_ pipeline telemetry when the platform is unreachable; that
+fallback is a convenience view, clearly labelled in the UI, and is not the
+audit log.
+
+#### Authentication (Platform)
 
 | Action        | Description                       |
 | ------------- | --------------------------------- |
@@ -146,7 +170,7 @@ action types.
 | `auth.logout` | A user ended their session        |
 | `auth.failed` | An authentication attempt failed  |
 
-#### License Management
+#### License Management (Platform)
 
 | Action           | Description                     |
 | ---------------- | ------------------------------- |
@@ -154,7 +178,7 @@ action types.
 | `license.revoke` | An existing license was revoked |
 | `license.rotate` | A license key was rotated       |
 
-#### Billing
+#### Billing (Platform)
 
 | Action              | Description                      |
 | ------------------- | -------------------------------- |
@@ -162,7 +186,7 @@ action types.
 | `billing.cancel`    | A subscription was cancelled     |
 | `billing.upgrade`   | A subscription tier was upgraded |
 
-#### Team Administration
+#### Team Administration (Platform)
 
 | Action             | Description                             |
 | ------------------ | --------------------------------------- |
@@ -170,7 +194,7 @@ action types.
 | `team.remove`      | A user was removed from a team          |
 | `team.role_change` | A user's role within a team was changed |
 
-#### Credentials
+#### Credentials (Platform)
 
 | Action           | Description                       |
 | ---------------- | --------------------------------- |
@@ -179,7 +203,7 @@ action types.
 | `webhook.create` | A webhook endpoint was registered |
 | `webhook.delete` | A webhook endpoint was removed    |
 
-#### Pipeline Activity
+#### Pipeline Activity (Client)
 
 | Action               | Description                                   |
 | -------------------- | --------------------------------------------- |
@@ -190,22 +214,22 @@ action types.
 | `stage.completed`    | A single pipeline stage finished successfully |
 | `stage.failed`       | A single pipeline stage failed                |
 
-#### Source Control
+#### Source Control (Client)
 
-| Action           | Description                              |
-| ---------------- | ---------------------------------------- |
-| `commit.created` | A git commit was created by the pipeline |
-| `pr.created`     | A pull request was opened                |
-| `pr.merged`      | A pull request was merged                |
+| Action           | Description                              | Emitted                                      |
+| ---------------- | ---------------------------------------- | -------------------------------------------- |
+| `commit.created` | A git commit was created by the pipeline | Yes — when a stage records a commit SHA      |
+| `pr.created`     | A pull request was opened                | No — recognized by the schema, never emitted |
+| `pr.merged`      | A pull request was merged                | No — recognized by the schema, never emitted |
 
-#### Cost and Skills
+#### Cost and Skills (Client)
 
 | Action          | Description                                            |
 | --------------- | ------------------------------------------------------ |
 | `cost.recorded` | AI token cost was recorded for a pipeline run          |
 | `skill.invoked` | A pipeline skill (stage instruction file) was executed |
 
-#### Compliance Operations
+#### Compliance Operations (Platform)
 
 | Action                        | Description                                             |
 | ----------------------------- | ------------------------------------------------------- |
@@ -243,7 +267,14 @@ pipeline stalls from slow network conditions.
 
 ### Tamper Evidence
 
-The platform's audit log table is **append-only**. There are no API endpoints
+Audit entries are **hash-chained**. Each stored entry carries a hash computed
+over its own contents together with the hash of the entry before it, so an
+account's entries form one verifiable chain. Editing an entry after the fact
+changes its hash, which breaks the link recorded by the _following_ entry — so
+tampering is detectable even when the edit leaves no other trace, and even when
+whoever made it had direct storage access.
+
+The audit log table is additionally **append-only**. There are no API endpoints
 or application code paths that allow in-place modification or deletion of
 individual audit records.
 
@@ -251,6 +282,30 @@ Deletion is only possible through the `audit.purged` action, which itself
 creates an audit record before removing data. This ensures that any data
 purge — whether routine (retention policy enforcement) or exceptional — is
 itself recorded in the audit trail.
+
+#### Verifying the chain
+
+Chain verification is a first-class operation, not an internal detail.
+`POST /v1/audit/integrity` takes a closed window as two RFC 3339 instants
+(`startDate`, `endDate`), re-walks every entry inside it, and returns:
+
+| Field          | Type    | Meaning                                                                                                        |
+| -------------- | ------- | -------------------------------------------------------------------------------------------------------------- |
+| `valid`        | boolean | `true` when every link in the window verified                                                                  |
+| `checkedCount` | number  | How many entries were re-hashed and compared                                                                   |
+| `brokenLinks`  | array   | One `{ entryId, position }` per entry whose stored hash does not match the chain; empty when `valid` is `true` |
+
+`position` is the entry's index within the verified range, so a broken link
+names a specific record an operator can go and examine rather than reporting
+that "something, somewhere" is wrong.
+
+The VSCode Dashboard drives this from the Audit Log tab's **Retention &
+Integrity** panel, which offers 30-, 90-, and 365-day windows and renders the
+outcome as a pass/fail badge, the number of entries checked, and the list of
+broken links. Integrity verification and retention configuration are
+Enterprise-plan operations; other plans see a locked panel rather than an
+error. See [Verifying Audit Log Integrity](#verifying-audit-log-integrity) for
+the operational procedure.
 
 ### Offline Queue Integrity
 
@@ -308,11 +363,21 @@ a secret:
 
 ### Platform-Side Retention
 
-Server-side retention is managed by the Nightgauge platform. The platform
-enforces configurable retention periods by organization tier. When records are
-purged under a retention policy, the platform emits an `audit.purged` event
-that identifies the quantity of records deleted and the applicable time window.
-This ensures the purge itself is auditable.
+Server-side retention is configured **per account** and enforced by the
+Nightgauge platform. The current setting is readable with
+`GET /v1/audit/retention` and changed with `PUT /v1/audit/retention`; both are
+Enterprise-plan operations, and both are surfaced in the VSCode Dashboard's
+Audit Log tab under **Retention & Integrity**.
+
+| Parameter      | Value                                                                   |
+| -------------- | ----------------------------------------------------------------------- |
+| Default        | 730 days (two years), applied when an account has set no explicit value |
+| Accepted range | 1–3,650 days, as enforced by the dashboard's retention control          |
+| Scope          | Per account; changed by an account administrator                        |
+
+When records are purged under a retention policy, the platform emits an
+`audit.purged` event that identifies the quantity of records deleted and the
+applicable time window. This ensures the purge itself is auditable.
 
 ### Client-Side Queue Retention
 
@@ -361,9 +426,9 @@ the same audit log.
   │                                 │           │                                         │
   │  pipeline.started               │           │  api_key.create                         │
   │  stage.started (feature-dev)    │           │  webhook.create                         │
-  │  stage.completed (feature-dev)  │           │  pr.created                             │
+  │  stage.completed (feature-dev)  │           │  team.role_change                       │
   │  commit.created                 │           │                                         │
-  │  pr.created                     │           └──────────────────┬──────────────────────┘
+  │  cost.recorded                  │           └──────────────────┬──────────────────────┘
   │  pipeline.completed             │                              │
   └──────────────────┬──────────────┘                              │
                      │                                             │
@@ -401,8 +466,8 @@ in SOC 2 Type II Trust Services Criteria and ISO 27001 Annex A.
 | CC6.2      | Prior to issuing system credentials, registration and authorization are required | `auth.login` events record successful authentication; `auth.failed` events record rejected attempts                           |
 | CC6.3      | Access to information assets is removed when no longer required                  | `team.remove`, `api_key.revoke`, `license.revoke` events                                                                      |
 | CC6.6      | Logical access security — restrict unauthorized access                           | `auth.failed` events enable detection of brute-force patterns; API key-based submission authentication                        |
-| CC7.2      | The entity monitors system components for anomalies                              | Audit log queryable by time window and action type; Audit Log Viewer in VSCode Dashboard                                      |
-| CC8.1      | Change management — authorize, design, develop, configure                        | `pipeline.started`, `pipeline.completed`, `commit.created`, `pr.created`, `pr.merged` events track all code changes           |
+| CC7.2      | The entity monitors system components for anomalies                              | Audit log queryable by time window and action type; Audit Log Viewer in VSCode Dashboard; on-demand hash-chain verification   |
+| CC8.1      | Change management — authorize, design, develop, configure                        | `pipeline.started`, `pipeline.completed`, `stage.*` and `commit.created` events track every change the pipeline makes         |
 | CC9.1      | Risk assessment — identify risks                                                 | `pipeline.failed`, `stage.failed` events provide evidence of failure detection and response                                   |
 
 ### SOC 2 Trust Services Criteria (Availability)
@@ -421,9 +486,9 @@ in SOC 2 Type II Trust Services Criteria and ISO 27001 Annex A.
 
 | Control | Title                                          | How Nightgauge Satisfies It                                                                                                          |
 | ------- | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| A.8.15  | Logging                                        | All security-relevant actions produce audit events; events are immutable once written                                                |
+| A.8.15  | Logging                                        | All security-relevant actions produce audit events; events are immutable once written and hash-chained                               |
 | A.8.16  | Monitoring activities                          | Audit Log Viewer provides real-time and historical visibility; CSV export for external SIEM integration                              |
-| A.5.33  | Protection of records                          | Append-only storage; purge events are themselves recorded (`audit.purged`)                                                           |
+| A.5.33  | Protection of records                          | Append-only, hash-chained storage verifiable via `POST /v1/audit/integrity`; purge events are themselves recorded (`audit.purged`)   |
 | A.8.5   | Secure authentication                          | `auth.*` events record all authentication activity; multi-factor authentication handled by identity provider (recorded at login)     |
 | A.5.18  | Access rights                                  | `team.invite`, `team.remove`, `team.role_change` events provide full access provisioning and de-provisioning history                 |
 | A.8.18  | Use of privileged utility programs             | `api_key.create`, `api_key.revoke` provide credential lifecycle visibility                                                           |
@@ -482,15 +547,50 @@ curl -s "https://platform.nightgauge.dev/api/v1/audit/events?from=2024-01-01T00:
 
 ### Verifying Audit Log Integrity
 
-The audit log is append-only. To verify no records have been retroactively
-modified or deleted for a given time window:
+The audit log is hash-chained, so integrity is _verified_ rather than inferred
+from record counts:
 
-1. Run the compliance report for the time window
-   (`compliance.report.generated` event will be created).
-2. Export the audit log for the same time window as CSV.
-3. Compare the event count in the report against the CSV row count.
-4. Check that no `audit.purged` events appear within the time window under
-   review unless expected under the retention policy.
+1. Open the Nightgauge VSCode Dashboard and click the **Audit Log** tab.
+2. In the **Retention & Integrity** panel, choose a window: **Last 30 days**,
+   **Last 90 days**, or **Last 365 days**.
+3. Read the result badge. **✓ Valid** means every link in the window verified;
+   the number of entries checked is shown beside it.
+4. **✗ Invalid** lists each broken link by entry ID and by its position within
+   the window. Treat any broken link as a security incident, and preserve the
+   surrounding entries before investigating further.
+
+The same check is available from the platform API, for scripted or scheduled
+verification:
+
+```bash
+curl -s -X POST "https://api.nightgauge.dev/v1/audit/integrity" \
+  -H "Authorization: Bearer <user session token>" \
+  -H "Content-Type: application/json" \
+  -d '{"startDate":"2026-01-01T00:00:00.000Z","endDate":"2026-01-31T23:59:59.999Z"}'
+```
+
+An intact chain:
+
+```json
+{ "valid": true, "checkedCount": 12, "brokenLinks": [] }
+```
+
+A tampered window returns the same shape, with the offending entries named:
+
+```json
+{
+  "valid": false,
+  "checkedCount": 20,
+  "brokenLinks": [{ "entryId": "entry-7", "position": 7 }]
+}
+```
+
+Both bounds must be RFC 3339 instants — a bare `YYYY-MM-DD` is rejected with
+`422`. Verification requires an Enterprise plan; other plans receive `403`.
+
+Separately, to confirm nothing was removed from a window under review, check
+that no `audit.purged` events appear inside it beyond what the retention policy
+leads you to expect.
 
 ### Exporting Audit Data
 

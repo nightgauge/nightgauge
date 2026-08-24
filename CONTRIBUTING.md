@@ -419,6 +419,48 @@ MCP server tools are also valid in `allowed-tools` using the
 [docs/MCP_INTEGRATION.md](docs/MCP_INTEGRATION.md) for setup instructions and
 recipes for popular MCP servers.
 
+### Model Overlays — adapting a skill without forking it
+
+A skill runs under whatever model the router selects, and one procedural
+document cannot serve Haiku and Opus equally well. **Do not branch inside the
+base skill.** Model variance is expressed as additive overlay fragments composed
+at render time by `nightgauge skill render`; the base `SKILL.md` stays the
+single source of procedural truth and carries no model-conditional language.
+
+```text
+skills/_shared/_overlays/<key>.md   # every skill — start here
+skills/<skill>/_overlays/<key>.md   # one skill — only for a genuine exception
+```
+
+`<key>` is a provider (`anthropic`, `openai`) or a concrete registry id
+(`claude-opus-5`), resolved from the model descriptor. All matching fragments
+are composed, general before specific and shared before skill-specific.
+
+To add one:
+
+1. Write the fragment as short prose about **disposition** — how this model
+   should carry the procedure out.
+2. Verify it resolves:
+   `nightgauge skill render --stage <stage> --model <id> --skills-root ./skills --json`
+   and read `resolved_keys`, `fragments`, and `injection_site`.
+3. Bring evidence. Vendor docs justify writing an overlay; an eval run showing
+   the delta justifies keeping it.
+
+**When not to write one:**
+
+- The fact belongs in the registry `behavior` block instead — thinking default,
+  effort ceiling, output limits, propensities are data, and an overlay that
+  restates them is a copy that will drift.
+- The change is a different _procedure_, not a different disposition. A
+  whole-file override (`<skill>/_overlays/<key>.SKILL.md`) exists for that case
+  and is deliberately discouraged; every one is a drift liability.
+- You have no evidence yet. An unevidenced overlay is superstition with a
+  filename.
+- The guidance applies to every model. That is a base-skill edit.
+
+Full authoring rules, the cascade, the `<!-- overlay -->` anchor, and the
+coverage gap: [docs/MODEL_ADAPTATION.md](docs/MODEL_ADAPTATION.md).
+
 ---
 
 ## Slash-Command Contract (ADR-007)

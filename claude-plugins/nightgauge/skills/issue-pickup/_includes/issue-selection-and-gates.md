@@ -147,7 +147,7 @@ promoting a CI check on `main` when `main`'s recent runs of that check are
 failing. Runs after Phase 2.7 (size-gate) so size rejections short-circuit
 before the network call.
 
-See [docs/FAILURE_TAXONOMY.md](../../../docs/FAILURE_TAXONOMY.md) for the
+See [docs/FAILURE_TAXONOMY.md](../../../../../docs/FAILURE_TAXONOMY.md) for the
 `[baseline-ci-deferred]` infrastructure pattern and Issue #3004 for the full
 design rationale.
 
@@ -273,7 +273,7 @@ of the baseline-CI gate (Phase 2.8): a controlled hold, **not** a pipeline
 failure. Runs after Phase 2.8 so both preflight holds resolve before issue
 analysis.
 
-See [docs/FAILURE_TAXONOMY.md](../../../docs/FAILURE_TAXONOMY.md) for the
+See [docs/FAILURE_TAXONOMY.md](../../../../../docs/FAILURE_TAXONOMY.md) for the
 `[blocked-dependency]` infrastructure pattern and Issue #231 for the design
 rationale.
 

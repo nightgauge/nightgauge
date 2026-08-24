@@ -22,5 +22,5 @@ fi
 | `project.sprint.auto_assign` | `false`    | Assign current sprint on issue-pickup  |
 | `project.sprint.field_name`  | `"Sprint"` | Name of iteration field in the project |
 
-See [docs/SPRINT_WORKFLOW.md](../../docs/SPRINT_WORKFLOW.md) for complete sprint
+See [docs/SPRINT_WORKFLOW.md](../../../../docs/SPRINT_WORKFLOW.md) for complete sprint
 setup and workflow documentation.

@@ -426,9 +426,9 @@ See the `assessment-engine.md` customization section (future) for implementation
 
 ## References
 
-- **Release-Watch Skill:** [skills/nightgauge-release-watch/SKILL.md](../SKILL.md)
-- **Assessment Template:** [skills/nightgauge-release-watch/assessments/TEMPLATE.md](./assessments/TEMPLATE.md)
-- **Historical Assessments:** [skills/nightgauge-release-watch/assessments/](./assessments/)
+- **Release-Watch Skill:** [skills/nightgauge-release-watch/SKILL.md](SKILL.md)
+- **Assessment Template:** [skills/nightgauge-release-watch/assessments/TEMPLATE.md](assessments/TEMPLATE.md)
+- **Historical Assessments:** [skills/nightgauge-release-watch/assessments/](assessments)
 - **Scoring Decisions:** See individual assessment files for rationale behind specific scores
 
 ---
