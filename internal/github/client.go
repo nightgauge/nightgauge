@@ -573,6 +573,25 @@ func (b *prefixedBody) Read(p []byte) (int, error) { return b.r.Read(p) }
 func (b *prefixedBody) Close() error               { return b.c.Close() }
 
 func (t *rateLimitHeaderTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	// Ledger bookkeeping is captured before the call and written after it, so
+	// a request that fails or is served from the ETag cache is still counted.
+	// The whole block collapses to one nil check when the ledger is off.
+	ledger := activeAPILedger()
+	var (
+		ledgerStart time.Time
+		ledgerRec   APILedgerRecord
+	)
+	if ledger != nil {
+		ledgerStart = ledgerNow()
+		ledgerRec = APILedgerRecord{
+			Method: req.Method,
+			Path:   req.URL.Path,
+			Op:     ledgerGraphQLOp(req),
+			Caller: ledgerCaller(),
+			PID:    os.Getpid(),
+		}
+	}
+
 	// Conditional GET: attach If-None-Match when we've cached a prior
 	// response for this exact URL. GET-only — mutating verbs (POST/PATCH)
 	// are never conditionally cached, and GitHub does not issue meaningful
@@ -589,6 +608,28 @@ func (t *rateLimitHeaderTransport) RoundTrip(req *http.Request) (*http.Response,
 	}
 
 	resp, err := t.base.RoundTrip(req)
+	if ledger != nil && resp != nil {
+		// Captured before the 304-to-200 rewrite below, so the ledger records
+		// what the server actually answered.
+		ledgerRec.Status = resp.StatusCode
+	}
+	if ledger != nil {
+		defer func() {
+			ledgerRec.TS = ledgerStart.UTC().Format(time.RFC3339Nano)
+			ledgerRec.DurationMs = ledgerNow().Sub(ledgerStart).Milliseconds()
+			remaining := ""
+			if resp != nil {
+				ledgerRec.Kind = resp.Header.Get("X-RateLimit-Resource")
+				remaining = resp.Header.Get("X-RateLimit-Remaining")
+				if v := resp.Header.Get("X-RateLimit-Reset"); v != "" {
+					if n, cerr := strconv.ParseInt(v, 10, 64); cerr == nil {
+						ledgerRec.Reset = n
+					}
+				}
+			}
+			ledger.record(ledgerRec, remaining)
+		}()
+	}
 	if err != nil || resp == nil {
 		return resp, err
 	}
@@ -596,6 +637,9 @@ func (t *rateLimitHeaderTransport) RoundTrip(req *http.Request) (*http.Response,
 	if cacheKey != "" {
 		switch {
 		case resp.StatusCode == http.StatusNotModified && cached != nil:
+			// Flagged here rather than after the rewrite below: by the time
+			// the deferred ledger write runs, this response says 200.
+			ledgerRec.Cached = true
 			// The server confirmed our cached copy is still current. Serve
 			// the cached body in place of the (normally empty) 304 body.
 			// Restore the cached 200's representation headers first, then
