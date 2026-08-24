@@ -96,7 +96,7 @@ recommendations block and creates follow-up issues — it also updates the PR
 description with a `## Created Follow-up Issues` section. This skill MUST NOT
 attempt to populate that section itself; leave the placeholder from
 `pr-create` intact for the materializer to replace. See
-[docs/SPIKE_CONTRACT.md](../../docs/SPIKE_CONTRACT.md).
+[docs/SPIKE_CONTRACT.md](../../../../docs/SPIKE_CONTRACT.md).
 
 ---
 
@@ -129,7 +129,7 @@ It also reads prior pipeline context for history and validation:
 - `.nightgauge/pipeline/dev-{N}.json` (from feature-dev)
 
 **Full schema**: See
-[docs/CONTEXT_ARCHITECTURE.md](../../docs/CONTEXT_ARCHITECTURE.md) for complete
+[docs/CONTEXT_ARCHITECTURE.md](../../../../docs/CONTEXT_ARCHITECTURE.md) for complete
 schema documentation including all field types and requirements.
 
 ---
@@ -139,7 +139,7 @@ schema documentation including all field types and requirements.
 This skill intentionally declares **no** `orchestration:` frontmatter block. PR
 merge is a **single-agent deterministic phase** by design — it is never fanned
 out (epic #3899,
-[docs/WORKFLOW_ORCHESTRATION.md](../../docs/WORKFLOW_ORCHESTRATION.md) §Safety &
+[docs/WORKFLOW_ORCHESTRATION.md](../../../../docs/WORKFLOW_ORCHESTRATION.md) §Safety &
 guardrails). The capability-routed `WorkflowEngine` runs it as one deterministic
 phase node alongside the orchestrated stages.
 

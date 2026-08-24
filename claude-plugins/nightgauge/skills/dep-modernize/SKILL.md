@@ -161,7 +161,7 @@ parallelized per major-update package), staged update groups (Phase 4), and
 apply-updates (Phase 6) — closed by a **gate** judge that runs the post-update
 regression check (`judge.gate: true`) before any change is accepted. The block
 is consumed by the capability-routed `WorkflowEngine` (epic #3899); see
-[docs/WORKFLOW_ORCHESTRATION.md](../../docs/WORKFLOW_ORCHESTRATION.md). Each
+[docs/WORKFLOW_ORCHESTRATION.md](../../../../docs/WORKFLOW_ORCHESTRATION.md). Each
 unit's `promptRef` points at the SAME phase the prose **Workflow** below walks,
 so providers without an orchestration capability run the phases sequentially in
 one agent — the prose stays the portability floor.

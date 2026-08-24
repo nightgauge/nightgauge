@@ -51,8 +51,8 @@ Extract from issue body:
 When the Go binary is on PATH, derive the routing decision through a single
 verb call. The verb wraps the canonical `routing.Derive` function and emits
 the same fields the rest of this phase consumes — see
-[docs/GO_BINARY.md](../../../docs/GO_BINARY.md#issue-operations) and audit row
-**B4** in [docs/SKILL_DETERMINISM_AUDIT.md](../../../docs/SKILL_DETERMINISM_AUDIT.md).
+[docs/GO_BINARY.md](../../../../../docs/GO_BINARY.md#issue-operations) and audit row
+**B4** in [docs/SKILL_DETERMINISM_AUDIT.md](../../../../../docs/SKILL_DETERMINISM_AUDIT.md).
 
 ```bash
 BINARY="${NIGHTGAUGE_BIN:-}"

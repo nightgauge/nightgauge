@@ -22,7 +22,7 @@ disable-model-invocation: true
 > cross-repo decomposition). The slash-command surface is preserved so
 > existing scripts and documented workflows continue to work, but new code
 > SHOULD call `issue-audit` directly. See
-> [docs/ISSUE_AUDIT.md](../../docs/ISSUE_AUDIT.md) for the full audit
+> [docs/ISSUE_AUDIT.md](../../../../docs/ISSUE_AUDIT.md) for the full audit
 > taxonomy and severity rules.
 
 ## When to Use
@@ -35,7 +35,7 @@ disable-model-invocation: true
 
 `issue-audit --epic <N>` produces the same outcomes the previous
 implementation produced, plus more — see
-[docs/ISSUE_AUDIT.md](../../docs/ISSUE_AUDIT.md):
+[docs/ISSUE_AUDIT.md](../../../../docs/ISSUE_AUDIT.md):
 
 - Sub-issue linking, project board membership, `blockedBy` alignment, body
   section completeness, cross-repo consistency, and knowledge scaffold
@@ -109,7 +109,7 @@ unchanged.
 ## Removal Plan
 
 This wrapper will be retired after a deprecation window. Track the removal
-in [docs/DEPRECATIONS.md](../../docs/DEPRECATIONS.md) when scheduling the
+in [docs/DEPRECATIONS.md](../../../../docs/DEPRECATIONS.md) when scheduling the
 cleanup PR. Until then the wrapper stays in place — the slash-command
 surface MUST remain working for existing callers.
 

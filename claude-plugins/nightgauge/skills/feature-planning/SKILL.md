@@ -78,7 +78,7 @@ spike answers and the expected **shape of the recommendations** the artifact
 will carry — NOT production code changes (spike deliverables are research
 artifacts at `docs/spikes/<N>-*.md`). Include placeholder ids for each
 anticipated recommendation so the author has an outline to fill the YAML block
-from in feature-dev. See [docs/SPIKE_CONTRACT.md](../../docs/SPIKE_CONTRACT.md).
+from in feature-dev. See [docs/SPIKE_CONTRACT.md](../../../../docs/SPIKE_CONTRACT.md).
 
 ## Gotchas
 

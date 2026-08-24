@@ -4,6 +4,8 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/nightgauge/nightgauge/internal/intelligence/routing"
@@ -204,19 +206,29 @@ func TestSchedulerRendersWithAModel(t *testing.T) {
 	}
 }
 
-func TestDefaultRootsIsTheRepoSkillsTreeOnly(t *testing.T) {
+// TestDefaultRootsPutsTheWorkspaceFirst pins the half of the contract that has
+// always held: the workspace checkout's own skills/ tree is searched first, so
+// dogfooding in this repository keeps beating anything shipped in a bundle.
+//
+// This test used to assert `len(roots) == 1`, and it passed for the whole life
+// of #874 — the bug was that the ONE root could not match in any repository
+// but this one. An assertion that pins a count is not an assertion about
+// behaviour; the bundle arm is covered by TestDefaultRootsAppendsTheBundleTree.
+func TestDefaultRootsPutsTheWorkspaceFirst(t *testing.T) {
 	roots := skillrender.DefaultRoots("/repo")
 
-	// The second root used to be claude-plugins/nightgauge/commands, a layout
-	// that has never carried a stage skill in this repository's history and
-	// that ADR 007's #3876 amendment retired outright. A root that cannot
-	// match is not a harmless fallback — it reads as a second source of skills
-	// when there is exactly one.
-	if len(roots) != 1 {
-		t.Fatalf("DefaultRoots = %v, want exactly one root", roots)
+	if len(roots) == 0 {
+		t.Fatal("DefaultRoots returned no roots")
 	}
 	if roots[0] != "/repo/skills" {
-		t.Errorf("root = %q, want /repo/skills", roots[0])
+		t.Errorf("first root = %q, want /repo/skills", roots[0])
+	}
+	// claude-plugins/nightgauge/commands was retired by ADR 007's #3876
+	// amendment and never carried a stage skill. It must not come back.
+	for _, r := range roots {
+		if strings.Contains(r, filepath.Join("claude-plugins", "nightgauge", "commands")) {
+			t.Errorf("root %q is the retired plugin-command layout", r)
+		}
 	}
 }
 

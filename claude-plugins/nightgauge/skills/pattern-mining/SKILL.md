@@ -53,7 +53,7 @@ Received from feature-planning as Task subagent arguments:
 Returns JSON matching `PatternMiningResultSchema` from
 `packages/nightgauge-sdk/src/context/schemas/pattern-mining.ts`.
 
-See [docs/PATTERN_MINING.md](../../docs/PATTERN_MINING.md) for full schema
+See [docs/PATTERN_MINING.md](../../../../docs/PATTERN_MINING.md) for full schema
 documentation.
 
 ---

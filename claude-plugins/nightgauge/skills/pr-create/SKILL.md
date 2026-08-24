@@ -83,7 +83,7 @@ authoritative output of the materializer.
 This skill intentionally declares **no** `orchestration:` frontmatter block. PR
 creation is a **single-agent deterministic phase** by design — it is never
 fanned out (epic #3899,
-[docs/WORKFLOW_ORCHESTRATION.md](../../docs/WORKFLOW_ORCHESTRATION.md) §Safety &
+[docs/WORKFLOW_ORCHESTRATION.md](../../../../docs/WORKFLOW_ORCHESTRATION.md) §Safety &
 guardrails). The capability-routed `WorkflowEngine` runs it as one deterministic
 phase node alongside the orchestrated stages.
 

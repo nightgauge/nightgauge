@@ -59,6 +59,15 @@ jobs:
       # exempt; only a flat assertion of the current value goes stale.
       - name: Visibility-prose reintroduction gate
         run: python3 scripts/check-visibility-prose.py
+      # Nonexistent-workflow-reference gate (#545): three workflows were named
+      # across docs, an ADR, Go comments and two shell libraries as though they
+      # enforced something in CI, and none had ever existed. Self-test first —
+      # a gate nothing exercises degrades into an unconditional pass (the
+      # #539/#549 lesson).
+      - name: Workflow-reference gate self-test
+        run: bash scripts/test-workflow-refs-check.sh
+      - name: Nonexistent-workflow-reference gate
+        run: python3 scripts/check-workflow-refs.py
       # Proves the gate below still FAILS CLOSED rather than passing vacuously
       # — the defect #539 exists to fix — and that it fails only on the
       # invariant it names (#546). Without this step, reverting the gate to
@@ -75,6 +84,15 @@ jobs:
       # check like this at all.
       - name: Plugin skills mirror in sync
         run: bash scripts/install-agent-skills.sh --check-mirror
+      # The question the step above structurally cannot ask (#831): it compares
+      # the mirror to the generator's own output, so a link the generator copied
+      # verbatim into a directory two levels deeper was dead on BOTH sides and
+      # the gate stayed green. Self-test first, so a gate that stopped failing
+      # closed is caught before its verdict is believed.
+      - name: Mirror link gate self-test
+        run: bash scripts/test-mirror-link-check.sh
+      - name: Mirror link integrity
+        run: python3 scripts/check-mirror-links.py
 
   link-check:
     # Validates cross-document reference integrity across root *.md + docs/**

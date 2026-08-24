@@ -55,8 +55,8 @@ If a skill shells out to `gh`, then:
    "command not found" or, worse, a 404 from the wrong API.
 2. The `IB_FORGE=gitlab` selector is a paper tiger: the Go binary respects it
    but the skill above bypasses it.
-3. The smoke-test matrix (`.github/workflows/skills-smoke.yml`) cannot
-   meaningfully exercise the GitLab slot.
+3. The smoke harness (`.nightgauge/skill-smoke/`) cannot meaningfully
+   exercise the GitLab slot.
 
 Migrating the binary surface (#3357 / #3358 / #3359) without migrating the
 skill layer leaves AC #6 — **"no skill retains a fallback `gh` path"** —
@@ -207,11 +207,12 @@ justification.
 
 ### Smoke-test against both forges
 
-`.github/workflows/skills-smoke.yml` runs a `forge: [github, gitlab] × skill: [...15...]`
-matrix. The GitLab slot consumes the Wave 5-2 Dockerized GitLab CE harness
+`.nightgauge/skill-smoke/` holds a per-skill smoke script covering
+`forge: [github, gitlab] × skill: [...15...]`, run by hand — no CI workflow
+executes it. The GitLab slot consumes the Wave 5-2 Dockerized GitLab CE harness
 (see #3349); when
 W5-2 has not yet landed, the slot falls back to recorded fixtures under
-`cmd/nightgauge/forge/testdata/gitlab-snapshots/` so the matrix still runs
+`cmd/nightgauge/forge/testdata/gitlab-snapshots/` so the scripts still run
 hermetically.
 
 ### Assert JSON-shape parity with `gh` snapshots
@@ -304,9 +305,8 @@ view` to a skill fails CI before merge.
 - The forge surface grew by three subcommands (`repo view`, `auth whoami`,
   `graphql`). Each carries its own help-text and test maintenance burden.
 - The `forge graphql` pass-through is intentionally GitHub-specific. Skills that
-  use it cannot run against GitLab — the GitLab matrix slot of the smoke-test
-  workflow skips them via per-skill exclusions in
-  `.github/workflows/skills-smoke.yml`. This is documented in the workflow.
+  use it cannot run against GitLab — the GitLab slot of the smoke harness
+  skips them via per-skill exclusions in `.nightgauge/skill-smoke/`.
 - The allowlist (`scripts/lint-skills/allowlist.txt`) is a known piece of
   technical debt — every entry is a future migration. The follow-up issue
   tracks draining it.
@@ -326,5 +326,6 @@ view` to a skill fails CI before merge.
 - [scripts/lint-skills/README.md](../../scripts/lint-skills/README.md) — the
   deprecation linter and its allowlist mechanism.
 - [skills/README.md](../../skills/README.md#forge-abstraction-contract-3363-adr-008) — the skill-author contract.
-- `.github/workflows/skills-smoke.yml` — the 2×15 smoke-test matrix.
+- `.nightgauge/skill-smoke/` — the 2×15 smoke scripts, run by hand. The
+  `skills-smoke.yml` workflow this ADR planned was never created (#545).
 - [.github/workflows/lint.yml](../../.github/workflows/lint.yml) — where the linter is wired into CI.

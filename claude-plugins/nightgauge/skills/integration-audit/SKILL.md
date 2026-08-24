@@ -68,7 +68,7 @@ fans the Phase 3 client API-call extraction out as one worker unit per client
 surface (dashboard/Angular, Flutter, extension), then a merge judge reconciles
 their findings against the platform endpoint truth (Phase 4 gap analysis). The
 block is consumed by the capability-routed `WorkflowEngine` (epic #3899); see
-[docs/WORKFLOW_ORCHESTRATION.md](../../docs/WORKFLOW_ORCHESTRATION.md). Each
+[docs/WORKFLOW_ORCHESTRATION.md](../../../../docs/WORKFLOW_ORCHESTRATION.md). Each
 unit's `promptRef` points at the SAME extraction section the prose **Workflow**
 below walks, so providers without an orchestration capability extract the three
 surfaces sequentially in one agent — the prose stays the portability floor.

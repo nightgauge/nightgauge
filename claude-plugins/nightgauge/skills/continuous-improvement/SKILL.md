@@ -38,7 +38,7 @@ prioritized improvement proposals routed by operating mode.
   on their codebases. Can only propose configuration adjustments, workflow
   recommendations, and calibration insights. Never modifies source code or
   proposes internal product changes. See
-  [docs/SELF_IMPROVEMENT_BOUNDARIES.md](../../docs/SELF_IMPROVEMENT_BOUNDARIES.md).
+  [docs/SELF_IMPROVEMENT_BOUNDARIES.md](../../../../docs/SELF_IMPROVEMENT_BOUNDARIES.md).
 
 **Use Cases:**
 
@@ -145,7 +145,7 @@ proposals in the focused area are prioritized for issue creation. For example,
 with `active_lens: performance`, performance-related proposals are ranked higher
 and are more likely to meet the score threshold for auto-creation.
 
-See [docs/SCHEDULED_DISCOVERY.md](../../docs/SCHEDULED_DISCOVERY.md) for full
+See [docs/SCHEDULED_DISCOVERY.md](../../../../docs/SCHEDULED_DISCOVERY.md) for full
 documentation on the scheduled discovery workflow.
 
 ---
@@ -1048,18 +1048,18 @@ the number of analyzable loops but never prevent the skill from running.
 
 ## Related Documentation
 
-- [docs/SELF_IMPROVEMENT_LOOP.md](../../docs/SELF_IMPROVEMENT_LOOP.md) —
+- [docs/SELF_IMPROVEMENT_LOOP.md](../../../../docs/SELF_IMPROVEMENT_LOOP.md) —
   Pipeline learning system
-- [docs/SELF_IMPROVEMENT_BOUNDARIES.md](../../docs/SELF_IMPROVEMENT_BOUNDARIES.md) —
+- [docs/SELF_IMPROVEMENT_BOUNDARIES.md](../../../../docs/SELF_IMPROVEMENT_BOUNDARIES.md) —
   Internal/external classification rules
-- [docs/HEALTH_MONITORING.md](../../docs/HEALTH_MONITORING.md) — 8-dimension
+- [docs/HEALTH_MONITORING.md](../../../../docs/HEALTH_MONITORING.md) — 8-dimension
   health analysis
-- [docs/OUTCOME_RECORDING.md](../../docs/OUTCOME_RECORDING.md) — Complexity
+- [docs/OUTCOME_RECORDING.md](../../../../docs/OUTCOME_RECORDING.md) — Complexity
   calibration
-- [docs/SKILL_SELF_ASSESSMENT.md](../../docs/SKILL_SELF_ASSESSMENT.md) — Skill
+- [docs/SKILL_SELF_ASSESSMENT.md](../../../../docs/SKILL_SELF_ASSESSMENT.md) — Skill
   friction detection
-- [docs/FEEDBACK_LOOPS.md](../../docs/FEEDBACK_LOOPS.md) — In-pipeline signals
-- [docs/RALPH_LOOP.md](../../docs/RALPH_LOOP.md) — Self-healing pattern
+- [docs/FEEDBACK_LOOPS.md](../../../../docs/FEEDBACK_LOOPS.md) — In-pipeline signals
+- [docs/RALPH_LOOP.md](../../../../docs/RALPH_LOOP.md) — Self-healing pattern
 
 ---
 
