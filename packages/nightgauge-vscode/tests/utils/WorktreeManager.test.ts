@@ -116,13 +116,13 @@ describe("WorktreeManager", () => {
         // against a guard placed AFTER the destructive cleanup.
         expect(
           execFileAsyncMock.mock.calls.some(
-            ([, args]: [string, string[]]) =>
+            ([, args]: any[]) =>
               Array.isArray(args) && args[0] === "branch" && args.includes(branch)
           )
         ).toBe(false);
         expect(
           execFileAsyncMock.mock.calls.some(
-            ([, args]: [string, string[]]) => Array.isArray(args) && args[0] === "worktree"
+            ([, args]: any[]) => Array.isArray(args) && args[0] === "worktree"
           )
         ).toBe(false);
       }
@@ -664,7 +664,7 @@ describe("WorktreeManager", () => {
       );
       expect(
         execFileAsyncMock.mock.calls.some(
-          ([, args]: [string, string[]]) =>
+          ([, args]: any[]) =>
             Array.isArray(args) &&
             args[0] === "diff" &&
             args[1] === "--stat" &&
