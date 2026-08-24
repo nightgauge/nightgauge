@@ -43,7 +43,23 @@ var sanctionedIssueParsers = map[string]string{
 // different on-disk convention, say which one and why it cannot be the same
 // function.
 func TestExactlyOneWorktreeIssueParser(t *testing.T) {
-	root := moduleRoot(t)
+	offenders := scanForIssueParsers(t, moduleRoot(t))
+	if len(offenders) > 0 {
+		t.Errorf("found %d unsanctioned issue-NNN parser(s):\n  %s\n\n"+
+			"Route worktree-directory parsing through execution.IssueNumberFromWorktreeDir. "+
+			"Independent copies drift silently, and a missed shape reads as \"orphaned\" — "+
+			"which is the input to `docker compose down -v` (#296, #323).",
+			len(offenders), strings.Join(offenders, "\n  "))
+	}
+}
+
+// scanForIssueParsers walks `root` and returns every issue-NNN parser that is
+// not the sanctioned one at its sanctioned path. Extracted from the test body
+// so the directory-exclusion behaviour can be exercised against a fixture tree
+// (#851) — a guard whose own skip list is untested is how `.worktrees` went
+// unnoticed.
+func scanForIssueParsers(t *testing.T, root string) []string {
+	t.Helper()
 
 	var offenders []string
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
@@ -52,7 +68,14 @@ func TestExactlyOneWorktreeIssueParser(t *testing.T) {
 		}
 		if d.IsDir() {
 			switch d.Name() {
-			case ".git", "node_modules", "vendor", "bin", "dist":
+			// ".worktrees" holds nested checkouts of THIS repo, created by the
+			// pipeline. Every sanctioned parser appears again inside each one,
+			// so scanning them made this guard report
+			// IssueNumberFromWorktreeDir — the function its own failure message
+			// tells you to route through — as an unsanctioned copy of itself,
+			// once per live worktree (#851). The directory is gitignored: it is
+			// not this checkout's source.
+			case ".git", ".worktrees", "node_modules", "vendor", "bin", "dist":
 				return fs.SkipDir
 			}
 			return nil
@@ -86,14 +109,7 @@ func TestExactlyOneWorktreeIssueParser(t *testing.T) {
 	if err != nil {
 		t.Fatalf("walk module: %v", err)
 	}
-
-	if len(offenders) > 0 {
-		t.Errorf("found %d unsanctioned issue-NNN parser(s):\n  %s\n\n"+
-			"Route worktree-directory parsing through execution.IssueNumberFromWorktreeDir. "+
-			"Independent copies drift silently, and a missed shape reads as \"orphaned\" — "+
-			"which is the input to `docker compose down -v` (#296, #323).",
-			len(offenders), strings.Join(offenders, "\n  "))
-	}
+	return offenders
 }
 
 // parsesIssuePrefixToNumber reports whether fn both splits a name on the
@@ -158,5 +174,72 @@ func moduleRoot(t *testing.T) string {
 			t.Fatal("go.mod not found above the test's working directory")
 		}
 		dir = parent
+	}
+}
+
+// TestIssueParserScanSkipsNestedWorktrees is #851 as a standing guard.
+//
+// A pipeline worktree is a nested checkout of THIS repo under `.worktrees/`,
+// so every sanctioned parser exists again inside it at a path that is not its
+// sanctioned path. Scanning them made the uniqueness guard report
+// IssueNumberFromWorktreeDir — the function its own failure message tells you
+// to route through — as an unsanctioned copy of itself, once per live
+// worktree, and `ci-local.sh` could not pass while the pipeline held one.
+func TestIssueParserScanSkipsNestedWorktrees(t *testing.T) {
+	root := t.TempDir()
+
+	// The shape the detector matches: split on the "issue-" literal AND
+	// convert the remainder to an integer.
+	parser := `package fixture
+
+import (
+	"strconv"
+	"strings"
+)
+
+func ParseIssueDir(base string) (int, bool) {
+	idx := strings.LastIndex(base, "issue-")
+	if idx < 0 {
+		return 0, false
+	}
+	n, err := strconv.Atoi(base[idx+len("issue-"):])
+	if err != nil {
+		return 0, false
+	}
+	return n, true
+}
+`
+	write := func(rel string) {
+		t.Helper()
+		full := filepath.Join(root, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", rel, err)
+		}
+		if err := os.WriteFile(full, []byte(parser), 0o644); err != nil {
+			t.Fatalf("write %s: %v", rel, err)
+		}
+	}
+
+	// One real offender in the tree's own source, and the same file inside
+	// two nested worktrees plus the other excluded directories.
+	write(filepath.Join("internal", "real", "parser.go"))
+	write(filepath.Join(".worktrees", "issue-465", "internal", "real", "parser.go"))
+	write(filepath.Join(".worktrees", "issue-467", "internal", "execution", "worktree_sweep.go"))
+	write(filepath.Join("node_modules", "dep", "parser.go"))
+	write(filepath.Join("vendor", "dep", "parser.go"))
+
+	offenders := scanForIssueParsers(t, root)
+
+	if len(offenders) != 1 {
+		t.Fatalf("got %d offenders, want exactly the one in the tree's own source:\n  %s",
+			len(offenders), strings.Join(offenders, "\n  "))
+	}
+	if !strings.HasPrefix(offenders[0], filepath.Join("internal", "real", "parser.go")) {
+		t.Errorf("offender = %q, want the one under internal/real/", offenders[0])
+	}
+	for _, o := range offenders {
+		if strings.Contains(o, ".worktrees") {
+			t.Errorf("a nested pipeline worktree was scanned: %q", o)
+		}
 	}
 }
