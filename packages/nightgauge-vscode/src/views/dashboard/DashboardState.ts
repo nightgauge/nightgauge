@@ -93,6 +93,39 @@ export interface ModelRoutingStageMetric {
 }
 
 /**
+ * The subset of a history run record the JSONL scanners below read.
+ *
+ * Declared structurally rather than reusing the Zod-inferred type because these
+ * scanners parse raw JSONL line by line and tolerate partial/legacy records
+ * instead of validating them. The shape that matters: `stages` is an object map
+ * keyed by stage name (never an array — see #466) and per-stage token totals
+ * hang off the run record's `tokens.per_stage`, not off the stage detail.
+ */
+interface HistoryRunRecordShape {
+  issue_number?: number;
+  started_at?: string;
+  stages?: Record<
+    string,
+    {
+      status?: string;
+      duration_ms?: number;
+      started_at?: string;
+      auto_retry_count?: number;
+      model_selection?: {
+        model?: string;
+        source?: string;
+        mode?: string;
+        confidence?: number;
+        complexity?: string;
+      };
+    }
+  >;
+  tokens?: {
+    per_stage?: Record<string, { input?: number; output?: number; cost_usd?: number }>;
+  };
+}
+
+/**
  * Model routing metrics summary for dashboard widget (Issue #734)
  */
 export interface ModelRoutingMetrics {
@@ -2762,7 +2795,6 @@ export class DashboardState {
         cache_creation: number;
         cost_usd: number;
         model?: string;
-        model_source?: string;
         cache_hit_rate?: number;
       }
     >
@@ -3299,18 +3331,30 @@ export class DashboardState {
           for (const line of content.split("\n")) {
             if (!line.trim()) continue;
             try {
-              const record = JSON.parse(line);
-              // Extract per-stage records from run records
-              if (record.stages && Array.isArray(record.stages)) {
-                for (const stage of record.stages) {
-                  if (stage.model_selection) {
+              const record = JSON.parse(line) as HistoryRunRecordShape;
+              // `stages` is an object map keyed by stage name in every schema
+              // version — V1, V2 and V3 all declare `z.record(...)`, and the Go
+              // writer's V2RunRecord uses `map[string]V2StageDetail`. This guard
+              // was `Array.isArray`, so the block never executed (#466).
+              //
+              // Two further corrections the array shape had hidden: the stage
+              // NAME is the map key (the detail carries no `stage` field), and
+              // per-stage token totals live on the run record's
+              // `tokens.per_stage`, not on the stage detail (which has no
+              // `tokens`). Reading them off the detail would have yielded a
+              // populated-looking result with `stage: undefined` and zero cost.
+              if (record.stages && !Array.isArray(record.stages)) {
+                const perStage = record.tokens?.per_stage ?? {};
+                for (const [stageName, stage] of Object.entries(record.stages)) {
+                  if (stage?.model_selection) {
+                    const tokens = perStage[stageName];
                     records.push({
-                      stage: stage.stage,
+                      stage: stageName,
                       success: stage.status === "complete",
                       retries: stage.auto_retry_count ?? 0,
-                      inputTokens: stage.tokens?.input ?? 0,
-                      outputTokens: stage.tokens?.output ?? 0,
-                      costUsd: stage.tokens?.cost_usd ?? 0,
+                      inputTokens: tokens?.input ?? 0,
+                      outputTokens: tokens?.output ?? 0,
+                      costUsd: tokens?.cost_usd ?? 0,
                       durationMs: stage.duration_ms ?? 0,
                       timestamp: stage.started_at ?? record.started_at ?? "",
                       model: stage.model_selection.model,
@@ -3534,7 +3578,6 @@ export class DashboardState {
               cache_creation: number;
               cost_usd: number;
               model?: string;
-              model_source?: string;
             }
           >
         | undefined;
@@ -3677,15 +3720,19 @@ export class DashboardState {
           for (const line of content.split("\n")) {
             if (!line.trim()) continue;
             try {
-              const record = JSON.parse(line);
+              const record = JSON.parse(line) as HistoryRunRecordShape;
               if (record.issue_number !== run.issueNumber) continue;
 
-              // Extract model info from stages array
-              if (record.stages && Array.isArray(record.stages)) {
-                for (const stageRec of record.stages) {
-                  if (stageRec.model_selection) {
+              // Object map keyed by stage name, not an array — see the note in
+              // getModelRoutingMetrics. The `Array.isArray` guard here meant
+              // this loop never produced a single `source: "history"` entry
+              // (#466), so the cost summary's model attribution always fell
+              // through to the fallbacks below.
+              if (record.stages && !Array.isArray(record.stages)) {
+                for (const [stageName, stageRec] of Object.entries(record.stages)) {
+                  if (stageRec?.model_selection) {
                     result.push({
-                      stage: stageRec.stage,
+                      stage: stageName as PipelineStage,
                       model: stageRec.model_selection.model ?? "sonnet",
                       effort: stageRec.model_selection.complexity ?? "medium",
                       source: "history",
