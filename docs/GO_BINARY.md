@@ -3604,6 +3604,45 @@ By caller:
 Two producers, the same board, one sweep, 81% of the bill — the finding that
 `--by caller` makes unmissable and a call-site count cannot show at all.
 
+### The Sweep's Board Binding (Issue #844)
+
+The ledger's first finding was not a cadence problem. Two of the three top
+callers above were failing outright: the daemon built its sweep forge client as
+`BuildRouter("", 0, "")`, whose `0` falls back to `config.Load(os.Getwd())` —
+and a daemon's working directory is not a checkout. The project number stayed
+0, so every board read came back
+
+```
+Could not resolve to a ProjectV2 with the number 0.
+```
+
+once per producer per repo per sweep, **billed at the same 17 points as a
+successful page**, and `stranded-ready-items` was silently blind for as long as
+it was true.
+
+A working directory config would not have fixed it either. A `forge.Router`
+binds ONE project number for every repo it answers, so a workspace router
+resolves a sibling repo's board number against the primary repo's board. The
+router is the wrong granularity for a workspace question.
+
+The daemon now resolves each repo through `config.ResolveRepoProject` — the one
+implementation of "which board does repo X use?" (#271/#313) — anchored to the
+workspace root it was given rather than to `os.Getwd()`, and caches **one router
+per (owner, board)** rather than one per workspace. `forgecmd.BuildRouterAt`
+exists for exactly this: `BuildRouter` still reads `os.Getwd()`, which is
+correct for a CLI invocation that runs inside the repo it targets and wrong for
+every long-lived process.
+
+The sweep reads boards rather than writing to them, so it uses
+`ResolveRepoProject` and its reason code, not the filing-policy
+`ResolveRepoProjectNumber`: a repo covered by the workspace-wide default board
+is swept against it, because that is what a shared-board workspace means. Only
+a genuinely **unmapped** repo — nothing declares a board and there is no default
+— is refused, and it is refused **before a router is constructed**. That is the
+point rather than a detail: the router carries the token and the transport, so
+building one is the first step of spending points, and the regression test
+asserts on whether it was built at all.
+
 ### Doctor — Environment Health Check
 
 ```bash

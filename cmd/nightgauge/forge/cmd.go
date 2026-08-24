@@ -83,18 +83,33 @@ func realForgeFromContext(cmd *cobra.Command) (forge.ForgeClient, error) {
 	return router.For(forgeFlag, repoSpec)
 }
 
-// BuildRouter constructs a forge.Router from the workspace config. When
-// no `forges:` block is present in config.yaml, the router falls back
-// to a single GitHub adapter using the legacy top-level fields.
+// BuildRouter constructs a forge.Router from the config at the process's
+// working directory. When no `forges:` block is present in config.yaml, the
+// router falls back to a single GitHub adapter using the legacy top-level
+// fields.
 //
 // Exported so that sibling cmd packages (e.g. workspacecmd) can reuse
 // the same router construction logic without duplicating config loading.
+//
+// A CLI invocation runs inside the repo it targets, so the working directory
+// IS the config anchor. A long-lived process is the case this does not cover:
+// the serve daemon's cwd is wherever it was launched, which is usually not a
+// checkout at all — see BuildRouterAt.
 func BuildRouter(ownerOverride string, projectOverride int, ownerTypeOverride string) (*forge.Router, error) {
 	wd, err := os.Getwd()
 	if err != nil {
 		return nil, fmt.Errorf("forge: getwd: %w", err)
 	}
-	cfg, err := config.Load(wd)
+	return BuildRouterAt(wd, ownerOverride, projectOverride, ownerTypeOverride)
+}
+
+// BuildRouterAt is BuildRouter anchored to an explicit config root. Callers
+// that are not the CLI — the serve daemon above all — must use this: os.Getwd()
+// for a daemon resolves to no config at all, and a router built that way binds
+// project number 0, which fails every board read while still costing points
+// (#844).
+func BuildRouterAt(root string, ownerOverride string, projectOverride int, ownerTypeOverride string) (*forge.Router, error) {
+	cfg, err := config.Load(root)
 	if err != nil {
 		// A missing or malformed config is recoverable — the user can
 		// still pass --owner/--token explicitly. Continue with an

@@ -4241,11 +4241,14 @@ func serveCmd() *cobra.Command {
 				opts = append(opts, ipc.WithSuppressGHWarning(true))
 			}
 
-			// Forge resolution for attention.sweep (#93). The router is built
-			// once and reused: constructing it re-reads config and re-runs the
-			// token chain (which can shell out to `gh`), and the sweep is
-			// invoked on a timer across every workspace repo.
-			opts = append(opts, ipc.WithForgeClientFactory(cachedSweepForgeClient()))
+			// Forge resolution for attention.sweep (#93). A router is built
+			// once per board and reused: constructing one re-reads config and
+			// re-runs the token chain (which can shell out to `gh`), and the
+			// sweep is invoked on a timer across every workspace repo. Both the
+			// root and the loaded config are passed in because the daemon's
+			// working directory is not a checkout — resolving from it bound
+			// project 0 and failed (billably) on every board read (#844).
+			opts = append(opts, ipc.WithForgeClientFactory(cachedSweepForgeClient(workspaceRoot, cfg)))
 
 			// Export the configured GitHub token so deterministic `gh`
 			// subprocesses (gates, recovery, board status, skill shell-outs)
