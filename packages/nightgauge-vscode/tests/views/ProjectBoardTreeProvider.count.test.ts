@@ -220,7 +220,9 @@ describe("ProjectBoardTreeProvider - Count Display", () => {
       provider = new ProjectBoardTreeProvider(mockService, "ready");
 
       // Create 100 issues
-      const manyIssues = Array.from({ length: 100 }, (_, i) => createMockReadyIssue(i + 1));
+      const manyIssues = Array.from({ length: 100 }, (_, i) =>
+        createMockReadyIssue({ number: i + 1 })
+      );
 
       vi.mocked(mockService.getIssuesByStatus).mockResolvedValue(manyIssues);
 

@@ -334,7 +334,7 @@ describe("Issue #3001 — QueuedIssueTreeItem paused rendering", () => {
   it("uses the debug-pause icon (not the lock icon) for paused items", () => {
     const tree = new QueuedIssueTreeItem(pausedItem);
     // Lock icon is reserved for blockedBy items; paused must be debug-pause.
-    expect(tree.iconPath?.id).toBe("debug-pause");
+    expect((tree.iconPath as { id?: string } | undefined)?.id).toBe("debug-pause");
   });
 
   it("description names the paused-reason inline so operators don't need the tooltip", () => {

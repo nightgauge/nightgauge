@@ -266,7 +266,7 @@ describe("WorktreeManager", () => {
 
       await manager.create(42, "feat/42-test", { npmInstall: false });
 
-      const localWrites = fsMock.writeFile.mock.calls.filter(([p]: [string]) =>
+      const localWrites = fsMock.writeFile.mock.calls.filter(([p]: any[]) =>
         String(p).endsWith("config.local.yaml")
       );
       expect(localWrites).toHaveLength(0);

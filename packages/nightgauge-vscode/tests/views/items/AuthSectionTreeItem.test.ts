@@ -54,6 +54,7 @@ function makeSessionData(overrides: Partial<SessionData> = {}): SessionData {
     expiresAt: null,
     userEmail: null,
     userTier: null,
+    userRole: null,
     ...overrides,
   };
 }

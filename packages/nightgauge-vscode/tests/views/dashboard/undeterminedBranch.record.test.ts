@@ -367,7 +367,6 @@ describe("undetermined-branch history record (#397)", () => {
       };
       return {
         entries: [entry],
-        filters: { dateFrom: "", dateTo: "", outcomeFilter: "", branchFilter: "" },
         pagination: {
           page: 0,
           pageSize: 20,

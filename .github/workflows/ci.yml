@@ -237,6 +237,14 @@ jobs:
       - name: Build
         if: ${{ needs.changes.outputs.run_heavy != 'false' }}
         run: npm run build
+      # #499: tsconfig.json covers src/** only, vitest transforms through
+      # esbuild (transpile-only), and eslint has no `project` for tests — so
+      # tests/** and the Playwright fixtures were typechecked by nothing.
+      # Deliberately NOT gated on run_heavy: this is seconds, and a type error
+      # in a test is exactly the drift a docs-only classification would let
+      # through.
+      - name: Typecheck test tree (VSCode)
+        run: npm run -w nightgauge-vscode typecheck:tests
       - name: Test (VSCode)
         if: ${{ needs.changes.outputs.run_heavy != 'false' }}
         run: npm run -w nightgauge-vscode test
