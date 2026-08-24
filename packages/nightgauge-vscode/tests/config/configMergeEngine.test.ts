@@ -118,7 +118,7 @@ describe("configMergeEngine", () => {
     it("null values DO override (explicit null)", () => {
       const target = { a: 1, b: 2 };
       const source = { a: null };
-      const result = deepMerge(target, source as Partial<typeof target>);
+      const result = deepMerge(target, source);
 
       expect(result).toEqual({ a: null, b: 2 });
     });

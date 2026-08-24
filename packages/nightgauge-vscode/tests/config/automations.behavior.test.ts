@@ -205,7 +205,7 @@ describe("automations.behavior", () => {
 
       const matchesTrigger = (
         transition: StatusTransition,
-        trigger: (typeof config.triggers)[0]
+        trigger: NonNullable<typeof config.triggers>[0]
       ): boolean => {
         if (!trigger) return false;
         const triggerTo = trigger.trigger;

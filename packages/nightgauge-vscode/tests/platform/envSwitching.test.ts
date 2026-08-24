@@ -361,8 +361,11 @@ describe("PlatformSseClient — per-host Last-Event-ID scoping", () => {
       onAuthRequired: vi.fn(async () => "canary-token"),
     });
 
-    await prodClient.connect("https://api.nightgauge.dev/v1/events/stream");
-    await canaryClient.connect("https://canary.api.nightgauge.dev/v1/events/stream");
+    await prodClient.connect("https://api.nightgauge.dev/v1/events/stream", "prod-token");
+    await canaryClient.connect(
+      "https://canary.api.nightgauge.dev/v1/events/stream",
+      "canary-token"
+    );
 
     // Verify each client read its own key
     expect(prodContext.globalState.get).toHaveBeenCalledWith(

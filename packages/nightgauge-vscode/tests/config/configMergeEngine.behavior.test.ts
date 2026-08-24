@@ -504,11 +504,11 @@ describe("configMergeEngine.behavior", () => {
 
     it("autonomous.scan_interval is correctly sourced from project tier", () => {
       const tiers: ConfigTiers = {
-        project: { autonomous: { scan_interval: 120 } },
+        project: { autonomous: { scan_interval: "120s" } },
       };
       const result = mergeConfigs(tiers, { skipEnvResolution: true });
 
-      expect(result.config.autonomous?.scan_interval).toBe(120);
+      expect(result.config.autonomous?.scan_interval).toBe("120s");
       expect(getSource(result.sources, "autonomous.scan_interval")).toBe("project");
     });
 

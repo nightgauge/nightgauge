@@ -86,11 +86,18 @@ describe("retryFailedIssue command", () => {
     runStage: Mock;
     getIsRunning: Mock;
   };
+  // The declared members drifted behind what the fixture actually assigns:
+  // ADR-017 step 3 (#370) added the run-identity accessors and the object has
+  // carried them since, while this type still listed the original four.
   let mockStateService: {
     getState: Mock;
     isPipelineComplete: Mock;
     clearPipeline: Mock;
     initializePipeline: Mock;
+    getRunId: Mock;
+    getRunRepo: Mock;
+    beginRun: Mock;
+    endRun: Mock;
   };
   let mockContext: {
     workspaceState: {

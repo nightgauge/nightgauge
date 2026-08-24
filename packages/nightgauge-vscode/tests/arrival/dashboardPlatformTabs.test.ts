@@ -116,6 +116,7 @@ function deferred<T>(): Deferred<T> {
  * panel pre-built.
  */
 const TRANSPORT_ERRORS: Record<PlatformFailureKind, string> = {
+  bad_request: "get analytics health: server returned 400",
   unauthorized: "get analytics health: server returned 401",
   forbidden: "get analytics health: server returned 403",
   server_error: "get analytics health: server returned 503",
