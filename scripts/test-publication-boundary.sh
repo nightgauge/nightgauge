@@ -71,6 +71,24 @@ MANIFEST=".github/publication-boundary.yaml" # relative — inside the sandbox
 # the suite runs on, and whatever is uncommitted next door.
 export NG_BOUNDARY_DIFF_BASE="HEAD"
 
+# ── Minimal mode (#850) ──────────────────────────────────────────────────────
+#
+# Opt-in, and it gates ONLY assertion bodies. Every structural behaviour the
+# hermeticity harness measures runs identically: the abandoned-sandbox sweep,
+# `git worktree add`, the manifest copy, the baseline precondition, all three
+# traps and cleanup(). What it skips is re-running rule assertions that CI has
+# already run once in the standalone step.
+#
+# It exists because each assertion is a full ~6s tree-wide scan and the
+# hermeticity harness runs this suite to completion twice — ~80 scans whose only
+# purpose there is "a suite run happened", not "the rules still hold".
+#
+# NOT for the standalone step, and never `export`ed by a caller: two of the
+# harness's four invocations are killed mid-run, and shortening those would let
+# the run finish before the signal lands — both of their assertions would then
+# pass having measured nothing. Set it per-invocation or not at all.
+MINIMAL="${NG_BOUNDARY_SUITE_MINIMAL:-}"
+
 # ── Where sandboxes live, and why it is a fixed root (#722) ──────────────────
 #
 # `trap` cannot catch SIGKILL, and a harness timeout or an OOM kill is exactly
@@ -190,8 +208,29 @@ cp "$MANIFEST_SRC" "$MANIFEST"
 BACKUP="$SANDBOX/manifest.bak"
 cp "$MANIFEST" "$BACKUP"
 
+# Single-case reporters, for assertions that cannot go through expect_exit
+# (they run the checker with a modified environment and compare exit codes
+# themselves). Defined because a call to an UNDEFINED function here does not
+# fail the suite: this script runs `set -uo pipefail` without `-e`, so bash
+# prints "ok: command not found" to stderr, the case silently does not run, and
+# the summary still says every test passed. Observed exactly that way while
+# adding the parallel-scan cases below.
+ok() {
+  printf '  \033[32m✓\033[0m %s\n' "$1"
+  PASS=$((PASS + 1))
+}
+bad() {
+  printf '  \033[31m✗\033[0m %s\n' "$1"
+  FAIL=$((FAIL + 1))
+}
 expect_exit() {
   local want="$1" desc="$2"
+  # In minimal mode every case still PLANTS its fixture (the caller did that
+  # before calling); only the verdict is skipped, and only for cases the
+  # keep-set does not mark. MINIMAL_KEEP is set per-call, never globally.
+  if [ -n "$MINIMAL" ] && [ -z "${MINIMAL_KEEP:-}" ]; then
+    return 0
+  fi
   python3 "$CHECK" >/dev/null 2>&1
   local got=$?
   if [ "$got" = "$want" ]; then
@@ -205,6 +244,9 @@ expect_exit() {
 
 expect_exit_with_base() {
   local base="$1" want="$2" desc="$3"
+  if [ -n "$MINIMAL" ] && [ -z "${MINIMAL_KEEP:-}" ]; then
+    return 0
+  fi
   NG_BOUNDARY_DIFF_BASE="$base" python3 "$CHECK" >/dev/null 2>&1
   local got=$?
   if [ "$got" = "$want" ]; then
@@ -236,13 +278,13 @@ fi
 
 # ── The guard must FAIL when it cannot see ──────────────────────────────────
 printf 'allow: [\n  - path: "unclosed\n' > "$MANIFEST"
-expect_exit 2 "malformed manifest fails closed (does not skip)"
+MINIMAL_KEEP=1 expect_exit 2 "malformed manifest fails closed (does not skip)"
 
 rm -f "$MANIFEST"
-expect_exit 2 "missing manifest fails closed (does not skip)"
+MINIMAL_KEEP=1 expect_exit 2 "missing manifest fails closed (does not skip)"
 
 printf 'version: 1\nallow: []\n' > "$MANIFEST"
-expect_exit 2 "vacuous manifest (no allow rules) fails closed"
+MINIMAL_KEEP=1 expect_exit 2 "vacuous manifest (no allow rules) fails closed"
 
 # ── The guard must FAIL on open decisions ───────────────────────────────────
 cp "$BACKUP" "$MANIFEST"
@@ -666,6 +708,36 @@ expect_exit 1 "a nightgauge-* companion repository reference is rejected"
 git rm --cached -q "$PLANTED" 2>/dev/null
 rm -f "$PLANTED"
 PLANTED=""
+
+# ── The parallel scan must agree with the serial one, and fail CLOSED ───────
+#
+# The tree scan runs across a process pool (#850). Two things must hold, and
+# neither is implied by the rules above: a worker that dies must not look like a
+# clean tree, and the parallel verdict must equal the serial one. A guard that
+# reports clean because a worker crashed is worse than no guard.
+#
+# These are kept in minimal mode: they are the one part of the suite the
+# hermeticity harness's shortened runs would otherwise never exercise.
+PLANTED="docs/_parallel_agreement_probe.md"
+printf 'Tracked internally as nightgauge-internal#42.\n' > "$PLANTED"
+git add -f "$PLANTED" 2>/dev/null
+MINIMAL_KEEP=1 expect_exit 1 "a violation is caught by the PARALLEL scan (default)"
+NG_BOUNDARY_JOBS=1 python3 "$CHECK" >/dev/null 2>&1
+if [ "$?" = "1" ]; then
+  ok "the SERIAL scan reaches the same verdict (NG_BOUNDARY_JOBS=1)"
+else
+  bad "serial and parallel scans disagree on a planted violation"
+fi
+git rm --cached -q "$PLANTED" 2>/dev/null
+rm -f "$PLANTED"
+PLANTED=""
+
+NG_BOUNDARY_JOBS=abc python3 "$CHECK" >/dev/null 2>&1
+if [ "$?" = "2" ]; then
+  ok "a non-integer NG_BOUNDARY_JOBS fails CLOSED, not open"
+else
+  bad "a non-integer NG_BOUNDARY_JOBS did not fail closed"
+fi
 
 # NOTE: there is deliberately no "clean tree passes" case here. CI runs the guard
 # against the real tree on every pull request, which proves that continuously and

@@ -7,7 +7,7 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { validatePipelineState } from "../../src/schemas/pipelineState";
+import { PipelineStateSchema } from "../../src/schemas/pipelineState";
 import { HistoryStageDetailSchema } from "../../src/schemas/executionHistory";
 import { PipelineConfigSchema } from "../../src/config/schema";
 
@@ -37,8 +37,14 @@ describe("Context File Size Measurement (Issue #1009)", () => {
         },
       });
 
-      const result = validatePipelineState(state);
+      const result = PipelineStateSchema.safeParse(state);
       expect(result.success).toBe(true);
+      // Assert the field SURVIVES the parse, not merely that the parse
+      // succeeded: Zod strips unknown keys and still reports success, so a
+      // success-only assertion stays green even if the schema drops the field
+      // entirely. (It did — verified by mutation while repointing this off the
+      // deleted `validatePipelineState` in #467.)
+      expect(result.data?.stages["issue-pickup"]?.context_file_size_bytes).toBe(5120);
     });
   });
 

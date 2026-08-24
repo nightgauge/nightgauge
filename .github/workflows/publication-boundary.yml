@@ -69,6 +69,20 @@ jobs:
         #   - the guard itself being unable to run (missing/malformed manifest)
         run: python3 scripts/publication-boundary-check.py
 
+      - name: Prove the hermeticity assertions still catch what they scope out
+        # The hermeticity step below attributes dirt to the paths the SUITE
+        # writes, instead of demanding that global `git status` and
+        # `git worktree list` be byte-identical. Byte-identity made the step
+        # fail whenever anything else in the repository moved -- a concurrent
+        # gate, a commit in a sibling worktree, even a branch switch -- and it
+        # failed while naming a #722 worktree leak, so a false alarm was
+        # indistinguishable from a real one (#832).
+        #
+        # Scoping an assertion is exactly how an assertion becomes vacuous, so
+        # the scoping is itself tested: that the real #713 shapes are still
+        # caught, and that concurrent churn is not. No tree scan; ~1s.
+        run: bash scripts/test-publication-boundary-attribution.sh
+
       - name: Prove the suite cannot dirty the repository it tests
         # The suite plants deliberately-forbidden fixtures. It must be safe to
         # interrupt (#713) and must not accumulate worktree registrations when

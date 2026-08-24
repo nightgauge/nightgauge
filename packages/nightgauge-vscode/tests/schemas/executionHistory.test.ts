@@ -21,7 +21,7 @@ import {
   HistoryStageDetailSchema,
   StageGateResultSchema,
 } from "../../src/schemas/executionHistory";
-import { PipelineStateSchema, validatePipelineState } from "../../src/schemas/pipelineState";
+import { PipelineStateSchema } from "../../src/schemas/pipelineState";
 import { MODEL_SELECTION_SOURCES } from "@nightgauge/sdk";
 
 describe("ExecutionHistory Schemas", () => {
@@ -976,8 +976,8 @@ describe("ExecutionHistory Schemas", () => {
       expect(result.success).toBe(false);
     });
 
-    it("should preserve outcome_type through validatePipelineState", () => {
-      const result = validatePipelineState({
+    it("should preserve outcome_type through a successful parse", () => {
+      const result = PipelineStateSchema.safeParse({
         ...validState,
         outcome_type: "verify-and-close",
       });

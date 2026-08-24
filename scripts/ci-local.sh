@@ -144,6 +144,15 @@ fi
 #     run leaks (trap cannot catch SIGKILL, and prune cannot remove an entry
 #     whose directory survives) is reclaimed by the NEXT run. Both are asserted
 #     by doing it for real, which costs one extra full suite run.
+# 5b-i. Attribution helpers (#832) — the hermeticity assertions below scope
+# themselves to what the SUITE writes rather than to global repo state. A
+# scoped assertion that scoped away the real failure would be silently useless,
+# so the scoping has its own tests. Costs ~1s: no tree scan.
+if [ -f scripts/test-publication-boundary-attribution.sh ]; then
+  run_step "Publication boundary attribution" \
+    bash scripts/test-publication-boundary-attribution.sh
+fi
+
 if [ -f scripts/test-publication-boundary-hermeticity.sh ]; then
   run_step "Publication boundary suite hermeticity" \
     bash scripts/test-publication-boundary-hermeticity.sh
