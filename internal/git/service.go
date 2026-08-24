@@ -691,13 +691,38 @@ func (s *Service) Push() error {
 }
 
 // PushBranch pushes the named branch to origin and sets upstream tracking.
+// PushBranch publishes a local branch to origin.
+//
+// This is a MUTATION, so it shells out — the same split gitExec's header
+// states, applied to the operation that most needed it (#878).
+//
+// It used to go through go-git with the *http.BasicAuth that NewService builds
+// from GITHUB_TOKEN. That auth is only valid for an HTTPS remote: against
+// `git@github.com:owner/repo.git` go-git's transport rejects it outright with
+// transport.ErrInvalidAuthMethod — "invalid auth method" — which is exactly
+// what deleteRemoteBranch's header has documented since #593. SSH is the
+// default remote for anyone who cloned over SSH, so on those checkouts EVERY
+// push through this method failed, and the epic-branch auto-create path
+// (CreateEpicBranch) failed the whole pipeline stage with it.
+//
+// #593's workaround was applied to the delete path and to nothing else. Routing
+// the push through git is the general fix rather than a second copy of that
+// workaround: git resolves credentials the way the user's machine already does
+// — SSH agent, credential helper, insteadOf rewrites — none of which go-git
+// reimplements, and all of which a user has necessarily already configured,
+// because they cloned the repository.
+//
+// The refspec is explicit, so nothing here depends on push.default.
+// "Everything up-to-date" exits 0, which is why go-git's NoErrAlreadyUpToDate
+// arm has no counterpart.
 func (s *Service) PushBranch(name string) error {
-	refSpec := config.RefSpec(fmt.Sprintf("refs/heads/%s:refs/heads/%s", name, name))
-	if err := s.repo.Push(&gogit.PushOptions{
-		RemoteName: "origin",
-		RefSpecs:   []config.RefSpec{refSpec},
-		Auth:       s.auth,
-	}); err != nil && err != gogit.NoErrAlreadyUpToDate {
+	// Building an argv makes the ref name an operand, so a leading "-" would be
+	// parsed as a flag. This boundary did not exist on the go-git path.
+	if err := validateRefArg("branch", name); err != nil {
+		return err
+	}
+	refSpec := fmt.Sprintf("refs/heads/%s:refs/heads/%s", name, name)
+	if _, err := s.gitExec("push", "origin", refSpec); err != nil {
 		return fmt.Errorf("push branch %s: %w", name, err)
 	}
 	return nil

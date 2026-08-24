@@ -3,6 +3,7 @@ package git
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -1668,5 +1669,84 @@ func TestValidateRefArgAcceptsRealNames(t *testing.T) {
 	}
 	if err := validateRefArg("branch", ""); err == nil {
 		t.Error("validateRefArg(\"\") = nil, want an error")
+	}
+}
+
+// TestPushBranchGoesThroughTheGitCLI is the regression for #878.
+//
+// PushBranch used to push through go-git with the *http.BasicAuth NewService
+// builds from GITHUB_TOKEN. That credential is only valid for an HTTPS remote;
+// against an SSH remote go-git's transport refuses it outright with
+// transport.ErrInvalidAuthMethod, so every push failed on any checkout cloned
+// over SSH — the default for most users.
+//
+// A real SSH remote needs a server and a key, so it cannot be exercised here.
+// This pins the MECHANISM instead, which is what actually changed: the push
+// must reach the git CLI, because git is what knows the user's SSH agent,
+// credential helper and insteadOf rewrites. go-git reimplements none of them.
+//
+// Asserting "a push to a local remote succeeds" would NOT work: a file:// remote
+// needs no credentials, so that passes identically on the broken code. This
+// test was written that way first and caught doing nothing — the whole defect
+// lives in the transport, so the assertion has to be about which transport ran.
+func TestPushBranchGoesThroughTheGitCLI(t *testing.T) {
+	realGit, err := exec.LookPath("git")
+	if err != nil {
+		t.Skipf("git not on PATH: %v", err)
+	}
+
+	svc, workDir := setupTestRepoWithRemote(t)
+
+	const branch = "feat/push-through-the-cli"
+	if err := svc.BranchCreate(branch); err != nil {
+		t.Fatalf("BranchCreate: %v", err)
+	}
+	commitFile(t, svc, workDir, "pushed.txt", "work", "feat: work")
+
+	// A `git` earlier on PATH that records its argv and then behaves exactly
+	// like the real one, so the push under test is a real push.
+	shimDir := t.TempDir()
+	logPath := filepath.Join(shimDir, "invocations.log")
+	shim := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> " + logPath + "\nexec " + realGit + " \"$@\"\n"
+	if err := os.WriteFile(filepath.Join(shimDir, "git"), []byte(shim), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", shimDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	if err := svc.PushBranch(branch); err != nil {
+		t.Fatalf("PushBranch: %v", err)
+	}
+
+	recorded, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("the git CLI was never invoked — the push did not shell out: %v", err)
+	}
+	want := fmt.Sprintf("push origin refs/heads/%s:refs/heads/%s", branch, branch)
+	if !strings.Contains(string(recorded), want) {
+		t.Errorf("git invocations did not include %q; got:\n%s", want, recorded)
+	}
+
+	// And it really pushed: the ref must be on the remote.
+	if err := svc.Fetch(true); err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if got := remoteBranchHash(t, svc, branch); got == "" {
+		t.Fatal("branch did not reach the remote")
+	}
+}
+
+// TestPushBranchRefusesAnOptionLikeName covers the boundary that routing
+// through the git CLI created: the ref name is now an argv operand, so a
+// leading "-" would be parsed as a flag. Branch names derive from issue titles,
+// which on a public repository anyone can supply.
+func TestPushBranchRefusesAnOptionLikeName(t *testing.T) {
+	svc, _ := setupTestRepoWithRemote(t)
+
+	err := svc.PushBranch("--delete")
+	if err == nil {
+		t.Fatal("PushBranch accepted an option-like ref name")
+	}
+	if !strings.Contains(err.Error(), "refusing") {
+		t.Errorf("error = %v, want the ref-arg refusal", err)
 	}
 }
