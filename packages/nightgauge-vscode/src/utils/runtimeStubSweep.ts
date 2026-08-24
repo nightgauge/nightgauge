@@ -94,9 +94,14 @@ export const ANY_RUNTIME_FILE = new RegExp(
  * does.
  *
  * Rules:
- *  - A NEW-SCHEME name is always kept, whatever its body says. Narrowing the
- *    sweep to the new scheme properly is ADR-017 step 8's job.
- *  - A LEGACY name gets the classifier's verdict.
+ *  - A NEW-SCHEME name is always kept, whatever its body says.
+ *  - A LEGACY name gets the classifier's verdict. **This sweep is where legacy
+ *    disposition ends up, permanently.** ADR-017's Migration section planned to
+ *    hand it to a one-shot Go sweep and narrow this filter to the new scheme;
+ *    that Go sweep was never built, and #381 decided against building it —
+ *    legacy files are abandoned unswept, because there has never been a
+ *    published release that could have written the legacy name. Do not "finish"
+ *    the narrowing: it would leave nothing owning legacy names at all.
  *  - Anything else is kept (the caller should not have offered it).
  *
  * @param fileName The snapshot's basename.
@@ -112,7 +117,7 @@ export function runtimeSweepVerdict(
   }
   return {
     action: "keep",
-    reason: "new-scheme snapshot — sweep is legacy-only (ADR-017 step 8)",
+    reason: "new-scheme snapshot — sweep is legacy-only (ADR-017; #381)",
   };
 }
 

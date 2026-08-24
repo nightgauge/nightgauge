@@ -1585,11 +1585,32 @@ The wire change bumps `ProtocolVersion` 1 → 2, and ADR 017 specifies the
 hard-fail rather than assuming one exists: on a mismatch the TypeScript client
 disconnects, raises a blocking modal, and rejects every later call with
 `protocol_mismatch`. Per the pre-customer no-compat rule the issue-keyed paths
-are deleted outright; a one-shot **Go** startup sweep reconciles-then-deletes
-legacy `runtime-{N}.json` files so the upgrade does not strand phantom `running`
-rows, and that sweep's own removal is filed as a follow-up. Legacy disposition
-belongs to that sweep **exclusively** — the extension's activation stub sweep is
-narrowed to the new filename scheme so the two cannot race.
+are deleted outright.
+
+**Legacy `runtime-{N}.json` files are abandoned unswept — there is no Go sweep
+(#381).** ADR 017's Migration section planned a one-shot reconcile-then-delete
+pass inside `Server.Run`, and this table used to describe it as shipped. It was
+never built: #370 closed without step 8, and the ADR's follow-up row L-1 (remove
+the sweep one release later) was therefore filed against something that does not
+exist. #381 re-decided the arc and chose abandonment, because the sweep's whole
+justification was avoiding phantom `running` rows across an upgrade and there
+has never been a release to upgrade from — the tag lineage is `v0.2.0-rc.*` with
+zero published releases, so no installed build ever wrote the legacy name.
+
+What that leaves, and it is deliberate:
+
+- **Go never reads or deletes a legacy file.** `state.ParseSnapshotFilename`
+  matches the new scheme only, and says so at its definition
+  (`internal/state/snapshot_file.go`). A legacy file is not a run this tree can
+  reason about, so it is not one Go acts on.
+- **The extension's activation sweep is still the only thing that touches a
+  legacy name**, gated by name first in `runtimeSweepVerdict`
+  (`packages/nightgauge-vscode/src/utils/runtimeStubSweep.ts`):
+  `LEGACY_RUNTIME_FILE` is the only pattern it may delete, and a new-scheme name
+  is kept whatever its body says. The ADR's claim that this filter was "narrowed
+  to the new-scheme regex" describes the plan, not the tree.
+- **The race the ADR worried about cannot occur**, because the second sweep was
+  never built. Nothing orders two sweeps when there is one.
 
 #### `cost by-class`
 
