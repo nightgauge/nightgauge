@@ -181,12 +181,12 @@ describe("HeadlessOrchestrator blockedBy deferral (Issue #305)", () => {
     vi.mocked(execSync).mockReturnValue(
       "Logged in to github.com account testuser (keyring)\n  Token: gho_fake\n  Token scopes: 'gist', 'read:org', 'repo', 'workflow'"
     );
-    vi.mocked(execFileSync).mockImplementation((cmd: string, args: unknown[]) => {
+    vi.mocked(execFileSync).mockImplementation(((cmd: string, args?: readonly string[]) => {
       const a = args as string[];
       if (cmd === "git" && a[0] === "branch") return "feat/305-test\n";
       if (cmd === "gh" && a[0] === "repo") return "TestOrg/test-repo";
       return "";
-    });
+    }) as unknown as typeof execFileSync);
   });
 
   function makeOrchestratorWithOpenBlockers() {
