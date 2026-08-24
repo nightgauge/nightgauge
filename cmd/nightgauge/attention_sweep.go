@@ -27,6 +27,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/attention/sweep"
 	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/forge"
+	"github.com/nightgauge/nightgauge/internal/forge/boardcache"
 	"github.com/spf13/cobra"
 )
 
@@ -77,6 +78,11 @@ func cachedSweepForgeClient(workspaceRoot string, cfg *config.Config) func(repo 
 	var (
 		mu      sync.Mutex
 		routers = map[routerKey]*forge.Router{}
+		// One cache for the whole factory, not one per repo: in a shared-board
+		// workspace several repos resolve to the SAME board, and keying the
+		// cache by (owner, project) rather than by repo is what lets the second
+		// repo's sweep reuse the first repo's snapshot (#845).
+		boards = boardcache.New(0)
 	)
 	return func(repo string) (forge.ForgeClient, error) {
 		project := config.ResolveRepoProject(cfg, config.RepoProjectQuery{
@@ -106,7 +112,15 @@ func cachedSweepForgeClient(workspaceRoot string, cfg *config.Config) func(repo 
 			routers[key] = r
 			router = r
 		}
-		return router.For("", repo)
+		client, err := router.For("", repo)
+		if err != nil {
+			return nil, err
+		}
+		// Read through the board snapshot cache. Two sweep producers ask the
+		// same board the same question inside one sweep — measured at 74% of a
+		// three-repo sweep's entire API bill — and neither knows the other
+		// exists. The fix belongs under them, not in their call sites (#845).
+		return boardcache.WrapClient(boards, client, owner, project.Number), nil
 	}
 }
 

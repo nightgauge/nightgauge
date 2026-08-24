@@ -3643,6 +3643,64 @@ point rather than a detail: the router carries the token and the transport, so
 building one is the first step of spending points, and the regression test
 asserts on whether it was built at all.
 
+### The Board Snapshot Cache (Issue #845)
+
+A ProjectV2 board read is the most expensive thing this product does: **17
+GraphQL points per 100-item page**, against a 5,000-point hourly budget where
+almost everything else costs 1. The nested `first:` values in that query were
+already tuned 16x down, so the remaining cost is not the query's shape — it is
+how many times it is issued.
+
+Measured with the #843 ledger across three repo sweeps, before any cache
+existed:
+
+```
+71 requests, 184 points billed
+  68 pts  4 calls  CoverageGap.discoverBoard          coveragegap.go:122
+  68 pts  4 calls  StrandedReadyItems.boardUnreachable strandedready.go:210
+```
+
+**136 points — 74% of the entire bill — was two producers asking the same board
+the same question inside the same sweep.** Neither knows the other exists, and
+neither should have to.
+
+`internal/forge/boardcache` is a read-through cache on `forge.BoardService`, so
+producers keep calling `in.Forge.Board().ListOpenItems(ctx)` unchanged:
+
+| Property | Behaviour |
+| --- | --- |
+| Key | `(owner, project, query)` — **not** repo, so a shared-board workspace reuses one snapshot across repos |
+| TTL | 90s default. Short on purpose: the win is collapsing reads milliseconds apart inside one sweep, and a staleness surface must not lie for minutes |
+| Concurrency | Concurrent readers of one key share a single fetch — without that, producers running in parallel each miss a cold cache and the duplicate survives |
+| Errors | **Never cached.** "I could not look" must not be memoized into "there is nothing there" |
+| Age | `Peek` returns the snapshot's `FetchedAt`; a cache that cannot report its own age cannot be audited |
+| Invalidation | Any board mutation this process issues drops every cached query for that board — including a mutation that FAILED, since the write may have landed before the error |
+
+After, on the same three sweeps:
+
+```
+67 requests, 116 points billed        (184 → 116, a 37% cut)
+  68 pts  4 calls  boardcache.(*cachedBoard).ListOpenItems
+```
+
+Board reads halved exactly — 8 calls → 4, 136 points → 68 — and the sweep's
+verdicts are byte-identical (5 producers evaluated, 0 failed, same cards). In
+the **daemon** the saving is larger than this CLI measurement shows: each CLI
+invocation is a fresh process and therefore a cold cache, while a daemon holds
+one cache across every repo and every sweep inside the TTL.
+
+**`CountsByStatus` and `GetItem` are deliberately not cached.** Deriving counts
+from a cached item list would be a second implementation of the adapter's own
+aggregation, silently divergent the first time either side changes; and serving
+`GetItem` from a board-wide list would answer "not on the board" for an item
+added since the snapshot — the one answer callers act on destructively.
+
+**One caveat on the instrument itself:** the ledger attributes a call to the
+first stack frame outside `internal/github`, which is now the cache rather than
+the producer that triggered the miss. The remaining board reads are at their
+floor of one per board per window, but per-producer attribution for board reads
+is gone. Restore it before using `--by caller` to judge #846/#847.
+
 ### Doctor — Environment Health Check
 
 ```bash
