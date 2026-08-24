@@ -237,6 +237,48 @@ describe("QueuedIssueTreeItem", () => {
     });
   });
 
+  /**
+   * Issue #881 — the tooltip promised a `baseline-defer-sweep` cron that has
+   * never existed in `.github/workflows/`. Nothing resumes a baseline-CI
+   * deferred item, so the operator waits for an automation that is not coming.
+   * The tooltip must name the operator action instead.
+   */
+  describe("baseline-CI paused tooltip (Issue #881)", () => {
+    const baselinePausedItem = () =>
+      createMockQueueItem({
+        issueNumber: 881,
+        position: 1,
+        status: "paused",
+        pausedReason: {
+          kind: "baseline_ci_red",
+          workflow: "ci.yml",
+          job: "Integration & E2E Tests",
+          failed_runs: 3,
+          lookback_runs: 5,
+        },
+      });
+
+    it("must not promise a cron that does not exist", () => {
+      const tooltip = (new QueuedIssueTreeItem(baselinePausedItem()).tooltip as any)
+        .value as string;
+
+      expect(tooltip).not.toContain("baseline-defer-sweep");
+      expect(tooltip).not.toMatch(/auto-resumes/i);
+      expect(tooltip).not.toMatch(/\bcron\b/i);
+    });
+
+    it("names the operator action required to release the item", () => {
+      const tooltip = (new QueuedIssueTreeItem(baselinePausedItem()).tooltip as any)
+        .value as string;
+
+      expect(tooltip).toContain("nightgauge baseline-gate promote");
+      expect(tooltip).toMatch(/does \*\*not\*\* resume on its own/i);
+      // The evidence that made the deferral legible must survive the rewording.
+      expect(tooltip).toContain("ci.yml");
+      expect(tooltip).toContain("3/5 recent runs");
+    });
+  });
+
   describe("update method", () => {
     it("should update single item correctly", () => {
       const item = new QueuedIssueTreeItem(createMockQueueItem({ issueNumber: 42, position: 1 }));

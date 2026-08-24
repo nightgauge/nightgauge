@@ -46,17 +46,6 @@ example packages/nightgauge-sdk/tests/analysis/product-audit/dimensions/dimensio
 example packages/nightgauge-sdk/tests/analysis/product-audit/dimensions/dimension-8.test.ts deploy.yml
 
 # ── stale ────────────────────────────────────────────────────────────────────
-# Both claims below are the same defect #545 fixed, but their corrections reach
-# past documentation. `baseline-defer-sweep` is asserted in TypeScript source
-# and a user-facing tree-item tooltip as well; `skill-eval.yml` is described as
-# a required status check across a doc section and an ADR. #545 is a
-# documentation sweep, and per AGENTS.md a mechanical sweep lands alone —
-# pulling TS source and UI strings in would make it un-reviewable. Recorded
-# here so the claims stay visible and counted rather than silently passing.
-#
-# A daily cron asserted in docs, TS source and a tooltip; never existed.
-stale skills/nightgauge-issue-pickup/_includes/issue-selection-and-gates.md baseline-defer-sweep.yml
-stale claude-plugins/nightgauge/skills/issue-pickup/_includes/issue-selection-and-gates.md baseline-defer-sweep.yml
-# Described as a required status check; never existed.
-stale docs/SKILL_EVALUATION.md skill-eval.yml
-stale docs/decisions/011-model-eval-system.md skill-eval.yml
+# EMPTY. #881 burned down the last two entries (`baseline-defer-sweep.yml` and
+# `skill-eval.yml`) by deleting the claims. Keep it that way: this bucket may
+# only shrink.
