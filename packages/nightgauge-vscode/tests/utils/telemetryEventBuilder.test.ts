@@ -78,6 +78,40 @@ describe("buildPipelineExecutionEvent", () => {
     expect(perStage["feature-planning"]).toEqual({ input: 3000, output: 800 });
   });
 
+  // #465: `model_used` used to read `stages[*].model_selection`, whose only
+  // writer was an empty stub — so the field shipped null on every event and no
+  // test noticed. These pin it to the live source, `tokens.per_stage[*].model`.
+  describe("model_used attribution", () => {
+    it("reports the first per-stage token block that carries a model", () => {
+      const event = buildPipelineExecutionEvent(
+        makeInput({
+          tokens: {
+            input: 0,
+            output: 0,
+            per_stage: {
+              "issue-pickup": { input: 1200, output: 300 },
+              "feature-planning": { input: 3000, output: 800, model: "haiku" },
+              "feature-dev": { input: 7800, output: 1900, model: "opus" },
+            },
+          },
+        })
+      );
+      expect(event.payload!.model_used).toBe("haiku");
+    });
+
+    it("reports null when no per-stage block carries a model", () => {
+      const event = buildPipelineExecutionEvent(makeInput());
+      expect(event.payload!.model_used).toBeNull();
+    });
+
+    it("reports null when there are no per-stage tokens at all", () => {
+      const event = buildPipelineExecutionEvent(
+        makeInput({ stages: {}, tokens: { input: 0, output: 0 } })
+      );
+      expect(event.payload!.model_used).toBeNull();
+    });
+  });
+
   it('maps "productive" outcome to "success"', () => {
     const event = buildPipelineExecutionEvent(makeInput({ outcome_type: "productive" }));
     expect(event.payload!.outcome).toBe("success");
