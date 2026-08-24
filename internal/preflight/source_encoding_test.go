@@ -199,7 +199,10 @@ func sourceFiles(t *testing.T) []string {
 		}
 		if d.IsDir() {
 			switch d.Name() {
-			case ".git", "node_modules", "vendor", "bin", "dist", "out", "testdata":
+			// ".worktrees" — see #851. Nested pipeline checkouts of this repo
+			// are not this checkout's source, and scanning them lets an
+			// unrelated branch's half-saved file fail a gate on main.
+			case ".git", ".worktrees", "node_modules", "vendor", "bin", "dist", "out", "testdata":
 				return fs.SkipDir
 			}
 			return nil

@@ -104,11 +104,23 @@ for d in $(sandbox_dirs); do
 done
 git worktree prune >/dev/null 2>&1
 
+# ── Attribution, not byte-identity (#832) ────────────────────────────────────
+# The helpers live in their own file so the attribution tests can exercise the
+# REAL implementation instead of a copy. See that file for why byte-identity
+# was the wrong assertion.
+# shellcheck source=lib/boundary-attribution.sh
+. "$(dirname "$0")/lib/boundary-attribution.sh"
+require_surface
+
 STATUS_BEFORE="$(git status --porcelain --untracked-files=all)"
-WORKTREES_BEFORE="$(git worktree list --porcelain)"
+WORKTREES_BEFORE="$(foreign_worktrees)"
 
 # ── 1. SIGKILL the suite mid-run ─────────────────────────────────────────────
-bash "$SUITE" >/dev/null 2>&1 &
+# Explicitly FULL-LENGTH. This arm is killed as soon as the sandbox registers,
+# so it costs almost nothing — but a caller that exported the minimal flag could
+# shorten it, and a run that finishes before the kill proves nothing while
+# staying green (#850).
+env -u NG_BOUNDARY_SUITE_MINIMAL bash "$SUITE" >/dev/null 2>&1 &
 SUITE_PID=$!
 
 # Wait for the sandbox to be registered — killing before that proves nothing.
@@ -139,11 +151,12 @@ SUITE_PID=""
 
 # ── 2. #713 — the operator's checkout is untouched ───────────────────────────
 STATUS_AFTER_KILL="$(git status --porcelain --untracked-files=all)"
-if [ "$STATUS_AFTER_KILL" = "$STATUS_BEFORE" ]; then
-  ok "a SIGKILLed suite run leaves git status --porcelain byte-identical (#713)"
+KILL_DIRT="$(new_owned_dirt "$STATUS_BEFORE" "$STATUS_AFTER_KILL")"
+if [ -z "$KILL_DIRT" ]; then
+  ok "a SIGKILLed suite run leaves no dirt on any path it writes (#713)"
 else
   bad "a SIGKILLed suite run mutated the real tree (#713)"
-  printf '    before: %s\n    after:  %s\n' "$STATUS_BEFORE" "$STATUS_AFTER_KILL"
+  printf '    new entries on suite-owned paths:\n%s\n' "$KILL_DIRT"
 fi
 
 if [ -z "$(git ls-files --others --exclude-standard -- 'docs/_*probe*' 2>/dev/null)" ] &&
@@ -163,11 +176,17 @@ else
   bad "expected a leaked registration to reclaim, but prune already cleared it"
 fi
 
-bash "$SUITE" >/dev/null 2>&1
+# Minimal mode (#850): what this arm uniquely proves is that starting ON TOP OF
+# a leaked sandbox does not break the run — the sweep, `git worktree add`, the
+# manifest copy and the baseline precondition all still succeed and the run
+# exits 0. That needs a completed run, not 41 re-validated rules; CI runs those
+# once in the standalone step. Set per-invocation, never exported: the two
+# SIGKILL/SIGTERM arms must stay full-length so the signal lands mid-run.
+NG_BOUNDARY_SUITE_MINIMAL=1 bash "$SUITE" >/dev/null 2>&1
 SUITE_EXIT=$?
 
 if [ "$SUITE_EXIT" -eq 0 ]; then
-  ok "the reclaiming suite run still passes all of its own cases"
+  ok "the reclaiming suite run completes cleanly on top of the swept leak"
 else
   bad "the reclaiming suite run exited $SUITE_EXIT"
 fi
@@ -188,14 +207,17 @@ else
   sandbox_dirs | sed 's/^/      /'
 fi
 
-# The sweep is scoped to this suite's own root and prefix. A byte-identical
-# worktree list is the strongest available statement that nothing else moved.
-WORKTREES_AFTER="$(git worktree list --porcelain)"
-if [ "$WORKTREES_AFTER" = "$WORKTREES_BEFORE" ]; then
-  ok "the sweep touched no unrelated worktree (#722)"
+# The sweep is scoped to this suite's own root and prefix. What it must never
+# do is REMOVE a worktree it does not own — including a stale registration
+# belonging to someone else, which `git worktree prune` could take. Additions by
+# a concurrent session are ignored: they are not this sweep's doing (#832).
+WORKTREES_AFTER="$(foreign_worktrees)"
+VANISHED="$(comm -23 <(printf '%s\n' "$WORKTREES_BEFORE") <(printf '%s\n' "$WORKTREES_AFTER"))"
+if [ -z "$VANISHED" ]; then
+  ok "the sweep removed no worktree it does not own (#722)"
 else
-  bad "the worktree list changed beyond the swept sandbox (#722)"
-  printf '    before: %s\n    after:  %s\n' "$WORKTREES_BEFORE" "$WORKTREES_AFTER"
+  bad "the sweep removed a worktree outside its own sandbox root (#722)"
+  printf '    vanished:\n%s\n' "$VANISHED"
 fi
 
 # ── 3b. SIGTERM, which runs the trap and must NOT resume ────────────────────
@@ -209,7 +231,12 @@ fi
 #
 # Kill mid-run, then assert the tracked tree is untouched. This is the arm that
 # would have caught it.
-bash "$SUITE" >/dev/null 2>&1 &
+# Explicitly FULL-LENGTH, and load-bearing: the TERM must land while a
+# fixture-planting arm is still ahead of the suite — specifically the vacuous
+# manifest arm, the one that overwrote the tracked file. Shorten this run and it
+# exits before the signal, leaving both assertions green having measured nothing
+# (#850).
+env -u NG_BOUNDARY_SUITE_MINIMAL bash "$SUITE" >/dev/null 2>&1 &
 SUITE_PID=$!
 TERM_SANDBOX=""
 for _ in $(seq 1 120); do
@@ -262,11 +289,12 @@ SUITE_PID=""
 # remaining fixture into the operator's checkout -- including the arm that
 # plants a vacuous manifest over the tracked one.
 STATUS_AFTER_TERM="$(git status --porcelain --untracked-files=all)"
-if [ "$STATUS_AFTER_TERM" = "$STATUS_BEFORE" ]; then
-  ok "a SIGTERMed suite run leaves the tracked tree byte-identical (#713)"
+TERM_DIRT="$(new_owned_dirt "$STATUS_BEFORE" "$STATUS_AFTER_TERM")"
+if [ -z "$TERM_DIRT" ]; then
+  ok "a SIGTERMed suite run leaves no dirt on any path it writes (#713)"
 else
   bad "a SIGTERMed suite run modified the real tree"
-  printf '    changed: %s\n' "$STATUS_AFTER_TERM"
+  printf '    new entries on suite-owned paths:\n%s\n' "$TERM_DIRT"
   # Never leave the operator's checkout damaged by a test.
   git checkout -- .github/publication-boundary.yaml 2>/dev/null
 fi
@@ -297,7 +325,9 @@ if git worktree add --detach --quiet "$LOCKED_SANDBOX/tree" HEAD >/dev/null 2>&1
     bad "expected a locked registration to survive prune; nothing to reclaim"
   fi
 
-  bash "$SUITE" >/dev/null 2>&1
+  # Minimal mode (#850): only the startup sweep is observed here — this run's
+  # exit code is deliberately not captured at all.
+  NG_BOUNDARY_SUITE_MINIMAL=1 bash "$SUITE" >/dev/null 2>&1
 
   if ! git worktree list --porcelain | grep -qF "$LOCKED_SANDBOX/tree"; then
     ok "the next suite run reclaims a LOCKED leaked registration too"
@@ -320,10 +350,12 @@ rm -rf "$LOCKED_SANDBOX"
 git worktree prune >/dev/null 2>&1
 
 STATUS_AFTER="$(git status --porcelain --untracked-files=all)"
-if [ "$STATUS_AFTER" = "$STATUS_BEFORE" ]; then
-  ok "the whole exercise left the real tree byte-identical (#713)"
+FINAL_DIRT="$(new_owned_dirt "$STATUS_BEFORE" "$STATUS_AFTER")"
+if [ -z "$FINAL_DIRT" ]; then
+  ok "the whole exercise left no dirt on any path the suite writes (#713)"
 else
   bad "the real tree changed across the exercise (#713)"
+  printf '    new entries on suite-owned paths:\n%s\n' "$FINAL_DIRT"
 fi
 
 echo ""
