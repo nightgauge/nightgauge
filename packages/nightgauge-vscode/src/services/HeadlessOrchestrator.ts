@@ -13862,20 +13862,12 @@ export class HeadlessOrchestrator implements vscode.Disposable {
                     model: result.servedModel ?? result.modelDecision?.model,
                     adapter: result.adapterDecision?.adapter,
                   });
-                  // Persist model selection for post-pipeline analysis (Issue #1259)
-                  if (result.modelDecision) {
-                    await this.stateService.setStageModelSelection(stage, {
-                      model: result.modelDecision.model,
-                      source: result.modelDecision.source,
-                      confidence: result.modelDecision.selectionResult?.confidence,
-                      complexity: result.modelDecision.selectionResult?.complexity,
-                      mode: result.modelDecision.mode,
-                      effort: result.modelDecision.effort,
-                    });
-                  }
-                  // Persist escalated_from for escalation history (Issue #1343)
-                  // Note: setStageModelSelection does not accept escalated_from yet;
-                  // this is captured in the execution history record via modelDecision.
+                  // A second `setStageModelSelection` call used to sit here
+                  // "for post-pipeline analysis (Issue #1259)". Its receiver was
+                  // an empty stub, so post-pipeline analysis never saw any of
+                  // it; deleted with #465. `completeStage` above already
+                  // forwards the served model and adapter to the Go recorder,
+                  // which is the authoritative writer of per-stage attribution.
                 } catch (err) {
                   this.logger.warn("Failed to update state on stage complete", {
                     stage,

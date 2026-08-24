@@ -650,10 +650,11 @@ function getStageTimelineHtml(state: PipelineState): string {
       : 0;
     const stageCost = perStage ? (perStage.cost_usd ?? 0) : 0;
 
-    // Model info from per_stage tokens (Issue #1006) or stage model_selection
-    const stageModel =
-      ((perStage as Record<string, unknown> | undefined)?.["model"] as string | undefined) ??
-      stageData.model_selection?.model;
+    // Model info from per_stage tokens (Issue #1006). The `model_selection`
+    // fallback that used to follow it was unreachable — nothing ever wrote that
+    // field (#465).
+    const stageModel = (perStage as Record<string, unknown> | undefined)?.["model"] as
+      string | undefined;
 
     // Check if stage cost exceeds budget (Issue #638)
     const budget = getStageBudget(stageName as PipelineStage);

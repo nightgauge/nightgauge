@@ -29,18 +29,6 @@ export interface StageTokenInfo {
 }
 
 /**
- * Model selection metadata for a stage
- */
-export interface StageModelInfo {
-  model: string;
-  source: string;
-  confidence?: number;
-  complexity?: string;
-  mode?: string;
-  effort?: string;
-}
-
-/**
  * Stage display configuration
  */
 interface StageDisplayConfig {
@@ -123,11 +111,6 @@ export class StageTreeItem extends BaseTreeItem {
    * @see Issue #498 - Token tracking for interactive execution mode
    */
   private executionMode: StageExecutionMode | null = null;
-
-  /**
-   * Model selection metadata for this stage
-   */
-  private modelInfo: StageModelInfo | null = null;
 
   /**
    * Current phase name (for description display when running)
@@ -334,26 +317,6 @@ export class StageTreeItem extends BaseTreeItem {
     md.appendMarkdown(`**${STAGE_LABELS[this.stage]}**\n\n`);
     md.appendMarkdown(`Status: ${this.status}\n\n`);
 
-    // Model selection section - shows execution path details
-    if (this.modelInfo) {
-      md.appendMarkdown(`**Execution Path:**\n\n`);
-      md.appendMarkdown(`- Model: ${this.modelInfo.model}\n`);
-      md.appendMarkdown(`- Source: ${this.modelInfo.source}\n`);
-      if (this.modelInfo.effort) {
-        md.appendMarkdown(`- Effort: ${this.modelInfo.effort}\n`);
-      }
-      if (this.modelInfo.complexity) {
-        md.appendMarkdown(`- Complexity: ${this.modelInfo.complexity}\n`);
-      }
-      if (this.modelInfo.mode) {
-        md.appendMarkdown(`- Selection mode: ${this.modelInfo.mode}\n`);
-      }
-      if (this.modelInfo.confidence !== undefined) {
-        md.appendMarkdown(`- Confidence: ${(this.modelInfo.confidence * 100).toFixed(0)}%\n`);
-      }
-      md.appendMarkdown(`\n`);
-    }
-
     // Show retry status if retrying
     if (this.isRetrying && this.nextRetryAt) {
       const now = Date.now();
@@ -536,14 +499,6 @@ export class StageTreeItem extends BaseTreeItem {
   }
 
   /**
-   * Set model selection metadata for this stage
-   */
-  setModelInfo(info: StageModelInfo | null): void {
-    this.modelInfo = info;
-    this.updateDisplay();
-  }
-
-  /**
    * Get the current retry count
    */
   getRetryCount(): number | null {
@@ -591,7 +546,6 @@ export class StageTreeItem extends BaseTreeItem {
     this.durationMs = null;
     this.errorMessage = null;
     this.executionMode = null;
-    this.modelInfo = null;
     this.clearPhases();
   }
 
