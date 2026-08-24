@@ -81,10 +81,18 @@ CI gates SHOULD treat exit code 1 as a hard merge block.
 
 ## Audit Phases
 
-The skill walks 8 deterministic phases in order. Each phase emits zero or more
-findings into a single findings list with severity tags.
+The skill walks 8 deterministic check phases in order. Each phase emits zero or
+more findings into a single findings list with severity tags.
 
-### Phase 1 — Existence & repo placement
+Phase numbers below are the skill's own — `SKILL.md` Phase 0 (environment
+preflight) and Phase 1 (argument parsing) resolve the audit set but emit no
+findings, so the checks start at Phase 2. Findings carry these numbers in the
+`phase` field of the JSON report, so a number seen in a report locates the same
+check in
+[`skills/nightgauge-issue-audit/SKILL.md`](../skills/nightgauge-issue-audit/SKILL.md)
+and here.
+
+### Phase 2 — Existence & repo placement
 
 For each issue in the audit set, fetch via `gh issue view --json
 state,labels,repository,body,number`.
@@ -95,7 +103,7 @@ state,labels,repository,body,number`.
 | `WRONG_REPO`       | CRITICAL | Manifest declares issue in repo X but the issue lives in repo Y                 |
 | `UNEXPECTED_STATE` | WARNING  | Manifest expects `OPEN` but issue is `CLOSED` (and `--allow-closed` not passed) |
 
-### Phase 2 — Label completeness
+### Phase 3 — Label completeness
 
 | Finding type              | Severity | Trigger                                                                  |
 | ------------------------- | -------- | ------------------------------------------------------------------------ |
@@ -104,9 +112,9 @@ state,labels,repository,body,number`.
 | `MISSING_COMPONENT_LABEL` | INFO     | Issue body references a component path but no `component:*` label is set |
 
 Note: `priority:*` and `size:*` are project board fields, not labels — those
-checks live in Phase 3.
+checks live in Phase 4.
 
-### Phase 3 — Project board membership and fields
+### Phase 4 — Project board membership and fields
 
 Query each issue's `projectItems(first: 10)` GraphQL.
 
@@ -118,7 +126,7 @@ Query each issue's `projectItems(first: 10)` GraphQL.
 | `MISSING_PRIORITY_FIELD` | WARNING  | Project item exists but `Priority` field is unset                           |
 | `MISSING_SIZE_FIELD`     | WARNING  | Project item exists but `Size` field is unset                               |
 
-### Phase 4 — Body section completeness
+### Phase 5 — Body section completeness
 
 Per-type required heading table. The canonical copy lives in
 [`skills/nightgauge-issue-audit/SKILL.md` Phase 5](../skills/nightgauge-issue-audit/SKILL.md#phase-5-body-section-completeness);
@@ -178,7 +186,7 @@ The finding fires when **any** of these signals trips:
 human/planning decision; `--fix` never auto-applies it. Even under `--fix`,
 `OVERSIZED_SCOPE` remains a WARNING.
 
-### Phase 5 — Sub-issue & parent linking
+### Phase 6 — Sub-issue & parent linking
 
 Use `gh api graphql` `subIssues(first: 50)` and the body's `Part of #X` /
 `Part of <owner>/<repo>#X` annotations.
@@ -189,7 +197,7 @@ Use `gh api graphql` `subIssues(first: 50)` and the body's `Part of #X` /
 | `MISSING_PART_OF_ANNOTATION` | CRITICAL | Cross-repo sub-issue body lacks `Part of <owner>/<repo>#<epic>`                  |
 | `ORPHAN_SUB_ISSUE`           | WARNING  | Issue has `Part of #X` but the parent epic has no matching native sub-issue link |
 
-### Phase 6 — `blockedBy` alignment
+### Phase 7 — `blockedBy` alignment
 
 Delegate the structural check to `nightgauge epic validate --json` for
 circular and stale blockers. Parse body `Depends on:` lines and the
@@ -204,7 +212,7 @@ verified via `gh issue view --repo`.
 | `CIRCULAR_BLOCKER`             | CRITICAL | Sub-issue → parent-epic blocking edge detected (per `epic validate`)           |
 | `CROSS_REPO_BLOCKER_MISSING`   | CRITICAL | Body cites a cross-repo blocker that does not exist or is in a different state |
 
-### Phase 7 — Cross-repo consistency
+### Phase 8 — Cross-repo consistency
 
 For epics whose manifest entries span multiple repos (or whose body cites
 `<owner>/<repo>#N` cross-repo references), audit body annotations both
@@ -215,7 +223,7 @@ directions.
 | `MISSING_PARENT_BACKREF`       | WARNING  | Cross-repo sub-issue has `Part of <owner>/<repo>#<epic>` but the epic body has no link back |
 | `INCONSISTENT_PROJECT_MAPPING` | CRITICAL | Two sub-issues in the same target repo are in different projects                            |
 
-### Phase 8 — Knowledge scaffold
+### Phase 9 — Knowledge scaffold
 
 When `knowledge.enabled: true` in `.nightgauge/config.yaml` OR the
 manifest entry sets `knowledge_path`, verify the knowledge directory exists
@@ -403,7 +411,7 @@ auto-fix available" for human-only items). Final verdict line is
   "findings": [
     {
       "issue": { "repo": "nightgauge/nightgauge", "number": 3238 },
-      "phase": 3,
+      "phase": 4,
       "type": "MISSING_FROM_BOARD",
       "severity": "CRITICAL",
       "detail": "Sub-issue is not a member of project 1.",
