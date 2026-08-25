@@ -906,7 +906,6 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
 
   private async startSlot(item: QueueItem): Promise<StartSlotOutcome> {
     const slotIndex = this.findAvailableSlotIndex();
-    const branchName = `feat/${item.issueNumber}-${this.slugify(item.title)}`;
     // THE run identity (#307 / ADR-017). Minted BEFORE the reservation so the
     // reservation record, the eventual PipelineSlot and the slot's state
     // service all carry the same id — that is what lets a late event prove
@@ -940,6 +939,33 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
       }
     };
     try {
+      // THE branch name comes from the Go composer, never from here (#889).
+      // `issue-pickup`'s own skill already names the binary as the authority
+      // for prefix derivation and slug generation; a second implementation
+      // here hardcoded `feat/`, so every `type:bug` issue was branded a
+      // feature, and it doubled an issue number the queue item's display title
+      // already carried. The call is repo-independent, so it does not depend
+      // on the worktree `startSlotInner` is about to create.
+      //
+      // INSIDE the try, and BELOW the reservation, on purpose. The reservation
+      // must be taken synchronously — `availableSlotCount` and `fillSlots`'
+      // running set have to reflect intent-to-run before this function yields,
+      // or a second pass beginning during the await under-counts same-repo
+      // concurrency and the per-repo cap is exceeded across passes — the
+      // cross-pass race the reservation comment above names.
+      // Composing above it reopens exactly that window, and widens the #307
+      // force-clear race by a whole IPC round-trip.
+      //
+      // Fails closed. There is deliberately no local fallback: a fallback IS
+      // the second composer, and it would come back the moment IPC hiccuped.
+      // The `finally` below releases the reservation if this throws.
+      const branchName = (
+        await IpcClient.getInstance().gitComposeBranchName(
+          item.issueNumber,
+          item.title,
+          item.labels
+        )
+      ).name;
       const outcome = await this.startSlotInner(item, slotIndex, branchName, reservation);
       // The dispatch may have been force-cleared while it was awaiting worktree
       // creation. Report `abandoned` so fillSlots neither re-enqueues the item
@@ -1396,10 +1422,14 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
     // the very first event.
     if (slot.stateService && slot.title) {
       try {
+        // The branch the worktree is ACTUALLY on, not a recomposition (#889).
+        // Recomposing here was a third composer, and it disagreed with the
+        // real branch the moment labels or truncation differed — so pipeline
+        // state opened naming a branch that did not exist.
         await slot.stateService.initializePipeline(
           slot.issueNumber,
           slot.title,
-          `feat/${slot.issueNumber}-${this.slugify(slot.title)}`
+          slot.worktree.branch
         );
       } catch {
         // Non-critical — runPipeline will initialize with placeholder
@@ -3471,14 +3501,6 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
       if (!usedIndices.has(i)) return i;
     }
     return this.maxConcurrent; // Shouldn't happen if called when slots available
-  }
-
-  private slugify(text: string): string {
-    return text
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/^-|-$/g, "")
-      .substring(0, 40);
   }
 
   private emitSlotsChanged(): void {

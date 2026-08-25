@@ -62,6 +62,7 @@ var contractTestedMethods = map[string]bool{
 	"git.branchCreate":          true,
 	"git.branchDelete":          true,
 	"git.cleanupMergedBranches": true,
+	"git.composeBranchName":     true,
 	"git.checkout":              true,
 	"git.commit":                true,
 	"git.currentBranch":         true,
@@ -844,6 +845,15 @@ func TestContract_Git(t *testing.T) {
 			"branch": "main",
 		})
 		assertMethodRegistered(t, h.readResponseFor(id, nil), "git.checkout")
+	})
+
+	t.Run("git.composeBranchName/registered", func(t *testing.T) {
+		id := h.sendRequest("git.composeBranchName", map[string]interface{}{
+			"issueNumber": 227,
+			"title":       "227 Per-operation error isolation",
+			"labels":      []string{"type:bug"},
+		})
+		assertMethodRegistered(t, h.readResponseFor(id, nil), "git.composeBranchName")
 	})
 
 	t.Run("git.branchCreate/registered", func(t *testing.T) {
