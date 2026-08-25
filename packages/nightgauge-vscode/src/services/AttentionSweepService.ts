@@ -511,11 +511,16 @@ export class AttentionSweepService implements vscode.Disposable {
 
   /** Log the outcome and nudge the tree when the store actually changed. */
   private report(trigger: SweepTrigger, repos: string[], result: AttentionSweepResult): void {
-    if (result.unavailable || result.busy) {
+    if (result.unavailable || result.busy || result.throttled) {
       this.deps.logger.debug("Attention sweep skipped", {
         trigger,
         unavailable: result.unavailable,
         busy: result.busy,
+        // #848 — the daemon declined this one because a sweep finished inside
+        // SweepMinGap. Logged distinctly from `busy` so a trigger path that is
+        // firing too often is visible as throttling rather than as contention.
+        throttled: result.throttled,
+        throttledForMs: result.throttledForMs,
       });
       return;
     }

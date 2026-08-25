@@ -15,6 +15,7 @@ import (
 	"errors"
 	"io"
 	"testing"
+	"time"
 
 	"github.com/nightgauge/nightgauge/internal/attention"
 	"github.com/nightgauge/nightgauge/internal/attention/sweep"
@@ -142,6 +143,18 @@ func runSweep(t *testing.T, s *Server, repos ...string) AttentionSweepResult {
 	return res
 }
 
+// advanceSweepClock moves the sweep clock forward by d for the rest of the
+// test. The daemon min-gap (#848) declines a second sweep inside SweepMinGap,
+// and a test that slept through 60s to prove idempotency would be a slow test
+// and a flaky one at the same time.
+func advanceSweepClock(t *testing.T, d time.Duration) {
+	t.Helper()
+	prev := sweepNow
+	t.Cleanup(func() { sweepNow = prev })
+	offset := d
+	sweepNow = func() time.Time { return prev().Add(offset) }
+}
+
 func listOpen(t *testing.T, s *Server) []attention.DecisionRequest {
 	t.Helper()
 	raw, _ := json.Marshal(AttentionListParams{})
@@ -218,6 +231,10 @@ func TestAttentionSweepAutoResolvesWhenTheConditionClears(t *testing.T) {
 	runSweep(t, s, sweepTestRepo)
 
 	forgeClient.ci.runs[0].Conclusion = "SUCCESS"
+	// Two sweeps in production are at least SweepMinGap apart (#848); advance
+	// the clock rather than weaken the gap, so this still exercises a genuine
+	// second sweep.
+	advanceSweepClock(t, SweepMinGap)
 	res := runSweep(t, s, sweepTestRepo)
 
 	if res.AutoResolved != 1 {
@@ -385,5 +402,115 @@ func TestAttentionMuteRejectsAMissingID(t *testing.T) {
 	raw, _ := json.Marshal(AttentionMuteParams{})
 	if _, err := s.handleAttentionMute(context.Background(), raw); err == nil {
 		t.Error("want an error for a mute with no id")
+	}
+}
+
+// --- #848: the daemon min-gap ---------------------------------------------
+//
+// A mutex is not a gap. sweepMu declines only a sweep that OVERLAPS one already
+// running, so two triggers 14 seconds apart both produced full sweeps — each
+// re-reading every board, the most expensive call this product makes. The
+// extension's SWEEP_MIN_GAP_MS covers only the triggers routed through
+// AttentionSweepService; the daemon is where the timer, activation,
+// view-refresh, run-terminated and manual paths all converge.
+
+func TestSweepWithinMinGapIsThrottledAndIssuesNoForgeTraffic(t *testing.T) {
+	forgeClient := redMain()
+	s := sweepServer(t, forgeClient)
+
+	first := runSweep(t, s, sweepTestRepo)
+	if first.Throttled {
+		t.Fatalf("the first sweep of a daemon must never be throttled: %+v", first)
+	}
+	if len(first.Repos) != 1 {
+		t.Fatalf("first sweep covered %d repos, want 1", len(first.Repos))
+	}
+
+	second := runSweep(t, s, sweepTestRepo)
+
+	if !second.Throttled {
+		t.Fatal("a second sweep inside SweepMinGap was accepted — the min-gap is " +
+			"enforced only in the extension, so every trigger path that does not " +
+			"pass through AttentionSweepService re-reads every board (#848)")
+	}
+	if len(second.Repos) != 0 {
+		t.Errorf("a throttled sweep evaluated %d repos, want 0 — being throttled "+
+			"must mean no forge traffic, not a cheaper sweep", len(second.Repos))
+	}
+	if second.ThrottledForMs <= 0 || second.ThrottledForMs > SweepMinGap.Milliseconds() {
+		t.Errorf("throttledForMs = %d, want a remaining interval within (0, %d]",
+			second.ThrottledForMs, SweepMinGap.Milliseconds())
+	}
+}
+
+// Throttled and Busy are different conditions and must not be conflated. Busy
+// means a sweep is running RIGHT NOW, so a caller may wait for its completion.
+// Throttled means one already finished — waiting for a completion event that
+// is never coming would hang the caller.
+func TestThrottledIsNotReportedAsBusy(t *testing.T) {
+	s := sweepServer(t, redMain())
+	runSweep(t, s, sweepTestRepo)
+
+	second := runSweep(t, s, sweepTestRepo)
+
+	if second.Busy {
+		t.Error("a throttled sweep reported Busy — nothing was running, and a caller " +
+			"that waits for the in-flight sweep to finish will wait forever")
+	}
+	if !second.Throttled {
+		t.Error("expected Throttled")
+	}
+}
+
+func TestSweepIsAcceptedAgainOnceTheMinGapHasPassed(t *testing.T) {
+	s := sweepServer(t, redMain())
+	runSweep(t, s, sweepTestRepo)
+
+	advanceSweepClock(t, SweepMinGap)
+	third := runSweep(t, s, sweepTestRepo)
+
+	if third.Throttled {
+		t.Fatalf("a sweep SweepMinGap after the last one was still throttled: %+v — "+
+			"the gap must expire, or the daemon stops observing anything", third)
+	}
+	if len(third.Repos) != 1 {
+		t.Errorf("post-gap sweep covered %d repos, want 1", len(third.Repos))
+	}
+}
+
+// The gap belongs to a daemon, not to the process. Two Servers must not
+// throttle each other — a package-global would make one workspace's sweep
+// suppress another's.
+func TestMinGapIsPerServerNotPerProcess(t *testing.T) {
+	first := sweepServer(t, redMain())
+	runSweep(t, first, sweepTestRepo)
+
+	other := sweepServer(t, redMain())
+	res := runSweep(t, other, sweepTestRepo)
+
+	if res.Throttled {
+		t.Fatal("a second Server was throttled by the first Server's sweep — the " +
+			"gap is process-global, so one workspace suppresses another's observations")
+	}
+}
+
+// An Unavailable call never looked at anything, so it must not start the gap:
+// a daemon that briefly had no forge factory would otherwise suppress the first
+// real sweep after it recovered.
+func TestUnavailableSweepDoesNotStartTheMinGap(t *testing.T) {
+	s := newAttentionTestServer(t)
+	s.workspaceRoot = t.TempDir()
+	// No forgeClientFn — the sweep reports Unavailable and returns early.
+	unavailable := runSweep(t, s, sweepTestRepo)
+	if !unavailable.Unavailable {
+		t.Fatalf("expected Unavailable, got %+v", unavailable)
+	}
+
+	s.forgeClientFn = func(string) (forge.ForgeClient, error) { return redMain(), nil }
+	res := runSweep(t, s, sweepTestRepo)
+
+	if res.Throttled {
+		t.Fatal("the first real sweep after an Unavailable one was throttled — a " +
+			"call that issued no forge traffic must not consume the gap")
 	}
 }
