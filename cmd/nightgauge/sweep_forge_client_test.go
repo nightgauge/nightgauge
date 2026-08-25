@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -8,6 +9,7 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/forge"
+	forgetypes "github.com/nightgauge/nightgauge/internal/forge/types"
 )
 
 // The sweep's forge client used to be built as BuildRouter("", 0, "") — one
@@ -174,5 +176,154 @@ func TestSweepForgeClientUsesSharedBoardForUndeclaredRepo(t *testing.T) {
 	}
 	if len(*calls) != 1 || (*calls)[0][2].(int) != 3 {
 		t.Fatalf("expected one router on the shared board 3, got %v", *calls)
+	}
+}
+
+// --- #907: the cache's cross-repo sharing, pinned at the seam --------------
+//
+// #845's headline win is that several repos on ONE shared board collapse to a
+// single 34-point read per sweep. That guarantee does not live in the
+// boardcache package — those tests hand `Wrap` two boards in isolation and
+// never observe who HOLDS the cache. It lives in one declaration here: `boards`
+// sits in cachedSweepForgeClient's shared `var` block, so every repo's wrapped
+// client reads through the same *boardcache.Cache.
+//
+// Move that declaration inside the returned closure — a plausible-looking
+// "scope it tightly" cleanup — and the cache silently becomes per-repo. Every
+// shared-board workspace pays a full board read per repo again, and before
+// these tests the entire suite stayed green. That is the `decoration` /
+// `cannot-go-red` class in docs/FAILURE_TAXONOMY.md: a real mechanism whose
+// guarantee nothing enforces.
+//
+// TestSweepForgeClientCachesOneRouterPerBoard is NOT this test. A router and a
+// cache are two different objects with two different lifetimes, and only the
+// router's was asserted.
+
+// countingSweepBoard records how many times the board behind the cache was
+// actually read. It stands in for the forge adapter's BoardService, so a hit
+// here means real GraphQL points were spent.
+type countingSweepBoard struct {
+	listOpen int
+}
+
+func (b *countingSweepBoard) ListOpenItems(context.Context) ([]forgetypes.BoardItem, int, error) {
+	b.listOpen++
+	return nil, 0, nil
+}
+
+func (b *countingSweepBoard) ListItems(context.Context, string) ([]forgetypes.BoardItem, error) {
+	return nil, nil
+}
+
+func (b *countingSweepBoard) CountsByStatus(context.Context) (*forgetypes.StatusCounts, error) {
+	return nil, nil
+}
+
+func (b *countingSweepBoard) GetItem(context.Context, string, string, int) (*forgetypes.BoardItem, error) {
+	return nil, nil
+}
+
+// countingSweepClient is a ForgeClient whose only live service is the board.
+// Project() must return a typed nil rather than fall through to the embedded
+// nil interface: boardcache.WrapClient dereferences it (see
+// TestNilProjectStaysNil).
+type countingSweepClient struct {
+	forge.ForgeClient
+	board forge.BoardService
+}
+
+func (c *countingSweepClient) Board() forge.BoardService     { return c.board }
+func (c *countingSweepClient) Project() forge.ProjectService { return nil }
+
+// countingSweepBoards installs an adapter whose clients share ONE board per
+// (owner, project) — the physical reality the cache is meant to protect: two
+// repos on the same board are two clients in front of one GitHub project.
+// Returns the per-board counters so a test can assert reads, not resolutions.
+func countingSweepBoards(t *testing.T) map[int]*countingSweepBoard {
+	t.Helper()
+	const kind = forge.Kind("counting-board-907")
+	boards := map[int]*countingSweepBoard{}
+
+	forge.RegisterAdapter(kind, func(cfg forge.Config) (forge.ForgeClient, error) {
+		b := boards[cfg.ProjectNumber]
+		if b == nil {
+			b = &countingSweepBoard{}
+			boards[cfg.ProjectNumber] = b
+		}
+		return &countingSweepClient{board: b}, nil
+	})
+
+	prev := buildSweepRouter
+	t.Cleanup(func() { buildSweepRouter = prev })
+	buildSweepRouter = func(root, owner string, project int, ownerType string) (*forge.Router, error) {
+		r := forge.NewRouter()
+		r.Register(string(kind), forge.Config{Kind: kind, Owner: owner, ProjectNumber: project, OwnerType: ownerType})
+		r.SetDefault(string(kind))
+		return r, nil
+	}
+	return boards
+}
+
+func TestSweepForgeClientSharesOneBoardSnapshotAcrossRepos(t *testing.T) {
+	// Two siblings deliberately declare the SAME board as the primary: this is
+	// the shared-board workspace #845 was measured against.
+	root := writeSweepWorkspace(t, "acme", 3, map[string]int{"platform": 3, "flutter": 3})
+	cfg, err := config.Load(root)
+	if err != nil {
+		t.Fatalf("load primary config: %v", err)
+	}
+	boards := countingSweepBoards(t)
+
+	resolve := cachedSweepForgeClient(root, cfg)
+	for _, repo := range []string{"acme/primary", "acme/platform", "acme/flutter"} {
+		client, err := resolve(repo)
+		if err != nil {
+			t.Fatalf("resolve %s: %v", repo, err)
+		}
+		if _, _, err := client.Board().ListOpenItems(context.Background()); err != nil {
+			t.Fatalf("list open items for %s: %v", repo, err)
+		}
+	}
+
+	got := boards[3].listOpen
+	if got != 1 {
+		t.Fatalf("board 3 was read %d times across 3 repos that share it, want 1 — "+
+			"a per-repo cache costs a full 34-point read per repo and undoes #845 "+
+			"(check that `boards` is still declared in cachedSweepForgeClient's "+
+			"shared var block, not inside the returned closure)", got)
+	}
+}
+
+func TestSweepForgeClientDoesNotShareSnapshotsAcrossDistinctBoards(t *testing.T) {
+	// The counter-test to the one above: a cache that over-shares would satisfy
+	// "one read for three repos" by serving board 4's repo from board 3's
+	// snapshot — answering with another board's items, which is worse than
+	// paying for the read.
+	root := writeSweepWorkspace(t, "acme", 3, map[string]int{"platform": 4})
+	cfg, err := config.Load(root)
+	if err != nil {
+		t.Fatalf("load primary config: %v", err)
+	}
+	boards := countingSweepBoards(t)
+
+	resolve := cachedSweepForgeClient(root, cfg)
+	for _, repo := range []string{"acme/primary", "acme/platform"} {
+		client, err := resolve(repo)
+		if err != nil {
+			t.Fatalf("resolve %s: %v", repo, err)
+		}
+		if _, _, err := client.Board().ListOpenItems(context.Background()); err != nil {
+			t.Fatalf("list open items for %s: %v", repo, err)
+		}
+	}
+
+	for _, project := range []int{3, 4} {
+		b := boards[project]
+		if b == nil {
+			t.Fatalf("board %d was never read — a distinct board must be read on its own, not served from another board's snapshot", project)
+		}
+		if b.listOpen != 1 {
+			t.Errorf("board %d was read %d times, want exactly 1", project, b.listOpen)
+		}
 	}
 }
