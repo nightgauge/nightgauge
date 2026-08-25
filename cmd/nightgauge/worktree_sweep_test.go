@@ -526,3 +526,68 @@ func TestWorktreeSweep_SkippedRootsCarryTheirReason(t *testing.T) {
 		t.Errorf("a root that resolves to no main checkout was not reported as skipped: %+v\noutput:\n%s", decoded.SkippedRoots, out)
 	}
 }
+
+// TestWorktreeSweep_StrandedBranchCommandIsRepoQualified is a MULTI-ROOT test
+// on purpose (#920).
+//
+// The stranded-branch report printed `git branch -D <names>`, which acts on
+// whatever repository the operator is standing in. The sweep's default scope is
+// every root in the workspace, so that line is printed once per repo and is
+// correct for at most one of them. A real workspace run printed six blocks and
+// 26 branches; five of the six lines silently applied to the wrong repository.
+//
+// Under `--workdir` the defect is invisible — one block makes "run this here"
+// accidentally true — which is exactly how it shipped. So the pin has to
+// stand up two roots and check that each command names its OWN root.
+func TestWorktreeSweep_StrandedBranchCommandIsRepoQualified(t *testing.T) {
+	primary, wtPrimary := sweepRepo(t, 921)
+	sibling, wtSibling := sweepRepo(t, 922)
+
+	// Remove the worktrees so both branches are STRANDED: merged, and held by
+	// no worktree, which is the state that puts them outside the worktree
+	// pass's reach and into the branch report (#912).
+	for root, wt := range map[string]string{primary: wtPrimary, sibling: wtSibling} {
+		cmd := exec.Command("git", "worktree", "remove", wt)
+		cmd.Dir = root
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("worktree remove %s: %v: %s", wt, err, out)
+		}
+	}
+
+	if err := os.MkdirAll(filepath.Join(primary, ".vscode"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	manifest := "repositories:\n" +
+		"  - name: primary\n    path: .\n    project_number: 3\n" +
+		"  - name: sibling\n    path: " + sibling + "\n    project_number: 4\n"
+	if err := os.WriteFile(filepath.Join(primary, ".vscode", "nightgauge-workspace.yaml"),
+		[]byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Chdir(primary)
+	out, err := runWorktreeSweep(t, "--dry-run")
+	if err != nil {
+		t.Fatalf("sweep: %v (%s)", err, out)
+	}
+
+	// Each root's command must name that root. Asserting the pair together is
+	// what catches the bug: a bare `git branch -D` satisfies neither, and a
+	// command hard-coded to the invocation directory satisfies only the first.
+	for _, want := range []string{
+		"git -C " + primary + " branch -D fix/921-work",
+		"git -C " + sibling + " branch -D fix/922-work",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output does not carry a repo-qualified command:\n  want: %s\noutput:\n%s", want, out)
+		}
+	}
+
+	// And no bare form survives, which is the actual regression to prevent.
+	for _, line := range strings.Split(out, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "git branch -D") {
+			t.Errorf("a bare `git branch -D` is still printed and applies to the wrong repo from five of six blocks: %q", trimmed)
+		}
+	}
+}

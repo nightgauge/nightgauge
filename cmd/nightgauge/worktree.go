@@ -339,7 +339,19 @@ created for a run about to start), and any issue with a run in flight.`,
 						}
 						fmt.Fprintf(out, "                   %s (%s)\n", b.Name, tip)
 					}
-					fmt.Fprintf(out, "                   delete by hand once verified: git branch -D %s\n", strings.Join(names, " "))
+					// `git -C <root>`, not a bare `git branch -D` (#920). This
+					// command is printed once per repo and the sweep's default
+					// scope is EVERY root in the workspace, so a bare form is
+					// correct for at most one of the blocks — whichever repo
+					// the operator happens to be standing in. A real workspace
+					// run printed six blocks and 26 branches; five of the six
+					// lines silently applied to the wrong repository.
+					//
+					// The defect is invisible under --workdir, where one block
+					// makes "run this here" accidentally true, and that is how
+					// it shipped.
+					fmt.Fprintf(out, "                   delete by hand once verified:\n")
+					fmt.Fprintf(out, "                     git -C %s branch -D %s\n", res.RepoRoot, strings.Join(names, " "))
 				}
 				for _, e := range res.Errors {
 					fmt.Fprintf(errOut, "[WARN] worktree sweep: %s\n", e)
@@ -366,11 +378,11 @@ created for a run about to start), and any issue with a run in flight.`,
 // The door is LAZY — building it here issues no request. A root whose every
 // branch passes the content test never calls it and never pays.
 func mergedPRDoorFor(ctx context.Context, root string) execution.MergedPRLookup {
-	client, err := clientFromConfig()
-	if err != nil || client == nil {
-		return nil
-	}
-	lookup := gh.NewMergedPRLookupForRoot(ctx, client, root)
+	// clientFromConfig is passed as a FACTORY, not a built client: it can shell
+	// out to `gh auth token`, and a root whose origin is not a GitHub URL never
+	// needs it. NewMergedPRLookupForRoot resolves the slug first and only then
+	// asks for a client.
+	lookup := gh.NewMergedPRLookupForRoot(ctx, clientFromConfig, root)
 	if lookup == nil {
 		return nil
 	}

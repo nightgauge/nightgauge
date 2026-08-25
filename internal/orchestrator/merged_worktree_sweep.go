@@ -206,7 +206,7 @@ func (s *Scheduler) mergedPRDoor(repoRoot string) execution.MergedPRLookup {
 	if s == nil || s.client == nil {
 		return nil
 	}
-	lookup := gh.NewMergedPRLookupForRoot(context.Background(), s.client, repoRoot)
+	lookup := gh.NewMergedPRLookupForRoot(context.Background(), func() (*gh.Client, error) { return s.client, nil }, repoRoot)
 	if lookup == nil {
 		return nil
 	}
