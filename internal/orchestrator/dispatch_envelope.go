@@ -220,6 +220,30 @@ func wireThinkingUnderPolicy(model, policy string) string {
 	return thinking
 }
 
+// StageEnvelopeAttribution returns the thinking state and model-selection
+// mode to attribute to a stage, for callers OUTSIDE this package (#888).
+//
+// It exists because the two dispatch paths had drifted: the scheduler
+// recorded the whole #580 envelope, while the IPC notify handler — the path
+// the VSCode extension uses, which is to say the path that runs — recorded
+// only StageModel and StageAdapter. Every other envelope field was null on
+// every successful extension run, so the calibration corpus learned nothing
+// from the runs that worked.
+//
+// This is deliberately a thin wrapper over the SAME unexported resolvers the
+// scheduler calls, not a second derivation. A copy would drift again, and the
+// point of #888 is that it already had.
+//
+// Both values are best-effort in the way their resolvers document: thinking
+// is "" when the model declares no registry default, and the mode always
+// resolves (modelRoutingMode is total). Effort is deliberately NOT returned —
+// see resolveDispatchEffort: Go has first-party evidence of effort only for
+// the grok-family adapters, and guessing it here would put a registry default
+// into a field whose contract is "observed or absent".
+func StageEnvelopeAttribution(adapterName, model, workspaceRoot string) (thinking, selectionMode string) {
+	return resolveDispatchThinking(adapterName, model), resolveDispatchSelectionMode(workspaceRoot)
+}
+
 // resolveDispatchSelectionMode returns model_routing.mode (manual | automatic
 // | hybrid) active for this dispatch (Issue #580, resolves #462).
 // modelRoutingMode is total — it never errors and defaults to "automatic" —

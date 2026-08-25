@@ -52,6 +52,18 @@ export interface NotifyStageTransitionParams {
   model?: string;
   adapter?: string;
   /**
+   * The executor's RAW first-party report (#888), sent unfallen-back.
+   *
+   * `model` above is `servedModel ?? modelDecision.model` — correct for
+   * per-stage attribution, wrong for these, whose contract (#580) is
+   * "observed, or honestly absent". Sending the fallback here would
+   * manufacture an observation, so these carry only what the executor
+   * actually reported and are omitted when it reported nothing.
+   */
+  servedModel?: string;
+  servedEffort?: string;
+  servedThinking?: string;
+  /**
    * Advisory OS pid of the child executing this stage (ADR-017 §7.2).
    *
    * Present on exactly ONE `running` transition per stage attempt, and `0` on

@@ -42,6 +42,13 @@ remain available when telemetry is disabled.
    facts in documentation.
 4. Keep deterministic quality gates constant across routes.
 5. Require human review before evaluation results change repository policy.
+6. **Do not read an empty effort as a default.** Effort is not observable on
+   the `claude` adapter — nothing in the system reports what effort a claude
+   stage actually ran at, so `stageEfforts` / `stageServedEfforts` are empty
+   there by design rather than by omission. A comparison across efforts is
+   only meaningful on adapters that report one; elsewhere the configured value
+   is a request nobody confirmed. See
+   [OUTCOME_RECORDING.md](OUTCOME_RECORDING.md#effort-is-unverifiable-on-the-claude-adapter--read-the-empty-field-as-unknown).
 
 Use the CLI help and [CONFIGURATION.md](CONFIGURATION.md) for current commands
 and schema fields.
