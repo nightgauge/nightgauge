@@ -623,7 +623,7 @@ issue_references:
   # The highest number this repository has issued (issues and pull requests
   # share one sequence). Bump this as the repository grows; the guard tells you
   # when it must be bumped, so it cannot silently rot.
-  high_water_mark: 913
+  high_water_mark: 922
   # Numbers that may be issued while a pull request is open. Deliberately tight:
   # the whole point of #673 is that the margin between a dead reference and a
   # wrong live one is a handful of issue numbers, and a generous slack reopens
@@ -647,8 +647,12 @@ issue_references:
   # landed, and with high_water_mark already at 913: the two numbers interact,
   # since raising the mark resolves references that were counted here.
   # Re-measure AFTER bumping the mark, never before.
+  # 2026-08-25 (session 6): 6,144 — measured after bumping the mark to 922,
+  # which by itself resolved 31 references that 913 had left dangling. Same
+  # lesson as the line above, now with a number attached: the bump is not a
+  # separate chore from the re-measure, it is the first half of it.
   # NEVER raise this number. Lower it as the sweep progresses.
-  tree_baseline: 6175
+  tree_baseline: 6144
   allow_paths:
     # Files that DEFINE or TEST the rule must contain example violations.
     - ".github/publication-boundary.yaml"
