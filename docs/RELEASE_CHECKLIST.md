@@ -184,14 +184,38 @@ Two observations left unfiled, both judged cosmetic:
   report. Alarming on a first run, and the sweep's warning already says what
   happened.
 
+### Findings from the 2026-08-25 clean-profile pass (steps 3–4)
+
+Run against `main` @ `29879753`, packaged as `nightgauge-vscode-0.1.0.vsix`
+(28.87 MB, 1341 files; binary reports `0.2.0-rc.24-…-29879753`). Packaging and
+install were green again. Steps 3 and 4 were walked for the first time: an
+isolated profile pointed at a repository with no Nightgauge state, following
+the Marketplace README verbatim.
+
+Every finding is the predicted shape — the docs describe a path the product
+does not have — and none was visible to CI:
+
+| Finding                                                                                   | Issue                                                            |
+| ----------------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
+| README's first instruction is `nightgauge doctor`; a Marketplace install has no such binary | [#898](https://github.com/nightgauge/nightgauge/issues/898)      |
+| `nightgauge --version` errors with "unknown flag"; only the subcommand works               | [#899](https://github.com/nightgauge/nightgauge/issues/899)      |
+| In Restricted Mode the Nightgauge activity-bar icon does not exist; Quick Start never mentions workspace trust | [#900](https://github.com/nightgauge/nightgauge/issues/900) |
+| First activation warns "project config incomplete" on a repo that is not initialized yet    | [#901](https://github.com/nightgauge/nightgauge/issues/901)      |
+| **Initialize Repository** runs an interactive `claude` session with its own trust prompt; the README calls it a click that writes files | [#902](https://github.com/nightgauge/nightgauge/issues/902) |
+
+Workspace trust is worth calling out on its own: it is the first thing a new
+user hits, it removes the product from the window entirely, and the only
+on-screen explanation is VS Code's generic banner, which never names
+Nightgauge.
+
 ### Still not walked
 
-**Steps 3–5 above have not been executed end to end.** The pass that produced
-the findings covered packaging, install, and the first-run diagnostic surface;
-it stopped short of driving an issue to a merged PR as a fresh user. That
-remains the release gate, and no amount of green CI substitutes for it — every
-finding above came from running the packaged artifact, and none of them was
-visible to the test suite.
+**Step 5 has not been executed.** Steps 3–4 above were walked on 2026-08-25 and
+stopped at **Initialize Repository**, which hands control to an interactive
+agent session in a VS Code terminal. Driving one issue through to a merged PR
+as a fresh user remains the release gate, and no amount of green CI substitutes
+for it — every finding above came from running the packaged artifact, and none
+of them was visible to the test suite.
 
 ## What this checklist is not
 
