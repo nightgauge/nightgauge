@@ -35,7 +35,10 @@ before the pipeline can run a single stage. See
   default. Other adapters are available but less exercised; see
   [Settings](#settings).
 
-Run `nightgauge doctor --adapters all` at any point to check all three.
+Run **Nightgauge: Adapter Doctor** from the Command Palette at any point to
+check all three. (The `nightgauge` binary ships inside the extension and is
+not added to your `PATH`, so there is no shell command to run until you
+clone the repository.)
 
 ### Steps
 
@@ -45,14 +48,21 @@ Run `nightgauge doctor --adapters all` at any point to check all three.
    Command Palette. This connects a Nightgauge account for hosted features. It
    is **not** how the pipeline reaches GitHub — that is `gh auth login` above,
    or a token in `.nightgauge/config.yaml`.
-3. **Initialize the repo** — Open the Nightgauge sidebar in a repository
-   you want to automate. If it hasn't been set up yet, click **Initialize
-   Repository** in the welcome view — this writes
+3. **Trust the folder** — Open the repository you want to automate. VS Code
+   opens a folder it has not seen before in **Restricted Mode**, which
+   disables Nightgauge entirely: there is no Nightgauge icon in the activity
+   bar until you trust it. Click **Manage** in the Restricted Mode banner,
+   then **Trust**, and the icon appears.
+4. **Initialize the repo** — Open the Nightgauge sidebar and click
+   **Initialize Repository** in the welcome view. This starts your AI agent
+   (the `claude` CLI by default) in a VS Code terminal, so expect an
+   interactive session — the agent may ask its own questions, including its
+   own folder-trust prompt, before it does anything. It then writes
    `.nightgauge/config.yaml`, standard labels, and links your GitHub
    Project board. Nothing is written until you opt in.
-4. **Claim an issue** — Click **Nightgauge: Pick Up Issue** (or drag an
+5. **Claim an issue** — Click **Nightgauge: Pick Up Issue** (or drag an
    item out of the _Ready_ list) to start the pipeline on a GitHub issue.
-5. **Watch it run** — The pipeline moves through `issue-pickup` →
+6. **Watch it run** — The pipeline moves through `issue-pickup` →
    `feature-planning` → `feature-dev` → `feature-validate` → `pr-create` →
    `pr-merge` automatically, pausing only for your plan approval and a manual
    test confirmation. When it finishes, you have a reviewed, issue-linked
@@ -202,7 +212,7 @@ knowledge:
     stale_days: 30
 ```
 
-Identical data is available on the CLI:
+Identical data is available on the CLI, from a clone of this repository:
 
 ```bash
 nightgauge knowledge metrics --window 7 --stale-days 30 --json
@@ -426,15 +436,13 @@ notification if enabled.
 merging to detect failures, apply corrections, and keep the UI in sync.
 Auto-merge bypasses these mechanisms and causes stale pipeline state.
 
-**To disable via CLI:**
-
-```bash
-nightgauge repo disable-auto-merge --owner <org> --repo <repo>
-```
-
 **To disable via VSCode:** Open the Command Palette and run
 `Nightgauge: Disable Repository Auto-Merge`, or click "Disable Auto-Merge"
 in the warning notification that appears on workspace load.
+
+**To disable via CLI:** from a clone of this repository, run
+`nightgauge repo disable-auto-merge --owner <org> --repo <repo>`. The binary
+bundled with the extension is not on your `PATH`.
 
 ---
 
@@ -451,11 +459,8 @@ in the warning notification that appears on workspace load.
 macOS (Apple Silicon and Intel) and Linux x64 only — see
 [Installing](#installing).
 
-Verify all of it in one command:
-
-```bash
-nightgauge doctor --adapters all
-```
+Verify all of it from the Command Palette with **Nightgauge: Adapter
+Doctor**.
 
 ## License
 
