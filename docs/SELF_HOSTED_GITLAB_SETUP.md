@@ -253,7 +253,7 @@ deployments can skip this section.
 
 1. Sign in to GitLab as an administrator.
 2. Navigate to **Admin Area → Applications → Add new application**
-   ([GitLab OAuth provider](https://docs.gitlab.com/integration/oauth_provider/)).
+   ([GitLab 17.6 OAuth Applications](https://docs.gitlab.com/administration/auth/oauth_applications/)).
 3. Set the callback URL to:
    ```
    <nightgauge-binary-host>/auth/callback
@@ -745,5 +745,5 @@ GitLab version when filling in the boxes above._
 - Knowledge base for this issue: `.nightgauge/knowledge/features/3369-docs-self-hosted-gitlab-setup/`
 - Integration harness: [`tests/integration/docker-compose.gitlab.yml`](../tests/integration/docker-compose.gitlab.yml)
 - GitLab Omnibus: [docs.gitlab.com/omnibus](https://docs.gitlab.com/omnibus/)
-- GitLab OAuth provider: [docs.gitlab.com/integration/oauth_provider](https://docs.gitlab.com/integration/oauth_provider/)
+- GitLab 17.6 OAuth applications: [docs.gitlab.com/administration/auth/oauth_applications](https://docs.gitlab.com/administration/auth/oauth_applications/)
 - GitLab 17.6 webhooks: [docs.gitlab.com/user/project/integrations/webhooks](https://docs.gitlab.com/user/project/integrations/webhooks/)
