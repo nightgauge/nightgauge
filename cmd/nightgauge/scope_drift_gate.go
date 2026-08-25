@@ -355,7 +355,7 @@ type scopeDriftGateYAML struct {
 
 // loadScopeDriftGateConfigFromYAML reads pipeline.scope_drift_gate from the
 // YAML config, applying defaults for missing fields. Same convention as
-// loadSizeGateConfigFromYAML and loadBaselineGateConfigFromYAML.
+// loadSizeGateConfigFromYAML and baselineGate.LoadGateConfigFromYAML.
 func loadScopeDriftGateConfigFromYAML(configPath string) scopeDriftGate.GateConfig {
 	cfg := scopeDriftGate.DefaultGateConfig()
 

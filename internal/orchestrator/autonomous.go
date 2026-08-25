@@ -25,6 +25,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/execution"
 	"github.com/nightgauge/nightgauge/internal/focus"
 	gh "github.com/nightgauge/nightgauge/internal/github"
+	"github.com/nightgauge/nightgauge/internal/intelligence/baselineGate"
 	"github.com/nightgauge/nightgauge/internal/state"
 )
 
@@ -1003,6 +1004,23 @@ type AutonomousScheduler struct {
 	// pace it to epicRollupReconcileInterval instead of the cycle cadence.
 	// Zero means "never" — the first cycle sweeps. Protected by mu.
 	lastEpicRollupSweepAt time.Time
+
+	// baselineEvaluatorFn builds the CI-history evaluator for one repo, plus
+	// the branch its baseline is measured on and whether the gate is enabled
+	// there. Nil means no evaluator is available and sweepBaselineDeferrals
+	// no-ops; overridable in tests without a real GitHub client.
+	// See autonomous_baseline_sweep.go (#885).
+	baselineEvaluatorFn func(owner, repo string) (eval BaselinePromoteEvaluator, branch string, enabled bool, err error)
+
+	// baselineGreenThreshold is how many consecutive green runs the sweep
+	// requires before promoting, mirroring the CLI verb's
+	// pipeline.baseline_ci_gate.green_threshold.
+	baselineGreenThreshold int
+
+	// lastBaselineSweepAt is when sweepBaselineDeferrals last swept, used to
+	// pace it to baselineDeferralSweepInterval instead of the cycle cadence.
+	// Zero means "never" — the first cycle sweeps. Protected by mu.
+	lastBaselineSweepAt time.Time
 }
 
 // MaxConflictRestarts bounds the LEGACY fresh-branch conflict-restart path
@@ -1116,6 +1134,34 @@ func NewAutonomousScheduler(
 		epicSvc := gh.NewEpicService(ghClient)
 		as.reconcileBoardFn = func(ctx context.Context, owner string, projectNumber int, ownerType gh.OwnerType) (*gh.ReconcileResult, error) {
 			return epicSvc.ReconcileBoard(ctx, owner, projectNumber, ownerType)
+		}
+	}
+
+	// Wire the baseline-deferral promote sweep (#885). Wired HERE rather than
+	// by each caller on purpose: the daemon is constructed from two places
+	// (the CLI and the IPC server on the extension's behalf), and a sweep
+	// wired at one call site is a sweep the other silently does not have —
+	// which is the same dual-path drift that produced this issue's sibling
+	// defects. Tests override the field to drive the sweep without a client.
+	//
+	// The gate config is read per-repo from the workspace YAML through the
+	// SAME loader the CLI verb uses, so `enabled` and `green_threshold` mean
+	// one thing everywhere.
+	if ghClient != nil && workspaceRoot != "" {
+		ciSvc := gh.NewCIService(ghClient)
+		as.baselineEvaluatorFn = func(owner, repo string) (BaselinePromoteEvaluator, string, bool, error) {
+			cfg := baselineGate.LoadGateConfigFromYAML(
+				filepath.Join(workspaceRoot, ".nightgauge", "config.yaml"))
+			if !cfg.Enabled {
+				return nil, "", false, nil
+			}
+			as.mu.Lock()
+			as.baselineGreenThreshold = cfg.GreenThreshold
+			as.mu.Unlock()
+			// `main` matches the CLI verb's --branch default. The baseline a
+			// deferral was measured against is the default branch's, and
+			// nothing in the pause record names another.
+			return baselineGate.NewEvaluator(cfg, ciSvc), "main", true, nil
 		}
 	}
 
@@ -2566,6 +2612,18 @@ func (as *AutonomousScheduler) runCycle(ctx context.Context) {
 	// authority: a board-wide sweep is exactly the kind of call that must not
 	// run while the GraphQL bucket is known-low.
 	as.reconcileEpicRollup(ctx)
+
+	// 0b. (#885) Baseline-deferral promote sweep. Same placement argument as
+	// the rollup backstop above and for the same reasons: it dispatches
+	// nothing so it must not be conditional on free slots (a saturated fleet
+	// is exactly when a deferred item waits longest), it needs no graph, and
+	// it stays BELOW the quota gates because it makes forge calls.
+	//
+	// Paced internally to baselineDeferralSweepInterval, NOT to the cycle
+	// cadence. Its sibling `blocked_dependency` is resumed inline in the
+	// triage passes below because that decision is free and in-memory; this
+	// one asks GitHub about workflow history and cannot ride a 30s tick.
+	as.sweepBaselineDeferrals(ctx)
 
 	// 1. Gate on slot availability BEFORE building the graph.
 	// Building the graph costs GraphQL quota. When no effective slots remain
