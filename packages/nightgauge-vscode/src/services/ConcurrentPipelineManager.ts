@@ -951,7 +951,8 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
       // must be taken synchronously — `availableSlotCount` and `fillSlots`'
       // running set have to reflect intent-to-run before this function yields,
       // or a second pass beginning during the await under-counts same-repo
-      // concurrency and the per-repo cap is exceeded across passes (#3874).
+      // concurrency and the per-repo cap is exceeded across passes — the
+      // cross-pass race the reservation comment above names.
       // Composing above it reopens exactly that window, and widens the #307
       // force-clear race by a whole IPC round-trip.
       //
