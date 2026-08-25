@@ -29,6 +29,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/execution/adapters"
 	"github.com/nightgauge/nightgauge/internal/execution/codexprovision"
 	stagecontext "github.com/nightgauge/nightgauge/internal/execution/context"
+	"github.com/nightgauge/nightgauge/internal/forge"
 	"github.com/nightgauge/nightgauge/internal/git"
 	gh "github.com/nightgauge/nightgauge/internal/github"
 	changeClassifier "github.com/nightgauge/nightgauge/internal/intelligence/changeClassifier"
@@ -1937,19 +1938,48 @@ func (s *Scheduler) RunQueue(ctx context.Context) (QueueRunSummary, error) {
 
 		log.Printf("processing queue: #%d (%s)", entry.IssueNumber, entry.Repo)
 
-		items, err := s.boardSvc.ListItems(ctx, "")
+		// One board ITEM, not the whole board (#908). This used to page the
+		// entire project at first:100 — 17 points per page, 34 for this repo's
+		// board — and then discard 99% of it to find one row, once per queue
+		// entry. GetItem asks the same question with a server-side
+		// `owner/repo#N` filter in a single unpaginated page.
+		//
+		// The read stays INSIDE the loop on purpose: runPipeline executes a
+		// whole pipeline between iterations, so board state genuinely moves and
+		// hoisting it out would serve stale statuses. The waste was never the
+		// per-entry read, it was reading a whole board to answer a one-row
+		// question.
+		// The old scan matched on issue NUMBER ALONE, ignoring the repo
+		// entirely — on a shared board two repos with the same issue number
+		// collided and the first row won. GetItem filters on owner/repo#N, so
+		// the identity has to be resolved properly rather than guessed.
+		entryRepo := entry.Repo
+		if entryRepo == "" {
+			// An entry that names no repo at all is only dispatchable against
+			// the launch repo, which is what resolveRunRoot would root it at.
+			entryRepo = s.launchRepo
+		}
+		owner, repoName := splitOwnerRepo(entryRepo)
+		if owner == "" {
+			// A bare slug carries no owner; the scheduler's configured one is
+			// the only other answer available, and it is the owner the board
+			// itself is bound to.
+			owner = s.owner
+		}
+		item, err := s.boardSvc.GetItem(ctx, owner, repoName, entry.IssueNumber)
 		if err != nil {
+			// "Not on the board" and "I could not look" must never collapse
+			// into each other. Absence makes the caller skip the entry, which
+			// is the destructive answer — a transient forge failure reported as
+			// absence silently drops queued work.
+			if errors.Is(err, forge.ErrNotFound) {
+				log.Printf("queue: issue #%d not found on board", entry.IssueNumber)
+				record(entry, QueueOutcomeNotDispatched, "", "not found on project board")
+				continue
+			}
 			log.Printf("queue: failed to fetch board: %v", err)
 			record(entry, QueueOutcomeNotDispatched, "", fmt.Sprintf("board fetch failed: %v", err))
 			continue
-		}
-
-		var item *types.BoardItem
-		for _, bi := range items {
-			if bi.Number == entry.IssueNumber {
-				item = &bi
-				break
-			}
 		}
 		if item == nil {
 			log.Printf("queue: issue #%d not found on board", entry.IssueNumber)
