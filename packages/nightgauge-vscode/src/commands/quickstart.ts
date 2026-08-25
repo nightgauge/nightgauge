@@ -25,7 +25,10 @@ const DOCS_URL = "https://github.com/nightgauge/nightgauge#readme";
  * auto-shown once for this VSCode installation (Issue #4155). */
 const GETTING_STARTED_SHOWN_KEY = "nightgauge.gettingStarted.shown";
 
-export { isRepoInitialized } from "../utils/repoInitialized";
+// Imported (not just re-exported) because `refreshRepoInitializedContext`
+// below calls it: `export … from` creates no local binding.
+import { isRepoInitialized } from "../utils/repoInitialized";
+export { isRepoInitialized };
 
 /**
  * Updates the `nightgauge.repoInitialized` VSCode context key so welcome
