@@ -20,6 +20,7 @@ import type { IWorkItemProvider } from "./types/WorkItemProvider";
 import type { EpicInfo } from "../views/items/EpicGroupTreeItem";
 import { deriveComponentOptions } from "../types/FilterConfig";
 import { getPrefixedMainChannel } from "../utils/logger";
+import { isRepoInitialized } from "../utils/repoInitialized";
 
 // ---------------------------------------------------------------------------
 // Output channel
@@ -247,7 +248,12 @@ export class ProjectBoardService implements vscode.Disposable, IWorkItemProvider
       log(
         `Config loaded via IPC: owner=${this.owner}, repo=${this.repo}, project=${this.projectNumber}`
       );
-      // Surface missing config to the user — silent empty views are confusing
+      // Surface missing config to the user — silent empty views are confusing.
+      // But an uninitialized repo is not a misconfigured one: before
+      // `/nightgauge:repo-init` runs there is no config.yaml to be missing
+      // keys from, the welcome view is already on screen inviting the user to
+      // create it, and the README promises nothing is written until they opt
+      // in. Warning there contradicts all three (#901).
       if (!this.owner || !this.projectNumber) {
         const missing = [
           !this.owner ? "project.owner (or top-level owner)" : "",
@@ -255,14 +261,18 @@ export class ProjectBoardService implements vscode.Disposable, IWorkItemProvider
         ]
           .filter(Boolean)
           .join(", ");
+        const initialized = await isRepoInitialized(this.workspaceRoot);
         log(
-          `WARNING: Incomplete project config — missing: ${missing}. ` +
+          `${initialized ? "WARNING: Incomplete" : "Uninitialized repo — no"} project config` +
+            `${initialized ? ` — missing: ${missing}` : ""}. ` +
             "Board views will be empty. Run /nightgauge:repo-init to fix."
         );
-        vscode.window.showWarningMessage(
-          `Nightgauge: project config incomplete — missing ${missing}. ` +
-            "Issue views will be empty until config is fixed."
-        );
+        if (initialized) {
+          vscode.window.showWarningMessage(
+            `Nightgauge: project config incomplete — missing ${missing}. ` +
+              "Issue views will be empty until config is fixed."
+          );
+        }
       }
     } catch (err) {
       log(`Failed to load config via IPC: ${err}`);
