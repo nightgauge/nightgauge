@@ -242,7 +242,7 @@ export class QueuedIssueTreeItem extends BaseTreeItem {
         if (r.summary) {
           text += `Summary: ${r.summary}\n`;
         }
-        text += `\nThis item does **not** resume on its own. Once the baseline is green, run \`nightgauge baseline-gate promote\` in this workspace to release it.\n\n`;
+        text += `\nThe autonomous daemon re-checks this workflow and resumes the item once \`main\`'s baseline is green again. To release it immediately, run \`nightgauge baseline-gate promote\` in this workspace.\n\n`;
       } else if (r.kind === "blocked_dependency") {
         text += `Reason: blocked by open dependency\n`;
         for (const b of r.blockingIssues) {

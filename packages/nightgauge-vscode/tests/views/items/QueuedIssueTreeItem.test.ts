@@ -239,11 +239,18 @@ describe("QueuedIssueTreeItem", () => {
 
   /**
    * Issue #881 — the tooltip promised a `baseline-defer-sweep` cron that has
-   * never existed in `.github/workflows/`. Nothing resumes a baseline-CI
-   * deferred item, so the operator waits for an automation that is not coming.
-   * The tooltip must name the operator action instead.
+   * never existed in `.github/workflows/`, so the operator waited for an
+   * automation that was not coming. #881 replaced the promise with the truth
+   * at the time: the item does not resume, run the verb.
+   *
+   * Issue #885 then MADE it resume — the autonomous daemon now sweeps these
+   * items, which is where the trigger always had to live (the queue is local
+   * and gitignored, so a CI cron has no queue to promote). The tooltip must
+   * now say THAT, and must still not resurrect the cron: an automation that
+   * exists and an automation that never did are different claims, and the
+   * only wrong answer is a tooltip describing whichever one is not true today.
    */
-  describe("baseline-CI paused tooltip (Issue #881)", () => {
+  describe("baseline-CI paused tooltip (Issues #881, #885)", () => {
     const baselinePausedItem = () =>
       createMockQueueItem({
         issueNumber: 881,
@@ -267,12 +274,17 @@ describe("QueuedIssueTreeItem", () => {
       expect(tooltip).not.toMatch(/\bcron\b/i);
     });
 
-    it("names the operator action required to release the item", () => {
+    it("says the item resumes automatically, and still offers the manual verb", () => {
       const tooltip = (new QueuedIssueTreeItem(baselinePausedItem()).tooltip as any)
         .value as string;
 
+      // #885: the daemon sweeps and resumes it.
+      expect(tooltip).toMatch(/autonomous daemon/i);
+      expect(tooltip).toMatch(/resumes/i);
+      // The stale #881 claim must be gone — it is now false.
+      expect(tooltip).not.toMatch(/does \*\*not\*\* resume on its own/i);
+      // The verb still releases it immediately, and the operator should know.
       expect(tooltip).toContain("nightgauge baseline-gate promote");
-      expect(tooltip).toMatch(/does \*\*not\*\* resume on its own/i);
       // The evidence that made the deferral legible must survive the rewording.
       expect(tooltip).toContain("ci.yml");
       expect(tooltip).toContain("3/5 recent runs");
