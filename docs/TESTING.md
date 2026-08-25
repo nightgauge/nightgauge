@@ -649,6 +649,59 @@ behave differently under load.
 full suite. A green single-file run is not evidence about suite behaviour, and
 a green suite run on an unloaded machine is not evidence about CI.
 
+### A fake has no API limits, so some bugs only a live probe can find
+
+A test double answers every question you thought to ask it. The provider's real
+API also enforces limits you did **not** think to ask about, and those are the
+ones that ship.
+
+`github.ListMergedPRHeads` requested `first: 250` merged PRs, a number chosen by
+eye against a shell script's `--limit 500`. **GitHub caps a GraphQL connection
+page at 100 and rejects the query above it.** Every unit test passed — the fake
+`MergedPRHeadLister` had no page limit — and the feature shipped doing nothing
+at all.
+
+Two lessons, and the second is the sharper one.
+
+**Probe the real API once before believing a query.** A throwaway
+`gh api graphql` call against the live endpoint validates the query shape, the
+argument types, and the limits in seconds. Do it for any new query, and for any
+change to a `first:`/`per_page:` value. It also catches scalar-type mistakes the
+Go type system cannot: `shurcooL/graphql` derives a variable's declared GraphQL
+type from its Go type **name**, so passing a `graphql.String` where GitHub wants
+`GitObjectID!` compiles, reads correctly, and fails only against the server.
+
+**A number that must satisfy an external constraint gets its own test.** Not a
+behavioural test — an assertion about the constant:
+
+```go
+func TestMergedPRIndexSize_FitsOneGitHubPage(t *testing.T) {
+    if mergedPRIndexSize > maxGraphQLPageSize { … }
+}
+```
+
+Naming `maxGraphQLPageSize` turns a magic number into a stated constraint, and
+the test fails the moment someone raises the other one.
+
+### Fail-open is a behaviour; failing silently is a bug
+
+A supplementary check that degrades rather than failing the operation is usually
+right — a broken lookup should not take down a sweep. But "degrade" and "say
+nothing" are different decisions, and conflating them is how the `first: 250`
+bug survived its first run.
+
+The door swallowed its index error by design, so the symptom was not an error
+anywhere: every lookup answered _not found_, which is **indistinguishable from a
+repo that genuinely has no matches**. Nothing was red. The only evidence was in
+the API ledger — one request, and no follow-up call that a successful lookup
+would have made.
+
+If a code path answers "no" both when the answer is no and when it could not
+look, log the second case. Once per operation, at WARN, naming what degraded and
+what the caller loses by it. The same rule the `doctor` checks follow for
+_unverifiable_ — "I could not look" must never render as "there is nothing
+wrong" — applies inside the code, not only in what it prints.
+
 ### Mock Factories
 
 Mock factories are located in `tests/mocks/` and provide consistent test data:
