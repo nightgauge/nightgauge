@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 
 	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/execution"
@@ -256,6 +257,9 @@ created for a run about to start), and any issue with a run in flight.`,
 					DefaultBranch: defaultBranch,
 					ActiveIssues:  active.Issues,
 					DryRun:        dryRun,
+					// Report-only, and the only place an operator sees it
+					// without running `doctor` (#912).
+					ReportStrandedBranches: true,
 				})
 				if sweepErr != nil {
 					// Best-effort per root, like the autonomous sweep: one
@@ -306,6 +310,26 @@ created for a run about to start), and any issue with a run in flight.`,
 				}
 				for _, wt := range res.Skipped {
 					fmt.Fprintf(out, "  %-14s %s (%s)\n", "skipped", wt.Path, wt.Reason)
+				}
+				// Report-only and printed LAST, after the worktree verdicts, so
+				// nothing here reads as something the sweep did. The wording
+				// says what it is and hands the operator the command, because
+				// this tool deliberately will not run it (#912).
+				if sb := res.StrandedBranches; sb != nil && len(sb.Stranded) > 0 {
+					names := make([]string, 0, len(sb.Stranded))
+					for _, b := range sb.Stranded {
+						names = append(names, b.Name)
+					}
+					fmt.Fprintf(out, "  %-14s %d merged branch(es) no worktree holds, base %s (report only — not deleted):\n",
+						"stranded", len(sb.Stranded), sb.BaseRef)
+					for _, b := range sb.Stranded {
+						tip := b.Tip
+						if len(tip) > 8 {
+							tip = tip[:8]
+						}
+						fmt.Fprintf(out, "                   %s (%s)\n", b.Name, tip)
+					}
+					fmt.Fprintf(out, "                   delete by hand once verified: git branch -D %s\n", strings.Join(names, " "))
 				}
 				for _, e := range res.Errors {
 					fmt.Fprintf(errOut, "[WARN] worktree sweep: %s\n", e)

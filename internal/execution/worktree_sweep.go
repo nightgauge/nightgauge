@@ -129,6 +129,10 @@ type WorktreeSweepResult struct {
 	Skipped           []SkippedWorktree   `json:"skipped"`
 	Errors            []string            `json:"errors,omitempty"`
 	DryRun            bool                `json:"dryRun"`
+	// StrandedBranches is the REPORT-ONLY branch scan, present only when
+	// ReportStrandedBranches was set. Nothing here is ever deleted by the
+	// sweep — see stranded_branches.go for why that is permanent (#912).
+	StrandedBranches *StrandedBranchScan `json:"strandedBranches,omitempty"`
 }
 
 // WorktreeSweepOptions configures one reconcile pass.
@@ -158,6 +162,14 @@ type WorktreeSweepOptions struct {
 	// leave the branch unmerged. The git merge test stays pure; this is
 	// never called from mergedIntoBase.
 	MergedPRLookup MergedPRLookup
+	// ReportStrandedBranches additionally runs the report-only scan for merged
+	// branches that no worktree holds (#912), reusing the base ref this sweep
+	// has already fetched and resolved so the freshness is the sweep's.
+	//
+	// Opt-in rather than unconditional: it is pure local git, but the daemon's
+	// periodic sweep would compute it every cycle and discard it. Callers that
+	// SHOW the result set it — the CLI verb and `doctor`.
+	ReportStrandedBranches bool
 }
 
 // MergedPRLookup reports the head commit of a MERGED pull request for
@@ -235,6 +247,25 @@ func SweepMergedWorktrees(opts WorktreeSweepOptions) (WorktreeSweepResult, error
 		res.Reclaimed = append(res.Reclaimed, ReclaimedWorktree{
 			Path: wt.Path, Branch: wt.Branch, IssueNumber: num, Door: verdict.Door,
 		})
+	}
+
+	// AFTER the worktree pass, not before: a worktree reclaimed above has just
+	// had its branch deleted with it, and scanning first would report branches
+	// this very call was about to clean up.
+	if opts.ReportStrandedBranches {
+		scan, err := ScanStrandedBranches(StrandedBranchOptions{
+			RepoRoot:      opts.RepoRoot,
+			DefaultBranch: defaultBranch,
+			BaseRef:       baseRef,
+		})
+		if err != nil {
+			// Non-fatal like every other per-item failure here: a branch scan
+			// that could not run must not discard a completed worktree sweep.
+			log.Printf("[WARN] worktree sweep: stranded branch scan: %v", err)
+			res.Errors = append(res.Errors, err.Error())
+		} else {
+			res.StrandedBranches = &scan
+		}
 	}
 
 	return res, nil

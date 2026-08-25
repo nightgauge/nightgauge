@@ -1354,6 +1354,52 @@ single-parser rule above, not a leniency: it takes the last `issue-` in the base
 name and reads the digits after it, so `issue-42` and `nightgauge-issue-42` both
 resolve to 42.
 
+#### Stranded Merged Branches (Issue #912)
+
+The sweep above deletes a merged branch only as a **side-effect of reclaiming
+the worktree that held it**: it drives entirely off
+`git worktree list --porcelain`, so a merged branch whose worktree is _already
+gone_ is out of its reach permanently. Nothing else enumerated branches, and
+`doctor` had arms for worktrees and stashes and none for branches.
+
+On 2026-08-25 three squash-merged branches sat in the core repo, each confirmed
+SAFE-DELETE by `scripts/branch-merged-check.sh`, while `worktree sweep
+--dry-run` reported "no reclaimable worktrees" and `doctor` reported
+`healthy`. A workspace-wide scan then found **12 across four repos**. The
+asymmetry that produces them is the tell: the same session merged three PRs
+identically, and the one worktree left in place was reclaimed completely —
+worktree _and_ branch — while the two whose worktrees a human removed first
+stranded their branches. **Removing a worktree by hand strands its branch**,
+because the reclaimer keys off the worktree.
+
+`execution.ScanStrandedBranches` enumerates local branches, drops those a
+worktree still holds and the default branch, and classifies the rest with
+`mergedIntoBase` — the same **content diff** the worktree pass uses, never
+ancestry, which is a false negative for every squash merge. Surfaced in two
+places:
+
+- `nightgauge worktree sweep` prints a `stranded` block after the worktree
+  verdicts (`WorktreeSweepOptions.ReportStrandedBranches`, opt-in so the
+  daemon's periodic sweep does not compute a report nobody reads).
+- `doctor`'s `stranded_branches` arm, so the condition is visible without
+  running a sweep.
+
+**Report-only, permanently — this is a design decision, not an unfinished
+one.** Whether a branch is "pipeline-managed" is decided by the worktree
+_directory_ name (`issue-NNN`, see `IssueNumberFromWorktreeDir`) and never by
+the branch name, so at exactly the moment this scan applies the worktree is
+gone and the provenance signal with it. A deleting version could not tell a
+pipeline branch from a developer's, and merged-ness does not rescue it: a
+developer may keep a merged branch on purpose. Giving branches a real
+provenance marker is a separate design change. Until then the product names
+the condition and the human runs the delete.
+
+Every keep is pinned by a test, because the cost of a false positive here is a
+human deleting real work on the report's say-so: unmerged content, unpushed
+work, a branch with no commits of its own, one a live worktree holds, and the
+default branch are each kept for a named reason, and an unreadable root reports
+**unverifiable** rather than clean.
+
 ### Stash Reclamation (Issue #330)
 
 Same two-half shape as worktree reclamation, for the same reason. A stage that
@@ -3786,6 +3832,7 @@ Plus the leaked-machine-state checks (#330 / #332 / #341), all **warning-only**:
 | Check key            | What it verifies                                                    |
 | -------------------- | ------------------------------------------------------------------- |
 | `worktree_leaks`     | Registered pipeline worktrees older than 24h that `sweep` cannot reclaim, with repo, age, skip reason, and the paths that blocked them |
+| `stranded_branches`  | Local branches whose content is already in `origin/<default>` and that **no worktree holds**, per repo — report only, nothing is deleted |
 | `pipeline_stashes`   | Stashes carrying the `nightgauge:` marker that were never reclaimed, per repo, with age |
 | `orphaned_processes` | Running `nightgauge` processes older than 1h that no live sidecar claims, with PID, age, and argv |
 

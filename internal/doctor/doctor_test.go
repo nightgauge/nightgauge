@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 
@@ -561,4 +562,28 @@ func TestRunDoctor_UsableAdapterAddsNoWarning(t *testing.T) {
 			t.Errorf("a usable adapter must add no adapter warning, got %q", w)
 		}
 	}
+}
+
+// TestRunDoctor_EmitsStrandedBranchesArm pins the wiring, not the classifier
+// (#912). checkStrandedBranches has its own tests in leaked_state_test.go and
+// every one of them passes while nothing in RunDoctor calls it — which is
+// precisely the leak the arm exists to close, one level up. Asserted on
+// presence rather than verdict: the row's OK depends on the machine the test
+// runs on, its existence does not.
+func TestRunDoctor_EmitsStrandedBranchesArm(t *testing.T) {
+	ctx := context.Background()
+	result := RunDoctor(ctx, nil, nil, nil)
+
+	if _, ok := result.Checks["stranded_branches"]; !ok {
+		t.Fatalf("stranded_branches missing from doctor's checks; got %v", checkKeys(result))
+	}
+}
+
+func checkKeys(r DoctorResult) []string {
+	keys := make([]string, 0, len(r.Checks))
+	for k := range r.Checks {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
