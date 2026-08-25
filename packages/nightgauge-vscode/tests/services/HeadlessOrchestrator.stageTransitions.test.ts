@@ -107,7 +107,12 @@ function createMockStateService(): PipelineStateService {
 }
 
 /** Helper: mock runStageSkillHeadless to resolve with success */
-function mockSkillSuccess(attribution?: { servedModel?: string; adapter?: string }) {
+function mockSkillSuccess(attribution?: {
+  servedModel?: string;
+  adapter?: string;
+  servedEffort?: string;
+  servedThinking?: string;
+}) {
   vi.mocked(runStageSkillHeadless).mockImplementation((_stage, _issueNumber, callbacks) => {
     Promise.resolve().then(() => {
       void callbacks?.onComplete?.({
@@ -116,6 +121,9 @@ function mockSkillSuccess(attribution?: { servedModel?: string; adapter?: string
         // #268: served-model + adapter attribution the orchestrator threads into
         // completeStage. Absent by default so tests that don't care are unchanged.
         servedModel: attribution?.servedModel,
+        // #888: the rest of the served envelope, threaded the same way.
+        servedEffort: attribution?.servedEffort,
+        servedThinking: attribution?.servedThinking,
         adapterDecision: attribution?.adapter
           ? ({ adapter: attribution.adapter, source: "test" } as any)
           : undefined,
@@ -225,16 +233,28 @@ describe("HeadlessOrchestrator stage transitions (Issue #2499)", () => {
   it("calls completeStage on state service when stage succeeds, threading served model + adapter (#268)", async () => {
     const mockState = createMockStateService();
     const orchestrator = new HeadlessOrchestrator(mockState, mockLogger);
-    mockSkillSuccess({ servedModel: "claude-opus-4-8", adapter: "claude" });
+    mockSkillSuccess({
+      servedModel: "claude-opus-4-8",
+      adapter: "claude",
+      servedEffort: "medium",
+      servedThinking: "on",
+    });
 
     await orchestrator.runStage("feature-dev", 42);
 
     // #268: the served model + executing adapter must be forwarded so the Go
     // notify handler attributes the stage (by-model cost breakdown + Adapter
     // Mix donut). Before the fix completeStage was called with the stage alone.
+    //
+    // #888: the rest of the served envelope rides the same call. `model` is
+    // the request-or-served fallback; `servedModel` is the RAW observation,
+    // and both are asserted because collapsing them is the defect #888 fixed.
     expect(mockState.completeStage).toHaveBeenCalledWith("feature-dev", {
       model: "claude-opus-4-8",
       adapter: "claude",
+      servedModel: "claude-opus-4-8",
+      servedEffort: "medium",
+      servedThinking: "on",
     });
   });
 

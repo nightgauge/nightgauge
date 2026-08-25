@@ -860,6 +860,13 @@ export function registerRunStageCommand(
                 await pipelineStateService.completeStage(stage, {
                   model: result.servedModel ?? result.modelDecision?.model,
                   adapter: result.adapterDecision?.adapter,
+                  // The raw served envelope (#888) — NOT fallen back to the requested
+                  // values the way `model` above is. Undefined means the executor
+                  // reported nothing, and Go records that as absent rather than
+                  // inventing an observation.
+                  servedModel: result.servedModel,
+                  servedEffort: result.servedEffort,
+                  servedThinking: result.servedThinking,
                 });
               } catch (err) {
                 logger.warn("Failed to mark stage complete in state service", {
