@@ -5,13 +5,11 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"time"
 
 	gh "github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/internal/intelligence/baselineGate"
 	"github.com/nightgauge/nightgauge/internal/orchestrator"
 	"github.com/spf13/cobra"
-	"gopkg.in/yaml.v3"
 )
 
 // baselineGateCmd is the top-level "baseline-gate" command. It exposes two
@@ -60,7 +58,7 @@ func baselineGateCheckCmd() *cobra.Command {
 				return fmt.Errorf("--issue must be a positive integer")
 			}
 
-			cfg := loadBaselineGateConfigFromYAML(configPath)
+			cfg := baselineGate.LoadGateConfigFromYAML(configPath)
 			if !cfg.Enabled {
 				if outputJSON {
 					return printJSON(checkJSONResult{
@@ -152,7 +150,7 @@ func baselineGatePromoteCmd() *cobra.Command {
 		Short:        "Promote deferred queue items back to the queue when baseline is green",
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg := loadBaselineGateConfigFromYAML(configPath)
+			cfg := baselineGate.LoadGateConfigFromYAML(configPath)
 
 			ownerPart, repoPart := splitRepo(owner, repo)
 			sched, err := getQueueScheduler(ownerPart, 0)
@@ -160,65 +158,27 @@ func baselineGatePromoteCmd() *cobra.Command {
 				return fmt.Errorf("init scheduler: %w", err)
 			}
 
-			items := sched.ListPausedByKind("baseline_ci_red")
-			summary := promoteSummary{
-				Owner:       ownerPart,
-				Repo:        repoPart,
-				Branch:      branch,
-				Total:       len(items),
-				Promoted:    []promoteEntry{},
-				StillPaused: []promoteEntry{},
-				Errors:      []promoteEntry{},
-				EvaluatedAt: time.Now().UTC().Format(time.RFC3339),
+			// A disabled gate still reports, and must do so WITHOUT building a
+			// forge client — the sweep is a no-op and paying for auth to say
+			// so would be the wrong shape. PromoteBaselineDeferrals returns
+			// the disabled summary before touching the evaluator, so a nil one
+			// is safe on that path.
+			var eval orchestrator.BaselinePromoteEvaluator
+			if cfg.Enabled {
+				client, cerr := clientFromConfig()
+				if cerr != nil {
+					return fmt.Errorf("create GitHub client: %w", cerr)
+				}
+				eval = baselineGate.NewEvaluator(cfg, gh.NewCIService(client))
 			}
 
-			if !cfg.Enabled {
-				summary.Disabled = true
-				if outputJSON {
-					return printJSON(summary)
-				}
-				fmt.Println("Baseline gate: DISABLED — skipping promote sweep")
-				return nil
-			}
-
-			client, err := clientFromConfig()
-			if err != nil {
-				return fmt.Errorf("create GitHub client: %w", err)
-			}
-			runner := gh.NewCIService(client)
-			eval := baselineGate.NewEvaluator(cfg, runner)
-
-			for _, item := range items {
-				if item.PausedReason == nil || item.PausedReason.Workflow == "" {
-					continue
-				}
-				green, runIDs, err := eval.IsLastNGreen(cmd.Context(),
-					ownerPart, repoPart,
-					item.PausedReason.Workflow, branch, item.PausedReason.Job,
-					cfg.GreenThreshold)
-
-				entry := promoteEntry{
-					IssueNumber: item.IssueNumber,
-					Workflow:    item.PausedReason.Workflow,
-					Job:         item.PausedReason.Job,
-					RunIDs:      runIDs,
-				}
-				if err != nil {
-					entry.Error = err.Error()
-					summary.Errors = append(summary.Errors, entry)
-					continue
-				}
-				if !green {
-					summary.StillPaused = append(summary.StillPaused, entry)
-					continue
-				}
-				if sched.ResumeByIssueNumber(item.IssueNumber) {
-					summary.Promoted = append(summary.Promoted, entry)
-				} else {
-					entry.Error = "resume failed: queue entry not found or already resumed"
-					summary.Errors = append(summary.Errors, entry)
-				}
-			}
+			// THE sweep lives in internal/orchestrator (#885) so this verb and
+			// the autonomous daemon share one implementation. This function is
+			// now only argument marshalling and rendering.
+			summary := orchestrator.PromoteBaselineDeferrals(
+				cmd.Context(), sched, eval,
+				ownerPart, repoPart, branch,
+				cfg.GreenThreshold, cfg.Enabled)
 
 			if outputJSON {
 				return printJSON(summary)
@@ -282,28 +242,6 @@ type checkJSONResult struct {
 	TriggerText string  `json:"trigger_text,omitempty"`
 }
 
-// promoteSummary is the JSON shape for `baseline-gate promote --json`.
-type promoteSummary struct {
-	Owner       string         `json:"owner"`
-	Repo        string         `json:"repo"`
-	Branch      string         `json:"branch"`
-	Total       int            `json:"total"`
-	Promoted    []promoteEntry `json:"promoted"`
-	StillPaused []promoteEntry `json:"still_paused"`
-	Errors      []promoteEntry `json:"errors"`
-	Disabled    bool           `json:"disabled,omitempty"`
-	EvaluatedAt string         `json:"evaluated_at"`
-}
-
-// promoteEntry is one row in a promoteSummary list.
-type promoteEntry struct {
-	IssueNumber int     `json:"issue_number"`
-	Workflow    string  `json:"workflow,omitempty"`
-	Job         string  `json:"job,omitempty"`
-	RunIDs      []int64 `json:"run_ids,omitempty"`
-	Error       string  `json:"error,omitempty"`
-}
-
 func renderCheckHuman(res *baselineGate.GateResult, issueNum int) {
 	switch res.Decision {
 	case baselineGate.DecisionAllow:
@@ -325,7 +263,7 @@ func renderCheckHuman(res *baselineGate.GateResult, issueNum int) {
 	}
 }
 
-func renderPromoteHuman(s promoteSummary) {
+func renderPromoteHuman(s orchestrator.BaselinePromoteSummary) {
 	fmt.Printf("Baseline-defer promote sweep — %s/%s @%s\n", s.Owner, s.Repo, s.Branch)
 	fmt.Printf("  Total deferred:  %d\n", s.Total)
 	fmt.Printf("  Promoted:        %d\n", len(s.Promoted))
@@ -337,49 +275,6 @@ func renderPromoteHuman(s promoteSummary) {
 	for _, p := range s.Errors {
 		fmt.Printf("  ✗ #%d: %s\n", p.IssueNumber, p.Error)
 	}
-}
-
-// baselineGateYAML is the YAML shape for the pipeline.baseline_ci_gate config
-// section. Same convention as `loadSizeGateConfigFromYAML`.
-type baselineGateYAML struct {
-	Pipeline struct {
-		BaselineCIGate struct {
-			Enabled        *bool `yaml:"enabled"`
-			LookbackRuns   *int  `yaml:"lookback_runs"`
-			RedThreshold   *int  `yaml:"red_threshold"`
-			GreenThreshold *int  `yaml:"green_threshold"`
-		} `yaml:"baseline_ci_gate"`
-	} `yaml:"pipeline"`
-}
-
-// loadBaselineGateConfigFromYAML reads pipeline.baseline_ci_gate from the
-// YAML config file, applying defaults for missing fields. When the file is
-// absent, defaults are used; the gate is never disabled by a missing config.
-func loadBaselineGateConfigFromYAML(configPath string) baselineGate.GateConfig {
-	cfg := baselineGate.DefaultGateConfig()
-
-	data, err := os.ReadFile(configPath)
-	if err != nil {
-		return cfg
-	}
-	var y baselineGateYAML
-	if err := yaml.Unmarshal(data, &y); err != nil {
-		return cfg
-	}
-	bg := y.Pipeline.BaselineCIGate
-	if bg.Enabled != nil {
-		cfg.Enabled = *bg.Enabled
-	}
-	if bg.LookbackRuns != nil {
-		cfg.LookbackRuns = *bg.LookbackRuns
-	}
-	if bg.RedThreshold != nil {
-		cfg.RedThreshold = *bg.RedThreshold
-	}
-	if bg.GreenThreshold != nil {
-		cfg.GreenThreshold = *bg.GreenThreshold
-	}
-	return cfg
 }
 
 // ensure json package is referenced (used elsewhere in the binary; keep

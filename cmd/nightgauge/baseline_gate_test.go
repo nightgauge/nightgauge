@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/nightgauge/nightgauge/internal/intelligence/baselineGate"
+	"github.com/nightgauge/nightgauge/internal/orchestrator"
 )
 
 func TestBaselineGateCmd_HasCheckAndPromote(t *testing.T) {
@@ -26,7 +27,7 @@ func TestBaselineGateCmd_HasCheckAndPromote(t *testing.T) {
 }
 
 func TestLoadBaselineGateConfig_Defaults(t *testing.T) {
-	cfg := loadBaselineGateConfigFromYAML("/non/existent/path")
+	cfg := baselineGate.LoadGateConfigFromYAML("/non/existent/path")
 	defaults := baselineGate.DefaultGateConfig()
 	if cfg != defaults {
 		t.Errorf("missing config: got %+v, want %+v", cfg, defaults)
@@ -46,7 +47,7 @@ func TestLoadBaselineGateConfig_Overrides(t *testing.T) {
 	if err := os.WriteFile(path, []byte(body), 0644); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
-	cfg := loadBaselineGateConfigFromYAML(path)
+	cfg := baselineGate.LoadGateConfigFromYAML(path)
 	if cfg.Enabled != false {
 		t.Errorf("Enabled = %v, want false", cfg.Enabled)
 	}
@@ -68,7 +69,7 @@ func TestLoadBaselineGateConfig_PartialKeepsDefaults(t *testing.T) {
 	if err := os.WriteFile(path, []byte("pipeline:\n  baseline_ci_gate:\n    lookback_runs: 10\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	cfg := loadBaselineGateConfigFromYAML(path)
+	cfg := baselineGate.LoadGateConfigFromYAML(path)
 	if cfg.LookbackRuns != 10 {
 		t.Errorf("LookbackRuns = %d, want 10", cfg.LookbackRuns)
 	}
@@ -86,7 +87,7 @@ func TestLoadBaselineGateConfig_MalformedFallsBackToDefaults(t *testing.T) {
 	if err := os.WriteFile(path, []byte("not: yaml: at all: ::: garbage"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	cfg := loadBaselineGateConfigFromYAML(path)
+	cfg := baselineGate.LoadGateConfigFromYAML(path)
 	if cfg != baselineGate.DefaultGateConfig() {
 		t.Errorf("malformed YAML did not fall back to defaults: %+v", cfg)
 	}
@@ -99,10 +100,10 @@ func TestRenderCheckHuman_DoesNotPanic(t *testing.T) {
 }
 
 func TestRenderPromoteHuman_DoesNotPanic(t *testing.T) {
-	renderPromoteHuman(promoteSummary{
+	renderPromoteHuman(orchestrator.BaselinePromoteSummary{
 		Owner: "o", Repo: "r", Branch: "main", Total: 2,
-		Promoted:    []promoteEntry{{IssueNumber: 1, Workflow: "ci.yml"}},
-		StillPaused: []promoteEntry{{IssueNumber: 2, Workflow: "ci.yml"}},
-		Errors:      []promoteEntry{{IssueNumber: 3, Error: "boom"}},
+		Promoted:    []orchestrator.BaselinePromoteEntry{{IssueNumber: 1, Workflow: "ci.yml"}},
+		StillPaused: []orchestrator.BaselinePromoteEntry{{IssueNumber: 2, Workflow: "ci.yml"}},
+		Errors:      []orchestrator.BaselinePromoteEntry{{IssueNumber: 3, Error: "boom"}},
 	})
 }

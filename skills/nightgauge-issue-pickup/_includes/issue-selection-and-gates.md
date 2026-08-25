@@ -256,12 +256,17 @@ When the gate decides to defer:
 - `signal=deferred` is printed to stdout so the orchestrator short-circuits
   remaining stages, mirroring the AC reconciliation `signal=verify-and-close`
   pattern from feature-planning.
-- Resuming is an **operator action**, not an automation. Running
-  `nightgauge baseline-gate promote` re-evaluates every paused-baseline-CI item
-  and resumes those whose last `green_threshold` (default 2) consecutive runs on
-  `main` are all `success`. Nothing invokes it on a schedule — the queue is local
-  state (`.nightgauge/pipeline/queue-state.json`, gitignored), so no CI job can
-  reach it.
+- Resuming is **automatic**, and the trigger is local. The autonomous daemon
+  sweeps paused-baseline-CI items on its own cycle and resumes those whose last
+  `green_threshold` (default 2) consecutive runs on `main` are all `success` —
+  the same evaluation `nightgauge baseline-gate promote` performs, sharing one
+  implementation rather than a copy (#885). The verb still exists and releases
+  an item immediately.
+
+  The trigger has to live in the daemon: the queue is local state
+  (`.nightgauge/pipeline/queue-state.json`, gitignored), so no CI job can reach
+  it, and anything a runner wrote would die with the runner. A scheduled
+  workflow was documented for this once and never existed (#881).
 
 When the gate cannot extract a workflow path from the AC text (decision
 `unparseable`), exit code is 0 and dispatch proceeds — best-effort design per

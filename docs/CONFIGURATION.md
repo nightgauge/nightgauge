@@ -2228,14 +2228,22 @@ Defers dispatch of issues whose acceptance criteria require promoting a CI
 check on `main` when `main`'s recent runs of that check are failing. Runs in
 `issue-pickup` Phase 2.8 (after the size gate).
 
-**A deferred item does not resume on its own.** Releasing it is an operator
-action — run `nightgauge baseline-gate promote` in the workspace, which
-re-evaluates every item paused with `kind=baseline_ci_red` and resumes those
-whose last `green_threshold` runs on `main` are all `success`. This cannot be a
-CI cron: the queue lives at `<repo>/.nightgauge/pipeline/queue-state.json` on
-the operator's machine and is gitignored, so a GitHub Actions runner has no
-queue to promote. If auto-resume is wanted, its home is the local autonomous
-daemon's sweep loop — where the `blocked_dependency` promote already runs.
+**A deferred item resumes on its own.** The local autonomous daemon sweeps
+items paused with `kind=baseline_ci_red` every 5 minutes and resumes those
+whose last `green_threshold` runs on `main` are all `success` (#885). Running
+`nightgauge baseline-gate promote` performs the same evaluation on demand and
+releases matching items immediately; both callers share one implementation
+(`orchestrator.PromoteBaselineDeferrals`) rather than a copy each.
+
+**The trigger cannot be a CI cron**, which is why it lives in the daemon: the
+queue is at `<repo>/.nightgauge/pipeline/queue-state.json` on the operator's
+machine and is gitignored, so a GitHub Actions runner has no queue to promote
+and anything it wrote would die with the runner. A
+`baseline-defer-sweep.yml` workflow was documented for this for some time and
+never existed (#881).
+
+The sweep runs only while the autonomous daemon is running. With the daemon
+stopped, the CLI verb remains the way to release a deferred item.
 
 ```yaml
 pipeline:
