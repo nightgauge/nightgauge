@@ -598,3 +598,87 @@ func CheckWorkspaceProjectMapping(cfg *Config, startDir string) ([]string, error
 	}
 	return report.Problems(), nil
 }
+
+// WorkspaceRepoPaths maps every repo this workspace knows about, keyed by its
+// "owner/repo" slug, to that repo's checkout root.
+//
+// It is the CLI analogue of the IPC ClientResolver's registry (#882). The
+// daemon is handed its repo set at startup by registerWorkspaceReposInResolver
+// and answers RepoPath from it; a CLI invocation has only the launch root and
+// must discover the same set, or a cross-repo run has no way to name the target
+// repo's filesystem root and roots everything — worktree, pipeline state, epic
+// branch — at the launch repo instead.
+//
+// Three sources, deliberately the union of what the daemon and the sweeps
+// already use, so CLI and daemon see the same workspace:
+//
+//   - the launch root itself,
+//   - every repositories[].path in .vscode/nightgauge-workspace.yaml,
+//   - every sibling directory of the launch root carrying
+//     .nightgauge/config.yaml (mirrors detectSiblingRepos / the daemon's
+//     registerWorkspaceReposInResolver).
+//
+// A directory only contributes an entry when its own config names BOTH an owner
+// and a repo: an entry keyed by a half-known slug would be worse than absent,
+// because absent is what makes the scheduler refuse rather than guess.
+//
+// The launch root wins any collision — it is the one root the caller can be
+// certain about.
+func WorkspaceRepoPaths(launchRoot string) map[string]string {
+	paths := map[string]string{}
+
+	add := func(root string, allowOverwrite bool) {
+		if root == "" {
+			return
+		}
+		abs, err := filepath.Abs(root)
+		if err != nil {
+			return
+		}
+		abs = filepath.Clean(abs)
+		cfg, loadErr := Load(abs)
+		if loadErr != nil || cfg == nil || cfg.Owner == "" || cfg.DefaultRepo == "" {
+			return
+		}
+		slug := cfg.Owner + "/" + cfg.DefaultRepo
+		if _, exists := paths[slug]; exists && !allowOverwrite {
+			return
+		}
+		paths[slug] = abs
+	}
+
+	// Manifest siblings first, then filesystem siblings, then the launch root
+	// last with overwrite rights.
+	if wsRoot, err := workspace.DetectWorkspaceRoot(launchRoot); err == nil {
+		if manifest, mErr := readWorkspaceManifest(wsRoot); mErr == nil {
+			for _, r := range manifest {
+				if r.Path == "" {
+					continue
+				}
+				if filepath.IsAbs(r.Path) {
+					add(r.Path, false)
+					continue
+				}
+				add(filepath.Join(wsRoot, r.Path), false)
+			}
+		}
+	}
+
+	if entries, err := os.ReadDir(filepath.Dir(launchRoot)); err == nil {
+		parent := filepath.Dir(launchRoot)
+		for _, entry := range entries {
+			if !entry.IsDir() {
+				continue
+			}
+			repoRoot := filepath.Join(parent, entry.Name())
+			if _, statErr := os.Stat(filepath.Join(repoRoot, ".nightgauge", "config.yaml")); statErr != nil {
+				continue
+			}
+			add(repoRoot, false)
+		}
+	}
+
+	add(launchRoot, true)
+
+	return paths
+}

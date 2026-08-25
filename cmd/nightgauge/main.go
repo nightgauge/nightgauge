@@ -3777,6 +3777,10 @@ func runCmd() *cobra.Command {
 				RuntimeConfig:   runCfg,
 			})
 
+			// Root a cross-repo run at its TARGET repo, and refuse the run when
+			// that repo cannot be resolved (#882).
+			sched.WithWorkspaceRepoRegistry(cwd)
+
 			// Identity preflight gate (#4068): assert the resolved per-repo
 			// identity has push before dispatch. Skips when no github_user is
 			// configured (nil checker = gate disabled).
@@ -3901,6 +3905,11 @@ func getQueueScheduler(owner string, projectNumber int) (*orchestrator.Scheduler
 		ExcludeLabels:            excludeLabels,
 		RuntimeConfig:            runtimeCfg,
 	})
+	// Root a cross-repo run at its TARGET repo, and refuse the run when that
+	// repo cannot be resolved (#882). `queue add --repo <other/repo>` is the
+	// documented way to queue cross-repo work, so this is the path that needs
+	// it most.
+	queueScheduler.WithWorkspaceRepoRegistry(cwd)
 	// Identity preflight gate (#4068): skips when no github_user is configured.
 	wireIdentityChecker(queueScheduler, cwd)
 	return queueScheduler, nil
@@ -8760,34 +8769,24 @@ func registerWorkspaceReposInResolver(server *ipc.Server, workspaceRoot string, 
 		return
 	}
 
-	// Primary repo (the current workspace root).
+	// Primary repo (the current workspace root). Registered from the already
+	// loaded config so a root whose config the discovery below cannot re-read
+	// is still registered.
 	if primaryCfg != nil && primaryCfg.Owner != "" && primaryCfg.DefaultRepo != "" {
 		server.RegisterRepo(primaryCfg.Owner, primaryCfg.DefaultRepo, workspaceRoot)
 	}
 
-	// Sibling repos sharing the parent directory — mirrors detectSiblingRepos
-	// discovery but registers owner/repo→path with the resolver.
-	parent := filepath.Dir(workspaceRoot)
-	entries, err := os.ReadDir(parent)
-	if err != nil {
-		return
-	}
-	for _, entry := range entries {
-		if !entry.IsDir() {
+	// Every other repo the workspace knows about: filesystem siblings AND
+	// .vscode/nightgauge-workspace.yaml repositories[] entries. The CLI builds
+	// its resolver from the same discovery (wireWorkspaceRepoPaths), so both
+	// modes agree on which repos are resolvable — and, since #882, on which
+	// repos a run must be REFUSED for rather than rooted at the launch repo.
+	for slug, repoRoot := range config.WorkspaceRepoPaths(workspaceRoot) {
+		owner, name, ok := strings.Cut(slug, "/")
+		if !ok || owner == "" || name == "" {
 			continue
 		}
-		repoRoot := filepath.Join(parent, entry.Name())
-		if repoRoot == workspaceRoot {
-			continue // primary repo already registered above
-		}
-		if _, statErr := os.Stat(filepath.Join(repoRoot, ".nightgauge", "config.yaml")); statErr != nil {
-			continue
-		}
-		repoCfg, loadErr := config.Load(repoRoot)
-		if loadErr != nil || repoCfg == nil || repoCfg.Owner == "" || repoCfg.DefaultRepo == "" {
-			continue
-		}
-		server.RegisterRepo(repoCfg.Owner, repoCfg.DefaultRepo, repoRoot)
+		server.RegisterRepo(owner, name, repoRoot)
 	}
 }
 
@@ -9360,6 +9359,10 @@ func autonomousRunCmd() *cobra.Command {
 				TrustedAuthorAssociations: autoTrustedAuthorAssociations,
 				RuntimeConfig:             cfg,
 			})
+
+			// Root a cross-repo run at its TARGET repo, and refuse the run when
+			// that repo cannot be resolved (#882).
+			sched.WithWorkspaceRepoRegistry(workdir)
 
 			// Create autonomous scheduler
 			pickupBacklog := false
