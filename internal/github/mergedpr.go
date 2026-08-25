@@ -2,8 +2,11 @@ package github
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
+	"net/http"
+	"net/url"
 	"os/exec"
 	"strings"
 	"sync"
@@ -111,56 +114,61 @@ func clampPageSize(limit int) int {
 	return limit
 }
 
-// GitObjectID is GitHub's scalar type for a commit OID. It exists as a named
-// Go type because shurcooL/graphql derives each GraphQL variable's type from
-// its Go type NAME (`writeArgumentType` → `reflect.Type.Name()`). Passing a
-// `graphql.String` here declares `$oid:String!`, and GitHub rejects the query:
-// `object(oid:)` takes `GitObjectID!`. Nothing in the Go type system catches
-// that — both are strings — so it is pinned by
-// TestCommitParentsVars_DeclaresGitObjectID.
-type GitObjectID string
-
-type commitParentsQuery struct {
-	Repository struct {
-		Object *struct {
-			Commit struct {
-				Parents struct {
-					Nodes []struct {
-						Oid graphql.String
-					}
-				} `graphql:"parents(first: 4)"`
-			} `graphql:"... on Commit"`
-		} `graphql:"object(oid: $oid)"`
-	} `graphql:"repository(owner: $owner, name: $name)"`
+// commitParentsResponse is the slice of `GET /repos/{owner}/{repo}/commits/
+// {sha}` this door reads. The endpoint returns the full commit — author,
+// message, stats, and the complete file list — and only the parent SHAs are
+// mapped.
+type commitParentsResponse struct {
+	Parents []struct {
+		SHA string `json:"sha"`
+	} `json:"parents"`
 }
 
 // CommitParents returns a commit's parent SHAs. An unknown OID is not an
 // error — it yields no parents, which the door reads as "no containment".
+//
+// REST, deliberately (#849). The predecessor spent a GraphQL point per lookup
+// on `repository.object(oid:)`, and this is a per-branch call: a sweep over N
+// candidate branches that miss the merged-PR index pays N points on the bucket
+// this repo exhausts. The REST commit answers with an ETag, so a repeat lookup
+// of the same commit — which is every subsequent sweep, since a merged commit
+// never changes — costs nothing through the conditional-GET layer (#486).
+//
+// **An unknown SHA comes back 422, not 404**, and that is the whole trap in
+// this migration. GraphQL expressed "no such object" as a null `object` field,
+// which this function mapped to (nil, nil). REST splits the same answer across
+// two status codes — 404 when the repository is unreachable or the ref path is
+// wrong, 422 ("No commit found for SHA") when the repository is fine and the
+// commit simply is not in it — and 422 is the one the door actually meets.
+// Treating it as an error would turn every index miss into a sweep failure;
+// treating an unrecognised status as "no parents" would let a permission
+// problem read as a clean answer. So exactly 404 and 422 map to no-parents and
+// everything else is an error. Pinned by
+// TestCommitParents_UnknownSHAIsNotAnError.
 func (s *PRService) CommitParents(ctx context.Context, owner, repo, oid string) ([]string, error) {
-	var q commitParentsQuery
-	vars := commitParentsVars(owner, repo, oid)
-	if err := s.client.query(ctx, &q, vars); err != nil {
+	path := fmt.Sprintf("/repos/%s/%s/commits/%s",
+		url.PathEscape(owner), url.PathEscape(repo), url.PathEscape(oid))
+	body, status, err := s.client.restDoStatus(ctx, http.MethodGet, path, nil)
+	if err != nil {
 		return nil, fmt.Errorf("commit parents for %s: %w", oid, err)
 	}
-	if q.Repository.Object == nil {
+	switch {
+	case status == http.StatusNotFound || status == http.StatusUnprocessableEntity:
+		// The forge says this commit is not here. Same answer the GraphQL null
+		// object carried, and the door reads it as "no containment".
 		return nil, nil
+	case status < 200 || status >= 300:
+		return nil, fmt.Errorf("commit parents for %s: REST %d: %s", oid, status, restErrorSummary(body))
 	}
-	parents := make([]string, 0, len(q.Repository.Object.Commit.Parents.Nodes))
-	for _, p := range q.Repository.Object.Commit.Parents.Nodes {
-		parents = append(parents, string(p.Oid))
+	var resp commitParentsResponse
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return nil, fmt.Errorf("commit parents for %s: decode commit: %w", oid, err)
+	}
+	parents := make([]string, 0, len(resp.Parents))
+	for _, p := range resp.Parents {
+		parents = append(parents, p.SHA)
 	}
 	return parents, nil
-}
-
-// commitParentsVars builds the variable map for commitParentsQuery. Split out
-// so a test can assert the declared GraphQL types without a live API call —
-// see GitObjectID above for why that is worth a test.
-func commitParentsVars(owner, repo, oid string) map[string]interface{} {
-	return map[string]interface{}{
-		"owner": graphql.String(owner),
-		"name":  graphql.String(repo),
-		"oid":   GitObjectID(oid),
-	}
 }
 
 // MergedPRHeadLister is the slice of PRService this door needs. Named so the

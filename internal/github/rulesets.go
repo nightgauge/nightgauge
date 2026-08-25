@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -320,23 +321,60 @@ func (s *RulesetService) pollForCopilotReview(ctx context.Context, owner, repo s
 	}
 }
 
-// hasCopilotReviewed queries whether Copilot has submitted a review on the PR.
+// copilotReviewPageSize is how many reviews one readiness probe reads.
+//
+// 100 is GitHub's per_page maximum, and asking for all of it is the point.
+// The GraphQL predecessor selected `reviews(first: 10)`, which is a
+// correctness bound rather than a cost one: on a PR that already carries ten
+// human reviews, Copilot's is the eleventh and the probe can never see it — so
+// pollForCopilotReview spins until its context expires and reports a timeout
+// for a review that exists. REST costs the same one request whether it returns
+// one review or a hundred.
+const copilotReviewPageSize = 100
+
+// prReview is the slice of `GET /repos/{owner}/{repo}/pulls/{n}/reviews` this
+// probe reads. Only the author's login is consulted.
+type prReview struct {
+	User struct {
+		Login string `json:"login"`
+	} `json:"user"`
+}
+
+// hasCopilotReviewed reports whether Copilot has submitted a review on the PR.
+//
+// REST, deliberately (#849). This is a POLLED read — pollForCopilotReview
+// calls it every pollInterval until Copilot answers or the context expires —
+// and it is the shape where the transport choice matters most. A GraphQL POST
+// is unconditional: every poll of an unchanged PR costs another point on the
+// bucket this repo actually exhausts. The REST collection answers with a
+// strong ETag, so the client's conditional-GET layer (#486) turns every poll
+// after the first into a 304, which GitHub does not bill at all. A wait that
+// costs one request instead of one per tick is the shape #849 AC 2 exists to
+// find, and the saving grows with how long Copilot takes.
+//
+// A non-2xx is an error rather than "not reviewed". The caller polls on false,
+// so swallowing a 403 or a 404 here would spin silently until the deadline and
+// then report a timeout — attributing a permission problem to Copilot.
 func (s *RulesetService) hasCopilotReviewed(ctx context.Context, owner, repo string, prNumber int) (bool, error) {
-	graphQLNumber, err := checkedGraphQLInt("pull request number", prNumber)
+	if prNumber <= 0 {
+		return false, fmt.Errorf("copilot review check: pull request number must be positive, got %d", prNumber)
+	}
+	path := fmt.Sprintf("/repos/%s/%s/pulls/%d/reviews?per_page=%d",
+		url.PathEscape(owner), url.PathEscape(repo), prNumber, copilotReviewPageSize)
+	body, status, err := s.client.restDoStatus(ctx, http.MethodGet, path, nil)
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("copilot review check for %s/%s#%d: %w", owner, repo, prNumber, err)
 	}
-	var q prReviewsQuery
-	vars := map[string]interface{}{
-		"owner":  graphql.String(owner),
-		"name":   graphql.String(repo),
-		"number": graphQLNumber,
+	if status < 200 || status >= 300 {
+		return false, fmt.Errorf("copilot review check for %s/%s#%d: REST %d: %s",
+			owner, repo, prNumber, status, restErrorSummary(body))
 	}
-	if err := s.client.query(ctx, &q, vars); err != nil {
-		return false, err
+	var reviews []prReview
+	if err := json.Unmarshal(body, &reviews); err != nil {
+		return false, fmt.Errorf("copilot review check for %s/%s#%d: decode reviews: %w", owner, repo, prNumber, err)
 	}
-	for _, review := range q.Repository.PullRequest.Reviews.Nodes {
-		if strings.EqualFold(string(review.Author.Login), "copilot") {
+	for _, review := range reviews {
+		if strings.EqualFold(review.User.Login, "copilot") {
 			return true, nil
 		}
 	}
@@ -354,18 +392,4 @@ type requestReviewsMutation struct {
 	RequestReviews struct {
 		ClientMutationID *graphql.String
 	} `graphql:"requestReviews(input: $input)"`
-}
-
-type prReviewsQuery struct {
-	Repository struct {
-		PullRequest struct {
-			Reviews struct {
-				Nodes []struct {
-					Author struct {
-						Login graphql.String
-					}
-				}
-			} `graphql:"reviews(first: 10)"`
-		} `graphql:"pullRequest(number: $number)"`
-	} `graphql:"repository(owner: $owner, name: $name)"`
 }

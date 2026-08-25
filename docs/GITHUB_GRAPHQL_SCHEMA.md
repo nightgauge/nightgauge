@@ -27,6 +27,7 @@
 - [Key Object Types](#key-object-types)
 - [Enum Types](#enum-types)
 - [Query Patterns](#query-patterns)
+- [Transport Classification — GraphQL vs REST](#transport-classification--graphql-vs-rest)
 - [Go Struct ↔ GraphQL Type Mapping](#go-struct--graphql-type-mapping)
 - [Validation](#validation)
 
@@ -893,6 +894,257 @@ The `shurcooL/graphql` library derives GraphQL type names from Go struct names.
 
 ---
 
+## Transport Classification — GraphQL vs REST
+
+> **Deliverable of [#849](https://github.com/nightgauge/nightgauge/issues/849)
+> AC 1** (epic #842, the GitHub API budget). Every GraphQL call site in
+> `internal/github` is classified below. Re-derived and probed against the live
+> API on 2026-08-25 — **not** carried forward from the issue body.
+
+### Why the classification exists
+
+The two rate-limit buckets are wildly unbalanced. GraphQL is the one Nightgauge
+exhausts; REST sits near-idle:
+
+```
+graphql:  367 / 5000 used
+core:      22 / 5000 used
+```
+
+The obvious reading is "move points to the idle bucket". That is the weaker
+half of the argument, and taking it alone leads to lateral churn. **The real
+win is conditional GET**, and it only exists on REST:
+
+```
+# Unconditional GET, twice — billed each time
+HTTP 200  X-RateLimit-Remaining: 4987
+HTTP 200  X-RateLimit-Remaining: 4986
+
+# Same URL with If-None-Match, three times — billed ZERO times
+HTTP 304  X-RateLimit-Remaining: 4986
+HTTP 304  X-RateLimit-Remaining: 4986
+HTTP 304  X-RateLimit-Remaining: 4986
+```
+
+Measured 2026-08-25 against `/repos/nightgauge/nightgauge/pulls/924/reviews`.
+A GraphQL POST can never do this. The client's ETag layer (#486,
+`rateLimitHeaderTransport`) attaches `If-None-Match` to every GET on the API
+host automatically, so a migrated read gets this with no call-site work.
+
+**So the ranking rule is: migrate POLLED and REPEATED reads first.** A call
+made once per run saves one point; a call made every ten seconds until a human
+or a bot answers saves one point per tick, forever.
+
+### The three verdicts
+
+| Verdict                 | Meaning                                                                                               |
+| ----------------------- | ----------------------------------------------------------------------------------------------------- |
+| **requires-GraphQL**    | REST cannot answer it at all, or cannot answer it without losing a fact the caller depends on         |
+| **GraphQL-by-batching** | REST could answer it, but only in several round trips, or without a filter GitHub applies server-side |
+| **better-as-REST**      | REST answers it in one call, and the read is repeated often enough that ETag conditioning pays        |
+
+### ProjectV2 — requires-GraphQL, without exception
+
+**ProjectV2 has no REST API.** Not a preference, a hard floor: every board
+read, field read, field write, item add and item lookup must be GraphQL.
+
+| Call site                                                                                                         | File                |
+| ----------------------------------------------------------------------------------------------------------------- | ------------------- |
+| `queryProjectItems`, `queryProjectItemsFiltered`, `queryProjectFieldsFull`, `queryProjectUpdatedAt`               | `project_query.go`  |
+| `AddItem`, `findItemID`, `updateField`, `createField`, `replaceFieldOptions`, `ResolveProject`, `getItemEstimate` | `project.go`        |
+| `FetchRepositoryLinkedProjects`, `FetchProjectLinkedRepos`                                                        | `project_repos.go`  |
+| `ViewService.List`                                                                                                | `views.go`          |
+| `BoardService.CountsByStatus`                                                                                     | `board.go`          |
+| `findProjectItemID`                                                                                               | `epic.go`           |
+| `ProjectNumbersForIssue`                                                                                          | `issue_projects.go` |
+
+This is where the GraphQL budget actually goes, and it is why #847's change
+probe — making the expensive board read _conditional_ rather than moving it —
+was the right shape for the biggest single consumer. **The lesson generalises:
+when a call is requires-GraphQL, the only lever left is not making it.**
+
+### Non-project call sites
+
+| Call site                                                   | Verdict                        | Why                                                                                                                       |
+| ----------------------------------------------------------- | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------- |
+| `SecurityService.ListOpenAlerts`                            | **requires-GraphQL**           | `dependabotUpdate` has no REST equivalent — see below                                                                     |
+| `IssueService.GetIssue`                                     | **GraphQL-by-batching**        | One document carries the issue, labels, sub-issues and blockedBy; REST needs 3–4 calls                                    |
+| `IssueService.GetIssuesByNumbers`                           | **GraphQL-by-batching**        | N issues in ONE aliased request. REST is strictly N calls                                                                 |
+| `IssueService.GetEpicProgress`                              | **GraphQL-by-batching**        | Sub-issue rollup in one hop                                                                                               |
+| `IssueService.SearchIssues`                                 | **GraphQL-by-batching**        | `search()` applies the query server-side                                                                                  |
+| `IssueService.ListIssues`, `ListIssuesExcludingLabels`      | **GraphQL-by-batching**        | Label filtering and node IDs in one page                                                                                  |
+| `IssueService.GetRepoLabels`, `LabelService.List`           | **better-as-REST** (deferred)  | `GET /repos/{o}/{r}/labels` is ETag-able — but the map it returns feeds label MUTATIONS by node ID, so it moves with them |
+| `PRService.GetPR`                                           | **GraphQL-by-batching**        | PR + labels + `statusCheckRollup` in one document                                                                         |
+| `PRService.ListPRs`                                         | **GraphQL-by-batching**        | Same, per page                                                                                                            |
+| `PRService.ListMergedPRHeads`                               | **GraphQL-by-batching**        | `states: MERGED` is a SERVER-SIDE filter REST lacks — see below                                                           |
+| `PRService.CommitParents`                                   | **better-as-REST** ✅ migrated | `GET /repos/{o}/{r}/commits/{sha}`, per-branch, ETag-able                                                                 |
+| `PRService.DeleteBranch`                                    | requires-GraphQL (read)        | Resolves a ref node ID for `deleteRef`                                                                                    |
+| `RulesetService.hasCopilotReviewed`                         | **better-as-REST** ✅ migrated | POLLED read — the strongest ETag case in the tree                                                                         |
+| `RepoService.RepoMetadata`                                  | **better-as-REST** (caveat)    | See the empty-repository trap below                                                                                       |
+| `Client.GetRepositoryID`                                    | **better-as-REST** (deferred)  | `GET /repos/{o}/{r}` returns `node_id`; moves with the mutations that consume it                                          |
+| `Client.GetRateLimit`                                       | **either — no gain**           | The GraphQL `rateLimit` query is genuinely free                                                                           |
+| `Client.ExecuteGraphQL`                                     | requires-GraphQL               | It _is_ the pass-through transport for `forge graphql`                                                                    |
+| All `IssueService` / `PRService` / `LabelService` mutations | **coupled**                    | See _Node-ID coupling_ below                                                                                              |
+
+### Node-ID coupling — the real reason the mutation surface has not moved
+
+Every mutation in `issues.go`, `prs.go` and `labels.go` takes a `graphql.ID`.
+Those IDs come from a GraphQL read, so a mutation cannot be migrated on its
+own — its ID source has to move with it, and every other consumer of that read
+has to keep working. **This, not the API surface, is what makes AC 2 a
+land-alone change.**
+
+One correction worth recording, because it dissolves the obvious objection:
+**REST returns node IDs.** `GET /repos/{o}/{r}/issues/{n}` includes `node_id`
+(verified live 2026-08-25), so "we need the node ID" is not by itself a reason
+to keep a READ on GraphQL. The coupling is a migration-ordering constraint, not
+a capability one.
+
+### `GetRateLimit` is free — a cheap disconfirmer, settled
+
+The comment in `client.go` calls the `rateLimit` query free. It is, and the
+obvious "we spend a GraphQL point to measure the GraphQL budget" finding is
+**not real**. Measured 2026-08-25 — three consecutive queries:
+
+```
+remaining=4931 cost=1
+remaining=4931 cost=1
+remaining=4931 cost=1
+```
+
+GitHub _reports_ `cost: 1` while never decrementing `remaining`. Note the
+consequence for the ledger: it derives cost from the drop in
+`X-RateLimit-Remaining`, so it prices this call at 0 — which is correct, and
+disagrees with the number GitHub prints. **Do not "fix" that disagreement.**
+
+### `ListOpenAlerts` is requires-GraphQL — correcting this issue's own worklist
+
+#849's first-candidate analysis named `SecurityService.ListOpenAlerts` as the
+unambiguous first migration, on the grounds that it already makes a REST call
+on the empty path and that REST distinguishes "clean" from "forbidden" by
+status code. Both of those statements are true. **The conclusion is still
+wrong**, and the premise check that catches it takes one command.
+
+The producers that consume this service read `Remediation` — the tri-state of
+"a fix PR is open" / "the forge says a fix is not possible, and why" / "no fix
+yet". That comes from GraphQL's `RepositoryVulnerabilityAlert.dependabotUpdate`.
+REST's alert object does not carry it. Its complete key set, live:
+
+```
+assignees, auto_dismissed_at, created_at, dependency, dismissal_request,
+dismissed_at, dismissed_by, dismissed_comment, dismissed_reason, fixed_at,
+html_url, number, security_advisory, security_vulnerability, state,
+updated_at, url
+```
+
+No link from an alert to the PR that fixes it, and no statement of why one does
+not exist. Migrating would delete the silent-empty guard as advertised — and
+also delete `attention`'s entire remediation surface (`dependabotalerts.go`,
+`dependabotstale.go`). The header of `internal/github/security.go` documents
+this; the issue analysis did not check it before naming the candidate.
+
+**The generalisable part: a call site that already spends on two transports
+looks like waste and may be paying for a fact only one of them has.** Read what
+the caller consumes before pricing the call.
+
+### `ListMergedPRHeads` — why a server-side filter is worth a bucket
+
+REST can list closed PRs (`GET /pulls?state=closed`) but cannot filter to
+MERGED. GraphQL's `states: MERGED` does it server-side. Since the index is one
+page of 100 by deliberate design (see `mergedPRIndexSize`), migrating would
+spend that fixed budget on closed-unmerged PRs and **shrink the window** —
+paying a correctness cost for a bucket saving. Server-side filtering is a real
+GraphQL win and this is the clearest instance of it.
+
+### `RepoMetadata` — better-as-REST, with a trap that must not be papered over
+
+`GET /repos/{o}/{r}` returns `full_name`, `owner.login`, `name` and
+`default_branch` in one ETag-able call, and nothing downstream needs a node ID.
+
+**But the two APIs may disagree about an empty repository, and that is the
+thing to settle before migrating.** GraphQL's `defaultBranchRef` is null when
+the ref does not exist — verified, and pinned by
+`TestRepoMetadata_EmptyRepoHasNoDefaultBranch`. REST's `default_branch` is
+believed to name the branch that _would_ be default, and so to be non-empty
+even with no commits. **That half is NOT verified** — checking it needs a
+repository with zero commits, which this classification pass did not create.
+
+It matters because `DefaultBranchHealth.Evaluate` depends on the GraphQL
+semantics: an empty `DefaultBranch` is its signal to decline to observe, and
+its comment says why ("guessing `main` here would produce a 404 that reads as
+a producer failure forever"). If REST does report a name for an empty
+repository, a naive migration silently converts every such repository into a
+permanently failing producer.
+
+So the first step of that migration is one probe against an empty repository,
+not a code change. If the disagreement is real, migrating costs a second
+conditional call to confirm the ref exists, or an explicit change to that
+contract. Both are fine; **doing neither is not.**
+
+### What has been migrated
+
+| Call site                           | Was                                      | Now                                                 |
+| ----------------------------------- | ---------------------------------------- | --------------------------------------------------- |
+| `RulesetService.hasCopilotReviewed` | GraphQL `pullRequest.reviews(first: 10)` | `GET /repos/{o}/{r}/pulls/{n}/reviews?per_page=100` |
+| `PRService.CommitParents`           | GraphQL `repository.object(oid:)`        | `GET /repos/{o}/{r}/commits/{sha}`                  |
+
+Ledger before/after, one `nightgauge worktree sweep --dry-run` over the
+workspace (**AC 3**):
+
+| Metric                | Before | After |
+| --------------------- | ------ | ----- |
+| GraphQL calls         | 4      | 3     |
+| GraphQL points billed | 3      | 2     |
+| REST (core) calls     | 0      | 1     |
+
+`hasCopilotReviewed` does not appear in a sweep — it runs in the PR merge path
+— and is the larger saving of the two, because it is the polled one.
+
+**Two traps this migration hit, recorded so the next one does not:**
+
+1. **An unknown commit SHA returns 422, not 404.** GraphQL expressed "no such
+   object" as a null field; REST splits it across two statuses, and 422 (`No
+commit found for SHA`) is the one the merged-PR door actually meets. A
+   migration handling only 404 turns every index miss into a sweep failure.
+   Pinned by `TestCommitParents_UnknownSHAIsNotAnError`.
+2. **A page bound can be a correctness bound.** The GraphQL predecessor of the
+   Copilot probe selected `reviews(first: 10)` — on a PR with ten human reviews
+   Copilot's is the eleventh, invisible, and the poll runs to its deadline
+   reporting a timeout for a review that exists. REST costs the same request at
+   `per_page=100`.
+
+### The remaining worklist (AC 2)
+
+Ordered by value, not by ease:
+
+1. **Sub-issues and blocked-by now have REST endpoints** — and the tree does not
+   use them. `GET /repos/{o}/{r}/issues/{n}/sub_issues` and
+   `.../dependencies/blocked_by` both answer 200 on the core bucket (verified
+   2026-08-25); these were GraphQL-only when `issues.go` was written, and the
+   tree has moved since. Their write counterparts are documented but were not
+   exercised. **Re-check the premise before building** — that is how this
+   entry was found.
+2. **Two client families exist, and the raw one bypasses `forge`/`boardcache`
+   entirely.** Measured 2026-08-25 rather than carried forward: **15**
+   construction sites outside the forge adapters build a `BoardService`
+   directly (`internal/doctor`, `internal/state`, `internal/depgraph`,
+   `internal/ipc/server.go`, and several inside `internal/github` itself), and
+   `internal/ipc/server.go` alone builds 12 `IssueService`, 7 `PRService`, 4
+   `ProjectService`, 2 `BoardService` and 1 `EpicService` inline. Unifying the
+   two families is AC 2's real work — high conflict surface, land it alone, and
+   do **not** bolt a cache onto the raw path (see `docs/FAILURE_TAXONOMY.md`
+   § Read-Through Cache Without Write Interception).
+
+   Note this corrects an inherited figure. The previous framing said "~10
+   mutating IPC verbs each build their own `gh.NewBoardService`"; the bypass is
+   real and larger than that, but only 2 of those sites are `BoardService` and
+   the rest are other services. Counting took one command.
+
+3. **`RepoMetadata`**, once the empty-repository contract above is settled.
+4. **Labels and `GetRepositoryID`**, with the mutations they feed.
+
+---
+
 ## Validation
 
 - **Automated**: `internal/github/schema_validation_test.go` validates query
@@ -925,3 +1177,4 @@ gh api graphql -f query='{ __type(name: "PullRequestMergeMethod") { enumValues {
 | Date       | Change                                                    |
 | ---------- | --------------------------------------------------------- |
 | 2026-03-11 | Initial schema introspection from live GitHub GraphQL API |
+| 2026-08-25 | Transport classification of every call site (#849 AC 1)   |

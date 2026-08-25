@@ -3,9 +3,11 @@ package github
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -33,6 +35,39 @@ func newRulesetClientForRESTTest(srv *httptest.Server) *Client {
 	return &Client{
 		http: &http.Client{Transport: &mockRESTTransport{server: srv}},
 	}
+}
+
+// mockCopilotFlowServer serves the mixed-transport Copilot flow SatisfyRulesets
+// now drives: the PR fetch and the requestReviews mutation over GraphQL (POST),
+// and the review-readiness probe over REST (GET
+// /repos/{o}/{r}/pulls/{n}/reviews) since #849 moved it there.
+//
+// It routes by METHOD rather than by call index, which is the point: the old
+// index-ordered mock answered every request from the same list, so once the
+// third call became a REST GET it was still handed a GraphQL envelope. One
+// test caught that as a decode error; TestSatisfyRulesets_Timeout did not,
+// because it asserts an error and got one for the wrong reason.
+//
+// reviewsJSON is the REST array body (`[]` for "Copilot has not reviewed").
+func mockCopilotFlowServer(t *testing.T, reviewsJSON string, graphQLResponses ...string) (*Client, func()) {
+	t.Helper()
+	var callIdx int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodGet {
+			if !strings.HasSuffix(r.URL.Path, "/reviews") {
+				t.Errorf("unexpected REST GET %s; the only REST read in this flow is the reviews probe", r.URL.Path)
+			}
+			_, _ = w.Write([]byte(reviewsJSON))
+			return
+		}
+		idx := int(atomic.AddInt32(&callIdx, 1)) - 1
+		if idx >= len(graphQLResponses) {
+			idx = len(graphQLResponses) - 1
+		}
+		fmt.Fprint(w, graphQLResponses[idx])
+	}))
+	return NewClientWithURL("test-token", srv.URL), srv.Close
 }
 
 // --- Constructor ---
@@ -427,16 +462,22 @@ func TestSatisfyRulesets_CopilotReview_ImmediateSuccess(t *testing.T) {
 
 	mutResp := `{"data":{"requestReviews":{"clientMutationId":null}}}`
 
-	// Poll response: Copilot has already reviewed
-	reviewResp := `{"data":{"repository":{"pullRequest":{"reviews":{"nodes":[
-		{"author":{"login":"Copilot"}}
-	]}}}}}`
+	// Poll response: Copilot has already reviewed. REST shape, lower-case
+	// login — hasCopilotReviewed matches case-insensitively on purpose.
+	reviewsJSON := `[{"user":{"login":"copilot"}}]`
 
-	client, cleanup := mockGraphQLServer(t, prResp, mutResp, reviewResp)
+	client, cleanup := mockCopilotFlowServer(t, reviewsJSON, prResp, mutResp)
 	defer cleanup()
 
 	svc := newRulesetServiceForTest(client)
-	resolved, err := svc.SatisfyRulesets(context.Background(), "o", "r", 10, []string{"copilot_code_review"})
+	// Bounded on purpose. SatisfyRulesets polls until Copilot answers, so a
+	// regression that stops recognising the review (a case-sensitive login
+	// compare, a wrong REST field) does not fail this test — it hangs it, and
+	// a hang in CI reads as an infrastructure problem rather than as the
+	// assertion below. The deadline converts that into a real failure.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	resolved, err := svc.SatisfyRulesets(ctx, "o", "r", 10, []string{"copilot_code_review"})
 	if err != nil {
 		t.Errorf("SatisfyRulesets returned unexpected error: %v", err)
 	}
@@ -465,10 +506,8 @@ func TestSatisfyRulesets_Timeout(t *testing.T) {
 
 	mutResp := `{"data":{"requestReviews":{"clientMutationId":null}}}`
 
-	// Copilot never reviews — return empty reviews every time
-	pollResp := `{"data":{"repository":{"pullRequest":{"reviews":{"nodes":[]}}}}}`
-
-	client, cleanup := mockGraphQLServer(t, prResp, mutResp, pollResp)
+	// Copilot never reviews — an empty REST collection every time.
+	client, cleanup := mockCopilotFlowServer(t, `[]`, prResp, mutResp)
 	defer cleanup()
 
 	svc := newRulesetServiceForTest(client)
@@ -737,5 +776,87 @@ func TestCheckRulesets_BypassResolvedOncePerRuleset(t *testing.T) {
 	}
 	if len(result.BypassedRules) != 2 {
 		t.Errorf("BypassedRules = %v, want both rules reported as bypassed", result.BypassedRules)
+	}
+}
+
+// --- hasCopilotReviewed (REST since #849) ---
+
+// TestHasCopilotReviewed_RequestShape pins the endpoint and the page size.
+//
+// per_page is asserted because the GraphQL predecessor selected
+// `reviews(first: 10)`: on a PR already carrying ten human reviews, Copilot's
+// is the eleventh and the probe could never see it, so pollForCopilotReview
+// would spin to its deadline and report a timeout for a review that exists.
+// Dropping back to a bounded page would silently restore that bug.
+func TestHasCopilotReviewed_RequestShape(t *testing.T) {
+	var gotPath, gotQuery, gotMethod string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath, gotQuery, gotMethod = r.URL.Path, r.URL.RawQuery, r.Method
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`[]`))
+	}))
+	defer srv.Close()
+
+	svc := newRulesetServiceForTest(newRulesetClientForRESTTest(srv))
+	if _, err := svc.hasCopilotReviewed(context.Background(), "o", "r", 42); err != nil {
+		t.Fatalf("hasCopilotReviewed: %v", err)
+	}
+	if gotMethod != http.MethodGet {
+		t.Errorf("method = %s, want GET — only a GET is ETag-conditional, which is the whole reason this moved to REST", gotMethod)
+	}
+	if gotPath != "/repos/o/r/pulls/42/reviews" {
+		t.Errorf("path = %q, want /repos/o/r/pulls/42/reviews", gotPath)
+	}
+	if !strings.Contains(gotQuery, "per_page=100") {
+		t.Errorf("query = %q, want per_page=100", gotQuery)
+	}
+}
+
+// TestHasCopilotReviewed_MatchesCopilotCaseInsensitively covers both verdicts.
+func TestHasCopilotReviewed_MatchesCopilotCaseInsensitively(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body string
+		want bool
+	}{
+		{"no reviews at all", `[]`, false},
+		{"only human reviewers", `[{"user":{"login":"octocat"}},{"user":{"login":"hubot"}}]`, false},
+		{"Copilot as GitHub spells it", `[{"user":{"login":"Copilot"}}]`, true},
+		{"copilot lower-case", `[{"user":{"login":"copilot"}}]`, true},
+		{"Copilot behind human reviews", `[{"user":{"login":"octocat"}},{"user":{"login":"Copilot"}}]`, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(rulesetRESTHandler(http.StatusOK, tc.body))
+			defer srv.Close()
+
+			got, err := newRulesetServiceForTest(newRulesetClientForRESTTest(srv)).
+				hasCopilotReviewed(context.Background(), "o", "r", 1)
+			if err != nil {
+				t.Fatalf("hasCopilotReviewed: %v", err)
+			}
+			if got != tc.want {
+				t.Errorf("hasCopilotReviewed = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestHasCopilotReviewed_NonSuccessIsAnError pins the fail-loud half.
+//
+// The caller POLLS on false. Reporting a 403 or a 404 as "Copilot has not
+// reviewed yet" would spin silently until the deadline and then blame Copilot
+// for a permission problem — the error the operator needs is the first one.
+func TestHasCopilotReviewed_NonSuccessIsAnError(t *testing.T) {
+	for _, status := range []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusInternalServerError} {
+		srv := httptest.NewServer(rulesetRESTHandler(status, `{"message":"nope"}`))
+		got, err := newRulesetServiceForTest(newRulesetClientForRESTTest(srv)).
+			hasCopilotReviewed(context.Background(), "o", "r", 1)
+		srv.Close()
+		if err == nil {
+			t.Errorf("REST %d returned no error; a failed read must not read as \"not reviewed yet\"", status)
+		}
+		if got {
+			t.Errorf("REST %d reported a review it never saw", status)
+		}
 	}
 }
