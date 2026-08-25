@@ -27,6 +27,24 @@
   stages that exit without their `.nightgauge/pipeline/{stage}-{N}.json`
   force the orchestrator onto a repo-blind deterministic fallback that may
   misreport state (#3114). Do not rely on the fallback.
+- **An assertion that cannot go red is decoration.** A test that passes both
+  before and after a fix constrains nothing — a regression test written for an
+  SSH-push bug asserted "a push succeeds with no auth configured" and passed
+  identically on the broken code, because a `file://` remote needs no
+  credentials either way. Prove it: `cp <file> /tmp/<file>.bak`, restore the
+  pre-fix behavior **from the copy**, confirm the new test FAILS, restore, and
+  confirm it passes. Never `git checkout -- <file>` to back a fix out — on an
+  uncommitted branch that destroys the fix. See
+  [Vacuous Assertion](../../docs/FAILURE_TAXONOMY.md#vacuous-assertion-the-test-that-cannot-go-red).
+- **A green suite is a statement about the cases that RAN.** After adding
+  assertions, check the reported PASS count rose by exactly the number you
+  added; a suite can skip a case silently and still print "all tests passed".
+- **Verify the issue's premise before implementing it.** An issue's stated cause
+  can be flatly wrong — a request to delete a sweep that was never built, a
+  claim that a failure category already classified an error when it fell through
+  to `CatUnknown`, a "build it or delete it" fork where building was
+  architecturally impossible. Check the claim against the tree first; if the
+  premise is false, do the smaller correct thing and say so in the handoff.
 - **Never report success when a step failed.** Swallowing a failed build/test
   lets a broken change flow downstream where it is caught later at higher cost
   (#2779). Surface the failure with its output.

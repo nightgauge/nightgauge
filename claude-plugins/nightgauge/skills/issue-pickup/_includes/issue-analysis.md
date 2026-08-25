@@ -10,6 +10,7 @@ change-detection and routing decision, and produce the requirements summary.
 - [Step 3.1.4: Detect Parent Epic](#step-314-detect-parent-epic)
 - [Step 3.2: Parse Issue Content](#step-32-parse-issue-content)
 - [Step 3.2.5: Change Detection and Routing](#step-325-change-detection-and-routing)
+- [Step 3.2.9: Check the Issue's Premise Against the Tree](#step-329-check-the-issues-premise-against-the-tree)
 - [Step 3.3: Create Requirements Summary](#step-33-create-requirements-summary)
 
 ---
@@ -251,6 +252,31 @@ This is **informational only** — it does not change the routing decision. The
 calibration table is auto-updated after each pipeline completion by the
 PostPipelineAnalyzer.
 
+## Step 3.2.9: Check the Issue's Premise Against the Tree
+
+An issue's stated cause can be flatly wrong, and every downstream stage inherits
+it. Before summarizing requirements, spend one search per factual claim the
+issue makes about this repository — a named symbol, file, sweep, config key, or
+"X already does Y". `grep`/`rg` for it; do not read the claim as fact.
+
+Three observed misses, each of which changed the work once checked:
+
+| The issue said                        | The tree said                                                                                                         |
+| ------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| "delete the one-shot migration sweep" | the sweep had **never been built**                                                                                    |
+| "this category already classifies it" | it fell through to `CatUnknown` — the actual defect                                                                   |
+| "build it or delete it"               | building was impossible (a CI cron cannot read a gitignored local-only file), so one branch of the fork did not exist |
+
+Record the verdict in `Technical Notes` below — do not silently correct it:
+
+```markdown
+- Premise check: <claim> → CONFIRMED | FALSE (<what the tree actually shows>)
+```
+
+A FALSE premise is not a blocker. Narrow the scope to the smaller correct thing,
+say so explicitly in the summary, and let feature-planning plan against reality
+rather than against the issue body.
+
 ## Step 3.3: Create Requirements Summary
 
 **REQUIRED** — The `requirements` object must always be written to the context
@@ -281,4 +307,5 @@ Generate structured requirements:
 - Files mentioned: [list]
 - Components involved: [list]
 - Dependencies: [list]
+- Premise check: [claim] → CONFIRMED | FALSE ([what the tree shows]) — Step 3.2.9
 ```

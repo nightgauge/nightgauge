@@ -624,6 +624,58 @@ each. **New failures** (pass on main, fail on branch) go to Ralph Loop.
 failures are pre-existing, treat as passed. Report results: PASSED, FAILED, or
 Not configured.
 
+### Step 2.2.5: Regression-Test Validity (the assertion must be able to fail)
+
+A green suite is a statement about the cases that **ran**, not about the cases
+that matter — and a test that passes on the fixed code and on the broken code
+alike is decoration. This is the one check the pipeline cannot delegate to CI:
+CI runs the same vacuous assertion and reports the same green.
+
+Fires when the diff adds or modifies a test file **and** the issue is a fix
+(`type:bug`, or the plan names a defect). Skipped for pure feature/docs work,
+where there is no "before" to revert to.
+
+**Step 1 — did the count move?** A suite can silently skip a case and still
+print success. Two assertions added to a `bash` suite running `set -uo pipefail`
+**without `-e`** called helpers that did not exist yet: bash wrote
+`ok: command not found` to stderr, neither case ran, and the summary still said
+all tests passed. Only the PASS count rising by 1 instead of 3 exposed it.
+
+```bash
+# The reported PASS count must rise by exactly the number of assertions added.
+```
+
+**Step 2 — revert the fix and watch the new test fail.** Not `git stash` and not
+`git checkout` — the fix is uncommitted at this point in the pipeline, and both
+would throw it away. Work from a copy:
+
+```bash
+FIXED_FILE=<the source file the fix changed>
+cp "$FIXED_FILE" "/tmp/$(basename "$FIXED_FILE").ng-revert.bak"   # COPY, not checkout
+# restore the pre-fix behavior in $FIXED_FILE (hand-edit the changed line)
+$TEST_CMD <the new test file>          # MUST exit non-zero
+REVERT_PROOF=$?
+cp "/tmp/$(basename "$FIXED_FILE").ng-revert.bak" "$FIXED_FILE"   # restore
+$TEST_CMD <the new test file>          # MUST exit zero
+```
+
+If the reverted run is **green**, the new test asserts something that does not
+depend on the fix. Do not adjust the fixture — rewrite the assertion to name the
+value that actually differs, and hand a feedback signal back to feature-dev.
+Prefer a mutation that **compiles**: a revert that only breaks the build proves
+the tests failed to compile, not that they failed.
+
+Observed miss: a regression test for a `git push` failing on SSH remotes with
+`invalid auth method` asserted "a push succeeds with no auth configured" against
+a `file://` remote. It passed identically on the broken code — a `file://`
+remote needs no credentials either way — because the defect lived entirely in
+**which transport ran**. It was caught only by reverting the fix and noticing
+the test stayed green. Full class:
+[Vacuous Assertion](../../../docs/FAILURE_TAXONOMY.md#vacuous-assertion-the-test-that-cannot-go-red).
+
+Record the literal outcome in the validate context notes (`reverted → FAILED,
+restored → PASSED`). "The tests pass" is not that evidence.
+
 ### Step 2.3: Run E2E Tests (Deterministic)
 
 When E2E frameworks were detected in Phase 1.2, execute the test suite using

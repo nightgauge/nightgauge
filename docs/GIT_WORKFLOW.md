@@ -356,6 +356,32 @@ nothing about it either (#691):
 - **`--pr`** — makes the hook verify the PR is genuinely `MERGED` before closing
   the issue. Omitting it skips the verification (`0` means "don't check").
 
+**`--issue` is the authority — the PR body does not control closure.** The hook
+closes the issue it is **told** to close. It never reads the PR body, so
+GitHub's `Closes #N` keyword and `--issue N` are two independent mechanisms, and
+on the hand-merge train this document mandates, the hook is the one that decides:
+a body with no `Closes` keyword leaves GitHub with nothing to do, and the hook
+then closes whatever number it was handed.
+
+This bites on partial fixes. A PR that resolves 2 of an issue's 5 acceptance
+criteria, whose body was deliberately edited to read _"Partially addresses #N"_
+with no `Closes` keyword, still closed #N — because the merge was finished with
+`nightgauge hook post-merge --issue N --pr <PR> --project <PROJECT>`. The
+remaining three criteria left the board silently.
+
+To land a partial fix, do one of:
+
+- pass `--issue` a **different** number — a follow-up issue that this PR really
+  does complete; or
+- **skip the hook for that PR** and sync the board by hand
+  (`nightgauge project …`), accepting that no epic rollup is evaluated.
+
+Either way, re-check afterwards that the partially-fixed issue is still open:
+
+```bash
+nightgauge forge issue view <N> --repo <owner/repo> --json state,title
+```
+
 `nightgauge project reconcile` is the board-wide backstop sweep for this hook, not
 a substitute for it: it repairs drift after the fact across every board item,
 where the hook resolves one merge at the moment it happens.

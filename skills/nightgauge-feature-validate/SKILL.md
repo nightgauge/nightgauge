@@ -196,7 +196,7 @@ printf '<!-- phase:start name="baseline-comparison" index=9 total=23 stage="feat
 printf '<!-- phase:start name="run-tests" index=10 total=23 stage="feature-validate" -->\n'
 ```
 
-> **Read `skills/nightgauge-feature-validate/_includes/build-and-tests.md` now and follow its instructions before continuing this phase.** Run integration and E2E tests (dev does NOT); do not re-run unit tests the dev context confirms passed. Failures → record in context; Ralph Loop auto-fix if enabled.
+> **Read `skills/nightgauge-feature-validate/_includes/build-and-tests.md` now and follow its instructions before continuing this phase.** Run integration and E2E tests (dev does NOT); do not re-run unit tests the dev context confirms passed. Failures → record in context; Ralph Loop auto-fix if enabled. On a fix issue that touched a test file, Step 2.2.5 also proves the new assertion can go red — revert the fix from a COPY and confirm the test FAILS; green there means the test is decoration.
 
 ### Phase 2.4: Mobile MCP E2E Tests (Agent-Driven)
 

@@ -142,6 +142,36 @@ For each new/modified component:
 2. Write tests for: happy path, error cases, edge cases
 3. Use mocking strategy from docs
 
+**Every regression test must be able to go red.** A test that passes on the
+fixed code AND on the broken code proves nothing, and it is green either way so
+nothing downstream notices. Before writing the assertion, name the value that
+differs between the broken and fixed behavior, and check the assertion can
+observe **that** value — an assertion about the code's shape (a field exists, a
+method is present) passes on both sides of a behavioral fix by construction.
+
+Worked example: a regression test for a `git push` failing on SSH remotes with
+`invalid auth method` asserted "a push succeeds with no credentials configured",
+against a `file://` remote in a temp dir. It passed on the broken code too — a
+`file://` remote needs no credentials on either implementation. The defect lived
+entirely in **which transport ran**, so that is what the assertion had to name.
+
+Prove it by reverting, before you hand off:
+
+```bash
+cp path/to/fixed.go /tmp/fixed.go.bak     # a COPY — never `git checkout -- <file>`,
+                                          # which discards the fix on an uncommitted branch
+# restore the pre-fix behavior in path/to/fixed.go (hand-edit the changed line)
+<test cmd> path/to/fixed_test.go          # MUST FAIL — if green, the test is decoration
+cp /tmp/fixed.go.bak path/to/fixed.go     # restore
+<test cmd> path/to/fixed_test.go          # green again
+```
+
+Prefer a mutation that **compiles**: a revert that only breaks the build proves
+the tests failed to compile, not that they failed. Record the literal
+before/after result in the dev context notes — it is the evidence feature-validate
+and the retro path read. Full class:
+[Vacuous Assertion](../../../../../docs/FAILURE_TAXONOMY.md#vacuous-assertion-the-test-that-cannot-go-red).
+
 ### Step 4.1.5: Run Build Before Tests
 
 **CRITICAL**: A build step MUST run before the test suite. Build failures that
