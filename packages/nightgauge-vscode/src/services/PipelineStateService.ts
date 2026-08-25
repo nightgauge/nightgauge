@@ -165,6 +165,16 @@ export interface ToolCallRecordedEvent {
 export interface StageAttribution {
   model?: string;
   adapter?: string;
+  /**
+   * The executor's raw served envelope (#888), passed through WITHOUT the
+   * `?? modelDecision.model` fallback that `model` above applies. Undefined
+   * means the executor reported nothing, and that must survive to Go: the
+   * whole value of the served_* fields is telling "unreported" apart from
+   * "reported X".
+   */
+  servedModel?: string;
+  servedEffort?: string;
+  servedThinking?: string;
 }
 
 export type ExtendedStageState = {
@@ -1042,6 +1052,11 @@ export class PipelineStateService implements vscode.Disposable {
           costUsd: usage.costUsd,
           ...(attribution?.model ? { model: attribution.model } : {}),
           ...(attribution?.adapter ? { adapter: attribution.adapter } : {}),
+          // The served envelope (#888) — the rest of the #580 fields, which
+          // this path recorded as null on every successful run until now.
+          ...(attribution?.servedModel ? { servedModel: attribution.servedModel } : {}),
+          ...(attribution?.servedEffort ? { servedEffort: attribution.servedEffort } : {}),
+          ...(attribution?.servedThinking ? { servedThinking: attribution.servedThinking } : {}),
           // A finished child must not vouch for the run (ADR-017 §7.2): the
           // terminal transition zeroes the pid so the PID-reuse window is
           // bounded by one stage rather than by the whole run.
@@ -1104,6 +1119,14 @@ export class PipelineStateService implements vscode.Disposable {
           costUsd: usage.costUsd,
           ...(attribution?.model ? { model: attribution.model } : {}),
           ...(attribution?.adapter ? { adapter: attribution.adapter } : {}),
+          // The served envelope on the "failed" transition too (#888), for
+          // the same reason the model above is threaded here: an expensive
+          // tier is disproportionately KILLED before it ever reaches
+          // completeStage, so attributing only on success measures the cheap
+          // stages and nothing else.
+          ...(attribution?.servedModel ? { servedModel: attribution.servedModel } : {}),
+          ...(attribution?.servedEffort ? { servedEffort: attribution.servedEffort } : {}),
+          ...(attribution?.servedThinking ? { servedThinking: attribution.servedThinking } : {}),
           // Terminal transition — see completeStage (ADR-017 §7.2).
           stagePid: 0,
           runId,

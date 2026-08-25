@@ -949,6 +949,21 @@ type PipelineNotifyStageTransitionParams struct {
 	// (the source of the dashboard's Adapter Mix donut). Empty maps to
 	// adapter-unknown, never defaulted to claude.
 	Adapter string `json:"adapter,omitempty"`
+	// ServedModel / ServedEffort / ServedThinking are the executor's RAW
+	// first-party report (#888), threaded verbatim and possibly empty.
+	//
+	// They are NOT the same thing as Model above. Model is
+	// `result.servedModel ?? modelDecision.model` — the served value when the
+	// stream reported one, otherwise the REQUESTED model — which is right for
+	// per-stage attribution and wrong for the served_* fields, whose whole
+	// contract (#580) is "observed, or honestly absent". Recording Model into
+	// StageServedModels would manufacture an observation that never happened,
+	// so the extension sends the unfallen-back values on their own fields and
+	// the handler records them exactly as the scheduler records
+	// result.ServedModel: verbatim, empty included.
+	ServedModel    string `json:"servedModel,omitempty"`
+	ServedEffort   string `json:"servedEffort,omitempty"`
+	ServedThinking string `json:"servedThinking,omitempty"`
 	// StagePid is the advisory OS pid of the process executing the stage (ADR-017
 	// §7.2). Advisory, not an identity — omitempty is fine.
 	//
