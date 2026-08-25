@@ -24,6 +24,7 @@ import (
 	"log"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/nightgauge/nightgauge/internal/attention"
 	"github.com/nightgauge/nightgauge/internal/attention/sweep"
@@ -72,6 +73,16 @@ type AttentionSweepResult struct {
 	// declined. Sweeps are idempotent, so the honest answer to a redundant
 	// request is "the one already running covers you".
 	Busy bool `json:"busy,omitempty"`
+	// Throttled reports that a sweep completed within SweepMinGap and this call
+	// was declined without issuing any forge traffic (#848).
+	//
+	// Deliberately NOT folded into Busy: Busy means "something is running right
+	// now", and reporting a finished-moments-ago sweep as in-flight would make
+	// a caller wait for a completion event that is never coming.
+	Throttled bool `json:"throttled,omitempty"`
+	// ThrottledForMs is how long until a sweep would be accepted again. Lets a
+	// caller schedule rather than poll.
+	ThrottledForMs int64 `json:"throttledForMs,omitempty"`
 	// Reason echoes the trigger label the caller sent.
 	Reason string `json:"reason,omitempty"`
 	// SweptRepos is how many repos this sweep covered (#260). Surfaces so a
@@ -89,6 +100,33 @@ type AttentionSweepResult struct {
 // second caller is told Busy rather than made to duplicate the first one's
 // forge traffic.
 var sweepMu sync.Mutex
+
+// SweepMinGap is the shortest interval between two daemon sweeps (#848).
+//
+// A mutex is not a gap. sweepMu declines a sweep that overlaps one already
+// running, which is why back-to-back triggers still produced two FULL sweeps
+// as soon as the first had finished:
+//
+//	2026/08/23 12:58:36  sweep
+//	2026/08/23 12:58:50  sweep     <- 14s later
+//	2026/08/23 21:57:48  sweep
+//	2026/08/23 21:58:07  sweep     <- 19s later
+//
+// Both are well inside the extension's own SWEEP_MIN_GAP_MS of 60s. That guard
+// lives in AttentionSweepService and therefore only covers the triggers that
+// pass through it; the daemon is where the timer, activation, view-refresh,
+// run-terminated and manual paths all converge, so it is the only place a gap
+// can bind on all of them.
+//
+// Matched to the extension's 60s deliberately: the extension-side guard already
+// throttles every trigger it owns to this interval, so enforcing the same value
+// here changes nothing for those paths and catches only the ones that slip
+// underneath it.
+const SweepMinGap = 60 * time.Second
+
+// sweepNow is time.Now behind a variable so a test can cross the gap without
+// sleeping through it.
+var sweepNow = time.Now
 
 // handleAttentionSweep evaluates the registered repo-scoped producers against
 // each requested repo and reconciles the results into the shared store.
@@ -117,6 +155,22 @@ func (s *Server) handleAttentionSweep(ctx context.Context, raw json.RawMessage) 
 	}
 	defer sweepMu.Unlock()
 
+	// The gap is checked INSIDE the lock so two triggers racing for it cannot
+	// both read a stale lastSweepAt and both proceed — the exact shape of the
+	// 14-seconds-apart pair in #848.
+	now := sweepNow()
+	if !s.lastSweepAt.IsZero() {
+		if elapsed := now.Sub(s.lastSweepAt); elapsed < SweepMinGap {
+			// Not Busy: nothing is running. A sweep finished moments ago and
+			// its results already cover this caller, so re-reading every board
+			// would spend the most expensive call this product makes to
+			// re-derive an answer we hold.
+			res.Throttled = true
+			res.ThrottledForMs = (SweepMinGap - elapsed).Milliseconds()
+			return res, nil
+		}
+	}
+
 	for _, repo := range repos {
 		res.Repos = append(res.Repos, s.sweepOneRepo(ctx, store, repo))
 	}
@@ -132,6 +186,12 @@ func (s *Server) handleAttentionSweep(ctx context.Context, raw json.RawMessage) 
 	// an object — most importantly, about what is missing from it, which no
 	// per-repo producer can observe.
 	s.sweepWorkspace(ctx, store, repos, &res)
+
+	// Stamped only after a sweep that actually looked. An Unavailable or
+	// empty-repo-list call returns earlier and must not start the gap, or a
+	// daemon that briefly had no forge factory would suppress the first real
+	// sweep after it recovered.
+	s.lastSweepAt = sweepNow()
 	return res, nil
 }
 

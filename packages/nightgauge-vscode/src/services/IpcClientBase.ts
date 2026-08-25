@@ -1229,6 +1229,12 @@ export interface AttentionSweepResult {
   unavailable?: boolean;
   /** Another sweep was already in flight and this call was declined. */
   busy?: boolean;
+  /** A sweep completed within the daemon's SweepMinGap and this call was
+   * declined without issuing any forge traffic (#848). Distinct from `busy`:
+   * nothing is running, so there is no completion to wait for. */
+  throttled?: boolean;
+  /** Milliseconds until a sweep would be accepted again. */
+  throttledForMs?: number;
   /** Echo of the trigger label the caller sent. */
   reason?: string;
 }
