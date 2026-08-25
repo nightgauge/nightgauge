@@ -347,9 +347,16 @@ type V2Tokens struct {
 	// CostUnstamped (#585, #588): true when EstimatedCostUSD folds in at
 	// least one stage whose cost is a placeholder 0 because the serving
 	// (provider, model) pair could not be resolved against the pricing
-	// registry — not a legitimately free local-provider run. Consumers that
+	// registry — not a legitimately free local-provider run, and not the
+	// exact $0 of a deterministic stage that dispatched no model at all
+	// (#890, cost_source "deterministic"). Consumers that
 	// sum or average EstimatedCostUSD across runs (e.g. `cost by-class`) must
 	// check this before treating the total as a fully priced figure.
+	//
+	// The OR is correct and deliberate: one unpriceable stage taints the run
+	// total. What #890 fixed is upstream of it — the deterministic bookends
+	// were being flagged as unpriceable, so the OR was true for every run
+	// ever recorded and the flag carried no information.
 	CostUnstamped bool                     `json:"cost_unstamped,omitempty"`
 	PerStage      map[string]V2StageTokens `json:"per_stage,omitempty"`
 }
@@ -371,8 +378,10 @@ type V2StageTokens struct {
 	Adapter string `json:"adapter,omitempty"`
 	// CostSource records HOW CostUSD was priced (Issue #682): one of
 	// state.CostSourceNative (a vendor/CLI-reported measurement),
-	// state.CostSourceComputed (rate-card derived), or state.CostSourceUnknown
-	// (no pricing-registry entry — CostUSD is a placeholder 0). Mirrors the TS
+	// state.CostSourceComputed (rate-card derived), state.CostSourceUnknown
+	// (no pricing-registry entry — CostUSD is a placeholder 0), or
+	// state.CostSourceDeterministic (no model was dispatched — CostUSD is an
+	// exact 0 and CostUnstamped is NOT set, #890). Mirrors the TS
 	// `cost_source` enum in HistoryStageTokenUsageSchema. Empty string maps to
 	// absent on the wire via omitempty; readers must treat absence as
 	// source-unknown, NOT backfill a guess from cost_usd (that manufactured
@@ -386,7 +395,9 @@ type V2StageTokens struct {
 	// CostUnstamped mirrors StageResult.CostUnstamped (#585, #588): true when
 	// CostUSD is a placeholder 0 because the serving (provider, model) pair
 	// could not be resolved against the pricing registry — never set for the
-	// local-provider (ollama/lm-studio) $0, which is a genuine cost. The
+	// local-provider (ollama/lm-studio) $0, nor for the deterministic $0 of a
+	// stage that dispatched no model (#890, cost_source "deterministic"),
+	// both of which are genuine costs. The
 	// BuildV2Record fold ORs this across every CompleteStage occurrence
 	// accumulated into one stage entry: a single unresolved attempt taints
 	// the accumulated cost_usd for the whole entry, even if a later retry on

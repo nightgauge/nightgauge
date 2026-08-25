@@ -104,12 +104,24 @@ export const HistoryStageTokenUsageSchema = z.object({
    *                  prior to #3228 every non-Claude stage reported `0`).
    * - `'unknown'`  — adapter+model has no pricing entry; reported `cost_usd`
    *                  is `0` to make it impossible to silently undercount.
+   * - `'deterministic'` — no model was dispatched at all (Issue #890): the
+   *                  pipeline-start/pipeline-finish bookends and the
+   *                  deterministic execution paths of pr-create / pr-merge
+   *                  run compiled Go and spend nothing, so `cost_usd` is an
+   *                  EXACT `0`, not a placeholder. `cost_unstamped` is never
+   *                  set alongside it — the same carve-out that already
+   *                  applies to a genuinely free local-provider run.
    *
    * Optional for backwards-compat with pre-#3228 JSONL records. Reader-side
    * normalization treats undefined as `'native'` only when `cost_usd > 0` —
    * that was the only path that ever produced a non-zero cost pre-#3228.
+   *
+   * Go is the sole writer (`internal/state/cost_source.go`); this enum is the
+   * only validator. `TestCostSourcesPinnedToTSSchema` reads THIS literal at
+   * test time and fails if the two vocabularies drift, so keep it an inline
+   * `z.enum([...])` on one line rather than a reference to another module.
    */
-  cost_source: z.enum(["native", "computed", "unknown"]).optional(),
+  cost_source: z.enum(["native", "computed", "unknown", "deterministic"]).optional(),
   /**
    * Mirrors Go `state.V2StageTokens.CostUnstamped` (Issue #585, #588): true
    * when `cost_usd` is a placeholder `0` because the serving (provider,
