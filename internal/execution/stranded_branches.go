@@ -109,6 +109,22 @@ type StrandedBranchOptions struct {
 	// function that unit tests can run against fixture refs, for the same
 	// reason mergedIntoBase does not fetch either.
 	BaseRef string
+	// MergedPRLookup is the same fail-open second door the worktree sweep
+	// takes (see WorktreeSweepOptions.MergedPRLookup). Without it this scan
+	// decays: a merged branch stops being reported the moment the default
+	// branch evolves any file the branch owns, because the content diff is
+	// non-empty again.
+	//
+	// That is not hypothetical — it happened to `docs/graduate-wiring-defect-
+	// classes` within an hour of this scan shipping, when a later PR touched
+	// `CLAUDE.md`, a file that branch also owned (#916). The branch was still
+	// merged; `scripts/branch-merged-check.sh` still said SAFE-DELETE, via
+	// exactly this door. Under-reporting is the safe direction, but a report
+	// that goes quiet as the tree moves is the same invisibility #912 was
+	// filed to end.
+	//
+	// nil closes the door and leaves the content test's verdict standing.
+	MergedPRLookup MergedPRLookup
 }
 
 // ScanStrandedBranches reports local branches that are fully merged into the
@@ -169,7 +185,10 @@ func ScanStrandedBranches(opts StrandedBranchOptions) (StrandedBranchScan, error
 		switch {
 		case !hasOwnCommits:
 			res.Kept = append(res.Kept, KeptBranch{Name: branch, Reason: KeepNoOwnCommits})
-		case !merged:
+		case !merged && !lookupMergedPRIn(opts.RepoRoot, opts.MergedPRLookup, branch):
+			// The door is consulted ONLY here, after the content test has
+			// already said unmerged. On a repo whose branches all pass the
+			// content test that is zero lookups and zero API cost.
 			res.Kept = append(res.Kept, KeptBranch{Name: branch, Reason: KeepUnmergedContent})
 		default:
 			tip, err := gitOutput(opts.RepoRoot, "rev-parse", branch)

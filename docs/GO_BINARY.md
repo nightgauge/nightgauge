@@ -1394,6 +1394,48 @@ developer may keep a merged branch on purpose. Giving branches a real
 provenance marker is a separate design change. Until then the product names
 the condition and the human runs the delete.
 
+##### The merged-PR second door (#916)
+
+The content test is right for squash merges and wrong in one direction: once
+the default branch evolves a file the branch owns, the diff is non-empty again
+and a merged branch reads as unmerged **forever**. That is fail-closed and
+therefore safe, and it made a real branch vanish from this report within an
+hour of the scan shipping — a later PR touched `CLAUDE.md`, which the branch
+also owned. Under-reporting is the safe direction, but a report that goes quiet
+as the tree moves is the invisibility #912 was filed to end.
+
+`WorktreeSweepOptions.MergedPRLookup` was written for exactly this in #593 —
+and **no production call site set it between #593 and #916**. The mechanism had
+a doc comment and two unit tests, each supplying the callback itself, so every
+test passed while the door was closed everywhere it mattered. Unpinned Wiring,
+pinned now by a source-level test
+(`TestEveryProductionSweepCallSiteOpensTheMergedPRDoor`) that fails when any
+non-test `WorktreeSweepOptions`/`StrandedBranchOptions` literal omits the field.
+
+`github.NewMergedPRLookup` is the production door, supplied by all three sweep
+call sites (CLI, `doctor`, the autonomous scheduler). Two properties are
+load-bearing:
+
+- **Lazy.** The merged-PR index query is issued on first use and never before,
+  and callers consult the door only after the content test has already reported
+  a branch unmerged. A workspace whose branches all pass the content test
+  spends **zero** forge quota — which matters because the daemon runs this
+  every reconcile cycle across every root, and #842 is an open epic about that
+  budget. Measured on this repo with five stranded branches: **2 requests,
+  1 GraphQL point** for the whole sweep.
+- **Fail-open toward keeping.** Any failure — no auth, no network, no PR, no
+  containment — leaves the content test's verdict standing. The door can only
+  move a branch from "kept" to "reported", never the reverse, so a broken door
+  costs visibility and never work.
+
+The index is **one page of 100**, GitHub's per-connection maximum. This is not
+a taste choice: `first: 250` is rejected outright, the door swallows the error
+by design, and the symptom is every lookup answering not-found — the whole
+feature silently doing nothing, indistinguishable from a repo with no merged
+PRs. It shipped that way for one run and only a live probe found it, because no
+fake-backed test has GitHub's page limit. The bound and the clamp both have
+tests now, and an index failure logs at WARN rather than passing in silence.
+
 Every keep is pinned by a test, because the cost of a false positive here is a
 human deleting real work on the report's say-so: unmerged content, unpushed
 work, a branch with no commits of its own, one a live worktree holds, and the

@@ -1,9 +1,11 @@
 package orchestrator
 
 import (
+	"context"
 	"log"
 
 	"github.com/nightgauge/nightgauge/internal/execution"
+	gh "github.com/nightgauge/nightgauge/internal/github"
 )
 
 // runMergedWorktreeSweep is the ONE merged-worktree sweep (#403), and it has
@@ -114,9 +116,21 @@ import (
 // notices leaked worktrees (#110/#302).
 //
 // Best-effort and strictly non-blocking throughout: a per-repo failure is
-// logged and those worktrees stay for the next reconcile. Unlike the
-// neighbouring sweeps this one spends no forge quota — it is local git only.
-func runMergedWorktreeSweep(roots []string, inFlight map[int]bool, determined bool, logPrefix string) {
+// logged and those worktrees stay for the next reconcile.
+//
+// # Forge quota (#916)
+//
+// This sweep was local-git-only until the merged-PR second door was wired in.
+// It is still local-git-only on the common path, and deliberately: `door` is
+// consulted ONLY after the content test has already reported a branch
+// unmerged, and the lookup it returns is lazy — it issues its one index query
+// on first use and never before. A workspace whose worktree branches all pass
+// the content test therefore still spends **zero** forge quota per cycle,
+// which matters because this runs on every reconcile across every root and
+// #842 is an open epic about exactly that budget.
+//
+// A nil door restores the previous behaviour exactly: content test only.
+func runMergedWorktreeSweep(roots []string, inFlight map[int]bool, determined bool, logPrefix string, door func(repoRoot string) execution.MergedPRLookup) {
 	if len(roots) == 0 {
 		// Not a benign "nothing to do": even a single-repo workspace resolves
 		// its primary root, so an empty set means the root lookup failed. This
@@ -132,9 +146,14 @@ func runMergedWorktreeSweep(roots []string, inFlight map[int]bool, determined bo
 	}
 
 	for _, root := range roots {
+		var lookup execution.MergedPRLookup
+		if door != nil {
+			lookup = door(root)
+		}
 		res, err := execution.SweepMergedWorktrees(execution.WorktreeSweepOptions{
-			RepoRoot:     root,
-			ActiveIssues: inFlight,
+			RepoRoot:       root,
+			ActiveIssues:   inFlight,
+			MergedPRLookup: lookup,
 		})
 		if err != nil {
 			log.Printf("%s: %s: %v", logPrefix, root, err)
@@ -172,4 +191,24 @@ func reclaimRationale(door execution.Door, baseRef string) string {
 	default:
 		return "UNACCOUNTED-FOR reclaim door " + string(door) + " — the sweep removed a directory it cannot explain"
 	}
+}
+
+// mergedPRDoor builds the merged-PR second door for one repo root, from the
+// scheduler's own GitHub client (#916).
+//
+// Method on Scheduler rather than a closure at the call site so the daemon
+// sweep and any future caller open the same door with the same client, and so
+// a nil client — which several test schedulers have deliberately — degrades to
+// the closed door instead of panicking.
+//
+// Lazy: this issues no request. See runMergedWorktreeSweep's quota note.
+func (s *Scheduler) mergedPRDoor(repoRoot string) execution.MergedPRLookup {
+	if s == nil || s.client == nil {
+		return nil
+	}
+	lookup := gh.NewMergedPRLookupForRoot(context.Background(), s.client, repoRoot)
+	if lookup == nil {
+		return nil
+	}
+	return lookup
 }

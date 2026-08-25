@@ -95,7 +95,7 @@ func TestCheckLeakedWorktrees_ReportsAStrandedWorktree(t *testing.T) {
 	r := newLeakRepo(t)
 	wt := r.strandedWorktree(1181)
 
-	item, warning := checkLeakedWorktrees(r.dir, aged())
+	item, warning := checkLeakedWorktrees(r.dir, aged(), nil)
 
 	if item.OK {
 		t.Fatalf("a stranded worktree must not read as healthy: %+v", item)
@@ -129,7 +129,7 @@ func TestCheckLeakedWorktrees_IgnoresAWorktreeHoldingOnlyExhaust(t *testing.T) {
 		t.Fatalf("write: %v", err)
 	}
 
-	item, _ := checkLeakedWorktrees(r.dir, aged())
+	item, _ := checkLeakedWorktrees(r.dir, aged(), nil)
 
 	if strings.Contains(item.Error, "uncommitted-changes") {
 		t.Errorf("pipeline exhaust was reported as a blocker: %q", item.Error)
@@ -139,7 +139,7 @@ func TestCheckLeakedWorktrees_IgnoresAWorktreeHoldingOnlyExhaust(t *testing.T) {
 func TestCheckLeakedWorktrees_HealthyRepoPasses(t *testing.T) {
 	r := newLeakRepo(t)
 
-	item, warning := checkLeakedWorktrees(r.dir, aged())
+	item, warning := checkLeakedWorktrees(r.dir, aged(), nil)
 
 	if !item.OK {
 		t.Errorf("a repo with no worktrees must pass: %+v", item)
@@ -153,7 +153,7 @@ func TestCheckLeakedWorktrees_UnverifiableIsNeverHealthy(t *testing.T) {
 	// Not a git repository and not a workspace, so no roots resolve. #296's
 	// lesson: "I could not look" must never render as "there is nothing wrong",
 	// because the operator cannot tell the two apart from the output.
-	item, warning := checkLeakedWorktrees(t.TempDir(), aged())
+	item, warning := checkLeakedWorktrees(t.TempDir(), aged(), nil)
 
 	if item.OK {
 		t.Fatalf("an unverifiable scan reported healthy: %+v", item)
@@ -279,7 +279,7 @@ func TestCheckStrandedBranches_ReportsAMergedBranchNoWorktreeHolds(t *testing.T)
 	r := newLeakRepo(t)
 	r.strandMergedBranch(912, "fix/912-landed")
 
-	item, warning := checkStrandedBranches(r.dir)
+	item, warning := checkStrandedBranches(r.dir, nil)
 
 	if item.OK {
 		t.Fatalf("a stranded merged branch must not read as healthy: %+v", item)
@@ -310,7 +310,7 @@ func TestCheckStrandedBranches_KeepsUnmergedWork(t *testing.T) {
 	r.git("-C", path, "commit", "-m", "unlanded work")
 	r.git("worktree", "remove", path)
 
-	item, _ := checkStrandedBranches(r.dir)
+	item, _ := checkStrandedBranches(r.dir, nil)
 
 	if strings.Contains(item.Error, "feat/919-unlanded") {
 		t.Fatalf("a branch carrying unmerged work was reported as stranded: %q", item.Error)
@@ -323,7 +323,7 @@ func TestCheckStrandedBranches_KeepsUnmergedWork(t *testing.T) {
 func TestCheckStrandedBranches_HealthyRepoPasses(t *testing.T) {
 	r := newLeakRepo(t)
 
-	item, warning := checkStrandedBranches(r.dir)
+	item, warning := checkStrandedBranches(r.dir, nil)
 
 	if !item.OK {
 		t.Errorf("a repo with only main must pass: %+v", item)
@@ -336,7 +336,7 @@ func TestCheckStrandedBranches_HealthyRepoPasses(t *testing.T) {
 func TestCheckStrandedBranches_UnverifiableIsNeverHealthy(t *testing.T) {
 	// #296 again: no roots resolve, so the scan never ran. A clean bill of
 	// health here would be an assertion about nothing.
-	item, warning := checkStrandedBranches(t.TempDir())
+	item, warning := checkStrandedBranches(t.TempDir(), nil)
 
 	if item.OK {
 		t.Fatalf("an unverifiable scan reported healthy: %+v", item)

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/execution"
+	gh "github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/internal/orchestrator"
 	"github.com/nightgauge/nightgauge/internal/reclaim"
 	"github.com/nightgauge/nightgauge/internal/state"
@@ -260,6 +262,14 @@ created for a run about to start), and any issue with a run in flight.`,
 					// Report-only, and the only place an operator sees it
 					// without running `doctor` (#912).
 					ReportStrandedBranches: true,
+					// The second door, per root (#916). Between #593 and #916
+					// this field was set by nothing in production, so the
+					// `update-branch` case it was written for never worked and
+					// every merged branch went invisible as soon as `main`
+					// touched its files. nil when no client or no GitHub
+					// origin, which is the closed door the sweep already
+					// handles.
+					MergedPRLookup: mergedPRDoorFor(cmd.Context(), root),
 				})
 				if sweepErr != nil {
 					// Best-effort per root, like the autonomous sweep: one
@@ -343,6 +353,28 @@ created for a run about to start), and any issue with a run in flight.`,
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Classify without removing anything")
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "Emit JSON instead of human-readable output")
 	return cmd
+}
+
+// mergedPRDoorFor builds the merged-PR second door for one repo root (#916).
+//
+// Best-effort by design and silent on failure: an unauthenticated or
+// offline machine gets the closed door and the content test alone, which is
+// exactly what this command did before the door existed. Failing the sweep
+// because a supplementary check is unavailable would trade a complete answer
+// for no answer.
+//
+// The door is LAZY — building it here issues no request. A root whose every
+// branch passes the content test never calls it and never pays.
+func mergedPRDoorFor(ctx context.Context, root string) execution.MergedPRLookup {
+	client, err := clientFromConfig()
+	if err != nil || client == nil {
+		return nil
+	}
+	lookup := gh.NewMergedPRLookupForRoot(ctx, client, root)
+	if lookup == nil {
+		return nil
+	}
+	return lookup
 }
 
 // worktreeSweepRoots resolves which repositories the sweep covers, CANONICALIZED

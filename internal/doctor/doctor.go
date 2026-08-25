@@ -336,7 +336,20 @@ func RunDoctor(ctx context.Context, cfg *config.Config, client *gh.Client, adapt
 	// leaked worktree is untidy, not broken, and a required failure here would
 	// exit 2 on a workspace that runs perfectly well.
 	now := time.Now()
-	worktreeLeaks, worktreeWarning := checkLeakedWorktrees(cwd, now)
+	// The merged-PR second door, built from doctor's OWN client (#916). nil
+	// client — the offline/unauthenticated case doctor already reports on
+	// above — yields the closed door and the content test alone, exactly as
+	// before. Lazy: no request is issued unless a branch actually fails the
+	// content test.
+	door := func(repoRoot string) execution.MergedPRLookup {
+		lookup := gh.NewMergedPRLookupForRoot(ctx, client, repoRoot)
+		if lookup == nil {
+			return nil
+		}
+		return lookup
+	}
+
+	worktreeLeaks, worktreeWarning := checkLeakedWorktrees(cwd, now, door)
 	result.Checks["worktree_leaks"] = worktreeLeaks
 	if worktreeWarning != "" {
 		warnings = append(warnings, worktreeWarning)
@@ -345,7 +358,7 @@ func RunDoctor(ctx context.Context, cfg *config.Config, client *gh.Client, adapt
 	// The worktree arm above sees only branches a worktree still holds, so a
 	// merged branch whose worktree is already gone is invisible to it — three
 	// of them sat in the core repo while every check reported green (#912).
-	strandedBranches, strandedWarning := checkStrandedBranches(cwd)
+	strandedBranches, strandedWarning := checkStrandedBranches(cwd, door)
 	result.Checks["stranded_branches"] = strandedBranches
 	if strandedWarning != "" {
 		warnings = append(warnings, strandedWarning)
