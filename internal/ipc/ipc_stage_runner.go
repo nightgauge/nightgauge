@@ -191,6 +191,15 @@ func (r *IpcStageRunner) RunStage(ctx context.Context, params orchestrator.Stage
 					log.Printf("#%d: stage %s — model %s rejected by API and no weaker tier available (%s)",
 						params.IssueNumber, params.Stage, params.Model, dg.Reason)
 				}
+			} else if blocked, reason := orchestrator.EscalationBlockedByCategory(result.ErrorText, result.LastOutputLines); blocked {
+				// #878: a permission failure is not a capability shortfall.
+				// The extension path escalates on the same RetryEngine as the
+				// Go-direct path, so a gate on only one of them means the
+				// expensive re-dispatch survives on whichever path the operator
+				// happens to be running — the exact shape the terminal-parity
+				// manifest exists to prevent.
+				log.Printf("#%d: stage %s failed — NOT escalating model: %s (no model can supply a missing credential)",
+					params.IssueNumber, params.Stage, reason)
 			} else {
 				decision := r.retryEngine.EvaluateEscalation(string(params.Stage), params.Model)
 				if decision.ShouldEscalate {

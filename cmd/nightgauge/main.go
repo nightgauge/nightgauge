@@ -3807,7 +3807,8 @@ func runCmd() *cobra.Command {
 					Repo:        repo,
 					IssueNumber: issueNumber,
 				})
-				return sched.RunQueue(cmd.Context())
+				summary, runErr := sched.RunQueue(cmd.Context())
+				return finishQueueRun(cmd, summary, runErr)
 			}
 
 			// Single run: pick next ready issue and execute
@@ -3825,7 +3826,8 @@ func runCmd() *cobra.Command {
 				Repo:        item.Repo,
 				IssueNumber: item.Number,
 			})
-			return sched.RunQueue(cmd.Context())
+			summary, runErr := sched.RunQueue(cmd.Context())
+			return finishQueueRun(cmd, summary, runErr)
 		},
 	}
 
@@ -4032,7 +4034,8 @@ func queueRunCmd() *cobra.Command {
 			}
 
 			fmt.Printf("Processing %d queued issues...\n", len(entries))
-			return sched.RunQueue(cmd.Context())
+			summary, runErr := sched.RunQueue(cmd.Context())
+			return finishQueueRun(cmd, summary, runErr)
 		},
 	}
 
@@ -11880,4 +11883,25 @@ func printModernizeAggregateFindingsHuman(r *aggregatefindings.Result) {
 			fmt.Printf("  [%s] %s (%s::%s)%s\n", f.Severity, f.Title, f.Source, f.SourceDimension, merged)
 		}
 	}
+}
+
+// finishQueueRun renders a queue pass's end-of-run summary to stdout and turns
+// a pass in which anything failed into a non-zero exit (#875).
+//
+// The summary goes to stdout and the one-line error to stderr (cobra prints it):
+// the exit code is no longer the only signal, and it is no longer wrong. Usage
+// is silenced because a failed pipeline is not a usage error — printing the
+// whole help text after a failure summary buries it.
+func finishQueueRun(cmd *cobra.Command, summary orchestrator.QueueRunSummary, err error) error {
+	if out := summary.Format(); out != "" {
+		fmt.Print(out)
+	}
+	if err != nil {
+		return err
+	}
+	if summary.HasFailures() {
+		cmd.SilenceUsage = true
+		return &orchestrator.QueueRunFailedError{Summary: summary}
+	}
+	return nil
 }

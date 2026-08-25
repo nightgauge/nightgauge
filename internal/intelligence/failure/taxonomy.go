@@ -143,8 +143,23 @@ func (c *Classifier) Classify(stage string, exitCode int, stderr string) Classif
 		}
 	}
 
-	// Auth/permission errors — not retryable
-	if containsAny(lower, "401", "403", "unauthorized", "forbidden", "permission denied") {
+	// Auth/permission errors — not retryable.
+	//
+	// The git-transport spellings (#878) are here because a credential-less
+	// push is the same class of failure as a 403 and must be recognized as
+	// such: the observed run's `invalid auth method` matched NOTHING in this
+	// ladder, fell through to CatUnknown, and the scheduler escalated
+	// haiku → sonnet and re-dispatched an identical 67k-char prompt that failed
+	// at the same line 44 seconds later. go-git reports `invalid auth method`
+	// and `authentication required`; the git CLI reports `Authentication
+	// failed`, `could not read Username`, and `Permission denied (publickey)`
+	// (the last already covered by the bare `permission denied` below); the
+	// GitHub API reports `Bad credentials`.
+	if containsAny(lower, "401", "403", "unauthorized", "forbidden", "permission denied",
+		"invalid auth method", "authentication required", "authentication failed",
+		"could not read username", "could not read password",
+		"invalid username or password", "bad credentials",
+		"ssh: unable to authenticate") {
 		return Classification{
 			Category:    CatPermission,
 			Severity:    SevHigh,

@@ -3818,7 +3818,7 @@ func (as *AutonomousScheduler) enqueueItem(ctx context.Context, item CandidateIt
 			stop := context.AfterFunc(genCtx, qcancel)
 			defer stop()
 			defer qcancel()
-			if err := as.scheduler.RunQueue(qctx); err != nil {
+			if _, err := as.scheduler.RunQueue(qctx); err != nil {
 				log.Printf("autonomous: queue processing error for %s#%d: %v",
 					item.Repo, item.Number, err)
 			}
