@@ -342,7 +342,7 @@ func RunDoctor(ctx context.Context, cfg *config.Config, client *gh.Client, adapt
 	// before. Lazy: no request is issued unless a branch actually fails the
 	// content test.
 	door := func(repoRoot string) execution.MergedPRLookup {
-		lookup := gh.NewMergedPRLookupForRoot(ctx, client, repoRoot)
+		lookup := gh.NewMergedPRLookupForRoot(ctx, func() (*gh.Client, error) { return client, nil }, repoRoot)
 		if lookup == nil {
 			return nil
 		}

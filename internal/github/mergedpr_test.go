@@ -181,8 +181,26 @@ func TestParseOriginSlug(t *testing.T) {
 		{"https://github.com/nightgauge/nightgauge.git", "nightgauge", "nightgauge", true},
 		{"https://user@github.com/nightgauge/nightgauge", "nightgauge", "nightgauge", true},
 		{"ssh://git@github.com/nightgauge/nightgauge.git", "nightgauge", "nightgauge", true},
+		{"git://github.com/nightgauge/nightgauge.git", "nightgauge", "nightgauge", true},
+		{"https://gitlab.example.com/group/proj.git", "group", "proj", true},
 		{"", "", "", false},
 		{"not-a-remote", "", "", false},
+
+		// A LOCAL CLONE IS NOT A FORGE. Every git fixture in this repo clones
+		// from a bare repo under t.TempDir(), so before #920 these parsed as
+		// owner="…" name="origin" and the merged-PR door was built for a
+		// repository that does not exist — an API call per sweep to be told
+		// so, a WARN per sweep, and the network dragged into unit tests.
+		{"/private/var/folders/xy/T/TestFoo/001/origin.git", "", "", false},
+		{"/tmp/base/origin.git", "", "", false},
+		{"file:///tmp/base/origin.git", "", "", false},
+		{"./relative/origin.git", "", "", false},
+		{"../sibling/origin.git", "", "", false},
+
+		// Malformed shapes that must not produce a plausible slug either.
+		{"https://github.com", "", "", false},
+		{"git@github.com:nightgauge", "", "", false},
+		{"https:///owner/name", "", "", false},
 	}
 	for _, c := range cases {
 		owner, name, ok := parseOriginSlug(c.remote)
@@ -228,5 +246,34 @@ func TestListMergedPRHeads_ClampsAnOversizedLimit(t *testing.T) {
 	}
 	if got := clampPageSize(25); got != 25 {
 		t.Errorf("clampPageSize(25) = %d, want 25 unchanged", got)
+	}
+}
+
+func TestNewMergedPRLookupForRoot_DoesNotBuildAClientForANonGitHubRemote(t *testing.T) {
+	// Laziness in the OTHER direction from the index query (#920). Building the
+	// client can shell out to `gh auth token`, which costs seconds; a repo
+	// whose origin is a local clone or another forge never needs it.
+	//
+	// Before this, every cmd-level sweep test over a temp-dir fixture paid that
+	// cost — 6.3s down to 2.0s on one test — and, worse, a local-path remote
+	// parsed as a plausible GitHub slug, so the door was built and would have
+	// queried a repository that does not exist.
+	calls := 0
+	factory := func() (*Client, error) {
+		calls++
+		return nil, nil
+	}
+
+	// t.TempDir() is not a git repo at all, so `git remote get-url` fails and
+	// the slug never resolves — the same closed path a local clone takes.
+	if got := NewMergedPRLookupForRoot(context.Background(), factory, t.TempDir()); got != nil {
+		t.Error("a root with no GitHub origin produced an open door")
+	}
+	if calls != 0 {
+		t.Errorf("client factory called %d time(s) for a root with no GitHub origin; want 0", calls)
+	}
+
+	if got := NewMergedPRLookupForRoot(context.Background(), nil, "/anywhere"); got != nil {
+		t.Error("a nil factory must produce the closed door, not a panicking one")
 	}
 }

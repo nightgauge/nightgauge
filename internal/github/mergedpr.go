@@ -273,12 +273,22 @@ func (d *mergedPRDoor) lookup(branch string) (string, []string, bool) {
 // remote is not a GitHub URL. A sweep on a repo whose forge this package
 // cannot speak to keeps working with the content test alone, which is what it
 // did before this door existed.
-func NewMergedPRLookupForRoot(ctx context.Context, client *Client, repoRoot string) func(branch string) (string, []string, bool) {
-	if client == nil || repoRoot == "" {
+// The slug is resolved BEFORE the client is built, and the client arrives as a
+// factory for that reason. Resolving `origin` is a local `git` call; building
+// the client can shell out to `gh auth token`, which costs seconds. A repo
+// whose remote is not a GitHub URL — a local clone, another forge — must not
+// pay for authentication it will never use, and unit tests over temp-dir
+// fixtures must not touch the network at all.
+func NewMergedPRLookupForRoot(ctx context.Context, clientFn func() (*Client, error), repoRoot string) func(branch string) (string, []string, bool) {
+	if clientFn == nil || repoRoot == "" {
 		return nil
 	}
 	owner, repo, ok := originSlug(repoRoot)
 	if !ok {
+		return nil
+	}
+	client, err := clientFn()
+	if err != nil || client == nil {
 		return nil
 	}
 	return NewMergedPRLookup(ctx, NewPRService(client), owner, repo)
@@ -298,22 +308,61 @@ func originSlug(repoRoot string) (owner, name string, ok bool) {
 
 // parseOriginSlug extracts owner/name from the SSH and HTTPS remote forms.
 // Split out from originSlug so the parsing is testable without a repository.
+//
+// **A remote that is not a forge URL must return false, not a plausible-looking
+// slug.** The first version took the last two path segments of anything, so a
+// local-path remote — `/private/var/…/base/origin.git`, which is what every git
+// test fixture in this repo uses — parsed as `owner="base" name="origin"`. The
+// door was then constructed for a repository that does not exist, spending an
+// API call per sweep to be told so, logging a WARN each time, and dragging the
+// network into unit tests that have no business touching it.
+//
+// So the shape is required, not inferred: an scp-style `user@host:owner/name`,
+// or a URL with a forge scheme. A bare filesystem path, a `file://` URL, and
+// anything else are all "not a GitHub remote", which is the closed door.
 func parseOriginSlug(remote string) (owner, name string, ok bool) {
 	remote = strings.TrimSpace(remote)
 	if remote == "" {
 		return "", "", false
 	}
-	remote = strings.TrimSuffix(remote, ".git")
-	// git@host:owner/name  and  ssh://git@host/owner/name
-	// https://host/owner/name  and  https://user@host/owner/name
-	if idx := strings.LastIndex(remote, ":"); idx >= 0 && !strings.Contains(remote[idx+1:], "/") {
-		// scp-style with no path separator after the colon is not owner/name.
+
+	switch {
+	case strings.HasPrefix(remote, "/"), strings.HasPrefix(remote, "."),
+		strings.HasPrefix(remote, "file://"):
+		// A local clone. Not a forge, and the case that produced the bogus
+		// slug above.
 		return "", "", false
 	}
-	if idx := strings.Index(remote, ":"); idx >= 0 && !strings.HasPrefix(remote, "http") && !strings.HasPrefix(remote, "ssh://") {
-		remote = remote[idx+1:]
+
+	remote = strings.TrimSuffix(remote, ".git")
+
+	var path string
+	switch {
+	case strings.HasPrefix(remote, "https://"), strings.HasPrefix(remote, "http://"),
+		strings.HasPrefix(remote, "ssh://"), strings.HasPrefix(remote, "git://"):
+		rest := remote[strings.Index(remote, "://")+3:]
+		slash := strings.Index(rest, "/")
+		if slash < 0 {
+			return "", "", false
+		}
+		host := rest[:slash]
+		if host == "" {
+			return "", "", false
+		}
+		path = rest[slash+1:]
+	case strings.Contains(remote, "@") && strings.Contains(remote, ":"):
+		// scp-style: user@host:owner/name
+		colon := strings.Index(remote, ":")
+		at := strings.Index(remote, "@")
+		if at > colon {
+			return "", "", false
+		}
+		path = remote[colon+1:]
+	default:
+		return "", "", false
 	}
-	parts := strings.Split(strings.Trim(remote, "/"), "/")
+
+	parts := strings.Split(strings.Trim(path, "/"), "/")
 	if len(parts) < 2 {
 		return "", "", false
 	}
