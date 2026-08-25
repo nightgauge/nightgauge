@@ -1,0 +1,74 @@
+{
+  "_comment": [
+    "THE branch-name contract (#889). This file is the single statement of what",
+    "an (issue number, title, labels) triple must produce, and it exists because",
+    "the extension used to compose names itself and disagreed with the Go binary",
+    "on all three of prefix, number and truncation.",
+    "Consumed by internal/git TestComposeBranchNameContract."
+  ],
+  "cases": [
+    {
+      "name": "the #889 regression: type:bug title carrying its own number",
+      "issueNumber": 227,
+      "title": "227 Per-operation error isolation and transactions in /sync/push",
+      "labels": ["type:bug"],
+      "want": "fix/227-per-operation-error-isolation-and-transactions-in"
+    },
+    {
+      "name": "a bug is fix/, never feat/",
+      "issueNumber": 12,
+      "title": "Crash on empty config",
+      "labels": ["type:bug"],
+      "want": "fix/12-crash-on-empty-config"
+    },
+    {
+      "name": "no labels falls back to feat/",
+      "issueNumber": 12,
+      "title": "Crash on empty config",
+      "labels": [],
+      "want": "feat/12-crash-on-empty-config"
+    },
+    {
+      "name": "docs label",
+      "issueNumber": 5,
+      "title": "Document the merge policy",
+      "labels": ["documentation"],
+      "want": "docs/5-document-the-merge-policy"
+    },
+    {
+      "name": "leading '#N ' is the same duplicate",
+      "issueNumber": 227,
+      "title": "#227 Fix the thing",
+      "labels": ["type:bug"],
+      "want": "fix/227-fix-the-thing"
+    },
+    {
+      "name": "a DIFFERENT leading number is content and survives",
+      "issueNumber": 12,
+      "title": "404 page returns 500",
+      "labels": ["type:bug"],
+      "want": "fix/12-404-page-returns-500"
+    },
+    {
+      "name": "a number that merely PREFIXES the issue number is not a duplicate",
+      "issueNumber": 22,
+      "title": "2200 requests per second regression",
+      "labels": [],
+      "want": "feat/22-2200-requests-per-second-regression"
+    },
+    {
+      "name": "slug budget is 50 chars, spent on words not on a repeated number",
+      "issueNumber": 99,
+      "title": "A very long title that goes on and on and on and should be truncated at some reasonable point eventually",
+      "labels": [],
+      "want": "feat/99-a-very-long-title-that-goes-on-and-on-and-on-and-s"
+    },
+    {
+      "name": "a title that is nothing but its own number",
+      "issueNumber": 42,
+      "title": "42",
+      "labels": [],
+      "want": "feat/42-"
+    }
+  ]
+}

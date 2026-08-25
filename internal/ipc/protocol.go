@@ -519,6 +519,23 @@ type GitCheckoutParams struct {
 	WorkDir string `json:"workDir,omitempty"`
 }
 
+// GitComposeBranchNameParams are parameters for git.composeBranchName.
+//
+// Repo-independent by design (#889): composing a name reads nothing from a
+// worktree, so there is no WorkDir and no way for the call to fail on a repo
+// the caller has not opened yet. That matters because the extension composes
+// BEFORE it creates the worktree it will use.
+type GitComposeBranchNameParams struct {
+	IssueNumber int      `json:"issueNumber"`
+	Title       string   `json:"title"`
+	Labels      []string `json:"labels,omitempty"`
+}
+
+// GitComposeBranchNameResult is the result for git.composeBranchName.
+type GitComposeBranchNameResult struct {
+	Name string `json:"name"`
+}
+
 // GitBranchCreateParams are parameters for git.branchCreate.
 type GitBranchCreateParams struct {
 	Name    string `json:"name"`

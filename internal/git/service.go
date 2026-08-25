@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -1355,7 +1356,26 @@ func BranchPrefixFromLabels(labels []string) string {
 	return "feat/"
 }
 
+// ComposeBranchName is THE branch-name composer (#889). Every caller that
+// turns an issue into a branch name goes through here — the CLI, the IPC
+// server on behalf of the VSCode extension, and the pipeline skills. It is
+// deliberately the only entry point that takes raw labels: a second composer
+// that hardcodes a prefix brands every bug fix a feature, which is exactly
+// what `ConcurrentPipelineManager` did before this existed.
+func ComposeBranchName(labels []string, number int, title string) string {
+	prefix := strings.TrimSuffix(BranchPrefixFromLabels(labels), "/")
+	return GenerateBranchSlug(prefix, number, title)
+}
+
 // GenerateBranchSlug creates a branch name from an issue number and title.
+//
+// A title that already opens with the issue number contributes it only once
+// (#889). Queue items reach this function with titles rendered for display,
+// and some of those carry a leading "#227" / "227 " that the caller has no
+// way to know about; prepending the number unconditionally produced
+// `feat/227-227-per-operation-...`. Only a leading token that IS this issue's
+// number is dropped, so a title whose first word is some other number ("404
+// page returns 500") keeps it.
 func GenerateBranchSlug(prefix string, number int, title string) string {
 	slug := strings.ToLower(title)
 	slug = strings.Map(func(r rune) rune {
@@ -1373,6 +1393,17 @@ func GenerateBranchSlug(prefix string, number int, title string) string {
 		slug = strings.ReplaceAll(slug, "--", "-")
 	}
 	slug = strings.Trim(slug, "-")
+
+	// Drop a leading duplicate of this issue's own number, before truncation
+	// so the budget below is spent on words rather than on a repeat.
+	if own := strconv.Itoa(number); strings.HasPrefix(slug, own) {
+		rest := slug[len(own):]
+		if strings.HasPrefix(rest, "-") {
+			slug = strings.TrimLeft(rest, "-")
+		} else if rest == "" {
+			slug = ""
+		}
+	}
 
 	// Truncate to reasonable length
 	if len(slug) > 50 {
