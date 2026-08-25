@@ -616,6 +616,39 @@ reports green having run zero of its cases), and on a `*.test.ts` under
 `require("vscode")`, which only resolves inside an extension host). All three
 shapes are exercised by `scripts/test-check-test-runner-coverage.sh`.
 
+### A test that passes alone and fails in the suite is order-dependent, not flaky
+
+"Flaky" invites a re-run. Order dependence does not go away on a re-run — it
+goes away on YOUR machine and comes back on CI, which is the worst possible
+place to learn about it.
+
+Two mechanisms produce it, and both were hit in one session:
+
+**Two `vi.mock` calls for the same module.** Only one wins, and which one is
+registration-order dependent. A file that already mocks `IpcClient` on a single
+line will not match a patch looking for the multi-line shape, so a scripted
+edit adds a SECOND mock instead of extending the first — and the surviving one
+decides whether the rest of the file's spies are wired at all. Symptom: an
+assertion on a spy that was never called, in a file that passes in isolation.
+
+```bash
+# After any scripted edit that touches mocks, assert the count is exactly 1.
+for f in tests/**/*.test.ts; do
+  n=$(grep -c 'vi.mock("../../src/services/IpcClient"' "$f")
+  [ "$n" -gt 1 ] && echo "DUPLICATE MOCK: $f ($n)"
+done
+```
+
+**A value captured before `vi.mock`'s factory can see it.** `vi.mock` is
+hoisted; a plain `const` above it is not. Use `vi.hoisted` for anything a mock
+factory closes over, and match whatever the file already does — a file that
+declares one spy with `vi.hoisted` and its neighbour with a bare `const` will
+behave differently under load.
+
+**Verify both ways before believing either**: run the file alone AND run the
+full suite. A green single-file run is not evidence about suite behaviour, and
+a green suite run on an unloaded machine is not evidence about CI.
+
 ### Mock Factories
 
 Mock factories are located in `tests/mocks/` and provide consistent test data:

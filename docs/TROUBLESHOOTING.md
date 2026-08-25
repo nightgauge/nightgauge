@@ -1076,23 +1076,57 @@ does the extension come up in the VSCode people actually have.
 Failures that read as success, and successes that read as failure. Every one
 below has cost a session at least once.
 
-### `ci-local.sh`'s exit code is meaningless — assert the success marker
+### Reading `ci-local.sh`'s result — its own exit code, not a wrapper's
 
-The script emits no `REAL_EXIT` line and its exit code does not reflect whether
-the checks passed. Failures render as `✗ N check(s) failed`, which a
-`grep FAIL` is silent on. Assert the explicit marker and treat its absence as
-failure:
+**The script's exit code is authoritative**: `scripts/ci-local.sh` ends in an
+explicit `exit 0` when `FAIL_COUNT` is zero and `exit 1` otherwise. An earlier
+revision of this page claimed the exit code "does not reflect whether the
+checks passed"; that has not been true for some time, and believing it costs
+you the single most reliable signal the run produces.
+
+What actually goes wrong is **reading someone else's exit code.** Backgrounding
+the gate as a compound command reports the status of the LAST command in the
+chain, not the script's:
 
 ```bash
-grep -q "All CI-parity checks passed" <log> && echo PASS || echo FAIL
+# WRONG — reports the echo's status (always 0), whatever the gate did
+bash scripts/ci-local.sh > gate.log 2>&1; echo "EXIT=$?"
+
+# RIGHT — the script is the last command; $? is its own
+bash scripts/ci-local.sh > gate.log 2>&1
+echo "CI_LOCAL_EXIT=$?"
 ```
 
-The run takes roughly three minutes (the `-race` step alone adds ~40s), which
-exceeds the foreground tool-call timeout in most agent harnesses. **Background
-it and poll.** A foreground timeout SIGKILLs the job, and a SIGKILLed run leaks
-a worktree registration that `git worktree prune` structurally cannot clear —
-prune only removes entries whose directory is gone, and on SIGKILL the directory
-survives.
+This is not hypothetical: a session read the first shape, reported a gate that
+had failed 109 tests as passing, and pushed on it.
+
+Confirm against the log's own verdict line, which is unambiguous either way:
+
+```bash
+grep -qE "^✓ All CI-parity checks passed" gate.log && echo PASS || echo FAIL
+```
+
+**Do not judge by tailing the log.** On failure the script prints remediation
+advice last ("Fix the failures before pushing. Most format/lint failures are
+auto-fixable…"), so a tail of a FAILED run ends in friendly text that reads
+like success. The failure summary — `✗ N check(s) failed:` with each step and
+its log path — sits above that.
+
+A full run on this tree takes **10–15 minutes**, not the three this page used
+to claim: `go test ./...` plus `-race`, both TypeScript workspaces (~12,500
+extension tests), the plugin-skills mirror regeneration and several network
+calls. That far exceeds the foreground tool-call timeout in most agent
+harnesses. **Background it and poll.** A foreground timeout SIGKILLs the job,
+and a SIGKILLed run leaks a worktree registration that `git worktree prune`
+structurally cannot clear — prune only removes entries whose directory is gone,
+and on SIGKILL the directory survives.
+
+**Background it in the right directory.** A backgrounded command's `cd` does
+not persist to later calls in some harnesses, so a gate launched with a bare
+`bash scripts/ci-local.sh` can run against the DEFAULT worktree while you
+believe it is testing your branch — a green result for code you did not
+change. Put the `cd` in the same command and have it print `pwd`, or verify
+with `lsof -a -d cwd -p "$(pgrep -f '[c]i-local.sh')"`.
 
 ### `vitest` in a worktree fails until the SDK is built
 

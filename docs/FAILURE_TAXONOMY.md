@@ -1126,6 +1126,18 @@ default.** A resolver that may be nil must document what the nil case _means
 today_, not what it meant when the seam was added, and a nil that is now
 incorrect must fail loudly rather than resolve to the nearest plausible root.
 
+**Wiring corollary: wire it at the CONSTRUCTOR, not at a call site.** A
+component built from more than one place acquires this defect the moment a
+capability is attached by whoever built it. The autonomous daemon is
+constructed twice — by the CLI and by the IPC server on the extension's behalf
+— so a sweep wired at one of those call sites is a sweep the other silently
+does not have, and the half that runs is the half nobody tested. #885's
+baseline evaluator is therefore wired inside `NewAutonomousScheduler` with a
+test seam, not passed in by each caller: there is exactly one place to get it
+right and no way for a second caller to forget. Ask of any new capability
+"which constructors exist, and does every one of them reach this?" before
+asking whether the code is correct.
+
 **Testing corollary:** a test that exercises one path in isolation cannot see
 this class — both paths pass their own suites, which is exactly why every
 instance above shipped green. The assertion has to **compare the two paths**:
