@@ -342,6 +342,15 @@ func RunDoctor(ctx context.Context, cfg *config.Config, client *gh.Client, adapt
 		warnings = append(warnings, worktreeWarning)
 	}
 
+	// The worktree arm above sees only branches a worktree still holds, so a
+	// merged branch whose worktree is already gone is invisible to it — three
+	// of them sat in the core repo while every check reported green (#912).
+	strandedBranches, strandedWarning := checkStrandedBranches(cwd)
+	result.Checks["stranded_branches"] = strandedBranches
+	if strandedWarning != "" {
+		warnings = append(warnings, strandedWarning)
+	}
+
 	stashLeaks, stashWarning := checkPipelineStashes(cwd, now)
 	result.Checks["pipeline_stashes"] = stashLeaks
 	if stashWarning != "" {

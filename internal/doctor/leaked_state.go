@@ -167,6 +167,80 @@ func checkLeakedWorktrees(startDir string, now time.Time) (CheckItem, string) {
 	}, msg
 }
 
+// strandedBranch is one merged branch, in one repo, that no worktree holds.
+type strandedBranch struct {
+	Repo   string
+	Branch string
+}
+
+// checkStrandedBranches builds the doctor entry for merged branches that no
+// worktree holds (#912 AC4) — the leak the worktree arm above structurally
+// cannot see, because it drives off `git worktree list` and these branches
+// have no worktree left.
+//
+// Report-only, and stated as such in the message: the check names the branches
+// and the command, and deletes nothing. execution.ScanStrandedBranches explains
+// why deleting is not a follow-up but a design decision.
+//
+// This arm does NOT fetch, and does not need the worktree arm's fetch to be
+// correct. A stale origin/<default> makes a just-merged branch read as
+// unmerged content, so the branch is KEPT: staleness costs timeliness, never
+// safety, and the arm never over-reports because of it. (In practice the
+// worktree arm has already fetched every root by the time this runs, so the
+// base ref is current — but nothing here depends on that ordering.)
+//
+// No age threshold, unlike the worktree arms. A branch whose content is
+// already in the default branch cannot become un-merged by waiting, and a
+// merged branch is stranded from the moment its PR lands — there is no
+// "probably from the run that just finished" reading to guard against.
+func checkStrandedBranches(startDir string) (CheckItem, string) {
+	roots := config.WorkspaceRepoRoots(startDir)
+	if len(roots) == 0 {
+		msg := "stranded branches unverifiable: no repo roots resolved — not inside a git repository or workspace"
+		return CheckItem{OK: false, Detail: "could not scan for stranded branches", Error: msg}, msg
+	}
+
+	var found []strandedBranch
+	for _, root := range roots {
+		scan, err := execution.ScanStrandedBranches(execution.StrandedBranchOptions{RepoRoot: root})
+		if err != nil {
+			// One unreadable root undetermines the answer, exactly as in
+			// scanLeakedWorktrees: a partial scan and a complete one print
+			// identically at the call site (#296, #323).
+			msg := fmt.Sprintf("stranded branches unverifiable in %s: %v", root, err)
+			return CheckItem{OK: false, Detail: "could not scan for stranded branches", Error: msg}, msg
+		}
+		for _, b := range scan.Stranded {
+			found = append(found, strandedBranch{Repo: filepath.Base(root), Branch: b.Name})
+		}
+	}
+	if len(found) == 0 {
+		return CheckItem{OK: true, Detail: "no stranded merged branches"}, ""
+	}
+
+	sort.Slice(found, func(i, j int) bool {
+		if found[i].Repo != found[j].Repo {
+			return found[i].Repo < found[j].Repo
+		}
+		return found[i].Branch < found[j].Branch
+	})
+	names := make([]string, 0, len(found))
+	for i, b := range found {
+		if i == maxLeaksReported {
+			names = append(names, fmt.Sprintf("… and %d more", len(found)-maxLeaksReported))
+			break
+		}
+		names = append(names, b.Repo+" "+b.Branch)
+	}
+	msg := fmt.Sprintf("merged branches no worktree holds (report only, nothing deleted): %s — verify with `scripts/branch-merged-check.sh` and delete by hand",
+		strings.Join(names, "; "))
+	return CheckItem{
+		OK:     false,
+		Detail: fmt.Sprintf("%d stranded merged branch(es)", len(found)),
+		Error:  msg,
+	}, msg
+}
+
 // checkPipelineStashes builds the doctor entry for stashes the pipeline created
 // and never reclaimed (#330 AC3).
 //

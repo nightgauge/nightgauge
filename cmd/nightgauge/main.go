@@ -10137,6 +10137,21 @@ Resolution methods checked in order:
 
 // --- doctor command ---
 
+// doctorCheckOrder is the render order for doctor's named rows. A check that
+// RunDoctor emits but this list omits is computed, JSON-visible, and INVISIBLE
+// in the human output — the shape a reader is most likely to read as "the
+// product does not check that" (#912). Pinned by
+// TestDoctorCheckOrder_CoversEveryEmittedCheck.
+//
+// The leak carriers are listed here so they render as named rows rather than
+// only as anonymous Warnings lines; keys absent from result.Checks
+// (compose_orphans writes nothing when healthy) are skipped at render time.
+var doctorCheckOrder = []string{
+	"binary", "gh", "github_auth", "api_user", "scopes", "rate_limit", "config", "project",
+	"ai_adapter",
+	"compose_orphans", "worktree_leaks", "stranded_branches", "pipeline_stashes", "orphaned_processes",
+}
+
 func doctorCmd() *cobra.Command {
 	var jsonOutput bool
 	var adaptersFlag string
@@ -10196,16 +10211,7 @@ Use --json for machine-readable output (skills parse this format).`,
 
 			// Human-readable output
 			fmt.Printf("nightgauge doctor — schema v%d\n\n", result.V)
-			// The leak carriers are listed here so they render as named rows
-			// rather than only as anonymous Warnings lines; keys absent from
-			// result.Checks (compose_orphans writes nothing when healthy) are
-			// skipped below.
-			checkOrder := []string{
-				"binary", "gh", "github_auth", "api_user", "scopes", "rate_limit", "config", "project",
-				"ai_adapter",
-				"compose_orphans", "worktree_leaks", "pipeline_stashes", "orphaned_processes",
-			}
-			for _, key := range checkOrder {
+			for _, key := range doctorCheckOrder {
 				item, ok := result.Checks[key]
 				if !ok {
 					continue

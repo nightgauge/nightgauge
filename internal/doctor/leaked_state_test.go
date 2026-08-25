@@ -252,3 +252,99 @@ func TestCheckPipelineStashes_UnreadableRootIsNeverHealthy(t *testing.T) {
 		t.Error("an unverifiable scan must warn")
 	}
 }
+
+// #912. The worktree arm above drives off `git worktree list`, so a merged
+// branch whose worktree is already gone is outside its reach permanently —
+// three of them sat in the core repo while `doctor` reported "healthy".
+
+// strandMergedBranch squash-merges a branch into main and then removes its
+// worktree, reproducing the production sequence exactly. Ancestry reports the
+// result as unmerged; only a content diff sees the truth.
+func (r *leakRepo) strandMergedBranch(issue int, branch string) {
+	r.t.Helper()
+	path := filepath.Join(r.dir, ".worktrees", "issue-"+itoa(issue))
+	r.git("worktree", "add", "-q", path, "-b", branch, "main")
+	if err := os.WriteFile(filepath.Join(path, "landed.txt"), []byte("shipped\n"), 0o644); err != nil {
+		r.t.Fatalf("write: %v", err)
+	}
+	r.git("-C", path, "add", ".")
+	r.git("-C", path, "commit", "-m", "work on "+branch)
+	r.git("merge", "--squash", branch)
+	r.git("commit", "-m", "squash: "+branch)
+	r.git("update-ref", "refs/remotes/origin/main", strings.TrimSpace(r.git("rev-parse", "main")))
+	r.git("worktree", "remove", path)
+}
+
+func TestCheckStrandedBranches_ReportsAMergedBranchNoWorktreeHolds(t *testing.T) {
+	r := newLeakRepo(t)
+	r.strandMergedBranch(912, "fix/912-landed")
+
+	item, warning := checkStrandedBranches(r.dir)
+
+	if item.OK {
+		t.Fatalf("a stranded merged branch must not read as healthy: %+v", item)
+	}
+	if !strings.Contains(item.Error, "fix/912-landed") {
+		t.Errorf("the check does not name the branch: %q", item.Error)
+	}
+	// Report-only is a promise to the operator, so the output has to say so —
+	// otherwise the row reads as something the product already handled.
+	if !strings.Contains(item.Error, "report only") {
+		t.Errorf("the check does not say it deleted nothing: %q", item.Error)
+	}
+	if warning == "" {
+		t.Error("a stranded branch must produce a warning, not just a check entry")
+	}
+}
+
+func TestCheckStrandedBranches_KeepsUnmergedWork(t *testing.T) {
+	// The failure that costs something: a human deletes real work on this
+	// report's say-so.
+	r := newLeakRepo(t)
+	path := filepath.Join(r.dir, ".worktrees", "issue-919")
+	r.git("worktree", "add", "-q", path, "-b", "feat/919-unlanded", "main")
+	if err := os.WriteFile(filepath.Join(path, "wip.txt"), []byte("not merged anywhere\n"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	r.git("-C", path, "add", ".")
+	r.git("-C", path, "commit", "-m", "unlanded work")
+	r.git("worktree", "remove", path)
+
+	item, _ := checkStrandedBranches(r.dir)
+
+	if strings.Contains(item.Error, "feat/919-unlanded") {
+		t.Fatalf("a branch carrying unmerged work was reported as stranded: %q", item.Error)
+	}
+	if !item.OK {
+		t.Errorf("nothing is stranded here: %+v", item)
+	}
+}
+
+func TestCheckStrandedBranches_HealthyRepoPasses(t *testing.T) {
+	r := newLeakRepo(t)
+
+	item, warning := checkStrandedBranches(r.dir)
+
+	if !item.OK {
+		t.Errorf("a repo with only main must pass: %+v", item)
+	}
+	if warning != "" {
+		t.Errorf("unexpected warning: %q", warning)
+	}
+}
+
+func TestCheckStrandedBranches_UnverifiableIsNeverHealthy(t *testing.T) {
+	// #296 again: no roots resolve, so the scan never ran. A clean bill of
+	// health here would be an assertion about nothing.
+	item, warning := checkStrandedBranches(t.TempDir())
+
+	if item.OK {
+		t.Fatalf("an unverifiable scan reported healthy: %+v", item)
+	}
+	if !strings.Contains(item.Error, "unverifiable") {
+		t.Errorf("the error does not say the scan could not run: %q", item.Error)
+	}
+	if warning == "" {
+		t.Error("an unverifiable scan must warn")
+	}
+}
