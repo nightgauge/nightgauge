@@ -439,3 +439,55 @@ func sizeFromLabels(labels []string) types.Size {
 	}
 	return ""
 }
+
+// ProjectUpdatedAt reports when the board last changed, for one point.
+//
+// This is the change probe behind #847's read gate. What it observes was
+// measured against live boards rather than assumed, because a detector that
+// answers a slightly different question than the read it gates is worse than
+// no detector at all — it reports "nothing moved" with confidence while the
+// board has moved. (The mechanism this issue originally specified,
+// `/repos/{o}/{r}/events` with If-None-Match, fails exactly that way: the repo
+// event feed carries no ProjectsV2 events at all.)
+//
+// It DOES move on:
+//
+//   - a field-value change, including the Backlog -> Ready transition the
+//     scheduler dispatches on;
+//   - an item being added to or removed from the board;
+//   - a linked issue being CLOSED or reopened, even when nothing writes a
+//     board field. Verified on a board holding 17 issues closed while their
+//     Status stayed Backlog/Ready: every one bumped the item, and the project,
+//     within a second of closedAt.
+//
+// It does NOT move on:
+//
+//   - an edit to a linked issue's own content — title, labels, body, comments.
+//     Verified on a board item whose issue was edited a full WEEK after the
+//     item's own updatedAt last moved.
+//
+// That last exclusion is why boardcache renews a snapshot only up to
+// MaxRenewedAge rather than indefinitely: BoardItem carries Title, Labels,
+// BlockedBy and SubIssues, and this probe is structurally blind to all four.
+// Reads never bump it, so polling the probe cannot make the probe fire.
+func (b *BoardService) ProjectUpdatedAt(ctx context.Context) (time.Time, error) {
+	vars := map[string]interface{}{
+		"owner":         graphql.String(b.owner),
+		"projectNumber": graphql.Int(b.projectNumber),
+	}
+	raw, err := queryProjectUpdatedAt(ctx, b.client, b.ownerType, vars)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("probe board updatedAt: %w", err)
+	}
+	if raw == "" {
+		// A present-but-empty timestamp is not "the board never changed"; it is
+		// a shape we do not understand. Report it so the caller refetches
+		// rather than trusting a zero value.
+		return time.Time{}, fmt.Errorf("probe board updatedAt: empty timestamp")
+	}
+	ts, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("probe board updatedAt: parse %q: %w", raw, err)
+	}
+	return ts, nil
+}

@@ -3847,6 +3847,114 @@ caused the fetch; the second producer gets a hit and issues nothing. So
 means `StrandedReadyItems` asked first. Attribution is per *call*, and after
 #845 there is only one call to attribute.
 
+### The Board Change Probe (Issue #847)
+
+The snapshot cache above removes duplicate reads *inside* one window. It does
+nothing about the next window: when a snapshot expires, the board is re-read
+unconditionally, and on an idle workspace that read almost always discovers
+that nothing changed. Sweeps can fire as often as `SweepMinGap` (60s) against a
+90s TTL, so an idle hour spends thousands of points learning nothing.
+
+**Whether the read is worth issuing can be answered for one point.**
+
+```graphql
+query($owner:String!$projectNumber:Int!){
+  organization(login: $owner){ projectV2(number: $projectNumber){ updatedAt } }
+}
+```
+
+`github.BoardService.ProjectUpdatedAt` — **1 point, measured**, against the
+**34** a two-page board read costs on this workspace's main board. It selects no
+connection, which is what keeps it at 1; the unit test asserts the *generated*
+query contains no `items(`, `first:`, or `nodes`, because the cost claim is the
+feature and a fake cannot reject a query that grew a connection.
+
+#### What the probe observes — measured, not assumed
+
+The mechanism this issue originally specified (`/repos/{o}/{r}/events` with
+`If-None-Match`) cannot work: the repo event feed carries **no ProjectsV2 events
+at all**, so it would report "no movement" with confidence while the board had
+moved. A detector must observe the same object the read observes. What
+`ProjectV2.updatedAt` actually tracks was then measured against live boards:
+
+| Change | Bumps `updatedAt`? | How it was measured |
+| --- | --- | --- |
+| Field value (Backlog → Ready) | **Yes** | Disposable board: `16:02:23 → 16:02:43` on a Status write |
+| Item added / removed | **Yes** | Same board, add and delete both moved it |
+| Linked issue **closed** or reopened | **Yes** | 17 issues closed while Status stayed `Backlog`/`Ready`: every one moved the item, and the project, within 1s of `closedAt` |
+| Issue **content** edit — title, labels, body, comments | **No** | A board item whose issue was edited a full **week** after the item's own `updatedAt` last moved |
+| Plain reads | **No** | Repeated reads leave it unchanged, so polling the detector cannot make it fire |
+
+The third row is the one worth keeping: closing an issue changes what
+`ListOpenItems` returns (it filters `is:open` server-side) *without* anyone
+writing a board field, and it was the failure mode most likely to make this
+feature wrong. It propagates. The fourth row is the one that survived.
+
+**Do not key the detector on `items.totalCount`.** It is the intuitive signal
+and it is the broken one: read immediately after an add it returned `0` on a
+one-item board and only settled ~3s later, while `updatedAt` was already fresh
+on the first read. A count-based detector would silently miss the very add it
+was watching for.
+
+#### The ceiling is the honest name for the blind spot
+
+`BoardItem` carries `Title`, `Labels`, `BlockedBy` and `SubIssues` — all
+issue-side fields the probe is structurally blind to. So renewal is **bounded**:
+
+| Constant | Meaning |
+| --- | --- |
+| `DefaultTTL` (90s) | How long a snapshot stands in without asking anything |
+| `MaxRenewedAge` (10m) | Hard ceiling on how long a snapshot may be served on probe evidence, however many times the probe says the board has not moved |
+
+`MaxRenewedAge` is measured from `FetchedAt`, **never** from the last renewal —
+measuring it from the renewal would push the ceiling away by one TTL on every
+probe so it never binds, which is the silent version of having no ceiling. Past
+the ceiling the read is forced and the probe is skipped entirely, since a point
+spent on a probe whose answer cannot change the outcome is a wasted point.
+
+`Snapshot` therefore carries two timestamps and they mean different things:
+`FetchedAt` is when the DATA was read and stays truthful across renewals;
+`VerifiedAt` is when the probe last vouched for it. Freshness counts from the
+later of the two; `Age` still reports the age of the data, so a consumer telling
+an operator "nothing is stranded" can still say the underlying read is eight
+minutes old.
+
+#### Fail open, in every direction
+
+`ChangeProbe` is an **optional** interface, not part of `forge.BoardService`: a
+forge with no cheap change signal (GitLab has no ProjectV2 equivalent) should
+not implement a method that lies. Every path that is not a confident "the board
+did not move" ends in a read — a probe that errors, a probe that is not offered,
+an empty or unparseable timestamp, and a board that moved all behave exactly as
+they did before #847. The probe can only ever save a read, never suppress one.
+A local write still drops the snapshot outright; `invalidatingProject` is
+unchanged, and the probe is never asked to second-guess a mutation we issued.
+
+The cost of "optional" is that a signature drift would disable the feature
+silently, with nothing failing — the Unpinned Wiring shape in
+[FAILURE_TAXONOMY.md](FAILURE_TAXONOMY.md). Two tests pin it:
+`TestGitHubBoardServiceImplementsChangeProbe` asserts the real adapter still
+satisfies the interface, and `TestWrapReachesForTheProbeCapability` asserts
+`Wrap` still reaches for it — the first alone would keep passing if the wiring
+were deleted outright.
+
+#### Measured, on the real board
+
+One cache, three reads, ledger on, one TTL boundary crossed:
+
+```
+op            cost  status   what
+organization     0     200   cold read, page 1  (first call on the resource: no baseline)
+organization    17     200   cold read, page 2
+                             <- read inside the TTL: no request at all
+organization     1     200   past the TTL, board unmoved: the PROBE renewed the snapshot
+```
+
+**18 points where three unconditional sweeps would have cost ~102.** The saving
+lands in the **daemon**, which holds one cache across sweeps; each CLI
+invocation is a fresh process and therefore a cold cache, so `nightgauge
+attention sweep` shows the #845 win but never reaches a renewal.
+
 ### Doctor — Environment Health Check
 
 ```bash

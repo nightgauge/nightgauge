@@ -39,6 +39,47 @@ import (
 // this is tuned for, not a session.
 const DefaultTTL = 90 * time.Second
 
+// MaxRenewedAge caps how long a snapshot may be served on PROBE evidence alone
+// before a real read is forced, however many times the probe says the board has
+// not moved.
+//
+// The probe (#847) answers "did this ProjectV2 object change?", and the answer
+// is complete for everything the board itself owns: field values, membership,
+// and a linked issue opening or closing. It is NOT complete for the issue-side
+// fields a BoardItem also carries — Title, Labels, BlockedBy, SubIssues — which
+// a plain issue edit changes without touching the project object at all
+// (measured; see github.BoardService.ProjectUpdatedAt).
+//
+// So this constant is the honest name for that blind spot's width. Without it,
+// an idle board would serve a snapshot whose labels were hours out of date and
+// the probe would keep confirming it, correctly and uselessly. With it, the
+// worst case is bounded and stated. It is a ceiling on staleness, not a TTL:
+// crossing it forces the expensive read, it does not merely permit one.
+const MaxRenewedAge = 10 * time.Minute
+
+// ChangeProbe is an OPTIONAL capability on a forge.BoardService: the ability to
+// answer "when did this board last change?" far more cheaply than reading it.
+//
+// It is deliberately not part of forge.BoardService. A forge that cannot answer
+// the question cheaply should not be made to implement a method that lies, and
+// GitLab has no ProjectV2 equivalent — its boards are read a different way
+// entirely. A service that does not implement this interface simply refetches
+// on expiry, exactly as it did before #847.
+//
+// The cost of "optional" is that a signature drift here disables the whole
+// feature silently, with nothing failing — the Unpinned Wiring shape in
+// docs/FAILURE_TAXONOMY.md. That is not left to vigilance:
+// TestGitHubBoardServiceImplementsChangeProbe pins the real adapter against
+// this interface, and TestWrapReachesForTheProbeCapability pins that Wrap
+// actually reaches for it.
+type ChangeProbe interface {
+	// ProjectUpdatedAt reports when the board last changed. An error must be
+	// returned rather than a zero time when the probe could not look: the
+	// caller treats "I do not know" as "refetch", and a silent zero would
+	// instead read as "the board changed at the epoch".
+	ProjectUpdatedAt(ctx context.Context) (time.Time, error)
+}
+
 // Snapshot is one board read, with the time it was taken. FetchedAt is exported
 // because a cache that cannot report its own age is indistinguishable from a
 // cache that is lying: a consumer showing an operator "nothing is stranded" has
@@ -47,10 +88,28 @@ type Snapshot struct {
 	Items     []forgetypes.BoardItem
 	Total     int
 	FetchedAt time.Time
+
+	// VerifiedAt is when the change probe last CONFIRMED this snapshot still
+	// matches the board, which is not the same claim as FetchedAt and must not
+	// overwrite it. FetchedAt stays truthful about when the data was read —
+	// a consumer telling an operator "nothing is stranded" is entitled to know
+	// the read is eight minutes old even though the board has not moved since.
+	// Freshness is computed from the later of the two; Age still reports the
+	// age of the DATA. Zero when the snapshot has never been re-verified.
+	VerifiedAt time.Time
 }
 
 // Age reports how long ago this snapshot was taken.
 func (s Snapshot) Age(now time.Time) time.Duration { return now.Sub(s.FetchedAt) }
+
+// servedAt is the instant freshness counts from: the read, or the last probe
+// that vouched for it.
+func (s Snapshot) servedAt() time.Time {
+	if s.VerifiedAt.After(s.FetchedAt) {
+		return s.VerifiedAt
+	}
+	return s.FetchedAt
+}
 
 // Cache holds board snapshots keyed by (owner, project, query). One Cache is
 // shared by every consumer in a process; Wrap binds it to a particular board.
@@ -143,7 +202,7 @@ func (c *Cache) Peek(owner string, project int, query string) (Snapshot, bool) {
 func (c *Cache) freshLocked(e *entry) bool {
 	select {
 	case <-e.done:
-		return c.now().Sub(e.snap.FetchedAt) < c.ttl
+		return c.now().Sub(e.snap.servedAt()) < c.ttl
 	default:
 		return true
 	}
@@ -151,7 +210,15 @@ func (c *Cache) freshLocked(e *entry) bool {
 
 // get returns the snapshot for a key, fetching through `load` on a miss.
 // Concurrent callers for one key share a single load.
-func (c *Cache) get(ctx context.Context, key string, load func(context.Context) (Snapshot, error)) (Snapshot, error) {
+//
+// An EXPIRED entry is not automatically a refetch. If the board offers a change
+// probe and the stale snapshot is still inside MaxRenewedAge, the probe is
+// asked first, and a board that has not moved renews the snapshot for one point
+// instead of re-reading it for thirty-four (#847). The renewal runs inside the
+// same single-flight entry as a real load, so concurrent callers wait on one
+// probe rather than each issuing their own — the same reason the entry
+// machinery exists at all.
+func (c *Cache) get(ctx context.Context, key string, probe func(context.Context) (time.Time, error), load func(context.Context) (Snapshot, error)) (Snapshot, error) {
 	c.mu.Lock()
 	if e, ok := c.entries[key]; ok && c.freshLocked(e) {
 		c.mu.Unlock()
@@ -162,12 +229,15 @@ func (c *Cache) get(ctx context.Context, key string, load func(context.Context) 
 			return Snapshot{}, ctx.Err()
 		}
 	}
+	// Capture the outgoing snapshot BEFORE replacing the entry: it is the only
+	// thing the probe can renew, and the replacement drops the map's last
+	// reference to it.
+	prev, renewable := c.renewableLocked(c.entries[key])
 	e := &entry{done: make(chan struct{})}
 	c.entries[key] = e
 	c.mu.Unlock()
 
-	snap, err := load(ctx)
-	snap.FetchedAt = c.now()
+	snap, err := c.refresh(ctx, prev, renewable, probe, load)
 	e.snap, e.err = snap, err
 	close(e.done)
 
@@ -184,6 +254,53 @@ func (c *Cache) get(ctx context.Context, key string, load func(context.Context) 
 	return snap, err
 }
 
+// renewableLocked reports the snapshot an expired entry could still have
+// renewed, and whether renewal is permitted at all.
+//
+// Three conditions, each of which would otherwise renew something that must not
+// be renewed: the entry must have COMPLETED (an in-flight one has no snapshot),
+// it must have succeeded (a failed read is never cached, so there is nothing to
+// vouch for), and its DATA must be inside MaxRenewedAge — measured from
+// FetchedAt, never from servedAt, or each renewal would extend the ceiling it
+// is supposed to be bounded by and the cap would never bind.
+func (c *Cache) renewableLocked(e *entry) (Snapshot, bool) {
+	if e == nil {
+		return Snapshot{}, false
+	}
+	select {
+	case <-e.done:
+	default:
+		return Snapshot{}, false
+	}
+	if e.err != nil || e.snap.FetchedAt.IsZero() {
+		return Snapshot{}, false
+	}
+	if c.now().Sub(e.snap.FetchedAt) >= MaxRenewedAge {
+		return Snapshot{}, false
+	}
+	return e.snap, true
+}
+
+// refresh either renews `prev` on the probe's word or loads a new snapshot.
+//
+// Every path that is not a confident "the board has not moved" ends in a load.
+// That is #847's AC 3 and it is the property worth stating explicitly: a probe
+// that errors, a probe that is not offered, a timestamp that fails to parse,
+// and a board that moved all produce the SAME outcome as having no probe at
+// all. The probe can only ever save a read, never suppress one.
+func (c *Cache) refresh(ctx context.Context, prev Snapshot, renewable bool, probe func(context.Context) (time.Time, error), load func(context.Context) (Snapshot, error)) (Snapshot, error) {
+	if renewable && probe != nil {
+		if updatedAt, err := probe(ctx); err == nil && !updatedAt.IsZero() && !updatedAt.After(prev.FetchedAt) {
+			prev.VerifiedAt = c.now()
+			return prev, nil
+		}
+	}
+	snap, err := load(ctx)
+	snap.FetchedAt = c.now()
+	snap.VerifiedAt = time.Time{}
+	return snap, err
+}
+
 // Wrap returns a forge.BoardService that reads through this cache on behalf of
 // the board identified by (owner, project). The returned service satisfies the
 // same interface the producers already consume, so nothing at the call sites
@@ -192,17 +309,32 @@ func (c *Cache) Wrap(board forge.BoardService, owner string, project int) forge.
 	if board == nil || c == nil {
 		return board
 	}
-	return &cachedBoard{cache: c, inner: board, prefix: boardPrefix(owner, project)}
+	return &cachedBoard{cache: c, inner: board, prefix: boardPrefix(owner, project), probe: probeFor(board)}
+}
+
+// probeFor extracts the optional change-probe capability from a board service,
+// returning nil when the adapter does not offer one. Resolved ONCE at Wrap time
+// rather than per call so the type assertion is not repeated on a hot path.
+func probeFor(board forge.BoardService) func(context.Context) (time.Time, error) {
+	cp, ok := board.(ChangeProbe)
+	if !ok {
+		return nil
+	}
+	return cp.ProjectUpdatedAt
 }
 
 type cachedBoard struct {
 	cache  *Cache
 	inner  forge.BoardService
 	prefix string
+	// probe is nil for an adapter with no cheap change signal, which is a
+	// supported state and not a degraded one: every nil-probe path refetches
+	// exactly as it did before #847.
+	probe func(context.Context) (time.Time, error)
 }
 
 func (b *cachedBoard) ListOpenItems(ctx context.Context) ([]forgetypes.BoardItem, int, error) {
-	snap, err := b.cache.get(ctx, b.prefix+"open", func(ctx context.Context) (Snapshot, error) {
+	snap, err := b.cache.get(ctx, b.prefix+"open", b.probe, func(ctx context.Context) (Snapshot, error) {
 		items, total, err := b.inner.ListOpenItems(ctx)
 		return Snapshot{Items: items, Total: total}, err
 	})
@@ -210,7 +342,7 @@ func (b *cachedBoard) ListOpenItems(ctx context.Context) ([]forgetypes.BoardItem
 }
 
 func (b *cachedBoard) ListItems(ctx context.Context, statusFilter string) ([]forgetypes.BoardItem, error) {
-	snap, err := b.cache.get(ctx, b.prefix+"items:"+statusFilter, func(ctx context.Context) (Snapshot, error) {
+	snap, err := b.cache.get(ctx, b.prefix+"items:"+statusFilter, b.probe, func(ctx context.Context) (Snapshot, error) {
 		items, err := b.inner.ListItems(ctx, statusFilter)
 		return Snapshot{Items: items, Total: len(items)}, err
 	})

@@ -94,3 +94,20 @@ func queryProjectFieldsFull(ctx context.Context, client *Client, ownerType Owner
 		Fields: q.Organization.ProjectV2.Fields.Nodes,
 	}, nil
 }
+
+// queryProjectUpdatedAt runs the 1-point change probe against the appropriate
+// org or user query and returns the project's raw RFC3339 updatedAt string.
+func queryProjectUpdatedAt(ctx context.Context, client *Client, ownerType OwnerType, vars map[string]interface{}) (string, error) {
+	if ownerType.IsUser() {
+		var q userProjectV2UpdatedAtQuery
+		if err := client.query(ctx, &q, vars); err != nil {
+			return "", err
+		}
+		return string(q.User.ProjectV2.UpdatedAt), nil
+	}
+	var q projectV2UpdatedAtQuery
+	if err := client.query(ctx, &q, vars); err != nil {
+		return "", err
+	}
+	return string(q.Organization.ProjectV2.UpdatedAt), nil
+}
