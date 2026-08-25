@@ -409,8 +409,10 @@ type StageResult struct {
 	CostUSD       float64       `json:"costUsd"`
 	// CostSource records HOW CostUSD was priced (Issue #682): CostSourceNative
 	// (CompleteStageWithCost's CLI-reported figure), CostSourceComputed
-	// (CompleteStage, rate-card resolved), or CostSourceUnknown (CompleteStage,
-	// registry lookup missed — mirrors CostUnstamped below). Carried onto
+	// (CompleteStage, rate-card resolved), CostSourceUnknown (CompleteStage,
+	// registry lookup missed — mirrors CostUnstamped below), or
+	// CostSourceDeterministic (CompleteStage, no model dispatched at all —
+	// an exact $0 that is NOT unstamped, #890). Carried onto
 	// V2StageTokens.CostSource by BuildV2Record so it reaches the durable
 	// history record TypeScript's HistoryStageTokenUsageSchema validates.
 	CostSource string `json:"costSource,omitempty"`
@@ -418,7 +420,10 @@ type StageResult struct {
 	// adapter's provider/model could not be resolved against the registry, so
 	// CostUSD is a placeholder 0 rather than a fabricated price (#585). Never
 	// set for the local-provider (ollama/lm-studio) $0, which is a genuine,
-	// intentional cost — see tokens.CalculateCostForAdapter.
+	// intentional cost — see tokens.CalculateCostForAdapter — and never for
+	// the deterministic $0 of a stage that dispatched no model at all (#890),
+	// which is genuine in exactly the same sense and is labeled
+	// CostSourceDeterministic instead.
 	CostUnstamped bool `json:"costUnstamped,omitempty"`
 }
 
@@ -758,6 +763,33 @@ func (rs *RuntimeState) CompleteStage(exitCode int, counts tokens.TokenCounts, m
 	costSource := CostSourceComputed
 	if !stamped {
 		costSource = CostSourceUnknown
+	}
+	// A stage that dispatched NO model is not an unpriceable stage (#890).
+	// No model name and not one billable token means nothing was sent to any
+	// provider: the deterministic bookends and the deterministic execution
+	// paths of pr-create / pr-merge all land here. CalculateCostForAdapter
+	// still reports stamped=false for them, because ("", "") resolves against
+	// no rate card — but that is a lookup that never had anything TO find,
+	// not the registry miss CostUnstamped was built to flag. With every pool
+	// at zero the price is exactly $0 under every rate card in the registry,
+	// so there is no placeholder here that a real figure could have replaced,
+	// which is the entire premise of the unstamped contract (#585).
+	//
+	// Four such stages appear in every run, so leaving them unstamped made
+	// the run-level OR true unconditionally and self-invalidated every
+	// `cost by-class` bucket. The label stays DISTINCT from the priced-$0
+	// cases so the durable record can still tell "ran nothing" from "ran
+	// something we could not price".
+	//
+	// Deliberately narrow: a stage that names a model keeps whatever
+	// stamped-ness the registry gives it, even at zero tokens. Both
+	// conditions must hold, so this cannot absorb a real dispatch whose
+	// token attribution merely went missing unless that dispatch ALSO lost
+	// its model name — and such a record has no evidence of a dispatch at all
+	// left in it.
+	if model == "" && counts.Input == 0 && counts.Output == 0 && counts.CacheRead == 0 &&
+		counts.CacheCreation5m == 0 && counts.CacheCreation1h == 0 {
+		cost, stamped, costSource = 0, true, CostSourceDeterministic
 	}
 	rs.completeStageInternalLocked(
 		exitCode,

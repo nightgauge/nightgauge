@@ -1,7 +1,12 @@
 package pipeline
 
-import "github.com/nightgauge/nightgauge/internal/state"
-import "testing"
+import (
+	"testing"
+	"time"
+
+	"github.com/nightgauge/nightgauge/internal/intelligence/tokens"
+	"github.com/nightgauge/nightgauge/internal/state"
+)
 
 func rec(class string, costUSD float64, durMs int64) state.V2RunRecord {
 	return state.V2RunRecord{
@@ -120,5 +125,51 @@ func TestAggregateCostByClass_UnstampedRuns(t *testing.T) {
 	}
 	if docs.UnstampedRuns != 0 {
 		t.Errorf("docs_only UnstampedRuns = %d, want 0", docs.UnstampedRuns)
+	}
+}
+
+// TestAggregateCostByClass_RealisticRunIsNotSelfInvalidating (Issue #890) is
+// the end-to-end sanity check for `cost by-class`: it builds a V2 record the
+// way a real run does — three model-running stages plus the five deterministic
+// stages that dispatch nothing — and asserts the bucket does NOT count it as
+// unstamped.
+//
+// Written against the real writer rather than a hand-built V2RunRecord on
+// purpose: asserting UnstampedRuns == 0 for a literal with CostUnstamped:false
+// would test nothing but the struct literal. Before #890 the deterministic
+// stages priced through the unresolvable (anthropic, "") pair, the run-level
+// OR was true for every run ever recorded, and every bucket reported
+// unstamped_runs == runs — which the field's own contract says disqualifies
+// cost_mean_usd/cost_p50_usd/cost_p95_usd.
+func TestAggregateCostByClass_RealisticRunIsNotSelfInvalidating(t *testing.T) {
+	hw := state.NewHistoryWriter(t.TempDir())
+	rs := state.NewRuntimeState("nightgauge/nightgauge", 890, "item-890-bucket", "01a00000-0000-7000-8000-000000000890")
+
+	for _, stage := range []state.PipelineStage{
+		state.StageFeaturePlanning, state.StageFeatureDev, state.StageFeatureValidate,
+	} {
+		rs.BeginStage(stage)
+		rs.CompleteStageWithCost(0, 1_000_000, 20_000, 900_000, 5.87)
+	}
+	for _, stage := range []state.PipelineStage{
+		state.PipelineStage("pipeline-start"), state.StageIssuePickup,
+		state.StagePRCreate, state.StagePRMerge, state.PipelineStage("pipeline-finish"),
+	} {
+		rs.BeginStage(stage)
+		rs.CompleteStage(0, tokens.TokenCounts{}, "", "")
+	}
+
+	record := hw.BuildV2Record(rs, true, "", state.V2RunInput{}, time.Now())
+	record.Routing.ChangeClass = "source"
+
+	res := AggregateCostByClass([]state.V2RunRecord{record})
+	if len(res.Classes) != 1 {
+		t.Fatalf("Classes = %d, want 1", len(res.Classes))
+	}
+	if got := res.Classes[0].UnstampedRuns; got != 0 {
+		t.Errorf("UnstampedRuns = %d, want 0 — a run whose stages are all either natively priced or deterministic must not invalidate its own bucket", got)
+	}
+	if got := res.Classes[0].TotalCostUSD; got != 17.61 {
+		t.Errorf("TotalCostUSD = %v, want 17.61 — the deterministic stages contribute exactly nothing", got)
 	}
 }

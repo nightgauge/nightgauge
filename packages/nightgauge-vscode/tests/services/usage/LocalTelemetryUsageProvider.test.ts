@@ -313,6 +313,13 @@ describe("confidence", () => {
       "estimated"
     );
     expect(stageCostConfidence({ ...base, cost_usd: 0, cost_source: "unknown" })).toBe("unknown");
+    // Issue #890: a stage that dispatched no model cost exactly $0. That is a
+    // measurement, not the absence of one — before #890 these stages arrived
+    // as cost_source "unknown" + cost_unstamped, which dragged every window
+    // containing a bookend stage down to unknown confidence.
+    expect(stageCostConfidence({ ...base, cost_usd: 0, cost_source: "deterministic" })).toBe(
+      "measured"
+    );
     // The Go writer's authoritative "this zero is a placeholder" flag wins
     // over any cost_source label.
     expect(

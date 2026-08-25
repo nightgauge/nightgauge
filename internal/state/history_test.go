@@ -1584,3 +1584,160 @@ func TestBuildV2Record_UnstampedFoldSurvivesRetry(t *testing.T) {
 		t.Error("Tokens.CostUnstamped = false, want true — the run-level aggregate must reflect the tainted stage")
 	}
 }
+
+// --- deterministic-stage cost tests (Issue #890) ---
+//
+// Four stages that dispatch NO model (the pipeline-start/pipeline-finish
+// bookends and the deterministic paths of pr-create/pr-merge) appear in every
+// run. Until #890 each of them priced through the unresolvable (anthropic, "")
+// pair, landed CostUnstamped, and made the run-level OR true unconditionally —
+// so `cost by-class` marked 100% of runs untrustworthy by construction.
+
+// TestBuildV2Record_DeterministicStagesDoNotMarkRunUnstamped is the FALSE-case
+// assertion #890 turns on: a run whose stages are all either natively priced
+// or deterministic must report cost_unstamped: false at the run level. A test
+// asserting only the true case passes on the pre-#890 code and proves nothing
+// (docs/FAILURE_TAXONOMY.md § Vacuous Assertion).
+func TestBuildV2Record_DeterministicStagesDoNotMarkRunUnstamped(t *testing.T) {
+	hw := NewHistoryWriter(t.TempDir())
+	now := time.Now()
+	rs := NewRuntimeState("nightgauge/nightgauge", 890, "item-890-false", testRunID())
+
+	// One model-running stage, priced natively (the CLI-reported figure).
+	rs.BeginStage(StageFeatureDev)
+	rs.CompleteStageWithCost(0, 1000, 500, 0, 12.23)
+
+	// The deterministic stages: no model, not one billable token.
+	deterministic := []PipelineStage{
+		PipelineStage("pipeline-start"),
+		StageIssuePickup,
+		StagePRCreate,
+		StagePRMerge,
+		PipelineStage("pipeline-finish"),
+	}
+	for _, stage := range deterministic {
+		rs.BeginStage(stage)
+		rs.CompleteStage(0, tokens.TokenCounts{}, "", "")
+	}
+
+	record := hw.BuildV2Record(rs, true, "", V2RunInput{}, now)
+
+	if record.Tokens.CostUnstamped {
+		t.Error("Tokens.CostUnstamped = true, want false — every stage in this run is either natively priced or dispatched no model at all")
+	}
+	for _, stage := range deterministic {
+		stageName := string(stage)
+		tok, ok := record.Tokens.PerStage[stageName]
+		if !ok {
+			t.Fatalf("Tokens.PerStage missing entry for %q", stageName)
+		}
+		if tok.CostUnstamped {
+			t.Errorf("PerStage[%q].CostUnstamped = true, want false — a stage that dispatched no model has a genuine $0", stageName)
+		}
+		if tok.CostSource != CostSourceDeterministic {
+			t.Errorf("PerStage[%q].CostSource = %q, want %q — \"ran nothing\" must stay distinguishable from \"ran something unpriceable\"",
+				stageName, tok.CostSource, CostSourceDeterministic)
+		}
+		if tok.CostUSD != 0 {
+			t.Errorf("PerStage[%q].CostUSD = %v, want an exact 0", stageName, tok.CostUSD)
+		}
+	}
+	if got := record.Tokens.EstimatedCostUSD; got != 12.23 {
+		t.Errorf("Tokens.EstimatedCostUSD = %v, want 12.23 — the deterministic stages must contribute exactly nothing", got)
+	}
+}
+
+// TestBuildV2Record_DeterministicStagesDoNotHideAnUnpriceableStage pins the
+// OR aggregation #890 must NOT weaken: add one genuinely unpriceable stage to
+// the same otherwise-clean run and the run-level flag goes back to true.
+func TestBuildV2Record_DeterministicStagesDoNotHideAnUnpriceableStage(t *testing.T) {
+	hw := NewHistoryWriter(t.TempDir())
+	now := time.Now()
+	rs := NewRuntimeState("nightgauge/nightgauge", 890, "item-890-true", testRunID())
+
+	rs.BeginStage(PipelineStage("pipeline-start"))
+	rs.CompleteStage(0, tokens.TokenCounts{}, "", "")
+	rs.BeginStage(StageFeatureDev)
+	rs.CompleteStageWithCost(0, 1000, 500, 0, 12.23)
+	// A real dispatch whose (provider, model) pair has no registry entry.
+	rs.BeginStage(StageFeatureValidate)
+	rs.CompleteStage(0, tokens.TokenCounts{Input: 1000, Output: 500}, "nonexistent-band-xyz", "grok")
+	rs.BeginStage(PipelineStage("pipeline-finish"))
+	rs.CompleteStage(0, tokens.TokenCounts{}, "", "")
+
+	record := hw.BuildV2Record(rs, true, "", V2RunInput{}, now)
+
+	if !record.Tokens.CostUnstamped {
+		t.Error("Tokens.CostUnstamped = false, want true — one unpriceable stage still taints the run total")
+	}
+	if tok := record.Tokens.PerStage[string(StageFeatureValidate)]; tok.CostSource != CostSourceUnknown {
+		t.Errorf("PerStage[feature-validate].CostSource = %q, want %q", tok.CostSource, CostSourceUnknown)
+	}
+}
+
+// TestCompleteStage_NoModelDispatchedIsDeterministic pins the predicate at the
+// point of decision. Both halves matter: a stage that NAMES a model keeps
+// whatever stamped-ness the registry gives it even at zero tokens, so the
+// carve-out cannot absorb a real dispatch that merely lost its token counts.
+func TestCompleteStage_NoModelDispatchedIsDeterministic(t *testing.T) {
+	rs := NewRuntimeState("nightgauge/nightgauge", 890, "item-890-unit", testRunID())
+	rs.BeginStage(StagePRCreate)
+	rs.CompleteStage(0, tokens.TokenCounts{}, "", "")
+
+	got := rs.CompletedStages[0]
+	if got.CostSource != CostSourceDeterministic {
+		t.Errorf("CostSource = %q, want %q for a stage that dispatched no model", got.CostSource, CostSourceDeterministic)
+	}
+	if got.CostUnstamped {
+		t.Error("CostUnstamped = true, want false — nothing was looked up, so the registry did not miss")
+	}
+	if got.CostUSD != 0 {
+		t.Errorf("CostUSD = %v, want 0", got.CostUSD)
+	}
+
+	// Named model, unresolvable, zero tokens: still unstamped/unknown. The
+	// carve-out is deliberately narrow.
+	rs2 := NewRuntimeState("nightgauge/nightgauge", 890, "item-890-named", testRunID())
+	rs2.BeginStage(StagePRCreate)
+	rs2.CompleteStage(0, tokens.TokenCounts{}, "nonexistent-band-xyz", "grok")
+	got2 := rs2.CompletedStages[0]
+	if got2.CostSource != CostSourceUnknown {
+		t.Errorf("CostSource = %q, want %q — a named model that will not resolve is still a registry miss", got2.CostSource, CostSourceUnknown)
+	}
+	if !got2.CostUnstamped {
+		t.Error("CostUnstamped = false, want true — a named, unresolvable model must stay flagged")
+	}
+
+	// No model but real tokens: something was dispatched and we cannot price
+	// it, so the unstamped contract still applies.
+	rs3 := NewRuntimeState("nightgauge/nightgauge", 890, "item-890-tokens", testRunID())
+	rs3.BeginStage(StagePRCreate)
+	rs3.CompleteStage(0, tokens.TokenCounts{Input: 1000}, "", "grok")
+	got3 := rs3.CompletedStages[0]
+	if got3.CostSource == CostSourceDeterministic {
+		t.Error("CostSource = deterministic for a stage that spent tokens — a token count is evidence of a dispatch")
+	}
+}
+
+// TestFoldCostSource_DeterministicNeverWeakensASpendingOccurrence pins the
+// fold direction for the new label. A stage folded from a deterministic run
+// and an LLM-fallback run (pr-create's two execution paths, #890) reports the
+// label of the occurrence that actually spent money: the exact $0 adds no
+// uncertainty to the sum, so it must not win foldCostSource's weakest-wins
+// rule.
+func TestFoldCostSource_DeterministicNeverWeakensASpendingOccurrence(t *testing.T) {
+	cases := []struct{ a, b, want string }{
+		{CostSourceDeterministic, CostSourceDeterministic, CostSourceDeterministic},
+		{CostSourceDeterministic, CostSourceNative, CostSourceNative},
+		{CostSourceNative, CostSourceDeterministic, CostSourceNative},
+		{CostSourceDeterministic, CostSourceComputed, CostSourceComputed},
+		{CostSourceDeterministic, CostSourceUnknown, CostSourceUnknown},
+		{CostSourceUnknown, CostSourceDeterministic, CostSourceUnknown},
+		{"", CostSourceDeterministic, CostSourceDeterministic},
+	}
+	for _, tc := range cases {
+		if got := foldCostSource(tc.a, tc.b); got != tc.want {
+			t.Errorf("foldCostSource(%q, %q) = %q, want %q", tc.a, tc.b, got, tc.want)
+		}
+	}
+}

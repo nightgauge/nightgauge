@@ -124,6 +124,12 @@ export function stageCostConfidence(usage: HistoryStageTokenUsage): UsageConfide
   switch (usage.cost_source) {
     case "native":
       return "measured";
+    // A stage that dispatched no model (Issue #890) cost exactly $0 — that is
+    // a measurement, not an absence of one. Folding it as "unknown" (the
+    // default arm it used to fall into) would have dragged every window
+    // containing a bookend stage down to unknown confidence.
+    case "deterministic":
+      return "measured";
     case "computed":
       return "estimated";
     case "unknown":

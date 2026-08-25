@@ -1669,6 +1669,25 @@ elsewhere), so a non-zero `unstamped_runs` means the bucket's
 `cost_mean_usd`/`cost_p50_usd`/`cost_p95_usd` are a floor rather than a fully
 priced figure — check this before trusting the average.
 
+A stage that dispatches **no model at all** is not unstamped (#890). The
+`pipeline-start`/`pipeline-finish` bookends and the deterministic execution
+paths of `pr-create`/`pr-merge` run compiled Go, spend no tokens, and cost an
+exact `$0`; nothing was looked up, so the pricing registry did not miss. Those
+stages record `cost_source: "deterministic"` in the per-stage history and leave
+`cost_unstamped` unset — the same carve-out the flag already makes for a
+genuinely free local-provider (`ollama`/`lm-studio`) run. Before #890 they
+priced through the unresolvable `(anthropic, "")` pair and were flagged, and
+because at least four of them appear in every run, the run-level OR was true
+for **every** run ever recorded: `unstamped_runs == runs` in every bucket, and
+the paragraph above disqualified every statistic the command produced. Records
+written before #890 keep the old flag; the fix applies from the next run
+forward.
+
+The label is what keeps "ran nothing" distinguishable from "ran something we
+could not price" — the two must never collapse into a bare `$0`. The run-level
+OR itself is unchanged and deliberately so: one genuinely unpriceable stage
+still taints the whole run.
+
 See [GATE_RELAXATION.md § "Measuring pipeline cost"](GATE_RELAXATION.md#measuring-pipeline-cost-nightgauge-cost-by-class)
 for how this proves the fast-track win.
 
