@@ -1263,6 +1263,59 @@ underlying call) _and_ assert the non-sharing (distinct keys stay distinct).
 Without the second, a cache that over-shares — serving one board's items for
 another — satisfies the first test while being strictly worse than no cache.
 
+#### The worst case: wiring that never existed (#916)
+
+`#907` was a guarantee that a plausible edit could _remove_. The degenerate form
+is a guarantee that was **never wired in the first place**, and it is harder to
+see because there is no regression — nothing ever worked, so nothing broke.
+
+`execution.WorktreeSweepOptions.MergedPRLookup` shipped in #593 as the fail-open
+second door for merged-ness. It had a fifteen-line doc comment explaining the
+`gh pr update-branch` case it existed for, and two unit tests covering it. **All
+three production call sites omitted the field**, and `lookupMergedPR` returns
+`false` on a nil callback — so the door was closed everywhere it mattered and
+open only in tests, each of which supplied the callback itself.
+
+It stayed that way from #593 to #916 and cost real behaviour: a merged branch
+went invisible to reclamation the moment the default branch touched any file the
+branch owned. The `#912` scan lost a branch to it within an hour of shipping.
+
+**The tell is an optional field with a nil-means-off default.** `Options` structs
+make omission syntactically invisible: nothing at a call site marks the field as
+absent, no compiler warns, and the mechanism's tests pass because they construct
+their own. Any field whose zero value silently disables a guarantee is unpinned
+by construction.
+
+#### Pinning a construction site: read the source
+
+The counter is a test that looks at the **construction**, not the behaviour —
+which for Go means parsing the tree. `TestEveryProductionSweepCallSiteOpensTheMergedPRDoor`
+walks every non-test `.go` file, finds each `WorktreeSweepOptions` /
+`StrandedBranchOptions` composite literal, and fails when one omits
+`MergedPRLookup`:
+
+```
+production sweep call site(s) omit MergedPRLookup, so the second door is closed
+there and nothing says so:
+  internal/doctor/leaked_state.go:85:46 WorktreeSweepOptions
+```
+
+Setting the field to a nil-returning expression passes — that is the documented
+closed door, chosen and visible. **Omission** is the failure, because omission is
+the thing nobody can see. This is the same instinct as
+`TestEveryMutatingProjectMethodIsIntercepted`, which enumerates an interface by
+reflection rather than trusting a hand-maintained list; where reflection cannot
+reach — a struct literal's key set — the AST can.
+
+Two properties keep such a test honest:
+
+- **It must fail when the watched types vanish.** A source-walking test that
+  finds nothing passes trivially, so assert a non-zero match count. A rename
+  would otherwise turn the guard green forever.
+- **It must exempt tests.** A test constructing its own door is doing the right
+  thing; requiring the field there is noise that teaches people to widen the
+  exemption.
+
 ### Read-Through Cache Without Write Interception
 
 **Shape:** a read path is wrapped in a cache; the write paths that invalidate it
