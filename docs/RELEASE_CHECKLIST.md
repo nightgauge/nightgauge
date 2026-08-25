@@ -195,12 +195,12 @@ the Marketplace README verbatim.
 Every finding is the predicted shape — the docs describe a path the product
 does not have — and none was visible to CI:
 
-| Finding                                                                                   | Issue                                                            |
-| ----------------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
-| README's first instruction is `nightgauge doctor`; a Marketplace install has no such binary | [#898](https://github.com/nightgauge/nightgauge/issues/898)      |
-| `nightgauge --version` errors with "unknown flag"; only the subcommand works               | [#899](https://github.com/nightgauge/nightgauge/issues/899)      |
-| In Restricted Mode the Nightgauge activity-bar icon does not exist; Quick Start never mentions workspace trust | [#900](https://github.com/nightgauge/nightgauge/issues/900) |
-| First activation warns "project config incomplete" on a repo that is not initialized yet    | [#901](https://github.com/nightgauge/nightgauge/issues/901)      |
+| Finding                                                                                                                                 | Issue                                                       |
+| --------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| README's first instruction is `nightgauge doctor`; a Marketplace install has no such binary                                             | [#898](https://github.com/nightgauge/nightgauge/issues/898) |
+| `nightgauge --version` errors with "unknown flag"; only the subcommand works                                                            | [#899](https://github.com/nightgauge/nightgauge/issues/899) |
+| In Restricted Mode the Nightgauge activity-bar icon does not exist; Quick Start never mentions workspace trust                          | [#900](https://github.com/nightgauge/nightgauge/issues/900) |
+| First activation warns "project config incomplete" on a repo that is not initialized yet                                                | [#901](https://github.com/nightgauge/nightgauge/issues/901) |
 | **Initialize Repository** runs an interactive `claude` session with its own trust prompt; the README calls it a click that writes files | [#902](https://github.com/nightgauge/nightgauge/issues/902) |
 
 Workspace trust is worth calling out on its own: it is the first thing a new
