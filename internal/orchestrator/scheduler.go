@@ -496,9 +496,10 @@ type Scheduler struct {
 	// TARGET repo in a multi-repo workspace, not the scheduler's single launch
 	// root, or the state is split across two repos (#229; mirrors the IPC
 	// server's pipelineStateDir fix for #215/#218). The IPC server wires this
-	// from its ClientResolver.RepoPath; CLI/auto mode leaves it nil and every
-	// root falls back to the execution manager's workspace root — purely
-	// additive, single-repo behavior unchanged.
+	// from its ClientResolver.RepoPath; CLI/auto mode wires an equivalent built
+	// from the workspace repo registry (#882). Nil, or a "" answer for a repo
+	// that is not the launch repo, makes resolveRunRoot REFUSE the run rather
+	// than root it at the launch repo.
 	repoPathResolver func(repo string) string
 
 	// repoRootsResolver, when set, enumerates every registered repo filesystem
@@ -509,9 +510,19 @@ type Scheduler struct {
 	// would miss it, leaving the run orphaned with no synthesized terminal
 	// record. Mirrors the IPC server's pipelineStateScanRoots fix (#218); the
 	// IPC server wires this from ClientResolver.RegisteredPaths, and CLI/auto
-	// mode leaves it nil — only the launch root is scanned, single-repo behavior
-	// unchanged (#239).
+	// mode wires an equivalent from the workspace repo registry (#882). Nil
+	// leaves only the launch root scanned (#239).
 	repoRootsResolver func() []string
+
+	// launchRepo is the "owner/repo" slug of the repo the scheduler was
+	// launched in, resolved from SchedulerConfig.RuntimeConfig at construction.
+	// It is the ONLY repo whose runs may legitimately root at the launch root
+	// when no repoPathResolver is wired — see resolveRunRoot, which refuses a
+	// run for any other repo rather than writing that run's worktree, branch
+	// and pipeline state into a real-but-wrong repository (#882). "" when the
+	// launch root carries no config that names a repo.
+	launchRepo     string
+	launchRepoOnce sync.Once
 
 	// composeLister and composeTeardown are seams over the docker compose CLI so
 	// reconcileOrphanedComposeProjects' DECISION is testable without a docker
@@ -865,6 +876,7 @@ func NewScheduler(client *gh.Client, cfg SchedulerConfig) *Scheduler {
 		runDefaultAdapter:         cfg.Adapter,
 		prMergeRunner:             pmstages.NewDeterministicRunner(),
 		prCreateRunner:            NewDefaultPRCreateRunner(client),
+		launchRepo:                launchRepoSlug(cfg.RuntimeConfig),
 	}
 	// Wire FailureRecovery registry (Issue #3268). Reuses the same runners
 	// as the deterministic-first hooks so a recovery and a deterministic
@@ -1018,14 +1030,55 @@ func (s *Scheduler) WithClientResolver(fn func(ctx context.Context, owner, repo 
 // scheduler's launch root — in a multi-repo workspace (#229). The resolver is
 // also forwarded to the execution manager so worktree resolution stays
 // consistent with run state. The IPC server wires this from its
-// ClientResolver.RepoPath; CLI/auto mode leaves it nil and every root resolves
-// to the execution manager's workspace root (additive; single-repo behavior
-// unchanged).
+// ClientResolver.RepoPath; CLI/auto mode wires an equivalent built from the
+// workspace repo registry (Scheduler.WithWorkspaceRepoRegistry, #882).
+//
+// A wired resolver that returns "" for a repo is a REFUSAL, not a fallback:
+// resolveRunRoot fails the run closed rather than rooting it at the launch
+// repo. Leaving the resolver nil is only safe for a scheduler that will never
+// be handed a repo other than the one it was launched in.
 func (s *Scheduler) WithRepoPathResolver(fn func(repo string) string) {
 	s.repoPathResolver = fn
 	if s.execMgr != nil {
 		s.execMgr.SetRepoPathResolver(fn)
 	}
+}
+
+// WithWorkspaceRepoRegistry builds the repo→path registry a CLI-mode scheduler
+// needs and wires it into BOTH resolvers (#882). It is the CLI's equivalent of
+// the IPC server's ClientResolver wiring, discovered from the launch root
+// instead of handed over at daemon start.
+//
+// Leaving this unwired is not a neutral omission. Without it resolveRunRoot has
+// no registry to consult, so `nightgauge queue add <N> --repo <other/repo>` —
+// the documented way to queue cross-repo work — ran entirely inside the LAUNCH
+// repo: an empty worktree under launch/.nightgauge/worktrees/, history and
+// trace under launch/.nightgauge/pipeline/, and an epic branch cut from the
+// LAUNCH repo's default branch and pushed to the LAUNCH repo's remote. The
+// target repo received nothing.
+//
+// A repo the discovery cannot see is NOT silently rooted at the launch repo:
+// resolveRunRoot refuses the run instead.
+func (s *Scheduler) WithWorkspaceRepoRegistry(launchRoot string) {
+	if launchRoot == "" {
+		return
+	}
+	paths := config.WorkspaceRepoPaths(launchRoot)
+	if len(paths) == 0 {
+		return
+	}
+	s.WithRepoPathResolver(func(repo string) string { return paths[repo] })
+
+	roots := make([]string, 0, len(paths))
+	seen := make(map[string]bool, len(paths))
+	for _, root := range paths {
+		if seen[root] {
+			continue
+		}
+		seen[root] = true
+		roots = append(roots, root)
+	}
+	s.WithRepoRootsResolver(func() []string { return roots })
 }
 
 // WithRepoRootsResolver injects an enumerator of every registered repo
@@ -1034,25 +1087,184 @@ func (s *Scheduler) WithRepoPathResolver(fn func(repo string) string) {
 // run's sidecar at its TARGET repo (via runRoot), a cross-repo run that crashes
 // leaves its sidecar under a non-launch repo root; scanning only the launch
 // root would never reconcile it. The IPC server wires this from its
-// ClientResolver.RegisteredPaths; CLI/auto mode leaves it nil and only the
-// launch root is scanned (additive; single-repo behavior unchanged, #239).
+// ClientResolver.RegisteredPaths; CLI/auto mode wires an equivalent from the
+// workspace repo registry (Scheduler.WithWorkspaceRepoRegistry, #882).
+// Nil leaves only the launch root scanned (#239).
 func (s *Scheduler) WithRepoRootsResolver(fn func() []string) {
 	s.repoRootsResolver = fn
+}
+
+// launchRepoSlug returns the "owner/repo" the launch root's own config names,
+// or "" when no config was loaded or it does not name both halves.
+func launchRepoSlug(cfg *config.Config) string {
+	if cfg == nil || cfg.Owner == "" || cfg.DefaultRepo == "" {
+		return ""
+	}
+	return cfg.Owner + "/" + cfg.DefaultRepo
+}
+
+// repoSlugsMatch reports whether two repo identifiers name the same repository.
+//
+// Tolerant of a missing owner on EITHER side, because they are not written by
+// the same producer: a board item's Repo is normally "owner/name", but the IPC
+// pipeline.runItem verb accepts a bare repo name, and a config may name only
+// half. Comparing strictly would read a bare "acme" as different from
+// "owner/acme" and refuse a perfectly ordinary single-repo run — a false
+// refusal is the one failure mode a fail-closed gate cannot afford, because it
+// stops work that was never in danger.
+func repoSlugsMatch(a, b string) bool {
+	if a == "" || b == "" {
+		return false
+	}
+	if strings.EqualFold(a, b) {
+		return true
+	}
+	short := func(v string) string {
+		if i := strings.LastIndex(v, "/"); i >= 0 {
+			return v[i+1:]
+		}
+		return v
+	}
+	// Only fall back to short-name comparison when one side omitted its owner.
+	// Two fully-qualified slugs with different owners are different repos.
+	if strings.Contains(a, "/") && strings.Contains(b, "/") {
+		return false
+	}
+	return strings.EqualFold(short(a), short(b))
+}
+
+// launchRepoIdentity returns the "owner/repo" the LAUNCH ROOT is, or "" when it
+// cannot be determined. Config first (the authoritative declaration), then the
+// launch root's `origin` remote, which is what makes the identity knowable for
+// a checkout whose config names only a project board.
+//
+// Cached: a run resolves this once per call site and the answer cannot change
+// for the life of the process.
+func (s *Scheduler) launchRepoIdentity() string {
+	s.launchRepoOnce.Do(func() {
+		if s.launchRepo != "" {
+			return
+		}
+		s.launchRepo = originRepoSlug(s.execMgr.WorkspaceRoot())
+	})
+	return s.launchRepo
+}
+
+// originRepoSlug reads "owner/repo" from the `origin` remote of the git repo at
+// root, or returns "" when the remote is absent or is not a FORGE url.
+//
+// A local-path remote (`/tmp/fixtures/origin`, `../mirror.git`) yields "" on
+// purpose. Its trailing two path segments look exactly like an owner/repo pair
+// — a fixture pushing to `.../001/origin` reads as the repo "001/origin" — and
+// a WRONG launch identity is worse than none: it turns the fail-closed gate
+// into a refusal machine for runs that were never in danger.
+func originRepoSlug(root string) string {
+	if root == "" {
+		return ""
+	}
+	out, err := exec.Command("git", "-C", root, "config", "--get", "remote.origin.url").Output()
+	if err != nil {
+		return ""
+	}
+	url := strings.TrimSuffix(strings.TrimSpace(string(out)), ".git")
+
+	var path string
+	switch {
+	case strings.HasPrefix(url, "https://"), strings.HasPrefix(url, "http://"), strings.HasPrefix(url, "ssh://"):
+		rest := url[strings.Index(url, "://")+3:]
+		i := strings.Index(rest, "/")
+		if i < 0 {
+			return ""
+		}
+		path = rest[i+1:]
+	case !strings.HasPrefix(url, "/") && !strings.HasPrefix(url, ".") &&
+		strings.Contains(url, "@") && strings.Contains(url, ":"):
+		// scp-style: user@host:owner/repo
+		path = url[strings.Index(url, ":")+1:]
+	default:
+		return "" // local path, file://, or unrecognized — not a forge identity
+	}
+
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) < 2 {
+		return ""
+	}
+	owner, name := parts[len(parts)-2], parts[len(parts)-1]
+	if owner == "" || name == "" {
+		return ""
+	}
+	return owner + "/" + name
 }
 
 // runRoot resolves the filesystem root a run's on-disk state belongs in — the
 // run's target repo in a multi-repo workspace so trace, runtime-{issue}-{runId}.json,
 // stage-context, and exit-records never split across repos (mirrors
-// Server.pipelineStateDir, #215). Falls back to the execution manager's
-// workspace root when no resolver is set or the repo is unregistered, keeping
-// single-repo / CLI / auto behavior byte-identical (#229).
+// Server.pipelineStateDir, #215). Returns "" when the target repo's root cannot
+// be resolved safely; callers that cannot refuse (best-effort bookkeeping) must
+// treat "" as "no root" rather than substituting the launch root (#882).
 func (s *Scheduler) runRoot(repo string) string {
+	root, err := s.resolveRunRoot(repo)
+	if err != nil {
+		return ""
+	}
+	return root
+}
+
+// resolveRunRoot resolves the filesystem root for a run targeting repo, and
+// FAILS CLOSED whenever it can see that the launch root is not that repo's.
+//
+// WHY REFUSING BEATS FALLING BACK (#882). The previous behavior returned the
+// execution manager's workspace root whenever the resolver was nil or the repo
+// was unregistered. That is not a harmless default: in CLI/auto mode — where
+// the resolver was always nil — a run queued with `queue add <N> --repo
+// <other/repo>` created its worktree, wrote its history and trace, and created
+// AND PUSHED its epic branch inside the LAUNCH repo. The launch repo is a real
+// repository with a real remote; publishing another repo's work there is worse
+// than not running at all.
+//
+// The arms, in order:
+//
+//  1. The item names no repo: nothing to mismatch, launch root.
+//  2. A wired resolver answered: that is the target repo's root, authoritative.
+//  3. The launch root's own identity is KNOWN (its config names owner +
+//     defaultRepo, or its `origin` remote does) and it IS the target repo: the
+//     launch root is that repo's root by definition. The single-repo case,
+//     unchanged — including when the registry simply has no entry for it.
+//  4. The launch root's identity is KNOWN and it is NOT the target repo:
+//     REFUSE, naming the repo that could not be resolved. This is the whole
+//     point of the gate, and it holds whether or not a resolver is wired.
+//  5. The launch root's identity is UNKNOWN: there is no evidence of a
+//     mismatch to act on — no config names the launch repo and it has no
+//     origin remote — so the launch root stands, with a warning. Refusing here
+//     would strand every run in a workspace that merely declines to name
+//     itself, which is a worse failure than the one being prevented: it stops
+//     work that was never in danger.
+func (s *Scheduler) resolveRunRoot(repo string) (string, error) {
+	launchRoot := s.execMgr.WorkspaceRoot()
+	if repo == "" {
+		return launchRoot, nil // arm 1
+	}
 	if s.repoPathResolver != nil {
 		if root := s.repoPathResolver(repo); root != "" {
-			return root
+			return root, nil // arm 2
 		}
 	}
-	return s.execMgr.WorkspaceRoot()
+	launch := s.launchRepoIdentity()
+	if launch == "" {
+		log.Printf("WARN: cannot identify the repository at the launch root %q (no config names it and it has no origin remote) — "+
+			"rooting the run for %q there unverified (#882)", launchRoot, repo)
+		return launchRoot, nil // arm 5
+	}
+	if repoSlugsMatch(repo, launch) {
+		return launchRoot, nil // arm 3
+	}
+	return "", fmt.Errorf( // arm 4
+		"cannot resolve a filesystem root for repo %q: this workspace's registry has no path for it and the launch root is %q. "+
+			"Refusing to run rather than rooting this run's worktree, pipeline state and branches at the launch repo, "+
+			"which would write — and push — another repository's work into a real repository that is not its own. "+
+			"Add the repo to the workspace (a checkout carrying .nightgauge/config.yaml beside the launch repo, or a "+
+			"repositories[] entry in .vscode/nightgauge-workspace.yaml) and re-queue the issue",
+		repo, launch)
 }
 
 // issueServiceFor returns an issueGetter scoped to (owner, repo). When a
@@ -2557,8 +2769,8 @@ func (s *Scheduler) activeWorktreeIssuesFor(roots []string) (map[int]bool, bool)
 // (mirrors the IPC pipelineStateScanRoots fix, #218). Deduplicated: the primary
 // repo is typically both the launch root and a registered path, and each run's
 // state lives under exactly one root, so there is no duplicate reconciliation.
-// In CLI/auto mode the resolver is nil and only the launch root is returned
-// (#239).
+// A nil resolver returns only the launch root (#239); CLI/auto mode wires one
+// from the workspace repo registry (#882).
 func (s *Scheduler) repoScanRoots() []string {
 	seen := make(map[string]bool)
 	var roots []string
@@ -3313,12 +3525,25 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 
 	// Root this run's on-disk state (trace, runtime-{issue}-{runId}.json,
 	// stage-context, exit-records, worktrees) at the run's TARGET repo, not the
-	// scheduler's launch root, so multi-repo state is never split (#229). Falls
-	// back to the execution manager's workspace root in single-repo / CLI /
-	// auto mode. Resolved BEFORE the runtime exists because the run_id
-	// resolution below reads run-state.json underneath it, and RunID is now a
-	// constructor argument (ADR-017 Decision 1 — immutable, no setter).
-	workspaceRoot := s.runRoot(item.Repo)
+	// scheduler's launch root, so multi-repo state is never split (#229).
+	// Resolved BEFORE the runtime exists because the run_id resolution below
+	// reads run-state.json underneath it, and RunID is now a constructor
+	// argument (ADR-017 Decision 1 — immutable, no setter).
+	//
+	// FAILS CLOSED (#882). When the target repo's root cannot be resolved, the
+	// error is carried to the repo-root preflight below the terminal defer —
+	// same shape as runIDMintErr, and for the same reason: a bare return here
+	// sits ABOVE the terminal defer, so it would leak the concurrency slot and
+	// leave the board In Progress. The launch root is used ONLY as the
+	// bookkeeping root for the refusal record itself (the daemon's own
+	// workspace, where the operator looks); the run is refused before any
+	// worktree, branch, push or stage dispatch can reach the wrong repository.
+	workspaceRoot, runRootErr := s.resolveRunRoot(item.Repo)
+	if runRootErr != nil {
+		log.Printf("#%d: cannot resolve a run root for %s: %v — the run will be refused at preflight (#882)",
+			item.Number, item.Repo, runRootErr)
+		workspaceRoot = s.execMgr.WorkspaceRoot()
+	}
 
 	// Resolve run_id for telemetry correlation (#3557). Prefer the RemoteRunID
 	// from the platform command payload (for remote-triggered runs); fall back
@@ -3908,6 +4133,22 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		if err := s.stateSvc.StartPipeline(ctx, item.ID, state.StageIssuePickup); err != nil {
 			log.Printf("#%d: board sync unavailable, continuing: %v", item.Number, err)
 		}
+	}
+
+	// Repo-root preflight (#882): refuse a run whose TARGET repo has no
+	// resolvable filesystem root. Everything downstream — the worktree, the
+	// epic base branch (created from a default branch and PUSHED to a remote),
+	// the trace, the history record — is rooted at the value resolved above. If
+	// that value is not the target repo's root it is some OTHER real
+	// repository's root, and the run publishes work into a project it has
+	// nothing to do with. Refusing books the failure through the terminal
+	// funnel exactly as the run-identity, license and identity preflights do.
+	if runRootErr != nil {
+		reason := "repo root preflight: " + runRootErr.Error()
+		log.Printf("#%d: %s", item.Number, reason)
+		runtime.SetStageError("pipeline-start", reason)
+		s.emitStateChanged(item.Repo, item.Number, runtime)
+		return // Pipeline blocked by repo-root check
 	}
 
 	// Run-identity preflight (ADR-017 step 0b): refuse a run whose identity is

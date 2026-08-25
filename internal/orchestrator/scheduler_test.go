@@ -2537,15 +2537,17 @@ func TestScheduler_ReRouteContext_AtomicWrite(t *testing.T) {
 }
 
 // TestRunRootResolvesTargetRepo verifies the scheduler roots a run's on-disk
-// state at the run's TARGET repo (#229): with a resolver installed, a
-// registered repo resolves to its mapped root; an unregistered or empty repo
-// falls back to the execution manager's workspace (launch) root; and with no
-// resolver installed every repo resolves to the launch root (single-repo / CLI
-// / auto behavior unchanged).
+// state at the run's TARGET repo (#229) and REFUSES rather than falling back to
+// the launch root when it cannot (#882).
+//
+// The fallback this used to assert is the bug: returning the launch root for an
+// unresolvable repo meant a cross-repo run created its worktree, wrote its
+// pipeline state, and pushed its epic branch inside a real repository that was
+// not the target.
 func TestRunRootResolvesTargetRepo(t *testing.T) {
 	launchRoot := t.TempDir()
 
-	s := &Scheduler{execMgr: execution.NewManager(launchRoot, nil)}
+	s := &Scheduler{execMgr: execution.NewManager(launchRoot, nil), launchRepo: "owner/launch"}
 	s.WithRepoPathResolver(func(repo string) string {
 		if repo == "owner/other" {
 			return "/tmp/other"
@@ -2553,22 +2555,53 @@ func TestRunRootResolvesTargetRepo(t *testing.T) {
 		return ""
 	})
 
-	if got := s.runRoot("owner/other"); got != "/tmp/other" {
-		t.Errorf("runRoot(owner/other) = %q, want /tmp/other", got)
+	if got, err := s.resolveRunRoot("owner/other"); err != nil || got != "/tmp/other" {
+		t.Errorf("resolveRunRoot(owner/other) = %q, %v; want /tmp/other, nil", got, err)
 	}
-	if got := s.runRoot("owner/unknown"); got != launchRoot {
-		t.Errorf("runRoot(owner/unknown) = %q, want launchRoot %q", got, launchRoot)
+	// The launch repo itself resolves to the launch root even when the registry
+	// has no entry for it — that root is known by construction.
+	if got, err := s.resolveRunRoot("owner/launch"); err != nil || got != launchRoot {
+		t.Errorf("resolveRunRoot(owner/launch) = %q, %v; want %q, nil", got, err, launchRoot)
 	}
-	if got := s.runRoot(""); got != launchRoot {
-		t.Errorf("runRoot(\"\") = %q, want launchRoot %q", got, launchRoot)
+	// An UNREGISTERED repo that is not the launch repo is a refusal, never the
+	// launch root.
+	got, err := s.resolveRunRoot("owner/unknown")
+	if err == nil {
+		t.Errorf("resolveRunRoot(owner/unknown) = %q, nil; want a refusal", got)
+	}
+	if got != "" {
+		t.Errorf("resolveRunRoot(owner/unknown) returned root %q alongside its refusal; want \"\"", got)
+	}
+	if err != nil && !strings.Contains(err.Error(), "owner/unknown") {
+		t.Errorf("refusal must name the repo it could not resolve; got %v", err)
+	}
+	if r := s.runRoot("owner/unknown"); r != "" {
+		t.Errorf("runRoot(owner/unknown) = %q; a refusal must surface as \"\", not the launch root", r)
+	}
+	// No target repo named at all — nothing to mismatch.
+	if got, err := s.resolveRunRoot(""); err != nil || got != launchRoot {
+		t.Errorf("resolveRunRoot(\"\") = %q, %v; want %q, nil", got, err, launchRoot)
 	}
 
-	// No resolver installed → everything falls back to the launch root, and the
-	// forwarded execution-manager resolver agrees.
-	s2 := &Scheduler{execMgr: execution.NewManager(launchRoot, nil)}
-	if got := s2.runRoot("owner/other"); got != launchRoot {
-		t.Errorf("runRoot with nil resolver = %q, want launchRoot %q", got, launchRoot)
+	// No resolver installed, and the launch root names a repo: a run for any
+	// OTHER repo is refused rather than rooted here. This is the CLI-mode case
+	// #882 observed.
+	s2 := &Scheduler{execMgr: execution.NewManager(launchRoot, nil), launchRepo: "owner/launch"}
+	if got, err := s2.resolveRunRoot("owner/other"); err == nil {
+		t.Errorf("resolveRunRoot(owner/other) with nil resolver = %q, nil; want a refusal", got)
 	}
+	if got, err := s2.resolveRunRoot("owner/launch"); err != nil || got != launchRoot {
+		t.Errorf("resolveRunRoot(owner/launch) with nil resolver = %q, %v; want %q, nil", got, err, launchRoot)
+	}
+
+	// No resolver and no launch repo identity: no evidence of a mismatch to act
+	// on, so the launch root stands (embedder with neither a resolver nor a
+	// config).
+	s3 := &Scheduler{execMgr: execution.NewManager(launchRoot, nil)}
+	if got, err := s3.resolveRunRoot("owner/other"); err != nil || got != launchRoot {
+		t.Errorf("resolveRunRoot with no resolver and no launch repo = %q, %v; want %q, nil", got, err, launchRoot)
+	}
+
 	// WithRepoPathResolver also forwards to the execution manager so worktree
 	// resolution stays consistent with run state.
 	if got := s.execMgr.RepoRoot("owner/other"); got != "/tmp/other" {

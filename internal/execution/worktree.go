@@ -347,13 +347,23 @@ func (m *Manager) CleanupWorktree(repo string, issueNumber int) error {
 	return nil
 }
 
+// worktreePath is the on-disk location of the run's worktree.
+//
+// IT ROOTS AT THE RUN'S TARGET REPO (m.repoRoot), NOT THE LAUNCH ROOT (#882).
+// The leaf already carries the target repo's short name — that qualifier exists
+// so two repos' issue #N cannot collide inside one workspace — and rooting the
+// base at m.workspaceRoot while the leaf named the target repo is precisely how
+// a cross-repo run put `A/.nightgauge/worktrees/B-issue-227/` on disk while B
+// received nothing. The worktree must live under the repo whose git dir it is
+// checked out from, or every consumer that derives repo state from the worktree
+// path (sweeps, reclamation, stage context) reads the wrong repo.
 func (m *Manager) worktreePath(repo string, issueNumber int) string {
 	// Use repo name (without owner) as the directory prefix
 	repoName := repo
 	if idx := strings.LastIndex(repo, "/"); idx >= 0 {
 		repoName = repo[idx+1:]
 	}
-	return filepath.Join(m.workspaceRoot, ".nightgauge", "worktrees",
+	return filepath.Join(m.repoRoot(repo), ".nightgauge", "worktrees",
 		fmt.Sprintf("%s-issue-%d", repoName, issueNumber))
 }
 

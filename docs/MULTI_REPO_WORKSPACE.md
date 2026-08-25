@@ -933,6 +933,47 @@ Scope notes:
 
 See [TROUBLESHOOTING.md](TROUBLESHOOTING.md) for recovery steps.
 
+### Where a Run Roots — and When It Refuses (Issue #882)
+
+Containment above catches a stage that _writes_ outside its worktree. It cannot
+catch the case where the pipeline hands the stage the wrong root to begin with.
+
+Every piece of a run's on-disk state — its worktree, `runtime-{issue}-{runId}.json`,
+stage context, exit records, lifecycle trace, history record — and every branch
+the run creates roots at the run's **target** repo, never at the repo the
+scheduler happened to be launched in. The mapping from an `owner/repo` slug to
+that repo's checkout is the workspace repo registry: the daemon builds it at
+startup from its client resolver, and a CLI invocation builds the same registry
+from the launch root's config, the `.vscode/nightgauge-workspace.yaml`
+`repositories[]` entries, and the sibling checkouts carrying
+`.nightgauge/config.yaml`.
+
+CLI mode used to build no registry at all. Because `nightgauge queue add <N>
+--repo <other/repo>` is the documented way to queue cross-repo work, the CLI
+could be asked for precisely the run it could not express: the target repo's
+work was created under the launch repo, and the epic base branch was cut from
+the **launch** repo's default branch and pushed to the **launch** repo's remote.
+Nothing about that mechanism guaranteed the branch would be empty.
+
+**The resolution fails closed.** When the launch root's own identity is known —
+its config names `owner` + `defaultRepo`, or its `origin` remote is a forge URL
+— and it is not the target repo, and the registry has no path for the target
+repo, the run is **refused** at a preflight beside the run-identity, license and
+identity gates. It is refused before any worktree, branch, push or stage
+dispatch, and the error names the repo that could not be resolved. Add the repo
+to the workspace and re-queue it.
+
+The refusal is deliberate and not negotiable by fallback: rooting at the launch
+repo is not a degraded mode, it is a write into a _real_ repository that has
+nothing to do with the change. Not running is the better failure.
+
+The one case that is not refused is the one with no evidence: a launch root that
+names no repository at all (no config identifying it, no forge `origin`). There
+is nothing to compare the target against, so the run proceeds from the launch
+root with a warning. Refusing there would strand every run in a workspace that
+merely declines to name itself — stopping work that was never in danger, which
+is the one failure a fail-closed gate cannot afford.
+
 ---
 
 ## Knowledge Base
