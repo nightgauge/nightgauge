@@ -198,6 +198,11 @@ type Server struct {
 	// same reason as notificationReloader: the router builder lives in cmd/,
 	// and internal/ipc must not import it.
 	forgeClientFn func(repo string) (forge.ForgeClient, error)
+
+	// lastSweepAt is when this daemon's last sweep that actually evaluated
+	// something finished, for the SweepMinGap check (#848). Read and written
+	// only while holding sweepMu, so it needs no lock of its own.
+	lastSweepAt time.Time
 }
 
 // ForgeInstanceConfig captures the forge kind + host bound to a repository.
