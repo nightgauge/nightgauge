@@ -43,6 +43,41 @@ type projectV2Query struct {
 	} `graphql:"organization(login: $owner)"`
 }
 
+// projectV2UpdatedAtQuery and userProjectV2UpdatedAtQuery are the board CHANGE
+// PROBE (#847): the whole project object, reduced to the one field that says
+// whether it moved.
+//
+// It selects no connection, so GitHub scores it at **1 point** against the
+// **34** a two-page board read costs on this workspace — measured, not
+// estimated. That ratio is the entire reason the probe exists: on an idle
+// workspace the expensive read almost always discovers that nothing changed.
+//
+// UpdatedAt is graphql.String, not time.Time, because the DateTime scalar
+// decodes as a string through shurcooL/graphql and naming a Go time type here
+// makes the client send a scalar name the schema does not have. Callers parse
+// RFC3339, the same way nodeToItem already does for item timestamps.
+//
+// `items { totalCount }` is deliberately NOT selected. It looks like the
+// obvious change signal and it is the broken one: measured on a disposable
+// board, totalCount read 0 for ~3s after an item was added while updatedAt was
+// already fresh on the first read. A detector keyed on a count would miss the
+// very add it was watching for, silently. See ProjectUpdatedAt.
+type projectV2UpdatedAtQuery struct {
+	Organization struct {
+		ProjectV2 struct {
+			UpdatedAt graphql.String
+		} `graphql:"projectV2(number: $projectNumber)"`
+	} `graphql:"organization(login: $owner)"`
+}
+
+type userProjectV2UpdatedAtQuery struct {
+	User struct {
+		ProjectV2 struct {
+			UpdatedAt graphql.String
+		} `graphql:"projectV2(number: $projectNumber)"`
+	} `graphql:"user(login: $owner)"`
+}
+
 // projectV2FilteredQuery fetches items with server-side status filtering.
 // Uses the query: parameter for efficient single-page fetches.
 type projectV2FilteredQuery struct {
