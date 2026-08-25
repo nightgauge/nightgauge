@@ -416,7 +416,13 @@ func rootCmd() *cobra.Command {
 		Use:   "nightgauge",
 		Short: "Nightgauge CLI — AI-powered SDLC pipeline",
 		Long:  "Command-line interface for the Nightgauge pipeline. Provides GitHub project board operations, issue management, and IPC server for VSCode integration.",
+		// Setting Version makes cobra register the --version flag, so the form
+		// nearly every CLI accepts stops erroring with "unknown flag" (#899).
+		// The template makes it print exactly what `nightgauge version` prints;
+		// cobra's default would say "nightgauge version <v>" instead.
+		Version: effectiveVersion(),
 	}
+	root.SetVersionTemplate("nightgauge {{.Version}}\n")
 
 	// PersistentPreRunE runs before every subcommand and applies config.yaml defaults
 	// for --owner, --repo, and --project flags when not explicitly set on the CLI.
