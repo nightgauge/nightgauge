@@ -359,8 +359,9 @@ nothing about it either (#691):
 **`--issue` is the authority — the PR body does not control closure.** The hook
 closes the issue it is **told** to close. It never reads the PR body, so
 GitHub's `Closes #N` keyword and `--issue N` are two independent mechanisms, and
-on the hand-merge train this document mandates, the hook is the one that fires
-first and wins.
+on the hand-merge train this document mandates, the hook is the one that decides:
+a body with no `Closes` keyword leaves GitHub with nothing to do, and the hook
+then closes whatever number it was handed.
 
 This bites on partial fixes. A PR that resolves 2 of an issue's 5 acceptance
 criteria, whose body was deliberately edited to read _"Partially addresses #N"_
