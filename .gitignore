@@ -39,9 +39,16 @@ bin/
 packages/nightgauge-sdk/THIRD_PARTY_NOTICES
 packages/nightgauge-vscode/THIRD_PARTY_NOTICES
 
-# Go compiled binary
-/nightgauge
-/seed
+# NOT ignored on purpose: a stray `nightgauge` or `seed` binary built into the
+# repo ROOT is a mistake, not build output. `make build-cli` writes
+# bin/nightgauge (which IS ignored, below/above), and nothing in the tree
+# references a root binary.
+#
+# Ignoring the mistake made it permanent and silent: a root ./nightgauge sat
+# here for five days reporting stale output, with `git status` clean the whole
+# time because this file said so (#919). Untracked-and-visible is the feedback
+# loop. Staging one is caught loudly by the publication-boundary guard
+# (UNCLASSIFIED path -> exit 1), which runs on every PR.
 
 # Git worktrees for concurrent pipeline execution (Issue #1621)
 .worktrees/
