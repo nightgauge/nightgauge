@@ -27,6 +27,15 @@ import (
 // a required failure would make `doctor` exit 2 on a workspace that runs
 // perfectly well — which teaches operators to stop reading its output.
 
+// mergedPRDoorFactory hands a repo root's merged-PR second door to the scans
+// below (#916). Returning nil is the closed door — an unauthenticated or
+// offline machine, or a root with no GitHub origin — and every scan here works
+// exactly as it did before the door existed.
+//
+// Passed in rather than constructed here so `doctor`'s own client is the one
+// used, and so these scans stay drivable from tests with no network at all.
+type mergedPRDoorFactory func(repoRoot string) execution.MergedPRLookup
+
 // maxLeaksReported caps how many entries each check names. The list is
 // evidence; the counts carry the magnitude.
 const maxLeaksReported = 8
@@ -66,7 +75,7 @@ type leakedWorktree struct {
 // honest substitute is staleWorktreeAge: a run's own worktree is minutes old,
 // and the leaks that mattered were weeks to months old. A run still going after
 // a day is surfaced, which is itself worth an operator's attention.
-func scanLeakedWorktrees(startDir string, now time.Time) (leaks []leakedWorktree, reclaimable int, determined bool) {
+func scanLeakedWorktrees(startDir string, now time.Time, door mergedPRDoorFactory) (leaks []leakedWorktree, reclaimable int, determined bool) {
 	roots := config.WorkspaceRepoRoots(startDir)
 	if len(roots) == 0 {
 		return nil, 0, false
@@ -76,6 +85,10 @@ func scanLeakedWorktrees(startDir string, now time.Time) (leaks []leakedWorktree
 		res, err := execution.SweepMergedWorktrees(execution.WorktreeSweepOptions{
 			RepoRoot: root,
 			DryRun:   true,
+			// #916: without this a worktree whose PR merged remotely is
+			// reported as a permanent `unmerged-content` leak rather than as
+			// something the sweep can reclaim.
+			MergedPRLookup: doorFor(door, root),
 		})
 		if err != nil {
 			// One unreadable root undetermines the whole answer: a partial
@@ -134,8 +147,8 @@ func worktreeAge(path string, now time.Time) time.Duration {
 
 // checkLeakedWorktrees builds the doctor entry for registered-but-stale
 // pipeline worktrees (#332 AC4).
-func checkLeakedWorktrees(startDir string, now time.Time) (CheckItem, string) {
-	leaks, reclaimable, determined := scanLeakedWorktrees(startDir, now)
+func checkLeakedWorktrees(startDir string, now time.Time, door mergedPRDoorFactory) (CheckItem, string) {
+	leaks, reclaimable, determined := scanLeakedWorktrees(startDir, now, door)
 	if !determined {
 		msg := "leaked worktrees unverifiable: could not read the worktree set across the workspace's repo roots — not inside a git repository or workspace, or `git worktree list` failed. A clean report here would be an assertion about a scan that never ran"
 		return CheckItem{OK: false, Detail: "could not scan for leaked worktrees", Error: msg}, msg
@@ -193,7 +206,7 @@ type strandedBranch struct {
 // already in the default branch cannot become un-merged by waiting, and a
 // merged branch is stranded from the moment its PR lands — there is no
 // "probably from the run that just finished" reading to guard against.
-func checkStrandedBranches(startDir string) (CheckItem, string) {
+func checkStrandedBranches(startDir string, door mergedPRDoorFactory) (CheckItem, string) {
 	roots := config.WorkspaceRepoRoots(startDir)
 	if len(roots) == 0 {
 		msg := "stranded branches unverifiable: no repo roots resolved — not inside a git repository or workspace"
@@ -202,7 +215,13 @@ func checkStrandedBranches(startDir string) (CheckItem, string) {
 
 	var found []strandedBranch
 	for _, root := range roots {
-		scan, err := execution.ScanStrandedBranches(execution.StrandedBranchOptions{RepoRoot: root})
+		scan, err := execution.ScanStrandedBranches(execution.StrandedBranchOptions{
+			RepoRoot: root,
+			// #916: without this the report goes quiet on any branch whose
+			// files the default branch has since touched — observed within an
+			// hour of the scan shipping.
+			MergedPRLookup: doorFor(door, root),
+		})
 		if err != nil {
 			// One unreadable root undetermines the answer, exactly as in
 			// scanLeakedWorktrees: a partial scan and a complete one print
@@ -286,4 +305,14 @@ func checkPipelineStashes(startDir string, now time.Time) (CheckItem, string) {
 		Detail: fmt.Sprintf("%d pipeline stash(es), oldest %dd", len(found), oldest),
 		Error:  msg,
 	}, msg
+}
+
+// doorFor applies the factory, tolerating a nil factory so every caller does
+// not repeat the check. A nil factory and a factory returning nil mean the
+// same thing: no second door, content test only.
+func doorFor(f mergedPRDoorFactory, root string) execution.MergedPRLookup {
+	if f == nil {
+		return nil
+	}
+	return f(root)
 }

@@ -53,5 +53,5 @@ func (as *AutonomousScheduler) sweepMergedWorktrees() {
 	// ordering between them to invert.
 	roots := as.scheduler.repoScanRoots()
 	_, determined := as.scheduler.activeWorktreeIssuesFor(roots)
-	runMergedWorktreeSweep(roots, inFlight, determined, worktreeSweepLogPrefix)
+	runMergedWorktreeSweep(roots, inFlight, determined, worktreeSweepLogPrefix, as.scheduler.mergedPRDoor)
 }

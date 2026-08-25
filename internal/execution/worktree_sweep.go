@@ -257,6 +257,11 @@ func SweepMergedWorktrees(opts WorktreeSweepOptions) (WorktreeSweepResult, error
 			RepoRoot:      opts.RepoRoot,
 			DefaultBranch: defaultBranch,
 			BaseRef:       baseRef,
+			// The sweep's own door, handed straight through. A sweep that
+			// consults the forge for its worktree branches and not for its
+			// stranded ones would report the two halves by different rules
+			// (#916).
+			MergedPRLookup: opts.MergedPRLookup,
 		})
 		if err != nil {
 			// Non-fatal like every other per-item failure here: a branch scan
@@ -479,10 +484,18 @@ func mergedIntoBase(repoRoot, baseRef, branch string) (merged bool, hasOwnCommit
 // tip, but the tip is one of that commit's two parents. Any inspect failure
 // leaves the branch unmerged.
 func lookupMergedPR(opts WorktreeSweepOptions, branch string) bool {
-	if opts.MergedPRLookup == nil {
+	return lookupMergedPRIn(opts.RepoRoot, opts.MergedPRLookup, branch)
+}
+
+// lookupMergedPRIn is the door itself, taking only what it needs so the
+// stranded-branch scan opens the SAME door rather than a second copy of it.
+// Two implementations of a rule whose failure direction is "delete work
+// nobody has landed" is one more than is safe.
+func lookupMergedPRIn(repoRoot string, lookup MergedPRLookup, branch string) bool {
+	if lookup == nil {
 		return false
 	}
-	tip, err := gitOutput(opts.RepoRoot, "rev-parse", branch)
+	tip, err := gitOutput(repoRoot, "rev-parse", branch)
 	if err != nil {
 		return false
 	}
@@ -490,7 +503,7 @@ func lookupMergedPR(opts WorktreeSweepOptions, branch string) bool {
 	if tip == "" {
 		return false
 	}
-	headSHA, parents, ok := opts.MergedPRLookup(branch)
+	headSHA, parents, ok := lookup(branch)
 	if !ok || headSHA == "" {
 		return false
 	}

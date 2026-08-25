@@ -1,6 +1,7 @@
 package execution
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -217,4 +218,147 @@ func isAncestor(t *testing.T, root, commit, ancestorOf string) bool {
 		t.Fatalf("merge-base --is-ancestor: %v", err)
 	}
 	return ok
+}
+
+// #916. The content test is right for squash merges and wrong in one
+// direction: once the base evolves a file the branch owns, the diff is
+// non-empty again and a merged branch reads as unmerged forever. That is
+// fail-closed and therefore safe — and it made a real branch vanish from this
+// scan's report within an hour of shipping, which is the invisibility #912 was
+// filed to end.
+
+// evolveBaseOn commits a change to one of the branch's own files on main and
+// pushes it, reproducing "a later PR touched a file this branch also owned".
+func (f *sweepFixture) evolveBaseOn(file, content string) {
+	f.t.Helper()
+	writeFile(f.t, filepath.Join(f.root, file), content)
+	run(f.t, f.root, "git", "add", ".")
+	run(f.t, f.root, "git", "commit", "-m", "later work on "+file)
+	run(f.t, f.root, "git", "push", "origin", "main")
+	run(f.t, f.root, "git", "fetch", "origin")
+}
+
+func TestScanStrandedBranches_WithoutTheDoorTheReportGoesQuietWhenTheBaseMovesOn(t *testing.T) {
+	// The bug, stated as a test. Not an aspiration — this is current, correct,
+	// fail-closed behaviour, pinned so the door below is demonstrably what
+	// changes it.
+	f := newSweepFixture(t)
+	f.strandBranch(916, "fix/916-stranded", "shared.txt")
+	f.evolveBaseOn("shared.txt", "content of shared.txt\nand a later change\n")
+
+	res, err := ScanStrandedBranches(StrandedBranchOptions{RepoRoot: f.root})
+	if err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	if got := strandedNames(res); len(got) != 0 {
+		t.Fatalf("expected the content test alone to lose the branch, got %v — fixture no longer reproduces #916", got)
+	}
+	if r := keptReason(res, "fix/916-stranded"); r != KeepUnmergedContent {
+		t.Fatalf("kept for %q, want %q", r, KeepUnmergedContent)
+	}
+}
+
+func TestScanStrandedBranches_TheDoorKeepsAMergedBranchVisibleAfterTheBaseMovesOn(t *testing.T) {
+	f := newSweepFixture(t)
+	f.strandBranch(916, "fix/916-stranded", "shared.txt")
+	tip := strings.TrimSpace(gitOut(t, f.root, "rev-parse", "fix/916-stranded"))
+	f.evolveBaseOn("shared.txt", "content of shared.txt\nand a later change\n")
+
+	res, err := ScanStrandedBranches(StrandedBranchOptions{
+		RepoRoot: f.root,
+		// The forge says: this branch merged as a PR whose head was its tip.
+		MergedPRLookup: func(branch string) (string, []string, bool) {
+			if branch == "fix/916-stranded" {
+				return tip, nil, true
+			}
+			return "", nil, false
+		},
+	})
+	if err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	if got := strandedNames(res); len(got) != 1 || got[0] != "fix/916-stranded" {
+		t.Fatalf("the door did not restore the branch to the report: %v (kept %+v)", got, res.Kept)
+	}
+}
+
+func TestScanStrandedBranches_TheDoorNeverReportsUnmergedWork(t *testing.T) {
+	// The direction that costs something. A door that says "not found" — no
+	// PR, no auth, no network — must leave the content test's KEEP standing.
+	// Every failure mode of the lookup lands here.
+	f := newSweepFixture(t)
+	wt := f.addWorktree(917, "feat/917-unlanded")
+	f.commitIn(wt, "unlanded.txt", "work nobody has merged\n")
+	run(t, f.root, "git", "worktree", "remove", wt)
+
+	for name, lookup := range map[string]MergedPRLookup{
+		"not found":       func(string) (string, []string, bool) { return "", nil, false },
+		"empty head":      func(string) (string, []string, bool) { return "", nil, true },
+		"unrelated head":  func(string) (string, []string, bool) { return "0000000000000000000000000000000000000000", nil, true },
+		"wrong parents":   func(string) (string, []string, bool) { return "abc", []string{"def"}, true },
+		"nil (no client)": nil,
+	} {
+		res, err := ScanStrandedBranches(StrandedBranchOptions{RepoRoot: f.root, MergedPRLookup: lookup})
+		if err != nil {
+			t.Fatalf("%s: scan: %v", name, err)
+		}
+		if got := strandedNames(res); len(got) != 0 {
+			t.Errorf("%s: unmerged work reported as stranded: %v", name, got)
+		}
+	}
+}
+
+func TestScanStrandedBranches_TheDoorIsNotConsultedForBranchesThatPassTheContentTest(t *testing.T) {
+	// Cost, stated as a property. The daemon runs this on every reconcile
+	// cycle across every root, and #842 is an open epic about the API budget:
+	// a door consulted for every branch would spend forge quota on every idle
+	// tick. It is consulted only after the content test has already failed.
+	f := newSweepFixture(t)
+	f.strandBranch(918, "fix/918-clean-merge", "fix.txt")
+
+	calls := 0
+	res, err := ScanStrandedBranches(StrandedBranchOptions{
+		RepoRoot: f.root,
+		MergedPRLookup: func(string) (string, []string, bool) {
+			calls++
+			return "", nil, false
+		},
+	})
+	if err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	if len(res.Stranded) != 1 {
+		t.Fatalf("fixture: expected the branch to pass the content test, got %+v", res)
+	}
+	if calls != 0 {
+		t.Errorf("door consulted %d time(s) for a branch the content test already resolved", calls)
+	}
+}
+
+func TestSweepMergedWorktrees_HandsItsOwnDoorToTheBranchScan(t *testing.T) {
+	// Wiring, again: the sweep resolving worktree branches through the forge
+	// while resolving stranded ones by content alone would report the two
+	// halves of the same question by two different rules.
+	f := newSweepFixture(t)
+	f.strandBranch(919, "fix/919-stranded", "shared.txt")
+	tip := strings.TrimSpace(gitOut(t, f.root, "rev-parse", "fix/919-stranded"))
+	f.evolveBaseOn("shared.txt", "content of shared.txt\nand a later change\n")
+
+	res, err := SweepMergedWorktrees(WorktreeSweepOptions{
+		RepoRoot:               f.root,
+		DryRun:                 true,
+		ReportStrandedBranches: true,
+		MergedPRLookup: func(branch string) (string, []string, bool) {
+			return tip, nil, branch == "fix/919-stranded"
+		},
+	})
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if res.StrandedBranches == nil {
+		t.Fatal("no branch scan ran")
+	}
+	if got := strandedNames(*res.StrandedBranches); len(got) != 1 {
+		t.Fatalf("the sweep's door did not reach the branch scan: %v", got)
+	}
 }
