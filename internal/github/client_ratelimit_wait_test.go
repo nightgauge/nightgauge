@@ -27,8 +27,22 @@ func TestRateLimitGate_WaitsThenProceeds_WhenEnabled(t *testing.T) {
 
 	path := filepath.Join(t.TempDir(), "rate-limit.json")
 	tr := NewSharedRateLimitTracker(path)
-	// Below floor, reset ~1s out so the wait is short and then clears.
-	resetAt := time.Now().Add(1 * time.Second).Unix()
+	// Below floor, with a reset far enough out that the wait is short and then
+	// clears.
+	//
+	// The offset is added to a whole-second clock reading, NOT to time.Now()
+	// before truncating it (#923). `time.Now().Add(time.Second).Unix()` looks
+	// like a one-second margin and is not: .Unix() truncates, so the real
+	// margin is whatever remains of the current second. Seeded at T.87 it
+	// leaves 130ms, and once setup crosses the boundary the gate reads
+	// `ResetAt <= now`, decides the reset has already passed, and does not wait
+	// at all — which trips the assertion below. In isolation setup takes ~1ms
+	// and it effectively never fires; under a full parallel `go test ./...` the
+	// scheduler delay is large enough that it does.
+	//
+	// Adding whole seconds to a whole-second value makes the margin exactly the
+	// offset, whenever in the second the test happens to start.
+	resetAt := time.Now().Unix() + 2
 	if err := tr.Set("alice", &RateLimitInfo{Remaining: 5, Limit: 5000, ResetAt: resetAt}); err != nil {
 		t.Fatalf("seed tracker: %v", err)
 	}
@@ -41,7 +55,7 @@ func TestRateLimitGate_WaitsThenProceeds_WhenEnabled(t *testing.T) {
 		t.Fatalf("expected success after waiting out the reset, got %v", err)
 	}
 	if waited := time.Since(start); waited < 500*time.Millisecond {
-		t.Errorf("expected the gate to wait ~1s for reset, only waited %s", waited)
+		t.Errorf("expected the gate to wait for reset, only waited %s", waited)
 	}
 	if got := atomic.LoadInt32(&calls); got == 0 {
 		t.Fatal("expected the call to dispatch after the wait, got 0 HTTP calls")
