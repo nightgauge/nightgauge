@@ -2239,8 +2239,8 @@ releases matching items immediately; both callers share one implementation
 queue is at `<repo>/.nightgauge/pipeline/queue-state.json` on the operator's
 machine and is gitignored, so a GitHub Actions runner has no queue to promote
 and anything it wrote would die with the runner. A
-`baseline-defer-sweep.yml` workflow was documented for this for some time and
-never existed (#881).
+scheduled CI sweep was documented for this for some time and never existed
+(#881).
 
 The sweep runs only while the autonomous daemon is running. With the daemon
 stopped, the CLI verb remains the way to release a deferred item.

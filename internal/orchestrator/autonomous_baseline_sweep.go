@@ -31,10 +31,12 @@ const baselineDeferralSweepInterval = 5 * time.Minute
 // passes). `baseline_ci_red` had no resumer running anywhere: the promote
 // logic existed and worked, but its only caller was the
 // `nightgauge baseline-gate promote` CLI verb, which nothing invoked on a
-// schedule. Documentation claimed a `.github/workflows/baseline-defer-sweep.yml`
-// cron did it; that workflow never existed and could not — the queue is
-// local-first and gitignored, so a runner has no queue to promote and
-// anything it wrote would die with the runner (#881).
+// schedule. Documentation claimed a scheduled CI sweep did it; no such
+// workflow ever existed, and none could — the queue is local-first and
+// gitignored, so a runner has no queue to promote and anything it wrote would
+// die with the runner (#881). The filename is deliberately not repeated here:
+// #881 burned it out of scripts/workflow-refs-allowlist.txt, and naming it
+// again would put it back.
 //
 // The daemon is therefore the only correct home: it is the one process with
 // both a periodic tick and the local filesystem the queue lives on.
