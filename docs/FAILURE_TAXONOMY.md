@@ -1067,18 +1067,54 @@ Nightgauge has two dispatch paths that must stay behavior-parallel:
 
 **Confirmed instances (evidence):**
 
-| Issue | Behavior                   | Wired to               | Consequence in the operating mode                                           |
-| ----- | -------------------------- | ---------------------- | --------------------------------------------------------------------------- |
-| #210  | Stage gates                | Extension wired 3 of 6 | `feature-dev`, `feature-planning`, `issue-pickup` ran ungated               |
-| #254  | `CompleteQueueItem`        | Go `runPipeline` only  | every autonomous run leaked a permanent `processing` queue item             |
-| #304  | Learning outcome record    | Go `runPipeline` only  | extension runs feed the self-improvement loop nothing                       |
-| #305  | Run-scoped attention cards | Go `runPipeline` only  | no IPC raise verb exists; interactive runs produce zero Action Center cards |
+| Issue | Behavior                                 | Wired to                        | Consequence in the operating mode                                                                      |
+| ----- | ---------------------------------------- | ------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| #210  | Stage gates                              | Extension wired 3 of 6          | `feature-dev`, `feature-planning`, `issue-pickup` ran ungated                                          |
+| #254  | `CompleteQueueItem`                      | Go `runPipeline` only           | every autonomous run leaked a permanent `processing` queue item                                        |
+| #304  | Learning outcome record                  | Go `runPipeline` only           | extension runs feed the self-improvement loop nothing                                                  |
+| #305  | Run-scoped attention cards               | Go `runPipeline` only           | no IPC raise verb exists; interactive runs produce zero Action Center cards                            |
+| #874  | Skill-root search path                   | TypeScript host: 2 roots; Go: 1 | `nightgauge queue run` could not render **any** stage skill in a repo that does not vendor `skills/`   |
+| #882  | `repoPathResolver` / `repoRootsResolver` | IPC server only                 | a cross-repo run rooted its state at the launch repo and pushed the branch to the launch repo's remote |
 
 **Why review does not catch it:** confirming _where_ a call sits inside a
 function says nothing about whether that function is ever entered. #254's
 comment even named the unwired path — as an aside, so it read as a benign edge
 case. The question review must ask is not "is this correct?" but **"which of
 the two paths reaches this — and is the other intentionally excluded?"**
+
+**The second shape: a capability the host wires up and the CLI leaves nil.**
+The drift does not need an unreached call site. It is enough that one path is
+_handed_ something the other constructs without. `Scheduler.WithRepoPathResolver`
+and `WithRepoRootsResolver` are optional injection seams, and their doc comments
+say so plainly:
+
+```go
+// The IPC server wires this from its ClientResolver.RepoPath; CLI/auto mode
+// leaves it nil and every root resolves to the execution manager's workspace
+// root (additive; single-repo behavior unchanged).
+```
+
+That comment was **true when written** — nothing could dispatch cross-repo from
+the CLI — and became false the moment cross-repo queueing existed, without a
+single line of it changing. The nil default then stopped being "single-repo
+behavior" and started being "wrong repo": run state written under the launch
+root, and a branch pushed to the launch root's remote (#882). #874 is the same
+shape one layer down — the TypeScript host searched the workspace checkout _and_
+the bundle beside the binary, Go searched only the checkout, so the Go-direct
+path failed with `SKILL.md not found for stage "issue-pickup"` while the file sat
+in `dist/skills/`.
+
+**The rule: when one execution path is given a capability by its host, the other
+path needs either the same capability or an explicit refusal — never a silent
+default.** A resolver that may be nil must document what the nil case _means
+today_, not what it meant when the seam was added, and a nil that is now
+incorrect must fail loudly rather than resolve to the nearest plausible root.
+
+**Testing corollary:** a test that exercises one path in isolation cannot see
+this class — both paths pass their own suites, which is exactly why every
+instance above shipped green. The assertion has to **compare the two paths**:
+the same input through each entry point, asserting the same resolved capability
+(the parity manifest below is that assertion, generalized).
 
 **Guards now in place:**
 
@@ -1107,3 +1143,48 @@ abort-deadline bookkeeping) are recorded in the manifest and its notes.
 Terminal-kind classification is no longer among them: #306 replaced the three
 ladders with one interpreted rule table (see
 [One rule table, three interpreters](#one-rule-table-three-interpreters-issue-306)).
+
+### Vacuous Assertion (the test that cannot go red)
+
+**Shape:** a test that passes on the fixed code and passes just as happily on
+the broken code. It runs, it is counted, it is green — and it constrains
+nothing. Unlike Silent No-Op the _product_ is fine; the defect is in the
+evidence, so the class is invisible until the next regression sails past a suite
+that was supposed to catch it.
+
+**Worked example (#878).** A regression test was written for a `git push` that
+failed on SSH remotes with `invalid auth method`. The assertion was "a push
+succeeds with no credentials configured", exercised against a `file://` remote
+in a temp dir. It passed. It also passed, byte for byte, against the code that
+had the bug — a `file://` remote needs no credentials on either implementation,
+so the one thing the test could never observe was the defect, which lived
+entirely in **which transport ran**. Rewritten to assert the transport (the push
+goes through the `git` CLI rather than the in-process library), it went red on
+the old code immediately.
+
+**Diagnosis: the assertion must name the thing that differs.** Ask what value
+changed when the bug was fixed, then check the assertion can see that value. An
+assertion about the code's _shape_ — a method exists, a field is present, a call
+site is reachable — passes on both sides of a behavioral fix by construction.
+
+**The proof is a revert, and it is one minute:**
+
+1. `cp <file> /tmp/<file>.bak` — a **copy**. Never `git checkout -- <file>` to
+   back a fix out: on an uncommitted branch that discards the fix itself.
+2. Restore the pre-fix behavior from the copy (or hand-mutate the fixed line).
+3. Run the new test. **It must FAIL.** If it is green, the test is decoration —
+   rewrite the assertion, do not adjust the fixture.
+4. Restore the fix, re-run, confirm green.
+
+**Find the mutation that COMPILES.** A revert that only breaks the build proves
+nothing about the assertion — the tests failed to compile, they did not fail.
+Prefer a mutation that type-checks: flip a boundary, swap a branch, restore an
+old default value.
+
+**Corollary — a green suite is a statement about the cases that RAN**, not about
+the cases that matter. Two assertions added to a `bash` suite running
+`set -uo pipefail` **without `-e`** called helpers that did not exist yet; bash
+printed `ok: command not found` to stderr, both cases silently did not run, and
+the summary still reported all tests passed. Only the PASS count rising by one
+instead of three exposed it. After adding assertions to any suite, **check the
+reported count rose by exactly the number you added.**

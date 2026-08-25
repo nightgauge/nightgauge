@@ -13,9 +13,27 @@ contract.
 
 ## Phase 4: Produce Plan File
 
+**Before writing the plan, re-check the issue's premise against the tree.**
+issue-pickup records a `Premise check:` line in its requirements; planning is the
+last stage that can act on a false one cheaply, and the first that will encode it
+into an implementation the next two stages execute. Verify each factual claim the
+issue makes about this repository — a named symbol, file, sweep, config key, or
+"X already does Y" — with one `grep`/`rg` per claim. Observed misses: an issue
+asking to delete a one-shot migration sweep that had **never been built**; an
+issue asserting a failure category already classified an auth error when it
+actually fell through to `CatUnknown` (which was the real defect); an issue
+offering "build it or delete it" where building was architecturally impossible —
+a CI cron cannot read a gitignored, local-only queue file — so one branch of the
+fork did not exist.
+
+When the premise is false, **plan the smaller correct thing and say so.** The
+plan MUST then carry a `## Premise Correction` section naming the claim, what the
+tree actually shows, and what the scope became. Do not silently plan the issue as
+written, and do not stall waiting for the issue to be rewritten.
+
 Write a concise plan that includes:
 
-- Problem summary and scope boundaries
+- Problem summary and scope boundaries — including any premise correction above
 - Assumptions and constraints
 - Files likely to change (existing + new)
 - Files to read — existing files that feature-dev should pre-load at the start
