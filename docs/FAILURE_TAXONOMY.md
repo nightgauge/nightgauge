@@ -1216,3 +1216,79 @@ printed `ok: command not found` to stderr, both cases silently did not run, and
 the summary still reported all tests passed. Only the PASS count rising by one
 instead of three exposed it. After adding assertions to any suite, **check the
 reported count rose by exactly the number you added.**
+
+### Unpinned Wiring (the guarantee that lives at the seam)
+
+**Shape:** a mechanism is correct, its own unit tests are thorough and green —
+and the property everyone relies on is produced not by the mechanism but by
+**where it is constructed**. Nothing tests the construction site, so a one-line
+scope change silently removes the guarantee while every test stays green.
+
+This is a sibling of Vacuous Assertion, not an instance of it. There the
+assertion could not see the defect; here the assertion is fine and **no test is
+looking at the place the property actually lives**.
+
+**Worked example (#907).** `internal/forge/boardcache` collapses repeated board
+reads. Its headline win is that several repos sharing one project board cost
+**one** 34-point read per sweep instead of N. That property is not implemented
+in the cache at all — it comes from a single declaration in
+`cachedSweepForgeClient`:
+
+```go
+var (
+    routers = map[routerKey]*forge.Router{}
+    boards  = boardcache.New(0)   // ONE cache for the whole factory
+)
+return func(repo string) (forge.ForgeClient, error) { … }
+```
+
+Move `boards` inside the returned closure — a plausible "scope it tightly"
+cleanup — and the cache becomes per-repo. Every shared-board workspace pays a
+full board read per repo again. The mutation compiled and **passed the entire
+suite**, because:
+
+- the cache's own tests exercise `Wrap` in isolation: they prove the cache
+  works and never observe who _holds_ it; and
+- the neighbouring test pinned **router** reuse, not snapshot reuse — two
+  different objects with two different lifetimes, and only one was asserted.
+
+**Diagnosis: ask where the property is produced, not where it is implemented.**
+For any performance or correctness guarantee, name the line that would have to
+change to lose it. If that line is a construction, a scope, a lifetime, or a
+registration — and the tests all live in the package being constructed — the
+guarantee is unpinned.
+
+**The pin needs both directions.** Assert the sharing (N consumers, one
+underlying call) _and_ assert the non-sharing (distinct keys stay distinct).
+Without the second, a cache that over-shares — serving one board's items for
+another — satisfies the first test while being strictly worse than no cache.
+
+### Read-Through Cache Without Write Interception
+
+**Shape:** a read path is wrapped in a cache; the write paths that invalidate it
+are not. Reads are fast and, for the length of the TTL, wrong. The staleness is
+invisible to tests because every test either reads or writes, never both across
+the boundary.
+
+**Worked example (#848).** `boardcache` is safe on the sweep path precisely
+because it intercepts mutating `ProjectService` methods and drops the snapshot —
+`TestEveryMutatingProjectMethodIsIntercepted` exists to keep that true. The
+obvious extension of the cache to the daemon's `board.list` would have satisfied
+its acceptance criterion and shipped a UI bug: `board.list` builds a fresh
+service per call, and the five mutating verbs (`board.updateStatus`,
+`project.syncStatus`, `project.syncIteration`, `project.setHours`,
+`project.addItem`) each build their own and route through no wrapper. An
+operator moving an item to Done would keep seeing the old status for the whole
+TTL, with nothing red.
+
+**The cheap repair is the trap.** Invalidating at each of the five call sites is
+bounded and easy, and it is the "keep two things in sync" shape this repo rules
+out: the sixth mutating verb someone adds later reintroduces the staleness
+silently. The repair is to route reads **and** writes for a given key through
+one wrapped client, so the interception that already exists does the work and no
+new sync surface is created.
+
+**Diagnosis: before caching a read, enumerate every writer of the same data and
+check each one passes through the wrapper.** If any writer constructs its own
+client, the cache is not safe on that path yet — and a TTL short enough to hide
+the problem is not a fix, it is a smaller version of the same bug.
