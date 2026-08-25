@@ -10,8 +10,6 @@
  */
 
 import * as vscode from "vscode";
-import * as path from "node:path";
-import * as fs from "node:fs/promises";
 import type { Logger } from "../utils/logger";
 import {
   GettingStartedPanel,
@@ -27,19 +25,10 @@ const DOCS_URL = "https://github.com/nightgauge/nightgauge#readme";
  * auto-shown once for this VSCode installation (Issue #4155). */
 const GETTING_STARTED_SHOWN_KEY = "nightgauge.gettingStarted.shown";
 
-/**
- * Checks whether `.nightgauge/config.yaml` exists at `nightgaugeRoot`.
- * This is the canonical signal that `/nightgauge:repo-init` has run.
- */
-export async function isRepoInitialized(nightgaugeRoot: string): Promise<boolean> {
-  const configPath = path.join(nightgaugeRoot, ".nightgauge", "config.yaml");
-  try {
-    const stat = await fs.stat(configPath);
-    return stat.isFile();
-  } catch {
-    return false;
-  }
-}
+// Imported (not just re-exported) because `refreshRepoInitializedContext`
+// below calls it: `export … from` creates no local binding.
+import { isRepoInitialized } from "../utils/repoInitialized";
+export { isRepoInitialized };
 
 /**
  * Updates the `nightgauge.repoInitialized` VSCode context key so welcome
