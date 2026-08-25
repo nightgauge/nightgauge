@@ -55,6 +55,7 @@ import type {
   ForgeConnectionTestResult,
   ForgeListResult,
   GitCleanupMergedBranchesResult,
+  GitComposeBranchNameResult,
   GitHubAuthCheckResult,
   GitLogEntry,
   GitStatusResult,
@@ -458,6 +459,10 @@ export class IpcClientGenerated extends IpcClientBase {
 
   async gitCheckout(branch: string, workDir?: string): Promise<void> {
     await this.call<void>('git.checkout', { branch, workDir });
+  }
+
+  async gitComposeBranchName(issueNumber: number, title: string, labels?: string[]): Promise<GitComposeBranchNameResult> {
+    return this.call<GitComposeBranchNameResult>('git.composeBranchName', { issueNumber, title, labels });
   }
 
   async gitBranchCreate(name: string, workDir?: string): Promise<void> {

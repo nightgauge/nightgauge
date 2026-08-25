@@ -121,6 +121,35 @@ no-compat rule in `AGENTS.md`):
   dispatch-side substring predicates survive as explicit keeps with inline
   reasons (see `scripts/check-band-vocabulary.py`'s header and PR #607).
 
+### Effort is unverifiable on the `claude` adapter — read the empty field as "unknown"
+
+`stageEfforts` and `stageServedEfforts` are **empty for every stage that runs
+on the `claude` adapter, and that is correct, not a gap in the data**. Go
+records effort only where it has first-party evidence of it, which today means
+the grok-family adapters' `NIGHTGAUGE_GROK_EFFORT` dispatch env var
+(`resolveDispatchEffort`) and any executor that reports a served effort on its
+own stream. The claude CLI reports neither, so nothing in the system observes
+what effort a claude stage actually ran at.
+
+**Nobody can verify it today** — not the dashboard, not a retro, not an
+operator asking "did that stage run at the effort I configured?" The honest
+answer is that the configured value was requested and the result was never
+observed.
+
+The field is left empty rather than filled with the registry default on
+purpose. A default written into an observation field is indistinguishable from
+a measurement, and it would be consumed as one by the routing calibration
+below — turning "we never looked" into "we looked and it was medium". Silence
+that looks like data is the failure mode; an empty field that readers know
+means _unknown_ is strictly better than a confident wrong number.
+
+Contrast `stageThinking`, which IS populated on the claude adapter (#888):
+that value is _derived_, from the resolved model's registry
+`behavior.thinking_default` plus the `CLAUDE_CODE_DISABLE_THINKING` interlock,
+and it is recorded because both inputs are facts Go's own process holds. The
+line is not "requested vs served" — it is whether anything in the system can
+actually answer the question.
+
 Two recording paths feed `ComplexityModelService`:
 
 ```

@@ -1067,20 +1067,36 @@ Nightgauge has two dispatch paths that must stay behavior-parallel:
 
 **Confirmed instances (evidence):**
 
-| Issue | Behavior                                 | Wired to                        | Consequence in the operating mode                                                                      |
-| ----- | ---------------------------------------- | ------------------------------- | ------------------------------------------------------------------------------------------------------ |
-| #210  | Stage gates                              | Extension wired 3 of 6          | `feature-dev`, `feature-planning`, `issue-pickup` ran ungated                                          |
-| #254  | `CompleteQueueItem`                      | Go `runPipeline` only           | every autonomous run leaked a permanent `processing` queue item                                        |
-| #304  | Learning outcome record                  | Go `runPipeline` only           | extension runs feed the self-improvement loop nothing                                                  |
-| #305  | Run-scoped attention cards               | Go `runPipeline` only           | no IPC raise verb exists; interactive runs produce zero Action Center cards                            |
-| #874  | Skill-root search path                   | TypeScript host: 2 roots; Go: 1 | `nightgauge queue run` could not render **any** stage skill in a repo that does not vendor `skills/`   |
-| #882  | `repoPathResolver` / `repoRootsResolver` | IPC server only                 | a cross-repo run rooted its state at the launch repo and pushed the branch to the launch repo's remote |
+| Issue | Behavior                                 | Wired to                        | Consequence in the operating mode                                                                                                                        |
+| ----- | ---------------------------------------- | ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| #210  | Stage gates                              | Extension wired 3 of 6          | `feature-dev`, `feature-planning`, `issue-pickup` ran ungated                                                                                            |
+| #254  | `CompleteQueueItem`                      | Go `runPipeline` only           | every autonomous run leaked a permanent `processing` queue item                                                                                          |
+| #304  | Learning outcome record                  | Go `runPipeline` only           | extension runs feed the self-improvement loop nothing                                                                                                    |
+| #305  | Run-scoped attention cards               | Go `runPipeline` only           | no IPC raise verb exists; interactive runs produce zero Action Center cards                                                                              |
+| #874  | Skill-root search path                   | TypeScript host: 2 roots; Go: 1 | `nightgauge queue run` could not render **any** stage skill in a repo that does not vendor `skills/`                                                     |
+| #882  | `repoPathResolver` / `repoRootsResolver` | IPC server only                 | a cross-repo run rooted its state at the launch repo and pushed the branch to the launch repo's remote                                                   |
+| #889  | Branch-name composition                  | BOTH — two implementations      | the extension hardcoded `feat/`, so every `type:bug` issue got a feature branch; it also doubled the issue number and truncated 10 chars shorter than Go |
 
 **Why review does not catch it:** confirming _where_ a call sits inside a
 function says nothing about whether that function is ever entered. #254's
 comment even named the unwired path — as an aside, so it read as a benign edge
 case. The question review must ask is not "is this correct?" but **"which of
 the two paths reaches this — and is the other intentionally excluded?"**
+
+**The third shape: BOTH paths implement it, and they disagree.** #889 is not a
+capability missing on one side — it is the same capability written twice, once
+per language, each self-consistent and each covered by its own tests. Nothing
+compared them, so the drift was invisible for as long as nobody read two branch
+names side by side. This shape is the most durable of the three, because every
+local test is green and every reviewer sees correct code.
+
+The repair is never "keep them in sync"; it is to delete one. `internal/git`'s
+`ComposeBranchName` is now the only composer, reached from TypeScript over
+`git.composeBranchName`, and
+`TestNoSecondBranchNameComposerInTypeScript` fails the build if a second one
+reappears in the extension sources. When you find this shape, ask which side the
+design already names as the authority — for #889 the `issue-pickup` skill had
+said "the Go binary" all along.
 
 **The second shape: a capability the host wires up and the CLI leaves nil.**
 The drift does not need an unreached call site. It is enough that one path is

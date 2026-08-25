@@ -785,6 +785,18 @@ export interface GitCleanupMergedBranchesResult {
   count: number;
 }
 
+/**
+ * Result of `git.composeBranchName` — THE branch name for an issue (#889).
+ *
+ * Mirrors `internal/ipc.GitComposeBranchNameResult`. The extension must use
+ * this verbatim; composing a name locally is the defect this verb exists to
+ * remove, and `internal/git`'s TestNoSecondBranchNameComposerInTypeScript
+ * fails the build if one reappears here.
+ */
+export interface GitComposeBranchNameResult {
+  name: string;
+}
+
 // ---------------------------------------------------------------------------
 // PR list type (matches Go pkg/types PullRequest)
 // ---------------------------------------------------------------------------

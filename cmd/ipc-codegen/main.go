@@ -384,6 +384,7 @@ func collectImportTypes(methods []MethodDef) []string {
 		"PipelineMaxConcurrentResult":        true,
 		"RateLimitInfo":                      true,
 		"GitCleanupMergedBranchesResult":     true,
+		"GitComposeBranchNameResult":         true, // Issue #889
 		"GitHubAuthCheckResult":              true,
 		"CancelActiveForNetworkOutageResult": true, // Issue #3296
 		"CostAnalyticsResult":                true, // Issue #3317

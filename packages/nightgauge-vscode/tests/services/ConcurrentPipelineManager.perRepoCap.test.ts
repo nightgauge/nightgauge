@@ -101,6 +101,35 @@ vi.mock("../../src/utils/nightgaugeConfig", () => ({
   }),
 }));
 
+/**
+ * #889 — `startSlot` now asks the Go binary for THE branch name over
+ * `git.composeBranchName` and fails closed if it cannot. These tests are about
+ * dispatch, not naming, so they need a stand-in that answers; a faithful one
+ * (prefix from labels, number once) keeps any name assertions meaningful.
+ */
+const gitComposeBranchName = vi.fn(
+  async (issueNumber: number, title: string, labels?: string[]) => {
+    const prefix = labels?.some((l) => l.toLowerCase().replace(/^type:/, "") === "bug")
+      ? "fix/"
+      : "feat/";
+    const slug = title
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-|-$/g, "")
+      .replace(new RegExp(`^${issueNumber}-`), "")
+      .substring(0, 50);
+    return { name: `${prefix}${issueNumber}-${slug}` };
+  }
+);
+
+vi.mock("../../src/services/IpcClient", () => ({
+  IpcClient: {
+    getInstance: () => ({
+      gitComposeBranchName,
+    }),
+  },
+}));
+
 import { ConcurrentPipelineManager } from "../../src/services/ConcurrentPipelineManager";
 
 // ---------------------------------------------------------------------------
