@@ -104,6 +104,30 @@ func TestVersionCmd(t *testing.T) {
 	}
 }
 
+// TestVersionFlagMatchesSubcommand pins #899: `--version` used to fail with
+// "unknown flag", so the first thing a new user types to check their install
+// errored out under an 80-line usage dump. Both forms must now print the same
+// single line.
+func TestVersionFlagMatchesSubcommand(t *testing.T) {
+	run := func(args ...string) string {
+		var out bytes.Buffer
+		cmd := rootCmd()
+		cmd.SetOut(&out)
+		cmd.SetErr(&out)
+		cmd.SetArgs(args)
+		if err := cmd.Execute(); err != nil {
+			t.Fatalf("%v failed: %v (output: %q)", args, err, out.String())
+		}
+		return out.String()
+	}
+
+	got := run("--version")
+	want := "nightgauge " + effectiveVersion() + "\n"
+	if got != want {
+		t.Errorf("--version = %q, want %q", got, want)
+	}
+}
+
 func TestProjectCmdSubcommands(t *testing.T) {
 	cmd := rootCmd()
 
