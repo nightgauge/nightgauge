@@ -2970,6 +2970,46 @@ func (s *Server) registerMethods() {
 		rt.RecordStageModel(stage, p.Model)
 		rt.RecordStageAdapter(stage, p.Adapter)
 
+		// The rest of the #580 model envelope (#888). Everything above this
+		// line was recorded on this path; everything below it was recorded
+		// ONLY by the Go scheduler, so a complete, successful extension run —
+		// six stages, 64M tokens, $17.63 — wrote null into every one of these
+		// fields and the routing corpus learned nothing from it.
+		//
+		// Derived through orchestrator.StageEnvelopeAttribution, the same
+		// resolvers the scheduler uses, so the two paths cannot drift apart
+		// again by copying. Both recorders ignore empty strings and are
+		// latest-wins per stage, so running this on every transition lets the
+		// authoritative "complete" values supersede a "model-resolved"
+		// estimate, and a bookend transition with no model is a no-op.
+		if p.Model != "" {
+			thinking, selectionMode := orchestrator.StageEnvelopeAttribution(
+				p.Adapter, p.Model, s.workspaceRootPath())
+			rt.RecordStageThinking(stage, thinking)
+			rt.RecordStageModelSelectionMode(stage, selectionMode)
+		}
+
+		// The served envelope, verbatim from the executor's own report and
+		// deliberately NOT falling back to the requested values — mirroring
+		// scheduler.go, where result.ServedModel is recorded raw alongside the
+		// separate request-or-served `servedModel` local. Empty stays empty:
+		// "the executor did not say" and "the executor said X" must remain
+		// distinguishable, which is the entire point of these fields.
+		rt.RecordStageServedModel(stage, p.ServedModel)
+		rt.RecordStageServedEffort(stage, p.ServedEffort)
+		rt.RecordStageServedThinking(stage, p.ServedThinking)
+		// When the executor served something OTHER than what was requested,
+		// the requested-value fields are re-recorded onto the served value —
+		// again exactly as the scheduler does, so requested-vs-served stay
+		// epistemically distinct while the headline field tells the truth
+		// about what ran.
+		if p.ServedEffort != "" {
+			rt.RecordStageEffort(stage, p.ServedEffort)
+		}
+		if p.ServedThinking != "" {
+			rt.RecordStageThinking(stage, p.ServedThinking)
+		}
+
 		switch p.Status {
 		case "initialized":
 			// Pipeline initialized — runtime already created above

@@ -13582,6 +13582,13 @@ export class HeadlessOrchestrator implements vscode.Disposable {
                   await this.stateService.failStage(stage, costCapError.message, {
                     model: result.servedModel ?? result.modelDecision?.model,
                     adapter: result.adapterDecision?.adapter,
+                    // The raw served envelope (#888) — NOT fallen back to the requested
+                    // values the way `model` above is. Undefined means the executor
+                    // reported nothing, and Go records that as absent rather than
+                    // inventing an observation.
+                    servedModel: result.servedModel,
+                    servedEffort: result.servedEffort,
+                    servedThinking: result.servedThinking,
                   });
                 } catch (err) {
                   this.logger.warn("Failed to update state on runaway-progress failure", {
@@ -13638,6 +13645,13 @@ export class HeadlessOrchestrator implements vscode.Disposable {
                   await this.stateService.failStage(stage, stallError.message, {
                     model: result.servedModel ?? result.modelDecision?.model,
                     adapter: result.adapterDecision?.adapter,
+                    // The raw served envelope (#888) — NOT fallen back to the requested
+                    // values the way `model` above is. Undefined means the executor
+                    // reported nothing, and Go records that as absent rather than
+                    // inventing an observation.
+                    servedModel: result.servedModel,
+                    servedEffort: result.servedEffort,
+                    servedThinking: result.servedThinking,
                   });
                 } catch (err) {
                   this.logger.warn("Failed to update state on stall-kill failure", { stage, err });
@@ -13761,6 +13775,13 @@ export class HeadlessOrchestrator implements vscode.Disposable {
                     await this.stateService.failStage(stage, budgetError.message, {
                       model: result.servedModel ?? result.modelDecision?.model,
                       adapter: result.adapterDecision?.adapter,
+                      // The raw served envelope (#888) — NOT fallen back to the requested
+                      // values the way `model` above is. Undefined means the executor
+                      // reported nothing, and Go records that as absent rather than
+                      // inventing an observation.
+                      servedModel: result.servedModel,
+                      servedEffort: result.servedEffort,
+                      servedThinking: result.servedThinking,
                     });
                   }
                 } catch (err) {
@@ -13861,6 +13882,13 @@ export class HeadlessOrchestrator implements vscode.Disposable {
                   await this.stateService.completeStage(stage, {
                     model: result.servedModel ?? result.modelDecision?.model,
                     adapter: result.adapterDecision?.adapter,
+                    // The raw served envelope (#888) — NOT fallen back to the requested
+                    // values the way `model` above is. Undefined means the executor
+                    // reported nothing, and Go records that as absent rather than
+                    // inventing an observation.
+                    servedModel: result.servedModel,
+                    servedEffort: result.servedEffort,
+                    servedThinking: result.servedThinking,
                   });
                   // A second `setStageModelSelection` call used to sit here
                   // "for post-pipeline analysis (Issue #1259)". Its receiver was
@@ -13999,6 +14027,13 @@ export class HeadlessOrchestrator implements vscode.Disposable {
                     await this.stateService.failStage(stage, errorMessage, {
                       model: result.servedModel ?? result.modelDecision?.model,
                       adapter: result.adapterDecision?.adapter,
+                      // The raw served envelope (#888) — NOT fallen back to the requested
+                      // values the way `model` above is. Undefined means the executor
+                      // reported nothing, and Go records that as absent rather than
+                      // inventing an observation.
+                      servedModel: result.servedModel,
+                      servedEffort: result.servedEffort,
+                      servedThinking: result.servedThinking,
                     });
                     await this.stateService.clearRetrying(stage);
                   } catch (err) {
