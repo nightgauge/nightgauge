@@ -906,7 +906,19 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
 
   private async startSlot(item: QueueItem): Promise<StartSlotOutcome> {
     const slotIndex = this.findAvailableSlotIndex();
-    const branchName = `feat/${item.issueNumber}-${this.slugify(item.title)}`;
+    // THE branch name comes from the Go composer, never from here (#889).
+    // `issue-pickup`'s own skill already names the binary as the authority for
+    // prefix derivation and slug generation; a second implementation here
+    // hardcoded `feat/`, so every `type:bug` issue was branded a feature, and
+    // it doubled an issue number that the queue item's display title already
+    // carried. This call is repo-independent, so it does not depend on the
+    // worktree `startSlotInner` is about to create.
+    //
+    // Fails closed. There is deliberately no local fallback: a fallback IS the
+    // second composer, and it would come back the moment IPC hiccuped.
+    const branchName = (
+      await IpcClient.getInstance().gitComposeBranchName(item.issueNumber, item.title, item.labels)
+    ).name;
     // THE run identity (#307 / ADR-017). Minted BEFORE the reservation so the
     // reservation record, the eventual PipelineSlot and the slot's state
     // service all carry the same id — that is what lets a late event prove
@@ -1396,10 +1408,14 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
     // the very first event.
     if (slot.stateService && slot.title) {
       try {
+        // The branch the worktree is ACTUALLY on, not a recomposition (#889).
+        // Recomposing here was a third composer, and it disagreed with the
+        // real branch the moment labels or truncation differed — so pipeline
+        // state opened naming a branch that did not exist.
         await slot.stateService.initializePipeline(
           slot.issueNumber,
           slot.title,
-          `feat/${slot.issueNumber}-${this.slugify(slot.title)}`
+          slot.worktree.branch
         );
       } catch {
         // Non-critical — runPipeline will initialize with placeholder
@@ -3471,14 +3487,6 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
       if (!usedIndices.has(i)) return i;
     }
     return this.maxConcurrent; // Shouldn't happen if called when slots available
-  }
-
-  private slugify(text: string): string {
-    return text
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/^-|-$/g, "")
-      .substring(0, 40);
   }
 
   private emitSlotsChanged(): void {

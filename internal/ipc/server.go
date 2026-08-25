@@ -4346,6 +4346,20 @@ func (s *Server) registerMethods() {
 		return map[string]string{"status": "ok"}, nil
 	}
 
+	//ipc:method gitComposeBranchName params:GitComposeBranchNameParams result:GitComposeBranchNameResult
+	s.methods["git.composeBranchName"] = func(_ context.Context, params json.RawMessage) (interface{}, error) {
+		var p GitComposeBranchNameParams
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, fmt.Errorf("invalid params: %w", err)
+		}
+		if p.IssueNumber <= 0 {
+			return nil, fmt.Errorf("issueNumber must be positive, got %d", p.IssueNumber)
+		}
+		return GitComposeBranchNameResult{
+			Name: gitops.ComposeBranchName(p.Labels, p.IssueNumber, p.Title),
+		}, nil
+	}
+
 	//ipc:method gitBranchCreate params:GitBranchCreateParams result:void
 	s.methods["git.branchCreate"] = func(_ context.Context, params json.RawMessage) (interface{}, error) {
 		var p GitBranchCreateParams
