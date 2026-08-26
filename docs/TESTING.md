@@ -845,6 +845,66 @@ was not:
    becomes the _only_ coverage the moment someone deletes the guard it was
    actually exercising.
 
+### A test that mutates shared state cannot be made crash-safe by being careful
+
+A test that `git mv`s a tracked file, edits a checked-in config, or otherwise
+mutates the repository it runs in has a window between the mutation and the
+restore. Careful `defer`-based cleanup closes that window against ordinary
+failure — and not at all against the process being killed inside it.
+
+That is not a hypothetical risk in this tree: the hermeticity suites re-run
+cases inside sandboxes and **deliberately SIGKILL them mid-run**. Three rename
+cases were added to `scripts/test-publication-boundary.sh`; they passed, and
+they took the suite around them from "completes cleanly" to "exited 2", because
+exercising a rename means moving a real tracked file and a kill between the
+`mv` and the restore leaves the checkout missing a source file.
+
+**The repair is a throwaway fixture, not more care.** Those tests now live in
+`scripts/test-publication-boundary-rename.py`, which builds its own scratch
+repository — so a kill at any instant destroys nothing that matters. If a test
+needs to mutate a repository, give it a repository of its own.
+
+Corollary for diagnosis: when adding a test breaks a suite that does not test
+the same thing, **revert only the test file and re-run**. That separates "my fix
+is wrong" from "my test is hostile to its neighbours" in one step, instead of
+guessing.
+
+### A test file's own fixtures can trip the rule the file tests
+
+A test for a lint, gate, or boundary rule has to contain examples of the thing
+the rule rejects. That makes the test file itself a violation, and the tree-wide
+counter the gate ratchets against will count it.
+
+The repair is the rule's own **"files that DEFINE or TEST this rule"** allowlist
+category — the one already holding the checker and its existing test script. A
+new test file is absent from it only because it did not exist yet.
+
+**Do NOT raise the ratchet instead.** A baseline that only ever moves down is a
+debt being burned off; spending four of its references on fixtures converts a
+one-line allowlist entry into permanent lost headroom, and the next reader
+cannot tell the difference between "the tree got worse" and "we added a test".
+
+### A test's probe should be pinned to its subject for a documented reason
+
+When a test drives a mechanism through some _other_ call site — a rate-limit
+gate exercised via whatever API call is handy, a cache exercised via whatever
+read is nearest — that call site is load-bearing and invisible. Migrate it and
+the test keeps passing while silently testing something else.
+
+`client_ratelimit_test.go` drove the **GraphQL** gate through
+`Client.GetRepositoryID`. #849 moved that call to REST; nothing failed, and the
+tests quietly became REST-gate tests — duplicating the `TestREST_*` cases below
+them while leaving the GraphQL gate with no coverage at all. Green the whole
+way.
+
+**Pick a probe whose behaviour is pinned by something a future change must
+confront.** These tests now use `RepoService.RepoMetadata`, which
+`docs/GITHUB_GRAPHQL_SCHEMA.md` classifies requires-GraphQL for a measured
+reason (REST reports a `default_branch` for a repository that has none). It
+cannot be migrated out from under them without that reversal being argued
+first. Say so at the helper, so the next person to reach for a convenient probe
+reads why this one was chosen.
+
 ### Prefer an assertion the bug would actually fail
 
 Error-only assertions pass against whole classes of real defects. #296's
