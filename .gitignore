@@ -60,6 +60,14 @@ packages/nightgauge-vscode/THIRD_PARTY_NOTICES
 # create checkouts here). Same rationale as above — administrative entries
 # tracked by `git worktree list`, not files that belong in the index.
 .claude/worktrees/
+# Interactive-session worktrees. docs/GIT_WORKFLOW.md tells a session to work an
+# issue in its own `.wt/<n>` and to read `git worktree list` for another
+# session's, so this is a documented root like the three above — it was just
+# never added here. Untracked, a `.wt/` checkout shows up as an addable path in
+# the PRIMARY tree, so `git add -A` on main stages a whole second copy of the
+# repo (node_modules included) and nothing downstream objects: the files are
+# genuinely new and genuinely formatted.
+.wt/
 
 # Test coverage
 coverage/
