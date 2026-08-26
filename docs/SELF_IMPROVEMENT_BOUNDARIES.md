@@ -39,25 +39,51 @@ prevent those mistakes.
 Every mechanism in the pipeline learning system is classified below. When adding
 a new mechanism, add it to this table before implementing.
 
-| Mechanism                           | Beneficiary | Modifies Code?                            | Data Location                                 | Status                  |
-| ----------------------------------- | ----------- | ----------------------------------------- | --------------------------------------------- | ----------------------- |
-| Skill Self-Assessment Epilogue      | INTERNAL    | No (writes assessment records)            | `.nightgauge/pipeline/assessments/`           | Phase 1 complete        |
-| Skill Drift Synthesis               | INTERNAL    | No (creates GitHub issues)                | GitHub Issues                                 | Active                  |
-| Retro Skill                         | INTERNAL    | No (analysis only)                        | Output window                                 | Active                  |
-| Feedback Loops (backtrack/escalate) | INTERNAL    | No (runtime recovery)                     | Context handoff files                         | Active                  |
-| Outcome Recording                   | SHARED      | No                                        | `.nightgauge/pipeline/history/outcomes.jsonl` | Active (see note)       |
-| Complexity Calibration              | SHARED      | No (updates prediction model)             | `.nightgauge/complexity-model.yaml`           | Active                  |
-| Post-Pipeline Analysis              | SHARED      | No (read-only insights)                   | `.nightgauge/analysis/`                       | Active                  |
-| Health Dashboard (8 dims)           | EXTERNAL    | No (read-only display)                    | `.nightgauge/health/`                         | Active                  |
-| Learning Effectiveness Dimension    | EXTERNAL    | No (measures learning system health)      | `.nightgauge/health/`                         | Active                  |
-| Gate Metrics                        | EXTERNAL    | No (observability)                        | `.nightgauge/gate-metrics.jsonl`              | Active                  |
-| Skill Effectiveness Tracking        | EXTERNAL    | No (before/after comparison)              | `.nightgauge/skill-effectiveness.jsonl`       | Active                  |
-| Skill Drift Dashboard Dimension     | EXTERNAL    | No (read-only display)                    | `.nightgauge/health/`                         | Active                  |
-| Skill Drift Auto-Issue Creation     | INTERNAL    | No (creates GitHub issues)                | GitHub Issues                                 | Active (config-gated)   |
-| Scheduled Discovery Loops           | SHARED      | No (creates GitHub issues)                | GitHub Issues + `.nightgauge/` records        | Active (off by default) |
-| Spike Materialization               | SHARED      | No (creates GitHub issues)                | GitHub Issues                                 | Active (ungated)        |
-| Continuous Improvement Skill        | SHARED      | No (read-only analysis + optional issues) | `.nightgauge/pipeline/`                       | Active                  |
-| Adaptive Policy Engine              | DISABLED    | Was: yes (`config.yaml`)                  | N/A (SDK-only)                                | Removed from extension  |
+| Mechanism                           | Beneficiary | Modifies Code?                            | Data Location                                 | Status                   |
+| ----------------------------------- | ----------- | ----------------------------------------- | --------------------------------------------- | ------------------------ |
+| Skill Self-Assessment Epilogue      | INTERNAL    | No (writes assessment records)            | `.nightgauge/pipeline/assessments/`           | Phase 1 complete         |
+| Skill Drift Synthesis               | INTERNAL    | No (creates GitHub issues)                | GitHub Issues                                 | Active                   |
+| Retro Skill                         | INTERNAL    | No (analysis only)                        | Output window                                 | Active                   |
+| Feedback Loops (backtrack/escalate) | INTERNAL    | No (runtime recovery)                     | Context handoff files                         | Active                   |
+| Outcome Recording                   | SHARED      | No                                        | `.nightgauge/pipeline/history/outcomes.jsonl` | Active (see note)        |
+| Complexity Calibration              | SHARED      | No (updates prediction model)             | `.nightgauge/complexity-model.yaml`           | Active                   |
+| Post-Pipeline Analysis              | SHARED      | No (read-only insights)                   | `.nightgauge/analysis/`                       | Active                   |
+| Health Dashboard (8 dims)           | EXTERNAL    | No (read-only display)                    | `.nightgauge/health/`                         | Active                   |
+| Learning Effectiveness Dimension    | EXTERNAL    | No (measures learning system health)      | `.nightgauge/health/`                         | Active                   |
+| Gate Metrics                        | EXTERNAL    | No (observability)                        | `.nightgauge/gate-metrics.jsonl`              | Active                   |
+| Skill Effectiveness Tracking        | EXTERNAL    | No (before/after comparison)              | `.nightgauge/skill-effectiveness.jsonl`       | Active                   |
+| Skill Drift Dashboard Dimension     | EXTERNAL    | No (read-only display)                    | `.nightgauge/health/`                         | Active                   |
+| Skill Drift Auto-Issue Creation     | INTERNAL    | No (creates GitHub issues)                | GitHub Issues                                 | Active (config-gated)    |
+| Scheduled Discovery Loops           | SHARED      | No (creates GitHub issues)                | GitHub Issues + `.nightgauge/` records        | Active (off by default)  |
+| Spike Materialization               | SHARED      | No (creates GitHub issues)                | GitHub Issues                                 | Active (ungated)         |
+| Continuous Improvement Skill        | SHARED      | No (read-only analysis + optional issues) | `.nightgauge/pipeline/`                       | Active                   |
+| Adaptive Policy Engine              | DISABLED    | Was: yes (`config.yaml`)                  | N/A (SDK-only)                                | Removed from extension   |
+| Workspace Knowledge Graph           | SHARED      | No (derived index, rebuilt)               | `.nightgauge/graph/`                          | Planned                  |
+| Impact-Set Computation              | SHARED      | No (read-only neighborhood walk)          | `.nightgauge/graph/`                          | Planned                  |
+| Strategic Assumption Contract       | SHARED      | No (reads ADR metadata)                   | ADR files + `.nightgauge/graph/`              | Planned                  |
+| Decision Log                        | SHARED      | No (append-only record)                   | `.nightgauge/decisions/`                      | Planned                  |
+| Operator Alerting                   | EXTERNAL    | No (surfaces, never mutates)              | Action Center + configured notifier           | Planned                  |
+| Backlog Alignment Actions           | SHARED      | No (mutates issues/board, never code)     | GitHub Issues + project board                 | Planned (autonomy-gated) |
+
+**Note — autonomy is a mode; transparency is the invariant.** The six planned
+mechanisms above are the first that can _act_ rather than only report, so the
+governing rule is stated here rather than left implicit:
+
+- **Autonomy defaults OFF.** A fresh install proposes and changes nothing.
+- **It is configured per action class**, not as a single switch, and a class
+  that is not explicitly enabled is proposal-only. Absence is never permission.
+- **Every action writes a decision-log entry before it acts.** If the log write
+  fails, the action does not happen — an action nobody can reconstruct is worse
+  than an action not taken.
+- **Every action is reversible or carries a documented reversal path.** An
+  irreversible action is not offered above proposal-only.
+- **Direction changes always alert the operator.** A change in direction is
+  never discoverable only by diffing the board.
+
+**This governs the backlog, not your code.** These mechanisms mutate issues,
+priorities and board state. [Rule 1](#rule-1-never-modify-customer-source-code)
+is unaffected and remains absolute: nothing here modifies customer source code
+under any autonomy setting.
 
 **Note — Outcome Recording (#304).** Both writers are wired and the corpus is
 written on every terminal run, but one of its consumers is currently inert:
@@ -184,10 +210,20 @@ A future capability may analyze customer codebases and recommend improvements
 skills like `health-check`, `security-audit`, and `refactor-rewrite` to generate
 recommendations. Key constraints:
 
-- Recommendations only — never auto-apply
+- **Code is never auto-applied.** Analysis produces suggested epics and issues;
+  it does not edit a customer codebase. This constraint is absolute and is not
+  an autonomy setting — see [Rule 1](#rule-1-never-modify-customer-source-code).
 - Presented as suggested epics/issues for user review
 - User explicitly opts in and approves each recommendation
 - No code modifications without explicit pipeline execution
+
+**A narrower earlier framing has been corrected.** This section previously read
+"recommendations only — never auto-apply" as a blanket constraint. That is right
+for _source code_ and wrong as a general rule: for **backlog** mechanisms —
+prioritisation, alignment, issue mutation — the operator chooses the autonomy
+level, and what is non-negotiable is transparency rather than passivity. See the
+autonomy note under the [Classification Matrix](#classification-matrix). The two
+are different surfaces and the distinction is deliberate.
 
 The same constraints bind the **in-run** counterpart: a pipeline stage that
 notices real-but-out-of-scope work mid-run and wants it recorded rather than
