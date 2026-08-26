@@ -1,0 +1,40 @@
+name: static-analysis
+
+# CodeQL covers this repo, but its Go coverage is not a superset of what a
+# dedicated Go tool finds. govulncheck adds the dimension CodeQL does not:
+# known CVEs in dependencies, filtered by whether the vulnerable symbol is
+# actually reachable from this code.
+#
+# gosec was evaluated and deliberately NOT gated here. It reports 614 findings
+# (38 HIGH) on this tree, dominated by G304/G204 -- reading user-supplied paths
+# and launching user-configured subprocesses, which is what a local CLI does by
+# definition. Its single command-injection finding is exec.Command($EDITOR,
+# path), which runs no shell. Gating on that would mean baselining ~600
+# findings first, and a scanner that is red on day one trains everyone to
+# ignore it.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  govulncheck:
+    name: Go vulnerability scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+      - name: Scan
+        # Fails the job on any REACHABLE vulnerability. Unreachable ones are
+        # reported but do not gate -- that distinction is the whole reason to
+        # use govulncheck rather than a plain dependency-version check.
+        run: govulncheck ./...
