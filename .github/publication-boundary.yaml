@@ -658,6 +658,7 @@ issue_references:
     - ".github/publication-boundary.yaml"
     - "scripts/publication-boundary-check.py"
     - "scripts/test-publication-boundary.sh"
+    - "scripts/test-publication-boundary-rename.py"
     # Synthetic test identifiers are not citations. `#700` in a table-driven Go
     # test or a snapshot fixture is an arbitrary key chosen to be out of range;
     # denying it would make the rule unusable, and rewriting it in the sweep

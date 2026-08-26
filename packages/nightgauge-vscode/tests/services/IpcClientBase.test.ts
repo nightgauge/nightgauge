@@ -405,6 +405,65 @@ describe("IpcClientBase", () => {
     });
   });
 
+  // ── The restart race (#430) ───────────────────────────────────────────────
+  //
+  // start() used to return IMMEDIATELY when another start was in flight. The
+  // second caller then fell through to call()'s `if
+  // (!this.process?.stdin?.writable) throw` while the process was still
+  // spawning. Because markStageRunning is void-called and latches
+  // runningTransitionSent, the dropped call is the pid-carrying `running`
+  // transition and it is never retried — the snapshot keeps PID 0 for the
+  // whole stage.
+
+  describe("concurrent start (#430)", () => {
+    it("a second call() racing an in-flight start awaits it instead of throwing", async () => {
+      const { spawn } = await import("child_process");
+      process.env.NIGHTGAUGE_GO_BINARY_PATH = "/fake/nightgauge";
+      expect(client.isConnected).toBe(false);
+
+      // Both issued before either start resolves — the restart window.
+      const first = client.call<string>("stage.markRunning");
+      const second = client.call<string>("stage.markRunning");
+
+      await flushPromises(10);
+      simulateResponse({ id: 1, result: "first" });
+      simulateResponse({ id: 2, result: "second" });
+      await flushPromises();
+
+      // The assertion is that NEITHER rejects. Asserting only on the first
+      // would pass against the bug, since the first caller always won.
+      await expect(first).resolves.toBe("first");
+      await expect(second).resolves.toBe("second");
+      expect(vi.mocked(spawn)).toHaveBeenCalledTimes(1);
+    });
+
+    it("a second start() resolves only once the process actually exists", async () => {
+      process.env.NIGHTGAUGE_GO_BINARY_PATH = "/fake/nightgauge";
+
+      const first = client.start();
+      const second = client.start();
+      // Observed after the awaited start, not before: the contract is that a
+      // caller which awaited start() may rely on the connection.
+      await Promise.all([first, second]);
+
+      expect(client.getProcess()).not.toBeNull();
+      expect(client.isStartingFlag()).toBe(false);
+    });
+
+    it("a failing start rejects BOTH racers rather than silently resolving one", async () => {
+      // No binary path: runStart throws. A concurrent caller must see that
+      // failure here, not one line later as an opaque "not connected".
+      delete process.env.NIGHTGAUGE_GO_BINARY_PATH;
+      existsSyncSpy.mockReturnValue(false);
+
+      const first = client.start();
+      const second = client.start();
+
+      await expect(first).rejects.toThrow();
+      await expect(second).rejects.toThrow();
+    });
+  });
+
   // ── call() auto-start ─────────────────────────────────────────────────────
 
   describe("call() auto-start", () => {

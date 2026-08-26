@@ -1491,6 +1491,12 @@ export abstract class IpcClientBase implements vscode.Disposable {
   private outputChannel: vscode.OutputChannel | null = null;
   private logFileStream: fs.WriteStream | null = null;
   protected starting = false;
+  /**
+   * The in-flight `start()`, so a concurrent caller can AWAIT the restart
+   * instead of being told "already starting" and racing ahead of it (#430).
+   * Null whenever `starting` is false; the two are set and cleared together.
+   */
+  private startPromise: Promise<void> | null = null;
   protected disposed = false;
   private restartTimer: ReturnType<typeof setTimeout> | null = null;
   protected restartAttempts = 0;
@@ -1520,30 +1526,64 @@ export abstract class IpcClientBase implements vscode.Disposable {
   // Lifecycle
   // -------------------------------------------------------------------------
 
-  /** Start the Go binary in serve mode. Resolves when ready. */
+  /**
+   * Start the Go binary in serve mode. Resolves when ready.
+   *
+   * **A concurrent caller awaits the in-flight start rather than returning
+   * early (#430).** Returning early is what made this a bug: `callInternal`
+   * does `if (!this.isConnected) await this.start()` and then immediately
+   * requires `this.process.stdin.writable`. During the backend auto-restart
+   * window two calls race the same restart — the first completes it, and the
+   * second used to be handed a resolved promise while the process was still
+   * spawning, so its very next line threw "Go backend not connected".
+   *
+   * The throw is invisible where it matters: `markStageRunning` is `void`-
+   * called and latches `runningTransitionSent`, so the dropped call is the
+   * pid-carrying `running` transition and it is never retried. The run's
+   * snapshot then keeps PID 0 for the whole stage, which darkens the
+   * liveness ladder's stagePid arm exactly during a long-silent stage.
+   */
   async start(): Promise<void> {
-    if (this.process || this.starting) {
+    if (this.process) {
+      return;
+    }
+    if (this.startPromise) {
+      // Await the SAME start, and surface its failure rather than swallowing
+      // it: a caller that cannot get a connection must learn that here, not
+      // one line later as an opaque "not connected".
+      await this.startPromise;
       return;
     }
     this.starting = true;
-
+    this.startPromise = this.runStart();
     try {
-      const path = await this.resolveBinaryPath();
-      if (!path) {
-        throw new Error("Go binary not found. Install via: brew install nightgauge");
-      }
-      this.binaryPath = path;
-      await this.resolveGitHubToken();
-      await this.resolveLicenseKey();
-      this.spawnProcess();
-      // A freshly spawned daemon knows only the license key it was handed in
-      // its environment. Hand it the signed-in user's JWT as well, and keep
-      // doing so for every later rotation (#742).
-      this.syncPlatformSessionToken();
-      this._onDidChangeStatus.fire(true);
+      await this.startPromise;
     } finally {
       this.starting = false;
+      this.startPromise = null;
     }
+  }
+
+  /**
+   * The body of `start()`. Separated so `startPromise` can hold exactly it.
+   * Cleanup of `starting` / `startPromise` belongs to `start()`'s finally —
+   * doing it here as well would clear the handle a concurrent caller is
+   * still awaiting.
+   */
+  private async runStart(): Promise<void> {
+    const path = await this.resolveBinaryPath();
+    if (!path) {
+      throw new Error("Go binary not found. Install via: brew install nightgauge");
+    }
+    this.binaryPath = path;
+    await this.resolveGitHubToken();
+    await this.resolveLicenseKey();
+    this.spawnProcess();
+    // A freshly spawned daemon knows only the license key it was handed in
+    // its environment. Hand it the signed-in user's JWT as well, and keep
+    // doing so for every later rotation (#742).
+    this.syncPlatformSessionToken();
+    this._onDidChangeStatus.fire(true);
   }
 
   /** Whether the IPC connection is active. */
