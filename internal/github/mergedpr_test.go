@@ -2,11 +2,11 @@ package github
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
-	"reflect"
+	"net/http"
+	"net/http/httptest"
 	"testing"
-
-	"github.com/shurcooL/graphql"
 )
 
 // #916. WorktreeSweepOptions.MergedPRLookup existed from #593 with a doc
@@ -149,25 +149,93 @@ func TestNewMergedPRLookup_NilServiceOrMissingRepoClosesTheDoor(t *testing.T) {
 	}
 }
 
-// TestCommitParentsVars_DeclaresGitObjectID pins the one thing about this
-// query that the Go type system cannot: shurcooL/graphql derives each
-// variable's declared GraphQL type from its Go type NAME, and GitHub's
-// `object(oid:)` takes `GitObjectID!`, not `String!`. Typing oid as
-// graphql.String compiles, reads fine, and fails at runtime against the live
-// API with a type error — the kind of break no fake-backed test can see.
-func TestCommitParentsVars_DeclaresGitObjectID(t *testing.T) {
-	vars := commitParentsVars("o", "r", "deadbeef")
+// newPRServiceForRESTTest wires a PRService onto an httptest server through
+// the same mock transport the other REST-backed services use.
+func newPRServiceForRESTTest(server *httptest.Server) *PRService {
+	return &PRService{client: &Client{http: &http.Client{Transport: &mockRESTTransport{server: server}}}}
+}
 
-	if got := reflect.TypeOf(vars["oid"]).Name(); got != "GitObjectID" {
-		t.Errorf("oid declares GraphQL type %q!, want GitObjectID! — GitHub rejects the query otherwise", got)
+// TestCommitParents_ReadsParentSHAs pins the happy path and the request shape.
+func TestCommitParents_ReadsParentSHAs(t *testing.T) {
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"sha": "child",
+			"parents": []map[string]string{
+				{"sha": "first-parent"},
+				{"sha": "second-parent"},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	got, err := newPRServiceForRESTTest(srv).CommitParents(context.Background(), "o", "r", "child")
+	if err != nil {
+		t.Fatalf("CommitParents: %v", err)
 	}
-	for _, k := range []string{"owner", "name"} {
-		if got := reflect.TypeOf(vars[k]).Name(); got != "String" {
-			t.Errorf("%s declares %q!, want String!", k, got)
+	want := []string{"first-parent", "second-parent"}
+	if len(got) != len(want) {
+		t.Fatalf("parents = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("parents[%d] = %q, want %q", i, got[i], want[i])
 		}
 	}
-	if _, isString := vars["oid"].(graphql.String); isString {
-		t.Error("oid is a graphql.String; it must be a GitObjectID")
+	if gotPath != "/repos/o/r/commits/child" {
+		t.Errorf("path = %q, want /repos/o/r/commits/child", gotPath)
+	}
+}
+
+// TestCommitParents_UnknownSHAIsNotAnError pins the trap that the GraphQL →
+// REST migration (#849) introduced.
+//
+// GraphQL expressed "no such object" as a null `object` field, which mapped to
+// (nil, nil) — an index miss the door reads as "no containment". REST splits
+// that same answer across TWO status codes, and the one it actually returns
+// for a commit that is not in the repository is **422**, not 404 (verified
+// live: `{"message":"No commit found for SHA: …","status":"422"}`). A migration
+// that mapped only 404 would turn every index miss into a sweep failure.
+//
+// The 500 case is the other half and must stay: an unrecognised status may NOT
+// read as "no parents", or a permission or outage answer would be reported as
+// a clean not-contained verdict.
+func TestCommitParents_UnknownSHAIsNotAnError(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		status  int
+		body    string
+		wantErr bool
+	}{
+		{"422 no commit found for sha", http.StatusUnprocessableEntity, `{"message":"No commit found for SHA: deadbeef"}`, false},
+		{"404 repository or ref unreachable", http.StatusNotFound, `{"message":"Not Found"}`, false},
+		{"403 is not an absence", http.StatusForbidden, `{"message":"Forbidden"}`, true},
+		{"500 is not an absence", http.StatusInternalServerError, `{"message":"boom"}`, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(tc.status)
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer srv.Close()
+
+			got, err := newPRServiceForRESTTest(srv).CommitParents(context.Background(), "o", "r", "deadbeef")
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("status %d returned no error; an unrecognised answer must not read as \"no parents\"", tc.status)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("status %d: unexpected error: %v", tc.status, err)
+			}
+			if len(got) != 0 {
+				t.Errorf("status %d: parents = %v, want none", tc.status, got)
+			}
+		})
 	}
 }
 
