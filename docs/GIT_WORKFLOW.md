@@ -177,6 +177,51 @@ redundant with the PR gate:
 | **Merge skew**             | Two PRs green apart, broken together. `strict_required_status_checks_policy` closes most of this, but not the window between last check and merge.    |
 | **Environment difference** | `main` runs have secrets and permissions that PR runs — especially from forks — do not.                                                               |
 
+### Working one repository from two sessions at once
+
+Running two interactive sessions against the same checkout is a supported way to
+get more done, and it has exactly one rule that matters:
+
+**Split by disjoint FILE SETS, not by issue count.** `AGENTS.md` already
+requires concurrent issues to be conflict-free by construction; with two
+sessions in one repository the check is mechanical — list the files each side
+will plausibly touch and confirm the intersection is empty (`comm -12` over two
+sorted lists) _before_ either one pushes. Separate worktrees isolate the
+checkout, not the merge: both sides see a clean tree and green CI, and the
+collision only appears when the second one rebases.
+
+**Parallel sessions do not multiply throughput the way they look like they
+should**, so pick the split deliberately rather than opportunistically:
+
+- **Merging is serial.** Every merge puts every other open PR `BEHIND` and costs
+  it a fresh CI run.
+- **One machine runs one `ci-local.sh` at a time.** N branches cost N sequential
+  gates however fast they were written.
+
+Two sessions on disjoint files is a real gain. Two sessions on the same area is
+strictly worse than one.
+
+**Before starting, check whether you are alone**, because the tree does not
+say so:
+
+```bash
+git worktree list                                     # someone else's .wt/*
+gh pr list --repo <owner>/<repo> --state open         # someone else's branch
+```
+
+An unexpected `.wt/<n>` with uncommitted work is not an anomaly to clean up —
+it is somebody's in-flight work. Leave it alone.
+
+**One shared-state hazard is worth naming**, because it presents as a flaky
+test rather than as a conflict: the publication-boundary regression suite builds
+each case in a throwaway git worktree and calls `git worktree prune`, which is
+**repo-global**. A second session creating a worktree during that run can strand
+a sandbox mid-case, and every case then fails with
+`FileNotFoundError: '.github/publication-boundary.yaml'`. Re-run it in isolation
+before hunting a bug in your own diff — and note this is a hazard of two
+sessions sharing one checkout, not a defect in the suite. CI never shares a
+checkout.
+
 ### Identity Preflight
 
 Before dispatching **any** stage for a target repo, the scheduler asserts the
@@ -230,6 +275,51 @@ than producing an un-mergeable PR as a read-only or wrong user.
    - Description of what changed and why
    - Testing steps
    - Screenshots (if applicable)
+
+### The PR body closes issues too, and it cannot read a negation
+
+GitHub scans **both** the commit messages and the **PR body** for closing
+keywords when a PR merges. A correct commit message does not protect you from a
+PR body that happens to contain one.
+
+The parser matches a keyword next to an issue reference. It has no notion of
+"not", so every one of these closes the issue:
+
+```text
+why this does not close #849          ← closed it
+this PR should not fix #123           ← closed it
+do not resolve #456 in this pass      ← closed it
+```
+
+This is not theoretical. #930 was deliberately scoped `Part of #849`, said so in
+its commit message, and deliberately skipped the post-merge hook — and merging
+it closed #849 anyway, from a heading that read _"why this does not close
+#849"_. The board followed: the project's built-in **closed → Done** workflow
+moved the row to Done, so a partially-complete issue was both closed and marked
+finished, by prose explaining that it was neither.
+
+**When a PR only partly addresses an issue, never put a closing keyword next to
+its number anywhere in the body.** Write around it:
+
+```text
+✓ Part of #849 — the remaining work is <…>
+✓ #849 stays open; see its worklist
+✗ this does not close #849
+```
+
+The failure is silent and asymmetric: nothing warns you, the merge output says
+nothing, and you only find it by re-measuring the backlog afterwards — which is
+the argument for re-measuring open-issue counts after a merge instead of
+assuming your intent carried.
+
+**Repairing it** takes three steps, and the second and third are the ones people
+forget:
+
+```bash
+gh issue reopen <n> --repo <owner>/<repo> --comment "<why it was closed by accident>"
+nightgauge project sync-status <n> --repo <owner>/<repo> --project <p> <status>   # undo closed→Done
+gh issue view <parent-epic> --json state    # confirm no rollup fired on the way through
+```
 
 ### PR Template
 

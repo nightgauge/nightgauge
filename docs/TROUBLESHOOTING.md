@@ -1147,6 +1147,29 @@ Pull and rebase run with `--autostash`, which rewrites the mtime of every file
 in the tree on every pull. An mtime-based "who touched this last" hypothesis is
 worthless here; use `git log` instead.
 
+### A diff against a branch also reports what the branch is BEHIND
+
+`git diff origin/main..HEAD` answers "how do these two trees differ", which is
+not the question "what did my work change" — it also reports everything
+`origin/main` gained while you were working. On a busy repository that is
+routinely another session's files, and it reads exactly like _you_ swept up
+someone else's work.
+
+A session hit this after a concurrent PR merged: the diff listed 18 files
+including a `board_services.go` it had never opened. Nothing was wrong;
+`origin/main` had simply moved.
+
+**Compare against the commit's own parent before concluding anything:**
+
+```bash
+git show --stat HEAD          # what this commit changed, vs its own parent
+git diff --stat @{u}...HEAD   # three dots: your side of the fork only
+```
+
+`git show` cannot drift, because a commit's parent never moves. Reach for it
+first whenever a diff surprises you — the cheap explanation is usually that
+your reference point moved, not that your tree is wrong.
+
 ### `gh` sometimes 503s _after_ succeeding
 
 A failed `gh pr create` may still have created the PR. **Check before
