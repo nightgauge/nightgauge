@@ -3,10 +3,14 @@
 # Review routing is handled by CODEOWNERS + branch protection (the `reviewers`
 # key is deprecated).
 #
-# Version updates are temporarily paused for the public-release cutover. Keeping
-# the configuration in place while setting each limit to zero prevents
-# Dependabot from creating irreversible PR metadata in the clean staging repo.
-# Re-enable updates in a normal post-launch PR by restoring the limits to 5.
+# Version updates are LIVE. They were paused at limit 0 for the public-release
+# cutover; the cutover is done, so the limits are restored to 5 as this file's
+# own instructions directed.
+#
+# A pause with no expiry is indistinguishable from an outage: nothing tracked
+# when this one should end, and it outlived its reason by months. If updates are
+# ever paused again, set a date and an owner in this comment at the same time --
+# not the pause without the expiry.
 version: 2
 
 updates:
@@ -24,7 +28,7 @@ updates:
         update-types:
           - minor
           - patch
-    open-pull-requests-limit: 0
+    open-pull-requests-limit: 5
 
   - package-ecosystem: npm
     # Root workspace plus the two standalone skill lockfiles that are outside the
@@ -45,7 +49,7 @@ updates:
         update-types:
           - minor
           - patch
-    open-pull-requests-limit: 0
+    open-pull-requests-limit: 5
 
   - package-ecosystem: github-actions
     directory: /
@@ -56,4 +60,4 @@ updates:
     labels:
       - dependencies
       - github-actions
-    open-pull-requests-limit: 0
+    open-pull-requests-limit: 5
