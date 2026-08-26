@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/nightgauge/nightgauge/internal/forge"
 	gh "github.com/nightgauge/nightgauge/internal/github"
 )
 
@@ -55,31 +56,41 @@ func (b BoardStatus) EqualFold(other BoardStatus) bool {
 }
 
 // BoardStateService reads and writes pipeline state via GitHub Project Board fields.
-// Write operations are delegated to an embedded ProjectService for cache unification.
+//
+// It holds its board and project services rather than constructing them, so a
+// caller that reads the board through a snapshot cache can hand in the wrapped
+// pair and have this service's writes invalidate the same snapshots (#848).
+// When it built its own, its status writes sat outside every wrapper — and
+// `board.updateStatus` is the most staleness-visible write the daemon makes.
 type BoardStateService struct {
-	client        *gh.Client
-	owner         string
-	ownerType     gh.OwnerType
-	projectNumber int
+	// board serves the two reads below. Not constructed here: see the type doc.
+	board forge.BoardService
 
 	// projSvc handles all write operations (single cache, single write path)
-	projSvc *gh.ProjectService
+	projSvc forge.ProjectService
 }
 
-// NewBoardStateService creates a board state service.
-// ownerType distinguishes organizations ("org") from user accounts ("user").
-func NewBoardStateService(client *gh.Client, owner string, projectNumber int, ownerType ...gh.OwnerType) *BoardStateService {
+// NewBoardStateService creates a board state service over the given board and
+// project services.
+//
+// Callers with nothing to cache use NewBoardStateServiceForClient, which builds
+// the plain pair. Callers that do — the IPC daemon — pass wrapped services.
+func NewBoardStateService(board forge.BoardService, projSvc forge.ProjectService) *BoardStateService {
+	return &BoardStateService{board: board, projSvc: projSvc}
+}
+
+// NewBoardStateServiceForClient builds the uncached pair for a caller that has
+// only a client. ownerType distinguishes organizations ("org") from user
+// accounts ("user").
+func NewBoardStateServiceForClient(client *gh.Client, owner string, projectNumber int, ownerType ...gh.OwnerType) *BoardStateService {
 	ot := gh.OwnerTypeOrg
 	if len(ownerType) > 0 {
 		ot = ownerType[0]
 	}
-	return &BoardStateService{
-		client:        client,
-		owner:         owner,
-		ownerType:     ot,
-		projectNumber: projectNumber,
-		projSvc:       gh.NewProjectService(client, owner, projectNumber, ot),
-	}
+	return NewBoardStateService(
+		gh.NewBoardService(client, owner, projectNumber, ot),
+		gh.NewProjectService(client, owner, projectNumber, ot),
+	)
 }
 
 // SetStatus updates the board status for an item (e.g., Ready → In progress → Done).
@@ -99,8 +110,7 @@ func (s *BoardStateService) SetPipelineStage(ctx context.Context, itemID string,
 
 // GetPipelineStage reads the current pipeline stage from the board for crash recovery.
 func (s *BoardStateService) GetPipelineStage(ctx context.Context, itemID string) (PipelineStage, error) {
-	board := gh.NewBoardService(s.client, s.owner, s.projectNumber, s.ownerType)
-	items, err := board.ListItems(ctx, "")
+	items, err := s.board.ListItems(ctx, "")
 	if err != nil {
 		return "", err
 	}
@@ -173,8 +183,7 @@ func (s *BoardStateService) FailPipeline(ctx context.Context, itemID string, tar
 // board does not actually hold. Compare it with BoardStatus.EqualFold, never
 // with `==`.
 func (s *BoardStateService) readItemStatus(ctx context.Context, itemID string) (BoardStatus, error) {
-	board := gh.NewBoardService(s.client, s.owner, s.projectNumber, s.ownerType)
-	items, err := board.ListItems(ctx, "")
+	items, err := s.board.ListItems(ctx, "")
 	if err != nil {
 		return "", fmt.Errorf("fetch items for status check: %w", err)
 	}

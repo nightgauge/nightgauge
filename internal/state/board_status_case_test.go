@@ -149,7 +149,7 @@ func TestBoardStateService_SetStatus_ProvisionedBoardOptions(t *testing.T) {
 	defer srv.Close()
 
 	client := gh.NewClientWithURL("test", srv.URL)
-	svc := NewBoardStateService(client, "testorg", 1)
+	svc := NewBoardStateServiceForClient(client, "testorg", 1)
 
 	statuses := []BoardStatus{StatusBacklog, StatusReady, StatusInProgress, StatusInReview, StatusDone}
 	for _, status := range statuses {
@@ -228,7 +228,7 @@ func TestFailPipeline_InReviewGuard_IgnoresBoardLabelCase(t *testing.T) {
 			defer srv.Close()
 
 			client := gh.NewClientWithURL("test", srv.URL)
-			svc := NewBoardStateService(client, "testorg", 1)
+			svc := NewBoardStateServiceForClient(client, "testorg", 1)
 
 			changed, err := svc.FailPipeline(context.Background(), "item1", StatusReady)
 			if err != nil {

@@ -855,7 +855,7 @@ func NewScheduler(client *gh.Client, cfg SchedulerConfig) *Scheduler {
 		issueSvc:                  gh.NewIssueService(client),
 		epicSvc:                   gh.NewEpicService(client),
 		execMgr:                   execMgr,
-		stateSvc:                  state.NewBoardStateService(client, cfg.Owner, cfg.ProjectNumber, cfg.OwnerType),
+		stateSvc:                  state.NewBoardStateServiceForClient(client, cfg.Owner, cfg.ProjectNumber, cfg.OwnerType),
 		owner:                     cfg.Owner,
 		projectNumber:             cfg.ProjectNumber,
 		workspaceRoot:             cfg.WorkspaceRoot,

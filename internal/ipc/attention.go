@@ -160,7 +160,7 @@ func (s *Server) handleIssueRemoveBlockedBy(ctx context.Context, raw json.RawMes
 	if err != nil {
 		return nil, err
 	}
-	projSvc := gh.NewProjectService(c, p.Owner, 0, gh.OwnerTypeUser)
+	projSvc := s.boardServicesFor(c, p.Owner, 0, gh.OwnerTypeUser).Project
 	if err := projSvc.RemoveBlockedByNumber(ctx, p.Owner, p.Repo, p.BlockedNumber, p.BlockerNumber); err != nil {
 		return nil, err
 	}
@@ -268,7 +268,7 @@ func (s *Server) ExecuteVerb(ctx context.Context, req *attention.DecisionRequest
 		if err != nil {
 			return err
 		}
-		return gh.NewProjectService(c, owner, 0, gh.OwnerTypeUser).RemoveBlockedByNumber(ctx, owner, name, issue, blocker)
+		return s.boardServicesFor(c, owner, 0, gh.OwnerTypeUser).Project.RemoveBlockedByNumber(ctx, owner, name, issue, blocker)
 
 	case attention.VerbWorkspaceAddRepo:
 		// The workspace root, not s.repoRoot(repo): the manifest lives once at
