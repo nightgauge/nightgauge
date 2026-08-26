@@ -872,34 +872,23 @@ func (s *IssueService) MarkRefined(ctx context.Context, owner, repo string, numb
 // Results are cached per "owner/repo" key for the lifetime of the IssueService
 // instance. Labels rarely change, so this avoids a redundant API call on every
 // SyncStatusLabel / MarkRefined invocation.
+//
+// REST since #849 — see listRepoLabels. The node IDs this returns still feed
+// GraphQL label mutations unchanged, because REST reports `node_id` itself.
 func (s *IssueService) GetRepoLabels(ctx context.Context, owner, repo string) (map[string]string, error) {
 	cacheKey := owner + "/" + repo
 	if cached, ok := s.repoLabelsCache[cacheKey]; ok {
 		return cached, nil
 	}
 
-	var q struct {
-		Repository struct {
-			Labels struct {
-				Nodes []struct {
-					ID   graphql.ID
-					Name graphql.String
-				}
-			} `graphql:"labels(first: 100)"`
-		} `graphql:"repository(owner: $owner, name: $name)"`
-	}
-	vars := map[string]interface{}{
-		"owner": graphql.String(owner),
-		"name":  graphql.String(repo),
-	}
-
-	if err := s.client.query(ctx, &q, vars); err != nil {
+	nodes, err := listRepoLabels(ctx, s.client, owner, repo)
+	if err != nil {
 		return nil, err
 	}
 
-	labels := make(map[string]string, len(q.Repository.Labels.Nodes))
-	for _, l := range q.Repository.Labels.Nodes {
-		labels[string(l.Name)] = fmt.Sprintf("%v", l.ID)
+	labels := make(map[string]string, len(nodes))
+	for _, l := range nodes {
+		labels[l.Name] = l.NodeID
 	}
 	s.repoLabelsCache[cacheKey] = labels
 	return labels, nil

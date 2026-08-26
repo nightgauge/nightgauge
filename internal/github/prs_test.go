@@ -402,16 +402,17 @@ func TestPRService_DeleteBranch_DeleteError(t *testing.T) {
 // --- CreateEpicPR Tests ---
 
 func TestPRService_CreateEpicPR_Created(t *testing.T) {
-	// No existing PRs → GetRepositoryID → CreatePR
+	// No existing PRs → GetRepositoryID (REST) → CreatePR
 	listPRsResponse := `{"data":{"repository":{"pullRequests":{"nodes":[]}}}}`
-	getRepoIDResponse := `{"data":{"repository":{"id":"REPO_NODE_ID"}}}`
 	createPRResponse := `{"data":{"createPullRequest":{"pullRequest":{
 		"id":"EPIC_PR_NODE_ID",
 		"number":30,
 		"url":"https://github.com/o/r/pull/30"
 	}}}}`
 
-	client, cleanup := mockGraphQLServer(t, listPRsResponse, getRepoIDResponse, createPRResponse)
+	client, cleanup := mockForgeServer(t,
+		map[string]string{"/repos/o/r": restRepoIDFixture},
+		listPRsResponse, createPRResponse)
 	defer cleanup()
 
 	svc := NewPRService(client)

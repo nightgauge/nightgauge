@@ -29,20 +29,13 @@ func TestNewLabelService(t *testing.T) {
 }
 
 func TestLabelList(t *testing.T) {
-	listResp := `{
-		"data": {
-			"repository": {
-				"labels": {
-					"nodes": [
-						{"id": "MDU6TGFiZWwx", "name": "bug", "description": "Something wrong", "color": "d73a4a"},
-						{"id": "MDU6TGFiZWwy", "name": "feature", "description": "New feature", "color": "a2eeef"}
-					]
-				}
-			}
-		}
-	}`
+	listResp := `[
+		{"node_id": "MDU6TGFiZWwx", "name": "bug", "description": "Something wrong", "color": "d73a4a"},
+		{"node_id": "MDU6TGFiZWwy", "name": "feature", "description": "New feature", "color": "a2eeef"}
+	]`
 
-	client, cleanup := mockGraphQLServer(t, listResp)
+	client, cleanup := mockForgeServer(t,
+		map[string]string{"/repos/nightgauge/nightgauge/labels": listResp})
 	defer cleanup()
 
 	svc := NewLabelService(client, "nightgauge", "nightgauge")
@@ -68,9 +61,8 @@ func TestLabelList(t *testing.T) {
 }
 
 func TestLabelList_Empty(t *testing.T) {
-	listResp := `{"data": {"repository": {"labels": {"nodes": []}}}}`
-
-	client, cleanup := mockGraphQLServer(t, listResp)
+	client, cleanup := mockForgeServer(t,
+		map[string]string{"/repos/nightgauge/nightgauge/labels": `[]`})
 	defer cleanup()
 
 	svc := NewLabelService(client, "nightgauge", "nightgauge")
@@ -84,12 +76,8 @@ func TestLabelList_Empty(t *testing.T) {
 }
 
 func TestLabelCreate_New(t *testing.T) {
-	// mockGraphQLServer sequences responses:
-	// 1st call = List() (listLabelsQuery) → empty
-	// 2nd call = GetRepositoryID → repo node ID
-	// 3rd call = createLabel mutation → new label
-	listResp := `{"data": {"repository": {"labels": {"nodes": []}}}}`
-	repoIDResp := `{"data": {"repository": {"id": "R_kgDOHNxxx"}}}`
+	// The chain is List() (REST, empty) → GetRepositoryID (REST) →
+	// createLabel mutation (GraphQL). Only the mutation is positional.
 	createResp := `{
 		"data": {
 			"createLabel": {
@@ -103,7 +91,10 @@ func TestLabelCreate_New(t *testing.T) {
 		}
 	}`
 
-	client, cleanup := mockGraphQLServer(t, listResp, repoIDResp, createResp)
+	client, cleanup := mockForgeServer(t, map[string]string{
+		"/repos/nightgauge/nightgauge/labels": `[]`,
+		"/repos/nightgauge/nightgauge":        `{"node_id":"R_kgDOHNxxx"}`,
+	}, createResp)
 	defer cleanup()
 
 	svc := NewLabelService(client, "nightgauge", "nightgauge")
@@ -125,19 +116,12 @@ func TestLabelCreate_New(t *testing.T) {
 func TestLabelCreate_Existing(t *testing.T) {
 	// Create() with an existing label returns it without calling createLabel mutation.
 	// Only one response needed: List() returns existing label.
-	listResp := `{
-		"data": {
-			"repository": {
-				"labels": {
-					"nodes": [
-						{"id": "MDU6TGFiZWwx", "name": "bug", "description": "A bug", "color": "d73a4a"}
-					]
-				}
-			}
-		}
-	}`
+	listResp := `[
+		{"node_id": "MDU6TGFiZWwx", "name": "bug", "description": "A bug", "color": "d73a4a"}
+	]`
 
-	client, cleanup := mockGraphQLServer(t, listResp)
+	client, cleanup := mockForgeServer(t,
+		map[string]string{"/repos/nightgauge/nightgauge/labels": listResp})
 	defer cleanup()
 
 	svc := NewLabelService(client, "nightgauge", "nightgauge")
@@ -155,8 +139,6 @@ func TestLabelCreate_Existing(t *testing.T) {
 
 func TestLabelCreate_DefaultColor(t *testing.T) {
 	// When color is empty, Create() defaults to "cccccc".
-	listResp := `{"data": {"repository": {"labels": {"nodes": []}}}}`
-	repoIDResp := `{"data": {"repository": {"id": "R_kgDOHNxxx"}}}`
 	createResp := `{
 		"data": {
 			"createLabel": {
@@ -170,7 +152,10 @@ func TestLabelCreate_DefaultColor(t *testing.T) {
 		}
 	}`
 
-	client, cleanup := mockGraphQLServer(t, listResp, repoIDResp, createResp)
+	client, cleanup := mockForgeServer(t, map[string]string{
+		"/repos/nightgauge/nightgauge/labels": `[]`,
+		"/repos/nightgauge/nightgauge":        `{"node_id":"R_kgDOHNxxx"}`,
+	}, createResp)
 	defer cleanup()
 
 	svc := NewLabelService(client, "nightgauge", "nightgauge")
@@ -195,10 +180,15 @@ func TestLabelDelete(t *testing.T) {
 	}
 }
 
-// recordingGraphQLServer replays responses in order (repeating the last) and
-// captures every request body, so a test can assert which operations actually
-// reached the API — the only way to prove the idempotent path mutates nothing.
-func recordingGraphQLServer(t *testing.T, bodies *[]string, responses ...string) (*Client, func()) {
+// recordingForgeServer replays GraphQL responses in order (repeating the last)
+// and captures EVERY request body — REST reads included, where the body is
+// empty — so a test can assert which operations actually reached the API. That
+// is the only way to prove the idempotent rename path mutates nothing.
+//
+// restBody answers the one REST read on this path: the label list, moved off
+// GraphQL by #849. It is served by path prefix rather than by position,
+// because the list is not always the first call.
+func recordingForgeServer(t *testing.T, bodies *[]string, restBody string, responses ...string) (*Client, func()) {
 	t.Helper()
 	var mu sync.Mutex
 	var callIdx int
@@ -209,25 +199,30 @@ func recordingGraphQLServer(t *testing.T, bodies *[]string, responses ...string)
 		idx := callIdx
 		callIdx++
 		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		if strings.HasPrefix(r.URL.Path, "/repos/") {
+			fmt.Fprint(w, restBody)
+			return
+		}
 		if idx >= len(responses) {
 			idx = len(responses) - 1
 		}
-		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprint(w, responses[idx])
 	}))
 	return NewClientWithURL("test-token", srv.URL), srv.Close
 }
 
-func labelListResp(entries string) string {
-	return `{"data":{"repository":{"labels":{"nodes":[` + entries + `]}}}}`
+// labelListFixture is the REST body for GET /repos/{o}/{r}/labels.
+func labelListFixture(entries string) string {
+	return `[` + entries + `]`
 }
 
-const areaVscodeNode = `{"id":"LA_old","name":"area:vscode","description":"VS Code extension","color":"c5def5"}`
+const areaVscodeNode = `{"node_id":"LA_old","name":"area:vscode","description":"VS Code extension","color":"c5def5"}`
 
 func TestLabelRename_PreservesNodeID(t *testing.T) {
 	updateResp := `{"data":{"updateLabel":{"label":{"id":"LA_old","name":"component:vscode","description":"VS Code extension","color":"7057ff"}}}}`
 	var bodies []string
-	client, cleanup := recordingGraphQLServer(t, &bodies, labelListResp(areaVscodeNode), updateResp)
+	client, cleanup := recordingForgeServer(t, &bodies, labelListFixture(areaVscodeNode), updateResp)
 	defer cleanup()
 
 	svc := NewLabelService(client, "nightgauge", "nightgauge")
@@ -260,9 +255,9 @@ func TestLabelRename_PreservesNodeID(t *testing.T) {
 }
 
 func TestLabelRename_AlreadyRenamedIsIdempotent(t *testing.T) {
-	renamed := `{"id":"LA_old","name":"component:vscode","description":"VS Code extension","color":"7057ff"}`
+	renamed := `{"node_id":"LA_old","name":"component:vscode","description":"VS Code extension","color":"7057ff"}`
 	var bodies []string
-	client, cleanup := recordingGraphQLServer(t, &bodies, labelListResp(renamed))
+	client, cleanup := recordingForgeServer(t, &bodies, labelListFixture(renamed))
 	defer cleanup()
 
 	svc := NewLabelService(client, "nightgauge", "nightgauge")
@@ -279,9 +274,9 @@ func TestLabelRename_AlreadyRenamedIsIdempotent(t *testing.T) {
 }
 
 func TestLabelRename_TargetNameOccupied(t *testing.T) {
-	occupied := `{"id":"LA_new","name":"component:vscode","description":"","color":"7057ff"}`
+	occupied := `{"node_id":"LA_new","name":"component:vscode","description":"","color":"7057ff"}`
 	var bodies []string
-	client, cleanup := recordingGraphQLServer(t, &bodies, labelListResp(areaVscodeNode+","+occupied))
+	client, cleanup := recordingForgeServer(t, &bodies, labelListFixture(areaVscodeNode+","+occupied))
 	defer cleanup()
 
 	svc := NewLabelService(client, "nightgauge", "nightgauge")
@@ -299,7 +294,7 @@ func TestLabelRename_TargetNameOccupied(t *testing.T) {
 
 func TestLabelRename_NotFound(t *testing.T) {
 	var bodies []string
-	client, cleanup := recordingGraphQLServer(t, &bodies, labelListResp(""))
+	client, cleanup := recordingForgeServer(t, &bodies, labelListFixture(""))
 	defer cleanup()
 
 	svc := NewLabelService(client, "nightgauge", "nightgauge")
@@ -315,7 +310,7 @@ func TestLabelRename_NotFound(t *testing.T) {
 func TestLabelRename_SameNameUpdatesColorOnly(t *testing.T) {
 	updateResp := `{"data":{"updateLabel":{"label":{"id":"LA_old","name":"area:vscode","description":"VS Code extension","color":"7057ff"}}}}`
 	var bodies []string
-	client, cleanup := recordingGraphQLServer(t, &bodies, labelListResp(areaVscodeNode), updateResp)
+	client, cleanup := recordingForgeServer(t, &bodies, labelListFixture(areaVscodeNode), updateResp)
 	defer cleanup()
 
 	svc := NewLabelService(client, "nightgauge", "nightgauge")

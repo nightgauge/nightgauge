@@ -973,26 +973,26 @@ when a call is requires-GraphQL, the only lever left is not making it.**
 
 ### Non-project call sites
 
-| Call site                                                   | Verdict                         | Why                                                                                                                       |
-| ----------------------------------------------------------- | ------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| `SecurityService.ListOpenAlerts`                            | **requires-GraphQL**            | `dependabotUpdate` has no REST equivalent — see below                                                                     |
-| `IssueService.GetIssue`                                     | **GraphQL-by-batching**         | One document carries the issue, labels, sub-issues and blockedBy; REST needs 3–4 calls                                    |
-| `IssueService.GetIssuesByNumbers`                           | **GraphQL-by-batching**         | N issues in ONE aliased request. REST is strictly N calls                                                                 |
-| `IssueService.GetEpicProgress`                              | **GraphQL-by-batching**         | Sub-issue rollup in one hop                                                                                               |
-| `IssueService.SearchIssues`                                 | **GraphQL-by-batching**         | `search()` applies the query server-side                                                                                  |
-| `IssueService.ListIssues`, `ListIssuesExcludingLabels`      | **GraphQL-by-batching**         | Label filtering and node IDs in one page                                                                                  |
-| `IssueService.GetRepoLabels`, `LabelService.List`           | **better-as-REST** (deferred)   | `GET /repos/{o}/{r}/labels` is ETag-able — but the map it returns feeds label MUTATIONS by node ID, so it moves with them |
-| `PRService.GetPR`                                           | **GraphQL-by-batching**         | PR + labels + `statusCheckRollup` in one document                                                                         |
-| `PRService.ListPRs`                                         | **GraphQL-by-batching**         | Same, per page                                                                                                            |
-| `PRService.ListMergedPRHeads`                               | **GraphQL-by-batching**         | `states: MERGED` is a SERVER-SIDE filter REST lacks — see below                                                           |
-| `PRService.CommitParents`                                   | **better-as-REST** ✅ migrated  | `GET /repos/{o}/{r}/commits/{sha}`, per-branch; bucket move always, 304s only under `serve`                               |
-| `PRService.DeleteBranch`                                    | requires-GraphQL (read)         | Resolves a ref node ID for `deleteRef`                                                                                    |
-| `RulesetService.hasCopilotReviewed`                         | **better-as-REST** ✅ migrated  | POLLED read — the strongest ETag case in the tree                                                                         |
-| `RepoService.RepoMetadata`                                  | **requires-GraphQL** ✅ settled | REST reports a `default_branch` for a repo that has none — see below                                                      |
-| `Client.GetRepositoryID`                                    | **better-as-REST** (deferred)   | `GET /repos/{o}/{r}` returns `node_id`; moves with the mutations that consume it                                          |
-| `Client.GetRateLimit`                                       | **either — no gain**            | The GraphQL `rateLimit` query is genuinely free                                                                           |
-| `Client.ExecuteGraphQL`                                     | requires-GraphQL                | It _is_ the pass-through transport for `forge graphql`                                                                    |
-| All `IssueService` / `PRService` / `LabelService` mutations | **coupled**                     | See _Node-ID coupling_ below                                                                                              |
+| Call site                                                   | Verdict                         | Why                                                                                                                                        |
+| ----------------------------------------------------------- | ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `SecurityService.ListOpenAlerts`                            | **requires-GraphQL**            | `dependabotUpdate` has no REST equivalent — see below                                                                                      |
+| `IssueService.GetIssue`                                     | **GraphQL-by-batching**         | One document carries the issue, labels, sub-issues and blockedBy; REST needs 3–4 calls                                                     |
+| `IssueService.GetIssuesByNumbers`                           | **GraphQL-by-batching**         | N issues in ONE aliased request. REST is strictly N calls                                                                                  |
+| `IssueService.GetEpicProgress`                              | **GraphQL-by-batching**         | Sub-issue rollup in one hop                                                                                                                |
+| `IssueService.SearchIssues`                                 | **GraphQL-by-batching**         | `search()` applies the query server-side                                                                                                   |
+| `IssueService.ListIssues`, `ListIssuesExcludingLabels`      | **GraphQL-by-batching**         | Label filtering and node IDs in one page                                                                                                   |
+| `IssueService.GetRepoLabels`, `LabelService.List`           | **better-as-REST** ✅ migrated  | `GET /repos/{o}/{r}/labels?per_page=100`. The deferral was wrong — REST reports `node_id`, so the mutations they feed did not have to move |
+| `PRService.GetPR`                                           | **GraphQL-by-batching**         | PR + labels + `statusCheckRollup` in one document                                                                                          |
+| `PRService.ListPRs`                                         | **GraphQL-by-batching**         | Same, per page                                                                                                                             |
+| `PRService.ListMergedPRHeads`                               | **GraphQL-by-batching**         | `states: MERGED` is a SERVER-SIDE filter REST lacks — see below                                                                            |
+| `PRService.CommitParents`                                   | **better-as-REST** ✅ migrated  | `GET /repos/{o}/{r}/commits/{sha}`, per-branch; bucket move always, 304s only under `serve`                                                |
+| `PRService.DeleteBranch`                                    | requires-GraphQL (read)         | Resolves a ref node ID for `deleteRef`                                                                                                     |
+| `RulesetService.hasCopilotReviewed`                         | **better-as-REST** ✅ migrated  | POLLED read — the strongest ETag case in the tree                                                                                          |
+| `RepoService.RepoMetadata`                                  | **requires-GraphQL** ✅ settled | REST reports a `default_branch` for a repo that has none — see below                                                                       |
+| `Client.GetRepositoryID`                                    | **better-as-REST** ✅ migrated  | `GET /repos/{o}/{r}` returns `node_id`. Same correction as the labels row: no mutation had to move with it                                 |
+| `Client.GetRateLimit`                                       | **either — no gain**            | The GraphQL `rateLimit` query is genuinely free                                                                                            |
+| `Client.ExecuteGraphQL`                                     | requires-GraphQL                | It _is_ the pass-through transport for `forge graphql`                                                                                     |
+| All `IssueService` / `PRService` / `LabelService` mutations | **coupled**                     | See _Node-ID coupling_ below                                                                                                               |
 
 ### Node-ID coupling — the real reason the mutation surface has not moved
 
@@ -1007,6 +1007,23 @@ One correction worth recording, because it dissolves the obvious objection:
 (verified live 2026-08-25), so "we need the node ID" is not by itself a reason
 to keep a READ on GraphQL. The coupling is a migration-ordering constraint, not
 a capability one.
+
+**And it constrains WRITES only.** Two rows of the table above carried
+"(deferred) — moves with the mutations that consume it" for exactly one
+sentence's worth of reasoning, and that reasoning did not survive the
+correction: `GET /repos/{o}/{r}` and `GET /repos/{o}/{r}/labels` both report
+`node_id` (verified live 2026-08-26, and pinned by
+`TestGetRepositoryID_UsesREST` / `TestListRepoLabels_UsesRESTWithFullPage`), so
+`createIssue`, `createPullRequest`, `createLabel`, `addLabelsToLabelable` and
+`removeLabelsFromLabelable` consume the migrated reads' output byte-for-byte
+unchanged. Nothing downstream can tell which transport produced the ID, so
+there is no second write path and no dual-path drift to avoid.
+
+**A deferral is a claim, and it ages.** Both rows were written in the same pass
+that recorded "REST returns node IDs" three paragraphs below them — the
+correction simply had not been applied back to the entries it invalidated. When
+a worklist says "deferred", check whether its stated blocker is still the
+blocker before scheduling work around it.
 
 ### `GetRateLimit` is free — a cheap disconfirmer, settled
 
@@ -1169,6 +1186,23 @@ something.
 | `RulesetService.hasCopilotReviewed`                                                    | GraphQL `pullRequest.reviews(first: 10)`                  | `GET /repos/{o}/{r}/pulls/{n}/reviews?per_page=100`    |
 | `PRService.CommitParents`                                                              | GraphQL `repository.object(oid:)`                         | `GET /repos/{o}/{r}/commits/{sha}`                     |
 | `ProjectService.AddBlockedByNumber` / `RemoveBlockedByNumber` — **ID resolution only** | 2× `IssueService.GetIssue` (a full GraphQL document each) | 2× `GET /repos/{o}/{r}/issues/{n}` (`resolveIssueRef`) |
+| `Client.GetRepositoryID`                                                               | GraphQL `repository(owner:, name:) { id }`                | `GET /repos/{o}/{r}` (`node_id`)                       |
+| `IssueService.GetRepoLabels`, `LabelService.List`                                      | GraphQL `repository.labels(first: 100)`                   | `GET /repos/{o}/{r}/labels?per_page=100`               |
+
+The label reads keep the predecessor's one-page cap deliberately: `first: 100`
+and `per_page=100` truncate a >100-label repository identically, so a behaviour
+change cannot hide inside the transport change.
+
+**One thing the transports do NOT agree on is order** — GraphQL returned
+GitHub's default labels first, REST returns them alphabetically. Both were run
+against the same repository and returned the identical set of 30 labels, and
+all three consumers match by name (`Create`'s idempotency check, `Rename`'s
+lookup, and the map `GetRepoLabels` builds), so nothing can observe it but the
+`label list` printout. Recorded because it was found by diffing the two
+binaries' live output, not by a unit test: a fixture-shaped test asserts the
+order its own fixture has. `GetRepoLabels` also keeps its
+per-`IssueService` memo, which is why its ETag win only appears in a process
+that reads more than one repository's labels.
 
 Ledger before/after, one `nightgauge worktree sweep --dry-run` over the
 workspace (**AC 3**):
@@ -1181,6 +1215,21 @@ workspace (**AC 3**):
 
 `hasCopilotReviewed` does not appear in a sweep — it runs in the PR merge path
 — and is the larger saving of the two, because it is the polled one.
+
+The label read is measured on its own, because no sweep reads labels. One
+`nightgauge label list --repo nightgauge/nightgauge`, same tree, two binaries,
+`NIGHTGAUGE_GITHUB_API_LOG` on:
+
+| Binary | Bucket    | Request                                   |
+| ------ | --------- | ----------------------------------------- |
+| before | `graphql` | `POST /graphql` (`repository`)            |
+| after  | `core`    | `GET /repos/nightgauge/nightgauge/labels` |
+
+Both lines report `cost: 0`, and that is the ledger working as designed rather
+than a null result: cost is derived from the DROP in `X-RateLimit-Remaining`
+between two observations, and a one-shot CLI run makes exactly one. The bucket
+is the measurement here — `remaining` was 4949/5000 on `graphql` before and
+4935/5000 on `core` after, which is the point of the move.
 
 **The blockedBy ID-resolution migration, and why only half of it moved.**
 `AddBlockedByNumber` and `RemoveBlockedByNumber` each issued **three** GraphQL
@@ -1233,9 +1282,10 @@ Ordered by value, not by ease:
    use them. `GET /repos/{o}/{r}/issues/{n}/sub_issues` and
    `.../dependencies/blocked_by` both answer 200 on the core bucket (verified
    2026-08-25); these were GraphQL-only when `issues.go` was written, and the
-   tree has moved since. Their write counterparts are documented but were not
-   exercised. **Re-check the premise before building** — that is how this
-   entry was found.
+   tree has moved since. Their write counterparts **have since been exercised
+   end to end** — see _Sub-issue and dependency links_ above for the four
+   endpoints, their database-id parameters, and the cross-repository result.
+   **Re-check the premise before building** — that is how this entry was found.
 2. **Two client families exist, and the raw one bypasses `forge`/`boardcache`
    entirely.** Measured 2026-08-25 rather than carried forward: **15**
    construction sites outside the forge adapters build a `BoardService`
@@ -1252,8 +1302,14 @@ Ordered by value, not by ease:
    real and larger than that, but only 2 of those sites are `BoardService` and
    the rest are other services. Counting took one command.
 
-3. **`RepoMetadata`**, once the empty-repository contract above is settled.
-4. **Labels and `GetRepositoryID`**, with the mutations they feed.
+3. ~~**`RepoMetadata`**~~ — **settled: requires-GraphQL, do not migrate.** The
+   empty-repository contract was probed and REST lost; see the `RepoMetadata`
+   section above. This entry outlived its own resolution by two sessions, which
+   is the argument for striking a worklist line the moment it is answered
+   rather than leaving it to read as open work.
+4. ~~**Labels and `GetRepositoryID`**~~ — **the READS are migrated.** The
+   mutations they feed stayed on GraphQL and did not have to move; see
+   _Node-ID coupling_ above for why that deferral was wrong.
 
 ---
 

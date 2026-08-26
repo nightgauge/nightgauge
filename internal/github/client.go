@@ -1169,20 +1169,40 @@ func restBodyLooksRateLimited(body []byte) bool {
 }
 
 // GetRepositoryID fetches the node ID for a repository (needed for mutations).
+//
+// REST since #849: `GET /repos/{o}/{r}` reports `node_id` directly, so this
+// read bills the near-idle `core` bucket and is conditional-GET-able, while
+// every mutation consuming the ID stays on GraphQL unchanged. Unlike
+// RepoMetadata — which stays on GraphQL because REST names a `default_branch`
+// for a repository that has none — the node ID is a fact both APIs carry
+// identically. See docs/GITHUB_GRAPHQL_SCHEMA.md § Transport Classification.
+//
+// An empty node ID is an error, not a value: it would otherwise flow into
+// createIssue / createPullRequest / createLabel as a blank repository ID and
+// fail there, far from the read that produced it.
 func (c *Client) GetRepositoryID(ctx context.Context, owner, name string) (string, error) {
-	var q struct {
-		Repository struct {
-			ID graphql.ID
-		} `graphql:"repository(owner: $owner, name: $name)"`
+	if owner == "" || name == "" {
+		return "", fmt.Errorf("get repository ID: owner and repo are required")
 	}
-	vars := map[string]interface{}{
-		"owner": graphql.String(owner),
-		"name":  graphql.String(name),
-	}
-	if err := c.query(ctx, &q, vars); err != nil {
+	path := fmt.Sprintf("/repos/%s/%s", url.PathEscape(owner), url.PathEscape(name))
+	body, status, err := c.restDoStatus(ctx, http.MethodGet, path, nil)
+	if err != nil {
 		return "", fmt.Errorf("get repository ID for %s/%s: %w", owner, name, err)
 	}
-	return fmt.Sprintf("%v", q.Repository.ID), nil
+	if status < 200 || status >= 300 {
+		return "", fmt.Errorf("get repository ID for %s/%s: REST %d: %s",
+			owner, name, status, restErrorSummary(body))
+	}
+	var resp struct {
+		NodeID string `json:"node_id"`
+	}
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return "", fmt.Errorf("get repository ID for %s/%s: decode: %w", owner, name, err)
+	}
+	if resp.NodeID == "" {
+		return "", fmt.Errorf("get repository ID for %s/%s: response carried no node_id", owner, name)
+	}
+	return resp.NodeID, nil
 }
 
 // RateLimitInfo holds the current GitHub API rate limit state.

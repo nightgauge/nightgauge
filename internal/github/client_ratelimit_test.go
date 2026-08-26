@@ -19,6 +19,14 @@ import (
 // query with a minimal valid `data` payload, optionally setting GitHub's
 // X-RateLimit-* response headers. The server records the count of incoming
 // requests so tests can assert "no GraphQL call dispatched" semantics.
+//
+// The probe call these tests drive is RepoService.RepoMetadata, chosen because
+// docs/GITHUB_GRAPHQL_SCHEMA.md classifies it requires-GraphQL: REST reports a
+// default_branch for a repository that has none, so it can never be migrated.
+// A probe that CAN move takes this coverage with it when it does — #849 moved
+// Client.GetRepositoryID to REST and these tests silently became REST-gate
+// tests, duplicating TestREST_* below while leaving the GraphQL gate untested.
+// Pick a probe whose transport is pinned by a documented reason.
 func graphQLProbeServer(t *testing.T, headers map[string]string, calls *int32) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -29,11 +37,14 @@ func graphQLProbeServer(t *testing.T, headers map[string]string, calls *int32) *
 		w.Header().Set("Content-Type", "application/json")
 		// Echo back a body that satisfies whatever struct shurcooL/graphql
 		// asks for. The repository(owner:..., name:...) query path is the
-		// only one we exercise from these tests; return a stable id.
+		// only one we exercise from these tests.
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"data": map[string]interface{}{
 				"repository": map[string]interface{}{
-					"id": "REPO_NODE_ID",
+					"nameWithOwner":    "nightgauge/nightgauge",
+					"owner":            map[string]interface{}{"login": "nightgauge"},
+					"name":             "nightgauge",
+					"defaultBranchRef": map[string]interface{}{"name": "main"},
 				},
 			},
 		})
@@ -121,7 +132,7 @@ func TestRateLimitGate_TripsBelowFloor(t *testing.T) {
 
 	t.Setenv(rateLimitFloorEnv, "100")
 
-	_, err := c.GetRepositoryID(context.Background(), "nightgauge", "nightgauge")
+	_, err := NewRepoService(c).RepoMetadata(context.Background(), "nightgauge", "nightgauge")
 	if err == nil {
 		t.Fatal("expected ErrRateLimitGated, got nil")
 	}
@@ -169,12 +180,12 @@ func TestRateLimitGate_NoOpAboveFloor(t *testing.T) {
 	c := NewClientWithURL("test-token", srv.URL).WithRateLimitTracker(tr, "alice")
 	t.Setenv(rateLimitFloorEnv, "100")
 
-	id, err := c.GetRepositoryID(context.Background(), "nightgauge", "nightgauge")
+	meta, err := NewRepoService(c).RepoMetadata(context.Background(), "nightgauge", "nightgauge")
 	if err != nil {
 		t.Fatalf("expected success above floor, got: %v", err)
 	}
-	if id == "" {
-		t.Fatalf("expected a repo id back")
+	if meta.NameWithOwner == "" {
+		t.Fatalf("expected repo metadata back")
 	}
 	if got := atomic.LoadInt32(&calls); got != 1 {
 		t.Fatalf("expected exactly 1 dispatched call, got %d", got)
@@ -209,7 +220,7 @@ func TestRateLimitGate_NoOpWhenStale(t *testing.T) {
 	c := NewClientWithURL("test-token", srv.URL).WithRateLimitTracker(tr, "alice")
 	t.Setenv(rateLimitFloorEnv, "100")
 
-	if _, err := c.GetRepositoryID(context.Background(), "nightgauge", "nightgauge"); err != nil {
+	if _, err := NewRepoService(c).RepoMetadata(context.Background(), "nightgauge", "nightgauge"); err != nil {
 		t.Fatalf("stale entry must not gate: %v", err)
 	}
 	if got := atomic.LoadInt32(&calls); got != 1 {
@@ -237,7 +248,7 @@ func TestRateLimitGate_NoOpWhenResetPassed(t *testing.T) {
 	c := NewClientWithURL("test-token", srv.URL).WithRateLimitTracker(tr, "alice")
 	t.Setenv(rateLimitFloorEnv, "100")
 
-	if _, err := c.GetRepositoryID(context.Background(), "nightgauge", "nightgauge"); err != nil {
+	if _, err := NewRepoService(c).RepoMetadata(context.Background(), "nightgauge", "nightgauge"); err != nil {
 		t.Fatalf("expected pass-through when reset window elapsed, got %v", err)
 	}
 	if got := atomic.LoadInt32(&calls); got != 1 {
@@ -253,7 +264,7 @@ func TestRateLimitGate_NoOpWithoutTracker(t *testing.T) {
 	defer srv.Close()
 
 	c := NewClientWithURL("test-token", srv.URL)
-	if _, err := c.GetRepositoryID(context.Background(), "nightgauge", "nightgauge"); err != nil {
+	if _, err := NewRepoService(c).RepoMetadata(context.Background(), "nightgauge", "nightgauge"); err != nil {
 		t.Fatalf("untracked client must still work: %v", err)
 	}
 	if got := atomic.LoadInt32(&calls); got != 1 {
@@ -282,7 +293,7 @@ func TestRateLimitGate_EnvOverride(t *testing.T) {
 
 	// With the default floor (100), 200 is above → call passes.
 	t.Setenv(rateLimitFloorEnv, "")
-	if _, err := c.GetRepositoryID(context.Background(), "nightgauge", "nightgauge"); err != nil {
+	if _, err := NewRepoService(c).RepoMetadata(context.Background(), "nightgauge", "nightgauge"); err != nil {
 		t.Fatalf("default floor should let 200 through: %v", err)
 	}
 	if got := atomic.LoadInt32(&calls); got != 1 {
@@ -291,7 +302,7 @@ func TestRateLimitGate_EnvOverride(t *testing.T) {
 
 	// Raise the floor to 500 → now 200 is below → call gates.
 	t.Setenv(rateLimitFloorEnv, "500")
-	_, err := c.GetRepositoryID(context.Background(), "nightgauge", "nightgauge")
+	_, err := NewRepoService(c).RepoMetadata(context.Background(), "nightgauge", "nightgauge")
 	if !errors.Is(err, ErrRateLimitGated) {
 		t.Fatalf("expected ErrRateLimitGated under raised floor, got %v", err)
 	}
@@ -318,7 +329,7 @@ func TestHeaderInterceptor_FeedsTracker(t *testing.T) {
 	c := NewClientWithURL("test-token", srv.URL).WithRateLimitTracker(tr, "alice")
 	t.Setenv(rateLimitFloorEnv, "100")
 
-	if _, err := c.GetRepositoryID(context.Background(), "nightgauge", "nightgauge"); err != nil {
+	if _, err := NewRepoService(c).RepoMetadata(context.Background(), "nightgauge", "nightgauge"); err != nil {
 		t.Fatalf("call: %v", err)
 	}
 
@@ -349,7 +360,7 @@ func TestHeaderInterceptor_NoTrackerNoOp(t *testing.T) {
 	defer srv.Close()
 
 	c := NewClientWithURL("test-token", srv.URL)
-	if _, err := c.GetRepositoryID(context.Background(), "nightgauge", "nightgauge"); err != nil {
+	if _, err := NewRepoService(c).RepoMetadata(context.Background(), "nightgauge", "nightgauge"); err != nil {
 		t.Fatalf("call: %v", err)
 	}
 	// No assertion on tracker — there isn't one. Just ensure no panic /
@@ -371,7 +382,7 @@ func TestHeaderInterceptor_SkipsResponsesWithoutHeaders(t *testing.T) {
 	tr := NewSharedRateLimitTracker(path)
 
 	c := NewClientWithURL("test-token", srv.URL).WithRateLimitTracker(tr, "alice")
-	if _, err := c.GetRepositoryID(context.Background(), "nightgauge", "nightgauge"); err != nil {
+	if _, err := NewRepoService(c).RepoMetadata(context.Background(), "nightgauge", "nightgauge"); err != nil {
 		t.Fatalf("call: %v", err)
 	}
 	entry, _, err := tr.Get("alice")
@@ -403,7 +414,12 @@ func TestHeaderInterceptor_NoDoubleCount(t *testing.T) {
 		w.Header().Set("X-RateLimit-Reset", fmt.Sprintf("%d", resetAt))
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
-			"data": map[string]interface{}{"repository": map[string]interface{}{"id": "x"}},
+			"data": map[string]interface{}{"repository": map[string]interface{}{
+				"nameWithOwner":    "nightgauge/nightgauge",
+				"owner":            map[string]interface{}{"login": "nightgauge"},
+				"name":             "nightgauge",
+				"defaultBranchRef": map[string]interface{}{"name": "main"},
+			}},
 		})
 	}))
 	defer srv.Close()
@@ -413,7 +429,7 @@ func TestHeaderInterceptor_NoDoubleCount(t *testing.T) {
 	c := NewClientWithURL("test-token", srv.URL).WithRateLimitTracker(tr, "alice")
 
 	for i := 0; i < 2; i++ {
-		if _, err := c.GetRepositoryID(context.Background(), "nightgauge", "nightgauge"); err != nil {
+		if _, err := NewRepoService(c).RepoMetadata(context.Background(), "nightgauge", "nightgauge"); err != nil {
 			t.Fatalf("call %d: %v", i, err)
 		}
 	}
