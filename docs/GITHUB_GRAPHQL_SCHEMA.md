@@ -1274,7 +1274,17 @@ commit found for SHA`) is the one the merged-PR door actually meets. A
    reporting a timeout for a review that exists. REST costs the same request at
    `per_page=100`.
 
-### The remaining worklist (AC 2)
+### The remaining worklist — now tracked as #933
+
+**#849's three acceptance criteria are met.** Every call site is classified
+(above); every call site classified better-as-REST is migrated (see _What has
+been migrated_); the ledger before/after is recorded for both the sweep and the
+label read.
+
+What remains below is the **mutation** surface, which this document classifies
+_coupled_ — not better-as-REST — so it was never inside AC 2. It is tracked as
+**#933** under epic #842, and entries 1 and 2 are one change, not two: the ids
+have to move with the mutations.
 
 Ordered by value, not by ease:
 
@@ -1293,8 +1303,8 @@ Ordered by value, not by ease:
    `internal/ipc/server.go`, and several inside `internal/github` itself), and
    `internal/ipc/server.go` alone builds 12 `IssueService`, 7 `PRService`, 4
    `ProjectService`, 2 `BoardService` and 1 `EpicService` inline. Unifying the
-   two families is AC 2's real work — high conflict surface, land it alone, and
-   do **not** bolt a cache onto the raw path (see `docs/FAILURE_TAXONOMY.md`
+   two families is the substance of #933 — high conflict surface, land it alone,
+   and do **not** bolt a cache onto the raw path (see `docs/FAILURE_TAXONOMY.md`
    § Read-Through Cache Without Write Interception).
 
    Note this corrects an inherited figure. The previous framing said "~10

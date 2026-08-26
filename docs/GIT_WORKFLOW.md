@@ -302,24 +302,65 @@ finished, by prose explaining that it was neither.
 its number anywhere in the body.** Write around it:
 
 ```text
-✓ Part of #849 — the remaining work is <…>
-✓ #849 stays open; see its worklist
-✗ this does not close #849
+✓ Part of #NNN — the remaining work is <…>
+✓ #NNN stays open; see its worklist
+✗ this does not clos<span>e</span> #NNN
 ```
+
+Writing _about_ the keyword is indistinguishable from using it, so quoting the
+pattern in prose needs the adjacency broken — an HTML entity or a hyphen.
 
 The failure is silent and asymmetric: nothing warns you, the merge output says
 nothing, and you only find it by re-measuring the backlog afterwards — which is
 the argument for re-measuring open-issue counts after a merge instead of
 assuming your intent carried.
 
-**Repairing it** takes three steps, and the second and third are the ones people
-forget:
+**Scan both channels before merging**, because a clean commit message does not
+imply a clean body and vice versa:
 
 ```bash
-gh issue reopen <n> --repo <owner>/<repo> --comment "<why it was closed by accident>"
+gh pr view <n> --json body --jq .body | grep -inE "(clos(e|es|ed)|fix(es|ed)?|resolv(e|es|ed))[[:space:]]*#[0-9]+"
+git log origin/main..HEAD --format='%B'  | grep -inE "(clos(e|es|ed)|fix(es|ed)?|resolv(e|es|ed))[[:space:]]*#[0-9]+"
+```
+
+Note that a fix to a **pushed** commit message needs an amend, and force-push is
+blocked in this environment — so the repair is a new branch and a new PR. Scan
+before you push, not after.
+
+#### The link is sticky, which is the part that actually bites
+
+Editing the offending text afterwards does **not** unlink the issue, and neither
+does reopening it. The association GitHub created from the original body
+persists and can close the issue again on a **later, unrelated merge**.
+
+Measured on #849, which was closed twice:
+
+```bash
+gh api graphql -f query='{ repository(owner:"…", name:"…") {
+  issue(number: NNN) { closedByPullRequestsReferences(first:10, includeClosedPrs:true) {
+    nodes { number state } } } } }'
+```
+
+That returned #930, #931 **and** #932 — including #931, whose body had been
+cleaned and which was **never merged**. The second close fired on #932's merge,
+whose body and every commit message scanned clean.
+
+**So reopening is not a repair; it is a reprieve.** Check the linked-PR list
+above before deciding what to do:
+
+```bash
+gh issue reopen <n> --repo <owner>/<repo> --comment "<why it closed by accident>"
 nightgauge project sync-status <n> --repo <owner>/<repo> --project <p> <status>   # undo closed→Done
 gh issue view <parent-epic> --json state    # confirm no rollup fired on the way through
 ```
+
+If the issue carries sticky links it cannot shed, the durable fix is to stop
+relying on that number: **re-file the remaining work as a fresh issue** and let
+the old one stay closed. Re-read its acceptance criteria first — an issue that
+keeps getting closed by accident is sometimes an issue whose criteria are
+actually met, with follow-on work that deserves its own number anyway. That was
+the outcome on #849: all three criteria were satisfied and the remainder became
+#933.
 
 ### PR Template
 
