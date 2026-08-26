@@ -699,6 +699,59 @@ mapper/integration contract tests enforce this.
 > Real-time in-progress requires wiring lifecycle events into
 > `ConcurrentPipelineManager`; tracked as a follow-up.
 
+### Nothing is running anywhere — check GitHub Status before anything else
+
+**Symptom:** Workflow runs sit `queued` across repositories and nothing moves to
+`in_progress`. Self-hosted runners look idle. Jobs may complete with
+`startup_failure` and zero steps, or a workflow may never create a run at all.
+
+**Check this first, before touching a runner:**
+
+<https://www.githubstatus.com>
+
+```bash
+curl -s https://www.githubstatus.com/api/v2/components.json \
+  | jq -r '.components[] | select(.name=="Actions") | "Actions: \(.status)"'
+curl -s https://www.githubstatus.com/api/v2/incidents/unresolved.json \
+  | jq -r '.incidents[] | "[\(.impact)] \(.name) — \(.status)"'
+```
+
+[CI_INTEGRATION.md](CI_INTEGRATION.md#troubleshooting) already states this as
+rule 1. It is repeated here because that is not where you look when the pipeline
+appears broken — you look here, at the false-alarm list.
+
+**The discriminator, in one line:** an Actions outage stalls **every** repo. A
+runner problem cannot stall a repo that uses no self-hosted runner, and a
+billing problem cannot stall a **public** repo, where Actions minutes are free
+and unmetered.
+
+```bash
+# If this repo is also stalled, it is neither your runner nor your billing.
+gh api "repos/<owner>/<public-repo>/actions/runs?status=queued&per_page=1" --jq .total_count
+gh api "repos/<owner>/<public-repo>/actions/runs?status=in_progress&per_page=1" --jq .total_count
+```
+
+**A healthy idle runner is the expected picture during an outage**, not evidence
+of a runner fault. `Runner.Listener` alive, log ending in `Listening for Jobs`,
+no `Runner.Worker` process — that is a runner correctly waiting for work it is
+never offered. Restarting it changes nothing.
+
+**Do not diagnose from the runner log.** `_diag/Runner_*.log` routinely contains
+transient `SocketException`s with `Back off N seconds before next retry. N
+attempts left`. Those are self-healing retries, and a subsequent
+`Listening for Jobs` line is the proof they healed. On 2026-08-26 one such line
+was mistaken for a root cause during a `major_outage`, costing an unnecessary
+runner restart — while the public repo, which shares neither the runner nor the
+billing account, sat stalled in exactly the same way and would have settled it in
+one query.
+
+**Ordering that would have caught it:**
+
+1. GitHub Status — is `Actions` operational?
+2. Is a **public** repo also stalled? → not runner, not billing.
+3. Are **`ubuntu-latest`** jobs also stalled? → not the self-hosted runner.
+4. Only then: runner health, labels, runner-group scoping.
+
 ### Every PR is stuck and nothing says why (repo-wide blocker)
 
 **Symptom:** Multiple PRs sit unmergeable at once. Individually each looks like
