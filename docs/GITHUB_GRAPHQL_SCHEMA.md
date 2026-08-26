@@ -973,26 +973,26 @@ when a call is requires-GraphQL, the only lever left is not making it.**
 
 ### Non-project call sites
 
-| Call site                                                   | Verdict                        | Why                                                                                                                       |
-| ----------------------------------------------------------- | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------- |
-| `SecurityService.ListOpenAlerts`                            | **requires-GraphQL**           | `dependabotUpdate` has no REST equivalent — see below                                                                     |
-| `IssueService.GetIssue`                                     | **GraphQL-by-batching**        | One document carries the issue, labels, sub-issues and blockedBy; REST needs 3–4 calls                                    |
-| `IssueService.GetIssuesByNumbers`                           | **GraphQL-by-batching**        | N issues in ONE aliased request. REST is strictly N calls                                                                 |
-| `IssueService.GetEpicProgress`                              | **GraphQL-by-batching**        | Sub-issue rollup in one hop                                                                                               |
-| `IssueService.SearchIssues`                                 | **GraphQL-by-batching**        | `search()` applies the query server-side                                                                                  |
-| `IssueService.ListIssues`, `ListIssuesExcludingLabels`      | **GraphQL-by-batching**        | Label filtering and node IDs in one page                                                                                  |
-| `IssueService.GetRepoLabels`, `LabelService.List`           | **better-as-REST** (deferred)  | `GET /repos/{o}/{r}/labels` is ETag-able — but the map it returns feeds label MUTATIONS by node ID, so it moves with them |
-| `PRService.GetPR`                                           | **GraphQL-by-batching**        | PR + labels + `statusCheckRollup` in one document                                                                         |
-| `PRService.ListPRs`                                         | **GraphQL-by-batching**        | Same, per page                                                                                                            |
-| `PRService.ListMergedPRHeads`                               | **GraphQL-by-batching**        | `states: MERGED` is a SERVER-SIDE filter REST lacks — see below                                                           |
-| `PRService.CommitParents`                                   | **better-as-REST** ✅ migrated | `GET /repos/{o}/{r}/commits/{sha}`, per-branch; bucket move always, 304s only under `serve`                               |
-| `PRService.DeleteBranch`                                    | requires-GraphQL (read)        | Resolves a ref node ID for `deleteRef`                                                                                    |
-| `RulesetService.hasCopilotReviewed`                         | **better-as-REST** ✅ migrated | POLLED read — the strongest ETag case in the tree                                                                         |
-| `RepoService.RepoMetadata`                                  | **better-as-REST** (caveat)    | See the empty-repository trap below                                                                                       |
-| `Client.GetRepositoryID`                                    | **better-as-REST** (deferred)  | `GET /repos/{o}/{r}` returns `node_id`; moves with the mutations that consume it                                          |
-| `Client.GetRateLimit`                                       | **either — no gain**           | The GraphQL `rateLimit` query is genuinely free                                                                           |
-| `Client.ExecuteGraphQL`                                     | requires-GraphQL               | It _is_ the pass-through transport for `forge graphql`                                                                    |
-| All `IssueService` / `PRService` / `LabelService` mutations | **coupled**                    | See _Node-ID coupling_ below                                                                                              |
+| Call site                                                   | Verdict                         | Why                                                                                                                       |
+| ----------------------------------------------------------- | ------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `SecurityService.ListOpenAlerts`                            | **requires-GraphQL**            | `dependabotUpdate` has no REST equivalent — see below                                                                     |
+| `IssueService.GetIssue`                                     | **GraphQL-by-batching**         | One document carries the issue, labels, sub-issues and blockedBy; REST needs 3–4 calls                                    |
+| `IssueService.GetIssuesByNumbers`                           | **GraphQL-by-batching**         | N issues in ONE aliased request. REST is strictly N calls                                                                 |
+| `IssueService.GetEpicProgress`                              | **GraphQL-by-batching**         | Sub-issue rollup in one hop                                                                                               |
+| `IssueService.SearchIssues`                                 | **GraphQL-by-batching**         | `search()` applies the query server-side                                                                                  |
+| `IssueService.ListIssues`, `ListIssuesExcludingLabels`      | **GraphQL-by-batching**         | Label filtering and node IDs in one page                                                                                  |
+| `IssueService.GetRepoLabels`, `LabelService.List`           | **better-as-REST** (deferred)   | `GET /repos/{o}/{r}/labels` is ETag-able — but the map it returns feeds label MUTATIONS by node ID, so it moves with them |
+| `PRService.GetPR`                                           | **GraphQL-by-batching**         | PR + labels + `statusCheckRollup` in one document                                                                         |
+| `PRService.ListPRs`                                         | **GraphQL-by-batching**         | Same, per page                                                                                                            |
+| `PRService.ListMergedPRHeads`                               | **GraphQL-by-batching**         | `states: MERGED` is a SERVER-SIDE filter REST lacks — see below                                                           |
+| `PRService.CommitParents`                                   | **better-as-REST** ✅ migrated  | `GET /repos/{o}/{r}/commits/{sha}`, per-branch; bucket move always, 304s only under `serve`                               |
+| `PRService.DeleteBranch`                                    | requires-GraphQL (read)         | Resolves a ref node ID for `deleteRef`                                                                                    |
+| `RulesetService.hasCopilotReviewed`                         | **better-as-REST** ✅ migrated  | POLLED read — the strongest ETag case in the tree                                                                         |
+| `RepoService.RepoMetadata`                                  | **requires-GraphQL** ✅ settled | REST reports a `default_branch` for a repo that has none — see below                                                      |
+| `Client.GetRepositoryID`                                    | **better-as-REST** (deferred)   | `GET /repos/{o}/{r}` returns `node_id`; moves with the mutations that consume it                                          |
+| `Client.GetRateLimit`                                       | **either — no gain**            | The GraphQL `rateLimit` query is genuinely free                                                                           |
+| `Client.ExecuteGraphQL`                                     | requires-GraphQL                | It _is_ the pass-through transport for `forge graphql`                                                                    |
+| All `IssueService` / `PRService` / `LabelService` mutations | **coupled**                     | See _Node-ID coupling_ below                                                                                              |
 
 ### Node-ID coupling — the real reason the mutation surface has not moved
 
@@ -1064,37 +1064,111 @@ spend that fixed budget on closed-unmerged PRs and **shrink the window** —
 paying a correctness cost for a bucket saving. Server-side filtering is a real
 GraphQL win and this is the clearest instance of it.
 
-### `RepoMetadata` — better-as-REST, with a trap that must not be papered over
+### `RepoMetadata` — the trap is real, and it reclassifies the call site
 
-`GET /repos/{o}/{r}` returns `full_name`, `owner.login`, `name` and
-`default_branch` in one ETag-able call, and nothing downstream needs a node ID.
+**Settled 2026-08-26. This read is requires-GraphQL; do not migrate it.**
 
-**But the two APIs may disagree about an empty repository, and that is the
-thing to settle before migrating.** GraphQL's `defaultBranchRef` is null when
-the ref does not exist — verified, and pinned by
-`TestRepoMetadata_EmptyRepoHasNoDefaultBranch`. REST's `default_branch` is
-believed to name the branch that _would_ be default, and so to be non-empty
-even with no commits. **That half is NOT verified** — checking it needs a
-repository with zero commits, which this classification pass did not create.
+#849 classified `RepoMetadata` better-as-REST because `GET /repos/{o}/{r}`
+returns `full_name`, `owner.login`, `name` and `default_branch` in one
+ETag-able call with no node ID needed. Every one of those statements is true.
+The conclusion is still wrong, and the previous pass said so — it flagged that
+the two APIs _might_ disagree about an empty repository and marked that half
+**NOT verified**, because checking needs a repository with zero commits.
 
-It matters because `DefaultBranchHealth.Evaluate` depends on the GraphQL
-semantics: an empty `DefaultBranch` is its signal to decline to observe, and
-its comment says why ("guessing `main` here would produce a 404 that reads as
-a producer failure forever"). If REST does report a name for an empty
-repository, a naive migration silently converts every such repository into a
-permanently failing producer.
+That probe has now been run. One throwaway repository, read by both APIs at the
+same moment, before and after its first commit:
 
-So the first step of that migration is one probe against an empty repository,
-not a code change. If the disagreement is real, migrating costs a second
-conditional call to confirm the ref exists, or an explicit change to that
-contract. Both are fine; **doing neither is not.**
+| State        | GraphQL `defaultBranchRef` | GraphQL `isEmpty` | REST `default_branch` | REST `size` | REST `pushed_at` |
+| ------------ | -------------------------- | ----------------- | --------------------- | ----------- | ---------------- |
+| zero commits | `null`                     | `true`            | `"main"`              | `0`         | creation time    |
+| one commit   | `"main"`                   | `false`           | `"main"`              | `0`         | **unchanged**    |
+
+**REST names a default branch for a repository that has no branch, and names it
+identically in both states.** The field carries no information about whether the
+ref exists.
+
+That is not cosmetic. `attention/sweep.DefaultBranchHealth.Evaluate` treats an
+empty `DefaultBranch` as its signal to decline to observe, and its own comment
+explains why: guessing a branch name produces a 404 that reads as a producer
+failing forever. A naive migration silently converts every empty repository
+into a permanently failing producer — the exact failure the last pass feared,
+now measured rather than suspected.
+
+**And there is no cheap REST field to guard it with**, which is what closes the
+question. The two obvious candidates both fail on the same probe: `size` is `0`
+on a repository that HAS a commit, so it is not an emptiness test; `pushed_at`
+is stamped at creation and did not update on push. The only REST guards left
+are a _second_ call (`/commits` → 409, or `/branches`), which erases the saving
+that motivated the migration in the first place.
+
+So `isEmpty` joins `dependabotUpdate` as **a fact REST does not carry**, and
+`RepoMetadata` joins `ListOpenAlerts` in the same bucket for the same reason.
+The rule those two now share, stated once:
+
+> A REST endpoint that returns the field you asked for has not necessarily
+> answered your question. Check what the CALLER does with the field — here, a
+> caller that depends on the field being _absent_.
+
+The reasoning is repeated at the call site in `internal/github/repo.go`, not
+only here: a doc stops a reader who goes looking, and a comment stops the one
+who does not. Pinned by `TestRepoMetadata_EmptyRepoHasNoDefaultBranch`.
+
+### Sub-issue and dependency links — REST endpoints the tree does not use
+
+The previous pass found that `GET /repos/{o}/{r}/issues/{n}/sub_issues` and
+`.../dependencies/blocked_by` answer 200, and noted the write counterparts were
+documented but **not exercised**. They have now been exercised end to end
+against throwaway repositories (2026-08-26). All four work, and all four bill
+`core`:
+
+| Operation         | Endpoint                                                        | Body / path parameter       |
+| ----------------- | --------------------------------------------------------------- | --------------------------- |
+| add sub-issue     | `POST /repos/{o}/{r}/issues/{n}/sub_issues`                     | `{"sub_issue_id": <db id>}` |
+| remove sub-issue  | `DELETE /repos/{o}/{r}/issues/{n}/sub_issue`                    | `{"sub_issue_id": <db id>}` |
+| add blocked-by    | `POST /repos/{o}/{r}/issues/{n}/dependencies/blocked_by`        | `{"issue_id": <db id>}`     |
+| remove blocked-by | `DELETE /repos/{o}/{r}/issues/{n}/dependencies/blocked_by/{id}` | database id in the PATH     |
+
+Three properties that decide whether the write surface can move:
+
+1. **They take the DATABASE id, not the node ID.** So migrating a mutation does
+   not merely relocate the node-ID coupling — it dissolves it, provided the id
+   source moves too.
+2. **They work cross-repository.** A parent in one repository accepted a child
+   from another, for both sub-issues and blocked-by, and the GET response
+   carries `.repository.full_name` — which is exactly what `types.SubIssueRef.Repo`
+   needs. This matters because `internal/audit/issue_creator.go` resolves
+   `epicRepo` and `subRepo` independently, so cross-repo linking is a live path
+   in the tree and not a hypothetical.
+3. **A 404 from these routes means the referenced ISSUE is absent, not that the
+   route is.** See the discriminator below.
+
+### Probing whether a write endpoint exists, without writing anything
+
+Confirming a mutating endpoint normally means performing a mutation. It does
+not have to. GitHub returns an endpoint-specific `documentation_url` for a
+route it matched, and the generic `https://docs.github.com/rest` for one it did
+not:
+
+```
+POST .../issues/842/sub_issues        {"sub_issue_id": 999999999999}
+  → 404  documentation_url: .../rest/issues/sub-issues#add-sub-issue      ← route EXISTS
+POST .../issues/842/not_a_real_endpoint
+  → 404  documentation_url: https://docs.github.com/rest                  ← route does not
+```
+
+Send a request that cannot succeed — a well-formed body naming an object that
+does not exist — and read which of the two you get. That distinguishes "this
+endpoint is not available to me" from "my arguments were wrong" for zero
+mutations and one request. Worth reaching for before deciding an API cannot do
+something.
 
 ### What has been migrated
 
-| Call site                           | Was                                      | Now                                                 |
-| ----------------------------------- | ---------------------------------------- | --------------------------------------------------- |
-| `RulesetService.hasCopilotReviewed` | GraphQL `pullRequest.reviews(first: 10)` | `GET /repos/{o}/{r}/pulls/{n}/reviews?per_page=100` |
-| `PRService.CommitParents`           | GraphQL `repository.object(oid:)`        | `GET /repos/{o}/{r}/commits/{sha}`                  |
+| Call site                                                                              | Was                                                       | Now                                                    |
+| -------------------------------------------------------------------------------------- | --------------------------------------------------------- | ------------------------------------------------------ |
+| `RulesetService.hasCopilotReviewed`                                                    | GraphQL `pullRequest.reviews(first: 10)`                  | `GET /repos/{o}/{r}/pulls/{n}/reviews?per_page=100`    |
+| `PRService.CommitParents`                                                              | GraphQL `repository.object(oid:)`                         | `GET /repos/{o}/{r}/commits/{sha}`                     |
+| `ProjectService.AddBlockedByNumber` / `RemoveBlockedByNumber` — **ID resolution only** | 2× `IssueService.GetIssue` (a full GraphQL document each) | 2× `GET /repos/{o}/{r}/issues/{n}` (`resolveIssueRef`) |
 
 Ledger before/after, one `nightgauge worktree sweep --dry-run` over the
 workspace (**AC 3**):
@@ -1108,7 +1182,37 @@ workspace (**AC 3**):
 `hasCopilotReviewed` does not appear in a sweep — it runs in the PR merge path
 — and is the larger saving of the two, because it is the polled one.
 
-**Two traps this migration hit, recorded so the next one does not:**
+**The blockedBy ID-resolution migration, and why only half of it moved.**
+`AddBlockedByNumber` and `RemoveBlockedByNumber` each issued **three** GraphQL
+calls: two full `GetIssue` documents and one mutation. The two reads existed
+only to reach a node ID and a parent number — and REST reports both in one
+conditional-GET-able call, so they became `resolveIssueRef`. Per call site
+that is 3 GraphQL points → 1, with the two survivors moved to the idle `core`
+bucket and ETag-able under `nightgauge serve`. It is the first cash-in of the
+"REST returns node IDs" finding above.
+
+**The mutation deliberately stayed on GraphQL.** Migrating it means switching
+to database ids, and every other caller of `IssueService.AddBlockedBy` would
+still be passing node IDs — two write paths creating the same edge, which is
+the Read-Through/dual-path shape `docs/FAILURE_TAXONOMY.md` says to never
+resolve by "keeping them in sync". The write surface moves as one piece, with
+its id source, in the client-family unification (#849 AC 2 / #848 AC 2).
+
+**One trap this migration hit, and it is not obvious:** the two APIs disagree
+about what a number means. GraphQL's `repository.issue(number:)` errors
+`NOT_FOUND` for a pull request number; REST's `/issues/{n}` **returns the pull
+request**, because GitHub models PRs as issues. Verified live on PR #925. A
+straight port therefore _widens_ the contract in silence — `issue
+add-blocked-by 925 …` starts succeeding where it used to fail loudly. REST
+marks the difference with a `pull_request` key on the object, so the rejection
+costs no extra call, but it has to be written down. Pinned by
+`TestResolveIssueRef_RejectsAPullRequestNumber`.
+
+> Generalisable: when a read moves transport, check what each API does with an
+> input that is **not valid** — not just what they do with a valid one. The
+> happy paths agreeing says nothing about the error paths agreeing.
+
+**Two traps the earlier migration hit, recorded so the next one does not:**
 
 1. **An unknown commit SHA returns 422, not 404.** GraphQL expressed "no such
    object" as a null field; REST splits it across two statuses, and 422 (`No

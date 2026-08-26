@@ -55,6 +55,35 @@ func NewRepoService(client *Client) *RepoService {
 // RepoMetadata returns the canonical name/owner pair for the named
 // repository. The implementation issues a single repository(owner,name)
 // GraphQL query.
+//
+// **This read is requires-GraphQL. Do not "migrate" it to REST.** It looks
+// like the easiest win in internal/github — four scalar fields, no node ID
+// needed, and `GET /repos/{o}/{r}` is ETag-able — and #849 classified it
+// better-as-REST on exactly that reasoning. A paired probe against one
+// repository, taken at the same moment, settles it the other way
+// (2026-08-26):
+//
+//	zero commits: GraphQL defaultBranchRef=null  isEmpty=true   REST default_branch="main"
+//	one commit:   GraphQL defaultBranchRef=main  isEmpty=false  REST default_branch="main"
+//
+// REST reports a default_branch for a repository that HAS no branch, and
+// reports it identically in both states — the field carries no information
+// about whether the ref exists. That matters because the empty string is a
+// load-bearing signal: attention/sweep.DefaultBranchHealth.Evaluate treats an
+// empty DefaultBranch as "decline to observe", and its own comment explains
+// that guessing a branch name produces a 404 which reads as a producer failing
+// forever. A REST migration silently converts every empty repository into a
+// permanently failing producer.
+//
+// There is also no cheap REST field to guard it with. `size` is 0 on a repo
+// WITH a commit (verified), so it is not an emptiness test, and `pushed_at` is
+// stamped at creation and did not update on push. The only REST guards are a
+// SECOND call (`/commits` → 409, or `/branches`), which erases the saving that
+// motivated the migration. GraphQL's `isEmpty` is a fact REST does not carry —
+// the same shape as SecurityService.ListOpenAlerts and dependabotUpdate.
+//
+// Pinned by TestRepoMetadata_EmptyRepoHasNoDefaultBranch. See
+// docs/GITHUB_GRAPHQL_SCHEMA.md § Transport Classification.
 func (r *RepoService) RepoMetadata(ctx context.Context, owner, name string) (*forgetypes.Repo, error) {
 	if owner == "" || name == "" {
 		return nil, fmt.Errorf("repo metadata: owner and name are required")
