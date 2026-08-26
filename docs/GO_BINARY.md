@@ -3847,6 +3847,54 @@ caused the fetch; the second producer gets a hit and issues nothing. So
 means `StrandedReadyItems` asked first. Attribution is per *call*, and after
 #845 there is only one call to attribute.
 
+#### The daemon reached the cache last (Issue #848)
+
+#845 put the cache under the sweep. The daemon's own board verbs went straight
+past it for three more issues, and nothing said so.
+
+Every board verb in `internal/ipc` built its own service inline from an
+identity-scoped client:
+
+```go
+svc := gh.NewBoardService(c, p.Owner, p.ProjectNumber, gh.ParseOwnerType(p.OwnerType))
+return svc.ListItems(ctx, p.Status)
+```
+
+So `board.list` read past the snapshot — the tree's `refresh_interval` defaults
+to 600s but every other trigger path (activation, view refresh, a run
+terminating, a manual refresh) issued a full 17-point board read however warm
+the cache was. **This is the Unpinned Wiring class**
+(`docs/FAILURE_TAXONOMY.md`): the cache worked, its own tests passed, and no
+test could see that production never reached it, because each test supplied the
+service itself.
+
+**Wrapping only the reads would have been worse than leaving it alone.** The
+cache is correct because mutations drop the snapshot they invalidate, and the
+daemon's five mutating verbs each built their own service too. A read-through
+cache whose writers bypass the wrapper serves data it already knows to be wrong
+— an operator dragging an item to Done would keep seeing it in Ready for up to
+the TTL, with nothing red anywhere.
+
+Both halves now come from one accessor, `internal/ipc/board_services.go`:
+
+| | |
+| --- | --- |
+| `boardServicesFor` | Returns the cached reader and the invalidating writer **as a pair**. Handing out one without the other is the defect, so the accessor does not offer that shape |
+| `boardStateFor` | `BoardStateService` used to construct its own `ProjectService`, which put `board.updateStatus` — the most staleness-visible write the daemon makes — outside every wrapper. It now takes the services, so the same interception covers it |
+| `TestBoardServicesAreNotBypassed` | A source-level pin: `gh.NewBoardService`, `gh.NewProjectService` and `state.NewBoardStateServiceForClient` may not appear anywhere in `internal/ipc` except the accessor |
+
+The cheaper fix — invalidating at each of the five mutating call sites — was
+rejected for the reason the pin exists. It works until someone adds a sixth
+verb, and nothing goes red when they do. Interception belongs *under* the call
+sites, not in them.
+
+**A project number of 0 invalidates every board, not none.** The blocked-by
+verbs are not board-scoped — a dependency edge is not a board concept, so they
+construct an unbound service. But `BoardItem` carries `BlockedBy`, so such a
+write still changes what a board read returns. `boardcache.WrapProject` treats
+an unnameable board as "drop everything": a cold cache costs one refetch, a
+confidently wrong one costs an operator acting on a board that has moved.
+
 ### The Board Change Probe (Issue #847)
 
 The snapshot cache above removes duplicate reads *inside* one window. It does

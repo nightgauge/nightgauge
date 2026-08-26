@@ -11,6 +11,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/nightgauge/nightgauge/internal/forge"
 	gh "github.com/nightgauge/nightgauge/internal/github"
 )
 
@@ -192,31 +193,51 @@ func itemsResp(cfg *mockConfig) map[string]interface{} {
 
 // --- Tests ---
 
-func TestNewBoardStateService(t *testing.T) {
+// The constructor must wire BOTH services. This used to assert on owner /
+// projectNumber / ownerType fields, which only restated the arguments it had
+// just passed; the property that matters now is that neither half is left nil,
+// because a nil board or project service is a nil-pointer panic at the first
+// read or write rather than a visible construction error (#848).
+func TestNewBoardStateServiceForClient_WiresBothServices(t *testing.T) {
 	client := gh.NewClientWithToken("test")
-	svc := NewBoardStateService(client, "nightgauge", 5)
+	svc := NewBoardStateServiceForClient(client, "nightgauge", 5)
 	if svc == nil {
-		t.Fatal("NewBoardStateService returned nil")
+		t.Fatal("NewBoardStateServiceForClient returned nil")
 	}
 	if svc.projSvc == nil {
-		t.Fatal("projSvc should not be nil")
+		t.Error("projSvc is nil — every write would panic")
 	}
-	if svc.owner != "nightgauge" {
-		t.Errorf("owner = %q, want %q", svc.owner, "nightgauge")
-	}
-	if svc.projectNumber != 5 {
-		t.Errorf("projectNumber = %d, want %d", svc.projectNumber, 5)
+	if svc.board == nil {
+		t.Error("board is nil — GetPipelineStage and readItemStatus would panic")
 	}
 }
 
-func TestNewBoardStateService_UserOwnerType(t *testing.T) {
+func TestNewBoardStateServiceForClient_UserOwnerType(t *testing.T) {
 	client := gh.NewClientWithToken("test")
-	svc := NewBoardStateService(client, "user1", 1, gh.OwnerTypeUser)
+	svc := NewBoardStateServiceForClient(client, "user1", 1, gh.OwnerTypeUser)
 	if svc == nil {
-		t.Fatal("NewBoardStateService returned nil")
+		t.Fatal("NewBoardStateServiceForClient returned nil")
 	}
-	if svc.ownerType != gh.OwnerTypeUser {
-		t.Errorf("ownerType = %q, want %q", svc.ownerType, gh.OwnerTypeUser)
+	if svc.projSvc == nil || svc.board == nil {
+		t.Fatal("both services must be wired for a user-owned board too")
+	}
+}
+
+// The injecting constructor is what lets the IPC daemon hand in cache-wrapped
+// services. It must keep exactly what it was given — a constructor that
+// rebuilt either half would put the daemon's writes back outside the wrapper,
+// which is the defect #848 exists to close.
+func TestNewBoardStateService_KeepsTheServicesItWasGiven(t *testing.T) {
+	client := gh.NewClientWithToken("test")
+	board := gh.NewBoardService(client, "nightgauge", 5)
+	proj := gh.NewProjectService(client, "nightgauge", 5)
+
+	svc := NewBoardStateService(board, proj)
+	if svc.board != forge.BoardService(board) {
+		t.Error("board service was replaced; wrapped services would be discarded")
+	}
+	if svc.projSvc != forge.ProjectService(proj) {
+		t.Error("project service was replaced; wrapped services would be discarded")
 	}
 }
 
@@ -225,7 +246,7 @@ func TestSetStatus_Delegates(t *testing.T) {
 	defer srv.Close()
 
 	client := gh.NewClientWithURL("test", srv.URL)
-	svc := NewBoardStateService(client, "testorg", 1)
+	svc := NewBoardStateServiceForClient(client, "testorg", 1)
 
 	err := svc.SetStatus(context.Background(), "item1", StatusInProgress)
 	if err != nil {
@@ -238,7 +259,7 @@ func TestUpdateStatus_Delegates(t *testing.T) {
 	defer srv.Close()
 
 	client := gh.NewClientWithURL("test", srv.URL)
-	svc := NewBoardStateService(client, "testorg", 1)
+	svc := NewBoardStateServiceForClient(client, "testorg", 1)
 
 	err := svc.UpdateStatus(context.Background(), "item1", "Ready")
 	if err != nil {
@@ -251,7 +272,7 @@ func TestSetPipelineStage_Delegates(t *testing.T) {
 	defer srv.Close()
 
 	client := gh.NewClientWithURL("test", srv.URL)
-	svc := NewBoardStateService(client, "testorg", 1)
+	svc := NewBoardStateServiceForClient(client, "testorg", 1)
 
 	err := svc.SetPipelineStage(context.Background(), "item1", StageFeatureDev)
 	if err != nil {
@@ -264,7 +285,7 @@ func TestSetPipelineStage_FieldMissing(t *testing.T) {
 	defer srv.Close()
 
 	client := gh.NewClientWithURL("test", srv.URL)
-	svc := NewBoardStateService(client, "testorg", 1)
+	svc := NewBoardStateServiceForClient(client, "testorg", 1)
 
 	err := svc.SetPipelineStage(context.Background(), "item1", StageFeaturePlanning)
 	if err != nil {
@@ -277,7 +298,7 @@ func TestStartPipeline(t *testing.T) {
 	defer srv.Close()
 
 	client := gh.NewClientWithURL("test", srv.URL)
-	svc := NewBoardStateService(client, "testorg", 1)
+	svc := NewBoardStateServiceForClient(client, "testorg", 1)
 
 	err := svc.StartPipeline(context.Background(), "item1", StageIssuePickup)
 	if err != nil {
@@ -290,7 +311,7 @@ func TestCompletePipeline_ClearStage(t *testing.T) {
 	defer srv.Close()
 
 	client := gh.NewClientWithURL("test", srv.URL)
-	svc := NewBoardStateService(client, "testorg", 1)
+	svc := NewBoardStateServiceForClient(client, "testorg", 1)
 
 	err := svc.CompletePipeline(context.Background(), "item1", StatusDone)
 	if err != nil {
@@ -303,7 +324,7 @@ func TestFailPipeline_SkipsInReview(t *testing.T) {
 	defer srv.Close()
 
 	client := gh.NewClientWithURL("test", srv.URL)
-	svc := NewBoardStateService(client, "testorg", 1)
+	svc := NewBoardStateServiceForClient(client, "testorg", 1)
 
 	changed, err := svc.FailPipeline(context.Background(), "item1", StatusReady)
 	if err != nil {
@@ -319,7 +340,7 @@ func TestFailPipeline_Reverts(t *testing.T) {
 	defer srv.Close()
 
 	client := gh.NewClientWithURL("test", srv.URL)
-	svc := NewBoardStateService(client, "testorg", 1)
+	svc := NewBoardStateServiceForClient(client, "testorg", 1)
 
 	changed, err := svc.FailPipeline(context.Background(), "item1", StatusReady)
 	if err != nil {
@@ -335,7 +356,7 @@ func TestConcurrentFieldWrites(t *testing.T) {
 	defer srv.Close()
 
 	client := gh.NewClientWithURL("test", srv.URL)
-	svc := NewBoardStateService(client, "testorg", 1)
+	svc := NewBoardStateServiceForClient(client, "testorg", 1)
 
 	// Run with go test -race ./internal/state/... to detect race conditions.
 	// Multiple goroutines write through the shared projSvc concurrently.
