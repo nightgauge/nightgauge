@@ -130,9 +130,17 @@ type commitParentsResponse struct {
 // REST, deliberately (#849). The predecessor spent a GraphQL point per lookup
 // on `repository.object(oid:)`, and this is a per-branch call: a sweep over N
 // candidate branches that miss the merged-PR index pays N points on the bucket
-// this repo exhausts. The REST commit answers with an ETag, so a repeat lookup
-// of the same commit — which is every subsequent sweep, since a merged commit
-// never changes — costs nothing through the conditional-GET layer (#486).
+// this repo exhausts. Moving them to the near-idle core bucket is the whole
+// saving on the one-shot CLI path.
+//
+// The conditional-GET layer (#486) adds a second saving, but ONLY inside a
+// long-lived process: its ETag cache is in-memory and hangs off one *Client
+// (see installHeaderInterceptor), so it is not shared between separate
+// `nightgauge` invocations. A sweep running under `nightgauge serve` re-reads
+// the same merged commits every cycle and pays nothing after the first; a
+// one-shot `nightgauge worktree sweep` starts with a cold cache every time.
+// Do not describe this call as free — it is cheaper, and free only in the
+// daemon.
 //
 // **An unknown SHA comes back 422, not 404**, and that is the whole trap in
 // this migration. GraphQL expressed "no such object" as a null `object` field,

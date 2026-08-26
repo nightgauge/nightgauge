@@ -931,9 +931,17 @@ A GraphQL POST can never do this. The client's ETag layer (#486,
 `rateLimitHeaderTransport`) attaches `If-None-Match` to every GET on the API
 host automatically, so a migrated read gets this with no call-site work.
 
-**So the ranking rule is: migrate POLLED and REPEATED reads first.** A call
-made once per run saves one point; a call made every ten seconds until a human
-or a bot answers saves one point per tick, forever.
+**So the ranking rule is: migrate reads that repeat WITHIN ONE PROCESS
+lifetime first.** A call made once per run saves one point — the bucket move,
+and nothing more. A call made every ten seconds until a human or a bot answers
+saves one point per tick, for as long as the wait lasts.
+
+The "within one process" qualifier is load-bearing and easy to miss. **The ETag
+cache is in-memory and hangs off a single `*Client`** (`installHeaderInterceptor`),
+so it is not shared between separate `nightgauge` invocations. A read repeated
+across CLI runs gets the bucket move and a cold cache; a read repeated inside a
+poll loop, or inside `nightgauge serve`, gets the 304s. Claiming a migrated
+one-shot read is "free" is wrong — it is cheaper, and free only in the daemon.
 
 ### The three verdicts
 
@@ -977,7 +985,7 @@ when a call is requires-GraphQL, the only lever left is not making it.**
 | `PRService.GetPR`                                           | **GraphQL-by-batching**        | PR + labels + `statusCheckRollup` in one document                                                                         |
 | `PRService.ListPRs`                                         | **GraphQL-by-batching**        | Same, per page                                                                                                            |
 | `PRService.ListMergedPRHeads`                               | **GraphQL-by-batching**        | `states: MERGED` is a SERVER-SIDE filter REST lacks — see below                                                           |
-| `PRService.CommitParents`                                   | **better-as-REST** ✅ migrated | `GET /repos/{o}/{r}/commits/{sha}`, per-branch, ETag-able                                                                 |
+| `PRService.CommitParents`                                   | **better-as-REST** ✅ migrated | `GET /repos/{o}/{r}/commits/{sha}`, per-branch; bucket move always, 304s only under `serve`                               |
 | `PRService.DeleteBranch`                                    | requires-GraphQL (read)        | Resolves a ref node ID for `deleteRef`                                                                                    |
 | `RulesetService.hasCopilotReviewed`                         | **better-as-REST** ✅ migrated | POLLED read — the strongest ETag case in the tree                                                                         |
 | `RepoService.RepoMetadata`                                  | **better-as-REST** (caveat)    | See the empty-repository trap below                                                                                       |
