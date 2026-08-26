@@ -28,6 +28,34 @@ for product layers and design.
 | **Config**        | Tool-specific configuration files                              | `configs/`        |
 | **Standard**      | Shared best practices and guidelines                           | `standards/`      |
 
+## Where to Start a Session
+
+**One repo per session: start the agent in the repo that owns the issue.**
+Working an issue in this repository means starting Claude Code (or any agent)
+**in this repository's directory**.
+
+Agent configuration loads from the working directory and its parents. A session
+started somewhere else does not get a merged ruleset — it silently gets a
+different repo's rules, or none at all. Cross-repo work is **two sessions, not
+one**: reading a sibling repository's file is fine, but the session's rules,
+validation gate and merge policy must be the ones belonging to the repo being
+changed.
+
+This file is the **canonical** source for that rule and for the workspace-wide
+rules in [Critical Rules](#critical-rules) below — `gh` multi-account handling,
+merge policy, the post-merge `main` check, board rollup, branch and worktree
+cleanup, concurrency, background-process reaping, and context economy. Sibling
+repositories in the same working checkout restate the relevant subset in their
+own `AGENTS.md` under a _Workspace-Wide Rules_ heading, because each repository
+is cloned independently and a relative cross-repo import resolves on one machine
+and breaks in CI. **Change this file first, then propagate.**
+
+Contributors working only on this repository need nothing further. For a
+maintainer with the wider working checkout, the map of sibling repositories and
+their entry points is tracked privately (`AGENTS.md` § _Public Core Boundary_),
+alongside the session handoffs described in the _Knowledge & Memory_ section of
+[CLAUDE.md](CLAUDE.md).
+
 ## Auto-Refine Pipeline
 
 Issues can be automatically refined and processed without manual intervention.
