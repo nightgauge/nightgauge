@@ -509,48 +509,65 @@ func (p *ProjectService) SetFields(ctx context.Context, owner, repo string, issu
 	return nil
 }
 
+// blocksOwnParent reports whether a proposed blockedBy edge would make an
+// issue blocked by its own parent epic — an unresolvable cycle, since the epic
+// cannot close until the sub-issue does and the sub-issue cannot start until
+// the epic does.
+//
+// blockedParentNumber is 0 when the blocked issue has no parent, or when its
+// parent could not be determined; both must decline to guard rather than
+// guess, because a false positive REJECTS a legitimate edge.
+func blocksOwnParent(blockedParentNumber, blockerNumber int) bool {
+	return blockedParentNumber != 0 && blockerNumber == blockedParentNumber
+}
+
 // AddBlockedByNumber adds a blocking relationship between two issues identified by number.
 // blockedNumber is blocked by blockerNumber.
 // Returns an error if the blocker is the parent epic of the blocked issue — this
 // creates an unresolvable circular dependency and is always a bug.
+//
+// The two ID-resolution reads are REST (#849): they exist only to reach a node
+// ID and a parent number, and REST reports both in one conditional-GET-able
+// call on the idle `core` bucket. The mutation itself stays GraphQL — there is
+// no second write path here, and adding one would be the dual-path drift
+// docs/FAILURE_TAXONOMY.md warns about. Migrating the WRITE surface is the
+// node-ID-coupling change that must land alone.
 func (p *ProjectService) AddBlockedByNumber(ctx context.Context, owner, repo string, blockedNumber, blockerNumber int) error {
-	issueSvc := NewIssueService(p.client)
-
-	blocked, err := issueSvc.GetIssue(ctx, owner, repo, blockedNumber)
+	blocked, err := resolveIssueRef(ctx, p.client, owner, repo, blockedNumber)
 	if err != nil {
 		return fmt.Errorf("fetch blocked issue #%d: %w", blockedNumber, err)
 	}
-	blocker, err := issueSvc.GetIssue(ctx, owner, repo, blockerNumber)
+	blocker, err := resolveIssueRef(ctx, p.client, owner, repo, blockerNumber)
 	if err != nil {
 		return fmt.Errorf("fetch blocker issue #%d: %w", blockerNumber, err)
 	}
 
 	// Guard: reject if the blocker is the parent epic of the blocked issue.
 	// A sub-issue blocked by its own epic creates an unresolvable circular dependency.
-	if blocked.ParentIssueNumber != 0 && blocker.Number == blocked.ParentIssueNumber {
+	if blocksOwnParent(blocked.ParentNumber, blockerNumber) {
 		return fmt.Errorf(
 			"circular dependency: cannot block #%d by its parent epic #%d",
 			blockedNumber, blockerNumber,
 		)
 	}
 
-	return issueSvc.AddBlockedBy(ctx, blocked.NodeID, blocker.NodeID)
+	return NewIssueService(p.client).AddBlockedBy(ctx, blocked.NodeID, blocker.NodeID)
 }
 
-// RemoveBlockedByNumber removes a blocking relationship between two issues identified by number.
+// RemoveBlockedByNumber removes a blocking relationship between two issues
+// identified by number. ID resolution is REST for the reasons on
+// AddBlockedByNumber above; the mutation stays GraphQL.
 func (p *ProjectService) RemoveBlockedByNumber(ctx context.Context, owner, repo string, blockedNumber, blockerNumber int) error {
-	issueSvc := NewIssueService(p.client)
-
-	blocked, err := issueSvc.GetIssue(ctx, owner, repo, blockedNumber)
+	blocked, err := resolveIssueRef(ctx, p.client, owner, repo, blockedNumber)
 	if err != nil {
 		return fmt.Errorf("fetch blocked issue #%d: %w", blockedNumber, err)
 	}
-	blocker, err := issueSvc.GetIssue(ctx, owner, repo, blockerNumber)
+	blocker, err := resolveIssueRef(ctx, p.client, owner, repo, blockerNumber)
 	if err != nil {
 		return fmt.Errorf("fetch blocker issue #%d: %w", blockerNumber, err)
 	}
 
-	return issueSvc.RemoveBlockedBy(ctx, blocked.NodeID, blocker.NodeID)
+	return NewIssueService(p.client).RemoveBlockedBy(ctx, blocked.NodeID, blocker.NodeID)
 }
 
 // MoveStatus transitions an issue's status with optional validation.
