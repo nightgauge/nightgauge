@@ -34,23 +34,22 @@ func NewLabelService(client *Client, owner, repo string) *LabelService {
 }
 
 // List returns all labels for the repository (first 100).
+//
+// REST since #849 — see listRepoLabels. The IDs it returns are still GraphQL
+// node IDs, so Delete and Rename below consume them unchanged.
 func (s *LabelService) List(ctx context.Context) ([]*Label, error) {
-	var q listLabelsQuery
-	vars := map[string]interface{}{
-		"owner": graphql.String(s.owner),
-		"name":  graphql.String(s.repo),
-	}
-	if err := s.client.query(ctx, &q, vars); err != nil {
-		return nil, fmt.Errorf("list labels for %s/%s: %w", s.owner, s.repo, err)
+	nodes, err := listRepoLabels(ctx, s.client, s.owner, s.repo)
+	if err != nil {
+		return nil, err
 	}
 
-	labels := make([]*Label, 0, len(q.Repository.Labels.Nodes))
-	for _, n := range q.Repository.Labels.Nodes {
+	labels := make([]*Label, 0, len(nodes))
+	for _, n := range nodes {
 		labels = append(labels, &Label{
-			ID:          idToString(n.ID),
-			Name:        string(n.Name),
-			Description: string(n.Description),
-			Color:       string(n.Color),
+			ID:          n.NodeID,
+			Name:        n.Name,
+			Description: n.Description,
+			Color:       n.Color,
 		})
 	}
 	return labels, nil

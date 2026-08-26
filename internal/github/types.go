@@ -912,22 +912,13 @@ type updateProjectV2FieldMutation struct {
 
 // --- Label Queries and Mutations ---
 
-// labelDetailNode holds full label fields for list/mutation responses.
+// labelDetailNode holds full label fields for mutation responses.
 // Distinct from labelNode (name only) which is used for issue label queries.
 type labelDetailNode struct {
 	ID          graphql.ID
 	Name        graphql.String
 	Description graphql.String
 	Color       graphql.String
-}
-
-// listLabelsQuery fetches all labels for a repository (first 100).
-type listLabelsQuery struct {
-	Repository struct {
-		Labels struct {
-			Nodes []labelDetailNode
-		} `graphql:"labels(first: 100)"`
-	} `graphql:"repository(owner: $owner, name: $name)"`
 }
 
 // CreateLabelInput is the named input type required by shurcooL/graphql for the

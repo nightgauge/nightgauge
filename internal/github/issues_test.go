@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -17,18 +18,54 @@ import (
 // Client pointed at the mock server and a cleanup function.
 func mockGraphQLServer(t *testing.T, responses ...string) (*Client, func()) {
 	t.Helper()
+	return mockForgeServer(t, nil, responses...)
+}
+
+// mockForgeServer serves both transports the adapter now uses. GraphQL POSTs
+// (path "/") are answered from `graphqlResponses` IN ORDER, exactly as before;
+// REST reads are answered from `rest`, keyed by the request path WITHOUT its
+// query string (e.g. "/repos/o/r/labels").
+//
+// The two are kept in separate namespaces on purpose. #849 moved
+// Client.GetRepositoryID and the repo-label read to REST, and a single
+// positional list cannot express that: the REST call happens at a position
+// that depends on cache state, so any test whose chain touches a cached read
+// would silently consume the wrong entry and assert against a body meant for
+// another call. Routing by path makes each fixture name the call it answers.
+//
+// An unregistered REST path is a test failure, not a 404 the code under test
+// gets to interpret — a missing fixture must read as "this test did not say
+// what that call returns", never as "the repository has no labels".
+func mockForgeServer(t *testing.T, rest map[string]string, graphqlResponses ...string) (*Client, func()) {
+	t.Helper()
 	var callIdx int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/repos/") {
+			body, ok := rest[r.URL.Path]
+			if !ok {
+				t.Errorf("mockForgeServer: no REST fixture registered for %s", r.URL.Path)
+				w.WriteHeader(http.StatusNotFound)
+				fmt.Fprint(w, `{"message":"no fixture"}`)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, body)
+			return
+		}
 		idx := int(atomic.AddInt32(&callIdx, 1)) - 1
-		if idx >= len(responses) {
-			idx = len(responses) - 1
+		if idx >= len(graphqlResponses) {
+			idx = len(graphqlResponses) - 1
 		}
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(w, responses[idx])
+		fmt.Fprint(w, graphqlResponses[idx])
 	}))
 	client := NewClientWithURL("test-token", srv.URL)
 	return client, srv.Close
 }
+
+// restRepoIDFixture is the REST body for GET /repos/{o}/{r} — the node ID read
+// that used to be a GraphQL query (#849).
+const restRepoIDFixture = `{"node_id":"REPO_NODE_ID"}`
 
 // --- Pure Function Tests ---
 
@@ -600,20 +637,24 @@ func syncStatusLabelGetIssueResponse(statusLabel string) string {
 	}}}}`, labelsJSON)
 }
 
-func syncStatusLabelGetRepoLabelsResponse() string {
-	return `{"data":{"repository":{"labels":{"nodes":[
-		{"id":"LABEL_STATUS_IN_PROGRESS","name":"status:In Progress"},
-		{"id":"LABEL_STATUS_DONE","name":"status:Done"},
-		{"id":"LABEL_STATUS_READY","name":"status:Ready"},
-		{"id":"LABEL_BUG","name":"bug"}
-	]}}}}`
+// syncStatusLabelRepoLabelsFixture is the REST body for
+// GET /repos/o/r/labels — the repo-label read moved off GraphQL by #849. The
+// node IDs are unchanged, because REST reports `node_id` itself and the label
+// mutations that consume them still run on GraphQL.
+func syncStatusLabelRepoLabelsFixture() string {
+	return `[
+		{"node_id":"LABEL_STATUS_IN_PROGRESS","name":"status:In Progress"},
+		{"node_id":"LABEL_STATUS_DONE","name":"status:Done"},
+		{"node_id":"LABEL_STATUS_READY","name":"status:Ready"},
+		{"node_id":"LABEL_BUG","name":"bug"}
+	]`
 }
 
 func TestIssueService_SyncStatusLabel_ReplacesExistingStatus(t *testing.T) {
-	// Chain: GetIssue → getRepoLabels → RemoveLabels → AddLabels
-	client, cleanup := mockGraphQLServer(t,
+	// Chain: GetIssue (GraphQL) → getRepoLabels (REST) → RemoveLabels → AddLabels
+	client, cleanup := mockForgeServer(t,
+		map[string]string{"/repos/o/r/labels": syncStatusLabelRepoLabelsFixture()},
 		syncStatusLabelGetIssueResponse("status:In Progress"),
-		syncStatusLabelGetRepoLabelsResponse(),
 		`{"data":{"removeLabelsFromLabelable":{"labelable":{"__typename":"Issue"}}}}`,
 		`{"data":{"addLabelsToLabelable":{"labelable":{"__typename":"Issue"}}}}`,
 	)
@@ -626,10 +667,10 @@ func TestIssueService_SyncStatusLabel_ReplacesExistingStatus(t *testing.T) {
 }
 
 func TestIssueService_SyncStatusLabel_NoExistingStatus(t *testing.T) {
-	// Chain: GetIssue (no status labels) → getRepoLabels → AddLabels only
-	client, cleanup := mockGraphQLServer(t,
+	// Chain: GetIssue (no status labels) → getRepoLabels (REST) → AddLabels only
+	client, cleanup := mockForgeServer(t,
+		map[string]string{"/repos/o/r/labels": syncStatusLabelRepoLabelsFixture()},
 		syncStatusLabelGetIssueResponse(""),
-		syncStatusLabelGetRepoLabelsResponse(),
 		`{"data":{"addLabelsToLabelable":{"labelable":{"__typename":"Issue"}}}}`,
 	)
 	defer cleanup()
@@ -641,10 +682,10 @@ func TestIssueService_SyncStatusLabel_NoExistingStatus(t *testing.T) {
 }
 
 func TestIssueService_SyncStatusLabel_LabelNotInRepo(t *testing.T) {
-	// GetIssue → getRepoLabels → error: target label not found
-	client, cleanup := mockGraphQLServer(t,
+	// GetIssue → getRepoLabels (REST) → error: target label not found
+	client, cleanup := mockForgeServer(t,
+		map[string]string{"/repos/o/r/labels": syncStatusLabelRepoLabelsFixture()},
 		syncStatusLabelGetIssueResponse(""),
-		syncStatusLabelGetRepoLabelsResponse(),
 	)
 	defer cleanup()
 
@@ -1012,13 +1053,15 @@ func TestIssueService_MarkRefined_HappyPath(t *testing.T) {
 		"assignees":{"nodes":[]},"subIssues":{"nodes":[]},
 		"blockedBy":{"nodes":[]},"blocking":{"nodes":[]}
 	}}}}`
-	getLabelsResp := `{"data":{"repository":{"labels":{"nodes":[
-		{"id":"LABEL_REFINED_ID","name":"pipeline:refined"},
-		{"id":"LABEL_EPIC_ID","name":"type:epic"}
-	]}}}}`
+	getLabelsResp := `[
+		{"node_id":"LABEL_REFINED_ID","name":"pipeline:refined"},
+		{"node_id":"LABEL_EPIC_ID","name":"type:epic"}
+	]`
 	addLabelsResp := `{"data":{"addLabelsToLabelable":{"labelable":{"__typename":"Issue"}}}}`
 
-	client, cleanup := mockGraphQLServer(t, getIssueResp, getLabelsResp, addLabelsResp)
+	client, cleanup := mockForgeServer(t,
+		map[string]string{"/repos/o/r/labels": getLabelsResp},
+		getIssueResp, addLabelsResp)
 	defer cleanup()
 
 	svc := NewIssueService(client)
@@ -1037,11 +1080,13 @@ func TestIssueService_MarkRefined_LabelNotFound(t *testing.T) {
 		"labels":{"nodes":[]},"assignees":{"nodes":[]},
 		"subIssues":{"nodes":[]},"blockedBy":{"nodes":[]},"blocking":{"nodes":[]}
 	}}}}`
-	getLabelsResp := `{"data":{"repository":{"labels":{"nodes":[
-		{"id":"LABEL_OTHER_ID","name":"type:feature"}
-	]}}}}`
+	getLabelsResp := `[
+		{"node_id":"LABEL_OTHER_ID","name":"type:feature"}
+	]`
 
-	client, cleanup := mockGraphQLServer(t, getIssueResp, getLabelsResp)
+	client, cleanup := mockForgeServer(t,
+		map[string]string{"/repos/o/r/labels": getLabelsResp},
+		getIssueResp)
 	defer cleanup()
 
 	svc := NewIssueService(client)
@@ -1201,13 +1246,14 @@ func getIssueResp(nodeID string, number int) string {
 }
 
 func TestIssueService_CreateSubIssue_NilProjectSvc(t *testing.T) {
-	// Sequence: GetRepositoryID → CreateIssue → GetIssue(parent) → AddSubIssue
-	repoIDResp := `{"data":{"repository":{"id":"REPO_NODE_ID"}}}`
+	// Sequence: GetRepositoryID (REST) → CreateIssue → GetIssue(parent) → AddSubIssue
 	createResp := `{"data":{"createIssue":{"issue":{"id":"NEW_NODE","number":101,"url":"https://github.com/o/r/issues/101"}}}}`
 	parentResp := getIssueResp("PARENT_NODE", 50)
 	addSubResp := `{"data":{"addSubIssue":{"issue":{"id":"PARENT_NODE"}}}}`
 
-	client, cleanup := mockGraphQLServer(t, repoIDResp, createResp, parentResp, addSubResp)
+	client, cleanup := mockForgeServer(t,
+		map[string]string{"/repos/o/r": restRepoIDFixture},
+		createResp, parentResp, addSubResp)
 	defer cleanup()
 
 	svc := NewIssueService(client)
@@ -1221,10 +1267,9 @@ func TestIssueService_CreateSubIssue_NilProjectSvc(t *testing.T) {
 }
 
 func TestIssueService_CreateSubIssue_WithProjectSvc(t *testing.T) {
-	// Sequence: GetRepositoryID → CreateIssue → GetIssue(parent) → AddSubIssue →
+	// Sequence: GetRepositoryID (REST) → CreateIssue → GetIssue(parent) → AddSubIssue →
 	//           ensureFields(project) → GetIssue(new issue, for AddIssueByNumber) →
 	//           addProjectV2ItemById → (syncLabelsToFields: no labels, no extra calls)
-	repoIDResp := `{"data":{"repository":{"id":"REPO_NODE_ID"}}}`
 	createResp := `{"data":{"createIssue":{"issue":{"id":"NEW_NODE","number":102,"url":"https://github.com/o/r/issues/102"}}}}`
 	parentResp := getIssueResp("PARENT_NODE", 50)
 	addSubResp := `{"data":{"addSubIssue":{"issue":{"id":"PARENT_NODE"}}}}`
@@ -1235,8 +1280,9 @@ func TestIssueService_CreateSubIssue_WithProjectSvc(t *testing.T) {
 	addItemResp := `{"data":{"addProjectV2ItemById":{"item":{"id":"ITEM_ID"}}}}`
 
 	// AddIssueByNumber order: GetIssue(new) → ensureFields → AddItem
-	client, cleanup := mockGraphQLServer(t,
-		repoIDResp, createResp, parentResp, addSubResp,
+	client, cleanup := mockForgeServer(t,
+		map[string]string{"/repos/o/r": restRepoIDFixture},
+		createResp, parentResp, addSubResp,
 		newIssueResp, fieldsResp, addItemResp,
 	)
 	defer cleanup()
@@ -1255,7 +1301,6 @@ func TestIssueService_CreateSubIssue_WithProjectSvc(t *testing.T) {
 func TestIssueService_CreateSubIssue_BoardSyncFailure(t *testing.T) {
 	// Board sync fails: issue + link succeed, but AddItem returns error.
 	// Verify: error wraps "board sync failed" and issue object is non-nil.
-	repoIDResp := `{"data":{"repository":{"id":"REPO_NODE_ID"}}}`
 	createResp := `{"data":{"createIssue":{"issue":{"id":"NEW_NODE","number":103,"url":"https://github.com/o/r/issues/103"}}}}`
 	parentResp := getIssueResp("PARENT_NODE", 50)
 	addSubResp := `{"data":{"addSubIssue":{"issue":{"id":"PARENT_NODE"}}}}`
@@ -1267,8 +1312,9 @@ func TestIssueService_CreateSubIssue_BoardSyncFailure(t *testing.T) {
 	addItemErr := `{"errors":[{"message":"project not found"}]}`
 
 	// AddIssueByNumber order: GetIssue(new) → ensureFields → AddItem(fails)
-	client, cleanup := mockGraphQLServer(t,
-		repoIDResp, createResp, parentResp, addSubResp,
+	client, cleanup := mockForgeServer(t,
+		map[string]string{"/repos/o/r": restRepoIDFixture},
+		createResp, parentResp, addSubResp,
 		newIssueResp, fieldsResp, addItemErr,
 	)
 	defer cleanup()
@@ -1300,7 +1346,6 @@ func TestIssueService_CreateSubIssue_BoardSyncFailure(t *testing.T) {
 func TestIssueService_CreateSubIssue_WithBlockedBy(t *testing.T) {
 	// Simulates the full CLI workflow for create-sub --blocked-by 1,2:
 	// CreateSubIssue sequence → GetIssue(blocker1) → AddBlockedBy(1) → GetIssue(blocker2) → AddBlockedBy(2)
-	repoIDResp := `{"data":{"repository":{"id":"REPO_NODE_ID"}}}`
 	createResp := `{"data":{"createIssue":{"issue":{"id":"NEW_NODE","number":110,"url":"https://github.com/o/r/issues/110"}}}}`
 	parentResp := getIssueResp("PARENT_NODE", 50)
 	addSubResp := `{"data":{"addSubIssue":{"issue":{"id":"PARENT_NODE"}}}}`
@@ -1309,8 +1354,9 @@ func TestIssueService_CreateSubIssue_WithBlockedBy(t *testing.T) {
 	blocker2Resp := getIssueResp("BLOCKER2_NODE", 2)
 	addBlocked2Resp := `{"data":{"addBlockedBy":{"clientMutationId":null}}}`
 
-	client, cleanup := mockGraphQLServer(t,
-		repoIDResp, createResp, parentResp, addSubResp,
+	client, cleanup := mockForgeServer(t,
+		map[string]string{"/repos/o/r": restRepoIDFixture},
+		createResp, parentResp, addSubResp,
 		blocker1Resp, addBlocked1Resp,
 		blocker2Resp, addBlocked2Resp,
 	)
@@ -1348,7 +1394,6 @@ func TestIssueService_CreateSubIssue_WithBlockedBy(t *testing.T) {
 
 func TestIssueService_CreateSubIssue_PartialBlockedByFailure(t *testing.T) {
 	// Simulates: blocker 1 resolves successfully, blocker 2 fails at AddBlockedBy.
-	repoIDResp := `{"data":{"repository":{"id":"REPO_NODE_ID"}}}`
 	createResp := `{"data":{"createIssue":{"issue":{"id":"NEW_NODE","number":111,"url":"https://github.com/o/r/issues/111"}}}}`
 	parentResp := getIssueResp("PARENT_NODE", 50)
 	addSubResp := `{"data":{"addSubIssue":{"issue":{"id":"PARENT_NODE"}}}}`
@@ -1357,8 +1402,9 @@ func TestIssueService_CreateSubIssue_PartialBlockedByFailure(t *testing.T) {
 	blocker2Resp := getIssueResp("BLOCKER2_NODE", 2)
 	addBlocked2Err := `{"errors":[{"message":"permission denied"}]}`
 
-	client, cleanup := mockGraphQLServer(t,
-		repoIDResp, createResp, parentResp, addSubResp,
+	client, cleanup := mockForgeServer(t,
+		map[string]string{"/repos/o/r": restRepoIDFixture},
+		createResp, parentResp, addSubResp,
 		blocker1Resp, addBlocked1Resp,
 		blocker2Resp, addBlocked2Err,
 	)
@@ -1399,7 +1445,6 @@ func TestIssueService_CreateSubIssue_PartialBlockedByFailure(t *testing.T) {
 func TestIssueService_CreateSubIssue_BlockedByIdempotency(t *testing.T) {
 	// GitHub's addBlockedBy mutation is idempotent: calling it twice with the same
 	// IDs succeeds on both calls (no error, no duplicate edge created).
-	repoIDResp := `{"data":{"repository":{"id":"REPO_NODE_ID"}}}`
 	createResp := `{"data":{"createIssue":{"issue":{"id":"NEW_NODE","number":112,"url":"https://github.com/o/r/issues/112"}}}}`
 	parentResp := getIssueResp("PARENT_NODE", 50)
 	addSubResp := `{"data":{"addSubIssue":{"issue":{"id":"PARENT_NODE"}}}}`
@@ -1408,8 +1453,9 @@ func TestIssueService_CreateSubIssue_BlockedByIdempotency(t *testing.T) {
 
 	// First run: create + AddBlockedBy once.
 	// Second run: GetIssue again + AddBlockedBy again (idempotent).
-	client, cleanup := mockGraphQLServer(t,
-		repoIDResp, createResp, parentResp, addSubResp,
+	client, cleanup := mockForgeServer(t,
+		map[string]string{"/repos/o/r": restRepoIDFixture},
+		createResp, parentResp, addSubResp,
 		blockerResp, addBlockedResp,
 		blockerResp, addBlockedResp,
 	)
