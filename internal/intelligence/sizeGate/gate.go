@@ -91,7 +91,7 @@ func (g *GateEvaluator) Evaluate(issueTitle string, issueLabels []string, subIss
 			result.Allowed = false
 			result.Reason = reason
 			result.Severity = "medium"
-			result.SuggestedAction = "Create sub-issues and link them via the GitHub sub-issue API (addSubIssue mutation)"
+			result.SuggestedAction = "Create sub-issues and link them via the GitHub sub-issue API"
 			result.HeuristicsApplied = append(result.HeuristicsApplied, "size-without-decomposition")
 			return result
 		}
