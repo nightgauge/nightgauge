@@ -30,6 +30,7 @@ Exit codes:
 from __future__ import annotations
 
 import bisect
+import functools
 import hashlib
 import locale
 import os
@@ -211,6 +212,42 @@ def _file_unresolvable_numbers(text: str, ceiling: int) -> set[int]:
     return out
 
 
+@functools.lru_cache(maxsize=None)
+def rename_map(base: str) -> dict[str, str]:
+    """new path -> old path, for every file this tree RENAMED since `base`.
+
+    Without this, `base_file_numbers` asks `git show base:<new path>`, which
+    cannot resolve for a file that was moved, and the function falls through to
+    its "genuinely new file" answer. The whole file's pre-existing references
+    are then charged to whoever moved it (#837).
+
+    That is not a rounding error. This repository carries thousands of
+    unresolvable references spread over most of its files, so the expected cost
+    of a rename is several dead references per file moved, charged to a change
+    that did not write any of them.
+
+    Fails OPEN to an empty map on any git error, which restores exactly the
+    previous behaviour: renames stop carrying over, nothing is wrongly
+    exempted. This helper only ever ADDS carry-over, so a failure here cannot
+    let a genuinely new reference through.
+    """
+    try:
+        out = subprocess.run(
+            ["git", "diff", "--no-color", "--no-ext-diff", "--find-renames",
+             "--name-status", "--diff-filter=R", base],
+            capture_output=True, check=True,
+        ).stdout.decode(errors="ignore")
+    except Exception:
+        return {}
+    renames: dict[str, str] = {}
+    for raw in out.splitlines():
+        # R<score>\told\tnew -- the score suffix varies, the R does not.
+        parts = raw.split("\t")
+        if len(parts) >= 3 and parts[0].startswith("R"):
+            renames[parts[2]] = parts[1]
+    return renames
+
+
 def base_file_numbers(base: str, path: str, ceiling: int) -> set[int]:
     """Unresolvable #N present in `path` AS OF `base`.
 
@@ -222,12 +259,29 @@ def base_file_numbers(base: str, path: str, ceiling: int) -> set[int]:
 
     A file that did not exist at `base` yields the empty set, so every reference
     in a genuinely new file is genuinely new.
+
+    A RENAMED file is not a new file, and the lookup follows the rename to its
+    pre-rename path before giving up (#837).
+
+    The rename map is consulted only AFTER the direct lookup fails. That order
+    is for readability, not behaviour: git does not report an overwriting move
+    as a rename (replacing A with B reports `M A` + `D B`, verified), so a
+    rename DESTINATION can never be a path that also exists at `base`, and the
+    two orderings cannot disagree. Do not write a test claiming otherwise --
+    one was tried, and it could not be made to fail against the other order.
     """
     r = subprocess.run(
         ["git", "show", f"{base}:{path}"], capture_output=True
     )
     if r.returncode != 0:
-        return set()
+        old = rename_map(base).get(path)
+        if old is None:
+            return set()
+        r = subprocess.run(
+            ["git", "show", f"{base}:{old}"], capture_output=True
+        )
+        if r.returncode != 0:
+            return set()
     try:
         return _file_unresolvable_numbers(r.stdout.decode("utf-8", "replace"), ceiling)
     except Exception:

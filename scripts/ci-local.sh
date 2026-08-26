@@ -137,6 +137,16 @@ if [ -f scripts/test-publication-boundary.sh ]; then
   run_step "Publication boundary regression suite" bash scripts/test-publication-boundary.sh
 fi
 
+# 5b-iii. Rename carry-over (#837) — hermetic, ~0.3s. Deliberately NOT a case
+#     in the suite above: exercising a rename means `git mv`-ing a real tracked
+#     file, and that suite is re-run inside sandboxes and SIGKILLed mid-run by
+#     the hermeticity tests below. A kill between the mv and the restore breaks
+#     the checkout. This builds its own throwaway repo instead.
+if [ -f scripts/test-publication-boundary-rename.py ]; then
+  run_step "Publication boundary rename carry-over" \
+    python3 scripts/test-publication-boundary-rename.py
+fi
+
 # 5b-ii. Publication boundary suite hermeticity (#713, #722) — the suite plants
 #     deliberately-forbidden fixtures, so two properties have to hold and
 #     neither is self-evident from reading it: a SIGKILLed run leaves the
