@@ -808,7 +808,7 @@ A passing test proves nothing about whether it would catch the bug. **Mutation-
 test every new assertion**: stub the fix out, confirm the test fails, restore,
 then `diff` against a saved copy to prove the tree is byte-identical.
 
-Three rules, each learned from a survivor that looked like a weak assertion and
+Four rules, each learned from a survivor that looked like a weak assertion and
 was not:
 
 1. **Verify the mutation actually applied.** A substitution that did not land
@@ -826,6 +826,24 @@ was not:
    the envelope, always returns the default" mutation survived because the
    asserted tool list `Read,Write,Edit,Glob,Grep` is a prefix of the default
    `Read,Write,Edit,Glob,Grep,Bash,Task`. Assert equality, not containment.
+4. **A survivor can also mean the test pins a DIFFERENT line than its name
+   claims.** Not every survivor is a weak assertion or a bad fixture; sometimes
+   the assertion is strong, the test genuinely fails when the code is broken —
+   just never for the reason the test is named after. Deleting the HTTP-status
+   check in `resolveIssueRef` (#849) left a suite fully green, including a test
+   called `..._AbsentIssueIsAnError`. That test served GitHub's real 404 body,
+   `{"message":"Not Found"}`, which carries no `node_id` — so a _later_
+   guard rejected it and the test passed without the line it was written to
+   protect. Two checks in sequence, and the fixture could only ever reach the
+   second.
+
+   The tell is a survivor whose named test looks like it should have caught it.
+   The fix is to make the fixture **valid in every respect except the one under
+   test** — here, a well-formed issue object served under a 404 status, so
+   nothing but the status check can reject it. A fixture that trips several
+   guards at once cannot tell you which one is load-bearing, and it silently
+   becomes the _only_ coverage the moment someone deletes the guard it was
+   actually exercising.
 
 ### Prefer an assertion the bug would actually fail
 
