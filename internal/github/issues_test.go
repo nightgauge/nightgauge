@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -23,8 +24,8 @@ func mockGraphQLServer(t *testing.T, responses ...string) (*Client, func()) {
 
 // mockForgeServer serves both transports the adapter now uses. GraphQL POSTs
 // (path "/") are answered from `graphqlResponses` IN ORDER, exactly as before;
-// REST reads are answered from `rest`, keyed by the request path WITHOUT its
-// query string (e.g. "/repos/o/r/labels").
+// REST calls are answered from `rest`, keyed by METHOD AND PATH without the
+// query string (e.g. "GET /repos/o/r/labels", "POST /repos/o/r/issues/1/sub_issues").
 //
 // The two are kept in separate namespaces on purpose. #849 moved
 // Client.GetRepositoryID and the repo-label read to REST, and a single
@@ -33,17 +34,44 @@ func mockGraphQLServer(t *testing.T, responses ...string) (*Client, func()) {
 // would silently consume the wrong entry and assert against a body meant for
 // another call. Routing by path makes each fixture name the call it answers.
 //
-// An unregistered REST path is a test failure, not a 404 the code under test
+// **The method is part of the key, and it has to be.** #956 moved the four
+// issue-link mutations to REST, and every one of them writes to a path the
+// same test also READS — `POST /repos/o/r/issues/1/sub_issues` against
+// `GET /repos/o/r/issues/1`. Keyed by path alone the fake cannot tell them
+// apart, so a test could assert a write happened while the fixture it matched
+// was the read's.
+//
+// An unregistered REST call is a test failure, not a 404 the code under test
 // gets to interpret — a missing fixture must read as "this test did not say
 // what that call returns", never as "the repository has no labels".
 func mockForgeServer(t *testing.T, rest map[string]string, graphqlResponses ...string) (*Client, func()) {
 	t.Helper()
+	client, _, cleanup := mockForgeServerRecording(t, rest, graphqlResponses...)
+	return client, cleanup
+}
+
+// mockForgeServerRecording is mockForgeServer plus the observed request log.
+//
+// The returned slice pointer records every call as "METHOD path", in order.
+// Chained tests need it: mockForgeServer repeats its LAST GraphQL response
+// once the positional list is exhausted, so deleting a read from a chain
+// silently reindexes the remaining fixtures and the test passes against the
+// wrong body. Asserting the observed order is what makes that visible —
+// without it, "the test still passes" is not evidence the chain is intact.
+func mockForgeServerRecording(t *testing.T, rest map[string]string, graphqlResponses ...string) (*Client, *[]string, func()) {
+	t.Helper()
 	var callIdx int32
+	var mu sync.Mutex
+	seen := &[]string{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/repos/") {
-			body, ok := rest[r.URL.Path]
+			key := r.Method + " " + r.URL.Path
+			mu.Lock()
+			*seen = append(*seen, key)
+			mu.Unlock()
+			body, ok := rest[key]
 			if !ok {
-				t.Errorf("mockForgeServer: no REST fixture registered for %s", r.URL.Path)
+				t.Errorf("mockForgeServer: no REST fixture registered for %s", key)
 				w.WriteHeader(http.StatusNotFound)
 				fmt.Fprint(w, `{"message":"no fixture"}`)
 				return
@@ -52,6 +80,9 @@ func mockForgeServer(t *testing.T, rest map[string]string, graphqlResponses ...s
 			fmt.Fprint(w, body)
 			return
 		}
+		mu.Lock()
+		*seen = append(*seen, "POST /graphql")
+		mu.Unlock()
 		idx := int(atomic.AddInt32(&callIdx, 1)) - 1
 		if idx >= len(graphqlResponses) {
 			idx = len(graphqlResponses) - 1
@@ -60,7 +91,7 @@ func mockForgeServer(t *testing.T, rest map[string]string, graphqlResponses ...s
 		fmt.Fprint(w, graphqlResponses[idx])
 	}))
 	client := NewClientWithURL("test-token", srv.URL)
-	return client, srv.Close
+	return client, seen, srv.Close
 }
 
 // restRepoIDFixture is the REST body for GET /repos/{o}/{r} — the node ID read
@@ -653,7 +684,7 @@ func syncStatusLabelRepoLabelsFixture() string {
 func TestIssueService_SyncStatusLabel_ReplacesExistingStatus(t *testing.T) {
 	// Chain: GetIssue (GraphQL) → getRepoLabels (REST) → RemoveLabels → AddLabels
 	client, cleanup := mockForgeServer(t,
-		map[string]string{"/repos/o/r/labels": syncStatusLabelRepoLabelsFixture()},
+		map[string]string{"GET /repos/o/r/labels": syncStatusLabelRepoLabelsFixture()},
 		syncStatusLabelGetIssueResponse("status:In Progress"),
 		`{"data":{"removeLabelsFromLabelable":{"labelable":{"__typename":"Issue"}}}}`,
 		`{"data":{"addLabelsToLabelable":{"labelable":{"__typename":"Issue"}}}}`,
@@ -669,7 +700,7 @@ func TestIssueService_SyncStatusLabel_ReplacesExistingStatus(t *testing.T) {
 func TestIssueService_SyncStatusLabel_NoExistingStatus(t *testing.T) {
 	// Chain: GetIssue (no status labels) → getRepoLabels (REST) → AddLabels only
 	client, cleanup := mockForgeServer(t,
-		map[string]string{"/repos/o/r/labels": syncStatusLabelRepoLabelsFixture()},
+		map[string]string{"GET /repos/o/r/labels": syncStatusLabelRepoLabelsFixture()},
 		syncStatusLabelGetIssueResponse(""),
 		`{"data":{"addLabelsToLabelable":{"labelable":{"__typename":"Issue"}}}}`,
 	)
@@ -684,7 +715,7 @@ func TestIssueService_SyncStatusLabel_NoExistingStatus(t *testing.T) {
 func TestIssueService_SyncStatusLabel_LabelNotInRepo(t *testing.T) {
 	// GetIssue → getRepoLabels (REST) → error: target label not found
 	client, cleanup := mockForgeServer(t,
-		map[string]string{"/repos/o/r/labels": syncStatusLabelRepoLabelsFixture()},
+		map[string]string{"GET /repos/o/r/labels": syncStatusLabelRepoLabelsFixture()},
 		syncStatusLabelGetIssueResponse(""),
 	)
 	defer cleanup()
@@ -1060,7 +1091,7 @@ func TestIssueService_MarkRefined_HappyPath(t *testing.T) {
 	addLabelsResp := `{"data":{"addLabelsToLabelable":{"labelable":{"__typename":"Issue"}}}}`
 
 	client, cleanup := mockForgeServer(t,
-		map[string]string{"/repos/o/r/labels": getLabelsResp},
+		map[string]string{"GET /repos/o/r/labels": getLabelsResp},
 		getIssueResp, addLabelsResp)
 	defer cleanup()
 
@@ -1085,7 +1116,7 @@ func TestIssueService_MarkRefined_LabelNotFound(t *testing.T) {
 	]`
 
 	client, cleanup := mockForgeServer(t,
-		map[string]string{"/repos/o/r/labels": getLabelsResp},
+		map[string]string{"GET /repos/o/r/labels": getLabelsResp},
 		getIssueResp)
 	defer cleanup()
 
@@ -1252,7 +1283,7 @@ func TestIssueService_CreateSubIssue_NilProjectSvc(t *testing.T) {
 	addSubResp := `{"data":{"addSubIssue":{"issue":{"id":"PARENT_NODE"}}}}`
 
 	client, cleanup := mockForgeServer(t,
-		map[string]string{"/repos/o/r": restRepoIDFixture},
+		map[string]string{"GET /repos/o/r": restRepoIDFixture},
 		createResp, parentResp, addSubResp)
 	defer cleanup()
 
@@ -1281,7 +1312,7 @@ func TestIssueService_CreateSubIssue_WithProjectSvc(t *testing.T) {
 
 	// AddIssueByNumber order: GetIssue(new) → ensureFields → AddItem
 	client, cleanup := mockForgeServer(t,
-		map[string]string{"/repos/o/r": restRepoIDFixture},
+		map[string]string{"GET /repos/o/r": restRepoIDFixture},
 		createResp, parentResp, addSubResp,
 		newIssueResp, fieldsResp, addItemResp,
 	)
@@ -1313,7 +1344,7 @@ func TestIssueService_CreateSubIssue_BoardSyncFailure(t *testing.T) {
 
 	// AddIssueByNumber order: GetIssue(new) → ensureFields → AddItem(fails)
 	client, cleanup := mockForgeServer(t,
-		map[string]string{"/repos/o/r": restRepoIDFixture},
+		map[string]string{"GET /repos/o/r": restRepoIDFixture},
 		createResp, parentResp, addSubResp,
 		newIssueResp, fieldsResp, addItemErr,
 	)
@@ -1355,7 +1386,7 @@ func TestIssueService_CreateSubIssue_WithBlockedBy(t *testing.T) {
 	addBlocked2Resp := `{"data":{"addBlockedBy":{"clientMutationId":null}}}`
 
 	client, cleanup := mockForgeServer(t,
-		map[string]string{"/repos/o/r": restRepoIDFixture},
+		map[string]string{"GET /repos/o/r": restRepoIDFixture},
 		createResp, parentResp, addSubResp,
 		blocker1Resp, addBlocked1Resp,
 		blocker2Resp, addBlocked2Resp,
@@ -1403,7 +1434,7 @@ func TestIssueService_CreateSubIssue_PartialBlockedByFailure(t *testing.T) {
 	addBlocked2Err := `{"errors":[{"message":"permission denied"}]}`
 
 	client, cleanup := mockForgeServer(t,
-		map[string]string{"/repos/o/r": restRepoIDFixture},
+		map[string]string{"GET /repos/o/r": restRepoIDFixture},
 		createResp, parentResp, addSubResp,
 		blocker1Resp, addBlocked1Resp,
 		blocker2Resp, addBlocked2Err,
@@ -1454,7 +1485,7 @@ func TestIssueService_CreateSubIssue_BlockedByIdempotency(t *testing.T) {
 	// First run: create + AddBlockedBy once.
 	// Second run: GetIssue again + AddBlockedBy again (idempotent).
 	client, cleanup := mockForgeServer(t,
-		map[string]string{"/repos/o/r": restRepoIDFixture},
+		map[string]string{"GET /repos/o/r": restRepoIDFixture},
 		createResp, parentResp, addSubResp,
 		blockerResp, addBlockedResp,
 		blockerResp, addBlockedResp,

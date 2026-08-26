@@ -28,16 +28,28 @@ func blockedByRESTServer(t *testing.T, byNumber map[int]string, seen *[]string) 
 		// "this failed" is pinning the STATUS check and not the empty-node_id
 		// fallback. See TestResolveIssueRef_AbsentIssueIsAnError.
 		w.WriteHeader(http.StatusNotFound)
-		_, _ = w.Write([]byte(`{"number":0,"node_id":"I_would_be_valid","parent_issue_url":null}`))
+		_, _ = w.Write([]byte(`{"number":0,"id":4242,"node_id":"I_would_be_valid","parent_issue_url":null}`))
 	}))
 }
+
+// databaseIDFor is the fake database id this package's REST fixtures carry for
+// a given issue number. Derived rather than hand-written so a test asserting a
+// write body can name the same value the fixture served, without either side
+// hard-coding a magic number the other might drift from.
+//
+// Deliberately NOT equal to the issue number: the sub-issue and dependency
+// endpoints take the database id where the surrounding path takes the number,
+// and a fixture where the two coincide would let a call that passes the wrong
+// one of the pair pass its test.
+func databaseIDFor(number int) int64 { return int64(number) + 5_000_000_000 }
 
 func issueJSON(number int, nodeID, parentURL string) string {
 	parent := "null"
 	if parentURL != "" {
 		parent = fmt.Sprintf("%q", parentURL)
 	}
-	return fmt.Sprintf(`{"number":%d,"node_id":%q,"parent_issue_url":%s}`, number, nodeID, parent)
+	return fmt.Sprintf(`{"number":%d,"id":%d,"node_id":%q,"parent_issue_url":%s}`,
+		number, databaseIDFor(number), nodeID, parent)
 }
 
 // These tests deliberately stop before the GraphQL mutation. Reaching it needs
