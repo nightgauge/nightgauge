@@ -4,6 +4,25 @@ Nightgauge uses an open-core model. This repository contains the Apache-2.0
 local product: the Go CLI, VS Code extension, TypeScript SDK, portable skills,
 Claude plugin, and public integration contracts.
 
+## Which repositories are public
+
+Three, and each is public for a different reason:
+
+| Repository                                                              | Why it is public                                                                                                                                                                                                                          |
+| ----------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`nightgauge/nightgauge`](https://github.com/nightgauge/nightgauge)     | The Apache-2.0 product itself — CLI, extension, SDK, skills. This is the open core.                                                                                                                                                       |
+| [`nightgauge/.github`](https://github.com/nightgauge/.github)           | Organization community-health defaults: security policy, code of conduct, support and contribution guidance. GitHub serves these for any repository without its own, so they must be readable by anyone who might report a vulnerability. |
+| [`nightgauge/homebrew-tap`](https://github.com/nightgauge/homebrew-tap) | A distribution channel. `brew install` fetches from it, so users must be able to inspect what they are installing and verify its provenance.                                                                                              |
+
+Everything else in the organization is private, and this document's _What stays
+private_ section describes the kind of material that lives there. That
+distinction is about **content class, not secrecy for its own sake**: the open
+core is the part you can run entirely on your own machine with your own model
+credentials, and it is complete on its own terms.
+
+The boundary is enforced mechanically rather than by convention — see
+_Intake and enforcement_ below.
+
 ## What belongs here
 
 - Features that run locally with credentials and model subscriptions controlled
