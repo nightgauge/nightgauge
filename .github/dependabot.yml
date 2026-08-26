@@ -49,6 +49,16 @@ updates:
         update-types:
           - minor
           - patch
+    # `@types/vscode` is NOT a dependency chore. It is capped by
+    # `engines.vscode` in packages/nightgauge-vscode/package.json, and
+    # scripts/check-engine-types.mjs fails the build when it exceeds that cap --
+    # a guard that exists because this exact bump regressed once already (#165).
+    # Raising the ceiling drops support for older VSCode, which is a product
+    # decision made deliberately in the same commit as `engines.vscode`.
+    # Left un-ignored, Dependabot re-proposes it every run and takes the whole
+    # grouped pull request down with it (#942 carried 18 unrelated updates).
+    ignore:
+      - dependency-name: "@types/vscode"
     open-pull-requests-limit: 5
 
   - package-ecosystem: github-actions
@@ -60,4 +70,16 @@ updates:
     labels:
       - dependencies
       - github-actions
+    # Ungrouped, Dependabot opens one pull request per action PATH -- and two
+    # paths of the same action are two pull requests. `codeql-action/init` and
+    # `codeql-action/analyze` are pinned to one SHA and refuse to run against
+    # each other ("Loaded a configuration file for version X, but running
+    # version Y"), so splitting them made each half red by construction and
+    # neither mergeable first (#938, #939). Grouping is what keeps an action
+    # family in one commit.
+    groups:
+      github-actions-minor-and-patch:
+        update-types:
+          - minor
+          - patch
     open-pull-requests-limit: 5
