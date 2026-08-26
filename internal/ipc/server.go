@@ -24,6 +24,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/executor"
 	"github.com/nightgauge/nightgauge/internal/focus"
 	"github.com/nightgauge/nightgauge/internal/forge"
+	"github.com/nightgauge/nightgauge/internal/forge/boardcache"
 	gitops "github.com/nightgauge/nightgauge/internal/git"
 	gh "github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/internal/intelligence/complexity"
@@ -203,6 +204,14 @@ type Server struct {
 	// something finished, for the SweepMinGap check (#848). Read and written
 	// only while holding sweepMu, so it needs no lock of its own.
 	lastSweepAt time.Time
+
+	// boards is the daemon-wide board snapshot cache (#845), shared by every
+	// board verb through boardServicesFor. One cache for the process, keyed by
+	// (owner, project): in a shared-board workspace several repos resolve to
+	// the same board, and that keying is what lets the second consumer reuse
+	// the first one's snapshot. Never nil after NewServer; the accessor still
+	// tolerates nil so a zero-value Server in a test is usable.
+	boards *boardcache.Cache
 }
 
 // ForgeInstanceConfig captures the forge kind + host bound to a repository.
@@ -249,6 +258,9 @@ func NewServer(client *gh.Client, opts ...ServerOption) *Server {
 		activeRuntimes: make(map[string]*runEntry),
 		adopting:       make(map[string]*adoptFlight),
 		forgeRegistry:  make(map[string]ForgeInstanceConfig),
+		// Zero TTL takes boardcache.DefaultTTL. Constructed before options run
+		// so a test can still override it.
+		boards: boardcache.New(0),
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -1287,8 +1299,8 @@ func (s *Server) registerMethods() {
 		if err != nil {
 			return nil, err
 		}
-		svc := gh.NewBoardService(c, p.Owner, p.ProjectNumber, gh.ParseOwnerType(p.OwnerType))
-		return svc.ListItems(ctx, p.Status)
+		return s.boardServicesFor(c, p.Owner, p.ProjectNumber, gh.ParseOwnerType(p.OwnerType)).
+			Board.ListItems(ctx, p.Status)
 	}
 
 	//ipc:method boardCounts params:BoardCountsParams result:StatusCounts
@@ -1301,8 +1313,8 @@ func (s *Server) registerMethods() {
 		if err != nil {
 			return nil, err
 		}
-		svc := gh.NewBoardService(c, p.Owner, p.ProjectNumber, gh.ParseOwnerType(p.OwnerType))
-		return svc.CountsByStatus(ctx)
+		return s.boardServicesFor(c, p.Owner, p.ProjectNumber, gh.ParseOwnerType(p.OwnerType)).
+			Board.CountsByStatus(ctx)
 	}
 
 	//ipc:method githubRateLimit params:GitHubRateLimitParams result:RateLimitInfo
@@ -1662,7 +1674,7 @@ func (s *Server) registerMethods() {
 		if err != nil {
 			return nil, err
 		}
-		stateSvc := state.NewBoardStateService(c, p.Owner, p.ProjectNumber, gh.ParseOwnerType(p.OwnerType))
+		stateSvc := s.boardStateFor(c, p.Owner, p.ProjectNumber, gh.ParseOwnerType(p.OwnerType))
 		stage, err := stateSvc.GetPipelineStage(ctx, p.ItemID)
 		if err != nil {
 			return nil, err
@@ -2276,7 +2288,7 @@ func (s *Server) registerMethods() {
 		if err != nil {
 			return nil, err
 		}
-		stateSvc := state.NewBoardStateService(c, p.Owner, p.ProjectNumber, gh.ParseOwnerType(p.OwnerType))
+		stateSvc := s.boardStateFor(c, p.Owner, p.ProjectNumber, gh.ParseOwnerType(p.OwnerType))
 		if err := stateSvc.UpdateStatus(ctx, p.ItemID, p.Status); err != nil {
 			return nil, err
 		}
@@ -4280,7 +4292,7 @@ func (s *Server) registerMethods() {
 		if err != nil {
 			return nil, err
 		}
-		projSvc := gh.NewProjectService(c, p.Owner, p.ProjectNumber, gh.ParseOwnerType(p.OwnerType))
+		projSvc := s.boardServicesFor(c, p.Owner, p.ProjectNumber, gh.ParseOwnerType(p.OwnerType)).Project
 		if err := projSvc.SyncStatus(ctx, p.Owner, p.Repo, p.IssueNumber, p.Status); err != nil {
 			return nil, err
 		}
@@ -4297,7 +4309,7 @@ func (s *Server) registerMethods() {
 		if err != nil {
 			return nil, err
 		}
-		projSvc := gh.NewProjectService(c, p.Owner, p.ProjectNumber, gh.ParseOwnerType(p.OwnerType))
+		projSvc := s.boardServicesFor(c, p.Owner, p.ProjectNumber, gh.ParseOwnerType(p.OwnerType)).Project
 		if err := projSvc.SyncIteration(ctx, p.Owner, p.Repo, p.IssueNumber, p.Iteration); err != nil {
 			return nil, err
 		}
@@ -4314,7 +4326,7 @@ func (s *Server) registerMethods() {
 		if err != nil {
 			return nil, err
 		}
-		projSvc := gh.NewProjectService(c, p.Owner, p.ProjectNumber, gh.ParseOwnerType(p.OwnerType))
+		projSvc := s.boardServicesFor(c, p.Owner, p.ProjectNumber, gh.ParseOwnerType(p.OwnerType)).Project
 		if err := projSvc.SetHours(ctx, p.Owner, p.Repo, p.IssueNumber, p.Hours); err != nil {
 			return nil, err
 		}
@@ -4331,7 +4343,7 @@ func (s *Server) registerMethods() {
 		if err != nil {
 			return nil, err
 		}
-		projSvc := gh.NewProjectService(c, p.Owner, p.ProjectNumber, gh.ParseOwnerType(p.OwnerType))
+		projSvc := s.boardServicesFor(c, p.Owner, p.ProjectNumber, gh.ParseOwnerType(p.OwnerType)).Project
 		itemID, err := projSvc.AddIssueByNumber(ctx, p.Owner, p.Repo, p.IssueNumber)
 		if err != nil {
 			return nil, err

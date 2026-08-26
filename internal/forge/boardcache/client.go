@@ -22,7 +22,7 @@ func WrapClient(c *Cache, inner forge.ForgeClient, owner string, project int) fo
 	return &cachedClient{
 		ForgeClient: inner,
 		board:       c.Wrap(inner.Board(), owner, project),
-		project:     wrapProject(c, inner.Project(), owner, project),
+		project:     WrapProject(c, inner.Project(), owner, project),
 	}
 }
 
@@ -37,11 +37,25 @@ type cachedClient struct {
 func (c *cachedClient) Board() forge.BoardService     { return c.board }
 func (c *cachedClient) Project() forge.ProjectService { return c.project }
 
-// wrapProject returns nil for a nil inner service so the caller's own nil check
+// WrapProject returns a ProjectService that drops the board's snapshots after
+// any call that can change what a board read would return.
+//
+// It is exported because not every caller has a whole forge.ForgeClient to hand
+// to WrapClient. The IPC daemon builds services directly from an
+// identity-scoped client, and needs the same interception under them — see
+// internal/ipc's board service accessor (#848).
+//
+// A nil inner service yields nil so the caller's own nil check
 // (`Forge.Project() == nil`) keeps working — several producers branch on it.
-func wrapProject(c *Cache, inner forge.ProjectService, owner string, project int) forge.ProjectService {
-	if inner == nil {
-		return nil
+//
+// **A project number of 0 means the caller could not name a board.** That is
+// not an error and must not silently skip invalidation: `BoardItem` carries
+// `BlockedBy`, so a blocked-by mutation issued against an unbound service still
+// changes what a board read returns. Such a call invalidates every board rather
+// than none — see invalidatingProject.invalidate.
+func WrapProject(c *Cache, inner forge.ProjectService, owner string, project int) forge.ProjectService {
+	if c == nil || inner == nil {
+		return inner
 	}
 	return &invalidatingProject{ProjectService: inner, cache: c, owner: owner, project: project}
 }
@@ -66,7 +80,18 @@ type invalidatingProject struct {
 // failed mutation is exactly the case where the board's true state is least
 // certain — the write may have landed before the error — so keeping a snapshot
 // across it is the wrong bet.
-func (p *invalidatingProject) invalidate() { p.cache.Invalidate(p.owner, p.project) }
+// A project number of 0 is a service that was never bound to a board (the
+// blocked-by verbs construct one that way, because a dependency edge is not a
+// board concept). It still mutates a field board reads return, so the honest
+// move is to drop everything: a cold cache costs one refetch, a confidently
+// wrong one costs an operator acting on a board that has already changed.
+func (p *invalidatingProject) invalidate() {
+	if p.project <= 0 {
+		p.cache.InvalidateAll()
+		return
+	}
+	p.cache.Invalidate(p.owner, p.project)
+}
 
 func (p *invalidatingProject) AddItem(ctx context.Context, contentNodeID string) (string, error) {
 	defer p.invalidate()
