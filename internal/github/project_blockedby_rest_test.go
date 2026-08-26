@@ -140,7 +140,16 @@ func TestBlockedByNumber_ResolvesBlockerOverREST(t *testing.T) {
 			if !strings.Contains(err.Error(), "blocker issue #2") {
 				t.Errorf("error = %q, want it to name the blocker", err)
 			}
+			// The ADD path resolves both: it needs the blocked issue's
+			// parent number for the circular-dependency guard. The REMOVE
+			// path has no guard, and the endpoint addresses the blocked issue
+			// by number, so it resolves only the blocker -- a read made
+			// solely to produce an error the write itself reports is a call
+			// worth not making.
 			want := []string{"GET /repos/o/r/issues/1", "GET /repos/o/r/issues/2"}
+			if tc.name == "remove" {
+				want = []string{"GET /repos/o/r/issues/2"}
+			}
 			if len(seen) != len(want) {
 				t.Fatalf("requests = %v, want %v", seen, want)
 			}
@@ -154,13 +163,18 @@ func TestBlockedByNumber_ResolvesBlockerOverREST(t *testing.T) {
 }
 
 // An unresolvable BLOCKED issue must fail too, and say which one it was.
+//
+// Only the add path reads the blocked issue (for the guard), so this pins the
+// add path. On the remove path an absent blocked issue surfaces from the write
+// as a 404 naming both refs -- covered by
+// TestLinkWrites_404NamesTheAbsentIssueNotTheRoute.
 func TestBlockedByNumber_UnresolvableBlockedIssueIsAnError(t *testing.T) {
 	var seen []string
 	srv := blockedByRESTServer(t, map[int]string{}, &seen)
 	defer srv.Close()
 
 	p := &ProjectService{client: newClientForRESTTest(srv)}
-	err := p.RemoveBlockedByNumber(context.Background(), "o", "r", 7, 8)
+	err := p.AddBlockedByNumber(context.Background(), "o", "r", 7, 8)
 	if err == nil || !strings.Contains(err.Error(), "blocked issue #7") {
 		t.Fatalf("err = %v, want an error naming the blocked issue", err)
 	}

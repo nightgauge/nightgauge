@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/nightgauge/nightgauge/internal/forge"
 	forgetypes "github.com/nightgauge/nightgauge/internal/forge/types"
 	"github.com/nightgauge/nightgauge/pkg/types"
 	"github.com/shurcooL/graphql"
@@ -526,12 +527,12 @@ func blocksOwnParent(blockedParentNumber, blockerNumber int) bool {
 // Returns an error if the blocker is the parent epic of the blocked issue — this
 // creates an unresolvable circular dependency and is always a bug.
 //
-// The two ID-resolution reads are REST (#849): they exist only to reach a node
-// ID and a parent number, and REST reports both in one conditional-GET-able
-// call on the idle `core` bucket. The mutation itself stays GraphQL — there is
-// no second write path here, and adding one would be the dual-path drift
-// docs/FAILURE_TAXONOMY.md warns about. Migrating the WRITE surface is the
-// node-ID-coupling change that must land alone.
+// The two ID-resolution reads are REST (#849), and since #956 so is the write.
+// Both reads happen here regardless -- the guard below needs the blocked
+// issue's parent number, and the write needs the blocker's database id -- so
+// the resolved form of the write is used to avoid paying a third read for an
+// id this method already holds. One write path, reached with the id already in
+// hand; not a second write path.
 func (p *ProjectService) AddBlockedByNumber(ctx context.Context, owner, repo string, blockedNumber, blockerNumber int) error {
 	blocked, err := resolveIssueRef(ctx, p.client, owner, repo, blockedNumber)
 	if err != nil {
@@ -551,23 +552,32 @@ func (p *ProjectService) AddBlockedByNumber(ctx context.Context, owner, repo str
 		)
 	}
 
-	return NewIssueService(p.client).AddBlockedBy(ctx, blocked.NodeID, blocker.NodeID)
+	return NewIssueService(p.client).addBlockedByResolved(ctx,
+		forge.IssueRef{Owner: owner, Repo: repo, Number: blockedNumber},
+		forge.IssueRef{Owner: owner, Repo: repo, Number: blockerNumber},
+		blocker.DatabaseID,
+	)
 }
 
 // RemoveBlockedByNumber removes a blocking relationship between two issues
-// identified by number. ID resolution is REST for the reasons on
-// AddBlockedByNumber above; the mutation stays GraphQL.
+// identified by number. ID resolution and the write are both REST, for the
+// reasons on AddBlockedByNumber above.
+// Unlike the add path, the BLOCKED issue is not read here. Add resolves it for
+// the circular-dependency guard, which needs its parent number; remove has no
+// guard, and the endpoint addresses the blocked issue by number. Reading it
+// anyway would be a call made solely to produce an error the write itself
+// reports -- the 404 discriminator names both sides.
 func (p *ProjectService) RemoveBlockedByNumber(ctx context.Context, owner, repo string, blockedNumber, blockerNumber int) error {
-	blocked, err := resolveIssueRef(ctx, p.client, owner, repo, blockedNumber)
-	if err != nil {
-		return fmt.Errorf("fetch blocked issue #%d: %w", blockedNumber, err)
-	}
 	blocker, err := resolveIssueRef(ctx, p.client, owner, repo, blockerNumber)
 	if err != nil {
 		return fmt.Errorf("fetch blocker issue #%d: %w", blockerNumber, err)
 	}
 
-	return NewIssueService(p.client).RemoveBlockedBy(ctx, blocked.NodeID, blocker.NodeID)
+	return NewIssueService(p.client).removeBlockedByResolved(ctx,
+		forge.IssueRef{Owner: owner, Repo: repo, Number: blockedNumber},
+		forge.IssueRef{Owner: owner, Repo: repo, Number: blockerNumber},
+		blocker.DatabaseID,
+	)
 }
 
 // MoveStatus transitions an issue's status with optional validation.

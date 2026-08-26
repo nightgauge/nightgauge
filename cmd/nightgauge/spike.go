@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	spikepkg "github.com/nightgauge/nightgauge/internal/cmd/spike"
+	"github.com/nightgauge/nightgauge/internal/forge"
 	gh "github.com/nightgauge/nightgauge/internal/github"
 	"github.com/spf13/cobra"
 )
@@ -274,9 +275,10 @@ func (g *githubMaterializer) CreateIssue(ctx context.Context, spikeNumber int, r
 		return 0, "", err
 	}
 
-	if spike, err := g.issueSvc.GetIssue(ctx, g.owner, g.repo, spikeNumber); err == nil {
-		_ = g.issueSvc.AddSubIssue(ctx, spike.NodeID, issue.NodeID)
-	}
+	_ = g.issueSvc.AddSubIssue(ctx,
+		forge.IssueRef{Owner: g.owner, Repo: g.repo, Number: spikeNumber},
+		forge.IssueRef{Owner: g.owner, Repo: g.repo, Number: issue.Number},
+	)
 
 	if itemID, err := g.projSvc.AddItem(ctx, issue.NodeID); err == nil {
 		_ = g.projSvc.SetSingleSelectField(ctx, itemID, "Priority", priorityToBoardOption(rec.Priority))

@@ -531,12 +531,17 @@ func intToStr(n int) string {
 	return string(digits)
 }
 
+// gl builds an IssueRef in the "o/r" project used by the link-backend stub.
+func gl(iid int) forge.IssueRef {
+	return forge.IssueRef{Owner: "o", Repo: "r", Number: iid}
+}
+
 func TestAddSubIssue_PostsRelatesToOnParent(t *testing.T) {
 	b := newLinkBackend(t)
 	c := NewClient(b.srv.srv.URL, "tok")
 	svc := NewIssueService(c)
 
-	if err := svc.AddSubIssue(context.Background(), "o/r#42", "o/r#43"); err != nil {
+	if err := svc.AddSubIssue(context.Background(), gl(42), gl(43)); err != nil {
 		t.Fatalf("AddSubIssue: %v", err)
 	}
 	if len(b.links[42]) != 1 || b.links[42][0].LinkType != linkTypeRelatesTo || b.links[42][0].IID != 43 {
@@ -553,20 +558,8 @@ func TestAddSubIssue_IsIdempotentOn409(t *testing.T) {
 	c := NewClient(srv.srv.URL, "tok")
 	svc := NewIssueService(c)
 
-	if err := svc.AddSubIssue(context.Background(), "o/r#42", "o/r#43"); err != nil {
+	if err := svc.AddSubIssue(context.Background(), gl(42), gl(43)); err != nil {
 		t.Errorf("expected nil on 409, got %v", err)
-	}
-}
-
-func TestAddSubIssue_RejectsMalformedRef(t *testing.T) {
-	c := NewClient("", "tok")
-	svc := NewIssueService(c)
-
-	if err := svc.AddSubIssue(context.Background(), "garbage", "o/r#43"); err == nil {
-		t.Error("expected error for malformed parent ref")
-	}
-	if err := svc.AddSubIssue(context.Background(), "o/r#42", "garbage"); err == nil {
-		t.Error("expected error for malformed child ref")
 	}
 }
 
@@ -576,10 +569,10 @@ func TestRemoveSubIssue_DeletesByLinkID(t *testing.T) {
 	svc := NewIssueService(c)
 	ctx := context.Background()
 
-	if err := svc.AddSubIssue(ctx, "o/r#42", "o/r#43"); err != nil {
+	if err := svc.AddSubIssue(ctx, gl(42), gl(43)); err != nil {
 		t.Fatalf("AddSubIssue: %v", err)
 	}
-	if err := svc.RemoveSubIssue(ctx, "o/r#42", "o/r#43"); err != nil {
+	if err := svc.RemoveSubIssue(ctx, gl(42), gl(43)); err != nil {
 		t.Fatalf("RemoveSubIssue: %v", err)
 	}
 	if len(b.links[42]) != 0 {
@@ -592,7 +585,7 @@ func TestRemoveSubIssue_NoSuchLinkIsNoOp(t *testing.T) {
 	c := NewClient(b.srv.srv.URL, "tok")
 	svc := NewIssueService(c)
 
-	if err := svc.RemoveSubIssue(context.Background(), "o/r#42", "o/r#99"); err != nil {
+	if err := svc.RemoveSubIssue(context.Background(), gl(42), gl(99)); err != nil {
 		t.Errorf("expected nil for non-existent link, got %v", err)
 	}
 }
@@ -615,7 +608,7 @@ func TestAddBlockedBy_PostsIsBlockedByOnBlocked(t *testing.T) {
 	c := NewClient(b.srv.srv.URL, "tok")
 	svc := NewIssueService(c)
 
-	if err := svc.AddBlockedBy(context.Background(), "o/r#42", "o/r#100"); err != nil {
+	if err := svc.AddBlockedBy(context.Background(), gl(42), gl(100)); err != nil {
 		t.Fatalf("AddBlockedBy: %v", err)
 	}
 	// Posted link is on the blocked side (#42), pointing at the blocker (#100)
@@ -634,10 +627,10 @@ func TestRemoveBlockedBy_DeletesFromBlockedSide(t *testing.T) {
 	svc := NewIssueService(c)
 	ctx := context.Background()
 
-	if err := svc.AddBlockedBy(ctx, "o/r#42", "o/r#100"); err != nil {
+	if err := svc.AddBlockedBy(ctx, gl(42), gl(100)); err != nil {
 		t.Fatalf("AddBlockedBy: %v", err)
 	}
-	if err := svc.RemoveBlockedBy(ctx, "o/r#42", "o/r#100"); err != nil {
+	if err := svc.RemoveBlockedBy(ctx, gl(42), gl(100)); err != nil {
 		t.Fatalf("RemoveBlockedBy: %v", err)
 	}
 	if len(b.links[42]) != 0 {

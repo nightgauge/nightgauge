@@ -459,7 +459,7 @@ type issueGetter interface {
 	GetEpicProgress(ctx context.Context, epicNodeID string) (*types.EpicProgress, error)
 	GetEpicProgressByNumber(ctx context.Context, owner, repo string, number int) (*types.EpicProgress, error)
 	CloseIssue(ctx context.Context, issueID string) error
-	RemoveBlockedBy(ctx context.Context, blockedID, blockerID string) error
+	RemoveBlockedBy(ctx context.Context, blocked, blocker forge.IssueRef) error
 }
 
 // Scheduler reads the project board and dispatches pipeline executions.
@@ -6426,10 +6426,32 @@ func (s *Scheduler) isBlocked(ctx context.Context, item types.BoardItem) (bool, 
 		// This can never resolve (epic waits for sub-issue, sub-issue waits for epic).
 		// Auto-remove the relationship and skip this blocker.
 		if item.ParentNumber > 0 && blocker.Number == item.ParentNumber {
-			log.Printf("AUTO-FIX: removing circular blockedBy — #%d was blocked by its parent epic #%d", item.Number, blocker.Number)
-			if s.issueSvc != nil && item.NodeID != "" && blocker.NodeID != "" {
-				if removeErr := s.issueSvc.RemoveBlockedBy(ctx, item.NodeID, blocker.NodeID); removeErr != nil {
-					log.Printf("WARN: failed to remove circular blockedBy for #%d: %v", item.Number, removeErr)
+			// This branch never actually removed anything before #956. It was
+			// guarded on item.NodeID, and BoardItem.NodeID is not populated on
+			// the GitHub path -- nodeToItem sets only item.ID, and the board
+			// query does not select the issue's own node id. So the log line
+			// below printed on every scan and the mutation never ran (#955).
+			//
+			// The ref-based signature is what fixes it: the numbers and
+			// repositories are all present on a board item, so no node ID is
+			// needed. The log now follows the call and reports what happened,
+			// because a line that announces a repair before attempting it is
+			// how the original defect stayed invisible.
+			if s.issueSvc != nil {
+				itemOwner, itemRepo := s.linkRepoFor(item.Repo)
+				blockerOwner, blockerRepo := s.linkRepoFor(blocker.Repo)
+				if blockerOwner == "" || blockerRepo == "" {
+					blockerOwner, blockerRepo = itemOwner, itemRepo
+				}
+				if removeErr := s.issueSvc.RemoveBlockedBy(ctx,
+					forge.IssueRef{Owner: itemOwner, Repo: itemRepo, Number: item.Number},
+					forge.IssueRef{Owner: blockerOwner, Repo: blockerRepo, Number: blocker.Number},
+				); removeErr != nil {
+					log.Printf("WARN: failed to remove circular blockedBy for #%d (blocked by parent epic #%d): %v",
+						item.Number, blocker.Number, removeErr)
+				} else {
+					log.Printf("AUTO-FIX: removed circular blockedBy — #%d was blocked by its parent epic #%d",
+						item.Number, blocker.Number)
 				}
 			}
 			continue
@@ -6565,6 +6587,20 @@ func priorityRank(p types.Priority) int {
 	default:
 		return 4 // No priority = lowest
 	}
+}
+
+// linkRepoFor resolves a BoardItem's "owner/repo" string into its parts,
+// falling back to the scheduler's own owner when the item does not carry one.
+// A board shared across repositories yields items whose Repo is set; a
+// single-repo board may leave it empty, and an empty owner or repo would build
+// a REST path like "/repos/owner//issues/12" -- a 404 that reads as "the issue
+// is absent" rather than as the malformed path it is.
+func (s *Scheduler) linkRepoFor(itemRepo string) (string, string) {
+	owner, repo := splitOwnerRepo(itemRepo)
+	if owner == "" || repo == "" {
+		return s.owner, repo
+	}
+	return owner, repo
 }
 
 func splitOwnerRepo(fullRepo string) (string, string) {

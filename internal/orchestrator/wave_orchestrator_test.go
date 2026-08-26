@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/nightgauge/nightgauge/internal/execution"
+	"github.com/nightgauge/nightgauge/internal/forge"
 	"github.com/nightgauge/nightgauge/internal/intelligence/batch"
 	"github.com/nightgauge/nightgauge/internal/intelligence/teams"
 	"github.com/nightgauge/nightgauge/pkg/types"
@@ -71,7 +72,7 @@ func (m *mockEpicIssueSvc) CloseIssue(_ context.Context, _ string) error {
 	return nil
 }
 
-func (m *mockEpicIssueSvc) RemoveBlockedBy(_ context.Context, _, _ string) error {
+func (m *mockEpicIssueSvc) RemoveBlockedBy(_ context.Context, _, _ forge.IssueRef) error {
 	return nil
 }
 

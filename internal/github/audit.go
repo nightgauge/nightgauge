@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nightgauge/nightgauge/internal/forge"
 	"github.com/nightgauge/nightgauge/pkg/types"
 )
 
@@ -293,7 +294,10 @@ func resolveItemRepo(itemRepo, fallbackOwner, fallbackRepo string) (string, stri
 }
 
 // detectStaleBlockers finds board items with closed blockedBy entries.
-// When fix=true, it fetches the blocked issue's node ID to call RemoveBlockedBy.
+// When fix=true it calls RemoveBlockedBy directly: the board read already
+// supplies every number and repository the REST endpoint needs, so the GraphQL
+// GetIssue that used to sit here -- issued solely to turn item.Number into a
+// node ID -- is gone (#956).
 func (s *LifecycleAuditService) detectStaleBlockers(
 	ctx context.Context,
 	boardItems []types.BoardItem,
@@ -322,14 +326,19 @@ func (s *LifecycleAuditService) detectStaleBlockers(
 			}
 
 			if fix {
-				// Need the blocked issue's node ID — fetch it since board item only
-				// has the project item ID. Resolve against the item's OWN repo so
-				// cross-repo board items (N:1 topology) don't fail. #3792.
+				// Resolve against the item's OWN repo so cross-repo board
+				// items (N:1 topology) don't fail. #3792.
 				itemOwner, itemRepo := resolveItemRepo(item.Repo, owner, repo)
-				fullIssue, fetchErr := issueSvc.GetIssue(ctx, itemOwner, itemRepo, item.Number)
-				if fetchErr != nil {
-					f.FixError = fmt.Sprintf("fetch issue node ID: %v", fetchErr)
-				} else if removeErr := issueSvc.RemoveBlockedBy(ctx, fullIssue.NodeID, blocker.NodeID); removeErr != nil {
+				// BlockingRef.Repo can be empty on a board-sourced ref, and an
+				// empty repo would build "/repos/{owner}//issues/..." — a 404
+				// that reads as "the issue is absent" rather than as the
+				// malformed path it is. Fall back to the item's own repo,
+				// which is where a same-repo blocker lives.
+				blockerOwner, blockerRepo := resolveItemRepo(blocker.Repo, itemOwner, itemRepo)
+				if removeErr := issueSvc.RemoveBlockedBy(ctx,
+					forge.IssueRef{Owner: itemOwner, Repo: itemRepo, Number: item.Number},
+					forge.IssueRef{Owner: blockerOwner, Repo: blockerRepo, Number: blocker.Number},
+				); removeErr != nil {
 					f.FixError = removeErr.Error()
 				} else {
 					f.Fixed = true

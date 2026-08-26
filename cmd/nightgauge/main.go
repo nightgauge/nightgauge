@@ -34,6 +34,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/execution/adapters"
 	"github.com/nightgauge/nightgauge/internal/executor"
 	"github.com/nightgauge/nightgauge/internal/focus"
+	"github.com/nightgauge/nightgauge/internal/forge"
 	gitpkg "github.com/nightgauge/nightgauge/internal/git"
 	gh "github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/internal/hooks"
@@ -1184,12 +1185,14 @@ func issueCreateSubCmd() *cobra.Command {
 						blockerErrors = append(blockerErrors, fmt.Sprintf("%s (invalid number)", raw))
 						continue
 					}
-					blocker, fetchErr := svc.GetIssue(cmd.Context(), ownerPart, repoPart, blockerNumber)
-					if fetchErr != nil {
-						blockerErrors = append(blockerErrors, fmt.Sprintf("#%d (fetch failed: %v)", blockerNumber, fetchErr))
-						continue
-					}
-					if addErr := svc.AddBlockedBy(cmd.Context(), issue.NodeID, blocker.NodeID); addErr != nil {
+					// No GetIssue here: the endpoint takes the blocked
+					// issue's number and resolves the blocker's database id
+					// itself, so an absent blocker surfaces from the write
+					// rather than from a read made to anticipate it.
+					if addErr := svc.AddBlockedBy(cmd.Context(),
+						forge.IssueRef{Owner: ownerPart, Repo: repoPart, Number: issue.Number},
+						forge.IssueRef{Owner: ownerPart, Repo: repoPart, Number: blockerNumber},
+					); addErr != nil {
 						blockerErrors = append(blockerErrors, fmt.Sprintf("#%d (%v)", blockerNumber, addErr))
 					}
 				}
@@ -8427,12 +8430,12 @@ func (a *githubIssueCreatorAdapter) CreateIssueWithID(ctx context.Context, owner
 	return issue.NodeID, issue.Number, nil
 }
 
-func (a *githubIssueCreatorAdapter) AddSubIssue(ctx context.Context, parentNodeID, childNodeID string) error {
-	return a.issueService.AddSubIssue(ctx, parentNodeID, childNodeID)
+func (a *githubIssueCreatorAdapter) AddSubIssue(ctx context.Context, parent, child forge.IssueRef) error {
+	return a.issueService.AddSubIssue(ctx, parent, child)
 }
 
-func (a *githubIssueCreatorAdapter) AddBlockedBy(ctx context.Context, blockedNodeID, blockerNodeID string) error {
-	return a.issueService.AddBlockedBy(ctx, blockedNodeID, blockerNodeID)
+func (a *githubIssueCreatorAdapter) AddBlockedBy(ctx context.Context, blocked, blocker forge.IssueRef) error {
+	return a.issueService.AddBlockedBy(ctx, blocked, blocker)
 }
 
 func (a *githubIssueCreatorAdapter) AddToProjectBoard(ctx context.Context, owner string, projectNumber int, issueNodeID string) error {

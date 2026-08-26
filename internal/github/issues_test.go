@@ -1,10 +1,13 @@
 package github
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -544,103 +547,227 @@ func TestIssueService_RemoveLabels_Error(t *testing.T) {
 	}
 }
 
-// --- Sub-issue Mutation Tests ---
+// --- Sub-issue and dependency link tests (REST, #956) ---
 
-func TestIssueService_AddSubIssue_HappyPath(t *testing.T) {
-	response := `{"data":{"addSubIssue":{"issue":{"id":"PARENT_ID"}}}}`
+// linkWriteServer serves the child/blocker resolution GET and records every
+// request as "METHOD path <body>". The body is recorded because the database
+// id travels in it for three of the four endpoints, and a test that asserts
+// only the path cannot tell a call that sent the right id from one that sent
+// the issue NUMBER instead -- the exact confusion these endpoints invite.
+func linkWriteServer(t *testing.T, writeStatus int, seen *[]string) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		entry := r.Method + " " + r.URL.Path
+		if len(bytes.TrimSpace(body)) > 0 {
+			entry += " " + string(bytes.TrimSpace(body))
+		}
+		*seen = append(*seen, entry)
 
-	client, cleanup := mockGraphQLServer(t, response)
-	defer cleanup()
+		// A plain GET of an issue is a resolution; anything else is the write.
+		if r.Method == http.MethodGet {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(issueJSON(refNumberFromPath(r.URL.Path), "I_node", "")))
+			return
+		}
+		w.WriteHeader(writeStatus)
+		if writeStatus >= 300 {
+			_, _ = w.Write([]byte(`{"message":"Not Found"}`))
+		}
+	}))
+}
 
-	svc := NewIssueService(client)
-	if err := svc.AddSubIssue(context.Background(), "PARENT_ID", "CHILD_ID"); err != nil {
-		t.Errorf("AddSubIssue returned unexpected error: %v", err)
+// refNumberFromPath pulls the trailing issue number out of a resolution path.
+func refNumberFromPath(path string) int {
+	seg := path[strings.LastIndex(path, "/")+1:]
+	n, err := strconv.Atoi(seg)
+	if err != nil {
+		return 0
+	}
+	return n
+}
+
+func ref(owner, repo string, number int) forge.IssueRef {
+	return forge.IssueRef{Owner: owner, Repo: repo, Number: number}
+}
+
+// Each of these asserts the TRANSPORT, not merely the outcome. A GraphQL
+// implementation would satisfy an error-free return just as well, which is
+// exactly how a migration regresses unnoticed -- see the convention set by
+// TestGetRepositoryID_UsesREST (#849).
+
+func TestAddSubIssue_UsesREST(t *testing.T) {
+	var seen []string
+	srv := linkWriteServer(t, http.StatusCreated, &seen)
+	defer srv.Close()
+
+	svc := NewIssueService(newClientForRESTTest(srv))
+	if err := svc.AddSubIssue(context.Background(), ref("o", "r", 1), ref("o", "r", 2)); err != nil {
+		t.Fatalf("AddSubIssue: %v", err)
+	}
+	want := []string{
+		"GET /repos/o/r/issues/2",
+		fmt.Sprintf(`POST /repos/o/r/issues/1/sub_issues {"sub_issue_id":%d}`, databaseIDFor(2)),
+	}
+	assertRequests(t, seen, want)
+}
+
+// The parent is addressed by NUMBER and the child by DATABASE ID. Their values
+// differ in the fixtures on purpose, so a call that swapped them would fail
+// here rather than pass by coincidence.
+func TestAddSubIssue_SendsTheChildsDatabaseIDNotItsNumber(t *testing.T) {
+	var seen []string
+	srv := linkWriteServer(t, http.StatusCreated, &seen)
+	defer srv.Close()
+
+	svc := NewIssueService(newClientForRESTTest(srv))
+	if err := svc.AddSubIssue(context.Background(), ref("o", "r", 1), ref("o", "r", 2)); err != nil {
+		t.Fatalf("AddSubIssue: %v", err)
+	}
+	for _, entry := range seen {
+		if strings.HasPrefix(entry, "POST") && strings.Contains(entry, `"sub_issue_id":2}`) {
+			t.Errorf("request sent the child's NUMBER as sub_issue_id: %s", entry)
+		}
 	}
 }
 
-func TestIssueService_AddSubIssue_Error(t *testing.T) {
-	response := `{"errors":[{"message":"Issue not found"}]}`
+// `sub_issue` SINGULAR on the delete path where the add path is `sub_issues`
+// plural. GitHub's asymmetry, not a typo -- pinned so nobody tidies it.
+func TestRemoveSubIssue_UsesRESTWithTheSingularPath(t *testing.T) {
+	var seen []string
+	srv := linkWriteServer(t, http.StatusOK, &seen)
+	defer srv.Close()
 
-	client, cleanup := mockGraphQLServer(t, response)
-	defer cleanup()
+	svc := NewIssueService(newClientForRESTTest(srv))
+	if err := svc.RemoveSubIssue(context.Background(), ref("o", "r", 1), ref("o", "r", 2)); err != nil {
+		t.Fatalf("RemoveSubIssue: %v", err)
+	}
+	want := []string{
+		"GET /repos/o/r/issues/2",
+		fmt.Sprintf(`DELETE /repos/o/r/issues/1/sub_issue {"sub_issue_id":%d}`, databaseIDFor(2)),
+	}
+	assertRequests(t, seen, want)
+}
 
-	svc := NewIssueService(client)
-	if err := svc.AddSubIssue(context.Background(), "INVALID", "CHILD"); err == nil {
-		t.Error("AddSubIssue should return error on API error response")
+func TestAddBlockedBy_UsesREST(t *testing.T) {
+	var seen []string
+	srv := linkWriteServer(t, http.StatusCreated, &seen)
+	defer srv.Close()
+
+	svc := NewIssueService(newClientForRESTTest(srv))
+	if err := svc.AddBlockedBy(context.Background(), ref("o", "r", 1), ref("o", "r", 2)); err != nil {
+		t.Fatalf("AddBlockedBy: %v", err)
+	}
+	want := []string{
+		"GET /repos/o/r/issues/2",
+		fmt.Sprintf(`POST /repos/o/r/issues/1/dependencies/blocked_by {"issue_id":%d}`, databaseIDFor(2)),
+	}
+	assertRequests(t, seen, want)
+}
+
+// The odd one out: the blocker's database id goes in the PATH and no body is
+// sent at all.
+func TestRemoveBlockedBy_UsesRESTWithTheIDInThePath(t *testing.T) {
+	var seen []string
+	srv := linkWriteServer(t, http.StatusNoContent, &seen)
+	defer srv.Close()
+
+	svc := NewIssueService(newClientForRESTTest(srv))
+	if err := svc.RemoveBlockedBy(context.Background(), ref("o", "r", 1), ref("o", "r", 2)); err != nil {
+		t.Fatalf("RemoveBlockedBy: %v", err)
+	}
+	want := []string{
+		"GET /repos/o/r/issues/2",
+		fmt.Sprintf("DELETE /repos/o/r/issues/1/dependencies/blocked_by/%d", databaseIDFor(2)),
+	}
+	assertRequests(t, seen, want)
+}
+
+// Cross-repository linking is a live path (internal/audit's issue creator
+// resolves the epic's repo and the sub-issue's repo independently), so the two
+// refs must be able to name different repositories.
+func TestAddSubIssue_LinksAcrossRepositories(t *testing.T) {
+	var seen []string
+	srv := linkWriteServer(t, http.StatusCreated, &seen)
+	defer srv.Close()
+
+	svc := NewIssueService(newClientForRESTTest(srv))
+	if err := svc.AddSubIssue(context.Background(), ref("o", "parent-repo", 1), ref("o", "child-repo", 2)); err != nil {
+		t.Fatalf("AddSubIssue: %v", err)
+	}
+	want := []string{
+		"GET /repos/o/child-repo/issues/2",
+		fmt.Sprintf(`POST /repos/o/parent-repo/issues/1/sub_issues {"sub_issue_id":%d}`, databaseIDFor(2)),
+	}
+	assertRequests(t, seen, want)
+}
+
+// A 404 from a link route means the REFERENCED ISSUE is absent, not that the
+// route is -- GitHub matched the route or the request would not have reached
+// the handler. The distinction matters: read as "endpoint missing" it would
+// invite a fallback to the GraphQL path this change deleted.
+func TestLinkWrites_404NamesTheAbsentIssueNotTheRoute(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		call func(*IssueService) error
+	}{
+		{"AddSubIssue", func(s *IssueService) error {
+			return s.AddSubIssue(context.Background(), ref("o", "r", 1), ref("o", "r", 2))
+		}},
+		{"RemoveSubIssue", func(s *IssueService) error {
+			return s.RemoveSubIssue(context.Background(), ref("o", "r", 1), ref("o", "r", 2))
+		}},
+		{"AddBlockedBy", func(s *IssueService) error {
+			return s.AddBlockedBy(context.Background(), ref("o", "r", 1), ref("o", "r", 2))
+		}},
+		{"RemoveBlockedBy", func(s *IssueService) error {
+			return s.RemoveBlockedBy(context.Background(), ref("o", "r", 1), ref("o", "r", 2))
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var seen []string
+			srv := linkWriteServer(t, http.StatusNotFound, &seen)
+			defer srv.Close()
+
+			err := tc.call(NewIssueService(newClientForRESTTest(srv)))
+			if err == nil {
+				t.Fatal("a 404 from the link endpoint must be an error, not a silent no-op")
+			}
+			if !strings.Contains(err.Error(), "absent") {
+				t.Errorf("error = %q, want it to report the referenced issue as absent", err)
+			}
+			if !strings.Contains(err.Error(), "o/r#1") || !strings.Contains(err.Error(), "o/r#2") {
+				t.Errorf("error = %q, want it to name both refs so the caller knows which is missing", err)
+			}
+		})
 	}
 }
 
-func TestIssueService_RemoveSubIssue_HappyPath(t *testing.T) {
-	response := `{"data":{"removeSubIssue":{"issue":{"id":"PARENT_ID"}}}}`
+// A non-404 failure must not be reported as an absent issue.
+func TestLinkWrites_ServerErrorIsNotReportedAsAbsence(t *testing.T) {
+	var seen []string
+	srv := linkWriteServer(t, http.StatusInternalServerError, &seen)
+	defer srv.Close()
 
-	client, cleanup := mockGraphQLServer(t, response)
-	defer cleanup()
-
-	svc := NewIssueService(client)
-	if err := svc.RemoveSubIssue(context.Background(), "PARENT_ID", "CHILD_ID"); err != nil {
-		t.Errorf("RemoveSubIssue returned unexpected error: %v", err)
+	err := NewIssueService(newClientForRESTTest(srv)).
+		AddSubIssue(context.Background(), ref("o", "r", 1), ref("o", "r", 2))
+	if err == nil {
+		t.Fatal("a 500 must be an error")
+	}
+	if strings.Contains(err.Error(), "absent") {
+		t.Errorf("error = %q, want it NOT to claim the issue is absent", err)
 	}
 }
 
-func TestIssueService_RemoveSubIssue_Error(t *testing.T) {
-	response := `{"errors":[{"message":"Sub-issue not linked"}]}`
-
-	client, cleanup := mockGraphQLServer(t, response)
-	defer cleanup()
-
-	svc := NewIssueService(client)
-	if err := svc.RemoveSubIssue(context.Background(), "PARENT_ID", "CHILD_ID"); err == nil {
-		t.Error("RemoveSubIssue should return error on API error response")
+func assertRequests(t *testing.T, got, want []string) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("requests =\n  %s\nwant\n  %s", strings.Join(got, "\n  "), strings.Join(want, "\n  "))
 	}
-}
-
-// --- AddBlockedBy / RemoveBlockedBy Tests ---
-
-func TestIssueService_AddBlockedBy_HappyPath(t *testing.T) {
-	response := `{"data":{"addBlockedBy":{"clientMutationId":null}}}`
-
-	client, cleanup := mockGraphQLServer(t, response)
-	defer cleanup()
-
-	svc := NewIssueService(client)
-	if err := svc.AddBlockedBy(context.Background(), "BLOCKED_ID", "BLOCKER_ID"); err != nil {
-		t.Errorf("AddBlockedBy returned unexpected error: %v", err)
-	}
-}
-
-func TestIssueService_AddBlockedBy_Error(t *testing.T) {
-	response := `{"errors":[{"message":"Issue not found"}]}`
-
-	client, cleanup := mockGraphQLServer(t, response)
-	defer cleanup()
-
-	svc := NewIssueService(client)
-	if err := svc.AddBlockedBy(context.Background(), "INVALID", "BLOCKER_ID"); err == nil {
-		t.Error("AddBlockedBy should return error on API error response")
-	}
-}
-
-func TestIssueService_RemoveBlockedBy_HappyPath(t *testing.T) {
-	response := `{"data":{"removeBlockedBy":{"clientMutationId":null}}}`
-
-	client, cleanup := mockGraphQLServer(t, response)
-	defer cleanup()
-
-	svc := NewIssueService(client)
-	if err := svc.RemoveBlockedBy(context.Background(), "BLOCKED_ID", "BLOCKER_ID"); err != nil {
-		t.Errorf("RemoveBlockedBy returned unexpected error: %v", err)
-	}
-}
-
-func TestIssueService_RemoveBlockedBy_Error(t *testing.T) {
-	response := `{"errors":[{"message":"Blocking relationship not found"}]}`
-
-	client, cleanup := mockGraphQLServer(t, response)
-	defer cleanup()
-
-	svc := NewIssueService(client)
-	if err := svc.RemoveBlockedBy(context.Background(), "BLOCKED_ID", "BLOCKER_ID"); err == nil {
-		t.Error("RemoveBlockedBy should return error on API error response")
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("request %d =\n  %s\nwant\n  %s", i, got[i], want[i])
+		}
 	}
 }
 
@@ -1277,14 +1404,21 @@ func getIssueResp(nodeID string, number int) string {
 }
 
 func TestIssueService_CreateSubIssue_NilProjectSvc(t *testing.T) {
-	// Sequence: GetRepositoryID (REST) → CreateIssue → GetIssue(parent) → AddSubIssue
+	// Sequence: GetRepositoryID (REST) -> CreateIssue (GraphQL) ->
+	//           resolve child (REST) -> link (REST).
+	//
+	// The GetIssue(parent) that used to sit between CreateIssue and the link
+	// is GONE: the sub-issue endpoint addresses the parent by number. Its
+	// absence from the observed order below is the assertion.
 	createResp := `{"data":{"createIssue":{"issue":{"id":"NEW_NODE","number":101,"url":"https://github.com/o/r/issues/101"}}}}`
-	parentResp := getIssueResp("PARENT_NODE", 50)
-	addSubResp := `{"data":{"addSubIssue":{"issue":{"id":"PARENT_NODE"}}}}`
 
-	client, cleanup := mockForgeServer(t,
-		map[string]string{"GET /repos/o/r": restRepoIDFixture},
-		createResp, parentResp, addSubResp)
+	client, seen, cleanup := mockForgeServerRecording(t,
+		map[string]string{
+			"GET /repos/o/r":                       restRepoIDFixture,
+			"GET /repos/o/r/issues/101":            issueJSON(101, "NEW_NODE", ""),
+			"POST /repos/o/r/issues/50/sub_issues": `{}`,
+		},
+		createResp)
 	defer cleanup()
 
 	svc := NewIssueService(client)
@@ -1295,25 +1429,30 @@ func TestIssueService_CreateSubIssue_NilProjectSvc(t *testing.T) {
 	if issue.Number != 101 {
 		t.Errorf("issue.Number = %d, want 101", issue.Number)
 	}
+	assertRequests(t, *seen, []string{
+		"GET /repos/o/r",
+		"POST /graphql",
+		"GET /repos/o/r/issues/101",
+		"POST /repos/o/r/issues/50/sub_issues",
+	})
 }
 
 func TestIssueService_CreateSubIssue_WithProjectSvc(t *testing.T) {
-	// Sequence: GetRepositoryID (REST) → CreateIssue → GetIssue(parent) → AddSubIssue →
-	//           ensureFields(project) → GetIssue(new issue, for AddIssueByNumber) →
-	//           addProjectV2ItemById → (syncLabelsToFields: no labels, no extra calls)
 	createResp := `{"data":{"createIssue":{"issue":{"id":"NEW_NODE","number":102,"url":"https://github.com/o/r/issues/102"}}}}`
-	parentResp := getIssueResp("PARENT_NODE", 50)
-	addSubResp := `{"data":{"addSubIssue":{"issue":{"id":"PARENT_NODE"}}}}`
 	// ensureFields: org project query
 	fieldsResp := `{"data":{"organization":{"projectV2":{"id":"PROJ_ID","fields":{"nodes":[]}}}}}`
 	// AddIssueByNumber calls GetIssue internally
 	newIssueResp := getIssueResp("NEW_NODE", 102)
 	addItemResp := `{"data":{"addProjectV2ItemById":{"item":{"id":"ITEM_ID"}}}}`
 
-	// AddIssueByNumber order: GetIssue(new) → ensureFields → AddItem
+	// AddIssueByNumber order: GetIssue(new) -> ensureFields -> AddItem
 	client, cleanup := mockForgeServer(t,
-		map[string]string{"GET /repos/o/r": restRepoIDFixture},
-		createResp, parentResp, addSubResp,
+		map[string]string{
+			"GET /repos/o/r":                       restRepoIDFixture,
+			"GET /repos/o/r/issues/102":            issueJSON(102, "NEW_NODE", ""),
+			"POST /repos/o/r/issues/50/sub_issues": `{}`,
+		},
+		createResp,
 		newIssueResp, fieldsResp, addItemResp,
 	)
 	defer cleanup()
@@ -1333,19 +1472,17 @@ func TestIssueService_CreateSubIssue_BoardSyncFailure(t *testing.T) {
 	// Board sync fails: issue + link succeed, but AddItem returns error.
 	// Verify: error wraps "board sync failed" and issue object is non-nil.
 	createResp := `{"data":{"createIssue":{"issue":{"id":"NEW_NODE","number":103,"url":"https://github.com/o/r/issues/103"}}}}`
-	parentResp := getIssueResp("PARENT_NODE", 50)
-	addSubResp := `{"data":{"addSubIssue":{"issue":{"id":"PARENT_NODE"}}}}`
-	// ensureFields succeeds
 	fieldsResp := `{"data":{"organization":{"projectV2":{"id":"PROJ_ID","fields":{"nodes":[]}}}}}`
-	// GetIssue inside AddIssueByNumber succeeds
 	newIssueResp := getIssueResp("NEW_NODE", 103)
-	// AddItem fails
 	addItemErr := `{"errors":[{"message":"project not found"}]}`
 
-	// AddIssueByNumber order: GetIssue(new) → ensureFields → AddItem(fails)
 	client, cleanup := mockForgeServer(t,
-		map[string]string{"GET /repos/o/r": restRepoIDFixture},
-		createResp, parentResp, addSubResp,
+		map[string]string{
+			"GET /repos/o/r":                       restRepoIDFixture,
+			"GET /repos/o/r/issues/103":            issueJSON(103, "NEW_NODE", ""),
+			"POST /repos/o/r/issues/50/sub_issues": `{}`,
+		},
+		createResp,
 		newIssueResp, fieldsResp, addItemErr,
 	)
 	defer cleanup()
@@ -1372,140 +1509,107 @@ func TestIssueService_CreateSubIssue_BoardSyncFailure(t *testing.T) {
 	}
 }
 
-// --- AddBlockedBy Tests (exercises the blocker workflow used by create-sub --blocked-by) ---
+// --- The `create-sub --blocked-by` loop ---
+//
+// These used to drive a GraphQL response sequence, because the loop was
+// GetIssue(blocker) + addBlockedBy(mutation). After #956 there is no GraphQL in
+// this loop at all -- the blocker is resolved and linked over REST -- so a
+// GraphQL-sequence fake would be asserting against a transport the code no
+// longer speaks. They drive the REST server instead.
+//
+// The GetIssue(blocker) call is gone too: AddBlockedBy resolves the blocker's
+// database id itself, so the CLI loop no longer reads the blocker first.
 
-func TestIssueService_CreateSubIssue_WithBlockedBy(t *testing.T) {
-	// Simulates the full CLI workflow for create-sub --blocked-by 1,2:
-	// CreateSubIssue sequence → GetIssue(blocker1) → AddBlockedBy(1) → GetIssue(blocker2) → AddBlockedBy(2)
-	createResp := `{"data":{"createIssue":{"issue":{"id":"NEW_NODE","number":110,"url":"https://github.com/o/r/issues/110"}}}}`
-	parentResp := getIssueResp("PARENT_NODE", 50)
-	addSubResp := `{"data":{"addSubIssue":{"issue":{"id":"PARENT_NODE"}}}}`
-	blocker1Resp := getIssueResp("BLOCKER1_NODE", 1)
-	addBlocked1Resp := `{"data":{"addBlockedBy":{"clientMutationId":null}}}`
-	blocker2Resp := getIssueResp("BLOCKER2_NODE", 2)
-	addBlocked2Resp := `{"data":{"addBlockedBy":{"clientMutationId":null}}}`
-
-	client, cleanup := mockForgeServer(t,
-		map[string]string{"GET /repos/o/r": restRepoIDFixture},
-		createResp, parentResp, addSubResp,
-		blocker1Resp, addBlocked1Resp,
-		blocker2Resp, addBlocked2Resp,
-	)
-	defer cleanup()
-
-	svc := NewIssueService(client)
-	issue, err := svc.CreateSubIssue(context.Background(), "o", "r", 50, "Sub", "", nil, nil)
-	if err != nil {
-		t.Fatalf("CreateSubIssue returned unexpected error: %v", err)
-	}
-	if issue.Number != 110 {
-		t.Errorf("issue.Number = %d, want 110", issue.Number)
-	}
-
-	// Simulate the --blocked-by loop: GetIssue + AddBlockedBy for each blocker.
-	for _, tc := range []struct {
-		blockerNumber int
-		blockerNodeID string
-	}{
-		{1, "BLOCKER1_NODE"},
-		{2, "BLOCKER2_NODE"},
-	} {
-		blocker, fetchErr := svc.GetIssue(context.Background(), "o", "r", tc.blockerNumber)
-		if fetchErr != nil {
-			t.Fatalf("GetIssue(#%d) returned unexpected error: %v", tc.blockerNumber, fetchErr)
+// linkWriteScriptServer answers writes with `writeStatuses` IN ORDER, so a test
+// can say "the first link succeeds and the second fails" -- which a per-path
+// status cannot express, since both writes go to the same path.
+func linkWriteScriptServer(t *testing.T, writeStatuses []int, seen *[]string) *httptest.Server {
+	t.Helper()
+	var writeIdx int
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		entry := r.Method + " " + r.URL.Path
+		if len(bytes.TrimSpace(body)) > 0 {
+			entry += " " + string(bytes.TrimSpace(body))
 		}
-		if blocker.NodeID != tc.blockerNodeID {
-			t.Errorf("blocker.NodeID = %q, want %q", blocker.NodeID, tc.blockerNodeID)
+		*seen = append(*seen, entry)
+
+		if r.Method == http.MethodGet {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(issueJSON(refNumberFromPath(r.URL.Path), "I_node", "")))
+			return
 		}
-		if addErr := svc.AddBlockedBy(context.Background(), issue.NodeID, blocker.NodeID); addErr != nil {
-			t.Fatalf("AddBlockedBy(#%d) returned unexpected error: %v", tc.blockerNumber, addErr)
+		status := http.StatusCreated
+		if writeIdx < len(writeStatuses) {
+			status = writeStatuses[writeIdx]
 		}
-	}
+		writeIdx++
+		w.WriteHeader(status)
+		if status >= 300 {
+			_, _ = w.Write([]byte(`{"message":"permission denied"}`))
+		}
+	}))
 }
 
-func TestIssueService_CreateSubIssue_PartialBlockedByFailure(t *testing.T) {
-	// Simulates: blocker 1 resolves successfully, blocker 2 fails at AddBlockedBy.
-	createResp := `{"data":{"createIssue":{"issue":{"id":"NEW_NODE","number":111,"url":"https://github.com/o/r/issues/111"}}}}`
-	parentResp := getIssueResp("PARENT_NODE", 50)
-	addSubResp := `{"data":{"addSubIssue":{"issue":{"id":"PARENT_NODE"}}}}`
-	blocker1Resp := getIssueResp("BLOCKER1_NODE", 1)
-	addBlocked1Resp := `{"data":{"addBlockedBy":{"clientMutationId":null}}}`
-	blocker2Resp := getIssueResp("BLOCKER2_NODE", 2)
-	addBlocked2Err := `{"errors":[{"message":"permission denied"}]}`
+func TestAddBlockedBy_LoopLinksEachBlocker(t *testing.T) {
+	var seen []string
+	srv := linkWriteScriptServer(t, []int{http.StatusCreated, http.StatusCreated}, &seen)
+	defer srv.Close()
 
-	client, cleanup := mockForgeServer(t,
-		map[string]string{"GET /repos/o/r": restRepoIDFixture},
-		createResp, parentResp, addSubResp,
-		blocker1Resp, addBlocked1Resp,
-		blocker2Resp, addBlocked2Err,
-	)
-	defer cleanup()
+	svc := NewIssueService(newClientForRESTTest(srv))
+	for _, blockerNumber := range []int{1, 2} {
+		if err := svc.AddBlockedBy(context.Background(), ref("o", "r", 110), ref("o", "r", blockerNumber)); err != nil {
+			t.Fatalf("AddBlockedBy(#%d): %v", blockerNumber, err)
+		}
+	}
+	assertRequests(t, seen, []string{
+		"GET /repos/o/r/issues/1",
+		fmt.Sprintf(`POST /repos/o/r/issues/110/dependencies/blocked_by {"issue_id":%d}`, databaseIDFor(1)),
+		"GET /repos/o/r/issues/2",
+		fmt.Sprintf(`POST /repos/o/r/issues/110/dependencies/blocked_by {"issue_id":%d}`, databaseIDFor(2)),
+	})
+}
 
-	svc := NewIssueService(client)
-	issue, err := svc.CreateSubIssue(context.Background(), "o", "r", 50, "Sub", "", nil, nil)
-	if err != nil {
-		t.Fatalf("CreateSubIssue returned unexpected error: %v", err)
-	}
-	if issue.Number != 111 {
-		t.Errorf("issue.Number = %d, want 111", issue.Number)
-	}
+// One blocker failing must not stop the others, and must be attributable: the
+// CLI accumulates per-blocker errors rather than aborting the loop.
+func TestAddBlockedBy_PartialFailureIsPerBlocker(t *testing.T) {
+	var seen []string
+	srv := linkWriteScriptServer(t, []int{http.StatusCreated, http.StatusForbidden}, &seen)
+	defer srv.Close()
 
-	// Blocker 1: succeeds.
-	blocker1, err := svc.GetIssue(context.Background(), "o", "r", 1)
-	if err != nil {
-		t.Fatalf("GetIssue(#1) unexpected error: %v", err)
-	}
-	if addErr := svc.AddBlockedBy(context.Background(), issue.NodeID, blocker1.NodeID); addErr != nil {
-		t.Fatalf("AddBlockedBy(#1) unexpected error: %v", addErr)
-	}
+	svc := NewIssueService(newClientForRESTTest(srv))
 
-	// Blocker 2: GetIssue succeeds, AddBlockedBy fails.
-	blocker2, err := svc.GetIssue(context.Background(), "o", "r", 2)
-	if err != nil {
-		t.Fatalf("GetIssue(#2) unexpected error: %v", err)
+	if err := svc.AddBlockedBy(context.Background(), ref("o", "r", 111), ref("o", "r", 1)); err != nil {
+		t.Fatalf("AddBlockedBy(#1) unexpected error: %v", err)
 	}
-	addErr := svc.AddBlockedBy(context.Background(), issue.NodeID, blocker2.NodeID)
-	if addErr == nil {
+	err := svc.AddBlockedBy(context.Background(), ref("o", "r", 111), ref("o", "r", 2))
+	if err == nil {
 		t.Fatal("expected AddBlockedBy(#2) to fail, got nil")
 	}
-	if !containsStr(addErr.Error(), "add blockedBy") {
-		t.Errorf("error %q does not contain 'add blockedBy'", addErr.Error())
+	if !containsStr(err.Error(), "add blockedBy") {
+		t.Errorf("error %q does not contain 'add blockedBy'", err.Error())
+	}
+	// A 403 is not a 404, and must not be reported as an absent issue.
+	if containsStr(err.Error(), "absent") {
+		t.Errorf("error %q claims the issue is absent on a 403", err.Error())
 	}
 }
 
-func TestIssueService_CreateSubIssue_BlockedByIdempotency(t *testing.T) {
-	// GitHub's addBlockedBy mutation is idempotent: calling it twice with the same
-	// IDs succeeds on both calls (no error, no duplicate edge created).
-	createResp := `{"data":{"createIssue":{"issue":{"id":"NEW_NODE","number":112,"url":"https://github.com/o/r/issues/112"}}}}`
-	parentResp := getIssueResp("PARENT_NODE", 50)
-	addSubResp := `{"data":{"addSubIssue":{"issue":{"id":"PARENT_NODE"}}}}`
-	blockerResp := getIssueResp("BLOCKER_NODE", 5)
-	addBlockedResp := `{"data":{"addBlockedBy":{"clientMutationId":null}}}`
+// Linking the same pair twice succeeds both times -- the endpoint is
+// idempotent, so the CLI need not check first.
+func TestAddBlockedBy_IsIdempotent(t *testing.T) {
+	var seen []string
+	srv := linkWriteScriptServer(t, []int{http.StatusCreated, http.StatusCreated}, &seen)
+	defer srv.Close()
 
-	// First run: create + AddBlockedBy once.
-	// Second run: GetIssue again + AddBlockedBy again (idempotent).
-	client, cleanup := mockForgeServer(t,
-		map[string]string{"GET /repos/o/r": restRepoIDFixture},
-		createResp, parentResp, addSubResp,
-		blockerResp, addBlockedResp,
-		blockerResp, addBlockedResp,
-	)
-	defer cleanup()
-
-	svc := NewIssueService(client)
-	issue, err := svc.CreateSubIssue(context.Background(), "o", "r", 50, "Sub", "", nil, nil)
-	if err != nil {
-		t.Fatalf("CreateSubIssue returned unexpected error: %v", err)
-	}
-
+	svc := NewIssueService(newClientForRESTTest(srv))
 	for i := 0; i < 2; i++ {
-		blocker, fetchErr := svc.GetIssue(context.Background(), "o", "r", 5)
-		if fetchErr != nil {
-			t.Fatalf("run %d: GetIssue(#5) unexpected error: %v", i+1, fetchErr)
+		if err := svc.AddBlockedBy(context.Background(), ref("o", "r", 112), ref("o", "r", 5)); err != nil {
+			t.Fatalf("run %d: AddBlockedBy unexpected error: %v", i+1, err)
 		}
-		if addErr := svc.AddBlockedBy(context.Background(), issue.NodeID, blocker.NodeID); addErr != nil {
-			t.Fatalf("run %d: AddBlockedBy unexpected error: %v", i+1, addErr)
-		}
+	}
+	if len(seen) != 4 {
+		t.Errorf("requests = %v, want two resolve+write pairs", seen)
 	}
 }
 

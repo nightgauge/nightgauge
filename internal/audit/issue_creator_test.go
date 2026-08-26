@@ -2,18 +2,45 @@ package audit
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/nightgauge/nightgauge/internal/forge"
 )
 
-// mockIssueCreator records calls but does nothing — used to verify dry-run skips all mutations.
+// linkCall records one two-ended issue link exactly as the creator issued it.
+// Both ends are kept because each carries its own owner/repo: a link is only
+// correct if BOTH refs name the right repository, so recording a single
+// identifier per end (as the old node-ID mock did) could not tell a
+// same-repo link from a cross-repo one.
+type linkCall struct {
+	from forge.IssueRef // epic for sub-issue links, blocked issue for blockedBy
+	to   forge.IssueRef // sub-issue for sub-issue links, blocker for blockedBy
+}
+
+// String renders the call the way an operator would read it, so a failed
+// assertion prints "owner/repo#1 -> owner/other#2".
+func (c linkCall) String() string { return c.from.String() + " -> " + c.to.String() }
+
+// mockIssueCreator records calls — used to verify dry-run skips all mutations
+// and that live runs address both ends of every link by the right ref.
 type mockIssueCreator struct {
 	createCalls       int
 	addSubIssueCalls  int
 	addBlockedByCalls int
 	addToBoardCalls   int
 	setStatusCalls    int
-	searchResults     map[string]struct {
+
+	subIssueLinks  []linkCall // epic -> sub-issue
+	blockedByLinks []linkCall // blocked -> blocker
+
+	// createdByTitle maps an issue title to the ref the mock handed back, so
+	// assertions can name issues by title instead of hard-coding the numbers
+	// that fall out of creation order.
+	createdByTitle map[string]forge.IssueRef
+
+	searchResults map[string]struct {
 		number int
 		nodeID string
 		found  bool
@@ -22,6 +49,7 @@ type mockIssueCreator struct {
 
 func newMockIssueCreator() *mockIssueCreator {
 	return &mockIssueCreator{
+		createdByTitle: make(map[string]forge.IssueRef),
 		searchResults: make(map[string]struct {
 			number int
 			nodeID string
@@ -34,18 +62,25 @@ func (m *mockIssueCreator) GetRepositoryID(_ context.Context, _, _ string) (stri
 	return "repo-node-id", nil
 }
 
-func (m *mockIssueCreator) CreateIssueWithID(_ context.Context, _, _, _, _ string, _ []string) (string, int, error) {
+// CreateIssueWithID hands back a realistic, non-zero issue number. The number
+// is load-bearing now: it becomes the IssueRef the link calls address, and a
+// zero would make the creator skip the link entirely.
+func (m *mockIssueCreator) CreateIssueWithID(_ context.Context, owner, repo, title, _ string, _ []string) (string, int, error) {
 	m.createCalls++
-	return "new-node-id", m.createCalls, nil
+	number := 100 + m.createCalls
+	m.createdByTitle[title] = forge.IssueRef{Owner: owner, Repo: repo, Number: number}
+	return fmt.Sprintf("node-%d", number), number, nil
 }
 
-func (m *mockIssueCreator) AddSubIssue(_ context.Context, _, _ string) error {
+func (m *mockIssueCreator) AddSubIssue(_ context.Context, parent, child forge.IssueRef) error {
 	m.addSubIssueCalls++
+	m.subIssueLinks = append(m.subIssueLinks, linkCall{from: parent, to: child})
 	return nil
 }
 
-func (m *mockIssueCreator) AddBlockedBy(_ context.Context, _, _ string) error {
+func (m *mockIssueCreator) AddBlockedBy(_ context.Context, blocked, blocker forge.IssueRef) error {
 	m.addBlockedByCalls++
+	m.blockedByLinks = append(m.blockedByLinks, linkCall{from: blocked, to: blocker})
 	return nil
 }
 
@@ -68,6 +103,17 @@ func (m *mockIssueCreator) SearchOpenIssueByTitle(_ context.Context, _, _, title
 
 func (m *mockIssueCreator) GetLabelID(_ context.Context, _, _, _ string) (string, error) {
 	return "label-node-id", nil
+}
+
+// refForTitle returns the ref the mock assigned to a created issue, failing
+// the test if that issue was never created.
+func (m *mockIssueCreator) refForTitle(t *testing.T, title string) forge.IssueRef {
+	t.Helper()
+	ref, ok := m.createdByTitle[title]
+	if !ok {
+		t.Fatalf("no issue was created with title %q; created: %v", title, m.createdByTitle)
+	}
+	return ref
 }
 
 // --- helpers ---
@@ -291,5 +337,145 @@ func TestRunIssueCreation_DryRun(t *testing.T) {
 	}
 	if result.IssuesCreated != 0 {
 		t.Errorf("expected 0 issues created in dry-run, got %d", result.IssuesCreated)
+	}
+}
+
+func TestRunIssueCreation_LinksSubIssuesByRef(t *testing.T) {
+	dim := &DimensionResult{
+		Name: "Dimension 1: API Alignment",
+		Findings: []AuditFinding{
+			makeFinding("f1", "CAT_A", "repo-alpha", "high"),
+		},
+	}
+	report := makeReport([]*DimensionResult{dim})
+
+	cfg := IssueCreatorConfig{
+		Owner: "test-owner",
+		Repo:  "repo-alpha",
+	}
+
+	mock := newMockIssueCreator()
+	result, err := RunIssueCreation(context.Background(), report, cfg, mock)
+	if err != nil {
+		t.Fatalf("RunIssueCreation returned error: %v", err)
+	}
+	if result.EpicsCreated != 1 || result.IssuesCreated != 1 {
+		t.Fatalf("expected 1 epic + 1 sub-issue created, got %d + %d", result.EpicsCreated, result.IssuesCreated)
+	}
+
+	epicRef := mock.refForTitle(t, GenerateEpicTitle(dim.Name, "repo-alpha"))
+	subRef := mock.refForTitle(t, GenerateSubIssueTitle(&dim.Findings[0]))
+
+	if len(mock.subIssueLinks) != 1 {
+		t.Fatalf("expected 1 AddSubIssue call, got %d: %v", len(mock.subIssueLinks), mock.subIssueLinks)
+	}
+	got := mock.subIssueLinks[0]
+	want := linkCall{from: epicRef, to: subRef}
+	if got != want {
+		t.Errorf("AddSubIssue linked %s, want %s", got, want)
+	}
+	// The link must address real issue numbers, not the zero value that would
+	// have made the creator skip the call altogether.
+	if got.from.Number == 0 || got.to.Number == 0 {
+		t.Errorf("AddSubIssue was handed a zero issue number: %s", got)
+	}
+}
+
+// TestRunIssueCreation_BlockedByCrossesRepositories is the reason both ends of
+// the link carry their own owner/repo. The blockedBy pass walks every
+// dimension, so a finding filed in one repository can be blocked by a finding
+// filed in another — a single shared owner/repo pair would silently link
+// within whichever one the caller named.
+func TestRunIssueCreation_BlockedByCrossesRepositories(t *testing.T) {
+	blocker := makeFinding("f1", "CAT_A", "repo-alpha", "high")
+
+	blocked := makeFinding("f2", "CAT_B", "repo-beta", "medium")
+	blocked.BlockedBy = []string{"f1"}
+
+	dim1 := &DimensionResult{Name: "Dimension 1: API Alignment", Findings: []AuditFinding{blocker}}
+	dim2 := &DimensionResult{Name: "Dimension 2: Lifecycle", Findings: []AuditFinding{blocked}}
+	report := makeReport([]*DimensionResult{dim1, dim2})
+
+	cfg := IssueCreatorConfig{
+		Owner: "test-owner",
+		Repo:  "repo-alpha", // default repo; repo-beta must come from the finding
+	}
+
+	mock := newMockIssueCreator()
+	result, err := RunIssueCreation(context.Background(), report, cfg, mock)
+	if err != nil {
+		t.Fatalf("RunIssueCreation returned error: %v", err)
+	}
+	if len(result.Errors) != 0 {
+		t.Fatalf("unexpected errors: %v", result.Errors)
+	}
+	if result.BlockedByAdded != 1 {
+		t.Fatalf("expected 1 blockedBy edge, got %d", result.BlockedByAdded)
+	}
+
+	blockerRef := mock.refForTitle(t, GenerateSubIssueTitle(&blocker))
+	blockedRef := mock.refForTitle(t, GenerateSubIssueTitle(&blocked))
+
+	if len(mock.blockedByLinks) != 1 {
+		t.Fatalf("expected 1 AddBlockedBy call, got %d: %v", len(mock.blockedByLinks), mock.blockedByLinks)
+	}
+	got := mock.blockedByLinks[0]
+	want := linkCall{from: blockedRef, to: blockerRef}
+	if got != want {
+		t.Errorf("AddBlockedBy linked %s, want %s", got, want)
+	}
+	// The whole point: the two ends name different repositories.
+	if got.from.Repo != "repo-beta" {
+		t.Errorf("blocked end resolved to repo %q, want repo-beta", got.from.Repo)
+	}
+	if got.to.Repo != "repo-alpha" {
+		t.Errorf("blocker end resolved to repo %q, want repo-alpha", got.to.Repo)
+	}
+	if got.from.Repo == got.to.Repo {
+		t.Errorf("both ends resolved to the same repository (%s); cross-repo linking is not being exercised", got.from.Repo)
+	}
+}
+
+// TestRunIssueCreation_ExistingIssuesLinkByFoundNumber pins that the number
+// SearchOpenIssueByTitle reports for an already-open issue is what the link
+// call addresses. Before refs, that number was discarded and the node ID
+// carried the identity; now a dropped number would silently skip the link.
+func TestRunIssueCreation_ExistingIssuesLinkByFoundNumber(t *testing.T) {
+	blocker := makeFinding("f1", "CAT_A", "repo-alpha", "high")
+	blocked := makeFinding("f2", "CAT_B", "repo-alpha", "medium")
+	blocked.BlockedBy = []string{"f1"}
+
+	dim := &DimensionResult{Name: "Dimension 1: API Alignment", Findings: []AuditFinding{blocker, blocked}}
+	report := makeReport([]*DimensionResult{dim})
+
+	cfg := IssueCreatorConfig{Owner: "test-owner", Repo: "repo-alpha"}
+
+	mock := newMockIssueCreator()
+	type searchResult = struct {
+		number int
+		nodeID string
+		found  bool
+	}
+	mock.searchResults[GenerateSubIssueTitle(&blocker)] = searchResult{number: 501, nodeID: "node-501", found: true}
+	mock.searchResults[GenerateSubIssueTitle(&blocked)] = searchResult{number: 502, nodeID: "node-502", found: true}
+
+	result, err := RunIssueCreation(context.Background(), report, cfg, mock)
+	if err != nil {
+		t.Fatalf("RunIssueCreation returned error: %v", err)
+	}
+	if result.IssuesSkipped != 2 {
+		t.Fatalf("expected 2 skipped (already-open) sub-issues, got %d", result.IssuesSkipped)
+	}
+
+	if len(mock.blockedByLinks) != 1 {
+		t.Fatalf("expected 1 AddBlockedBy call, got %d: %v", len(mock.blockedByLinks), mock.blockedByLinks)
+	}
+	got := mock.blockedByLinks[0]
+	want := linkCall{
+		from: forge.IssueRef{Owner: "test-owner", Repo: "repo-alpha", Number: 502},
+		to:   forge.IssueRef{Owner: "test-owner", Repo: "repo-alpha", Number: 501},
+	}
+	if got != want {
+		t.Errorf("AddBlockedBy linked %s, want %s", got, want)
 	}
 }
