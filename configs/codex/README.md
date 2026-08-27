@@ -214,16 +214,6 @@ parses `input_tokens`, `cached_input_tokens`, and `output_tokens`. The CLI does
 not provide provider USD cost; Nightgauge derives cost from model pricing and
 observed tokens.
 
-### Adapter Capabilities
-
-| Capability            | Status | Notes                                                               |
-| --------------------- | ------ | ------------------------------------------------------------------- |
-| `interactive`         | false  | Codex exec runs headless                                            |
-| `sessionResume`       | true   | Opt-in `exec resume`; set `NIGHTGAUGE_CODEX_RESUME_ENABLED=true`    |
-| `streamJson`          | true   | `--json` produces JSONL event stream                                |
-| `nativeTokenTracking` | true   | Parses token usage from `turn.completed.usage`; USD cost is derived |
-| `fastMode`            | defer  | Model tiers are routed through the canonical Codex model registry   |
-
 ### Investigated But Not Adopted
 
 The following CLI patterns were evaluated during the beta and GA maturation

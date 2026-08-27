@@ -93,6 +93,15 @@ jobs:
         run: bash scripts/test-mirror-link-check.sh
       - name: Mirror link integrity
         run: python3 scripts/check-mirror-links.py
+      # CLA gate regression suite (#976): .github/scripts/cla-check.test.mjs
+      # existed but no workflow, npm script or ci-local.sh step ever ran it, so
+      # it was structurally incapable of going red. It spawns the real
+      # cla-check.mjs against a local HTTP stub — no Go toolchain, no network —
+      # and lint.yml already has setup-node + `npm ci` and runs unconditionally.
+      # Use the explicit file path: `node --test .github/scripts/` would try to
+      # execute cla-check.mjs itself and fail on the missing environment.
+      - name: CLA gate regression suite
+        run: node --test .github/scripts/cla-check.test.mjs
 
   link-check:
     # Validates cross-document reference integrity across root *.md + docs/**

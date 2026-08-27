@@ -1,7 +1,7 @@
 # Adapter Capability Matrix
 
-**Version:** 1.1
-**Updated:** 2026-07-21
+**Version:** 1.2
+**Updated:** 2026-08-26
 **Author:** nightgauge
 
 ---
@@ -9,9 +9,9 @@
 ## Overview
 
 This document is the canonical reference for what each Nightgauge AI CLI adapter
-actually supports. It was produced by a systematic audit of all 8 adapter implementations
+actually supports. It was produced by a systematic audit of all nine adapter implementations
 in both the TypeScript SDK layer and the Go binary layer, with code-level verification of
-every capability claim.
+every claim against source.
 
 The audit methodology followed the pattern established by
 [Decision #003 (Codex adapter parity)](decisions/003-codex-adapter-feature-parity.md):
@@ -44,48 +44,55 @@ pipeline dispatch.
 
 ## Full Capability Matrix
 
-### Capability Definitions
+### Adapter Surface (declared on `ICliAdapter`)
 
-| Capability              | Meaning                                                             |
-| ----------------------- | ------------------------------------------------------------------- |
-| **interactive**         | Supports multi-turn conversational execution (not just single-shot) |
-| **sessionResume**       | Can resume a prior session/thread by ID across pipeline stages      |
-| **streamJson**          | CLI/SDK produces structured NDJSON events (not plain text)          |
-| **nativeTokenTracking** | Token usage counts are reliably available in the adapter's output   |
+Every TypeScript adapter implements `ICliAdapter`
+(`packages/nightgauge-sdk/src/cli/adapters/ICliAdapter.ts:67-122`). The members
+below are the whole declared surface: `agentic` (:87),
+`getOrchestrationCapability()` (:105), the optional `runWorkflow?()` (:113), and
+`requiresDirectApiKey()` (:121).
 
-### Summary Table (TypeScript SDK Adapters)
+- **agentic** — drives a real tool loop (edit files, run shell, call `gh`). A
+  hard requirement for pipeline stage dispatch (#57); chat-completion-only
+  adapters declare `false` and are rejected there.
+- **orchestration** — `native-workflow` adapters may offload a fan-out to their
+  own engine via `runWorkflow?()`; everything else runs on the portable
+  `SdkFanoutRunner` floor. Orthogonal to `agentic` (codex is agentic yet
+  `sdk-fanout`).
+- **direct API key** — `requiresDirectApiKey()`; `true` means a raw provider key
+  is mandatory rather than a CLI session.
 
-| Adapter         | Interactive | Session Resume | Stream JSON | Token Tracking | Auth Method                                    | Min Version     |
-| --------------- | :---------: | :------------: | :---------: | :------------: | ---------------------------------------------- | --------------- |
-| claude-headless |      ✗      |       ✗        |      ✗      |       ✗        | OAuth (`claude auth status`)                   | None documented |
-| claude-sdk      |      ✓      |       ✓        |      ✓      |       ✓        | API key (`ANTHROPIC_API_KEY`)                  | N/A (SDK)       |
-| codex           |      ✗      |   ✓ (opt-in)   |      ✓      |       ✓        | `codex login status`                           | 0.111.0         |
-| gemini          |      ✗      |       ✗        |      ✓      |       ✓        | Cascade (GEMINI_API_KEY / Vertex / gcloud)     | 0.29.0          |
-| gemini-sdk      |      ✓      |       ✗        |      ✓      |       ✓        | API key (`GEMINI_API_KEY` or `GOOGLE_API_KEY`) | N/A (SDK)       |
-| lm-studio       |      ✗      |       ✗        |     ✗†      |       ✓        | None (local HTTP server)                       | N/A (HTTP)      |
-| ollama          |      ✗      |       ✗        |     ✗†      |       ✓        | None (local HTTP server)                       | N/A (HTTP)      |
-| copilot         |      ✗      |       ✗        |      ✗      |       ⚠️       | Token env vars / `copilot auth status`         | Unknown         |
-| grok            |      ✗      |   ✓ (opt-in)   |      ✓      |       ✓        | `grok login` / `XAI_API_KEY`                   | 1.0.0           |
+| Adapter         | agentic | orchestration     | direct API key | `runWorkflow?()`       | Auth method                                                                  | Min version    |
+| --------------- | :-----: | ----------------- | :------------: | ---------------------- | ---------------------------------------------------------------------------- | -------------- |
+| claude-headless |    ✓    | `native-workflow` |       ✗        | ✓ (gated ≥ `v2.1.154`) | `claude auth status` (OAuth)                                                 | none declared  |
+| claude-sdk      |    ✓    | `native-workflow` |       ✓        | ✓ (gated ≥ `v2.1.154`) | `ANTHROPIC_API_KEY` (checked in `validateAuth`)                              | N/A (SDK)      |
+| codex           |    ✓    | `sdk-fanout`      |       ✗        | —                      | `codex login status`                                                         | `0.111.0` warn |
+| gemini          |    ✓    | `sdk-fanout`      |       ✗        | —                      | Cascade: `GEMINI_API_KEY` / Vertex / `gcloud`                                | `0.29.0` warn  |
+| gemini-sdk      |    ✗    | `sdk-fanout`      |       ✓        | —                      | `GEMINI_API_KEY` or `GOOGLE_API_KEY` (checked in `validateAuth`)             | N/A (SDK)      |
+| grok            |    ✓    | `sdk-fanout`      |       ✗        | —                      | `grok login` session or `XAI_API_KEY`                                        | `1.0.0` warn   |
+| copilot         |    ✓    | `sdk-fanout`      |       ✗        | —                      | `GH_TOKEN` / `GITHUB_TOKEN` / `COPILOT_GITHUB_TOKEN` → `copilot auth status` | none declared  |
+| lm-studio       |    ✗    | `sdk-fanout`      |       ✗        | —                      | None (local HTTP server)                                                     | N/A (HTTP)     |
+| ollama          |    ✗    | `sdk-fanout`      |       ✗        | —                      | None (local HTTP server)                                                     | N/A (HTTP)     |
 
-† HTTP-based adapters (lm-studio, ollama) stream internally via SSE but produce SDKMessage objects,
-not raw NDJSON CLI output. See [Gap #3](#gap-3-lm-studio--ollama-streamjson-capability-semantics).
+`grok` has no per-adapter deep dive below by design — its verified behaviour is
+recorded in [§ Grok Live-Run Evidence (#528)](#grok-live-run-evidence-528).
 
 ### Go Binary Adapter Coverage
 
 The Go binary (`cmd/nightgauge`) has its own adapter layer (`internal/execution/adapters/`).
 The Go adapters are the **scheduler-driven execution path** (not the VSCode IPC path).
 
-| Adapter         | Go Binary Support | TypeScript Support | Gap?                                                                                    |
-| --------------- | :---------------: | :----------------: | --------------------------------------------------------------------------------------- |
-| claude-headless |         ✓         |         ✓          | Stream-JSON parity (see [Gap #4](#gap-4-claude-headless-streamjson-and-token-tracking)) |
-| claude-sdk      |         ✓         |         ✓          | Different implementation (see note)                                                     |
-| codex           |         ✓         |         ✓          | Session resume, ephemeral, sandbox (see #2589)                                          |
-| gemini          |         ✓         |         ✓          | Parity (#4032): positional prompt + `--output-format stream-json`                       |
-| gemini-sdk      |         ✓         |         ✓          | Stream-JSON flag in Go (uses `--output-format stream-json`)                             |
-| lm-studio       |         ✗         |         ✓          | Not in Go registry                                                                      |
-| ollama          |    ✓ (bridge)     |         ✓          | Go uses claude CLI as SDK bridge                                                        |
-| copilot         |         ✓         |         ✓          | CLI contract exists in both layers; live verification remains                           |
-| grok            |         ✓         |         ✓          | Beta since 2026-08-15 (#528) — see § Grok Live-Run Evidence                             |
+| Adapter         | Go Binary Support | TypeScript Support | Gap?                                                                                                                   |
+| --------------- | :---------------: | :----------------: | ---------------------------------------------------------------------------------------------------------------------- |
+| claude-headless |         ✓         |         ✓          | Stream-JSON parity (see [Gap #4](#gap-4-claude-headless-typescript-plain-text-output-and-token-reporting))             |
+| claude-sdk      |         ✓         |         ✓          | Different implementation (see note)                                                                                    |
+| codex           |         ✓         |         ✓          | Session resume, ephemeral, sandbox (see #2589)                                                                         |
+| gemini          |         ✓         |         ✓          | Parity (#4032): positional prompt + `--output-format stream-json`                                                      |
+| gemini-sdk      |         ✓         |         ✓          | Stream-JSON flag in Go (uses `--output-format stream-json`)                                                            |
+| lm-studio       |    ✓ (bridge)     |         ✓          | Registered at `internal/execution/adapters/registry.go:38` (alias `lmstudio` at :45); Go uses claude CLI as SDK bridge |
+| ollama          |    ✓ (bridge)     |         ✓          | Go uses claude CLI as SDK bridge                                                                                       |
+| copilot         |         ✓         |         ✓          | CLI contract exists in both layers; live verification remains                                                          |
+| grok            |         ✓         |         ✓          | Beta since 2026-08-15 (#528) — see § Grok Live-Run Evidence                                                            |
 
 **Note on claude-sdk Go adapter:** The Go `ClaudeSdkAdapter` spawns `claude -p --output-format stream-json`
 using `ANTHROPIC_API_KEY`. This is NOT the same as the TypeScript `ClaudeSdkAdapter` which imports
@@ -152,15 +159,6 @@ deterministic punt), #560 (402 classification).
 | Min version            | None documented in TypeScript adapter    |
 | `requiresDirectApiKey` | `false`                                  |
 
-**Capabilities (TypeScript):**
-
-| Capability          | Declared | Actual  | Status                                      |
-| ------------------- | -------- | ------- | ------------------------------------------- |
-| interactive         | `false`  | `false` | ✓ Correct — `--print` is single-shot        |
-| sessionResume       | `false`  | `false` | ✓ Correct — no resume support               |
-| streamJson          | `false`  | `false` | ✓ Correct — uses `text` format              |
-| nativeTokenTracking | `false`  | `false` | ✓ Correct — text output has no token fields |
-
 **Auth validation quality:** Good — specific error with clear recovery action
 (`Run 'claude auth login'`). Handles timeout (exit code 124) with a separate, actionable message.
 
@@ -176,7 +174,7 @@ deterministic punt), #560 (402 classification).
 - `NIGHTGAUGE_CLAUDE_CLI_COMMAND` — Override CLI binary path
 - `NIGHTGAUGE_CLAUDE_CLI_ARGS` — Override default args
 
-**Gaps identified:** [Gap #1](#gap-1-claude-headless-typescript-vs-go-parity), [Gap #4](#gap-4-claude-headless-streamjson-and-token-tracking)
+**Gaps identified:** [Gap #1](#gap-1-claude-headless-typescript-vs-go-parity), [Gap #4](#gap-4-claude-headless-typescript-plain-text-output-and-token-reporting)
 
 ---
 
@@ -198,25 +196,17 @@ the VS Code bundle, and VS Code routes its Claude selection through
 | Min version            | N/A (SDK, not CLI)                                                        |
 | `requiresDirectApiKey` | `true`                                                                    |
 
-**Capabilities (TypeScript):**
-
-| Capability          | Declared | Actual | Status                                               |
-| ------------------- | -------- | ------ | ---------------------------------------------------- |
-| interactive         | `true`   | `true` | ✓ Correct — SDK enables multi-turn                   |
-| sessionResume       | `true`   | `true` | ✓ Correct — SDK passes session context               |
-| streamJson          | `true`   | `true` | ✓ Correct — yields typed SDKMessage objects          |
-| nativeTokenTracking | `true`   | `true` | ✓ Correct — SDK returns `usage` in `result` messages |
-
-**Auth validation quality:** Does NOT validate at `validateAuth()` time — always returns "passed".
-Validation is deferred to `createQueryFunction()` which throws if no API key. This means the
-`validateAuth()` step does not surface missing-key errors early in the pipeline.
-**Decision:** DEFER — early auth validation could be added in a follow-up.
+**Auth validation quality:** Good — `validateAuth()` (`ClaudeSdkAdapter.ts:44-56`)
+throws `AUTH_MISSING` when `ANTHROPIC_API_KEY` is absent, so a missing key
+surfaces at the preflight check rather than mid-query. It also runs the
+native-workflow version preflight, which never hard-fails auth — a stale SDK
+simply downgrades orchestration to the `sdk-fanout` floor.
 
 **Environment variables:**
 
 - `ANTHROPIC_API_KEY` — Required
 
-**No gaps in capability declarations.** This is the gold-standard adapter.
+**No open gaps.** This is the gold-standard adapter.
 
 ---
 
@@ -232,15 +222,6 @@ Validation is deferred to `createQueryFunction()` which throws if no API key. Th
 | Default args           | `exec --full-auto --sandbox danger-full-access --json` |
 | Min version            | `0.111.0` (warn, not block)                            |
 | `requiresDirectApiKey` | `false`                                                |
-
-**Capabilities (TypeScript):**
-
-| Capability          | Declared | Actual  | Status                                                                                                                                      |
-| ------------------- | -------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| interactive         | `false`  | `false` | ✓ Correct — headless `exec` mode                                                                                                            |
-| sessionResume       | `true`   | `true`  | ✓ Correct — `exec resume <threadId>` via `NIGHTGAUGE_CODEX_RESUME_ENABLED=true`                                                             |
-| streamJson          | `true`   | `true`  | ✓ Correct — `--json` produces JSONL (`thread.started`, `item.completed`, `turn.completed`)                                                  |
-| nativeTokenTracking | `true`   | `true`  | ✓ Correct — `turn.completed.usage` (`input_tokens`/`cached_input_tokens`/`output_tokens`) parsed since Issue #4027 (supersedes spike #2587) |
 
 **Auth validation quality:** Good — specific to Codex CLI 0.98+ API (`codex login status`).
 Includes version check with warning (non-blocking) when below 0.111.0.
@@ -292,15 +273,6 @@ Error message: `codex CLI is not authenticated. Run 'codex login' to authenticat
 | Min version            | `0.29.0` (warn, not block)                      |
 | `requiresDirectApiKey` | `false`                                         |
 
-**Capabilities (TypeScript):**
-
-| Capability          | Declared | Actual  | Status                                                                 |
-| ------------------- | -------- | ------- | ---------------------------------------------------------------------- |
-| interactive         | `false`  | `false` | ✓ Correct — single-shot positional delivery                            |
-| sessionResume       | `false`  | `false` | ✓ Correct — no session support                                         |
-| streamJson          | `true`   | `true`  | ✓ Correct — `--output-format stream-json` produces NDJSON events       |
-| nativeTokenTracking | `true`   | `true`  | ✓ Correct — `result` event contains `stats.input_tokens/output_tokens` |
-
 **Auth validation quality:** Excellent — three-method cascade with specific instructions for each:
 
 1. `GEMINI_API_KEY` — instant env var check
@@ -349,17 +321,10 @@ dispatch.
 | Min version            | N/A (SDK, not CLI)                                                      |
 | `requiresDirectApiKey` | `true`                                                                  |
 
-**Capabilities (TypeScript):**
-
-| Capability          | Declared | Actual  | Status                                                                        |
-| ------------------- | -------- | ------- | ----------------------------------------------------------------------------- |
-| interactive         | `true`   | `true`  | ✓ Correct — SDK-based, multi-turn capable                                     |
-| sessionResume       | `false`  | `false` | ✓ Correct — no session/thread tracking                                        |
-| streamJson          | `true`   | `true`  | ✓ Correct — `generateContentStream` yields typed chunks                       |
-| nativeTokenTracking | `true`   | `true`  | ✓ Correct — `usageMetadata.promptTokenCount/candidatesTokenCount` from stream |
-
-**Auth validation quality:** Same gap as `claude-sdk` — `validateAuth()` always returns "passed";
-real validation (key presence check) deferred to `createQueryFunction()`.
+**Auth validation quality:** Good — `validateAuth()` (`GeminiSdkAdapter.ts:45-61`)
+resolves `GEMINI_API_KEY` then `GOOGLE_API_KEY` and throws `AUTH_MISSING` when
+neither is set. `createQueryFunction()` repeats the check before importing
+`@google/genai`.
 
 **Model resolution:** `NIGHTGAUGE_GEMINI_MODEL` → `NIGHTGAUGE_MODEL` → `gemini-2.5-flash` (default)
 
@@ -389,15 +354,6 @@ summarization, not repository-changing pipeline stages.
 | Min version            | N/A (HTTP server)                                              |
 | `requiresDirectApiKey` | `false`                                                        |
 
-**Capabilities (TypeScript):**
-
-| Capability          | Declared | Actual               | Status                                                                                                        |
-| ------------------- | -------- | -------------------- | ------------------------------------------------------------------------------------------------------------- |
-| interactive         | `false`  | `false`              | ✓ Correct — single-turn HTTP request                                                                          |
-| sessionResume       | `false`  | `false`              | ✓ Correct — no session support                                                                                |
-| streamJson          | `false`  | ⚠️ Partially correct | See [Gap #3](#gap-3-lm-studio--ollama-streamjson-capability-semantics)                                        |
-| nativeTokenTracking | `true`   | `true`               | ✓ Correct — `stream_options: {include_usage: true}` in request; reads `usage.prompt_tokens/completion_tokens` |
-
 **Auth validation quality:** Minimal — `validateAuth()` always passes. Real validation happens at
 request time: HTTP 404/400 → actionable "model not loaded" error; other HTTP errors → status code
 reported. Server connectivity errors surface at request time.
@@ -414,7 +370,14 @@ reported. Server connectivity errors surface at request time.
 - `NIGHTGAUGE_LM_STUDIO_API_KEY` — API key (default: `lm-studio`)
 - `NIGHTGAUGE_LM_STUDIO_TIMEOUT_MS` — Request timeout (default: 180000ms / 3 minutes)
 
-**Not in Go binary registry.** Only TypeScript SDK path supports LM Studio.
+**Go binary adapter (bridge mode):** registered at
+`internal/execution/adapters/registry.go:38` with the alias `lmstudio` at
+`registry.go:45`. `internal/execution/adapters/lmstudio.go` spawns
+`claude -p --output-format stream-json --verbose` and sets
+`NIGHTGAUGE_ADAPTER=lm-studio` so the TypeScript `LmStudioAdapter` handles the
+HTTP call — the same SDK-bridge shape as the Go Ollama adapter, and it likewise
+requires the `claude` CLI to be installed. `Agentic()` returns `false`, so the
+Go path is available for eval/judge, not pipeline dispatch.
 
 ---
 
@@ -433,15 +396,6 @@ summarization, not repository-changing pipeline stages.
 | Default args           | `[]` (HTTP-based)                                           |
 | Min version            | N/A (HTTP server)                                           |
 | `requiresDirectApiKey` | `false`                                                     |
-
-**Capabilities (TypeScript):**
-
-| Capability          | Declared | Actual               | Status                                                                                             |
-| ------------------- | -------- | -------------------- | -------------------------------------------------------------------------------------------------- |
-| interactive         | `false`  | `false`              | ✓ Correct — single-turn HTTP request                                                               |
-| sessionResume       | `false`  | `false`              | ✓ Correct — no session support                                                                     |
-| streamJson          | `false`  | ⚠️ Partially correct | See [Gap #3](#gap-3-lm-studio--ollama-streamjson-capability-semantics)                             |
-| nativeTokenTracking | `true`   | `true`               | ✓ Correct — `stream_options: {include_usage: true}`; reads `usage.prompt_tokens/completion_tokens` |
 
 **Auth validation quality:** Same as LM Studio — always passes. Actionable error messages at request time:
 
@@ -479,18 +433,9 @@ live representative six-stage run has not yet been recorded.
 | CLI command            | `copilot`                                                                                  |
 | Auth method            | Cascade: `GH_TOKEN`/`GITHUB_TOKEN`/`COPILOT_GITHUB_TOKEN` env vars → `copilot auth status` |
 | Prompt delivery        | stdin                                                                                      |
-| Default args           | `--allow-all`                                                                              |
+| Default args           | `--allow-all-tools`                                                                        |
 | Min version            | Not documented                                                                             |
 | `requiresDirectApiKey` | `false`                                                                                    |
-
-**Capabilities (TypeScript):**
-
-| Capability          | Declared | Actual        | Status                                                 |
-| ------------------- | -------- | ------------- | ------------------------------------------------------ |
-| interactive         | `false`  | `false`       | ✓ Correct — headless stdin mode                        |
-| sessionResume       | `false`  | `false`       | ✓ Correct — no session support                         |
-| streamJson          | `false`  | `false`       | ✓ Correct — Copilot CLI produces plain text            |
-| nativeTokenTracking | `true`   | ⚠️ Unverified | See [Gap #2](#gap-2-copilot-nativetokentracking-claim) |
 
 **Auth validation quality:** Good design — checks cheapest methods first:
 
@@ -501,15 +446,20 @@ live representative six-stage run has not yet been recorded.
 
 Error messages from `validateCLIAuth`: `copilot CLI is not authenticated. Run 'gh auth login' to authenticate.`
 
-**Token parsing (best-effort):** `summarizeCopilotOutput()` uses three defensive strategies:
-
-1. JSON block at end of output matching `{"usage": {...}}`
-2. Text regex: `Input tokens: N` / `Output tokens: N`
-3. Text regex: `Tokens used: N input, N output`
-4. Text regex: `Usage: N input tokens, N output tokens`
-
-Falls back to zero tokens if no pattern matches. **This is not guaranteed token extraction** — it
-depends on Copilot CLI actually emitting one of these patterns.
+**Usage and cost — settled in #52.** Copilot is subscription-based and the CLI
+emits **no token counts at all**, so `input_tokens` / `output_tokens` are honest
+zeros rather than an estimate. Billing is per _premium request_, and that is what
+the adapter records: `summarizeCopilotOutput()`
+(`packages/nightgauge-sdk/src/cli/adapterQuery.ts:488`) parses the plain-text
+stats footer the CLI prints by default (the adapter deliberately omits `-s`),
+extracting the premium-request count, session id, and served model, and strips
+the footer from the displayed text. Cost is
+`premium_requests × COPILOT_PREMIUM_REQUEST_COST_USD`. When no footer usage line
+is present (early exit, or `-s` output) `usage` is left `undefined` and cost is
+`0`, mirroring Codex's "unobserved → undefined" convention rather than
+fabricating a count. See [Gap #2](#gap-2-copilot-stream-parsing-model-control-and-cost-accounting--resolved-52)
+for what remains: a live confirmation of the footer wording, not the token
+question.
 
 **Go support:** `CopilotAdapter` is registered in the Go execution layer and its
 plain-text stats stream is parsed there. Live entitlement-backed verification
@@ -586,183 +536,64 @@ of blanket `--allow-all-tools`) is a follow-up.
 
 ---
 
-### Gap #3: lm-studio / ollama `streamJson` Capability Semantics
-
-| Attribute  | Value                                                                             |
-| ---------- | --------------------------------------------------------------------------------- |
-| Adapters   | `lm-studio`, `ollama`                                                             |
-| Capability | `streamJson`                                                                      |
-| Declared   | `false`                                                                           |
-| Reality    | Internally streams via SSE/OpenAI-compatible streaming; yields SDKMessage objects |
-| Severity   | LOW (documentation gap only)                                                      |
-| Decision   | **SKIP** — document the nuance; no code change needed                             |
-
-**Evidence:**
-
-- Both adapters use `stream: true` with `stream_options: {include_usage: true}` in their HTTP requests
-- They parse SSE `data:` lines into SDKMessage objects yielded from async generators
-- The `streamJson` capability was designed for CLI adapters that produce NDJSON to stdout
-- HTTP-based adapters produce streaming at the HTTP transport layer, not NDJSON CLI output
-- Declaring `streamJson: false` is correct under the original definition; the adapters stream differently
-
-**Resolution:** The `streamJson` capability field definition should be clarified in `ICliAdapter.ts`
-to explicitly state it refers to CLI NDJSON output, not internal streaming. This is a documentation
-gap, not a capability gap.
-
----
-
-### Gap #4: claude-headless Stream-JSON and Token Tracking
+### Gap #4: claude-headless TypeScript Plain-Text Output and Token Reporting
 
 | Attribute  | Value                                                                 |
 | ---------- | --------------------------------------------------------------------- |
 | Adapter    | `claude-headless` (TypeScript)                                        |
-| Capability | `streamJson`, `nativeTokenTracking`                                   |
-| Declared   | Both `false`                                                          |
-| Go adapter | Uses `--output-format stream-json --verbose` (enables token tracking) |
+| Behaviour  | Emits plain text; no token counts are recoverable from the output     |
+| Go adapter | Uses `--output-format stream-json --verbose` (tokens are recoverable) |
 | Severity   | MEDIUM                                                                |
-| Decision   | **DEFER** — upgrade requires updating default args and output parser  |
+| Decision   | **DEFER** — upgrade requires new default args and an output parser    |
 
 **Evidence:**
 
-- TypeScript `ClaudeHeadlessAdapter.getDefaultArgs()` returns `["--print", "--output-format", "text"]`
+- TypeScript `ClaudeHeadlessAdapter.createQueryFunction()` defaults to
+  `["--print", "--output-format", "text"]`
 - Go `ClaudeAdapter.BuildCommand()` uses `-p --output-format stream-json --verbose`
-- Claude CLI `--output-format stream-json` produces NDJSON with `system.start` events containing token counts
-- If TypeScript `ClaudeHeadlessAdapter` switched to `--output-format stream-json`, it could report tokens natively
+- Claude CLI `--output-format stream-json` produces NDJSON carrying token counts
+- Switching the TypeScript adapter would let it report tokens natively instead of
+  relying on external estimation
 
-**Rationale for DEFER:** Requires:
-
-1. Updating `ClaudeHeadlessAdapter.createQueryFunction()` to use `stream-json` args
-2. Adding stream-json parsing in `cliQueryHelper.ts` for the `claude-headless` adapter (currently only `codex`, `gemini`, `copilot` have parsers)
-3. Updating `getCapabilities()` to reflect new `streamJson: true` and `nativeTokenTracking: true`
-
-This is non-trivial but high-value. Tracked as part of the broader adapter parity work.
+**Rationale for DEFER:** Requires (1) changing
+`ClaudeHeadlessAdapter.createQueryFunction()` to the stream-json args, and
+(2) adding a stream-json parser for `claude-headless` in `cliQueryHelper.ts`
+(only `codex`, `gemini` and `copilot` have parsers today). Non-trivial but
+high-value; tracked as part of the broader adapter parity work.
 
 ---
 
 ### Gap #5: Missing Minimum Version in claude-headless
 
-| Attribute       | Value                                                          |
-| --------------- | -------------------------------------------------------------- |
-| Adapter         | `claude-headless`                                              |
-| Capability      | Version detection                                              |
-| Codex pattern   | `MIN_KNOWN_VERSION = "0.111.0"` with warning in `validateAuth` |
-| Gemini pattern  | `MIN_KNOWN_VERSION = "0.29.0"` with warning in `validateAuth`  |
-| Claude headless | No minimum version defined; no version check in `validateAuth` |
-| Severity        | LOW                                                            |
-| Decision        | **DEFER**                                                      |
+| Attribute       | Value                                                             |
+| --------------- | ----------------------------------------------------------------- |
+| Adapter         | `claude-headless`                                                 |
+| Capability      | Version detection                                                 |
+| Codex pattern   | `MIN_KNOWN_VERSION = "0.111.0"` with warning in `validateAuth`    |
+| Gemini pattern  | `MIN_KNOWN_VERSION = "0.29.0"` with warning in `validateAuth`     |
+| Claude headless | Version is detected, but no `MIN_KNOWN_VERSION` floor is compared |
+| Severity        | LOW                                                               |
+| Decision        | **DEFER**                                                         |
 
-**Evidence:** `ClaudeHeadlessAdapter.validateAuth()` verifies the CLI is installed and authenticated
-but does not call `verifyCLIInstalled()` or check the version. Codex and Gemini adapters both check
-version and emit a non-blocking warning when below the known minimum.
+**Evidence:** `ClaudeHeadlessAdapter.validateAuth()` calls `verifyCLIInstalled()`
+and `detectClaudeCliVersion()`, but the detected version is used only for the
+native-workflow floor (`>= v2.1.154`) — there is no general `MIN_KNOWN_VERSION`
+compatibility warning. Codex (`0.111.0`), Gemini (`0.29.0`) and Grok (`1.0.0`)
+all emit a non-blocking warning when the CLI is below their known minimum.
 
-**Recommended fix:** Add `MIN_KNOWN_VERSION = "3.0.0"` (or appropriate value) and call
-`verifyCLIInstalled()` at the start of `validateAuth()` when a runner is provided.
-
----
-
-### Gap #6: claude-sdk and gemini-sdk `validateAuth` Deferred to Query Time
-
-| Attribute | Value                                                                                           |
-| --------- | ----------------------------------------------------------------------------------------------- |
-| Adapters  | `claude-sdk`, `gemini-sdk`                                                                      |
-| Issue     | `validateAuth()` always returns "passed"; API key validation happens in `createQueryFunction()` |
-| Impact    | Pipeline fails later (at query time) instead of at the preflight check stage                    |
-| Severity  | LOW                                                                                             |
-| Decision  | **DEFER**                                                                                       |
-
-**Evidence:**
-
-- `ClaudeSdkAdapter.validateAuth()`: `return "passed"` with no key check
-- `GeminiSdkAdapter.validateAuth()`: `return "passed"` with no key check
-- Actual key check is in `createQueryFunction()` which throws on missing key
-- Pipeline preflight runs `validateAuth()` — SDK adapters don't surface missing-key errors there
-
-**Recommended fix:** Add API key presence check in `validateAuth()` for both SDK adapters, mirroring
-how `GeminiSdkAdapter.createQueryFunction()` already does it.
-
----
-
-### Gap #7: Go Registry Missing lm-studio
-
-| Attribute           | Value                                                       |
-| ------------------- | ----------------------------------------------------------- |
-| Adapter             | `lm-studio`                                                 |
-| Go Registry         | Not registered in `internal/execution/adapters/registry.go` |
-| TypeScript Registry | Registered in `AdapterRegistry.ts`                          |
-| Severity            | LOW                                                         |
-| Decision            | **DEFER**                                                   |
-
-**Evidence:** `NewRegistry()` includes Copilot but not LM Studio.
-
-**Impact:** LM Studio evaluation is available only through the TypeScript SDK
-path. This does not block pipeline execution because LM Studio is
-chat-completion-only in both layers.
-
-**Rationale for DEFER:**
-
-- LM Studio would need a Go HTTP bridge if Go-native eval/judge support becomes
-  desirable.
+**Recommended fix:** Add a `MIN_KNOWN_VERSION` constant and compare the version
+already returned by `detectClaudeCliVersion()` against it, warning (not blocking)
+when the CLI is below the floor — the same shape as Codex, Gemini and Grok.
 
 ---
 
 ## Follow-Up Issues
 
-| Priority | Issue | Title                                                                  | Adapter                | Gap                                                                            |
-| -------- | ----- | ---------------------------------------------------------------------- | ---------------------- | ------------------------------------------------------------------------------ |
-| HIGH     | #2589 | Sync Go Codex Adapter with TypeScript Adapter                          | codex                  | Session resume, ephemeral, sandbox                                             |
-| MEDIUM   | —     | Verify Copilot CLI token output format                                 | copilot                | [Gap #2](#gap-2-copilot-nativetokentracking-claim)                             |
-| MEDIUM   | —     | Upgrade claude-headless TypeScript to stream-json                      | claude-headless        | [Gap #4](#gap-4-claude-headless-streamjson-and-token-tracking)                 |
-| LOW      | —     | Add LM Studio to the Go registry for eval/judge use                    | lm-studio              | [Gap #7](#gap-7-go-registry-missing-lm-studio)                                 |
-| LOW      | —     | Add version check to claude-headless validateAuth                      | claude-headless        | [Gap #5](#gap-5-missing-minimum-version-in-claude-headless)                    |
-| LOW      | —     | Add early API key validation to claude-sdk and gemini-sdk validateAuth | claude-sdk, gemini-sdk | [Gap #6](#gap-6-claude-sdk-and-gemini-sdk-validateauth-deferred-to-query-time) |
-| LOW      | —     | Clarify streamJson definition in ICliAdapter.ts for HTTP adapters      | lm-studio, ollama      | [Gap #3](#gap-3-lm-studio--ollama-streamjson-capability-semantics)             |
-
----
-
-## Capability Definitions (Reference)
-
-### interactive
-
-An adapter is `interactive: true` when it supports multi-turn conversational execution where
-the model can ask clarifying questions and the pipeline responds. This is different from
-"streaming" (receiving tokens incrementally).
-
-Currently `true`: `claude-sdk` (via Agent SDK), `gemini-sdk` (via `generateContentStream`)
-
-### sessionResume
-
-An adapter supports `sessionResume: true` when a prior conversation thread can be resumed
-by ID across separate pipeline stage invocations. The session ID must be extracted from one
-stage's output and passed to the next stage's query function.
-
-Currently `true`: `claude-sdk` (native), `codex` (opt-in via `NIGHTGAUGE_CODEX_RESUME_ENABLED=true`)
-
-### streamJson
-
-An adapter declares `streamJson: true` when its **CLI binary** produces structured NDJSON output
-to stdout. This is distinct from internal streaming (SSE, SDK generators).
-
-- `codex`: `--json` flag → JSONL events (`thread.started`, `item.completed`, `turn.completed`)
-- `gemini`: `--output-format stream-json` → NDJSON events (`init`, `message`, `tool_use`, etc.)
-- `claude-sdk`: yields typed `SDKMessage` objects (SDK-native, not NDJSON CLI)
-- `gemini-sdk`: yields typed chunks from `generateContentStream` (SDK-native, not NDJSON CLI)
-- `lm-studio`, `ollama`: stream internally via SSE but produce `SDKMessage` objects (not NDJSON CLI)
-
-### nativeTokenTracking
-
-An adapter has `nativeTokenTracking: true` when its output **reliably** contains token usage counts
-that can be extracted programmatically without estimation.
-
-| Adapter         | Source                               | Fields                                                                |
-| --------------- | ------------------------------------ | --------------------------------------------------------------------- |
-| claude-sdk      | `result` message `usage` field       | `input_tokens`, `output_tokens`, `cache_read_input_tokens`            |
-| gemini          | `result` NDJSON event `stats` field  | `input_tokens`, `output_tokens`, `cached`                             |
-| gemini-sdk      | `usageMetadata` in stream chunks     | `promptTokenCount`, `candidatesTokenCount`, `cachedContentTokenCount` |
-| lm-studio       | Final SSE chunk `usage` field        | `prompt_tokens`, `completion_tokens`                                  |
-| ollama          | Final SSE chunk `usage` field        | `prompt_tokens`, `completion_tokens`                                  |
-| codex           | `turn.completed` event `usage` field | `input_tokens`, `cached_input_tokens`, `output_tokens` (#4027)        |
-| claude-headless | Not available                        | Requires external estimation                                          |
-| copilot         | Best-effort regex parsing            | Unverified reliability (see Gap #2)                                   |
+| Priority | Issue | Title                                             | Adapter         | Gap                                                                               |
+| -------- | ----- | ------------------------------------------------- | --------------- | --------------------------------------------------------------------------------- |
+| HIGH     | #2589 | Sync Go Codex Adapter with TypeScript Adapter     | codex           | Session resume, ephemeral, sandbox                                                |
+| MEDIUM   | —     | Upgrade claude-headless TypeScript to stream-json | claude-headless | [Gap #4](#gap-4-claude-headless-typescript-plain-text-output-and-token-reporting) |
+| LOW      | —     | Add version check to claude-headless validateAuth | claude-headless | [Gap #5](#gap-5-missing-minimum-version-in-claude-headless)                       |
 
 ---
 
@@ -770,9 +601,22 @@ that can be extracted programmatically without estimation.
 
 This document should be updated when:
 
-1. A new adapter is added to `AdapterRegistry.ts`
-2. An adapter's `getCapabilities()` return value changes
-3. A capability gap is resolved (update Decision column to "Adopted" with issue reference)
-4. A new capability dimension is added to `AdapterCapabilities` interface
+1. A new adapter is registered in
+   `packages/nightgauge-sdk/src/cli/adapters/AdapterRegistry.ts` or
+   `internal/execution/adapters/registry.go`
+2. An adapter's `agentic` field or `getOrchestrationCapability()` return value
+   changes
+3. An adapter gains or loses `runWorkflow?()`, or its `requiresDirectApiKey()`
+   answer changes
+4. The `ICliAdapter` surface itself
+   (`packages/nightgauge-sdk/src/cli/adapters/ICliAdapter.ts:67-122`) gains or
+   loses a member
+5. A gap is resolved (delete the gap section and its Follow-Up row rather than
+   leaving a closed entry behind)
 
-**Last verified:** 2026-04-09 via full code review of all 8 TypeScript adapters and 6 Go adapters.
+**Last verified:** 2026-08-26 — the Adapter Surface table, the Go Binary Adapter
+Coverage table, and every gap section were re-read against
+`packages/nightgauge-sdk/src/cli/adapters/*.ts`,
+`packages/nightgauge-sdk/src/cli/adapterQuery.ts`, and
+`internal/execution/adapters/`. The Grok Live-Run Evidence section carries
+forward from its 2026-08-15 run and was not re-executed.

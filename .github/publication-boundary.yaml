@@ -651,8 +651,10 @@ issue_references:
   # which by itself resolved 31 references that 913 had left dangling. Same
   # lesson as the line above, now with a number attached: the bump is not a
   # separate chore from the re-measure, it is the first half of it.
+  # 2026-08-26 (#971): 6,060 — the ADAPTER_MATRIX.md correction retired three
+  # citations along with the dead capability audit and the two refuted gaps.
   # NEVER raise this number. Lower it as the sweep progresses.
-  tree_baseline: 6063
+  tree_baseline: 6060
   allow_paths:
     # Files that DEFINE or TEST the rule must contain example violations.
     - ".github/publication-boundary.yaml"
