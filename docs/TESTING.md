@@ -869,6 +869,44 @@ the same thing, **revert only the test file and re-run**. That separates "my fix
 is wrong" from "my test is hostile to its neighbours" in one step, instead of
 guessing.
 
+### Mutate a COPY — `git checkout --` is not an undo for a mutation
+
+Mutation testing means deliberately breaking the subject to prove a check goes
+red. The obvious way to undo that is `git checkout -- <file>` — and it is wrong
+whenever the surrounding work is **uncommitted**, because it does not revert
+your mutation, it reverts to `HEAD`. Your mutation and the change you were
+verifying go together.
+
+This is not hypothetical. An agent auditing a two-line deletion mutation-tested
+it by re-inserting the deleted key, restored with `git checkout --`, and
+silently wiped the still-uncommitted fix — then reported the acceptance criteria
+met, because it had already measured them before restoring. The deletion had to
+be redone from scratch, and it was caught only because `git status` showed the
+files unmodified while the report claimed both were changed.
+
+**The habit that works: mutate a copy, never the working tree.**
+
+```bash
+cp docs/FOCUS_MODE.md /tmp/mutant.md    # mutate the copy
+# ...apply the mutation to /tmp/mutant.md...
+grep -ci vscode docs/FOCUS_MODE.md      # 1  — the repaired subject
+grep -ci vscode /tmp/mutant.md          # 2  — the check discriminates
+```
+
+Two rules fall out of it:
+
+1. **A check is only proof if it distinguishes the subject from the mutant.**
+   Compare the two measurements; do not read "the command printed nothing" as a
+   pass. A case-sensitive grep for `vscode` matches neither `VSCode` nor
+   `VSCode Extension`, so it can be green on a completely unrepaired file.
+2. **If you must mutate in place, restore from a backup you took** (`cp` before,
+   `cp` back after) — never from git, unless the work is already committed.
+
+The same asymmetry applies to any agent or script that verifies by editing:
+**a verification step that can write is a verification step that can destroy
+what it verifies.** Give it a read-only remit and a scratch directory, and diff
+the tree against its report rather than trusting the report.
+
 ### A test file's own fixtures can trip the rule the file tests
 
 A test for a lint, gate, or boundary rule has to contain examples of the thing
