@@ -801,24 +801,6 @@ export const ExecutionHistoryRunRecordV2Schema = z.object({
   proactive_escalations: z.array(ProactiveEscalationRecordSchema).optional(),
 
   /**
-   * Active focus lens state at pipeline start (Issue #2460).
-   *
-   * Records which focus lens (if any) was active when this pipeline run began.
-   * Used for A/B comparison of focus vs non-focus run outcomes and costs.
-   * Absent when no focus lens was active (equivalent to "general" lens).
-   */
-  focus_lens_active: z
-    .object({
-      /** The active lens name (e.g., "quality", "security", "features") */
-      lens: z.string(),
-      /** When the focus was set (ISO 8601) */
-      set_at: z.string().optional(),
-      /** Who set the focus ("cli", "vscode", "ipc") */
-      set_by: z.string().optional(),
-    })
-    .optional(),
-
-  /**
    * Pipeline run UUID for platform deduplication vs. real-time events (#3558).
    *
    * Written by the Go scheduler into run-state.json (RunState.RunID). Carried
