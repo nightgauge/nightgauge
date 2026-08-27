@@ -1648,11 +1648,6 @@
           "default": 15,
           "description": "How often (in minutes) the telemetry queue flushes when telemetry is enabled."
         },
-        "nightgauge.backend.useGoBinary": {
-          "type": "boolean",
-          "default": false,
-          "description": "Use Go binary for project board data (falls back to TypeScript if unavailable)"
-        },
         "nightgauge.backend.binaryPath": {
           "type": "string",
           "default": "",
