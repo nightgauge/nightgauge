@@ -70,6 +70,19 @@ re-runs and turns green. If you have already signed and the check is still red,
 comment `recheck`. Contributing on behalf of a company uses
 [`corporate.md`](corporate.md) — see the corporate flow below.
 
+**A red `cla` is not always a verdict about your CLA.** The gate talks to the
+GitHub API, and that call can fail transiently. Open the failed job's log and
+read the last line:
+
+- `... after 3 attempts` (or `failed after 3 attempts`) — a **transport
+  failure**. The gate retried and gave up; nothing was decided about your
+  agreement. Re-run the job, or comment `recheck`.
+- `GitHub API 4xx for ...` with no attempt count — the gate's **own verdict**,
+  reached on the first request. Something is genuinely wrong (a missing file, a
+  bad token, a permission); re-running will not change it.
+- A `pending` status with the bot's comment — the ordinary unsigned case. Reply
+  with the agreement phrase above.
+
 ## Submitting work you do not fully own
 
 If a contribution includes work whose copyright you do **not** entirely own (for
@@ -164,6 +177,14 @@ moment both exist it enforces (fail-closed) with no workflow edit.**
    `nightgauge/.cla-signatures` and the check re-runs green; a second PR from
    the same account passes with no new comment. The check-run name is exactly
    **`cla`** (the job id) — the name the branch ruleset requires (#137).
+
+The gate retries the GitHub API up to three times, with backoff, for the three
+classes that are transport failures rather than answers: a network-level
+rejection, a `5xx`, and a `429`. Every other non-ok status is raised on the
+first request. That split is what makes the two failure shapes above
+distinguishable in the log — a red `cla` naming an attempt count is an outage to
+re-run, and one without it is the gate's verdict (#976). Retries are bounded on
+purpose: once the budget is spent the job fails loudly rather than hanging.
 
 Bots are allow-listed in the workflow and do not sign. The sole maintainer signs
 once like anyone else (the flow is idempotent) or merges under the ruleset's

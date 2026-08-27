@@ -12,14 +12,34 @@ import test from "node:test";
 const script = path.resolve(".github/scripts/cla-check.mjs");
 const agreement = "I have read the CLA Document and I hereby sign the CLA";
 
-async function runGate(event, initialSignatures = [], corporateEntities = []) {
+// `faults` scripts transport failures per request URL, so the retry behaviour
+// added for #976 can be driven end to end through the real script. A value of
+// `[500, 429]` is consumed one entry per hit and then falls through to the
+// normal payload; a bare `500` (or `"destroy"`) applies to every hit. The
+// literal "destroy" kills the socket before any response byte is written, so
+// `globalThis.fetch` REJECTS instead of returning a response — the third
+// retryable class, which a status code cannot exercise.
+async function runGate(event, initialSignatures = [], corporateEntities = [], options = {}) {
+  const { faults = {}, expectFailure = false } = options;
   const state = {
     signatures: initialSignatures,
     prompts: [],
     statuses: [],
     writes: 0,
+    // url -> array of Date.now() per hit. Timestamps rather than a count so a
+    // test can assert the backoff actually slept between attempts without
+    // measuring the child process's own startup.
+    hits: {},
   };
   const server = http.createServer(async (request, response) => {
+    (state.hits[request.url] ??= []).push(Date.now());
+    const scripted = faults[request.url];
+    const fault = Array.isArray(scripted) ? (scripted.length ? scripted.shift() : null) : scripted;
+    if (fault === "destroy") return request.socket.destroy();
+    if (typeof fault === "number") {
+      response.writeHead(fault, { "content-type": "application/json" });
+      return response.end(JSON.stringify({ message: `simulated ${fault}` }));
+    }
     const body = await new Promise((resolve) => {
       let value = "";
       request.on("data", (chunk) => (value += chunk));
@@ -114,11 +134,20 @@ async function runGate(event, initialSignatures = [], corporateEntities = []) {
   let stderr = "";
   child.stderr.on("data", (chunk) => (stderr += chunk));
   const [code] = await once(child, "exit");
+  server.closeAllConnections();
   server.close();
   await fs.rm(directory, { recursive: true, force: true });
-  assert.equal(code, 0, stderr);
+  state.code = code;
+  state.stderr = stderr;
+  if (expectFailure) {
+    assert.notEqual(code, 0, "expected the gate to exit non-zero");
+  } else {
+    assert.equal(code, 0, stderr);
+  }
   return state;
 }
+
+const pullPath = "/repos/nightgauge/nightgauge/pulls/7";
 
 test("prompts an unsigned contributor and publishes a pending status", async () => {
   const state = await runGate({ pull_request: { number: 7 } });
@@ -166,4 +195,61 @@ test("accepts a contributor authorized by a corporate agreement", async () => {
   );
   assert.equal(state.statuses.at(-1).state, "success");
   assert.equal(state.prompts.length, 0);
+});
+
+test("retries a transient 500 and still publishes a status", async () => {
+  const state = await runGate({ pull_request: { number: 7 } }, [], [], {
+    faults: { [pullPath]: [500, 500] },
+  });
+  const hits = state.hits[pullPath];
+  assert.equal(hits.length, 3);
+  // Pins the backoff itself: a retry loop whose sleep is a no-op passes every
+  // other assertion here. 700ms is the -25% jitter floor of the first delay.
+  assert.ok(hits[1] - hits[0] >= 700, `first retry waited only ${hits[1] - hits[0]}ms`);
+  assert.equal(state.statuses.at(-1).context, "cla");
+  assert.equal(state.statuses.at(-1).state, "pending");
+});
+
+test("retries a 429 rate-limit response", async () => {
+  const state = await runGate({ pull_request: { number: 7 } }, [], [], {
+    faults: { [pullPath]: [429] },
+  });
+  assert.equal(state.hits[pullPath].length, 2);
+  assert.equal(state.statuses.at(-1).state, "pending");
+});
+
+test("retries a network-level failure", async () => {
+  const state = await runGate({ pull_request: { number: 7 } }, [], [], {
+    faults: { [pullPath]: ["destroy"] },
+  });
+  assert.equal(state.hits[pullPath].length, 2);
+  assert.equal(state.statuses.at(-1).state, "pending");
+});
+
+test("does not retry a non-retryable 404", async () => {
+  const state = await runGate({ pull_request: { number: 7 } }, [], [], {
+    faults: { [pullPath]: 404 },
+    expectFailure: true,
+  });
+  assert.equal(state.hits[pullPath].length, 1);
+  assert.match(state.stderr, /GitHub API 404 for \/repos\/nightgauge\/nightgauge\/pulls\/7/);
+  assert.doesNotMatch(state.stderr, /attempts/);
+});
+
+test("names the attempt count when HTTP retries are exhausted", async () => {
+  const state = await runGate({ pull_request: { number: 7 } }, [], [], {
+    faults: { [pullPath]: 500 },
+    expectFailure: true,
+  });
+  assert.equal(state.hits[pullPath].length, 3);
+  assert.match(state.stderr, /GitHub API 500 for .* after 3 attempts/);
+});
+
+test("names the attempt count when network retries are exhausted", async () => {
+  const state = await runGate({ pull_request: { number: 7 } }, [], [], {
+    faults: { [pullPath]: "destroy" },
+    expectFailure: true,
+  });
+  assert.equal(state.hits[pullPath].length, 3);
+  assert.match(state.stderr, /failed after 3 attempts/);
 });

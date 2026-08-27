@@ -197,6 +197,17 @@ if [ -f scripts/check-workflow-refs.py ]; then
   run_step "nonexistent-workflow-reference gate" python3 scripts/check-workflow-refs.py
 fi
 
+# 5g. CLA gate regression suite (#976) — spawns the real .github/scripts/cla-check.mjs
+#     against a local HTTP stub and pins its bounded retry: a transient 5xx/429
+#     or socket failure is retried, every other 4xx is the gate's own verdict and
+#     is raised on the first shot. Mirrors .github/workflows/lint.yml's own step
+#     (not ci.yml's — this block is the lint.yml mirror region). Costs ~12s: the
+#     backoff is deliberately real, because a test-only zero-delay knob would
+#     re-open the mutation the timing assertion exists to kill.
+if [ -f .github/scripts/cla-check.test.mjs ]; then
+  run_step "CLA gate regression suite" node --test .github/scripts/cla-check.test.mjs
+fi
+
 # 4b. Cache-boundary measurement smoke test
 if [ -f scripts/test-measure-cache-boundary-loss.sh ]; then
   run_step "Cache-boundary measurement smoke" bash scripts/test-measure-cache-boundary-loss.sh
