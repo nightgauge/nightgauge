@@ -117,8 +117,6 @@ export interface HistoryIndexEntry {
   is_supercharge?: boolean;
   /** Active performance mode for this run (Issue #3009). */
   performance_mode?: "efficiency" | "elevated" | "maximum" | "frontier";
-  /** Active focus lens name when this run started, if any (Issue #2460) */
-  focus_lens_active?: string;
   cost_usd: number;
   /**
    * Token totals. OPTIONAL because entries written before these fields existed
@@ -395,7 +393,6 @@ export class ExecutionHistoryWriter {
       is_recovery: record.is_recovery,
       is_supercharge: record.is_supercharge,
       performance_mode: record.performance_mode,
-      focus_lens_active: record.focus_lens_active?.lens,
       cost_usd: record.tokens.estimated_cost_usd,
       total_input_tokens: record.tokens.total_input,
       total_output_tokens: record.tokens.total_output,

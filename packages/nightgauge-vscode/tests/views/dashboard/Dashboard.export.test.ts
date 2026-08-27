@@ -145,7 +145,6 @@ vi.mock("../../../src/utils/executionHistoryReader", () => ({
     listHistoryFiles: vi.fn().mockResolvedValue([]),
     parseJsonlFile: vi.fn().mockResolvedValue([]),
     getCostByIssue: vi.fn().mockResolvedValue([]),
-    getFocusLensComparison: vi.fn().mockResolvedValue(null),
     clearCache: vi.fn(),
   },
 }));

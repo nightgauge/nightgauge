@@ -36,39 +36,6 @@ import { ExecutionHistoryWriter } from "./executionHistoryWriter";
 export type NormalizedRunRecord = ExecutionHistoryRunRecordV2 | ExecutionHistoryRunRecordV3;
 
 /**
- * A/B comparison of pipeline runs with vs without an active focus lens (Issue #2460).
- *
- * Quantifies the ROI of focus lens usage by comparing cost, duration, and
- * success rate between focused and unfocused runs.
- */
-export interface FocusLensImpactComparison {
-  /** Number of runs with an active (non-general) focus lens */
-  focusedRunCount: number;
-  /** Number of runs with no active focus lens */
-  unfocusedRunCount: number;
-  /** Average cost (USD) per focused run */
-  avgCostFocused: number;
-  /** Average cost (USD) per unfocused run */
-  avgCostUnfocused: number;
-  /** Average duration (ms) per focused run */
-  avgDurationFocused: number;
-  /** Average duration (ms) per unfocused run */
-  avgDurationUnfocused: number;
-  /** Success rate (0–1) for focused runs — outcome === 'complete' */
-  successRateFocused: number;
-  /** Success rate (0–1) for unfocused runs — outcome === 'complete' */
-  successRateUnfocused: number;
-  /** Breakdown of focused runs by lens name */
-  byLens: Array<{
-    lens: string;
-    runCount: number;
-    avgCostUsd: number;
-    avgDurationMs: number;
-    successRate: number;
-  }>;
-}
-
-/**
  * Aggregated cost for a single issue across all pipeline runs.
  * Computed lazily from JSONL execution history — not persisted.
  *
@@ -309,76 +276,6 @@ export class ExecutionHistoryReader {
     } catch (err) {
       console.warn("[Nightgauge] getCostByIssue aggregation failed:", err);
       return [];
-    }
-  }
-
-  /**
-   * Compute A/B comparison of pipeline runs with vs without a focus lens (Issue #2460).
-   *
-   * Splits all run records into focused (focus_lens_active present and not "general")
-   * and unfocused (focus_lens_active absent or lens === "general") groups, then
-   * computes average cost, duration, and success rate for each group.
-   *
-   * @param workspaceRoot - Absolute path to repository root
-   * @returns Comparison metrics, or null when fewer than 2 total run records exist
-   */
-  static async getFocusLensComparison(
-    workspaceRoot: string
-  ): Promise<FocusLensImpactComparison | null> {
-    try {
-      const allRecords = await this.readAll(workspaceRoot);
-      const runRecords = allRecords.filter(
-        (r) => r.record_type === "run"
-      ) as ExecutionHistoryRunRecordV2[];
-
-      if (runRecords.length < 2) {
-        return null;
-      }
-
-      const focused = runRecords.filter(
-        (r) => r.focus_lens_active?.lens && r.focus_lens_active.lens !== "general"
-      );
-      const unfocused = runRecords.filter(
-        (r) => !r.focus_lens_active?.lens || r.focus_lens_active.lens === "general"
-      );
-
-      const avg = (nums: number[]) =>
-        nums.length === 0 ? 0 : nums.reduce((a, b) => a + b, 0) / nums.length;
-
-      const successRate = (runs: ExecutionHistoryRunRecordV2[]) =>
-        runs.length === 0 ? 0 : runs.filter((r) => r.outcome === "complete").length / runs.length;
-
-      // Per-lens breakdown for focused runs
-      const lensMap = new Map<string, ExecutionHistoryRunRecordV2[]>();
-      for (const r of focused) {
-        const lens = r.focus_lens_active!.lens;
-        const group = lensMap.get(lens) ?? [];
-        group.push(r);
-        lensMap.set(lens, group);
-      }
-
-      const byLens = Array.from(lensMap.entries()).map(([lens, runs]) => ({
-        lens,
-        runCount: runs.length,
-        avgCostUsd: avg(runs.map((r) => r.tokens.estimated_cost_usd)),
-        avgDurationMs: avg(runs.map((r) => r.total_duration_ms)),
-        successRate: successRate(runs),
-      }));
-
-      return {
-        focusedRunCount: focused.length,
-        unfocusedRunCount: unfocused.length,
-        avgCostFocused: avg(focused.map((r) => r.tokens.estimated_cost_usd)),
-        avgCostUnfocused: avg(unfocused.map((r) => r.tokens.estimated_cost_usd)),
-        avgDurationFocused: avg(focused.map((r) => r.total_duration_ms)),
-        avgDurationUnfocused: avg(unfocused.map((r) => r.total_duration_ms)),
-        successRateFocused: successRate(focused),
-        successRateUnfocused: successRate(unfocused),
-        byLens,
-      };
-    } catch (err) {
-      console.warn("[Nightgauge] getFocusLensComparison failed:", err);
-      return null;
     }
   }
 
