@@ -366,19 +366,23 @@ schema before writing.
 ## Configuration knobs
 
 Orchestration is **off by default** (the engine is opt-in). The knobs live in
-three mirrored places — the SDK config (`OrchestrationConfig` in
-`cli/workflow/OrchestrationConfig.ts`, surfaced on `PipelineConfig.orchestration`),
-the VSCode settings (`nightgauge.orchestration.*` in the extension
-`package.json`), and the config manifest (`.nightgauge/config.schema.json` →
-`orchestration`).
+the SDK config (`OrchestrationConfig` in `cli/workflow/OrchestrationConfig.ts`,
+surfaced on `PipelineConfig.orchestration`) and the config manifest
+(`.nightgauge/config.schema.json` → `orchestration`). Values are sourced from
+the `NIGHTGAUGE_ORCHESTRATION_*` environment variables
+(`packages/nightgauge-sdk/src/cli/config.ts`).
 
-| Key (`orchestration.*`) | VSCode setting                                 | Type                             | Default | Meaning                                                                                |
-| ----------------------- | ---------------------------------------------- | -------------------------------- | ------- | -------------------------------------------------------------------------------------- |
-| `disabled`              | `nightgauge.orchestration.disabled`            | boolean                          | `true`  | Disable the engine entirely (off by default).                                          |
-| `prefer_native_offload` | `nightgauge.orchestration.preferNativeOffload` | per-stage `{ [stage]: boolean }` | `{}`    | Prefer an adapter's `runWorkflow?()` backend over the portable floor, per stage.       |
-| `max_usd`               | `nightgauge.orchestration.maxUsd`              | number (≥ 0)                     | `0`     | Total USD budget for a run. `0` = uncapped. Maps to `WorkflowSpec.budgetUsd`.          |
-| `max_agents`            | `nightgauge.orchestration.maxAgents`           | integer (≥ 0)                    | `0`     | Total fan-out cap. `0` = use provider ceiling; `> 0` only lowers `ceiling.maxTotal`.   |
-| `max_concurrency`       | `nightgauge.orchestration.maxConcurrency`      | integer (≥ 0)                    | `0`     | Concurrent cap. `0` = use provider ceiling; `> 0` only lowers `ceiling.maxConcurrent`. |
+There is deliberately **no VSCode settings surface**. One existed until #968 —
+`nightgauge.orchestration.*` — but no extension code ever read it, so setting a
+budget cap there left the run uncapped with no warning.
+
+| Key (`orchestration.*`) | Env var                                    | Type                             | Default | Meaning                                                                                |
+| ----------------------- | ------------------------------------------ | -------------------------------- | ------- | -------------------------------------------------------------------------------------- |
+| `disabled`              | `NIGHTGAUGE_ORCHESTRATION_DISABLED`        | boolean                          | `true`  | Disable the engine entirely (off by default).                                          |
+| `prefer_native_offload` | `—`                                        | per-stage `{ [stage]: boolean }` | `{}`    | Prefer an adapter's `runWorkflow?()` backend over the portable floor, per stage.       |
+| `max_usd`               | `NIGHTGAUGE_ORCHESTRATION_MAX_USD`         | number (≥ 0)                     | `0`     | Total USD budget for a run. `0` = uncapped. Maps to `WorkflowSpec.budgetUsd`.          |
+| `max_agents`            | `NIGHTGAUGE_ORCHESTRATION_MAX_AGENTS`      | integer (≥ 0)                    | `0`     | Total fan-out cap. `0` = use provider ceiling; `> 0` only lowers `ceiling.maxTotal`.   |
+| `max_concurrency`       | `NIGHTGAUGE_ORCHESTRATION_MAX_CONCURRENCY` | integer (≥ 0)                    | `0`     | Concurrent cap. `0` = use provider ceiling; `> 0` only lowers `ceiling.maxConcurrent`. |
 
 `prefer_native_offload` is keyed by `OrchestrationStage` — every pipeline stage
 except the `pipeline-start` / `pipeline-finish` lifecycle markers. The

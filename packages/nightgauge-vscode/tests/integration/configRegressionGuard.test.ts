@@ -10,11 +10,13 @@
  * - mergeConfigs() for programmatic config access
  *
  * ALLOWED EXCEPTIONS:
- * - UI settings that are VSCode-specific (sidebar, output window preferences)
- * - Notification preferences (nightgauge.notifications.*)
- * - Warning preferences (nightgauge.warnings.*)
  * - Plugin setup (nightgauge.plugins.*)
+ * - VSCode tree/dashboard view preferences (readyItems, dashboard, projectBoard)
  * - Settings that are intentionally VSCode-only (not in config.yaml)
+ *
+ * The sidebar / outputWindow / notifications / warnings exceptions were removed
+ * in #968: those contributed settings reached no code at all, so they were
+ * deleted rather than kept as allowed bypasses.
  *
  * @see Issue #477 - Add integration tests for config.yaml → merge engine → service behavior
  * @see Issue #473 - ConfigBridge migration
@@ -29,10 +31,6 @@ import * as path from "node:path";
  * These are VSCode-specific settings that intentionally bypass the 6-tier config.
  */
 const ALLOWED_CONFIG_SECTIONS = [
-  "nightgauge.sidebar", // VSCode sidebar preferences
-  "nightgauge.outputWindow", // VSCode output window preferences
-  "nightgauge.notifications", // VSCode notification preferences
-  "nightgauge.warnings", // VSCode warning preferences
   "nightgauge.plugins", // Plugin setup
   "nightgauge.readyItems", // VSCode tree view preferences
   "nightgauge.dashboard", // VSCode dashboard preferences
@@ -233,10 +231,8 @@ describe("Config Regression Guard (Issue #477)", () => {
   describe("allowed config sections are documented", () => {
     it("should have documentation for each allowed section", () => {
       // Each allowed section should have a clear purpose
-      expect(ALLOWED_CONFIG_SECTIONS).toContain("nightgauge.sidebar");
-      expect(ALLOWED_CONFIG_SECTIONS).toContain("nightgauge.outputWindow");
-      expect(ALLOWED_CONFIG_SECTIONS).toContain("nightgauge.notifications");
-      expect(ALLOWED_CONFIG_SECTIONS).toContain("nightgauge.warnings");
+      expect(ALLOWED_CONFIG_SECTIONS).toContain("nightgauge.readyItems");
+      expect(ALLOWED_CONFIG_SECTIONS).toContain("nightgauge.dashboard");
       expect(ALLOWED_CONFIG_SECTIONS).toContain("nightgauge.plugins");
     });
 

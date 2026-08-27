@@ -4893,11 +4893,9 @@ variables are available:
 
 #### Gemini VSCode Settings
 
-| Setting                        | Type   | Default              | Description                                |
-| ------------------------------ | ------ | -------------------- | ------------------------------------------ |
-| `nightgauge.gemini.authMethod` | enum   | `"api-key"`          | Auth method: api-key, google-login, vertex |
-| `nightgauge.gemini.model`      | string | `"gemini-2.5-flash"` | Gemini model to use                        |
-| `nightgauge.gemini.apiKey`     | string | _(none)_             | API key (stored securely)                  |
+| Setting                    | Type   | Default  | Description               |
+| -------------------------- | ------ | -------- | ------------------------- |
+| `nightgauge.gemini.apiKey` | string | _(none)_ | API key (stored securely) |
 
 #### LM Studio Adapter Environment Variables
 

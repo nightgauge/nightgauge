@@ -338,11 +338,9 @@ ui:
 
 **Or via VSCode settings:**
 
-| Setting                        | Value              |
-| ------------------------------ | ------------------ |
-| `nightgauge.gemini.authMethod` | `api-key`          |
-| `nightgauge.gemini.model`      | `gemini-2.5-flash` |
-| `nightgauge.gemini.apiKey`     | _(your API key)_   |
+| Setting                    | Value            |
+| -------------------------- | ---------------- |
+| `nightgauge.gemini.apiKey` | _(your API key)_ |
 
 #### Step 4: Verify
 

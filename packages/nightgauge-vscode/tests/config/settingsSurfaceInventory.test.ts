@@ -18,6 +18,40 @@ function matches(setting: string, rule: InventoryRule): boolean {
     : setting === rule.setting;
 }
 
+/**
+ * True when `source` actually READS one of the namespace's settings through the
+ * VS Code settings API.
+ *
+ * A file-exists check is not enough: it passes for any path that resolves, which
+ * is how `nightgauge.orchestration.*` and `nightgauge.agentTeams.*` shipped as
+ * inert surfaces behind a green test (#968).
+ *
+ * A bare substring check is not enough either, and that is the subtler trap. The
+ * namespace string also appears in memento keys ("nightgauge.outputWindow.state"),
+ * in the manifest that DECLARES the settings, and in the Zod schema — none of
+ * which is a consumer. So the check requires a real `getConfiguration()` call
+ * whose section prefixes the setting, plus the remaining leaf as a string
+ * literal. That pairing is what distinguishes reading a setting from merely
+ * naming one.
+ */
+function readsSetting(source: string, setting: string): boolean {
+  const sections = [...source.matchAll(/getConfiguration\(\s*["'`]([^"'`]+)["'`]\s*\)/g)].map(
+    (m) => m[1]
+  );
+
+  // `getConfiguration(CONST)` — resolve simple module-level string constants.
+  for (const [, name] of source.matchAll(/getConfiguration\(\s*([A-Z_][A-Z0-9_]*)\s*\)/g)) {
+    const decl = source.match(new RegExp(`${name}\\s*=\\s*["'\`]([^"'\`]+)["'\`]`));
+    if (decl) sections.push(decl[1]);
+  }
+
+  return sections.some((section) => {
+    if (!setting.startsWith(`${section}.`)) return false;
+    const leaf = setting.slice(section.length + 1);
+    return new RegExp(`["'\`]${leaf.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}["'\`]`).test(source);
+  });
+}
+
 function schemaHasPath(path: string): boolean {
   const segments = path.replace(/\.\*$/, "").split(".");
   let schema: unknown = NightgaugeConfigSchema;
@@ -70,8 +104,19 @@ describe("settings surface inventory", () => {
   });
 
   it("maps schema-backed VS Code namespaces to real schema paths and consumers", () => {
+    const settings = Object.keys(packageJson.contributes.configuration.properties);
+
     for (const rule of inventory.vscode_namespaces) {
-      expect(existsSync(resolve(packageRoot, rule.runtime_consumer))).toBe(true);
+      const consumer = resolve(packageRoot, rule.runtime_consumer);
+      expect(existsSync(consumer), `${rule.setting}: ${rule.runtime_consumer}`).toBe(true);
+
+      // The consumer must actually read at least one setting in the namespace.
+      const source = readFileSync(consumer, "utf8");
+      const owned = settings.filter((setting) => matches(setting, rule));
+      expect(
+        owned.some((setting) => readsSetting(source, setting)),
+        `${rule.setting} is declared to be consumed by ${rule.runtime_consumer}, which never reads it`
+      ).toBe(true);
       if ("schema_path" in rule && rule.schema_path) {
         expect(schemaHasPath(rule.schema_path), rule.setting).toBe(true);
       } else {

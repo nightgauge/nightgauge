@@ -1290,92 +1290,6 @@
           "description": "Base URL for the Nightgauge web dashboard. Deep-link commands append route paths to this value.",
           "order": 5
         },
-        "nightgauge.authProvider": {
-          "type": "string",
-          "enum": [
-            "max",
-            "bedrock",
-            "vertex"
-          ],
-          "default": "max",
-          "description": "Authentication provider for Claude API"
-        },
-        "nightgauge.defaultModel": {
-          "type": "string",
-          "enum": [
-            "haiku",
-            "sonnet",
-            "opus",
-            "fable"
-          ],
-          "enumDescriptions": [
-            "Haiku — fastest, cheapest; lightweight tasks",
-            "Sonnet — balanced speed and capability (default)",
-            "Opus — most capable; recommended for hard work",
-            "Fable 5 — premium frontier tier, ~2× Opus cost. Applies to EVERY stage; use deliberately or prefer the 'frontier' performance mode which limits Fable to reasoning stages."
-          ],
-          "default": "sonnet",
-          "description": "Default model for pipeline stages. Automatic routing never selects Fable; setting it here forces Fable on every stage."
-        },
-        "nightgauge.contextPath": {
-          "type": "string",
-          "default": ".nightgauge/pipeline",
-          "description": "Path to pipeline context files relative to git root"
-        },
-        "nightgauge.plansPath": {
-          "type": "string",
-          "default": ".nightgauge/plans",
-          "description": "Path to plan files relative to git root"
-        },
-        "nightgauge.core.adapter": {
-          "type": "string",
-          "enum": [
-            "claude",
-            "codex",
-            "gemini",
-            "copilot",
-            "grok"
-          ],
-          "enumDescriptions": [
-            "Claude Code CLI (default)",
-            "OpenAI Codex CLI (beta agentic adapter)",
-            "Gemini CLI (experimental agentic adapter)",
-            "GitHub Copilot CLI (experimental agentic adapter)",
-            "Grok Build CLI (experimental agentic adapter)"
-          ],
-          "default": "claude",
-          "description": "Execution adapter for pipeline stages"
-        },
-        "nightgauge.gemini.authMethod": {
-          "type": "string",
-          "enum": [
-            "api-key",
-            "google-login",
-            "vertex-ai"
-          ],
-          "enumDescriptions": [
-            "GEMINI_API_KEY environment variable or SecretStorage (default)",
-            "Google account login (via Gemini CLI)",
-            "Vertex AI service account authentication"
-          ],
-          "default": "api-key",
-          "description": "Authentication method for Gemini adapters"
-        },
-        "nightgauge.gemini.model": {
-          "type": "string",
-          "enum": [
-            "gemini-2.5-pro",
-            "gemini-2.5-flash",
-            "gemini-2.0-flash"
-          ],
-          "enumDescriptions": [
-            "Gemini 2.5 Pro — most capable, best for complex tasks",
-            "Gemini 2.5 Flash — fast and efficient (default)",
-            "Gemini 2.0 Flash — previous generation, fastest"
-          ],
-          "default": "gemini-2.5-flash",
-          "description": "Default Gemini model for pipeline stages"
-        },
         "nightgauge.readyItems.autoRefresh": {
           "type": "boolean",
           "default": false,
@@ -1479,43 +1393,6 @@
           "default": true,
           "description": "Show dependency indicators (blocked by/blocks) and expandable dependency tree"
         },
-        "nightgauge.outputWindow.autoOpen": {
-          "type": "boolean",
-          "default": true,
-          "description": "Automatically open output window when pipeline starts"
-        },
-        "nightgauge.outputWindow.autoScroll": {
-          "type": "boolean",
-          "default": true,
-          "description": "Automatically scroll to latest output"
-        },
-        "nightgauge.outputWindow.verboseLevel": {
-          "type": "string",
-          "enum": [
-            "minimal",
-            "normal",
-            "verbose",
-            "debug"
-          ],
-          "enumDescriptions": [
-            "Show only errors and warnings",
-            "Show standard output including info messages",
-            "Show verbose output including tool calls",
-            "Show all output including debug messages"
-          ],
-          "default": "normal",
-          "description": "Amount of detail shown in output window"
-        },
-        "nightgauge.outputWindow.showTokenUsage": {
-          "type": "boolean",
-          "default": true,
-          "description": "Show real-time token usage and cost estimation"
-        },
-        "nightgauge.outputWindow.wordWrap": {
-          "type": "boolean",
-          "default": true,
-          "description": "Enable word wrap for long lines in output window"
-        },
         "nightgauge.dashboard.timeSavings.issuePickup": {
           "type": "number",
           "default": 5,
@@ -1613,99 +1490,6 @@
           "default": "https://github.com/nightgauge/nightgauge.git",
           "description": "Git URL for the Nightgauge plugin marketplace"
         },
-        "nightgauge.notifications.enabled": {
-          "type": "boolean",
-          "default": true,
-          "description": "Enable/disable all Nightgauge notifications"
-        },
-        "nightgauge.notifications.sounds.enabled": {
-          "type": "boolean",
-          "default": true,
-          "description": "Play sounds for pipeline events"
-        },
-        "nightgauge.notifications.sounds.alert": {
-          "type": "string",
-          "default": "Glass",
-          "enum": [
-            "Glass",
-            "Ping",
-            "Blow",
-            "Bottle",
-            "Frog",
-            "Funk",
-            "none"
-          ],
-          "enumDescriptions": [
-            "Gentle glass sound (default)",
-            "Subtle ping",
-            "Soft blow sound",
-            "Bottle pop",
-            "Frog croak",
-            "Funky alert",
-            "No sound"
-          ],
-          "description": "Sound for user input needed (set 'none' to disable)"
-        },
-        "nightgauge.notifications.sounds.success": {
-          "type": "string",
-          "default": "Hero",
-          "enum": [
-            "Hero",
-            "Purr",
-            "Pop",
-            "Submarine",
-            "none"
-          ],
-          "enumDescriptions": [
-            "Triumphant hero sound (default)",
-            "Soft purr",
-            "Pop sound",
-            "Submarine ping",
-            "No sound"
-          ],
-          "description": "Sound for pipeline completion (set 'none' to disable)"
-        },
-        "nightgauge.notifications.sounds.error": {
-          "type": "string",
-          "default": "Basso",
-          "enum": [
-            "Basso",
-            "Sosumi",
-            "Morse",
-            "Tink",
-            "none"
-          ],
-          "enumDescriptions": [
-            "Deep bass sound (default)",
-            "Distinctive sosumi",
-            "Morse code beep",
-            "Light tink",
-            "No sound"
-          ],
-          "description": "Sound for pipeline errors (set 'none' to disable)"
-        },
-        "nightgauge.notifications.sounds.volume": {
-          "type": "number",
-          "default": 0.5,
-          "minimum": 0,
-          "maximum": 1,
-          "description": "Volume for notification sounds (0.0-1.0)"
-        },
-        "nightgauge.notifications.banner.enabled": {
-          "type": "boolean",
-          "default": true,
-          "description": "Show VS Code notification banners"
-        },
-        "nightgauge.notifications.dockBounce.enabled": {
-          "type": "boolean",
-          "default": true,
-          "markdownDescription": "Bounce Dock icon when attention needed (macOS only)"
-        },
-        "nightgauge.notifications.respectDoNotDisturb": {
-          "type": "boolean",
-          "default": true,
-          "markdownDescription": "Suppress sounds/notifications when system Do Not Disturb is enabled (macOS only)"
-        },
         "nightgauge.pipeline.defaultMode": {
           "type": "string",
           "enum": [
@@ -1730,37 +1514,6 @@
           "minimum": 0,
           "maximum": 10000,
           "description": "Delay in milliseconds before auto-continuing to the next stage"
-        },
-        "nightgauge.orchestration.disabled": {
-          "type": "boolean",
-          "default": true,
-          "description": "Disable the multi-agent orchestration engine (epic #3899). Off by default while the engine is opt-in. The CLAUDE_CODE_DISABLE_WORKFLOWS environment variable forces this on regardless of setting."
-        },
-        "nightgauge.orchestration.preferNativeOffload": {
-          "type": "object",
-          "default": {},
-          "additionalProperties": {
-            "type": "boolean"
-          },
-          "markdownDescription": "Per-stage preference for an adapter's native `runWorkflow()` offload over the portable SdkFanoutRunner floor, when the resolved adapter declares `native-workflow`. Keys are pipeline stages (`issue-pickup`, `feature-planning`, `feature-dev`, `feature-validate`); `pr-create`/`pr-merge` are single-agent and never fanned out. A missing stage means \"use the portable floor\"."
-        },
-        "nightgauge.orchestration.maxUsd": {
-          "type": "number",
-          "default": 0,
-          "minimum": 0,
-          "description": "Total USD budget cap for a single orchestrated run. Set to 0 for uncapped (default)."
-        },
-        "nightgauge.orchestration.maxAgents": {
-          "type": "number",
-          "default": 0,
-          "minimum": 0,
-          "description": "Maximum agents spawned over a whole orchestrated run. Set to 0 to use the provider safety ceiling (default). When > 0 it can only lower the ceiling, never raise it."
-        },
-        "nightgauge.orchestration.maxConcurrency": {
-          "type": "number",
-          "default": 0,
-          "minimum": 0,
-          "description": "Maximum agents running at once in an orchestrated run. Set to 0 to use the provider safety ceiling (default). When > 0 it can only lower the ceiling, never raise it."
         },
         "nightgauge.projectBoard.groupByEpic": {
           "type": "boolean",
@@ -1857,11 +1610,6 @@
           "maximum": 500,
           "description": "Maximum number of batch runs to keep in history (rolling window)"
         },
-        "nightgauge.sidebar.hideEmptySections": {
-          "type": "boolean",
-          "default": false,
-          "description": "Hide sidebar sections that have no items"
-        },
         "nightgauge.audit.legacyEndpoint": {
           "type": "boolean",
           "default": false,
@@ -1899,119 +1647,6 @@
           "maximum": 1440,
           "default": 15,
           "description": "How often (in minutes) the telemetry queue flushes when telemetry is enabled."
-        },
-        "nightgauge.warnings.enabled": {
-          "type": "boolean",
-          "default": true,
-          "description": "Enable warnings when dragging issues that are already in progress or under review"
-        },
-        "nightgauge.warnings.warnOnInProgress": {
-          "type": "boolean",
-          "default": true,
-          "description": "Warn when dragging In Progress issues (requires warnings.enabled)"
-        },
-        "nightgauge.warnings.warnOnInReview": {
-          "type": "boolean",
-          "default": true,
-          "description": "Warn when dragging In Review issues (requires warnings.enabled)"
-        },
-        "nightgauge.agentTeams.enabled": {
-          "type": "boolean",
-          "default": false,
-          "description": "Enable agent teams for parallel pipeline execution (requires Claude Code CLI)"
-        },
-        "nightgauge.agentTeams.maxTeammates": {
-          "type": "number",
-          "default": 4,
-          "minimum": 1,
-          "maximum": 8,
-          "description": "Maximum number of parallel teammate sessions"
-        },
-        "nightgauge.agentTeams.teammateModel": {
-          "type": "string",
-          "enum": [
-            "sonnet",
-            "opus",
-            "haiku"
-          ],
-          "enumDescriptions": [
-            "Claude Sonnet — balanced speed and quality (default)",
-            "Claude Opus — highest quality, slower",
-            "Claude Haiku — fastest, lower quality"
-          ],
-          "default": "sonnet",
-          "description": "Model for teammate agents"
-        },
-        "nightgauge.agentTeams.displayMode": {
-          "type": "string",
-          "enum": [
-            "auto",
-            "in-process",
-            "tmux"
-          ],
-          "enumDescriptions": [
-            "Automatically select display mode (default)",
-            "Run teammates in-process (no tmux required)",
-            "Run teammates in tmux panes (requires tmux)"
-          ],
-          "default": "auto",
-          "description": "Display mode for teammate sessions"
-        },
-        "nightgauge.agentTeams.planApproval": {
-          "type": "boolean",
-          "default": true,
-          "description": "Require lead agent approval of teammate plans"
-        },
-        "nightgauge.agentTeams.delegateMode": {
-          "type": "boolean",
-          "default": false,
-          "description": "Restrict lead agent to coordination only"
-        },
-        "nightgauge.agentTeams.tokenBudgetSplit": {
-          "type": "string",
-          "enum": [
-            "proportional",
-            "equal",
-            "manual"
-          ],
-          "enumDescriptions": [
-            "Split budget proportional to task complexity (default)",
-            "Split budget equally across teammates",
-            "Manually set per-teammate budgets"
-          ],
-          "default": "proportional",
-          "description": "How to divide token budget across teammates"
-        },
-        "nightgauge.agentTeams.fileOwnership": {
-          "type": "boolean",
-          "default": true,
-          "description": "Enable file ownership hints in sub-issues"
-        },
-        "nightgauge.limits.monthlyBudgetUsd": {
-          "type": "number",
-          "default": 0,
-          "minimum": 0,
-          "description": "Monthly API cost budget in USD. Set to 0 to disable usage tracking and alerts."
-        },
-        "nightgauge.limits.warningThresholdPct": {
-          "type": "number",
-          "default": 80,
-          "minimum": 1,
-          "maximum": 100,
-          "description": "Percentage of monthly budget at which a warning notification fires."
-        },
-        "nightgauge.limits.criticalThresholdPct": {
-          "type": "number",
-          "default": 90,
-          "minimum": 1,
-          "maximum": 100,
-          "description": "Percentage of monthly budget at which a critical alert fires."
-        },
-        "nightgauge.limits.pollingIntervalSeconds": {
-          "type": "number",
-          "default": 300,
-          "minimum": 60,
-          "description": "How often (in seconds) to check usage against the budget threshold."
         },
         "nightgauge.backend.useGoBinary": {
           "type": "boolean",
