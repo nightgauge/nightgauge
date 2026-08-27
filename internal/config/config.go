@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/nightgauge/nightgauge/internal/cadence"
 	"os"
 	"path/filepath"
 	"sort"
@@ -801,6 +802,20 @@ type Config struct {
 	// time.
 	Notifiers *NotifiersConfig `json:"notifiers,omitempty" yaml:"notifiers,omitempty"`
 
+	// Cadence registers this workspace's OTHER scheduled automations so their
+	// silence is noticed (#996). Only this repository's own automations are
+	// built into the registry; a workspace's sibling repos declare theirs here
+	// rather than in the shipped product, which must not hardcode one
+	// workspace's repo slugs.
+	//
+	//	cadence:
+	//	  - id: nightly-smoke
+	//	    interval: 24h            # "7d" is accepted too
+	//	    repo: acme/widget        # omit for this repo
+	//	    workflow: smoke.yml
+	//	    trigger_event: schedule  # only a scheduled run proves the CRON works
+	Cadence []cadence.ConfigAutomation `json:"cadence,omitempty" yaml:"cadence,omitempty"`
+
 	// Users maps Mattermost user IDs to GitHub/GitLab identities for
 	// per-user authorization of inbound slash commands. Uses mattermost_user_id
 	// (stable identifier) rather than user_name (which can change).
@@ -1591,6 +1606,7 @@ type yamlConfigNested struct {
 	Forges           map[string]*ForgeConfigEntry `yaml:"forges,omitempty"`
 	Notifications    *NotificationsConfig         `yaml:"notifications,omitempty"`
 	Notifiers        *NotifiersConfig             `yaml:"notifiers,omitempty"`
+	Cadence          []cadence.ConfigAutomation   `yaml:"cadence,omitempty"`
 }
 
 // yamlConfigFlat is the legacy flat YAML format:
@@ -1627,6 +1643,7 @@ type yamlConfigFlat struct {
 	Forges           map[string]*ForgeConfigEntry `yaml:"forges,omitempty"`
 	Notifications    *NotificationsConfig         `yaml:"notifications,omitempty"`
 	Notifiers        *NotifiersConfig             `yaml:"notifiers,omitempty"`
+	Cadence          []cadence.ConfigAutomation   `yaml:"cadence,omitempty"`
 }
 
 // DefaultConfig returns default configuration values.
@@ -1802,6 +1819,7 @@ func parseYAMLNested(data []byte) (*Config, error) {
 	cfg.Forges = nested.Forges
 	cfg.Notifications = nested.Notifications
 	cfg.Notifiers = nested.Notifiers
+	cfg.Cadence = nested.Cadence
 	cfg.Attention = nested.Attention
 	if len(nested.Project.SizeToEstimate) > 0 {
 		cfg.SizeToEstimate = nested.Project.SizeToEstimate
@@ -1905,6 +1923,7 @@ func parseYAMLFlat(data []byte) (*Config, error) {
 	cfg.Forges = flat.Forges
 	cfg.Notifications = flat.Notifications
 	cfg.Notifiers = flat.Notifiers
+	cfg.Cadence = flat.Cadence
 	cfg.Attention = flat.Attention
 	if len(flat.SizeToEstimate) > 0 {
 		cfg.SizeToEstimate = flat.SizeToEstimate

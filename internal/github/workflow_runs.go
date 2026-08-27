@@ -43,6 +43,24 @@ type WorkflowRunJob struct {
 // Filters to status=completed so in-flight runs do not skew red/green
 // threshold counting in the baseline-CI gate evaluator.
 func (s *CIService) ListWorkflowRuns(ctx context.Context, owner, repo, workflowFile, branch string, perPage int) ([]WorkflowRun, error) {
+	return s.listWorkflowRuns(ctx, owner, repo, workflowFile, branch, "", perPage)
+}
+
+// ListWorkflowRunsByEvent is ListWorkflowRuns restricted to runs triggered by a
+// specific event ("schedule", "push", "workflow_dispatch", …).
+//
+// The distinction is load-bearing for cadence checking (#996): a workflow whose
+// cron is broken but which someone dispatched by hand has runs, and a check that
+// counts any run reads it as healthy. `org-security-audit.yml` is exactly that
+// shape — every run to date is `workflow_dispatch` or `pull_request`, and its
+// weekly cron has never fired once.
+//
+// An empty event means "any", which is what ListWorkflowRuns passes.
+func (s *CIService) ListWorkflowRunsByEvent(ctx context.Context, owner, repo, workflowFile, branch, event string, perPage int) ([]WorkflowRun, error) {
+	return s.listWorkflowRuns(ctx, owner, repo, workflowFile, branch, event, perPage)
+}
+
+func (s *CIService) listWorkflowRuns(ctx context.Context, owner, repo, workflowFile, branch, event string, perPage int) ([]WorkflowRun, error) {
 	if perPage <= 0 {
 		perPage = 5
 	}
@@ -59,6 +77,9 @@ func (s *CIService) ListWorkflowRuns(ctx context.Context, owner, repo, workflowF
 	q := url.Values{}
 	q.Set("branch", branch)
 	q.Set("status", "completed")
+	if event != "" {
+		q.Set("event", event)
+	}
 	q.Set("per_page", fmt.Sprintf("%d", perPage))
 
 	endpoint := fmt.Sprintf("https://api.github.com/repos/%s/%s/actions/workflows/%s/runs?%s",
