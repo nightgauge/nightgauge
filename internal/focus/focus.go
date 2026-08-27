@@ -3,7 +3,7 @@
 // Focus lenses steer autonomous enhancement, release-watch scoring, and
 // continuous-improvement proposals toward a specific quality dimension.
 // The active lens is persisted in .nightgauge/focus.yaml and readable
-// by all consumers (Go binary, VSCode extension, skills).
+// by all consumers (Go binary, skills).
 package focus
 
 import (
@@ -37,7 +37,7 @@ type State struct {
 	ActiveLens string `yaml:"active_lens" json:"activeLens"`
 	// SetAt is when the focus was last changed.
 	SetAt time.Time `yaml:"set_at" json:"setAt"`
-	// SetBy records who set the focus ("cli", "vscode", "ipc").
+	// SetBy records who set the focus ("cli", "ipc").
 	SetBy string `yaml:"set_by" json:"setBy"`
 	// CustomLenses holds user-defined lens definitions.
 	CustomLenses []Lens `yaml:"custom_lenses,omitempty" json:"customLenses,omitempty"`
