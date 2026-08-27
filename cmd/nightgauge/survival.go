@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"log"
 	"os"
 	"time"
 
@@ -64,25 +63,14 @@ never re-observed by 2×window ages out to "unobserved" (no signal).`,
 				windowDays = survival.DefaultWindowDays
 			}
 
-			store := survival.NewStore(workdir)
-			res, err := survival.Sweep(cmd.Context(), store, gh.NewSurvivalDetector(), now, windowDays)
+			// Shared with the autonomous reconcile pass and the post-merge hook
+			// (#992). The sweep-then-calibrate sequence used to be written out
+			// once per caller, and two of those copies had already drifted.
+			res, err := gh.FinalizeDueSurvivalRecords(cmd.Context(), workdir, now, windowDays)
 			if err != nil {
 				return err
 			}
-
-			// (#4152/#4153) Feed newly-finalized verdicts into bias-safe
-			// calibration so a manual/CI `survival sweep` has the same
-			// effect as the autonomous reconcile sweep. Best-effort: a
-			// calibration error is logged, never fails the command or
-			// changes the printed sweep result.
-			if len(res.FinalizedRecords) > 0 {
-				calRes := gh.NewOutcomeService(workdir).ApplySurvivalVerdicts(res.FinalizedRecords)
-				if calRes.Error != "" {
-					log.Printf("survival sweep: calibration error: %v", calRes.Error)
-				}
-			}
-
-			return printJSON(res)
+			return printJSON(res.SweepResult)
 		},
 	}
 

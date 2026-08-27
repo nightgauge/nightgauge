@@ -1054,6 +1054,11 @@ type AutonomousScheduler struct {
 	// pace it to baselineDeferralSweepInterval instead of the cycle cadence.
 	// Zero means "never" — the first cycle sweeps. Protected by mu.
 	lastBaselineSweepAt time.Time
+
+	// lastSurvivalSweepAt is when sweepSurvivalRecords last swept, used to pace
+	// it to survivalSweepInterval instead of riding graphWasFresh (#992).
+	// Zero means "never" — the first cycle sweeps. Protected by mu.
+	lastSurvivalSweepAt time.Time
 }
 
 // MaxConflictRestarts bounds the LEGACY fresh-branch conflict-restart path
@@ -2709,6 +2714,25 @@ func (as *AutonomousScheduler) runCycle(ctx context.Context) {
 	// one asks GitHub about workflow history and cannot ride a 30s tick.
 	as.sweepBaselineDeferrals(ctx)
 
+	// 0c. (#992) Finalize due post-merge survival records.
+	//
+	// Placed here, above the slot gate, for the same reason the rollup backstop
+	// at 0a was hoisted: it DISPATCHES NOTHING, and a saturated fleet is exactly
+	// when merges pile up waiting to be observed. That argument was written down
+	// for the rollup and never applied to this sweep, which sat below the gate
+	// and behind `graphWasFresh` as well — three independent conditions, all of
+	// which had to hold at once for a verdict to be finalized.
+	//
+	// The consequence was not a delay. Records aging past 2 × window fold to
+	// `unobserved`, which is worthless as evidence, so lateness DESTROYS
+	// verdicts rather than postponing them. This workspace accumulated 51 due
+	// records, the oldest a month past its window, while the writer ran on every
+	// pipeline run and the reader had not run since the loop stopped.
+	//
+	// Paced internally to survivalSweepInterval rather than riding the graph
+	// TTL, so its cadence is its own and does not change when graph pacing does.
+	as.sweepSurvivalRecords(ctx)
+
 	// 1. Gate on slot availability BEFORE building the graph.
 	// Building the graph costs GraphQL quota. When no effective slots remain
 	// (considering both the global cap and any per-repo caps), skip the build
@@ -2790,15 +2814,6 @@ func (as *AutonomousScheduler) runCycle(ctx context.Context) {
 		// fresh scan sees a Ready issue with an un-mergeable PR and blocks it.
 		as.refreshBlockedReadyPRs(ctx, graph)
 		as.reconcileStuckInReviewPRs(ctx, graph)
-	}
-
-	// 2d. (#4151) Finalize due post-merge survival records — poll-on-reconcile,
-	// no new cron (spike #4134 §1.4). Gated to FRESH graph builds: like the
-	// in-review sweep, survival detection makes per-record GitHub calls, so we
-	// run it at the graph TTL cadence rather than every cycle to protect the
-	// shared GitHub quota. Best-effort and non-blocking.
-	if graphWasFresh {
-		as.sweepSurvivalRecords(ctx)
 	}
 
 	// 2e. (#410) Tear down per-issue docker compose stacks whose run is gone.

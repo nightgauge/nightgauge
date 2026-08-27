@@ -18,6 +18,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/dockercompose"
 	"github.com/nightgauge/nightgauge/internal/execution"
 	gh "github.com/nightgauge/nightgauge/internal/github"
+	"github.com/nightgauge/nightgauge/internal/intelligence/survival"
 )
 
 // DoctorResult is the stable JSON output schema for `nightgauge doctor`.
@@ -368,6 +369,21 @@ func RunDoctor(ctx context.Context, cfg *config.Config, client *gh.Client, adapt
 	result.Checks["pipeline_stashes"] = stashLeaks
 	if stashWarning != "" {
 		warnings = append(warnings, stashWarning)
+	}
+
+	// Every arm above detects RESIDUE — something that exists and should not.
+	// This one detects an ABSENCE: work that should have been observed by now
+	// and was not (#992). A workflow with zero runs has no failed run to
+	// report, and a stopped sweep logs no error, so the whole class was
+	// invisible to a product whose value proposition is unattended operation.
+	survivalWindow := survival.DefaultWindowDays
+	if cfg != nil {
+		survivalWindow = cfg.Pipeline.ResolveSurvivalWindowDays()
+	}
+	survivalBacklog, survivalWarning := checkSurvivalBacklog(cwd, now, survivalWindow)
+	result.Checks["survival_backlog"] = survivalBacklog
+	if survivalWarning != "" {
+		warnings = append(warnings, survivalWarning)
 	}
 
 	// A killed stage leaks its worktree; a stage that is never killed leaks
