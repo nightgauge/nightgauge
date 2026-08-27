@@ -2038,6 +2038,59 @@ When a new failure class is eliminated and needs a guard:
 No workflow path filter needs extending: `go test ./...` already picks up
 anything added to `tests/synthetic/`.
 
+## A content check must distinguish reading a value from naming one
+
+A guard that pins a declaration to its consumer has three strengths, and only
+the third is worth anything:
+
+| Assertion                                           | What it actually proves                                                                       |
+| --------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| `existsSync(consumer)`                              | The path resolves. Nothing about consumption.                                                 |
+| `readFileSync(consumer).includes(name)`             | The name appears in the file — as a memento key, a declaration, a schema entry, or a comment. |
+| The consumer performs a **read** keyed by that name | It is consumed.                                                                               |
+
+`settingsSurfaceInventory.test.ts` shipped the first form (#968). Every VS Code
+settings namespace was pinned to a `runtime_consumer` path, and the test only
+checked that the path resolved — so `nightgauge.orchestration.*` and
+`nightgauge.agentTeams.*` passed while nothing read them. A user could set a
+`maxUsd` budget cap and get no cap, no warning and no log line.
+
+**The second form is the trap worth naming, because it looks like a real fix.**
+Tightening to a substring check would still have passed on:
+
+- **memento keys** — `"nightgauge.outputWindow.state"` is `globalState`, not a
+  setting read;
+- **the manifest that declares the settings** — the file generating
+  `contributes.configuration` naturally contains every setting name;
+- **the Zod schema** — same;
+- **prose in a comment**, including a comment explaining the defect.
+
+And the lenient variant is worse than the strict one. Falling back to bare leaf
+identifiers made `agentTeams` pass on the word `enabled` appearing anywhere in a
+14k-line file — a second vacuous assertion wearing the fix's clothes.
+
+The working form pairs the two halves that only co-occur in a genuine read: a
+`getConfiguration()` call whose section prefixes the setting, **and** the
+remaining leaf as a string literal. Generalised: assert the _mechanism_ of
+consumption, not the presence of the identifier.
+
+**Then run the AC that makes it real** — restore one deleted entry and watch the
+test fail with a message that names the row. A guard you have not seen go red is
+a guard you have not tested.
+
+## A deletion sweep verified by substring grep flags its own neighbours
+
+Removing `moveQueueItemUp` / `moveQueueItemDown` (#966), the residual check
+`grep -c "moveQueueItem"` returned 1 against a tree that was actually clean: the
+surviving `removeQueueItem` **contains** `moveQueueItem` as a substring.
+
+The failure runs in the dangerous direction too — a sweep that greps for a
+too-short fragment reports work remaining that is already done, and one that
+greps for a fragment shared with a survivor can mask a real leftover. Anchor
+residual greps on the full identifier with word boundaries, or grep the exact
+declaration form (`"nightgauge.moveQueueItemUp"` with quotes), and read the hits
+rather than trusting the count.
+
 ## Author
 
 nightgauge
