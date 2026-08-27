@@ -945,7 +945,40 @@ type AutonomousScheduler struct {
 
 	// refinementFailures tracks consecutive refinement failures per issue.
 	// Key: "repo#number". NOT shared with dispatch circuit breaker.
+	//
+	// Read by refinementExhausted at candidate selection (#993). Before that it
+	// was write-only: incremented on failure, deleted on success, never
+	// compared against anything.
 	refinementFailures map[string]int
+
+	// markRefinedFn adds the pipeline:refined label. A field, not a direct
+	// call, for the same reason buildGraphFn is one: refineIssue otherwise
+	// constructs its own IssueService from a live client, and the failure that
+	// matters here — the repo has no pipeline:refined label — is then only
+	// reachable against real GitHub. Tests override it to prove the failure is
+	// recorded as a failure. Defaulted in NewAutonomousScheduler.
+	markRefinedFn func(ctx context.Context, owner, repo string, number int) error
+
+	// refinementLabelCheck caches the per-repo label preflight verdict.
+	//
+	// GetRepoLabels memoises per owner/repo, but only for the lifetime of ONE
+	// IssueService — and runRefinementCycle constructs a fresh one inside the
+	// per-repo loop on every cycle, so that cache never survives a tick. Without
+	// this the preflight is one extra REST call per active repo every 60s,
+	// forever, in a loop whose surrounding code breaks early specifically to
+	// avoid per-cycle API spend (#488, and the request ledger in #843).
+	//
+	// Labels are close to static, so a short TTL is safe: a label deleted inside
+	// the window is caught by the next check, and the MarkRefined failure path
+	// records it correctly in the meantime.
+	refinementLabelCheck map[string]refinementLabelVerdict
+
+	// refinementWarned dedupes the log lines that would otherwise repeat every
+	// refinement cycle for a condition that does not change between cycles — a
+	// repo missing a required label, an issue that has exhausted its retries.
+	// The Action Center card is already idempotent; this keeps the daemon log
+	// readable. Key namespace is the caller's ("labels:<repo>", "gaveup:<key>").
+	refinementWarned map[string]bool
 
 	// onRefinementDispatch is an optional callback for IPC mode.
 	// When nil, refinement is spawned directly via execution.Manager.
@@ -1111,7 +1144,15 @@ func NewAutonomousScheduler(
 		refinementSem:        make(chan struct{}, refinementSlots),
 		refinementCooldown:   make(map[string]time.Time),
 		refinementFailures:   make(map[string]int),
+		refinementWarned:     make(map[string]bool),
+		refinementLabelCheck: make(map[string]refinementLabelVerdict),
 		refinementEmptyCache: make(map[string]time.Time),
+	}
+
+	// Wire the default label marker. Tests override this field to drive the
+	// missing-label failure path without a live client (#993).
+	as.markRefinedFn = func(ctx context.Context, owner, repo string, number int) error {
+		return gh.NewIssueService(as.ghClient).MarkRefined(ctx, owner, repo, number)
 	}
 
 	// Wire the default graph builder. Tests override this field to inject a fake
@@ -1760,6 +1801,19 @@ func (as *AutonomousScheduler) pruneStateToRepos(allowed map[string]bool) {
 			delete(as.refinementFailures, key)
 		}
 	}
+	// refinementWarned is namespaced ("labels:owner/repo", "gaveup:owner/repo#N"),
+	// so strip the namespace before testing the repo key. Without this the map
+	// grows without bound across repo add/remove.
+	for key := range as.refinementWarned {
+		if _, bare, ok := strings.Cut(key, ":"); ok && !repoKeyAllowed(bare, allowed) {
+			delete(as.refinementWarned, key)
+		}
+	}
+	for key := range as.refinementLabelCheck {
+		if !repoKeyAllowed(key, allowed) {
+			delete(as.refinementLabelCheck, key)
+		}
+	}
 
 	pruned := (prevCompleted - len(as.state.Completed)) + (prevFailed - len(as.state.Failed))
 	if pruned > 0 {
@@ -2191,6 +2245,13 @@ func (as *AutonomousScheduler) Resume() {
 		as.conflictRestartCount = make(map[string]int)
 		as.refinementCooldown = make(map[string]time.Time)
 		as.refinementFailures = make(map[string]int)
+		// Re-arm the log-once latches with the counters they belong to. Resetting
+		// refinementFailures without this is an asymmetric lifetime: the retry
+		// counter starts again but the notification does not, so the SECOND
+		// exhaustion of the same issue is completely silent — a stall with no
+		// signal, which is the failure the exhaustion card exists to prevent.
+		as.refinementWarned = make(map[string]bool)
+		as.refinementLabelCheck = make(map[string]refinementLabelVerdict)
 		as.persistStateLocked()
 		as.fireStatusChangeLocked()
 		// Trigger an immediate re-scan
@@ -6219,8 +6280,55 @@ func (as *AutonomousScheduler) runRefinementCycle(ctx context.Context) {
 		}
 
 		issueSvc := gh.NewIssueService(as.ghClient)
+
+		// Label preflight (#993). Refinement cannot record completion in a repo
+		// without pipeline:refined — MarkRefined hard-errors — and the candidate
+		// query excludes issues that CARRY the label, so a label absent from the
+		// repo makes the exclusion inert and every issue a permanent candidate.
+		// The verdict is cached per repo for refinementLabelTTL — GetRepoLabels'
+		// own memoisation is per IssueService, and this loop builds a fresh one
+		// every cycle, so relying on it would mean one REST call per repo per
+		// tick forever. Skipping the REPO rather than failing the cycle keeps a
+		// correctly-provisioned repo working while a misprovisioned sibling is
+		// reported.
+		//
+		// It refuses ONLY on the labels that make the loop misbehave, not on the
+		// whole registry: a repo that has simply never had an epic is missing
+		// type:epic, and disabling its refinement for that would trade a runaway
+		// loop for a silent stall.
+		blockers, advisory, err := as.refinementLabelsMissing(ctx, issueSvc, owner, repo)
+		if err != nil {
+			// Fail closed: an unverifiable repo is not a verified-good repo, and
+			// the failure mode we are guarding rewrites issue bodies.
+			as.refinementWarnOnce("labelcheck:"+fullRepo, func() {
+				log.Printf("[refinement] %s: could not verify required labels, skipping: %v", fullRepo, err)
+			})
+			continue
+		}
+		if len(blockers) > 0 {
+			as.refinementWarnOnce("labels:"+fullRepo, func() {
+				log.Printf("[refinement] %s: skipping — repo is missing required label(s) %v; run `nightgauge label ensure --owner %s --repo %s`",
+					fullRepo, blockers, owner, repo)
+				as.raiseRefinementLabelsMissing(owner, repo, blockers)
+			})
+			continue
+		}
+		if len(advisory) > 0 {
+			// Not fatal, but worth exactly one line: these change behaviour
+			// (auto-process absent sends everything to Backlog) without failing.
+			as.refinementWarnOnce("labels-advisory:"+fullRepo, func() {
+				log.Printf("[refinement] %s: proceeding, but missing non-blocking label(s) %v; `nightgauge label ensure --owner %s --repo %s` provisions them",
+					fullRepo, advisory, owner, repo)
+			})
+		}
+		// The condition no longer holds — retract any card raised earlier.
+		as.resolveRefinementLabels(fullRepo)
+
+		// gh.LabelEpic IS "type:epic" — the literal that used to sit beside it
+		// here was a no-op duplicate, and exactly the drift a registry exists
+		// to prevent.
 		candidates, err := issueSvc.ListIssuesExcludingLabels(ctx, owner, repo,
-			[]string{gh.LabelRefined, gh.LabelEpic, "type:epic"}, 5)
+			[]string{gh.LabelRefined, gh.LabelEpic}, 5)
 		if err != nil {
 			log.Printf("[refinement] %s: failed to list unrefined issues: %v", fullRepo, err)
 			continue
@@ -6284,6 +6392,22 @@ func (as *AutonomousScheduler) runRefinementCycle(ctx context.Context) {
 				continue
 			}
 
+			// Skip an issue that has failed refinement maxRefinementFailures
+			// times in a row (#993). The cooldown above bounds how OFTEN an
+			// issue is retried; nothing bounded how MANY times, so a
+			// deterministic failure — a missing pipeline:refined label being
+			// the motivating case — retried forever at the rail's cap. The
+			// counter is only cleared by a success or an operator resume, so
+			// this is a genuine terminal state rather than a longer cooldown.
+			if as.refinementExhausted(key) {
+				as.refinementWarnOnce("gaveup:"+key, func() {
+					log.Printf("[refinement] %s#%d: giving up after %d consecutive failures",
+						fullRepo, candidate.Number, maxRefinementFailures)
+					as.raiseRefinementExhausted(owner, repo, candidate.Number, candidate.Title)
+				})
+				continue
+			}
+
 			// Try to acquire the refinement semaphore (non-blocking).
 			//
 			// The acquisition GATES the dispatch (#488): everything below —
@@ -6337,6 +6461,126 @@ func (as *AutonomousScheduler) runRefinementCycle(ctx context.Context) {
 			as.persistState()
 		}
 	}
+}
+
+// refinementWarnOnce runs fn the first time it sees key, and never again for
+// the lifetime of the scheduler. Used for conditions that are re-evaluated
+// every cycle but whose truth does not change between cycles, so the operator
+// sees one line instead of one per minute.
+func (as *AutonomousScheduler) refinementWarnOnce(key string, fn func()) {
+	as.mu.Lock()
+	if as.refinementWarned == nil {
+		as.refinementWarned = make(map[string]bool)
+	}
+	seen := as.refinementWarned[key]
+	if !seen {
+		as.refinementWarned[key] = true
+	}
+	as.mu.Unlock()
+	if !seen {
+		fn()
+	}
+}
+
+// refinementLabelTTL is how long a label preflight verdict stays good. Sized
+// like refinementEmptyTTL: long enough that the check is not a per-cycle API
+// call, short enough that provisioning a label takes effect without a restart.
+const refinementLabelTTL = 5 * time.Minute
+
+// refinementLabelVerdict is one repo's cached preflight result.
+type refinementLabelVerdict struct {
+	blockers  []string
+	advisory  []string
+	checkedAt time.Time
+}
+
+// refinementLabelsMissing splits the repo's missing required labels into the
+// ones that must stop the refinement loop and the ones merely worth reporting.
+//
+// Only a SUCCESSFUL check is cached. An error must be retried on the next cycle
+// rather than latched for the TTL, or one transient API failure pauses
+// refinement for five minutes.
+func (as *AutonomousScheduler) refinementLabelsMissing(ctx context.Context, issueSvc *gh.IssueService, owner, repo string) (blockers, advisory []string, err error) {
+	if issueSvc == nil {
+		return nil, nil, fmt.Errorf("issue service is required")
+	}
+	cacheKey := owner + "/" + repo
+
+	as.mu.Lock()
+	cached, ok := as.refinementLabelCheck[cacheKey]
+	as.mu.Unlock()
+	if ok && time.Since(cached.checkedAt) < refinementLabelTTL {
+		return cached.blockers, cached.advisory, nil
+	}
+
+	repoLabels, err := issueSvc.GetRepoLabels(ctx, owner, repo)
+	if err != nil {
+		return nil, nil, err
+	}
+	blockers = gh.MissingRefinementBlockers(repoLabels)
+	blocking := make(map[string]bool, len(blockers))
+	for _, b := range blockers {
+		blocking[b] = true
+	}
+	for _, name := range gh.MissingRequiredLabels(repoLabels) {
+		if !blocking[name] {
+			advisory = append(advisory, name)
+		}
+	}
+
+	as.mu.Lock()
+	if as.refinementLabelCheck == nil {
+		as.refinementLabelCheck = make(map[string]refinementLabelVerdict)
+	}
+	as.refinementLabelCheck[cacheKey] = refinementLabelVerdict{
+		blockers:  blockers,
+		advisory:  advisory,
+		checkedAt: time.Now(),
+	}
+	as.mu.Unlock()
+	return blockers, advisory, nil
+}
+
+// maxRefinementFailures is the consecutive-failure threshold after which the
+// candidate loop stops re-selecting an issue. Deliberately low: every retry
+// spends a model call rewriting an issue body, so the cost of over-retrying is
+// destroyed issue text, while the cost of giving up early is one attention
+// item asking a human to look.
+const maxRefinementFailures = 3
+
+// recordRefinementFailure moves an in-flight refinement from Running → Failed
+// and increments the consecutive-failure counter the candidate loop reads.
+//
+// Shared by refineIssue's two failure paths so they cannot drift. Before #993
+// only the skill-invocation path recorded a failure; a MarkRefined error fell
+// through to the SUCCESS path, which appends to RefinementCompleted and — in
+// the same critical section — DELETES this counter. That delete is why adding
+// a threshold alone would have fixed nothing: the counter was being reset by
+// the very path the failure took.
+func (as *AutonomousScheduler) recordRefinementFailure(fullRepo, key string, issue gh.UnrefinedIssue, cause error) {
+	as.mu.Lock()
+	as.state.RefinementRunning = removeRefinementItem(as.state.RefinementRunning, fullRepo, issue.Number)
+	as.state.RefinementFailed = append(as.state.RefinementFailed, RefinementItem{
+		Repo:     fullRepo,
+		Number:   issue.Number,
+		Title:    issue.Title,
+		FailedAt: time.Now().UTC().Format(time.RFC3339),
+		Reason:   cause.Error(),
+	})
+	as.refinementFailures[key]++
+	failures := as.refinementFailures[key]
+	as.mu.Unlock()
+	as.persistState()
+	log.Printf("[refinement] Failed #%d (%d consecutive): %v", issue.Number, failures, cause)
+}
+
+// refinementExhausted reports whether an issue has hit the consecutive-failure
+// threshold, so the candidate loop can skip it instead of re-dispatching model
+// work that has already failed maxRefinementFailures times.
+func (as *AutonomousScheduler) refinementExhausted(key string) bool {
+	as.mu.Lock()
+	defer as.mu.Unlock()
+	return as.refinementFailures[key] >= maxRefinementFailures
 }
 
 // refineIssue runs the refinement skill for a single issue. It manages state
@@ -6401,26 +6645,27 @@ func (as *AutonomousScheduler) refineIssue(ctx context.Context, owner, repo stri
 	issueSvc := gh.NewIssueService(as.ghClient)
 
 	if refineErr != nil {
-		// Move from Running → Failed
-		as.mu.Lock()
-		as.state.RefinementRunning = removeRefinementItem(as.state.RefinementRunning, fullRepo, issue.Number)
-		as.state.RefinementFailed = append(as.state.RefinementFailed, RefinementItem{
-			Repo:     fullRepo,
-			Number:   issue.Number,
-			Title:    issue.Title,
-			FailedAt: time.Now().UTC().Format(time.RFC3339),
-			Reason:   refineErr.Error(),
-		})
-		as.refinementFailures[key]++
-		as.mu.Unlock()
-		as.persistState()
-		log.Printf("[refinement] Failed #%d: %v", issue.Number, refineErr)
+		as.recordRefinementFailure(fullRepo, key, issue, refineErr)
 		return
 	}
 
-	// Success: add pipeline:refined label
-	if err := issueSvc.MarkRefined(ctx, owner, repo, issue.Number); err != nil {
-		log.Printf("[refinement] #%d: failed to add pipeline:refined label: %v", issue.Number, err)
+	// Adding pipeline:refined is the ONLY durable record that this issue is
+	// done. Candidacy is re-derived every cycle from live GitHub labels
+	// (ListIssuesExcludingLabels), and state.RefinementCompleted is write-only —
+	// nothing reads it back. So a swallowed failure here does not degrade
+	// gracefully: it re-queues the issue forever, rewriting a human-reviewed
+	// body up to the safety rail's cap every hour, indefinitely (#993).
+	// Treating it as a refinement failure both records the reason and feeds
+	// the consecutive-failure threshold the candidate loop now honours.
+	markRefined := as.markRefinedFn
+	if markRefined == nil {
+		markRefined = func(ctx context.Context, owner, repo string, number int) error {
+			return issueSvc.MarkRefined(ctx, owner, repo, number)
+		}
+	}
+	if err := markRefined(ctx, owner, repo, issue.Number); err != nil {
+		as.recordRefinementFailure(fullRepo, key, issue, fmt.Errorf("mark refined: %w", err))
+		return
 	}
 
 	// Determine board target status
@@ -6475,6 +6720,9 @@ func (as *AutonomousScheduler) refineIssue(ctx context.Context, owner, repo stri
 	delete(as.refinementFailures, key)
 	as.mu.Unlock()
 	as.persistState()
+	// Success makes the give-up condition untrue — retract the card rather than
+	// leaving an "abandoned" notice on an issue that just refined cleanly.
+	as.resolveRefinementExhausted(fullRepo, issue.Number)
 	log.Printf("[refinement] Completed #%d → %s", issue.Number, targetStatus)
 }
 

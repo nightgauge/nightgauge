@@ -13,7 +13,13 @@ Setup).
 ## Phase 2: Component Label Selection
 
 Ask which component label set to create. The component labels are the only
-project-specific group — all others (type, priority, size, status) are fixed.
+project-specific group; the `type:*` and pipeline labels below are fixed.
+
+**Priority, size and status are NOT labels here** — priority and size are
+project-board single-select fields, and status is a board column. This section
+used to list all four as "fixed", which reads as a promise to create them and
+contradicts the note further down; nothing in this file creates a `priority:*`,
+`size:*` or `status:*` label.
 
 ```json
 {
@@ -127,8 +133,21 @@ create_label "type:epic"     "8957e5" "Parent issue with sub-issues"
 create_label "type:spike"    "c2e0c6" "Research/investigation task"
 
 # ── Pipeline labels ───────────────────────────────────────────────────────────
-create_label "pipeline:refined" "0969da" "Issue has been refined and is ready for development"
-create_label "auto-process"     "8957e5" "Issue is queued for automatic pipeline processing"
+# These are the labels the Go layer READS to make control-flow decisions, and
+# they are the ones whose absence misbehaves rather than merely looking untidy.
+# The registry is `github.RequiredLabels` (internal/github/required_labels.go);
+# `nightgauge label ensure` provisions exactly that list and is idempotent.
+#
+# PREFER THE VERB over the lines below when the binary is available — it is
+# deterministic, it cannot drift from what the code reads, and unlike this
+# skill nothing has to remember to run it:
+#
+#     nightgauge label ensure --owner <OWNER> --repo <REPO>
+#
+create_label "pipeline:refined"      "0969da" "Issue has been refined and is ready for development"
+create_label "auto-process"          "8957e5" "Issue is queued for automatic pipeline processing"
+create_label "owner-action"          "FBCA04" "Requires owner action (real account / external state)"
+create_label "approved:architecture" "0e8a16" "Human-approved architectural decision — architecture gate passes"
 
 # NOTE: Priority and Size are NOT created as labels.
 # They are set directly as project board fields (single-select) via GraphQL

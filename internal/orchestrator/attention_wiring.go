@@ -45,6 +45,8 @@ const (
 	producerTerminalFailure     = "terminal-failure"
 	producerUntrustedAuthor     = "author-trust-gate"
 	producerSelfRepoRefusal     = "self-repo-refusal"
+	producerRefinementLabels    = "refinement-labels-missing"
+	producerRefinementExhausted = "refinement-exhausted"
 )
 
 // producerUnverifiedDeliverableStreak is a fourth standing, run-loop-scoped
@@ -86,6 +88,20 @@ func keyArchitectureApproval(repo string, issue int) string {
 // for the per-issue terminal-failure halt card (#148).
 func keyTerminalFailure(repo string, issue int) string {
 	return fmt.Sprintf("%s:%s#%d", producerTerminalFailure, repo, issue)
+}
+
+// keyRefinementLabels is the per-REPO identity for the missing-required-label
+// condition (#993). Scoped to the repo, not an issue: the label is a property
+// of the repository, and one card per unrefinable issue would be a hundred
+// cards for one missing label.
+func keyRefinementLabels(repo string) string {
+	return fmt.Sprintf("%s:%s", producerRefinementLabels, repo)
+}
+
+// keyRefinementExhausted is the per-issue identity for an issue that has hit
+// maxRefinementFailures consecutive refinement failures (#993).
+func keyRefinementExhausted(repo string, issue int) string {
+	return fmt.Sprintf("%s:%s#%d", producerRefinementExhausted, repo, issue)
 }
 
 // IsBranchProtectionPunt reports whether a pr-merge punt reason is a
@@ -530,6 +546,122 @@ func (as *AutonomousScheduler) raiseUntrustedAuthorSkip(owner, repo string, issu
 		ExpiresAt:     standingExpiry(),
 		Steer:         &attention.Steer{Enabled: true, Hint: "Note why this author should (or should not) be trusted"},
 	})
+}
+
+// raiseRefinementLabelsMissing surfaces the repo-level provisioning gap that
+// makes autonomous refinement unrecordable (#993).
+//
+// Severity is deliberately not FYI. Before the preflight existed, this
+// condition did not degrade — it produced an unbounded loop that rewrote
+// human-reviewed issue bodies at the safety rail's cap, indefinitely, with no
+// operator-visible signal at all. The card is the signal that was missing.
+func (as *AutonomousScheduler) raiseRefinementLabelsMissing(owner, repo string, missing []string) {
+	fullRepo := fmt.Sprintf("%s/%s", owner, repo)
+	as.raiseAttention(attention.DecisionRequest{
+		IdempotencyKey: keyRefinementLabels(fullRepo),
+		Kind:           attention.KindUnblock,
+		Severity:       attention.SeverityBlockingRun,
+		Title:          fmt.Sprintf("Refinement disabled on %s — missing required label(s)", fullRepo),
+		Body: fmt.Sprintf("Autonomous refinement is skipping %s because the repository is missing the "+
+			"required label(s) %s. The pipeline uses these labels as its only durable record that an "+
+			"issue has been refined, so without them a refined issue is re-selected on every cycle and "+
+			"its body is rewritten again. Refinement is skipped for this repo until the labels exist.\n\n"+
+			"Fix: `nightgauge label ensure --owner %s --repo %s`",
+			fullRepo, strings.Join(missing, ", "), owner, repo),
+		Producer: producerRefinementLabels,
+		Standing: true,
+		// Constant fingerprint: the set of missing labels is a property of the
+		// repo and does not change between cycles. Re-raising on every cycle
+		// with a varying fingerprint would defeat mute-until-changed.
+		Fingerprint: "labels:missing",
+		Context:     attention.Context{Repo: fullRepo, Blocker: strings.Join(missing, ",")},
+		Options: []attention.Option{
+			noopOption("ack", "Acknowledge"),
+		},
+		DefaultAction: "ack",
+		ExpiresAt:     standingExpiry(),
+	})
+}
+
+// raiseRefinementExhausted surfaces a single issue that has failed refinement
+// maxRefinementFailures times in a row and will no longer be retried (#993).
+//
+// This is the counterpart to the threshold itself: giving up silently would
+// trade a visible runaway loop for an invisible stall, which is the worse of
+// the two failures.
+func (as *AutonomousScheduler) raiseRefinementExhausted(owner, repo string, issue int, title string) {
+	fullRepo := fmt.Sprintf("%s/%s", owner, repo)
+	as.raiseAttention(attention.DecisionRequest{
+		IdempotencyKey: keyRefinementExhausted(fullRepo, issue),
+		Kind:           attention.KindUnblock,
+		Severity:       attention.SeverityBlockingRun,
+		Title:          fmt.Sprintf("Refinement gave up on #%d after %d failures", issue, maxRefinementFailures),
+		Body: fmt.Sprintf("#%d (%q) failed refinement %d times consecutively and will not be retried "+
+			"automatically. The most recent reason is recorded in the autonomous state's refinementFailed "+
+			"list. A repeated failure here is usually a repo-level problem (a missing label, a revoked "+
+			"token) rather than anything about the issue itself — check the daemon log for the reason "+
+			"before re-queuing.",
+			issue, title, maxRefinementFailures),
+		Producer:      producerRefinementExhausted,
+		Standing:      true,
+		Fingerprint:   "refinement:exhausted",
+		Context:       attention.Context{Repo: fullRepo, Issue: issue},
+		Options:       []attention.Option{noopOption("ack", "Acknowledge")},
+		DefaultAction: "ack",
+		ExpiresAt:     standingExpiry(),
+		Steer:         &attention.Steer{Enabled: true, Hint: "Note what should happen to this issue"},
+	})
+}
+
+// resolveRefinementLabels retracts a repo's missing-label card the moment the
+// preflight passes for that repo.
+//
+// A targeted single-key retract, not autoResolveAttention: the refinement cycle
+// can stop scanning early when the workspace-wide semaphore is saturated, so a
+// given cycle has NOT necessarily observed every repo the producer holds a card
+// for — and AutoResolveUnobserved would then retract cards whose condition it
+// simply never looked at. An empty observed set must never mean "I could not
+// look".
+//
+// Without this the card outlives its condition: the operator runs
+// `nightgauge label ensure`, refinement resumes, and the Action Center still
+// says refinement is disabled — the "notification that never clears" failure
+// this producer exists to avoid rather than reproduce.
+func (as *AutonomousScheduler) resolveRefinementLabels(fullRepo string) {
+	if as == nil || as.attention == nil {
+		return
+	}
+	// Also clear the log-once latch, so a repo that regresses warns again
+	// instead of failing silently the second time.
+	as.mu.Lock()
+	delete(as.refinementWarned, "labels:"+fullRepo)
+	delete(as.refinementWarned, "labelcheck:"+fullRepo)
+	as.mu.Unlock()
+
+	resolved, err := as.attention.AutoResolveKey(producerRefinementLabels, keyRefinementLabels(fullRepo))
+	if err != nil {
+		log.Printf("attention: auto-resolve %q failed (fail-open): %v", producerRefinementLabels, err)
+		return
+	}
+	if resolved {
+		log.Printf("attention: %s now has its required labels — retracted the refinement-disabled card", fullRepo)
+	}
+}
+
+// resolveRefinementExhausted retracts an issue's give-up card once refinement
+// succeeds for it again. Same single-key rationale as above: one refineIssue
+// call observes one issue, never the producer's whole set.
+func (as *AutonomousScheduler) resolveRefinementExhausted(fullRepo string, issue int) {
+	if as == nil || as.attention == nil {
+		return
+	}
+	as.mu.Lock()
+	delete(as.refinementWarned, fmt.Sprintf("gaveup:%s#%d", fullRepo, issue))
+	as.mu.Unlock()
+
+	if _, err := as.attention.AutoResolveKey(producerRefinementExhausted, keyRefinementExhausted(fullRepo, issue)); err != nil {
+		log.Printf("attention: auto-resolve %q failed (fail-open): %v", producerRefinementExhausted, err)
+	}
 }
 
 // retractArchitectureApproval clears one issue's approval card once the gate is

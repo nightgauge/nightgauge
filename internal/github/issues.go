@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"net/url"
 	"sort"
@@ -837,16 +838,28 @@ func (s *IssueService) LinkSubIssue(ctx context.Context, owner, repo string, par
 // may return incomplete results when the pre-filter population exceeds this cap.
 // limit caps the number of returned results after filtering (0 = no limit).
 func (s *IssueService) ListIssuesExcludingLabels(ctx context.Context, owner, repo string, excludeLabels []string, limit int) ([]UnrefinedIssue, error) {
-	// labels(first: 8) — caller filters by presence of label names; rare to
-	// have >8 labels on a single issue. See #3587 follow-up for rationale.
+	// The exclusion below is computed from the labels this query returns, so a
+	// TRUNCATED label list is not a smaller answer — it is a wrong one, and it
+	// is wrong in the destructive direction. If `pipeline:refined` falls outside
+	// the page, the issue reads as unrefined and refinement rewrites a
+	// human-reviewed body again, every cycle, forever (#993).
+	//
+	// This used to fetch `first: 8` with the note "rare to have >8 labels on a
+	// single issue". Rare is not never, and nothing detected the miss. The page
+	// is sized to reality with margin — the busiest repo in this workspace tops
+	// out at 4 labels per issue — and `totalCount` makes an overflow SAFE rather
+	// than silent: an issue whose labels did not all fit is excluded below,
+	// because a false "already refined" costs one skipped refinement that a
+	// human can see, while a false "unrefined" costs an unbounded rewrite loop.
 	type issueNode struct {
 		Number            graphql.Int
 		Title             graphql.String
 		CreatedAt         graphql.String
 		AuthorAssociation graphql.String `graphql:"authorAssociation"`
 		Labels            struct {
-			Nodes []labelNode
-		} `graphql:"labels(first: 8)"`
+			TotalCount graphql.Int
+			Nodes      []labelNode
+		} `graphql:"labels(first: 20)"`
 	}
 
 	var q struct {
@@ -877,6 +890,15 @@ func (s *IssueService) ListIssuesExcludingLabels(ctx context.Context, owner, rep
 		labels := make([]string, 0, len(n.Labels.Nodes))
 		for _, l := range n.Labels.Nodes {
 			labels = append(labels, string(l.Name))
+		}
+
+		// Fail closed on a truncated label list: we cannot prove the issue
+		// lacks an excluded label, so we must not assert that it does.
+		if int(n.Labels.TotalCount) > len(n.Labels.Nodes) {
+			log.Printf("issues: #%d in %s/%s carries %d labels but only %d were returned — "+
+				"excluding it from the candidate set rather than risk re-processing an already-labelled issue",
+				int(n.Number), owner, repo, int(n.Labels.TotalCount), len(n.Labels.Nodes))
+			continue
 		}
 
 		skip := false

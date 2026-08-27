@@ -27,7 +27,10 @@ import (
 // twice.
 func threeTrustedUnrefinedIssuesServer(t *testing.T) *httptest.Server {
 	t.Helper()
-	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveRepoLabels(w, r) {
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{
 			"data": {
