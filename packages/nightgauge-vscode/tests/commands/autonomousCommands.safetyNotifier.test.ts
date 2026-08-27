@@ -37,6 +37,23 @@ describe("autonomousCommands — CASCADE_PAUSE_TRIGGERS", () => {
     expect(CASCADE_PAUSE_TRIGGERS.has("safety:lifetime-failure-cap")).toBe(true);
   });
 
+  it("includes the safety-rail trip tag (halts the whole fleet — Issue #991)", () => {
+    // Every safety rail funnels through ONE trigger on the Go side:
+    // internal/orchestrator/autonomous.go stamps `safety:rail-check` for the
+    // budget ceiling, circuit breaker, rate limit, health gate and epic
+    // checkpoint alike, then latches a machine halt that survives a restart
+    // and that Start refuses to auto-resume.
+    //
+    // It was absent from this set, so the ONE pause shape that stops every
+    // repo was also the only one that sent no notification at all.
+    //
+    // This matters more since #991 than it did before: the epic checkpoint
+    // defaults to ON and now actually fires, so an ordinary epic completion
+    // reaches this path — where previously only an explicitly-tuned rail
+    // could.
+    expect(CASCADE_PAUSE_TRIGGERS.has("safety:rail-check")).toBe(true);
+  });
+
   it("does NOT include per-issue safety tags that pause nothing global (budget-ceiling, health-gate)", () => {
     // These fan out via the toast/log path because they affect a single
     // issue without halting the scheduler.

@@ -122,6 +122,16 @@ export const CASCADE_PAUSE_TRIGGERS = new Set<string>([
   "rate-limit-circuit-breaker",
   "safety:cascading-failures",
   "safety:lifetime-failure-cap",
+  // Every safety rail funnels through this one trigger on the Go side
+  // (internal/orchestrator/autonomous.go stamps `safety:rail-check` for the
+  // budget ceiling, circuit breaker, rate limit, health gate and epic
+  // checkpoint alike). It was absent, so the halt that stops the entire fleet
+  // was the only pause shape that sent no notification at all (#991).
+  //
+  // This matters more now than it used to: the epic checkpoint defaults to ON
+  // and, since #991, actually fires — so a routine epic completion reaches this
+  // path, where previously only an explicitly-tuned rail could.
+  "safety:rail-check",
 ]);
 
 /**

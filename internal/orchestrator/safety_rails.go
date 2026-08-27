@@ -221,15 +221,30 @@ func (sr *SafetyRails) Reset() {
 	sr.state.TripReason = ""
 }
 
-// ResumeCheckpoint clears only the epic checkpoint pause.
+// ResumeCheckpoint clears only the epic checkpoint pause, leaving the circuit
+// breaker, rate-limit window and budget counters untouched.
+//
+// This distinction only became meaningful with #991. Before it, the checkpoint
+// could not fire at all, so the function had no production caller and its guard
+// was dead code: it read `PausedForCheckpoint == false` on the line AFTER
+// setting that field to false, so the condition was always true and TripReason
+// was cleared unconditionally — the opposite of what its comment claimed.
+//
+// It is kept rather than deleted because the coarser Resume() path calls
+// Reset(), which also zeroes ConsecutiveFailures. Acknowledging "yes, continue
+// to the next epic" should not silently discard a genuine consecutive-failure
+// signal that was accumulating for an unrelated reason.
 func (sr *SafetyRails) ResumeCheckpoint() {
 	sr.mu.Lock()
 	defer sr.mu.Unlock()
-	sr.state.PausedForCheckpoint = false
-	if sr.state.TripReason != "" && sr.state.PausedForCheckpoint == false {
-		// Only clear TripReason if it was a checkpoint reason
-		sr.state.TripReason = ""
+	if !sr.state.PausedForCheckpoint {
+		// Nothing to resume. Returning early matters: clearing TripReason here
+		// would erase a budget or circuit-breaker refusal that this function has
+		// no business touching.
+		return
 	}
+	sr.state.PausedForCheckpoint = false
+	sr.state.TripReason = ""
 }
 
 // IsTripped returns true if any safety rail has been triggered.

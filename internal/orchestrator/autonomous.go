@@ -1094,6 +1094,14 @@ func NewAutonomousScheduler(
 		if cfg.SafetyRails.HealthGateMin > 0 {
 			safetyCfg.HealthGateMin = cfg.SafetyRails.HealthGateMin
 		}
+		// Unguarded on purpose, unlike its int siblings above. A bool has no
+		// "0 = unset" sentinel, so there is nothing to guard ON — which is
+		// exactly how an omitted YAML key used to read as an explicit false.
+		// The fix lives one layer up: config.ResolveEpicCheckpoint applies the
+		// default at both cmd/nightgauge bridges, so orchestrator.SafetyConfig
+		// arrives already settled and this is a straight copy of a resolved
+		// value. Do not "fix" this line by adding a guard here — that would put
+		// the default in a third place (#991).
 		safetyCfg.EpicCheckpoint = cfg.SafetyRails.EpicCheckpoint
 	}
 
@@ -1148,6 +1156,18 @@ func NewAutonomousScheduler(
 		refinementLabelCheck: make(map[string]refinementLabelVerdict),
 		refinementEmptyCache: make(map[string]time.Time),
 	}
+
+	// Wire the epic checkpoint through to the plain Scheduler, which owns the
+	// one call site where an epic actually auto-closes. Registered here rather
+	// than in Run() so it is live for the scheduler's whole lifetime, and via a
+	// dedicated setter rather than by chaining OnEpicComplete — that slot is
+	// re-assigned per pipeline.run request and a chain built on it is silently
+	// wiped (#991). SetEpicCheckpointFn is nil-receiver safe.
+	scheduler.SetEpicCheckpointFn(func(epicNumber int) {
+		if as.safetyRails != nil {
+			as.safetyRails.RecordEpicComplete(epicNumber)
+		}
+	})
 
 	// Wire the default label marker. Tests override this field to drive the
 	// missing-label failure path without a live client (#993).
@@ -2232,6 +2252,9 @@ func (as *AutonomousScheduler) Resume() {
 		if as.safetyRails != nil {
 			as.safetyRails.Reset()
 		}
+		// The halt is over, so its card must go with it — otherwise the fleet is
+		// running while the Action Center still says it is stopped.
+		defer as.resolveSafetyRailTrip()
 		// #3605 bullet C: clearing the cascading-failure breaker is gated on
 		// explicit user Resume — never on an automatic / self-clear path. We
 		// land here only from operator action, so reset is appropriate.
@@ -2962,9 +2985,22 @@ func (as *AutonomousScheduler) runCycle(ctx context.Context) {
 				// the next graceful shutdown writes "cancelled" over
 				// safety_tripped and the trip is gone on restart.
 				as.latchMachineHaltLocked("safety_tripped", "safety:rail-check")
+				lastEpic := safetySnap.LastEpicNumber
+				pausedForCheckpoint := safetySnap.PausedForCheckpoint
 				as.fireStatusChangeLocked()
 				as.mu.Unlock()
 				as.persistState()
+				// Raise the card the halt has always deserved and never had
+				// (#991). latchMachineHaltLocked makes this survive restart and
+				// makes Start refuse to resume it — ResumeUnlessMachineHalted
+				// even tells the operator to "resolve the card". Until now there
+				// was no card to resolve, and the whole signal was a status-bar
+				// icon. Outside the lock: raiseAttention writes to the store.
+				epicForCard := 0
+				if pausedForCheckpoint {
+					epicForCard = lastEpic
+				}
+				as.raiseSafetyRailTrip(reason, epicForCard)
 				if as.onCycleComplete != nil {
 					as.onCycleComplete()
 				}

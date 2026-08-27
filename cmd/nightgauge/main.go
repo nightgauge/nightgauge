@@ -4548,8 +4548,9 @@ func serveCmd() *cobra.Command {
 								BudgetCeiling:     src.BudgetCeiling,
 								CircuitBreakerMax: src.CircuitBreakerMax,
 								RateLimitPerHour:  src.RateLimitPerHour,
-								EpicCheckpoint:    src.EpicCheckpoint,
-								HealthGateMin:     src.HealthGateMin,
+								// Resolved, not copied: an omitted key must keep the default.
+								EpicCheckpoint: config.ResolveEpicCheckpoint(cfg),
+								HealthGateMin:  src.HealthGateMin,
 							}
 						}
 						rc := config.ResolveConcurrency(cfg)
@@ -9516,8 +9517,9 @@ func autonomousRunCmd() *cobra.Command {
 					BudgetCeiling:     src.BudgetCeiling,
 					CircuitBreakerMax: src.CircuitBreakerMax,
 					RateLimitPerHour:  src.RateLimitPerHour,
-					EpicCheckpoint:    src.EpicCheckpoint,
-					HealthGateMin:     src.HealthGateMin,
+					// Resolved, not copied: an omitted key must keep the default.
+					EpicCheckpoint: config.ResolveEpicCheckpoint(cfg),
+					HealthGateMin:  src.HealthGateMin,
 				}
 			}
 

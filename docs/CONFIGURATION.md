@@ -6584,9 +6584,23 @@ autonomous:
   safety_rails:
     circuit_breaker_max: 3 # Consecutive failures before trip (default: 3)
     rate_limit_per_hour: 20 # Max pipeline starts per hour (default: 20)
-    epic_checkpoint: true # Pause after each epic wave (default: false)
+    epic_checkpoint: true # Pause after each epic wave (default: true)
     health_gate_min: 30 # Min health score to continue (default: 0)
 ```
+
+**Omitting a key inside `safety_rails:` preserves its default — it is not an
+opt-out.** This is worth stating because it was not true until #991:
+`epic_checkpoint` was a plain `bool` while every sibling is an int with a
+`0 = unset` sentinel, so writing this block to tune _any_ other rail set the
+checkpoint to `false` and silently removed the between-epic human pause. The key
+is now resolved through `config.ResolveEpicCheckpoint`, which distinguishes an
+omitted key from an explicit `false`.
+
+**When the checkpoint fires, it stops the whole fleet, not one repo**, and the
+halt is machine-raised: it survives a restart and Start will refuse to resume it
+until the Action Center card is resolved or you resume explicitly. Set
+`epic_checkpoint: false` if unattended epic-after-epic execution is what you
+want.
 
 ### enabled_repos
 

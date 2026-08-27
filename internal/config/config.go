@@ -187,7 +187,16 @@ type SafetyRailsConfig struct {
 	// RateLimitPerHour is the max pipeline starts per hour. 0 = disabled.
 	RateLimitPerHour int `yaml:"rate_limit_per_hour" json:"rateLimitPerHour,omitempty"`
 	// EpicCheckpoint pauses between epics for human review. Default: true.
-	EpicCheckpoint bool `yaml:"epic_checkpoint" json:"epicCheckpoint,omitempty"`
+	//
+	// Pointer so an OMITTED key is distinguishable from an explicit `false`,
+	// matching DisciplineGateConfig.Enabled below. Every sibling in this struct
+	// is an int whose `0 = disabled` sentinel makes a `> 0` guard sound; a plain
+	// bool has no such sentinel, so writing a safety_rails: block to tune ANY
+	// other rail silently set this one to false and removed the between-epic
+	// human pause with no error and no log line (#991).
+	//
+	// Resolve with ResolveEpicCheckpoint, never by reading the field directly.
+	EpicCheckpoint *bool `yaml:"epic_checkpoint,omitempty" json:"epicCheckpoint,omitempty"`
 	// HealthGateMin is the minimum health score (0–100) to continue. 0 = disabled.
 	HealthGateMin int `yaml:"health_gate_min" json:"healthGateMin,omitempty"`
 }
@@ -1453,6 +1462,32 @@ func (r ResolvedConcurrency) CapForRepo(repo string) int {
 		}
 	}
 	return r.PerRepoMax
+}
+
+// DefaultEpicCheckpoint is the built-in value for
+// autonomous.safety_rails.epic_checkpoint. It mirrors
+// orchestrator.DefaultSafetyConfig().EpicCheckpoint, and the two are pinned
+// together by a test — the docs disagreed about this default for as long as the
+// rail existed (AUTONOMOUS_ORCHESTRATOR.md said true, CONFIGURATION.md said
+// false) precisely because it was written down in prose twice and in code once.
+const DefaultEpicCheckpoint = true
+
+// ResolveEpicCheckpoint reports whether the between-epic human checkpoint is
+// enabled, applying the default when the key is omitted.
+//
+// Callers MUST use this rather than reading SafetyRailsConfig.EpicCheckpoint
+// directly, for the same reason ResolveConcurrency exists: the default lives in
+// one place. Reading the field means re-deciding what nil means at every call
+// site, and the two bridges in cmd/nightgauge did exactly that — they copied a
+// zero value through and turned an omitted key into an explicit opt-out.
+func ResolveEpicCheckpoint(cfg *Config) bool {
+	if cfg == nil || cfg.Autonomous == nil || cfg.Autonomous.SafetyRails == nil {
+		return DefaultEpicCheckpoint
+	}
+	if v := cfg.Autonomous.SafetyRails.EpicCheckpoint; v != nil {
+		return *v
+	}
+	return DefaultEpicCheckpoint
 }
 
 // ResolveConcurrency applies defaults to the configured concurrency block.

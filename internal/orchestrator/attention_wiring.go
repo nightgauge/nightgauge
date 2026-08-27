@@ -47,6 +47,7 @@ const (
 	producerSelfRepoRefusal     = "self-repo-refusal"
 	producerRefinementLabels    = "refinement-labels-missing"
 	producerRefinementExhausted = "refinement-exhausted"
+	producerSafetyRailTrip      = "safety-rail-trip"
 )
 
 // producerUnverifiedDeliverableStreak is a fourth standing, run-loop-scoped
@@ -611,6 +612,95 @@ func (as *AutonomousScheduler) raiseRefinementExhausted(owner, repo string, issu
 		ExpiresAt:     standingExpiry(),
 		Steer:         &attention.Steer{Enabled: true, Hint: "Note what should happen to this issue"},
 	})
+}
+
+// safetyRailKind reduces a CheckBeforeEnqueue reason to the stable name of the
+// rail that produced it.
+//
+// The fingerprint drives mute-until-changed, so it must NOT be the raw reason:
+// those embed live counters ("used 412300 + estimate 0 > ceiling 500000"), which
+// change on almost every evaluation and would re-alert a condition the operator
+// already muted. The rail identity is what actually changed or did not.
+//
+// Prefix-matched against the reasons CheckBeforeEnqueue constructs
+// (internal/orchestrator/safety_rails.go). An unrecognised reason falls back to
+// "other" rather than to the raw string — a new rail should show up as one
+// steady unknown, not as a stream of distinct fingerprints.
+func safetyRailKind(reason string) string {
+	switch {
+	case strings.HasPrefix(reason, "budget ceiling"):
+		return "budget-ceiling"
+	case strings.HasPrefix(reason, "circuit breaker"):
+		return "circuit-breaker"
+	case strings.HasPrefix(reason, "rate limit"):
+		return "rate-limit"
+	case strings.HasPrefix(reason, "health gate"):
+		return "health-gate"
+	case strings.HasPrefix(reason, "paused for epic checkpoint"):
+		return "epic-checkpoint"
+	default:
+		return "other"
+	}
+}
+
+// keySafetyRailTrip is the fleet-scoped identity for a tripped safety rail.// keySafetyRailTrip is the fleet-scoped identity for a tripped safety rail.
+// There is one fleet, so there is one key — a second rail tripping while the
+// first is unresolved updates the card rather than stacking a new one.
+const keySafetyRailTrip = producerSafetyRailTrip + ":fleet"
+
+// raiseSafetyRailTrip surfaces the fleet halt that a tripped safety rail causes.
+//
+// Every rail already latched a MACHINE halt here — one that survives restart and
+// makes ResumeUnlessMachineHalted refuse to auto-resume, logging "resolve the
+// card or Resume explicitly". There was no card. The only operator signal was a
+// VSCode status-bar icon, or one log line under `nightgauge autonomous run`.
+//
+// That gap was survivable while the rails that could trip were ones an operator
+// had explicitly tuned. It stops being survivable with #991: the epic checkpoint
+// defaults to ON and now actually fires, so a routine epic completion stops the
+// entire fleet across every repo. A halt this cheap to reach must be this
+// visible.
+func (as *AutonomousScheduler) raiseSafetyRailTrip(reason string, epicNumber int) {
+	body := fmt.Sprintf("Autonomous dispatch is stopped across every repository: %s\n\n"+
+		"This is a machine-raised halt — it survives a restart, and Start will refuse to "+
+		"resume it. Resolve this card, or resume explicitly, once you have decided the "+
+		"fleet should continue.", reason)
+	if epicNumber > 0 {
+		body = fmt.Sprintf("Epic #%d finished and the between-epic checkpoint paused the fleet for "+
+			"human review.\n\n%s\n\nThe checkpoint is `autonomous.safety_rails.epic_checkpoint` "+
+			"and defaults to true. Set it to false to run epic after epic unattended.",
+			epicNumber, body)
+	}
+
+	as.raiseAttention(attention.DecisionRequest{
+		IdempotencyKey: keySafetyRailTrip,
+		Kind:           attention.KindResume,
+		// The fleet is stopped, not one run. This is the severity that exists
+		// precisely for "interrupt someone".
+		Severity: attention.SeverityBlockingFleet,
+		Title:    "Autonomous fleet halted by a safety rail",
+		Body:     body,
+		Producer: producerSafetyRailTrip,
+		Standing: true,
+		// Fingerprint on the REASON so a different rail tripping re-alerts
+		// instead of being muted under the previous rail's resolution.
+		Fingerprint:   "rail:" + safetyRailKind(reason),
+		Context:       attention.Context{Blocker: reason},
+		Options:       []attention.Option{noopOption("ack", "Acknowledge — resume from the Action Center")},
+		DefaultAction: "ack",
+		ExpiresAt:     standingExpiry(),
+		Steer:         &attention.Steer{Enabled: true, Hint: "Note why the fleet should resume"},
+	})
+}
+
+// resolveSafetyRailTrip retracts the halt card once the fleet is resumed.
+func (as *AutonomousScheduler) resolveSafetyRailTrip() {
+	if as == nil || as.attention == nil {
+		return
+	}
+	if _, err := as.attention.AutoResolveKey(producerSafetyRailTrip, keySafetyRailTrip); err != nil {
+		log.Printf("attention: auto-resolve %q failed (fail-open): %v", producerSafetyRailTrip, err)
+	}
 }
 
 // resolveRefinementLabels retracts a repo's missing-label card the moment the

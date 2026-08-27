@@ -37,7 +37,11 @@ func (s *Scheduler) checkEpicCompletion(ctx context.Context, item types.BoardIte
 		}
 	}
 
-	result := hooks.EvaluatePostMerge(ctx, s.issueSvc, s.issueSvc, epicSvc, prVerifier, boardSvc, hooks.PostMergeInput{
+	evaluate := s.evaluatePostMergeFn
+	if evaluate == nil {
+		evaluate = hooks.EvaluatePostMerge
+	}
+	result := evaluate(ctx, s.issueSvc, s.issueSvc, epicSvc, prVerifier, boardSvc, hooks.PostMergeInput{
 		IssueNumber:     item.Number,
 		RepositoryOwner: ownerPart,
 		RepositoryName:  repoPart,
@@ -58,6 +62,12 @@ func (s *Scheduler) checkEpicCompletion(ctx context.Context, item types.BoardIte
 			defer cancel()
 			s.emitReadyToShipAlert(nctx, repo, epic)
 		}()
+		// Latch the checkpoint BEFORE handing control to the epic-PR callback.
+		// onEpicComplete does real network work (epic PR create + merge), so a
+		// panic or a long block there must not lose the pause (#991).
+		if s.epicCheckpoint != nil {
+			s.epicCheckpoint(result.EpicNumber)
+		}
 		if s.onEpicComplete != nil {
 			s.onEpicComplete(item.Repo, result.EpicNumber)
 		}
