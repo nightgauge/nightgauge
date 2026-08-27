@@ -41,9 +41,17 @@ func cachePath(workdir string) string {
 	return filepath.Join(workdir, cacheDir, cacheFile)
 }
 
-// loadFromCache reads the JSONL cache and validates mtime for every entry.
-// Returns nil when the cache is missing, corrupt, or its parameters differ from k1/b.
-func loadFromCache(workdir string, k1, b float64) ([]*Document, error) {
+// loadFromCache reads the JSONL cache and validates it against refs — the
+// documents that exist on disk right now.
+//
+// Validating per-entry mtimes alone answers "did anything I already know about
+// change?", which is silent about ADDED files: a document absent from the cache
+// is never stat-ed, so it can never be found stale. refs closes that hole, and
+// the caller enumerates it with the same function the scanner uses.
+//
+// Returns an error when the cache is missing, corrupt, stale, or its parameters
+// differ from k1/b — in every case the caller falls back to a full scan.
+func loadFromCache(workdir string, k1, b float64, refs []docRef) ([]*Document, error) {
 	path := cachePath(workdir)
 	f, err := os.Open(path)
 	if err != nil {
@@ -113,6 +121,25 @@ func loadFromCache(workdir string, k1, b float64) ([]*Document, error) {
 	if stale {
 		return nil, fmt.Errorf("cache is stale")
 	}
+
+	// Any document on disk that the cache does not carry makes the cache stale.
+	// Without this the document stays unreachable until some ALREADY indexed
+	// file happens to change, and "nothing new was indexed" is indistinguishable
+	// from "nothing new exists".
+	cached := make(map[string]struct{}, len(docs))
+	for _, d := range docs {
+		cached[d.Path] = struct{}{}
+	}
+	for _, r := range refs {
+		relPath, err := filepath.Rel(workdir, r.absPath)
+		if err != nil {
+			continue
+		}
+		if _, ok := cached[relPath]; !ok {
+			return nil, fmt.Errorf("cache is missing %s", relPath)
+		}
+	}
+
 	return docs, nil
 }
 

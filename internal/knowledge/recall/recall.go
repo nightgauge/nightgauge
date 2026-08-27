@@ -72,17 +72,18 @@ func BuildIndex(workdir string, scopes []string, cfg *config.KnowledgeConfig) (*
 	k1 := cfg.RecallBM25K1()
 	b := cfg.RecallBM25B()
 
-	docs, err := loadFromCache(workdir, k1, b)
+	// Enumerate once and hand the same list to both the cache validator and the
+	// scanner, so index membership cannot differ between the two paths.
+	refs := enumerateDocs(workdir)
+
+	docs, err := loadFromCache(workdir, k1, b, refs)
 	if err != nil {
-		// Cache miss or corrupt — full scan.
+		// Cache miss, corrupt, or stale — full scan.
 		docs = nil
 	}
 
 	if docs == nil {
-		docs, err = scanAllDocs(workdir)
-		if err != nil {
-			return nil, fmt.Errorf("scan knowledge docs: %w", err)
-		}
+		docs = scanRefs(workdir, refs)
 		if saveErr := saveToCache(workdir, docs, k1, b); saveErr != nil {
 			// Non-fatal — continue without cache persistence.
 			_ = saveErr
@@ -235,29 +236,36 @@ func buildIndexFromDocs(docs []*Document, k1, b float64) *Index {
 	return idx
 }
 
-// scanAllDocs walks all KB scopes and indexes every .md file.
-// The CLI orchestrator handles scope passing; this function indexes everything
-// and scope filtering happens at query time.
-func scanAllDocs(workdir string) ([]*Document, error) {
-	var docs []*Document
+// docRef is one enumerated knowledge document: where it lives on disk and how
+// it should be classified. Enumeration is deliberately separate from indexing.
+//
+// It is the single source of truth for index MEMBERSHIP. scanRefs indexes
+// exactly what enumerateDocs returns, and loadFromCache treats any path it
+// returns that the cache does not carry as staleness. Two independent walks
+// would be free to disagree about which files belong in the index, and the
+// disagreement would present as a silent recall miss.
+type docRef struct {
+	absPath  string
+	kind     string
+	issueNum int
+}
+
+// enumerateDocs lists every knowledge document across all KB scopes WITHOUT
+// reading or tokenising any of them. It costs directory reads only, which is
+// the part the cache was never saving.
+func enumerateDocs(workdir string) []docRef {
+	var refs []docRef
 
 	// Local features/ directory.
 	featuresDir := filepath.Join(workdir, ".nightgauge", "knowledge", "features")
-	localDocs, err := walkKBDir(workdir, featuresDir, "issue")
-	if err == nil {
-		docs = append(docs, localDocs...)
-	}
+	refs = append(refs, walkKBPaths(featuresDir, "issue")...)
 
 	// Cross-repo knowledge via workspace config.
 	crossEntries, _ := knowledge.ScanCrossRepoKnowledge(workdir, 200)
 	for _, entry := range crossEntries {
 		absPath := filepath.Join(workdir, entry.Path)
 		for _, relEntry := range entry.Entries {
-			filePath := filepath.Join(absPath, relEntry)
-			doc, err := indexFile(workdir, filePath, "repo-topic", 0)
-			if err == nil {
-				docs = append(docs, doc)
-			}
+			refs = append(refs, docRef{absPath: filepath.Join(absPath, relEntry), kind: "repo-topic"})
 		}
 	}
 
@@ -266,27 +274,36 @@ func scanAllDocs(workdir string) ([]*Document, error) {
 	for _, entry := range wsEntries {
 		catDir := filepath.Join(workdir, entry.Path)
 		for _, fname := range entry.Entries {
-			filePath := filepath.Join(catDir, fname)
-			doc, err := indexFile(workdir, filePath, "workspace", 0)
-			if err == nil {
-				docs = append(docs, doc)
-			}
+			refs = append(refs, docRef{absPath: filepath.Join(catDir, fname), kind: "workspace"})
 		}
 	}
 
-	return docs, nil
+	return refs
 }
 
-// walkKBDir indexes all .md files in a knowledge directory tree.
-func walkKBDir(workdir, dir, defaultKind string) ([]*Document, error) {
+// scanRefs reads and indexes every enumerated document. A file that cannot be
+// read is skipped, exactly as before.
+func scanRefs(workdir string, refs []docRef) []*Document {
+	docs := make([]*Document, 0, len(refs))
+	for _, r := range refs {
+		doc, err := indexFile(workdir, r.absPath, r.kind, r.issueNum)
+		if err == nil {
+			docs = append(docs, doc)
+		}
+	}
+	return docs
+}
+
+// walkKBPaths lists all indexable .md files in a knowledge directory tree.
+func walkKBPaths(dir, defaultKind string) []docRef {
 	if _, err := os.Stat(dir); err != nil {
-		return nil, nil
+		return nil
 	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return nil, err
+		return nil
 	}
-	var docs []*Document
+	var refs []docRef
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
@@ -301,14 +318,14 @@ func walkKBDir(workdir, dir, defaultKind string) ([]*Document, error) {
 			if mde.IsDir() || !strings.HasSuffix(mde.Name(), ".md") || mde.Name() == "README.md" {
 				continue
 			}
-			filePath := filepath.Join(issueDir, mde.Name())
-			doc, err := indexFile(workdir, filePath, defaultKind, issueNum)
-			if err == nil {
-				docs = append(docs, doc)
-			}
+			refs = append(refs, docRef{
+				absPath:  filepath.Join(issueDir, mde.Name()),
+				kind:     defaultKind,
+				issueNum: issueNum,
+			})
 		}
 	}
-	return docs, nil
+	return refs
 }
 
 // indexFile reads a markdown file and produces a Document for the index.

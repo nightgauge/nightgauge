@@ -1,9 +1,11 @@
 package recall_test
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/knowledge/recall"
@@ -184,26 +186,198 @@ func TestIntegration_ScopeFilter(t *testing.T) {
 	}
 }
 
-func TestIntegration_CacheRoundTrip(t *testing.T) {
+// docPaths returns the set of document paths an index carries.
+func docPaths(idx *recall.Index) map[string]bool {
+	out := make(map[string]bool, len(idx.Docs))
+	for _, d := range idx.Docs {
+		out[d.Path] = true
+	}
+	return out
+}
+
+// writeKnowledgeDoc scaffolds one knowledge document the way issue pickup does.
+func writeKnowledgeDoc(t *testing.T, root, issueDir, name, body string) string {
+	t.Helper()
+	dir := filepath.Join(root, ".nightgauge", "knowledge", "features", issueDir)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("create %s: %v", dir, err)
+	}
+	abs := filepath.Join(dir, name)
+	if err := os.WriteFile(abs, []byte(body), 0o644); err != nil {
+		t.Fatalf("write %s: %v", abs, err)
+	}
+	rel, err := filepath.Rel(root, abs)
+	if err != nil {
+		t.Fatalf("rel: %v", err)
+	}
+	return rel
+}
+
+// A warm build must see a document that was added after the cache was written.
+//
+// The previous version of this test compared cold and warm doc COUNTS, which are
+// equal whether or not the cache is consulted at all — it stayed green with
+// saveToCache stubbed to `return nil`. It therefore could not observe that the
+// cache validated only the entries it already held and never enumerated the
+// tree, so an added file was invisible until an already-indexed file changed.
+func TestIntegration_CacheSeesAddedDocument(t *testing.T) {
 	root := mkTempRoot(t)
 	scaffoldFixtures(t, root)
 
 	cfg := &config.KnowledgeConfig{}
 
-	// First build: populates cache.
+	// Cold build: populates the cache with the documents present right now.
 	idx1, err := recall.BuildIndex(root, nil, cfg)
 	if err != nil {
 		t.Fatalf("BuildIndex (cold): %v", err)
 	}
 
-	// Second build: should load from cache.
+	// Issue pickup scaffolds a new knowledge document.
+	rel := writeKnowledgeDoc(t, root, "999-late-arrival", "PRD.md",
+		"# Late arrival\n\nzarquon vestibule chronosynclastic\n")
+
+	if docPaths(idx1)[rel] {
+		t.Fatalf("cold index already contains %s — fixture is not testing an ADDITION", rel)
+	}
+
+	// Warm build: the cache is now missing a document that exists on disk.
 	idx2, err := recall.BuildIndex(root, nil, cfg)
 	if err != nil {
 		t.Fatalf("BuildIndex (warm): %v", err)
 	}
 
-	if len(idx1.Docs) != len(idx2.Docs) {
-		t.Errorf("doc count mismatch: cold=%d warm=%d", len(idx1.Docs), len(idx2.Docs))
+	if !docPaths(idx2)[rel] {
+		t.Errorf("warm build did not index the added document %s\n"+
+			"cold=%d docs, warm=%d docs — an added file is invisible until an "+
+			"already-indexed file changes", rel, len(idx1.Docs), len(idx2.Docs))
+	}
+
+	// And it must be reachable by query, which is what a user actually observes.
+	result, err := recall.Query(idx2, "chronosynclastic", 10, nil)
+	if err != nil {
+		t.Fatalf("Query: %v", err)
+	}
+	if result.TotalHits == 0 {
+		t.Errorf("recall returned 0 hits for a term unique to the added document; "+
+			"exit 0 with no hits is indistinguishable from %q", "no matching knowledge exists")
+	}
+}
+
+// A cached document that is MODIFIED must be re-indexed. This half already
+// worked; it is pinned so the membership check added alongside it cannot
+// quietly cost us mtime invalidation later.
+func TestIntegration_CacheSeesModifiedDocument(t *testing.T) {
+	root := mkTempRoot(t)
+	scaffoldFixtures(t, root)
+
+	cfg := &config.KnowledgeConfig{}
+
+	rel := writeKnowledgeDoc(t, root, "500-mutable", "PRD.md", "# Mutable\n\noriginalterm\n")
+	if _, err := recall.BuildIndex(root, nil, cfg); err != nil {
+		t.Fatalf("BuildIndex (cold): %v", err)
+	}
+
+	abs := filepath.Join(root, rel)
+	if err := os.WriteFile(abs, []byte("# Mutable\n\nreplacedterm\n"), 0o644); err != nil {
+		t.Fatalf("rewrite: %v", err)
+	}
+	future := time.Now().Add(2 * time.Second)
+	if err := os.Chtimes(abs, future, future); err != nil {
+		t.Fatalf("chtimes: %v", err)
+	}
+
+	idx, err := recall.BuildIndex(root, nil, cfg)
+	if err != nil {
+		t.Fatalf("BuildIndex (warm): %v", err)
+	}
+	fresh, err := recall.Query(idx, "replacedterm", 10, nil)
+	if err != nil {
+		t.Fatalf("Query: %v", err)
+	}
+	if fresh.TotalHits == 0 {
+		t.Error("warm build served stale content for a modified document")
+	}
+	stale, err := recall.Query(idx, "originalterm", 10, nil)
+	if err != nil {
+		t.Fatalf("Query: %v", err)
+	}
+	if stale.TotalHits != 0 {
+		t.Error("warm build still matches the replaced content")
+	}
+}
+
+// A cached document that is DELETED must drop out of the index.
+func TestIntegration_CacheSeesDeletedDocument(t *testing.T) {
+	root := mkTempRoot(t)
+	scaffoldFixtures(t, root)
+
+	cfg := &config.KnowledgeConfig{}
+
+	rel := writeKnowledgeDoc(t, root, "501-doomed", "PRD.md", "# Doomed\n\nephemeralterm\n")
+	idx1, err := recall.BuildIndex(root, nil, cfg)
+	if err != nil {
+		t.Fatalf("BuildIndex (cold): %v", err)
+	}
+	if !docPaths(idx1)[rel] {
+		t.Fatalf("cold build did not index %s", rel)
+	}
+
+	if err := os.Remove(filepath.Join(root, rel)); err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+
+	idx2, err := recall.BuildIndex(root, nil, cfg)
+	if err != nil {
+		t.Fatalf("BuildIndex (warm): %v", err)
+	}
+	if docPaths(idx2)[rel] {
+		t.Errorf("warm build still carries the deleted document %s", rel)
+	}
+}
+
+// The cache must actually be READ on a warm build. Without this, the addition
+// test above would still pass with caching entirely disabled.
+func TestIntegration_CacheIsConsulted(t *testing.T) {
+	root := mkTempRoot(t)
+	scaffoldFixtures(t, root)
+
+	cfg := &config.KnowledgeConfig{}
+
+	if _, err := recall.BuildIndex(root, nil, cfg); err != nil {
+		t.Fatalf("BuildIndex (cold): %v", err)
+	}
+
+	cachePath := filepath.Join(root, ".nightgauge", "knowledge", ".recall-cache", "index.jsonl")
+	before, err := os.ReadFile(cachePath)
+	if err != nil {
+		t.Fatalf("cold build wrote no cache at %s: %v", cachePath, err)
+	}
+
+	// Poison one cached entry with a term that exists in no file on disk. BM25
+	// needs the term in BOTH fields: Tokens feeds the document-frequency table
+	// (buildIndexFromDocs) and TermFreq feeds tf, so either alone scores zero.
+	// A warm build that returns a hit proves the cache read path ran; a full
+	// rescan would silently discard the poison and return nothing.
+	poisoned := bytes.Replace(before, []byte(`"tokens":["`), []byte(`"tokens":["zzsentinel","`), 1)
+	poisoned = bytes.Replace(poisoned, []byte(`"term_freq":{"`), []byte(`"term_freq":{"zzsentinel":5,"`), 1)
+	if bytes.Equal(poisoned, before) {
+		t.Fatalf("could not poison cache entry — format changed, update this test")
+	}
+	if err := os.WriteFile(cachePath, poisoned, 0o644); err != nil {
+		t.Fatalf("write poisoned cache: %v", err)
+	}
+
+	idx, err := recall.BuildIndex(root, nil, cfg)
+	if err != nil {
+		t.Fatalf("BuildIndex (warm): %v", err)
+	}
+
+	result, err := recall.Query(idx, "zzsentinel", 10, nil)
+	if err != nil {
+		t.Fatalf("Query: %v", err)
+	}
+	if result.TotalHits == 0 {
+		t.Error("warm build did not serve cached tokens — the cache read path did not run")
 	}
 }
 

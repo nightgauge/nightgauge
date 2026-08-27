@@ -6279,7 +6279,9 @@ nightgauge knowledge recall "<query>" \
 
 **Graduated ADR de-duplication**: when a `decisions.md` has a `<!-- graduated-to: docs/path.md -->` marker and the graduation target also appears in results, the source is suppressed. The stable `docs/` location always wins. If the target is below `--limit`, the source appears with `"graduated": true`.
 
-**Cache**: index stored at `.nightgauge/knowledge/.recall-cache/index.jsonl` (JSONL, gitignored). Mtime-based invalidation per file; full rebuild on `--update-cache` or BM25 parameter change.
+**Cache**: index stored at `.nightgauge/knowledge/.recall-cache/index.jsonl` (JSONL, gitignored). Invalidation is by **document set plus per-file mtime**: the cache is rebuilt when a cached file's mtime changes, when a cached file is gone, **and when a document exists on disk that the cache has no entry for**. Full rebuild on `--update-cache` or BM25 parameter change.
+
+The membership half is load-bearing, not belt-and-braces. Validating only the entries the cache already holds answers "did anything I know about change?", which is structurally silent about *additions* — an unindexed file is never stat-ed, so it can never be found stale. A newly scaffolded knowledge document would then stay unreachable until some unrelated indexed file happened to change, and "nothing new was indexed" and "nothing new exists" would share one observable value: zero hits, exit 0. Membership is checked by directory enumeration only — no file reads, no tokenisation — so the warm path keeps the saving it exists for, and `BuildIndex` hands the same enumeration to both the cache validator and the scanner so the two cannot disagree about what belongs in the index.
 
 **BM25 config keys** (in `.nightgauge/config.yaml`):
 ```yaml
