@@ -1266,6 +1266,40 @@ a corrupted character to a person.
 **If one fails, repair the bytes** (utf-8 decode → latin-1 encode → utf-8
 decode). Do not retype the line by hand, and do not exempt the file.
 
+### A fresh worktree fails three packaging suites until `build:assets` runs
+
+`claudeAgentSdkPackaging`, `modelRegistryPackaging` and `failureTaxonomyPackaging`
+assert that files exist under `packages/nightgauge-vscode/dist/`. In a worktree
+where you have run `npm install` and `npm run build --workspace=@nightgauge/sdk`
+— the two steps the handoff and `AGENTS.md` tell you to run — those files are
+still absent, and five tests fail:
+
+```
+× dist/model-registry.json is present after build
+× dist/failure-taxonomy.yaml is present after build
+× dist copy deep-equals the SDK source — a stale build:assets output is a red test (#436)
+× dist copy parses under the packaged strict schema — the load-time-crash class as a test (#436)
+× does not claim the optional Agent SDK as redistributed software
+```
+
+They are **environmental, not your diff**. `ci-local.sh` runs the extension build
+(and with it `build:assets`), so they pass in the gate and in CI.
+
+**Confirm before attributing, and confirm the cheap way**: `git stash push -u`,
+re-run the same suites against the clean tree, `git stash pop`. If they fail
+identically with your change stashed, they are pre-existing. This costs about
+thirty seconds and is the difference between "my change broke packaging" and
+"this worktree has never been built" — a distinction that reads identically in
+the failure output.
+
+### `timeout` does not exist on macOS
+
+`timeout 900 gh pr checks --watch` exits **127** immediately with
+`command not found`, and a backgrounded wrapper reports that as its own exit
+status — so a watch that never ran can look like a watch that completed. GNU
+coreutils ships it as `gtimeout` if installed. Prefer a bounded poll loop, and
+always read the log body rather than the exit code alone.
+
 ## VSCode Extension Diagnostics
 
 ### Where to look when something fails
