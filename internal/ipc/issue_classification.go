@@ -2,10 +2,9 @@ package ipc
 
 import (
 	"encoding/json"
-	"fmt"
 	"os"
-	"path/filepath"
 
+	"github.com/nightgauge/nightgauge/internal/execution"
 	"github.com/nightgauge/nightgauge/internal/state"
 )
 
@@ -91,23 +90,22 @@ func loadIssueClassification(repoRoot, worktreeDir string, issueNumber int) issu
 
 // issueContextCandidates returns the ordered issue-{N}.json paths to try,
 // most-specific workdir first.
+//
+// DELEGATES to execution.IssueContextCandidates (#994). It used to enumerate
+// the extension's `<repoRoot>/.worktrees/issue-N` layout only, and the
+// scheduler's reader enumerated neither layout — two readers of ONE corpus
+// field, each knowing a different subset of the places that field's source can
+// live. The Go manager's worktree (`.nightgauge/worktrees/{repo}-issue-N`) was
+// invisible to both.
+//
+// repo is optional: without it the Go-manager layout cannot be named, and the
+// list degrades to what this function used to return.
 func issueContextCandidates(repoRoot, worktreeDir string, issueNumber int) []string {
-	roots := make([]string, 0, 3)
-	if worktreeDir != "" {
-		roots = append(roots, worktreeDir)
-	}
-	if repoRoot != "" {
-		roots = append(roots,
-			filepath.Join(repoRoot, ".worktrees", fmt.Sprintf("issue-%d", issueNumber)),
-			repoRoot,
-		)
-	}
-	paths := make([]string, 0, len(roots))
-	for _, root := range roots {
-		paths = append(paths, filepath.Join(root, ".nightgauge", "pipeline",
-			fmt.Sprintf("issue-%d.json", issueNumber)))
-	}
-	return paths
+	return issueContextCandidatesForRepo(repoRoot, worktreeDir, "", issueNumber)
+}
+
+func issueContextCandidatesForRepo(repoRoot, worktreeDir, repo string, issueNumber int) []string {
+	return execution.IssueContextCandidates(repoRoot, worktreeDir, repo, issueNumber)
 }
 
 // decodeContextLabels normalizes the context file's labels array to plain

@@ -386,6 +386,16 @@ func RunDoctor(ctx context.Context, cfg *config.Config, client *gh.Client, adapt
 		warnings = append(warnings, survivalWarning)
 	}
 
+	// The second absence detector (#994). Same shape as the arm above and for
+	// the same reason: every consumer of the outcome corpus reports an
+	// unmeasurable one as "no data", which is indistinguishable from a young
+	// corpus. Only the row count tells them apart, and nothing was looking at it.
+	corpusCalibration, corpusWarning := checkCorpusCalibration(cwd)
+	result.Checks["corpus_calibration"] = corpusCalibration
+	if corpusWarning != "" {
+		warnings = append(warnings, corpusWarning)
+	}
+
 	// A killed stage leaks its worktree; a stage that is never killed leaks
 	// ITSELF (#341). Report-only — this check never signals a process.
 	processLeaks, processWarning := checkOrphanedProcesses(cwd, now)

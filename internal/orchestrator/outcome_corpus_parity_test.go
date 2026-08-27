@@ -288,7 +288,7 @@ func TestLoadIssueContext_DoesNotFabricateAPrediction(t *testing.T) {
 		[]byte(`{"routing":{"complexity_score":5,"path":"standard"}}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	score, _, model := loadIssueContext(root, 81)
+	score, _, model := loadIssueContext(root, "", "", 81)
 	if score != 5 {
 		t.Errorf("complexityScore = %d, want 5", score)
 	}

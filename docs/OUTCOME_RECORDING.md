@@ -35,6 +35,35 @@ Together these two paths mean the complexity model is a **living document**: it
 improves with every issue the pipeline processes and degrades gracefully when
 patterns prove unreliable.
 
+### Where the prediction comes from, and when (#994)
+
+`predictedModel` and `complexityScore` are read from the run's
+`issue-{N}.json`, which the **issue-pickup stage writes into the run's
+worktree**. Two facts follow, and getting either wrong empties the pair:
+
+**There are two worktree layouts.** The Go manager writes
+`<repoRoot>/.nightgauge/worktrees/{repoName}-issue-N`; the VSCode extension
+writes `<repoRoot>/.worktrees/issue-N`. `execution.IssueContextCandidates` is
+the single list both readers use — before it existed, the scheduler searched
+neither layout and the IPC path searched only the extension's, so one corpus
+field had two readers each knowing a different subset of where its source
+lives.
+
+**The read happens at RECORDING time, never at pickup.** At pickup the worktree
+does not exist and issue-pickup has not run, so on a first run the value is
+definitionally empty. `Scheduler.resolveOutcomePrediction` re-reads at the
+recording boundary and only ever upgrades — a re-read that finds nothing keeps
+whatever the caller had.
+
+Until this was fixed, **every row in the corpus carried `predictedModel: ""`
+and `complexityScore: 0` for the life of the product**, while the real context
+files in the field carried both. Nothing reported it: `Calibrate` excludes a
+pair with an empty half rather than booking a false miss, `ratio()` returns nil
+rather than 0, and `analyzeCalibration` says "no data" — all correct, and
+collectively indistinguishable from a corpus that is simply young. `nightgauge
+doctor`'s `corpus_calibration` arm is the one check that tells them apart,
+because it keys on the row count the polite consumers ignore.
+
 ### The model pair's vocabulary (#340)
 
 The learning corpus (`.nightgauge/pipeline/history/outcomes.jsonl`) stores

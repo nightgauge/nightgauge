@@ -5613,7 +5613,7 @@ func learnTuneCmd() *cobra.Command {
 						"current writers capture actualSize from the pre-merge diff at pr-create exit, " +
 						"while older rows and runs that never reached pr-create remain absent. " +
 						"See docs/SELF_IMPROVEMENT_LOOP.md § Outcome Recording.",
-					"measuredAlternate": "modelAccuracy (reported above; not a tuning target)",
+					"measuredAlternate": modelAccuracyAlternate(report.ModelAccuracy),
 				}
 				return printJSON(output)
 			}
@@ -10257,6 +10257,23 @@ Resolution methods checked in order:
 	return cmd
 }
 
+// modelAccuracyAlternate describes what the operator can look at INSTEAD of a
+// size-accuracy tuning run.
+//
+// It used to name modelAccuracy unconditionally, "reported above" — but on a
+// corpus where the size pair is unmeasurable the MODEL pair usually is too, and
+// this repo's real corpus had zero of both. So the one line offered when the
+// tool cannot tune pointed the operator at a second null (#994). Say which it
+// is.
+func modelAccuracyAlternate(modelAccuracy *float64) string {
+	if modelAccuracy == nil {
+		return "none — modelAccuracy is also unmeasurable on this corpus (no row carries " +
+			"both predictedModel and actualModel). Run `nightgauge doctor` for the " +
+			"corpus_calibration check."
+	}
+	return "modelAccuracy (reported above; not a tuning target)"
+}
+
 // --- doctor command ---
 
 // doctorCheckOrder is the render order for doctor's named rows. A check that
@@ -10279,7 +10296,7 @@ var doctorCheckOrder = []string{
 	"binary", "gh", "github_auth", "api_user", "scopes", "rate_limit", "config", "project",
 	"ai_adapter",
 	"compose_orphans", "worktree_leaks", "stranded_branches", "pipeline_stashes", "orphaned_processes",
-	"survival_backlog",
+	"survival_backlog", "corpus_calibration",
 }
 
 func doctorCmd() *cobra.Command {
