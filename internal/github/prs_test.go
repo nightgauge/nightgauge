@@ -411,7 +411,7 @@ func TestPRService_CreateEpicPR_Created(t *testing.T) {
 	}}}}`
 
 	client, cleanup := mockForgeServer(t,
-		map[string]string{"/repos/o/r": restRepoIDFixture},
+		map[string]string{"GET /repos/o/r": restRepoIDFixture},
 		listPRsResponse, createPRResponse)
 	defer cleanup()
 

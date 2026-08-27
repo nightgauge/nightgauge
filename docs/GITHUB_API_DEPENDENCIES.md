@@ -13,18 +13,18 @@ renamed.
 
 ## Summary Table
 
-| Feature           | Type     | GitHub Availability | Risk if Removed | Used In                                    |
-| ----------------- | -------- | ------------------- | --------------- | ------------------------------------------ |
-| `subIssues`       | Query    | GA (2024)           | Critical        | Issue board, epic tracking, cross-repo     |
-| `blockedBy`       | Query    | GA (2024)           | Critical        | Board lock icons, dependency ordering      |
-| `blocking`        | Query    | GA (2024)           | Critical        | Board lock icons, dependency ordering      |
-| `addSubIssue`     | Mutation | GA (2024)           | High            | Sub-issue linking (`scripts/`)             |
-| `removeSubIssue`  | Mutation | GA (2024)           | High            | Sub-issue unlinking (`scripts/`)           |
-| `addBlockedBy`    | Mutation | GA (2024)           | High            | Blocking relationship setup (`scripts/`)   |
-| `removeBlockedBy` | Mutation | GA (2024)           | High            | Blocking relationship teardown             |
-| `ProjectV2`       | Query    | GA (2023)           | Critical        | Board queries (all project board features) |
-| `ProjectV2 Views` | REST API | GA (2026)           | Medium          | repo-init standard view creation           |
-| `node(id:)`       | Query    | Stable              | High            | Cross-repo epic progress lookups           |
+| Feature               | Type     | GitHub Availability | Risk if Removed     | Used In                                    |
+| --------------------- | -------- | ------------------- | ------------------- | ------------------------------------------ |
+| `subIssues`           | Query    | GA (2024)           | Critical            | Issue board, epic tracking, cross-repo     |
+| `blockedBy`           | Query    | GA (2024)           | Critical            | Board lock icons, dependency ordering      |
+| `blocking`            | Query    | GA (2024)           | Critical            | Board lock icons, dependency ordering      |
+| ~~`addSubIssue`~~     | Mutation | GA (2024)           | **none — REST now** | No longer used — REST, see below (#956)    |
+| ~~`removeSubIssue`~~  | Mutation | GA (2024)           | **none — REST now** | No longer used — REST, see below (#956)    |
+| ~~`addBlockedBy`~~    | Mutation | GA (2024)           | **none — REST now** | No longer used — REST, see below (#956)    |
+| ~~`removeBlockedBy`~~ | Mutation | GA (2024)           | **none — REST now** | No longer used — REST, see below (#956)    |
+| `ProjectV2`           | Query    | GA (2023)           | Critical            | Board queries (all project board features) |
+| `ProjectV2 Views`     | REST API | GA (2026)           | Medium              | repo-init standard view creation           |
+| `node(id:)`           | Query    | Stable              | High                | Cross-repo epic progress lookups           |
 
 ---
 
@@ -89,43 +89,32 @@ blocking. Used for informational display on board items.
 
 ---
 
-### `addSubIssue` / `removeSubIssue` — Sub-Issue Link Mutations
+### Sub-issue and blocking links — **no longer a GraphQL dependency**
 
-**GraphQL mutations**: `addSubIssue(input: $input)`,
-`removeSubIssue(input: $input)`
+`addSubIssue`, `removeSubIssue`, `addBlockedBy` and `removeBlockedBy` were
+GraphQL mutations taking node IDs. **The tree no longer uses any of them**
+(#956): `internal/github/issues.go` writes these links over REST, and the four
+mutation structs plus their input structs were deleted rather than kept as a
+fallback.
 
-**What they do**: Link/unlink an issue as a child of another issue.
+| Operation         | Endpoint now used                                               | Parameter                   |
+| ----------------- | --------------------------------------------------------------- | --------------------------- |
+| add sub-issue     | `POST /repos/{o}/{r}/issues/{n}/sub_issues`                     | `{"sub_issue_id": <db id>}` |
+| remove sub-issue  | `DELETE /repos/{o}/{r}/issues/{n}/sub_issue`                    | `{"sub_issue_id": <db id>}` |
+| add blocked-by    | `POST /repos/{o}/{r}/issues/{n}/dependencies/blocked_by`        | `{"issue_id": <db id>}`     |
+| remove blocked-by | `DELETE /repos/{o}/{r}/issues/{n}/dependencies/blocked_by/{id}` | database id in the PATH     |
 
-**Where we use them**: Setup scripts (`scripts/`) for creating epic structures;
-`internal/github/issues.go` `AddSubIssue`/`RemoveSubIssue`.
+**Risk**: the risk moved rather than vanished — it is now a REST dependency, on
+endpoints that take a **database id** rather than a node ID. The upside is that
+these bill the near-idle `core` bucket instead of the contended `graphql` one,
+and that the reads feeding them were already REST.
 
-**Risk**: High. Scripts that set up new epics would need REST API workarounds if
-these mutations are removed.
+The `subIssues` / `blockedBy` / `blocking` **queries** above are unaffected and
+remain critical GraphQL dependencies — only the writes moved.
 
----
-
-### `addBlockedBy` / `removeBlockedBy` — Blocking Relationship Mutations
-
-**GraphQL mutations**: `addBlockedBy(input: $input)`,
-`removeBlockedBy(input: $input)`
-
-**What they do**: Create/remove a blocking relationship between two issues.
-`addBlockedBy(issueId: X, blockingIssueId: Y)` makes Y block X.
-
-**Where we use them**: Setup scripts for sequential epic ordering;
-`internal/github/issues.go` `AddBlockedBy`/`RemoveBlockedBy`.
-
-**Input structure**:
-
-```graphql
-input AddBlockedByInput {
-  issueId: ID! # the issue that gets blocked
-  blockingIssueId: ID! # the issue that does the blocking
-  clientMutationId: String
-}
-```
-
-**Risk**: High. Sequential epic dependency enforcement breaks without these.
+See `docs/GITHUB_GRAPHQL_SCHEMA.md` § _Sub-issue and dependency links_ for the
+probe evidence and § _Node-ID coupling_ for why these could move when the other
+mutations still cannot.
 
 ---
 

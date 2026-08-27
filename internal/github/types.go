@@ -347,26 +347,6 @@ type RemoveLabelsFromLabelableInput struct {
 	LabelIDs    []graphql.ID `json:"labelIds"`
 }
 
-type AddSubIssueInput struct {
-	IssueID    graphql.ID `json:"issueId"`
-	SubIssueID graphql.ID `json:"subIssueId"`
-}
-
-type RemoveSubIssueInput struct {
-	IssueID    graphql.ID `json:"issueId"`
-	SubIssueID graphql.ID `json:"subIssueId"`
-}
-
-type AddBlockedByInput struct {
-	IssueID         graphql.ID `json:"issueId"`
-	BlockingIssueID graphql.ID `json:"blockingIssueId"`
-}
-
-type RemoveBlockedByInput struct {
-	IssueID         graphql.ID `json:"issueId"`
-	BlockingIssueID graphql.ID `json:"blockingIssueId"`
-}
-
 type CreatePullRequestInput struct {
 	RepositoryID graphql.ID     `json:"repositoryId"`
 	Title        graphql.String `json:"title"`
@@ -431,22 +411,6 @@ type removeLabelsMutation struct {
 			TypeName string `graphql:"__typename"`
 		}
 	} `graphql:"removeLabelsFromLabelable(input: $input)"`
-}
-
-type addSubIssueMutation struct {
-	AddSubIssue struct {
-		Issue struct {
-			ID graphql.ID
-		}
-	} `graphql:"addSubIssue(input: $input)"`
-}
-
-type removeSubIssueMutation struct {
-	RemoveSubIssue struct {
-		Issue struct {
-			ID graphql.ID
-		}
-	} `graphql:"removeSubIssue(input: $input)"`
 }
 
 type addCommentMutation struct {
@@ -681,20 +645,6 @@ type searchIssuesQuery struct {
 		IssueCount graphql.Int
 		Nodes      []searchIssueNode
 	} `graphql:"search(query: $q, type: ISSUE, first: $limit)"`
-}
-
-// --- Blocking Mutations ---
-
-type addBlockedByMutation struct {
-	AddBlockedBy struct {
-		ClientMutationID *graphql.String
-	} `graphql:"addBlockedBy(input: $input)"`
-}
-
-type removeBlockedByMutation struct {
-	RemoveBlockedBy struct {
-		ClientMutationID *graphql.String
-	} `graphql:"removeBlockedBy(input: $input)"`
 }
 
 // --- Project Field Introspection (full) ---

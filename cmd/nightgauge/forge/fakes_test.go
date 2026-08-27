@@ -128,13 +128,13 @@ func (f *fakeIssueService) AddComment(_ context.Context, _, _ string) error {
 	f.calls = append(f.calls, "AddComment")
 	return nil
 }
-func (f *fakeIssueService) AddSubIssue(_ context.Context, _, _ string) error    { return nil }
-func (f *fakeIssueService) RemoveSubIssue(_ context.Context, _, _ string) error { return nil }
+func (f *fakeIssueService) AddSubIssue(_ context.Context, _, _ forge.IssueRef) error    { return nil }
+func (f *fakeIssueService) RemoveSubIssue(_ context.Context, _, _ forge.IssueRef) error { return nil }
 func (f *fakeIssueService) LinkSubIssue(_ context.Context, _, _ string, _, _ int) error {
 	return nil
 }
-func (f *fakeIssueService) AddBlockedBy(_ context.Context, _, _ string) error    { return nil }
-func (f *fakeIssueService) RemoveBlockedBy(_ context.Context, _, _ string) error { return nil }
+func (f *fakeIssueService) AddBlockedBy(_ context.Context, _, _ forge.IssueRef) error    { return nil }
+func (f *fakeIssueService) RemoveBlockedBy(_ context.Context, _, _ forge.IssueRef) error { return nil }
 func (f *fakeIssueService) AddLabels(_ context.Context, _ string, _ []string) error {
 	f.calls = append(f.calls, "AddLabels")
 	return f.addLabelsErr

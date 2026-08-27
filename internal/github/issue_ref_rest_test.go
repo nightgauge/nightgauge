@@ -30,6 +30,7 @@ func TestResolveIssueRef_ReadsNodeIDAndParentOverREST(t *testing.T) {
 	var seen []string
 	srv := httptest.NewServer(issueRefHandler(t, `{
 		"number": 849,
+		"id": 5262249483,
 		"node_id": "I_kwDOTfoR3s8AAAABN_sThw",
 		"parent_issue_url": "https://api.github.com/repos/o/r/issues/842"
 	}`, http.StatusOK, &seen))
@@ -44,6 +45,12 @@ func TestResolveIssueRef_ReadsNodeIDAndParentOverREST(t *testing.T) {
 	}
 	if ref.ParentNumber != 842 {
 		t.Errorf("ParentNumber = %d, want 842 parsed from parent_issue_url", ref.ParentNumber)
+	}
+	// The database id is what the sub-issue and dependency endpoints take. It
+	// is a distinct value from the node ID and arrives in the same response,
+	// which is the property that let the link mutations move transport.
+	if ref.DatabaseID != 5262249483 {
+		t.Errorf("DatabaseID = %d, want the top-level id REST reported", ref.DatabaseID)
 	}
 	// The point of the migration is that this read leaves the graphql bucket.
 	// Assert the transport, not just the value: a GraphQL implementation would
@@ -87,7 +94,7 @@ func TestResolveIssueRef_RejectsAPullRequestNumber(t *testing.T) {
 func TestResolveIssueRef_AbsentIssueIsAnError(t *testing.T) {
 	var seen []string
 	srv := httptest.NewServer(issueRefHandler(t,
-		`{"number":9999,"node_id":"I_would_be_valid","parent_issue_url":null}`,
+		`{"number":9999,"id":4242,"node_id":"I_would_be_valid","parent_issue_url":null}`,
 		http.StatusNotFound, &seen))
 	defer srv.Close()
 
@@ -100,11 +107,30 @@ func TestResolveIssueRef_AbsentIssueIsAnError(t *testing.T) {
 // GitHub answers with a confusing error far from the cause.
 func TestResolveIssueRef_MissingNodeIDIsAnError(t *testing.T) {
 	var seen []string
-	srv := httptest.NewServer(issueRefHandler(t, `{"number": 1}`, http.StatusOK, &seen))
+	srv := httptest.NewServer(issueRefHandler(t, `{"number": 1, "id": 4242}`, http.StatusOK, &seen))
 	defer srv.Close()
 
 	if _, err := resolveIssueRef(context.Background(), newClientForRESTTest(srv), "o", "r", 1); err == nil {
 		t.Fatal("resolveIssueRef succeeded with no node_id, want an error")
+	}
+}
+
+// The mirror of the node_id guard, and it needs its own test for the same
+// reason that one does: a zero database id reaches a link endpoint as
+// `{"sub_issue_id": 0}`, which GitHub answers 404 — indistinguishable at the
+// call site from "the referenced issue is gone".
+//
+// The fixture carries a VALID node_id so the missing `id` is the only thing
+// wrong with it. Sharing the previous test's body would leave both guards
+// satisfied by whichever check runs first, and neither actually pinned.
+func TestResolveIssueRef_MissingDatabaseIDIsAnError(t *testing.T) {
+	var seen []string
+	srv := httptest.NewServer(issueRefHandler(t,
+		`{"number": 1, "node_id": "I_kwDOTfoR3s8AAAABN_sThw"}`, http.StatusOK, &seen))
+	defer srv.Close()
+
+	if _, err := resolveIssueRef(context.Background(), newClientForRESTTest(srv), "o", "r", 1); err == nil {
+		t.Fatal("resolveIssueRef succeeded with no database id, want an error")
 	}
 }
 

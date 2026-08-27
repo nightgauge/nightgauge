@@ -520,87 +520,60 @@ func (s *IssueService) AddComment(ctx context.Context, subjectID, body string) e
 // adapter additionally writes the native parent_id field as a best-effort
 // secondary action; failure of that secondary write is non-fatal because
 // the canonical readback is the relates_to link.
-func (s *IssueService) AddSubIssue(ctx context.Context, parentID, childID string) error {
-	pOwner, pRepo, pIid, err := parseIssueRef(parentID)
-	if err != nil {
-		return fmt.Errorf("gitlab AddSubIssue parent: %w", err)
-	}
-	cOwner, cRepo, cIid, err := parseIssueRef(childID)
-	if err != nil {
-		return fmt.Errorf("gitlab AddSubIssue child: %w", err)
-	}
-	if err := addIssueLink(ctx, s.client, pOwner, pRepo, pIid, cOwner, cRepo, cIid, linkTypeRelatesTo); err != nil {
+func (s *IssueService) AddSubIssue(ctx context.Context, parent, child forge.IssueRef) error {
+	if err := addIssueLink(ctx, s.client,
+		parent.Owner, parent.Repo, parent.Number,
+		child.Owner, child.Repo, child.Number, linkTypeRelatesTo); err != nil {
 		return err
 	}
 	if s.client.Edition(ctx) == EditionEE {
-		_ = tryWriteParentID(ctx, s.client, cOwner, cRepo, cIid, pIid)
+		_ = tryWriteParentID(ctx, s.client, child.Owner, child.Repo, child.Number, parent.Number)
 	}
 	return nil
 }
 
 // RemoveSubIssue removes the parent→child relates_to link. Returns nil
 // when no such link exists so the operation is idempotent.
-func (s *IssueService) RemoveSubIssue(ctx context.Context, parentID, childID string) error {
-	pOwner, pRepo, pIid, err := parseIssueRef(parentID)
-	if err != nil {
-		return fmt.Errorf("gitlab RemoveSubIssue parent: %w", err)
-	}
-	_, _, cIid, err := parseIssueRef(childID)
-	if err != nil {
-		return fmt.Errorf("gitlab RemoveSubIssue child: %w", err)
-	}
-	linkID, err := findLinkID(ctx, s.client, pOwner, pRepo, pIid, cIid, linkTypeRelatesTo)
+func (s *IssueService) RemoveSubIssue(ctx context.Context, parent, child forge.IssueRef) error {
+	linkID, err := findLinkID(ctx, s.client, parent.Owner, parent.Repo, parent.Number, child.Number, linkTypeRelatesTo)
 	if err != nil {
 		return err
 	}
 	if linkID == 0 {
 		return nil
 	}
-	return deleteIssueLink(ctx, s.client, pOwner, pRepo, pIid, linkID)
+	return deleteIssueLink(ctx, s.client, parent.Owner, parent.Repo, parent.Number, linkID)
 }
 
-// LinkSubIssue is a convenience that resolves number-keyed identifiers into
-// "owner/repo#iid" refs and delegates to AddSubIssue.
+// LinkSubIssue is a convenience that delegates to AddSubIssue with both ends in
+// the same project.
 func (s *IssueService) LinkSubIssue(ctx context.Context, owner, repo string, parentNumber, childNumber int) error {
-	parentRef := fmt.Sprintf("%s/%s#%d", owner, repo, parentNumber)
-	childRef := fmt.Sprintf("%s/%s#%d", owner, repo, childNumber)
-	return s.AddSubIssue(ctx, parentRef, childRef)
+	return s.AddSubIssue(ctx,
+		forge.IssueRef{Owner: owner, Repo: repo, Number: parentNumber},
+		forge.IssueRef{Owner: owner, Repo: repo, Number: childNumber},
+	)
 }
 
-// AddBlockedBy creates an is_blocked_by link from blockedID → blockerID.
+// AddBlockedBy creates an is_blocked_by link from blocked → blocker.
 // GitLab materialises the inverse blocks link on the blocker automatically.
-func (s *IssueService) AddBlockedBy(ctx context.Context, blockedID, blockerID string) error {
-	bOwner, bRepo, bIid, err := parseIssueRef(blockedID)
-	if err != nil {
-		return fmt.Errorf("gitlab AddBlockedBy blocked: %w", err)
-	}
-	rOwner, rRepo, rIid, err := parseIssueRef(blockerID)
-	if err != nil {
-		return fmt.Errorf("gitlab AddBlockedBy blocker: %w", err)
-	}
-	return addIssueLink(ctx, s.client, bOwner, bRepo, bIid, rOwner, rRepo, rIid, linkTypeIsBlockedBy)
+func (s *IssueService) AddBlockedBy(ctx context.Context, blocked, blocker forge.IssueRef) error {
+	return addIssueLink(ctx, s.client,
+		blocked.Owner, blocked.Repo, blocked.Number,
+		blocker.Owner, blocker.Repo, blocker.Number, linkTypeIsBlockedBy)
 }
 
-// RemoveBlockedBy deletes the is_blocked_by link from blockedID → blockerID.
+// RemoveBlockedBy deletes the is_blocked_by link from blocked → blocker.
 // GitLab removes the inverse blocks link on the blocker automatically.
 // Returns nil when no such link exists.
-func (s *IssueService) RemoveBlockedBy(ctx context.Context, blockedID, blockerID string) error {
-	bOwner, bRepo, bIid, err := parseIssueRef(blockedID)
-	if err != nil {
-		return fmt.Errorf("gitlab RemoveBlockedBy blocked: %w", err)
-	}
-	_, _, rIid, err := parseIssueRef(blockerID)
-	if err != nil {
-		return fmt.Errorf("gitlab RemoveBlockedBy blocker: %w", err)
-	}
-	linkID, err := findLinkID(ctx, s.client, bOwner, bRepo, bIid, rIid, linkTypeIsBlockedBy)
+func (s *IssueService) RemoveBlockedBy(ctx context.Context, blocked, blocker forge.IssueRef) error {
+	linkID, err := findLinkID(ctx, s.client, blocked.Owner, blocked.Repo, blocked.Number, blocker.Number, linkTypeIsBlockedBy)
 	if err != nil {
 		return err
 	}
 	if linkID == 0 {
 		return nil
 	}
-	return deleteIssueLink(ctx, s.client, bOwner, bRepo, bIid, linkID)
+	return deleteIssueLink(ctx, s.client, blocked.Owner, blocked.Repo, blocked.Number, linkID)
 }
 
 func (s *IssueService) AddLabels(ctx context.Context, issueID string, labelIDs []string) error {

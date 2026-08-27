@@ -28,16 +28,28 @@ func blockedByRESTServer(t *testing.T, byNumber map[int]string, seen *[]string) 
 		// "this failed" is pinning the STATUS check and not the empty-node_id
 		// fallback. See TestResolveIssueRef_AbsentIssueIsAnError.
 		w.WriteHeader(http.StatusNotFound)
-		_, _ = w.Write([]byte(`{"number":0,"node_id":"I_would_be_valid","parent_issue_url":null}`))
+		_, _ = w.Write([]byte(`{"number":0,"id":4242,"node_id":"I_would_be_valid","parent_issue_url":null}`))
 	}))
 }
+
+// databaseIDFor is the fake database id this package's REST fixtures carry for
+// a given issue number. Derived rather than hand-written so a test asserting a
+// write body can name the same value the fixture served, without either side
+// hard-coding a magic number the other might drift from.
+//
+// Deliberately NOT equal to the issue number: the sub-issue and dependency
+// endpoints take the database id where the surrounding path takes the number,
+// and a fixture where the two coincide would let a call that passes the wrong
+// one of the pair pass its test.
+func databaseIDFor(number int) int64 { return int64(number) + 5_000_000_000 }
 
 func issueJSON(number int, nodeID, parentURL string) string {
 	parent := "null"
 	if parentURL != "" {
 		parent = fmt.Sprintf("%q", parentURL)
 	}
-	return fmt.Sprintf(`{"number":%d,"node_id":%q,"parent_issue_url":%s}`, number, nodeID, parent)
+	return fmt.Sprintf(`{"number":%d,"id":%d,"node_id":%q,"parent_issue_url":%s}`,
+		number, databaseIDFor(number), nodeID, parent)
 }
 
 // These tests deliberately stop before the GraphQL mutation. Reaching it needs
@@ -128,7 +140,16 @@ func TestBlockedByNumber_ResolvesBlockerOverREST(t *testing.T) {
 			if !strings.Contains(err.Error(), "blocker issue #2") {
 				t.Errorf("error = %q, want it to name the blocker", err)
 			}
+			// The ADD path resolves both: it needs the blocked issue's
+			// parent number for the circular-dependency guard. The REMOVE
+			// path has no guard, and the endpoint addresses the blocked issue
+			// by number, so it resolves only the blocker -- a read made
+			// solely to produce an error the write itself reports is a call
+			// worth not making.
 			want := []string{"GET /repos/o/r/issues/1", "GET /repos/o/r/issues/2"}
+			if tc.name == "remove" {
+				want = []string{"GET /repos/o/r/issues/2"}
+			}
 			if len(seen) != len(want) {
 				t.Fatalf("requests = %v, want %v", seen, want)
 			}
@@ -142,13 +163,18 @@ func TestBlockedByNumber_ResolvesBlockerOverREST(t *testing.T) {
 }
 
 // An unresolvable BLOCKED issue must fail too, and say which one it was.
+//
+// Only the add path reads the blocked issue (for the guard), so this pins the
+// add path. On the remove path an absent blocked issue surfaces from the write
+// as a 404 naming both refs -- covered by
+// TestLinkWrites_404NamesTheAbsentIssueNotTheRoute.
 func TestBlockedByNumber_UnresolvableBlockedIssueIsAnError(t *testing.T) {
 	var seen []string
 	srv := blockedByRESTServer(t, map[int]string{}, &seen)
 	defer srv.Close()
 
 	p := &ProjectService{client: newClientForRESTTest(srv)}
-	err := p.RemoveBlockedByNumber(context.Background(), "o", "r", 7, 8)
+	err := p.AddBlockedByNumber(context.Background(), "o", "r", 7, 8)
 	if err == nil || !strings.Contains(err.Error(), "blocked issue #7") {
 		t.Fatalf("err = %v, want an error naming the blocked issue", err)
 	}
