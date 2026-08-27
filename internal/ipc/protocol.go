@@ -501,11 +501,6 @@ type QueueEnqueueEpicParams struct {
 	EligibleSubIssues []int `json:"eligibleSubIssues,omitempty"`
 }
 
-// QueueReorderParams are parameters for queue.reorder.
-type QueueReorderParams struct {
-	IssueNumbers []int `json:"issueNumbers"`
-}
-
 // --- Git methods ---
 
 // GitCurrentBranchParams are parameters for git.currentBranch.

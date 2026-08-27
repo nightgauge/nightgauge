@@ -1,9 +1,9 @@
 ---
 name: nightgauge-queue
 description: Manage the issue queue for sequential and batch pipeline processing. Add,
-  list, remove, clear, and reorder queued issues. Supports epic expansion and
+  list, remove, and clear queued issues. Supports epic expansion and
   label-based queuing. Use when staging which issues the pipeline processes next,
-  or when reordering or clearing the queue.
+  or when clearing the queue.
 license: Apache-2.0
 metadata:
   author: nightgauge

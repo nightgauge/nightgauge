@@ -435,7 +435,7 @@ See [full specification](../skills/nightgauge-config-show/SKILL.md)
 **Version:** 1.0.0 | **Purpose:** Manage issue queue for pipeline processing
 
 **Description:**
-Manage the issue queue for sequential and batch pipeline processing. Add, list, remove, clear, and reorder queued issues. Supports epic expansion with automatic sub-issue ordering.
+Manage the issue queue for sequential and batch pipeline processing. Add, list, remove, and clear queued issues. Supports epic expansion with automatic sub-issue ordering.
 
 **When to Use:**
 

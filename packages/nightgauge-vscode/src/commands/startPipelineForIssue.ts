@@ -14,8 +14,6 @@ import type { Logger } from "../utils/logger";
 import type { HeadlessOrchestrator } from "../services/HeadlessOrchestrator";
 import type { IssueQueueService } from "../services/IssueQueueService";
 import type { ConcurrentPipelineManager } from "../services/ConcurrentPipelineManager";
-import { registerMoveQueueItemUpCommand } from "./moveQueueItemUp";
-import { registerMoveQueueItemDownCommand } from "./moveQueueItemDown";
 import { registerRemoveQueueItemCommand } from "./removeQueueItem";
 import { registerRetryQueueItemCommand } from "./retryQueueItem";
 
@@ -340,8 +338,6 @@ export function registerQueueCommands(
   );
 
   // Register queue management commands
-  disposables.push(registerMoveQueueItemUpCommand(queueService, logger));
-  disposables.push(registerMoveQueueItemDownCommand(queueService, logger));
   disposables.push(registerRemoveQueueItemCommand(queueService, logger));
   disposables.push(registerRetryQueueItemCommand(queueService, logger));
 

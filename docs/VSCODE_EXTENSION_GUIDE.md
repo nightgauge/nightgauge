@@ -133,7 +133,6 @@ The Nightgauge sidebar contains four main views:
 - Click an issue to select it for pipeline execution
 - Right-click a stage to get context menu options (run, retry, view context)
 - Click `[Retry]` on a failed stage to re-run it
-- Drag issues to reorder queue priority
 
 #### 2. Project Board View
 
@@ -432,7 +431,6 @@ When a pipeline is already running and you pick up another issue, that issue is 
 - **Automatic Queueing** — Issues added while pipeline is running go to queue
 - **Priority Sorting** — Queue auto-sorts by: Priority (P0 → P3) → Size (XS → XL) → Issue Number
 - **Token Estimation** — Shows estimated tokens for each queued issue based on size label
-- **Reordering** — Use arrow buttons to move queue items up/down
 - **Dynamic Addition** — Add more issues to queue while pipeline is running
 
 #### Queue Status Colors

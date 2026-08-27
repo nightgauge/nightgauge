@@ -263,7 +263,7 @@ flowchart TD
     A["I want to manage<br/>my backlog"] --> B{What's the task?}
     B -->|Triage & hygiene<br/>weekly or monthly| C["/nightgauge-backlog-groom<br/>Find stale, duplicate,<br/>unlinked issues"]
     B -->|Validate issues are<br/>pipeline-ready| D["/nightgauge-backlog-preflight<br/>Check labels, criteria,<br/>quality"]
-    B -->|Queue issues for<br/>batch pipeline run| E["/nightgauge-queue<br/>Add, remove, reorder<br/>issues"]
+    B -->|Queue issues for<br/>batch pipeline run| E["/nightgauge-queue<br/>Add, remove, clear<br/>issues"]
     B -->|Manage epic<br/>sub-issues| F["/nightgauge-assess-epic<br/>Plan batch vs<br/>sequential strategy"]
     C --> G{Fix issues found?}
     G -->|Yes| H["/nightgauge-issue-create<br/>or edit labels"]
