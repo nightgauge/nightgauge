@@ -467,16 +467,6 @@ export const MANIFEST_CONTRIBUTES: ManifestContributes = {
       icon: "$(github)",
     },
     {
-      command: "nightgauge.moveQueueItemUp",
-      title: "Nightgauge: Move Queue Item Up",
-      icon: "$(arrow-up)",
-    },
-    {
-      command: "nightgauge.moveQueueItemDown",
-      title: "Nightgauge: Move Queue Item Down",
-      icon: "$(arrow-down)",
-    },
-    {
       command: "nightgauge.removeQueueItem",
       title: "Nightgauge: Remove from Queue",
       icon: "$(trash)",
@@ -1177,16 +1167,6 @@ export const MANIFEST_CONTRIBUTES: ManifestContributes = {
         group: "inline@2",
       },
       {
-        command: "nightgauge.moveQueueItemUp",
-        when: "view =~ /^nightgauge\\.pipeline/ && viewItem =~ /^queuedIssue\\.(pending|ready)$/",
-        group: "inline@1",
-      },
-      {
-        command: "nightgauge.moveQueueItemDown",
-        when: "view =~ /^nightgauge\\.pipeline/ && viewItem =~ /^queuedIssue\\.(pending|ready)$/",
-        group: "inline@2",
-      },
-      {
         command: "nightgauge.removeFromQueue",
         when: "view =~ /^nightgauge\\.pipeline/ && viewItem =~ /^queuedIssue\\.(pending|ready|completed|failed)$/",
         group: "inline@3",
@@ -1355,18 +1335,6 @@ export const MANIFEST_CONTRIBUTES: ManifestContributes = {
       key: "ctrl+shift+r",
       mac: "cmd+shift+r",
       when: "focusedView =~ /^nightgauge\\.pipeline/ && viewItem =~ /^queuedIssue\\./",
-    },
-    {
-      command: "nightgauge.moveQueueItemUp",
-      key: "ctrl+shift+up",
-      mac: "cmd+shift+up",
-      when: "focusedView =~ /^nightgauge\\.pipeline/ && viewItem =~ /^queuedIssue\\.(pending|ready)$/",
-    },
-    {
-      command: "nightgauge.moveQueueItemDown",
-      key: "ctrl+shift+down",
-      mac: "cmd+shift+down",
-      when: "focusedView =~ /^nightgauge\\.pipeline/ && viewItem =~ /^queuedIssue\\.(pending|ready)$/",
     },
     {
       command: "nightgauge.focusPipelineView",

@@ -42,8 +42,6 @@ export {
 } from "./startPipelineForIssue";
 export { registerPausePipelineCommand } from "./pausePipeline";
 export { registerResumePipelineCommand } from "./resumePipeline";
-export { registerMoveQueueItemUpCommand } from "./moveQueueItemUp";
-export { registerMoveQueueItemDownCommand } from "./moveQueueItemDown";
 export { registerRemoveQueueItemCommand } from "./removeQueueItem";
 export { registerRetryQueueItemCommand } from "./retryQueueItem";
 export { registerClearPipelineHistoryCommand } from "./clearPipelineHistory";

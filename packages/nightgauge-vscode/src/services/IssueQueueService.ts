@@ -390,14 +390,6 @@ export class IssueQueueService implements vscode.Disposable {
     this.callbacks.onStatusChanged?.("waiting");
   }
 
-  async reorder(issueNumber: number, _newPosition: number): Promise<boolean> {
-    // Reorder is not yet implemented in Go IPC (queue.reorder protocol type
-    // exists but handler is not wired). For now, return false.
-    // TODO: Wire up queue.reorder IPC handler in Go
-    void issueNumber;
-    return false;
-  }
-
   /**
    * Remove all queued items that belong to a specific epic.
    *

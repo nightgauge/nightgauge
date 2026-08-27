@@ -3002,7 +3002,7 @@ func (s *Scheduler) emitQueueChangedUnlocked() {
 
 // recalculatePositions renumbers queue items 1..N over the items actually
 // waiting. "processing" items are skipped (Issue #232) so an in-flight item
-// doesn't occupy a position slot the UI reorder commands act on; its
+// doesn't occupy a position slot among the waiting items; its
 // Position is left at whatever it last held.
 func (s *Scheduler) recalculatePositions() {
 	pos := 1

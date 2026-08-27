@@ -223,8 +223,6 @@ export interface QueueCallbacks {
   onItemAdded?: (item: QueueItem) => void;
   /** Called when an item is removed from the queue */
   onItemRemoved?: (issueNumber: number) => void;
-  /** Called when the queue is reordered */
-  onQueueReordered?: (items: QueueItem[]) => void;
   /** Called when the queue is cleared */
   onQueueCleared?: () => void;
   /** Called when next item auto-starts */
