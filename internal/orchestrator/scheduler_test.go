@@ -287,7 +287,7 @@ func TestLoadIssueContext(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	score, routingPath, model := loadIssueContext(tmpDir, 99)
+	score, routingPath, model := loadIssueContext(tmpDir, "", "", 99)
 	if score != 7 {
 		t.Errorf("complexityScore = %d, want 7", score)
 	}
@@ -298,7 +298,7 @@ func TestLoadIssueContext(t *testing.T) {
 	}
 
 	// Missing file returns zero values
-	score2, routingPath2, model2 := loadIssueContext(tmpDir, 404)
+	score2, routingPath2, model2 := loadIssueContext(tmpDir, "", "", 404)
 	if score2 != 0 || routingPath2 != "" || model2 != "" {
 		t.Errorf("missing file: got score=%d path=%q model=%q, want 0, empty, empty", score2, routingPath2, model2)
 	}
@@ -2394,7 +2394,7 @@ func TestScheduler_ShouldReRoute_PerfModeNewer(t *testing.T) {
 		t.Skip("filesystem mtime resolution too coarse for this test — skipping")
 	}
 
-	if got := s.shouldReRoute(tmpDir, 3140); !got {
+	if got := s.shouldReRoute(tmpDir, "", "", 3140); !got {
 		t.Error("shouldReRoute = false, want true (perf-mode is newer)")
 	}
 }
@@ -2414,7 +2414,7 @@ func TestScheduler_ShouldReRoute_ContextNewer(t *testing.T) {
 		t.Skip("filesystem mtime resolution too coarse for this test — skipping")
 	}
 
-	if got := s.shouldReRoute(tmpDir, 3140); got {
+	if got := s.shouldReRoute(tmpDir, "", "", 3140); got {
 		t.Error("shouldReRoute = true, want false (context is newer)")
 	}
 }
@@ -2425,7 +2425,7 @@ func TestScheduler_ShouldReRoute_MissingPerfMode(t *testing.T) {
 	makeIssueContext(t, tmpDir, 3140, "claude-sonnet-4-6", 5)
 	// No performance-mode.yaml written
 
-	if got := s.shouldReRoute(tmpDir, 3140); got {
+	if got := s.shouldReRoute(tmpDir, "", "", 3140); got {
 		t.Error("shouldReRoute = true, want false (no perf-mode file)")
 	}
 }
@@ -2438,7 +2438,7 @@ func TestScheduler_ReRouteContext_EfficiencyOverride(t *testing.T) {
 	makeIssueContext(t, tmpDir, 3140, "claude-opus-4-7", 8)
 	makePerfModeFile(t, tmpDir, "efficiency")
 
-	rec, err := s.reRouteContext(ctx, tmpDir, 3140, "claude-opus-4-7")
+	rec, err := s.reRouteContext(ctx, tmpDir, "", "", 3140, "claude-opus-4-7")
 	if err != nil {
 		t.Fatalf("reRouteContext error: %v", err)
 	}
@@ -2476,7 +2476,7 @@ func TestScheduler_ReRouteContext_MaximumMode(t *testing.T) {
 	makeIssueContext(t, tmpDir, 3140, "claude-sonnet-4-6", 5)
 	makePerfModeFile(t, tmpDir, "maximum")
 
-	rec, err := s.reRouteContext(ctx, tmpDir, 3140, "claude-sonnet-4-6")
+	rec, err := s.reRouteContext(ctx, tmpDir, "", "", 3140, "claude-sonnet-4-6")
 	if err != nil {
 		t.Fatalf("reRouteContext error: %v", err)
 	}
@@ -2506,7 +2506,7 @@ func TestScheduler_ReRouteContext_LogsChange(t *testing.T) {
 	log.SetOutput(&logBuf)
 	defer log.SetOutput(os.Stderr)
 
-	rec, err := s.reRouteContext(ctx, tmpDir, 3140, "claude-sonnet-4-6")
+	rec, err := s.reRouteContext(ctx, tmpDir, "", "", 3140, "claude-sonnet-4-6")
 	if err != nil {
 		t.Fatalf("reRouteContext error: %v", err)
 	}
@@ -2528,7 +2528,7 @@ func TestScheduler_ReRouteContext_AtomicWrite(t *testing.T) {
 	makeIssueContext(t, tmpDir, 3140, "claude-sonnet-4-6", 5)
 	makePerfModeFile(t, tmpDir, "maximum")
 
-	if _, err := s.reRouteContext(ctx, tmpDir, 3140, "claude-sonnet-4-6"); err != nil {
+	if _, err := s.reRouteContext(ctx, tmpDir, "", "", 3140, "claude-sonnet-4-6"); err != nil {
 		t.Fatalf("reRouteContext error: %v", err)
 	}
 

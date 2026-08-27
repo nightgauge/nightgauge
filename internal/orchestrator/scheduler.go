@@ -3735,7 +3735,13 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 
 	// Load issue context to extract complexity and predicted model for outcome recording.
 	// Non-fatal: missing or malformed context results in zero values.
-	complexityScore, issueRoutingPath, predictedModel := loadIssueContext(workspaceRoot, item.Number)
+	// At PICKUP the worktree does not exist yet and issue-pickup has not written
+	// the context, so on a first run this is definitionally empty. It is read
+	// here anyway because the routing decisions below want whatever is already
+	// known; the value that reaches the CORPUS is re-resolved at recording time
+	// (#994), which is the only point at which the file is guaranteed to exist.
+	complexityScore, issueRoutingPath, predictedModel := loadIssueContext(
+		workspaceRoot, loadWorktreePath(workspaceRoot, item.Number), item.Repo, item.Number)
 
 	// Job-class attribution at pickup (#606): the labels are already read
 	// here, and the conservative type-label mapping is the same one the TS
@@ -3785,8 +3791,9 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 
 	// Re-route if performance-mode.yaml has been updated since the issue context was written.
 	// Non-fatal: routing failure falls back to the cached model.
-	if s.shouldReRoute(workspaceRoot, item.Number) {
-		if rec, rerouteErr := s.reRouteContext(ctx, workspaceRoot, item.Number, predictedModel); rerouteErr != nil {
+	rerouteWorktree := loadWorktreePath(workspaceRoot, item.Number)
+	if s.shouldReRoute(workspaceRoot, rerouteWorktree, item.Repo, item.Number) {
+		if rec, rerouteErr := s.reRouteContext(ctx, workspaceRoot, rerouteWorktree, item.Repo, item.Number, predictedModel); rerouteErr != nil {
 			log.Printf("#%d: re-routing failed: %v — using cached model %s", item.Number, rerouteErr, predictedModel)
 		} else {
 			predictedModel = rec.Model
@@ -3993,6 +4000,9 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			log.Printf("#%d: skipping outcome recording (terminal_failure_kind=%s — deferral, no work done)",
 				item.Number, TerminalKindBlockedDependency)
 		default:
+			// recordOutcome re-resolves the prediction from the run's worktree
+			// before writing the row (#994) — the values here were read at
+			// pickup, before the file existed.
 			outcomePrediction = s.recordOutcome(item, snap, pipelineSuccess, complexityScore, predictedModel, workspaceRoot)
 		}
 
@@ -6774,11 +6784,26 @@ func clipRunes(s string, n int) string {
 // reintroduce a default in this function: one caller wants "what did the router
 // say" and the other wants "what will we run", and they are not the same
 // question.
-func loadIssueContext(workspaceRoot string, issueNumber int) (complexityScore int, routingPath string, predictedModel string) {
-	path := filepath.Join(workspaceRoot, ".nightgauge", "pipeline",
-		fmt.Sprintf("issue-%d.json", issueNumber))
-	data, err := os.ReadFile(path)
-	if err != nil {
+// SEARCHES EVERY WORKTREE LAYOUT, NOT JUST THE ROOT (#994). This used to read
+// `<workspaceRoot>/.nightgauge/pipeline/issue-{N}.json` and nothing else, while
+// the issue-pickup stage writes that file into the run's WORKTREE — so on the
+// autonomous path it found nothing, every time, and every one of the corpus's
+// rows carried complexityScore 0 and predictedModel "". The comment in
+// recordOutcome had described this outcome exactly, as a known consequence,
+// without it being read as a bug.
+//
+// repo and worktreeDir may be "" — the candidate list degrades to the old
+// single-root behaviour, which is still correct for a run with no worktree.
+func loadIssueContext(workspaceRoot, worktreeDir, repo string, issueNumber int) (complexityScore int, routingPath string, predictedModel string) {
+	var data []byte
+	var err error
+	for _, path := range execution.IssueContextCandidates(workspaceRoot, worktreeDir, repo, issueNumber) {
+		data, err = os.ReadFile(path)
+		if err == nil {
+			break
+		}
+	}
+	if err != nil || len(data) == 0 {
 		return 0, "", ""
 	}
 	var ctx struct {
@@ -7210,14 +7235,35 @@ func loadFeatureBranch(workspaceRoot string, issueNumber int) string {
 
 // shouldReRoute returns true if performance-mode.yaml is strictly newer than
 // the issue context file. Non-fatal: missing files return false (no re-route).
-func (s *Scheduler) shouldReRoute(workspaceRoot string, issueNumber int) bool {
+// resolveIssueContextPath returns the first candidate issue-context path that
+// EXISTS, or "" when none does.
+//
+// Separate from loadIssueContext because two callers need the PATH rather than
+// the contents: shouldReRoute stats it, and reRouteContext rewrites it. Both
+// used to hardcode `<workspaceRoot>/.nightgauge/pipeline/issue-{N}.json`, which
+// made shouldReRoute return false on exactly the worktree-isolated runs whose
+// prediction it was supposed to repair — and would have made reRouteContext
+// write a SECOND context file at the root, diverging from the one the stages
+// actually read (#994).
+func resolveIssueContextPath(workspaceRoot, worktreeDir, repo string, issueNumber int) string {
+	for _, path := range execution.IssueContextCandidates(workspaceRoot, worktreeDir, repo, issueNumber) {
+		if _, err := os.Stat(path); err == nil {
+			return path
+		}
+	}
+	return ""
+}
+
+func (s *Scheduler) shouldReRoute(workspaceRoot, worktreeDir, repo string, issueNumber int) bool {
 	perfModePath := filepath.Join(workspaceRoot, ".nightgauge", "performance-mode.yaml")
 	perfModeInfo, err := os.Stat(perfModePath)
 	if err != nil {
 		return false
 	}
-	contextPath := filepath.Join(workspaceRoot, ".nightgauge", "pipeline",
-		fmt.Sprintf("issue-%d.json", issueNumber))
+	contextPath := resolveIssueContextPath(workspaceRoot, worktreeDir, repo, issueNumber)
+	if contextPath == "" {
+		return false
+	}
 	contextInfo, err := os.Stat(contextPath)
 	if err != nil {
 		return false
@@ -7230,9 +7276,15 @@ func (s *Scheduler) shouldReRoute(workspaceRoot string, issueNumber int) bool {
 // using a fresh router call. Writes atomically (temp + rename). Returns the
 // full recommendation so the caller can trace the decision with its
 // reasoning and rejected alternatives (#179).
-func (s *Scheduler) reRouteContext(ctx context.Context, workspaceRoot string, issueNumber int, oldModel string) (routing.Recommendation, error) {
-	contextPath := filepath.Join(workspaceRoot, ".nightgauge", "pipeline",
-		fmt.Sprintf("issue-%d.json", issueNumber))
+func (s *Scheduler) reRouteContext(ctx context.Context, workspaceRoot, worktreeDir, repo string, issueNumber int, oldModel string) (routing.Recommendation, error) {
+	// Rewrite the file the stages actually read. Writing to the workspace root
+	// unconditionally would leave the real context — in the worktree —
+	// untouched while creating a decoy beside it (#994).
+	contextPath := resolveIssueContextPath(workspaceRoot, worktreeDir, repo, issueNumber)
+	if contextPath == "" {
+		contextPath = filepath.Join(workspaceRoot, ".nightgauge", "pipeline",
+			fmt.Sprintf("issue-%d.json", issueNumber))
+	}
 
 	data, err := os.ReadFile(contextPath)
 	if err != nil {
@@ -7353,6 +7405,28 @@ func loadPRNumberForRecovery(workspaceRoot string, issueNumber int) int {
 // so `nightgauge intelligence loop-verdicts --workdir <repo>` and `nightgauge
 // learn tune --workdir <repo>` see the outcomes for exactly the history they
 // are reading beside.
+// resolveOutcomePrediction returns the complexity score and predicted model to
+// record, preferring a freshly-read issue context over the caller's pickup-time
+// values.
+//
+// Separate and named so it can be driven in a test. Inlined at the call site it
+// was unfalsifiable — the first version of this fix was inlined, and deleting
+// it left the entire suite green (#994).
+//
+// Each half is upgraded independently: a context that carries a model but no
+// score must not discard a score the caller already had, and vice versa.
+func (s *Scheduler) resolveOutcomePrediction(runRoot, worktreeDir, repo string, issueNumber, pickupScore int, pickupModel string) (int, string) {
+	score, model := pickupScore, pickupModel
+	freshScore, _, freshModel := loadIssueContext(runRoot, worktreeDir, repo, issueNumber)
+	if freshScore > 0 {
+		score = freshScore
+	}
+	if freshModel != "" {
+		model = freshModel
+	}
+	return score, model
+}
+
 func (s *Scheduler) recordOutcome(item types.BoardItem, snap *state.RuntimeState, success bool, complexityScore int, predictedModel, runRoot string) *state.OutcomePrediction {
 	if !s.recordOutcomes || runRoot == "" {
 		return nil
@@ -7361,6 +7435,21 @@ func (s *Scheduler) recordOutcome(item types.BoardItem, snap *state.RuntimeState
 	if !success {
 		failedStage = string(snap.Stage)
 	}
+
+	// RE-RESOLVE THE PREDICTION HERE, not at pickup (#994).
+	//
+	// The caller's values were read before the stage loop — therefore before
+	// issue-pickup wrote the context, and before the worktree it writes into
+	// existed. That is why every row in the corpus carried complexityScore 0
+	// and predictedModel "" for the life of the product, while the real
+	// issue-{N}.json files in the field carry both.
+	//
+	// This is the recording boundary, and it is the first moment at which the
+	// file is guaranteed to exist and its location is known. Only ever an
+	// upgrade: a re-read that finds nothing keeps whatever the caller had, so a
+	// run whose context genuinely never appeared is no worse off.
+	complexityScore, predictedModel = s.resolveOutcomePrediction(
+		runRoot, snap.WorktreeDir, item.Repo, item.Number, complexityScore, predictedModel)
 	// Predicted vs actual, in the vocabulary the corpus's OTHER writer uses —
 	// see internal/orchestrator/outcome_semantics.go for the three rules both
 	// paths obey. The helpers are shared precisely so they cannot drift: this
