@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nightgauge/nightgauge/internal/cadence"
 	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/dockercompose"
 	"github.com/nightgauge/nightgauge/internal/execution"
@@ -46,6 +47,23 @@ type CheckItem struct {
 	OK     bool   `json:"ok"`               // true when this check passed
 	Detail string `json:"detail,omitempty"` // human-readable success detail
 	Error  string `json:"error,omitempty"`  // human-readable failure reason
+}
+
+// doctorOwner / doctorRepo are the nil-safe accessors the cadence probes need:
+// RunDoctor is called with a nil cfg on an unconfigured workspace, which is
+// precisely a workspace worth reporting on rather than crashing over.
+func doctorOwner(cfg *config.Config) string {
+	if cfg == nil {
+		return ""
+	}
+	return cfg.Owner
+}
+
+func doctorRepo(cfg *config.Config) string {
+	if cfg == nil {
+		return ""
+	}
+	return cfg.DefaultRepo
 }
 
 // readOrgWarning returns the read:org advisory warning when scopes lacks
@@ -394,6 +412,23 @@ func RunDoctor(ctx context.Context, cfg *config.Config, client *gh.Client, adapt
 	result.Checks["corpus_calibration"] = corpusCalibration
 	if corpusWarning != "" {
 		warnings = append(warnings, corpusWarning)
+	}
+
+	// The GENERAL absence detector (#996). The two arms above each notice one
+	// specific thing having stopped; this one notices anything in the cadence
+	// registry going quiet, so registering a new scheduled workflow is the only
+	// work needed to have its silence reported.
+	var declaredCadence []cadence.ConfigAutomation
+	if cfg != nil {
+		declaredCadence = cfg.Cadence
+	}
+	scheduled, scheduledWarning := checkScheduledAutomations(ctx, map[cadence.EvidenceKind]cadenceProbe{
+		cadence.EvidenceAutonomousState: autonomousStateEvidence(cwd),
+		cadence.EvidenceWorkflowRun:     workflowRunEvidence(client, doctorOwner(cfg), doctorRepo(cfg)),
+	}, declaredCadence, now)
+	result.Checks["scheduled_automations"] = scheduled
+	if scheduledWarning != "" {
+		warnings = append(warnings, scheduledWarning)
 	}
 
 	// A killed stage leaks its worktree; a stage that is never killed leaks

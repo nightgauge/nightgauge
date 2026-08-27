@@ -10296,7 +10296,7 @@ var doctorCheckOrder = []string{
 	"binary", "gh", "github_auth", "api_user", "scopes", "rate_limit", "config", "project",
 	"ai_adapter",
 	"compose_orphans", "worktree_leaks", "stranded_branches", "pipeline_stashes", "orphaned_processes",
-	"survival_backlog", "corpus_calibration",
+	"survival_backlog", "corpus_calibration", "scheduled_automations",
 }
 
 func doctorCmd() *cobra.Command {

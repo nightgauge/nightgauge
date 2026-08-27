@@ -3287,6 +3287,76 @@ expanded), so words inside commit messages or `--body` payloads never trip it.
 Read-only/edit forge verbs (`pr view|list|checks|comment`, `issue view|edit`)
 stay allowed for every stage.
 
+### Scheduled-Automation Cadence (#996)
+
+**Every other detector in this product answers "did this run FAIL?". None
+answered "did this run AT ALL?"** A workflow with zero runs has no failed run to
+report; a stopped daemon logs no error. The whole class of "it quietly stopped"
+was invisible — including to `doctor`, whose other arms are all _residue_
+detectors (leaked worktrees, stale stashes, orphaned processes: things that
+exist and should not).
+
+That gap cost a 22-day autonomous-loop stall that every surface reported as
+healthy, and with it 51 survival verdicts that aged toward `unobserved`.
+
+`internal/cadence` holds the registry as **data the code reads**, not prose:
+
+| Field          | Meaning                                                                                   |
+| -------------- | ----------------------------------------------------------------------------------------- |
+| `ID`           | stable identifier; findings key on it, so assert on this and never on a message substring |
+| `Interval`     | how often evidence is expected                                                            |
+| `Kind`         | where freshness evidence lives (`autonomous_state`, `workflow_run`)                       |
+| `TriggerEvent` | the GitHub event whose runs prove the **schedule** fired                                  |
+| `Remedy`       | the operator's next action, named concretely                                              |
+
+`nightgauge doctor`'s `scheduled_automations` arm evaluates every entry and
+reports three classes separately:
+
+- **NEVER RAN** — no evidence has ever existed. Usually a schedule that was
+  never valid: a cron on a non-default branch, a trigger that never matched.
+- **STOPPED** — it ran, then went quiet past `DefaultStaleMultiple` (3×) its
+  interval. Usually a dead process or an expired credential.
+- **UNVERIFIABLE** — the probe could not tell. Reported, never treated as
+  healthy: an unreachable API is not evidence that a cron fired.
+
+Collapsing the first two into one "stale" verdict is a **worse** signal than
+none, because it sends the operator to look at the wrong half.
+
+**`TriggerEvent` is not a detail.** A workflow whose cron is broken but which
+someone dispatched by hand _has runs_, so a check counting any run reads it as
+healthy. `org-security-audit.yml` is exactly that shape — plenty of runs, every
+one `workflow_dispatch` or `pull_request`, and its weekly cron has never fired.
+The first version of this arm reported it healthy for that reason.
+
+**Only this repository's own automations are built in.** A workspace's sibling
+repos register through a `cadence:` block in `config.yaml`, which merges with
+the built-ins:
+
+```yaml
+cadence:
+  - id: nightly-smoke
+    description: the daily smoke test against the deployed app
+    interval: 24h # "7d" is accepted too
+    repo: acme/widget # omit for this repo
+    workflow: smoke.yml
+    trigger_event: schedule # only a scheduled run proves the CRON works
+    remedy: check the cron is on the default branch
+```
+
+A shipped product must not hardcode one workspace's repo slugs, and this
+repository's public-core boundary independently forbids naming a private
+companion repo in the tree — including in its own tracked `config.yaml`. An
+operator registering a private repo's cron does it in an untracked config.
+
+**A malformed entry is reported, never skipped.** A silently-dropped entry is an
+automation the operator believes is watched and is not — this check's own
+failure mode, reproduced one level up.
+
+**Adding a scheduled workflow without registering it is the defect this exists
+to prevent.** A cron nobody registered is a cron nobody will notice stopping —
+which is how all four founding instances were found by a human looking directly
+at them, none with an issue, none raising anything.
+
 ### Survival Operations (#4151)
 
 The post-merge **survival outcome model** (spike #4134) records whether merged
