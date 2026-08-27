@@ -1292,6 +1292,44 @@ thirty seconds and is the difference between "my change broke packaging" and
 "this worktree has never been built" — a distinction that reads identically in
 the failure output.
 
+### Go silently excludes a file whose name ends in a GOARCH suffix
+
+A new file called `cadence_arm.go` compiled **nowhere**. Go reads `_arm` as the
+GOARCH build constraint for 32-bit ARM, so the file was excluded from its own
+package on every other platform — and `go build ./...` exited 0, because a file
+that is not in the package cannot fail to compile.
+
+The symptom is `undefined: <yourNewFunction>` from a _caller_ while the function
+is plainly there in the file you just wrote. Confirm with:
+
+```bash
+go list -f '{{.IgnoredGoFiles}}' ./internal/yourpkg/
+```
+
+An excluded file appears there. The reserved suffixes are the GOOS and GOARCH
+values — `_arm`, `_386`, `_amd64`, `_windows`, `_linux`, `_darwin`, `_js` and the
+rest — so avoid ending a filename with `_` plus any platform word. Rename rather
+than adding a build tag: the name is the bug.
+
+This is worth knowing because the failure mode is **dead code that every gate
+accepts**. Build, vet, and test all pass; the code simply is not there.
+
+### The publication-boundary regression suite sandboxes at `HEAD`
+
+`scripts/test-publication-boundary.sh` checks out a sandbox at `HEAD`, which
+deliberately **excludes uncommitted work**. Running it mid-change therefore
+measures the PRE-change tree while reading your working-tree manifest, and the
+two disagree.
+
+The visible symptom is a false ratchet violation: `UNRESOLVABLE REFERENCE COUNT
+ROSE: 5983 > baseline 5977`, where 5977 is the number you correctly measured
+against your own tree seconds earlier. Nothing is wrong; the suite is comparing
+your new baseline against the old content.
+
+**Commit first, then run the suite.** `python3 scripts/publication-boundary-check.py`
+alone does read the working tree, so use that while iterating and the suite as
+the gate.
+
 ### `timeout` does not exist on macOS
 
 `timeout 900 gh pr checks --watch` exits **127** immediately with

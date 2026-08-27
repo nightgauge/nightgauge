@@ -2132,3 +2132,37 @@ rather than trusting the count.
 ## Author
 
 nightgauge
+
+## To pin wiring, delete the call site — not the logic
+
+A test that calls the fixed function directly proves the **logic**. It says
+nothing about whether anything _calls_ it, and those are different bugs with the
+same green suite.
+
+This caught three separate fixes in one session, each time on the first draft,
+each time while the author was actively watching for it:
+
+| Fix  | First-draft test                               | The mutation it survived                     |
+| ---- | ---------------------------------------------- | -------------------------------------------- |
+| #991 | fired `sched.epicCheckpoint(42)` directly      | deleting the call site in `epic.go`          |
+| #992 | called `as.sweepSurvivalRecords(ctx)` directly | moving the call back below the slot gate     |
+| #994 | asserted the resolver's return value           | deleting the re-resolve from `recordOutcome` |
+
+In every case the whole defect _was_ the wiring — an unreachable rail, a call
+below a gate, a read at the wrong time — so a test that skipped the caller
+verified the one thing that was never broken.
+
+**The rule is mechanical, not a matter of remembering:**
+
+1. Write the test.
+2. Delete the **call site** — not the function body, not a condition inside it.
+3. If the suite stays green, the test does not pin the wiring. Drive the
+   production caller instead.
+
+Driving the caller usually needs a seam, and this codebase already has the shape:
+an injectable function field defaulted in the constructor (`buildGraphFn`,
+`markRefinedFn`, `evaluatePostMergeFn`). That is cheaper than it looks and is the
+difference between a guard and a decoration.
+
+Related: `docs/FAILURE_TAXONOMY.md` § construction-site / unpinned-wiring names
+the production defect. This is how the _test_ for it goes wrong.
