@@ -6518,8 +6518,8 @@ product_audit:
 
 Focus mode is configured through a **separate file** at
 `.nightgauge/focus.yaml` — not through `config.yaml`. This file is read
-by the Go binary, VSCode extension, and all skills that participate in
-focus-aware prioritization.
+by the Go binary and all skills that participate in focus-aware
+prioritization.
 
 > For the complete user guide including lens descriptions, workflow examples,
 > and CLI reference, see [docs/FOCUS_MODE.md](FOCUS_MODE.md).
@@ -6544,7 +6544,7 @@ active_lens: security
 # Timestamp of last change (UTC ISO 8601, set automatically)
 set_at: 2026-03-15T09:00:00Z
 
-# Source of last change: "cli", "vscode", "ipc"
+# Source of last change: "cli", "ipc"
 set_by: cli
 
 # Optional: user-defined lenses
@@ -6567,7 +6567,7 @@ custom_lenses:
 | -------------------------------- | --------- | --------- | --------------------------------------- |
 | `active_lens`                    | string    | `general` | Name of the currently active focus lens |
 | `set_at`                         | timestamp | auto      | When the focus was last changed (UTC)   |
-| `set_by`                         | string    | —         | Source: `cli`, `vscode`, or `ipc`       |
+| `set_by`                         | string    | —         | Source: `cli` or `ipc`                  |
 | `custom_lenses[].name`           | string    | required  | Unique lens identifier (lowercase)      |
 | `custom_lenses[].description`    | string    | —         | Human-readable lens description         |
 | `custom_lenses[].scoring_boosts` | map       | —         | Dimension → bonus points (0–20)         |

@@ -19,7 +19,7 @@ component that participates in prioritization:
 | Autonomous scheduler     | Issues matching lens keywords sort higher in each cycle |
 | Release-watch assessment | Matching Claude Code features receive a score boost     |
 | Continuous-improvement   | Matching proposals are promoted; marked `★` in output   |
-| CLI / VSCode             | Set, clear, and inspect the active lens                 |
+| CLI                      | Set, clear, and inspect the active lens                 |
 
 ---
 
@@ -149,14 +149,6 @@ Proposal categories and their associated focus lenses:
 | Reliability / failure patterns | `reliability`, `security`    |
 | Safety-critical (always)       | all lenses                   |
 
-### VSCode Extension
-
-The VSCode extension exposes focus management through:
-
-- **Command Palette**: `Nightgauge: Focus: Set`, `Nightgauge: Focus: Show`, `Nightgauge: Focus: Clear`
-- **Dashboard sidebar**: Shows active lens name and description
-- **IPC protocol**: Focus state changes broadcast to all connected Claude Code sessions
-
 ---
 
 ## Focus Configuration File
@@ -182,12 +174,12 @@ custom_lenses:
 
 **Fields:**
 
-| Field           | Type      | Description                                   |
-| --------------- | --------- | --------------------------------------------- |
-| `active_lens`   | string    | Name of active lens (default: `general`)      |
-| `set_at`        | timestamp | When the focus was last changed (UTC)         |
-| `set_by`        | string    | Source of last change: `cli`, `vscode`, `ipc` |
-| `custom_lenses` | array     | User-defined lens definitions                 |
+| Field           | Type      | Description                              |
+| --------------- | --------- | ---------------------------------------- |
+| `active_lens`   | string    | Name of active lens (default: `general`) |
+| `set_at`        | timestamp | When the focus was last changed (UTC)    |
+| `set_by`        | string    | Source of last change: `cli`, `ipc`      |
+| `custom_lenses` | array     | User-defined lens definitions            |
 
 The file is created automatically on first `focus set` invocation. If the file
 does not exist, all systems default to the `general` (no-boost) lens.
