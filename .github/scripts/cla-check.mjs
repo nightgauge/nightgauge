@@ -2,6 +2,7 @@
 
 import { Buffer } from "node:buffer";
 import process from "node:process";
+import { setTimeout as sleep } from "node:timers/promises";
 
 const api = process.env.GITHUB_API_URL ?? "https://api.github.com";
 const agreement = "I have read the CLA Document and I hereby sign the CLA";
@@ -25,8 +26,22 @@ const repository = process.env.GITHUB_REPOSITORY;
 const pullNumber = event.pull_request?.number ?? event.issue?.number;
 if (!pullNumber) throw new Error("Event is not associated with a pull request");
 
+// Bounded retry for transport-level failures (#976). The gate is a required
+// check on every pull request, so a single 500 from the Actions GITHUB_TOKEN
+// context — observed persisting across ~25 minutes and one full rerun — reads
+// exactly like an unsigned CLA. Retries cover ONLY transport classes: a fetch
+// rejection, 5xx, and 429. Every other non-ok status is the gate's own verdict
+// and is raised immediately, byte-for-byte in today's shape — `loadStoreFile()`
+// below detects the absent corporate-signatures file by string-matching
+// "GitHub API 404", so reshaping that message breaks the corporate fallback.
+const RETRY_ATTEMPTS = 3;
+const RETRY_DELAYS_MS = [1000, 2000];
+
+// ±25% jitter so concurrent workflow runs do not retry in lockstep.
+const jitter = (ms) => Math.round(ms * (0.75 + Math.random() * 0.5));
+
 async function request(path, token, options = {}) {
-  const response = await globalThis.fetch(`${api}${path}`, {
+  const init = {
     ...options,
     headers: {
       Accept: "application/vnd.github+json",
@@ -35,12 +50,34 @@ async function request(path, token, options = {}) {
       "User-Agent": "nightgauge-cla-gate",
       ...options.headers,
     },
-  });
-  if (!response.ok) {
+  };
+  for (let attempt = 1; ; attempt += 1) {
+    const final = attempt === RETRY_ATTEMPTS;
+    let response;
+    try {
+      response = await globalThis.fetch(`${api}${path}`, init);
+    } catch (cause) {
+      if (final) {
+        throw new Error(
+          `GitHub API request to ${path} failed after ${RETRY_ATTEMPTS} attempts: ${String(cause)}`,
+          { cause }
+        );
+      }
+      await sleep(jitter(RETRY_DELAYS_MS[attempt - 1]));
+      continue;
+    }
+    if (response.ok) return response.status === 204 ? null : response.json();
     const detail = await response.text();
-    throw new Error(`GitHub API ${response.status} for ${path}: ${detail}`);
+    if (!(response.status >= 500 || response.status === 429)) {
+      throw new Error(`GitHub API ${response.status} for ${path}: ${detail}`);
+    }
+    if (final) {
+      throw new Error(
+        `GitHub API ${response.status} for ${path} after ${RETRY_ATTEMPTS} attempts: ${detail}`
+      );
+    }
+    await sleep(jitter(RETRY_DELAYS_MS[attempt - 1]));
   }
-  return response.status === 204 ? null : response.json();
 }
 
 const githubToken = process.env.GITHUB_TOKEN;

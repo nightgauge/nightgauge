@@ -144,15 +144,6 @@ Event types in the stream-json output:
 | `error`       | Non-fatal warnings and system errors           |
 | `result`      | Final outcome with status and token statistics |
 
-### Adapter Capabilities
-
-| Capability            | Status | Notes                                           |
-| --------------------- | ------ | ----------------------------------------------- |
-| `interactive`         | false  | Gemini runs headless via stream-json output     |
-| `sessionResume`       | false  | Not available in Gemini CLI                     |
-| `streamJson`          | true   | NDJSON events via `--output-format stream-json` |
-| `nativeTokenTracking` | false  | Stats available in result events but not parsed |
-
 ## Current Parity Status
 
 | Capability Group                                      | Status    | Notes                                          |
