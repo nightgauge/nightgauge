@@ -3312,9 +3312,33 @@ squash merge** — epic-umbrella PRs are skipped (ambiguous N→1 attribution). 
 record is written to `.nightgauge/pipeline/survival-records.jsonl`
 (append-only; a terminal line supersedes its pending line on fold).
 
-**Finalize** folds into the autonomous **reconcile sweep** (poll-on-reconcile, no
-new cron); `survival sweep` exposes the same pass for manual/CI use. Each due
-record (window elapsed) is finalized deterministically:
+**Finalize** runs on **three** paths, and the count matters (#992). Until then
+there was exactly one automatic caller — the autonomous reconcile sweep — and it
+was gated on the loop being `running`, on free dispatch slots, **and** on graph
+freshness. The record _writer_ meanwhile ran on every pipeline run. Producer
+always, consumer almost never:
+
+| Path                         | When                                                      | Requires autonomous mode? |
+| ---------------------------- | --------------------------------------------------------- | ------------------------- |
+| `nightgauge hook post-merge` | every hand merge — the routine path `AGENTS.md` mandates  | **no**                    |
+| Autonomous reconcile pass    | every ~5 min while the loop runs, **above** the slot gate | yes                       |
+| `nightgauge survival sweep`  | manual / CI                                               | no                        |
+
+All three call `github.FinalizeDueSurvivalRecords`, one implementation. The
+sequence (sweep → feed `FinalizedRecords` into calibration, best-effort) had been
+written out once per caller and two copies had already drifted in what they
+logged.
+
+**Lateness destroys verdicts rather than delaying them.** A record never
+re-observed by `2 × window` folds to `unobserved`, which is explicitly _no
+evidence_. This workspace accumulated 51 due records — the oldest a month past
+its window — while every check reported green. `nightgauge doctor` now carries a
+`survival_backlog` arm that reports records pending past `2 × window` before they
+age out; it is the first doctor arm that detects an **absence** rather than
+residue (every other arm reports leaked worktrees, stale stashes, orphaned
+processes — things that exist and should not).
+
+Each due record (window elapsed) is finalized deterministically:
 
 | Verdict      | Trigger                                                                                     | Signal                      |
 | ------------ | ------------------------------------------------------------------------------------------- | --------------------------- |

@@ -5478,6 +5478,39 @@ cause the command to exit non-zero.`,
 				}
 			}
 
+			// (#992) Finalize any records that are now DUE, on the same pass.
+			//
+			// This hook was the seeder and never the reaper: the writer ran on
+			// every merge while the only automatic finalizer lived inside the
+			// autonomous scheduler, triple-gated on the loop being `running`, on
+			// free dispatch slots, and on graph freshness. With the loop stopped
+			// this workspace reached 51 due records, the oldest a month past its
+			// window — and a record aging past 2 x window folds to `unobserved`,
+			// which is worthless as evidence. Lateness destroys verdicts rather
+			// than delaying them.
+			//
+			// AGENTS.md mandates a hand squash-merge plus this hook as the
+			// ROUTINE path, so this is the one caller guaranteed to run on a
+			// repo that has never enabled autonomous mode. Zero GitHub calls
+			// when nothing is due. Best-effort like the rest of the hook.
+			if wd, wdErr := os.Getwd(); wdErr == nil {
+				// Same resolution the daemon uses (pipeline.survival.window_days,
+				// nil-Pipeline safe), so a record finalized by hand and one
+				// finalized by the loop agree on when its window elapsed.
+				window := survival.DefaultWindowDays
+				if hookCfg, cfgErr := config.Load(wd); cfgErr == nil && hookCfg != nil {
+					window = hookCfg.Pipeline.ResolveSurvivalWindowDays()
+				}
+				finRes, finErr := gh.FinalizeDueSurvivalRecords(cmd.Context(), wd, time.Now(), window)
+				switch {
+				case finErr != nil:
+					fmt.Fprintf(os.Stderr, "Warning: post-merge survival finalize failed: %v\n", finErr)
+				case finRes.Finalized > 0:
+					fmt.Printf("Post-merge: finalized %d due survival record(s): %v\n",
+						finRes.Finalized, finRes.ByVerdict)
+				}
+			}
+
 			if outputJSON {
 				return printJSON(result)
 			}
@@ -10235,10 +10268,18 @@ Resolution methods checked in order:
 // The leak carriers are listed here so they render as named rows rather than
 // only as anonymous Warnings lines; keys absent from result.Checks
 // (compose_orphans writes nothing when healthy) are skipped at render time.
+//
+// survival_backlog is last and is the odd one out: every other row on that line
+// reports RESIDUE — something that exists and should not. It reports an
+// ABSENCE, work that should have been observed by now and was not (#992). It
+// renders alongside them because the operator's question is the same ("what is
+// wrong with this workspace's local state?"), even though the detection shape
+// is inverted.
 var doctorCheckOrder = []string{
 	"binary", "gh", "github_auth", "api_user", "scopes", "rate_limit", "config", "project",
 	"ai_adapter",
 	"compose_orphans", "worktree_leaks", "stranded_branches", "pipeline_stashes", "orphaned_processes",
+	"survival_backlog",
 }
 
 func doctorCmd() *cobra.Command {
