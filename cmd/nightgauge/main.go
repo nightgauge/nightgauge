@@ -7556,11 +7556,12 @@ func cleanupClosedIssueBranch(svc *gitpkg.Service, branch string) (action, reaso
 func labelCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "label",
-		Short: "Repository label operations (list, create, rename, delete)",
+		Short: "Repository label operations (list, create, ensure, rename, delete)",
 	}
 	cmd.AddCommand(
 		labelListCmd(),
 		labelCreateCmd(),
+		labelEnsureCmd(),
 		labelRenameCmd(),
 		labelDeleteCmd(),
 	)
@@ -7660,6 +7661,89 @@ func labelCreateCmd() *cobra.Command {
 	cmd.Flags().StringVar(&name, "name", "", "Label name (required)")
 	cmd.Flags().StringVar(&description, "description", "", "Label description")
 	cmd.Flags().StringVar(&color, "color", "", "Hex color without # (default: cccccc)")
+	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output as JSON")
+	return cmd
+}
+
+// requiredLabelHelp renders the required-label registry for --help. Derived
+// rather than restated: a hand-written list in help text goes stale the first
+// time the registry grows, and the operator reading it has no way to tell.
+func requiredLabelHelp() string {
+	var b strings.Builder
+	width := 0
+	for _, l := range gh.RequiredLabels {
+		if len(l.Name) > width {
+			width = len(l.Name)
+		}
+	}
+	for _, l := range gh.RequiredLabels {
+		fmt.Fprintf(&b, "  %-*s  %s\n", width, l.Name, l.Description)
+	}
+	return b.String()
+}
+
+func labelEnsureCmd() *cobra.Command {
+	var (
+		owner      string
+		repo       string
+		outputJSON bool
+	)
+
+	cmd := &cobra.Command{
+		Use:   "ensure",
+		Short: "Create the labels the pipeline itself requires (idempotent)",
+		Long: `Create any of the pipeline's required labels that the repository is missing.
+
+These are the labels the Go layer READS to make control-flow decisions, not the
+wider taxonomy the repo-init skill provisions for humans:
+
+` + requiredLabelHelp() + `
+A repository missing pipeline:refined does not degrade gracefully. MarkRefined
+hard-errors without it, and the refinement candidate query excludes issues that
+CARRY the label — so a label absent from the repo makes the exclusion inert and
+every open issue stays a permanent candidate, its body rewritten on every cycle
+(#993).
+
+Idempotent: labels that already exist are left untouched and no mutation is
+issued for them, so this is safe to re-run and safe to call from provisioning
+scripts.`,
+		Example: `  nightgauge label ensure --owner nightgauge --repo nightgauge
+  nightgauge label ensure --owner nightgauge --repo nightgauge --json`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			client, err := clientFromConfig()
+			if err != nil {
+				return err
+			}
+
+			ownerPart, repoPart := splitRepo(owner, repo)
+			svc := gh.NewLabelService(client, ownerPart, repoPart)
+			created, err := gh.EnsureRequiredLabels(cmd.Context(), svc)
+			if err != nil {
+				return err
+			}
+
+			if outputJSON {
+				return printJSON(map[string]any{
+					"owner":    ownerPart,
+					"repo":     repoPart,
+					"required": gh.RequiredLabelNames(),
+					"created":  created,
+				})
+			}
+
+			if len(created) == 0 {
+				fmt.Printf("%s/%s: all %d required labels already present.\n",
+					ownerPart, repoPart, len(gh.RequiredLabelNames()))
+				return nil
+			}
+			fmt.Printf("%s/%s: created %d label(s): %s\n",
+				ownerPart, repoPart, len(created), strings.Join(created, ", "))
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&owner, "owner", "nightgauge", "GitHub organization or user")
+	repoNameFlag(cmd, &repo, "nightgauge", "Repository name (owner/name or name)")
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output as JSON")
 	return cmd
 }

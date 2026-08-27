@@ -209,6 +209,11 @@ acceptance criteria, labels, and sizing before dispatch.
 
 **How it works:**
 
+0. Before listing anything, each repo is preflighted against the required-label
+   registry (`github.RequiredLabels`). A repo missing any of them is **skipped**
+   with an Action Center card, because refinement there cannot record its own
+   completion and would re-select the same issues forever (#993). Fix with
+   `nightgauge label ensure --owner O --repo R`.
 1. On each refinement tick (default: 60s), the scanner queries all configured
    repos for open issues that lack the `pipeline:refined` label
 2. Issues already running through refinement, on cooldown, or already in a
@@ -217,8 +222,14 @@ acceptance criteria, labels, and sizing before dispatch.
    via the execution manager (CLI mode) or IPC callback (VSCode mode)
 4. On success: `pipeline:refined` label is added, `auto-process` label is
    removed (if present), and the issue is moved to Ready status on the board
-5. On failure: the issue enters a cooldown period (default: 5 minutes) and is
-   retried in the next cycle after cooldown expires
+5. On failure — including a failure to ADD the `pipeline:refined` label, which
+   was previously logged and dropped — the run is recorded in
+   `state.RefinementFailed` with its reason, the per-issue consecutive-failure
+   counter is incremented, and the issue enters a cooldown (default: 5 minutes)
+6. After **3 consecutive failures** the candidate loop stops re-selecting that
+   issue and raises an Action Center card. The cooldown bounds how OFTEN an
+   issue is retried; this bounds how MANY times. Without it a deterministic
+   failure retried at the rail's cap indefinitely (#993)
 
 **Concurrency control:**
 
@@ -291,6 +302,11 @@ Dispatch Scan picks up Ready issues → full pipeline execution
 | ------------------ | ------------------------------------------------------------- |
 | `auto-process`     | Opt-in signal: "refine this issue and process it immediately" |
 | `pipeline:refined` | Completion marker: "this issue has been refined by the AI"    |
+
+**Both labels must EXIST in the repository.** They are not created on demand —
+run `nightgauge label ensure` (see
+[docs/GO_BINARY.md](GO_BINARY.md#repository-label-operations)). The refinement
+preflight refuses to run against a repo that is missing them.
 
 The `auto-process` label is the **trigger** — add it to any issue to request
 automatic refinement. The `pipeline:refined` label is the **result** — it

@@ -637,6 +637,9 @@ nightgauge label list [--owner ORG] [--repo REPO] [--json]
 nightgauge label create --name "priority:critical" --color ff0000 \
   [--description "..."] [--owner ORG] [--repo REPO] [--json]
 
+# Create the labels the pipeline itself READS (idempotent, no-op when present)
+nightgauge label ensure [--owner ORG] [--repo REPO] [--json]
+
 # Rename a label in place, preserving its issue associations (idempotent)
 nightgauge label rename --name "area:vscode" --new-name "component:vscode" \
   [--color 7057ff] [--description "..."] [--owner ORG] [--repo REPO] [--json]
@@ -644,6 +647,37 @@ nightgauge label rename --name "area:vscode" --new-name "component:vscode" \
 # Delete a label by node ID
 nightgauge label delete --label-id <node-id> [--owner ORG] [--repo REPO] [--json]
 ```
+
+**`label ensure` and the required-label registry (#993)**: `ensure` provisions
+`github.RequiredLabels` (`internal/github/required_labels.go`) — the labels the
+Go layer makes control-flow decisions on, as distinct from the wider taxonomy
+the `nightgauge-repo-init` skill creates for humans:
+
+| Label                   | What breaks without it                                                                 |
+| ----------------------- | -------------------------------------------------------------------------------------- |
+| `pipeline:refined`      | `MarkRefined` hard-errors, so refinement cannot record completion — see below          |
+| `auto-process`          | The opt-in trigger cannot be applied, so no issue reaches Ready on the refinement path |
+| `type:epic`             | Epics are not excluded from refinement candidacy                                       |
+| `owner-action`          | The default dispatch exclusion is inert, so human-only work gets dispatched            |
+| `approved:architecture` | The architecture gate cannot be satisfied by the label mechanism its own docs describe |
+
+**A missing label does not degrade gracefully, which is why this verb is
+deterministic and the skill is not.** Refinement candidacy is re-derived every
+cycle from live GitHub labels, and the query excludes issues that CARRY
+`pipeline:refined`. A label absent from the repository can never be present, so
+the exclusion is inert, every open issue stays a permanent candidate, and each
+one has its body rewritten again on every cycle — bounded only by the hourly
+safety rail, unbounded in time. Provisioning previously lived only in an LLM
+skill step with no gate confirming it ran.
+
+`ensure` lists once and creates only the gaps, so re-running it issues zero
+mutations. It never modifies an existing label: `Create` matches by name, so a
+repo whose `type:epic` is a different colour keeps its colour.
+
+The refinement loop preflights the same registry per repo and **skips a repo
+that is missing any of it**, raising an Action Center card naming the labels and
+the command to fix them, rather than dispatching model work that cannot be
+recorded.
 
 **label create notes**: `--color` is a hex string without `#` (e.g., `ff0000`);
 defaults to `cccccc` if omitted. All label operations use GraphQL — no `gh` CLI

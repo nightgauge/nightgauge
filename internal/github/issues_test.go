@@ -1749,3 +1749,72 @@ func TestIssueService_IterateIssues_YieldsThenEOF(t *testing.T) {
 		t.Error("expected io.EOF after exhaustion")
 	}
 }
+
+// TestIssueService_ListIssuesExcludingLabels_TruncatedLabelsExcluded proves the
+// fail-closed guard on a partial label page (#993).
+//
+// The exclusion is computed from the labels the query RETURNS. When the labels
+// connection is truncated, an issue that genuinely carries pipeline:refined can
+// come back without it and read as a refinement candidate — and refinement then
+// rewrites a human-reviewed body again, every cycle. The safe reading of "I
+// could not see all the labels" is "assume it is excluded".
+func TestIssueService_ListIssuesExcludingLabels_TruncatedLabelsExcluded(t *testing.T) {
+	// Issue 1: totalCount exceeds the returned nodes — truncated, must be
+	// excluded even though none of the VISIBLE labels is in the exclude set.
+	// Issue 2: complete label list, none excluded — must survive.
+	response := `{"data":{"repository":{"issues":{
+		"pageInfo":{"hasNextPage":false,"endCursor":""},
+		"nodes":[
+			{"number":1,"title":"Heavily Labelled","createdAt":"2026-01-01T00:00:00Z",
+			 "labels":{"totalCount":21,"nodes":[{"name":"type:feature"},{"name":"priority:high"}]}},
+			{"number":2,"title":"Ordinary","createdAt":"2026-01-02T00:00:00Z",
+			 "labels":{"totalCount":1,"nodes":[{"name":"type:feature"}]}}
+		]
+	}}}}`
+
+	client, cleanup := mockGraphQLServer(t, response)
+	defer cleanup()
+
+	svc := NewIssueService(client)
+	issues, err := svc.ListIssuesExcludingLabels(context.Background(), "o", "r",
+		[]string{LabelRefined, LabelEpic}, 0)
+	if err != nil {
+		t.Fatalf("ListIssuesExcludingLabels returned unexpected error: %v", err)
+	}
+	if len(issues) != 1 {
+		t.Fatalf("count = %d, want 1 — the truncated issue must be excluded", len(issues))
+	}
+	if issues[0].Number != 2 {
+		t.Errorf("surviving issue = #%d, want #2; #1's label list was truncated and "+
+			"cannot be proven free of the excluded labels", issues[0].Number)
+	}
+}
+
+// TestIssueService_ListIssuesExcludingLabels_CompleteListNotExcluded guards the
+// other direction: totalCount equal to the node count is NOT truncation, and
+// must not cause a wholesale exclusion. Without this, a guard written as
+// `totalCount >= len(nodes)` would silently exclude every issue and refinement
+// would stop entirely — a fix that trades a runaway loop for a dead loop.
+func TestIssueService_ListIssuesExcludingLabels_CompleteListNotExcluded(t *testing.T) {
+	response := `{"data":{"repository":{"issues":{
+		"pageInfo":{"hasNextPage":false,"endCursor":""},
+		"nodes":[
+			{"number":7,"title":"Exactly Complete","createdAt":"2026-01-01T00:00:00Z",
+			 "labels":{"totalCount":2,"nodes":[{"name":"type:feature"},{"name":"priority:high"}]}}
+		]
+	}}}}`
+
+	client, cleanup := mockGraphQLServer(t, response)
+	defer cleanup()
+
+	svc := NewIssueService(client)
+	issues, err := svc.ListIssuesExcludingLabels(context.Background(), "o", "r",
+		[]string{LabelRefined, LabelEpic}, 0)
+	if err != nil {
+		t.Fatalf("ListIssuesExcludingLabels returned unexpected error: %v", err)
+	}
+	if len(issues) != 1 || issues[0].Number != 7 {
+		t.Fatalf("got %d issue(s) %v, want exactly #7 — a complete label list is not truncation",
+			len(issues), issues)
+	}
+}
