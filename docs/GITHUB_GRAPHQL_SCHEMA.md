@@ -973,34 +973,54 @@ when a call is requires-GraphQL, the only lever left is not making it.**
 
 ### Non-project call sites
 
-| Call site                                                   | Verdict                         | Why                                                                                                                                        |
-| ----------------------------------------------------------- | ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| `SecurityService.ListOpenAlerts`                            | **requires-GraphQL**            | `dependabotUpdate` has no REST equivalent — see below                                                                                      |
-| `IssueService.GetIssue`                                     | **GraphQL-by-batching**         | One document carries the issue, labels, sub-issues and blockedBy; REST needs 3–4 calls                                                     |
-| `IssueService.GetIssuesByNumbers`                           | **GraphQL-by-batching**         | N issues in ONE aliased request. REST is strictly N calls                                                                                  |
-| `IssueService.GetEpicProgress`                              | **GraphQL-by-batching**         | Sub-issue rollup in one hop                                                                                                                |
-| `IssueService.SearchIssues`                                 | **GraphQL-by-batching**         | `search()` applies the query server-side                                                                                                   |
-| `IssueService.ListIssues`, `ListIssuesExcludingLabels`      | **GraphQL-by-batching**         | Label filtering and node IDs in one page                                                                                                   |
-| `IssueService.GetRepoLabels`, `LabelService.List`           | **better-as-REST** ✅ migrated  | `GET /repos/{o}/{r}/labels?per_page=100`. The deferral was wrong — REST reports `node_id`, so the mutations they feed did not have to move |
-| `PRService.GetPR`                                           | **GraphQL-by-batching**         | PR + labels + `statusCheckRollup` in one document                                                                                          |
-| `PRService.ListPRs`                                         | **GraphQL-by-batching**         | Same, per page                                                                                                                             |
-| `PRService.ListMergedPRHeads`                               | **GraphQL-by-batching**         | `states: MERGED` is a SERVER-SIDE filter REST lacks — see below                                                                            |
-| `PRService.CommitParents`                                   | **better-as-REST** ✅ migrated  | `GET /repos/{o}/{r}/commits/{sha}`, per-branch; bucket move always, 304s only under `serve`                                                |
-| `PRService.DeleteBranch`                                    | requires-GraphQL (read)         | Resolves a ref node ID for `deleteRef`                                                                                                     |
-| `RulesetService.hasCopilotReviewed`                         | **better-as-REST** ✅ migrated  | POLLED read — the strongest ETag case in the tree                                                                                          |
-| `RepoService.RepoMetadata`                                  | **requires-GraphQL** ✅ settled | REST reports a `default_branch` for a repo that has none — see below                                                                       |
-| `Client.GetRepositoryID`                                    | **better-as-REST** ✅ migrated  | `GET /repos/{o}/{r}` returns `node_id`. Same correction as the labels row: no mutation had to move with it                                 |
-| `Client.GetRateLimit`                                       | **either — no gain**            | The GraphQL `rateLimit` query is genuinely free                                                                                            |
-| `Client.ExecuteGraphQL`                                     | requires-GraphQL                | It _is_ the pass-through transport for `forge graphql`                                                                                     |
-| All `IssueService` / `PRService` / `LabelService` mutations | **coupled**                     | See _Node-ID coupling_ below                                                                                                               |
+| Call site                                                         | Verdict                         | Why                                                                                                                                        |
+| ----------------------------------------------------------------- | ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `SecurityService.ListOpenAlerts`                                  | **requires-GraphQL**            | `dependabotUpdate` has no REST equivalent — see below                                                                                      |
+| `IssueService.GetIssue`                                           | **GraphQL-by-batching**         | One document carries the issue, labels, sub-issues and blockedBy; REST needs 3–4 calls                                                     |
+| `IssueService.GetIssuesByNumbers`                                 | **GraphQL-by-batching**         | N issues in ONE aliased request. REST is strictly N calls                                                                                  |
+| `IssueService.GetEpicProgress`                                    | **GraphQL-by-batching**         | Sub-issue rollup in one hop                                                                                                                |
+| `IssueService.SearchIssues`                                       | **GraphQL-by-batching**         | `search()` applies the query server-side                                                                                                   |
+| `IssueService.ListIssues`, `ListIssuesExcludingLabels`            | **GraphQL-by-batching**         | Label filtering and node IDs in one page                                                                                                   |
+| `IssueService.GetRepoLabels`, `LabelService.List`                 | **better-as-REST** ✅ migrated  | `GET /repos/{o}/{r}/labels?per_page=100`. The deferral was wrong — REST reports `node_id`, so the mutations they feed did not have to move |
+| `PRService.GetPR`                                                 | **GraphQL-by-batching**         | PR + labels + `statusCheckRollup` in one document                                                                                          |
+| `PRService.ListPRs`                                               | **GraphQL-by-batching**         | Same, per page                                                                                                                             |
+| `PRService.ListMergedPRHeads`                                     | **GraphQL-by-batching**         | `states: MERGED` is a SERVER-SIDE filter REST lacks — see below                                                                            |
+| `PRService.CommitParents`                                         | **better-as-REST** ✅ migrated  | `GET /repos/{o}/{r}/commits/{sha}`, per-branch; bucket move always, 304s only under `serve`                                                |
+| `PRService.DeleteBranch`                                          | requires-GraphQL (read)         | Resolves a ref node ID for `deleteRef`                                                                                                     |
+| `RulesetService.hasCopilotReviewed`                               | **better-as-REST** ✅ migrated  | POLLED read — the strongest ETag case in the tree                                                                                          |
+| `RepoService.RepoMetadata`                                        | **requires-GraphQL** ✅ settled | REST reports a `default_branch` for a repo that has none — see below                                                                       |
+| `Client.GetRepositoryID`                                          | **better-as-REST** ✅ migrated  | `GET /repos/{o}/{r}` returns `node_id`. Same correction as the labels row: no mutation had to move with it                                 |
+| `Client.GetRateLimit`                                             | **either — no gain**            | The GraphQL `rateLimit` query is genuinely free                                                                                            |
+| `Client.ExecuteGraphQL`                                           | requires-GraphQL                | It _is_ the pass-through transport for `forge graphql`                                                                                     |
+| `IssueService` sub-issue and dependency link mutations            | **better-as-REST** ✅ migrated  | `AddSubIssue` / `RemoveSubIssue` / `AddBlockedBy` / `RemoveBlockedBy` — the endpoints take a DATABASE id, so the coupling dissolved (#956) |
+| Remaining `IssueService` / `PRService` / `LabelService` mutations | **coupled**                     | `createIssue`, `createPullRequest`, `createLabel`, `addLabelsToLabelable`, `removeLabelsFromLabelable` — still node-ID writes              |
 
-### Node-ID coupling — the real reason the mutation surface has not moved
+### Node-ID coupling — and how the link mutations escaped it
 
 Every mutation in `issues.go`, `prs.go` and `labels.go` takes a `graphql.ID`.
 Those IDs come from a GraphQL read, so a mutation cannot be migrated on its
 own — its ID source has to move with it, and every other consumer of that read
-has to keep working. **This, not the API surface, is what makes AC 2 a
-land-alone change.**
+has to keep working.
+
+**For the four issue-link mutations this was resolved rather than deferred, and
+the resolution is worth reading before assuming the same of the rest.** The
+sub-issue and dependency REST endpoints do not take a node ID at all: they take
+the issue NUMBER in the path and the referenced issue's DATABASE id in the body.
+And the database id arrives in `GET /repos/{o}/{r}/issues/{n}` — the very read
+`resolveIssueRef` was already making to obtain the node ID. It was being parsed
+past and discarded.
+
+So the id source did not have to move. It was already on REST, already paid for,
+and two struct fields recovered it. The coupling **dissolved** instead of
+relocating, which is the property the endpoint table below records as the reason
+this surface could move at all. Migrating them deleted more GraphQL than it
+moved: `LinkSubIssue` went from two GraphQL reads plus a GraphQL mutation to one
+REST GET and one REST POST.
+
+**The generalisable part: a coupling is a claim about a specific id, not about
+mutations as a class.** Before accepting that a write cannot move, check what
+the destination endpoint actually takes — it may not want the id the coupling is
+about.
 
 One correction worth recording, because it dissolves the obvious objection:
 **REST returns node IDs.** `GET /repos/{o}/{r}/issues/{n}` includes `node_id`
@@ -1130,13 +1150,20 @@ The reasoning is repeated at the call site in `internal/github/repo.go`, not
 only here: a doc stops a reader who goes looking, and a comment stops the one
 who does not. Pinned by `TestRepoMetadata_EmptyRepoHasNoDefaultBranch`.
 
-### Sub-issue and dependency links — REST endpoints the tree does not use
+### Sub-issue and dependency links — REST
 
-The previous pass found that `GET /repos/{o}/{r}/issues/{n}/sub_issues` and
+An earlier pass found that `GET /repos/{o}/{r}/issues/{n}/sub_issues` and
 `.../dependencies/blocked_by` answer 200, and noted the write counterparts were
-documented but **not exercised**. They have now been exercised end to end
-against throwaway repositories (2026-08-26). All four work, and all four bill
-`core`:
+documented but **not exercised**. They were then exercised end to end against
+throwaway repositories (2026-08-26). All four work, and all four bill `core`.
+
+**The tree now uses all four** (#956). `IssueService.AddSubIssue`,
+`RemoveSubIssue`, `AddBlockedBy` and `RemoveBlockedBy` are REST, take
+`forge.IssueRef` values rather than node IDs, and the GraphQL mutations they
+replaced were deleted — there is no second write path. Pinned by
+`TestAddSubIssue_UsesREST`, `TestRemoveSubIssue_UsesRESTWithTheSingularPath`,
+`TestAddBlockedBy_UsesREST` and `TestRemoveBlockedBy_UsesRESTWithTheIDInThePath`,
+each asserting the exact method, path and request body:
 
 | Operation         | Endpoint                                                        | Body / path parameter       |
 | ----------------- | --------------------------------------------------------------- | --------------------------- |
@@ -1156,6 +1183,24 @@ Three properties that decide whether the write surface can move:
    needs. This matters because `internal/audit/issue_creator.go` resolves
    `epicRepo` and `subRepo` independently, so cross-repo linking is a live path
    in the tree and not a hypothetical.
+
+   **This is why `forge.IssueRef` carries its own owner and repo, and why the
+   methods take TWO of them.** A single `owner, repo` pair shared by both ends
+   of the call would compile, pass every same-repo test, and silently link
+   within one repository wherever the two differ. Pinned by
+   `TestAddSubIssue_LinksAcrossRepositories` and, at the caller,
+   `TestRunIssueCreation_BlockedByCrossesRepositories`.
+
+   **Which call site actually crosses repositories is worth stating precisely,
+   because an earlier version of this note got it wrong.** In
+   `internal/audit/issue_creator.go` the sub-issue link cannot cross repos:
+   `GroupFindingsByEpic` keys epics on `{dimension, repository}`, so every
+   finding in an epic carries the epic's own repository and the two refs always
+   agree. The **blocked-by** pass is the genuine case — it walks every dimension
+   after the fact, so a finding in one repository can be blocked by one filed in
+   another. Both take two refs regardless, because the constraint lives in a
+   different function and no caller can see it locally.
+
 3. **A 404 from these routes means the referenced ISSUE is absent, not that the
    route is.** See the discriminator below.
 
@@ -1240,12 +1285,23 @@ that is 3 GraphQL points → 1, with the two survivors moved to the idle `core`
 bucket and ETag-able under `nightgauge serve`. It is the first cash-in of the
 "REST returns node IDs" finding above.
 
-**The mutation deliberately stayed on GraphQL.** Migrating it means switching
-to database ids, and every other caller of `IssueService.AddBlockedBy` would
-still be passing node IDs — two write paths creating the same edge, which is
-the Read-Through/dual-path shape `docs/FAILURE_TAXONOMY.md` says to never
-resolve by "keeping them in sync". The write surface moves as one piece, with
-its id source, in the client-family unification (#849 AC 2 / #848 AC 2).
+**The mutation stayed on GraphQL at the time, and moved in #956.** The stated
+reason for deferring it was sound and also narrower than it looked: migrating it
+meant switching to database ids while every other caller of
+`IssueService.AddBlockedBy` still passed node IDs — two write paths creating the
+same edge, the dual-path shape `docs/FAILURE_TAXONOMY.md` says never to resolve
+by "keeping them in sync".
+
+What made it tractable was not the client-family unification it was deferred to
+(that is #933, still open). It was changing **all four link methods and every
+caller in one commit**, so there is exactly one write path at every instant —
+the GraphQL mutation structs were deleted, not retained behind a flag. The
+deferral was right that two write paths must never coexist; it was wrong that
+avoiding them required the larger change first.
+
+> Generalisable, and this is the second time it has held on this epic: **when a
+> blocker says "needs the larger change first", check whether it means the whole
+> tree or just the surface you are standing on.** #848 hit the same shape.
 
 **One trap this migration hit, and it is not obvious:** the two APIs disagree
 about what a number means. GraphQL's `repository.issue(number:)` errors
@@ -1281,36 +1337,57 @@ commit found for SHA`) is the one the merged-PR door actually meets. A
 been migrated_); the ledger before/after is recorded for both the sweep and the
 label read.
 
-What remains below is the **mutation** surface, which this document classifies
-_coupled_ — not better-as-REST — so it was never inside AC 2. It is tracked as
-**#933** under epic #842, and entries 1 and 2 are one change, not two: the ids
-have to move with the mutations.
+What remained was the **mutation** surface, which this document classified
+_coupled_ — not better-as-REST — so it was never inside AC 2. Entry 1 is now
+done; entry 2 is the whole of #933.
 
 Ordered by value, not by ease:
 
-1. **Sub-issues and blocked-by now have REST endpoints** — and the tree does not
-   use them. `GET /repos/{o}/{r}/issues/{n}/sub_issues` and
-   `.../dependencies/blocked_by` both answer 200 on the core bucket (verified
-   2026-08-25); these were GraphQL-only when `issues.go` was written, and the
-   tree has moved since. Their write counterparts **have since been exercised
-   end to end** — see _Sub-issue and dependency links_ above for the four
-   endpoints, their database-id parameters, and the cross-repository result.
-   **Re-check the premise before building** — that is how this entry was found.
-2. **Two client families exist, and the raw one bypasses `forge`/`boardcache`
-   entirely.** Measured 2026-08-25 rather than carried forward: **15**
-   construction sites outside the forge adapters build a `BoardService`
-   directly (`internal/doctor`, `internal/state`, `internal/depgraph`,
-   `internal/ipc/server.go`, and several inside `internal/github` itself), and
-   `internal/ipc/server.go` alone builds 12 `IssueService`, 7 `PRService`, 4
-   `ProjectService`, 2 `BoardService` and 1 `EpicService` inline. Unifying the
-   two families is the substance of #933 — high conflict surface, land it alone,
-   and do **not** bolt a cache onto the raw path (see `docs/FAILURE_TAXONOMY.md`
-   § Read-Through Cache Without Write Interception).
+1. ~~**Sub-issues and blocked-by now have REST endpoints, and the tree does not
+   use them.**~~ — **done in #956.** All four link mutations are REST, taking
+   `forge.IssueRef` values; the GraphQL mutations and their input structs were
+   deleted. See _Sub-issue and dependency links_ above for the endpoints and
+   _Node-ID coupling_ for why the coupling dissolved rather than moving.
 
-   Note this corrects an inherited figure. The previous framing said "~10
-   mutating IPC verbs each build their own `gh.NewBoardService`"; the bypass is
-   real and larger than that, but only 2 of those sites are `BoardService` and
-   the rest are other services. Counting took one command.
+   **This entry was found by re-checking a premise, and closed by re-checking
+   another.** It was written when the endpoints were believed not to exist; it
+   was executed once someone asked what the endpoints actually take, which turned
+   out to be a database id already present in a read the tree was making and
+   discarding.
+
+2. **Two client families exist, and the raw one bypasses `forge`/`boardcache`
+   entirely.** This is the whole of #933; it does **not** include the write
+   surface, which moved separately in #956 without needing it.
+
+   **Re-measured 2026-08-26, and the previous figure was wrong.** This entry said
+   "**15** construction sites outside the forge adapters build a `BoardService`"
+   and that `internal/ipc/server.go` "builds 12 `IssueService`, 7 `PRService`, 4
+   `ProjectService`, 2 `BoardService` and 1 `EpicService` inline". Counted over
+   the five services named in #933's AC 1
+   (`grep -rnE '\bNew(Issue|PR|Project|Board|Epic)Service\(' --include='*.go'`):
+
+   | Scope                              | Sites   |
+   | ---------------------------------- | ------- |
+   | Total, including tests             | **392** |
+   | Non-test, all                      | **180** |
+   | Non-test, inside `internal/github` | **41**  |
+   | Non-test, outside it               | **129** |
+   | Non-test, `internal/gitlab` mirror | **10**  |
+
+   `internal/ipc/server.go` contains **zero** `NewBoardService` and **zero**
+   `NewProjectService` calls — the #848 pin forbids them and the pin works. Its
+   20 sites are 12 `IssueService` + 7 `PRService` + 1 `EpicService`.
+
+   The bypass concentrates in `cmd/nightgauge/main.go` (**63**),
+   `internal/ipc/server.go` (**20**), `internal/orchestrator/autonomous.go`
+   (**12**) and `scheduler.go` (**6**). High conflict surface — land it alone,
+   and do **not** bolt a cache onto the raw path (see
+   `docs/FAILURE_TAXONOMY.md` § Read-Through Cache Without Write Interception).
+
+   **A figure that describes the tree goes stale silently.** The 15 was a real
+   measurement of a narrower question (`BoardService` only) that was then read as
+   an answer to a wider one. Both corrections are kept above rather than
+   overwritten, because the failure mode is the reading, not the counting.
 
 3. ~~**`RepoMetadata`**~~ — **settled: requires-GraphQL, do not migrate.** The
    empty-repository contract was probed and REST lost; see the `RepoMetadata`
@@ -1327,6 +1404,17 @@ Ordered by value, not by ease:
 
 - **Automated**: `internal/github/schema_validation_test.go` validates query
   struct fields against expectations
+- **Transport pins**: a migrated call must be pinned to its TRANSPORT, not only
+  its result — a GraphQL implementation satisfies an error-free return just as
+  well, which is how a migration regresses unnoticed.
+  `TestGetRepositoryID_UsesREST`, `TestListRepoLabels_UsesRESTWithFullPage`,
+  `TestAddSubIssue_UsesREST`, `TestRemoveSubIssue_UsesRESTWithTheSingularPath`,
+  `TestAddBlockedBy_UsesREST`, `TestRemoveBlockedBy_UsesRESTWithTheIDInThePath`.
+- **Invalid-input pins**: the error paths need pinning too, per the rule above —
+  `TestResolveIssueRef_RejectsAPullRequestNumber`,
+  `TestResolveIssueRef_MissingDatabaseIDIsAnError`,
+  `TestLinkWrites_404NamesTheAbsentIssueNotTheRoute`,
+  `TestLinkWrites_ServerErrorIsNotReportedAsAbsence`.
 - **Manual introspection**: Use `gh api graphql` to check types before coding
 - **Dependency tracking**: See `docs/GITHUB_API_DEPENDENCIES.md` for risk
   assessment
@@ -1335,7 +1423,7 @@ Ordered by value, not by ease:
 
 ```bash
 # Check a mutation's input type
-gh api graphql -f query='{ __type(name: "AddSubIssueInput") { name inputFields { name type { name kind ofType { name } } } } }'
+gh api graphql -f query='{ __type(name: "CreateIssueInput") { name inputFields { name type { name kind ofType { name } } } } }'
 
 # Check an object type's fields
 gh api graphql -f query='{ __type(name: "Issue") { fields { name type { name } args { name } } } }'
@@ -1352,7 +1440,9 @@ gh api graphql -f query='{ __type(name: "PullRequestMergeMethod") { enumValues {
 
 ## Changelog
 
-| Date       | Change                                                    |
-| ---------- | --------------------------------------------------------- |
-| 2026-03-11 | Initial schema introspection from live GitHub GraphQL API |
-| 2026-08-25 | Transport classification of every call site (#849 AC 1)   |
+| Date       | Change                                                                                                                |
+| ---------- | --------------------------------------------------------------------------------------------------------------------- |
+| 2026-03-11 | Initial schema introspection from live GitHub GraphQL API                                                             |
+| 2026-08-25 | Transport classification of every call site (#849 AC 1)                                                               |
+| 2026-08-26 | Repo-ID and label reads moved to REST; sub-issue and dependency write endpoints probed end to end (#849 AC 2, #930)   |
+| 2026-08-26 | Sub-issue and dependency link mutations moved to REST; GraphQL mutations deleted; worklist entry 2 re-measured (#956) |

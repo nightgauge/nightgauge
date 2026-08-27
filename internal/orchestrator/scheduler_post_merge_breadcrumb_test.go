@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/nightgauge/nightgauge/internal/execution"
+	"github.com/nightgauge/nightgauge/internal/forge"
 	gh "github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/internal/intelligence/survival"
 	"github.com/nightgauge/nightgauge/internal/state"
@@ -100,7 +101,9 @@ func (m *breadcrumbIssueSvc) GetEpicProgressByNumber(_ context.Context, _, _ str
 
 func (m *breadcrumbIssueSvc) CloseIssue(_ context.Context, _ string) error { return nil }
 
-func (m *breadcrumbIssueSvc) RemoveBlockedBy(_ context.Context, _, _ string) error { return nil }
+func (m *breadcrumbIssueSvc) RemoveBlockedBy(_ context.Context, _, _ forge.IssueRef) error {
+	return nil
+}
 
 // newBreadcrumbScheduler builds a scheduler whose LAUNCH root and whose run
 // TARGET root are two different directories — the only shape in which a

@@ -154,55 +154,16 @@ func TestCriticalAPIDependencies_NodeQuery(t *testing.T) {
 
 // --- 2. Mutation Dependency Manifest -----------------------------------------
 
-// TestMutationDependencies asserts that all four sub-issue and blocking
-// mutations are defined (non-zero struct type with the expected graphql tag).
-func TestMutationDependencies(t *testing.T) {
-	mutations := []struct {
-		name string
-		typ  reflect.Type
-		tag  string // expected graphql tag on the top-level mutation field
-	}{
-		{
-			"addSubIssue",
-			reflect.TypeOf(addSubIssueMutation{}),
-			"addSubIssue(input: $input)",
-		},
-		{
-			"removeSubIssue",
-			reflect.TypeOf(removeSubIssueMutation{}),
-			"removeSubIssue(input: $input)",
-		},
-		{
-			"addBlockedBy",
-			reflect.TypeOf(addBlockedByMutation{}),
-			"addBlockedBy(input: $input)",
-		},
-		{
-			"removeBlockedBy",
-			reflect.TypeOf(removeBlockedByMutation{}),
-			"removeBlockedBy(input: $input)",
-		},
-	}
-
-	for _, m := range mutations {
-		t.Run(m.name, func(t *testing.T) {
-			if m.typ.NumField() == 0 {
-				t.Errorf("%s mutation struct has no fields", m.name)
-				return
-			}
-			// The first (and only) field carries the graphql tag naming the mutation.
-			f := m.typ.Field(0)
-			tag := f.Tag.Get("graphql")
-			if tag != m.tag {
-				t.Errorf(
-					"%s mutation graphql tag = %q, want %q\n"+
-						"If GitHub renamed this mutation, update types.go and docs/GITHUB_API_DEPENDENCIES.md",
-					m.name, tag, m.tag,
-				)
-			}
-		})
-	}
-}
+// The four sub-issue and blocking mutations used to be pinned here as GraphQL
+// mutation structs. They moved to REST in #956 and the structs were deleted, so
+// there is nothing left for a GraphQL schema test to assert about them.
+//
+// This is deliberately recorded rather than silently removed: a schema-manifest
+// test disappearing looks like coverage loss. The replacement pins are stronger,
+// because they assert the transport rather than the document shape --
+// TestAddSubIssue_UsesREST, TestRemoveSubIssue_UsesREST,
+// TestAddBlockedBy_UsesREST and TestRemoveBlockedBy_UsesREST in issues_test.go,
+// each asserting the exact method, path and request body.
 
 // --- 3. Field Name Convention Validation -------------------------------------
 
@@ -442,10 +403,6 @@ func TestNoDeprecatedFieldsUsed(t *testing.T) {
 		{"projectV2FilteredQuery", reflect.TypeOf(projectV2FilteredQuery{})},
 		{"nodeQuery", reflect.TypeOf(nodeQuery{})},
 		{"pullRequestQuery", reflect.TypeOf(pullRequestQuery{})},
-		{"addSubIssueMutation", reflect.TypeOf(addSubIssueMutation{})},
-		{"removeSubIssueMutation", reflect.TypeOf(removeSubIssueMutation{})},
-		{"addBlockedByMutation", reflect.TypeOf(addBlockedByMutation{})},
-		{"removeBlockedByMutation", reflect.TypeOf(removeBlockedByMutation{})},
 	}
 
 	for _, qt := range queryTypes {

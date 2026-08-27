@@ -330,6 +330,8 @@ Flags follow the 'gh api graphql' convention:
 
 The output is the raw JSON envelope returned by the forge — use jq to
 extract fields. This subcommand exists for the carve-out cases listed
-in ADR-008 (sub-issue linking, addBlockedBy, project view-create) where
-no typed forge surface exists yet.
+in ADR-008 where no typed forge surface exists yet — project view-create
+among them. Sub-issue linking and blocked-by are NO LONGER carve-outs:
+they have a typed surface on the forge issue service and moved to REST,
+so reach for that rather than a hand-written GraphQL document.
 `

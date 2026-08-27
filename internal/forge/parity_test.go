@@ -20,6 +20,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nightgauge/nightgauge/internal/forge"
 	_ "github.com/nightgauge/nightgauge/internal/github" // adapter registration
 	"github.com/nightgauge/nightgauge/internal/gitlab"
 	"github.com/nightgauge/nightgauge/internal/intelligence/teams"
@@ -301,10 +302,14 @@ func parseIntForTest(s string) int {
 // TestParityContract_BlockedBy_RoundTrip pins the cross-forge contract
 // that AddBlockedBy followed by GetItem yields a BoardItem.BlockedBy[]
 // shape consumable by the VSCode lock-icon predicate (isBlocked) on either
-// adapter. The GitHub side of this round-trip is covered by the existing
-// internal/github tests that exercise the GraphQL mutation paths; this
-// test pins the GitLab side and asserts the resulting BoardItem.BlockedBy
-// shape matches what a GitHub-adapter caller would receive.
+// adapter. The GitHub side of the WRITE is covered by the transport pins in
+// internal/github (TestAddBlockedBy_UsesREST and friends); this test pins the
+// GitLab side and asserts the resulting BoardItem.BlockedBy shape matches what
+// a GitHub-adapter caller would receive.
+//
+// Both adapters now take the same forge.IssueRef on the way in, which is the
+// half of the contract this file can check directly — see
+// TestParityContract_BlockedBy_AcceptsTheSameRefType below.
 func TestParityContract_BlockedBy_RoundTrip(t *testing.T) {
 	stub := newGitlabBlockedByStub(t)
 	c := gitlab.NewClient(stub.srv.URL, "tok")
@@ -313,7 +318,10 @@ func TestParityContract_BlockedBy_RoundTrip(t *testing.T) {
 	ctx := context.Background()
 
 	// Write blocking relationship: #42 is blocked by #43.
-	if err := svc.AddBlockedBy(ctx, "o/r#42", "o/r#43"); err != nil {
+	if err := svc.AddBlockedBy(ctx,
+		forge.IssueRef{Owner: "o", Repo: "r", Number: 42},
+		forge.IssueRef{Owner: "o", Repo: "r", Number: 43},
+	); err != nil {
 		t.Fatalf("AddBlockedBy: %v", err)
 	}
 
@@ -339,6 +347,26 @@ func TestParityContract_BlockedBy_RoundTrip(t *testing.T) {
 	}
 	if got.State != "opened" {
 		t.Errorf("BlockedBy[0].State = %q, want opened", got.State)
+	}
+}
+
+// Both adapters must satisfy the SAME forge.IssueService signature for the four
+// link methods. This is a compile-time contract, but writing it down as a test
+// is what makes a future divergence a named failure rather than a confusing one
+// -- and it is cheap insurance now that the two adapters reached the same
+// signature by opposite routes (GitHub gained refs; GitLab shed string parsing).
+func TestParityContract_BlockedBy_AcceptsTheSameRefType(t *testing.T) {
+	var _ interface {
+		AddSubIssue(context.Context, forge.IssueRef, forge.IssueRef) error
+		RemoveSubIssue(context.Context, forge.IssueRef, forge.IssueRef) error
+		AddBlockedBy(context.Context, forge.IssueRef, forge.IssueRef) error
+		RemoveBlockedBy(context.Context, forge.IssueRef, forge.IssueRef) error
+	} = forge.IssueService(nil)
+
+	// And the ref renders identically for both, since it is the same type: the
+	// error messages a user sees name the issue the same way on either forge.
+	if got := (forge.IssueRef{Owner: "o", Repo: "r", Number: 42}).String(); got != "o/r#42" {
+		t.Errorf("IssueRef.String() = %q, want o/r#42", got)
 	}
 }
 

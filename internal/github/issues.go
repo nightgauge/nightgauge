@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/url"
 	"sort"
 	"strings"
 
@@ -547,68 +549,141 @@ func (s *IssueService) AddComment(ctx context.Context, subjectID, body string) e
 	return nil
 }
 
-// AddSubIssue links a sub-issue to a parent issue using GitHub's native sub-issue API.
-func (s *IssueService) AddSubIssue(ctx context.Context, parentID, childID string) error {
-	var m addSubIssueMutation
-	input := map[string]interface{}{
-		"input": AddSubIssueInput{
-			IssueID:    graphql.ID(parentID),
-			SubIssueID: graphql.ID(childID),
-		},
+// resolveLinkTarget reads the database id of the issue on the REFERENCED side
+// of a link. Only that side needs one: the endpoints put the subject's number
+// in the path and the referenced issue's database id in the body (or, for
+// remove-blocked-by, in the trailing path segment).
+func (s *IssueService) resolveLinkTarget(ctx context.Context, ref forge.IssueRef) (int64, error) {
+	got, err := resolveIssueRef(ctx, s.client, ref.Owner, ref.Repo, ref.Number)
+	if err != nil {
+		return 0, err
 	}
+	return got.DatabaseID, nil
+}
 
-	if err := s.client.mutate(ctx, &m, input); err != nil {
-		return fmt.Errorf("add sub-issue: %w", err)
+// linkPath builds a link-endpoint path rooted at one issue.
+func linkPath(subject forge.IssueRef, suffix string) (string, error) {
+	if subject.Owner == "" || subject.Repo == "" {
+		return "", fmt.Errorf("issue #%d: owner and repo are required", subject.Number)
+	}
+	if subject.Number <= 0 {
+		return "", fmt.Errorf("issue number must be positive, got %d", subject.Number)
+	}
+	return fmt.Sprintf("/repos/%s/%s/issues/%d%s",
+		url.PathEscape(subject.Owner), url.PathEscape(subject.Repo), subject.Number, suffix), nil
+}
+
+// doLinkWrite issues one link mutation and classifies its status.
+//
+// A 404 from these routes means the REFERENCED issue is absent, not that the
+// route is — GitHub matched the route or it would not have reached the
+// handler. Saying so at the call site matters because the alternative reading
+// ("this endpoint does not exist") would invite a fallback to the GraphQL path
+// that this change deletes.
+func (s *IssueService) doLinkWrite(ctx context.Context, method, path string, body interface{}, subject, referenced forge.IssueRef, op string) error {
+	respBody, status, err := s.client.restDoStatus(ctx, method, path, body)
+	if err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+	if status == http.StatusNotFound {
+		return fmt.Errorf("%s: %s or %s is absent (REST 404: %s)",
+			op, subject, referenced, restErrorSummary(respBody))
+	}
+	if status < 200 || status >= 300 {
+		return fmt.Errorf("%s: REST %d: %s", op, status, restErrorSummary(respBody))
 	}
 	return nil
+}
+
+// AddSubIssue links child under parent using GitHub's REST sub-issue API.
+//
+// The endpoint takes the child's DATABASE id, not its node ID, which is why
+// this moved off GraphQL: the id arrives in the same REST read that used to
+// supply the node ID, so the coupling that kept the mutation on GraphQL
+// dissolved rather than moving. See docs/GITHUB_GRAPHQL_SCHEMA.md
+// § Sub-issue and dependency links.
+func (s *IssueService) AddSubIssue(ctx context.Context, parent, child forge.IssueRef) error {
+	childID, err := s.resolveLinkTarget(ctx, child)
+	if err != nil {
+		return fmt.Errorf("add sub-issue: resolve child %s: %w", child, err)
+	}
+	return s.addSubIssueResolved(ctx, parent, child, childID)
+}
+
+// addSubIssueResolved is AddSubIssue with the child's database id already in
+// hand, for callers that resolved it for another reason and must not pay a
+// second read. One write path, two entry points -- not two write paths.
+func (s *IssueService) addSubIssueResolved(ctx context.Context, parent, child forge.IssueRef, childDatabaseID int64) error {
+	path, err := linkPath(parent, "/sub_issues")
+	if err != nil {
+		return fmt.Errorf("add sub-issue: %w", err)
+	}
+	body := map[string]int64{"sub_issue_id": childDatabaseID}
+	return s.doLinkWrite(ctx, http.MethodPost, path, body, parent, child, "add sub-issue")
 }
 
 // RemoveSubIssue unlinks a sub-issue from its parent.
-func (s *IssueService) RemoveSubIssue(ctx context.Context, parentID, childID string) error {
-	var m removeSubIssueMutation
-	input := map[string]interface{}{
-		"input": RemoveSubIssueInput{
-			IssueID:    graphql.ID(parentID),
-			SubIssueID: graphql.ID(childID),
-		},
+//
+// Note the path is `sub_issue` SINGULAR here where AddSubIssue uses
+// `sub_issues` plural. That asymmetry is GitHub's, verified against the live
+// API; it is not a typo to be tidied.
+//
+// This method has no production caller today. It exists for parity with
+// AddSubIssue and because the GitLab adapter implements it, so its REST path
+// is exercised by tests alone -- said plainly here rather than implied by its
+// presence.
+func (s *IssueService) RemoveSubIssue(ctx context.Context, parent, child forge.IssueRef) error {
+	childID, err := s.resolveLinkTarget(ctx, child)
+	if err != nil {
+		return fmt.Errorf("remove sub-issue: resolve child %s: %w", child, err)
 	}
-
-	if err := s.client.mutate(ctx, &m, input); err != nil {
+	path, err := linkPath(parent, "/sub_issue")
+	if err != nil {
 		return fmt.Errorf("remove sub-issue: %w", err)
 	}
-	return nil
+	body := map[string]int64{"sub_issue_id": childID}
+	return s.doLinkWrite(ctx, http.MethodDelete, path, body, parent, child, "remove sub-issue")
 }
 
-// AddBlockedBy adds a blocking relationship between issues.
-func (s *IssueService) AddBlockedBy(ctx context.Context, blockedID, blockerID string) error {
-	var m addBlockedByMutation
-	input := map[string]interface{}{
-		"input": AddBlockedByInput{
-			IssueID:         graphql.ID(blockedID),
-			BlockingIssueID: graphql.ID(blockerID),
-		},
+// AddBlockedBy records that `blocked` is blocked by `blocker`.
+func (s *IssueService) AddBlockedBy(ctx context.Context, blocked, blocker forge.IssueRef) error {
+	blockerID, err := s.resolveLinkTarget(ctx, blocker)
+	if err != nil {
+		return fmt.Errorf("add blockedBy: resolve blocker %s: %w", blocker, err)
 	}
+	return s.addBlockedByResolved(ctx, blocked, blocker, blockerID)
+}
 
-	if err := s.client.mutate(ctx, &m, input); err != nil {
+// addBlockedByResolved is AddBlockedBy with the blocker's database id already
+// resolved. ProjectService.AddBlockedByNumber resolves both ends anyway, for
+// the circular-dependency guard, and would otherwise pay a third read.
+func (s *IssueService) addBlockedByResolved(ctx context.Context, blocked, blocker forge.IssueRef, blockerDatabaseID int64) error {
+	path, err := linkPath(blocked, "/dependencies/blocked_by")
+	if err != nil {
 		return fmt.Errorf("add blockedBy: %w", err)
 	}
-	return nil
+	body := map[string]int64{"issue_id": blockerDatabaseID}
+	return s.doLinkWrite(ctx, http.MethodPost, path, body, blocked, blocker, "add blockedBy")
 }
 
 // RemoveBlockedBy removes a blocking relationship between issues.
-func (s *IssueService) RemoveBlockedBy(ctx context.Context, blockedID, blockerID string) error {
-	var m removeBlockedByMutation
-	input := map[string]interface{}{
-		"input": RemoveBlockedByInput{
-			IssueID:         graphql.ID(blockedID),
-			BlockingIssueID: graphql.ID(blockerID),
-		},
+func (s *IssueService) RemoveBlockedBy(ctx context.Context, blocked, blocker forge.IssueRef) error {
+	blockerID, err := s.resolveLinkTarget(ctx, blocker)
+	if err != nil {
+		return fmt.Errorf("remove blockedBy: resolve blocker %s: %w", blocker, err)
 	}
+	return s.removeBlockedByResolved(ctx, blocked, blocker, blockerID)
+}
 
-	if err := s.client.mutate(ctx, &m, input); err != nil {
+// removeBlockedByResolved is RemoveBlockedBy with the blocker's database id in
+// hand. Unlike the other three, this endpoint takes the id in the PATH and
+// sends no body.
+func (s *IssueService) removeBlockedByResolved(ctx context.Context, blocked, blocker forge.IssueRef, blockerDatabaseID int64) error {
+	path, err := linkPath(blocked, fmt.Sprintf("/dependencies/blocked_by/%d", blockerDatabaseID))
+	if err != nil {
 		return fmt.Errorf("remove blockedBy: %w", err)
 	}
-	return nil
+	return s.doLinkWrite(ctx, http.MethodDelete, path, nil, blocked, blocker, "remove blockedBy")
 }
 
 // AddLabels adds labels to an issue by node IDs.
@@ -721,14 +796,14 @@ func (s *IssueService) CreateSubIssue(ctx context.Context, owner, repo string, p
 		return nil, err
 	}
 
-	// Get parent issue node ID
-	parent, err := s.GetIssue(ctx, owner, repo, parentNumber)
-	if err != nil {
-		return newIssue, fmt.Errorf("issue created (#%d) but failed to fetch parent: %w", newIssue.Number, err)
-	}
-
-	// Link as sub-issue
-	if err := s.AddSubIssue(ctx, parent.NodeID, newIssue.NodeID); err != nil {
+	// Link as sub-issue. The parent needs no read at all now: the REST
+	// endpoint addresses it by number, and only the child's database id has
+	// to be resolved -- which AddSubIssue does. The GraphQL GetIssue that used
+	// to sit here existed solely to turn parentNumber into a node ID.
+	if err := s.AddSubIssue(ctx,
+		forge.IssueRef{Owner: owner, Repo: repo, Number: parentNumber},
+		forge.IssueRef{Owner: owner, Repo: repo, Number: newIssue.Number},
+	); err != nil {
 		return newIssue, fmt.Errorf("issue created (#%d) but failed to link: %w", newIssue.Number, err)
 	}
 
@@ -743,18 +818,17 @@ func (s *IssueService) CreateSubIssue(ctx context.Context, owner, repo string, p
 }
 
 // LinkSubIssue links an existing issue as a sub-issue of a parent.
+//
+// Both GraphQL GetIssue reads that used to open this method are gone: they
+// existed only to turn two numbers into two node IDs, and the REST endpoint
+// takes a number and a database id. This is the largest single saving in the
+// migration -- two GraphQL documents and a GraphQL mutation became one REST
+// GET and one REST POST, on the idle `core` bucket.
 func (s *IssueService) LinkSubIssue(ctx context.Context, owner, repo string, parentNumber, childNumber int) error {
-	parent, err := s.GetIssue(ctx, owner, repo, parentNumber)
-	if err != nil {
-		return fmt.Errorf("fetch parent #%d: %w", parentNumber, err)
-	}
-
-	child, err := s.GetIssue(ctx, owner, repo, childNumber)
-	if err != nil {
-		return fmt.Errorf("fetch child #%d: %w", childNumber, err)
-	}
-
-	return s.AddSubIssue(ctx, parent.NodeID, child.NodeID)
+	return s.AddSubIssue(ctx,
+		forge.IssueRef{Owner: owner, Repo: repo, Number: parentNumber},
+		forge.IssueRef{Owner: owner, Repo: repo, Number: childNumber},
+	)
 }
 
 // ListIssuesExcludingLabels lists open issues that do NOT have any of the given labels.

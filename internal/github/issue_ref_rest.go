@@ -10,15 +10,21 @@ import (
 	"strings"
 )
 
-// issueRef is the minimum an issue-linking mutation needs about one issue:
-// the node ID the GraphQL mutation takes, and the parent epic's number for
-// the circular-dependency guard. Deliberately NOT a types.Issue — nothing on
-// this path reads a title, a label or a body, and returning the full object
-// would invite a caller to depend on fields this cheap read does not fetch.
+// issueRef is the minimum an issue-linking write needs about one issue: the
+// database id the REST link endpoints take, the node ID the remaining
+// ProjectV2 mutations take, and the parent epic's number for the
+// circular-dependency guard. Deliberately NOT a types.Issue — nothing on this
+// path reads a title, a label or a body, and returning the full object would
+// invite a caller to depend on fields this cheap read does not fetch.
 type issueRef struct {
 	// NodeID is the GraphQL global ID. REST reports it directly (`node_id`),
 	// which is why resolving it no longer costs a GraphQL point.
 	NodeID string
+	// DatabaseID is the integer id the sub-issue and dependency REST endpoints
+	// take. It arrives in the same response as NodeID, at no extra cost —
+	// which is the whole reason the link mutations could move transport: the
+	// id source did not have to move, it was already here.
+	DatabaseID int64
 	// ParentNumber is the parent epic's issue number, or 0 when the issue has
 	// no parent. Derived from REST's `parent_issue_url`.
 	ParentNumber int
@@ -26,7 +32,11 @@ type issueRef struct {
 
 // issueRefResponse is the slice of GitHub's REST issue object this read uses.
 type issueRefResponse struct {
-	Number int    `json:"number"`
+	Number int `json:"number"`
+	// ID is the database id — the parameter every sub-issue and dependency
+	// REST endpoint takes. GraphQL never exposed it, which is why the link
+	// mutations were classified `coupled` until this read carried it.
+	ID     int64  `json:"id"`
 	NodeID string `json:"node_id"`
 	// ParentIssueURL is null for an issue with no parent, and an API URL
 	// ending in /issues/<number> otherwise.
@@ -87,8 +97,16 @@ func resolveIssueRef(ctx context.Context, c *Client, owner, repo string, number 
 		// as success would hand an empty ID to a mutation.
 		return nil, fmt.Errorf("resolve issue %s/%s#%d: response carried no node_id", owner, repo, number)
 	}
+	if resp.ID == 0 {
+		// Same reasoning as the node_id guard, for the other id. A zero
+		// database id would reach a link endpoint as `{"sub_issue_id": 0}`,
+		// which GitHub answers 404 — indistinguishable from "the issue is
+		// gone" at the call site. Fail here, where the cause is still known.
+		return nil, fmt.Errorf("resolve issue %s/%s#%d: response carried no id", owner, repo, number)
+	}
 	return &issueRef{
 		NodeID:       resp.NodeID,
+		DatabaseID:   resp.ID,
 		ParentNumber: parentIssueNumber(resp.ParentIssueURL),
 	}, nil
 }

@@ -16,6 +16,7 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/execution"
+	"github.com/nightgauge/nightgauge/internal/forge"
 	gh "github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/internal/intelligence/learning"
 	"github.com/nightgauge/nightgauge/internal/intelligence/routing"
@@ -34,6 +35,16 @@ import (
 type mockIssueSvc struct {
 	issues     map[string]*types.Issue // keyed by "owner/repo#number"
 	batchCalls []mockBatchCall         // recorded GetIssuesByNumbers invocations
+	// removeBlockedByCalls records every RemoveBlockedBy invocation in the
+	// canonical "owner/repo#number" form of both refs, so assertions can pin
+	// which pair of issues the scheduler actually unlinked.
+	removeBlockedByCalls []mockRemoveBlockedByCall
+}
+
+// mockRemoveBlockedByCall is one recorded RemoveBlockedBy invocation.
+type mockRemoveBlockedByCall struct {
+	blocked forge.IssueRef
+	blocker forge.IssueRef
 }
 
 func newMockIssueSvc() *mockIssueSvc {
@@ -83,7 +94,9 @@ func (m *mockIssueSvc) CloseIssue(_ context.Context, _ string) error {
 	return fmt.Errorf("not implemented")
 }
 
-func (m *mockIssueSvc) RemoveBlockedBy(_ context.Context, _, _ string) error {
+func (m *mockIssueSvc) RemoveBlockedBy(_ context.Context, blocked, blocker forge.IssueRef) error {
+	m.removeBlockedByCalls = append(m.removeBlockedByCalls,
+		mockRemoveBlockedByCall{blocked: blocked, blocker: blocker})
 	return nil
 }
 
@@ -2654,5 +2667,58 @@ func TestRunIdentity_SchedulerPhaseArmsAreIdentityGated(t *testing.T) {
 	}
 	if got := s.RunIDForIssue(9999); got != "" {
 		t.Errorf("RunIDForIssue for an unrun issue = %q, want empty", got)
+	}
+}
+
+// TestCircularBlockedByAutoFixActuallyFires pins the repair that #955 reported
+// but never performed. isBlocked's circular-dependency branch used to be
+// guarded on item.NodeID != "", and types.BoardItem.NodeID is never populated
+// on the GitHub path (board.go's nodeToItem sets item.ID and the board query
+// does not select the issue's own node id). So the guard was permanently
+// false: the scheduler logged "AUTO-FIX: removed circular blockedBy" on every
+// scan while the mutation never ran, and the sub-issue stayed blocked by its
+// own parent epic forever.
+//
+// The fixture is therefore deliberately shaped like a real board item: NodeID
+// empty on the item AND on the blocker, with only numbers and repositories
+// present. Against the old NodeID-guarded, node-ID-argument code this test
+// fails — RemoveBlockedBy is never called and removeBlockedByCalls is empty.
+// It can only pass once the call is keyed on refs the board item actually
+// carries. TestIsBlocked_CircularEpicDependency does not catch this: it
+// asserts only the unblocked return value, which the old `continue` produced
+// whether or not the removal happened.
+func TestCircularBlockedByAutoFixActuallyFires(t *testing.T) {
+	issueSvc := newMockIssueSvc()
+	s := &Scheduler{issueSvc: issueSvc, owner: "nightgauge"}
+	item := types.BoardItem{
+		// No NodeID anywhere — exactly what the GitHub board path yields.
+		Number:       163,
+		Repo:         "nightgauge/angular",
+		ParentNumber: 152,
+		BlockedBy: []types.BlockingRef{
+			{Number: 152, Title: "Epic: Tests", State: "OPEN"},
+		},
+	}
+
+	blocked, err := s.isBlocked(context.Background(), item)
+	if err != nil {
+		t.Fatalf("isBlocked error: %v", err)
+	}
+	if blocked {
+		t.Error("expected not blocked — circular epic dependency should be auto-removed")
+	}
+
+	if len(issueSvc.removeBlockedByCalls) != 1 {
+		t.Fatalf("RemoveBlockedBy called %d times, want 1 — the auto-fix logged a repair it did not perform (#955)",
+			len(issueSvc.removeBlockedByCalls))
+	}
+	call := issueSvc.removeBlockedByCalls[0]
+	wantBlocked := forge.IssueRef{Owner: "nightgauge", Repo: "angular", Number: 163}
+	wantBlocker := forge.IssueRef{Owner: "nightgauge", Repo: "angular", Number: 152}
+	if call.blocked != wantBlocked {
+		t.Errorf("blocked ref = %s, want %s", call.blocked, wantBlocked)
+	}
+	if call.blocker != wantBlocker {
+		t.Errorf("blocker ref = %s, want %s", call.blocker, wantBlocker)
 	}
 }

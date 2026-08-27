@@ -35,7 +35,7 @@ func TestLabelList(t *testing.T) {
 	]`
 
 	client, cleanup := mockForgeServer(t,
-		map[string]string{"/repos/nightgauge/nightgauge/labels": listResp})
+		map[string]string{"GET /repos/nightgauge/nightgauge/labels": listResp})
 	defer cleanup()
 
 	svc := NewLabelService(client, "nightgauge", "nightgauge")
@@ -62,7 +62,7 @@ func TestLabelList(t *testing.T) {
 
 func TestLabelList_Empty(t *testing.T) {
 	client, cleanup := mockForgeServer(t,
-		map[string]string{"/repos/nightgauge/nightgauge/labels": `[]`})
+		map[string]string{"GET /repos/nightgauge/nightgauge/labels": `[]`})
 	defer cleanup()
 
 	svc := NewLabelService(client, "nightgauge", "nightgauge")
@@ -92,8 +92,8 @@ func TestLabelCreate_New(t *testing.T) {
 	}`
 
 	client, cleanup := mockForgeServer(t, map[string]string{
-		"/repos/nightgauge/nightgauge/labels": `[]`,
-		"/repos/nightgauge/nightgauge":        `{"node_id":"R_kgDOHNxxx"}`,
+		"GET /repos/nightgauge/nightgauge/labels": `[]`,
+		"GET /repos/nightgauge/nightgauge":        `{"node_id":"R_kgDOHNxxx"}`,
 	}, createResp)
 	defer cleanup()
 
@@ -121,7 +121,7 @@ func TestLabelCreate_Existing(t *testing.T) {
 	]`
 
 	client, cleanup := mockForgeServer(t,
-		map[string]string{"/repos/nightgauge/nightgauge/labels": listResp})
+		map[string]string{"GET /repos/nightgauge/nightgauge/labels": listResp})
 	defer cleanup()
 
 	svc := NewLabelService(client, "nightgauge", "nightgauge")
@@ -153,8 +153,8 @@ func TestLabelCreate_DefaultColor(t *testing.T) {
 	}`
 
 	client, cleanup := mockForgeServer(t, map[string]string{
-		"/repos/nightgauge/nightgauge/labels": `[]`,
-		"/repos/nightgauge/nightgauge":        `{"node_id":"R_kgDOHNxxx"}`,
+		"GET /repos/nightgauge/nightgauge/labels": `[]`,
+		"GET /repos/nightgauge/nightgauge":        `{"node_id":"R_kgDOHNxxx"}`,
 	}, createResp)
 	defer cleanup()
 

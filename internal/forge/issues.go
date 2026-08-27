@@ -2,9 +2,29 @@ package forge
 
 import (
 	"context"
+	"strconv"
 
 	forgetypes "github.com/nightgauge/nightgauge/internal/forge/types"
 )
+
+// IssueRef identifies one issue by number, carrying its own owner and repo.
+//
+// Both sides of a link carry their own repository because cross-repository
+// linking is a live path in this tree, not a hypothetical: internal/audit's
+// issue creator resolves the epic's repository and the sub-issue's repository
+// from different sources and they routinely differ. A single owner/repo pair
+// shared by both ends of the call would be silently wrong there — it would
+// link within whichever repository the caller happened to name.
+type IssueRef struct {
+	Owner  string
+	Repo   string
+	Number int
+}
+
+// String renders the canonical "owner/repo#number" form used in errors.
+func (r IssueRef) String() string {
+	return r.Owner + "/" + r.Repo + "#" + strconv.Itoa(r.Number)
+}
 
 // UpdateIssueOptions describes a partial update to an existing issue. All
 // fields are pointers so callers can distinguish "do not change" (nil) from
@@ -44,13 +64,17 @@ type IssueService interface {
 
 	// Sub-issue linking (GitHub-native; GitLab adapters may emulate via
 	// related issues with a documented mapping).
-	AddSubIssue(ctx context.Context, parentID, childID string) error
-	RemoveSubIssue(ctx context.Context, parentID, childID string) error
+	//
+	// These take references rather than node IDs. The REST endpoints behind
+	// them address issues by number and database id, so a caller that already
+	// knows the number no longer pays a read to turn it into a node ID.
+	AddSubIssue(ctx context.Context, parent, child IssueRef) error
+	RemoveSubIssue(ctx context.Context, parent, child IssueRef) error
 	LinkSubIssue(ctx context.Context, owner, repo string, parentNumber, childNumber int) error
 
 	// Blocking relationships.
-	AddBlockedBy(ctx context.Context, blockedID, blockerID string) error
-	RemoveBlockedBy(ctx context.Context, blockedID, blockerID string) error
+	AddBlockedBy(ctx context.Context, blocked, blocker IssueRef) error
+	RemoveBlockedBy(ctx context.Context, blocked, blocker IssueRef) error
 
 	// Labels.
 	AddLabels(ctx context.Context, issueID string, labelIDs []string) error

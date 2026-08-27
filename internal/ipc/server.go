@@ -2317,12 +2317,9 @@ func (s *Server) registerMethods() {
 			return nil, err
 		}
 		svc := gh.NewIssueService(c)
-		// Get epic to find its node ID
-		epic, err := svc.GetIssue(ctx, p.Owner, p.Repo, p.EpicNumber)
-		if err != nil {
-			return nil, fmt.Errorf("fetch epic #%d: %w", p.EpicNumber, err)
-		}
-		// Get repo ID for creating the issue
+		// The epic needs no read: the sub-issue endpoint addresses it by
+		// number. Only CreateIssue still needs a node ID, and that is the
+		// repository's, below.
 		repoID, err := c.GetRepositoryID(ctx, p.Owner, p.Repo)
 		if err != nil {
 			return nil, fmt.Errorf("get repo ID: %w", err)
@@ -2333,7 +2330,10 @@ func (s *Server) registerMethods() {
 			return nil, fmt.Errorf("create issue: %w", err)
 		}
 		// Link as sub-issue
-		if err := svc.AddSubIssue(ctx, epic.NodeID, created.NodeID); err != nil {
+		if err := svc.AddSubIssue(ctx,
+			forge.IssueRef{Owner: p.Owner, Repo: p.Repo, Number: p.EpicNumber},
+			forge.IssueRef{Owner: p.Owner, Repo: p.Repo, Number: created.Number},
+		); err != nil {
 			return nil, fmt.Errorf("link sub-issue: %w", err)
 		}
 		return created, nil
@@ -2350,15 +2350,12 @@ func (s *Server) registerMethods() {
 			return nil, err
 		}
 		svc := gh.NewIssueService(c)
-		epic, err := svc.GetIssue(ctx, p.Owner, p.Repo, p.EpicNumber)
-		if err != nil {
-			return nil, fmt.Errorf("fetch epic: %w", err)
-		}
-		child, err := svc.GetIssue(ctx, p.Owner, p.Repo, p.IssueNumber)
-		if err != nil {
-			return nil, fmt.Errorf("fetch child issue: %w", err)
-		}
-		if err := svc.AddSubIssue(ctx, epic.NodeID, child.NodeID); err != nil {
+		// Both GetIssue reads that used to precede this existed only to turn
+		// two numbers into two node IDs.
+		if err := svc.AddSubIssue(ctx,
+			forge.IssueRef{Owner: p.Owner, Repo: p.Repo, Number: p.EpicNumber},
+			forge.IssueRef{Owner: p.Owner, Repo: p.Repo, Number: p.IssueNumber},
+		); err != nil {
 			return nil, err
 		}
 		return map[string]string{"status": "ok"}, nil

@@ -6,6 +6,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/nightgauge/nightgauge/internal/forge"
 )
 
 // IssueCreatorConfig holds configuration for issue creation.
@@ -36,12 +38,20 @@ type IssueCreationResult struct {
 	Errors         []string `json:"errors,omitempty"`
 }
 
+// issueHandle is one created-or-found issue, carrying both identifiers the
+// creation flow needs: the reference the issue-link REST endpoints take, and
+// the node ID the ProjectV2 board operations take.
+type issueHandle struct {
+	NodeID string
+	Ref    forge.IssueRef
+}
+
 // IssueCreator interface for GitHub operations (allows mocking in tests).
 type IssueCreator interface {
 	GetRepositoryID(ctx context.Context, owner, repo string) (string, error)
 	CreateIssueWithID(ctx context.Context, owner, repo, title, body string, labels []string) (nodeID string, number int, err error)
-	AddSubIssue(ctx context.Context, parentNodeID, childNodeID string) error
-	AddBlockedBy(ctx context.Context, blockedNodeID, blockerNodeID string) error
+	AddSubIssue(ctx context.Context, parent, child forge.IssueRef) error
+	AddBlockedBy(ctx context.Context, blocked, blocker forge.IssueRef) error
 	AddToProjectBoard(ctx context.Context, owner string, projectNumber int, issueNodeID string) error
 	SetProjectItemStatus(ctx context.Context, owner string, projectNumber int, issueNodeID, status string) error
 	SearchOpenIssueByTitle(ctx context.Context, owner, repo, title string) (number int, nodeID string, found bool, err error)
@@ -191,8 +201,14 @@ func RunIssueCreation(ctx context.Context, report *SynthesisReport, cfg IssueCre
 
 	epics := GroupFindingsByEpic(report)
 
-	// Track nodeID per finding ID so we can wire blockedBy later.
-	findingNodeIDs := make(map[string]string) // findingID → nodeID
+	// Track each created issue per finding ID so we can wire blockedBy later.
+	//
+	// BOTH identifiers are kept, and both are needed. The link endpoints
+	// address issues by owner/repo/number; AddToProjectBoard and
+	// SetProjectItemStatus are ProjectV2 operations, which are GraphQL without
+	// exception and take node IDs. Keeping only one would force a read to
+	// recover the other.
+	findingIssues := make(map[string]issueHandle) // findingID → handle
 
 	// epicNodeIDs maps epic title → nodeID (for board addition).
 	epicNodeIDs := make(map[string]string)
@@ -220,27 +236,30 @@ func RunIssueCreation(ctx context.Context, report *SynthesisReport, cfg IssueCre
 		epicBody := GenerateEpicBody(epic)
 
 		// Check for existing epic.
-		_, existingNodeID, found, err := creator.SearchOpenIssueByTitle(ctx, cfg.Owner, epicRepo, epicTitle)
+		existingNumber, existingNodeID, found, err := creator.SearchOpenIssueByTitle(ctx, cfg.Owner, epicRepo, epicTitle)
 		if err != nil {
 			result.Errors = append(result.Errors, fmt.Sprintf("search epic %q: %v", epicTitle, err))
 		}
 
 		var epicNodeID string
+		epicRef := forge.IssueRef{Owner: cfg.Owner, Repo: epicRepo}
 
 		if found {
 			result.IssuesSkipped++
 			epicNodeID = existingNodeID
+			epicRef.Number = existingNumber
 			fmt.Printf("[SKIP] Epic already exists: %s\n", epicTitle)
 		} else if cfg.DryRun {
 			fmt.Printf("[DRY-RUN] Would create epic: %s (repo: %s)\n", epicTitle, epicRepo)
 			fmt.Printf("  Body preview: %d chars\n", len(epicBody))
 		} else {
-			nodeID, _, createErr := creator.CreateIssueWithID(ctx, cfg.Owner, epicRepo, epicTitle, epicBody, epicLabels)
+			nodeID, number, createErr := creator.CreateIssueWithID(ctx, cfg.Owner, epicRepo, epicTitle, epicBody, epicLabels)
 			if createErr != nil {
 				result.Errors = append(result.Errors, fmt.Sprintf("create epic %q: %v", epicTitle, createErr))
 				continue
 			}
 			epicNodeID = nodeID
+			epicRef.Number = number
 			result.EpicsCreated++
 		}
 
@@ -262,14 +281,17 @@ func RunIssueCreation(ctx context.Context, report *SynthesisReport, cfg IssueCre
 				}
 			}
 
-			_, existingSubNodeID, subFound, searchErr := creator.SearchOpenIssueByTitle(ctx, cfg.Owner, subRepo, subTitle)
+			existingSubNumber, existingSubNodeID, subFound, searchErr := creator.SearchOpenIssueByTitle(ctx, cfg.Owner, subRepo, subTitle)
 			if searchErr != nil {
 				result.Errors = append(result.Errors, fmt.Sprintf("search sub-issue %q: %v", subTitle, searchErr))
 			}
 
 			if subFound {
 				result.IssuesSkipped++
-				findingNodeIDs[finding.ID] = existingSubNodeID
+				findingIssues[finding.ID] = issueHandle{
+					NodeID: existingSubNodeID,
+					Ref:    forge.IssueRef{Owner: cfg.Owner, Repo: subRepo, Number: existingSubNumber},
+				}
 				fmt.Printf("[SKIP] Sub-issue already exists: %s\n", subTitle)
 				continue
 			}
@@ -283,17 +305,29 @@ func RunIssueCreation(ctx context.Context, report *SynthesisReport, cfg IssueCre
 				continue
 			}
 
-			subNodeID, _, createErr := creator.CreateIssueWithID(ctx, cfg.Owner, subRepo, subTitle, subBody, labels)
+			subNodeID, subNumber, createErr := creator.CreateIssueWithID(ctx, cfg.Owner, subRepo, subTitle, subBody, labels)
 			if createErr != nil {
 				result.Errors = append(result.Errors, fmt.Sprintf("create sub-issue %q: %v", subTitle, createErr))
 				continue
 			}
 			result.IssuesCreated++
-			findingNodeIDs[finding.ID] = subNodeID
+			subHandle := issueHandle{
+				NodeID: subNodeID,
+				Ref:    forge.IssueRef{Owner: cfg.Owner, Repo: subRepo, Number: subNumber},
+			}
+			findingIssues[finding.ID] = subHandle
 
 			// Link as sub-issue under epic.
-			if epicNodeID != "" {
-				if linkErr := creator.AddSubIssue(ctx, epicNodeID, subNodeID); linkErr != nil {
+			//
+			// These two refs always name the SAME repository today, and that
+			// is a property of GroupFindingsByEpic rather than of this call:
+			// it keys epics on {dimension, repository}, so every finding in an
+			// epic carries the epic's own Repository. Written as two refs
+			// anyway, because the constraint lives in a different function and
+			// a caller here cannot see it -- the blocked-by pass below is the
+			// one that genuinely crosses repositories.
+			if epicRef.Number > 0 {
+				if linkErr := creator.AddSubIssue(ctx, epicRef, subHandle.Ref); linkErr != nil {
 					result.Errors = append(result.Errors, fmt.Sprintf("add sub-issue %q to epic %q: %v", subTitle, epicTitle, linkErr))
 				}
 			}
@@ -312,7 +346,8 @@ func RunIssueCreation(ctx context.Context, report *SynthesisReport, cfg IssueCre
 			}
 
 			for _, finding := range epic.Findings {
-				subNodeID, ok := findingNodeIDs[finding.ID]
+				sub, ok := findingIssues[finding.ID]
+				subNodeID := sub.NodeID
 				if !ok || subNodeID == "" {
 					continue
 				}
@@ -336,17 +371,20 @@ func RunIssueCreation(ctx context.Context, report *SynthesisReport, cfg IssueCre
 				if len(finding.BlockedBy) == 0 {
 					continue
 				}
-				blockedNodeID, ok := findingNodeIDs[finding.ID]
-				if !ok || blockedNodeID == "" {
+				blocked, ok := findingIssues[finding.ID]
+				if !ok || blocked.Ref.Number == 0 {
 					continue
 				}
 				for _, blockerID := range finding.BlockedBy {
-					blockerNodeID, ok := findingNodeIDs[blockerID]
-					if !ok || blockerNodeID == "" {
+					blocker, ok := findingIssues[blockerID]
+					if !ok || blocker.Ref.Number == 0 {
 						result.Errors = append(result.Errors, fmt.Sprintf("blocker finding %q not found for finding %q", blockerID, finding.ID))
 						continue
 					}
-					if err := creator.AddBlockedBy(ctx, blockedNodeID, blockerNodeID); err != nil {
+					// Crosses epic AND repository boundaries by construction:
+					// this pass walks every dimension, so a finding may be
+					// blocked by one filed in a different repository.
+					if err := creator.AddBlockedBy(ctx, blocked.Ref, blocker.Ref); err != nil {
 						result.Errors = append(result.Errors, fmt.Sprintf("addBlockedBy %q → %q: %v", finding.ID, blockerID, err))
 					} else {
 						result.BlockedByAdded++
