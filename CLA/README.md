@@ -112,9 +112,10 @@ an updated list.
 The gate is the first-party workflow
 [`.github/workflows/cla.yml`](../.github/workflows/cla.yml) — no third-party
 actions; it talks to the GitHub API directly (#164). It needs two things it
-cannot create itself. **Until both exist, the check logs a loud "CLA gate NOT
-ENFORCED" warning and passes (fail-soft) so development is never blocked; the
-moment both exist it enforces (fail-closed) with no workflow edit.**
+cannot create itself. **It fails closed: until both exist, every pull request
+fails the `cla` check with `Missing required environment`.** Create both before
+making `cla` a required status check — there is no grace period, and no
+workflow edit is needed once they exist.
 
 1. **Create the private signature store repo** `nightgauge/.cla-signatures`.
    Signatures are stored **there**, not in this source tree, so contributor
