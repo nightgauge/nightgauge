@@ -1300,6 +1300,39 @@ status — so a watch that never ran can look like a watch that completed. GNU
 coreutils ships it as `gtimeout` if installed. Prefer a bounded poll loop, and
 always read the log body rather than the exit code alone.
 
+### A poll loop must distinguish "false" from "I could not measure it"
+
+The natural form of a wait-for-CI loop exits on the wrong condition:
+
+```bash
+# WRONG — exits when `gh` ERRORS, not when the checks settle
+until ! gh pr checks "$N" --jq 'any(.[]; .bucket=="pending")' | grep -q true; do
+  sleep 30
+done
+echo SETTLED
+```
+
+A failed command produces no output, so `grep` finds no `true`, so the loop
+exits and reports `SETTLED`. During a GitHub API outage this printed `SETTLED`
+while the PR still had two pending checks — the loop reported a state it had
+never observed.
+
+Capture the output, bail to a `sleep` on a non-zero exit, and compare against
+the literal `false` rather than testing for the absence of `true`:
+
+```bash
+out=$(gh pr checks "$N" --json bucket --jq 'any(.[]; .bucket=="pending")' 2>/dev/null) \
+  || { sleep 30; continue; }
+[ "$out" = "false" ] && break
+```
+
+Bound the loop with an iteration count as well, so an endpoint that stays
+unreachable fails loudly instead of spinning.
+
+This is the same family as `ci-local.sh`'s exit code and `timeout`'s 127 above:
+**the wrapper's exit status is not the measurement.** Any check whose "pass"
+branch is reachable by the command failing is not a check.
+
 ## VSCode Extension Diagnostics
 
 ### Where to look when something fails
