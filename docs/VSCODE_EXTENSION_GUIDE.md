@@ -641,21 +641,14 @@ Access settings via **Cmd+, / Ctrl+,** when sidebar is active, or **Nightgauge: 
 
 ### Core Settings
 
-| Setting                   | Type   | Default                | Description                                        |
-| ------------------------- | ------ | ---------------------- | -------------------------------------------------- |
-| `nightgauge.authProvider` | enum   | `max`                  | Auth provider: `max` (Claude), `bedrock`, `vertex` |
-| `nightgauge.defaultModel` | enum   | `sonnet`               | Model: `sonnet` (recommended), `opus`, `haiku`     |
-| `nightgauge.contextPath`  | string | `.nightgauge/pipeline` | Path to pipeline context files                     |
-| `nightgauge.plansPath`    | string | `.nightgauge/plans`    | Path to plan documents                             |
+| Setting | Type | Default | Description |
+| ------- | ---- | ------- | ----------- |
 
 ### Execution Adapter
 
-| Setting                        | Type   | Default            | Description                                                            |
-| ------------------------------ | ------ | ------------------ | ---------------------------------------------------------------------- |
-| `nightgauge.core.adapter`      | enum   | `claude`           | Execution adapter: `claude` (CLI), `codex`, `gemini`, `gemini-sdk`     |
-| `nightgauge.gemini.authMethod` | enum   | `api-key`          | For Gemini: `api-key`, `google-login`, `vertex-ai`                     |
-| `nightgauge.gemini.model`      | enum   | `gemini-2.5-flash` | Gemini model: `gemini-2.5-pro`, `gemini-2.5-flash`, `gemini-2.0-flash` |
-| `nightgauge.gemini.apiKey`     | string | (empty)            | Gemini API key (stored securely, or use env var)                       |
+| Setting                    | Type   | Default | Description                                      |
+| -------------------------- | ------ | ------- | ------------------------------------------------ |
+| `nightgauge.gemini.apiKey` | string | (empty) | Gemini API key (stored securely, or use env var) |
 
 ### Ready Items (Project Board)
 
@@ -920,7 +913,7 @@ Quick reference for built-in shortcuts. Customize via VSCode Keybindings (Cmd+K 
 
 - Your Claude API plan doesn't include requested model
 - Solution:
-  1. Settings → `nightgauge.defaultModel` → change to `sonnet`
+  1. Set `ui.core.default_model` to `sonnet` in `.nightgauge/config.yaml`
   2. Or upgrade Claude API plan at Anthropic console
 
 **"Token budget exceeded"**

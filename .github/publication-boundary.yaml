@@ -652,7 +652,7 @@ issue_references:
   # lesson as the line above, now with a number attached: the bump is not a
   # separate chore from the re-measure, it is the first half of it.
   # NEVER raise this number. Lower it as the sweep progresses.
-  tree_baseline: 6093
+  tree_baseline: 6063
   allow_paths:
     # Files that DEFINE or TEST the rule must contain example violations.
     - ".github/publication-boundary.yaml"

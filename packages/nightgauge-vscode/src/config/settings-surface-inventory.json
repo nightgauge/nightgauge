@@ -14,56 +14,14 @@
     {
       "setting": "nightgauge.dashboardUrl",
       "classification": "derived",
-      "runtime_consumer": "src/views/dashboard/Dashboard.ts",
-      "storage": "vscode"
-    },
-    {
-      "setting": "nightgauge.authProvider",
-      "schema_path": "ui.core.auth_provider",
-      "runtime_consumer": "src/config/coreSettings.ts",
-      "storage": "vscode"
-    },
-    {
-      "setting": "nightgauge.defaultModel",
-      "schema_path": "ui.core.default_model",
-      "runtime_consumer": "src/config/coreSettings.ts",
-      "storage": "vscode"
-    },
-    {
-      "setting": "nightgauge.contextPath",
-      "schema_path": "ui.core.context_path",
-      "runtime_consumer": "src/config/coreSettings.ts",
-      "storage": "vscode"
-    },
-    {
-      "setting": "nightgauge.plansPath",
-      "schema_path": "ui.core.plans_path",
-      "runtime_consumer": "src/config/coreSettings.ts",
-      "storage": "vscode"
-    },
-    {
-      "setting": "nightgauge.core.*",
-      "schema_path": "ui.core",
-      "runtime_consumer": "src/config/coreSettings.ts",
-      "storage": "vscode"
-    },
-    {
-      "setting": "nightgauge.gemini.*",
-      "schema_path": "ui.core.gemini",
-      "runtime_consumer": "src/config/coreSettings.ts",
+      "runtime_consumer": "src/commands/auditCommands.ts",
       "storage": "vscode"
     },
     {
       "setting": "nightgauge.readyItems.*",
       "schema_path": "ui.ready_items",
-      "runtime_consumer": "src/config/readyItemsSettings.ts",
+      "runtime_consumer": "src/commands/filterProjectBoard.ts",
       "storage": "runtime"
-    },
-    {
-      "setting": "nightgauge.outputWindow.*",
-      "schema_path": "ui.output_window",
-      "runtime_consumer": "src/config/outputWindowSettings.ts",
-      "storage": "vscode"
     },
     {
       "setting": "nightgauge.dashboard.*",
@@ -74,31 +32,19 @@
     {
       "setting": "nightgauge.plugins.*",
       "schema_path": "ui.plugins",
-      "runtime_consumer": "src/services/PluginSetupService.ts",
-      "storage": "vscode"
-    },
-    {
-      "setting": "nightgauge.notifications.*",
-      "schema_path": "ui.notifications",
-      "runtime_consumer": "src/config/notificationSettings.ts",
+      "runtime_consumer": "src/services/CodexSetupService.ts",
       "storage": "vscode"
     },
     {
       "setting": "nightgauge.pipeline.*",
       "schema_path": "ui.pipeline",
-      "runtime_consumer": "src/config/pipelineUISettings.ts",
-      "storage": "vscode"
-    },
-    {
-      "setting": "nightgauge.orchestration.*",
-      "schema_path": "orchestration",
-      "runtime_consumer": "src/config/configMergeEngine.ts",
+      "runtime_consumer": "src/commands/retry-success.ts",
       "storage": "vscode"
     },
     {
       "setting": "nightgauge.projectBoard.*",
       "schema_path": "ui.project_board",
-      "runtime_consumer": "src/config/projectBoardSettings.ts",
+      "runtime_consumer": "src/commands/epicGroupCommands.ts",
       "storage": "vscode"
     },
     {
@@ -108,40 +54,16 @@
       "storage": "vscode"
     },
     {
-      "setting": "nightgauge.sidebar.*",
-      "schema_path": "ui.sidebar",
-      "runtime_consumer": "src/config/sidebarSettings.ts",
-      "storage": "vscode"
-    },
-    {
       "setting": "nightgauge.audit.*",
       "schema_path": "audit",
       "classification": "deprecated",
-      "runtime_consumer": "src/services/AuditLogService.ts",
+      "runtime_consumer": "src/views/dashboard/Dashboard.ts",
       "storage": "vscode"
     },
     {
       "setting": "nightgauge.telemetry.*",
       "classification": "extension-only",
       "runtime_consumer": "src/services/TelemetryConsentService.ts",
-      "storage": "vscode"
-    },
-    {
-      "setting": "nightgauge.warnings.*",
-      "schema_path": "ui.warnings",
-      "runtime_consumer": "src/config/warningSettings.ts",
-      "storage": "vscode"
-    },
-    {
-      "setting": "nightgauge.agentTeams.*",
-      "classification": "extension-only",
-      "runtime_consumer": "src/services/HeadlessOrchestrator.ts",
-      "storage": "vscode"
-    },
-    {
-      "setting": "nightgauge.limits.*",
-      "schema_path": "ui.limits",
-      "runtime_consumer": "src/config/limitsSettings.ts",
       "storage": "vscode"
     },
     {
