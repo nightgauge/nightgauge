@@ -4,6 +4,20 @@ import { getDefaultConfig } from "../../../src/config/schema";
 import type { NightgaugeConfig } from "../../../src/views/settings/types";
 import type { ConfigSourceMap } from "../../../src/config/schema";
 
+/**
+ * Extract just the `enforcement.dependencies.mode` <select> element.
+ *
+ * The page renders several `<select>`s that share option values (#967 added a
+ * `sanitization.mode` selector whose default is also `warn`), so a
+ * whole-document `<option value="warn" selected>` match no longer identifies
+ * this section's control.
+ */
+function enforcementModeSelect(html: string): string {
+  const match = html.match(/<select[^>]*id="enforcement\.dependencies\.mode"[\s\S]*?<\/select>/);
+  expect(match).toBeTruthy();
+  return match![0];
+}
+
 describe("SettingsHtml enforcement section", () => {
   it("renders enforcement section controls", () => {
     const config = getDefaultConfig() as NightgaugeConfig;
@@ -30,7 +44,7 @@ describe("SettingsHtml enforcement section", () => {
     expect(html).toMatch(/id="enforcement\.dependencies\.enabled"[^>]*checked/);
 
     // mode defaults to warn (selected)
-    expect(html).toContain('<option value="warn" selected>');
+    expect(enforcementModeSelect(html)).toContain('<option value="warn" selected>');
 
     // check_transitive defaults to false (not checked)
     const checkTransitiveMatch = html.match(
@@ -57,8 +71,9 @@ describe("SettingsHtml enforcement section", () => {
     expect(enabledMatch![0]).not.toContain("checked");
 
     // mode is block (selected)
-    expect(html).toContain('<option value="block" selected>');
-    expect(html).not.toMatch(/<option value="warn" selected>/);
+    const modeSelect = enforcementModeSelect(html);
+    expect(modeSelect).toContain('<option value="block" selected>');
+    expect(modeSelect).not.toMatch(/<option value="warn" selected>/);
 
     // check_transitive is true (checked)
     expect(html).toMatch(/id="enforcement\.dependencies\.check_transitive"[^>]*checked/);

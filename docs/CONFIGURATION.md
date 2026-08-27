@@ -4269,88 +4269,43 @@ export NIGHTGAUGE_VALIDATION_VERIFY_UI_TESTS="strict"
 
 ### sanitization
 
-Prompt injection sanitization and firewall settings. Controls destructive
-command detection, allowlist/blocklist patterns, and directory-scoped bypass.
+Prompt-injection sanitization for the PreToolUse workflow gate. A single
+setting — `mode` — decides what happens when a Bash command or Task prompt
+matches a built-in destructive / exfiltration / escalation / traversal
+pattern. The pattern set is built into the binary and is not configurable.
 
-| Option             | Type     | Default     | Description                                                             |
-| ------------------ | -------- | ----------- | ----------------------------------------------------------------------- |
-| `enabled`          | boolean  | `true`      | Enable output sanitization                                              |
-| `mode`             | string   | `warn`      | Firewall mode: `warn` (log + allow), `block` (reject), `disabled`       |
-| `sanitize_input`   | boolean  | `false`     | Enable input (prompt) sanitization                                      |
-| `logging`          | boolean  | `true`      | Log sanitization events to NDJSON log                                   |
-| `warn_only`        | boolean  | `false`     | **Deprecated** — use `mode` instead. `true` → `warn`, `false` → `block` |
-| `allowlist`        | string[] | `[]`        | Regex patterns for commands to bypass sanitization                      |
-| `blocklist`        | string[] | `[]`        | Additional regex patterns to block                                      |
-| `safe_directories` | string[] | (see below) | Project-relative directories safe for `rm` commands                     |
+| Option | Type   | Default | Description                                                       |
+| ------ | ------ | ------- | ----------------------------------------------------------------- |
+| `mode` | string | `warn`  | Firewall mode: `warn` (log + allow), `block` (reject), `disabled` |
 
-#### sanitization.safe_directories
-
-Directory-scoped firewall bypass (Issue #785). When a `rm -rf` (or `rm -f`)
-command targets **only** paths under these directories, it bypasses the
-destructive pattern check with audit logging.
-
-**Default directories:**
-
-| Directory        | Purpose               |
-| ---------------- | --------------------- |
-| `./dist`         | Build output          |
-| `./build`        | Build output          |
-| `./node_modules` | npm dependencies      |
-| `./.next`        | Next.js build cache   |
-| `./coverage`     | Test coverage reports |
-| `./out`          | Generic output        |
-| `./.cache`       | Build/tool caches     |
-
-**Security notes:**
-
-- Paths are resolved to absolute paths using `realpath` (with fallback) to
-  prevent `../` traversal attacks.
-- Commands targeting paths outside the project root are always blocked.
-- Commands targeting the project root itself (`rm -rf .`) are blocked.
-- If **any** target in a multi-target `rm` is outside safe directories, the
-  entire command is blocked.
-- Only `rm` commands with `-r` and/or `-f` flags are evaluated. Other
-  destructive patterns (dd, mkfs, etc.) are unaffected.
-
-**Check order:** The safe directory check runs **after** the allowlist (which
-has highest priority) but **before** destructive pattern matching.
+There is no directory-scoped bypass and no per-repo pattern list. Every
+command is evaluated against the same built-in pattern set; `mode` alone
+decides warn vs block.
 
 **Example:**
 
 ```yaml
 sanitization:
-  enabled: true
-  mode: warn # warn (default), block, disabled
-  safe_directories:
-    - ./dist
-    - ./build
-    - ./node_modules
-    - ./.next
-    - ./coverage
-    - ./out
-    - ./.cache
-  allowlist:
-    - rm -rf ./node_modules
+  mode: warn # warn (default: log + allow), block, disabled
 ```
 
-> **Mode precedence:** If both `mode` and `warn_only` are set, `mode` takes
-> precedence. The `warn_only` field is deprecated and will be removed in a
-> future release.
+> **Default:** when `sanitization.mode` is unset the effective mode is `warn` —
+> matches are appended to `.nightgauge/logs/sanitization.log` and the command is
+> allowed. Enforcement is opt-in via `mode: block`.
 >
 > **Scope:** Mode only affects Gate 6 (sanitization pattern matching). Security
 > gates (push-to-main, force-push, destructive-git, secret-read, secret-write)
 > always block regardless of mode.
 
-**Environment overrides:**
-
-```bash
-export NIGHTGAUGE_SKIP_SANITIZATION=1          # Disable all sanitization
-export NIGHTGAUGE_SANITIZATION_WARN_ONLY=1     # Warn instead of block
-```
+**Escape hatch:** `NIGHTGAUGE_SKIP_WORKFLOW_GATE=1` bypasses the operation
+gates and the sanitization scan for one command. Secret read/write and
+pre-push validation stay ON. MUST NOT be set in skillRunner or orchestrator
+environments.
 
 **Used by:**
 
-- `workflow-gate.sh` - PreToolUse hook for Bash commands
+- `nightgauge hook workflow-gate` (PreToolUse:Bash) and
+  `nightgauge hook sanitize-prompt` (PreToolUse:Task)
 
 ---
 

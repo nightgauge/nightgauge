@@ -1680,27 +1680,16 @@ export type SanitizationMode = z.infer<typeof SanitizationModeSchema>;
  * Prompt injection sanitization settings
  */
 export const SanitizationConfigSchema = z.object({
-  enabled: z.boolean().optional(),
-  sanitize_input: z.boolean().optional(),
-  logging: z.boolean().optional(),
   mode: SanitizationModeSchema.optional(),
-  /** @deprecated Use `mode` instead. Kept for backward compatibility. */
-  warn_only: z.boolean().optional(),
-  allowlist: z.array(z.string()).optional(),
-  blocklist: z.array(z.string()).optional(),
-  safe_directories: z.array(z.string()).optional(),
 });
 export type SanitizationConfig = z.infer<typeof SanitizationConfigSchema>;
 
 /**
  * Resolve the effective sanitization mode from config.
- * Priority: mode field > warn_only legacy field > default ("warn").
+ * Returns the `mode` field when set, otherwise the default ("warn").
  */
 export function resolveSanitizationMode(cfg: SanitizationConfig | undefined): SanitizationMode {
-  if (!cfg) return "warn";
-  if (cfg.mode) return cfg.mode;
-  if (cfg.warn_only != null) return cfg.warn_only ? "warn" : "block";
-  return "warn";
+  return cfg?.mode ?? "warn";
 }
 
 // ============================================================================
@@ -3798,22 +3787,7 @@ export const DEFAULT_CONFIG: NightgaugeConfig = {
     mobile_mcp_tests: "strict",
   },
   sanitization: {
-    enabled: true,
-    sanitize_input: false,
-    logging: true,
     mode: "warn",
-    warn_only: false,
-    allowlist: [],
-    blocklist: [],
-    safe_directories: [
-      "./dist",
-      "./build",
-      "./node_modules",
-      "./.next",
-      "./coverage",
-      "./out",
-      "./.cache",
-    ],
   },
   human_in_the_loop: {
     auto_accept_stages: true,

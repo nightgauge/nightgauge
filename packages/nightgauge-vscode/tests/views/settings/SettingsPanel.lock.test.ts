@@ -142,7 +142,7 @@ describe("SettingsPanel per-section lock behavior", () => {
       expect(isSectionLocked("branch.base", lockedSections)).toBe(false);
       expect(isSectionLocked("batch.max_issues", lockedSections)).toBe(false);
       expect(isSectionLocked("validation.require_tests", lockedSections)).toBe(false);
-      expect(isSectionLocked("sanitization.enabled", lockedSections)).toBe(false);
+      expect(isSectionLocked("sanitization.mode", lockedSections)).toBe(false);
       expect(isSectionLocked("human_in_the_loop.auto_accept_stages", lockedSections)).toBe(false);
       expect(isSectionLocked("ralph_loop.enabled", lockedSections)).toBe(false);
       expect(isSectionLocked("automations.enabled", lockedSections)).toBe(false);

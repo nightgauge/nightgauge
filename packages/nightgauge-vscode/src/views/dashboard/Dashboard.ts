@@ -56,10 +56,7 @@ import { ProjectIterationService } from "../../services/ProjectIterationService"
 import { IssueQueueService } from "../../services/IssueQueueService";
 import { CompletedIssuesService } from "../../services/CompletedIssuesService";
 import { RecommendationApplier } from "../../services/RecommendationApplier";
-import { AllowlistSuggestionService } from "../../services/AllowlistSuggestionService";
-import { NightgaugeYamlService } from "../settings/NightgaugeYamlService";
 import type { ProjectBoardData, StatusCounts } from "./ProjectBoardTypes";
-import type { AllowlistSuggestion } from "./FirewallTypes";
 import { Logger } from "../../utils/logger";
 import { getCoreSettings } from "../../config/coreSettings";
 import type { Container } from "../../bootstrap/Container";
@@ -140,12 +137,6 @@ type WebViewMessage =
       value: unknown;
     }
   | { type: "revertRecommendation"; category: string }
-  | {
-      type: "firewallAddAllowlist";
-      pattern: string;
-      suggestionType: "allowlist" | "safe_directory";
-    }
-  | { type: "firewallDismissSuggestion"; pattern: string }
   | { type: "scrollPosition"; scrollY: number }
   | { type: "loadMoreHistory" }
   | {
@@ -262,13 +253,6 @@ export class Dashboard implements vscode.Disposable {
   private costEstimate: import("@nightgauge/sdk").PipelineCostEstimate | null = null;
   /** Recommendation applier for config patches (Issue #787) */
   private recommendationApplier: RecommendationApplier | null = null;
-  /** Allowlist suggestion service (Issue #786) */
-  private allowlistSuggestionService = new AllowlistSuggestionService();
-  /** NightgaugeYaml service for config writes (Issue #786) */
-  private nightgaugeYamlService: NightgaugeYamlService | null = null;
-  /** Cached sanitization config for synchronous render access (Issue #786) */
-  private cachedAllowlist: string[] = [];
-  private cachedSafeDirs: string[] = [];
   /** Cached health check report from Run Pipeline Health command (Issue #1104) */
   private healthCheckReport: HealthCheckReport | null = null;
   /** Optional usage limits service for budget tracking section (Issue #1333) */
@@ -457,8 +441,6 @@ export class Dashboard implements vscode.Disposable {
         );
       }
       this.recommendationApplier = new RecommendationApplier(workspaceRoot);
-      this.nightgaugeYamlService = new NightgaugeYamlService(workspaceRoot);
-      this.refreshSanitizationConfigCache();
       this.discoveryActivityService = new DiscoveryActivityService(workspaceRoot);
 
       // Load history from TelemetryStore index (Issue #1007)
@@ -593,21 +575,6 @@ export class Dashboard implements vscode.Disposable {
 
     // Initialize the service
     await this.sanitizationLogService.initialize();
-  }
-
-  /**
-   * Refresh the cached sanitization config for synchronous render access (Issue #786).
-   * Called on init and after config mutations; errors are silently ignored
-   * so render remains non-blocking.
-   */
-  private async refreshSanitizationConfigCache(): Promise<void> {
-    try {
-      const result = await this.nightgaugeYamlService?.read();
-      this.cachedAllowlist = result?.config?.sanitization?.allowlist ?? [];
-      this.cachedSafeDirs = result?.config?.sanitization?.safe_directories ?? [];
-    } catch {
-      // Config read failed — keep existing cache values
-    }
   }
 
   /**
@@ -1504,22 +1471,12 @@ export class Dashboard implements vscode.Disposable {
           filters.timeRange === "hour" || filters.timeRange === "24h" ? "hour" : "day";
         const timeSeriesData = this.sanitizationLogService.getTimeSeriesData(filters, granularity);
 
-        // Generate allowlist suggestions using cached config (Issue #786)
-        const dismissedPatterns = this.state.getDismissedSuggestions();
-        const suggestions = this.allowlistSuggestionService.generateSuggestions(
-          this.sanitizationLogService!.getEvents(),
-          this.cachedAllowlist,
-          this.cachedSafeDirs,
-          dismissedPatterns
-        );
-
         firewallData = {
           events,
           filters,
           aggregates: firewallAggregates,
           timeSeriesData,
           granularity,
-          suggestions,
         };
       }
 
@@ -1872,50 +1829,6 @@ export class Dashboard implements vscode.Disposable {
             vscode.window.showErrorMessage(`Failed to revert: ${revertResult.error}`);
           }
           this.updatePanel("msg:revertRecommendation");
-        }
-        break;
-
-      case "firewallAddAllowlist":
-        // Add a suggested pattern to config.yaml (Issue #786)
-        if (
-          this.nightgaugeYamlService &&
-          typeof message.pattern === "string" &&
-          message.pattern.length > 0 &&
-          message.pattern.length <= 500 &&
-          (message.suggestionType === "allowlist" || message.suggestionType === "safe_directory")
-        ) {
-          // Validate safe_directory paths are workspace-relative
-          if (
-            message.suggestionType === "safe_directory" &&
-            (!message.pattern.startsWith("./") || message.pattern.includes(".."))
-          ) {
-            break;
-          }
-          const addResult =
-            message.suggestionType === "safe_directory"
-              ? await this.nightgaugeYamlService.addToSanitizationSafeDirectories(message.pattern)
-              : await this.nightgaugeYamlService.addToSanitizationAllowlist(message.pattern);
-          if (addResult.success) {
-            vscode.window.showInformationMessage(
-              `Added to ${message.suggestionType === "safe_directory" ? "safe_directories" : "allowlist"}: ${message.pattern}`
-            );
-          } else {
-            vscode.window.showErrorMessage(`Failed to update config: ${addResult.error}`);
-          }
-          await this.refreshSanitizationConfigCache();
-          this.updatePanel("msg:firewallAddAllowlist");
-        }
-        break;
-
-      case "firewallDismissSuggestion":
-        // Dismiss a suggestion (Issue #786)
-        if (
-          typeof message.pattern === "string" &&
-          message.pattern.length > 0 &&
-          message.pattern.length <= 500
-        ) {
-          await this.state.dismissSuggestion(message.pattern);
-          this.updatePanel("msg:firewallDismissSuggestion");
         }
         break;
 
@@ -4072,9 +3985,6 @@ export class Dashboard implements vscode.Disposable {
 
     // Dispose recommendation applier (Issue #787)
     this.recommendationApplier?.dispose();
-
-    // Dispose NightgaugeYaml service (Issue #786)
-    this.nightgaugeYamlService?.dispose();
 
     // Dispose diagnostic logger (Issue #780)
     this.logger.dispose();

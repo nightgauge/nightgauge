@@ -284,7 +284,6 @@ export interface FirewallDashboardData {
   aggregates: FirewallAggregates;
   timeSeriesData: import("./FirewallTypes").FirewallTimeSeriesPoint[];
   granularity: import("./FirewallTypes").TimeSeriesGranularity;
-  suggestions?: import("./FirewallTypes").AllowlistSuggestion[];
 }
 
 /**
@@ -758,11 +757,6 @@ const HISTORY_STORAGE_KEY = "nightgauge.dashboard.history";
  * Storage key for applied recommendation categories (Issue #787)
  */
 const APPLIED_RECOMMENDATIONS_KEY = "nightgauge.dashboard.appliedRecommendations";
-
-/**
- * Storage key for dismissed allowlist suggestions (Issue #786)
- */
-const DISMISSED_SUGGESTIONS_KEY = "nightgauge.dashboard.dismissedSuggestions";
 
 /**
  * Storage key for session start time (persists across VSCode restarts)
@@ -3251,30 +3245,6 @@ export class DashboardState {
     if (!this.workspaceState) return;
     const applied = this.getAppliedRecommendations().filter((c) => c !== category);
     await this.workspaceState.update(APPLIED_RECOMMENDATIONS_KEY, applied);
-  }
-
-  // =========================================================================
-  // Dismissed Allowlist Suggestions (Issue #786)
-  // =========================================================================
-
-  /**
-   * Get dismissed suggestion patterns from workspace storage
-   */
-  getDismissedSuggestions(): string[] {
-    if (!this.workspaceState) return [];
-    return this.workspaceState.get<string[]>(DISMISSED_SUGGESTIONS_KEY) ?? [];
-  }
-
-  /**
-   * Dismiss a suggestion pattern (persist to workspace storage)
-   */
-  async dismissSuggestion(pattern: string): Promise<void> {
-    if (!this.workspaceState) return;
-    const dismissed = this.getDismissedSuggestions();
-    if (!dismissed.includes(pattern)) {
-      dismissed.push(pattern);
-      await this.workspaceState.update(DISMISSED_SUGGESTIONS_KEY, dismissed);
-    }
   }
 
   // =========================================================================

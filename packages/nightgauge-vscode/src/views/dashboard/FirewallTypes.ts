@@ -198,23 +198,3 @@ export const EVENT_TYPE_COLORS: Record<SanitizationEventType, string> = {
   warned: "rgba(255, 206, 86, 0.8)", // Yellow
   bypassed: "rgba(75, 192, 75, 0.8)", // Green
 };
-
-/**
- * A suggested allowlist or safe_directory entry generated from blocked/warned events
- *
- * @see Issue #786 - Firewall Learning Mode
- */
-export interface AllowlistSuggestion {
-  /** The suggested pattern (regex for allowlist, path for safe_directory) */
-  pattern: string;
-  /** Type of suggestion: 'allowlist' (command regex) or 'safe_directory' (path) */
-  type: "allowlist" | "safe_directory";
-  /** Number of blocked/warned events this would cover */
-  frequency: number;
-  /** Timestamp of most recent matching event */
-  lastOccurrence: Date;
-  /** Example content from the events that triggered this suggestion */
-  exampleContent: string;
-  /** Human-readable description of what this pattern permits */
-  description: string;
-}

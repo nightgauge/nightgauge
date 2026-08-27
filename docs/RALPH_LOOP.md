@@ -202,10 +202,11 @@ Ralph Loop integrates with the existing pipeline circuit breaker:
 
 ### Security Considerations
 
-1. **Output sanitization** remains enabled — blocks dangerous commands
+1. **Sanitization** remains active — dangerous commands and self-prompting
+   injection patterns are screened (logged under the default `warn` mode,
+   rejected under `sanitization.mode: block`)
 2. **Error truncation** — Large outputs are truncated to 500 characters
-3. **Input sanitization** — Should be enabled for self-prompting scenarios
-4. **No arbitrary code execution** — Only runs configured build/test commands
+3. **No arbitrary code execution** — Only runs configured build/test commands
 
 ## Token Usage Analysis
 

@@ -391,12 +391,7 @@ const KNOWN_CONFIG_PATHS: string[] = [
   "validation.max_files_changed",
   "validation.max_lines_changed",
   // Sanitization
-  "sanitization.enabled",
-  "sanitization.sanitize_input",
-  "sanitization.logging",
-  "sanitization.warn_only",
-  "sanitization.allowlist",
-  "sanitization.blocklist",
+  "sanitization.mode",
   // Human-in-the-loop
   "human_in_the_loop.auto_accept_stages",
   "human_in_the_loop.auto_accept_permissions",

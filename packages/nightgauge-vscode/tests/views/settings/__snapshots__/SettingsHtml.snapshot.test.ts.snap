@@ -2864,120 +2864,17 @@ exports[`getSettingsHtml snapshots (Issue #1242) > default config render 1`] = `
 
     <div class="setting-row ">
       <div class="setting-info">
-        <label for="sanitization.enabled" class="setting-label">Enable Sanitization </label>
-        <p class="setting-description">Enable prompt injection protection</p>
+        <label for="sanitization.mode" class="setting-label">Sanitization Mode </label>
+        <p class="setting-description">How the prompt injection firewall handles a pattern match: warn logs and allows, block denies the command, disabled skips the checks entirely.</p>
 
       </div>
       <div class="setting-control">
-        <input type="checkbox"
-               id="sanitization.enabled"
-               class="toggle-input"
-               data-path="sanitization.enabled"
-               checked
-               disabled>
-        <label for="sanitization.enabled" class="toggle-switch"></label>
-      </div>
-    </div>
-
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="sanitization.sanitize_input" class="setting-label">Sanitize Input </label>
-        <p class="setting-description">Check user prompts for injection attempts</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="checkbox"
-               id="sanitization.sanitize_input"
-               class="toggle-input"
-               data-path="sanitization.sanitize_input"
-
-               disabled>
-        <label for="sanitization.sanitize_input" class="toggle-switch"></label>
-      </div>
-    </div>
-
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="sanitization.logging" class="setting-label">Enable Logging </label>
-        <p class="setting-description">Log all sanitization events</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="checkbox"
-               id="sanitization.logging"
-               class="toggle-input"
-               data-path="sanitization.logging"
-               checked
-               disabled>
-        <label for="sanitization.logging" class="toggle-switch"></label>
-      </div>
-    </div>
-
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="sanitization.warn_only" class="setting-label">Warn Only </label>
-        <p class="setting-description">Log but do not block suspicious content</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="checkbox"
-               id="sanitization.warn_only"
-               class="toggle-input"
-               data-path="sanitization.warn_only"
-
-               disabled>
-        <label for="sanitization.warn_only" class="toggle-switch"></label>
-      </div>
-    </div>
-
-
-    <div class="setting-row setting-row-list ">
-      <div class="setting-info">
-        <label for="sanitization.allowlist" class="setting-label">Allowlist </label>
-        <p class="setting-description">Patterns that bypass sanitization</p>
-
-      </div>
-      <div class="setting-control list-control">
-        <div class="list-items" id="sanitization.allowlist-items">
-          <div class="list-empty">No items</div>
-        </div>
-        <div class="list-add">
-          <input type="text"
-                 id="sanitization.allowlist-input"
-                 class="list-input"
-                 placeholder="pattern"
-                 disabled>
-          <button class="list-add-btn" data-path="sanitization.allowlist" disabled>
-            <span class="codicon codicon-add"></span>
-          </button>
-        </div>
-      </div>
-    </div>
-
-
-    <div class="setting-row setting-row-list ">
-      <div class="setting-info">
-        <label for="sanitization.blocklist" class="setting-label">Blocklist </label>
-        <p class="setting-description">Patterns that are always blocked</p>
-
-      </div>
-      <div class="setting-control list-control">
-        <div class="list-items" id="sanitization.blocklist-items">
-          <div class="list-empty">No items</div>
-        </div>
-        <div class="list-add">
-          <input type="text"
-                 id="sanitization.blocklist-input"
-                 class="list-input"
-                 placeholder="pattern"
-                 disabled>
-          <button class="list-add-btn" data-path="sanitization.blocklist" disabled>
-            <span class="codicon codicon-add"></span>
-          </button>
-        </div>
+        <select id="sanitization.mode"
+                class="select-input"
+                data-path="sanitization.mode"
+                disabled>
+          <option value="warn" selected>Warn — log matches but allow</option><option value="block" >Block — deny matching commands</option><option value="disabled" >Disabled — skip pattern checks</option>
+        </select>
       </div>
     </div>
 
@@ -6993,120 +6890,17 @@ exports[`getSettingsHtml snapshots (Issue #1242) > global tier view 1`] = `
 
     <div class="setting-row ">
       <div class="setting-info">
-        <label for="sanitization.enabled" class="setting-label">Enable Sanitization </label>
-        <p class="setting-description">Enable prompt injection protection</p>
+        <label for="sanitization.mode" class="setting-label">Sanitization Mode </label>
+        <p class="setting-description">How the prompt injection firewall handles a pattern match: warn logs and allows, block denies the command, disabled skips the checks entirely.</p>
 
       </div>
       <div class="setting-control">
-        <input type="checkbox"
-               id="sanitization.enabled"
-               class="toggle-input"
-               data-path="sanitization.enabled"
-               checked
-               >
-        <label for="sanitization.enabled" class="toggle-switch"></label>
-      </div>
-    </div>
-
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="sanitization.sanitize_input" class="setting-label">Sanitize Input </label>
-        <p class="setting-description">Check user prompts for injection attempts</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="checkbox"
-               id="sanitization.sanitize_input"
-               class="toggle-input"
-               data-path="sanitization.sanitize_input"
-
-               >
-        <label for="sanitization.sanitize_input" class="toggle-switch"></label>
-      </div>
-    </div>
-
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="sanitization.logging" class="setting-label">Enable Logging </label>
-        <p class="setting-description">Log all sanitization events</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="checkbox"
-               id="sanitization.logging"
-               class="toggle-input"
-               data-path="sanitization.logging"
-               checked
-               >
-        <label for="sanitization.logging" class="toggle-switch"></label>
-      </div>
-    </div>
-
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="sanitization.warn_only" class="setting-label">Warn Only </label>
-        <p class="setting-description">Log but do not block suspicious content</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="checkbox"
-               id="sanitization.warn_only"
-               class="toggle-input"
-               data-path="sanitization.warn_only"
-
-               >
-        <label for="sanitization.warn_only" class="toggle-switch"></label>
-      </div>
-    </div>
-
-
-    <div class="setting-row setting-row-list ">
-      <div class="setting-info">
-        <label for="sanitization.allowlist" class="setting-label">Allowlist </label>
-        <p class="setting-description">Patterns that bypass sanitization</p>
-
-      </div>
-      <div class="setting-control list-control">
-        <div class="list-items" id="sanitization.allowlist-items">
-          <div class="list-empty">No items</div>
-        </div>
-        <div class="list-add">
-          <input type="text"
-                 id="sanitization.allowlist-input"
-                 class="list-input"
-                 placeholder="pattern"
-                 >
-          <button class="list-add-btn" data-path="sanitization.allowlist" >
-            <span class="codicon codicon-add"></span>
-          </button>
-        </div>
-      </div>
-    </div>
-
-
-    <div class="setting-row setting-row-list ">
-      <div class="setting-info">
-        <label for="sanitization.blocklist" class="setting-label">Blocklist </label>
-        <p class="setting-description">Patterns that are always blocked</p>
-
-      </div>
-      <div class="setting-control list-control">
-        <div class="list-items" id="sanitization.blocklist-items">
-          <div class="list-empty">No items</div>
-        </div>
-        <div class="list-add">
-          <input type="text"
-                 id="sanitization.blocklist-input"
-                 class="list-input"
-                 placeholder="pattern"
-                 >
-          <button class="list-add-btn" data-path="sanitization.blocklist" >
-            <span class="codicon codicon-add"></span>
-          </button>
-        </div>
+        <select id="sanitization.mode"
+                class="select-input"
+                data-path="sanitization.mode"
+                >
+          <option value="warn" selected>Warn — log matches but allow</option><option value="block" >Block — deny matching commands</option><option value="disabled" >Disabled — skip pattern checks</option>
+        </select>
       </div>
     </div>
 
@@ -11120,120 +10914,17 @@ exports[`getSettingsHtml snapshots (Issue #1242) > local tier view 1`] = `
 
     <div class="setting-row ">
       <div class="setting-info">
-        <label for="sanitization.enabled" class="setting-label">Enable Sanitization </label>
-        <p class="setting-description">Enable prompt injection protection</p>
+        <label for="sanitization.mode" class="setting-label">Sanitization Mode </label>
+        <p class="setting-description">How the prompt injection firewall handles a pattern match: warn logs and allows, block denies the command, disabled skips the checks entirely.</p>
 
       </div>
       <div class="setting-control">
-        <input type="checkbox"
-               id="sanitization.enabled"
-               class="toggle-input"
-               data-path="sanitization.enabled"
-               checked
-               >
-        <label for="sanitization.enabled" class="toggle-switch"></label>
-      </div>
-    </div>
-
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="sanitization.sanitize_input" class="setting-label">Sanitize Input </label>
-        <p class="setting-description">Check user prompts for injection attempts</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="checkbox"
-               id="sanitization.sanitize_input"
-               class="toggle-input"
-               data-path="sanitization.sanitize_input"
-
-               >
-        <label for="sanitization.sanitize_input" class="toggle-switch"></label>
-      </div>
-    </div>
-
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="sanitization.logging" class="setting-label">Enable Logging </label>
-        <p class="setting-description">Log all sanitization events</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="checkbox"
-               id="sanitization.logging"
-               class="toggle-input"
-               data-path="sanitization.logging"
-               checked
-               >
-        <label for="sanitization.logging" class="toggle-switch"></label>
-      </div>
-    </div>
-
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="sanitization.warn_only" class="setting-label">Warn Only </label>
-        <p class="setting-description">Log but do not block suspicious content</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="checkbox"
-               id="sanitization.warn_only"
-               class="toggle-input"
-               data-path="sanitization.warn_only"
-
-               >
-        <label for="sanitization.warn_only" class="toggle-switch"></label>
-      </div>
-    </div>
-
-
-    <div class="setting-row setting-row-list ">
-      <div class="setting-info">
-        <label for="sanitization.allowlist" class="setting-label">Allowlist </label>
-        <p class="setting-description">Patterns that bypass sanitization</p>
-
-      </div>
-      <div class="setting-control list-control">
-        <div class="list-items" id="sanitization.allowlist-items">
-          <div class="list-empty">No items</div>
-        </div>
-        <div class="list-add">
-          <input type="text"
-                 id="sanitization.allowlist-input"
-                 class="list-input"
-                 placeholder="pattern"
-                 >
-          <button class="list-add-btn" data-path="sanitization.allowlist" >
-            <span class="codicon codicon-add"></span>
-          </button>
-        </div>
-      </div>
-    </div>
-
-
-    <div class="setting-row setting-row-list ">
-      <div class="setting-info">
-        <label for="sanitization.blocklist" class="setting-label">Blocklist </label>
-        <p class="setting-description">Patterns that are always blocked</p>
-
-      </div>
-      <div class="setting-control list-control">
-        <div class="list-items" id="sanitization.blocklist-items">
-          <div class="list-empty">No items</div>
-        </div>
-        <div class="list-add">
-          <input type="text"
-                 id="sanitization.blocklist-input"
-                 class="list-input"
-                 placeholder="pattern"
-                 >
-          <button class="list-add-btn" data-path="sanitization.blocklist" >
-            <span class="codicon codicon-add"></span>
-          </button>
-        </div>
+        <select id="sanitization.mode"
+                class="select-input"
+                data-path="sanitization.mode"
+                >
+          <option value="warn" selected>Warn — log matches but allow</option><option value="block" >Block — deny matching commands</option><option value="disabled" >Disabled — skip pattern checks</option>
+        </select>
       </div>
     </div>
 
@@ -15263,120 +14954,17 @@ exports[`getSettingsHtml snapshots (Issue #1242) > locked section — pipeline r
 
     <div class="setting-row ">
       <div class="setting-info">
-        <label for="sanitization.enabled" class="setting-label">Enable Sanitization </label>
-        <p class="setting-description">Enable prompt injection protection</p>
+        <label for="sanitization.mode" class="setting-label">Sanitization Mode </label>
+        <p class="setting-description">How the prompt injection firewall handles a pattern match: warn logs and allows, block denies the command, disabled skips the checks entirely.</p>
 
       </div>
       <div class="setting-control">
-        <input type="checkbox"
-               id="sanitization.enabled"
-               class="toggle-input"
-               data-path="sanitization.enabled"
-               checked
-               disabled>
-        <label for="sanitization.enabled" class="toggle-switch"></label>
-      </div>
-    </div>
-
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="sanitization.sanitize_input" class="setting-label">Sanitize Input </label>
-        <p class="setting-description">Check user prompts for injection attempts</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="checkbox"
-               id="sanitization.sanitize_input"
-               class="toggle-input"
-               data-path="sanitization.sanitize_input"
-
-               disabled>
-        <label for="sanitization.sanitize_input" class="toggle-switch"></label>
-      </div>
-    </div>
-
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="sanitization.logging" class="setting-label">Enable Logging </label>
-        <p class="setting-description">Log all sanitization events</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="checkbox"
-               id="sanitization.logging"
-               class="toggle-input"
-               data-path="sanitization.logging"
-               checked
-               disabled>
-        <label for="sanitization.logging" class="toggle-switch"></label>
-      </div>
-    </div>
-
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="sanitization.warn_only" class="setting-label">Warn Only </label>
-        <p class="setting-description">Log but do not block suspicious content</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="checkbox"
-               id="sanitization.warn_only"
-               class="toggle-input"
-               data-path="sanitization.warn_only"
-
-               disabled>
-        <label for="sanitization.warn_only" class="toggle-switch"></label>
-      </div>
-    </div>
-
-
-    <div class="setting-row setting-row-list ">
-      <div class="setting-info">
-        <label for="sanitization.allowlist" class="setting-label">Allowlist </label>
-        <p class="setting-description">Patterns that bypass sanitization</p>
-
-      </div>
-      <div class="setting-control list-control">
-        <div class="list-items" id="sanitization.allowlist-items">
-          <div class="list-empty">No items</div>
-        </div>
-        <div class="list-add">
-          <input type="text"
-                 id="sanitization.allowlist-input"
-                 class="list-input"
-                 placeholder="pattern"
-                 disabled>
-          <button class="list-add-btn" data-path="sanitization.allowlist" disabled>
-            <span class="codicon codicon-add"></span>
-          </button>
-        </div>
-      </div>
-    </div>
-
-
-    <div class="setting-row setting-row-list ">
-      <div class="setting-info">
-        <label for="sanitization.blocklist" class="setting-label">Blocklist </label>
-        <p class="setting-description">Patterns that are always blocked</p>
-
-      </div>
-      <div class="setting-control list-control">
-        <div class="list-items" id="sanitization.blocklist-items">
-          <div class="list-empty">No items</div>
-        </div>
-        <div class="list-add">
-          <input type="text"
-                 id="sanitization.blocklist-input"
-                 class="list-input"
-                 placeholder="pattern"
-                 disabled>
-          <button class="list-add-btn" data-path="sanitization.blocklist" disabled>
-            <span class="codicon codicon-add"></span>
-          </button>
-        </div>
+        <select id="sanitization.mode"
+                class="select-input"
+                data-path="sanitization.mode"
+                disabled>
+          <option value="warn" selected>Warn — log matches but allow</option><option value="block" >Block — deny matching commands</option><option value="disabled" >Disabled — skip pattern checks</option>
+        </select>
       </div>
     </div>
 
@@ -19392,120 +18980,17 @@ exports[`getSettingsHtml snapshots (Issue #1242) > project tier view 1`] = `
 
     <div class="setting-row ">
       <div class="setting-info">
-        <label for="sanitization.enabled" class="setting-label">Enable Sanitization </label>
-        <p class="setting-description">Enable prompt injection protection</p>
+        <label for="sanitization.mode" class="setting-label">Sanitization Mode </label>
+        <p class="setting-description">How the prompt injection firewall handles a pattern match: warn logs and allows, block denies the command, disabled skips the checks entirely.</p>
 
       </div>
       <div class="setting-control">
-        <input type="checkbox"
-               id="sanitization.enabled"
-               class="toggle-input"
-               data-path="sanitization.enabled"
-               checked
-               >
-        <label for="sanitization.enabled" class="toggle-switch"></label>
-      </div>
-    </div>
-
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="sanitization.sanitize_input" class="setting-label">Sanitize Input </label>
-        <p class="setting-description">Check user prompts for injection attempts</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="checkbox"
-               id="sanitization.sanitize_input"
-               class="toggle-input"
-               data-path="sanitization.sanitize_input"
-
-               >
-        <label for="sanitization.sanitize_input" class="toggle-switch"></label>
-      </div>
-    </div>
-
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="sanitization.logging" class="setting-label">Enable Logging </label>
-        <p class="setting-description">Log all sanitization events</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="checkbox"
-               id="sanitization.logging"
-               class="toggle-input"
-               data-path="sanitization.logging"
-               checked
-               >
-        <label for="sanitization.logging" class="toggle-switch"></label>
-      </div>
-    </div>
-
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="sanitization.warn_only" class="setting-label">Warn Only </label>
-        <p class="setting-description">Log but do not block suspicious content</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="checkbox"
-               id="sanitization.warn_only"
-               class="toggle-input"
-               data-path="sanitization.warn_only"
-
-               >
-        <label for="sanitization.warn_only" class="toggle-switch"></label>
-      </div>
-    </div>
-
-
-    <div class="setting-row setting-row-list ">
-      <div class="setting-info">
-        <label for="sanitization.allowlist" class="setting-label">Allowlist </label>
-        <p class="setting-description">Patterns that bypass sanitization</p>
-
-      </div>
-      <div class="setting-control list-control">
-        <div class="list-items" id="sanitization.allowlist-items">
-          <div class="list-empty">No items</div>
-        </div>
-        <div class="list-add">
-          <input type="text"
-                 id="sanitization.allowlist-input"
-                 class="list-input"
-                 placeholder="pattern"
-                 >
-          <button class="list-add-btn" data-path="sanitization.allowlist" >
-            <span class="codicon codicon-add"></span>
-          </button>
-        </div>
-      </div>
-    </div>
-
-
-    <div class="setting-row setting-row-list ">
-      <div class="setting-info">
-        <label for="sanitization.blocklist" class="setting-label">Blocklist </label>
-        <p class="setting-description">Patterns that are always blocked</p>
-
-      </div>
-      <div class="setting-control list-control">
-        <div class="list-items" id="sanitization.blocklist-items">
-          <div class="list-empty">No items</div>
-        </div>
-        <div class="list-add">
-          <input type="text"
-                 id="sanitization.blocklist-input"
-                 class="list-input"
-                 placeholder="pattern"
-                 >
-          <button class="list-add-btn" data-path="sanitization.blocklist" >
-            <span class="codicon codicon-add"></span>
-          </button>
-        </div>
+        <select id="sanitization.mode"
+                class="select-input"
+                data-path="sanitization.mode"
+                >
+          <option value="warn" selected>Warn — log matches but allow</option><option value="block" >Block — deny matching commands</option><option value="disabled" >Disabled — skip pattern checks</option>
+        </select>
       </div>
     </div>
 

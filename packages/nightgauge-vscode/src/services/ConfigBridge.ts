@@ -51,7 +51,6 @@ import type {
   EnforcementConfig,
   CommandsConfig,
   ValidationConfig,
-  SanitizationConfig,
   HumanInTheLoopConfig,
   RalphLoopConfig,
   AutomationsConfig,
@@ -408,13 +407,6 @@ export class ConfigBridge implements vscode.Disposable {
    */
   getValidation(): ValidationConfig | undefined {
     return this.cachedResult?.config.validation;
-  }
-
-  /**
-   * Get sanitization configuration section
-   */
-  getSanitization(): SanitizationConfig | undefined {
-    return this.cachedResult?.config.sanitization;
   }
 
   /**

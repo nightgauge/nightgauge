@@ -63,9 +63,7 @@ describe("NightgaugeYamlService", () => {
           max_lines_changed: 2000,
         },
         sanitization: {
-          enabled: true,
-          allowlist: ["allowed-pattern"],
-          blocklist: ["blocked-pattern"],
+          mode: "warn",
         },
       };
 
@@ -172,25 +170,14 @@ describe("NightgaugeYamlService", () => {
       expect(result.valid).toBe(false);
     });
 
-    it("should reject non-array allowlist", () => {
+    it("should reject an invalid sanitization mode", () => {
       const config = {
-        sanitization: { allowlist: "not-an-array" as unknown as string[] },
+        sanitization: { mode: "not-a-mode" as unknown as "warn" },
       };
 
       const result = validateConfig(config);
       expect(result.valid).toBe(false);
-      expect(result.errors).toContainEqual(
-        expect.objectContaining({ field: "sanitization.allowlist" })
-      );
-    });
-
-    it("should reject non-array blocklist", () => {
-      const config = {
-        sanitization: { blocklist: "not-an-array" as unknown as string[] },
-      };
-
-      const result = validateConfig(config);
-      expect(result.valid).toBe(false);
+      expect(result.errors).toContainEqual(expect.objectContaining({ field: "sanitization.mode" }));
     });
 
     it("should collect multiple validation errors", () => {
@@ -378,8 +365,8 @@ describe("NightgaugeYamlService", () => {
     it("should handle setting boolean values", () => {
       const config: NightgaugeConfig = {};
 
-      setConfigValue(config, "sanitization.enabled", false);
-      expect(config.sanitization?.enabled).toBe(false);
+      setConfigValue(config, "pipeline.auto_fix", false);
+      expect(config.pipeline?.auto_fix).toBe(false);
     });
 
     it.each(["__proto__.polluted", "constructor.prototype.polluted", "prototype.polluted"])(
@@ -407,7 +394,7 @@ describe("NightgaugeYamlService", () => {
       expect(DEFAULT_CONFIG.pull_request?.merge_strategy).toBe("squash");
       expect(DEFAULT_CONFIG.branch?.base).toBe("main");
       expect(DEFAULT_CONFIG.pipeline?.auto_fix).toBe(true);
-      expect(DEFAULT_CONFIG.sanitization?.enabled).toBe(true);
+      expect(DEFAULT_CONFIG.sanitization?.mode).toBe("warn");
     });
 
     it("should be a valid configuration", () => {
