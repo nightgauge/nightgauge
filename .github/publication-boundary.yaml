@@ -623,7 +623,7 @@ issue_references:
   # The highest number this repository has issued (issues and pull requests
   # share one sequence). Bump this as the repository grows; the guard tells you
   # when it must be bumped, so it cannot silently rot.
-  high_water_mark: 976
+  high_water_mark: 981
   # Numbers that may be issued while a pull request is open. Deliberately tight:
   # the whole point of #673 is that the margin between a dead reference and a
   # wrong live one is a handful of issue numbers, and a generous slack reopens
@@ -653,8 +653,12 @@ issue_references:
   # separate chore from the re-measure, it is the first half of it.
   # 2026-08-26 (#971): 6,060 — the ADAPTER_MATRIX.md correction retired three
   # citations along with the dead capability audit and the two refuted gaps.
+  # 2026-08-26 (session 13): 6,036 — the #970/#971/#978 deletions retired some,
+  # and raising high_water_mark to 981 resolved the rest. Measured from this
+  # script's own output AFTER the raise, not carried forward: the two halves are
+  # one operation, because the bump itself changes what resolves.
   # NEVER raise this number. Lower it as the sweep progresses.
-  tree_baseline: 6060
+  tree_baseline: 6036
   allow_paths:
     # Files that DEFINE or TEST the rule must contain example violations.
     - ".github/publication-boundary.yaml"
