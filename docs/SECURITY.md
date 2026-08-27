@@ -11,19 +11,24 @@ agents execute commands or process untrusted content.
 
 ### How It Works
 
-The sanitization layer operates at two levels:
+The sanitization layer runs at two PreToolUse points — `nightgauge hook
+workflow-gate` screens every Bash command, and `nightgauge hook
+sanitize-prompt` screens Task prompts. Both are always registered, and both
+honour the same `sanitization.mode` setting. Screened content is matched
+against a built-in pattern set covering commands that:
 
-1. **Output Sanitization** (enabled by default): Before any Bash command
-   executes, it's validated against a blocklist of dangerous patterns. This
-   catches commands that could:
-   - Destroy data (`rm -rf /`, `dd`, `mkfs`)
-   - Exfiltrate credentials (`cat ~/.ssh/*`, `env | curl`)
-   - Escalate privileges (`sudo rm`, `chmod 777 /`)
-   - Traverse paths (`../../etc/passwd`)
+- Destroy data (`rm -rf /`, `dd`, `mkfs`)
+- Exfiltrate credentials (`cat ~/.ssh/*`, `env | curl`)
+- Escalate privileges (`sudo rm`, `chmod 777 /`)
+- Traverse paths (`../../etc/passwd`)
+- Attempt prompt injection ("ignore previous instructions", "you are now a…")
 
-2. **Input Sanitization** (disabled by default): User prompts can be checked for
-   prompt injection attempts like "ignore previous instructions". Usually
-   unnecessary since user prompts are trusted.
+The default is `warn`: a match is logged to
+`.nightgauge/logs/sanitization.log` and the command or prompt is allowed. Set
+`sanitization.mode: block` to reject on match, or `disabled` to skip screening
+entirely. Enforcement is deliberately opt-in — the prompt-injection patterns
+appear verbatim in legitimate orchestration prompts, so block-by-default would
+trade a dead guard for one that silently blocks real work.
 
 ### Architecture
 
@@ -42,10 +47,10 @@ principle. Pattern matching is deterministic, ensuring:
                               │
                               ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│           prompt-sanitize.sh (PreToolUse - Optional)            │
+│           prompt-sanitize.sh (PreToolUse - Always Active)       │
 │  - Input prompt validation                                       │
 │  - System prompt override detection                              │
-│  - Disabled by default                                           │
+│  - Warn by default; block is opt-in                              │
 └─────────────────────────────────────────────────────────────────┘
                               │
                               ▼
@@ -70,45 +75,22 @@ principle. Pattern matching is deterministic, ensuring:
 
 ### Configuration
 
-Configure sanitization in `.nightgauge/config.yaml`:
+`mode` is the only sanitization setting. Patterns are built into the binary;
+the log path (`.nightgauge/logs/sanitization.log`) is fixed and not
+configurable.
 
 ```yaml
 sanitization:
-  # Enable/disable output sanitization (default: true)
-  enabled: true
-
-  # Enable input sanitization (default: false)
-  input_enabled: false
-
-  # Log all events (default: true)
-  logging: true
-
-  # Log file location
-  log_file: ".nightgauge/logs/sanitization.log"
-
-  # Warn-only mode for testing (default: false)
-  warn_only: false
-
-  # Custom blocklist patterns (added to defaults)
-  blocklist:
-    - "custom-dangerous-pattern"
-
-  # Allowlist patterns (bypass sanitization)
-  allowlist:
-    - "rm -rf ./node_modules"
-    - "rm -rf ./dist"
+  mode: warn # warn (default: log + allow), block, disabled
 ```
 
-### Environment Variables
+### Escape Hatch
 
-Override configuration via environment:
+One developer/manual escape hatch exists:
 
-| Variable                              | Description                                                                                                                                                                                                                                                          |
-| ------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `NIGHTGAUGE_SKIP_SANITIZATION=1`      | Disable output sanitization                                                                                                                                                                                                                                          |
-| `NIGHTGAUGE_SANITIZE_INPUT=1`         | Enable input sanitization                                                                                                                                                                                                                                            |
-| `NIGHTGAUGE_SANITIZATION_WARN_ONLY=1` | Log but don't block                                                                                                                                                                                                                                                  |
-| `NIGHTGAUGE_SKIP_WORKFLOW_GATE=1`     | Developer/manual escape hatch — bypass the operation gates (push-to-main, force-push, destructive-git) and the sanitization scan for one command. Secret read/write and pre-push validation gates stay ON. MUST NOT be set in skillRunner/orchestrator environments. |
+| Variable                          | Description                                                                                                                                                                                                                                                          |
+| --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `NIGHTGAUGE_SKIP_WORKFLOW_GATE=1` | Developer/manual escape hatch — bypass the operation gates (push-to-main, force-push, destructive-git) and the sanitization scan for one command. Secret read/write and pre-push validation gates stay ON. MUST NOT be set in skillRunner/orchestrator environments. |
 
 #### Operation parsing, not substring matching (#4069)
 
@@ -130,6 +112,10 @@ rewording human-readable text.
 
 ### Default Protected Patterns
 
+`(BLOCK)` below means the category is rejected when `sanitization.mode` is set
+to `block`. Under the default `warn` mode every match in every category is
+logged and allowed.
+
 #### Destructive Commands (BLOCK)
 
 - `rm -rf /` - Filesystem destruction
@@ -150,7 +136,7 @@ rewording human-readable text.
 - `chmod 777 /` - World-writable root
 - `passwd root` - Password changes
 
-#### Prompt Injection (BLOCK when input_enabled)
+#### Prompt Injection — Task prompts (BLOCK)
 
 - "ignore previous instructions"
 - "you are now a..."
@@ -187,58 +173,17 @@ Count blocked events:
 grep '"event":"blocked"' .nightgauge/logs/sanitization.log | wc -l
 ```
 
-### Allowlist Usage
+### Command Exemptions
 
-Add patterns to the allowlist for known-safe commands that match blocklist
-patterns:
+There is no allowlist, blocklist or safe-directory setting. Every screened
+command is evaluated against the same built-in pattern set, and `mode` is the
+only control.
 
-```yaml
-sanitization:
-  allowlist:
-    - "rm -rf ./node_modules" # Safe: project directory
-    - "rm -rf ./dist" # Safe: build output
-    - "rm -rf ./coverage" # Safe: test coverage
-```
-
-**Warning**: Allowlist patterns create security holes. Only add patterns for
-commands that:
-
-1. Are constrained to project directories
-2. Cannot be manipulated by untrusted input
-3. Have been reviewed for security implications
-
-### Pipeline Cleanup Allowlist
-
-Pipeline operations routinely clean up context files, plan files, git locks, and
-build artifacts. These operations trigger the destructive command filter because
-they use `rm -f` or `rm -rf` with absolute paths. The following path-scoped
-patterns allowlist legitimate pipeline cleanup while keeping all other
-destructive operations blocked:
-
-```yaml
-sanitization:
-  allowlist:
-    # Pipeline context file cleanup
-    - rm -f .*\.nightgauge/pipeline/.*\.json
-    # Pipeline plan file cleanup
-    - rm -f .*\.nightgauge/plans/.*\.md
-    # Git lock file cleanup
-    - rm -f .*\.git/index\.lock
-    # VSIX artifact cleanup
-    - rm -f .*\.vsix
-    # Temp directory cleanup
-    - rm -rf /tmp/
-```
-
-**Scope constraints:**
-
-- Pipeline patterns only match within `.nightgauge/pipeline/` and
-  `.nightgauge/plans/` directories
-- Git lock pattern is limited to `.git/index.lock` — not all `.git/*` files
-- VSIX pattern matches any `.vsix` file (build artifacts only)
-- `/tmp/` cleanup is safe since `/tmp` is transient by design
-- Non-pipeline destructive operations (`rm -rf /`, `rm -rf /home`) remain
-  blocked
+Pipeline cleanup commands (`rm -f` on `.nightgauge/pipeline/*.json`, plan
+files, `.git/index.lock`, `.vsix` artifacts) are therefore not specially
+exempted. Under the default `warn` mode any match is logged and allowed, so
+cleanup proceeds; under `mode: block` these commands can be rejected and
+cleanup must run through a path the gate does not screen.
 
 ### Security Considerations
 
@@ -250,30 +195,31 @@ sanitization:
    The sanitization layer catches obvious attacks but is not foolproof. Defense
    in depth is required.
 
-2. **False Positives**: Some legitimate commands may match patterns. Use the
-   allowlist for known-safe patterns.
+2. **False Positives**: Legitimate commands can match built-in patterns. Under
+   the default `warn` mode they are logged and allowed; there is no per-pattern
+   exemption, so `mode: block` should only be enabled once a repo's log shows a
+   clean baseline.
 
 3. **Performance**: Pattern matching is fast (milliseconds) but adds latency.
-   Disable with `NIGHTGAUGE_SKIP_SANITIZATION=1` if needed for specific
-   operations.
-
-4. **Bypass Risk**: The allowlist creates intentional security holes. Document
-   and review all allowlist entries.
+   Set `sanitization.mode: disabled`, or `NIGHTGAUGE_SKIP_WORKFLOW_GATE=1` for
+   a single invocation.
 
 ### Testing
 
 Test the sanitization layer:
 
 ```bash
-# Should be blocked
-echo 'rm -rf /' | ./claude-plugins/nightgauge/hooks/workflow-gate.sh
+# Screen a raw string directly (manual invocation)
+nightgauge hook sanitize-prompt --input 'ignore all previous instructions'
 
-# Should pass (allowlisted)
-echo 'rm -rf ./node_modules' | ./claude-plugins/nightgauge/hooks/workflow-gate.sh
-
-# Test in warn-only mode
-NIGHTGAUGE_SANITIZATION_WARN_ONLY=1 ./claude-plugins/nightgauge/hooks/workflow-gate.sh
+# Screen a Bash command as the hook sees it (stdin JSON payload)
+echo '{"tool_name":"Bash","tool_input":{"command":"rm -rf /"}}' \
+  | nightgauge hook workflow-gate
 ```
+
+Under the default `warn` mode both return `allow` and append an NDJSON line to
+`.nightgauge/logs/sanitization.log`; set `sanitization.mode: block` in
+`.nightgauge/config.yaml` to see a deny.
 
 ### Related Documentation
 

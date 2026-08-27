@@ -66,8 +66,7 @@ pipeline:
 
 # Sanitization (prompt injection protection)
 sanitization:
-  enabled: true
-  warn_only: false
+  mode: warn # warn | block | disabled
 
 # Human-in-the-loop gates
 human_in_the_loop:

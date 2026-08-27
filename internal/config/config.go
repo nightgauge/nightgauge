@@ -91,24 +91,16 @@ const (
 // SanitizationConfig holds firewall settings from config.yaml.
 type SanitizationConfig struct {
 	Mode SanitizationMode `json:"mode,omitempty" yaml:"mode,omitempty"`
-	// Legacy field — if Mode is empty, check this for backward compat.
-	WarnOnly *bool `json:"warn_only,omitempty" yaml:"warn_only,omitempty"`
 }
 
-// ResolvedMode returns the effective sanitization mode.
-// Priority: Mode field > WarnOnly legacy field > default (warn).
+// ResolvedMode returns the effective sanitization mode: the Mode field when
+// set, otherwise the default (warn).
 func (s *SanitizationConfig) ResolvedMode() SanitizationMode {
 	if s == nil {
 		return SanitizationModeWarn
 	}
 	if s.Mode != "" {
 		return s.Mode
-	}
-	if s.WarnOnly != nil {
-		if *s.WarnOnly {
-			return SanitizationModeWarn
-		}
-		return SanitizationModeBlock
 	}
 	return SanitizationModeWarn
 }

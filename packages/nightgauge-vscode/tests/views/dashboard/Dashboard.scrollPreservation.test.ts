@@ -148,13 +148,13 @@ vi.mock("../../../src/services/SanitizationLogService", () => ({
   }),
 }));
 
-// Mock NightgaugeYamlService (Issue #786)
+// Mock NightgaugeYamlService
 vi.mock("../../../src/views/settings/NightgaugeYamlService", () => ({
   NightgaugeYamlService: vi.fn(function () {
     return {
       read: vi.fn().mockResolvedValue({
         success: true,
-        config: { sanitization: { allowlist: [], safe_directories: [] } },
+        config: {},
       }),
       dispose: vi.fn(),
     };

@@ -12,7 +12,6 @@ import type {
   FirewallFilterState,
   FirewallAggregates,
   FirewallTimeSeriesPoint,
-  AllowlistSuggestion,
 } from "../FirewallTypes";
 import { CATEGORY_LABELS } from "../FirewallTypes";
 import type { SanitizationMode } from "../../../config/schema";
@@ -98,35 +97,6 @@ function getFirewallScript(): string {
         vscode.postMessage({ type: 'firewallResetFilters' });
       });
 
-      // Suggestion "Add" buttons (Issue #786)
-      document.querySelectorAll('.suggestion-add-btn').forEach((btn) => {
-        btn.addEventListener('click', (e) => {
-          const target = e.currentTarget;
-          const pattern = target.getAttribute('data-pattern');
-          const suggestionType = target.getAttribute('data-suggestion-type');
-          if (pattern && suggestionType) {
-            vscode.postMessage({
-              type: 'firewallAddAllowlist',
-              pattern: pattern,
-              suggestionType: suggestionType
-            });
-          }
-        });
-      });
-
-      // Suggestion "Dismiss" buttons (Issue #786)
-      document.querySelectorAll('.suggestion-dismiss-btn').forEach((btn) => {
-        btn.addEventListener('click', (e) => {
-          const target = e.currentTarget;
-          const pattern = target.getAttribute('data-pattern');
-          if (pattern) {
-            vscode.postMessage({
-              type: 'firewallDismissSuggestion',
-              pattern: pattern
-            });
-          }
-        });
-      });
     })();
   `;
 }
@@ -385,48 +355,6 @@ function getFirewallChartsHtml(
 }
 
 /**
- * Generate suggested allowlist entries HTML (Issue #786)
- */
-function getFirewallSuggestionsHtml(suggestions: AllowlistSuggestion[] | undefined): string {
-  if (!suggestions || suggestions.length === 0) {
-    return `
-      <div class="firewall-suggestions-section">
-        <h4>Suggested Allowlist Entries</h4>
-        <p class="empty-state-text">No suggestions — all blocked events are either already allowlisted or system-level.</p>
-      </div>`;
-  }
-
-  const cards = suggestions
-    .map(
-      (s, i) => `
-      <div class="suggestion-card" data-index="${i}">
-        <div class="suggestion-header">
-          <span class="suggestion-type-badge suggestion-type-${s.type}">${s.type === "safe_directory" ? "Safe Dir" : "Allowlist"}</span>
-          <span class="suggestion-freq-badge">${s.frequency} event${s.frequency !== 1 ? "s" : ""}</span>
-          <span class="suggestion-last-seen">Last: ${formatRelativeTime(s.lastOccurrence)}</span>
-        </div>
-        <code class="suggestion-pattern">${escapeHtml(s.pattern)}</code>
-        <p class="suggestion-description">${escapeHtml(s.description)}</p>
-        <p class="suggestion-example"><em>Example:</em> ${escapeHtml(s.exampleContent.substring(0, 120))}${s.exampleContent.length > 120 ? "..." : ""}</p>
-        <div class="suggestion-actions">
-          <button class="btn btn-primary btn-sm suggestion-add-btn"
-            data-pattern="${escapeHtml(s.pattern)}"
-            data-suggestion-type="${s.type}">Add to ${s.type === "safe_directory" ? "Safe Dirs" : "Allowlist"}</button>
-          <button class="btn btn-ghost btn-sm suggestion-dismiss-btn"
-            data-pattern="${escapeHtml(s.pattern)}">Dismiss</button>
-        </div>
-      </div>`
-    )
-    .join("");
-
-  return `
-    <div class="firewall-suggestions-section">
-      <h4>Suggested Allowlist Entries <span class="badge">${suggestions.length}</span></h4>
-      <div class="suggestion-cards">${cards}</div>
-    </div>`;
-}
-
-/**
  * Generate complete firewall section HTML
  */
 function getFirewallSectionHtml(
@@ -435,7 +363,6 @@ function getFirewallSectionHtml(
   aggregates: FirewallAggregates,
   timeSeriesData: FirewallTimeSeriesPoint[],
   nonce: string,
-  suggestions?: AllowlistSuggestion[],
   mode: SanitizationMode = "warn"
 ): string {
   return `
@@ -451,7 +378,6 @@ function getFirewallSectionHtml(
           ${getFirewallFiltersHtml(filters)}
           ${getFirewallChartsHtml(timeSeriesData, aggregates, nonce)}
           ${getFirewallEventTableHtml(events)}
-          ${getFirewallSuggestionsHtml(suggestions)}
         </div>
       </div>
     </details>
@@ -737,107 +663,6 @@ export function getFirewallTabStyles(): string {
       border-radius: var(--border-radius);
     }
 
-    /* Allowlist Suggestions (Issue #786) */
-    .firewall-suggestions-section {
-      margin-top: var(--spacing-md);
-      padding-top: var(--spacing-md);
-      border-top: 1px solid var(--vscode-panel-border);
-    }
-    .firewall-suggestions-section h4 {
-      font-size: 1em;
-      font-weight: 600;
-      margin: 0 0 var(--spacing-md) 0;
-      display: flex;
-      align-items: center;
-      gap: var(--spacing-sm);
-    }
-    .suggestion-cards {
-      display: flex;
-      flex-direction: column;
-      gap: var(--spacing-sm);
-    }
-    .suggestion-card {
-      background: var(--vscode-editor-background);
-      border: 1px solid var(--vscode-panel-border);
-      border-radius: var(--border-radius);
-      padding: var(--spacing-md);
-    }
-    .suggestion-header {
-      display: flex;
-      align-items: center;
-      gap: var(--spacing-sm);
-      margin-bottom: var(--spacing-xs);
-    }
-    .suggestion-type-badge {
-      display: inline-block;
-      padding: 2px 8px;
-      border-radius: var(--border-radius);
-      font-size: 0.75em;
-      font-weight: 600;
-    }
-    .suggestion-type-allowlist {
-      background: rgba(54, 162, 235, 0.2);
-      color: rgba(54, 162, 235, 1);
-    }
-    .suggestion-type-safe_directory {
-      background: rgba(75, 192, 75, 0.2);
-      color: rgba(75, 192, 75, 1);
-    }
-    .suggestion-freq-badge {
-      display: inline-block;
-      padding: 2px 8px;
-      border-radius: var(--border-radius);
-      font-size: 0.75em;
-      background: var(--vscode-badge-background);
-      color: var(--vscode-badge-foreground);
-    }
-    .suggestion-last-seen {
-      font-size: 0.75em;
-      color: var(--vscode-descriptionForeground);
-      margin-left: auto;
-    }
-    .suggestion-pattern {
-      display: block;
-      font-family: var(--vscode-editor-font-family);
-      font-size: 0.9em;
-      padding: var(--spacing-xs) var(--spacing-sm);
-      background: var(--vscode-textCodeBlock-background);
-      border-radius: var(--border-radius);
-      margin: var(--spacing-xs) 0;
-      word-break: break-all;
-    }
-    .suggestion-description {
-      font-size: 0.85em;
-      color: var(--vscode-descriptionForeground);
-      margin: var(--spacing-xs) 0;
-    }
-    .suggestion-example {
-      font-size: 0.8em;
-      color: var(--vscode-descriptionForeground);
-      margin: var(--spacing-xs) 0;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-    .suggestion-actions {
-      display: flex;
-      gap: var(--spacing-sm);
-      margin-top: var(--spacing-sm);
-    }
-    .btn-sm {
-      padding: 3px 10px;
-      font-size: 0.8em;
-    }
-    .btn-ghost {
-      background: transparent;
-      color: var(--vscode-descriptionForeground);
-      border: 1px solid var(--vscode-panel-border);
-      border-radius: var(--border-radius);
-      cursor: pointer;
-    }
-    .btn-ghost:hover {
-      background: var(--vscode-list-hoverBackground);
-    }
   `;
 }
 

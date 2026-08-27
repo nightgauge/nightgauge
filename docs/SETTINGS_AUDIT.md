@@ -29,7 +29,7 @@ runtime** are **missing from the UI**.
 | Sections registered but empty    | 1     |
 | Settings rendered in UI          | ~70   |
 | Settings consumed at runtime     | 50+   |
-| UI settings NOT consumed         | 8     |
+| UI settings NOT consumed         | 2     |
 | Runtime settings MISSING from UI | 25+   |
 | Schema settings missing from UI  | 15+   |
 
@@ -281,35 +281,19 @@ implement runtime enforcement for the existing ones and add the missing ones.
 
 ### 9. Sanitization (`getSanitizationSectionHtml`)
 
-**UI Settings Rendered:**
+**Resolved (#967).**
 
-| Setting                       | Runtime Consumed | Consumer |
-| ----------------------------- | ---------------- | -------- |
-| `sanitization.enabled`        | NO               | Not read |
-| `sanitization.sanitize_input` | NO               | Not read |
-| `sanitization.logging`        | NO               | Not read |
-| `sanitization.warn_only`      | NO               | Not read |
-| `sanitization.allowlist`      | NO               | Not read |
-| `sanitization.blocklist`      | NO               | Not read |
+At the time of this audit the section rendered six decorative controls — none
+of them had a runtime consumer. `ConfigBridge.getSanitization()` was never
+called, and the `NightgaugeYamlService` write helpers reached from the
+dashboard firewall log wrote keys nothing enforced.
 
-**Verdict: NOT IMPLEMENTED** — All 6 settings are rendered but none are consumed
-at runtime. `ConfigBridge.getSanitization()` is never called. The
-`SanitizationLogService` reads log files but does not read sanitization config
-to change behavior.
-
-The `NightgaugeYamlService` has methods `addToAllowlist()` and `addSafeDirectory()`
-that write to config, but nothing reads these values to enforce sanitization
-rules.
-
-**Issues Found:**
-
-- All 6 settings are decorative. No prompt injection protection is implemented
-  despite the UI suggesting it is configurable.
-
-**Recommendation:** Either implement the sanitization engine (read config values
-and enforce them during pipeline execution) or remove the section from the UI.
-If kept as aspirational, add a note that these settings are planned but not yet
-enforced.
+Issue #967 removed the six decorative controls, their schema fields, their
+env-var overrides, and the dashboard write helpers, and added the one control
+that is actually honoured: `sanitization.mode` (`warn` | `block` |
+`disabled`), consumed by `internal/hooks.EvaluateGate` via
+`config.SanitizationConfig.ResolvedMode()`. The deprecated `warn_only`
+resolution leg was removed with them.
 
 ---
 
@@ -452,12 +436,6 @@ These settings mislead users into thinking they control behavior:
 | `validation.require_changelog`  | Validation   | Not enforced |
 | `validation.max_files_changed`  | Validation   | Not enforced |
 | `validation.max_lines_changed`  | Validation   | Not enforced |
-| `sanitization.enabled`          | Sanitization | Not enforced |
-| `sanitization.sanitize_input`   | Sanitization | Not enforced |
-| `sanitization.logging`          | Sanitization | Not enforced |
-| `sanitization.warn_only`        | Sanitization | Not enforced |
-| `sanitization.allowlist`        | Sanitization | Not enforced |
-| `sanitization.blocklist`        | Sanitization | Not enforced |
 | `issue.auto_assign`             | Issue        | Not enforced |
 | `issue.default_labels`          | Issue        | Not enforced |
 | `branch.prefixes.feature`       | Branch       | Not enforced |
@@ -517,7 +495,7 @@ These settings control behavior but users cannot see or change them in the UI:
 | Pipeline          | B     | 6 rendered, 6 consumed. 14+ missing.           |
 | Commands          | A+    | 5 rendered, 5 consumed. Complete.              |
 | Validation        | F     | 4 rendered, 0 consumed. 4 consumed missing.    |
-| Sanitization      | F     | 6 rendered, 0 consumed. Fully decorative.      |
+| Sanitization      | —     | Six decorative controls removed (#967).        |
 | Enforcement       | A+    | 3 rendered, 3 consumed. Complete.              |
 | Routing           | A     | 5 rendered, 5 consumed. 1 missing.             |
 | Batch             | A+    | 13 rendered, 13 consumed. Complete.            |
@@ -539,8 +517,9 @@ These settings control behavior but users cannot see or change them in the UI:
 3. **Implement or remove Issue settings** — MEDIUM priority. Both settings are
    fully decorative. (New issue)
 
-4. **Implement or remove Sanitization settings** — MEDIUM priority. All 6
-   settings are fully decorative. (New issue)
+4. **Sanitization settings** — DONE (#967). The six decorative controls were
+   removed rather than implemented; the panel now exposes only the one setting
+   the gate honours.
 
 5. **Add missing Pipeline settings to UI** — MEDIUM priority. 14+ consumed
    settings missing from UI, especially `default_mode`, `max_turns`, `retry.*`.

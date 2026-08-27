@@ -16,6 +16,7 @@ import { SETTINGS_SECTIONS, DEFAULT_CONFIG, TIER_TABS, PIPELINE_LOCKED_SECTIONS 
 import { getForgeInstancesSectionHtml } from "./ForgeInstancesSection";
 import { mergeWithDefaults, getConfigValue } from "./NightgaugeYamlService";
 import type { ConfigSourceMap, TrustedStage } from "../../config/schema";
+import { resolveSanitizationMode } from "../../config/schema";
 import { getTierBadgeHtml, getTierBadgeStyles, getUxTierBadgeHtml } from "./TierBadge";
 import type { TierAuditEntry } from "../../services/IpcClientBase";
 import { modelSupportsEffort } from "../../utils/nightgaugeConfig";
@@ -1995,70 +1996,22 @@ function getSanitizationSectionHtml(
   showBadges: boolean,
   options?: SettingsHtmlOptions
 ): string {
-  const sanitization = config.sanitization ?? {};
   const g = (path: string) => getSourceForPath(path, sources);
 
   return `
     <div class="section-content">
-      ${getToggleHtml(
-        "sanitization.enabled",
-        "Enable Sanitization",
-        "Enable prompt injection protection",
-        sanitization.enabled ?? true,
+      ${getSelectHtml(
+        "sanitization.mode",
+        "Sanitization Mode",
+        "How the prompt injection firewall handles a pattern match: warn logs and allows, block denies the command, disabled skips the checks entirely.",
+        resolveSanitizationMode(config.sanitization),
+        [
+          { value: "warn", label: "Warn — log matches but allow" },
+          { value: "block", label: "Block — deny matching commands" },
+          { value: "disabled", label: "Disabled — skip pattern checks" },
+        ],
         disabled,
-        g("sanitization.enabled"),
-        showBadges,
-        options
-      )}
-      ${getToggleHtml(
-        "sanitization.sanitize_input",
-        "Sanitize Input",
-        "Check user prompts for injection attempts",
-        sanitization.sanitize_input ?? false,
-        disabled,
-        g("sanitization.sanitize_input"),
-        showBadges,
-        options
-      )}
-      ${getToggleHtml(
-        "sanitization.logging",
-        "Enable Logging",
-        "Log all sanitization events",
-        sanitization.logging ?? true,
-        disabled,
-        g("sanitization.logging"),
-        showBadges,
-        options
-      )}
-      ${getToggleHtml(
-        "sanitization.warn_only",
-        "Warn Only",
-        "Log but do not block suspicious content",
-        sanitization.warn_only ?? false,
-        disabled,
-        g("sanitization.warn_only"),
-        showBadges,
-        options
-      )}
-      ${getListInputHtml(
-        "sanitization.allowlist",
-        "Allowlist",
-        "Patterns that bypass sanitization",
-        sanitization.allowlist ?? [],
-        "pattern",
-        disabled,
-        g("sanitization.allowlist"),
-        showBadges,
-        options
-      )}
-      ${getListInputHtml(
-        "sanitization.blocklist",
-        "Blocklist",
-        "Patterns that are always blocked",
-        sanitization.blocklist ?? [],
-        "pattern",
-        disabled,
-        g("sanitization.blocklist"),
+        g("sanitization.mode"),
         showBadges,
         options
       )}

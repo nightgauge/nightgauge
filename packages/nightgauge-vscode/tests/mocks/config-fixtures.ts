@@ -773,50 +773,6 @@ export function createMockValidationConfig(
 }
 
 // ============================================================================
-// Sanitization Configuration Fixtures
-// ============================================================================
-
-/**
- * Default sanitization configuration for tests
- */
-export const DEFAULT_SANITIZATION_CONFIG: import("../../src/config/schema").SanitizationConfig = {
-  enabled: true,
-  sanitize_input: false,
-  logging: true,
-  mode: "warn",
-  warn_only: false,
-  allowlist: [],
-  blocklist: [],
-  safe_directories: [
-    "./dist",
-    "./build",
-    "./node_modules",
-    "./.next",
-    "./coverage",
-    "./out",
-    "./.cache",
-  ],
-};
-
-/**
- * Create a mock sanitization configuration with optional overrides
- *
- * @param overrides - Partial overrides for the config
- * @returns Complete sanitization configuration
- *
- * @example
- * const config = createMockSanitizationConfig({ warn_only: true });
- */
-export function createMockSanitizationConfig(
-  overrides?: Partial<import("../../src/config/schema").SanitizationConfig>
-): import("../../src/config/schema").SanitizationConfig {
-  return {
-    ...DEFAULT_SANITIZATION_CONFIG,
-    ...overrides,
-  };
-}
-
-// ============================================================================
 // Human-in-the-Loop Configuration Fixtures
 // ============================================================================
 
@@ -1012,10 +968,7 @@ export const BEHAVIOR_CONFIG_ENV_MAPPINGS = {
   "validation.max_lines_changed": "NIGHTGAUGE_VALIDATION_MAX_LINES",
 
   // Sanitization config
-  "sanitization.enabled": "NIGHTGAUGE_SANITIZATION_ENABLED",
-  "sanitization.sanitize_input": "NIGHTGAUGE_SANITIZATION_INPUT",
-  "sanitization.logging": "NIGHTGAUGE_SANITIZATION_LOGGING",
-  "sanitization.warn_only": "NIGHTGAUGE_SANITIZATION_WARN_ONLY",
+  "sanitization.mode": "NIGHTGAUGE_SANITIZATION_MODE",
 
   // Human-in-the-loop config
   "human_in_the_loop.auto_accept_stages": "NIGHTGAUGE_HITL_AUTO_ACCEPT_STAGES",

@@ -166,13 +166,7 @@ describe("NightgaugeConfigSchema", () => {
           max_lines_changed: 2000,
         },
         sanitization: {
-          enabled: true,
-          sanitize_input: false,
-          logging: true,
-          warn_only: false,
-          allowlist: [],
-          blocklist: [],
-          safe_directories: ["./dist", "./build"],
+          mode: "warn",
         },
         human_in_the_loop: {
           auto_accept_stages: false,
@@ -487,18 +481,7 @@ describe("NightgaugeConfigSchema", () => {
 
     it("applies sanitization defaults", () => {
       const config = mergeWithDefaults({ sanitization: {} });
-      expect(config.sanitization?.enabled).toBe(true);
-      expect(config.sanitization?.mode).toBe("warn");
-      expect(config.sanitization?.warn_only).toBe(false);
-      expect(config.sanitization?.safe_directories).toEqual([
-        "./dist",
-        "./build",
-        "./node_modules",
-        "./.next",
-        "./coverage",
-        "./out",
-        "./.cache",
-      ]);
+      expect(config.sanitization).toEqual({ mode: "warn" });
     });
 
     it("applies human_in_the_loop defaults", () => {
@@ -633,20 +616,14 @@ describe("NightgaugeConfigSchema", () => {
       expect(result.success).toBe(true);
     });
 
-    it("SanitizationConfigSchema accepts valid sanitization config", () => {
-      const result = SanitizationConfigSchema.safeParse({
-        enabled: true,
-        allowlist: ["rm -rf ./node_modules"],
-      });
+    it("SanitizationConfigSchema accepts a valid mode", () => {
+      const result = SanitizationConfigSchema.safeParse({ mode: "block" });
       expect(result.success).toBe(true);
     });
 
-    it("SanitizationConfigSchema accepts safe_directories", () => {
-      const result = SanitizationConfigSchema.safeParse({
-        enabled: true,
-        safe_directories: ["./dist", "./build", "./node_modules"],
-      });
-      expect(result.success).toBe(true);
+    it("SanitizationConfigSchema rejects an invalid mode", () => {
+      const result = SanitizationConfigSchema.safeParse({ mode: "nope" });
+      expect(result.success).toBe(false);
     });
 
     it("HumanInTheLoopConfigSchema accepts valid HITL config", () => {

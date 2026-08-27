@@ -1300,8 +1300,7 @@ pipeline:
 
 # Sanitization (prompt injection protection)
 sanitization:
-  enabled: true
-  warn_only: false
+  mode: warn # warn (default: log + allow), block, disabled
 ```
 
 **Gitignore Entry for Local Config:**

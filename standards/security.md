@@ -194,12 +194,12 @@ based on potentially untrusted input (file contents, issue descriptions, etc.).
 
 ### Quick Reference
 
-| Feature             | Default  | Description                                |
-| ------------------- | -------- | ------------------------------------------ |
-| Output sanitization | Enabled  | Blocks dangerous Bash commands             |
-| Input sanitization  | Disabled | Checks user prompts for injection attempts |
-| Logging             | Enabled  | Records all sanitization events            |
-| Warn-only mode      | Disabled | Logs without blocking (for testing)        |
+| Setting             | Default | Description                                                         |
+| ------------------- | ------- | ------------------------------------------------------------------- |
+| `sanitization.mode` | `warn`  | `warn` logs and allows; `block` rejects; `disabled` skips screening |
+
+The pattern set is built into the binary. There is no allowlist, blocklist or
+safe-directory setting, and the log path is fixed.
 
 ### Configuration
 
@@ -207,16 +207,13 @@ Add to `.nightgauge/config.yaml`:
 
 ```yaml
 sanitization:
-  enabled: true
-  warn_only: false
-  allowlist:
-    - "rm -rf ./node_modules"
+  mode: warn # warn (default: log + allow), block, disabled
 ```
 
-### Environment Variables
+### Escape Hatch
 
-- `NIGHTGAUGE_SKIP_SANITIZATION=1` - Disable sanitization
-- `NIGHTGAUGE_SANITIZATION_WARN_ONLY=1` - Log but don't block
+- `NIGHTGAUGE_SKIP_WORKFLOW_GATE=1` — bypass the gate for one manual command.
+  Never set it in skillRunner or orchestrator environments.
 
 ---
 
