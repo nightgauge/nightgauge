@@ -32,6 +32,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/forge"
 	"github.com/nightgauge/nightgauge/internal/git"
 	gh "github.com/nightgauge/nightgauge/internal/github"
+	"github.com/nightgauge/nightgauge/internal/hooks"
 	changeClassifier "github.com/nightgauge/nightgauge/internal/intelligence/changeClassifier"
 	"github.com/nightgauge/nightgauge/internal/intelligence/complexity"
 	"github.com/nightgauge/nightgauge/internal/intelligence/learning"
@@ -629,9 +630,30 @@ type Scheduler struct {
 	runDefaultAdapter adapters.SkillRunner
 
 	// Callbacks
-	onStageStart       func(repo string, issue int, stage string, title string)
-	onStageComplete    func(repo string, issue int, stage string, err error, inputTokens, outputTokens, cacheReadTokens int, costUsd float64, model string)
-	onEpicComplete     func(repo string, epicNumber int)
+	onStageStart    func(repo string, issue int, stage string, title string)
+	onStageComplete func(repo string, issue int, stage string, err error, inputTokens, outputTokens, cacheReadTokens int, costUsd float64, model string)
+	onEpicComplete  func(repo string, epicNumber int)
+	// evaluatePostMergeFn performs the post-merge evaluation. A field, not a
+	// direct call, for the same reason buildGraphFn is one: checkEpicCompletion
+	// otherwise constructs its own GitHub services from a live client, so the
+	// only branch that matters here — result.AutoClosed == true — is
+	// unreachable in a test. Without this seam, deleting the epic.go call site
+	// breaks no test, which is the unpinned-wiring shape #991 exists to fix.
+	// Defaulted in NewScheduler.
+	evaluatePostMergeFn func(ctx context.Context, issueSvc hooks.IssueFetcher, issueCloser hooks.IssueCloser,
+		epicSvc hooks.EpicAutoCloser, prVerifier hooks.PRVerifier, boardSvc hooks.BoardSyncer,
+		input hooks.PostMergeInput) hooks.PostMergeResult
+
+	// epicCheckpoint latches the autonomous scheduler's between-epic safety
+	// pause when an epic auto-closes.
+	//
+	// A DEDICATED field rather than a second registration on onEpicComplete,
+	// which is a single slot that internal/ipc/server.go re-assigns inside the
+	// `pipeline.run` method closure — per REQUEST, not at startup. Chaining
+	// onto it would be silently wiped by the next pipeline.run, or born nil,
+	// depending on ordering; both failures are invisible (#991). Mirrors the
+	// SetAttention shape: one writer, nil-safe on both ends. nil in CLI mode.
+	epicCheckpoint     func(epicNumber int)
 	onPipelineComplete func(repo string, issue int, runtime *state.RuntimeState, success bool)
 	onQueueChanged     func(QueueState)
 	onStateChanged     func(repo string, issue int, runtime *state.RuntimeState)
@@ -850,6 +872,9 @@ func NewScheduler(client *gh.Client, cfg SchedulerConfig) *Scheduler {
 	excludeLabels := resolvedExcludeLabels(cfg.ExcludeLabels)
 
 	s := &Scheduler{
+		// Default to the real evaluator; tests override to drive the
+		// AutoClosed branch without a live GitHub client (#991).
+		evaluatePostMergeFn:       hooks.EvaluatePostMerge,
 		client:                    client,
 		boardSvc:                  gh.NewBoardService(client, cfg.Owner, cfg.ProjectNumber, cfg.OwnerType),
 		issueSvc:                  gh.NewIssueService(client),
@@ -3036,8 +3061,26 @@ func (s *Scheduler) OnStageComplete(fn func(repo string, issue int, stage string
 }
 
 // OnEpicComplete sets a callback for when an epic auto-closes.
+//
+// SINGLE SLOT: a second call replaces the first. internal/ipc/server.go
+// registers one per `pipeline.run` request, so anything that needs to observe
+// epic completion durably must NOT register here — see SetEpicCheckpointFn for
+// the shape that survives (#991).
 func (s *Scheduler) OnEpicComplete(fn func(repo string, epicNumber int)) {
 	s.onEpicComplete = fn
+}
+
+// SetEpicCheckpointFn injects the autonomous scheduler's epic-checkpoint
+// recorder, so the fleet-scoped SafetyRails pause fires from the one place an
+// epic actually closes.
+//
+// Nil-receiver guard is required: NewAutonomousScheduler is called with a nil
+// *Scheduler throughout the test suite.
+func (s *Scheduler) SetEpicCheckpointFn(fn func(epicNumber int)) {
+	if s == nil {
+		return
+	}
+	s.epicCheckpoint = fn
 }
 
 // OnPipelineComplete sets a callback invoked when a pipeline finishes (success or failure).

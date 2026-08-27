@@ -836,7 +836,12 @@ Detection still surfaces via state and the CLI when no webhook is configured.
 
 ### Epic Checkpoint
 
-- **Config**: `safety_rails.epic_checkpoint` (default: `true`)
+- **Config**: `safety_rails.epic_checkpoint` (default: `true`; an omitted key
+  preserves the default — see
+  [CONFIGURATION.md](CONFIGURATION.md) § safety_rails)
+- **Effect**: latches a machine-raised halt that stops dispatch across **every**
+  repo, survives a restart, and raises a `blocking_fleet` Action Center card.
+  Start refuses to resume it; resolve the card or Resume explicitly (#991)
 - **Trigger**: All sub-issues of an epic complete
 - **Effect**: Scheduler pauses (`pausedForCheckpoint`) until human resumes
 - **Resume**: Call `ResumeCheckpoint()` or restart the scheduler
