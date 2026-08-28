@@ -1471,7 +1471,12 @@ export class PipelineStateService implements vscode.Disposable {
   // Phase tracking — routed to Go IPC
   // -------------------------------------------------------------------------
 
-  async startPhase(stage: string, phaseName: string, total: number): Promise<void> {
+  async startPhase(
+    stage: string,
+    phaseName: string,
+    total: number,
+    registryIndex?: number
+  ): Promise<void> {
     // Always update local state and fire events immediately so the tree
     // view shows phase progress without depending on the IPC round-trip
     // (TS → Go → phase.start event → TS). The IPC notification to Go is
@@ -1484,7 +1489,13 @@ export class PipelineStateService implements vscode.Disposable {
         if (!phases.some((p) => p.name === phaseName)) {
           phases.push({
             name: phaseName,
-            index: phases.length,
+            // #1008: the phase's position in its stage, from the registry —
+            // NOT `phases.length`, which counted how many phases happened to
+            // have been recorded so far. The tree view renders a phase by
+            // looking its name up in the registry, so a positional counter
+            // guaranteed the record and the display disagreed whenever any
+            // phase went unrecorded.
+            index: registryIndex ?? phases.length,
             total,
             status: "running",
             started_at: new Date().toISOString(),
@@ -1496,8 +1507,12 @@ export class PipelineStateService implements vscode.Disposable {
       }
     }
 
+    // The same registry index goes on the wire, so the durable record and the
+    // local state cannot carry different numbers for one phase (#1008).
     const index =
-      this._lastState?.stages[stage]?.phases?.findIndex((p) => p.name === phaseName) ?? 0;
+      registryIndex ??
+      this._lastState?.stages[stage]?.phases?.findIndex((p) => p.name === phaseName) ??
+      0;
 
     this._onPhaseStart.fire({
       stage,
@@ -1595,7 +1610,12 @@ export class PipelineStateService implements vscode.Disposable {
       });
   }
 
-  async skipPhase(stage: string, phaseName: string, total: number): Promise<void> {
+  async skipPhase(
+    stage: string,
+    phaseName: string,
+    total: number,
+    registryIndex?: number
+  ): Promise<void> {
     if (!this._lastState) return;
     const stageState = this._lastState.stages[stage];
     if (!stageState) return;
@@ -1603,7 +1623,7 @@ export class PipelineStateService implements vscode.Disposable {
     if (phases.some((p) => p.name === phaseName)) return;
     phases.push({
       name: phaseName,
-      index: phases.length,
+      index: registryIndex ?? phases.length,
       total,
       status: "skipped",
     });
@@ -1614,7 +1634,7 @@ export class PipelineStateService implements vscode.Disposable {
     // #1026: this used to stop here. Local state and the view knew about the
     // skip; the durable record never did, so the GUI and the run record could
     // not agree — which is the disagreement the epic set out to end.
-    this.notifyPhaseTransition(stage, phaseName, phases.length - 1, total, "skip");
+    this.notifyPhaseTransition(stage, phaseName, registryIndex ?? phases.length - 1, total, "skip");
   }
 
   async failPhase(stage: string, phaseName: string, error: string, total: number): Promise<void> {
