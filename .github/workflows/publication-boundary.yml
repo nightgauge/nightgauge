@@ -98,3 +98,13 @@ jobs:
         # guard rejects all six. If someone "fixes" a red build by weakening the
         # guard, this step goes red too.
         run: bash scripts/test-publication-boundary.sh
+
+      - name: Prove the derived ceiling cannot be raised by a pull-request title
+        # The ceiling is inferred from squash-merge markers (#1078), so a number
+        # a human used to curate is now inferred from text a contributor partly
+        # controls — and raising it weakens the rule SILENTLY. This pins the
+        # anchoring that prevents it. Needs the full history fetched above.
+        run: python3 scripts/test-publication-boundary-ceiling.py
+
+      - name: Prove the rename carry-over still holds
+        run: python3 scripts/test-publication-boundary-rename.py

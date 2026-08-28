@@ -44,15 +44,38 @@ planning or private implementation details — path allowlisting, a regex
 check is necessary but does not replace human publication review.
 
 `issue_references` rejects a **newly added** line citing an issue number above
-`high_water_mark + slack` — a number this repository has not issued cannot
-resolve at the moment it is written, and once the repository's own numbering
-climbs past it, it stops 404-ing and starts resolving to unrelated live work.
-The rule anchors on the repository's own high-water mark rather than on digit
-count, so it does not need revisiting when the numbering passes four digits;
-the manifest records that mark, and the guard fails closed (exit 2) once
-merge-commit history proves it has gone stale. The scope is the diff, not the
-tree: the rule is "nothing newly introduced", and the tree's inherited
-predecessor references are a separate mechanical sweep.
+the repository's high-water mark plus `slack` — a number this repository has
+not issued cannot resolve at the moment it is written, and once the
+repository's own numbering climbs past it, it stops 404-ing and starts
+resolving to unrelated live work. The rule anchors on the mark rather than on
+digit count, so it does not need revisiting when the numbering passes four
+digits.
+
+**The mark is derived, not recorded** (#1078). GitHub appends the pull-request
+number in parentheses to the subject when it squash-merges, so the guard reads
+that trailing marker off the first-parent history — offline, with no network
+call, and with nothing to bump.
+
+Only the **trailing** marker counts, and that anchoring is load-bearing rather
+than incidental. An author can put a parenthesised number in the pull-request
+title itself; the forge then appends its own, so the subject carries two and
+only the last one is the number actually issued. An unanchored search would
+read the author's, which means any contributor could raise the ceiling — and a
+raised ceiling weakens the rule silently. `scripts/test-publication-boundary-ceiling.py`
+pins this; dropping the anchor is the mutation it exists to catch.
+
+`slack` remains because the derived mark can only see what has already MERGED,
+and numbers are issued while a pull request is open.
+
+This replaced a hand-maintained integer that cost 21 chore commits and failed
+**closed** every time it fell behind — rejecting legitimate references and
+turning `main` red rather than degrading quietly. A shallow clone is detected
+and refused for the same reason: the derived mark would be far too low, and the
+guard will not check against a mark it had to invent.
+
+The scope is the diff, not the tree: the rule is "nothing newly introduced",
+and the tree's inherited predecessor references are a separate mechanical
+sweep tracked by `tree_baseline`.
 
 The guard's own fail-closed regression suite
 (`scripts/test-publication-boundary.sh`) runs both in CI

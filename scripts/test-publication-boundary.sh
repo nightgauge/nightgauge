@@ -688,10 +688,16 @@ rmdir packages/nightgauge-vscode/tests/_boundary_probe 2>/dev/null
 PLANTED=""
 
 # ── The rule must fail closed when it cannot trust its own ceiling ──────────
+# The ceiling is DERIVED from merge history since #1078, so there is no longer a
+# stale mark to simulate — see test-publication-boundary-ceiling.py for the
+# derivation itself. What is still worth pinning here is that a LEFTOVER mark is
+# rejected rather than ignored: a key the guard silently stops reading is how a
+# reader concludes the ceiling is still hand-maintained.
 cp "$BACKUP" "$MANIFEST"
-sed -i.sedbak 's/^  high_water_mark: [0-9]*$/  high_water_mark: 1/' "$MANIFEST"
+sed -i.sedbak 's/^  slack: [0-9]*$/  high_water_mark: 1\
+  slack: 25/' "$MANIFEST"
 rm -f "$MANIFEST.sedbak"
-expect_exit 2 "a stale high_water_mark fails closed instead of rejecting real references"
+expect_exit 2 "a leftover high_water_mark fails closed instead of being silently ignored"
 
 cp "$BACKUP" "$MANIFEST"
 printf 'version: 1\nallow:\n  - path: "**"\n    class: PUBLIC\n' > "$MANIFEST"

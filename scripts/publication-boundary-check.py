@@ -489,21 +489,48 @@ def untracked_added_lines(paths):
             yield p, n, line
 
 
-def observed_high_water() -> int:
-    """Largest "(#N)" in first-parent commit subjects.
+def derived_high_water() -> int:
+    """The repository's high-water mark, read from its own merge history.
 
-    Squash merges write the pull request number into the subject, so this is an
-    OFFLINE lower bound on the numbers this repository has really issued -- no
-    network call inside a fail-closed guard. It is used only to detect that the
-    recorded mark has gone stale; it never raises the ceiling on its own, so the
-    guard can never be silently weakened by a crafted commit subject.
+    GitHub APPENDS `(#N)` to the subject when it squash-merges a pull request,
+    so the TRAILING marker on a first-parent subject is the number the forge
+    issued. This is the authority for the ceiling -- there is no recorded mark
+    to bump and therefore none to go stale (#1078).
+
+    Two properties make this safe inside a fail-closed guard:
+
+    * OFFLINE. No network call. `git log` on a full clone answers it, so the
+      guard cannot be turned red by a third party being unreachable -- the
+      failure mode that #1004 is about.
+    * NOT AUTHOR-CONTROLLED. Only the trailing marker counts. A pull request
+      titled `feat: thing (#99999)` squash-merges to
+      `feat: thing (#99999) (#1080)`, and this reads 1080. Anchoring to the end
+      of the subject is what keeps a crafted title from raising the ceiling and
+      silently weakening the rule; an unanchored search would take the bait.
     """
     out = subprocess.run(
         ["git", "log", "--first-parent", "--format=%s", "HEAD"],
         capture_output=True,
         check=True,
     ).stdout.decode(errors="ignore")
-    return max((int(n) for n in re.findall(r"\(#(\d+)\)", out)), default=0)
+    trailing = (re.search(r"\(#(\d+)\)\s*$", line) for line in out.splitlines())
+    return max((int(m.group(1)) for m in trailing if m), default=0)
+
+
+def repository_is_shallow() -> bool:
+    """True when this clone lacks the history the derivation needs.
+
+    A shallow clone answers `git log` with a truncated range, so the derived
+    mark would be far too LOW and the guard would reject every legitimate
+    reference above it. That must fail loudly rather than produce a tree's worth
+    of false positives.
+    """
+    out = subprocess.run(
+        ["git", "rev-parse", "--is-shallow-repository"],
+        capture_output=True,
+        check=True,
+    ).stdout.decode(errors="ignore").strip()
+    return out == "true"
 
 
 def main() -> int:
@@ -540,26 +567,31 @@ def main() -> int:
         die(2, "manifest has no `issue_references` block. The unresolvable-reference rule "
                "cannot know this repository's high-water mark, so it would silently check "
                "nothing. Failing closed.")
-    mark = refs_rule.get("high_water_mark")
+    if "high_water_mark" in refs_rule:
+        die(2, "issue_references.high_water_mark is no longer read -- the mark is derived\n"
+               "  from this repository's own merge history (#1078). A recorded mark can go\n"
+               "  stale; a derived one cannot. Delete the key from "
+               f"{MANIFEST}.")
     slack = refs_rule.get("slack")
-    if isinstance(mark, bool) or not isinstance(mark, int) or mark < 1:
-        die(2, "issue_references.high_water_mark must be a positive integer. Failing closed.")
     if isinstance(slack, bool) or not isinstance(slack, int) or slack < 0:
         die(2, "issue_references.slack must be a non-negative integer. Failing closed.")
-    ceiling = mark + slack
 
-    # The recorded mark is the source of truth for the ceiling; git history is
-    # only ever consulted to prove that mark has gone stale. Once the repository
-    # has demonstrably issued a number ABOVE the ceiling, the rule would start
-    # denying legitimate references -- so stop, loudly, instead of manufacturing
-    # false positives.
-    observed = observed_high_water()
-    if observed > ceiling:
-        die(2, f"issue_references.high_water_mark ({mark}) is stale.\n"
-               f"  This repository has already merged #{observed}, above the ceiling "
-               f"{ceiling} (= {mark} + slack {slack}).\n"
-               f"  Bump `high_water_mark` in {MANIFEST} to the repository's current highest\n"
-               f"  issue/PR number. Until then this rule would reject real references.")
+    # THE MARK IS DERIVED, NOT RECORDED (#1078). It was a hand-maintained integer
+    # for 21 chore commits, and it fails CLOSED: every time it fell behind, the
+    # rule began rejecting legitimate references and turned `main` red. Reading
+    # it from the forge's own squash-merge markers keeps the entire guarantee and
+    # removes the counter that nobody was watching.
+    if repository_is_shallow():
+        die(2, "the reference ceiling is derived from merge history, and this is a SHALLOW\n"
+               "  clone -- the derived mark would be far too low and every reference above\n"
+               "  it would be reported as unresolvable.\n"
+               "  Fetch full history (`git fetch --unshallow`, or `fetch-depth: 0` in CI).")
+    mark = derived_high_water()
+    if mark < 1:
+        die(2, "no `(#N)` merge marker found on the first-parent history, so the reference\n"
+               "  ceiling cannot be derived. The guard will not check references against a\n"
+               "  mark it had to invent. Failing closed.")
+    ceiling = mark + slack
 
     violations: list[str] = []
     tracked = tracked_paths()
@@ -788,8 +820,10 @@ def main() -> int:
                 f"    {token} is above this repository's high-water mark "
                 f"({mark} + slack {slack} = {ceiling}), so it cannot resolve here.\n"
                 f"    {line.strip()[:100]}\n"
-                f"    Cite the real issue, drop the '#', or -- if #{num} genuinely exists\n"
-                f"    now -- bump issue_references.high_water_mark in {MANIFEST}.\n"
+                f"    Cite the real issue, drop the '#', or qualify it as `owner/repo#{num}`\n"
+                f"    if it belongs to another repository. The ceiling is DERIVED from merge\n"
+                f"    history (#1078), so there is no mark to bump: if #{num} genuinely exists\n"
+                f"    here, this branch simply predates the merge that issued it.\n"
                 f"    (measured against {base_ref} @ {base[:12]})"
             )
 
