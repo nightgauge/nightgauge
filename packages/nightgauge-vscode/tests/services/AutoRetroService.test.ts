@@ -1562,10 +1562,10 @@ describe("AutoRetroService", () => {
       expect(findings[0].evidence.join(" ")).toContain("dev_handoff_missing");
     });
 
-    it("does not let a terminal kind displace the merge-blocked verdict (#3924 ordering)", () => {
+    it("does not let a terminal kind displace the merge-blocked verdict (extractor ordering)", () => {
       const findings = AutoRetroService.classifyFailure(
         {
-          // The real #3924 shape: a deterministically-known blocker. Declining
+          // The real merge-blocked shape: a deterministically-known blocker. Declining
           // to merge a red PR is CORRECT behaviour, not a skill no-op.
           text: 'blocked by failing check "Sync E2E (Docker)" (mergeStateStatus=UNSTABLE)',
           sourcesAnalyzed: ["terminal_reason"],
@@ -1577,7 +1577,7 @@ describe("AutoRetroService", () => {
       );
 
       // Whatever else fires, the first verdict must remain the merge-blocked
-      // one that #3924 deliberately ordered ahead of skill-no-op.
+      // one the extractor above deliberately orders ahead of skill-no-op.
       expect(findings[0].category).toBe("merge-blocked");
     });
 

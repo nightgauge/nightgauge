@@ -552,8 +552,8 @@ const SIGNAL_EXTRACTORS: Array<(input: ExtractorInput) => StructuredSignal | nul
   // PLACEMENT IS LOAD-BEARING. This sits AFTER the merge-blocked and
   // skill-no-op extractors on purpose. The "authoritative kind wins, so put it
   // first" instinct would let a pr-merge kind displace the merge-blocked
-  // verdict that #3924 deliberately ordered ahead of skill-no-op — shipping a
-  // new misclassification for a case that is currently correct.
+  // verdict that the extractor above deliberately orders ahead of skill-no-op
+  // — shipping a new misclassification for a case that is currently correct.
   //
   // Mapped to `skill-no-op`, not `state-management`: the latter recommends
   // "re-run the failed stage after verifying context", which directly
