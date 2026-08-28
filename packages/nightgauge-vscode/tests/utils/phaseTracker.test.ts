@@ -203,4 +203,64 @@ describe("createPhaseTracker", () => {
       );
     });
   });
+
+  // #1055 — the concurrent slot closed phases from onSlotStageChanged (which
+  // fires when a stage STARTS) and passed the STARTING stage to
+  // completeStagePhases. These two tests pin the semantic that was
+  // misunderstood: the argument names the stage that FINISHED.
+  describe("completeStagePhases names the stage that finished (#1055)", () => {
+    it("closes the last active phase of the stage it is given", async () => {
+      const tracker = createPhaseTracker(mockStateService as any);
+
+      tracker.onPhaseDetected(
+        "pr-merge" as PipelineStage,
+        {
+          name: "read-pr-context",
+          index: 0,
+          total: 14,
+          stage: "pr-merge",
+        } as ParsedPhaseMarker
+      );
+
+      tracker.completeStagePhases("pr-merge" as PipelineStage);
+
+      await vi.waitFor(() => {
+        expect(mockStateService.completePhase).toHaveBeenCalledWith(
+          "pr-merge",
+          "read-pr-context",
+          expect.any(Number)
+        );
+      });
+    });
+
+    it("is a no-op for a stage that has no active phase — which is why passing the STARTING stage left the previous stage's last phase running forever", async () => {
+      const tracker = createPhaseTracker(mockStateService as any);
+
+      // pr-merge is mid-flight with an open phase.
+      tracker.onPhaseDetected(
+        "pr-merge" as PipelineStage,
+        {
+          name: "read-pr-context",
+          index: 0,
+          total: 14,
+          stage: "pr-merge",
+        } as ParsedPhaseMarker
+      );
+
+      // The old wiring called this with the stage that was just STARTING.
+      tracker.completeStagePhases("feature-validate" as PipelineStage);
+
+      await vi.waitFor(() => {
+        expect(mockStateService.skipPhase).toHaveBeenCalled();
+      });
+
+      // pr-merge's open phase is untouched: nothing closed it, and nothing
+      // will until teardown — by which time the run is terminal-latched and
+      // the transition is refused.
+      const closedStages = mockStateService.completePhase.mock.calls.map(
+        (call: unknown[]) => call[0]
+      );
+      expect(closedStages).not.toContain("pr-merge");
+    });
+  });
 });
