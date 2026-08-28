@@ -291,6 +291,85 @@ export class ContextAssembler {
    * @see Issue #327 — Repository-scoped context loading
    * @see Issue #1629 — Worktree path isolation
    */
+  /**
+   * Overwrite `planning.ac_reconcile` from the deterministic report on disk.
+   *
+   * `nightgauge preflight ac-reconcile` writes a complete seven-field report to
+   * `.nightgauge/pipeline/ac-reconcile-{N}.json`. Before #1011 the only
+   * instruction to get it into `planning-{N}.json` was prose in the planning
+   * SKILL.md, and the shell phase that ran the reconciler exposed just three
+   * scalars — so the model re-typed the block by hand and dropped
+   * `acceptance_criteria`, `main_sha` and `evaluated_at`.
+   *
+   * Those are exactly the three fields `PlanningContextSchema` requires. The
+   * assembler logged the mismatch and continued (correct policy, applied to a
+   * file the next stage depends on), so `feature-dev` and `feature-validate`
+   * received a handoff with no machine-readable acceptance criteria at all.
+   *
+   * The report is the source of truth and whatever the model wrote is discarded
+   * unconditionally — single writer, no merge, no "keep the richer of the two".
+   * The two neighbouring fields in the same phase (`recalled_decisions`,
+   * `dependency_analysis`) already work this way; this one was the exception.
+   *
+   * A missing or unreadable report yields `null`, never a partial object: a
+   * partial block is the defect being fixed, so producing one here would
+   * reintroduce it from the other side.
+   */
+  private spliceACReconcile(issueNumber: number, parsed: unknown, contextPath: string): void {
+    if (!parsed || typeof parsed !== "object") {
+      return;
+    }
+    const target = parsed as Record<string, unknown>;
+    let report: unknown = null;
+    try {
+      const reportPath = this.getContextPath("ac-reconcile", issueNumber);
+      if (fs.existsSync(reportPath)) {
+        report = JSON.parse(fs.readFileSync(reportPath, "utf-8"));
+      }
+    } catch (err) {
+      this.logger.warn("ac_reconcile report unreadable — writing null", {
+        issueNumber,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      report = null;
+    }
+
+    if (!report || typeof report !== "object") {
+      target.ac_reconcile = null;
+      this.persistSplicedContext(contextPath, target, issueNumber);
+      return;
+    }
+
+    target.ac_reconcile = report;
+    const criteria = (report as Record<string, unknown>).acceptance_criteria;
+    this.logger.info("Spliced ac_reconcile from the deterministic report", {
+      issueNumber,
+      acCount: Array.isArray(criteria) ? criteria.length : 0,
+      aggregateStatus: (report as Record<string, unknown>).aggregate_status,
+    });
+    this.persistSplicedContext(contextPath, target, issueNumber);
+  }
+
+  /**
+   * Write the spliced object back so the bytes on disk and the object validated
+   * in memory agree — `feature-dev` reads the FILE, not this object.
+   */
+  private persistSplicedContext(
+    contextPath: string,
+    target: Record<string, unknown>,
+    issueNumber: number
+  ): void {
+    try {
+      fs.writeFileSync(contextPath, JSON.stringify(target, null, 2));
+    } catch (err) {
+      this.logger.warn("Could not persist the spliced planning context", {
+        issueNumber,
+        contextPath,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
   getContextPath(type: ContextFileType, issueNumber: number): string {
     if (this.contextLoader) {
       return this.contextLoader.getContextFile(type, issueNumber);
@@ -407,6 +486,14 @@ export class ContextAssembler {
           }
           this.logger.error(parseMsg, { stage, issueNumber, contextPath });
           return { error: new Error(parseMsg) };
+        }
+
+        // #1011: the orchestrator, not the model, writes planning.ac_reconcile.
+        // Must run BEFORE safeParse — the three fields the model drops are the
+        // three the schema requires, and repairing after validation would only
+        // silence the warning without fixing what the next stage reads.
+        if (stage === "feature-planning") {
+          this.spliceACReconcile(issueNumber, parsed, contextPath);
         }
 
         const result = schema.safeParse(parsed);

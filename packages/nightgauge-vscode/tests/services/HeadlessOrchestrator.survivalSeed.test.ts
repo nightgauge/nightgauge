@@ -260,37 +260,50 @@ describe("HeadlessOrchestrator seeds a survival record on the extension merge pa
     return p;
   }
 
-  it("passes --pr, so the hook can fetch the merge SHA the record is made of", async () => {
-    await runCleanPipeline();
+  /**
+   * ONE pipeline run for all three wiring assertions.
+   *
+   * Each of these drove its own full eight-stage run at first, and that made
+   * the file cost three pipelines to assert three flags on one argv. Even with
+   * faked timers the drain loop burns real wall-clock — module churn, promise
+   * scheduling, the mocked spawns — and on a loaded CI runner the third test
+   * crossed vitest's 15s budget and timed out while passing locally every time.
+   *
+   * The redundancy was the defect, not the budget: the run is identical in all
+   * three, so raising the timeout would have kept paying 3x for one measurement.
+   * The mutation guarantee is unchanged — deleting the production call site
+   * leaves `spawn` undefined and turns all three red together.
+   */
+  describe("the argv a clean run produces", () => {
+    let spawn: { args: string[]; cwd: string };
 
-    expect(hookSpawns.length, "the post-merge hook should have been invoked").toBeGreaterThan(0);
-    const spawn = hookSpawns[hookSpawns.length - 1];
+    beforeEach(async () => {
+      await runCleanPipeline();
+      expect(hookSpawns.length, "the post-merge hook should have been invoked").toBeGreaterThan(0);
+      spawn = hookSpawns[hookSpawns.length - 1];
+    });
 
-    // Without --pr, EvaluatePostMerge never resolves MergedCommitSha/MergedAt,
-    // SurvivalEligible stays false, and the seeding block never runs. This is
-    // the exact argv omission that produced zero records.
-    expect(flagValue(spawn.args, "--pr")).toBe("4200");
-  });
+    it("passes --pr, so the hook can fetch the merge SHA the record is made of", () => {
+      // Without --pr, EvaluatePostMerge never resolves MergedCommitSha/MergedAt,
+      // SurvivalEligible stays false, and the seeding block never runs. This is
+      // the exact argv omission that produced zero records.
+      expect(flagValue(spawn.args, "--pr")).toBe("4200");
+    });
 
-  it("roots the journal at the launch root, not the worktree that is about to be deleted", async () => {
-    await runCleanPipeline();
-    const spawn = hookSpawns[hookSpawns.length - 1];
+    it("roots the journal at the launch root, not the worktree that is about to be deleted", () => {
+      expect(flagValue(spawn.args, "--workdir")).toBe(LAUNCH_ROOT);
+      expect(flagValue(spawn.args, "--workdir")).not.toBe(WORKTREE);
+      // The spawn still runs IN the worktree — only the journal's root moves.
+      expect(spawn.cwd).toBe(WORKTREE);
+    });
 
-    expect(flagValue(spawn.args, "--workdir")).toBe(LAUNCH_ROOT);
-    expect(flagValue(spawn.args, "--workdir")).not.toBe(WORKTREE);
-    // The spawn still runs IN the worktree — only the journal's root moves.
-    expect(spawn.cwd).toBe(WORKTREE);
-  });
-
-  it("names the repo the run targeted, not whatever repo the cwd happens to be", async () => {
-    await runCleanPipeline();
-    const spawn = hookSpawns[hookSpawns.length - 1];
-
-    // `gh repo view` is stubbed to answer wrong-owner/wrong-repo: on a
-    // cross-repo slot dispatch, asking the cwd is how a survival record comes
-    // to name the wrong repository.
-    expect(flagValue(spawn.args, "--owner")).toBe("nightgauge");
-    expect(flagValue(spawn.args, "--repo")).toBe("target");
+    it("names the repo the run targeted, not whatever repo the cwd happens to be", () => {
+      // `gh repo view` is stubbed to answer wrong-owner/wrong-repo: on a
+      // cross-repo slot dispatch, asking the cwd is how a survival record comes
+      // to name the wrong repository.
+      expect(flagValue(spawn.args, "--owner")).toBe("nightgauge");
+      expect(flagValue(spawn.args, "--repo")).toBe("target");
+    });
   });
 
   /**

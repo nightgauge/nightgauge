@@ -195,12 +195,18 @@ fi
 When `aggregate_status === "all-satisfied"`, Phase 4 (Produce Plan) MUST emit a
 plan whose `approach` is `"verify-and-close"`, with empty `files_to_create` and
 `files_to_modify`, and a body section that quotes the evidence that proved each
-AC. When `mostly-satisfied`, the plan-generation prompt MUST be passed
-`focus_acs` so it scopes to the unsatisfied / undetectable subset only.
+AC. When `mostly-satisfied` **or `undetectable`**, the plan-generation prompt
+MUST be passed `focus_acs` so it scopes to exactly that subset — `undetectable`
+means none of the criteria could be evaluated, so `focus_acs` carries every
+index and the plan must cover all of them.
 
-Phase 5 (Write Planning Context) embeds the report in the top-level
-`ac_reconcile` field of `planning-{N}.json` so downstream stages can see the
-deterministic verdict.
+**Do NOT write the `ac_reconcile` field.** The orchestrator splices the whole
+report into `planning-{N}.json` from `ac-reconcile-{N}.json` after this stage
+exits, and overwrites whatever is there. Transcribing it by hand is what #1011
+fixed: the three scalars echoed above are the only ones a shell phase exposes,
+so a hand-written block loses `acceptance_criteria`, `main_sha` and
+`evaluated_at` — the exact three the schema requires — and the next stage
+receives a plan with no machine-readable acceptance criteria.
 
 ### Phase 2: Assess Complexity (Deterministic)
 
@@ -383,6 +389,10 @@ Minimal required skeleton:
 
 **Additional field constraints**:
 
+- `ac_reconcile`: **Leave as `null`. Never populate it.** The orchestrator
+  overwrites this field with the verbatim contents of `ac-reconcile-{N}.json`
+  after the stage exits (#1011). It is listed here because the skeleton above
+  contains it, not because the stage writes it.
 - `knowledge_path`: Copied from `issue-{N}.json` when knowledge scaffolding is
   enabled. Omit (or `null`) when absent. Written by Phase 5.5.
 - `knowledge_entries`: Array of `.md` filenames in the knowledge directory.

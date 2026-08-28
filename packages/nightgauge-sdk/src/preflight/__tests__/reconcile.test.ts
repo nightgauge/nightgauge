@@ -112,6 +112,25 @@ describe("reconcileAcceptanceCriteria", () => {
     });
     expect(r.aggregate_status).toBe("undetectable");
     expect(r.suggested_route.approach).toBe("standard");
+    // #1011: "none could be evaluated" is MAXIMUM uncertainty — no evidence any
+    // criterion is done, so every one is in scope. This branch used to return
+    // [], the same answer all-satisfied gives, which read to the planner as
+    // "nothing needs attention". Byte-parallel with Go's deriveAggregate; this
+    // assertion is what stops a one-sided edit becoming dual-path drift.
+    expect(r.suggested_route.focus_acs).toEqual([0, 1]);
+  });
+
+  it("still focuses nothing when every AC is satisfied", async () => {
+    const r = await reconcileAcceptanceCriteria({
+      ...baseOpts,
+      issueBody: "- [ ] a\n- [ ] b",
+      rules: [fakeRule("satisfied")],
+    });
+    // The control for the assertion above: the widened focus must not become
+    // "always focus everything", which would destroy the one state that
+    // legitimately focuses nothing.
+    expect(r.aggregate_status).toBe("all-satisfied");
+    expect(r.suggested_route.focus_acs).toEqual([]);
   });
 
   it("classifies unmatched ACs as undetectable with rule_applied=null", async () => {
