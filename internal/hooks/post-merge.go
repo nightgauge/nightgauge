@@ -57,7 +57,7 @@ type PostMergeResult struct {
 	// OrphanSubsClosed counts sub-issues closed because the merged issue was
 	// itself an epic that shipped via an umbrella PR without enumerating
 	// `Closes #sub` for each sub (#3979).
-	OrphanSubsClosed int    `json:"orphanSubsClosed"`
+	OrphanSubsClosed int `json:"orphanSubsClosed"`
 	// Reason is the hook's own outcome word. The full vocabulary:
 	//   no_parent | closed | skipped        — the hook did its job
 	//   pr_verify_error | pr_not_merged     — it refused before doing anything
