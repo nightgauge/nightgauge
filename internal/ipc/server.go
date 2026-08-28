@@ -3847,6 +3847,38 @@ func (s *Server) registerMethods() {
 				"index":       p.Index,
 				"total":       p.Total,
 			})
+		case "skip":
+			// #1026: the extension's skipPhase updated its own state, fired a
+			// view event, and sent nothing here — so the GUI knew about a
+			// skipped phase and the durable record did not.
+			rt.SkipPhase(stage, p.Name, p.Index, p.Total)
+			s.Emit("phase.skip", map[string]interface{}{
+				"repo":        p.Repo,
+				"issueNumber": p.IssueNumber,
+				"runId":       runID,
+				"stage":       p.Stage,
+				"name":        p.Name,
+				"index":       p.Index,
+				"total":       p.Total,
+			})
+		case "fail":
+			rt.FailPhase(stage, p.Name, p.Index, p.Total)
+			s.Emit("phase.fail", map[string]interface{}{
+				"repo":        p.Repo,
+				"issueNumber": p.IssueNumber,
+				"runId":       runID,
+				"stage":       p.Stage,
+				"name":        p.Name,
+				"index":       p.Index,
+				"total":       p.Total,
+			})
+		default:
+			// This switch had no default (#1026). An event type the server did
+			// not recognise returned {"status":"ok"} having done nothing, so a
+			// caller could not tell "recorded" from "silently discarded" — and
+			// that is exactly how a whole vocabulary went missing without any
+			// surface reporting a problem. Say so rather than answering ok.
+			return nil, fmt.Errorf("pipeline.notifyPhaseTransition: unknown eventType %q (want start|complete|skip|fail)", p.EventType)
 		}
 
 		return map[string]string{"status": "ok"}, nil

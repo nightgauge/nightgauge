@@ -106,6 +106,12 @@ export interface StagePhase {
   status?: "pending" | "running" | "complete" | "failed" | "skipped";
   started_at?: string;
   completed_at?: string;
+  /**
+   * Why the phase failed. `status: "failed"` was declarable before #1026 and
+   * unreachable — failPhase had an empty body — so nothing ever carried a
+   * reason either.
+   */
+  error?: string;
 }
 
 export interface PTCMetrics {
@@ -1604,14 +1610,75 @@ export class PipelineStateService implements vscode.Disposable {
     stageState.phases = phases;
     stageState.total_phases = total;
     this._onStateChanged.fire(this._lastState);
+
+    // #1026: this used to stop here. Local state and the view knew about the
+    // skip; the durable record never did, so the GUI and the run record could
+    // not agree — which is the disagreement the epic set out to end.
+    this.notifyPhaseTransition(stage, phaseName, phases.length - 1, total, "skip");
   }
 
-  async failPhase(
-    _stage: string,
-    _phaseName: string,
-    _error: string,
-    _total: number
-  ): Promise<void> {}
+  async failPhase(stage: string, phaseName: string, error: string, total: number): Promise<void> {
+    // #1026: this was an empty body with a live caller, so a phase that FAILED
+    // was indistinguishable from one still running — feature-dev left
+    // sync-project-status in "running" for twenty-four minutes.
+    if (this._lastState) {
+      const stageState = this._lastState.stages[stage];
+      if (stageState) {
+        const phases = stageState.phases ?? [];
+        const running = [...phases].reverse().find((p) => p.name === phaseName);
+        if (running) {
+          running.status = "failed";
+          running.error = error;
+        } else {
+          phases.push({ name: phaseName, index: phases.length, total, status: "failed", error });
+        }
+        stageState.phases = phases;
+        stageState.total_phases = total;
+        this._onStateChanged.fire(this._lastState);
+      }
+    }
+    this.notifyPhaseTransition(stage, phaseName, -1, total, "fail");
+  }
+
+  /**
+   * The one place a phase transition goes on the wire.
+   *
+   * startPhase and completePhase each carried their own copy of this call;
+   * skipPhase carried none and failPhase had no body at all (#1026). Extracting
+   * it means a new transition type cannot be added to the local state and
+   * forgotten on the wire, which is precisely how "skipped" came to be a status
+   * the record advertised and no writer ever produced.
+   */
+  private notifyPhaseTransition(
+    stage: string,
+    phaseName: string,
+    index: number,
+    total: number,
+    eventType: "skip" | "fail"
+  ): void {
+    const runId = this.wireIdentityOrSkip("pipeline.notifyPhaseTransition", stage);
+    if (runId === null) return;
+    this.ipc
+      .call("pipeline.notifyPhaseTransition", {
+        repo: this.runRepo,
+        issueNumber: this.issueNumber ?? 0,
+        stage,
+        name: phaseName,
+        index,
+        total,
+        eventType,
+        runId,
+      } satisfies NotifyPhaseTransitionParams)
+      .catch((err: unknown) => {
+        handleIpcRejection({
+          method: "pipeline.notifyPhaseTransition",
+          stage,
+          runId,
+          err,
+          logger: this.rejectionLogger,
+        });
+      });
+  }
 
   // -------------------------------------------------------------------------
   // Compatibility accessors

@@ -353,13 +353,16 @@ const StageOutputBufferByteCap = 200 * 1024 // 200KB
 
 // PhaseRecord records the lifecycle of a single phase within a stage.
 type PhaseRecord struct {
-	Stage       PipelineStage `json:"stage"`
-	Name        string        `json:"name"`
-	Index       int           `json:"index"`
-	Total       int           `json:"total"`
-	Status      string        `json:"status"` // "running" | "complete" | "skipped"
-	StartedAt   time.Time     `json:"startedAt"`
-	CompletedAt *time.Time    `json:"completedAt,omitempty"`
+	Stage PipelineStage `json:"stage"`
+	Name  string        `json:"name"`
+	Index int           `json:"index"`
+	Total int           `json:"total"`
+	// Status is the phase's lifecycle state. Until #1026 the "skipped" value
+	// here was aspirational — no writer produced one, and "failed" did not
+	// exist at all, so a failing phase was indistinguishable from a running one.
+	Status      string     `json:"status"` // "running" | "complete" | "skipped" | "failed"
+	StartedAt   time.Time  `json:"startedAt"`
+	CompletedAt *time.Time `json:"completedAt,omitempty"`
 }
 
 // EscalationRecord records a model escalation event during pipeline execution.
@@ -1099,6 +1102,68 @@ func (rs *RuntimeState) CompletePhase(stage PipelineStage, name string) {
 			return
 		}
 	}
+}
+
+// SkipPhase records a phase the stage decided not to run (#1026).
+//
+// PhaseRecord.Status has advertised "skipped" since it was written, and nothing
+// ever produced one: the extension's skipPhase updated its own in-memory state,
+// fired a view event, and sent no IPC at all. So the live GUI knew about a
+// skipped phase and the durable record — the thing a retro or a survival
+// verdict reads afterwards — did not. The two could not agree, by construction.
+//
+// A skip is terminal on arrival: there is no running record to close, so unlike
+// CompletePhase this appends rather than amends. Idempotent on stage+name so a
+// re-notification cannot double-count.
+func (rs *RuntimeState) SkipPhase(stage PipelineStage, name string, index, total int) {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	for i := range rs.PhaseHistory {
+		if rs.PhaseHistory[i].Stage == stage && rs.PhaseHistory[i].Name == name {
+			return
+		}
+	}
+	now := time.Now()
+	rs.PhaseHistory = append(rs.PhaseHistory, PhaseRecord{
+		Stage:       stage,
+		Name:        name,
+		Index:       index,
+		Total:       total,
+		Status:      "skipped",
+		StartedAt:   now,
+		CompletedAt: &now,
+	})
+}
+
+// FailPhase closes the most recent running record for stage+name as failed
+// (#1026), or appends a terminal record when the phase never started.
+//
+// The extension's failPhase was an empty body taking four arguments — it had a
+// live caller, so a failing phase looked to every durable consumer exactly like
+// a phase that was still running. That is worse than no record: `feature-dev`
+// left sync-project-status in status "running" for twenty-four minutes, and
+// nothing could distinguish "in progress" from "died here".
+func (rs *RuntimeState) FailPhase(stage PipelineStage, name string, index, total int) {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	now := time.Now()
+	for i := len(rs.PhaseHistory) - 1; i >= 0; i-- {
+		p := &rs.PhaseHistory[i]
+		if p.Stage == stage && p.Name == name && p.Status == "running" {
+			p.Status = "failed"
+			p.CompletedAt = &now
+			return
+		}
+	}
+	rs.PhaseHistory = append(rs.PhaseHistory, PhaseRecord{
+		Stage:       stage,
+		Name:        name,
+		Index:       index,
+		Total:       total,
+		Status:      "failed",
+		StartedAt:   now,
+		CompletedAt: &now,
+	})
 }
 
 // SetLicenseSnapshot records the license validation result from pipeline
