@@ -904,12 +904,21 @@ export class ContextAssembler {
    * Parse structured sections from a GitHub issue body.
    * Mirrors the logic in write-issue-context.sh.
    */
-  private parseIssueBodySections(body: string): {
+  private parseIssueBodySections(
+    body: string,
+    repository?: string
+  ): {
     summary: string;
     userStory: string;
     acceptanceCriteria: string[];
     technicalNotes: string[];
     parentIssue: number | null;
+    /**
+     * The owner/repo of a `Part of` reference that names a DIFFERENT repository
+     * (#1058). Null when the parent is local or absent. Surfaced so "the parent
+     * lives in another repo" is distinguishable from "there is no parent".
+     */
+    parentForeignRepo: string | null;
   } {
     if (!body) {
       return {
@@ -918,11 +927,31 @@ export class ContextAssembler {
         acceptanceCriteria: [],
         technicalNotes: [],
         parentIssue: null,
+        parentForeignRepo: null,
       };
     }
 
-    const parentRef = body.match(/Part of #(\d+)/i);
-    const parentIssue = parentRef ? parseInt(parentRef[1], 10) : null;
+    // #1058 — accept the qualified cross-repo form, but only claim the number
+    // when it names THIS repository.
+    //
+    // `.claude/rules/scripts.md` mandates `Part of <owner>/<repo>#<n>` for
+    // cross-repo sub-issues, and this parser required `#` to follow `Part of `
+    // immediately — so the mandated form was the one form it could not see.
+    //
+    // Widening the regex alone would be WRONG. `native_parent` is an issue
+    // number in this repository; issue numbers are not unique across a
+    // workspace, so lifting `205` out of `otherorg/other-repo#205` would point
+    // at an unrelated local issue. A foreign parent is deliberately still
+    // `null` — but it is now reported as such rather than being indistinguish-
+    // able from "no parent at all".
+    const parentRef = body.match(/Part of\s+(?:([\w.-]+\/[\w.-]+))?#(\d+)/i);
+    const parentQualifier = parentRef?.[1] ?? null;
+    const parentIsLocal =
+      !!parentRef &&
+      (!parentQualifier ||
+        (!!repository && parentQualifier.toLowerCase() === repository.toLowerCase()));
+    const parentIssue = parentIsLocal ? parseInt(parentRef![2], 10) : null;
+    const parentForeignRepo = parentRef && !parentIsLocal ? parentQualifier : null;
 
     const extractSection = (headers: string[]): string => {
       const lines = body.split("\n");
@@ -977,6 +1006,7 @@ export class ContextAssembler {
       acceptanceCriteria,
       technicalNotes,
       parentIssue,
+      parentForeignRepo,
     };
   }
 
@@ -1046,7 +1076,23 @@ export class ContextAssembler {
         });
       }
 
-      const sections = this.parseIssueBodySections(body);
+      let repository = this.repoOverride ?? "";
+      if (!repository) {
+        try {
+          const { stdout: repoRaw } = await execFileAsync(
+            "gh",
+            ["repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"],
+            execOptions
+          );
+          repository = repoRaw.trim();
+        } catch {
+          // Non-critical
+        }
+      }
+
+      // #1058: repository identity must be resolved BEFORE the body is parsed,
+      // so a qualified `Part of owner/repo#N` can be compared against this repo.
+      const sections = this.parseIssueBodySections(body, repository);
       const analysis = analyzeChange(labels, title);
 
       let baseBranch = "main";
@@ -1091,20 +1137,6 @@ export class ContextAssembler {
           }
         } catch {
           // Non-critical: fall back to main
-        }
-      }
-
-      let repository = this.repoOverride ?? "";
-      if (!repository) {
-        try {
-          const { stdout: repoRaw } = await execFileAsync(
-            "gh",
-            ["repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"],
-            execOptions
-          );
-          repository = repoRaw.trim();
-        } catch {
-          // Non-critical
         }
       }
 
@@ -1196,6 +1228,10 @@ export class ContextAssembler {
             acCount: sections.acceptanceCriteria.length,
             techNotesCount: sections.technicalNotes.length,
             parentDetected: sections.parentIssue,
+            // #1058: a parent in another repository is not "no parent". Logged
+            // separately so the third state is visible instead of collapsing
+            // into null.
+            parentForeignRepo: sections.parentForeignRepo,
           },
         }
       );
