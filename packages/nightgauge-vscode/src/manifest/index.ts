@@ -422,6 +422,11 @@ export const MANIFEST_CONTRIBUTES: ManifestContributes = {
       icon: "$(bell)",
     },
     {
+      command: "nightgauge.configureSlackNotifications",
+      title: "Nightgauge: Configure Slack Notifications",
+      icon: "$(bell)",
+    },
+    {
       command: "nightgauge.configureMattermostWorkspace",
       title: "Nightgauge: Configure Mattermost Workspace",
       icon: "$(settings-gear)",

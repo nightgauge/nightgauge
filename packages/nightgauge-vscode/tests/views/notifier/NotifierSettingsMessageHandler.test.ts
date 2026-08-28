@@ -37,10 +37,24 @@ describe("NotifierSettingsMessageHandler", () => {
     expect(cb.onNotifierAdd).toHaveBeenCalledWith("mattermost");
   });
 
-  it("notifier-add with invalid type is silently ignored", async () => {
+  it("notifier-add with slack → onNotifierAdd('slack')", async () => {
     const cb = makeCallbacks();
     const h = new NotifierSettingsMessageHandler(cb);
     await h.handleMessage({ type: "notifier-add", notifierType: "slack" });
+    expect(cb.onNotifierAdd).toHaveBeenCalledWith("slack");
+  });
+
+  // The guard still has to reject an unknown provider — this test used to use
+  // "slack" as its invalid value, which stopped being true when Slack shipped
+  // (#1073). Repointed at a provider that genuinely does not exist rather than
+  // deleted, so the guard keeps its coverage.
+  it("notifier-add with an unknown type is silently ignored", async () => {
+    const cb = makeCallbacks();
+    const h = new NotifierSettingsMessageHandler(cb);
+    await h.handleMessage({
+      type: "notifier-add",
+      notifierType: "teams" as never,
+    });
     expect(cb.onNotifierAdd).not.toHaveBeenCalled();
   });
 

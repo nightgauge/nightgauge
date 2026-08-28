@@ -2,11 +2,12 @@
  * Message protocol for the Notifier Settings webview (#3379).
  */
 
-import type { NotifierInstanceRow } from "./NotifierInstancesSection";
+import { NOTIFIER_PROVIDERS } from "./NotifierInstancesSection";
+import type { NotifierInstanceRow, NotifierProvider } from "./NotifierInstancesSection";
 
 export type NotifierWebViewToExtensionMessage =
   | { type: "getState" }
-  | { type: "notifier-add"; notifierType: "discord" | "mattermost" }
+  | { type: "notifier-add"; notifierType: NotifierProvider }
   | { type: "notifier-action"; action: "test" | "remove"; id: string };
 
 export type NotifierExtensionToWebViewMessage =
@@ -16,7 +17,7 @@ export type NotifierExtensionToWebViewMessage =
 
 export interface NotifierMessageCallbacks {
   onGetState: () => Promise<void> | void;
-  onNotifierAdd: (notifierType: "discord" | "mattermost") => Promise<void> | void;
+  onNotifierAdd: (notifierType: NotifierProvider) => Promise<void> | void;
   onNotifierAction: (action: "test" | "remove", id: string) => Promise<void> | void;
 }
 
@@ -33,7 +34,7 @@ export class NotifierSettingsMessageHandler {
         await this.callbacks.onGetState();
         return;
       case "notifier-add":
-        if (msg.notifierType === "discord" || msg.notifierType === "mattermost") {
+        if (NOTIFIER_PROVIDERS.includes(msg.notifierType)) {
           await this.callbacks.onNotifierAdd(msg.notifierType);
         }
         return;
