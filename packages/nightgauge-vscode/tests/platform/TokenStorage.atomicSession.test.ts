@@ -53,7 +53,9 @@ function makeSecretService() {
 
 function makeStorage() {
   const secrets = makeSecretService();
-  const storage = new TokenStorage(secrets as never);
+  TokenStorage.resetInstance();
+  TokenStorage.initialize(secrets as never, () => "test-host");
+  const storage = TokenStorage.getInstance()!;
   return { storage, secrets };
 }
 

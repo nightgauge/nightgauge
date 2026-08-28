@@ -50,6 +50,7 @@ vi.mock("vscode", () => {
 
 // Mock TokenStorage
 const mockTokenStore = vi.fn().mockResolvedValue(undefined);
+const mockTokenStoreSession = vi.fn().mockResolvedValue(undefined);
 const mockTokenRetrieve = vi.fn().mockResolvedValue(null);
 const mockTokenDelete = vi.fn().mockResolvedValue(undefined);
 const mockTokenClear = vi.fn().mockResolvedValue(undefined);
@@ -58,6 +59,8 @@ vi.mock("../../src/platform/TokenStorage", () => ({
   TokenStorage: {
     getInstance: () => ({
       store: mockTokenStore,
+      // #1024: the device flow writes the session atomically.
+      storeSession: mockTokenStoreSession,
       retrieve: mockTokenRetrieve,
       delete: mockTokenDelete,
       clear: mockTokenClear,
@@ -177,9 +180,12 @@ describe("OAuthDeviceFlowService", () => {
 
       expect(ipcClient.platformAuthDeviceCode).toHaveBeenCalledOnce();
       expect(ipcClient.platformAuthDeviceToken).toHaveBeenCalledWith("dc_abc123");
-      expect(mockTokenStore).toHaveBeenCalledWith("accessToken", "at_xyz789");
-      expect(mockTokenStore).toHaveBeenCalledWith("refreshToken", "rt_xyz789");
-      expect(mockTokenStore).toHaveBeenCalledWith("expiresAt", expect.any(String));
+      // One atomic write, not three per-field calls (#1024).
+      expect(mockTokenStoreSession).toHaveBeenCalledWith({
+        accessToken: "at_xyz789",
+        refreshToken: "rt_xyz789",
+        expiresAt: expect.any(String),
+      });
       expect(signedInSpy).toHaveBeenCalledOnce();
       expect(service.state).toBe("signed-in");
     });
