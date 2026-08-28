@@ -161,6 +161,28 @@ export class ProjectBoardService implements vscode.Disposable, IWorkItemProvider
   /** In-flight deduplication: callers waiting on the same status share one promise */
   private inFlightRequests = new Map<string, Promise<ReadyIssue[]>>();
   private inFlightAllItems: Promise<ReadyIssue[]> | null = null;
+  /**
+   * In-flight deduplication for loadConfig (#1014).
+   *
+   * `configLoaded` is set only AFTER the IPC round-trip returns, so it cannot
+   * exclude callers that arrive while the first request is still in flight —
+   * and the tree provider fires three `getIssuesByStatus` calls in one
+   * `Promise.all`, each of which begins by awaiting loadConfig(). Three
+   * identical IPC calls per repo per activation, by construction.
+   *
+   * This is a promise memo, not a cache: it holds only the work currently
+   * running and clears itself when that settles, so there is no new lifetime
+   * to reason about and nothing to invalidate.
+   */
+  private inFlightConfig: Promise<void> | null = null;
+  /**
+   * Bumped whenever the config is invalidated. A reply from a superseded
+   * generation is discarded rather than applied — otherwise an invalidation
+   * that lands mid-flight would be overwritten by the stale reply that was
+   * already in the air, which is a read-through cache without write
+   * interception (docs/FAILURE_TAXONOMY.md).
+   */
+  private configGeneration = 0;
   /** Rate limit tracking — avoids making API calls when quota is exhausted */
   private rateLimitRemaining: number | null = null;
   private rateLimitResetAt: number = 0; // Unix timestamp
@@ -219,8 +241,25 @@ export class ProjectBoardService implements vscode.Disposable, IWorkItemProvider
 
   async loadConfig(): Promise<void> {
     if (this.configLoaded) return;
+    if (this.inFlightConfig) return this.inFlightConfig;
+    const p = this.doLoadConfig(++this.configGeneration).finally(() => {
+      // Only the promise that is still current may clear the memo; a
+      // superseded one clearing it would strand a live request.
+      if (this.inFlightConfig === p) this.inFlightConfig = null;
+    });
+    this.inFlightConfig = p;
+    return p;
+  }
+
+  private async doLoadConfig(generation: number): Promise<void> {
     try {
       const result = await this.ipc.configGetProjectConfig(this.workspaceRoot);
+      if (generation !== this.configGeneration) {
+        // The config was invalidated while this reply was in the air. Applying
+        // it now would silently restore the identity we were told to forget.
+        log("Discarding a superseded project-config reply");
+        return;
+      }
       this.owner = result.owner || null;
       this.ownerType = result.ownerType || undefined;
       this.projectNumber = result.projectNumber || null;
@@ -282,6 +321,10 @@ export class ProjectBoardService implements vscode.Disposable, IWorkItemProvider
   updateWorkspaceRoot(newRoot: string): void {
     this.workspaceRoot = newRoot;
     this.configLoaded = false;
+    // Supersede any reply already in the air (#1014) — without this an
+    // invalidation can be undone by a request that predates it.
+    this.configGeneration++;
+    this.inFlightConfig = null;
     this.owner = null;
     this.projectNumber = null;
     this.repo = null;
@@ -304,6 +347,10 @@ export class ProjectBoardService implements vscode.Disposable, IWorkItemProvider
       githubUser: this.githubUser,
     });
     this.configLoaded = false;
+    // Supersede any reply already in the air (#1014) — without this an
+    // invalidation can be undone by a request that predates it.
+    this.configGeneration++;
+    this.inFlightConfig = null;
     await this.loadConfig();
     const after = JSON.stringify({
       owner: this.owner,
@@ -697,6 +744,10 @@ export class ProjectBoardService implements vscode.Disposable, IWorkItemProvider
     // — without it, loadConfig() returns immediately with stale (or null)
     // owner/projectNumber values and the tree shows empty.
     this.configLoaded = false;
+    // Supersede any reply already in the air (#1014) — without this an
+    // invalidation can be undone by a request that predates it.
+    this.configGeneration++;
+    this.inFlightConfig = null;
   }
 
   /**
@@ -719,6 +770,10 @@ export class ProjectBoardService implements vscode.Disposable, IWorkItemProvider
     this.inFlightRequests.clear();
     this.inFlightAllItems = null;
     this.configLoaded = false;
+    // Supersede any reply already in the air (#1014) — without this an
+    // invalidation can be undone by a request that predates it.
+    this.configGeneration++;
+    this.inFlightConfig = null;
   }
 
   /**

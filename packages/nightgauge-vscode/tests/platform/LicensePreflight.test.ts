@@ -40,6 +40,12 @@ vi.mock("vscode", () => {
     EventEmitter: MockEventEmitter,
     Disposable: { from: vi.fn() },
     env: { machineId: "test-machine-id" },
+    // #1018: the renew link now resolves through buildAccountUrl() ->
+    // getDashboardBaseUrl(), which reads workspace configuration. Without this
+    // the mock throws "Cannot read properties of undefined (reading
+    // 'getConfiguration')" and the blocked-status tests fail on the mock, not
+    // on the behaviour they assert.
+    workspace: { getConfiguration: () => ({ get: () => undefined }) },
   };
 });
 
@@ -121,7 +127,9 @@ describe("LicensePreflight", () => {
     expect(result.allowed).toBe(false);
     expect(result.tier).toBe("community");
     expect(result.reason).toBeDefined();
-    expect(result.actionUrl).toContain("renew");
+    // #1018: the action points at the dashboard billing surface, not a
+    // marketing-host /account/renew page that never existed.
+    expect(result.actionUrl).toContain("/billing");
   });
 
   // 3. Offline / IPC error → community tier
@@ -406,7 +414,9 @@ describe("LicensePreflight", () => {
       const result = await preflight.validate();
       expect(result.allowed).toBe(false);
       expect(result.status).toBe("expired");
-      expect(result.actionUrl).toContain("renew");
+      // #1018: the action points at the dashboard billing surface, not a
+      // marketing-host /account/renew page that never existed.
+      expect(result.actionUrl).toContain("/billing");
     });
 
     it("falls back to expired-style messaging when status is missing on an invalid response", async () => {
@@ -422,7 +432,9 @@ describe("LicensePreflight", () => {
 
       const result = await preflight.validate();
       expect(result.status).toBe("expired");
-      expect(result.actionUrl).toContain("renew");
+      // #1018: the action points at the dashboard billing surface, not a
+      // marketing-host /account/renew page that never existed.
+      expect(result.actionUrl).toContain("/billing");
     });
 
     it("propagates machineBound and machineCount from the response", async () => {
