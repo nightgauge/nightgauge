@@ -16,7 +16,7 @@
 
 import { describe, it, expect, vi } from "vitest";
 import { createPhaseTracker } from "../../src/utils/phaseTracker";
-import type { PipelineStage } from "../../src/utils/skillRunner";
+import type { PipelineStage } from "@nightgauge/sdk";
 
 function makeStateService() {
   const started: Array<{ stage: string; name: string; total: number; index?: number }> = [];
