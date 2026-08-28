@@ -486,7 +486,8 @@ describe("NightgaugeConfigSchema", () => {
 
     it("applies human_in_the_loop defaults", () => {
       const config = mergeWithDefaults({ human_in_the_loop: {} });
-      expect(config.human_in_the_loop?.auto_accept_stages).toBe(true);
+      // #1050: aligned with the runtime resolvers and `nightgauge init`.
+      expect(config.human_in_the_loop?.auto_accept_stages).toBe(false);
       expect(config.human_in_the_loop?.auto_accept_permissions).toBe(false);
       expect(config.human_in_the_loop?.trusted_stages).toEqual([]);
     });

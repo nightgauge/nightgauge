@@ -354,7 +354,10 @@ describe("human_in_the_loop.behavior", () => {
 
   describe("default values", () => {
     it("DEFAULT_CONFIG.human_in_the_loop has correct defaults", () => {
-      expect(DEFAULT_CONFIG.human_in_the_loop?.auto_accept_stages).toBe(true);
+      // #1050: false, matching the runtime resolvers and `nightgauge init`.
+      // The display default used to be true while every runtime consumer used
+      // false, so the panel showed unattended-on for a pipeline running manual.
+      expect(DEFAULT_CONFIG.human_in_the_loop?.auto_accept_stages).toBe(false);
       expect(DEFAULT_CONFIG.human_in_the_loop?.auto_accept_permissions).toBe(false);
       expect(DEFAULT_CONFIG.human_in_the_loop?.trusted_stages).toEqual([]);
     });
@@ -370,7 +373,10 @@ describe("human_in_the_loop.behavior", () => {
     it("missing human_in_the_loop section uses defaults", () => {
       const config = mergeWithDefaults({});
 
-      expect(config.human_in_the_loop?.auto_accept_stages).toBe(true);
+      // #1050: false, matching the runtime resolvers and `nightgauge init`.
+      // The display default used to be true while every runtime consumer used
+      // false, so the panel showed unattended-on for a pipeline running manual.
+      expect(config.human_in_the_loop?.auto_accept_stages).toBe(false);
       expect(config.human_in_the_loop?.trusted_stages).toEqual([]);
     });
   });

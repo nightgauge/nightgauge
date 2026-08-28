@@ -45,10 +45,13 @@ describe("SettingsHtml human_in_the_loop section", () => {
     const config = {} as NightgaugeConfig;
     const html = getSettingsHtml({ cspSource: "test-csp" } as any, config);
 
-    // auto_accept_stages defaults to true (checked)
+    // #1050: auto_accept_stages defaults to FALSE (unchecked), matching the
+    // runtime resolvers and `nightgauge init`. It used to render checked while
+    // the pipeline actually ran in manual mode, so the panel told the operator
+    // unattended was on when it was not.
     const stagesMatch = html.match(/id="human_in_the_loop\.auto_accept_stages"[^>]*/);
     expect(stagesMatch).toBeTruthy();
-    expect(stagesMatch![0]).toContain("checked");
+    expect(stagesMatch![0]).not.toContain("checked");
 
     // auto_accept_permissions defaults to false (not checked)
     const permsMatch = html.match(/id="human_in_the_loop\.auto_accept_permissions"[^>]*/);
@@ -131,10 +134,12 @@ describe("SettingsHtml human_in_the_loop section", () => {
     expect(html).toContain('data-path="human_in_the_loop.auto_accept_stages"');
     expect(html).toContain('data-path="human_in_the_loop.auto_accept_permissions"');
 
-    // auto_accept_stages toggle should render as checked (true default)
+    // #1050: an empty human_in_the_loop block must render the same default the
+    // runtime applies — unchecked. Rendering it checked is what told operators
+    // unattended was on while the pipeline ran manual.
     const stagesMatch = html.match(/id="human_in_the_loop\.auto_accept_stages"[^>]*/);
     expect(stagesMatch).toBeTruthy();
-    expect(stagesMatch![0]).toContain("checked");
+    expect(stagesMatch![0]).not.toContain("checked");
 
     // All 6 stage checkboxes should render unchecked
     const checkboxMatches = html.match(
