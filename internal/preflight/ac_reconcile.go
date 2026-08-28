@@ -232,10 +232,24 @@ func deriveAggregate(criteria []ReconciledCriterion) (string, SuggestedRoute) {
 		}
 	}
 	if counts[ACUndetectable] == total {
+		// Focus EVERY criterion, exactly as the all-unsatisfied branch above
+		// does (#1011). This branch used to hand back an empty list, which made
+		// all-undetectable the only aggregate with criteria present that told
+		// the planner to focus on nothing.
+		//
+		// The polarity was backwards. "None of these could be evaluated" is the
+		// MAXIMUM-uncertainty case: there is no evidence any of them is done, so
+		// every one is in scope. Emptying the list reads to the planner as "no
+		// criteria need attention" — indistinguishable from all-satisfied, which
+		// is the one state that legitimately focuses nothing.
+		focus := make([]int, 0, total)
+		for _, c := range criteria {
+			focus = append(focus, c.Index)
+		}
 		return AggUndetectable, SuggestedRoute{
 			Approach:  "standard",
-			FocusACs:  []int{},
-			Rationale: "No acceptance criteria could be deterministically evaluated — proceed with the standard plan",
+			FocusACs:  focus,
+			Rationale: fmt.Sprintf("%d criterion/criteria found, none deterministically evaluable — plan against all %d", total, total),
 		}
 	}
 
