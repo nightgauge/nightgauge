@@ -51,14 +51,21 @@ resolving to unrelated live work. The rule anchors on the mark rather than on
 digit count, so it does not need revisiting when the numbering passes four
 digits.
 
-**The mark is derived, not recorded** (#1078). GitHub appends `(#N)` to the
-subject when it squash-merges a pull request, so the guard reads the trailing
-marker off the first-parent history — offline, with no network call, and with
-nothing to bump. Only the trailing marker counts: a pull request titled
-`feat: thing (#99999)` merges to `feat: thing (#99999) (#1080)` and reads 1080,
-so a crafted title cannot raise the ceiling. `slack` remains because the
-derived mark can only see what has already MERGED, and numbers are issued while
-a pull request is open.
+**The mark is derived, not recorded** (#1078). GitHub appends the pull-request
+number in parentheses to the subject when it squash-merges, so the guard reads
+that trailing marker off the first-parent history — offline, with no network
+call, and with nothing to bump.
+
+Only the **trailing** marker counts, and that anchoring is load-bearing rather
+than incidental. An author can put a parenthesised number in the pull-request
+title itself; the forge then appends its own, so the subject carries two and
+only the last one is the number actually issued. An unanchored search would
+read the author's, which means any contributor could raise the ceiling — and a
+raised ceiling weakens the rule silently. `scripts/test-publication-boundary-ceiling.py`
+pins this; dropping the anchor is the mutation it exists to catch.
+
+`slack` remains because the derived mark can only see what has already MERGED,
+and numbers are issued while a pull request is open.
 
 This replaced a hand-maintained integer that cost 21 chore commits and failed
 **closed** every time it fell behind — rejecting legitimate references and

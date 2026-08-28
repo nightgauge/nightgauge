@@ -820,8 +820,10 @@ def main() -> int:
                 f"    {token} is above this repository's high-water mark "
                 f"({mark} + slack {slack} = {ceiling}), so it cannot resolve here.\n"
                 f"    {line.strip()[:100]}\n"
-                f"    Cite the real issue, drop the '#', or -- if #{num} genuinely exists\n"
-                f"    now -- bump issue_references.high_water_mark in {MANIFEST}.\n"
+                f"    Cite the real issue, drop the '#', or qualify it as `owner/repo#{num}`\n"
+                f"    if it belongs to another repository. The ceiling is DERIVED from merge\n"
+                f"    history (#1078), so there is no mark to bump: if #{num} genuinely exists\n"
+                f"    here, this branch simply predates the merge that issued it.\n"
                 f"    (measured against {base_ref} @ {base[:12]})"
             )
 
