@@ -269,6 +269,11 @@ interface ExtractorInput {
    * no cost cap is even configured for that stage.
    */
   terminalReason: string;
+  /**
+   * The structured terminal failure kind, when the orchestrator had one
+   * (#1056). Empty string when absent, so extractors can compare directly.
+   */
+  terminalKind: string;
 }
 
 /**
@@ -538,6 +543,38 @@ const SIGNAL_EXTRACTORS: Array<(input: ExtractorInput) => StructuredSignal | nul
     }
     return null;
   },
+  // #1056 — the orchestrator's own structured terminal kind. The pipeline
+  // emits an enum about itself; matching it exactly beats pattern-matching
+  // English in a codebase whose subject matter IS pipeline failure handling.
+  // A real run reported category `unknown` with severity `low` while holding
+  // `dev_handoff_missing`, a kind it had emitted and logged twice.
+  //
+  // PLACEMENT IS LOAD-BEARING. This sits AFTER the merge-blocked and
+  // skill-no-op extractors on purpose. The "authoritative kind wins, so put it
+  // first" instinct would let a pr-merge kind displace the merge-blocked
+  // verdict that the extractor above deliberately orders ahead of skill-no-op
+  // — shipping a new misclassification for a case that is currently correct.
+  //
+  // Mapped to `skill-no-op`, not `state-management`: the latter recommends
+  // "re-run the failed stage after verifying context", which directly
+  // contradicts the gate's own verdict that the work exists and must be
+  // preserved rather than re-derived. A dedicated category would be a taxonomy
+  // change, not this fix.
+  ({ terminalKind, terminalReason, failedStage }) => {
+    const NO_OP_KINDS = new Set([
+      "dev_handoff_missing",
+      "dev_produced_no_changes",
+      "premature_turn_end",
+    ]);
+    if (!terminalKind || !NO_OP_KINDS.has(terminalKind)) return null;
+    return {
+      category: "skill-no-op",
+      evidence: terminalReason
+        ? `${failedStage} ended with terminal kind ${terminalKind}: ${terminalReason}`
+        : `${failedStage} ended with terminal kind ${terminalKind} — the stage exited without the state its post-condition gate requires`,
+      severityHint: "high",
+    };
+  },
   // Claude CLI stop-hook-error notification — the #3204 incident signature.
   // Demoted to LAST in #3275 so any other structured signal wins, and
   // gated by `isPreResultStopHook` so routine post-result teardown noise
@@ -587,7 +624,17 @@ export class AutoRetroService {
      * directly lets the structured extractors fire. Optional for backward
      * compatibility with call sites that have no reason in hand.
      */
-    failureReason?: string
+    failureReason?: string,
+    /**
+     * The orchestrator's structured terminal failure kind (#1056), e.g.
+     * `dev_handoff_missing`. Distinct from `failureReason`, which is prose: the
+     * kind is an enum the pipeline emitted about itself, so an extractor can
+     * match it exactly instead of pattern-matching English that may be quoting
+     * our own taxonomy back at us. The run that motivated this reported
+     * category `unknown` while `sources_analyzed` was `["terminal_reason"]` and
+     * the kind was sitting in the orchestrator unused.
+     */
+    terminalKind?: string
   ): Promise<AutoRetroResult | null> {
     try {
       // Step 1: Read config
@@ -613,7 +660,8 @@ export class AutoRetroService {
         issueNumber,
         failedStage,
         logger,
-        failureReason
+        failureReason,
+        terminalKind
       );
 
       // Step 3: Classify failure (pattern-match), then state-aware refinement
@@ -784,12 +832,14 @@ export class AutoRetroService {
     issueNumber: number,
     failedStage: string,
     logger: Logger,
-    failureReason?: string
+    failureReason?: string,
+    terminalKind?: string
   ): Promise<{
     text: string;
     sourcesAnalyzed: string[];
     lines: TaggedLine[];
     terminalReason: string;
+    terminalKind: string;
   }> {
     const parts: string[] = [];
     const sourcesAnalyzed: string[] = [];
@@ -920,6 +970,7 @@ export class AutoRetroService {
       sourcesAnalyzed,
       lines,
       terminalReason: failureReason?.trim() ?? "",
+      terminalKind: terminalKind?.trim() ?? "",
     };
   }
 
@@ -1020,6 +1071,7 @@ export class AutoRetroService {
       sourcesAnalyzed: string[];
       lines?: TaggedLine[];
       terminalReason?: string;
+      terminalKind?: string;
     },
     failedStage: string
   ): RetroFinding[] {
@@ -1033,6 +1085,7 @@ export class AutoRetroService {
       sourcesAnalyzed: evidence.sourcesAnalyzed,
       failedStage,
       terminalReason: evidence.terminalReason ?? "",
+      terminalKind: evidence.terminalKind ?? "",
     };
     for (const extractor of SIGNAL_EXTRACTORS) {
       const signal = extractor(extractorInput);
