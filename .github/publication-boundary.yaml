@@ -597,15 +597,19 @@ forbidden_tokens:
 # issues while a pull request is open, so a reference to an issue filed after
 # the mark was last recorded is not rejected.
 #
-# STALENESS: the recorded mark is the only source of truth for the ceiling --
-# the guard makes no network call. It does read merge-commit subjects on the
-# first-parent history as an OFFLINE lower bound on the numbers really issued,
-# and FAILS (exit 2) once that lower bound passes the ceiling, because from
-# that point the rule would start rejecting legitimate references. Git history
-# can only ever make the guard fail; it never raises the ceiling, so a crafted
-# commit subject cannot weaken it. The remedy is one integer:
+# THE MARK IS DERIVED, NOT RECORDED (#1078). GitHub appends `(#N)` to the
+# subject when it squash-merges a pull request, so the TRAILING marker on the
+# first-parent history is the number the forge issued. The guard reads it from
+# `git log` -- offline, no network call, nothing to bump.
 #
-#     high_water_mark: <the repository's current highest issue/PR number>
+# Only the trailing marker counts, which is what keeps the derivation from being
+# author-controlled: a pull request titled `feat: thing (#99999)` squash-merges
+# to `feat: thing (#99999) (#1080)` and reads 1080. An unanchored search would
+# take the bait and let a crafted title raise the ceiling.
+#
+# This replaced a hand-maintained `high_water_mark` that cost 21 chore commits
+# and failed CLOSED every time it fell behind -- turning `main` red rather than
+# degrading. The guarantee is unchanged; the counter nobody watched is gone.
 #
 # NOT MATCHED, on purpose:
 #   * `owner/repo#N` for any other repository -- those numbers belong to a
@@ -620,11 +624,9 @@ forbidden_tokens:
 #   * `#0000ff`, `#000000` -- zero-padded, and GitHub issues no such number.
 #   * anything under `allow_paths` below.
 issue_references:
-  # The highest number this repository has issued (issues and pull requests
-  # share one sequence). Bump this as the repository grows; the guard tells you
-  # when it must be bumped, so it cannot silently rot.
-  high_water_mark: 1076
-  # Numbers that may be issued while a pull request is open. Deliberately tight:
+  # Numbers that may be issued while a pull request is open -- the derived mark
+  # is a lower bound, since it can only see what has already MERGED. Deliberately
+  # tight:
   # the whole point of #673 is that the margin between a dead reference and a
   # wrong live one is a handful of issue numbers, and a generous slack reopens
   # exactly that hole.
@@ -659,14 +661,19 @@ issue_references:
   # one operation, because the bump itself changes what resolves.
   # 2026-08-28 (session 18): 5,807 — measured after raising the mark to 1076,
   # which resolved the epic #1052 citations that 1058 had left dangling.
+  # 2026-08-28 (#1078): 5,801 — the mark became derived rather than recorded, so
+  # it now tracks the newest merged number automatically. This is the last
+  # re-measure that follows a manual bump; from here the count moves only when
+  # references are actually written or retired.
   # NEVER raise this number. Lower it as the sweep progresses.
-  tree_baseline: 5807
+  tree_baseline: 5801
   allow_paths:
     # Files that DEFINE or TEST the rule must contain example violations.
     - ".github/publication-boundary.yaml"
     - "scripts/publication-boundary-check.py"
     - "scripts/test-publication-boundary.sh"
     - "scripts/test-publication-boundary-rename.py"
+    - "scripts/test-publication-boundary-ceiling.py"
     # Synthetic test identifiers are not citations. `#700` in a table-driven Go
     # test or a snapshot fixture is an arbitrary key chosen to be out of range;
     # denying it would make the rule unusable, and rewriting it in the sweep

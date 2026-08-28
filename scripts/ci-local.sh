@@ -147,6 +147,17 @@ if [ -f scripts/test-publication-boundary-rename.py ]; then
     python3 scripts/test-publication-boundary-rename.py
 fi
 
+# 5b-i-b. Derived reference ceiling (#1078) — the ceiling is inferred from merge
+#     history rather than recorded, so the inference is load-bearing. The case
+#     that matters is that a pull-request TITLE cannot raise it: the mark comes
+#     from text an author partly controls, and a raised ceiling weakens the rule
+#     silently. Same throwaway-repo shape as the rename suite, for the same
+#     crash-safety reason.
+if [ -f scripts/test-publication-boundary-ceiling.py ]; then
+  run_step "Publication boundary derived ceiling" \
+    python3 scripts/test-publication-boundary-ceiling.py
+fi
+
 # 5b-ii. Publication boundary suite hermeticity (#713, #722) — the suite plants
 #     deliberately-forbidden fixtures, so two properties have to hold and
 #     neither is self-evident from reading it: a SIGKILLed run leaves the
