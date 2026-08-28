@@ -136,6 +136,74 @@ files. It is **not** a context handoff file — it is a durable replay log:
 | `recovery_actions`  | `string[]` \| `null`                                             | Surface for the Gap 2 recovery UX.                                     |
 | `attempts`          | `Attempt[]`                                                      | Per-attempt metadata (PID, host_id, last_stage).                       |
 
+### Runtime snapshot (`runtime-<N>-<runId>.json`)
+
+Written **only by the Go scheduler**. There is no TypeScript writer, so the
+"both write the same on-disk format" note at the top of this document does not
+apply to this one file — the extension has three readers and no writer. The same
+bytes are also the `state` payload on the `pipeline.stateChanged` IPC event, so
+this table describes the wire shape as well as the file.
+
+`docs/decisions/017-runtime-identity-keying.md` § 8 documents the **filename**,
+the discovery regex and the atomic-write contract. This section documents the
+**field shape**, which nothing did before (#1012).
+
+**Two things a reader assumes and gets wrong:**
+
+1. **There is no `status` field.** Of the 56 top-level fields, none is named
+   `status` — the lifecycle lives in `terminal` / `terminalAt` /
+   `terminalOutcome` and `abandoned` / `abandonedAt` / `abandonedReason`.
+   (`status` appears only _nested_, on `license` and on each `phaseHistory[]`
+   entry.)
+2. **On the happy path the file does not flip to a terminal value — it
+   disappears.** `SealAndRemove` writes the terminal-stamped snapshot and
+   `os.Remove`s that same path inside one critical section, so a watcher waiting
+   to observe `terminal: true` on disk will usually observe a deletion instead.
+   The durable record of a finished run is the **history record**
+   (`history/<YYYY-MM-DD>.jsonl`, field `outcome`), not this file.
+
+| Group          | Fields                                                                                                                                                                                                                                                                                                                              |
+| -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Identity       | `repo`, `issueNumber`, `itemId`, `title`, `body`, `branch`, `runId`                                                                                                                                                                                                                                                                 |
+| Lifecycle      | `terminal`, `terminalAt`, `terminalOutcome`, `abandoned`, `abandonedAt`, `abandonedReason`, `paused`                                                                                                                                                                                                                                |
+| Position       | `stage`, `startedAt`, `stageStart`                                                                                                                                                                                                                                                                                                  |
+| Process        | `pid`, `ownerPid`, `worktreeDir`                                                                                                                                                                                                                                                                                                    |
+| Totals         | `inputTokens`, `outputTokens`, `totalCostUsd`, `authoritativeChangeClass`, `actualLinesChanged`                                                                                                                                                                                                                                     |
+| Progress       | `completedStages`, `skippedStages`, `phaseHistory`, `stageErrors`, `retryCount`, `escalationHistory`, `ralphIterations`                                                                                                                                                                                                             |
+| Per-stage maps | `stageModes`, `stageAdapters`, `stageModels`, `stageServedModels`, `stageEfforts`, `stageThinking`, `stageServedEfforts`, `stageServedThinking`, `stageModelSelectionModes`, `stageExecutionPaths`, `stagePuntReasons`, `stageGateResults`, `stageAnomalies`, `stageRecoveryAttempts`, `stageOutputTails`, `terminatingStageTokens` |
+| Outcome        | `gateResults`, `prUrl`, `mergedCommitSha`, `mergedAt`, `license`, `licenseExpiredMidRun`, `toolCalls`, `modelRefusalFallbacks`                                                                                                                                                                                                      |
+
+`terminalOutcome` has a closed vocabulary — `complete` | `cancelled` | `failed`
+— shared deliberately with the extension path so the two cannot drift.
+
+#### `phaseHistory[]` — `PhaseRecord`
+
+| Field         | Type               | Meaning                                                                  |
+| ------------- | ------------------ | ------------------------------------------------------------------------ |
+| `stage`       | `string`           | The pipeline stage this phase belongs to.                                |
+| `name`        | `string`           | Kebab-case phase id, matching `PHASE_REGISTRY`.                          |
+| `index`       | `int`              | The phase's position **in the registry**, not its arrival order (#1008). |
+| `total`       | `int`              | The stage's registry phase count.                                        |
+| `status`      | `string`           | See below.                                                               |
+| `startedAt`   | RFC 3339           | When the phase began.                                                    |
+| `completedAt` | RFC 3339 \| absent | Absent while running.                                                    |
+
+`status` values and who writes each:
+
+| Value       | Writer                                                       |
+| ----------- | ------------------------------------------------------------ |
+| `running`   | `BeginPhase`                                                 |
+| `complete`  | `CompletePhase`                                              |
+| `skipped`   | `SkipPhase` — a phase the stage chose not to run (#1026)     |
+| `failed`    | `FailPhase` — a phase that reported an error (#1026)         |
+| `abandoned` | `CompleteStage` — still running when its stage ended (#1009) |
+
+Until #1026 the first two were the only values any writer produced, even though
+`skipped` was declared; and a phase that never completed stayed `running`
+forever, which read as "the run is stuck here" long after the stage had moved
+on. Both are now written, and the set above is pinned by a parity test — a value
+added to the Go struct without being documented here fails the build.
+
 ## Schema versioning rules
 
 `schema_version` is a `<major>.<minor>` string on every pipeline JSON file.
@@ -194,8 +262,11 @@ context file for the issue is moved into:
 
 The `<run_id>` is the UUID v7 from `run-state.json` (sortable by start time).
 The pipeline-history walker (`internal/cmd/batchfailures/extractor.go`)
-reads both legacy daily JSONL files (`history/<YYYY-MM-DD>.jsonl`) and the
-new per-run directories.
+reads both the daily JSONL files (`history/<YYYY-MM-DD>.jsonl`) and the per-run
+directories. The daily files are **not** legacy: `state.WriteV2` documents itself
+as the primary write path for the Go scheduler and writes exactly that filename
+(#1012). Note the daily file is a LOCAL calendar day (`time.Now()`), while
+`exit-records/` stamps a UTC day — the two directories do not line up.
 
 ## Recovery decision tree
 
