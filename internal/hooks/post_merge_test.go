@@ -1198,3 +1198,108 @@ func TestPostMergeRepairMatchesTheRealSentinel(t *testing.T) {
 		t.Errorf("IssueDoneSync = %q, want %q", result.IssueDoneSync, BoardSyncFailed)
 	}
 }
+
+// TestPostMergeAutoCloseErrorStatusIsAFailure pins the path production actually
+// takes (#1025).
+//
+// TestPostMergeAutoCloseFailsNonBlocking above drives the `err != nil` arm, and
+// that arm is DEAD through *gh.EpicService: AutoCloseSingle swallows every
+// error into result.Status="error" and returns a nil error unconditionally
+// (internal/github/epic.go). So the one reason word any caller recognised was
+// unreachable, every real failure arrived as the bare status word "error", and
+// a green test sat next to it proving the unreachable half.
+//
+// Both shapes must now be indistinguishable to a caller.
+func TestPostMergeAutoCloseErrorStatusIsAFailure(t *testing.T) {
+	fetcher := &mockFetcher{issues: map[string]*types.Issue{
+		"nightgauge/nightgauge#101": {
+			NodeID:            "I_node101",
+			Number:            101,
+			ParentIssueNumber: 99,
+		},
+	}}
+	closer := &mockEpicAutoCloser{
+		// Exactly what *gh.EpicService produces on any API failure: a nil error
+		// and a result carrying the cause.
+		result: &gh.AutoCloseSingleResult{
+			EpicNumber: 99,
+			Status:     "error",
+			Reason:     "check_failed",
+			Error:      "GraphQL: rate limit exceeded",
+		},
+	}
+
+	result := EvaluatePostMerge(context.Background(), fetcher, &mockIssueCloser{}, closer, nil, nil, PostMergeInput{
+		IssueNumber:     101,
+		RepositoryOwner: "nightgauge",
+		RepositoryName:  "nightgauge",
+	})
+
+	if !result.Failed {
+		t.Error("Failed=false for a failed epic rollup — every consumer then has to " +
+			"re-derive failure from a string vocabulary, which is how this went unread")
+	}
+	if result.Reason != "auto_close_error" {
+		t.Errorf("Reason = %q, want auto_close_error — the bare word %q is not in the vocabulary "+
+			"and no caller branches on it", result.Reason, "error")
+	}
+	if result.EpicReason != "check_failed" {
+		t.Errorf("EpicReason = %q, want check_failed — the discriminator was computed and dropped",
+			result.EpicReason)
+	}
+	if result.Error == "" {
+		t.Error("Error is empty — the cause was computed by the epic service and never copied out")
+	}
+	if result.AutoClosed {
+		t.Error("AutoClosed=true on a failure")
+	}
+}
+
+// TestPostMergeSuccessIsNotFailed is the control: the failure flag must not be
+// set on the paths that worked, or it is worthless as a discriminator.
+func TestPostMergeSuccessIsNotFailed(t *testing.T) {
+	fetcher := &mockFetcher{issues: map[string]*types.Issue{
+		"nightgauge/nightgauge#101": {NodeID: "I_node101", Number: 101, ParentIssueNumber: 99},
+	}}
+	closer := &mockEpicAutoCloser{
+		result: &gh.AutoCloseSingleResult{EpicNumber: 99, Status: "skipped", Reason: "has_open"},
+	}
+
+	result := EvaluatePostMerge(context.Background(), fetcher, &mockIssueCloser{}, closer, nil, nil, PostMergeInput{
+		IssueNumber:     101,
+		RepositoryOwner: "nightgauge",
+		RepositoryName:  "nightgauge",
+	})
+
+	if result.Failed {
+		t.Error("Failed=true for a skipped rollup — skipped is a normal outcome, not a failure")
+	}
+	if result.Reason != "skipped" {
+		t.Errorf("Reason = %q, want skipped", result.Reason)
+	}
+	// The field that made "Epic #N skipped: skipped" possible.
+	if result.EpicReason != "has_open" {
+		t.Errorf("EpicReason = %q, want has_open — without it the CLI can only re-print Reason",
+			result.EpicReason)
+	}
+}
+
+// TestPostMergeNoParentIsNotFailed keeps the most common outcome quiet.
+func TestPostMergeNoParentIsNotFailed(t *testing.T) {
+	fetcher := &mockFetcher{issues: map[string]*types.Issue{
+		"nightgauge/nightgauge#101": {NodeID: "I_node101", Number: 101},
+	}}
+
+	result := EvaluatePostMerge(context.Background(), fetcher, &mockIssueCloser{}, &mockEpicAutoCloser{}, nil, nil, PostMergeInput{
+		IssueNumber:     101,
+		RepositoryOwner: "nightgauge",
+		RepositoryName:  "nightgauge",
+	})
+
+	if result.Failed {
+		t.Error("Failed=true for an issue with no parent epic — the ordinary case must stay silent")
+	}
+	if result.Reason != "no_parent" {
+		t.Errorf("Reason = %q, want no_parent", result.Reason)
+	}
+}

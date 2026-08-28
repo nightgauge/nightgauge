@@ -5525,6 +5525,25 @@ cause the command to exit non-zero.`,
 				}
 			}
 
+			// (#1025) Report a failure in BOTH output modes, and BEFORE the
+			// --json early return.
+			//
+			// The hook is non-blocking and always exits 0, so its stdout is the
+			// only signal there is — and every consumer read it wrong. The
+			// extension logs the JSON blob at INFO under the word "completed"
+			// and drops stderr; this verb's own reporting switch sat below the
+			// --json return, so the path AGENTS.md tells operators to use
+			// printed nothing at all on failure. stdout stays pure JSON; the
+			// warning goes to stderr, where a failed rollup now names itself.
+			if result.Failed {
+				fmt.Fprintf(os.Stderr,
+					"Warning: post-merge FAILED for issue #%d: %s%s%s\n",
+					issueNumber, result.Reason,
+					epicReasonSuffix(result.EpicReason),
+					errorSuffix(result.Error))
+				raisePostMergeFailureCard(workdir, ownerPart, repoPart, issueNumber, result)
+			}
+
 			if outputJSON {
 				return printJSON(result)
 			}
@@ -5556,9 +5575,12 @@ cause the command to exit non-zero.`,
 			case "closed":
 				fmt.Printf("Epic #%d auto-closed (all sub-issues complete).\n", result.EpicNumber)
 			case "skipped":
-				fmt.Printf("Epic #%d skipped: %s\n", result.EpicNumber, result.Reason)
-			case "issue_fetch_error", "auto_close_error":
-				fmt.Fprintf(os.Stderr, "Warning: post-merge check failed: %s\n", result.Error)
+				// result.EpicReason, not result.Reason — the latter is the word
+				// "skipped" itself, so this line used to read "Epic #N skipped:
+				// skipped" and told the operator nothing (#1025).
+				fmt.Printf("Epic #%d skipped: %s\n", result.EpicNumber, result.EpicReason)
+			case "pr_verify_error", "pr_not_merged", "issue_fetch_error", "auto_close_error":
+				// Already reported to stderr above, in both output modes.
 			default:
 				fmt.Printf("Epic #%d: %s\n", result.EpicNumber, result.Reason)
 			}
