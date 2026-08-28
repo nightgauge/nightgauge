@@ -529,7 +529,17 @@ export interface SkillRunCallbacks {
    * model on every transition (latest-wins, empties ignored), so a concrete
    * `servedModel` at completion still overrides this up-front value.
    */
-  onModelResolved?: (stage: PipelineStage, model: string, adapter: string) => void;
+  /**
+   * The dispatch's model decision, fired once, synchronously before spawn.
+   *
+   * Carries `source` since #1016. It used to carry only model+adapter, so the
+   * orchestrator's "Starting stage" line ran its OWN second copy of the
+   * resolver to obtain a source — one without the issue metadata the `auto`
+   * branch needs, so it could never agree with the real decision on any run the
+   * AutoModelSelector made. One decision, described twice, by a writer that
+   * lacked the inputs to describe it.
+   */
+  onModelResolved?: (stage: PipelineStage, model: string, adapter: string, source: string) => void;
   /**
    * Fired SYNCHRONOUSLY, immediately after the stage's child process is
    * spawned, with its OS pid (ADR-017 §7.2, #370).
@@ -3790,7 +3800,6 @@ export function runStageSkillHeadless(
   // RuntimeState alongside the scheduler's own. The IPC path needs no
   // equivalent: the Go scheduler already records the dispatch model up-front,
   // at stage start, from the same value it sent over the wire.
-  callbacks?.onModelResolved?.(stage, modelDecision.model, adapter);
 
   // Compose the skill through `nightgauge skill render` — the ONE composer
   // (#78, ADR 016 §4). Platform-resolved content (#1473) arrives already
@@ -4651,6 +4660,17 @@ export function runStageSkillHeadless(
   if (!runId) {
     delete spawnEnv.NIGHTGAUGE_RUN_ID;
   }
+
+  // The dispatch's model decision, reported ONCE and synchronously before the
+  // spawn — so a stage killed early still has its model on record (#367).
+  //
+  // It fires HERE, not at resolution time, because the adapter branches above
+  // mutate modelDecision after the fact: gemini, gemini-sdk, copilot and
+  // lm-studio all overwrite `.model`, and three of them overwrite `.source` to
+  // "config". Firing before those ran reported a decision the run did not make,
+  // which is the same two-writer disagreement #1016 is about, merely narrowed
+  // to four adapters. This is the first point where the values are final.
+  callbacks?.onModelResolved?.(stage, modelDecision.model, adapter, modelDecision.source);
 
   const proc = spawn(cmd, args, {
     cwd: workspaceRoot,
