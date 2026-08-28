@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 func TestRender_FullYAML(t *testing.T) {
@@ -339,5 +341,70 @@ defaultRepo: legacy-repo
 	}
 	if numOut != "99" {
 		t.Errorf("legacy project.number: got %q, want %q", numOut, "99")
+	}
+}
+
+// #1048 — `config show` is the product's own answer to "what is my effective
+// configuration?", and it structurally could not display two of the settings
+// most likely to be tuned.
+func TestToRenderView_ShowsThePipelineBlock(t *testing.T) {
+	enabled := false
+	cfg := DefaultConfig()
+	cfg.Pipeline = &PipelineConfig{
+		ArchitectureApproval: &ArchitectureApprovalConfig{Enabled: &enabled},
+	}
+
+	out, err := yaml.Marshal(toRenderView(cfg))
+	if err != nil {
+		t.Fatalf("marshal render view: %v", err)
+	}
+	got := string(out)
+	if !strings.Contains(got, "pipeline:") {
+		t.Errorf("no pipeline: block in config show output — architecture_approval, budget_preset and max_concurrent are all invisible:\n%s", got)
+	}
+	if !strings.Contains(got, "architecture_approval:") {
+		t.Errorf("pipeline block does not carry architecture_approval:\n%s", got)
+	}
+}
+
+// The pointer-ness is load-bearing: Platform.Enabled is a *bool precisely so an
+// explicit false is distinguishable from unset. Rendering it as a plain bool
+// with omitempty would drop `enabled: false` and reproduce this defect for the
+// one value an operator most needs to confirm.
+func TestToRenderView_ShowsAnExplicitlyDisabledPlatform(t *testing.T) {
+	disabled := false
+	cfg := DefaultConfig()
+	cfg.PlatformEnabled = &disabled
+	// Deliberately NO api_url, license_key or telemetry: a platform block whose
+	// only content is `enabled: false` previously rendered as absent entirely,
+	// so a configured value was displayed as unconfigured.
+
+	out, err := yaml.Marshal(toRenderView(cfg))
+	if err != nil {
+		t.Fatalf("marshal render view: %v", err)
+	}
+	got := string(out)
+	if !strings.Contains(got, "platform:") {
+		t.Errorf("a platform block containing only `enabled: false` rendered as absent:\n%s", got)
+	}
+	if !strings.Contains(got, "enabled: false") {
+		t.Errorf("explicit `enabled: false` was dropped from the rendered platform block:\n%s", got)
+	}
+}
+
+// Absent must stay absent: the guard is a nil check, not a truthiness check.
+func TestToRenderView_OmitsPlatformWhenNothingIsConfigured(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.PlatformEnabled = nil
+	cfg.PlatformURL = ""
+	cfg.LicenseKey = ""
+	cfg.Telemetry = nil
+
+	out, err := yaml.Marshal(toRenderView(cfg))
+	if err != nil {
+		t.Fatalf("marshal render view: %v", err)
+	}
+	if strings.Contains(string(out), "platform:") {
+		t.Errorf("platform block rendered for a config that has no platform settings:\n%s", out)
 	}
 }
