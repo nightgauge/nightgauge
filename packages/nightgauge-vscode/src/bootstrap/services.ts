@@ -1587,9 +1587,16 @@ export async function initializeServices(
           issueNumber,
         });
       },
+      // #1055: phases are closed by onSlotStageCompleted below, not here. The
+      // call that used to live here passed the stage that was STARTING to
+      // completeStagePhases, which looks up activePhase by that stage name — a
+      // stage that has no active phase yet — so it was a total no-op. Intra-
+      // stage completes still landed (marker N+1 closes N), which is why every
+      // phase but the last of each stage reached "complete", while the stale
+      // activePhase entries accumulated and were only drained at teardown,
+      // after the run was terminal-latched — producing a burst of refused
+      // notifyPhaseTransition calls, one per stage.
       onSlotStageChanged: (_slotIndex, issueNumber, stage) => {
-        // Complete phases for the previous stage before updating
-        slotPhaseTrackers.get(issueNumber)?.completeStagePhases(stage);
         slotOutputManager!.updateStage(issueNumber, stage);
         // In single-slot mode, show per-stage status bar (mirrors pre-#1831 UX).
         // In multi-slot mode, show aggregated "Pipelines: N/M" display.
@@ -1598,6 +1605,13 @@ export async function initializeServices(
         } else {
           updateConcurrentStatusBar();
         }
+      },
+      // #1055: close the stage's phases when the stage COMPLETES, mirroring the
+      // sequential path's onStageComplete wiring. Without this the last phase
+      // of every stage (e.g. self-assessment, index 13 of 14) never received a
+      // complete transition and sat "running" long after its stage had ended.
+      onSlotStageCompleted: (_slotIndex, issueNumber, stage) => {
+        slotPhaseTrackers.get(issueNumber)?.completeStagePhases(stage);
       },
       onSlotOutput: (_slotIndex, issueNumber, data, stage) => {
         // Detect phase markers in stdout for progress display (2/16 - [phase])
