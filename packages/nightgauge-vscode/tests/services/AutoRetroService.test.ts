@@ -1537,4 +1537,61 @@ describe("AutoRetroService", () => {
       expect(AutoRetroService.parseIssueNumberFromUrl("")).toBeUndefined();
     });
   });
+
+  // #1056 — the classifier reported category "unknown", severity "low" for a
+  // run whose terminal kind was `dev_handoff_missing`: an enum the pipeline
+  // emitted about itself and logged twice. The structured kind must be an
+  // input, not something reconstructed from prose.
+  describe("structured terminal kind (#1056)", () => {
+    it("classifies dev_handoff_missing as skill-no-op instead of unknown", () => {
+      const findings = AutoRetroService.classifyFailure(
+        {
+          // Deliberately unhelpful prose: on the real run the gate reason was
+          // never in the corpus the classifier read.
+          text: "",
+          sourcesAnalyzed: ["terminal_reason"],
+          terminalReason: "",
+          terminalKind: "dev_handoff_missing",
+        },
+        "feature-dev"
+      );
+
+      expect(findings.length).toBeGreaterThan(0);
+      expect(findings[0].category).toBe("skill-no-op");
+      expect(findings[0].category).not.toBe("unknown");
+      expect(findings[0].evidence.join(" ")).toContain("dev_handoff_missing");
+    });
+
+    it("does not let a terminal kind displace the merge-blocked verdict (extractor ordering)", () => {
+      const findings = AutoRetroService.classifyFailure(
+        {
+          // The real merge-blocked shape: a deterministically-known blocker. Declining
+          // to merge a red PR is CORRECT behaviour, not a skill no-op.
+          text: 'blocked by failing check "Sync E2E (Docker)" (mergeStateStatus=UNSTABLE)',
+          sourcesAnalyzed: ["terminal_reason"],
+          terminalReason:
+            'blocked by failing check "Sync E2E (Docker)" (mergeStateStatus=UNSTABLE)',
+          terminalKind: "premature_turn_end",
+        },
+        "pr-merge"
+      );
+
+      // Whatever else fires, the first verdict must remain the merge-blocked
+      // one the extractor above deliberately orders ahead of skill-no-op.
+      expect(findings[0].category).toBe("merge-blocked");
+    });
+
+    it("stays silent when no terminal kind is present", () => {
+      const findings = AutoRetroService.classifyFailure(
+        {
+          text: "",
+          sourcesAnalyzed: [],
+          terminalReason: "",
+        },
+        "feature-dev"
+      );
+      // No kind, no prose: the honest answer is still unknown.
+      expect(findings.every((f) => f.category !== "skill-no-op")).toBe(true);
+    });
+  });
 });

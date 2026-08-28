@@ -98,7 +98,7 @@ func TestRecordGateResult_RoutesThroughTheDaemonWhenOneIsReachable(t *testing.T)
 	const issue = 5501
 	runID := seedRun(t, workspace, issue)
 
-	recordGateResult(context.Background(), workspace, issue, "pr-create", runID, state.StageGateResult{
+	recordGateResult(context.Background(), workspace, "", issue, "pr-create", runID, state.StageGateResult{
 		GateName: "pr-create", Passed: true, Timestamp: "2026-08-23T00:00:00Z",
 	})
 
@@ -128,7 +128,7 @@ func TestRecordGateResult_TakesTheRunIDFromTheStageEnvironment(t *testing.T) {
 	t.Setenv(adapters.RunIDEnvVar, runID)
 
 	// No run id passed — it must come from the environment.
-	recordGateResult(context.Background(), workspace, issue, "pr-create", "", state.StageGateResult{
+	recordGateResult(context.Background(), workspace, "", issue, "pr-create", "", state.StageGateResult{
 		GateName: "pr-create", Passed: true, Timestamp: "2026-08-23T00:00:00Z",
 	})
 
@@ -166,7 +166,7 @@ func TestRecordGateResult_FallsBackToTheDirectWriteWithNoDaemon(t *testing.T) {
 		t.Fatal("a daemon is reachable; this test cannot exercise the fallback")
 	}
 
-	recordGateResult(context.Background(), workspace, issue, "pr-create", runID, state.StageGateResult{
+	recordGateResult(context.Background(), workspace, "", issue, "pr-create", runID, state.StageGateResult{
 		GateName: "pr-create", Passed: true, Timestamp: "2026-08-23T00:00:00Z",
 	})
 
@@ -214,7 +214,7 @@ func TestRecordGateResult_DoesNotWriteDirectlyWhenTheDaemonRefuses(t *testing.T)
 		t.Fatalf("seed a stray snapshot: %v", err)
 	}
 
-	recordGateResult(context.Background(), workspace, issue, "pr-create", runID, state.StageGateResult{
+	recordGateResult(context.Background(), workspace, "", issue, "pr-create", runID, state.StageGateResult{
 		GateName: "pr-create", Passed: true, Timestamp: "2026-08-23T00:00:00Z",
 	})
 
@@ -242,5 +242,57 @@ func TestGateVerify_RunIDFlagIsWired(t *testing.T) {
 	// Keep the marshalled params in step with the server's expectations.
 	if _, err := json.Marshal(ipc.PipelineRecordStageGateResultParams{}); err != nil {
 		t.Fatalf("params do not marshal: %v", err)
+	}
+}
+
+// TestRecordGateResult_FilesUnderTheRecordRootWhenWorkdirIsAWorktree is the
+// #1054 regression. The extension runs gates with `--workdir <worktree>`,
+// because that is where the gate reads issue-N.json / dev-N.json from. But the
+// daemon listens only at the repo root, and only the repo root holds the run
+// snapshot.
+//
+// Before --record-root existed, this function used `workspace` for both: the
+// dial at <worktree>/.nightgauge/daemon.sock always failed, and the direct
+// write then targeted <worktree>/.nightgauge/pipeline, which has a pipeline
+// directory but no runtime-{issue}-{runID}.json — so the append took its
+// load-or-skip branch and wrote nothing. Every gate on every worktree run
+// recorded nowhere, which is why the end-of-run audit reported
+// [gate-not-invoked] for stages whose gates had demonstrably passed.
+//
+// Passing "" for recordRoot here reproduces the pre-fix behaviour and fails.
+func TestRecordGateResult_FilesUnderTheRecordRootWhenWorkdirIsAWorktree(t *testing.T) {
+	repo := daemonWorkspace(t)
+	startGateRecordDaemon(t, repo)
+	const issue = 5505
+	runID := seedRun(t, repo, issue)
+
+	// The real worktree shape: a .nightgauge/pipeline directory holding stage
+	// context files, but never a run snapshot.
+	worktree := filepath.Join(repo, ".worktrees", "issue-5505")
+	if err := os.MkdirAll(filepath.Join(worktree, ".nightgauge", "pipeline"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	recordGateResult(context.Background(), worktree, repo, issue, "pr-create", runID, state.StageGateResult{
+		GateName: "pr-create", Passed: true, Timestamp: "2026-08-28T00:00:00Z",
+	})
+
+	// The record must land on the run snapshot at the REPO root.
+	stateDir := filepath.Join(repo, ".nightgauge", "pipeline")
+	rs, loadErr := state.LoadPersistedState(stateDir, runID)
+	if loadErr != nil {
+		t.Fatalf("load the run's snapshot at the repo root: %v", loadErr)
+	}
+	if got := rs.StageGateResultsFor(state.PipelineStage("pr-create")); len(got) != 1 {
+		t.Fatalf("gate results recorded on the run = %d, want 1 — the record did not reach the authoritative snapshot", len(got))
+	}
+
+	// And nothing may be written into the worktree.
+	if entries, err := os.ReadDir(filepath.Join(worktree, ".nightgauge", "pipeline")); err == nil {
+		for _, e := range entries {
+			if len(e.Name()) >= 8 && e.Name()[:8] == "runtime-" {
+				t.Errorf("a run snapshot was created in the worktree: %s", e.Name())
+			}
+		}
 	}
 }

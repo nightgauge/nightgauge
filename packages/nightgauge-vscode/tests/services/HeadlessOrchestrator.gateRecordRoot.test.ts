@@ -137,6 +137,40 @@ describe("gate records address the daemon's root (#1021)", () => {
     expect(flagValue(spawn.args, "--workdir")).toBe(WORKTREE);
   });
 
+  // #1054: --run-id alone was inert. recordGateResult derived BOTH the daemon
+  // socket path and the direct-write state dir from --workdir, which is the
+  // worktree — so the dial always failed and the fallback wrote into a
+  // directory holding no run snapshot. The record reached nowhere on every
+  // worktree run, and the end-of-run audit then reported [gate-not-invoked]
+  // for gates that had demonstrably passed.
+  //
+  // The record's destination must be addressed separately from the gate's
+  // inputs. This asserts both halves at once, because fixing it by moving
+  // --workdir would make every gate false-negate.
+  it("addresses the record at the repo root while the gate still reads the worktree", async () => {
+    const o = makeOrchestrator();
+    await (
+      o as unknown as { verifyPostMergeState(n: number): Promise<Error | null> }
+    ).verifyPostMergeState(4151);
+
+    const spawn = gateSpawns[gateSpawns.length - 1];
+    expect(flagValue(spawn.args, "--record-root")).toBe(REPO_ROOT);
+    expect(flagValue(spawn.args, "--workdir")).toBe(WORKTREE);
+  });
+
+  // The duplicated --run-id block was harmless (cobra takes the last) but it
+  // documented a fix that did not work. One occurrence, so a future reader is
+  // not led back to the wrong mechanism.
+  it("passes --run-id exactly once", async () => {
+    const o = makeOrchestrator();
+    await (
+      o as unknown as { verifyPostMergeState(n: number): Promise<Error | null> }
+    ).verifyPostMergeState(4151);
+
+    const spawn = gateSpawns[gateSpawns.length - 1];
+    expect(spawn.args.filter((a: string) => a === "--run-id")).toHaveLength(1);
+  });
+
   it("reads gate results from the run's repo root, where the daemon writes them", async () => {
     const o = makeOrchestrator();
     const readSpy = vi.spyOn(
