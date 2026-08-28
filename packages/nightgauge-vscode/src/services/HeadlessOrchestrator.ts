@@ -12991,7 +12991,9 @@ export class HeadlessOrchestrator implements vscode.Disposable {
           this.logger.warn(outputDecision.message, {
             stage,
             outputTokens: usage.outputTokens,
-            effectiveLimit: outputDecision.effectiveLimit,
+            // #1027: the same number the message quotes. This logged
+            // effectiveLimit (base + grace) beside a message naming baseLimit.
+            limit: outputDecision.limit,
           });
           this.eventDispatcher.onStderr(stage, `${outputDecision.message}\n`);
         }

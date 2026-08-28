@@ -60,10 +60,17 @@ export interface BudgetEnforcementDecision {
  * @see Issue #842 - Cap feature-dev output tokens
  */
 export interface OutputTokenEnforcementDecision {
-  shouldTerminate: boolean;
   shouldWarn: boolean;
   currentOutputTokens: number;
-  effectiveLimit: number;
+  /**
+   * The threshold the warning is measured against — the ONE number (#1027).
+   *
+   * Was `effectiveLimit` (base + grace) while the message quoted `baseLimit`,
+   * so the operator saw two different limits for one decision. `shouldTerminate`
+   * is gone with it: the deleted post-hoc hard limit was its only reader,
+   * and it has been hardcoded false ever since.
+   */
+  limit: number;
   message: string;
 }
 
@@ -538,17 +545,6 @@ export class BudgetEnforcer {
   }
 
   /**
-   * Get the effective output token limit (base + grace buffer).
-   *
-   * @see Issue #842 - Cap feature-dev output tokens
-   */
-  getEffectiveOutputTokenLimit(stage: PipelineStage | string, sizeLabel?: SizeLabel): number {
-    const base = this.getBaseOutputTokenLimit(stage, sizeLabel);
-    if (base <= 0) return 0;
-    return Math.round(base * (1 + this.gracePercent / 100));
-  }
-
-  /**
    * Check whether a stage's current output tokens trigger a warning.
    *
    * Output token limits are warn-only — they never terminate a stage.
@@ -565,38 +561,37 @@ export class BudgetEnforcer {
     currentOutputTokens: number,
     sizeLabel?: SizeLabel
   ): OutputTokenEnforcementDecision {
-    const baseLimit = this.getBaseOutputTokenLimit(stage, sizeLabel);
-    const effectiveLimit = this.getEffectiveOutputTokenLimit(stage, sizeLabel);
+    // ONE threshold (#1027). This used to compute two: it warned against
+    // baseLimit and formatted the message from baseLimit, then returned
+    // effectiveLimit (base + grace) in the struct — so the operator read
+    // "exceeds 50,000" beside a payload saying the limit was 75,000.
+    //
+    // The grace buffer is residue. It existed for the post-hoc HARD limit that
+    // that was deleted, and `shouldTerminate` has been hardcoded false since,
+    // so nothing compares anything to it. A threshold no code enforces is not a
+    // second opinion; it is a second number to disbelieve.
+    const limit = this.getBaseOutputTokenLimit(stage, sizeLabel);
 
     // No output token limit configured for this stage
-    if (baseLimit <= 0) {
+    if (limit <= 0) {
       return {
-        shouldTerminate: false,
         shouldWarn: false,
         currentOutputTokens,
-        effectiveLimit: 0,
+        limit: 0,
         message: "",
       };
     }
 
-    const overBaseLimit = currentOutputTokens > baseLimit;
+    const overLimit = currentOutputTokens > limit;
 
     return {
-      shouldTerminate: false,
-      shouldWarn: overBaseLimit,
+      shouldWarn: overLimit,
       currentOutputTokens,
-      effectiveLimit,
-      message: overBaseLimit
-        ? this.formatOutputTokenWarningMessage(stage, currentOutputTokens, baseLimit)
+      limit,
+      message: overLimit
+        ? this.formatOutputTokenWarningMessage(stage, currentOutputTokens, limit)
         : "",
     };
-  }
-
-  formatOutputTokenTerminationMessage(stage: string, tokens: number, limit: number): string {
-    return (
-      `[OUTPUT TOKEN LIMIT EXCEEDED] Stage ${stage} terminated: ` +
-      `${tokens.toLocaleString()} output tokens exceeds hard limit of ${limit.toLocaleString()}`
-    );
   }
 
   formatOutputTokenWarningMessage(stage: string, tokens: number, limit: number): string {

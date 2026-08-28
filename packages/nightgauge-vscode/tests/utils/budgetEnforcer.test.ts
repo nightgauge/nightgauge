@@ -417,62 +417,45 @@ describe("BudgetEnforcer", () => {
     });
   });
 
-  describe("getEffectiveOutputTokenLimit", () => {
-    it("should apply 50% grace buffer by default", () => {
-      const enforcer = new BudgetEnforcer();
-      // feature-dev M = 50000, effective = 50000 * 1.5 = 75000
-      expect(enforcer.getEffectiveOutputTokenLimit("feature-dev", "M")).toBe(75000);
-    });
+  // `getEffectiveOutputTokenLimit` and its grace-buffer tests are DELETED
+  // (#1027). The buffer existed for the post-hoc hard limit #1609 removed;
+  // afterwards nothing compared anything to it, and it survived only as the
+  // number the log payload reported while the operator-facing message quoted a
+  // different one. A threshold no code enforces is not a second opinion.
 
-    it("should apply custom grace percent", () => {
-      const enforcer = new BudgetEnforcer({ gracePercent: 100 });
-      // feature-dev M = 50000, effective = 50000 * 2.0 = 100000
-      expect(enforcer.getEffectiveOutputTokenLimit("feature-dev", "M")).toBe(100000);
-    });
-
-    it("should return 0 for stages without output token limits", () => {
-      const enforcer = new BudgetEnforcer();
-      expect(enforcer.getEffectiveOutputTokenLimit("pr-create", "M")).toBe(0);
-    });
-  });
-
-  describe("checkOutputTokens - hard mode (warn-only per #1609)", () => {
+  describe("checkOutputTokens - warn-only per #1609, one threshold per #1027", () => {
     const enforcer = new BudgetEnforcer({ mode: "hard" });
 
-    it("should not warn or terminate when under limit", () => {
+    it("does not warn when under the limit", () => {
       const decision = enforcer.checkOutputTokens("feature-dev", 30000, "M");
-      expect(decision.shouldTerminate).toBe(false);
       expect(decision.shouldWarn).toBe(false);
       expect(decision.message).toBe("");
+      expect(decision.limit).toBe(50000);
     });
 
-    it("should warn but not terminate when over base limit but under grace", () => {
-      // M base = 50000, effective = 75000
+    it("warns over the limit, and reports the SAME number the message quotes", () => {
       const decision = enforcer.checkOutputTokens("feature-dev", 60000, "M");
-      expect(decision.shouldTerminate).toBe(false);
       expect(decision.shouldWarn).toBe(true);
       expect(decision.message).toContain("OUTPUT TOKEN WARNING");
       expect(decision.message).toContain("60,000");
+      // The defect: the message named 50,000 while the struct returned 75,000,
+      // so the operator was shown two limits for one decision.
+      expect(decision.limit).toBe(50000);
+      expect(decision.message).toContain("50,000");
     });
 
-    it("should warn but never terminate when over effective limit (#1609)", () => {
-      // M base = 50000, effective = 75000
+    it("keeps warning far above the limit, and never terminates (#1609)", () => {
       const decision = enforcer.checkOutputTokens("feature-dev", 80000, "M");
-      expect(decision.shouldTerminate).toBe(false);
       expect(decision.shouldWarn).toBe(true);
-      expect(decision.message).toContain("OUTPUT TOKEN WARNING");
       expect(decision.message).toContain("80,000");
+      // shouldTerminate is gone: it was hardcoded false and had no reader.
+      expect("shouldTerminate" in decision).toBe(false);
     });
 
-    it("should not terminate at exactly the effective limit", () => {
-      const decision = enforcer.checkOutputTokens("feature-dev", 75000, "M");
-      expect(decision.shouldTerminate).toBe(false);
-    });
-
-    it("should not terminate even above the effective limit (#1609)", () => {
-      const decision = enforcer.checkOutputTokens("feature-dev", 75001, "M");
-      expect(decision.shouldTerminate).toBe(false);
-      expect(decision.shouldWarn).toBe(true);
+    it("reports a zero limit for a stage that has none", () => {
+      const decision = enforcer.checkOutputTokens("pr-create", 99999, "M");
+      expect(decision.shouldWarn).toBe(false);
+      expect(decision.limit).toBe(0);
     });
   });
 
@@ -481,7 +464,8 @@ describe("BudgetEnforcer", () => {
 
     it("should never terminate, even when far over limit", () => {
       const decision = enforcer.checkOutputTokens("feature-dev", 500000, "M");
-      expect(decision.shouldTerminate).toBe(false);
+      // The warn-only guarantee, now structural: no terminate field to set.
+      expect("shouldTerminate" in decision).toBe(false);
       expect(decision.shouldWarn).toBe(true);
     });
 
@@ -494,11 +478,10 @@ describe("BudgetEnforcer", () => {
   describe("checkOutputTokens - no limit configured", () => {
     const enforcer = new BudgetEnforcer();
 
-    it("should not warn or terminate for stages without output token limits", () => {
+    it("should not warn for stages without output token limits", () => {
       const decision = enforcer.checkOutputTokens("pr-create", 1000000, "M");
-      expect(decision.shouldTerminate).toBe(false);
       expect(decision.shouldWarn).toBe(false);
-      expect(decision.effectiveLimit).toBe(0);
+      expect(decision.limit).toBe(0);
       expect(decision.message).toBe("");
     });
   });
@@ -508,15 +491,15 @@ describe("BudgetEnforcer", () => {
       const enforcer = new BudgetEnforcer({
         outputTokenOverrides: { "feature-dev": 80000 },
       });
-      // Base = 80000, effective = 80000 * 1.5 = 120000
+      // The override IS the limit — there is no second, grace-inflated one (#1027).
       const decision = enforcer.checkOutputTokens("feature-dev", 90000, "XL");
       expect(decision.shouldWarn).toBe(true);
-      expect(decision.shouldTerminate).toBe(false);
+      expect(decision.limit).toBe(80000);
 
-      const termDecision = enforcer.checkOutputTokens("feature-dev", 121000, "XL");
-      // Output tokens never terminate (#1609) — warn only
-      expect(termDecision.shouldTerminate).toBe(false);
-      expect(termDecision.shouldWarn).toBe(true);
+      // Output tokens never terminate (#1609) — warn only, at any magnitude.
+      const farOver = enforcer.checkOutputTokens("feature-dev", 121000, "XL");
+      expect(farOver.shouldWarn).toBe(true);
+      expect(farOver.limit).toBe(80000);
     });
   });
 
@@ -527,22 +510,18 @@ describe("BudgetEnforcer", () => {
           "feature-dev": { XL: 300000 },
         },
       });
-      // XL base = 300000, effective = 300000 * 1.5 = 450000
       expect(enforcer.getBaseOutputTokenLimit("feature-dev", "XL")).toBe(300000);
-      expect(enforcer.getEffectiveOutputTokenLimit("feature-dev", "XL")).toBe(450000);
+      // One threshold (#1027): what the check reports is what it enforces.
+      expect(enforcer.checkOutputTokens("feature-dev", 1, "XL").limit).toBe(300000);
     });
   });
 
   describe("output token message formatting", () => {
     const enforcer = new BudgetEnforcer();
 
-    it("should format termination message with token counts", () => {
-      const msg = enforcer.formatOutputTokenTerminationMessage("feature-dev", 80000, 75000);
-      expect(msg).toContain("OUTPUT TOKEN LIMIT EXCEEDED");
-      expect(msg).toContain("feature-dev");
-      expect(msg).toContain("80,000");
-      expect(msg).toContain("75,000");
-    });
+    // The termination message formatter is DELETED with the hard limit it
+    // described (#1027) — the termination it announced was removed, so it
+    // had no production caller and could only ever have lied.
 
     it("should format warning message with token counts", () => {
       const msg = enforcer.formatOutputTokenWarningMessage("feature-dev", 60000, 50000);
