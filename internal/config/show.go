@@ -27,14 +27,14 @@ var ErrRawNotScalar = errors.New("--raw is only valid on scalar values")
 // The view is intentionally narrower than yamlConfigNested — it only carries
 // fields the consuming verb is expected to surface.
 type renderView struct {
-	Project        renderProject           `yaml:"project,omitempty"`
-	GitHubUser     string                  `yaml:"github_user,omitempty"`
-	GitHubAuth     *GitHubAuthConfig       `yaml:"github_auth,omitempty"`
-	LogLevel       string                  `yaml:"logLevel,omitempty"`
-	APIKey         string                  `yaml:"api_key,omitempty"`
-	Sanitization   *SanitizationConfig     `yaml:"sanitization,omitempty"`
-	FeedbackLoop   *FeedbackLoopConfig     `yaml:"feedback_loop,omitempty"`
-	Platform       *renderPlatform         `yaml:"platform,omitempty"`
+	Project      renderProject       `yaml:"project,omitempty"`
+	GitHubUser   string              `yaml:"github_user,omitempty"`
+	GitHubAuth   *GitHubAuthConfig   `yaml:"github_auth,omitempty"`
+	LogLevel     string              `yaml:"logLevel,omitempty"`
+	APIKey       string              `yaml:"api_key,omitempty"`
+	Sanitization *SanitizationConfig `yaml:"sanitization,omitempty"`
+	FeedbackLoop *FeedbackLoopConfig `yaml:"feedback_loop,omitempty"`
+	Platform     *renderPlatform     `yaml:"platform,omitempty"`
 	// #1048: the whole pipeline: block was absent from this view, so
 	// `config show` could not display architecture_approval, budget_preset,
 	// max_concurrent, default_branch or worktree_base — the settings most
