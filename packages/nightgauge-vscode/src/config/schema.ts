@@ -3790,7 +3790,21 @@ export const DEFAULT_CONFIG: NightgaugeConfig = {
     mode: "warn",
   },
   human_in_the_loop: {
-    auto_accept_stages: true,
+    // #1050: FALSE, matching the runtime resolvers and `nightgauge init`.
+    //
+    // This was `true` while otherResolver.ts and skillRunner.ts both default it
+    // to false and internal/config/init.go writes `auto_accept_stages: false`.
+    // With no human_in_the_loop block in config, the Settings panel therefore
+    // showed "Auto-Accept Stages" CHECKED while getInitialExecutionMode
+    // returned "manual" and the pipeline was set to manual. The operator read
+    // the GUI as "unattended is on" and the run stopped for a human anyway.
+    //
+    // The control was never missing — it misreported its own default. Changing
+    // the DISPLAY side is the safe direction: an unconfigured repo now shows
+    // "approval required", which is what actually happens. Flipping the runtime
+    // to true instead would change live gating for every workspace without a
+    // config block and contradict init.go.
+    auto_accept_stages: false,
     auto_accept_permissions: false,
     trusted_stages: [],
   },

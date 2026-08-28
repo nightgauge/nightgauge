@@ -2553,7 +2553,8 @@ function getHumanInTheLoopSectionHtml(
           "human_in_the_loop.auto_accept_stages",
           "Auto-Accept Stages",
           "Automatically approve all pipeline stage gates without prompting",
-          hitl.auto_accept_stages ?? true,
+          // #1050: false, matching DEFAULT_CONFIG and the runtime resolvers.
+          hitl.auto_accept_stages ?? false,
           disabled,
           g("human_in_the_loop.auto_accept_stages"),
           showBadges,

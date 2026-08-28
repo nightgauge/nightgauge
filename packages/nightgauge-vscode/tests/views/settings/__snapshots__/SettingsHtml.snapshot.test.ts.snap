@@ -2913,7 +2913,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > default config render 1`] = `
                id="human_in_the_loop.auto_accept_stages"
                class="toggle-input"
                data-path="human_in_the_loop.auto_accept_stages"
-               checked
+
                disabled>
         <label for="human_in_the_loop.auto_accept_stages" class="toggle-switch"></label>
       </div>
@@ -6939,7 +6939,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > global tier view 1`] = `
                id="human_in_the_loop.auto_accept_stages"
                class="toggle-input"
                data-path="human_in_the_loop.auto_accept_stages"
-               checked
+
                >
         <label for="human_in_the_loop.auto_accept_stages" class="toggle-switch"></label>
       </div>
@@ -10963,7 +10963,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > local tier view 1`] = `
                id="human_in_the_loop.auto_accept_stages"
                class="toggle-input"
                data-path="human_in_the_loop.auto_accept_stages"
-               checked
+
                >
         <label for="human_in_the_loop.auto_accept_stages" class="toggle-switch"></label>
       </div>
@@ -15003,7 +15003,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > locked section — pipeline r
                id="human_in_the_loop.auto_accept_stages"
                class="toggle-input"
                data-path="human_in_the_loop.auto_accept_stages"
-               checked
+
                disabled>
         <label for="human_in_the_loop.auto_accept_stages" class="toggle-switch"></label>
       </div>
@@ -19029,7 +19029,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > project tier view 1`] = `
                id="human_in_the_loop.auto_accept_stages"
                class="toggle-input"
                data-path="human_in_the_loop.auto_accept_stages"
-               checked
+
                >
         <label for="human_in_the_loop.auto_accept_stages" class="toggle-switch"></label>
       </div>
