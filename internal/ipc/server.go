@@ -4500,10 +4500,22 @@ func (s *Server) registerMethods() {
 		if params != nil {
 			json.Unmarshal(params, &p)
 		}
-		if s.execMgr == nil {
-			return nil, fmt.Errorf("execution manager not initialized")
+		// #1013: this used to reach the function through s.execMgr, a field
+		// written by exactly one function — WithExecutionManager — which has
+		// ZERO callers. The verb therefore answered "execution manager not
+		// initialized" on every invocation the extension ever made, and the
+		// extension's caller logged and continued, so cleanup was silently
+		// skipped on every activation.
+		//
+		// It also ignored p.WorkDir entirely. Routing through gitService puts
+		// this verb on the same rail as every other git.* method and makes the
+		// parameter mean something. gitService, not destructiveGitService: the
+		// extension calls with no workDir and must resolve the workspace root.
+		svc, err := s.gitService(p.WorkDir)
+		if err != nil {
+			return nil, err
 		}
-		deleted, err := s.execMgr.CleanupMergedBranches()
+		deleted, err := svc.CleanupMergedBranches()
 		if err != nil {
 			return nil, err
 		}

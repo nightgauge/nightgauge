@@ -1560,3 +1560,89 @@ func CreateInitialCommit(repo *gogit.Repository, repoPath string) error {
 	})
 	return err
 }
+
+// CleanupMergedBranches removes local branches whose remote tracking branch
+// no longer exists (i.e., was deleted after PR merge). Protects main/master
+// and the currently checked-out branch. Returns the list of deleted branch names.
+//
+// It lives here rather than on execution.Manager (#1013). The IPC verb that
+// calls it was its ONLY production caller, and it reached it through
+// Server.execMgr — a field written by exactly one function, WithExecutionManager,
+// which has zero callers. So `git.cleanupMergedBranches` returned "execution
+// manager not initialized" on every invocation the extension ever made.
+//
+// The dependency was wrong, not merely unwired: cleaning branches needs a git
+// checkout, not a stage runner. Wiring execMgr to satisfy it would also have
+// revived execution.list, whose Go nil slice would flip that verb's wire value
+// from [] to null and break two callers that dereference it immediately.
+func (s *Service) CleanupMergedBranches() ([]string, error) {
+	repoRoot := s.repoPath
+
+	// Prune stale remote-tracking refs first. This is NOT best-effort: the
+	// "[gone]" marker this function keys on only appears once the stale
+	// remote-tracking ref is pruned. If the fetch fails — no network, expired
+	// credentials, a remote that no longer resolves — nothing is ever marked
+	// gone, the loop below matches nothing, and this returns ([], nil): a
+	// clean "0 branches cleaned" that is indistinguishable from "there was
+	// nothing to clean" (#166). Report it instead of guessing.
+	prune := exec.Command("git", "fetch", "--prune")
+	prune.Dir = repoRoot
+	if out, err := prune.CombinedOutput(); err != nil {
+		return nil, fmt.Errorf("fetch --prune (required to detect merged branches): %w: %s",
+			err, strings.TrimSpace(string(out)))
+	}
+
+	// Get current branch to protect it
+	currentCmd := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD")
+	currentCmd.Dir = repoRoot
+	currentOut, err := currentCmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("get current branch: %w", err)
+	}
+	currentBranch := strings.TrimSpace(string(currentOut))
+
+	// List local branches with their tracking status
+	// Format: <branchname> <upstream:track> — "gone" means remote was deleted
+	listCmd := exec.Command("git", "for-each-ref", "--format=%(refname:short) %(upstream:track)", "refs/heads/")
+	listCmd.Dir = repoRoot
+	listOut, err := listCmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("list branches: %w", err)
+	}
+
+	var deleted []string
+	for _, line := range strings.Split(strings.TrimSpace(string(listOut)), "\n") {
+		if line == "" {
+			continue
+		}
+		parts := strings.SplitN(line, " ", 2)
+		branch := parts[0]
+		track := ""
+		if len(parts) > 1 {
+			track = parts[1]
+		}
+
+		// Protect main, master, and current branch
+		if branch == "main" || branch == "master" || branch == currentBranch {
+			continue
+		}
+
+		// Delete branches whose remote tracking branch is gone
+		if track == "[gone]" {
+			delCmd := exec.Command("git", "branch", "-D", branch)
+			delCmd.Dir = repoRoot
+			if out, err := delCmd.CombinedOutput(); err == nil {
+				deleted = append(deleted, branch)
+			} else {
+				// A branch git refuses to delete — most often one checked out
+				// in another worktree — is silently absent from the returned
+				// list, which reads as "not a candidate" rather than "tried
+				// and failed". Name it so a persistent failure is visible.
+				log.Printf("[WARN] cleanup: git branch -D %s failed (%v): %s",
+					branch, err, strings.TrimSpace(string(out)))
+			}
+		}
+	}
+
+	return deleted, nil
+}
