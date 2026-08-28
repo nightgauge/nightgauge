@@ -22,11 +22,18 @@ import {
   NotifierSettingsMessageHandler,
   type NotifierExtensionToWebViewMessage,
 } from "./NotifierSettingsMessageHandler";
-import type { NotifierInstanceRow } from "./NotifierInstancesSection";
+import type { NotifierInstanceRow, NotifierProvider } from "./NotifierInstancesSection";
 import type { NotifierRoutingRule } from "../../config/schema";
 
 /** 15-minute window within which a last-success is considered "connected". */
 const CONNECTED_WINDOW_MS = 15 * 60 * 1000;
+
+/** Default SecretStorage key per provider, used when a rule declares none. */
+const WEBHOOK_SECRET_KEY: Record<NotifierProvider, string> = {
+  discord: SECRET_KEYS.discordWebhookUrl,
+  mattermost: SECRET_KEYS.mattermostWebhookUrl,
+  slack: SECRET_KEYS.slackBotToken,
+};
 
 export class NotifierSettingsPanel implements vscode.Disposable {
   private static currentPanel: NotifierSettingsPanel | undefined;
@@ -126,11 +133,7 @@ export class NotifierSettingsPanel implements vscode.Disposable {
 
     for (const rule of notifiersConfig) {
       seenTypes.add(rule.type);
-      const webhookKey =
-        rule.webhook_secret_key ??
-        (rule.type === "discord"
-          ? SECRET_KEYS.discordWebhookUrl
-          : SECRET_KEYS.mattermostWebhookUrl);
+      const webhookKey = rule.webhook_secret_key ?? WEBHOOK_SECRET_KEY[rule.type];
       const webhookUrl = secretService ? await secretService.getSecret(webhookKey) : undefined;
 
       const notifierStatus = tracker?.getStatus(rule.id);

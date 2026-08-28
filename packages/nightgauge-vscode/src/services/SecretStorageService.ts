@@ -23,6 +23,7 @@ export const SECRET_KEYS = {
   discordWebhookUrl: `${KEY_PREFIX}.discord.webhookUrl`,
   mattermostWebhookUrl: `${KEY_PREFIX}.mattermost.webhookUrl`,
   mattermostBotToken: `${KEY_PREFIX}.mattermost.botToken`,
+  slackBotToken: `${KEY_PREFIX}.slack.botToken`,
   platformLicenseKey: `${KEY_PREFIX}.platform.licenseKey`,
   platformAccessToken: `${KEY_PREFIX}.platform.accessToken`,
   platformRefreshToken: `${KEY_PREFIX}.platform.refreshToken`,

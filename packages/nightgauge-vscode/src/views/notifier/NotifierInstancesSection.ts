@@ -9,9 +9,12 @@
  * @see Issue #3379 — Notifier Settings Panel
  */
 
+/** Provider types a notifier instance can declare. Mirrors the config schema. */
+export type NotifierProvider = "discord" | "mattermost" | "slack";
+
 export interface NotifierInstanceRow {
   id: string;
-  type: "discord" | "mattermost";
+  type: NotifierProvider;
   channel?: string;
   status: "connected" | "errored" | "disabled" | "unknown";
   lastEventSentAt?: string;
@@ -27,10 +30,14 @@ function escapeHtml(str: string): string {
     .replace(/"/g, "&quot;");
 }
 
-function typeBadgeHtml(type: "discord" | "mattermost"): string {
-  const label = type === "discord" ? "Discord" : "Mattermost";
-  const cls = type === "discord" ? "badge-discord" : "badge-mattermost";
-  return `<span class="notifier-badge ${cls}">${label}</span>`;
+const PROVIDER_LABEL: Record<NotifierProvider, string> = {
+  discord: "Discord",
+  mattermost: "Mattermost",
+  slack: "Slack",
+};
+
+function typeBadgeHtml(type: NotifierProvider): string {
+  return `<span class="notifier-badge badge-${type}">${PROVIDER_LABEL[type]}</span>`;
 }
 
 function statusPillHtml(status: NotifierInstanceRow["status"]): string {
@@ -179,6 +186,7 @@ export function getNotifierInstancesSectionHtml(
       }
       .badge-discord { background: #5865f2; color: #fff; }
       .badge-mattermost { background: #0058cc; color: #fff; }
+      .badge-slack { background: #4a154b; color: #fff; }
       .notifier-status {
         display: inline-block;
         padding: 1px 6px;

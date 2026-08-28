@@ -2521,12 +2521,41 @@ export const MattermostNotificationsConfigSchema = z.object({
 export type MattermostNotificationsConfig = z.infer<typeof MattermostNotificationsConfigSchema>;
 
 /**
- * External notification integrations (Discord, Mattermost, etc.)
+ * Slack notification configuration.
+ *
+ * Uses a bot token rather than an incoming webhook: only `chat.postMessage`
+ * returns a message `ts`, and only that `ts` lets `chat.update` edit the
+ * message in place as stages progress (Discord parity). Slack has deprecated
+ * standalone custom-integration webhooks anyway, so a workspace creates an app
+ * either way — the bot token is strictly more capable at the same setup cost.
+ *
+ * Example:
+ *   notifications:
+ *     slack:
+ *       enabled: true
+ *       bot_token_env: SLACK_BOT_TOKEN
+ *       channel: "C0123456789"
+ *
+ * @see Issue #1071
+ */
+export const SlackNotificationsConfigSchema = z.object({
+  /** Enable Slack pipeline status posts */
+  enabled: z.boolean().optional(),
+  /** Name of the env var that holds the Slack bot token (xoxb-…) */
+  bot_token_env: z.string().optional(),
+  /** Target channel id (preferred) or #name the bot posts into */
+  channel: z.string().optional(),
+});
+export type SlackNotificationsConfig = z.infer<typeof SlackNotificationsConfigSchema>;
+
+/**
+ * External notification integrations (Discord, Mattermost, Slack, etc.)
  * Separate from ui.notifications which handles VSCode-native sounds/banners.
  */
 export const NotificationsConfigSchema = z.object({
   discord: DiscordNotificationsConfigSchema.optional(),
   mattermost: MattermostNotificationsConfigSchema.optional(),
+  slack: SlackNotificationsConfigSchema.optional(),
 });
 export type NotificationsConfig = z.infer<typeof NotificationsConfigSchema>;
 
@@ -2570,7 +2599,7 @@ export const NotifierRoutingRuleSchema = z.object({
   /** Unique identifier for this notifier entry — must match the id passed in services.ts wiring */
   id: z.string(),
   /** Notifier provider type */
-  type: z.enum(["discord", "mattermost"]),
+  type: z.enum(["discord", "mattermost", "slack"]),
   /** Channel name or identifier (informational; used for display only) */
   channel: z.string().optional(),
   /** Allowlist of event keys this notifier receives. Empty or absent = all events. */
