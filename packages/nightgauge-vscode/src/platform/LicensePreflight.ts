@@ -17,6 +17,7 @@ import * as os from "node:os";
 import type { IpcClient } from "../services/IpcClient";
 import type { MachineFingerprint } from "./MachineFingerprint";
 import type { LicenseStatus, Tier } from "./types";
+import { buildAccountUrl } from "../commands/auditCommands";
 
 /** Result of a license preflight check. */
 export interface LicensePreflightResult {
@@ -296,7 +297,7 @@ export function messageForBlockedStatus(status: LicenseStatus | "community"): {
     default:
       return {
         reason: "Your license is not valid. Please check your subscription status.",
-        actionUrl: "https://nightgauge.dev/account/renew",
+        actionUrl: buildAccountUrl(),
       };
   }
 }

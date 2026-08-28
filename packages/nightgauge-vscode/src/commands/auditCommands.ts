@@ -13,6 +13,15 @@ const DASHBOARD_ROUTES: Record<string, string> = {
   // the login page — a dead command that looked wired up. Verified against the
   // deployed bundle, not assumed.
   cost: "/analytics/forecast",
+  // NOT "/account", and not on the marketing host either — the old links were
+  // wrong twice (#1018). `https://nightgauge.dev/account` pointed at the
+  // marketing site, which has no such page, and the dashboard SPA declares no
+  // `account` route either, so even the corrected host would hit the same
+  // `{path:"**", redirectTo:"/login"}` catch-all that "/cost" hit above.
+  // `/billing` is the real subscription surface. Its `billingGuard` degrades to
+  // `/dashboard` for a user without `billing:read` rather than bouncing to
+  // login. Verified against the dashboard's own app.routes.ts, not assumed.
+  account: "/billing",
 };
 
 function getDashboardBaseUrl(): string {
@@ -26,6 +35,17 @@ export function buildDashboardUrl(route: string, accountId?: string): string {
   const base = getDashboardBaseUrl().replace(/\/$/, "");
   const query = accountId ? `?accountId=${encodeURIComponent(accountId)}` : "";
   return `${base}${route}${query}`;
+}
+
+/**
+ * The subscription/account surface on the hosted dashboard.
+ *
+ * Exists so the six call sites that used to hardcode a marketing-host URL share
+ * one definition with the audit/analytics/compliance links, and so a route
+ * change is a one-line edit rather than a six-site sweep (#1018).
+ */
+export function buildAccountUrl(): string {
+  return buildDashboardUrl(DASHBOARD_ROUTES.account);
 }
 
 export function registerAuditDashboardCommands(

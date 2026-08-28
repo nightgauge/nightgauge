@@ -12,6 +12,7 @@
 import * as vscode from "vscode";
 import type { PlatformStatusBarItem } from "../platform/PlatformStatusBarItem";
 import type { LicensePreflight } from "../platform/LicensePreflight";
+import { buildAccountUrl } from "./auditCommands";
 
 type AuthAction =
   "sign-out" | "switch-account" | "view-account" | "manage-subscription" | "upgrade";
@@ -107,10 +108,10 @@ export function registerShowPlatformStatusCommand(
           await vscode.commands.executeCommand("nightgauge.signIn");
           break;
         case "view-account":
-          await vscode.env.openExternal(vscode.Uri.parse("https://nightgauge.dev/account"));
+          await vscode.env.openExternal(vscode.Uri.parse(buildAccountUrl()));
           break;
         case "manage-subscription":
-          await vscode.env.openExternal(vscode.Uri.parse("https://nightgauge.dev/account"));
+          await vscode.env.openExternal(vscode.Uri.parse(buildAccountUrl()));
           break;
         case "upgrade":
           await vscode.env.openExternal(vscode.Uri.parse("https://nightgauge.dev/upgrade"));

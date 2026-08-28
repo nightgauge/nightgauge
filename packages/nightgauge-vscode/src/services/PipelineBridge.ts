@@ -44,6 +44,7 @@ import type { StallEscalationLevel, PauseForStallPayload } from "../schemas/pipe
 // exactly where a silently-refused key would hurt most.
 import type { NotifyPhaseTransitionParams, NotifyStageProgressParams } from "./ipcNotifyParams";
 import type { ClaudeRateLimitStore } from "./usage/ClaudeRateLimitStore";
+import { buildAccountUrl } from "../commands/auditCommands";
 
 /**
  * IPC RunStageParams as received from Go.
@@ -191,9 +192,7 @@ export class PipelineBridge {
           )
           .then((action) => {
             if (action === "Renew") {
-              void vscode.env.openExternal(
-                vscode.Uri.parse("https://nightgauge.dev/account/renew")
-              );
+              void vscode.env.openExternal(vscode.Uri.parse(buildAccountUrl()));
             }
           });
       })

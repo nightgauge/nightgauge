@@ -21,6 +21,7 @@ import * as vscode from "vscode";
 import { BaseTreeItem } from "./BaseTreeItem";
 import type { LicenseStatus } from "../../platform/types";
 import type { Tier } from "../../platform/types";
+import { buildAccountUrl } from "../../commands/auditCommands";
 
 /** Tier display labels mapping internal values to user-facing strings. */
 const TIER_LABELS: Record<string, string> = {
@@ -210,7 +211,7 @@ export class SubscriptionSectionTreeItem extends BaseTreeItem {
           command: {
             command: "nightgauge.openSubscriptionUrl",
             title: "Update Payment",
-            arguments: ["https://nightgauge.dev/account/renew"],
+            arguments: [buildAccountUrl()],
           },
           tooltip: "Update your payment to renew your license",
           contextValue: "subscription-update-payment",
