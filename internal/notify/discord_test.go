@@ -40,7 +40,7 @@ func TestClampField(t *testing.T) {
 	}
 }
 
-func TestPostEmbeds_SendsPayload(t *testing.T) {
+func TestDiscordSink_SendsPayload(t *testing.T) {
 	var body []byte
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ = io.ReadAll(r.Body)
@@ -48,13 +48,13 @@ func TestPostEmbeds_SendsPayload(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	_, err := PostEmbeds(context.Background(), srv.Client(), srv.URL, []Embed{{
-		Title: "hi", Color: ColorSuccess, Fields: []EmbedField{{Name: "n", Value: "v"}},
+	_, err := (&DiscordSink{WebhookURL: srv.URL, Client: srv.Client()}).Post(context.Background(), []Message{{
+		Title: "hi", Color: ColorSuccess, Fields: []Field{{Name: "n", Value: "v"}},
 	}})
 	if err != nil {
-		t.Fatalf("PostEmbeds: %v", err)
+		t.Fatalf("Post: %v", err)
 	}
-	var got Payload
+	var got DiscordPayload
 	if err := json.Unmarshal(body, &got); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
@@ -63,7 +63,7 @@ func TestPostEmbeds_SendsPayload(t *testing.T) {
 	}
 }
 
-func TestPostEmbeds_RetriesTransient(t *testing.T) {
+func TestDiscordSink_RetriesTransient(t *testing.T) {
 	var hits int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		atomic.AddInt32(&hits, 1)
@@ -71,7 +71,7 @@ func TestPostEmbeds_RetriesTransient(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	delivered, err := PostEmbeds(context.Background(), srv.Client(), srv.URL, []Embed{{Title: "x"}})
+	delivered, err := (&DiscordSink{WebhookURL: srv.URL, Client: srv.Client()}).Post(context.Background(), []Message{{Title: "x"}})
 	if err == nil {
 		t.Fatal("expected error after exhausting retries")
 	}
@@ -83,7 +83,7 @@ func TestPostEmbeds_RetriesTransient(t *testing.T) {
 	}
 }
 
-func TestPostEmbeds_Permanent4xxNotRetried(t *testing.T) {
+func TestDiscordSink_Permanent4xxNotRetried(t *testing.T) {
 	var hits int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		atomic.AddInt32(&hits, 1)
@@ -91,7 +91,7 @@ func TestPostEmbeds_Permanent4xxNotRetried(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	if _, err := PostEmbeds(context.Background(), srv.Client(), srv.URL, []Embed{{Title: "x"}}); err == nil {
+	if _, err := (&DiscordSink{WebhookURL: srv.URL, Client: srv.Client()}).Post(context.Background(), []Message{{Title: "x"}}); err == nil {
 		t.Fatal("expected permanent error")
 	}
 	if got := atomic.LoadInt32(&hits); got != 1 {
@@ -99,11 +99,11 @@ func TestPostEmbeds_Permanent4xxNotRetried(t *testing.T) {
 	}
 }
 
-func TestPostEmbeds_ChunksOver10(t *testing.T) {
+func TestDiscordSink_ChunksOver10(t *testing.T) {
 	var posts, totalEmbeds int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		atomic.AddInt32(&posts, 1)
-		var p Payload
+		var p DiscordPayload
 		_ = json.NewDecoder(r.Body).Decode(&p)
 		atomic.AddInt32(&totalEmbeds, int32(len(p.Embeds)))
 		if len(p.Embeds) > MaxEmbedsPerMessage {
@@ -113,13 +113,13 @@ func TestPostEmbeds_ChunksOver10(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	embeds := make([]Embed, 23) // → 3 batches (10 + 10 + 3)
+	embeds := make([]Message, 23) // → 3 batches (10 + 10 + 3)
 	for i := range embeds {
-		embeds[i] = Embed{Title: "e"}
+		embeds[i] = Message{Title: "e"}
 	}
-	delivered, err := PostEmbeds(context.Background(), srv.Client(), srv.URL, embeds)
+	delivered, err := (&DiscordSink{WebhookURL: srv.URL, Client: srv.Client()}).Post(context.Background(), embeds)
 	if err != nil {
-		t.Fatalf("PostEmbeds: %v", err)
+		t.Fatalf("Post: %v", err)
 	}
 	if delivered != 23 {
 		t.Errorf("delivered = %d, want 23", delivered)
@@ -132,7 +132,7 @@ func TestPostEmbeds_ChunksOver10(t *testing.T) {
 	}
 }
 
-func TestPostEmbeds_PartialBatchFailureReportsDelivered(t *testing.T) {
+func TestDiscordSink_PartialBatchFailureReportsDelivered(t *testing.T) {
 	var hits int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		n := atomic.AddInt32(&hits, 1)
@@ -144,11 +144,11 @@ func TestPostEmbeds_PartialBatchFailureReportsDelivered(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	embeds := make([]Embed, 13) // → batch 1 (10) lands, batch 2 (3) fails
+	embeds := make([]Message, 13) // → batch 1 (10) lands, batch 2 (3) fails
 	for i := range embeds {
-		embeds[i] = Embed{Title: "e"}
+		embeds[i] = Message{Title: "e"}
 	}
-	delivered, err := PostEmbeds(context.Background(), srv.Client(), srv.URL, embeds)
+	delivered, err := (&DiscordSink{WebhookURL: srv.URL, Client: srv.Client()}).Post(context.Background(), embeds)
 	if err == nil {
 		t.Fatal("expected an error from the failing second batch")
 	}

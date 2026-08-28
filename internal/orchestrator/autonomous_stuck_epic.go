@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/depgraph"
 	"github.com/nightgauge/nightgauge/internal/notify"
 	"github.com/nightgauge/nightgauge/internal/state"
@@ -607,12 +608,21 @@ func (as *AutonomousScheduler) surfaceStuckEpics(ctx context.Context, graph *dep
 	as.alertStuckEpics(ctx, epics)
 }
 
-// alertStuckEpics posts a Discord embed for each stalled epic not alerted within
-// the re-alert cooldown. Best-effort: a webhook failure is logged, not fatal.
+// alertStuckEpics posts an alert for each stalled epic not alerted within the
+// re-alert cooldown, to every configured sink (Discord and/or Slack, #1072).
+// Best-effort: a webhook failure is logged, not fatal.
 func (as *AutonomousScheduler) alertStuckEpics(ctx context.Context, epics []StuckEpic) {
 	webhook := strings.TrimSpace(as.config.StuckEpicWebhookURL)
-	if webhook == "" {
-		return // sink disabled — detection still surfaces via state/CLI
+	cfg, cfgErr := config.Load(as.workspaceRoot)
+	if cfgErr != nil {
+		// A malformed config.yaml must not silence the Discord alert that is
+		// already configured — resolve Slack from defaults instead (cfg == nil).
+		log.Printf("autonomous: stuck-epic alert: config load failed, Slack sink unavailable: %v", cfgErr)
+		cfg = nil
+	}
+	sink := notify.Sinks(webhook, cfg, &http.Client{Timeout: 10 * time.Second})
+	if sink == nil {
+		return // no destination configured — detection still surfaces via state/CLI
 	}
 	cooldown := as.config.StuckEpicReAlertAfter
 	if cooldown <= 0 {
@@ -620,7 +630,7 @@ func (as *AutonomousScheduler) alertStuckEpics(ctx context.Context, epics []Stuc
 	}
 	now := time.Now()
 
-	var embeds []notify.Embed
+	var msgs []notify.Message
 	var sentKeys []string
 	as.mu.Lock()
 	if as.alertedStuckEpics == nil {
@@ -632,22 +642,24 @@ func (as *AutonomousScheduler) alertStuckEpics(ctx context.Context, epics []Stuc
 			continue // still within cooldown — don't re-spam
 		}
 		sentKeys = append(sentKeys, key)
-		embeds = append(embeds, stuckEpicEmbed(e))
+		msgs = append(msgs, stuckEpicMessage(e))
 	}
 	as.mu.Unlock()
 
-	if len(embeds) == 0 {
+	if len(msgs) == 0 {
 		return
 	}
-	delivered, err := notify.PostEmbeds(ctx, &http.Client{Timeout: 10 * time.Second}, webhook, embeds)
+	delivered, err := sink.Post(ctx, msgs)
 	if err != nil {
 		// A failed batch must NOT arm the cooldown for the epics it dropped, or a
 		// transient outage would suppress them for the full cooldown (default 6h).
 		// But embeds in earlier batches that DID land must be armed, or they
-		// re-spam every cycle. `delivered` is the count Discord actually received
-		// (#4073 review, rounds 1-2).
-		log.Printf("autonomous: stuck-epic Discord alert partially failed (%d/%d delivered): %s",
-			delivered, len(embeds), notify.RedactURL(err.Error(), webhook))
+		// re-spam every cycle. `delivered` is the count a sink actually received
+		// (#4073 review, rounds 1-2); with several sinks it is the best any one
+		// of them managed, so a message that reached Slack but not Discord still
+		// arms its cooldown rather than re-spamming Slack every cycle.
+		log.Printf("autonomous: stuck-epic alert partially failed (%d/%d delivered via %s): %s",
+			delivered, len(msgs), sink.Name(), sink.Redact(err.Error()))
 	}
 	if delivered > len(sentKeys) {
 		delivered = len(sentKeys)
@@ -663,22 +675,22 @@ func (as *AutonomousScheduler) alertStuckEpics(ctx context.Context, epics []Stuc
 	as.mu.Unlock()
 }
 
-func stuckEpicEmbed(e StuckEpic) notify.Embed {
-	fields := make([]notify.EmbedField, 0, len(e.Blockers))
+func stuckEpicMessage(e StuckEpic) notify.Message {
+	fields := make([]notify.Field, 0, len(e.Blockers))
 	for _, b := range e.Blockers {
-		fields = append(fields, notify.EmbedField{
+		fields = append(fields, notify.Field{
 			Name:  fmt.Sprintf("#%d · %s", b.Number, notify.ClampField(b.Title, 120)),
 			Value: notify.ClampField(b.Reason, 400),
 		})
 	}
 	title := fmt.Sprintf("🛑 Stalled epic: %s#%d", e.Repo, e.Number)
 	desc := fmt.Sprintf("%s\n\nNo eligible work, no active run, and no recovery in flight — this epic is open but stalled, not done.", notify.ClampField(e.Title, 200))
-	return notify.Embed{
+	return notify.Message{
 		Title:       notify.ClampField(title, 240),
 		Description: desc,
 		Color:       notify.ColorHigh,
 		Fields:      fields,
-		Footer:      &notify.Footer{Text: "nightgauge stuck-epic watchdog"},
+		Footer:      "nightgauge stuck-epic watchdog",
 		Timestamp:   e.DetectedAt,
 	}
 }

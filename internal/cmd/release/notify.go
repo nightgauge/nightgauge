@@ -8,6 +8,7 @@ import (
 	"os"
 	"sort"
 
+	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/notify"
 )
 
@@ -50,10 +51,14 @@ type NotifyOptions struct {
 	// LogPath is the creation-log JSON file to read (required).
 	LogPath string
 	// WebhookURL is the full Discord webhook URL to POST to. Empty disables the
-	// sink (the call is a no-op skip) so the feature is opt-in and a missing
-	// secret never breaks the release-watch workflow. Tests inject a
-	// httptest.Server URL.
+	// Discord sink so the feature is opt-in and a missing secret never breaks
+	// the release-watch workflow. Tests inject a httptest.Server URL. When the
+	// Slack sink is also unconfigured, the call is a no-op skip.
 	WebhookURL string
+	// Config supplies the shared Slack destination for Go-side alerts (#1072).
+	// Nil resolves the default env var name, so a caller that never loaded
+	// config still picks up an exported NIGHTGAUGE_SLACK_WEBHOOK.
+	Config *config.Config
 	// MinScore routes only findings whose score is >= MinScore. 0/negative
 	// defaults to DefaultAlertMinScore.
 	MinScore int
@@ -85,10 +90,11 @@ type NotifyResult struct {
 
 // NotifyFindings reads the creation-log at opts.LogPath, selects the
 // high-impact `issues_created` findings (score >= MinScore), caps them at
-// MaxItems, and POSTs a single consolidated Discord embed to opts.WebhookURL.
+// MaxItems, and POSTs a single consolidated alert to every configured sink
+// (Discord via opts.WebhookURL, Slack via the shared config resolver, #1072).
 //
-// It is a no-op skip (no error) when the sink is disabled (empty WebhookURL) or
-// no finding clears the threshold. A hard error is returned only when the log
+// It is a no-op skip (no error) when no sink is configured or no finding clears
+// the threshold. A hard error is returned only when the log
 // cannot be read or parsed.
 func NotifyFindings(ctx context.Context, opts NotifyOptions) (NotifyResult, error) {
 	minScore := opts.MinScore
@@ -134,13 +140,7 @@ func NotifyFindings(ctx context.Context, opts NotifyOptions) (NotifyResult, erro
 		res.Reason = fmt.Sprintf("no findings at/above score %d", minScore)
 		return res, nil
 	}
-	if opts.WebhookURL == "" {
-		res.Skipped = true
-		res.Reason = "no webhook configured (sink disabled)"
-		return res, nil
-	}
-
-	embeds := buildDiscordEmbeds(log, eligible, routed)
+	msgs := buildAlertMessages(log, eligible, routed)
 
 	if opts.DryRun {
 		res.Skipped = true
@@ -148,12 +148,20 @@ func NotifyFindings(ctx context.Context, opts NotifyOptions) (NotifyResult, erro
 		return res, nil
 	}
 
-	if _, err := notify.PostEmbeds(ctx, opts.HTTPClient, opts.WebhookURL, embeds); err != nil {
-		// Best-effort: capture, do not fail the command. The webhook URL carries
-		// the Discord token (it IS the credential), so the reason is scrubbed of
-		// it as defense-in-depth — this Reason is printed to CI logs via --json.
+	sink := notify.Sinks(opts.WebhookURL, opts.Config, opts.HTTPClient)
+	if sink == nil {
+		res.Skipped = true
+		res.Reason = "no webhook configured (sink disabled)"
+		return res, nil
+	}
+
+	if _, err := sink.Post(ctx, msgs); err != nil {
+		// Best-effort: capture, do not fail the command. Each webhook URL carries
+		// its provider's token (it IS the credential), so the reason is scrubbed
+		// of every configured URL as defense-in-depth — this Reason is printed to
+		// CI logs via --json.
 		res.Sent = false
-		res.Reason = "webhook POST failed: " + notify.RedactURL(err.Error(), opts.WebhookURL)
+		res.Reason = "webhook POST failed: " + sink.Redact(err.Error())
 		return res, nil
 	}
 
@@ -161,11 +169,12 @@ func NotifyFindings(ctx context.Context, opts NotifyOptions) (NotifyResult, erro
 	return res, nil
 }
 
-// --- Discord embed payload -------------------------------------------------
+// --- Alert payload ---------------------------------------------------------
 
-// buildDiscordEmbeds renders the routed findings into a single shared
-// notify.Embed (the webhook delivery lives in internal/notify).
-func buildDiscordEmbeds(log CreationLog, eligible, routed []CreatedIssue) []notify.Embed {
+// buildAlertMessages renders the routed findings into a single provider-neutral
+// notify.Message (the webhook delivery lives in internal/notify, and each sink
+// renders this in its own wire format).
+func buildAlertMessages(log CreationLog, eligible, routed []CreatedIssue) []notify.Message {
 	top := 0
 	for _, f := range routed {
 		if f.Score > top {
@@ -173,9 +182,9 @@ func buildDiscordEmbeds(log CreationLog, eligible, routed []CreatedIssue) []noti
 		}
 	}
 
-	fields := make([]notify.EmbedField, 0, len(routed))
+	fields := make([]notify.Field, 0, len(routed))
 	for _, f := range routed {
-		fields = append(fields, notify.EmbedField{
+		fields = append(fields, notify.Field{
 			Name:  fmt.Sprintf("#%d · score %d", f.Number, f.Score),
 			Value: fmt.Sprintf("[%s](%s)", notify.ClampField(f.Title, 200), f.URL),
 		})
@@ -189,12 +198,12 @@ func buildDiscordEmbeds(log CreationLog, eligible, routed []CreatedIssue) []noti
 		desc += fmt.Sprintf(" Showing the top %d.", len(routed))
 	}
 
-	return []notify.Embed{{
+	return []notify.Message{{
 		Title:       fmt.Sprintf("🔔 Release alert: %s %s", log.Provider, log.NewVersion),
 		Description: desc,
 		Color:       colorForScore(top),
 		Fields:      fields,
-		Footer:      &notify.Footer{Text: "nightgauge release-watch"},
+		Footer:      "nightgauge release-watch",
 		Timestamp:   log.RunStartedAt, // deterministic; from the run, not time.Now()
 	}}
 }
