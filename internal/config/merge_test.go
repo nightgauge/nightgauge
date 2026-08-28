@@ -667,3 +667,73 @@ func TestReadMachineConfigBytesFallsBackToLegacyLinuxPath(t *testing.T) {
 		t.Fatalf("canonical path = %q", canonical)
 	}
 }
+
+// #1049 — the strip ran BEFORE the warning pass, so the one key the loader
+// deletes outright could never trigger its own warning.
+//
+// The asymmetry was the tell: github_user warned in the same run because it is
+// merely shadowed, while platform is deleted, and deletion is quieter than
+// shadowing. An operator wrote platform.enabled: false, saw the warning system
+// working for another key, saw nothing for theirs, and reasonably concluded
+// their value was accepted. It was discarded.
+func TestLoadMergedWarnsWhenTheProjectTierDefinesPlatform(t *testing.T) {
+	resetShadowWarnDedup()
+	withMachineConfig(t, `
+platform:
+  enabled: true
+  api_url: https://api.example.com
+`)
+	dir := t.TempDir()
+	writeProjectYAML(t, dir, `
+schema_version: "2"
+project:
+  owner: acme
+  number: 1
+platform:
+  enabled: false
+`)
+
+	logged := captureLog(t, func() {
+		if _, err := LoadMerged(dir); err != nil {
+			t.Fatalf("LoadMerged: %v", err)
+		}
+	})
+
+	if !strings.Contains(logged, "platform is in project YAML") {
+		t.Errorf("no warning for a project-tier platform block — the value is discarded silently:\n%s", logged)
+	}
+	// And it must say what actually happened. "shadows" is factually wrong for
+	// a key that is removed before the merge.
+	if !strings.Contains(logged, "IGNORED") {
+		t.Errorf("warning describes platform as shadowed rather than ignored:\n%s", logged)
+	}
+}
+
+// The machine tier must still win regardless of the warning — the reorder is
+// bookkeeping only and must not change precedence.
+func TestLoadMergedPlatformPrecedenceUnchangedByTheWarning(t *testing.T) {
+	resetShadowWarnDedup()
+	withMachineConfig(t, `
+platform:
+  enabled: true
+`)
+	dir := t.TempDir()
+	// Nested project: block routes through parseYAMLNested, the real
+	// production path (see TestLoadMergedMachineProvidesPlatformSection).
+	writeProjectYAML(t, dir, `
+schema_version: "2"
+project:
+  owner: acme
+  number: 1
+platform:
+  enabled: false
+`)
+
+	cfg, err := LoadMerged(dir)
+	if err != nil {
+		t.Fatalf("LoadMerged: %v", err)
+	}
+	if cfg.PlatformEnabled == nil || !*cfg.PlatformEnabled {
+		t.Errorf("machine tier must still win: PlatformEnabled = %v, want true", cfg.PlatformEnabled)
+	}
+}

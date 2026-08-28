@@ -213,6 +213,21 @@ func LoadMerged(workspaceRoot string) (*Config, error) {
 	hasProject := projectErr == nil
 	hasLocal := localErr == nil
 
+	// Surface shadow warnings only when both machine and project YAML define
+	// the same key (actual conflict), not just when the project has the key.
+	//
+	// #1049: THIS MUST RUN BEFORE THE STRIP BELOW. It used to run after, and it
+	// inspects `projectData` — from which `platform` had already been deleted —
+	// so the one key the loader hard-strips could never trigger its own warning.
+	// The asymmetry was the tell: `github_user` warned in the same run because
+	// it is merely SHADOWED, while `platform` is DELETED, and deletion is
+	// quieter than shadowing. An operator wrote `platform.enabled: false`, saw
+	// the warning system working for another key, saw nothing for theirs, and
+	// reasonably concluded the value was accepted. It was discarded.
+	if hasMachine && hasProject {
+		warnMachineKeysInProjectYAML(projectData, machineData)
+	}
+
 	// Platform credentials and preferences are machine-owned. Never allow a
 	// repository-controlled file (including local checkout overrides) to shadow
 	// the machine identity used by the backend.
@@ -226,12 +241,6 @@ func LoadMerged(workspaceRoot string) (*Config, error) {
 	// No tier present at all — return defaults.
 	if !hasMachine && !hasProject && !hasLocal {
 		return DefaultConfig(), nil
-	}
-
-	// Surface shadow warnings only when both machine and project YAML define
-	// the same key (actual conflict), not just when the project has the key.
-	if hasMachine && hasProject {
-		warnMachineKeysInProjectYAML(projectData, machineData)
 	}
 
 	// Build merged YAML node tree.
@@ -389,6 +398,14 @@ func resetShadowWarnDedup() {
 //
 // Each distinct conflicting key is logged only once per process (see
 // warnShadowOnce / #360), not once per config merge.
+// isHardStrippedMachineKey reports whether LoadMerged deletes this key from the
+// project/local tiers outright, rather than merely letting the machine tier
+// outrank it. Today that is `platform` alone; keep this in step with the
+// removeTopLevelYAMLKey calls in LoadMerged (#1049).
+func isHardStrippedMachineKey(key string) bool {
+	return key == "platform"
+}
+
 func warnMachineKeysInProjectYAML(projectData, machineData []byte) {
 	if len(projectData) == 0 {
 		return
@@ -402,7 +419,15 @@ func warnMachineKeysInProjectYAML(projectData, machineData []byte) {
 	for _, key := range MachineTierKeys {
 		segs := strings.Split(key, ".")
 		if nodeHasPath(projectRoot, segs) && nodeHasPath(machineRoot, segs) {
-			warnShadowOnce("key:"+key, fmt.Sprintf("WARN config: %s is in project YAML but is owned by the machine tier (~/.nightgauge/config.yaml). The project value shadows your machine setting. See docs/SETTINGS_ARCHITECTURE.md.", key))
+			// #1049: "shadows" is factually wrong for a key the loader strips
+			// outright — the project value is not merely outranked, it is
+			// deleted before the merge sees it. Say which one happened, or the
+			// warning misdescribes the very case it exists to surface.
+			effect := "The project value shadows your machine setting."
+			if isHardStrippedMachineKey(key) {
+				effect = "The project value is IGNORED — it is removed before the merge and the machine tier wins."
+			}
+			warnShadowOnce("key:"+key, fmt.Sprintf("WARN config: %s is in project YAML but is owned by the machine tier (~/.nightgauge/config.yaml). %s See docs/SETTINGS_ARCHITECTURE.md.", key, effect))
 		}
 	}
 
