@@ -57,7 +57,15 @@ const (
 	ScopeSkill  = "skill"
 )
 
-// StageSkillDirs maps pipeline stages to their skill directory names.
+// StageSkillDirs maps a renderable skill's stage key to its directory name.
+//
+// Not every key is a pipeline stage. "issue-refine" is dispatched by the
+// autonomous refinement loop rather than by runPipeline, and it is in this map
+// for the same reason the six stages are: it is the ONE place that answers
+// "which directory holds the SKILL.md for this stage string", and a skill
+// missing from it cannot be located by Render no matter which roots are
+// searched. Every key here must also be shipped by the marketplace bundle —
+// see TestBundleShipsEverySkillTheGoDirectPathRenders.
 var StageSkillDirs = map[string]string{
 	"issue-pickup":     "nightgauge-issue-pickup",
 	"feature-planning": "nightgauge-feature-planning",
@@ -65,6 +73,7 @@ var StageSkillDirs = map[string]string{
 	"feature-validate": "nightgauge-feature-validate",
 	"pr-create":        "nightgauge-pr-create",
 	"pr-merge":         "nightgauge-pr-merge",
+	"issue-refine":     "nightgauge-issue-refine",
 }
 
 // Options parameterize a render.
