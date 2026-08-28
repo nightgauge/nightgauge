@@ -92,15 +92,22 @@ func TestMultiSink_Name(t *testing.T) {
 	}
 }
 
+// slackCfg builds a config with the shared outbound Slack block.
+func slackCfg(enabled bool, tokenEnv, channel string) *config.Config {
+	return &config.Config{Notifications: &config.NotificationsConfig{
+		Slack: &config.SlackNotificationsConfig{
+			Enabled: &enabled, BotTokenEnv: tokenEnv, Channel: channel,
+		},
+	}}
+}
+
 func TestSinks_NilWhenNothingConfigured(t *testing.T) {
-	t.Setenv(config.DefaultAlertsSlackWebhookEnv, "")
 	if s := Sinks("", nil, nil); s != nil {
 		t.Fatalf("Sinks with no destination = %v, want nil", s)
 	}
 }
 
 func TestSinks_DiscordOnly(t *testing.T) {
-	t.Setenv(config.DefaultAlertsSlackWebhookEnv, "")
 	s := Sinks("https://discord.com/api/webhooks/1/x", nil, nil)
 	if s == nil || s.Name() != "discord" {
 		t.Fatalf("Sinks = %v, want a discord-only sink", s)
@@ -108,36 +115,46 @@ func TestSinks_DiscordOnly(t *testing.T) {
 }
 
 func TestSinks_SlackOnly(t *testing.T) {
-	t.Setenv(config.DefaultAlertsSlackWebhookEnv, fakeSlackURL)
-	s := Sinks("", nil, nil)
+	t.Setenv("MY_SLACK_TOKEN", fakeBotToken)
+	s := Sinks("", slackCfg(true, "MY_SLACK_TOKEN", "C0123"), nil)
 	if s == nil || s.Name() != "slack" {
 		t.Fatalf("Sinks = %v, want a slack-only sink", s)
 	}
 }
 
 func TestSinks_BothConfigured(t *testing.T) {
-	t.Setenv(config.DefaultAlertsSlackWebhookEnv, fakeSlackURL)
-	s := Sinks("https://discord.com/api/webhooks/1/x", nil, nil)
+	t.Setenv("MY_SLACK_TOKEN", fakeBotToken)
+	s := Sinks("https://discord.com/api/webhooks/1/x", slackCfg(true, "MY_SLACK_TOKEN", "C0123"), nil)
 	if s == nil || s.Name() != "discord+slack" {
 		t.Fatalf("Sinks = %v, want both sinks", s)
 	}
 }
 
-// The env var name is configurable, and the resolver is the only thing that
-// reads it — a call site must never grow its own os.Getenv.
-func TestSlackWebhookURL_HonorsConfiguredEnvName(t *testing.T) {
-	t.Setenv(config.DefaultAlertsSlackWebhookEnv, "https://default/never-used")
-	t.Setenv("MY_SLACK_HOOK", fakeSlackURL)
-	cfg := &config.Config{Alerts: &config.AlertsConfig{SlackWebhookEnv: "MY_SLACK_HOOK"}}
-	if got := SlackWebhookURL(cfg); got != fakeSlackURL {
-		t.Errorf("SlackWebhookURL = %q, want the configured variable's value", got)
+// enabled:false must silence Slack even with a valid token and channel —
+// adding a sink must not create a path around an explicit opt-out.
+func TestSinks_DisabledSilencesSlack(t *testing.T) {
+	t.Setenv("MY_SLACK_TOKEN", fakeBotToken)
+	if s := Sinks("", slackCfg(false, "MY_SLACK_TOKEN", "C0123"), nil); s != nil {
+		t.Fatalf("Sinks = %v, want nil when slack is disabled", s)
 	}
 }
 
-func TestSlackWebhookURL_NilConfigUsesDefaultEnv(t *testing.T) {
-	t.Setenv(config.DefaultAlertsSlackWebhookEnv, fakeSlackURL)
-	if got := SlackWebhookURL(nil); got != fakeSlackURL {
-		t.Errorf("SlackWebhookURL(nil) = %q, want the default variable's value", got)
+// A channel is as required as a token: without one there is nowhere to post.
+func TestSinks_NoChannelMeansNoSlack(t *testing.T) {
+	t.Setenv("MY_SLACK_TOKEN", fakeBotToken)
+	if s := Sinks("", slackCfg(true, "MY_SLACK_TOKEN", ""), nil); s != nil {
+		t.Fatalf("Sinks = %v, want nil with no channel", s)
+	}
+}
+
+// The env var name is configurable, and the resolver is the only thing that
+// reads it — a call site must never grow its own os.Getenv.
+func TestSlackCredentials_HonorsConfiguredEnvName(t *testing.T) {
+	t.Setenv(config.DefaultSlackBotTokenEnv, "never-used")
+	t.Setenv("MY_SLACK_TOKEN", fakeBotToken)
+	tok, ch := SlackCredentials(slackCfg(true, "MY_SLACK_TOKEN", "C0123"))
+	if tok != fakeBotToken || ch != "C0123" {
+		t.Errorf("SlackCredentials = %q/%q", tok, ch)
 	}
 }
 
@@ -153,13 +170,13 @@ func TestSinks_BothProvidersRenderTheSameMessage(t *testing.T) {
 	ssrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		slackBody, _ = readAll(r)
 		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"ok":true}`))
 	}))
 	defer ssrv.Close()
 
-	t.Setenv(config.DefaultAlertsSlackWebhookEnv, ssrv.URL)
-	sink := Sinks(dsrv.URL, nil, dsrv.Client())
-	if sink == nil {
-		t.Fatal("expected both sinks")
+	sink := MultiSink{
+		&DiscordSink{WebhookURL: dsrv.URL, Client: dsrv.Client()},
+		&SlackSink{BotToken: fakeBotToken, Channel: "C0123", Client: ssrv.Client(), APIBase: ssrv.URL},
 	}
 	if _, err := sink.Post(context.Background(), []Message{{
 		Title: "Ready to ship", Description: "epic closed", Color: ColorSuccess,

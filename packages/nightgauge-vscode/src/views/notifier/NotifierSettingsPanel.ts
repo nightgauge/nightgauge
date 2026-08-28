@@ -23,6 +23,7 @@ import {
   type NotifierExtensionToWebViewMessage,
 } from "./NotifierSettingsMessageHandler";
 import type { NotifierInstanceRow, NotifierProvider } from "./NotifierInstancesSection";
+import { SLACK_API_BASE } from "../../services/notifications/SlackService";
 import type { NotifierRoutingRule } from "../../config/schema";
 
 /** 15-minute window within which a last-success is considered "connected". */
@@ -199,24 +200,46 @@ export class NotifierSettingsPanel implements vscode.Disposable {
     const type: string = notifierRule?.type ?? id;
 
     const secretService = SecretStorageService.getInstance();
-    const webhookKey =
-      notifierRule?.webhook_secret_key ??
-      (type === "discord" ? SECRET_KEYS.discordWebhookUrl : SECRET_KEYS.mattermostWebhookUrl);
-    const webhookUrl = secretService ? await secretService.getSecret(webhookKey) : undefined;
+    // WEBHOOK_SECRET_KEY is the single provider->key table. This used to carry
+    // its own discord/mattermost ternary, which silently sent Slack down the
+    // Mattermost branch when Slack shipped — the dual-path drift this table
+    // exists to prevent (#1089).
+    const secretKey =
+      notifierRule?.webhook_secret_key ?? WEBHOOK_SECRET_KEY[type as NotifierProvider];
+    const credential = secretKey ? await secretService?.getSecret(secretKey) : undefined;
 
-    if (!webhookUrl) {
+    if (!credential) {
       await this.postMessage({
         type: "test-result",
         id,
         ok: false,
-        error: "No webhook URL configured. Use Add Discord / Add Mattermost to set one up.",
+        error:
+          type === "slack"
+            ? "No bot token configured. Run 'Nightgauge: Configure Slack Notifications'."
+            : "No webhook URL configured. Use Add Discord / Add Mattermost to set one up.",
+      });
+      return;
+    }
+
+    // Slack posts through the Web API with a channel, not to a webhook URL.
+    const channel =
+      type === "slack"
+        ? // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (config as any)?.notifications?.slack?.channel
+        : undefined;
+    if (type === "slack" && !channel) {
+      await this.postMessage({
+        type: "test-result",
+        id,
+        ok: false,
+        error: "No channel configured. Set notifications.slack.channel in .nightgauge/config.yaml.",
       });
       return;
     }
 
     let result: { ok: boolean; error?: string };
     try {
-      result = await sendTestWebhook(type, webhookUrl);
+      result = await sendTestNotification(type, credential, channel);
     } catch (err) {
       result = { ok: false, error: redactSecrets(String(err)) };
     }
@@ -521,16 +544,39 @@ function redactWebhookUrl(url: string): string {
   return "••••" + url.slice(-8);
 }
 
-async function sendTestWebhook(
+/**
+ * Send a provider-appropriate test notification.
+ *
+ * Discord and Mattermost POST to a webhook URL. Slack posts through
+ * chat.postMessage with a bearer token and a channel — and reports API failures
+ * in a 200 body, so its result is read from the body rather than the status. A
+ * status-only check would report "sent" for a bad token.
+ */
+async function sendTestNotification(
   type: string,
-  webhookUrl: string
+  credential: string,
+  channel?: string
 ): Promise<{ ok: boolean; error?: string }> {
-  const body =
-    type === "discord"
-      ? JSON.stringify({ content: "🔔 Nightgauge: Test notification" })
-      : JSON.stringify({ text: "🔔 Nightgauge: Test notification" });
+  const TEXT = "🔔 Nightgauge: Test notification";
 
-  const res = await fetch(webhookUrl, {
+  if (type === "slack") {
+    const res = await fetch(`${SLACK_API_BASE}/chat.postMessage`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json; charset=utf-8",
+        Authorization: `Bearer ${credential}`,
+      },
+      body: JSON.stringify({ channel, text: TEXT }),
+    });
+    if (!res.ok) return { ok: false, error: `HTTP ${res.status}` };
+    const api = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string };
+    return api.ok ? { ok: true } : { ok: false, error: api.error ?? "unknown_error" };
+  }
+
+  const body =
+    type === "discord" ? JSON.stringify({ content: TEXT }) : JSON.stringify({ text: TEXT });
+
+  const res = await fetch(credential, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body,

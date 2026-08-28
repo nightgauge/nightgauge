@@ -2,7 +2,6 @@ package orchestrator
 
 import (
 	"context"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -226,7 +225,6 @@ func TestLatestRunRecordFromDir(t *testing.T) {
 // treats an issue with a pending retry (in-memory backoff) as actively
 // recovering — so the epic is NOT flagged as stuck (#4073).
 func TestDetectStuckEpics_RetryBackoffExcludes(t *testing.T) {
-	t.Setenv(config.DefaultAlertsSlackWebhookEnv, "") // Discord-only path
 	g := buildEpicGraph("In progress",
 		[]*depgraph.Node{
 			{Number: 143, Title: "Sub A", State: "OPEN", BoardStatus: "In progress"},
@@ -255,7 +253,6 @@ func TestDetectStuckEpics_RetryBackoffExcludes(t *testing.T) {
 // TestDetectStuckEpics_HistoryRecoveryExcludes verifies a recent
 // conflict-recovery run (from history) keeps the epic NOT stuck.
 func TestDetectStuckEpics_HistoryRecoveryExcludes(t *testing.T) {
-	t.Setenv(config.DefaultAlertsSlackWebhookEnv, "") // Discord-only path
 	g := buildEpicGraph("In progress",
 		[]*depgraph.Node{{Number: 143, Title: "Sub A", State: "OPEN", BoardStatus: "In progress"}}, nil)
 
@@ -281,7 +278,6 @@ func TestDetectStuckEpics_HistoryRecoveryExcludes(t *testing.T) {
 }
 
 func TestAlertStuckEpics_DeDup(t *testing.T) {
-	t.Setenv(config.DefaultAlertsSlackWebhookEnv, "") // Discord-only path
 	var hits int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		atomic.AddInt32(&hits, 1)
@@ -392,7 +388,6 @@ func TestStuckEpics_InReviewDepNotBlocking(t *testing.T) {
 // itself blocked by an open upstream epic is NOT dispatchable (cascade), so the
 // epic IS stuck — matching the real dispatcher.
 func TestStuckEpics_EpicCascadeBlocksSub(t *testing.T) {
-	t.Setenv(config.DefaultAlertsSlackWebhookEnv, "") // Discord-only path
 	g := depgraph.NewGraph()
 	g.AddNode(&depgraph.Node{Repo: "o/r", Number: 100, Title: "Upstream epic", State: "OPEN", BoardStatus: "In progress", Labels: []string{"type:epic"}})
 	g.AddNode(&depgraph.Node{Repo: "o/r", Number: 142, Title: "Epic", State: "OPEN", BoardStatus: "In progress", Labels: []string{"type:epic"}})
@@ -430,7 +425,6 @@ func TestStuckEpics_EpicCascadeBlocksSub(t *testing.T) {
 // TestParseRecordTime locks the deterministic tie-break: completed_at preferred,
 // recorded_at fallback, ok=false when neither parses.
 func TestParseRecordTime(t *testing.T) {
-	t.Setenv(config.DefaultAlertsSlackWebhookEnv, "") // Discord-only path
 	if tm, ok := parseRecordTime("2026-06-02T10:00:00Z", "2026-06-01T10:00:00Z"); !ok || tm.Day() != 2 {
 		t.Errorf("completed_at must win, got %v ok=%v", tm, ok)
 	}
@@ -448,7 +442,6 @@ func TestParseRecordTime(t *testing.T) {
 // TestAlertStuckEpics_NoCooldownOnFailure locks the #4073 review fix: a failed
 // Discord POST must NOT arm the re-alert cooldown, so the next cycle retries.
 func TestAlertStuckEpics_NoCooldownOnFailure(t *testing.T) {
-	t.Setenv(config.DefaultAlertsSlackWebhookEnv, "") // Discord-only path
 	var fail int32 = 1
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		if atomic.LoadInt32(&fail) == 1 {
@@ -484,7 +477,6 @@ func TestAlertStuckEpics_NoCooldownOnFailure(t *testing.T) {
 // back only by its parent epic's blocker is described as "(via epic #N)", not
 // mislabeled "ready but undispatched".
 func TestStuckEpics_EpicCascadeReason(t *testing.T) {
-	t.Setenv(config.DefaultAlertsSlackWebhookEnv, "") // Discord-only path
 	g := depgraph.NewGraph()
 	g.AddNode(&depgraph.Node{Repo: "o/r", Number: 100, Title: "Upstream", State: "OPEN", BoardStatus: "In progress", Labels: []string{"type:epic"}})
 	g.AddNode(&depgraph.Node{Repo: "o/r", Number: 142, Title: "Epic", State: "OPEN", BoardStatus: "In progress", Labels: []string{"type:epic"}})
@@ -514,7 +506,6 @@ func TestStuckEpics_EpicCascadeReason(t *testing.T) {
 // fails, the cooldown must be armed ONLY for the delivered epics (the failed
 // batch re-alerts next cycle) (#4073 round-2 review).
 func TestAlertStuckEpics_PartialBatchArmsDelivered(t *testing.T) {
-	t.Setenv(config.DefaultAlertsSlackWebhookEnv, "") // Discord-only path
 	var hits int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		if atomic.AddInt32(&hits, 1) == 1 {
@@ -669,60 +660,21 @@ func TestPREvidenceFrom_ThreeStates(t *testing.T) {
 	}
 }
 
-// The stuck-epic watchdog must reach Slack when only Slack is configured. The
-// Discord webhook lives on AutonomousConfig; Slack comes from the shared
-// resolver, so an operator who configures only Slack still gets the alert.
-func TestAlertStuckEpics_ReachesSlackOnly(t *testing.T) {
-	var hits int32
-	var body []byte
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		atomic.AddInt32(&hits, 1)
-		body, _ = io.ReadAll(r.Body)
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer srv.Close()
-	t.Setenv(config.DefaultAlertsSlackWebhookEnv, srv.URL)
-
-	as := &AutonomousScheduler{
-		alertedStuckEpics: map[string]time.Time{},
-		config:            AutonomousConfig{StuckEpicReAlertAfter: time.Hour}, // no Discord webhook
-	}
-	as.alertStuckEpics(context.Background(), []StuckEpic{{
-		Repo: "o/r", Number: 142, Title: "stalled thing",
-		Blockers: []StuckBlocker{{Number: 7, Title: "sub", Reason: "blocked"}},
-	}})
-
-	if atomic.LoadInt32(&hits) != 1 {
-		t.Fatalf("expected 1 Slack POST, got %d", hits)
-	}
-	if !strings.Contains(string(body), "attachments") {
-		t.Errorf("payload is not in Slack's wire shape: %s", body)
-	}
-	if !strings.Contains(string(body), "142") {
-		t.Errorf("Slack payload lost the epic number: %s", body)
-	}
-}
-
-// A delivered Slack alert must arm the re-alert cooldown, or the watchdog
-// re-spams the channel on every scan.
-func TestAlertStuckEpics_SlackDeliveryArmsCooldown(t *testing.T) {
-	var hits int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		atomic.AddInt32(&hits, 1)
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer srv.Close()
-	t.Setenv(config.DefaultAlertsSlackWebhookEnv, srv.URL)
-
-	as := &AutonomousScheduler{
-		alertedStuckEpics: map[string]time.Time{},
-		config:            AutonomousConfig{StuckEpicReAlertAfter: time.Hour},
-	}
-	epics := []StuckEpic{{Repo: "o/r", Number: 142, Title: "stalled"}}
-	as.alertStuckEpics(context.Background(), epics)
-	as.alertStuckEpics(context.Background(), epics) // within cooldown → suppressed
-
-	if got := atomic.LoadInt32(&hits); got != 1 {
-		t.Errorf("POSTs = %d, want 1 (second call is within the cooldown)", got)
+// The stuck-epic watchdog must build a Slack sink when Slack is configured and
+// no Discord webhook is set — the wiring that decides whether the alert can
+// reach Slack at all. Delivery and the cooldown are covered by SlackSink's own
+// tests and the Discord path's cooldown tests respectively; this asserts the
+// caller resolves credentials from the shared config block (#1089).
+func TestAlertStuckEpics_BuildsSlackSinkFromSharedConfig(t *testing.T) {
+	t.Setenv("TEST_SLACK_TOKEN", "xoxb-test")
+	enabled := true
+	cfg := &config.Config{Notifications: &config.NotificationsConfig{
+		Slack: &config.SlackNotificationsConfig{
+			Enabled: &enabled, BotTokenEnv: "TEST_SLACK_TOKEN", Channel: "C0123",
+		},
+	}}
+	sink := notify.Sinks("", cfg, nil)
+	if sink == nil || sink.Name() != "slack" {
+		t.Fatalf("Sinks = %v, want a slack-only sink", sink)
 	}
 }

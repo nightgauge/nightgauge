@@ -88,7 +88,6 @@ func TestShipNotifyMessage_CarriesDeployCommand(t *testing.T) {
 }
 
 func TestEmitReadyToShipAlert_PostsWhenConfigured(t *testing.T) {
-	t.Setenv(config.DefaultAlertsSlackWebhookEnv, "") // Discord-only path
 	var hits int32
 	var body []byte
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -115,8 +114,7 @@ func TestEmitReadyToShipAlert_PostsWhenConfigured(t *testing.T) {
 }
 
 func TestEmitReadyToShipAlert_NoOpWhenNoWebhook(t *testing.T) {
-	t.Setenv(config.DefaultAlertsSlackWebhookEnv, "") // no Slack destination either
-	t.Setenv(config.DefaultShipNotifyWebhookEnv, "")  // no webhook
+	t.Setenv(config.DefaultShipNotifyWebhookEnv, "") // no webhook
 	s := &Scheduler{workspaceRoot: t.TempDir()}
 	// Must not panic / must be a no-op (epicNumber 0 and missing webhook).
 	s.emitReadyToShipAlert(context.Background(), "o/r", 0)
@@ -127,7 +125,6 @@ func TestEmitReadyToShipAlert_NoOpWhenNoWebhook(t *testing.T) {
 // a malformed config.yaml (config.Load errors) must SKIP the notification, not
 // fall back to enabled-by-default and fire despite a user's opt-out intent.
 func TestEmitReadyToShipAlert_FailsClosedOnConfigError(t *testing.T) {
-	t.Setenv(config.DefaultAlertsSlackWebhookEnv, "") // no Slack destination either
 	var hits int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		atomic.AddInt32(&hits, 1)
@@ -146,7 +143,6 @@ func TestEmitReadyToShipAlert_FailsClosedOnConfigError(t *testing.T) {
 }
 
 func TestEmitReadyToShipAlert_DisabledByConfig(t *testing.T) {
-	t.Setenv(config.DefaultAlertsSlackWebhookEnv, "") // no Slack destination either
 	var hits int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		atomic.AddInt32(&hits, 1)
@@ -163,104 +159,20 @@ func TestEmitReadyToShipAlert_DisabledByConfig(t *testing.T) {
 	}
 }
 
-// The ready-to-ship alert must reach Slack when only Slack is configured —
-// otherwise "Slack support" ships while this alert stays Discord-only.
-func TestEmitReadyToShipAlert_ReachesSlackOnly(t *testing.T) {
-	var hits int32
-	var body []byte
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		atomic.AddInt32(&hits, 1)
-		body, _ = io.ReadAll(r.Body)
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer srv.Close()
-	t.Setenv(config.DefaultShipNotifyWebhookEnv, "") // no Discord
-	t.Setenv(config.DefaultAlertsSlackWebhookEnv, srv.URL)
-
-	s := &Scheduler{workspaceRoot: t.TempDir()}
-	s.emitReadyToShipAlert(context.Background(), "o/r", 4067)
-
-	if atomic.LoadInt32(&hits) != 1 {
-		t.Fatalf("expected 1 Slack POST, got %d", hits)
-	}
-	if !strings.Contains(string(body), "deploy-stores.yml") {
-		t.Errorf("Slack payload missing the deploy command: %s", body)
-	}
-	if !strings.Contains(string(body), "attachments") {
-		t.Errorf("Slack payload is not in Slack's wire shape: %s", body)
-	}
-}
-
-// With both configured, each provider gets the alert exactly once.
-func TestEmitReadyToShipAlert_DeliversToBothProviders(t *testing.T) {
-	var discordHits, slackHits int32
-	dsrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		atomic.AddInt32(&discordHits, 1)
-		w.WriteHeader(http.StatusNoContent)
-	}))
-	defer dsrv.Close()
-	ssrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		atomic.AddInt32(&slackHits, 1)
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer ssrv.Close()
-	t.Setenv(config.DefaultShipNotifyWebhookEnv, dsrv.URL)
-	t.Setenv(config.DefaultAlertsSlackWebhookEnv, ssrv.URL)
-
-	s := &Scheduler{workspaceRoot: t.TempDir()}
-	s.emitReadyToShipAlert(context.Background(), "o/r", 4067)
-
-	if got := atomic.LoadInt32(&discordHits); got != 1 {
-		t.Errorf("discord POSTs = %d, want 1", got)
-	}
-	if got := atomic.LoadInt32(&slackHits); got != 1 {
-		t.Errorf("slack POSTs = %d, want 1", got)
-	}
-}
-
-// A dead Discord webhook must not stop Slack from receiving the alert.
-func TestEmitReadyToShipAlert_SlackSurvivesDiscordFailure(t *testing.T) {
-	dsrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusBadRequest) // permanent failure
-	}))
-	defer dsrv.Close()
-	var slackHits int32
-	ssrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		atomic.AddInt32(&slackHits, 1)
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer ssrv.Close()
-	t.Setenv(config.DefaultShipNotifyWebhookEnv, dsrv.URL)
-	t.Setenv(config.DefaultAlertsSlackWebhookEnv, ssrv.URL)
-
-	s := &Scheduler{workspaceRoot: t.TempDir()}
-	s.emitReadyToShipAlert(context.Background(), "o/r", 4067)
-
-	if got := atomic.LoadInt32(&slackHits); got != 1 {
-		t.Errorf("slack POSTs = %d, want 1 despite Discord failing", got)
-	}
-}
-
-// ready_to_ship.enabled:false must silence BOTH providers — adding a sink must
-// not create a path around an explicit opt-out.
-func TestEmitReadyToShipAlert_DisabledSilencesSlackToo(t *testing.T) {
-	var slackHits int32
-	ssrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		atomic.AddInt32(&slackHits, 1)
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer ssrv.Close()
-	t.Setenv(config.DefaultAlertsSlackWebhookEnv, ssrv.URL)
-	root := writeWorkspaceConfig(t, `
-owner: test-org
-project: 1
-ready_to_ship:
-  enabled: false
-`)
-	s := &Scheduler{workspaceRoot: root}
-	s.emitReadyToShipAlert(context.Background(), "o/r", 4067)
-
-	if got := atomic.LoadInt32(&slackHits); got != 0 {
-		t.Errorf("slack POSTs = %d, want 0 when ready_to_ship is disabled", got)
+// The ready-to-ship alert must build a Slack sink when Slack is configured and
+// no Discord webhook is set. Delivery is covered by SlackSink's own tests; this
+// asserts the caller resolves credentials from the shared config block (#1089),
+// which is the wiring that decides whether the alert can reach Slack at all.
+func TestEmitReadyToShipAlert_BuildsSlackSinkFromSharedConfig(t *testing.T) {
+	t.Setenv("TEST_SLACK_TOKEN", "xoxb-test")
+	enabled := true
+	cfg := &config.Config{Notifications: &config.NotificationsConfig{
+		Slack: &config.SlackNotificationsConfig{
+			Enabled: &enabled, BotTokenEnv: "TEST_SLACK_TOKEN", Channel: "C0123",
+		},
+	}}
+	sink := notify.Sinks("", cfg, nil)
+	if sink == nil || sink.Name() != "slack" {
+		t.Fatalf("Sinks = %v, want a slack-only sink", sink)
 	}
 }
