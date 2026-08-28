@@ -81,6 +81,19 @@ export type ProgressSignalType =
   | "file_change" // Write/Edit to a NEW path or git write command (productive iff new)
   | "ci_progress" // CI_PROGRESS: JSON line detected (productive)
   | "distinct_tool" // New unique tool signature — ACTIVITY ONLY, never advances window
+  /**
+   * A heartbeat from a tool call still in flight (#1083) — ACTIVITY ONLY.
+   *
+   * Deliberately NOT `distinct_tool`: that path dedups on signature, and a
+   * heartbeat is repetitive by nature, so it would be swallowed after the
+   * first. This is the exact hole #1083 fell through — a stage waiting inside
+   * one long call emits no NOVEL tool signature, so its activity clock went
+   * cold precisely because it was waiting correctly rather than churning, and
+   * the runaway guard killed it 171s after its test suite went green.
+   *
+   * It can never satisfy the kill (it is not productive), only defer it.
+   */
+  | "tool_heartbeat"
   | "commit"; // git commit observed (productive)
 
 /** Signal types that represent genuine forward motion on the deliverable. */
@@ -205,6 +218,13 @@ export class ProgressMonitor {
       // A NOVEL tool invocation proves the process is alive and doing
       // something new — it gates (but never satisfies) the no-progress kill.
       // Issue #128.
+      this.lastActivityMs = Date.now();
+      return;
+    }
+
+    if (type === "tool_heartbeat") {
+      // Liveness, not progress, and never deduped — see the type's note.
+      this.totalSignals++;
       this.lastActivityMs = Date.now();
       return;
     }

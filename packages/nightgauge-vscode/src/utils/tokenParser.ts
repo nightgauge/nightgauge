@@ -110,7 +110,14 @@ export type StreamJsonMessageType =
   | "token:usage"
   | "error"
   | "system"
-  | "rate_limit_event";
+  | "rate_limit_event"
+  /**
+   * A heartbeat for a tool call still in flight (#1083). The adapter emits one
+   * every ~30s carrying the call's `tool_use_id` and elapsed seconds. It was
+   * absent from this union, so `parseStreamJsonLine` returned null for it and
+   * the one signal that proves a blocked stage is alive reached nothing.
+   */
+  | "tool_progress";
 
 /**
  * One `tool_result` block from a user message.
@@ -267,6 +274,15 @@ export interface ParsedStreamMessage {
   toolResults?: ParsedToolResult[];
   /** Rate limit event data (Issue #2573) */
   rateLimitEvent?: RateLimitEventData;
+  /**
+   * In-flight tool call this heartbeat belongs to, and how long it has been
+   * running (#1083). Present only on `tool_progress`.
+   *
+   * The id matters as much as the elapsed time: heartbeats prove liveness, but
+   * only per-CALL elapsed can tell a stage waiting on genuinely long work from
+   * one blocked on a wedged child that will never return.
+   */
+  toolProgress?: { toolUseId: string; toolName?: string; elapsedSeconds: number };
   /** System-event subtype (`init`, `model_refusal_fallback`, ...) (#91) */
   subtype?: string;
   /**
@@ -312,6 +328,30 @@ export function parseStreamJsonLine(line: string): ParsedStreamMessage | null {
 
   try {
     const parsed = JSON.parse(trimmed);
+
+    // #1083: a heartbeat for a tool call still running. Surfaced so the runaway
+    // monitor can tell "waiting on real work" from "wedged"; previously this
+    // fell through every branch below and the function returned null.
+    if (parsed.type === "tool_progress") {
+      const id = typeof parsed.tool_use_id === "string" ? parsed.tool_use_id : "";
+      const elapsed =
+        typeof parsed.elapsed_time_seconds === "number" && parsed.elapsed_time_seconds >= 0
+          ? parsed.elapsed_time_seconds
+          : 0;
+      if (!id) {
+        // No id means the heartbeat cannot be attributed to a call, and an
+        // unattributable heartbeat must not be allowed to defer a kill.
+        return null;
+      }
+      return {
+        type: "tool_progress",
+        toolProgress: {
+          toolUseId: id,
+          toolName: typeof parsed.tool_name === "string" ? parsed.tool_name : undefined,
+          elapsedSeconds: elapsed,
+        },
+      };
+    }
 
     // Handle Nightgauge workflow agent events emitted by the packaged SDK CLI.
     // Codex runs are wrapped by the SDK, so skillRunner receives these events
