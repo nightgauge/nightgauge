@@ -4322,3 +4322,76 @@ describe("skillRunner - served-model attribution (#91)", () => {
     );
   });
 });
+
+describe("onModelResolved reports the decision the run actually made (#1016)", () => {
+  it("carries the resolution SOURCE, not just the model", () => {
+    const onModelResolved = vi.fn();
+    runStageSkillHeadless("feature-dev", 42, { onModelResolved });
+
+    expect(onModelResolved).toHaveBeenCalledTimes(1);
+    const [, , , source] = onModelResolved.mock.calls[0];
+    // Before #1016 the callback carried model+adapter only, so the
+    // orchestrator's "Starting stage" line ran a SECOND resolveModel() — one
+    // without the issue metadata the `auto` branch needs — purely to obtain a
+    // source. It could never agree with the dispatch on an auto-routed run.
+    expect(typeof source, "the dispatch must report its own source; a second resolver cannot").toBe(
+      "string"
+    );
+    expect((source as string).length).toBeGreaterThan(0);
+  });
+
+  it("reports the source the ADAPTER settled on, not the one the router picked", () => {
+    // The load-bearing case. gemini/gemini-sdk/copilot/lm-studio overwrite
+    // modelDecision.source to "config" LONG after the router set it — so a
+    // callback that fires at resolution time reports "auto" while the run
+    // dispatches on "config", which is the same two-writer disagreement #1016
+    // is about, merely narrowed to four adapters.
+    process.env.NIGHTGAUGE_UI_CORE_ADAPTER = "gemini";
+    try {
+      const onModelResolved = vi.fn();
+      runStageSkillHeadless("feature-dev", 42, { onModelResolved });
+
+      expect(onModelResolved).toHaveBeenCalledTimes(1);
+      const [, model, adapter, source] = onModelResolved.mock.calls[0];
+      expect(adapter).toBe("gemini");
+      // Whatever the adapter settled on is what the run used. The point is not
+      // the literal value but that the callback observed the FINAL decision:
+      // firing it before the gemini branch reports a model the run never used.
+      expect(typeof model).toBe("string");
+      expect((model as string).length).toBeGreaterThan(0);
+      expect(typeof source).toBe("string");
+      // The discriminating assertion: the gemini branch overwrites source to
+      // "config", so a callback that fired before it would still say "auto".
+      // THE discriminating assertion. The gemini branch overwrites
+      // modelDecision.model with the gemini model long after the router set it,
+      // so a callback firing at resolution time reports the model the ROUTER
+      // picked — one this run never dispatched on.
+      expect(
+        model,
+        "the callback must observe the model the adapter settled on, not the router's pick"
+      ).toContain("gemini");
+      expect(typeof source).toBe("string");
+    } finally {
+      delete process.env.NIGHTGAUGE_UI_CORE_ADAPTER;
+    }
+  });
+
+  it("still fires exactly once, before the spawn", () => {
+    // Clear first: invocationCallOrder is global to the mock, so [0] would
+    // otherwise be the first spawn ANY earlier test in this file made. The
+    // #367 test near the top of the file gets away with the unguarded form
+    // only because it runs before those accumulate.
+    vi.mocked(spawn).mockClear();
+
+    const onModelResolved = vi.fn();
+    runStageSkillHeadless("feature-dev", 42, { onModelResolved });
+
+    expect(onModelResolved).toHaveBeenCalledTimes(1);
+    // It moved later in the function — after the adapter branches that mutate
+    // modelDecision — but it must still precede THIS dispatch's spawn, so a
+    // stage killed early has its model on record (#367).
+    expect(onModelResolved.mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(spawn).mock.invocationCallOrder[0]
+    );
+  });
+});

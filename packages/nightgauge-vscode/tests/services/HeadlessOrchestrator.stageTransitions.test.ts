@@ -283,7 +283,10 @@ describe("HeadlessOrchestrator stage transitions (Issue #2499)", () => {
     // once the model is resolved (before the CLI spawns).
     vi.mocked(runStageSkillHeadless).mockImplementation((_stage, _issueNumber, callbacks) => {
       Promise.resolve().then(() => {
-        callbacks?.onModelResolved?.("feature-dev", "claude-fable-5", "claude");
+        // #1016: the callback now carries the resolution SOURCE, so the
+        // orchestrator's "Starting stage" line comes from the dispatch that
+        // made the decision rather than a second, degraded resolver.
+        callbacks?.onModelResolved?.("feature-dev", "claude-fable-5", "claude", "auto");
         void callbacks?.onComplete?.({
           success: true,
           exitCode: 0,
