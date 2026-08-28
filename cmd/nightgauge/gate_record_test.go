@@ -98,7 +98,7 @@ func TestRecordGateResult_RoutesThroughTheDaemonWhenOneIsReachable(t *testing.T)
 	const issue = 5501
 	runID := seedRun(t, workspace, issue)
 
-	recordGateResult(context.Background(), workspace, "", issue, "pr-create", runID, state.StageGateResult{
+	recordGateResult(context.Background(), workspace, "", "", issue, "pr-create", runID, state.StageGateResult{
 		GateName: "pr-create", Passed: true, Timestamp: "2026-08-23T00:00:00Z",
 	})
 
@@ -128,7 +128,7 @@ func TestRecordGateResult_TakesTheRunIDFromTheStageEnvironment(t *testing.T) {
 	t.Setenv(adapters.RunIDEnvVar, runID)
 
 	// No run id passed — it must come from the environment.
-	recordGateResult(context.Background(), workspace, "", issue, "pr-create", "", state.StageGateResult{
+	recordGateResult(context.Background(), workspace, "", "", issue, "pr-create", "", state.StageGateResult{
 		GateName: "pr-create", Passed: true, Timestamp: "2026-08-23T00:00:00Z",
 	})
 
@@ -166,7 +166,7 @@ func TestRecordGateResult_FallsBackToTheDirectWriteWithNoDaemon(t *testing.T) {
 		t.Fatal("a daemon is reachable; this test cannot exercise the fallback")
 	}
 
-	recordGateResult(context.Background(), workspace, "", issue, "pr-create", runID, state.StageGateResult{
+	recordGateResult(context.Background(), workspace, "", "", issue, "pr-create", runID, state.StageGateResult{
 		GateName: "pr-create", Passed: true, Timestamp: "2026-08-23T00:00:00Z",
 	})
 
@@ -214,7 +214,7 @@ func TestRecordGateResult_DoesNotWriteDirectlyWhenTheDaemonRefuses(t *testing.T)
 		t.Fatalf("seed a stray snapshot: %v", err)
 	}
 
-	recordGateResult(context.Background(), workspace, "", issue, "pr-create", runID, state.StageGateResult{
+	recordGateResult(context.Background(), workspace, "", "", issue, "pr-create", runID, state.StageGateResult{
 		GateName: "pr-create", Passed: true, Timestamp: "2026-08-23T00:00:00Z",
 	})
 
@@ -273,7 +273,7 @@ func TestRecordGateResult_FilesUnderTheRecordRootWhenWorkdirIsAWorktree(t *testi
 		t.Fatal(err)
 	}
 
-	recordGateResult(context.Background(), worktree, repo, issue, "pr-create", runID, state.StageGateResult{
+	recordGateResult(context.Background(), worktree, repo, repo, issue, "pr-create", runID, state.StageGateResult{
 		GateName: "pr-create", Passed: true, Timestamp: "2026-08-28T00:00:00Z",
 	})
 
@@ -294,5 +294,54 @@ func TestRecordGateResult_FilesUnderTheRecordRootWhenWorkdirIsAWorktree(t *testi
 				t.Errorf("a run snapshot was created in the worktree: %s", e.Name())
 			}
 		}
+	}
+}
+
+// TestRecordGateResult_ReachesTheDaemonWhenItServesADifferentRoot is the #1054
+// round-two regression, and the shape the first fix missed.
+//
+// In a multi-repo workspace `nightgauge serve` is started with ONE workspace
+// root while runs execute in sibling repos. The daemon's socket lives at the
+// SERVE root; the run's snapshot lives at the run's repo root. Round one pointed
+// the dial at the run's repo root, which has no socket, so the dial still failed
+// on every run.
+//
+// The fallback file write cannot cover for it: the durable record is built by
+// the daemon from its in-memory RuntimeState (claimTerminal snapshots
+// entry.rs), so a result written to a file by this process never reaches the
+// record. Only the IPC path lands a gate result on the run.
+//
+// Passing daemonRoot == repo (the round-one behaviour) reproduces the failure.
+func TestRecordGateResult_ReachesTheDaemonWhenItServesADifferentRoot(t *testing.T) {
+	serveRoot := daemonWorkspace(t)
+	startGateRecordDaemon(t, serveRoot)
+	const issue = 5506
+	runID := seedRun(t, serveRoot, issue)
+
+	// A sibling repo: the run's own root, with a pipeline dir but NO socket.
+	repo := filepath.Join(filepath.Dir(serveRoot), "sibling-repo")
+	if err := os.MkdirAll(filepath.Join(repo, ".nightgauge", "pipeline"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// And the worktree the gate reads its inputs from.
+	worktree := filepath.Join(repo, ".worktrees", "issue-5506")
+	if err := os.MkdirAll(filepath.Join(worktree, ".nightgauge", "pipeline"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := os.Stat(ipc.DaemonSocketPath(repo)); err == nil {
+		t.Fatal("fixture is wrong: the sibling repo must not have a daemon socket")
+	}
+
+	recordGateResult(context.Background(), worktree, repo, serveRoot, issue, "pr-create", runID,
+		state.StageGateResult{GateName: "pr-create", Passed: true, Timestamp: "2026-08-28T00:00:00Z"})
+
+	// The daemon owns the snapshot; the result must be on it.
+	rs, loadErr := state.LoadPersistedState(filepath.Join(serveRoot, ".nightgauge", "pipeline"), runID)
+	if loadErr != nil {
+		t.Fatalf("load the run's snapshot at the serve root: %v", loadErr)
+	}
+	if got := rs.StageGateResultsFor(state.PipelineStage("pr-create")); len(got) != 1 {
+		t.Fatalf("gate results on the run = %d, want 1 — the record did not reach the daemon", len(got))
 	}
 }

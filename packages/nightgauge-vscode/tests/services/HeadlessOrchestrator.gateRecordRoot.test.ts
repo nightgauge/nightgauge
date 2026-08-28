@@ -161,6 +161,30 @@ describe("gate records address the daemon's root (#1021)", () => {
   // The duplicated --run-id block was harmless (cobra takes the last) but it
   // documented a fix that did not work. One occurrence, so a future reader is
   // not led back to the wrong mechanism.
+  // #1054 round two. Round one asserted --record-root === REPO_ROOT and passed,
+  // yet [gate-not-invoked] still fired in production on every run: the daemon
+  // listens at the workspace root serve was started with, not at the run's repo
+  // root, and in a multi-repo workspace those are different directories.
+  //
+  // The file fallback cannot substitute — the durable record is built by the
+  // daemon from its in-memory RuntimeState and never reads that file — so the
+  // dial reaching the daemon is the only path that lands a gate result.
+  it("addresses the daemon at the persistent root, not the run's repo root", async () => {
+    const o = makeOrchestrator();
+    await (
+      o as unknown as { verifyPostMergeState(n: number): Promise<Error | null> }
+    ).verifyPostMergeState(4151);
+
+    const spawn = gateSpawns[gateSpawns.length - 1];
+    const daemonRoot = flagValue(spawn.args, "--daemon-root");
+
+    expect(daemonRoot, "--daemon-root must be passed").toBeDefined();
+    // All three roots are distinct concerns: inputs, record, socket.
+    expect(flagValue(spawn.args, "--workdir")).toBe(WORKTREE);
+    expect(flagValue(spawn.args, "--record-root")).toBe(REPO_ROOT);
+    expect(daemonRoot).not.toBe(WORKTREE);
+  });
+
   it("passes --run-id exactly once", async () => {
     const o = makeOrchestrator();
     await (
