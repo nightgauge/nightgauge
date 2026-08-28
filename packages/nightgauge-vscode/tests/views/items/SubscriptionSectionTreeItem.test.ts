@@ -15,6 +15,11 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 vi.mock("vscode", () => {
   return {
+    // #1018: the "Update Payment" action now resolves through buildAccountUrl()
+    // -> getDashboardBaseUrl(), which reads workspace configuration. Without
+    // this key the two expired-license tests below throw on the mock rather
+    // than exercising the behaviour they assert.
+    workspace: { getConfiguration: () => ({ get: () => undefined }) },
     TreeItemCollapsibleState: { None: 0, Collapsed: 1, Expanded: 2 },
     ThemeColor: class {
       constructor(public readonly id: string) {}

@@ -10,6 +10,8 @@
 
 import * as vscode from "vscode";
 
+import { buildAccountUrl } from "./auditCommands";
+
 // Register functions from './index' (barrel export)
 import {
   registerRunStageCommand,
@@ -361,7 +363,7 @@ export function registerAllCommands(deps: AllCommandDeps): void {
   const openManageSubscriptionCommand = vscode.commands.registerCommand(
     "nightgauge.openManageSubscription",
     async () => {
-      await vscode.env.openExternal(vscode.Uri.parse("https://nightgauge.dev/account"));
+      await vscode.env.openExternal(vscode.Uri.parse(buildAccountUrl()));
     }
   );
 

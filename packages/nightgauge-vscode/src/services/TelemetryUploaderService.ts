@@ -83,6 +83,12 @@ const RETRY_DELAYS_MS = [1000, 2000, 4000, 8000, 16000, 60000];
 const MAX_REJECTION_RETRY_CYCLES = 5;
 const WATERMARK_FILENAME = ".upload-watermarks.json";
 const HISTORY_SUBDIR = path.join(".nightgauge", "pipeline", "history");
+
+/**
+ * A daily run-history file: `YYYY-MM-DD.jsonl`. Mirrors the Go reader's
+ * `parseDailyHistoryDate` on the same directory (#1023).
+ */
+const DAILY_HISTORY_FILE = /^\d{4}-\d{2}-\d{2}\.jsonl$/u;
 const TRACE_SUBDIR = path.join(".nightgauge", "pipeline", "trace");
 const WATERMARK_SUBDIR = path.join(".nightgauge", "pipeline");
 
@@ -538,8 +544,22 @@ export class TelemetryUploaderService implements vscode.Disposable {
       return { uploaded: 0, skipped: true, aborted: false };
     }
 
+    // Date-stamped daily history files ONLY (#1023).
+    //
+    // `.nightgauge/pipeline/history/` is not exclusively run history: the
+    // learning corpus (`outcomes.jsonl`) and other non-run journals are
+    // co-located there by their own writers. A bare `.jsonl` suffix test fed
+    // every one of them to a run-record mapper they can never satisfy — each
+    // row was rejected at the first gate, marked consumed, and buried under the
+    // watermark, permanently. The field-name mismatch the log names is simply
+    // the first field a corpus row does not have; it is the symptom, not the
+    // defect.
+    //
+    // Go enforces exactly this contract on the same directory —
+    // internal/state/history.go parseDailyHistoryDate — so this is the
+    // TypeScript side of one shared rule, not a new one.
     const jsonlFiles = entries
-      .filter(([name, type]) => name.endsWith(".jsonl") && type === vscode.FileType.File)
+      .filter(([name, type]) => DAILY_HISTORY_FILE.test(name) && type === vscode.FileType.File)
       .map(([name]) => name);
 
     if (jsonlFiles.length === 0) {

@@ -330,6 +330,62 @@ describe("TelemetryUploaderService", () => {
     expect(savedWatermarks["2026-05-10.jsonl"]).toBe(5);
   });
 
+  // ── #1023: the history directory is not exclusively run history ──────────
+
+  it("ignores non-daily journals co-located in history/, and never watermarks them", async () => {
+    // `outcomes.jsonl` is the LEARNING CORPUS, written into the same directory
+    // by its own writer. Before #1023 a bare `.jsonl` suffix test fed it to the
+    // run-record mapper, which rejected every row, marked it consumed, and
+    // buried it under the watermark — permanently, and silently.
+    const content = makeJsonlContent(3);
+    setupFs([
+      { name: "2026-05-10.jsonl", content, sizeBytes: 300 },
+      {
+        name: "outcomes.jsonl",
+        content: '{"issueNumber":42,"actualModel":"sonnet"}\n',
+        sizeBytes: 80,
+      },
+      { name: "knowledge-events.jsonl", content: '{"kind":"knowledge"}\n', sizeBytes: 40 },
+      { name: "tuning-audit.jsonl", content: '{"kind":"tuning"}\n', sizeBytes: 40 },
+      { name: "index.json", content: "{}", sizeBytes: 2 },
+    ]);
+
+    fetchMock.mockResolvedValue(okResponse());
+
+    const service = new TelemetryUploaderService(
+      makeLicenseKey(),
+      makeConsentService() as never,
+      () => "https://api.example.com",
+      "/workspace",
+      makeLogger() as never
+    );
+
+    await service.runUploadCycle();
+
+    const fsMock = vi.mocked(vscode.workspace.fs);
+    const writeCall = fsMock.writeFile.mock.calls.find(([uri]) =>
+      (uri as { fsPath: string }).fsPath.includes("upload-watermarks.json.tmp")
+    );
+    expect(writeCall).toBeTruthy();
+    const savedWatermarks = JSON.parse(
+      Buffer.from(writeCall![1] as Uint8Array).toString("utf8")
+    ) as Record<string, number>;
+
+    // The real daily file is still processed — the filter must not be so tight
+    // that it excludes the stream's actual subject.
+    expect(savedWatermarks["2026-05-10.jsonl"]).toBe(3);
+
+    // None of the strays may acquire a watermark. A watermark on a corpus file
+    // is what made this permanent: the rows are consumed once and never
+    // reconsidered, so the defect could not be fixed by re-running.
+    for (const stray of ["outcomes.jsonl", "knowledge-events.jsonl", "tuning-audit.jsonl"]) {
+      expect(
+        savedWatermarks[stray],
+        `${stray} is not run history and must never be watermarked`
+      ).toBeUndefined();
+    }
+  });
+
   // ── Test 2: Retry on 429 ──────────────────────────────────────────────────
 
   it("retries on 429 and advances watermark after eventual success", async () => {
