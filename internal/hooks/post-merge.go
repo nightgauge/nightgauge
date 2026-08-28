@@ -57,9 +57,28 @@ type PostMergeResult struct {
 	// OrphanSubsClosed counts sub-issues closed because the merged issue was
 	// itself an epic that shipped via an umbrella PR without enumerating
 	// `Closes #sub` for each sub (#3979).
-	OrphanSubsClosed int    `json:"orphanSubsClosed"`
-	Reason           string `json:"reason"` // "no_parent", "closed", "skipped", "issue_fetch_error", "auto_close_error"
-	Error            string `json:"error,omitempty"`
+	OrphanSubsClosed int `json:"orphanSubsClosed"`
+	// Reason is the hook's own outcome word. The full vocabulary:
+	//   no_parent | closed | skipped        — the hook did its job
+	//   pr_verify_error | pr_not_merged     — it refused before doing anything
+	//   issue_fetch_error | auto_close_error — it tried and failed
+	// "error" is deliberately NOT in this set (#1025). It used to be, copied
+	// straight from the epic service's status word, and it was the one value no
+	// caller recognised — so a failed rollup printed through the silent default
+	// branch while a successful one printed a banner.
+	Reason string `json:"reason"`
+	// EpicReason is the epic service's own discriminator (has_open, check_failed,
+	// fetch_failed, close_failed…). It answers "why" once Reason has answered
+	// "what", and before #1025 it was computed on every call and never copied
+	// out — so "Epic #N skipped: skipped" was the best the CLI could print.
+	EpicReason string `json:"epicReason,omitempty"`
+	// Failed is set on every return that did not do what the caller asked. It
+	// exists because the hook is deliberately non-blocking and always exits 0:
+	// without one boolean, every consumer has to re-derive failure from a string
+	// vocabulary, and every consumer got it wrong. AGENTS.md tells operators to
+	// READ this hook's output; this is the field that makes that possible.
+	Failed bool   `json:"failed"`
+	Error  string `json:"error,omitempty"`
 	// MergedCommitSha + MergedAt are the post-merge ground-truth breadcrumb
 	// (#4133): the merge commit on the base branch and GitHub's ISO-8601 merge
 	// timestamp. Captured best-effort via a PRMergeInfoFetcher when one is
@@ -206,11 +225,11 @@ func EvaluatePostMerge(ctx context.Context, issueSvc IssueFetcher, issueCloser I
 		state, err := prVerifier.GetPRState(ctx, input.RepositoryOwner, input.RepositoryName, input.PRNumber)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: post-merge hook: could not verify PR #%d state: %v — skipping issue close\n", input.PRNumber, err)
-			return PostMergeResult{Reason: "pr_verify_error", Error: err.Error()}
+			return PostMergeResult{Reason: "pr_verify_error", Failed: true, Error: err.Error()}
 		}
 		if !strings.EqualFold(state, "MERGED") {
 			fmt.Fprintf(os.Stderr, "Warning: post-merge hook: PR #%d is %q not MERGED — skipping issue close\n", input.PRNumber, state)
-			return PostMergeResult{Reason: "pr_not_merged", Error: fmt.Sprintf("PR #%d state=%s", input.PRNumber, state)}
+			return PostMergeResult{Reason: "pr_not_merged", Failed: true, Error: fmt.Sprintf("PR #%d state=%s", input.PRNumber, state)}
 		}
 	}
 
@@ -235,6 +254,7 @@ func EvaluatePostMerge(ctx context.Context, issueSvc IssueFetcher, issueCloser I
 		fmt.Fprintf(os.Stderr, "Warning: post-merge hook: failed to fetch issue #%d: %v\n", input.IssueNumber, err)
 		return PostMergeResult{
 			Reason: "issue_fetch_error",
+			Failed: true,
 			Error:  err.Error(),
 		}
 	}
@@ -284,6 +304,11 @@ func EvaluatePostMerge(ctx context.Context, issueSvc IssueFetcher, issueCloser I
 	out.IssueDoneSync = BoardSyncNotAttempted
 	if boardSvc != nil && input.ProjectNumber > 0 && issueClosed {
 		out.IssueDoneSync = syncIssueDone(ctx, boardSvc, input)
+		// A board left out of date is a failure of what the caller asked for,
+		// even when the epic half succeeds (#1025).
+		if out.IssueDoneSync == BoardSyncFailed {
+			out.Failed = true
+		}
 	}
 
 	// (#3979) If the merged issue is itself an epic, an umbrella PR may have
@@ -312,10 +337,27 @@ func EvaluatePostMerge(ctx context.Context, issueSvc IssueFetcher, issueCloser I
 	epicNumber := issue.ParentIssueNumber
 	out.EpicNumber = epicNumber
 	result, err := epicSvc.AutoCloseSingle(ctx, input.RepositoryOwner, input.RepositoryName, epicNumber, input.ProjectNumber)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: post-merge epic auto-close failed for #%d: %v\n", epicNumber, err)
+
+	// BOTH failure shapes land on one reason word (#1025).
+	//
+	// `err != nil` is dead through *gh.EpicService — AutoCloseSingle swallows
+	// every error into result.Status="error" and returns nil — so the only
+	// reason value any caller recognised was unreachable, and every real
+	// failure arrived as the bare word "error" that nothing branched on. The
+	// two are the same event and must not be distinguishable by accident of
+	// which implementation is wired.
+	if err != nil || (result != nil && result.Status == "error") {
 		out.Reason = "auto_close_error"
-		out.Error = err.Error()
+		out.Failed = true
+		if result != nil {
+			out.EpicReason = result.Reason
+			out.Error = result.Error
+		}
+		if err != nil {
+			out.Error = err.Error()
+		}
+		fmt.Fprintf(os.Stderr, "Warning: post-merge epic auto-close FAILED for #%d (%s): %s\n",
+			epicNumber, out.EpicReason, out.Error)
 		return out
 	}
 
@@ -323,5 +365,6 @@ func EvaluatePostMerge(ctx context.Context, issueSvc IssueFetcher, issueCloser I
 
 	out.AutoClosed = result.Status == "closed"
 	out.Reason = result.Status
+	out.EpicReason = result.Reason
 	return out
 }
