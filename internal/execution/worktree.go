@@ -394,17 +394,31 @@ func (m *Manager) CleanupLocalBranch(repo, branchName string) error {
 	if branchName == "" || branchName == "main" || branchName == "master" {
 		return nil
 	}
-	repoRoot := m.workspaceRoot
+	// ONE root for the guard and the action (#1020). This used to read
+	// m.workspaceRoot here while the safety check below evaluated
+	// m.repoRoot(repo) — so on any repo that is not the workspace root, the
+	// guard judged repository A and the delete ran in repository B. A branch
+	// carrying unique work in B could be deleted because a same-named branch
+	// in A did not.
+	repoRoot := m.repoRoot(repo)
 
-	if ahead, err := branchAheadOfBase(m.repoRoot(repo), branchName); err == nil && ahead {
+	if ahead, err := branchAheadOfBase(repoRoot, branchName); err == nil && ahead {
 		log.Printf("branch cleanup: preserving local branch %s — carries commits not on the default branch (%s)",
 			branchName, SkipUnmergedContent)
 		return nil
 	}
 
+	// Do not swallow the delete (#1020). git refuses to delete a branch that
+	// is checked out in a worktree, and `_ = delLocal.Run()` made that refusal
+	// invisible — the caller then logged "cleaned up feature branch" for a
+	// branch that is still there. Report it and keep going: a branch left
+	// behind is not a pipeline failure, but it must not be silent.
 	delLocal := exec.Command("git", "branch", "-D", branchName)
 	delLocal.Dir = repoRoot
-	_ = delLocal.Run() // ignore error — branch may not exist locally
+	if out, err := delLocal.CombinedOutput(); err != nil {
+		log.Printf("[WARN] branch cleanup: git branch -D %s in %s failed (%v): %s — branch left in place",
+			branchName, repoRoot, err, strings.TrimSpace(string(out)))
+	}
 
 	prune := exec.Command("git", "remote", "prune", "origin")
 	prune.Dir = repoRoot
@@ -425,7 +439,10 @@ func (m *Manager) CleanupBranch(repo, branchName string) error {
 	if branchName == "" || branchName == "main" || branchName == "master" {
 		return nil
 	}
-	repoRoot := m.workspaceRoot
+	// The run's own repo, not the workspace root (#1020) — otherwise a
+	// cross-repo run pushes the delete to whichever remote the workspace root
+	// happens to point at.
+	repoRoot := m.repoRoot(repo)
 
 	// Delete remote branch
 	delRemote := exec.Command("git", "push", "origin", "--delete", branchName)
@@ -466,6 +483,19 @@ func (m *Manager) branchMergedIntoDefault(repo, branchName string) bool {
 	repoRoot := m.repoRoot(repo)
 
 	defaultBranch := detectDefaultBranch(repoRoot)
+	// Fetch before judging (#1020). The verdict is a content diff against
+	// origin/<default>, and the commit that makes a just-merged branch
+	// redundant is the SQUASH COMMIT THE FORGE JUST CREATED. Without a fetch
+	// that commit is invisible locally, so every freshly merged branch
+	// classifies as "unmerged content" and is kept — silently, because the
+	// caller reads `false` as a legitimate refusal.
+	//
+	// Non-fatal, and the same soft-fail the worktree sweep uses: classify
+	// against the local ref and say so, rather than turning a network blip
+	// into a cleanup failure.
+	if err := fetchOriginBranch(repoRoot, defaultBranch); err != nil {
+		log.Printf("[WARN] branch cleanup: fetch origin/%s failed: %v — classifying against local ref", defaultBranch, err)
+	}
 	baseRef, err := resolveBaseRef(repoRoot, defaultBranch)
 	if err != nil {
 		log.Printf("[WARN] branch cleanup: resolve base ref for %s failed: %v — leaving %s in place", repoRoot, err, branchName)
