@@ -133,6 +133,7 @@ import { BrownfieldDashboard } from "../views/brownfield/BrownfieldDashboard";
 import { KnowledgeValueDashboard } from "../views/dashboard/KnowledgeValueDashboard";
 import { DiscordService } from "../services/DiscordService";
 import { MattermostService } from "../services/notifications/MattermostService";
+import { SlackService } from "../services/notifications/SlackService";
 import { MattermostCommandDispatcher } from "../services/notifications/MattermostCommandDispatcher";
 import { NotificationDispatcher } from "../services/notifications/NotificationDispatcher";
 import { NotificationRouter } from "../services/notifications/NotificationRouter";
@@ -1068,14 +1069,15 @@ export async function initializeServices(
 
     logger.info("OfflineManager initialized", { baseUrl: getPlatformUrl() });
 
-    // Initialize Discord + Mattermost notifiers and wrap them in a
-    // NotificationDispatcher so future Slack / Teams notifiers can be added
-    // without re-wiring bootstrap. The dispatcher owns lifecycle disposal —
-    // adding it to context.subscriptions is enough to dispose every wrapped
-    // notifier. Issue #3372 introduced the dispatcher; Issue #3373 added
-    // Mattermost; Issue #3374 adds per-channel routing rules.
+    // Initialize the chat notifiers and wrap them in a NotificationDispatcher
+    // so a further provider can be added without re-wiring bootstrap. The
+    // dispatcher owns lifecycle disposal — adding it to context.subscriptions
+    // is enough to dispose every wrapped notifier. Issue #3372 introduced the
+    // dispatcher; #3373 added Mattermost; #3374 adds per-channel routing
+    // rules; #1071 adds Slack.
     discordService = new DiscordService(pipelineStateService, configBridge, logger);
     const mattermostService = new MattermostService(pipelineStateService, configBridge, logger);
+    const slackService = new SlackService(pipelineStateService, configBridge, logger);
 
     // Issue #3605 bullet C: wire the autonomous safety-pause notifier to
     // DiscordService.notifySafetyPause so cascading-failure / rate-limit
@@ -1122,6 +1124,7 @@ export async function initializeServices(
       [
         { id: "discord", notifier: discordService },
         { id: "mattermost", notifier: mattermostService },
+        { id: "slack", notifier: slackService },
       ],
       logger,
       router
