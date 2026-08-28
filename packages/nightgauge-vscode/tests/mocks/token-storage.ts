@@ -2,7 +2,7 @@
  * A complete `ITokenStorage` double.
  *
  * Four test files each hand-built a three-method stub — `retrieve`, `store`,
- * `delete` — and cast it at the call site. `ITokenStorage` has seven members;
+ * `delete` — and cast it at the call site. `ITokenStorage` has eight members;
  * the other four (`clear`, `notifyHostChanged`, `onTokenChanged`, `dispose`)
  * were simply absent, and nothing noticed because the test tree was never
  * typechecked (#499).
@@ -19,6 +19,7 @@ import type { ITokenStorage } from "../../src/platform/TokenStorage";
 export interface MockTokenStorage extends ITokenStorage {
   retrieve: ReturnType<typeof vi.fn<ITokenStorage["retrieve"]>>;
   store: ReturnType<typeof vi.fn<ITokenStorage["store"]>>;
+  storeSession: ReturnType<typeof vi.fn<ITokenStorage["storeSession"]>>;
   delete: ReturnType<typeof vi.fn<ITokenStorage["delete"]>>;
   clear: ReturnType<typeof vi.fn<ITokenStorage["clear"]>>;
   notifyHostChanged: ReturnType<typeof vi.fn<ITokenStorage["notifyHostChanged"]>>;
@@ -32,6 +33,7 @@ export function makeMockTokenStorage(token: string | null = "test-token"): MockT
   return {
     retrieve: vi.fn<ITokenStorage["retrieve"]>().mockResolvedValue(token),
     store: vi.fn<ITokenStorage["store"]>().mockResolvedValue(undefined),
+    storeSession: vi.fn<ITokenStorage["storeSession"]>().mockResolvedValue(undefined),
     delete: vi.fn<ITokenStorage["delete"]>().mockResolvedValue(undefined),
     clear: vi.fn<ITokenStorage["clear"]>().mockResolvedValue(undefined),
     notifyHostChanged: vi.fn<ITokenStorage["notifyHostChanged"]>(),

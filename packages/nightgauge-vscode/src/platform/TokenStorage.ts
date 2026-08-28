@@ -39,6 +39,22 @@ export interface TokenChangeEvent {
 
 export interface ITokenStorage extends vscode.Disposable {
   store(key: TokenKey, value: string): Promise<void>;
+  /**
+   * Write a whole session in one operation, emitting exactly one
+   * `{key:"all", action:"stored"}` event after all three fields are durable.
+   *
+   * Sign-in used to be three `store()` calls, and `store()` fires per field —
+   * so the refresh scheduler, which re-arms on an accessToken event and then
+   * reads expiresAt, was correct only if expiresAt happened to be written
+   * first (#1024). That ordering contract lived in a comment in one of three
+   * call sites and two of them violated it. This method removes the contract
+   * rather than documenting it harder.
+   */
+  storeSession(session: {
+    accessToken: string;
+    refreshToken: string;
+    expiresAt: string;
+  }): Promise<void>;
   retrieve(key: TokenKey): Promise<string | null>;
   delete(key: TokenKey): Promise<void>;
   clear(): Promise<void>;
@@ -117,6 +133,24 @@ export class TokenStorage implements ITokenStorage {
       this._onTokenChanged.fire({ key, action: "stored" });
     } catch {
       // Event emission is fire-and-forget — errors must not propagate to callers
+    }
+  }
+
+  async storeSession(session: {
+    accessToken: string;
+    refreshToken: string;
+    expiresAt: string;
+  }): Promise<void> {
+    const keyMap = this.getKeyMap();
+    // All three durable BEFORE any listener runs. A per-field event here would
+    // reintroduce the ordering hazard this method exists to delete.
+    await this.secretService.setSecret(keyMap.accessToken, session.accessToken);
+    await this.secretService.setSecret(keyMap.refreshToken, session.refreshToken);
+    await this.secretService.setSecret(keyMap.expiresAt, session.expiresAt);
+    try {
+      this._onTokenChanged.fire({ key: "all", action: "stored" });
+    } catch {
+      // Event emission is fire-and-forget
     }
   }
 
