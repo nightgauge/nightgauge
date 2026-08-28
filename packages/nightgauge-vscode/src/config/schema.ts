@@ -2521,21 +2521,30 @@ export const MattermostNotificationsConfigSchema = z.object({
 export type MattermostNotificationsConfig = z.infer<typeof MattermostNotificationsConfigSchema>;
 
 /**
- * Slack webhook notification configuration.
+ * Slack notification configuration.
+ *
+ * Uses a bot token rather than an incoming webhook: only `chat.postMessage`
+ * returns a message `ts`, and only that `ts` lets `chat.update` edit the
+ * message in place as stages progress (Discord parity). Slack has deprecated
+ * standalone custom-integration webhooks anyway, so a workspace creates an app
+ * either way — the bot token is strictly more capable at the same setup cost.
  *
  * Example:
  *   notifications:
  *     slack:
  *       enabled: true
- *       webhook_env: SLACK_WEBHOOK_URL
+ *       bot_token_env: SLACK_BOT_TOKEN
+ *       channel: "C0123456789"
  *
  * @see Issue #1071
  */
 export const SlackNotificationsConfigSchema = z.object({
   /** Enable Slack pipeline status posts */
   enabled: z.boolean().optional(),
-  /** Name of the env var that holds the Slack incoming webhook URL */
-  webhook_env: z.string().optional(),
+  /** Name of the env var that holds the Slack bot token (xoxb-…) */
+  bot_token_env: z.string().optional(),
+  /** Target channel id (preferred) or #name the bot posts into */
+  channel: z.string().optional(),
 });
 export type SlackNotificationsConfig = z.infer<typeof SlackNotificationsConfigSchema>;
 

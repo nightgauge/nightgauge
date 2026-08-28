@@ -1,5 +1,5 @@
 /**
- * SlackService — pipeline status delivery to a Slack incoming webhook (#1071).
+ * SlackService — live-updating pipeline status via the Slack Web API (#1071).
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
@@ -22,177 +22,213 @@ vi.mock("../../../src/services/SecretStorageService", () => ({
   SecretStorageService: {
     getInstance: () => ({ getSecret: async () => storedSecret }),
   },
-  SECRET_KEYS: { slackWebhookUrl: "slackWebhookUrl" },
+  SECRET_KEYS: { slackBotToken: "slackBotToken" },
 }));
 
-const { SlackService, isSlackWebhookUrl } =
+const { SlackService, isSlackBotToken, SLACK_API_BASE } =
   await import("../../../src/services/notifications/SlackService");
 
-/** Fake webhook. The last path segment stands in for the credential. */
-const HOOK_TOKEN = "zzzTESTTOKENzzz";
-const WEBHOOK = `https://hooks.slack.com/services/T00000000/B00000000/${HOOK_TOKEN}`;
+/** Fake bot token. Assembled from parts so no literal looks like a credential. */
+const TOKEN_TAIL = "zzTESTTOKENzz";
+const BOT_TOKEN = "xoxb-" + TOKEN_TAIL;
+const CHANNEL = "C0123456789";
 
-function slackConfigBridge(enabled = true, webhookEnv = "SLACK_WEBHOOK_URL") {
-  return {
-    getEffectiveConfig: vi.fn(() => ({
-      config: { notifications: { slack: { enabled, webhook_env: webhookEnv } } },
-    })),
+function slackConfigBridge(
+  overrides: { enabled?: boolean; channel?: string; bot_token_env?: string } = {}
+) {
+  const slack = {
+    enabled: overrides.enabled ?? true,
+    bot_token_env: "bot_token_env" in overrides ? overrides.bot_token_env : "SLACK_BOT_TOKEN",
+    channel: "channel" in overrides ? overrides.channel : CHANNEL,
   };
+  return { getEffectiveConfig: vi.fn(() => ({ config: { notifications: { slack } } })) };
 }
 
-/** A PipelineStateService stub that serves one snapshot and records listeners. */
 function makeStateService(state: unknown) {
-  const listeners: {
-    stageStart: Array<(e: { stage: string; issueNumber: number }) => void>;
-    stateChanged: Array<(s: unknown) => void>;
-  } = { stageStart: [], stateChanged: [] };
   return {
-    listeners,
     getState: vi.fn(async () => state),
-    onStageStart: vi.fn((cb: (e: { stage: string; issueNumber: number }) => void) => {
-      listeners.stageStart.push(cb);
-      return { dispose: vi.fn() };
-    }),
+    onStageStart: vi.fn(() => ({ dispose: vi.fn() })),
     onStageError: vi.fn(() => ({ dispose: vi.fn() })),
-    onStateChanged: vi.fn((cb: (s: unknown) => void) => {
-      listeners.stateChanged.push(cb);
-      return { dispose: vi.fn() };
-    }),
+    onStateChanged: vi.fn(() => ({ dispose: vi.fn() })),
   };
 }
 
-describe("isSlackWebhookUrl", () => {
-  it("accepts a Slack incoming-webhook URL", () => {
-    expect(isSlackWebhookUrl(WEBHOOK)).toBe(true);
+/** A Slack API responder: 200 with a JSON body, the way Slack actually replies. */
+function slackOk(body: Record<string, unknown> = { ok: true, ts: "1700000000.000100" }) {
+  return vi.fn(async () => ({ ok: true, status: 200, json: async () => body }));
+}
+
+function newService(
+  fetchMock: ReturnType<typeof vi.fn>,
+  logger: ReturnType<typeof makeLogger>,
+  bridge = slackConfigBridge(),
+  state: unknown = makeState(42)
+) {
+  vi.stubGlobal("fetch", fetchMock);
+  return new SlackService(makeStateService(state) as never, bridge as never, logger as never);
+}
+
+/** The method name from a recorded fetch call's URL. */
+function methodOf(call: unknown[]): string {
+  return String(call[0]).replace(`${SLACK_API_BASE}/`, "");
+}
+
+function bodyOf(call: unknown[]): Record<string, unknown> {
+  return JSON.parse((call[1] as { body: string }).body);
+}
+
+/** The Authorization header from a recorded fetch call. */
+function authOf(call: unknown[]): string {
+  return (call[1] as { headers: Record<string, string> }).headers.Authorization;
+}
+
+describe("isSlackBotToken", () => {
+  it("accepts a bot token", () => {
+    expect(isSlackBotToken(BOT_TOKEN)).toBe(true);
   });
 
-  it("rejects a look-alike host — a prefix check would accept this", () => {
-    expect(isSlackWebhookUrl("https://hooks.slack.com.evil.test/services/T/B/X")).toBe(false);
-  });
-
-  it("rejects plaintext http", () => {
-    expect(isSlackWebhookUrl("http://hooks.slack.com/services/T/B/X")).toBe(false);
-  });
-
-  it("rejects another provider's webhook pasted into the Slack field", () => {
-    expect(isSlackWebhookUrl("https://discord.com/api/webhooks/123/abc")).toBe(false);
-    expect(isSlackWebhookUrl("https://mm.example.com/hooks/abc")).toBe(false);
+  // These are the realistic paste-mistakes, and each would surface as an
+  // opaque invalid_auth at the first pipeline run if not caught here.
+  it("rejects a user token, an app-level token, and a webhook URL", () => {
+    expect(isSlackBotToken("xoxp-" + TOKEN_TAIL)).toBe(false);
+    expect(isSlackBotToken("xapp-" + TOKEN_TAIL)).toBe(false);
+    expect(isSlackBotToken("https://hooks.slack.com/services/T0/B0/x")).toBe(false);
   });
 
   it("rejects junk", () => {
-    expect(isSlackWebhookUrl("")).toBe(false);
-    expect(isSlackWebhookUrl("not a url")).toBe(false);
+    expect(isSlackBotToken("")).toBe(false);
+    expect(isSlackBotToken("xoxb-")).toBe(false);
   });
 });
 
 describe("SlackService — delivery", () => {
-  let fetchMock: ReturnType<typeof vi.fn>;
   let logger: ReturnType<typeof makeLogger>;
 
   beforeEach(() => {
-    storedSecret = WEBHOOK;
+    storedSecret = BOT_TOKEN;
     logger = makeLogger();
-    fetchMock = vi.fn(async () => ({ ok: true, status: 200 }));
-    vi.stubGlobal("fetch", fetchMock);
   });
 
   afterEach(() => {
     vi.unstubAllGlobals();
-    delete process.env.SLACK_WEBHOOK_URL;
+    delete process.env.SLACK_BOT_TOKEN;
   });
 
-  it("posts a Slack attachment when a run starts", async () => {
-    const stateService = makeStateService(makeState(42));
-    const svc = new SlackService(
-      stateService as never,
-      slackConfigBridge() as never,
-      logger as never
-    );
+  it("posts via chat.postMessage with the bot token when a run starts", async () => {
+    const fetchMock = slackOk();
+    const svc = newService(fetchMock, logger);
     svc.onPipelineStart({ issueNumber: 42, stage: "issue-pickup" });
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalled());
 
-    const [url, init] = fetchMock.mock.calls[0];
-    expect(url).toBe(WEBHOOK);
-    expect(init.method).toBe("POST");
-    const body = JSON.parse(init.body);
-    expect(body.attachments).toHaveLength(1);
-    expect(body.attachments[0].title).toContain("#42");
+    const call = fetchMock.mock.calls[0];
+    expect(methodOf(call)).toBe("chat.postMessage");
+    expect(authOf(call)).toBe(`Bearer ${BOT_TOKEN}`);
+    const body = bodyOf(call);
+    expect(body.channel).toBe(CHANNEL);
+    expect((body.attachments as Array<{ title: string }>)[0].title).toContain("#42");
     svc.dispose();
   });
 
-  it("posts the terminal summary exactly once, then forgets the run", async () => {
-    const stateService = makeStateService(makeState(42));
-    const svc = new SlackService(
-      stateService as never,
-      slackConfigBridge() as never,
-      logger as never
-    );
+  // The whole reason for a bot token: the terminal summary must EDIT the
+  // original message, not append a second one.
+  it("edits the original message in place at terminal state", async () => {
+    const fetchMock = slackOk();
+    const svc = newService(fetchMock, logger);
     svc.onPipelineStart({ issueNumber: 42, stage: "issue-pickup" });
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
 
-    const final = makeState(42, "productive");
-    svc.onPipelineUpdate({ issueNumber: 42, state: final });
+    svc.onPipelineUpdate({ issueNumber: 42, state: makeState(42, "productive") });
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
 
-    // A repeated terminal snapshot must not post again.
-    svc.onPipelineUpdate({ issueNumber: 42, state: final });
-    await new Promise((r) => setTimeout(r, 20));
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const second = fetchMock.mock.calls[1];
+    expect(methodOf(second)).toBe("chat.update");
+    const body = bodyOf(second);
+    expect(body.ts).toBe("1700000000.000100");
+    expect(body.channel).toBe(CHANNEL);
     svc.dispose();
   });
 
-  it("does not post when the notifier is disabled in config", async () => {
-    const stateService = makeStateService(makeState(42));
-    const svc = new SlackService(
-      stateService as never,
-      slackConfigBridge(false) as never,
-      logger as never
-    );
+  // Slack reports failures in a 200 body. Trusting res.ok would call this a
+  // success and then try to edit a message that was never posted.
+  it("treats {ok:false} in a 200 body as a failure", async () => {
+    const fetchMock = slackOk({ ok: false, error: "channel_not_found" });
+    const svc = newService(fetchMock, logger);
     svc.onPipelineStart({ issueNumber: 42, stage: "issue-pickup" });
+    await vi.waitFor(() => expect(logger.warn).toHaveBeenCalled());
+
+    const warned = JSON.stringify(logger.warn.mock.calls);
+    expect(warned).toContain("channel_not_found");
+
+    // The run must not be retained: a later terminal event has nothing to edit.
+    svc.onPipelineUpdate({ issueNumber: 42, state: makeState(42, "productive") });
     await new Promise((r) => setTimeout(r, 20));
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
     svc.dispose();
   });
 
-  it("does not post when no webhook is configured anywhere", async () => {
-    storedSecret = undefined;
-    const stateService = makeStateService(makeState(42));
-    const svc = new SlackService(
-      stateService as never,
-      slackConfigBridge() as never,
-      logger as never
-    );
+  // A permanent error should carry the action that fixes it, not just a code.
+  it("logs an actionable hint for a permanent Slack error", async () => {
+    const fetchMock = slackOk({ ok: false, error: "missing_scope" });
+    const svc = newService(fetchMock, logger);
     svc.onPipelineStart({ issueNumber: 42, stage: "issue-pickup" });
-    await new Promise((r) => setTimeout(r, 20));
-    expect(fetchMock).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(logger.warn).toHaveBeenCalled());
+
+    const warned = JSON.stringify(logger.warn.mock.calls);
+    expect(warned).toContain("chat:write");
     svc.dispose();
+  });
+
+  // No ts means nothing to edit; appending per stage would flood the channel.
+  it("degrades to post-only when chat.postMessage returns no ts", async () => {
+    const fetchMock = slackOk({ ok: true });
+    const svc = newService(fetchMock, logger);
+    svc.onPipelineStart({ issueNumber: 42, stage: "issue-pickup" });
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+
+    // An intermediate update must not post in post-only mode.
+    svc.onPipelineUpdate({ issueNumber: 42, state: makeState(42) });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    // The terminal state posts once, as a fresh message.
+    svc.onPipelineUpdate({ issueNumber: 42, state: makeState(42, "productive") });
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    expect(methodOf(fetchMock.mock.calls[1])).toBe("chat.postMessage");
+    svc.dispose();
+  });
+
+  it("does not post when disabled, when no token is configured, or with no channel", async () => {
+    for (const [label, bridge, secret] of [
+      ["disabled", slackConfigBridge({ enabled: false }), BOT_TOKEN],
+      ["no channel", slackConfigBridge({ channel: undefined }), BOT_TOKEN],
+      ["no token", slackConfigBridge(), undefined],
+    ] as const) {
+      storedSecret = secret;
+      const fetchMock = slackOk();
+      const svc = newService(fetchMock, logger, bridge);
+      svc.onPipelineStart({ issueNumber: 42, stage: "issue-pickup" });
+      await new Promise((r) => setTimeout(r, 20));
+      expect(fetchMock, label).not.toHaveBeenCalled();
+      svc.dispose();
+      vi.unstubAllGlobals();
+    }
   });
 
   it("falls back to the configured env var when SecretStorage has nothing", async () => {
     storedSecret = undefined;
-    process.env.SLACK_WEBHOOK_URL = WEBHOOK;
-    const stateService = makeStateService(makeState(42));
-    const svc = new SlackService(
-      stateService as never,
-      slackConfigBridge() as never,
-      logger as never
-    );
+    process.env.SLACK_BOT_TOKEN = BOT_TOKEN;
+    const fetchMock = slackOk();
+    const svc = newService(fetchMock, logger);
     svc.onPipelineStart({ issueNumber: 42, stage: "issue-pickup" });
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalled());
-    expect(fetchMock.mock.calls[0][0]).toBe(WEBHOOK);
+    expect(authOf(fetchMock.mock.calls[0])).toBe(`Bearer ${BOT_TOKEN}`);
     svc.dispose();
   });
 
-  // Pasting a Discord webhook into the Slack field must not send pipeline
-  // status to the wrong provider.
-  it("refuses a configured URL that is not a Slack webhook", async () => {
-    storedSecret = "https://discord.com/api/webhooks/123/abc";
-    const stateService = makeStateService(makeState(42));
-    const svc = new SlackService(
-      stateService as never,
-      slackConfigBridge() as never,
-      logger as never
-    );
+  it("refuses a credential that is not a bot token", async () => {
+    storedSecret = "https://hooks.slack.com/services/T0/B0/x";
+    const fetchMock = slackOk();
+    const svc = newService(fetchMock, logger);
     svc.onPipelineStart({ issueNumber: 42, stage: "issue-pickup" });
     await new Promise((r) => setTimeout(r, 20));
     expect(fetchMock).not.toHaveBeenCalled();
@@ -200,14 +236,11 @@ describe("SlackService — delivery", () => {
     svc.dispose();
   });
 
-  it("a POST failure is logged and never thrown into the pipeline", async () => {
-    fetchMock.mockResolvedValue({ ok: false, status: 500 });
-    const stateService = makeStateService(makeState(42));
-    const svc = new SlackService(
-      stateService as never,
-      slackConfigBridge() as never,
-      logger as never
-    );
+  it("a transport failure is logged and never thrown into the pipeline", async () => {
+    const fetchMock = vi.fn(async () => {
+      throw new Error("ECONNREFUSED");
+    });
+    const svc = newService(fetchMock, logger);
     await expect(
       (async () => {
         svc.onPipelineStart({ issueNumber: 42, stage: "issue-pickup" });
@@ -218,15 +251,12 @@ describe("SlackService — delivery", () => {
     svc.dispose();
   }, 10000);
 
-  // The webhook URL IS the credential — no log line may carry it.
-  it("never logs the webhook URL or its token on failure", async () => {
-    fetchMock.mockRejectedValue(new Error(`connect ECONNREFUSED ${WEBHOOK}`));
-    const stateService = makeStateService(makeState(42));
-    const svc = new SlackService(
-      stateService as never,
-      slackConfigBridge() as never,
-      logger as never
-    );
+  // The bot token IS the credential — no log line may carry it.
+  it("never logs the bot token", async () => {
+    const fetchMock = vi.fn(async () => {
+      throw new Error(`request failed with Bearer ${BOT_TOKEN}`);
+    });
+    const svc = newService(fetchMock, logger);
     svc.onPipelineStart({ issueNumber: 42, stage: "issue-pickup" });
     await new Promise((r) => setTimeout(r, 1500));
 
@@ -235,28 +265,7 @@ describe("SlackService — delivery", () => {
       ...logger.info.mock.calls,
       ...logger.error.mock.calls,
     ]);
-    expect(logged).not.toContain(HOOK_TOKEN);
-    expect(logged).not.toContain(WEBHOOK);
+    expect(logged).not.toContain(TOKEN_TAIL);
     svc.dispose();
   }, 10000);
-
-  // Intermediate stage transitions must not each become a channel message —
-  // an incoming webhook cannot edit, so per-stage posts would flood.
-  it("does not post on every stage transition", async () => {
-    const stateService = makeStateService(makeState(42));
-    const svc = new SlackService(
-      stateService as never,
-      slackConfigBridge() as never,
-      logger as never
-    );
-    svc.onPipelineStart({ issueNumber: 42, stage: "issue-pickup" });
-    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
-
-    for (const stage of ["feature-planning", "feature-dev", "feature-validate"]) {
-      svc.onPipelineStart({ issueNumber: 42, stage });
-    }
-    await new Promise((r) => setTimeout(r, 30));
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    svc.dispose();
-  });
 });

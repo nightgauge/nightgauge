@@ -1,35 +1,40 @@
 /**
- * SlackService — pipeline status posts for a Slack channel.
+ * SlackService — live-updating pipeline status posts for Slack.
  *
- * Posts one attachment per pipeline run via a Slack incoming webhook, using the
- * shared renderer (`runAttachment.ts`) so a Slack channel shows exactly what a
- * Discord or Mattermost channel shows for the same run.
+ * Posts a single attachment per pipeline run via `chat.postMessage`, then edits
+ * that message in place via `chat.update` as stages progress — the same
+ * live-updating single message Discord and Mattermost show, built from the same
+ * shared renderer (`runAttachment.ts`) so all three say the same thing.
  *
- * **Incoming webhooks cannot edit a message.** Discord and Mattermost both
- * patch a single post in place as stages progress; Slack's incoming-webhook API
- * has no equivalent (editing needs `chat.update` and a bot token, which is a
- * different auth model and a different feature). So this service does NOT
- * translate every stage transition into a POST — that would flood the channel
- * with a message per stage. Instead:
- *
- *   - `onPipelineStart` posts once, so the channel sees work begin.
- *   - Intermediate state is tracked in memory but not posted.
- *   - The terminal state posts the complete run summary — every stage, cost,
- *     outcome — which is the message an operator actually reads.
- *   - `onPipelineUpdate` posts only when the dispatcher's `NotificationRouter`
- *     routes an event to this notifier. An operator who wants per-stage
- *     granularity opts in with an `events` allowlist on the notifier instance;
- *     the default (no rules) stays at start + terminal.
+ * **Why a bot token rather than an incoming webhook.** An incoming webhook
+ * answers with the literal body `ok` and no message timestamp, so there is
+ * nothing to edit with — a webhook-based notifier can only append messages, and
+ * a per-stage append floods the channel. `chat.postMessage` returns the message
+ * `ts`, which `chat.update` takes. Slack has also deprecated standalone
+ * custom-integration webhooks: an incoming webhook is itself an app feature
+ * now, so a workspace has to create an app either way. Given that, the bot
+ * token is strictly more capable at the same setup cost, and it is the only
+ * path to inbound slash commands later.
  *
  * Configuration (.nightgauge/config.yaml):
  *   notifications:
  *     slack:
  *       enabled: true
- *       webhook_env: SLACK_WEBHOOK_URL
+ *       bot_token_env: SLACK_BOT_TOKEN
+ *       channel: "C0123456789"   # channel id, or "#pipeline"
  *
- * The webhook URL is preferred from VSCode SecretStorage
- * (SECRET_KEYS.slackWebhookUrl); the env var is the CI fallback. The URL is the
- * credential — it is never logged, and every failure path is redacted.
+ * The bot token is preferred from VSCode SecretStorage
+ * (SECRET_KEYS.slackBotToken); the env var is the CI fallback. Required scope
+ * is `chat:write` (plus `chat:write.public` to post to a channel the bot has
+ * not been invited to). The token IS the credential — it is never logged, and
+ * every failure path is redacted.
+ *
+ * Slack reports API-level failures in a 200 response body (`{ok: false, error}`),
+ * not in the HTTP status, so this service inspects the body rather than trusting
+ * `res.ok` — a status-only check would silently treat every rejection as success.
+ * When `chat.postMessage` succeeds but no `ts` comes back, the run degrades to
+ * **post-only**: intermediate edits are suppressed and one terminal-state
+ * message posts at the end, mirroring MattermostService's fallback.
  *
  * @see Issue #1071
  * @see runAttachment — the shared renderer this and MattermostService share
@@ -43,15 +48,23 @@ import { Logger } from "../../utils/logger";
 import { SecretStorageService, SECRET_KEYS } from "../SecretStorageService";
 import type { Notifier, PipelineEventContext } from "./types";
 import { NotifierStatusTracker } from "./NotifierStatusTracker";
-import { FETCH_RETRY_DELAYS, redactSecrets, retryWithBackoff } from "./transport";
+import {
+  DEBOUNCE_MS,
+  DebouncedPatcher,
+  FETCH_RETRY_DELAYS,
+  redactSecrets,
+  retryWithBackoff,
+} from "./transport";
 import {
   buildRunAttachment,
   type AttachmentLimits,
   type PipelineStateSnapshot,
-  type RunAttachment,
 } from "./runAttachment";
 
-// ─── Slack attachment limits ────────────────────────────────────────────────
+// ─── Slack API ──────────────────────────────────────────────────────────────
+
+/** Slack Web API base. Only `chat.postMessage` and `chat.update` are used. */
+export const SLACK_API_BASE = "https://slack.com/api";
 
 /**
  * Slack truncates attachment `text` and per-field `value` at ~3000 chars (below
@@ -64,19 +77,44 @@ const SLACK_LIMITS: AttachmentLimits = {
   maxFields: 20,
 };
 
-/** Slack's incoming-webhook host. Anything else is not a Slack webhook. */
-export const SLACK_WEBHOOK_HOST = "hooks.slack.com";
+/**
+ * Slack API errors that will never succeed on a retry: the token is wrong, the
+ * scope is missing, or the channel is unreachable. Retrying these burns rate
+ * limit and delays the honest log line, so they fail fast.
+ */
+const PERMANENT_SLACK_ERRORS = new Set([
+  "invalid_auth",
+  "account_inactive",
+  "token_revoked",
+  "not_authed",
+  "missing_scope",
+  "channel_not_found",
+  "not_in_channel",
+  "is_archived",
+  "invalid_arguments",
+]);
 
 // ─── Interfaces ─────────────────────────────────────────────────────────────
 
 interface SlackNotificationsConfig {
   enabled?: boolean;
-  webhook_env?: string;
+  bot_token_env?: string;
+  channel?: string;
 }
 
-interface SlackPostBody {
-  attachments: RunAttachment[];
+/** Shape of a `chat.postMessage` / `chat.update` response (fields we read). */
+interface SlackApiResponse {
+  ok: boolean;
+  ts?: string;
+  error?: string;
 }
+
+/**
+ * Edit mode for the run.
+ *   - "edit"      → live in-place edits via `chat.update`.
+ *   - "post-only" → a single terminal-state message, no intermediate edits.
+ */
+type EditMode = "edit" | "post-only";
 
 interface ActiveRun {
   issueNumber: number;
@@ -84,40 +122,40 @@ interface ActiveRun {
   branch: string;
   repoName: string;
   repoSlug?: string;
-  webhookUrl: string;
+  botToken: string;
+  channel: string;
+  /** Slack message timestamp — the edit handle. Empty until the first post. */
+  ts: string;
+  editMode: EditMode;
   startTime: number;
   costUsd: number;
   prUrl?: string;
   stageStartTimes: Map<string, number>;
   isFinal: boolean;
   stateService?: PipelineStateService;
-  /** True once the terminal summary has been posted, so it posts exactly once. */
-  finalPosted: boolean;
+  /** True after the post-id-missing warning has been logged for this run. */
+  fallbackWarned: boolean;
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
 /**
- * True when `url` is a Slack incoming-webhook URL.
+ * True when `token` looks like a Slack bot token.
  *
- * Host-checked rather than prefix-matched so a look-alike host
- * (`hooks.slack.com.evil.test`) is rejected — a substring check would accept
- * it. A Discord or Mattermost webhook pasted into the Slack field is also
- * rejected here rather than producing a confusing 404 at POST time.
+ * Slack bot tokens are `xoxb-` prefixed. Checking the prefix catches the most
+ * common misconfiguration by far — pasting a webhook URL, a user token
+ * (`xoxp-`), or an app-level token (`xapp-`) into the bot-token field — before
+ * it becomes a confusing `invalid_auth` at the first pipeline run.
  */
-export function isSlackWebhookUrl(url: string): boolean {
-  try {
-    const parsed = new URL(url.trim());
-    return parsed.protocol === "https:" && parsed.hostname === SLACK_WEBHOOK_HOST;
-  } catch {
-    return false;
-  }
+export function isSlackBotToken(token: string): boolean {
+  return /^xoxb-\S+$/.test(token.trim());
 }
 
 // ─── SlackService ───────────────────────────────────────────────────────────
 
 export class SlackService implements Notifier, vscode.Disposable {
   private readonly runs = new Map<number, ActiveRun>();
+  private readonly patcher = new DebouncedPatcher();
   private readonly slotDisposables = new Map<number, vscode.Disposable[]>();
   private readonly pendingRepoSlugs = new Map<number, string>();
 
@@ -135,6 +173,10 @@ export class SlackService implements Notifier, vscode.Disposable {
         if (this.slotDisposables.size > 0) return;
         void this.handleStageStart(stage as PipelineStage, issueNumber);
       }),
+      this.pipelineStateService.onStageError(({ issueNumber }) => {
+        if (this.slotDisposables.size > 0) return;
+        this.scheduleUpdate(issueNumber);
+      }),
       this.pipelineStateService.onStateChanged((state) => {
         if (this.slotDisposables.size > 0) return;
         if (state) void this.handleStateChanged(state as unknown as PipelineStateSnapshot);
@@ -149,19 +191,12 @@ export class SlackService implements Notifier, vscode.Disposable {
     void this.handleStageStart(ctx.stage as PipelineStage, ctx.issueNumber);
   }
 
-  /**
-   * Router-gated update. Reaching this method means the dispatcher's routing
-   * rules allowed the event through for this notifier, so it posts — that is
-   * how an operator opts into per-stage granularity.
-   */
   onPipelineUpdate(ctx: PipelineEventContext): void {
     if (ctx.state) {
-      void this.handleStateChanged(ctx.state as unknown as PipelineStateSnapshot, {
-        postIntermediate: true,
-      });
-      return;
+      void this.handleStateChanged(ctx.state as unknown as PipelineStateSnapshot);
+    } else {
+      this.scheduleUpdate(ctx.issueNumber);
     }
-    void this.postCurrentState(ctx.issueNumber);
   }
 
   // ─── Concurrent worktree slot subscription ────────────────────────────────
@@ -178,6 +213,10 @@ export class SlackService implements Notifier, vscode.Disposable {
       slotStateService.onStageStart(({ stage, issueNumber: num }) => {
         if (num !== issueNumber) return;
         void this.handleStageStart(stage as PipelineStage, num, slotStateService);
+      }),
+      slotStateService.onStageError(({ issueNumber: num }) => {
+        if (num !== issueNumber) return;
+        this.scheduleUpdate(num);
       }),
       slotStateService.onStateChanged((state) => {
         if (!state) return;
@@ -206,6 +245,7 @@ export class SlackService implements Notifier, vscode.Disposable {
       for (const s of subs) s.dispose();
     }
     this.slotDisposables.clear();
+    this.patcher.dispose();
     this.runs.clear();
     this.pendingRepoSlugs.clear();
   }
@@ -217,36 +257,31 @@ export class SlackService implements Notifier, vscode.Disposable {
     issueNumber: number,
     stateService?: PipelineStateService
   ): Promise<void> {
-    const effectiveStateService = stateService ?? this.pipelineStateService;
-
-    // A stage that is not the run's first only advances in-memory state; the
-    // channel hears about it in the terminal summary (or via a routed update).
     const existing = this.runs.get(issueNumber);
     if (existing) {
       existing.stageStartTimes.set(stage, Date.now());
       if (stateService) existing.stateService = stateService;
+      this.scheduleUpdate(issueNumber);
       return;
     }
-    if (stage !== "issue-pickup") {
-      // Joined mid-run (e.g. after a restart): still track it so the terminal
-      // summary is complete, but do not claim the run "started" now.
-      await this.startRun(issueNumber, effectiveStateService, stage, { announce: false });
-      return;
-    }
-    await this.startRun(issueNumber, effectiveStateService, stage, { announce: true });
+    await this.startRun(issueNumber, stateService ?? this.pipelineStateService, stage);
   }
 
   private async startRun(
     issueNumber: number,
     stateService: PipelineStateService,
-    stage: PipelineStage,
-    opts: { announce: boolean }
+    stage: PipelineStage
   ): Promise<void> {
     const config = this.getSlackConfig();
     if (!config?.enabled) return;
 
-    const webhookUrl = await this.resolveWebhookUrl(config);
-    if (!webhookUrl) return;
+    const botToken = await this.resolveBotToken(config);
+    if (!botToken) return;
+    const channel = config.channel?.trim();
+    if (!channel) {
+      this.logger.warn("SlackService: notifications.slack.channel is not set — cannot post");
+      return;
+    }
 
     const state = (await stateService.getState()) as unknown as PipelineStateSnapshot | null;
     const repoSlug = this.pendingRepoSlugs.get(issueNumber);
@@ -256,25 +291,47 @@ export class SlackService implements Notifier, vscode.Disposable {
       branch: state?.branch ?? "",
       repoName: repoSlug?.split("/")[1] ?? repoSlug ?? "",
       repoSlug,
-      webhookUrl,
+      botToken,
+      channel,
+      ts: "",
+      editMode: "edit",
       startTime: Date.now(),
       costUsd: state?.tokens?.estimated_cost_usd ?? 0,
       stageStartTimes: new Map([[stage, Date.now()]]),
       isFinal: false,
       stateService,
-      finalPosted: false,
+      fallbackWarned: false,
     };
     this.runs.set(issueNumber, run);
 
-    if (opts.announce && state) {
-      await this.post(run, state);
+    if (!state) return;
+    const attachment = buildRunAttachment(run, state, this.renderContext());
+    const res = await this.call("chat.postMessage", run, {
+      channel: run.channel,
+      text: attachment.fallback ?? `Pipeline #${issueNumber}`,
+      attachments: [attachment],
+    });
+
+    if (!res?.ok) {
+      this.runs.delete(issueNumber);
+      return;
     }
+    if (res.ts) {
+      run.ts = res.ts;
+    } else {
+      // No timestamp came back, so there is nothing to edit. Degrade rather
+      // than append a message per stage.
+      run.editMode = "post-only";
+      run.fallbackWarned = true;
+      this.logger.warn(
+        "SlackService: chat.postMessage returned no ts — downgrading to post-only mode",
+        { issueNumber }
+      );
+    }
+    NotifierStatusTracker.getInstance()?.recordSuccess("slack");
   }
 
-  private async handleStateChanged(
-    state: PipelineStateSnapshot,
-    opts: { postIntermediate?: boolean } = {}
-  ): Promise<void> {
+  private async handleStateChanged(state: PipelineStateSnapshot): Promise<void> {
     const run = this.runs.get(state.issue_number);
     if (!run) return;
 
@@ -286,70 +343,154 @@ export class SlackService implements Notifier, vscode.Disposable {
 
     if (state.outcome_type) {
       run.isFinal = true;
-      if (run.finalPosted) return;
-      run.finalPosted = true;
-      await this.post(run, state);
-      this.runs.delete(state.issue_number);
+      // Terminal state must not sit behind the debounce — cancel any pending
+      // edit and flush now, or the run's last word can be lost to dispose().
+      this.patcher.cancel(state.issue_number);
+      await this.patchMessage(state.issue_number, state);
       return;
     }
-
-    if (opts.postIntermediate) {
-      await this.post(run, state);
-    }
+    this.scheduleUpdate(state.issue_number);
   }
 
-  private async postCurrentState(issueNumber: number): Promise<void> {
+  /** Coalesce bursts of stage events into one edit per DEBOUNCE_MS. */
+  private scheduleUpdate(issueNumber: number): void {
     const run = this.runs.get(issueNumber);
-    if (!run) return;
-    const service = run.stateService ?? this.pipelineStateService;
-    const state = (await service.getState()) as unknown as PipelineStateSnapshot | null;
-    if (!state) return;
-    await this.handleStateChanged(state, { postIntermediate: true });
+    if (!run || run.editMode === "post-only") return;
+    this.patcher.schedule(issueNumber, () => this.patchMessage(issueNumber), DEBOUNCE_MS);
   }
 
   // ─── Delivery ─────────────────────────────────────────────────────────────
 
   /**
-   * POST one attachment to the incoming webhook. Transient failures retry on
-   * the shared backoff schedule; a permanent failure is logged (redacted) and
-   * never thrown — a notifier must not be able to fail a pipeline run.
+   * Edit the run's message in place (or, in post-only mode, post the terminal
+   * summary once). Never throws — a notifier must not be able to fail a run.
    */
-  private async post(run: ActiveRun, state: PipelineStateSnapshot): Promise<void> {
-    const attachment = buildRunAttachment(run, state, {
-      logger: this.logger,
-      limits: SLACK_LIMITS,
-    });
-    const body: SlackPostBody = { attachments: [attachment] };
+  private async patchMessage(
+    issueNumber: number,
+    finalState?: PipelineStateSnapshot
+  ): Promise<void> {
+    const run = this.runs.get(issueNumber);
+    if (!run) return;
 
+    let snapshot = finalState;
+    if (!snapshot) {
+      const service = run.stateService ?? this.pipelineStateService;
+      const state = (await service.getState()) as unknown as PipelineStateSnapshot | null;
+      if (!state) return;
+      snapshot = state;
+    }
+
+    const attachment = buildRunAttachment(run, snapshot, this.renderContext());
+    const text = attachment.fallback ?? `Pipeline #${issueNumber}`;
+
+    // post-only: nothing to edit, so only the terminal summary is worth sending.
+    if (run.editMode === "post-only") {
+      if (!run.isFinal) return;
+      await this.call("chat.postMessage", run, {
+        channel: run.channel,
+        text,
+        attachments: [attachment],
+      });
+      this.runs.delete(issueNumber);
+      return;
+    }
+
+    if (!run.ts) return;
+    const res = await this.call("chat.update", run, {
+      channel: run.channel,
+      ts: run.ts,
+      text,
+      attachments: [attachment],
+    });
+    if (res?.ok) NotifierStatusTracker.getInstance()?.recordSuccess("slack");
+    if (run.isFinal) this.runs.delete(issueNumber);
+  }
+
+  /**
+   * Call a Slack Web API method with the run's bot token.
+   *
+   * Slack signals API failures in a 200 body (`{ok: false, error: "..."}`), so
+   * the body is inspected rather than the HTTP status — checking only `res.ok`
+   * would report every rejection as a success. Transport and 5xx/429 failures
+   * retry on the shared backoff; a permanent API error (bad token, missing
+   * scope, unknown channel) fails fast. Returns null on failure.
+   */
+  private async call(
+    method: "chat.postMessage" | "chat.update",
+    run: ActiveRun,
+    payload: Record<string, unknown>
+  ): Promise<SlackApiResponse | null> {
     try {
-      await retryWithBackoff(
+      const res = await retryWithBackoff(
         async () => {
-          const res = await fetch(run.webhookUrl, {
+          const r = await fetch(`${SLACK_API_BASE}/${method}`, {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(body),
+            headers: {
+              "Content-Type": "application/json; charset=utf-8",
+              Authorization: `Bearer ${run.botToken}`,
+            },
+            body: JSON.stringify(payload),
           });
-          if (!res.ok) throw new Error(`HTTP ${res.status}`);
-          return res;
+          if (!r.ok) throw new Error(`HTTP ${r.status}`);
+          return r;
         },
         {
           delays: FETCH_RETRY_DELAYS,
           logger: this.logger,
           label: "SlackService",
-          sanitizedUrl: `https://${SLACK_WEBHOOK_HOST}/services/[redacted]`,
+          sanitizedUrl: `${SLACK_API_BASE}/${method}`,
         }
       );
-      NotifierStatusTracker.getInstance()?.recordSuccess("slack");
+
+      const body = (await res.json()) as SlackApiResponse;
+      if (body.ok) return body;
+
+      const error = body.error ?? "unknown_error";
+      const permanent = PERMANENT_SLACK_ERRORS.has(error);
+      this.logger.warn("SlackService: Slack API rejected the request", {
+        issueNumber: run.issueNumber,
+        method,
+        error,
+        permanent,
+        hint: permanent ? this.hintFor(error) : undefined,
+      });
+      NotifierStatusTracker.getInstance()?.recordError("slack", error);
+      return null;
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);
-      // redactSecrets strips webhook URLs and xox* tokens; the URL is never
-      // interpolated into this message in the first place.
-      this.logger.warn("SlackService: failed to post pipeline status", {
+      this.logger.warn("SlackService: failed to reach the Slack API", {
         issueNumber: run.issueNumber,
+        method,
         detail: redactSecrets(detail),
       });
       NotifierStatusTracker.getInstance()?.recordError("slack", redactSecrets(detail));
+      return null;
     }
+  }
+
+  /** Turn an opaque Slack error code into the action that actually fixes it. */
+  private hintFor(error: string): string {
+    switch (error) {
+      case "missing_scope":
+        return "the bot token needs the chat:write scope (chat:write.public to post without being invited)";
+      case "not_in_channel":
+        return "invite the bot to the channel, or grant chat:write.public";
+      case "channel_not_found":
+        return "check notifications.slack.channel — use the channel id, and confirm the bot can see it";
+      case "invalid_auth":
+      case "not_authed":
+      case "token_revoked":
+      case "account_inactive":
+        return "the bot token is invalid or revoked — reconfigure it";
+      case "is_archived":
+        return "the target channel is archived";
+      default:
+        return "see Slack's chat.postMessage error reference";
+    }
+  }
+
+  private renderContext() {
+    return { logger: this.logger, limits: SLACK_LIMITS };
   }
 
   // ─── Config & secret resolution ───────────────────────────────────────────
@@ -365,18 +506,18 @@ export class SlackService implements Notifier, vscode.Disposable {
   }
 
   /**
-   * Resolve the webhook URL: SecretStorage first (the interactive path), env
-   * var second (CI). A value that is not a Slack webhook URL is rejected with a
-   * warning rather than POSTed to — pasting a Discord webhook here would
-   * otherwise send pipeline status to the wrong provider.
+   * Resolve the bot token: SecretStorage first (the interactive path), env var
+   * second (CI). A value that is not a bot token is rejected with a warning
+   * rather than sent — pasting a webhook URL or a user token here would
+   * otherwise surface as an opaque `invalid_auth` at the first pipeline run.
    */
-  private async resolveWebhookUrl(config: SlackNotificationsConfig): Promise<string | null> {
+  private async resolveBotToken(config: SlackNotificationsConfig): Promise<string | null> {
     const secretService = SecretStorageService.getInstance();
     if (secretService) {
-      const stored = await secretService.getSecret(SECRET_KEYS.slackWebhookUrl);
+      const stored = await secretService.getSecret(SECRET_KEYS.slackBotToken);
       if (stored) return this.validated(stored, "SecretStorage");
     }
-    const envName = config.webhook_env;
+    const envName = config.bot_token_env;
     if (envName) {
       const fromEnv = process.env[envName];
       if (fromEnv) return this.validated(fromEnv, `env ${envName}`);
@@ -384,14 +525,14 @@ export class SlackService implements Notifier, vscode.Disposable {
     return null;
   }
 
-  private validated(url: string, source: string): string | null {
-    if (!isSlackWebhookUrl(url)) {
-      this.logger.warn("SlackService: configured webhook URL is not a Slack webhook — ignoring", {
-        source,
-        expectedHost: SLACK_WEBHOOK_HOST,
-      });
+  private validated(token: string, source: string): string | null {
+    if (!isSlackBotToken(token)) {
+      this.logger.warn(
+        "SlackService: configured credential is not a Slack bot token (expected an xoxb- token) — ignoring",
+        { source }
+      );
       return null;
     }
-    return url.trim();
+    return token.trim();
   }
 }

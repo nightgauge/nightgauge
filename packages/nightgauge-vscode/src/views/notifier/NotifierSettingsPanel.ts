@@ -32,7 +32,7 @@ const CONNECTED_WINDOW_MS = 15 * 60 * 1000;
 const WEBHOOK_SECRET_KEY: Record<NotifierProvider, string> = {
   discord: SECRET_KEYS.discordWebhookUrl,
   mattermost: SECRET_KEYS.mattermostWebhookUrl,
-  slack: SECRET_KEYS.slackWebhookUrl,
+  slack: SECRET_KEYS.slackBotToken,
 };
 
 export class NotifierSettingsPanel implements vscode.Disposable {
