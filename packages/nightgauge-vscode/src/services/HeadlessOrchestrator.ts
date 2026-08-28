@@ -9135,8 +9135,10 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     // Non-critical: never blocks pipeline start.
     // ===================================================================
     try {
+      // #1057: same root drift as the self-check call — reading the worktree
+      // silently disabled every health-gated policy on concurrent slots.
       const { policies } = await HealthActionService.evaluateWithPolicies(
-        this.getWorkingDirectory(),
+        this.getPersistentRoot(),
         this.logger
       );
       if (policies.tier !== "none") {
@@ -11316,8 +11318,14 @@ export class HeadlessOrchestrator implements vscode.Disposable {
 
       // Health evaluation and self-check summary (Issue #1045)
       try {
+        // #1057: the persistent root, not the worktree. health-history.jsonl
+        // is written only to the main workspace, and `.nightgauge/.gitignore`
+        // ignores `pipeline/*`, so a worktree slot never has the file and the
+        // reader returned [] on every run — forever. Same root-drift class as
+        // #1017/#1045, and it matches the PostPipelineAnalyzer.analyze call
+        // immediately above.
         const healthEval = await HealthActionService.evaluate(
-          this.getWorkingDirectory(),
+          this.getPersistentRoot(),
           this.logger
         );
 
@@ -11356,7 +11364,10 @@ export class HeadlessOrchestrator implements vscode.Disposable {
           // The historical average genuinely is not computed here, and
           // formatSelfCheck documents 0 as "unknown" and guards every use of it
           // — so this zero is honest, unlike the cost one above.
-          0
+          0,
+          // #1057: the run's own outcome. Without it the panel reported "No
+          // anomalies detected" on the same run whose stage had just failed.
+          failedStage
         );
         this.logger.info(selfCheck);
       } catch (err) {

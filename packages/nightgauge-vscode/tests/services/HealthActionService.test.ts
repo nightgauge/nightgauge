@@ -12,7 +12,7 @@
  * - Trend detection: declining (recent 3-run avg < prior 7-run avg by >10%)
  * - Trend detection: stable (change < 10%)
  * - Config: health_actions_enabled: false returns empty actions
- * - Missing history: returns score 100, stable, no actions
+ * - Missing history: returns null (#1057 — no data is not excellent health)
  * - Exception propagation: returns null when evaluate throws
  *
  * @see Issue #1045 - Health-gated tier actions and learning system monitoring
@@ -449,16 +449,17 @@ describe("HealthActionService", () => {
   // ===========================================================================
 
   describe("missing health history", () => {
-    it("returns score 100, excellent, stable, and no actions when no snapshots exist", async () => {
+    // #1057: this previously asserted a fabricated score of 100 for an empty
+    // history, which is the assertion that made the defect look like a feature.
+    // A run that failed its post-condition gate printed
+    // "Health: 100 (=) — Excellent", and the 100 was published onward to the
+    // meta/notifier surfaces. An absent history means unknown, not perfect.
+    it("returns null when no snapshots exist — absence is not excellent health", async () => {
       mockReadAll.mockResolvedValue([]);
 
       const result = await HealthActionService.evaluate(workspaceRoot, logger as any);
 
-      expect(result).not.toBeNull();
-      expect(result!.score).toBe(100);
-      expect(result!.status).toBe("excellent");
-      expect(result!.trend).toBe("stable");
-      expect(result!.actions).toHaveLength(0);
+      expect(result).toBeNull();
     });
   });
 

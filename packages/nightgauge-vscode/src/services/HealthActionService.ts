@@ -58,12 +58,13 @@ export class HealthActionService {
       const snapshots = await HealthScoreHistoryReader.readAll(workspaceRoot);
 
       if (snapshots.length === 0) {
-        return {
-          score: 100,
-          status: "excellent",
-          trend: "stable",
-          actions: [],
-        };
+        // No data is not excellent health (#1057). Fabricating a perfect score
+        // for an empty history made a failed run print "Health: 100 (=) —
+        // Excellent", and published that 100 onward to the meta/notifier
+        // surfaces. `formatSelfCheck` already renders `Health: N/A` for a null
+        // evaluation and every caller null-guards, so absence now reads as
+        // absence.
+        return null;
       }
 
       // Get latest score
