@@ -12076,20 +12076,17 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     this.currentStage = stage;
     const startTime = Date.now();
 
-    // Resolve model for observability logging (Issue #2340).
-    // The actual --model flag is set inside runStageSkillHeadless via the same
-    // resolveModel() call, so this is read-only — no behavioral change.
-    const effectiveWorkspace = pinnedWorkspaceRoot ?? this.getWorkingDirectory();
-    const modelPreview = modelOverride
-      ? { model: modelOverride, source: modelOverrideSource ?? "override" }
-      : resolveModel(stage, effectiveWorkspace, undefined, issueNumber);
-    this.logger.info("Starting stage", {
-      stage,
-      issueNumber,
-      model: modelPreview.model,
-      modelSource: modelPreview.source,
-      effort: "effort" in modelPreview ? modelPreview.effort : undefined,
-    });
+    // The "Starting stage" line is emitted from onModelResolved below, by the
+    // dispatch that actually made the decision (#1016).
+    //
+    // It used to be emitted here from a SECOND resolveModel() call, and the
+    // comment claimed it was "the same resolveModel() call" as the dispatch's.
+    // It was not: the real one passes the issue metadata, this one passed
+    // undefined — and `source: "auto"` is only reachable inside `if
+    // (issueMetadata)`. So on every run the AutoModelSelector decided — the
+    // default for feature-planning and feature-dev — the preview reported
+    // "default" while the dispatch used "auto". One decision, described twice,
+    // by a writer that lacked the inputs to describe it.
 
     // VALIDATE BEFORE RUNNING
     if (this.stateService) {
@@ -13477,7 +13474,18 @@ export class HeadlessOrchestrator implements vscode.Disposable {
           onStallWarningClear: () => {
             this.eventDispatcher.onStallWarningClear(stage);
           },
-          onModelResolved: (_resolvedStage, model, adapter) => {
+          onModelResolved: (_resolvedStage, model, adapter, source) => {
+            // The ONE writer of the dispatch's model decision (#1016). It fires
+            // after the adapter branches have finished resolving, so `source`
+            // here is what the run actually used — not a prediction of it.
+            this.logger.info("Starting stage", {
+              stage,
+              issueNumber,
+              model,
+              modelSource: source,
+              adapter,
+            });
+
             // Record the resolved model up-front (#367) so a stage killed
             // before completeStage/failStage still attributes its true model
             // instead of 'unknown'. Fire-and-forget: telemetry must never
