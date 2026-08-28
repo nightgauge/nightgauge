@@ -450,33 +450,41 @@ const DefaultShipNotifyWebhookEnv = "NIGHTGAUGE_SHIP_NOTIFY_WEBHOOK"
 // notification when none is configured. It is only displayed, never run.
 const DefaultDeployCommand = "gh workflow run deploy-stores.yml -f platforms=all"
 
-// AlertsConfig configures where Go-side alerts are delivered (#1072).
-//
-// Each Discord alert already resolves its own webhook (ready_to_ship, stuck
-// epics, release-watch), because those predate a shared sink and each has its
-// own enable/disable semantics. Slack has exactly ONE source for all of them —
-// this block — so an operator configures the Slack destination once and every
-// Go-side alert reaches it, rather than exporting a variable per alert.
-type AlertsConfig struct {
-	// SlackWebhookEnv names the environment variable holding the Slack incoming
-	// webhook URL. Empty = DefaultAlertsSlackWebhookEnv. The secret stays in the
-	// environment, never in config.yaml.
-	SlackWebhookEnv string `yaml:"slack_webhook_env,omitempty" json:"slackWebhookEnv,omitempty"`
+// DefaultSlackBotTokenEnv is the env var consulted for the Slack bot token
+// when notifications.slack.bot_token_env is not set. Matches the extension's
+// documented default so one export serves both halves.
+const DefaultSlackBotTokenEnv = "SLACK_BOT_TOKEN"
+
+// SlackBotTokenEnv returns the environment variable name holding the Slack bot
+// token. It is the single resolver for that name — call sites must not read an
+// env var directly. A nil receiver returns the default, so a caller whose
+// config failed to load still behaves sanely.
+func (c *Config) SlackBotTokenEnv() string {
+	if c != nil && c.Notifications != nil && c.Notifications.Slack != nil {
+		if v := strings.TrimSpace(c.Notifications.Slack.BotTokenEnv); v != "" {
+			return v
+		}
+	}
+	return DefaultSlackBotTokenEnv
 }
 
-// DefaultAlertsSlackWebhookEnv is the env var consulted for the Slack incoming
-// webhook URL used by every Go-side alert when none is configured.
-const DefaultAlertsSlackWebhookEnv = "NIGHTGAUGE_SLACK_WEBHOOK"
-
-// SlackAlertWebhookEnv returns the environment variable name that holds the
-// Slack webhook URL for Go-side alerts. It is the single resolver for that
-// name — call sites must not read an env var directly. A nil receiver returns
-// the default, so a caller whose config failed to load still behaves sanely.
-func (c *Config) SlackAlertWebhookEnv() string {
-	if c != nil && c.Alerts != nil && strings.TrimSpace(c.Alerts.SlackWebhookEnv) != "" {
-		return strings.TrimSpace(c.Alerts.SlackWebhookEnv)
+// SlackChannel returns the channel Go-side alerts post into — the same channel
+// the extension posts pipeline status to.
+func (c *Config) SlackChannel() string {
+	if c == nil || c.Notifications == nil || c.Notifications.Slack == nil {
+		return ""
 	}
-	return DefaultAlertsSlackWebhookEnv
+	return strings.TrimSpace(c.Notifications.Slack.Channel)
+}
+
+// SlackAlertsEnabled reports whether Go-side alerts should reach Slack.
+// Absent block or absent flag = disabled, so an existing config is unaffected
+// by the addition of this feature.
+func (c *Config) SlackAlertsEnabled() bool {
+	if c == nil || c.Notifications == nil || c.Notifications.Slack == nil {
+		return false
+	}
+	return c.Notifications.Slack.Enabled != nil && *c.Notifications.Slack.Enabled
 }
 
 // ValidateAutonomousConfig checks autonomous config constraints that cannot be
@@ -758,9 +766,6 @@ type Config struct {
 	// ReadyToShip configures the post-epic "ready to ship" notification (#4076).
 	ReadyToShip *ReadyToShipConfig `json:"readyToShip,omitempty" yaml:"ready_to_ship,omitempty"`
 
-	// Alerts configures the shared Slack destination for Go-side alerts (#1072).
-	Alerts *AlertsConfig `json:"alerts,omitempty" yaml:"alerts,omitempty"`
-
 	// SizeToEstimate maps size label values (lowercase) to story-point estimates.
 	// Configurable under project.size_to_estimate in config.yaml.
 	// Default: XS=1, S=2, M=3, L=5, XL=8.
@@ -877,6 +882,25 @@ type UserMappingEntry struct {
 // (Discord, Slack, Mattermost) live in the TS extension config.
 type NotificationsConfig struct {
 	Inbound *InboundConfig `json:"inbound,omitempty" yaml:"inbound,omitempty"`
+	// Slack is the OUTBOUND Slack destination, shared with the VSCode
+	// extension: both halves of the integration read this one block, so a
+	// workspace configures a single credential and channel (#1089).
+	Slack *SlackNotificationsConfig `json:"slack,omitempty" yaml:"slack,omitempty"`
+}
+
+// SlackNotificationsConfig is the outbound Slack destination. It is the same
+// shape the extension's config schema defines, deliberately: the Go binary and
+// the extension post to the same channel with the same bot token.
+type SlackNotificationsConfig struct {
+	// Enabled gates Slack delivery for Go-side alerts. Nil/unset = disabled,
+	// so an existing config without this block is unaffected.
+	Enabled *bool `json:"enabled,omitempty" yaml:"enabled,omitempty"`
+	// BotTokenEnv names the environment variable holding the bot token
+	// (xoxb-…). Empty = DefaultSlackBotTokenEnv. The secret stays in the
+	// environment, never in config.yaml.
+	BotTokenEnv string `json:"bot_token_env,omitempty" yaml:"bot_token_env,omitempty"`
+	// Channel is the target channel id (preferred) or #name.
+	Channel string `json:"channel,omitempty" yaml:"channel,omitempty"`
 }
 
 // InboundConfig configures the in-binary HTTP receiver that accepts
@@ -1627,7 +1651,6 @@ type yamlConfigNested struct {
 	AgentTeams       *AgentTeamsConfig            `yaml:"agent_teams,omitempty"`
 	Autonomous       *AutonomousConfig            `yaml:"autonomous,omitempty"`
 	ReadyToShip      *ReadyToShipConfig           `yaml:"ready_to_ship,omitempty"`
-	Alerts           *AlertsConfig                `yaml:"alerts,omitempty"`
 	SizeToEstimate   map[string]float64           `yaml:"size_to_estimate,omitempty"`
 	Knowledge        *KnowledgeConfig             `yaml:"knowledge,omitempty"`
 	PipelineExecutor *PipelineExecutorConfig      `yaml:"pipeline_executor,omitempty"`
@@ -1665,7 +1688,6 @@ type yamlConfigFlat struct {
 	AgentTeams       *AgentTeamsConfig            `yaml:"agent_teams,omitempty"`
 	Autonomous       *AutonomousConfig            `yaml:"autonomous,omitempty"`
 	ReadyToShip      *ReadyToShipConfig           `yaml:"ready_to_ship,omitempty"`
-	Alerts           *AlertsConfig                `yaml:"alerts,omitempty"`
 	SizeToEstimate   map[string]float64           `yaml:"size_to_estimate,omitempty"`
 	Knowledge        *KnowledgeConfig             `yaml:"knowledge,omitempty"`
 	PipelineExecutor *PipelineExecutorConfig      `yaml:"pipeline_executor,omitempty"`
@@ -1843,7 +1865,6 @@ func parseYAMLNested(data []byte) (*Config, error) {
 	cfg.AgentTeams = nested.AgentTeams
 	cfg.Autonomous = nested.Autonomous
 	cfg.ReadyToShip = nested.ReadyToShip
-	cfg.Alerts = nested.Alerts
 	cfg.Knowledge = nested.Knowledge
 	cfg.PipelineExecutor = nested.PipelineExecutor
 	cfg.Pipeline = nested.Pipeline
@@ -1948,7 +1969,6 @@ func parseYAMLFlat(data []byte) (*Config, error) {
 	cfg.AgentTeams = flat.AgentTeams
 	cfg.Autonomous = flat.Autonomous
 	cfg.ReadyToShip = flat.ReadyToShip
-	cfg.Alerts = flat.Alerts
 	cfg.Knowledge = flat.Knowledge
 	cfg.PipelineExecutor = flat.PipelineExecutor
 	cfg.Pipeline = flat.Pipeline

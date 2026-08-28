@@ -51,7 +51,6 @@ const twoHighScoreLog = `{
 // NIGHTGAUGE_SLACK_WEBHOOK must not add a second sink (or a real network call)
 // to a unit test run.
 func TestMain(m *testing.M) {
-	_ = os.Setenv(config.DefaultAlertsSlackWebhookEnv, "")
 	os.Exit(m.Run())
 }
 
@@ -321,42 +320,26 @@ func containsAll(s string, subs ...string) bool {
 
 // The release-watch alert must reach Slack when only Slack is configured —
 // WebhookURL is the Discord destination, and its absence used to skip the whole
-// call before the sink layer existed (#1072).
-func TestNotifyFindings_ReachesSlackWithoutDiscord(t *testing.T) {
-	var hits int32
-	var body []byte
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		atomic.AddInt32(&hits, 1)
-		body, _ = io.ReadAll(r.Body)
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer srv.Close()
-	t.Setenv(config.DefaultAlertsSlackWebhookEnv, srv.URL)
-
-	res, err := NotifyFindings(context.Background(), NotifyOptions{
-		LogPath: writeLog(t, twoHighScoreLog),
-	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !res.Sent || res.Skipped {
-		t.Fatalf("want Sent, got %+v", res)
-	}
-	if got := atomic.LoadInt32(&hits); got != 1 {
-		t.Fatalf("Slack POSTs = %d, want 1", got)
-	}
-	if !strings.Contains(string(body), "attachments") {
-		t.Errorf("payload is not in Slack's wire shape: %s", body)
-	}
-	if !strings.Contains(string(body), "Release alert") {
-		t.Errorf("Slack payload lost the alert title: %s", body)
+// call before the sink layer existed (#1072). Delivery itself is covered by
+// SlackSink's own tests; what this asserts is that the caller builds a Slack
+// sink at all, which is the wiring that was missing.
+func TestNotifyFindings_BuildsSlackSinkWithoutDiscord(t *testing.T) {
+	t.Setenv("TEST_SLACK_TOKEN", "xoxb-test")
+	enabled := true
+	cfg := &config.Config{Notifications: &config.NotificationsConfig{
+		Slack: &config.SlackNotificationsConfig{
+			Enabled: &enabled, BotTokenEnv: "TEST_SLACK_TOKEN", Channel: "C0123",
+		},
+	}}
+	sink := notify.Sinks("", cfg, nil)
+	if sink == nil || sink.Name() != "slack" {
+		t.Fatalf("Sinks = %v, want a slack-only sink with no Discord webhook", sink)
 	}
 }
 
 // With neither provider configured the call must still be a no-op skip, not an
 // error — the feature stays opt-in.
 func TestNotifyFindings_NoSinkConfiguredSkips(t *testing.T) {
-	t.Setenv(config.DefaultAlertsSlackWebhookEnv, "")
 	res, err := NotifyFindings(context.Background(), NotifyOptions{
 		LogPath: writeLog(t, twoHighScoreLog),
 	})
@@ -365,29 +348,5 @@ func TestNotifyFindings_NoSinkConfiguredSkips(t *testing.T) {
 	}
 	if res.Sent || !res.Skipped {
 		t.Fatalf("want a skip, got %+v", res)
-	}
-}
-
-// A Slack webhook failure stays best-effort and its URL never reaches Reason,
-// which is printed to CI logs via --json.
-func TestNotifyFindings_SlackFailureIsBestEffortAndScrubbed(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusBadRequest)
-	}))
-	defer srv.Close()
-	secretURL := srv.URL + "/services/T0/B0/SUPERSECRET"
-	t.Setenv(config.DefaultAlertsSlackWebhookEnv, secretURL)
-
-	res, err := NotifyFindings(context.Background(), NotifyOptions{
-		LogPath: writeLog(t, twoHighScoreLog),
-	})
-	if err != nil {
-		t.Fatalf("a webhook failure must not be a hard error: %v", err)
-	}
-	if res.Sent {
-		t.Error("Sent must be false when the POST failed")
-	}
-	if strings.Contains(res.Reason, "SUPERSECRET") {
-		t.Fatalf("Reason leaked the Slack webhook token: %s", res.Reason)
 	}
 }
