@@ -593,9 +593,9 @@ forbidden_tokens:
 # shipping the sweep before the guard, which is the ordering that let the
 # problem accumulate.
 #
-# CEILING: high_water_mark + slack. `slack` covers numbers this repository
-# issues while a pull request is open, so a reference to an issue filed after
-# the mark was last recorded is not rejected.
+# CEILING: the derived mark + slack. `slack` covers numbers this repository
+# issues while a pull request is open, which the mark cannot see because it is
+# read from what has already MERGED.
 #
 # THE MARK IS DERIVED, NOT RECORDED (#1078). GitHub appends `(#N)` to the
 # subject when it squash-merges a pull request, so the TRAILING marker on the
@@ -665,8 +665,15 @@ issue_references:
   # it now tracks the newest merged number automatically. This is the last
   # re-measure that follows a manual bump; from here the count moves only when
   # references are actually written or retired.
+  # 2026-08-28 (#1078, same day): 5,796 — and this fall is NOT progress. The
+  # mark now rises on its own, so references stop being counted here the moment
+  # the repository issues a number past them. They were not fixed; they crossed
+  # the ceiling and became live links to unrelated work, which is the exact
+  # hazard the rule exists to prevent. A falling count is therefore ambiguous:
+  # part sweep, part erosion. Tracked separately — do not read this number as a
+  # measure of the sweep on its own.
   # NEVER raise this number. Lower it as the sweep progresses.
-  tree_baseline: 5801
+  tree_baseline: 5796
   allow_paths:
     # Files that DEFINE or TEST the rule must contain example violations.
     - ".github/publication-boundary.yaml"
