@@ -31,9 +31,14 @@ done
 #    pipeline without needing the nightgauge source repo.
 SKILLS_DIR="$DIST/skills"
 SHARED_DIR="$REPO_ROOT/skills/_shared"
+# Every key in the Go binary's skillrender.StageSkillDirs must appear here:
+# a skill the binary can name but the VSIX does not ship resolves in the
+# nightgauge source tree and nowhere else (#1029). Pinned by
+# TestBundleShipsEverySkillTheGoDirectPathRenders.
 for skill in nightgauge-issue-pickup nightgauge-feature-planning \
              nightgauge-feature-dev nightgauge-feature-validate \
-             nightgauge-pr-create nightgauge-pr-merge; do
+             nightgauge-pr-create nightgauge-pr-merge \
+             nightgauge-issue-refine; do
   src="$REPO_ROOT/skills/$skill"
   if [ -d "$src" ]; then
     dest="$SKILLS_DIR/$skill"
