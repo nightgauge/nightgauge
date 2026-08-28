@@ -70,13 +70,17 @@ function deriveAggregate(criteria: ReconciledCriterion[]): {
   }
 
   if (counts.undetectable === total) {
+    // Focus EVERY criterion, mirroring the Go deriveAggregate exactly (#1011).
+    // "None of these could be evaluated" is the maximum-uncertainty case: no
+    // evidence any is done, so all are in scope. An empty list read to the
+    // planner as "nothing needs attention" — indistinguishable from
+    // all-satisfied, the one state that legitimately focuses nothing.
     return {
       status: "undetectable",
       route: {
         approach: "standard",
-        focus_acs: [],
-        rationale:
-          "No acceptance criteria could be deterministically evaluated — proceed with the standard plan",
+        focus_acs: criteria.map((c) => c.index),
+        rationale: `${total} criterion/criteria found, none deterministically evaluable — plan against all ${total}`,
       },
     };
   }

@@ -31,7 +31,8 @@ export type ContextFileType =
   | "running"
   | "batch"
   | "planning-batch"
-  | "dev-batch";
+  | "dev-batch"
+  | "ac-reconcile";
 
 /**
  * Configuration precedence for merged config loading
@@ -255,6 +256,8 @@ export class RepositoryContextLoader implements vscode.Disposable {
         return path.join(contextDir, `planning-batch-${issueNumber}.json`);
       case "dev-batch":
         return path.join(contextDir, `dev-batch-${issueNumber}.json`);
+      case "ac-reconcile":
+        return path.join(contextDir, `ac-reconcile-${issueNumber}.json`);
       default:
         throw new Error(`Unknown context file type: ${type}`);
     }

@@ -305,6 +305,116 @@ describe("ContextAssembler.validateStageContextOutput", () => {
     expect(result.error).toBeNull();
     expect(waitSpy).toHaveBeenCalledTimes(2);
   });
+
+  // -------------------------------------------------------------------------
+  // #1011 — the orchestrator, not the model, writes planning.ac_reconcile
+  // -------------------------------------------------------------------------
+
+  /** The exact 7-field report `nightgauge preflight ac-reconcile` emits. */
+  const AC_REPORT = {
+    schema_version: "1.0",
+    issue_number: 228,
+    main_sha: "9f8e7d6c5b4a",
+    evaluated_at: "2026-08-27T00:05:41Z",
+    acceptance_criteria: [
+      { index: 0, text: "a", rule_applied: null, classification: "undetectable", evidence: [] },
+      { index: 1, text: "b", rule_applied: null, classification: "undetectable", evidence: [] },
+      { index: 2, text: "c", rule_applied: null, classification: "undetectable", evidence: [] },
+    ],
+    aggregate_status: "undetectable",
+    suggested_route: { approach: "standard", focus_acs: [0, 1, 2], rationale: "…" },
+  };
+
+  /**
+   * The truncated block the model actually wrote on the live run: the three
+   * scalars the shell phase echoes, and none of the three the schema requires.
+   */
+  const TRUNCATED_PLANNING = {
+    schema_version: "1.1",
+    issue_number: 228,
+    plan_file: ".nightgauge/plans/228-test.md",
+    approach: "standard",
+    files_to_create: [],
+    files_to_modify: ["src/test.ts"],
+    created_at: "2026-01-01T00:00:00Z",
+    ac_reconcile: {
+      schema_version: "1.0",
+      issue_number: 228,
+      aggregate_status: "undetectable",
+      suggested_route: { approach: "standard", focus_acs: [], rationale: "…" },
+    },
+  };
+
+  function routeReads(reportExists: boolean) {
+    mockExistsSync.mockImplementation((p) => {
+      if (String(p).includes("ac-reconcile-228.json")) return reportExists;
+      return true;
+    });
+    mockReadFileSync.mockImplementation((p) => {
+      if (String(p).includes("ac-reconcile-228.json")) return JSON.stringify(AC_REPORT) as any;
+      return JSON.stringify(TRUNCATED_PLANNING) as any;
+    });
+  }
+
+  function lastPlanningWrite(): Record<string, unknown> {
+    const writes = vi.mocked(fs.writeFileSync).mock.calls;
+    const planning = writes.filter((c) => String(c[0]).includes("planning-228.json"));
+    expect(planning.length, "the spliced context should have been written back").toBeGreaterThan(0);
+    return JSON.parse(String(planning[planning.length - 1][1]));
+  }
+
+  it("splices the whole ac-reconcile report over the model's truncated block (#1011)", async () => {
+    const assembler = makeAssembler("/workspace");
+    routeReads(true);
+
+    const result = await assembler.validateStageContextOutput("feature-planning", 228);
+    expect(result.error).toBeNull();
+
+    const written = lastPlanningWrite();
+    const spliced = written.ac_reconcile as Record<string, unknown>;
+
+    // The three fields the model dropped, which are the three the schema
+    // requires — this is the whole defect.
+    expect(spliced.acceptance_criteria).toHaveLength(3);
+    expect(spliced.main_sha).toBe("9f8e7d6c5b4a");
+    expect(spliced.evaluated_at).toBe("2026-08-27T00:05:41Z");
+
+    // The report wins outright — no merge, no "keep the richer of the two".
+    expect((spliced.suggested_route as Record<string, unknown>).focus_acs).toEqual([0, 1, 2]);
+  });
+
+  it("writes null rather than a partial block when the report is missing", async () => {
+    const assembler = makeAssembler("/workspace");
+    routeReads(false);
+
+    await assembler.validateStageContextOutput("feature-planning", 228);
+
+    // A partial block is the defect being fixed; producing one here would
+    // reintroduce it from the other side.
+    expect(lastPlanningWrite().ac_reconcile).toBeNull();
+  });
+
+  it("leaves other stages' context untouched", async () => {
+    const assembler = makeAssembler("/workspace");
+    mockExistsSync.mockReturnValue(true);
+    mockReadFileSync.mockReturnValue(
+      JSON.stringify({
+        schema_version: "1.0",
+        issue_number: 228,
+        pr_number: 1,
+        pr_url: "https://example.test/1",
+        title: "t",
+        base_branch: "main",
+        status: "open",
+        created_at: "2026-01-01T00:00:00Z",
+      }) as any
+    );
+
+    await assembler.validateStageContextOutput("pr-create", 228);
+
+    const writes = vi.mocked(fs.writeFileSync).mock.calls;
+    expect(writes.filter((c) => String(c[0]).includes("pr-228.json"))).toHaveLength(0);
+  });
 });
 
 // ---------------------------------------------------------------------------

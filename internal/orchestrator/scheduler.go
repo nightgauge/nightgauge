@@ -3196,7 +3196,63 @@ func validateStageOutput(stage state.PipelineStage, workspaceRoot string, issueN
 	if _, statErr := os.Stat(outputFile); os.IsNotExist(statErr) {
 		return fmt.Errorf("stage %s exited 0 but did not write expected output context: %s", stage, outputFile)
 	}
+	if stage == state.StageFeaturePlanning {
+		spliceACReconcile(workspaceRoot, issueNumber, outputFile)
+	}
 	return nil
+}
+
+// spliceACReconcile overwrites planning-{N}.json's `ac_reconcile` field with the
+// verbatim contents of ac-reconcile-{N}.json (#1011).
+//
+// This is the Go-path twin of ContextAssembler.spliceACReconcile. Both exist
+// because the two dispatch paths share no post-stage step: the extension
+// validates the planning context against a Zod schema and can splice there, and
+// this path has no schema in the loop at all — validateStageOutput otherwise
+// only stats the file and never opens it. Fixing one and not the other would
+// leave `nightgauge run <issue>` producing exactly the truncated handoff the
+// extension no longer produces, which is the dual-path drift class this
+// repository keeps finding.
+//
+// Best-effort by design: a missing or malformed report leaves the field alone
+// rather than failing a stage that succeeded. The stage is instructed not to
+// write the field, so "left alone" means the skeleton's null.
+func spliceACReconcile(workspaceRoot string, issueNumber int, planningFile string) {
+	reportPath := stagecontext.ContextPath(workspaceRoot, issueNumber, "ac-reconcile")
+	reportRaw, err := os.ReadFile(reportPath)
+	if err != nil {
+		return
+	}
+	var report map[string]any
+	if err := json.Unmarshal(reportRaw, &report); err != nil {
+		log.Printf("#%d: ac_reconcile report is not valid JSON, leaving planning context alone: %v", issueNumber, err)
+		return
+	}
+
+	planningRaw, err := os.ReadFile(planningFile)
+	if err != nil {
+		return
+	}
+	var planning map[string]any
+	if err := json.Unmarshal(planningRaw, &planning); err != nil {
+		// The extension path reports this through schema validation; here there
+		// is no validator, so say it rather than swallowing it.
+		log.Printf("#%d: planning context is not valid JSON, cannot splice ac_reconcile: %v", issueNumber, err)
+		return
+	}
+
+	planning["ac_reconcile"] = report
+	merged, err := json.MarshalIndent(planning, "", "  ")
+	if err != nil {
+		return
+	}
+	if err := os.WriteFile(planningFile, merged, 0o644); err != nil {
+		log.Printf("#%d: could not persist the spliced planning context: %v", issueNumber, err)
+		return
+	}
+	if acs, ok := report["acceptance_criteria"].([]any); ok {
+		log.Printf("#%d: spliced ac_reconcile (%d criteria, aggregate=%v)", issueNumber, len(acs), report["aggregate_status"])
+	}
 }
 
 // hasUncommittedWork returns true when the worktree has staged, unstaged, or

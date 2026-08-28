@@ -902,6 +902,22 @@ Two rules fall out of it:
 2. **If you must mutate in place, restore from a backup you took** (`cp` before,
    `cp` back after) — never from git, unless the work is already committed.
 
+   **"Already committed" is a claim about the specific hunk, not about the
+   session.** Committing first is the obvious defence, and it has a hole:
+   `git checkout -- <file>` restores that file to `HEAD` _entirely_, so it also
+   reverts anything you added to it **after** the commit. An agent working #1011
+   committed its work, mutation-tested the extension half, restored from git —
+   correctly, at that point — then added a second fix to `scheduler.go`,
+   mutation-tested that, and restored the same way. The second restore silently
+   deleted the fix while leaving the test that demanded it, and `git status`
+   showed a clean tree, because the next `git add -A && git commit --amend`
+   committed the reverted file. It surfaced only in the full-suite gate, one
+   package out of ninety.
+
+   Note the failure mode is _inverted_ from the uncommitted case above: the tree
+   looks clean and the guard looks like a flake. `cp` before / `cp` back is
+   immune to both, because it restores exactly what you saved and nothing else.
+
 The same asymmetry applies to any agent or script that verifies by editing:
 **a verification step that can write is a verification step that can destroy
 what it verifies.** Give it a read-only remit and a scratch directory, and diff

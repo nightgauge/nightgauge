@@ -335,8 +335,33 @@ All context files include a `schema_version` field for future compatibility.
 ### ac-reconcile-{N}.json
 
 **Created by**: `/nightgauge-feature-planning` (Phase 1.7 — `ac-reconcile`)
-**Read by**: `/nightgauge-feature-planning` (embeds into `planning-{N}.json`),
-`/nightgauge-feature-dev` (read transitively via `planning.ac_reconcile`)
+**Read by**: the **orchestrator**, which splices the report verbatim into
+`planning.ac_reconcile` after the stage exits; `/nightgauge-feature-dev` reads it
+transitively from there.
+
+> **The stage does not write `planning.ac_reconcile` (#1011).** It used to, by
+> prose instruction, and the model transcribed it from the three scalars Phase
+> 1.7 echoes — losing `acceptance_criteria`, `main_sha` and `evaluated_at`, which
+> are the three fields `PlanningContextSchema` requires. The assembler logged the
+> mismatch and continued, so `feature-dev` and `feature-validate` received a plan
+> with no machine-readable acceptance criteria. There is now one writer, and it
+> is a program.
+>
+> **Both dispatch paths splice, and they must stay that way.** The extension
+> splices in `ContextAssembler.validateStageContextOutput` (before Zod
+> validation); the Go scheduler splices in `validateStageOutput`, which is the
+> only post-stage step that path has — it otherwise just `stat`s the file and
+> never opens it. Fixing one and not the other would leave `nightgauge run
+<issue>` producing exactly the truncated handoff the extension no longer
+> produces.
+
+> **`undetectable` is not "no criteria found".** `undetectable` means N criteria
+> were parsed and none could be deterministically evaluated; `no-acs-detected`
+> means zero were parsed. `nightgauge issue ac-check` counts checkbox _states_ and
+> `ReconcileACs` additionally _classifies_ them, so the two answering differently
+> about the same issue is correct behaviour, not drift. Because "none could be
+> evaluated" is the maximum-uncertainty case, that route focuses **every** index
+> — it is not the empty focus list that `all-satisfied` legitimately returns.
 
 Output of the deterministic AC reconciliation pre-flight (Issue #3003). The
 reconciler parses checkboxes from the issue body, runs the rule library

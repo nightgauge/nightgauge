@@ -157,6 +157,65 @@ func TestReconcileACs_BranchProtection_Undetectable(t *testing.T) {
 	}
 }
 
+// TestReconcileACs_AllUndetectable_FocusesEveryCriterion pins the polarity of
+// the all-undetectable route (#1011).
+//
+// The body is #228's three real acceptance criteria — ordinary prose checkboxes
+// naming no file, symbol, npm script, doc section, workflow job or branch
+// protection, so no rule in the library matches and every one classifies
+// undetectable. That is the honest verdict, and it is also the case the route
+// got backwards: it handed the planner an EMPTY focus list, the same answer
+// all-satisfied gives, on the run whose entire purpose was to demonstrate the
+// pipeline does good work.
+func TestReconcileACs_AllUndetectable_FocusesEveryCriterion(t *testing.T) {
+	body := "- [ ] Bootstrap supports cursor/offset continuation so a client can fetch the full corpus\n" +
+		"- [ ] A large org fully bootstraps across pages (integration test)\n" +
+		"- [ ] OpenAPI updated; contract test covers the multi-page path\n"
+	res := ReconcileACs(t.TempDir(), 228, body)
+
+	// The premise, asserted so a future change to the rule library that makes
+	// one of these evaluable fails HERE with a clear reason rather than making
+	// the real assertion below silently vacuous.
+	if len(res.AcceptanceCriteria) != 3 {
+		t.Fatalf("parsed %d criteria, want 3 — the fixture no longer exercises the branch",
+			len(res.AcceptanceCriteria))
+	}
+	if res.AggregateStatus != AggUndetectable {
+		t.Fatalf("aggregate = %s, want %s — the fixture no longer exercises the branch",
+			res.AggregateStatus, AggUndetectable)
+	}
+
+	want := []int{0, 1, 2}
+	got := res.SuggestedRoute.FocusACs
+	if len(got) != len(want) {
+		t.Fatalf("focus_acs = %v, want %v — \"none could be evaluated\" is maximum uncertainty "+
+			"and must focus every criterion, not none", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("focus_acs = %v, want %v", got, want)
+		}
+	}
+}
+
+// TestReconcileACs_AllSatisfiedStillFocusesNothing is the control. Without it,
+// the fix above could be "always focus everything", which would destroy the one
+// state that legitimately focuses nothing.
+func TestReconcileACs_AllSatisfiedStillFocusesNothing(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "x.md"), []byte("hi"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	res := ReconcileACs(dir, 14, "- [ ] File `x.md` exists\n")
+	if res.AggregateStatus != AggAllSatisfied {
+		t.Skipf("fixture did not reach all-satisfied (got %s); control not exercised", res.AggregateStatus)
+	}
+	if len(res.SuggestedRoute.FocusACs) != 0 {
+		t.Errorf("focus_acs = %v, want empty — all-satisfied is the one state that focuses nothing",
+			res.SuggestedRoute.FocusACs)
+	}
+}
+
 func TestWriteACReconcile(t *testing.T) {
 	dir := t.TempDir()
 	res := ReconcileACs(dir, 13, "- [ ] File `x.md` exists\n")
