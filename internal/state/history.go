@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -168,6 +169,22 @@ type RecoveryEvent struct {
 	At          string `json:"at"`
 }
 
+// V2PhaseDetail is one phase of one stage, as recorded in the durable run
+// record (#1055). A projection of state.PhaseRecord: the stage is implied by
+// the map key it hangs under, so it is not repeated here.
+type V2PhaseDetail struct {
+	Name  string `json:"name"`
+	Index int    `json:"index"`
+	Total int    `json:"total,omitempty"`
+	// Status carries the full vocabulary, "skipped" and "abandoned" included.
+	// A phase that did not run must be distinguishable from one that was never
+	// recorded, or an index gap reads identically to a silent drop.
+	Status      string `json:"status"`
+	StartedAt   string `json:"started_at,omitempty"`
+	CompletedAt string `json:"completed_at,omitempty"`
+	DurationMs  int64  `json:"duration_ms,omitempty"`
+}
+
 // V2StageDetail matches HistoryStageDetailSchema.
 type V2StageDetail struct {
 	Status         string         `json:"status"`
@@ -193,6 +210,20 @@ type V2StageDetail struct {
 	// This is distinct from V2RunRecord.GateResults (quality gates: build /
 	// lint / unit-tests / type-check) — see GateResult vs StageGateResult.
 	GateResults []StageGateResult `json:"gate_results,omitempty"`
+	// Phases is the per-stage phase record (#1055). Phase telemetry existed
+	// only in the transient runtime snapshot: this struct had no phase field
+	// and the builder never read snap.PhaseHistory, so every phase-level
+	// observation -- which phases ran, in what order, which were skipped,
+	// which never completed -- was discarded when the run ended. No ADR
+	// excluded it; it was simply never plumbed through.
+	//
+	// That absence is what let a phase sit "running" past the end of its stage
+	// without anyone noticing, and it is why diagnosing a phase-level defect
+	// required a human watching the GUI live.
+	//
+	// Additive `omitempty`: records written before this omit the field and
+	// readers default to nil.
+	Phases []V2PhaseDetail `json:"phases,omitempty"`
 	// LastOutputLines is the tail of subagent stdout/stderr captured at
 	// terminal failure (Issue #3001). Bounded by the runtime ring buffer
 	// (≤200 lines × ≤1KB/line ≈ 200KB). Only populated for the stage that
@@ -1089,6 +1120,36 @@ func (hw *HistoryWriter) BuildV2Record(snap *RuntimeState, success bool, errMsg 
 	stages := make(map[string]V2StageDetail)
 	perStageTokens := make(map[string]V2StageTokens)
 
+	// #1055: group the run's phase records by stage once, so each stage detail
+	// can carry its own. Built from snap.PhaseHistory, which the builder simply
+	// never read — the data was present on every run and thrown away.
+	phasesByStage := make(map[string][]V2PhaseDetail, len(snap.PhaseHistory))
+	for _, pr := range snap.PhaseHistory {
+		d := V2PhaseDetail{
+			Name:   pr.Name,
+			Index:  pr.Index,
+			Total:  pr.Total,
+			Status: pr.Status,
+		}
+		if !pr.StartedAt.IsZero() {
+			d.StartedAt = pr.StartedAt.Format(time.RFC3339)
+			if pr.CompletedAt != nil {
+				d.CompletedAt = pr.CompletedAt.Format(time.RFC3339)
+				d.DurationMs = pr.CompletedAt.Sub(pr.StartedAt).Milliseconds()
+			}
+		}
+		key := string(pr.Stage)
+		phasesByStage[key] = append(phasesByStage[key], d)
+	}
+	// Registry order, not arrival order (#1008): markers can arrive out of
+	// order and the index is the authoritative position, so sorting here keeps
+	// the durable record readable without changing what was observed.
+	for k := range phasesByStage {
+		sort.SliceStable(phasesByStage[k], func(i, j int) bool {
+			return phasesByStage[k][i].Index < phasesByStage[k][j].Index
+		})
+	}
+
 	for _, sr := range snap.CompletedStages {
 		stageName := string(sr.Stage)
 		stageStarted := sr.StartedAt.Format(time.RFC3339)
@@ -1110,6 +1171,7 @@ func (hw *HistoryWriter) BuildV2Record(snap *RuntimeState, success bool, errMsg 
 			PerformanceMode: snap.StageModes[stageName],
 			ExecutionPath:   snap.StageExecutionPaths[stageName],
 			PuntReason:      snap.StagePuntReasons[stageName],
+			Phases:          phasesByStage[stageName],
 		}
 
 		// Attribute the stage to the model that ACTUALLY ran it (#42) — after
@@ -1222,6 +1284,10 @@ func (hw *HistoryWriter) BuildV2Record(snap *RuntimeState, success bool, errMsg 
 	for _, skipped := range snap.SkippedStages {
 		stages[skipped] = V2StageDetail{
 			Status: "skipped",
+			// A skipped stage can still hold phase records — the tracker
+			// auto-skips registry phases — so carry them rather than dropping
+			// the one signal that says the skip was recorded, not silent.
+			Phases: phasesByStage[string(skipped)],
 		}
 	}
 
