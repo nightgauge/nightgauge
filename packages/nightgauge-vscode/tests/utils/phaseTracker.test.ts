@@ -55,7 +55,11 @@ describe("createPhaseTracker", () => {
     });
 
     expect(mockStateService.completePhase).toHaveBeenCalledWith("pr-merge", "read-pr-context", 14);
-    expect(mockStateService.startPhase).toHaveBeenCalledWith("pr-merge", "batch-detection", 14);
+    // #1008: the fourth argument is the phase's REGISTRY position — batch-detection
+    // is index 1 of pr-merge's 14. Asserting it here rather than relaxing the
+    // matcher keeps this test pinning the full call, which is what caught the
+    // signature change in the first place.
+    expect(mockStateService.startPhase).toHaveBeenCalledWith("pr-merge", "batch-detection", 14, 1);
   });
 
   it("should auto-skip untracked phases when stage completes (Issue #1232)", async () => {
