@@ -22,8 +22,21 @@ export const GateMetricRecordSchema = z.object({
    * anti-hallucination judge gate (#3918) whose verdict is folded in as a
    * `"fail"` result so the Go FeatureValidateGate.Verify() loop (which trips on
    * `result != "pass"`) consumes it with zero new Go scaffolding.
+   *
+   * NOT AN ENUM, deliberately (#1084). It was one, listing six names, while the
+   * shipped feature-validate skill emitted `adversarial-review` and `verify-ui`
+   * — neither on the list. The Go writer validates no name at all, so those
+   * records were written happily and then dropped by `safeParse` on read, in
+   * silence. The reader's only observable failure was a shorter list, which the
+   * renderer turned into `Gates: N/A` — indistinguishable from "no gates ran".
+   *
+   * The producer here is a MARKDOWN SKILL, not a typed call site: nothing makes
+   * a new gate name in a skill fail a build, so a closed enum in the reader can
+   * only ever discover the mismatch at runtime, after the record is lost. A
+   * non-empty string keeps the record and lets the tally name gates this schema
+   * has never heard of, which is the honest model of that boundary.
    */
-  gate_name: z.enum(["build", "unit-tests", "integration-tests", "type-check", "lint", "judges"]),
+  gate_name: z.string().min(1),
   /**
    * - "pass"  — gate ran and found no defects (every gate).
    * - "catch" — a deterministic gate found defects (build/lint/test).

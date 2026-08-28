@@ -787,6 +787,37 @@ describe("PostPipelineAnalyzer", () => {
       expect(lintGate!.hitRate).toBe(0.5);
     });
 
+    // #1084 — the writer runs inside the worktree and passes no root, so on a
+    // worktree run the persistent root holds nothing and the tally read `N/A`.
+    it("analyze() falls back to the stage root when the workspace root has no gate metrics", async () => {
+      setupSuccessfulAnalyze();
+      const stageRoot = `${workspaceRoot}/.worktrees/issue-338`;
+      mockGateMetricsReadAll.mockImplementation(async (root: string) =>
+        root === stageRoot ? [{ gate_name: "adversarial-review", result: "pass" }] : []
+      );
+
+      const result = await PostPipelineAnalyzer.analyze(
+        workspaceRoot,
+        338,
+        logger as any,
+        stageRoot
+      );
+
+      expect(result!.gateEffectiveness).not.toBeNull();
+      expect(result!.gateEffectiveness!.byGate[0]!.gateName).toBe("adversarial-review");
+      // The persistent root stays PRIMARY — the fallback is last-resort.
+      expect(mockGateMetricsReadAll).toHaveBeenNthCalledWith(1, workspaceRoot);
+    });
+
+    it("analyze() does not re-read when the stage root IS the workspace root", async () => {
+      setupSuccessfulAnalyze();
+      mockGateMetricsReadAll.mockResolvedValue([]);
+
+      await PostPipelineAnalyzer.analyze(workspaceRoot, 338, logger as any, workspaceRoot);
+
+      expect(mockGateMetricsReadAll).toHaveBeenCalledTimes(1);
+    });
+
     it("analyze() sets gateEffectiveness to null when no gate metrics exist", async () => {
       setupSuccessfulAnalyze();
       mockGateMetricsReadAll.mockResolvedValue([]);
