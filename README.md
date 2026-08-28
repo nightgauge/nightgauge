@@ -80,7 +80,10 @@ extension development and intentionally produces a non-release build.
 - GitHub Project board integration (Ready/In Progress/In Review views)
 - Batch pipeline execution for multiple issues
 - Token usage tracking and cost analytics
-- Configurable notifications and sounds
+- Configurable notifications and sounds — live-updating pipeline status in
+  [Discord](docs/CONFIGURATION.md#discord-notifications),
+  [Slack](docs/SLACK_INTEGRATION.md) or
+  [Mattermost](docs/MATTERMOST_INTEGRATION.md)
 
 ### Claude Code CLI (Alternative)
 

@@ -6040,6 +6040,42 @@ notifications:
 
 ---
 
+## Slack Notifications
+
+> **Issue #1071 / #1089** — Live-updating pipeline status in a Slack channel.
+
+Full setup runbook: **[docs/SLACK_INTEGRATION.md](SLACK_INTEGRATION.md)**.
+
+```yaml
+notifications:
+  slack:
+    enabled: true
+    channel: "C0123456789"
+    bot_token_env: SLACK_BOT_TOKEN
+```
+
+| Field           | Type    | Default           | Description                                  |
+| --------------- | ------- | ----------------- | -------------------------------------------- |
+| `enabled`       | boolean | `false`           | Gates Slack delivery. Absent means off.      |
+| `channel`       | string  | —                 | Channel ID (preferred) or `#name`. Required. |
+| `bot_token_env` | string  | `SLACK_BOT_TOKEN` | Env var holding the bot token (`xoxb-…`).    |
+
+**One block, both halves.** The VSCode extension (pipeline status) and the Go
+binary (ready-to-ship, stuck-epic and release-watch alerts) read this same
+block, so Slack needs exactly one credential and one channel.
+
+**Slack uses a bot token, not an incoming webhook.** Only `chat.postMessage`
+returns a message timestamp, and only that timestamp lets `chat.update` edit the
+message in place as stages progress. A webhook can only append, which would post
+one message per stage. Required scope is `chat:write` (plus `chat:write.public`
+to post without being invited to the channel).
+
+**The token is not stored here.** It lives in the OS keychain via
+`Nightgauge: Configure Slack Notifications`; `bot_token_env` is the fallback for
+CI and headless runs where there is no keychain.
+
+---
+
 ## Notification Routing Rules (`notifiers:`)
 
 > **Issue #3374** — Per-channel routing rules for multi-notifier dispatch.
@@ -6064,14 +6100,14 @@ event (default behavior, unchanged from before #3374).
 
 ### Field Reference
 
-| Field                | Type                      | Description                                                            |
-| -------------------- | ------------------------- | ---------------------------------------------------------------------- |
-| `id`                 | string (required)         | Unique identifier — must match a notifier wired in services.ts         |
-| `type`               | `discord` \| `mattermost` | Notifier provider type                                                 |
-| `channel`            | string (optional)         | Channel name (informational, used for display only)                    |
-| `events`             | EventKey[] (optional)     | Allowlist of event keys. Absent or empty = all events.                 |
-| `suppress`           | EventKey[] (optional)     | Denylist of event keys. Takes precedence over `events`.                |
-| `webhook_secret_key` | string (optional)         | SecretStorage key name for this notifier's webhook URL (not a raw URL) |
+| Field                | Type                                 | Description                                                             |
+| -------------------- | ------------------------------------ | ----------------------------------------------------------------------- |
+| `id`                 | string (required)                    | Unique identifier — must match a notifier wired in services.ts          |
+| `type`               | `discord` \| `mattermost` \| `slack` | Notifier provider type                                                  |
+| `channel`            | string (optional)                    | Channel name (informational, used for display only)                     |
+| `events`             | EventKey[] (optional)                | Allowlist of event keys. Absent or empty = all events.                  |
+| `suppress`           | EventKey[] (optional)                | Denylist of event keys. Takes precedence over `events`.                 |
+| `webhook_secret_key` | string (optional)                    | SecretStorage key name for this notifier's credential (not a raw value) |
 
 ### Examples
 
