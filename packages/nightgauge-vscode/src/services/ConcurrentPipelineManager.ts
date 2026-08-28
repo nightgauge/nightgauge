@@ -303,6 +303,15 @@ export interface ConcurrentPipelineCallbacks {
   ) => void;
   /** Called when a slot's pipeline stage changes */
   onSlotStageChanged?: (slotIndex: number, issueNumber: number, stage: PipelineStage) => void;
+  /**
+   * Called when a slot FINISHES a stage (#1055).
+   *
+   * Distinct from onSlotStageChanged, which fires when a stage STARTS. Phases
+   * must be closed on completion: closing them on the next stage's start means
+   * the last stage of a run is never closed at all, and the terminal close is
+   * looked up by a stage that has no active phase yet, so it no-ops.
+   */
+  onSlotStageCompleted?: (slotIndex: number, issueNumber: number, stage: PipelineStage) => void;
   /** Called when a slot completes successfully */
   onSlotCompleted?: (
     slotIndex: number,
@@ -1442,6 +1451,13 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
           slot.currentStage = stage;
           this.emitSlotsChanged();
           this.callbacks.onSlotStageChanged?.(slot.index, slot.issueNumber, stage);
+        },
+        // #1055: the slot never wired onStageComplete, so nothing closed a
+        // stage's phases on the concurrent path. onStageComplete is already
+        // declared on PipelineCallbacks and already fires on every success and
+        // failure path, so no orchestrator change is needed.
+        onStageComplete: (stage) => {
+          this.callbacks.onSlotStageCompleted?.(slot.index, slot.issueNumber, stage);
         },
         onStdout: (stage, data) => {
           this.callbacks.onSlotOutput?.(slot.index, slot.issueNumber, data, stage);
