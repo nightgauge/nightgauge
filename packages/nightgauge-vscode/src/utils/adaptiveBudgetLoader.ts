@@ -70,14 +70,39 @@ interface ExitRecord {
 }
 
 /**
- * Resolve the main repo root from a potential worktree path.
- * Exit records live in the main repo, not in the worktree.
- * Mirrors the logic in budgetIntelligence.ts.
+ * Resolve the main repo root from a path that may be a worktree.
+ *
+ * THERE ARE TWO WORKTREE LAYOUTS AND THIS KNEW ABOUT ONE (#1017). The exact
+ * lesson `internal/execution/issue_context_paths.go` records for #994, in a
+ * file nobody re-checked:
+ *
+ *   - the VSCode extension writes `<repoRoot>/.worktrees/issue-N`
+ *   - the Go manager writes `<repoRoot>/.nightgauge/worktrees/{repo}-issue-N`
+ *
+ * Missing the second means this returns the WORKTREE path unchanged, so every
+ * history read calibrates against the worktree's own near-empty, gitignored
+ * history rather than the repo's. That is how a repo whose corpus holds
+ * eighty-seven costed issues reports a four-sample cohort — and a four-sample
+ * cohort is how a pre-flight estimate lands ~2x under actual.
+ *
+ * String-stripping is not the ideal shape; the caller usually knows the real
+ * root. It stays because both callers currently receive a worktree path, and
+ * making it aware of both layouts is the smallest change that stops the
+ * estimator reading the wrong corpus.
  */
-function resolveMainRepoRoot(workspaceRoot: string): string {
-  const marker = `${path.sep}.worktrees${path.sep}`;
-  const idx = workspaceRoot.indexOf(marker);
-  return idx >= 0 ? workspaceRoot.substring(0, idx) : workspaceRoot;
+export function resolveMainRepoRoot(workspaceRoot: string): string {
+  // Longest marker first: the Go layout contains a path separator that the
+  // extension marker would otherwise match inside it.
+  for (const marker of [
+    `${path.sep}.nightgauge${path.sep}worktrees${path.sep}`,
+    `${path.sep}.worktrees${path.sep}`,
+  ]) {
+    const idx = workspaceRoot.indexOf(marker);
+    if (idx >= 0) {
+      return workspaceRoot.substring(0, idx);
+    }
+  }
+  return workspaceRoot;
 }
 
 /**
