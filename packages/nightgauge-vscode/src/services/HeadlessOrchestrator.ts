@@ -2082,6 +2082,16 @@ export class HeadlessOrchestrator implements vscode.Disposable {
             "--timeout",
             "60",
             "--record",
+            // #1021 — see the note at the pr-merge gate call: without a run id
+            // the CLI writes the record to the worktree, which has no snapshot.
+            ...(this.stateService?.getRunId() ? ["--run-id", this.stateService.getRunId()!] : []),
+            // #1021: route the record through the daemon. `gate verify` writes
+            // DIRECTLY to <workdir>/.nightgauge/pipeline when it has no run
+            // identity to address the daemon with — and --workdir is the run's
+            // worktree, which holds no runtime snapshot. The daemon is the
+            // single authoritative writer (#377) and files the record under the
+            // run's repo root, which is where the snapshot actually lives.
+            ...(this.stateService?.getRunId() ? ["--run-id", this.stateService.getRunId()!] : []),
           ],
           { encoding: "utf-8", cwd, timeout: 90_000 }
         );
@@ -2619,6 +2629,9 @@ export class HeadlessOrchestrator implements vscode.Disposable {
           "--timeout",
           "60",
           "--record",
+          // #1021 — see the note at the pr-merge gate call: without a run id
+          // the CLI writes the record to the worktree, which has no snapshot.
+          ...(this.stateService?.getRunId() ? ["--run-id", this.stateService.getRunId()!] : []),
         ],
         { encoding: "utf-8", cwd, timeout: 90_000 }
       );
@@ -2859,6 +2872,16 @@ export class HeadlessOrchestrator implements vscode.Disposable {
             "--timeout",
             "60",
             "--record",
+            // #1021 — see the note at the pr-merge gate call: without a run id
+            // the CLI writes the record to the worktree, which has no snapshot.
+            ...(this.stateService?.getRunId() ? ["--run-id", this.stateService.getRunId()!] : []),
+            // #1021: route the record through the daemon. `gate verify` writes
+            // DIRECTLY to <workdir>/.nightgauge/pipeline when it has no run
+            // identity to address the daemon with — and --workdir is the run's
+            // worktree, which holds no runtime snapshot. The daemon is the
+            // single authoritative writer (#377) and files the record under the
+            // run's repo root, which is where the snapshot actually lives.
+            ...(this.stateService?.getRunId() ? ["--run-id", this.stateService.getRunId()!] : []),
           ],
           { encoding: "utf-8", cwd, timeout: 90_000 }
         );
@@ -3020,6 +3043,16 @@ export class HeadlessOrchestrator implements vscode.Disposable {
             "--timeout",
             "60",
             "--record",
+            // #1021 — see the note at the pr-merge gate call: without a run id
+            // the CLI writes the record to the worktree, which has no snapshot.
+            ...(this.stateService?.getRunId() ? ["--run-id", this.stateService.getRunId()!] : []),
+            // #1021: route the record through the daemon. `gate verify` writes
+            // DIRECTLY to <workdir>/.nightgauge/pipeline when it has no run
+            // identity to address the daemon with — and --workdir is the run's
+            // worktree, which holds no runtime snapshot. The daemon is the
+            // single authoritative writer (#377) and files the record under the
+            // run's repo root, which is where the snapshot actually lives.
+            ...(this.stateService?.getRunId() ? ["--run-id", this.stateService.getRunId()!] : []),
           ],
           { encoding: "utf-8", cwd, timeout: 90_000 }
         );
@@ -6858,7 +6891,14 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     Array<{ kind?: string; passed: boolean; gate_name?: string; reason?: string }>
   > {
     try {
-      const cwd = this.pinnedWorkspaceRoot ?? this.getWorkingDirectory();
+      // #1021: read where the DAEMON writes. getWorkingDirectory() prefers the
+      // worktree override, and the daemon files runtime-{issue}-{runId}.json
+      // under the run's REPO root — so on a concurrent-slot or cross-repo run
+      // the reader was looking in a directory that never holds a snapshot, and
+      // returned {} for every stage. That empty map is what made the shipped
+      // `gate-not-invoked` detector fire on six stages whose gates had all run
+      // and passed.
+      const cwd = this.getRunRepoRoot();
       const statePath = this.resolveRuntimeSnapshotPath(cwd, issueNumber);
       if (!statePath) return {};
       const stateBlob = JSON.parse(fs.readFileSync(statePath, "utf-8"));
@@ -11300,12 +11340,23 @@ export class HeadlessOrchestrator implements vscode.Disposable {
           this.stateService?.setMeta({ health_score: healthEval.score });
         }
 
-        // Emit self-check summary
+        // Emit self-check summary.
+        //
+        // #1022: these were literal zeros, with a comment saying the cost was
+        // "not available at this level". It is available — the run's own state
+        // carries it, and the panel reported $0.00 for a $12.81 run because
+        // nobody read it. A hardcoded zero is indistinguishable from a free run,
+        // which is exactly the class of misinformation this epic is about.
+        const selfCheckState = await this.stateService?.getState();
+        const runCostUsd = selfCheckState?.tokens?.estimated_cost_usd ?? 0;
         const selfCheck = PostPipelineAnalyzer.formatSelfCheck(
           analysisResult,
           healthEval,
-          0, // Cost not available at this level; downstream consumers can provide
-          0 // Historical average not available here
+          runCostUsd,
+          // The historical average genuinely is not computed here, and
+          // formatSelfCheck documents 0 as "unknown" and guards every use of it
+          // — so this zero is honest, unlike the cost one above.
+          0
         );
         this.logger.info(selfCheck);
       } catch (err) {

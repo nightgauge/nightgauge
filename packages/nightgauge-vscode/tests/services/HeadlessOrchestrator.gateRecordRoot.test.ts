@@ -1,0 +1,160 @@
+/**
+ * Issue #1021: every stage reported `[gate-not-invoked]` while the gates ran and
+ * passed — #210 re-opening, with the detector it shipped firing on every
+ * extension run since.
+ *
+ * The writer and the reader were wrong in the SAME direction, so they agreed
+ * with each other and both disagreed with the daemon:
+ *
+ *   - `gate verify --record` writes DIRECTLY to `<workdir>/.nightgauge/pipeline`
+ *     when it has no run identity to address the daemon with. The extension
+ *     passed `--workdir <worktree>` and never passed `--run-id`, so the record
+ *     went to a directory that holds no runtime snapshot.
+ *   - The reader resolved `pinnedWorkspaceRoot ?? getWorkingDirectory()`, which
+ *     prefers the worktree override — the same wrong place — so it read `{}` and
+ *     the detector fired.
+ *
+ * The daemon is the single authoritative writer (#377) and files the snapshot
+ * under the run's REPO root. Both halves now address it.
+ */
+
+import { describe, it, expect, beforeEach, vi } from "vitest";
+import { HeadlessOrchestrator } from "../../src/services/HeadlessOrchestrator";
+import type { PipelineStateService } from "../../src/services/PipelineStateService";
+import type { Logger } from "../../src/utils/logger";
+
+vi.mock("../../src/utils/nightgaugeConfig", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../src/utils/nightgaugeConfig")>()),
+  getSkipAuthPreflight: () => true,
+}));
+
+vi.mock("../../src/services/BinaryResolver", () => ({
+  BinaryResolver: { fromVSCode: () => ({ resolve: async () => "/fake/nightgauge" }) },
+}));
+
+const { gateSpawns } = vi.hoisted(() => ({
+  gateSpawns: [] as Array<{ args: string[]; cwd: string }>,
+}));
+
+vi.mock("child_process", async () => {
+  const actual = await vi.importActual<typeof import("child_process")>("child_process");
+  const kCustom = Symbol.for("nodejs.util.promisify.custom");
+  const execFileMock: any = vi.fn();
+  execFileMock[kCustom] = (cmd: string, args: string[], opts?: { cwd?: string }) => {
+    if (typeof cmd === "string" && cmd.includes("nightgauge") && args?.[0] === "gate") {
+      gateSpawns.push({ args: [...args], cwd: opts?.cwd ?? "" });
+      return Promise.resolve({
+        stdout: JSON.stringify({
+          stage: "pr-merge",
+          gate_name: "pr-merge",
+          passed: true,
+          reason: "PR is MERGED",
+          evidence: ["state=MERGED"],
+        }),
+        stderr: "",
+      });
+    }
+    return Promise.resolve({ stdout: "{}", stderr: "" });
+  };
+  const execMock: any = vi.fn();
+  execMock[kCustom] = () => Promise.resolve({ stdout: "", stderr: "" });
+  return {
+    ...actual,
+    exec: execMock,
+    execFile: execFileMock,
+    execSync: vi.fn().mockReturnValue(""),
+    execFileSync: vi.fn().mockReturnValue("{}"),
+  };
+});
+
+vi.mock("fs", async () => {
+  const actual = await vi.importActual<typeof import("fs")>("fs");
+  return {
+    ...actual,
+    existsSync: vi.fn().mockReturnValue(true),
+    readFileSync: vi
+      .fn()
+      .mockImplementation((p: string) =>
+        typeof p === "string" && p.includes("pr-") ? JSON.stringify({ pr_number: 4200 }) : "{}"
+      ),
+    writeFileSync: vi.fn(),
+  };
+});
+
+const LAUNCH_ROOT = "/launch-root";
+const REPO_ROOT = "/repos/target";
+const WORKTREE = "/repos/target/.worktrees/issue-4151";
+const RUN_ID = "01a02f24-498e-7364-bb8a-c96fa3739900";
+
+function makeStateService(): PipelineStateService {
+  return {
+    getRunId: vi.fn().mockReturnValue(RUN_ID),
+    getRunRepo: vi.fn().mockReturnValue("nightgauge/target"),
+  } as unknown as PipelineStateService;
+}
+
+function makeOrchestrator() {
+  const logger = {
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    debug: vi.fn(),
+  } as unknown as Logger;
+  const o = new HeadlessOrchestrator(makeStateService(), logger, { contextFileWaitMs: 0 });
+  o.setMainRepoRoot(LAUNCH_ROOT);
+  o.setRunRepoRoot(REPO_ROOT);
+  o.setWorktreeOverride(WORKTREE);
+  return o;
+}
+
+function flagValue(args: string[], flag: string): string | undefined {
+  const i = args.indexOf(flag);
+  return i >= 0 ? args[i + 1] : undefined;
+}
+
+describe("gate records address the daemon's root (#1021)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    gateSpawns.length = 0;
+  });
+
+  it("passes --run-id so the record routes through the daemon, not a direct worktree write", async () => {
+    const o = makeOrchestrator();
+    await (
+      o as unknown as { verifyPostMergeState(n: number): Promise<Error | null> }
+    ).verifyPostMergeState(4151);
+
+    expect(gateSpawns.length, "the pr-merge gate should have been invoked").toBeGreaterThan(0);
+    const spawn = gateSpawns[gateSpawns.length - 1];
+
+    // Without a run id, recordGateResult falls through to
+    // AppendStageGateResultToDisk under --workdir, which is the worktree.
+    expect(spawn.args).toContain("--record");
+    expect(flagValue(spawn.args, "--run-id")).toBe(RUN_ID);
+
+    // --workdir stays the worktree on purpose: the gate's INPUTS live there.
+    // Only the record's destination moves.
+    expect(flagValue(spawn.args, "--workdir")).toBe(WORKTREE);
+  });
+
+  it("reads gate results from the run's repo root, where the daemon writes them", async () => {
+    const o = makeOrchestrator();
+    const readSpy = vi.spyOn(
+      o as unknown as { resolveRuntimeSnapshotPath(root: string, n: number): string | null },
+      "resolveRuntimeSnapshotPath"
+    );
+    readSpy.mockReturnValue(null);
+
+    (o as unknown as { readStageGateResultsForRun(n: number): unknown }).readStageGateResultsForRun(
+      4151
+    );
+
+    expect(readSpy).toHaveBeenCalled();
+    const rootUsed = readSpy.mock.calls[0][0];
+    expect(
+      rootUsed,
+      "the reader must address the daemon's root; the worktree holds no snapshot"
+    ).toBe(REPO_ROOT);
+    expect(rootUsed).not.toBe(WORKTREE);
+  });
+});
