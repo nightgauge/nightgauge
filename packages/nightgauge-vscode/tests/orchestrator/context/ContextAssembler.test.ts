@@ -512,3 +512,61 @@ describe("detectTestRunner (#3114)", () => {
     expect(detectTestRunner("/repo")).toBe("vitest");
   });
 });
+
+// ---------------------------------------------------------------------------
+// #1058 — cross-repo `Part of` parent detection
+// ---------------------------------------------------------------------------
+
+describe("parseIssueBodySections parent detection (#1058)", () => {
+  // The parser required `#` to immediately follow "Part of ", so the QUALIFIED
+  // form that .claude/rules/scripts.md mandates for cross-repo sub-issues was
+  // the one form it could not see. A real run logged parentDetected=null and
+  // wrote native_parent=null for a body ending "Part of Owner/other-repo#205".
+  const parse = (body: string, repository?: string) =>
+    (
+      makeAssembler() as unknown as {
+        parseIssueBodySections(
+          b: string,
+          r?: string
+        ): { parentIssue: number | null; parentForeignRepo: string | null };
+      }
+    ).parseIssueBodySections(body, repository);
+
+  it("still detects the unqualified form", () => {
+    const r = parse("Body text\n\nPart of #205", "acme/widgets");
+    expect(r.parentIssue).toBe(205);
+    expect(r.parentForeignRepo).toBeNull();
+  });
+
+  it("detects the qualified form when it names this repository", () => {
+    const r = parse("Body text\n\nPart of acme/widgets#205", "acme/widgets");
+    expect(r.parentIssue).toBe(205);
+    expect(r.parentForeignRepo).toBeNull();
+  });
+
+  it("is case-insensitive about the repository qualifier", () => {
+    const r = parse("Part of ACME/Widgets#205", "acme/widgets");
+    expect(r.parentIssue).toBe(205);
+  });
+
+  // The important half. Widening the regex alone would be WRONG: native_parent
+  // is an issue number in THIS repository, and issue numbers are not unique
+  // across a workspace, so lifting 205 out of another repo's reference would
+  // point at an unrelated local issue.
+  it("does NOT claim a parent that lives in another repository", () => {
+    const r = parse("Part of acme/other-repo#205", "acme/widgets");
+    expect(r.parentIssue).toBeNull();
+  });
+
+  it("reports a foreign parent instead of collapsing it into 'no parent'", () => {
+    const foreign = parse("Part of acme/other-repo#205", "acme/widgets");
+    const none = parse("Body with no parent reference at all", "acme/widgets");
+
+    expect(foreign.parentForeignRepo).toBe("acme/other-repo");
+    expect(none.parentForeignRepo).toBeNull();
+    // Both have a null parentIssue — the distinguishing signal must be the
+    // foreign-repo field, or the two states remain indistinguishable.
+    expect(foreign.parentIssue).toBeNull();
+    expect(none.parentIssue).toBeNull();
+  });
+});
