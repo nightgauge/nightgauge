@@ -14,7 +14,7 @@ import * as path from "node:path";
 import { type PipelineStage, parsePhaseMarker, uuidV7 } from "@nightgauge/sdk";
 import type { NotifyStageProgressParams } from "../services/ipcNotifyParams";
 import { handleIpcRejection } from "../services/ipcRejection";
-import { Logger, createMainLogger } from "../utils/logger";
+import { Logger, createMainLogger, installLogDiskSink } from "../utils/logger";
 import { StatusBarManager } from "../utils/statusBar";
 import { resolveActiveRepository } from "../utils/resolveActiveRepository";
 import {
@@ -3162,6 +3162,11 @@ export async function initializeServices(
         if (result.success && result.config) {
           const logsConfig = result.config.pipeline?.logs;
           outputWindow.setLogConfig(workspaceRootForLogs, logsConfig);
+          // #1051: give the Nightgauge output channel a durable sink too.
+          // Without this the channel's stream — extension lifecycle, config
+          // resolution, board sync, gate results, auto-cleanup — exists only in
+          // the panel and is lost when the window closes.
+          installLogDiskSink(workspaceRootForLogs, logsConfig);
           logger.debug("Disk logging configured", { logsConfig });
 
           // Wire pr.auto_merge to orchestrator deferMerge setting
@@ -3179,6 +3184,7 @@ export async function initializeServices(
         } else {
           // Use defaults if no config
           outputWindow.setLogConfig(workspaceRootForLogs);
+          installLogDiskSink(workspaceRootForLogs);
           logger.debug("Disk logging configured with defaults");
         }
         yamlService.dispose();
