@@ -454,16 +454,37 @@ board. Read as "we should have used the pipeline", it looks like a discipline
 problem. It is not — the pipeline was never supposed to be the merger here.
 
 **Read the output; do not trust the exit code.** The hook is intentionally
-non-blocking: `issue_fetch_error` and `auto_close_error` are printed to stderr and
-the command still exits `0`, so a failed rollup and a successful one are
+non-blocking and always exits `0`, so a failed rollup and a successful one are
 indistinguishable by exit status alone. Expected lines:
 
-| Output                                    | Meaning                                  |
-| ----------------------------------------- | ---------------------------------------- |
-| `Issue #N has no parent epic — skipping…` | normal for a standalone issue            |
-| `Epic #N auto-closed (all sub-issues …)`  | the rollup fired                         |
-| `Epic #N: <reason>`                       | siblings still open — nothing to do yet  |
-| `Warning: post-merge check failed: …`     | **it did not run**; re-run once resolved |
+| Output                                       | Meaning                                  |
+| -------------------------------------------- | ---------------------------------------- |
+| `Issue #N has no parent epic — skipping…`    | normal for a standalone issue            |
+| `Epic #N auto-closed (all sub-issues …)`     | the rollup fired                         |
+| `Epic #N skipped: has_open`                  | siblings still open — nothing to do yet  |
+| `Warning: post-merge FAILED for issue #N: …` | **it did not run**; re-run once resolved |
+
+**`--json` reports failures too, since #1025.** It did not before: the reporting
+switch sat _below_ the `--json` early return, so the machine-readable mode — the
+one the extension uses — printed nothing at all on failure while the human mode
+printed a warning. The JSON now carries a `failed` boolean and an `epicReason`
+discriminator, and the warning goes to stderr in **both** modes, leaving stdout
+pure JSON.
+
+Two shapes of the same bug were fixed together, and both were silent:
+
+- The result's `reason` was set from the epic service's raw status word
+  `"error"`, which was **not in the vocabulary any caller branched on** — so a
+  failed rollup fell through a `default:` case that printed nothing, while the
+  one reason value callers _did_ recognise (`auto_close_error`) was unreachable,
+  because `AutoCloseSingle` swallows every error and returns `nil`.
+- `Epic #N skipped: %s` re-printed `reason` — the word "skipped" itself — so the
+  line read `Epic #206 skipped: skipped`. The discriminator that says _why_
+  (`has_open`, `check_failed`) was computed on every call and never copied out.
+
+A failure now also raises an Action Center card, because the operator who most
+needs this signal is the one who ran a hand merge and moved on. Epic #206 is the
+worked example: it did not roll up, and nothing said so.
 
 The board half of the hook reports itself separately, because exit `0` says
 nothing about it either (#691):
