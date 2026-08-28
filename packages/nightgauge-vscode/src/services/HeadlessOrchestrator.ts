@@ -11479,12 +11479,24 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       // Thread the orchestrator's terminal failure reason into the retro so
       // the classifier sees the authoritative verdict instead of starving on
       // the subagent log alone (#3926).
+      // #1056: the run's repo root, not the daemon's workspace root. The retro
+      // for an issue owned by one repo was written into whichever repo `serve`
+      // was started with, so retros for every repo piled up in one unrelated
+      // repo keyed only by issue number — and issue numbers are not unique
+      // across a multi-repo workspace, so those filenames collide.
+      // getRunRepoRoot() falls back to the persistent root when unset, so the
+      // sequential path is byte-identical.
       void AutoRetroService.runAfterFailure(
-        this.getPersistentRoot(),
+        this.getRunRepoRoot(),
         issueNumber,
         failedStage,
         this.logger,
-        error?.message
+        error?.message,
+        // #1056: the structured terminal kind, so the classifier reads the
+        // authoritative verdict instead of fishing for markers in prose. The
+        // run that motivated this reported category "unknown" while holding
+        // `dev_handoff_missing` in hand.
+        gateTerminalKind
       );
     }
 
