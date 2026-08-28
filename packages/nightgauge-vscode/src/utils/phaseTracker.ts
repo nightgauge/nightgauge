@@ -100,6 +100,23 @@ export function createPhaseTracker(stateService: PipelineStateService): PhaseTra
     );
 
     const prev = activePhase.get(stage);
+
+    // One marker can arrive TWICE (#1009). Two independent producers feed this
+    // callback for the same phase: `onSlotOutput` parses the marker out of raw
+    // stdout, and `onSlotPhaseStart` delivers it as a structured event. When
+    // both fire, the block below completes the previous phase and starts a new
+    // one — a second time — so `validate-environment` was recorded twice at
+    // index 0, thirty-three seconds apart, with the first already complete.
+    //
+    // A re-delivery of the phase we are ALREADY on is not a transition. This is
+    // deliberately not a dedupe in RuntimeState: a re-emission after completion
+    // is a legitimate re-run there (a stage retry genuinely re-runs a phase),
+    // and suppressing it in the record would lose real occurrences. The
+    // ambiguity only exists here, where the active phase is known.
+    if (prev && prev.name === marker.name) {
+      return;
+    }
+
     activePhase.set(stage, { name: marker.name, total });
 
     enqueue(stage, async () => {

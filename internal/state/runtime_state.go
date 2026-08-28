@@ -360,7 +360,10 @@ type PhaseRecord struct {
 	// Status is the phase's lifecycle state. Until #1026 the "skipped" value
 	// here was aspirational — no writer produced one, and "failed" did not
 	// exist at all, so a failing phase was indistinguishable from a running one.
-	Status      string     `json:"status"` // "running" | "complete" | "skipped" | "failed"
+	// "abandoned" is a phase the stage got past without ever completing (#1009):
+	// it sat "running" for twenty-four minutes and the stage then finished, so
+	// leaving it running told every reader the run was stuck there.
+	Status      string     `json:"status"` // "running" | "complete" | "skipped" | "failed" | "abandoned"
 	StartedAt   time.Time  `json:"startedAt"`
 	CompletedAt *time.Time `json:"completedAt,omitempty"`
 }
@@ -757,6 +760,10 @@ func (rs *RuntimeState) BeginStage(stage PipelineStage) {
 func (rs *RuntimeState) CompleteStage(exitCode int, counts tokens.TokenCounts, model, adapter string) {
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
+
+	// A phase the stage never completed cannot still be running once the stage
+	// is over (#1009). Leaving it told every reader the run was stuck there.
+	rs.closeRunningPhasesLocked(rs.Stage)
 
 	counts = rs.consumeCurrentStageTokenCountsLocked(counts)
 	cost, stamped := tokens.CalculateCostForAdapter(adapter, model, counts)
@@ -1164,6 +1171,44 @@ func (rs *RuntimeState) FailPhase(stage PipelineStage, name string, index, total
 		StartedAt:   now,
 		CompletedAt: &now,
 	})
+}
+
+// CloseRunningPhases terminates any phase of `stage` still marked running
+// (#1009), returning how many it closed.
+//
+// A phase that never receives its completion transition stays "running"
+// forever. On the observed run `sync-project-status` sat running for
+// twenty-four minutes while the stage worked on — and then the stage finished,
+// and the record still said running. A retro, a stall watchdog, or anyone
+// asking "where did it get stuck?" reads that as the answer, and it is not: the
+// stage got past it and never said so.
+//
+// Deliberately called at the STAGE boundary rather than on a timer. A timeout
+// would have to guess how long a phase may legitimately take — the observed one
+// ran twenty minutes and was healthy. Stage completion is the moment the
+// question becomes decidable: whatever is still running then did not finish,
+// and "abandoned" is honest where "running" is a lie.
+func (rs *RuntimeState) CloseRunningPhases(stage PipelineStage) int {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	return rs.closeRunningPhasesLocked(stage)
+}
+
+// closeRunningPhasesLocked is CloseRunningPhases for callers already holding
+// the mutex — CompleteStage does, and calling the exported form there would
+// deadlock.
+func (rs *RuntimeState) closeRunningPhasesLocked(stage PipelineStage) int {
+	now := time.Now()
+	closed := 0
+	for i := range rs.PhaseHistory {
+		p := &rs.PhaseHistory[i]
+		if p.Stage == stage && p.Status == "running" {
+			p.Status = "abandoned"
+			p.CompletedAt = &now
+			closed++
+		}
+	}
+	return closed
 }
 
 // SetLicenseSnapshot records the license validation result from pipeline
