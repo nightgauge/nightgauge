@@ -464,7 +464,7 @@ describe("BudgetEnforcer", () => {
 
     it("should never terminate, even when far over limit", () => {
       const decision = enforcer.checkOutputTokens("feature-dev", 500000, "M");
-      // #1609's guarantee, now structural: there is no terminate field to set.
+      // The warn-only guarantee, now structural: no terminate field to set.
       expect("shouldTerminate" in decision).toBe(false);
       expect(decision.shouldWarn).toBe(true);
     });
@@ -520,7 +520,7 @@ describe("BudgetEnforcer", () => {
     const enforcer = new BudgetEnforcer();
 
     // The termination message formatter is DELETED with the hard limit it
-    // described (#1027) — #1609 removed the termination it announced, so it
+    // described (#1027) — the termination it announced was removed, so it
     // had no production caller and could only ever have lied.
 
     it("should format warning message with token counts", () => {

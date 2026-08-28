@@ -67,7 +67,7 @@ export interface OutputTokenEnforcementDecision {
    *
    * Was `effectiveLimit` (base + grace) while the message quoted `baseLimit`,
    * so the operator saw two different limits for one decision. `shouldTerminate`
-   * is gone with it: the post-hoc hard limit #1609 deleted was its only reader,
+   * is gone with it: the deleted post-hoc hard limit was its only reader,
    * and it has been hardcoded false ever since.
    */
   limit: number;
@@ -567,7 +567,7 @@ export class BudgetEnforcer {
     // "exceeds 50,000" beside a payload saying the limit was 75,000.
     //
     // The grace buffer is residue. It existed for the post-hoc HARD limit that
-    // #1609 deleted, and `shouldTerminate` has been hardcoded false ever since,
+    // that was deleted, and `shouldTerminate` has been hardcoded false since,
     // so nothing compares anything to it. A threshold no code enforces is not a
     // second opinion; it is a second number to disbelieve.
     const limit = this.getBaseOutputTokenLimit(stage, sizeLabel);

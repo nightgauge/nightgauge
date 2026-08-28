@@ -658,7 +658,7 @@ issue_references:
   # script's own output AFTER the raise, not carried forward: the two halves are
   # one operation, because the bump itself changes what resolves.
   # NEVER raise this number. Lower it as the sweep progresses.
-  tree_baseline: 5936
+  tree_baseline: 5935
   allow_paths:
     # Files that DEFINE or TEST the rule must contain example violations.
     - ".github/publication-boundary.yaml"
