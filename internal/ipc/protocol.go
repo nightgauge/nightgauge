@@ -1129,7 +1129,12 @@ type PipelineNotifyPhaseTransitionParams struct {
 	Name        string `json:"name"`
 	Index       int    `json:"index"`
 	Total       int    `json:"total"`
-	EventType   string `json:"eventType"` // "start" | "complete"
+	// EventType is the phase's lifecycle transition. "skip" and "fail" were
+	// added by #1026: PhaseRecord.Status had advertised "skipped" since it was
+	// written and no writer produced one, and a failing phase was recorded as
+	// still running. The server now REFUSES an unrecognised value rather than
+	// answering ok having done nothing.
+	EventType string `json:"eventType"` // "start" | "complete" | "skip" | "fail"
 	// RunID is the run identity the server keys on (ADR-017 step 4, Decision
 	// 1). REQUIRED: absent is run_id_required, non-canonical is
 	// run_id_invalid. RUN-PROGRESS class (Decision 3). A scheduler-owned run is
