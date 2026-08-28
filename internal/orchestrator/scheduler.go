@@ -3324,6 +3324,55 @@ func hasUnmergedIndex(worktreePath string) bool {
 	return len(out) > 0
 }
 
+// stagedDeletionDominance reports how much of the CURRENTLY STAGED change is
+// the deletion of tracked files, after git's own rename detection has run.
+//
+// Rename detection is the load-bearing part and the reason this reads the index
+// rather than the pre-`add` porcelain. A filesystem rename appears before
+// staging as `" D old"` plus `"?? new"` — indistinguishable, by column alone,
+// from the mid-transformation tree this guard exists to catch. `git add -A`
+// resolves it to a single `R`, so counting `D` entries here counts only
+// deletions that are NOT half of a rename. A column-blind check on the
+// pre-staging porcelain would fire on every refactor that moves a file.
+//
+// Returns (deletions, total entries, a sample path). A git error answers
+// (0, 0, "") — this guards a rescue, and a tree git cannot read gets no guard
+// rather than a fabricated verdict.
+func stagedDeletionDominance(worktreePath string) (int, int, string) {
+	out, err := exec.Command("git", "-C", worktreePath, "diff", "--cached", "--find-renames", "--name-status", "-z").Output()
+	if err != nil {
+		return 0, 0, ""
+	}
+	fields := strings.Split(string(out), "\x00")
+	deletions, total, sample := 0, 0, ""
+	for i := 0; i < len(fields); i++ {
+		status := fields[i]
+		if status == "" {
+			continue
+		}
+		// -z emits status and path as separate NUL-terminated fields; a rename
+		// or copy emits status, source, destination — consume the extra path so
+		// a rename is never miscounted as two entries.
+		paths := 1
+		if status[0] == 'R' || status[0] == 'C' {
+			paths = 2
+		}
+		var first string
+		if i+1 < len(fields) {
+			first = fields[i+1]
+		}
+		i += paths
+		total++
+		if status[0] == 'D' {
+			deletions++
+			if sample == "" {
+				sample = first
+			}
+		}
+	}
+	return deletions, total, sample
+}
+
 func onlyManagedAgentsChange(worktreePath string) bool {
 	working, err := os.ReadFile(filepath.Join(worktreePath, "AGENTS.md"))
 	if err != nil {
@@ -3398,6 +3447,46 @@ func RecoverUncommittedWork(worktreePath string, issueNumber int, stage string) 
 		if err := exec.Command("git", resetArgs...).Run(); err != nil {
 			log.Printf("#%d: unstaging pipeline exhaust before recovery commit failed (non-fatal): %v", issueNumber, err)
 		}
+	}
+	// Refuse to publish a tree that is mostly the deletion of tracked files
+	// (#1053). A stage that removes generated output intending to regenerate it,
+	// and dies before regenerating, leaves exactly this shape: the sources still
+	// declare the artifacts, the artifacts are gone, and the tree cannot build.
+	// Observed on a real run — 89 generated files deleted against 10 edited, and
+	// the surviving sources still carried `part 'router.g.dart';` for a file the
+	// commit removed.
+	//
+	// This REFUSES rather than editing the commit's contents, deliberately, and
+	// mirrors the unmerged-index guard above. Withholding the deletions instead
+	// would commit a tree holding both halves of every rename and would repeat
+	// the #332/#701 lesson in a new column: a stage whose deliverable IS
+	// deletion would have that deliverable silently dropped and reported as
+	// rescued. Refusing loses nothing — the files are still in HEAD, the
+	// deletions are still on disk, and the caller preserves the worktree — while
+	// keeping an incoherent tree off the branch and out of `origin`.
+	//
+	// Renames are already excluded: the count runs after `git add -A` has let
+	// git resolve `D`+`??` pairs into a single `R`.
+	//
+	// A PURELY deletional change is explicitly allowed through. That is the
+	// #332/#701 shape — a stage whose deliverable IS removal, such as the 209
+	// staged deletions under `.nightgauge/pipeline/assessments/` that an earlier
+	// category-blind guard destroyed — and `TestWorktreeRecover_RescuesBookkeeping
+	// OnlyDeliverable` pins it. Deliberate removal arrives as removals and
+	// nothing else; the mid-transformation tree is the one that deletes most of
+	// itself AND still carries the edits that triggered the deletion. Requiring
+	// a non-deletion entry is what separates the two, and it is the difference
+	// between the observed #1053 tree (89 deletions alongside 10 edits) and a
+	// legitimate deletion deliverable.
+	if deletions, total, sample := stagedDeletionDominance(worktreePath); deletions > 0 && deletions < total && deletions*2 > total {
+		// Restore the index so the worktree is left exactly as it was found.
+		// The work stays on disk for the next attempt or for a human.
+		if err := exec.Command("git", "-C", worktreePath, "reset", "-q").Run(); err != nil {
+			log.Printf("#%d: restoring the index after refusing the recovery commit failed (non-fatal): %v", issueNumber, err)
+		}
+		return fmt.Errorf(
+			"staged change is %d deletion(s) of tracked files out of %d entries (e.g. %q) — refusing to publish a tree that is most likely mid-transformation; the work is preserved in the worktree",
+			deletions, total, sample)
 	}
 	msg := fmt.Sprintf("feat(#%d): [auto-recovery] %s work recovered after stop-hook failure", issueNumber, stage)
 	if err := exec.Command("git", "-C", worktreePath, "commit", "-m", msg).Run(); err != nil {
