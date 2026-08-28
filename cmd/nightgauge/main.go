@@ -5423,6 +5423,7 @@ func hookPostMergeCmd() *cobra.Command {
 		repo          string
 		projectNumber int
 		prNumber      int
+		workdir       string
 		outputJSON    bool
 	)
 
@@ -5442,6 +5443,21 @@ cause the command to exit non-zero.`,
 			client, err := clientFromConfig()
 			if err != nil {
 				return err
+			}
+
+			// The survival journal's root, resolved ONCE so the seeder and the
+			// finalizer below cannot disagree about which store they touch
+			// (#1019). Deliberately separate from the process cwd: the extension
+			// spawns this hook with cwd set to the run's git WORKTREE, which is
+			// removed moments later by post-merge cleanup — a record written
+			// there is written and then deleted, and is never seen by the
+			// launch-rooted sweep that reads it back. clientFromConfig() above
+			// keeps reading cwd on purpose; token and forge resolution are a
+			// different question from journal placement.
+			if workdir == "" {
+				if wd, wdErr := os.Getwd(); wdErr == nil {
+					workdir = wd
+				}
 			}
 
 			ownerPart, repoPart := splitRepo(owner, repo)
@@ -5468,13 +5484,11 @@ cause the command to exit non-zero.`,
 			// merge, mirroring the in-process scheduler path so the deterministic
 			// plugin route also captures the breadcrumb. Best-effort/non-blocking,
 			// rooted at the current working directory.
-			if result.SurvivalEligible {
-				if wd, wdErr := os.Getwd(); wdErr == nil {
-					store := survival.NewStore(wd)
-					rec := survival.NewPending(ownerPart+"/"+repoPart, issueNumber, prNumber, result.MergedCommitSha, result.MergedAt, "")
-					if _, appErr := store.Append(rec); appErr != nil {
-						fmt.Fprintf(os.Stderr, "Warning: post-merge survival capture failed: %v\n", appErr)
-					}
+			if result.SurvivalEligible && workdir != "" {
+				store := survival.NewStore(workdir)
+				rec := survival.NewPending(ownerPart+"/"+repoPart, issueNumber, prNumber, result.MergedCommitSha, result.MergedAt, "")
+				if _, appErr := store.Append(rec); appErr != nil {
+					fmt.Fprintf(os.Stderr, "Warning: post-merge survival capture failed: %v\n", appErr)
 				}
 			}
 
@@ -5493,15 +5507,15 @@ cause the command to exit non-zero.`,
 			// ROUTINE path, so this is the one caller guaranteed to run on a
 			// repo that has never enabled autonomous mode. Zero GitHub calls
 			// when nothing is due. Best-effort like the rest of the hook.
-			if wd, wdErr := os.Getwd(); wdErr == nil {
+			if workdir != "" {
 				// Same resolution the daemon uses (pipeline.survival.window_days,
 				// nil-Pipeline safe), so a record finalized by hand and one
 				// finalized by the loop agree on when its window elapsed.
 				window := survival.DefaultWindowDays
-				if hookCfg, cfgErr := config.Load(wd); cfgErr == nil && hookCfg != nil {
+				if hookCfg, cfgErr := config.Load(workdir); cfgErr == nil && hookCfg != nil {
 					window = hookCfg.Pipeline.ResolveSurvivalWindowDays()
 				}
-				finRes, finErr := gh.FinalizeDueSurvivalRecords(cmd.Context(), wd, time.Now(), window)
+				finRes, finErr := gh.FinalizeDueSurvivalRecords(cmd.Context(), workdir, time.Now(), window)
 				switch {
 				case finErr != nil:
 					fmt.Fprintf(os.Stderr, "Warning: post-merge survival finalize failed: %v\n", finErr)
@@ -5557,7 +5571,8 @@ cause the command to exit non-zero.`,
 	cmd.Flags().StringVar(&owner, "owner", "", "Repository owner (or owner/repo)")
 	repoNameFlag(cmd, &repo, "", "Repository name")
 	cmd.Flags().IntVar(&projectNumber, "project", 0, "GitHub Project number for board sync (optional)")
-	cmd.Flags().IntVar(&prNumber, "pr", 0, "PR number to verify is MERGED before closing issue (optional; 0 skips verification)")
+	cmd.Flags().IntVar(&prNumber, "pr", 0, "PR number to verify is MERGED before closing issue (optional; 0 skips verification, and skips the survival capture that needs its merge SHA)")
+	cmd.Flags().StringVar(&workdir, "workdir", "", "Root of the survival journal (default: current directory). Set this when the process cwd is a transient worktree.")
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output result as JSON")
 	_ = cmd.MarkFlagRequired("issue") // cobra MarkFlagRequired never errors for known flags
 	_ = cmd.MarkFlagRequired("owner") // cobra MarkFlagRequired never errors for known flags

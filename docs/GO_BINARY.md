@@ -3376,11 +3376,39 @@ nightgauge survival list                  # show captured records (JSON)
 nightgauge survival list --verdict pending
 ```
 
-**Capture** is automatic: the pr-merge path appends a `pending` survival record
-keyed on the merge commit SHA (the #4133 breadcrumb) for every **single-issue
-squash merge** — epic-umbrella PRs are skipped (ambiguous N→1 attribution). The
-record is written to `.nightgauge/pipeline/survival-records.jsonl`
-(append-only; a terminal line supersedes its pending line on fold).
+**Capture** appends a `pending` survival record keyed on the merge commit SHA
+(the #4133 breadcrumb) for every **single-issue squash merge** — epic-umbrella
+PRs are skipped (ambiguous N→1 attribution). The record is written to
+`.nightgauge/pipeline/survival-records.jsonl` (append-only; a terminal line
+supersedes its pending line on fold).
+
+"Automatic" was too strong, and the gap it hid cost the whole evidence base
+(#1019). Capture has **one writer per merge path**, and each depends on a
+contract nothing was checking:
+
+| Path         | Caller                                      | What it must get right                                          |
+| ------------ | ------------------------------------------- | --------------------------------------------------------------- |
+| Go scheduler | in-process, `scheduler.go` post-merge       | rooted at `s.workspaceRoot`                                     |
+| Extension    | `HeadlessOrchestrator.invokePostMergeHook`  | must pass **`--pr`** and **`--workdir`** (see below)            |
+| Hand merge   | the operator's `nightgauge hook post-merge` | must pass `--pr`; `AGENTS.md` mandates this on every hand merge |
+
+Two argv contracts decide whether a record exists at all:
+
+- **`--pr` is not optional for capture.** `hooks.EvaluatePostMerge` only fetches
+  the merge SHA and `mergedAt` when a PR number is given, and `SurvivalEligible`
+  requires both. Omit it and the seeding block is reached and gated off — no
+  record, no error, no trace. The extension omitted it for the life of the
+  feature, which is why a 113-run history carried an empty store.
+- **`--workdir` decides which journal is written.** It defaults to the process
+  cwd. The extension spawns the hook inside the run's git **worktree**, which
+  post-merge cleanup deletes moments later, so without this flag the record is
+  written and then destroyed — and it would never have been launch-rooted, which
+  is where `FinalizeDueSurvivalRecords` looks for it.
+
+`nightgauge doctor`'s **`survival_coverage`** arm is the detector for this
+class: recorded runs with an empty journal. It exists because `survival_backlog`
+reads _pending_ records and therefore returns a clean bill for a store a dead
+writer left empty — indistinguishable from a young workspace.
 
 **Finalize** runs on **three** paths, and the count matters (#992). Until then
 there was exactly one automatic caller — the autonomous reconcile sweep — and it

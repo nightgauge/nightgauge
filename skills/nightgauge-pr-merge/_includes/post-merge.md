@@ -118,47 +118,24 @@ if [ "$ISSUE_CLOSED" = "true" ] && [ "$CLOSE_VERIFIED" = "false" ]; then
   exit 1
 fi
 
-# Invoke post-merge hook so EvaluatePostMerge can check parent epic completion.
-# Non-blocking: errors go to stderr only and never block the merge flow.
-if [ -n "$BINARY" ] && [ "$ISSUE_CLOSED" = "true" ]; then
-  PM_OWNER=$(nightgauge forge repo view --repo "$REPO" --json owner --jq '.owner.login' 2>/dev/null || echo "")
-  PM_REPO=$(nightgauge forge repo view --repo "$REPO" --json name --jq '.name' 2>/dev/null || echo "")
-  PM_PROJECT=$(jq -r '.project_number // 0' "$MERGE_CONTEXT_FILE" 2>/dev/null || echo "0")
-  if [ -n "$PM_OWNER" ] && [ -n "$PM_REPO" ]; then
-    PM_HOOK_RESULT=$("$BINARY" hook post-merge \
-      --issue "$ISSUE_NUMBER" \
-      --owner "$PM_OWNER" \
-      --repo "$PM_REPO" \
-      --project "$PM_PROJECT" \
-      --json 2>&1 || echo '{}')
-    echo "Post-merge hook invoked for issue #$ISSUE_NUMBER"
-
-    # Parse hook result and surface epic auto-close notification
-    EPIC_AUTO_CLOSED=$(echo "$PM_HOOK_RESULT" | jq -r '.autoClosed // false' 2>/dev/null || echo "false")
-    EPIC_NUMBER_CLOSED=$(echo "$PM_HOOK_RESULT" | jq -r '.epicNumber // 0' 2>/dev/null || echo "0")
-    CLOSE_REASON=$(echo "$PM_HOOK_RESULT" | jq -r '.reason // ""' 2>/dev/null || echo "")
-
-    if [ "$EPIC_AUTO_CLOSED" = "true" ] && [ "$EPIC_NUMBER_CLOSED" -gt 0 ]; then
-      EPIC_DETAILS=$("$BINARY" issue view "$EPIC_NUMBER_CLOSED" --owner "$PM_OWNER" --repo "$PM_REPO" --json 2>/dev/null || echo '{}')
-      EPIC_TITLE=$(echo "$EPIC_DETAILS" | jq -r '.title // ""' 2>/dev/null || echo "")
-      if [ -n "$EPIC_TITLE" ]; then
-        EPIC_DISPLAY="$EPIC_TITLE"
-      else
-        EPIC_DISPLAY="Epic #$EPIC_NUMBER_CLOSED"
-      fi
-      echo ""
-      echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-      echo "✓ Epic #$EPIC_NUMBER_CLOSED auto-closed — all sub-issues complete"
-      echo "  $EPIC_DISPLAY"
-      echo "  Status: Moved to Done on project board"
-      echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-      echo ""
-    fi
-    # CLOSE_REASON values "no_parent" and "skipped" are expected — no notification needed
-  else
-    echo "WARNING: Could not resolve owner/repo for post-merge hook" >&2
-  fi
-fi
+# The post-merge hook is NOT invoked here.
+#
+# It used to be, and the invocation could not be made correct where it stood
+# (#1019). This block runs inside the run's git worktree, which post-merge
+# cleanup removes moments later, so any survival record it seeded would be
+# written and then deleted. It also had two dead flags nobody noticed: it never
+# passed --pr, so hooks.EvaluatePostMerge never fetched the merge SHA and the
+# capture was gated off anyway; and PM_PROJECT read $MERGE_CONTEXT_FILE ~90
+# lines BEFORE that variable is assigned, so --project was always literally 0
+# and the board-Done sync it looked like it performed never ran once.
+#
+# There is now exactly one hook caller per merge path:
+#   extension    -> HeadlessOrchestrator.invokePostMergeHook (launch-rooted)
+#   Go scheduler -> its own in-process epic check + survival seeding
+#   hand merge   -> the operator's `nightgauge hook post-merge` (AGENTS.md)
+#
+# The epic auto-close banner this block printed is carried by the hook's own
+# JSON, which the orchestrator logs.
 
 # Step 7.2.5: Prune empty knowledge directories (post-merge, non-blocking)
 CONFIG_PRUNE_ON_MERGE=$(yq -r '.knowledge.auto_prune_on_merge // true' .nightgauge/config.yaml 2>/dev/null || echo "true")
