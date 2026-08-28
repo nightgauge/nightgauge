@@ -1,4 +1,4 @@
-package execution
+package git
 
 import (
 	"os"
@@ -22,16 +22,19 @@ import (
 //
 // Nothing crashes and no error surfaces. That is exactly what makes it costly.
 func TestCleanupMergedBranches_ReportsUnreachableRemoteInsteadOfEmptySuccess(t *testing.T) {
-	repoRoot := initTestGitRepo(t, "main")
+	repoRoot := initCleanupRepo(t, "main")
 
 	// A remote that cannot possibly resolve. `git fetch --prune` fails, so no
 	// branch can ever be marked [gone].
-	runGit(t, repoRoot, "remote", "add", "origin",
+	runGitForCleanup(t, repoRoot, "remote", "add", "origin",
 		filepath.Join(t.TempDir(), "definitely-not-a-repo"))
 
-	m := &Manager{workspaceRoot: repoRoot}
+	svc, err := NewService(repoRoot)
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
 
-	deleted, err := m.CleanupMergedBranches()
+	deleted, err := svc.CleanupMergedBranches()
 
 	if err == nil {
 		t.Fatalf("expected an error when the prune cannot run; got nil with deleted=%v.\n"+
@@ -51,31 +54,31 @@ func TestCleanupMergedBranches_ReportsUnreachableRemoteInsteadOfEmptySuccess(t *
 // error would "fix" the silent no-op by breaking the feature.
 func TestCleanupMergedBranches_DeletesGoneBranchesWhenPruneSucceeds(t *testing.T) {
 	// A real upstream repo so `git fetch --prune` genuinely succeeds.
-	upstream := initTestGitRepo(t, "main")
-	runGit(t, upstream, "config", "receive.denyCurrentBranch", "ignore")
+	upstream := initCleanupRepo(t, "main")
+	runGitForCleanup(t, upstream, "config", "receive.denyCurrentBranch", "ignore")
 
 	clone := t.TempDir()
 	if out, err := exec.Command("git", "clone", upstream, clone).CombinedOutput(); err != nil {
 		t.Fatalf("clone: %v: %s", err, out)
 	}
-	runGit(t, clone, "config", "user.email", "test@test")
-	runGit(t, clone, "config", "user.name", "test")
+	runGitForCleanup(t, clone, "config", "user.email", "test@test")
+	runGitForCleanup(t, clone, "config", "user.name", "test")
 
 	// Publish a branch, then delete it upstream — the post-merge shape.
-	runGit(t, clone, "checkout", "-b", "feat/shipped")
+	runGitForCleanup(t, clone, "checkout", "-b", "feat/shipped")
 	if err := os.WriteFile(filepath.Join(clone, "f.txt"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	runGit(t, clone, "add", ".")
-	runGit(t, clone, "commit", "-m", "work")
-	runGit(t, clone, "push", "-u", "origin", "feat/shipped")
-	runGit(t, upstream, "branch", "-D", "feat/shipped")
+	runGitForCleanup(t, clone, "add", ".")
+	runGitForCleanup(t, clone, "commit", "-m", "work")
+	runGitForCleanup(t, clone, "push", "-u", "origin", "feat/shipped")
+	runGitForCleanup(t, upstream, "branch", "-D", "feat/shipped")
 
 	// Must not be the checked-out branch, or it is protected.
-	runGit(t, clone, "checkout", "main")
+	runGitForCleanup(t, clone, "checkout", "main")
 
-	m := &Manager{workspaceRoot: clone}
-	deleted, err := m.CleanupMergedBranches()
+	svc := mustService(t, clone)
+	deleted, err := svc.CleanupMergedBranches()
 	if err != nil {
 		t.Fatalf("healthy path must not error: %v", err)
 	}
@@ -91,11 +94,36 @@ func TestCleanupMergedBranches_DeletesGoneBranchesWhenPruneSucceeds(t *testing.T
 	}
 }
 
-func runGit(t *testing.T, dir string, args ...string) {
+func runGitForCleanup(t *testing.T, dir string, args ...string) {
 	t.Helper()
 	cmd := exec.Command("git", args...)
 	cmd.Dir = dir
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("git %s: %v: %s", strings.Join(args, " "), err, out)
 	}
+}
+
+// initCleanupRepo makes a throwaway repo with one commit on branchName.
+func initCleanupRepo(t *testing.T, branchName string) string {
+	t.Helper()
+	dir := t.TempDir()
+	runGitForCleanup(t, dir, "init", "-b", branchName)
+	runGitForCleanup(t, dir, "config", "user.email", "test@test")
+	runGitForCleanup(t, dir, "config", "user.name", "test")
+	if err := os.WriteFile(filepath.Join(dir, "README"), []byte("hi"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGitForCleanup(t, dir, "add", ".")
+	runGitForCleanup(t, dir, "commit", "-m", "initial")
+	return dir
+}
+
+// mustService opens a Service or fails the test.
+func mustService(t *testing.T, repoRoot string) *Service {
+	t.Helper()
+	svc, err := NewService(repoRoot)
+	if err != nil {
+		t.Fatalf("NewService(%s): %v", repoRoot, err)
+	}
+	return svc
 }
