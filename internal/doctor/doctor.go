@@ -404,6 +404,18 @@ func RunDoctor(ctx context.Context, cfg *config.Config, client *gh.Client, adapt
 		warnings = append(warnings, survivalWarning)
 	}
 
+	// The THIRD absence detector (#1019), and the one that distinguishes an
+	// empty survival journal from a young one. The backlog arm above reads
+	// PENDING records, so it returns a clean bill for a store with nothing in
+	// it — which is precisely what a dead writer produces. This arm keys on the
+	// outcome corpus's row count instead, because that is written by a
+	// different mechanism on the same merges.
+	survivalCoverage, coverageWarning := checkSurvivalCoverage(cwd)
+	result.Checks["survival_coverage"] = survivalCoverage
+	if coverageWarning != "" {
+		warnings = append(warnings, coverageWarning)
+	}
+
 	// The second absence detector (#994). Same shape as the arm above and for
 	// the same reason: every consumer of the outcome corpus reports an
 	// unmeasurable one as "no data", which is indistinguishable from a young

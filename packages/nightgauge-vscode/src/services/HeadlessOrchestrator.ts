@@ -3172,6 +3172,65 @@ export class HeadlessOrchestrator implements vscode.Disposable {
    * Non-blocking by design: any failure logs a warning but never throws.
    * The merge itself has already succeeded by the time we get here.
    */
+  /**
+   * owner/repo for the post-merge hook.
+   *
+   * Prefers the slot's own repo override: on the concurrent-slot path the run
+   * targets a repository that is not necessarily the one the process cwd sits
+   * in, and asking `gh repo view` in the wrong directory names the wrong repo
+   * in the survival record. The fallback runs in getRunRepoRoot() for the same
+   * reason — the run's repo, never the launch root.
+   */
+  private async resolvePostMergeNwo(issueNumber: number): Promise<{ owner: string; repo: string }> {
+    if (this.repoOverride?.includes("/")) {
+      const [owner, repo] = this.repoOverride.split("/");
+      if (owner && repo) {
+        return { owner, repo };
+      }
+    }
+    try {
+      const { stdout: nwoRaw } = await execFileAsync(
+        "gh",
+        ["repo", "view", "--json", "owner,name", "-q", '.owner.login + "/" + .name'],
+        { cwd: this.getRunRepoRoot(), encoding: "utf-8", timeout: 10_000 }
+      );
+      const [owner, repo] = nwoRaw.trim().split("/");
+      if (!owner || !repo) {
+        this.logger.warn("Post-merge hook: could not resolve owner/repo", {
+          issueNumber,
+          nwo: nwoRaw.trim(),
+        });
+        return { owner: "", repo: "" };
+      }
+      return { owner, repo };
+    } catch (err) {
+      this.logger.warn("Post-merge hook: could not resolve owner/repo", {
+        issueNumber,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return { owner: "", repo: "" };
+    }
+  }
+
+  /**
+   * The merged PR's number, from the pr-{N}.json context file. Returns 0 when
+   * the file is absent or unreadable — the hook then behaves as it did before
+   * #1019 (epic check only, no survival capture) rather than not running.
+   */
+  private readMergedPrNumber(issueNumber: number): number {
+    try {
+      const prContextPath = this.getContextPath("pr", issueNumber);
+      if (!fs.existsSync(prContextPath)) {
+        return 0;
+      }
+      const prContext = JSON.parse(fs.readFileSync(prContextPath, "utf-8"));
+      const n = Number(prContext.pr_number);
+      return Number.isFinite(n) && n > 0 ? n : 0;
+    } catch {
+      return 0;
+    }
+  }
+
   private async invokePostMergeHook(issueNumber: number): Promise<void> {
     const cwd = this.pinnedWorkspaceRoot ?? this.getWorkingDirectory();
     try {
@@ -3184,35 +3243,46 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         return;
       }
 
-      const { stdout: nwoRaw } = await execFileAsync(
-        "gh",
-        ["repo", "view", "--json", "owner,name", "-q", '.owner.login + "/" + .name'],
-        { cwd, encoding: "utf-8", timeout: 10_000 }
-      );
-      const [owner, repo] = nwoRaw.trim().split("/");
+      const { owner, repo } = await this.resolvePostMergeNwo(issueNumber);
       if (!owner || !repo) {
-        this.logger.warn("Post-merge hook: could not resolve owner/repo", {
-          issueNumber,
-          nwo: nwoRaw.trim(),
-        });
         return;
       }
 
-      const { stdout } = await execFileAsync(
-        binary,
-        [
-          "hook",
-          "post-merge",
-          "--issue",
-          String(issueNumber),
-          "--owner",
-          owner,
-          "--repo",
-          repo,
-          "--json",
-        ],
-        { cwd, encoding: "utf-8", timeout: 30_000 }
-      );
+      // The PR number, read the same way verifyPostMergeState reads it. Without
+      // it hooks.EvaluatePostMerge never fetches the merge SHA and mergedAt, so
+      // SurvivalEligible is false and the seeding block is dead — which is how
+      // the mandated dogfood path produced zero survival records (#1019). The
+      // hook is non-blocking, so an unreadable context file degrades to the old
+      // epic-only behaviour rather than skipping the hook.
+      const prNumber = this.readMergedPrNumber(issueNumber);
+
+      const args = [
+        "hook",
+        "post-merge",
+        "--issue",
+        String(issueNumber),
+        "--owner",
+        owner,
+        "--repo",
+        repo,
+        // Root the survival journal at the LAUNCH root, not the process cwd.
+        // cwd is the run's worktree on the concurrent-slot path, and that
+        // directory is removed as part of post-merge cleanup — the record would
+        // be written and then deleted, leaving no trace of the failure. This is
+        // the TypeScript twin of the Go scheduler's s.workspaceRoot.
+        "--workdir",
+        this.getPersistentRoot(),
+        "--json",
+      ];
+      if (prNumber > 0) {
+        args.splice(4, 0, "--pr", String(prNumber));
+      }
+
+      const { stdout } = await execFileAsync(binary, args, {
+        cwd,
+        encoding: "utf-8",
+        timeout: 30_000,
+      });
       this.logger.info("Post-merge hook completed", {
         issueNumber,
         result: stdout.trim(),
