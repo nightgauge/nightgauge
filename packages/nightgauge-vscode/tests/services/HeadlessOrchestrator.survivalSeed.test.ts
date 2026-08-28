@@ -276,12 +276,27 @@ describe("HeadlessOrchestrator seeds a survival record on the extension merge pa
    */
   describe("the argv a clean run produces", () => {
     let spawn: { args: string[]; cwd: string };
+    let cached: { args: string[]; cwd: string } | null = null;
 
+    // Drive the pipeline ONCE for all three assertions, then reuse the captured
+    // argv. `beforeEach` is the right place to assign `spawn` (the outer
+    // beforeEach resets fake timers and clears hookSpawns per test), but the
+    // expensive run happens only on the first pass — the `cached` guard is what
+    // makes this share work rather than merely relocate it.
+    //
+    // An explicit timeout because the default HOOK budget is 10s, tighter than
+    // the 15s test budget: driving a real eight-stage pipeline burns real
+    // wall-clock even with faked timers, and a loaded CI runner crosses it.
     beforeEach(async () => {
-      await runCleanPipeline();
-      expect(hookSpawns.length, "the post-merge hook should have been invoked").toBeGreaterThan(0);
-      spawn = hookSpawns[hookSpawns.length - 1];
-    });
+      if (!cached) {
+        await runCleanPipeline();
+        expect(hookSpawns.length, "the post-merge hook should have been invoked").toBeGreaterThan(
+          0
+        );
+        cached = hookSpawns[hookSpawns.length - 1];
+      }
+      spawn = cached;
+    }, 60_000);
 
     it("passes --pr, so the hook can fetch the merge SHA the record is made of", () => {
       // Without --pr, EvaluatePostMerge never resolves MergedCommitSha/MergedAt,
