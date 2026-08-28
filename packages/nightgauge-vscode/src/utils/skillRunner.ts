@@ -731,6 +731,16 @@ const HEADLESS_STALL_CHECK_INTERVAL_MS = 30_000;
 const NX_RUNAWAY_KILL_MULTIPLE = 8;
 
 /**
+ * Seconds a SINGLE tool call may run before its heartbeats stop counting as
+ * activity (#1083).
+ *
+ * Not a kill timer: past it, the stage simply becomes killable again by the
+ * machinery that already exists. See the heartbeat block in the stream handler
+ * for why both arms are required.
+ */
+const WEDGED_TOOL_CALL_CEILING_S = 20 * 60;
+
+/**
  * Fast-fail idle threshold once a quota-exhausted `rate_limit_event` has
  * been observed (Issue #3425, follow-up to #3386).
  *
@@ -6078,6 +6088,10 @@ export function runStageSkillHeadless(
   // This detects when Claude repeatedly tries AskUserQuestion despite it being
   // filtered from allowed tools. The CLI treats it as permission denial, causing
   // Claude to retry indefinitely.
+  // Tool calls already reported as wedged (#1083) — one line per call, not per
+  // heartbeat, or a wedged call would log every 30 seconds until the kill.
+  const wedgedToolCallsReported = new Set<string>();
+
   let lastToolCall: { name: string; inputHash: string } | null = null;
   let consecutiveAttempts = 0;
 
@@ -6243,6 +6257,43 @@ export function runStageSkillHeadless(
       // Served-model attribution (#91): last observed model wins; a refusal
       // fallback event gets one observable log line the moment it fires.
       observeServedModel(parsed);
+
+      // ── Heartbeats from an in-flight tool call (#1083) ──────────────────
+      //
+      // BOTH ARMS ARE LOAD-BEARING and must ship together.
+      //
+      // Under the ceiling, a heartbeat is ACTIVITY: it proves the stage is
+      // alive and waiting on real work, which stops the runaway guard killing
+      // a stage for waiting. A watched run was killed 171s after its suite
+      // reported 1436 tests passing, with `idle_ms_at_exit: 355`, because the
+      // activity clock only advances on NOVEL tool signatures and waiting
+      // produces none.
+      //
+      // Past the ceiling the heartbeat stops counting, which lets the EXISTING
+      // kill machinery reclaim the stage with no new kill path. Without this
+      // arm the fix would be strictly worse than the bug: a wedged child that
+      // heartbeats forever would become immortal. In the same run,
+      // `build_runner` deadlocked after an analyzer exception and heartbeated
+      // for 25 minutes at zero CPU with no open files.
+      //
+      // The ceiling sits between the two: the longest legitimate single call
+      // observed was ~17 minutes (a cold codegen build), the wedge was 25.
+      // An observed-range choice, not a derived one — widen it if a real
+      // command is found above it.
+      if (parsed?.type === "tool_progress" && parsed.toolProgress) {
+        const { toolUseId, toolName, elapsedSeconds } = parsed.toolProgress;
+        if (elapsedSeconds <= WEDGED_TOOL_CALL_CEILING_S) {
+          progressMonitor.recordSignal("tool_heartbeat");
+        } else if (!wedgedToolCallsReported.has(toolUseId)) {
+          wedgedToolCallsReported.add(toolUseId);
+          callbacks?.onStderr?.(
+            `[wedged-tool-call] Stage ${stage}: ${toolName ?? "a tool call"} has been ` +
+              `running for ${Math.round(elapsedSeconds)}s, past the ` +
+              `${WEDGED_TOOL_CALL_CEILING_S}s ceiling. Its heartbeats no longer defer the ` +
+              `runaway guard — the stage is now killable as it was before. (#1083)\n`
+          );
+        }
+      }
 
       // Detect phase markers in streaming text content.
       // Skills emit HTML comments like: <!-- phase:start name="..." index=N total=N stage="..." -->
