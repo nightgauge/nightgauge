@@ -293,17 +293,39 @@ describe("HeadlessOrchestrator seeds a survival record on the extension merge pa
     expect(flagValue(spawn.args, "--repo")).toBe("target");
   });
 
+  /**
+   * Degradation, driven directly rather than through runPipeline.
+   *
+   * The three tests above already pin the WIRING — deleting the call site turns
+   * all of them red — so this one only needs to pin the argv SHAPE when the PR
+   * number cannot be read. Driving the whole pipeline for it is both redundant
+   * and non-deterministic: with no pr_number the run does not settle inside the
+   * drained window, which passed locally and timed out on a loaded CI runner.
+   */
   it("still invokes the hook when the PR context file carries no pr_number", async () => {
     const fs = await import("fs");
-    vi.mocked(fs.readFileSync).mockImplementation((p: any) =>
-      typeof p === "string" && p.includes("pr-") ? "{}" : "{}"
-    );
+    vi.mocked(fs.readFileSync).mockImplementation(() => "{}" as any);
 
-    await runCleanPipeline();
+    const orchestrator = new HeadlessOrchestrator(createMockStateService(), mockLogger, {
+      contextFileWaitMs: 0,
+    });
+    orchestrator.setMainRepoRoot(LAUNCH_ROOT);
+    orchestrator.setWorktreeOverride(WORKTREE);
+    orchestrator.setRepoOverride("nightgauge/target");
+
+    await (
+      orchestrator as unknown as {
+        invokePostMergeHook(issueNumber: number): Promise<void>;
+      }
+    ).invokePostMergeHook(4151);
 
     // Degrades to the pre-#1019 behaviour — epic check only — rather than
     // skipping the hook and losing the epic rollup as well.
-    expect(hookSpawns.length).toBeGreaterThan(0);
-    expect(flagValue(hookSpawns[hookSpawns.length - 1].args, "--pr")).toBeUndefined();
+    expect(hookSpawns.length).toBe(1);
+    const args = hookSpawns[0].args;
+    expect(flagValue(args, "--pr")).toBeUndefined();
+    // The root contract does NOT depend on the PR number being readable.
+    expect(flagValue(args, "--workdir")).toBe(LAUNCH_ROOT);
+    expect(flagValue(args, "--issue")).toBe("4151");
   });
 });
