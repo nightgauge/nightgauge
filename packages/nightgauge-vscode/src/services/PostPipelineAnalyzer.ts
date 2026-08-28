@@ -183,7 +183,20 @@ export class PostPipelineAnalyzer {
   static async analyze(
     workspaceRoot: string,
     issueNumber: number,
-    logger: Logger
+    logger: Logger,
+    /**
+     * Where the STAGE ran, when that is not `workspaceRoot` (#1084).
+     *
+     * `nightgauge gate record-metric` is invoked by the feature-validate skill
+     * from inside the stage's worktree and passes no root, so the Go verb
+     * defaults it to `os.Getwd()` and the file lands there. This reader is
+     * called with the persistent root. In a worktree run those never meet, and
+     * `readAll`'s `catch { return [] }` renders the difference as `Gates: N/A`.
+     *
+     * Optional and last-resort on purpose: the persistent root stays the
+     * primary source, so a non-worktree run is byte-identical to before.
+     */
+    stageRoot?: string
   ): Promise<PostPipelineAnalysisResult | null> {
     try {
       // Read all execution history records
@@ -261,7 +274,18 @@ export class PostPipelineAnalyzer {
       // Gate effectiveness analysis (non-critical) — Issue #1412
       let gateEffectiveness: PostPipelineAnalysisResult["gateEffectiveness"] = null;
       try {
-        const gateRecords = await GateMetricsWriter.readAll(workspaceRoot);
+        let gateRecords = await GateMetricsWriter.readAll(workspaceRoot);
+        if (gateRecords.length === 0 && stageRoot && stageRoot !== workspaceRoot) {
+          // The worktree is where the writer actually put them (#1084).
+          gateRecords = await GateMetricsWriter.readAll(stageRoot);
+          if (gateRecords.length > 0) {
+            logger.info("Gate metrics found in the stage root, not the workspace root", {
+              workspaceRoot,
+              stageRoot,
+              records: gateRecords.length,
+            });
+          }
+        }
         if (gateRecords.length > 0) {
           const byGate = new Map<string, { invocations: number; catches: number }>();
           for (const r of gateRecords) {
