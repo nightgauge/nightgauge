@@ -83,8 +83,20 @@ export function createPhaseTracker(stateService: PipelineStateService): PhaseTra
     const registryPhases = PHASE_REGISTRY[stage as ExecutionStage] ?? [];
     const total = registryPhases.length > 0 ? registryPhases.length : marker.total;
 
+    // Derive the INDEX from the registry too (#1008), for the same reason the
+    // total is derived: the registry is the one declaration of where a phase
+    // sits in its stage. The tree view already renders a phase by looking its
+    // NAME up here, so a record carrying any other number disagrees with the
+    // display by construction — and `startPhase` used to record
+    // `phases.length`, a running count of how many phases happened to be
+    // recorded so far. That is how `sync-project-status` was stored at index 2
+    // while the registry (and the skill's own marker) place it at 15, and the
+    // GUI showed "15 of 18" for a stage on its third recorded phase.
+    const registryIndex = registryPhases.findIndex((p) => p.name === marker.name);
+    const index = registryIndex >= 0 ? registryIndex : marker.index;
+
     console.log(
-      `[PhaseTracker] onPhaseDetected: stage=${stage} phase=${marker.name} index=${marker.index} total=${total}`
+      `[PhaseTracker] onPhaseDetected: stage=${stage} phase=${marker.name} index=${index} total=${total}`
     );
 
     const prev = activePhase.get(stage);
@@ -95,7 +107,7 @@ export function createPhaseTracker(stateService: PipelineStateService): PhaseTra
       if (prev) {
         await stateService.completePhase(stage, prev.name, prev.total);
       }
-      await stateService.startPhase(stage, marker.name, total);
+      await stateService.startPhase(stage, marker.name, total, index);
     });
   }
 
@@ -127,8 +139,8 @@ export function createPhaseTracker(stateService: PipelineStateService): PhaseTra
       // state.json, the phase would be absent from both the seen set bypass
       // and the phases array — resulting in a permanent gap in the count.
       // Calling skipPhase unconditionally closes that gap. Issue #1232
-      for (const phaseDef of registryPhases) {
-        await stateService.skipPhase(stage, phaseDef.name, total);
+      for (let i = 0; i < registryPhases.length; i++) {
+        await stateService.skipPhase(stage, registryPhases[i].name, total, i);
       }
     });
   }
