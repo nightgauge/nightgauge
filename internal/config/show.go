@@ -27,14 +27,20 @@ var ErrRawNotScalar = errors.New("--raw is only valid on scalar values")
 // The view is intentionally narrower than yamlConfigNested — it only carries
 // fields the consuming verb is expected to surface.
 type renderView struct {
-	Project        renderProject           `yaml:"project,omitempty"`
-	GitHubUser     string                  `yaml:"github_user,omitempty"`
-	GitHubAuth     *GitHubAuthConfig       `yaml:"github_auth,omitempty"`
-	LogLevel       string                  `yaml:"logLevel,omitempty"`
-	APIKey         string                  `yaml:"api_key,omitempty"`
-	Sanitization   *SanitizationConfig     `yaml:"sanitization,omitempty"`
-	FeedbackLoop   *FeedbackLoopConfig     `yaml:"feedback_loop,omitempty"`
-	Platform       *renderPlatform         `yaml:"platform,omitempty"`
+	Project      renderProject       `yaml:"project,omitempty"`
+	GitHubUser   string              `yaml:"github_user,omitempty"`
+	GitHubAuth   *GitHubAuthConfig   `yaml:"github_auth,omitempty"`
+	LogLevel     string              `yaml:"logLevel,omitempty"`
+	APIKey       string              `yaml:"api_key,omitempty"`
+	Sanitization *SanitizationConfig `yaml:"sanitization,omitempty"`
+	FeedbackLoop *FeedbackLoopConfig `yaml:"feedback_loop,omitempty"`
+	Platform     *renderPlatform     `yaml:"platform,omitempty"`
+	// #1048: the whole pipeline: block was absent from this view, so
+	// `config show` could not display architecture_approval, budget_preset,
+	// max_concurrent, default_branch or worktree_base — the settings most
+	// likely to be tuned. PipelineExec below is `pipeline_executor`, a
+	// different key, which is what made the omission easy to miss.
+	Pipeline       *PipelineConfig         `yaml:"pipeline,omitempty"`
 	RemoteCommands *RemoteCommandsConfig   `yaml:"remote_commands,omitempty"`
 	AgentTeams     *AgentTeamsConfig       `yaml:"agent_teams,omitempty"`
 	Autonomous     *AutonomousConfig       `yaml:"autonomous,omitempty"`
@@ -51,6 +57,11 @@ type renderProject struct {
 }
 
 type renderPlatform struct {
+	// #1048: MUST be *bool, not bool. A plain bool with omitempty drops an
+	// explicit `enabled: false` — reproducing this very defect for the one
+	// value operators most need to confirm, since Platform.Enabled is a
+	// pointer precisely so omitted and false are distinguishable.
+	Enabled    *bool            `yaml:"enabled,omitempty"`
 	APIURL     string           `yaml:"api_url,omitempty"`
 	LicenseKey string           `yaml:"license_key,omitempty"`
 	Telemetry  *TelemetryConfig `yaml:"telemetry,omitempty"`
@@ -91,12 +102,20 @@ func toRenderView(cfg *Config) renderView {
 		Autonomous:     cfg.Autonomous,
 		Knowledge:      cfg.Knowledge,
 		PipelineExec:   cfg.PipelineExecutor,
+		Pipeline:       cfg.Pipeline,
 	}
 	// api_url / license_key mirror the on-disk platform: block (#333) — render
 	// them nested, matching the schema the VSCode extension actually writes,
 	// rather than as flat top-level keys.
-	if cfg.Telemetry != nil || cfg.PlatformURL != "" || cfg.LicenseKey != "" {
+	//
+	// #1048: PlatformEnabled joins the guard as a BARE nil check. The tempting
+	// variant — `|| (cfg.PlatformEnabled != nil && *cfg.PlatformEnabled)` —
+	// ships this defect again: an operator who explicitly disabled the platform
+	// would still see no platform block, which is exactly the absent-versus-off
+	// ambiguity being removed here.
+	if cfg.Telemetry != nil || cfg.PlatformURL != "" || cfg.LicenseKey != "" || cfg.PlatformEnabled != nil {
 		v.Platform = &renderPlatform{
+			Enabled:    cfg.PlatformEnabled,
 			APIURL:     cfg.PlatformURL,
 			LicenseKey: redactConfigSecret(cfg.LicenseKey),
 			Telemetry:  cfg.Telemetry,
