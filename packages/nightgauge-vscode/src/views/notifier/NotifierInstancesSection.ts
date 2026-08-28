@@ -30,6 +30,9 @@ function escapeHtml(str: string): string {
     .replace(/"/g, "&quot;");
 }
 
+/** Every provider the settings surface offers, in display order. */
+export const NOTIFIER_PROVIDERS: NotifierProvider[] = ["discord", "mattermost", "slack"];
+
 const PROVIDER_LABEL: Record<NotifierProvider, string> = {
   discord: "Discord",
   mattermost: "Mattermost",
@@ -79,7 +82,7 @@ export function getNotifierInstancesSectionHtml(
 
   const tableRows =
     notifiers.length === 0
-      ? `<tr><td colspan="6" class="notifier-empty-row">No notifier instances configured. Click <strong>Add Discord</strong> or <strong>Add Mattermost</strong> to get started.</td></tr>`
+      ? `<tr><td colspan="6" class="notifier-empty-row">No notifier instances configured. Click ${NOTIFIER_PROVIDERS.map((p) => `<strong>Add ${PROVIDER_LABEL[p]}</strong>`).join(" or ")} to get started.</td></tr>`
       : notifiers
           .map((n) => {
             const errorTitle = n.lastError ? ` title="${escapeHtml(n.lastError)}"` : "";
@@ -105,14 +108,13 @@ export function getNotifierInstancesSectionHtml(
   return `
     <div class="subsection">
       <div class="notifier-toolbar">
-        <button class="notifier-add-btn" id="notifier-add-discord-btn"${disabledAttr}>
+        ${NOTIFIER_PROVIDERS.map(
+          (p) => `
+        <button class="notifier-add-btn" id="notifier-add-${p}-btn"${disabledAttr}>
           <span class="codicon codicon-add"></span>
-          Add Discord
-        </button>
-        <button class="notifier-add-btn" id="notifier-add-mattermost-btn"${disabledAttr}>
-          <span class="codicon codicon-add"></span>
-          Add Mattermost
-        </button>
+          Add ${PROVIDER_LABEL[p]}
+        </button>`
+        ).join("")}
       </div>
       <table class="notifier-table">
         <thead>
@@ -222,18 +224,15 @@ export function getNotifierInstancesSectionHtml(
     </style>
     <script>
       (function() {
-        const addDiscordBtn = document.getElementById('notifier-add-discord-btn');
-        if (addDiscordBtn) {
-          addDiscordBtn.addEventListener('click', () => {
-            vscode.postMessage({ type: 'notifier-add', notifierType: 'discord' });
-          });
-        }
-        const addMattermostBtn = document.getElementById('notifier-add-mattermost-btn');
-        if (addMattermostBtn) {
-          addMattermostBtn.addEventListener('click', () => {
-            vscode.postMessage({ type: 'notifier-add', notifierType: 'mattermost' });
-          });
-        }
+        // Driven by NOTIFIER_PROVIDERS so a new provider needs no wiring here.
+        ${JSON.stringify(NOTIFIER_PROVIDERS)}.forEach(provider => {
+          const btn = document.getElementById('notifier-add-' + provider + '-btn');
+          if (btn) {
+            btn.addEventListener('click', () => {
+              vscode.postMessage({ type: 'notifier-add', notifierType: provider });
+            });
+          }
+        });
         document.querySelectorAll('.notifier-action-btn').forEach(btn => {
           btn.addEventListener('click', () => {
             const action = btn.getAttribute('data-notifier-action');

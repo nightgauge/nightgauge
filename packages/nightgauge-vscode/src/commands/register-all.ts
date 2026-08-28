@@ -92,6 +92,7 @@ import { registerRetryCommands } from "./register-retry-commands";
 import { registerConfigureForgeInstanceCommand } from "./configureForgeInstance";
 import { registerConfigureDiscordWebhookCommand } from "./configureDiscordWebhook";
 import { registerConfigureMattermostWebhookCommand } from "./configureMattermostWebhook";
+import { registerConfigureSlackNotificationsCommand } from "./configureSlackNotifications";
 import { registerConfigureMattermostWorkspaceCommand } from "./configureMattermostWorkspace";
 import { registerAccountCommands } from "./accountCommands";
 import { registerManageSubscriptionCommand } from "./manageSubscription";
@@ -761,6 +762,7 @@ export function registerAllCommands(deps: AllCommandDeps): void {
 
     // Mattermost webhook configuration (Issue #3373)
     registerConfigureMattermostWebhookCommand(),
+    registerConfigureSlackNotificationsCommand(),
 
     // Mattermost full workspace configuration (Issue #3378)
     registerConfigureMattermostWorkspaceCommand(),

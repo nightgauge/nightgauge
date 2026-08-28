@@ -8,6 +8,7 @@
 import { describe, it, expect } from "vitest";
 import {
   getNotifierInstancesSectionHtml,
+  NOTIFIER_PROVIDERS,
   type NotifierInstanceRow,
 } from "../../../src/views/notifier/NotifierInstancesSection";
 
@@ -153,5 +154,40 @@ describe("getNotifierInstancesSectionHtml", () => {
     const html = getNotifierInstancesSectionHtml([], false);
     expect(html).toContain("<script>");
     expect(html).toContain("vscode.postMessage");
+  });
+
+  // Driven off NOTIFIER_PROVIDERS rather than a hardcoded list, so adding a
+  // provider without an Add button or a click handler fails here instead of
+  // shipping a button that does nothing (#1073).
+  describe("every configured provider is offered", () => {
+    const html = getNotifierInstancesSectionHtml([], false);
+
+    for (const provider of NOTIFIER_PROVIDERS) {
+      it(`renders an Add button for ${provider}`, () => {
+        expect(html).toContain(`id="notifier-add-${provider}-btn"`);
+      });
+    }
+
+    it("wires every Add button to a postMessage handler", () => {
+      // The client script iterates the serialized provider list.
+      expect(html).toContain(JSON.stringify(NOTIFIER_PROVIDERS));
+      expect(html).toContain("notifier-add-' + provider + '-btn");
+    });
+
+    it("names every provider in the empty-state copy", () => {
+      for (const provider of NOTIFIER_PROVIDERS) {
+        const label = provider.charAt(0).toUpperCase() + provider.slice(1);
+        expect(html).toContain(`Add ${label}`);
+      }
+    });
+  });
+
+  it("renders a Slack row with its own provider badge", () => {
+    const html = getNotifierInstancesSectionHtml(
+      [{ id: "slack", type: "slack", channel: "#pipeline", status: "connected" }],
+      false
+    );
+    expect(html).toContain("badge-slack");
+    expect(html).toContain("Slack");
   });
 });
