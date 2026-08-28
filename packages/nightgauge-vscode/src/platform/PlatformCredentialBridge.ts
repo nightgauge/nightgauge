@@ -63,9 +63,17 @@ export class PlatformCredentialBridge implements vscode.Disposable {
   ) {
     this._subscription = tokenStorage.onTokenChanged((evt) => {
       // 'cleared' is the bulk sign-out and 'rekeyed' is a host switch — both
-      // change what storage answers for every key. Otherwise only the access
-      // token matters.
-      if (evt.action !== "cleared" && evt.action !== "rekeyed" && evt.key !== "accessToken") {
+      // change what storage answers for every key. `all` + 'stored' is the
+      // atomic session write a sign-in now produces (#1024): without it here,
+      // making the write atomic would have silently stopped pushing the new
+      // token to the Go daemon, because no per-field accessToken event is
+      // emitted any more. Otherwise only the access token matters.
+      if (
+        evt.action !== "cleared" &&
+        evt.action !== "rekeyed" &&
+        evt.key !== "accessToken" &&
+        evt.key !== "all"
+      ) {
         return;
       }
       this._markStale();

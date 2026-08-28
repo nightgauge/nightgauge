@@ -50,6 +50,22 @@ class FakeTokenStorage implements ITokenStorage {
     this.fire({ key, action: "stored" });
   }
 
+  /**
+   * The atomic session write (#1024). One `{key:"all"}` event after all three
+   * fields land — which is precisely the event shape this bridge had to start
+   * honouring, or an atomic write would silently stop pushing the token to Go.
+   */
+  async storeSession(session: {
+    accessToken: string;
+    refreshToken: string;
+    expiresAt: string;
+  }): Promise<void> {
+    this.values.set("accessToken", session.accessToken);
+    this.values.set("refreshToken", session.refreshToken);
+    this.values.set("expiresAt", session.expiresAt);
+    this.fire({ key: "all", action: "stored" });
+  }
+
   async retrieve(key: TokenKey): Promise<string | null> {
     if (this.retrieveError) throw this.retrieveError;
     return this.values.get(key) ?? null;

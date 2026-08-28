@@ -205,11 +205,17 @@ export class OAuthDeviceFlowService implements vscode.Disposable {
       return;
     }
 
-    await tokenStorage.store("accessToken", tokenResponse.access_token);
-    await tokenStorage.store("refreshToken", tokenResponse.refresh_token);
-
-    const expiresAt = new Date(Date.now() + tokenResponse.expires_in * 1000).toISOString();
-    await tokenStorage.store("expiresAt", expiresAt);
+    // One atomic write (#1024). This used to be three `store()` calls with
+    // accessToken FIRST — and `store()` fires a per-field event, so the refresh
+    // scheduler re-armed on the accessToken event and then read an expiresAt
+    // that the preceding clear() had deleted and this method had not yet
+    // written. It scheduled nothing, and a freshly signed-in session never
+    // refreshed.
+    await tokenStorage.storeSession({
+      accessToken: tokenResponse.access_token,
+      refreshToken: tokenResponse.refresh_token,
+      expiresAt: new Date(Date.now() + tokenResponse.expires_in * 1000).toISOString(),
+    });
   }
 
   private delay(ms: number): Promise<void> {

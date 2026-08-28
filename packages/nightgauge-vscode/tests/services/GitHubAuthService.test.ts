@@ -53,8 +53,11 @@ vi.mock("vscode", () => {
 const mockTokenStore = vi.fn().mockResolvedValue(undefined);
 const mockTokenRetrieve = vi.fn().mockResolvedValue(null);
 const mockTokenClear = vi.fn().mockResolvedValue(undefined);
+// #1024: sign-in writes the session atomically, so the double needs this.
+const mockTokenStoreSession = vi.fn().mockResolvedValue(undefined);
 let mockTokenStorageInstance: object | null = {
   store: mockTokenStore,
+  storeSession: mockTokenStoreSession,
   retrieve: mockTokenRetrieve,
   clear: mockTokenClear,
 };
@@ -115,6 +118,7 @@ describe("GitHubAuthService", () => {
     // Reset token storage to always-present state
     mockTokenStorageInstance = {
       store: mockTokenStore,
+      storeSession: mockTokenStoreSession,
       retrieve: mockTokenRetrieve,
       clear: mockTokenClear,
     };
@@ -144,9 +148,14 @@ describe("GitHubAuthService", () => {
         createIfNone: true,
       });
       expect(ipcClient.platformAuthGithub).toHaveBeenCalledWith("gh_token_abc");
-      expect(mockTokenStore).toHaveBeenCalledWith("accessToken", tokenResponse.access_token);
-      expect(mockTokenStore).toHaveBeenCalledWith("refreshToken", tokenResponse.refresh_token);
-      expect(mockTokenStore).toHaveBeenCalledWith("expiresAt", expect.any(String));
+      // One atomic write, not three per-field calls (#1024). Stronger than the
+      // assertion it replaces: it pins that all three fields go in together,
+      // which is what lets the refresh scheduler read a real expiresAt.
+      expect(mockTokenStoreSession).toHaveBeenCalledWith({
+        accessToken: tokenResponse.access_token,
+        refreshToken: tokenResponse.refresh_token,
+        expiresAt: expect.any(String),
+      });
       expect(onSignedInFired).toHaveBeenCalledOnce();
       expect(vscode.window.showInformationMessage).toHaveBeenCalledWith(
         "Nightgauge: Signed in via GitHub!"
