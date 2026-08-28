@@ -25,7 +25,7 @@ vi.mock("../../../src/services/SecretStorageService", () => ({
   SECRET_KEYS: { slackBotToken: "slackBotToken" },
 }));
 
-const { SlackService, isSlackBotToken, SLACK_API_BASE } =
+const { SlackService, isSlackBotToken, toSlackMrkdwn, SLACK_API_BASE } =
   await import("../../../src/services/notifications/SlackService");
 
 /** Fake bot token. Assembled from parts so no literal looks like a credential. */
@@ -101,6 +101,47 @@ describe("isSlackBotToken", () => {
   });
 });
 
+describe("toSlackMrkdwn", () => {
+  // The shared renderer emits Discord/Mattermost Markdown. Slack accepts the
+  // payload either way and returns ok:true, so an untranslated message is a
+  // SILENT rendering defect — visible only by looking at the channel.
+  it("converts Markdown links to Slack link syntax", () => {
+    expect(toSlackMrkdwn("[the issue](https://example.test/42)")).toBe(
+      "<https://example.test/42|the issue>"
+    );
+  });
+
+  it("converts double-asterisk bold to Slack's single asterisk", () => {
+    expect(toSlackMrkdwn("**Feature Dev**")).toBe("*Feature Dev*");
+  });
+
+  it("keeps two bold runs on one line separate", () => {
+    expect(toSlackMrkdwn("**a** and **b**")).toBe("*a* and *b*");
+  });
+
+  it("unwraps a bold label inside a link", () => {
+    expect(toSlackMrkdwn("[**Title**](https://u.test)")).toBe("<https://u.test|*Title*>");
+  });
+
+  it("converts strikethrough", () => {
+    expect(toSlackMrkdwn("~~gone~~")).toBe("~gone~");
+  });
+
+  // A ** or a bracket inside a command or a stack trace is literal text.
+  it("leaves inline code spans untouched", () => {
+    expect(toSlackMrkdwn("run `npm **x**` now")).toBe("run `npm **x**` now");
+  });
+
+  it("leaves fenced blocks untouched", () => {
+    const fenced = "```\nkeep **this** [as](is)\n```";
+    expect(toSlackMrkdwn(fenced)).toBe(fenced);
+  });
+
+  it("passes through text with no markup", () => {
+    expect(toSlackMrkdwn("plain text")).toBe("plain text");
+  });
+});
+
 describe("SlackService — delivery", () => {
   let logger: ReturnType<typeof makeLogger>;
 
@@ -126,6 +167,13 @@ describe("SlackService — delivery", () => {
     const body = bodyOf(call);
     expect(body.channel).toBe(CHANNEL);
     expect((body.attachments as Array<{ title: string }>)[0].title).toContain("#42");
+
+    // The posted attachment must carry Slack mrkdwn, not the renderer's
+    // Markdown, and must declare mrkdwn_in or Slack renders it as plain text.
+    const att = (body.attachments as Array<{ text: string; mrkdwn_in: string[] }>)[0];
+    expect(att.mrkdwn_in).toEqual(["text", "fields"]);
+    expect(att.text).not.toMatch(/\*\*/);
+    expect(att.text).not.toMatch(/\]\(/);
     svc.dispose();
   });
 

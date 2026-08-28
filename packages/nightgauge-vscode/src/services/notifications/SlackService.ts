@@ -59,6 +59,7 @@ import {
   buildRunAttachment,
   type AttachmentLimits,
   type PipelineStateSnapshot,
+  type RunAttachment,
 } from "./runAttachment";
 
 // ─── Slack API ──────────────────────────────────────────────────────────────
@@ -149,6 +150,59 @@ interface ActiveRun {
  */
 export function isSlackBotToken(token: string): boolean {
   return /^xoxb-\S+$/.test(token.trim());
+}
+
+/**
+ * Translate the shared renderer's Markdown into Slack's mrkdwn dialect.
+ *
+ * The renderer emits Discord/Mattermost-flavoured Markdown, which those two
+ * providers parse natively. Slack does not: it uses `*bold*` (single asterisk)
+ * and `<url|label>` links, so `**bold**` and `[label](url)` reach the channel as
+ * literal punctuation. The payload is accepted either way — Slack returns
+ * `ok: true` and nothing goes red — so this is a silent rendering defect that
+ * only shows up by looking at the channel.
+ *
+ * Translating here rather than in the renderer keeps Discord and Mattermost
+ * output byte-identical: the dialect is this provider's problem.
+ *
+ * Code spans and fenced blocks are passed through untouched — a `**` or a
+ * bracket inside a command or a stack trace is literal text, not markup.
+ */
+export function toSlackMrkdwn(text: string): string {
+  // Split on fenced blocks and inline code spans, translating only the parts
+  // outside them. The capture group keeps the delimiters in the output.
+  return text
+    .split(/(```[\s\S]*?```|`[^`\n]*`)/g)
+    .map((chunk, i) => {
+      // Odd indices are the captured code spans/fences — leave them alone.
+      if (i % 2 === 1) return chunk;
+      return (
+        chunk
+          // [label](url) → <url|label>. Runs before the bold rule so a label
+          // like **Title** is unwrapped by the bold rule afterwards.
+          .replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, "<$2|$1>")
+          // **bold** → *bold*. Non-greedy so two runs on one line stay separate.
+          .replace(/\*\*(.+?)\*\*/g, "*$1*")
+          // ~~strike~~ → ~strike~
+          .replace(/~~(.+?)~~/g, "~$1~")
+      );
+    })
+    .join("");
+}
+
+/**
+ * Apply the mrkdwn translation across an attachment's human-readable text, and
+ * declare `mrkdwn_in` so Slack actually formats those fields — a legacy
+ * attachment renders them as plain text without it, which would defeat the
+ * translation above.
+ */
+function toSlackAttachment(att: RunAttachment): RunAttachment & { mrkdwn_in: string[] } {
+  return {
+    ...att,
+    text: att.text ? toSlackMrkdwn(att.text) : att.text,
+    fields: att.fields?.map((f) => ({ ...f, value: toSlackMrkdwn(f.value) })),
+    mrkdwn_in: ["text", "fields"],
+  };
 }
 
 // ─── SlackService ───────────────────────────────────────────────────────────
@@ -305,7 +359,7 @@ export class SlackService implements Notifier, vscode.Disposable {
     this.runs.set(issueNumber, run);
 
     if (!state) return;
-    const attachment = buildRunAttachment(run, state, this.renderContext());
+    const attachment = toSlackAttachment(buildRunAttachment(run, state, this.renderContext()));
     const res = await this.call("chat.postMessage", run, {
       channel: run.channel,
       text: attachment.fallback ?? `Pipeline #${issueNumber}`,
@@ -380,7 +434,7 @@ export class SlackService implements Notifier, vscode.Disposable {
       snapshot = state;
     }
 
-    const attachment = buildRunAttachment(run, snapshot, this.renderContext());
+    const attachment = toSlackAttachment(buildRunAttachment(run, snapshot, this.renderContext()));
     const text = attachment.fallback ?? `Pipeline #${issueNumber}`;
 
     // post-only: nothing to edit, so only the terminal summary is worth sending.
