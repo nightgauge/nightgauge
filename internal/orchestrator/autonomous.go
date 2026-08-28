@@ -26,6 +26,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/focus"
 	gh "github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/internal/intelligence/baselineGate"
+	"github.com/nightgauge/nightgauge/internal/skillrender"
 	"github.com/nightgauge/nightgauge/internal/state"
 )
 
@@ -6777,6 +6778,62 @@ func (as *AutonomousScheduler) refineIssue(ctx context.Context, owner, repo stri
 	log.Printf("[refinement] Completed #%d → %s", issue.Number, targetStatus)
 }
 
+// refineSkillRoots is the seam through which refinement resolves its skill
+// roots. It exists so a test can point the search somewhere it controls:
+// skillrender.DefaultRoots reads os.Executable() to derive the bundle root,
+// which a test cannot influence, and the whole point of #1029 is that the
+// bundle root must be searched.
+var refineSkillRoots = skillrender.DefaultRoots
+
+// refineStageOptions composes the dispatch for the issue-refine skill.
+//
+// Extracted from refineViaCLI so the composition is assertable without an
+// execution manager. The three fields that matter are SkillPath, Prompt and
+// AllowedTools: before #1029 the first was a literal join under workspaceRoot
+// and the other two were absent, so refinement spawned a prompt-less process
+// in this repository and failed to locate its skill at all in every other one.
+func (as *AutonomousScheduler) refineStageOptions(owner, repo string, issueNumber int, adapterName string) (execution.StageOptions, error) {
+	// Same composer the pipeline stages use (scheduler.go, skillrender.Render).
+	// Locating through DefaultRoots is what gives refinement the bundle
+	// fallback #874 added: <workspaceRoot>/skills first, then
+	// <binary>/../skills, which is the only root that exists in a workspace
+	// that is not the nightgauge source tree.
+	rendered, err := skillrender.Render(skillrender.Options{
+		Stage:       "issue-refine",
+		Model:       "sonnet", // Refinement is a lighter workload
+		Adapter:     adapterName,
+		SkillsRoots: refineSkillRoots(as.workspaceRoot),
+		Warn:        func(msg string) { log.Printf("[refinement] %s", msg) },
+	})
+	if err != nil {
+		return execution.StageOptions{}, fmt.Errorf("refinement skill render failed: %w", err)
+	}
+
+	fullRepo := fmt.Sprintf("%s/%s", owner, repo)
+	return execution.StageOptions{
+		Repo:        fullRepo,
+		IssueNumber: issueNumber,
+		Stage:       "issue-refine",
+		SkillPath:   rendered.SkillPath,
+		Model:       "sonnet",
+		Timeout:     5 * time.Minute,
+		TargetRepo:  fullRepo,
+		// Without these two the resolved SkillPath is never read by any
+		// adapter: execution.Manager pipes Prompt on stdin and passes
+		// AllowedTools through to the adapter. A roots-only fix would move the
+		// failure from "skill not found" to "spawns and does nothing", which
+		// is strictly harder to detect.
+		AllowedTools: skillrender.FilterHeadlessTools(rendered.AllowedTools),
+		Prompt: execution.BuildPrompt(
+			state.PipelineStage("issue-refine"),
+			rendered.Content,
+			issueNumber,
+			filepath.Dir(rendered.SkillPath),
+			"", "",
+		),
+	}, nil
+}
+
 // refineViaCLI invokes the issue-refine skill directly via execution.Manager.
 func (as *AutonomousScheduler) refineViaCLI(ctx context.Context, owner, repo string, issueNumber int) error {
 	execMgr := as.scheduler.ExecMgr()
@@ -6784,20 +6841,9 @@ func (as *AutonomousScheduler) refineViaCLI(ctx context.Context, owner, repo str
 		return fmt.Errorf("execution manager not available")
 	}
 
-	skillPath := filepath.Join(as.workspaceRoot, "skills", "nightgauge-issue-refine", "SKILL.md")
-	if _, err := os.Stat(skillPath); os.IsNotExist(err) {
-		return fmt.Errorf("refinement skill not found: %s", skillPath)
-	}
-
-	fullRepo := fmt.Sprintf("%s/%s", owner, repo)
-	opts := execution.StageOptions{
-		Repo:        fullRepo,
-		IssueNumber: issueNumber,
-		Stage:       "issue-refine",
-		SkillPath:   skillPath,
-		Model:       "sonnet", // Refinement is a lighter workload
-		Timeout:     5 * time.Minute,
-		TargetRepo:  fullRepo,
+	opts, err := as.refineStageOptions(owner, repo, issueNumber, execMgr.AdapterName())
+	if err != nil {
+		return err
 	}
 
 	result, err := execMgr.RunStage(ctx, opts)
