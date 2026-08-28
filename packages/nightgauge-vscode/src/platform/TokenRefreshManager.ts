@@ -132,7 +132,10 @@ export class TokenRefreshManager implements vscode.Disposable, IOnDemandTokenRef
     // Subscribe to token changes to reschedule when new tokens are stored
     this._disposables.push(
       tokenStorage.onTokenChanged((evt) => {
-        if (evt.key === "accessToken" && evt.action === "stored") {
+        // `all` is the atomic session write (#1024) — the shape a sign-in
+        // now produces, fired only once every field is durable. `accessToken`
+        // remains for the single-field refresh path.
+        if ((evt.key === "all" || evt.key === "accessToken") && evt.action === "stored") {
           // New token stored (by device flow or prior refresh) — a fresh
           // session episode begins, so re-arm the terminal guard and reschedule.
           this._terminated = false;
@@ -278,13 +281,15 @@ export class TokenRefreshManager implements vscode.Disposable, IOnDemandTokenRef
         return { ok: false, kind: "transient", error: new Error("host changed during refresh") };
       }
 
-      // Store expiresAt first so _scheduleNext reads the new expiry when
-      // onTokenChanged fires for accessToken (ordering matters for scheduling).
-      const expiresAt = new Date(Date.now() + response.expires_in * 1000).toISOString();
-      await this.tokenStorage.store("expiresAt", expiresAt);
-      await this.tokenStorage.store("refreshToken", response.refresh_token);
-      // Storing accessToken last — fires onTokenChanged → _scheduleNext.
-      await this.tokenStorage.store("accessToken", response.access_token);
+      // One atomic write (#1024). This path had the ordering right and said so
+      // in a comment; the two sign-in paths did not. The invariant is now
+      // structural — there is no order to get wrong — so the comment that
+      // carried it is deleted rather than reworded.
+      await this.tokenStorage.storeSession({
+        accessToken: response.access_token,
+        refreshToken: response.refresh_token,
+        expiresAt: new Date(Date.now() + response.expires_in * 1000).toISOString(),
+      });
 
       this.logger.debug("[TokenRefreshManager] Token refreshed successfully");
       this._onRefreshSucceeded.fire();

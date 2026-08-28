@@ -81,6 +81,16 @@ function createMockTokenStorage(
       values.set(key, value);
       emitter.fire({ key, action: "stored" });
     }),
+    // The atomic session write (#1024): all three fields durable before the
+    // single event, so a listener can never observe a half-written session.
+    storeSession: vi.fn(
+      async (session: { accessToken: string; refreshToken: string; expiresAt: string }) => {
+        values.set("accessToken", session.accessToken);
+        values.set("refreshToken", session.refreshToken);
+        values.set("expiresAt", session.expiresAt);
+        emitter.fire({ key: "all", action: "stored" });
+      }
+    ),
     retrieve: vi.fn(async (key: TokenKey) => values.get(key) ?? null),
     delete: vi.fn(async (key: TokenKey) => {
       values.delete(key);

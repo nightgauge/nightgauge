@@ -80,6 +80,17 @@ function createMockTokenStorage(
       values.set(key, value);
       emitter.fire({ key, action: "stored" });
     }),
+    // The atomic session write (#1024). Mirrors the real TokenStorage: all
+    // three fields durable BEFORE the single event, so a listener can never
+    // observe a half-written session.
+    storeSession: vi.fn(
+      async (session: { accessToken: string; refreshToken: string; expiresAt: string }) => {
+        values.set("accessToken", session.accessToken);
+        values.set("refreshToken", session.refreshToken);
+        values.set("expiresAt", session.expiresAt);
+        emitter.fire({ key: "all", action: "stored" });
+      }
+    ),
     retrieve: vi.fn(async (key: TokenKey) => values.get(key) ?? null),
     delete: vi.fn(async (key: TokenKey) => {
       values.delete(key);
@@ -336,14 +347,18 @@ describe("TokenRefreshManager", () => {
       await mgr.start();
       await vi.advanceTimersByTimeAsync(0);
 
-      expect(tokenStorage.store).toHaveBeenCalledWith("accessToken", "new-access");
-      expect(tokenStorage.store).toHaveBeenCalledWith("refreshToken", "new-refresh");
-      // expiresAt stored as ISO string
-      const expiresAtCalls = (tokenStorage.store as Mock).mock.calls.filter(
-        (c: unknown[]) => c[0] === "expiresAt"
+      // One atomic write, not three per-field calls (#1024). The assertion is
+      // stronger than the one it replaces: it pins that all three fields go in
+      // together, which is the property the refresh scheduler depends on.
+      expect(tokenStorage.storeSession).toHaveBeenCalledWith(
+        expect.objectContaining({ accessToken: "new-access", refreshToken: "new-refresh" })
       );
-      expect(expiresAtCalls).toHaveLength(1);
-      expect(typeof expiresAtCalls[0][1]).toBe("string");
+      // expiresAt stored as ISO string, in the same atomic write.
+      const sessionCalls = (tokenStorage.storeSession as Mock).mock.calls;
+      expect(sessionCalls).toHaveLength(1);
+      const written = sessionCalls[0][0] as { expiresAt: string };
+      expect(typeof written.expiresAt).toBe("string");
+      expect(Number.isNaN(Date.parse(written.expiresAt))).toBe(false);
 
       mgr.dispose();
     });
@@ -860,7 +875,9 @@ describe("TokenRefreshManager", () => {
 
       expect(ipcClient.platformAuthRefresh).toHaveBeenCalledTimes(2);
       expect(onSignOut).not.toHaveBeenCalled();
-      expect(tokenStorage.store).toHaveBeenCalledWith("accessToken", "recovered-access");
+      expect(tokenStorage.storeSession).toHaveBeenCalledWith(
+        expect.objectContaining({ accessToken: "recovered-access" })
+      );
 
       mgr.dispose();
     });
