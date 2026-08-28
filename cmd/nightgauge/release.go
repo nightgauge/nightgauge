@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/cmd/release"
+	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/spf13/cobra"
 )
 
@@ -241,9 +242,11 @@ is the alert sink of #4058 — it surfaces new-model / breaking-change findings
 beyond the VSCode Discovery tab while respecting the existing score threshold and
 per-release cap.
 
-OPT-IN + BEST-EFFORT: the webhook URL is read from the env var named by
---webhook-env. If that var is unset/empty the sink is disabled (clean no-op). A
-webhook delivery failure is reported but does not fail the command.
+OPT-IN + BEST-EFFORT: the Discord webhook URL is read from the env var named by
+--webhook-env; the Slack webhook URL comes from the shared alerts.slack_webhook_env
+setting (default NIGHTGAUGE_SLACK_WEBHOOK). If neither is set the sink is disabled
+(clean no-op). A webhook delivery failure is reported but does not fail the
+command.
 
 Exit codes:
   0  finished (sent / skipped / best-effort delivery failure)
@@ -259,12 +262,23 @@ Exit codes:
 
 			webhookURL := os.Getenv(webhookEnv)
 
+			// The Slack destination is shared across every Go-side alert and
+			// resolved from config, not from --webhook-env (which is the Discord
+			// one). A config load failure is not fatal: nil falls back to the
+			// default env var name, so an exported Slack webhook still works.
+			cfg, cfgErr := config.Load(".")
+			if cfgErr != nil {
+				fmt.Fprintf(os.Stderr, "warning: config load failed, using default Slack webhook env: %v\n", cfgErr)
+				cfg = nil
+			}
+
 			ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
 			defer cancel()
 
 			result, err := release.NotifyFindings(ctx, release.NotifyOptions{
 				LogPath:    logPath,
 				WebhookURL: webhookURL,
+				Config:     cfg,
 				MinScore:   minScore,
 				MaxItems:   maxItems,
 				DryRun:     dryRun,

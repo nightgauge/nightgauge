@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/notify"
 )
 
@@ -44,6 +45,15 @@ const twoHighScoreLog = `{
     {"number": 102, "title": "Breaking: tool API change", "url": "https://x/102", "score": 75}
   ]
 }`
+
+// TestMain clears the shared Slack destination for the whole package: every
+// test below asserts Discord-only delivery, and an operator's exported
+// NIGHTGAUGE_SLACK_WEBHOOK must not add a second sink (or a real network call)
+// to a unit test run.
+func TestMain(m *testing.M) {
+	_ = os.Setenv(config.DefaultAlertsSlackWebhookEnv, "")
+	os.Exit(m.Run())
+}
 
 func TestNotifyFindings_HappyPath(t *testing.T) {
 	var gotBody []byte
@@ -79,7 +89,7 @@ func TestNotifyFindings_HappyPath(t *testing.T) {
 	}
 
 	// Verify the embed payload shape + highest-score-first ordering.
-	var payload notify.Payload
+	var payload notify.DiscordPayload
 	if err := json.Unmarshal(gotBody, &payload); err != nil {
 		t.Fatalf("decode posted body: %v", err)
 	}
@@ -131,7 +141,7 @@ func TestNotifyFindings_CapsAtMaxItems(t *testing.T) {
 	if res.Eligible != 5 || res.Routed != 3 {
 		t.Errorf("eligible/routed = %d/%d, want 5/3", res.Eligible, res.Routed)
 	}
-	var payload notify.Payload
+	var payload notify.DiscordPayload
 	_ = json.Unmarshal(gotBody, &payload)
 	if n := len(payload.Embeds[0].Fields); n != 3 {
 		t.Errorf("fields = %d, want 3 (capped)", n)
@@ -307,4 +317,77 @@ func containsAll(s string, subs ...string) bool {
 		}
 	}
 	return true
+}
+
+// The release-watch alert must reach Slack when only Slack is configured —
+// WebhookURL is the Discord destination, and its absence used to skip the whole
+// call before the sink layer existed (#1072).
+func TestNotifyFindings_ReachesSlackWithoutDiscord(t *testing.T) {
+	var hits int32
+	var body []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&hits, 1)
+		body, _ = io.ReadAll(r.Body)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	t.Setenv(config.DefaultAlertsSlackWebhookEnv, srv.URL)
+
+	res, err := NotifyFindings(context.Background(), NotifyOptions{
+		LogPath: writeLog(t, twoHighScoreLog),
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !res.Sent || res.Skipped {
+		t.Fatalf("want Sent, got %+v", res)
+	}
+	if got := atomic.LoadInt32(&hits); got != 1 {
+		t.Fatalf("Slack POSTs = %d, want 1", got)
+	}
+	if !strings.Contains(string(body), "attachments") {
+		t.Errorf("payload is not in Slack's wire shape: %s", body)
+	}
+	if !strings.Contains(string(body), "Release alert") {
+		t.Errorf("Slack payload lost the alert title: %s", body)
+	}
+}
+
+// With neither provider configured the call must still be a no-op skip, not an
+// error — the feature stays opt-in.
+func TestNotifyFindings_NoSinkConfiguredSkips(t *testing.T) {
+	t.Setenv(config.DefaultAlertsSlackWebhookEnv, "")
+	res, err := NotifyFindings(context.Background(), NotifyOptions{
+		LogPath: writeLog(t, twoHighScoreLog),
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.Sent || !res.Skipped {
+		t.Fatalf("want a skip, got %+v", res)
+	}
+}
+
+// A Slack webhook failure stays best-effort and its URL never reaches Reason,
+// which is printed to CI logs via --json.
+func TestNotifyFindings_SlackFailureIsBestEffortAndScrubbed(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+	}))
+	defer srv.Close()
+	secretURL := srv.URL + "/services/T0/B0/SUPERSECRET"
+	t.Setenv(config.DefaultAlertsSlackWebhookEnv, secretURL)
+
+	res, err := NotifyFindings(context.Background(), NotifyOptions{
+		LogPath: writeLog(t, twoHighScoreLog),
+	})
+	if err != nil {
+		t.Fatalf("a webhook failure must not be a hard error: %v", err)
+	}
+	if res.Sent {
+		t.Error("Sent must be false when the POST failed")
+	}
+	if strings.Contains(res.Reason, "SUPERSECRET") {
+		t.Fatalf("Reason leaked the Slack webhook token: %s", res.Reason)
+	}
 }
