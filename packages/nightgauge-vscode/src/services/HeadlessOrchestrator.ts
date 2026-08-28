@@ -2094,6 +2094,16 @@ export class HeadlessOrchestrator implements vscode.Disposable {
             // the address it was sent to, which is why it changed nothing.
             "--record-root",
             this.getRunRepoRoot(),
+            // #1054 round two: the daemon listens at the workspace root serve
+            // was started with, NOT at the run's repo root. In a multi-repo
+            // workspace those differ, so pointing the dial at the run root left
+            // it failing on every run. Verified live: the socket existed only
+            // under the persistent root while the run executed in a sibling
+            // repo. The file fallback cannot cover for this — the durable
+            // record is built by the daemon from its in-memory RuntimeState and
+            // never reads that file.
+            "--daemon-root",
+            this.getPersistentRoot(),
             ...(this.stateService?.getRunId() ? ["--run-id", this.stateService.getRunId()!] : []),
           ],
           { encoding: "utf-8", cwd, timeout: 90_000 }
@@ -2638,6 +2648,9 @@ export class HeadlessOrchestrator implements vscode.Disposable {
           // post-condition gate call.
           "--record-root",
           this.getRunRepoRoot(),
+          // #1054 round two — see the note at the post-condition gate call.
+          "--daemon-root",
+          this.getPersistentRoot(),
           ...(this.stateService?.getRunId() ? ["--run-id", this.stateService.getRunId()!] : []),
         ],
         { encoding: "utf-8", cwd, timeout: 90_000 }
@@ -2891,6 +2904,16 @@ export class HeadlessOrchestrator implements vscode.Disposable {
             // the address it was sent to, which is why it changed nothing.
             "--record-root",
             this.getRunRepoRoot(),
+            // #1054 round two: the daemon listens at the workspace root serve
+            // was started with, NOT at the run's repo root. In a multi-repo
+            // workspace those differ, so pointing the dial at the run root left
+            // it failing on every run. Verified live: the socket existed only
+            // under the persistent root while the run executed in a sibling
+            // repo. The file fallback cannot cover for this — the durable
+            // record is built by the daemon from its in-memory RuntimeState and
+            // never reads that file.
+            "--daemon-root",
+            this.getPersistentRoot(),
             ...(this.stateService?.getRunId() ? ["--run-id", this.stateService.getRunId()!] : []),
           ],
           { encoding: "utf-8", cwd, timeout: 90_000 }
@@ -3065,6 +3088,16 @@ export class HeadlessOrchestrator implements vscode.Disposable {
             // the address it was sent to, which is why it changed nothing.
             "--record-root",
             this.getRunRepoRoot(),
+            // #1054 round two: the daemon listens at the workspace root serve
+            // was started with, NOT at the run's repo root. In a multi-repo
+            // workspace those differ, so pointing the dial at the run root left
+            // it failing on every run. Verified live: the socket existed only
+            // under the persistent root while the run executed in a sibling
+            // repo. The file fallback cannot cover for this — the durable
+            // record is built by the daemon from its in-memory RuntimeState and
+            // never reads that file.
+            "--daemon-root",
+            this.getPersistentRoot(),
             ...(this.stateService?.getRunId() ? ["--run-id", this.stateService.getRunId()!] : []),
           ],
           { encoding: "utf-8", cwd, timeout: 90_000 }

@@ -94,6 +94,7 @@ func gateVerifyCmd() *cobra.Command {
 	var (
 		workdir    string
 		recordRoot string
+		daemonRoot string
 		outputJSON bool
 		timeoutSec int
 		record     bool
@@ -165,7 +166,7 @@ func gateVerifyCmd() *cobra.Command {
 			// changes the gate's pass/fail exit-code contract. The verdict is
 			// the command's product; the record is bookkeeping.
 			if record {
-				recordGateResult(ctx, workspace, recordRoot, issueNumber, stageName, runID, result.ToStageGateResult())
+				recordGateResult(ctx, workspace, recordRoot, daemonRoot, issueNumber, stageName, runID, result.ToStageGateResult())
 			}
 
 			if outputJSON {
@@ -199,6 +200,10 @@ func gateVerifyCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&workdir, "workdir", "", "Workspace root (default: cwd)")
+	cmd.Flags().StringVar(&daemonRoot, "daemon-root", "",
+		"Workspace root the `nightgauge serve` daemon was started with — where its socket lives (#1054). "+
+			"In a multi-repo workspace this is NOT the run's repo root: the daemon serves one workspace while "+
+			"runs execute in sibling repos. Defaults to --record-root, then --workdir.")
 	cmd.Flags().StringVar(&recordRoot, "record-root", "",
 		"Repo root that owns the run record — where --record files the result and where the daemon socket lives. "+
 			"Defaults to --workdir. Set this when --workdir is a worktree (#1054): the gate reads its inputs from the "+
@@ -305,12 +310,38 @@ func renderGateHuman(stage string, r gates.GateResult) {
 // That is why #1021's fix appeared to change nothing: it corrected the run id in
 // the payload, not the address the payload was sent to.
 //
-// An empty recordRoot falls back to workspace, preserving the single-repo
-// behaviour the existing tests pin.
+// #1054 ROUND TWO — the first fix was insufficient and this comment records why,
+// because the mistake is easy to repeat.
+//
+// Round one pointed BOTH the socket and the state dir at recordRoot (the run's
+// repo root). Verified in production afterwards: the dial STILL failed and
+// [gate-not-invoked] still fired. The daemon does not listen at the run's repo
+// root — it listens at the workspace root `nightgauge serve` was started with,
+// and in a multi-repo workspace those are different directories. Measured on a
+// live run: the socket existed at <workspace>/.nightgauge/daemon.sock while the
+// run executed in a sibling repo, which had no socket at all.
+//
+// The fallback file write is not a substitute, and that is the load-bearing
+// part. The durable run record is built by the daemon from its IN-MEMORY
+// RuntimeState — `claimTerminal` snapshots `entry.rs` from activeRuntimes and
+// never reads the file (internal/ipc/run_registry.go). A gate result written to
+// disk by this separate process is invisible to the record builder, so the
+// write "succeeds" and the result still never appears. Reaching the daemon is
+// the ONLY path that lands a gate result on the run.
+//
+// The tell that separates this from a plain plumbing bug: phase records reach
+// the durable record while gate results do not, and phases travel by IPC while
+// gate results travelled by file.
+//
+// An empty recordRoot falls back to workspace, and an empty daemonRoot falls
+// back to recordRoot, preserving the single-repo behaviour the existing tests
+// pin — in a single-repo workspace all three are the same directory, which is
+// exactly why this survived every test.
 func recordGateResult(
 	ctx context.Context,
 	workspace string,
 	recordRoot string,
+	daemonRoot string,
 	issueNumber int,
 	stageName string,
 	runID string,
@@ -319,12 +350,15 @@ func recordGateResult(
 	if recordRoot == "" {
 		recordRoot = workspace
 	}
+	if daemonRoot == "" {
+		daemonRoot = recordRoot
+	}
 	if runID == "" {
 		runID = os.Getenv(adapters.RunIDEnvVar)
 	}
 
 	if runID != "" {
-		if client, dialErr := ipc.DialClient(ctx, ipc.DaemonSocketPath(recordRoot), daemonDialTimeout); dialErr == nil {
+		if client, dialErr := ipc.DialClient(ctx, ipc.DaemonSocketPath(daemonRoot), daemonDialTimeout); dialErr == nil {
 			defer client.Close()
 			params := ipc.PipelineRecordStageGateResultParams{
 				IssueNumber: issueNumber,
