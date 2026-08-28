@@ -22,6 +22,7 @@
  */
 
 import * as path from "path";
+import { resolveMainRepoRoot as resolveMainRepoRootShared } from "./adaptiveBudgetLoader";
 import {
   AutoModelSelector,
   StageModelCalibrationService,
@@ -34,19 +35,14 @@ import { p75 } from "./adaptiveBudgetLoader";
 import { toModelEnvelope } from "./modeProfiles";
 
 /**
- * Resolve the main repository root from a potential worktree path.
- * Worktrees live at `<mainRepo>/.worktrees/issue-N/`, so execution
- * history (which only exists in the main repo) would never be found
- * if we used the worktree path directly.
+ * Resolve the main repository root from a path that may be a worktree.
+ *
+ * Re-exported from adaptiveBudgetLoader so there is ONE definition (#1017).
+ * There were two copies, and both knew about one of the two worktree layouts —
+ * see the note on the definition for why that made this estimator calibrate
+ * against a near-empty history.
  */
-function resolveMainRepoRoot(workspaceRoot: string): string {
-  const worktreeMarker = `${path.sep}.worktrees${path.sep}`;
-  const idx = workspaceRoot.indexOf(worktreeMarker);
-  if (idx >= 0) {
-    return workspaceRoot.substring(0, idx);
-  }
-  return workspaceRoot;
-}
+const resolveMainRepoRoot = resolveMainRepoRootShared;
 
 // ============================================================================
 // Historical cost calibration (shared by Tier 1 and Tier 2)
