@@ -11343,7 +11343,10 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         analysisResult = await PostPipelineAnalyzer.analyze(
           this.getPersistentRoot(),
           issueNumber,
-          this.logger
+          this.logger,
+          // #1084: gate metrics are written by a skill running IN the worktree,
+          // so the persistent root alone can never see them on a worktree run.
+          this.getWorkingDirectory()
         );
 
         if (analysisResult) {

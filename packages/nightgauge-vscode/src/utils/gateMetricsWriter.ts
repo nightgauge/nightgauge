@@ -126,6 +126,13 @@ export class GateMetricsWriter {
     }
 
     const records: GateMetricRecord[] = [];
+    // A DROPPED RECORD IS REPORTED, NOT SWALLOWED (#1084). Both arms below used
+    // to be silent, so the reader's every failure mode looked identical to "no
+    // gates ran" — which is exactly how a closed `gate_name` enum discarded
+    // every record the shipped skill wrote, for as long as it took someone to
+    // read a log by hand.
+    let rejected = 0;
+    let firstRejection = "";
     for (const line of content.split("\n")) {
       const trimmed = line.trim();
       if (!trimmed) continue;
@@ -134,10 +141,22 @@ export class GateMetricsWriter {
         const validation = GateMetricRecordSchema.safeParse(parsed);
         if (validation.success) {
           records.push(validation.data);
+        } else {
+          rejected++;
+          firstRejection ||= validation.error.issues[0]?.message ?? "schema mismatch";
         }
       } catch {
-        // Skip malformed lines silently
+        rejected++;
+        firstRejection ||= "malformed JSON";
       }
+    }
+
+    if (rejected > 0) {
+      console.warn(
+        `[gate-metrics] dropped ${rejected} unreadable record(s) from ${filePath} ` +
+          `(first: ${firstRejection}). The gate tally is INCOMPLETE — this is not ` +
+          `the same as no gates having run. (#1084)`
+      );
     }
 
     return records;
