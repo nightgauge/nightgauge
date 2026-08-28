@@ -2082,15 +2082,18 @@ export class HeadlessOrchestrator implements vscode.Disposable {
             "--timeout",
             "60",
             "--record",
-            // #1021 — see the note at the pr-merge gate call: without a run id
-            // the CLI writes the record to the worktree, which has no snapshot.
-            ...(this.stateService?.getRunId() ? ["--run-id", this.stateService.getRunId()!] : []),
-            // #1021: route the record through the daemon. `gate verify` writes
-            // DIRECTLY to <workdir>/.nightgauge/pipeline when it has no run
-            // identity to address the daemon with — and --workdir is the run's
-            // worktree, which holds no runtime snapshot. The daemon is the
-            // single authoritative writer (#377) and files the record under the
-            // run's repo root, which is where the snapshot actually lives.
+            // #1054: --workdir is the run's WORKTREE, because that is where the
+            // gate reads issue-N.json / dev-N.json from. But the daemon socket
+            // and the run snapshot both live at the repo root, so the record
+            // must be addressed there separately. Before --record-root existed
+            // the CLI derived both from --workdir: the dial always failed and
+            // the direct write landed in a directory with no snapshot, so every
+            // gate on every worktree run recorded nowhere — which is why the
+            // end-of-run audit reported [gate-not-invoked] for gates that had
+            // demonstrably passed. #1021 fixed the run id in the payload, not
+            // the address it was sent to, which is why it changed nothing.
+            "--record-root",
+            this.getRunRepoRoot(),
             ...(this.stateService?.getRunId() ? ["--run-id", this.stateService.getRunId()!] : []),
           ],
           { encoding: "utf-8", cwd, timeout: 90_000 }
@@ -2629,8 +2632,12 @@ export class HeadlessOrchestrator implements vscode.Disposable {
           "--timeout",
           "60",
           "--record",
-          // #1021 — see the note at the pr-merge gate call: without a run id
-          // the CLI writes the record to the worktree, which has no snapshot.
+          // #1054: --workdir is the worktree the gate reads its inputs from;
+          // the daemon socket and the run snapshot live at the repo root, so
+          // the record is addressed there separately. See the note at the
+          // post-condition gate call.
+          "--record-root",
+          this.getRunRepoRoot(),
           ...(this.stateService?.getRunId() ? ["--run-id", this.stateService.getRunId()!] : []),
         ],
         { encoding: "utf-8", cwd, timeout: 90_000 }
@@ -2872,15 +2879,18 @@ export class HeadlessOrchestrator implements vscode.Disposable {
             "--timeout",
             "60",
             "--record",
-            // #1021 — see the note at the pr-merge gate call: without a run id
-            // the CLI writes the record to the worktree, which has no snapshot.
-            ...(this.stateService?.getRunId() ? ["--run-id", this.stateService.getRunId()!] : []),
-            // #1021: route the record through the daemon. `gate verify` writes
-            // DIRECTLY to <workdir>/.nightgauge/pipeline when it has no run
-            // identity to address the daemon with — and --workdir is the run's
-            // worktree, which holds no runtime snapshot. The daemon is the
-            // single authoritative writer (#377) and files the record under the
-            // run's repo root, which is where the snapshot actually lives.
+            // #1054: --workdir is the run's WORKTREE, because that is where the
+            // gate reads issue-N.json / dev-N.json from. But the daemon socket
+            // and the run snapshot both live at the repo root, so the record
+            // must be addressed there separately. Before --record-root existed
+            // the CLI derived both from --workdir: the dial always failed and
+            // the direct write landed in a directory with no snapshot, so every
+            // gate on every worktree run recorded nowhere — which is why the
+            // end-of-run audit reported [gate-not-invoked] for gates that had
+            // demonstrably passed. #1021 fixed the run id in the payload, not
+            // the address it was sent to, which is why it changed nothing.
+            "--record-root",
+            this.getRunRepoRoot(),
             ...(this.stateService?.getRunId() ? ["--run-id", this.stateService.getRunId()!] : []),
           ],
           { encoding: "utf-8", cwd, timeout: 90_000 }
@@ -3043,15 +3053,18 @@ export class HeadlessOrchestrator implements vscode.Disposable {
             "--timeout",
             "60",
             "--record",
-            // #1021 — see the note at the pr-merge gate call: without a run id
-            // the CLI writes the record to the worktree, which has no snapshot.
-            ...(this.stateService?.getRunId() ? ["--run-id", this.stateService.getRunId()!] : []),
-            // #1021: route the record through the daemon. `gate verify` writes
-            // DIRECTLY to <workdir>/.nightgauge/pipeline when it has no run
-            // identity to address the daemon with — and --workdir is the run's
-            // worktree, which holds no runtime snapshot. The daemon is the
-            // single authoritative writer (#377) and files the record under the
-            // run's repo root, which is where the snapshot actually lives.
+            // #1054: --workdir is the run's WORKTREE, because that is where the
+            // gate reads issue-N.json / dev-N.json from. But the daemon socket
+            // and the run snapshot both live at the repo root, so the record
+            // must be addressed there separately. Before --record-root existed
+            // the CLI derived both from --workdir: the dial always failed and
+            // the direct write landed in a directory with no snapshot, so every
+            // gate on every worktree run recorded nowhere — which is why the
+            // end-of-run audit reported [gate-not-invoked] for gates that had
+            // demonstrably passed. #1021 fixed the run id in the payload, not
+            // the address it was sent to, which is why it changed nothing.
+            "--record-root",
+            this.getRunRepoRoot(),
             ...(this.stateService?.getRunId() ? ["--run-id", this.stateService.getRunId()!] : []),
           ],
           { encoding: "utf-8", cwd, timeout: 90_000 }
@@ -9135,8 +9148,10 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     // Non-critical: never blocks pipeline start.
     // ===================================================================
     try {
+      // #1057: same root drift as the self-check call — reading the worktree
+      // silently disabled every health-gated policy on concurrent slots.
       const { policies } = await HealthActionService.evaluateWithPolicies(
-        this.getWorkingDirectory(),
+        this.getPersistentRoot(),
         this.logger
       );
       if (policies.tier !== "none") {
@@ -11316,8 +11331,14 @@ export class HeadlessOrchestrator implements vscode.Disposable {
 
       // Health evaluation and self-check summary (Issue #1045)
       try {
+        // #1057: the persistent root, not the worktree. health-history.jsonl
+        // is written only to the main workspace, and `.nightgauge/.gitignore`
+        // ignores `pipeline/*`, so a worktree slot never has the file and the
+        // reader returned [] on every run — forever. Same root-drift class as
+        // #1017/#1045, and it matches the PostPipelineAnalyzer.analyze call
+        // immediately above.
         const healthEval = await HealthActionService.evaluate(
-          this.getWorkingDirectory(),
+          this.getPersistentRoot(),
           this.logger
         );
 
@@ -11356,7 +11377,10 @@ export class HeadlessOrchestrator implements vscode.Disposable {
           // The historical average genuinely is not computed here, and
           // formatSelfCheck documents 0 as "unknown" and guards every use of it
           // — so this zero is honest, unlike the cost one above.
-          0
+          0,
+          // #1057: the run's own outcome. Without it the panel reported "No
+          // anomalies detected" on the same run whose stage had just failed.
+          failedStage
         );
         this.logger.info(selfCheck);
       } catch (err) {

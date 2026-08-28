@@ -529,6 +529,41 @@ describe("PostPipelineAnalyzer", () => {
       expect(output).toContain("No anomalies detected");
     });
 
+    // #1057: the run's own outcome was not an input to this panel, so a run
+    // that failed its post-condition gate printed "No anomalies detected" on
+    // the same screen as "Failure patterns: 1 detected", beside a fabricated
+    // "Health: 100 — Excellent".
+    it("reports a failed stage as an anomaly instead of 'No anomalies detected'", () => {
+      const analysisResult: PostPipelineAnalysisResult = {
+        analysisFile: "/test/analysis.json",
+        recommendationCount: 0,
+        totalPotentialSavingsUsd: 0,
+        costSavingsVsStaticUsd: 0,
+        outcomeRecorded: false,
+        selfAssessmentSynthesis: null,
+        overallRecommendation: "Optimal.",
+        failurePatterns: null,
+        costPerIssue: null,
+        gateEffectiveness: null,
+        skillEffectiveness: null,
+        workflowCalibration: null,
+        calibrationUpdated: false,
+      };
+
+      const output = PostPipelineAnalyzer.formatSelfCheck(
+        analysisResult,
+        null,
+        3.63,
+        0,
+        "feature-dev"
+      );
+
+      expect(output).toContain("stage failure: feature-dev");
+      expect(output).not.toContain("No anomalies detected");
+      // A null evaluation must read as unknown, never as a perfect score.
+      expect(output).not.toContain("Health: 100");
+    });
+
     it("shows cost spike anomaly when cost > 2x average", () => {
       const output = PostPipelineAnalyzer.formatSelfCheck(null, null, 2.5, 1.0);
 

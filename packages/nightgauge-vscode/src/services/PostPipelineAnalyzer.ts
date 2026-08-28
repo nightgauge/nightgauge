@@ -723,7 +723,12 @@ export class PostPipelineAnalyzer {
     analysisResult: PostPipelineAnalysisResult | null,
     healthEvaluation: HealthEvaluation | null,
     costUsd: number,
-    avgCostUsd: number
+    avgCostUsd: number,
+    // #1057: the run that just finished was not an input to this panel at all,
+    // so a gate-failed run printed "No anomalies detected" beside
+    // "Failure patterns: 1 detected". Optional so every existing 4-argument
+    // caller is unaffected.
+    failedStage?: string
   ): string {
     const lines: string[] = [];
     lines.push("┌─────────────────────────────────────────┐");
@@ -782,6 +787,9 @@ export class PostPipelineAnalyzer {
     }
     if (healthEvaluation && healthEvaluation.trend === "declining" && healthEvaluation.score < 50) {
       anomalies.push("critical health");
+    }
+    if (failedStage) {
+      anomalies.push(`stage failure: ${failedStage}`);
     }
     if (anomalies.length > 0) {
       lines.push(`│  Anomalies: ${anomalies.join(", ")}`.padEnd(42) + "│");

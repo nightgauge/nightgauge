@@ -93,6 +93,7 @@ gate without putting an LLM call inside the gate itself (see docs/STAGE_GATES.md
 func gateVerifyCmd() *cobra.Command {
 	var (
 		workdir    string
+		recordRoot string
 		outputJSON bool
 		timeoutSec int
 		record     bool
@@ -164,7 +165,7 @@ func gateVerifyCmd() *cobra.Command {
 			// changes the gate's pass/fail exit-code contract. The verdict is
 			// the command's product; the record is bookkeeping.
 			if record {
-				recordGateResult(ctx, workspace, issueNumber, stageName, runID, result.ToStageGateResult())
+				recordGateResult(ctx, workspace, recordRoot, issueNumber, stageName, runID, result.ToStageGateResult())
 			}
 
 			if outputJSON {
@@ -198,6 +199,10 @@ func gateVerifyCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&workdir, "workdir", "", "Workspace root (default: cwd)")
+	cmd.Flags().StringVar(&recordRoot, "record-root", "",
+		"Repo root that owns the run record — where --record files the result and where the daemon socket lives. "+
+			"Defaults to --workdir. Set this when --workdir is a worktree (#1054): the gate reads its inputs from the "+
+			"worktree, but the run snapshot and the daemon live at the repo root.")
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Emit JSON instead of human output")
 	cmd.Flags().IntVar(&timeoutSec, "timeout", 60, "Gate timeout in seconds (0 = no timeout)")
 	cmd.Flags().BoolVar(&record, "record", false,
@@ -283,20 +288,43 @@ func renderGateHuman(stage string, r gates.GateResult) {
 // it is genuinely absent — a hand-run gate, or a dispatch that predates the
 // export — there is nothing to address the server with, and the direct path is
 // the honest answer rather than an invented identity.
+// recordRoot addresses the RUN, workspace addresses the GATE'S INPUTS, and on a
+// worktree run they are different directories (#1054).
+//
+// The extension deliberately passes `--workdir <worktree>`, because that is
+// where the gate reads `issue-N.json` / `dev-N.json` from; repointing it at the
+// repo root would make every gate false-negate. But this function used
+// `workspace` for BOTH the daemon socket path and the direct-write state dir.
+// The daemon listens only at serve's own workspace root, so the dial at
+// `<worktree>/.nightgauge/daemon.sock` always failed, and the fallback then
+// wrote into `<worktree>/.nightgauge/pipeline`, which holds stage context files
+// but never a `runtime-{issue}-{runID}.json` — so the append took its
+// load-or-skip branch and returned without writing. The record was created
+// nowhere, on every worktree run.
+//
+// That is why #1021's fix appeared to change nothing: it corrected the run id in
+// the payload, not the address the payload was sent to.
+//
+// An empty recordRoot falls back to workspace, preserving the single-repo
+// behaviour the existing tests pin.
 func recordGateResult(
 	ctx context.Context,
 	workspace string,
+	recordRoot string,
 	issueNumber int,
 	stageName string,
 	runID string,
 	result state.StageGateResult,
 ) {
+	if recordRoot == "" {
+		recordRoot = workspace
+	}
 	if runID == "" {
 		runID = os.Getenv(adapters.RunIDEnvVar)
 	}
 
 	if runID != "" {
-		if client, dialErr := ipc.DialClient(ctx, ipc.DaemonSocketPath(workspace), daemonDialTimeout); dialErr == nil {
+		if client, dialErr := ipc.DialClient(ctx, ipc.DaemonSocketPath(recordRoot), daemonDialTimeout); dialErr == nil {
 			defer client.Close()
 			params := ipc.PipelineRecordStageGateResultParams{
 				IssueNumber: issueNumber,
@@ -321,7 +349,7 @@ func recordGateResult(
 
 	// No daemon reachable (or no run identity to address one with): write
 	// directly, under Decision 5's three rules.
-	stateDir := filepath.Join(workspace, ".nightgauge", "pipeline")
+	stateDir := filepath.Join(recordRoot, ".nightgauge", "pipeline")
 	if recErr := state.AppendStageGateResultToDisk(
 		stateDir, issueNumber, state.PipelineStage(stageName), result,
 	); recErr != nil {
