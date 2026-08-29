@@ -2706,14 +2706,6 @@ export const NOTIFICATION_PROVIDERS: NotificationProviderSpec[] = [
         description: "Post pipeline status to Discord",
         fallback: false,
       },
-      {
-        key: "webhook_env",
-        kind: "text",
-        label: "Webhook Env Var",
-        description:
-          "Name of the environment variable holding the webhook URL. The URL itself is never stored in config.",
-        placeholder: "DISCORD_WEBHOOK_URL",
-      },
     ],
   },
   {
@@ -2727,14 +2719,6 @@ export const NOTIFICATION_PROVIDERS: NotificationProviderSpec[] = [
         label: "Enabled",
         description: "Post pipeline status to Mattermost",
         fallback: false,
-      },
-      {
-        key: "webhook_env",
-        kind: "text",
-        label: "Webhook Env Var",
-        description:
-          "Name of the environment variable holding the webhook URL. The URL itself is never stored in config.",
-        placeholder: "MATTERMOST_WEBHOOK_URL",
       },
     ],
   },
@@ -2758,14 +2742,6 @@ export const NOTIFICATION_PROVIDERS: NotificationProviderSpec[] = [
         description:
           "Channel id (preferred) or #name the bot posts into. Without this, Slack stays silent even when enabled.",
         placeholder: "C0123456789",
-      },
-      {
-        key: "bot_token_env",
-        kind: "text",
-        label: "Bot Token Env Var",
-        description:
-          "Name of the environment variable holding the xoxb- bot token, used when no token is stored in the extension.",
-        placeholder: "SLACK_BOT_TOKEN",
       },
     ],
   },

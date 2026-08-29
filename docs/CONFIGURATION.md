@@ -5822,32 +5822,34 @@ provider is independent, and any combination may be enabled at once.
 notifications:
   discord:
     enabled: true
-    webhook_env: DISCORD_WEBHOOK_URL
   mattermost:
     enabled: false
-    webhook_env: MATTERMOST_WEBHOOK_URL
   slack:
     enabled: true
-    bot_token_env: SLACK_BOT_TOKEN
     channel: "C0123456789"
 ```
 
-| Key                      | Type    | Default                  | Description                                          |
-| ------------------------ | ------- | ------------------------ | ---------------------------------------------------- |
-| `discord.enabled`        | boolean | `false`                  | Post pipeline status to Discord                      |
-| `discord.webhook_env`    | string  | `DISCORD_WEBHOOK_URL`    | Env var holding the incoming-webhook URL             |
-| `mattermost.enabled`     | boolean | `false`                  | Post pipeline status to Mattermost                   |
-| `mattermost.webhook_env` | string  | `MATTERMOST_WEBHOOK_URL` | Env var holding the incoming-webhook URL             |
-| `slack.enabled`          | boolean | `false`                  | Post pipeline status to Slack                        |
-| `slack.bot_token_env`    | string  | `SLACK_BOT_TOKEN`        | Env var holding the `xoxb-` bot token                |
-| `slack.channel`          | string  | —                        | Channel id (preferred) or `#name` the bot posts into |
+| Key                  | Type    | Default | Description                                          |
+| -------------------- | ------- | ------- | ---------------------------------------------------- |
+| `discord.enabled`    | boolean | `false` | Post pipeline status to Discord                      |
+| `mattermost.enabled` | boolean | `false` | Post pipeline status to Mattermost                   |
+| `slack.enabled`      | boolean | `false` | Post pipeline status to Slack                        |
+| `slack.channel`      | string  | —       | Channel id (preferred) or `#name` the bot posts into |
 
 ### Credentials are never stored here
 
-The block names the **environment variable** that holds a credential; it never
-holds the credential itself. Tokens and webhook URLs live in an env var or in
-VSCode SecretStorage, so a config tier file stays safe to commit and to share
-across a team.
+No credential — and no field naming where a credential lives — belongs in this
+block. Tokens and webhook URLs live in VSCode SecretStorage, written by the
+`Nightgauge: Configure …` commands, so a config tier file stays safe to commit
+and to share across a team.
+
+For CI and headless runs there is no keychain, so each notifier falls back to a
+**fixed** environment variable: `SLACK_BOT_TOKEN`, `DISCORD_WEBHOOK_URL`,
+`MATTERMOST_WEBHOOK_URL`. These names are not configurable. The former
+`*_env` fields let you name your own variable, and because a text box for "the
+name of the place the secret lives" sat beside boxes that take the secret
+itself, it collected secrets — in plaintext, in this file (#1107). A value left
+in one of those keys is refused, with a warning to rotate the credential.
 
 ### Two halves, two places
 
@@ -6060,22 +6062,22 @@ repo)
 notifications:
   discord:
     enabled: true
-    webhook_env: DISCORD_WEBHOOK_URL # name of the env var
 ```
 
 ### Config Reference
 
-| Key                                 | Type    | Description                             |
-| ----------------------------------- | ------- | --------------------------------------- |
-| `notifications.discord.enabled`     | boolean | Enable/disable Discord embeds           |
-| `notifications.discord.webhook_env` | string  | Name of env var holding the webhook URL |
+| Key                             | Type    | Description                   |
+| ------------------------------- | ------- | ----------------------------- |
+| `notifications.discord.enabled` | boolean | Enable/disable Discord embeds |
 
 ### Notes
 
-- The webhook URL is resolved from `process.env[webhook_env]` at runtime. If
-  using VSCode, you can also store it securely via the command palette:
-  "Nightgauge: Configure Discord Notifications" (uses OS keychain)
-- If no webhook URL is found, Discord notifications are silently skipped
+- The webhook URL is stored via the command palette: "Nightgauge: Configure
+  Discord Notifications" (OS keychain). For CI, export the fixed variable
+  `DISCORD_WEBHOOK_URL`; the name is not configurable (#1107)
+- If no webhook URL is found, Discord notifications are skipped **and the
+  reason is logged** — an enabled notifier that cannot post never fails
+  silently (#1106)
 - Message updates are debounced (1.5 s) to stay within Discord rate limits
 - Completed/failed pipeline embeds remain in the channel as a history log
 - The final PATCH (with outcome status) retries up to 3 times with exponential
@@ -6107,14 +6109,12 @@ notifications:
   slack:
     enabled: true
     channel: "C0123456789"
-    bot_token_env: SLACK_BOT_TOKEN
 ```
 
-| Field           | Type    | Default           | Description                                  |
-| --------------- | ------- | ----------------- | -------------------------------------------- |
-| `enabled`       | boolean | `false`           | Gates Slack delivery. Absent means off.      |
-| `channel`       | string  | —                 | Channel ID (preferred) or `#name`. Required. |
-| `bot_token_env` | string  | `SLACK_BOT_TOKEN` | Env var holding the bot token (`xoxb-…`).    |
+| Field     | Type    | Default | Description                                  |
+| --------- | ------- | ------- | -------------------------------------------- |
+| `enabled` | boolean | `false` | Gates Slack delivery. Absent means off.      |
+| `channel` | string  | —       | Channel ID (preferred) or `#name`. Required. |
 
 **One block, both halves.** The VSCode extension (pipeline status) and the Go
 binary (ready-to-ship, stuck-epic and release-watch alerts) read this same
@@ -6126,9 +6126,10 @@ message in place as stages progress. A webhook can only append, which would post
 one message per stage. Required scope is `chat:write` (plus `chat:write.public`
 to post without being invited to the channel).
 
-**The token is not stored here.** It lives in the OS keychain via
-`Nightgauge: Configure Slack Notifications`; `bot_token_env` is the fallback for
-CI and headless runs where there is no keychain.
+**The token is not stored here, and there is no field for it.** It lives in the
+OS keychain via `Nightgauge: Configure Slack Notifications`; the fixed variable
+`SLACK_BOT_TOKEN` is the fallback for CI and headless runs where there is no
+keychain.
 
 ---
 

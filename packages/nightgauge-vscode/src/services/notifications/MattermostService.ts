@@ -29,6 +29,7 @@ import { Logger } from "../../utils/logger";
 import { SecretStorageService, SECRET_KEYS } from "../SecretStorageService";
 import type { Notifier, PipelineEventContext } from "./types";
 import { NotifierStatusTracker } from "./NotifierStatusTracker";
+import { CREDENTIAL_ENV_VAR, warnOnLegacyEnvKey } from "./credentials";
 import {
   DEBOUNCE_MS,
   DebouncedPatcher,
@@ -612,16 +613,19 @@ export class MattermostService implements Notifier, vscode.Disposable {
       if (stored) return stored;
     }
 
-    if (config.webhook_env) {
-      const envUrl = process.env[config.webhook_env];
-      if (envUrl) return envUrl;
+    const envName = CREDENTIAL_ENV_VAR.mattermost;
+    const envUrl = process.env[envName];
+    if (envUrl) return envUrl;
+
+    const hadLegacy = warnOnLegacyEnvKey(
+      this.logger,
+      "mattermost",
+      config as unknown as Record<string, unknown>,
+      "Nightgauge: Configure Mattermost Notifications"
+    );
+    if (!hadLegacy) {
       this.logger.warn(
-        `MattermostService: no webhook URL found in SecretStorage or env var "${config.webhook_env}" — ` +
-          'run "Nightgauge: Configure Mattermost Notifications" to set it up.'
-      );
-    } else {
-      this.logger.warn(
-        "MattermostService: no webhook URL configured — " +
+        `MattermostService: no webhook URL in SecretStorage or ${envName} — ` +
           'run "Nightgauge: Configure Mattermost Notifications" to set it up.'
       );
     }

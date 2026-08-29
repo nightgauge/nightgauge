@@ -3471,23 +3471,6 @@ exports[`getSettingsHtml snapshots (Issue #1242) > default config render 1`] = `
       </div>
     </div>
 
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="notifications.discord.webhook_env" class="setting-label">Webhook Env Var </label>
-        <p class="setting-description">Name of the environment variable holding the webhook URL. The URL itself is never stored in config.</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="text"
-               id="notifications.discord.webhook_env"
-               class="text-input"
-               data-path="notifications.discord.webhook_env"
-               value=""
-               placeholder="DISCORD_WEBHOOK_URL"
-               disabled>
-      </div>
-    </div>
-
       </div>
       <div class="subsection">
         <h4 class="subsection-title">Mattermost</h4>
@@ -3507,23 +3490,6 @@ exports[`getSettingsHtml snapshots (Issue #1242) > default config render 1`] = `
 
                disabled>
         <label for="notifications.mattermost.enabled" class="toggle-switch"></label>
-      </div>
-    </div>
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="notifications.mattermost.webhook_env" class="setting-label">Webhook Env Var </label>
-        <p class="setting-description">Name of the environment variable holding the webhook URL. The URL itself is never stored in config.</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="text"
-               id="notifications.mattermost.webhook_env"
-               class="text-input"
-               data-path="notifications.mattermost.webhook_env"
-               value=""
-               placeholder="MATTERMOST_WEBHOOK_URL"
-               disabled>
       </div>
     </div>
 
@@ -3562,23 +3528,6 @@ exports[`getSettingsHtml snapshots (Issue #1242) > default config render 1`] = `
                data-path="notifications.slack.channel"
                value=""
                placeholder="C0123456789"
-               disabled>
-      </div>
-    </div>
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="notifications.slack.bot_token_env" class="setting-label">Bot Token Env Var </label>
-        <p class="setting-description">Name of the environment variable holding the xoxb- bot token, used when no token is stored in the extension.</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="text"
-               id="notifications.slack.bot_token_env"
-               class="text-input"
-               data-path="notifications.slack.bot_token_env"
-               value=""
-               placeholder="SLACK_BOT_TOKEN"
                disabled>
       </div>
     </div>
@@ -7697,23 +7646,6 @@ exports[`getSettingsHtml snapshots (Issue #1242) > global tier view 1`] = `
       </div>
     </div>
 
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="notifications.discord.webhook_env" class="setting-label">Webhook Env Var </label>
-        <p class="setting-description">Name of the environment variable holding the webhook URL. The URL itself is never stored in config.</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="text"
-               id="notifications.discord.webhook_env"
-               class="text-input"
-               data-path="notifications.discord.webhook_env"
-               value=""
-               placeholder="DISCORD_WEBHOOK_URL"
-               >
-      </div>
-    </div>
-
       </div>
       <div class="subsection">
         <h4 class="subsection-title">Mattermost</h4>
@@ -7733,23 +7665,6 @@ exports[`getSettingsHtml snapshots (Issue #1242) > global tier view 1`] = `
 
                >
         <label for="notifications.mattermost.enabled" class="toggle-switch"></label>
-      </div>
-    </div>
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="notifications.mattermost.webhook_env" class="setting-label">Webhook Env Var </label>
-        <p class="setting-description">Name of the environment variable holding the webhook URL. The URL itself is never stored in config.</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="text"
-               id="notifications.mattermost.webhook_env"
-               class="text-input"
-               data-path="notifications.mattermost.webhook_env"
-               value=""
-               placeholder="MATTERMOST_WEBHOOK_URL"
-               >
       </div>
     </div>
 
@@ -7788,23 +7703,6 @@ exports[`getSettingsHtml snapshots (Issue #1242) > global tier view 1`] = `
                data-path="notifications.slack.channel"
                value=""
                placeholder="C0123456789"
-               >
-      </div>
-    </div>
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="notifications.slack.bot_token_env" class="setting-label">Bot Token Env Var </label>
-        <p class="setting-description">Name of the environment variable holding the xoxb- bot token, used when no token is stored in the extension.</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="text"
-               id="notifications.slack.bot_token_env"
-               class="text-input"
-               data-path="notifications.slack.bot_token_env"
-               value=""
-               placeholder="SLACK_BOT_TOKEN"
                >
       </div>
     </div>
@@ -11923,23 +11821,6 @@ exports[`getSettingsHtml snapshots (Issue #1242) > local tier view 1`] = `
       </div>
     </div>
 
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="notifications.discord.webhook_env" class="setting-label">Webhook Env Var </label>
-        <p class="setting-description">Name of the environment variable holding the webhook URL. The URL itself is never stored in config.</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="text"
-               id="notifications.discord.webhook_env"
-               class="text-input"
-               data-path="notifications.discord.webhook_env"
-               value=""
-               placeholder="DISCORD_WEBHOOK_URL"
-               >
-      </div>
-    </div>
-
       </div>
       <div class="subsection">
         <h4 class="subsection-title">Mattermost</h4>
@@ -11959,23 +11840,6 @@ exports[`getSettingsHtml snapshots (Issue #1242) > local tier view 1`] = `
 
                >
         <label for="notifications.mattermost.enabled" class="toggle-switch"></label>
-      </div>
-    </div>
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="notifications.mattermost.webhook_env" class="setting-label">Webhook Env Var </label>
-        <p class="setting-description">Name of the environment variable holding the webhook URL. The URL itself is never stored in config.</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="text"
-               id="notifications.mattermost.webhook_env"
-               class="text-input"
-               data-path="notifications.mattermost.webhook_env"
-               value=""
-               placeholder="MATTERMOST_WEBHOOK_URL"
-               >
       </div>
     </div>
 
@@ -12014,23 +11878,6 @@ exports[`getSettingsHtml snapshots (Issue #1242) > local tier view 1`] = `
                data-path="notifications.slack.channel"
                value=""
                placeholder="C0123456789"
-               >
-      </div>
-    </div>
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="notifications.slack.bot_token_env" class="setting-label">Bot Token Env Var </label>
-        <p class="setting-description">Name of the environment variable holding the xoxb- bot token, used when no token is stored in the extension.</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="text"
-               id="notifications.slack.bot_token_env"
-               class="text-input"
-               data-path="notifications.slack.bot_token_env"
-               value=""
-               placeholder="SLACK_BOT_TOKEN"
                >
       </div>
     </div>
@@ -16167,23 +16014,6 @@ exports[`getSettingsHtml snapshots (Issue #1242) > locked section — pipeline r
       </div>
     </div>
 
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="notifications.discord.webhook_env" class="setting-label">Webhook Env Var </label>
-        <p class="setting-description">Name of the environment variable holding the webhook URL. The URL itself is never stored in config.</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="text"
-               id="notifications.discord.webhook_env"
-               class="text-input"
-               data-path="notifications.discord.webhook_env"
-               value=""
-               placeholder="DISCORD_WEBHOOK_URL"
-               disabled>
-      </div>
-    </div>
-
       </div>
       <div class="subsection">
         <h4 class="subsection-title">Mattermost</h4>
@@ -16203,23 +16033,6 @@ exports[`getSettingsHtml snapshots (Issue #1242) > locked section — pipeline r
 
                disabled>
         <label for="notifications.mattermost.enabled" class="toggle-switch"></label>
-      </div>
-    </div>
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="notifications.mattermost.webhook_env" class="setting-label">Webhook Env Var </label>
-        <p class="setting-description">Name of the environment variable holding the webhook URL. The URL itself is never stored in config.</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="text"
-               id="notifications.mattermost.webhook_env"
-               class="text-input"
-               data-path="notifications.mattermost.webhook_env"
-               value=""
-               placeholder="MATTERMOST_WEBHOOK_URL"
-               disabled>
       </div>
     </div>
 
@@ -16258,23 +16071,6 @@ exports[`getSettingsHtml snapshots (Issue #1242) > locked section — pipeline r
                data-path="notifications.slack.channel"
                value=""
                placeholder="C0123456789"
-               disabled>
-      </div>
-    </div>
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="notifications.slack.bot_token_env" class="setting-label">Bot Token Env Var </label>
-        <p class="setting-description">Name of the environment variable holding the xoxb- bot token, used when no token is stored in the extension.</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="text"
-               id="notifications.slack.bot_token_env"
-               class="text-input"
-               data-path="notifications.slack.bot_token_env"
-               value=""
-               placeholder="SLACK_BOT_TOKEN"
                disabled>
       </div>
     </div>
@@ -20393,23 +20189,6 @@ exports[`getSettingsHtml snapshots (Issue #1242) > project tier view 1`] = `
       </div>
     </div>
 
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="notifications.discord.webhook_env" class="setting-label">Webhook Env Var </label>
-        <p class="setting-description">Name of the environment variable holding the webhook URL. The URL itself is never stored in config.</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="text"
-               id="notifications.discord.webhook_env"
-               class="text-input"
-               data-path="notifications.discord.webhook_env"
-               value=""
-               placeholder="DISCORD_WEBHOOK_URL"
-               >
-      </div>
-    </div>
-
       </div>
       <div class="subsection">
         <h4 class="subsection-title">Mattermost</h4>
@@ -20429,23 +20208,6 @@ exports[`getSettingsHtml snapshots (Issue #1242) > project tier view 1`] = `
 
                >
         <label for="notifications.mattermost.enabled" class="toggle-switch"></label>
-      </div>
-    </div>
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="notifications.mattermost.webhook_env" class="setting-label">Webhook Env Var </label>
-        <p class="setting-description">Name of the environment variable holding the webhook URL. The URL itself is never stored in config.</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="text"
-               id="notifications.mattermost.webhook_env"
-               class="text-input"
-               data-path="notifications.mattermost.webhook_env"
-               value=""
-               placeholder="MATTERMOST_WEBHOOK_URL"
-               >
       </div>
     </div>
 
@@ -20484,23 +20246,6 @@ exports[`getSettingsHtml snapshots (Issue #1242) > project tier view 1`] = `
                data-path="notifications.slack.channel"
                value=""
                placeholder="C0123456789"
-               >
-      </div>
-    </div>
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="notifications.slack.bot_token_env" class="setting-label">Bot Token Env Var </label>
-        <p class="setting-description">Name of the environment variable holding the xoxb- bot token, used when no token is stored in the extension.</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="text"
-               id="notifications.slack.bot_token_env"
-               class="text-input"
-               data-path="notifications.slack.bot_token_env"
-               value=""
-               placeholder="SLACK_BOT_TOKEN"
                >
       </div>
     </div>

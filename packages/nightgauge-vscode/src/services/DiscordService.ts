@@ -18,7 +18,8 @@
  *   notifications:
  *     discord:
  *       enabled: true
- *       webhook_env: DISCORD_WEBHOOK_URL
+ *
+ * The webhook URL lives in SecretStorage; DISCORD_WEBHOOK_URL is the CI fallback.
  *
  * @see docs/CONFIGURATION.md#discord-notifications
  */
@@ -29,6 +30,7 @@ import { PipelineStateService } from "./PipelineStateService";
 import { ConfigBridge } from "./ConfigBridge";
 import { Logger } from "../utils/logger";
 import { SecretStorageService, SECRET_KEYS } from "./SecretStorageService";
+import { CREDENTIAL_ENV_VAR, warnOnLegacyEnvKey } from "./notifications/credentials";
 import type { Notifier, PipelineEventContext } from "./notifications/types";
 import { NotifierStatusTracker } from "./notifications/NotifierStatusTracker";
 import { getBranchDisplayText } from "../views/dashboard/DashboardComponents";
@@ -92,8 +94,6 @@ const STAGE_LABEL: Record<string, string> = {
 
 interface DiscordNotificationsConfig {
   enabled?: boolean;
-  /** Name of the environment variable that holds the Discord webhook URL */
-  webhook_env?: string;
 }
 
 /** Fields we read from PipelineState for building Discord embeds */
@@ -1658,17 +1658,20 @@ export class DiscordService implements Notifier, vscode.Disposable {
       if (stored) return stored;
     }
 
-    // 2. Env var fallback (CI / power users)
-    if (config.webhook_env) {
-      const envUrl = process.env[config.webhook_env];
-      if (envUrl) return envUrl;
+    // 2. Env var fallback (CI). Fixed name — see notifications/credentials.ts.
+    const envName = CREDENTIAL_ENV_VAR.discord;
+    const envUrl = process.env[envName];
+    if (envUrl) return envUrl;
+
+    const hadLegacy = warnOnLegacyEnvKey(
+      this.logger,
+      "discord",
+      config as unknown as Record<string, unknown>,
+      "Nightgauge: Configure Discord Notifications"
+    );
+    if (!hadLegacy) {
       this.logger.warn(
-        `DiscordService: no webhook URL found in SecretStorage or env var "${config.webhook_env}" — ` +
-          'run "Nightgauge: Configure Discord Notifications" to set it up.'
-      );
-    } else {
-      this.logger.warn(
-        "DiscordService: no webhook URL configured — " +
+        `DiscordService: no webhook URL in SecretStorage or ${envName} — ` +
           'run "Nightgauge: Configure Discord Notifications" to set it up.'
       );
     }
