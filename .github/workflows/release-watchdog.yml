@@ -76,7 +76,7 @@ jobs:
       score_threshold: ${{ steps.gate.outputs.score_threshold }}
       reason: ${{ steps.gate.outputs.reason }}
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install the gate's pinned parser dependency
         # Hosted runner images do not promise PyYAML, and the gate fails closed
@@ -130,7 +130,7 @@ jobs:
       # so the key's presence is resolved here, where it is.
       HAS_API_KEY: ${{ secrets.ANTHROPIC_API_KEY != '' }}
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
