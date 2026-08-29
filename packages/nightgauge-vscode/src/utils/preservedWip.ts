@@ -26,7 +26,7 @@ import { execFile } from "child_process";
 import { promisify } from "util";
 import { WIP_COMMIT_TRAILER, WIP_REF_NAMESPACE } from "./preserveWorkInProgress";
 
-// #2884: never a sync subprocess — this runs on the extension host event loop.
+// Never a sync subprocess: this runs on the extension host event loop.
 const execFileAsync = promisify(execFile);
 
 /** Per-git-invocation timeout. This is a diagnostic, not a critical path. */
