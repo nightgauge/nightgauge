@@ -2,13 +2,13 @@ package main
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
 
 	gitpkg "github.com/nightgauge/nightgauge/internal/git"
+	"github.com/nightgauge/nightgauge/internal/gittest"
 )
 
 // #541 AC5 — the branch-cleanup sweep's candidate set, and what makes it safe.
@@ -132,9 +132,7 @@ func writeFileT(t *testing.T, path, content string) {
 // gitTry runs git and returns its output and error instead of failing the test,
 // for the commands the fixture EXPECTS to fail.
 func gitTry(dir string, args ...string) (string, error) {
-	cmd := exec.Command("git", args...)
-	cmd.Dir = dir
-	out, err := cmd.CombinedOutput()
+	out, err := gittest.Command(dir, args...).CombinedOutput()
 	return string(out), err
 }
 

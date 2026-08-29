@@ -4,10 +4,11 @@ import (
 	"bytes"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/nightgauge/nightgauge/internal/gittest"
 )
 
 // #1105. The verb is the discoverability floor: without it an operator has to
@@ -37,9 +38,7 @@ func newWipCLIRepo(t *testing.T) *wipCLIRepo {
 
 func (r *wipCLIRepo) git(args ...string) string {
 	r.t.Helper()
-	cmd := exec.Command("git", args...)
-	cmd.Dir = r.dir
-	out, err := cmd.CombinedOutput()
+	out, err := gittest.Command(r.dir, args...).CombinedOutput()
 	if err != nil {
 		r.t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
 	}
@@ -73,9 +72,7 @@ func (r *wipCLIRepo) preserve(branch string, issue int, stage string, ts int64, 
 }
 
 func (r *wipCLIRepo) refExists(ref string) bool {
-	cmd := exec.Command("git", "rev-parse", "--verify", "--quiet", ref)
-	cmd.Dir = r.dir
-	return cmd.Run() == nil
+	return gittest.Command(r.dir, "rev-parse", "--verify", "--quiet", ref).Run() == nil
 }
 
 func runWipCmd(t *testing.T, args ...string) (string, error) {
