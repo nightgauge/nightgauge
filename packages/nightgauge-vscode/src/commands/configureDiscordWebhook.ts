@@ -7,6 +7,7 @@
 
 import * as vscode from "vscode";
 import { SecretStorageService, SECRET_KEYS } from "../services/SecretStorageService";
+import { reportNotifierSetup } from "./notifierSetupReport";
 
 /** Register the configureDiscordWebhook command */
 export function registerConfigureDiscordWebhookCommand(): vscode.Disposable {
@@ -55,10 +56,9 @@ export function registerConfigureDiscordWebhookCommand(): vscode.Disposable {
 
     await secretService.setSecret(SECRET_KEYS.discordWebhookUrl, url.trim());
 
-    // Ensure Discord notifications are enabled in config if not already set
-    vscode.window.showInformationMessage(
-      "Nightgauge: Discord webhook configured. " +
-        "Make sure `notifications.discord.enabled: true` is set in .nightgauge/config.yaml."
-    );
+    // Report what is actually unset rather than nagging unconditionally about a
+    // setting that is usually already there, in a config tier that is usually
+    // the wrong one (#1115).
+    await reportNotifierSetup("discord");
   });
 }
