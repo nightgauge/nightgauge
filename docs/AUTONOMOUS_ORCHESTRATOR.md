@@ -751,14 +751,80 @@ ADR-bearing first ticket as a normal blocker for the rest of the epic.
 
 ## VSCode Commands
 
-| Command               | Description                      |
-| --------------------- | -------------------------------- |
-| `Autonomous: Run`     | Start with confirmation dialog   |
-| `Autonomous: Dry Run` | Preview what would execute       |
-| `Autonomous: Pause`   | Pause scanning (state preserved) |
-| `Autonomous: Resume`  | Resume from pause                |
-| `Autonomous: Stop`    | Stop and show summary            |
-| `Autonomous: Status`  | Show full status report          |
+| Command                         | Description                                             |
+| ------------------------------- | ------------------------------------------------------- |
+| `Autonomous: Run`               | Start with confirmation dialog                          |
+| `Autonomous: Dry Run`           | Preview what would execute                              |
+| `Autonomous: Pause`             | Pause scanning (state preserved)                        |
+| `Autonomous: Resume`            | Resume from pause (and release every halted repository) |
+| `Autonomous: Resume Repository` | Release ONE halted repository (#1148)                   |
+| `Autonomous: Stop`              | Stop and show summary                                   |
+| `Autonomous: Status`            | Show full status report                                 |
+
+## Repo-Scoped Halt on a Terminal Failure — #1148
+
+A terminal stage failure halts **the repository that produced it**, not the
+fleet.
+
+Before this, `ConcurrentPipelineManager.haltQueueOnSlotFailure` answered one
+issue's validation failure by clearing the entire queue and calling
+`autonomous.pause`. In a multi-repo workspace that stopped **every**
+repository until a human clicked Resume: the blast radius was the workspace,
+the evidence was one issue in one repo.
+
+**The scope unit is the repository, not the project board.** A board is a view;
+two repos can share one and still have entirely separate code, tests, worktrees
+and CI. Everything else the scheduler decides at this granularity is already
+keyed by repo — the per-repo concurrency cap, the `owner/repo#n` lifetime-failure
+and quarantine keys, the repo allowlist — so a repo-keyed halt is the existing
+grain rather than a new one.
+
+**What a halt does and does not stop:**
+
+|                                    | Behaviour                                                                                       |
+| ---------------------------------- | ----------------------------------------------------------------------------------------------- |
+| New dispatches in the halted repo  | Stopped, until an explicit Resume                                                               |
+| New dispatches in every other repo | Unaffected                                                                                      |
+| Runs already in flight, any repo   | Untouched — the halt only suppresses future dispatch, exactly as the fleet-wide halt always did |
+| Local queue                        | Only the halted repo's pending items are drained; other repos' queued work stays                |
+| Fleet `status`                     | Stays `running` — read `pausedRepos` alongside it                                               |
+
+The halt is persisted in `AutonomousState.pausedRepos` (keyed `owner/repo`,
+carrying the reason, trigger, issue and stage), survives a restart, and is
+cleared **only** by an explicit human action:
+
+- `autonomous.resumeRepo` — the `Autonomous: Resume Repository` command, and
+  the Retry option on the repo's terminal-failure Action Center card.
+- `autonomous.resume` — the fleet-wide Resume, which means "go again"
+  everywhere and therefore releases every halted repo.
+
+Nothing auto-clears it. Narrowing the blast radius does not remove the gate.
+
+**Discoverability.** A halted repo whose status line still reads `running` is a
+halted repo that gets forgotten, so the halt is surfaced in three places: the
+standing terminal-failure card (titled with the repo), the
+`Autonomous: Status` report's _Halted repositories_ section, and the modal the
+extension raises at halt time.
+
+### Two things that deliberately do NOT halt
+
+- **A `blocked` terminal with a durable out-of-scope finding** (#1142/#1147).
+  That run already classified itself, wrote
+  `.nightgauge/pipeline/blocked-findings/<issue>.json`, posted the issue
+  comment and raised its own card; pickup defers at zero cost on re-dispatch.
+  There is nothing a human triages by also freezing the queue. Keyed on the
+  typed `outOfScopeFinding` flag — the other producer of `blocked` (a
+  pr-merge repo-config dead end) is a real fault and still halts.
+- **Environmental, overload and network terminal kinds**:
+  `stream_idle_timeout`, `rate_limit_quota_exhausted`, `network_unavailable`,
+  `api_overloaded`, `api_connection_lost`, `github_network_outage`,
+  `stall_kill`. Unchanged by #1148 and pinned by test — the Go scheduler
+  auto-recovers all of them. This skip set predates #1148 and is
+  deliberately untouched by it.
+
+**Fallback.** A dispatch whose repo identity could not be determined cannot be
+scoped, so it falls back to the fleet-wide halt. Guessing a scope for an
+unattributable failure would let a real defect keep dispatching.
 
 ## Stuck-Epic Detection (No Silent Stalls) — #4073
 

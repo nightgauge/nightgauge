@@ -106,6 +106,10 @@ vi.mock("../../src/utils/nightgaugeConfig", () => ({
 }));
 
 const mockAutonomousPause = vi.fn().mockResolvedValue(undefined);
+// #1148: the halt is repo-scoped now. A skip test that watched only the
+// fleet-wide verb would keep passing while the skip quietly stopped applying
+// to the verb the halt actually uses.
+const mockAutonomousPauseRepo = vi.fn().mockResolvedValue(undefined);
 const mockAutonomousStatus = vi.fn();
 
 /**
@@ -135,6 +139,7 @@ vi.mock("../../src/services/IpcClient", () => ({
       gitComposeBranchName,
       autonomousStatus: mockAutonomousStatus,
       autonomousPause: mockAutonomousPause,
+      autonomousPauseRepo: mockAutonomousPauseRepo,
     }),
   },
 }));
@@ -258,6 +263,7 @@ describe("ConcurrentPipelineManager — approval pause must not halt the queue (
     await manager.settleForTest(178);
 
     expect(mockAutonomousPause).not.toHaveBeenCalled();
+    expect(mockAutonomousPauseRepo).not.toHaveBeenCalled();
     expect(queueClear).not.toHaveBeenCalled();
     // The notification must carry the one-click actions, not just prose.
     expect(mockShowWarningMessage).toHaveBeenCalledWith(
@@ -312,6 +318,7 @@ describe("ConcurrentPipelineManager — approval pause must not halt the queue (
     );
     // Still no queue halt.
     expect(mockAutonomousPause).not.toHaveBeenCalled();
+    expect(mockAutonomousPauseRepo).not.toHaveBeenCalled();
   });
 
   it("dismissing the notification approves nothing and re-queues nothing", async () => {
@@ -334,8 +341,10 @@ describe("ConcurrentPipelineManager — approval pause must not halt the queue (
     controllable.failIssue(178, "feature-dev", "Schema validation failed: missing field 'plan'");
     await manager.settleForTest(178);
 
-    expect(mockAutonomousPause).toHaveBeenCalledTimes(1);
-    const [, triggeredBy] = mockAutonomousPause.mock.calls[0];
+    // #1148: a located failure halts its repository, not the fleet.
+    expect(mockAutonomousPauseRepo).toHaveBeenCalledTimes(1);
+    expect(mockAutonomousPause).not.toHaveBeenCalled();
+    const [, , triggeredBy] = mockAutonomousPauseRepo.mock.calls[0];
     expect(triggeredBy).toBe("haltQueueOnSlotFailure");
   });
 });

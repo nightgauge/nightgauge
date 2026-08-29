@@ -180,7 +180,9 @@ var contractTestedMethods = map[string]bool{
 	// Autonomous
 	"autonomous.start":              true,
 	"autonomous.pause":              true,
+	"autonomous.pauseRepo":          true,
 	"autonomous.resume":             true,
+	"autonomous.resumeRepo":         true,
 	"autonomous.stop":               true,
 	"autonomous.complete":           true,
 	"autonomous.status":             true,
@@ -1343,6 +1345,17 @@ func TestContract_Autonomous(t *testing.T) {
 	t.Run("autonomous.pause/registered", func(t *testing.T) {
 		id := h.sendRequest("autonomous.pause", nil)
 		assertMethodRegistered(t, h.readResponseFor(id, nil), "autonomous.pause")
+	})
+
+	// #1148 — the repo-scoped halt verbs.
+	t.Run("autonomous.pauseRepo/registered", func(t *testing.T) {
+		id := h.sendRequest("autonomous.pauseRepo", nil)
+		assertMethodRegistered(t, h.readResponseFor(id, nil), "autonomous.pauseRepo")
+	})
+
+	t.Run("autonomous.resumeRepo/registered", func(t *testing.T) {
+		id := h.sendRequest("autonomous.resumeRepo", nil)
+		assertMethodRegistered(t, h.readResponseFor(id, nil), "autonomous.resumeRepo")
 	})
 
 	t.Run("autonomous.resume/registered", func(t *testing.T) {

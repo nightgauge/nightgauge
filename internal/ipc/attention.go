@@ -222,7 +222,7 @@ func (s *Server) ExecuteVerb(ctx context.Context, req *attention.DecisionRequest
 			k = key
 		}
 		s.autonomousScheduler.ClearIssueFailures(k)
-		return s.applyThenAction(ctx, argString(opt.Args, "then"))
+		return s.applyThenAction(ctx, argString(opt.Args, "then"), repo)
 
 	case attention.VerbQueueAdd:
 		if s.scheduler == nil {
@@ -308,6 +308,10 @@ func (s *Server) ExecuteVerb(ctx context.Context, req *attention.DecisionRequest
 const (
 	thenAutonomousRescan = "autonomous.rescan"
 	thenAutonomousResume = "autonomous.resume"
+	// thenAutonomousResumeRepo releases only the halted repository named by the
+	// request's Context.Repo (#1148). The terminal-failure card's Retry uses it
+	// because the halt it reports is scoped to one repository.
+	thenAutonomousResumeRepo = "autonomous.resumeRepo"
 )
 
 // applyThenAction executes the follow-on action named by an option's "then"
@@ -320,7 +324,7 @@ const (
 // the request — so the card vanished, the fleet stayed halted, and the one
 // surface that could re-raise it was gone. A card option that cannot be
 // carried out must fail loudly enough to be audited.
-func (s *Server) applyThenAction(ctx context.Context, then string) error {
+func (s *Server) applyThenAction(ctx context.Context, then, repo string) error {
 	switch then {
 	case "":
 		return nil
@@ -332,6 +336,14 @@ func (s *Server) applyThenAction(ctx context.Context, then string) error {
 		return nil
 	case thenAutonomousResume:
 		return s.resumeAndEnsureRunning(ctx)
+	case thenAutonomousResumeRepo:
+		// #1148: the repo comes from the card's own Context, never from the
+		// option args — a card that could name any repo in its `then` would
+		// let one repo's Retry release another repo's halt.
+		if repo == "" {
+			return fmt.Errorf("attention: %q needs a repo on the request context", thenAutonomousResumeRepo)
+		}
+		return s.resumeRepoAndEnsureRunning(ctx, repo)
 	default:
 		log.Printf("attention: WARN unknown \"then\" action %q — the option's follow-on step was NOT executed", then)
 		return fmt.Errorf("attention: unknown \"then\" action %q", then)
@@ -368,6 +380,27 @@ func (s *Server) resumeAndEnsureRunning(ctx context.Context) error {
 	return nil
 }
 
+// resumeRepoAndEnsureRunning is the repo-scoped twin of
+// resumeAndEnsureRunning (#1148): release one repository's halt, then make
+// sure the dispatch loop is actually up. Both halves are needed for the same
+// reason the fleet path needs them — after a backend restart the halt comes
+// back from persisted state with no goroutine alive, and clearing it without
+// starting Run() is the silent "resumed but never dispatches" state.
+func (s *Server) resumeRepoAndEnsureRunning(ctx context.Context, repo string) error {
+	if s.autonomousScheduler == nil {
+		return fmt.Errorf("autonomous scheduler not configured")
+	}
+	s.autonomousScheduler.ResumeRepo(repo)
+	if !s.autonomousScheduler.IsRunning() {
+		go func() {
+			if err := s.autonomousScheduler.Run(ctx); err != nil {
+				log.Printf("autonomous scheduler exited: %v", err)
+			}
+		}()
+	}
+	return nil
+}
+
 // redispatchAfterOverride clears the issue failure cooldown, requeues, and
 // wakes the scheduler — the common tail of budget.raiseCeiling and
 // run.retryWithEscalation so the override actually takes effect on a retry.
@@ -391,7 +424,7 @@ func (s *Server) redispatchAfterOverride(ctx context.Context, key, repo string, 
 	if then == "" {
 		then = thenAutonomousRescan
 	}
-	return s.applyThenAction(ctx, then)
+	return s.applyThenAction(ctx, then, repo)
 }
 
 // closeIssueBestEffort closes a GitHub issue via the resolved per-repo client.

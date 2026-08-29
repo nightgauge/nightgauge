@@ -141,6 +141,9 @@ vi.mock("../../src/utils/nightgaugeConfig", () => ({
 }));
 
 const mockAutonomousPause = vi.fn().mockResolvedValue(undefined);
+// #1148: the halt is repo-scoped now — this fixture's queue item names a repo,
+// so a genuine failure reaches the repo verb and never the fleet one.
+const mockAutonomousPauseRepo = vi.fn().mockResolvedValue(undefined);
 const mockAutonomousStatus = vi.fn();
 
 /**
@@ -170,6 +173,7 @@ vi.mock("../../src/services/IpcClient", () => ({
       gitComposeBranchName,
       autonomousStatus: mockAutonomousStatus,
       autonomousPause: mockAutonomousPause,
+      autonomousPauseRepo: mockAutonomousPauseRepo,
     }),
   },
 }));
@@ -294,6 +298,7 @@ describe("ConcurrentPipelineManager — notifier reconciles forge + exit-record 
     await manager.settleForTest(35);
 
     expect(mockAutonomousPause).not.toHaveBeenCalled();
+    expect(mockAutonomousPauseRepo).not.toHaveBeenCalled();
     expect(queueClear).not.toHaveBeenCalled();
   });
 
@@ -308,6 +313,7 @@ describe("ConcurrentPipelineManager — notifier reconciles forge + exit-record 
     await manager.settleForTest(35);
 
     expect(mockAutonomousPause).not.toHaveBeenCalled();
+    expect(mockAutonomousPauseRepo).not.toHaveBeenCalled();
     expect(queueClear).not.toHaveBeenCalled();
   });
 
@@ -332,8 +338,9 @@ describe("ConcurrentPipelineManager — notifier reconciles forge + exit-record 
     );
     await manager.settleForTest(35);
 
-    expect(mockAutonomousPause).toHaveBeenCalledTimes(1);
-    const [, triggeredBy] = mockAutonomousPause.mock.calls[0];
+    expect(mockAutonomousPauseRepo).toHaveBeenCalledTimes(1);
+    expect(mockAutonomousPause).not.toHaveBeenCalled();
+    const [, , triggeredBy] = mockAutonomousPauseRepo.mock.calls[0];
     expect(triggeredBy).toBe("haltQueueOnSlotFailure");
   });
 
@@ -362,7 +369,7 @@ describe("ConcurrentPipelineManager — notifier reconciles forge + exit-record 
     controllable.failIssue(35, "feature-validate", "subagent crashed");
     await manager.settleForTest(35);
 
-    expect(mockAutonomousPause).toHaveBeenCalledTimes(1);
+    expect(mockAutonomousPauseRepo).toHaveBeenCalledTimes(1);
   });
 
   it("uses the LATEST record for the failed stage (append-only newest-last)", async () => {
@@ -381,6 +388,7 @@ describe("ConcurrentPipelineManager — notifier reconciles forge + exit-record 
     await manager.settleForTest(35);
 
     expect(mockAutonomousPause).not.toHaveBeenCalled();
+    expect(mockAutonomousPauseRepo).not.toHaveBeenCalled();
     expect(queueClear).not.toHaveBeenCalled();
   });
 
@@ -394,8 +402,9 @@ describe("ConcurrentPipelineManager — notifier reconciles forge + exit-record 
     controllable.failIssue(35, "pr-create", "API Error: 500");
     await manager.settleForTest(35);
 
-    expect(mockAutonomousPause).toHaveBeenCalledTimes(1);
-    const [, triggeredBy] = mockAutonomousPause.mock.calls[0];
+    expect(mockAutonomousPauseRepo).toHaveBeenCalledTimes(1);
+    expect(mockAutonomousPause).not.toHaveBeenCalled();
+    const [, , triggeredBy] = mockAutonomousPauseRepo.mock.calls[0];
     expect(triggeredBy).toBe("haltQueueOnSlotFailure");
   });
 
@@ -419,6 +428,7 @@ describe("ConcurrentPipelineManager — notifier reconciles forge + exit-record 
     await manager.settleForTest(35);
 
     expect(mockAutonomousPause).not.toHaveBeenCalled();
+    expect(mockAutonomousPauseRepo).not.toHaveBeenCalled();
     expect(queueClear).not.toHaveBeenCalled();
   });
 
@@ -436,6 +446,7 @@ describe("ConcurrentPipelineManager — notifier reconciles forge + exit-record 
     await manager.settleForTest(35);
 
     expect(mockAutonomousPause).not.toHaveBeenCalled();
+    expect(mockAutonomousPauseRepo).not.toHaveBeenCalled();
     expect(queueClear).not.toHaveBeenCalled();
   });
 });

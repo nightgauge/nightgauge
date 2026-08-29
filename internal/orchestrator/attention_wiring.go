@@ -834,7 +834,7 @@ func (as *AutonomousScheduler) RaiseTerminalFailure(repo string, issue int, stag
 	}
 
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf("Issue #%d failed terminally at %s (%s) and halted the whole fleet — nothing else dispatches until this is resolved.\n\n", issue, stage, terminalKind))
+	b.WriteString(fmt.Sprintf("Issue #%d failed terminally at %s (%s) and halted dispatch for %s — no further issues in this repository start until it is resolved. Every OTHER repository in the workspace keeps running (#1148), and runs already in flight are untouched.\n\n", issue, stage, terminalKind, repo))
 	if terminalKind == TerminalKindAbandonedCommit {
 		b.WriteString("A recovery attempt already found committed, unmerged work on this branch (clean tree, ahead of base) but could not resume automatically. The commit is still there — retry will resume at pr-create rather than re-deriving the work from scratch.\n\n")
 	}
@@ -849,25 +849,29 @@ func (as *AutonomousScheduler) RaiseTerminalFailure(repo string, issue int, stag
 	} else {
 		b.WriteString(fmt.Sprintf("The lifetime failure cap (%d) has been reached — no further automatic retries will be accepted for this issue.\n\n", MaxLifetimeFailuresPerIssue))
 	}
-	b.WriteString("Retry clears the failure cooldown and re-runs the whole pipeline from issue-pickup — it re-derives work already committed to the branch, it does not resume mid-pipeline. Park leaves the fleet paused for manual triage.")
+	b.WriteString("Retry clears the failure cooldown, releases this repository's halt and re-runs the whole pipeline from issue-pickup — it re-derives work already committed to the branch, it does not resume mid-pipeline. Park leaves this repository halted for manual triage.")
 
 	options := []attention.Option{
 		{ID: "retry", Label: "Retry", Verb: attention.VerbAutonomousClearIssueFailures,
-			Args: map[string]any{"key": key, "then": "autonomous.resume"}, Style: attention.StylePrimary},
+			// #1148: resumeRepo, not resume. The halt this card names is scoped
+			// to one repository, so its Retry must release exactly that — a
+			// fleet-wide resume from a repo-scoped card would clear halts on
+			// repos the operator never looked at.
+			Args: map[string]any{"key": key, "then": "autonomous.resumeRepo"}, Style: attention.StylePrimary},
 	}
 	if attemptsRemaining > 0 {
 		options = append(options, attention.Option{
 			ID: "retry-escalate", Label: "Retry with escalation", Verb: attention.VerbRunRetryWithEscalation,
-			Args: map[string]any{"key": key, "issueNumber": issue, "then": "autonomous.resume"}, Style: attention.StyleDefault,
+			Args: map[string]any{"key": key, "issueNumber": issue, "then": "autonomous.resumeRepo"}, Style: attention.StyleDefault,
 		})
 	}
-	options = append(options, noopOption("park", "Park — leave paused for manual triage"))
+	options = append(options, noopOption("park", "Park — leave this repository halted for manual triage"))
 
 	as.raiseAttention(attention.DecisionRequest{
 		IdempotencyKey: keyTerminalFailure(repo, issue),
 		Kind:           attention.KindUnblock,
 		Severity:       attention.SeverityBlockingFleet,
-		Title:          fmt.Sprintf("Fleet halted — #%d failed at %s", issue, stage),
+		Title:          fmt.Sprintf("%s halted — #%d failed at %s", repo, issue, stage),
 		Body:           b.String(),
 		Producer:       producerTerminalFailure,
 		Context:        attention.Context{Repo: repo, Issue: issue, Stage: stage, CostSoFarUSD: costUSD, Blocker: terminalKind},
@@ -913,7 +917,10 @@ func (as *AutonomousScheduler) reconcileTerminalFailureCards() {
 	// same conjunct is how one state rewrite silently broke both producers at
 	// once. It reads the halt LATCH, so no exit-path status rewrite can make
 	// the cards retract themselves.
-	stillHalted := readable && haltedOnSlotFailure(as.state)
+	// #1148: OR the repo-scoped halt in. Scoping the halt to one repository
+	// must not retract the card that names the failure — the card IS how the
+	// operator learns which repo stopped and why.
+	stillHalted := readable && (haltedOnSlotFailure(as.state) || anyRepoHaltedOnSlotFailure(as.state))
 	as.mu.Unlock()
 
 	if !readable {

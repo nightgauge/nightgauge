@@ -857,6 +857,20 @@ export interface EpicContextResult {
   [key: string]: unknown;
 }
 
+/**
+ * One repository's autonomous halt (#1148) — the per-repo analogue of
+ * pauseReason/pauseTriggeredBy/pausedAt, plus the issue and stage that caused
+ * it so a halted repo can always say WHY it stopped.
+ */
+export interface AutonomousRepoPause {
+  repo: string;
+  reason?: string;
+  triggeredBy?: string;
+  pausedAt?: string;
+  issue?: number;
+  stage?: string;
+}
+
 /** Result from autonomous.* methods — autonomous scheduler state snapshot. */
 export interface AutonomousStatusResult {
   status: string;
@@ -875,6 +889,18 @@ export interface AutonomousStatusResult {
    * latch restores ("paused" or "safety_tripped").
    */
   machineHalt?: { tag: string; status: string };
+  /**
+   * Repositories whose autonomous dispatch is halted, keyed "owner/repo"
+   * (#1148).
+   *
+   * A terminal stage failure halts ONE repository now, not the fleet, so
+   * `status` stays "running" while these entries hold: the fleet is dispatching
+   * and some subset of it is not. Reading only `status` therefore under-reports
+   * — every surface that answers "is anything waiting on me?" must consider
+   * both. Cleared per-repo by `autonomousResumeRepo`, or wholesale by the
+   * fleet-wide `autonomousResume`.
+   */
+  pausedRepos?: Record<string, AutonomousRepoPause>;
   startedAt: string;
   lastScanAt: string;
   running: { repo: string; number: number; title: string; startedAt: string }[];

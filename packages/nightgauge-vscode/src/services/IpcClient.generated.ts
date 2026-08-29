@@ -612,6 +612,14 @@ export class IpcClientGenerated extends IpcClientBase {
     return this.call<AutonomousStatusResult>('autonomous.pause', { reason, triggeredBy, repo, issueNumber, stage, terminalKind, costUsd });
   }
 
+  async autonomousPauseRepo(repo: string, reason?: string, triggeredBy?: string, issueNumber?: number, stage?: string, terminalKind?: string, costUsd?: number): Promise<AutonomousStatusResult> {
+    return this.call<AutonomousStatusResult>('autonomous.pauseRepo', { repo, reason, triggeredBy, issueNumber, stage, terminalKind, costUsd });
+  }
+
+  async autonomousResumeRepo(repo: string): Promise<AutonomousStatusResult> {
+    return this.call<AutonomousStatusResult>('autonomous.resumeRepo', { repo });
+  }
+
   async autonomousResume(workspaceRepos?: string[]): Promise<AutonomousStatusResult> {
     return this.call<AutonomousStatusResult>('autonomous.resume', { workspaceRepos });
   }

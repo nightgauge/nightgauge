@@ -992,6 +992,24 @@ function formatStatus(status: AutonomousStatusResult, now: Date = new Date()): s
     lines.push('Use "Resume Autonomous" or click Start to reset and continue.');
   }
 
+  // ─── Halted repositories (#1148) ───────────────────────────────────
+  //
+  // Printed directly under the status line, because it QUALIFIES that line: a
+  // repo-scoped halt leaves `status` reading "RUNNING" while a repository is
+  // stopped, so a report that showed only the status would be true and
+  // misleading at once.
+  const haltedRepos = Object.values(status.pausedRepos ?? {}).sort((a, b) =>
+    a.repo.localeCompare(b.repo)
+  );
+  if (haltedRepos.length > 0) {
+    lines.push(`Halted repositories: ${haltedRepos.length} (other repositories keep dispatching)`);
+    for (const h of haltedRepos) {
+      const why = h.issue ? `#${h.issue} failed at ${h.stage || "unknown"}` : h.reason || "unknown";
+      lines.push(`  • ${h.repo} — ${why}`);
+    }
+    lines.push('Use "Autonomous: Resume Repository" to release one after triage.');
+  }
+
   // ─── Header: session age + lifetime cycles ─────────────────────────
   if (status.startedAt) {
     const elapsed = formatElapsedFrom(status.startedAt, now);
@@ -1726,6 +1744,62 @@ export function registerAutonomousCommands(
         const message = error instanceof Error ? error.message : "Unknown error";
         logger.error("Failed to resume autonomous mode", { error: message });
         vscode.window.showErrorMessage(`Failed to resume autonomous mode: ${message}`);
+      }
+    })
+  );
+
+  // ── Autonomous: Resume Repository (#1148) ──────────────────────────
+  //
+  // A terminal stage failure halts ONE repository now, which means the fleet
+  // status stays "running" while some repository is stopped. That is strictly
+  // better behaviour and strictly worse discoverability unless there is a
+  // surface for it: the global Resume button is not shown (nothing is
+  // "resumable" by the old status test), so without this command a halted repo
+  // has no operator affordance at all and gets silently forgotten.
+  //
+  // The quick pick names each halted repo with the issue and stage that
+  // stopped it, so the operator is choosing between facts rather than repo
+  // names. With exactly one halted repo it still prompts — releasing a human
+  // gate is not something to do on an unconfirmed keystroke.
+  disposables.push(
+    vscode.commands.registerCommand("nightgauge.autonomousResumeRepo", async () => {
+      try {
+        const ipc = IpcClient.getInstance();
+        const status = await ipc.autonomousStatus();
+        const halted = Object.values(status.pausedRepos ?? {});
+        if (halted.length === 0) {
+          vscode.window.showInformationMessage(
+            "No repositories are halted. (Autonomous itself may still be paused — use Autonomous: Resume.)"
+          );
+          return;
+        }
+        const picked = await vscode.window.showQuickPick(
+          halted.map((h) => ({
+            label: h.repo,
+            description: h.issue ? `#${h.issue} failed at ${h.stage || "unknown"}` : undefined,
+            detail: h.reason,
+            repo: h.repo,
+          })),
+          { title: "Resume a halted repository", placeHolder: "Select the repository to resume" }
+        );
+        if (!picked) return;
+
+        const result = await ipc.autonomousResumeRepo(picked.repo);
+        const stillHalted = Object.keys(result.pausedRepos ?? {}).length;
+        getOutputChannel().appendLine(
+          `[${new Date().toISOString()}] Autonomous resumed repository ${picked.repo} ` +
+            `(${stillHalted} repositor${stillHalted === 1 ? "y" : "ies"} still halted)`
+        );
+        vscode.window.showInformationMessage(
+          stillHalted > 0
+            ? `Resumed ${picked.repo}. ${stillHalted} other repositor${stillHalted === 1 ? "y is" : "ies are"} still halted.`
+            : `Resumed ${picked.repo}. No repositories remain halted.`
+        );
+        logger.info("Autonomous repository resumed", { repo: picked.repo, stillHalted });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Unknown error";
+        logger.error("Failed to resume repository", { error: message });
+        vscode.window.showErrorMessage(`Failed to resume repository: ${message}`);
       }
     })
   );

@@ -2309,6 +2309,34 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
     pipelineResult: PipelineRunResult | undefined
   ): Promise<void> {
     try {
+      // #1148: a `blocked` terminal never halts anything.
+      //
+      // A run that stopped because its work is blocked on other issues has
+      // ALREADY done everything a halt exists to provoke: #1142 classified it
+      // as blocked rather than failed, and #1147 wrote the durable finding to
+      // .nightgauge/pipeline/blocked-findings/, posted the issue comment, and
+      // raised the out-of-scope-blocker card. Pickup consults that finding and
+      // defers at zero cost on re-dispatch. Freezing the queue on top of that
+      // adds no information and no decision — it only stops unrelated work.
+      //
+      // Keyed on the typed `outOfScopeFinding` flag, not a prefix test on
+      // `blocker`, for the same reason the failure-comment guard above is: the
+      // OTHER producer of `blocked` is #190's pr-merge dead end (branch
+      // protection, required-check mismatch), which is a genuine repo-config
+      // fault a human must clear — that one still halts. Sniffing a substring
+      // out of `blocker` would make the two indistinguishable the first time
+      // either string is reworded.
+      if (pipelineResult?.blocked?.outOfScopeFinding) {
+        this.logger.info(
+          "Skipping haltQueueOnSlotFailure — blocked terminal with a durable finding; the run diagnosed itself and the queue keeps flowing",
+          {
+            failedIssue: slot.issueNumber,
+            blocker: pipelineResult.blocked.blocker,
+          }
+        );
+        return;
+      }
+
       // #3444: Skip the halt for environmental terminal kinds — failures
       // caused by upstream conditions (Anthropic API quota, idle stream
       // timeouts mid-token-output, extended GitHub connectivity loss) that the
@@ -2485,23 +2513,53 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
         return;
       }
 
+      // #1148: the halt is scoped to the repository that produced the failure.
+      //
+      // `haltRepo` is the scope unit for BOTH halves — the local queue drain
+      // and the Go-side dispatch halt — so the two can never disagree about
+      // what stopped. When the dispatch could not be attributed to a repo at
+      // all (`slot.repo` empty), the scope collapses to the fleet: an
+      // unattributable failure is exactly the case where narrowing would be a
+      // guess, and guessing wrong here means a real defect keeps dispatching.
+      const haltRepo = slot.repo ?? "";
+      const repoScoped = haltRepo !== "";
+
       const drainedBefore = await this.queueService.getQueue().catch(() => null);
-      const pendingCount =
-        drainedBefore?.items.filter((i) => i.status === "pending" || i.status === "ready").length ??
-        0;
+      const pendingItems = (drainedBefore?.items ?? []).filter(
+        (i) => i.status === "pending" || i.status === "ready"
+      );
+      // Only this repo's queued work is evidence-adjacent to the failure.
+      // Items queued against another repository are untouched — that is the
+      // whole point — so they are not counted in the "N pending removed"
+      // message either, which would otherwise overstate what was taken away.
+      const doomed = repoScoped
+        ? pendingItems.filter((i) => i.repoName === haltRepo)
+        : pendingItems;
+      const pendingCount = doomed.length;
 
       if (pendingCount > 0) {
         try {
-          await this.queueService.clear();
+          if (repoScoped) {
+            // Remove item-by-item rather than clear(): clear() is a queue-wide
+            // truncation and would delete the other repositories' pending work
+            // that this halt has no evidence about.
+            for (const item of doomed) {
+              await this.queueService.remove(item.issueNumber);
+            }
+          } else {
+            await this.queueService.clear();
+          }
           this.logger.info(
-            "Queue cleared after slot failure — pending items require user acknowledgement before auto-continuing",
+            "Queue drained after slot failure — pending items require user acknowledgement before auto-continuing",
             {
               failedIssue: slot.issueNumber,
+              haltRepo: haltRepo || "(unattributed — fleet scope)",
               pendingCleared: pendingCount,
+              pendingLeftForOtherRepos: pendingItems.length - pendingCount,
             }
           );
         } catch (clearError) {
-          this.logger.warn("Failed to clear queue after slot failure", {
+          this.logger.warn("Failed to drain queue after slot failure", {
             failedIssue: slot.issueNumber,
             error: clearError instanceof Error ? clearError.message : String(clearError),
           });
@@ -2536,18 +2594,38 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
           // label — a validation_error (harness/bookkeeping fault) must not
           // present as an unclassifiable organic failure on the halt card.
           const pauseTerminalKind = pipelineResult?.terminalKind || "unclassified";
-          await ipc.autonomousPause(
-            `haltQueueOnSlotFailure: issue #${slot.issueNumber} failed at ${failedStage}`,
-            "haltQueueOnSlotFailure",
-            slot.repo ?? "",
-            slot.issueNumber,
-            failedStage,
-            pauseTerminalKind,
-            pauseCostUsd
-          );
+          const pauseReason = `haltQueueOnSlotFailure: issue #${slot.issueNumber} failed at ${failedStage}`;
+          // #1148: pauseRepo, not pause. Both verbs raise the same
+          // terminal-failure card and both latch until an explicit human
+          // Resume — the ONLY difference is how much stops. `autonomousPause`
+          // survives as the fleet fallback for an unattributable dispatch (and
+          // as the operator's own Pause button); it is no longer what a
+          // located, ordinary stage failure reaches for.
+          if (repoScoped) {
+            await ipc.autonomousPauseRepo(
+              haltRepo,
+              pauseReason,
+              "haltQueueOnSlotFailure",
+              slot.issueNumber,
+              failedStage,
+              pauseTerminalKind,
+              pauseCostUsd
+            );
+          } else {
+            await ipc.autonomousPause(
+              pauseReason,
+              "haltQueueOnSlotFailure",
+              "",
+              slot.issueNumber,
+              failedStage,
+              pauseTerminalKind,
+              pauseCostUsd
+            );
+          }
           autonomousPaused = true;
-          this.logger.info("Autonomous mode paused after slot failure", {
+          this.logger.info("Autonomous dispatch halted after slot failure", {
             failedIssue: slot.issueNumber,
+            scope: repoScoped ? haltRepo : "fleet (repo unattributed)",
           });
         }
       } catch (pauseError) {
@@ -2560,15 +2638,23 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
       const failedStage = pipelineResult?.failedStage ?? "unknown";
       const slotState = await slot.stateService.getState().catch(() => null);
       const costUsd = slotState?.tokens?.estimated_cost_usd ?? 0;
-      const repo = slot.repo ?? "";
+      const repo = haltRepo;
       const issueUrl = repo ? `https://github.com/${repo}/issues/${slot.issueNumber}` : undefined;
 
       const queuePart =
         pendingCount > 0
-          ? `Queue cleared (${pendingCount} pending item${pendingCount === 1 ? "" : "s"} removed). `
+          ? `${pendingCount} pending item${pendingCount === 1 ? "" : "s"} removed from the queue` +
+            (repoScoped ? ` for ${repo}. ` : ". ")
           : "";
+      // Say plainly what is and is not stopped. An operator who reads "paused"
+      // and assumes the whole fleet stopped will go looking for work that is
+      // in fact still running — and one who assumes the opposite will leave a
+      // halted repo sitting.
       const autonomousPart = autonomousPaused
-        ? "Autonomous mode paused. Resume from the Autonomous panel after triage."
+        ? repoScoped
+          ? `Autonomous dispatch for ${repo} is halted; other repositories keep running. ` +
+            `Resume it with "Autonomous: Resume Repository" after triage.`
+          : "Autonomous mode paused (repository could not be identified). Resume from the Autonomous panel after triage."
         : "Triage this failure, then re-queue or resume autonomous to continue.";
       const detail =
         `Issue #${slot.issueNumber} failed at ${failedStage}` +
@@ -2584,7 +2670,9 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
       // Fire-and-forget — the modal blocks the user but not the finally block.
       void vscode.window
         .showErrorMessage(
-          `Nightgauge pipeline halted — failure on #${slot.issueNumber}`,
+          repoScoped
+            ? `Nightgauge — ${repo} halted on #${slot.issueNumber}`
+            : `Nightgauge pipeline halted — failure on #${slot.issueNumber}`,
           { modal: true, detail },
           ...actions
         )
