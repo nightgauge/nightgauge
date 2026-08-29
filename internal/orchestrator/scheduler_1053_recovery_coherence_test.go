@@ -16,9 +16,12 @@ import (
 // (`part 'router.g.dart';` for a file the same commit removed), so the branch
 // was a compile error wearing a plausible commit.
 //
-// The guard refuses rather than editing the commit's contents. The rename test
-// below is the reason: withholding every worktree-column deletion — the obvious
-// fix — commits BOTH halves of every rename and breaks a case that works today.
+// The guard withholds the DELETIONS rather than refusing the whole tree
+// (narrowed by #1108). The rename test below is why the withheld set is read
+// from the INDEX and not from the worktree column: withholding every
+// worktree-column deletion commits BOTH halves of every rename and breaks a
+// case that works today. After `git add -A` a rename is a single `R`, so its
+// source is never in the withheld set.
 
 // gitCommitAll is a small local helper: stage everything and commit, failing the
 // test on error. Kept separate from the recovery path under test.
@@ -47,10 +50,23 @@ func gitHeadPaths(t *testing.T, dir string) map[string]bool {
 	return paths
 }
 
-// TestRecoverUncommittedWork_RefusesADeletionDominatedTree reproduces the #1053
-// shape: many tracked files removed from disk, a couple edited, nothing
-// regenerated. The rescue must refuse and leave the work in the worktree.
-func TestRecoverUncommittedWork_RefusesADeletionDominatedTree(t *testing.T) {
+// gitShowFile returns a path's contents at a revision, failing the test on
+// error. Used to assert what the recovery commit actually published.
+func gitShowFile(t *testing.T, dir, rev string) string {
+	t.Helper()
+	out, err := exec.Command("git", "-C", dir, "show", rev).Output()
+	if err != nil {
+		t.Fatalf("git show %s: %v", rev, err)
+	}
+	return string(out)
+}
+
+// TestRecoverUncommittedWork_WithholdsDeletionsFromADominatedTree reproduces
+// the #1053 shape: many tracked files removed from disk, a couple edited,
+// nothing regenerated. The deletions must stay out of the commit — that is the
+// coherence property — while the edits, which carry no mid-transformation risk,
+// are rescued rather than discarded with them (#1108).
+func TestRecoverUncommittedWork_WithholdsDeletionsFromADominatedTree(t *testing.T) {
 	dir := t.TempDir()
 	gitInitRepo(t, dir)
 
@@ -79,24 +95,35 @@ func TestRecoverUncommittedWork_RefusesADeletionDominatedTree(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := RecoverUncommittedWork(dir, 1053, "feature-dev")
-	if err == nil {
-		t.Fatal("RecoverUncommittedWork committed a deletion-dominated tree; want a refusal")
+	rec, err := RecoverUncommittedWork(dir, 1053, "feature-dev")
+	if err != nil {
+		t.Fatalf("RecoverUncommittedWork = %v, want the edits rescued with the deletions withheld", err)
 	}
-	if !strings.Contains(err.Error(), "mid-transformation") {
-		t.Errorf("refusal reason = %q, want it to name the mid-transformation shape", err.Error())
+	if rec.WithheldReason == "" {
+		t.Error("nothing reported as withheld; a deletion-dominated tree must say what it held back")
+	}
+	if len(rec.WithheldDeletions) != 6 {
+		t.Errorf("withheld %d deletion(s), want 6", len(rec.WithheldDeletions))
 	}
 
-	// The work must survive in the worktree — refusing preserves, it does not discard.
+	// The deletions must NOT be published: every artifact is still in HEAD.
+	head := gitHeadPaths(t, dir)
+	for i := 0; i < 6; i++ {
+		name := "gen" + string(rune('a'+i)) + ".g.txt"
+		if !head[name] {
+			t.Errorf("%s left HEAD — the incoherent half was published", name)
+		}
+	}
+	// They are still deleted on disk, so the next attempt sees the same tree.
+	if _, statErr := os.Stat(filepath.Join(dir, "gena.g.txt")); !os.IsNotExist(statErr) {
+		t.Errorf("withheld deletion was undone on disk: %v", statErr)
+	}
 	if !hasUncommittedWork(dir) {
-		t.Error("worktree is clean after a refusal; the rescue must leave the work on disk")
+		t.Error("worktree is clean; the withheld deletions must remain in it")
 	}
-	if _, statErr := os.Stat(filepath.Join(dir, "src_one.txt")); statErr != nil {
-		t.Errorf("edited source missing after refusal: %v", statErr)
-	}
-	// And HEAD must be untouched: no recovery commit, artifacts still present.
-	if head := gitHeadPaths(t, dir); !head["gena.g.txt"] {
-		t.Error("HEAD lost a generated artifact; the refusal must not rewrite history")
+	// The edit IS published — it is the deliverable.
+	if got := gitShowFile(t, dir, "HEAD:src_one.txt"); got != "source edited\n" {
+		t.Errorf("src_one.txt in HEAD = %q, want the edited contents — the deliverable was discarded", got)
 	}
 }
 
@@ -123,7 +150,7 @@ func TestRecoverUncommittedWork_CommitsARenameCoherently(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := RecoverUncommittedWork(dir, 1053, "feature-dev"); err != nil {
+	if _, err := RecoverUncommittedWork(dir, 1053, "feature-dev"); err != nil {
 		t.Fatalf("RecoverUncommittedWork refused a plain rename: %v", err)
 	}
 
@@ -161,7 +188,7 @@ func TestRecoverUncommittedWork_CommitsAMinorityDeletion(t *testing.T) {
 		}
 	}
 
-	if err := RecoverUncommittedWork(dir, 1053, "feature-dev"); err != nil {
+	if _, err := RecoverUncommittedWork(dir, 1053, "feature-dev"); err != nil {
 		t.Fatalf("RecoverUncommittedWork refused a normal edit-with-one-deletion: %v", err)
 	}
 	if head := gitHeadPaths(t, dir); head["doomed.txt"] {
@@ -191,7 +218,7 @@ func TestRecoverUncommittedWork_RescuesAPurelyDeletionalDeliverable(t *testing.T
 		}
 	}
 
-	if err := RecoverUncommittedWork(dir, 1053, "feature-dev"); err != nil {
+	if _, err := RecoverUncommittedWork(dir, 1053, "feature-dev"); err != nil {
 		t.Fatalf("RecoverUncommittedWork refused a purely deletional deliverable: %v", err)
 	}
 	head := gitHeadPaths(t, dir)
@@ -202,10 +229,10 @@ func TestRecoverUncommittedWork_RescuesAPurelyDeletionalDeliverable(t *testing.T
 	}
 }
 
-// TestStagedDeletionDominance_CountsRenamesAsOneNonDeletion pins the counting
+// TestStagedDeletions_CountsRenamesAsOneNonDeletion pins the counting
 // contract directly, so a future change to the parser cannot silently
 // reintroduce the rename miscount.
-func TestStagedDeletionDominance_CountsRenamesAsOneNonDeletion(t *testing.T) {
+func TestStagedDeletions_CountsRenamesAsOneNonDeletion(t *testing.T) {
 	dir := t.TempDir()
 	gitInitRepo(t, dir)
 	if err := os.WriteFile(filepath.Join(dir, "old.txt"), []byte("stable\n"), 0o644); err != nil {
@@ -219,9 +246,9 @@ func TestStagedDeletionDominance_CountsRenamesAsOneNonDeletion(t *testing.T) {
 		t.Fatalf("git add: %v: %s", err, out)
 	}
 
-	deletions, total, _ := stagedDeletionDominance(dir)
-	if deletions != 0 {
-		t.Errorf("deletions = %d, want 0 — a rename is not a deletion", deletions)
+	deletions, total := stagedDeletions(dir)
+	if len(deletions) != 0 {
+		t.Errorf("deletions = %v, want none — a rename is not a deletion", deletions)
 	}
 	if total != 1 {
 		t.Errorf("total = %d, want 1 — a rename is one entry, not two", total)
