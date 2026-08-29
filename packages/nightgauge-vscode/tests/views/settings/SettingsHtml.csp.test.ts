@@ -32,7 +32,12 @@ describe("settings webview CSP", () => {
     const { html, nonce } = render();
 
     // Every script tag must carry the nonce, or the browser drops it.
-    const scripts = html.match(/<script[^>]*>/g) ?? [];
+    // Case-insensitive on purpose: HTML tag names are not case-sensitive, so
+    // a `<SCRIPT>` emitted without a nonce would be blocked by the CSP exactly
+    // like a lower-case one — but a case-sensitive matcher here would not see
+    // it, and this test would pass while the button stayed dead. (CodeQL
+    // "Bad HTML filtering regexp" flagged precisely this.)
+    const scripts = html.match(/<script[^>]*>/gi) ?? [];
     expect(scripts.length).toBeGreaterThan(0);
 
     const unnonced = scripts.filter((tag) => !tag.includes(`nonce="${nonce}"`));
@@ -50,7 +55,7 @@ describe("settings webview CSP", () => {
     expect(html).toContain('id="notifications-open-panel-btn"');
 
     // ...and their listeners must be reachable, i.e. inside a nonced <script>.
-    const re = new RegExp(`<script nonce="${nonce}">([\\s\\S]*?)</script>`, "g");
+    const re = new RegExp(`<script nonce="${nonce}">([\\s\\S]*?)</script>`, "gi");
     const nonced = [...html.matchAll(re)].map((m) => m[1]).join("\n");
 
     expect(nonced).toContain("notifications-open-panel-btn");
