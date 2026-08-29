@@ -502,7 +502,26 @@ const SKILL_STAGES: PipelineStage[] = [
 ];
 
 // STAGE_OUTPUT_CONTEXT_TYPE, STAGE_OUTPUT_SCHEMA, STAGE_INPUT_PREREQUISITES, OPTIONAL_CONTEXT_STAGES
-// moved to ContextAssembler (Issue #2770 — Part 3).
+// moved to ContextAssembler (Issue #2770 — Part 3). STAGE_OUTPUT_CONTEXT_TYPE
+// now lives in orchestrator/context/stageContextFiles and is re-exported from
+// ContextAssembler (Issue #1143).
+
+/**
+ * Stages whose deliverable is read for backward `feedback[]` signals.
+ *
+ * This is POLICY — which stages the backtrack engine listens to — and is
+ * deliberately kept separate from STAGE_OUTPUT_CONTEXT_TYPE, which is the
+ * naming FACT of what file a stage writes. Conflating the two is how three
+ * hand-written `{ "feature-dev": "dev", "feature-validate": "validate" }`
+ * literals ended up in this file.
+ *
+ * @see Issue #1342 — backtrack engine
+ * @see Issue #1143 — one shared stage → filename mapping
+ */
+const FEEDBACK_EMITTING_STAGES: ReadonlySet<PipelineStage> = new Set<PipelineStage>([
+  "feature-dev",
+  "feature-validate",
+]);
 
 /**
  * Stages that require human action and are deferred when deferMerge is enabled.
@@ -8498,12 +8517,12 @@ export class HeadlessOrchestrator implements vscode.Disposable {
    * MODEL_ESCALATION_NEEDED signals (which retry same stage, not backtrack).
    */
   private readFeedbackSignals(stage: PipelineStage, issueNumber: number): PipelineFeedbackSignal[] {
-    const contextTypeMap: Partial<Record<PipelineStage, ContextFileType>> = {
-      "feature-dev": "dev",
-      "feature-validate": "validate",
-    };
+    // Which stages emit backtrack feedback is POLICY and stays here. Which
+    // FILE a stage writes is a naming fact, and that comes from the one shared
+    // mapping (#1143) — a hand-written second copy of it is dual-path drift.
+    if (!FEEDBACK_EMITTING_STAGES.has(stage)) return [];
 
-    const contextType = contextTypeMap[stage];
+    const contextType = STAGE_OUTPUT_CONTEXT_TYPE[stage];
     if (!contextType) return [];
 
     try {
