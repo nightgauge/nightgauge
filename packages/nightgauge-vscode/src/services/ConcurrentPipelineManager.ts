@@ -1813,12 +1813,19 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
         // operator action, the comment's recommendations don't apply, and during
         // a GitHub outage the post can't succeed anyway (the original incident
         // tried to post "run `gh auth login`" over the dead network).
+        // Also skip when the run ended on a recorded out-of-scope blocked
+        // finding (#1147): the orchestrator has already posted a comment that
+        // names the signal, the rationale and the verbatim evidence, and it
+        // posts on BOTH surfaces rather than only this one. A generic failure
+        // report underneath it would narrate the same stop a second time as a
+        // failure, which is the shape #1147 exists to stop it being.
         if (
           !pipelineSucceeded &&
           !pipelineDeferred &&
           !this.isShuttingDown &&
           !slot.userCancelled &&
           pipelineResult &&
+          !pipelineResult.blocked?.outOfScopeFinding &&
           !isTransientNetworkFailureText(pipelineResult.error?.message ?? "")
         ) {
           try {

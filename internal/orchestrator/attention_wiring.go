@@ -23,6 +23,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -1609,4 +1610,106 @@ func splitRepo(repo string) (owner, name string) {
 		}
 	}
 	return "", repo
+}
+
+// --- Producer (unnumbered): out-of-scope blocker (per-issue, extension-only) ---
+
+// ProducerOutOfScopeBlocker names the durable out-of-scope-blocked producer
+// (#1147).
+const ProducerOutOfScopeBlocker = "out-of-scope-blocker"
+
+// BlockedFindingsDirName is the directory, under `.nightgauge/pipeline/`,
+// holding one recorded out-of-scope finding per issue (#1147).
+//
+// A DIRECTORY rather than a flat `blocked-<issue>.json`, and that is
+// load-bearing: runstate.ArchiveRun moves EVERY `*-<issue>.json` sitting
+// directly under `.nightgauge/pipeline/` into `pipeline/history/<runID>/` when
+// a run ends, and skips directories. A finding written flat would be archived
+// out of the way by the very run that produced it — which is exactly the
+// "discarded context file" #1147 exists to stop.
+const BlockedFindingsDirName = "blocked-findings"
+
+// BlockedFindingPath is the one place the finding's location is spelled out on
+// the Go side. The extension writes it (utils/blockedFinding.ts) and reads it
+// at issue-pickup to defer for zero tokens; the daemon only ever DELETES it,
+// when an operator resolves the card below.
+func BlockedFindingPath(repoRoot string, issue int) string {
+	return filepath.Join(repoRoot, ".nightgauge", "pipeline", BlockedFindingsDirName,
+		fmt.Sprintf("%d.json", issue))
+}
+
+// BuildOutOfScopeBlocker constructs the card for a run that terminated `blocked`
+// because a stage discovered the work depends on something outside the issue's
+// own scope (#1142 classified it; #1147 made it durable).
+//
+// EXTENSION-ONLY, like BuildAbandonedDispatch and for the same kind of reason:
+// the fork that produces this terminal lives in the TypeScript post-validate
+// gate (HeadlessOrchestrator.evaluateFailedStageFeedback). There is no Go
+// counterpart to keep in parity, so this builder has exactly one call site —
+// the `attention.raise` handler.
+//
+// NO CALLER-SUPPLIED PROSE, and no new wire field to carry any. The signal's
+// rationale and its verbatim evidence are already on the GitHub issue (the
+// orchestrator comments them at the same moment it raises this) and in the
+// recorded finding on disk; putting them on the card too would mean accepting
+// operator-facing text over a socket any local process can reach — the boundary
+// this file's neighbours state as "the extension reports a CONDITION; the
+// daemon decides what the card says".
+//
+// THE ONE REAL OPTION IS THE CLEAR, and it is a real one rather than a noop.
+// While the finding sits on disk, issue-pickup defers this issue at zero cost
+// on every dispatch — which is the feature, and would be a silent permanent
+// stall if nothing could retract it. `blocked.clearFinding` deletes the
+// recorded finding under the card's OWN Context.Repo with an empty arg surface,
+// the same bounded shape as dependabot.enableAlerts and workspace.addRepo. The
+// deliberate omission is a requeue: re-dispatching before a human has dealt
+// with the blocker would walk straight back into the same wall, and offering it
+// would be the button-that-does-nothing ADR-015 Invariant 3 forbids.
+func BuildOutOfScopeBlocker(repo string, issue int, runID, stage string) attention.DecisionRequest {
+	if stage == "" {
+		stage = "unknown"
+	}
+	return attention.DecisionRequest{
+		IdempotencyKey: fmt.Sprintf("%s:%s#%d", ProducerOutOfScopeBlocker, repo, issue),
+		// unblock + blocking_run: unlike abandoned-dispatch, nobody asked for
+		// this stop, the issue cannot progress until a human acts, and the run
+		// it describes delivered nothing.
+		Kind:     attention.KindUnblock,
+		Severity: attention.SeverityBlockingRun,
+		Title:    fmt.Sprintf("#%d is blocked on work outside its scope", issue),
+		Body: fmt.Sprintf(
+			"A stage in the run for #%d found that this issue depends on work that is not in its "+
+				"scope, so the pipeline ended as `blocked` instead of re-planning into the same "+
+				"wall. The finding — the signal, its rationale and its evidence verbatim — is "+
+				"posted as a comment on the issue and recorded at "+
+				"`.nightgauge/pipeline/%s/%d.json`.\n\n"+
+				"UNTIL THAT FINDING IS CLEARED, re-dispatching #%d defers at pickup for zero "+
+				"tokens rather than re-running three stages. That is deliberate, and it is why "+
+				"this card exists: nothing else retracts it.\n\n"+
+				"NO `blockedBy` EDGES WERE CREATED. The blocking work is named in free text, and "+
+				"guessing issue numbers out of prose to mutate a real dependency graph can defer "+
+				"an issue forever behind an edge nobody meant. Read the comment, add the edges by "+
+				"hand with `nightgauge issue add-blocked-by %d <blocker>` if they are genuine, "+
+				"then clear the finding here.",
+			issue, BlockedFindingsDirName, issue, issue, issue),
+		Producer: ProducerOutOfScopeBlocker,
+		Context: attention.Context{
+			Repo: repo, Issue: issue, RunID: runID, Stage: stage,
+			Blocker:  "out-of-scope dependency discovered by a stage",
+			TraceRef: runTraceRef(runID),
+		},
+		Options: []attention.Option{
+			{ID: "cleared", Label: "Blocker resolved — unblock this issue",
+				Verb: attention.VerbBlockedFindingClear, Style: attention.StylePrimary},
+			noopOption("leave", "Leave blocked"),
+		},
+		DefaultAction: "leave",
+		// The finding is durable and the condition does not decay on its own, so
+		// a short window would retract the operator's only handle on it while it
+		// is still true. The same 72h window the blockedBy deferral uses, for
+		// the same reason.
+		ExpiresAt: expiryFromNow(72 * time.Hour),
+		Steer: &attention.Steer{Enabled: true,
+			Hint: "Note which work this actually depends on, or why it should stay blocked"},
+	}
 }

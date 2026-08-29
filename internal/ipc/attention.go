@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"os"
 	"strings"
 
 	"github.com/nightgauge/nightgauge/internal/attention"
@@ -277,6 +278,16 @@ func (s *Server) ExecuteVerb(ctx context.Context, req *attention.DecisionRequest
 		root := s.workspaceRootPath()
 		return attention.ExecuteAddRepo(ctx, workspaceRepoAdder{root: root}, req, opt, sweep.ConfiguredRepos(root))
 
+	case attention.VerbBlockedFindingClear:
+		// The RUN'S OWN REPO ROOT, not s.workspaceRoot — the same per-repo
+		// registry that decides where a run's runtime snapshot and its
+		// budget-override.json live. The extension writes the finding under
+		// getRunRepoRoot(); a daemon that deleted from the focused editor's repo
+		// instead would report success and leave the issue deferring forever,
+		// which is the multi-repo inertness #305 had to fix on the budget path.
+		return attention.ExecuteClearBlockedFinding(ctx, blockedFindingClearer{server: s},
+			req, opt, sweep.ConfiguredRepos(s.workspaceRootPath()))
+
 	case attention.VerbIssueApproveArchitecture:
 		return s.approveArchitecture(ctx, key, repo, owner, name, issue)
 
@@ -537,4 +548,30 @@ func (a workspaceRepoAdder) AddWorkspaceRepo(_ context.Context, repo string) err
 		})
 	})
 	return err
+}
+
+// blockedFindingClearer backs attention.VerbBlockedFindingClear by deleting the
+// recorded out-of-scope finding for one issue (#1147).
+//
+// It holds the server rather than a path: the repository arrives from the
+// card's own Context.Repo through ExecuteClearBlockedFinding, and only then is
+// it resolved to a root via s.repoRoot — so there is no field here a resolving
+// surface could influence, and the root is the RUN'S repo rather than whichever
+// one owns the focused editor.
+type blockedFindingClearer struct{ server *Server }
+
+// ClearBlockedFinding removes the finding file, treating "already gone" as
+// success.
+//
+// The store CAS-resolves the card only after this returns nil, and two surfaces
+// can resolve the same card — so reporting a missing file as a failure would
+// leave an un-resolvable card in front of an operator whose blocker really is
+// cleared. A genuine I/O failure (a permission error, say) still errors, because
+// then the hold IS still in place and the card must survive to say so.
+func (c blockedFindingClearer) ClearBlockedFinding(_ context.Context, repo string, issue int) error {
+	path := orchestrator.BlockedFindingPath(c.server.repoRoot(repo), issue)
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("attention: clear blocked finding for %s#%d: %w", repo, issue, err)
+	}
+	return nil
 }

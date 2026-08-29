@@ -104,6 +104,25 @@ const (
 	// present.
 	VerbWorkspaceAddRepo Verb = "workspace.addRepo"
 
+	// VerbBlockedFindingClear retracts ONE recorded out-of-scope blocked
+	// finding, so the issue it describes stops deferring at pickup (#1147).
+	//
+	// It exists because the finding is deliberately durable and deliberately
+	// load-bearing: while it sits on disk, every re-dispatch of that issue
+	// defers before spending a token, which is the whole point of recording it.
+	// A standing hold with no retraction is a silent permanent stall, and this
+	// card is the only thing in front of an operator that knows the hold is
+	// there — so a card without this verb would be the dead end the registry
+	// exists to avoid, not a cautious omission.
+	//
+	// The argument surface is EMPTY, which is the security property and not a
+	// convenience — the same shape as VerbDependabotEnableAlerts and
+	// VerbWorkspaceAddRepo. The repository AND the issue both come from the
+	// persisted request's Context, which is what the producer declared when it
+	// raised the card, so a resolving surface can neither name a repository nor
+	// name an issue. See ExecuteClearBlockedFinding, the verb's only executor.
+	VerbBlockedFindingClear Verb = "blocked.clearFinding"
+
 	// VerbNoop is the explicit "do nothing but resolve" choice — the registry
 	// binding for the ADR's leave / keep-paused / wait / halt options, where the
 	// operator deliberately declines to mutate the fleet. Registry-gated like any
@@ -127,6 +146,7 @@ var registry = map[Verb]struct{}{
 	VerbIssueApproveArchitecture:     {},
 	VerbDependabotEnableAlerts:       {},
 	VerbWorkspaceAddRepo:             {},
+	VerbBlockedFindingClear:          {},
 	VerbNoop:                         {},
 }
 
@@ -407,4 +427,69 @@ func ExecuteAddRepo(ctx context.Context, adder WorkspaceRepoAdder, req *Decision
 		return fmt.Errorf("attention: %s is not available on this surface", VerbWorkspaceAddRepo)
 	}
 	return adder.AddWorkspaceRepo(ctx, repo)
+}
+
+// --- blocked.clearFinding (#1147) -------------------------------------------
+
+// BlockedFindingClearer is the single capability blocked.clearFinding needs.
+//
+// One method, for the same reason DependabotAlertEnabler and WorkspaceRepoAdder
+// are one method each: an executor that can retract a hold on one issue cannot,
+// through this seam, also read findings, write them, or touch a different
+// issue's state. The daemon passes an implementation that deletes the recorded
+// file under the repo's own root; tests pass a recorder.
+//
+// Clearing something that is already gone is SUCCESS, not an error. Two
+// surfaces can resolve the same card, and a run can be re-dispatched between a
+// click and its execution — an implementation that reported "no such file" as a
+// failure would leave an un-resolvable card in front of an operator whose
+// blocker really is cleared.
+type BlockedFindingClearer interface {
+	ClearBlockedFinding(ctx context.Context, repo string, issue int) error
+}
+
+// ExecuteClearBlockedFinding performs blocked.clearFinding against the
+// request's declared target, enforcing the four properties the verb promises:
+//
+//  1. the option must actually bind this verb,
+//  2. the option carries no arguments,
+//  3. BOTH halves of the target — repository and issue — come from the
+//     persisted request's Context and nowhere else, and the repository must be
+//     in the configured set, and
+//  4. a surface without the capability fails loudly rather than succeeding.
+//
+// (3) is stricter than the two verbs it is modelled on, because this verb's
+// target has two coordinates rather than one. A caller-supplied issue number
+// would let any local process retract the hold on an arbitrary issue in a
+// configured repo and send it straight back into the wall it stopped at.
+//
+// (4) matters for the reason it does everywhere else here: the store
+// CAS-resolves only after the verb returns nil, so a silent success would
+// consume the card and leave the issue deferring forever with the one
+// affordance that could have cleared it now gone.
+func ExecuteClearBlockedFinding(ctx context.Context, clearer BlockedFindingClearer, req *DecisionRequest, opt Option, configuredRepos []string) error {
+	if req == nil {
+		return fmt.Errorf("attention: %s requires the persisted request", VerbBlockedFindingClear)
+	}
+	if opt.Verb != VerbBlockedFindingClear {
+		return fmt.Errorf("attention: %s executor invoked for verb %q", VerbBlockedFindingClear, opt.Verb)
+	}
+	if len(opt.Args) > 0 {
+		return fmt.Errorf("%w: %s was given %d", ErrVerbArgsNotAccepted, VerbBlockedFindingClear, len(opt.Args))
+	}
+
+	repo := strings.TrimSpace(req.Context.Repo)
+	if repo == "" {
+		return fmt.Errorf("attention: %s: request %s names no repository", VerbBlockedFindingClear, req.ID)
+	}
+	if req.Context.Issue <= 0 {
+		return fmt.Errorf("attention: %s: request %s names no issue", VerbBlockedFindingClear, req.ID)
+	}
+	if !RepoInConfiguredSet(configuredRepos, repo) {
+		return fmt.Errorf("%w: %q", ErrVerbTargetNotConfigured, repo)
+	}
+	if clearer == nil {
+		return fmt.Errorf("attention: %s is not available on this surface", VerbBlockedFindingClear)
+	}
+	return clearer.ClearBlockedFinding(ctx, repo, req.Context.Issue)
 }

@@ -398,6 +398,16 @@ func TestNoRaiseableProducerIsStandingWithoutRetraction(t *testing.T) {
 		ProducerAbandonedDispatch: {Producer: ProducerAbandonedDispatch, Repo: "octocat/acme", Issue: 1,
 			RunID: "run-1", Stage: "feature-dev",
 			Situation: string(orchestrator.AbandonedSlotWorktreePreserved)},
+		// #1147. EVENT, not standing: the card describes a transition the
+		// extension's post-validate gate observed once, and its retraction is a
+		// human resolving it — which is the whole design, because that
+		// resolution is what deletes the recorded finding and lets the issue
+		// stop deferring at pickup. Declaring Standing here would be actively
+		// wrong twice over: no scan re-observes the condition, and the first
+		// resolution would suppress the card forever while the finding it
+		// retracts stayed on disk.
+		ProducerOutOfScopeBlocker: {Producer: ProducerOutOfScopeBlocker, Repo: "octocat/acme",
+			Issue: 1, RunID: "run-1", Stage: "feature-validate"},
 	}
 	for _, producer := range RaiseableProducers() {
 		p, ok := samples[producer]

@@ -13,6 +13,7 @@ import { promisify } from "util";
 import type { PipelineStage } from "@nightgauge/sdk";
 import { isHeavyweightModel } from "@nightgauge/sdk";
 import type { Logger } from "./logger";
+import type { BlockedFinding } from "./blockedFinding";
 import type { PipelineState, BacktrackRecord } from "../services/PipelineStateService";
 import type { PipelineRunResult } from "../services/HeadlessOrchestrator";
 
@@ -68,22 +69,7 @@ export async function postFailureComment(opts: FailureCommentOptions): Promise<v
 
   try {
     const body = buildCommentBody(issueNumber, result, state);
-    const repoArgs = repoOverride ? ["--repo", repoOverride] : [];
-
-    // Use gh issue comment to post the diagnostic
-    const escapedBody = body.replace(/'/g, "'\\''");
-    const cmd = [
-      "gh",
-      "issue",
-      "comment",
-      String(issueNumber),
-      ...repoArgs,
-      "--body",
-      `'${escapedBody}'`,
-    ].join(" ");
-
-    await execAsync(cmd, { cwd, timeout: 30_000 });
-
+    await postIssueComment({ issueNumber, body, repoOverride, cwd });
     logger.info("Posted pipeline failure comment on issue", {
       issueNumber,
       repo: repoOverride ?? "default",
@@ -95,6 +81,126 @@ export async function postFailureComment(opts: FailureCommentOptions): Promise<v
       error: err instanceof Error ? err.message : String(err),
     });
   }
+}
+
+/**
+ * The one `gh issue comment` invocation this module makes.
+ *
+ * Extracted (#1147) so the blocked-finding comment below cannot drift from the
+ * failure comment on repo targeting, quoting or timeout — the same reason
+ * `ProposedCeilingUSD` is one function rather than two call sites that agree
+ * today.
+ */
+async function postIssueComment(opts: {
+  issueNumber: number;
+  body: string;
+  repoOverride?: string;
+  cwd: string;
+}): Promise<void> {
+  const repoArgs = opts.repoOverride ? ["--repo", opts.repoOverride] : [];
+  const escapedBody = opts.body.replace(/'/g, "'\\''");
+  const cmd = [
+    "gh",
+    "issue",
+    "comment",
+    String(opts.issueNumber),
+    ...repoArgs,
+    "--body",
+    `'${escapedBody}'`,
+  ].join(" ");
+  await execAsync(cmd, { cwd: opts.cwd, timeout: 30_000 });
+}
+
+/**
+ * Post the out-of-scope blocked finding on the issue (#1147).
+ *
+ * A SEPARATE entry point rather than another branch inside `buildCommentBody`,
+ * because this comment is posted from a different place for a different reason.
+ * `postFailureComment` is called once per slot teardown by
+ * `ConcurrentPipelineManager` — the autonomous path only — and narrates a run
+ * that FAILED. A blocked termination is a finding, is reachable from the
+ * interactive path too, and is posted by the orchestrator at the moment it
+ * classifies the run, so the reason reaches the issue whichever surface ran it.
+ * (`ConcurrentPipelineManager` suppresses its generic failure comment when the
+ * finding was recorded, so an autonomous run gets this comment and not two.)
+ *
+ * Non-blocking, like every other comment path here: a failed post must not
+ * change the run's terminal classification.
+ */
+export async function postBlockedFindingComment(opts: {
+  issueNumber: number;
+  finding: BlockedFinding;
+  /** "owner/repo" for cross-repo items, undefined for same-repo */
+  repoOverride?: string;
+  cwd: string;
+  logger: Logger;
+}): Promise<boolean> {
+  const { issueNumber, finding, repoOverride, cwd, logger } = opts;
+  try {
+    await postIssueComment({
+      issueNumber,
+      body: buildBlockedFindingBody(finding),
+      repoOverride,
+      cwd,
+    });
+    logger.info("Posted out-of-scope blocked finding on issue (#1147)", {
+      issueNumber,
+      repo: repoOverride ?? "default",
+      signalType: finding.signal_type,
+    });
+    return true;
+  } catch (err) {
+    logger.warn("Failed to post the out-of-scope blocked finding on issue (#1147)", {
+      issueNumber,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return false;
+  }
+}
+
+/**
+ * Render the finding.
+ *
+ * The evidence is reproduced VERBATIM in a fenced block rather than summarised.
+ * It is the only place the blocking work is named, a human is about to turn it
+ * into real `blockedBy` edges from what they read here, and a prose rewrite of
+ * a machine-readable marker is exactly the lossy step that would make those
+ * edges wrong.
+ */
+function buildBlockedFindingBody(finding: BlockedFinding): string {
+  const sections: string[] = [
+    "## ⛔ Blocked — out-of-scope dependency\n",
+    "This run **stopped without failing**: a stage discovered that the work this issue asks " +
+      "for depends on something outside the issue's own scope. No re-plan can clear that, so " +
+      "the pipeline ended as `blocked` rather than burning another planning → dev → validate " +
+      "lap to reach the same verdict.\n",
+    `**Signal:** \`${finding.signal_type}\` from \`${finding.stage}\``,
+    `**Why it is not re-plannable:** ${finding.reason}\n`,
+  ];
+
+  if (finding.rationale) {
+    sections.push(`### Rationale\n\n${finding.rationale}\n`);
+  }
+  if (finding.evidence.length > 0) {
+    sections.push(`### Evidence (verbatim)\n\n\`\`\`\n${finding.evidence.join("\n")}\n\`\`\`\n`);
+  }
+
+  sections.push(
+    "### What happens next\n",
+    "- The finding is recorded at " +
+      `\`.nightgauge/pipeline/blocked-findings/${finding.issue_number}.json\`, and **a ` +
+      "re-dispatch of this issue now defers at pickup for zero tokens** instead of re-running " +
+      "three stages.",
+    "- **Nothing was written to this issue's dependency graph.** The blocking work is named in " +
+      "free text above, and guessing issue numbers out of prose to create real `blockedBy` " +
+      "edges would risk deferring this issue forever behind an edge nobody meant. Add the " +
+      "edges by hand — `nightgauge issue add-blocked-by " +
+      `${finding.issue_number} <blocker>\` — if they are genuinely dependencies.`,
+    "- An Action Center card is open for this issue. Resolving it with **Blocker resolved** " +
+      "clears the finding and lets the issue run again.\n"
+  );
+
+  return sections.join("\n");
 }
 
 function buildCommentBody(
