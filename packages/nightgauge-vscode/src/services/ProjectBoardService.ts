@@ -17,6 +17,12 @@ import { IpcClientBase } from "./IpcClient";
 import type { StatusCounts } from "./IpcClientBase";
 import { getGitHubUser } from "../utils/nightgaugeConfig";
 import type { IWorkItemProvider } from "./types/WorkItemProvider";
+import {
+  ALL_ITEMS_SCOPE,
+  sharedBoardSnapshots,
+  type BoardSnapshotKey,
+  type BoardSnapshotStore,
+} from "./BoardSnapshotStore";
 import type { EpicInfo } from "../views/items/EpicGroupTreeItem";
 import { deriveComponentOptions } from "../types/FilterConfig";
 import { getPrefixedMainChannel } from "../utils/logger";
@@ -221,10 +227,60 @@ export class ProjectBoardService implements vscode.Disposable, IWorkItemProvider
   private readonly _onRateLimitState = new vscode.EventEmitter<RateLimitState>();
   readonly onRateLimitState = this._onRateLimitState.event;
 
-  constructor(workspaceRoot: string, _cacheTtlMs?: number) {
+  /**
+   * Board snapshots, shared with every other service pointed at the same board
+   * (#11). Injectable so tests get an isolated store instead of the window-wide
+   * singleton.
+   */
+  private readonly snapshots: BoardSnapshotStore;
+
+  constructor(workspaceRoot: string, _cacheTtlMs?: number, snapshots?: BoardSnapshotStore) {
     this.workspaceRoot = workspaceRoot;
     this.ipc = IpcClient.getInstance();
     this.cacheTtlMs = _cacheTtlMs ?? ProjectBoardService.DEFAULT_CACHE_TTL_MS;
+    this.snapshots = snapshots ?? sharedBoardSnapshots;
+  }
+
+  /**
+   * Key for one board read. Returns null until config resolves, which is the
+   * same condition the callers already guard on.
+   */
+  private snapshotKey(scope: string): BoardSnapshotKey | null {
+    if (!this.owner || !this.projectNumber) return null;
+    return {
+      owner: this.owner,
+      projectNumber: this.projectNumber,
+      ownerType: this.ownerType,
+      githubUser: this.githubUser,
+      scope,
+    };
+  }
+
+  /** Cache hit/miss counters for the shared store. Contains no board content. */
+  getBoardSnapshotMetrics(): ReturnType<BoardSnapshotStore["getMetrics"]> {
+    return this.snapshots.getMetrics();
+  }
+
+  /**
+   * Drops this board's shared snapshots. Board-scoped rather than global so a
+   * refresh in one repository does not discard another board's data.
+   */
+  private invalidateSharedSnapshots(): void {
+    if (this.owner && this.projectNumber) {
+      this.snapshots.invalidateBoard(this.owner, this.projectNumber);
+    }
+  }
+
+  /**
+   * Expires this board's shared snapshots while keeping them as a fallback -
+   * the shared-store half of softInvalidate(). Without it a user-triggered
+   * refresh would still be answered from the shared snapshot, and "refresh"
+   * would quietly mean "refresh unless another repository fetched recently".
+   */
+  private expireSharedSnapshots(): void {
+    if (this.owner && this.projectNumber) {
+      this.snapshots.expireBoard(this.owner, this.projectNumber);
+    }
   }
 
   dispose(): void {
@@ -325,6 +381,8 @@ export class ProjectBoardService implements vscode.Disposable, IWorkItemProvider
     // invalidation can be undone by a request that predates it.
     this.configGeneration++;
     this.inFlightConfig = null;
+    // Before owner/project are nulled, or there is no key left to invalidate.
+    this.invalidateSharedSnapshots();
     this.owner = null;
     this.projectNumber = null;
     this.repo = null;
@@ -361,6 +419,7 @@ export class ProjectBoardService implements vscode.Disposable, IWorkItemProvider
       githubUser: this.githubUser,
     });
     if (before === after) return false;
+    this.invalidateSharedSnapshots();
     this.cache.clear();
     this.cacheTimes.clear();
     this.allItemsCache = null;
@@ -388,8 +447,11 @@ export class ProjectBoardService implements vscode.Disposable, IWorkItemProvider
   setSelectedProject(name: string): void {
     const project = this.projects.find((p) => p.name === name);
     if (project) {
+      // The old board's snapshots first, while its number is still current.
+      this.invalidateSharedSnapshots();
       this.selectedProject = name;
       this.projectNumber = project.number;
+      this.invalidateSharedSnapshots();
       this.cache.clear();
       this.cacheTimes.clear();
       this.allItemsCache = null;
@@ -490,71 +552,64 @@ export class ProjectBoardService implements vscode.Disposable, IWorkItemProvider
       return [];
     }
 
-    // Check cache
+    // Board snapshots are shared across every service pointed at this board,
+    // so a second repository on the same project costs nothing (#11). Freshness,
+    // in-flight coalescing and storage all live in the shared store; what stays
+    // here is the fallback policy, which is this service's to decide.
+    const key = this.snapshotKey(status);
+    if (!key) return [];
+
     const cacheKey = `${this.projectNumber}:${status}`;
-    const cached = this.cache.get(cacheKey);
-    const cacheTime = this.cacheTimes.get(cacheKey) ?? 0;
-    if (cached && Date.now() - cacheTime < this.cacheTtlMs) {
-      return this.sortIssues(cached, sortBy, sortDirection);
-    }
+    const staleItems = this.snapshots.stale(key);
 
-    // Deduplicate in-flight requests: if another caller is already fetching
-    // the same status, piggyback on their promise instead of making a second
-    // GitHub API call.
-    const existing = this.inFlightRequests.get(cacheKey);
-    if (existing) {
-      const issues = await existing;
-      return this.sortIssues(issues, sortBy, sortDirection);
-    }
-
-    const fetchPromise = this.fetchIssuesForStatus(status, cacheKey, cached);
-    this.inFlightRequests.set(cacheKey, fetchPromise);
-    try {
-      const issues = await fetchPromise;
-      return this.sortIssues(issues, sortBy, sortDirection);
-    } finally {
-      this.inFlightRequests.delete(cacheKey);
-    }
-  }
-
-  private async fetchIssuesForStatus(
-    status: string,
-    cacheKey: string,
-    cached: ReadyIssue[] | undefined
-  ): Promise<ReadyIssue[]> {
-    // Check rate limit before making API calls — return stale cache if exhausted
+    // Rate limit is checked before joining the store so an exhausted quota
+    // never starts a fetch, and never registers as a miss.
     const canProceed = await this.checkRateLimit();
     if (!canProceed) {
-      return cached ?? [];
+      return this.sortIssues(this.cache.get(cacheKey) ?? [], sortBy, sortDirection);
     }
 
     try {
-      const statusMap: Record<string, string> = {
-        ready: "Ready",
-        "in-progress": "In progress",
-        "in-review": "In review",
-        done: "Done",
-        backlog: "Backlog",
-      };
-      const apiStatus = statusMap[status] || status;
-
-      const items = await this.ipc.boardList(
-        this.owner!,
-        this.projectNumber!,
-        apiStatus,
-        this.ownerType,
-        this.githubUser
+      const items = await this.snapshots.fetch(key, this.cacheTtlMs, () =>
+        this.fetchIssuesForStatus(status)
       );
-
+      // Filtering happens per service, on the shared raw payload.
       const issues = this.boardItemsToReadyIssues(items);
       this.cache.set(cacheKey, issues);
       this.cacheTimes.set(cacheKey, Date.now());
-
-      return issues;
+      return this.sortIssues(issues, sortBy, sortDirection);
     } catch (err) {
+      // Never cached: the store only stores fulfilled fetches, so one
+      // repository's failure cannot become another's answer.
       log(`IPC board.list failed: ${err}`);
-      return cached ?? [];
+      const fallback =
+        this.cache.get(cacheKey) ?? (staleItems ? this.boardItemsToReadyIssues(staleItems) : []);
+      return this.sortIssues(fallback, sortBy, sortDirection);
     }
+  }
+
+  /**
+   * The raw board read for one status. Throws on failure rather than returning
+   * a fallback, so the shared store can tell success from failure and decline
+   * to cache the latter.
+   */
+  private async fetchIssuesForStatus(status: string): Promise<BoardItem[]> {
+    const statusMap: Record<string, string> = {
+      ready: "Ready",
+      "in-progress": "In progress",
+      "in-review": "In review",
+      done: "Done",
+      backlog: "Backlog",
+    };
+    const apiStatus = statusMap[status] || status;
+
+    return this.ipc.boardList(
+      this.owner!,
+      this.projectNumber!,
+      apiStatus,
+      this.ownerType,
+      this.githubUser
+    );
   }
 
   async getReadyIssues(sortBy?: SortBy): Promise<ReadyIssue[]> {
@@ -584,40 +639,22 @@ export class ProjectBoardService implements vscode.Disposable, IWorkItemProvider
       return [];
     }
 
-    // Return cached result if fresh — avoids redundant 7-page unfiltered
-    // fetches when multiple tabs call this for epic grouping.
-    if (this.allItemsCache && Date.now() - this.allItemsCacheTime < this.cacheTtlMs) {
-      return this.allItemsCache;
-    }
+    // The unfiltered read is the expensive one - seven pages at 17 points each
+    // - and it is entirely repo-independent, so sharing it across repositories
+    // on the same board is where most of the saving is (#11).
+    const key = this.snapshotKey(ALL_ITEMS_SCOPE);
+    if (!key) return [];
 
-    // Deduplicate in-flight: multiple callers share one unfiltered fetch
-    if (this.inFlightAllItems) {
-      return this.inFlightAllItems;
-    }
+    const staleItems = this.snapshots.stale(key);
 
-    const fetchPromise = this.fetchAllItemsInternal();
-    this.inFlightAllItems = fetchPromise;
-    try {
-      return await fetchPromise;
-    } finally {
-      this.inFlightAllItems = null;
-    }
-  }
-
-  private async fetchAllItemsInternal(): Promise<ReadyIssue[]> {
-    // Check rate limit before making API calls — return stale cache if exhausted
     const canProceed = await this.checkRateLimit();
     if (!canProceed) {
       return this.allItemsCache ?? [];
     }
 
     try {
-      const items = await this.ipc.boardList(
-        this.owner!,
-        this.projectNumber!,
-        undefined,
-        this.ownerType,
-        this.githubUser
+      const items = await this.snapshots.fetch(key, this.cacheTtlMs, () =>
+        this.fetchAllItemsInternal()
       );
       const issues = this.boardItemsToReadyIssues(items);
       this.allItemsCache = issues;
@@ -625,8 +662,22 @@ export class ProjectBoardService implements vscode.Disposable, IWorkItemProvider
       return issues;
     } catch (err) {
       log(`IPC board.list (all) failed: ${err}`);
-      return this.allItemsCache ?? [];
+      return this.allItemsCache ?? (staleItems ? this.boardItemsToReadyIssues(staleItems) : []);
     }
+  }
+
+  /**
+   * The raw unfiltered board read. Throws on failure so the shared store can
+   * decline to cache it.
+   */
+  private async fetchAllItemsInternal(): Promise<BoardItem[]> {
+    return this.ipc.boardList(
+      this.owner!,
+      this.projectNumber!,
+      undefined,
+      this.ownerType,
+      this.githubUser
+    );
   }
 
   async prefetchAllItems(options?: { force?: boolean }): Promise<void> {
@@ -645,16 +696,23 @@ export class ProjectBoardService implements vscode.Disposable, IWorkItemProvider
       return;
     }
 
+    // Deliberately AFTER loadConfig: the shared snapshot is keyed by owner and
+    // project, so invalidating before they resolve is a silent no-op on a
+    // service's first call — and `force` would then be answered from another
+    // repository's snapshot, which is the one case it exists to rule out.
+    if (options?.force) {
+      this.invalidateSharedSnapshots();
+    }
+
     const expectedRepo =
       this.owner && this.repo ? `${this.owner}/${this.repo}`.toLowerCase() : null;
 
     try {
-      const items = await this.ipc.boardList(
-        this.owner,
-        this.projectNumber,
-        undefined,
-        this.ownerType,
-        this.githubUser
+      // The same shared unfiltered snapshot getAllItems uses, so a prefetch in
+      // the second repository of a shared board costs nothing (#11).
+      const prefetchKey = this.snapshotKey(ALL_ITEMS_SCOPE)!;
+      const items = await this.snapshots.fetch(prefetchKey, this.cacheTtlMs, () =>
+        this.fetchAllItemsInternal()
       );
       const allIssues = this.boardItemsToReadyIssues(items);
 
@@ -731,6 +789,10 @@ export class ProjectBoardService implements vscode.Disposable, IWorkItemProvider
   }
 
   clearCache(): void {
+    // clearCache is the "stale data must not be served" path, so the shared
+    // snapshot has to go too; leaving it would keep serving exactly the data
+    // this call exists to discard.
+    this.invalidateSharedSnapshots();
     this.cache.clear();
     this.cacheTimes.clear();
     this.allItemsCache = null;
@@ -764,6 +826,7 @@ export class ProjectBoardService implements vscode.Disposable, IWorkItemProvider
    * must not be served (workspace switch, adapter change).
    */
   softInvalidate(): void {
+    this.expireSharedSnapshots();
     this.cacheTimes.clear();
     this.allItemsCacheTime = 0;
     this.boardCountsCacheTime = 0;
