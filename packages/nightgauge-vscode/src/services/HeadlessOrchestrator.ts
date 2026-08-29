@@ -152,7 +152,17 @@ import {
   type SizeLabel,
 } from "../utils/budgetEnforcer";
 import { ContextBudgetEnforcer } from "../utils/contextBudgetEnforcer";
-import { ARCHITECTURE_APPROVAL_REQUIRED_MARKER } from "../utils/failureComment";
+import {
+  ARCHITECTURE_APPROVAL_REQUIRED_MARKER,
+  postBlockedFindingComment,
+} from "../utils/failureComment";
+import {
+  blockedFindingPath,
+  describeBlockedFinding,
+  readBlockedFinding,
+  writeBlockedFinding,
+  type BlockedFinding,
+} from "../utils/blockedFinding";
 import { loadAdaptiveBudgetOverrides } from "../utils/adaptiveBudgetLoader";
 import type { EstimateSource } from "../utils/adaptiveBudgetLoader";
 import { PipelineBudgetCeiling } from "../utils/pipelineBudgetCeiling";
@@ -248,6 +258,19 @@ export interface BlockedTerminalState {
   remediation?: string;
   /** The unmerged PR */
   prNumber?: number;
+  /**
+   * True when this `blocked` terminal came from a stage's out-of-scope signal
+   * AND the durable finding was recorded (#1147).
+   *
+   * A typed flag rather than a prefix test on `blocker`, because it gates
+   * behaviour in another service: `ConcurrentPipelineManager` suppresses its
+   * generic failure comment when it is set, since the orchestrator has already
+   * posted the finding. The other producer of `blocked` — the #190 pr-merge
+   * dead ends — must keep the failure comment, so sniffing a substring out of
+   * `blocker` would make the two indistinguishable the first time either
+   * string is reworded.
+   */
+  outOfScopeFinding?: boolean;
 }
 
 /**
@@ -720,7 +743,7 @@ export interface MergeBlockerSnapshot {
  * @internal Exported for testing.
  */
 export interface RunScopedAttentionRaise {
-  producer: "budget-ceiling" | "branch-protection" | "abandoned-dispatch";
+  producer: "budget-ceiling" | "branch-protection" | "abandoned-dispatch" | "out-of-scope-blocker";
   issueNumber: number;
   /**
    * budget-ceiling carries NO fields at all, and that is the security boundary
@@ -8835,6 +8858,155 @@ export class HeadlessOrchestrator implements vscode.Disposable {
   }
 
   /**
+   * Terminate the run as a pickup DEFERRAL — the one implementation, for both
+   * conditions that defer at pickup (#189/#305, #1147).
+   *
+   * A deferral is NOT a failure: `success` is false but `failedStage` and
+   * `error` stay unset, the stage is booked `deferred` (never `failStage`, which
+   * would surface as `subagent_crash`), the outcome type is `deferred`, and the
+   * stderr line carries the `[blocked-dependency]` marker the slot manager and
+   * the Go scheduler key off to route the completion away from the failure
+   * path. Getting any one of those wrong pauses autonomous and pollutes
+   * failure-rate telemetry for a run in which nothing crashed and nothing was
+   * spent.
+   *
+   * Extracted (#1147) rather than copied for the second caller. Seven separate
+   * side effects have to be right for a deferral to book correctly, and only
+   * two lines of the block differ between the two conditions — the operator
+   * prose. A second copy would pass its own test on the day it was written and
+   * then drift the moment either the marker or the result shape moved, which is
+   * the `dual-path-drift` class this repo names.
+   */
+  private async finishAsDeferredPickup(opts: {
+    stage: PipelineStage;
+    issueNumber: number;
+    startTime: number;
+    completedStages: PipelineStage[];
+    skippedStages: PipelineStage[];
+    /** Operator-facing reason for the stage-skipped event. */
+    skipReason: string;
+    /** The `[blocked-dependency]`-marked stderr line, newline included. */
+    stderrLine: string;
+  }): Promise<PipelineRunResult> {
+    const { stage, issueNumber, startTime, completedStages, skippedStages } = opts;
+
+    if (this.stateService) {
+      try {
+        await this.stateService.deferStage(stage);
+        await this.stateService.setOutcomeType("deferred");
+      } catch {
+        // Non-critical — the return below still halts the pipeline.
+      }
+    }
+    this.eventDispatcher.onStageSkipped(stage, opts.skipReason);
+    // Info-level marker, NOT a `[pipeline-*-failure]` line: the slot manager
+    // and Go scheduler key off `[blocked-dependency]` to route this to the
+    // deferral path, never the failure path.
+    this.eventDispatcher.onStderr(stage, opts.stderrLine);
+
+    const deferredResult: PipelineRunResult = {
+      success: false,
+      deferred: true,
+      completedStages,
+      skippedStages,
+      deferredStages: [stage],
+      // No failedStage / error — a deferral is not a failure.
+      totalDurationMs: Date.now() - startTime,
+      outcomeType: "deferred",
+    };
+
+    this.firePipelineComplete(deferredResult, issueNumber);
+    if (this.queueService) {
+      this.handleQueueAutoStart(deferredResult.success, issueNumber);
+    }
+    this.isRunning = false;
+    this.abortController = null;
+    return deferredResult;
+  }
+
+  /**
+   * Write the out-of-scope finding down, tell the human, and raise the card
+   * (#1147) — the durable half of the #1142 `blocked` terminal.
+   *
+   * #1142 made the run STOP honestly. It stopped and left nothing behind, so
+   * the next dispatch spent planning, dev and validate rediscovering the same
+   * wall. Three durable effects, in this order and with this precedence:
+   *
+   *  1. **The artifact** (`blocked-findings/<issue>.json`, under the RUN'S repo
+   *     root so it survives worktree cleanup). This is the one that matters:
+   *     `issue-pickup` reads it on the next dispatch and defers before spending
+   *     a token. Its success is the method's return value.
+   *  2. **The issue comment**, so the reason is visible without a session log.
+   *  3. **The Action Center card**, so the finding sits in the operator's
+   *     inbox with a one-click way to clear it.
+   *
+   * (2) and (3) are best-effort and cannot fail (1): both cross a network or
+   * IPC boundary, and a run that recorded its finding but could not reach
+   * GitHub is still strictly better off than one that recorded nothing.
+   *
+   * WHAT THIS DELIBERATELY DOES NOT DO: create `blockedBy` edges. The blocking
+   * work is named in the signal's free-text `evidence`, and #1147's scoping
+   * question — can issue references be extracted from it confidently enough to
+   * mutate a real issue's dependency graph? — is answered NO here. See the
+   * PR body; the short version is that `#N` in prose is ambiguous in this very
+   * corpus ("AC #3"), no producer emits the marker yet so an extractor would
+   * have zero real inputs to be right about, and a wrong edge is durable,
+   * human-visible, and turns the zero-cost pickup defer into a permanent
+   * silent stall. The card is the one-step human accept instead.
+   *
+   * @returns whether the durable artifact landed.
+   */
+  private async recordOutOfScopeBlockedFinding(
+    stage: PipelineStage,
+    issueNumber: number,
+    signal: PipelineFeedbackSignal,
+    reason: string
+  ): Promise<boolean> {
+    const finding: BlockedFinding = {
+      schema_version: "1.0",
+      issue_number: issueNumber,
+      stage,
+      signal_type: signal.signal_type,
+      reason,
+      rationale: signal.rationale ?? "",
+      evidence: (signal.evidence ?? []).map(String),
+      run_id: this.readCurrentRunId(issueNumber),
+      recorded_at: new Date().toISOString(),
+    };
+
+    const persisted = writeBlockedFinding(this.getRunRepoRoot(), finding, this.logger);
+    if (persisted) {
+      this.logger.info("Recorded a durable out-of-scope blocked finding (#1147)", {
+        issueNumber,
+        stage,
+        signalType: signal.signal_type,
+        path: blockedFindingPath(this.getRunRepoRoot(), issueNumber),
+      });
+    }
+
+    try {
+      await postBlockedFindingComment({
+        issueNumber,
+        finding,
+        repoOverride: this.repoOverride,
+        cwd: this.getRunRepoRoot(),
+        logger: this.logger,
+      });
+    } catch {
+      // postBlockedFindingComment is already non-throwing; this is the belt to
+      // its braces, because nothing here may change the terminal outcome.
+    }
+
+    await this.raiseRunScopedAttention({
+      producer: "out-of-scope-blocker",
+      issueNumber,
+      stage,
+    });
+
+    return persisted;
+  }
+
+  /**
    * Run the full pipeline from pipeline-start to pipeline-finish
    *
    * The pipeline includes bookend stages (pipeline-start, pipeline-finish) that
@@ -9972,6 +10144,47 @@ export class HeadlessOrchestrator implements vscode.Disposable {
             },
           });
 
+          // A recorded out-of-scope blocked finding defers BEFORE the
+          // deterministic context is generated (#1147).
+          //
+          // This is the payoff for writing the finding down. The run that
+          // discovered the wall spent planning + dev + validate to learn it; a
+          // re-dispatch now learns it from one local file read — no subagent,
+          // no forge call, no tokens. Placed ahead of
+          // `generateDeterministicContext` deliberately: the open-blockedBy
+          // deferral below is strictly cheaper than the LLM but still pays for
+          // a `hook check-deps` round trip, and there is nothing to check when
+          // a stage has already told us the answer.
+          //
+          // The finding is a HOLD, not a verdict for all time. It is cleared by
+          // resolving the Action Center card this run raised
+          // (`blocked.clearFinding`), which is the one-step human accept — see
+          // recordOutOfScopeBlockedFinding.
+          const recordedFinding = readBlockedFinding(this.getRunRepoRoot(), issueNumber);
+          if (recordedFinding) {
+            this.logger.info(
+              "issue-pickup deferred — a recorded out-of-scope blocked finding is unresolved (#1147)",
+              {
+                issueNumber,
+                signalType: recordedFinding.signal_type,
+                recordedAt: recordedFinding.recorded_at,
+              }
+            );
+            return this.finishAsDeferredPickup({
+              stage,
+              issueNumber,
+              startTime,
+              completedStages,
+              skippedStages,
+              skipReason:
+                `Deferred: issue #${issueNumber} has an unresolved out-of-scope blocked ` +
+                `finding (${describeBlockedFinding(recordedFinding)})`,
+              stderrLine:
+                `[blocked-dependency] issue #${issueNumber} deferred — ` +
+                `unresolved out-of-scope blocked finding: ${describeBlockedFinding(recordedFinding)}\n`,
+            });
+          }
+
           const deterministicGenerated = await this.contextAssembler.generateDeterministicContext(
             "issue-pickup",
             issueNumber
@@ -10001,45 +10214,17 @@ export class HeadlessOrchestrator implements vscode.Disposable {
               issueNumber,
               blockedBy: deterministicGenerated.blockedBy.map((d) => d.number),
             });
-            if (this.stateService) {
-              try {
-                await this.stateService.deferStage(stage);
-                await this.stateService.setOutcomeType("deferred");
-              } catch {
-                // Non-critical — the early return below still halts the pipeline.
-              }
-            }
-            this.eventDispatcher.onStageSkipped(
+            return this.finishAsDeferredPickup({
               stage,
-              `Deferred: issue #${issueNumber} is blocked by open dependencies (${blockerList})`
-            );
-            // Info-level marker, NOT a `[pipeline-*-failure]` line: the slot
-            // manager and Go scheduler key off `[blocked-dependency]` to route
-            // this to the deferral path, never the failure path.
-            this.eventDispatcher.onStderr(
-              stage,
-              `[blocked-dependency] issue #${issueNumber} deferred — ` +
-                `blocked by open dependencies: ${blockerList}\n`
-            );
-
-            const deferredResult: PipelineRunResult = {
-              success: false,
-              deferred: true,
+              issueNumber,
+              startTime,
               completedStages,
               skippedStages,
-              deferredStages: [stage],
-              // No failedStage / error — a deferral is not a failure.
-              totalDurationMs: Date.now() - startTime,
-              outcomeType: "deferred",
-            };
-
-            this.firePipelineComplete(deferredResult, issueNumber);
-            if (this.queueService) {
-              this.handleQueueAutoStart(deferredResult.success, issueNumber);
-            }
-            this.isRunning = false;
-            this.abortController = null;
-            return deferredResult;
+              skipReason: `Deferred: issue #${issueNumber} is blocked by open dependencies (${blockerList})`,
+              stderrLine:
+                `[blocked-dependency] issue #${issueNumber} deferred — ` +
+                `blocked by open dependencies: ${blockerList}\n`,
+            });
           }
 
           if (deterministicGenerated.generated) {
@@ -10513,6 +10698,16 @@ export class HeadlessOrchestrator implements vscode.Disposable {
               this.blockedTerminalState = {
                 blocker: `out-of-scope: ${disposition.signal.signal_type}`,
                 remediation: disposition.signal.rationale,
+                // #1147: only true once the finding is actually on disk. The
+                // flag makes another service skip its failure comment, so
+                // setting it on a failed write would trade a generic comment
+                // for no comment at all.
+                outOfScopeFinding: await this.recordOutOfScopeBlockedFinding(
+                  stage,
+                  issueNumber,
+                  disposition.signal,
+                  disposition.reason
+                ),
               };
               this.logger.error(
                 "Failed stage carries a blocking signal that cannot be re-planned — ending BLOCKED (#1142)",

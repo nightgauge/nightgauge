@@ -1720,6 +1720,17 @@ type AttentionRaiseParams struct {
 	ReviewDecision   string                `json:"reviewDecision,omitempty"`
 	Checks           []AttentionRaiseCheck `json:"checks,omitempty"`
 
+	// --- out-of-scope-blocker ---
+	//
+	// NO FIELDS OF ITS OWN (#1147). It reuses `Stage` below for the stage whose
+	// deliverable carried the signal, and nothing else. The signal's rationale
+	// and its verbatim evidence are deliberately NOT on the wire: they are
+	// operator-facing prose, they are already posted as a comment on the issue
+	// and recorded in the finding on disk, and accepting them here would let any
+	// local process choose the words on a blocking_run card. Same stance the
+	// branch-protection arm takes when it sends a projection and lets the daemon
+	// classify.
+
 	// --- abandoned-dispatch ---
 	// Stage is the last stage the force-cleared dispatch was seen in.
 	Stage string `json:"stage,omitempty"`

@@ -281,6 +281,19 @@ They therefore share one implementation (`sweep.ConfiguredRepos`); if they
 diverged, the producer would raise a card whose button the executor refuses on
 click, which is precisely the dead affordance this invariant exists to prevent.
 
+**The inverse case: when a card's condition is a hold your own pipeline
+placed, a repair verb is not optional.** `out-of-scope-blocker` (#1147) reports
+that a stage found the issue depends on work outside its scope, and the run
+recorded that finding to disk so every later dispatch of the issue defers at
+pickup for zero tokens. That durability is the feature — and it means the card
+is the ONLY thing in front of an operator that can end the hold. Shipping it
+dismiss-only would not be the cautious choice the paragraphs above describe; it
+would leave an issue that never runs again with no affordance to say otherwise.
+`blocked.clearFinding` is bounded like the verbs above, and a notch tighter:
+its target has TWO coordinates, and BOTH the repository and the issue come from
+the persisted request's `Context`, because a caller-supplied issue number would
+let any local process lift the hold on an issue nobody clicked on.
+
 ## Choosing a severity
 
 | Severity         | Means                            | Use when                                            |

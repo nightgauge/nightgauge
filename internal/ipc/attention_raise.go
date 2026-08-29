@@ -52,6 +52,10 @@ const (
 	// ProducerAbandonedDispatch is extension-only by design — there is no Go
 	// force-clear funnel. See orchestrator.BuildAbandonedDispatch.
 	ProducerAbandonedDispatch = orchestrator.ProducerAbandonedDispatch
+	// ProducerOutOfScopeBlocker is extension-only by design — the out-of-scope
+	// fork lives in the TypeScript post-validate gate (#1142/#1147). See
+	// orchestrator.BuildOutOfScopeBlocker.
+	ProducerOutOfScopeBlocker = orchestrator.ProducerOutOfScopeBlocker
 )
 
 // raiseableProducers is the closed allowlist. Adding an entry here is the
@@ -84,6 +88,14 @@ var raiseableProducers = map[string]struct{}{
 	ProducerBudgetCeiling:     {},
 	ProducerBranchProtection:  {},
 	ProducerAbandonedDispatch: {},
+	// #1147. Extension-only for the same structural reason abandoned-dispatch
+	// is: the fork that produces this terminal lives in the TypeScript
+	// post-validate gate, so there is no Go call site to keep in parity. It
+	// carries no producer-specific field, and that is the point — every word on
+	// the card is written by BuildOutOfScopeBlocker, and the rationale and
+	// evidence a human needs go on the GitHub issue and into the recorded
+	// finding, neither of which crosses this socket.
+	ProducerOutOfScopeBlocker: {},
 }
 
 // RaiseableProducers returns the allowlist sorted, for diagnostics, error
@@ -466,6 +478,20 @@ func (s *Server) buildRaise(p AttentionRaiseParams) (attention.DecisionRequest, 
 		}
 		return orchestrator.BuildAbandonedDispatch(p.Repo, p.Issue, p.RunID, p.Stage,
 			orchestrator.AbandonedDispatchSituation(p.Situation)), true, nil
+
+	case ProducerOutOfScopeBlocker:
+		// NO producer-specific validation, because there is no
+		// producer-specific FIELD. `stage` is the only thing this arm reads
+		// beyond the shared repo/issue/runId, it is optional (the builder
+		// renders "unknown"), and it selects nothing — not an option, not a
+		// number, not a body. Every operator-facing word is the builder's.
+		//
+		// Nor is there a precondition to evaluate daemon-side: unlike
+		// branch-protection, whose block may turn out to be in-flight CI, the
+		// condition here was DECIDED by the caller's own post-validate fork over
+		// the deliverable it holds, and the daemon has no vantage point from
+		// which to second-guess it. There is therefore no not_applicable answer.
+		return orchestrator.BuildOutOfScopeBlocker(p.Repo, p.Issue, p.RunID, p.Stage), true, nil
 	}
 	// Unreachable: the allowlist check ran first. Kept so a producer added to
 	// the allowlist and not to the switch is a loud failure, not a silent

@@ -71,6 +71,39 @@ to `feature-planning`. The self-loop on `feature-dev` and `feature-validate`
 labeled `MODEL_ESCALATION_NEEDED` retries the same stage with a more capable
 model.
 
+## Not every blocking signal is a rewind request
+
+A blocking signal that names work **outside this issue's scope** cannot be
+answered by another lap of the pipeline: no new plan makes the missing work
+exist. The post-validate gate forks on that before it considers a backtrack,
+using the signal's structured fields only — its `signal_type`, and a declared
+`evidence` marker (`blocked-on:` / `blocked-by:` / `external-blocker:` /
+`out-of-scope:`, a prefix on a structured entry, never a search of the free-text
+`rationale`). A marker overrides the type: a `PLAN_REVISION_NEEDED` that
+declares an external blocker is blocked, not rewindable.
+
+Such a run terminates as the first-class **`blocked`** outcome rather than a
+stage failure, and leaves three things behind:
+
+| Artifact                                             | Why                                                                                              |
+| ---------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| `.nightgauge/pipeline/blocked-findings/<issue>.json` | So the NEXT dispatch defers at `issue-pickup` for zero tokens instead of re-running three stages |
+| An issue comment carrying the rationale and evidence | So a human sees why it stopped without reading a session log                                     |
+| An `out-of-scope-blocker` Action Center card         | So the finding is in the operator's inbox with a one-click way to clear it                       |
+
+The finding lives in a **subdirectory** of `.nightgauge/pipeline/` on purpose:
+`runstate.ArchiveRun` moves every flat `*-<issue>.json` there into
+`pipeline/history/<runId>/` at run end, and skips directories — a finding
+written flat would be archived away by the run that produced it.
+
+**No `blockedBy` edges are created automatically, and that is deliberate.** The
+blocking work is named only in free text, `#N` in prose is ambiguous ("AC #3"),
+and a wrong edge is durable, human-visible, and converts the zero-cost defer
+into a permanent silent stall. Add the edges by hand
+(`nightgauge issue add-blocked-by <blocked> <blocker>`) after reading the
+comment. Resolving the card with **Blocker resolved** deletes the finding and
+lets the issue run again — the defer is a hold, not a verdict.
+
 ## Recursion Guards
 
 Two independent guards prevent infinite revision loops:

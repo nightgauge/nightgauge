@@ -14,7 +14,7 @@ func TestRegistryIsClosedAllowlist(t *testing.T) {
 		VerbAutonomousComplete, VerbAutonomousClearIssueFailures, VerbProjectSyncStatus,
 		VerbIssueClose, VerbBudgetRaiseCeiling, VerbRunRetryWithEscalation,
 		VerbIssueApproveArchitecture, VerbDependabotEnableAlerts,
-		VerbWorkspaceAddRepo, VerbNoop,
+		VerbWorkspaceAddRepo, VerbBlockedFindingClear, VerbNoop,
 	}
 	for _, v := range registered {
 		if !IsRegisteredVerb(v) {
@@ -41,6 +41,12 @@ func TestRegistryIsClosedAllowlist(t *testing.T) {
 	if !IsRegisteredVerb(VerbWorkspaceAddRepo) {
 		t.Error("workspace.addRepo must be registered")
 	}
+	// The out-of-scope-blocker card's clear button (#1147). It is the only
+	// retraction for a hold that otherwise defers an issue at pickup forever,
+	// so a card without it would be the dead end Invariant 3 forbids.
+	if !IsRegisteredVerb(VerbBlockedFindingClear) {
+		t.Error("blocked.clearFinding must be registered")
+	}
 	// Anything not on the allowlist is rejected — the security boundary. The
 	// near-miss spellings of the approval verb must NOT resolve: the executor
 	// resolves the label name from config, so a surface cannot reach a
@@ -54,7 +60,11 @@ func TestRegistryIsClosedAllowlist(t *testing.T) {
 		// Nothing generic or adjacent to the manifest writer is reachable by
 		// guessing: the card can add a repo and nothing else.
 		"workspace.addRepo ", "workspace.removeRepo", "workspace.write",
-		"workspace.setRouting", "manifest.write"} {
+		"workspace.setRouting", "manifest.write",
+		// Nothing generic or adjacent to the finding clearer is reachable by
+		// guessing: the card can retract one issue's hold and nothing else.
+		"blocked.clearFinding ", "blocked.clear", "blocked.writeFinding",
+		"pipeline.deleteFile", "findings.clear"} {
 		if IsRegisteredVerb(v) {
 			t.Errorf("verb %q must NOT be registered", v)
 		}
