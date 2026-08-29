@@ -296,6 +296,79 @@ describe("IssueDragAndDropController", () => {
       );
     });
 
+    it("reports a mid-refresh drop as 'no issues', not as a JSON syntax error (#1102)", async () => {
+      // ProjectBoardTreeProvider renders a "Loading..." ProjectBoardActionItem
+      // while a fetch is in flight. Dragging that placeholder makes handleDrag
+      // return before it stashes or populates the DataTransfer, so handleDrop
+      // sees a present-but-empty custom-MIME entry. That must not reach
+      // JSON.parse("") -> "Unexpected end of JSON input".
+      const dragTransfer = new Map<string, vscode.DataTransferItem>();
+      const mockToken = { isCancellationRequested: false } as any;
+
+      // A non-issue tree item, exactly as the loading placeholder arrives.
+      const placeholder = { label: "Loading...", constructor: { name: "ProjectBoardActionItem" } };
+      await controller.handleDrag([placeholder as any], dragTransfer as any, mockToken);
+
+      // handleDrag wrote nothing: no stash, no transfer entries.
+      expect(dragTransfer.size).toBe(0);
+
+      // VSCode still materialises the registered drag MIME with an empty value.
+      const dropTransfer = new Map<string, vscode.DataTransferItem>();
+      dropTransfer.set("application/vnd.code.tree.nightgauge-issue", {
+        value: "",
+        asString: async () => "",
+      } as any);
+
+      const showErrorMessage = vi.fn();
+      const showWarningMessage = vi.fn();
+      (vscode.window as any).showErrorMessage = showErrorMessage;
+      (vscode.window as any).showWarningMessage = showWarningMessage;
+
+      await controller.handleDrop(undefined, dropTransfer as any, mockToken);
+
+      // The operator must never be told the payload was malformed JSON.
+      expect(showErrorMessage).not.toHaveBeenCalled();
+      expect(showWarningMessage).toHaveBeenCalledWith(expect.stringContaining("refreshing"));
+    });
+
+    it("does not re-drop the previous drag's issue on an empty transfer (#1104)", async () => {
+      const mockToken = { isCancellationRequested: false } as any;
+
+      // 1. A real drag of #42 — this writes the static stash.
+      const realItem = new ReadyIssueTreeItem({
+        number: 42,
+        title: "Test Issue",
+        labels: ["type:feature"],
+        url: "https://github.com/test/repo/issues/42",
+      } as any);
+      const firstTransfer = new Map<string, vscode.DataTransferItem>();
+      await controller.handleDrag([realItem], firstTransfer as any, mockToken);
+      expect(firstTransfer.size).toBeGreaterThan(0);
+
+      // 2. Immediately after (well inside the 10s TTL), the board refreshes and
+      //    the user grabs the "Loading..." placeholder. Nothing is serialized.
+      const placeholder = { label: "Loading...", constructor: { name: "ProjectBoardActionItem" } };
+      const secondTransfer = new Map<string, vscode.DataTransferItem>();
+      await controller.handleDrag([placeholder as any], secondTransfer as any, mockToken);
+
+      // 3. The drop carries an empty custom-MIME entry.
+      const dropTransfer = new Map<string, vscode.DataTransferItem>();
+      dropTransfer.set("application/vnd.code.tree.nightgauge-issue", {
+        value: "",
+        asString: async () => "",
+      } as any);
+
+      const executeCommand = vi.fn();
+      (vscode.commands as any).executeCommand = executeCommand;
+      (vscode.window as any).showWarningMessage = vi.fn();
+      (vscode.window as any).showErrorMessage = vi.fn();
+
+      await controller.handleDrop(undefined, dropTransfer as any, mockToken);
+
+      // #42 must not be started: the operator never dragged it in this gesture.
+      expect(executeCommand).not.toHaveBeenCalled();
+    });
+
     it("should reject invalid MIME type", async () => {
       const mockDataTransfer = new Map<string, vscode.DataTransferItem>();
       // No MIME data set

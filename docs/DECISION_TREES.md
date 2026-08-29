@@ -261,7 +261,7 @@ For any other repo (pipeline or not) that just needs AI-ready docs:
 ```mermaid
 flowchart TD
     A["I want to manage<br/>my backlog"] --> B{What's the task?}
-    B -->|Triage & hygiene<br/>weekly or monthly| C["/nightgauge-backlog-groom<br/>Find stale, duplicate,<br/>unlinked issues"]
+    B -->|Triage & hygiene<br/>weekly or monthly| C["/nightgauge-backlog-groom<br/>Re-assess validity, worth,<br/>verification, security, epic fit"]
     B -->|Validate issues are<br/>pipeline-ready| D["/nightgauge-backlog-preflight<br/>Check labels, criteria,<br/>quality"]
     B -->|Queue issues for<br/>batch pipeline run| E["/nightgauge-queue<br/>Add, remove, clear<br/>issues"]
     B -->|Manage epic<br/>sub-issues| F["/nightgauge-assess-epic<br/>Plan batch vs<br/>sequential strategy"]
@@ -576,7 +576,7 @@ Some pairs of skills overlap. Here's how to choose:
 
 ### Backlog Groom vs Backlog Preflight
 
-- **Backlog Groom** (`/nightgauge-backlog-groom`) — Periodic hygiene: find stale, duplicate, unlinked issues
+- **Backlog Groom** (`/nightgauge-backlog-groom`) — Periodic grooming of the whole open backlog: validity, worth, verification completeness, security of the approach, epic fit
 - **Backlog Preflight** (`/nightgauge-backlog-preflight`) — Validate backlog is ready for pipeline processing
 
 **Choose:** Groom weekly/monthly for maintenance, Preflight before starting pipeline.

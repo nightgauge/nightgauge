@@ -4,43 +4,43 @@ Complete reference for all Nightgauge skills — what they do, when to use them,
 
 ## Quick Reference
 
-| Skill                               | Category         | Purpose                                       | Version | Invocation                                     |
-| ----------------------------------- | ---------------- | --------------------------------------------- | ------- | ---------------------------------------------- |
-| `nightgauge-issue-pickup`           | Core Pipeline    | Claim an issue and set up development         | 1.19.0  | `/nightgauge-issue-pickup [#]`                 |
-| `nightgauge-feature-planning`       | Core Pipeline    | Plan implementation with docs-first approach  | 1.16.0  | `/nightgauge-feature-planning`                 |
-| `nightgauge-feature-dev`            | Core Pipeline    | Implement features following approved plan    | 1.10.0  | `/nightgauge-feature-dev`                      |
-| `nightgauge-feature-validate`       | Core Pipeline    | Validate with integration/E2E tests           | 1.14.0  | `/nightgauge-feature-validate`                 |
-| `nightgauge-pr-create`              | Core Pipeline    | Create PR with validation summary             | 1.19.0  | `/nightgauge-pr-create`                        |
-| `nightgauge-pr-merge`               | Core Pipeline    | Wait for reviews and merge PR                 | 1.13.0  | `/nightgauge-pr-merge`                         |
-| `nightgauge-assess-epic`            | Project Ops      | Analyze epic for batch vs sequential strategy | 1.0.0   | `/nightgauge:assess-epic <#>`                  |
-| `nightgauge-backlog-groom`          | Project Ops      | Perform backlog triage and hygiene            | 1.1.0   | `/nightgauge:backlog-groom [options]`          |
-| `nightgauge-backlog-preflight`      | Project Ops      | Validate backlog before processing            | 1.1.0   | `/nightgauge:backlog-preflight [options]`      |
-| `nightgauge-config-show`            | Project Ops      | Display effective configuration               | 1.1.0   | `/nightgauge-config-show`                      |
-| `nightgauge-epic-validate`          | Project Ops      | Post-creation epic validation                 | 1.0.0   | `/nightgauge:epic-validate <#>`                |
-| `nightgauge-issue-create`           | Project Ops      | Create well-structured GitHub issues          | 1.15.0  | `/nightgauge:issue-create [options]`           |
-| `nightgauge-project-sync`           | Project Ops      | Bulk-sync issues to project board             | 1.1.0   | `/nightgauge:project-sync [options]`           |
-| `nightgauge-queue`                  | Project Ops      | Manage issue queue for pipeline processing    | 1.0.0   | `/nightgauge:queue [args]`                     |
-| `nightgauge-health-check`           | Quality & Audit  | Codebase health assessment (6 dimensions)     | 1.1.0   | `/nightgauge:health-check [options]`           |
-| `nightgauge-security-audit`         | Quality & Audit  | Security posture assessment (7 dimensions)    | 1.1.0   | `/nightgauge:security-audit [options]`         |
-| `nightgauge-product-audit`          | Quality & Audit  | 8-dimension cross-repo quality audit          | 1.0.0   | `/nightgauge:product-audit [options]`          |
-| `nightgauge-integration-audit`      | Quality & Audit  | Cross-repository integration health           | 1.0.0   | `/nightgauge:integration-audit [options]`      |
-| `nightgauge-pipeline-audit`         | Quality & Audit  | Pipeline efficiency snapshot (quick check)    | 1.3.0   | `/nightgauge:pipeline-audit [options]`         |
-| `nightgauge-pipeline-health`        | Quality & Audit  | Pipeline health analysis (comprehensive)      | 1.1.0   | `/nightgauge:pipeline-health [options]`        |
-| `nightgauge-retro`                  | Quality & Audit  | Post-failure root cause analysis              | 1.3.0   | `/nightgauge:retro [options]`                  |
-| `nightgauge-dep-modernize`          | Modernization    | Dependency modernization engine               | 1.1.0   | `/nightgauge:dep-modernize [options]`          |
-| `nightgauge-refactor-rewrite`       | Modernization    | Refactor vs rewrite decision analysis         | 1.1.0   | `/nightgauge:refactor-rewrite [options]`       |
-| `nightgauge-modernize-plan`         | Modernization    | Phased roadmap from assessments               | 1.1.0   | `/nightgauge:modernize-plan [options]`         |
-| `nightgauge-test-gen`               | Modernization    | Generate comprehensive test suites            | 1.0.0   | `/nightgauge:test-gen [options]`               |
-| `nightgauge-test-scaffold`          | Modernization    | Safety net for refactoring                    | 1.2.0   | `/nightgauge:test-scaffold [options]`          |
-| `nightgauge-doc-gen`                | Documentation    | Auto-generate and update API documentation    | 1.1.0   | `/nightgauge:doc-gen [options]`                |
-| `nightgauge-docs-watch`             | Documentation    | Monitor Claude Code documentation changes     | 1.0.0   | `/nightgauge:docs-watch [options]`             |
-| `nightgauge-docs-write`             | Documentation    | Write narrative documentation sections        | 1.1.0   | `/nightgauge:docs-write [options]`             |
-| `nightgauge-continuous-improvement` | Self-Improvement | Unified continuous improvement review         | 1.0.0   | `/nightgauge:continuous-improvement [options]` |
-| `pr-preflight`                      | Portable         | Universal PR pre-flight validation            | 1.1.0   | `/pr-preflight`                                |
-| `smart-setup`                       | Portable         | Make repository AI-ready                      | 4.7.1   | `/smart-setup`                                 |
-| `update-docs`                       | Portable         | Verify and update documentation               | 1.7.0   | `/update-docs [options]`                       |
-| `nightgauge-repo-init`              | Project Ops      | Prime repository for Nightgauge               | 1.3.0   | `/nightgauge:repo-init [options]`              |
-| `nightgauge-workspace-init`         | Project Ops      | Scaffold multi-repo workspace manifest        | 1.0.0   | `/nightgauge:workspace-init [options]`         |
+| Skill                               | Category         | Purpose                                                                    | Version | Invocation                                     |
+| ----------------------------------- | ---------------- | -------------------------------------------------------------------------- | ------- | ---------------------------------------------- |
+| `nightgauge-issue-pickup`           | Core Pipeline    | Claim an issue and set up development                                      | 1.19.0  | `/nightgauge-issue-pickup [#]`                 |
+| `nightgauge-feature-planning`       | Core Pipeline    | Plan implementation with docs-first approach                               | 1.16.0  | `/nightgauge-feature-planning`                 |
+| `nightgauge-feature-dev`            | Core Pipeline    | Implement features following approved plan                                 | 1.10.0  | `/nightgauge-feature-dev`                      |
+| `nightgauge-feature-validate`       | Core Pipeline    | Validate with integration/E2E tests                                        | 1.14.0  | `/nightgauge-feature-validate`                 |
+| `nightgauge-pr-create`              | Core Pipeline    | Create PR with validation summary                                          | 1.19.0  | `/nightgauge-pr-create`                        |
+| `nightgauge-pr-merge`               | Core Pipeline    | Wait for reviews and merge PR                                              | 1.13.0  | `/nightgauge-pr-merge`                         |
+| `nightgauge-assess-epic`            | Project Ops      | Analyze epic for batch vs sequential strategy                              | 1.0.0   | `/nightgauge:assess-epic <#>`                  |
+| `nightgauge-backlog-groom`          | Project Ops      | Groom the open backlog (validity, worth, verification, security, epic fit) | 2.0.0   | `/nightgauge:backlog-groom [options]`          |
+| `nightgauge-backlog-preflight`      | Project Ops      | Validate backlog before processing                                         | 1.1.0   | `/nightgauge:backlog-preflight [options]`      |
+| `nightgauge-config-show`            | Project Ops      | Display effective configuration                                            | 1.1.0   | `/nightgauge-config-show`                      |
+| `nightgauge-epic-validate`          | Project Ops      | Post-creation epic validation                                              | 1.0.0   | `/nightgauge:epic-validate <#>`                |
+| `nightgauge-issue-create`           | Project Ops      | Create well-structured GitHub issues                                       | 1.15.0  | `/nightgauge:issue-create [options]`           |
+| `nightgauge-project-sync`           | Project Ops      | Bulk-sync issues to project board                                          | 1.1.0   | `/nightgauge:project-sync [options]`           |
+| `nightgauge-queue`                  | Project Ops      | Manage issue queue for pipeline processing                                 | 1.0.0   | `/nightgauge:queue [args]`                     |
+| `nightgauge-health-check`           | Quality & Audit  | Codebase health assessment (6 dimensions)                                  | 1.1.0   | `/nightgauge:health-check [options]`           |
+| `nightgauge-security-audit`         | Quality & Audit  | Security posture assessment (7 dimensions)                                 | 1.1.0   | `/nightgauge:security-audit [options]`         |
+| `nightgauge-product-audit`          | Quality & Audit  | 8-dimension cross-repo quality audit                                       | 1.0.0   | `/nightgauge:product-audit [options]`          |
+| `nightgauge-integration-audit`      | Quality & Audit  | Cross-repository integration health                                        | 1.0.0   | `/nightgauge:integration-audit [options]`      |
+| `nightgauge-pipeline-audit`         | Quality & Audit  | Pipeline efficiency snapshot (quick check)                                 | 1.3.0   | `/nightgauge:pipeline-audit [options]`         |
+| `nightgauge-pipeline-health`        | Quality & Audit  | Pipeline health analysis (comprehensive)                                   | 1.1.0   | `/nightgauge:pipeline-health [options]`        |
+| `nightgauge-retro`                  | Quality & Audit  | Post-failure root cause analysis                                           | 1.3.0   | `/nightgauge:retro [options]`                  |
+| `nightgauge-dep-modernize`          | Modernization    | Dependency modernization engine                                            | 1.1.0   | `/nightgauge:dep-modernize [options]`          |
+| `nightgauge-refactor-rewrite`       | Modernization    | Refactor vs rewrite decision analysis                                      | 1.1.0   | `/nightgauge:refactor-rewrite [options]`       |
+| `nightgauge-modernize-plan`         | Modernization    | Phased roadmap from assessments                                            | 1.1.0   | `/nightgauge:modernize-plan [options]`         |
+| `nightgauge-test-gen`               | Modernization    | Generate comprehensive test suites                                         | 1.0.0   | `/nightgauge:test-gen [options]`               |
+| `nightgauge-test-scaffold`          | Modernization    | Safety net for refactoring                                                 | 1.2.0   | `/nightgauge:test-scaffold [options]`          |
+| `nightgauge-doc-gen`                | Documentation    | Auto-generate and update API documentation                                 | 1.1.0   | `/nightgauge:doc-gen [options]`                |
+| `nightgauge-docs-watch`             | Documentation    | Monitor Claude Code documentation changes                                  | 1.0.0   | `/nightgauge:docs-watch [options]`             |
+| `nightgauge-docs-write`             | Documentation    | Write narrative documentation sections                                     | 1.1.0   | `/nightgauge:docs-write [options]`             |
+| `nightgauge-continuous-improvement` | Self-Improvement | Unified continuous improvement review                                      | 1.0.0   | `/nightgauge:continuous-improvement [options]` |
+| `pr-preflight`                      | Portable         | Universal PR pre-flight validation                                         | 1.1.0   | `/pr-preflight`                                |
+| `smart-setup`                       | Portable         | Make repository AI-ready                                                   | 4.7.1   | `/smart-setup`                                 |
+| `update-docs`                       | Portable         | Verify and update documentation                                            | 1.7.0   | `/update-docs [options]`                       |
+| `nightgauge-repo-init`              | Project Ops      | Prime repository for Nightgauge                                            | 1.3.0   | `/nightgauge:repo-init [options]`              |
+| `nightgauge-workspace-init`         | Project Ops      | Scaffold multi-repo workspace manifest                                     | 1.0.0   | `/nightgauge:workspace-init [options]`         |
 
 ---
 
@@ -554,17 +554,17 @@ See [full specification](../skills/nightgauge-epic-validate/SKILL.md)
 
 ### `/nightgauge:backlog-groom`
 
-**Version:** 1.1.0 | **Purpose:** Periodic backlog triage
+**Version:** 2.0.0 | **Purpose:** Periodic backlog grooming
 
 **Description:**
-Automated backlog hygiene: identify stale issues, detect duplicates, validate priorities, and discover hidden dependency chains.
+Re-assess every open issue against current `main` on five axes — validity, worth under the product lens, verification completeness, security of the proposed approach, and epic fit — then adversarially verify every proposed mutation and apply append-only corrections, evidence-cited closures, epic moves and a stale-sync sweep. Repo-scoped or workspace-wide with cross-repo epic batches. Dry-run by default.
 
 **When to Use:**
 
-- Weekly/monthly for backlog maintenance
-- Post-sprint cleanup
-- Pre-release grooming
-- When onboarding new team members
+- After an epic completes (merged work falsifies premises)
+- Before a planning session (ends with a ranked what-to-work-next)
+- Monthly, paired with `/nightgauge:pipeline-health`
+- After a strategy change (drift shows up as `close-not-worth` / `clarify`)
 
 **Invocation:**
 
@@ -576,16 +576,16 @@ Automated backlog hygiene: identify stale issues, detect duplicates, validate pr
 
 **Arguments:**
 
-- `--apply` — Apply recommended changes (default: dry-run)
-- `--stale-days N` — Mark inactive issues as stale (default: 60)
-- `--focus TYPE` — Focus on specific area: `all`, `stale`, `duplicates`, `priorities`, `dependencies`
+- `--repo <owner/repo>` — Target repo for a repo-scoped run (default: current repo)
+- `--workspace` — Every repo in the workspace manifest, cross-repo epic batches
+- `--apply` — Execute verifier-upheld mutations (default: dry-run; boundary redaction is applied in every mode)
 
 **Example:**
 
 ```bash
-/nightgauge:backlog-groom               # Dry run
-/nightgauge:backlog-groom --apply --stale-days 90  # Apply with 90-day threshold
-/nightgauge:backlog-groom --focus duplicates       # Focus on duplicates
+/nightgauge:backlog-groom                     # Dry run, current repo
+/nightgauge:backlog-groom --workspace         # Dry run, every workspace repo
+/nightgauge:backlog-groom --workspace --apply # Apply verified verdicts
 ```
 
 See [full specification](../skills/nightgauge-backlog-groom/SKILL.md)
@@ -597,7 +597,7 @@ See [full specification](../skills/nightgauge-backlog-groom/SKILL.md)
 **Version:** 1.1.0 | **Purpose:** Validate backlog before processing
 
 **Description:**
-Validate that issues meet minimum requirements for pipeline processing. Extends backlog-groom analysis with greenfield-specific checks (docs drift, API assumptions, etc.).
+Validate that issues meet minimum requirements for pipeline processing. Judges a chosen batch immediately before a run (backlog-groom judges the whole backlog on a cadence) and adds greenfield-specific checks (docs drift, API assumptions, etc.).
 
 **When to Use:**
 
