@@ -47,6 +47,7 @@ import {
 import { analyzeChange } from "../../utils/changeAnalyzer";
 import type { IssueMetadata } from "@nightgauge/sdk";
 import { BinaryResolver } from "../../services/BinaryResolver";
+import { STAGE_OUTPUT_CONTEXT_TYPE } from "./stageContextFiles";
 
 /** One open blockedBy dependency discovered by the deterministic check (#189). */
 export interface OpenDependencyRef {
@@ -72,17 +73,11 @@ export interface DeterministicContextResult {
 // ---------------------------------------------------------------------------
 
 /**
- * Maps skill stages to their expected output context file type.
- * Stages absent from this map produce no output file (bookends, pr-merge).
- * @see Issue #637
+ * Re-exported from ./stageContextFiles, which is now the single home of the
+ * stage -> deliverable-file mapping (#1143). Kept exported here so existing
+ * importers do not have to move.
  */
-export const STAGE_OUTPUT_CONTEXT_TYPE: Partial<Record<PipelineStage, ContextFileType>> = {
-  "issue-pickup": "issue",
-  "feature-planning": "planning",
-  "feature-dev": "dev",
-  "feature-validate": "validate",
-  "pr-create": "pr",
-};
+export { STAGE_OUTPUT_CONTEXT_TYPE };
 
 /**
  * Maps skill stages to their corresponding Zod validation schema.

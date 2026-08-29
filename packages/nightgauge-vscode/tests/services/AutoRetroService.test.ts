@@ -48,6 +48,7 @@ vi.mock("../../src/utils/configPathResolver", () => ({
 }));
 
 import { AutoRetroService } from "../../src/services/AutoRetroService";
+import { stageContextFileName } from "../../src/orchestrator/context/stageContextFiles";
 
 function createMockLogger() {
   return {
@@ -195,7 +196,11 @@ describe("AutoRetroService", () => {
   // ===========================================================================
 
   describe("failure classification", () => {
-    it('classifies as "budget-exceeded" when log contains "budget exceeded"', async () => {
+    // #1144 — the fixture carries a REAL extension log prefix. A genuine
+    // BudgetEnforcer message is always written through the extension logger, so
+    // it always has one; the un-prefixed form this fixture used to carry is
+    // tagged `unknown` and, post-#1144, deliberately no longer matches.
+    it('classifies as "budget-exceeded" when an extension log line says "budget exceeded"', async () => {
       const today = new Date().toISOString().slice(0, 10);
       const logFileName = `${today}-session.log`;
 
@@ -204,7 +209,9 @@ describe("AutoRetroService", () => {
         .mockRejectedValue(Object.assign(new Error("ENOENT"), { code: "ENOENT" }));
       vi.mocked(fs.readFile)
         .mockRejectedValueOnce(Object.assign(new Error("ENOENT"), { code: "ENOENT" }))
-        .mockResolvedValueOnce("ERROR: budget exceeded at stage feature-dev" as any);
+        .mockResolvedValueOnce(
+          "[2026-08-29T10:00:00.000Z] [ERROR] budget exceeded at stage feature-dev" as any
+        );
 
       const result = await AutoRetroService.runAfterFailure(
         WORKSPACE,
@@ -1592,6 +1599,318 @@ describe("AutoRetroService", () => {
       );
       // No kind, no prose: the honest answer is still unknown.
       expect(findings.every((f) => f.category !== "skill-no-op")).toBe(true);
+    });
+  });
+
+  // ===========================================================================
+  // #1143 — the pipeline_context deliverable path
+  //
+  // The path was built as `${failedStage}-${issueNumber}.json`. Deliverables
+  // are not named after stages, so the lookup resolved to a filename that has
+  // never existed for any stage in any run, and the ENOENT was swallowed by a
+  // bare `catch {}`.
+  //
+  // RED PROOF for this whole block: restore the interpolation in
+  // collectEvidence —
+  //     `${failedStage}-${issueNumber}.json`
+  // instead of `stageContextFileName(failedStage, issueNumber)`. Every test
+  // below fails behaviourally (wrong path requested / source absent / miss
+  // logged against the wrong path), none of them by a compile error.
+  // ===========================================================================
+
+  describe("#1143 — pipeline_context deliverable resolution", () => {
+    /** The canonical mapping, restated from ContextManager.cleanup(). */
+    const STAGE_DELIVERABLE: ReadonlyArray<readonly [string, string]> = [
+      ["issue-pickup", "issue"],
+      ["feature-planning", "planning"],
+      ["feature-dev", "dev"],
+      ["feature-validate", "validate"],
+      ["pr-create", "pr"],
+    ];
+
+    /**
+     * Record every path handed to fs.readFile and serve only the ones named in
+     * `files`. readdir keeps failing (beforeEach default), so pipeline_context
+     * is the only evidence source in play.
+     */
+    function trackReadFile(files: Record<string, string> = {}): string[] {
+      const requested: string[] = [];
+      vi.mocked(fs.readFile).mockImplementation((async (target: unknown) => {
+        const key = String(target);
+        requested.push(key);
+        if (key in files) return files[key];
+        throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+      }) as never);
+      return requested;
+    }
+
+    const deliverablePath = (name: string) =>
+      `${WORKSPACE}/.nightgauge/pipeline/${name}-${ISSUE_NUMBER}.json`;
+
+    it("resolves the deliverable filename for every pipeline stage", () => {
+      for (const [stage, prefix] of STAGE_DELIVERABLE) {
+        expect(stageContextFileName(stage, ISSUE_NUMBER), `stage ${stage}`).toBe(
+          `${prefix}-${ISSUE_NUMBER}.json`
+        );
+      }
+      // pr-merge and unknown stages write no deliverable at all — null, so the
+      // caller can tell "no deliverable exists" from "the deliverable is gone".
+      expect(stageContextFileName("pr-merge", ISSUE_NUMBER)).toBeNull();
+      expect(stageContextFileName("not-a-stage", ISSUE_NUMBER)).toBeNull();
+    });
+
+    it.each(STAGE_DELIVERABLE)(
+      "reads %s's deliverable from %s-{N}.json, not from the stage name",
+      async (stage, prefix) => {
+        const requested = trackReadFile();
+
+        await AutoRetroService.runAfterFailure(WORKSPACE, ISSUE_NUMBER, stage, logger as never);
+
+        expect(requested, `stage ${stage} did not try its real deliverable`).toContain(
+          deliverablePath(prefix)
+        );
+        // The defect's path. `issue-pickup`/`feature-planning`/... were never
+        // deliverable names; asserting their absence is what goes red when the
+        // `${failedStage}-` interpolation is restored.
+        expect(requested, `stage ${stage} still probed the stage-named path`).not.toContain(
+          deliverablePath(stage)
+        );
+      }
+    );
+
+    it("reports pipeline_context in sources_analyzed once the deliverable is read", async () => {
+      trackReadFile({
+        [deliverablePath("validate")]: JSON.stringify({ issue_number: ISSUE_NUMBER }),
+      });
+
+      await AutoRetroService.runAfterFailure(
+        WORKSPACE,
+        ISSUE_NUMBER,
+        "feature-validate",
+        logger as never
+      );
+
+      const written = vi.mocked(fs.writeFile).mock.calls.at(-1);
+      expect(written).toBeDefined();
+      const payload = JSON.parse(String(written![1]));
+      expect(payload.sources_analyzed).toContain("pipeline_context");
+    });
+
+    it("logs the miss with the path it tried instead of swallowing the ENOENT", async () => {
+      trackReadFile();
+
+      await AutoRetroService.runAfterFailure(
+        WORKSPACE,
+        ISSUE_NUMBER,
+        "feature-validate",
+        logger as never
+      );
+
+      const logged = logger.info.mock.calls.find(
+        ([, detail]) =>
+          detail !== null &&
+          typeof detail === "object" &&
+          (detail as { contextFile?: string }).contextFile !== undefined
+      );
+      expect(logged, "the unreadable deliverable was never logged").toBeDefined();
+      expect((logged![1] as { contextFile: string }).contextFile).toBe(deliverablePath("validate"));
+    });
+
+    it("probes no deliverable for pr-merge, which writes none", async () => {
+      const requested = trackReadFile();
+
+      await AutoRetroService.runAfterFailure(WORKSPACE, ISSUE_NUMBER, "pr-merge", logger as never);
+
+      expect(requested.some((p) => p.includes("/.nightgauge/pipeline/pr-merge-"))).toBe(false);
+    });
+  });
+
+  // ===========================================================================
+  // #1144 — a false budget-exceeded verdict
+  //
+  // A run that failed an acceptance-criteria gate was written up as
+  // budget-exceeded / severity high with the evidence string
+  // "Pattern matched: Pattern matched: token limit".
+  // ===========================================================================
+
+  describe("#1144 — structured cause beats keyword inference", () => {
+    /**
+     * The reported shape: a deliverable whose feedback[] says exactly why the
+     * stage stopped, AND whose free text happens to contain "token limit".
+     * The phrase sits on an `extension`-tagged line (the deliverable is tagged
+     * `extension` wholesale), so the budget rule WOULD match it — which is what
+     * makes this a real proof that the keyword table is never consulted.
+     */
+    const deliverableWithFeedback = JSON.stringify({
+      issue_number: ISSUE_NUMBER,
+      notes: "AC #3 asks the summarizer to respect a token limit",
+      feedback: [
+        {
+          signal_type: "ACCEPTANCE_CRITERIA_AMBIGUOUS",
+          emitted_by_stage: "feature-validate",
+          backtrack_target_stage: "feature-planning",
+          rationale: "AC #3 does not say which branch the count is measured against",
+          evidence: ["validate.md step 4: criterion 3 unverifiable"],
+          severity: "blocking",
+        },
+      ],
+    });
+
+    // RED PROOF: delete the Pass 1.5 `classifyFromFeedback` call in
+    // classifyFailure. The keyword table then runs, matches /token limit/i on
+    // the extension-tagged deliverable, and the category returns to
+    // "budget-exceeded" — the exact defect.
+    it("classifies from a blocking feedback[] signal and never reaches the keyword table", async () => {
+      vi.mocked(fs.readFile).mockImplementation((async (target: unknown) => {
+        if (String(target) === `${WORKSPACE}/.nightgauge/pipeline/validate-${ISSUE_NUMBER}.json`) {
+          return deliverableWithFeedback;
+        }
+        throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+      }) as never);
+
+      const result = await AutoRetroService.runAfterFailure(
+        WORKSPACE,
+        ISSUE_NUMBER,
+        "feature-validate",
+        logger as never
+      );
+
+      expect(result).not.toBeNull();
+      const finding = result!.findings[0];
+      expect(finding.category).not.toBe("budget-exceeded");
+      expect(finding.category).toBe("validation-failure");
+      // The signal's own words are carried through, so the operator reads the
+      // real reason rather than a category summary.
+      const evidence = finding.evidence.join("\n");
+      expect(evidence).toContain("ACCEPTANCE_CRITERIA_AMBIGUOUS");
+      expect(evidence).toContain("AC #3 does not say which branch");
+      expect(evidence).toContain("criterion 3 unverifiable");
+      // Nothing was pattern-matched, so nothing claims to have been.
+      expect(evidence).not.toContain("Pattern matched:");
+    });
+
+    it("falls back to the keyword table when the only signals are warnings", () => {
+      const findings = AutoRetroService.classifyFailure(
+        {
+          text: "no signal here",
+          sourcesAnalyzed: ["pipeline_context"],
+          lines: [{ source: "extension", text: "no signal here" }],
+          feedbackSignals: [
+            {
+              signal_type: "ACCEPTANCE_CRITERIA_AMBIGUOUS",
+              emitted_by_stage: "feature-validate",
+              backtrack_target_stage: "feature-planning",
+              rationale: "minor wording nit",
+              evidence: [],
+              severity: "warning",
+            },
+          ],
+        },
+        "feature-validate"
+      );
+
+      // A warning is background for the next stage, not the cause of the run
+      // failing — the classifier must not treat it as one.
+      expect(findings[0].category).toBe("unknown");
+    });
+
+    // RED PROOF: restore the blanket `new Set([...allowedSources, "unknown"])`
+    // in findFirstMatch (or flip allowUnknownSource back to true on the budget
+    // rule). This test then returns "budget-exceeded".
+    it('does not report budget-exceeded for "token limit" in unknown-source text', async () => {
+      const today = new Date().toISOString().slice(0, 10);
+      const logFileName = `${today}_${ISSUE_NUMBER}_session.log`;
+      // Raw subagent stdout: no `[ISO-ts] [LEVEL]` prefix, so classifyLineSource
+      // tags it `unknown`. This is prompt/AC text, not a BudgetEnforcer message.
+      const sessionLog = [
+        "Reading acceptance criteria for #1144...",
+        "  - [ ] the summarizer must respect the configured token limit",
+        "Gate result: acceptance criteria not met (1 of 4 unverified)",
+      ].join("\n");
+
+      vi.mocked(fs.readdir).mockImplementation((async (target: unknown) => {
+        if (String(target) === `${WORKSPACE}/.nightgauge/logs`) return [logFileName];
+        throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+      }) as never);
+      vi.mocked(fs.readFile).mockImplementation((async (target: unknown) => {
+        if (String(target) === `${WORKSPACE}/.nightgauge/logs/${logFileName}`) return sessionLog;
+        throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+      }) as never);
+
+      const result = await AutoRetroService.runAfterFailure(
+        WORKSPACE,
+        ISSUE_NUMBER,
+        "feature-validate",
+        logger as never
+      );
+
+      expect(result).not.toBeNull();
+      expect(result!.findings[0].category).not.toBe("budget-exceeded");
+    });
+
+    it("still reports budget-exceeded when the extension logger says so", () => {
+      const line =
+        "[2026-08-29T10:00:00.000Z] [ERROR] BudgetEnforcer: budget exceeded for feature-dev";
+      const findings = AutoRetroService.classifyFailure(
+        {
+          text: line,
+          sourcesAnalyzed: ["session_log"],
+          lines: [{ source: "extension", text: line }],
+        },
+        "feature-dev"
+      );
+
+      expect(findings[0].category).toBe("budget-exceeded");
+    });
+
+    // RED PROOF (evidence content): return `p.source` from findFirstMatch again
+    // — evidence becomes "Pattern matched: budget exceeded" and the equality
+    // below fails.
+    // RED PROOF (prefix count): re-add the `Pattern matched: ${matched}`
+    // wrapper at the findings.push call site — evidence becomes
+    // "Pattern matched: Pattern matched: ..." and both assertions fail.
+    it("records the matching line, not the regex source, with the prefix applied once", () => {
+      const line =
+        "[2026-08-29T10:00:00.000Z] [ERROR] BudgetEnforcer: budget exceeded (costUsd 12.40 > 10.00)";
+      const findings = AutoRetroService.classifyFailure(
+        {
+          text: line,
+          sourcesAnalyzed: ["session_log"],
+          lines: [{ source: "extension", text: line }],
+        },
+        "feature-dev"
+      );
+
+      expect(findings[0].category).toBe("budget-exceeded");
+      expect(findings[0].evidence[0]).toBe(`Pattern matched: ${line}`);
+      // The regex source alone ("budget exceeded") is not evidence — it is the
+      // question, not the answer.
+      expect(findings[0].evidence[0]).not.toBe("Pattern matched: budget exceeded");
+      // Exactly once, in exactly one entry.
+      expect(findings[0].evidence.join("\n").match(/Pattern matched:/g)).toHaveLength(1);
+    });
+
+    it("narrows a multi-line blob down to the line that actually matched", () => {
+      const blob = [
+        "{",
+        '  "stage": "feature-dev",',
+        '  "error": "budget exceeded after 4 turns",',
+        '  "unrelated": "everything else in this document"',
+        "}",
+      ].join("\n");
+      const findings = AutoRetroService.classifyFailure(
+        {
+          text: blob,
+          sourcesAnalyzed: ["pipeline_context"],
+          lines: [{ source: "extension", text: blob }],
+        },
+        "feature-dev"
+      );
+
+      expect(findings[0].evidence[0]).toBe(
+        'Pattern matched: "error": "budget exceeded after 4 turns",'
+      );
+      expect(findings[0].evidence[0]).not.toContain("unrelated");
     });
   });
 });
