@@ -215,6 +215,7 @@ describe("outcomeDisplay", () => {
 let stageStartHandler: ((e: { stage: string; issueNumber: number }) => void) | null = null;
 let stageErrorHandler: ((e: { issueNumber: number }) => void) | null = null;
 let stateChangedHandler: ((state: unknown) => void) | null = null;
+let runFinalizedHandler: ((state: unknown) => void) | null = null;
 
 // Mock vscode (must be before DiscordService import)
 vi.mock("vscode", () => ({
@@ -259,6 +260,10 @@ function makePipelineStateService() {
     }),
     onStateChanged: vi.fn((cb: (state: unknown) => void) => {
       stateChangedHandler = cb;
+      return { dispose: vi.fn() };
+    }),
+    onRunFinalized: vi.fn((cb: (state: unknown) => void) => {
+      runFinalizedHandler = cb;
       return { dispose: vi.fn() };
     }),
     getState: vi.fn().mockResolvedValue(null),
@@ -315,6 +320,7 @@ describe("DiscordService retry and flush", () => {
     stageStartHandler = null;
     stageErrorHandler = null;
     stateChangedHandler = null;
+    runFinalizedHandler = null;
 
     pss = makePipelineStateService();
     const configBridge = makeConfigBridge();
@@ -364,6 +370,37 @@ describe("DiscordService retry and flush", () => {
     // Let the state change handler run
     await vi.advanceTimersByTimeAsync(0);
   }
+
+  // #1127: `health_score` is written by the post-run health evaluation, AFTER
+  // `outcome_type` is already on the state. The immediate terminal PATCH
+  // therefore renders a card without it, and no later state:changed event
+  // re-renders — the notifier deliberately ignores them to avoid flooding the
+  // webhook. Only the run:finalized signal makes the last write visible.
+  describe("terminal flush after a late metadata write (#1127)", () => {
+    it("re-renders the embed with Pipeline Health once the run is finalized", async () => {
+      await simulateIssuePickup(42);
+
+      fetchMock.mockResolvedValueOnce({ ok: true });
+      await markFinal(42);
+
+      const terminalBody = JSON.parse(fetchMock.mock.calls[1][1].body);
+      const terminalNames = terminalBody.embeds[0].fields.map((f: { name: string }) => f.name);
+      expect(terminalNames).not.toContain("🏥 Pipeline Health");
+
+      // The health evaluation lands, then the run is finalized.
+      fetchMock.mockResolvedValueOnce({ ok: true });
+      runFinalizedHandler!({
+        ...makeState(42, "productive"),
+        pipeline_meta: { health_score: 89 },
+      });
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+      const flushBody = JSON.parse(fetchMock.mock.calls[2][1].body);
+      const flushNames = flushBody.embeds[0].fields.map((f: { name: string }) => f.name);
+      expect(flushNames).toContain("🏥 Pipeline Health");
+    });
+  });
 
   describe("immediate final PATCH (no debounce)", () => {
     it("sends final PATCH immediately when outcome_type is set", async () => {

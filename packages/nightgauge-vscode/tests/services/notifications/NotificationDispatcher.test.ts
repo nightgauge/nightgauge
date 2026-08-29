@@ -23,6 +23,7 @@ interface FakeNotifierCalls {
   initialize: number;
   onPipelineStart: PipelineEventContext[];
   onPipelineUpdate: PipelineEventContext[];
+  onPipelineFinal: PipelineEventContext[];
   subscribeToSlot: Array<{ issueNumber: number; repoSlug?: string }>;
   unsubscribeFromSlot: number[];
   dispose: number;
@@ -33,6 +34,7 @@ class FakeNotifier implements Notifier {
     initialize: 0,
     onPipelineStart: [],
     onPipelineUpdate: [],
+    onPipelineFinal: [],
     subscribeToSlot: [],
     unsubscribeFromSlot: [],
     dispose: 0,
@@ -55,6 +57,10 @@ class FakeNotifier implements Notifier {
 
   onPipelineUpdate(ctx: PipelineEventContext): void {
     this.calls.onPipelineUpdate.push(ctx);
+  }
+
+  onPipelineFinal(ctx: PipelineEventContext): void {
+    this.calls.onPipelineFinal.push(ctx);
   }
 
   subscribeToSlot(
