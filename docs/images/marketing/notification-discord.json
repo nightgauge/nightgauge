@@ -1,0 +1,46 @@
+{
+  "embeds": [
+    {
+      "title": "🔨 Pipeline #338 🚀 — Complete ✓",
+      "url": "https://github.com/EdibuLLC/bowlsheet-flutter/pull/351",
+      "description": "[**Guest auth state: remove the forced-login router gate**](https://github.com/EdibuLLC/bowlsheet-flutter/issues/338)\n`bowlsheet-flutter` · `feat/338-guest-auth-state-remove-the-forced-login-router-ga`\n**M**  ·  10 files\n\n✅  **Issue Pickup**  —  1s\n✅  **Feature Planning**  —  1m 16s  ($0.408  ·  sonnet-5)\n✅  **Feature Dev**  —  22m 11s  ($2.38  ·  fable-5)\n✅  **Feature Validate**  —  35m 38s  ($2.51  ·  fable-5)\n✅  **PR Create**  —  3s\n✅  **PR Merge**  —  8m 46s  ($1.43  ·  fable-5)",
+      "color": 5763719,
+      "fields": [
+        {
+          "name": "⚙️ Limits",
+          "value": "Frontier  ·  up to Fable",
+          "inline": true
+        },
+        {
+          "name": "📊 Cost Accuracy",
+          "value": "Est. $4.46 → Actual $6.72  ·  **1.5x over**",
+          "inline": true
+        },
+        {
+          "name": "🏥 Pipeline Health",
+          "value": "🟡 89/100 — Good",
+          "inline": true
+        },
+        {
+          "name": "📦 Cache",
+          "value": "100% hit rate",
+          "inline": true
+        },
+        {
+          "name": "📋 Pull Request",
+          "value": "#351",
+          "inline": true
+        },
+        {
+          "name": "🤖 Model",
+          "value": "fable-5, sonnet-5, fable-5",
+          "inline": true
+        }
+      ],
+      "footer": {
+        "text": "💰 $6.72  ⏱ 83m 46s"
+      },
+      "timestamp": "2026-08-29T17:32:10.212Z"
+    }
+  ]
+}

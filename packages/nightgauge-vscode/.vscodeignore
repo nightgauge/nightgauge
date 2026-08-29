@@ -16,6 +16,10 @@ coverage/**
 test-results/**
 playwright.config.ts
 vitest.config.ts
+tsconfig.test.json
+tsconfig.playwright.json
+scripts/**
+*.vsix
 
 # Runtime/test state is never part of a distributable extension. Tests may
 # create this directory under the package cwd; excluding it prevents local

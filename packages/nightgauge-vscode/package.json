@@ -24,6 +24,8 @@
     "automation"
   ],
   "homepage": "https://nightgauge.dev",
+  "qna": "https://github.com/nightgauge/nightgauge/discussions",
+  "pricing": "Free",
   "galleryBanner": {
     "color": "#0A0E1C",
     "theme": "dark"
@@ -1721,6 +1723,7 @@
     "test": "vitest run",
     "test:run": "vitest run",
     "test:playwright": "playwright test",
+    "marketing:screenshots": "tsx scripts/marketing/capture.ts",
     "test:e2e": "tsx scripts/generate-dashboard-html.ts && playwright test",
     "test:e2e:debug": "tsx scripts/generate-dashboard-html.ts && playwright test --headed --workers=1",
     "pretest:host": "bash scripts/check-test-collection.sh && bash scripts/check-test-runner-coverage.sh && tsc -p tests/vscode-host --noEmit",
