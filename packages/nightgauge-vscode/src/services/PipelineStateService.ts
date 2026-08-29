@@ -511,6 +511,21 @@ export class PipelineStateService implements vscode.Disposable {
   private readonly _onStateChanged = new vscode.EventEmitter<PipelineState | null>();
   readonly onStateChanged = this._onStateChanged.event;
 
+  /**
+   * Fires once per run, after the run is terminal AND every piece of its final
+   * metadata has been written (#1127).
+   *
+   * `onStateChanged` cannot serve this purpose: it fires on each individual
+   * write, so a subscriber that renders on it is sampling an arbitrary instant.
+   * `health_score` is written by the orchestrator's post-run health evaluation
+   * *after* `outcome_type` is already on the state, so every notifier that
+   * rendered its terminal card on the outcome write kept a card without it —
+   * permanently, because nothing edits the card again. This event is the
+   * "nothing more is coming" signal those subscribers were missing.
+   */
+  private readonly _onRunFinalized = new vscode.EventEmitter<PipelineState | null>();
+  readonly onRunFinalized = this._onRunFinalized.event;
+
   private readonly _onStageStart = new vscode.EventEmitter<{
     stage: string;
     issueNumber: number;
@@ -634,6 +649,7 @@ export class PipelineStateService implements vscode.Disposable {
       d.dispose();
     }
     this._onStateChanged.dispose();
+    this._onRunFinalized.dispose();
     this._onStageStart.dispose();
     this._onStageComplete.dispose();
     this._onStageError.dispose();
@@ -1380,6 +1396,18 @@ export class PipelineStateService implements vscode.Disposable {
       ...meta,
     };
     this._onStateChanged.fire(this._lastState);
+  }
+
+  /**
+   * Announce that the run is terminal and its final metadata is complete
+   * (#1127). Called from the orchestrator's single pipeline-completion funnel,
+   * after the post-run enrichment writes (`setMeta`) have all landed.
+   *
+   * This is a signal, not a mutation: it carries the state as it finally
+   * stands so subscribers can render it without racing another write.
+   */
+  finalizeRun(): void {
+    this._onRunFinalized.fire(this._lastState);
   }
 
   async clearPipeline(): Promise<void> {

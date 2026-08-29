@@ -69,6 +69,7 @@ export function makeRun(overrides: Record<string, unknown> = {}) {
     costUsd: 0,
     stageStartTimes: new Map<string, number>(),
     isFinal: false,
+    finalFlushed: false,
     finalPatchRetries: 0,
     editMode: "edit" as const,
     fallbackWarned: false,
@@ -82,6 +83,7 @@ export interface FakeNotifierCalls {
   initialize: number;
   onPipelineStart: PipelineEventContext[];
   onPipelineUpdate: PipelineEventContext[];
+  onPipelineFinal: PipelineEventContext[];
   subscribeToSlot: Array<{ issueNumber: number; repoSlug?: string }>;
   unsubscribeFromSlot: number[];
   dispose: number;
@@ -92,6 +94,7 @@ export class FakeNotifier implements Notifier {
     initialize: 0,
     onPipelineStart: [],
     onPipelineUpdate: [],
+    onPipelineFinal: [],
     subscribeToSlot: [],
     unsubscribeFromSlot: [],
     dispose: 0,
@@ -100,6 +103,7 @@ export class FakeNotifier implements Notifier {
   initializeReject?: Error;
   onStartThrow?: Error;
   onUpdateThrow?: Error;
+  onFinalThrow?: Error;
   subscribeThrow?: Error;
   disposeThrow?: Error;
 
@@ -116,6 +120,11 @@ export class FakeNotifier implements Notifier {
   onPipelineUpdate(ctx: PipelineEventContext): void {
     this.calls.onPipelineUpdate.push(ctx);
     if (this.onUpdateThrow) throw this.onUpdateThrow;
+  }
+
+  onPipelineFinal(ctx: PipelineEventContext): void {
+    this.calls.onPipelineFinal.push(ctx);
+    if (this.onFinalThrow) throw this.onFinalThrow;
   }
 
   subscribeToSlot(

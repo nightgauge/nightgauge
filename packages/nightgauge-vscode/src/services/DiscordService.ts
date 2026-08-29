@@ -69,7 +69,15 @@ const COLOR_FAILED = 0xed4245; // Red      — stage error / unknown terminal st
 
 const MAX_DESCRIPTION_LENGTH = 4096;
 const MAX_FIELD_VALUE_LENGTH = 1024;
-const MAX_FIELDS = 25;
+/**
+ * Discord's documented embed limit: "fields — Up to 25 field objects"
+ * (https://docs.discord.com/developers/resources/message, Embed Limits).
+ * Slack and Mattermost attachments document no field-count limit at all, so
+ * they carry the same 25 rather than a lower invented one — the two cards for
+ * one run must not disagree because of a cap nobody's platform imposes
+ * (#1127).
+ */
+export const MAX_FIELDS = 25;
 
 // ─── Pipeline stages in execution order ──────────────────────────────────────
 
@@ -184,6 +192,11 @@ interface ActiveRun {
    *  batch mode where the file may be replaced by the next issue's pipeline
    *  before the debounced patchEmbed fires. */
   finalSnapshot?: PipelineStateSnapshot;
+  /** Set once the terminal flush (#1127) has rendered this run from its
+   *  final state. The run entry is retained until then — the terminal PATCH
+   *  fired on the first sighting of `outcome_type` is not the run's last word,
+   *  because late metadata (health score) is still being written. */
+  finalFlushed: boolean;
   /** Number of retry attempts for the final PATCH */
   finalPatchRetries: number;
   /** Per-slot state service for concurrent worktree pipelines.
@@ -856,6 +869,13 @@ export class DiscordService implements Notifier, vscode.Disposable {
       this.pipelineStateService.onStateChanged((state) => {
         if (this.slotDisposables.size > 0) return;
         if (state) void this.handleStateChanged(state as unknown as PipelineStateSnapshot);
+      }),
+
+      // run:finalized — the run is terminal AND its final metadata is written.
+      // The only render guaranteed to see the whole state (#1127).
+      this.pipelineStateService.onRunFinalized((state) => {
+        if (this.slotDisposables.size > 0) return;
+        if (state) void this.handleRunFinalized(state as unknown as PipelineStateSnapshot);
       })
     );
 
@@ -880,6 +900,11 @@ export class DiscordService implements Notifier, vscode.Disposable {
     } else {
       this.scheduleUpdate(ctx.issueNumber);
     }
+  }
+
+  onPipelineFinal(ctx: PipelineEventContext): void {
+    if (!ctx.state) return;
+    void this.handleRunFinalized(ctx.state as unknown as PipelineStateSnapshot);
   }
 
   // ─── Concurrent worktree slot subscription (Issue #1750) ────────────────────
@@ -922,6 +947,12 @@ export class DiscordService implements Notifier, vscode.Disposable {
         if (snap.issue_number !== issueNumber) return;
         void this.handleStateChanged(snap);
       }),
+      slotStateService.onRunFinalized((state) => {
+        if (!state) return;
+        const snap = state as unknown as PipelineStateSnapshot;
+        if (snap.issue_number !== issueNumber) return;
+        void this.handleRunFinalized(snap);
+      }),
     ];
 
     this.slotDisposables.set(issueNumber, subs);
@@ -939,6 +970,13 @@ export class DiscordService implements Notifier, vscode.Disposable {
     if (subs) {
       for (const s of subs) s.dispose();
       this.slotDisposables.delete(issueNumber);
+    }
+    // Last chance: the slot is being torn down, so no further event can reach
+    // this run. If it went terminal without ever being flushed (#1127), render
+    // it from the snapshot we hold rather than leaving the entry stranded.
+    const run = this.runs.get(issueNumber);
+    if (run?.isFinal && !run.finalFlushed && run.finalSnapshot) {
+      void this.handleRunFinalized(run.finalSnapshot);
     }
   }
 
@@ -1018,6 +1056,7 @@ export class DiscordService implements Notifier, vscode.Disposable {
       costUsd: 0,
       stageStartTimes: new Map(),
       isFinal: false,
+      finalFlushed: false,
       finalPatchRetries: 0,
       stateService, // per-slot service for worktree pipelines
     };
@@ -1117,6 +1156,31 @@ export class DiscordService implements Notifier, vscode.Disposable {
     this.scheduleUpdate(state.issue_number);
   }
 
+  /**
+   * Terminal flush (#1127) — render the run one last time from the state as it
+   * finally stands, and only then release the run entry.
+   *
+   * The terminal PATCH dispatched by `handleStateChanged` on the first sighting
+   * of `outcome_type` is not the last word: the orchestrator writes the health
+   * score (and anything else it enriches post-run) afterwards, and every one of
+   * those writes arrives on a state-changed event this notifier deliberately
+   * ignores to avoid flooding the webhook. So the card kept whatever
+   * `pipeline_meta` held at the outcome write — which is why the same run's
+   * Discord and Slack cards could disagree about Pipeline Health.
+   *
+   * Idempotent: a second call for an already-flushed run is a no-op.
+   */
+  private async handleRunFinalized(state: PipelineStateSnapshot): Promise<void> {
+    const run = this.runs.get(state.issue_number);
+    if (!run || run.finalFlushed) return;
+
+    run.isFinal = true;
+    run.finalFlushed = true;
+    run.finalSnapshot = state;
+    this.patcher.cancel(state.issue_number);
+    await this.patchEmbed(state.issue_number);
+  }
+
   // ─── Debounced update ────────────────────────────────────────────────────────
 
   private scheduleUpdate(issueNumber: number): void {
@@ -1165,6 +1229,9 @@ export class DiscordService implements Notifier, vscode.Disposable {
     for (const [issueNumber, run] of this.runs) {
       if (issueNumber === excludeIssue) continue;
       if (run.isFinal && run.finalSnapshot) {
+        // No terminal flush is coming for a run the queue has already moved
+        // past, so this render is its last — release the entry after it.
+        run.finalFlushed = true;
         this.patcher.cancel(issueNumber);
         void this.patchEmbed(issueNumber);
       }
@@ -1257,9 +1324,13 @@ export class DiscordService implements Notifier, vscode.Disposable {
       return;
     }
 
-    // Remove completed runs only after a successful final patch
+    // Release the run only after the terminal FLUSH has been patched
+    // successfully. A terminal patch that fired on the first `outcome_type`
+    // sighting is not the end of the run — late metadata is still landing, and
+    // dropping the entry there is what made the last write unrenderable
+    // (#1127).
     NotifierStatusTracker.getInstance()?.recordSuccess("discord");
-    if (run.isFinal) {
+    if (run.isFinal && run.finalFlushed) {
       this.runs.delete(issueNumber);
     }
   }

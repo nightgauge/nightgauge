@@ -70,13 +70,18 @@ export const SLACK_API_BASE = "https://slack.com/api";
 
 /**
  * Slack truncates attachment `text` and per-field `value` at ~3000 chars (below
- * Mattermost's ~4000) and renders at most 20 fields cleanly. Handed to the
- * shared renderer as this provider's limits.
+ * Mattermost's ~4000). Handed to the shared renderer as this provider's limits.
  */
-const SLACK_LIMITS: AttachmentLimits = {
+export const SLACK_LIMITS: AttachmentLimits = {
   maxFieldValueLength: 3000,
   maxDescriptionLength: 3000,
-  maxFields: 20,
+  // 25, matching Discord and Mattermost. Slack's attachment reference states
+  // no maximum for the `fields` array, so the previous 20 was an invented cap
+  // that could silently drop a field Discord kept for the same run — the exact
+  // class of divergence #1127 is about. Discord's 25 IS documented ("fields —
+  // Up to 25 field objects"), so it is the binding limit and every provider
+  // renders to it.
+  maxFields: 25,
 };
 
 /**
@@ -134,6 +139,12 @@ interface ActiveRun {
   prUrl?: string;
   stageStartTimes: Map<string, number>;
   isFinal: boolean;
+  /** Cached when `outcome_type` is first seen, so the terminal flush (#1127)
+   *  has something to render even if the state source has moved on. */
+  finalSnapshot?: PipelineStateSnapshot;
+  /** Set once the terminal flush has rendered this run from its final state.
+   *  The run entry is retained until then. */
+  finalFlushed: boolean;
   stateService?: PipelineStateService;
   /** True after the post-id-missing warning has been logged for this run. */
   fallbackWarned: boolean;
@@ -235,6 +246,11 @@ export class SlackService implements Notifier, vscode.Disposable {
       this.pipelineStateService.onStateChanged((state) => {
         if (this.slotDisposables.size > 0) return;
         if (state) void this.handleStateChanged(state as unknown as PipelineStateSnapshot);
+      }),
+      // The run is terminal AND its final metadata is written (#1127).
+      this.pipelineStateService.onRunFinalized((state) => {
+        if (this.slotDisposables.size > 0) return;
+        if (state) void this.handleRunFinalized(state as unknown as PipelineStateSnapshot);
       })
     );
     this.logger.info("SlackService initialized");
@@ -252,6 +268,11 @@ export class SlackService implements Notifier, vscode.Disposable {
     } else {
       this.scheduleUpdate(ctx.issueNumber);
     }
+  }
+
+  onPipelineFinal(ctx: PipelineEventContext): void {
+    if (!ctx.state) return;
+    void this.handleRunFinalized(ctx.state as unknown as PipelineStateSnapshot);
   }
 
   // ─── Concurrent worktree slot subscription ────────────────────────────────
@@ -279,6 +300,12 @@ export class SlackService implements Notifier, vscode.Disposable {
         if (snap.issue_number !== issueNumber) return;
         void this.handleStateChanged(snap);
       }),
+      slotStateService.onRunFinalized((state) => {
+        if (!state) return;
+        const snap = state as unknown as PipelineStateSnapshot;
+        if (snap.issue_number !== issueNumber) return;
+        void this.handleRunFinalized(snap);
+      }),
     ];
 
     this.slotDisposables.set(issueNumber, subs);
@@ -290,6 +317,12 @@ export class SlackService implements Notifier, vscode.Disposable {
     if (subs) {
       for (const s of subs) s.dispose();
       this.slotDisposables.delete(issueNumber);
+    }
+    // No further event can reach this run once the slot is gone — flush it
+    // rather than strand a terminal card mid-state (#1127).
+    const run = this.runs.get(issueNumber);
+    if (run?.isFinal && !run.finalFlushed && run.finalSnapshot) {
+      void this.handleRunFinalized(run.finalSnapshot);
     }
   }
 
@@ -360,6 +393,7 @@ export class SlackService implements Notifier, vscode.Disposable {
       costUsd: state?.tokens?.estimated_cost_usd ?? 0,
       stageStartTimes: new Map([[stage, Date.now()]]),
       isFinal: false,
+      finalFlushed: false,
       stateService,
       fallbackWarned: false,
     };
@@ -403,14 +437,41 @@ export class SlackService implements Notifier, vscode.Disposable {
     if (state.pr_url) run.prUrl = state.pr_url;
 
     if (state.outcome_type) {
-      run.isFinal = true;
-      // Terminal state must not sit behind the debounce — cancel any pending
-      // edit and flush now, or the run's last word can be lost to dispose().
-      this.patcher.cancel(state.issue_number);
-      await this.patchMessage(state.issue_number, state);
+      // Keep the freshest terminal state for the flush below.
+      run.finalSnapshot = state;
+      if (!run.isFinal) {
+        run.isFinal = true;
+        // Terminal state must not sit behind the debounce — cancel any pending
+        // edit and edit now, or the run's last word can be lost to dispose().
+        this.patcher.cancel(state.issue_number);
+        await this.patchMessage(state.issue_number, state);
+      }
+      // Later terminal writes do not each earn a chat.update — the run's
+      // last render is the terminal flush below (#1127).
       return;
     }
     this.scheduleUpdate(state.issue_number);
+  }
+
+  /**
+   * Terminal flush (#1127) — render the run once more from the state as it
+   * finally stands. `outcome_type` is written before the orchestrator's
+   * post-run enrichment (the health score), so the edit dispatched on the
+   * first outcome sighting is not the run's last word.
+   *
+   * Idempotent, and a no-op in post-only mode: with no editable message a
+   * second render would append a duplicate card rather than correct the first.
+   */
+  private async handleRunFinalized(state: PipelineStateSnapshot): Promise<void> {
+    const run = this.runs.get(state.issue_number);
+    if (!run || run.finalFlushed) return;
+    if (run.editMode === "post-only") return;
+
+    run.isFinal = true;
+    run.finalFlushed = true;
+    run.finalSnapshot = state;
+    this.patcher.cancel(state.issue_number);
+    await this.patchMessage(state.issue_number, state);
   }
 
   /** Coalesce bursts of stage events into one edit per DEBOUNCE_MS. */
@@ -464,7 +525,8 @@ export class SlackService implements Notifier, vscode.Disposable {
       attachments: [attachment],
     });
     if (res?.ok) NotifierStatusTracker.getInstance()?.recordSuccess("slack");
-    if (run.isFinal) this.runs.delete(issueNumber);
+    // Released only after the terminal flush — see handleRunFinalized (#1127).
+    if (run.isFinal && run.finalFlushed) this.runs.delete(issueNumber);
   }
 
   /**

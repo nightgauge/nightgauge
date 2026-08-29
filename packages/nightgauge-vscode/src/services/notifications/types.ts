@@ -40,6 +40,17 @@ export interface Notifier {
   initialize(): Promise<void>;
   onPipelineStart(ctx: PipelineEventContext): void;
   onPipelineUpdate(ctx: PipelineEventContext): void;
+  /**
+   * Terminal flush (#1127): the run is terminal AND its final metadata is
+   * written, so render the card once more from the state carried in `ctx`.
+   *
+   * This is deliberately not `onPipelineUpdate` with a terminal state. An
+   * update is coalesced behind a debounce and may already have fired against
+   * an earlier state; this call must render, unconditionally, from the state
+   * that is final. It is idempotent — a notifier that has already flushed a
+   * run ignores a second call.
+   */
+  onPipelineFinal(ctx: PipelineEventContext): void;
   subscribeToSlot(
     issueNumber: number,
     slotStateService: PipelineStateService,

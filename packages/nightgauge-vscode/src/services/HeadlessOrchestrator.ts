@@ -1304,6 +1304,18 @@ export class HeadlessOrchestrator implements vscode.Disposable {
    * out of 'running'. Telemetry is fire-and-forget and never blocks the run.
    */
   private firePipelineComplete(result: PipelineRunResult, issueNumber?: number): void {
+    // #1127: the run is terminal and every post-run `setMeta` enrichment (the
+    // health score among them) has already landed. Announce that before any
+    // other completion work so the notifiers render their card from the state
+    // as it finally stands, instead of from whichever instant their own
+    // debounce happened to sample. Best-effort — a notifier must never be able
+    // to fail a run.
+    try {
+      this.stateService?.finalizeRun();
+    } catch {
+      /* a subscriber threw; the run outcome is unaffected */
+    }
+
     this.eventDispatcher.onPipelineComplete(result);
     // #297/#309: flatten the per-stage execution-path decisions accumulated
     // across the run into plain records for the IPC wire, so the Go
