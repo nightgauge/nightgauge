@@ -6,10 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -78,8 +80,31 @@ func startSocketServer(t *testing.T) (string, *atomic.Int32) {
 	return path, &invocations
 }
 
+// isPeerClosed reports whether err is the server having closed the connection
+// — the expected shape of a refusal that never read the request.
+func isPeerClosed(err error) bool {
+	return errors.Is(err, syscall.EPIPE) ||
+		errors.Is(err, syscall.ECONNRESET) ||
+		errors.Is(err, io.EOF) ||
+		errors.Is(err, net.ErrClosed)
+}
+
 // call dials the socket, sends one request, and returns the response line.
-func call(t *testing.T, path, method string) Response {
+//
+// The second result reports whether a response was actually read. On the
+// REFUSAL paths the server authenticates before reading (socket.go — the
+// ordering is the security property), so it writes its error and closes
+// without ever consuming the request. The client's write therefore races the
+// close and may legitimately land as EPIPE/ECONNRESET, and the response may be
+// gone before it can be read. Treating either as a test failure made
+// TestSocketRefusesForeignUID a coin flip that passed every PR and failed on
+// main with `write: broken pipe` (#1123).
+//
+// A refused connection is the same verdict whether it is delivered as a typed
+// error or as a closed socket, so both are reported here and the caller
+// decides. What must never vary — and what the refusal tests really assert —
+// is that the handler did not run.
+func call(t *testing.T, path, method string) (Response, bool) {
 	t.Helper()
 
 	conn, err := net.Dial("unix", path)
@@ -90,12 +115,18 @@ func call(t *testing.T, path, method string) Response {
 
 	req := fmt.Sprintf(`{"id":1,"method":%q,"params":{}}`, method)
 	if _, err := fmt.Fprintf(conn, "%s\n", req); err != nil {
+		if isPeerClosed(err) {
+			return Response{}, false
+		}
 		t.Fatalf("write: %v", err)
 	}
 
 	_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
 	scanner := bufio.NewScanner(conn)
 	if !scanner.Scan() {
+		if err := scanner.Err(); err == nil || isPeerClosed(err) {
+			return Response{}, false
+		}
 		t.Fatalf("no response: %v", scanner.Err())
 	}
 
@@ -103,7 +134,7 @@ func call(t *testing.T, path, method string) Response {
 	if err := json.Unmarshal(scanner.Bytes(), &resp); err != nil {
 		t.Fatalf("unmarshal %q: %v", scanner.Text(), err)
 	}
-	return resp
+	return resp, true
 }
 
 // The acceptance criterion for #378: a caller outside the trust boundary
@@ -119,13 +150,16 @@ func TestSocketRefusesForeignUID(t *testing.T) {
 	})
 
 	path, invocations := startSocketServer(t)
-	resp := call(t, path, "test.mutate")
+	resp, got := call(t, path, "test.mutate")
 
-	if resp.Error == nil {
-		t.Fatal("expected an error response for a foreign uid, got success")
-	}
-	if resp.Error.Code != ErrUnauthorized {
-		t.Errorf("code = %d, want ErrUnauthorized (%d)", resp.Error.Code, ErrUnauthorized)
+	// Either delivery is a refusal; only a SUCCESS response would be a defect.
+	if got {
+		if resp.Error == nil {
+			t.Fatal("expected an error response for a foreign uid, got success")
+		}
+		if resp.Error.Code != ErrUnauthorized {
+			t.Errorf("code = %d, want ErrUnauthorized (%d)", resp.Error.Code, ErrUnauthorized)
+		}
 	}
 	if got := invocations.Load(); got != 0 {
 		t.Errorf("handler ran %d times; a refused connection must never reach a verb", got)
@@ -139,8 +173,13 @@ func TestSocketAcceptsOwnUID(t *testing.T) {
 	})
 
 	path, invocations := startSocketServer(t)
-	resp := call(t, path, "test.mutate")
+	resp, got := call(t, path, "test.mutate")
 
+	// No race on the accept path: the server reads the request before
+	// responding, so a missing response here is a real failure.
+	if !got {
+		t.Fatal("own uid got no response; the connection was closed unread")
+	}
 	if resp.Error != nil {
 		t.Fatalf("own uid refused: %+v", resp.Error)
 	}
@@ -160,8 +199,11 @@ func TestSocketAllowsWhenPeerCredUnsupported(t *testing.T) {
 	})
 
 	path, invocations := startSocketServer(t)
-	resp := call(t, path, "test.mutate")
+	resp, got := call(t, path, "test.mutate")
 
+	if !got {
+		t.Fatal("unsupported-platform fallback got no response; the connection was closed unread")
+	}
 	if resp.Error != nil {
 		t.Fatalf("unsupported-platform fallback refused the connection: %+v", resp.Error)
 	}
@@ -179,13 +221,15 @@ func TestSocketRefusesWhenPeerCredLookupFails(t *testing.T) {
 	})
 
 	path, invocations := startSocketServer(t)
-	resp := call(t, path, "test.mutate")
+	resp, got := call(t, path, "test.mutate")
 
-	if resp.Error == nil {
-		t.Fatal("expected refusal when the peer lookup fails")
-	}
-	if resp.Error.Code != ErrUnauthorized {
-		t.Errorf("code = %d, want ErrUnauthorized (%d)", resp.Error.Code, ErrUnauthorized)
+	if got {
+		if resp.Error == nil {
+			t.Fatal("expected refusal when the peer lookup fails")
+		}
+		if resp.Error.Code != ErrUnauthorized {
+			t.Errorf("code = %d, want ErrUnauthorized (%d)", resp.Error.Code, ErrUnauthorized)
+		}
 	}
 	if got := invocations.Load(); got != 0 {
 		t.Errorf("handler ran %d times; a failed credential check must not dispatch", got)
