@@ -1,9 +1,10 @@
 /**
  * Marketing capture — the run data every rendered asset is built from.
  *
- * This is NOT invented. `RUN_338` is the pipeline run that closed
- * bowlsheet-flutter#338 on 2026-08-29 (PR #351), copied from the run record
- * the pipeline wrote to `.nightgauge/pipeline/history/2026-08-29.jsonl`:
+ * This is NOT invented. `RUN_338` is a pipeline run that closed issue #338
+ * of a private Flutter app the maintainers build with Nightgauge, on
+ * 2026-08-29 (PR #351), copied from the run record the pipeline wrote to
+ * `.nightgauge/pipeline/history/2026-08-29.jsonl`:
  * stage durations, per-stage cost, token totals and the cache-hit ratio are
  * the real numbers. The sibling runs are today's real merges in the workspace
  * (issue and PR numbers are real); their costs are representative of the
@@ -26,8 +27,14 @@ export interface StageRecord {
   cache_creation?: number;
 }
 
-export const REPO_SLUG = "EdibuLLC/bowlsheet-flutter";
-export const REPO_NAME = "bowlsheet-flutter";
+/**
+ * The repository is identified by a neutral placeholder: the app that
+ * produced the run is a private downstream workspace, and its name is not
+ * published from this tree. Override for a private render with
+ * `NIGHTGAUGE_MARKETING_REPO=owner/name`.
+ */
+export const REPO_SLUG = process.env.NIGHTGAUGE_MARKETING_REPO ?? "acme/flutter-app";
+export const REPO_NAME = REPO_SLUG.split("/").pop() ?? REPO_SLUG;
 
 /** 83m 46s — the wall clock the pipeline reported for #338. */
 export const RUN_338_DURATION_MS = 5_026_000;
@@ -154,11 +161,11 @@ export const SIBLING_RUNS: SiblingRun[] = [
     model: "claude-fable-5",
   },
   {
-    repoName: "nightgauge-dashboard",
-    issueNumber: 716,
-    title: "Coordinated Angular 21 → 22 upgrade",
-    branch: "chore/716-angular-22",
-    prNumber: 763,
+    repoName: "nightgauge",
+    issueNumber: 1114,
+    title: "Verification is a required heading for every issue type",
+    branch: "feat/1114-verification-heading",
+    prNumber: 1114,
     status: "complete",
     costUsd: 8.41,
     durationMs: 5_460_000,

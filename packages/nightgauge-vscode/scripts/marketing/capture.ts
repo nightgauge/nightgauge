@@ -10,8 +10,8 @@
  *
  * What is real and what is a frame is documented in
  * docs/images/marketing/README.md. Short version: the dashboard content and
- * both notification payloads come from production code fed with the run that
- * closed bowlsheet-flutter#338; the VS Code window and the chat-client chrome
+ * both notification payloads come from production code fed with a real run
+ * (issue #338 of a private Flutter app); the VS Code window and the chat-client chrome
  * are faithful frames, because neither VS Code nor Discord can be rendered
  * headless from a script.
  */
@@ -20,6 +20,7 @@ import { chromium } from "@playwright/test";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { REPO_NAME } from "./run-data";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const PKG = resolve(here, "..", "..");
@@ -101,9 +102,9 @@ async function main() {
         `<head><script>window.acquireVsCodeApi=function(){var s={activeTab:${JSON.stringify(tab)}};return{postMessage:function(){},setState:function(v){s=v;return v;},getState:function(){return s;}}};</script>`
       );
       const html = renderFrame({
-        title: "Nightgauge Dashboard — bowlsheet-flutter — Visual Studio Code",
+        title: `Nightgauge Dashboard — ${REPO_NAME} — Visual Studio Code`,
         tabLabel: "Nightgauge Dashboard",
-        workspaceName: "bowlsheet-flutter",
+        workspaceName: REPO_NAME,
         activityIcon,
         webviewHtml: webview,
       });

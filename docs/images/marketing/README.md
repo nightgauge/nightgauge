@@ -22,8 +22,11 @@ copies from here and never renders at build time.
 | `notification-discord.{png,json}` | The exact embed `DiscordService.buildEmbed()` posts to the webhook for the run below; the JSON is that payload | A mock of Discord's message layout                    |
 | `notification-slack.{png,json}`   | The exact attachment `SlackService` sends via `chat.postMessage`; the JSON is that payload                     | A mock of Slack's message layout                      |
 
-The run every image is built from is `bowlsheet-flutter#338`, which the
-pipeline closed on 2026-08-29 with PR #351 — stage durations, per-stage cost,
+The run every image is built from is issue #338 of a private Flutter app the
+maintainers build with Nightgauge, which the pipeline closed on 2026-08-29 with
+PR #351. The repository is shown under the neutral name `acme/flutter-app`
+because the downstream workspace is not named from this tree
+(`NIGHTGAUGE_MARKETING_REPO=owner/name` overrides it for a private render) — stage durations, per-stage cost,
 token totals and cache-hit ratio are copied from the run record the pipeline
 wrote. The other runs shown are that day's real merges in the workspace with
 representative costs. `run-data.ts` is the single source; change it there and

@@ -5,8 +5,8 @@
       "fallback": "Pipeline #338: Complete ✓",
       "color": "#57f287",
       "title": "Pipeline #338 🚀 — Complete ✓",
-      "title_link": "https://github.com/EdibuLLC/bowlsheet-flutter/pull/351",
-      "text": "<https://github.com/EdibuLLC/bowlsheet-flutter/issues/338|*Guest auth state: remove the forced-login router gate*>\n`bowlsheet-flutter` · `feat/338-guest-auth-state-remove-the-forced-login-router-ga`\n*M*  ·  10 files\n\n:white_check_mark:  *Issue Pickup*  — 1s\n:white_check_mark:  *Feature Planning*  — 1m 16s  ($0.408)\n:white_check_mark:  *Feature Dev*  — 22m 11s  ($2.38)\n:white_check_mark:  *Feature Validate*  — 35m 38s  ($2.51)\n:white_check_mark:  *PR Create*  — 3s\n:white_check_mark:  *PR Merge*  — 8m 46s  ($1.43)",
+      "title_link": "https://github.com/acme/flutter-app/pull/351",
+      "text": "<https://github.com/acme/flutter-app/issues/338|*Guest auth state: remove the forced-login router gate*>\n`flutter-app` · `feat/338-guest-auth-state-remove-the-forced-login-router-ga`\n*M*  ·  10 files\n\n:white_check_mark:  *Issue Pickup*  — 1s\n:white_check_mark:  *Feature Planning*  — 1m 16s  ($0.408)\n:white_check_mark:  *Feature Dev*  — 22m 11s  ($2.38)\n:white_check_mark:  *Feature Validate*  — 35m 38s  ($2.51)\n:white_check_mark:  *PR Create*  — 3s\n:white_check_mark:  *PR Merge*  — 8m 46s  ($1.43)",
       "fields": [
         {
           "title": "Limits",
@@ -40,7 +40,7 @@
         }
       ],
       "footer": "💰 $6.72  ⏱ 83m 46s",
-      "ts": 1788024730,
+      "ts": 1788025408,
       "mrkdwn_in": ["text", "fields"]
     }
   ]

@@ -80,7 +80,7 @@ function stagesFor338() {
 }
 
 const run338 = {
-  runId: "run-338-bowlsheet-flutter",
+  runId: `run-338-${REPO_NAME}`,
   issueNumber: RUN_338.issue_number,
   title: RUN_338.title,
   branch: RUN_338.branch,
@@ -149,7 +149,7 @@ function siblingSummary(r: (typeof SIBLING_RUNS)[number]) {
     toolCalls: [],
     timeSavedMs: r.status === "running" ? undefined : Math.round(r.durationMs * 2.6),
     sizeLabel: r.sizeLabel,
-    issueType: r.title.toLowerCase().includes("upgrade") ? "chore" : "bug",
+    issueType: r.title.toLowerCase().includes("heading") ? "feature" : "bug",
     repoName: r.repoName,
   };
 }
