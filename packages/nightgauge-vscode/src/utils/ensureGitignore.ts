@@ -127,6 +127,7 @@ pipeline/queue-state.json
 
 # ─── Generated reports (backlog triage, health, security, etc.) ─────
 /backlog-*.md
+/triage/
 # Per-machine session state the backlog orchestrator rewrites at every
 # issue boundary — same runtime class as /autonomous/ and /attention/.
 /session-handoff.md
