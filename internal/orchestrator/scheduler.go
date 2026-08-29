@@ -672,14 +672,21 @@ type Scheduler struct {
 	activeStagesMu sync.Mutex
 
 	// activeRuntimes tracks the live RuntimeState for each currently-running
-	// pipeline keyed by issue number. Used by IPC mode (IpcStageRunner) so
-	// the IPC server can update PhaseHistory on the scheduler's runtime when
-	// TypeScript reports phase markers via pipeline.notifyPhaseTransition.
-	// Without this, IPC-mode runs have an empty PhaseHistory in every
-	// pipeline.stateChanged snapshot, which means the tree view loses phase
-	// counts ("17/17 phases") on already-completed stages whenever the
-	// extension reloads mid-pipeline.
-	activeRuntimes   map[int]*state.RuntimeState
+	// pipeline, keyed by RUN ID (ADR-017 follow-up R-5, #379). Used by IPC
+	// mode (IpcStageRunner) so the IPC server can update PhaseHistory on the
+	// scheduler's runtime when TypeScript reports phase markers via
+	// pipeline.notifyPhaseTransition. Without this, IPC-mode runs have an
+	// empty PhaseHistory in every pipeline.stateChanged snapshot, which means
+	// the tree view loses phase counts ("17/17 phases") on already-completed
+	// stages whenever the extension reloads mid-pipeline.
+	//
+	// It was keyed by issue number until #379, with an identity guard at each
+	// write site checking rt.RunID against the caller's. ADR-017 identifies a
+	// compensating check of exactly that shape as the signature of a wrong
+	// key: the guard existed because the key could not distinguish two runs of
+	// one issue. Keying on the identity removes the guard rather than
+	// duplicating it, and makes LookupRunByID a map hit instead of a scan.
+	activeRuntimes   map[string]*state.RuntimeState
 	activeRuntimesMu sync.Mutex
 
 	// runningSiblingsFn, when non-nil, returns the set of `owner/repo#number`
@@ -1354,61 +1361,61 @@ func (s *Scheduler) unregisterActiveStage(issueNumber int) {
 	delete(s.activeStages, issueNumber)
 }
 
-// registerRuntime stores the live RuntimeState for an active pipeline. Used
-// in IPC mode so the IPC server can record phase transitions onto the
-// scheduler's runtime via RecordPhaseStart / RecordPhaseComplete.
-func (s *Scheduler) registerRuntime(issueNumber int, rt *state.RuntimeState) {
-	if issueNumber <= 0 || rt == nil {
+// registerRuntime stores the live RuntimeState for an active pipeline under
+// its own run identity. Used in IPC mode so the IPC server can record phase
+// transitions onto the scheduler's runtime via RecordPhaseStart /
+// RecordPhaseComplete.
+//
+// A runtime with no identity is not registered. Registering one under the
+// empty key would make the map's key meaningless for that entry and let the
+// next identity-less run overwrite it — the collision the re-key exists to
+// remove, reintroduced through the back door.
+func (s *Scheduler) registerRuntime(rt *state.RuntimeState) {
+	if rt == nil || rt.RunID == "" {
 		return
 	}
 	s.activeRuntimesMu.Lock()
 	defer s.activeRuntimesMu.Unlock()
 	if s.activeRuntimes == nil {
-		s.activeRuntimes = make(map[int]*state.RuntimeState)
+		s.activeRuntimes = make(map[string]*state.RuntimeState)
 	}
-	s.activeRuntimes[issueNumber] = rt
+	s.activeRuntimes[rt.RunID] = rt
 }
 
-// unregisterRuntime removes the runtime for an issue. Called via defer at the
-// end of runPipeline so a completed run can be GC'd.
-func (s *Scheduler) unregisterRuntime(issueNumber int) {
+// unregisterRuntime removes one run. Called via defer at the end of
+// runPipeline so a completed run can be GC'd.
+//
+// Keyed by identity, this deletes exactly the run that finished. Keyed by
+// issue number it deleted whatever was registered for that issue, which on a
+// re-run was not necessarily the same run.
+func (s *Scheduler) unregisterRuntime(runID string) {
+	if runID == "" {
+		return
+	}
 	s.activeRuntimesMu.Lock()
 	defer s.activeRuntimesMu.Unlock()
-	delete(s.activeRuntimes, issueNumber)
-}
-
-// getActiveRuntime returns the live RuntimeState for an issue, or nil if no
-// pipeline is currently running for that issue. Used by RecordPhase* and
-// available to the IPC layer for additional bookkeeping.
-func (s *Scheduler) getActiveRuntime(issueNumber int) *state.RuntimeState {
-	s.activeRuntimesMu.Lock()
-	defer s.activeRuntimesMu.Unlock()
-	return s.activeRuntimes[issueNumber]
+	delete(s.activeRuntimes, runID)
 }
 
 // LookupRunByID returns the scheduler-owned runtime carrying runID, or nil.
-// The scheduler's registry stays keyed by issue number (ADR-017 C11; re-keying
-// it is follow-up R-5), so this is a scan — the map holds at most the
-// concurrency limit's worth of entries.
 //
-// It is the step-3 arm of ADR-017 Decision 11's resolution order: a run-progress
-// call carrying a live scheduler run's id is SERVED from this runtime and never
-// adopted into the IPC registry, and a terminal or administrative call carrying
-// one is refused `run_wrong_owner`. Takes activeRuntimesMu and must never be
-// called while the IPC server holds its own runtimesMu — the two registry locks
-// are never held together (Decision 5's lock-discipline table).
+// Since #379 the registry is keyed by identity, so this is a map hit rather
+// than the scan it was under the issue-number key.
+//
+// It is the step-3 arm of ADR-017 Decision 11's resolution order: a
+// run-progress OR administrative call carrying a live scheduler run's id is
+// SERVED from this runtime and never adopted into the IPC registry, and a
+// terminal call carrying one is still refused `run_wrong_owner` — the
+// scheduler books its own terminal record. Takes activeRuntimesMu and must
+// never be called while the IPC server holds its own runtimesMu — the two
+// registry locks are never held together (Decision 5's lock-discipline table).
 func (s *Scheduler) LookupRunByID(runID string) *state.RuntimeState {
 	if runID == "" {
 		return nil
 	}
 	s.activeRuntimesMu.Lock()
 	defer s.activeRuntimesMu.Unlock()
-	for _, rt := range s.activeRuntimes {
-		if rt != nil && rt.RunID == runID {
-			return rt
-		}
-	}
-	return nil
+	return s.activeRuntimes[runID]
 }
 
 // IsRunLive reports whether runID names a run this scheduler is currently
@@ -1419,45 +1426,33 @@ func (s *Scheduler) IsRunLive(runID string) bool {
 }
 
 // RecordPhaseStartForRun records a phase:start transition on the scheduler's
-// runtime for the given issue — and ONLY when that runtime's RunID equals
-// runID (ADR-017 Decision 11).
+// runtime for runID.
 //
-// This is an identity guard at the write site rather than a re-key, and it is
-// sound here for a reason the IPC registry cannot claim: the scheduler registry
-// has a single writer per issue by construction (registerRuntime /
-// unregisterRuntime bracket runPipeline in one goroutine), so the only
-// cross-run hazard is a write arriving from OUTSIDE over IPC — which is exactly
-// what this rejects. A mismatch is logged loudly rather than swallowed: on
-// today's tree it means an extension-path run and a scheduler-path run share an
-// issue number, which is the F10 shape.
+// Before #379 this looked the runtime up by ISSUE NUMBER and then compared
+// rt.RunID against the caller's, logging and refusing on a mismatch. That
+// comparison was a compensating check for a key that could not tell two runs
+// of one issue apart — the shape ADR-017 itself names as the signature of a
+// wrong key. With the registry keyed on identity the lookup either finds the
+// named run or finds nothing, so there is no second run to mis-address and
+// nothing left to compensate for. The guard is deleted, not moved.
 //
 // Safe no-op when no runtime is registered (the HeadlessOrchestrator path keys
-// its runtimes in the IPC server's own registry instead).
-func (s *Scheduler) RecordPhaseStartForRun(runID string, issueNumber int, stage, name string, index, total int) {
-	rt := s.getActiveRuntime(issueNumber)
+// its runtimes in the IPC server's own registry instead), and equally a no-op
+// for an id this scheduler does not own — which is the guard's old job, now
+// done by the lookup itself.
+func (s *Scheduler) RecordPhaseStartForRun(runID string, _ int, stage, name string, index, total int) {
+	rt := s.LookupRunByID(runID)
 	if rt == nil {
-		return
-	}
-	if rt.RunID != runID {
-		log.Printf("scheduler: phase start for #%d names run %q but the registered runtime is run %q — refusing to record onto another run's PhaseHistory (ADR-017 Decision 11)",
-			issueNumber, runID, rt.RunID)
 		return
 	}
 	rt.BeginPhase(state.PipelineStage(stage), name, index, total)
 }
 
-// RecordPhaseCompleteForRun is RecordPhaseStartForRun's complete arm, carrying
-// the identical identity gate — an ungated complete arm would let a foreign run
-// close phases on a scheduler run's PhaseHistory, which is the same defect one
-// event type over.
-func (s *Scheduler) RecordPhaseCompleteForRun(runID string, issueNumber int, stage, name string) {
-	rt := s.getActiveRuntime(issueNumber)
+// RecordPhaseCompleteForRun is RecordPhaseStartForRun's complete arm. It
+// resolves by identity for the same reason.
+func (s *Scheduler) RecordPhaseCompleteForRun(runID string, _ int, stage, name string) {
+	rt := s.LookupRunByID(runID)
 	if rt == nil {
-		return
-	}
-	if rt.RunID != runID {
-		log.Printf("scheduler: phase complete for #%d names run %q but the registered runtime is run %q — refusing to record onto another run's PhaseHistory (ADR-017 Decision 11)",
-			issueNumber, runID, rt.RunID)
 		return
 	}
 	rt.CompletePhase(state.PipelineStage(stage), name)
@@ -1467,11 +1462,35 @@ func (s *Scheduler) RecordPhaseCompleteForRun(runID string, issueNumber int, sta
 // or "" when the scheduler is not running that issue. It is how the IPC
 // server's scheduler-sourced emitters stamp a real `runId` on their envelopes
 // (ADR-017 Decision 6) instead of fabricating one.
+//
+// A derived scan rather than a second map, following the IPC registry's own
+// "THERE IS NO SECOND MAP" rule: the registry holds at most the concurrency
+// limit's worth of entries, and a derived index cannot drift from its source.
+//
+// Issue number is not an identity, so this can only answer for a single live
+// run per issue. When more than one is somehow live it returns the empty
+// string rather than picking one, because an arbitrary choice here would be
+// stamped onto an event envelope as though it were resolved — exactly the
+// confidently-wrong answer the re-key exists to stop.
 func (s *Scheduler) RunIDForIssue(issueNumber int) string {
-	if rt := s.getActiveRuntime(issueNumber); rt != nil {
-		return rt.RunID
+	if issueNumber <= 0 {
+		return ""
 	}
-	return ""
+	s.activeRuntimesMu.Lock()
+	defer s.activeRuntimesMu.Unlock()
+	found := ""
+	for runID, rt := range s.activeRuntimes {
+		if rt == nil || rt.IssueNumber != issueNumber {
+			continue
+		}
+		if found != "" {
+			log.Printf("scheduler: issue #%d has more than one live run (%q, %q) — refusing to guess which one an envelope means (ADR-017 R-5)",
+				issueNumber, found, runID)
+			return ""
+		}
+		found = runID
+	}
+	return found
 }
 
 // CancelAllForNetworkOutage cancels every actively-running stage context with
@@ -3861,8 +3880,8 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 	// PhaseHistory on this runtime. Without registration the IPC path leaves
 	// PhaseHistory empty for the entire run, and any extension reload
 	// mid-pipeline loses phase counts on already-completed stages.
-	s.registerRuntime(item.Number, runtime)
-	defer s.unregisterRuntime(item.Number)
+	s.registerRuntime(runtime)
+	defer s.unregisterRuntime(runtime.RunID)
 
 	// Reset orchestration engines for this pipeline run
 	s.retryEngine.Reset()

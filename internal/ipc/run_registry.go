@@ -626,14 +626,33 @@ func (s *Server) resolveRun(method string, class verbClass, runID, repo string, 
 
 	if s.schedulerRuns != nil {
 		if rt := s.schedulerRuns.LookupRunByID(runID); rt != nil {
-			if class == verbRunProgress {
+			// RUN-PROGRESS and ADMINISTRATIVE are both served from the
+			// scheduler's own live runtime (#379).
+			//
+			// Administrative was refused here until the scheduler registry was
+			// keyed on identity. The refusal was never about the verb being
+			// unsafe — it was that an issue-number-keyed registry could not
+			// prove which run a caller meant. It can now, and serving is
+			// strictly better than refusing: the alternative was ADOPTING a
+			// snapshot of the same run into the IPC registry, which produced a
+			// SECOND *RuntimeState for one identity, with the operator's pause
+			// landing on the copy the scheduler does not read.
+			//
+			// The write goes through the scheduler's live object, so rs.mu
+			// serialises it against every Persist that run makes — the same
+			// single-object argument F33 makes for the adoption path.
+			if class == verbRunProgress || class == verbAdministrative {
 				return runResolution{rs: rt, schedulerOwned: true}, nil
 			}
-			// Logged loudly with the resolved registry named, because on
-			// today's tree this should be unreachable and a non-zero count is
-			// a real signal. "The scheduler path never calls notifyComplete"
-			// is a statement about today's TypeScript, not an invariant of an
-			// unauthenticated socket.
+			// TERMINAL still stops here, and this arm is why the distinction
+			// matters. The scheduler books that run's record itself through
+			// OnPipelineComplete; serving a terminal verb from a registry with
+			// no latch, no lease and no compare-and-delete target would write a
+			// SECOND authoritative record under one run id (F29). Logged loudly
+			// with the resolved registry named, because on today's tree this
+			// should be unreachable and a non-zero count is a real signal.
+			// "The scheduler path never calls notifyComplete" is a statement
+			// about today's TypeScript, not an invariant of the socket.
 			return runResolution{}, s.rejectRun(method, codeRunWrongOwner, runID, issue,
 				"the Go scheduler owns this run; its terminal bookkeeping is not this socket's to do")
 		}
