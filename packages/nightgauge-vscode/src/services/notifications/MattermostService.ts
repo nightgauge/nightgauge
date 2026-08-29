@@ -54,7 +54,7 @@ import {
  * Handed to the shared renderer as this provider's limits — the rendering
  * itself is identical across providers (#1071).
  */
-const MATTERMOST_LIMITS: AttachmentLimits = {
+export const MATTERMOST_LIMITS: AttachmentLimits = {
   maxFieldValueLength: 4000,
   maxDescriptionLength: 4000,
   maxFields: 25,
@@ -88,6 +88,9 @@ interface ActiveRun {
   stageStartTimes: Map<string, number>;
   isFinal: boolean;
   finalSnapshot?: PipelineStateSnapshot;
+  /** Set once the terminal flush (#1127) has rendered this run from its final
+   *  state. The run entry is retained until then. */
+  finalFlushed: boolean;
   finalPatchRetries: number;
   editMode: EditMode;
   /** True after we've logged the post-id-missing warning for this run. */
@@ -160,6 +163,11 @@ export class MattermostService implements Notifier, vscode.Disposable {
       this.pipelineStateService.onStateChanged((state) => {
         if (this.slotDisposables.size > 0) return;
         if (state) void this.handleStateChanged(state as unknown as PipelineStateSnapshot);
+      }),
+      // The run is terminal AND its final metadata is written (#1127).
+      this.pipelineStateService.onRunFinalized((state) => {
+        if (this.slotDisposables.size > 0) return;
+        if (state) void this.handleRunFinalized(state as unknown as PipelineStateSnapshot);
       })
     );
     this.logger.info("MattermostService initialized");
@@ -177,6 +185,11 @@ export class MattermostService implements Notifier, vscode.Disposable {
     } else {
       this.scheduleUpdate(ctx.issueNumber);
     }
+  }
+
+  onPipelineFinal(ctx: PipelineEventContext): void {
+    if (!ctx.state) return;
+    void this.handleRunFinalized(ctx.state as unknown as PipelineStateSnapshot);
   }
 
   // ─── Concurrent worktree slot subscription ────────────────────────────────
@@ -204,6 +217,12 @@ export class MattermostService implements Notifier, vscode.Disposable {
         if (snap.issue_number !== issueNumber) return;
         void this.handleStateChanged(snap);
       }),
+      slotStateService.onRunFinalized((state) => {
+        if (!state) return;
+        const snap = state as unknown as PipelineStateSnapshot;
+        if (snap.issue_number !== issueNumber) return;
+        void this.handleRunFinalized(snap);
+      }),
     ];
 
     this.slotDisposables.set(issueNumber, subs);
@@ -215,6 +234,12 @@ export class MattermostService implements Notifier, vscode.Disposable {
     if (subs) {
       for (const s of subs) s.dispose();
       this.slotDisposables.delete(issueNumber);
+    }
+    // No further event can reach this run once the slot is gone — flush it
+    // rather than strand a terminal card mid-state (#1127).
+    const run = this.runs.get(issueNumber);
+    if (run?.isFinal && !run.finalFlushed && run.finalSnapshot) {
+      void this.handleRunFinalized(run.finalSnapshot);
     }
   }
 
@@ -287,6 +312,7 @@ export class MattermostService implements Notifier, vscode.Disposable {
       costUsd: 0,
       stageStartTimes: new Map(),
       isFinal: false,
+      finalFlushed: false,
       finalPatchRetries: 0,
       editMode: "edit",
       fallbackWarned: false,
@@ -379,6 +405,28 @@ export class MattermostService implements Notifier, vscode.Disposable {
     this.scheduleUpdate(state.issue_number);
   }
 
+  /**
+   * Terminal flush (#1127) — render the run once more from the state as it
+   * finally stands. The orchestrator writes the health score after
+   * `outcome_type` is already on the state, so the patch dispatched on the
+   * first outcome sighting is not the run's last word.
+   *
+   * Idempotent, and a no-op in post-only mode: without an editable post a
+   * second render would append a duplicate card to the channel rather than
+   * correct the first one.
+   */
+  private async handleRunFinalized(state: PipelineStateSnapshot): Promise<void> {
+    const run = this.runs.get(state.issue_number);
+    if (!run || run.finalFlushed) return;
+    if (run.editMode === "post-only") return;
+
+    run.isFinal = true;
+    run.finalFlushed = true;
+    run.finalSnapshot = state;
+    this.patcher.cancel(state.issue_number);
+    await this.patchPost(state.issue_number);
+  }
+
   // ─── Debounced update / retry ─────────────────────────────────────────────
 
   private scheduleUpdate(issueNumber: number): void {
@@ -414,6 +462,8 @@ export class MattermostService implements Notifier, vscode.Disposable {
     for (const [issueNumber, run] of this.runs) {
       if (issueNumber === excludeIssue) continue;
       if (run.isFinal && run.finalSnapshot) {
+        // No terminal flush is coming for a run the queue has moved past.
+        run.finalFlushed = true;
         this.patcher.cancel(issueNumber);
         void this.patchPost(issueNumber);
       }
@@ -513,7 +563,8 @@ export class MattermostService implements Notifier, vscode.Disposable {
     }
 
     NotifierStatusTracker.getInstance()?.recordSuccess("mattermost");
-    if (run.isFinal) this.runs.delete(issueNumber);
+    // Released only after the terminal flush — see handleRunFinalized (#1127).
+    if (run.isFinal && run.finalFlushed) this.runs.delete(issueNumber);
   }
 
   private handlePatchFailure(

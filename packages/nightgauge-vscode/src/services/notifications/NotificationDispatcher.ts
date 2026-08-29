@@ -86,6 +86,23 @@ export class NotificationDispatcher implements Notifier, vscode.Disposable {
     }
   }
 
+  /**
+   * Terminal flush fan-out (#1127). Routed under `pipeline.complete` — a
+   * channel that suppresses completion events does not want the terminal card
+   * either.
+   */
+  onPipelineFinal(ctx: PipelineEventContext): void {
+    const eventKey: EventKey = ctx.eventKey ?? "pipeline.complete";
+    for (const { id, notifier } of this.entries) {
+      if (!this.router.shouldDeliver(id, eventKey)) continue;
+      try {
+        notifier.onPipelineFinal(ctx);
+      } catch (error) {
+        this.logger.warn("Notifier onPipelineFinal() threw", { error });
+      }
+    }
+  }
+
   subscribeToSlot(
     issueNumber: number,
     slotStateService: PipelineStateService,
