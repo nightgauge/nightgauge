@@ -672,8 +672,13 @@ issue_references:
   # hazard the rule exists to prevent. A falling count is therefore ambiguous:
   # part sweep, part erosion. Tracked separately — do not read this number as a
   # measure of the sweep on its own.
+  # 2026-08-28 (post-#1070): 5,774 — measured on a settled tree after the Slack
+  # epic merged. The fall is the ambiguous kind described directly above: the
+  # Slack work wrote no new citations, so this is the derived mark rising past
+  # references rather than a sweep retiring them. Recorded to keep the ratchet
+  # tight, not claimed as progress.
   # NEVER raise this number. Lower it as the sweep progresses.
-  tree_baseline: 5796
+  tree_baseline: 5774
   allow_paths:
     # Files that DEFINE or TEST the rule must contain example violations.
     - ".github/publication-boundary.yaml"
