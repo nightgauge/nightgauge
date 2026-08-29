@@ -177,6 +177,16 @@ import { withBehavioralPreamble } from "./behavioralPreamble";
 import type { KillCeiling } from "./killCeiling";
 import { formatKillCeilingValue, msLimit } from "./killCeiling";
 import { ProgressMonitor, recordToolCallProgress, isBlindMonitorKill } from "./progressMonitor";
+import {
+  declaredTimeoutMs,
+  longToolCallReportBucket,
+  formatLongSilentTask,
+  formatLongToolCall,
+  formatTimeoutOverrun,
+  formatWorktreeSummary,
+  summarizeWorktreeChanges,
+  PolledTaskSilenceTracker,
+} from "./toolCallDiagnostics";
 import { preserveWorkInProgress, shouldPreserveWorkOnExit } from "./preserveWorkInProgress";
 import {
   captureContainmentBaseline,
@@ -940,6 +950,23 @@ const LIGHTWEIGHT_STAGE_DEFAULTS: Partial<Record<PipelineStage, DefaultModel>> =
  * Count total lines changed (insertions + deletions) in the current branch vs main.
  * Returns 0 on any error so callers fall through to the default model.
  */
+/**
+ * `git status --porcelain` for the wedge diagnostic (#1118).
+ *
+ * Read-only and short-bounded. Throws are the caller's to swallow —
+ * `summarizeWorktreeChanges` degrades to no summary rather than letting a
+ * diagnostic take down the stage it is describing. It lives here rather than
+ * in toolCallDiagnostics.ts because this file already owns the exemption for a
+ * short-timeout synchronous git read, and that module stays free of spawning.
+ */
+function readPorcelainStatus(worktreePath: string): string {
+  return execFileSync("git", ["status", "--porcelain"], {
+    cwd: worktreePath,
+    encoding: "utf-8",
+    timeout: 5000,
+  });
+}
+
 function getDiffLineCount(workspaceRoot: string): number {
   try {
     const result = execFileSync("git", ["diff", "main", "--shortstat"], {
@@ -6092,6 +6119,44 @@ export function runStageSkillHeadless(
   // heartbeat, or a wedged call would log every 30 seconds until the kill.
   const wedgedToolCallsReported = new Set<string>();
 
+  // What each in-flight tool call declared about itself (#1118). A heartbeat
+  // carries only an id, an optional name and an elapsed time — the timeout the
+  // call asked for lives in the ORIGINAL tool_use input, which is why an
+  // overrun was previously unreportable. Bounded: a stage can make thousands
+  // of calls and this must not grow with them.
+  const TOOL_CALL_DECLARATIONS_MAX = 256;
+  const toolCallDeclarations = new Map<string, { name: string; timeoutMs?: number }>();
+  // Highest reporting window already logged per call, so the periodic line
+  // fires once per window rather than once per heartbeat.
+  const longToolCallReportedBucket = new Map<string, number>();
+  const timeoutOverrunReported = new Set<string>();
+
+  const rememberToolCallDeclaration = (name: string, input: unknown, id?: string): void => {
+    if (id === undefined) return;
+    if (toolCallDeclarations.size >= TOOL_CALL_DECLARATIONS_MAX) {
+      const oldest = toolCallDeclarations.keys().next();
+      if (!oldest.done) toolCallDeclarations.delete(oldest.value);
+    }
+    toolCallDeclarations.set(id, { name, timeoutMs: declaredTimeoutMs(input) });
+  };
+
+  // How long each polled task has gone without producing new output (#1118).
+  //
+  // WEDGED_TOOL_CALL_CEILING_S is compared against ONE call's elapsed time,
+  // and a task polled by a series of short bounded calls never reaches it —
+  // 15 calls, none above ~4.5 minutes, against a 20-minute ceiling. That gap
+  // is real, but it must NOT be closed by keying a kill to the task instead:
+  // the run that motivated this issue looked exactly like a wedge (15 polls,
+  // no incremental output, zero CPU) and COMPLETED SUCCESSFULLY at ~24
+  // minutes, because its output was piped through `tail` and buffered. A
+  // task-keyed kill predicate would have reclaimed it at minute 20 and taken
+  // the worktree with it, four minutes before it succeeded.
+  //
+  // "Produced no new output" cannot distinguish a wedged task from a quiet
+  // one, so this tracker only REPORTS. It never withholds activity and never
+  // makes a stage killable that was not killable before.
+  const polledTasks = new PolledTaskSilenceTracker(WEDGED_TOOL_CALL_CEILING_S * 1000);
+
   let lastToolCall: { name: string; inputHash: string } | null = null;
   let consecutiveAttempts = 0;
 
@@ -6174,6 +6239,11 @@ export function runStageSkillHeadless(
     recentBashRing.observeToolUse(name, input, id);
     // All-tools call log (Issue #144) — every tool, not just Bash.
     toolCallLog.observeToolUse(name, input, id);
+    // Wedge diagnostics (#1118): the only point at which a call's declared
+    // timeout, and the task it is polling, are visible. Heartbeats arrive
+    // later carrying nothing but a tool_use id.
+    rememberToolCallDeclaration(name, input, id);
+    polledTasks.observePoll(name, input, id, Date.now());
 
     callbacks?.onToolUse?.(name, input, id);
     // Dashboard tool-call recording (#639).
@@ -6280,17 +6350,113 @@ export function runStageSkillHeadless(
       // observed was ~17 minutes (a cold codegen build), the wedge was 25.
       // An observed-range choice, not a derived one — widen it if a real
       // command is found above it.
+      //
+      // Everything #1118 adds below is REPORTING. Which heartbeats count as
+      // activity is decided by the ceiling above and by nothing else — a
+      // deliberate correction. It is very natural to notice that a task
+      // polled by a series of short calls never reaches the per-call ceiling
+      // (15 calls, none above ~4.5 minutes) and to key the clock to the task
+      // instead. That is wrong, and the motivating run is the counter-example:
+      // the codegen step that looked wedged — 15 polls, no incremental
+      // output, zero CPU — COMPLETED SUCCESSFULLY at ~24 minutes, because its
+      // output was piped through `tail` and buffered. A task-keyed kill would
+      // have reclaimed the stage at minute 20 and destroyed the worktree four
+      // minutes before it succeeded. "Produced no new output" cannot tell a
+      // wedged task from a quiet one, and the false positive is strictly
+      // worse than the bug.
       if (parsed?.type === "tool_progress" && parsed.toolProgress) {
         const { toolUseId, toolName, elapsedSeconds } = parsed.toolProgress;
+        const declaration = toolCallDeclarations.get(toolUseId);
+        const resolvedName = toolName ?? declaration?.name;
+        const nowMs = Date.now();
+
         if (elapsedSeconds <= WEDGED_TOOL_CALL_CEILING_S) {
           progressMonitor.recordSignal("tool_heartbeat");
+
+          // #1118: under the ceiling, a wedge and a healthy long call were
+          // byte-identical in the log — heartbeats were consumed in silence,
+          // so "is this hung?" needed `ps` and `lsof` by hand. Report on a
+          // fixed cadence (see LONG_TOOL_CALL_REPORT_INTERVAL_S) rather than
+          // per heartbeat, so the operator can watch a call approach the
+          // ceiling without the line becoming noise.
+          const bucket = longToolCallReportBucket(elapsedSeconds);
+          if (bucket > 0 && (longToolCallReportedBucket.get(toolUseId) ?? 0) < bucket) {
+            longToolCallReportedBucket.set(toolUseId, bucket);
+            callbacks?.onStderr?.(
+              formatLongToolCall({
+                stage,
+                toolName: resolvedName,
+                elapsedSeconds,
+                ceilingSeconds: WEDGED_TOOL_CALL_CEILING_S,
+                declaredTimeoutMs: declaration?.timeoutMs,
+              })
+            );
+          }
         } else if (!wedgedToolCallsReported.has(toolUseId)) {
           wedgedToolCallsReported.add(toolUseId);
+          // #1118: the wedge's real cost is the tree it strands. Reporting
+          // only "a tool call was wedged" made the operator run git by hand
+          // to find out what was at stake — a deletes-then-regenerates
+          // codegen step interrupted mid-flight leaves a tree dominated by
+          // deletions with hand-edited files mixed in. Read-only, and silent
+          // when git cannot be read.
+          const worktree = formatWorktreeSummary(
+            workspaceRoot,
+            summarizeWorktreeChanges(workspaceRoot, readPorcelainStatus)
+          );
           callbacks?.onStderr?.(
-            `[wedged-tool-call] Stage ${stage}: ${toolName ?? "a tool call"} has been ` +
+            `[wedged-tool-call] Stage ${stage}: ${resolvedName ?? "a tool call"} has been ` +
               `running for ${Math.round(elapsedSeconds)}s, past the ` +
               `${WEDGED_TOOL_CALL_CEILING_S}s ceiling. Its heartbeats no longer defer the ` +
-              `runaway guard — the stage is now killable as it was before. (#1083)\n`
+              `runaway guard — the stage is now killable as it was before. (#1083)` +
+              `${worktree} (#1118)\n`
+          );
+        }
+
+        // #1118: a task that has been polled repeatedly and has said nothing
+        // for a long time. The per-call ceiling cannot see this — every poll
+        // is short — so without this line the operator has no signal at all
+        // until the whole stage dies. It is an OBSERVATION, not a verdict:
+        // the run this came from finished successfully at ~24 minutes looking
+        // exactly like this. Emitted after the branch above precisely so it
+        // cannot be mistaken for a gate on activity; nothing above consulted
+        // it. One line per silence, cleared when the task speaks again.
+        const polledTaskId = polledTasks.taskForToolUse(toolUseId);
+        if (polledTaskId !== undefined) {
+          const silence = polledTasks.silenceToReport(polledTaskId, nowMs);
+          if (silence) {
+            callbacks?.onStderr?.(
+              formatLongSilentTask({
+                stage,
+                toolName: resolvedName,
+                silence,
+                worktreeSummary: formatWorktreeSummary(
+                  workspaceRoot,
+                  summarizeWorktreeChanges(workspaceRoot, readPorcelainStatus)
+                ),
+              })
+            );
+          }
+        }
+
+        // #1118: independent of the ceiling. A call that declared a 300000ms
+        // timeout and is still running at 900s is already wrong, and the
+        // declared limit going unmentioned is its own silent failure. One
+        // line per call, whichever side of the ceiling it happens on.
+        const timeoutMs = declaration?.timeoutMs;
+        if (
+          timeoutMs !== undefined &&
+          elapsedSeconds * 1000 > timeoutMs &&
+          !timeoutOverrunReported.has(toolUseId)
+        ) {
+          timeoutOverrunReported.add(toolUseId);
+          callbacks?.onStderr?.(
+            formatTimeoutOverrun({
+              stage,
+              toolName: resolvedName,
+              elapsedSeconds,
+              declaredTimeoutMs: timeoutMs,
+            })
           );
         }
       }
@@ -6386,6 +6552,13 @@ export function runStageSkillHeadless(
       // never again go silent for the whole stage. The returned count powers
       // the fail-open guard in checkRunaway. Kept separate from the phase
       // inference above (different concern: window progress vs phase tracking).
+      //
+      // #1118 deliberately does NOT filter repeat polls out of this feed. A
+      // poll of a task that has said nothing looks like a wedge and looks
+      // exactly the same as a poll of a task that is quietly compiling; the
+      // motivating run was the latter and finished successfully. Withholding
+      // the signal would make such a stage killable, so the tracker only
+      // reports and this call site is untouched.
       parsedToolEventCount += recordToolCallProgress(progressMonitor, parsed);
 
       if (parsed?.usage) {
@@ -6481,6 +6654,16 @@ export function runStageSkillHeadless(
           toolResult.toolUseId,
           toolResult.isError,
           typeof toolResult.content === "string" ? toolResult.content.substring(0, 200) : undefined
+        );
+        // #1118: the poll's answer, against the FULL body rather than the
+        // 200-char prefix above — a poll that re-echoes a long unchanged
+        // buffer is identical in its first 200 characters whether or not the
+        // task moved. Output that differs from the previous look is the only
+        // thing that restarts the polled-task wedge clock.
+        polledTasks.observeResult(
+          toolResult.toolUseId,
+          typeof toolResult.content === "string" ? toolResult.content : undefined,
+          Date.now()
         );
       }
 
