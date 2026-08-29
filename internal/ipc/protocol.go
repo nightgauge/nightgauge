@@ -48,6 +48,12 @@ const (
 	// this numeric code lets a client separate "the server refused this run
 	// message" from an ordinary internal error without parsing prose.
 	ErrRunIdentity = -32010
+	// ErrUnauthorized is returned when the daemon socket refuses a connection
+	// before dispatching anything (ADR 017 R-2, #378). It is distinct from
+	// ErrInternal so a client can tell "the daemon would not talk to me" from
+	// "the daemon tried and failed", and distinct from ErrRunIdentity because
+	// no run is involved: the refusal happens before the request is read.
+	ErrUnauthorized = -32011
 )
 
 // ProtocolVersion is the current IPC protocol version.

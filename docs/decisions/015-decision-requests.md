@@ -851,6 +851,15 @@ a bookkeeping verb" describe that pre-existing surface.
 > the socket a **run identity**, not **authentication**, and the two halves of
 > this residual separate along exactly that line. See the amendment under
 > "Residual exposure" below.
+>
+> **Further amended by #378 (ADR 017 R-2).** The socket is now authenticated by
+> peer credential: a connection whose uid is not the daemon's own is refused
+> before the request is read, so "a hostile local process is out of scope"
+> narrows to **a hostile process running as the operator's own uid**. Every verb
+> listed above is still unauthenticated _within_ that boundary — the check is at
+> the transport, not per verb — so reviews of the form "a same-uid caller can
+> poison a bookkeeping verb" still describe a real, accepted surface. A caller
+> running as a different user no longer reaches those verbs at all.
 
 **What `attention.raise` guarantees inside that model.** Three properties, none
 of which depend on the socket being authenticated:

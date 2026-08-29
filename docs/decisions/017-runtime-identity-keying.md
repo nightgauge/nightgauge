@@ -2838,6 +2838,20 @@ progression) remain the only mitigation. Socket authentication is the named
 successor, filed at merge alongside R-1. No new capability against a run the
 caller did not start is introduced by this ADR (C8).
 
+> **R-2 closed for the cross-uid case by #378.** The socket now performs a peer
+> credential check (`SO_PEERCRED` on Linux, `LOCAL_PEERCRED` on Darwin) before a
+> request is read, so a connection whose peer uid is not the daemon's own is
+> refused before any verb dispatches — the forgery half above is closed against
+> a caller running as a _different_ user.
+>
+> It is **not** closed against a process running as the **same uid**, which
+> remains inside the declared trust boundary. Unix domain sockets offer no way
+> to separate same-uid callers, and a token on disk would not either: a same-uid
+> process can read the secret exactly as it can dial the socket. Closing that
+> would mean changing the trust model — sandboxing the daemon, or moving to a
+> channel with per-caller identity — not adding another check at this layer.
+> R-2 is therefore narrowed, not retired.
+
 **A false-positive lease expiry can re-emit a terminal event — residual risk
 R-3.** A live-but-silent run reconciled after 30 minutes gets a `pipeline_done`
 it will later contradict. The event is keyed by run id, so the platform side

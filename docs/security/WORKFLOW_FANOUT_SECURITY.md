@@ -36,6 +36,14 @@ prompt-injection / secret-exfiltration risk.
   drain), prompt injection to make an agent run dangerous shell, and
   secret-exfiltration (reading env/credentials and emitting them in output or
   to the network).
+- **The daemon IPC socket is authenticated by peer credential (#378), and that
+  does not contain a spawned agent.** The socket refuses any connection whose
+  uid is not the daemon's own, which closes it to other users on the machine.
+  A spawned agent is not another user: per F4 it inherits the parent
+  environment and runs as the same uid, so it is _inside_ the socket's trust
+  boundary and can drive pipeline verbs. Read "the socket is authenticated" as
+  "no other account can reach it", never as "a spawned agent is contained" —
+  containment for spawned agents is F4's problem, not the socket's.
 
 ## Risk-rating scale
 
