@@ -137,16 +137,18 @@ drift between local and team config, and move overrides up the stack.
 
 ## Privacy and Telemetry
 
-Telemetry is off by default and requires an explicit opt-in. VS Code's global
-telemetry-off setting is honored as a hard stop. When enabled, the
+Telemetry is on by default and you are asked on first activation whether to
+keep it on; turning it off there, or later in Settings, is honored permanently.
+VS Code's global telemetry-off setting is honored as a hard stop. Without a
+platform license key or sign-in nothing is uploaded at all. When enabled, the
 `pipeline-run` stream includes the repository slug and issue number as
 correlation keys, plus bounded outcome, duration, and token counters; it never
 sends source code, file contents, prompts, secrets, branch names, or commit
 SHAs. Streams can be disabled independently at any time.
 
-Read [Telemetry Privacy](../../docs/TELEMETRY_PRIVACY.md) before enabling
-telemetry for the complete field list, retention policy, controls, and deletion
-instructions.
+Read [Telemetry Privacy](https://github.com/nightgauge/nightgauge/blob/main/docs/TELEMETRY_PRIVACY.md)
+for the complete field list, retention policy, controls, and deletion
+instructions, and the [Nightgauge Privacy Policy](https://nightgauge.dev/privacy/).
 
 ## Commands
 
