@@ -158,6 +158,17 @@ if [ -f scripts/test-publication-boundary-ceiling.py ]; then
     python3 scripts/test-publication-boundary-ceiling.py
 fi
 
+# 5b-i-c. Branch-local ceiling lag and baseline erosion (#1129) — the derived
+#     ceiling is per-branch and `git merge origin/main` does NOT advance it
+#     (the merge is the second parent), while `tree_baseline` is one global
+#     integer compared against a count that GROWS as the ceiling falls. The two
+#     together blocked a branch with references it never wrote. Same
+#     throwaway-repo shape: these cases need controlled merge topology.
+if [ -f scripts/test-publication-boundary-erosion.py ]; then
+  run_step "Publication boundary ceiling lag and erosion" \
+    python3 scripts/test-publication-boundary-erosion.py
+fi
+
 # 5b-ii. Publication boundary suite hermeticity (#713, #722) — the suite plants
 #     deliberately-forbidden fixtures, so two properties have to hold and
 #     neither is self-evident from reading it: a SIGKILLed run leaves the
