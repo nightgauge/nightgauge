@@ -491,3 +491,62 @@ func TestProjectFieldFullNodeNoInlineBraces(t *testing.T) {
 		}
 	}
 }
+
+// --- 4. Union Selection Validation -------------------------------------------
+
+// unionNodeTypes registers every query struct that maps onto a GraphQL *union*
+// type. Membership is deliberately hand-maintained rather than inferred from
+// the presence of a `__typename` tag: `__typename` is equally legal on an
+// interface, and an interface DOES permit selecting its common fields directly.
+// A blanket rule would flag those correctly-written structs.
+var unionNodeTypes = map[string]reflect.Type{
+	// SearchResultItem — search(type: ISSUE).nodes
+	"searchIssueNode": reflect.TypeOf(searchIssueNode{}),
+	// ProjectV2ItemContent — projectV2Item.content
+	"projectItemContent": reflect.TypeOf(projectItemContent{}),
+	// ProjectV2ItemFieldValue — projectV2Item.fieldValues.nodes
+	"fieldValueNode": reflect.TypeOf(fieldValueNode{}),
+}
+
+// TestUnionNodesSelectThroughInlineFragments asserts that structs mapping onto
+// GraphQL unions select every field through an `... on <Type>` inline fragment,
+// with `__typename` as the sole permitted exception.
+//
+// Regression test for #1094. searchIssueNode selected id/number/title/state/url
+// at the top level of a SearchResultItem, so GitHub rejected the query with
+// "Selections can't be made directly on unions" before the search ever ran —
+// `nightgauge issue list --search` had never worked in any invocation. Nothing
+// caught it because the error is raised server-side at query-validation time
+// and no test exercised SearchIssues against a real schema.
+//
+// The failure is invisible to the compiler and to every mock-backed test, which
+// is why it is asserted structurally here rather than left to a live call.
+func TestUnionNodesSelectThroughInlineFragments(t *testing.T) {
+	for name, typ := range unionNodeTypes {
+		t.Run(name, func(t *testing.T) {
+			fragments := 0
+			for i := 0; i < typ.NumField(); i++ {
+				f := typ.Field(i)
+				tag := f.Tag.Get("graphql")
+
+				if tag == "__typename" {
+					continue
+				}
+				if strings.HasPrefix(tag, "... on ") {
+					fragments++
+					continue
+				}
+
+				t.Errorf("%s.%s selects %q directly on a union; GitHub rejects "+
+					"the whole query with \"Selections can't be made directly on "+
+					"unions\". Move it inside an `... on <Type>` inline fragment.",
+					name, f.Name, tag)
+			}
+			if fragments == 0 {
+				t.Errorf("%s is registered as a union node but selects nothing "+
+					"through an inline fragment — either the struct is wrong or "+
+					"it does not belong in unionNodeTypes", name)
+			}
+		})
+	}
+}

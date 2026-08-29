@@ -1017,15 +1017,16 @@ func (s *IssueService) SearchIssues(ctx context.Context, owner, repo, query stri
 		if n.TypeName != "Issue" {
 			continue
 		}
+		f := n.IssueFields
 		issue := types.Issue{
-			NodeID: fmt.Sprintf("%v", n.ID),
-			Number: int(n.Number),
-			Title:  string(n.Title),
-			State:  string(n.State),
-			Repo:   string(n.Repository.NameWithOwner),
-			URL:    string(n.URL),
+			NodeID: fmt.Sprintf("%v", f.ID),
+			Number: int(f.Number),
+			Title:  string(f.Title),
+			State:  string(f.State),
+			Repo:   string(f.Repository.NameWithOwner),
+			URL:    string(f.URL),
 		}
-		for _, l := range n.Labels.Nodes {
+		for _, l := range f.Labels.Nodes {
 			issue.Labels = append(issue.Labels, string(l.Name))
 		}
 		issues = append(issues, issue)
