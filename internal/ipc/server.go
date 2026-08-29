@@ -4078,6 +4078,16 @@ func (s *Server) registerMethods() {
 		if s.scheduler == nil {
 			return nil, errors.New(errSchedulerNotConfigured)
 		}
+		// Human-only label refusal (#1146): the CLI `queue add` already
+		// refuses an issue carrying an autonomous.exclude_labels label, and
+		// this path did not — the same operation gave two different answers.
+		// Both resolve the set from Scheduler.ExcludeLabels(), so they cannot
+		// drift. DequeueIndependent is still the backstop for every other
+		// route; refusing here just gives the caller the reason at the door
+		// instead of a silent "ok" for work that will never be dispatched.
+		if label, excluded := orchestrator.ExcludedLabelMatch(p.Labels, s.scheduler.ExcludeLabels()); excluded {
+			return nil, fmt.Errorf("issue #%d carries human-only label %q (autonomous.exclude_labels) and was not queued", p.IssueNumber, label)
+		}
 		repo := fmt.Sprintf("%s/%s", p.Owner, p.Repo)
 		s.scheduler.QueueAddItem(orchestrator.QueueItem{
 			Repo:        repo,
