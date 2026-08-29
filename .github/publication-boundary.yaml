@@ -678,7 +678,7 @@ issue_references:
   # references rather than a sweep retiring them. Recorded to keep the ratchet
   # tight, not claimed as progress.
   # NEVER raise this number. Lower it as the sweep progresses.
-  tree_baseline: 5774
+  tree_baseline: 5754
   allow_paths:
     # Files that DEFINE or TEST the rule must contain example violations.
     - ".github/publication-boundary.yaml"
