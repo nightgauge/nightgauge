@@ -58,6 +58,9 @@ vi.mock("../../src/utils/nightgaugeConfig", () => ({
 }));
 
 const mockAutonomousPause = vi.fn().mockResolvedValue(undefined);
+// #1148: a located failure halts its repository, not the fleet. The fleet verb
+// survives only as the fallback for a dispatch with no repo identity.
+const mockAutonomousPauseRepo = vi.fn().mockResolvedValue(undefined);
 const mockAutonomousStatus = vi.fn();
 
 /**
@@ -87,6 +90,7 @@ vi.mock("../../src/services/IpcClient", () => ({
       gitComposeBranchName,
       autonomousStatus: mockAutonomousStatus,
       autonomousPause: mockAutonomousPause,
+      autonomousPauseRepo: mockAutonomousPauseRepo,
     }),
   },
 }));
@@ -99,15 +103,17 @@ interface QueueItem {
   position: number;
   status: string;
   addedAt: string;
+  repoName?: string;
 }
 
-function makeQueueItem(issueNumber: number): QueueItem {
+function makeQueueItem(issueNumber: number, repoName?: string): QueueItem {
   return {
     issueNumber,
     title: `Issue #${issueNumber}`,
     position: 1,
     status: "pending",
     addedAt: new Date().toISOString(),
+    ...(repoName ? { repoName } : {}),
   };
 }
 
@@ -119,6 +125,7 @@ function createControllableFactory() {
       orchestrator: {
         setWorktreeOverride: vi.fn(),
         setRunRepoRoot: vi.fn(),
+        setRepoOverride: vi.fn(),
         setUnattended: vi.fn(),
         // ADR-017 step 3 (#370): the slot resolves its repo through the
         // orchestrator when the queue item and the workspace manifest cannot
@@ -165,13 +172,13 @@ describe("ConcurrentPipelineManager — haltQueueOnSlotFailure pause reason (#32
     mockAutonomousStatus.mockResolvedValue({ status: "running" });
   });
 
-  it("passes a structured reason + triggeredBy to autonomousPause when a slot fails", async () => {
+  it("passes a structured reason + triggeredBy to autonomousPauseRepo when a slot fails", async () => {
     const manager = new ConcurrentPipelineManager(
       "/test-repo",
       {
         dequeueIndependent: vi
           .fn()
-          .mockResolvedValueOnce([makeQueueItem(3239)])
+          .mockResolvedValueOnce([makeQueueItem(3239, "nightgauge/nightgauge")])
           .mockResolvedValue([]),
         updateActiveSlots: vi.fn().mockResolvedValue(undefined),
         drainBlockedSuccessors: vi.fn().mockResolvedValue([]),
@@ -195,8 +202,13 @@ describe("ConcurrentPipelineManager — haltQueueOnSlotFailure pause reason (#32
     // pause) instead of a fixed sleep that raced the async chain under load (#100).
     await manager.settleForTest(3239);
 
-    expect(mockAutonomousPause).toHaveBeenCalledTimes(1);
-    const [reason, triggeredBy, repo, issueNumber, stage] = mockAutonomousPause.mock.calls[0];
+    // #1148: the halt is scoped to the repository that produced the failure,
+    // so the structured fields ride the repo verb now. Argument order differs
+    // from the fleet verb: repo comes FIRST, because it is required rather
+    // than additive.
+    expect(mockAutonomousPause).not.toHaveBeenCalled();
+    expect(mockAutonomousPauseRepo).toHaveBeenCalledTimes(1);
+    const [repo, reason, triggeredBy, issueNumber, stage] = mockAutonomousPauseRepo.mock.calls[0];
     expect(reason).toContain("haltQueueOnSlotFailure");
     expect(reason).toContain("3239");
     expect(reason).toContain("pr-merge");
@@ -207,7 +219,42 @@ describe("ConcurrentPipelineManager — haltQueueOnSlotFailure pause reason (#32
     // scan cycle later.
     expect(issueNumber).toBe(3239);
     expect(stage).toBe("pr-merge");
-    expect(typeof repo).toBe("string");
+    expect(repo).toBe("nightgauge/nightgauge");
+  });
+
+  // #1148 — the fallback. A dispatch that could not be attributed to a repo
+  // cannot be scoped, and narrowing on a guess would let a real defect keep
+  // dispatching. The scope collapses to the fleet instead of vanishing.
+  it("falls back to the fleet pause when the dispatch has no repo identity", async () => {
+    const manager = new ConcurrentPipelineManager(
+      "/test-repo",
+      {
+        dequeueIndependent: vi
+          .fn()
+          .mockResolvedValueOnce([makeQueueItem(3240)])
+          .mockResolvedValue([]),
+        updateActiveSlots: vi.fn().mockResolvedValue(undefined),
+        drainBlockedSuccessors: vi.fn().mockResolvedValue([]),
+        enqueue: vi.fn().mockResolvedValue(null),
+        clear: vi.fn().mockResolvedValue(undefined),
+        getQueue: vi.fn().mockResolvedValue({ items: [], status: "idle" }),
+      } as any,
+      ((): any => {
+        const c = createControllableFactory();
+        (globalThis as any).__controllableNoRepo = c;
+        return c.factory;
+      })(),
+      { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), getChannel: vi.fn() } as any,
+      { maxConcurrent: 1, worktreeBase: ".worktrees" }
+    );
+
+    await manager.fillSlots();
+    (globalThis as any).__controllableNoRepo.failIssue(3240, "pr-merge");
+    await manager.settleForTest(3240);
+
+    expect(mockAutonomousPauseRepo).not.toHaveBeenCalled();
+    expect(mockAutonomousPause).toHaveBeenCalledTimes(1);
+    expect(mockAutonomousPause.mock.calls[0][1]).toBe("haltQueueOnSlotFailure");
   });
 
   it("does not call autonomousPause when Go autonomous is not running", async () => {

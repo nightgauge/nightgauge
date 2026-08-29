@@ -183,9 +183,12 @@ describe("registerAutonomousCommands", () => {
     it("returns an array of disposables (one per command + two event listeners)", () => {
       const disposables = registerAutonomousCommands(mockLogger, mockStatusBar, null);
       // 2 event listeners (autonomous.statusChanged + autonomous.dispatch)
-      // + 9 command handlers = 11 disposables. #3251 added statusChanged.
-      // #3446 added autonomousClearQuotaCooldown.
-      expect(disposables).toHaveLength(11);
+      // + 10 command handlers = 12 disposables. #3251 added statusChanged.
+      // #3446 added autonomousClearQuotaCooldown. #1148 added
+      // autonomousResumeRepo — a repo-scoped halt leaves fleet status
+      // "running", so the fleet Resume button is not even shown for it and a
+      // halted repo would otherwise have no operator affordance at all.
+      expect(disposables).toHaveLength(12);
       disposables.forEach((d) => expect(d).toHaveProperty("dispose"));
     });
 
@@ -198,6 +201,7 @@ describe("registerAutonomousCommands", () => {
       expect(registered).toContain("nightgauge.autonomousDryRun");
       expect(registered).toContain("nightgauge.autonomousPause");
       expect(registered).toContain("nightgauge.autonomousResume");
+      expect(registered).toContain("nightgauge.autonomousResumeRepo");
       expect(registered).toContain("nightgauge.autonomousStop");
       expect(registered).toContain("nightgauge.autonomousStatus");
       expect(registered).toContain("nightgauge.autonomousSelectRepos");

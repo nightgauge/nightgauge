@@ -396,6 +396,43 @@ type AutonomousState struct {
 	// (#4073). Re-computed each idle cycle; surfaced via `autonomous stuck-epics`
 	// and the IPC snapshot. Empty when nothing is stalled.
 	StuckEpics []StuckEpic `json:"stuckEpics,omitempty"`
+
+	// PausedRepos is the REPO-SCOPED halt (#1148), keyed "owner/repo".
+	//
+	// A terminal stage failure is evidence about ONE repository — its code,
+	// its tests, its worktree, its branch. Before this, the extension's
+	// haltQueueOnSlotFailure answered it by pausing the whole fleet: Status
+	// went to "paused" and every OTHER repository in a multi-repo workspace
+	// stopped dispatching until a human clicked Resume. The blast radius was
+	// the workspace; the evidence was one issue.
+	//
+	// This is the same shape as QuarantinedIssues (#127) one level up: a
+	// targeted, persisted, human-cleared skip that the dispatch loop consults
+	// per candidate, leaving every unaffected repo running. It is deliberately
+	// NOT the MachineHalt latch — that latch means "the FLEET is waiting on a
+	// human", and claiming it for a single repo is the over-reach being fixed.
+	// A repo entry is its own latch: it survives restarts because it is
+	// persisted, and it is cleared only by ResumeRepo (per-repo Resume) or
+	// Resume (the fleet-wide Resume, which means "go again" everywhere).
+	PausedRepos map[string]*RepoPauseRecord `json:"pausedRepos,omitempty"`
+}
+
+// RepoPauseRecord is one repository's halt (#1148) — the per-repo analogue of
+// PauseReason/PauseTriggeredBy/PausedAt plus the structured fields the
+// terminal-failure card needs to stay discoverable after a restart.
+//
+// It carries Issue/Stage because a paused repo that cannot say WHICH issue
+// stopped it is exactly the "silently forgotten" state the issue's acceptance
+// criteria forbid: the UI renders these fields, so the operator sees "acme/web
+// paused — #12 failed at feature-validate" rather than an unexplained gap in
+// dispatch.
+type RepoPauseRecord struct {
+	Repo        string `json:"repo"`
+	Reason      string `json:"reason,omitempty"`
+	TriggeredBy string `json:"triggeredBy,omitempty"`
+	PausedAt    string `json:"pausedAt,omitempty"`
+	Issue       int    `json:"issue,omitempty"`
+	Stage       string `json:"stage,omitempty"`
 }
 
 // MachineHaltRecord is the persisted machine-halt latch (#405). It is written
@@ -2235,6 +2272,178 @@ func (as *AutonomousScheduler) Pause(reason, triggeredBy string) {
 	}
 }
 
+// PauseRepo halts dispatch for ONE repository (#1148) without touching the
+// fleet's Status. Every other repository in the workspace keeps dispatching;
+// runs already in flight — in this repo or any other — are never aborted, the
+// same contract the fleet-wide halt always had (it suppressed future fills
+// only).
+//
+// It is the machine-raised halt for a terminal stage failure, so like the
+// fleet latch it survives restarts (it is persisted state, not a status) and
+// is released only by an explicit human action: ResumeRepo for this repo, or
+// Resume for the whole fleet. Nothing auto-clears it.
+//
+// Re-pausing an already-paused repo REFRESHES the record rather than being a
+// no-op: the second failure is the current reason the repo is stopped, and
+// showing the operator the first one would be stale by construction.
+//
+// A blank repo is ignored on purpose. A dispatch whose repo identity is
+// unknown cannot be scoped, and silently converting that into a fleet-wide
+// halt is the behaviour this change exists to remove.
+func (as *AutonomousScheduler) PauseRepo(repo, reason, triggeredBy string, issue int, stage string) bool {
+	if as == nil || repo == "" {
+		return false
+	}
+	as.mu.Lock()
+	defer as.mu.Unlock()
+	if as.state == nil {
+		return false
+	}
+	// #3444 parity: decline a slot-failure halt while a quota cooldown is in
+	// force. The cooldown auto-clears; a halt waits for a human. Scoping the
+	// halt to a repo does not make it correct to strand that repo over an
+	// upstream quota miss.
+	if triggeredBy == haltTagSlotFailure && as.state.QuotaCooldownUntil != "" {
+		if until, err := time.Parse(time.RFC3339, as.state.QuotaCooldownUntil); err == nil && time.Now().UTC().Before(until) {
+			log.Printf("autonomous: declining repo halt for %s — quota cooldown active until %s (%s)",
+				repo, as.state.QuotaCooldownUntil, reason)
+			return false
+		}
+	}
+	if as.state.PausedRepos == nil {
+		as.state.PausedRepos = make(map[string]*RepoPauseRecord)
+	}
+	as.state.PausedRepos[repo] = &RepoPauseRecord{
+		Repo:        repo,
+		Reason:      reason,
+		TriggeredBy: triggeredBy,
+		PausedAt:    time.Now().UTC().Format(time.RFC3339),
+		Issue:       issue,
+		Stage:       stage,
+	}
+	log.Printf("autonomous: repo halt raised for %s (%s) — other repositories keep dispatching: %s",
+		repo, triggeredBy, reason)
+	as.persistStateLocked()
+	return true
+}
+
+// ResumeRepo releases one repository's halt (#1148) and returns whether one
+// was in force. It is the per-repo half of Resume: the same clearing of
+// per-issue backoff and failure counts that an explicit operator resume
+// performs, restricted to this repo's keys so a resume of acme/web cannot
+// silently reset another repo's cooldowns.
+func (as *AutonomousScheduler) ResumeRepo(repo string) bool {
+	if as == nil || repo == "" {
+		return false
+	}
+	as.mu.Lock()
+	if as.state == nil || as.state.PausedRepos == nil {
+		as.mu.Unlock()
+		return false
+	}
+	if _, ok := as.state.PausedRepos[repo]; !ok {
+		as.mu.Unlock()
+		return false
+	}
+	delete(as.state.PausedRepos, repo)
+	if len(as.state.PausedRepos) == 0 {
+		as.state.PausedRepos = nil
+	}
+	prefix := repo + "#"
+	for k := range as.perIssueFailureCount {
+		if strings.HasPrefix(k, prefix) {
+			delete(as.perIssueFailureCount, k)
+		}
+	}
+	for k := range as.retryBackoff {
+		if strings.HasPrefix(k, prefix) {
+			delete(as.retryBackoff, k)
+		}
+	}
+	for k := range as.conflictRestartCount {
+		if strings.HasPrefix(k, prefix) {
+			delete(as.conflictRestartCount, k)
+		}
+	}
+	as.persistStateLocked()
+	as.mu.Unlock()
+	log.Printf("autonomous: repo halt released for %s", repo)
+	// The halt is over, so its card must go with it — same contract as the
+	// fleet resume, evaluated on the next reconcile pass.
+	as.reconcileTerminalFailureCards()
+	select {
+	case as.rescanCh <- struct{}{}:
+	default:
+	}
+	return true
+}
+
+// RepoPaused reports whether dispatch is halted for this repository.
+func (as *AutonomousScheduler) RepoPaused(repo string) bool {
+	if as == nil || repo == "" {
+		return false
+	}
+	as.mu.Lock()
+	defer as.mu.Unlock()
+	return repoPaused(as.state, repo)
+}
+
+// PausedReposSnapshot returns the current repo halts, sorted by repo, for the
+// IPC status payload. A paused repo the UI cannot see is a paused repo that
+// gets forgotten, which is the failure mode the per-repo scope would otherwise
+// introduce — so this is not optional plumbing.
+func (as *AutonomousScheduler) PausedReposSnapshot() []RepoPauseRecord {
+	if as == nil {
+		return nil
+	}
+	as.mu.Lock()
+	defer as.mu.Unlock()
+	return pausedReposSnapshot(as.state)
+}
+
+func pausedReposSnapshot(st *AutonomousState) []RepoPauseRecord {
+	if st == nil || len(st.PausedRepos) == 0 {
+		return nil
+	}
+	out := make([]RepoPauseRecord, 0, len(st.PausedRepos))
+	for _, rec := range st.PausedRepos {
+		if rec == nil {
+			continue
+		}
+		out = append(out, *rec)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Repo < out[j].Repo })
+	return out
+}
+
+// repoPaused is the single predicate for "this repository is halted".
+func repoPaused(st *AutonomousState, repo string) bool {
+	if st == nil || repo == "" || st.PausedRepos == nil {
+		return false
+	}
+	_, ok := st.PausedRepos[repo]
+	return ok
+}
+
+// anyRepoHaltedOnSlotFailure reports whether ANY repository is halted by the
+// slot-failure trigger. It is the repo-scoped companion to
+// haltedOnSlotFailure, and the two are OR'd wherever the question is "is a
+// human still owed a triage decision about a terminal failure?" — the
+// standing terminal-failure cards and the fleet-idle suppression. Without it,
+// scoping the halt would have silently retracted the very card that names the
+// failure.
+func anyRepoHaltedOnSlotFailure(st *AutonomousState) bool {
+	if st == nil {
+		return false
+	}
+	for _, rec := range st.PausedRepos {
+		if rec != nil && rec.TriggeredBy == haltTagSlotFailure {
+			return true
+		}
+	}
+	return false
+}
+
 // Resume transitions from paused or safety_tripped back to running state.
 // When resuming from safety_tripped, the circuit breaker and rate limiter are
 // reset so the scheduler can dispatch new items immediately.
@@ -2248,8 +2457,14 @@ func (as *AutonomousScheduler) Pause(reason, triggeredBy string) {
 func (as *AutonomousScheduler) Resume() {
 	as.mu.Lock()
 	defer as.mu.Unlock()
-	if as.state.Status == "paused" || as.state.Status == "safety_tripped" || machineHalted(as.state) {
+	// A repo-scoped halt (#1148) leaves Status "running", so a status-keyed
+	// guard would make the fleet-wide Resume a silent no-op over it — the
+	// operator clicks Resume, the badge already says running, and acme/web
+	// stays halted forever. Resume means "go again", everywhere.
+	if as.state.Status == "paused" || as.state.Status == "safety_tripped" || machineHalted(as.state) ||
+		len(as.state.PausedRepos) > 0 {
 		as.state.Status = "running"
+		as.state.PausedRepos = nil
 		// Clear the halt latch and the pause provenance together — one
 		// clearer, so nothing can read as half-halted afterwards.
 		clearMachineHaltLocked(as.state)
@@ -2523,6 +2738,19 @@ func (as *AutonomousScheduler) Status() AutonomousState {
 	copy(snapshot.RefinementCompleted, as.state.RefinementCompleted)
 	snapshot.RefinementFailed = make([]RefinementItem, len(as.state.RefinementFailed))
 	copy(snapshot.RefinementFailed, as.state.RefinementFailed)
+	// #1148: deep-copy the repo halts. A shallow struct copy aliases the map,
+	// so a caller holding a "snapshot" would see later PauseRepo/ResumeRepo
+	// writes — and race with them.
+	if len(as.state.PausedRepos) > 0 {
+		snapshot.PausedRepos = make(map[string]*RepoPauseRecord, len(as.state.PausedRepos))
+		for k, v := range as.state.PausedRepos {
+			if v == nil {
+				continue
+			}
+			rec := *v
+			snapshot.PausedRepos[k] = &rec
+		}
+	}
 	// Include latest safety state
 	if as.safetyRails != nil {
 		safetySnap := as.safetyRails.State()
@@ -2909,6 +3137,21 @@ func (as *AutonomousScheduler) runCycle(ctx context.Context) {
 			continue
 		}
 
+		// #1148: skip candidates in a HALTED repository. A terminal stage
+		// failure is evidence about one repo, so it stops that repo and
+		// nothing else — this `continue` is the whole difference between a
+		// repo-scoped halt and the fleet-wide pause it replaces. Runs already
+		// in flight are untouched (this loop only starts new ones), in this
+		// repo and every other.
+		as.mu.Lock()
+		haltedRepo := repoPaused(as.state, item.Repo)
+		as.mu.Unlock()
+		if haltedRepo {
+			log.Printf("autonomous: skipping %s#%d — repository halted awaiting triage (Resume %s to continue)",
+				item.Repo, item.Number, item.Repo)
+			continue
+		}
+
 		// Skip if repo is at its per-repo concurrency cap. The cap is the
 		// numeric per-repo limit when set, falling back to 1 for the legacy
 		// boolean sequential flag, and 0 (no cap) otherwise.
@@ -3049,7 +3292,9 @@ func (as *AutonomousScheduler) runCycle(ctx context.Context) {
 	as.mu.Unlock()
 
 	as.mu.Lock()
-	haltedForTerminalFailure := haltedOnSlotFailure(as.state)
+	// #1148: a repo-scoped halt is the same fact at a smaller scope — a human
+	// still owes a triage decision — so it suppresses the idle card too.
+	haltedForTerminalFailure := haltedOnSlotFailure(as.state) || anyRepoHaltedOnSlotFailure(as.state)
 	as.mu.Unlock()
 
 	if remaining == 0 && runningCount == 0 {

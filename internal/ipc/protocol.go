@@ -1291,6 +1291,40 @@ type AutonomousPauseParams struct {
 	CostUsd float64 `json:"costUsd,omitempty"`
 }
 
+// AutonomousPauseRepoParams halts autonomous dispatch for ONE repository
+// (#1148) — the repo-scoped replacement for the fleet-wide pause the
+// extension's haltQueueOnSlotFailure used to issue on a terminal stage
+// failure.
+//
+// Repo is required and carries no default: a dispatch whose repo identity is
+// unknown cannot be scoped, and quietly widening that back to a fleet halt is
+// the behaviour this exists to remove. The remaining fields are the same
+// structured evidence AutonomousPauseParams carries for the terminal-failure
+// Action Center card.
+type AutonomousPauseRepoParams struct {
+	// Repo is "owner/name" — the repository whose dispatch is halted.
+	Repo string `json:"repo"`
+	// Reason is a short human-readable explanation.
+	Reason string `json:"reason,omitempty"`
+	// TriggeredBy is a structured tag identifying the caller, e.g.
+	// "haltQueueOnSlotFailure".
+	TriggeredBy string `json:"triggeredBy,omitempty"`
+	// IssueNumber is the issue whose terminal failure raised the halt.
+	IssueNumber int `json:"issueNumber,omitempty"`
+	// Stage is the pipeline stage that failed.
+	Stage string `json:"stage,omitempty"`
+	// TerminalKind is the classified terminal failure kind.
+	TerminalKind string `json:"terminalKind,omitempty"`
+	// CostUsd is the run's estimated spend so far. Zero degrades gracefully.
+	CostUsd float64 `json:"costUsd,omitempty"`
+}
+
+// AutonomousResumeRepoParams releases one repository's halt (#1148).
+type AutonomousResumeRepoParams struct {
+	// Repo is "owner/name" — the repository to resume.
+	Repo string `json:"repo"`
+}
+
 // AutonomousCompleteParams notifies the autonomous scheduler that a dispatched
 // pipeline run has completed (success or failure).
 type AutonomousCompleteParams struct {

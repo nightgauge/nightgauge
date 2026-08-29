@@ -66,6 +66,10 @@ vi.mock("../../src/utils/nightgaugeConfig", () => ({
 }));
 
 const mockAutonomousPause = vi.fn().mockResolvedValue(undefined);
+// #1148: the halt is repo-scoped now. A skip test that watched only the
+// fleet-wide verb would keep passing while the skip quietly stopped applying
+// to the verb the halt actually uses.
+const mockAutonomousPauseRepo = vi.fn().mockResolvedValue(undefined);
 const mockAutonomousStatus = vi.fn();
 const mockShowWarningMessage = vi.fn().mockResolvedValue(undefined);
 const mockShowErrorMessage = vi.fn().mockResolvedValue(undefined);
@@ -97,6 +101,7 @@ vi.mock("../../src/services/IpcClient", () => ({
       gitComposeBranchName,
       autonomousStatus: mockAutonomousStatus,
       autonomousPause: mockAutonomousPause,
+      autonomousPauseRepo: mockAutonomousPauseRepo,
     }),
   },
 }));
@@ -213,6 +218,7 @@ describe("ConcurrentPipelineManager — skip haltQueueOnSlotFailure on environme
     await manager.settleForTest(3375);
 
     expect(mockAutonomousPause).not.toHaveBeenCalled();
+    expect(mockAutonomousPauseRepo).not.toHaveBeenCalled();
     expect(queueClear).not.toHaveBeenCalled();
   });
 
@@ -227,6 +233,7 @@ describe("ConcurrentPipelineManager — skip haltQueueOnSlotFailure on environme
     await manager.settleForTest(3375);
 
     expect(mockAutonomousPause).not.toHaveBeenCalled();
+    expect(mockAutonomousPauseRepo).not.toHaveBeenCalled();
     expect(queueClear).not.toHaveBeenCalled();
   });
 
@@ -241,6 +248,7 @@ describe("ConcurrentPipelineManager — skip haltQueueOnSlotFailure on environme
     await manager.settleForTest(3375);
 
     expect(mockAutonomousPause).not.toHaveBeenCalled();
+    expect(mockAutonomousPauseRepo).not.toHaveBeenCalled();
     expect(queueClear).not.toHaveBeenCalled();
   });
 
@@ -255,6 +263,7 @@ describe("ConcurrentPipelineManager — skip haltQueueOnSlotFailure on environme
     await manager.settleForTest(3375);
 
     expect(mockAutonomousPause).not.toHaveBeenCalled();
+    expect(mockAutonomousPauseRepo).not.toHaveBeenCalled();
     expect(queueClear).not.toHaveBeenCalled();
   });
 
@@ -312,6 +321,7 @@ describe("ConcurrentPipelineManager — skip haltQueueOnSlotFailure on environme
     await manager.settleForTest(3499);
 
     expect(mockAutonomousPause).not.toHaveBeenCalled();
+    expect(mockAutonomousPauseRepo).not.toHaveBeenCalled();
     expect(queueClear).not.toHaveBeenCalled();
   });
 
@@ -326,6 +336,7 @@ describe("ConcurrentPipelineManager — skip haltQueueOnSlotFailure on environme
     await manager.settleForTest(3375);
 
     expect(mockAutonomousPause).not.toHaveBeenCalled();
+    expect(mockAutonomousPauseRepo).not.toHaveBeenCalled();
     expect(queueClear).not.toHaveBeenCalled();
   });
 

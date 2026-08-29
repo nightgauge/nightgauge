@@ -4797,6 +4797,66 @@ func (s *Server) registerMethods() {
 		return s.autonomousScheduler.Status(), nil
 	}
 
+	//ipc:method autonomousPauseRepo params:AutonomousPauseRepoParams result:AutonomousStatusResult
+	// #1148 — halt dispatch for ONE repository. This is what the extension's
+	// haltQueueOnSlotFailure now calls: a terminal stage failure is evidence
+	// about one repo's code, tests and worktree, and answering it by pausing
+	// every repository in a multi-repo workspace was a blast radius the
+	// evidence never justified.
+	//
+	// It still raises the terminal-failure card, because narrowing the halt
+	// must not make it less discoverable — a repo that is halted and unnamed
+	// is a repo that gets forgotten.
+	s.methods["autonomous.pauseRepo"] = func(_ context.Context, params json.RawMessage) (interface{}, error) {
+		if s.autonomousScheduler == nil {
+			return nil, fmt.Errorf("autonomous scheduler not configured")
+		}
+		var p AutonomousPauseRepoParams
+		if len(params) > 0 {
+			_ = json.Unmarshal(params, &p)
+		}
+		if p.Repo == "" {
+			return nil, fmt.Errorf("repo is required for a repo-scoped pause")
+		}
+		triggeredBy := p.TriggeredBy
+		if triggeredBy == "" {
+			triggeredBy = "unknown"
+		}
+		reason := p.Reason
+		if reason == "" {
+			reason = "no reason provided"
+		}
+		if s.autonomousScheduler.PauseRepo(p.Repo, reason, triggeredBy, p.IssueNumber, p.Stage) &&
+			triggeredBy == "haltQueueOnSlotFailure" && p.IssueNumber != 0 {
+			s.autonomousScheduler.RaiseTerminalFailure(p.Repo, p.IssueNumber, p.Stage, p.TerminalKind, p.CostUsd)
+		}
+		return s.autonomousScheduler.Status(), nil
+	}
+
+	//ipc:method autonomousResumeRepo params:AutonomousResumeRepoParams result:AutonomousStatusResult
+	// #1148 — release ONE repository's halt. Goes through the shared
+	// ensure-running helper for the same reason autonomous.resume does: after a
+	// backend restart the halt comes back with no goroutine alive, and flipping
+	// state without starting the loop is the silent "resumed but never
+	// dispatches" state #3303 fixed.
+	s.methods["autonomous.resumeRepo"] = func(ctx context.Context, params json.RawMessage) (interface{}, error) {
+		if s.autonomousScheduler == nil {
+			return nil, fmt.Errorf("autonomous scheduler not configured")
+		}
+		var p AutonomousResumeRepoParams
+		if len(params) > 0 {
+			_ = json.Unmarshal(params, &p)
+		}
+		if p.Repo == "" {
+			return nil, fmt.Errorf("repo is required for a repo-scoped resume")
+		}
+		if err := s.resumeRepoAndEnsureRunning(ctx, p.Repo); err != nil {
+			return nil, err
+		}
+		time.Sleep(50 * time.Millisecond)
+		return s.autonomousScheduler.Status(), nil
+	}
+
 	//ipc:method autonomousResume params:AutonomousResumeParams result:AutonomousStatusResult
 	// #3303 — Resume must also start the dispatch goroutine when the scheduler
 	// goroutine isn't alive. Previously, after a backend restart the persisted

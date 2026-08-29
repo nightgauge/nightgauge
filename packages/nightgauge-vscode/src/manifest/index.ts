@@ -782,6 +782,16 @@ export const MANIFEST_CONTRIBUTES: ManifestContributes = {
       icon: "$(debug-continue)",
     },
     {
+      // #1148 — a terminal stage failure halts ONE repository, which leaves
+      // fleet status "running" and therefore hides the global Resume button
+      // (it is gated on a "resumable" status). Without this command a halted
+      // repository has no operator affordance at all.
+      command: "nightgauge.autonomousResumeRepo",
+      title: "Autonomous: Resume Repository",
+      category: "Nightgauge",
+      icon: "$(debug-continue-small)",
+    },
+    {
       command: "nightgauge.autonomousStop",
       title: "Autonomous: Stop",
       category: "Nightgauge",

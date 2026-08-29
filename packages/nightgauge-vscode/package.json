@@ -775,6 +775,12 @@
         "icon": "$(debug-continue)"
       },
       {
+        "command": "nightgauge.autonomousResumeRepo",
+        "title": "Autonomous: Resume Repository",
+        "category": "Nightgauge",
+        "icon": "$(debug-continue-small)"
+      },
+      {
         "command": "nightgauge.autonomousStop",
         "title": "Autonomous: Stop",
         "category": "Nightgauge",
