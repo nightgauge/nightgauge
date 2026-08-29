@@ -17,6 +17,7 @@ import { classifyTerminalKind, uuidV7, type PipelineStage } from "@nightgauge/sd
 import { WorktreeManager, type WorktreeInfo } from "../utils/WorktreeManager";
 import { killAllActiveProcesses } from "../utils/skillRunner";
 import { getPRForIssue } from "../utils/prDetection";
+import { describePreservedWip, listPreservedWip } from "../utils/preservedWip";
 
 const execAsync = promisify(exec);
 const execFileAsync = promisify(execFile);
@@ -1186,6 +1187,27 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
       await fs.unlink(conflictSignalPath).catch(() => {});
     } catch {
       // No signal file — normal dispatch
+    }
+
+    // Preserved work from a previous kill (#1105). `worktreeManager.create`
+    // below force-removes the old worktree and `branch -D`s its branch before
+    // building a fresh one from origin/<base>, so from here on the ONLY path
+    // back to a killed stage's work is its refs/nightgauge/wip/ anchor. Say so
+    // BEFORE the teardown: the observed failure was a re-dispatch that planned
+    // from scratch over 13 preserved paths and never mentioned them.
+    //
+    // Advisory, never blocking — listPreservedWip swallows its own failures,
+    // and this must not be able to fail a dispatch.
+    try {
+      const preserved = await listPreservedWip(slotWorktreeManager.getRepoRoot(), item.issueNumber);
+      if (preserved.length > 0) {
+        this.logger.warn(describePreservedWip(item.issueNumber, preserved), {
+          issueNumber: item.issueNumber,
+          refs: preserved.map((p) => p.ref),
+        });
+      }
+    } catch {
+      // Never block a dispatch on a diagnostic.
     }
 
     let worktree: WorktreeInfo | undefined;
