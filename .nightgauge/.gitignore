@@ -6,7 +6,7 @@
 #   config.yaml           — repository-wide pipeline configuration
 #   .gitignore            — this file
 #   */.gitkeep            — preserve directory structure
-# nightgauge-gitignore-version: 10
+# nightgauge-gitignore-version: 11
 
 # ─── Pipeline context, state, and execution data ─────────────────────
 pipeline/*
