@@ -47,8 +47,13 @@ func TestRunPipeline_LatchesTerminalAndSealsTheSnapshot(t *testing.T) {
 	// The LIVE runtime pointer is captured here too, and deliberately: the
 	// onPipelineComplete callback is handed runtime.Snapshot() — a COPY taken
 	// before the latch fires — so asserting the latch against it would assert
-	// nothing about the run. getActiveRuntime returns the object the defer
+	// nothing about the run. LookupRunByID returns the object the defer
 	// actually mutates, for as long as it is registered.
+	//
+	// Resolved by the identity the snapshot itself carries (#379). The old
+	// issue-number lookup would have been satisfied by ANY run of this issue;
+	// this can only be satisfied by the run that wrote the snapshot the
+	// assertions below read.
 	var midRunSeen, midRunTerminal bool
 	var live *state.RuntimeState
 	runner.onStage = func() {
@@ -61,7 +66,7 @@ func TestRunPipeline_LatchesTerminalAndSealsTheSnapshot(t *testing.T) {
 		}
 		midRunSeen = true
 		midRunTerminal = found[0].Terminal
-		live = s.getActiveRuntime(item.Number)
+		live = s.LookupRunByID(found[0].RunID)
 	}
 
 	s.runPipeline(context.Background(), item)

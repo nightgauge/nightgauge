@@ -369,8 +369,8 @@ func TestOnPhaseDetectedCallback(t *testing.T) {
 func TestRecordPhaseStart_PopulatesRuntime(t *testing.T) {
 	s := &Scheduler{}
 	rt := state.NewRuntimeState("nightgauge/nightgauge", 3486, "item-1", testRunID())
-	s.registerRuntime(3486, rt)
-	defer s.unregisterRuntime(3486)
+	s.registerRuntime(rt)
+	defer s.unregisterRuntime(rt.RunID)
 
 	s.RecordPhaseStartForRun(rt.RunID, 3486, "feature-dev", "implementation", 7, 17)
 
@@ -392,8 +392,8 @@ func TestRecordPhaseStart_PopulatesRuntime(t *testing.T) {
 func TestRecordPhaseComplete_MarksRunningPhaseDone(t *testing.T) {
 	s := &Scheduler{}
 	rt := state.NewRuntimeState("nightgauge/nightgauge", 3486, "item-1", testRunID())
-	s.registerRuntime(3486, rt)
-	defer s.unregisterRuntime(3486)
+	s.registerRuntime(rt)
+	defer s.unregisterRuntime(rt.RunID)
 
 	s.RecordPhaseStartForRun(rt.RunID, 3486, "feature-dev", "implementation", 7, 17)
 	s.RecordPhaseCompleteForRun(rt.RunID, 3486, "feature-dev", "implementation")
@@ -415,15 +415,65 @@ func TestRecordPhaseStart_NoRuntimeIsNoOp(t *testing.T) {
 
 func TestRegisterRuntime_RejectsInvalidInputs(t *testing.T) {
 	s := &Scheduler{}
-	// Invalid issue number — should not register.
-	s.registerRuntime(0, state.NewRuntimeState("r", 0, "x", testRunID()))
-	if s.getActiveRuntime(0) != nil {
-		t.Error("issueNumber=0 should not be registered")
-	}
 	// Nil runtime — should not register.
-	s.registerRuntime(123, nil)
-	if s.getActiveRuntime(123) != nil {
-		t.Error("nil runtime should not be registered")
+	s.registerRuntime(nil)
+
+	// A runtime with no identity is not registered (#379). Registering it
+	// under the empty key would make the key meaningless for that entry and
+	// let the next identity-less run overwrite it — the very collision the
+	// re-key removes.
+	noIdentity := state.NewRuntimeState("r", 7, "x", "")
+	s.registerRuntime(noIdentity)
+	if s.LookupRunByID("") != nil {
+		t.Error("a runtime with no RunID must not be registered")
+	}
+	if len(s.activeRuntimes) != 0 {
+		t.Errorf("activeRuntimes = %d entries, want 0", len(s.activeRuntimes))
+	}
+}
+
+// TestActiveRuntimes_SeparatesTwoRunsOfOneIssue is the property the re-key
+// buys (#379). Under the issue-number key these two runs were ONE entry: the
+// second registration evicted the first, and a phase for the evicted run
+// either vanished or — without the compensating guard — landed on the wrong
+// run's PhaseHistory.
+func TestActiveRuntimes_SeparatesTwoRunsOfOneIssue(t *testing.T) {
+	s := &Scheduler{}
+	const issue = 4242
+	first := state.NewRuntimeState("nightgauge/nightgauge", issue, "item-1", testRunID())
+	second := state.NewRuntimeState("nightgauge/nightgauge", issue, "item-1", testRunID())
+
+	s.registerRuntime(first)
+	s.registerRuntime(second)
+	defer s.unregisterRuntime(first.RunID)
+	defer s.unregisterRuntime(second.RunID)
+
+	if s.LookupRunByID(first.RunID) != first {
+		t.Error("the first run was evicted by a second run of the same issue")
+	}
+	if s.LookupRunByID(second.RunID) != second {
+		t.Error("the second run of the same issue is not resolvable")
+	}
+
+	s.RecordPhaseStartForRun(first.RunID, issue, "feature-dev", "implementation", 7, 17)
+
+	if len(first.PhaseHistory) != 1 {
+		t.Errorf("the named run recorded %d phases, want 1", len(first.PhaseHistory))
+	}
+	if len(second.PhaseHistory) != 0 {
+		t.Errorf("a phase for one run landed on the other run's history: %+v", second.PhaseHistory)
+	}
+
+	// Issue number cannot name one of two live runs, and guessing would stamp
+	// an arbitrary id onto an event envelope as though it were resolved.
+	if got := s.RunIDForIssue(issue); got != "" {
+		t.Errorf("RunIDForIssue picked %q from two live runs; want \"\"", got)
+	}
+
+	// With one left it answers again.
+	s.unregisterRuntime(second.RunID)
+	if got := s.RunIDForIssue(issue); got != first.RunID {
+		t.Errorf("RunIDForIssue = %q, want %q", got, first.RunID)
 	}
 }
 
@@ -431,10 +481,10 @@ func TestActiveRuntimes_IsolatedPerIssue(t *testing.T) {
 	s := &Scheduler{}
 	rtA := state.NewRuntimeState("nightgauge/nightgauge", 100, "a", testRunID())
 	rtB := state.NewRuntimeState("nightgauge/nightgauge", 200, "b", testRunID())
-	s.registerRuntime(100, rtA)
-	s.registerRuntime(200, rtB)
-	defer s.unregisterRuntime(100)
-	defer s.unregisterRuntime(200)
+	s.registerRuntime(rtA)
+	s.registerRuntime(rtB)
+	defer s.unregisterRuntime(rtA.RunID)
+	defer s.unregisterRuntime(rtB.RunID)
 
 	s.RecordPhaseStartForRun(rtA.RunID, 100, "feature-dev", "implementation", 7, 17)
 	s.RecordPhaseStartForRun(rtB.RunID, 200, "feature-planning", "load-context", 1, 13)
@@ -2635,8 +2685,8 @@ func TestRunRootResolvesTargetRepo(t *testing.T) {
 func TestRunIdentity_SchedulerPhaseArmsAreIdentityGated(t *testing.T) {
 	s := &Scheduler{}
 	rt := state.NewRuntimeState("nightgauge/nightgauge", 370, "item-1", testRunID())
-	s.registerRuntime(370, rt)
-	defer s.unregisterRuntime(370)
+	s.registerRuntime(rt)
+	defer s.unregisterRuntime(rt.RunID)
 
 	foreign := testRunID()
 	s.RecordPhaseStartForRun(foreign, 370, "feature-dev", "implementation", 1, 3)

@@ -967,11 +967,18 @@ func TestRunIdentity_PhaseTransitionSchedulerArmIsIdentityGated(t *testing.T) {
 
 // TestRunIdentity_TerminalVerbAgainstSchedulerRunIsRefused covers F29 and C4.
 //
-// notifyComplete and setPaused carrying a LIVE SCHEDULER run's id each return
-// run_wrong_owner, write no V2 record and emit no pipeline_done: the scheduler
-// books that run's record itself, and serving a terminal verb from a registry
-// with no latch, no lease and no compare-and-delete target would write a SECOND
+// notifyComplete carrying a LIVE SCHEDULER run's id returns run_wrong_owner,
+// writes no V2 record and emits no pipeline_done: the scheduler books that
+// run's record itself, and serving a TERMINAL verb from a registry with no
+// latch, no lease and no compare-and-delete target would write a SECOND
 // authoritative record under one run id.
+//
+// setPaused no longer belongs in this test (#379). It is ADMINISTRATIVE, not
+// terminal, and since the scheduler registry was keyed on identity it is
+// SERVED from the scheduler's own live runtime — see
+// TestRunIdentity_SetPausedReachesSchedulerOwnedRun. The refusal it used to get
+// was a consequence of a key that could not prove which run the caller meant,
+// not of the verb being unsafe.
 //
 // The abandonRun leg of this test arrives with ADR-017 step 6, when the verb
 // exists.
@@ -993,21 +1000,68 @@ func TestRunIdentity_TerminalVerbAgainstSchedulerRunIsRefused(t *testing.T) {
 		Repo: repo, IssueNumber: issue, Success: true, TotalDurationMs: 1, RunID: schedRun.RunID,
 	}), codeRunWrongOwner)
 
-	wantRefusal(t, callRunVerb(t, s, "pipeline.setPaused", PipelineSetPausedParams{
-		IssueNumber: issue, Repo: repo, Paused: true, RunID: schedRun.RunID,
-	}), codeRunWrongOwner)
-
 	if schedRun.Terminal {
 		t.Error("an IPC terminal verb latched a scheduler-owned run")
-	}
-	if schedRun.Paused {
-		t.Error("an IPC administrative verb paused a scheduler-owned run")
 	}
 	if entries, _ := os.ReadDir(filepath.Join(root, ".nightgauge", "pipeline")); len(entries) != 0 {
 		t.Errorf("a refused terminal verb wrote %d file(s) into the state dir", len(entries))
 	}
 	if _, err := os.Stat(filepath.Join(root, ".nightgauge", "pipeline", "history")); !os.IsNotExist(err) {
 		t.Errorf("a refused terminal verb wrote a history record; stat = %v", err)
+	}
+}
+
+// TestRunIdentity_SetPausedReachesSchedulerOwnedRun is R-5's behavioural half
+// (#379): an operator pausing a scheduler-owned run must reach the run the
+// scheduler is actually executing.
+//
+// The assertion that matters is that the pause lands on the SCHEDULER'S OWN
+// object. Before the re-key, an administrative verb naming a scheduler run was
+// refused, and the fallback path adopted a snapshot of that same run into the
+// IPC registry — producing a second *RuntimeState for one identity, with the
+// operator's pause on the copy the scheduler never reads. A test asserting
+// only "no error" would pass against exactly that defect.
+func TestRunIdentity_SetPausedReachesSchedulerOwnedRun(t *testing.T) {
+	root := t.TempDir()
+	s := NewServer(nil, WithWorkspaceRoot(root))
+	fake := newFakeSchedulerRuns()
+	s.schedulerRuns = fake
+
+	const (
+		repo  = "acme/platform"
+		issue = 630
+	)
+	schedRun := state.NewRuntimeState(repo, issue, "item-1", newTestRunID())
+	schedRun.BeginStage(state.StageFeatureDev)
+	fake.register(issue, schedRun)
+
+	if err := callRunVerb(t, s, "pipeline.setPaused", PipelineSetPausedParams{
+		IssueNumber: issue, Repo: repo, Paused: true, RunID: schedRun.RunID,
+	}); err != nil {
+		t.Fatalf("setPaused against a scheduler-owned run was refused: %v", err)
+	}
+
+	if !schedRun.Paused {
+		t.Error("the pause did not land on the scheduler's own runtime; the operator paused a copy the scheduler never reads")
+	}
+
+	// And it must not have been adopted into the IPC registry: two entries for
+	// one identity is the state the whole ADR exists to prevent.
+	s.runtimesMu.Lock()
+	_, adopted := s.activeRuntimes[schedRun.RunID]
+	s.runtimesMu.Unlock()
+	if adopted {
+		t.Error("serving a scheduler-owned run ALSO adopted it into the IPC registry")
+	}
+
+	// Resuming must reach the same object.
+	if err := callRunVerb(t, s, "pipeline.setPaused", PipelineSetPausedParams{
+		IssueNumber: issue, Repo: repo, Paused: false, RunID: schedRun.RunID,
+	}); err != nil {
+		t.Fatalf("resume against a scheduler-owned run was refused: %v", err)
+	}
+	if schedRun.Paused {
+		t.Error("resume did not reach the scheduler's runtime")
 	}
 }
 

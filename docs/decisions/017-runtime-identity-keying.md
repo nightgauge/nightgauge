@@ -218,7 +218,7 @@ cited code does.
 | C8  | The IPC socket's trust model (ADR 015 §N) may not be **widened**: no new verb may give an unauthenticated caller a capability against a run it did not start that it does not already have.                                                                                                                           |
 | C9  | **Fail-open.** A refused or lost IPC call must never kill a live run; the run continues on its local cache. The two new client-side run-id filters are the migration surface for this.                                                                                                                                |
 | C10 | #307's guarantees: permanent tombstones, `await`-free check-and-claim boundaries, `stillOwnsIssue` reading `slots ∪ reservedSlots`, and the sha256-pinned terminal-parity fences.                                                                                                                                     |
-| C11 | The Go scheduler's `map[int]*RuntimeState` registry is **out of re-keying scope** for this ADR — but it is not out of **correctness** scope (see F21, and Decision 11).                                                                                                                                               |
+| C11 | The Go scheduler's `map[int]*RuntimeState` registry is **out of re-keying scope** for this ADR — but it is not out of **correctness** scope (see F21, and Decision 11). **Discharged by #379 (R-5):** the registry is now keyed by `RunID`.                                                                           |
 | C12 | Third-process seams (`nightgauge gate verify --record`, the SDK `TraceRecorder`) must get the identity **threaded**, never guessed.                                                                                                                                                                                   |
 | C13 | **Reconciliation may only close a run it can prove dead.** An empty registry is not evidence of death — the Go backend is auto-restarted under a surviving extension host (F26). Liveness evidence is a registry entry, a live recorded PID, or a fresh lease; its absence is decisive only outside the grace window. |
 | C14 | **Adoption is exactly-once per identity within a process.** It is the ordinary post-restart path, it performs I/O, and every request runs in its own goroutine, so two concurrent adoptions of one id may never produce two `*RuntimeState` objects (F30).                                                            |
@@ -2877,6 +2877,40 @@ guards its one externally-reachable write site on identity rather than re-keying
 it. That is sound because it has a single in-process writer per issue, but it is
 a compensating check, which this ADR elsewhere calls the signature of a wrong
 key. Re-keying `Scheduler.activeRuntimes` on `RunID` is filed as a follow-up.
+
+> **R-5 closed by #379.** `Scheduler.activeRuntimes` is now
+> `map[string]*RuntimeState` keyed by `RunID`, and the identity guards in
+> `RecordPhaseStartForRun` / `RecordPhaseCompleteForRun` are **deleted, not
+> moved**: with the registry keyed on identity the lookup either finds the named
+> run or finds nothing, so there is no second run to mis-address and nothing
+> left to compensate for. `LookupRunByID` becomes a map hit rather than a scan.
+>
+> Two consequences worth stating, because they change what the ADR says
+> elsewhere:
+>
+> 1. **Decision 3's class policy narrows.** An ADMINISTRATIVE verb naming a live
+>    scheduler run is now SERVED from the scheduler's own runtime instead of
+>    refused `run_wrong_owner`. The refusal was never about the verb being
+>    unsafe — it was that an issue-keyed registry could not prove which run the
+>    caller meant. Serving is also strictly safer than what actually happened
+>    before: the refusal sent the caller down the adoption path, which built a
+>    SECOND `*RuntimeState` for one identity from a snapshot, so an operator's
+>    pause landed on a copy the scheduler never reads. **TERMINAL verbs are
+>    unchanged and still refused** — F29 is about the terminal claim's missing
+>    latch/lease/compare-and-delete target, which re-keying does not supply.
+> 2. **C11 is discharged.** The scheduler registry was declared out of
+>    re-keying scope for this ADR; it is now in scope and done.
+>
+> `RunIDForIssue` survives as a _derived scan_ (the IPC registry's "THERE IS NO
+> SECOND MAP" rule), and returns `""` rather than guessing when an issue somehow
+> has two live runs — an arbitrary pick would be stamped onto an event envelope
+> as though it had been resolved.
+>
+> **The abandonRun half of R-5 is NOT closed, because `pipeline.abandonRun` does
+> not exist.** It is ADR-017 step 6 and no such verb is registered on this tree
+> (`runEntry.abandoned` still carries its "NOTHING SETS IT YET" note). When the
+> verb lands it inherits the administrative-class policy above and needs no
+> further scheduler work.
 
 **Orphan reconciliation at startup is deferred by two minutes.** A genuinely
 dead run's platform row closes 120 seconds later than it does today. That is the
