@@ -389,6 +389,17 @@ func RunDoctor(ctx context.Context, cfg *config.Config, client *gh.Client, adapt
 		warnings = append(warnings, stashWarning)
 	}
 
+	// The three arms above scan things that exist on disk or in a listing an
+	// operator can stumble across. A preserved-WIP ref is invisible to all of
+	// them — no worktree, no stash, and after re-dispatch not even a branch —
+	// so work from a killed stage sat unreported and unreclaimed while every
+	// check read green (#1105).
+	preservedWipRefs, wipWarning := checkPreservedWip(cwd, now)
+	result.Checks["preserved_wip"] = preservedWipRefs
+	if wipWarning != "" {
+		warnings = append(warnings, wipWarning)
+	}
+
 	// Every arm above detects RESIDUE — something that exists and should not.
 	// This one detects an ABSENCE: work that should have been observed by now
 	// and was not (#992). A workflow with zero runs has no failed run to

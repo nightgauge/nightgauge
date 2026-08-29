@@ -1536,6 +1536,70 @@ stage-exit record carries `unreclaimed_stashes` (see
 [STAGE_EXIT_DIAGNOSTIC.md](STAGE_EXIT_DIAGNOSTIC.md)), and `nightgauge doctor`
 reports them per repo with age.
 
+### Preserved-WIP Reclamation (Issue #1105)
+
+The third leak in the same family, and the only one that had a writer and no
+reader at all. When a guard terminates a stage with uncommitted work,
+`preserveWorkInProgress` (#128) commits the worktree in place and anchors that
+commit under `refs/nightgauge/wip/`, outside `refs/heads/`, so the re-dispatch
+teardown (`worktree remove --force` + `branch -D` + fresh `worktree add`) cannot
+orphan it.
+
+That namespace had exactly one writer and zero readers. Nothing listed it, no
+`doctor` arm reported it, nothing pruned it, and — the failure that produced
+#1105 — nothing consulted it when the same issue was dispatched again. A run
+killed on 2026-08-28 preserved 13 paths; the branch and worktree were then
+cleaned up, leaving the commit reachable only through the ref; the next day the
+issue was re-dispatched and planned from scratch without mentioning it.
+
+```bash
+# What is preserved here: issue, stage branch, commit, path count, age
+nightgauge wip list [--workdir <repo>] [--issue N] [--json]
+
+# Remove anchors whose content is already in the base ref
+nightgauge wip prune [--dry-run] [--base-ref <ref>] [--json]
+
+# Abandon one issue's preserved work explicitly
+nightgauge wip prune --issue N --discard
+nightgauge wip prune --ref refs/nightgauge/wip/<name> --discard
+```
+
+**Pruning is deliberately narrow.** A ref pins its whole object graph against
+`git gc`, so the namespace grows without bound — but it is also the last copy
+of work the pipeline itself destroyed. So the automatic door opens on exactly
+one proof: every path the preserved commit touches already reads identically in
+the base ref. Everything else is KEPT and reported.
+
+**Merged-ness is CONTENT, never ancestry**, for the reason
+`ScanStrandedBranches` gives: squash merge is this workspace's only merge shape,
+and an ancestry test would report that nothing has ever landed while looking
+correct doing it. The diff is restricted to the commit's own paths, so the
+verdict does not decay as the base branch moves.
+
+**There is no age-based expiry, and there will not be one.** Preserved work does
+not become less valuable by being old; "it was three weeks ago" is not evidence
+that it landed. The second door is an operator naming the work with `--discard`
+plus an explicit `--issue` or `--ref` — a bare `--discard` is refused, because
+it would delete every preserved commit in the repository.
+
+| Verdict      | Meaning                                                        |
+| ------------ | -------------------------------------------------------------- |
+| `landed`     | Content already in the base ref — pruned automatically         |
+| `discarded`  | Operator named this ref/issue with `--discard`                 |
+| `not-landed` | Carries content the base lacks — kept, this is unsalvaged work |
+| `unknown`    | Classification failed — kept, never "safe to delete" (#296)    |
+
+Deletion is compare-and-delete against the SHA the scan observed, so a
+concurrent kill that re-anchors the ref at newer work is not clobbered.
+
+**Two other readers close the loop.** `nightgauge doctor` reports outstanding
+anchors as the `preserved_wip` arm, alongside the worktree, stranded-branch and
+stash arms — warning-only, no age threshold, since a WIP ref only ever exists
+because a stage was killed. And the dispatch path itself
+(`ConcurrentPipelineManager`) logs the issue's preserved anchors, with the
+recovery command, **before** the worktree teardown that makes the ref the only
+remaining path to the work.
+
 ### PR Operations
 
 ```bash
