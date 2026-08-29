@@ -349,8 +349,7 @@ github.com/nightgauge/nightgauge/
 │   ├── orchestrator/                  # Module 4: Orchestrator
 │   │   ├── scheduler.go               # Board-driven scheduling
 │   │   ├── epic.go                    # Cross-repo epic coordination
-│   │   ├── dependencies.go            # Blocking relationship ordering
-│   │   └── merge_lock.go              # Per-repo merge serialization
+│   │   └── dependencies.go            # Blocking relationship ordering
 │   ├── platform/                      # Module 5: Platform Client
 │   │   ├── client.go                  # Generated OpenAPI client
 │   │   ├── offline.go                 # Degraded/offline fallback

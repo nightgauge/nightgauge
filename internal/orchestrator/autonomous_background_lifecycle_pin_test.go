@@ -16,7 +16,7 @@ package orchestrator
 //	P5 the generation — a drain releases even with a LIVE Run context
 //
 // Scope note: P1 covers autonomous.go only. scheduler.go (3 spawns),
-// wave_orchestrator.go (4), epic.go (1) and merge_lock.go (1) legitimately hold
+// wave_orchestrator.go (4) and epic.go (1) legitimately hold
 // bare spawns today; scheduler.go is owned by queued issues #463/#444/#441, and
 // widening this pin belongs to whichever change gives those files a lifecycle.
 
