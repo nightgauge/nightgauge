@@ -274,6 +274,13 @@ export const SETTINGS_SECTIONS: SettingsSectionMeta[] = [
     docLink: "docs/AUTONOMOUS_ORCHESTRATOR.md",
   },
   {
+    id: "notifications",
+    title: "Notifications",
+    icon: "bell",
+    description: "Discord, Mattermost, and Slack pipeline status posts",
+    docLink: "docs/CONFIGURATION.md#notifications",
+  },
+  {
     id: "forges",
     title: "Forge Instances",
     icon: "server",

@@ -3432,6 +3432,208 @@ exports[`getSettingsHtml snapshots (Issue #1242) > default config render 1`] = `
 
       </div>
 
+      <div class="section " id="section-notifications">
+
+    <div class="section-header" data-section="notifications">
+      <div class="section-title-row">
+        <span class="section-chevron codicon codicon-chevron-down"></span>
+        <span class="codicon codicon-bell section-icon"></span>
+        <h3 class="section-title">Notifications</h3>
+
+        <a href="#" class="doc-link" data-doc="docs/CONFIGURATION.md#notifications" title="View documentation">
+         <span class="codicon codicon-link-external"></span>
+       </a>
+      </div>
+      <p class="section-description">Discord, Mattermost, and Slack pipeline status posts</p>
+    </div>
+
+
+    <div class="section-content">
+
+      <div class="subsection">
+        <h4 class="subsection-title">Discord</h4>
+        <p class="setting-description subsection-blurb">Posts pipeline status to a Discord channel via an incoming webhook.</p>
+
+    <div class="setting-row ">
+      <div class="setting-info">
+        <label for="notifications.discord.enabled" class="setting-label">Enabled </label>
+        <p class="setting-description">Post pipeline status to Discord</p>
+
+      </div>
+      <div class="setting-control">
+        <input type="checkbox"
+               id="notifications.discord.enabled"
+               class="toggle-input"
+               data-path="notifications.discord.enabled"
+
+               disabled>
+        <label for="notifications.discord.enabled" class="toggle-switch"></label>
+      </div>
+    </div>
+
+    <div class="setting-row ">
+      <div class="setting-info">
+        <label for="notifications.discord.webhook_env" class="setting-label">Webhook Env Var </label>
+        <p class="setting-description">Name of the environment variable holding the webhook URL. The URL itself is never stored in config.</p>
+
+      </div>
+      <div class="setting-control">
+        <input type="text"
+               id="notifications.discord.webhook_env"
+               class="text-input"
+               data-path="notifications.discord.webhook_env"
+               value=""
+               placeholder="DISCORD_WEBHOOK_URL"
+               disabled>
+      </div>
+    </div>
+
+      </div>
+      <div class="subsection">
+        <h4 class="subsection-title">Mattermost</h4>
+        <p class="setting-description subsection-blurb">Posts pipeline status to a Mattermost channel via an incoming webhook.</p>
+
+    <div class="setting-row ">
+      <div class="setting-info">
+        <label for="notifications.mattermost.enabled" class="setting-label">Enabled </label>
+        <p class="setting-description">Post pipeline status to Mattermost</p>
+
+      </div>
+      <div class="setting-control">
+        <input type="checkbox"
+               id="notifications.mattermost.enabled"
+               class="toggle-input"
+               data-path="notifications.mattermost.enabled"
+
+               disabled>
+        <label for="notifications.mattermost.enabled" class="toggle-switch"></label>
+      </div>
+    </div>
+
+    <div class="setting-row ">
+      <div class="setting-info">
+        <label for="notifications.mattermost.webhook_env" class="setting-label">Webhook Env Var </label>
+        <p class="setting-description">Name of the environment variable holding the webhook URL. The URL itself is never stored in config.</p>
+
+      </div>
+      <div class="setting-control">
+        <input type="text"
+               id="notifications.mattermost.webhook_env"
+               class="text-input"
+               data-path="notifications.mattermost.webhook_env"
+               value=""
+               placeholder="MATTERMOST_WEBHOOK_URL"
+               disabled>
+      </div>
+    </div>
+
+      </div>
+      <div class="subsection">
+        <h4 class="subsection-title">Slack</h4>
+        <p class="setting-description subsection-blurb">Posts pipeline status to a Slack channel via a bot token, editing the message in place as stages progress.</p>
+
+    <div class="setting-row ">
+      <div class="setting-info">
+        <label for="notifications.slack.enabled" class="setting-label">Enabled </label>
+        <p class="setting-description">Post pipeline status to Slack</p>
+
+      </div>
+      <div class="setting-control">
+        <input type="checkbox"
+               id="notifications.slack.enabled"
+               class="toggle-input"
+               data-path="notifications.slack.enabled"
+
+               disabled>
+        <label for="notifications.slack.enabled" class="toggle-switch"></label>
+      </div>
+    </div>
+
+    <div class="setting-row ">
+      <div class="setting-info">
+        <label for="notifications.slack.channel" class="setting-label">Channel </label>
+        <p class="setting-description">Channel id (preferred) or #name the bot posts into. Without this, Slack stays silent even when enabled.</p>
+
+      </div>
+      <div class="setting-control">
+        <input type="text"
+               id="notifications.slack.channel"
+               class="text-input"
+               data-path="notifications.slack.channel"
+               value=""
+               placeholder="C0123456789"
+               disabled>
+      </div>
+    </div>
+
+    <div class="setting-row ">
+      <div class="setting-info">
+        <label for="notifications.slack.bot_token_env" class="setting-label">Bot Token Env Var </label>
+        <p class="setting-description">Name of the environment variable holding the xoxb- bot token, used when no token is stored in the extension.</p>
+
+      </div>
+      <div class="setting-control">
+        <input type="text"
+               id="notifications.slack.bot_token_env"
+               class="text-input"
+               data-path="notifications.slack.bot_token_env"
+               value=""
+               placeholder="SLACK_BOT_TOKEN"
+               disabled>
+      </div>
+    </div>
+
+      </div>
+      <div class="subsection">
+        <h4 class="subsection-title">Credentials</h4>
+        <p class="setting-description subsection-blurb">
+          Bot tokens and webhook URLs are held in VSCode SecretStorage, never in a
+          config tier file. Set them, and send a test message, from the Notifier
+          Settings panel.
+        </p>
+        <button class="notifications-open-panel-btn" id="notifications-open-panel-btn" disabled>
+          <span class="codicon codicon-bell-dot"></span>
+          Open Notifier Settings
+        </button>
+      </div>
+    </div>
+    <style>
+      .subsection-blurb {
+        margin-bottom: var(--spacing-sm);
+      }
+      .notifications-open-panel-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 4px 10px;
+        background: var(--vscode-button-background);
+        color: var(--vscode-button-foreground);
+        border: none;
+        border-radius: 2px;
+        cursor: pointer;
+        font-size: 12px;
+      }
+      .notifications-open-panel-btn:hover:not(:disabled) {
+        background: var(--vscode-button-hoverBackground);
+      }
+      .notifications-open-panel-btn:disabled {
+        opacity: 0.5;
+        cursor: default;
+      }
+    </style>
+    <script>
+      (function() {
+        const btn = document.getElementById('notifications-open-panel-btn');
+        if (btn) {
+          btn.addEventListener('click', () => {
+            vscode.postMessage({ type: 'action', action: 'open-notifier-settings' });
+          });
+        }
+      })();
+    </script>
+
+      </div>
+
       <div class="section " id="section-forges">
 
     <div class="section-header" data-section="forges">
@@ -7456,6 +7658,208 @@ exports[`getSettingsHtml snapshots (Issue #1242) > global tier view 1`] = `
 
       </div>
 
+      <div class="section " id="section-notifications">
+
+    <div class="section-header" data-section="notifications">
+      <div class="section-title-row">
+        <span class="section-chevron codicon codicon-chevron-down"></span>
+        <span class="codicon codicon-bell section-icon"></span>
+        <h3 class="section-title">Notifications</h3>
+
+        <a href="#" class="doc-link" data-doc="docs/CONFIGURATION.md#notifications" title="View documentation">
+         <span class="codicon codicon-link-external"></span>
+       </a>
+      </div>
+      <p class="section-description">Discord, Mattermost, and Slack pipeline status posts</p>
+    </div>
+
+
+    <div class="section-content">
+
+      <div class="subsection">
+        <h4 class="subsection-title">Discord</h4>
+        <p class="setting-description subsection-blurb">Posts pipeline status to a Discord channel via an incoming webhook.</p>
+
+    <div class="setting-row ">
+      <div class="setting-info">
+        <label for="notifications.discord.enabled" class="setting-label">Enabled </label>
+        <p class="setting-description">Post pipeline status to Discord</p>
+
+      </div>
+      <div class="setting-control">
+        <input type="checkbox"
+               id="notifications.discord.enabled"
+               class="toggle-input"
+               data-path="notifications.discord.enabled"
+
+               >
+        <label for="notifications.discord.enabled" class="toggle-switch"></label>
+      </div>
+    </div>
+
+    <div class="setting-row ">
+      <div class="setting-info">
+        <label for="notifications.discord.webhook_env" class="setting-label">Webhook Env Var </label>
+        <p class="setting-description">Name of the environment variable holding the webhook URL. The URL itself is never stored in config.</p>
+
+      </div>
+      <div class="setting-control">
+        <input type="text"
+               id="notifications.discord.webhook_env"
+               class="text-input"
+               data-path="notifications.discord.webhook_env"
+               value=""
+               placeholder="DISCORD_WEBHOOK_URL"
+               >
+      </div>
+    </div>
+
+      </div>
+      <div class="subsection">
+        <h4 class="subsection-title">Mattermost</h4>
+        <p class="setting-description subsection-blurb">Posts pipeline status to a Mattermost channel via an incoming webhook.</p>
+
+    <div class="setting-row ">
+      <div class="setting-info">
+        <label for="notifications.mattermost.enabled" class="setting-label">Enabled </label>
+        <p class="setting-description">Post pipeline status to Mattermost</p>
+
+      </div>
+      <div class="setting-control">
+        <input type="checkbox"
+               id="notifications.mattermost.enabled"
+               class="toggle-input"
+               data-path="notifications.mattermost.enabled"
+
+               >
+        <label for="notifications.mattermost.enabled" class="toggle-switch"></label>
+      </div>
+    </div>
+
+    <div class="setting-row ">
+      <div class="setting-info">
+        <label for="notifications.mattermost.webhook_env" class="setting-label">Webhook Env Var </label>
+        <p class="setting-description">Name of the environment variable holding the webhook URL. The URL itself is never stored in config.</p>
+
+      </div>
+      <div class="setting-control">
+        <input type="text"
+               id="notifications.mattermost.webhook_env"
+               class="text-input"
+               data-path="notifications.mattermost.webhook_env"
+               value=""
+               placeholder="MATTERMOST_WEBHOOK_URL"
+               >
+      </div>
+    </div>
+
+      </div>
+      <div class="subsection">
+        <h4 class="subsection-title">Slack</h4>
+        <p class="setting-description subsection-blurb">Posts pipeline status to a Slack channel via a bot token, editing the message in place as stages progress.</p>
+
+    <div class="setting-row ">
+      <div class="setting-info">
+        <label for="notifications.slack.enabled" class="setting-label">Enabled </label>
+        <p class="setting-description">Post pipeline status to Slack</p>
+
+      </div>
+      <div class="setting-control">
+        <input type="checkbox"
+               id="notifications.slack.enabled"
+               class="toggle-input"
+               data-path="notifications.slack.enabled"
+
+               >
+        <label for="notifications.slack.enabled" class="toggle-switch"></label>
+      </div>
+    </div>
+
+    <div class="setting-row ">
+      <div class="setting-info">
+        <label for="notifications.slack.channel" class="setting-label">Channel </label>
+        <p class="setting-description">Channel id (preferred) or #name the bot posts into. Without this, Slack stays silent even when enabled.</p>
+
+      </div>
+      <div class="setting-control">
+        <input type="text"
+               id="notifications.slack.channel"
+               class="text-input"
+               data-path="notifications.slack.channel"
+               value=""
+               placeholder="C0123456789"
+               >
+      </div>
+    </div>
+
+    <div class="setting-row ">
+      <div class="setting-info">
+        <label for="notifications.slack.bot_token_env" class="setting-label">Bot Token Env Var </label>
+        <p class="setting-description">Name of the environment variable holding the xoxb- bot token, used when no token is stored in the extension.</p>
+
+      </div>
+      <div class="setting-control">
+        <input type="text"
+               id="notifications.slack.bot_token_env"
+               class="text-input"
+               data-path="notifications.slack.bot_token_env"
+               value=""
+               placeholder="SLACK_BOT_TOKEN"
+               >
+      </div>
+    </div>
+
+      </div>
+      <div class="subsection">
+        <h4 class="subsection-title">Credentials</h4>
+        <p class="setting-description subsection-blurb">
+          Bot tokens and webhook URLs are held in VSCode SecretStorage, never in a
+          config tier file. Set them, and send a test message, from the Notifier
+          Settings panel.
+        </p>
+        <button class="notifications-open-panel-btn" id="notifications-open-panel-btn">
+          <span class="codicon codicon-bell-dot"></span>
+          Open Notifier Settings
+        </button>
+      </div>
+    </div>
+    <style>
+      .subsection-blurb {
+        margin-bottom: var(--spacing-sm);
+      }
+      .notifications-open-panel-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 4px 10px;
+        background: var(--vscode-button-background);
+        color: var(--vscode-button-foreground);
+        border: none;
+        border-radius: 2px;
+        cursor: pointer;
+        font-size: 12px;
+      }
+      .notifications-open-panel-btn:hover:not(:disabled) {
+        background: var(--vscode-button-hoverBackground);
+      }
+      .notifications-open-panel-btn:disabled {
+        opacity: 0.5;
+        cursor: default;
+      }
+    </style>
+    <script>
+      (function() {
+        const btn = document.getElementById('notifications-open-panel-btn');
+        if (btn) {
+          btn.addEventListener('click', () => {
+            vscode.postMessage({ type: 'action', action: 'open-notifier-settings' });
+          });
+        }
+      })();
+    </script>
+
+      </div>
+
       <div class="section " id="section-forges">
 
     <div class="section-header" data-section="forges">
@@ -11477,6 +11881,208 @@ exports[`getSettingsHtml snapshots (Issue #1242) > local tier view 1`] = `
 
       </div>
     </div>
+
+      </div>
+
+      <div class="section " id="section-notifications">
+
+    <div class="section-header" data-section="notifications">
+      <div class="section-title-row">
+        <span class="section-chevron codicon codicon-chevron-down"></span>
+        <span class="codicon codicon-bell section-icon"></span>
+        <h3 class="section-title">Notifications</h3>
+
+        <a href="#" class="doc-link" data-doc="docs/CONFIGURATION.md#notifications" title="View documentation">
+         <span class="codicon codicon-link-external"></span>
+       </a>
+      </div>
+      <p class="section-description">Discord, Mattermost, and Slack pipeline status posts</p>
+    </div>
+
+
+    <div class="section-content">
+
+      <div class="subsection">
+        <h4 class="subsection-title">Discord</h4>
+        <p class="setting-description subsection-blurb">Posts pipeline status to a Discord channel via an incoming webhook.</p>
+
+    <div class="setting-row ">
+      <div class="setting-info">
+        <label for="notifications.discord.enabled" class="setting-label">Enabled </label>
+        <p class="setting-description">Post pipeline status to Discord</p>
+
+      </div>
+      <div class="setting-control">
+        <input type="checkbox"
+               id="notifications.discord.enabled"
+               class="toggle-input"
+               data-path="notifications.discord.enabled"
+
+               >
+        <label for="notifications.discord.enabled" class="toggle-switch"></label>
+      </div>
+    </div>
+
+    <div class="setting-row ">
+      <div class="setting-info">
+        <label for="notifications.discord.webhook_env" class="setting-label">Webhook Env Var </label>
+        <p class="setting-description">Name of the environment variable holding the webhook URL. The URL itself is never stored in config.</p>
+
+      </div>
+      <div class="setting-control">
+        <input type="text"
+               id="notifications.discord.webhook_env"
+               class="text-input"
+               data-path="notifications.discord.webhook_env"
+               value=""
+               placeholder="DISCORD_WEBHOOK_URL"
+               >
+      </div>
+    </div>
+
+      </div>
+      <div class="subsection">
+        <h4 class="subsection-title">Mattermost</h4>
+        <p class="setting-description subsection-blurb">Posts pipeline status to a Mattermost channel via an incoming webhook.</p>
+
+    <div class="setting-row ">
+      <div class="setting-info">
+        <label for="notifications.mattermost.enabled" class="setting-label">Enabled </label>
+        <p class="setting-description">Post pipeline status to Mattermost</p>
+
+      </div>
+      <div class="setting-control">
+        <input type="checkbox"
+               id="notifications.mattermost.enabled"
+               class="toggle-input"
+               data-path="notifications.mattermost.enabled"
+
+               >
+        <label for="notifications.mattermost.enabled" class="toggle-switch"></label>
+      </div>
+    </div>
+
+    <div class="setting-row ">
+      <div class="setting-info">
+        <label for="notifications.mattermost.webhook_env" class="setting-label">Webhook Env Var </label>
+        <p class="setting-description">Name of the environment variable holding the webhook URL. The URL itself is never stored in config.</p>
+
+      </div>
+      <div class="setting-control">
+        <input type="text"
+               id="notifications.mattermost.webhook_env"
+               class="text-input"
+               data-path="notifications.mattermost.webhook_env"
+               value=""
+               placeholder="MATTERMOST_WEBHOOK_URL"
+               >
+      </div>
+    </div>
+
+      </div>
+      <div class="subsection">
+        <h4 class="subsection-title">Slack</h4>
+        <p class="setting-description subsection-blurb">Posts pipeline status to a Slack channel via a bot token, editing the message in place as stages progress.</p>
+
+    <div class="setting-row ">
+      <div class="setting-info">
+        <label for="notifications.slack.enabled" class="setting-label">Enabled </label>
+        <p class="setting-description">Post pipeline status to Slack</p>
+
+      </div>
+      <div class="setting-control">
+        <input type="checkbox"
+               id="notifications.slack.enabled"
+               class="toggle-input"
+               data-path="notifications.slack.enabled"
+
+               >
+        <label for="notifications.slack.enabled" class="toggle-switch"></label>
+      </div>
+    </div>
+
+    <div class="setting-row ">
+      <div class="setting-info">
+        <label for="notifications.slack.channel" class="setting-label">Channel </label>
+        <p class="setting-description">Channel id (preferred) or #name the bot posts into. Without this, Slack stays silent even when enabled.</p>
+
+      </div>
+      <div class="setting-control">
+        <input type="text"
+               id="notifications.slack.channel"
+               class="text-input"
+               data-path="notifications.slack.channel"
+               value=""
+               placeholder="C0123456789"
+               >
+      </div>
+    </div>
+
+    <div class="setting-row ">
+      <div class="setting-info">
+        <label for="notifications.slack.bot_token_env" class="setting-label">Bot Token Env Var </label>
+        <p class="setting-description">Name of the environment variable holding the xoxb- bot token, used when no token is stored in the extension.</p>
+
+      </div>
+      <div class="setting-control">
+        <input type="text"
+               id="notifications.slack.bot_token_env"
+               class="text-input"
+               data-path="notifications.slack.bot_token_env"
+               value=""
+               placeholder="SLACK_BOT_TOKEN"
+               >
+      </div>
+    </div>
+
+      </div>
+      <div class="subsection">
+        <h4 class="subsection-title">Credentials</h4>
+        <p class="setting-description subsection-blurb">
+          Bot tokens and webhook URLs are held in VSCode SecretStorage, never in a
+          config tier file. Set them, and send a test message, from the Notifier
+          Settings panel.
+        </p>
+        <button class="notifications-open-panel-btn" id="notifications-open-panel-btn">
+          <span class="codicon codicon-bell-dot"></span>
+          Open Notifier Settings
+        </button>
+      </div>
+    </div>
+    <style>
+      .subsection-blurb {
+        margin-bottom: var(--spacing-sm);
+      }
+      .notifications-open-panel-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 4px 10px;
+        background: var(--vscode-button-background);
+        color: var(--vscode-button-foreground);
+        border: none;
+        border-radius: 2px;
+        cursor: pointer;
+        font-size: 12px;
+      }
+      .notifications-open-panel-btn:hover:not(:disabled) {
+        background: var(--vscode-button-hoverBackground);
+      }
+      .notifications-open-panel-btn:disabled {
+        opacity: 0.5;
+        cursor: default;
+      }
+    </style>
+    <script>
+      (function() {
+        const btn = document.getElementById('notifications-open-panel-btn');
+        if (btn) {
+          btn.addEventListener('click', () => {
+            vscode.postMessage({ type: 'action', action: 'open-notifier-settings' });
+          });
+        }
+      })();
+    </script>
 
       </div>
 
@@ -15522,6 +16128,208 @@ exports[`getSettingsHtml snapshots (Issue #1242) > locked section — pipeline r
 
       </div>
 
+      <div class="section " id="section-notifications">
+
+    <div class="section-header" data-section="notifications">
+      <div class="section-title-row">
+        <span class="section-chevron codicon codicon-chevron-down"></span>
+        <span class="codicon codicon-bell section-icon"></span>
+        <h3 class="section-title">Notifications</h3>
+
+        <a href="#" class="doc-link" data-doc="docs/CONFIGURATION.md#notifications" title="View documentation">
+         <span class="codicon codicon-link-external"></span>
+       </a>
+      </div>
+      <p class="section-description">Discord, Mattermost, and Slack pipeline status posts</p>
+    </div>
+
+
+    <div class="section-content">
+
+      <div class="subsection">
+        <h4 class="subsection-title">Discord</h4>
+        <p class="setting-description subsection-blurb">Posts pipeline status to a Discord channel via an incoming webhook.</p>
+
+    <div class="setting-row ">
+      <div class="setting-info">
+        <label for="notifications.discord.enabled" class="setting-label">Enabled </label>
+        <p class="setting-description">Post pipeline status to Discord</p>
+
+      </div>
+      <div class="setting-control">
+        <input type="checkbox"
+               id="notifications.discord.enabled"
+               class="toggle-input"
+               data-path="notifications.discord.enabled"
+
+               disabled>
+        <label for="notifications.discord.enabled" class="toggle-switch"></label>
+      </div>
+    </div>
+
+    <div class="setting-row ">
+      <div class="setting-info">
+        <label for="notifications.discord.webhook_env" class="setting-label">Webhook Env Var </label>
+        <p class="setting-description">Name of the environment variable holding the webhook URL. The URL itself is never stored in config.</p>
+
+      </div>
+      <div class="setting-control">
+        <input type="text"
+               id="notifications.discord.webhook_env"
+               class="text-input"
+               data-path="notifications.discord.webhook_env"
+               value=""
+               placeholder="DISCORD_WEBHOOK_URL"
+               disabled>
+      </div>
+    </div>
+
+      </div>
+      <div class="subsection">
+        <h4 class="subsection-title">Mattermost</h4>
+        <p class="setting-description subsection-blurb">Posts pipeline status to a Mattermost channel via an incoming webhook.</p>
+
+    <div class="setting-row ">
+      <div class="setting-info">
+        <label for="notifications.mattermost.enabled" class="setting-label">Enabled </label>
+        <p class="setting-description">Post pipeline status to Mattermost</p>
+
+      </div>
+      <div class="setting-control">
+        <input type="checkbox"
+               id="notifications.mattermost.enabled"
+               class="toggle-input"
+               data-path="notifications.mattermost.enabled"
+
+               disabled>
+        <label for="notifications.mattermost.enabled" class="toggle-switch"></label>
+      </div>
+    </div>
+
+    <div class="setting-row ">
+      <div class="setting-info">
+        <label for="notifications.mattermost.webhook_env" class="setting-label">Webhook Env Var </label>
+        <p class="setting-description">Name of the environment variable holding the webhook URL. The URL itself is never stored in config.</p>
+
+      </div>
+      <div class="setting-control">
+        <input type="text"
+               id="notifications.mattermost.webhook_env"
+               class="text-input"
+               data-path="notifications.mattermost.webhook_env"
+               value=""
+               placeholder="MATTERMOST_WEBHOOK_URL"
+               disabled>
+      </div>
+    </div>
+
+      </div>
+      <div class="subsection">
+        <h4 class="subsection-title">Slack</h4>
+        <p class="setting-description subsection-blurb">Posts pipeline status to a Slack channel via a bot token, editing the message in place as stages progress.</p>
+
+    <div class="setting-row ">
+      <div class="setting-info">
+        <label for="notifications.slack.enabled" class="setting-label">Enabled </label>
+        <p class="setting-description">Post pipeline status to Slack</p>
+
+      </div>
+      <div class="setting-control">
+        <input type="checkbox"
+               id="notifications.slack.enabled"
+               class="toggle-input"
+               data-path="notifications.slack.enabled"
+
+               disabled>
+        <label for="notifications.slack.enabled" class="toggle-switch"></label>
+      </div>
+    </div>
+
+    <div class="setting-row ">
+      <div class="setting-info">
+        <label for="notifications.slack.channel" class="setting-label">Channel </label>
+        <p class="setting-description">Channel id (preferred) or #name the bot posts into. Without this, Slack stays silent even when enabled.</p>
+
+      </div>
+      <div class="setting-control">
+        <input type="text"
+               id="notifications.slack.channel"
+               class="text-input"
+               data-path="notifications.slack.channel"
+               value=""
+               placeholder="C0123456789"
+               disabled>
+      </div>
+    </div>
+
+    <div class="setting-row ">
+      <div class="setting-info">
+        <label for="notifications.slack.bot_token_env" class="setting-label">Bot Token Env Var </label>
+        <p class="setting-description">Name of the environment variable holding the xoxb- bot token, used when no token is stored in the extension.</p>
+
+      </div>
+      <div class="setting-control">
+        <input type="text"
+               id="notifications.slack.bot_token_env"
+               class="text-input"
+               data-path="notifications.slack.bot_token_env"
+               value=""
+               placeholder="SLACK_BOT_TOKEN"
+               disabled>
+      </div>
+    </div>
+
+      </div>
+      <div class="subsection">
+        <h4 class="subsection-title">Credentials</h4>
+        <p class="setting-description subsection-blurb">
+          Bot tokens and webhook URLs are held in VSCode SecretStorage, never in a
+          config tier file. Set them, and send a test message, from the Notifier
+          Settings panel.
+        </p>
+        <button class="notifications-open-panel-btn" id="notifications-open-panel-btn" disabled>
+          <span class="codicon codicon-bell-dot"></span>
+          Open Notifier Settings
+        </button>
+      </div>
+    </div>
+    <style>
+      .subsection-blurb {
+        margin-bottom: var(--spacing-sm);
+      }
+      .notifications-open-panel-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 4px 10px;
+        background: var(--vscode-button-background);
+        color: var(--vscode-button-foreground);
+        border: none;
+        border-radius: 2px;
+        cursor: pointer;
+        font-size: 12px;
+      }
+      .notifications-open-panel-btn:hover:not(:disabled) {
+        background: var(--vscode-button-hoverBackground);
+      }
+      .notifications-open-panel-btn:disabled {
+        opacity: 0.5;
+        cursor: default;
+      }
+    </style>
+    <script>
+      (function() {
+        const btn = document.getElementById('notifications-open-panel-btn');
+        if (btn) {
+          btn.addEventListener('click', () => {
+            vscode.postMessage({ type: 'action', action: 'open-notifier-settings' });
+          });
+        }
+      })();
+    </script>
+
+      </div>
+
       <div class="section " id="section-forges">
 
     <div class="section-header" data-section="forges">
@@ -19543,6 +20351,208 @@ exports[`getSettingsHtml snapshots (Issue #1242) > project tier view 1`] = `
 
       </div>
     </div>
+
+      </div>
+
+      <div class="section " id="section-notifications">
+
+    <div class="section-header" data-section="notifications">
+      <div class="section-title-row">
+        <span class="section-chevron codicon codicon-chevron-down"></span>
+        <span class="codicon codicon-bell section-icon"></span>
+        <h3 class="section-title">Notifications</h3>
+
+        <a href="#" class="doc-link" data-doc="docs/CONFIGURATION.md#notifications" title="View documentation">
+         <span class="codicon codicon-link-external"></span>
+       </a>
+      </div>
+      <p class="section-description">Discord, Mattermost, and Slack pipeline status posts</p>
+    </div>
+
+
+    <div class="section-content">
+
+      <div class="subsection">
+        <h4 class="subsection-title">Discord</h4>
+        <p class="setting-description subsection-blurb">Posts pipeline status to a Discord channel via an incoming webhook.</p>
+
+    <div class="setting-row ">
+      <div class="setting-info">
+        <label for="notifications.discord.enabled" class="setting-label">Enabled </label>
+        <p class="setting-description">Post pipeline status to Discord</p>
+
+      </div>
+      <div class="setting-control">
+        <input type="checkbox"
+               id="notifications.discord.enabled"
+               class="toggle-input"
+               data-path="notifications.discord.enabled"
+
+               >
+        <label for="notifications.discord.enabled" class="toggle-switch"></label>
+      </div>
+    </div>
+
+    <div class="setting-row ">
+      <div class="setting-info">
+        <label for="notifications.discord.webhook_env" class="setting-label">Webhook Env Var </label>
+        <p class="setting-description">Name of the environment variable holding the webhook URL. The URL itself is never stored in config.</p>
+
+      </div>
+      <div class="setting-control">
+        <input type="text"
+               id="notifications.discord.webhook_env"
+               class="text-input"
+               data-path="notifications.discord.webhook_env"
+               value=""
+               placeholder="DISCORD_WEBHOOK_URL"
+               >
+      </div>
+    </div>
+
+      </div>
+      <div class="subsection">
+        <h4 class="subsection-title">Mattermost</h4>
+        <p class="setting-description subsection-blurb">Posts pipeline status to a Mattermost channel via an incoming webhook.</p>
+
+    <div class="setting-row ">
+      <div class="setting-info">
+        <label for="notifications.mattermost.enabled" class="setting-label">Enabled </label>
+        <p class="setting-description">Post pipeline status to Mattermost</p>
+
+      </div>
+      <div class="setting-control">
+        <input type="checkbox"
+               id="notifications.mattermost.enabled"
+               class="toggle-input"
+               data-path="notifications.mattermost.enabled"
+
+               >
+        <label for="notifications.mattermost.enabled" class="toggle-switch"></label>
+      </div>
+    </div>
+
+    <div class="setting-row ">
+      <div class="setting-info">
+        <label for="notifications.mattermost.webhook_env" class="setting-label">Webhook Env Var </label>
+        <p class="setting-description">Name of the environment variable holding the webhook URL. The URL itself is never stored in config.</p>
+
+      </div>
+      <div class="setting-control">
+        <input type="text"
+               id="notifications.mattermost.webhook_env"
+               class="text-input"
+               data-path="notifications.mattermost.webhook_env"
+               value=""
+               placeholder="MATTERMOST_WEBHOOK_URL"
+               >
+      </div>
+    </div>
+
+      </div>
+      <div class="subsection">
+        <h4 class="subsection-title">Slack</h4>
+        <p class="setting-description subsection-blurb">Posts pipeline status to a Slack channel via a bot token, editing the message in place as stages progress.</p>
+
+    <div class="setting-row ">
+      <div class="setting-info">
+        <label for="notifications.slack.enabled" class="setting-label">Enabled </label>
+        <p class="setting-description">Post pipeline status to Slack</p>
+
+      </div>
+      <div class="setting-control">
+        <input type="checkbox"
+               id="notifications.slack.enabled"
+               class="toggle-input"
+               data-path="notifications.slack.enabled"
+
+               >
+        <label for="notifications.slack.enabled" class="toggle-switch"></label>
+      </div>
+    </div>
+
+    <div class="setting-row ">
+      <div class="setting-info">
+        <label for="notifications.slack.channel" class="setting-label">Channel </label>
+        <p class="setting-description">Channel id (preferred) or #name the bot posts into. Without this, Slack stays silent even when enabled.</p>
+
+      </div>
+      <div class="setting-control">
+        <input type="text"
+               id="notifications.slack.channel"
+               class="text-input"
+               data-path="notifications.slack.channel"
+               value=""
+               placeholder="C0123456789"
+               >
+      </div>
+    </div>
+
+    <div class="setting-row ">
+      <div class="setting-info">
+        <label for="notifications.slack.bot_token_env" class="setting-label">Bot Token Env Var </label>
+        <p class="setting-description">Name of the environment variable holding the xoxb- bot token, used when no token is stored in the extension.</p>
+
+      </div>
+      <div class="setting-control">
+        <input type="text"
+               id="notifications.slack.bot_token_env"
+               class="text-input"
+               data-path="notifications.slack.bot_token_env"
+               value=""
+               placeholder="SLACK_BOT_TOKEN"
+               >
+      </div>
+    </div>
+
+      </div>
+      <div class="subsection">
+        <h4 class="subsection-title">Credentials</h4>
+        <p class="setting-description subsection-blurb">
+          Bot tokens and webhook URLs are held in VSCode SecretStorage, never in a
+          config tier file. Set them, and send a test message, from the Notifier
+          Settings panel.
+        </p>
+        <button class="notifications-open-panel-btn" id="notifications-open-panel-btn">
+          <span class="codicon codicon-bell-dot"></span>
+          Open Notifier Settings
+        </button>
+      </div>
+    </div>
+    <style>
+      .subsection-blurb {
+        margin-bottom: var(--spacing-sm);
+      }
+      .notifications-open-panel-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 4px 10px;
+        background: var(--vscode-button-background);
+        color: var(--vscode-button-foreground);
+        border: none;
+        border-radius: 2px;
+        cursor: pointer;
+        font-size: 12px;
+      }
+      .notifications-open-panel-btn:hover:not(:disabled) {
+        background: var(--vscode-button-hoverBackground);
+      }
+      .notifications-open-panel-btn:disabled {
+        opacity: 0.5;
+        cursor: default;
+      }
+    </style>
+    <script>
+      (function() {
+        const btn = document.getElementById('notifications-open-panel-btn');
+        if (btn) {
+          btn.addEventListener('click', () => {
+            vscode.postMessage({ type: 'action', action: 'open-notifier-settings' });
+          });
+        }
+      })();
+    </script>
 
       </div>
 
