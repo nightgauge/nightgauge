@@ -3,7 +3,8 @@
  */
 import * as os from "node:os";
 import * as path from "node:path";
-import { vi } from "vitest";
+import { beforeEach, vi } from "vitest";
+import { sharedBoardSnapshots } from "../src/services/BoardSnapshotStore";
 import { DEFAULT_CONFIG } from "../src/config/schema";
 
 // Hermetic config tiers: resolver reads merge the machine tier
@@ -266,3 +267,16 @@ vi.mock("vscode", () => ({
     getExtension: vi.fn(() => undefined),
   },
 }));
+
+// The board snapshot store is a module singleton shared by every
+// ProjectBoardService in the window (#11), which is exactly what makes it
+// leak between tests: two tests using the same owner/project/status key would
+// have the second read the first one's snapshot instead of its own mock.
+//
+// Resetting here rather than in each suite's beforeEach means a test written
+// later cannot forget to, and the failure mode this prevents is a confusing
+// one - assertions fail with another test's data, which reads like a mapping
+// bug rather than a shared-state bug.
+beforeEach(() => {
+  sharedBoardSnapshots.clear();
+});
