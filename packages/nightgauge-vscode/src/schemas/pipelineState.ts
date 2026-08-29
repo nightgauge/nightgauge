@@ -289,7 +289,7 @@ export const PipelineStateSchema = z.object({
       // A stage ended in `failed` status — never a success outcome (#1109).
       "partial",
       // The post-condition gate detected a stage that exited 0 without doing
-      // the work (#3267).
+      // the work. Refuted by a merged PR (#1120).
       "skill-no-op",
       // Pickup deferred — issue's native blockedBy dependencies still open
       // (#189/#305). Non-failure; issue stays eligible for a later tick.
