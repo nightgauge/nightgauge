@@ -54,7 +54,7 @@ export interface PipelineExecutionInput {
  * on this list being authoritative; adding a new "success" outcome means
  * appending here.
  */
-const SUCCESS_OUTCOMES: PipelineOutcomeType[] = [
+export const SUCCESS_OUTCOMES: readonly PipelineOutcomeType[] = [
   "success",
   "productive",
   "verify-and-close",
