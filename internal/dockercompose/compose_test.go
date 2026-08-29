@@ -238,3 +238,33 @@ func TestIssueNumberFromProject(t *testing.T) {
 		}
 	}
 }
+
+// TestParseComposeLs_ConfigFiles (#442): docker emits ConfigFiles as one
+// comma-separated string; it must surface as a split slice in both shapes.
+func TestParseComposeLs_ConfigFiles(t *testing.T) {
+	cases := map[string]string{
+		"array": `[{"Name":"issue-1","Status":"running(1)","ConfigFiles":"/ws/a/docker-compose.yml,/ws/a/override.yml"},{"Name":"issue-2","Status":"exited(0)"}]`,
+		"ndjson": "{\"Name\":\"issue-1\",\"Status\":\"running(1)\",\"ConfigFiles\":\"/ws/a/docker-compose.yml,/ws/a/override.yml\"}\n" +
+			"{\"Name\":\"issue-2\",\"Status\":\"exited(0)\"}\n",
+	}
+	for name, out := range cases {
+		t.Run(name, func(t *testing.T) {
+			installFakeDocker(t)
+			t.Setenv("FAKE_DOCKER_LS_OUTPUT", out)
+			projects, err := ListIssueProjects(context.Background())
+			if err != nil {
+				t.Fatalf("ListIssueProjects: %v", err)
+			}
+			if len(projects) != 2 {
+				t.Fatalf("expected 2 projects, got %d", len(projects))
+			}
+			want := []string{"/ws/a/docker-compose.yml", "/ws/a/override.yml"}
+			if got := projects[0].ConfigFiles; len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
+				t.Errorf("ConfigFiles = %v, want %v", got, want)
+			}
+			if got := projects[1].ConfigFiles; len(got) != 0 {
+				t.Errorf("missing ConfigFiles must parse as empty, got %v", got)
+			}
+		})
+	}
+}

@@ -33,8 +33,8 @@ func TestSweepOrphanedCompose_RunsOnTheAutonomousCycle(t *testing.T) {
 		&Scheduler{
 			workspaceRoot: root,
 			composeLister: listing(
-				dockercompose.Project{Name: "issue-921", IssueNumber: 921}, // live worktree
-				dockercompose.Project{Name: "issue-922", IssueNumber: 922}, // orphaned
+				composeIn(root, 921), // live worktree
+				composeIn(root, 922), // orphaned
 			),
 			composeTeardown: recordingTeardown(&torn),
 		},
@@ -67,9 +67,9 @@ func TestSweepOrphanedCompose_UnionProtectsBothPopulations(t *testing.T) {
 		scheduler: &Scheduler{
 			workspaceRoot: root,
 			composeLister: listing(
-				dockercompose.Project{Name: "issue-931", IssueNumber: 931},
-				dockercompose.Project{Name: "issue-932", IssueNumber: 932},
-				dockercompose.Project{Name: "issue-933", IssueNumber: 933},
+				composeIn(root, 931),
+				composeIn(root, 932),
+				composeIn(root, 933),
 			),
 			composeTeardown: recordingTeardown(&torn),
 		},
@@ -109,7 +109,7 @@ func TestSweepOrphanedCompose_NilStateSkipsLoudly(t *testing.T) {
 	as := &AutonomousScheduler{
 		scheduler: &Scheduler{
 			workspaceRoot:   root,
-			composeLister:   listing(dockercompose.Project{Name: "issue-942", IssueNumber: 942}),
+			composeLister:   listing(composeIn(root, 942)),
 			composeTeardown: recordingTeardown(&torn),
 		},
 	}
@@ -159,8 +159,13 @@ func TestSweepOrphanedCompose_UndeterminedTearsDownNothing(t *testing.T) {
 // injected lister, no injected teardown — still reach the docker CLI from the
 // autonomous receiver, so "nothing called docker" can never be the whole story.
 func TestSweepOrphanedCompose_ProductionDefaultsReachDocker(t *testing.T) {
-	logPath := installRecordingDocker(t, `[{"Name":"issue-961","Status":"running(1)"},{"Name":"issue-962","Status":"running(1)"}]`)
 	root := worktreeRepo(t, 961)
+	// ConfigFiles under root: the candidate bound (#442) skips a project whose
+	// compose files the workspace cannot vouch for, and docker's real `ls`
+	// output carries the field.
+	cf := func(n string) string { return filepath.Join(root, ".worktrees", n, "docker-compose.yml") }
+	logPath := installRecordingDocker(t, `[{"Name":"issue-961","Status":"running(1)","ConfigFiles":"`+cf("issue-961")+`"},`+
+		`{"Name":"issue-962","Status":"running(1)","ConfigFiles":"`+cf("issue-962")+`"}]`)
 
 	as := &AutonomousScheduler{
 		scheduler: &Scheduler{workspaceRoot: root},
@@ -215,7 +220,7 @@ func TestAutonomousCycle_ComposeReconcileRunsBeforeTheWorktreeSweep(t *testing.T
 	as := NewAutonomousScheduler(
 		&Scheduler{
 			workspaceRoot:   root,
-			composeLister:   listing(dockercompose.Project{Name: "issue-802", IssueNumber: 802}),
+			composeLister:   listing(composeIn(root, 802)),
 			composeTeardown: recordingTeardown(&torn),
 		},
 		nil, nil, nil, DefaultAutonomousConfig(), t.TempDir(),
@@ -263,8 +268,8 @@ func TestSweepOrphanedCompose_SnapshotArmProtectsARunWithNoWorktree(t *testing.T
 		scheduler: &Scheduler{
 			workspaceRoot: root,
 			composeLister: listing(
-				dockercompose.Project{Name: "issue-972", IssueNumber: 972},
-				dockercompose.Project{Name: "issue-973", IssueNumber: 973},
+				composeIn(root, 972),
+				composeIn(root, 973),
 			),
 			composeTeardown: recordingTeardown(&torn),
 		},
@@ -306,7 +311,7 @@ func TestSweepOrphanedCompose_UnreadableSnapshotSourceVetoesTheTeardown(t *testi
 	as := &AutonomousScheduler{
 		scheduler: &Scheduler{
 			workspaceRoot:   root,
-			composeLister:   listing(dockercompose.Project{Name: "issue-992", IssueNumber: 992}),
+			composeLister:   listing(composeIn(root, 992)),
 			composeTeardown: recordingTeardown(&torn),
 		},
 		state: &AutonomousState{},
