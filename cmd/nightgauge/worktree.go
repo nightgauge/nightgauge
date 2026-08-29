@@ -75,14 +75,18 @@ branch, which is what actually prevents the work being lost.`,
 				return fmt.Errorf("inspect %s: %w", worktree, err)
 			}
 			if !dirty {
-				return emitRecoverResult(cmd, jsonOut, false, "worktree is clean — nothing to recover")
+				return emitRecoverResult(cmd, jsonOut, false, "worktree is clean — nothing to recover", orchestrator.RecoveryOutcome{})
 			}
 
-			if err := orchestrator.RecoverUncommittedWork(worktree, issue, stage); err != nil {
+			rec, err := orchestrator.RecoverUncommittedWork(worktree, issue, stage)
+			if err != nil {
 				return fmt.Errorf("recover %s: %w", worktree, err)
 			}
-			return emitRecoverResult(cmd, jsonOut, true,
-				fmt.Sprintf("committed uncommitted %s work on #%d", stage, issue))
+			message := fmt.Sprintf("committed uncommitted %s work on #%d", stage, issue)
+			if rec.WithheldReason != "" {
+				message += " — " + rec.WithheldReason
+			}
+			return emitRecoverResult(cmd, jsonOut, true, message, rec)
 		},
 	}
 
@@ -113,12 +117,22 @@ func worktreeHasChanges(path string) (bool, error) {
 	return reclaim.ClassifyStatus(string(out)).Blocked(), nil
 }
 
-func emitRecoverResult(cmd *cobra.Command, jsonOut, recovered bool, message string) error {
+// emitRecoverResult reports the rescue, INCLUDING anything the coherence guard
+// held back (#1108). A partial rescue that printed a bare success would be the
+// defect the guard's granularity fix exists to remove, one layer up: the
+// operator would be told the work was committed and never learn that the
+// deletions are still sitting unstaged in the worktree.
+func emitRecoverResult(cmd *cobra.Command, jsonOut, recovered bool, message string, rec orchestrator.RecoveryOutcome) error {
 	if jsonOut {
-		return json.NewEncoder(cmd.OutOrStdout()).Encode(map[string]any{
+		payload := map[string]any{
 			"recovered": recovered,
 			"message":   message,
-		})
+		}
+		if rec.WithheldReason != "" {
+			payload["withheld_reason"] = rec.WithheldReason
+			payload["withheld_deletions"] = rec.WithheldDeletions
+		}
+		return json.NewEncoder(cmd.OutOrStdout()).Encode(payload)
 	}
 	fmt.Fprintln(cmd.OutOrStdout(), message)
 	return nil
