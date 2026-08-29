@@ -767,9 +767,10 @@ type QueueItem struct {
 //     failure. (Issue #231)
 //   - "excluded_label" — the item carries a human-only label
 //     (autonomous.exclude_labels, default ["owner-action"]) and was paused by
-//     DequeueIndependent instead of being dispatched. Summary names the label
-//     that matched. The item is held, not discarded, so an operator who queued
-//     it can see why it is not running. (Issue #1146)
+//     DequeueIndependent instead of being dispatched. Label carries the label
+//     that matched (Summary repeats it as prose). The item is held, not
+//     discarded, so an operator who queued it can see why it is not running.
+//     (Issue #1146)
 //
 // FailedRunID is empty for kinds that are not associated with a specific
 // failed RunRecord (e.g. baseline_ci_red, blocked_dependency).
@@ -788,6 +789,12 @@ type QueuePausedReason struct {
 	// BlockingIssues names the open blockers when Kind == "blocked_dependency".
 	// Empty for other kinds. (Issue #231)
 	BlockingIssues []QueueBlockingRef `json:"blocking_issues,omitempty"`
+
+	// Label is the human-only label that matched when Kind ==
+	// "excluded_label". Empty for other kinds. Carried structurally rather
+	// than only inside Summary so readers can render it without parsing
+	// prose — the dashboard and the queue tree both name it. (Issue #1146)
+	Label string `json:"label,omitempty"`
 }
 
 // QueueBlockingRef is a reference to a blocking issue within a queue item.
@@ -822,7 +829,13 @@ const queueStateFile = ".nightgauge/pipeline/queue-state.json"
 // BlockingIssues field on QueuePausedReason. Additive — 2.2 readers ignore the
 // unknown kind (it parses as a generic paused item) and the BlockingIssues
 // field is omitempty, so older records remain valid without a migration.
-const queueSchemaVersion = "2.3"
+//
+// 2.3 → 2.4 (Issue #1146): added "excluded_label" PausedReason kind and the
+// Label field on QueuePausedReason, emitted when DequeueIndependent holds an
+// item carrying a human-only label instead of dispatching it. Additive — 2.3
+// readers ignore the unknown kind (it parses as a generic paused item) and the
+// Label field is omitempty, so older records remain valid without a migration.
+const queueSchemaVersion = "2.4"
 
 // currentRunSidecarFile is the path (relative to workspaceRoot) where the
 // scheduler records the in-flight run at stage start. The file is removed on
@@ -2370,6 +2383,7 @@ func (s *Scheduler) DequeueIndependent(ctx context.Context, maxSlots int, runnin
 			s.queue[i].Status = "paused"
 			s.queue[i].PausedReason = &QueuePausedReason{
 				Kind:    "excluded_label",
+				Label:   label,
 				Summary: fmt.Sprintf("carries human-only label %q (autonomous.exclude_labels)", label),
 			}
 			pausedByLabel = true

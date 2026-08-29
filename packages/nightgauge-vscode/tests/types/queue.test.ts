@@ -4,6 +4,7 @@
  * @see Issue #3001 — `upstream_failure` paused-reason variant.
  * @see Issue #3004 — `baseline_ci_red` paused-reason variant + schema 2.2 bump.
  * @see Issue #231 — `blocked_dependency` paused-reason variant + schema 2.3 bump.
+ * @see Issue #1146 — `excluded_label` paused-reason variant + schema 2.4 bump.
  */
 
 import { describe, it, expect } from "vitest";
@@ -14,8 +15,8 @@ import {
 } from "../../src/types/queue";
 
 describe("QUEUE_SCHEMA_VERSION", () => {
-  it("is bumped to 2.3 for blocked_dependency support", () => {
-    expect(QUEUE_SCHEMA_VERSION).toBe("2.3");
+  it("is bumped to 2.4 for excluded_label support", () => {
+    expect(QUEUE_SCHEMA_VERSION).toBe("2.4");
   });
 });
 
@@ -54,6 +55,18 @@ describe("QueueItemPausedReason", () => {
     expect(r.kind).toBe("blocked_dependency");
     if (r.kind === "blocked_dependency") {
       expect(r.blockingIssues[0].number).toBe(123);
+    }
+  });
+
+  it("excluded_label variant compiles with the matched label", () => {
+    const r: QueueItemPausedReason = {
+      kind: "excluded_label",
+      label: "owner-action",
+      summary: 'carries human-only label "owner-action" (autonomous.exclude_labels)',
+    };
+    expect(r.kind).toBe("excluded_label");
+    if (r.kind === "excluded_label") {
+      expect(r.label).toBe("owner-action");
     }
   });
 

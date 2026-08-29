@@ -18,6 +18,12 @@ function pausedReasonAriaLabel(r: QueueItemPausedReason): string {
   if (r.kind === "upstream_failure") return "upstream pipeline failure";
   if (r.kind === "baseline_ci_red") return "baseline CI red on main";
   if (r.kind === "blocked_dependency") return "blocked by an open dependency";
+  // Issue #1146 — human-only label held at the dequeue chokepoint. Name the
+  // label: "a human-only label" alone does not tell the operator which one to
+  // remove.
+  if (r.kind === "excluded_label") {
+    return r.label ? `the human-only label ${r.label}` : "a human-only label";
+  }
   return (r as { kind: string }).kind;
 }
 import { isBlocked, getBlockerTitles } from "../../utils/dependencyUtils";
@@ -190,6 +196,10 @@ export class QueuedIssueTreeItem extends BaseTreeItem {
       } else if (r.kind === "blocked_dependency") {
         const first = r.blockingIssues[0];
         label = first ? `paused: blocked by #${first.number}` : "paused: blocked by dependency";
+      } else if (r.kind === "excluded_label") {
+        // Issue #1146 — the label is the actionable part: it is what an
+        // operator removes to release the item.
+        label = r.label ? `paused: human-only label ${r.label}` : "paused: human-only label";
       } else {
         // Defensive: future variants should fall through to a generic label.
         label = `paused: ${(r as { kind: string }).kind}`;
@@ -252,6 +262,15 @@ export class QueuedIssueTreeItem extends BaseTreeItem {
           text += `Summary: ${r.summary}\n`;
         }
         text += `\n\`deps-gate promote\` (and the autonomous cascade) auto-resumes this item when its blockers close.\n\n`;
+      } else if (r.kind === "excluded_label") {
+        text += `Reason: human-only label\n`;
+        if (r.label) {
+          text += `Label: \`${r.label}\`\n`;
+        }
+        if (r.summary) {
+          text += `Summary: ${r.summary}\n`;
+        }
+        text += `\nThis issue carries a label listed in \`autonomous.exclude_labels\` — work only a person can do, so the scheduler holds it instead of claiming a slot. Nothing resumes it automatically: remove the label and re-queue the issue, or discard the item.\n\n`;
       }
     }
 

@@ -78,6 +78,12 @@ func TestDequeueIndependent_SkipsExcludedLabelWhateverRouteEnqueuedIt(t *testing
 	if !strings.Contains(excluded.PausedReason.Summary, "owner-action") {
 		t.Errorf("PausedReason.Summary = %q, want it to name the matched label", excluded.PausedReason.Summary)
 	}
+	// The label is carried structurally as well as in the prose summary, so
+	// readers (the queue tree, the dashboard card) can name it without
+	// parsing the summary.
+	if excluded.PausedReason.Label != "owner-action" {
+		t.Errorf("PausedReason.Label = %q, want %q", excluded.PausedReason.Label, "owner-action")
+	}
 }
 
 // TestDequeueIndependent_LogsExcludedLabelSkip pins the operator-visible
@@ -131,8 +137,13 @@ func TestDequeueIndependent_ExcludedLabelMatchIsCaseInsensitive(t *testing.T) {
 		if got := s.DequeueIndependent(t.Context(), 5, nil); len(got) != 0 {
 			t.Fatalf("dequeued %+v, want none (unset config must resolve to %v)", got, defaultExcludeLabels)
 		}
-		if s.ExcludeLabels()[0] != defaultExcludeLabels[0] {
-			t.Errorf("ExcludeLabels() = %v, want the resolved default %v", s.ExcludeLabels(), defaultExcludeLabels)
+		// ExcludeLabels() is what the CLI `queue add` and the IPC door check
+		// read. NewScheduler always resolves, so this only bites a Scheduler
+		// built as a struct literal (tests): before #1146 it handed callers the
+		// raw, unresolved field and an empty list disables the check entirely.
+		got := s.ExcludeLabels()
+		if len(got) == 0 || got[0] != defaultExcludeLabels[0] {
+			t.Errorf("ExcludeLabels() = %v, want the resolved default %v", got, defaultExcludeLabels)
 		}
 	})
 
