@@ -116,8 +116,11 @@ export class IssueDragAndDropController implements vscode.TreeDragAndDropControl
    * "Unexpected end of JSON input". The static stash, written by whichever
    * instance just ran `handleDrag`, lets the target recover the payload.
    *
-   * Recency-guarded (see DRAG_STASH_TTL_MS) so a stale stash from an earlier
-   * drag can never be injected into an unrelated drop.
+   * Guarded two ways so a stale stash can never be injected into an unrelated
+   * drop (#1104): `handleDrag` clears it at the top of every invocation, so the
+   * stash only ever belongs to the drag in flight, and `consumeStashedDragPayload`
+   * additionally rejects anything older than DRAG_STASH_TTL_MS. The clear is the
+   * load-bearing half — recency alone let a 10s-old payload ride an empty drop.
    */
   private static lastDragPayload: { json: string; at: number } | null = null;
 
@@ -201,6 +204,14 @@ export class IssueDragAndDropController implements vscode.TreeDragAndDropControl
     dataTransfer: vscode.DataTransfer,
     token: vscode.CancellationToken
   ): Promise<void> {
+    // Bind the stash to THIS drag before doing anything else. It is recovered
+    // by age alone, and age is not identity: without this clear, a drag that
+    // serializes nothing (cancelled, or a mid-refresh placeholder) inherits the
+    // previous drag's payload and silently drops an issue the operator never
+    // dragged (#1104). Clearing first makes the empty-transfer case fall
+    // through to handleDrop's "no issues" handling (#1102) instead.
+    IssueDragAndDropController.lastDragPayload = null;
+
     if (token.isCancellationRequested) {
       return;
     }
@@ -234,7 +245,16 @@ export class IssueDragAndDropController implements vscode.TreeDragAndDropControl
       return;
     }
 
+    // Nothing draggable in the source. This is the board-refresh case:
+    // ProjectBoardTreeProvider renders a "Loading..." ProjectBoardActionItem
+    // while a fetch is in flight, and the user grabs that placeholder instead
+    // of an issue row. Returning here leaves the DataTransfer empty, which
+    // handleDrop must recognise as "no issues" rather than as malformed JSON
+    // (#1102) — nothing is stashed on this path, so the stash cannot rescue it.
     if (issueItems.length === 0) {
+      this.logger?.debug("handleDrag: no draggable issue items in source", {
+        sourceTypes: source.map((item) => item?.constructor?.name ?? "unknown"),
+      });
       return;
     }
 
@@ -368,6 +388,21 @@ export class IssueDragAndDropController implements vscode.TreeDragAndDropControl
           });
           rawValue = stashed;
         }
+      }
+      // An empty payload is not corrupt JSON — it means the drag carried no
+      // issues, which is what a drop onto/from a mid-refresh board looks like.
+      // Report that, rather than letting JSON.parse("") surface as
+      // "Unexpected end of JSON input" (#1102).
+      if (typeof rawValue !== "string" || rawValue.trim() === "") {
+        this.logger?.warn("handleDrop: empty drag payload — no issues to drop", {
+          availableMimes,
+          rawValueType: typeof rawValue,
+        });
+        void vscode.window.showWarningMessage(
+          "No issues were dropped — the project board was still refreshing. " +
+            "Wait for the refresh to finish, then drag again."
+        );
+        return;
       }
       issues = this.deserializeIssues(rawValue);
       this.logger?.debug("handleDrop: deserialized issues", {
@@ -778,6 +813,12 @@ export class IssueDragAndDropController implements vscode.TreeDragAndDropControl
    * @throws Error if JSON is malformed
    */
   private deserializeIssues(json: string | unknown): SerializedIssue[] {
+    // Guard the blank string explicitly: JSON.parse("") reports "Unexpected
+    // end of JSON input", which describes a corrupt payload rather than an
+    // absent one and misleads whoever reads it (#1102).
+    if (typeof json === "string" && json.trim() === "") {
+      throw new Error("Empty drag payload — no issue data to deserialize");
+    }
     const parsed = typeof json === "string" ? JSON.parse(json) : json;
 
     // Validate structure
