@@ -27,6 +27,7 @@ export type QueueItemStatus =
  * @see Issue #3001 — Preserve pipeline + queue state on terminal failure
  * @see Issue #3004 — Baseline-CI dependency gate (`baseline_ci_red` variant)
  * @see Issue #231 — Native blockedBy deferral (`blocked_dependency` variant)
+ * @see Issue #1146 — Human-only label held at dequeue (`excluded_label` variant)
  */
 export type QueueItemPausedReason =
   | {
@@ -73,6 +74,24 @@ export type QueueItemPausedReason =
       summary?: string;
       /** The open blockers naming why dispatch is deferred. */
       blockingIssues: { number: number; title?: string; repo?: string }[];
+    }
+  | {
+      /**
+       * Item carries a human-only label (`autonomous.exclude_labels`, default
+       * `["owner-action"]`) — work a person must do, which the pipeline can
+       * only burn tokens on. The Go scheduler's `DequeueIndependent` holds it
+       * at the dispatch chokepoint (Issue #1146) instead of claiming a slot.
+       * Nothing resumes it automatically: an operator removes the label and
+       * re-queues, or discards the item.
+       */
+      kind: "excluded_label";
+      /** Human-readable summary surfaced in the dashboard's paused-items panel. */
+      summary?: string;
+      /**
+       * The label that matched. Carried structurally so readers can name it
+       * without parsing `summary`.
+       */
+      label?: string;
     };
 
 /**
@@ -208,12 +227,19 @@ export interface QueueState {
  * the blocker list. `deps-gate promote` resumes 2.3 items when their blockers
  * all close.
  *
+ * 2.3 → 2.4 (Issue #1146): added `excluded_label` discriminated variant to
+ * `QueueItemPausedReason` (with the matched `label`). Additive — 2.3 readers
+ * ignore the unknown `kind` (it parses as a generic paused item) and 2.4
+ * readers name the label that held the item. Nothing promotes these: an
+ * operator removes the label and re-queues, or discards the item.
+ *
  * @see Issue #1898 - Consolidate Queue into Go
  * @see Issue #3001 — Preserve pipeline + queue state on terminal failure
  * @see Issue #3004 — Baseline-CI dependency gate
  * @see Issue #231 — Native blockedBy dependency deferral
+ * @see Issue #1146 — exclude_labels enforced at the dequeue chokepoint
  */
-export const QUEUE_SCHEMA_VERSION = "2.3";
+export const QUEUE_SCHEMA_VERSION = "2.4";
 
 /**
  * Callbacks for queue events
