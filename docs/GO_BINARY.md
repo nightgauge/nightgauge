@@ -1310,11 +1310,33 @@ slot frees; before #410 it ran on every Scheduler construction, so the pacing is
 new exposure for compose. `nightgauge cleanup` is the operator path in the
 meantime.
 
-**Residual** — the candidate list is host-global (`docker compose ls --all` has no
-repo attribution) while all three protection sources are bounded by the scanned
-repo roots, so a live run in a repo this workspace never registered is protected
-by none of them. Bounding the candidates by their compose `ConfigFiles` is the
-durable fix and is filed separately.
+**The candidate set is bounded to the same roots** (#442). `docker compose ls
+--all` is host-global — it lists every `issue-N` project on the machine with no
+repo attribution — while all three protection sources are bounded by the scanned
+repo roots. Before #442 a live run in a repo this workspace never registered (an
+unregistered sibling, a repo dropped from the manifest) was protected by none of
+them, and `down -v` destroyed its named volumes as an "orphan". The bound is the
+project's own compose `ConfigFiles` (`docker compose ls --format json` emits the
+list; `dockercompose.Project.ConfigFiles` carries it split):
+
+| Project's compose files                                                             | Verdict                                                                    |
+| ----------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| Every file resolves inside a scanned root                                           | Candidate — torn down if no run is in flight                               |
+| Any file resolves outside every scanned root                                        | Skipped, logged `skipped issue-N: compose files outside scanned roots (…)` |
+| No `ConfigFiles` reported, or a path that cannot be resolved (relative, unreadable) | Skipped, logged `skipped issue-N: no resolvable compose files`             |
+
+Containment is a path relation (`filepath.Rel` must not climb out), never a
+string prefix — `/ws/repo` does not vouch for `/ws/repo-other` — and both sides
+are cleaned and symlink-resolved first, so a file reached through a link that
+leaves the root is outside. A file whose tail no longer exists is resolved
+through its **deepest existing ancestor** with the missing suffix appended: the
+population this pass exists to reap is a stack whose worktree the post-merge
+cleanup already removed, and the compose file went with it. Refusing every
+missing file would make the reconcile skip exactly its own orphans, and the
+missing tail cannot widen what the resolution vouches for. **Every skip is
+logged** under `compose-reconcile:`, because the skip line is the only evidence
+that the pass was narrower than `compose ls` makes it look; a stack outside the
+workspace is `nightgauge cleanup`'s to remove, from its own repo.
 
 #### Active-Worktree Scanning — Single-Scanner Contract (Issue #323)
 

@@ -34,6 +34,12 @@ type Project struct {
 	// "running(2)", "exited(1)"). Not used for control flow — purely
 	// informational for human / JSON output.
 	Status string
+	// ConfigFiles is the compose file list docker recorded for the project
+	// (`docker compose ls` emits it as one comma-separated string). It is the
+	// only repo attribution a compose project carries, and the autonomous
+	// reconcile uses it to bound its candidate set to the workspace's scanned
+	// roots (#442). Empty when docker reported none.
+	ConfigFiles []string
 }
 
 // TeardownOptions controls TeardownProject behaviour.
@@ -76,8 +82,21 @@ func IsAvailable(ctx context.Context) bool {
 // ls --format json`. Newer docker versions emit a JSON array; older versions
 // emit one object per line. We tolerate both.
 type composeLsEntry struct {
-	Name   string `json:"Name"`
-	Status string `json:"Status"`
+	Name        string `json:"Name"`
+	Status      string `json:"Status"`
+	ConfigFiles string `json:"ConfigFiles"`
+}
+
+// splitConfigFiles turns docker's comma-separated ConfigFiles string into a
+// slice, dropping empty entries. Docker joins the list with "," and no space.
+func splitConfigFiles(raw string) []string {
+	var out []string
+	for _, f := range strings.Split(raw, ",") {
+		if f = strings.TrimSpace(f); f != "" {
+			out = append(out, f)
+		}
+	}
+	return out
 }
 
 // ListIssueProjects returns every compose project whose name matches
@@ -109,6 +128,7 @@ func ListIssueProjects(ctx context.Context) ([]Project, error) {
 			Name:        e.Name,
 			IssueNumber: num,
 			Status:      e.Status,
+			ConfigFiles: splitConfigFiles(e.ConfigFiles),
 		})
 	}
 	return projects, nil

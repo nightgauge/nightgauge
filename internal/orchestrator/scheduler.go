@@ -2819,11 +2819,20 @@ func (s *Scheduler) loadQueue() {
 // leaves stale containers squatting ports, which a later cycle fixes; guessing
 // destroys a live run's named volumes, which nothing recovers.
 //
+// roots bounds the CANDIDATES (#442). `docker compose ls` is host-global and the
+// in-flight set is scoped to the roots the caller scanned, so a live run outside
+// those roots is protected by nothing in inFlight. A project whose compose
+// ConfigFiles do not resolve inside a root is therefore not a candidate at all —
+// it is skipped and the skip is logged, because the skip is the only evidence
+// that the pass was narrower than `compose ls` makes it look. The same roots
+// slice that built inFlight must be passed here; see composeProjectWithinRoots
+// for the containment rule.
+//
 // ctx is the CALLER's context, not a fresh Background (#410). The pass now runs
 // inside the autonomous cycle, so an orchestrator shutdown must cancel it rather
 // than wait on docker; the 60s budget is derived from the cycle context and
 // remains a soft cap on the whole fan-out.
-func (s *Scheduler) reconcileOrphanedComposeProjects(ctx context.Context, inFlight map[int]bool, determined bool) {
+func (s *Scheduler) reconcileOrphanedComposeProjects(ctx context.Context, inFlight map[int]bool, determined bool, roots []string) {
 	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 
@@ -2849,6 +2858,10 @@ func (s *Scheduler) reconcileOrphanedComposeProjects(ctx context.Context, inFlig
 		return
 	}
 	for _, p := range projects {
+		if inside, reason := composeProjectWithinRoots(p.ConfigFiles, roots); !inside {
+			log.Printf("compose-reconcile: skipped %s: %s", p.Name, reason)
+			continue
+		}
 		if inFlight[p.IssueNumber] {
 			continue
 		}

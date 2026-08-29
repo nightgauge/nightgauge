@@ -1,7 +1,9 @@
 package orchestrator
 
 import (
+	"bytes"
 	"context"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -56,6 +58,28 @@ func recordingTeardown(torn *[]string) func(context.Context, string, dockercompo
 
 func listing(projects ...dockercompose.Project) func(context.Context) ([]dockercompose.Project, error) {
 	return func(context.Context) ([]dockercompose.Project, error) { return projects, nil }
+}
+
+// composeIn builds an `issue-<n>` project whose compose file lives where the
+// pipeline puts it — inside the issue's worktree under root. The file need not
+// exist: a reclaimed worktree takes its compose file with it, and that stack is
+// exactly what the reconcile reaps (#442, composeProjectWithinRoots).
+func composeIn(root string, n int) dockercompose.Project {
+	return dockercompose.Project{
+		Name:        "issue-" + strconv.Itoa(n),
+		IssueNumber: n,
+		ConfigFiles: []string{filepath.Join(root, ".worktrees", "issue-"+strconv.Itoa(n), "docker-compose.yml")},
+	}
+}
+
+// captureReconcileLog routes the package logger into a buffer for the test's lifetime.
+func captureReconcileLog(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	buf := &bytes.Buffer{}
+	prev := log.Writer()
+	log.SetOutput(buf)
+	t.Cleanup(func() { log.SetOutput(prev) })
+	return buf
 }
 
 // TestActiveWorktreeIssues_SeesCrossRepoWorktree is case 3 of #296. A cross-repo
@@ -155,7 +179,7 @@ func TestReconcileOrphanedCompose_UndeterminedTearsDownNothing(t *testing.T) {
 	var torn []string
 	s := &Scheduler{
 		workspaceRoot:   notARepo, // `git worktree list` here fails → undetermined
-		composeLister:   listing(dockercompose.Project{Name: "issue-501", IssueNumber: 501}),
+		composeLister:   listing(composeIn(notARepo, 501)),
 		composeTeardown: recordingTeardown(&torn),
 	}
 
@@ -166,7 +190,7 @@ func TestReconcileOrphanedCompose_UndeterminedTearsDownNothing(t *testing.T) {
 	if determined {
 		t.Fatal("fixture is not the undetermined state — `git worktree list` succeeded")
 	}
-	s.reconcileOrphanedComposeProjects(context.Background(), inFlight, determined)
+	s.reconcileOrphanedComposeProjects(context.Background(), inFlight, determined, s.repoScanRoots())
 
 	if len(torn) != 0 {
 		t.Errorf("tore down %v on an undetermined worktree set — that is `down -v` against a possibly-live run", torn)
@@ -191,8 +215,8 @@ func TestReconcileOrphanedCompose_CrossRepoRunSurvives(t *testing.T) {
 			workspaceRoot:     launchRoot,
 			repoRootsResolver: func() []string { return []string{siblingRoot} },
 			composeLister: listing(
-				dockercompose.Project{Name: "issue-602", IssueNumber: 602}, // live, in the sibling
-				dockercompose.Project{Name: "issue-999", IssueNumber: 999}, // genuinely orphaned
+				composeIn(siblingRoot, 602), // live, in the sibling
+				composeIn(launchRoot, 999),  // genuinely orphaned
 			),
 			composeTeardown: recordingTeardown(&torn),
 		},
@@ -295,3 +319,163 @@ func TestNewScheduler_ConstructionTearsDownNoContainers(t *testing.T) {
 // that still reclaims.
 
 func s0(root string) *Scheduler { return &Scheduler{workspaceRoot: root} }
+
+// TestComposeReconcile_SkipsProjectOutsideRoots is #442. `docker compose ls` is
+// host-global; the in-flight union is root-scoped. A live run whose repo this
+// workspace never registered was protected by nothing, so its stack — and its
+// named volumes — went down as an "orphan". The candidate set is now bounded by
+// each project's compose ConfigFiles, and every skip is logged: the skip line is
+// the only evidence that the pass was narrower than `compose ls` looks.
+func TestComposeReconcile_SkipsProjectOutsideRoots(t *testing.T) {
+	rootA := worktreeRepo(t, 1) // the scanned root
+	rootB := worktreeRepo(t, 2) // a repo this workspace does not know
+	outsideFile := filepath.Join(rootB, ".worktrees", "issue-2", "docker-compose.yml")
+
+	// A file that resolves through the launch root; a symlink to it from
+	// rootB must still count as inside (the link is followed), and a link
+	// from rootA out to rootB must count as outside.
+	linkIn := filepath.Join(rootB, "link-into-a")
+	if err := os.Symlink(filepath.Join(rootA, ".worktrees"), linkIn); err != nil {
+		t.Fatal(err)
+	}
+	linkOut := filepath.Join(rootA, "link-out-to-b")
+	if err := os.Symlink(filepath.Join(rootB, ".worktrees"), linkOut); err != nil {
+		t.Fatal(err)
+	}
+
+	cases := []struct {
+		name     string
+		project  dockercompose.Project
+		torn     bool
+		skipLine string
+	}{
+		{
+			name:    "inside root is a candidate",
+			project: composeIn(rootA, 1),
+			torn:    true,
+		},
+		{
+			name:     "outside root is skipped and reported",
+			project:  composeIn(rootB, 2),
+			skipLine: "skipped issue-2: compose files outside scanned roots (" + outsideFile + ")",
+		},
+		{
+			name:     "no ConfigFiles is skipped conservatively",
+			project:  dockercompose.Project{Name: "issue-3", IssueNumber: 3},
+			skipLine: "skipped issue-3: no resolvable compose files",
+		},
+		{
+			name: "symlink resolving inside root is a candidate",
+			project: dockercompose.Project{Name: "issue-4", IssueNumber: 4,
+				ConfigFiles: []string{filepath.Join(linkIn, "issue-4", "docker-compose.yml")}},
+			torn: true,
+		},
+		{
+			name: "symlink resolving outside root is skipped",
+			project: dockercompose.Project{Name: "issue-5", IssueNumber: 5,
+				ConfigFiles: []string{filepath.Join(linkOut, "issue-5", "docker-compose.yml")}},
+			skipLine: "skipped issue-5: compose files outside scanned roots (" +
+				filepath.Join(rootB, ".worktrees", "issue-5", "docker-compose.yml") + ")",
+		},
+		{
+			name: "one file outside is enough to skip",
+			project: dockercompose.Project{Name: "issue-6", IssueNumber: 6,
+				ConfigFiles: []string{
+					filepath.Join(rootA, "docker-compose.yml"),
+					filepath.Join(rootB, "override.yml"),
+				}},
+			skipLine: "skipped issue-6: compose files outside scanned roots (" + filepath.Join(rootB, "override.yml") + ")",
+		},
+		{
+			name: "relative path is not resolvable",
+			project: dockercompose.Project{Name: "issue-7", IssueNumber: 7,
+				ConfigFiles: []string{"docker-compose.yml"}},
+			skipLine: "skipped issue-7: no resolvable compose files",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			logs := captureReconcileLog(t)
+			var torn []string
+			s := &Scheduler{
+				workspaceRoot:   rootA,
+				composeLister:   listing(tc.project),
+				composeTeardown: recordingTeardown(&torn),
+			}
+			// Nothing is in flight: every candidate is an orphan, so the only
+			// thing standing between the project and `down -v` is the bound.
+			s.reconcileOrphanedComposeProjects(context.Background(), map[int]bool{}, true, s.repoScanRoots())
+
+			if tc.torn && (len(torn) != 1 || torn[0] != tc.project.Name) {
+				t.Errorf("expected %s torn down, got %v", tc.project.Name, torn)
+			}
+			if !tc.torn && len(torn) != 0 {
+				t.Errorf("tore down %v — a project the workspace cannot vouch for was destroyed", torn)
+			}
+			if tc.skipLine != "" && !strings.Contains(logs.String(), tc.skipLine) {
+				t.Errorf("skip must be reported.\nwant line: %s\ngot log:\n%s", tc.skipLine, logs.String())
+			}
+			if tc.skipLine == "" && strings.Contains(logs.String(), "skipped "+tc.project.Name) {
+				t.Errorf("candidate was reported as skipped:\n%s", logs.String())
+			}
+		})
+	}
+}
+
+// TestComposeReconcile_PrefixIsNotContainment: `/ws/repo` must not vouch for
+// `/ws/repo-other`. A string-prefix check would.
+func TestComposeReconcile_PrefixIsNotContainment(t *testing.T) {
+	base := t.TempDir()
+	root := filepath.Join(base, "repo")
+	other := filepath.Join(base, "repo-other")
+	for _, d := range []string{root, other} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	logs := captureReconcileLog(t)
+	var torn []string
+	s := &Scheduler{
+		composeLister: listing(dockercompose.Project{Name: "issue-8", IssueNumber: 8,
+			ConfigFiles: []string{filepath.Join(other, "docker-compose.yml")}}),
+		composeTeardown: recordingTeardown(&torn),
+	}
+	s.reconcileOrphanedComposeProjects(context.Background(), map[int]bool{}, true, []string{root})
+
+	if len(torn) != 0 {
+		t.Errorf("tore down %v — a sibling directory sharing a name prefix is not inside the root", torn)
+	}
+	if !strings.Contains(logs.String(), "skipped issue-8: compose files outside scanned roots") {
+		t.Errorf("prefix-only match must be reported as a skip:\n%s", logs.String())
+	}
+}
+
+// TestComposeReconcile_BoundIsTheReceiversRoots pins that the bound uses the
+// SAME roots the in-flight union was built from: a project inside a sibling
+// root the receiver resolved is still a candidate, not a skip.
+func TestComposeReconcile_BoundIsTheReceiversRoots(t *testing.T) {
+	launchRoot := worktreeRepo(t, 11)
+	siblingRoot := worktreeRepo(t, 12)
+	logs := captureReconcileLog(t)
+	var torn []string
+	as := &AutonomousScheduler{
+		scheduler: &Scheduler{
+			workspaceRoot:     launchRoot,
+			repoRootsResolver: func() []string { return []string{siblingRoot} },
+			composeLister: listing(
+				composeIn(siblingRoot, 13), // orphan in the sibling: reaped, not skipped
+				composeIn(t.TempDir(), 14), // outside every root: skipped
+			),
+			composeTeardown: recordingTeardown(&torn),
+		},
+		state: &AutonomousState{},
+	}
+	as.sweepOrphanedComposeProjects(context.Background())
+
+	if len(torn) != 1 || torn[0] != "issue-13" {
+		t.Errorf("expected exactly the sibling-root orphan torn down, got %v", torn)
+	}
+	if !strings.Contains(logs.String(), "skipped issue-14: compose files outside scanned roots") {
+		t.Errorf("the out-of-workspace stack must be reported as skipped:\n%s", logs.String())
+	}
+}
