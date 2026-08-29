@@ -21,18 +21,19 @@ provides that contract.
 `issue-audit --epic <N>`. Existing slash-command invocations keep working;
 new code should call `issue-audit` directly.
 
-## Boundary: issue-audit vs backlog-audit
+## Boundary: issue-audit vs backlog-groom
 
 `issue-audit` is the **structural** post-creation gate: labels, board
 membership and fields, body headings, sub-issue links, `blockedBy` wiring.
 It runs at creation time and never judges whether an issue is still worth
 doing.
 
-[`nightgauge-backlog-audit`](../skills/nightgauge-backlog-audit/SKILL.md)
-(`/nightgauge:backlog-audit`) is the **semantic** pass over the existing
+[`nightgauge-backlog-groom`](../skills/nightgauge-backlog-groom/SKILL.md)
+(`/nightgauge:backlog-groom`) is the **semantic** pass over the existing
 open backlog: validity against current `main`, worth under the product
-lens, and priority/size rank — run occasionally (after an epic completes,
-or monthly). It reuses issue-audit's deterministic checks as riders rather
+lens, verification completeness, security of the proposed approach, epic
+fit, and priority/size rank — run occasionally (after an epic completes,
+or monthly), repo-scoped or workspace-wide. It reuses issue-audit's deterministic checks as riders rather
 than duplicating them, and shares the same hard rule: never auto-rewrite
 human-authored content.
 
@@ -276,7 +277,7 @@ re-decided on its merits:
   and pre-#711 issues that no creation flow ever shaped. Promoting there would
   turn every backlog sweep red for defects the operator did not introduce in
   that run; grooming legacy bodies is
-  [`backlog-audit`](../skills/nightgauge-backlog-audit/SKILL.md)'s job.
+  [`backlog-groom`](../skills/nightgauge-backlog-groom/SKILL.md)'s job.
 
 The finding has no repair primitive in either mode and must not acquire one:
 required sections are human-authored prose, and synthesizing an `## Actual`
