@@ -106,5 +106,14 @@ jobs:
         # anchoring that prevents it. Needs the full history fetched above.
         run: python3 scripts/test-publication-boundary-ceiling.py
 
+      - name: Prove a lagging branch ceiling neither blocks nor erodes the ratchet
+        # A branch updated the only permitted way -- `git merge origin/main` --
+        # keeps its own first-parent ceiling, which is lower than the
+        # mainline's, and a lower ceiling MEASURES MORE. That inflated count is
+        # compared against one global baseline, so it both blocks branches
+        # unfairly and, when the number falls, invites a lowering that records
+        # erosion as cleanup. Needs the full history fetched above.
+        run: python3 scripts/test-publication-boundary-erosion.py
+
       - name: Prove the rename carry-over still holds
         run: python3 scripts/test-publication-boundary-rename.py

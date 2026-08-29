@@ -379,6 +379,17 @@ export class SlackService implements Notifier, vscode.Disposable {
     }
     if (res.ts) {
       run.ts = res.ts;
+      // Say so. Discord logs "pipeline embed created" with its message id, and
+      // Slack logged nothing at all on success — so a working notifier and one
+      // that never started were byte-identical in the log, and confirming a run
+      // had posted meant going and looking at the channel (#1126). The inert
+      // reasons all report themselves (#1106); the working case must too, or
+      // silence still means nothing.
+      this.logger.info("SlackService: pipeline message posted", {
+        issueNumber,
+        channel: run.channel,
+        ts: res.ts,
+      });
     } else {
       // No timestamp came back, so there is nothing to edit. Degrade rather
       // than append a message per stage.
