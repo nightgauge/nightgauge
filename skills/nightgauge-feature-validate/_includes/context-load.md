@@ -167,20 +167,64 @@ fi
 [ -z "$BINARY" ] && [ -x "$HOME/go/bin/nightgauge" ] && BINARY="$HOME/go/bin/nightgauge"
 [ -n "$BINARY" ] && export PATH="$(dirname "$BINARY"):$PATH"
 
-AC_RESULT=$("$BINARY" issue ac-check "$ISSUE_NUMBER" --json 2>/dev/null)
-AC_STATUS=$(echo "$AC_RESULT" | jq -r .status)
-CHECKED=$(echo "$AC_RESULT" | jq -r .checked_count)
-UNCHECKED=$(echo "$AC_RESULT" | jq -r .unchecked_count)
-TOTAL=$(echo "$AC_RESULT" | jq -r .total)
+# The gate is FAIL-CLOSED (#1145). "The check did not run" is its own state —
+# AC_CHECK_ERROR — and it must never be confused with a verdict. Every failure
+# mode below used to collapse to AC_STATUS="" and land in the passing branch:
+# an unresolved $BINARY (every rung of the cascade above can miss), a non-zero
+# exit (transient forge fetch failure, auth), empty stdout, unparseable JSON.
+AC_CHECK_ERROR=""
+AC_RESULT=""
+AC_STATUS=""
+CHECKED=0
+UNCHECKED=0
+TOTAL=0
 
-echo "AC result: status=$AC_STATUS checked=$CHECKED unchecked=$UNCHECKED"
+if [ -z "$BINARY" ]; then
+  AC_CHECK_ERROR="nightgauge binary could not be resolved (NIGHTGAUGE_BIN, PATH, repo bin/, \$HOME/go/bin all missed)"
+else
+  AC_STDERR_FILE=$(mktemp)
+  AC_RESULT=$("$BINARY" issue ac-check "$ISSUE_NUMBER" --json 2>"$AC_STDERR_FILE")
+  AC_EXIT=$?
+  AC_STDERR=$(cat "$AC_STDERR_FILE")
+  rm -f "$AC_STDERR_FILE"
+  # Never blackhole stderr — the reason a hard gate could not run is diagnostic.
+  if [ -n "$AC_STDERR" ]; then
+    echo "ac-check stderr: $AC_STDERR" >&2
+  fi
+  if [ "$AC_EXIT" -ne 0 ]; then
+    AC_CHECK_ERROR="ac-check exited $AC_EXIT: ${AC_STDERR:-(no stderr)}"
+  elif [ -z "$AC_RESULT" ]; then
+    AC_CHECK_ERROR="ac-check produced no output: ${AC_STDERR:-(no stderr)}"
+  else
+    AC_STATUS=$(echo "$AC_RESULT" | jq -r '.status // empty' 2>/dev/null || echo "")
+    if [ -z "$AC_STATUS" ]; then
+      AC_CHECK_ERROR="ac-check output carried no .status field: $AC_RESULT"
+    else
+      CHECKED=$(echo "$AC_RESULT" | jq -r '.checked_count // 0')
+      UNCHECKED=$(echo "$AC_RESULT" | jq -r '.unchecked_count // 0')
+      TOTAL=$(echo "$AC_RESULT" | jq -r '.total // 0')
+    fi
+  fi
+fi
+
+if [ -n "$AC_CHECK_ERROR" ]; then
+  echo "AC result: DID NOT RUN — $AC_CHECK_ERROR"
+else
+  echo "AC result: status=$AC_STATUS checked=$CHECKED unchecked=$UNCHECKED"
+fi
 ```
 
 ### Step 0.6.3: Gate on Result
 
 ```bash
 if [ "$AC_CHECK_REQUIRED" = "true" ]; then
-  if [ "$AC_STATUS" = "failed" ]; then
+  if [ -n "$AC_CHECK_ERROR" ]; then
+    echo "✗ AC COMPLETION CHECK COULD NOT RUN — $AC_CHECK_ERROR"
+    echo "An unverified gate is not a passed gate. Resolve the binary or the"
+    echo "forge failure and re-run validation."
+    AC_COMPLETION_STATUS="error"
+    exit 1
+  elif [ "$AC_STATUS" = "failed" ]; then
     echo "✗ AC COMPLETION CHECK FAILED — $UNCHECKED unchecked box(es) remain"
     echo "Complete all acceptance criteria before validation can pass."
     echo "Mark each completed item as '- [x]' in the issue body."
@@ -189,11 +233,19 @@ if [ "$AC_CHECK_REQUIRED" = "true" ]; then
   elif [ "$AC_STATUS" = "not_applicable" ]; then
     echo "⏭ No AC checkboxes found — not_applicable"
     AC_COMPLETION_STATUS="not_applicable"
-  else
+  elif [ "$AC_STATUS" = "passed" ]; then
     echo "✓ AC completion check passed — all $CHECKED box(es) checked"
     AC_COMPLETION_STATUS="passed"
+  else
+    # Only an explicit "passed" passes. An unrecognized status means the verb's
+    # enum moved under this gate — that is "did not run", not "passed".
+    echo "✗ AC COMPLETION CHECK RETURNED AN UNRECOGNIZED STATUS — '$AC_STATUS'"
+    AC_COMPLETION_STATUS="error"
+    exit 1
   fi
 fi
 ```
 
-If `AC_CHECK_SKIP=true`, set `AC_COMPLETION_STATUS="skipped"` (not applicable).
+If `AC_CHECK_SKIP=true`, set `AC_COMPLETION_STATUS="skipped"` — the gate does
+not apply to this issue, which is a different fact from any of the four verdicts
+above and is what `ac_completion_check.applicable: false` records.

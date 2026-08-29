@@ -1056,5 +1056,29 @@ describe("Context Schemas", () => {
       });
       expect(result.success).toBe(true);
     });
+
+    it('should accept ac_completion_check.status "error" — the gate could not run (#1145)', () => {
+      // feature-validate Phase 0.6 is fail-closed: an unresolved binary, a
+      // non-zero ac-check exit, or empty/unparseable output is its own state,
+      // never "passed". The deliverable has to be able to carry that state.
+      const result = ValidateContextSchema.safeParse({
+        schema_version: "2.6",
+        issue_number: 1145,
+        validation_status: "failed",
+        ac_completion_check: {
+          status: "error",
+          checked_count: 0,
+          unchecked_count: 0,
+          applicable: true,
+        },
+        manual_checklist: [],
+        project_type: "node-library",
+        created_at: "2026-02-01T13:00:00Z",
+      });
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.ac_completion_check?.status).toBe("error");
+      }
+    });
   });
 });

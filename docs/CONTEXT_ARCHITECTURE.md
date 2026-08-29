@@ -611,8 +611,8 @@ issue #1608)
 | `skipped_phases[].phase`                   | string | Yes      | Phase name (e.g., "build_verification", "unit_tests", "baseline_comparison")     |
 | `skipped_phases[].reason`                  | string | Yes      | Human-readable reason for skipping                                               |
 | `ac_completion_check`                      | object | No       | AC checkbox verification for type:docs issues (v1.5+)                            |
-| `ac_completion_check.applicable`           | bool   | Yes      | Whether this check applies (true only for type:docs issues)                      |
-| `ac_completion_check.status`               | string | Yes      | `"passed"`, `"failed"`, or `"skipped"` (skipped when not applicable)             |
+| `ac_completion_check.applicable`           | bool   | Yes      | Whether this check applies — true only for type:docs issues (#1145)              |
+| `ac_completion_check.status`               | string | Yes      | `"passed"`, `"failed"`, `"not_applicable"`, `"error"` (did not run), `"skipped"` |
 | `ac_completion_check.checked_count`        | number | No       | Number of checked `- [x]` boxes in the issue body                                |
 | `ac_completion_check.unchecked_count`      | number | No       | Number of unchecked `- [ ]` boxes in the issue body                              |
 | `manual_checklist`                         | array  | Yes      | Manual verification items                                                        |

@@ -26,7 +26,7 @@ full canonical form.
 
 | Variable               | Valid values                                                                                   |
 | ---------------------- | ---------------------------------------------------------------------------------------------- |
-| `AC_COMPLETION_STATUS` | `passed`, `failed`, `skipped`, `not_applicable`                                                |
+| `AC_COMPLETION_STATUS` | `passed`, `failed`, `skipped`, `not_applicable`, `error`                                       |
 | `NOTES`                | A plain string (not a JSON array). Use newlines for multiple notes. Pass empty string if none. |
 
 ### Step 6.1–6.3: Write Context Inline
@@ -113,10 +113,10 @@ jq -n \
   --argjson dead_code_warnings "$(echo "${DEAD_CODE_JSON:-[]}" | jq -c .)" \
   --argjson preexisting_failures "$(echo "${PREEXISTING_FAILURES:-[]}" | jq -c .)" \
   --argjson skipped_phases "$(echo "${SKIPPED_PHASES:-[]}" | jq -c .)" \
-  --arg ac_status "${AC_COMPLETION_STATUS:-not_applicable}" \
+  --arg ac_status "${AC_COMPLETION_STATUS:-skipped}" \
   --argjson ac_checked "${CHECKED:-0}" \
   --argjson ac_unchecked "${UNCHECKED:-0}" \
-  --argjson ac_applicable "$([ "${AC_COMPLETION_STATUS:-not_applicable}" = "not_applicable" ] && echo false || echo true)" \
+  --argjson ac_applicable "$([ "${AC_CHECK_REQUIRED:-false}" = "true" ] && echo true || echo false)" \
   --argjson manual_checklist "$(echo "${MANUAL_CHECKLIST_JSON:-[]}" | jq -c .)" \
   --argjson feedback "$(echo "${FEEDBACK_JSON:-[]}" | jq -c .)" \
   --arg notes "${NOTES:-}" \
