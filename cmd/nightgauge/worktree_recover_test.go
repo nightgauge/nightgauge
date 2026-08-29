@@ -240,3 +240,74 @@ func TestWorktreeRecover_RequiresWorktreeAndIssue(t *testing.T) {
 		t.Error("expected an error when --issue is omitted")
 	}
 }
+
+// TestWorktreeRecover_ReportsWithheldDeletions pins the operator-facing half of
+// #1108. The rescue now publishes what it can and holds back the deletions of a
+// deletion-dominated tree — and a partial rescue that printed a bare success
+// would be the original defect one layer up: the operator told the work was
+// committed, never learning that the deletions are still sitting in the
+// worktree.
+func TestWorktreeRecover_ReportsWithheldDeletions(t *testing.T) {
+	dir := recoverRepo(t)
+	run := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
+		}
+	}
+	for i := 0; i < 6; i++ {
+		name := filepath.Join(dir, "gen"+string(rune('a'+i))+".g.txt")
+		if err := os.WriteFile(name, []byte("generated\n"), 0o644); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(dir, "src.txt"), []byte("v1\n"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	run("add", ".")
+	run("commit", "-m", "baseline")
+
+	for i := 0; i < 6; i++ {
+		if err := os.Remove(filepath.Join(dir, "gen"+string(rune('a'+i))+".g.txt")); err != nil {
+			t.Fatalf("remove: %v", err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(dir, "src.txt"), []byte("v2 — the deliverable\n"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	out, err := runRecover(t, "--worktree", dir, "--issue", "1108", "--stage", "feature-dev", "--json")
+	if err != nil {
+		t.Fatalf("recover = %v (%s)", err, out)
+	}
+	var result struct {
+		Recovered         bool     `json:"recovered"`
+		Message           string   `json:"message"`
+		WithheldReason    string   `json:"withheld_reason"`
+		WithheldDeletions []string `json:"withheld_deletions"`
+	}
+	if decErr := json.Unmarshal([]byte(out), &result); decErr != nil {
+		t.Fatalf("decode %q: %v", out, decErr)
+	}
+	if !result.Recovered {
+		t.Error("recovered=false; the modification was rescuable and must be reported as rescued")
+	}
+	if result.WithheldReason == "" {
+		t.Error("withheld_reason is empty; a partial rescue must say what it held back")
+	}
+	if len(result.WithheldDeletions) != 6 {
+		t.Errorf("withheld_deletions = %v, want the 6 deletions", result.WithheldDeletions)
+	}
+	if !strings.Contains(result.Message, "withheld") {
+		t.Errorf("message = %q, want it to name the withholding", result.Message)
+	}
+	// The deliverable landed; the deletions did not.
+	if got := gitLines(t, dir, "show", "HEAD:src.txt"); got != "v2 — the deliverable\n" {
+		t.Errorf("HEAD:src.txt = %q, want the edited contents", got)
+	}
+	if got := gitLines(t, dir, "ls-tree", "-r", "--name-only", "HEAD"); !strings.Contains(got, "gena.g.txt") {
+		t.Errorf("HEAD lost gena.g.txt; the withheld deletion was published:\n%s", got)
+	}
+}

@@ -256,7 +256,7 @@ func TestHasUncommittedWork_IgnoresOnlyGeneratedCodexSteering(t *testing.T) {
 // canonical message, and that the function errors gracefully on a bad path.
 func TestRecoverUncommittedWork(t *testing.T) {
 	// Bad path — no git repo, empty path.
-	if err := RecoverUncommittedWork("", 3542, "feature-dev"); err == nil {
+	if _, err := RecoverUncommittedWork("", 3542, "feature-dev"); err == nil {
 		t.Error("RecoverUncommittedWork(\"\", ...) = nil, want error")
 	}
 
@@ -268,7 +268,7 @@ func TestRecoverUncommittedWork(t *testing.T) {
 
 	// No remote configured — push will fail, but that is non-fatal and the
 	// local recovery commit must still be created.
-	if err := RecoverUncommittedWork(dir, 3542, "feature-dev"); err != nil {
+	if _, err := RecoverUncommittedWork(dir, 3542, "feature-dev"); err != nil {
 		t.Fatalf("RecoverUncommittedWork on a real repo = %v, want nil", err)
 	}
 
