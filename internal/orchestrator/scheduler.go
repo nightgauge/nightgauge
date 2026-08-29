@@ -765,6 +765,12 @@ type QueueItem struct {
 //     blockers so the deps-gate promote sweep (and the autonomous cascade)
 //     can resume the item once they all close. A controlled hold, not a
 //     failure. (Issue #231)
+//   - "excluded_label" — the item carries a human-only label
+//     (autonomous.exclude_labels, default ["owner-action"]) and was paused by
+//     DequeueIndependent instead of being dispatched. Label carries the label
+//     that matched (Summary repeats it as prose). The item is held, not
+//     discarded, so an operator who queued it can see why it is not running.
+//     (Issue #1146)
 //
 // FailedRunID is empty for kinds that are not associated with a specific
 // failed RunRecord (e.g. baseline_ci_red, blocked_dependency).
@@ -783,6 +789,12 @@ type QueuePausedReason struct {
 	// BlockingIssues names the open blockers when Kind == "blocked_dependency".
 	// Empty for other kinds. (Issue #231)
 	BlockingIssues []QueueBlockingRef `json:"blocking_issues,omitempty"`
+
+	// Label is the human-only label that matched when Kind ==
+	// "excluded_label". Empty for other kinds. Carried structurally rather
+	// than only inside Summary so readers can render it without parsing
+	// prose — the dashboard and the queue tree both name it. (Issue #1146)
+	Label string `json:"label,omitempty"`
 }
 
 // QueueBlockingRef is a reference to a blocking issue within a queue item.
@@ -817,7 +829,13 @@ const queueStateFile = ".nightgauge/pipeline/queue-state.json"
 // BlockingIssues field on QueuePausedReason. Additive — 2.2 readers ignore the
 // unknown kind (it parses as a generic paused item) and the BlockingIssues
 // field is omitempty, so older records remain valid without a migration.
-const queueSchemaVersion = "2.3"
+//
+// 2.3 → 2.4 (Issue #1146): added "excluded_label" PausedReason kind and the
+// Label field on QueuePausedReason, emitted when DequeueIndependent holds an
+// item carrying a human-only label instead of dispatching it. Additive — 2.3
+// readers ignore the unknown kind (it parses as a generic paused item) and the
+// Label field is omitempty, so older records remain valid without a migration.
+const queueSchemaVersion = "2.4"
 
 // currentRunSidecarFile is the path (relative to workspaceRoot) where the
 // scheduler records the in-flight run at stage start. The file is removed on
@@ -2320,6 +2338,10 @@ func (s *Scheduler) DequeueIndependent(ctx context.Context, maxSlots int, runnin
 
 	var dequeued []QueueItem
 	var toRemoveIdx []int
+	// pausedByLabel records that the human-only label guard below rewrote at
+	// least one item's status, so the queue is persisted and re-emitted even
+	// when nothing was dequeued.
+	pausedByLabel := false
 
 	for i, item := range s.queue {
 		if len(dequeued) >= maxSlots {
@@ -2339,6 +2361,32 @@ func (s *Scheduler) DequeueIndependent(ctx context.Context, maxSlots int, runnin
 		// Skip them here so a later DequeueIndependent call doesn't
 		// re-dispatch a run that is already executing.
 		if item.Status == "processing" {
+			continue
+		}
+
+		// Human-only label guard (#1146): exclude_labels was enforced only on
+		// the two enqueue routes (the autonomous candidate loop in
+		// autonomous.go, and EnqueueEpic below), so any item that reached the
+		// queue by another route — dashboard trigger, epic drag, manual "Add
+		// to Queue", retry, a remote command, or `queue.add` over IPC — was
+		// dispatched regardless of its labels. This is the chokepoint where a
+		// slot is actually claimed, so the guard here catches every route.
+		//
+		// The item is paused rather than removed: an operator put it in the
+		// queue on purpose and silently discarding it would hide both the item
+		// and the reason. Pausing keeps the row visible with a machine-readable
+		// PausedReason, reuses the existing operator affordances (Retry / Skip /
+		// Discard), and — because the paused guard above short-circuits before
+		// this one — the skip is logged exactly once instead of every cycle.
+		if label, excluded := excludedLabelMatch(item.Labels, resolvedExcludeLabels(s.excludeLabels)); excluded {
+			log.Printf("DequeueIndependent: skipping #%d — carries human-only label %q (autonomous.exclude_labels)", item.IssueNumber, label)
+			s.queue[i].Status = "paused"
+			s.queue[i].PausedReason = &QueuePausedReason{
+				Kind:    "excluded_label",
+				Label:   label,
+				Summary: fmt.Sprintf("carries human-only label %q (autonomous.exclude_labels)", label),
+			}
+			pausedByLabel = true
 			continue
 		}
 
@@ -2391,7 +2439,7 @@ func (s *Scheduler) DequeueIndependent(ctx context.Context, maxSlots int, runnin
 		s.queue[idx].Status = "processing"
 	}
 
-	if len(dequeued) > 0 {
+	if len(dequeued) > 0 || pausedByLabel {
 		s.recalculatePositions()
 		s.persistQueue()
 		s.emitQueueChangedUnlocked()
@@ -2435,7 +2483,11 @@ func (s *Scheduler) CompleteQueueItem(repo string, issueNumber int) {
 // (e.g. the `queue add` CLI command) can apply the identical check before
 // calling QueueAdd directly.
 func (s *Scheduler) ExcludeLabels() []string {
-	return s.excludeLabels
+	// Resolve through the single default (#1146): a Scheduler may be built
+	// without a config-supplied list, and every caller — the CLI `queue add`,
+	// the IPC `queue.add` door check, and the DequeueIndependent backstop —
+	// must see the same set rather than an empty one that disables the guard.
+	return resolvedExcludeLabels(s.excludeLabels)
 }
 
 // EnqueueEpic fetches sub-issues from GitHub and enqueues them with epicOrder.

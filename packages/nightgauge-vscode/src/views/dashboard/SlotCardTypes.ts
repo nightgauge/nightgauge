@@ -106,6 +106,14 @@ export interface QueuedCardData {
         kind: "blocked_dependency";
         summary?: string;
         blockingIssues: { number: number; title?: string; repo?: string }[];
+      }
+    | {
+        // Issue #1146 — human-only label (autonomous.exclude_labels) held at
+        // the dequeue chokepoint. Nothing auto-resumes it; an operator removes
+        // the label and re-queues, or discards the item.
+        kind: "excluded_label";
+        summary?: string;
+        label?: string;
       };
 }
 

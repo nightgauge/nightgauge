@@ -250,6 +250,40 @@ export interface BlockedTerminalState {
   prNumber?: number;
 }
 
+/**
+ * Feedback signal types a backtrack can actually serve (#1142).
+ *
+ * All three mean "a different plan, or a different implementation of THIS
+ * issue, would fix it" — which is exactly what rewinding buys. The remaining
+ * types in the schema do not: ACCEPTANCE_CRITERIA_AMBIGUOUS needs a human to
+ * settle the criterion and COMPLEXITY_UNDERESTIMATED is a sizing fact that
+ * another lap cannot shrink (MODEL_ESCALATION_NEEDED never reaches here —
+ * `readFeedbackSignals` excludes it because escalation retries the same stage).
+ * Anything not listed here terminates the run as `blocked`.
+ *
+ * @see packages/nightgauge-sdk/src/context/schemas/feedback.ts
+ */
+const REWINDABLE_SIGNAL_TYPES: ReadonlySet<string> = new Set([
+  "PLAN_REVISION_NEEDED",
+  "SCOPE_DISCOVERED",
+  "CONFLICT_RESOLUTION_NEEDED",
+]);
+
+/**
+ * Declared, machine-readable "this needs work outside the issue" marker in a
+ * signal's `evidence` array (#1142) — the same convention the schema already
+ * uses for provenance (`"operator-origin: action-center"`). It is deliberately
+ * a prefix match on a structured entry, NOT a search of the free-text
+ * `rationale`.
+ */
+const EXTERNAL_BLOCKER_EVIDENCE = /^\s*(blocked-on|blocked-by|external-blocker|out-of-scope)\s*:/i;
+
+/** What the post-validate gate must do with a failed stage's feedback (#1142). */
+type FailedStageDisposition =
+  | { kind: "rewind"; targetIndex: number }
+  | { kind: "blocked"; signal: PipelineFeedbackSignal; reason: string }
+  | { kind: "halt" };
+
 export interface PipelineRunResult {
   success: boolean;
   completedStages: PipelineStage[];
@@ -502,7 +536,26 @@ const SKILL_STAGES: PipelineStage[] = [
 ];
 
 // STAGE_OUTPUT_CONTEXT_TYPE, STAGE_OUTPUT_SCHEMA, STAGE_INPUT_PREREQUISITES, OPTIONAL_CONTEXT_STAGES
-// moved to ContextAssembler (Issue #2770 — Part 3).
+// moved to ContextAssembler (Issue #2770 — Part 3). STAGE_OUTPUT_CONTEXT_TYPE
+// now lives in orchestrator/context/stageContextFiles and is re-exported from
+// ContextAssembler (Issue #1143).
+
+/**
+ * Stages whose deliverable is read for backward `feedback[]` signals.
+ *
+ * This is POLICY — which stages the backtrack engine listens to — and is
+ * deliberately kept separate from STAGE_OUTPUT_CONTEXT_TYPE, which is the
+ * naming FACT of what file a stage writes. Conflating the two is how three
+ * hand-written `{ "feature-dev": "dev", "feature-validate": "validate" }`
+ * literals ended up in this file.
+ *
+ * @see Issue #1342 — backtrack engine
+ * @see Issue #1143 — one shared stage → filename mapping
+ */
+const FEEDBACK_EMITTING_STAGES: ReadonlySet<PipelineStage> = new Set<PipelineStage>([
+  "feature-dev",
+  "feature-validate",
+]);
 
 /**
  * Stages that require human action and are deferred when deferMerge is enabled.
@@ -8498,12 +8551,12 @@ export class HeadlessOrchestrator implements vscode.Disposable {
    * MODEL_ESCALATION_NEEDED signals (which retry same stage, not backtrack).
    */
   private readFeedbackSignals(stage: PipelineStage, issueNumber: number): PipelineFeedbackSignal[] {
-    const contextTypeMap: Partial<Record<PipelineStage, ContextFileType>> = {
-      "feature-dev": "dev",
-      "feature-validate": "validate",
-    };
+    // Which stages emit backtrack feedback is POLICY and stays here. Which
+    // FILE a stage writes is a naming fact, and that comes from the one shared
+    // mapping (#1143) — a hand-written second copy of it is dual-path drift.
+    if (!FEEDBACK_EMITTING_STAGES.has(stage)) return [];
 
-    const contextType = contextTypeMap[stage];
+    const contextType = STAGE_OUTPUT_CONTEXT_TYPE[stage];
     if (!contextType) return [];
 
     try {
@@ -8628,11 +8681,24 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       });
     }
 
+    const targetIndex = STAGE_ORDER.indexOf(targetStage);
+    const currentIndex = STAGE_ORDER.indexOf(currentStage);
+    const intermediateStages = STAGE_ORDER.slice(targetIndex + 1, currentIndex);
+
+    // Clear the #698 duplicate-completion guard for every stage this rewind
+    // replays — same idiom as the opus retry and the #500 pr-merge retry. Each
+    // replayed stage completes a SECOND time, and `completedStageSet` makes the
+    // second `onComplete` a no-op, so `runStage`'s promise would never resolve
+    // and the run would hang forever at the first replayed stage. The guard
+    // exists to swallow a doubled callback for ONE attempt, not to outlaw a
+    // second attempt (#1142 — found when the failed-stage rewind first replayed
+    // feature-planning and the pipeline stopped dead).
+    for (const replayed of STAGE_ORDER.slice(targetIndex, currentIndex + 1)) {
+      this.completedStageSet.delete(replayed);
+    }
+
     // Record backtrack in pipeline state
     if (this.stateService) {
-      const targetIndex = STAGE_ORDER.indexOf(targetStage);
-      const currentIndex = STAGE_ORDER.indexOf(currentStage);
-      const intermediateStages = STAGE_ORDER.slice(targetIndex + 1, currentIndex);
       try {
         await this.stateService.recordBacktrack(record, intermediateStages);
       } catch (err) {
@@ -8654,6 +8720,118 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     this.eventDispatcher.onBacktrackTriggered(record);
 
     return STAGE_ORDER.indexOf(targetStage);
+  }
+
+  /**
+   * Consult a FAILED stage's deliverable feedback before halting the run (#1142).
+   *
+   * The backtrack engine above sits ~640 lines below the post-validate gate, and
+   * is reached only by a stage that got that far — i.e. a stage that SUCCEEDED.
+   * `readFeedbackSignals` filters for `severity === "blocking"`, and a blocking
+   * signal is by definition emitted when the stage could NOT succeed. The
+   * unconditional `break` at the gate therefore guaranteed the engine never saw
+   * the case it was built for: `PLAN_REVISION_NEEDED → feature-planning` was
+   * written to `validate-{N}.json` and then dropped on the floor. It also left
+   * `feedback-{N}.json` — whose only writer is `executeBacktrack` — with no
+   * producer at all, so the Go retry engine's deliverable-driven rewind path was
+   * equally dead.
+   *
+   * This is the single seam that makes the halt conditional. It is deliberately
+   * a thin composition of the three existing engine methods rather than a second
+   * copy of their logic (`dual-path-drift`, docs/FAILURE_TAXONOMY.md): the budget
+   * ceiling and the oscillation guard stay in `evaluateBacktrack`, and the state
+   * record plus the `feedback-{N}.json` write stay in `executeBacktrack`.
+   *
+   * The halt remains the default. A rewind happens ONLY when the deliverable
+   * itself asked for one and the guards allow it; no feedback, non-blocking
+   * feedback, an exhausted budget or a repeated edge all return null and the
+   * caller halts with its original error, exactly as before.
+   *
+   * @returns What the caller must do: rewind to an index, book the run as
+   *          `blocked`, or halt exactly as it did before.
+   */
+  private async evaluateFailedStageFeedback(
+    stage: PipelineStage,
+    issueNumber: number,
+    callbacks?: PipelineCallbacks
+  ): Promise<FailedStageDisposition> {
+    const signals = this.readFeedbackSignals(stage, issueNumber);
+    if (signals.length === 0) {
+      return { kind: "halt" };
+    }
+    const signal = signals[0]; // Act on first blocking signal, as the success path does
+
+    // FORK: not every blocking signal is a rewind request. A signal that says
+    // the work is blocked on something OUTSIDE this issue's scope must
+    // terminate the run as `blocked`, because no new plan can make the work
+    // possible — rewinding there burns a whole planning+dev+validate cycle to
+    // arrive at the identical verdict, repeatedly, until the budget runs out.
+    const notRewindable = this.notRewindableReason(signal);
+    if (notRewindable) {
+      return { kind: "blocked", signal, reason: notRewindable };
+    }
+
+    if (!this.evaluateBacktrack(signal, stage, issueNumber, callbacks)) {
+      // Budget exhausted or oscillation detected — evaluateBacktrack has already
+      // surfaced the reason via onBacktrackBlocked. Halt with the original error.
+      return { kind: "halt" };
+    }
+    this.logger.info("Failed stage carries a blocking backtrack signal — rewinding (#1142)", {
+      issueNumber,
+      stage,
+      signalType: signal.signal_type,
+      targetStage: signal.backtrack_target_stage,
+    });
+    return {
+      kind: "rewind",
+      targetIndex: await this.executeBacktrack(signal, stage, issueNumber, callbacks),
+    };
+  }
+
+  /**
+   * Why a blocking signal must NOT be answered with a rewind — or null when a
+   * rewind is the right answer (#1142).
+   *
+   * The decision is made from the signal's STRUCTURED fields only. Guessing at
+   * `rationale` prose would put a free-text classifier on the pipeline's control
+   * flow, which is the shape of defect this repo calls out by name.
+   *
+   * Two structured discriminators exist today:
+   *
+   *  1. **`signal_type`.** Three types mean "a different plan or a different
+   *     implementation of this same issue would fix it" and are the only ones
+   *     a rewind can serve. Everything else — an ambiguous acceptance criterion
+   *     a human must settle, an under-estimate that re-planning cannot shrink —
+   *     is outside what another lap of the pipeline can change.
+   *  2. **An `evidence` marker.** `evidence` is already the schema's slot for
+   *     machine-readable provenance (`"operator-origin: action-center"`), so a
+   *     `blocked-on:` / `blocked-by:` / `external-blocker:` / `out-of-scope:`
+   *     entry is the declared, non-prose way for a stage to say "this needs
+   *     work that is not in this issue". It overrides the type: a
+   *     PLAN_REVISION_NEEDED that declares an external blocker is blocked, not
+   *     rewindable.
+   *
+   * The feedback schema has NO first-class field for "blocked on external work"
+   * (see packages/nightgauge-sdk/src/context/schemas/feedback.ts) — the marker
+   * above is the honest interim, and a producing skill has to be taught to write
+   * it before the declared form appears in real runs. Until then the type list
+   * is the only discriminator that fires, and the budget/oscillation guards in
+   * `evaluateBacktrack` remain the bound on a wrong call: a misfiled
+   * PLAN_REVISION_NEEDED costs at most `max_backtracks` laps (default 1) and
+   * then halts. A wrong fork decision degrades to a halt, never to an unbounded
+   * re-plan.
+   */
+  private notRewindableReason(signal: PipelineFeedbackSignal): string | null {
+    const declared = (signal.evidence ?? []).find((entry) =>
+      EXTERNAL_BLOCKER_EVIDENCE.test(String(entry))
+    );
+    if (declared) {
+      return `the signal declares an out-of-scope blocker (${String(declared).trim()})`;
+    }
+    if (!REWINDABLE_SIGNAL_TYPES.has(signal.signal_type)) {
+      return `${signal.signal_type} is not a plan-fixable signal — no re-plan can clear it`;
+    }
+    return null;
   }
 
   /**
@@ -10299,6 +10477,55 @@ export class HeadlessOrchestrator implements vscode.Disposable {
 
           const validateVerdictError = this.verifyPostValidateState(issueNumber);
           if (validateVerdictError) {
+            // #1348 revived on the failed path (#1142): a run that discovers
+            // mid-flight it was under-estimated could never say so, because the
+            // halt below preempted the learning engine 640 lines further down.
+            // COMPLEXITY_UNDERESTIMATED is emitted precisely by runs that went
+            // badly, so the failed path is the one that carries the signal.
+            // FeedbackLearningService de-duplicates per issue, so running it here
+            // and again on a later successful pass records once.
+            await this.applyFeedbackLearning(stage, issueNumber);
+
+            // #1142: the deliverable may have asked to rewind rather than stop.
+            // Consult it BEFORE halting; the halt stays the default and fires
+            // whenever there is no blocking signal, the signal is not
+            // plan-fixable, or the guards refuse.
+            const disposition = await this.evaluateFailedStageFeedback(
+              stage,
+              issueNumber,
+              callbacks
+            );
+            if (disposition.kind === "rewind") {
+              // Rewind exactly as the success path does: set stageIndex so the
+              // loop increment lands on the target stage. The stage is NOT
+              // pushed to completedStages and NOT recorded as failed — the run
+              // is continuing, and executeBacktrack has recorded the transition.
+              stageIndex = disposition.targetIndex - 1;
+              continue;
+            }
+            if (disposition.kind === "blocked") {
+              // A blocking signal that no re-plan can clear. Book the existing
+              // first-class `blocked` terminal state (#190) rather than a
+              // generic failure, so outcome telemetry and the learning loop see
+              // a blocker class instead of another anonymous validation failure
+              // — and so the run can never present as complete. The halt below
+              // still runs: `blocked` is a terminal outcome, not a rewind.
+              this.blockedTerminalState = {
+                blocker: `out-of-scope: ${disposition.signal.signal_type}`,
+                remediation: disposition.signal.rationale,
+              };
+              this.logger.error(
+                "Failed stage carries a blocking signal that cannot be re-planned — ending BLOCKED (#1142)",
+                {
+                  issueNumber,
+                  stage,
+                  signalType: disposition.signal.signal_type,
+                  reason: disposition.reason,
+                  rationale: disposition.signal.rationale,
+                }
+              );
+            }
+
             this.logger.error(
               "Post-validate verification failed — halting instead of advancing to pr-create",
               { issueNumber, error: validateVerdictError.message }
@@ -10321,6 +10548,16 @@ export class HeadlessOrchestrator implements vscode.Disposable {
           // unrecoverable state (work gone, or backstop commit failed)
           // returns an error. See enforceValidateCommitContract docs
           // (production autonomous-run post-mortem).
+          //
+          // #1142 deliberately does NOT extend the feedback-consult to this
+          // halt. The contract error is only ever returned when the validate
+          // verdict PASSED and the approved tree is nevertheless gone from the
+          // branch — a state/environment fault the orchestrator discovered
+          // itself, not a quality judgement the deliverable emitted. Any
+          // `feedback` in validate-{N}.json describes the code, so rewinding on
+          // it would spend backtrack budget answering a question nobody asked,
+          // and would re-run planning and dev over a run whose implementation
+          // has already been destroyed. This halt stays unconditional.
           const commitContractError = await this.enforceValidateCommitContract(issueNumber);
           if (commitContractError) {
             this.logger.error(

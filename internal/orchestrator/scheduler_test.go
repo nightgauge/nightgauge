@@ -608,8 +608,8 @@ func TestQueuePersistence(t *testing.T) {
 		t.Fatalf("failed to parse queue state: %v", err)
 	}
 
-	if state.SchemaVersion != "2.3" {
-		t.Errorf("SchemaVersion = %q, want 2.3", state.SchemaVersion)
+	if state.SchemaVersion != "2.4" {
+		t.Errorf("SchemaVersion = %q, want 2.4", state.SchemaVersion)
 	}
 	if len(state.Items) != 2 {
 		t.Fatalf("len(Items) = %d, want 2", len(state.Items))

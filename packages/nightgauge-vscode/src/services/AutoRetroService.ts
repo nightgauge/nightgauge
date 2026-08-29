@@ -44,6 +44,8 @@ import * as path from "node:path";
 import type { Logger } from "../utils/logger";
 import { IpcClient } from "./IpcClient";
 import { getRepoIdentity } from "../utils/configPathResolver";
+import { stageContextFileName } from "../orchestrator/context/stageContextFiles";
+import type { PipelineFeedbackSignal, PipelineFeedbackSignalType } from "@nightgauge/sdk";
 
 // ============================================================================
 // Types
@@ -176,16 +178,94 @@ interface ClassificationPattern {
   category: RetroFailureCategory;
   /** Sources where these patterns are meaningful. Empty = all sources. */
   sources?: EvidenceSource[];
+  /**
+   * Whether `unknown`-sourced lines count as a match for this rule (#1144).
+   *
+   * `classifyLineSource` tags every line WITHOUT an `[ISO-ts] [LEVEL]` prefix
+   * as `unknown` — which is all raw subagent stdout, every JSON blob, every
+   * prompt echo and every line of acceptance-criteria text quoted back at us.
+   * `findFirstMatch` used to admit `unknown` for EVERY rule unconditionally,
+   * which made the `sources` declaration decorative for anything the source
+   * classifier could not identify.
+   *
+   * The admission is per-rule rather than global because the right answer
+   * differs by rule:
+   *
+   *   - A rule that trusts `subagent` genuinely needs it. Raw subagent stdout
+   *     carries no extension log prefix, so it lands as `unknown`; refusing
+   *     `unknown` would make `validation-failure` unmatchable in practice.
+   *   - A rule that trusts ONLY `extension` never needs it. Extension log
+   *     lines are reliably identifiable by their prefix, so a line tagged
+   *     `unknown` is by construction NOT an extension line, and admitting it
+   *     just re-opens the hole the `sources` declaration was meant to close.
+   *
+   * Defaults to `true` to preserve the historical behavior for rules that have
+   * not been reviewed; see each rule's own comment for its reasoning.
+   */
+  allowUnknownSource?: boolean;
 }
 
+/**
+ * Cap on a single evidence entry (#1144). Evidence now records the LINE that
+ * matched rather than the regex that matched it, and one of those "lines" can
+ * be an entire pipeline-context JSON document pushed as a single element.
+ */
+const EVIDENCE_LINE_MAX = 300;
+
+/**
+ * Stage-authored `feedback[]` signal → retro finding category (#1144).
+ *
+ * A blocking feedback signal is the stage's own structured statement of why it
+ * could not proceed. It outranks the keyword table entirely: guessing from
+ * prose when the deliverable already says what happened is how an
+ * acceptance-criteria gate failure got written up as `budget-exceeded`.
+ *
+ * The categories below are the closest members of the existing retro taxonomy
+ * (shared with `skills/nightgauge-retro`); the signal's own `rationale` and
+ * `evidence` are carried through onto the finding, so the operator reads the
+ * real reason rather than the category's generic summary.
+ *
+ * `OPERATOR_STEER` is absent by construction: ADR 015 §G fixes it at `warning`
+ * severity, and only `blocking` signals are classified from.
+ */
+const FEEDBACK_SIGNAL_CATEGORY: Partial<Record<PipelineFeedbackSignalType, RetroFailureCategory>> =
+  {
+    // The work as planned / as specified did not clear the gate.
+    PLAN_REVISION_NEEDED: "validation-failure",
+    SCOPE_DISCOVERED: "validation-failure",
+    ACCEPTANCE_CRITERIA_AMBIGUOUS: "validation-failure",
+    // The model was not up to the task at the routed capability.
+    COMPLEXITY_UNDERESTIMATED: "model-capability",
+    MODEL_ESCALATION_NEEDED: "model-capability",
+    // pr-merge hit a conflict it could not resolve in place.
+    CONFLICT_RESOLUTION_NEEDED: "merge-blocked",
+  };
+
 const CLASSIFICATION_PATTERNS: ClassificationPattern[] = [
-  // budget-exceeded: BudgetEnforcer messages live in extension logs
+  // budget-exceeded: BudgetEnforcer messages live in extension logs.
+  //
+  // #1144 — allowUnknownSource:false. These four patterns are the loosest in
+  // the table: `/token limit/i` and `/cost.*exceeded/i` are ordinary English
+  // in a codebase whose SUBJECT MATTER is pipeline budgets, so they match
+  // acceptance-criteria text, prompt echoes and quoted docs. Combined with
+  // this rule being FIRST in the table and the keyword pass short-circuiting
+  // on first match, an `unknown`-tagged line containing the phrase "token
+  // limit" outranked every other category. A genuine BudgetEnforcer message
+  // is always written through the extension logger and therefore always
+  // carries the `[ISO-ts] [LEVEL]` prefix, so this rule loses nothing real.
   {
     category: "budget-exceeded",
     patterns: [/budget exceeded/i, /token limit/i, /costUsd\s*>\s*budget/i, /cost.*exceeded/i],
     sources: ["extension"],
+    allowUnknownSource: false,
   },
-  // state-management: pipeline-context schema problems — extension orchestration
+  // state-management: pipeline-context schema problems — extension orchestration.
+  //
+  // #1144 — reviewed and left admitting `unknown`. Unlike the budget patterns
+  // these are distinctive orchestration protocol strings ("did not write
+  // expected output context") that do not occur as incidental prose, and they
+  // are also echoed by stage skills in un-prefixed output that we still want
+  // to catch.
   {
     category: "state-management",
     patterns: [
@@ -840,10 +920,13 @@ export class AutoRetroService {
     lines: TaggedLine[];
     terminalReason: string;
     terminalKind: string;
+    /** `feedback[]` read off the stage deliverable, when it had one (#1144). */
+    feedbackSignals: PipelineFeedbackSignal[];
   }> {
     const parts: string[] = [];
     const sourcesAnalyzed: string[] = [];
     const lines: TaggedLine[] = [];
+    let feedbackSignals: PipelineFeedbackSignal[] = [];
 
     // Source 0: the orchestrator's terminal failure reason (#3926). This is
     // the authoritative verdict for the run and the highest-signal text the
@@ -894,22 +977,43 @@ export class AutoRetroService {
       // Session logs not available — skip
     }
 
-    // Source 2: Pipeline context for the failed stage
-    try {
-      const contextFile = path.join(
-        workspaceRoot,
-        ".nightgauge",
-        "pipeline",
-        `${failedStage}-${issueNumber}.json`
-      );
-      const contextContent = await fs.readFile(contextFile, "utf-8");
-      parts.push(contextContent);
-      sourcesAnalyzed.push("pipeline_context");
-      // Pipeline context is structured JSON — tag as `extension` since it
-      // originates from the orchestrator, not the subagent.
-      lines.push({ source: "extension", text: contextContent });
-    } catch {
-      // Pipeline context not available — skip
+    // Source 2: the failed stage's pipeline-context DELIVERABLE.
+    //
+    // #1143 — this path was built as `${failedStage}-${issueNumber}.json`.
+    // Deliverables are not named after stages (`feature-validate` writes
+    // `validate-{N}.json`), so the lookup resolved to a filename that has
+    // never existed, for any stage, in any run. The ENOENT landed in a bare
+    // `catch {}` and the miss was invisible: real retros record
+    // `sources_analyzed: ["terminal_reason", "session_log"]` and never mention
+    // the file they failed to open. Resolve through the ONE shared mapping and
+    // log the miss with the path tried.
+    const contextFileName = stageContextFileName(failedStage, issueNumber);
+    if (!contextFileName) {
+      // pr-merge and the bookend stages legitimately write no deliverable.
+      logger.info("Auto-retro: stage writes no pipeline context deliverable", {
+        issueNumber,
+        failedStage,
+      });
+    } else {
+      const contextFile = path.join(workspaceRoot, ".nightgauge", "pipeline", contextFileName);
+      try {
+        const contextContent = await fs.readFile(contextFile, "utf-8");
+        parts.push(contextContent);
+        sourcesAnalyzed.push("pipeline_context");
+        // Pipeline context is structured JSON — tag as `extension` since it
+        // originates from the orchestrator, not the subagent.
+        lines.push({ source: "extension", text: contextContent });
+        // The deliverable may carry the stage's own structured statement of
+        // why it could not proceed. That beats every inference downstream.
+        feedbackSignals = this.extractFeedbackSignals(contextContent, contextFile, logger);
+      } catch (err) {
+        logger.info("Auto-retro: pipeline context deliverable not readable", {
+          issueNumber,
+          failedStage,
+          contextFile,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
     }
 
     // Source 3: JSONL history entry for THIS issue. Pre-#3204 this took the
@@ -971,7 +1075,43 @@ export class AutoRetroService {
       lines,
       terminalReason: failureReason?.trim() ?? "",
       terminalKind: terminalKind?.trim() ?? "",
+      feedbackSignals,
     };
+  }
+
+  /**
+   * Pull the `feedback[]` array off a stage deliverable (#1144).
+   *
+   * Structural validation only — the array is filtered for well-formed entries
+   * and left otherwise untouched, so a schema addition upstream does not have
+   * to be mirrored here. Never throws: a malformed or non-JSON deliverable is
+   * logged and yields no signals, and the classifier falls back to inference
+   * exactly as it did before.
+   *
+   * @see packages/nightgauge-sdk/src/context/schemas/feedback.ts
+   */
+  private static extractFeedbackSignals(
+    contextContent: string,
+    contextFile: string,
+    logger: Logger
+  ): PipelineFeedbackSignal[] {
+    try {
+      const parsed = JSON.parse(contextContent) as { feedback?: unknown };
+      if (!Array.isArray(parsed.feedback)) return [];
+      return (parsed.feedback as PipelineFeedbackSignal[]).filter(
+        (signal) =>
+          signal != null &&
+          typeof signal === "object" &&
+          typeof signal.signal_type === "string" &&
+          typeof signal.severity === "string"
+      );
+    } catch (err) {
+      logger.info("Auto-retro: pipeline context deliverable is not parseable JSON", {
+        contextFile,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return [];
+    }
   }
 
   /**
@@ -1072,6 +1212,8 @@ export class AutoRetroService {
       lines?: TaggedLine[];
       terminalReason?: string;
       terminalKind?: string;
+      /** Stage-authored `feedback[]` off the deliverable (#1143 / #1144). */
+      feedbackSignals?: PipelineFeedbackSignal[];
     },
     failedStage: string
   ): RetroFinding[] {
@@ -1098,15 +1240,38 @@ export class AutoRetroService {
       return this.orderFindings(findings);
     }
 
+    // Pass 1.5: stage-authored feedback signals (#1144).
+    //
+    // The deliverable's `feedback[]` is the stage's OWN structured statement of
+    // why it could not proceed — signal type, rationale and evidence, written
+    // by the stage that hit the wall. When it exists there is nothing to infer,
+    // so the keyword table below is not consulted at all. Guessing from prose
+    // while the deliverable says what happened is how an acceptance-criteria
+    // gate failure was written up as `budget-exceeded`, severity high.
+    const feedbackFindings = this.classifyFromFeedback(evidence.feedbackSignals, failedStage, seen);
+    if (feedbackFindings.length > 0) {
+      return this.orderFindings(feedbackFindings);
+    }
+
     // Pass 2: source-tagged keyword matching. Use tagged lines if the
     // collector provided them, else fall back to whole-text matching for
     // patterns that aren't source-restricted.
     const tagged = evidence.lines;
-    for (const { patterns, category, sources } of CLASSIFICATION_PATTERNS) {
-      const matched = this.findFirstMatch(text, tagged, patterns, sources);
+    for (const { patterns, category, sources, allowUnknownSource } of CLASSIFICATION_PATTERNS) {
+      const matched = this.findFirstMatch(
+        text,
+        tagged,
+        patterns,
+        sources,
+        allowUnknownSource ?? true
+      );
+      // `matched` is the LINE that matched, not the regex source (#1144), and
+      // the "Pattern matched: " prefix is applied by buildFinding — exactly
+      // once. Applying it here as well produced the literal evidence string
+      // "Pattern matched: Pattern matched: token limit".
       if (matched && !seen.has(category)) {
         seen.add(category);
-        findings.push(this.buildFinding(category, failedStage, `Pattern matched: ${matched}`));
+        findings.push(this.buildFinding(category, failedStage, matched));
         // Keyword pass returns a single finding (preserves pre-#3204 behavior
         // where the user-visible retro is one strongest candidate). Multi-
         // finding output requires a structured signal upstream.
@@ -1118,29 +1283,84 @@ export class AutoRetroService {
   }
 
   /**
+   * Build findings from the stage deliverable's blocking `feedback[]` signals.
+   *
+   * Only `blocking` signals classify: a `warning` signal is background the next
+   * stage should honor, not the cause of a failed run. `OPERATOR_STEER` is
+   * always `warning` (ADR 015 §G) and so is never a cause here.
+   *
+   * The signal's `rationale` and `evidence` ride along on the finding, so the
+   * operator sees the stage's actual words rather than the category's generic
+   * summary — the whole point of preferring the structured cause.
+   *
+   * @see Issue #1144
+   */
+  private static classifyFromFeedback(
+    signals: PipelineFeedbackSignal[] | undefined,
+    failedStage: string,
+    seen: Set<RetroFailureCategory>
+  ): RetroFinding[] {
+    if (!signals || signals.length === 0) return [];
+
+    const findings: RetroFinding[] = [];
+    for (const signal of signals) {
+      if (signal.severity !== "blocking") continue;
+
+      const category = FEEDBACK_SIGNAL_CATEGORY[signal.signal_type];
+      if (!category || seen.has(category)) continue;
+      seen.add(category);
+
+      const emitter = signal.emitted_by_stage ?? failedStage;
+      const detail = [`Feedback signal: ${signal.signal_type} (emitted by ${emitter})`];
+      if (signal.rationale) {
+        detail.push(`Rationale: ${this.truncateEvidence(signal.rationale)}`);
+      }
+      for (const item of signal.evidence ?? []) {
+        detail.push(`Evidence: ${this.truncateEvidence(item)}`);
+      }
+
+      findings.push(this.buildFinding(category, failedStage, "", detail));
+    }
+    return findings;
+  }
+
+  /**
    * Source-tagged regex match. When `tagged` is provided, only test patterns
    * against lines whose source is in `allowedSources` (or any source if
    * `allowedSources` is empty/undefined). When `tagged` is absent, fall back
    * to a whole-text test, but only for unrestricted patterns — restricted
    * patterns silently skip rather than firing on potentially-wrong source.
+   *
+   * Returns the LINE that matched, not the regex that matched it (#1144). The
+   * regex source is the one datum an operator already has — it is printed in
+   * this file — while the matching line is the one that would have exposed the
+   * false positive. Recording `p.source` discarded exactly the evidence the
+   * evidence array exists to carry.
+   *
+   * @param allowUnknownSource whether `unknown`-tagged lines satisfy a rule
+   *   that declares `sources`. See ClassificationPattern.allowUnknownSource for
+   *   why this is per-rule rather than global.
    */
   private static findFirstMatch(
     fullText: string,
     tagged: TaggedLine[] | undefined,
     patterns: RegExp[],
-    allowedSources?: EvidenceSource[]
+    allowedSources?: EvidenceSource[],
+    allowUnknownSource = true
   ): string | null {
     if (tagged && allowedSources && allowedSources.length > 0) {
-      // `unknown`-tagged lines are always considered (the source classifier
-      // could not determine origin; treat as wildcard rather than fail-close).
-      // This preserves correct behavior for free-form text inputs while still
-      // blocking extension-cleanup noise (which IS reliably tagged as
-      // `extension`) from tripping subagent-only patterns.
-      const allow = new Set([...allowedSources, "unknown" as EvidenceSource]);
+      const allow = new Set<EvidenceSource>(allowedSources);
+      if (allowUnknownSource) {
+        // The source classifier could not determine origin; treat as wildcard
+        // rather than fail-close. Correct for rules that trust `subagent`
+        // (raw subagent stdout carries no log prefix, so it lands here), and
+        // wrong for rules that trust only `extension` — see the per-rule flag.
+        allow.add("unknown");
+      }
       for (const line of tagged) {
         if (!allow.has(line.source)) continue;
         for (const p of patterns) {
-          if (p.test(line.text)) return p.source;
+          if (p.test(line.text)) return this.matchedLine(line.text, p);
         }
       }
       return null;
@@ -1150,9 +1370,29 @@ export class AutoRetroService {
     // source-aware behavior is the live one; this lenient path keeps the
     // standalone classifier API ergonomic for tests and one-off callers.
     for (const p of patterns) {
-      if (p.test(fullText)) return p.source;
+      if (p.test(fullText)) return this.matchedLine(fullText, p);
     }
     return null;
+  }
+
+  /**
+   * Narrow a matched blob down to the single line that matched, truncated for
+   * readability (#1144).
+   *
+   * A "line" in the tagged corpus can be an entire pipeline-context JSON
+   * document pushed as one element, so this re-splits and picks the line the
+   * pattern actually hits. Falls back to the whole text when the pattern spans
+   * lines, which keeps the evidence honest rather than empty.
+   */
+  private static matchedLine(text: string, pattern: RegExp): string {
+    const hit = text.split("\n").find((line) => pattern.test(line)) ?? text;
+    return this.truncateEvidence(hit);
+  }
+
+  /** Trim and cap a single evidence entry. */
+  private static truncateEvidence(text: string): string {
+    const trimmed = String(text).trim();
+    return trimmed.length > EVIDENCE_LINE_MAX ? `${trimmed.slice(0, EVIDENCE_LINE_MAX)}…` : trimmed;
   }
 
   /**
@@ -1174,12 +1414,21 @@ export class AutoRetroService {
   private static buildFinding(
     category: RetroFailureCategory,
     failedStage: string,
-    matchedPattern: string
+    matchedPattern: string,
+    /**
+     * Extra evidence lines that are NOT pattern matches — used by the
+     * feedback-signal path (#1144), which carries the stage's own rationale and
+     * evidence and must not be dressed up as "Pattern matched: ".
+     */
+    extraEvidence: string[] = []
   ): RetroFinding {
     const evidence: string[] = [];
+    // The ONLY place the "Pattern matched: " prefix is applied (#1144). Call
+    // sites pass the bare matched text.
     if (matchedPattern) {
       evidence.push(`Pattern matched: ${matchedPattern}`);
     }
+    evidence.push(...extraEvidence);
     evidence.push(`Failed stage: ${failedStage}`);
 
     const summaries: Record<RetroFailureCategory, string> = {

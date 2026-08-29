@@ -291,6 +291,72 @@ describe("QueuedIssueTreeItem", () => {
     });
   });
 
+  /**
+   * Issue #1146 — the Go scheduler gained an `excluded_label` paused reason
+   * when `exclude_labels` moved to the dequeue chokepoint. The TypeScript
+   * union and the label function knew only the three older kinds, so the
+   * generic fallback rendered the raw discriminant: an operator saw
+   * `excluded_label` where every other pause reason reads as a phrase, and the
+   * label they need to remove was never named.
+   */
+  describe("human-only label paused rendering (Issue #1146)", () => {
+    const excludedPausedItem = (label?: string) =>
+      createMockQueueItem({
+        issueNumber: 1146,
+        position: 1,
+        status: "paused",
+        pausedReason: {
+          kind: "excluded_label",
+          label,
+          summary: label
+            ? `carries human-only label "${label}" (autonomous.exclude_labels)`
+            : undefined,
+        },
+      });
+
+    it("renders the description as a phrase naming the label, not the raw discriminant", () => {
+      const item = new QueuedIssueTreeItem(excludedPausedItem("owner-action"));
+
+      const description = item.description as string;
+      expect(description).toContain("paused: human-only label owner-action");
+      expect(description).not.toContain("excluded_label");
+    });
+
+    it("reads as prose in the accessibility label, not the raw discriminant", () => {
+      const item = new QueuedIssueTreeItem(excludedPausedItem("owner-action"));
+
+      const a11yLabel = (item.accessibilityInformation?.label ?? "") as string;
+      expect(a11yLabel).toContain("Paused due to the human-only label owner-action");
+      expect(a11yLabel).not.toContain("excluded_label");
+      // Nothing sweeps these — the operator removes the label or discards.
+      expect(a11yLabel).toContain("Resumes only via operator action.");
+    });
+
+    it("explains the hold in the tooltip and says what releases it", () => {
+      const tooltip = (new QueuedIssueTreeItem(excludedPausedItem("owner-action")).tooltip as any)
+        .value as string;
+
+      expect(tooltip).toContain("Reason: human-only label");
+      expect(tooltip).toContain("owner-action");
+      expect(tooltip).toContain("autonomous.exclude_labels");
+      expect(tooltip).toMatch(/remove the label/i);
+      expect(tooltip).not.toContain("Reason: excluded_label");
+      // It is not on any promote sweep — do not imply one.
+      expect(tooltip).not.toMatch(/auto-resumes/i);
+    });
+
+    it("degrades to a phrase when the label is absent", () => {
+      const item = new QueuedIssueTreeItem(excludedPausedItem(undefined));
+
+      const description = item.description as string;
+      const a11yLabel = (item.accessibilityInformation?.label ?? "") as string;
+      expect(description).toContain("paused: human-only label");
+      expect(description).not.toContain("excluded_label");
+      expect(a11yLabel).toContain("a human-only label");
+      expect(a11yLabel).not.toContain("excluded_label");
+    });
+  });
+
   describe("update method", () => {
     it("should update single item correctly", () => {
       const item = new QueuedIssueTreeItem(createMockQueueItem({ issueNumber: 42, position: 1 }));
