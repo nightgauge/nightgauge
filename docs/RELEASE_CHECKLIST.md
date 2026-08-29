@@ -3,12 +3,100 @@
 Evidence from the 2026-08-20 release-readiness run. This is not a generic
 template: every row is something that was actually executed or judged.
 
-The last published tag at the start of the run was **`v0.2.0-rc.23`**. The
-originally requested `v0.2.0-rc.10` was already obsolete. The next candidate
-is **`v0.2.0-rc.24`**.
+The 2026-08-20 run (the sections after _What is left_) recorded the last
+published tag as **`v0.2.0-rc.23`** and set `v0.2.0-rc.24` as the candidate;
+`v0.2.0-rc.24` has since been tagged and `main` has moved on.
 
 Green CI on a PR is a prediction. The merge commit on `main` is the
 observation. Do not tag until that post-merge observation is green.
+
+## What is left before the first Marketplace version — 2026-08-29 pass
+
+This section is the current answer to "what stands between `main` and the
+first VS Code Marketplace release". It was produced by a release-readiness
+pass on 2026-08-29 that re-measured every earlier row of this file, walked
+the marketing and legal surfaces, and landed the items marked **done**. Every
+open row names the evidence that will close it. Re-measure before trusting a
+row; `main` moves.
+
+### The one gate that matters
+
+| #   | Gate                                                                                                                                                                                                                 | State                                                                                                                       |
+| --- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| G1  | **Clean-machine install, step 5**: install the packaged `.vsix` into a profile with no Nightgauge state, follow the README verbatim, and drive one issue to a merged PR. See _The clean-machine install gate_ below. | **Open.** Steps 1–4 walked (2026-08-24/25); all eight findings fixed (#862–#865, #898–#902). Step 5 never executed — #1137. |
+
+The pipeline has proven itself end to end on a real repository — an
+M-sized feature issue went pickup → plan → dev → validate → PR → merge
+unattended on 2026-08-29 (six stages, $6.72, 83 minutes; the run every image
+in `docs/images/marketing/` is built from). That run was driven by a
+maintainer's install, which is exactly what G1 does not accept as evidence.
+
+### Code readiness
+
+| #   | Gate                                                                                                                               | State                                                                                                                                                                              |
+| --- | ---------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| C1  | No open issue claims install, activation, or any of the six core stages fails for a single-repo user on their own keys             | **Done.** 92-issue v1 triage (2026-08-24): 0 block v1. Re-run the triage over bugs filed since before tagging.                                                                     |
+| C2  | Publish-blocker list empty (the four tests: stranger's first hour; no destructive or costly failure; fails loudly; clean boundary) | **2 left** of 11: #442 (compose reconcile can tear down a live stack outside the workspace) and #490 (merge-lock goroutine wedges on cancel). Fix or document both before tagging. |
+| C3  | `main`'s own post-merge run green at the release commit (not the PR prediction)                                                    | Re-check at tag time. The scheduled staging smoke attaching to head is not a merge regression — read the job name.                                                                 |
+| C4  | Known-issues baseline reviewed                                                                                                     | **Done** (below) — nothing in it is a product defect.                                                                                                                              |
+
+### The listing is true
+
+A Marketplace listing is the README, the gallery images, `package.json`
+metadata and the CHANGELOG. Each must describe the product that ships.
+
+| #   | Gate                                                                                                                    | State                                                                                                                                                   |
+| --- | ----------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| L1  | Telemetry disclosure matches the code (opt-out, on by default, nothing uploaded without a license key or sign-in)       | **Done** — #1134. README previously claimed opt-in.                                                                                                     |
+| L2  | No relative links in the README (they 404 on the listing page)                                                          | **Done** — #1134.                                                                                                                                       |
+| L3  | `qna`, `pricing`, `galleryBanner`, `icon`, `license`, `homepage`, `bugs`, `repository` present; VSIX ships no dev files | **Done** — #1134 (`qna`, `pricing: Free`; test tsconfigs, `scripts/**` and stray `.vsix` excluded).                                                     |
+| L4  | The README states which adapter path is the supported one and does not advertise autonomous multi-repo mode as finished | **Open** — #1136. The v1 triage's honest-risk section: non-default adapters are rougher; multi-repo/autonomous is less finished.                        |
+| L5  | Gallery imagery is generated from the product, not drawn, and regenerable in one command                                | **Done** — #1134 (`npm run -w nightgauge-vscode marketing:screenshots`). The six hand-captured README images still exist; replace or keep deliberately. |
+| L6  | CHANGELOG has an entry for the version being tagged                                                                     | **Open** — #1136. Only `[0.2.0] - 2026-07-28` exists and `main` is far past it.                                                                         |
+| L7  | Privacy policy and terms the README links to exist and name the right entity                                            | **Done on the site side** (nightgauge.dev `/privacy/`, `/terms/`, sub-processors as a section); README links `/privacy/` — #1134.                       |
+
+### Every surface is real
+
+The product is the extension, the web dashboard, the mobile app and the chat
+cards. A release page that shows only one of them is a claim about the other
+three.
+
+| #   | Gate                                                                                                               | State                                                                                                                           |
+| --- | ------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------- |
+| S1  | Extension dashboard: the real renderer, real run, VS Code frame                                                    | **Done** — `docs/images/marketing/extension-dashboard-*.png`.                                                                   |
+| S2  | Discord and Slack cards: the exact payloads the notifiers send, plus the JSON                                      | **Done** — `docs/images/marketing/notification-{discord,slack}.{png,json}`. Compared against a real screenshot of the same run. |
+| S3  | Web dashboard: a mocked-backend Playwright lane that captures the same run                                         | **Done** in the dashboard repository (`npm run screenshots:marketing`).                                                         |
+| S4  | Mobile app: an emulator route-walk lane with marketing fixtures for the same run                                   | **In progress** in the mobile repository (`scripts/marketing-screenshots.sh` on a Pixel 9 Pro AVD).                             |
+| S5  | The site copies all of the above from the owning repositories (`npm run assets:sync`) and never draws a screenshot | **Done** on nightgauge.dev; the mobile surface slots in when S4 lands.                                                          |
+
+### The publish path
+
+| #   | Gate                                                                                                                                    | State                                                                                                                                                                  |
+| --- | --------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| P1  | `release.yml` has fired at least once on a stable tag (dogfood-readiness gate D2)                                                       | **Open.** No stable tag exists; only `v0.2.0-rc.*` (staging, publishes nothing).                                                                                       |
+| P2  | Marketplace publish is double-gated (`MARKETPLACE_PUBLISH` repo variable **and** `VSCE_PAT`), with `vsce verify-pat` before any publish | **Done** in the workflow. The variable is still `false` — flipping it _is_ the release decision.                                                                       |
+| P3  | 0.x publishes to the Marketplace **pre-release** channel                                                                                | **Open** — #1135. The runbook says pre-release channel; the publish step has no `--pre-release` flag.                                                                  |
+| P4  | Open VSX                                                                                                                                | **Decided: not in the first release.** The namespace is claimed; publish there only after the Marketplace listing has soaked. No `ovsx` step exists — nothing to gate. |
+| P5  | Recut the release candidate at the release commit; do not publish an older RC's artifacts                                               | **Open.** Tag `v0.2.0-rc.25` (or later) at the commit that passes G1, then `v0.2.0`.                                                                                   |
+| P6  | After the merge: the 72-hour quiet soak, then the announcement, then the Marketplace flip                                               | Sequenced in the private release runbook.                                                                                                                              |
+
+### Dogfood before the tag
+
+G1 proves the install path once. The pipeline should also be seen to handle
+the _shapes_ of work a stranger will hand it, not one M-sized feature. Before
+tagging, drive one issue of each class through the packaged extension and
+record the outcome in the private release runbook:
+
+- an S-sized bug with a clear reproduction;
+- an S-sized feature touching UI;
+- an M-sized feature with a design decision in it;
+- a chore (dependency or CI) with no product change;
+- a spike whose deliverable is a written decision, not code;
+- an issue with a `blockedBy` edge, to see the queue honour it;
+- one that _should_ fail a gate (a wrong premise), to see it fail loudly.
+
+Every card, dashboard row and history record those runs produce is the
+release's evidence. Regenerate the marketing imagery from the best of them.
 
 ## Verdict
 
@@ -178,7 +266,7 @@ below is about what the product _claims_, not what it does.
 Two observations left unfiled, both judged cosmetic:
 
 - The `.vsix` ships `tsconfig.test.json` and `tsconfig.playwright.json`. Dev
-  files in a Marketplace artifact; harmless, untidy.
+  files in a Marketplace artifact; harmless, untidy. _Fixed 2026-08-29 (#1134)._
 - `doctor` on a repository with no `origin` prints a raw four-line
   `git fatal: Could not read from remote repository` to stderr before its
   report. Alarming on a first run, and the sweep's warning already says what
