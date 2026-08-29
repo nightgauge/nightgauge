@@ -85,6 +85,15 @@ func (s *Server) ListenSocket(ctx context.Context, path string) error {
 func (s *Server) serveSocketConn(ctx context.Context, conn net.Conn) {
 	defer conn.Close()
 
+	// Authenticate BEFORE the request is read or dispatched (ADR 017 R-2,
+	// #378). Ordering is the whole point: a check that ran after dispatch
+	// would refuse the response while the verb had already mutated state.
+	if err := s.authorizeConn(conn); err != nil {
+		log.Printf("WARNING: IPC socket rejected a connection: %v", err)
+		s.sendErrorOnWriter(conn, 0, ErrUnauthorized, "unauthorized: "+err.Error())
+		return
+	}
+
 	scanner := bufio.NewScanner(conn)
 	scanner.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
 
