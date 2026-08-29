@@ -183,6 +183,26 @@ describe("SlackService — delivery", () => {
 
   // The whole reason for a bot token: the terminal summary must EDIT the
   // original message, not append a second one.
+  it("reports the successful post, so silence never means success (#1126)", async () => {
+    // Discord logged "pipeline embed created"; Slack logged nothing on
+    // success. A working notifier and one that never started produced
+    // identical logs, so the only way to confirm a run had posted was to open
+    // the channel. Every inert reason already reports itself (#1106) — the
+    // working case has to as well, or the absence of a warning proves nothing.
+    const fetchMock = slackOk();
+    const svc = newService(fetchMock, logger);
+    svc.onPipelineStart({ issueNumber: 42, stage: "issue-pickup" });
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalled());
+
+    const posted = logger.info.mock.calls.find((c: unknown[]) =>
+      String(c[0]).includes("pipeline message posted")
+    );
+    expect(posted, "a successful post must be logged").toBeDefined();
+    expect(posted?.[1]).toMatchObject({ issueNumber: 42, channel: CHANNEL });
+
+    svc.dispose();
+  });
+
   it("edits the original message in place at terminal state", async () => {
     const fetchMock = slackOk();
     const svc = newService(fetchMock, logger);
