@@ -32,13 +32,39 @@ function dataUri(path: string, mime: string): string {
   return `data:${mime};base64,${readFileSync(path).toString("base64")}`;
 }
 
-async function shot(browser: any, html: string, out: string, width: number, height?: number) {
+/**
+ * Seeds `acquireVsCodeApi()` in every frame (the dashboard runs inside a
+ * srcdoc iframe) with the tab the fixture was rendered for. The tab reaches
+ * the page as an init-script ARGUMENT, never as code — no HTML or script is
+ * built from data.
+ */
+function vscodeApiSeed(activeTab: string) {
+  let state: unknown = { activeTab };
+  (globalThis as any).acquireVsCodeApi = () => ({
+    postMessage: () => {},
+    setState: (v: unknown) => {
+      state = v;
+      return v;
+    },
+    getState: () => state,
+  });
+}
+
+async function shot(
+  browser: any,
+  html: string,
+  out: string,
+  width: number,
+  height?: number,
+  activeTab?: string
+) {
   const ctx = await browser.newContext({
     viewport: { width, height: height ?? 900 },
     deviceScaleFactor: SCALE,
     colorScheme: "dark",
   });
   const page = await ctx.newPage();
+  if (activeTab !== undefined) await page.addInitScript(vscodeApiSeed, activeTab);
   await page.setContent(html, { waitUntil: "load" });
   await page.waitForTimeout(600);
   if (height) {
@@ -97,10 +123,7 @@ async function main() {
       ["history", "extension-dashboard-history"],
     ];
     for (const [tab, name] of tabs) {
-      const webview = themeWebview(renderDashboardTab(tab)).replace(
-        "<head>",
-        `<head><script>window.acquireVsCodeApi=function(){var s={activeTab:${JSON.stringify(tab)}};return{postMessage:function(){},setState:function(v){s=v;return v;},getState:function(){return s;}}};</script>`
-      );
+      const webview = themeWebview(renderDashboardTab(tab));
       const html = renderFrame({
         title: `Nightgauge Dashboard — ${REPO_NAME} — Visual Studio Code`,
         tabLabel: "Nightgauge Dashboard",
@@ -108,7 +131,7 @@ async function main() {
         activityIcon,
         webviewHtml: webview,
       });
-      await shot(browser, html, resolve(OUT, `${name}.png`), 1440, 900);
+      await shot(browser, html, resolve(OUT, `${name}.png`), 1440, 900, tab);
     }
   }
 
