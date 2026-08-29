@@ -522,6 +522,7 @@ func rootCmd() *cobra.Command {
 		cleanupCmd(),
 		worktreeCmd(),
 		stashCmd(),
+		wipCmd(),
 		configCmd(),
 		scanCmd(),
 		preflightCmd(),
@@ -10332,7 +10333,7 @@ func modelAccuracyAlternate(modelAccuracy *float64) string {
 var doctorCheckOrder = []string{
 	"binary", "gh", "github_auth", "api_user", "scopes", "rate_limit", "config", "project",
 	"ai_adapter",
-	"compose_orphans", "worktree_leaks", "stranded_branches", "pipeline_stashes", "orphaned_processes",
+	"compose_orphans", "worktree_leaks", "stranded_branches", "pipeline_stashes", "preserved_wip", "orphaned_processes",
 	"survival_backlog", "survival_coverage", "corpus_calibration", "scheduled_automations",
 }
 
