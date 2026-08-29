@@ -6855,8 +6855,17 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     completedStages: PipelineStage[],
     failedStageCount = 0
   ): PipelineOutcomeType {
-    return HeadlessOrchestrator.reconcileOutcomeWithFailedStages(
+    // Two cross-checks, both against the run's own ground truth: a success
+    // outcome cannot stand over a failed stage (#1109), and a "landed nothing"
+    // outcome cannot stand over a merged PR (#1120). Landed-work runs first so
+    // a refuted no-op is then still subject to the failed-stage check.
+    const landed = HeadlessOrchestrator.reconcileOutcomeWithLandedWork(
       this.classifyPipelineOutcomeFromArtifacts(issueNumber, completedStages),
+      this.runLandedWork(issueNumber, completedStages),
+      this.logger
+    );
+    return HeadlessOrchestrator.reconcileOutcomeWithFailedStages(
+      landed,
       failedStageCount,
       this.logger
     );
@@ -6944,6 +6953,75 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       }
     );
     return HeadlessOrchestrator.FAILED_STAGE_OUTCOME;
+  }
+
+  /**
+   * Outcomes that assert the run landed nothing. A merged PR refutes them
+   * (#1120).
+   */
+  private static readonly NO_WORK_OUTCOMES: readonly PipelineOutcomeType[] = [
+    "skill-no-op",
+    "verify-and-close",
+  ];
+
+  /** What a run that landed work is booked as when a no-work outcome is refuted. */
+  private static readonly LANDED_WORK_OUTCOME: PipelineOutcomeType = "productive";
+
+  /**
+   * Reject a "landed nothing" outcome on a run that demonstrably landed
+   * something (#1120) — the mirror of
+   * {@link HeadlessOrchestrator.reconcileOutcomeWithFailedStages}.
+   *
+   * `classifyPipelineOutcomeFromArtifacts` gives one stage's gate absolute
+   * precedence: any single `kind: "no_op"` result returns `skill-no-op`
+   * "regardless of what the dev context records". That rule was written for
+   * runs where the no-op IS the outcome, and it has no notion of a run that
+   * no-op'd in one conditional stage — a skipped E2E phase, a stage with
+   * nothing to do — and still shipped. A watched run merged a PR of 15 files
+   * and was booked as a no-op, which then entered the calibration corpus and
+   * the health snapshot as the pipeline having done nothing.
+   *
+   * A merged PR is dispositive, so it wins. The gate rule is not deleted, only
+   * subordinated: a run that really did land nothing still classifies as
+   * `skill-no-op`, because `landedWork` is false for it.
+   */
+  static reconcileOutcomeWithLandedWork(
+    outcome: PipelineOutcomeType,
+    landedWork: boolean,
+    logger?: { warn: (msg: string, meta?: Record<string, unknown>) => void }
+  ): PipelineOutcomeType {
+    if (!landedWork) return outcome;
+    if (!HeadlessOrchestrator.NO_WORK_OUTCOMES.includes(outcome)) return outcome;
+
+    logger?.warn(
+      "Classifier: no-work outcome contradicted by a merged PR — booking the contradiction",
+      {
+        proposedOutcomeType: outcome,
+        outcome_type: HeadlessOrchestrator.LANDED_WORK_OUTCOME,
+      }
+    );
+    return HeadlessOrchestrator.LANDED_WORK_OUTCOME;
+  }
+
+  /**
+   * Whether this run landed work: `pr-merge` completed AND the PR context
+   * records a PR number. `pr-merge` only reaches `completed` through its
+   * post-merge verification gate, which checks the PR is really MERGED, so the
+   * pair is ground truth rather than intent.
+   *
+   * Never throws: an unreadable context yields `false`, which leaves
+   * classification exactly as it was.
+   */
+  private runLandedWork(issueNumber: number, completedStages: PipelineStage[]): boolean {
+    if (!completedStages.includes("pr-merge")) return false;
+    try {
+      const prContextPath = this.getContextPath("pr", issueNumber);
+      if (!fs.existsSync(prContextPath)) return false;
+      const prNumber = JSON.parse(fs.readFileSync(prContextPath, "utf-8")).pr_number;
+      return typeof prNumber === "number" && prNumber > 0;
+    } catch {
+      return false;
+    }
   }
 
   /**

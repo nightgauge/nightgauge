@@ -258,3 +258,48 @@ describe("the failed-stage predicate is shared, not per-consumer (#1109)", () =>
     expect(countFailedStages(undefined)).toBe(0);
   });
 });
+
+describe("HeadlessOrchestrator.reconcileOutcomeWithLandedWork (#1120)", () => {
+  it("refutes a no-work outcome when the run merged a PR", () => {
+    // A watched run merged a PR of 15 files and was booked skill-no-op,
+    // because one conditional stage's gate carried kind:"no_op" and that
+    // return happens "regardless of what the dev context records".
+    for (const noWork of ["skill-no-op", "verify-and-close"] as PipelineOutcomeType[]) {
+      expect(HeadlessOrchestrator.reconcileOutcomeWithLandedWork(noWork, true)).toBe("productive");
+    }
+  });
+
+  it("is a no-op when the run landed nothing — a genuine no-op still classifies as one", () => {
+    for (const noWork of ["skill-no-op", "verify-and-close"] as PipelineOutcomeType[]) {
+      expect(HeadlessOrchestrator.reconcileOutcomeWithLandedWork(noWork, false)).toBe(noWork);
+    }
+  });
+
+  it("never rewrites an outcome that is not a no-work claim", () => {
+    // `partial` and `blocked` carry more information than `productive`; a
+    // merged PR does not entitle the classifier to discard that.
+    for (const outcome of ["partial", "blocked", "budget-ceiling"] as PipelineOutcomeType[]) {
+      expect(HeadlessOrchestrator.reconcileOutcomeWithLandedWork(outcome, true)).toBe(outcome);
+    }
+  });
+
+  it("logs the contradiction so the rewrite is not silent", () => {
+    const logger = { warn: vi.fn() };
+    HeadlessOrchestrator.reconcileOutcomeWithLandedWork("skill-no-op", true, logger);
+
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+    const [msg, meta] = logger.warn.mock.calls[0];
+    expect(String(msg)).toContain("contradicted by a merged PR");
+    expect(meta).toMatchObject({
+      proposedOutcomeType: "skill-no-op",
+      outcome_type: "productive",
+    });
+  });
+
+  it("composes with the failed-stage check rather than shadowing it", () => {
+    // A run that merged a PR AND has a failed stage is `partial`, not
+    // `productive`: landed-work runs first, then the failed-stage check.
+    const landed = HeadlessOrchestrator.reconcileOutcomeWithLandedWork("skill-no-op", true);
+    expect(HeadlessOrchestrator.reconcileOutcomeWithFailedStages(landed, 1)).toBe("partial");
+  });
+});
