@@ -20,6 +20,10 @@ assignees: ""
 - [ ] [Criterion 2]
 - [ ] [Criterion 3]
 
+## Verification
+
+- [The command whose output proves the chore is done — e.g. a `grep` that returns zero hits, a build or lint that passes]
+
 ## Technical Notes
 
 [Any implementation considerations, affected areas, or dependencies]

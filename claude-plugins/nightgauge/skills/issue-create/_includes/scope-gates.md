@@ -290,7 +290,16 @@ priority/size/status metadata.
 - [ ] All sub-issues linked to parent epic via addSubIssue mutation
 - [ ] All sub-issues added to project board with Status set
 - [ ] This chore closed
-"
+
+
+## Verification
+
+- \`gh api graphql\` on the parent epic returns at least one sub-issue, and
+  every sub-issue carries a Status of Ready on the project board
+  (\`nightgauge project audit --epic ${EPIC_NUMBER}\` reports no
+  MISSING_FROM_BOARD).
+- This chore is closed and the epic body's \`## Sub-Issues\` lists the
+  created children."
     # Create the follow-up chore — body written to temp file (hook-safe, per ADR-002)
     CHORE_BODY_FILE=$(mktemp)
     printf '%s' "$PLACEHOLDER_CHORE_BODY" > "$CHORE_BODY_FILE"
