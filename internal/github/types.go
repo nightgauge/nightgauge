@@ -624,19 +624,26 @@ type closePullRequestMutation struct {
 // --- Search Query ---
 
 // searchIssueNode represents an issue node inside a search result.
+//
+// search() returns SearchResultItem, a union. Only __typename may be selected
+// on it directly; every other field needs an inline fragment naming a concrete
+// member. Selecting them at the top level made GitHub reject the whole query
+// before the search ran, so the --search flag never worked at all (#1094).
 type searchIssueNode struct {
-	TypeName   string `graphql:"__typename"`
-	ID         graphql.ID
-	Number     graphql.Int
-	Title      graphql.String
-	State      graphql.String
-	URL        graphql.String
-	Repository struct {
-		NameWithOwner graphql.String
-	}
-	Labels struct {
-		Nodes []labelNode
-	} `graphql:"labels(first: 10)"`
+	TypeName    string `graphql:"__typename"`
+	IssueFields struct {
+		ID         graphql.ID
+		Number     graphql.Int
+		Title      graphql.String
+		State      graphql.String
+		URL        graphql.String
+		Repository struct {
+			NameWithOwner graphql.String
+		}
+		Labels struct {
+			Nodes []labelNode
+		} `graphql:"labels(first: 10)"`
+	} `graphql:"... on Issue"`
 }
 
 // searchIssuesQuery uses the top-level search() field to find issues.
