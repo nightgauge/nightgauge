@@ -2022,11 +2022,11 @@ Standalone tools for codebase assessment and modernization:
 
 Tools for backlog hygiene, project board sync, and configuration:
 
-| Skill                      | Description                                                                  |
-| -------------------------- | ---------------------------------------------------------------------------- |
-| `nightgauge-backlog-groom` | Backlog triage — stale issues, duplicates, priority validation, dependencies |
-| `nightgauge-project-sync`  | Bulk-sync issues to GitHub Project boards with field mappings                |
-| `nightgauge-config-show`   | Display effective configuration with source annotations                      |
+| Skill                      | Description                                                                              |
+| -------------------------- | ---------------------------------------------------------------------------------------- |
+| `nightgauge-backlog-groom` | Backlog grooming — validity, worth, verification, security, epic fit; verified mutations |
+| `nightgauge-project-sync`  | Bulk-sync issues to GitHub Project boards with field mappings                            |
+| `nightgauge-config-show`   | Display effective configuration with source annotations                                  |
 
 #### Quality & Observability
 

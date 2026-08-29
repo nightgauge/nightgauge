@@ -289,7 +289,7 @@ actually fail.
 
 In inferential mode (`--epic`, `--issues`, `--all-recent`) the target is
 frequently a hand-filed or pre-#711 issue that no creation flow ever shaped.
-Blocking those is `backlog-audit`'s job, not this skill's, so the finding stays
+Blocking those is `backlog-groom`'s job, not this skill's, so the finding stays
 a WARNING and the run still exits 0.
 
 The finding has no repair primitive in either mode: headings are human-authored

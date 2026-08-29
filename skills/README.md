@@ -85,12 +85,11 @@ Tools for analyzing, assessing, validating, and managing epics and their sub-iss
 
 Tools for backlog triage, prioritization, and issue queue management.
 
-| Skill                                                                 | Version | Description                                                                                                                                                                  |
-| --------------------------------------------------------------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [nightgauge-backlog-audit](nightgauge-backlog-audit/SKILL.md)         | 1.0.0   | Semantic re-assessment of open issues: validity against current main, worth, and priority fit, with adversarially verified closures. Use after an epic completes or monthly. |
-| [nightgauge-backlog-groom](nightgauge-backlog-groom/SKILL.md)         | 1.1.0   | Perform periodic backlog triage—identify stale issues, detect duplicates, validate priorities, and discover dependencies. Use weekly/monthly for hygiene.                    |
-| [nightgauge-backlog-preflight](nightgauge-backlog-preflight/SKILL.md) | 1.1.0   | Validate backlog issues are pipeline-ready before processing. Checks required labels, acceptance criteria quality, and greenfield readiness.                                 |
-| [nightgauge-queue](nightgauge-queue/SKILL.md)                         | 1.0.0   | Manage the issue queue for sequential and batch pipeline processing. Add, list, remove, and clear queued issues. Supports epic expansion.                                    |
+| Skill                                                                 | Version | Description                                                                                                                                                                                                                                          |
+| --------------------------------------------------------------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [nightgauge-backlog-groom](nightgauge-backlog-groom/SKILL.md)         | 2.0.0   | Groom the open backlog: validity against current main, worth, verification completeness, security of the proposed approach, and epic fit — with adversarially verified mutations. Repo-scoped or workspace-wide; after an epic completes or monthly. |
+| [nightgauge-backlog-preflight](nightgauge-backlog-preflight/SKILL.md) | 1.1.0   | Validate backlog issues are pipeline-ready before processing. Checks required labels, acceptance criteria quality, and greenfield readiness.                                                                                                         |
+| [nightgauge-queue](nightgauge-queue/SKILL.md)                         | 1.0.0   | Manage the issue queue for sequential and batch pipeline processing. Add, list, remove, and clear queued issues. Supports epic expansion.                                                                                                            |
 
 ---
 
