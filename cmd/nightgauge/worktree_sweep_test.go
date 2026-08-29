@@ -4,13 +4,13 @@ import (
 	"bytes"
 	"encoding/json"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/nightgauge/nightgauge/internal/gittest"
 	"github.com/nightgauge/nightgauge/internal/runstate"
 	"github.com/nightgauge/nightgauge/internal/state"
 )
@@ -34,9 +34,7 @@ func sweepRepo(t *testing.T, issue int) (root, worktree string) {
 
 	git := func(dir string, args ...string) {
 		t.Helper()
-		cmd := exec.Command("git", args...)
-		cmd.Dir = dir
-		if out, err := cmd.CombinedOutput(); err != nil {
+		if out, err := gittest.Command(dir, args...).CombinedOutput(); err != nil {
 			t.Fatalf("git %s (in %s): %v: %s", strings.Join(args, " "), dir, err, out)
 		}
 	}
@@ -287,9 +285,7 @@ func addWorktree(t *testing.T, root string, issue int) string {
 	t.Helper()
 	git := func(dir string, args ...string) {
 		t.Helper()
-		cmd := exec.Command("git", args...)
-		cmd.Dir = dir
-		if out, err := cmd.CombinedOutput(); err != nil {
+		if out, err := gittest.Command(dir, args...).CombinedOutput(); err != nil {
 			t.Fatalf("git %s (in %s): %v: %s", strings.Join(args, " "), dir, err, out)
 		}
 	}
@@ -547,9 +543,7 @@ func TestWorktreeSweep_StrandedBranchCommandIsRepoQualified(t *testing.T) {
 	// no worktree, which is the state that puts them outside the worktree
 	// pass's reach and into the branch report (#912).
 	for root, wt := range map[string]string{primary: wtPrimary, sibling: wtSibling} {
-		cmd := exec.Command("git", "worktree", "remove", wt)
-		cmd.Dir = root
-		if out, err := cmd.CombinedOutput(); err != nil {
+		if out, err := gittest.Command(root, "worktree", "remove", wt).CombinedOutput(); err != nil {
 			t.Fatalf("worktree remove %s: %v: %s", wt, err, out)
 		}
 	}

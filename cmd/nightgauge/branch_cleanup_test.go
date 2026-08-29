@@ -2,12 +2,12 @@ package main
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	gitpkg "github.com/nightgauge/nightgauge/internal/git"
+	"github.com/nightgauge/nightgauge/internal/gittest"
 )
 
 func TestGitBranchCleanupCmd_HelpListsDocsAndChore(t *testing.T) {
@@ -81,11 +81,17 @@ func branchCleanupFixture(t *testing.T) (svc *gitpkg.Service, root string) {
 	return svc, resolved
 }
 
+// gitIn runs a fixture git command through internal/gittest (#1160).
+//
+// It must NOT be a bare exec.Command: that leaves git's background housekeeping
+// armed (`gc --auto` detaches by default and runs `git worktree prune`) and lets
+// the machine's global/system config arm it behind the test's back. A prune
+// landing in `git worktree add`'s mkdir-to-`locked` window deletes the
+// half-built `$GIT_DIR/worktrees/<id>` and the add dies with ENOENT — which is
+// exactly how this file turned `main` red on a diff about label filtering.
 func gitIn(t *testing.T, dir string, args ...string) string {
 	t.Helper()
-	cmd := exec.Command("git", args...)
-	cmd.Dir = dir
-	out, err := cmd.CombinedOutput()
+	out, err := gittest.Command(dir, args...).CombinedOutput()
 	if err != nil {
 		t.Fatalf("git %s (in %s): %v: %s", strings.Join(args, " "), dir, err, out)
 	}
