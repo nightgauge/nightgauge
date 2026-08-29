@@ -7,6 +7,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/nightgauge/nightgauge/internal/gitworktree"
 )
 
 // ArchiveRun moves every live context file for this run's issue into
@@ -88,9 +90,17 @@ func CleanupBranchAndWorktree(repoRoot string, rs *RunState) error {
 
 	if rs.WorktreePath != nil && *rs.WorktreePath != "" {
 		// Best-effort git worktree remove — fall back to rm -rf if needed.
-		cmd := exec.Command("git", "worktree", "remove", *rs.WorktreePath, "--force")
-		cmd.Dir = repoRoot
-		if out, err := cmd.CombinedOutput(); err != nil {
+		//
+		// Removal, manual cleanup and prune are one critical section under the
+		// repository's worktree-mutation lock (#1163): a discard can run at any
+		// time, including while the scheduler is provisioning another issue's
+		// worktree against the same repo, and an unserialised prune inside that
+		// add's window fails it.
+		_ = gitworktree.Do(repoRoot, func(g *gitworktree.Session) error {
+			out, err := g.Remove(*rs.WorktreePath)
+			if err == nil {
+				return nil
+			}
 			// Best-effort, but never silent: a swallowed removal failure is
 			// how leaked worktrees go unnoticed for days (#110).
 			log.Printf("[WARN] discard teardown: git worktree remove %s failed (%v): %s — falling back to manual removal",
@@ -103,10 +113,9 @@ func CleanupBranchAndWorktree(repoRoot string, rs *RunState) error {
 				}
 			}
 			// Prune dangling refs.
-			pruneCmd := exec.Command("git", "worktree", "prune")
-			pruneCmd.Dir = repoRoot
-			_ = pruneCmd.Run()
-		}
+			_, _ = g.Prune()
+			return nil
+		})
 	}
 
 	if rs.Branch != "" && rs.Branch != "main" && rs.Branch != "master" {

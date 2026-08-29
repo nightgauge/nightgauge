@@ -1498,6 +1498,56 @@ work, a branch with no commits of its own, one a live worktree holds, and the
 default branch are each kept for a named reason, and an unreadable root reports
 **unverifiable** rather than clean.
 
+### Serialised Worktree Mutation (Issue #1163)
+
+`git worktree add` creates `$GIT_COMMON_DIR/worktrees/<id>/` with `mkdir()` and
+then, as its very next action, writes a `locked` file into it — git's own source
+comment says the file exists "to prevent it from being pruned while being
+created". Between those two syscalls the entry has neither `locked` nor
+`gitdir`, which is exactly the state git's `should_prune_worktree()` classifies
+as prunable. A prune landing inside that window deletes the half-built directory
+and the add dies with:
+
+```text
+fatal: could not open '.git/worktrees/<id>/locked' for writing: No such file or directory
+```
+
+Nightgauge does both operations against the same repo root concurrently by
+design: runs dispatch up to `max_concurrent` while the scheduler's sweep ticker
+reclaims merged worktrees. The failure surfaces as an unexplained pipeline start
+failure that names nothing about the sweep, so it triages as a mystery. Issue
+#1160 fixed the test fixture that exposed the same window in CI (by routing
+fixtures through `internal/gittest`); that does nothing for production, where
+the prune is deliberate and the concurrency is the point.
+
+**Every worktree mutation therefore goes through `internal/gitworktree`.** It is
+a chokepoint, not a helper: the mutating `exec.Command("git", "worktree", …)`
+calls no longer exist at their call sites, so a new caller cannot bypass the
+lock by writing its own. `Do(repoRoot, func(*Session) error)` is the compound
+form — a teardown's `remove` → `os.RemoveAll` → `prune` is one critical section,
+not three, because a creation slipping between the removal and the prune is the
+same defect. `Add` / `Remove` / `Prune` are the single-operation wrappers.
+
+What is _not_ serialised: `git worktree list`. It is read-only, it backs whole
+sweeps that would otherwise hold the lock for their duration, and every consumer
+already handles an entry vanishing between the listing and the act.
+
+**Two locks, deliberately.** The in-process mutex is keyed on the repository's
+git **common directory**, so a teardown naming a linked worktree and a creation
+naming the repo root contend on one lock instead of two. That covers the daemon.
+It does not cover a second process, and nightgauge has several — `nightgauge
+worktree sweep` and `nightgauge cleanup` are separate processes, the VSCode
+extension's `WorktreeManager` is a third, and the operator's shell is a fourth —
+so the mutex is layered over an advisory `flock` on
+`$GIT_COMMON_DIR/nightgauge-worktree.lock`. A crashed holder releases it via the
+kernel; a wedged holder is waited on for `flockTimeout` (30s) and then bypassed
+with a WARN, because a hardening measure must not become an outage.
+
+Neither lock constrains git itself. `git gc` runs `git worktree prune --expire`,
+and a hand-run `git worktree prune` takes no lock of ours. The guard shrinks
+third-party exposure rather than eliminating it, which is the most a
+cooperative advisory scheme can do.
+
 ### Stash Reclamation (Issue #330)
 
 Same two-half shape as worktree reclamation, for the same reason. A stage that
