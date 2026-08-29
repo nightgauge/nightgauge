@@ -361,6 +361,24 @@ ADR, or committing documentation, read
   them. When authoring an issue, epic, spike, or doc whose home is
   `nightgauge/nightgauge`, keep company economics, private implementation
   details, customer data, and unreleased roadmap material out.
+- **The guard's issue-reference ceiling is per-branch, and `git merge
+origin/main` does not raise it.** The ceiling is derived from the trailing
+  `(#N)` of squash-merge subjects on **first-parent** history, and a merge puts
+  `main` on the _second_ parent — so a branch's own line still ends where it
+  forked. The rules above forbid force-push and rebase, which makes merging the
+  only permitted way to update a branch and therefore the one path that never
+  helps: a long-lived branch measures against an ever-staler ceiling. The
+  checker compensates by taking the larger of the branch's mark and its base
+  ref's, so **keep `origin/main` fetched** — an unfetched base ref puts the lag
+  back. A lower ceiling leaves more numbers above it, so the same tree measures
+  a **higher** unresolvable count on a lagging branch.
+- **Never hand-lower `issue_references.tree_baseline` on a falling count.** The
+  baseline is one global integer compared against a ceiling-dependent count, so
+  a fall has two causes — references genuinely removed, and the ceiling rising
+  over references that were already there — and only the first may be ratcheted.
+  Recording the second claims a sweep that did not happen and blocks the next
+  branch with references it never wrote. The checker separates them and names
+  the number to record; when it says **"Do NOT lower"**, do not lower.
 - **Coordination epics/spikes that are mostly private work** belong in
   `nightgauge-internal`; leave only a slim capability-level stub in the public
   repo if a community tracker is wanted.
