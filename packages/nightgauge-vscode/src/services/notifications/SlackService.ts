@@ -46,6 +46,7 @@ import { PipelineStateService } from "../PipelineStateService";
 import { ConfigBridge } from "../ConfigBridge";
 import { Logger } from "../../utils/logger";
 import { SecretStorageService, SECRET_KEYS } from "../SecretStorageService";
+import { CREDENTIAL_ENV_VAR, warnOnLegacyEnvKey } from "./credentials";
 import type { Notifier, PipelineEventContext } from "./types";
 import { NotifierStatusTracker } from "./NotifierStatusTracker";
 import {
@@ -327,10 +328,16 @@ export class SlackService implements Notifier, vscode.Disposable {
     stage: PipelineStage
   ): Promise<void> {
     const config = this.getSlackConfig();
-    if (!config?.enabled) return;
+    if (!config?.enabled) {
+      // Not an error, but it is the state an operator who just switched Slack
+      // "on" in one place and not the other lands in. Silence here reads as
+      // working (#1106), because subscribeToSlot already logged success.
+      this.logger.debug("SlackService: notifications.slack.enabled is not true — not posting");
+      return;
+    }
 
     const botToken = await this.resolveBotToken(config);
-    if (!botToken) return;
+    if (!botToken) return; // resolveBotToken has already explained why.
     const channel = config.channel?.trim();
     if (!channel) {
       this.logger.warn("SlackService: notifications.slack.channel is not set — cannot post");
@@ -571,10 +578,25 @@ export class SlackService implements Notifier, vscode.Disposable {
       const stored = await secretService.getSecret(SECRET_KEYS.slackBotToken);
       if (stored) return this.validated(stored, "SecretStorage");
     }
-    const envName = config.bot_token_env;
-    if (envName) {
-      const fromEnv = process.env[envName];
-      if (fromEnv) return this.validated(fromEnv, `env ${envName}`);
+
+    const envName = CREDENTIAL_ENV_VAR.slack;
+    const fromEnv = process.env[envName];
+    if (fromEnv) return this.validated(fromEnv, `env ${envName}`);
+
+    // Nothing resolved. Say so, and attribute it to a legacy key when there is
+    // one — a token pasted into bot_token_env used to fail here in total
+    // silence (#1106), which is how a live token sat in plaintext unnoticed.
+    const hadLegacy = warnOnLegacyEnvKey(
+      this.logger,
+      "slack",
+      config as unknown as Record<string, unknown>,
+      "Nightgauge: Configure Slack Notifications"
+    );
+    if (!hadLegacy) {
+      this.logger.warn(
+        `SlackService: no bot token in SecretStorage or ${envName} — ` +
+          'run "Nightgauge: Configure Slack Notifications" to set it up. Slack will not post.'
+      );
     }
     return null;
   }

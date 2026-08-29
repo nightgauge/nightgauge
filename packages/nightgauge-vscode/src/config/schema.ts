@@ -2489,12 +2489,18 @@ export type UINotificationsConfig = z.infer<typeof UINotificationsConfigSchema>;
  *   notifications:
  *     discord:
  *       enabled: true
- *       webhook_env: DISCORD_WEBHOOK_URL
+ *
+ * The URL lives in SecretStorage; DISCORD_WEBHOOK_URL is the fixed CI fallback.
  */
 export const DiscordNotificationsConfigSchema = z.object({
   /** @deprecated Phase 5 (#3338) — migrated to machine tier (~/.nightgauge/config.yaml). Will be removed in a future minor version. */
   enabled: z.boolean().optional(),
-  /** Name of the env var that holds the Discord webhook URL */
+  /**
+   * @deprecated #1107 — removed as a configuration option. Retained ONLY so a
+   * value left in an existing config can be detected, refused, and reported
+   * (it collected pasted secrets). Never read as a variable name or as a
+   * credential; the CI fallback is the fixed var DISCORD_WEBHOOK_URL.
+   */
   webhook_env: z.string().optional(),
 });
 export type DiscordNotificationsConfig = z.infer<typeof DiscordNotificationsConfigSchema>;
@@ -2508,14 +2514,19 @@ export type DiscordNotificationsConfig = z.infer<typeof DiscordNotificationsConf
  *   notifications:
  *     mattermost:
  *       enabled: true
- *       webhook_env: MATTERMOST_WEBHOOK_URL
+ *
+ * The URL lives in SecretStorage; MATTERMOST_WEBHOOK_URL is the fixed CI fallback.
  *
  * @see Issue #3373
  */
 export const MattermostNotificationsConfigSchema = z.object({
   /** Enable Mattermost pipeline status posts */
   enabled: z.boolean().optional(),
-  /** Name of the env var that holds the Mattermost incoming webhook URL */
+  /**
+   * @deprecated #1107 — removed as a configuration option. Retained ONLY for
+   * detection and refusal; the CI fallback is the fixed var
+   * MATTERMOST_WEBHOOK_URL.
+   */
   webhook_env: z.string().optional(),
 });
 export type MattermostNotificationsConfig = z.infer<typeof MattermostNotificationsConfigSchema>;
@@ -2533,7 +2544,6 @@ export type MattermostNotificationsConfig = z.infer<typeof MattermostNotificatio
  *   notifications:
  *     slack:
  *       enabled: true
- *       bot_token_env: SLACK_BOT_TOKEN
  *       channel: "C0123456789"
  *
  * @see Issue #1071
@@ -2541,7 +2551,11 @@ export type MattermostNotificationsConfig = z.infer<typeof MattermostNotificatio
 export const SlackNotificationsConfigSchema = z.object({
   /** Enable Slack pipeline status posts */
   enabled: z.boolean().optional(),
-  /** Name of the env var that holds the Slack bot token (xoxb-…) */
+  /**
+   * @deprecated #1107 — removed as a configuration option. Retained ONLY so a
+   * token pasted here can be detected and refused with a rotation warning;
+   * the CI fallback is the fixed var SLACK_BOT_TOKEN.
+   */
   bot_token_env: z.string().optional(),
   /** Target channel id (preferred) or #name the bot posts into */
   channel: z.string().optional(),

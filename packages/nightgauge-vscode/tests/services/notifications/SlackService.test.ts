@@ -36,11 +36,15 @@ const CHANNEL = "C0123456789";
 function slackConfigBridge(
   overrides: { enabled?: boolean; channel?: string; bot_token_env?: string } = {}
 ) {
-  const slack = {
+  // No bot_token_env unless a test deliberately supplies one: the key is gone
+  // (#1107) and the CI fallback is the fixed SLACK_BOT_TOKEN. The old default
+  // here was injected by the harness and never by production code, so the
+  // documented setup — export the var, configure nothing — went untested.
+  const slack: Record<string, unknown> = {
     enabled: overrides.enabled ?? true,
-    bot_token_env: "bot_token_env" in overrides ? overrides.bot_token_env : "SLACK_BOT_TOKEN",
     channel: "channel" in overrides ? overrides.channel : CHANNEL,
   };
+  if ("bot_token_env" in overrides) slack.bot_token_env = overrides.bot_token_env;
   return { getEffectiveConfig: vi.fn(() => ({ config: { notifications: { slack } } })) };
 }
 
@@ -262,7 +266,64 @@ describe("SlackService — delivery", () => {
     }
   });
 
-  it("falls back to the configured env var when SecretStorage has nothing", async () => {
+  it("resolves SLACK_BOT_TOKEN with no notifications config beyond enabled+channel (#1107)", async () => {
+    // The documented headless setup: export the variable, configure nothing.
+    // Before #1107 the code guarded on `if (config.bot_token_env)` with no
+    // default, so this resolved nothing — silently.
+    storedSecret = undefined;
+    process.env.SLACK_BOT_TOKEN = BOT_TOKEN;
+    const fetchMock = slackOk();
+    const svc = newService(fetchMock, logger, slackConfigBridge());
+    svc.onPipelineStart({ issueNumber: 42, stage: "issue-pickup" });
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    expect(authOf(fetchMock.mock.calls[0])).toBe(`Bearer ${BOT_TOKEN}`);
+    svc.dispose();
+  });
+
+  it("refuses a token pasted into bot_token_env and says to rotate it (#1106)", async () => {
+    // The observed failure: a live token in the env-var-NAME field made the
+    // lookup process.env["xoxb-…"] -> undefined, and nothing was ever logged.
+    storedSecret = undefined;
+    delete process.env.SLACK_BOT_TOKEN;
+    const fetchMock = slackOk();
+    const svc = newService(
+      fetchMock,
+      logger,
+      slackConfigBridge({ bot_token_env: "xoxb-" + TOKEN_TAIL })
+    );
+    svc.onPipelineStart({ issueNumber: 42, stage: "issue-pickup" });
+    await new Promise((r) => setTimeout(r, 20));
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    const warned = logger.warn.mock.calls.map((c: unknown[]) => String(c[0])).join("\n");
+    expect(warned).toContain("Rotate");
+    expect(warned).not.toContain(TOKEN_TAIL);
+    svc.dispose();
+  });
+
+  it("explains every inert reason instead of failing silently (#1106)", async () => {
+    // Silence was the whole defect: Slack logged "subscribed to worktree slot"
+    // and then said nothing at all for a 13-minute run.
+    for (const [label, bridge, secret] of [
+      ["no channel", slackConfigBridge({ channel: undefined }), BOT_TOKEN],
+      ["no token", slackConfigBridge(), undefined],
+    ] as const) {
+      storedSecret = secret;
+      delete process.env.SLACK_BOT_TOKEN;
+      logger.warn.mockClear();
+      const fetchMock = slackOk();
+      const svc = newService(fetchMock, logger, bridge);
+      svc.onPipelineStart({ issueNumber: 42, stage: "issue-pickup" });
+      await new Promise((r) => setTimeout(r, 20));
+
+      expect(fetchMock, label).not.toHaveBeenCalled();
+      expect(logger.warn, `${label} must be explained, not silent`).toHaveBeenCalled();
+      svc.dispose();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("falls back to the fixed env var when SecretStorage has nothing", async () => {
     storedSecret = undefined;
     process.env.SLACK_BOT_TOKEN = BOT_TOKEN;
     const fetchMock = slackOk();
