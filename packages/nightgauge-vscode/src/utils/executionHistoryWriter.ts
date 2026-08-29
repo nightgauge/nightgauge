@@ -104,6 +104,7 @@ export interface HistoryIndexEntry {
     | "shipped-but-overbudget"
     | "skill-no-op"
     | "blocked"
+    | "partial"
     | "deferred";
   /** What aborted a failed V3 run; retained for crash-vs-phantom identity (#447). */
   terminal_failure_kind?: TerminalFailureKind;

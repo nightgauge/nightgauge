@@ -723,6 +723,11 @@ export const ExecutionHistoryRunRecordV2Schema = z.object({
       // Run ended with the PR unmerged behind a non-retryable repo-config
       // blocker — a human must change repo config (#190).
       "blocked",
+      // One or more stages ended in `failed` status. The classifier emits this
+      // instead of a success outcome whenever the run's own stage list
+      // contradicts one (#1109) — the durable record, the calibration corpus
+      // and the health snapshot must agree with the gates.
+      "partial",
       // Pickup deferred because the issue's native blockedBy dependencies are
       // still open (#189/#305). A non-failure: no tokens spent, the issue stays
       // eligible. Paired with outcome="cancelled" and an empty

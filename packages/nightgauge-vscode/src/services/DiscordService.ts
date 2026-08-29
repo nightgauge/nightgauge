@@ -29,6 +29,7 @@ import type { PipelineStage } from "@nightgauge/sdk";
 import { PipelineStateService } from "./PipelineStateService";
 import { ConfigBridge } from "./ConfigBridge";
 import { Logger } from "../utils/logger";
+import { countFailedStages } from "../utils/failedStages";
 import { SecretStorageService, SECRET_KEYS } from "./SecretStorageService";
 import { CREDENTIAL_ENV_VAR, warnOnLegacyEnvKey } from "./notifications/credentials";
 import type { Notifier, PipelineEventContext } from "./notifications/types";
@@ -614,11 +615,13 @@ export interface OutcomeDisplayContext {
 
 /**
  * Count the run's failed stages — the ground truth `outcomeDisplay` is
- * cross-checked against. Shared by both notifiers. Exported for unit testing.
+ * cross-checked against.
+ *
+ * Re-exported from `utils/failedStages` so the classifier
+ * (`HeadlessOrchestrator`) and every notifier share ONE predicate (#1109).
+ * Kept exported here because the notifier modules import it from this path.
  */
-export function countFailedStages(state: PipelineStateSnapshot): number {
-  return Object.values(state.stages ?? {}).filter((s) => s?.status === "failed").length;
-}
+export { countFailedStages };
 
 /**
  * Base color + label for an outcome, before the stage cross-check.
@@ -689,6 +692,13 @@ function baseOutcomeDisplay(outcomeType: string | undefined): {
  * Maps a PipelineOutcomeType to the Discord embed color and status label,
  * cross-checked against the run's own stage list.
  * Exported for unit testing.
+ *
+ * DEFENCE IN DEPTH ONLY (#1109). Since #1109 the same cross-check runs where
+ * `outcome_type` is *computed* — `HeadlessOrchestrator.reconcileOutcomeWithFailedStages`,
+ * off the same `countFailedStages` predicate — so a success outcome should
+ * never reach this function over a failed stage list any more. The warning
+ * below therefore now means "the classifier was bypassed", which is worth
+ * knowing; the re-colouring stays so a bypass still cannot render a lie.
  *
  * A success outcome is never rendered as an unqualified success while the
  * run's own stage list contains a failure: the #289 message read

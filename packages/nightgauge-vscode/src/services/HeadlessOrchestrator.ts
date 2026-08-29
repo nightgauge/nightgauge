@@ -102,6 +102,8 @@ import {
   type SkillProcessHandle,
 } from "../utils/skillRunner";
 import type { PipelineStateService, PipelineOutcomeType } from "./PipelineStateService";
+import { countFailedStages } from "../utils/failedStages";
+import { SUCCESS_OUTCOMES } from "../utils/telemetryEventBuilder";
 import type { RepositoryContextLoader, ContextFileType } from "./RepositoryContextLoader";
 import type { Logger } from "../utils/logger";
 import { resolveRuntimeSnapshotPath } from "../utils/runtimeSnapshotResolver";
@@ -6837,12 +6839,119 @@ export class HeadlessOrchestrator implements vscode.Disposable {
    *      behaviour — no other classification information available).
    *   3. Otherwise read `dev-{N}.json` and emit `"verify-and-close"` when
    *      no files were created/modified, else `"productive"` (Issue #709).
+   *   4. Finally, cross-check the result against the run's own failed stages
+   *      (#1109): a success outcome over `failedStageCount >= 1` is booked as
+   *      `partial` instead. See
+   *      {@link HeadlessOrchestrator.reconcileOutcomeWithFailedStages}.
    *
    * @param issueNumber - The issue number
    * @param completedStages - Stages that completed successfully
+   * @param failedStageCount - Stages in `failed` status, from the run's own
+   *   state via the shared `countFailedStages` predicate.
    * @returns The pipeline outcome classification
    */
   private classifyPipelineOutcome(
+    issueNumber: number,
+    completedStages: PipelineStage[],
+    failedStageCount = 0
+  ): PipelineOutcomeType {
+    return HeadlessOrchestrator.reconcileOutcomeWithFailedStages(
+      this.classifyPipelineOutcomeFromArtifacts(issueNumber, completedStages),
+      failedStageCount,
+      this.logger
+    );
+  }
+
+  /**
+   * Classify the run AND persist the result — the single seam between
+   * classification and everything downstream (#1109).
+   *
+   * The failed-stage count comes from the run's own state through
+   * `countFailedStages`, the SAME predicate the Discord / Slack / Mattermost
+   * attachments use, so the durable `outcome_type` and every notifier's label
+   * are answers to one question rather than two. `runningFailedStage` is the
+   * stage the loop itself halted on: it is folded in so a run that failed
+   * before its state snapshot could record the status is still classified
+   * honestly.
+   *
+   * Persisting here (rather than at the call site) is what makes the invariant
+   * testable: a test can assert what `setOutcomeType` actually received.
+   */
+  private async classifyAndRecordOutcome(
+    issueNumber: number,
+    completedStages: PipelineStage[],
+    runningFailedStage?: PipelineStage
+  ): Promise<PipelineOutcomeType | undefined> {
+    if (!this.stateService) return undefined;
+
+    const state = await this.stateService.getState();
+    const failedStageCount = Math.max(countFailedStages(state), runningFailedStage ? 1 : 0);
+
+    const outcome = this.classifyPipelineOutcome(issueNumber, completedStages, failedStageCount);
+    await this.stateService.setOutcomeType(outcome);
+    this.logger.info("Pipeline outcome classified", {
+      issueNumber,
+      outcome_type: outcome,
+      failedStageCount,
+    });
+    return outcome;
+  }
+
+  /**
+   * Outcome type booked for a run whose own stage list contains a failure
+   * (#1109). `partial` is the existing `PipelineOutcomeType` for "some stages
+   * completed, one did not" — it is absent from the authoritative
+   * `SUCCESS_OUTCOMES` set, so analytics, the calibration corpus and the health
+   * snapshot all see a non-success, and `baseOutcomeDisplay` renders it red.
+   */
+  static readonly FAILED_STAGE_OUTCOME: PipelineOutcomeType = "partial";
+
+  /**
+   * Refuse a success outcome for a run whose own stage list contains a failure
+   * (#1109). Pure and static so the invariant can be pinned by a unit test.
+   *
+   * A `feature-dev` stage that failed its post-condition gate — no handoff, no
+   * PR, nothing merged — used to classify `productive`, because the classifier
+   * consulted only gate no-op results and the `dev-{N}.json` file counts and
+   * defaulted to `productive` for everything else. The contradiction WAS
+   * detected, but only in `outcomeDisplay`, which returns a colour and a label:
+   * `state.outcome_type` stayed `productive`, and that raw value is what the
+   * calibration table, the health snapshot and `determineAction` consume. A
+   * failed run therefore trained the learning corpus as a success.
+   *
+   * Membership is driven off `SUCCESS_OUTCOMES` (utils/telemetryEventBuilder),
+   * the same authoritative set analytics maps to `outcome: "success"`, so a new
+   * green outcome cannot slip past this check by not being listed here.
+   *
+   * Non-success outcomes are returned untouched: `skill-no-op`, `blocked`,
+   * `budget-ceiling` and friends are already honest about the run, and each
+   * carries more information than `partial` does.
+   */
+  static reconcileOutcomeWithFailedStages(
+    outcome: PipelineOutcomeType,
+    failedStageCount: number,
+    logger?: { warn: (msg: string, meta?: Record<string, unknown>) => void }
+  ): PipelineOutcomeType {
+    if (failedStageCount <= 0) return outcome;
+    if (!SUCCESS_OUTCOMES.includes(outcome)) return outcome;
+
+    logger?.warn(
+      "Classifier: success outcome contradicted by the run's own stage list — booking the contradiction",
+      {
+        proposedOutcomeType: outcome,
+        outcome_type: HeadlessOrchestrator.FAILED_STAGE_OUTCOME,
+        failedStageCount,
+      }
+    );
+    return HeadlessOrchestrator.FAILED_STAGE_OUTCOME;
+  }
+
+  /**
+   * The artifact-driven half of the classification: gate no-op results, then
+   * the `dev-{N}.json` file counts. Knows nothing about failed stages — that
+   * cross-check is applied by {@link classifyPipelineOutcome}.
+   */
+  private classifyPipelineOutcomeFromArtifacts(
     issueNumber: number,
     completedStages: PipelineStage[]
   ): PipelineOutcomeType {
@@ -11312,12 +11421,11 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       });
     } else if (this.stateService) {
       try {
-        classifiedOutcome = this.classifyPipelineOutcome(issueNumber, completedStages);
-        await this.stateService.setOutcomeType(classifiedOutcome);
-        this.logger.info("Pipeline outcome classified", {
+        classifiedOutcome = await this.classifyAndRecordOutcome(
           issueNumber,
-          outcome_type: classifiedOutcome,
-        });
+          completedStages,
+          failedStage
+        );
       } catch (err) {
         this.logger.warn("Failed to classify pipeline outcome", {
           issueNumber,
