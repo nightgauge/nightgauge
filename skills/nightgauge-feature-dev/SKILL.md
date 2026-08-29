@@ -416,28 +416,16 @@ check coverage, and fix failures.
 
 > **Read `skills/nightgauge-feature-dev/_includes/implementation-and-testing.md` now and follow its instructions before continuing this phase.**
 
-#### Step 4.5: E2E Test Generation and Execution (Conditional)
+### Phase 4b: E2E Testing (Conditional)
 
 ```bash
 printf '<!-- phase:start name="e2e-testing" index=10 total=18 stage="feature-dev" -->\n'
 ```
 
-**PURPOSE**: Generate and (when a framework is configured) run E2E tests for
-UI-touching changes; set `INCLUDES_E2E` accordingly. Backend-only changes skip.
-
-> **Read `skills/nightgauge-feature-dev/_includes/implementation-and-testing.md` now and follow its instructions before continuing this phase.**
-
----
-
-### Phase 4b: E2E Testing
-
-```bash
-printf '<!-- phase:start name="e2e-testing" index=10 total=18 stage="feature-dev" -->\n'
-```
-
-**PURPOSE**: Run end-to-end / integration test infrastructure (Playwright,
-Cypress, Selenium) when present; skip gracefully for backend-only changes with
-no framework.
+**PURPOSE**: Generate and, when a framework is configured (Playwright, Cypress,
+Selenium), run end-to-end / integration tests for UI-touching changes; set
+`INCLUDES_E2E` accordingly. Backend-only changes with no framework skip
+gracefully.
 
 > **Read `skills/nightgauge-feature-dev/_includes/implementation-and-testing.md` now and follow its instructions before continuing this phase.**
 
