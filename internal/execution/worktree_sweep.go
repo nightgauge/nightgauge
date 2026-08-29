@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/nightgauge/nightgauge/internal/gitworktree"
 	"github.com/nightgauge/nightgauge/internal/reclaim"
 )
 
@@ -586,21 +587,31 @@ func blockingChanges(worktreePath string) ([]string, error) {
 // the leak and the branch is the repository's trunk. Passing this wrong once
 // deletes `main` locally, so the caller states it explicitly rather than
 // reclaimWorktree re-deriving the branch's protected-ness from a name.
+//
+// The removal (and the prune that follows a manual fallback) runs inside the
+// repository's worktree-mutation lock (#1163). This sweep is the prune the
+// issue was written about: it is ticker-driven, it fires while runs are
+// dispatching against the same repo root, and an unserialised prune here can
+// delete another run's half-built `worktrees/<id>` entry and fail its
+// `git worktree add`.
 func reclaimWorktree(repoRoot string, wt worktreeRecord, keepBranch bool) error {
-	cmd := exec.Command("git", "worktree", "remove", wt.Path, "--force")
-	cmd.Dir = repoRoot
-	if out, err := cmd.CombinedOutput(); err != nil {
+	if err := gitworktree.Do(repoRoot, func(g *gitworktree.Session) error {
+		out, err := g.Remove(wt.Path)
+		if err == nil {
+			return nil
+		}
 		log.Printf("[WARN] worktree sweep: git worktree remove %s failed (%v): %s — falling back to manual removal",
 			wt.Path, err, strings.TrimSpace(string(out)))
 		if rmErr := os.RemoveAll(wt.Path); rmErr != nil {
 			return fmt.Errorf("remove worktree %s: %v (manual cleanup also failed: %v)", wt.Path, err, rmErr)
 		}
-		prune := exec.Command("git", "worktree", "prune")
-		prune.Dir = repoRoot
-		if pruneOut, pruneErr := prune.CombinedOutput(); pruneErr != nil {
+		if pruneOut, pruneErr := g.Prune(); pruneErr != nil {
 			log.Printf("[WARN] worktree sweep: git worktree prune after manual removal of %s failed (%v): %s",
 				wt.Path, pruneErr, strings.TrimSpace(string(pruneOut)))
 		}
+		return nil
+	}); err != nil {
+		return err
 	}
 
 	if keepBranch {

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/dockercompose"
+	"github.com/nightgauge/nightgauge/internal/gitworktree"
 )
 
 // ensureWorktree creates a git worktree for isolated execution.
@@ -72,9 +73,14 @@ func (m *Manager) ensureWorktree(repo string, issueNumber int) (string, error) {
 	}
 	headSHA := strings.TrimSpace(string(headOutput))
 
-	cmd := exec.Command("git", "worktree", "add", "--detach", worktreeDir, headSHA)
-	cmd.Dir = repoRoot
-	if output, err := cmd.CombinedOutput(); err != nil {
+	// Serialised against every other worktree mutation on this repository
+	// (#1163): a prune landing inside `git worktree add`'s
+	// mkdir()-then-write-`locked` window deletes the half-built registration
+	// and fails the add. The SDK-CLI build below deliberately stays outside
+	// the lock — it is minutes of work that has nothing to do with the
+	// registration.
+	output, err := gitworktree.Add(repoRoot, "--detach", worktreeDir, headSHA)
+	if err != nil {
 		// The add is the creation boundary: it normally leaves nothing behind,
 		// but the error contract above is stated as "non-empty iff on disk", so
 		// ask the disk rather than assume which side of the boundary we are on.
@@ -269,9 +275,7 @@ func (m *Manager) CleanupWorktree(repo string, issueNumber int) error {
 	projectName := fmt.Sprintf("issue-%d", issueNumber)
 
 	if _, err := os.Stat(worktreeDir); os.IsNotExist(err) {
-		reclaim := exec.Command("git", "worktree", "remove", worktreeDir, "--force")
-		reclaim.Dir = repoRoot
-		_ = reclaim.Run()
+		_, _ = gitworktree.Remove(repoRoot, worktreeDir)
 		return nil
 	}
 
@@ -322,10 +326,17 @@ func (m *Manager) CleanupWorktree(repo string, issueNumber int) error {
 		}
 	}
 
-	// Remove worktree via git
-	cmd := exec.Command("git", "worktree", "remove", worktreeDir, "--force")
-	cmd.Dir = repoRoot
-	if output, err := cmd.CombinedOutput(); err != nil {
+	// Remove worktree via git.
+	//
+	// remove → RemoveAll → prune is ONE critical section (#1163), not three:
+	// the prune exists precisely to collect the registration the manual
+	// removal orphaned, and a concurrent `git worktree add` that lands between
+	// those two steps is the run that dies on the half-built-entry window.
+	return gitworktree.Do(repoRoot, func(wt *gitworktree.Session) error {
+		output, err := wt.Remove(worktreeDir)
+		if err == nil {
+			return nil
+		}
 		// A failure here used to be silent whenever the manual fallback
 		// succeeded, which is how leaked worktrees stayed invisible until
 		// someone counted them days later (#110). Log it.
@@ -336,15 +347,12 @@ func (m *Manager) CleanupWorktree(repo string, issueNumber int) error {
 			return fmt.Errorf("git worktree remove: %s (manual cleanup also failed: %v)", string(output), rmErr)
 		}
 		// Prune worktree references
-		pruneCmd := exec.Command("git", "worktree", "prune")
-		pruneCmd.Dir = repoRoot
-		if pruneOut, pruneErr := pruneCmd.CombinedOutput(); pruneErr != nil {
+		if pruneOut, pruneErr := wt.Prune(); pruneErr != nil {
 			log.Printf("[WARN] worktree teardown: git worktree prune after manual removal of %s failed (%v): %s",
 				worktreeDir, pruneErr, strings.TrimSpace(string(pruneOut)))
 		}
-	}
-
-	return nil
+		return nil
+	})
 }
 
 // worktreePath is the on-disk location of the run's worktree.
