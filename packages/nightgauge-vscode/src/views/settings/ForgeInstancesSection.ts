@@ -227,24 +227,5 @@ export function getForgeInstancesSectionHtml(
         color: var(--vscode-errorForeground);
       }
     </style>
-    <script>
-      (function() {
-        const addBtn = document.getElementById('forge-add-btn');
-        if (addBtn) {
-          addBtn.addEventListener('click', () => {
-            vscode.postMessage({ type: 'forge-add' });
-          });
-        }
-        document.querySelectorAll('.forge-action-btn').forEach(btn => {
-          btn.addEventListener('click', () => {
-            const action = btn.getAttribute('data-forge-action');
-            const instanceId = btn.getAttribute('data-instance-id');
-            if (action && instanceId) {
-              vscode.postMessage({ type: 'forge-action', action, instanceId });
-            }
-          });
-        });
-      })();
-    </script>
   `;
 }

@@ -17,7 +17,7 @@ import { loadWorkspaceConfig } from "./workspaceDetection";
  * Bump this when adding new patterns so the extension knows to update
  * existing .gitignore files that were written with an older version.
  */
-const GITIGNORE_VERSION = 10;
+const GITIGNORE_VERSION = 11;
 const VERSION_MARKER = `# nightgauge-gitignore-version: ${GITIGNORE_VERSION}`;
 
 /**
@@ -127,6 +127,7 @@ pipeline/queue-state.json
 
 # ─── Generated reports (backlog triage, health, security, etc.) ─────
 /backlog-*.md
+/triage/
 # Per-machine session state the backlog orchestrator rewrites at every
 # issue boundary — same runtime class as /autonomous/ and /attention/.
 /session-handoff.md

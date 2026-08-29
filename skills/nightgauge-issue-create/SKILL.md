@@ -6,7 +6,7 @@ description: Create well-structured GitHub issues with SDLC metadata, project bo
 license: Apache-2.0
 metadata:
   author: nightgauge
-  version: "1.23.0"
+  version: "1.24.0"
   source: https://github.com/nightgauge/nightgauge
 allowed-tools: Read Write Edit Glob Grep Bash Task AskUserQuestion
 ---
@@ -93,7 +93,7 @@ Verify the Go binary, `GITHUB_TOKEN`, and a GitHub-backed remote are present bef
 
 ### Phase 2: Build Issue Content
 
-Classify the issue (implementation vs spike), draft a concise, actionable title and body with acceptance criteria, determine labels, and size the issue from the complexity model and file-based heuristics.
+Classify the issue (implementation vs spike), draft a concise, actionable title and body with acceptance criteria **and a `## Verification` section a reviewer could run**, state any security hazard in the proposed design as an acceptance criterion, choose the parent epic from the open-epic list, determine labels, and size the issue from the complexity model and file-based heuristics.
 
 > **Read `skills/nightgauge-issue-create/_includes/environment-and-content.md` now and follow its instructions before continuing this phase.**
 
@@ -232,6 +232,12 @@ Fail with clear remediation when:
 ## Completion Checklist
 
 - [ ] Issue created successfully
+- [ ] Every body carries `## Verification` naming a test/command, input and
+      expected observable output per acceptance criterion (no "add tests")
+- [ ] A design touching auth, secrets, endpoints, retries, spawning, file
+      paths, shell, or model-authored text carries its mitigation as an AC
+- [ ] Parent epic chosen from the open-epic list and linked via `addSubIssue`
+      (or the alternative named in `## Related work`)
 - [ ] Cross-repo reality check completed (API endpoints verified or skip noted)
 - [ ] Required metadata applied (type label, priority, size)
 - [ ] Added to project board via `nightgauge project add`

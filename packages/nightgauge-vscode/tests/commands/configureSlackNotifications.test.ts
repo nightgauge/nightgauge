@@ -59,7 +59,34 @@ vi.mock("../../src/services/SecretStorageService", () => ({
     }),
   },
   SECRET_KEYS: { slackBotToken: "slackBotToken" },
+  // Re-exported by the module and read transitively via ConfigBridge once the
+  // command started reporting real config state (#1115). A partial mock of a
+  // module is a promise about its whole surface, not just the parts in use.
+  PLATFORM_TOKEN_FIELDS: { accessToken: "accessToken", refreshToken: "refreshToken" },
+  PLATFORM_ENV_TOKEN_PREFIX: "nightgauge.platform.",
+  MATTERMOST_SIGNING_KEY_PREFIX: "nightgauge.mattermost.signingToken.",
+  FORGE_SECRET_PREFIX: "nightgauge-forge-",
+  platformTokenKey: (envKey: string, field: string) => `${envKey}.${field}`,
+  mattermostSigningKey: (channelId: string) => `mm.${channelId}`,
 }));
+
+// The command now reports the notifier's real configured state instead of an
+// unconditional "add it to YAML" (#1115); these are its new collaborators.
+vi.mock("../../src/services/ConfigBridge", () => ({
+  ConfigBridge: {
+    getInstance: () => ({
+      getEffectiveConfig: () => ({
+        config: { notifications: { slack: { enabled: true, channel: "C0123456789" } } },
+      }),
+    }),
+  },
+}));
+vi.mock("../../src/views/settings/NightgaugeYamlService", () => ({
+  NightgaugeYamlService: class {
+    writeGlobal = vi.fn(async () => ({ success: true }));
+  },
+}));
+vi.mock("../../src/config/settings", () => ({ getWorkspaceRoot: () => "/tmp/ws" }));
 
 const { registerConfigureSlackNotificationsCommand } =
   await import("../../src/commands/configureSlackNotifications");
@@ -169,17 +196,26 @@ describe("configureSlackNotifications", () => {
     });
   });
 
-  it("copies a config block carrying the chosen channel", async () => {
-    state.infoChoice = "Copy config block";
+  it("stores the token and never leaks it to the clipboard (#1115)", async () => {
+    // Replaces "copies a config block carrying the chosen channel". The command
+    // no longer hands the operator YAML to paste: it prompted for the channel,
+    // validated it, and then discarded it, telling them to type it again into a
+    // file at the wrong config tier. The channel is now persisted directly, so
+    // there is no config block and nothing is copied.
+    state.infoChoice = undefined;
     state.secrets = new Map();
     state.inputs = [TOKEN, "C0123456789"];
     state.quickPick = undefined;
     state.lastInputOpts = [];
+
     registerConfigureSlackNotificationsCommand();
     await registered!();
-    expect(state.clipboard).toContain('channel: "C0123456789"');
-    expect(state.clipboard).toContain("enabled: true");
-    // The token is a secret and must never reach the clipboard.
-    expect(state.clipboard).not.toContain(TOKEN);
+
+    // The credential goes to SecretStorage, and only there.
+    expect(state.secrets.get("slackBotToken")).toBe(TOKEN);
+
+    // The property the old test protected, kept: a live token must never reach
+    // the clipboard. Now trivially true — nothing is written to it at all.
+    expect(state.clipboard ?? "").not.toContain(TOKEN);
   });
 });

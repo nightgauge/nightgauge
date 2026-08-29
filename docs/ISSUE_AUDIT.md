@@ -21,18 +21,19 @@ provides that contract.
 `issue-audit --epic <N>`. Existing slash-command invocations keep working;
 new code should call `issue-audit` directly.
 
-## Boundary: issue-audit vs backlog-audit
+## Boundary: issue-audit vs backlog-groom
 
 `issue-audit` is the **structural** post-creation gate: labels, board
 membership and fields, body headings, sub-issue links, `blockedBy` wiring.
 It runs at creation time and never judges whether an issue is still worth
 doing.
 
-[`nightgauge-backlog-audit`](../skills/nightgauge-backlog-audit/SKILL.md)
-(`/nightgauge:backlog-audit`) is the **semantic** pass over the existing
+[`nightgauge-backlog-groom`](../skills/nightgauge-backlog-groom/SKILL.md)
+(`/nightgauge:backlog-groom`) is the **semantic** pass over the existing
 open backlog: validity against current `main`, worth under the product
-lens, and priority/size rank — run occasionally (after an epic completes,
-or monthly). It reuses issue-audit's deterministic checks as riders rather
+lens, verification completeness, security of the proposed approach, epic
+fit, and priority/size rank — run occasionally (after an epic completes,
+or monthly), repo-scoped or workspace-wide. It reuses issue-audit's deterministic checks as riders rather
 than duplicating them, and shares the same hard rule: never auto-rewrite
 human-authored content.
 
@@ -139,22 +140,31 @@ exact and case-sensitive** — `## Acceptance criteria` does not satisfy a
 required `Acceptance Criteria`. Headings the table does not list are ignored,
 so extra sections are always safe.
 
-| Type     | Required headings                             |
-| -------- | --------------------------------------------- |
-| feature  | Summary, Acceptance Criteria                  |
-| bug      | Summary, Steps to Reproduce, Expected, Actual |
-| docs     | Summary, Acceptance Criteria                  |
-| refactor | Summary, Acceptance Criteria                  |
-| spike    | Summary, Acceptance Criteria, Recommendations |
-| chore    | Summary                                       |
-| epic     | Summary, Sub-Issues, Acceptance Criteria      |
+| Type     | Required headings                                           |
+| -------- | ----------------------------------------------------------- |
+| feature  | Summary, Acceptance Criteria, Verification                  |
+| bug      | Summary, Steps to Reproduce, Expected, Actual, Verification |
+| docs     | Summary, Acceptance Criteria, Verification                  |
+| refactor | Summary, Acceptance Criteria, Verification                  |
+| spike    | Summary, Acceptance Criteria, Recommendations, Verification |
+| chore    | Summary, Verification                                       |
+| epic     | Summary, Sub-Issues, Acceptance Criteria, Verification      |
 
-| Finding type               | Severity                                    | Trigger                                                                                  |
-| -------------------------- | ------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| `MISSING_REQUIRED_HEADING` | CRITICAL in `--manifest` mode, else WARNING | A heading required by the issue's type is absent — see [Severity Tiers](#severity-tiers) |
-| `EMPTY_REQUIRED_HEADING`   | WARNING                                     | A required heading is present but its body is empty                                      |
-| `MISSING_SPIKE_RECS_BLOCK` | CRITICAL                                    | Spike issue is missing the `yaml recommendations` block per `docs/SPIKE_CONTRACT.md`     |
-| `OVERSIZED_SCOPE`          | WARNING                                     | Issue bundles many independent units of work into a single ticket — see below            |
+`Verification` became required of every type on 2026-08-29, after the
+workspace backlog groom found 167 of 224 open issues with no falsifiable
+check and had to author one for each. The bar is
+[`issue-create`'s](../skills/nightgauge-issue-create/_includes/environment-and-content.md):
+per acceptance criterion, the test or command, the input, and the expected
+observable output.
+
+| Finding type                   | Severity                                    | Trigger                                                                                  |
+| ------------------------------ | ------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| `MISSING_REQUIRED_HEADING`     | CRITICAL in `--manifest` mode, else WARNING | A heading required by the issue's type is absent — see [Severity Tiers](#severity-tiers) |
+| `EMPTY_REQUIRED_HEADING`       | WARNING                                     | A required heading is present but its body is empty                                      |
+| `WEAK_VERIFICATION`            | WARNING                                     | `## Verification` names no test, command, or file — "add tests" is not verification      |
+| `SECURITY_SURFACE_UNADDRESSED` | WARNING                                     | Body touches auth/secrets/endpoints/retries/spawn/shell/uploads with no security AC      |
+| `MISSING_SPIKE_RECS_BLOCK`     | CRITICAL                                    | Spike issue is missing the `yaml recommendations` block per `docs/SPIKE_CONTRACT.md`     |
+| `OVERSIZED_SCOPE`              | WARNING                                     | Issue bundles many independent units of work into a single ticket — see below            |
 
 #### `OVERSIZED_SCOPE` heuristic
 
@@ -276,7 +286,7 @@ re-decided on its merits:
   and pre-#711 issues that no creation flow ever shaped. Promoting there would
   turn every backlog sweep red for defects the operator did not introduce in
   that run; grooming legacy bodies is
-  [`backlog-audit`](../skills/nightgauge-backlog-audit/SKILL.md)'s job.
+  [`backlog-groom`](../skills/nightgauge-backlog-groom/SKILL.md)'s job.
 
 The finding has no repair primitive in either mode and must not acquire one:
 required sections are human-authored prose, and synthesizing an `## Actual`

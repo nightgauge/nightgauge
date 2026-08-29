@@ -40,7 +40,7 @@ automatically). Otherwise, write the full file:
 #   config.yaml           — repository-wide pipeline configuration
 #   .gitignore            — this file
 #   */.gitkeep            — preserve directory structure
-# nightgauge-gitignore-version: 10
+# nightgauge-gitignore-version: 11
 
 # ─── Pipeline context, state, and execution data ─────────────────────
 pipeline/*
@@ -134,6 +134,7 @@ pipeline/queue-state.json
 
 # ─── Generated reports (backlog triage, health, security, etc.) ─────
 /backlog-*.md
+/triage/
 # Per-machine session state the backlog orchestrator rewrites at every
 # issue boundary — same runtime class as /autonomous/ and /attention/.
 /session-handoff.md

@@ -3,6 +3,7 @@ package platform
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"math"
@@ -107,6 +108,14 @@ type AnalyticsService struct {
 	buffer     []bufferedBatch             // Ingest-path retries
 	runQueue   []ExecutionHistoryRunRecord // PushPipelineRun retries
 	eventQueue []PipelineEvent             // EmitPipelineEvent retries
+
+	// eventRejectStatus is the HTTP status of the permanent rejection already
+	// reported for the pipeline-events endpoint, and eventRejectDropped counts
+	// the events dropped since. A permanent refusal (401/403/…) applies to
+	// every event equally, so it is stated once instead of once per event per
+	// flush tick (#1103).
+	eventRejectStatus  int
+	eventRejectDropped int
 }
 
 type bufferedBatch struct {
@@ -244,6 +253,12 @@ func (s *AnalyticsService) FlushBuffered(ctx context.Context) int {
 
 	for _, event := range pendingEvents {
 		if err := s.emitPipelineEventSync(ctx, event); err != nil {
+			var rejected *eventRejectedError
+			if errors.As(err, &rejected) {
+				// Permanent: drop it rather than re-queuing it into the next tick.
+				s.dropRejectedEvent(err, rejected.status)
+				continue
+			}
 			log.Printf("platform: flush EmitPipelineEvent failed, re-queuing: %v", err)
 			s.enqueueEvent(event)
 			continue
@@ -459,6 +474,55 @@ func retryBackoff(attempt int, retryAfter string) time.Duration {
 	return d
 }
 
+// eventRejectedError marks a pipeline event the platform refused for a reason
+// re-sending cannot change: a 4xx other than 429 (401/403 entitlement, 400
+// schema, 404 route). Buffering these is pure waste — every flush tick replays
+// up to maxBufferSize guaranteed-failing POSTs and logs a line for each,
+// burying every other signal in the daemon log (#1103). 429 keeps its retry
+// semantics, and 5xx / transport errors stay retryable.
+//
+// This mirrors the poison-message handling pushPipelineRunSync already applies
+// to application-level rejections; the event path simply never had it.
+type eventRejectedError struct {
+	status int
+}
+
+func (e *eventRejectedError) Error() string {
+	return fmt.Sprintf("emit pipeline event: server returned %d (permanent — not retrying)", e.status)
+}
+
+// isPermanentEventRejection reports whether err is a refusal that re-sending
+// cannot fix.
+func isPermanentEventRejection(err error) bool {
+	var rejected *eventRejectedError
+	return errors.As(err, &rejected)
+}
+
+// noteEventRejection records a permanent rejection and reports whether this
+// caller should log it. The first rejection for a given status is stated once,
+// with the endpoint and the consequence; subsequent drops are counted so the
+// suppression is itself visible rather than silent.
+func (s *AnalyticsService) noteEventRejection(status int) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.eventRejectStatus == status {
+		s.eventRejectDropped++
+		return false
+	}
+	s.eventRejectStatus = status
+	s.eventRejectDropped = 1
+	return true
+}
+
+// dropRejectedEvent discards a permanently-rejected event, stating the reason
+// once per status rather than once per event.
+func (s *AnalyticsService) dropRejectedEvent(err error, status int) {
+	if s.noteEventRejection(status) {
+		log.Printf("platform: pipeline-event ingest refused with HTTP %d — this is an authorization/contract verdict, not a transient failure. Dropping pipeline events for this endpoint instead of retrying them; the live Pipelines view will not update. Underlying error: %v",
+			status, err)
+	}
+}
+
 // EmitPipelineEvent sends a real-time pipeline event to POST /v1/pipelines/events.
 // Fire-and-forget: launches a goroutine, logs errors, does not block the caller.
 // Buffers the event for retry when offline or on HTTP failure.
@@ -469,6 +533,11 @@ func (s *AnalyticsService) EmitPipelineEvent(ctx context.Context, event Pipeline
 			return
 		}
 		if err := s.emitPipelineEventSync(ctx, event); err != nil {
+			var rejected *eventRejectedError
+			if errors.As(err, &rejected) {
+				s.dropRejectedEvent(err, rejected.status)
+				return
+			}
 			log.Printf("platform: EmitPipelineEvent failed, buffered for retry: %v", err)
 			s.enqueueEvent(event)
 		}
@@ -629,6 +698,11 @@ func (s *AnalyticsService) emitPipelineEventSync(ctx context.Context, event Pipe
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 400 {
+		// A 4xx that is not 429 is a verdict about the request itself, not
+		// about timing — re-sending it byte-for-byte cannot change the answer.
+		if resp.StatusCode < 500 && resp.StatusCode != http.StatusTooManyRequests {
+			return &eventRejectedError{status: resp.StatusCode}
+		}
 		return fmt.Errorf("emit pipeline event: server returned %d", resp.StatusCode)
 	}
 	return nil

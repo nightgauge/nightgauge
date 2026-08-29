@@ -123,7 +123,7 @@ expect "authoring-rule drift caught" 1 "$(run_gate)"
 # about. Tightening the audit without amending the author is how the original
 # mismatch was introduced.
 seed_repo
-plant "$TMP/$AUDIT" 's/(\|\s*chore\s*\|\s*Summary)(\s*\|)/${1}, Rationale$2/'
+plant "$TMP/$AUDIT" 's/(\|\s*chore\s*\|\s*Summary, Verification)(\s*\|)/${1}, Rationale$2/'
 expect "canonical-only tightening caught" 1 "$(run_gate)"
 
 # Case 5: the matcher goes case-insensitive. Then `## Acceptance criteria`

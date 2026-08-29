@@ -9,7 +9,7 @@ description: Deterministic post-creation gate that verifies every issue created 
 license: Apache-2.0
 metadata:
   author: nightgauge
-  version: "1.1.0"
+  version: "1.2.0"
   source: https://github.com/nightgauge/nightgauge
   chainable: true
 allowed-tools: Read Write Edit Glob Grep Bash Task AskUserQuestion
@@ -223,15 +223,22 @@ readers. All three copies are pinned against each other by
 until the other two follow. Before #711 the three disagreed on every row, so
 Phase 5 fired on every issue the pipeline itself authored.
 
-| Type     | Required headings                             |
-| -------- | --------------------------------------------- |
-| feature  | Summary, Acceptance Criteria                  |
-| bug      | Summary, Steps to Reproduce, Expected, Actual |
-| docs     | Summary, Acceptance Criteria                  |
-| refactor | Summary, Acceptance Criteria                  |
-| spike    | Summary, Acceptance Criteria, Recommendations |
-| chore    | Summary                                       |
-| epic     | Summary, Sub-Issues, Acceptance Criteria      |
+| Type     | Required headings                                           |
+| -------- | ----------------------------------------------------------- |
+| feature  | Summary, Acceptance Criteria, Verification                  |
+| bug      | Summary, Steps to Reproduce, Expected, Actual, Verification |
+| docs     | Summary, Acceptance Criteria, Verification                  |
+| refactor | Summary, Acceptance Criteria, Verification                  |
+| spike    | Summary, Acceptance Criteria, Recommendations, Verification |
+| chore    | Summary, Verification                                       |
+| epic     | Summary, Sub-Issues, Acceptance Criteria, Verification      |
+
+`Verification` is required of every type (2026-08-29): the workspace backlog
+groom found 167 of 224 open issues carried no falsifiable way to tell the
+feature working from the feature claimed, and a pipeline dispatched against
+such an issue self-grants "done". The section names, per acceptance
+criterion, the test or command, the input, and the expected observable
+output — see `issue-create`'s authoring rules for the bar.
 
 **Matching is exact and case-sensitive.** The regex below is `grep -E` without
 `-i`, so `## Acceptance criteria` does not satisfy a required
@@ -258,6 +265,28 @@ SECTION=$(echo "$BODY" | awk -v h="^##[[:space:]]+${HEADING}\\s*$" '
   flag {print}')
 if [ -z "$(echo "$SECTION" | tr -d '[:space:]')" ]; then
   FINDINGS+=( /* EMPTY_REQUIRED_HEADING (WARNING) */ )
+fi
+```
+
+Two quality riders on the body, both WARNING and never auto-fixed — they are
+heuristics, and a false positive must cost a glance, not a block:
+
+```bash
+# WEAK_VERIFICATION — the section exists but names no test, command, or file.
+VSEC=$(echo "$BODY" | awk '
+  $0 ~ /^##[[:space:]]+Verification[[:space:]]*$/ {flag=1; next}
+  flag && /^##[[:space:]]/ {flag=0}
+  flag {print}')
+if [ -n "$(echo "$VSEC" | tr -d '[:space:]')" ] \
+   && ! echo "$VSEC" | grep -qE '`[^`]+`|go test|vitest|flutter test|pytest|npm (run|test)'; then
+  FINDINGS+=( /* WEAK_VERIFICATION (WARNING) — "add tests" is not verification */ )
+fi
+
+# SECURITY_SURFACE_UNADDRESSED — the design touches a security surface and
+# neither a Security section nor a security-shaped acceptance criterion exists.
+if echo "$BODY" | grep -qiE 'auth|token|secret|credential|webhook|endpoint|retry|retries|spawn|exec|shell|symlink|upload|permission' \
+   && ! echo "$BODY" | grep -qiE '^##[[:space:]]+Security|^- \[ \].*(secur|sanitiz|validat|authoriz|authent|bound|rate.?limit|scope|confine|redact)'; then
+  FINDINGS+=( /* SECURITY_SURFACE_UNADDRESSED (WARNING) — never auto-fix */ )
 fi
 ```
 
@@ -289,7 +318,7 @@ actually fail.
 
 In inferential mode (`--epic`, `--issues`, `--all-recent`) the target is
 frequently a hand-filed or pre-#711 issue that no creation flow ever shaped.
-Blocking those is `backlog-audit`'s job, not this skill's, so the finding stays
+Blocking those is `backlog-groom`'s job, not this skill's, so the finding stays
 a WARNING and the run still exits 0.
 
 The finding has no repair primitive in either mode: headings are human-authored

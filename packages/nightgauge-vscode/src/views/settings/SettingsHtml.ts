@@ -2706,14 +2706,6 @@ export const NOTIFICATION_PROVIDERS: NotificationProviderSpec[] = [
         description: "Post pipeline status to Discord",
         fallback: false,
       },
-      {
-        key: "webhook_env",
-        kind: "text",
-        label: "Webhook Env Var",
-        description:
-          "Name of the environment variable holding the webhook URL. The URL itself is never stored in config.",
-        placeholder: "DISCORD_WEBHOOK_URL",
-      },
     ],
   },
   {
@@ -2727,14 +2719,6 @@ export const NOTIFICATION_PROVIDERS: NotificationProviderSpec[] = [
         label: "Enabled",
         description: "Post pipeline status to Mattermost",
         fallback: false,
-      },
-      {
-        key: "webhook_env",
-        kind: "text",
-        label: "Webhook Env Var",
-        description:
-          "Name of the environment variable holding the webhook URL. The URL itself is never stored in config.",
-        placeholder: "MATTERMOST_WEBHOOK_URL",
       },
     ],
   },
@@ -2758,14 +2742,6 @@ export const NOTIFICATION_PROVIDERS: NotificationProviderSpec[] = [
         description:
           "Channel id (preferred) or #name the bot posts into. Without this, Slack stays silent even when enabled.",
         placeholder: "C0123456789",
-      },
-      {
-        key: "bot_token_env",
-        kind: "text",
-        label: "Bot Token Env Var",
-        description:
-          "Name of the environment variable holding the xoxb- bot token, used when no token is stored in the extension.",
-        placeholder: "SLACK_BOT_TOKEN",
       },
     ],
   },
@@ -2883,16 +2859,6 @@ function getNotificationsSectionHtml(
         cursor: default;
       }
     </style>
-    <script>
-      (function() {
-        const btn = document.getElementById('notifications-open-panel-btn');
-        if (btn) {
-          btn.addEventListener('click', () => {
-            vscode.postMessage({ type: 'action', action: 'open-notifier-settings' });
-          });
-        }
-      })();
-    </script>
   `;
 }
 
@@ -4024,6 +3990,41 @@ function getScript(): string {
           });
           setModified(true);
           vscode.postMessage({ type: 'change', path, value: checked });
+        });
+      });
+
+      // Notifier-settings and forge-instance buttons.
+      //
+      // These listeners live here, inside the single nonced script, because the
+      // sections that render those buttons used to carry their own inline
+      // script blocks that carried no nonce — and the webview's CSP is
+      // script-src 'nonce-...', so the browser dropped them outright.
+      // The buttons therefore had no listener at all and clicking them did
+      // nothing, silently. Even had the nonce been present they would still have
+      // failed: the vscode handle is a const local to this IIFE, not a global,
+      // so a separate block referencing it throws ReferenceError on click.
+      // Keeping every listener in this one scope removes both failure modes.
+      const openNotifierBtn = document.getElementById('notifications-open-panel-btn');
+      if (openNotifierBtn) {
+        openNotifierBtn.addEventListener('click', () => {
+          vscode.postMessage({ type: 'action', action: 'open-notifier-settings' });
+        });
+      }
+
+      const forgeAddBtn = document.getElementById('forge-add-btn');
+      if (forgeAddBtn) {
+        forgeAddBtn.addEventListener('click', () => {
+          vscode.postMessage({ type: 'forge-add' });
+        });
+      }
+
+      document.querySelectorAll('.forge-action-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const action = btn.getAttribute('data-forge-action');
+          const instanceId = btn.getAttribute('data-instance-id');
+          if (action && instanceId) {
+            vscode.postMessage({ type: 'forge-action', action, instanceId });
+          }
         });
       });
 

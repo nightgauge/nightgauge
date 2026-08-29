@@ -6,6 +6,30 @@ documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.24.0] - 2026-08-29
+
+### Changed
+
+- **`## Verification` is a required section of every body** (all types,
+  chore included). The 2026-08-29 workspace backlog groom found 167 of 224
+  open issues with no falsifiable check and authored one for each; from now
+  on the terminal audit (`issue-audit` 1.2.0) fails an issue born without
+  one. Authoring rules state the bar: per acceptance criterion, the test or
+  command, the input, the expected observable output, and what edit would
+  make a pinning test go red.
+- **Security constraints at design time.** When the proposed design touches
+  auth, secrets, endpoints, retries/fan-out, file paths, shell/exec, or
+  model-authored text reaching a mutating tool, the hazard's mitigation is
+  written as an acceptance criterion (bar: `standards/security.md`).
+- **Parent epic fit.** The parent is chosen from the open-epic list by whose
+  acceptance criteria the issue advances, linked through `addSubIssue`, with
+  a rejected alternative named in `## Related work`; never a closed or
+  archived-repo epic.
+- Acceptance-criteria quality bar adds the no-backwards-compat check: no
+  shims, fallbacks, or "keep both paths" asks.
+- Machine-authored bodies (Path B placeholder chore, spike worked example)
+  carry `## Verification`, pinned by `check-issue-body-contract.py`.
+
 ## [1.23.0] - 2026-08-18
 
 ### Changed

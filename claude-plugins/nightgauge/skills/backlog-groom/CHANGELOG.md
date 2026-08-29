@@ -8,6 +8,32 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-08-29
+
+### Changed
+
+- **Consolidated with `nightgauge-backlog-audit`** (deleted). One skill now
+  owns periodic backlog grooming: the audit skill's seven-phase shape
+  (inventory, theme batching, assessment fan-out, adversarial verification,
+  apply, stale-sync sweep, report) and its hard rules replace the former
+  stale-days / keyword-duplicate triage. Date-based staleness, the
+  `backlog_groom:` config block, `--stale-days` and `--focus` are gone —
+  validity against current `main` is the staleness test.
+- Assessment judges five axes instead of three: validity, worth,
+  **verification completeness**, **security of the proposed approach**, and
+  **epic fit**. New verdicts: `clarify`, `add-verification`,
+  `security-concern`, `move-to-epic`, `close-not-worth`.
+- Every issue leaves a run with concrete verification steps (appended
+  `## Verification (added <date>)`), and an insecure design gets its
+  mitigation appended as an acceptance criterion.
+- `--workspace` assesses every repo in the workspace manifest at once, with
+  cross-repo epic batches built from the sub-issue graph; parent repos
+  without a checkout join at planning level.
+- Fan-out prefers the `Workflow` tool (assess → verify → apply pipeline);
+  `Task` subagents remain the fallback.
+- Epic re-parenting lands through the sub-issue API
+  (`addSubIssue … replaceParent:true`); closures are never deletions.
+
 ## [1.0.0] - 2026-02-06
 
 ### Added

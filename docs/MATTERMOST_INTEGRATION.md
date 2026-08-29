@@ -489,8 +489,8 @@ If you revoke a user's GitHub repo access urgently, also remove their
 notifications:
   mattermost:
     enabled: true
-    # webhook_env optional — SecretStorage is the preferred source
-    webhook_env: MATTERMOST_WEBHOOK_URL
+    # The webhook URL is not a config field: it lives in SecretStorage, with
+    # the fixed variable MATTERMOST_WEBHOOK_URL as the CI fallback (#1107).
   inbound:
     enabled: true
     host: 127.0.0.1

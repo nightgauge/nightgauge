@@ -102,9 +102,10 @@ wrong Slack credential is the most common setup error:
 | `xapp-…`                    | That is an app-level token — use the Bot User OAuth Token |
 | `https://hooks.slack.com/…` | That is a webhook URL — use the Bot User OAuth Token      |
 
-**CI / headless**: there is no keychain, so export the token instead. The
-variable name comes from `bot_token_env` below and defaults to
-`SLACK_BOT_TOKEN`.
+**CI / headless**: there is no keychain, so export the token as
+`SLACK_BOT_TOKEN`. The name is fixed and not configurable — a settings field for
+"the name of the variable holding the secret" sits next to fields that take the
+secret itself, and it collected tokens in plaintext (#1107).
 
 ---
 
@@ -119,18 +120,21 @@ notifications:
   slack:
     enabled: true
     channel: "C0123456789"
-    # bot_token_env: SLACK_BOT_TOKEN   # optional; this is the default
 ```
 
 **This one block drives both halves** — the extension's pipeline status and the
 Go binary's three alerts. There is no second credential and no second channel
 setting.
 
-| Field           | Required | Meaning                                              |
-| --------------- | -------- | ---------------------------------------------------- |
-| `enabled`       | yes      | Absent or `false` disables Slack entirely            |
-| `channel`       | yes      | Channel ID (preferred) or `#name`                    |
-| `bot_token_env` | no       | Env var holding the token. Default `SLACK_BOT_TOKEN` |
+| Field     | Required | Meaning                                   |
+| --------- | -------- | ----------------------------------------- |
+| `enabled` | yes      | Absent or `false` disables Slack entirely |
+| `channel` | yes      | Channel ID (preferred) or `#name`         |
+
+The token is **not** a config field. It lives in SecretStorage (via
+`Nightgauge: Configure Slack Notifications`), with `SLACK_BOT_TOKEN` as the
+fixed CI fallback. A token left in a removed `bot_token_env` key is refused with
+a warning telling you to rotate it — it was written to a plaintext file.
 
 `enabled` defaults to **off**, so upgrading Nightgauge never starts posting to a
 workspace that did not ask for it.
@@ -250,7 +254,6 @@ notifications:
   slack:
     enabled: true
     channel: "C0123456789"
-    bot_token_env: SLACK_BOT_TOKEN
 
 # Optional: route specific events to this notifier.
 notifiers:

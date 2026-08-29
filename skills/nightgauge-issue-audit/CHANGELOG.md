@@ -8,6 +8,26 @@ this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-08-29
+
+### Changed
+
+- **`Verification` is a required heading for every issue type.** The
+  2026-08-29 workspace backlog groom found 167 of 224 open issues with no
+  falsifiable way to tell the feature working from the feature claimed; the
+  groom appended one to each, and this makes the next creation fail its own
+  terminal audit instead. Same three-copy contract, same
+  `check-issue-body-contract.py` pin.
+
+### Added
+
+- **`WEAK_VERIFICATION` (WARNING)** — the section exists but names no test,
+  command, or file (nothing in backticks, no test runner).
+- **`SECURITY_SURFACE_UNADDRESSED` (WARNING)** — the body touches auth,
+  secrets, endpoints, retries, spawning, shell, symlinks, uploads or
+  permissions and carries neither a `## Security` section nor a
+  security-shaped acceptance criterion. Heuristic; never auto-fixed.
+
 ### Changed
 
 - **`MISSING_REQUIRED_HEADING` is CRITICAL in strict (`--manifest`) mode**

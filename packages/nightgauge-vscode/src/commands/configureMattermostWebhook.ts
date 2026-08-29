@@ -9,6 +9,7 @@
 
 import * as vscode from "vscode";
 import { SecretStorageService, SECRET_KEYS } from "../services/SecretStorageService";
+import { reportNotifierSetup } from "./notifierSetupReport";
 
 const MATTERMOST_WEBHOOK_PATTERN = /^https?:\/\/[^/\s]+\/hooks\/[A-Za-z0-9]+\/?$/;
 
@@ -61,10 +62,10 @@ export function registerConfigureMattermostWebhookCommand(): vscode.Disposable {
 
       await secretService.setSecret(SECRET_KEYS.mattermostWebhookUrl, url.trim());
 
-      vscode.window.showInformationMessage(
-        "Nightgauge: Mattermost webhook configured. " +
-          "Make sure `notifications.mattermost.enabled: true` is set in .nightgauge/config.yaml."
-      );
+      // Report what is actually unset rather than nagging unconditionally about
+      // a setting that is usually already there, in a config tier that is
+      // usually the wrong one (#1115).
+      await reportNotifierSetup("mattermost");
     }
   );
 }
