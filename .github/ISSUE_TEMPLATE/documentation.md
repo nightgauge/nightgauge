@@ -16,6 +16,10 @@ assignees: ""
 - [ ] [Documentation requirement 2]
 - [ ] [Documentation requirement 3]
 
+## Verification
+
+- [How a reader proves the docs are right — the command or link check to run, the page or section that must exist, the example that must execute as written]
+
 ## Technical Notes
 
 [Reference existing docs, API specs, or code to document]

@@ -20,6 +20,10 @@ assignees: ""
 - [ ] [Criterion 2]
 - [ ] [Criterion 3]
 
+## Verification
+
+- [One line per acceptance criterion: the test file or command, the input, and the expected observable output]
+
 ## Technical Notes
 
 [Any implementation considerations, constraints, or hints]

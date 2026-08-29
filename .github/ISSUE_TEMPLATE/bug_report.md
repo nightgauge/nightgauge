@@ -10,24 +10,30 @@ assignees: ""
 
 [Brief description of the bug]
 
-## Current Behavior
-
-[What is happening now]
-
-## Expected Behavior
-
-[What should happen instead]
-
 ## Steps to Reproduce
 
 1. [Step 1]
 2. [Step 2]
 3. [Step 3]
 
+## Expected
+
+[What should happen instead]
+
+## Actual
+
+[What is happening now]
+
 ## Acceptance Criteria
 
 - [ ] Bug is fixed
 - [ ] [Additional criteria]
+
+## Verification
+
+- [The regression test (file or package) that reproduces the Actual behavior
+  today and the Expected behavior after the fix, or the exact command and
+  its expected output]
 
 ## Technical Notes
 

@@ -496,6 +496,17 @@ evaluate whether event-driven dispatch would reduce idle CPU cost.
 
 **Artifact**: [`docs/spikes/4042-evaluate-event-driven-dispatch.md`](docs/spikes/4042-evaluate-event-driven-dispatch.md)
 
+## Verification
+
+- `test -f docs/spikes/4042-evaluate-event-driven-dispatch.md` succeeds and
+  the file's executive summary contains exactly one of `adopt`, `defer`,
+  `skip`.
+- `nightgauge spike validate docs/spikes/4042-evaluate-event-driven-dispatch.md`
+  exits 0 (the `yaml recommendations` block parses against
+  docs/SPIKE_CONTRACT.md).
+- Benchmark numbers for both dispatch strategies appear in the findings with
+  the command that produced them.
+
 ## Recommendations
 
 ​```yaml recommendations
