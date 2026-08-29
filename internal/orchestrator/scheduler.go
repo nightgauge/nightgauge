@@ -3343,27 +3343,32 @@ func hasUnmergedIndex(worktreePath string) bool {
 	return len(out) > 0
 }
 
-// stagedDeletionDominance reports how much of the CURRENTLY STAGED change is
-// the deletion of tracked files, after git's own rename detection has run.
+// stagedDeletions names the tracked files the CURRENTLY STAGED change deletes,
+// and reports how many staged entries there are in total, after git's own
+// rename detection has run.
 //
 // Rename detection is the load-bearing part and the reason this reads the index
 // rather than the pre-`add` porcelain. A filesystem rename appears before
 // staging as `" D old"` plus `"?? new"` — indistinguishable, by column alone,
 // from the mid-transformation tree this guard exists to catch. `git add -A`
-// resolves it to a single `R`, so counting `D` entries here counts only
+// resolves it to a single `R`, so the `D` entries collected here are only
 // deletions that are NOT half of a rename. A column-blind check on the
 // pre-staging porcelain would fire on every refactor that moves a file.
 //
-// Returns (deletions, total entries, a sample path). A git error answers
-// (0, 0, "") — this guards a rescue, and a tree git cannot read gets no guard
-// rather than a fabricated verdict.
-func stagedDeletionDominance(worktreePath string) (int, int, string) {
+// The PATHS are returned, not just a count, because the guard withholds the
+// deletions rather than refusing the whole tree (#1108) — it needs to name them
+// to `git reset`, and the caller needs to name them to the operator.
+//
+// A git error answers (nil, 0) — this guards a rescue, and a tree git cannot
+// read gets no guard rather than a fabricated verdict.
+func stagedDeletions(worktreePath string) ([]string, int) {
 	out, err := exec.Command("git", "-C", worktreePath, "diff", "--cached", "--find-renames", "--name-status", "-z").Output()
 	if err != nil {
-		return 0, 0, ""
+		return nil, 0
 	}
 	fields := strings.Split(string(out), "\x00")
-	deletions, total, sample := 0, 0, ""
+	var deletions []string
+	total := 0
 	for i := 0; i < len(fields); i++ {
 		status := fields[i]
 		if status == "" {
@@ -3382,14 +3387,28 @@ func stagedDeletionDominance(worktreePath string) (int, int, string) {
 		}
 		i += paths
 		total++
-		if status[0] == 'D' {
-			deletions++
-			if sample == "" {
-				sample = first
-			}
+		if status[0] == 'D' && first != "" {
+			deletions = append(deletions, first)
 		}
 	}
-	return deletions, total, sample
+	return deletions, total
+}
+
+// unstagePaths removes the named paths from the index without touching the
+// working tree, in batches so a tree with thousands of entries cannot overflow
+// the argument list. `git reset -- <path>` restores the index entry from HEAD,
+// which for a deletion means the file stays gone on disk and the deletion stays
+// out of the commit.
+func unstagePaths(worktreePath string, paths []string) error {
+	const batch = 100
+	for start := 0; start < len(paths); start += batch {
+		end := min(start+batch, len(paths))
+		args := append([]string{"-C", worktreePath, "reset", "-q", "--"}, paths[start:end]...)
+		if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
+			return fmt.Errorf("git reset: %w: %s", err, strings.TrimSpace(string(out)))
+		}
+	}
+	return nil
 }
 
 func onlyManagedAgentsChange(worktreePath string) bool {
@@ -3404,20 +3423,43 @@ func onlyManagedAgentsChange(worktreePath string) bool {
 	return codexprovision.IsOnlyManagedSteeringChange(string(committed), string(working))
 }
 
+// RecoveryOutcome describes what a rescue published and what it held back.
+//
+// A rescue is not all-or-nothing (#1108). The coherence guard's judgement is
+// per change-kind: a preponderance of DELETIONS is evidence that the deletions
+// are mid-transformation, and says nothing about modifications and additions,
+// which carry no such risk. When the guard declines one kind the other kinds
+// are still committed, and what stayed behind is named here so the caller can
+// report exactly what was withheld and why instead of a bare success.
+type RecoveryOutcome struct {
+	// WithheldDeletions are the tracked-file deletions kept out of the recovery
+	// commit. They remain deleted in the worktree, unstaged, for the next
+	// attempt or for a human.
+	WithheldDeletions []string
+	// WithheldReason explains the withholding in one sentence. Empty when
+	// nothing was withheld.
+	WithheldReason string
+}
+
 // RecoverUncommittedWork stages all changes, creates a recovery commit, and
 // pushes it to origin. Best-effort and non-fatal: a failed push logs a warning
 // but the local recovery commit is still preserved on the worktree. Returns an
 // error only when staging or committing fails (the work is then still on disk
 // for manual recovery). Issue #3542.
 //
+// The returned RecoveryOutcome names anything the coherence guard held back
+// (#1108); a nil error with a non-empty WithheldReason is a PARTIAL rescue and
+// callers are expected to report it rather than announce a plain success.
+//
 // Exported for `nightgauge worktree recover` (#223). Until then this lived only
 // on the Go scheduler's failure path, so a run driven by the extension's
 // HeadlessOrchestrator — which is most of them — had no recovery at all. #221
 // ended with a finished implementation sitting uncommitted in a worktree
 // precisely because nothing on that path could reach this function.
-func RecoverUncommittedWork(worktreePath string, issueNumber int, stage string) error {
+func RecoverUncommittedWork(worktreePath string, issueNumber int, stage string) (RecoveryOutcome, error) {
+	var outcome RecoveryOutcome
 	if worktreePath == "" {
-		return fmt.Errorf("worktreePath is empty")
+		return outcome, fmt.Errorf("worktreePath is empty")
 	}
 	// An unmerged index is not uncommitted work and this rescue cannot handle it
 	// (#301). `git status --porcelain` reports a conflicted path as `UU`, which
@@ -3431,7 +3473,7 @@ func RecoverUncommittedWork(worktreePath string, issueNumber int, stage string) 
 	// lifetime-failure increment and the board revert. Refuse instead: the caller
 	// logs the reason and preserves the worktree.
 	if hasUnmergedIndex(worktreePath) {
-		return fmt.Errorf("worktree has an unmerged index (a merge or rebase is stopped at a conflict) — refusing to stage it, which would collapse the conflict stages and commit conflict markers")
+		return outcome, fmt.Errorf("worktree has an unmerged index (a merge or rebase is stopped at a conflict) — refusing to stage it, which would collapse the conflict stages and commit conflict markers")
 	}
 	// Read the tree BEFORE staging: `git add -A` collapses the distinction
 	// this rescue turns on. A staged deletion and an untracked scaffold look
@@ -3439,7 +3481,7 @@ func RecoverUncommittedWork(worktreePath string, issueNumber int, stage string) 
 	exhaust := untrackedExhaust(worktreePath)
 
 	if err := exec.Command("git", "-C", worktreePath, "add", "-A").Run(); err != nil {
-		return fmt.Errorf("git add: %w", err)
+		return outcome, fmt.Errorf("git add: %w", err)
 	}
 	// Unstage the pipeline's own exhaust (#202). `git add -A` alone swept the
 	// run's `.nightgauge/` state into the recovery commit and pushed it to the
@@ -3467,54 +3509,66 @@ func RecoverUncommittedWork(worktreePath string, issueNumber int, stage string) 
 			log.Printf("#%d: unstaging pipeline exhaust before recovery commit failed (non-fatal): %v", issueNumber, err)
 		}
 	}
-	// Refuse to publish a tree that is mostly the deletion of tracked files
-	// (#1053). A stage that removes generated output intending to regenerate it,
-	// and dies before regenerating, leaves exactly this shape: the sources still
-	// declare the artifacts, the artifacts are gone, and the tree cannot build.
-	// Observed on a real run — 89 generated files deleted against 10 edited, and
-	// the surviving sources still carried `part 'router.g.dart';` for a file the
-	// commit removed.
+	// Withhold the DELETIONS from a tree that is mostly the deletion of tracked
+	// files (#1053, narrowed by #1108). A stage that removes generated output
+	// intending to regenerate it, and dies before regenerating, leaves exactly
+	// this shape: the sources still declare the artifacts, the artifacts are
+	// gone, and the tree cannot build. Observed on a real run — 89 generated
+	// files deleted against 10 edited, and the surviving sources still carried
+	// `part 'router.g.dart';` for a file the commit removed.
 	//
-	// This REFUSES rather than editing the commit's contents, deliberately, and
-	// mirrors the unmerged-index guard above. Withholding the deletions instead
-	// would commit a tree holding both halves of every rename and would repeat
-	// the #332/#701 lesson in a new column: a stage whose deliverable IS
-	// deletion would have that deliverable silently dropped and reported as
-	// rescued. Refusing loses nothing — the files are still in HEAD, the
-	// deletions are still on disk, and the caller preserves the worktree — while
-	// keeping an incoherent tree off the branch and out of `origin`.
+	// The judgement is right; the granularity was wrong. #1053 refused the WHOLE
+	// tree, and on the observed #1108 run that discarded 11 hand-edited source
+	// and test files — the entire deliverable, verified afterwards to analyze
+	// clean and pass its tests — because 89 regeneratable artifacts happened to
+	// be missing alongside them. A deleted generated artifact and an edited
+	// source file are different kinds of change, and the mid-transformation
+	// signal from the former says nothing about the latter.
 	//
-	// Renames are already excluded: the count runs after `git add -A` has let
-	// git resolve `D`+`??` pairs into a single `R`.
+	// So the ratio decides ONE kind's fate: a preponderance of deletions blocks
+	// publishing the deletions, and modifications, additions and renames — none
+	// of which can leave a half-transformed tree — are committed as usual. The
+	// incoherent half never reaches the branch or `origin`, which is the whole
+	// safety property #1053 bought; nothing is lost either way, because a
+	// withheld deletion is still deleted on disk and still present in HEAD.
 	//
-	// A PURELY deletional change is explicitly allowed through. That is the
+	// Renames are untouched: `git add -A` has already resolved `D`+`??` pairs
+	// into a single `R`, so no rename's source is in the withheld set and the
+	// #1053 both-halves-committed hazard cannot recur.
+	//
+	// A PURELY deletional change is explicitly allowed through whole. That is the
 	// #332/#701 shape — a stage whose deliverable IS removal, such as the 209
 	// staged deletions under `.nightgauge/pipeline/assessments/` that an earlier
 	// category-blind guard destroyed — and `TestWorktreeRecover_RescuesBookkeeping
 	// OnlyDeliverable` pins it. Deliberate removal arrives as removals and
 	// nothing else; the mid-transformation tree is the one that deletes most of
 	// itself AND still carries the edits that triggered the deletion. Requiring
-	// a non-deletion entry is what separates the two, and it is the difference
-	// between the observed #1053 tree (89 deletions alongside 10 edits) and a
-	// legitimate deletion deliverable.
-	if deletions, total, sample := stagedDeletionDominance(worktreePath); deletions > 0 && deletions < total && deletions*2 > total {
-		// Restore the index so the worktree is left exactly as it was found.
-		// The work stays on disk for the next attempt or for a human.
-		if err := exec.Command("git", "-C", worktreePath, "reset", "-q").Run(); err != nil {
-			log.Printf("#%d: restoring the index after refusing the recovery commit failed (non-fatal): %v", issueNumber, err)
+	// a non-deletion entry is what separates the two.
+	if deletions, total := stagedDeletions(worktreePath); len(deletions) > 0 && len(deletions) < total && len(deletions)*2 > total {
+		if err := unstagePaths(worktreePath, deletions); err != nil {
+			// The kinds could not be separated, so the only safe answer is the
+			// whole-tree refusal. Restore the index and leave the work on disk.
+			if resetErr := exec.Command("git", "-C", worktreePath, "reset", "-q").Run(); resetErr != nil {
+				log.Printf("#%d: restoring the index after refusing the recovery commit failed (non-fatal): %v", issueNumber, resetErr)
+			}
+			return outcome, fmt.Errorf(
+				"staged change is %d deletion(s) of tracked files out of %d entries (e.g. %q) and the deletions could not be withheld (%v) — refusing to publish a tree that is most likely mid-transformation; the work is preserved in the worktree",
+				len(deletions), total, deletions[0], err)
 		}
-		return fmt.Errorf(
-			"staged change is %d deletion(s) of tracked files out of %d entries (e.g. %q) — refusing to publish a tree that is most likely mid-transformation; the work is preserved in the worktree",
-			deletions, total, sample)
+		outcome.WithheldDeletions = deletions
+		outcome.WithheldReason = fmt.Sprintf(
+			"withheld %d deletion(s) of tracked files out of %d staged entries (e.g. %q) — a deletion-dominated tree is most likely mid-transformation; the deletions stay in the worktree while the remaining %d change(s) were committed",
+			len(deletions), total, deletions[0], total-len(deletions))
+		log.Printf("#%d: recovery %s", issueNumber, outcome.WithheldReason)
 	}
 	msg := fmt.Sprintf("feat(#%d): [auto-recovery] %s work recovered after stop-hook failure", issueNumber, stage)
 	if err := exec.Command("git", "-C", worktreePath, "commit", "-m", msg).Run(); err != nil {
-		return fmt.Errorf("git commit: %w", err)
+		return outcome, fmt.Errorf("git commit: %w", err)
 	}
 	if err := exec.Command("git", "-C", worktreePath, "push", "origin", "HEAD").Run(); err != nil {
 		log.Printf("#%d: recovery commit push failed (non-fatal): %v", issueNumber, err)
 	}
-	return nil
+	return outcome, nil
 }
 
 // schedulerTerminalOutcome derives the terminal outcome string the Go
@@ -3631,10 +3685,13 @@ func (s *Scheduler) refusePreDispatch(
 	if worktreePath := loadWorktreePath(workspaceRoot, item.Number); worktreePath != "" && hasUncommittedWork(worktreePath) {
 		log.Printf("#%d: stage %s refused before dispatch with uncommitted work in the worktree — attempting recovery",
 			item.Number, stage)
-		if recErr := RecoverUncommittedWork(worktreePath, item.Number, string(stage)); recErr != nil {
+		if rec, recErr := RecoverUncommittedWork(worktreePath, item.Number, string(stage)); recErr != nil {
 			log.Printf("#%d: uncommitted work recovery failed: %v — worktree preserved at %s",
 				item.Number, recErr, worktreePath)
 		} else {
+			if rec.WithheldReason != "" {
+				log.Printf("#%d: recovery was partial — %s (worktree %s)", item.Number, rec.WithheldReason, worktreePath)
+			}
 			// THE RESCUE IS NOT THE CAUSE (#875). Pre-fix this line read
 			// `kind = TerminalKindWorktreeUncommitted`, and a run that could
 			// never have proceeded — no SKILL.md to dispatch — was filed under
@@ -4029,10 +4086,13 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			if worktreePath != "" && hasUncommittedWork(worktreePath) {
 				log.Printf("#%d: failure cleanup: uncommitted work detected in worktree — attempting recovery",
 					item.Number)
-				if recErr := RecoverUncommittedWork(worktreePath, item.Number, string(preSnap.Stage)); recErr != nil {
+				if rec, recErr := RecoverUncommittedWork(worktreePath, item.Number, string(preSnap.Stage)); recErr != nil {
 					log.Printf("#%d: uncommitted work recovery failed: %v — worktree preserved at %s",
 						item.Number, recErr, worktreePath)
 				} else {
+					if rec.WithheldReason != "" {
+						log.Printf("#%d: recovery was partial — %s (worktree %s)", item.Number, rec.WithheldReason, worktreePath)
+					}
 					log.Printf("#%d: uncommitted work recovered — setting terminal_failure_kind=%s",
 						item.Number, TerminalKindWorktreeUncommitted)
 					terminalFailureKind = TerminalKindWorktreeUncommitted
@@ -6460,9 +6520,12 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 				if worktreePath != "" && hasUncommittedWork(worktreePath) {
 					log.Printf("#%d: stop hook signaled incomplete tasks — recovering uncommitted feature-dev work",
 						item.Number)
-					if recErr := RecoverUncommittedWork(worktreePath, item.Number, string(stage)); recErr != nil {
+					if rec, recErr := RecoverUncommittedWork(worktreePath, item.Number, string(stage)); recErr != nil {
 						log.Printf("#%d: stop-hook fallback commit failed: %v — worktree preserved at %s",
 							item.Number, recErr, worktreePath)
+					} else if rec.WithheldReason != "" {
+						log.Printf("#%d: stop-hook fallback commit was partial — %s (worktree %s)",
+							item.Number, rec.WithheldReason, worktreePath)
 					} else {
 						log.Printf("#%d: stop-hook fallback commit successful", item.Number)
 					}
