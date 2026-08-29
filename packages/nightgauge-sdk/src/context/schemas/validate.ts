@@ -339,7 +339,14 @@ export const ValidateContextSchema = z
     /** AC completion gate result for type:docs issues (v1.5+) */
     ac_completion_check: z
       .object({
-        status: flexEnum(["passed", "failed", "skipped", "not_applicable"] as const),
+        /**
+         * "error" is the fail-closed state added by #1145: the gate could not
+         * run at all (unresolved binary, non-zero ac-check exit, empty or
+         * unparseable output). Distinct from "failed" (ran, unchecked boxes
+         * remain) and from "passed" — which is exactly the confusion the old
+         * shell if/elif/else made, sending an empty status to the pass branch.
+         */
+        status: flexEnum(["passed", "failed", "skipped", "not_applicable", "error"] as const),
         checked_count: z.number().int().min(0).nullish(),
         unchecked_count: z.number().int().min(0).nullish(),
         applicable: z.boolean().nullish(),
