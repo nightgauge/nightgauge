@@ -355,7 +355,7 @@ judging five axes:
   concrete, falsifiable, scoped to the issue's acceptance criteria, naming
   files that exist (or clearly marked as to-be-created).
 - **Security of the proposed approach** — judged against
-  [standards/security.md](../../standards/security.md): would the design as
+  `standards/security.md`: would the design as
   written put secrets in settings or logs, expose an unauthenticated or
   unauthorized mutating path, retry or fan out without bound, skip input
   validation at a boundary, write files outside a contained root, or let
