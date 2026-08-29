@@ -21,6 +21,18 @@ that passes when it cannot tell is worse than no guard, because it manufactures
 confidence -- which is exactly how the previous control (a written rule in
 nightgauge-internal/CLAUDE.md, plus a local-only .git/info/exclude line) failed.
 
+THE REFERENCE CEILING IS PER-BRANCH, AND `git merge origin/main` DOES NOT RAISE
+IT (#1129). It is derived from the trailing `(#N)` of squash-merge subjects on
+FIRST-PARENT history, and a merge puts `main` on the second parent -- so a
+branch's own line stops at the commit it forked from. Since AGENTS.md forbids
+force-push and rebase, merging is the only permitted update path, and it is the
+one that does not help. The guard therefore takes the LARGER of the branch's
+mark and its base ref's (`ceiling_marks`), which needs the base ref fetched. A
+count taken at a lower ceiling is larger, and `tree_baseline` is one global
+integer, so a count is only ever comparable against the ceiling it was taken at
+-- which is why the burn-down report names that ceiling and refuses to advise a
+lowering it cannot attribute to references actually removed.
+
 Exit codes:
   0  clean
   1  boundary violation(s)
@@ -160,7 +172,9 @@ def _line_has_denied_token(line, word, salt, token_hashes, memo):
 # "owner/repo#N" for any OTHER repository is deliberately not matched: those
 # numbers belong to a sequence this manifest knows nothing about, and the
 # private ones are already covered by `private-repository-issue-reference`.
-ISSUE_REF = re.compile(r"(?<![0-9A-Za-z_/&#-])(?:nightgauge/nightgauge|nightgauge)?#([0-9]+)")
+ISSUE_REF = re.compile(
+    r"(?<![0-9A-Za-z_/&#-])(?:nightgauge/nightgauge|nightgauge)?#([0-9]+)"
+)
 HEX_RUN = re.compile(r"[0-9a-fA-F]+")
 
 # Widths a CSS/SVG hex colour can take that this repository cannot produce as an
@@ -233,9 +247,18 @@ def rename_map(base: str) -> dict[str, str]:
     """
     try:
         out = subprocess.run(
-            ["git", "diff", "--no-color", "--no-ext-diff", "--find-renames",
-             "--name-status", "--diff-filter=R", base],
-            capture_output=True, check=True,
+            [
+                "git",
+                "diff",
+                "--no-color",
+                "--no-ext-diff",
+                "--find-renames",
+                "--name-status",
+                "--diff-filter=R",
+                base,
+            ],
+            capture_output=True,
+            check=True,
         ).stdout.decode(errors="ignore")
     except Exception:
         return {}
@@ -270,16 +293,12 @@ def base_file_numbers(base: str, path: str, ceiling: int) -> set[int]:
     two orderings cannot disagree. Do not write a test claiming otherwise --
     one was tried, and it could not be made to fail against the other order.
     """
-    r = subprocess.run(
-        ["git", "show", f"{base}:{path}"], capture_output=True
-    )
+    r = subprocess.run(["git", "show", f"{base}:{path}"], capture_output=True)
     if r.returncode != 0:
         old = rename_map(base).get(path)
         if old is None:
             return set()
-        r = subprocess.run(
-            ["git", "show", f"{base}:{old}"], capture_output=True
-        )
+        r = subprocess.run(["git", "show", f"{base}:{old}"], capture_output=True)
         if r.returncode != 0:
             return set()
     try:
@@ -297,16 +316,27 @@ def base_file_numbers(base: str, path: str, ceiling: int) -> set[int]:
 _SCAN: dict = {}
 
 
-def _scan_init(rule_specs, token_hashes, salt, token_allow, manifest_path,
-               ref_exempt, ceiling, enc, tracked):
+def _scan_init(
+    rule_specs,
+    token_hashes,
+    salt,
+    token_allow,
+    manifest_path,
+    ref_exempt,
+    ceiling,
+    enc,
+    tracked,
+):
     """Compile per-worker state once, not once per chunk."""
     global _SCAN
     _SCAN = {
         # Patterns are shipped as SOURCE and compiled here: a compiled pattern
         # survives pickling, but sending the source keeps the worker's regex
         # flags explicit and identical to the serial path.
-        "rules": [(rid, re.compile(src, re.IGNORECASE), exempt)
-                  for rid, src, exempt in rule_specs],
+        "rules": [
+            (rid, re.compile(src, re.IGNORECASE), exempt)
+            for rid, src, exempt in rule_specs
+        ],
         "token_hashes": token_hashes,
         "salt": salt,
         "token_allow": token_allow,
@@ -386,7 +416,10 @@ def _scan_jobs(path_count: int) -> int:
         try:
             n = int(override)
         except ValueError:
-            die(2, f"NG_BOUNDARY_JOBS must be an integer, got {override!r}. Failing closed.")
+            die(
+                2,
+                f"NG_BOUNDARY_JOBS must be an integer, got {override!r}. Failing closed.",
+            )
         return max(1, n)
     # Below this the pool costs more than it saves, and the suite runs this
     # guard dozens of times in a row.
@@ -423,8 +456,11 @@ def resolve_diff_base() -> tuple[str, str] | tuple[None, None]:
         # An explicit base that does not resolve is an error, not an invitation
         # to quietly measure against something else.
         if not _rev_ok(override):
-            die(2, f"NG_BOUNDARY_DIFF_BASE={override!r} does not resolve to a commit. "
-                   "Failing closed rather than silently diffing against a different base.")
+            die(
+                2,
+                f"NG_BOUNDARY_DIFF_BASE={override!r} does not resolve to a commit. "
+                "Failing closed rather than silently diffing against a different base.",
+            )
         candidates.append(override)
     base_ref = os.environ.get("GITHUB_BASE_REF")
     if base_ref:
@@ -436,9 +472,7 @@ def resolve_diff_base() -> tuple[str, str] | tuple[None, None]:
     for cand in candidates:
         if not _rev_ok(cand):
             continue
-        found = subprocess.run(
-            ["git", "merge-base", cand, "HEAD"], capture_output=True
-        )
+        found = subprocess.run(["git", "merge-base", cand, "HEAD"], capture_output=True)
         if found.returncode == 0 and found.stdout.strip():
             return cand, found.stdout.decode().strip()
     return None, None
@@ -452,8 +486,15 @@ def added_lines(base: str):
     violations with `git add` and never commits them.
     """
     out = subprocess.run(
-        ["git", "diff", "--no-color", "--no-ext-diff", "--unified=0",
-         "--diff-filter=ACMR", base],
+        [
+            "git",
+            "diff",
+            "--no-color",
+            "--no-ext-diff",
+            "--unified=0",
+            "--diff-filter=ACMR",
+            base,
+        ],
         capture_output=True,
         check=True,
     ).stdout.decode(errors="ignore")
@@ -463,7 +504,13 @@ def added_lines(base: str):
     for raw in out.splitlines():
         if raw.startswith("+++ "):
             target = raw[4:]
-            path = None if target == "/dev/null" else target[2:] if target.startswith("b/") else target
+            path = (
+                None
+                if target == "/dev/null"
+                else target[2:]
+                if target.startswith("b/")
+                else target
+            )
         elif raw.startswith("@@"):
             hunk = re.match(r"@@ -\S+ \+(\d+)", raw)
             lineno = int(hunk.group(1)) if hunk else 0
@@ -489,8 +536,8 @@ def untracked_added_lines(paths):
             yield p, n, line
 
 
-def derived_high_water() -> int:
-    """The repository's high-water mark, read from its own merge history.
+def derived_high_water(rev: str = "HEAD") -> int:
+    """The high-water mark on `rev`'s own first-parent line.
 
     GitHub APPENDS `(#N)` to the subject when it squash-merges a pull request,
     so the TRAILING marker on a first-parent subject is the number the forge
@@ -507,14 +554,154 @@ def derived_high_water() -> int:
       `feat: thing (#99999) (#1080)`, and this reads 1080. Anchoring to the end
       of the subject is what keeps a crafted title from raising the ceiling and
       silently weakening the rule; an unanchored search would take the bait.
+
+    MERGING `main` INTO A BRANCH DOES NOT RAISE THIS (#1129). `--first-parent`
+    is what makes the second property hold -- it stays on the mainline and
+    never descends into a merged-in branch, whose subjects the author writes
+    freely. The cost is that `git merge origin/main`, which AGENTS.md makes the
+    ONLY permitted way to update a branch (no force-push, no rebase), puts
+    `main` on the SECOND parent. So a branch's own line still ends at the
+    commit it forked from, and the mark derived here goes staler the longer the
+    branch lives. `main` at `(#1125)` was read as 1110 on a branch that had
+    already merged it twice.
+
+    The caller therefore derives this on BOTH the branch and its base ref and
+    takes the larger; see `ceiling_marks`.
     """
     out = subprocess.run(
-        ["git", "log", "--first-parent", "--format=%s", "HEAD"],
+        ["git", "log", "--first-parent", "--format=%s", rev],
         capture_output=True,
         check=True,
     ).stdout.decode(errors="ignore")
     trailing = (re.search(r"\(#(\d+)\)\s*$", line) for line in out.splitlines())
     return max((int(m.group(1)) for m in trailing if m), default=0)
+
+
+def ceiling_marks(base_ref: str | None) -> tuple[int, str]:
+    """The mark to use, and the ref it came from: the LARGER of two lines.
+
+    Why alignment rather than a ceiling-independent count (#1129). The
+    tree-wide count is a function of the ceiling -- a LOWER ceiling leaves more
+    numbers above it and so measures MORE -- while the ratchet it is compared
+    against is one global integer in the manifest. Two ways out:
+
+      (a) pin the ceiling the baseline was measured at, in the manifest, and
+          always count against that. This makes the count ceiling-independent,
+          and it re-creates exactly the hand-maintained integer #1078 deleted:
+          it has to be bumped, it goes stale in silence, and while it is stale
+          the guard is measuring against a ceiling the repository has long
+          passed.
+      (b) stop the measuring branch's ceiling from lagging in the first place.
+
+    (b) is simpler, needs no new knob, and is free: `resolve_diff_base` has
+    already found the base ref, whose first-parent line is the same
+    forge-controlled mainline the branch's line diverged from. Reading the mark
+    there costs one extra `git log` and removes the lag entirely for any branch
+    whose base ref is fetched -- which is every branch CI can diff at all,
+    since the diff-scoped rules need that same ref.
+
+    `max` is deliberate. This can only ever RAISE the ceiling toward the
+    mainline's, never lower it below what the branch itself proves was issued,
+    and both inputs are first-parent lines, so the anti-crafted-title property
+    of `derived_high_water` is preserved on both.
+    """
+    mark, source = derived_high_water(), "HEAD"
+    if base_ref:
+        base_mark = derived_high_water(base_ref)
+        if base_mark > mark:
+            mark, source = base_mark, base_ref
+    return mark, source
+
+
+def _file_unresolvable_count(text: str, ceiling: int) -> int:
+    """Occurrences (not distinct numbers) of unresolvable #N in `text`.
+
+    The tree-wide burn-down counts occurrences, so an attribution that compares
+    against it must count the same thing -- `_file_unresolvable_numbers`
+    de-duplicates and would under-count a file citing one dead number twice.
+    """
+    return sum(1 for _ in _unresolvable_in_text(text, ceiling))
+
+
+def references_removed_since(base, ceiling, ref_exempt, tree_hits):
+    """How many unresolvable references this tree REMOVED relative to `base`.
+
+    Returns `(removed, comparable)`; `comparable` is False when git could not
+    be asked, and the caller must then advise nothing.
+
+    This is what separates the two reasons the tree-wide count can fall
+    (#1129). A fall is only evidence of CLEANUP if references actually left the
+    tree; it is otherwise erosion -- the ceiling rose over numbers that were
+    already there and were already counted, and the tree did not change at all.
+    Recording an eroded fall as a lower baseline claims a sweep that never
+    happened, and the next branch (measuring at its own, lower ceiling) is then
+    blocked by references it never wrote.
+
+    Both sides are measured at the SAME `ceiling`, which is the whole trick:
+    the difference is then independent of where the ceiling sits, even though
+    each side's absolute count is not. Only files the diff reports as changed
+    can contribute to the difference -- an untouched file counts identically on
+    both sides -- so this reads a handful of blobs, not the tree.
+    """
+    r = subprocess.run(
+        [
+            "git",
+            "diff",
+            "--no-color",
+            "--no-ext-diff",
+            "--name-status",
+            "-z",
+            "--find-renames",
+            base,
+        ],
+        capture_output=True,
+    )
+    if r.returncode != 0:
+        return 0, False
+    fields = r.stdout.decode("utf-8", "replace").split("\0")
+    base_side: list[str] = []
+    cur_side: set[str] = set()
+    try:
+        i = 0
+        while i < len(fields):
+            status = fields[i]
+            if not status:
+                i += 1
+                continue
+            if status[0] in ("R", "C"):
+                old, new = fields[i + 1], fields[i + 2]
+                i += 3
+                # A copy leaves its source in place; only a rename moves it.
+                if status[0] == "R":
+                    base_side.append(old)
+                cur_side.add(new)
+            else:
+                path = fields[i + 1]
+                i += 2
+                if status[0] != "A":
+                    base_side.append(path)
+                if status[0] != "D":
+                    cur_side.add(path)
+    except IndexError:
+        return 0, False  # truncated -z record: refuse to guess
+
+    at_base = 0
+    for path in base_side:
+        if any(matches(path, e) for e in ref_exempt):
+            continue
+        blob = subprocess.run(["git", "show", f"{base}:{path}"], capture_output=True)
+        if blob.returncode != 0:
+            continue
+        try:
+            text = blob.stdout.decode("utf-8")
+        except UnicodeDecodeError:
+            continue  # binary: the tree-wide scan skips these too
+        at_base += _file_unresolvable_count(text, ceiling)
+
+    # The current side is already measured: `tree_hits` is the same corpus,
+    # same ceiling, same exemptions. Re-reading the files would risk drift.
+    now = sum(1 for h in tree_hits if h[0] in cur_side)
+    return at_base - now, True
 
 
 def repository_is_shallow() -> bool:
@@ -525,22 +712,32 @@ def repository_is_shallow() -> bool:
     reference above it. That must fail loudly rather than produce a tree's worth
     of false positives.
     """
-    out = subprocess.run(
-        ["git", "rev-parse", "--is-shallow-repository"],
-        capture_output=True,
-        check=True,
-    ).stdout.decode(errors="ignore").strip()
+    out = (
+        subprocess.run(
+            ["git", "rev-parse", "--is-shallow-repository"],
+            capture_output=True,
+            check=True,
+        )
+        .stdout.decode(errors="ignore")
+        .strip()
+    )
     return out == "true"
 
 
 def main() -> int:
     if not MANIFEST.exists():
-        die(2, f"manifest not found: {MANIFEST}\n  The guard cannot verify anything. Failing closed.")
+        die(
+            2,
+            f"manifest not found: {MANIFEST}\n  The guard cannot verify anything. Failing closed.",
+        )
 
     try:
         import yaml  # noqa: PLC0415
     except ImportError:
-        die(2, "PyYAML is not available. The guard cannot parse the manifest. Failing closed.")
+        die(
+            2,
+            "PyYAML is not available. The guard cannot parse the manifest. Failing closed.",
+        )
 
     try:
         manifest = yaml.safe_load(MANIFEST.read_text())
@@ -559,19 +756,28 @@ def main() -> int:
     pending = manifest.get("needs_decision") or []
 
     if not allow:
-        die(2, "manifest has no `allow` rules. Every path would be rejected; this is "
-               "almost certainly a broken manifest rather than an empty repo. Failing closed.")
+        die(
+            2,
+            "manifest has no `allow` rules. Every path would be rejected; this is "
+            "almost certainly a broken manifest rather than an empty repo. Failing closed.",
+        )
 
     refs_rule = manifest.get("issue_references")
     if not isinstance(refs_rule, dict):
-        die(2, "manifest has no `issue_references` block. The unresolvable-reference rule "
-               "cannot know this repository's high-water mark, so it would silently check "
-               "nothing. Failing closed.")
+        die(
+            2,
+            "manifest has no `issue_references` block. The unresolvable-reference rule "
+            "cannot know this repository's high-water mark, so it would silently check "
+            "nothing. Failing closed.",
+        )
     if "high_water_mark" in refs_rule:
-        die(2, "issue_references.high_water_mark is no longer read -- the mark is derived\n"
-               "  from this repository's own merge history (#1078). A recorded mark can go\n"
-               "  stale; a derived one cannot. Delete the key from "
-               f"{MANIFEST}.")
+        die(
+            2,
+            "issue_references.high_water_mark is no longer read -- the mark is derived\n"
+            "  from this repository's own merge history (#1078). A recorded mark can go\n"
+            "  stale; a derived one cannot. Delete the key from "
+            f"{MANIFEST}.",
+        )
     slack = refs_rule.get("slack")
     if isinstance(slack, bool) or not isinstance(slack, int) or slack < 0:
         die(2, "issue_references.slack must be a non-negative integer. Failing closed.")
@@ -582,15 +788,32 @@ def main() -> int:
     # it from the forge's own squash-merge markers keeps the entire guarantee and
     # removes the counter that nobody was watching.
     if repository_is_shallow():
-        die(2, "the reference ceiling is derived from merge history, and this is a SHALLOW\n"
-               "  clone -- the derived mark would be far too low and every reference above\n"
-               "  it would be reported as unresolvable.\n"
-               "  Fetch full history (`git fetch --unshallow`, or `fetch-depth: 0` in CI).")
-    mark = derived_high_water()
+        die(
+            2,
+            "the reference ceiling is derived from merge history, and this is a SHALLOW\n"
+            "  clone -- the derived mark would be far too low and every reference above\n"
+            "  it would be reported as unresolvable.\n"
+            "  Fetch full history (`git fetch --unshallow`, or `fetch-depth: 0` in CI).",
+        )
+    # Resolved BEFORE the mark, not with the diff-scoped rules below, because
+    # the base ref is half of the ceiling now (#1129).
+    base_ref, base = resolve_diff_base()
+    if base is None:
+        die(
+            2,
+            "cannot resolve a base commit to diff against, so the "
+            "unresolvable-reference rule would check nothing.\n"
+            "  Fetch the default branch, or set NG_BOUNDARY_DIFF_BASE to a "
+            "revision. Failing closed.",
+        )
+    mark, mark_source = ceiling_marks(base_ref)
     if mark < 1:
-        die(2, "no `(#N)` merge marker found on the first-parent history, so the reference\n"
-               "  ceiling cannot be derived. The guard will not check references against a\n"
-               "  mark it had to invent. Failing closed.")
+        die(
+            2,
+            "no `(#N)` merge marker found on the first-parent history, so the reference\n"
+            "  ceiling cannot be derived. The guard will not check references against a\n"
+            "  mark it had to invent. Failing closed.",
+        )
     ceiling = mark + slack
 
     violations: list[str] = []
@@ -657,7 +880,10 @@ def main() -> int:
             # inline (?-i:...) group.
             pattern = re.compile(rule["pattern"], re.IGNORECASE)
         except re.error as exc:
-            die(2, f"forbidden_content rule '{rid}' has an invalid regex: {exc}. Failing closed.")
+            die(
+                2,
+                f"forbidden_content rule '{rid}' has an invalid regex: {exc}. Failing closed.",
+            )
         exempt = rule.get("allow_paths") or []
         # A rule may declare `file_baseline: N` to land while the tree still
         # violates it. The gate then becomes MONOTONIC over the number of
@@ -674,8 +900,11 @@ def main() -> int:
         if rule_baseline is not None and (
             not isinstance(rule_baseline, int) or rule_baseline < 0
         ):
-            die(2, f"forbidden_content rule '{rid}' has a non-integer "
-                   f"file_baseline. Failing closed.")
+            die(
+                2,
+                f"forbidden_content rule '{rid}' has a non-integer "
+                f"file_baseline. Failing closed.",
+            )
         compiled_rules.append((rid, pattern, exempt, rule_baseline))
 
     # ── 3b. Forbidden tokens, matched by HASH ────────────────────────────────
@@ -703,12 +932,7 @@ def main() -> int:
     # "#N above the high-water mark" is a definition, not a heuristic: such a
     # number cannot resolve at the moment it is written, at any repository size.
     # See the module header for why the scope is a diff rather than the tree.
-    base_ref, base = resolve_diff_base()
-    if base is None:
-        die(2, "cannot resolve a base commit to diff against, so the "
-               "unresolvable-reference rule would check nothing.\n"
-               "  Fetch the default branch, or set NG_BOUNDARY_DIFF_BASE to a "
-               "revision. Failing closed.")
+    # `base_ref`/`base` were resolved above, with the ceiling.
 
     ref_exempt = refs_rule.get("allow_paths") or []
 
@@ -729,10 +953,20 @@ def main() -> int:
     # section order, so the report is byte-identical to the multi-pass form.
     _enc = locale.getpreferredencoding(False)
     tracked_set = set(tracked)
-    _rule_specs = [(rid, pat.pattern, exempt)
-                   for rid, pat, exempt, _b in compiled_rules]
-    _init_args = (_rule_specs, token_hashes, salt, token_allow_paths,
-                  str(MANIFEST), ref_exempt, ceiling, _enc, tracked_set)
+    _rule_specs = [
+        (rid, pat.pattern, exempt) for rid, pat, exempt, _b in compiled_rules
+    ]
+    _init_args = (
+        _rule_specs,
+        token_hashes,
+        salt,
+        token_allow_paths,
+        str(MANIFEST),
+        ref_exempt,
+        ceiling,
+        _enc,
+        tracked_set,
+    )
 
     rule_hits: dict[str, list] = {rid: [] for rid, _p, _e, _b in compiled_rules}
     token_violations: list[str] = []
@@ -743,7 +977,7 @@ def main() -> int:
         # Contiguous slices, merged in slice order, so the report is identical
         # to the serial walk. Striding would interleave and reorder it.
         size = (len(paths) + jobs - 1) // jobs
-        chunks = [paths[i:i + size] for i in range(0, len(paths), size)]
+        chunks = [paths[i : i + size] for i in range(0, len(paths), size)]
         try:
             with ProcessPoolExecutor(
                 max_workers=jobs, initializer=_scan_init, initargs=_init_args
@@ -753,8 +987,11 @@ def main() -> int:
             # A worker that dies must never look like a clean tree. main()'s
             # caller turns this into exit 2; the one thing it must not do is
             # fall through to a report built from partial results.
-            die(2, f"the parallel scan failed ({exc!r}). Failing closed.\n"
-                   f"  Re-run with NG_BOUNDARY_JOBS=1 to scan in this process.")
+            die(
+                2,
+                f"the parallel scan failed ({exc!r}). Failing closed.\n"
+                f"  Re-run with NG_BOUNDARY_JOBS=1 to scan in this process.",
+            )
     else:
         _scan_init(*_init_args)
         results = [_scan_chunk(paths)]
@@ -781,9 +1018,7 @@ def main() -> int:
                     f"    {snippet}"
                 )
         elif len(hits) > rule_baseline:
-            sample = "\n".join(
-                f"      {h[0]}:{h[1]}  {h[2]}" for h in sorted(hits)[:8]
-            )
+            sample = "\n".join(f"      {h[0]}:{h[1]}  {h[2]}" for h in sorted(hits)[:8])
             violations.append(
                 f"FORBIDDEN CONTENT COUNT ROSE [{rid}]: "
                 f"{len(hits)} file(s) > baseline {rule_baseline}\n"
@@ -843,12 +1078,18 @@ def main() -> int:
     tree_files = len({h[0] for h in tree_hits})
 
     if tree_baseline is None:
-        die(2, "issue_references.tree_baseline is missing. The tree-wide burn-down\n"
-               f"  cannot be enforced without it. Observed right now: {tree_count} "
-               f"reference(s) across {tree_files} file(s).\n"
-               f"  Record `tree_baseline: {tree_count}` in {MANIFEST}. Failing closed.")
+        die(
+            2,
+            "issue_references.tree_baseline is missing. The tree-wide burn-down\n"
+            f"  cannot be enforced without it. Observed right now: {tree_count} "
+            f"reference(s) across {tree_files} file(s).\n"
+            f"  Record `tree_baseline: {tree_count}` in {MANIFEST}. Failing closed.",
+        )
     if not isinstance(tree_baseline, int) or tree_baseline < 0:
-        die(2, "issue_references.tree_baseline must be a non-negative integer. Failing closed.")
+        die(
+            2,
+            "issue_references.tree_baseline must be a non-negative integer. Failing closed.",
+        )
 
     if tree_count > tree_baseline:
         worst = sorted(tree_hits, key=lambda h: (h[0], h[1]))[:10]
@@ -859,7 +1100,12 @@ def main() -> int:
             f"({ceiling}) may only go DOWN.\n"
             f"    {tree_count - tree_baseline} more than the recorded baseline, "
             f"across {tree_files} file(s). First few:\n{sample}\n"
-            f"    Fix the new ones. Do not raise `tree_baseline`."
+            f"    Fix the new ones. Do not raise `tree_baseline`.\n"
+            f"    This count is measured at ceiling {ceiling} (mark {mark} from "
+            f"{mark_source} + slack {slack}). A LOWER ceiling leaves more numbers\n"
+            f"    above it and so measures MORE: if the sample above is entirely\n"
+            f"    pre-existing, this branch's ceiling is behind the mainline's and the\n"
+            f"    fix is `git fetch origin main`, not an edit (#1129)."
         )
 
     # ── 4. NEEDS-DECISION must be empty ──────────────────────────────────────
@@ -872,51 +1118,117 @@ def main() -> int:
 
     # ── Report ───────────────────────────────────────────────────────────────
     if violations:
-        print(f"\n\033[31m✗ publication boundary: {len(violations)} violation(s)\033[0m\n",
-              file=sys.stderr)
+        print(
+            f"\n\033[31m✗ publication boundary: {len(violations)} violation(s)\033[0m\n",
+            file=sys.stderr,
+        )
         for v in violations:
             print(f"  • {v}\n", file=sys.stderr)
-        print("This repository is maintained as a public-safe tree regardless of its current",
-              file=sys.stderr)
-        print("visibility setting -- treat every violation above as a real leak. Fix the above,",
-              file=sys.stderr)
-        print(f"or classify the path in {MANIFEST} if it is genuinely publishable.\n", file=sys.stderr)
+        print(
+            "This repository is maintained as a public-safe tree regardless of its current",
+            file=sys.stderr,
+        )
+        print(
+            "visibility setting -- treat every violation above as a real leak. Fix the above,",
+            file=sys.stderr,
+        )
+        print(
+            f"or classify the path in {MANIFEST} if it is genuinely publishable.\n",
+            file=sys.stderr,
+        )
         return 1
 
     scope = f"{len(tracked)} tracked path(s)"
     if untracked:
         scope += f" + {len(untracked)} untracked, not-yet-added path(s)"
-    print(f"\033[32m✓ publication boundary clean\033[0m — {scope}, "
-          f"all classified; no denied paths, no forbidden content, no open decisions.")
+    print(
+        f"\033[32m✓ publication boundary clean\033[0m — {scope}, "
+        f"all classified; no denied paths, no forbidden content, no open decisions."
+    )
     # NOT `base` — that name holds the diff base commit and is read again
     # below. Shadowing it here made the report crash into the fail-closed
     # handler with an unhelpful TypeError.
     for rid, count, rule_base in content_notes:
         if count < rule_base:
-            print(f"  {rid}: {count} file(s), BELOW the recorded baseline of {rule_base}.\n"
-                  f"    Lower `file_baseline` to {count} in {MANIFEST} so the ratchet holds.")
+            print(
+                f"  {rid}: {count} file(s), BELOW the recorded baseline of {rule_base}.\n"
+                f"    Lower `file_baseline` to {count} in {MANIFEST} so the ratchet holds."
+            )
         else:
             print(f"  {rid}: {count} file(s) still match, at the recorded baseline.")
 
+    at_ceiling = f"measured at ceiling {ceiling} (mark {mark} from {mark_source} + slack {slack})"
     if tree_count < tree_baseline:
-        print(f"  issue references: tree-wide count is {tree_count}, BELOW the recorded "
-              f"baseline of {tree_baseline}.\n"
-              f"    Lower `issue_references.tree_baseline` to {tree_count} in {MANIFEST} "
-              f"so the ratchet holds.")
+        # A fall has two possible causes and only one of them may be ratcheted
+        # (#1129). `removed` is the part attributable to references that
+        # actually left the tree; the rest is the ceiling having risen over
+        # numbers that were already there, which is not a cleanup and must not
+        # be recorded as one -- the baseline is global, and the next branch
+        # measuring at a lower ceiling would be blocked by references it never
+        # wrote.
+        removed, comparable = references_removed_since(
+            base, ceiling, ref_exempt, tree_hits
+        )
+        floor = (
+            max(tree_count, tree_baseline - removed) if comparable else tree_baseline
+        )
+        if comparable and removed > 0:
+            print(
+                f"  issue references: tree-wide count is {tree_count}, BELOW the recorded "
+                f"baseline of {tree_baseline} ({at_ceiling}).\n"
+                f"    {removed} reference(s) were genuinely removed from the tree since "
+                f"{base_ref} ({base[:12]}), measured on both sides at that same ceiling.\n"
+                f"    Lower `issue_references.tree_baseline` to {floor} in {MANIFEST} "
+                f"so the ratchet holds."
+            )
+            if floor > tree_count:
+                print(
+                    f"    Do NOT lower it to {tree_count}. The remaining "
+                    f"{floor - tree_count} is not attributable to anything being "
+                    f"removed --\n"
+                    f"    the ceiling rose over references that were already there. "
+                    f"Recording that erosion\n"
+                    f"    would claim a sweep that did not happen and block the next "
+                    f"branch (#1129)."
+                )
+        else:
+            why = (
+                "nothing was removed from the tree"
+                if comparable
+                else "the two causes could not be separated (git would not answer)"
+            )
+            print(
+                f"  issue references: tree-wide count is {tree_count}, below the recorded "
+                f"baseline of {tree_baseline} ({at_ceiling}).\n"
+                f"    Do NOT lower `issue_references.tree_baseline`: {why}, so this fall "
+                f"is not a cleanup.\n"
+                f"    A count is only comparable against the ceiling it was taken at, and "
+                f"the baseline is\n"
+                f"    global -- ratcheting an unattributed fall blocks branches that "
+                f"measure lower (#1129)."
+            )
     else:
-        print(f"  issue references: {tree_count} unresolvable reference(s) tree-wide "
-              f"across {tree_files} file(s), at the recorded baseline.")
+        print(
+            f"  issue references: {tree_count} unresolvable reference(s) tree-wide "
+            f"across {tree_files} file(s), at the recorded baseline ({at_ceiling})."
+        )
     if carried_over:
-        print(f"    {carried_over} pre-existing reference(s) on edited lines were "
-              f"carried over, not charged to this change.")
-    print(f"  issue references: {len(added)} added line(s) over {base_ref} "
-          f"({base[:12]}) carry no #N above {ceiling}.")
+        print(
+            f"    {carried_over} pre-existing reference(s) on edited lines were "
+            f"carried over, not charged to this change."
+        )
+    print(
+        f"  issue references: {len(added)} added line(s) over {base_ref} "
+        f"({base[:12]}) carry no #N above {ceiling}."
+    )
     if untracked:
         # Naming them is the point: the pass is only as good as the corpus, and
         # a reader who cannot see the corpus cannot judge the pass (#716).
-        print(f"  scanned as new content (untracked, not ignored): "
-              f"{', '.join(sorted(untracked)[:10])}"
-              f"{f' and {len(untracked) - 10} more' if len(untracked) > 10 else ''}")
+        print(
+            f"  scanned as new content (untracked, not ignored): "
+            f"{', '.join(sorted(untracked)[:10])}"
+            f"{f' and {len(untracked) - 10} more' if len(untracked) > 10 else ''}"
+        )
     return 0
 
 
