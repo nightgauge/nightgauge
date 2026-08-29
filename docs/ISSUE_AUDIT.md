@@ -140,22 +140,31 @@ exact and case-sensitive** — `## Acceptance criteria` does not satisfy a
 required `Acceptance Criteria`. Headings the table does not list are ignored,
 so extra sections are always safe.
 
-| Type     | Required headings                             |
-| -------- | --------------------------------------------- |
-| feature  | Summary, Acceptance Criteria                  |
-| bug      | Summary, Steps to Reproduce, Expected, Actual |
-| docs     | Summary, Acceptance Criteria                  |
-| refactor | Summary, Acceptance Criteria                  |
-| spike    | Summary, Acceptance Criteria, Recommendations |
-| chore    | Summary                                       |
-| epic     | Summary, Sub-Issues, Acceptance Criteria      |
+| Type     | Required headings                                           |
+| -------- | ----------------------------------------------------------- |
+| feature  | Summary, Acceptance Criteria, Verification                  |
+| bug      | Summary, Steps to Reproduce, Expected, Actual, Verification |
+| docs     | Summary, Acceptance Criteria, Verification                  |
+| refactor | Summary, Acceptance Criteria, Verification                  |
+| spike    | Summary, Acceptance Criteria, Recommendations, Verification |
+| chore    | Summary, Verification                                       |
+| epic     | Summary, Sub-Issues, Acceptance Criteria, Verification      |
 
-| Finding type               | Severity                                    | Trigger                                                                                  |
-| -------------------------- | ------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| `MISSING_REQUIRED_HEADING` | CRITICAL in `--manifest` mode, else WARNING | A heading required by the issue's type is absent — see [Severity Tiers](#severity-tiers) |
-| `EMPTY_REQUIRED_HEADING`   | WARNING                                     | A required heading is present but its body is empty                                      |
-| `MISSING_SPIKE_RECS_BLOCK` | CRITICAL                                    | Spike issue is missing the `yaml recommendations` block per `docs/SPIKE_CONTRACT.md`     |
-| `OVERSIZED_SCOPE`          | WARNING                                     | Issue bundles many independent units of work into a single ticket — see below            |
+`Verification` became required of every type on 2026-08-29, after the
+workspace backlog groom found 167 of 224 open issues with no falsifiable
+check and had to author one for each. The bar is
+[`issue-create`'s](../skills/nightgauge-issue-create/_includes/environment-and-content.md):
+per acceptance criterion, the test or command, the input, and the expected
+observable output.
+
+| Finding type                   | Severity                                    | Trigger                                                                                  |
+| ------------------------------ | ------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| `MISSING_REQUIRED_HEADING`     | CRITICAL in `--manifest` mode, else WARNING | A heading required by the issue's type is absent — see [Severity Tiers](#severity-tiers) |
+| `EMPTY_REQUIRED_HEADING`       | WARNING                                     | A required heading is present but its body is empty                                      |
+| `WEAK_VERIFICATION`            | WARNING                                     | `## Verification` names no test, command, or file — "add tests" is not verification      |
+| `SECURITY_SURFACE_UNADDRESSED` | WARNING                                     | Body touches auth/secrets/endpoints/retries/spawn/shell/uploads with no security AC      |
+| `MISSING_SPIKE_RECS_BLOCK`     | CRITICAL                                    | Spike issue is missing the `yaml recommendations` block per `docs/SPIKE_CONTRACT.md`     |
+| `OVERSIZED_SCOPE`              | WARNING                                     | Issue bundles many independent units of work into a single ticket — see below            |
 
 #### `OVERSIZED_SCOPE` heuristic
 

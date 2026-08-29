@@ -93,7 +93,7 @@ func TestRecoverUncommittedWork_RefusesUnmergedIndex(t *testing.T) {
 		t.Fatal("precondition: a conflicted worktree reads as uncommitted work, which is what routes it into the rescue")
 	}
 
-	err := RecoverUncommittedWork(dir, 301, "pr-merge")
+	_, err := RecoverUncommittedWork(dir, 301, "pr-merge")
 	if err == nil {
 		t.Fatal("RecoverUncommittedWork on an unmerged index = nil — the caller reads nil as 'recovered' and relabels the failure worktree_uncommitted")
 	}

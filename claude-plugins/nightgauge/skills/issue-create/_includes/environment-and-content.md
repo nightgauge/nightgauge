@@ -71,13 +71,13 @@ If prerequisites fail, stop with exact remediation command.
    it is reproduced here so the author does not have to open it, and
    `scripts/check-issue-body-contract.py` fails CI if the two ever drift apart.
 
-   | `type:` label             | Required `##` headings, in this order         |
-   | ------------------------- | --------------------------------------------- |
-   | feature / docs / refactor | Summary, Acceptance Criteria                  |
-   | bug                       | Summary, Steps to Reproduce, Expected, Actual |
-   | spike                     | Summary, Acceptance Criteria, Recommendations |
-   | chore                     | Summary                                       |
-   | epic                      | Summary, Sub-Issues, Acceptance Criteria      |
+   | `type:` label             | Required `##` headings, in this order                       |
+   | ------------------------- | ----------------------------------------------------------- |
+   | feature / docs / refactor | Summary, Acceptance Criteria, Verification                  |
+   | bug                       | Summary, Steps to Reproduce, Expected, Actual, Verification |
+   | spike                     | Summary, Acceptance Criteria, Recommendations, Verification |
+   | chore                     | Summary, Verification                                       |
+   | epic                      | Summary, Sub-Issues, Acceptance Criteria, Verification      |
 
    **Casing is significant.** The audit matches
    `^##[[:space:]]+<heading>\s*$` with `grep -E` and no `-i`, so
@@ -108,6 +108,19 @@ If prerequisites fail, stop with exact remediation command.
    - **Recommendations** (`spike`): the fenced `yaml recommendations` block
      required by [docs/SPIKE_CONTRACT.md](../../../../../docs/SPIKE_CONTRACT.md).
      Phase 2.X scaffolds this automatically.
+   - **Verification** (every type): how a reviewer holding the tree and the
+     command tells pass from fail without asking the author — one bullet per
+     acceptance criterion naming the test file or package to add or extend
+     (or the command for a manual check), the input, and the expected
+     observable output. Name real paths; mark to-be-created files as such.
+     Where a test pins behavior, say what edit makes it go red (a test that
+     cannot fail proves nothing). "Add tests" and "verify it works" are not
+     verification. For `epic`, the epic-level observable once every child
+     has merged; for `chore`, the command whose output proves the chore is
+     done (a `grep` that returns zero hits, a `go vet` that passes); for
+     `bug`, the regression test that reproduces `Actual` today and `Expected`
+     after the fix. Issue-audit warns (`WEAK_VERIFICATION`) when the section
+     names no test, command, or file.
 
 4. For implementation issues:
    - acceptance criteria MUST describe shipped or observable behavior
@@ -186,6 +199,62 @@ Before finalizing any issue, check:
 - If external tool behavior matters, is there an explicit verification guard?
 - For spike issues, does the issue end with `adopt`, `defer`, or `skip`?
 - For epics, are implementation items and spikes clearly separated?
+- Does every acceptance criterion have a matching `## Verification` bullet a
+  reviewer could run? An AC with no way to observe it is a wish, not a
+  criterion — rewrite or drop it.
+- Does the ask preserve one path? Under the no-backwards-compat doctrine
+  (`AGENTS.md` § Agent Operating Rules) an issue must never request a compat
+  shim, a migration fallback, a feature flag that keeps both behaviors, or
+  "support the old format too". Consolidate to the single resolved behavior
+  and say what gets deleted.
+
+#### Security Constraints (design time)
+
+Security is judged on the **proposed design**, not on the current code, and
+it is cheapest here: a hazard caught at creation costs one sentence, the same
+hazard caught at `feature-validate` costs a re-plan, and one caught after
+merge ships. Whenever the design as written touches any of:
+
+- authentication or authorization (who may call this, on whose behalf)
+- secrets, tokens, keys, or credentials (where stored, where logged)
+- a network endpoint, webhook, or inbound payload
+- retries, fan-out, spawning, or anything unbounded
+- file writes or path handling (containment, symlinks, `..`)
+- shell or exec from configuration or issue text
+- model-authored text reaching a mutating tool or a filed issue
+
+then name the hazard and state its mitigation **as an acceptance criterion**
+(a `- [ ]` line), so the pipeline cannot close the issue without it, and
+optionally group the reasoning under a `## Security constraints` section.
+The bar is `standards/security.md`. Issue-audit warns
+(`SECURITY_SURFACE_UNADDRESSED`) when the body names such a surface and
+carries no security-shaped criterion. Hazards the 2026-08-29 groom had to
+append after the fact — every one avoidable at creation: an endpoint whose
+"token" was a guessable topic name anyone could subscribe to; a worker
+calling the platform with one shared credential and a self-asserted account
+id (confused deputy); a 403 retried forever; a shell string executed from
+repo config; an artifact `path` with no containment check; fetched web pages
+turned into issue bodies with no injection boundary.
+
+#### Parent Epic Fit
+
+An issue that lands under the wrong epic — or under none — is invisible to
+the wave planner and to the next groom. Before Phase 3:
+
+1. List the open epics (`nightgauge forge issue list --label type:epic
+--json`) and read each one's `## Acceptance Criteria`.
+2. Choose the parent whose criteria this issue **advances**. Link it in
+   Phase 3.5 through `addSubIssue` — the sub-issue graph is the membership
+   record; "Part of #N" body text is not.
+3. If two epics plausibly fit, pick one and name the other in
+   `## Related work` with one line on why not, so the next groom does not
+   re-litigate it.
+4. If no open epic fits and the work is three or more issues, create the epic
+   first (Phase 2.9 rules) and file the issues under it. A standalone issue
+   is fine when it is genuinely one; a cluster of orphans is not.
+5. Never parent to a closed epic, and never parent an issue in one repo to
+   an epic in a repository that is archived or unreachable — the groom cannot
+   maintain either.
 
 #### Size Prediction from Complexity Model
 
