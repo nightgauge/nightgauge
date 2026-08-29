@@ -677,7 +677,26 @@ issue_references:
   # Slack work wrote no new citations, so this is the derived mark rising past
   # references rather than a sweep retiring them. Recorded to keep the ratchet
   # tight, not claimed as progress.
-  # NEVER raise this number. Lower it as the sweep progresses.
+  # 2026-08-29 (#1129): STOP HAND-JUDGING FALLS. The two entries above call a
+  # fall "ambiguous" and then ratchet it anyway; doing that once broke the next
+  # branch, which measured the identical tree at its own lower ceiling and was
+  # rejected by 13 references it had never touched. Two facts make the manual
+  # judgement unsafe rather than merely imprecise:
+  #
+  #   * the count is a function of the CEILING -- a lower ceiling leaves more
+  #     numbers above it and so measures MORE -- while this baseline is one
+  #     global integer shared by every branch; and
+  #   * a branch's ceiling is derived from FIRST-PARENT history, and merging
+  #     `main` in does not advance it (the merge is the second parent). Since
+  #     AGENTS.md forbids force-push and rebase, that is the only permitted way
+  #     to update a branch, so a long-lived branch always measures low-ceiling.
+  #
+  # The checker now decides instead of asking. It takes the larger of the
+  # branch's and the base ref's marks, and it advises a lowering only for the
+  # part of a fall it can attribute to references genuinely removed -- measuring
+  # both sides at one ceiling. When it prints "Do NOT lower", do not lower.
+  #
+  # NEVER raise this number. Lower it ONLY to the value the checker names.
   tree_baseline: 5761
   allow_paths:
     # Files that DEFINE or TEST the rule must contain example violations.
