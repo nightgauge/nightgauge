@@ -165,6 +165,10 @@
       "schema_path": "autonomous"
     },
     {
+      "section": "notifications",
+      "schema_path": "notifications"
+    },
+    {
       "section": "forges",
       "schema_path": "forges"
     }

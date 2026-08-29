@@ -2664,6 +2664,238 @@ function getPlatformSectionHtml(
   `;
 }
 
+/**
+ * Declarative description of one notification provider's config surface.
+ *
+ * The Notifications section is generated from NOTIFICATION_PROVIDERS rather
+ * than hand-written per provider. That is deliberate: this feature has already
+ * produced two dual-path-drift defects (#1089) where a provider was added to
+ * one copy of a lookup and silently missed by another, so the settings surface
+ * is built so that adding a provider is a data edit, not a wiring exercise.
+ */
+interface NotificationProviderField {
+  /** Leaf key beneath notifications.<provider> — the config path suffix. */
+  key: string;
+  kind: "toggle" | "text";
+  label: string;
+  description: string;
+  placeholder?: string;
+  /** Value shown when the key is absent from every tier. */
+  fallback?: boolean;
+}
+
+interface NotificationProviderSpec {
+  id: string;
+  label: string;
+  /** One line under the provider heading explaining what it posts. */
+  blurb: string;
+  fields: NotificationProviderField[];
+}
+
+/** Every provider the Notifications section renders, in display order. */
+export const NOTIFICATION_PROVIDERS: NotificationProviderSpec[] = [
+  {
+    id: "discord",
+    label: "Discord",
+    blurb: "Posts pipeline status to a Discord channel via an incoming webhook.",
+    fields: [
+      {
+        key: "enabled",
+        kind: "toggle",
+        label: "Enabled",
+        description: "Post pipeline status to Discord",
+        fallback: false,
+      },
+      {
+        key: "webhook_env",
+        kind: "text",
+        label: "Webhook Env Var",
+        description:
+          "Name of the environment variable holding the webhook URL. The URL itself is never stored in config.",
+        placeholder: "DISCORD_WEBHOOK_URL",
+      },
+    ],
+  },
+  {
+    id: "mattermost",
+    label: "Mattermost",
+    blurb: "Posts pipeline status to a Mattermost channel via an incoming webhook.",
+    fields: [
+      {
+        key: "enabled",
+        kind: "toggle",
+        label: "Enabled",
+        description: "Post pipeline status to Mattermost",
+        fallback: false,
+      },
+      {
+        key: "webhook_env",
+        kind: "text",
+        label: "Webhook Env Var",
+        description:
+          "Name of the environment variable holding the webhook URL. The URL itself is never stored in config.",
+        placeholder: "MATTERMOST_WEBHOOK_URL",
+      },
+    ],
+  },
+  {
+    id: "slack",
+    label: "Slack",
+    blurb:
+      "Posts pipeline status to a Slack channel via a bot token, editing the message in place as stages progress.",
+    fields: [
+      {
+        key: "enabled",
+        kind: "toggle",
+        label: "Enabled",
+        description: "Post pipeline status to Slack",
+        fallback: false,
+      },
+      {
+        key: "channel",
+        kind: "text",
+        label: "Channel",
+        description:
+          "Channel id (preferred) or #name the bot posts into. Without this, Slack stays silent even when enabled.",
+        placeholder: "C0123456789",
+      },
+      {
+        key: "bot_token_env",
+        kind: "text",
+        label: "Bot Token Env Var",
+        description:
+          "Name of the environment variable holding the xoxb- bot token, used when no token is stored in the extension.",
+        placeholder: "SLACK_BOT_TOKEN",
+      },
+    ],
+  },
+];
+
+/**
+ * Notifications section — the `notifications.*` config block.
+ *
+ * Before #1096 this block had no GUI at all. The Notifier Settings panel
+ * manages the *credential* half (tokens and webhook URLs, held in VSCode
+ * SecretStorage) but never writes config, so `enabled` and `channel` could only
+ * be set by hand-editing YAML — with nothing in the settings UI to suggest the
+ * feature existed. A user who opened Settings, chose a tier and found no
+ * notifier entry reasonably concluded notifications were not installed.
+ *
+ * The split is honest rather than hidden: this section owns what lives in
+ * config and says so, and links to the Notifier Settings panel for the
+ * secrets, which stay out of every tier file by design.
+ */
+function getNotificationsSectionHtml(
+  config: NightgaugeConfig,
+  disabled: boolean,
+  sources: ConfigSourceMap,
+  showBadges: boolean,
+  options?: SettingsHtmlOptions
+): string {
+  const notifications = (config.notifications ?? {}) as Record<
+    string,
+    Record<string, unknown> | undefined
+  >;
+  const g = (path: string) => getSourceForPath(path, sources);
+
+  const providerBlocks = NOTIFICATION_PROVIDERS.map((provider) => {
+    const current = notifications[provider.id] ?? {};
+
+    const fields = provider.fields
+      .map((field) => {
+        const path = `notifications.${provider.id}.${field.key}`;
+        const raw = current[field.key];
+
+        if (field.kind === "toggle") {
+          return getToggleHtml(
+            path,
+            field.label,
+            field.description,
+            typeof raw === "boolean" ? raw : (field.fallback ?? false),
+            disabled,
+            g(path),
+            showBadges,
+            options
+          );
+        }
+
+        return getTextInputHtml(
+          path,
+          field.label,
+          field.description,
+          typeof raw === "string" ? raw : "",
+          field.placeholder ?? "",
+          disabled,
+          g(path),
+          showBadges,
+          options
+        );
+      })
+      .join("");
+
+    return `
+      <div class="subsection">
+        <h4 class="subsection-title">${escapeHtml(provider.label)}</h4>
+        <p class="setting-description subsection-blurb">${escapeHtml(provider.blurb)}</p>
+        ${fields}
+      </div>`;
+  }).join("");
+
+  return `
+    <div class="section-content">
+      ${providerBlocks}
+      <div class="subsection">
+        <h4 class="subsection-title">Credentials</h4>
+        <p class="setting-description subsection-blurb">
+          Bot tokens and webhook URLs are held in VSCode SecretStorage, never in a
+          config tier file. Set them, and send a test message, from the Notifier
+          Settings panel.
+        </p>
+        <button class="notifications-open-panel-btn" id="notifications-open-panel-btn"${
+          disabled ? " disabled" : ""
+        }>
+          <span class="codicon codicon-bell-dot"></span>
+          Open Notifier Settings
+        </button>
+      </div>
+    </div>
+    <style>
+      .subsection-blurb {
+        margin-bottom: var(--spacing-sm);
+      }
+      .notifications-open-panel-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 4px 10px;
+        background: var(--vscode-button-background);
+        color: var(--vscode-button-foreground);
+        border: none;
+        border-radius: 2px;
+        cursor: pointer;
+        font-size: 12px;
+      }
+      .notifications-open-panel-btn:hover:not(:disabled) {
+        background: var(--vscode-button-hoverBackground);
+      }
+      .notifications-open-panel-btn:disabled {
+        opacity: 0.5;
+        cursor: default;
+      }
+    </style>
+    <script>
+      (function() {
+        const btn = document.getElementById('notifications-open-panel-btn');
+        if (btn) {
+          btn.addEventListener('click', () => {
+            vscode.postMessage({ type: 'action', action: 'open-notifier-settings' });
+          });
+        }
+      })();
+    </script>
+  `;
+}
+
 function getSectionContentHtml(
   sectionId: string,
   config: NightgaugeConfig,
@@ -2707,6 +2939,8 @@ function getSectionContentHtml(
       return getAutonomousSectionHtml(config, disabled, sources, showBadges, options);
     case "human_in_the_loop":
       return getHumanInTheLoopSectionHtml(config, disabled, sources, showBadges, options);
+    case "notifications":
+      return getNotificationsSectionHtml(config, disabled, sources, showBadges, options);
     case "forges":
       return getForgeInstancesSectionHtml(
         options.forgeInstances ?? [],

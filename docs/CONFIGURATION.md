@@ -5813,6 +5813,62 @@ The workspace configuration schema is designed for future features:
 
 ---
 
+## Notifications
+
+The `notifications:` block configures where pipeline status is posted. Each
+provider is independent, and any combination may be enabled at once.
+
+```yaml
+notifications:
+  discord:
+    enabled: true
+    webhook_env: DISCORD_WEBHOOK_URL
+  mattermost:
+    enabled: false
+    webhook_env: MATTERMOST_WEBHOOK_URL
+  slack:
+    enabled: true
+    bot_token_env: SLACK_BOT_TOKEN
+    channel: "C0123456789"
+```
+
+| Key                      | Type    | Default                  | Description                                          |
+| ------------------------ | ------- | ------------------------ | ---------------------------------------------------- |
+| `discord.enabled`        | boolean | `false`                  | Post pipeline status to Discord                      |
+| `discord.webhook_env`    | string  | `DISCORD_WEBHOOK_URL`    | Env var holding the incoming-webhook URL             |
+| `mattermost.enabled`     | boolean | `false`                  | Post pipeline status to Mattermost                   |
+| `mattermost.webhook_env` | string  | `MATTERMOST_WEBHOOK_URL` | Env var holding the incoming-webhook URL             |
+| `slack.enabled`          | boolean | `false`                  | Post pipeline status to Slack                        |
+| `slack.bot_token_env`    | string  | `SLACK_BOT_TOKEN`        | Env var holding the `xoxb-` bot token                |
+| `slack.channel`          | string  | —                        | Channel id (preferred) or `#name` the bot posts into |
+
+### Credentials are never stored here
+
+The block names the **environment variable** that holds a credential; it never
+holds the credential itself. Tokens and webhook URLs live in an env var or in
+VSCode SecretStorage, so a config tier file stays safe to commit and to share
+across a team.
+
+### Two halves, two places
+
+Configuring a notifier means setting both halves, and either one alone is
+silent:
+
+- **This block** — `enabled`, and for Slack `channel`. Edit it in the
+  **Notifications** section of the Nightgauge settings panel, at whichever tier
+  you want it to apply to.
+- **The credential** — set from the **Notifier Settings** panel
+  (`Nightgauge: Notifier Settings`), which stores it in SecretStorage, or by
+  exporting the named environment variable.
+
+Slack enabled with no `channel` set is the most common silent failure: the
+integration reports healthy and posts nothing.
+
+Per-provider behaviour and setup runbooks:
+[Discord Notifications](#discord-notifications),
+[Slack Notifications](#slack-notifications) and
+[docs/SLACK_INTEGRATION.md](SLACK_INTEGRATION.md).
+
 ## Discord Notifications
 
 Send live-updating pipeline status to a Discord channel. One embed message is

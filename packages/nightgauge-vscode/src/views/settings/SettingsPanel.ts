@@ -749,8 +749,17 @@ export class SettingsPanel implements vscode.Disposable {
     // empty string represents "(Use global default)" — delete the leaf rather
     // than persisting "". The resolver would ignore an empty value anyway, so
     // storing "" is pure clutter (Issue #3225, #4030).
+    // notifications.<provider>.<channel|*_env> follows the same rule. An empty
+    // string is not a configured value, and for Slack `channel: ""` is
+    // indistinguishable at runtime from the unset case that makes the notifier
+    // silently post nothing (#1096) — so persisting it records a misleading
+    // "configured" state rather than a real one.
+    const isNotificationsTextLeaf = /^notifications\.[^.]+\.(channel|.*_env)$/.test(path);
+
     if (
-      (path.startsWith("pipeline.stage_adapters.") || path.startsWith("pipeline.stage_models.")) &&
+      (path.startsWith("pipeline.stage_adapters.") ||
+        path.startsWith("pipeline.stage_models.") ||
+        isNotificationsTextLeaf) &&
       (coerced === "" || coerced === undefined)
     ) {
       this.removeConfigValue(config, path);
@@ -1200,6 +1209,14 @@ export class SettingsPanel implements vscode.Disposable {
         break;
       case "edit-team-config": {
         await vscode.commands.executeCommand("nightgauge.editTeamConfig");
+        break;
+      }
+      // The Notifications section owns the config half of a notifier; tokens
+      // and webhook URLs live in SecretStorage and are edited in the Notifier
+      // Settings panel. Routing to that one panel keeps a single editor for
+      // credentials rather than a second copy here (#1096).
+      case "open-notifier-settings": {
+        await vscode.commands.executeCommand("nightgauge.showNotifierSettings");
         break;
       }
       case "workspace-repo-add": {
