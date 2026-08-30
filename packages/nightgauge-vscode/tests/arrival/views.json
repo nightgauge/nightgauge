@@ -3,9 +3,9 @@
     "The view register for the data-arrival tier (#746).",
     "",
     "scripts/check-arrival-coverage.sh enumerates every view from the product",
-    "itself — dashboard tabs from VALID_TABS in DashboardHtml.ts, webview panels",
+    "itself \u2014 dashboard tabs from VALID_TABS in DashboardHtml.ts, webview panels",
     "from the createWebviewPanel() call sites under src/, tree views from",
-    "package.json's contributes.views — and requires each to appear here exactly",
+    "package.json's contributes.views \u2014 and requires each to appear here exactly",
     "once. Adding a view therefore cannot be done silently: the guard fails until",
     "the view is either given an arrival test or explicitly recorded as pending.",
     "",
@@ -13,7 +13,7 @@
     "found broken, and this issue's slice covers all thirteen.",
     "",
     "`arrivalTest` names the file, and `marker` the string that file must contain",
-    "(`arrival:<id>`) — so deleting or renaming the tests for one view fails the",
+    "(`arrival:<id>`) \u2014 so deleting or renaming the tests for one view fails the",
     "guard instead of leaving a registry entry pointing at a file that no longer",
     "covers it."
   ],
@@ -67,7 +67,7 @@
       "transport": "filesystem (.nightgauge/release-watch, improvement-runs), published by the scheduled workflows to the discovery-state branch",
       "arrivalTest": "tests/arrival/dashboardDiscoveryTab.test.ts",
       "failureFidelity": true,
-      "note": "Moved off dashboardExternalTabs.test.ts, which writes hand-authored fixtures to disk. A fixture written to match the reader cannot detect that no producer exists — which is what had actually happened (#753). The named test runs scripts/discovery-run-record.py and the discovery-state publish/sync pair instead. The fixture-based render coverage remains in dashboardExternalTabs.test.ts."
+      "note": "Moved off dashboardExternalTabs.test.ts, which writes hand-authored fixtures to disk. A fixture written to match the reader cannot detect that no producer exists \u2014 which is what had actually happened (#753). The named test runs scripts/discovery-run-record.py and the discovery-state publish/sync pair instead. The fixture-based render coverage remains in dashboardExternalTabs.test.ts."
     },
     {
       "id": "cost",
@@ -111,7 +111,6 @@
       "arrivalTest": "tests/arrival/dashboardExternalTabs.test.ts",
       "failureFidelity": true
     },
-
     {
       "id": "src/views/dashboard/Dashboard.ts",
       "kind": "webview-panel",
@@ -125,127 +124,119 @@
       "kind": "webview-panel",
       "transport": "ConfigBridge + workspace config files",
       "arrivalTest": null,
-      "pending": "#746 slice 2 — non-dashboard webview panels"
+      "pending": "#746 slice 2 \u2014 non-dashboard webview panels"
     },
     {
       "id": "src/views/outputWindow/OutputWindow.ts",
       "kind": "webview-panel",
       "transport": "SlotOutputManager stream events",
       "arrivalTest": null,
-      "pending": "#746 slice 2 — non-dashboard webview panels"
+      "pending": "#746 slice 2 \u2014 non-dashboard webview panels"
     },
     {
       "id": "src/views/brownfield/BrownfieldDashboard.ts",
       "kind": "webview-panel",
       "transport": "BrownfieldDataService (local analysis output)",
       "arrivalTest": null,
-      "pending": "#746 slice 2 — non-dashboard webview panels"
+      "pending": "#746 slice 2 \u2014 non-dashboard webview panels"
     },
     {
       "id": "src/views/approval/ApprovalDialog.ts",
       "kind": "webview-panel",
       "transport": "pipeline approval IPC events",
       "arrivalTest": null,
-      "pending": "#746 slice 2 — non-dashboard webview panels"
+      "pending": "#746 slice 2 \u2014 non-dashboard webview panels"
     },
     {
       "id": "src/views/onboarding/GettingStartedPanel.ts",
       "kind": "webview-panel",
       "transport": "workspace probe (config, binary, auth state)",
       "arrivalTest": null,
-      "pending": "#746 slice 2 — non-dashboard webview panels"
+      "pending": "#746 slice 2 \u2014 non-dashboard webview panels"
     },
     {
       "id": "src/views/doctor/AdapterDoctorPanel.ts",
       "kind": "webview-panel",
       "transport": "doctor --adapters over IPC",
       "arrivalTest": null,
-      "pending": "#746 slice 2 — non-dashboard webview panels"
+      "pending": "#746 slice 2 \u2014 non-dashboard webview panels"
     },
     {
       "id": "src/views/notifier/NotifierSettingsPanel.ts",
       "kind": "webview-panel",
       "transport": "ConfigBridge notifier config",
       "arrivalTest": null,
-      "pending": "#746 slice 2 — non-dashboard webview panels"
+      "pending": "#746 slice 2 \u2014 non-dashboard webview panels"
     },
     {
       "id": "src/views/telemetry/TelemetrySettingsPanel.ts",
       "kind": "webview-panel",
       "transport": "ConfigBridge telemetry config",
       "arrivalTest": null,
-      "pending": "#746 slice 2 — non-dashboard webview panels"
+      "pending": "#746 slice 2 \u2014 non-dashboard webview panels"
     },
     {
       "id": "src/views/summary/PipelineSummary.ts",
       "kind": "webview-panel",
       "transport": "local telemetry (run record)",
       "arrivalTest": null,
-      "pending": "#746 slice 2 — non-dashboard webview panels"
+      "pending": "#746 slice 2 \u2014 non-dashboard webview panels"
     },
     {
       "id": "src/views/recovery/RecoveryDialog.ts",
       "kind": "webview-panel",
       "transport": "recovery registry over IPC",
       "arrivalTest": null,
-      "pending": "#746 slice 2 — non-dashboard webview panels"
+      "pending": "#746 slice 2 \u2014 non-dashboard webview panels"
     },
     {
       "id": "src/views/dashboard/KnowledgeValueDashboard.ts",
       "kind": "webview-panel",
       "transport": "filesystem (.nightgauge/knowledge)",
       "arrivalTest": null,
-      "pending": "#746 slice 2 — non-dashboard webview panels"
+      "pending": "#746 slice 2 \u2014 non-dashboard webview panels"
     },
-
     {
       "id": "nightgauge.pipelineView",
       "kind": "tree-view",
       "transport": "PipelineStateService + IPC events",
       "arrivalTest": null,
-      "pending": "#746 slice 3 — tree views"
+      "pending": "#746 slice 3 \u2014 tree views"
     },
     {
       "id": "nightgauge.workflowView",
       "kind": "tree-view",
       "transport": "workflow journal over IPC",
       "arrivalTest": null,
-      "pending": "#746 slice 3 — tree views"
+      "pending": "#746 slice 3 \u2014 tree views"
     },
     {
       "id": "nightgauge.repositoriesView",
       "kind": "tree-view",
       "transport": "workspace manifest + board counts over IPC",
       "arrivalTest": null,
-      "pending": "#746 slice 3 — tree views"
+      "pending": "#746 slice 3 \u2014 tree views"
     },
     {
       "id": "nightgauge.queryResults",
       "kind": "tree-view",
       "transport": "QueryService over IPC",
       "arrivalTest": null,
-      "pending": "#746 slice 3 — tree views"
+      "pending": "#746 slice 3 \u2014 tree views"
     },
     {
       "id": "nightgauge.knowledgeView",
       "kind": "tree-view",
       "transport": "filesystem (.nightgauge/knowledge)",
       "arrivalTest": null,
-      "pending": "#746 slice 3 — tree views"
-    },
-    {
-      "id": "nightgauge.activeIssueKnowledgeView",
-      "kind": "tree-view",
-      "transport": "filesystem (.nightgauge/knowledge for the active issue)",
-      "arrivalTest": null,
-      "pending": "#746 slice 3 — tree views"
+      "pending": "#746 slice 3 \u2014 tree views"
     },
     {
       "id": "nightgauge.attentionView",
       "kind": "tree-view",
       "transport": "attention sweep over IPC",
       "arrivalTest": null,
-      "pending": "#746 slice 3 — tree views"
+      "pending": "#746 slice 3 \u2014 tree views"
     }
   ]
 }

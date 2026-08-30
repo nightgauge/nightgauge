@@ -60,13 +60,6 @@ export const MANIFEST_CONTRIBUTES: ManifestContributes = {
         visibility: "collapsed",
       },
       {
-        id: "nightgauge.activeIssueKnowledgeView",
-        name: "Active Issue Knowledge",
-        icon: "$(book)",
-        contextualTitle: "Active Issue Knowledge",
-        visibility: "collapsed",
-      },
-      {
         // Action Center — severity-ordered DecisionRequest cards (ADR 015 / #325).
         id: "nightgauge.attentionView",
         name: "Attention",
@@ -648,12 +641,6 @@ export const MANIFEST_CONTRIBUTES: ManifestContributes = {
       // invoke them (#766).
       command: "nightgauge.refreshKnowledgeView",
       title: "Nightgauge: Refresh Knowledge View",
-      icon: "$(refresh)",
-      category: "Nightgauge Knowledge",
-    },
-    {
-      command: "nightgauge.activeKnowledge.refresh",
-      title: "Nightgauge: Refresh Active Issue Knowledge",
       icon: "$(refresh)",
       category: "Nightgauge Knowledge",
     },

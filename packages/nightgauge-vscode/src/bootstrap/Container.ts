@@ -31,7 +31,6 @@ import type { KnowledgeTreeProvider } from "../views/KnowledgeTreeProvider";
 import type { KnowledgeDocumentLinkProvider } from "../views/KnowledgeDocumentLinkProvider";
 import type { RepositoriesTreeProvider, QueryResultsTreeProvider } from "../views";
 import type { SlotOutputManager } from "../views/SlotOutputManager";
-import type { ActiveIssueKnowledgeProvider } from "../providers/ActiveIssueKnowledgeProvider";
 
 /**
  * Registry of services managed by the container.
@@ -66,7 +65,6 @@ interface ServiceRegistry {
   notifier?: NotificationDispatcher;
   knowledgeTreeProvider?: KnowledgeTreeProvider;
   knowledgeDocumentLinkProvider?: KnowledgeDocumentLinkProvider;
-  activeKnowledgeProvider?: ActiveIssueKnowledgeProvider;
   repositoriesTreeProvider?: RepositoriesTreeProvider;
   queryResultsTreeProvider?: QueryResultsTreeProvider;
   slotOutputManager?: SlotOutputManager;
