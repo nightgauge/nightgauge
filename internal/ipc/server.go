@@ -50,6 +50,21 @@ import (
 const errSchedulerNotConfigured = "scheduler not configured — no workspace-root .nightgauge/config.yaml (owner + project.number) and the workspace manifest did not yield one; run `nightgauge workspace-init` or add a root config.yaml"
 
 // Server handles JSON-over-stdio IPC communication with VSCode.
+// pipelineEventEmitter is the ONE method the IPC package needs from the
+// platform analytics service to tell the platform a pipeline event happened:
+// the three telemetry emissions and the orphan reconciler's terminal event.
+//
+// It exists so those emissions have a fake-able seam (#472). Before it, the
+// reconciler's `s.analyticsSvc.EmitPipelineEvent(...)` could be DELETED and the
+// whole package stayed green — every reconcile test pinned the pure collector
+// (what WOULD be emitted), and nothing could observe an actual emission because
+// *platform.AnalyticsService requires a live client.
+//
+// *platform.AnalyticsService satisfies it unchanged.
+type pipelineEventEmitter interface {
+	EmitPipelineEvent(ctx context.Context, event platform.PipelineEvent)
+}
+
 type Server struct {
 	client    *gh.Client
 	writer    io.Writer
@@ -76,12 +91,19 @@ type Server struct {
 	// authSvc is deliberately NOT part of this group: it drives the daemon's
 	// own device-code / GitHub sign-in flow, i.e. it is how a session gets
 	// created, not something a session's arrival should construct.
-	platformClientMu  sync.RWMutex
-	platformClient    *platform.Client
-	licenseSvc        *platform.LicenseService
-	authSvc           *platform.AuthService
-	skillSvc          *platform.SkillService
-	analyticsSvc      *platform.AnalyticsService
+	platformClientMu sync.RWMutex
+	platformClient   *platform.Client
+	licenseSvc       *platform.LicenseService
+	authSvc          *platform.AuthService
+	skillSvc         *platform.SkillService
+	// analyticsSvc is the EMISSION seam only — an interface so a test can count
+	// emissions (#472). It is nil exactly when no platform client is attached;
+	// see setPlatformServicesLocked for why the assignment is guarded.
+	analyticsSvc pipelineEventEmitter
+	// analyticsAPI is the same object under its concrete type, for the rest of
+	// the analytics surface (usage summaries, telemetry sync, run pushes) that
+	// the emission interface deliberately does not cover.
+	analyticsAPI      *platform.AnalyticsService
 	complianceSvc     *platform.ComplianceService
 	auditRetentionSvc *platform.AuditRetentionService
 	teamSvc           *platform.TeamService
@@ -330,7 +352,18 @@ func (s *Server) setPlatformServicesLocked(pc *platform.Client) {
 	s.platformClient = pc
 	s.licenseSvc = platform.NewLicenseService(pc)
 	s.skillSvc = platform.NewSkillService(pc)
-	s.analyticsSvc = platform.NewAnalyticsService(pc)
+	// NIL-INTERFACE HAZARD: a nil *AnalyticsService stored in a
+	// pipelineEventEmitter is a NON-nil interface, so every `analyticsSvc !=
+	// nil` guard (the reconciler's and the three in pipeline_telemetry.go)
+	// would pass and dereference it. Assign only when pc is real.
+	if pc != nil {
+		as := platform.NewAnalyticsService(pc)
+		s.analyticsAPI = as
+		s.analyticsSvc = as
+	} else {
+		s.analyticsAPI = nil
+		s.analyticsSvc = nil
+	}
 	s.complianceSvc = platform.NewComplianceService(pc)
 	s.auditRetentionSvc = platform.NewAuditRetentionService(pc)
 	s.teamSvc = platform.NewTeamService(pc)
@@ -422,7 +455,7 @@ func (s *Server) getSkillSvc() *platform.SkillService {
 func (s *Server) getAnalyticsSvc() *platform.AnalyticsService {
 	s.platformClientMu.RLock()
 	defer s.platformClientMu.RUnlock()
-	return s.analyticsSvc
+	return s.analyticsAPI
 }
 
 func (s *Server) getComplianceSvc() *platform.ComplianceService {

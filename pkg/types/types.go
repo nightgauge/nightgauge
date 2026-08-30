@@ -80,9 +80,19 @@ type Issue struct {
 	Milestone   string   `json:"milestone,omitempty"`
 
 	// Sub-issue relationships
-	ParentIssueID     string        `json:"parentIssueId,omitempty"`
-	ParentIssueNumber int           `json:"parentIssueNumber,omitempty"`
-	SubIssues         []SubIssueRef `json:"subIssues,omitempty"`
+	ParentIssueID string `json:"parentIssueId,omitempty"`
+	// ParentIssueNumber is the parent epic's number, which is only meaningful
+	// together with ParentIssueRepo: issue numbers are per-repository, so a
+	// number alone is not a coordinate (#1181).
+	ParentIssueNumber int `json:"parentIssueNumber,omitempty"`
+	// ParentIssueRepo is the parent epic's OWN "owner/repo", as reported by
+	// GitHub's native sub-issue link. In a multi-repo workspace the parent
+	// usually lives in a different repository from this issue; resolving
+	// ParentIssueNumber against this issue's repo lands on an unrelated issue
+	// (or a pull request) and is the defect #1181 fixes. Mirrors
+	// SubIssueRef.Repo / BlockingRef.Repo, which have always carried it.
+	ParentIssueRepo string        `json:"parentIssueRepo,omitempty"`
+	SubIssues       []SubIssueRef `json:"subIssues,omitempty"`
 
 	// Blocking relationships
 	BlockedBy []BlockingRef `json:"blockedBy,omitempty"`

@@ -69,6 +69,7 @@ const ISSUE_TS_OPTIONAL: Record<string, string> = {
   isEpic: "boolean",
   parentIssueId: "string",
   parentIssueNumber: "number",
+  parentIssueRepo: "string",
   milestone: "string",
 };
 

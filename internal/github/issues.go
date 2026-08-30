@@ -135,6 +135,8 @@ func (s *IssueService) GetIssue(ctx context.Context, owner, repo string, number 
 	if parentNumber := int(q.Repository.Issue.Parent.Number); parentNumber != 0 {
 		issue.ParentIssueID = fmt.Sprintf("%v", q.Repository.Issue.Parent.ID)
 		issue.ParentIssueNumber = parentNumber
+		// The parent's own repository, not this issue's (#1181).
+		issue.ParentIssueRepo = string(q.Repository.Issue.Parent.Repository.NameWithOwner)
 	}
 
 	for _, l := range q.Repository.Issue.Labels.Nodes {
@@ -237,7 +239,7 @@ func (s *IssueService) GetIssuesByNumbers(ctx context.Context, owner, repo strin
   body
   state
   url
-  parent { id number title }
+  parent { id number title repository { nameWithOwner } }
   labels(first: 10) { nodes { name } }
   assignees(first: 5) { nodes { login } }
   subIssues(first: 25) { nodes { id number title state repository { nameWithOwner } } }
@@ -265,9 +267,12 @@ func (s *IssueService) GetIssuesByNumbers(ctx context.Context, owner, repo strin
 		State  string `json:"state"`
 		URL    string `json:"url"`
 		Parent *struct {
-			ID     string `json:"id"`
-			Number int    `json:"number"`
-			Title  string `json:"title"`
+			ID         string `json:"id"`
+			Number     int    `json:"number"`
+			Title      string `json:"title"`
+			Repository struct {
+				NameWithOwner string `json:"nameWithOwner"`
+			} `json:"repository"`
 		} `json:"parent"`
 		Labels struct {
 			Nodes []struct {
@@ -351,6 +356,7 @@ func (s *IssueService) GetIssuesByNumbers(ctx context.Context, owner, repo strin
 		if node.Parent != nil && node.Parent.Number != 0 {
 			issue.ParentIssueID = node.Parent.ID
 			issue.ParentIssueNumber = node.Parent.Number
+			issue.ParentIssueRepo = node.Parent.Repository.NameWithOwner
 		}
 		for _, l := range node.Labels.Nodes {
 			issue.Labels = append(issue.Labels, l.Name)
