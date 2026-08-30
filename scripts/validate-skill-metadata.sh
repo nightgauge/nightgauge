@@ -30,6 +30,9 @@ set -uo pipefail
 CANONICAL_SOURCE="https://github.com/nightgauge/nightgauge"
 ERRORS=0
 WARNINGS=0
+# Files the validator could not read a complete frontmatter block from (#856).
+# Counted separately from ERRORS so a red run says which of the two it was.
+UNREADABLE=0
 
 # Required fields in canonical order
 REQUIRED_FIELDS=(name description license metadata allowed-tools)
@@ -149,10 +152,12 @@ check_skill() {
 
   # Extract frontmatter (between first and second ---)
   local in_frontmatter=false
+  local closed=false
   local frontmatter=""
   while IFS= read -r line; do
     if [[ "$line" == "---" ]]; then
       if $in_frontmatter; then
+        closed=true
         break
       else
         in_frontmatter=true
@@ -167,6 +172,35 @@ check_skill() {
   if [[ -z "$frontmatter" ]]; then
     echo "ERROR: $file — no YAML frontmatter found"
     ((ERRORS++))
+    return
+  fi
+
+  # PREMISE CHECK (#856): the frontmatter block must have CLOSED.
+  #
+  # Every field check below is a statement about a complete frontmatter block.
+  # If the closing `---` never arrived, the buffer is a PREFIX of the real one
+  # and every field that lives past the truncation point reads as absent — a
+  # read that could not be completed, wearing the exact costume of a file that
+  # is wrong. That is what a single unreproducible `missing required field:
+  # metadata.source` looked like on a file that provably had it, was unmodified
+  # since its initial import, and validated clean on five consecutive runs of
+  # the identical tree.
+  #
+  # Which is a real defect either way: a SKILL.md whose frontmatter never closes
+  # is malformed, and a torn read means something wrote the file underneath the
+  # reader. So this fails CLOSED — it is not a retry and not a pass — but under
+  # its own message, because "this file is missing a field" and "I could not
+  # read this file" send whoever reads the log to two different places. Folding
+  # the second into the first is how a gate teaches people to re-run it until
+  # green.
+  if ! $closed; then
+    echo "UNREADABLE: $file — frontmatter block never closed (no second '---')."
+    echo "  The validator could not read a complete frontmatter block, so no"
+    echo "  field check below is meaningful for this file. This is NOT a report"
+    echo "  that a field is missing. Either the file is malformed, or it was"
+    echo "  written underneath this read — check for a concurrent writer"
+    echo "  (a second gate running over the same checkout) before editing it."
+    ((UNREADABLE++))
     return
   fi
 
@@ -277,8 +311,10 @@ check_skill() {
   check_command_parity "$file" "$desc"
 }
 
-# Find all SKILL.md files
-SKILL_FILES=$(find skills -name "SKILL.md" -maxdepth 2 | sort)
+# Find all SKILL.md files. SKILLS_ROOT is overridable so the regression suite
+# can point the validator at fixtures instead of the real tree.
+SKILLS_ROOT="${SKILLS_ROOT:-skills}"
+SKILL_FILES=$(find "$SKILLS_ROOT" -name "SKILL.md" -maxdepth 2 | sort)
 SKILL_COUNT=0
 
 for file in $SKILL_FILES; do
@@ -287,7 +323,14 @@ for file in $SKILL_FILES; do
 done
 
 echo ""
-echo "Validated $SKILL_COUNT SKILL.md files: $ERRORS errors, $WARNINGS warnings"
+echo "Validated $SKILL_COUNT SKILL.md files: $ERRORS errors, $WARNINGS warnings, $UNREADABLE unreadable"
+
+if [[ $UNREADABLE -gt 0 ]]; then
+  # Distinct exit code so a caller can tell "a skill is wrong" from "the
+  # validator could not run over $UNREADABLE file(s)". Both are failures; they
+  # are not the same failure.
+  exit 2
+fi
 
 if [[ $ERRORS -gt 0 ]]; then
   exit 1

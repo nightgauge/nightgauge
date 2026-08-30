@@ -34,22 +34,6 @@ func clipHistoryRunes(s string, n int) string {
 	return string(r[:n])
 }
 
-// HistoryEntry is the legacy execution record format (executions.jsonl).
-// Retained for backward compatibility with ReadRecent.
-type HistoryEntry struct {
-	Timestamp     time.Time     `json:"timestamp"`
-	Repo          string        `json:"repo"`
-	IssueNumber   int           `json:"issueNumber"`
-	Duration      time.Duration `json:"duration"`
-	InputTokens   int           `json:"inputTokens"`
-	OutputTokens  int           `json:"outputTokens"`
-	TotalCostUSD  float64       `json:"totalCostUsd"`
-	Stages        []StageResult `json:"stages"`
-	SkippedStages []string      `json:"skippedStages,omitempty"`
-	Success       bool          `json:"success"`
-	Error         string        `json:"error,omitempty"`
-}
-
 // V2RunRecord matches the TypeScript ExecutionHistoryRunRecordV2 / V3 Zod
 // schemas exactly. Written to daily YYYY-MM-DD.jsonl files that the VSCode
 // dashboard reads.
@@ -315,6 +299,23 @@ type RecoveryAttempt struct {
 type V2ModelSelect struct {
 	Model  string `json:"model"`
 	Source string `json:"source"`
+	// EscalationReason is the RAW EscalationRecord.Reason behind a Source of
+	// "escalation" (#463) — a non-vocabulary sibling, deliberately outside the
+	// closed MODEL_SELECTION_SOURCES set.
+	//
+	// It exists because Source is a COLLAPSE:
+	// modelSelectionSourceForEscalationReason maps every upward reason onto the
+	// single "escalation" member, and nothing else on V2 or V3 carries the
+	// reason. Without this field the record cannot tell a stage that FAILED
+	// from one that produced NO OUTPUT from one that STALLED over budget —
+	// three different stories about the same run, indistinguishable forever.
+	// Keeping the detail here rather than widening the vocabulary is what lets
+	// attribution stay closed, and strictly validated on the TypeScript side,
+	// while the cause survives.
+	//
+	// Empty for every other Source, the model-unavailable downgrade included:
+	// that one has its own dedicated Source member and needs no sibling.
+	EscalationReason string `json:"escalation_reason,omitempty"`
 	// Adapter is the adapter that served this stage (Issue #580) — a
 	// self-contained mirror of V2StageTokens.Adapter (#3224) so a
 	// model_selection block does not require cross-referencing the tokens
@@ -1004,8 +1005,8 @@ func truncateToLocalDate(t time.Time) time.Time {
 }
 
 // parseDailyHistoryDate parses a "YYYY-MM-DD.jsonl" filename's date. Returns
-// false for any name that doesn't match that shape (executions.jsonl,
-// index.json, temp files, etc.) so prune logic never treats an unrelated file
+// false for any name that doesn't match that shape (index.json, temp files,
+// sidecars, etc.) so prune logic never treats an unrelated file
 // as history. Mirrors the filename validation duplicated in ReadRecentV2 and
 // readAllDailyRecords.
 func parseDailyHistoryDate(name string) (time.Time, bool) {
@@ -1150,7 +1151,16 @@ func (hw *HistoryWriter) BuildV2Record(snap *RuntimeState, success bool, errMsg 
 		})
 	}
 
-	for _, sr := range snap.CompletedStages {
+	// EVERY attempt, superseded ones first (#556). CompletedStages now means
+	// "most recent attempt", so it is no longer the run's spend ledger: a stage
+	// the retry engine rewound has its earlier attempt in SupersededStages, and
+	// summing only CompletedStages would erase that attempt's tokens and
+	// dollars from estimated_cost_usd and tokens.per_stage — the
+	// bias-calibration-low defect the accumulate-never-assign rule below
+	// exists to prevent, arriving by a different door. Chronological order
+	// also means a stage's LAST attempt writes the detail fields, so
+	// stages[<name>] describes the attempt that actually stands.
+	for _, sr := range snap.AllStageAttempts() {
 		stageName := string(sr.Stage)
 		stageStarted := sr.StartedAt.Format(time.RFC3339)
 		stageCompleted := sr.StartedAt.Add(sr.Duration).Format(time.RFC3339)
@@ -1194,21 +1204,38 @@ func (hw *HistoryWriter) BuildV2Record(snap *RuntimeState, success bool, errMsg 
 					break
 				}
 			}
+			escalationReason := ""
 			if source == ModelSourceScheduler {
-				for _, esc := range snap.EscalationHistory {
-					if string(esc.Stage) == stageName {
-						source = modelSelectionSourceForEscalationReason(esc.Reason)
-						break
+				// The LAST matching record, not the first (#463). A stage can
+				// now carry more than one — a model-unavailable downgrade and
+				// then an upward escalation, in either order — and the model
+				// the stage actually ran is the one the LAST substitution
+				// chose. First-match was indistinguishable from last-match
+				// while only the downgrade sites wrote here.
+				for i := len(snap.EscalationHistory) - 1; i >= 0; i-- {
+					esc := snap.EscalationHistory[i]
+					if string(esc.Stage) != stageName {
+						continue
 					}
+					source = modelSelectionSourceForEscalationReason(esc.Reason)
+					// Carry the raw reason ONLY where the mapping collapsed it.
+					// The downgrade reason has its own Source member, so
+					// repeating it here would be a second copy two readers
+					// could disagree about.
+					if source == ModelSourceEscalation {
+						escalationReason = esc.Reason
+					}
+					break
 				}
 			}
 			detail.ModelSelection = &V2ModelSelect{
-				Model:       m,
-				Source:      source,
-				Adapter:     stageAdapter,
-				ServedModel: snap.StageServedModels[stageName],
-				Effort:      snap.StageEfforts[stageName],
-				Thinking:    snap.StageThinking[stageName],
+				Model:            m,
+				Source:           source,
+				EscalationReason: escalationReason,
+				Adapter:          stageAdapter,
+				ServedModel:      snap.StageServedModels[stageName],
+				Effort:           snap.StageEfforts[stageName],
+				Thinking:         snap.StageThinking[stageName],
 				// #606 served-envelope attribution, the ServedModel analogues.
 				ServedEffort:   snap.StageServedEfforts[stageName],
 				ServedThinking: snap.StageServedThinking[stageName],
@@ -1691,47 +1718,6 @@ func (hw *HistoryWriter) rebuildIndexEntriesFromJSONL() []V2IndexEntry {
 	return entries
 }
 
-// Write appends a legacy HistoryEntry to executions.jsonl.
-// Retained for backward compatibility; new code should use WriteV2.
-func (hw *HistoryWriter) Write(rs *RuntimeState, success bool, errMsg string) error {
-	if err := os.MkdirAll(hw.dir, 0755); err != nil {
-		return fmt.Errorf("create history dir: %w", err)
-	}
-
-	snap := rs.Snapshot()
-	entry := HistoryEntry{
-		Timestamp:     time.Now(),
-		Repo:          snap.Repo,
-		IssueNumber:   snap.IssueNumber,
-		Duration:      snap.TotalDuration(),
-		InputTokens:   snap.InputTokens,
-		OutputTokens:  snap.OutputTokens,
-		TotalCostUSD:  snap.TotalCostUSD,
-		Stages:        snap.CompletedStages,
-		SkippedStages: snap.SkippedStages,
-		Success:       success,
-		Error:         errMsg,
-	}
-
-	data, err := json.Marshal(entry)
-	if err != nil {
-		return fmt.Errorf("marshal history entry: %w", err)
-	}
-
-	filename := filepath.Join(hw.dir, "executions.jsonl")
-	f, err := os.OpenFile(filename, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		return fmt.Errorf("open history file: %w", err)
-	}
-	defer f.Close()
-
-	if _, err := f.Write(append(data, '\n')); err != nil {
-		return fmt.Errorf("write history entry: %w", err)
-	}
-
-	return nil
-}
-
 // ReadRecentV2 reads the last N V2RunRecords from daily YYYY-MM-DD.jsonl files.
 // It reads up to days most recent daily files (defaults to 7 when days <= 0).
 // Returns records in chronological order (oldest first).
@@ -1757,7 +1743,7 @@ func (hw *HistoryWriter) ReadRecentV2(n int, days int) ([]V2RunRecord, error) {
 		}
 		name := e.Name()
 		if len(name) == len("2006-01-02.jsonl") && strings.HasSuffix(name, ".jsonl") {
-			// Validate it looks like a date file (not executions.jsonl etc.)
+			// Validate it looks like a date file (not index.json, a sidecar, etc.)
 			base := strings.TrimSuffix(name, ".jsonl")
 			if len(base) == 10 && base[4] == '-' && base[7] == '-' {
 				dailyFiles = append(dailyFiles, name)
@@ -1888,35 +1874,6 @@ func dedupeRichestByKey(records []V2RunRecord) []V2RunRecord {
 		out = append(out, rec)
 	}
 	return out
-}
-
-// ReadRecent reads the last N legacy history entries from executions.jsonl.
-func (hw *HistoryWriter) ReadRecent(n int) ([]HistoryEntry, error) {
-	filename := filepath.Join(hw.dir, "executions.jsonl")
-	data, err := os.ReadFile(filename)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("read history: %w", err)
-	}
-
-	var entries []HistoryEntry
-	for _, line := range splitLines(data) {
-		if len(line) == 0 {
-			continue
-		}
-		var entry HistoryEntry
-		if err := json.Unmarshal(line, &entry); err != nil {
-			continue // Skip malformed entries
-		}
-		entries = append(entries, entry)
-	}
-
-	if n > 0 && len(entries) > n {
-		entries = entries[len(entries)-n:]
-	}
-	return entries, nil
 }
 
 func splitLines(data []byte) [][]byte {

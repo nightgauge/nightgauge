@@ -28,6 +28,11 @@ import {
   DevContextSchema,
   ValidateContextSchema,
   PRContextSchema,
+  applyDeliverablePolicy,
+  deliverableKindForStage,
+  stampPolicyMarker,
+  summarizePolicy,
+  type PolicyOutcome,
 } from "@nightgauge/sdk";
 import { type ZodSchema, type ZodError } from "zod";
 import type { Logger } from "../../utils/logger";
@@ -481,6 +486,59 @@ export class ContextAssembler {
           }
           this.logger.error(parseMsg, { stage, issueNumber, contextPath });
           return { error: new Error(parseMsg) };
+        }
+
+        // #1182: ONE policy governs this validator and the Go post-condition
+        // gate. Before this, the same defect was a warning here and a
+        // run-ender there — `files_changed` as an array warned in the
+        // prerequisite read and destroyed a $6.12 implementation at the gate,
+        // and nothing about the WORK differed between the two. The policy
+        // decides by defect: repair what is totally repairable, quarantine an
+        // advisory field whose value was never written, fail what a consumer
+        // genuinely cannot read. Warn-and-continue is gone as a category.
+        const kind = deliverableKindForStage(stage);
+        if (kind) {
+          const policy: PolicyOutcome = applyDeliverablePolicy(kind, parsed);
+          if (!policy.ok) {
+            const detail = summarizePolicy(policy)
+              .map((line) => `  - ${line}`)
+              .join("\n");
+            const msg =
+              `${stage} deliverable does not match the contract and no total repair exists: ` +
+              `${contextPath}\n${detail}`;
+            this.logger.error(msg, { stage, issueNumber, contextPath });
+            return { error: new Error(msg) };
+          }
+          if (policy.changed) {
+            stampPolicyMarker(policy, new Date());
+            parsed = policy.doc;
+            // Record the repair where a human and the learning corpus can see
+            // it. A repair that is not written back is a repair the next stage
+            // does not get, and a bad emitter nobody ever notices (#1176).
+            try {
+              fs.writeFileSync(contextPath, `${JSON.stringify(policy.doc, null, 2)}\n`, "utf-8");
+            } catch (writeErr) {
+              this.logger.warn("Deliverable policy: could not write the repair back", {
+                stage,
+                issueNumber,
+                contextPath,
+                error: writeErr instanceof Error ? writeErr.message : String(writeErr),
+              });
+            }
+            this.logger.warn(
+              "Deliverable policy applied — the stage emitted a non-conforming shape",
+              {
+                stage,
+                issueNumber,
+                contextPath,
+                verdict: policy.verdict,
+                untrustworthy: policy.untrustworthy,
+                notes: `\n${summarizePolicy(policy)
+                  .map((line) => `  - ${line}`)
+                  .join("\n")}`,
+              }
+            );
+          }
         }
 
         // #1011: the orchestrator, not the model, writes planning.ac_reconcile.

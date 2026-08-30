@@ -10,11 +10,13 @@
 // retro emits `merge-blocked` instead.
 //
 // The strings here are also the inputs the AutoRetroService `merge-blocked`
-// extractor matches — see AutoRetroService.test.ts. Keep the two in sync.
+// extractor matches. The final describe block pins that cross-module contract
+// against the REAL classifier rather than a copy of its regex (#498).
 
 import { describe, expect, it } from "vitest";
 
 import { describeMergeBlocker } from "../../src/services/HeadlessOrchestrator";
+import { AutoRetroService } from "../../src/services/AutoRetroService";
 
 describe("describeMergeBlocker", () => {
   it("names the failing check(s) and the merge state for an UNSTABLE PR", () => {
@@ -55,13 +57,71 @@ describe("describeMergeBlocker", () => {
     expect(blocker).toContain("mergeable=UNKNOWN");
   });
 
-  it("produces a line the AutoRetroService merge-blocked extractor matches", () => {
-    const blocker = describeMergeBlocker("MERGEABLE", "UNSTABLE", [
-      { name: "Sync E2E (Docker)", conclusion: "FAILURE" },
-    ]);
-    // Mirror of the extractor regex in AutoRetroService.ts.
-    expect(blocker).toMatch(
-      /blocked by (?:failing check|required review|review|merge conflict|non-mergeable state)/i
-    );
+  // #498 — this block used to assert the rendered line against a LOCAL COPY of
+  // the AutoRetroService extractor regex, so drift on either side of the
+  // contract left it green. It now feeds the shipped renderer's output to the
+  // shipped classifier: a change to describeMergeBlocker's wording OR to the
+  // extractor's pattern breaks it.
+  describe("renders lines the shipped AutoRetroService classifier reads as merge-blocked", () => {
+    const cases: Array<{
+      label: string;
+      mergeable: string;
+      mergeState: string;
+      checks: Array<{ name: string; conclusion: string }>;
+    }> = [
+      {
+        label: "failing check / UNSTABLE",
+        mergeable: "MERGEABLE",
+        mergeState: "UNSTABLE",
+        checks: [{ name: "Sync E2E (Docker)", conclusion: "FAILURE" }],
+      },
+      {
+        label: "merge conflict / DIRTY",
+        mergeable: "CONFLICTING",
+        mergeState: "DIRTY",
+        checks: [],
+      },
+      { label: "branch behind / BEHIND", mergeable: "MERGEABLE", mergeState: "BEHIND", checks: [] },
+      {
+        label: "required review / BLOCKED",
+        mergeable: "MERGEABLE",
+        mergeState: "BLOCKED",
+        checks: [],
+      },
+      {
+        label: "generic non-mergeable state",
+        mergeable: "UNKNOWN",
+        mergeState: "UNKNOWN",
+        checks: [],
+      },
+    ];
+
+    for (const { label, mergeable, mergeState, checks } of cases) {
+      it(`classifies ${label} as merge-blocked, not skill-no-op`, () => {
+        const blocker = describeMergeBlocker(mergeable, mergeState, checks);
+        const findings = AutoRetroService.classifyFailure(
+          {
+            // The shape the orchestrator actually emits: the generic
+            // "not merged" alarm with the blocker reason appended.
+            text: `pr-merge reported success but PR #73 is not merged (state: OPEN). ${blocker}`,
+            sourcesAnalyzed: ["terminal_reason"],
+          },
+          "pr-merge"
+        );
+        expect(findings[0].category).toBe("merge-blocked");
+      });
+    }
+
+    it("carries the failing check name through into the retro evidence", () => {
+      const blocker = describeMergeBlocker("MERGEABLE", "UNSTABLE", [
+        { name: "Sync E2E (Docker)", conclusion: "FAILURE" },
+      ]);
+      const findings = AutoRetroService.classifyFailure(
+        { text: blocker, sourcesAnalyzed: ["terminal_reason"] },
+        "pr-merge"
+      );
+      expect(findings[0].category).toBe("merge-blocked");
+      expect(findings[0].evidence.join(" ")).toContain("Sync E2E (Docker)");
+    });
   });
 });

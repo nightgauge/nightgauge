@@ -360,13 +360,21 @@ export function registerAbortPipelineCommand(
 
       const allPlanFiles = planFileArrays.flat();
 
-      // Run clearPipeline and file deletions concurrently
-      // clearPipeline handles state.json; file deletion skips state.json — no conflict
+      // Run clearPipeline and file deletions concurrently.
+      //
+      // `contextFiles` is EVERY *.json in .nightgauge/pipeline/, not just the
+      // per-issue context files, so this filter is load-bearing: it is what
+      // keeps the durable `run-state.json`, `queue-state.json` and
+      // `batch-state.json` from being deleted on abort. Until #471 the suffix
+      // it tested was two characters shorter, so it protected those three only
+      // as a side effect of also naming a phantom file nothing writes.
+      // Narrowing it to `-state.json` is behaviourally identical for every file
+      // that can exist, and it now says what it actually protects.
       await Promise.all([
         pipelineStateService?.clearPipeline(),
-        // Delete context files in parallel (skip state.json)
+        // Delete context files in parallel (never the durable *-state.json files)
         ...contextFiles
-          .filter((f) => !f.fsPath.endsWith("state.json"))
+          .filter((f) => !f.fsPath.endsWith("-state.json"))
           .map((f) => vscode.workspace.fs.delete(f).then(undefined, () => {})),
         // Delete plan files in parallel
         ...allPlanFiles.map((f) => vscode.workspace.fs.delete(f).then(undefined, () => {})),

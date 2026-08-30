@@ -149,14 +149,12 @@ func hasReachedPRCreate(runtime *state.RuntimeState) bool {
 	if runtime == nil {
 		return false
 	}
-	// Snapshot() is the mutex-guarded reader for CompletedStages; the slice is
-	// appended to from the stage loop and read by the IPC/telemetry paths.
-	for _, sr := range runtime.Snapshot().CompletedStages {
-		if sr.Stage == state.StagePRCreate {
-			return true
-		}
-	}
-	return false
+	// EVER completed, not "completed and not since re-dispatched" (#556):
+	// opening a PR is an irreversible side effect, so the claim must survive a
+	// backtrack that puts pr-create back in flight. HasCompletedStage is the
+	// mutex-guarded reader that spans both the standing and the superseded
+	// attempts.
+	return runtime.HasCompletedStage(state.StagePRCreate)
 }
 
 // reconcileIssueResolved reports whether the issue's work has already landed on

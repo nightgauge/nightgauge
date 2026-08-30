@@ -28,7 +28,8 @@ is opened in a subdirectory.
 ```
 {git_root}/.nightgauge/
 ├── pipeline/                   # Pipeline handoff files (transient)
-│   ├── state.json             # Unified pipeline state (PipelineStateService)
+│   ├── run-state.json         # Durable run lifecycle state (Go internal/runstate)
+│   ├── runtime-{N}-{runId}.json # Per-run runtime snapshot (issue N, run id)
 │   ├── issue-{N}.json         # Output of /issue-pickup
 │   ├── planning-{N}.json      # Output of /feature-planning
 │   ├── dev-{N}.json           # Output of /feature-dev
@@ -1098,17 +1099,29 @@ Per-entry fields (`CreationManifestEntrySchema`):
    artifacts are cleaned up by `pr-merge` along with other pipeline
    transients.
 
-### state.json
+### Live pipeline state (in memory)
 
-**Created by**: `PipelineStateService` (VSCode extension) **Read by**:
-Dashboard, TreeProvider, OutputWindow
+**Owned by**: `PipelineStateService` (VSCode extension), in memory
+(`_lastState`) **Fed by**: the Go binary over IPC — `pipeline.stateChanged`
+notifications and `applyRuntimeSnapshot` **Read by**: Dashboard, TreeProvider,
+OutputWindow via the `onStateChanged` event
 
-This file is the **authoritative state** for the current pipeline run, owned by
-the VSCode extension's `PipelineStateService`. Unlike other context files which
-are stage-specific handoffs, this file tracks the entire pipeline's progress and
-token usage.
+Live pipeline state is **not a file**. It is an in-memory object held by the
+extension's `PipelineStateService`, populated from the Go binary over IPC and
+republished to the UI through `onStateChanged`. Nothing reads it back from disk,
+and no unified pipeline state file is written under `.nightgauge/pipeline/`.
 
-**Schema Version**: 1.0 (version 1.1 adds `retry_count` to stage objects)
+Durability is a separate concern with its own artifacts:
+
+| Artifact                                        | Written by                | Holds                                       |
+| ----------------------------------------------- | ------------------------- | ------------------------------------------- |
+| `.nightgauge/pipeline/run-state.json`           | Go `internal/runstate`    | Canonical run lifecycle state               |
+| `.nightgauge/pipeline/runtime-{N}-{runId}.json` | Go runtime snapshot write | Per-run snapshot for issue `N`, run `runId` |
+| `.nightgauge/history/*.jsonl`                   | Go history writer         | Append-only per-run records for retro/audit |
+
+See [PIPELINE_STATE_SCHEMA.md](PIPELINE_STATE_SCHEMA.md) for the durable
+schemas. The shape below documents the **in-memory** object the UI consumes; it
+has no on-disk representation.
 
 ```json
 {
@@ -1209,13 +1222,13 @@ token usage.
 
 **Key Differences from Stage Handoff Files:**
 
-| Aspect        | state.json                   | Stage Handoff Files (issue-N.json, etc.) |
-| ------------- | ---------------------------- | ---------------------------------------- |
-| **Owner**     | PipelineStateService         | Individual pipeline skills               |
-| **Purpose**   | Track overall progress/usage | Pass context between stages              |
-| **Lifecycle** | Entire pipeline run          | Created by one stage, read by next       |
-| **Updates**   | Continuously during run      | Once when stage completes                |
-| **Cleanup**   | Cleared after PR merge       | Deleted by pr-merge skill                |
+| Aspect        | Live pipeline state              | Stage Handoff Files (issue-N.json, etc.) |
+| ------------- | -------------------------------- | ---------------------------------------- |
+| **Owner**     | PipelineStateService (in memory) | Individual pipeline skills               |
+| **Purpose**   | Track overall progress/usage     | Pass context between stages              |
+| **Lifecycle** | Entire pipeline run              | Created by one stage, read by next       |
+| **Updates**   | Continuously, over IPC from Go   | Once when stage completes                |
+| **Cleanup**   | Discarded with the process       | Deleted by pr-merge skill                |
 
 ### Stage Transition Guards
 
@@ -1383,52 +1396,18 @@ rm -f .nightgauge/pipeline/dev-batch-{E}.json
 
 ## Pipeline State Management
 
-The pipeline uses **unified state management** via `state.json` to track when
-stages are running, complete, or failed. This enables the VS Code extension to
-show real-time status in the pipeline sidebar.
+Stage progress is reported, not filed. The Go binary owns run execution and
+emits `pipeline.stateChanged` notifications over IPC; the VS Code extension's
+`PipelineStateService` holds the resulting state in memory and republishes it to
+the sidebar, dashboard and output window through `onStateChanged`. Skills do not
+write a pipeline state file, and the extension does not watch one.
 
 ### Purpose
 
-When a user runs a pipeline skill, the skill directly updates `state.json` at
-the start and completion of each stage. The VS Code extension's
-`PipelineStateService` watches this file to update the UI in real-time.
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                     PIPELINE STATE LIFECYCLE                                 │
-├─────────────────────────────────────────────────────────────────────────────┤
-│                                                                              │
-│  User runs /feature-dev                                                      │
-│       │                                                                      │
-│       ▼                                                                      │
-│  ┌──────────────────────────┐                                               │
-│  │ update-pipeline-state.sh │──▶ Updates state.json                │
-│  │ "42" "feature-dev"       │    status: "running"                          │
-│  │ "running"                │    current_stage: "feature-dev"               │
-│  └──────────────────────────┘                                               │
-│       │                                                                      │
-│       │  VS Code detects file change                                         │
-│       │  Pipeline sidebar shows "running" state (spinning icon)              │
-│       │                                                                      │
-│       ▼                                                                      │
-│  ┌──────────────────────────┐                                               │
-│  │ Skill executes...        │                                               │
-│  │ (implementation work)    │                                               │
-│  └──────────────────────────┘                                               │
-│       │                                                                      │
-│       ▼                                                                      │
-│  ┌──────────────────────────┐                                               │
-│  │ update-pipeline-state.sh │──▶ Updates state.json                │
-│  │ "42" "feature-dev"       │    stages.feature-dev.status: "complete"      │
-│  │ "complete"               │    stages.feature-dev.completed_at: "..."     │
-│  └──────────────────────────┘                                               │
-│       │                                                                      │
-│       │  VS Code detects file change                                         │
-│       │  Pipeline sidebar shows "complete" state (checkmark)                 │
-│       ▼                                                                      │
-│                                                                              │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
+The board — not a local file — is the durable, human-visible signal that a stage
+has started or finished. Skills move the issue's board status with the
+`nightgauge project move-status` verb; the binary reports the run's own progress
+to the extension over IPC as it goes.
 
 ### Valid Stage Names
 
@@ -1453,8 +1432,8 @@ the start and completion of each stage. The VS Code extension's
 
 ### Go Binary Command
 
-Skills use the `nightgauge project move-status` Go binary command to signal
-stage status:
+Skills use the `nightgauge project move-status` Go binary command to move the
+issue's board status as the pipeline advances:
 
 ```bash
 # Usage: nightgauge project move-status <issue-number> <board-status>
@@ -1479,28 +1458,26 @@ fi
 
 **Key features:**
 
-- Atomic writes using temp file + rename
-- Creates `state.json` if it doesn't exist
-- Validates stage names and status values
-- Increments `retry_count` on each `running` transition
+- Updates the project board over the forge API — it writes no local state file
+- Validates the issue number and the board status value
+- Idempotent: moving to a status the item already has is a no-op
 - Cross-platform (Go binary, not shell-dependent)
 
 ### VS Code Extension Integration
 
-The `PipelineStateService` in the VS Code extension watches `state.json`:
+`PipelineStateService` is fed by the Go binary over IPC, not by a file watcher:
 
-1. **FileSystemWatcher** monitors `.nightgauge/pipeline/state.json`
-2. **onStateChanged** event fires when the file is modified
-3. **TreeProvider** updates stage status based on `stages[stage].status`
+1. The binary emits `pipeline.stateChanged` (and runtime snapshots applied via
+   `applyRuntimeSnapshot`) as a run progresses
+2. `PipelineStateService` updates its in-memory `_lastState` and fires
+   `onStateChanged`
+3. **TreeProvider** updates stage status from the published state
 4. **Dashboard** shows real-time progress and token usage
 5. **OutputWindow** displays current stage activity
 
-### Deprecated: Running Files
-
-**Note**: The previous `running-{stage}-{N}.json` file pattern is deprecated as
-of Issue #89. The legacy scripts `signal-stage-start.sh` and
-`signal-stage-complete.sh` now delegate to `update-pipeline-state.sh` for
-backwards compatibility, but should not be used in new code
+Durable per-run records — `run-state.json`, `runtime-{N}-{runId}.json` and the
+history JSONLs — are written by the Go side and are what post-hoc tooling
+(retro, audit, health) reads. They are not the UI's live feed.
 
 ## Skill Input/Output Contracts
 
@@ -1626,6 +1603,114 @@ which avoids file write operations while maintaining full backward
 compatibility.
 
 @see Issue #418 - Schema migration for pipeline routing
+
+## The Deliverable-Schema Policy (#1182, #1176, #1177)
+
+A stage deliverable that does not match its schema used to have two possible
+fates and no way to predict which. The TypeScript context-file validator logged
+`(non-fatal, continuing)` and shipped the run; the Go post-condition gate failed
+the stage and discarded the work. Across one ten-run session that produced
+**eight mismatches in five fields across three stages** — seven warnings and one
+`$6.12` loss — and **the difference was not severity**. It was which validator
+happened to look at that particular field. `files_changed` is a field the gate
+inspects; `gate_metrics.result` is not. Nothing about the _work_ differed.
+
+One closed rule table now decides, and both validation points consult it:
+
+| Validation point       | Where                                                                                                                                                           | Runs                                         |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------- |
+| In-stage self-check    | `nightgauge gate check-deliverable` (`internal/deliverable/policy.go`)                                                                                          | Before the stage exits                       |
+| Context-file validator | `ContextAssembler.validateStageContextOutput`, and the prerequisite read in `HeadlessOrchestrator` (`packages/nightgauge-sdk/src/context/deliverablePolicy.ts`) | After the stage, and before a consumer reads |
+| Post-condition gate    | `FeatureDevGate` / `FeatureValidateGate` (`internal/deliverable/policy.go`)                                                                                     | After the stage                              |
+
+The Go and TypeScript implementations are driven by one shared conformance
+corpus, `schemas/deliverable-policy-corpus-v1.json`, read by both suites. Two
+implementations of one policy drift in silence — that file is what turns a drift
+into a failing suite instead of a failing run.
+
+### Three dispositions
+
+- **`repaired`** — every value the schema wants is already in the file; only the
+  shape or the vocabulary is wrong, and the mapping is a hand-written entry in
+  the table. The value is rewritten, the deliverable is written back, and the
+  repair is recorded. No rule infers, partially fills, or asks a model; a rule
+  that cannot prove its repair is TOTAL returns `fatal` instead.
+- **`quarantined`** — a value is genuinely absent in a field no consumer's
+  control flow reads. The offending entry is **removed** rather than forwarded
+  malformed, and the field is named in `_deliverable_policy.untrustworthy`.
+  Tolerating a mismatch and silently propagating one are different things.
+- **`fatal`** — a value a consumer needs is absent, or present in a form no
+  closed rule can map without guessing. Both validation points fail the stage.
+
+### The rule table
+
+| Rule                                                                                   | Disposition | Why                                                                                                                      |
+| -------------------------------------------------------------------------------------- | ----------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `any.document.not_an_object`                                                           | fatal       | Nothing to read.                                                                                                         |
+| `any.schema_version.stamped`                                                           | repaired    | The version is asserted from the binary's registry, not read (#1177).                                                    |
+| `dev.files_changed.from_sibling_manifest`                                              | repaired    | The array and the union of `files_created`/`files_modified`/`files_deleted` name the **same set**; the rebuild is total. |
+| `dev.files_changed.no_sibling_manifest`                                                | fatal       | The created/modified split was never written.                                                                            |
+| `dev.files_changed.sibling_manifest_incomplete`                                        | fatal       | The sets differ, so some path's classification is unknown — a partial fill is inference.                                 |
+| `dev.files_changed.non_string_entries`                                                 | fatal       | No rule maps it.                                                                                                         |
+| `any.quality_checks.vocabulary`                                                        | repaired    | Closed synonym table (`not run`, `N/A`, `pass`, …).                                                                      |
+| `any.quality_checks.unknown_vocabulary`                                                | quarantined | An unrecognised verdict is dropped, never reported as a verdict it does not mean.                                        |
+| `validate.skipped_phases.entry_not_an_object`                                          | quarantined | A bare string names the phase and omits the reason — and the reason is the field's whole point.                          |
+| `validate.skipped_phases.incomplete_entry`                                             | quarantined | A skip with no stated reason is not evidence of anything.                                                                |
+| `validate.gate_metrics.missing_gate_name`                                              | quarantined | The record is tallied **by gate**; a nameless row can neither be counted nor excluded.                                   |
+| `validate.gate_metrics.result_vocabulary`                                              | repaired    | Closed synonym table over `{pass, catch, fail}`.                                                                         |
+| `validate.gate_metrics.unknown_result` / `result_not_a_string` / `entry_not_an_object` | quarantined | Unattributable telemetry, dropped.                                                                                       |
+
+The list is **closed**. A new rule is a deliberate addition to
+`internal/deliverable/policy.go`, its TypeScript mirror, and the shared corpus,
+in one change — the corpus's `policy_version` gate makes a one-sided edit fail.
+
+Two of the #1182 rows were not bad emissions at all, but **schema drift**, and
+were fixed at the source rather than papered over by a rule:
+
+- `gate_metrics[].result` accepted `{pass, catch}` in the deliverable while the
+  gate-metrics record it feeds accepted `{pass, catch, fail}`, so a legitimate
+  adversarial-judge `"fail"` read as an invalid option. The two lists are now
+  one list.
+- Three of the four `quality_checks` verdicts omitted `not_run` while
+  `dead_code_scan` accepted it — and the include that authors the block defaults
+  `dead_code_scan` to `not_run`. All four now share one vocabulary.
+
+### The record
+
+When the policy changes anything, it stamps the deliverable:
+
+```json
+"_deliverable_policy": {
+  "policy_version": "1",
+  "applied_at": "2026-08-29T12:00:00Z",
+  "repairs": [{ "field": "files_changed", "rule": "dev.files_changed.from_sibling_manifest", "detail": "…" }],
+  "quarantined": [{ "field": "gate_metrics.0", "rule": "validate.gate_metrics.missing_gate_name", "detail": "…" }],
+  "untrustworthy": ["gate_metrics"]
+}
+```
+
+A healthy deliverable never grows this key, so the marker's presence is itself
+the signal. The same notes ride the `GateResult` evidence into the run record —
+a repair that passes silently is a repair nobody ever fixes.
+
+### Catching it before the spend (#1177)
+
+The dev deliverable's shape was prescriptive text: an exact `jq -n` template in
+`skills/nightgauge-feature-dev/_includes/context-and-epilogue.md`, followed by
+`jq . "$FILE"` — which proves the file is well-formed JSON, a much weaker claim
+than "matches the contract". Nothing verified the stage had used the template at
+all. #1177's run wrote a flat `files_changed` array against `schema_version:
+"1.5"`, three contracts old, and the emitted object contained `"committed":
+False` and `"commit_sha": None` — Python literals no `jq` invocation can produce.
+The model hand-wrote the deliverable from a remembered schema and the only
+detector was the gate, `$6.12` later.
+
+Both stage includes now run `nightgauge gate check-deliverable --stage <kind>
+--issue <N>` before exiting. It applies the same rule table, repairs in place,
+stamps `schema_version` from the binary's registry, and exits 1 while the stage
+still has the context to correct itself. A Go test asserts the include still
+calls it, and another asserts the include's `schema_version` literal matches
+`CanonicalSchemaVersion` — so the two statements of that one fact cannot drift.
 
 ## Model Selection Decision Flow
 

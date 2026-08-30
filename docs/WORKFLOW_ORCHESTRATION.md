@@ -235,13 +235,18 @@ resolved orchestration config it:
    totals.
 5. **Writes a durable append-only journal** —
    `.nightgauge/pipeline/workflow-{runId}.jsonl`, one `JournalRecord`
-   (`{ event, heartbeatMs }`) per emission, via a `JournalingSink` that wraps the
+   (`{ event }`) per emission, via a `JournalingSink` that wraps the
    downstream sink. `resume(runId, spec, sink)` replays the journal
    (`replayJournal`), re-emits the historical tree so a fresh consumer sees the
    whole run, then re-dispatches **only** the nodes that never reached a terminal
-   state. Completed agents replay their `outputRef` instead of re-running. A
-   node-level liveness heartbeat (`isRunLive`) lets stale-slot recovery
-   distinguish a wedged run from one still making progress.
+   state. Completed agents replay their `outputRef` instead of re-running.
+
+   **The journal is a replay log, not a liveness feed.** It carried a
+   `heartbeatMs` stamp and an `isRunLive` reader until #475; the reader had zero
+   callers, and the "stale-slot recovery" consumer it named was deleted by #427
+   and never existed on the SDK side. Run liveness is the scheduler's question,
+   answered from the runtime registry (ADR 017) — not from this file. Anything
+   that needs to know whether a run is wedged asks there.
 
 **`outputRef` is untrusted on resume.** A replayed handle is treated as **opaque**
 — never `eval`'d, never used as a filesystem path. `sanitizeOutputRef` rejects

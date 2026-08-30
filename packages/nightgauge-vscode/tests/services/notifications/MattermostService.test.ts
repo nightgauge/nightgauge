@@ -84,7 +84,7 @@ function makePipelineStateService() {
     }),
     onRunFinalized: vi.fn(() => ({ dispose: vi.fn() })),
     getState: vi.fn().mockResolvedValue(null),
-    getStatePath: vi.fn(() => "/repos/my-repo/.nightgauge/pipeline/state.json"),
+    getRepoRoot: vi.fn(() => "/repos/my-repo"),
   };
 }
 

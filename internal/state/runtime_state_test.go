@@ -242,17 +242,25 @@ func TestStageTokenCountHandoffIsConsumedOnce(t *testing.T) {
 	}
 
 	// A new occurrence for the same stage must not inherit the old handoff.
+	//
+	// Addressed by SEARCH, not by index: since #556 a second occurrence
+	// SUPERSEDES the first rather than sitting after it, so CompletedStages[1]
+	// is no longer the second feature-dev attempt — it is whatever stage ran
+	// next. Positional addressing here would pin the old shape, not the
+	// one-shot-consume behaviour this test is about.
 	rs.BeginStage(StageFeatureDev)
 	rs.CompleteStageWithCost(0, 1, 2, 0, 0.001)
-	if got := rs.CompletedStages[1].CacheCreation; got != 0 {
-		t.Errorf("second occurrence CacheCreation=%d, want 0 after one-shot consume", got)
+	second := standingAttempt(t, rs, StageFeatureDev)
+	if second.CacheCreation != 0 {
+		t.Errorf("second occurrence CacheCreation=%d, want 0 after one-shot consume", second.CacheCreation)
 	}
 
 	// Callers that already have only a combined total can pass it directly;
 	// the variadic tail keeps legacy scheduler call sites source-compatible.
 	rs.BeginStage(StageFeaturePlanning)
 	rs.CompleteStageWithCost(0, 3, 4, 0, 0.002, 500)
-	if got := rs.CompletedStages[2].CacheCreation; got != 500 {
+	planning := standingAttempt(t, rs, StageFeaturePlanning)
+	if got := planning.CacheCreation; got != 500 {
 		t.Errorf("direct CompleteStageWithCost CacheCreation=%d, want 500", got)
 	}
 }
@@ -277,21 +285,57 @@ func TestCompleteStageIdempotentPerOccurrence(t *testing.T) {
 	}
 }
 
+// standingAttempt returns the single CompletedStages entry for a stage — the
+// attempt that currently stands, under the #556 contract. Fails the test if
+// there is not exactly one, since "exactly one" IS the contract.
+func standingAttempt(t *testing.T, rs *RuntimeState, stage PipelineStage) StageResult {
+	t.Helper()
+	var found []StageResult
+	for _, sr := range rs.CompletedStages {
+		if sr.Stage == stage {
+			found = append(found, sr)
+		}
+	}
+	if len(found) != 1 {
+		t.Fatalf("CompletedStages holds %d entries for %s, want exactly 1: %+v",
+			len(found), stage, rs.CompletedStages)
+	}
+	return found[0]
+}
+
 // A legitimate retry re-runs BeginStage (advancing StageStart), so its
-// completion is a distinct occurrence and still appends.
-func TestCompleteStageRetryStillAppends(t *testing.T) {
+// completion is a distinct occurrence and is recorded as one — but since #556
+// it SUPERSEDES the earlier attempt rather than appending beside it.
+// CompletedStages means "stages whose most recent attempt completed", so it
+// holds one entry for the stage; the displaced attempt moves to
+// SupersededStages, where the spend readers still find it. Both halves are
+// asserted, because dropping the displaced attempt would satisfy the first.
+func TestCompleteStageRetrySupersedesRatherThanAppends(t *testing.T) {
 	rs := NewRuntimeState("nightgauge/nightgauge", 244, "item-1", testRunID())
 
 	rs.BeginStage(StageIssuePickup)
 	rs.CompleteStage(0, tokens.TokenCounts{Input: 100, Output: 50}, "", "")
+	first := rs.StageStart
 	// A real retry: BeginStage stamps a new StageStart. Sleep guarantees the
 	// timestamp advances so the occurrence is distinguishable.
 	time.Sleep(time.Millisecond)
 	rs.BeginStage(StageIssuePickup)
 	rs.CompleteStage(0, tokens.TokenCounts{Input: 100, Output: 50}, "", "")
+	second := rs.StageStart
 
-	if len(rs.CompletedStages) != 2 {
-		t.Fatalf("CompletedStages = %d, want 2 (a genuine retry must append)", len(rs.CompletedStages))
+	standing := standingAttempt(t, rs, StageIssuePickup)
+	if !standing.StartedAt.Equal(second) {
+		t.Errorf("standing entry started at %v, want the retry's %v", standing.StartedAt, second)
+	}
+	if len(rs.SupersededStages) != 1 || !rs.SupersededStages[0].StartedAt.Equal(first) {
+		t.Fatalf("the first attempt was not moved to SupersededStages (%+v) — its spend is "+
+			"gone from the per-attempt ledger the history record sums", rs.SupersededStages)
+	}
+	if got := len(rs.AllStageAttempts()); got != 2 {
+		t.Errorf("AllStageAttempts() = %d, want 2 (a genuine retry is still two attempts)", got)
+	}
+	if rs.InputTokens != 200 || rs.OutputTokens != 100 {
+		t.Errorf("run totals = %d in / %d out, want 200/100", rs.InputTokens, rs.OutputTokens)
 	}
 }
 
@@ -927,5 +971,148 @@ func TestAdoptOwnership_TakesAGoneOwnersRunAndLeavesALiveOnesAlone(t *testing.T)
 	}
 	if live.OwnedByThisProcess() {
 		t.Error("OwnedByThisProcess is true for a run a different live process owns")
+	}
+}
+
+// ── CompletedStages means "most recent attempt" (#556) ────────────────────
+
+// The contract in one arm: beginning a stage that is already booked complete
+// un-books it, and does not disturb any other stage.
+//
+// This is the state-layer half of the extension symptom. On a backtrack the
+// scheduler rewinds stageIdx and re-dispatches an earlier stage; the persisted
+// snapshot then named that stage in BOTH `stage` and `completedStages`, and
+// applyRuntimeSnapshot's `!stages[goState.stage]` guard — which is correct and
+// stays — therefore skipped it. The operator watched a stage run while the tree
+// showed it complete, for the whole of its second attempt.
+func TestBeginStage_RemovesStageFromCompletedStages(t *testing.T) {
+	dir := t.TempDir()
+	runID := testRunID()
+	rs := NewRuntimeState("nightgauge/nightgauge", 556, "item-556", runID)
+
+	rs.BeginStage(StageIssuePickup)
+	rs.CompleteStage(0, tokens.TokenCounts{Input: 100, Output: 50}, "", "")
+	rs.BeginStage(StageFeatureDev)
+	rs.CompleteStage(0, tokens.TokenCounts{Input: 200, Output: 80}, "", "")
+
+	// The backtrack: feature-dev is re-dispatched.
+	time.Sleep(time.Millisecond)
+	rs.BeginStage(StageFeatureDev)
+
+	if err := rs.Persist(dir); err != nil {
+		t.Fatalf("Persist: %v", err)
+	}
+	loaded, err := LoadPersistedState(dir, runID)
+	if err != nil {
+		t.Fatalf("LoadPersistedState: %v", err)
+	}
+
+	if loaded.Stage != StageFeatureDev {
+		t.Errorf("snapshot stage = %q, want %q", loaded.Stage, StageFeatureDev)
+	}
+	for _, sr := range loaded.CompletedStages {
+		if sr.Stage == StageFeatureDev {
+			t.Errorf("feature-dev is still in completedStages while it is being re-dispatched; "+
+				"the extension's `!stages[goState.stage]` guard will render it complete, "+
+				"never running (completedStages = %+v)", loaded.CompletedStages)
+		}
+	}
+
+	// The stage that was NOT re-dispatched must survive: a prune that cleared
+	// the slice would satisfy the arm above and lose the run's history.
+	foundPickup := false
+	for _, sr := range loaded.CompletedStages {
+		if sr.Stage == StageIssuePickup {
+			foundPickup = true
+		}
+	}
+	if !foundPickup {
+		t.Errorf("issue-pickup vanished from completedStages = %+v; BeginStage must un-book "+
+			"only the stage it is beginning", loaded.CompletedStages)
+	}
+}
+
+// The cost-accounting guard the issue body warns about: pruning the stage from
+// CompletedStages must not lose the first attempt's spend. It is a MOVE, and
+// the run's own totals are unchanged by it.
+func TestCompletedStages_MeansMostRecentAttempt(t *testing.T) {
+	rs := NewRuntimeState("nightgauge/nightgauge", 556, "item-556", testRunID())
+
+	rs.BeginStage(StageFeatureDev)
+	firstStart := rs.StageStart
+	rs.CompleteStageWithCost(0, 1000, 400, 0, 1.25)
+
+	time.Sleep(2 * time.Millisecond)
+	rs.BeginStage(StageFeatureDev)
+	secondStart := rs.StageStart
+	rs.CompleteStageWithCost(0, 300, 100, 0, 0.75)
+
+	if firstStart.Equal(secondStart) {
+		t.Fatal("the two attempts share a StageStart — the fixture cannot tell them apart")
+	}
+
+	var standing []StageResult
+	for _, sr := range rs.CompletedStages {
+		if sr.Stage == StageFeatureDev {
+			standing = append(standing, sr)
+		}
+	}
+	if len(standing) != 1 {
+		t.Fatalf("feature-dev appears %d times in CompletedStages, want exactly 1 "+
+			"(the most recent attempt): %+v", len(standing), rs.CompletedStages)
+	}
+	if !standing[0].StartedAt.Equal(secondStart) {
+		t.Errorf("the standing feature-dev entry started at %v, want the SECOND attempt's %v",
+			standing[0].StartedAt, secondStart)
+	}
+
+	// SPEND SURVIVES. The run totals count both attempts…
+	if rs.InputTokens != 1300 || rs.OutputTokens != 500 {
+		t.Errorf("run totals = %d in / %d out, want 1300/500 — both attempts",
+			rs.InputTokens, rs.OutputTokens)
+	}
+	if rs.TotalCostUSD != 2.0 {
+		t.Errorf("TotalCostUSD = %v, want 2.0 — both attempts", rs.TotalCostUSD)
+	}
+
+	// …and so does the PER-ENTRY ledger, which is what the durable history
+	// record actually sums. A prune that dropped the displaced attempt would
+	// leave the two in silent disagreement: TotalCostUSD says $2.00 and
+	// estimated_cost_usd says $0.75.
+	attemptCost := 0.0
+	attemptIn, attemptOut := 0, 0
+	for _, sr := range rs.AllStageAttempts() {
+		attemptCost += sr.CostUSD
+		attemptIn += sr.InputTokens
+		attemptOut += sr.OutputTokens
+	}
+	if attemptCost != rs.TotalCostUSD || attemptIn != rs.InputTokens || attemptOut != rs.OutputTokens {
+		t.Errorf("per-attempt ledger (%d in / %d out / $%.2f) disagrees with the run totals "+
+			"(%d in / %d out / $%.2f) — a displaced attempt's spend was dropped rather than moved",
+			attemptIn, attemptOut, attemptCost,
+			rs.InputTokens, rs.OutputTokens, rs.TotalCostUSD)
+	}
+}
+
+// "Has this run ever been to pr-create" is a question about history, and it
+// gates an irreversible side effect: claiming the branch's open PR. It must
+// keep answering yes while pr-create is being re-dispatched.
+func TestHasCompletedStage_SurvivesARedispatch(t *testing.T) {
+	rs := NewRuntimeState("nightgauge/nightgauge", 556, "item-556", testRunID())
+
+	rs.BeginStage(StagePRCreate)
+	rs.CompleteStage(0, tokens.TokenCounts{Input: 10, Output: 5}, "", "")
+	if !rs.HasCompletedStage(StagePRCreate) {
+		t.Fatal("HasCompletedStage(pr-create) is false right after completing it")
+	}
+
+	time.Sleep(time.Millisecond)
+	rs.BeginStage(StagePRCreate)
+	if !rs.HasCompletedStage(StagePRCreate) {
+		t.Error("HasCompletedStage(pr-create) went false while pr-create was re-dispatched; " +
+			"the run would disown a PR it really opened")
+	}
+	if rs.HasCompletedStage(StageFeatureValidate) {
+		t.Error("HasCompletedStage answers yes for a stage the run never ran")
 	}
 }

@@ -2,7 +2,9 @@ package orchestrator
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -61,16 +63,14 @@ func (o stageStartObservation) String() string {
 // is false for every pre-fix snapshot. (a) is the first-stage half — a run that
 // has no file at all is invisible rather than merely stale.
 //
-// THE SCOPE IS FORWARD PROGRESS, AND THE LIMIT IS NAMED RATHER THAN IMPLIED.
-// On a BACKTRACK the extension still renders the re-dispatched stage as
-// complete: BeginStage does not prune the stage from CompletedStages, so
-// applyRuntimeSnapshot's `!stages[goState.stage]` guard skips it and this
-// perfectly correct snapshot marks nothing running — the exact symptom #534
-// exists to remove, surviving on the rewind path. The fix is
-// CompletedStages meaning "stages whose MOST RECENT attempt completed" (the
-// shape #407 gave StageErrors), which carries history and cost-accounting blast
-// radius and is filed separately. This fixture cannot observe it either way:
-// its retry engine is built with MaxBacktracks: 0.
+// THE SCOPE OF THIS TEST IS FORWARD PROGRESS, AND THE LIMIT IS NAMED RATHER
+// THAN IMPLIED. The BACKTRACK path — where BeginStage did not prune the
+// re-dispatched stage from CompletedStages, so applyRuntimeSnapshot's
+// `!stages[goState.stage]` guard skipped it and this perfectly correct snapshot
+// marked nothing running — was #556, and it is fixed and covered by
+// TestRunPipeline_RedispatchedStageSnapshotRendersRunning at the bottom of this
+// file. This fixture still cannot observe it either way: its retry engine is
+// built with MaxBacktracks: 0, so that test builds its own.
 //
 // An earlier revision carried a third arm — "the persisted stage is never the
 // last completed stage". It is DELETED, not weakened. Given (b) it says nothing
@@ -328,5 +328,135 @@ func TestRunPipeline_StageStartSnapshotLandsInTheRunsTargetRepo(t *testing.T) {
 			t.Errorf("dispatch #%d: the target-rooted snapshot names %q but the scheduler is dispatching %q",
 				sample.dispatch, sample.targetStageName, sample.stage)
 		}
+	}
+}
+
+// TestRunPipeline_RedispatchedStageSnapshotRendersRunning is the #556 half of
+// the invariant above, on the path the #534 fixture structurally could not
+// reach.
+//
+// #534 made the scheduler persist the runtime snapshot at each stage's START,
+// so the snapshot names the stage that is actually running. That held for
+// FORWARD progress only. On a BACKTRACK the re-dispatched stage was already in
+// completedStages and BeginStage did not remove it, so the extension's
+// applyRuntimeSnapshot — which paints completedStages first and only then marks
+// `stage` running, guarded by `!stages[goState.stage]` — rendered the running
+// stage as COMPLETE for the whole of its second attempt. A perfectly correct
+// snapshot, read correctly, reproducing the exact symptom #534 existed to
+// remove.
+//
+// The guard is NOT the defect and is untouched: it is what stops a terminal
+// snapshot flipping a finished stage back to running. What was wrong is that
+// completedStages kept claiming something that had stopped being true.
+//
+// The fixture the tests above use cannot observe any of this — its retry engine
+// is built with MaxBacktracks: 0 — so this one gives itself a backtrack budget
+// and drives a real feature-validate → feature-dev rewind through a feedback
+// signal, the way the product does.
+func TestRunPipeline_RedispatchedStageSnapshotRendersRunning(t *testing.T) {
+	root := gitWorkspace(t)
+	runner := &runIDCapturingRunner{}
+	s := newRunIdentityTestScheduler(t, root, runner)
+	// A budget of exactly 1: enough for one rewind, and no more, so the run
+	// still terminates.
+	s.retryEngine = NewRetryEngine(RetryConfig{MaxBacktracks: 1, MaxEscalationsPerStage: 0})
+
+	const issue = 556
+	stateDir := filepath.Join(root, ".nightgauge", "pipeline")
+	feedbackFile := filepath.Join(stateDir, fmt.Sprintf("feedback-%d.json", issue))
+
+	// One sample of the persisted snapshot per feature-dev dispatch. Index 0 is
+	// the first attempt; index 1 is the re-dispatch this test is about.
+	type devObservation struct {
+		snapshotStage   state.PipelineStage
+		devInCompleted  bool
+		devInSuperseded bool
+		completedList   []state.PipelineStage
+	}
+	var devObs []devObservation
+
+	runner.onStage = func() {
+		calls := runner.captured()
+		stage := calls[len(calls)-1].Stage
+
+		// Arm the rewind as feature-validate runs: the product writes this file
+		// from the stage itself, and the scheduler evaluates it once the stage
+		// succeeds.
+		if stage == state.StageFeatureValidate {
+			data, err := json.Marshal(FeedbackContext{
+				SchemaVersion: "1.0",
+				IssueNumber:   issue,
+				Signals: []FeedbackSignal{{
+					SignalType:           "IMPLEMENTATION_REVISION_NEEDED",
+					EmittedByStage:       string(state.StageFeatureValidate),
+					BacktrackTargetStage: string(state.StageFeatureDev),
+					Rationale:            "validation found a defect the implementation must fix",
+					Severity:             "blocking",
+				}},
+			})
+			if err != nil {
+				t.Errorf("marshal feedback: %v", err)
+				return
+			}
+			if err := os.WriteFile(feedbackFile, data, 0o644); err != nil {
+				t.Errorf("write feedback: %v", err)
+			}
+			return
+		}
+		if stage != state.StageFeatureDev {
+			return
+		}
+
+		found, err := state.FindPersistedStatesForIssue(stateDir, issue)
+		if err != nil || len(found) != 1 {
+			t.Errorf("FindPersistedStatesForIssue: %d snapshots, err=%v", len(found), err)
+			return
+		}
+		snap := found[0]
+		obs := devObservation{snapshotStage: snap.Stage}
+		for _, sr := range snap.CompletedStages {
+			obs.completedList = append(obs.completedList, sr.Stage)
+			if sr.Stage == state.StageFeatureDev {
+				obs.devInCompleted = true
+			}
+		}
+		for _, sr := range snap.SupersededStages {
+			if sr.Stage == state.StageFeatureDev {
+				obs.devInSuperseded = true
+			}
+		}
+		devObs = append(devObs, obs)
+	}
+
+	s.runPipeline(context.Background(), types.BoardItem{
+		Number: issue, Repo: "nightgauge/nightgauge", ID: "item-556",
+	})
+
+	if len(devObs) < 2 {
+		t.Fatalf("feature-dev was dispatched %d time(s) — the fixture never produced a "+
+			"backtrack, so it observes nothing about #556. Dispatches: %d",
+			len(devObs), len(runner.captured()))
+	}
+
+	// THE ARM. On the re-dispatch the snapshot must name feature-dev as the live
+	// stage AND must have stopped claiming it complete; otherwise the guard is
+	// false and the tree renders a running stage as finished.
+	redispatch := devObs[1]
+	if redispatch.snapshotStage != state.StageFeatureDev {
+		t.Errorf("on the re-dispatch the snapshot names stage %q, want feature-dev",
+			redispatch.snapshotStage)
+	}
+	if redispatch.devInCompleted {
+		t.Errorf("feature-dev is still in completedStages (%v) while it is being "+
+			"re-dispatched — applyRuntimeSnapshot's `!stages[goState.stage]` guard is "+
+			"false, so the tree shows the running stage as complete for its whole "+
+			"second attempt", redispatch.completedList)
+	}
+
+	// The displaced attempt was MOVED, not dropped: its spend still has a home.
+	if !redispatch.devInSuperseded {
+		t.Error("the first feature-dev attempt is in neither completedStages nor " +
+			"supersededStages — its tokens and dollars are gone from the per-attempt " +
+			"ledger the durable history record sums")
 	}
 }

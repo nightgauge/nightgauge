@@ -30,6 +30,7 @@ failure mode.`,
 	}
 	cmd.AddCommand(gateVerifyCmd())
 	cmd.AddCommand(gateRecordMetricCmd())
+	cmd.AddCommand(gateCheckDeliverableCmd())
 	return cmd
 }
 

@@ -327,12 +327,19 @@ export class ContextWatcherService implements vscode.Disposable {
     try {
       const files = await fs.readdir(contextDir);
 
-      // Guard: If state.json does not exist, the pipeline was already completed
-      // and cleared. Do not re-initialize from stale issue-*.json context files.
-      // This prevents reload from resurrecting a completed pipeline. (Issue #1205)
-      if (!files.includes("state.json")) {
+      // Guard: if no durable run state exists, the pipeline was already
+      // completed and cleared. Do not re-initialize from stale issue-*.json
+      // context files — that is how a reload resurrects a completed pipeline
+      // (Issue #1205).
+      //
+      // The guard tested for `state.json` until #471. Nothing writes that file,
+      // so it matched on EVERY run and this method returned before doing any
+      // work at all. Repointed to `run-state.json`, which the Go runstate
+      // package actually writes (internal/runstate/state.go), so the guard
+      // expresses the condition it always meant to.
+      if (!files.includes("run-state.json")) {
         this.logger.debug(
-          "No state.json found — pipeline previously completed, skipping context scan"
+          "No run-state.json found — pipeline previously completed, skipping context scan"
         );
         return;
       }
@@ -416,9 +423,13 @@ export class ContextWatcherService implements vscode.Disposable {
    * from previous runs that confuse the tree view and state service.
    *
    * Removes: issue-*.json, planning-*.json, dev-*.json, validate-*.json,
-   * pr-*.json, merge-*.json, and state.json.
-   * Preserves: queue-state.json, health-history.jsonl, calibration.json,
-   * history/, and other non-context files.
+   * pr-*.json, merge-*.json (plus the checkpoint/winddown/budget signal files).
+   * Preserves: run-state.json, queue-state.json, batch-state.json,
+   * health-history.jsonl, calibration.json, history/, and other non-context
+   * files.
+   *
+   * A disjunct naming the writer-less pipeline state file was removed by
+   * #471: nothing writes it, so it never selected anything for deletion.
    */
   async cleanStaleContextFiles(): Promise<number> {
     if (!this.workspaceRoot) return 0;
@@ -441,9 +452,9 @@ export class ContextWatcherService implements vscode.Disposable {
     try {
       const files = await fs.readdir(contextDir);
       for (const file of files) {
-        const isContextFile =
-          CONTEXT_PREFIXES.some((prefix) => file.startsWith(prefix) && file.endsWith(".json")) ||
-          file === "state.json";
+        const isContextFile = CONTEXT_PREFIXES.some(
+          (prefix) => file.startsWith(prefix) && file.endsWith(".json")
+        );
 
         if (isContextFile) {
           try {

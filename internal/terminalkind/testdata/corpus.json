@@ -451,22 +451,13 @@
       "rationale": "ORDERING ROW. The cost-cap kill IS delivered as an idle SIGTERM, so its text can legitimately carry both. Budget must win: a run that deliberately spent its cap should not be retried as a transient stall and spend it again."
     },
     {
-      "id": "stall-kill-stale-slot-orphan",
-      "input": "[stale-slot-orphan] slot 2 swept on extension reload — the run's process died without its close handler",
-      "expected": "stall_kill",
-      "expected_signal": "",
-      "source": "synthetic",
-      "producer": "StaleSlotRecoveryService zombie-run guard (#252)",
-      "rationale": "A zombie run, classified transient-stall because retry with backoff is the correct recovery and it must not count against the lifetime cap. Neither this marker nor its sibling below existed in the SDK mirror."
-    },
-    {
       "id": "stall-kill-stage-no-output-timeout",
       "input": "[stage-no-output-timeout] Stage feature-dev produced no session output within 10m 0s",
       "expected": "stall_kill",
       "expected_signal": "",
       "source": "synthetic",
-      "producer": "First-output watchdog (#252)",
-      "rationale": "A stage wedged before it ever spoke — a pre-spawn await or a silent session. Grouped with stall_kill for recovery, kept as its own marker so the pre-first-output case stays distinguishable in triage."
+      "producer": "HeadlessOrchestrator first-output watchdog (#252)",
+      "rationale": "A zombie run, classified transient-stall because retry with backoff is the correct recovery and it must not count against the lifetime cap. This is now the zombie-run row's ONLY clause — #470 retired the sibling clause after #427 deleted its only producer."
     },
     {
       "id": "stall-kill-marker-only",

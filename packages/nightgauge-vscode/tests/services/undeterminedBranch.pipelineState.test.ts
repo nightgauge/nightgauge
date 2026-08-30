@@ -13,9 +13,8 @@
  * This file pins the same contract one layer earlier, on pipeline state, which
  * was the last surviving origin of the fabrication class. The TypeScript seeds
  * ran BEFORE issue-pickup resolves a branch and invented `feat/{issueNumber}`
- * to satisfy `schemas/pipelineState.ts`'s `branch: z.string().min(1)`. On the
- * interactive path that invented value is not cosmetic — it reaches a DURABLE
- * record:
+ * to satisfy the then-non-empty `branch` constraint. On the interactive path
+ * that invented value is not cosmetic — it reaches a DURABLE record:
  *
  *   PipelineStateService.initializePipeline
  *     -> ipc "pipeline.notifyStageTransition" { branch }
@@ -50,7 +49,6 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { HeadlessOrchestrator } from "../../src/services/HeadlessOrchestrator";
 import type { PipelineStateService } from "../../src/services/PipelineStateService";
 import type { Logger } from "../../src/utils/logger";
-import { PipelineStateSchema } from "../../src/schemas/pipelineState";
 import {
   getBranchDisplayText,
   getProgressBarHtml,
@@ -193,57 +191,6 @@ describe("the pipeline-state path never fabricates a branch (#448)", () => {
       // two fields gets a fallback.
       expect(title).toBe("Issue #449");
       expect(branch).toBe("");
-    });
-  });
-
-  describe("schemas/pipelineState — an undetermined branch survives", () => {
-    const validState = {
-      schema_version: "1.0" as const,
-      issue_number: 448,
-      title: "Pipeline-state path still fabricates feat/{N}",
-      branch: "",
-      base_branch: "main",
-      started_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-      execution_mode: "automatic" as const,
-      paused: false,
-      stages: {},
-      tokens: {
-        total_input: 0,
-        total_output: 0,
-        total_cache_read: 0,
-        total_cache_creation: 0,
-        estimated_cost_usd: 0,
-      },
-    };
-
-    it('accepts branch "" and keeps it empty', () => {
-      const result = PipelineStateSchema.safeParse(validState);
-      expect(result.success).toBe(true);
-      expect(result.success && result.data.branch).toBe("");
-    });
-
-    it("still accepts a resolved branch unchanged", () => {
-      const result = PipelineStateSchema.safeParse({
-        ...validState,
-        branch: "fix/448-no-fabricated-branch-placeholders",
-      });
-      expect(result.success).toBe(true);
-      expect(result.success && result.data.branch).toBe(
-        "fix/448-no-fabricated-branch-placeholders"
-      );
-    });
-
-    it("still REQUIRES the key — absent is a different fact from undetermined", () => {
-      // The #397 contract lives in the bytes: `""` means "we looked and found
-      // nothing", an absent key means a foreign producer or a pre-contract
-      // writer. Relaxing `.min(1)` must not collapse the two.
-      const { branch: _dropped, ...withoutBranch } = validState;
-      expect(PipelineStateSchema.safeParse(withoutBranch).success).toBe(false);
-    });
-
-    it("keeps title non-empty — only `branch` gained the empty meaning", () => {
-      expect(PipelineStateSchema.safeParse({ ...validState, title: "" }).success).toBe(false);
     });
   });
 

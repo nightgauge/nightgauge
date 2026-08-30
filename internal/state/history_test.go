@@ -12,74 +12,6 @@ import (
 	"github.com/nightgauge/nightgauge/internal/intelligence/tokens"
 )
 
-func TestHistoryWriteAndRead(t *testing.T) {
-	dir := t.TempDir()
-	hw := NewHistoryWriter(dir)
-
-	rs := NewRuntimeState("nightgauge/nightgauge", 1311, "item-123", testRunID())
-	rs.BeginStage(StageIssuePickup)
-	rs.CompleteStage(0, tokens.TokenCounts{Input: 1000, Output: 500}, "", "")
-
-	if err := hw.Write(rs, true, ""); err != nil {
-		t.Fatalf("Write: %v", err)
-	}
-
-	entries, err := hw.ReadRecent(10)
-	if err != nil {
-		t.Fatalf("ReadRecent: %v", err)
-	}
-
-	if len(entries) != 1 {
-		t.Fatalf("entries = %d, want 1", len(entries))
-	}
-	if entries[0].IssueNumber != 1311 {
-		t.Errorf("IssueNumber = %d, want 1311", entries[0].IssueNumber)
-	}
-	if !entries[0].Success {
-		t.Error("Success should be true")
-	}
-	if len(entries[0].Stages) != 1 {
-		t.Errorf("Stages = %d, want 1", len(entries[0].Stages))
-	}
-}
-
-func TestHistoryMultipleEntries(t *testing.T) {
-	dir := t.TempDir()
-	hw := NewHistoryWriter(dir)
-
-	for i := 0; i < 5; i++ {
-		rs := NewRuntimeState("nightgauge/nightgauge", 1300+i, "item", testRunID())
-		if err := hw.Write(rs, true, ""); err != nil {
-			t.Fatalf("Write %d: %v", i, err)
-		}
-	}
-
-	// Read last 3
-	entries, err := hw.ReadRecent(3)
-	if err != nil {
-		t.Fatalf("ReadRecent: %v", err)
-	}
-	if len(entries) != 3 {
-		t.Errorf("entries = %d, want 3", len(entries))
-	}
-	if entries[0].IssueNumber != 1302 {
-		t.Errorf("first entry should be 1302, got %d", entries[0].IssueNumber)
-	}
-}
-
-func TestHistoryReadEmpty(t *testing.T) {
-	dir := t.TempDir()
-	hw := NewHistoryWriter(dir)
-
-	entries, err := hw.ReadRecent(10)
-	if err != nil {
-		t.Fatalf("ReadRecent: %v", err)
-	}
-	if len(entries) != 0 {
-		t.Errorf("entries = %d, want 0", len(entries))
-	}
-}
-
 // --- V2 tests ---
 
 func TestWriteV2_ProducesValidRecord(t *testing.T) {
@@ -1048,12 +980,18 @@ func TestBuildV2Record_TerminatingStageTokensSurvive(t *testing.T) {
 
 // TestBuildV2Record_BacktrackedStageAccumulates pins the sharp edge created by
 // sourcing run totals from the per-stage map: that map is keyed by stage name,
-// but CompletedStages is an append-only slice in which one stage legitimately
-// appears twice when the retry/backtrack engine rewinds to it. If the map is
-// assigned rather than accumulated, the earlier attempt's spend vanishes from
-// BOTH tokens.per_stage and estimated_cost_usd — biasing calibration low on
-// precisely the runs that cost the most, which is the defect Issue #146 exists
-// to remove.
+// but one stage legitimately runs twice when the retry/backtrack engine rewinds
+// to it. If the map is assigned rather than accumulated, the earlier attempt's
+// spend vanishes from BOTH tokens.per_stage and estimated_cost_usd — biasing
+// calibration low on precisely the runs that cost the most, which is the defect
+// Issue #146 exists to remove.
+//
+// #556 MOVED THE SOURCE THIS TEST GUARDS. CompletedStages now means "the
+// stage's most recent attempt completed", so the earlier attempt is no longer
+// in it — it is in SupersededStages, and BuildV2Record reads
+// AllStageAttempts(). This test is therefore also the red bar for a summer that
+// forgets the superseded half: it fails with exactly the #146 numbers if
+// AllStageAttempts() stops returning them.
 func TestBuildV2Record_BacktrackedStageAccumulates(t *testing.T) {
 	hw := NewHistoryWriter(t.TempDir())
 	now := time.Now()
@@ -1739,5 +1677,63 @@ func TestFoldCostSource_DeterministicNeverWeakensASpendingOccurrence(t *testing.
 		if got := foldCostSource(tc.a, tc.b); got != tc.want {
 			t.Errorf("foldCostSource(%q, %q) = %q, want %q", tc.a, tc.b, got, tc.want)
 		}
+	}
+}
+
+// TestBuildV2Record_BacktrackedStageDetailDescribesTheStandingAttempt is the
+// half of #556 that the accumulation test above cannot see.
+//
+// Spend is a SUM, so it does not care which attempt an entry came from. The
+// stage DETAIL is not a sum: stages[<name>].started_at, .completed_at and
+// .duration_ms describe one attempt, and an operator reading the record needs
+// them to describe the attempt that actually stands. Since #556 the standing
+// attempt is the one in CompletedStages and the displaced one is in
+// SupersededStages, and BuildV2Record iterates superseded-first precisely so
+// the LAST write wins. Reverse that order and this arm goes red while every
+// cost assertion stays green.
+func TestBuildV2Record_BacktrackedStageDetailDescribesTheStandingAttempt(t *testing.T) {
+	hw := NewHistoryWriter(t.TempDir())
+	now := time.Now()
+
+	rs := NewRuntimeState("nightgauge/nightgauge", 556, "item-556-detail", testRunID())
+	rs.BeginStage(StageFeatureDev)
+	rs.CompleteStageWithCost(0, 10000, 4000, 0, 1.25) // first attempt
+	rs.BeginStage(StageFeatureValidate)
+	rs.CompleteStageWithCost(0, 2000, 500, 0, 0.02)
+	// started_at is formatted as RFC 3339 with SECOND granularity, so the two
+	// attempts must land in different seconds or the assertion below cannot
+	// tell them apart and would pass against either ordering. Spinning to the
+	// next second boundary costs under a second and is deterministic, unlike a
+	// fixed sleep sized by guesswork.
+	for mark := time.Now().Second(); time.Now().Second() == mark; {
+		time.Sleep(5 * time.Millisecond)
+	}
+	rs.BeginStage(StageFeatureDev) // the rewind
+	standingStart := rs.StageStart
+	rs.CompleteStageWithCost(0, 3000, 1000, 0, 0.75) // second attempt
+
+	record := hw.BuildV2Record(rs, true, "", V2RunInput{}, now)
+
+	detail, ok := record.Stages[string(StageFeatureDev)]
+	if !ok {
+		t.Fatalf("feature-dev missing from record.Stages: %+v", record.Stages)
+	}
+	if want := standingStart.Format(time.RFC3339); detail.StartedAt != want {
+		t.Errorf("stages[feature-dev].started_at = %q, want the STANDING attempt's %q — "+
+			"the record describes a superseded attempt as though it were the outcome",
+			detail.StartedAt, want)
+	}
+	if detail.Status != "complete" {
+		t.Errorf("stages[feature-dev].status = %q, want complete", detail.Status)
+	}
+
+	// And the invariant that ties the two halves together: the record's run
+	// total is the runtime's own total. Asserted against the live value rather
+	// than a transcribed constant, so it cannot drift into agreeing with a
+	// wrong sum.
+	if record.Tokens.EstimatedCostUSD != rs.TotalCostUSD {
+		t.Errorf("estimated_cost_usd = %v but the run booked %v — a superseded attempt's "+
+			"spend is missing from the durable record",
+			record.Tokens.EstimatedCostUSD, rs.TotalCostUSD)
 	}
 }

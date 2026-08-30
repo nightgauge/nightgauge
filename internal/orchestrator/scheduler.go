@@ -6005,6 +6005,17 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 							log.Printf("#%d: stall-kill with >50%% budget consumed ($%.2f/$%.2f) — escalating model to %s",
 								item.Number, runtime.TotalCostUSD, pipelineBudgetCeilingUSD, escalation.NewModel)
 							s.retryEngine.RecordEscalation(string(stage), escalation.NewModel)
+							// The DURABLE half (#463). RecordEscalation only
+							// bumps a process-memory counter on the retry
+							// engine; nothing persists it, so before this the
+							// run's own record showed no escalation at all.
+							runtime.AppendEscalation(state.EscalationRecord{
+								Stage:     stage,
+								FromModel: model,
+								ToModel:   escalation.NewModel,
+								Reason:    state.EscalationReasonBudgetStall,
+								At:        time.Now(),
+							})
 							tracer.Emit(trace.KindComplexityEscalation, string(stage), trace.EscalationPayload{
 								Direction: "up",
 								FromModel: model,
@@ -6400,6 +6411,14 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 					log.Printf("#%d: stage %s failed — escalating model to %s",
 						item.Number, stage, escalation.NewModel)
 					s.retryEngine.RecordEscalation(string(stage), escalation.NewModel)
+					// #463 — see the budget-stall site above.
+					runtime.AppendEscalation(state.EscalationRecord{
+						Stage:     stage,
+						FromModel: model,
+						ToModel:   escalation.NewModel,
+						Reason:    state.EscalationReasonStageFailed,
+						At:        time.Now(),
+					})
 					tracer.Emit(trace.KindComplexityEscalation, string(stage), trace.EscalationPayload{
 						Direction: "up",
 						FromModel: model,
@@ -6531,6 +6550,15 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 				log.Printf("#%d: stage %s missing output — escalating model to %s",
 					item.Number, stage, escalation.NewModel)
 				s.retryEngine.RecordEscalation(string(stage), escalation.NewModel)
+				// #463 — see the budget-stall site above. A distinct reason
+				// from stage_failed: the model believed it had finished.
+				runtime.AppendEscalation(state.EscalationRecord{
+					Stage:     stage,
+					FromModel: model,
+					ToModel:   escalation.NewModel,
+					Reason:    state.EscalationReasonMissingOutput,
+					At:        time.Now(),
+				})
 				tracer.Emit(trace.KindComplexityEscalation, string(stage), trace.EscalationPayload{
 					Direction: "up",
 					FromModel: model,
@@ -6685,7 +6713,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 	// Log pipeline cost summary
 	snap := runtime.Snapshot()
 	log.Printf("#%d: ═══ Pipeline Complete ═══", item.Number)
-	for _, sr := range snap.CompletedStages {
+	for _, sr := range snap.AllStageAttempts() {
 		log.Printf("#%d:   %-20s %d in / %d out  $%.4f",
 			item.Number, sr.Stage, sr.InputTokens, sr.OutputTokens, sr.CostUSD)
 	}
@@ -8752,6 +8780,13 @@ func (s *Scheduler) tryDeterministicPRCreate(
 	// (line ~2874) and the post-condition gates already use for the same reason.
 	stageWS := stageWorkspace(runtime, workspaceRoot)
 	detResult, detErr := s.prCreateRunner.Run(ctx, item.Number, item.Repo, stageWS)
+	// The commit owner (#1179) runs inside the runner, before its create/punt
+	// decision, so its outcome is reported on EVERY path — including the punt
+	// that the trivial route takes when routing skipped feature-validate.
+	if detResult.CommitReason != "" {
+		log.Printf("#%d: pr-create commit owner: %s%s",
+			item.Number, detResult.CommitReason, commitSHASuffix(detResult.CommitSHA))
+	}
 	if detErr == nil && detResult.Path == pmstages.CreatePathPunt && ReasonIndicatesRateLimit(detResult.Reason) {
 		// Rate-limit punt → defer, do NOT run the LLM path (#3976). Leave
 		// execution_path unset; the post-cooldown retry records it accurately.
@@ -8774,11 +8809,14 @@ func (s *Scheduler) tryDeterministicPRCreate(
 				Stage:       string(stage),
 				Timestamp:   time.Now(),
 				Metadata: map[string]interface{}{
-					"path":        string(detResult.Path),
-					"pr_number":   detResult.PRNumber,
-					"pr_url":      detResult.PRURL,
-					"reason":      detResult.Reason,
-					"duration_ms": detResult.DurationMs,
+					"path":         string(detResult.Path),
+					"pr_number":    detResult.PRNumber,
+					"pr_url":       detResult.PRURL,
+					"reason":       detResult.Reason,
+					"duration_ms":  detResult.DurationMs,
+					"commit_owner": detResult.CommitReason,
+					"commit_sha":   detResult.CommitSHA,
+					"commit_made":  detResult.CommitPerformed,
 				},
 				SchemaVersion: "1",
 			})
@@ -8799,6 +8837,15 @@ func (s *Scheduler) tryDeterministicPRCreate(
 	runtime.RecordStagePuntReason(stage, puntReason)
 	s.emitStagePunt(ctx, runtime, stage, item.Number, puntReason)
 	return false, false
+}
+
+// commitSHASuffix renders " (<sha>)" for a non-empty commit SHA, so the
+// commit-owner log line reads the same whether or not the SHA was resolvable.
+func commitSHASuffix(sha string) string {
+	if sha == "" {
+		return ""
+	}
+	return " (" + sha + ")"
 }
 
 // emitStagePunt emits the stage_punt telemetry event recording that a

@@ -267,11 +267,24 @@ func TestModelSelectionSourceForEscalationReason_IsTotal(t *testing.T) {
 
 // reasonsDeliberatelyBucketed lists the EscalationReasons members whose
 // attribution to the ModelSourceEscalation catch-all is a DECISION, not an
-// oversight. It is empty today: the one reason any writer emits
-// (EscalationReasonModelUnavailable) has its own label. Adding an entry here is
-// how you record "this cause does not deserve its own source label" — and doing
-// so is a real choice, because the record keeps no other copy of the reason.
-var reasonsDeliberatelyBucketed = map[string]string{}
+// oversight. Adding an entry here is how you record "this cause does not
+// deserve its own source label".
+//
+// The three upward reasons (#463) belong here for the same reason, stated
+// three times: `"escalation"` is the vocabulary member that NAMES upward
+// escalation, so bucketing them into it is the correct attribution rather than
+// a loss of one. What made bucketing lossy — that the record kept no other copy
+// of the reason — no longer holds: `V2ModelSelect.EscalationReason` carries the
+// raw string beside the mapped source, so "which cause" survives without
+// widening a vocabulary the SDK validates strictly.
+var reasonsDeliberatelyBucketed = map[string]string{
+	EscalationReasonStageFailed: "\"escalation\" is exactly what an upward escalation is; " +
+		"the specific cause survives on model_selection.escalation_reason (#463)",
+	EscalationReasonMissingOutput: "same vocabulary member as the other upward causes; " +
+		"distinguished from them by model_selection.escalation_reason (#463)",
+	EscalationReasonBudgetStall: "same vocabulary member as the other upward causes; " +
+		"distinguished from them by model_selection.escalation_reason (#463)",
+}
 
 // TestEscalationReasonsAreDeliberatelyLabeled is the closure guard the totality
 // test cannot be. TestModelSelectionSourceForEscalationReason_IsTotal proves

@@ -763,8 +763,21 @@ export class PipelineStateService implements vscode.Disposable {
     this._onStateChanged.fire(this._lastState);
   }
 
-  getStatePath(): string {
-    return `${this.workspaceRoot}/.nightgauge/pipeline/state.json`;
+  /**
+   * The repo root this service is bound to.
+   *
+   * This replaced a path getter in #471 that returned the writer-less
+   * pipeline state file's location — a path to a file nothing has ever
+   * written. BOTH of its callers immediately split the phantom filename back
+   * off to recover this directory, so returning the root directly is exactly
+   * equivalent, and it stops the notifiers from advertising a state file that
+   * does not exist.
+   *
+   * Still context-aware, which is why the callers want it: it is the ACTIVE
+   * repo's root during a batch run, not the static initial workspace.
+   */
+  getRepoRoot(): string {
+    return this.workspaceRoot;
   }
 
   // -------------------------------------------------------------------------

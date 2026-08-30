@@ -11,7 +11,7 @@
 
 import * as vscode from "vscode";
 import type { NightgaugeConfig, ViewTier, EditableTier, TierViewState } from "./types";
-import { PIPELINE_LOCKED_SECTIONS } from "./types";
+import { PIPELINE_LOCKED_SECTIONS, isSectionLocked } from "./types";
 import { NightgaugeYamlService, setConfigValue, getConfigValue } from "./NightgaugeYamlService";
 import { getSettingsHtml, STAGE_ADAPTER_STAGES, type StageAdapterPreviewRow } from "./SettingsHtml";
 import { resolveStageAdapter } from "../../utils/resolvers/adapterResolver";
@@ -1698,30 +1698,13 @@ export class SettingsPanel implements vscode.Disposable {
   }
 
   /**
-   * Extract the settings section ID from a config path.
-   *
-   * Config paths follow the pattern "section.field" or "section.nested.field".
-   * Special cases map config prefixes to their section IDs.
-   */
-  private getSectionForPath(path: string): string | undefined {
-    const prefix = path.split(".")[0];
-    const sectionMap: Record<string, string> = {
-      pr: "pull_request",
-      pull_request: "pull_request",
-      ui: "core",
-      lm_studio: "core",
-      ollama: "core",
-      model_routing: "routing",
-    };
-    return sectionMap[prefix] ?? prefix;
-  }
-
-  /**
    * Check if the section owning a config path is currently locked.
+   *
+   * The path→section mapping and the lock predicate live in `./types` so the
+   * lock tests can exercise the shipped implementation directly (#498).
    */
   private isSectionLocked(path: string): boolean {
-    const section = this.getSectionForPath(path);
-    return section !== undefined && this.lockedSections.has(section);
+    return isSectionLocked(path, this.lockedSections);
   }
 
   /**

@@ -30,7 +30,6 @@ import {
 } from "./pipelineState";
 import { StallEventSchema } from "./stallEvents";
 import { ExecutionAdapterSchema, ModelRoutingModeSchema } from "../config/schema";
-import { AdapterSourceSchema } from "../utils/resolvers/adapterResolver";
 import { ORCHESTRATOR_CRASH_TERMINAL_KIND } from "../utils/orchestratorCrashRecord";
 export {
   ORCHESTRATOR_CRASH_TERMINAL_KIND,
@@ -69,32 +68,6 @@ export const HistoryStageTokenUsageSchema = z.object({
    * absence as adapter-unknown rather than defaulting to a value.
    */
   adapter: ExecutionAdapterSchema.optional(),
-  /**
-   * Source step that produced the resolved adapter (Issue #3223).
-   *
-   * The adapter analogue of `model_selection.source`: it lets dashboards and
-   * learning consumers distinguish a per-stage env override from a
-   * stage-config value, fallback substitution, or the global default. Its
-   * vocabulary is `AdapterSourceSchema`'s and is unrelated to the
-   * model-selection one. Absent on records emitted before the SkillRunner
-   * dispatcher honored `resolveStageAdapter` end-to-end. Populated from
-   * `AdapterDecision.source` returned by the resolver.
-   */
-  adapter_source: AdapterSourceSchema.optional(),
-  /**
-   * Adapters tried at stage start, in order, when the fallback chain walked
-   * (Issue #3231). Length 1 (or absent) means no fallback was needed —
-   * `adapter` already names the only candidate considered. Length ≥ 2 means
-   * the primary failed prereq and one or more candidates were attempted; the
-   * winner is the final adapter (== `adapter` field) when the walk
-   * succeeded, or this is the exhaustive list of every candidate when the
-   * full chain failed (the stage emitted `[stage:no-adapter-available]`).
-   *
-   * Optional — emitted only when fallback occurred to keep records terse.
-   * Pre-#3231 readers ignore it; post-#3231 dashboards can compute the
-   * "fallback-rate per primary adapter" metric.
-   */
-  adapter_fallback_chain_used: z.array(ExecutionAdapterSchema).optional(),
   /**
    * Resolution step that produced `cost_usd` (Issue #3228).
    *
@@ -226,6 +199,26 @@ export const HistoryStageDetailSchema = z.object({
        * its strict parse.
        */
       source: z.enum(MODEL_SELECTION_SOURCES),
+      /**
+       * The RAW escalation cause behind `source: "escalation"` (#463).
+       *
+       * DELIBERATELY NOT AN ENUM, and deliberately not a member of
+       * `MODEL_SELECTION_SOURCES`. `source` is a closed, strictly-validated
+       * vocabulary shared with the SDK; every upward escalation reason
+       * collapses onto its single `"escalation"` member, and nothing else on
+       * the record carried the reason — so a stage that FAILED, one that
+       * produced NO OUTPUT and one that STALLED over budget were the same
+       * record forever. This sibling keeps the cause without widening the
+       * vocabulary, which is what lets attribution stay closed.
+       *
+       * Written by Go (`V2ModelSelect.EscalationReason`), from the
+       * `EscalationReasons` closure list in internal/state/runtime_state.go,
+       * and pinned to that list by
+       * `TestEscalationReasonSiblingPinnedToExecutionHistorySchema`. Absent for
+       * every other `source`, the model-unavailable downgrade included — that
+       * one has its own `source` member.
+       */
+      escalation_reason: z.string().optional(),
       confidence: z.number().min(0).max(1).optional(),
       complexity: z.string().optional(),
       /**

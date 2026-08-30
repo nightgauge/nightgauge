@@ -516,20 +516,23 @@ describe("ContextWatcherService", () => {
   });
 
   describe("scanExistingContext()", () => {
-    it("should skip scan when state.json does not exist (completed pipeline)", async () => {
+    it("should skip scan when run-state.json does not exist (completed pipeline)", async () => {
       const service = new ContextWatcherService(workspaceRoot, mockLogger as any);
 
       const issueHandler = vi.fn();
       service.onIssuePickedUp(issueHandler);
 
-      // issue-42.json exists but state.json does not — pipeline was completed
+      // issue-42.json exists but no durable run state does — pipeline completed.
+      // The gate tested for a phantom file until #471; it now tests run-state.json,
+      // which Go actually writes, so this case can distinguish a completed run
+      // from a live one instead of firing on every run alike.
       vi.mocked(fs.readdir).mockResolvedValue(["issue-42.json"] as any);
 
       await service.scanExistingContext();
 
       expect(issueHandler).not.toHaveBeenCalled();
       expect(mockLogger.debug).toHaveBeenCalledWith(
-        "No state.json found — pipeline previously completed, skipping context scan"
+        "No run-state.json found — pipeline previously completed, skipping context scan"
       );
 
       service.dispose();
@@ -541,7 +544,7 @@ describe("ContextWatcherService", () => {
       const issueHandler = vi.fn();
       service.onIssuePickedUp(issueHandler);
 
-      vi.mocked(fs.readdir).mockResolvedValue(["state.json", "issue-42.json"] as any);
+      vi.mocked(fs.readdir).mockResolvedValue(["run-state.json", "issue-42.json"] as any);
       vi.mocked(fs.stat).mockResolvedValue({ mtimeMs: Date.now() } as any);
       vi.mocked(fs.readFile).mockResolvedValue(
         JSON.stringify({
@@ -573,7 +576,7 @@ describe("ContextWatcherService", () => {
       service.onStageComplete(stageHandler);
 
       vi.mocked(fs.readdir).mockResolvedValue([
-        "state.json",
+        "run-state.json",
         "issue-42.json",
         "planning-42.json",
         "dev-42.json",
@@ -615,7 +618,7 @@ describe("ContextWatcherService", () => {
       service.onIssuePickedUp(issueHandler);
 
       vi.mocked(fs.readdir).mockResolvedValue([
-        "state.json",
+        "run-state.json",
         "issue-40.json",
         "issue-42.json",
         "issue-41.json",
@@ -697,7 +700,7 @@ describe("ContextWatcherService", () => {
       service.onIssuePickedUp(issueHandler);
 
       vi.mocked(fs.readdir).mockResolvedValue([
-        "state.json",
+        "run-state.json",
         "issue-42.json",
         "issue-43.json",
       ] as any);
@@ -742,7 +745,7 @@ describe("ContextWatcherService", () => {
       const issueHandler = vi.fn();
       service.onIssuePickedUp(issueHandler);
 
-      vi.mocked(fs.readdir).mockResolvedValue(["state.json", "batch-state.json"] as any);
+      vi.mocked(fs.readdir).mockResolvedValue(["run-state.json", "batch-state.json"] as any);
 
       await service.scanExistingContext();
 
@@ -1004,7 +1007,7 @@ describe("ContextWatcherService", () => {
   });
 
   describe("cleanStaleContextFiles()", () => {
-    it("should remove context files and state.json", async () => {
+    it("removes context files and preserves every durable *-state.json", async () => {
       const service = new ContextWatcherService(workspaceRoot, mockLogger as any);
 
       vi.mocked(fs.readdir).mockResolvedValue([
@@ -1013,8 +1016,9 @@ describe("ContextWatcherService", () => {
         "issue-1542.json",
         "planning-1539.json",
         "dev-1542.json",
-        "state.json",
+        "run-state.json",
         "queue-state.json",
+        "batch-state.json",
         "health-history.jsonl",
         "calibration.json",
       ] as any);
@@ -1022,14 +1026,26 @@ describe("ContextWatcherService", () => {
 
       const cleaned = await service.cleanStaleContextFiles();
 
-      // Should remove: issue-1539, issue-1540, issue-1542, planning-1539, dev-1542, state.json
-      expect(cleaned).toBe(6);
-      expect(fs.unlink).toHaveBeenCalledTimes(6);
+      // Removes exactly the five per-issue context files:
+      // issue-1539, issue-1540, issue-1542, planning-1539, dev-1542.
+      // (A sixth was removed here until #471 — a phantom `state.json` the
+      // cleaner also matched. Nothing writes it, so that arm never fired.)
+      expect(cleaned).toBe(5);
+      expect(fs.unlink).toHaveBeenCalledTimes(5);
 
-      // Should NOT remove queue-state.json, health-history.jsonl, etc.
+      // The durable state files and the non-context files MUST survive: this
+      // cleaner runs on abort, and deleting run-state.json would take the
+      // pipeline's own source of truth with it.
       const unlinkCalls = vi.mocked(fs.unlink).mock.calls.map((c) => c[0]);
-      expect(unlinkCalls).not.toContainEqual(expect.stringContaining("queue-state.json"));
-      expect(unlinkCalls).not.toContainEqual(expect.stringContaining("health-history.jsonl"));
+      for (const preserved of [
+        "run-state.json",
+        "queue-state.json",
+        "batch-state.json",
+        "health-history.jsonl",
+        "calibration.json",
+      ]) {
+        expect(unlinkCalls).not.toContainEqual(expect.stringContaining(preserved));
+      }
 
       service.dispose();
     });
@@ -1075,7 +1091,7 @@ describe("ContextWatcherService", () => {
       vi.mocked(fs.readdir).mockResolvedValue([
         "issue-42.json",
         "issue-43.json",
-        "state.json",
+        "planning-42.json",
       ] as any);
       vi.mocked(fs.unlink)
         .mockRejectedValueOnce(new Error("Permission denied"))

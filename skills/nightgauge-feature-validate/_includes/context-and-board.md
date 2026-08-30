@@ -178,13 +178,52 @@ jq -n \
     created_at: $created_at
   }' > "$CONTEXT_FILE"
 
-jq . "$CONTEXT_FILE" > /dev/null && \
-  echo "✓ Context file written: $CONTEXT_FILE [status=$VALIDATION_STATUS]" || \
+jq . "$CONTEXT_FILE" > /dev/null || \
   { echo "ERROR: validate context JSON invalid" >&2; exit 1; }
 ```
 
-Schema version 2.4 (adds the `verify_ui` block, Issue #4193). Schema version
-2.3 added the `mobile_mcp` block, Issue #24.
+Then verify the SHAPE, not just the JSON — `jq .` proves only well-formedness,
+and a well-formed file in the wrong shape is what `validate-170`, `validate-232`
+and `validate-340` all shipped behind nothing but a warning (#1182). The checker
+applies the same rule table the post-condition gate applies, repairs what is
+repairable, drops an unattributable gate metric rather than forwarding it into
+the gate-metrics tally, and stamps `schema_version` from the binary's own
+registry.
+
+```bash
+BINARY="${NIGHTGAUGE_BIN:-}"
+[ -n "$BINARY" ] && [ ! -x "$BINARY" ] && BINARY=""
+[ -z "$BINARY" ] && BINARY=$(command -v nightgauge 2>/dev/null || echo "")
+if [ -z "$BINARY" ]; then
+  REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+  [ -x "$REPO_ROOT/bin/nightgauge" ] && BINARY="$REPO_ROOT/bin/nightgauge"
+fi
+if [ -z "$BINARY" ]; then
+  GIT_COMMON_DIR="$(git rev-parse --git-common-dir 2>/dev/null || true)"
+  if [ -n "$GIT_COMMON_DIR" ]; then
+    CANONICAL_REPO="$(cd "$GIT_COMMON_DIR/.." 2>/dev/null && pwd)"
+    [ -n "$CANONICAL_REPO" ] && [ -x "$CANONICAL_REPO/bin/nightgauge" ] && BINARY="$CANONICAL_REPO/bin/nightgauge"
+  fi
+fi
+[ -z "$BINARY" ] && [ -x "$HOME/go/bin/nightgauge" ] && BINARY="$HOME/go/bin/nightgauge"
+
+if [ -n "$BINARY" ]; then
+  "$BINARY" gate check-deliverable --stage validate --issue "$ISSUE_NUMBER" || {
+    echo "ERROR: validate context does not match the contract — re-emit it with the jq template above, verbatim." >&2
+    exit 1
+  }
+else
+  echo "WARNING: nightgauge binary not found; validate context shape unverified" >&2
+fi
+echo "✓ Context file written and shape-verified: $CONTEXT_FILE [status=$VALIDATION_STATUS]"
+```
+
+**Do not hand-write this file.** Run the `jq -n` command above verbatim — a
+hand-written object reproduces a schema the model remembers rather than the one
+this include specifies (#1177).
+
+Schema version 2.6 is the current contract. 2.4 added the `verify_ui` block
+(Issue #4193); 2.3 added the `mobile_mcp` block (Issue #24).
 
 ---
 

@@ -269,8 +269,9 @@ func (s *Server) isConfiguredRepo(repo string) bool {
 //     #307 made when it refused to PERSIST one (server.go's `repo != ""` gate).
 //
 //  2. REAL PROGRESSION. A record only corroborates when it shows a stage the
-//     daemon watched BEGIN and then finish: `CompletedStages` entries whose
-//     `StartedAt` is non-zero. That timestamp is stamped by `BeginStage`, which
+//     daemon watched BEGIN and then finish: stage attempts whose `StartedAt` is
+//     non-zero (`AllStageAttempts`, which since #556 spans both the standing
+//     entries and the ones a backtrack superseded). That timestamp is stamped by `BeginStage`, which
 //     only the "running" transition calls — so the created-on-miss "complete"
 //     that mints a runtime in one call books a stage with a ZERO StartedAt and
 //     an empty Stage, and corroborates nothing. The figure returned is the sum
@@ -340,7 +341,10 @@ func corroboratedRunSpendUSD(rt *state.RuntimeState, repo string) (float64, bool
 	}
 	total := 0.0
 	begun := 0
-	for _, sr := range rt.CompletedStages {
+	// Every attempt, not just the standing ones (#556): a rewound stage's first
+	// attempt moved to SupersededStages, and corroboration that under-counts
+	// spend is corroboration that fails on exactly the runs worth raising.
+	for _, sr := range rt.AllStageAttempts() {
 		// StartedAt is BeginStage's stamp and Stage is what BeginStage set; a
 		// terminal transition that created its own runtime carries neither.
 		if sr.StartedAt.IsZero() || sr.Stage == "" {
@@ -371,7 +375,7 @@ func (s *Server) buildRaise(p AttentionRaiseParams) (attention.DecisionRequest, 
 		// runtime.TotalCostUSD)`. The ceiling input is the same in-process read;
 		// the spend input is DELIBERATELY not `TotalCostUSD` — that accumulator
 		// is writable by a single created-on-miss transition, so this path sums
-		// only CompletedStages entries with a BeginStage-stamped StartedAt (see
+		// only stage attempts with a BeginStage-stamped StartedAt (see
 		// corroboratedRunSpendUSD). The scheduler trusts its own accumulator
 		// because it wrote it; this handler cannot, because any socket caller
 		// can have.

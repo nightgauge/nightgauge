@@ -696,8 +696,16 @@ issue_references:
   # part of a fall it can attribute to references genuinely removed -- measuring
   # both sides at one ceiling. When it prints "Do NOT lower", do not lower.
   #
+  # 2026-08-29 (#1080): 5,770 — and this one IS four references, named. The
+  # checker measured the tree at 5,687 and refused 83 of the 87-point fall as
+  # erosion, offering 5,770; that is what is recorded. The four are `#1608` in
+  # AGENTS.md (de-linked to `legacy issue 1608`) and three `docs/spikes/`
+  # citations qualified to `owner/repo#N`. They are listed by path and number in
+  # the run's own `retired:` lines, which is the point of #1080: a fall is now
+  # itemised instead of argued about.
+  #
   # NEVER raise this number. Lower it ONLY to the value the checker names.
-  tree_baseline: 5774
+  tree_baseline: 5770
   allow_paths:
     # Files that DEFINE or TEST the rule must contain example violations.
     - ".github/publication-boundary.yaml"

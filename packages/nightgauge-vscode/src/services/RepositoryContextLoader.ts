@@ -26,7 +26,6 @@ export type ContextFileType =
   | "validate"
   | "pr"
   | "feedback"
-  | "state"
   | "batch-state"
   | "running"
   | "batch"
@@ -232,8 +231,9 @@ export class RepositoryContextLoader implements vscode.Disposable {
     const contextDir = this.getContextDir(repository);
 
     switch (type) {
-      case "state":
-        return path.join(contextDir, "state.json");
+      // A `case "state"` returning `<dir>/state.json` sat here until #471. No
+      // live caller ever passed "state" — the stage→ContextFileType maps only
+      // name per-issue types — and nothing writes that file either way.
       case "batch-state":
         return path.join(contextDir, "batch-state.json");
       case "issue":
