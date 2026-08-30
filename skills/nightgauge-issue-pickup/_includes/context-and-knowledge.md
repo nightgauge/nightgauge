@@ -13,8 +13,7 @@ Procedural detail for two adjacent phases:
 
 - [Step 8.1: Create Context Directory](#step-81-create-context-directory)
 - [Step 8.2: Write issue-{N}.json inline](#step-82-write-issue-njson-inline)
-- [Step 8.3: Knowledge Scaffolding (MANDATORY)](#step-83-knowledge-scaffolding-mandatory)
-- [Step 8.3.5: Workspace KB auto-scaffold](#step-835-workspace-kb-auto-scaffold-gated-by-knowledgeworkspace_scoped)
+- [Step 8.3: Knowledge scaffolding — done by the binary](#step-83-knowledge-scaffolding--done-by-the-binary-not-by-this-skill)
 - [Step 8.4: AI populates routing field](#step-84-ai-populates-routing-field)
 - [Step 8.5: Verify final context file](#step-85-verify-final-context-file)
 - [Step 8.6: Signal Stage Complete](#step-86-signal-stage-complete)
@@ -79,156 +78,35 @@ jq . "$CONTEXT_FILE" > /dev/null && \
   { echo "ERROR: Context file JSON invalid" >&2; exit 1; }
 ```
 
-## Step 8.3: Knowledge Scaffolding (MANDATORY)
+## Step 8.3: Knowledge scaffolding — done by the binary, not by this skill
 
-> The `index=11` `knowledge-scaffolding` phase marker is emitted by the SKILL.md
-> body immediately before this step. Run the marker there, then run this step.
+Nothing to run here. The knowledge base for this issue (and the workspace-level
+tree) is created by the Go pickup path before this skill starts, and
+`knowledge_path` is already stamped into the issue context file.
 
-**PURPOSE**: When knowledge scaffolding is enabled, create the knowledge
-directory and pre-populate it with `PRD.md` and `decisions.md` templates derived
-from the issue body. Controlled by `knowledge.enabled` and
-`knowledge.auto_scaffold` config flags (both default to false/true respectively,
-but scaffolding is opt-in — disabled unless `knowledge.enabled: true`).
+This used to be ~100 lines of bash that called `nightgauge knowledge scaffold`
+from the stage's cwd. On the scheduler path that cwd is the run's **worktree**,
+so the PRD and decisions landed in `<worktree>/.nightgauge/knowledge/` —
+gitignored, and deleted with the worktree at reclamation. Every later reader
+(feature-dev's "read `knowledge_path/PRD.md`" rule, `/nightgauge:retro`'s
+outcome append, the sidebar) then found nothing, which is why this workspace's
+root knowledge base still ended at `390-` after hundreds of runs (#1205).
 
-```bash
-# Determine if this is an epic (check labels)
-IS_EPIC=false
-if printf '%s\n' "${LABELS:-}" | grep -q "type:epic"; then
-  IS_EPIC=true
-fi
+Root resolution is not something a skill can get right by convention — it needs
+`git rev-parse --git-common-dir`, and it needs to be the same answer every time.
+So it moved to the one place that already knows the canonical root. The
+`knowledge.enabled` / `knowledge.auto_scaffold` gate is read there too, from the
+parsed config rather than from `grep -A5 "^knowledge:"`.
 
-# Write issue body to temp file to avoid env var size limits
-ISSUE_BODY_FILE=$(mktemp)
-echo "${ISSUE_BODY:-}" > "$ISSUE_BODY_FILE"
-
-# Check if knowledge was already scaffolded by issue-create --with-knowledge
-# Idempotent: don't overwrite existing files. Match directory by issue number prefix.
-EXISTING_KNOWLEDGE_PATH=""
-CATEGORY="features"
-if [ "$IS_EPIC" = "true" ]; then
-  CATEGORY="epics"
-fi
-for dir in ".nightgauge/knowledge/${CATEGORY}/${ISSUE_NUMBER}-"*; do
-  if [ -d "$dir" ]; then
-    EXISTING_KNOWLEDGE_PATH="$dir"
-    break
-  fi
-done
-
-# Run scaffolding via KnowledgeService (shell wrapper)
-KNOWLEDGE_PATH=""
-if [ -n "$EXISTING_KNOWLEDGE_PATH" ]; then
-  # Knowledge was already scaffolded (e.g., via issue-create --with-knowledge). Skip.
-  KNOWLEDGE_PATH="$EXISTING_KNOWLEDGE_PATH"
-  rm -f "$ISSUE_BODY_FILE"
-  echo "Knowledge directory already exists: $KNOWLEDGE_PATH (skipping re-scaffold)"
-  # Patch knowledge_path into the context file so downstream stages find it
-  CONTEXT_FILE=".nightgauge/pipeline/issue-${ISSUE_NUMBER}.json"
-  tmp=$(mktemp)
-  jq --arg kp "$KNOWLEDGE_PATH" '.knowledge_path = $kp' "$CONTEXT_FILE" > "$tmp"
-  mv "$tmp" "$CONTEXT_FILE"
-else
-  rm -f "$ISSUE_BODY_FILE"
-
-  # Read config flags from shell — used to gate the CLI call.
-  KNOWLEDGE_ENABLED=$(grep -A5 "^knowledge:" .nightgauge/config.yaml 2>/dev/null | grep "enabled:" | grep -q "true" && echo "true" || echo "false")
-  WORKSPACE_SCOPED=$(grep -A5 "^knowledge:" .nightgauge/config.yaml 2>/dev/null | grep "workspace_scoped:" | grep -q "false" && echo "false" || echo "true")
-
-  BINARY="${NIGHTGAUGE_BIN:-}"
-  [ -n "$BINARY" ] && [ ! -x "$BINARY" ] && BINARY=""
-  [ -z "$BINARY" ] && BINARY=$(command -v nightgauge 2>/dev/null || echo "")
-  if [ -z "$BINARY" ]; then
-    REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-    [ -x "$REPO_ROOT/bin/nightgauge" ] && BINARY="$REPO_ROOT/bin/nightgauge"
-  fi
-  if [ -z "$BINARY" ]; then
-    GIT_COMMON_DIR="$(git rev-parse --git-common-dir 2>/dev/null || true)"
-    if [ -n "$GIT_COMMON_DIR" ]; then
-      CANONICAL_REPO="$(cd "$GIT_COMMON_DIR/.." 2>/dev/null && pwd)"
-      [ -n "$CANONICAL_REPO" ] && [ -x "$CANONICAL_REPO/bin/nightgauge" ] && BINARY="$CANONICAL_REPO/bin/nightgauge"
-    fi
-  fi
-  [ -z "$BINARY" ] && [ -x "$HOME/go/bin/nightgauge" ] && BINARY="$HOME/go/bin/nightgauge"
-  [ -n "$BINARY" ] && export PATH="$(dirname "$BINARY"):$PATH"
-
-  if [ -n "$BINARY" ]; then
-    SCAFFOLD_RESULT=$("$BINARY" knowledge scaffold \
-      --issue-number "$ISSUE_NUMBER" \
-      --title "$TITLE" \
-      --knowledge-enabled "$KNOWLEDGE_ENABLED" \
-      --workspace-scoped "$WORKSPACE_SCOPED" \
-      --json 2>/dev/null || echo '{"skipped":true,"skip_reason":"binary error"}')
-  else
-    SCAFFOLD_RESULT='{"skipped":true,"skip_reason":"nightgauge binary not found"}'
-  fi
-
-  KNOWLEDGE_PATH=$(printf '%s\n' "$SCAFFOLD_RESULT" | jq -r '.knowledge_path // empty')
-  KNOWLEDGE_SKIPPED=$(printf '%s\n' "$SCAFFOLD_RESULT" | jq -r '.skipped // true')
-  SKIP_REASON=$(printf '%s\n' "$SCAFFOLD_RESULT" | jq -r '.skip_reason // empty')
-
-  if [ "$KNOWLEDGE_SKIPPED" != "true" ] && [ -n "$KNOWLEDGE_PATH" ]; then
-    # Patch knowledge_path into the context file
-    CONTEXT_FILE=".nightgauge/pipeline/issue-${ISSUE_NUMBER}.json"
-    tmp=$(mktemp)
-    jq --arg kp "$KNOWLEDGE_PATH" '.knowledge_path = $kp' "$CONTEXT_FILE" > "$tmp"
-    mv "$tmp" "$CONTEXT_FILE"
-    echo "Knowledge directory scaffolded: $KNOWLEDGE_PATH"
-  elif [ "$KNOWLEDGE_SKIPPED" = "true" ]; then
-    if printf '%s\n' "$SKIP_REASON" | grep -q "knowledge.enabled=false"; then
-      echo "Knowledge scaffolding skipped (knowledge.enabled=false in config)"
-    else
-      echo "Knowledge scaffolding skipped: $SKIP_REASON"
-    fi
-  fi
-fi
-```
-
-## Step 8.3.5: Workspace KB auto-scaffold (gated by knowledge.workspace_scoped)
-
-After per-issue scaffold, idempotently create the workspace-level KB tree
-(`product/`, `cross-repo/`, `architecture/`) when both
-`knowledge.enabled=true` and `knowledge.workspace_scoped=true` (default).
-Skipped silently when either flag is false or when no workspace marker
-(`.vscode/nightgauge-workspace.yaml`) is found.
+To scaffold by hand (outside a pipeline run):
 
 ```bash
-# Read effective config flags from shell (same approach as Step 8.3).
-KNOWLEDGE_ENABLED_FLAG=$(grep -A5 "^knowledge:" .nightgauge/config.yaml 2>/dev/null | grep "enabled:" | grep -q "true" && echo "true" || echo "false")
-KNOWLEDGE_WORKSPACE_SCOPED=$(grep -A5 "^knowledge:" .nightgauge/config.yaml 2>/dev/null | grep "workspace_scoped:" | grep -q "false" && echo "false" || echo "true")
-
-if [ "$KNOWLEDGE_WORKSPACE_SCOPED" = "true" ] && [ "$KNOWLEDGE_ENABLED_FLAG" = "true" ]; then
-  BINARY="${NIGHTGAUGE_BIN:-}"
-  [ -n "$BINARY" ] && [ ! -x "$BINARY" ] && BINARY=""
-  [ -z "$BINARY" ] && BINARY=$(command -v nightgauge 2>/dev/null || echo "")
-  if [ -z "$BINARY" ]; then
-    REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-    [ -x "$REPO_ROOT/bin/nightgauge" ] && BINARY="$REPO_ROOT/bin/nightgauge"
-  fi
-  if [ -z "$BINARY" ]; then
-    GIT_COMMON_DIR="$(git rev-parse --git-common-dir 2>/dev/null || true)"
-    if [ -n "$GIT_COMMON_DIR" ]; then
-      CANONICAL_REPO="$(cd "$GIT_COMMON_DIR/.." 2>/dev/null && pwd)"
-      [ -n "$CANONICAL_REPO" ] && [ -x "$CANONICAL_REPO/bin/nightgauge" ] && BINARY="$CANONICAL_REPO/bin/nightgauge"
-    fi
-  fi
-  [ -z "$BINARY" ] && [ -x "$HOME/go/bin/nightgauge" ] && BINARY="$HOME/go/bin/nightgauge"
-  [ -n "$BINARY" ] && export PATH="$(dirname "$BINARY"):$PATH"
-  if [ -n "$BINARY" ]; then
-    WS_INIT_RESULT=$("$BINARY" knowledge workspace-init --json 2>/dev/null || echo "")
-    if [ -n "$WS_INIT_RESULT" ]; then
-      WS_SKIPPED=$(printf '%s\n' "$WS_INIT_RESULT" | jq -r '.skipped // false' 2>/dev/null)
-      WS_FILES_COUNT=$(printf '%s\n' "$WS_INIT_RESULT" | jq -r '.files_created | length' 2>/dev/null || echo "0")
-      if [ "$WS_SKIPPED" = "true" ]; then
-        echo "Workspace KB already initialized — no changes."
-      elif [ "$WS_FILES_COUNT" -gt 0 ]; then
-        echo "Workspace KB scaffolded: ${WS_FILES_COUNT} file(s) created."
-      fi
-    fi
-    # Silent failure is acceptable — workspace-init is opportunistic. The
-    # user can always run it manually via the CLI command.
-  fi
-fi
+nightgauge knowledge scaffold --issue-number <N> --title "<title>" \
+  --knowledge-enabled true --json
 ```
+
+The CLI verb canonicalizes its root the same way, so it is safe to run from
+inside a worktree.
 
 ## Step 8.4: AI populates routing field
 

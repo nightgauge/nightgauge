@@ -39,6 +39,8 @@ import (
 	"github.com/nightgauge/nightgauge/internal/intelligence/routing"
 	"github.com/nightgauge/nightgauge/internal/intelligence/survival"
 	"github.com/nightgauge/nightgauge/internal/intelligence/tokens"
+	"github.com/nightgauge/nightgauge/internal/knowledge"
+	kbworkspace "github.com/nightgauge/nightgauge/internal/knowledge/workspace"
 	"github.com/nightgauge/nightgauge/internal/models"
 	"github.com/nightgauge/nightgauge/internal/orchestrator/gates"
 	"github.com/nightgauge/nightgauge/internal/orchestrator/recovery"
@@ -5421,6 +5423,16 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			if item.ParentNumber != 0 {
 				s.ensureEpicBranchForItem(ctx, workspaceRoot, item)
 			}
+			// Scaffold the knowledge base HERE rather than in the skill
+			// (#1205). The skill's bash block called `knowledge scaffold`
+			// with its cwd inside the run's worktree, so the PRD and
+			// decisions landed in <worktree>/.nightgauge/knowledge —
+			// gitignored, and deleted with the worktree at reclamation. Every
+			// later reader (feature-dev's "read knowledge_path/PRD.md" rule,
+			// /nightgauge:retro's outcome append, the sidebar) then found
+			// nothing, which is why this workspace's root KB still ended at
+			// 390- after hundreds of runs.
+			s.scaffoldKnowledgeAtPickup(workspaceRoot, stageWorkspace(runtime, workspaceRoot), item)
 		case state.StageFeatureValidate:
 			if gr := loadGateResults(workspaceRoot, item.Number); len(gr) > 0 {
 				runtime.SetGateResults(gr)
@@ -7565,6 +7577,116 @@ func loadFeatureBranch(workspaceRoot string, issueNumber int) string {
 // prediction it was supposed to repair — and would have made reRouteContext
 // write a SECOND context file at the root, diverging from the one the stages
 // actually read (#994).
+// scaffoldKnowledgeAtPickup creates the issue's knowledge base at the CANONICAL
+// workspace root and stamps knowledge_path into the run's context file.
+//
+// Root-anchoring is the whole point: a scaffold written relative to the stage's
+// cwd is written into the worktree, and a worktree is reclaimed after merge
+// (#1205). The path written into the context file is ABSOLUTE, because it is
+// read from two different cwds — the stages run in the worktree, the sidebar
+// and retro read from the root — and only an absolute path is correct from
+// both. Both TypeScript readers already accept either form.
+//
+// Non-fatal throughout. The knowledge base is an enrichment; a pickup that
+// otherwise succeeded must not fail because a directory could not be written.
+// Every failure is logged, because a silent skip here is exactly the failure
+// mode that let the original bug run for hundreds of pipelines.
+func (s *Scheduler) scaffoldKnowledgeAtPickup(workspaceRoot, worktreeDir string, item types.BoardItem) {
+	// Canonicalize BEFORE reading config. The scheduler's own root is a
+	// worktree in the dogfood shape, and a worktree created before a config
+	// change carries a stale copy — or none. The config that governs the
+	// repository is the one in the main checkout.
+	root := workspaceRoot
+	if canonical := config.MainCheckoutRoot(workspaceRoot); canonical != "" {
+		root = canonical
+	}
+
+	cfg, err := config.Load(root)
+	if err != nil || cfg == nil {
+		return
+	}
+	if !cfg.Knowledge.IsAutoScaffold() {
+		return
+	}
+
+	result, err := knowledge.ScaffoldWithConfig(root, item.Number, item.Title, nil,
+		cfg.Knowledge.IsEnabled(), cfg.Knowledge.IsWorkspaceScoped())
+	if err != nil {
+		log.Printf("#%d: knowledge scaffold failed (non-fatal): %v", item.Number, err)
+		return
+	}
+	if result.KnowledgePath == "" {
+		return
+	}
+	// A skipped result is still a usable path — an idempotent rerun returns the
+	// directory that already exists, and the context file still needs it.
+	absPath := filepath.Join(root, result.KnowledgePath)
+	if err := stampKnowledgePath(workspaceRoot, worktreeDir, item, absPath); err != nil {
+		log.Printf("#%d: knowledge scaffolded at %s but knowledge_path was not "+
+			"stamped into the context file (non-fatal): %v", item.Number, absPath, err)
+		return
+	}
+	if result.Skipped {
+		log.Printf("#%d: knowledge base already present at %s", item.Number, absPath)
+	} else {
+		log.Printf("#%d: knowledge scaffolded at %s", item.Number, absPath)
+	}
+
+	// The workspace-level tree (product/, cross-repo/, architecture/) was the
+	// skill's Step 8.3.5 and carried the same cwd exposure. Idempotent, and
+	// opportunistic — a workspace with no marker file simply has none.
+	if !cfg.Knowledge.IsWorkspaceScoped() {
+		return
+	}
+	wsRoot, err := kbworkspace.DetectWorkspaceRoot(root)
+	if err != nil {
+		return
+	}
+	if _, err := kbworkspace.InitTree(kbworkspace.InitTreeInput{WorkspaceRoot: wsRoot}); err != nil {
+		log.Printf("#%d: workspace knowledge tree init failed (non-fatal): %v", item.Number, err)
+	}
+}
+
+// stampKnowledgePath writes knowledge_path into the run's issue context file,
+// wherever IssueContextCandidates finds it (#994) — on a worktree-isolated run
+// that is inside the worktree, not at the root.
+func stampKnowledgePath(workspaceRoot, worktreeDir string, item types.BoardItem, knowledgePath string) error {
+	contextPath := resolveIssueContextPath(workspaceRoot, worktreeDir, item.Repo, item.Number)
+	if contextPath == "" {
+		return fmt.Errorf("no issue context file found for #%d", item.Number)
+	}
+
+	data, err := os.ReadFile(contextPath)
+	if err != nil {
+		return fmt.Errorf("read context: %w", err)
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return fmt.Errorf("parse context: %w", err)
+	}
+	if existing, ok := raw["knowledge_path"].(string); ok && existing == knowledgePath {
+		return nil
+	}
+	raw["knowledge_path"] = knowledgePath
+
+	updated, err := json.MarshalIndent(raw, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal context: %w", err)
+	}
+
+	// Atomic write: temp file + rename, so a reader never sees a half-written
+	// context (#1210).
+	tmpPath := contextPath + ".tmp"
+	if err := os.WriteFile(tmpPath, updated, 0o644); err != nil {
+		return fmt.Errorf("write temp context: %w", err)
+	}
+	if err := os.Rename(tmpPath, contextPath); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("rename context: %w", err)
+	}
+	return nil
+}
+
 func resolveIssueContextPath(workspaceRoot, worktreeDir, repo string, issueNumber int) string {
 	for _, path := range execution.IssueContextCandidates(workspaceRoot, worktreeDir, repo, issueNumber) {
 		if _, err := os.Stat(path); err == nil {

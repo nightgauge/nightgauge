@@ -15,7 +15,13 @@ type KnowledgeConfig struct {
 	// Enabled controls whether the knowledge base is active. Defaults to false (opt-in).
 	Enabled *bool `yaml:"enabled" json:"enabled,omitempty"`
 	// AutoScaffold controls whether the knowledge directory is automatically
-	// scaffolded at issue pickup when Enabled is true. Defaults to false.
+	// scaffolded at issue pickup when Enabled is true. Resolved via
+	// IsAutoScaffold(): defaults ON when Enabled is true and AutoScaffold is
+	// unset, and is always off when Enabled is false. (The old "defaults to
+	// false" comment here contradicted docs/KNOWLEDGE_BASE.md, the
+	// docs/CONFIGURATION.md table and the SDK's own reader, all three of which
+	// treat unset as on — and nothing in Go read the field at all, so the
+	// contradiction never surfaced. #1205.)
 	AutoScaffold *bool `yaml:"auto_scaffold" json:"auto_scaffold,omitempty"`
 	// WikiLinks controls whether [[wiki-link]] syntax is resolved in knowledge documents.
 	WikiLinks *bool `yaml:"wiki_links" json:"wiki_links,omitempty"`
@@ -78,6 +84,25 @@ func (k *KnowledgeConfig) IsTelemetryEnabled() bool {
 		return true
 	}
 	return *k.Telemetry.Enabled
+}
+
+// IsAutoScaffold returns the effective auto_scaffold setting.
+//
+// Gated by Enabled for the same reason IsTelemetryEnabled is (ADR-005): a
+// project that opts out of the knowledge base must not have directories
+// scaffolded into its tree by a nested flag it never looked at.
+//
+// When knowledge.enabled is true:
+//   - auto_scaffold unset    → true  (docs/KNOWLEDGE_BASE.md behaviour matrix)
+//   - auto_scaffold explicit → the explicit value
+func (k *KnowledgeConfig) IsAutoScaffold() bool {
+	if k == nil || !k.IsEnabled() {
+		return false
+	}
+	if k.AutoScaffold == nil {
+		return true
+	}
+	return *k.AutoScaffold
 }
 
 // IsWorkspaceScoped returns the effective workspace_scoped setting. Defaults

@@ -65,3 +65,46 @@ func TestIsTelemetryEnabled_ExplicitOptIn(t *testing.T) {
 		t.Error("explicit telemetry.enabled=true not respected")
 	}
 }
+
+// --- IsAutoScaffold (#1205) ---
+//
+// The field existed since the knowledge base shipped and NOTHING in Go read it.
+// Its struct comment said "defaults to false" while docs/KNOWLEDGE_BASE.md, the
+// docs/CONFIGURATION.md table and the SDK's own reader all treat unset as on —
+// a contradiction that could never surface, because no resolver existed to be
+// wrong. The truth table below is the one the docs publish.
+
+func TestIsAutoScaffold_DefaultsOnWhenKnowledgeOn(t *testing.T) {
+	tr := true
+	cfg := &KnowledgeConfig{Enabled: &tr}
+	if !cfg.IsAutoScaffold() {
+		t.Error("enabled=true, auto_scaffold unset: IsAutoScaffold = false, want true")
+	}
+}
+
+func TestIsAutoScaffold_OffWhenKnowledgeDisabled(t *testing.T) {
+	fa := false
+	tr := true
+	// Gated by Enabled for the same reason telemetry is (ADR-005): a project
+	// that opted out of the KB must not get directories scaffolded into its
+	// tree by a nested flag it never looked at.
+	cfg := &KnowledgeConfig{Enabled: &fa, AutoScaffold: &tr}
+	if cfg.IsAutoScaffold() {
+		t.Error("enabled=false, auto_scaffold=true: IsAutoScaffold = true, want false")
+	}
+	if (*KnowledgeConfig)(nil).IsAutoScaffold() {
+		t.Error("nil receiver: IsAutoScaffold = true, want false")
+	}
+	if (&KnowledgeConfig{}).IsAutoScaffold() {
+		t.Error("empty config (enabled unset ⇒ false): IsAutoScaffold = true, want false")
+	}
+}
+
+func TestIsAutoScaffold_ExplicitOptOut(t *testing.T) {
+	tr := true
+	fa := false
+	cfg := &KnowledgeConfig{Enabled: &tr, AutoScaffold: &fa}
+	if cfg.IsAutoScaffold() {
+		t.Error("auto_scaffold=false not respected — enabled but not automatic")
+	}
+}
