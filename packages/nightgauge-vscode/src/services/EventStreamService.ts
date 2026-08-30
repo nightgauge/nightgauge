@@ -1,28 +1,24 @@
 /**
- * EventStreamService — fetch-based SSE client for real-time audit + workflow events.
+ * EventStreamService — fetch-based SSE client for real-time audit events.
  *
  * Delegates all stream I/O (connection, backoff, 401 refresh, Last-Event-ID) to
  * PlatformSseClient. This class owns event parsing and status emitters.
  *
- * Workflow events are the canonical `schemaVersion-4` {@link WorkflowEvent} node
- * tree (run / phase / agent / judge) emitted by the SDK EventBus and re-served
- * over SSE. The previous hand-rolled `PipelineEvent` discriminated union + string
- * matching (#3714) is GONE: every workflow payload is validated by one
- * `parseWorkflowEvent` Zod call and forwarded VERBATIM — `nodeId` / `parentId` /
- * `seq` / `ts` intact — to the sidebar workflow tree (#3919).
+ * It used to also parse `schemaVersion-4` WorkflowEvent nodes and fan them out
+ * to a sidebar tree. Nothing ever published those nodes to this stream, so that
+ * half was removed in #1208 — see the note at the dispatch site. Audit events
+ * are the real traffic here.
  *
  * @see Issue #3321 — Wire up SSE consumer for real-time audit/pipeline events
  * @see Issue #3711 — Shared Resilient PlatformSseClient
- * @see Issue #3919 — live workflow node-tree sidebar; reverses the #3714 mirror
+ * @see Issue #1208 — removed the unreachable workflow half
  * @see ProjectEventSubscriber.ts — sibling subscriber using the same transport
  */
 
 import * as vscode from "vscode";
-import type { WorkflowEvent } from "@nightgauge/sdk";
 import type { Logger } from "../utils/logger";
 import type { AuditLogEntry } from "../views/dashboard/DashboardState";
 import type { TokenRefreshManager } from "../platform/TokenRefreshManager";
-import { parseWorkflowEvent } from "../schemas/workflowEvent";
 import { PlatformSseClient } from "./PlatformSseClient";
 import type { SseStreamStatus } from "./PlatformSseClient";
 
@@ -53,14 +49,6 @@ export class EventStreamService implements vscode.Disposable {
 
   private readonly _onStreamStatusChanged = new vscode.EventEmitter<StreamStatusEvent>();
   readonly onStreamStatusChanged = this._onStreamStatusChanged.event;
-
-  /**
-   * Fires for every canonical {@link WorkflowEvent} node emission received over
-   * SSE — the run / phase / agent / judge tree, forwarded verbatim (with its
-   * `seq`). Subscribers fold the stream into the live workflow sidebar tree.
-   */
-  private readonly _onWorkflowEvent = new vscode.EventEmitter<WorkflowEvent>();
-  readonly onWorkflowEvent = this._onWorkflowEvent.event;
 
   private constructor(opts: EventStreamServiceOptions) {
     this._sseClient = new PlatformSseClient({
@@ -117,7 +105,6 @@ export class EventStreamService implements vscode.Disposable {
     this._sseClient.dispose();
     this._onAuditLiveEvent.dispose();
     this._onStreamStatusChanged.dispose();
-    this._onWorkflowEvent.dispose();
   }
 
   private _dispatchEvent(data: string): void {
@@ -140,14 +127,15 @@ export class EventStreamService implements vscode.Disposable {
       return;
     }
 
-    // Workflow node-tree emission — one Zod parse, no string matching. The SSE
-    // envelope may nest the node under `data`; unwrap before parsing.
-    const candidate =
-      typeof payload["data"] === "object" && payload["data"] !== null ? payload["data"] : payload;
-    const node = parseWorkflowEvent(candidate);
-    if (node) {
-      this._onWorkflowEvent.fire(node);
-    }
+    // Workflow node emissions used to be parsed here and fanned out to a
+    // sidebar view. Nothing ever published WorkflowEvent nodes to this stream —
+    // the SDK's PipelineOrchestrator emits them onto a private in-process
+    // EventBus whose only production subscriber is the SDK CLI's stdout
+    // formatter, the extension never instantiates that orchestrator, and the Go
+    // scheduler that actually runs the operator's pipeline has no workflow-node
+    // code at all. The view and this dispatch were removed in #1208 rather than
+    // kept as plumbing for an unreachable producer; the SDK contract itself is
+    // untouched. Audit events, above, are the real traffic on this stream.
   }
 }
 

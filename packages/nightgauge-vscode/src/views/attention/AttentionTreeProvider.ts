@@ -6,7 +6,8 @@
  * `blocking_run`) and "Needs a human" (`fyi`). State is fetched once via
  * `attention.list` and kept live thereafter by folding the `attention.event`
  * push (created | updated | acknowledged | resolved | expired) — no polling,
- * mirroring {@link WorkflowTreeProvider}'s subscribe-and-fold shape.
+ * using the subscribe-and-fold shape the workflow tree used before #1208
+ * removed it.
  *
  * "One queue, many mirrors" (ADR 015 §D): a resolve on ANY surface emits the
  * same event this provider consumes, so a request resolved elsewhere (the

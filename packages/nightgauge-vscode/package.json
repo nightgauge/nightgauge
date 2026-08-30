@@ -55,13 +55,6 @@
           "contextualTitle": "Nightgauge Pipeline"
         },
         {
-          "id": "nightgauge.workflowView",
-          "name": "Workflow",
-          "icon": "$(circuit-board)",
-          "contextualTitle": "Live Workflow Tree",
-          "visibility": "collapsed"
-        },
-        {
           "id": "nightgauge.repositoriesView",
           "name": "Repositories",
           "icon": "$(repo)",

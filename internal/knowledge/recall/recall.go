@@ -37,6 +37,15 @@ type Document struct {
 
 // Index is the in-memory BM25 index.
 type Index struct {
+	// Root is the workspace root every Document.Path is relative to.
+	//
+	// The index stores WORKSPACE-RELATIVE paths, so anything that reopens a
+	// document has to join them against this. extractSnippet did not, and
+	// resolved them against the process cwd instead — which for the IPC daemon
+	// is not the workspace root. Every snippet then came back empty and the
+	// sidebar fell back to the file's basename, rendering rows that read
+	// `decisions 0.69` (#1207).
+	Root      string
 	Docs      []*Document
 	DF        map[string]int // document frequency per term
 	AvgDocLen float64
@@ -95,7 +104,7 @@ func BuildIndex(workdir string, scopes []string, cfg *config.KnowledgeConfig) (*
 		docs = filterByScope(docs, scopes)
 	}
 
-	return buildIndexFromDocs(docs, k1, b), nil
+	return buildIndexFromDocs(workdir, docs, k1, b), nil
 }
 
 // Query scores all documents against query and returns the top limit hits.
@@ -172,7 +181,7 @@ func Query(idx *Index, query string, limit int, scopes []string) (RecallResult, 
 			Kind:        doc.Kind,
 			IssueNumber: doc.IssueNumber,
 			Tags:        doc.Tags,
-			Snippet:     extractSnippet(doc.Path, queryTerms),
+			Snippet:     extractSnippet(idx.Root, doc.Path, queryTerms),
 			Graduated:   doc.Graduated,
 		})
 		rank++
@@ -212,8 +221,9 @@ func ScoreDoc(idx *Index, doc *Document, queryTerms []string, k1, b float64) flo
 }
 
 // buildIndexFromDocs constructs an Index from a slice of documents.
-func buildIndexFromDocs(docs []*Document, k1, b float64) *Index {
+func buildIndexFromDocs(root string, docs []*Document, k1, b float64) *Index {
 	idx := &Index{
+		Root: root,
 		Docs: docs,
 		DF:   make(map[string]int),
 		K1:   k1,
@@ -413,8 +423,17 @@ func matchesScope(doc *Document, scopes []string) bool {
 }
 
 // extractSnippet returns a short excerpt from the file containing a query term.
-func extractSnippet(relPath string, queryTerms []string) string {
+// extractSnippet reopens an indexed document to quote the matching line.
+//
+// relPath is workspace-relative, so it MUST be joined against the index root.
+// Reading it directly resolves against the process cwd, which is the workspace
+// root only by coincidence — the IPC daemon runs elsewhere, so every snippet
+// came back empty and the sidebar rendered a bare filename and score (#1207).
+func extractSnippet(root, relPath string, queryTerms []string) string {
 	// Best-effort: snippet is not required for correctness.
+	if root != "" && !filepath.IsAbs(relPath) {
+		relPath = filepath.Join(root, relPath)
+	}
 	data, err := os.ReadFile(relPath)
 	if err != nil {
 		return ""

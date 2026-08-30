@@ -88,7 +88,6 @@ import { ConfigBridge } from "../../services/ConfigBridge";
 import { LocalAuditFallbackService } from "../../services/LocalAuditFallbackService";
 import type { AuditLogData, AuditFilterState } from "./DashboardState";
 import { EventStreamService } from "../../services/EventStreamService";
-import type { WorkflowEvent } from "@nightgauge/sdk";
 import { TokenStorage } from "../../platform/TokenStorage";
 import {
   DiscoveryActivityService,
@@ -2284,70 +2283,6 @@ export class Dashboard implements vscode.Disposable {
   }
 
   /**
-   * Apply a live {@link WorkflowEvent} node emission to the open Run Detail
-   * panel (#3919, reworked from the #3714 flat-event handler).
-   *
-   * The canonical node tree replaces the old `pipeline.*` flat events:
-   * - a `run` terminal (succeeded / failed / cancelled) → `allComplete` marker
-   *   plus a snapshot refresh for final counts;
-   * - a `phase` node → a per-stage status update (the phase `name` is the stage,
-   *   its `status` maps onto the run-detail stage row).
-   *
-   * No-op when no panel is open or the emission belongs to a different run.
-   */
-  private handleWorkflowEvent(event: WorkflowEvent): void {
-    if (!this.panel) return;
-    if (this.selectedRunIssueNumber === null) return;
-    if (!this.eventBelongsToSelectedRun(event)) return;
-
-    if (event.kind === "run") {
-      if (
-        event.status === "succeeded" ||
-        event.status === "failed" ||
-        event.status === "cancelled"
-      ) {
-        this.panel.webview.postMessage({
-          type: "runDetailLiveUpdate",
-          issueNumber: this.selectedRunIssueNumber,
-          update: { allComplete: true },
-        });
-        void this.refreshRunDetailSnapshot();
-      }
-      return;
-    }
-
-    if (event.kind === "phase") {
-      const status =
-        event.status === "succeeded"
-          ? "completed"
-          : event.status === "failed"
-            ? "failed"
-            : event.status === "skipped"
-              ? "skipped"
-              : "running";
-      this.panel.webview.postMessage({
-        type: "runDetailLiveUpdate",
-        issueNumber: this.selectedRunIssueNumber,
-        update: { stage: event.name, status },
-      });
-    }
-  }
-
-  /**
-   * Whether a workflow node emission belongs to the currently-selected run. The
-   * root `run` node carries `runId` / `issueNumber`; descendant nodes are matched
-   * by their nodeId carrying the run's issue number (`run:NNN`, `phase:NNN:…`).
-   */
-  private eventBelongsToSelectedRun(event: WorkflowEvent): boolean {
-    if (event.kind === "run") {
-      if (this.selectedRunId !== null && event.runId === this.selectedRunId) return true;
-      return event.issueNumber === this.selectedRunIssueNumber;
-    }
-    // Node ids are namespaced by issue number (e.g. "phase:42:feature-dev").
-    return event.nodeId.includes(`:${this.selectedRunIssueNumber}:`);
-  }
-
-  /**
    * Re-fetch run details after pipeline completes to refresh final token counts (#3714).
    */
   private async refreshRunDetailSnapshot(): Promise<void> {
@@ -2834,12 +2769,6 @@ export class Dashboard implements vscode.Disposable {
           status: statusEvent.status,
           label: statusEvent.label,
         });
-      })
-    );
-
-    this.disposables.push(
-      service.onWorkflowEvent((event) => {
-        this.handleWorkflowEvent(event);
       })
     );
   }
