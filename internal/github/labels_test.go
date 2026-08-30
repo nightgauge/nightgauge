@@ -2,10 +2,12 @@ package github
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -330,5 +332,241 @@ func TestLabelRename_RequiresBothNames(t *testing.T) {
 	}
 	if _, err := svc.Rename(context.Background(), "area:vscode", "", "", ""); err == nil {
 		t.Error("empty new name must be rejected")
+	}
+}
+
+// --- ResolveNames (#1214) ---
+//
+// `issue create --labels` documented and consumed GraphQL node IDs while every
+// caller — the issue-create skill's own worked examples included — passed
+// names. The create mutation then failed with `Could not resolve to a node
+// with the global id of 'type:bug'`, and agents fell back to `gh issue create`,
+// bypassing the deterministic path the skill mandates.
+
+const resolveNamesFixture = `[
+	{"node_id": "LA_bug", "name": "type:bug", "description": "", "color": "d73a4a"},
+	{"node_id": "LA_sdk", "name": "component:sdk", "description": "", "color": "a2eeef"},
+	{"node_id": "LA_hi",  "name": "priority:high", "description": "", "color": "b60205"}
+]`
+
+func TestLabelResolveNames_MapsNamesToIDsInOrder(t *testing.T) {
+	client, cleanup := mockForgeServer(t,
+		map[string]string{"GET /repos/nightgauge/nightgauge/labels": resolveNamesFixture})
+	defer cleanup()
+
+	svc := NewLabelService(client, "nightgauge", "nightgauge")
+	got, err := svc.ResolveNames(context.Background(), []string{"component:sdk", "type:bug"})
+	if err != nil {
+		t.Fatalf("ResolveNames() error: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("ResolveNames() returned %d labels, want 2", len(got))
+	}
+	// Order is the caller's, not the repository's — a caller reporting what it
+	// applied must be able to pair its input with the result.
+	if got[0].ID != "LA_sdk" || got[1].ID != "LA_bug" {
+		t.Errorf("ids = [%s %s], want [LA_sdk LA_bug]", got[0].ID, got[1].ID)
+	}
+	if got[0].Name != "component:sdk" || got[1].Name != "type:bug" {
+		t.Errorf("names = [%s %s], want [component:sdk type:bug]", got[0].Name, got[1].Name)
+	}
+}
+
+func TestLabelResolveNames_UnknownNameIsAnError(t *testing.T) {
+	client, cleanup := mockForgeServer(t,
+		map[string]string{"GET /repos/nightgauge/nightgauge/labels": resolveNamesFixture})
+	defer cleanup()
+
+	svc := NewLabelService(client, "nightgauge", "nightgauge")
+	got, err := svc.ResolveNames(context.Background(), []string{"type:bug", "no:such-label"})
+	if err == nil {
+		t.Fatalf("ResolveNames() with an unknown name returned %v, want an error", got)
+	}
+	// The message has to name the label AND the repo: "not found" alone leaves
+	// the caller guessing whether the name or the repo is wrong.
+	if !strings.Contains(err.Error(), `"no:such-label"`) {
+		t.Errorf("error %q does not name the missing label", err)
+	}
+	if !strings.Contains(err.Error(), "nightgauge/nightgauge") {
+		t.Errorf("error %q does not name the repository", err)
+	}
+	// All-or-nothing: a partial result would let a caller label an issue with
+	// half of what it asked for and report success.
+	if got != nil {
+		t.Errorf("ResolveNames() returned %v alongside the error, want nil", got)
+	}
+}
+
+func TestLabelResolveNames_ReportsEveryUnknownNameAtOnce(t *testing.T) {
+	client, cleanup := mockForgeServer(t,
+		map[string]string{"GET /repos/nightgauge/nightgauge/labels": resolveNamesFixture})
+	defer cleanup()
+
+	svc := NewLabelService(client, "nightgauge", "nightgauge")
+	_, err := svc.ResolveNames(context.Background(), []string{"nope:one", "type:bug", "nope:two"})
+	if err == nil {
+		t.Fatal("ResolveNames() returned nil error, want an error")
+	}
+	for _, want := range []string{`"nope:one"`, `"nope:two"`} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q omits %s — a caller with two bad labels should "+
+				"not learn about them over two round trips", err, want)
+		}
+	}
+}
+
+func TestLabelResolveNames_IsCaseSensitive(t *testing.T) {
+	client, cleanup := mockForgeServer(t,
+		map[string]string{"GET /repos/nightgauge/nightgauge/labels": resolveNamesFixture})
+	defer cleanup()
+
+	svc := NewLabelService(client, "nightgauge", "nightgauge")
+	// GitHub label names are case-sensitive. A case-insensitive match would
+	// silently apply a different label than the caller named.
+	if _, err := svc.ResolveNames(context.Background(), []string{"Type:Bug"}); err == nil {
+		t.Error("ResolveNames(\"Type:Bug\") succeeded; want a miss against \"type:bug\"")
+	}
+}
+
+func TestLabelResolveNames_EmptyInputMakesNoRequest(t *testing.T) {
+	// No REST fixture registered: mockForgeServer fails the test on any call,
+	// so this asserts the zero-label path costs nothing.
+	client, cleanup := mockForgeServer(t, map[string]string{})
+	defer cleanup()
+
+	svc := NewLabelService(client, "nightgauge", "nightgauge")
+	got, err := svc.ResolveNames(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("ResolveNames(nil) error: %v", err)
+	}
+	if got != nil {
+		t.Errorf("ResolveNames(nil) = %v, want nil", got)
+	}
+}
+
+func TestLabelResolveNames_TrimsSurroundingWhitespace(t *testing.T) {
+	client, cleanup := mockForgeServer(t,
+		map[string]string{"GET /repos/nightgauge/nightgauge/labels": resolveNamesFixture})
+	defer cleanup()
+
+	svc := NewLabelService(client, "nightgauge", "nightgauge")
+	// `--labels "type:bug, component:sdk"` is how a human writes a list.
+	got, err := svc.ResolveNames(context.Background(), []string{"type:bug", " component:sdk "})
+	if err != nil {
+		t.Fatalf("ResolveNames() error: %v", err)
+	}
+	if len(got) != 2 || got[1].ID != "LA_sdk" {
+		t.Errorf("ResolveNames() = %v, want the padded name resolved", got)
+	}
+}
+
+// TestResolveNamesThenCreateIssue_SendsIDsNotNames is the end-to-end assertion
+// #1214 was missing: it inspects the createIssue mutation's actual variables.
+//
+// Every other test here can pass while names are handed straight to `labelIds`,
+// because nothing else reads the request body. That is exactly how the bug
+// shipped — the flag was named, documented and exercised, and no test ever
+// looked at what went over the wire.
+func TestResolveNamesThenCreateIssue_SendsIDsNotNames(t *testing.T) {
+	var (
+		mu       sync.Mutex
+		seen     []string
+		mutation map[string]any
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/repos/") && strings.HasSuffix(r.URL.Path, "/labels"):
+			seen = append(seen, "GET labels")
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, resolveNamesFixture)
+		default:
+			seen = append(seen, "POST /graphql")
+			raw, _ := io.ReadAll(r.Body)
+			var payload struct {
+				Variables map[string]any `json:"variables"`
+			}
+			if err := json.Unmarshal(raw, &payload); err != nil {
+				t.Errorf("decode mutation body: %v", err)
+			}
+			mutation = payload.Variables
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, `{"data":{"createIssue":{"issue":{"id":"I_1","number":42,"url":"https://x/42"}}}}`)
+		}
+	}))
+	defer srv.Close()
+
+	client := NewClientWithURL("test-token", srv.URL)
+	resolved, err := NewLabelService(client, "nightgauge", "nightgauge").
+		ResolveNames(context.Background(), []string{"type:bug", "component:sdk"})
+	if err != nil {
+		t.Fatalf("ResolveNames() error: %v", err)
+	}
+	ids := make([]string, len(resolved))
+	for i, l := range resolved {
+		ids[i] = l.ID
+	}
+
+	issue, err := NewIssueService(client).
+		CreateIssue(context.Background(), "REPO_NODE_ID", "t", "b", ids)
+	if err != nil {
+		t.Fatalf("CreateIssue() error: %v", err)
+	}
+	if issue.Number != 42 {
+		t.Errorf("issue.Number = %d, want 42", issue.Number)
+	}
+
+	// Exactly one label lookup, then the create — not a lookup per label.
+	if want := []string{"GET labels", "POST /graphql"}; !reflect.DeepEqual(seen, want) {
+		t.Errorf("requests = %v, want %v", seen, want)
+	}
+
+	input, ok := mutation["input"].(map[string]any)
+	if !ok {
+		t.Fatalf("mutation variables have no input object: %#v", mutation)
+	}
+	got, _ := json.Marshal(input["labelIds"])
+	if want := `["LA_bug","LA_sdk"]`; string(got) != want {
+		t.Errorf("labelIds = %s, want %s — a name reaching labelIds is the bug "+
+			"(`Could not resolve to a node with the global id of 'type:bug'`)", got, want)
+	}
+}
+
+// TestResolveNamesThenCreateIssue_UnknownNameCreatesNothing pins the ordering
+// the fix depends on. A half-labelled issue that reports success is worse than
+// a refusal, because the missing label is what the board syncs on.
+func TestResolveNamesThenCreateIssue_UnknownNameCreatesNothing(t *testing.T) {
+	var (
+		mu   sync.Mutex
+		seen []string
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		if strings.HasSuffix(r.URL.Path, "/labels") {
+			seen = append(seen, "GET labels")
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, resolveNamesFixture)
+			return
+		}
+		seen = append(seen, "POST /graphql")
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"data":{}}`)
+	}))
+	defer srv.Close()
+
+	client := NewClientWithURL("test-token", srv.URL)
+	if _, err := NewLabelService(client, "nightgauge", "nightgauge").
+		ResolveNames(context.Background(), []string{"no:such-label"}); err == nil {
+		t.Fatal("ResolveNames() returned nil error for an unknown label")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	for _, call := range seen {
+		if call == "POST /graphql" {
+			t.Fatalf("a mutation was issued despite the unresolvable label: %v", seen)
+		}
 	}
 }

@@ -880,16 +880,15 @@ fi
 [ -z "$BINARY" ] && [ -x "$HOME/go/bin/nightgauge" ] && BINARY="$HOME/go/bin/nightgauge"
 [ -n "$BINARY" ] && export PATH="$(dirname "$BINARY"):$PATH"
 
-"$BINARY" issue create-sub <EPIC_NUMBER> "<FINDING_TITLE>" "<FINDING_BODY>"
+"$BINARY" issue create-sub <EPIC_NUMBER> \
+  --title "<FINDING_TITLE>" --body "<FINDING_BODY>" \
+  --labels "type:bug,component:go-binary"
 ```
 
-Note: `issue create-sub` does NOT support `--labels`. After creating the
-sub-issue, add labels separately:
-
-```bash
-nightgauge forge graphql -f query='mutation($id:ID!,$labels:[ID!]!){addLabelsToLabelable(input:{labelableId:$id,labelIds:$labels}){clientMutationId}}' \
-  -f id="$SUB_ISSUE_NODE_ID" -f labels="$LABEL_IDS"
-```
+`create-sub` takes the parent number positionally and everything else as
+flags, and `--labels` takes label NAMES (#1214) — it resolves them to node IDs
+itself and fails before creating anything if a name is unknown. The raw
+`addLabelsToLabelable` mutation that used to be documented here is not needed.
 
 **Step 6.3c**: Sync the epic to the project board:
 

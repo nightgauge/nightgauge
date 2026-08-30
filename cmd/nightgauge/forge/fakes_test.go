@@ -69,6 +69,11 @@ type fakeIssueService struct {
 	editResp     *forgetypes.Issue
 	addLabelsErr error
 	calls        []string
+	// The label ids each call actually received. #1214 was invisible for as
+	// long as the fakes discarded this argument.
+	createLabelIDs []string
+	addLabelIDs    []string
+	removeLabelIDs []string
 }
 
 func (f *fakeIssueService) GetIssue(_ context.Context, _, _ string, n int) (*forgetypes.Issue, error) {
@@ -105,8 +110,9 @@ func (f *fakeIssueService) HasLabel(_ context.Context, _, _ string, _ int, _ str
 func (f *fakeIssueService) GetRepoLabels(_ context.Context, _, _ string) (map[string]string, error) {
 	return nil, nil
 }
-func (f *fakeIssueService) CreateIssue(_ context.Context, _, _, _ string, _ []string) (*forgetypes.Issue, error) {
+func (f *fakeIssueService) CreateIssue(_ context.Context, _, _, _ string, labelIDs []string) (*forgetypes.Issue, error) {
 	f.calls = append(f.calls, "CreateIssue")
+	f.createLabelIDs = labelIDs
 	return f.createResp, nil
 }
 func (f *fakeIssueService) CloseIssue(_ context.Context, _ string) error {
@@ -135,12 +141,14 @@ func (f *fakeIssueService) LinkSubIssue(_ context.Context, _, _ string, _, _ int
 }
 func (f *fakeIssueService) AddBlockedBy(_ context.Context, _, _ forge.IssueRef) error    { return nil }
 func (f *fakeIssueService) RemoveBlockedBy(_ context.Context, _, _ forge.IssueRef) error { return nil }
-func (f *fakeIssueService) AddLabels(_ context.Context, _ string, _ []string) error {
+func (f *fakeIssueService) AddLabels(_ context.Context, _ string, labelIDs []string) error {
 	f.calls = append(f.calls, "AddLabels")
+	f.addLabelIDs = labelIDs
 	return f.addLabelsErr
 }
-func (f *fakeIssueService) RemoveLabels(_ context.Context, _ string, _ []string) error {
+func (f *fakeIssueService) RemoveLabels(_ context.Context, _ string, labelIDs []string) error {
 	f.calls = append(f.calls, "RemoveLabels")
+	f.removeLabelIDs = labelIDs
 	return nil
 }
 func (f *fakeIssueService) SyncStatusLabel(_ context.Context, _, _ string, _ int, _ string) error {

@@ -2,6 +2,9 @@ package forgecmd
 
 import (
 	"fmt"
+	"strings"
+
+	"github.com/nightgauge/nightgauge/internal/forge"
 
 	"github.com/spf13/cobra"
 )
@@ -99,10 +102,53 @@ func labelDeleteCmd() *cobra.Command {
 	return cmd
 }
 
+// resolveLabelNames maps the label NAMES a caller wrote to the node IDs the
+// forge mutations take, in the order given.
+//
+// Names are the only form a human or a skill ever produces, and the examples on
+// these very commands show names (`--labels type:bug`). Before #1214 the flags
+// consumed node IDs, so every documented invocation failed with
+// `Could not resolve to a node with the global id of 'type:bug'`.
+//
+// Resolution is all-or-nothing and runs BEFORE the mutation: an unknown name
+// returns an error naming the label, and nothing is changed. This lives at the
+// CLI layer rather than in an adapter because forge.LabelService.List is
+// already forge-agnostic, so one implementation serves every forge.
+func resolveLabelNames(cmd *cobra.Command, client forge.ForgeClient, names []string) ([]string, error) {
+	if len(names) == 0 {
+		return nil, nil
+	}
+	existing, err := client.Labels().List(cmd.Context())
+	if err != nil {
+		return nil, fmt.Errorf("list labels: %w", err)
+	}
+	byName := make(map[string]string, len(existing))
+	for _, l := range existing {
+		byName[l.Name] = l.ID
+	}
+
+	ids := make([]string, 0, len(names))
+	var missing []string
+	for _, name := range names {
+		id, ok := byName[name]
+		if !ok {
+			// Report every unknown name at once: a caller with three bad
+			// labels should not learn about them over three round trips.
+			missing = append(missing, fmt.Sprintf("%q", name))
+			continue
+		}
+		ids = append(ids, id)
+	}
+	if len(missing) > 0 {
+		return nil, fmt.Errorf("label %s not found on the repository", strings.Join(missing, ", "))
+	}
+	return ids, nil
+}
+
 func labelAddCmd() *cobra.Command {
 	var (
-		issueID  string
-		labelIDs string
+		issueID    string
+		labelNames string
 	)
 	cmd := &cobra.Command{
 		Use:          "add",
@@ -110,31 +156,35 @@ func labelAddCmd() *cobra.Command {
 		Long:         longLabelAdd,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if issueID == "" || labelIDs == "" {
+			if issueID == "" || labelNames == "" {
 				return emitError(cmd, fmt.Errorf("--issue-id and --labels are required"))
 			}
 			client, err := forgeFromContext(cmd)
 			if err != nil {
 				return emitError(cmd, err)
 			}
-			ids := splitCSV(labelIDs)
+			names := splitCSV(labelNames)
+			ids, err := resolveLabelNames(cmd, client, names)
+			if err != nil {
+				return emitError(cmd, err)
+			}
 			if err := client.Issues().AddLabels(cmd.Context(), issueID, ids); err != nil {
 				return emitError(cmd, fmt.Errorf("add labels: %w", err))
 			}
 			return renderForCmd(cmd, map[string]any{
-				"v": 1, "added": true, "issueId": issueID, "labels": ids,
+				"v": 1, "added": true, "issueId": issueID, "labels": names,
 			})
 		},
 	}
 	cmd.Flags().StringVar(&issueID, "issue-id", "", "Issue or PR node ID")
-	cmd.Flags().StringVar(&labelIDs, "labels", "", "Comma-separated label node IDs")
+	cmd.Flags().StringVar(&labelNames, "labels", "", "Comma-separated label names (e.g. type:bug,priority:high). Unknown names fail before anything is changed.")
 	return cmd
 }
 
 func labelRemoveCmd() *cobra.Command {
 	var (
-		issueID  string
-		labelIDs string
+		issueID    string
+		labelNames string
 	)
 	cmd := &cobra.Command{
 		Use:          "remove",
@@ -142,23 +192,27 @@ func labelRemoveCmd() *cobra.Command {
 		Long:         longLabelRemove,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if issueID == "" || labelIDs == "" {
+			if issueID == "" || labelNames == "" {
 				return emitError(cmd, fmt.Errorf("--issue-id and --labels are required"))
 			}
 			client, err := forgeFromContext(cmd)
 			if err != nil {
 				return emitError(cmd, err)
 			}
-			ids := splitCSV(labelIDs)
+			names := splitCSV(labelNames)
+			ids, err := resolveLabelNames(cmd, client, names)
+			if err != nil {
+				return emitError(cmd, err)
+			}
 			if err := client.Issues().RemoveLabels(cmd.Context(), issueID, ids); err != nil {
 				return emitError(cmd, fmt.Errorf("remove labels: %w", err))
 			}
 			return renderForCmd(cmd, map[string]any{
-				"v": 1, "removed": true, "issueId": issueID, "labels": ids,
+				"v": 1, "removed": true, "issueId": issueID, "labels": names,
 			})
 		},
 	}
 	cmd.Flags().StringVar(&issueID, "issue-id", "", "Issue or PR node ID")
-	cmd.Flags().StringVar(&labelIDs, "labels", "", "Comma-separated label node IDs")
+	cmd.Flags().StringVar(&labelNames, "labels", "", "Comma-separated label names (e.g. type:bug,priority:high). Unknown names fail before anything is changed.")
 	return cmd
 }
