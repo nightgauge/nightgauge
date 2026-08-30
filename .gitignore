@@ -175,3 +175,4 @@ docs/strategy/
 
 # Captured output from scripts/ci-local.sh (see run_step)
 .ci-local-logs/
+go-test.json

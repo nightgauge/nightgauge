@@ -2,49 +2,15 @@ package ipc
 
 import (
 	"context"
-	"errors"
-	"os/exec"
 	"path/filepath"
-	"syscall"
 	"testing"
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/runstate"
 	"github.com/nightgauge/nightgauge/internal/state"
+
+	"github.com/nightgauge/nightgauge/internal/pidtest"
 )
-
-// reapedPID returns a PID that has certainly exited: a real child, run to
-// completion and reaped. An invented "large number" pid is not reliably dead —
-// the kernel recycles — which is the same reason internal/runstate's sidecar
-// suite builds its dead pid this way rather than hard-coding one.
-//
-// The recycle precondition is checked with a RAW `kill(pid, 0)` rather than with
-// `runstate.ProcessAlive`, because ProcessAlive is the predicate the test exists
-// to exercise: asking it whether the pid is usable would let an arm-3 regression
-// (dead pids reading alive) turn this test into a silent SKIP, and the package
-// would still print `ok`.
-func reapedPID(t *testing.T) int {
-	t.Helper()
-	cmd := exec.Command("true")
-	if err := cmd.Run(); err != nil {
-		t.Fatalf("run throwaway child: %v", err)
-	}
-	pid := cmd.Process.Pid
-
-	err := syscall.Kill(pid, 0)
-	if err == nil || errors.Is(err, syscall.EPERM) {
-		// pid genuinely occupied (recycled, possibly into another user's
-		// process) — cannot serve as a dead pid. EPERM means a process exists
-		// that we may not signal; it is NOT free.
-		t.Skipf("pid %d was recycled before the test could use it as a dead pid", pid)
-	}
-	// Kernel says the pid is free (ESRCH). If ProcessAlive disagrees, that IS the
-	// arm-3 regression this test exists to catch — fail loudly, never skip.
-	if runstate.ProcessAlive(pid) {
-		t.Fatalf("ProcessAlive(%d) calls a reaped pid alive — ladder arm 3 would pin such a run forever", pid)
-	}
-	return pid
-}
 
 // TestOrphanReconcile_ExtensionRunWithReapedStageChildReconcilesPastGrace pins
 // the failure mode #427's deleted TypeScript scanner claimed: the extension
@@ -71,7 +37,7 @@ func TestOrphanReconcile_ExtensionRunWithReapedStageChildReconcilesPastGrace(t *
 	s, _, stateDir := reconcileServer(t)
 	now := time.Now()
 	runID := newTestRunID()
-	dead := reapedPID(t)
+	dead := pidtest.Reaped(t, runstate.ProcessAlive)
 
 	// The extension path's own route: the run's last stage transition, carrying
 	// the pid of the child the extension host spawned.

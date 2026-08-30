@@ -139,6 +139,7 @@ func buildTelemetryTestScheduler(t *testing.T, tmpDir string, svc telemetryServi
 }
 
 func TestTelemetryStageStartedEmitted(t *testing.T) {
+	stubReconcileGhUnreachable(t)
 	tmpDir := t.TempDir()
 	mock := &mockTelemetry{}
 	s := buildTelemetryTestScheduler(t, tmpDir, mock, &mockAlwaysFailStageRunner{}, []string{
@@ -167,6 +168,7 @@ func TestTelemetryStageStartedEmitted(t *testing.T) {
 }
 
 func TestTelemetryStageErrorEmitted(t *testing.T) {
+	stubReconcileGhUnreachable(t)
 	tmpDir := t.TempDir()
 	mock := &mockTelemetry{}
 	s := buildTelemetryTestScheduler(t, tmpDir, mock, &mockAlwaysFailStageRunner{}, []string{
@@ -200,6 +202,7 @@ func TestTelemetryStageErrorEmitted(t *testing.T) {
 }
 
 func TestTelemetryStageErrorNotEmittedOnEscalation(t *testing.T) {
+	stubReconcileGhUnreachable(t)
 	tmpDir := t.TempDir()
 	mock := &mockTelemetry{}
 	// Use default retry config which allows escalations.
@@ -259,6 +262,7 @@ func TestTelemetryStageCompletedEmitted(t *testing.T) {
 }
 
 func TestTelemetryPipelineDoneEmittedViaDefer(t *testing.T) {
+	stubReconcileGhUnreachable(t)
 	tmpDir := t.TempDir()
 	mock := &mockTelemetry{}
 	// Pipeline fails immediately — defer still fires.
@@ -289,6 +293,7 @@ func TestTelemetryPipelineDoneEmittedViaDefer(t *testing.T) {
 }
 
 func TestTelemetryDisabledNoEventsEmitted(t *testing.T) {
+	stubReconcileGhUnreachable(t)
 	tmpDir := t.TempDir()
 	mock := &mockTelemetry{}
 	s := buildTelemetryTestScheduler(t, tmpDir, mock, &mockAlwaysFailStageRunner{}, []string{
@@ -306,6 +311,7 @@ func TestTelemetryDisabledNoEventsEmitted(t *testing.T) {
 }
 
 func TestTelemetryNilServiceNoPanic(t *testing.T) {
+	stubReconcileGhUnreachable(t)
 	tmpDir := t.TempDir()
 	// nil telemetrySvc with telemetryEnabled=true must not panic.
 	s := buildTelemetryTestScheduler(t, tmpDir, nil, &mockAlwaysFailStageRunner{}, []string{

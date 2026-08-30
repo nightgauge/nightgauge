@@ -2,13 +2,14 @@ package orchestrator
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/nightgauge/nightgauge/internal/intelligence/routing"
 	"github.com/nightgauge/nightgauge/internal/state"
+
+	"github.com/nightgauge/nightgauge/internal/gittest"
 )
 
 // dispatch_routing_mode_test.go is the Go half of the mode × knob agreement
@@ -441,33 +442,20 @@ func gitWorkspaceWithLargeDiff(t *testing.T, body string, lines int) string {
 	isolateRoutingEnv(t)
 	root := t.TempDir()
 
-	git := func(args ...string) {
-		t.Helper()
-		cmd := exec.Command("git", args...)
-		cmd.Dir = root
-		cmd.Env = append(os.Environ(),
-			"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@example.com",
-			"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@example.com",
-		)
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %v: %v\n%s", args, err, out)
-		}
-	}
-
-	git("init", "-b", "main")
+	gittest.Run(t, root, "init", "-b", "main")
 	if err := os.WriteFile(filepath.Join(root, "big.txt"), []byte("seed\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	git("add", ".")
-	git("commit", "-m", "seed")
+	gittest.Run(t, root, "add", ".")
+	gittest.Run(t, root, "commit", "-m", "seed")
 
-	git("checkout", "-b", "feat/large")
+	gittest.Run(t, root, "checkout", "-b", "feat/large")
 	if err := os.WriteFile(filepath.Join(root, "big.txt"),
 		[]byte(strings.Repeat("a line of a very large changeset\n", lines)), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	git("add", ".")
-	git("commit", "-m", "large")
+	gittest.Run(t, root, "add", ".")
+	gittest.Run(t, root, "commit", "-m", "large")
 
 	if body != "" {
 		dir := filepath.Join(root, ".nightgauge")

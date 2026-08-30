@@ -111,6 +111,7 @@ func enableAdaptiveStallRecovery(t *testing.T, root string) {
 // feature-dev stalls once, the scheduler synthesizes a feedback signal,
 // rewinds to feature-planning, and succeeds on the retry.
 func TestStallRecovery_FirstStallTriggersRewind(t *testing.T) {
+	stubReconcileGhUnreachable(t)
 	root := t.TempDir()
 	enableAdaptiveStallRecovery(t, root)
 
@@ -162,6 +163,7 @@ func TestStallRecovery_FirstStallTriggersRewind(t *testing.T) {
 // on both attempts terminates without a third try, recording stall_kill +
 // stall-killed-after-retry on the failed stage.
 func TestStallRecovery_SecondStallIsTerminal(t *testing.T) {
+	stubReconcileGhUnreachable(t)
 	root := t.TempDir()
 	enableAdaptiveStallRecovery(t, root)
 
@@ -215,6 +217,7 @@ func TestStallRecovery_SecondStallIsTerminal(t *testing.T) {
 // #3020 — default flipped to true; this test now writes an explicit
 // `adaptive_stall_recovery: false` to assert the opt-out path.
 func TestStallRecovery_DisabledFlagDoesNotRetry(t *testing.T) {
+	stubReconcileGhUnreachable(t)
 	root := t.TempDir()
 	// Explicit opt-out: the default is now true, so we must write
 	// `adaptive_stall_recovery: false` to disable.
@@ -261,6 +264,7 @@ func TestStallRecovery_DisabledFlagDoesNotRetry(t *testing.T) {
 // a kill marked with the cost-cap error string is terminal even when
 // adaptive stall-recovery is enabled.
 func TestStallRecovery_CostCapKillIsNeverRetried(t *testing.T) {
+	stubReconcileGhUnreachable(t)
 	root := t.TempDir()
 	enableAdaptiveStallRecovery(t, root)
 

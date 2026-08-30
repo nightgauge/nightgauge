@@ -53,6 +53,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"sync/atomic"
 )
 
 // ErrPeerCredUnsupported reports that this platform cannot tell us who is on
@@ -63,13 +64,30 @@ import (
 // a broken lookup into an open door.
 var ErrPeerCredUnsupported = errors.New("ipc: peer credentials unsupported on this platform")
 
-// peerUID reports the uid of the process on the other end of conn.
+// peerUIDFunc reports the uid of the process on the other end of conn.
+type peerUIDFunc func(net.Conn) (uint32, error)
+
+// peerUID is the swappable peer-credential lookup.
 //
-// A package variable rather than a direct call so tests can present a peer uid
-// the test process does not have. Without the seam the rejection path could
-// only be exercised by running the suite as two different users, which is to
-// say it would never be exercised.
-var peerUID = platformPeerUID
+// A seam rather than a direct call so tests can present a peer uid the test
+// process does not have. Without it the rejection path could only be exercised
+// by running the suite as two different users, which is to say it would never
+// be exercised.
+//
+// It is ATOMIC rather than a plain package variable because the two sides run
+// concurrently: authorizeConn reads it on the daemon's per-connection
+// goroutines, while a test's t.Cleanup restores the previous value the moment
+// the test body returns. ln.Close() stops new accepts but does not join the
+// serveSocketConn goroutines already in flight, so the restore genuinely races
+// a read. The plain-variable version was a latent data race for as long as the
+// seam has existed; the whole-tree -race gate (#493) is what finally reported
+// it, on TestSocketAllowsWhenPeerCredUnsupported.
+var peerUID atomic.Pointer[peerUIDFunc]
+
+func init() {
+	fn := peerUIDFunc(platformPeerUID)
+	peerUID.Store(&fn)
+}
 
 // authorizeConn decides whether a freshly accepted connection may proceed.
 //
@@ -85,7 +103,7 @@ var peerUID = platformPeerUID
 //     failure is anomalous, and "I could not determine who you are" is not a
 //     reason to let someone in.
 func (s *Server) authorizeConn(conn net.Conn) error {
-	uid, err := peerUID(conn)
+	uid, err := (*peerUID.Load())(conn)
 	if errors.Is(err, ErrPeerCredUnsupported) {
 		return nil
 	}

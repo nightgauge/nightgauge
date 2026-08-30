@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -17,6 +16,8 @@ import (
 	pmstages "github.com/nightgauge/nightgauge/internal/orchestrator/stages"
 	"github.com/nightgauge/nightgauge/internal/state"
 	"github.com/nightgauge/nightgauge/pkg/types"
+
+	"github.com/nightgauge/nightgauge/internal/gittest"
 )
 
 // passingGate is a StageGate that always passes (KindOK). Used to neutralize
@@ -373,8 +374,7 @@ func TestScheduler_PRMerge_NonPRMergeStage_NoOp(t *testing.T) {
 // fixture below, failing the test on error.
 func gitRunForCleanupTest(t *testing.T, dir string, args ...string) {
 	t.Helper()
-	cmd := exec.Command("git", args...)
-	cmd.Dir = dir
+	cmd := gittest.Command(dir, args...)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("git %s (dir=%s): %v\n%s", strings.Join(args, " "), dir, err, out)
 	}
@@ -383,8 +383,7 @@ func gitRunForCleanupTest(t *testing.T, dir string, args ...string) {
 // currentBranchForCleanupTest reads the short branch name checked out in dir.
 func currentBranchForCleanupTest(t *testing.T, dir string) string {
 	t.Helper()
-	cmd := exec.Command("git", "symbolic-ref", "--short", "HEAD")
-	cmd.Dir = dir
+	cmd := gittest.Command(dir, "symbolic-ref", "--short", "HEAD")
 	out, err := cmd.Output()
 	if err != nil {
 		t.Fatalf("read current branch in %s: %v", dir, err)
@@ -395,8 +394,7 @@ func currentBranchForCleanupTest(t *testing.T, dir string) string {
 // remoteBranchExistsForCleanupTest reports whether originDir (a bare repo)
 // still carries refs/heads/<branch>.
 func remoteBranchExistsForCleanupTest(originDir, branch string) bool {
-	cmd := exec.Command("git", "show-ref", "--verify", "--quiet", "refs/heads/"+branch)
-	cmd.Dir = originDir
+	cmd := gittest.Command(originDir, "show-ref", "--verify", "--quiet", "refs/heads/"+branch)
 	return cmd.Run() == nil
 }
 

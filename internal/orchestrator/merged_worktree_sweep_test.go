@@ -2,11 +2,12 @@ package orchestrator
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/nightgauge/nightgauge/internal/gittest"
 )
 
 // TestNewScheduler_ConstructionReclaimsNothing is the #403 inversion, pinned:
@@ -38,20 +39,12 @@ func TestNewScheduler_ConstructionReclaimsNothing(t *testing.T) {
 func defaultBranchWorktreeRepo(t *testing.T, issue int) (string, string) {
 	t.Helper()
 	root, merged := mergedWorktreeRepo(t, issue)
-	git := func(args ...string) {
-		t.Helper()
-		cmd := exec.Command("git", args...)
-		cmd.Dir = root
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %s (in %s): %v: %s", strings.Join(args, " "), root, err, out)
-		}
-	}
 	// Drop the merged-branch worktree so the repo holds exactly one candidate
 	// and the assertion below cannot be satisfied by the other door.
-	git("worktree", "remove", "--force", merged)
-	git("checkout", "-q", "-b", "parked-elsewhere")
+	gittest.Run(t, root, "worktree", "remove", "--force", merged)
+	gittest.Run(t, root, "checkout", "-q", "-b", "parked-elsewhere")
 	wt := filepath.Join(root, ".worktrees", "issue-"+strconv.Itoa(issue+1))
-	git("worktree", "add", wt, "main")
+	gittest.Run(t, root, "worktree", "add", wt, "main")
 	return root, wt
 }
 

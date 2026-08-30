@@ -28,6 +28,15 @@ func (as *AutonomousScheduler) SetSurvivalWindowDays(days int) {
 // changes on a human timescale.
 const survivalSweepInterval = 5 * time.Minute
 
+// finalizeDueSurvivalRecords is the indirection point for the `gh`-backed
+// survival sweep, mirroring reconcileExecGh (#492). gh.FinalizeDueSurvivalRecords
+// shells out to `gh api .../commits` once per DUE record, so any test that seeds
+// a pending record and then drives a cycle reaches the network — three real
+// GitHub round-trips per run of this package's suite, measured with a PATH shim,
+// in tests that assert only on the sweep's PACING and never look at what the
+// forge said. The seam lets the test binary refuse the call outright.
+var finalizeDueSurvivalRecords = gh.FinalizeDueSurvivalRecords
+
 // sweepSurvivalRecords finalizes due post-merge survival records. Best-effort
 // and strictly non-blocking: a load/detection error is logged and the records
 // stay pending for the next pass. When there are no pending records it does
@@ -58,7 +67,7 @@ func (as *AutonomousScheduler) sweepSurvivalRecords(ctx context.Context) {
 		window = survival.DefaultWindowDays
 	}
 
-	res, err := gh.FinalizeDueSurvivalRecords(ctx, as.workspaceRoot, time.Now(), window)
+	res, err := finalizeDueSurvivalRecords(ctx, as.workspaceRoot, time.Now(), window)
 	if err != nil {
 		log.Printf("autonomous: survival sweep error: %v", err)
 		return

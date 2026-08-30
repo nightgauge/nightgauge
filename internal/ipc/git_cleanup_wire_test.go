@@ -2,16 +2,16 @@ package ipc
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/nightgauge/nightgauge/internal/gittest"
 )
 
 func gitCleanupRun(t *testing.T, dir string, args ...string) {
 	t.Helper()
-	cmd := exec.Command("git", args...)
-	cmd.Dir = dir
+	cmd := gittest.Command(dir, args...)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("git %s: %v: %s", strings.Join(args, " "), err, out)
 	}

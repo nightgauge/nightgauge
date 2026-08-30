@@ -26,6 +26,7 @@ import (
 // neither the idle-stall ticker nor the exit-code check and was recorded as
 // a success.
 func TestScheduler_FeaturePlanning_PrematureTurnEnd_FailsPipeline(t *testing.T) {
+	stubReconcileGhUnreachable(t)
 	root := t.TempDir()
 
 	for _, dir := range []string{

@@ -4,13 +4,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/nightgauge/nightgauge/internal/pidtest"
 )
 
 // #388. The serve daemon's PID marker. These tests drive the PRODUCTION writer
@@ -30,21 +31,6 @@ func isolatedHome(t *testing.T) string {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	return home
-}
-
-// deadPID returns a PID that has certainly exited: a real child, reaped.
-// Invented "large number" PIDs are not reliably dead — the kernel recycles.
-func deadPID(t *testing.T) int {
-	t.Helper()
-	cmd := exec.Command("true")
-	if err := cmd.Run(); err != nil {
-		t.Fatalf("run throwaway child: %v", err)
-	}
-	pid := cmd.Process.Pid
-	if ProcessAlive(pid) {
-		t.Skipf("pid %d was recycled before the test could use it as a dead pid", pid)
-	}
-	return pid
 }
 
 // capturingLog records what the writer told the operator.
@@ -184,7 +170,7 @@ func TestClaimServeSidecar_ADeadPredecessorIsOverwrittenSilently(t *testing.T) {
 	// on every restart would train operators past the message that matters.
 	isolatedHome(t)
 	root := t.TempDir()
-	dead := deadPID(t)
+	dead := pidtest.Reaped(t, ProcessAlive)
 	if _, err := ClaimServeSidecar(root, dead, time.Now().Add(-time.Hour), nil); err != nil {
 		t.Fatalf("seed: %v", err)
 	}

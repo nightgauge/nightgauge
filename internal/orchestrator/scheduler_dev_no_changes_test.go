@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -14,6 +13,8 @@ import (
 	"github.com/nightgauge/nightgauge/internal/orchestrator/gates"
 	"github.com/nightgauge/nightgauge/internal/state"
 	"github.com/nightgauge/nightgauge/pkg/types"
+
+	"github.com/nightgauge/nightgauge/internal/gittest"
 )
 
 // honestReportEmptyDiskRunner is the #202 stage runner: every stage exits 0 and
@@ -81,6 +82,7 @@ func (r *honestReportEmptyDiskRunner) ran(stage state.PipelineStage) bool {
 // Post-fix the run must die at feature-dev's own gate, and feature-validate must
 // never be invoked at all — that is where the $0.87 goes.
 func TestScheduler_FeatureDev_NoChangesProduced_FailsBeforeValidate(t *testing.T) {
+	stubReconcileGhUnreachable(t)
 	root := gitWorkspace(t)
 
 	for _, dir := range []string{
@@ -257,8 +259,7 @@ func gitWorkspace(t *testing.T) string {
 
 func gitIn(t *testing.T, dir string, args ...string) {
 	t.Helper()
-	cmd := exec.Command("git", args...)
-	cmd.Dir = dir
+	cmd := gittest.Command(dir, args...)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
 	}

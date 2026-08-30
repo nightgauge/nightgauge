@@ -105,6 +105,7 @@ func readStageExitPayloads(t *testing.T, root, runID string) []trace.StageExitPa
 // so a future change cannot "fix" one path by moving the derivation onto the
 // other.
 func TestTraceStageExit_CLIFailureCarriesTerminalKind(t *testing.T) {
+	stubReconcileGhUnreachable(t)
 	shapes := []struct {
 		name     string
 		ipcShape bool

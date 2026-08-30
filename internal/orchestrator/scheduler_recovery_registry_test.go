@@ -527,6 +527,7 @@ func (a *capturingRecoveryAction) observed() (int, []recovery.StageFailure) {
 // result. `executed == 1` is the "fired at all" assertion — pre-#533 the count
 // on the CLI shape was 0, because no matcher could see anything to match on.
 func TestRecoveryRegistry_FiresOnCLIPathStageError(t *testing.T) {
+	stubReconcileGhUnreachable(t)
 	shapes := []struct {
 		name     string
 		ipcShape bool

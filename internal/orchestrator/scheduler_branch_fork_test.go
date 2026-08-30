@@ -12,6 +12,8 @@ import (
 	"github.com/nightgauge/nightgauge/internal/execution"
 	"github.com/nightgauge/nightgauge/internal/state"
 	"github.com/nightgauge/nightgauge/pkg/types"
+
+	"github.com/nightgauge/nightgauge/internal/gittest"
 )
 
 // branchAwareStageRunner is successStageRunner plus the one field that matters
@@ -99,12 +101,12 @@ func TestScheduler_BranchForkPreflight_BlocksBeforeSpendingTokens(t *testing.T) 
 
 	// The orphan: a killed run's commit, pushed and then abandoned on origin.
 	other := f.clone()
-	gitx(t, other, "checkout", "-b", branch)
+	gittest.Run(t, other, "checkout", "-b", branch)
 	orphan := commitFile(t, other, "impl.go", "// implementation A\n", "feat: implementation A")
-	gitx(t, other, "push", "origin", branch)
+	gittest.Run(t, other, "push", "origin", branch)
 
 	// This run's branch, created from the base exactly as issue-pickup makes it.
-	gitx(t, root, "branch", branch)
+	gittest.Run(t, root, "branch", branch)
 
 	runner := newBranchAwareStageRunner(branch)
 	s := &Scheduler{
@@ -176,7 +178,7 @@ func TestScheduler_BranchForkPreflight_BlocksBeforeSpendingTokens(t *testing.T) 
 	// 4. The orphan is NOT this run's own push (this run pushed nothing), so the
 	//    post-run reclamation must have left it standing rather than deleting a
 	//    commit whose provenance it cannot prove.
-	if out := gitx(t, root, "ls-remote", "--heads", "origin", "refs/heads/"+branch); !strings.Contains(out, orphan) {
+	if out := gittest.Run(t, root, "ls-remote", "--heads", "origin", "refs/heads/"+branch); !strings.Contains(out, orphan) {
 		t.Errorf("origin/%s should still carry %s after a declined reclamation; ls-remote = %q", branch, orphan, out)
 	}
 }
@@ -202,9 +204,9 @@ func TestScheduler_BranchForkPreflight_DoesNotBlockAHealthyRun(t *testing.T) {
 	}
 
 	// The run's own branch, pushed to origin — the ordinary post-validate state.
-	gitx(t, root, "checkout", "-b", branch)
+	gittest.Run(t, root, "checkout", "-b", branch)
 	commitFile(t, root, "impl.go", "// work\n", "feat: work")
-	gitx(t, root, "push", "origin", branch)
+	gittest.Run(t, root, "push", "origin", branch)
 
 	runner := newBranchAwareStageRunner(branch)
 	s := &Scheduler{

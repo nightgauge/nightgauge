@@ -1054,6 +1054,7 @@ func TestOnPipelineComplete_ApiOverloaded_SuccessResetsBackoff(t *testing.T) {
 // The breaker exists to stop a pipeline that keeps breaking on its own work. A
 // provider outage is weather, not evidence, and must be invisible to it.
 func TestTransientFailuresNeverTripTheCircuitBreaker(t *testing.T) {
+	stubReconcileGhUnreachable(t)
 	// Every kind whose handler documents itself as environmental, transient,
 	// recoverable, or a deferral. Each must leave the breaker untouched.
 	nonFaultKinds := []string{

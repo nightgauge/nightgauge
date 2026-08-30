@@ -2,11 +2,12 @@ package reclaim
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/nightgauge/nightgauge/internal/gittest"
 )
 
 // These drive real git. The defect being fixed is state that only exists in a
@@ -34,8 +35,7 @@ func newStashRepo(t *testing.T) *stashRepo {
 
 func (r *stashRepo) git(args ...string) string {
 	r.t.Helper()
-	cmd := exec.Command("git", args...)
-	cmd.Dir = r.dir
+	cmd := gittest.Command(r.dir, args...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		r.t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)

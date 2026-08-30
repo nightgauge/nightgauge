@@ -1,7 +1,7 @@
 ci-local.sh step inventory
 go build ./...
-go test ./... -count=1
-go test -race -count=1 ./internal/orchestrator/
+go test ./... -count=1 (with skip accounting)
+go test -race -count=1 ./...
 gofmt -l ./internal ./cmd
 branch-merged-check.sh regression suite
 CI change-class gate regression suite

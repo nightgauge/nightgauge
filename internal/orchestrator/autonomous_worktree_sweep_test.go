@@ -2,11 +2,12 @@ package orchestrator
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/nightgauge/nightgauge/internal/gittest"
 )
 
 // mergedWorktreeRepo builds a repo with an "origin" remote and one
@@ -19,14 +20,6 @@ func mergedWorktreeRepo(t *testing.T, issue int) (string, string) {
 	origin := filepath.Join(base, "origin.git")
 	clone := filepath.Join(base, "clone")
 
-	git := func(dir string, args ...string) {
-		t.Helper()
-		cmd := exec.Command("git", args...)
-		cmd.Dir = dir
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %s (in %s): %v: %s", strings.Join(args, " "), dir, err, out)
-		}
-	}
 	write := func(path, content string) {
 		t.Helper()
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -37,23 +30,23 @@ func mergedWorktreeRepo(t *testing.T, issue int) (string, string) {
 		}
 	}
 
-	git(base, "init", "--bare", "-b", "main", origin)
+	gittest.Run(t, base, "init", "--bare", "-b", "main", origin)
 	seed := filepath.Join(base, "seed")
 	if err := os.MkdirAll(seed, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	git(seed, "init", "-b", "main")
-	git(seed, "config", "user.email", "test@test")
-	git(seed, "config", "user.name", "test")
+	gittest.Run(t, seed, "init", "-b", "main")
+	gittest.Run(t, seed, "config", "user.email", "test@test")
+	gittest.Run(t, seed, "config", "user.name", "test")
 	write(filepath.Join(seed, "README"), "hello\n")
-	git(seed, "add", ".")
-	git(seed, "commit", "-m", "initial")
-	git(seed, "remote", "add", "origin", origin)
-	git(seed, "push", "-u", "origin", "main")
+	gittest.Run(t, seed, "add", ".")
+	gittest.Run(t, seed, "commit", "-m", "initial")
+	gittest.Run(t, seed, "remote", "add", "origin", origin)
+	gittest.Run(t, seed, "push", "-u", "origin", "main")
 
-	git(base, "clone", origin, clone)
-	git(clone, "config", "user.email", "test@test")
-	git(clone, "config", "user.name", "test")
+	gittest.Run(t, base, "clone", origin, clone)
+	gittest.Run(t, clone, "config", "user.email", "test@test")
+	gittest.Run(t, clone, "config", "user.name", "test")
 
 	root, err := filepath.EvalSymlinks(clone)
 	if err != nil {
@@ -62,14 +55,14 @@ func mergedWorktreeRepo(t *testing.T, issue int) (string, string) {
 
 	branch := "fix/" + strconv.Itoa(issue) + "-work"
 	wt := filepath.Join(root, ".worktrees", "issue-"+strconv.Itoa(issue))
-	git(root, "worktree", "add", wt, "-b", branch, "origin/main")
+	gittest.Run(t, root, "worktree", "add", wt, "-b", branch, "origin/main")
 	write(filepath.Join(wt, "fix.txt"), "fixed\n")
-	git(wt, "add", ".")
-	git(wt, "commit", "-m", "work")
-	git(root, "merge", "--squash", branch)
-	git(root, "commit", "-m", "squash: "+branch)
-	git(root, "push", "origin", "main")
-	git(root, "fetch", "origin")
+	gittest.Run(t, wt, "add", ".")
+	gittest.Run(t, wt, "commit", "-m", "work")
+	gittest.Run(t, root, "merge", "--squash", branch)
+	gittest.Run(t, root, "commit", "-m", "squash: "+branch)
+	gittest.Run(t, root, "push", "origin", "main")
+	gittest.Run(t, root, "fetch", "origin")
 
 	return root, wt
 }

@@ -13,7 +13,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
@@ -22,6 +21,8 @@ import (
 	"github.com/nightgauge/nightgauge/internal/intelligence/tokens"
 	"github.com/nightgauge/nightgauge/internal/state"
 	"github.com/nightgauge/nightgauge/pkg/types"
+
+	"github.com/nightgauge/nightgauge/internal/gittest"
 )
 
 // TestRecordOutcome_UsesPreMergeLinesCapturedAtPRCreate pins the autonomous
@@ -31,23 +32,15 @@ import (
 // on main by then and would all look like zero-line changes.
 func TestRecordOutcome_UsesPreMergeLinesCapturedAtPRCreate(t *testing.T) {
 	root := t.TempDir()
-	runGit := func(args ...string) {
-		t.Helper()
-		cmd := exec.Command("git", args...)
-		cmd.Dir = root
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %v: %v\n%s", args, err, out)
-		}
-	}
-	runGit("init", "-b", "main")
-	runGit("config", "user.email", "test@example.com")
-	runGit("config", "user.name", "Test User")
+	gittest.Run(t, root, "init", "-b", "main")
+	gittest.Run(t, root, "config", "user.email", "test@example.com")
+	gittest.Run(t, root, "config", "user.name", "Test User")
 	if err := os.WriteFile(filepath.Join(root, "change.txt"), []byte("base\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	runGit("add", ".")
-	runGit("commit", "-m", "base")
-	runGit("checkout", "-b", "fix/369-measure")
+	gittest.Run(t, root, "add", ".")
+	gittest.Run(t, root, "commit", "-m", "base")
+	gittest.Run(t, root, "checkout", "-b", "fix/369-measure")
 	if err := os.WriteFile(filepath.Join(root, "change.txt"), []byte("base\none\ntwo\nthree\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}

@@ -11,7 +11,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -22,6 +21,8 @@ import (
 	"github.com/nightgauge/nightgauge/internal/runstate"
 	"github.com/nightgauge/nightgauge/internal/state"
 	"github.com/nightgauge/nightgauge/pkg/types"
+
+	"github.com/nightgauge/nightgauge/internal/gittest"
 )
 
 // gitInitRepo initializes a git repository at dir with an identity configured
@@ -29,17 +30,10 @@ import (
 // test on any git error.
 func gitInitRepo(t *testing.T, dir string) {
 	t.Helper()
-	runGit := func(args ...string) {
-		t.Helper()
-		cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
-		}
-	}
-	runGit("init")
-	runGit("config", "user.email", "test@nightgauge.dev")
-	runGit("config", "user.name", "Nightgauge Test")
-	runGit("config", "commit.gpgsign", "false")
+	gittest.Run(t, dir, "init")
+	gittest.Run(t, dir, "config", "user.email", "test@nightgauge.dev")
+	gittest.Run(t, dir, "config", "user.name", "Nightgauge Test")
+	gittest.Run(t, dir, "config", "commit.gpgsign", "false")
 	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("seed\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -48,14 +42,14 @@ func gitInitRepo(t *testing.T, dir string) {
 	if err := os.WriteFile(filepath.Join(dir, ".gitignore"), []byte(".nightgauge/\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	runGit("add", "-A")
-	runGit("commit", "-m", "chore: seed commit")
+	gittest.Run(t, dir, "add", "-A")
+	gittest.Run(t, dir, "commit", "-m", "chore: seed commit")
 }
 
 // gitLog returns the one-line commit subjects in the repo at dir, newest first.
 func gitLog(t *testing.T, dir string) []string {
 	t.Helper()
-	out, err := exec.Command("git", "-C", dir, "log", "--pretty=%s").Output()
+	out, err := gittest.Command(dir, "log", "--pretty=%s").Output()
 	if err != nil {
 		t.Fatalf("git log: %v", err)
 	}
@@ -637,6 +631,7 @@ func (r *budgetEscalationRunner) RunStage(_ context.Context, params StageRunPara
 // scheduler escalates the model (sonnet → opus) instead of taking a
 // same-model stall-retry / re-plan rewind.
 func TestScheduler_BudgetAwareEscalationOnStallKill(t *testing.T) {
+	stubReconcileGhUnreachable(t)
 	root := t.TempDir()
 	// Enable adaptive stall recovery AND set a low $10 budget ceiling. Without
 	// the budget-aware branch, the stall-kill would rewind to feature-planning;

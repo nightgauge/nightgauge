@@ -3,7 +3,6 @@ package orchestrator
 import (
 	"context"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -12,6 +11,8 @@ import (
 	"github.com/nightgauge/nightgauge/internal/execution"
 	"github.com/nightgauge/nightgauge/internal/state"
 	"github.com/nightgauge/nightgauge/pkg/types"
+
+	"github.com/nightgauge/nightgauge/internal/gittest"
 )
 
 // --- #882: launch repo ≠ target repo -----------------------------------------
@@ -32,37 +33,28 @@ func repoWithOrigin(t *testing.T, parent, owner, name string) (string, string) {
 	origin := filepath.Join(t.TempDir(), name+".git")
 	root := filepath.Join(parent, name)
 
-	run := func(dir string, args ...string) {
-		t.Helper()
-		cmd := exec.Command("git", args...)
-		cmd.Dir = dir
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %s (in %s): %v\n%s", strings.Join(args, " "), dir, err, out)
-		}
-	}
-
 	if err := os.MkdirAll(origin, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	run(origin, "init", "--bare", "--initial-branch=main")
+	gittest.Run(t, origin, "init", "--bare", "--initial-branch=main")
 
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	run(root, "init", "--initial-branch=main")
-	run(root, "config", "user.email", "cross-repo-test@example.com")
-	run(root, "config", "user.name", "Cross Repo Test")
-	run(root, "config", "commit.gpgsign", "false")
+	gittest.Run(t, root, "init", "--initial-branch=main")
+	gittest.Run(t, root, "config", "user.email", "cross-repo-test@example.com")
+	gittest.Run(t, root, "config", "user.name", "Cross Repo Test")
+	gittest.Run(t, root, "config", "commit.gpgsign", "false")
 	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte(name+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(root, ".gitignore"), []byte(".nightgauge/\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	run(root, "add", "-A")
-	run(root, "commit", "-m", "seed")
-	run(root, "remote", "add", "origin", origin)
-	run(root, "push", "-u", "origin", "main")
+	gittest.Run(t, root, "add", "-A")
+	gittest.Run(t, root, "commit", "-m", "seed")
+	gittest.Run(t, root, "remote", "add", "origin", origin)
+	gittest.Run(t, root, "push", "-u", "origin", "main")
 
 	// The repo's own .nightgauge/config.yaml is what makes it DISCOVERABLE by
 	// the workspace repo registry — the same file the daemon's resolver reads.
@@ -80,7 +72,7 @@ func repoWithOrigin(t *testing.T, parent, owner, name string) (string, string) {
 // remoteBranches lists the branch refs present in a bare origin.
 func remoteBranches(t *testing.T, origin string) []string {
 	t.Helper()
-	out, err := exec.Command("git", "-C", origin, "for-each-ref", "--format=%(refname:short)", "refs/heads/").Output()
+	out, err := gittest.Command(origin, "for-each-ref", "--format=%(refname:short)", "refs/heads/").Output()
 	if err != nil {
 		t.Fatalf("for-each-ref in %s: %v", origin, err)
 	}

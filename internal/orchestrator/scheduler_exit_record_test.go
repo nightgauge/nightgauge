@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -17,6 +16,8 @@ import (
 	"github.com/nightgauge/nightgauge/internal/reclaim"
 	"github.com/nightgauge/nightgauge/internal/state"
 	"github.com/nightgauge/nightgauge/pkg/types"
+
+	"github.com/nightgauge/nightgauge/internal/gittest"
 )
 
 // readExitRecords loads every JSONL line from today's exit-records file.
@@ -642,40 +643,32 @@ func TestWriteStageExitRecord_DailyPathHasOwnerSlashName(t *testing.T) {
 func TestWriteStageExitRecord_NamesUnreclaimedPipelineStashes(t *testing.T) {
 	s := newSchedulerForDeterministicTest()
 	root := t.TempDir()
-	gitInRoot := func(args ...string) {
-		t.Helper()
-		cmd := exec.Command("git", args...)
-		cmd.Dir = root
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
-		}
-	}
-	gitInRoot("init", "-b", "main")
-	gitInRoot("config", "user.email", "test@test")
-	gitInRoot("config", "user.name", "test")
+	gittest.Run(t, root, "init", "-b", "main")
+	gittest.Run(t, root, "config", "user.email", "test@test")
+	gittest.Run(t, root, "config", "user.name", "test")
 	if err := os.WriteFile(filepath.Join(root, "tracked.txt"), []byte("base\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	gitInRoot("add", ".")
-	gitInRoot("commit", "-m", "initial")
+	gittest.Run(t, root, "add", ".")
+	gittest.Run(t, root, "commit", "-m", "initial")
 
 	// The stage stashes to measure against a clean tree…
 	if err := os.WriteFile(filepath.Join(root, "tracked.txt"), []byte("stage work\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	gitInRoot("stash", "push", "-m", reclaim.StashName(reclaim.StashBaseline, 692, "feature-validate"))
+	gittest.Run(t, root, "stash", "push", "-m", reclaim.StashName(reclaim.StashBaseline, 692, "feature-validate"))
 	// …an unrelated stash of the operator's…
 	if err := os.WriteFile(filepath.Join(root, "tracked.txt"), []byte("my own wip\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	gitInRoot("stash", "push", "-m", "wip before the refactor")
+	gittest.Run(t, root, "stash", "push", "-m", "wip before the refactor")
 	// …and a CONCURRENT run's pipeline stash. This one is the discriminating
 	// case: it carries the marker, so any filter weaker than "this issue"
 	// attributes another run's leak to this stage's exit record.
 	if err := os.WriteFile(filepath.Join(root, "tracked.txt"), []byte("another run\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	gitInRoot("stash", "push", "-m", reclaim.StashName(reclaim.StashBaseline, 701, "feature-dev"))
+	gittest.Run(t, root, "stash", "push", "-m", reclaim.StashName(reclaim.StashBaseline, 701, "feature-dev"))
 
 	runtime := state.NewRuntimeState("nightgauge/nightgauge", 692, "item-id", testRunID())
 	item := types.BoardItem{Number: 692, Repo: "nightgauge/nightgauge"}

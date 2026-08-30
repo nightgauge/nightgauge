@@ -3,10 +3,11 @@ package orchestrator
 import (
 	"context"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/nightgauge/nightgauge/internal/gittest"
 )
 
 // These tests drive REAL git against a local bare "origin". A fork is a
@@ -16,30 +17,15 @@ import (
 // network) while exercising the same `ls-remote` / `merge-base --is-ancestor`
 // plumbing production uses.
 
-func gitx(t *testing.T, dir string, args ...string) string {
-	t.Helper()
-	cmd := exec.Command("git", args...)
-	cmd.Dir = dir
-	cmd.Env = append(os.Environ(),
-		"GIT_AUTHOR_NAME=Test", "GIT_AUTHOR_EMAIL=test@example.com",
-		"GIT_COMMITTER_NAME=Test", "GIT_COMMITTER_EMAIL=test@example.com",
-	)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("git %s (in %s) failed: %v\n%s", strings.Join(args, " "), dir, err, out)
-	}
-	return strings.TrimSpace(string(out))
-}
-
 // commitFile writes a file and commits it, returning the new HEAD SHA.
 func commitFile(t *testing.T, dir, name, content, msg string) string {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
 		t.Fatalf("write %s: %v", name, err)
 	}
-	gitx(t, dir, "add", "-A")
-	gitx(t, dir, "commit", "-m", msg)
-	return gitx(t, dir, "rev-parse", "HEAD")
+	gittest.Run(t, dir, "add", "-A")
+	gittest.Run(t, dir, "commit", "-m", msg)
+	return gittest.Run(t, dir, "rev-parse", "HEAD")
 }
 
 // forkFixture is an origin bare repo with one `main` commit, plus a working
@@ -57,14 +43,14 @@ func newForkFixture(t *testing.T) *forkFixture {
 	t.Helper()
 	root := t.TempDir()
 	origin := filepath.Join(root, "origin.git")
-	gitx(t, root, "init", "--bare", "-b", "main", origin)
+	gittest.Run(t, root, "init", "--bare", "-b", "main", origin)
 
 	work := filepath.Join(root, "work")
-	gitx(t, root, "clone", origin, work)
-	gitx(t, work, "config", "user.email", "test@example.com")
-	gitx(t, work, "config", "user.name", "Test")
+	gittest.Run(t, root, "clone", origin, work)
+	gittest.Run(t, work, "config", "user.email", "test@example.com")
+	gittest.Run(t, work, "config", "user.name", "Test")
 	commitFile(t, work, "README.md", "base\n", "base")
-	gitx(t, work, "push", "origin", "main")
+	gittest.Run(t, work, "push", "origin", "main")
 
 	return &forkFixture{root: root, origin: origin, work: work, t: t}
 }
@@ -77,9 +63,9 @@ func (f *forkFixture) clone() string {
 	if f.n > 1 {
 		dir = filepath.Join(f.root, "other"+string(rune('0'+f.n)))
 	}
-	gitx(f.t, f.root, "clone", f.origin, dir)
-	gitx(f.t, dir, "config", "user.email", "other@example.com")
-	gitx(f.t, dir, "config", "user.name", "Other")
+	gittest.Run(f.t, f.root, "clone", f.origin, dir)
+	gittest.Run(f.t, dir, "config", "user.email", "other@example.com")
+	gittest.Run(f.t, dir, "config", "user.name", "Other")
 	return dir
 }
 
@@ -100,13 +86,13 @@ func TestCheckBranchFork_DetectsWorktreeBaseBehindRemoteHead(t *testing.T) {
 	// The killed run's orphan: a commit pushed to the branch that this
 	// worktree never saw.
 	other := f.clone()
-	gitx(t, other, "checkout", "-b", branch)
+	gittest.Run(t, other, "checkout", "-b", branch)
 	orphan := commitFile(t, other, "impl.go", "// implementation A\n", "feat: implementation A")
-	gitx(t, other, "push", "origin", branch)
+	gittest.Run(t, other, "push", "origin", branch)
 
 	// The retry: branch created from main, nothing done yet, remote never fetched.
-	gitx(t, f.work, "checkout", "-b", branch)
-	base := gitx(t, f.work, "rev-parse", "HEAD")
+	gittest.Run(t, f.work, "checkout", "-b", branch)
+	base := gittest.Run(t, f.work, "rev-parse", "HEAD")
 
 	fork := CheckBranchFork(context.Background(), f.work, branch)
 	if !fork.Forked() {
@@ -133,13 +119,13 @@ func TestCheckBranchFork_DetectsForkAfterFetch(t *testing.T) {
 	const branch = "fix/163-diverged"
 
 	other := f.clone()
-	gitx(t, other, "checkout", "-b", branch)
+	gittest.Run(t, other, "checkout", "-b", branch)
 	commitFile(t, other, "impl.go", "// implementation A\n", "feat: implementation A")
-	gitx(t, other, "push", "origin", branch)
+	gittest.Run(t, other, "push", "origin", branch)
 
-	gitx(t, f.work, "checkout", "-b", branch)
+	gittest.Run(t, f.work, "checkout", "-b", branch)
 	commitFile(t, f.work, "impl.go", "// implementation B\n", "feat: implementation B")
-	gitx(t, f.work, "fetch", "origin", branch) // remote head now in the local object store
+	gittest.Run(t, f.work, "fetch", "origin", branch) // remote head now in the local object store
 
 	fork := CheckBranchFork(context.Background(), f.work, branch)
 	if !fork.Forked() {
@@ -156,9 +142,9 @@ func TestCheckBranchFork_CleanWhenRemoteHeadIsAncestor(t *testing.T) {
 	f := newForkFixture(t)
 	const branch = "feat/ordinary"
 
-	gitx(t, f.work, "checkout", "-b", branch)
+	gittest.Run(t, f.work, "checkout", "-b", branch)
 	commitFile(t, f.work, "impl.go", "// work\n", "feat: work")
-	gitx(t, f.work, "push", "origin", branch)
+	gittest.Run(t, f.work, "push", "origin", branch)
 
 	if fork := CheckBranchFork(context.Background(), f.work, branch); fork.Forked() {
 		t.Fatalf("a branch the run itself pushed must be clean; got %q (%s)", fork.State, fork.Detail)
@@ -176,7 +162,7 @@ func TestCheckBranchFork_CleanWhenRemoteHeadIsAncestor(t *testing.T) {
 func TestCheckBranchFork_CleanWhenRemoteBranchAbsent(t *testing.T) {
 	f := newForkFixture(t)
 	const branch = "feat/never-pushed"
-	gitx(t, f.work, "checkout", "-b", branch)
+	gittest.Run(t, f.work, "checkout", "-b", branch)
 
 	fork := CheckBranchFork(context.Background(), f.work, branch)
 	if fork.State != ForkStateClean {
@@ -225,23 +211,23 @@ func TestReclaimOrphanedRemoteBranch_DropsThePipelinesOwnPush(t *testing.T) {
 	f := newForkFixture(t)
 	const branch = "fix/163-killed-mid-push"
 
-	gitx(t, f.work, "checkout", "-b", branch)
+	gittest.Run(t, f.work, "checkout", "-b", branch)
 	commitFile(t, f.work, "impl.go", "// half-done\n", "feat: partial")
-	gitx(t, f.work, "push", "origin", branch)
+	gittest.Run(t, f.work, "push", "origin", branch)
 
 	res := ReclaimOrphanedRemoteBranch(context.Background(), f.work, branch)
 	if !res.Deleted {
 		t.Fatalf("expected the pipeline's own orphaned push to be reclaimed; reason=%s", res.Reason)
 	}
-	if out := gitx(t, f.work, "ls-remote", "--heads", "origin", "refs/heads/"+branch); out != "" {
+	if out := gittest.Run(t, f.work, "ls-remote", "--heads", "origin", "refs/heads/"+branch); out != "" {
 		t.Errorf("origin still has %s after reclamation: %s", branch, out)
 	}
 
 	// And the next attempt, starting from the base, now sees a clean branch —
 	// this is the whole point of the reclamation.
-	gitx(t, f.work, "checkout", "main")
-	gitx(t, f.work, "branch", "-D", branch)
-	gitx(t, f.work, "checkout", "-b", branch)
+	gittest.Run(t, f.work, "checkout", "main")
+	gittest.Run(t, f.work, "branch", "-D", branch)
+	gittest.Run(t, f.work, "checkout", "-b", branch)
 	if fork := CheckBranchFork(context.Background(), f.work, branch); fork.Forked() {
 		t.Errorf("after reclamation the retry must see a clean branch; got %q (%s)", fork.State, fork.Detail)
 	}
@@ -258,15 +244,15 @@ func TestReclaimOrphanedRemoteBranch_LeavesACommitTheRunNeverAuthored(t *testing
 	const branch = "fix/163-operator-push"
 
 	other := f.clone()
-	gitx(t, other, "checkout", "-b", branch)
+	gittest.Run(t, other, "checkout", "-b", branch)
 	foreign := commitFile(t, other, "operator.md", "operator work\n", "docs: operator edit")
-	gitx(t, other, "push", "origin", branch)
+	gittest.Run(t, other, "push", "origin", branch)
 
 	// The run's local branch sits at the base and has fetched the remote head,
 	// so the object is present — the decision must rest on ancestry, not on
 	// whether the object happens to be local.
-	gitx(t, f.work, "checkout", "-b", branch)
-	gitx(t, f.work, "fetch", "origin", branch)
+	gittest.Run(t, f.work, "checkout", "-b", branch)
+	gittest.Run(t, f.work, "fetch", "origin", branch)
 
 	res := ReclaimOrphanedRemoteBranch(context.Background(), f.work, branch)
 	if res.Deleted {
@@ -275,7 +261,7 @@ func TestReclaimOrphanedRemoteBranch_LeavesACommitTheRunNeverAuthored(t *testing
 	if !strings.Contains(res.Reason, "never authored") {
 		t.Errorf("Reason = %q, want it to say why the deletion was declined", res.Reason)
 	}
-	if out := gitx(t, f.work, "ls-remote", "--heads", "origin", "refs/heads/"+branch); !strings.Contains(out, foreign) {
+	if out := gittest.Run(t, f.work, "ls-remote", "--heads", "origin", "refs/heads/"+branch); !strings.Contains(out, foreign) {
 		t.Fatalf("the operator's commit %s must survive; ls-remote = %q", foreign, out)
 	}
 	// The declined case is exactly the one the pre-flight must report.
@@ -300,7 +286,7 @@ func TestReclaimOrphanedRemoteBranch_RefusesProtectedBranches(t *testing.T) {
 		}
 	}
 	// main must still be on origin.
-	if out := gitx(t, f.work, "ls-remote", "--heads", "origin", "refs/heads/main"); out == "" {
+	if out := gittest.Run(t, f.work, "ls-remote", "--heads", "origin", "refs/heads/main"); out == "" {
 		t.Fatal("origin/main was deleted")
 	}
 }
@@ -310,7 +296,7 @@ func TestReclaimOrphanedRemoteBranch_RefusesProtectedBranches(t *testing.T) {
 func TestReclaimOrphanedRemoteBranch_NoopWhenNothingWasPushed(t *testing.T) {
 	f := newForkFixture(t)
 	const branch = "feat/never-pushed"
-	gitx(t, f.work, "checkout", "-b", branch)
+	gittest.Run(t, f.work, "checkout", "-b", branch)
 	commitFile(t, f.work, "impl.go", "// local only\n", "feat: local only")
 
 	res := ReclaimOrphanedRemoteBranch(context.Background(), f.work, branch)
@@ -330,11 +316,11 @@ func TestReclaimOrphanedRemoteBranch_DeclinesWhenLocalBranchIsGone(t *testing.T)
 	f := newForkFixture(t)
 	const branch = "fix/163-local-gone"
 
-	gitx(t, f.work, "checkout", "-b", branch)
+	gittest.Run(t, f.work, "checkout", "-b", branch)
 	commitFile(t, f.work, "impl.go", "// work\n", "feat: work")
-	gitx(t, f.work, "push", "origin", branch)
-	gitx(t, f.work, "checkout", "main")
-	gitx(t, f.work, "branch", "-D", branch)
+	gittest.Run(t, f.work, "push", "origin", branch)
+	gittest.Run(t, f.work, "checkout", "main")
+	gittest.Run(t, f.work, "branch", "-D", branch)
 
 	res := ReclaimOrphanedRemoteBranch(context.Background(), f.work, branch)
 	if res.Deleted {

@@ -4,12 +4,13 @@ import (
 	"errors"
 	"io/fs"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"testing"
 
 	"github.com/nightgauge/nightgauge/internal/runstate"
 	"github.com/nightgauge/nightgauge/internal/state"
+
+	"github.com/nightgauge/nightgauge/internal/pidtest"
 )
 
 // #557 — a scheduler-owned run's snapshot must not be resurrected after a
@@ -34,21 +35,6 @@ import (
 //
 // The fix makes ownership an identity-scoped fact the snapshot carries, so step
 // 3 declines. Step 4 then updates a file that never went away.
-
-// deadPID returns a pid that has certainly exited: a real child, reaped.
-// Invented "large number" pids are not reliably dead — the kernel recycles.
-func deadPID(t *testing.T) int {
-	t.Helper()
-	cmd := exec.Command("true")
-	if err := cmd.Run(); err != nil {
-		t.Fatalf("run throwaway child: %v", err)
-	}
-	pid := cmd.Process.Pid
-	if runstate.ProcessAlive(pid) {
-		t.Skipf("pid %d was recycled before the test could use it as a dead pid", pid)
-	}
-	return pid
-}
 
 // liveForeignPID returns a pid that is alive and is NOT this process — the test
 // binary's parent, which outlives every test in the binary. It stands in for
@@ -147,7 +133,7 @@ func TestRunIdentity_AGoneOwnersRunIsStillSealedByItsAdopter(t *testing.T) {
 	runID := newTestRunID()
 
 	orphan := state.NewRuntimeState(repo, issue, "", runID)
-	orphan.OwnerPID = deadPID(t)
+	orphan.OwnerPID = pidtest.Reaped(t, runstate.ProcessAlive)
 	orphan.BeginStage(state.StageFeatureDev)
 	if err := orphan.Persist(stateDir); err != nil {
 		t.Fatalf("orphan persist: %v", err)
@@ -204,7 +190,7 @@ func TestRunIdentity_AdoptionTakesOwnershipOnlyFromAGoneOwner(t *testing.T) {
 	}
 
 	t.Run("gone owner", func(t *testing.T) {
-		gone := deadPID(t)
+		gone := pidtest.Reaped(t, runstate.ProcessAlive)
 		rs := adopt(t, 559, gone)
 		// The transfer is asserted on the PID, not on OwnedByThisProcess: a
 		// gone owner already reads as "not a live foreign owner", so the
