@@ -2,10 +2,11 @@ package orchestrator
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/nightgauge/nightgauge/internal/gittest"
 )
 
 // #1053: the auto-recovery rescue published a tree that could not build.
@@ -27,17 +28,17 @@ import (
 // test on error. Kept separate from the recovery path under test.
 func gitCommitAll(t *testing.T, dir, msg string) {
 	t.Helper()
-	if out, err := exec.Command("git", "-C", dir, "add", "-A").CombinedOutput(); err != nil {
+	if out, err := gittest.Command(dir, "add", "-A").CombinedOutput(); err != nil {
 		t.Fatalf("git add: %v: %s", err, out)
 	}
-	if out, err := exec.Command("git", "-C", dir, "commit", "-m", msg).CombinedOutput(); err != nil {
+	if out, err := gittest.Command(dir, "commit", "-m", msg).CombinedOutput(); err != nil {
 		t.Fatalf("git commit: %v: %s", err, out)
 	}
 }
 
 func gitHeadPaths(t *testing.T, dir string) map[string]bool {
 	t.Helper()
-	out, err := exec.Command("git", "-C", dir, "ls-tree", "-r", "--name-only", "HEAD").Output()
+	out, err := gittest.Command(dir, "ls-tree", "-r", "--name-only", "HEAD").Output()
 	if err != nil {
 		t.Fatalf("git ls-tree: %v", err)
 	}
@@ -54,7 +55,7 @@ func gitHeadPaths(t *testing.T, dir string) map[string]bool {
 // error. Used to assert what the recovery commit actually published.
 func gitShowFile(t *testing.T, dir, rev string) string {
 	t.Helper()
-	out, err := exec.Command("git", "-C", dir, "show", rev).Output()
+	out, err := gittest.Command(dir, "show", rev).Output()
 	if err != nil {
 		t.Fatalf("git show %s: %v", rev, err)
 	}
@@ -242,7 +243,7 @@ func TestStagedDeletions_CountsRenamesAsOneNonDeletion(t *testing.T) {
 	if err := os.Rename(filepath.Join(dir, "old.txt"), filepath.Join(dir, "new.txt")); err != nil {
 		t.Fatal(err)
 	}
-	if out, err := exec.Command("git", "-C", dir, "add", "-A").CombinedOutput(); err != nil {
+	if out, err := gittest.Command(dir, "add", "-A").CombinedOutput(); err != nil {
 		t.Fatalf("git add: %v: %s", err, out)
 	}
 

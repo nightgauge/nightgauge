@@ -14,6 +14,8 @@ import (
 	stagecontext "github.com/nightgauge/nightgauge/internal/execution/context"
 	"github.com/nightgauge/nightgauge/internal/state"
 	"github.com/nightgauge/nightgauge/pkg/types"
+
+	"github.com/nightgauge/nightgauge/internal/gittest"
 )
 
 // ---------------------------------------------------------------------------
@@ -556,7 +558,7 @@ func TestScheduler_NonTerminalReconcile_OwnRunPrOpen_FailurePreserved(t *testing
 	f := newWorktreeRunFixture(t, issueNumber, branch)
 	// The PR points at the PUSHED tip; the rewind re-dispatch then commits on the
 	// branch with the push deferred, so the local tip moves past it.
-	gitx(t, f.worktree, "commit", "--allow-empty", "-m", "wip: rewind re-dispatch checkpoint")
+	gittest.Run(t, f.worktree, "commit", "--allow-empty", "-m", "wip: rewind re-dispatch checkpoint")
 	writeRecordedPRContext(t, f.worktree, issueNumber, recordedPRNum)
 
 	stubReconcileGh(t, func(_ context.Context, args ...string) ([]byte, error) {
@@ -629,7 +631,7 @@ func TestScheduler_NonTerminalReconcile_ForeignPrOpen_StillReconciles(t *testing
 	// The premise: the checkout really is sitting at the head the prior run
 	// pushed. If the fixture ever stops reusing the branch this test no longer
 	// exercises the direction it claims to.
-	if rootTip, wtTip := gitx(t, f.root, "rev-parse", "refs/heads/"+branch), gitx(t, f.worktree, "rev-parse", "HEAD"); rootTip != wtTip {
+	if rootTip, wtTip := gittest.Run(t, f.root, "rev-parse", "refs/heads/"+branch), gittest.Run(t, f.worktree, "rev-parse", "HEAD"); rootTip != wtTip {
 		t.Fatalf("fixture premise gone: worktree HEAD %s is not the reused branch tip %s", wtTip, rootTip)
 	}
 

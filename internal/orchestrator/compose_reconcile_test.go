@@ -5,13 +5,14 @@ import (
 	"context"
 	"log"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/nightgauge/nightgauge/internal/dockercompose"
+
+	"github.com/nightgauge/nightgauge/internal/gittest"
 )
 
 // worktreeRepo builds a git repo holding one pipeline-shaped worktree
@@ -21,27 +22,19 @@ import (
 func worktreeRepo(t *testing.T, issue int) string {
 	t.Helper()
 	base := t.TempDir()
-	git := func(dir string, args ...string) {
-		t.Helper()
-		cmd := exec.Command("git", args...)
-		cmd.Dir = dir
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %s (in %s): %v: %s", strings.Join(args, " "), dir, err, out)
-		}
-	}
-	git(base, "init", "-b", "main", "repo")
+	gittest.Run(t, base, "init", "-b", "main", "repo")
 	root, err := filepath.EvalSymlinks(filepath.Join(base, "repo"))
 	if err != nil {
 		t.Fatalf("resolve repo path: %v", err)
 	}
-	git(root, "config", "user.email", "test@test")
-	git(root, "config", "user.name", "test")
+	gittest.Run(t, root, "config", "user.email", "test@test")
+	gittest.Run(t, root, "config", "user.name", "test")
 	if err := os.WriteFile(filepath.Join(root, "README"), []byte("hi\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	git(root, "add", ".")
-	git(root, "commit", "-m", "initial")
-	git(root, "worktree", "add",
+	gittest.Run(t, root, "add", ".")
+	gittest.Run(t, root, "commit", "-m", "initial")
+	gittest.Run(t, root, "worktree", "add",
 		filepath.Join(root, ".worktrees", "issue-"+strconv.Itoa(issue)),
 		"-b", "fix/"+strconv.Itoa(issue)+"-work")
 	return root
@@ -133,9 +126,8 @@ func TestActiveWorktreeIssues_UndeterminedPaths(t *testing.T) {
 		// The guard must not degrade into "never act": a real, readable repo
 		// that genuinely holds no pipeline worktrees is a determined answer.
 		root := worktreeRepo(t, 403)
-		cmd := exec.Command("git", "worktree", "remove", "--force",
+		cmd := gittest.Command(root, "worktree", "remove", "--force",
 			filepath.Join(root, ".worktrees", "issue-403"))
-		cmd.Dir = root
 		if out, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("remove worktree: %v: %s", err, out)
 		}

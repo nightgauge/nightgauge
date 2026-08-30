@@ -4,11 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/nightgauge/nightgauge/internal/gittest"
 )
 
 // End-to-end coverage for #152: the validate gate must re-derive the verdict
@@ -26,45 +27,20 @@ func initRepo(t *testing.T) string {
 	t.Helper()
 	ws := t.TempDir()
 
-	run := func(args ...string) {
-		t.Helper()
-		cmd := exec.Command("git", args...)
-		cmd.Dir = ws
-		cmd.Env = append(os.Environ(),
-			"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@example.com",
-			"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@example.com",
-		)
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
-		}
-	}
-
-	run("init", "-b", "main")
+	gittest.Run(t, ws, "init", "-b", "main")
 	if err := os.WriteFile(filepath.Join(ws, "README.md"), []byte("base\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	run("add", ".")
-	run("commit", "-m", "base")
+	gittest.Run(t, ws, "add", ".")
+	gittest.Run(t, ws, "commit", "-m", "base")
 	return ws
 }
 
 // commitOnBranch checks out a feature branch and commits the given files.
 func commitOnBranch(t *testing.T, ws, branch string, files map[string]string) {
 	t.Helper()
-	run := func(args ...string) {
-		t.Helper()
-		cmd := exec.Command("git", args...)
-		cmd.Dir = ws
-		cmd.Env = append(os.Environ(),
-			"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@example.com",
-			"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@example.com",
-		)
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
-		}
-	}
 
-	run("checkout", "-b", branch)
+	gittest.Run(t, ws, "checkout", "-b", branch)
 	for name, content := range files {
 		full := filepath.Join(ws, name)
 		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
@@ -74,8 +50,8 @@ func commitOnBranch(t *testing.T, ws, branch string, files map[string]string) {
 			t.Fatal(err)
 		}
 	}
-	run("add", ".")
-	run("commit", "-m", "work")
+	gittest.Run(t, ws, "add", ".")
+	gittest.Run(t, ws, "commit", "-m", "work")
 }
 
 func writeValidateArtifact(t *testing.T, ws string, issue int, body map[string]any) {

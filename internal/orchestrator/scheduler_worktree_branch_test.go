@@ -15,6 +15,8 @@ import (
 	stagecontext "github.com/nightgauge/nightgauge/internal/execution/context"
 	"github.com/nightgauge/nightgauge/internal/state"
 	"github.com/nightgauge/nightgauge/pkg/types"
+
+	"github.com/nightgauge/nightgauge/internal/gittest"
 )
 
 // ---------------------------------------------------------------------------
@@ -169,7 +171,7 @@ func newWorktreeRunFixture(t *testing.T, issueNumber int, branch string) *worktr
 	}
 
 	worktree := filepath.Join(root, ".nightgauge", "worktrees", "issue-"+strconv.Itoa(issueNumber))
-	gitx(t, root, "worktree", "add", "-b", branch, worktree)
+	gittest.Run(t, root, "worktree", "add", "-b", branch, worktree)
 
 	return &worktreeRunFixture{root: root, worktree: worktree}
 }

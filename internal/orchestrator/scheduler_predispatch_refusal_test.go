@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -14,6 +13,8 @@ import (
 	"github.com/nightgauge/nightgauge/internal/platform"
 	"github.com/nightgauge/nightgauge/internal/state"
 	"github.com/nightgauge/nightgauge/pkg/types"
+
+	"github.com/nightgauge/nightgauge/internal/gittest"
 )
 
 // refusalCapturingStageRunner succeeds every stage it is asked to run, writes
@@ -345,7 +346,7 @@ var allRefusalStageSkills = []string{
 // refusalGit runs a git command in dir and fails the test on error.
 func refusalGit(t *testing.T, dir string, args ...string) string {
 	t.Helper()
-	out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).CombinedOutput()
+	out, err := gittest.Command(dir, args...).CombinedOutput()
 	if err != nil {
 		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
 	}

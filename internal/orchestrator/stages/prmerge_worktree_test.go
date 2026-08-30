@@ -8,6 +8,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/nightgauge/nightgauge/internal/gittest"
 )
 
 // setupLinkedWorktreeForMerge builds the exact topology every pipeline run
@@ -54,8 +56,7 @@ func setupLinkedWorktreeForMerge(t *testing.T, headBranch string) (mainDir, work
 
 func gitRun(t *testing.T, dir string, args ...string) string {
 	t.Helper()
-	cmd := exec.Command("git", args...)
-	cmd.Dir = dir
+	cmd := gittest.Command(dir, args...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("git %s (dir=%s): %v\n%s", strings.Join(args, " "), dir, err, out)
@@ -65,8 +66,7 @@ func gitRun(t *testing.T, dir string, args ...string) string {
 
 func assertBranch(t *testing.T, dir, want string) {
 	t.Helper()
-	cmd := exec.Command("git", "symbolic-ref", "--short", "HEAD")
-	cmd.Dir = dir
+	cmd := gittest.Command(dir, "symbolic-ref", "--short", "HEAD")
 	out, err := cmd.Output()
 	if err != nil {
 		t.Fatalf("read current branch in %s: %v", dir, err)

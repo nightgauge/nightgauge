@@ -2,10 +2,11 @@ package git
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/nightgauge/nightgauge/internal/gittest"
 )
 
 // CleanupMergedBranches keys entirely on git's "[gone]" upstream marker, which
@@ -58,7 +59,7 @@ func TestCleanupMergedBranches_DeletesGoneBranchesWhenPruneSucceeds(t *testing.T
 	runGitForCleanup(t, upstream, "config", "receive.denyCurrentBranch", "ignore")
 
 	clone := t.TempDir()
-	if out, err := exec.Command("git", "clone", upstream, clone).CombinedOutput(); err != nil {
+	if out, err := gittest.Command("", "clone", upstream, clone).CombinedOutput(); err != nil {
 		t.Fatalf("clone: %v: %s", err, out)
 	}
 	runGitForCleanup(t, clone, "config", "user.email", "test@test")
@@ -96,8 +97,7 @@ func TestCleanupMergedBranches_DeletesGoneBranchesWhenPruneSucceeds(t *testing.T
 
 func runGitForCleanup(t *testing.T, dir string, args ...string) {
 	t.Helper()
-	cmd := exec.Command("git", args...)
-	cmd.Dir = dir
+	cmd := gittest.Command(dir, args...)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("git %s: %v: %s", strings.Join(args, " "), err, out)
 	}

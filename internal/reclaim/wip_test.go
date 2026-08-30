@@ -3,11 +3,12 @@ package reclaim
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/nightgauge/nightgauge/internal/gittest"
 )
 
 // #1105. These drive real git for the same reason the stash tests do: the
@@ -39,8 +40,7 @@ func newWipRepo(t *testing.T) *wipRepo {
 
 func (r *wipRepo) git(args ...string) string {
 	r.t.Helper()
-	cmd := exec.Command("git", args...)
-	cmd.Dir = r.dir
+	cmd := gittest.Command(r.dir, args...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		r.t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
@@ -103,8 +103,7 @@ func (r *wipRepo) land(files map[string]string) {
 
 func (r *wipRepo) refExists(ref string) bool {
 	r.t.Helper()
-	cmd := exec.Command("git", "rev-parse", "--verify", "--quiet", ref)
-	cmd.Dir = r.dir
+	cmd := gittest.Command(r.dir, "rev-parse", "--verify", "--quiet", ref)
 	return cmd.Run() == nil
 }
 
@@ -305,8 +304,7 @@ func TestPruneWipRefs_DiscardWithoutASelectorIsRefused(t *testing.T) {
 
 func isAncestor(t *testing.T, dir, maybeAncestor, ref string) bool {
 	t.Helper()
-	cmd := exec.Command("git", "merge-base", "--is-ancestor", maybeAncestor, ref)
-	cmd.Dir = dir
+	cmd := gittest.Command(dir, "merge-base", "--is-ancestor", maybeAncestor, ref)
 	return cmd.Run() == nil
 }
 
