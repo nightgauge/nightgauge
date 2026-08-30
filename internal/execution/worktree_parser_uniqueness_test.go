@@ -68,14 +68,27 @@ func scanForIssueParsers(t *testing.T, root string) []string {
 		}
 		if d.IsDir() {
 			switch d.Name() {
-			// ".worktrees" holds nested checkouts of THIS repo, created by the
-			// pipeline. Every sanctioned parser appears again inside each one,
-			// so scanning them made this guard report
-			// IssueNumberFromWorktreeDir — the function its own failure message
-			// tells you to route through — as an unsanctioned copy of itself,
-			// once per live worktree (#851). The directory is gitignored: it is
-			// not this checkout's source.
-			case ".git", ".worktrees", "node_modules", "vendor", "bin", "dist":
+			case ".git", "node_modules", "vendor", "bin", "dist":
+				return fs.SkipDir
+			}
+			// A nested checkout of THIS repo contains every sanctioned parser
+			// again, at a path that is not its sanctioned path — so scanning
+			// one makes this guard report IssueNumberFromWorktreeDir, the
+			// function its own failure message tells you to route through, as
+			// an unsanctioned copy of itself, once per live worktree. That is
+			// #851, and `ci-local.sh` cannot pass while any worktree exists.
+			//
+			// #851 excluded the ONE directory name in use at the time
+			// (`.worktrees`). The agent worktree convention puts checkouts
+			// under `.claude/worktrees/` instead — a directory named
+			// `worktrees`, which the literal `.worktrees` entry does not match
+			// — so the identical defect came back at a new path (#1200).
+			//
+			// Detect the PROPERTY instead of enumerating names: a directory
+			// that contains its own `.git` is a checkout, not this checkout's
+			// source. That covers both conventions in use, any future one, and
+			// a hand-made `git worktree add` anywhere in the tree.
+			if path != root && isNestedCheckout(path) {
 				return fs.SkipDir
 			}
 			return nil
@@ -110,6 +123,18 @@ func scanForIssueParsers(t *testing.T, root string) []string {
 		t.Fatalf("walk module: %v", err)
 	}
 	return offenders
+}
+
+// isNestedCheckout reports whether dir is the root of a git checkout.
+//
+// `git worktree add` writes a `.git` FILE (a gitdir pointer) rather than a
+// directory, and a plain clone writes a directory — os.Stat accepts both
+// without caring which, because either one means the same thing here: the
+// files below this point belong to another checkout's working tree, not to the
+// tree being scanned (#1200).
+func isNestedCheckout(dir string) bool {
+	_, err := os.Stat(filepath.Join(dir, ".git"))
+	return err == nil
 }
 
 // parsesIssuePrefixToNumber reports whether fn both splits a name on the
@@ -220,13 +245,43 @@ func ParseIssueDir(base string) (int, bool) {
 		}
 	}
 
+	// A nested checkout is what it is because it carries its own `.git`, so
+	// the fixture must too — the scan detects the property, not the name.
+	// `git worktree add` writes a gitdir POINTER FILE; a clone writes a
+	// directory. Both shapes appear below so neither can regress alone.
+	markCheckoutDir := func(rel string) {
+		full := filepath.Join(root, rel, ".git")
+		if err := os.MkdirAll(full, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", full, err)
+		}
+	}
+	markCheckoutFile := func(rel string) {
+		full := filepath.Join(root, rel, ".git")
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", filepath.Dir(full), err)
+		}
+		if err := os.WriteFile(full, []byte("gitdir: /elsewhere/.git/worktrees/x\n"), 0o644); err != nil {
+			t.Fatalf("write %s: %v", full, err)
+		}
+	}
+
 	// One real offender in the tree's own source, and the same file inside
-	// two nested worktrees plus the other excluded directories.
+	// nested checkouts under BOTH worktree conventions, plus the other
+	// excluded directories.
 	write(filepath.Join("internal", "real", "parser.go"))
 	write(filepath.Join(".worktrees", "issue-465", "internal", "real", "parser.go"))
 	write(filepath.Join(".worktrees", "issue-467", "internal", "execution", "worktree_sweep.go"))
+	// #1200: the agent worktree convention. Before the property-based skip
+	// this path was scanned, and the whole-tree race gate failed for anyone
+	// holding an agent worktree.
+	write(filepath.Join(".claude", "worktrees", "issue-1150", "internal", "execution", "worktree_sweep.go"))
+	write(filepath.Join(".claude", "worktrees", "issue-1150", "internal", "cmd", "batchfailures", "extractor.go"))
 	write(filepath.Join("node_modules", "dep", "parser.go"))
 	write(filepath.Join("vendor", "dep", "parser.go"))
+
+	markCheckoutDir(filepath.Join(".worktrees", "issue-465"))
+	markCheckoutFile(filepath.Join(".worktrees", "issue-467"))
+	markCheckoutFile(filepath.Join(".claude", "worktrees", "issue-1150"))
 
 	offenders := scanForIssueParsers(t, root)
 
@@ -238,8 +293,11 @@ func ParseIssueDir(base string) (int, bool) {
 		t.Errorf("offender = %q, want the one under internal/real/", offenders[0])
 	}
 	for _, o := range offenders {
-		if strings.Contains(o, ".worktrees") {
-			t.Errorf("a nested pipeline worktree was scanned: %q", o)
+		// Deliberately NOT `.worktrees`: that substring is blind to the
+		// `.claude/worktrees/` convention, and an assertion that cannot fail
+		// for a convention it does not name is how #1200 followed #851.
+		if strings.Contains(o, "worktrees") {
+			t.Errorf("a nested checkout was scanned: %q", o)
 		}
 	}
 }
