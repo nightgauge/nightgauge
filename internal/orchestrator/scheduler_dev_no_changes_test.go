@@ -82,6 +82,7 @@ func (r *honestReportEmptyDiskRunner) ran(stage state.PipelineStage) bool {
 // Post-fix the run must die at feature-dev's own gate, and feature-validate must
 // never be invoked at all — that is where the $0.87 goes.
 func TestScheduler_FeatureDev_NoChangesProduced_FailsBeforeValidate(t *testing.T) {
+	stubReconcileGhUnreachable(t)
 	root := gitWorkspace(t)
 
 	for _, dir := range []string{

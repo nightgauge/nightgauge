@@ -631,6 +631,7 @@ func (r *budgetEscalationRunner) RunStage(_ context.Context, params StageRunPara
 // scheduler escalates the model (sonnet → opus) instead of taking a
 // same-model stall-retry / re-plan rewind.
 func TestScheduler_BudgetAwareEscalationOnStallKill(t *testing.T) {
+	stubReconcileGhUnreachable(t)
 	root := t.TempDir()
 	// Enable adaptive stall recovery AND set a low $10 budget ceiling. Without
 	// the budget-aware branch, the stall-kill would rewind to feature-planning;

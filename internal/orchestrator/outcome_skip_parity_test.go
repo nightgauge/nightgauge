@@ -110,6 +110,7 @@ func splitNonEmptyLines(s string) []string {
 // A blocked-dependency deferral records NOTHING on the autonomous path, exactly
 // as it already did on the extension path.
 func TestRunPipeline_BlockedDependencyDeferralRecordsNoOutcome(t *testing.T) {
+	stubReconcileGhUnreachable(t)
 	root := runTerminalSkipPipeline(t, 305,
 		"[blocked-dependency] issue #305 dispatched while blockedBy #300 is still open — deferring")
 
@@ -121,6 +122,7 @@ func TestRunPipeline_BlockedDependencyDeferralRecordsNoOutcome(t *testing.T) {
 
 // The network_unavailable skip (#3296) stays.
 func TestRunPipeline_NetworkUnavailableRecordsNoOutcome(t *testing.T) {
+	stubReconcileGhUnreachable(t)
 	root := runTerminalSkipPipeline(t, 3296, ErrNetworkUnavailable.Error())
 
 	if got := corpusRowCount(t, root); got != 0 {
@@ -131,6 +133,7 @@ func TestRunPipeline_NetworkUnavailableRecordsNoOutcome(t *testing.T) {
 // CONTROL: an ordinary failure still records. Without this the two tests above
 // would pass just as well against a writer that was switched off entirely.
 func TestRunPipeline_OrdinaryFailureStillRecordsAnOutcome(t *testing.T) {
+	stubReconcileGhUnreachable(t)
 	root := runTerminalSkipPipeline(t, 999, "stage exited 1: the model produced no usable output")
 
 	if got := corpusRowCount(t, root); got != 1 {

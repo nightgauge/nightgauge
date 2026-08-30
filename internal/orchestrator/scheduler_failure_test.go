@@ -1504,6 +1504,7 @@ func TestCLIAdapterAuthFailedExcludedFromEscalation_NotSubagentCrash(t *testing.
 // was unreachable. Making it reachable is what re-introduced "exit 1: <nil>" on
 // this path, so the branch is asserted here rather than left to inspection.
 func TestCLIStallKill_RewindsAndPersistsTheRealReason(t *testing.T) {
+	stubReconcileGhUnreachable(t)
 	root := t.TempDir()
 	enableAdaptiveStallRecovery(t, root)
 
@@ -1579,6 +1580,7 @@ func TestCLIStallKill_RewindsAndPersistsTheRealReason(t *testing.T) {
 // and nothing removed it when the retry succeeded — so the V3 record showed a
 // `complete` feature-dev carrying a crash transcript.
 func TestSupersededStageTailIsCleared(t *testing.T) {
+	stubReconcileGhUnreachable(t)
 	root := t.TempDir()
 
 	const crashTail = "…transcript…\nError: Cannot read properties of undefined (reading 'text')"

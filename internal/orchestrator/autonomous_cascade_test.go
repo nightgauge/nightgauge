@@ -133,6 +133,7 @@ func TestAutonomous_CascadeIgnoresQuotaExhausted(t *testing.T) {
 //     "In review" (moveIssueToInReview) so it is not re-dispatched into the
 //     same blocker.
 func TestAutonomous_PrMergeUnmerged_Recoverable(t *testing.T) {
+	stubReconcileGhUnreachable(t)
 	as := newAutonomousForCascadeTest(t, 3, 30*time.Minute)
 	repo := "acme/platform"
 	issue := 949

@@ -71,6 +71,7 @@ func dispatchedRepoHalt(hay []string, needle string) bool {
 // (the fleet-wide reading) and the SECOND assertion fails instead: acme/api
 // stops too. Neither neuter is a compile error.
 func TestRepoHalt_StopsOnlyItsOwnRepository(t *testing.T) {
+	stubReconcileGhUnreachable(t)
 	as, dispatched := newRepoHaltScheduler(t)
 
 	if !as.PauseRepo("acme/web", "issue #10 failed at feature-validate", haltTagSlotFailure, 10, "feature-validate") {
@@ -97,6 +98,7 @@ func TestRepoHalt_StopsOnlyItsOwnRepository(t *testing.T) {
 // PauseRepo non-persistent / cleared at the top of runCycle and the
 // "still halted on the second cycle" assertion fails.
 func TestRepoHalt_RequiresAnExplicitResume(t *testing.T) {
+	stubReconcileGhUnreachable(t)
 	as, dispatched := newRepoHaltScheduler(t)
 	as.PauseRepo("acme/web", "issue #10 failed at feature-validate", haltTagSlotFailure, 10, "feature-validate")
 

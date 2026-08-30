@@ -28,6 +28,7 @@ import (
 // property that actually matters — that repeated halts never walk the issue
 // toward the lifetime cap that stops the whole queue.
 func TestOnPipelineComplete_ArchitectureApproval_NoRetryNoLifetimeIncrementNoCascade(t *testing.T) {
+	stubReconcileGhUnreachable(t)
 	as := newAutonomousForCascadeTest(t, 3, 30*time.Minute)
 	as.state.LifetimeIssueFailures = map[string]int{}
 	as.perIssueFailureCount = map[string]int{}
@@ -80,6 +81,7 @@ func TestOnPipelineComplete_ArchitectureApproval_NoRetryNoLifetimeIncrementNoCas
 // than MaxLifetimeFailuresPerIssue must still leave the scheduler running.
 // Pre-fix, the second halt was enough to stop the entire workspace.
 func TestOnPipelineComplete_ArchitectureApproval_RepeatedHaltsNeverTripCap(t *testing.T) {
+	stubReconcileGhUnreachable(t)
 	as := newAutonomousForCascadeTest(t, 3, 30*time.Minute)
 	as.state.LifetimeIssueFailures = map[string]int{}
 	as.perIssueFailureCount = map[string]int{}
@@ -114,6 +116,7 @@ func TestOnPipelineComplete_ArchitectureApproval_RepeatedHaltsNeverTripCap(t *te
 // Observed in production after the first fix shipped: #1181, #1182 and #1185 all
 // hit the gate, and the fleet stopped despite four other issues completing fine.
 func TestArchitectureApproval_DoesNotFeedConsecutiveFailureRail(t *testing.T) {
+	stubReconcileGhUnreachable(t)
 	as := newAutonomousForCascadeTest(t, 3, 30*time.Minute)
 	as.state.LifetimeIssueFailures = map[string]int{}
 	as.perIssueFailureCount = map[string]int{}
@@ -148,6 +151,7 @@ func TestArchitectureApproval_DoesNotFeedConsecutiveFailureRail(t *testing.T) {
 // shape the a production autonomous run run actually produced — the TS layer knew
 // it was an approval pause, but nothing forwarded a structured kind to Go.
 func TestNotifyComplete_EmptyKindApprovalDetail_Reclassifies(t *testing.T) {
+	stubReconcileGhUnreachable(t)
 	as := newAutonomousForCascadeTest(t, 3, 30*time.Minute)
 	as.state.LifetimeIssueFailures = map[string]int{}
 	as.perIssueFailureCount = map[string]int{}

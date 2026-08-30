@@ -43,6 +43,7 @@ func pendingCount(t *testing.T, root string) int {
 // gate with the comment that convergence must not depend on free slots; the
 // identical argument was never applied here.
 func TestRunCycle_SweepsSurvivalWithZeroFreeSlots(t *testing.T) {
+	stubSurvivalSweepNoForge(t)
 	root := t.TempDir()
 	as := NewAutonomousScheduler(nil, nil, nil, nil, DefaultAutonomousConfig(), root)
 
@@ -73,6 +74,7 @@ func TestRunCycle_SweepsSurvivalWithZeroFreeSlots(t *testing.T) {
 // TestSweepSurvivalRecords_IsPacedIndependently guards against the sweep going
 // back to riding `graphWasFresh`, and against it running on every 30s tick.
 func TestSweepSurvivalRecords_IsPacedIndependently(t *testing.T) {
+	stubSurvivalSweepNoForge(t)
 	root := t.TempDir()
 	as := NewAutonomousScheduler(nil, nil, nil, nil, DefaultAutonomousConfig(), root)
 	seedPending(t, root, "o/r", 7, time.Now().AddDate(0, 0, -30))
