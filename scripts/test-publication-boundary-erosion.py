@@ -549,6 +549,46 @@ def case_a_newly_written_in_range_reference_is_not_a_crossing(tmp: str) -> None:
     )
 
 
+def case_the_lowering_advice_is_a_fixed_point(tmp: str) -> None:
+    """Taking the advice must not produce more advice.
+
+    The advice is `baseline - removed`. If `baseline` is read from the WORKING
+    TREE, then lowering the manifest to what a run names and re-running
+    subtracts the same `removed` from the number just written -- and the second
+    run looks exactly as authoritative as the first. Following it twice records
+    a sweep that happened once, which is the erosion AGENTS.md forbids, arrived
+    at by obeying the tool rather than by ignoring it.
+
+    Three at base, one deleted, baseline 6: the advice is 5 and must stay 5.
+    """
+    dead = "\n".join(f"line {i}: {ref(9000 + i)}" for i in (1, 2, 3)) + "\n"
+    Path(tmp, "doc.md").write_text(dead)
+    write_manifest(tmp, 6)
+    commit(tmp, "feat: seed (#100)")
+    Path(tmp, "doc.md").write_text(
+        "\n".join(f"line {i}: {ref(9000 + i)}" for i in (1, 2)) + "\n"
+    )
+
+    _, first = run_check(tmp, "HEAD")
+    check(
+        "Lower `issue_references.tree_baseline` to 5" in first,
+        "the first run names the attributable floor",
+    )
+
+    # Take the advice, exactly as an operator would, and ask again.
+    write_manifest(tmp, 5)
+    code, second = run_check(tmp, "HEAD")
+    check(code == 0, f"the tree is still clean after taking the advice (exit {code})")
+    check(
+        "Lower `issue_references.tree_baseline` to 4" not in second,
+        "the second run does not subtract the same removals again",
+    )
+    check(
+        "ALREADY at the attributable floor of 5" in second,
+        "it reports the baseline as settled instead of advising another lowering",
+    )
+
+
 def main() -> int:
     print("publication-boundary ceiling lag and baseline erosion (#1129, #1080)")
     for name, body in [
@@ -607,6 +647,10 @@ def main() -> int:
         (
             "a newly written in-range reference is not a crossing (#1080)",
             case_a_newly_written_in_range_reference_is_not_a_crossing,
+        ),
+        (
+            "the lowering advice is a fixed point (#1080)",
+            case_the_lowering_advice_is_a_fixed_point,
         ),
     ]:
         run_case(name, body)

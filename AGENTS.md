@@ -324,7 +324,8 @@ has the rungs and the cases where a wider sweep genuinely is required.
 
 **This rule binds whoever pushes — not every stage that touches code.** In the
 pipeline that is `feature-validate` (and any interactive session about to push).
-`feature-dev` does not commit or push (#1608); it verifies what it changed and
+`feature-dev` does not commit or push (legacy issue 1608); it verifies what it
+changed and
 hands off. A stage that runs the full suite anyway spends its whole budget on a
 job the next stage will redo — #221 lost a completed implementation that way,
 babysitting `ci-local.sh` until it ran out of turn.

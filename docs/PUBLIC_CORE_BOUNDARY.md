@@ -58,3 +58,52 @@ When a proposal spans public and private surfaces, create a public issue only
 for the local capability or public contract. Track private implementation and
 commercial work separately; never link private issue numbers from the public
 repository.
+
+## How to write an issue reference
+
+This tree was imported from a predecessor repository whose issue numbers came
+with it, and the guard's `issue_references` rule exists because those numbers do
+not name anything here. Three forms, and only three:
+
+| Situation                               | Write                         |
+| --------------------------------------- | ----------------------------- |
+| An issue in this repository             | `#N`                          |
+| An issue in another public repository   | `owner/repo#N`                |
+| A number inherited from the predecessor | `legacy issue N` — **no `#`** |
+
+`legacy issue N` is de-linked on purpose. The number is kept because it is real
+provenance and someone with access can still look it up; the `#` is dropped
+because that is the character that turns a note into a claim about _this_
+repository's issue N. Rewriting such a reference to a live nightgauge number it
+does not correspond to is worse than leaving it dead, and deleting it loses the
+reasoning the citation was carrying. Neither of those is the fix.
+
+`owner/repo#N` matters for the same reason in the other direction. A bare `#N`
+in prose that has already named another repository still reads, to the forge and
+to a human skimming, as a reference to _this_ repository's issue N — the
+surrounding words are not part of the link. Qualifying it makes the same citation
+correct and takes it out of the burn-down, because it now names the sequence it
+belongs to. Three such references in `docs/spikes/` were qualified this way
+rather than deleted; the prose already named the repository and only the link was
+wrong.
+
+This document cannot show a live example of a bad reference, because writing one
+would be one — the guard rejects this file like any other, which is the intended
+demonstration.
+
+### Why the count alone cannot tell you how the sweep is going
+
+`issue_references.tree_baseline` counts references above a ceiling that **rises
+on its own** as this repository issues numbers. So a reference leaves the count
+for two opposite reasons, and they are indistinguishable in the total:
+
+- an edit **retired** it — progress; or
+- the rising mark **crossed** it — the reference was a 404 and is now a
+  confident live link to unrelated work. It got worse, and the number improved.
+
+The checker reports both populations by name (`retired: <path> #N` and
+`crossed (now resolves to unrelated work): <path>:<line> #N`) so the direction is
+legible. A crossing is **reported, never gated**: the change that raised the mark
+introduced nothing and cannot fix it by editing its own diff. The ratchet on the
+count is the gate and is unchanged — and `tree_baseline` is still only lowered to
+the value the checker names. See `AGENTS.md` § _Public Core Boundary_.

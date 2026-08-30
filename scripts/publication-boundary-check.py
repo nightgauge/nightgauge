@@ -726,6 +726,37 @@ def _blob_text(base, path):
         return None  # binary: the tree-wide scan skips these too
 
 
+def baseline_at(base, fallback):
+    """`issue_references.tree_baseline` as recorded at `base`, or `fallback`.
+
+    The advice below is `baseline - removed`, and it has to be measured from the
+    baseline the BASE COMMIT recorded, not the one in this working tree.
+
+    Both operands are otherwise measured against different points and the advice
+    stops being idempotent: lower the manifest to what a run names, re-run, and
+    the next run subtracts the SAME `removed` again from the number just
+    written. Following it twice records a sweep that happened once, which is the
+    precise thing AGENTS.md forbids -- and it is an easy mistake to make,
+    because the second run looks exactly as authoritative as the first.
+
+    Reading it from `base` makes the advice a fixed point: the same branch
+    against the same base names the same number however often it is run.
+    """
+    text = _blob_text(base, str(MANIFEST))
+    if text is None:
+        return fallback
+    try:
+        import yaml  # noqa: PLC0415
+
+        recorded = (yaml.safe_load(text) or {}).get("issue_references", {})
+    except Exception:  # noqa: BLE001 — a manifest we cannot parse is not advice
+        return fallback
+    value = recorded.get("tree_baseline") if isinstance(recorded, dict) else None
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return fallback
+    return value
+
+
 def retired_reference_set(base, ceiling, ref_exempt, tree_hits):
     """`(path, number)` pairs that left the tree since `base` -- the SET (#1080).
 
@@ -1337,17 +1368,30 @@ def main() -> int:
         removed, comparable = references_removed_since(
             base, ceiling, ref_exempt, tree_hits
         )
+        # Subtract from the baseline recorded AT BASE, and never advise a number
+        # above the one already recorded here -- so re-running after taking the
+        # advice names the same value instead of walking the baseline down by
+        # `removed` on every run.
+        anchor = baseline_at(base, tree_baseline) if comparable else tree_baseline
         floor = (
-            max(tree_count, tree_baseline - removed) if comparable else tree_baseline
+            max(tree_count, min(tree_baseline, anchor - removed))
+            if comparable
+            else tree_baseline
         )
         if comparable and removed > 0:
+            done = floor >= tree_baseline
             print(
                 f"  issue references: tree-wide count is {tree_count}, BELOW the recorded "
                 f"baseline of {tree_baseline} ({at_ceiling}).\n"
                 f"    {removed} reference(s) were genuinely removed from the tree since "
                 f"{base_ref} ({base[:12]}), measured on both sides at that same ceiling.\n"
-                f"    Lower `issue_references.tree_baseline` to {floor} in {MANIFEST} "
-                f"so the ratchet holds."
+                + (
+                    f"    `issue_references.tree_baseline` is ALREADY at the attributable "
+                    f"floor of {floor}; the removals are recorded. Change nothing."
+                    if done
+                    else f"    Lower `issue_references.tree_baseline` to {floor} in "
+                    f"{MANIFEST} so the ratchet holds."
+                )
             )
             if floor > tree_count:
                 print(

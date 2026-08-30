@@ -329,7 +329,7 @@ limits associated with your current quota." This is, like Claude's `/usage` and 
 `/status`, an interactive command — nightgauge's `gemini.go`/`gemini_sdk.go` both
 dispatch non-interactively, so the same headless-unreachability finding applies here too.
 Unlike Claude and Codex, though, this spike also found a filed, maintainer-unanswered bug
-report (`google-gemini/gemini-cli` issue #17081) describing `/stats` showing available
+report (google-gemini/gemini-cli#17081) describing `/stats` showing available
 quota at the same moment the API was actually rejecting requests as exhausted — i.e., an
 independent report that even the interactive, documented figure may be stale or
 inaccurate in practice. This spike did not resolve that dispute; it is recorded as a
@@ -498,8 +498,9 @@ the sense this survey cares about, and a provider must not conflate them.
 **Ollama Cloud (a separate, hosted product) does have plan-based limits, with no shipped
 API to query them.** Distinct from the local server this adapter talks to, Ollama's
 hosted offering has session/weekly usage limits by plan tier — but a live quota-check API
-for it is an **open, unshipped feature request** as of this spike (`ollama/ollama`
-issues #16448 and #15663), not a mechanism nightgauge's `ollama` adapter could adopt even
+for it is an **open, unshipped feature request** as of this spike
+(ollama/ollama#16448 and ollama/ollama#15663), not a mechanism nightgauge's
+`ollama` adapter could adopt even
 if it wanted to, since the adapter targets the local server
 (`NIGHTGAUGE_OLLAMA_BASE_URL`, default `http://localhost:11434/v1`), not the hosted
 product.
