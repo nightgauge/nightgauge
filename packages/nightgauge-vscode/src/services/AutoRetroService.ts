@@ -670,6 +670,47 @@ const SIGNAL_EXTRACTORS: Array<(input: ExtractorInput) => StructuredSignal | nul
       severityHint: "medium",
     };
   },
+  // #1178 — the CONTEXT-DECODE gate's own structured reason.
+  //
+  // `internal/orchestrator/gates/context_decode.go` refuses a stage whose
+  // deliverable is unreadable or wrongly shaped, and it says so precisely:
+  //   "dev context does not match the expected schema"
+  //   evidence: `field "files_changed": expected object, got array`
+  // That verdict is threaded in as the terminal reason. But the deliverable it
+  // is complaining about is, by construction, the one file the collector
+  // cannot read — so `pipeline_context` is absent, the keyword table has no
+  // pattern for schema prose, and the run was written up as `unknown` /
+  // severity `low` while holding an exact machine-readable cause.
+  //
+  // Placed LAST among the extractors so any other structured signal (an
+  // adapter outage, a stall kill, a terminal kind) still wins: a corrupt
+  // deliverable is frequently the SYMPTOM of one of those, and this rule
+  // exists to beat `unknown`, not to displace a better verdict.
+  //
+  // Matched against the gate's reason/kind only — never the whole corpus.
+  // The phrase "does not match the expected schema" appears verbatim in the
+  // session log of any run that merely LOGGED such a gate for another issue,
+  // and classifying on that would be the source-blindness #1144 fixed.
+  ({ terminalReason, terminalKind }) => {
+    const reason = `${terminalKind} ${terminalReason}`.trim();
+    if (reason.length === 0) return null;
+    const decodeFailure =
+      /does not match the expected schema/i.test(reason) ||
+      /is not valid JSON/i.test(reason) ||
+      /could not be decoded/i.test(reason) ||
+      /expected (?:object|array|string|number|boolean), got /i.test(reason) ||
+      /^context_decode/i.test(reason);
+    if (!decodeFailure) return null;
+    return {
+      category: "state-management",
+      // The gate's own words, verbatim. An operator reading the retro gets the
+      // field and the shape mismatch, not "category could not be determined".
+      evidence: terminalReason?.trim()
+        ? terminalReason.trim()
+        : `context-decode gate refused the stage with kind ${terminalKind}`,
+      severityHint: "high",
+    };
+  },
 ];
 
 // ============================================================================
@@ -714,7 +755,26 @@ export class AutoRetroService {
      * category `unknown` while `sources_analyzed` was `["terminal_reason"]` and
      * the kind was sitting in the orchestrator unused.
      */
-    terminalKind?: string
+    terminalKind?: string,
+    /**
+     * The directory the RUN executed in (#1178) — the worktree when the run
+     * had one, absent on the interactive path.
+     *
+     * Distinct from `workspaceRoot`, which is the run's REPO root
+     * (`HeadlessOrchestrator.getRunRepoRoot()`) and is where the retro's own
+     * output, `.nightgauge/config.yaml` and the daemon's logs live. Stage
+     * DELIVERABLES do not live there in worktree mode: `feature-dev` writes
+     * `.worktrees/issue-210/.nightgauge/pipeline/dev-210.json`, and the repo
+     * root's `pipeline/` holds only `calibration.json` / `queue-state.json`.
+     *
+     * `getRunRepoRoot()` is deliberately NOT the authority here — see
+     * `utils/blockedFinding.ts`, which documents that it writes at the repo
+     * root "rather than the worktree" precisely so the record outlives the
+     * worktree's removal. The pipeline's own authority for where a stage put
+     * its files is `HeadlessOrchestrator.getWorkingDirectory()` (worktree
+     * override first), and that is what the call site passes.
+     */
+    deliverableRoot?: string
   ): Promise<AutoRetroResult | null> {
     try {
       // Step 1: Read config
@@ -741,7 +801,8 @@ export class AutoRetroService {
         failedStage,
         logger,
         failureReason,
-        terminalKind
+        terminalKind,
+        deliverableRoot
       );
 
       // Step 3: Classify failure (pattern-match), then state-aware refinement
@@ -913,7 +974,9 @@ export class AutoRetroService {
     failedStage: string,
     logger: Logger,
     failureReason?: string,
-    terminalKind?: string
+    terminalKind?: string,
+    /** Worktree the run executed in, when it had one (#1178). @see runAfterFailure */
+    deliverableRoot?: string
   ): Promise<{
     text: string;
     sourcesAnalyzed: string[];
@@ -995,23 +1058,58 @@ export class AutoRetroService {
         failedStage,
       });
     } else {
-      const contextFile = path.join(workspaceRoot, ".nightgauge", "pipeline", contextFileName);
-      try {
-        const contextContent = await fs.readFile(contextFile, "utf-8");
-        parts.push(contextContent);
+      // #1178 — the DIRECTORY, which #1143 left wrong while fixing the
+      // filename. In worktree mode the stage wrote its deliverable inside the
+      // worktree; the run's repo root holds only `calibration.json` and
+      // `queue-state.json`, so reading `<repo>/.nightgauge/pipeline/dev-210.json`
+      // is a guaranteed ENOENT for exactly the runs the retro exists to explain.
+      //
+      // Ordered worktree-first, repo-root-second rather than picking one: the
+      // interactive path passes no worktree, and a run whose worktree was
+      // already reclaimed by the time the fire-and-forget retro lands still has
+      // whatever the repo root holds. Deduped so the single-root case logs one
+      // path, not the same path twice.
+      const roots = [deliverableRoot, workspaceRoot].filter(
+        (root, index, all): root is string =>
+          typeof root === "string" && root.length > 0 && all.indexOf(root) === index
+      );
+      const tried: string[] = [];
+      let read: { contextFile: string; contextContent: string } | undefined;
+      let lastError = "no candidate root";
+      for (const root of roots) {
+        const contextFile = path.join(root, ".nightgauge", "pipeline", contextFileName);
+        tried.push(contextFile);
+        try {
+          read = { contextFile, contextContent: await fs.readFile(contextFile, "utf-8") };
+          break;
+        } catch (err) {
+          lastError = err instanceof Error ? err.message : String(err);
+        }
+      }
+
+      if (read) {
+        parts.push(read.contextContent);
         sourcesAnalyzed.push("pipeline_context");
         // Pipeline context is structured JSON — tag as `extension` since it
         // originates from the orchestrator, not the subagent.
-        lines.push({ source: "extension", text: contextContent });
+        lines.push({ source: "extension", text: read.contextContent });
         // The deliverable may carry the stage's own structured statement of
         // why it could not proceed. That beats every inference downstream.
-        feedbackSignals = this.extractFeedbackSignals(contextContent, contextFile, logger);
-      } catch (err) {
+        feedbackSignals = this.extractFeedbackSignals(
+          read.contextContent,
+          read.contextFile,
+          logger
+        );
+      } else {
         logger.info("Auto-retro: pipeline context deliverable not readable", {
           issueNumber,
           failedStage,
-          contextFile,
-          error: err instanceof Error ? err.message : String(err),
+          // `contextFile` stays the last path tried so the existing log shape
+          // (and the #1143 assertion on it) is unchanged; `contextFilesTried`
+          // is what tells an operator the worktree was actually looked in.
+          contextFile: tried[tried.length - 1],
+          contextFilesTried: tried,
+          error: lastError,
         });
       }
     }

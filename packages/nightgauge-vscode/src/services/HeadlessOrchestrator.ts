@@ -12274,7 +12274,15 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         // authoritative verdict instead of fishing for markers in prose. The
         // run that motivated this reported category "unknown" while holding
         // `dev_handoff_missing` in hand.
-        gateTerminalKind
+        gateTerminalKind,
+        // #1178: where the run actually EXECUTED, which in worktree mode is
+        // not the repo root above. Stage deliverables are written next to the
+        // checkout the stage ran in, so the retro's `pipeline_context` source
+        // has to look there. getRunRepoRoot() is the wrong authority for this
+        // — it exists to keep records OUT of the worktree so they survive its
+        // removal (see utils/blockedFinding.ts). getWorkingDirectory() is the
+        // pipeline's own answer to "where did this stage put its files".
+        this.getWorkingDirectory()
       );
     }
 
