@@ -174,7 +174,7 @@ func TestIssueContractValues(t *testing.T) {
 		// parent epic usually lives elsewhere in a multi-repo workspace, and a
 		// fixture that made them identical would not notice a consumer that
 		// substitutes the issue's repo for the parent's.
-		ParentIssueRepo: "nightgauge/nightgauge-infra",
+		ParentIssueRepo: "acme/platform",
 		SubIssues: []types.SubIssueRef{
 			{NodeID: "I_sub789", Number: 43, Title: "Implement upload API", State: "OPEN", Repo: "nightgauge/nightgauge", Labels: []string{"size:M"}},
 		},

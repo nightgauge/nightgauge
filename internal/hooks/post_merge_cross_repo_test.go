@@ -21,11 +21,11 @@ import (
 
 func crossRepoSubIssue() *mockFetcher {
 	return &mockFetcher{issues: map[string]*types.Issue{
-		"acme/bowlsheet-flutter#3001": {
+		"acme/mobile#3001": {
 			NodeID:            "I_sub3001",
 			Number:            3001,
 			ParentIssueNumber: 205,
-			ParentIssueRepo:   "acme/bowlsheet-infra",
+			ParentIssueRepo:   "acme/platform",
 		},
 	}}
 }
@@ -40,22 +40,22 @@ func TestPostMergeResolvesEpicInTheEpicsOwnRepo(t *testing.T) {
 	result := EvaluatePostMerge(context.Background(), crossRepoSubIssue(), &mockIssueCloser{}, closer, nil, nil, PostMergeInput{
 		IssueNumber:     3001,
 		RepositoryOwner: "acme",
-		RepositoryName:  "bowlsheet-flutter",
+		RepositoryName:  "mobile",
 	})
 
 	if !closer.called {
 		t.Fatal("expected AutoCloseSingle to be called")
 	}
 	ref := closer.calledWith.ref
-	if ref.Owner != "acme" || ref.Repo != "bowlsheet-infra" {
-		t.Errorf("epic resolved against %s/%s, want acme/bowlsheet-infra — resolving #205 in the sub-issue's repo is #1181",
+	if ref.Owner != "acme" || ref.Repo != "platform" {
+		t.Errorf("epic resolved against %s/%s, want acme/platform — resolving #205 in the sub-issue's repo is #1181",
 			ref.Owner, ref.Repo)
 	}
 	if ref.Number != 205 {
 		t.Errorf("epic number = %d, want 205", ref.Number)
 	}
-	if result.EpicRepo != "acme/bowlsheet-infra" {
-		t.Errorf("result.EpicRepo = %q, want acme/bowlsheet-infra", result.EpicRepo)
+	if result.EpicRepo != "acme/platform" {
+		t.Errorf("result.EpicRepo = %q, want acme/platform", result.EpicRepo)
 	}
 	if !result.AutoClosed {
 		t.Error("expected AutoClosed=true for a cross-repo epic whose subs are all closed")
@@ -76,7 +76,7 @@ func TestPostMergePassesTheMergedIssueAsTheExpectedSub(t *testing.T) {
 	EvaluatePostMerge(context.Background(), crossRepoSubIssue(), &mockIssueCloser{}, closer, nil, nil, PostMergeInput{
 		IssueNumber:     3001,
 		RepositoryOwner: "acme",
-		RepositoryName:  "bowlsheet-flutter",
+		RepositoryName:  "mobile",
 	})
 
 	ref := closer.calledWith.ref
@@ -84,8 +84,8 @@ func TestPostMergePassesTheMergedIssueAsTheExpectedSub(t *testing.T) {
 		t.Errorf("ExpectSubIssueNumber = %d, want 3001 — without it a mis-resolved epic answers no_subs and the hook calls that success",
 			ref.ExpectSubIssueNumber)
 	}
-	if ref.ExpectSubIssueRepo != "acme/bowlsheet-flutter" {
-		t.Errorf("ExpectSubIssueRepo = %q, want acme/bowlsheet-flutter — a number alone is not an identity across repos",
+	if ref.ExpectSubIssueRepo != "acme/mobile" {
+		t.Errorf("ExpectSubIssueRepo = %q, want acme/mobile — a number alone is not an identity across repos",
 			ref.ExpectSubIssueRepo)
 	}
 }
@@ -99,14 +99,14 @@ func TestPostMergeWrongEpicIsAFailureNotASilentSkip(t *testing.T) {
 			EpicNumber: 205,
 			Status:     "error",
 			Reason:     "wrong_epic",
-			Error:      "epic acme/bowlsheet-flutter#205 does not list acme/bowlsheet-flutter#3001 among its 0 sub-issue(s)",
+			Error:      "epic acme/mobile#205 does not list acme/mobile#3001 among its 0 sub-issue(s)",
 		},
 	}
 
 	result := EvaluatePostMerge(context.Background(), crossRepoSubIssue(), &mockIssueCloser{}, closer, nil, nil, PostMergeInput{
 		IssueNumber:     3001,
 		RepositoryOwner: "acme",
-		RepositoryName:  "bowlsheet-flutter",
+		RepositoryName:  "mobile",
 	})
 
 	if !result.Failed {
@@ -164,7 +164,7 @@ func TestPostMergeSameRepoEpicUnchanged(t *testing.T) {
 // the expected-sub fields must still be set.
 func TestPostMergeFallsBackToTheMergedIssueRepoWhenTheParentLinkHasNoRepo(t *testing.T) {
 	fetcher := &mockFetcher{issues: map[string]*types.Issue{
-		"acme/bowlsheet-flutter#3001": {
+		"acme/mobile#3001": {
 			NodeID:            "I_sub3001",
 			Number:            3001,
 			ParentIssueNumber: 205,
@@ -178,11 +178,11 @@ func TestPostMergeFallsBackToTheMergedIssueRepoWhenTheParentLinkHasNoRepo(t *tes
 	EvaluatePostMerge(context.Background(), fetcher, &mockIssueCloser{}, closer, nil, nil, PostMergeInput{
 		IssueNumber:     3001,
 		RepositoryOwner: "acme",
-		RepositoryName:  "bowlsheet-flutter",
+		RepositoryName:  "mobile",
 	})
 
 	ref := closer.calledWith.ref
-	if ref.Owner != "acme" || ref.Repo != "bowlsheet-flutter" {
+	if ref.Owner != "acme" || ref.Repo != "mobile" {
 		t.Errorf("fallback resolved to %s/%s, want the merged issue's repo", ref.Owner, ref.Repo)
 	}
 	if ref.ExpectSubIssueNumber == 0 {
@@ -194,7 +194,7 @@ func TestPostMergeFallsBackToTheMergedIssueRepoWhenTheParentLinkHasNoRepo(t *tes
 // parent-repo field must not yield an owner with an empty repo (which would
 // query "acme/" and fail confusingly). It falls back whole.
 func TestPostMergeMalformedParentRepoDoesNotProduceAHalfCoordinate(t *testing.T) {
-	for _, bad := range []string{"bowlsheet-infra", "acme/", "/infra", "a/b/c", ""} {
+	for _, bad := range []string{"platform", "acme/", "/infra", "a/b/c", ""} {
 		fetcher := &mockFetcher{issues: map[string]*types.Issue{
 			"acme/flutter#3001": {
 				NodeID:            "I_sub3001",

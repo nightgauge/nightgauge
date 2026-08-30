@@ -13,7 +13,7 @@
   "milestone": "Sprint 1",
   "parentIssueId": "I_parent100",
   "parentIssueNumber": 40,
-  "parentIssueRepo": "nightgauge/nightgauge-infra",
+  "parentIssueRepo": "acme/platform",
   "subIssues": [
     {
       "nodeId": "I_sub789",

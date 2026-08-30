@@ -15,8 +15,8 @@ import (
 // #1181 — the epic number used to travel without its repository.
 //
 // The workspace that surfaced this has three repos on one board. The epics live
-// in `bowlsheet-infra`; the sub-issues live in `bowlsheet-flutter` and
-// `bowlsheet-platform`. Because issue numbers are per-repository, resolving an
+// in `platform`; the sub-issues live in `mobile` and
+// `api`. Because issue numbers are per-repository, resolving an
 // epic number against the SUB-ISSUE's repo does not fail cleanly — it has two
 // faces, and both are reproduced below against a fake GitHub that answers
 // per-(owner, repo, number) exactly as the real one does:
@@ -165,48 +165,48 @@ func (n fakeIssueNode) render(key string) string {
 	}}}}`, strings.ReplaceAll(key, "/", "_"), num, n.title, n.state, parent, strings.Join(subs, ","))
 }
 
-// bowlsheetForge is the observed workspace, reduced to the two collisions.
-func bowlsheetForge() *fakeForge {
+// acmeForge is the observed workspace, reduced to the two collisions.
+func acmeForge() *fakeForge {
 	return &fakeForge{
 		issues: map[string]fakeIssueNode{
 			// --- the real epics, in their OWN repo ---
-			"acme/bowlsheet-infra#205": {
+			"acme/platform#205": {
 				kind: "issue", title: "E49", state: "OPEN",
 				subs: []fakeSubIssue{
-					{number: 3001, repo: "acme/bowlsheet-flutter", state: "CLOSED"},
-					{number: 3002, repo: "acme/bowlsheet-flutter", state: "CLOSED"},
+					{number: 3001, repo: "acme/mobile", state: "CLOSED"},
+					{number: 3002, repo: "acme/mobile", state: "CLOSED"},
 				},
 			},
-			"acme/bowlsheet-infra#207": {
+			"acme/platform#207": {
 				kind: "issue", title: "E51", state: "OPEN",
 				subs: []fakeSubIssue{
-					{number: 4001, repo: "acme/bowlsheet-platform", state: "CLOSED"},
+					{number: 4001, repo: "acme/api", state: "CLOSED"},
 				},
 			},
 
 			// --- Face 2: flutter#205 is a REAL closed issue with no subs ---
-			"acme/bowlsheet-flutter#205": {
+			"acme/mobile#205": {
 				kind: "issue", title: "Redesign the settings sheet", state: "CLOSED",
 			},
 			// --- Face 1: platform#207 is a merged PULL REQUEST ---
-			"acme/bowlsheet-platform#207": {kind: "pull_request", title: "chore: bump deps"},
+			"acme/api#207": {kind: "pull_request", title: "chore: bump deps"},
 
 			// --- the merged sub-issues, each pointing at its cross-repo parent ---
-			"acme/bowlsheet-flutter#3001": {
+			"acme/mobile#3001": {
 				kind: "issue", title: "sub", state: "CLOSED",
-				parent: "acme/bowlsheet-infra#205", parentID: "I_epic205",
+				parent: "acme/platform#205", parentID: "I_epic205",
 			},
-			"acme/bowlsheet-flutter#3002": {
+			"acme/mobile#3002": {
 				kind: "issue", title: "sub", state: "CLOSED",
-				parent: "acme/bowlsheet-infra#205", parentID: "I_epic205",
+				parent: "acme/platform#205", parentID: "I_epic205",
 			},
-			"acme/bowlsheet-platform#4001": {
+			"acme/api#4001": {
 				kind: "issue", title: "sub", state: "CLOSED",
-				parent: "acme/bowlsheet-infra#207", parentID: "I_epic207",
+				parent: "acme/platform#207", parentID: "I_epic207",
 			},
 		},
 		epicsByRepo: map[string][]int{
-			"acme/bowlsheet-infra": {205, 207},
+			"acme/platform": {205, 207},
 		},
 	}
 }
@@ -222,19 +222,19 @@ func newForgeClient(t *testing.T, f *fakeForge) *Client {
 // on: GitHub's native sub-issue link reports the parent's repository, and
 // GetIssue surfaces it. Without this, everything downstream is guessing.
 func TestGetIssue_ParentCarriesItsOwnRepository(t *testing.T) {
-	f := bowlsheetForge()
+	f := acmeForge()
 	svc := NewIssueService(newForgeClient(t, f))
 
-	issue, err := svc.GetIssue(context.Background(), "acme", "bowlsheet-flutter", 3001)
+	issue, err := svc.GetIssue(context.Background(), "acme", "mobile", 3001)
 	if err != nil {
 		t.Fatalf("GetIssue: %v", err)
 	}
 	if issue.ParentIssueNumber != 205 {
 		t.Fatalf("ParentIssueNumber = %d, want 205", issue.ParentIssueNumber)
 	}
-	if issue.ParentIssueRepo != "acme/bowlsheet-infra" {
+	if issue.ParentIssueRepo != "acme/platform" {
 		t.Errorf("ParentIssueRepo = %q, want %q — the parent's repo is the whole coordinate; without it #205 is ambiguous",
-			issue.ParentIssueRepo, "acme/bowlsheet-infra")
+			issue.ParentIssueRepo, "acme/platform")
 	}
 }
 
@@ -242,15 +242,15 @@ func TestGetIssue_ParentCarriesItsOwnRepository(t *testing.T) {
 // acceptance criterion: a cross-repo epic whose sub-issues are all closed
 // actually auto-closes, and the lookup goes to the EPIC's repository.
 func TestAutoCloseSingle_CrossRepoEpicClosesInItsOwnRepo(t *testing.T) {
-	f := bowlsheetForge()
+	f := acmeForge()
 	svc := NewEpicService(newForgeClient(t, f))
 
 	res, err := svc.AutoCloseSingle(context.Background(), EpicRef{
 		Owner:                "acme",
-		Repo:                 "bowlsheet-infra",
+		Repo:                 "platform",
 		Number:               205,
 		ExpectSubIssueNumber: 3001,
-		ExpectSubIssueRepo:   "acme/bowlsheet-flutter",
+		ExpectSubIssueRepo:   "acme/mobile",
 	}, 0)
 	if err != nil {
 		t.Fatalf("AutoCloseSingle: %v", err)
@@ -258,14 +258,14 @@ func TestAutoCloseSingle_CrossRepoEpicClosesInItsOwnRepo(t *testing.T) {
 	if res.Status != "closed" || res.Reason != "all_closed" {
 		t.Fatalf("status/reason = %q/%q (error=%q), want closed/all_closed", res.Status, res.Reason, res.Error)
 	}
-	if res.EpicRepo != "acme/bowlsheet-infra" {
-		t.Errorf("EpicRepo = %q, want acme/bowlsheet-infra", res.EpicRepo)
+	if res.EpicRepo != "acme/platform" {
+		t.Errorf("EpicRepo = %q, want acme/platform", res.EpicRepo)
 	}
 	if len(f.closedNodes()) == 0 {
 		t.Error("expected the epic to actually be closed on the forge")
 	}
 	for _, c := range f.calls() {
-		if strings.HasPrefix(c, "acme/bowlsheet-flutter#205") {
+		if strings.HasPrefix(c, "acme/mobile#205") {
 			t.Errorf("epic #205 was looked up in the SUB-ISSUE's repo (%s) — that is the #1181 defect", c)
 		}
 	}
@@ -278,15 +278,15 @@ func TestAutoCloseSingle_CrossRepoEpicClosesInItsOwnRepo(t *testing.T) {
 // ("skipped", "no_subs", nil) and the hook reported failed:false while the
 // real epic was never evaluated.
 func TestAutoCloseSingle_Face2_RealIssueCollisionIsNotSilentSuccess(t *testing.T) {
-	f := bowlsheetForge()
+	f := acmeForge()
 	svc := NewEpicService(newForgeClient(t, f))
 
 	res, err := svc.AutoCloseSingle(context.Background(), EpicRef{
 		Owner:                "acme",
-		Repo:                 "bowlsheet-flutter", // the SUB-ISSUE's repo: the old default
+		Repo:                 "mobile", // the SUB-ISSUE's repo: the old default
 		Number:               205,
 		ExpectSubIssueNumber: 3001,
-		ExpectSubIssueRepo:   "acme/bowlsheet-flutter",
+		ExpectSubIssueRepo:   "acme/mobile",
 	}, 0)
 	if err != nil {
 		t.Fatalf("AutoCloseSingle returned a hard error: %v", err)
@@ -309,15 +309,15 @@ func TestAutoCloseSingle_Face2_RealIssueCollisionIsNotSilentSuccess(t *testing.T
 // loud face and pins that it is a FAILURE, not a skip: platform#207 is a merged
 // PR, and GraphQL will not resolve a PR through issue(number:).
 func TestAutoCloseSingle_Face1_PullRequestCollisionSurfacesLoudly(t *testing.T) {
-	f := bowlsheetForge()
+	f := acmeForge()
 	svc := NewEpicService(newForgeClient(t, f))
 
 	res, err := svc.AutoCloseSingle(context.Background(), EpicRef{
 		Owner:                "acme",
-		Repo:                 "bowlsheet-platform", // the SUB-ISSUE's repo
+		Repo:                 "api", // the SUB-ISSUE's repo
 		Number:               207,
 		ExpectSubIssueNumber: 4001,
-		ExpectSubIssueRepo:   "acme/bowlsheet-platform",
+		ExpectSubIssueRepo:   "acme/api",
 	}, 0)
 	if err != nil {
 		t.Fatalf("AutoCloseSingle returned a hard error: %v", err)
@@ -332,10 +332,10 @@ func TestAutoCloseSingle_Face1_PullRequestCollisionSurfacesLoudly(t *testing.T) 
 	// ...and with the epic's OWN repo the same number resolves and closes.
 	res2, err := svc.AutoCloseSingle(context.Background(), EpicRef{
 		Owner:                "acme",
-		Repo:                 "bowlsheet-infra",
+		Repo:                 "platform",
 		Number:               207,
 		ExpectSubIssueNumber: 4001,
-		ExpectSubIssueRepo:   "acme/bowlsheet-platform",
+		ExpectSubIssueRepo:   "acme/api",
 	}, 0)
 	if err != nil {
 		t.Fatalf("AutoCloseSingle (epic repo): %v", err)
@@ -349,19 +349,19 @@ func TestAutoCloseSingle_Face1_PullRequestCollisionSurfacesLoudly(t *testing.T) 
 // number-only guard would miss: the wrong repo's #205 has sub-issues of its
 // own. Total > 0, so "no_subs" never fires — but it is still not our epic.
 func TestAutoCloseSingle_WrongEpicWithItsOwnSubIssues(t *testing.T) {
-	f := bowlsheetForge()
-	f.issues["acme/bowlsheet-flutter#205"] = fakeIssueNode{
+	f := acmeForge()
+	f.issues["acme/mobile#205"] = fakeIssueNode{
 		kind: "issue", title: "An unrelated flutter epic", state: "OPEN",
-		subs: []fakeSubIssue{{number: 9001, repo: "acme/bowlsheet-flutter", state: "CLOSED"}},
+		subs: []fakeSubIssue{{number: 9001, repo: "acme/mobile", state: "CLOSED"}},
 	}
 	svc := NewEpicService(newForgeClient(t, f))
 
 	res, err := svc.AutoCloseSingle(context.Background(), EpicRef{
 		Owner:                "acme",
-		Repo:                 "bowlsheet-flutter",
+		Repo:                 "mobile",
 		Number:               205,
 		ExpectSubIssueNumber: 3001,
-		ExpectSubIssueRepo:   "acme/bowlsheet-flutter",
+		ExpectSubIssueRepo:   "acme/mobile",
 	}, 0)
 	if err != nil {
 		t.Fatalf("AutoCloseSingle: %v", err)
@@ -422,7 +422,7 @@ func TestAutoCloseSingle_NoSubsStaysReachableWithoutAnExpectedSub(t *testing.T) 
 // TestAutoCloseSingle_MissingEpicRepoIsRefused: a number with no repository is
 // not a coordinate, and guessing one is what caused #1181.
 func TestAutoCloseSingle_MissingEpicRepoIsRefused(t *testing.T) {
-	f := bowlsheetForge()
+	f := acmeForge()
 	svc := NewEpicService(newForgeClient(t, f))
 
 	res, err := svc.AutoCloseSingle(context.Background(), EpicRef{Number: 205}, 0)
@@ -446,16 +446,16 @@ func TestAutoCloseSingle_MissingEpicRepoIsRefused(t *testing.T) {
 // Both paths now read the same membership record (EpicCompletionResult.SubIssues),
 // so this asserts the answers are identical for every epic in the sweep.
 func TestEpicSweepAndPostMergeHookAgreeOnSubIssues(t *testing.T) {
-	f := bowlsheetForge()
+	f := acmeForge()
 	// Leave one sub-issue open so the epics are not closed out from under the
 	// sweep mid-test, and both paths have a non-trivial answer to agree on.
-	n := f.issues["acme/bowlsheet-infra#205"]
+	n := f.issues["acme/platform#205"]
 	n.subs[1].state = "OPEN"
-	f.issues["acme/bowlsheet-infra#205"] = n
+	f.issues["acme/platform#205"] = n
 
 	svc := NewEpicService(newForgeClient(t, f))
 
-	sweep, err := svc.SweepEpics(context.Background(), "acme", "bowlsheet-infra")
+	sweep, err := svc.SweepEpics(context.Background(), "acme", "platform")
 	if err != nil {
 		t.Fatalf("SweepEpics: %v", err)
 	}
