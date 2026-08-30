@@ -1,0 +1,44 @@
+ci-local.sh step inventory
+go build ./...
+go test ./... -count=1
+go test -race -count=1 ./internal/orchestrator/
+gofmt -l ./internal ./cmd
+branch-merged-check.sh regression suite
+CI change-class gate regression suite
+make generate-ipc-client
+generated IPC client in sync
+terminal-kind table consumers in sync
+platform operation registry in sync
+npm audit allow-list
+SKILL.md metadata gate regression suite
+SKILL.md metadata
+publication boundary
+Publication boundary regression suite
+Publication boundary rename carry-over
+Publication boundary derived ceiling
+Publication boundary ceiling lag and erosion
+Publication boundary attribution
+Publication boundary suite hermeticity
+band-vocabulary reintroduction gate
+Band-vocabulary gate regression suite
+visibility-prose reintroduction gate
+Workflow-reference gate regression suite
+nonexistent-workflow-reference gate
+CLA gate regression suite
+Cache-boundary measurement smoke
+VSCode test-tree typecheck
+ESLint
+Prettier format:check
+npm run build (all workspaces)
+Phase markers ↔ PHASE_REGISTRY
+npm run test (all workspaces)
+Generated VSCode contributions in sync
+@types/vscode <= engines.vscode
+Link-check gate regression suite
+Markdown link check
+Mirror drift gate regression suite
+Issue-body contract gate regression suite
+Issue-body heading contract
+Plugin skills mirror in sync
+Mirror link gate regression suite
+Mirror link integrity

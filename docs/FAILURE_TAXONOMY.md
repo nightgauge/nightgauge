@@ -1345,3 +1345,58 @@ new sync surface is created.
 check each one passes through the wrapper.** If any writer constructs its own
 client, the cache is not safe on that path yet — and a TTL short enough to hide
 the problem is not a fix, it is a smaller version of the same bug.
+
+### Broken vs. Could-Not-Run (the check that collapses two verdicts into one)
+
+**Shape:** a check that cannot distinguish _the thing under test is broken_ from
+_the check itself could not run_, and reports both as the same outcome. Which
+outcome it picks is a detail; the defect is that a red (or green) run no longer
+identifies which of the two happened, so the correct response and the incorrect
+response are the same gesture.
+
+**It shows up in both directions, and both are this class:**
+
+| Instance                               | Could-not-run signal           | Collapsed into         |
+| -------------------------------------- | ------------------------------ | ---------------------- |
+| link-check on an errored fetch (#1004) | `Status: 0` — no HTTP response | **dead link** (fail)   |
+| `ci-local.sh` step guards (#983)       | the script it runs is missing  | **step passed** (skip) |
+| pre-push Node validation (#1159)       | `npm run build` has no script  | **build failed**       |
+| SKILL.md metadata validation (#856)    | frontmatter block never closed | **missing field**      |
+| staging platform smoke (#1087)         | no credential is provisioned   | **`main` is red**      |
+
+**Why the direction does not matter.** Collapsing toward pass is a Silent No-Op:
+coverage disappears with no observable difference from success. Collapsing
+toward fail is worse in a way that is easy to under-rate — it is a standing
+false alarm, and a check that cries wolf trains everyone to stop reading it.
+Nine consecutive red scheduled runs (#1087) cost a real investigation on an
+unrelated merge and taught the operator to disbelieve the post-merge query that
+`AGENTS.md` mandates. The next time that query is right, the reflex will skip it.
+
+**Diagnosis — one question, asked at every point a check reads a signal:** _can
+this value mean "I could not find out"?_ An exit code, an HTTP status, a missing
+file, an absent credential and an empty parse buffer all can. If the answer is
+yes, that reading needs its own state.
+
+**The repair, and it is the same three steps every time:**
+
+1. **Name the third state.** Not `passed`/`failed` but `passed` / `failed` /
+   `not-applicable` / `unreachable-from-runner` / `unknown` / `UNREADABLE` — a
+   value a human reading the log can act on without opening the raw output.
+2. **Decide its verdict deliberately, and write down why.** "Could not run" is
+   usually **fail-closed** (#856, #1159's unparseable `package.json`, the
+   AC-completion gate in `skills/nightgauge-feature-validate/`), because a gate
+   that cannot run has not granted anything. It is **not fatal** only when the
+   inability is provably outside the repository's control and re-probing has
+   ruled out the real defect (#1004's `unreachable-from-runner`: a transport
+   failure that survives four attempts and is not NXDOMAIN). Either way the
+   state is **recorded** — `pre-push-<N>.json` carries `build: not-applicable`
+   rather than omitting the phase.
+3. **Keep the other half of the pair red.** Every fix here weakens a failure
+   path, so it must be paired with a test that the genuine defect still fails:
+   a dead _internal_ link still fails link-check, a build script that exists
+   and fails still blocks, a genuinely missing `metadata.source` is still an
+   ERROR. Without that pair, "stop failing on X" is satisfiable by never
+   failing at all.
+
+**Related classes:** Silent No-Op (the fail-open half), Vacuous Assertion (what
+step 3 exists to prevent).
