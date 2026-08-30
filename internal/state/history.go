@@ -315,6 +315,23 @@ type RecoveryAttempt struct {
 type V2ModelSelect struct {
 	Model  string `json:"model"`
 	Source string `json:"source"`
+	// EscalationReason is the RAW EscalationRecord.Reason behind a Source of
+	// "escalation" (#463) — a non-vocabulary sibling, deliberately outside the
+	// closed MODEL_SELECTION_SOURCES set.
+	//
+	// It exists because Source is a COLLAPSE:
+	// modelSelectionSourceForEscalationReason maps every upward reason onto the
+	// single "escalation" member, and nothing else on V2 or V3 carries the
+	// reason. Without this field the record cannot tell a stage that FAILED
+	// from one that produced NO OUTPUT from one that STALLED over budget —
+	// three different stories about the same run, indistinguishable forever.
+	// Keeping the detail here rather than widening the vocabulary is what lets
+	// attribution stay closed, and strictly validated on the TypeScript side,
+	// while the cause survives.
+	//
+	// Empty for every other Source, the model-unavailable downgrade included:
+	// that one has its own dedicated Source member and needs no sibling.
+	EscalationReason string `json:"escalation_reason,omitempty"`
 	// Adapter is the adapter that served this stage (Issue #580) — a
 	// self-contained mirror of V2StageTokens.Adapter (#3224) so a
 	// model_selection block does not require cross-referencing the tokens
@@ -1150,7 +1167,16 @@ func (hw *HistoryWriter) BuildV2Record(snap *RuntimeState, success bool, errMsg 
 		})
 	}
 
-	for _, sr := range snap.CompletedStages {
+	// EVERY attempt, superseded ones first (#556). CompletedStages now means
+	// "most recent attempt", so it is no longer the run's spend ledger: a stage
+	// the retry engine rewound has its earlier attempt in SupersededStages, and
+	// summing only CompletedStages would erase that attempt's tokens and
+	// dollars from estimated_cost_usd and tokens.per_stage — the
+	// bias-calibration-low defect the accumulate-never-assign rule below
+	// exists to prevent, arriving by a different door. Chronological order
+	// also means a stage's LAST attempt writes the detail fields, so
+	// stages[<name>] describes the attempt that actually stands.
+	for _, sr := range snap.AllStageAttempts() {
 		stageName := string(sr.Stage)
 		stageStarted := sr.StartedAt.Format(time.RFC3339)
 		stageCompleted := sr.StartedAt.Add(sr.Duration).Format(time.RFC3339)
@@ -1194,21 +1220,38 @@ func (hw *HistoryWriter) BuildV2Record(snap *RuntimeState, success bool, errMsg 
 					break
 				}
 			}
+			escalationReason := ""
 			if source == ModelSourceScheduler {
-				for _, esc := range snap.EscalationHistory {
-					if string(esc.Stage) == stageName {
-						source = modelSelectionSourceForEscalationReason(esc.Reason)
-						break
+				// The LAST matching record, not the first (#463). A stage can
+				// now carry more than one — a model-unavailable downgrade and
+				// then an upward escalation, in either order — and the model
+				// the stage actually ran is the one the LAST substitution
+				// chose. First-match was indistinguishable from last-match
+				// while only the downgrade sites wrote here.
+				for i := len(snap.EscalationHistory) - 1; i >= 0; i-- {
+					esc := snap.EscalationHistory[i]
+					if string(esc.Stage) != stageName {
+						continue
 					}
+					source = modelSelectionSourceForEscalationReason(esc.Reason)
+					// Carry the raw reason ONLY where the mapping collapsed it.
+					// The downgrade reason has its own Source member, so
+					// repeating it here would be a second copy two readers
+					// could disagree about.
+					if source == ModelSourceEscalation {
+						escalationReason = esc.Reason
+					}
+					break
 				}
 			}
 			detail.ModelSelection = &V2ModelSelect{
-				Model:       m,
-				Source:      source,
-				Adapter:     stageAdapter,
-				ServedModel: snap.StageServedModels[stageName],
-				Effort:      snap.StageEfforts[stageName],
-				Thinking:    snap.StageThinking[stageName],
+				Model:            m,
+				Source:           source,
+				EscalationReason: escalationReason,
+				Adapter:          stageAdapter,
+				ServedModel:      snap.StageServedModels[stageName],
+				Effort:           snap.StageEfforts[stageName],
+				Thinking:         snap.StageThinking[stageName],
 				// #606 served-envelope attribution, the ServedModel analogues.
 				ServedEffort:   snap.StageServedEfforts[stageName],
 				ServedThinking: snap.StageServedThinking[stageName],
@@ -1700,14 +1743,16 @@ func (hw *HistoryWriter) Write(rs *RuntimeState, success bool, errMsg string) er
 
 	snap := rs.Snapshot()
 	entry := HistoryEntry{
-		Timestamp:     time.Now(),
-		Repo:          snap.Repo,
-		IssueNumber:   snap.IssueNumber,
-		Duration:      snap.TotalDuration(),
-		InputTokens:   snap.InputTokens,
-		OutputTokens:  snap.OutputTokens,
-		TotalCostUSD:  snap.TotalCostUSD,
-		Stages:        snap.CompletedStages,
+		Timestamp:    time.Now(),
+		Repo:         snap.Repo,
+		IssueNumber:  snap.IssueNumber,
+		Duration:     snap.TotalDuration(),
+		InputTokens:  snap.InputTokens,
+		OutputTokens: snap.OutputTokens,
+		TotalCostUSD: snap.TotalCostUSD,
+		// Every attempt (#556) — this legacy record's Stages array is read as a
+		// spend list, and CompletedStages alone now omits superseded attempts.
+		Stages:        snap.AllStageAttempts(),
 		SkippedStages: snap.SkippedStages,
 		Success:       success,
 		Error:         errMsg,

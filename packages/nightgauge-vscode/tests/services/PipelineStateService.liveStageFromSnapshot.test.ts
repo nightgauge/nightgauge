@@ -151,4 +151,76 @@ describe("applyRuntimeSnapshot — which snapshot shape shows the live stage", (
     //   ["pipeline-start", "issue-pickup", "feature-planning", "feature-dev", …]
     expect(state?.current_stage_position).toBe(3);
   });
+
+  /**
+   * THE BACKTRACK SHAPE (#556) — the consumer half.
+   *
+   * On a rewind the scheduler re-dispatches a stage that had already
+   * completed. The snapshot named that stage in BOTH `stage` and
+   * `completedStages`, so the guard below was false and the running stage
+   * rendered COMPLETE for its entire second attempt: #534's symptom surviving
+   * on the path #534 never covered.
+   *
+   * The fix is on the writer — `BeginStage` un-books the stage it is
+   * beginning — so what this arm pins is the READING of the shape the fixed
+   * writer produces. Note there is no assertion here about supersededStages:
+   * the extension neither reads nor needs it, which is what makes the Go-side
+   * spend ledger invisible to this consumer and the fix a one-sided one.
+   */
+  it("a BACKTRACK snapshot (a re-dispatched stage, no longer in completedStages) marks it running", async () => {
+    const svc = await makeService();
+
+    // The post-#556 shape: feature-dev completed once, feature-validate sent a
+    // revision signal, the scheduler rewound, and BeginStage removed feature-dev
+    // from completedStages when it re-dispatched it.
+    svc.applyRuntimeSnapshot({
+      issueNumber: ISSUE,
+      stage: "feature-dev",
+      stageStart: "2026-08-14T10:05:00.000Z",
+      completedStages: [PICKUP_COMPLETE],
+    });
+
+    const state = await svc.getState();
+
+    expect(state?.stages["feature-dev"]).toMatchObject({
+      status: "running",
+      started_at: "2026-08-14T10:05:00.000Z",
+    });
+    const running = Object.entries(state?.stages ?? {})
+      .filter(([, s]) => (s as { status: string }).status === "running")
+      .map(([stage]) => stage);
+    expect(running).toEqual(["feature-dev"]);
+  });
+
+  /**
+   * THE GUARD IS UNCHANGED, and this arm is what says so.
+   *
+   * #556 explicitly forbids "fixing" the backtrack case by weakening
+   * `!stages[goState.stage]`, because that guard is the only thing stopping a
+   * TERMINAL snapshot — whose `stage` is legitimately the last completed stage
+   * — from flipping a finished row back to running. So the previous arm and
+   * this one must both hold: a stage in `completedStages` stays complete even
+   * when `stage` names it.
+   */
+  it("a stage present in BOTH stage and completedStages still renders complete", async () => {
+    const svc = await makeService();
+
+    svc.applyRuntimeSnapshot({
+      issueNumber: ISSUE,
+      stage: "feature-dev",
+      stageStart: "2026-08-14T09:42:00.000Z",
+      completedStages: [
+        PICKUP_COMPLETE,
+        { stage: "feature-dev", startedAt: "2026-08-14T09:42:00.000Z" },
+      ],
+    });
+
+    const state = await svc.getState();
+
+    expect(state?.stages["feature-dev"]).toMatchObject({ status: "complete" });
+    const running = Object.entries(state?.stages ?? {}).filter(
+      ([, s]) => (s as { status: string }).status === "running"
+    );
+    expect(running).toEqual([]);
+  });
 });

@@ -12,6 +12,7 @@ import { RunStateManager, uuidV7 } from "../context/RunStateManager.js";
 import { RUN_IDENTITY_PATTERN } from "../context/runIdentity.js";
 import {
   ConcurrentRunRefused,
+  ContextSchemaError,
   SchemaVersionMismatch,
   WorktreeMissing,
 } from "../errors/PipelineStateErrors.js";
@@ -200,6 +201,116 @@ describe("RunStateManager", () => {
       await mgr.markRunning({ issue_number: 1, branch: "b" });
       const rs = await mgr.read();
       expect(rs?.schema_version).toBe("1.0");
+    });
+  });
+
+  /**
+   * READ-BACK REFUSAL (#468) — strict, with no lenient branch.
+   *
+   * `run-state.json` used to validate `run_id` with `z.string().uuid()`, which
+   * accepts every UUID version and uppercase hex: precisely the set Go's
+   * run-identity authority refuses with `ErrNoRunIdentity`. An id only this
+   * side accepted could be read back here and handed on as an IPC param and a
+   * `runtime-{issue}-{runId}.json` filename component the Go scanner will not
+   * parse — the F16 `run_id_invalid` family, where every progress call for the
+   * run is silently discarded.
+   *
+   * The decision is refusal, not "lenient with telemetry": a compat branch for
+   * on-disk files no customer has is out under `AGENTS.md` § Agent Operating
+   * Rules. The resume path must fail LOUDLY — never silently drop the run and
+   * never rewrite the id — so the refusal surfaces as the existing
+   * `ContextSchemaError`, which already carries the file path, and the message
+   * names the offending id so the operator can see which bytes are wrong.
+   *
+   * THE FILE UNDER TEST IS CAPTURED, NOT HAND-AUTHORED (#166): the fixture is
+   * whatever `RunStateManager` really wrote — see
+   * `scripts/capture-run-state-fixture.sh` and the `_capture` header inside the
+   * fixture. Each arm edits ONLY `run_id`, exactly as that header states, so
+   * what these arms exercise is the read-back path over a real file rather than
+   * a schema over a hand-shaped object.
+   */
+  describe("read — run_id refusal on a captured run-state.json", () => {
+    /**
+     * The captured file, re-emitted into the manager's own directory with
+     * `run_id` (both sites) replaced. Returns the path so the assertions can
+     * check the error names it.
+     */
+    // `__dirname`, not `import.meta.dirname`: this package builds to CommonJS,
+    // where the import.meta form is a compile error. The existing integration
+    // tests resolve fixtures the same way.
+    const FIXTURE = path.resolve(
+      __dirname,
+      "integration",
+      "fixtures",
+      "captured-run-state-paused.json"
+    );
+
+    async function loadCaptured(): Promise<Record<string, unknown>> {
+      return JSON.parse(await fs.readFile(FIXTURE, "utf-8"));
+    }
+
+    /**
+     * Re-emit the captured file into the manager's own directory, with `run_id`
+     * (both the top-level site and the nested attempt site) replaced by
+     * `runId`. Returns the path, so an assertion can check the error names it.
+     */
+    async function writeCapturedWithRunId(runId: string): Promise<string> {
+      const fixture = (await loadCaptured()) as {
+        run_id: string;
+        attempts: Array<{ run_id: string }>;
+      };
+      fixture.run_id = runId;
+      for (const attempt of fixture.attempts) attempt.run_id = runId;
+      const file = path.join(dir, "run-state.json");
+      await fs.writeFile(file, JSON.stringify(fixture, null, 2) + "\n", "utf-8");
+      return file;
+    }
+
+    // The ACCEPTING arm, and it is not optional: without it every refusal below
+    // would also pass against a schema that refuses everything, including one
+    // that refuses what the product actually writes.
+    it("reads the captured fixture back unedited", async () => {
+      const captured = (await loadCaptured()) as { run_id: string };
+      await writeCapturedWithRunId(captured.run_id);
+      const rs = await mgr.read();
+      expect(rs?.state).toBe("paused");
+      expect(rs?.run_id).toBe(captured.run_id);
+      expect(RUN_IDENTITY_PATTERN.test(rs!.run_id)).toBe(true);
+    });
+
+    it("refuses a run-state.json whose run_id is a v4 UUID", async () => {
+      const bad = "3f2504e0-4f89-41d3-9a0c-0305e82c3301";
+      const file = await writeCapturedWithRunId(bad);
+      await expect(mgr.read()).rejects.toBeInstanceOf(ContextSchemaError);
+      await expect(mgr.read()).rejects.toThrow(bad);
+      await expect(mgr.read()).rejects.toThrow(file);
+    });
+
+    it("refuses a run-state.json whose run_id is uppercase", async () => {
+      const bad = "019FE6F3-FCFE-7B6F-8A7C-BE0F444B6610";
+      const file = await writeCapturedWithRunId(bad);
+      await expect(mgr.read()).rejects.toBeInstanceOf(ContextSchemaError);
+      await expect(mgr.read()).rejects.toThrow(bad);
+      await expect(mgr.read()).rejects.toThrow(file);
+    });
+
+    // The resume path is the one that matters operationally: `resume()` goes
+    // through `requireExisting()` → `read()`, so the refusal has to reach the
+    // caller as the SAME loud error rather than being swallowed into a "no
+    // state, start fresh" answer, which would silently orphan the run.
+    it("resume() surfaces the refusal rather than starting fresh", async () => {
+      await writeCapturedWithRunId("3f2504e0-4f89-41d3-9a0c-0305e82c3301");
+      await expect(mgr.resume()).rejects.toBeInstanceOf(ContextSchemaError);
+    });
+
+    // `detectResume()` is the other read of the same file, and it decides
+    // whether the UI offers resume/restart/discard at all. A refusal this path
+    // swallowed would present a real paused run as absent.
+    it("detectResume() surfaces the refusal rather than reporting a fresh run", async () => {
+      await writeCapturedWithRunId("019FE6F3-FCFE-7B6F-8A7C-BE0F444B6610");
+      await expect(
+        mgr.detectResume({ branch: "feat/acme-platform-widget", hasContextFiles: true })
+      ).rejects.toBeInstanceOf(ContextSchemaError);
     });
   });
 

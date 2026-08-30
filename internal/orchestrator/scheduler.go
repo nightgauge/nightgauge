@@ -6005,6 +6005,17 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 							log.Printf("#%d: stall-kill with >50%% budget consumed ($%.2f/$%.2f) — escalating model to %s",
 								item.Number, runtime.TotalCostUSD, pipelineBudgetCeilingUSD, escalation.NewModel)
 							s.retryEngine.RecordEscalation(string(stage), escalation.NewModel)
+							// The DURABLE half (#463). RecordEscalation only
+							// bumps a process-memory counter on the retry
+							// engine; nothing persists it, so before this the
+							// run's own record showed no escalation at all.
+							runtime.AppendEscalation(state.EscalationRecord{
+								Stage:     stage,
+								FromModel: model,
+								ToModel:   escalation.NewModel,
+								Reason:    state.EscalationReasonBudgetStall,
+								At:        time.Now(),
+							})
 							tracer.Emit(trace.KindComplexityEscalation, string(stage), trace.EscalationPayload{
 								Direction: "up",
 								FromModel: model,
@@ -6400,6 +6411,14 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 					log.Printf("#%d: stage %s failed — escalating model to %s",
 						item.Number, stage, escalation.NewModel)
 					s.retryEngine.RecordEscalation(string(stage), escalation.NewModel)
+					// #463 — see the budget-stall site above.
+					runtime.AppendEscalation(state.EscalationRecord{
+						Stage:     stage,
+						FromModel: model,
+						ToModel:   escalation.NewModel,
+						Reason:    state.EscalationReasonStageFailed,
+						At:        time.Now(),
+					})
 					tracer.Emit(trace.KindComplexityEscalation, string(stage), trace.EscalationPayload{
 						Direction: "up",
 						FromModel: model,
@@ -6531,6 +6550,15 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 				log.Printf("#%d: stage %s missing output — escalating model to %s",
 					item.Number, stage, escalation.NewModel)
 				s.retryEngine.RecordEscalation(string(stage), escalation.NewModel)
+				// #463 — see the budget-stall site above. A distinct reason
+				// from stage_failed: the model believed it had finished.
+				runtime.AppendEscalation(state.EscalationRecord{
+					Stage:     stage,
+					FromModel: model,
+					ToModel:   escalation.NewModel,
+					Reason:    state.EscalationReasonMissingOutput,
+					At:        time.Now(),
+				})
 				tracer.Emit(trace.KindComplexityEscalation, string(stage), trace.EscalationPayload{
 					Direction: "up",
 					FromModel: model,
@@ -6685,7 +6713,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 	// Log pipeline cost summary
 	snap := runtime.Snapshot()
 	log.Printf("#%d: ═══ Pipeline Complete ═══", item.Number)
-	for _, sr := range snap.CompletedStages {
+	for _, sr := range snap.AllStageAttempts() {
 		log.Printf("#%d:   %-20s %d in / %d out  $%.4f",
 			item.Number, sr.Stage, sr.InputTokens, sr.OutputTokens, sr.CostUSD)
 	}

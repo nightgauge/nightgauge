@@ -226,6 +226,26 @@ export const HistoryStageDetailSchema = z.object({
        * its strict parse.
        */
       source: z.enum(MODEL_SELECTION_SOURCES),
+      /**
+       * The RAW escalation cause behind `source: "escalation"` (#463).
+       *
+       * DELIBERATELY NOT AN ENUM, and deliberately not a member of
+       * `MODEL_SELECTION_SOURCES`. `source` is a closed, strictly-validated
+       * vocabulary shared with the SDK; every upward escalation reason
+       * collapses onto its single `"escalation"` member, and nothing else on
+       * the record carried the reason — so a stage that FAILED, one that
+       * produced NO OUTPUT and one that STALLED over budget were the same
+       * record forever. This sibling keeps the cause without widening the
+       * vocabulary, which is what lets attribution stay closed.
+       *
+       * Written by Go (`V2ModelSelect.EscalationReason`), from the
+       * `EscalationReasons` closure list in internal/state/runtime_state.go,
+       * and pinned to that list by
+       * `TestEscalationReasonSiblingPinnedToExecutionHistorySchema`. Absent for
+       * every other `source`, the model-unavailable downgrade included — that
+       * one has its own `source` member.
+       */
+      escalation_reason: z.string().optional(),
       confidence: z.number().min(0).max(1).optional(),
       complexity: z.string().optional(),
       /**
