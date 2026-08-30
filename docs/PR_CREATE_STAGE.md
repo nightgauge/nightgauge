@@ -24,6 +24,75 @@ emits. The deterministic runner produces a superset-compatible payload —
 zero-values that downstream consumers (the pr-merge deterministic runner from
 #3264, the VSCode extension's execution-history view) treat as "not run."
 
+## The commit owner (issue #1179)
+
+`pr-create` owns the run's commit. Not "commits when convenient" — it is the
+stage the pipeline holds responsible for the branch carrying its work.
+
+`feature-dev` deliberately does not commit (#1608), and `feature-validate` is
+the stage that commits and pushes. That was a **convention stated in a skill
+file**, and routing can skip the stage that holds it: the fast-track path
+([GATE_RELAXATION.md](GATE_RELAXATION.md)) emits `skip_stages =
+[feature-planning, feature-validate]` for a trivial change. With the only
+documented owner skipped, the working tree reached `pr-create` uncommitted,
+the branch had zero commits ahead of base, and the PR would have opened empty.
+The stage that noticed wrote a `commit_note` in `dev-{N}.json` addressed to a
+stage with no instruction to read it, and filed `medium` friction in a
+self-assessment nothing consumes.
+
+The owner is now `stages.DecideCommit` +
+`DeterministicPRCreateRunner.ensureWorkCommitted`, compiled, running at the
+**head of `Run`** — before `DecideCreate` and before the client-wiring check.
+Placement is the fix:
+
+- Before `DecideCreate`, so a punt still commits. The trivial route punts with
+  `missing-validate-context` (no `validate-{N}.json` exists when the stage was
+  skipped) and the LLM skill opens the PR — from a branch that now carries the
+  work.
+- Before the `prClient == nil` check, so an unwired GitHub client cannot
+  silently disable it.
+- Inside the runner rather than the scheduler, so the Go scheduler and the
+  extension's `nightgauge pr-stage create` path (#300) share one
+  implementation instead of drifting.
+- In `pr-create`, because `schedulerSkippableStages` honours only
+  `feature-planning` and `feature-validate` — `pr-create` can never be routed
+  out of the chain, and `feature-validate` can.
+
+### Decision matrix (first match wins)
+
+| Condition                                | Outcome | Reason                             |
+| ---------------------------------------- | ------- | ---------------------------------- |
+| Branch name unreadable                   | Refuse  | `commit-refused: branch-unknown`   |
+| Detached HEAD                            | Refuse  | `commit-refused: detached-head`    |
+| Current branch == base branch            | Refuse  | `commit-refused: branch-is-base`   |
+| Commits-ahead count unknown              | Refuse  | `commit-refused: ahead-unknown`    |
+| Commits ahead of base > 0                | No-op   | `commit-not-needed: commits-ahead` |
+| Unmerged index (conflict stages present) | Refuse  | `commit-refused: unmerged-index`   |
+| Clean tree                               | No-op   | `commit-not-needed: clean-tree`    |
+| Only untracked pipeline exhaust          | No-op   | `commit-not-needed: exhaust-only`  |
+| Otherwise                                | COMMIT  | `committed`                        |
+
+The `commits-ahead > 0` arm is what leaves the normal path untouched:
+`feature-validate` committed, so the owner declines without touching git's
+object store. The base branch is never committed to, and a run stopped at a
+conflict is refused rather than having its conflict markers committed (the
+#301 reasoning `RecoverUncommittedWork` records).
+
+What lands in the commit is `reclaim.ClassifyStatus`'s **blocking** set —
+deliverables plus TRACKED bookkeeping changes (#237/#332). The pipeline's own
+UNTRACKED exhaust is unstaged after `git add -A` (never excluded via pathspec,
+which exits 1 on gitignored paths). The message is
+`stages.CommitMessage(snapshot)`: the same conventional-commit subject
+`RenderTitle` produces, plus a fixed provenance line — deterministic, so a
+retry over the same tree produces the same message.
+
+The outcome is reported on every path: `PRCreateResult.CommitPerformed /
+CommitSHA / CommitReason`, a scheduler log line, `commit_owner` /
+`commit_sha` / `commit_made` on the `stage_deterministic` telemetry event, and
+`commit_made` / `commit_sha` / `commit_reason` on `nightgauge pr-stage create
+--json`. A refusal or a git failure is recorded and non-fatal — it never turns
+an empty PR into a crashed stage.
+
 ## When the deterministic path runs
 
 The runner evaluates this decision matrix (in priority order — first match

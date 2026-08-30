@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -72,6 +73,12 @@ type PRCreateResult struct {
 	Body       string // rendered body  (set on CreatePathCreated; useful for telemetry)
 	Reason     string
 	DurationMs int64
+
+	// Commit-owner outcome (#1179). Populated on EVERY path — punt included —
+	// because the commit owner runs before the create/punt decision.
+	CommitPerformed bool
+	CommitSHA       string
+	CommitReason    string
 }
 
 // PRCreateRunner is the contract the scheduler uses to invoke the deterministic
@@ -420,6 +427,23 @@ type gitClient interface {
 	// dead-end the stage — the work is already on the remote and the PR can be
 	// opened from it.
 	RemoteBranchExists(ctx context.Context, workdir, branch string) (bool, error)
+
+	// The commit owner's surface (#1179). pr-create is the only stage in the
+	// chain that routing can never skip, so it — not a sentence in a skill
+	// file — owns creating the run's commit when nothing else did.
+
+	// CurrentBranch returns the checked-out branch name, or "HEAD" when
+	// detached.
+	CurrentBranch(ctx context.Context, workdir string) (string, error)
+	// WorkingTreeStatus returns `git status --porcelain --untracked-files=all`.
+	WorkingTreeStatus(ctx context.Context, workdir string) (string, error)
+	// CommitsAhead counts commits on HEAD that base does not have. An error
+	// means "unknown", which makes the commit owner refuse rather than guess.
+	CommitsAhead(ctx context.Context, workdir, base string) (int, error)
+	// CommitAll stages everything, unstages the named pipeline exhaust, and
+	// commits with the given message, returning the new commit SHA. Returns
+	// ErrNothingStaged when the exclusion left nothing to commit.
+	CommitAll(ctx context.Context, workdir, message string, exhaust []string) (string, error)
 }
 
 // DeterministicPRCreateRunner is the default PRCreateRunner implementation.
@@ -473,8 +497,12 @@ func (r *DeterministicPRCreateRunner) WithGitClient(g gitClient) *DeterministicP
 // Run implements PRCreateRunner.
 func (r *DeterministicPRCreateRunner) Run(ctx context.Context, issueNumber int, repo, workdir string) (PRCreateResult, error) {
 	start := r.now()
+	var commit commitOutcome
 	finish := func(res PRCreateResult, err error) (PRCreateResult, error) {
 		res.DurationMs = r.now().Sub(start).Milliseconds()
+		res.CommitPerformed = commit.Committed
+		res.CommitSHA = commit.SHA
+		res.CommitReason = commit.Reason
 		return res, err
 	}
 
@@ -483,6 +511,13 @@ func (r *DeterministicPRCreateRunner) Run(ctx context.Context, issueNumber int, 
 		return finish(PRCreateResult{Path: CreatePathPunt, Reason: ReasonContextInvalidJSON}, nil)
 	}
 	snap.IssueNumber = issueNumber
+
+	// Own the commit BEFORE deciding anything (#1179). Placement is the whole
+	// fix: above DecideCreate so a punt (the trivial path punts with
+	// missing-validate-context, because routing skipped feature-validate) still
+	// hands the LLM skill a branch that carries the work, and above the
+	// client-wiring check so a missing GitHub client cannot disable it.
+	commit = r.ensureWorkCommitted(ctx, workdir, snap)
 
 	decision := DecideCreate(snap)
 	if !decision.ShouldCreate {
@@ -857,6 +892,104 @@ func (g *execGitClient) RemoteBranchExists(ctx context.Context, workdir, branch 
 		return false, nil
 	}
 	return false, normalizeGhError(err)
+}
+
+// CurrentBranch returns the checked-out branch name, or "HEAD" when detached.
+func (g *execGitClient) CurrentBranch(ctx context.Context, workdir string) (string, error) {
+	cmd := exec.CommandContext(ctx, "git", "rev-parse", "--abbrev-ref", "HEAD")
+	cmd.Dir = workdir
+	out, err := cmd.Output()
+	if err != nil {
+		return "", normalizeGhError(err)
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+// WorkingTreeStatus returns porcelain v1 status. `--untracked-files=all` is
+// mandatory, not stylistic: porcelain's default collapses a new directory to a
+// single entry, and the setting is ambient (`status.showUntrackedFiles`), so
+// omitting it makes the commit owner's view of the tree machine-dependent.
+func (g *execGitClient) WorkingTreeStatus(ctx context.Context, workdir string) (string, error) {
+	cmd := exec.CommandContext(ctx, "git", "status", "--porcelain", "--untracked-files=all")
+	cmd.Dir = workdir
+	out, err := cmd.Output()
+	if err != nil {
+		return "", normalizeGhError(err)
+	}
+	return string(out), nil
+}
+
+// CommitsAhead counts commits HEAD has that base does not. `origin/<base>` is
+// tried first (the remote is the authority on what base contains) and the local
+// ref second, so a worktree with no local base branch still gets an answer. An
+// error means unknown and the caller refuses to commit.
+func (g *execGitClient) CommitsAhead(ctx context.Context, workdir, base string) (int, error) {
+	var lastErr error
+	for _, ref := range []string{"origin/" + base, base} {
+		cmd := exec.CommandContext(ctx, "git", "rev-list", "--count", ref+"..HEAD")
+		cmd.Dir = workdir
+		out, err := cmd.Output()
+		if err != nil {
+			lastErr = normalizeGhError(err)
+			continue
+		}
+		n, convErr := strconv.Atoi(strings.TrimSpace(string(out)))
+		if convErr != nil {
+			lastErr = convErr
+			continue
+		}
+		return n, nil
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("could not resolve base ref %q", base)
+	}
+	return 0, lastErr
+}
+
+// CommitAll stages the whole tree, unstages the pipeline's own untracked
+// exhaust, and commits.
+//
+// The exhaust is unstaged AFTER `git add -A` rather than excluded via a
+// pathspec, for the reason RecoverUncommittedWork records: naming a gitignored
+// path in an exclude pathspec makes `git add` exit 1 in every repo that ignores
+// `.nightgauge`, which would turn the commit owner into a hard failure exactly
+// where it is needed. `git reset` exits 0 whether the path is ignored,
+// untracked, or absent.
+func (g *execGitClient) CommitAll(ctx context.Context, workdir, message string, exhaust []string) (string, error) {
+	add := exec.CommandContext(ctx, "git", "add", "-A")
+	add.Dir = workdir
+	if err := add.Run(); err != nil {
+		return "", fmt.Errorf("git add: %w", normalizeGhError(err))
+	}
+	if len(exhaust) > 0 {
+		args := append([]string{"reset", "-q", "--"}, exhaust...)
+		reset := exec.CommandContext(ctx, "git", args...)
+		reset.Dir = workdir
+		if err := reset.Run(); err != nil {
+			return "", fmt.Errorf("unstage pipeline exhaust: %w", normalizeGhError(err))
+		}
+	}
+	// `diff --cached --quiet` exits 0 when nothing is staged. Committing then
+	// would fail with git's own "nothing to commit", which reads as a fault;
+	// this is the benign case and gets its own sentinel.
+	staged := exec.CommandContext(ctx, "git", "diff", "--cached", "--quiet")
+	staged.Dir = workdir
+	if err := staged.Run(); err == nil {
+		return "", ErrNothingStaged
+	}
+	commit := exec.CommandContext(ctx, "git", "commit", "-m", message)
+	commit.Dir = workdir
+	if err := commit.Run(); err != nil {
+		return "", fmt.Errorf("git commit: %w", normalizeGhError(err))
+	}
+	head := exec.CommandContext(ctx, "git", "rev-parse", "HEAD")
+	head.Dir = workdir
+	out, err := head.Output()
+	if err != nil {
+		// The commit exists; only its SHA is unknown.
+		return "", nil
+	}
+	return strings.TrimSpace(string(out)), nil
 }
 
 // ---------------------------------------------------------------------------

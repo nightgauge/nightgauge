@@ -75,6 +75,32 @@ func TestSchedulerSkippableStages(t *testing.T) {
 	})
 }
 
+// TestCommitOwnerStageIsNeverSkippable pins the property the #1179 fix rests
+// on: pr-create owns the run's commit (stages.DecideCommit runs at the head of
+// the deterministic pr-create runner), so routing must never be able to remove
+// it from the chain. feature-validate — the stage that commits on the normal
+// path — IS skippable, which is exactly why the owner had to move somewhere
+// that is not.
+func TestCommitOwnerStageIsNeverSkippable(t *testing.T) {
+	routes := [][]string{
+		{"feature-planning", "feature-validate"},              // the observed trivial route
+		{"feature-planning", "feature-validate", "pr-create"}, // a change_rule that also lists the owner
+		{"pr-create"},
+		{"pr-create", "pr-merge", "feature-dev"},
+	}
+	for _, skip := range routes {
+		got := schedulerSkippableStages(skip)
+		if got[state.StagePRCreate] {
+			t.Errorf("routing %v made pr-create skippable — the commit owner must always run", skip)
+		}
+	}
+	// The counterpart: feature-validate really is skippable, so the hole this
+	// test guards is reachable and the pin is not vacuous.
+	if !schedulerSkippableStages([]string{"feature-validate"})[state.StageFeatureValidate] {
+		t.Fatal("feature-validate is no longer skippable — this test's premise is stale")
+	}
+}
+
 // routingWorkspace writes a minimal project config.yaml (optionally with a
 // routing block) under a temp dir and returns the dir for deriveRoutingDecision.
 // Delegates to the package's writeWorkspaceConfig helper (ship_notify_test.go).

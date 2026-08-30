@@ -28,6 +28,25 @@ Skipped stages are recorded as `skipped` (not `failed`/`completed`) and count
 toward success (`completed + skipped == 6`). `force_full_pipeline: true` and the
 label-based `risk_high` floor both disable skipping.
 
+### A skippable stage may not be the sole owner of a required side effect (#1179)
+
+Skipping is safe only for work the rest of the chain does not depend on. It was
+not: `feature-validate` was the only stage documented as committing and pushing
+(`feature-dev` deliberately does not — #1608), so a trivial route that skipped
+it left the implementation uncommitted, the branch zero commits ahead of base,
+and `pr-create` opening an empty PR. Nothing detected it; the stage said so in
+a prose self-assessment that nothing consumes.
+
+The answer is not a rule about which routes are allowed. It is that the commit
+is owned by a stage routing can never skip: the compiled commit owner at the
+head of the `pr-create` deterministic runner
+([PR_CREATE_STAGE.md](PR_CREATE_STAGE.md#the-commit-owner-issue-1179)). It is a
+no-op whenever `feature-validate` ran.
+
+Before adding a `change_rule` that skips a stage, ask what side effects that
+stage solely owns. If any exists, move the side effect into a stage that cannot
+be skipped — a documented convention is exactly what failed here.
+
 ## 2. CI fast-track (#4127, wired in #647)
 
 `.github/workflows/ci.yml` runs a cheap `changes` job (`name: Change class`)
