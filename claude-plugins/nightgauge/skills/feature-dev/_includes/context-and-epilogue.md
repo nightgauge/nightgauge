@@ -66,7 +66,7 @@ jq -n \
   --argjson architectural_constraints "$(printf '%s\n' "${ARCH_CONSTRAINTS:-null}" | jq -c 'if . == "[]" then [] elif . == null then null else . end')" \
   --arg created_at "$TIMESTAMP" \
   '{
-    schema_version: "1.8",
+    schema_version: "1.9",
     issue_number: $issue_number,
     commit_sha: null,
     files_changed: {
@@ -97,6 +97,7 @@ jq -n \
       type_check: $type_check,
       dead_code_scan: $dead_code_scan
     },
+    handoff_source: "authored",
     feedback: $feedback,
     retry_count: $retry_count,
     retry_reasons: $retry_reasons,
@@ -108,6 +109,16 @@ jq -n \
 jq . "$CONTEXT_FILE" > /dev/null || \
   { echo "ERROR: dev context JSON invalid" >&2; exit 1; }
 ```
+
+`handoff_source: "authored"` is a constant here on purpose: it records that
+YOU wrote this file. If this phase never runs, the gate derives the deliverable
+from git instead and stamps `"derived"` (#1076) — the work is no longer lost
+either way, but a derived handoff carries only what git can prove. It records
+`build_verification.status = "unverified"`, no test counts, and none of your
+approach, decisions or known gaps, because git cannot witness any of that.
+
+So this phase is still worth reaching. The safety net stops a stage that dies
+here from destroying an implementation; it does not reconstruct what you knew.
 
 ### Step 7.2: Verify the SHAPE, not just the JSON (MANDATORY)
 

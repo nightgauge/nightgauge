@@ -55,11 +55,17 @@ func TestGateVerifyFeatureDev_DirtyTreeNoContext_JSONReportsFiles(t *testing.T) 
 	}
 	result := gate.Verify(context.Background(), 134, ws)
 
-	if result.Passed {
-		t.Fatalf("expected gate to fail (no dev context): %+v", result)
+	// #1076 changed the verdict here from terminal to a derived pass: the
+	// handoff is written from git rather than only complained about. What did
+	// NOT change is #134's contract — the JSON payload still has to carry the
+	// deliverable paths, because feature-validate's Phase 0 reads them. A
+	// field that survives only on a code path that no longer runs is a
+	// contract that has quietly stopped being honoured.
+	if !result.Passed {
+		t.Fatalf("expected a derived pass (work on disk, no handoff): %+v", result)
 	}
-	if result.TerminalKind != "dev_handoff_missing" {
-		t.Fatalf("terminal_kind = %q, want dev_handoff_missing", result.TerminalKind)
+	if result.TerminalKind != "" {
+		t.Fatalf("terminal_kind = %q, want empty — a derived handoff is not terminal", result.TerminalKind)
 	}
 
 	payload := gateVerifyJSON{
@@ -84,8 +90,9 @@ func TestGateVerifyFeatureDev_DirtyTreeNoContext_JSONReportsFiles(t *testing.T) 
 	if err := json.Unmarshal(data, &decoded); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if decoded["terminal_kind"] != "dev_handoff_missing" {
-		t.Fatalf("decoded terminal_kind = %v", decoded["terminal_kind"])
+	// omitempty: a derived pass carries no terminal kind at all.
+	if tk, present := decoded["terminal_kind"]; present && tk != "" {
+		t.Fatalf("decoded terminal_kind = %v, want absent", tk)
 	}
 	files, _ := decoded["files"].([]any)
 	if len(files) != 1 || files[0] != "internal/scan/testcmd.go" {

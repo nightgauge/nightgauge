@@ -30,7 +30,7 @@
           }
         ],
         "doc": {
-          "schema_version": "1.8",
+          "schema_version": "1.9",
           "issue_number": 210,
           "files_changed": {
             "created": [],
@@ -47,7 +47,7 @@
       "evidence": "#1176 AC — a deliverable genuinely missing information must still fail",
       "stage": "dev",
       "input": {
-        "schema_version": "1.8",
+        "schema_version": "1.9",
         "issue_number": 211,
         "files_changed": ["src/a.ts", "src/b.ts"]
       },
@@ -67,7 +67,7 @@
       "evidence": "#1176 AC — repair must be TOTAL; a partial fill is a fatal, not a repair",
       "stage": "dev",
       "input": {
-        "schema_version": "1.8",
+        "schema_version": "1.9",
         "issue_number": 212,
         "files_changed": ["src/a.ts", "src/b.ts", "src/unaccounted.ts"],
         "files_created": ["src/a.ts"],
@@ -89,7 +89,7 @@
       "evidence": "#1176 AC — the repair cannot invent a value the deliverable never carried",
       "stage": "dev",
       "input": {
-        "schema_version": "1.8",
+        "schema_version": "1.9",
         "issue_number": 213,
         "files_changed": ["src/a.ts"],
         "files_created": ["src/a.ts"],
@@ -110,7 +110,7 @@
       "id": "dev.files_changed.already-canonical",
       "stage": "dev",
       "input": {
-        "schema_version": "1.8",
+        "schema_version": "1.9",
         "issue_number": 214,
         "files_changed": { "created": ["a"], "modified": [], "deleted": [] }
       },
@@ -121,7 +121,7 @@
       "evidence": "#1182 table row 1 — logged as a warning, run shipped",
       "stage": "dev",
       "input": {
-        "schema_version": "1.8",
+        "schema_version": "1.9",
         "issue_number": 170,
         "quality_checks": { "type_check": "not run", "dead_code_scan": "not_run" }
       },
@@ -135,7 +135,7 @@
           }
         ],
         "doc": {
-          "schema_version": "1.8",
+          "schema_version": "1.9",
           "issue_number": 170,
           "quality_checks": { "type_check": "not_run", "dead_code_scan": "not_run" }
         }
@@ -146,7 +146,7 @@
       "evidence": "#1182 table row 3 — logged as a warning, run shipped",
       "stage": "dev",
       "input": {
-        "schema_version": "1.8",
+        "schema_version": "1.9",
         "issue_number": 340,
         "quality_checks": { "security_review": "N/A" }
       },
@@ -160,7 +160,7 @@
           }
         ],
         "doc": {
-          "schema_version": "1.8",
+          "schema_version": "1.9",
           "issue_number": 340,
           "quality_checks": { "security_review": "not_run" }
         }
@@ -171,7 +171,7 @@
       "evidence": "#1182 — an unknown verdict word is not guessed at; the field is quarantined",
       "stage": "dev",
       "input": {
-        "schema_version": "1.8",
+        "schema_version": "1.9",
         "issue_number": 341,
         "quality_checks": { "type_check": "mostly fine" }
       },
@@ -186,7 +186,7 @@
           }
         ],
         "doc": {
-          "schema_version": "1.8",
+          "schema_version": "1.9",
           "issue_number": 341,
           "quality_checks": {}
         }

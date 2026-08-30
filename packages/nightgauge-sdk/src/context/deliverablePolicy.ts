@@ -79,7 +79,7 @@ export interface PolicyOutcome {
  * correction, so a stage running on a remembered schema stays visible.
  */
 const CANONICAL_SCHEMA_VERSION: Record<string, string> = {
-  dev: "1.8",
+  dev: "1.9",
   validate: "2.6",
 };
 
