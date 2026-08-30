@@ -170,6 +170,177 @@ describe("pre-flight historical cost calibration (#112)", () => {
     expect(result.summary).toContain("Historical p75 (all sizes): $30.00 (4 runs)");
   });
 
+  it("rescales a mixed-size cohort into the target size instead of projecting it raw", () => {
+    // The #1229 shape: a corpus whose expensive runs are expensive BECAUSE
+    // they are large. Projected onto an S issue, the raw p75 lands on an L run.
+    const cohort = [
+      { sizeLabel: "S", totalCostUsd: 3 },
+      { sizeLabel: "S", totalCostUsd: 4 },
+      { sizeLabel: "M", totalCostUsd: 10 },
+      { sizeLabel: "M", totalCostUsd: 12 },
+      { sizeLabel: "L", totalCostUsd: 60 },
+    ];
+    // static(S)=2.70, static(M)=4.46, static(L)=7.68 — the shape of the real
+    // TOKEN_BASELINES table, stubbed so the test states the weighting it relies on.
+    const staticFor = (size: string) =>
+      ({ XS: 2.7, S: 2.7, M: 4.46, L: 7.68, XL: 7.68 })[size] ?? null;
+
+    const raw = computeHistoricalCalibration(cohort, "S", undefined);
+    const scaled = computeHistoricalCalibration(cohort, "S", undefined, staticFor);
+
+    expect(raw.source).toBe("all-sizes");
+    expect(scaled.source).toBe("all-sizes-scaled");
+    // Same cohort, same sample count — only the projection moved.
+    expect(scaled.sampleCount).toBe(raw.sampleCount);
+    // The L run enters an S projection at 60 * 2.70/7.68 = $21.09 rather than
+    // $60, so it no longer out-ranks the runs it should sit below.
+    expect(scaled.costUsd!).toBeLessThan(raw.costUsd!);
+    expect(scaled.costUsd!).toBeCloseTo((12 * 2.7) / 4.46, 5);
+  });
+
+  it("rescales UP when the target size is larger than the cohort's typical run", () => {
+    // The same defect in the other direction, and the one that actually matters
+    // for a budget gate: a raw cross-size p75 UNDER-projects a large issue, so
+    // the gate waves through the run most likely to blow the ceiling.
+    const cohort = [
+      { sizeLabel: "M", totalCostUsd: 8 },
+      { sizeLabel: "M", totalCostUsd: 10 },
+      { sizeLabel: "M", totalCostUsd: 12 },
+      { sizeLabel: "S", totalCostUsd: 3 },
+    ];
+    const staticFor = (size: string) =>
+      ({ XS: 2.7, S: 2.7, M: 4.46, L: 7.68, XL: 7.68 })[size] ?? null;
+
+    const raw = computeHistoricalCalibration(cohort, "L", undefined);
+    const scaled = computeHistoricalCalibration(cohort, "L", undefined, staticFor);
+
+    expect(scaled.source).toBe("all-sizes-scaled");
+    expect(scaled.costUsd!).toBeGreaterThan(raw.costUsd!);
+  });
+
+  it("leaves the projection alone when the cohort's typical size IS the target", () => {
+    // Two sized M runs is below MIN_CALIBRATION_SAMPLES, so the cohort widens
+    // to include the unsized runs — but its median sized run is still M.
+    const cohort = [
+      { sizeLabel: "M", totalCostUsd: 10 },
+      { sizeLabel: "M", totalCostUsd: 20 },
+      { sizeLabel: null, totalCostUsd: 30 },
+      { sizeLabel: null, totalCostUsd: 40 },
+    ];
+    const staticFor = (size: string) =>
+      ({ XS: 2.7, S: 2.7, M: 4.46, L: 7.68, XL: 7.68 })[size] ?? null;
+
+    // Every run rescales from M to M, so the figure must be identical to the
+    // unscaled one — a rescale that is a no-op must actually be a no-op.
+    const raw = computeHistoricalCalibration(cohort, "M", undefined);
+    const scaled = computeHistoricalCalibration(cohort, "M", undefined, staticFor);
+
+    expect(scaled.source).toBe("all-sizes-scaled");
+    expect(scaled.costUsd).toBe(raw.costUsd);
+  });
+
+  it("keeps unsized runs in the cohort, rescaled from the median sized run", () => {
+    // 32 of 54 scored runs carry size:null in the real corpus — dropping them
+    // would gut the cohort the fallback exists to provide.
+    const cohort = [
+      { sizeLabel: "M", totalCostUsd: 10 },
+      { sizeLabel: null, totalCostUsd: 20 },
+      { sizeLabel: null, totalCostUsd: 30 },
+      { sizeLabel: null, totalCostUsd: 40 },
+    ];
+    const staticFor = (size: string) =>
+      ({ XS: 2.7, S: 2.7, M: 4.46, L: 7.68, XL: 7.68 })[size] ?? null;
+
+    const scaled = computeHistoricalCalibration(cohort, "S", undefined, staticFor);
+
+    expect(scaled.sampleCount).toBe(4);
+    // Every run rescales M -> S, including the three unsized ones.
+    expect(scaled.costUsd!).toBeCloseTo((30 * 2.7) / 4.46, 5);
+  });
+
+  it("reports all-sizes UNSCALED rather than pretending, when no size can anchor it", () => {
+    // Every run unsized: there is no median size to rescale from, so the
+    // honest answer is the raw p75 labelled as raw — never a silent 1.0 factor
+    // reported as though a rescale happened.
+    const cohort = [
+      { sizeLabel: null, totalCostUsd: 10 },
+      { sizeLabel: null, totalCostUsd: 20 },
+      { sizeLabel: null, totalCostUsd: 30 },
+    ];
+    const staticFor = (size: string) =>
+      ({ XS: 2.7, S: 2.7, M: 4.46, L: 7.68, XL: 7.68 })[size] ?? null;
+
+    const scaled = computeHistoricalCalibration(cohort, "S", undefined, staticFor);
+
+    expect(scaled.source).toBe("all-sizes");
+    expect(scaled.costUsd).toBe(20);
+  });
+
+  it("names the rescale in the operator-facing summary", async () => {
+    mockedHistory.mockResolvedValue([...historyRuns("L", [60, 62]), ...historyRuns("M", [10, 12])]);
+
+    const result = await runPreFlightBudgetCheck(
+      { labels: ["size:S", "type:feature"], title: "Small docs fix" },
+      75,
+      "/workspace"
+    );
+
+    // "all sizes" alone would hide that the figure was moved into S's terms.
+    expect(result.historicalSource).toBe("all-sizes-scaled");
+    expect(result.summary).toContain("all sizes → S");
+  });
+
+  it("the shared size weighting varies by size and ignores the calibration table", async () => {
+    // The weighting is the RELATIVE cost of sizes, so it must come from the
+    // static baseline. Reading the calibrated total instead would feed the
+    // calibrated number back into the correction that is supposed to be
+    // independent of it — and would flatten the ratio to 1 whenever a cell is
+    // calibrated, silently turning the rescale into a no-op.
+    const { staticSizeWeighting } = await import("../../src/utils/budgetIntelligence");
+    const { AutoModelSelector } = await import("@nightgauge/sdk");
+
+    const snap = {
+      metadata: { labels: [], title: "" },
+      // A table whose cells are wildly cheap. If the weighting reads through to
+      // it, every size collapses to the same figure and the ratios go flat.
+      stageModelCalibration: {
+        schema_version: "1" as const,
+        updated_at: new Date().toISOString(),
+        total_records_analyzed: 999,
+        buckets: {
+          "feature-dev": {
+            sonnet: {
+              median_cost_usd: 0.01,
+              p25_cost_usd: 0.01,
+              p75_cost_usd: 0.01,
+              median_input_tokens: 1,
+              median_output_tokens: 1,
+              sample_count: 500,
+              last_updated: new Date().toISOString(),
+            },
+          },
+        },
+      },
+      mode: "elevated" as const,
+      capturedAt: new Date().toISOString(),
+      adapter: "claude",
+      provider: "anthropic" as const,
+      stageEfforts: {},
+    };
+
+    const weight = staticSizeWeighting(new AutoModelSelector(), snap, undefined);
+    const s = weight("S");
+    const m = weight("M");
+    const l = weight("L");
+
+    for (const v of [s, m, l]) expect(v).not.toBeNull();
+    // Strictly ordered: this is the whole property the rescale depends on.
+    expect(s!).toBeLessThan(m!);
+    expect(m!).toBeLessThan(l!);
+    // …and well clear of the $0.01 cell, proving the baseline was used.
+    expect(s!).toBeGreaterThan(1);
+  });
+
   it("says UNCALIBRATED out loud instead of silently omitting the segment", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     mockedHistory.mockResolvedValue(historyRuns("M", [12]));

@@ -75,7 +75,23 @@ const MIN_CALIBRATION_SAMPLES = 3;
  * `"none"` means calibration is OFF — the caller is flying on the static
  * estimate alone.
  */
-export type CalibrationSource = "same-size" | "all-sizes" | "none";
+export type CalibrationSource =
+  /** ≥ `MIN_CALIBRATION_SAMPLES` runs of the SAME size — the cohort we want. */
+  | "same-size"
+  /**
+   * Too few same-size runs, so every scored run was used, rescaled from the
+   * cohort's typical size into this size's terms by the static table's own
+   * size weighting (#1229). Blunter than `same-size`; no longer size-blind.
+   */
+  | "all-sizes-scaled"
+  /**
+   * The same widened cohort with NO rescaling, because the caller supplied no
+   * size-weighting function. Size-blind: an S issue is projected at the cost of
+   * a corpus dominated by L runs. Only ad-hoc callers land here.
+   */
+  | "all-sizes"
+  /** Calibration is OFF — the caller is flying on the static estimate alone. */
+  | "none";
 
 /** Historical cost signal for one size bucket, derived from run history. */
 export interface HistoricalCalibration {
@@ -101,13 +117,41 @@ export interface HistoricalCalibration {
  * `size: null`, and runs on issues with no `size:*` label still do. Demanding
  * an exact size match would keep calibration switched off until a full history
  * of labelled records accumulated, so a cohort too small to trust falls back to
- * every scored run instead of to nothing. A cross-size p75 is blunter than a
- * same-size one but is still far better than the uncorrected static estimate.
+ * every scored run instead of to nothing.
+ *
+ * **The widened cohort is RESCALED, not used raw (#1229).** The old fallback
+ * took the p75 of every run whatever its size and projected it onto this issue,
+ * justified as "blunter but still better than the uncorrected static estimate".
+ * That reasoning is unidirectional: it holds only while the static table
+ * under-estimates. It does not hold downward. Observed in a dogfood workspace:
+ * an **S** issue was projected at **$29.23** — the all-sizes p75 of a corpus
+ * containing a $63.86 L run — against a **$3.42** actual. An 8.5x
+ * OVER-estimate, from the correction that exists to fix under-estimates, on a
+ * gate whose whole job is to refuse runs it thinks are too expensive.
+ *
+ * The two inputs are good at different things. The static table is a poor
+ * predictor of absolute cost (one bucket produced actuals from $1.66 to
+ * $107.02) but it does encode the RELATIVE cost of sizes. The corpus is the
+ * opposite: it knows the absolute level and nothing about which size this issue
+ * is. So take the level from the corpus and the size weighting from the table —
+ * scale the widened p75 by `static(thisSize) / static(cohortTypicalSize)`.
+ *
+ * Each run is rescaled by its OWN size, so the cohort re-sorts and a large
+ * expensive run stops out-ranking the small ones it should sit below — see
+ * {@link rescaleCohortToSize} on why one factor applied to the p75 is not the
+ * same thing. Unsized runs stay in the cohort, rescaled from the median sized
+ * run: dropping them would gut it (32 of 54 scored runs carried `size: null` in
+ * the corpus above) and they still carry real level information.
+ *
+ * Without `staticCostForSize` the scaling cannot be computed and the raw
+ * cross-size p75 is returned as before, reported as `"all-sizes"` rather than
+ * `"all-sizes-scaled"` so the two are never confused in telemetry.
  */
 export function computeHistoricalCalibration(
   runs: Array<{ sizeLabel: string | null; totalCostUsd: number }>,
   sizeLabel: string,
-  minSamples: number = MIN_CALIBRATION_SAMPLES
+  minSamples: number = MIN_CALIBRATION_SAMPLES,
+  staticCostForSize?: (size: string) => number | null
 ): HistoricalCalibration {
   const scored = runs.filter((c) => c.totalCostUsd > 0);
   const sameSize = scored.filter((c) => c.sizeLabel === sizeLabel);
@@ -118,17 +162,167 @@ export function computeHistoricalCalibration(
     return { costUsd: null, sampleCount: cohort.length, source: "none" };
   }
 
-  const sorted = cohort.map((c) => c.totalCostUsd).sort((a, b) => a - b);
+  if (useSameSize) {
+    const sorted = cohort.map((c) => c.totalCostUsd).sort((a, b) => a - b);
+    return { costUsd: p75(sorted), sampleCount: cohort.length, source: "same-size" };
+  }
+
+  // Widened cohort: rescale EACH RUN into this issue's size, then take the p75
+  // of the rescaled costs (#1229).
+  const rescaled = rescaleCohortToSize(cohort, sizeLabel, staticCostForSize);
+  if (rescaled === null) {
+    const sorted = cohort.map((c) => c.totalCostUsd).sort((a, b) => a - b);
+    return { costUsd: p75(sorted), sampleCount: cohort.length, source: "all-sizes" };
+  }
   return {
-    costUsd: p75(sorted),
+    costUsd: p75(rescaled.sort((a, b) => a - b)),
     sampleCount: cohort.length,
-    source: useSameSize ? "same-size" : "all-sizes",
+    source: "all-sizes-scaled",
   };
 }
 
-/** Human-readable cohort name for a calibration figure. */
+/**
+ * Build the size-weighting function `computeHistoricalCalibration` uses to
+ * rescale a cross-size cohort (#1229).
+ *
+ * ONE definition, shared by the pre-flight gate and the budget retro. Those two
+ * already carried the comment "same calibration lookup as the pre-flight gate",
+ * and they were the same lookup right up until one of them was fixed — which is
+ * precisely how a `dual-path-drift` starts. A retro that classifies "anomalous"
+ * against a size-blind p75 is wrong in exactly the way the gate was.
+ *
+ * Every size is priced through the SAME selector under the SAME options,
+ * differing only in `size`, so the ratio is a controlled comparison of two
+ * static figures rather than two differently-configured ones.
+ *
+ * `baselineEstimatedCost` — the UNCALIBRATED total by construction — is what a
+ * size weighting needs. Reading `totalEstimatedCost` instead would let one
+ * calibrated `(stage, model)` cell distort the ratio between two sizes, feeding
+ * the calibrated number back into the correction meant to be independent of it.
+ */
+export function staticSizeWeighting(
+  selector: AutoModelSelector,
+  snap: EstimatorInputSnapshot,
+  skipStages?: string[]
+): (size: string) => number | null {
+  return (size: string): number | null => {
+    try {
+      const sized = selector.estimatePipelineCost(
+        { ...snap.metadata, size: size as IssueMetadata["size"] },
+        {
+          skipStages,
+          stageModelCalibration: null,
+          envelope: toModelEnvelope(snap.mode),
+          provider: snap.provider,
+          stageEfforts: snap.stageEfforts,
+        }
+      );
+      return sized.unpriced ? null : (sized.baselineEstimatedCost ?? null);
+    } catch {
+      return null;
+    }
+  };
+}
+
+/**
+ * Rescale every run in a cross-size cohort into `sizeLabel`'s terms (#1229):
+ * `cost_i * static(target) / static(size_i)`.
+ *
+ * **Per run, not one factor on the p75.** Scaling the p75 by a single
+ * cohort-level ratio looks equivalent and is not, because size and cost are
+ * correlated — which is the entire defect. The expensive runs in a mixed cohort
+ * are expensive *because* they are large, so they sit in the right tail and the
+ * p75 lands on one of them; a constant factor moves that L-sized outlier down
+ * but leaves it the 75th-percentile run. Deflating each run by its OWN size
+ * first re-sorts the cohort, so an L run at $63.86 enters an S projection as
+ * $22.45 and stops out-ranking the S runs it should sit below.
+ *
+ * Unsized runs are rescaled from the cohort's median sized run — see
+ * {@link computeHistoricalCalibration} on why they stay in rather than being
+ * dropped.
+ *
+ * Returns `null` whenever the rescale cannot be done honestly: no weighting
+ * function, no sized run to anchor the unsized ones, or a missing/non-positive
+ * static figure for the target size. A null means "project the raw p75 and SAY
+ * it is unscaled", never "substitute 1.0 and let it read as scaled".
+ */
+function rescaleCohortToSize(
+  cohort: Array<{ sizeLabel: string | null; totalCostUsd: number }>,
+  sizeLabel: string,
+  staticCostForSize?: (size: string) => number | null
+): number[] | null {
+  if (!staticCostForSize) return null;
+
+  const typical = medianSizeLabel(cohort);
+  if (typical === null) return null;
+
+  const target = staticCostForSize(sizeLabel);
+  if (target === null || !(target > 0)) return null;
+
+  // One lookup per DISTINCT size, not per run: `staticCostForSize` prices a
+  // whole pipeline through the selector, and a 100-run cohort spans at most
+  // five sizes.
+  const anchors = new Map<string, number | null>();
+  const anchorFor = (size: string): number | null => {
+    if (!anchors.has(size)) anchors.set(size, staticCostForSize(size));
+    return anchors.get(size) ?? null;
+  };
+
+  const out: number[] = [];
+  for (const run of cohort) {
+    const raw = run.sizeLabel ? run.sizeLabel.toUpperCase() : typical;
+    const from = SIZE_ORDER.includes(raw as SizeLabel) ? raw : typical;
+    if (from === sizeLabel) {
+      // Identity, short-circuited: `cost * target / target` is not exactly
+      // `cost` in floating point, and a rescale that should be a no-op must not
+      // perturb the number by 4e-15 and make the two paths look different.
+      out.push(run.totalCostUsd);
+      continue;
+    }
+    const anchor = anchorFor(from);
+    if (anchor === null || !(anchor > 0)) {
+      // One unpriceable size must not silently drop a run and shrink the
+      // cohort the caller was told the sample count of — carry it unscaled.
+      out.push(run.totalCostUsd);
+      continue;
+    }
+    out.push((run.totalCostUsd * target) / anchor);
+  }
+  return out;
+}
+
+/**
+ * Median size label among the cohort's SIZED runs, on the ordinal XS<S<M<L<XL
+ * scale. Null when no run in the cohort carries a size.
+ *
+ * Median rather than mean: the scale is ordinal, so "the middle run's size" is
+ * meaningful in a way that an averaged size index is not.
+ */
+function medianSizeLabel(cohort: Array<{ sizeLabel: string | null }>): string | null {
+  const ranked = cohort
+    .map((c) => (c.sizeLabel ? SIZE_ORDER.indexOf(c.sizeLabel.toUpperCase() as SizeLabel) : -1))
+    .filter((i) => i >= 0)
+    .sort((a, b) => a - b);
+  if (ranked.length === 0) return null;
+  return SIZE_ORDER[ranked[Math.floor((ranked.length - 1) / 2)]];
+}
+
+/** Ordinal size scale, smallest first. Mirrors the SDK's `ComplexityLabel`. */
+const SIZE_ORDER = ["XS", "S", "M", "L", "XL"] as const;
+type SizeLabel = (typeof SIZE_ORDER)[number];
+
+/**
+ * Human-readable cohort name for a calibration figure.
+ *
+ * `all-sizes-scaled` names the rescale in the summary the operator actually
+ * reads (#1229). Reporting it as plain "all sizes" would hide that the figure
+ * was moved into this issue's size — the difference between $29.23 and a
+ * projection an operator can act on.
+ */
 function calibrationCohortLabel(source: CalibrationSource, sizeLabel: string): string {
-  return source === "same-size" ? sizeLabel : "all sizes";
+  if (source === "same-size") return sizeLabel;
+  if (source === "all-sizes-scaled") return `all sizes → ${sizeLabel}`;
+  return "all sizes";
 }
 
 // ============================================================================
@@ -324,7 +518,12 @@ export async function runPreFlightBudgetCheck(
       historyRoot,
       100 // get enough data for a meaningful percentile
     );
-    calibration = computeHistoricalCalibration(allCosts, estimate.complexity);
+    calibration = computeHistoricalCalibration(
+      allCosts,
+      estimate.complexity,
+      undefined,
+      staticSizeWeighting(selector, snap, skipStages)
+    );
   } catch (err) {
     console.warn("[Nightgauge] pre-flight calibration lookup failed:", err);
   }
@@ -530,8 +729,20 @@ export async function buildBudgetRetro(params: {
   try {
     const allCosts = await ExecutionHistoryReader.getCostByIssue(retroHistoryRoot, 100);
     // Same calibration lookup as the pre-flight gate (#112) — this comparison
-    // was equally dead while every IPC-written record carried a null size.
-    calibration = computeHistoricalCalibration(allCosts, sizeLabel);
+    // was equally dead while every IPC-written record carried a null size, and
+    // it takes the same cross-size rescale (#1229). Classifying this run as
+    // "anomalous" against a corpus of a different typical size is the same
+    // error the gate was making, one path over.
+    const retroSnap = await captureEstimatorInputs(
+      { labels: [`size:${sizeLabel}`], title: "" },
+      workspaceRoot
+    );
+    calibration = computeHistoricalCalibration(
+      allCosts,
+      sizeLabel,
+      undefined,
+      staticSizeWeighting(new AutoModelSelector(), retroSnap)
+    );
 
     // Classify: above 1.5x the historical p75 = above-average, above 2.5x = anomalous
     if (calibration.costUsd !== null && calibration.costUsd > 0) {

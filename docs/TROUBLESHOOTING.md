@@ -570,6 +570,29 @@ prefers records whose `size` matches the issue's size bucket and falls back to
 the cross-size cohort when too few match, so this line means the run history is
 genuinely thin — not that the size join failed.
 
+### `[PRE-FLIGHT]` reads `Historical p75 (all sizes)` and the number is absurd
+
+If the cohort label says **`all sizes`** with no arrow, the projection is a raw
+cross-size p75 — the cost of a corpus, not of this issue. On a mixed corpus that
+is wrong in whichever direction the issue differs from the corpus: an S issue in
+a dogfood workspace was projected at **$29.23** against a **$3.42** actual,
+because the p75 landed on a `$63.86` L run.
+
+A healthy fallback reads **`all sizes → S`** instead. That is the rescaled form
+(#1229): each historical run is converted into this issue's size by the static
+table's own size weighting (`cost × static(target) ÷ static(runSize)`) _before_
+the p75 is taken, so a large expensive run stops out-ranking the small ones. The
+un-arrowed form now appears only when no run in the cohort carries a size at
+all, leaving nothing to anchor the rescale — the fix for that is `size:*` labels,
+per the root cause below.
+
+Neither form is a substitute for the per-`(stage, model)` table. Once
+`.nightgauge/pipeline/stage-model-calibration.json` has ≥5 samples in a cell the
+source becomes `stage-model` and the cross-size path stops being consulted; if
+that never happens after many runs, check that the table is being written to
+**this** repo and not a sibling's (#1229 — see
+[SELF_IMPROVEMENT_LOOP.md](SELF_IMPROVEMENT_LOOP.md)).
+
 Root cause of the original outage: `size` is the **join key** for cost
 calibration, and the IPC history-write path left it `null` on every
 extension-driven run (it looked like a cosmetic `omitempty` display field), so
