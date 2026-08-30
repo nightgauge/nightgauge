@@ -33,6 +33,14 @@ jobs:
         run: npm run lint
       - name: License-header guard (no proprietary markers)
         run: bash scripts/check-license-headers.sh
+      # Self-test first, same reasoning as the band-vocabulary and mirror-link
+      # gates below: the validator reported a missing field once, on a file that
+      # provably had it, because a frontmatter block that never closed handed the
+      # field checks a truncated buffer (#856). It now fails under its own
+      # UNREADABLE message and exit code instead. This proves that separation
+      # still holds — and that a genuinely missing field is still an ERROR.
+      - name: SKILL.md metadata gate self-test
+        run: bash scripts/test-validate-skill-metadata.sh
       - name: SKILL.md metadata
         run: bash scripts/validate-skill-metadata.sh
       # Band-vocabulary reintroduction gate (#582): fails on hand-inlined band
@@ -102,6 +110,15 @@ jobs:
       # execute cla-check.mjs itself and fail on the missing environment.
       - name: CLA gate regression suite
         run: node --test .github/scripts/cla-check.test.mjs
+      # ci-local.sh step inventory (#983): the mandatory local gate guarded 31
+      # of its steps behind `if [ -f <the script it runs> ]` with no `else`, so
+      # a deleted script removed the step and the gate still exited 0. It cannot
+      # detect that itself — a skipped step and a passing step are identical in
+      # its output and its exit code — so this is the second observer, diffing
+      # `ci-local.sh --list-steps` against the checked-in inventory. CI does not
+      # run ci-local.sh, which is exactly why nothing noticed before.
+      - name: ci-local.sh step inventory
+        run: bash scripts/test-ci-local-inventory.sh
 
   link-check:
     # Validates cross-document reference integrity across root *.md + docs/**
@@ -115,5 +132,14 @@ jobs:
           node-version: 24
           cache: npm
           cache-dependency-path: package-lock.json
+      # Self-test first. `markdown-link-check` reports `Status: 0` for a request
+      # that never completed, and this job used to fail a PR on that exactly as
+      # on a 404 — it fired on PR #1003 against two URLs that PR never touched
+      # (#1004). Errored requests are now re-probed and sorted into
+      # dead / unreachable-from-runner / alive-after-reprobe. The suite pins
+      # both directions: an internal dead link still fails, a host that drops
+      # the runner does not.
+      - name: Link-check gate self-test
+        run: bash scripts/test-check-md-links.sh
       - name: Markdown link check (docs cross-references)
         run: bash scripts/check-md-links.sh
