@@ -254,6 +254,45 @@ export class LogFileWriter {
   }
 
   /**
+   * Resolve the most recent session log file on disk for one issue.
+   *
+   * Returns the absolute path, or null when logging is disabled, the log
+   * directory does not exist, or no log has been written for that issue yet.
+   *
+   * Deliberately does NOT apply the `max_count` / `max_age_days` retention
+   * caps that {@link listLogs} applies. Those bound how many archived tabs get
+   * rebuilt on panel open; they are not a statement about which files exist.
+   * Applying them here would report "no log" for a log sitting on disk, purely
+   * because it fell outside a rehydration window (Issue #1198).
+   *
+   * @param workspaceRoot - Absolute path to the repo root the run logged under
+   * @param issueNumber - Issue number whose log to resolve
+   * @param config - Optional config with `dir` / `retain` overrides
+   * @returns Absolute path to the newest matching log, or null
+   */
+  static async findLatestLogForIssue(
+    workspaceRoot: string,
+    issueNumber: number,
+    config?: Partial<LogFileConfig>
+  ): Promise<string | null> {
+    const mergedConfig = { ...DEFAULT_CONFIG, ...config };
+    if (!mergedConfig.retain) return null;
+
+    const logDir = path.join(workspaceRoot, mergedConfig.dir);
+    let filenames: string[];
+    try {
+      filenames = await fs.readdir(logDir);
+    } catch {
+      return null; // Directory doesn't exist — no logs yet
+    }
+
+    // The YYYY-MM-DD prefix sorts chronologically, so the last match is newest.
+    const matches = filenames.filter((f) => f.endsWith(`_${issueNumber}_session.log`)).sort();
+    const newest = matches[matches.length - 1];
+    return newest ? path.join(logDir, newest) : null;
+  }
+
+  /**
    * Enumerate archived session log files on disk.
    *
    * Scans the log directory for files named `{YYYY-MM-DD}_{issue}_session.log`,

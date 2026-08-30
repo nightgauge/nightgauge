@@ -56,6 +56,7 @@ import {
   createSlotBadgeUpdateMessage,
   createOverviewCardUpdateMessage,
   createRemoveOldestMessage,
+  type SlotAction,
 } from "./OutputWindowMessageHandler";
 import type {
   AskUserQuestionPayload,
@@ -209,6 +210,7 @@ export class OutputWindow implements vscode.Disposable {
       onToggleSearchUseRegex: (enabled) => this.handleToggleSearchUseRegex(enabled),
       onSendMessage: (text) => this.handleSendMessage(text),
       onTabSwitch: (slotIndex) => this.handleTabSwitch(slotIndex),
+      onSlotAction: (slotIndex, action) => void this.handleSlotAction(slotIndex, action),
     });
 
     this.subscribeToPhaseEvents();
@@ -1223,6 +1225,68 @@ export class OutputWindow implements vscode.Disposable {
    */
   private handleTabSwitch(slotIndex: number | null): void {
     this.setActiveSlot(slotIndex);
+  }
+
+  /**
+   * Act on an overview-card button (Issue #1198).
+   *
+   * `reveal-github` opens the slot's issue on the forge; `open-log` opens that
+   * run's newest session log in an editor. `close` and `pin` are in the
+   * message contract but are driven by the tab bar's own paths, so they are
+   * accepted and ignored here rather than warned about.
+   *
+   * Every failure mode reports itself. A dead button is bad; a button that
+   * silently does nothing when the issue or log cannot be resolved is the same
+   * defect wearing a working implementation, so each unresolvable case tells
+   * the user which piece was missing.
+   */
+  private async handleSlotAction(slotIndex: number, action: SlotAction): Promise<void> {
+    if (action !== "reveal-github" && action !== "open-log") return;
+
+    const slot = this.state.getSlot(slotIndex);
+    if (!slot) {
+      void vscode.window.showWarningMessage(
+        `Nightgauge: no pipeline slot is registered at index ${slotIndex}.`
+      );
+      return;
+    }
+
+    if (action === "reveal-github") {
+      if (!slot.repoSlug) {
+        void vscode.window.showWarningMessage(
+          `Nightgauge: issue #${slot.issueNumber} has no repository recorded on its slot, so its issue URL cannot be built.`
+        );
+        return;
+      }
+      const issueUrl = `https://github.com/${slot.repoSlug}/issues/${slot.issueNumber}`;
+      await vscode.env.openExternal(vscode.Uri.parse(issueUrl));
+      return;
+    }
+
+    // open-log: resolve the root this slot's bytes were actually written under
+    // (#191 precedence), then the newest log file for its issue.
+    const logRoot = this.state.resolveLogRoot(slotIndex) ?? this.replayWorkspaceRoot;
+    if (!logRoot) {
+      void vscode.window.showWarningMessage(
+        "Nightgauge: no workspace root is known for this run, so its session log cannot be located."
+      );
+      return;
+    }
+
+    const logPath = await LogFileWriter.findLatestLogForIssue(
+      logRoot,
+      slot.issueNumber,
+      this.replayLogConfig ?? undefined
+    );
+    if (!logPath) {
+      void vscode.window.showWarningMessage(
+        `Nightgauge: no session log found for issue #${slot.issueNumber} under ${logRoot}.`
+      );
+      return;
+    }
+
+    const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(logPath));
+    await vscode.window.showTextDocument(doc, { preview: false });
   }
 
   /**
