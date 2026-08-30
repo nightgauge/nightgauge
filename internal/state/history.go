@@ -34,22 +34,6 @@ func clipHistoryRunes(s string, n int) string {
 	return string(r[:n])
 }
 
-// HistoryEntry is the legacy execution record format (executions.jsonl).
-// Retained for backward compatibility with ReadRecent.
-type HistoryEntry struct {
-	Timestamp     time.Time     `json:"timestamp"`
-	Repo          string        `json:"repo"`
-	IssueNumber   int           `json:"issueNumber"`
-	Duration      time.Duration `json:"duration"`
-	InputTokens   int           `json:"inputTokens"`
-	OutputTokens  int           `json:"outputTokens"`
-	TotalCostUSD  float64       `json:"totalCostUsd"`
-	Stages        []StageResult `json:"stages"`
-	SkippedStages []string      `json:"skippedStages,omitempty"`
-	Success       bool          `json:"success"`
-	Error         string        `json:"error,omitempty"`
-}
-
 // V2RunRecord matches the TypeScript ExecutionHistoryRunRecordV2 / V3 Zod
 // schemas exactly. Written to daily YYYY-MM-DD.jsonl files that the VSCode
 // dashboard reads.
@@ -1004,8 +988,8 @@ func truncateToLocalDate(t time.Time) time.Time {
 }
 
 // parseDailyHistoryDate parses a "YYYY-MM-DD.jsonl" filename's date. Returns
-// false for any name that doesn't match that shape (executions.jsonl,
-// index.json, temp files, etc.) so prune logic never treats an unrelated file
+// false for any name that doesn't match that shape (index.json, temp files,
+// sidecars, etc.) so prune logic never treats an unrelated file
 // as history. Mirrors the filename validation duplicated in ReadRecentV2 and
 // readAllDailyRecords.
 func parseDailyHistoryDate(name string) (time.Time, bool) {
@@ -1691,47 +1675,6 @@ func (hw *HistoryWriter) rebuildIndexEntriesFromJSONL() []V2IndexEntry {
 	return entries
 }
 
-// Write appends a legacy HistoryEntry to executions.jsonl.
-// Retained for backward compatibility; new code should use WriteV2.
-func (hw *HistoryWriter) Write(rs *RuntimeState, success bool, errMsg string) error {
-	if err := os.MkdirAll(hw.dir, 0755); err != nil {
-		return fmt.Errorf("create history dir: %w", err)
-	}
-
-	snap := rs.Snapshot()
-	entry := HistoryEntry{
-		Timestamp:     time.Now(),
-		Repo:          snap.Repo,
-		IssueNumber:   snap.IssueNumber,
-		Duration:      snap.TotalDuration(),
-		InputTokens:   snap.InputTokens,
-		OutputTokens:  snap.OutputTokens,
-		TotalCostUSD:  snap.TotalCostUSD,
-		Stages:        snap.CompletedStages,
-		SkippedStages: snap.SkippedStages,
-		Success:       success,
-		Error:         errMsg,
-	}
-
-	data, err := json.Marshal(entry)
-	if err != nil {
-		return fmt.Errorf("marshal history entry: %w", err)
-	}
-
-	filename := filepath.Join(hw.dir, "executions.jsonl")
-	f, err := os.OpenFile(filename, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		return fmt.Errorf("open history file: %w", err)
-	}
-	defer f.Close()
-
-	if _, err := f.Write(append(data, '\n')); err != nil {
-		return fmt.Errorf("write history entry: %w", err)
-	}
-
-	return nil
-}
-
 // ReadRecentV2 reads the last N V2RunRecords from daily YYYY-MM-DD.jsonl files.
 // It reads up to days most recent daily files (defaults to 7 when days <= 0).
 // Returns records in chronological order (oldest first).
@@ -1757,7 +1700,7 @@ func (hw *HistoryWriter) ReadRecentV2(n int, days int) ([]V2RunRecord, error) {
 		}
 		name := e.Name()
 		if len(name) == len("2006-01-02.jsonl") && strings.HasSuffix(name, ".jsonl") {
-			// Validate it looks like a date file (not executions.jsonl etc.)
+			// Validate it looks like a date file (not index.json, a sidecar, etc.)
 			base := strings.TrimSuffix(name, ".jsonl")
 			if len(base) == 10 && base[4] == '-' && base[7] == '-' {
 				dailyFiles = append(dailyFiles, name)
@@ -1888,35 +1831,6 @@ func dedupeRichestByKey(records []V2RunRecord) []V2RunRecord {
 		out = append(out, rec)
 	}
 	return out
-}
-
-// ReadRecent reads the last N legacy history entries from executions.jsonl.
-func (hw *HistoryWriter) ReadRecent(n int) ([]HistoryEntry, error) {
-	filename := filepath.Join(hw.dir, "executions.jsonl")
-	data, err := os.ReadFile(filename)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("read history: %w", err)
-	}
-
-	var entries []HistoryEntry
-	for _, line := range splitLines(data) {
-		if len(line) == 0 {
-			continue
-		}
-		var entry HistoryEntry
-		if err := json.Unmarshal(line, &entry); err != nil {
-			continue // Skip malformed entries
-		}
-		entries = append(entries, entry)
-	}
-
-	if n > 0 && len(entries) > n {
-		entries = entries[len(entries)-n:]
-	}
-	return entries, nil
 }
 
 func splitLines(data []byte) [][]byte {
