@@ -368,7 +368,7 @@ func repoRootFromTest(t *testing.T) string {
 	return ""
 }
 
-// TestFeatureDevStillDoesNotCommit pins #1608 against this change. The commit
+// TestFeatureDevStillDoesNotCommit pins issue 1608 against this change. The commit
 // owner moved into pr-create BECAUSE feature-dev must not commit; a future edit
 // that "fixes" the trivial path by making feature-dev commit instead reverses a
 // deliberate decision, and this goes red when the skill stops saying so.
@@ -385,7 +385,7 @@ func TestFeatureDevStillDoesNotCommit(t *testing.T) {
 		}
 		body := string(data)
 		if !strings.Contains(body, "No commit or push in feature-dev.") {
-			t.Errorf("%s no longer states the #1608 contract that feature-dev does not commit", rel)
+			t.Errorf("%s no longer states the issue 1608 contract that feature-dev does not commit", rel)
 		}
 		if !strings.Contains(body, "stages.DecideCommit") {
 			t.Errorf("%s does not name the structural commit owner for the skipped-validate route (#1179)", rel)

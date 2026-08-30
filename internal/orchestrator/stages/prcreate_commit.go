@@ -1,7 +1,7 @@
 // The pipeline's commit owner (#1179).
 //
 // `feature-dev` deliberately does not commit — it verifies what it changed and
-// hands off (#1608) — and `feature-validate` is the stage that commits and
+// hands off (issue 1608) — and `feature-validate` is the stage that commits and
 // pushes. That is a CONVENTION written in a skill file, and routing may skip
 // `feature-validate`: the fast-track change_rules path
 // (docs/GATE_RELAXATION.md) emits `skip_stages = [feature-planning,

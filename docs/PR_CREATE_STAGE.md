@@ -29,7 +29,7 @@ zero-values that downstream consumers (the pr-merge deterministic runner from
 `pr-create` owns the run's commit. Not "commits when convenient" — it is the
 stage the pipeline holds responsible for the branch carrying its work.
 
-`feature-dev` deliberately does not commit (#1608), and `feature-validate` is
+`feature-dev` deliberately does not commit (issue 1608), and `feature-validate` is
 the stage that commits and pushes. That was a **convention stated in a skill
 file**, and routing can skip the stage that holds it: the fast-track path
 ([GATE_RELAXATION.md](GATE_RELAXATION.md)) emits `skip_stages =

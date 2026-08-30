@@ -32,7 +32,7 @@ label-based `risk_high` floor both disable skipping.
 
 Skipping is safe only for work the rest of the chain does not depend on. It was
 not: `feature-validate` was the only stage documented as committing and pushing
-(`feature-dev` deliberately does not — #1608), so a trivial route that skipped
+(`feature-dev` deliberately does not — issue 1608), so a trivial route that skipped
 it left the implementation uncommitted, the branch zero commits ahead of base,
 and `pr-create` opening an empty PR. Nothing detected it; the stage said so in
 a prose self-assessment that nothing consumes.
