@@ -114,7 +114,12 @@ func issueCreateCmd() *cobra.Command {
 			if err != nil {
 				return emitError(cmd, err)
 			}
-			labelIDs := splitCSV(labels)
+			// Names, not node IDs — the example on this command has always
+			// shown names, and nothing but the forge knows the IDs (#1214).
+			labelIDs, err := resolveLabelNames(cmd, client, splitCSV(labels))
+			if err != nil {
+				return emitError(cmd, err)
+			}
 			issue, err := client.Issues().CreateIssue(cmd.Context(), repoID, title, body, labelIDs)
 			if err != nil {
 				return emitError(cmd, fmt.Errorf("create issue: %w", err))
@@ -125,7 +130,7 @@ func issueCreateCmd() *cobra.Command {
 	cmd.Flags().StringVar(&repoID, "repo-id", "", "Repository node ID (GraphQL)")
 	cmd.Flags().StringVar(&title, "title", "", "Issue title")
 	cmd.Flags().StringVar(&body, "body", "", "Issue body (Markdown)")
-	cmd.Flags().StringVar(&labels, "labels", "", "Comma-separated label IDs")
+	cmd.Flags().StringVar(&labels, "labels", "", "Comma-separated label names (e.g. type:bug,priority:high). Unknown names fail before the issue is created.")
 	return cmd
 }
 

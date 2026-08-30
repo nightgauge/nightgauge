@@ -735,7 +735,12 @@ nightgauge issue view <number> [--owner ORG] [--repo REPO] [--json]
 nightgauge issue list [--epic <number>] [--search "<keywords>"] [--limit N] \
   [--owner ORG] [--repo REPO] [--json]
 
-# Create issue
+# Create issue.
+# --labels takes label NAMES, comma-separated. The command resolves them to
+# node IDs itself (#1214) and fails before creating anything if a name does not
+# exist on the repository, so an issue is never left half-labelled. The same
+# holds for `issue create-sub`, `forge issue create`, and
+# `forge label add`/`remove`.
 nightgauge issue create --title "..." --body "..." --labels "type:feature"
 
 # Close issue

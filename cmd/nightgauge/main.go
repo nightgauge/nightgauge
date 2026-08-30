@@ -876,6 +876,32 @@ func issueListCmd() *cobra.Command {
 	return cmd
 }
 
+// resolveLabelNames turns the label NAMES a caller wrote into the node IDs the
+// create mutations take, returning the canonical labels so the caller can
+// report exactly what it applied.
+//
+// Names are the only form a human, a skill or an issue template ever produces
+// (`--labels "type:bug,component:sdk"`). Before #1214 both create verbs
+// documented and consumed node IDs, so every documented invocation — including
+// the issue-create skill's own worked examples — failed with `Could not resolve
+// to a node with the global id of 'type:bug'`, and agents fell back to
+// `gh issue create`, bypassing the deterministic path the skill mandates.
+//
+// The lookup runs BEFORE the create mutation, so an unknown name creates
+// nothing: a half-labelled issue that reports success is worse than a refusal,
+// because the missing label is what the board syncs on.
+func resolveLabelNames(ctx context.Context, client *gh.Client, owner, repo string, names []string) ([]*gh.Label, []string, error) {
+	labels, err := gh.NewLabelService(client, owner, repo).ResolveNames(ctx, names)
+	if err != nil {
+		return nil, nil, err
+	}
+	ids := make([]string, len(labels))
+	for i, l := range labels {
+		ids[i] = l.ID
+	}
+	return labels, ids, nil
+}
+
 func issueCreateCmd() *cobra.Command {
 	var (
 		owner      string
@@ -902,15 +928,28 @@ func issueCreateCmd() *cobra.Command {
 			}
 
 			ownerPart, repoPart := splitRepo(owner, repo)
+
+			// Resolve names to IDs first: an unknown label must fail before
+			// anything is created, not leave a half-labelled issue behind.
+			resolved, labelIDs, err := resolveLabelNames(cmd.Context(), client, ownerPart, repoPart, labels)
+			if err != nil {
+				return err
+			}
+
 			repoID, err := client.GetRepositoryID(cmd.Context(), ownerPart, repoPart)
 			if err != nil {
 				return err
 			}
 
 			svc := gh.NewIssueService(client)
-			issue, err := svc.CreateIssue(cmd.Context(), repoID, title, body, labels)
+			issue, err := svc.CreateIssue(cmd.Context(), repoID, title, body, labelIDs)
 			if err != nil {
 				return err
+			}
+			// Report the canonical names the mutation applied, not the caller's
+			// input — the two differ whenever a name arrived with whitespace.
+			for _, l := range resolved {
+				issue.Labels = append(issue.Labels, l.Name)
 			}
 
 			if outputJSON {
@@ -926,7 +965,7 @@ func issueCreateCmd() *cobra.Command {
 	repoNameFlag(cmd, &repo, "nightgauge", "Repository (owner/name or name)")
 	cmd.Flags().StringVar(&title, "title", "", "Issue title (required)")
 	cmd.Flags().StringVar(&body, "body", "", "Issue body")
-	cmd.Flags().StringSliceVar(&labels, "labels", nil, "Label node IDs to apply")
+	cmd.Flags().StringSliceVar(&labels, "labels", nil, "Label names to apply, comma-separated (e.g. type:bug,component:sdk). Unknown names fail before anything is created.")
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output as JSON")
 	return cmd
 }
@@ -1151,6 +1190,14 @@ func issueCreateSubCmd() *cobra.Command {
 			}
 
 			ownerPart, repoPart := splitRepo(owner, repo)
+
+			// Resolve names to IDs first — before the create, the sub-issue
+			// link and the board sync, none of which are undone on failure.
+			resolved, labelIDs, err := resolveLabelNames(cmd.Context(), client, ownerPart, repoPart, labels)
+			if err != nil {
+				return err
+			}
+
 			svc := gh.NewIssueService(client)
 
 			var projectSvc *gh.ProjectService
@@ -1158,9 +1205,12 @@ func issueCreateSubCmd() *cobra.Command {
 				projectSvc = gh.NewProjectService(client, ownerPart, projectNumber)
 			}
 
-			issue, err := svc.CreateSubIssue(cmd.Context(), ownerPart, repoPart, parentNumber, title, body, labels, projectSvc)
+			issue, err := svc.CreateSubIssue(cmd.Context(), ownerPart, repoPart, parentNumber, title, body, labelIDs, projectSvc)
 			if err != nil {
 				return err
+			}
+			for _, l := range resolved {
+				issue.Labels = append(issue.Labels, l.Name)
 			}
 
 			// Merge --blocked-by and --depends-on into a single blocker list.
@@ -1216,7 +1266,7 @@ func issueCreateSubCmd() *cobra.Command {
 	repoNameFlag(cmd, &repo, "nightgauge", "Repository (owner/name or name)")
 	cmd.Flags().StringVar(&title, "title", "", "Sub-issue title (required)")
 	cmd.Flags().StringVar(&body, "body", "", "Sub-issue body")
-	cmd.Flags().StringSliceVar(&labels, "labels", nil, "Label node IDs to apply")
+	cmd.Flags().StringSliceVar(&labels, "labels", nil, "Label names to apply, comma-separated (e.g. type:bug,component:sdk). Unknown names fail before anything is created.")
 	cmd.Flags().IntVar(&projectNumber, "project", 0, "Project board number (skips board sync when 0)")
 	cmd.Flags().StringVar(&blockedBy, "blocked-by", "", "Comma-separated blocker issue numbers (e.g. 280,290). Body text 'Blocked by #N' is not parsed.")
 	cmd.Flags().StringVar(&dependsOn, "depends-on", "", "Comma-separated blocker issue numbers (semantic alias for --blocked-by; creates addBlockedBy relationships)")

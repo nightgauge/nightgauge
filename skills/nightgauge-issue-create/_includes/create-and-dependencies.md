@@ -119,7 +119,7 @@ script:
 
 ```bash
 nightgauge issue create-sub <parent-issue-number> \
-  --title "<title>" --body "<body>" [--labels "<label-id>"] \
+  --title "<title>" --body "<body>" [--labels "<name>,<name>"] \
   [--repo <owner/repo>] [--blocked-by <N>,<M>] \
   [--wave <wave-number>] [--depends-on <N>,<M>]
 ```

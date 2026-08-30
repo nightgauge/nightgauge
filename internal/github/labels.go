@@ -3,6 +3,7 @@ package github
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	forgetypes "github.com/nightgauge/nightgauge/internal/forge/types"
 	"github.com/shurcooL/graphql"
@@ -53,6 +54,64 @@ func (s *LabelService) List(ctx context.Context) ([]*Label, error) {
 		})
 	}
 	return labels, nil
+}
+
+// ResolveNames maps label names to the node IDs the createIssue mutation
+// takes, in the order given.
+//
+// Callers write names — `type:bug`, `component:sdk`. Names are the only form a
+// human, a skill or an issue template ever produces; a node ID is an
+// implementation detail of the forge that no caller has any way to know. Before
+// #1214 `issue create --labels` documented and consumed IDs, so every
+// documented invocation failed with `Could not resolve to a node with the
+// global id of 'type:bug'` and agents fell back to `gh issue create`, bypassing
+// the binary the skill mandates.
+//
+// Resolution is all-or-nothing and happens BEFORE any mutation: an unknown name
+// returns an error naming the label and the repository, and the caller creates
+// nothing. Half-labelling an issue and reporting success is worse than
+// refusing, because the missing label is what the board syncs on.
+//
+// Matching is exact and case-sensitive — GitHub label names are, and a
+// case-insensitive match would silently apply `Type:Bug` when the caller asked
+// for `type:bug`. The returned IDs pair with the canonical Label values, so a
+// caller can report exactly what it applied rather than echoing its input.
+func (s *LabelService) ResolveNames(ctx context.Context, names []string) ([]*Label, error) {
+	if len(names) == 0 {
+		return nil, nil
+	}
+
+	existing, err := s.List(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list labels for %s/%s: %w", s.owner, s.repo, err)
+	}
+	byName := make(map[string]*Label, len(existing))
+	for _, l := range existing {
+		byName[l.Name] = l
+	}
+
+	resolved := make([]*Label, 0, len(names))
+	var missing []string
+	for _, raw := range names {
+		name := strings.TrimSpace(raw)
+		if name == "" {
+			continue
+		}
+		l, ok := byName[name]
+		if !ok {
+			missing = append(missing, name)
+			continue
+		}
+		resolved = append(resolved, l)
+	}
+
+	// Report every unknown name at once. Failing on the first means a caller
+	// with three bad labels learns about them over three round trips.
+	if len(missing) > 0 {
+		return nil, fmt.Errorf("label %s not found on %s/%s",
+			quoteJoin(missing), s.owner, s.repo)
+	}
+	return resolved, nil
 }
 
 // Create creates a label in the repository. Idempotent: if a label with the
