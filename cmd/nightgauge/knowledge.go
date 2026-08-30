@@ -565,6 +565,19 @@ func knowledgeScaffoldCmd() *cobra.Command {
 				}
 			}
 
+			// Canonicalize to the main checkout (#1205). On the scheduler path
+			// this command runs with its cwd inside the run's worktree, so a bare
+			// Getwd() wrote the knowledge base into <worktree>/.nightgauge —
+			// gitignored, and deleted with the worktree at reclamation. That is why
+			// .nightgauge/knowledge/features/ at this workspace's root still ended
+			// at 390- after hundreds of runs.
+			//
+			// Applied whether or not --workdir was passed: a caller handing us its
+			// own cwd has exactly the same problem as one that let us read it.
+			if root := config.MainCheckoutRoot(workdir); root != "" {
+				workdir = root
+			}
+
 			start := time.Now()
 			result, err := knowledge.ScaffoldWithConfig(workdir, issueNumber, title, criteria, knowledgeEnabled, workspaceScoped)
 			if err != nil {
@@ -843,6 +856,13 @@ func knowledgeWorkspaceCreateCmd() *cobra.Command {
 				if err != nil {
 					return fmt.Errorf("get working directory: %w", err)
 				}
+			}
+
+			// Canonicalize before walking up (#1205): on the scheduler path the
+			// cwd is the run's worktree, and a worktree placed outside the main
+			// checkout never reaches the workspace marker at all.
+			if root := config.MainCheckoutRoot(startDir); root != "" {
+				startDir = root
 			}
 
 			wsRoot, err := workspace.DetectWorkspaceRoot(startDir)

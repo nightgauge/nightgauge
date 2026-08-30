@@ -47,6 +47,28 @@ When enabled, the pipeline automatically scaffolds a directory for each issue as
 it is picked up. AI agents and developers can then read and update these files
 throughout the lifecycle of an issue.
 
+**Where the scaffold lands, and who creates it.** The scaffold is created by the
+**Go pickup path** — `internal/orchestrator`, immediately after the issue-pickup
+stage completes — at the **canonical workspace root** (the main checkout,
+resolved with `git rev-parse --git-common-dir`), never at the stage's current
+directory. `knowledge_path` is then stamped into the run's issue context file as
+an **absolute** path, wherever `execution.IssueContextCandidates` finds that
+file; on a worktree-isolated run that is inside the worktree, not at the root.
+
+Absolute is deliberate: the stages read `knowledge_path` from the worktree while
+the sidebar and `/nightgauge:retro` read it from the root, and only an absolute
+path is correct from both.
+
+This used to be a bash block in the issue-pickup skill that called
+`nightgauge knowledge scaffold` from the stage's cwd. On the scheduler path that
+cwd is the run's worktree, so the PRD and decisions landed in
+`<worktree>/.nightgauge/knowledge/` — gitignored, and deleted with the worktree
+at reclamation. Every later reader then found nothing (#1205). The skill's block
+is gone; there is one path, not two.
+
+`nightgauge knowledge scaffold` remains for manual use and canonicalizes its
+root the same way, so it is safe to run from inside a worktree.
+
 **Benefits:**
 
 - Preserves intent and context across pipeline sessions (no conversation history
@@ -820,11 +842,16 @@ The knowledge base is controlled by flags in `.nightgauge/config.yaml`:
 
 **Behavior matrix:**
 
-| `enabled` | `auto_scaffold` | Effect                                            |
-| --------- | --------------- | ------------------------------------------------- |
-| `false`   | any             | No scaffolding. `knowledge_path` = `null`.        |
-| `true`    | `true`          | Scaffold automatically on issue pickup.           |
-| `true`    | `false`         | Enabled but not automatic. Must trigger manually. |
+| `enabled` | `auto_scaffold` | Effect                                                                       |
+| --------- | --------------- | ---------------------------------------------------------------------------- |
+| `false`   | any             | No scaffolding. `knowledge_path` = `null`.                                   |
+| `true`    | unset           | Scaffold automatically on issue pickup — `auto_scaffold` defaults to `true`. |
+| `true`    | `true`          | Scaffold automatically on issue pickup.                                      |
+| `true`    | `false`         | Enabled but not automatic. Run `nightgauge knowledge scaffold` by hand.      |
+
+Both flags are resolved by `config.KnowledgeConfig.IsAutoScaffold()`. Until
+#1205 nothing in Go read `auto_scaffold` at all, so the flag had no effect in
+either direction.
 
 **Example `.nightgauge/config.yaml`:**
 
