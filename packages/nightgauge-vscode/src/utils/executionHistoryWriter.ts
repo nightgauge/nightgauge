@@ -18,6 +18,7 @@ import * as path from "node:path";
 
 import { resolveConfigPathSync } from "./configPathResolver";
 import { readEffectiveConfigTextSync } from "./mergedConfigReader";
+import { writeFileAtomic } from "./atomicWrite";
 import {
   type ExecutionHistoryRunRecordV2,
   type ExecutionHistoryRunRecordV3,
@@ -323,7 +324,8 @@ export class ExecutionHistoryWriter {
     };
 
     try {
-      await fs.writeFile(indexPath, JSON.stringify(next, null, 2), "utf-8");
+      // Atomic: the dashboard reads this index while the prune rewrites it (#1210).
+      await writeFileAtomic(indexPath, JSON.stringify(next, null, 2));
     } catch (error) {
       console.warn(`[Nightgauge] Index prune write failed: ${error}`);
     }

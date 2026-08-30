@@ -20,6 +20,7 @@ import {
   type RecalibrationMarker,
 } from "../schemas/healthScoreHistory";
 import type { TrendAnalysis, TrendChartDay } from "../views/dashboard/HealthWidgetTypes";
+import { writeFileAtomic } from "./atomicWrite";
 
 /** Relative path from workspace root to the health history file */
 const HEALTH_HISTORY_FILE = ".nightgauge/pipeline/health-history.jsonl";
@@ -89,7 +90,9 @@ export class HealthScoreHistoryWriter {
         }
       }
 
-      await fs.writeFile(filePath, kept.join("\n") + (kept.length > 0 ? "\n" : ""), "utf-8");
+      // Atomic: the telemetry uploader reads this file on its own timer, and a
+      // truncate-in-place rewrite let it observe zero lines mid-prune (#1210).
+      await writeFileAtomic(filePath, kept.join("\n") + (kept.length > 0 ? "\n" : ""));
     } catch (error) {
       console.warn(`[Nightgauge] Failed to prune health history: ${error}`);
     }

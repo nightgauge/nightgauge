@@ -251,6 +251,11 @@ interface CursorResolution {
   rotated: boolean;
   /** A legacy count-only entry validated in place — persist the upgrade. */
   upgraded: boolean;
+  /**
+   * The file read as empty while the cursor says records were uploaded from
+   * it. Leave the cursor alone and try again next cycle (#1210).
+   */
+  skip?: boolean;
 }
 
 /**
@@ -283,6 +288,28 @@ function resolveCursor(
   const { lines, anchor } = entry;
   if (lines <= 0) {
     return { start: 0, rotated: false, upgraded: false };
+  }
+
+  // An EMPTY file under a non-zero cursor is ambiguous, and the two readings
+  // call for opposite actions. It may be a genuine wipe (recover from 0), or a
+  // read that landed inside another process's truncate-then-write window, in
+  // which case every record is still there and re-deriving from 0 re-uploads
+  // the whole stream (#1210). Retention pruning cannot produce a zero-length
+  // file with a non-zero cursor — a prune keeps the recent records, which are
+  // exactly the ones a non-zero cursor was counting.
+  //
+  // So: do nothing. Leave the cursor untouched and look again next cycle. A
+  // real wipe still recovers then (the file is still empty and the writer is
+  // no longer mid-write); a transient one costs one skipped cycle instead of a
+  // duplicate upload of the entire file.
+  if (allLines.length === 0) {
+    logger?.warn(
+      "TelemetryUploaderService: file read as empty while the cursor says records were uploaded from it — " +
+        "leaving the cursor alone and retrying next cycle rather than re-deriving from zero, because a " +
+        "concurrent rewrite is indistinguishable from a wipe at this instant",
+      { ...ctx, watermark: lines, fileLines: 0 }
+    );
+    return { start: 0, rotated: false, upgraded: false, skip: true };
   }
 
   const pastEof = lines > allLines.length;
@@ -784,6 +811,9 @@ export class TelemetryUploaderService implements vscode.Disposable {
         filename,
         root,
       });
+      if (cursor.skip) {
+        continue;
+      }
       if (cursor.rotated) {
         rootRotated = true;
       }
@@ -1103,6 +1133,9 @@ export class TelemetryUploaderService implements vscode.Disposable {
       filename: watermarkKey,
       root,
     });
+    if (cursor.skip) {
+      return { stream: cfg.stream, uploaded: 0, skipped: true };
+    }
     const uploadedCount = cursor.start;
     const newLines = allLines.slice(uploadedCount);
 

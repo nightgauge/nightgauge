@@ -1860,6 +1860,37 @@ describe("TelemetryUploaderService", () => {
       expect(wmLines(lastSavedWatermarks(), "health-history.jsonl")).toBe(232);
     });
 
+    // #1210 — `pruneOldEntries` used fs.writeFile (truncate-then-write), so a
+    // read landing mid-rewrite saw ZERO lines under a non-zero cursor. The
+    // anchor scan cannot match an empty file, so the old code fell through to
+    // `start: 0` and re-uploaded the whole stream. The producer is atomic now;
+    // this guards the reader against any producer that is not.
+    it("health: an empty read under a non-zero cursor is skipped, not re-derived from zero", async () => {
+      const health = {
+        filename: "health-history.jsonl",
+        content: "",
+        sizeBytes: 0,
+      };
+      setupFs([], { "health-history.jsonl": { lines: 36, anchor: "deadbeefdeadbeef" } }, [health]);
+      fetchMock.mockResolvedValue(okResponse());
+
+      const logger = makeLogger();
+      await makeService(logger).runUploadCycle();
+
+      // Nothing uploaded, and — the part that matters — the cursor is LEFT
+      // ALONE. Persisting 0 here is what caused the duplicate re-upload once
+      // the file's real contents reappeared.
+      expect(fetchMock).not.toHaveBeenCalled();
+      const saved = lastSavedWatermarks();
+      if (saved && "health-history.jsonl" in saved) {
+        expect(wmLines(saved, "health-history.jsonl")).toBe(36);
+      }
+      expect(logger.error).not.toHaveBeenCalledWith(
+        expect.stringContaining("STALE"),
+        expect.anything()
+      );
+    });
+
     it("health: after a prune, snapshots written afterwards upload rather than being skipped", async () => {
       const lines = dailyLines(10);
       const health = {
