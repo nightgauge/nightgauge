@@ -60,17 +60,36 @@ func TestStageErrors_CompletionClearsTheRecoveredStage(t *testing.T) {
 			"this snapshot is what reaches the TS appliers, which apply stageErrors after completedStages",
 			snap.StageErrors)
 	}
-	// The stage is genuinely in the completed list — twice, because both
-	// attempts booked their own spend (history.go accumulates per stage).
+	// The stage stands completed ONCE — #556 gave completedStages the same
+	// current-attempt contract this file's stageErrors cases pin: an entry
+	// means "this stage's MOST RECENT attempt completed". The failed attempt
+	// did not vanish, it moved to supersededStages, and both are still summed
+	// for spend.
 	var completions int
 	for _, sr := range snap.CompletedStages {
 		if sr.Stage == StageFeatureValidate {
 			completions++
 		}
 	}
-	if completions != 2 {
-		t.Errorf("completedStages entries for feature-validate = %d, want 2 "+
-			"(the failed attempt's spend must not vanish with its error)", completions)
+	if completions != 1 {
+		t.Errorf("completedStages entries for feature-validate = %d, want 1 "+
+			"(the most recent attempt — #556)", completions)
+	}
+	var attempts int
+	var attemptCost float64
+	for _, sr := range snap.AllStageAttempts() {
+		if sr.Stage == StageFeatureValidate {
+			attempts++
+			attemptCost += sr.CostUSD
+		}
+	}
+	if attempts != 2 {
+		t.Errorf("stage attempts for feature-validate = %d, want 2 "+
+			"(the failed attempt's spend must not vanish with its error)", attempts)
+	}
+	if attemptCost != 0.49 {
+		t.Errorf("summed attempt cost = $%.2f, want $0.49 — the failed attempt's "+
+			"$0.21 plus the recovered attempt's $0.28", attemptCost)
 	}
 }
 

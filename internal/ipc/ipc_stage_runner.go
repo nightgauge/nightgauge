@@ -10,6 +10,7 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/intelligence/tokens"
 	"github.com/nightgauge/nightgauge/internal/orchestrator"
+	"github.com/nightgauge/nightgauge/internal/state"
 )
 
 // IpcStageRunner routes stage execution through the TypeScript SkillRunner
@@ -206,6 +207,23 @@ func (r *IpcStageRunner) RunStage(ctx context.Context, params orchestrator.Stage
 					log.Printf("#%d: stage %s failed — escalating model to %s",
 						params.IssueNumber, params.Stage, decision.NewModel)
 					r.retryEngine.RecordEscalation(string(params.Stage), decision.NewModel)
+					// The DURABLE half, written HERE rather than by the
+					// scheduler (#463). The scheduler's EscalationRecorded
+					// branch has no from/to models to write — it asks the retry
+					// engine for CurrentModel after the fact — whereas this
+					// site holds both. Every RecordEscalation call in the repo
+					// now has an AppendEscalation beside it, which is what
+					// stops one dispatch path telling a different story about
+					// the same run from the other.
+					if params.Runtime != nil {
+						params.Runtime.AppendEscalation(state.EscalationRecord{
+							Stage:     params.Stage,
+							FromModel: params.Model,
+							ToModel:   decision.NewModel,
+							Reason:    state.EscalationReasonStageFailed,
+							At:        time.Now(),
+						})
+					}
 					escalationRecorded = true
 				}
 			}

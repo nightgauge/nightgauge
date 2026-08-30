@@ -583,8 +583,14 @@ func (s *Server) initSchedulerCallbacks(sched *orchestrator.Scheduler) {
 	})
 	sched.OnPipelineComplete(func(cbRepo string, issue int, runtime *state.RuntimeState, ok bool) {
 		snap := runtime
-		perStage := make([]map[string]interface{}, len(snap.CompletedStages))
-		for i, sr := range snap.CompletedStages {
+		// Every attempt (#556). This array is the per-stage SPEND the platform
+		// bills and charts from, and CompletedStages now means "most recent
+		// attempt" — a rewound stage's first attempt lives in
+		// SupersededStages. A stage that ran twice contributes two entries,
+		// which is what happened.
+		attempts := snap.AllStageAttempts()
+		perStage := make([]map[string]interface{}, len(attempts))
+		for i, sr := range attempts {
 			entry := map[string]interface{}{
 				"stage":        string(sr.Stage),
 				"inputTokens":  sr.InputTokens,

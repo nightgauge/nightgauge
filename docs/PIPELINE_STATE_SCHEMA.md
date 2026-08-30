@@ -171,12 +171,42 @@ the discovery regex and the atomic-write contract. This section documents the
 | Position       | `stage`, `startedAt`, `stageStart`                                                                                                                                                                                                                                                                                                  |
 | Process        | `pid`, `ownerPid`, `worktreeDir`                                                                                                                                                                                                                                                                                                    |
 | Totals         | `inputTokens`, `outputTokens`, `totalCostUsd`, `authoritativeChangeClass`, `actualLinesChanged`                                                                                                                                                                                                                                     |
-| Progress       | `completedStages`, `skippedStages`, `phaseHistory`, `stageErrors`, `retryCount`, `escalationHistory`, `ralphIterations`                                                                                                                                                                                                             |
+| Progress       | `completedStages`, `supersededStages`, `skippedStages`, `phaseHistory`, `stageErrors`, `retryCount`, `escalationHistory`, `ralphIterations`                                                                                                                                                                                         |
 | Per-stage maps | `stageModes`, `stageAdapters`, `stageModels`, `stageServedModels`, `stageEfforts`, `stageThinking`, `stageServedEfforts`, `stageServedThinking`, `stageModelSelectionModes`, `stageExecutionPaths`, `stagePuntReasons`, `stageGateResults`, `stageAnomalies`, `stageRecoveryAttempts`, `stageOutputTails`, `terminatingStageTokens` |
 | Outcome        | `gateResults`, `prUrl`, `mergedCommitSha`, `mergedAt`, `license`, `licenseExpiredMidRun`, `toolCalls`, `modelRefusalFallbacks`                                                                                                                                                                                                      |
 
 `terminalOutcome` has a closed vocabulary — `complete` | `cancelled` | `failed`
 — shared deliberately with the extension path so the two cannot drift.
+
+#### `completedStages[]` vs `supersededStages[]` — `StageResult`
+
+`completedStages` means **"stages whose most recent attempt completed"** — the
+same current-attempt contract `stageErrors` carries. `BeginStage` is the clear
+site: beginning a stage that is already booked complete un-books it, so a stage
+the retry engine re-dispatches on a backtrack renders as _running_ rather than
+staying _complete_ for the whole of its second attempt.
+
+The displaced entry is **moved**, never dropped: it goes to
+`supersededStages`, which is the run's ledger of work that happened and was then
+re-done. The distinction matters because two different questions used to share
+one answer:
+
+| Question                                 | Read                                       |
+| ---------------------------------------- | ------------------------------------------ |
+| What is this stage's state _now_?        | `completedStages`                          |
+| What did this run _spend_?               | both — `RuntimeState.AllStageAttempts()`   |
+| Has this run _ever_ completed stage _S_? | both — `RuntimeState.HasCompletedStage(S)` |
+
+The durable history record derives `estimated_cost_usd` and
+`tokens.per_stage` by summing per-attempt figures, so a spend reader that
+consulted `completedStages` alone would under-report exactly the runs that
+retried — biasing the calibration corpus low on the hardest issues while never
+disagreeing with itself. `AllStageAttempts()` returns superseded attempts first,
+then the standing ones, so chronological "last attempt wins" also holds for the
+per-stage detail fields.
+
+`supersededStages` is omitted from the JSON when empty, which is every run that
+never backtracked.
 
 #### `phaseHistory[]` — `PhaseRecord`
 

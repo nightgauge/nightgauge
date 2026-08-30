@@ -126,9 +126,30 @@ type RuntimeState struct {
 	OutputTokens int     `json:"outputTokens"`
 	TotalCostUSD float64 `json:"totalCostUsd"`
 
-	// Stage history
+	// Stage history.
+	//
+	// CompletedStages means "stages whose MOST RECENT attempt completed"
+	// (#556) — the same current-attempt contract #407 gave StageErrors, and
+	// the contract every presence reader already assumed it had. It is stated
+	// HERE, once; BeginStage is the clear site and SupersededStages is where
+	// the displaced attempts go.
 	CompletedStages []StageResult `json:"completedStages"`
-	SkippedStages   []string      `json:"skippedStages"`
+	// SupersededStages holds every completed attempt that a later BeginStage
+	// displaced from CompletedStages — the run's spend ledger for work that
+	// happened and was then re-done.
+	//
+	// It exists because "most recent attempt" and "everything the run spent"
+	// are two different questions with one former answer. The durable history
+	// record derives estimated_cost_usd and tokens.per_stage by SUMMING the
+	// per-entry figures (BuildV2Record, history.go), and internal/ipc's
+	// corroborated run spend does the same — so pruning a displaced attempt
+	// out of CompletedStages without keeping it somewhere would delete that
+	// attempt's dollars and tokens from the permanent record while
+	// rs.TotalCostUSD (an independent running sum) kept them. That silent
+	// divergence biases the learning corpus low on exactly the runs that cost
+	// the most, which is why the pruning is a MOVE and never a delete.
+	SupersededStages []StageResult `json:"supersededStages,omitempty"`
+	SkippedStages    []string      `json:"skippedStages"`
 
 	// Phase tracking
 	PhaseHistory []PhaseRecord `json:"phaseHistory"`
@@ -387,6 +408,34 @@ type EscalationRecord struct {
 // history record never carries a raw reason string.
 const EscalationReasonModelUnavailable = "model_unavailable"
 
+// The UPWARD escalation reasons (#463) — one per site that raises the model
+// tier. Until they existed, only the two model-unavailable DOWNGRADE sites
+// appended to EscalationHistory at all: every upward escalation called
+// RetryEngine.RecordEscalation, which increments a process-memory counter
+// nothing persists, and stopped there. Three records lied as a result —
+// AttemptsUntilSuccess undercounted by the escalation count, an upward-escalated
+// stage's model was attributed to "scheduler" as though nothing had substituted
+// it, and the "escalation" member of the model-selection vocabulary could not
+// fire for the one case it names.
+//
+// Each value is a distinct CAUSE, not a synonym: they are the four different
+// answers to "why did this run end up on a stronger model", and collapsing them
+// would make the record unable to distinguish a stage that failed from one that
+// merely produced no output.
+const (
+	// EscalationReasonStageFailed — the stage exited non-zero and a stronger
+	// model may succeed where this one did not. Both dispatch paths raise it:
+	// the Go-direct scheduler and the IPC runner.
+	EscalationReasonStageFailed = "stage_failed"
+	// EscalationReasonMissingOutput — the stage exited 0 but wrote no output
+	// context. Distinct from a failure: the model believed it had finished.
+	EscalationReasonMissingOutput = "missing_output"
+	// EscalationReasonBudgetStall — a stall-kill with more than half the
+	// budget ceiling already consumed, where a stronger model is a better bet
+	// than another retry on the same one.
+	EscalationReasonBudgetStall = "budget_stall"
+)
+
 // EscalationReasons is the closure list for EscalationRecord.Reason: every
 // reason a writer emits MUST be listed here. It exists because the record keeps
 // no other copy of the reason — modelSelectionSourceForEscalationReason
@@ -400,6 +449,9 @@ const EscalationReasonModelUnavailable = "model_unavailable"
 // catch-all is right for this one" is a one-line allowlist entry in that test.
 var EscalationReasons = []string{
 	EscalationReasonModelUnavailable,
+	EscalationReasonStageFailed,
+	EscalationReasonMissingOutput,
+	EscalationReasonBudgetStall,
 }
 
 // StageResult records the outcome of a completed stage.
@@ -728,11 +780,43 @@ func (rs *RuntimeState) AdoptOwnership() (previous int, moved bool) {
 }
 
 // BeginStage marks the start of a new pipeline stage.
+//
+// THE CLEAR SITE for the CompletedStages contract (#556). An entry means "this
+// stage's MOST RECENT attempt completed", so beginning a stage that is already
+// booked as complete must un-book it: the retry engine rewinds `stageIdx` on a
+// backtrack and re-dispatches an earlier stage, and until this moved, that
+// stage stayed in CompletedStages for the whole of its second attempt.
+//
+// The consumer that made this a defect rather than a nicety is the extension.
+// PipelineStateService.applyRuntimeSnapshot paints completedStages FIRST and
+// only then marks `stage` running, guarded by `!stages[goState.stage]` — a
+// guard that is correct and must stay, because it is what stops a terminal
+// snapshot (whose `stage` is the last completed stage) flipping a finished row
+// back to running. With the stage present in both, the guard was false and a
+// re-dispatched stage rendered COMPLETE for its entire second attempt: the
+// operator watched a stage they could not see running, and #534's fix survived
+// on the rewind path.
+//
+// Displaced attempts MOVE to SupersededStages rather than being dropped; see
+// the field comment for why deleting them would corrupt the cost record.
 func (rs *RuntimeState) BeginStage(stage PipelineStage) {
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
 	rs.Stage = stage
 	rs.StageStart = time.Now()
+
+	// Un-book any completed attempt of this stage. Almost always zero or one
+	// entry, but the loop is written for N because nothing prevents a run
+	// backtracking through the same stage twice.
+	kept := rs.CompletedStages[:0]
+	for _, sr := range rs.CompletedStages {
+		if sr.Stage == stage {
+			rs.SupersededStages = append(rs.SupersededStages, sr)
+			continue
+		}
+		kept = append(kept, sr)
+	}
+	rs.CompletedStages = kept
 }
 
 // CompleteStage records the completion of the current stage.
@@ -2237,6 +2321,52 @@ func (rs *RuntimeState) TotalDuration() time.Duration {
 	return time.Since(rs.StartedAt)
 }
 
+// AllStageAttempts returns every completed stage attempt the run booked, in
+// chronological order: the attempts a later BeginStage displaced, then the
+// current-attempt entries.
+//
+// THIS IS THE ACCOUNTING VIEW, and every reader that sums tokens, cost or
+// duration must use it rather than CompletedStages alone (#556). Since
+// CompletedStages became "most recent attempt", it is no longer the run's
+// spend ledger: a rewound stage's first attempt lives in SupersededStages, and
+// a summer that reads only CompletedStages under-reports exactly the runs that
+// retried — which is to say the expensive ones — and biases the calibration
+// corpus low without ever disagreeing with itself.
+//
+// CompletedStages remains the right read for "what is the state of this stage
+// NOW": stage status, presence tests, and the extension's stage rows.
+func (rs *RuntimeState) AllStageAttempts() []StageResult {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	all := make([]StageResult, 0, len(rs.SupersededStages)+len(rs.CompletedStages))
+	all = append(all, rs.SupersededStages...)
+	all = append(all, rs.CompletedStages...)
+	return all
+}
+
+// HasCompletedStage reports whether the run has EVER completed the named stage,
+// counting attempts a later BeginStage superseded.
+//
+// The distinction matters for irreversible side effects: "has this run been to
+// pr-create" is a question about history, not about the current attempt, and
+// answering it from CompletedStages alone would say "no" for the whole of a
+// re-dispatch — long enough to disown a PR the run really did open.
+func (rs *RuntimeState) HasCompletedStage(stage PipelineStage) bool {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	for _, sr := range rs.CompletedStages {
+		if sr.Stage == stage {
+			return true
+		}
+	}
+	for _, sr := range rs.SupersededStages {
+		if sr.Stage == stage {
+			return true
+		}
+	}
+	return false
+}
+
 // IsComplete returns true if all 6 stages are completed or skipped.
 func (rs *RuntimeState) IsComplete() bool {
 	rs.mu.Lock()
@@ -2304,6 +2434,10 @@ func (rs *RuntimeState) snapshotLocked() *RuntimeState {
 	}
 	snap.CompletedStages = make([]StageResult, len(rs.CompletedStages))
 	copy(snap.CompletedStages, rs.CompletedStages)
+	if len(rs.SupersededStages) > 0 {
+		snap.SupersededStages = make([]StageResult, len(rs.SupersededStages))
+		copy(snap.SupersededStages, rs.SupersededStages)
+	}
 	snap.SkippedStages = make([]string, len(rs.SkippedStages))
 	copy(snap.SkippedStages, rs.SkippedStages)
 	snap.PhaseHistory = make([]PhaseRecord, len(rs.PhaseHistory))

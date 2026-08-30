@@ -504,10 +504,15 @@ func buildOrphanDoneEvent(snap *state.RuntimeState, now time.Time) (platform.Pip
 	if snap == nil {
 		return platform.PipelineEvent{}, false
 	}
+	// stagesRun names the stages that stand completed; the duration sums EVERY
+	// attempt (#556), including ones a backtrack superseded, because the run
+	// really did spend that time.
 	stagesRun := make([]string, 0, len(snap.CompletedStages))
-	var totalDuration time.Duration
 	for _, sr := range snap.CompletedStages {
 		stagesRun = append(stagesRun, string(sr.Stage))
+	}
+	var totalDuration time.Duration
+	for _, sr := range snap.AllStageAttempts() {
 		totalDuration += sr.Duration
 	}
 	return buildPipelineDoneEvent(snap.RunID, PipelineNotifyCompleteParams{

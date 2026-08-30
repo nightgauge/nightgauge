@@ -19,6 +19,7 @@
 import { describe, it, expect } from "vitest";
 import { RUN_IDENTITY_PATTERN, RUN_IDENTITY_SHAPE, isRunIdentity } from "../context/runIdentity.js";
 import { uuidV7 } from "../context/RunStateManager.js";
+import { RunAttemptSchema, RunStateSchema } from "../context/schemas/run-state.js";
 
 /** A hand-built canonical identity: version nibble 7, variant nibble 8. */
 const CANONICAL = "019fe6f3-fcfe-7b6f-8a7c-be0f444b6610";
@@ -50,78 +51,173 @@ describe("isRunIdentity — accepts", () => {
   });
 });
 
+/**
+ * THE REFUSAL TABLE — mirroring `internal/state/run_identity_test.go`'s
+ * non-canonical cases case-for-case.
+ *
+ * Declared ONCE and driven through every TypeScript site that claims to gate a
+ * run identity, so a site that loosens on its own goes red here rather than in
+ * production (#468). It is deliberately a table of DATA, never of patterns: the
+ * character sequence of the shape itself lives in exactly one place
+ * (`context/runIdentity.ts`) and is pinned to Go — see the repo-wide walk in
+ * `internal/runstate/identity_crosslang_test.go`.
+ *
+ * Each row is expanded into ONE arm per site: a table asserted in a single
+ * `expect` loop fails on its first row and hides the rest.
+ */
+const NON_CANONICAL: ReadonlyArray<{ label: string; value: string; why: string }> = [
+  {
+    label: "a UUIDv4 — right length, wrong version nibble",
+    value: "3f2504e0-4f89-41d3-9a0c-0305e82c3301",
+    why:
+      "zod's `.uuid()` accepts every RFC 9562 version, so this is the headline " +
+      "TS-accepts / Go-refuses divergence (#468).",
+  },
+  {
+    label: "a ULID with a prefix",
+    value: "run_01H8XGJWBWBAQ4ZZY1N1V9PJ0M",
+    why: "a competing id encoding — length and alphabet both wrong.",
+  },
+  {
+    label: "the canonical shape in UPPERCASE",
+    value: "019FE6F3-FCFE-7B6F-8A7C-BE0F444B6610",
+    why:
+      "the identity is canonical LOWERCASE. An `i` flag on the pattern would " +
+      "make this pass here and still fail Go's `IdentityRegexp` — drift with an " +
+      "identical-looking body, which is why the pin checks flags too. zod's " +
+      "`.uuid()` is case-insensitive, which is the second half of #468.",
+  },
+  {
+    label: "the canonical shape with ONE uppercased component",
+    value: "019fe6f3-fcfe-7b6f-8a7c-BE0F444B6610",
+    why:
+      "full-uppercase is not the only case widening: a `[0-9a-fA-F]` class in " +
+      "one component, or a `.toLowerCase()` on the last group only, leaves the " +
+      "row above red-free while accepting this.",
+  },
+  {
+    label: "a fullwidth-confusable canonical id",
+    value: "０１９ｆｅ６ｆ３－ｆｃｆｅ－７ｂ６ｆ－８ａ７ｃ－ｂｅ０ｆ４４４ｂ６６１０",
+    why:
+      "every codepoint NFKC-folds to the canonical id, and Go's RE2 does no " +
+      "normalization whatsoever — so accepting it is precisely the F16 " +
+      "`run_id_invalid` divergence: the extension mints it, the server refuses " +
+      "to key on it, every progress call for that run is discarded. It is also " +
+      "the BODY the cross-language pin cannot see: the pin byte-compares the " +
+      'pattern LITERAL, so a `.test(value.normalize("NFKC"))` mutation leaves ' +
+      "the pin and every other row green.",
+  },
+  {
+    label: "a canonical id with a trailing space",
+    value: `${CANONICAL} `,
+    why: "a `.test(value.trim())` mutation leaves the pin green and this red.",
+  },
+  {
+    label: "a canonical id with a leading space",
+    value: ` ${CANONICAL}`,
+    why: "the leading half of the same trim mutation.",
+  },
+  {
+    label: "a canonical id with a trailing newline",
+    value: `${CANONICAL}\n`,
+    why: "JS `$` matches before a final newline in some engines' dialects; RE2 does not.",
+  },
+  {
+    label: "two canonical ids separated by an embedded newline",
+    value: `aaaaaaaa-bbbb-7ccc-8ddd-eeeeeeeeeeee\n${CANONICAL}`,
+    why:
+      "without the `m` flag `^…$` bracket the WHOLE string and this is refused; " +
+      "with `m` they bracket each line and both halves match, so a " +
+      "multiline-flag mutation is caught HERE even though every single-line row " +
+      "still behaves.",
+  },
+  {
+    label: "a wrong variant nibble (c)",
+    value: "019fe6f3-fcfe-7b6f-ca7c-be0f444b6610",
+    why: "the variant nibble is a closed set; `c` is outside it.",
+  },
+  { label: "the empty string", value: "", why: "the degenerate case." },
+  {
+    label: "a path traversal",
+    value: "../../etc/passwd",
+    why:
+      "the security case: the identity becomes a filename component on a socket " +
+      'ADR-015 documents as unauthenticated, so a "/" or ".." bearing value ' +
+      "is an arbitrary-path write. Twin of Go's traversal refusal.",
+  },
+];
+
 describe("isRunIdentity — refuses", () => {
-  it("a UUIDv4 — right length, wrong version nibble", () => {
-    expect(isRunIdentity("3f2504e0-4f89-41d3-9a0c-0305e82c3301")).toBe(false);
+  for (const { label, value, why } of NON_CANONICAL) {
+    it(label, () => {
+      expect(isRunIdentity(value), why).toBe(false);
+    });
+  }
+});
+
+/**
+ * The SECOND gate on the same shape: the `run-state.json` READ-BACK schema
+ * (#468).
+ *
+ * `isRunIdentity` guards values the extension is about to put on the wire. It
+ * says nothing about values that arrive FROM DISK — and until #468 the on-disk
+ * schema had its own, laxer opinion: `z.string().uuid()`, which accepts every
+ * UUID version and uppercase hex, i.e. exactly the set Go's authority refuses
+ * with `ErrNoRunIdentity`. An id only the TypeScript side accepted could be
+ * read back out of `run-state.json` and handed to IPC params and snapshot
+ * filename components the Go scanner will not parse — the F16 `run_id_invalid`
+ * family, where every progress call for that run is silently discarded.
+ *
+ * Both sites are driven from the ONE table above, and each arm asserts BOTH of
+ * them, so a future loosening of one site cannot pass while the other holds.
+ */
+describe("run-state.json schema — refuses the same set", () => {
+  const attempt = (runId: string) => ({
+    run_id: runId,
+    attempt_number: 1,
+    started_at: "2026-01-01T00:00:00.000Z",
   });
 
-  it("a ULID with a prefix", () => {
-    expect(isRunIdentity("run_01H8XGJWBWBAQ4ZZY1N1V9PJ0M")).toBe(false);
+  const wholeState = (runId: string) => ({
+    schema_version: "1.0",
+    issue_number: 1,
+    state: "running" as const,
+    run_id: runId,
+    attempt_number: 1,
+    completed_stages: [],
+    branch: "feat/acme-platform-widget",
+    created_at: "2026-01-01T00:00:00.000Z",
+    updated_at: "2026-01-01T00:00:00.000Z",
+    attempts: [attempt(CANONICAL)],
   });
 
-  // The identity is canonical LOWERCASE. An `i` flag on the pattern would make
-  // this pass here and still fail Go's `IdentityRegexp` — drift with an
-  // identical-looking body, which is why the pin checks flags too.
-  it("the canonical shape in UPPERCASE", () => {
-    expect(isRunIdentity("019FE6F3-FCFE-7B6F-8A7C-BE0F444B6610")).toBe(false);
+  for (const { label, value, why } of NON_CANONICAL) {
+    it(`${label} — at RunAttemptSchema.run_id`, () => {
+      expect(RunAttemptSchema.safeParse(attempt(value)).success, why).toBe(false);
+    });
+
+    it(`${label} — at RunStateSchema.run_id`, () => {
+      expect(RunStateSchema.safeParse(wholeState(value)).success, why).toBe(false);
+    });
+  }
+
+  it("accepts what the minter actually produces, at both sites", () => {
+    for (let i = 0; i < 8; i++) {
+      const id = uuidV7();
+      expect(RunAttemptSchema.safeParse(attempt(id)).success, id).toBe(true);
+      expect(RunStateSchema.safeParse(wholeState(id)).success, id).toBe(true);
+    }
   });
 
-  // Full-uppercase is not the only case widening: a `[0-9a-fA-F]` class in one
-  // component, or a `.toLowerCase()` on the last group only, leaves the arm
-  // above red-free while accepting this.
-  it("the canonical shape with ONE uppercased component", () => {
-    expect(isRunIdentity("019fe6f3-fcfe-7b6f-8a7c-BE0F444B6610")).toBe(false);
-  });
-
-  // Every codepoint in this id NFKC-folds to the canonical id above, and Go's
-  // RE2 does no normalization whatsoever — so accepting it here is precisely the
-  // TS-accepts / Go-refuses `run_id_invalid` divergence (F16) this module exists
-  // to prevent: the extension mints it, the server refuses to key on it, every
-  // progress call for that run is discarded. Verified against the Go side:
-  // `runstate.IsIdentity` on this string is false.
-  //
-  // This arm's other job is the BODY the cross-language pin cannot see. The pin
-  // byte-compares the pattern LITERAL, so a `.test(value.normalize("NFKC"))`
-  // mutation leaves the pin and the whole table above green.
-  it("a fullwidth-confusable canonical id", () => {
-    expect(
-      isRunIdentity("０１９ｆｅ６ｆ３－ｆｃｆｅ－７ｂ６ｆ－８ａ７ｃ－ｂｅ０ｆ４４４ｂ６６１０")
-    ).toBe(false);
-  });
-
-  it("a canonical id with a trailing space", () => {
-    expect(isRunIdentity(`${CANONICAL} `)).toBe(false);
-  });
-
-  it("a canonical id with a leading space", () => {
-    expect(isRunIdentity(` ${CANONICAL}`)).toBe(false);
-  });
-
-  it("a canonical id with a trailing newline", () => {
-    expect(isRunIdentity(`${CANONICAL}\n`)).toBe(false);
-  });
-
-  // Two canonical-shaped lines in one string. Without the `m` flag `^…$` bracket
-  // the WHOLE string and this is refused; with `m` they bracket each line and
-  // both halves match, so a multiline-flag mutation is caught HERE even though
-  // every single-line case above still behaves.
-  it("two canonical ids separated by an embedded newline", () => {
-    expect(isRunIdentity(`aaaaaaaa-bbbb-7ccc-8ddd-eeeeeeeeeeee\n${CANONICAL}`)).toBe(false);
-  });
-
-  it("a wrong variant nibble (c)", () => {
-    expect(isRunIdentity("019fe6f3-fcfe-7b6f-ca7c-be0f444b6610")).toBe(false);
-  });
-
-  it("the empty string", () => {
-    expect(isRunIdentity("")).toBe(false);
-  });
-
-  // The security case: the identity becomes a filename component on a socket
-  // ADR-015 documents as unauthenticated, so a "/" or ".." bearing value is an
-  // arbitrary-path write. Twin of Go's traversal refusal.
-  it("a path traversal", () => {
-    expect(isRunIdentity("../../etc/passwd")).toBe(false);
+  // The refusal must NAME the offending id, because the only human who ever
+  // sees it is an operator whose resume just failed on a file they did not
+  // write. A bare "invalid string" sends them reading the schema; the id sends
+  // them to the file.
+  it("names the offending id in the message", () => {
+    const bad = "3f2504e0-4f89-41d3-9a0c-0305e82c3301";
+    const result = RunAttemptSchema.safeParse(attempt(bad));
+    expect(result.success).toBe(false);
+    expect(result.success === false && JSON.stringify(result.error.issues)).toContain(bad);
   });
 });
 

@@ -1,0 +1,35 @@
+{
+  "_capture": {
+    "script": "scripts/capture-run-state-fixture.sh",
+    "command": "bash scripts/capture-run-state-fixture.sh",
+    "produced_by": "RunStateManager.markRunning -> markStageComplete(issue-pickup) -> markPaused, read back verbatim from the file the manager wrote",
+    "issue": "468 — run-state.json read-back validated run_id with z.string().uuid()",
+    "redacted": "host_id, pid and all timestamps replaced with stable placeholders after the write; every other field is exactly what RunStateManager produced",
+    "run_id_note": "run_id is a REAL uuidV7() mint and is NOT edited on disk. The refusal arms of src/__tests__/RunStateManager.test.ts edit ONLY this field, in memory, to each non-canonical form in the Go refusal table."
+  },
+  "schema_version": "1.0",
+  "issue_number": 4242,
+  "state": "paused",
+  "run_id": "01a0510e-c5a4-7d96-afaa-e06f18b61d5c",
+  "attempt_number": 1,
+  "completed_stages": ["issue-pickup"],
+  "resume_from_stage": "feature-planning",
+  "worktree_path": null,
+  "branch": "feat/acme-platform-widget",
+  "created_at": "2026-01-01T00:00:00.000Z",
+  "updated_at": "2026-01-01T00:00:00.000Z",
+  "reason": "captured by scripts/capture-run-state-fixture.sh",
+  "recoverable": true,
+  "recovery_actions": ["resume", "restart", "discard"],
+  "attempts": [
+    {
+      "run_id": "01a0510e-c5a4-7d96-afaa-e06f18b61d5c",
+      "attempt_number": 1,
+      "started_at": "2026-01-01T00:00:00.000Z",
+      "ended_at": null,
+      "pid": 1,
+      "host_id": "00000000-0000-0000-0000-000000000000",
+      "last_stage": "issue-pickup"
+    }
+  ]
+}
