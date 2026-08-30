@@ -22,11 +22,19 @@ type PrePushInput struct {
 
 // PrePushResult holds the outcome of pre-push validation.
 type PrePushResult struct {
-	Decision         string            `json:"decision"` // "allow" or "block"
-	IssueNumber      int               `json:"issue_number"`
-	TargetBranch     string            `json:"target_branch"`
-	FeatureBranch    string            `json:"feature_branch"`
-	ValidationPhases map[string]string `json:"validation_phases"` // phase -> "passed"|"failed"|"skipped"
+	Decision      string `json:"decision"` // "allow" or "block"
+	IssueNumber   int    `json:"issue_number"`
+	TargetBranch  string `json:"target_branch"`
+	FeatureBranch string `json:"feature_branch"`
+	// ValidationPhases maps a phase to its outcome:
+	//   "passed"         the phase ran and succeeded
+	//   "failed"         the phase ran and failed (blocks the push)
+	//   "skipped"        the phase was not reached
+	//   "not-applicable" the project has no such phase (e.g. a Node project
+	//                    with no `build` script) — recorded, not silent (#1159)
+	//   "unknown"        the gate could not determine whether the phase
+	//                    applies (blocks: a check that cannot run is not a pass)
+	ValidationPhases map[string]string `json:"validation_phases"`
 	CriticalFindings int               `json:"critical_findings"`
 	Reason           string            `json:"reason,omitempty"`
 	ContextPath      string            `json:"context_path"`
@@ -210,23 +218,55 @@ func runMergedStateValidation(ctx context.Context, runner CmdRunner, workDir, ta
 		}
 		result.ValidationPhases["vet"] = "passed"
 	} else if fileExists(filepath.Join(workDir, "package.json")) {
-		// Node.js project: build, test
-		if out, err := runner.Run(ctx, workDir, "npm", "run", "build"); err != nil {
+		// Node.js project: build, test.
+		//
+		// Ask package.json which scripts EXIST before running them (#1159).
+		// `npm run build` exits 1 with `Missing script: "build"` when the
+		// script is not defined, and that is not a build failure — it is the
+		// gate being unable to run a phase that does not exist. Treating the
+		// two the same blocked every build-less Node project at pre-push with
+		// `Reason: npm build failed`, while feature-validate (which does detect
+		// the absence) passed the same tree: two gates, opposite verdicts, and
+		// the run halted with build-failed after ~12 minutes.
+		//
+		// A package.json that cannot be read or parsed is a third thing again:
+		// the gate cannot determine what to run, so it blocks with a distinct
+		// reason rather than guessing in either direction.
+		scripts, err := nodeScripts(filepath.Join(workDir, "package.json"))
+		if err != nil {
+			result.ValidationPhases["build"] = "unknown"
+			result.ValidationPhases["test"] = "unknown"
+			result.Decision = "block"
+			result.Reason = fmt.Sprintf("package.json could not be read, so build/test coverage is undetermined: %s", truncateStr(err.Error(), 500))
+			return
+		}
+
+		if _, ok := scripts["build"]; !ok {
+			// Recorded, not silent: pre-push-<N>.json carries
+			// "build": "not-applicable" so a missing build step is visible
+			// rather than indistinguishable from a build that passed.
+			result.ValidationPhases["build"] = "not-applicable"
+		} else if out, err := runner.Run(ctx, workDir, "npm", "run", "build"); err != nil {
 			result.ValidationPhases["build"] = "failed"
 			result.Decision = "block"
 			result.Reason = fmt.Sprintf("npm build failed: %s", truncateStr(string(out), 500))
 			return
+		} else {
+			result.ValidationPhases["build"] = "passed"
 		}
-		result.ValidationPhases["build"] = "passed"
 
-		if out, err := runner.Run(ctx, workDir, "npm", "test"); err != nil {
+		if _, ok := scripts["test"]; !ok {
+			result.ValidationPhases["test"] = "not-applicable"
+		} else if out, err := runner.Run(ctx, workDir, "npm", "test"); err != nil {
 			result.ValidationPhases["test"] = "failed"
 			result.Decision = "block"
 			result.Reason = fmt.Sprintf("npm test failed: %s", truncateStr(string(out), 500))
 			return
+		} else {
+			result.ValidationPhases["test"] = "passed"
 		}
-		result.ValidationPhases["test"] = "passed"
-		result.ValidationPhases["vet"] = "skipped" // No vet for Node.js
+
+		result.ValidationPhases["vet"] = "not-applicable" // No vet for Node.js
 	}
 }
 
@@ -383,6 +423,28 @@ func extractIssueFromBranch(branch string) int {
 		n = n*10 + int(ch-'0')
 	}
 	return n
+}
+
+// nodeScripts returns the `scripts` block of a package.json. A package.json
+// that is absent, unreadable or not valid JSON is an error rather than an empty
+// map: "this project defines no scripts" and "I could not find out what scripts
+// this project defines" are different facts, and only the first one licenses
+// skipping a phase (#1159).
+func nodeScripts(packageJSONPath string) (map[string]string, error) {
+	raw, err := os.ReadFile(packageJSONPath)
+	if err != nil {
+		return nil, err
+	}
+	var pkg struct {
+		Scripts map[string]string `json:"scripts"`
+	}
+	if err := json.Unmarshal(raw, &pkg); err != nil {
+		return nil, fmt.Errorf("parse %s: %w", packageJSONPath, err)
+	}
+	if pkg.Scripts == nil {
+		pkg.Scripts = map[string]string{}
+	}
+	return pkg.Scripts, nil
 }
 
 func fileExists(path string) bool {
