@@ -123,6 +123,10 @@ if [ "${#MISSING[@]}" -gt 0 ]; then
 fi
 
 FAIL_COUNT=0
+# Per-step wall clock, parallel arrays (#1217).
+STEP_SECONDS=()
+STEP_LABELS=()
+GATE_STARTED=$SECONDS
 FAILED_STEPS=()
 FAILED_LOGS=()
 
@@ -150,24 +154,158 @@ run_step() {
     printf '%s\n' "$label"
     return 0
   fi
-  local slug log code
+  local slug log code started elapsed
   slug="$(printf '%s' "$label" | tr -c '[:alnum:]' '-' | tr -s '-' | sed 's/^-//; s/-$//')"
   log="$LOG_DIR/${slug}.log"
   echo ""
   echo "▶ $label"
   echo "  \$ $*"
+  started=$SECONDS
   # `tee` keeps the terminal output live; PIPESTATUS[0] preserves the command's
   # own exit code, which a bare pipeline would otherwise replace with tee's.
   "$@" 2>&1 | tee "$log"
   code=${PIPESTATUS[0]}
+  elapsed=$((SECONDS - started))
+  # Per-step wall clock (#1217). Without it "the gate is slow" is unactionable:
+  # 47 sequential steps and no way to tell which three of them are the cost.
+  STEP_SECONDS+=("$elapsed")
+  STEP_LABELS+=("$label")
   if [ "$code" -eq 0 ]; then
-    echo "  ✓ $label"
+    echo "  ✓ $label (${elapsed}s)"
   else
-    echo "  ✗ $label (exit $code)"
+    echo "  ✗ $label (exit $code, ${elapsed}s)"
     FAIL_COUNT=$((FAIL_COUNT + 1))
     FAILED_STEPS+=("$label")
     FAILED_LOGS+=("$log")
   fi
+}
+
+# ── Parallel group runner (#1217) ───────────────────────────────────────────
+#
+# The gate was 836s of steps in 836s of wall clock — purely serial, at 189% CPU
+# on a machine with far more cores. The fix is not "run everything with &": most
+# steps here are ordered on purpose. `make generate-ipc-client` REWRITES a
+# tracked file that a later step checks for drift; `npm run build` writes the
+# dist/ that the test steps import; the mirror regeneration rewrites files the
+# mirror gate then diffs; the publication-boundary scan reads the whole tracked
+# tree and must not race a writer. Parallelising any of those produces exactly
+# the order-dependent flake this gate exists to prevent — and some of those
+# failures would be FALSE GREEN, which is worse than slow.
+#
+# So only steps that are provably read-only w.r.t. the working tree join a
+# group. Each one either shells into a `mktemp -d` sandbox seeded from
+# `git archive HEAD` (every regression suite here does) or only reads. The
+# membership rule is written at the group's declaration site, not here — a
+# reader must be able to see WHY a given step is safe to run concurrently.
+#
+# Failure handling is the load-bearing part. `run_step` accumulates failures in
+# shell arrays, and a backgrounded step runs in a SUBSHELL whose array writes
+# are discarded on exit — so a naive port loses failures silently and the gate
+# reports green over a red step. Exit codes therefore travel through FILES, and
+# the parent re-reads them after `wait`. `run_group_wait` is what appends to
+# FAILED_STEPS, in the parent shell, in declared order.
+GROUP_LABELS=()
+GROUP_PIDS=()
+GROUP_CODEFILES=()
+GROUP_LOGS=()
+GROUP_STARTS=()
+
+# Bounded concurrency. Unbounded would put four `go test` compilations and a
+# 12k-test vitest run on the box at once and thrash; the measured critical path
+# is one 144s step, so there is nothing to gain past a handful of slots.
+CI_LOCAL_JOBS="${CI_LOCAL_JOBS:-4}"
+
+# Escape hatch: CI_LOCAL_SERIAL=1 runs every grouped step inline, in declared
+# order, exactly as before. For bisecting a failure whose interleaving matters,
+# and as the answer to "is this new runner lying to me?".
+CI_LOCAL_SERIAL="${CI_LOCAL_SERIAL:-0}"
+
+run_group() {
+  local label="$1"
+  shift
+  if [ "$LIST_STEPS" -eq 1 ]; then
+    printf '%s\n' "$label"
+    return 0
+  fi
+  if [ "$CI_LOCAL_SERIAL" = "1" ]; then
+    run_step "$label" "$@"
+    return 0
+  fi
+
+  # Throttle to CI_LOCAL_JOBS in flight.
+  while [ "$(jobs -rp | wc -l)" -ge "$CI_LOCAL_JOBS" ]; do
+    wait -n 2>/dev/null || break
+  done
+
+  local slug log codefile
+  slug="$(printf '%s' "$label" | tr -c '[:alnum:]' '-' | tr -s '-' | sed 's/^-//; s/-$//')"
+  log="$LOG_DIR/${slug}.log"
+  codefile="$LOG_DIR/${slug}.exitcode"
+  rm -f "$codefile"
+  echo "▶ $label (started, concurrent)"
+  # The exit code goes to a FILE, not a variable: this subshell's variables die
+  # with it. `$!` is captured immediately so the parent can wait on this exact
+  # child rather than on `jobs`, whose table does not survive into the parent's
+  # later commands.
+  # The child records its OWN duration next to its own exit code. Measuring it
+  # in the parent after `wait` timed queue-to-group-end, so every grouped step
+  # reported the group's total and the summary was useless for finding the
+  # expensive one.
+  ( local_start=$SECONDS
+    "$@" > "$log" 2>&1
+    printf '%s\n' "$?" > "$codefile"
+    printf '%s\n' "$((SECONDS - local_start))" > "$codefile.secs" ) &
+  GROUP_PIDS+=("$!")
+  GROUP_LABELS+=("$label")
+  GROUP_CODEFILES+=("$codefile")
+  GROUP_LOGS+=("$log")
+  GROUP_STARTS+=("$SECONDS")
+}
+
+# Wait for every started group step, then fold the results into the same
+# FAIL_COUNT / FAILED_STEPS the serial path uses, in DECLARED order so output is
+# reproducible regardless of which step happened to finish first.
+run_group_wait() {
+  [ "$LIST_STEPS" -eq 1 ] && return 0
+  [ "${#GROUP_PIDS[@]}" -eq 0 ] && return 0
+
+  local i pid code elapsed
+  for pid in "${GROUP_PIDS[@]}"; do
+    wait "$pid" 2>/dev/null || true
+  done
+
+  for i in "${!GROUP_LABELS[@]}"; do
+    if [ -r "${GROUP_CODEFILES[$i]}.secs" ]; then
+      elapsed="$(cat "${GROUP_CODEFILES[$i]}.secs" 2>/dev/null || echo 0)"
+    else
+      elapsed=$((SECONDS - GROUP_STARTS[i]))
+    fi
+    # A missing exit-code file means the child died without writing one (killed,
+    # disk full, a `set -e` in an unexpected place). Treat it as FAILURE, never
+    # as success: an unobservable step is the false-green case this whole
+    # mechanism exists to avoid.
+    if [ -r "${GROUP_CODEFILES[$i]}" ]; then
+      code="$(cat "${GROUP_CODEFILES[$i]}" 2>/dev/null || echo 1)"
+    else
+      code=1
+      echo "  ! ${GROUP_LABELS[$i]}: no exit code was recorded — treating as FAILED" >&2
+    fi
+    [ -n "$code" ] || code=1
+
+    cat "${GROUP_LOGS[$i]}" 2>/dev/null || true
+    STEP_SECONDS+=("$elapsed")
+    STEP_LABELS+=("${GROUP_LABELS[$i]}")
+    if [ "$code" -eq 0 ] 2>/dev/null; then
+      echo "  ✓ ${GROUP_LABELS[$i]} (${elapsed}s, concurrent)"
+    else
+      echo "  ✗ ${GROUP_LABELS[$i]} (exit $code, ${elapsed}s, concurrent)"
+      FAIL_COUNT=$((FAIL_COUNT + 1))
+      FAILED_STEPS+=("${GROUP_LABELS[$i]}")
+      FAILED_LOGS+=("${GROUP_LOGS[$i]}")
+    fi
+  done
+
+  GROUP_LABELS=(); GROUP_PIDS=(); GROUP_CODEFILES=(); GROUP_LOGS=(); GROUP_STARTS=()
 }
 
 if [ "$LIST_STEPS" -eq 0 ]; then
@@ -189,7 +327,7 @@ run_step "ci-local.sh step inventory" bash scripts/test-ci-local-inventory.sh
 # indistinguishable from one that passed. Piped back through
 # go-test-json-echo.py so the log stays readable.
 run_step "go build ./..." go build ./...
-run_step "go test ./... -count=1 (with skip accounting)" \
+run_group "go test ./... -count=1 (with skip accounting)" \
   bash -c 'set -o pipefail; go test -json ./... -count=1 | tee go-test.json | python3 scripts/go-test-json-echo.py && python3 scripts/check-go-test-skips.py go-test.json'
 # Mirrors ci.yml's "Test (race, whole tree)" step (#493), which replaced the
 # internal/orchestrator-scoped step from #428 — one race step, not two. The
@@ -197,7 +335,7 @@ run_step "go test ./... -count=1 (with skip accounting)" \
 # when a drainBackground() join is deleted from a test body, and that argument
 # was never specific to one package. Measured whole-tree cost: +6% over the
 # plain run (2m48s -> 2m58s on an Apple M-series), not the ~3x once feared.
-run_step "go test -race -count=1 ./..." \
+run_group "go test -race -count=1 ./..." \
   go test -race -count=1 ./...
 run_step "gofmt -l ./internal ./cmd" \
   bash -c '! gofmt -l ./internal ./cmd | grep .'
@@ -206,14 +344,14 @@ run_step "gofmt -l ./internal ./cmd" \
 #     procedure `git branch -D` reclaim decisions defer to (AGENTS.md § Clean
 #     up on merge). Kept aligned with the Go sweep's own ancestry-acceptance
 #     door (#593).
-run_step "branch-merged-check.sh regression suite" \
+run_group "branch-merged-check.sh regression suite" \
   bash scripts/test-branch-merged-check.sh
 
 # 1c. CI change-class gate (#647) — drives scripts/ci-change-class.sh against
 #     real git fixtures AND asserts .github/workflows/ci.yml still consumes its
 #     outputs. Mirrors ci.yml's own ungated step in the Go job; the wiring half
 #     is what makes the gate impossible to document without shipping.
-run_step "CI change-class gate regression suite" \
+run_group "CI change-class gate regression suite" \
   bash scripts/test-ci-change-class.sh
 
 # 2. Generated files must be in sync
@@ -316,7 +454,7 @@ run_step "Publication boundary suite hermeticity" \
 run_step "band-vocabulary reintroduction gate" python3 scripts/check-band-vocabulary.py
 
 # 5d. Band-vocabulary gate self-test — proves the gate still fails closed.
-run_step "Band-vocabulary gate regression suite" bash scripts/test-band-vocabulary-check.sh
+run_group "Band-vocabulary gate regression suite" bash scripts/test-band-vocabulary-check.sh
 
 # 5e. Stale-visibility-prose reintroduction gate (#697) — fails on a tracked
 #     artifact unconditionally asserting this repository is private, the
@@ -326,7 +464,7 @@ run_step "visibility-prose reintroduction gate" python3 scripts/check-visibility
 # 5f. Nonexistent-workflow-reference gate (#545) — fails when a tracked file
 # names a `.github/workflows/*.yml` path that does not exist. Self-test first:
 # a gate nothing exercises degrades into an unconditional pass.
-run_step "Workflow-reference gate regression suite" bash scripts/test-workflow-refs-check.sh
+run_group "Workflow-reference gate regression suite" bash scripts/test-workflow-refs-check.sh
 run_step "nonexistent-workflow-reference gate" python3 scripts/check-workflow-refs.py
 
 # 5g. CLA gate regression suite (#976) — spawns the real .github/scripts/cla-check.mjs
@@ -336,7 +474,7 @@ run_step "nonexistent-workflow-reference gate" python3 scripts/check-workflow-re
 #     (not ci.yml's — this block is the lint.yml mirror region). Costs ~12s: the
 #     backoff is deliberately real, because a test-only zero-delay knob would
 #     re-open the mutation the timing assertion exists to kill.
-run_step "CLA gate regression suite" node --test .github/scripts/cla-check.test.mjs
+run_group "CLA gate regression suite" node --test .github/scripts/cla-check.test.mjs
 
 # 4b. Cache-boundary measurement smoke test
 run_step "Cache-boundary measurement smoke" bash scripts/test-measure-cache-boundary-loss.sh
@@ -385,14 +523,14 @@ run_step "@types/vscode <= engines.vscode" \
 #     dead / unreachable-from-runner / alive-after-reprobe; the suite pins both
 #     directions, so "stop failing on an errored fetch" cannot be satisfied by
 #     no longer failing on a dead internal link.
-run_step "Link-check gate regression suite" bash scripts/test-check-md-links.sh
-run_step "Markdown link check" bash scripts/check-md-links.sh
+run_group "Link-check gate regression suite" bash scripts/test-check-md-links.sh
+run_group "Markdown link check" bash scripts/check-md-links.sh
 
 # 11. Drift-gate self-test — proves the mirror gate below still fails closed
 #     rather than passing vacuously, the defect it was created to fix (#539),
 #     and that it no longer goes red on a dirty tree it has no quarrel with
 #     (#546). Paired with 11b as 5b is paired with 5.
-run_step "Mirror drift gate regression suite" \
+run_group "Mirror drift gate regression suite" \
   bash scripts/test-mirror-drift-gate.sh
 
 # 11a2. Issue-body heading contract (#711) — the required-heading table exists
@@ -401,7 +539,7 @@ run_step "Mirror drift gate regression suite" \
 #       own terminal gate. When the copies drift, every issue the pipeline
 #       authors fails its own audit; that shipped as a WARNING nobody read until
 #       #711. Self-test first, same reasoning as 11 and 5b.
-run_step "Issue-body contract gate regression suite" \
+run_group "Issue-body contract gate regression suite" \
   bash scripts/test-issue-body-contract.sh
 run_step "Issue-body heading contract" \
   python3 scripts/check-issue-body-contract.py
@@ -437,8 +575,31 @@ if [ "$LIST_STEPS" -eq 1 ]; then
   exit 0
 fi
 
+# Slowest steps + total (#1217). Printed on pass AND fail: the run you most
+# want to profile is often the one that failed at minute twelve.
+print_timing_summary() {
+  local total=$((SECONDS - GATE_STARTED))
+  echo ""
+  echo "Wall clock: $((total / 60))m$((total % 60))s total. Slowest steps:"
+  local i
+  for i in "${!STEP_LABELS[@]}"; do
+    printf '%6s  %s\n' "${STEP_SECONDS[$i]}s" "${STEP_LABELS[$i]}"
+  done | sort -rn | head -8 | sed 's/^/  /'
+}
+
+# Collect every concurrent step before summarising. Placed HERE, at the very
+# end, so a grouped step overlaps the entire serial remainder rather than just
+# its immediate neighbours — the Go suites (284s combined) run underneath the
+# npm, lint and doc steps instead of in front of them.
+#
+# Nothing may read a grouped step's result before this point, and nothing does:
+# the group is read-only by construction, so no serial step downstream depends
+# on one having finished.
+run_group_wait
+
 echo ""
 echo "-------------------------------------------------------------------------"
+print_timing_summary
 if [ "$FAIL_COUNT" -eq 0 ]; then
   echo "✓ All CI-parity checks passed."
   exit 0
