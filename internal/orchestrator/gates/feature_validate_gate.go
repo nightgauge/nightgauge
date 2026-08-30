@@ -3,6 +3,7 @@ package gates
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/nightgauge/nightgauge/internal/ci"
 	"github.com/nightgauge/nightgauge/internal/deliverable"
@@ -24,6 +25,21 @@ func (FeatureValidateGate) Name() string { return "feature-validate" }
 // Verify implements StageGate.
 func (FeatureValidateGate) Verify(_ context.Context, issueNumber int, workspace string) GateResult {
 	return timedKindTerminal("feature-validate", func() (bool, string, []string, Kind, string) {
+		// #1182: run the deliverable-schema policy over validate-{N}.json before
+		// anything reads it. `validate-340` and `validate-232` shipped gate
+		// metrics with no `gate_name` behind nothing but a warning; a nameless
+		// row can neither be counted in a per-gate tally nor excluded from one,
+		// so the policy drops it and marks `gate_metrics` untrustworthy inside
+		// the deliverable. Tolerating a mismatch and silently forwarding it are
+		// different things — this is the difference.
+		validatePolicy, policyErr := deliverable.ApplyPolicyToFile(
+			"validate", contextFilePath(workspace, "validate", issueNumber), time.Now())
+		if policyErr == nil && !validatePolicy.OK() {
+			evidence := append([]string{}, validatePolicy.Summary()...)
+			return false, "validate context does not match the expected schema and no total repair exists",
+				evidence, KindFail, TerminalKindValidationError
+		}
+
 		results, err := state.ReadGateMetricsForIssue(workspace, issueNumber)
 		if err != nil {
 			return false, "failed to read gate-metrics.jsonl", []string{err.Error()}, KindFail, ""
@@ -47,6 +63,7 @@ func (FeatureValidateGate) Verify(_ context.Context, issueNumber int, workspace 
 		}
 
 		details := []string{fmt.Sprintf("gates=%d", len(results))}
+		details = append(details, validatePolicy.Summary()...)
 		if summary := markUnexercisedDeliverable(issueNumber, workspace); summary != "" {
 			details = append(details, summary)
 		}

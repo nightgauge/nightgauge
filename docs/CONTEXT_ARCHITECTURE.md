@@ -1604,6 +1604,114 @@ compatibility.
 
 @see Issue #418 - Schema migration for pipeline routing
 
+## The Deliverable-Schema Policy (#1182, #1176, #1177)
+
+A stage deliverable that does not match its schema used to have two possible
+fates and no way to predict which. The TypeScript context-file validator logged
+`(non-fatal, continuing)` and shipped the run; the Go post-condition gate failed
+the stage and discarded the work. Across one ten-run session that produced
+**eight mismatches in five fields across three stages** — seven warnings and one
+`$6.12` loss — and **the difference was not severity**. It was which validator
+happened to look at that particular field. `files_changed` is a field the gate
+inspects; `gate_metrics.result` is not. Nothing about the _work_ differed.
+
+One closed rule table now decides, and both validation points consult it:
+
+| Validation point       | Where                                                                                                                                                           | Runs                                         |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------- |
+| In-stage self-check    | `nightgauge gate check-deliverable` (`internal/deliverable/policy.go`)                                                                                          | Before the stage exits                       |
+| Context-file validator | `ContextAssembler.validateStageContextOutput`, and the prerequisite read in `HeadlessOrchestrator` (`packages/nightgauge-sdk/src/context/deliverablePolicy.ts`) | After the stage, and before a consumer reads |
+| Post-condition gate    | `FeatureDevGate` / `FeatureValidateGate` (`internal/deliverable/policy.go`)                                                                                     | After the stage                              |
+
+The Go and TypeScript implementations are driven by one shared conformance
+corpus, `schemas/deliverable-policy-corpus-v1.json`, read by both suites. Two
+implementations of one policy drift in silence — that file is what turns a drift
+into a failing suite instead of a failing run.
+
+### Three dispositions
+
+- **`repaired`** — every value the schema wants is already in the file; only the
+  shape or the vocabulary is wrong, and the mapping is a hand-written entry in
+  the table. The value is rewritten, the deliverable is written back, and the
+  repair is recorded. No rule infers, partially fills, or asks a model; a rule
+  that cannot prove its repair is TOTAL returns `fatal` instead.
+- **`quarantined`** — a value is genuinely absent in a field no consumer's
+  control flow reads. The offending entry is **removed** rather than forwarded
+  malformed, and the field is named in `_deliverable_policy.untrustworthy`.
+  Tolerating a mismatch and silently propagating one are different things.
+- **`fatal`** — a value a consumer needs is absent, or present in a form no
+  closed rule can map without guessing. Both validation points fail the stage.
+
+### The rule table
+
+| Rule                                                                                   | Disposition | Why                                                                                                                      |
+| -------------------------------------------------------------------------------------- | ----------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `any.document.not_an_object`                                                           | fatal       | Nothing to read.                                                                                                         |
+| `any.schema_version.stamped`                                                           | repaired    | The version is asserted from the binary's registry, not read (#1177).                                                    |
+| `dev.files_changed.from_sibling_manifest`                                              | repaired    | The array and the union of `files_created`/`files_modified`/`files_deleted` name the **same set**; the rebuild is total. |
+| `dev.files_changed.no_sibling_manifest`                                                | fatal       | The created/modified split was never written.                                                                            |
+| `dev.files_changed.sibling_manifest_incomplete`                                        | fatal       | The sets differ, so some path's classification is unknown — a partial fill is inference.                                 |
+| `dev.files_changed.non_string_entries`                                                 | fatal       | No rule maps it.                                                                                                         |
+| `any.quality_checks.vocabulary`                                                        | repaired    | Closed synonym table (`not run`, `N/A`, `pass`, …).                                                                      |
+| `any.quality_checks.unknown_vocabulary`                                                | quarantined | An unrecognised verdict is dropped, never reported as a verdict it does not mean.                                        |
+| `validate.skipped_phases.entry_not_an_object`                                          | quarantined | A bare string names the phase and omits the reason — and the reason is the field's whole point.                          |
+| `validate.skipped_phases.incomplete_entry`                                             | quarantined | A skip with no stated reason is not evidence of anything.                                                                |
+| `validate.gate_metrics.missing_gate_name`                                              | quarantined | The record is tallied **by gate**; a nameless row can neither be counted nor excluded.                                   |
+| `validate.gate_metrics.result_vocabulary`                                              | repaired    | Closed synonym table over `{pass, catch, fail}`.                                                                         |
+| `validate.gate_metrics.unknown_result` / `result_not_a_string` / `entry_not_an_object` | quarantined | Unattributable telemetry, dropped.                                                                                       |
+
+The list is **closed**. A new rule is a deliberate addition to
+`internal/deliverable/policy.go`, its TypeScript mirror, and the shared corpus,
+in one change — the corpus's `policy_version` gate makes a one-sided edit fail.
+
+Two of the #1182 rows were not bad emissions at all, but **schema drift**, and
+were fixed at the source rather than papered over by a rule:
+
+- `gate_metrics[].result` accepted `{pass, catch}` in the deliverable while the
+  gate-metrics record it feeds accepted `{pass, catch, fail}`, so a legitimate
+  adversarial-judge `"fail"` read as an invalid option. The two lists are now
+  one list.
+- Three of the four `quality_checks` verdicts omitted `not_run` while
+  `dead_code_scan` accepted it — and the include that authors the block defaults
+  `dead_code_scan` to `not_run`. All four now share one vocabulary.
+
+### The record
+
+When the policy changes anything, it stamps the deliverable:
+
+```json
+"_deliverable_policy": {
+  "policy_version": "1",
+  "applied_at": "2026-08-29T12:00:00Z",
+  "repairs": [{ "field": "files_changed", "rule": "dev.files_changed.from_sibling_manifest", "detail": "…" }],
+  "quarantined": [{ "field": "gate_metrics.0", "rule": "validate.gate_metrics.missing_gate_name", "detail": "…" }],
+  "untrustworthy": ["gate_metrics"]
+}
+```
+
+A healthy deliverable never grows this key, so the marker's presence is itself
+the signal. The same notes ride the `GateResult` evidence into the run record —
+a repair that passes silently is a repair nobody ever fixes.
+
+### Catching it before the spend (#1177)
+
+The dev deliverable's shape was prescriptive text: an exact `jq -n` template in
+`skills/nightgauge-feature-dev/_includes/context-and-epilogue.md`, followed by
+`jq . "$FILE"` — which proves the file is well-formed JSON, a much weaker claim
+than "matches the contract". Nothing verified the stage had used the template at
+all. #1177's run wrote a flat `files_changed` array against `schema_version:
+"1.5"`, three contracts old, and the emitted object contained `"committed":
+False` and `"commit_sha": None` — Python literals no `jq` invocation can produce.
+The model hand-wrote the deliverable from a remembered schema and the only
+detector was the gate, `$6.12` later.
+
+Both stage includes now run `nightgauge gate check-deliverable --stage <kind>
+--issue <N>` before exiting. It applies the same rule table, repairs in place,
+stamps `schema_version` from the binary's registry, and exits 1 while the stage
+still has the context to correct itself. A Go test asserts the include still
+calls it, and another asserts the include's `schema_version` literal matches
+`CanonicalSchemaVersion` — so the two statements of that one fact cannot drift.
+
 ## Model Selection Decision Flow
 
 When a pipeline stage executes, `skillRunner.ts` resolves the AI model to use

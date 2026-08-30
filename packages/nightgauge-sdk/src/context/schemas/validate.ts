@@ -92,7 +92,15 @@ const SkippedPhaseSchema = z.object({
  */
 const GateMetricEntrySchema = z.object({
   gate_name: z.string().min(1),
-  result: z.enum(["pass", "catch"]),
+  /**
+   * #1182: the SAME set the gate-metrics record accepts
+   * (`packages/nightgauge-vscode/src/schemas/gateMetrics.ts`). This used to be
+   * `["pass", "catch"]` while the record it feeds accepted
+   * `["pass", "catch", "fail"]`, so a legitimate adversarial-judge `"fail"` was
+   * reported here as an invalid option. That drift was the defect in
+   * `validate-340`, not the emission. Keep the two lists identical.
+   */
+  result: z.enum(["pass", "catch", "fail"]),
   duration_ms: z.number().int().min(0).nullish(),
 });
 

@@ -18,6 +18,21 @@ Before #3266, each stage had its own ad-hoc post-state check
 (`verifyPostMergeState` in TS, inline `loadFeatureBranch` / `loadPrUrl`
 calls on the Go side). This guide describes the unified replacement.
 
+## The deliverable-schema policy
+
+A gate whose only verb is _reject_ punishes a bookkeeping defect exactly as hard
+as a substantive one. Before decoding a deliverable, `FeatureDevGate` and
+`FeatureValidateGate` run the closed rule table in `internal/deliverable/policy.go`:
+a totally repairable shape is rewritten and recorded, an unattributable telemetry
+entry is quarantined and marked untrustworthy, and anything genuinely missing
+still fails. The SAME table runs at the TypeScript context-file validator and
+in-stage via `nightgauge gate check-deliverable`, so one defect cannot be a
+warning in one stage and a run-ender in the next.
+
+See
+[docs/CONTEXT_ARCHITECTURE.md § The Deliverable-Schema Policy](CONTEXT_ARCHITECTURE.md#the-deliverable-schema-policy-1182-1176-1177)
+for the rule table and dispositions.
+
 ## The framework
 
 ```
