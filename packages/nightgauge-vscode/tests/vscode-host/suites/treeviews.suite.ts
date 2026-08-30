@@ -29,7 +29,6 @@ export const EXPECTED_TREE_VIEW_IDS = [
   "nightgauge.repositoriesView",
   "nightgauge.queryResults",
   "nightgauge.knowledgeView",
-  "nightgauge.activeIssueKnowledgeView",
   "nightgauge.attentionView",
 ] as const;
 

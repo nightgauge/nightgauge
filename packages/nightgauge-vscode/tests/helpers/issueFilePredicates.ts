@@ -5,7 +5,7 @@
  * Production writes and reads issue context as
  * `<workspaceRoot>/.nightgauge/pipeline/issue-<n>.json`
  * (`RepositoryContextLoader.getContextFile("issue", n)` and
- * `ContextAssembler.getContextPath("issue", n)`; `ActiveIssueKnowledgeProvider`
+ * `ContextAssembler.getContextPath("issue", n)`; `KnowledgeTreeProvider`
  * composes the same basename by hand). The identity of that file is therefore
  * its **basename**, never a substring of its absolute path.
  *
