@@ -421,15 +421,18 @@ the existing Issue #708 short-circuit.
 
 ### dev-{N}.json
 
-**Created by**: `/nightgauge-feature-dev` **Read by**:
+**Created by**: `/nightgauge-feature-dev`, **or derived from git by the
+feature-dev stage gate when the stage did not write one** (#1076 — see
+[The derived handoff](#the-derived-handoff-1076) below). **Read by**:
 `/nightgauge-pr-create`, `/nightgauge-feature-validate`
 
-**Schema Version**: 1.6 (version 1.1 adds `build_verification` object, extends
+**Schema Version**: 1.9 (version 1.1 adds `build_verification` object, extends
 `tests_status` with test detail fields, and extends `quality_checks` with
 `type_check` and `dead_code_scan` — issue #867; version 1.2 makes `commit_sha`
 always null — commit+push moved to feature-validate — issue #1608; version 1.5
 adds `knowledge_path` — issue #1679; version 1.6 adds `cross_repo_knowledge` —
-issue #1700)
+issue #1700; version 1.9 adds `handoff_source` and `handoff_derivation` —
+issue #1076)
 
 ```json
 {
@@ -498,6 +501,52 @@ issue #1700)
 | `created_at`                        | string | Yes      | ISO 8601 timestamp                                                                                                                             |
 | `knowledge_path`                    | string | No       | Path to knowledge directory for this issue (v1.5+)                                                                                             |
 | `cross_repo_knowledge`              | array  | No       | Cross-repo knowledge entries from planning context, threaded to dev for implementation context (v1.6+). Each entry: `{repo, path, entries[]}`. |
+| `handoff_source`                    | string | No       | Provenance of `files_changed`: `authored` (the stage wrote this file) or `derived` (git did, #1076). Absent on pre-1.9 documents (v1.9+).      |
+| `handoff_derivation`                | object | No       | Present only when `handoff_source` is `derived`: `{derived_at, reason, probe_mode, narrative_preserved}` (v1.9+).                              |
+
+#### The derived handoff (#1076)
+
+`feature-dev` was the last stage-boundary artifact whose existence depended on
+a model remembering to write it — phase 14 of 18, four phases of bookkeeping
+after the implementation was already finished. #223 built a detector for what
+that costs (`dev_handoff_missing`: the deliverable records zero files while git
+holds dozens) and it reported the same defect for months, because nothing ever
+fixed the producer.
+
+The failure is not about context length or attention, which is why more prompt
+emphasis never helped. In one observed run the `implementation`
+phase COMPLETED and every phase after it — `write-dev-context` included — was
+recorded `skipped`: the stage backgrounded its test run, spun on `sleep 1; echo
+waiting`, and idled out. A handoff that exists only as an instruction is
+unreachable the moment a stage stops advancing phases, for any reason.
+
+So the gate derives it. Before any post-condition check reads the document, the
+same ground-truth probe that used to only convict a missing handoff now writes
+one from git — the same move `pr-create` and `pr-merge` already made
+([PR_CREATE_STAGE.md](PR_CREATE_STAGE.md),
+[PR_MERGE_STAGE.md](PR_MERGE_STAGE.md)): deterministic path first, model as
+enrichment.
+
+What a derived handoff does and does not claim:
+
+| Field                | Derived value                      | Why                                                                                                       |
+| -------------------- | ---------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `files_changed`      | git's answer, uncapped             | git is authoritative for WHAT changed, and the stage is not a witness to it                               |
+| `build_verification` | `ran: false`, `status: unverified` | Nothing here ran a build; `passed` would be a self-granted exemption                                      |
+| `tests_status`       | zeroes, empty `test_command`       | Same — feature-validate runs the suite for real, as it always did                                         |
+| `quality_checks`     | all `not_run`                      | Same                                                                                                      |
+| narrative fields     | preserved from a partial document  | `knowledge_path`, `architectural_constraints`, `retry_*`, `feedback` — git cannot reconstruct any of them |
+
+Two boundaries matter:
+
+- **An empty tree still fails.** Derivation is declined when git finds no work
+  or cannot answer, so `dev_produced_no_changes` (#202) and the missing-context
+  no-op reach the operator exactly as before. Papering over those would trade a
+  loud failure for a silent one.
+- **A derived pass is degraded, not healthy.** `handoff_source` is in the
+  document and in the gate's run-record evidence on every passing run, so
+  "this deliverable came from git, not from the stage" is queryable rather than
+  inferred from a missing field.
 
 ### validate-{N}.json
 

@@ -37,6 +37,13 @@ vi.mock("../../../src/utils/zodErrorFormatter", () => ({
 import * as fs from "fs";
 
 import { ContextAssembler } from "../../../src/orchestrator/context/ContextAssembler";
+import { canonicalSchemaVersion } from "@nightgauge/sdk";
+
+// Read the contract version from the registry rather than pinning a literal:
+// a fixture that is "already canonical" is by definition on the current
+// contract, so a hardcoded version fails on the next legitimate bump for a
+// reason unrelated to what these tests assert (#1076).
+const DEV_SCHEMA_VERSION = canonicalSchemaVersion("dev")!;
 
 const mockExistsSync = vi.mocked(fs.existsSync);
 const mockReadFileSync = vi.mocked(fs.readFileSync);
@@ -119,14 +126,14 @@ describe("validateStageContextOutput — repairable shape (#1176)", () => {
   it("stamps schema_version from the contract, not the skill's claim (#1177)", async () => {
     const { assembler } = stage(devDeliverable);
     await assembler.validateStageContextOutput("feature-dev", 210);
-    expect(writtenBack()!.schema_version).toBe("1.8");
+    expect(writtenBack()!.schema_version).toBe(DEV_SCHEMA_VERSION);
   });
 });
 
 describe("validateStageContextOutput — unrepairable (#1176 AC)", () => {
   it("fails when the created/modified split was never written", async () => {
     const { assembler } = stage({
-      schema_version: "1.8",
+      schema_version: DEV_SCHEMA_VERSION,
       issue_number: 211,
       files_changed: ["src/a.ts", "src/b.ts"],
     });
@@ -137,7 +144,7 @@ describe("validateStageContextOutput — unrepairable (#1176 AC)", () => {
 
   it("fails rather than partially filling a manifest that misses a path", async () => {
     const { assembler } = stage({
-      schema_version: "1.8",
+      schema_version: DEV_SCHEMA_VERSION,
       issue_number: 212,
       files_changed: ["src/a.ts", "src/unaccounted.ts"],
       files_created: ["src/a.ts"],
@@ -149,7 +156,7 @@ describe("validateStageContextOutput — unrepairable (#1176 AC)", () => {
 
   it("never writes a document back on a fatal outcome", async () => {
     const { assembler } = stage({
-      schema_version: "1.8",
+      schema_version: DEV_SCHEMA_VERSION,
       issue_number: 211,
       files_changed: ["src/a.ts"],
     });
@@ -202,7 +209,7 @@ describe("validateStageContextOutput — quarantine (#1182 AC 3)", () => {
 describe("validateStageContextOutput — a healthy deliverable is left alone", () => {
   it("does not rewrite a conforming file", async () => {
     const { assembler } = stage({
-      schema_version: "1.8",
+      schema_version: DEV_SCHEMA_VERSION,
       issue_number: 300,
       files_changed: { created: [], modified: ["src/a.ts"], deleted: [] },
       build_verification: { ran: true, status: "passed" },

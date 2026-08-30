@@ -182,8 +182,13 @@ func TestRepairIsRecordedInTheDeliverable(t *testing.T) {
 // TestCleanDeliverableGrowsNoMarker — a healthy file must not accumulate
 // bookkeeping. The marker's presence is itself the signal.
 func TestCleanDeliverableGrowsNoMarker(t *testing.T) {
+	// Read the version from the registry rather than pinning a literal: a
+	// clean document is BY DEFINITION one already on the current contract, so
+	// hardcoding a version here makes this test fail on the next legitimate
+	// bump for a reason that has nothing to do with what it asserts.
+	current, _ := CanonicalSchemaVersion("dev")
 	out := ApplyPolicy("dev", map[string]any{
-		"schema_version": "1.8",
+		"schema_version": current,
 		"files_changed":  map[string]any{"created": []any{}, "modified": []any{"a.ts"}, "deleted": []any{}},
 	})
 	if out.Changed {

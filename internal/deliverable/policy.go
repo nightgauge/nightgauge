@@ -191,7 +191,7 @@ func topLevelField(path string) string {
 // A drift test asserts each value here equals the literal in the skill include
 // that authors the deliverable, so bumping one without the other fails CI.
 var canonicalSchemaVersion = map[string]string{
-	"dev":      "1.8",
+	"dev":      "1.9",
 	"validate": "2.6",
 }
 

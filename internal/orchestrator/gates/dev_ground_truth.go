@@ -32,6 +32,49 @@ func statusArgs() []string {
 	return append([]string{"status", "--porcelain", "--untracked-files=all", "--"}, ci.DeliverablePathspec()...)
 }
 
+// devFileSet is a changed-file list split into the three buckets the dev
+// deliverable's `files_changed` records. It exists so the gate and a derived
+// handoff read one classification instead of two.
+type devFileSet struct {
+	Created  []string
+	Modified []string
+	Deleted  []string
+}
+
+// Total is the number of paths across all three buckets.
+func (s devFileSet) Total() int { return len(s.Created) + len(s.Modified) + len(s.Deleted) }
+
+// Paths flattens the set in created/modified/deleted order.
+func (s devFileSet) Paths() []string {
+	out := make([]string, 0, s.Total())
+	out = append(out, s.Created...)
+	out = append(out, s.Modified...)
+	out = append(out, s.Deleted...)
+	return out
+}
+
+// classifyStatus splits porcelain entries into git's verbs.
+//
+// The XY field is two characters — index status then worktree status — and a
+// path can carry a different verb in each (a staged add later deleted from the
+// tree reads "AD"). The bucket a path lands in is decided by the strongest
+// claim across both columns, in the order delete > add > modify, so a file git
+// says is gone is never recorded as merely modified.
+func classifyStatus(entries []reclaim.StatusEntry) devFileSet {
+	var set devFileSet
+	for _, e := range entries {
+		switch {
+		case e.Untracked(), strings.ContainsRune(e.XY, 'A'):
+			set.Created = append(set.Created, e.Path)
+		case strings.ContainsRune(e.XY, 'D'):
+			set.Deleted = append(set.Deleted, e.Path)
+		default:
+			set.Modified = append(set.Modified, e.Path)
+		}
+	}
+	return set
+}
+
 // devWorkState is the answer to "did this stage actually produce anything?"
 // derived from git, not from what the skill wrote about itself.
 type devWorkState struct {
@@ -53,6 +96,13 @@ type devWorkState struct {
 	Files []string
 	// FileCount is the true total, which may exceed len(Files).
 	FileCount int
+	// AllFiles is the uncapped list Files is a view of, split into git's
+	// own verbs. Files/FileCount serve a human reading a verdict; a derived
+	// handoff (#1076) has to reproduce the deliverable exactly, and a list
+	// truncated at maxFilesReported would hand feature-validate a shorter
+	// file set than the one on disk — the same understating-the-work defect
+	// --untracked-files=all exists to prevent.
+	AllFiles devFileSet
 	// Stranded names sibling worktrees that DO hold uncommitted work while
 	// this one is empty — the #202 signature. Diagnostic only; it never
 	// changes the verdict, it explains it.
@@ -156,12 +206,14 @@ func inspectDevWork(workspace string, declared []string) devWorkState {
 		return devWorkState{}
 	}
 	if strings.TrimSpace(status) != "" {
+		entries := reclaim.ParseStatus(status)
 		paths := statusPaths(status)
 		return devWorkState{
 			Determined: true,
 			HasWork:    true,
 			Files:      capped(paths),
 			FileCount:  len(paths),
+			AllFiles:   classifyStatus(entries),
 		}
 	}
 
@@ -183,6 +235,7 @@ func inspectDevWork(workspace string, declared []string) devWorkState {
 				HasWork:        true,
 				Files:          capped(paths),
 				FileCount:      len(paths),
+				AllFiles:       classifyStatus(reclaim.ParseStatus(bkStatus)),
 				Mode:           "bookkeeping",
 				DeclaredCount:  len(declared),
 				ConfirmedCount: len(paths),
@@ -210,6 +263,11 @@ func inspectDevWork(workspace string, declared []string) devWorkState {
 			HasWork:    true,
 			Files:      capped(deliverable),
 			FileCount:  len(deliverable),
+			// `git diff --name-only` carries no verb, so every path lands in
+			// Modified. The bucket is the one thing a derived handoff cannot
+			// know here; the file LIST — which is what the gate counts and
+			// what feature-validate consumes — is exact either way.
+			AllFiles: devFileSet{Modified: deliverable},
 		}
 	}
 

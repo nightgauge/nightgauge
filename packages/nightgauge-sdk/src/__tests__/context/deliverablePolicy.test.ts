@@ -13,6 +13,12 @@ import {
   type PolicyOutcome,
 } from "../../context/deliverablePolicy.js";
 import { DevContextSchema } from "../../context/schemas/dev.js";
+
+// Read the contract version from the registry rather than pinning a literal.
+// A fixture that is "already canonical" is BY DEFINITION on the current
+// contract, so a hardcoded version makes these cases fail on the next
+// legitimate bump for a reason unrelated to what they assert (#1076).
+const DEV_SCHEMA_VERSION = canonicalSchemaVersion("dev")!;
 import { ValidateContextSchema } from "../../context/schemas/validate.js";
 
 /**
@@ -103,7 +109,7 @@ describe("one policy, one consequence (#1182)", () => {
     {
       row: "dev-170 quality_checks.type_check invalid option",
       kind: "dev",
-      doc: { schema_version: "1.8", quality_checks: { type_check: "not run" } },
+      doc: { schema_version: DEV_SCHEMA_VERSION, quality_checks: { type_check: "not run" } },
       verdict: "repaired",
     },
     {
@@ -115,7 +121,7 @@ describe("one policy, one consequence (#1182)", () => {
     {
       row: "dev-340 quality_checks.security_review invalid option",
       kind: "dev",
-      doc: { schema_version: "1.8", quality_checks: { security_review: "N/A" } },
+      doc: { schema_version: DEV_SCHEMA_VERSION, quality_checks: { security_review: "N/A" } },
       verdict: "repaired",
     },
     {
@@ -140,7 +146,7 @@ describe("one policy, one consequence (#1182)", () => {
       row: "dev-210 files_changed expected object, got array (repairable)",
       kind: "dev",
       doc: {
-        schema_version: "1.8",
+        schema_version: DEV_SCHEMA_VERSION,
         files_changed: ["a.ts"],
         files_modified: ["a.ts"],
       },
@@ -149,7 +155,7 @@ describe("one policy, one consequence (#1182)", () => {
     {
       row: "dev files_changed array with no manifest (unrepairable)",
       kind: "dev",
-      doc: { schema_version: "1.8", files_changed: ["a.ts"] },
+      doc: { schema_version: DEV_SCHEMA_VERSION, files_changed: ["a.ts"] },
       verdict: "fatal",
     },
   ];
@@ -191,7 +197,7 @@ describe("the policy output satisfies the schema it is repairing", () => {
 
   it("repairs the quality-check vocabulary into something DevContextSchema accepts", () => {
     const out = applyDeliverablePolicy("dev", {
-      schema_version: "1.8",
+      schema_version: DEV_SCHEMA_VERSION,
       issue_number: 170,
       quality_checks: { type_check: "not run", security_review: "N/A", dead_code_scan: "not_run" },
     });
@@ -238,7 +244,7 @@ describe("the repair is recorded, and only when there was one (#1176)", () => {
 
   it("leaves a clean deliverable unmarked — the marker's presence is the signal", () => {
     const out = applyDeliverablePolicy("dev", {
-      schema_version: "1.8",
+      schema_version: DEV_SCHEMA_VERSION,
       files_changed: { created: [], modified: ["a.ts"], deleted: [] },
     });
     expect(out.changed).toBe(false);
