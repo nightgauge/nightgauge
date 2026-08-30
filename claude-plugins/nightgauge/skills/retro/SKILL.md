@@ -199,14 +199,14 @@ RECORD_OUTCOME=false
 
 ```bash
 if [ -n "$SINCE_DATE" ]; then
-  if ! echo "$SINCE_DATE" | grep -qE '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'; then
+  if ! printf '%s\n' "$SINCE_DATE" | grep -qE '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'; then
     echo "ERROR: --since must be YYYY-MM-DD format (got: $SINCE_DATE)"
     exit 1
   fi
 fi
 
 VALID_FORMATS="summary json both"
-if ! echo "$VALID_FORMATS" | grep -qw "$OUTPUT_FORMAT"; then
+if ! printf '%s\n' "$VALID_FORMATS" | grep -qw "$OUTPUT_FORMAT"; then
   echo "ERROR: --format must be one of: $VALID_FORMATS"
   exit 1
 fi
@@ -856,8 +856,8 @@ SEARCH_TITLE="fix(pipeline): ${ACTION_SUMMARY}"
 EXISTING=$(nightgauge forge issue list --search "${SEARCH_TITLE}" --state open --json number,title --limit 5)
 
 # If duplicate found, skip and report
-if echo "$EXISTING" | jq -e 'length > 0' > /dev/null 2>&1; then
-  echo "SKIP: Similar issue already exists: $(echo "$EXISTING" | jq -r '.[0] | "#\(.number) \(.title)"')"
+if printf '%s\n' "$EXISTING" | jq -e 'length > 0' > /dev/null 2>&1; then
+  echo "SKIP: Similar issue already exists: $(printf '%s\n' "$EXISTING" | jq -r '.[0] | "#\(.number) \(.title)"')"
   continue
 fi
 ```
@@ -986,9 +986,9 @@ to score each ADR and returns only those at or above the threshold.
 GRADUATION_SECTION=""
 if [ -n "$ISSUE_NUMBER" ]; then
   CANDIDATES_JSON=$(nightgauge knowledge graduate-candidates "$ISSUE_NUMBER" --json 2>/dev/null || echo '{"issue":0,"candidates":[]}')
-  CAND_COUNT=$(echo "$CANDIDATES_JSON" | jq '.candidates | length' 2>/dev/null || echo 0)
+  CAND_COUNT=$(printf '%s\n' "$CANDIDATES_JSON" | jq '.candidates | length' 2>/dev/null || echo 0)
   if [ "$CAND_COUNT" -gt 0 ]; then
-    GRADUATION_SECTION=$(echo "$CANDIDATES_JSON" | jq -r '
+    GRADUATION_SECTION=$(printf '%s\n' "$CANDIDATES_JSON" | jq -r '
       "## Graduation Candidates\n\nThese ADRs from this issue look like good candidates to graduate to permanent docs. Run `nightgauge knowledge graduate \(.issue) --section <docs-path> --adr ADR-NNN` to start the ritual.\n\n| ADR | Score | Signals | Suggested Dest |\n|-----|-------|---------|----------------|\n" +
       (.candidates | map("| \"\(.adr_title)\" (ADR-\(.adr_index | tostring | (if length < 3 then ("000" + .) | .[-3:] else . end))) | \(.score) | \(.signals | join(", ")) | \(.suggested_dest) |") | join("\n"))
     ')
@@ -1188,18 +1188,18 @@ For each **recurring** friction pattern (count >= 2), generate a
 
 ```bash
 if [ -n "$EPIC_NUMBER" ] && [ -n "$SYNTHESIS_RESULT" ]; then
-  RECURRING_COUNT=$(echo "$SYNTHESIS_RESULT" | jq '.recurring_friction | length' 2>/dev/null || echo "0")
+  RECURRING_COUNT=$(printf '%s\n' "$SYNTHESIS_RESULT" | jq '.recurring_friction | length' 2>/dev/null || echo "0")
 
   if [ "$RECURRING_COUNT" -gt 0 ]; then
     echo "=== RECURRING SKILL FRICTION (${RECURRING_COUNT} patterns) ==="
-    echo "$SYNTHESIS_RESULT" | jq -r '.recurring_friction[] |
+    printf '%s\n' "$SYNTHESIS_RESULT" | jq -r '.recurring_friction[] |
       "[\(.severity | ascii_upcase)] \(.pattern) — seen \(.count)x across issues \(.affected_issues | join(", "))
       Fix: \(.suggested_fix // "No suggestion")\n"'
 
     # Write synthesis to assessments dir for dashboard consumption
     SYNTHESIS_FILE="$ASSESSMENT_DIR/synthesis-epic-${EPIC_NUMBER}.json"
     mkdir -p "$ASSESSMENT_DIR"
-    echo "$SYNTHESIS_RESULT" | jq --arg epic "$EPIC_NUMBER" \
+    printf '%s\n' "$SYNTHESIS_RESULT" | jq --arg epic "$EPIC_NUMBER" \
       '. + {"epic_number": ($epic | tonumber), "synthesized_at": (now | todate)}' \
       > "$SYNTHESIS_FILE"
     echo "Synthesis written to: $SYNTHESIS_FILE"
@@ -1215,13 +1215,13 @@ When `--create-issues` is active and recurring friction has `severity >= medium`
 
 ```bash
 if [ "$CREATE_ISSUES" = "true" ] && [ "$RECURRING_COUNT" -gt 0 ]; then
-  echo "$SYNTHESIS_RESULT" | jq -c '.recurring_friction[] | select(.severity == "high" or .severity == "medium")' | \
+  printf '%s\n' "$SYNTHESIS_RESULT" | jq -c '.recurring_friction[] | select(.severity == "high" or .severity == "medium")' | \
   while IFS= read -r proposal; do
-    PATTERN=$(echo "$proposal" | jq -r '.pattern')
-    FIX=$(echo "$proposal" | jq -r '.suggested_fix // "Review and update skill instructions"')
-    COUNT=$(echo "$proposal" | jq -r '.count')
-    ISSUES=$(echo "$proposal" | jq -r '.affected_issues | map("#" + tostring) | join(", ")')
-    SEVERITY=$(echo "$proposal" | jq -r '.severity')
+    PATTERN=$(printf '%s\n' "$proposal" | jq -r '.pattern')
+    FIX=$(printf '%s\n' "$proposal" | jq -r '.suggested_fix // "Review and update skill instructions"')
+    COUNT=$(printf '%s\n' "$proposal" | jq -r '.count')
+    ISSUES=$(printf '%s\n' "$proposal" | jq -r '.affected_issues | map("#" + tostring) | join(", ")')
+    SEVERITY=$(printf '%s\n' "$proposal" | jq -r '.severity')
 
     TITLE="fix(skills): ${PATTERN}"
     BODY="## Recurring Skill Friction

@@ -72,7 +72,7 @@ Handle: `MERGED` → exit 0, `CLOSED` → exit 1.
 #### Step 1.4: Extract Issue Number
 
 ```bash
-ISSUE_NUMBER=$(echo $BRANCH | grep -oE '[0-9]+' | head -1)
+ISSUE_NUMBER=$(printf '%s\n' "$BRANCH" | grep -oE '[0-9]+' | head -1)
 ```
 
 #### Step 1.5: Pre-CI Go Build Integrity Check
@@ -103,7 +103,7 @@ if [ "$SKIP_VET" = "false" ] && [ -f "go.mod" ] && command -v go >/dev/null 2>&1
   VET_OUTPUT=$(go vet ./... 2>&1 || true)
 
   # Detect duplicate declaration errors (common in concurrent epic development)
-  DUPLICATE_DECLS=$(echo "$VET_OUTPUT" | grep -E "redeclared in this block|declared and not used.*redeclared" || true)
+  DUPLICATE_DECLS=$(printf '%s\n' "$VET_OUTPUT" | grep -E "redeclared in this block|declared and not used.*redeclared" || true)
 
   if [ -n "$DUPLICATE_DECLS" ]; then
     echo ""

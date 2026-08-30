@@ -26,7 +26,7 @@ this is "no implementation work" — see below.
 
 ```bash
 BRANCH=$(git branch --show-current)
-ISSUE_NUMBER=$(echo "$BRANCH" | grep -oE '[0-9]+' | head -1)
+ISSUE_NUMBER=$(printf '%s\n' "$BRANCH" | grep -oE '[0-9]+' | head -1)
 CONTEXT_FILE=".nightgauge/pipeline/dev-${ISSUE_NUMBER}.json"
 
 # Resolve the nightgauge binary now — needed both for the missing-context
@@ -62,14 +62,14 @@ if [ ! -f "$CONTEXT_FILE" ]; then
   GATE_JSON=$("$BINARY" gate verify feature-dev "$ISSUE_NUMBER" --workdir . --json 2>/dev/null)
   GATE_EXIT=$?
   TERMINAL_KIND=""
-  [ "$GATE_EXIT" -eq 2 ] && TERMINAL_KIND=$(echo "$GATE_JSON" | jq -r '.terminal_kind // empty' 2>/dev/null)
+  [ "$GATE_EXIT" -eq 2 ] && TERMINAL_KIND=$(printf '%s\n' "$GATE_JSON" | jq -r '.terminal_kind // empty' 2>/dev/null)
 
   if [ "$GATE_EXIT" -eq 2 ] && [ "$TERMINAL_KIND" = "dev_handoff_missing" ]; then
     # Work exists: feature-dev was likely killed mid-stage after writing real
     # changes but before writing its handoff JSON. Proceed against the
     # git-derived file list instead of exiting (#134).
-    GIT_GROUND_TRUTH_FILES=$(echo "$GATE_JSON" | jq -c '.files // []' 2>/dev/null)
-    FILE_COUNT=$(echo "$GATE_JSON" | jq -r '.file_count // 0' 2>/dev/null)
+    GIT_GROUND_TRUTH_FILES=$(printf '%s\n' "$GATE_JSON" | jq -c '.files // []' 2>/dev/null)
+    FILE_COUNT=$(printf '%s\n' "$GATE_JSON" | jq -r '.file_count // 0' 2>/dev/null)
     echo "dev-${ISSUE_NUMBER}.json missing but git finds ${FILE_COUNT} changed file(s) — feature-dev was likely killed mid-stage; proceeding against the working tree"
     COMMIT_SHA=""
     FILES_CREATED="[]"
@@ -112,7 +112,7 @@ consolidated validation — run build and tests once for all changes.
 **Detection**: After loading dev context, check for `dev-batch-{E}.json`.
 
 ```bash
-EPIC_NUMBER=$(echo "$BRANCH" | grep -oE '[0-9]+' | head -1)
+EPIC_NUMBER=$(printf '%s\n' "$BRANCH" | grep -oE '[0-9]+' | head -1)
 BATCH_DEV=".nightgauge/pipeline/dev-batch-${EPIC_NUMBER}.json"
 
 if [ -f "$BATCH_DEV" ]; then
@@ -196,13 +196,13 @@ else
   elif [ -z "$AC_RESULT" ]; then
     AC_CHECK_ERROR="ac-check produced no output: ${AC_STDERR:-(no stderr)}"
   else
-    AC_STATUS=$(echo "$AC_RESULT" | jq -r '.status // empty' 2>/dev/null || echo "")
+    AC_STATUS=$(printf '%s\n' "$AC_RESULT" | jq -r '.status // empty' 2>/dev/null || echo "")
     if [ -z "$AC_STATUS" ]; then
       AC_CHECK_ERROR="ac-check output carried no .status field: $AC_RESULT"
     else
-      CHECKED=$(echo "$AC_RESULT" | jq -r '.checked_count // 0')
-      UNCHECKED=$(echo "$AC_RESULT" | jq -r '.unchecked_count // 0')
-      TOTAL=$(echo "$AC_RESULT" | jq -r '.total // 0')
+      CHECKED=$(printf '%s\n' "$AC_RESULT" | jq -r '.checked_count // 0')
+      UNCHECKED=$(printf '%s\n' "$AC_RESULT" | jq -r '.unchecked_count // 0')
+      TOTAL=$(printf '%s\n' "$AC_RESULT" | jq -r '.total // 0')
     fi
   fi
 fi

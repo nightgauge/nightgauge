@@ -151,14 +151,14 @@ ISSUE_JSON=$(nightgauge forge issue view "$NUM" --repo "$OWNER_REPO" --json 2>/d
 }
 
 # WRONG_REPO: the api response's repository.nameWithOwner ≠ expected
-ACTUAL_REPO=$(echo "$ISSUE_JSON" | jq -r '.repository.nameWithOwner // empty')
+ACTUAL_REPO=$(printf '%s\n' "$ISSUE_JSON" | jq -r '.repository.nameWithOwner // empty')
 if [ -n "$ACTUAL_REPO" ] && [ "$ACTUAL_REPO" != "$OWNER_REPO" ]; then
   # emit WRONG_REPO finding
   ...
 fi
 
 # UNEXPECTED_STATE: closed but not allowed
-STATE=$(echo "$ISSUE_JSON" | jq -r '.state')
+STATE=$(printf '%s\n' "$ISSUE_JSON" | jq -r '.state')
 if [ "$STATE" = "CLOSED" ] && [ "$ALLOW_CLOSED" != "true" ]; then
   # emit UNEXPECTED_STATE finding (WARNING)
   ...
@@ -250,8 +250,8 @@ without affecting this phase.
 For each required heading:
 
 ```bash
-BODY=$(echo "$ISSUE_JSON" | jq -r '.body // ""')
-if ! echo "$BODY" | grep -qE "^##[[:space:]]+${HEADING}\\s*$"; then
+BODY=$(printf '%s\n' "$ISSUE_JSON" | jq -r '.body // ""')
+if ! printf '%s\n' "$BODY" | grep -qE "^##[[:space:]]+${HEADING}\\s*$"; then
   # Mode-dependent severity — see "Severity of MISSING_REQUIRED_HEADING" below.
   HEADING_SEV=$([ "$MODE" = "manifest" ] && echo "CRITICAL" || echo "WARNING")
   FINDINGS+=( /* MISSING_REQUIRED_HEADING ($HEADING_SEV) */ )
@@ -259,7 +259,7 @@ if ! echo "$BODY" | grep -qE "^##[[:space:]]+${HEADING}\\s*$"; then
 fi
 
 # Non-empty content check between this heading and the next ##
-SECTION=$(echo "$BODY" | awk -v h="^##[[:space:]]+${HEADING}\\s*$" '
+SECTION=$(printf '%s\n' "$BODY" | awk -v h="^##[[:space:]]+${HEADING}\\s*$" '
   $0 ~ h {flag=1; next}
   flag && /^##[[:space:]]/ {flag=0}
   flag {print}')
@@ -273,19 +273,19 @@ heuristics, and a false positive must cost a glance, not a block:
 
 ```bash
 # WEAK_VERIFICATION — the section exists but names no test, command, or file.
-VSEC=$(echo "$BODY" | awk '
+VSEC=$(printf '%s\n' "$BODY" | awk '
   $0 ~ /^##[[:space:]]+Verification[[:space:]]*$/ {flag=1; next}
   flag && /^##[[:space:]]/ {flag=0}
   flag {print}')
 if [ -n "$(echo "$VSEC" | tr -d '[:space:]')" ] \
-   && ! echo "$VSEC" | grep -qE '`[^`]+`|go test|vitest|flutter test|pytest|npm (run|test)'; then
+   && ! printf '%s\n' "$VSEC" | grep -qE '`[^`]+`|go test|vitest|flutter test|pytest|npm (run|test)'; then
   FINDINGS+=( /* WEAK_VERIFICATION (WARNING) — "add tests" is not verification */ )
 fi
 
 # SECURITY_SURFACE_UNADDRESSED — the design touches a security surface and
 # neither a Security section nor a security-shaped acceptance criterion exists.
-if echo "$BODY" | grep -qiE 'auth|token|secret|credential|webhook|endpoint|retry|retries|spawn|exec|shell|symlink|upload|permission' \
-   && ! echo "$BODY" | grep -qiE '^##[[:space:]]+Security|^- \[ \].*(secur|sanitiz|validat|authoriz|authent|bound|rate.?limit|scope|confine|redact)'; then
+if printf '%s\n' "$BODY" | grep -qiE 'auth|token|secret|credential|webhook|endpoint|retry|retries|spawn|exec|shell|symlink|upload|permission' \
+   && ! printf '%s\n' "$BODY" | grep -qiE '^##[[:space:]]+Security|^- \[ \].*(secur|sanitiz|validat|authoriz|authent|bound|rate.?limit|scope|confine|redact)'; then
   FINDINGS+=( /* SECURITY_SURFACE_UNADDRESSED (WARNING) — never auto-fix */ )
 fi
 ```
@@ -294,7 +294,7 @@ For `type: spike`:
 
 ````bash
 # Verify the yaml recommendations block exists and parses
-if ! echo "$BODY" | awk '/```yaml recommendations/,/```/' | head -2 | grep -q '```yaml recommendations'; then
+if ! printf '%s\n' "$BODY" | awk '/```yaml recommendations/,/```/' | head -2 | grep -q '```yaml recommendations'; then
   FINDINGS+=( /* MISSING_SPIKE_RECS_BLOCK (CRITICAL) — never auto-fix */ )
 fi
 ````
@@ -361,7 +361,7 @@ fi
 # Labels come from ISSUE_JSON (Phase 2); sub-issue count via the same subIssues
 # query Phase 6 uses.
 IS_DECOMPOSED_EPIC=false
-if echo "$ISSUE_JSON" | jq -e '.labels[]? | select(.name == "type:epic")' >/dev/null 2>&1; then
+if printf '%s\n' "$ISSUE_JSON" | jq -e '.labels[]? | select(.name == "type:epic")' >/dev/null 2>&1; then
   SUB_ISSUE_COUNT=$(nightgauge forge graphql -f query='query($owner:String!,$name:String!,$num:Int!){
     repository(owner:$owner,name:$name){issue(number:$num){subIssues(first:50){totalCount}}}
   }' -f owner="$OWNER" -f name="$NAME" -F num="$NUM" \
@@ -375,7 +375,7 @@ fi
 # AND not already a decomposed epic AND no override marker.
 if [ "$IS_DECOMPOSED_EPIC" = "false" ] && [ "$SCOPE_OVERRIDE" = "false" ] && {
      [ "${DISTINCT_TARGETS:-0}" -ge 6 ] || \
-     echo "$PREDICTED_SIZE" | grep -qiE '^XL$' || \
+     printf '%s\n' "$PREDICTED_SIZE" | grep -qiE '^XL$' || \
      [ "${AC_GROUP_COUNT:-0}" -ge 6 ]; }; then
   FINDINGS+=( /* OVERSIZED_SCOPE (WARNING) — no auto-fix; requires manual decomposition */ )
 fi
@@ -426,11 +426,11 @@ Delegate the structural check to the Go binary:
 ```bash
 if [ "$MODE" = "epic" ] && [ -n "$EPIC_NUMBER" ]; then
   EPIC_VALIDATE=$("$BINARY" epic validate "$EPIC_NUMBER" --json 2>/dev/null)
-  GAPS=$(echo "$EPIC_VALIDATE" | jq -c '.gaps // []')
-  echo "$GAPS" | jq -c '.[]' | while read -r gap; do
-    GAP_TYPE=$(echo "$gap" | jq -r '.gapType')
-    SUB=$(echo "$gap" | jq -r '.subIssueNumber')
-    DETAIL=$(echo "$gap" | jq -r '.detail')
+  GAPS=$(printf '%s\n' "$EPIC_VALIDATE" | jq -c '.gaps // []')
+  printf '%s\n' "$GAPS" | jq -c '.[]' | while read -r gap; do
+    GAP_TYPE=$(printf '%s\n' "$gap" | jq -r '.gapType')
+    SUB=$(printf '%s\n' "$gap" | jq -r '.subIssueNumber')
+    DETAIL=$(printf '%s\n' "$gap" | jq -r '.detail')
     case "$GAP_TYPE" in
       circular_blocker) /* emit CIRCULAR_BLOCKER (CRITICAL) */ ;;
       stale_blocker)    /* emit STALE_BLOCKED_BY (WARNING) */ ;;
@@ -473,7 +473,7 @@ When `knowledge.enabled: true` in `.nightgauge/config.yaml` OR the
 manifest entry sets `knowledge_path`:
 
 ```bash
-KNOWLEDGE_PATH=$(echo "$ENTRY" | jq -r '.knowledge_path // empty')
+KNOWLEDGE_PATH=$(printf '%s\n' "$ENTRY" | jq -r '.knowledge_path // empty')
 if [ -n "$KNOWLEDGE_PATH" ]; then
   if [ ! -d "$KNOWLEDGE_PATH" ]; then
     FINDINGS+=( /* MISSING_KNOWLEDGE_DIR (WARNING) */ )

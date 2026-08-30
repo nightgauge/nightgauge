@@ -406,7 +406,7 @@ a clear, actionable error.
 ALLOWED_DIRS="docs/spikes/ docs/decisions/ docs/research/"
 IS_ALLOWED=false
 for DIR in $ALLOWED_DIRS; do
-  echo "$ARTIFACT_PATH" | grep -q "^$DIR" && IS_ALLOWED=true && break
+  printf '%s\n' "$ARTIFACT_PATH" | grep -q "^$DIR" && IS_ALLOWED=true && break
 done
 if [ "$IS_ALLOWED" = "false" ]; then
   echo "ERROR: artifact path must be under one of: $ALLOWED_DIRS"
@@ -433,7 +433,7 @@ fi
 **Check 3 — Well-formed path:**
 
 ```bash
-if ! echo "$ARTIFACT_PATH" | grep -qE '^docs/(spikes|decisions|research)/[0-9]+-[a-z0-9-]+\.md$'; then
+if ! printf '%s\n' "$ARTIFACT_PATH" | grep -qE '^docs/(spikes|decisions|research)/[0-9]+-[a-z0-9-]+\.md$'; then
   echo "ERROR: artifact path is not well-formed"
   echo "  Expected: docs/{spikes|decisions|research}/{N}-{slug}.md"
   echo "  Got: $ARTIFACT_PATH"

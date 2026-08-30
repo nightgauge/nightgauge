@@ -78,15 +78,15 @@ if [[ -n "$BINARY" ]]; then
 fi
 
 if [[ -n "$ROUTE_JSON" ]]; then
-  TYPE_LABEL=$(echo "$ROUTE_JSON" | jq -r '.task_type')
-  SIZE_LABEL=$(echo "$ROUTE_JSON" | jq -r '.effective_size')
-  PRIORITY_LABEL=$(echo "$ROUTE_JSON" | jq -r '.effective_priority')
-  CHANGE_TYPE=$(echo "$ROUTE_JSON" | jq -r '.change_type')
-  COMPLEXITY_SCORE=$(echo "$ROUTE_JSON" | jq -r '.complexity_score')
-  SUGGESTED_ROUTE=$(echo "$ROUTE_JSON" | jq -r '.suggested_route')
-  SKIP_STAGES=$(echo "$ROUTE_JSON" | jq -r '.skip_stages | join(",")')
-  FOUNDATION_TASK=$(echo "$ROUTE_JSON" | jq -r '.foundation_task')
-  RATIONALE=$(echo "$ROUTE_JSON" | jq -r '.rationale')
+  TYPE_LABEL=$(printf '%s\n' "$ROUTE_JSON" | jq -r '.task_type')
+  SIZE_LABEL=$(printf '%s\n' "$ROUTE_JSON" | jq -r '.effective_size')
+  PRIORITY_LABEL=$(printf '%s\n' "$ROUTE_JSON" | jq -r '.effective_priority')
+  CHANGE_TYPE=$(printf '%s\n' "$ROUTE_JSON" | jq -r '.change_type')
+  COMPLEXITY_SCORE=$(printf '%s\n' "$ROUTE_JSON" | jq -r '.complexity_score')
+  SUGGESTED_ROUTE=$(printf '%s\n' "$ROUTE_JSON" | jq -r '.suggested_route')
+  SKIP_STAGES=$(printf '%s\n' "$ROUTE_JSON" | jq -r '.skip_stages | join(",")')
+  FOUNDATION_TASK=$(printf '%s\n' "$ROUTE_JSON" | jq -r '.foundation_task')
+  RATIONALE=$(printf '%s\n' "$ROUTE_JSON" | jq -r '.rationale')
   echo "Routing decision via Go verb: $RATIONALE"
   # All routing variables are now populated — skip ahead to Step 3.3.
 fi
@@ -103,7 +103,7 @@ identical when the binary is present or absent — see ADR-003 in
 
 ```bash
 # type:* stays label-based (labels are authoritative for type)
-TYPE_LABEL=$(echo "$LABELS" | grep -oE "type:(feature|bug|docs|refactor|chore)" | cut -d: -f2)
+TYPE_LABEL=$(printf '%s\n' "$LABELS" | grep -oE "type:(feature|bug|docs|refactor|chore)" | cut -d: -f2)
 
 # Read Size and Priority from project board fields (board-first, label fallback)
 CONTEXT_FILE=".nightgauge/pipeline/issue-${ISSUE_NUMBER}.json"
@@ -136,7 +136,7 @@ if [[ -z "$SIZE_LABEL" || -z "$PRIORITY_BOARD" ]]; then
          | select(type=="object" and .field.name=="Size") | .name] | first // empty' 2>/dev/null)
     # Label fallback
     if [[ -z "$SIZE_LABEL" ]]; then
-      SIZE_LABEL=$(echo "$LABELS" | grep -oE "size:(XS|S|M|L|XL)" | cut -d: -f2)
+      SIZE_LABEL=$(printf '%s\n' "$LABELS" | grep -oE "size:(XS|S|M|L|XL)" | cut -d: -f2)
     fi
   fi
 
@@ -154,7 +154,7 @@ case "$PRIORITY_BOARD" in
   P2) PRIORITY_LABEL="medium" ;;
   P3) PRIORITY_LABEL="low" ;;
   *)  # Fallback to label
-      PRIORITY_LABEL=$(echo "$LABELS" | grep -oE "priority:(critical|high|medium|low)" | cut -d: -f2)
+      PRIORITY_LABEL=$(printf '%s\n' "$LABELS" | grep -oE "priority:(critical|high|medium|low)" | cut -d: -f2)
       ;;
 esac
 ```
@@ -171,7 +171,7 @@ need feature-planning. Force trivial routing to skip planning + validate.
 FOUNDATION_TASK=false
 if [[ "$TYPE_LABEL" == "chore" ]]; then
   TITLE_LOWER=$(echo "$TITLE" | tr '[:upper:]' '[:lower:]')
-  if echo "$TITLE_LOWER" | grep -qE '\b(scaffold|setup|bootstrap|initialize|initialise|init|configure)\b'; then
+  if printf '%s\n' "$TITLE_LOWER" | grep -qE '\b(scaffold|setup|bootstrap|initialize|initialise|init|configure)\b'; then
     FOUNDATION_TASK=true
     # Override size to XS (force trivial path, complexity ≤ 2)
     SIZE_LABEL="XS"

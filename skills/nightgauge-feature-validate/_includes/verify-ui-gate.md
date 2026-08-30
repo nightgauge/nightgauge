@@ -73,10 +73,10 @@ elif [ -z "$BINARY" ]; then
 else
   VERIFY_UI_REPO=$(basename "$(pwd)")
   UI_SURFACE_JSON=$("$BINARY" ci classify-ui-surface --base "origin/${BASE_BRANCH:-main}" --head HEAD --repo "$VERIFY_UI_REPO" --json 2>/dev/null || echo '{"touches_ui_surface":false,"reason":"classifier unavailable"}')
-  TOUCHES_UI=$(echo "$UI_SURFACE_JSON" | jq -r '.touches_ui_surface // false')
+  TOUCHES_UI=$(printf '%s\n' "$UI_SURFACE_JSON" | jq -r '.touches_ui_surface // false')
 
   if [ "$TOUCHES_UI" != "true" ]; then
-    VERIFY_UI_SKIPPED_REASON="$(echo "$UI_SURFACE_JSON" | jq -r '.reason // "diff does not touch UI-bearing surface"')"
+    VERIFY_UI_SKIPPED_REASON="$(printf '%s\n' "$UI_SURFACE_JSON" | jq -r '.reason // "diff does not touch UI-bearing surface"')"
     echo "⏭ Web UI verification skipped — $VERIFY_UI_SKIPPED_REASON"
   else
     # Repo -> flow registry. Onboarding a new UI-bearing repo needs BOTH a new
@@ -184,13 +184,13 @@ fi
 ```bash
 if [ "$VERIFY_UI_ACTIVE" = "true" ]; then
   VERIFY_UI_RAN=true
-  VERIFY_UI_STATUS=$(echo "$VERIFY_UI_REPORT_JSON" | jq -r '.status // "error"')
+  VERIFY_UI_STATUS=$(printf '%s\n' "$VERIFY_UI_REPORT_JSON" | jq -r '.status // "error"')
   [ "$VERIFY_UI_STATUS" = "passed" ] && VERIFY_UI_PASSED=true || VERIFY_UI_PASSED=false
 
   if [ "$VERIFY_UI_PASSED" = "true" ]; then
     "$BINARY" gate record-metric --issue "$ISSUE_NUMBER" --gate verify-ui --result pass
   else
-    FIRST_FAIL=$(echo "$VERIFY_UI_REPORT_JSON" | jq -r '([.steps[]? | select(.status != "passed")] | .[0].name) // .error // "unknown"')
+    FIRST_FAIL=$(printf '%s\n' "$VERIFY_UI_REPORT_JSON" | jq -r '([.steps[]? | select(.status != "passed")] | .[0].name) // .error // "unknown"')
     "$BINARY" gate record-metric --issue "$ISSUE_NUMBER" --gate verify-ui \
       --result catch --error-summary "verify-ui flow '$VERIFY_UI_FLOW' failed: $FIRST_FAIL"
     if [ "$VERIFY_UI_MODE" = "strict" ]; then

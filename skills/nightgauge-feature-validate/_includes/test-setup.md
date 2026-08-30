@@ -20,9 +20,9 @@ Use the Go binary for deterministic test-command selection (Issue #221):
 
 ```bash
 TESTCMD_DETECT=$(nightgauge scan testcmd --json --workdir . 2>/dev/null || echo '{"command":"","source":"","framework":"","warnings":[]}')
-TEST_CMD=$(echo "$TESTCMD_DETECT" | jq -r '.command' 2>/dev/null || echo "")
-TEST_CMD_SOURCE=$(echo "$TESTCMD_DETECT" | jq -r '.source' 2>/dev/null || echo "")
-UNIT_TEST_FRAMEWORK=$(echo "$TESTCMD_DETECT" | jq -r '.framework' 2>/dev/null || echo "")
+TEST_CMD=$(printf '%s\n' "$TESTCMD_DETECT" | jq -r '.command' 2>/dev/null || echo "")
+TEST_CMD_SOURCE=$(printf '%s\n' "$TESTCMD_DETECT" | jq -r '.source' 2>/dev/null || echo "")
+UNIT_TEST_FRAMEWORK=$(printf '%s\n' "$TESTCMD_DETECT" | jq -r '.framework' 2>/dev/null || echo "")
 ```
 
 `$TEST_CMD` is what every later phase invokes (`build-and-tests.md:307,437,440`)
@@ -61,9 +61,9 @@ Use the Go binary for deterministic E2E framework detection (audit row B8):
 
 ```bash
 E2E_DETECT=$(nightgauge e2e detect --json --workdir . 2>/dev/null || echo '{"detected":false,"frameworks":[],"config_files":[],"test_dirs":[]}')
-E2E_DETECTED=$(echo "$E2E_DETECT" | jq -r '.detected' 2>/dev/null || echo "false")
-E2E_FRAMEWORKS=$(echo "$E2E_DETECT" | jq -r '.frameworks | join(",")' 2>/dev/null || echo "")
-E2E_FRAMEWORK=$(echo "$E2E_DETECT" | jq -r '.frameworks[0] // empty' 2>/dev/null || echo "")
+E2E_DETECTED=$(printf '%s\n' "$E2E_DETECT" | jq -r '.detected' 2>/dev/null || echo "false")
+E2E_FRAMEWORKS=$(printf '%s\n' "$E2E_DETECT" | jq -r '.frameworks | join(",")' 2>/dev/null || echo "")
+E2E_FRAMEWORK=$(printf '%s\n' "$E2E_DETECT" | jq -r '.frameworks[0] // empty' 2>/dev/null || echo "")
 ```
 
 When the binary is unavailable, fall back to checking for E2E directories
@@ -126,12 +126,12 @@ if [ "$PTC_AVAILABLE" = "true" ]; then
 
   if [ $PTC_EXIT -eq 0 ]; then
     # Parse PTC results into validation variables
-    BUILD_PASSED=$(echo "$PTC_RESULT" | jq -r '.build.passed')
-    BUILD_RAN=$(echo "$PTC_RESULT" | jq -r '.build.ran')
-    LINT_PASSED=$(echo "$PTC_RESULT" | jq -r '.lint.passed')
-    TYPECHECK_PASSED=$(echo "$PTC_RESULT" | jq -r '.typecheck.passed')
-    TESTS_PASSED_COUNT=$(echo "$PTC_RESULT" | jq -r '.tests.passed')
-    TESTS_FAILED_COUNT=$(echo "$PTC_RESULT" | jq -r '.tests.failed')
+    BUILD_PASSED=$(printf '%s\n' "$PTC_RESULT" | jq -r '.build.passed')
+    BUILD_RAN=$(printf '%s\n' "$PTC_RESULT" | jq -r '.build.ran')
+    LINT_PASSED=$(printf '%s\n' "$PTC_RESULT" | jq -r '.lint.passed')
+    TYPECHECK_PASSED=$(printf '%s\n' "$PTC_RESULT" | jq -r '.typecheck.passed')
+    TESTS_PASSED_COUNT=$(printf '%s\n' "$PTC_RESULT" | jq -r '.tests.passed')
+    TESTS_FAILED_COUNT=$(printf '%s\n' "$PTC_RESULT" | jq -r '.tests.failed')
     echo "PTC validation complete — skipping Phases 1.5 through 2.1"
     # Skip directly to Phase 3 (checklist) or Phase 5 (context writing)
 

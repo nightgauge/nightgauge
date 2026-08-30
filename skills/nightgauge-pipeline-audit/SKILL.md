@@ -189,7 +189,7 @@ Filter data based on arguments:
 ```bash
 # Validate --since date format (YYYY-MM-DD)
 if [ -n "$SINCE_DATE" ]; then
-  if ! echo "$SINCE_DATE" | grep -qE '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'; then
+  if ! printf '%s\n' "$SINCE_DATE" | grep -qE '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'; then
     echo "ERROR: --since must be YYYY-MM-DD format (got: $SINCE_DATE)"
     exit 1
   fi

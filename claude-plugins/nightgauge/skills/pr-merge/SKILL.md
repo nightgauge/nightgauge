@@ -377,7 +377,7 @@ if [ "$BEHIND_COUNT" -gt 0 ] && [ "$FRESHNESS_CHECK_FAILED" != "true" ]; then
       echo "PR #$PR_NUMBER was merged (detected after rebase CI wait). Exiting cleanly."
       exit 0
     fi
-    CI_ALL_PASSED=$(echo "$CI_RESULT" | jq -r 'if .state == "SUCCESS" then "true" else "false" end')
+    CI_ALL_PASSED=$(printf '%s\n' "$CI_RESULT" | jq -r 'if .state == "SUCCESS" then "true" else "false" end')
     if [ "$CI_ALL_PASSED" != "true" ]; then
       echo "WARNING: CI checks failed after rebase. Proceeding to merge phase for auto-fix."
     fi

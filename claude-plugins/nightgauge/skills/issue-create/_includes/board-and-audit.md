@@ -71,9 +71,9 @@ nightgauge project sync-status <epic-number> backlog \
 # 2. Add each sub-issue to ITS OWN repo's project per the manifest.
 #    Cross-repo sub-issues are added to a different project than the epic.
 jq -c '.sub_issues[]' "$MANIFEST" | while read -r row; do
-  NUM=$(echo "$row" | jq -r .number)
-  REPO=$(echo "$row" | jq -r .target_repo)
-  PROJ=$(echo "$row" | jq -r .target_project)
+  NUM=$(printf '%s\n' "$row" | jq -r .number)
+  REPO=$(printf '%s\n' "$row" | jq -r .target_repo)
+  PROJ=$(printf '%s\n' "$row" | jq -r .target_project)
   nightgauge project add "$NUM" --repo "$REPO" --project "$PROJ"
   nightgauge project sync-status "$NUM" backlog --repo "$REPO" --project "$PROJ"
 done
@@ -190,9 +190,9 @@ either the manifest or the live board blindly:
 MANIFEST=".nightgauge/pipeline/issue-create-routing-<epic-number>.json"
 EXIT_CODE=0
 jq -c '.sub_issues[]' "$MANIFEST" | while read -r row; do
-  NUM=$(echo "$row" | jq -r .number)
-  EXPECTED_REPO=$(echo "$row" | jq -r .target_repo)
-  MANIFEST_PROJECT=$(echo "$row" | jq -r .target_project)
+  NUM=$(printf '%s\n' "$row" | jq -r .number)
+  EXPECTED_REPO=$(printf '%s\n' "$row" | jq -r .target_repo)
+  MANIFEST_PROJECT=$(printf '%s\n' "$row" | jq -r .target_project)
 
   # Re-resolve fresh — do NOT reuse $MANIFEST_PROJECT as the expected value.
   RESOLVED_PROJECT=$(nightgauge project resolve --repo "nightgauge/$EXPECTED_REPO" --json | jq -r .number)
@@ -208,7 +208,7 @@ jq -c '.sub_issues[]' "$MANIFEST" | while read -r row; do
     }
   }" -q '.data.repository.issue.projectItems.nodes[].project.number')
 
-  if ! echo "$ACTUAL" | grep -qx "$RESOLVED_PROJECT"; then
+  if ! printf '%s\n' "$ACTUAL" | grep -qx "$RESOLVED_PROJECT"; then
     if [ "$MANIFEST_PROJECT" != "$RESOLVED_PROJECT" ]; then
       echo "AUDIT FAIL: #$NUM in nightgauge/$EXPECTED_REPO is not a member of project $RESOLVED_PROJECT (actual: ${ACTUAL:-<none>}; manifest said $MANIFEST_PROJECT at routing time — the two disagree, config drifted mid-run)"
     else
@@ -246,7 +246,7 @@ begin writing knowledge (PRD, decisions) before running `/issue-pickup`.
 ```bash
 # Determine if this is an epic (check labels from Phase 2)
 IS_EPIC=false
-if echo "${LABELS:-}" | grep -q "type:epic"; then
+if printf '%s\n' "${LABELS:-}" | grep -q "type:epic"; then
   IS_EPIC=true
 fi
 
@@ -286,19 +286,19 @@ process.stdout.write(JSON.stringify(r));
 NODEEOF
 rm -f "$ISSUE_BODY_FILE"
 
-SCAFFOLD_SUCCESS=$(echo "$SCAFFOLD_RESULT" | jq -r '.success // false')
-KNOWLEDGE_PATH=$(echo "$SCAFFOLD_RESULT" | jq -r '.knowledge_path // empty')
-KNOWLEDGE_SKIPPED=$(echo "$SCAFFOLD_RESULT" | jq -r '.skipped // false')
+SCAFFOLD_SUCCESS=$(printf '%s\n' "$SCAFFOLD_RESULT" | jq -r '.success // false')
+KNOWLEDGE_PATH=$(printf '%s\n' "$SCAFFOLD_RESULT" | jq -r '.knowledge_path // empty')
+KNOWLEDGE_SKIPPED=$(printf '%s\n' "$SCAFFOLD_RESULT" | jq -r '.skipped // false')
 
 if [ "$SCAFFOLD_SUCCESS" = "true" ] && [ -n "$KNOWLEDGE_PATH" ] && [ "$KNOWLEDGE_SKIPPED" != "true" ]; then
   echo "Knowledge directory scaffolded: $KNOWLEDGE_PATH"
-  echo "  Files created: $(echo "$SCAFFOLD_RESULT" | jq -r '.files_created | join(", ")')"
+  echo "  Files created: $(printf '%s\n' "$SCAFFOLD_RESULT" | jq -r '.files_created | join(", ")')"
 elif [ "$KNOWLEDGE_SKIPPED" = "true" ]; then
-  SKIP_REASON=$(echo "$SCAFFOLD_RESULT" | jq -r '.skip_reason // "unknown"')
+  SKIP_REASON=$(printf '%s\n' "$SCAFFOLD_RESULT" | jq -r '.skip_reason // "unknown"')
   echo "Knowledge scaffolding skipped: $SKIP_REASON"
   echo "  To enable: set knowledge.enabled: true in .nightgauge/config.yaml"
 else
-  echo "WARNING: Knowledge scaffolding failed: $(echo "$SCAFFOLD_RESULT" | jq -r '.error // "unknown error"')"
+  echo "WARNING: Knowledge scaffolding failed: $(printf '%s\n' "$SCAFFOLD_RESULT" | jq -r '.error // "unknown error"')"
 fi
 ```
 

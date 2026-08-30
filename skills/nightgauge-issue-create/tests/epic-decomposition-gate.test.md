@@ -56,7 +56,7 @@ TYPE_LABEL="epic"
 SUB_ISSUE_COUNT=3
 
 IS_EPIC=false
-echo "$TYPE_LABEL" | grep -qi "epic" && IS_EPIC=true
+printf '%s\n' "$TYPE_LABEL" | grep -qi "epic" && IS_EPIC=true
 
 HAS_SUB_ISSUES=false
 [ "${SUB_ISSUE_COUNT:-0}" -gt 0 ] && HAS_SUB_ISSUES=true
@@ -122,10 +122,10 @@ HAS_STANDALONE_MARKER=false
 
 [ "${SUB_ISSUE_COUNT:-0}" -gt 0 ] && HAS_SUB_ISSUES=true
 
-echo "$ISSUE_BODY" | grep -qi "nightgauge:decompose-later\|placeholder.*decompose later\|decompose later.*placeholder" \
+printf '%s\n' "$ISSUE_BODY" | grep -qi "nightgauge:decompose-later\|placeholder.*decompose later\|decompose later.*placeholder" \
   && HAS_PLACEHOLDER_MARKER=true
 
-echo "$ISSUE_BODY" | grep -qi "nightgauge:standalone-epic\|standalone epic\|intentionally.*no sub-issues" \
+printf '%s\n' "$ISSUE_BODY" | grep -qi "nightgauge:standalone-epic\|standalone epic\|intentionally.*no sub-issues" \
   && HAS_STANDALONE_MARKER=true
 
 [ "$HAS_PLACEHOLDER_MARKER" = "true" ] \
@@ -135,7 +135,7 @@ echo "$ISSUE_BODY" | grep -qi "nightgauge:standalone-epic\|standalone epic\|inte
 # Verify chore title format
 EPIC_TITLE="New Reporting Module"
 CHORE_TITLE="chore: decompose epic — ${EPIC_TITLE}"
-echo "$CHORE_TITLE" | grep -q "^chore: decompose epic — " \
+printf '%s\n' "$CHORE_TITLE" | grep -q "^chore: decompose epic — " \
   && echo "TC-2: chore title format: PASS" \
   || echo "TC-2: chore title format: FAIL"
 ```
@@ -145,7 +145,7 @@ echo "$CHORE_TITLE" | grep -q "^chore: decompose epic — " \
 
 ```bash
 ISSUE_BODY_PROSE="Placeholder, decompose later — scope to be determined."
-echo "$ISSUE_BODY_PROSE" | grep -qi "placeholder.*decompose later\|decompose later.*placeholder" \
+printf '%s\n' "$ISSUE_BODY_PROSE" | grep -qi "placeholder.*decompose later\|decompose later.*placeholder" \
   && echo "TC-2b: PASS — prose phrase detected" \
   || echo "TC-2b: FAIL — prose phrase not detected"
 ```
@@ -201,10 +201,10 @@ HAS_STANDALONE_MARKER=false
 
 [ "${SUB_ISSUE_COUNT:-0}" -gt 0 ] && HAS_SUB_ISSUES=true
 
-echo "$ISSUE_BODY" | grep -qi "nightgauge:decompose-later\|placeholder.*decompose later\|decompose later.*placeholder" \
+printf '%s\n' "$ISSUE_BODY" | grep -qi "nightgauge:decompose-later\|placeholder.*decompose later\|decompose later.*placeholder" \
   && HAS_PLACEHOLDER_MARKER=true
 
-echo "$ISSUE_BODY" | grep -qi "nightgauge:standalone-epic\|standalone epic\|intentionally.*no sub-issues" \
+printf '%s\n' "$ISSUE_BODY" | grep -qi "nightgauge:standalone-epic\|standalone epic\|intentionally.*no sub-issues" \
   && HAS_STANDALONE_MARKER=true
 
 [ "$HAS_STANDALONE_MARKER" = "true" ] && [ "$HAS_PLACEHOLDER_MARKER" = "false" ] \
@@ -213,7 +213,7 @@ echo "$ISSUE_BODY" | grep -qi "nightgauge:standalone-epic\|standalone epic\|inte
 
 # Verify "standalone epic" prose also triggers Path C
 PROSE_BODY="This is a standalone epic with a single deliverable."
-echo "$PROSE_BODY" | grep -qi "standalone epic" \
+printf '%s\n' "$PROSE_BODY" | grep -qi "standalone epic" \
   && echo "TC-3b: PASS — prose 'standalone epic' detected" \
   || echo "TC-3b: FAIL"
 ```
@@ -284,10 +284,10 @@ HAS_STANDALONE_MARKER=false
 
 [ "${SUB_ISSUE_COUNT:-0}" -gt 0 ] && HAS_SUB_ISSUES=true
 
-echo "$ISSUE_BODY" | grep -qi "nightgauge:decompose-later\|placeholder.*decompose later\|decompose later.*placeholder" \
+printf '%s\n' "$ISSUE_BODY" | grep -qi "nightgauge:decompose-later\|placeholder.*decompose later\|decompose later.*placeholder" \
   && HAS_PLACEHOLDER_MARKER=true
 
-echo "$ISSUE_BODY" | grep -qi "nightgauge:standalone-epic\|standalone epic\|intentionally.*no sub-issues" \
+printf '%s\n' "$ISSUE_BODY" | grep -qi "nightgauge:standalone-epic\|standalone epic\|intentionally.*no sub-issues" \
   && HAS_STANDALONE_MARKER=true
 
 # All three must be false → gate should reject
@@ -318,9 +318,9 @@ ERROR: epic-decomposition-gate
 EOF
 )
 
-echo "$GATE_ERROR" | grep -q "Path A" && echo "TC-4: Path A in error: PASS" || echo "TC-4: Path A in error: FAIL"
-echo "$GATE_ERROR" | grep -q "Path B" && echo "TC-4: Path B in error: PASS" || echo "TC-4: Path B in error: FAIL"
-echo "$GATE_ERROR" | grep -q "Path C" && echo "TC-4: Path C in error: PASS" || echo "TC-4: Path C in error: FAIL"
+printf '%s\n' "$GATE_ERROR" | grep -q "Path A" && echo "TC-4: Path A in error: PASS" || echo "TC-4: Path A in error: FAIL"
+printf '%s\n' "$GATE_ERROR" | grep -q "Path B" && echo "TC-4: Path B in error: PASS" || echo "TC-4: Path B in error: FAIL"
+printf '%s\n' "$GATE_ERROR" | grep -q "Path C" && echo "TC-4: Path C in error: PASS" || echo "TC-4: Path C in error: FAIL"
 ```
 
 ---
@@ -360,10 +360,10 @@ HAS_STANDALONE_MARKER=false
 
 [ "${SUB_ISSUE_COUNT:-0}" -gt 0 ] && HAS_SUB_ISSUES=true
 
-echo "$ISSUE_BODY" | grep -qi "nightgauge:decompose-later\|placeholder.*decompose later\|decompose later.*placeholder" \
+printf '%s\n' "$ISSUE_BODY" | grep -qi "nightgauge:decompose-later\|placeholder.*decompose later\|decompose later.*placeholder" \
   && HAS_PLACEHOLDER_MARKER=true
 
-echo "$ISSUE_BODY" | grep -qi "nightgauge:standalone-epic\|standalone epic\|intentionally.*no sub-issues" \
+printf '%s\n' "$ISSUE_BODY" | grep -qi "nightgauge:standalone-epic\|standalone epic\|intentionally.*no sub-issues" \
   && HAS_STANDALONE_MARKER=true
 
 if [ "$HAS_SUB_ISSUES" = "false" ] && [ "$HAS_PLACEHOLDER_MARKER" = "false" ] && [ "$HAS_STANDALONE_MARKER" = "false" ]; then
@@ -400,7 +400,7 @@ must not affect the issue body or creation flow.
 TYPE_LABEL="feature"
 
 IS_EPIC=false
-echo "$TYPE_LABEL" | grep -qi "epic" && IS_EPIC=true
+printf '%s\n' "$TYPE_LABEL" | grep -qi "epic" && IS_EPIC=true
 
 [ "$IS_EPIC" = "false" ] \
   && echo "TC-6: PASS — gate skipped for non-epic type" \

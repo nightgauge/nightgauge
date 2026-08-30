@@ -309,12 +309,12 @@ at walk time. Audit row **B39**.
 
 ```bash
 INV_JSON=$(nightgauge test inventory --workdir "$ASSESS_PATH" --json)
-TEST_FILE_COUNT=$(echo "$INV_JSON"   | jq -r '.counts.test_files')
-SOURCE_FILE_COUNT=$(echo "$INV_JSON" | jq -r '.counts.source_files')
-UNTESTED_COUNT=$(echo "$INV_JSON"    | jq -r '.counts.untested_files')
+TEST_FILE_COUNT=$(printf '%s\n' "$INV_JSON"   | jq -r '.counts.test_files')
+SOURCE_FILE_COUNT=$(printf '%s\n' "$INV_JSON" | jq -r '.counts.source_files')
+UNTESTED_COUNT=$(printf '%s\n' "$INV_JSON"    | jq -r '.counts.untested_files')
 
 # UNTESTED_FILES is the list piped into Phase 3 risk scoring.
-echo "$INV_JSON" | jq -r '.untested_files[]' > /tmp/ts_untested.txt
+printf '%s\n' "$INV_JSON" | jq -r '.untested_files[]' > /tmp/ts_untested.txt
 
 echo "Tests: $TEST_FILE_COUNT  Sources: $SOURCE_FILE_COUNT  Untested: $UNTESTED_COUNT"
 ```
@@ -463,7 +463,7 @@ RISK_JSON=$(nightgauge test risk-score \
   --json)
 
 # Sorted entries, highest score first
-echo "$RISK_JSON" | jq -c '.entries[]' > /tmp/ts_risk.ndjson
+printf '%s\n' "$RISK_JSON" | jq -c '.entries[]' > /tmp/ts_risk.ndjson
 
 # Filter by --priority (when set by the caller — defaults to "all")
 PRIORITY="${PRIORITY:-all}"
@@ -473,8 +473,8 @@ case "$PRIORITY" in
 esac
 
 # Examples of consuming the output:
-TOP_FIVE=$(echo "$RISK_JSON" | jq -r '.entries[0:5][].file')
-CRITICAL_FILES=$(echo "$RISK_JSON" | jq -r '.entries[] | select(.priority=="critical") | .file')
+TOP_FIVE=$(printf '%s\n' "$RISK_JSON" | jq -r '.entries[0:5][].file')
+CRITICAL_FILES=$(printf '%s\n' "$RISK_JSON" | jq -r '.entries[] | select(.priority=="critical") | .file')
 ```
 
 The full JSON contract (`v`, `workdir`, `entries[]` with

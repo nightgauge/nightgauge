@@ -269,7 +269,7 @@ while :; do
   PAGE=$(nightgauge forge graphql -f query="$QUERY" \
     -f owner="$OWNER" -F project="$PROJECT_NUMBER" \
     ${CURSOR:+-f endCursor="$CURSOR"})
-  echo "$PAGE" | jq -c '.data.organization.projectV2.items.nodes[]' \
+  printf '%s\n' "$PAGE" | jq -c '.data.organization.projectV2.items.nodes[]' \
     >> /tmp/board_items.jsonl
   HAS_NEXT=$(echo "$PAGE" \
     | jq -r '.data.organization.projectV2.items.pageInfo.hasNextPage')

@@ -84,18 +84,18 @@ DOCTOR_RESULT=$("$BINARY" doctor --json 2>/dev/null)
 DOCTOR_EXIT=$?
 if [ "$DOCTOR_EXIT" -eq 2 ]; then
   echo "ERROR: Environment check failed — nightgauge doctor reports broken environment." >&2
-  FAILED_CHECKS=$(echo "$DOCTOR_RESULT" | jq -r '.failed_checks[]? // empty' 2>/dev/null)
+  FAILED_CHECKS=$(printf '%s\n' "$DOCTOR_RESULT" | jq -r '.failed_checks[]? // empty' 2>/dev/null)
   if [ -n "$FAILED_CHECKS" ]; then
     echo "Failing check(s): $(echo "$FAILED_CHECKS" | tr '\n' ',' | sed 's/,$//')" >&2
   fi
-  echo "$DOCTOR_RESULT" | jq -r '.errors[]' >&2 2>/dev/null || true
-  INSTALL_MSG=$(echo "$DOCTOR_RESULT" | jq -r '.install_instructions // empty' 2>/dev/null)
+  printf '%s\n' "$DOCTOR_RESULT" | jq -r '.errors[]' >&2 2>/dev/null || true
+  INSTALL_MSG=$(printf '%s\n' "$DOCTOR_RESULT" | jq -r '.install_instructions // empty' 2>/dev/null)
   [ -n "$INSTALL_MSG" ] && echo "$INSTALL_MSG" >&2
   exit 1
 fi
 if [ "$DOCTOR_EXIT" -eq 1 ]; then
   echo "WARNING: Environment has non-critical issues:" >&2
-  echo "$DOCTOR_RESULT" | jq -r '.warnings[]' >&2 2>/dev/null || true
+  printf '%s\n' "$DOCTOR_RESULT" | jq -r '.warnings[]' >&2 2>/dev/null || true
   # Continue — warnings do not block skill execution
 fi
 ```

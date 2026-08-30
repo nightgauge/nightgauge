@@ -215,13 +215,13 @@ if [ "$ISSUE_TYPE" = "docs" ] || [ "$ISSUE_TYPE" = "chore" ]; then
     DRIFT_EXIT=$?
 
     if [ $DRIFT_EXIT -eq 0 ]; then
-      SCOPE_DRIFT_STATUS=$(echo "$DRIFT_RESULT" | jq -r '.status // "passed"')
+      SCOPE_DRIFT_STATUS=$(printf '%s\n' "$DRIFT_RESULT" | jq -r '.status // "passed"')
       echo "Scope drift gate: $(echo "$SCOPE_DRIFT_STATUS" | tr '[:lower:]' '[:upper:]')"
-      echo "$DRIFT_RESULT" | jq -r '.reason // empty'
+      printf '%s\n' "$DRIFT_RESULT" | jq -r '.reason // empty'
     elif [ $DRIFT_EXIT -eq 1 ]; then
       SCOPE_DRIFT_STATUS="failed"
       echo "Scope drift gate: BLOCKED (strict mode)" >&2
-      echo "$DRIFT_RESULT" | jq . >&2
+      printf '%s\n' "$DRIFT_RESULT" | jq . >&2
       exit 1
     else
       SCOPE_DRIFT_STATUS="skipped"

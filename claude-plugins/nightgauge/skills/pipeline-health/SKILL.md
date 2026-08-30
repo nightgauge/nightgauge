@@ -320,13 +320,13 @@ OUTPUT_FORMAT="summary"
 ```bash
 # Validate date formats
 if [ -n "$SINCE_DATE" ]; then
-  if ! echo "$SINCE_DATE" | grep -qE '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'; then
+  if ! printf '%s\n' "$SINCE_DATE" | grep -qE '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'; then
     echo "ERROR: --since must be YYYY-MM-DD format (got: $SINCE_DATE)"
     exit 1
   fi
 fi
 if [ -n "$UNTIL_DATE" ]; then
-  if ! echo "$UNTIL_DATE" | grep -qE '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'; then
+  if ! printf '%s\n' "$UNTIL_DATE" | grep -qE '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'; then
     echo "ERROR: --until must be YYYY-MM-DD format (got: $UNTIL_DATE)"
     exit 1
   fi
@@ -336,7 +336,7 @@ fi
 VALID_DIMS="token-economics,cost-health,stage-effectiveness,model-routing,reliability,self-improvement,pipeline-velocity"
 if [ "$DIMENSIONS" != "all" ]; then
   for dim in $(echo "$DIMENSIONS" | tr ',' '\n'); do
-    if ! echo "$VALID_DIMS" | grep -q "$dim"; then
+    if ! printf '%s\n' "$VALID_DIMS" | grep -q "$dim"; then
       echo "ERROR: Unknown dimension '$dim'. Valid: $VALID_DIMS"
       exit 1
     fi

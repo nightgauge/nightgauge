@@ -83,8 +83,8 @@ status. Blocked sub-issues display with 🔒 lock icons in the Ready tab.
 #### Detect Epic Type
 
 ```bash
-LABELS=$(echo "$ISSUE_JSON" | jq -r '.labels[].name' 2>/dev/null)
-if echo "$LABELS" | grep -q "^type:epic$"; then
+LABELS=$(printf '%s\n' "$ISSUE_JSON" | jq -r '.labels[].name' 2>/dev/null)
+if printf '%s\n' "$LABELS" | grep -q "^type:epic$"; then
   IS_EPIC=true
 fi
 ```
@@ -115,7 +115,7 @@ fi
      exit 1
    fi
    EPIC_STATUS=$("$BINARY" epic check-completion "$ISSUE_NUMBER" --json 2>/dev/null || echo '{"complete":false}')
-   EPICS_CLOSED=$(echo "$EPIC_STATUS" | jq 'if .complete == true then 1 else 0 end')
+   EPICS_CLOSED=$(printf '%s\n' "$EPIC_STATUS" | jq 'if .complete == true then 1 else 0 end')
    if [ "$EPICS_CLOSED" -gt 0 ]; then
      echo "Epic #$ISSUE_NUMBER had all sub-issues completed. Auto-closed and synced to Done."
      exit 1
@@ -145,7 +145,7 @@ fi
    response with:
 
    ```bash
-   echo "$RESULT" | jq -r '.data.repository.issue.subIssues.nodes[] |
+   printf '%s\n' "$RESULT" | jq -r '.data.repository.issue.subIssues.nodes[] |
      "#\(.number) - \(.title) [\(.state)]"'
    ```
 
@@ -208,7 +208,7 @@ if [ -z "$BINARY" ]; then
 fi
 EPIC_RESULT=$("$BINARY" epic check-completion "$ISSUE_NUMBER" --json 2>/dev/null || echo '{"complete":false}')
 # Determine if epic is ready to close
-EPICS_READY=$(echo "$EPIC_RESULT" | jq 'if .complete == true then 1 else 0 end')
+EPICS_READY=$(printf '%s\n' "$EPIC_RESULT" | jq 'if .complete == true then 1 else 0 end')
 EPIC_ACTION=$( [ "$EPICS_READY" -gt 0 ] && echo "ready-to-close" || echo "not-ready" )
 ```
 
@@ -217,8 +217,8 @@ EPIC_ACTION=$( [ "$EPICS_READY" -gt 0 ] && echo "ready-to-close" || echo "not-re
 If `action == "ready-to-close"`:
 
 ```bash
-EPIC_NUMBER=$(echo "$EPIC_RESULT" | jq -r '.epicNumber')
-EPIC_TITLE=$(echo "$EPIC_RESULT" | jq -r '.title')
+EPIC_NUMBER=$(printf '%s\n' "$EPIC_RESULT" | jq -r '.epicNumber')
+EPIC_TITLE=$(printf '%s\n' "$EPIC_RESULT" | jq -r '.title')
 HOOKS_DIR="${CLAUDE_PLUGIN_ROOT:-claude-plugins/nightgauge}/hooks/lib"
 
 # a. Classify summary tier (deterministic, no AI tokens)
@@ -227,7 +227,7 @@ if [ ! -x "$HOOKS_DIR/classify-epic-summary-tier.sh" ]; then
   TIER="none"
 else
   TIER_RESULT=$("$HOOKS_DIR/classify-epic-summary-tier.sh" "$EPIC_NUMBER") || true
-  TIER=$(echo "$TIER_RESULT" | jq -r '.tier // "none"')
+  TIER=$(printf '%s\n' "$TIER_RESULT" | jq -r '.tier // "none"')
 fi
 
 # b. Generate summary if tier is not "none"
@@ -290,8 +290,8 @@ if [ -z "$EPIC_BRANCH" ]; then
   echo "WARNING: No epic branch found for epic #$EPIC_NUMBER — skipping PR creation" >&2
 else
   PR_RESULT=$("$BINARY" pr create     --title "feat(#${EPIC_NUMBER}): ${EPIC_TITLE}"     --head "$EPIC_BRANCH"     --base main     --body "Epic #${EPIC_NUMBER} completion: all sub-issues are closed."     --json 2>/dev/null) || true
-  PR_ACTION=$(echo "$PR_RESULT" | jq -r '.action // "created"')
-  PR_URL=$(echo "$PR_RESULT" | jq -r '.prUrl // ""')
+  PR_ACTION=$(printf '%s\n' "$PR_RESULT" | jq -r '.action // "created"')
+  PR_URL=$(printf '%s\n' "$PR_RESULT" | jq -r '.prUrl // ""')
 
   if [ -n "$PR_URL" ] || [ "$PR_ACTION" = "created" ] || [ "$PR_ACTION" = "already-exists" ]; then
     echo "Epic PR ready: $PR_URL"

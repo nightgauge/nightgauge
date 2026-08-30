@@ -38,7 +38,7 @@ if [ "$TESTS_PASSED" -gt 1000 ] && [ "$TESTS_FAILED" -eq 0 ]; then
   echo "⏭ Manual checklist auto-passed — $TESTS_PASSED unit tests passed in dev, providing comprehensive coverage"
   CHECKLIST_AUTO_PASSED=true
   MANUAL_STATUS="auto-passed"
-  SKIPPED_PHASES=$(echo "$SKIPPED_PHASES" | jq '. + [{"phase": "manual_checklist", "reason": "auto-passed: '$TESTS_PASSED' unit tests passed with 0 failures in dev"}]')
+  SKIPPED_PHASES=$(printf '%s\n' "$SKIPPED_PHASES" | jq '. + [{"phase": "manual_checklist", "reason": "auto-passed: '$TESTS_PASSED' unit tests passed with 0 failures in dev"}]')
 fi
 ```
 
@@ -216,8 +216,8 @@ only a single file was touched (single-file changes are inherently bounded).
 EMIT_COMPLEXITY=false
 
 if [ "$PLAN_FILE_COUNT" -gt 0 ] && [ "$ACTUAL_FILE_COUNT" -gt 0 ]; then
-  RATIO=$(echo "$ACTUAL_FILE_COUNT $PLAN_FILE_COUNT" | awk '{printf "%.2f", $1/$2}')
-  RATIO_INT=$(echo "$ACTUAL_FILE_COUNT $PLAN_FILE_COUNT" | awk '{print int($1/$2)}')
+  RATIO=$(printf '%s\n' "$ACTUAL_FILE_COUNT $PLAN_FILE_COUNT" | awk '{printf "%.2f", $1/$2}')
+  RATIO_INT=$(printf '%s\n' "$ACTUAL_FILE_COUNT $PLAN_FILE_COUNT" | awk '{print int($1/$2)}')
   if [ "$RATIO_INT" -ge 2 ]; then
     EMIT_COMPLEXITY=true
   fi
@@ -298,9 +298,9 @@ FEEDBACK_JSON="[]"
 if [ ${#FEEDBACK_SIGNALS[@]} -gt 0 ]; then
   FEEDBACK_JSON=$(printf '%s\n' "${FEEDBACK_SIGNALS[@]}" | jq -s '.')
   SIGNAL_COUNT=${#FEEDBACK_SIGNALS[@]}
-  BLOCKING_COUNT=$(echo "$FEEDBACK_JSON" | jq '[.[] | select(.severity == "blocking")] | length')
+  BLOCKING_COUNT=$(printf '%s\n' "$FEEDBACK_JSON" | jq '[.[] | select(.severity == "blocking")] | length')
   echo "Feedback signals emitted: $SIGNAL_COUNT total, $BLOCKING_COUNT blocking"
-  echo "$FEEDBACK_JSON" | jq -r '.[] | "  - \(.signal_type) (\(.severity)): \(.rationale)"'
+  printf '%s\n' "$FEEDBACK_JSON" | jq -r '.[] | "  - \(.signal_type) (\(.severity)): \(.rationale)"'
 else
   echo "No feedback signals — validation failures are normal dev mistakes or none occurred"
 fi
@@ -499,7 +499,7 @@ this phase entirely and let the orchestrator handle backtracking.
 if [ "$VALIDATION_STATUS" = "failed" ]; then
   echo "Validation failed — skipping commit/push. Code remains on disk for retry."
   COMMIT_SHA=""
-  SKIPPED_PHASES=$(echo "$SKIPPED_PHASES" | jq '. + [{"phase": "commit-and-push", "reason": "validation_status is failed — do not commit broken code"}]')
+  SKIPPED_PHASES=$(printf '%s\n' "$SKIPPED_PHASES" | jq '. + [{"phase": "commit-and-push", "reason": "validation_status is failed — do not commit broken code"}]')
 fi
 ```
 

@@ -976,7 +976,7 @@ for the schema, exit codes, and template provenance.
 #   ".prettierrc"                 → prettier
 #   ".github/workflows/ci.yml"    → ci
 # "Skip tooling scaffold" or an empty selection → no run.
-SELECTED_LIST=$(echo "$USER_MULTISELECT" | jq -r '
+SELECTED_LIST=$(printf '%s\n' "$USER_MULTISELECT" | jq -r '
   [.[] | select(. != "Skip tooling scaffold")
     | sub("^tsconfig\\.json$"; "tsconfig")
     | sub("^vitest\\.config\\.ts$"; "vitest")

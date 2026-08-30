@@ -54,16 +54,16 @@ export GITHUB_TOKEN=$(nightgauge forge auth token 2>/dev/null || echo "")
 
 BRANCH_RESULT=$("$BINARY" git branch-create --issue "$ISSUE_NUMBER" --json 2>/dev/null || echo '{"success":false,"error":"binary not found"}')
 
-if [ "$(echo "$BRANCH_RESULT" | jq -r '.success')" != "true" ]; then
-  echo "ERROR: Branch creation failed: $(echo "$BRANCH_RESULT" | jq -r '.error')"
+if [ "$(printf '%s\n' "$BRANCH_RESULT" | jq -r '.success')" != "true" ]; then
+  echo "ERROR: Branch creation failed: $(printf '%s\n' "$BRANCH_RESULT" | jq -r '.error')"
   exit 1
 fi
 
-BRANCH_NAME=$(echo "$BRANCH_RESULT" | jq -r '.branch')
-BASE_BRANCH=$(echo "$BRANCH_RESULT" | jq -r '.base_branch')
-PARENT_ISSUE_NUMBER=$(echo "$BRANCH_RESULT" | jq -r '.parent_issue // empty')
-EPIC_BRANCH=$(echo "$BRANCH_RESULT" | jq -r '.epic_branch // empty')
-ACTION=$(echo "$BRANCH_RESULT" | jq -r '.action')
+BRANCH_NAME=$(printf '%s\n' "$BRANCH_RESULT" | jq -r '.branch')
+BASE_BRANCH=$(printf '%s\n' "$BRANCH_RESULT" | jq -r '.base_branch')
+PARENT_ISSUE_NUMBER=$(printf '%s\n' "$BRANCH_RESULT" | jq -r '.parent_issue // empty')
+EPIC_BRANCH=$(printf '%s\n' "$BRANCH_RESULT" | jq -r '.epic_branch // empty')
+ACTION=$(printf '%s\n' "$BRANCH_RESULT" | jq -r '.action')
 ```
 
 The script handles:

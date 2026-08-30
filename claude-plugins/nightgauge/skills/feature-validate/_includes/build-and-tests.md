@@ -31,7 +31,7 @@ BUILD_CMD="" BUILD_RAN=false BUILD_PASSED=false BUILD_SKIPPED_REASON=""
 if [ "$DEV_BUILD_RAN" = "true" ] && [ "$DEV_BUILD_STATUS" = "passed" ]; then
   BUILD_PASSED=true
   BUILD_SKIPPED_REASON="build verified by feature-dev"
-  SKIPPED_PHASES=$(echo "$SKIPPED_PHASES" | jq '. + [{"phase": "build_verification", "reason": "build verified by feature-dev (dev context build_verification.status=passed)"}]')
+  SKIPPED_PHASES=$(printf '%s\n' "$SKIPPED_PHASES" | jq '. + [{"phase": "build_verification", "reason": "build verified by feature-dev (dev context build_verification.status=passed)"}]')
 fi
 ```
 
@@ -73,7 +73,7 @@ fi
 # Build failure is a HARD GATE — cannot be bypassed by --auto-pass or --skip-manual.
 # Exception: stale SDK dist is auto-recoverable (run SDK build, retry once).
 if [ "$BUILD_RAN" = "true" ] && [ "$BUILD_PASSED" = "false" ]; then
-  if echo "$BUILD_OUTPUT" | grep -q "RECOVERABLE: stale_sdk_dist\|SDK dist/index.js not found\|SDK dist is stale"; then
+  if printf '%s\n' "$BUILD_OUTPUT" | grep -q "RECOVERABLE: stale_sdk_dist\|SDK dist/index.js not found\|SDK dist is stale"; then
     if [ "$SDK_REBUILD_ATTEMPTED" = "false" ]; then
       SDK_REBUILD_ATTEMPTED=true
       echo "=== Auto-healing: stale SDK dist detected — rebuilding SDK ==="
@@ -229,11 +229,11 @@ DEAD_CODE_BLOCKED=false
 if [ "$DEAD_CODE_MODE" = "off" ]; then
   echo "⏭ Dead code detection disabled (validation.dead_code=off)"
 elif [ "$DEAD_CODE_MODE" = "gate" ]; then
-  ERROR_COUNT=$(echo "$DEAD_CODE_JSON" | jq '[.[] | select(.severity == "error")] | length')
+  ERROR_COUNT=$(printf '%s\n' "$DEAD_CODE_JSON" | jq '[.[] | select(.severity == "error")] | length')
   if [ "$ERROR_COUNT" -gt 0 ]; then
     DEAD_CODE_BLOCKED=true
     echo "✗ Dead code gating FAILED: $ERROR_COUNT finding(s) in current-issue files"
-    echo "$DEAD_CODE_JSON" | jq -r '.[] | select(.severity == "error") | "  - \(.type): \(.name) at \(.location)"'
+    printf '%s\n' "$DEAD_CODE_JSON" | jq -r '.[] | select(.severity == "error") | "  - \(.type): \(.name) at \(.location)"'
   fi
 elif [ "$DEAD_CODE_MODE" = "warn" ]; then
   echo "⚠ Dead code findings recorded as warnings (validation.dead_code=warn)"
@@ -251,11 +251,11 @@ INTEGRATION_CHECK_MODE=$(yq -r '.validation.integration_check // "warn"' .nightg
 if [ "$INTEGRATION_CHECK_MODE" = "off" ]; then
   echo "⏭ Integration check disabled (validation.integration_check=off)"
 elif [ "$INTEGRATION_CHECK_MODE" = "gate" ]; then
-  INTEGRATION_ERRORS=$(echo "$DEAD_CODE_JSON" | jq '[.[] | select(.type == "terminal_output" or .type == "orphaned_producer") | select(.severity == "error")] | length')
+  INTEGRATION_ERRORS=$(printf '%s\n' "$DEAD_CODE_JSON" | jq '[.[] | select(.type == "terminal_output" or .type == "orphaned_producer") | select(.severity == "error")] | length')
   if [ "$INTEGRATION_ERRORS" -gt 0 ]; then
     DEAD_CODE_BLOCKED=true
     echo "✗ Integration check FAILED: $INTEGRATION_ERRORS orphaned integration(s)"
-    echo "$DEAD_CODE_JSON" | jq -r '.[] | select(.type == "terminal_output" or .type == "orphaned_producer") | select(.severity == "error") | "  - \(.type): \(.name) at \(.location)"'
+    printf '%s\n' "$DEAD_CODE_JSON" | jq -r '.[] | select(.type == "terminal_output" or .type == "orphaned_producer") | select(.severity == "error") | "  - \(.type): \(.name) at \(.location)"'
   fi
 elif [ "$INTEGRATION_CHECK_MODE" = "warn" ]; then
   echo "⚠ Integration findings recorded as warnings (validation.integration_check=warn)"
@@ -286,7 +286,7 @@ PREEXISTING_COUNT=0
 # Skip baseline comparison if dev context shows all tests passed (Issue #861)
 if [ "$TESTS_PASSED" -gt 0 ] && [ "$TESTS_FAILED" -eq 0 ]; then
   echo "⏭ Baseline comparison skipped — dev context shows all $TESTS_PASSED tests passed with 0 failures"
-  SKIPPED_PHASES=$(echo "$SKIPPED_PHASES" | jq '. + [{"phase": "baseline_comparison", "reason": "dev context shows all tests passed (passed='$TESTS_PASSED', failed=0)"}]')
+  SKIPPED_PHASES=$(printf '%s\n' "$SKIPPED_PHASES" | jq '. + [{"phase": "baseline_comparison", "reason": "dev context shows all tests passed (passed='$TESTS_PASSED', failed=0)"}]')
 # Only run baseline comparison if tests failed
 elif [ "$TESTS_FAILED" -gt 0 ]; then
   echo "Tests failed — running baseline comparison against main..."
@@ -319,7 +319,7 @@ for FAILING_FILE in $FAILING_TEST_FILES; do
     # Append structured entry — required by PreexistingFailureSchema:
     #   { test_file: string, failure_count: int >= 1, baseline_verified: boolean }
     # baseline_verified=true means "this file also fails on the main branch"
-    PREEXISTING_FAILURES=$(echo "$PREEXISTING_FAILURES" | jq \
+    PREEXISTING_FAILURES=$(printf '%s\n' "$PREEXISTING_FAILURES" | jq \
       --arg tf "$FAILING_FILE" \
       '. += [{"test_file": $tf, "failure_count": 1, "baseline_verified": true}]')
   else
@@ -382,7 +382,7 @@ UNIT_TESTS_SKIPPED=false
 if [ "$TESTS_PASSED" -gt 0 ] && [ "$TESTS_FAILED" -eq 0 ]; then
   echo "⏭ Unit tests skipped — dev context shows $TESTS_PASSED passed, 0 failed"
   UNIT_TESTS_SKIPPED=true
-  SKIPPED_PHASES=$(echo "$SKIPPED_PHASES" | jq '. + [{"phase": "unit_tests", "reason": "dev context shows all unit tests passed (passed='$TESTS_PASSED', failed=0)"}]')
+  SKIPPED_PHASES=$(printf '%s\n' "$SKIPPED_PHASES" | jq '. + [{"phase": "unit_tests", "reason": "dev context shows all unit tests passed (passed='$TESTS_PASSED', failed=0)"}]')
 else
   echo "⚠ Dev context shows test failures (passed=$TESTS_PASSED, failed=$TESTS_FAILED) — unit tests will be re-run"
 fi
@@ -419,13 +419,13 @@ ESEOF
   2>/dev/null)
 
   if [ $? -eq 0 ] && [ -n "$SELECTION_RESULT" ]; then
-    SELECTION_MODE=$(echo "$SELECTION_RESULT" | jq -r '.mode')
-    SELECTION_REASON=$(echo "$SELECTION_RESULT" | jq -r '.reason')
-    SELECTED_TESTS_COUNT=$(echo "$SELECTION_RESULT" | jq -r '.selectedTests')
-    TOTAL_TESTS_COUNT=$(echo "$SELECTION_RESULT" | jq -r '.totalTests // "unknown"')
+    SELECTION_MODE=$(printf '%s\n' "$SELECTION_RESULT" | jq -r '.mode')
+    SELECTION_REASON=$(printf '%s\n' "$SELECTION_RESULT" | jq -r '.reason')
+    SELECTED_TESTS_COUNT=$(printf '%s\n' "$SELECTION_RESULT" | jq -r '.selectedTests')
+    TOTAL_TESTS_COUNT=$(printf '%s\n' "$SELECTION_RESULT" | jq -r '.totalTests // "unknown"')
 
     if [ "$SELECTION_MODE" = "selective" ]; then
-      TARGETED_TESTS=$(echo "$SELECTION_RESULT" | jq -r '.testFiles[]' | tr '\n' ' ' | xargs)
+      TARGETED_TESTS=$(printf '%s\n' "$SELECTION_RESULT" | jq -r '.testFiles[]' | tr '\n' ' ' | xargs)
       echo "Selective testing: $SELECTED_TESTS_COUNT tests selected (of $TOTAL_TESTS_COUNT total). Reason: $SELECTION_REASON"
     else
       echo "Full suite: $SELECTION_REASON"
@@ -433,8 +433,8 @@ ESEOF
   else
     # Fallback: graph unavailable, use heuristic path mapping
     echo "SelectiveTestRunner unavailable — falling back to heuristic test mapping"
-    for SRC_FILE in $(echo "$FILES_CREATED $FILES_MODIFIED" | jq -r '.[]' 2>/dev/null); do
-      echo "$SRC_FILE" | grep -qE '\.(ts|tsx|js|jsx)$' || continue
+    for SRC_FILE in $(printf '%s\n' "$FILES_CREATED $FILES_MODIFIED" | jq -r '.[]' 2>/dev/null); do
+      printf '%s\n' "$SRC_FILE" | grep -qE '\.(ts|tsx|js|jsx)$' || continue
       TEST_CANDIDATE=$(echo "$SRC_FILE" | sed 's|^src/|tests/|; s|\.\(ts\|tsx\|js\|jsx\)$|.test.\1|')
       [ -f "$TEST_CANDIDATE" ] && TARGETED_TESTS="$TARGETED_TESTS $TEST_CANDIDATE"
     done
@@ -554,13 +554,13 @@ console.log(JSON.stringify(detectIntegrationRequirement({
 ESEOF
   2>/dev/null || echo '{"required":false,"commands":[],"detectedVia":"detection failed"}')
 
-INTEGRATION_TESTS_REQUIRED=$(echo "$REQUIREMENT_JSON" | jq -r '.required')
+INTEGRATION_TESTS_REQUIRED=$(printf '%s\n' "$REQUIREMENT_JSON" | jq -r '.required')
 INTEGRATION_TESTS_RAN=false
 INTEGRATION_TESTS_PASSED=false
 INTEGRATION_SKIP_REASON=""
 
 if [ "$INTEGRATION_TESTS_REQUIRED" = "true" ] && [ "$INTEGRATION_TESTS_MODE" != "off" ]; then
-  CMD=$(echo "$REQUIREMENT_JSON" | jq -r '.commands[0]')
+  CMD=$(printf '%s\n' "$REQUIREMENT_JSON" | jq -r '.commands[0]')
   echo "Attempting integration tests via: $CMD"
   INTEGRATION_STDOUT=$(mktemp) && INTEGRATION_STDERR=$(mktemp)
   eval "$CMD" > "$INTEGRATION_STDOUT" 2> "$INTEGRATION_STDERR"
@@ -581,9 +581,9 @@ ESEOF
 )
   rm -f "$INTEGRATION_STDOUT" "$INTEGRATION_STDERR"
 
-  INTEGRATION_TESTS_RAN=$(echo "$OUTCOME_JSON" | jq -r '.ran')
-  INTEGRATION_TESTS_PASSED=$(echo "$OUTCOME_JSON" | jq -r '.passed')
-  INTEGRATION_SKIP_REASON=$(echo "$OUTCOME_JSON" | jq -r '.reason')
+  INTEGRATION_TESTS_RAN=$(printf '%s\n' "$OUTCOME_JSON" | jq -r '.ran')
+  INTEGRATION_TESTS_PASSED=$(printf '%s\n' "$OUTCOME_JSON" | jq -r '.passed')
+  INTEGRATION_SKIP_REASON=$(printf '%s\n' "$OUTCOME_JSON" | jq -r '.reason')
   echo "Integration outcome: ran=$INTEGRATION_TESTS_RAN passed=$INTEGRATION_TESTS_PASSED reason=$INTEGRATION_SKIP_REASON"
 fi
 
@@ -601,9 +601,9 @@ console.log(JSON.stringify(evaluateGate({
 })));
 ESEOF
 )
-INTEGRATION_GATE_STATUS=$(echo "$GATE_DECISION_JSON" | jq -r '.validationStatus')
-INTEGRATION_GATE_REASON=$(echo "$GATE_DECISION_JSON" | jq -r '.reason')
-INTEGRATION_GATE_EMIT_FEEDBACK=$(echo "$GATE_DECISION_JSON" | jq -r '.shouldEmitFeedback')
+INTEGRATION_GATE_STATUS=$(printf '%s\n' "$GATE_DECISION_JSON" | jq -r '.validationStatus')
+INTEGRATION_GATE_REASON=$(printf '%s\n' "$GATE_DECISION_JSON" | jq -r '.reason')
+INTEGRATION_GATE_EMIT_FEEDBACK=$(printf '%s\n' "$GATE_DECISION_JSON" | jq -r '.shouldEmitFeedback')
 echo "Integration gate: $INTEGRATION_GATE_STATUS — $INTEGRATION_GATE_REASON"
 ```
 
@@ -691,9 +691,9 @@ if [ "${E2E_DETECTED:-false}" = "true" ] && [ -n "${E2E_FRAMEWORK:-}" ]; then
   E2E_RUN_RESULT=$(nightgauge e2e run --json --workdir . \
     --framework "$E2E_FRAMEWORK" 2>/dev/null || \
     echo '{"ran":false,"status":"skipped","framework":"","commands":[],"output":"","timestamp":""}')
-  E2E_RAN=$(echo "$E2E_RUN_RESULT" | jq -r '.ran' 2>/dev/null || echo "false")
-  E2E_STATUS=$(echo "$E2E_RUN_RESULT" | jq -r '.status' 2>/dev/null || echo "skipped")
-  E2E_FRAMEWORK=$(echo "$E2E_RUN_RESULT" | jq -r '.framework' 2>/dev/null || echo "")
+  E2E_RAN=$(printf '%s\n' "$E2E_RUN_RESULT" | jq -r '.ran' 2>/dev/null || echo "false")
+  E2E_STATUS=$(printf '%s\n' "$E2E_RUN_RESULT" | jq -r '.status' 2>/dev/null || echo "skipped")
+  E2E_FRAMEWORK=$(printf '%s\n' "$E2E_RUN_RESULT" | jq -r '.framework' 2>/dev/null || echo "")
   if [ "$E2E_STATUS" = "passed" ]; then
     E2E_PASSED=true
     E2E_REASON="E2E tests passed"
@@ -958,14 +958,14 @@ if [ "$MOBILE_MCP_ACTIVE" = "true" ]; then
 
     if [ -f "$RESULT_JSON_PATH" ] && jq -e . "$RESULT_JSON_PATH" >/dev/null 2>&1; then
       SPEC_RESULT=$(jq -c . "$RESULT_JSON_PATH")
-      SPEC_STATUS=$(echo "$SPEC_RESULT" | jq -r '.status // "error"')
+      SPEC_STATUS=$(printf '%s\n' "$SPEC_RESULT" | jq -r '.status // "error"')
     else
       SPEC_STATUS="error"
       SPEC_RESULT=$(jq -nc --arg s "$SPEC_NAME" \
         '{spec: $s, status: "error", error: "no valid result.json written by agent"}')
     fi
 
-    MOBILE_MCP_RESULTS_JSON=$(echo "$MOBILE_MCP_RESULTS_JSON" | jq -c ". + [$SPEC_RESULT]")
+    MOBILE_MCP_RESULTS_JSON=$(printf '%s\n' "$MOBILE_MCP_RESULTS_JSON" | jq -c ". + [$SPEC_RESULT]")
 
     if [ "$SPEC_STATUS" = "pass" ]; then
       MOBILE_MCP_SPECS_PASSED=$((MOBILE_MCP_SPECS_PASSED + 1))

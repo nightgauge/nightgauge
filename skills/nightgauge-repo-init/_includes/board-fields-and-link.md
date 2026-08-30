@@ -49,18 +49,18 @@ if [ $? -ne 0 ]; then
 fi
 
 echo "Field validation complete:"
-echo "$ENSURE_RESULT" | jq -r '
+printf '%s\n' "$ENSURE_RESULT" | jq -r '
   if (.created | length) > 0 then "  Created: \(.created | join(", "))" else empty end,
   if (.updated | length) > 0 then "  Updated: \(.updated | join(", "))" else empty end,
   if (.already | length) > 0 then "  Already: \(.already | join(", "))" else empty end'
 
 # Extract field IDs from ensure-fields JSON output (no separate query needed)
-STATUS_FIELD_ID=$(echo "$ENSURE_RESULT" | jq -r '.field_ids["Status"] // empty')
-PRIORITY_FIELD_ID=$(echo "$ENSURE_RESULT" | jq -r '.field_ids["Priority"] // empty')
-SIZE_FIELD_ID=$(echo "$ENSURE_RESULT" | jq -r '.field_ids["Size"] // empty')
-START_DATE_FIELD_ID=$(echo "$ENSURE_RESULT" | jq -r '.field_ids["Start date"] // empty')
-TARGET_DATE_FIELD_ID=$(echo "$ENSURE_RESULT" | jq -r '.field_ids["Target date"] // empty')
-ESTIMATE_FIELD_ID=$(echo "$ENSURE_RESULT" | jq -r '.field_ids["Estimate"] // empty')
+STATUS_FIELD_ID=$(printf '%s\n' "$ENSURE_RESULT" | jq -r '.field_ids["Status"] // empty')
+PRIORITY_FIELD_ID=$(printf '%s\n' "$ENSURE_RESULT" | jq -r '.field_ids["Priority"] // empty')
+SIZE_FIELD_ID=$(printf '%s\n' "$ENSURE_RESULT" | jq -r '.field_ids["Size"] // empty')
+START_DATE_FIELD_ID=$(printf '%s\n' "$ENSURE_RESULT" | jq -r '.field_ids["Start date"] // empty')
+TARGET_DATE_FIELD_ID=$(printf '%s\n' "$ENSURE_RESULT" | jq -r '.field_ids["Target date"] // empty')
+ESTIMATE_FIELD_ID=$(printf '%s\n' "$ENSURE_RESULT" | jq -r '.field_ids["Estimate"] // empty')
 ```
 
 ---
@@ -72,7 +72,7 @@ If `LINKED_PROJECTS` included this project number, skip the link step:
 
 ```bash
 ALREADY_LINKED=false
-if echo "$LINKED_PROJECTS" | awk -F'\t' '{print $1}' | grep -qx "$PROJECT_NUMBER"; then
+if printf '%s\n' "$LINKED_PROJECTS" | awk -F'\t' '{print $1}' | grep -qx "$PROJECT_NUMBER"; then
   ALREADY_LINKED=true
 fi
 
@@ -154,7 +154,7 @@ fi
 create_view_if_missing() {
   local name="$1" layout="$2" filter="$3"
 
-  if echo "$EXISTING_VIEWS" | grep -qx "$name"; then
+  if printf '%s\n' "$EXISTING_VIEWS" | grep -qx "$name"; then
     echo "  ✓ exists:  $name ($layout)"
     return
   fi

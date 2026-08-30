@@ -36,7 +36,7 @@ invocation:
 
 ```bash
 BRANCH=$(git branch --show-current)
-ISSUE_NUMBER=$(echo "$BRANCH" | grep -oE '[0-9]+' | head -1)
+ISSUE_NUMBER=$(printf '%s\n' "$BRANCH" | grep -oE '[0-9]+' | head -1)
 ```
 
 ### Step 1.2: Locate Plan by Issue Number
@@ -141,11 +141,11 @@ pre-load the referenced sibling-repo knowledge files before implementing.
 
 ```bash
 CROSS_REPO=$(jq -r '.cross_repo_knowledge // []' ".nightgauge/pipeline/planning-${ISSUE_NUMBER}.json" 2>/dev/null)
-REPO_COUNT=$(echo "$CROSS_REPO" | jq 'length' 2>/dev/null || echo "0")
+REPO_COUNT=$(printf '%s\n' "$CROSS_REPO" | jq 'length' 2>/dev/null || echo "0")
 
 if [ "$REPO_COUNT" -gt 0 ]; then
   echo "=== Cross-Repo Knowledge Context ==="
-  echo "$CROSS_REPO" | jq -r '.[] | "--- Repo: \(.repo) ---\nPath: \(.path)\nEntries: \(.entries | join(", "))"'
+  printf '%s\n' "$CROSS_REPO" | jq -r '.[] | "--- Repo: \(.repo) ---\nPath: \(.path)\nEntries: \(.entries | join(", "))"'
   echo ""
   echo "Read the decisions.md and PRD.md files from the above sibling repositories."
   echo "These contain architecture decisions that may constrain the implementation approach."
@@ -203,7 +203,7 @@ if [ "$KNOWLEDGE_ENABLED" != "true" ]; then
   echo "Phase 1.6: knowledge.enabled=false — skipping recall"
 else
   # Build query from files being modified: join paths with spaces (lexical substring match)
-  ALL_FILES=$(echo "${FILES_TO_MODIFY:-[]}" | jq -r '.[]' 2>/dev/null; echo "${FILES_TO_CREATE:-[]}" | jq -r '.[]' 2>/dev/null)
+  ALL_FILES=$(printf '%s\n' "${FILES_TO_MODIFY:-[]}" | jq -r '.[]' 2>/dev/null; printf '%s\n' "${FILES_TO_CREATE:-[]}" | jq -r '.[]' 2>/dev/null)
   RECALL_QUERY=$(echo "$ALL_FILES" | tr '\n' ' ' | xargs | cut -c1-4096)
 
   if [ -z "$RECALL_QUERY" ]; then
@@ -218,19 +218,19 @@ else
       --scopes "local,cross-repo,workspace" \
       2>/dev/null || echo '{"hits":[],"total_hits":0,"query_id":""}')
 
-    RAW_HITS=$(echo "$RECALL_RESULT" | jq -c '.hits // []')
-    RECALL_QUERY_ID=$(echo "$RECALL_RESULT" | jq -r '.query_id // ""')
+    RAW_HITS=$(printf '%s\n' "$RECALL_RESULT" | jq -c '.hits // []')
+    RECALL_QUERY_ID=$(printf '%s\n' "$RECALL_RESULT" | jq -r '.query_id // ""')
 
     # Filter by dev_threshold (higher than planning's default to reduce noise)
     THRESH_NONZERO=$(awk "BEGIN{print ($DEV_THRESHOLD > 0) ? 1 : 0}" 2>/dev/null || echo 0)
     if [ "$THRESH_NONZERO" -eq 1 ]; then
-      ARCH_CONSTRAINTS=$(echo "$RAW_HITS" | jq --argjson thresh "$DEV_THRESHOLD" \
+      ARCH_CONSTRAINTS=$(printf '%s\n' "$RAW_HITS" | jq --argjson thresh "$DEV_THRESHOLD" \
         '[.[] | select(.score >= $thresh)]')
     else
       ARCH_CONSTRAINTS="$RAW_HITS"
     fi
 
-    ARCH_CONSTRAINT_COUNT=$(echo "$ARCH_CONSTRAINTS" | jq 'length')
+    ARCH_CONSTRAINT_COUNT=$(printf '%s\n' "$ARCH_CONSTRAINTS" | jq 'length')
 
     if [ "$ARCH_CONSTRAINT_COUNT" -gt 0 ]; then
       echo "Phase 1.6: Recall found $ARCH_CONSTRAINT_COUNT architectural constraints above threshold ($DEV_THRESHOLD)"
@@ -243,8 +243,8 @@ else
         --stage "feature-dev" 2>/dev/null || true
 
       # Emit knowledge.recall_hit per constraint
-      echo "$ARCH_CONSTRAINTS" | jq -c '.[]' | while IFS= read -r hit; do
-        HIT_PATH=$(echo "$hit" | jq -r '.path // ""')
+      printf '%s\n' "$ARCH_CONSTRAINTS" | jq -c '.[]' | while IFS= read -r hit; do
+        HIT_PATH=$(printf '%s\n' "$hit" | jq -r '.path // ""')
         "$BINARY" telemetry emit \
           --type knowledge.recall_hit \
           --path "$HIT_PATH" \
@@ -253,13 +253,13 @@ else
       done
 
       # Truncate if total snippet content exceeds ~2000 chars to stay within budget
-      TOTAL_SNIPPET_LEN=$(echo "$ARCH_CONSTRAINTS" | jq '[.[].snippet | length] | add // 0')
+      TOTAL_SNIPPET_LEN=$(printf '%s\n' "$ARCH_CONSTRAINTS" | jq '[.[].snippet | length] | add // 0')
       if [ "$TOTAL_SNIPPET_LEN" -gt 2000 ]; then
         "$BINARY" telemetry emit \
           --type knowledge.recall_truncated \
           --stage "feature-dev" 2>/dev/null || true
         # Keep highest-ranked hits that fit; drop lowest
-        ARCH_CONSTRAINTS=$(echo "$ARCH_CONSTRAINTS" | jq '
+        ARCH_CONSTRAINTS=$(printf '%s\n' "$ARCH_CONSTRAINTS" | jq '
           reduce .[] as $h (
             {"hits": [], "chars": 0};
             if (.chars + ($h.snippet | length)) <= 2000
@@ -267,7 +267,7 @@ else
             else .
             end
           ) | .hits')
-        ARCH_CONSTRAINT_COUNT=$(echo "$ARCH_CONSTRAINTS" | jq 'length')
+        ARCH_CONSTRAINT_COUNT=$(printf '%s\n' "$ARCH_CONSTRAINTS" | jq 'length')
       fi
 
       echo ""
@@ -279,11 +279,11 @@ else
       echo ""
       echo "| Rank | Issue | Path | Key Decision |"
       echo "| ---- | ----- | ---- | ------------ |"
-      echo "$ARCH_CONSTRAINTS" | jq -r '.[] | "| \(.rank) | #\(.issue_number // "?") | \(.path) | \(.snippet | split("\n")[0] | .[0:80]) |"'
+      printf '%s\n' "$ARCH_CONSTRAINTS" | jq -r '.[] | "| \(.rank) | #\(.issue_number // "?") | \(.path) | \(.snippet | split("\n")[0] | .[0:80]) |"'
       echo ""
 
       # Read full content of each decision file for deep context
-      echo "$ARCH_CONSTRAINTS" | jq -r '.[].path' | while IFS= read -r hit_path; do
+      printf '%s\n' "$ARCH_CONSTRAINTS" | jq -r '.[].path' | while IFS= read -r hit_path; do
         if [ -f "$hit_path" ]; then
           echo "---"
           echo "### $hit_path"

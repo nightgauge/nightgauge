@@ -105,14 +105,14 @@ VALIDATE_CONTEXT=$(jq '.validate' /tmp/ib_group_c_files.json 2>/dev/null || echo
 PLANNING_CONTEXT=$(jq '.planning' /tmp/ib_group_c_files.json 2>/dev/null || echo '{}')
 
 # Extract commit SHA — prefer validate context (commit happens in feature-validate, Issue #1608)
-COMMIT_SHA=$(echo "$VALIDATE_CONTEXT" | jq -r '.commit_sha // empty')
+COMMIT_SHA=$(printf '%s\n' "$VALIDATE_CONTEXT" | jq -r '.commit_sha // empty')
 if [ -z "$COMMIT_SHA" ]; then
   COMMIT_SHA=$(git rev-parse HEAD)
 fi
 
 # Extract changed files and test outcomes from dev context
-FILES_CHANGED=$(echo "$DEV_CONTEXT" | jq -c '.files_changed // {}')
-TESTS_STATUS=$(echo "$DEV_CONTEXT" | jq -c '.tests_status // {}')
+FILES_CHANGED=$(printf '%s\n' "$DEV_CONTEXT" | jq -c '.files_changed // {}')
+TESTS_STATUS=$(printf '%s\n' "$DEV_CONTEXT" | jq -c '.tests_status // {}')
 
 # Clean up temp files
 rm -f /tmp/ib_group_b_git.json /tmp/ib_group_c_files.json
@@ -121,12 +121,12 @@ rm -f /tmp/ib_group_b_git.json /tmp/ib_group_c_files.json
 **Step 1.6: Load knowledge context**
 
 ```bash
-KNOWLEDGE_PATH=$(echo "$PLANNING_CONTEXT" | jq -r '.knowledge_path // empty')
-KNOWLEDGE_ENTRIES=$(echo "$PLANNING_CONTEXT" | jq -c '.knowledge_entries // []')
+KNOWLEDGE_PATH=$(printf '%s\n' "$PLANNING_CONTEXT" | jq -r '.knowledge_path // empty')
+KNOWLEDGE_ENTRIES=$(printf '%s\n' "$PLANNING_CONTEXT" | jq -c '.knowledge_entries // []')
 # Fallback: check dev context if planning context is absent
 if [ -z "$KNOWLEDGE_PATH" ]; then
-  KNOWLEDGE_PATH=$(echo "$DEV_CONTEXT" | jq -r '.knowledge_path // empty')
-  KNOWLEDGE_ENTRIES=$(echo "$DEV_CONTEXT" | jq -c '.knowledge_entries // []')
+  KNOWLEDGE_PATH=$(printf '%s\n' "$DEV_CONTEXT" | jq -r '.knowledge_path // empty')
+  KNOWLEDGE_ENTRIES=$(printf '%s\n' "$DEV_CONTEXT" | jq -c '.knowledge_entries // []')
 fi
 ```
 
@@ -163,7 +163,7 @@ single PR with multi-issue closing keywords.
 **Detection**: After loading dev context, check for `dev-batch-{E}.json`.
 
 ```bash
-EPIC_NUMBER=$(echo "$BRANCH" | grep -oE '[0-9]+' | head -1)
+EPIC_NUMBER=$(printf '%s\n' "$BRANCH" | grep -oE '[0-9]+' | head -1)
 BATCH_DEV=".nightgauge/pipeline/dev-batch-${EPIC_NUMBER}.json"
 
 if [ -f "$BATCH_DEV" ]; then

@@ -23,7 +23,7 @@ Silently skip to Phase 1.
 
 ```bash
 BRANCH=$(git branch --show-current)
-ISSUE_NUMBER=$(echo "$BRANCH" | grep -oE '[0-9]+' | head -1)
+ISSUE_NUMBER=$(printf '%s\n' "$BRANCH" | grep -oE '[0-9]+' | head -1)
 FEEDBACK_FILE=".nightgauge/pipeline/feedback-${ISSUE_NUMBER}.json"
 
 REVISION_COUNT=0
@@ -33,7 +33,7 @@ IS_REVISION=false
 if [ -f "$FEEDBACK_FILE" ]; then
   IS_REVISION=true
   SIGNALS=$(jq -r '.signals' "$FEEDBACK_FILE")
-  SIGNAL_COUNT=$(echo "$SIGNALS" | jq 'length')
+  SIGNAL_COUNT=$(printf '%s\n' "$SIGNALS" | jq 'length')
   REVISION_COUNT=$(jq -r '.revision_count // 0' ".nightgauge/pipeline/planning-${ISSUE_NUMBER}.json" 2>/dev/null || echo 0)
 
   echo "=== PLAN REVISION (Attempt $((REVISION_COUNT + 1))) ==="
@@ -45,17 +45,17 @@ if [ -f "$FEEDBACK_FILE" ]; then
   echo ""
 
   # Print verbatim evidence for each signal
-  echo "$SIGNALS" | jq -r '.[] | "### \(.signal_type) (\(.severity))\nRationale: \(.rationale)\nEvidence:\n\(.evidence | map("  - " + .) | join("\n"))\n"'
+  printf '%s\n' "$SIGNALS" | jq -r '.[] | "### \(.signal_type) (\(.severity))\nRationale: \(.rationale)\nEvidence:\n\(.evidence | map("  - " + .) | join("\n"))\n"'
 
   # Collect revision_reasons from all evidence strings
-  REVISION_REASONS=$(echo "$SIGNALS" | jq '[.[].evidence[]] ')
+  REVISION_REASONS=$(printf '%s\n' "$SIGNALS" | jq '[.[].evidence[]] ')
 
   # Per-signal-type handling instructions
   echo "## Revision Instructions"
   echo ""
 
   # PLAN_REVISION_NEEDED
-  HAS_REVISION_NEEDED=$(echo "$SIGNALS" | jq '[.[] | select(.signal_type == "PLAN_REVISION_NEEDED")] | length')
+  HAS_REVISION_NEEDED=$(printf '%s\n' "$SIGNALS" | jq '[.[] | select(.signal_type == "PLAN_REVISION_NEEDED")] | length')
   if [ "$HAS_REVISION_NEEDED" -gt 0 ]; then
     echo "**PLAN_REVISION_NEEDED**: Revise the specific files, APIs, and patterns"
     echo "that were wrong. Do NOT reuse the same file list or approach without"
@@ -64,7 +64,7 @@ if [ -f "$FEEDBACK_FILE" ]; then
   fi
 
   # SCOPE_DISCOVERED
-  HAS_SCOPE=$(echo "$SIGNALS" | jq '[.[] | select(.signal_type == "SCOPE_DISCOVERED")] | length')
+  HAS_SCOPE=$(printf '%s\n' "$SIGNALS" | jq '[.[] | select(.signal_type == "SCOPE_DISCOVERED")] | length')
   if [ "$HAS_SCOPE" -gt 0 ]; then
     echo "**SCOPE_DISCOVERED**: Explicitly expand the plan's scope section to"
     echo "include all newly discovered files listed in the evidence. These files"
@@ -73,7 +73,7 @@ if [ -f "$FEEDBACK_FILE" ]; then
   fi
 
   # ACCEPTANCE_CRITERIA_AMBIGUOUS
-  HAS_AMBIGUOUS=$(echo "$SIGNALS" | jq '[.[] | select(.signal_type == "ACCEPTANCE_CRITERIA_AMBIGUOUS")] | length')
+  HAS_AMBIGUOUS=$(printf '%s\n' "$SIGNALS" | jq '[.[] | select(.signal_type == "ACCEPTANCE_CRITERIA_AMBIGUOUS")] | length')
   if [ "$HAS_AMBIGUOUS" -gt 0 ]; then
     echo "**ACCEPTANCE_CRITERIA_AMBIGUOUS**: You cannot change the acceptance"
     echo "criteria. Read the original issue body and any comments. Make an"
@@ -83,7 +83,7 @@ if [ -f "$FEEDBACK_FILE" ]; then
   fi
 
   # COMPLEXITY_UNDERESTIMATED
-  HAS_COMPLEXITY=$(echo "$SIGNALS" | jq '[.[] | select(.signal_type == "COMPLEXITY_UNDERESTIMATED")] | length')
+  HAS_COMPLEXITY=$(printf '%s\n' "$SIGNALS" | jq '[.[] | select(.signal_type == "COMPLEXITY_UNDERESTIMATED")] | length')
   if [ "$HAS_COMPLEXITY" -gt 0 ]; then
     echo "**COMPLEXITY_UNDERESTIMATED**: Escalate the documentation scope and"
     echo "re-assess the Size board field. If the issue is sized S or M, consider"

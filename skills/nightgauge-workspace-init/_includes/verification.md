@@ -12,8 +12,8 @@ member. A non-empty payload is the exact signal the extension's
 ```bash
 cd "$WORKSPACE_ROOT"
 PAYLOAD="$(nightgauge workspace sync-payload 2>/dev/null)"
-REPO_COUNT="$(echo "$PAYLOAD" | jq '.repos | length')"
-DISPLAY_NAME="$(echo "$PAYLOAD" | jq -r '.workspace.display_name // ""')"
+REPO_COUNT="$(printf '%s\n' "$PAYLOAD" | jq '.repos | length')"
+DISPLAY_NAME="$(printf '%s\n' "$PAYLOAD" | jq -r '.workspace.display_name // ""')"
 
 echo "sync-payload: repos=$REPO_COUNT display_name=\"$DISPLAY_NAME\""
 

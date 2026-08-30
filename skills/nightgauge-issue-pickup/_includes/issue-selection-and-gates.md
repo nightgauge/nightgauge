@@ -201,11 +201,11 @@ else
 
   if [ $GATE_EXIT -eq 1 ]; then
     # Defer: parse JSON for evidence and post deferral comment.
-    WORKFLOW=$(echo "$GATE_OUTPUT" | jq -r '.workflow // "unknown"' 2>/dev/null)
-    JOB=$(echo "$GATE_OUTPUT" | jq -r '.job // empty' 2>/dev/null)
-    FAILED=$(echo "$GATE_OUTPUT" | jq -r '.failed_runs // 0' 2>/dev/null)
-    SAMPLED=$(echo "$GATE_OUTPUT" | jq -r '.sampled_runs // 0' 2>/dev/null)
-    REASON=$(echo "$GATE_OUTPUT" | jq -r '.reason // ""' 2>/dev/null)
+    WORKFLOW=$(printf '%s\n' "$GATE_OUTPUT" | jq -r '.workflow // "unknown"' 2>/dev/null)
+    JOB=$(printf '%s\n' "$GATE_OUTPUT" | jq -r '.job // empty' 2>/dev/null)
+    FAILED=$(printf '%s\n' "$GATE_OUTPUT" | jq -r '.failed_runs // 0' 2>/dev/null)
+    SAMPLED=$(printf '%s\n' "$GATE_OUTPUT" | jq -r '.sampled_runs // 0' 2>/dev/null)
+    REASON=$(printf '%s\n' "$GATE_OUTPUT" | jq -r '.reason // ""' 2>/dev/null)
 
     JOB_LINE=""
     [ -n "$JOB" ] && JOB_LINE=" job=\`$JOB\`"
@@ -334,8 +334,8 @@ else
 
   if [ $GATE_EXIT -eq 1 ]; then
     # Defer: parse the open blockers and post a deferral comment.
-    BLOCKERS=$(echo "$GATE_OUTPUT" | jq -r '.open_dependencies[]? | "- #\(.number) \(.title)"' 2>/dev/null)
-    REASON=$(echo "$GATE_OUTPUT" | jq -r '.reason // "blocked by open dependency"' 2>/dev/null)
+    BLOCKERS=$(printf '%s\n' "$GATE_OUTPUT" | jq -r '.open_dependencies[]? | "- #\(.number) \(.title)"' 2>/dev/null)
+    REASON=$(printf '%s\n' "$GATE_OUTPUT" | jq -r '.reason // "blocked by open dependency"' 2>/dev/null)
 
     COMMENT_BODY="## Dependency Gate — Deferred
 

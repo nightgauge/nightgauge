@@ -225,10 +225,10 @@ EPIC="<epic-number-from-args>"
 # Pass --repo: check-completion defaults to nightgauge/nightgauge, which is
 # the wrong repo for a store epic (e.g. Acme-Community/acme-tracker).
 EPIC_STATUS=$(nightgauge epic check-completion "$EPIC" --repo "$REPO" --json 2>/dev/null || echo '{"complete":false}')
-COMPLETE=$(echo "$EPIC_STATUS" | jq -r '.complete // false')
+COMPLETE=$(printf '%s\n' "$EPIC_STATUS" | jq -r '.complete // false')
 if [ "$COMPLETE" != "true" ]; then
   echo "ERROR: epic #$EPIC is not fully closed. The version bump is derived only after an epic closes."
-  echo "$EPIC_STATUS" | jq -r '"  open: \(.open // "?")  closed: \(.closed // "?")  total: \(.total // "?")"'
+  printf '%s\n' "$EPIC_STATUS" | jq -r '"  open: \(.open // "?")  closed: \(.closed // "?")  total: \(.total // "?")"'
   exit 1
 fi
 # Enumerate sub-issues from the epic BODY (#N links) — the established pattern
@@ -290,18 +290,18 @@ ADDED=""; FIXED=""; CHANGED=""
 classify() {  # echoes one of: major | minor | fix | other
   local title="$1" body="$2" labels="$3"
   # Breaking (→ major): label, "type!:" prefix, or BREAKING CHANGE in the body.
-  if echo "$labels" | grep -qiw 'type:breaking' \
+  if printf '%s\n' "$labels" | grep -qiw 'type:breaking' \
      || printf '%s' "$title" | grep -qE '^[a-z]+(\([^)]*\))?!:' \
      || printf '%s' "$body" | grep -qE 'BREAKING[ -]CHANGE'; then
     echo major; return
   fi
   # Feature (→ minor, Added).
-  if echo "$labels" | grep -qiw 'type:feature' \
+  if printf '%s\n' "$labels" | grep -qiw 'type:feature' \
      || printf '%s' "$title" | grep -qiE '^feat(\([^)]*\))?!?:'; then
     echo minor; return
   fi
   # Bug fix (→ patch, Fixed).
-  if echo "$labels" | grep -qiw 'type:bug' \
+  if printf '%s\n' "$labels" | grep -qiw 'type:bug' \
      || printf '%s' "$title" | grep -qiE '^fix(\([^)]*\))?!?:'; then
     echo fix; return
   fi
@@ -310,9 +310,9 @@ classify() {  # echoes one of: major | minor | fix | other
 
 for n in $SUB_NUMBERS; do
   ISSUE_JSON=$(nightgauge forge issue view "$n" --repo "$REPO" --json 2>/dev/null)
-  TITLE=$(echo "$ISSUE_JSON" | jq -r '.title // ""')
-  BODY=$(echo "$ISSUE_JSON"  | jq -r '.body // ""')
-  LABELS=$(echo "$ISSUE_JSON" | jq -r '(.labels // []) | map(.name) | join(",")')
+  TITLE=$(printf '%s\n' "$ISSUE_JSON" | jq -r '.title // ""')
+  BODY=$(printf '%s\n' "$ISSUE_JSON"  | jq -r '.body // ""')
+  LABELS=$(printf '%s\n' "$ISSUE_JSON" | jq -r '(.labels // []) | map(.name) | join(",")')
   KIND=$(classify "$TITLE" "$BODY" "$LABELS")
 
   # Strip a Conventional-Commit prefix from the title for a clean bullet.

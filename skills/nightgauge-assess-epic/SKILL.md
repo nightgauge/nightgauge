@@ -92,7 +92,7 @@ autonomous decisions or fail with clear error.
 EPIC_NUMBER="${1:?ERROR: Epic number is required. Usage: /nightgauge:assess-epic <epic-number>}"
 
 # Validate numeric input
-if ! echo "$EPIC_NUMBER" | grep -qE '^[0-9]+$'; then
+if ! printf '%s\n' "$EPIC_NUMBER" | grep -qE '^[0-9]+$'; then
   echo "ERROR: Epic number must be a positive integer (got: $EPIC_NUMBER)"
   exit 1
 fi
@@ -109,14 +109,14 @@ if [ $? -ne 0 ]; then
 fi
 
 # Verify it has the type:epic label
-IS_EPIC=$(echo "$EPIC_JSON" | jq -r '.labels[]?.name' | grep -c '^type:epic$' || echo "0")
+IS_EPIC=$(printf '%s\n' "$EPIC_JSON" | jq -r '.labels[]?.name' | grep -c '^type:epic$' || echo "0")
 if [ "$IS_EPIC" -eq 0 ]; then
   echo "ERROR: Issue #$EPIC_NUMBER does not have the 'type:epic' label."
   echo "  This command only works on epic issues."
   exit 1
 fi
 
-EPIC_TITLE=$(echo "$EPIC_JSON" | jq -r '.title')
+EPIC_TITLE=$(printf '%s\n' "$EPIC_JSON" | jq -r '.title')
 echo "Epic #$EPIC_NUMBER: $EPIC_TITLE"
 ```
 
@@ -152,7 +152,7 @@ if [ $? -ne 0 ]; then
   exit 1
 fi
 
-SUB_COUNT=$(echo "$SUB_ISSUES_JSON" | jq '.data.repository.issue.subIssues.nodes | length')
+SUB_COUNT=$(printf '%s\n' "$SUB_ISSUES_JSON" | jq '.data.repository.issue.subIssues.nodes | length')
 if [ "$SUB_COUNT" -eq 0 ]; then
   echo "ERROR: Epic #$EPIC_NUMBER has no sub-issues linked via GitHub's sub-issue feature."
   echo "  Sub-issues must be linked using the addSubIssue GraphQL mutation."
@@ -161,7 +161,7 @@ if [ "$SUB_COUNT" -eq 0 ]; then
 fi
 
 echo "Found $SUB_COUNT sub-issues"
-echo "$SUB_ISSUES_JSON" | jq -r '.data.repository.issue.subIssues.nodes[] |
+printf '%s\n' "$SUB_ISSUES_JSON" | jq -r '.data.repository.issue.subIssues.nodes[] |
   "  #\(.number) - \(.title) [\(.state)]"'
 ```
 
@@ -200,11 +200,11 @@ if [ $? -ne 0 ] || [ -z "$ASSESS_JSON" ]; then
   exit 1
 fi
 
-STRATEGY=$(echo "$ASSESS_JSON" | jq -r '.strategy')
-REASONING=$(echo "$ASSESS_JSON" | jq -r '.reasoning')
-EST_COST=$(echo "$ASSESS_JSON" | jq -r '.estimatedCostUsd')
-EST_MINUTES=$(echo "$ASSESS_JSON" | jq -r '.estimatedMinutes')
-OPEN_COUNT=$(echo "$ASSESS_JSON" | jq '.issues | length')
+STRATEGY=$(printf '%s\n' "$ASSESS_JSON" | jq -r '.strategy')
+REASONING=$(printf '%s\n' "$ASSESS_JSON" | jq -r '.reasoning')
+EST_COST=$(printf '%s\n' "$ASSESS_JSON" | jq -r '.estimatedCostUsd')
+EST_MINUTES=$(printf '%s\n' "$ASSESS_JSON" | jq -r '.estimatedMinutes')
+OPEN_COUNT=$(printf '%s\n' "$ASSESS_JSON" | jq '.issues | length')
 
 echo "Strategy: $(echo "$STRATEGY" | tr '[:lower:]' '[:upper:]')"
 echo "Reasoning: $REASONING"
@@ -231,7 +231,7 @@ echo "  Cost: \$$EST_COST"
 echo "  Time: $EST_MINUTES min"
 echo ""
 echo "Per-Issue Breakdown:"
-echo "$ASSESS_JSON" | jq -r '.issues[] |
+printf '%s\n' "$ASSESS_JSON" | jq -r '.issues[] |
   "  #\(.issueNumber) complexity=\(.complexityScore) model=\(.recommendedModel)\(if .hasDependencies then " [blocked]" else "" end)"'
 echo ""
 echo "Recommendation:"
@@ -257,7 +257,7 @@ REPORT_DIR=".nightgauge/pipeline"
 mkdir -p "$REPORT_DIR"
 REPORT_FILE="$REPORT_DIR/epic-assessment-${EPIC_NUMBER}.json"
 
-echo "$ASSESS_JSON" | jq \
+printf '%s\n' "$ASSESS_JSON" | jq \
   --arg epic_number "$EPIC_NUMBER" \
   --arg epic_title "$(echo "$EPIC_TITLE" | sed 's/"/\\"/g')" \
   --argjson sub_total "$SUB_COUNT" \

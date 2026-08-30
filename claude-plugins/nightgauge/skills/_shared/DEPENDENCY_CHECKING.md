@@ -44,10 +44,10 @@ if [ "$DEP_ENABLED" = "true" ] && [ "$DEP_MODE" != "ignore" ]; then
     exit 1
   fi
   DEP_RESULT=$("$BINARY" hook check-deps "$ISSUE_NUMBER" 2>/dev/null || echo '{"has_open_dependencies":false}')
-  HAS_OPEN_DEPS=$(echo "$DEP_RESULT" | jq -r '.has_open_dependencies')
-  SHOULD_BLOCK=$(echo "$DEP_RESULT" | jq -r '.should_block')
-  OPEN_DEPS=$(echo "$DEP_RESULT" | jq -r '.open_dependencies')
-  OPEN_COUNT=$(echo "$DEP_RESULT" | jq -r '.open_count')
+  HAS_OPEN_DEPS=$(printf '%s\n' "$DEP_RESULT" | jq -r '.has_open_dependencies')
+  SHOULD_BLOCK=$(printf '%s\n' "$DEP_RESULT" | jq -r '.should_block')
+  OPEN_DEPS=$(printf '%s\n' "$DEP_RESULT" | jq -r '.open_dependencies')
+  OPEN_COUNT=$(printf '%s\n' "$DEP_RESULT" | jq -r '.open_count')
 fi
 ```
 
@@ -72,8 +72,8 @@ GATE_EXIT=$?
 if [ $GATE_EXIT -eq 1 ]; then
   # Deferred: the gate paused the queue item (kind=blocked_dependency) and
   # emitted the open blockers as JSON. Post a deferral comment naming each.
-  BLOCKERS=$(echo "$GATE_OUTPUT" | jq -r '.open_dependencies[]? | "- #\(.number) \(.title)"' 2>/dev/null)
-  REASON=$(echo "$GATE_OUTPUT" | jq -r '.reason // "blocked by open dependency"' 2>/dev/null)
+  BLOCKERS=$(printf '%s\n' "$GATE_OUTPUT" | jq -r '.open_dependencies[]? | "- #\(.number) \(.title)"' 2>/dev/null)
+  REASON=$(printf '%s\n' "$GATE_OUTPUT" | jq -r '.reason // "blocked by open dependency"' 2>/dev/null)
 
   COMMENT_BODY="## Dependency Gate — Deferred
 

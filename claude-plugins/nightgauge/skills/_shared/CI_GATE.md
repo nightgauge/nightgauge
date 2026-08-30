@@ -36,7 +36,7 @@ The CI workflow (`.github/workflows/ci.yml`) only triggers on PRs targeting
 CI waiting for these PRs — the local pre-merge safety net still runs.
 
 ```bash
-if [ -n "$BASE_BRANCH" ] && echo "$BASE_BRANCH" | grep -q "^epic/"; then
+if [ -n "$BASE_BRANCH" ] && printf '%s\n' "$BASE_BRANCH" | grep -q "^epic/"; then
   echo "PR targets epic branch ($BASE_BRANCH) — CI workflows do not trigger for non-main targets"
   echo "Skipping CI wait; local pre-merge safety net will run instead"
   CI_CHECKS_PASSED=true
@@ -138,15 +138,15 @@ if [ "$CI_CHUNK_PENDING" != "true" ]; then
   rm -f "$CI_DEADLINE_FILE"
 fi
 
-CI_ALL_PASSED=$(echo "$CI_RESULT" | jq -r 'if .state == "SUCCESS" then "true" else "false" end')
-CI_HAS_CHECKS=$(echo "$CI_RESULT" | jq -r 'if .total > 0 then "true" else "false" end')
+CI_ALL_PASSED=$(printf '%s\n' "$CI_RESULT" | jq -r 'if .state == "SUCCESS" then "true" else "false" end')
+CI_HAS_CHECKS=$(printf '%s\n' "$CI_RESULT" | jq -r 'if .total > 0 then "true" else "false" end')
 
-REQUIRED_CHECKS=$(echo "$CI_RESULT" | jq -r '.requiredCheckNames // [] | join(", ")' 2>/dev/null)
+REQUIRED_CHECKS=$(printf '%s\n' "$CI_RESULT" | jq -r '.requiredCheckNames // [] | join(", ")' 2>/dev/null)
 if [ -n "$REQUIRED_CHECKS" ]; then
   echo "[ci-gate] Waited on required checks: $REQUIRED_CHECKS"
 fi
-CI_FAILED_COUNT=$(echo "$CI_RESULT" | jq -r '.failed // 0')
-CI_PENDING_COUNT=$(echo "$CI_RESULT" | jq -r '.pending // 0')
+CI_FAILED_COUNT=$(printf '%s\n' "$CI_RESULT" | jq -r '.failed // 0')
+CI_PENDING_COUNT=$(printf '%s\n' "$CI_RESULT" | jq -r '.pending // 0')
 
 case $CI_EXIT_CODE in
   0) CI_CHECKS_PASSED=true ;;
@@ -176,7 +176,7 @@ fi
 # failure — it is excluded here (#187).
 if [ "$CI_EXIT_CODE" -ne 0 ] && [ "$CI_EXIT_CODE" -ne 2 ] && [ "$CI_EPIC_SKIP" != "true" ]; then
   CI_FETCH_FAILED=true
-  if echo "$CI_STDERR" | grep -qiE "rate.?limit|api rate"; then
+  if printf '%s\n' "$CI_STDERR" | grep -qiE "rate.?limit|api rate"; then
     CI_RATE_LIMITED=true
     echo "ERROR: ci wait failed due to GitHub API rate limit. Cannot verify CI status." >&2
   fi
@@ -230,7 +230,7 @@ status, cancel.
 
 ```bash
 if [ "$CI_HAS_FAILURES" = "true" ]; then
-  FAILED_CHECKS=$(echo "$CI_RESULT" | jq -r '[.checks[] | select(.conclusion == "FAILURE") | .name] | .[]' 2>/dev/null)
+  FAILED_CHECKS=$(printf '%s\n' "$CI_RESULT" | jq -r '[.checks[] | select(.conclusion == "FAILURE") | .name] | .[]' 2>/dev/null)
 
   AUTO_FIX_CI=$([ "${ARG_NO_AUTO_FIX_CI:-false}" = "true" ] && echo "false" || echo "true")
 

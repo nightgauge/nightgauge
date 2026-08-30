@@ -193,7 +193,7 @@ Extract issue number from branch name (e.g., `feat/11-description` → 11).
 
 ```bash
 BRANCH=$(git branch --show-current)
-ISSUE_NUMBER=$(echo "$BRANCH" | grep -oE '[0-9]+' | head -1)
+ISSUE_NUMBER=$(printf '%s\n' "$BRANCH" | grep -oE '[0-9]+' | head -1)
 ```
 
 **Step 1.2: Determine base branch early**
@@ -465,7 +465,7 @@ printf '<!-- phase:start name="write-context" index=12 total=14 stage="pr-create
      --argjson passed "${CI_CHECKS_PASSED:-0}" \
      --argjson failed "${CI_CHECKS_FAILED:-0}" \
      --argjson pending "${CI_CHECKS_PENDING:-0}" \
-     --argjson failures "$(echo "${CI_FAILURES_JSON:-[]}" | jq -c .)" \
+     --argjson failures "$(printf '%s\n' "${CI_FAILURES_JSON:-[]}" | jq -c .)" \
      --arg timestamp "${CI_MONITOR_TIMESTAMP:-}" \
      --arg notes "${CI_NOTES:-}" \
      '{

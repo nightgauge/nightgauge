@@ -105,7 +105,7 @@ CACHED_LABELS_JSON=$(nightgauge label list \
 create_label() {
   local name="$1" color="$2" description="$3"
   # Check cached list — avoids repeated API calls
-  if echo "$CACHED_LABELS_JSON" | jq -r '.[].name' | grep -qx "$name"; then
+  if printf '%s\n' "$CACHED_LABELS_JSON" | jq -r '.[].name' | grep -qx "$name"; then
     echo "  ✓ exists: $name"
   elif [ "$DRY_RUN" = "true" ]; then
     echo "  [DRY RUN] would create: $name"

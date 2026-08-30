@@ -144,7 +144,7 @@ while [ $# -gt 0 ]; do
       ;;
     *)
       # Numeric arguments are issue numbers
-      if echo "$1" | grep -qE '^[0-9]+$'; then
+      if printf '%s\n' "$1" | grep -qE '^[0-9]+$'; then
         OPERATION="add"
         ISSUE_NUMBERS="$ISSUE_NUMBERS $1"
       else
@@ -209,13 +209,13 @@ for ISSUE_NUM in $ISSUE_NUMBERS; do
     continue
   fi
 
-  ISSUE_STATE=$(echo "$ISSUE_JSON" | jq -r '.state')
+  ISSUE_STATE=$(printf '%s\n' "$ISSUE_JSON" | jq -r '.state')
   if [ "$ISSUE_STATE" != "OPEN" ]; then
     echo "SKIP: Issue #$ISSUE_NUM is $ISSUE_STATE (not open)"
     continue
   fi
 
-  ISSUE_TITLE=$(echo "$ISSUE_JSON" | jq -r '.title')
+  ISSUE_TITLE=$(printf '%s\n' "$ISSUE_JSON" | jq -r '.title')
 
   # Binary auto-detects type:epic and expands sub-issues; plain issues are queued directly
   "$BINARY" queue add "$ISSUE_NUM"
@@ -230,8 +230,8 @@ When `OPERATION="list"`:
 ```bash
 QUEUE_STATE=$("$BINARY" queue list --json 2>/dev/null)
 
-ITEM_COUNT=$(echo "$QUEUE_STATE" | jq '.items | length' 2>/dev/null || echo "0")
-QUEUE_STATUS=$(echo "$QUEUE_STATE" | jq -r '.status // "idle"' 2>/dev/null)
+ITEM_COUNT=$(printf '%s\n' "$QUEUE_STATE" | jq '.items | length' 2>/dev/null || echo "0")
+QUEUE_STATUS=$(printf '%s\n' "$QUEUE_STATE" | jq -r '.status // "idle"' 2>/dev/null)
 
 echo ""
 echo "QUEUE STATUS"
@@ -244,7 +244,7 @@ echo ""
 if [ "$ITEM_COUNT" -gt 0 ]; then
   echo "Position  Issue  Title"
   echo "───────────────────────────────────────────────────"
-  echo "$QUEUE_STATE" | jq -r '.items[] |
+  printf '%s\n' "$QUEUE_STATE" | jq -r '.items[] |
     "   \(.position)      #\(.issueNumber)    \(.title)"'
 fi
 ```
@@ -287,7 +287,7 @@ if [ $? -ne 0 ]; then
   exit 1
 fi
 
-MATCH_COUNT=$(echo "$MATCHING_ISSUES" | jq 'length')
+MATCH_COUNT=$(printf '%s\n' "$MATCHING_ISSUES" | jq 'length')
 if [ "$MATCH_COUNT" -eq 0 ]; then
   echo "No open issues found with label '$LABEL'"
   exit 0
@@ -296,7 +296,7 @@ fi
 echo "Found $MATCH_COUNT issues with label '$LABEL'"
 
 # Filter out epics from label-based queuing (epics must be queued explicitly)
-echo "$MATCHING_ISSUES" | jq -r '.[] |
+printf '%s\n' "$MATCHING_ISSUES" | jq -r '.[] |
   select(.labels | map(.name) | index("type:epic") | not) |
   "\(.number) \(.title)"' | while read -r NUM TITLE; do
   "$BINARY" queue add "$NUM" "$TITLE" ""
@@ -318,14 +318,14 @@ state:
 if [ "$OPERATION" != "list" ]; then
   UPDATED_STATE=$("$BINARY" queue list --json 2>/dev/null)
 
-  FINAL_COUNT=$(echo "$UPDATED_STATE" | jq '.items | length' 2>/dev/null || echo "0")
-  AUTO_START=$(echo "$UPDATED_STATE" | jq -r '.autoStart // true' 2>/dev/null)
+  FINAL_COUNT=$(printf '%s\n' "$UPDATED_STATE" | jq '.items | length' 2>/dev/null || echo "0")
+  AUTO_START=$(printf '%s\n' "$UPDATED_STATE" | jq -r '.autoStart // true' 2>/dev/null)
 
   echo ""
   echo "Queue: $FINAL_COUNT items | Auto-start: $AUTO_START"
 
   if [ "$FINAL_COUNT" -gt 0 ] && [ "$AUTO_START" = "true" ]; then
-    NEXT_ISSUE=$(echo "$UPDATED_STATE" | jq -r '.items[0].issueNumber' 2>/dev/null)
+    NEXT_ISSUE=$(printf '%s\n' "$UPDATED_STATE" | jq -r '.items[0].issueNumber' 2>/dev/null)
     echo "Next: #$NEXT_ISSUE will start when pipeline is idle"
   fi
 fi

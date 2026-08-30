@@ -190,7 +190,7 @@ ISSUES=$(gh api graphql -f query='
   }
 }')
 
-ISSUE_COUNT=$(echo "$ISSUES" | jq '[.data.organization.projectV2.items.nodes[] | select(.content.number != null)] | length')
+ISSUE_COUNT=$(printf '%s\n' "$ISSUES" | jq '[.data.organization.projectV2.items.nodes[] | select(.content.number != null)] | length')
 echo "Found $ISSUE_COUNT issues with status: $STATUS_FILTER"
 ```
 
@@ -238,20 +238,20 @@ if [ -n "$BINARY" ]; then
   fi
 
   # Extract per-category finding arrays for downstream reporting.
-  MISSING_TYPE_JSON=$(echo "$PREFLIGHT_JSON" | jq -c '[.findings[] | select(.finding_type == "missing_type_label")]' 2>/dev/null || echo "[]")
-  MISSING_SIZE_JSON=$(echo "$PREFLIGHT_JSON" | jq -c '[.findings[] | select(.finding_type == "missing_size_field")]' 2>/dev/null || echo "[]")
-  MISSING_PRIORITY_JSON=$(echo "$PREFLIGHT_JSON" | jq -c '[.findings[] | select(.finding_type == "missing_priority_field")]' 2>/dev/null || echo "[]")
-  WEAK_AC_JSON=$(echo "$PREFLIGHT_JSON" | jq -c '[.findings[] | select(.finding_type == "weak_acceptance_criteria")]' 2>/dev/null || echo "[]")
-  CYCLES_JSON=$(echo "$PREFLIGHT_JSON" | jq -c '[.findings[] | select(.finding_type == "dependency_cycle")]' 2>/dev/null || echo "[]")
-  GREENFIELD_JSON=$(echo "$PREFLIGHT_JSON" | jq -c '[.findings[] | select(.finding_type == "greenfield_warning")]' 2>/dev/null || echo "[]")
+  MISSING_TYPE_JSON=$(printf '%s\n' "$PREFLIGHT_JSON" | jq -c '[.findings[] | select(.finding_type == "missing_type_label")]' 2>/dev/null || echo "[]")
+  MISSING_SIZE_JSON=$(printf '%s\n' "$PREFLIGHT_JSON" | jq -c '[.findings[] | select(.finding_type == "missing_size_field")]' 2>/dev/null || echo "[]")
+  MISSING_PRIORITY_JSON=$(printf '%s\n' "$PREFLIGHT_JSON" | jq -c '[.findings[] | select(.finding_type == "missing_priority_field")]' 2>/dev/null || echo "[]")
+  WEAK_AC_JSON=$(printf '%s\n' "$PREFLIGHT_JSON" | jq -c '[.findings[] | select(.finding_type == "weak_acceptance_criteria")]' 2>/dev/null || echo "[]")
+  CYCLES_JSON=$(printf '%s\n' "$PREFLIGHT_JSON" | jq -c '[.findings[] | select(.finding_type == "dependency_cycle")]' 2>/dev/null || echo "[]")
+  GREENFIELD_JSON=$(printf '%s\n' "$PREFLIGHT_JSON" | jq -c '[.findings[] | select(.finding_type == "greenfield_warning")]' 2>/dev/null || echo "[]")
 
   # Populate bash arrays for the Phase 3 reporter (backward-compatible interface).
-  while IFS= read -r line; do [ -n "$line" ] && MISSING_TYPE+=("$line"); done < <(echo "$MISSING_TYPE_JSON" | jq -r '.[] | "#\(.issue_number): \(.issue_title)"' 2>/dev/null)
-  while IFS= read -r line; do [ -n "$line" ] && MISSING_SIZE+=("$line"); done < <(echo "$MISSING_SIZE_JSON" | jq -r '.[] | "#\(.issue_number): \(.issue_title)"' 2>/dev/null)
-  while IFS= read -r line; do [ -n "$line" ] && MISSING_PRIORITY+=("$line"); done < <(echo "$MISSING_PRIORITY_JSON" | jq -r '.[] | "#\(.issue_number): \(.issue_title)"' 2>/dev/null)
-  while IFS= read -r line; do [ -n "$line" ] && WEAK_AC+=("$line"); done < <(echo "$WEAK_AC_JSON" | jq -r '.[] | "#\(.issue_number): \(.issue_title) (\(.detail))"' 2>/dev/null)
-  while IFS= read -r line; do [ -n "$line" ] && CYCLES+=("$line"); done < <(echo "$CYCLES_JSON" | jq -r '.[] | .detail' 2>/dev/null)
-  while IFS= read -r line; do [ -n "$line" ] && GREENFIELD_WARNINGS+=("$line"); done < <(echo "$GREENFIELD_JSON" | jq -r '.[] | .detail' 2>/dev/null)
+  while IFS= read -r line; do [ -n "$line" ] && MISSING_TYPE+=("$line"); done < <(printf '%s\n' "$MISSING_TYPE_JSON" | jq -r '.[] | "#\(.issue_number): \(.issue_title)"' 2>/dev/null)
+  while IFS= read -r line; do [ -n "$line" ] && MISSING_SIZE+=("$line"); done < <(printf '%s\n' "$MISSING_SIZE_JSON" | jq -r '.[] | "#\(.issue_number): \(.issue_title)"' 2>/dev/null)
+  while IFS= read -r line; do [ -n "$line" ] && MISSING_PRIORITY+=("$line"); done < <(printf '%s\n' "$MISSING_PRIORITY_JSON" | jq -r '.[] | "#\(.issue_number): \(.issue_title)"' 2>/dev/null)
+  while IFS= read -r line; do [ -n "$line" ] && WEAK_AC+=("$line"); done < <(printf '%s\n' "$WEAK_AC_JSON" | jq -r '.[] | "#\(.issue_number): \(.issue_title) (\(.detail))"' 2>/dev/null)
+  while IFS= read -r line; do [ -n "$line" ] && CYCLES+=("$line"); done < <(printf '%s\n' "$CYCLES_JSON" | jq -r '.[] | .detail' 2>/dev/null)
+  while IFS= read -r line; do [ -n "$line" ] && GREENFIELD_WARNINGS+=("$line"); done < <(printf '%s\n' "$GREENFIELD_JSON" | jq -r '.[] | .detail' 2>/dev/null)
 
 else
   # Legacy shell fallback — runs when binary is not installed.
@@ -260,11 +260,11 @@ else
 
   if [ "$FOCUS" = "all" ] || [ "$FOCUS" = "labels" ]; then
     for i in $(seq 0 $((ISSUE_COUNT - 1))); do
-      NUMBER=$(echo "$ISSUES" | jq -r ".data.organization.projectV2.items.nodes[$i].content.number")
-      TITLE=$(echo "$ISSUES" | jq -r ".data.organization.projectV2.items.nodes[$i].content.title")
-      LABELS=$(echo "$ISSUES" | jq -r "[.data.organization.projectV2.items.nodes[$i].content.labels.nodes[].name] | join(\",\")")
+      NUMBER=$(printf '%s\n' "$ISSUES" | jq -r ".data.organization.projectV2.items.nodes[$i].content.number")
+      TITLE=$(printf '%s\n' "$ISSUES" | jq -r ".data.organization.projectV2.items.nodes[$i].content.title")
+      LABELS=$(printf '%s\n' "$ISSUES" | jq -r "[.data.organization.projectV2.items.nodes[$i].content.labels.nodes[].name] | join(\",\")")
 
-      HAS_TYPE=$(echo "$LABELS" | grep -cE "type:(feature|bug|docs|refactor|chore|epic|spike)" || true)
+      HAS_TYPE=$(printf '%s\n' "$LABELS" | grep -cE "type:(feature|bug|docs|refactor|chore|epic|spike)" || true)
       if [ "$HAS_TYPE" -eq 0 ]; then
         MISSING_TYPE+=("#$NUMBER: $TITLE")
       fi
@@ -275,11 +275,11 @@ else
 
   if [ "$FOCUS" = "all" ] || [ "$FOCUS" = "labels" ]; then
     for i in $(seq 0 $((ISSUE_COUNT - 1))); do
-      NUMBER=$(echo "$ISSUES" | jq -r ".data.organization.projectV2.items.nodes[$i].content.number")
-      TITLE=$(echo "$ISSUES" | jq -r ".data.organization.projectV2.items.nodes[$i].content.title")
+      NUMBER=$(printf '%s\n' "$ISSUES" | jq -r ".data.organization.projectV2.items.nodes[$i].content.number")
+      TITLE=$(printf '%s\n' "$ISSUES" | jq -r ".data.organization.projectV2.items.nodes[$i].content.title")
 
-      SIZE=$(echo "$ISSUES" | jq -r "[.data.organization.projectV2.items.nodes[$i].fieldValues.nodes[] | select(.field.name==\"Size\") | .name] | first // empty")
-      PRIORITY=$(echo "$ISSUES" | jq -r "[.data.organization.projectV2.items.nodes[$i].fieldValues.nodes[] | select(.field.name==\"Priority\") | .name] | first // empty")
+      SIZE=$(printf '%s\n' "$ISSUES" | jq -r "[.data.organization.projectV2.items.nodes[$i].fieldValues.nodes[] | select(.field.name==\"Size\") | .name] | first // empty")
+      PRIORITY=$(printf '%s\n' "$ISSUES" | jq -r "[.data.organization.projectV2.items.nodes[$i].fieldValues.nodes[] | select(.field.name==\"Priority\") | .name] | first // empty")
 
       if [ -z "$SIZE" ]; then MISSING_SIZE+=("#$NUMBER: $TITLE"); fi
       if [ -z "$PRIORITY" ]; then MISSING_PRIORITY+=("#$NUMBER: $TITLE"); fi
@@ -290,11 +290,11 @@ else
 
   if [ "$FOCUS" = "all" ] || [ "$FOCUS" = "criteria" ]; then
     for i in $(seq 0 $((ISSUE_COUNT - 1))); do
-      NUMBER=$(echo "$ISSUES" | jq -r ".data.organization.projectV2.items.nodes[$i].content.number")
-      TITLE=$(echo "$ISSUES" | jq -r ".data.organization.projectV2.items.nodes[$i].content.title")
-      BODY=$(echo "$ISSUES" | jq -r ".data.organization.projectV2.items.nodes[$i].content.body // \"\"")
+      NUMBER=$(printf '%s\n' "$ISSUES" | jq -r ".data.organization.projectV2.items.nodes[$i].content.number")
+      TITLE=$(printf '%s\n' "$ISSUES" | jq -r ".data.organization.projectV2.items.nodes[$i].content.title")
+      BODY=$(printf '%s\n' "$ISSUES" | jq -r ".data.organization.projectV2.items.nodes[$i].content.body // \"\"")
       BODY_LEN=${#BODY}
-      AC_COUNT=$(echo "$BODY" | grep -c "\- \[ \]" 2>/dev/null || echo "0")
+      AC_COUNT=$(printf '%s\n' "$BODY" | grep -c "\- \[ \]" 2>/dev/null || echo "0")
 
       if [ "$BODY_LEN" -lt 100 ] || [ "$AC_COUNT" -lt 2 ]; then
         REASON=""
@@ -389,20 +389,20 @@ if [ "$FOCUS" = "all" ] || [ "$FOCUS" = "drift" ]; then
   # Collect issues that have non-trivial bodies for drift analysis
   DRIFT_CANDIDATES="[]"
   for i in $(seq 0 $((ISSUE_COUNT - 1))); do
-    NUMBER=$(echo "$ISSUES" | jq -r ".data.organization.projectV2.items.nodes[$i].content.number")
-    TITLE=$(echo "$ISSUES" | jq -r ".data.organization.projectV2.items.nodes[$i].content.title")
-    BODY=$(echo "$ISSUES" | jq -r ".data.organization.projectV2.items.nodes[$i].content.body // \"\"")
+    NUMBER=$(printf '%s\n' "$ISSUES" | jq -r ".data.organization.projectV2.items.nodes[$i].content.number")
+    TITLE=$(printf '%s\n' "$ISSUES" | jq -r ".data.organization.projectV2.items.nodes[$i].content.title")
+    BODY=$(printf '%s\n' "$ISSUES" | jq -r ".data.organization.projectV2.items.nodes[$i].content.body // \"\"")
     BODY_LEN=${#BODY}
 
     # Only send issues with substantial bodies (skip trivial stubs)
     if [ "$BODY_LEN" -gt 200 ]; then
-      DRIFT_CANDIDATES=$(echo "$DRIFT_CANDIDATES" | jq \
+      DRIFT_CANDIDATES=$(printf '%s\n' "$DRIFT_CANDIDATES" | jq \
         --arg num "$NUMBER" --arg title "$TITLE" --arg body "$BODY" \
         '. + [{number: $num, title: $title, body: $body}]')
     fi
   done
 
-  CANDIDATE_COUNT=$(echo "$DRIFT_CANDIDATES" | jq 'length')
+  CANDIDATE_COUNT=$(printf '%s\n' "$DRIFT_CANDIDATES" | jq 'length')
   if [ "$CANDIDATE_COUNT" -gt 0 ]; then
     echo "Checking $CANDIDATE_COUNT issues for documentation drift..."
 
@@ -478,22 +478,22 @@ fi)
 | # | Title | Problem | Fix |
 |---|-------|---------|-----|
 $(for issue in "${MISSING_TYPE[@]}"; do
-  NUM=$(echo "$issue" | grep -oE '#[0-9]+' | tr -d '#')
+  NUM=$(printf '%s\n' "$issue" | grep -oE '#[0-9]+' | tr -d '#')
   TTITLE=$(echo "$issue" | sed 's/#[0-9]*: //')
   echo "| #$NUM | $TTITLE | Missing type label | Add type:feature/bug/docs/refactor/chore |"
 done)
 $(for issue in "${MISSING_SIZE[@]}"; do
-  NUM=$(echo "$issue" | grep -oE '#[0-9]+' | tr -d '#')
+  NUM=$(printf '%s\n' "$issue" | grep -oE '#[0-9]+' | tr -d '#')
   TTITLE=$(echo "$issue" | sed 's/#[0-9]*: //')
   echo "| #$NUM | $TTITLE | Missing Size field | Set Size on project board |"
 done)
 $(for issue in "${MISSING_PRIORITY[@]}"; do
-  NUM=$(echo "$issue" | grep -oE '#[0-9]+' | tr -d '#')
+  NUM=$(printf '%s\n' "$issue" | grep -oE '#[0-9]+' | tr -d '#')
   TTITLE=$(echo "$issue" | sed 's/#[0-9]*: //')
   echo "| #$NUM | $TTITLE | Missing Priority field | Set Priority on project board |"
 done)
 $(for issue in "${WEAK_AC[@]}"; do
-  NUM=$(echo "$issue" | grep -oE '#[0-9]+' | tr -d '#')
+  NUM=$(printf '%s\n' "$issue" | grep -oE '#[0-9]+' | tr -d '#')
   TTITLE=$(echo "$issue" | sed 's/#[0-9]*: //')
   echo "| #$NUM | $TTITLE | Weak acceptance criteria | Add at least 2 checkbox ACs (- [ ] ...) |"
 done)
@@ -580,16 +580,16 @@ When `--fix` is provided, apply deterministic fixes:
 if [ "$FIX_MODE" = "true" ]; then
   FIXES_APPLIED=0
   for issue in "${MISSING_TYPE[@]}"; do
-    NUMBER=$(echo "$issue" | grep -oE '#[0-9]+' | tr -d '#')
+    NUMBER=$(printf '%s\n' "$issue" | grep -oE '#[0-9]+' | tr -d '#')
     TITLE=$(echo "$issue" | sed 's/#[0-9]*: //')
     RESULT=$(nightgauge issue infer-type "$NUMBER" --apply --json 2>/dev/null)
     if [ -z "$RESULT" ]; then
       echo "  ERROR: infer-type failed for #$NUMBER"
       continue
     fi
-    INFERRED_TYPE=$(echo "$RESULT" | jq -r '.type')
-    SOURCE=$(echo "$RESULT" | jq -r '.source')
-    APPLIED=$(echo "$RESULT" | jq -r '.applied')
+    INFERRED_TYPE=$(printf '%s\n' "$RESULT" | jq -r '.type')
+    SOURCE=$(printf '%s\n' "$RESULT" | jq -r '.source')
+    APPLIED=$(printf '%s\n' "$RESULT" | jq -r '.applied')
     echo "Applying $INFERRED_TYPE to #$NUMBER ($TITLE)..."
     if [ "$APPLIED" = "true" ]; then
       echo "  Applied $INFERRED_TYPE to #$NUMBER (source: $SOURCE)"

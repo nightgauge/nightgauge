@@ -82,7 +82,7 @@ if [ -n "${ARG_PROJECT:-}" ]; then
 else
   # Collect distinct project numbers across members.
   distinct="$(for m in "${MEMBERS[@]}"; do read_member_field "$m" '.project.number' 'number'; done | sort -u | grep -v '^$')"
-  count="$(echo "$distinct" | grep -c . || true)"
+  count="$(printf '%s\n' "$distinct" | grep -c . || true)"
   if [ "$count" -gt 1 ]; then
     echo "ERROR: members point at different projects:" >&2
     echo "$distinct" >&2

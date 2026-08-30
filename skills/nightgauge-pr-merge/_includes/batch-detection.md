@@ -89,8 +89,8 @@ once, unmodified, over the single shared PR.
    [ -n "$PR_NUMBER" ] && [ -n "$BINARY" ] && \
      PR_BODY=$("$BINARY" pr view "$PR_NUMBER" --json 2>/dev/null | jq -r '.body // ""')
 
-   for N in $(echo "$BATCH_ISSUES" | jq -r '.[]'); do
-     echo "$PR_BODY" | grep -qiE "closes #${N}\b" || echo "WARNING: PR body has no 'Closes #${N}' — issue #${N} will stay open"
+   for N in $(printf '%s\n' "$BATCH_ISSUES" | jq -r '.[]'); do
+     printf '%s\n' "$PR_BODY" | grep -qiE "closes #${N}\b" || echo "WARNING: PR body has no 'Closes #${N}' — issue #${N} will stay open"
    done
    ```
 

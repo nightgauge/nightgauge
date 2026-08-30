@@ -44,23 +44,23 @@ directories in a single deterministic pass. No Python required.
 
 ```bash
 KNOWLEDGE_JSON=$(nightgauge knowledge index --cross-repo --workspace --limit 20 --json 2>/dev/null || echo '{}')
-CROSS_REPO_ENTRIES_JSON=$(echo "$KNOWLEDGE_JSON" | jq -c '.cross_repo_knowledge // []')
-WORKSPACE_KB_ENTRIES_JSON=$(echo "$KNOWLEDGE_JSON" | jq -c '.workspace_kb // []')
+CROSS_REPO_ENTRIES_JSON=$(printf '%s\n' "$KNOWLEDGE_JSON" | jq -c '.cross_repo_knowledge // []')
+WORKSPACE_KB_ENTRIES_JSON=$(printf '%s\n' "$KNOWLEDGE_JSON" | jq -c '.workspace_kb // []')
 
-REPO_COUNT=$(echo "$CROSS_REPO_ENTRIES_JSON" | jq 'length' 2>/dev/null || echo "0")
+REPO_COUNT=$(printf '%s\n' "$CROSS_REPO_ENTRIES_JSON" | jq 'length' 2>/dev/null || echo "0")
 if [ "$REPO_COUNT" -gt 0 ]; then
   echo "=== Cross-Repo Knowledge Found: $REPO_COUNT sibling repo(s) ==="
-  echo "$CROSS_REPO_ENTRIES_JSON" | jq -r '.[] | "  - \(.repo): \(.entries | length) entries at \(.path)"'
+  printf '%s\n' "$CROSS_REPO_ENTRIES_JSON" | jq -r '.[] | "  - \(.repo): \(.entries | length) entries at \(.path)"'
   echo ""
   echo "Read decisions.md and PRD.md from related sibling issues for planning context."
   echo "Focus on entries related to the current issue (same epic parent or referenced issue numbers)."
   echo "Limit reading to avoid token waste — prefer decisions.md over full PRD body."
 fi
 
-WS_KB_COUNT=$(echo "$WORKSPACE_KB_ENTRIES_JSON" | jq 'length' 2>/dev/null || echo "0")
+WS_KB_COUNT=$(printf '%s\n' "$WORKSPACE_KB_ENTRIES_JSON" | jq 'length' 2>/dev/null || echo "0")
 if [ "$WS_KB_COUNT" -gt 0 ]; then
   echo "=== Workspace KB entries: $WS_KB_COUNT namespace(s) ==="
-  echo "$WORKSPACE_KB_ENTRIES_JSON" | jq -r '.[] | "  - [[\(.namespace):...]]: \(.entries | length) entries at \(.path)"'
+  printf '%s\n' "$WORKSPACE_KB_ENTRIES_JSON" | jq -r '.[] | "  - [[\(.namespace):...]]: \(.entries | length) entries at \(.path)"'
   echo ""
   echo "When planning touches cross-repo contracts, product principles, or"
   echo "ecosystem architecture, read matching entries above via the wiki-link"
@@ -117,17 +117,17 @@ else
     --scopes "local,cross-repo,workspace" \
     2>/dev/null || echo '{"hits":[],"total_hits":0,"query_id":""}')
 
-  RECALL_HITS=$(echo "$RECALL_RESULT" | jq -c '.hits // []')
-  RECALL_QUERY_ID=$(echo "$RECALL_RESULT" | jq -r '.query_id // ""')
+  RECALL_HITS=$(printf '%s\n' "$RECALL_RESULT" | jq -c '.hits // []')
+  RECALL_QUERY_ID=$(printf '%s\n' "$RECALL_RESULT" | jq -r '.query_id // ""')
 
   # Step 3.7.5: Filter by threshold (skip filter when threshold is 0)
   THRESH_NONZERO=$(awk "BEGIN{print ($RECALL_THRESHOLD > 0) ? 1 : 0}" 2>/dev/null || echo 0)
   if [ "$THRESH_NONZERO" = "1" ]; then
-    RECALL_HITS=$(echo "$RECALL_HITS" | jq --argjson thresh "$RECALL_THRESHOLD" \
+    RECALL_HITS=$(printf '%s\n' "$RECALL_HITS" | jq --argjson thresh "$RECALL_THRESHOLD" \
       '[.[] | select(.score >= $thresh)]')
   fi
 
-  RECALL_HIT_COUNT=$(echo "$RECALL_HITS" | jq 'length')
+  RECALL_HIT_COUNT=$(printf '%s\n' "$RECALL_HITS" | jq 'length')
 
   if [ "$RECALL_HIT_COUNT" -gt 0 ]; then
     echo "Phase 3.7: Recall found $RECALL_HIT_COUNT prior decisions above threshold"
@@ -140,9 +140,9 @@ else
       --stage feature-planning \
       2>/dev/null || true
 
-    echo "$RECALL_HITS" | jq -c '.[]' | while IFS= read -r hit; do
-      HIT_RANK=$(echo "$hit" | jq -r '.rank')
-      HIT_PATH=$(echo "$hit" | jq -r '.path')
+    printf '%s\n' "$RECALL_HITS" | jq -c '.[]' | while IFS= read -r hit; do
+      HIT_RANK=$(printf '%s\n' "$hit" | jq -r '.rank')
+      HIT_PATH=$(printf '%s\n' "$hit" | jq -r '.path')
       "$BINARY" knowledge telemetry record \
         --type recall_hit \
         --path "$HIT_PATH" \
@@ -154,7 +154,7 @@ else
 
     # Step 3.7.7: Read full content of top-ranked decision files
     echo "=== Prior Decisions (full content) ==="
-    echo "$RECALL_HITS" | jq -r '.[].path' | while IFS= read -r hit_path; do
+    printf '%s\n' "$RECALL_HITS" | jq -r '.[].path' | while IFS= read -r hit_path; do
       if [ -f "$hit_path" ]; then
         echo "--- $hit_path ---"
         cat "$hit_path"

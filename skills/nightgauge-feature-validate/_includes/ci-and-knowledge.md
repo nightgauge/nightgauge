@@ -34,7 +34,7 @@ actually runs. Fall back to standard commands if no workflow is found.
 ```bash
 CI_DISCOVER_RESULT=$(nightgauge ci discover-commands --json 2>/dev/null || \
   echo '{"commands":[],"workflow_path":"","framework":"unknown","timestamp":""}')
-mapfile -t CI_PARITY_COMMANDS < <(echo "$CI_DISCOVER_RESULT" | jq -r '.commands[]' 2>/dev/null)
+mapfile -t CI_PARITY_COMMANDS < <(printf '%s\n' "$CI_DISCOVER_RESULT" | jq -r '.commands[]' 2>/dev/null)
 echo "CI parity commands discovered (${#CI_PARITY_COMMANDS[@]}): ${CI_PARITY_COMMANDS[*]}"
 ```
 
@@ -129,7 +129,7 @@ Skip this phase entirely when:
 ```bash
 if [ "$PTC_AVAILABLE" = "true" ] && [ "$PTC_EXIT" = "0" ]; then
   echo "⏭ CI parity skipped — PTC validation already passed"
-  SKIPPED_PHASES=$(echo "$SKIPPED_PHASES" | jq '. + [{"phase": "ci_parity_check", "reason": "PTC validation passed — same commands already executed"}]')
+  SKIPPED_PHASES=$(printf '%s\n' "$SKIPPED_PHASES" | jq '. + [{"phase": "ci_parity_check", "reason": "PTC validation passed — same commands already executed"}]')
 fi
 ```
 
@@ -208,7 +208,7 @@ if [ -n "$KNOWLEDGE_PATH" ] && [ -f "$PRD_FILE" ]; then
       sed 's/.*['"'"'"`]\([^'"'"'"`]*\)['"'"'"`].*/\1/' | head -20)
     TEST_NAMES="${TEST_NAMES}${names}"$'\n'
   done <<< "$CHANGED_TEST_FILES"
-  TEST_NAMES_JSON=$(echo "$TEST_NAMES" | grep -v '^$' | jq -R . | jq -s . 2>/dev/null || echo "[]")
+  TEST_NAMES_JSON=$(printf '%s\n' "$TEST_NAMES" | grep -v '^$' | jq -R . | jq -s . 2>/dev/null || echo "[]")
 fi
 ```
 
@@ -220,7 +220,7 @@ if [ -n "$KNOWLEDGE_PATH" ] && [ -f "$PRD_FILE" ]; then
 
   # Get list of changed file paths for code evidence scanning
   CHANGED_FILES=$(git diff HEAD~1 --name-only 2>/dev/null | head -50 || true)
-  CHANGED_FILES_JSON=$(echo "$CHANGED_FILES" | grep -v '^$' | jq -R . | jq -s . 2>/dev/null || echo "[]")
+  CHANGED_FILES_JSON=$(printf '%s\n' "$CHANGED_FILES" | grep -v '^$' | jq -R . | jq -s . 2>/dev/null || echo "[]")
 
   # Invoke the Go binary coverage check subcommand
   COVERAGE_RESULT=$("$BINARY" knowledge coverage-check \
@@ -232,16 +232,16 @@ if [ -n "$KNOWLEDGE_PATH" ] && [ -f "$PRD_FILE" ]; then
     --output "$COVERAGE_MAP_PATH" \
     --json 2>/dev/null || echo '{"error":"coverage-check not available"}')
 
-  COVERAGE_ERROR=$(echo "$COVERAGE_RESULT" | jq -r '.error // empty' 2>/dev/null)
+  COVERAGE_ERROR=$(printf '%s\n' "$COVERAGE_RESULT" | jq -r '.error // empty' 2>/dev/null)
   if [ -n "$COVERAGE_ERROR" ]; then
     echo "WARNING: Coverage check unavailable ($COVERAGE_ERROR) — skipping"
     COVERAGE_MAP_PATH=""
   else
     echo "Coverage map written: $COVERAGE_MAP_PATH"
-    COVERED=$(echo "$COVERAGE_RESULT" | jq -r '.covered_count // 0')
-    TOTAL=$(echo "$COVERAGE_RESULT" | jq -r '.total_count // 0')
-    NO_EVIDENCE=$(echo "$COVERAGE_RESULT" | jq -r '.no_evidence_count // 0')
-    VIOLATIONS=$(echo "$COVERAGE_RESULT" | jq -r '.violation_count // 0')
+    COVERED=$(printf '%s\n' "$COVERAGE_RESULT" | jq -r '.covered_count // 0')
+    TOTAL=$(printf '%s\n' "$COVERAGE_RESULT" | jq -r '.total_count // 0')
+    NO_EVIDENCE=$(printf '%s\n' "$COVERAGE_RESULT" | jq -r '.no_evidence_count // 0')
+    VIOLATIONS=$(printf '%s\n' "$COVERAGE_RESULT" | jq -r '.violation_count // 0')
     echo "Coverage: ${COVERED}/${TOTAL} ACs covered, ${NO_EVIDENCE} no-evidence, ${VIOLATIONS} violation(s)"
   fi
 fi
@@ -330,7 +330,7 @@ if [ -n "$BINARY" ]; then
     echo "GATE BLOCKED: Pre-push validation failed. Fix issues before committing/pushing."
     echo "See .nightgauge/pipeline/pre-push-${ISSUE_NUMBER}.json for details."
     VALIDATION_STATUS="failed"
-    SKIPPED_PHASES=$(echo "$SKIPPED_PHASES" | jq '. + [{"phase": "commit-and-push", "reason": "pre-push gate blocked"}]')
+    SKIPPED_PHASES=$(printf '%s\n' "$SKIPPED_PHASES" | jq '. + [{"phase": "commit-and-push", "reason": "pre-push gate blocked"}]')
   }
 else
   # Graceful degradation: binary unavailable — run shell-based checks

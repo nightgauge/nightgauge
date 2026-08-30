@@ -76,7 +76,7 @@ if [ -n "$BINARY" ]; then
     --owner "$(echo "$REPO" | cut -d'/' -f1)" \
     --repo "$(echo "$REPO" | cut -d'/' -f2)" \
     --json 2>/dev/null || echo '{}')
-  CLOSE_STATUS=$(echo "$CLOSE_RESULT" | jq -r '.result // empty' 2>/dev/null || echo "")
+  CLOSE_STATUS=$(printf '%s\n' "$CLOSE_RESULT" | jq -r '.result // empty' 2>/dev/null || echo "")
   if [ "$CLOSE_STATUS" = "closed" ]; then
     ISSUE_CLOSED=true
     echo "Issue #$ISSUE_NUMBER closed."
@@ -142,10 +142,10 @@ CONFIG_PRUNE_ON_MERGE=$(yq -r '.knowledge.auto_prune_on_merge // true' .nightgau
 if [ "$CONFIG_PRUNE_ON_MERGE" = "true" ] && [ -n "$BINARY" ] && [ "$ISSUE_CLOSED" = "true" ]; then
   echo "Pruning empty knowledge directories for issue #$ISSUE_NUMBER..."
   PRUNE_RESULT=$("$BINARY" knowledge prune-empty --issue "$ISSUE_NUMBER" --json 2>/dev/null || echo '{"pruned":[]}')
-  PRUNED_COUNT=$(echo "$PRUNE_RESULT" | jq -r '.pruned | length' 2>/dev/null || echo "0")
+  PRUNED_COUNT=$(printf '%s\n' "$PRUNE_RESULT" | jq -r '.pruned | length' 2>/dev/null || echo "0")
   if [ "$PRUNED_COUNT" -gt 0 ]; then
     echo "Pruned $PRUNED_COUNT knowledge director(ies) with boilerplate-only content:"
-    echo "$PRUNE_RESULT" | jq -r '.pruned[]' | while read -r dir; do
+    printf '%s\n' "$PRUNE_RESULT" | jq -r '.pruned[]' | while read -r dir; do
       echo "  - $dir"
     done
   else
@@ -165,9 +165,9 @@ if [ "$CONFIG_AUTO_INDEX" = "true" ] && [ -d "$KNOWLEDGE_DIR" ]; then
     echo "Regenerating knowledge index (.nightgauge/knowledge/README.md)..."
     if [ -n "$BINARY" ]; then
       REGEN_RESULT=$("$BINARY" knowledge regenerate-index --json 2>/dev/null || echo '{"ok":false,"error":"binary command not available"}')
-      REGEN_OK=$(echo "$REGEN_RESULT" | jq -r '.ok // false' 2>/dev/null || echo "false")
+      REGEN_OK=$(printf '%s\n' "$REGEN_RESULT" | jq -r '.ok // false' 2>/dev/null || echo "false")
       if [ "$REGEN_OK" = "true" ]; then
-        ENTRY_COUNT=$(echo "$REGEN_RESULT" | jq -r '.total_entries // "?"' 2>/dev/null || echo "?")
+        ENTRY_COUNT=$(printf '%s\n' "$REGEN_RESULT" | jq -r '.total_entries // "?"' 2>/dev/null || echo "?")
         echo "Knowledge index regenerated: $ENTRY_COUNT entries"
         # Commit the updated README.md if it changed
         if ! git diff --quiet "$KNOWLEDGE_DIR/README.md" 2>/dev/null; then
@@ -176,7 +176,7 @@ if [ "$CONFIG_AUTO_INDEX" = "true" ] && [ -d "$KNOWLEDGE_DIR" ]; then
           echo "Knowledge README.md committed."
         fi
       else
-        echo "WARNING: knowledge regenerate-index failed: $(echo "$REGEN_RESULT" | jq -r '.error // "unknown"')" >&2
+        echo "WARNING: knowledge regenerate-index failed: $(printf '%s\n' "$REGEN_RESULT" | jq -r '.error // "unknown"')" >&2
       fi
     else
       echo "WARNING: nightgauge binary not found — skipping knowledge index regeneration" >&2
@@ -214,9 +214,9 @@ This happens in the `OnEpicComplete` callback — no shell scripts needed. The
 skill only needs to confirm the flow ran by checking the CLI:
 
 ```bash
-if echo "$MERGED_INTO" | grep -q "^epic/"; then
+if printf '%s\n' "$MERGED_INTO" | grep -q "^epic/"; then
   echo "Merged into epic branch: $MERGED_INTO"
-  EPIC_FROM_BRANCH=$(echo "$MERGED_INTO" | grep -oE '[0-9]+' | head -1)
+  EPIC_FROM_BRANCH=$(printf '%s\n' "$MERGED_INTO" | grep -oE '[0-9]+' | head -1)
 
   # Deterministic completion check via Go binary CLI
   BINARY="${NIGHTGAUGE_BIN:-}"
@@ -240,14 +240,14 @@ if echo "$MERGED_INTO" | grep -q "^epic/"; then
     EPIC_RESULT=$("$BINARY" epic check-completion "$EPIC_FROM_BRANCH" --json 2>/dev/null) || true
   fi
 
-  EPIC_COMPLETE=$(echo "$EPIC_RESULT" | jq -r '.complete // false')
+  EPIC_COMPLETE=$(printf '%s\n' "$EPIC_RESULT" | jq -r '.complete // false')
   if [ "$EPIC_COMPLETE" = "true" ]; then
-    EPIC_TITLE=$(echo "$EPIC_RESULT" | jq -r '.title // ""')
-    echo "All sub-issues complete for epic #$(echo "$EPIC_RESULT" | jq -r '.epicNumber')! ($EPIC_TITLE)"
+    EPIC_TITLE=$(printf '%s\n' "$EPIC_RESULT" | jq -r '.title // ""')
+    echo "All sub-issues complete for epic #$(printf '%s\n' "$EPIC_RESULT" | jq -r '.epicNumber')! ($EPIC_TITLE)"
     echo "Go OnEpicComplete callback will auto-create PR, merge, and cleanup branches."
   else
-    CLOSED=$(echo "$EPIC_RESULT" | jq -r '.closed // "?"')
-    TOTAL=$(echo "$EPIC_RESULT" | jq -r '.total // "?"')
+    CLOSED=$(printf '%s\n' "$EPIC_RESULT" | jq -r '.closed // "?"')
+    TOTAL=$(printf '%s\n' "$EPIC_RESULT" | jq -r '.total // "?"')
     echo "Epic #$EPIC_FROM_BRANCH: $CLOSED/$TOTAL sub-issues complete"
   fi
 fi
@@ -308,8 +308,8 @@ ACTUAL_LINES=0
 if [ -n "$PR_NUMBER" ] && [ -n "$BINARY" ]; then
   PR_STATS=$("$BINARY" pr view "$PR_NUMBER" --json 2>/dev/null || echo "")
   if [ -n "$PR_STATS" ]; then
-    ADDITIONS=$(echo "$PR_STATS" | jq -r '.additions // 0')
-    DELETIONS=$(echo "$PR_STATS" | jq -r '.deletions // 0')
+    ADDITIONS=$(printf '%s\n' "$PR_STATS" | jq -r '.additions // 0')
+    DELETIONS=$(printf '%s\n' "$PR_STATS" | jq -r '.deletions // 0')
     ACTUAL_LINES=$((ADDITIONS + DELETIONS))
   fi
 fi
@@ -341,9 +341,9 @@ if [ -n "$BINARY" ] && [ -n "$ISSUE_NUMBER" ] && [ -n "$PR_NUMBER" ]; then
     --actual-lines "$ACTUAL_LINES" \
     --type "$ISSUE_TYPE" 2>/dev/null || echo '{"error":"outcome record command failed"}')
 
-  RECORDED=$(echo "$OUTCOME_RESULT" | jq -r '.recorded // false' 2>/dev/null || echo "false")
-  SKIPPED=$(echo "$OUTCOME_RESULT" | jq -r '.skipped // false' 2>/dev/null || echo "false")
-  OUTCOME_ERROR=$(echo "$OUTCOME_RESULT" | jq -r '.error // empty' 2>/dev/null || echo "")
+  RECORDED=$(printf '%s\n' "$OUTCOME_RESULT" | jq -r '.recorded // false' 2>/dev/null || echo "false")
+  SKIPPED=$(printf '%s\n' "$OUTCOME_RESULT" | jq -r '.skipped // false' 2>/dev/null || echo "false")
+  OUTCOME_ERROR=$(printf '%s\n' "$OUTCOME_RESULT" | jq -r '.error // empty' 2>/dev/null || echo "")
 
   if [ "$RECORDED" = "true" ]; then
     echo "Complexity model updated: issue #$ISSUE_NUMBER recorded ($ACTUAL_LINES lines, predicted $PREDICTED_SIZE)"

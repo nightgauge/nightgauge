@@ -16,7 +16,7 @@ last time." This mirrors `nightgauge-release-watch`'s `last-seen.json`.
 mkdir -p "$(dirname "$RUN_LOG")"
 if [ -f "$RUN_LOG" ]; then
   PREV=$(tail -n 1 "$RUN_LOG")
-  PREV_TS=$(echo "$PREV" | jq -r '.ts // "never"')
+  PREV_TS=$(printf '%s\n' "$PREV" | jq -r '.ts // "never"')
   echo "Last run: ${PREV_TS}"
 else
   PREV='{}'
