@@ -163,8 +163,8 @@ jobs:
       # body: the tests pass with or without it, which is why that flake stayed
       # invisible. That argument was never specific to one package.
       #
-      # Measured on this branch, whole tree, Apple M-series: 2m55s plain vs
-      # 3m00s with -race — about +3%, not the ~3x the scoped step's comment
+      # Measured on this branch, whole tree, Apple M-series: 2m48s plain vs
+      # 2m58s with -race — about +6%, not the ~3x the scoped step's comment
       # predicted, because the suite is dominated by subprocess and filesystem
       # work rather than by instrumented Go. Zero DATA RACE reports over 108
       # packages, so the gate arrives green; #490 and #491 are blockers for the
