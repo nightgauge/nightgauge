@@ -28,7 +28,8 @@ is opened in a subdirectory.
 ```
 {git_root}/.nightgauge/
 ├── pipeline/                   # Pipeline handoff files (transient)
-│   ├── state.json             # Unified pipeline state (PipelineStateService)
+│   ├── run-state.json         # Durable run lifecycle state (Go internal/runstate)
+│   ├── runtime-{N}-{runId}.json # Per-run runtime snapshot (issue N, run id)
 │   ├── issue-{N}.json         # Output of /issue-pickup
 │   ├── planning-{N}.json      # Output of /feature-planning
 │   ├── dev-{N}.json           # Output of /feature-dev
@@ -1098,17 +1099,29 @@ Per-entry fields (`CreationManifestEntrySchema`):
    artifacts are cleaned up by `pr-merge` along with other pipeline
    transients.
 
-### state.json
+### Live pipeline state (in memory)
 
-**Created by**: `PipelineStateService` (VSCode extension) **Read by**:
-Dashboard, TreeProvider, OutputWindow
+**Owned by**: `PipelineStateService` (VSCode extension), in memory
+(`_lastState`) **Fed by**: the Go binary over IPC — `pipeline.stateChanged`
+notifications and `applyRuntimeSnapshot` **Read by**: Dashboard, TreeProvider,
+OutputWindow via the `onStateChanged` event
 
-This file is the **authoritative state** for the current pipeline run, owned by
-the VSCode extension's `PipelineStateService`. Unlike other context files which
-are stage-specific handoffs, this file tracks the entire pipeline's progress and
-token usage.
+Live pipeline state is **not a file**. It is an in-memory object held by the
+extension's `PipelineStateService`, populated from the Go binary over IPC and
+republished to the UI through `onStateChanged`. Nothing reads it back from disk,
+and no unified pipeline state file is written under `.nightgauge/pipeline/`.
 
-**Schema Version**: 1.0 (version 1.1 adds `retry_count` to stage objects)
+Durability is a separate concern with its own artifacts:
+
+| Artifact                                        | Written by                | Holds                                       |
+| ----------------------------------------------- | ------------------------- | ------------------------------------------- |
+| `.nightgauge/pipeline/run-state.json`           | Go `internal/runstate`    | Canonical run lifecycle state               |
+| `.nightgauge/pipeline/runtime-{N}-{runId}.json` | Go runtime snapshot write | Per-run snapshot for issue `N`, run `runId` |
+| `.nightgauge/history/*.jsonl`                   | Go history writer         | Append-only per-run records for retro/audit |
+
+See [PIPELINE_STATE_SCHEMA.md](PIPELINE_STATE_SCHEMA.md) for the durable
+schemas. The shape below documents the **in-memory** object the UI consumes; it
+has no on-disk representation.
 
 ```json
 {
@@ -1209,13 +1222,13 @@ token usage.
 
 **Key Differences from Stage Handoff Files:**
 
-| Aspect        | state.json                   | Stage Handoff Files (issue-N.json, etc.) |
-| ------------- | ---------------------------- | ---------------------------------------- |
-| **Owner**     | PipelineStateService         | Individual pipeline skills               |
-| **Purpose**   | Track overall progress/usage | Pass context between stages              |
-| **Lifecycle** | Entire pipeline run          | Created by one stage, read by next       |
-| **Updates**   | Continuously during run      | Once when stage completes                |
-| **Cleanup**   | Cleared after PR merge       | Deleted by pr-merge skill                |
+| Aspect        | Live pipeline state              | Stage Handoff Files (issue-N.json, etc.) |
+| ------------- | -------------------------------- | ---------------------------------------- |
+| **Owner**     | PipelineStateService (in memory) | Individual pipeline skills               |
+| **Purpose**   | Track overall progress/usage     | Pass context between stages              |
+| **Lifecycle** | Entire pipeline run              | Created by one stage, read by next       |
+| **Updates**   | Continuously, over IPC from Go   | Once when stage completes                |
+| **Cleanup**   | Discarded with the process       | Deleted by pr-merge skill                |
 
 ### Stage Transition Guards
 
@@ -1383,52 +1396,18 @@ rm -f .nightgauge/pipeline/dev-batch-{E}.json
 
 ## Pipeline State Management
 
-The pipeline uses **unified state management** via `state.json` to track when
-stages are running, complete, or failed. This enables the VS Code extension to
-show real-time status in the pipeline sidebar.
+Stage progress is reported, not filed. The Go binary owns run execution and
+emits `pipeline.stateChanged` notifications over IPC; the VS Code extension's
+`PipelineStateService` holds the resulting state in memory and republishes it to
+the sidebar, dashboard and output window through `onStateChanged`. Skills do not
+write a pipeline state file, and the extension does not watch one.
 
 ### Purpose
 
-When a user runs a pipeline skill, the skill directly updates `state.json` at
-the start and completion of each stage. The VS Code extension's
-`PipelineStateService` watches this file to update the UI in real-time.
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                     PIPELINE STATE LIFECYCLE                                 │
-├─────────────────────────────────────────────────────────────────────────────┤
-│                                                                              │
-│  User runs /feature-dev                                                      │
-│       │                                                                      │
-│       ▼                                                                      │
-│  ┌──────────────────────────┐                                               │
-│  │ update-pipeline-state.sh │──▶ Updates state.json                │
-│  │ "42" "feature-dev"       │    status: "running"                          │
-│  │ "running"                │    current_stage: "feature-dev"               │
-│  └──────────────────────────┘                                               │
-│       │                                                                      │
-│       │  VS Code detects file change                                         │
-│       │  Pipeline sidebar shows "running" state (spinning icon)              │
-│       │                                                                      │
-│       ▼                                                                      │
-│  ┌──────────────────────────┐                                               │
-│  │ Skill executes...        │                                               │
-│  │ (implementation work)    │                                               │
-│  └──────────────────────────┘                                               │
-│       │                                                                      │
-│       ▼                                                                      │
-│  ┌──────────────────────────┐                                               │
-│  │ update-pipeline-state.sh │──▶ Updates state.json                │
-│  │ "42" "feature-dev"       │    stages.feature-dev.status: "complete"      │
-│  │ "complete"               │    stages.feature-dev.completed_at: "..."     │
-│  └──────────────────────────┘                                               │
-│       │                                                                      │
-│       │  VS Code detects file change                                         │
-│       │  Pipeline sidebar shows "complete" state (checkmark)                 │
-│       ▼                                                                      │
-│                                                                              │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
+The board — not a local file — is the durable, human-visible signal that a stage
+has started or finished. Skills move the issue's board status with the
+`nightgauge project move-status` verb; the binary reports the run's own progress
+to the extension over IPC as it goes.
 
 ### Valid Stage Names
 
@@ -1453,8 +1432,8 @@ the start and completion of each stage. The VS Code extension's
 
 ### Go Binary Command
 
-Skills use the `nightgauge project move-status` Go binary command to signal
-stage status:
+Skills use the `nightgauge project move-status` Go binary command to move the
+issue's board status as the pipeline advances:
 
 ```bash
 # Usage: nightgauge project move-status <issue-number> <board-status>
@@ -1479,28 +1458,26 @@ fi
 
 **Key features:**
 
-- Atomic writes using temp file + rename
-- Creates `state.json` if it doesn't exist
-- Validates stage names and status values
-- Increments `retry_count` on each `running` transition
+- Updates the project board over the forge API — it writes no local state file
+- Validates the issue number and the board status value
+- Idempotent: moving to a status the item already has is a no-op
 - Cross-platform (Go binary, not shell-dependent)
 
 ### VS Code Extension Integration
 
-The `PipelineStateService` in the VS Code extension watches `state.json`:
+`PipelineStateService` is fed by the Go binary over IPC, not by a file watcher:
 
-1. **FileSystemWatcher** monitors `.nightgauge/pipeline/state.json`
-2. **onStateChanged** event fires when the file is modified
-3. **TreeProvider** updates stage status based on `stages[stage].status`
+1. The binary emits `pipeline.stateChanged` (and runtime snapshots applied via
+   `applyRuntimeSnapshot`) as a run progresses
+2. `PipelineStateService` updates its in-memory `_lastState` and fires
+   `onStateChanged`
+3. **TreeProvider** updates stage status from the published state
 4. **Dashboard** shows real-time progress and token usage
 5. **OutputWindow** displays current stage activity
 
-### Deprecated: Running Files
-
-**Note**: The previous `running-{stage}-{N}.json` file pattern is deprecated as
-of Issue #89. The legacy scripts `signal-stage-start.sh` and
-`signal-stage-complete.sh` now delegate to `update-pipeline-state.sh` for
-backwards compatibility, but should not be used in new code
+Durable per-run records — `run-state.json`, `runtime-{N}-{runId}.json` and the
+history JSONLs — are written by the Go side and are what post-hoc tooling
+(retro, audit, health) reads. They are not the UI's live feed.
 
 ## Skill Input/Output Contracts
 
