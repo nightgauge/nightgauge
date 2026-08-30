@@ -12,6 +12,7 @@
 import * as vscode from "vscode";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { writeFileAtomic } from "../utils/atomicWrite";
 import type {
   HealthReportData,
   SecurityAuditData,
@@ -194,7 +195,8 @@ export class BrownfieldDataService implements vscode.Disposable {
   private async saveHistory(history: BrownfieldSnapshot[]): Promise<void> {
     try {
       await fs.mkdir(this.historyDir, { recursive: true });
-      await fs.writeFile(this.historyFile, JSON.stringify(history, null, 2));
+      // Atomic — a crash mid-write would otherwise lose the whole history (#1210).
+      await writeFileAtomic(this.historyFile, JSON.stringify(history, null, 2));
     } catch {
       // Non-critical — history save failure should not break dashboard
     }

@@ -18,6 +18,7 @@ import * as path from "node:path";
 import { isJudgeVerdict, type JudgeVerdict } from "@nightgauge/sdk";
 
 import { GateMetricRecordSchema, type GateMetricRecord } from "../schemas/gateMetrics";
+import { writeFileAtomic } from "./atomicWrite";
 
 /** Relative path from workspace root to the gate metrics file */
 const GATE_METRICS_FILE = ".nightgauge/health/gate-metrics.jsonl";
@@ -208,7 +209,8 @@ export class GateMetricsWriter {
         }
       }
 
-      await fs.writeFile(filePath, kept.join("\n") + (kept.length > 0 ? "\n" : ""), "utf-8");
+      // Atomic — same prune-while-read shape as health history (#1210).
+      await writeFileAtomic(filePath, kept.join("\n") + (kept.length > 0 ? "\n" : ""));
     } catch (error) {
       console.warn(`[Nightgauge] Failed to prune gate metrics: ${error}`);
     }
