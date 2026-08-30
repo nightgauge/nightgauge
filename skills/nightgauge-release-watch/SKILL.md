@@ -162,10 +162,10 @@ mkdir -p "${WATCH_DIR}/reports"
 PROVIDER="claude-code"
 SOURCE="anthropics/claude-code"
 if [[ "$*" == *"--provider"* ]]; then
-  PROVIDER=$(echo "$*" | grep -oP '(?<=--provider\s)\S+')
+  PROVIDER=$(printf '%s\n' "$*" | grep -oP '(?<=--provider\s)\S+')
 fi
 if [[ "$*" == *"--source"* ]]; then
-  SOURCE=$(echo "$*" | grep -oP '(?<=--source\s)\S+')
+  SOURCE=$(printf '%s\n' "$*" | grep -oP '(?<=--source\s)\S+')
 fi
 RELEASE_LABEL="${PROVIDER}-release"
 LAST_SEEN_FILE="${WATCH_DIR}/last-seen-${PROVIDER}.json"
@@ -185,7 +185,7 @@ fi
 
 # Allow --since to override
 if [[ "$*" == *"--since"* ]]; then
-  SINCE_VERSION=$(echo "$*" | grep -oP '(?<=--since\s)\S+')
+  SINCE_VERSION=$(printf '%s\n' "$*" | grep -oP '(?<=--since\s)\S+')
   LAST_VERSION="$SINCE_VERSION"
   echo "Checking from specified version: ${LAST_VERSION}"
 fi

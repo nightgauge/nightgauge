@@ -64,6 +64,8 @@ REQUIRED_FILES=(
   scripts/test-mirror-drift-gate.sh
   scripts/test-issue-body-contract.sh
   scripts/check-issue-body-contract.py
+  scripts/test-skill-echo-json.sh
+  scripts/check-skill-echo-json.py
   scripts/install-agent-skills.sh
   scripts/test-mirror-link-check.sh
   scripts/check-mirror-links.py
@@ -543,6 +545,18 @@ run_group "Issue-body contract gate regression suite" \
   bash scripts/test-issue-body-contract.sh
 run_step "Issue-body heading contract" \
   python3 scripts/check-issue-body-contract.py
+
+# 11a2. Skill `echo "$VAR" | jq` gate (#1215) — zsh's builtin echo expands
+#       backslash escapes, so a JSON `\n` reaches jq as a real newline, the
+#       parse aborts, and the caller reads an empty string. On 2026-08-30 that
+#       made the issue-audit terminal gate report all five required headings
+#       MISSING on an issue that had every one of them. Placed before the mirror
+#       drift gate: this is a canonical-skills edit, and 11b will fail anyway if
+#       the fix did not reach the mirror. Self-test first, same reasoning as 11.
+run_group "Skill echo-into-jq gate regression suite" \
+  bash scripts/test-skill-echo-json.sh
+run_step "Skill echo-into-jq gate" \
+  python3 scripts/check-skill-echo-json.py
 
 # 11b. Plugin skills mirror drift — claude-plugins/nightgauge/skills/ is
 #      generated output committed on purpose (the marketplace manifest ships it

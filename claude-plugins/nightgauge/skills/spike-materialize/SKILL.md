@@ -57,7 +57,7 @@ The Go binary owns the deterministic logic — the skill only orchestrates.
 
 ```bash
 BRANCH=$(git branch --show-current)
-ISSUE_NUMBER=$(echo "$BRANCH" | grep -oE '[0-9]+' | head -1)
+ISSUE_NUMBER=$(printf '%s\n' "$BRANCH" | grep -oE '[0-9]+' | head -1)
 if [ -z "$ISSUE_NUMBER" ]; then
   echo "ERROR: cannot infer issue number from branch '$BRANCH'"
   exit 1
@@ -114,7 +114,7 @@ if [ -n "$PR_NUMBER" ] && [ "$PR_NUMBER" != "null" ]; then
   ISSUES_LIST=$(jq -r '.issues[] | select(.skipped != true and .issue_number > 0) | "- #\(.issue_number) \(.title)"' "$OUTPUT_FILE")
   if [ -n "$ISSUES_LIST" ]; then
     CURRENT_BODY=$(gh pr view "$PR_NUMBER" --json body --jq .body 2>/dev/null)
-    if ! echo "$CURRENT_BODY" | grep -q "## Created Follow-up Issues"; then
+    if ! printf '%s\n' "$CURRENT_BODY" | grep -q "## Created Follow-up Issues"; then
       NEW_BODY=$(printf "%s\n\n## Created Follow-up Issues\n\n%s\n" "$CURRENT_BODY" "$ISSUES_LIST")
       gh pr edit "$PR_NUMBER" --body "$NEW_BODY" 2>/dev/null || true
     fi

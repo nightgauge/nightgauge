@@ -173,11 +173,11 @@ motivated this gate.
 ```bash
 CI_PARITY_RESULT=$(nightgauge ci parity-check --json 2>/dev/null || \
   echo '{"passed":false,"commands_run":[],"failures":[{"command":"ci parity-check","failure_type":"build","output":"binary not found","exit_code":1}],"timestamp":""}')
-CI_PARITY_PASSED=$(echo "$CI_PARITY_RESULT" | jq -r '.passed')
+CI_PARITY_PASSED=$(printf '%s\n' "$CI_PARITY_RESULT" | jq -r '.passed')
 
 if [ "$CI_PARITY_PASSED" != "true" ]; then
   echo "ERROR: CI parity check failed:"
-  echo "$CI_PARITY_RESULT" | jq -r '.failures[] | "  FAIL [\(.failure_type)]: \(.command)"'
+  printf '%s\n' "$CI_PARITY_RESULT" | jq -r '.failures[] | "  FAIL [\(.failure_type)]: \(.command)"'
   echo "Fix the failures and re-run Step 6.3 + 6.4. Do NOT proceed to commit or to feature-validate."
   exit 1
 fi
@@ -236,8 +236,8 @@ FEEDBACK_SIGNALS=()
 FEEDBACK_JSON="[]"
 
 # Count files the plan specified vs. what implementation actually touched
-PLANNED_MODIFY_COUNT=$(echo "$FILES_TO_MODIFY" | jq 'length' 2>/dev/null || echo "0")
-PLANNED_CREATE_COUNT=$(echo "$FILES_TO_CREATE" | jq 'length' 2>/dev/null || echo "0")
+PLANNED_MODIFY_COUNT=$(printf '%s\n' "$FILES_TO_MODIFY" | jq 'length' 2>/dev/null || echo "0")
+PLANNED_CREATE_COUNT=$(printf '%s\n' "$FILES_TO_CREATE" | jq 'length' 2>/dev/null || echo "0")
 PLANNED_FILE_COUNT=$((PLANNED_MODIFY_COUNT + PLANNED_CREATE_COUNT))
 
 # Actual files touched — tracked during Phase 3 implementation
@@ -366,9 +366,9 @@ fi
 if [ ${#FEEDBACK_SIGNALS[@]} -gt 0 ]; then
   FEEDBACK_JSON=$(printf '%s\n' "${FEEDBACK_SIGNALS[@]}" | jq -s '.')
   SIGNAL_COUNT=${#FEEDBACK_SIGNALS[@]}
-  BLOCKING_COUNT=$(echo "$FEEDBACK_JSON" | jq '[.[] | select(.severity == "blocking")] | length')
+  BLOCKING_COUNT=$(printf '%s\n' "$FEEDBACK_JSON" | jq '[.[] | select(.severity == "blocking")] | length')
   echo "Feedback signals emitted: $SIGNAL_COUNT total, $BLOCKING_COUNT blocking"
-  echo "$FEEDBACK_JSON" | jq -r '.[] | "  - \(.signal_type) (\(.severity)): \(.rationale)"'
+  printf '%s\n' "$FEEDBACK_JSON" | jq -r '.[] | "  - \(.signal_type) (\(.severity)): \(.rationale)"'
 else
   echo "No feedback signals — implementation matched plan or adaptations were minor"
 fi

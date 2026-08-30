@@ -194,10 +194,10 @@ EPIC="<epic-number-from-args>"
 # Pass --repo: check-completion defaults to nightgauge/nightgauge, which is
 # the wrong repo for a store epic (e.g. Acme-Community/acme-tracker).
 EPIC_STATUS=$(nightgauge epic check-completion "$EPIC" --repo "$REPO" --json 2>/dev/null || echo '{"complete":false}')
-COMPLETE=$(echo "$EPIC_STATUS" | jq -r '.complete // false')
+COMPLETE=$(printf '%s\n' "$EPIC_STATUS" | jq -r '.complete // false')
 if [ "$COMPLETE" != "true" ]; then
   echo "ERROR: epic #$EPIC is not fully closed. Release notes are drafted only after an epic closes."
-  echo "$EPIC_STATUS" | jq -r '"  open: \(.open // "?")  closed: \(.closed // "?")  total: \(.total // "?")"'
+  printf '%s\n' "$EPIC_STATUS" | jq -r '"  open: \(.open // "?")  closed: \(.closed // "?")  total: \(.total // "?")"'
   exit 1
 fi
 # Enumerate the sub-issues from the epic BODY. check-completion's JSON only
@@ -221,8 +221,8 @@ user-facing "what's new" material lives:
 SUB_CONTENT=""
 for n in $SUB_NUMBERS; do
   ISSUE_JSON=$(nightgauge forge issue view "$n" --repo "$REPO" --json 2>/dev/null)
-  TITLE=$(echo "$ISSUE_JSON" | jq -r '.title')
-  BODY=$(echo "$ISSUE_JSON" | jq -r '.body')
+  TITLE=$(printf '%s\n' "$ISSUE_JSON" | jq -r '.title')
+  BODY=$(printf '%s\n' "$ISSUE_JSON" | jq -r '.body')
   SUB_CONTENT+=$'\n### '"$TITLE"$'\n'"$BODY"$'\n'
 done
 ```

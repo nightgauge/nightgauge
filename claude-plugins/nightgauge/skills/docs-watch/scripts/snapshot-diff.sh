@@ -71,7 +71,7 @@ while IFS= read -r url; do
   fi
 
   HASH=$(echo "$CONTENT" | $HASH_CMD | awk '{print $1}')
-  NEW_ENTRIES=$(echo "$NEW_ENTRIES" | jq --arg url "$url" --arg hash "$HASH" \
+  NEW_ENTRIES=$(printf '%s\n' "$NEW_ENTRIES" | jq --arg url "$url" --arg hash "$HASH" \
     '. + [{"url": $url, "hash": $hash}]')
 done <<< "$NEW_URLS"
 
@@ -91,7 +91,7 @@ while IFS= read -r url; do
   HASH=$(echo "$CONTENT" | $HASH_CMD | awk '{print $1}')
 
   if [ "$HASH" != "$OLD_HASH" ]; then
-    CHANGED_ENTRIES=$(echo "$CHANGED_ENTRIES" | jq \
+    CHANGED_ENTRIES=$(printf '%s\n' "$CHANGED_ENTRIES" | jq \
       --arg url "$url" --arg hash "$HASH" --arg old_hash "$OLD_HASH" \
       '. + [{"url": $url, "hash": $hash, "old_hash": $old_hash}]')
   fi
@@ -100,7 +100,7 @@ done <<< "$EXISTING_URLS"
 # Process removed pages
 while IFS= read -r url; do
   [ -z "$url" ] && continue
-  REMOVED_ENTRIES=$(echo "$REMOVED_ENTRIES" | jq --arg url "$url" \
+  REMOVED_ENTRIES=$(printf '%s\n' "$REMOVED_ENTRIES" | jq --arg url "$url" \
     '. + [{"url": $url}]')
 done <<< "$REMOVED_URLS"
 

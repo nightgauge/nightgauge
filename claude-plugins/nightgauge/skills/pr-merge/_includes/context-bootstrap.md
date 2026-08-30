@@ -117,7 +117,7 @@ if [ ! -f "$CONTEXT_FILE" ]; then
     BRANCH=$(git branch --show-current)
     PR_DATA=$("$BINARY" pr view --json 2>/dev/null || echo "")
   fi
-  AUTO_PR_NUMBER=$(echo "$PR_DATA" | jq -r '.number // empty' 2>/dev/null || echo "")
+  AUTO_PR_NUMBER=$(printf '%s\n' "$PR_DATA" | jq -r '.number // empty' 2>/dev/null || echo "")
 
   if [ -n "$AUTO_PR_NUMBER" ] && [ "$AUTO_PR_NUMBER" != "null" ]; then
     mkdir -p .nightgauge/pipeline

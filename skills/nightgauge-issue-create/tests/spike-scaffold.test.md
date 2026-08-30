@@ -187,7 +187,7 @@ ARTIFACT_PATH="docs/rfcs/9999-some-rfc.md"
 ALLOWED_DIRS="docs/spikes/ docs/decisions/ docs/research/"
 IS_ALLOWED=false
 for DIR in $ALLOWED_DIRS; do
-  echo "$ARTIFACT_PATH" | grep -q "^$DIR" && IS_ALLOWED=true && break
+  printf '%s\n' "$ARTIFACT_PATH" | grep -q "^$DIR" && IS_ALLOWED=true && break
 done
 
 [ "$IS_ALLOWED" = "false" ] && echo "PASS: rejected disallowed dir" || echo "FAIL: accepted disallowed dir"
@@ -324,7 +324,7 @@ SLUG=$(echo "spike: evaluate the comprehensive long-term impact of switching fro
   cut -c1-60)
 
 [ ${#SLUG} -le 60 ] && echo "PASS: slug length ${#SLUG}" || echo "FAIL: slug too long (${#SLUG})"
-echo "docs/spikes/9999-${SLUG}.md" | grep -qE '^docs/spikes/[0-9]+-[a-z0-9-]+\.md$' && echo "PASS: well-formed" || echo "FAIL: malformed"
+printf '%s\n' "docs/spikes/9999-${SLUG}.md" | grep -qE '^docs/spikes/[0-9]+-[a-z0-9-]+\.md$' && echo "PASS: well-formed" || echo "FAIL: malformed"
 ```
 
 ---
@@ -465,9 +465,9 @@ ticket is not actionable.
 
 ${BODY}"
 
-echo "$PREPENDED" | grep -q '^## Prerequisite ADR$' && echo PASS || echo FAIL
-echo "$PREPENDED" | grep -q "$ADR_PATH" && echo PASS || echo FAIL
-echo "$PREPENDED" | grep -q "$FIRST_TICKET" && echo PASS || echo FAIL
+printf '%s\n' "$PREPENDED" | grep -q '^## Prerequisite ADR$' && echo PASS || echo FAIL
+printf '%s\n' "$PREPENDED" | grep -q "$ADR_PATH" && echo PASS || echo FAIL
+printf '%s\n' "$PREPENDED" | grep -q "$FIRST_TICKET" && echo PASS || echo FAIL
 ```
 
 ### TC-11b: Cross-Repo Path B Opt-In Triggers Guard
@@ -500,12 +500,12 @@ RATIONALE='design space too open: workspace isolation strategy requires upfront 
 ACK_FLAG='--accept-path-b-risk'
 
 PREVIEW="Selected path: Path B — Concurrent siblings with auto-cite (opt-in; rationale: ${RATIONALE})"
-echo "$PREVIEW" | grep -q 'opt-in' && echo PASS || echo FAIL
-echo "$PREVIEW" | grep -q "$RATIONALE" && echo PASS || echo FAIL
+printf '%s\n' "$PREVIEW" | grep -q 'opt-in' && echo PASS || echo FAIL
+printf '%s\n' "$PREVIEW" | grep -q "$RATIONALE" && echo PASS || echo FAIL
 
 # Without the flag, headless invocation should fail closed
 HEADLESS_CMD='nightgauge-issue-create --epic 328 --route path-b'
-echo "$HEADLESS_CMD" | grep -q -- "$ACK_FLAG" && echo "ACKED" || echo "GUARD_BLOCKS"
+printf '%s\n' "$HEADLESS_CMD" | grep -q -- "$ACK_FLAG" && echo "ACKED" || echo "GUARD_BLOCKS"
 ```
 
 ---
@@ -533,10 +533,10 @@ Path B for visibility and immediate assignment.
 
 ```bash
 PREVIEW='Selected path: Path B — Concurrent siblings with auto-cite (user override; default was Path A)'
-echo "$PREVIEW" | grep -q 'user override' && echo PASS || echo FAIL
+printf '%s\n' "$PREVIEW" | grep -q 'user override' && echo PASS || echo FAIL
 
 CREATE_CMD='nightgauge issue create-sub 328 --title "workspace: implement CRUD API" --blocked-by 329'
-echo "$CREATE_CMD" | grep -q -- '--blocked-by 329' && echo PASS || echo FAIL
+printf '%s\n' "$CREATE_CMD" | grep -q -- '--blocked-by 329' && echo PASS || echo FAIL
 ```
 
 ---
@@ -623,15 +623,15 @@ the rest of this epic.
 - ownership boundary
 - multi-tenant isolation strategy"
 
-echo "$FIRST_BODY" | grep -q '^## Architectural Decision Required$' && echo PASS || echo FAIL
-echo "$FIRST_BODY" | grep -q "$ADR" && echo PASS || echo FAIL
+printf '%s\n' "$FIRST_BODY" | grep -q '^## Architectural Decision Required$' && echo PASS || echo FAIL
+printf '%s\n' "$FIRST_BODY" | grep -q "$ADR" && echo PASS || echo FAIL
 
 DEPENDENT_BODY="## Prerequisite ADR
 
 **\`${ADR}\`** — produced by \`#330\`'s PR."
 
-echo "$DEPENDENT_BODY" | grep -q '^## Prerequisite ADR$' && echo PASS || echo FAIL
-echo "$DEPENDENT_BODY" | grep -q "$ADR" && echo PASS || echo FAIL
+printf '%s\n' "$DEPENDENT_BODY" | grep -q '^## Prerequisite ADR$' && echo PASS || echo FAIL
+printf '%s\n' "$DEPENDENT_BODY" | grep -q "$ADR" && echo PASS || echo FAIL
 ```
 
 ---
@@ -670,7 +670,7 @@ EOF
 
 LABEL_LIST="type:spike,priority:high"
 
-if echo "$LABEL_LIST" | grep -q "type:spike"; then
+if printf '%s\n' "$LABEL_LIST" | grep -q "type:spike"; then
   nightgauge spike validate --body-file "$BODY_FILE" 2>&1
   EXIT=$?
   [ $EXIT -ne 0 ] && echo "PASS: gate rejected" || echo "FAIL: gate should have rejected"

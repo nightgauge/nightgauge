@@ -103,7 +103,7 @@ if [ -f "package.json" ]; then
 
   if [ "$version" = "MISSING" ]; then
     echo "⚠️ No version field in package.json"
-  elif ! echo "$version" | grep -qE "^[0-9]+\\.[0-9]+\\.[0-9]+"; then
+  elif ! printf '%s\n' "$version" | grep -qE "^[0-9]+\\.[0-9]+\\.[0-9]+"; then
     echo "❌ Invalid semver format in package.json: $version"
   else
     echo "✓ package.json version: $version"

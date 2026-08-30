@@ -109,12 +109,12 @@ if [ -n "$PROJECT_ARG" ]; then
   RESOLVE_EXIT=$?
 
   if [ $RESOLVE_EXIT -eq 0 ]; then
-    RESOLVED_PROJECT_NUMBER=$(echo "$RESOLVE_JSON" | jq -r '.number')
-    RESOLVED_PROJECT_OWNER=$(echo "$RESOLVE_JSON" | jq -r '.owner')
-    RESOLVED_PROJECT_OWNER_TYPE=$(echo "$RESOLVE_JSON" | jq -r '.owner_type')
-    RESOLVED_PROJECT_TITLE=$(echo "$RESOLVE_JSON" | jq -r '.title')
-    RESOLVED_PROJECT_URL=$(echo "$RESOLVE_JSON" | jq -r '.url')
-    RESOLVED_PROJECT_ID=$(echo "$RESOLVE_JSON" | jq -r '.id')
+    RESOLVED_PROJECT_NUMBER=$(printf '%s\n' "$RESOLVE_JSON" | jq -r '.number')
+    RESOLVED_PROJECT_OWNER=$(printf '%s\n' "$RESOLVE_JSON" | jq -r '.owner')
+    RESOLVED_PROJECT_OWNER_TYPE=$(printf '%s\n' "$RESOLVE_JSON" | jq -r '.owner_type')
+    RESOLVED_PROJECT_TITLE=$(printf '%s\n' "$RESOLVE_JSON" | jq -r '.title')
+    RESOLVED_PROJECT_URL=$(printf '%s\n' "$RESOLVE_JSON" | jq -r '.url')
+    RESOLVED_PROJECT_ID=$(printf '%s\n' "$RESOLVE_JSON" | jq -r '.id')
     echo "Resolved project #$RESOLVED_PROJECT_NUMBER: $RESOLVED_PROJECT_TITLE ($RESOLVED_PROJECT_OWNER_TYPE: $RESOLVED_PROJECT_OWNER)"
   else
     echo "ERROR: Project #$PROJECT_ARG not found under org or user '$OWNER'."

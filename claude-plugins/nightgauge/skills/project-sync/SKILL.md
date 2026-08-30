@@ -361,10 +361,10 @@ else
   BULK_OUTPUT=$("$BINARY" project add "${BULK_ARGS[@]}" 2>/dev/null)
   BULK_EXIT=$?
 
-  SYNCED=$(echo "$BULK_OUTPUT" | jq -r '.added // 0')
-  SKIPPED=$(echo "$BULK_OUTPUT" | jq -r '.skipped // 0')
-  ERRORS=$(echo "$BULK_OUTPUT" | jq -r '.failed // 0')
-  TOTAL=$(echo "$BULK_OUTPUT" | jq -r '.total // 0')
+  SYNCED=$(printf '%s\n' "$BULK_OUTPUT" | jq -r '.added // 0')
+  SKIPPED=$(printf '%s\n' "$BULK_OUTPUT" | jq -r '.skipped // 0')
+  ERRORS=$(printf '%s\n' "$BULK_OUTPUT" | jq -r '.failed // 0')
+  TOTAL=$(printf '%s\n' "$BULK_OUTPUT" | jq -r '.total // 0')
 
   RESULT=$(jq -n \
     --argjson total "$TOTAL" \
@@ -420,11 +420,11 @@ The hook script outputs JSON:
 Parse JSON using jq:
 
 ```bash
-TOTAL=$(echo "$RESULT" | jq -r '.total_issues')
-SYNCED=$(echo "$RESULT" | jq -r '.synced')
-SKIPPED=$(echo "$RESULT" | jq -r '.skipped')
-ERRORS=$(echo "$RESULT" | jq -r '.errors')
-DRY_RUN_MODE=$(echo "$RESULT" | jq -r '.dry_run')
+TOTAL=$(printf '%s\n' "$RESULT" | jq -r '.total_issues')
+SYNCED=$(printf '%s\n' "$RESULT" | jq -r '.synced')
+SKIPPED=$(printf '%s\n' "$RESULT" | jq -r '.skipped')
+ERRORS=$(printf '%s\n' "$RESULT" | jq -r '.errors')
+DRY_RUN_MODE=$(printf '%s\n' "$RESULT" | jq -r '.dry_run')
 ```
 
 #### Step 3.3: Sync Date Fields from Milestones

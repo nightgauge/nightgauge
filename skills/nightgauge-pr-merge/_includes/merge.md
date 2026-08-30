@@ -42,9 +42,9 @@ RULESET_RESULT=$("$BINARY" pr ruleset-precheck "$PR_NUMBER" --auto-satisfy --jso
 RULESET_BLOCKERS=()
 if [ -n "$RULESET_RESULT" ]; then
   # `.blockers` is post-auto-satisfy: only unresolved blockers remain.
-  BLOCKERS_STR=$(echo "$RULESET_RESULT" | jq -r '.blockers | join(", ")' 2>/dev/null || echo "")
-  RESOLVED_STR=$(echo "$RULESET_RESULT" | jq -r '(.resolved_blockers // []) | join(", ")' 2>/dev/null || echo "")
-  BASE_REF=$(echo "$RULESET_RESULT" | jq -r '.base_ref // "main"' 2>/dev/null || echo "main")
+  BLOCKERS_STR=$(printf '%s\n' "$RULESET_RESULT" | jq -r '.blockers | join(", ")' 2>/dev/null || echo "")
+  RESOLVED_STR=$(printf '%s\n' "$RULESET_RESULT" | jq -r '(.resolved_blockers // []) | join(", ")' 2>/dev/null || echo "")
+  BASE_REF=$(printf '%s\n' "$RULESET_RESULT" | jq -r '.base_ref // "main"' 2>/dev/null || echo "main")
   if [ -n "$RESOLVED_STR" ]; then
     echo "Auto-satisfied on '$BASE_REF': $RESOLVED_STR"
   fi
@@ -423,8 +423,8 @@ if [ "$MERGEABLE" = "CONFLICTING" ]; then
 
   # Determine base branch
   _PR_JSON=$("$BINARY" pr view "$PR_NUMBER" --json 2>/dev/null || echo '{}')
-  BASE_REF=$(echo "$_PR_JSON" | jq -r '.baseRef // "main"')
-  HEAD_REF=$(echo "$_PR_JSON" | jq -r '.headRef // ""')
+  BASE_REF=$(printf '%s\n' "$_PR_JSON" | jq -r '.baseRef // "main"')
+  HEAD_REF=$(printf '%s\n' "$_PR_JSON" | jq -r '.headRef // ""')
 
   # Fetch latest base branch
   git fetch origin "$BASE_REF"
@@ -556,7 +556,7 @@ if [ "$MERGEABLE" = "CONFLICTING" ]; then
       echo "PR #$PR_NUMBER was merged (detected after conflict-resolution CI wait). Exiting cleanly."
       exit 0
     fi
-    FAILED_COUNT=$(echo "$CI_RESULT" | jq -r '.failed // 0')
+    FAILED_COUNT=$(printf '%s\n' "$CI_RESULT" | jq -r '.failed // 0')
     if [ "$FAILED_COUNT" -gt 0 ]; then
       echo "ERROR: CI checks failed after conflict resolution rebase."
       echo "The conflict resolution may have introduced errors."
@@ -619,7 +619,7 @@ individual sub-issue commits when the epic branch is later merged into main.
 MERGE_STRATEGY="--${ARG_MERGE_STRATEGY:-squash}"
 
 # Detect if this is a sub-issue PR targeting an epic branch
-if echo "$BASE_BRANCH" | grep -q "^epic/"; then
+if printf '%s\n' "$BASE_BRANCH" | grep -q "^epic/"; then
   # Sub-issue → epic: use configured merge_strategy (default: squash)
   # Each sub-issue becomes one squashed commit on the epic branch
   MERGE_STRATEGY="--${ARG_MERGE_STRATEGY:-squash}"
@@ -670,7 +670,7 @@ else
     $( [ "$ARG_FORCE" = "true" ] && printf '%s' "--force" ) \
     --json 2>"$MERGE_STDERR") || MERGE_EXIT=$?
 
-  MERGED=$(echo "$MERGE_RESULT" | jq -r '.merged // false' 2>/dev/null || echo "false")
+  MERGED=$(printf '%s\n' "$MERGE_RESULT" | jq -r '.merged // false' 2>/dev/null || echo "false")
 
   if [ "$MERGE_EXIT" -ne 0 ] && [ "$MERGED" != "true" ]; then
     # Verify merge actually landed before treating as failure (handles race conditions)
@@ -685,7 +685,7 @@ else
       # the #184 config-mismatch marker. The Go failure classifier records
       # CatRulesetBlocked for all of these so retries are skipped (#185).
       MERGE_STDERR_CONTENT=$(cat "$MERGE_STDERR" 2>/dev/null)
-      if echo "$MERGE_STDERR_CONTENT" | grep -qiE "base branch policy prohibits the merge|required status check[^\n]* (is|are) (expected|failing)|required status checks have not passed|required-check-config-mismatch"; then
+      if printf '%s\n' "$MERGE_STDERR_CONTENT" | grep -qiE "base branch policy prohibits the merge|required status check[^\n]* (is|are) (expected|failing)|required status checks have not passed|required-check-config-mismatch"; then
         echo "ERROR: merge blocked by base branch ruleset / required status checks on '$BASE_REF'."
         if [ ${#RULESET_BLOCKERS[@]} -gt 0 ]; then
           echo "Known blockers detected in Step 6.0: ${RULESET_BLOCKERS[*]}"

@@ -153,10 +153,10 @@ fi
 Extract results (field names match the Go `PullRequest` struct):
 
 ```bash
-PR_NUMBER=$(echo "$RESULT" | jq -r '.number')
-PR_URL=$(echo "$RESULT" | jq -r '.url')
-PR_TITLE=$(echo "$RESULT" | jq -r '.title')
-PR_BASE_BRANCH=$(echo "$RESULT" | jq -r '.baseRef')
+PR_NUMBER=$(printf '%s\n' "$RESULT" | jq -r '.number')
+PR_URL=$(printf '%s\n' "$RESULT" | jq -r '.url')
+PR_TITLE=$(printf '%s\n' "$RESULT" | jq -r '.title')
+PR_BASE_BRANCH=$(printf '%s\n' "$RESULT" | jq -r '.baseRef')
 ```
 
 ## Phase 3.6: verify PR created
@@ -175,7 +175,7 @@ PR_CHECK=$("$BINARY" forge pr list --repo "$REPO" \
   --json number,state,url \
   2>/dev/null || echo "[]")
 
-PR_EXISTS=$(echo "$PR_CHECK" | jq 'length' 2>/dev/null || echo "0")
+PR_EXISTS=$(printf '%s\n' "$PR_CHECK" | jq 'length' 2>/dev/null || echo "0")
 ```
 
 **Step 3.6.2: Cross-check with `gh` before declaring not-found**
@@ -189,7 +189,7 @@ if [ "$PR_EXISTS" -eq 0 ]; then
   # Second opinion: gh queries the API directly by head ref.
   GH_CHECK=$(gh pr list --repo "$REPO" --head "$BRANCH" --state all \
     --json number,state,url 2>/dev/null || echo "[]")
-  PR_EXISTS=$(echo "$GH_CHECK" | jq 'length' 2>/dev/null || echo "0")
+  PR_EXISTS=$(printf '%s\n' "$GH_CHECK" | jq 'length' 2>/dev/null || echo "0")
   [ "$PR_EXISTS" -gt 0 ] && PR_CHECK="$GH_CHECK"
 fi
 ```
@@ -266,12 +266,12 @@ else
 
   # Parse result fields from Go binary JSON output
   # Fields: state, total, successful, failed, pending, elapsedSecs, checks[]
-  CI_STATE=$(echo "$CI_RESULT" | jq -r '.state // "UNKNOWN"' 2>/dev/null || echo "UNKNOWN")
-  CI_CHECKS_TOTAL=$(echo "$CI_RESULT" | jq -r '.total // 0' 2>/dev/null || echo "0")
-  CI_CHECKS_PASSED=$(echo "$CI_RESULT" | jq -r '.successful // 0' 2>/dev/null || echo "0")
-  CI_CHECKS_FAILED=$(echo "$CI_RESULT" | jq -r '.failed // 0' 2>/dev/null || echo "0")
-  CI_CHECKS_PENDING=$(echo "$CI_RESULT" | jq -r '.pending // 0' 2>/dev/null || echo "0")
-  CI_MONITOR_DURATION=$(echo "$CI_RESULT" | jq -r '.elapsedSecs // 0' 2>/dev/null || echo "0")
+  CI_STATE=$(printf '%s\n' "$CI_RESULT" | jq -r '.state // "UNKNOWN"' 2>/dev/null || echo "UNKNOWN")
+  CI_CHECKS_TOTAL=$(printf '%s\n' "$CI_RESULT" | jq -r '.total // 0' 2>/dev/null || echo "0")
+  CI_CHECKS_PASSED=$(printf '%s\n' "$CI_RESULT" | jq -r '.successful // 0' 2>/dev/null || echo "0")
+  CI_CHECKS_FAILED=$(printf '%s\n' "$CI_RESULT" | jq -r '.failed // 0' 2>/dev/null || echo "0")
+  CI_CHECKS_PENDING=$(printf '%s\n' "$CI_RESULT" | jq -r '.pending // 0' 2>/dev/null || echo "0")
+  CI_MONITOR_DURATION=$(printf '%s\n' "$CI_RESULT" | jq -r '.elapsedSecs // 0' 2>/dev/null || echo "0")
 
   CI_MONITORED=true
 
@@ -285,10 +285,10 @@ else
   # name/status/conclusion shape Step 3.5.2 expects.
   if [ "$CI_CHECKS_TOTAL" -eq 0 ] && { [ "$CI_STATE" = "FAILURE" ] || [ "$CI_STATE" = "ERROR" ]; }; then
     GH_ROLLUP=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json statusCheckRollup 2>/dev/null || echo '{"statusCheckRollup":[]}')
-    GH_CHECKS=$(echo "$GH_ROLLUP" | jq -c '[.statusCheckRollup[]? | {name, status, conclusion, detailsUrl}]' 2>/dev/null || echo "[]")
-    GH_CHECKS_COUNT=$(echo "$GH_CHECKS" | jq 'length' 2>/dev/null || echo "0")
+    GH_CHECKS=$(printf '%s\n' "$GH_ROLLUP" | jq -c '[.statusCheckRollup[]? | {name, status, conclusion, detailsUrl}]' 2>/dev/null || echo "[]")
+    GH_CHECKS_COUNT=$(printf '%s\n' "$GH_CHECKS" | jq 'length' 2>/dev/null || echo "0")
     if [ "$GH_CHECKS_COUNT" -gt 0 ]; then
-      CI_RESULT=$(echo "$CI_RESULT" | jq --argjson checks "$GH_CHECKS" '. + {checks: $checks, total: ($checks | length)}' 2>/dev/null || echo "$CI_RESULT")
+      CI_RESULT=$(printf '%s\n' "$CI_RESULT" | jq --argjson checks "$GH_CHECKS" '. + {checks: $checks, total: ($checks | length)}' 2>/dev/null || echo "$CI_RESULT")
       CI_CHECKS_TOTAL="$GH_CHECKS_COUNT"
       echo "  (ci wait returned no check detail for a $CI_STATE verdict — cross-checked via 'gh pr view --json statusCheckRollup': $GH_CHECKS_COUNT checks found)"
     fi
@@ -306,7 +306,7 @@ will be empty until the CheckDetail struct is extended in a future issue.
 ```bash
 if [ "$CI_MONITORED" = "true" ] && { [ "$CI_STATE" = "FAILURE" ] || [ "$CI_STATE" = "ERROR" ]; }; then
   # Extract failed checks from Go binary result
-  FAILED_CHECKS=$(echo "$CI_RESULT" | jq -c '[
+  FAILED_CHECKS=$(printf '%s\n' "$CI_RESULT" | jq -c '[
     .checks[] |
     select(
       .status == "COMPLETED" and
@@ -315,7 +315,7 @@ if [ "$CI_MONITORED" = "true" ] && { [ "$CI_STATE" = "FAILURE" ] || [ "$CI_STATE
   ]' 2>/dev/null || echo "[]")
 
   # Classify each failure using patterns matching ciCheckHelpers FAILURE_TYPE_PATTERNS
-  CI_FAILURES_JSON=$(echo "$FAILED_CHECKS" | jq '
+  CI_FAILURES_JSON=$(printf '%s\n' "$FAILED_CHECKS" | jq '
     map(
       . as $check |
       ($check.conclusion | ascii_downcase) as $conclusion |
@@ -371,7 +371,7 @@ echo "Checks: ${CI_CHECKS_TOTAL} total | ${CI_CHECKS_PASSED} passed | ${CI_CHECK
 if [ "$CI_FINAL_STATUS" = "failure" ] || [ "$CI_FINAL_STATUS" = "error" ]; then
   echo ""
   echo "Failed checks:"
-  echo "$CI_FAILURES_JSON" | jq -r '.[] |
+  printf '%s\n' "$CI_FAILURES_JSON" | jq -r '.[] |
     "  [\(.failure_type)] \(.name)" +
     (if .is_transient then " (transient)" else "" end) +
     (if .details_url != "" then "\n    Logs: \(.details_url)" else "" end)
@@ -385,7 +385,7 @@ if [ "$CI_FINAL_STATUS" = "failure" ] || [ "$CI_FINAL_STATUS" = "error" ]; then
   if [ "$AUTO_FIXABLE" -gt 0 ]; then
     echo ""
     echo "Auto-fixable failures detected (handoff to pr-merge — do NOT fix here):"
-    echo "$CI_FAILURES_JSON" | jq -r \
+    printf '%s\n' "$CI_FAILURES_JSON" | jq -r \
       '.[] | select(.failure_type == "format" or .failure_type == "lint") |
        "  [\(.failure_type)] \(.name)"' 2>/dev/null || true
     CI_NOTES="${AUTO_FIXABLE} auto-fixable CI failure(s) (format/lint) — pr-merge will resolve."

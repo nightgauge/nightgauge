@@ -39,12 +39,12 @@ mkdir -p .nightgauge/pipeline
 
 jq -n \
   --argjson issue_number "$ISSUE_NUMBER" \
-  --argjson files_created "$(echo "${FILES_CREATED_JSON:-[]}" | jq -c .)" \
-  --argjson files_modified "$(echo "${FILES_MODIFIED_JSON:-[]}" | jq -c .)" \
-  --argjson files_deleted "$(echo "${FILES_DELETED_JSON:-[]}" | jq -c .)" \
+  --argjson files_created "$(printf '%s\n' "${FILES_CREATED_JSON:-[]}" | jq -c .)" \
+  --argjson files_modified "$(printf '%s\n' "${FILES_MODIFIED_JSON:-[]}" | jq -c .)" \
+  --argjson files_deleted "$(printf '%s\n' "${FILES_DELETED_JSON:-[]}" | jq -c .)" \
   --argjson build_ran "${BUILD_RAN:-false}" \
   --arg build_status "${BUILD_STATUS:-skipped}" \
-  --argjson build_commands "$(echo "${BUILD_COMMANDS_JSON:-[]}" | jq -c .)" \
+  --argjson build_commands "$(printf '%s\n' "${BUILD_COMMANDS_JSON:-[]}" | jq -c .)" \
   --argjson build_timestamp "$(if [ -n "${BUILD_TIMESTAMP:-}" ]; then echo "\"$BUILD_TIMESTAMP\""; else echo "null"; fi)" \
   --argjson tests_passed "${TESTS_PASSED:-0}" \
   --argjson tests_failed "${TESTS_FAILED:-0}" \
@@ -59,11 +59,11 @@ jq -n \
   --arg security_review "${SECURITY_REVIEW_RESULT:-skipped}" \
   --arg type_check "${TYPE_CHECK_RESULT:-skipped}" \
   --arg dead_code_scan "${DEAD_CODE_RESULT:-not_run}" \
-  --argjson feedback "$(echo "${FEEDBACK_JSON:-[]}" | jq -c .)" \
+  --argjson feedback "$(printf '%s\n' "${FEEDBACK_JSON:-[]}" | jq -c .)" \
   --argjson retry_count "${RETRY_COUNT:-0}" \
-  --argjson retry_reasons "$(echo "${RETRY_REASONS_JSON:-[]}" | jq -c .)" \
+  --argjson retry_reasons "$(printf '%s\n' "${RETRY_REASONS_JSON:-[]}" | jq -c .)" \
   --argjson knowledge_path "$(if [ -n "${KNOWLEDGE_PATH:-}" ]; then echo "\"$KNOWLEDGE_PATH\""; else echo "null"; fi)" \
-  --argjson architectural_constraints "$(echo "${ARCH_CONSTRAINTS:-null}" | jq -c 'if . == "[]" then [] elif . == null then null else . end')" \
+  --argjson architectural_constraints "$(printf '%s\n' "${ARCH_CONSTRAINTS:-null}" | jq -c 'if . == "[]" then [] elif . == null then null else . end')" \
   --arg created_at "$TIMESTAMP" \
   '{
     schema_version: "1.8",

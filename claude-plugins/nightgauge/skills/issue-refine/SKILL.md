@@ -118,15 +118,15 @@ echo "Refining issue #${ISSUE_NUMBER}..."
 ISSUE_JSON=$(nightgauge forge issue view "$ISSUE_NUMBER" --repo $REPO \
   --json number,title,body,labels,comments,state 2>/dev/null)
 
-if [ -z "$ISSUE_JSON" ] || [ "$(echo "$ISSUE_JSON" | jq -r '.number // empty')" = "" ]; then
+if [ -z "$ISSUE_JSON" ] || [ "$(printf '%s\n' "$ISSUE_JSON" | jq -r '.number // empty')" = "" ]; then
   echo "ERROR: Issue #${ISSUE_NUMBER} not found or not accessible."
   exit 1
 fi
 
-ISSUE_TITLE=$(echo "$ISSUE_JSON" | jq -r '.title')
-ISSUE_BODY=$(echo "$ISSUE_JSON" | jq -r '.body // ""')
-ISSUE_STATE=$(echo "$ISSUE_JSON" | jq -r '.state')
-ISSUE_LABELS=$(echo "$ISSUE_JSON" | jq -r '[.labels[].name] | join(",")')
+ISSUE_TITLE=$(printf '%s\n' "$ISSUE_JSON" | jq -r '.title')
+ISSUE_BODY=$(printf '%s\n' "$ISSUE_JSON" | jq -r '.body // ""')
+ISSUE_STATE=$(printf '%s\n' "$ISSUE_JSON" | jq -r '.state')
+ISSUE_LABELS=$(printf '%s\n' "$ISSUE_JSON" | jq -r '[.labels[].name] | join(",")')
 
 echo "Issue: #${ISSUE_NUMBER} — ${ISSUE_TITLE}"
 echo "State: ${ISSUE_STATE}"
@@ -145,20 +145,20 @@ printf '<!-- phase:start name="detect-issue-type" index=2 total=6 stage="issue-r
 
 ```bash
 # Prefer explicit type label
-if echo "$ISSUE_LABELS" | grep -q "type:bug"; then
+if printf '%s\n' "$ISSUE_LABELS" | grep -q "type:bug"; then
   ISSUE_TYPE="bug"
-elif echo "$ISSUE_LABELS" | grep -q "type:feature"; then
+elif printf '%s\n' "$ISSUE_LABELS" | grep -q "type:feature"; then
   ISSUE_TYPE="feature"
-elif echo "$ISSUE_LABELS" | grep -q "type:chore"; then
+elif printf '%s\n' "$ISSUE_LABELS" | grep -q "type:chore"; then
   ISSUE_TYPE="chore"
-elif echo "$ISSUE_LABELS" | grep -q "type:docs"; then
+elif printf '%s\n' "$ISSUE_LABELS" | grep -q "type:docs"; then
   ISSUE_TYPE="docs"
 else
   # Infer from body keywords
   BODY_LOWER=$(echo "$ISSUE_BODY" | tr '[:upper:]' '[:lower:]')
-  if echo "$BODY_LOWER" | grep -qE '\b(bug|error|exception|crash|broken|fail|wrong|incorrect|regression|stack trace)\b'; then
+  if printf '%s\n' "$BODY_LOWER" | grep -qE '\b(bug|error|exception|crash|broken|fail|wrong|incorrect|regression|stack trace)\b'; then
     ISSUE_TYPE="bug"
-  elif echo "$BODY_LOWER" | grep -qE '\b(add|implement|create|build|feature|enhancement|support|allow)\b'; then
+  elif printf '%s\n' "$BODY_LOWER" | grep -qE '\b(add|implement|create|build|feature|enhancement|support|allow)\b'; then
     ISSUE_TYPE="feature"
   else
     ISSUE_TYPE="feature"  # safe default
@@ -180,12 +180,12 @@ HAS_TECHNICAL_NOTES=false
 HAS_ROOT_CAUSE=false
 HAS_COMPLEXITY=false
 
-echo "$ISSUE_BODY" | grep -q "^## Summary" && HAS_SUMMARY=true
-echo "$ISSUE_BODY" | grep -q "^## User Story" && HAS_USER_STORY=true
-echo "$ISSUE_BODY" | grep -qE "^## Acceptance Criteria" && HAS_ACCEPTANCE_CRITERIA=true
-echo "$ISSUE_BODY" | grep -q "^## Technical Notes" && HAS_TECHNICAL_NOTES=true
-echo "$ISSUE_BODY" | grep -q "^## Root Cause" && HAS_ROOT_CAUSE=true
-echo "$ISSUE_BODY" | grep -q "^## Complexity" && HAS_COMPLEXITY=true
+printf '%s\n' "$ISSUE_BODY" | grep -q "^## Summary" && HAS_SUMMARY=true
+printf '%s\n' "$ISSUE_BODY" | grep -q "^## User Story" && HAS_USER_STORY=true
+printf '%s\n' "$ISSUE_BODY" | grep -qE "^## Acceptance Criteria" && HAS_ACCEPTANCE_CRITERIA=true
+printf '%s\n' "$ISSUE_BODY" | grep -q "^## Technical Notes" && HAS_TECHNICAL_NOTES=true
+printf '%s\n' "$ISSUE_BODY" | grep -q "^## Root Cause" && HAS_ROOT_CAUSE=true
+printf '%s\n' "$ISSUE_BODY" | grep -q "^## Complexity" && HAS_COMPLEXITY=true
 
 echo "Existing sections — Summary:${HAS_SUMMARY} AC:${HAS_ACCEPTANCE_CRITERIA} Technical:${HAS_TECHNICAL_NOTES}"
 ```
@@ -459,7 +459,7 @@ echo "Issue #${ISSUE_NUMBER} body updated."
 #### Step 5.3: Add Type Label if Missing
 
 ```bash
-if ! echo "$ISSUE_LABELS" | grep -qE '(^|,)type:'; then
+if ! printf '%s\n' "$ISSUE_LABELS" | grep -qE '(^|,)type:'; then
   nightgauge forge graphql -f query="mutation{addLabelsToLabelable(input:{labelableId:\"$ISSUE_NUMBER\",labelIds:[\"type:${ISSUE_TYPE}\"]}){clientMutationId}}" 2>/dev/null || \
     echo "WARNING: Could not add type:${ISSUE_TYPE} label (may not exist in repo)."
 fi
@@ -503,7 +503,7 @@ echo ""
 echo "✓ Issue #${ISSUE_NUMBER} refined successfully"
 echo "  URL: ${ISSUE_URL}"
 echo "  Type: ${ISSUE_TYPE}"
-echo "  Files referenced: $(echo "${RELATED_FILES}" | grep -c . 2>/dev/null || echo 0)"
+echo "  Files referenced: $(printf '%s\n' "${RELATED_FILES}" | grep -c . 2>/dev/null || echo 0)"
 echo ""
 echo "Next step: /nightgauge-issue-pickup ${ISSUE_NUMBER}"
 ```

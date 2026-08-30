@@ -68,13 +68,13 @@ After the subagent completes, merge results into the planning context:
 
 ```bash
 # Parse pattern mining results
-PATTERNS_FOUND=$(echo "$PATTERN_RESULT" | jq -c '.patterns_found // []')
-SIMILAR_ISSUES=$(echo "$PATTERN_RESULT" | jq -c '.similar_issues // []')
-PATTERN_RECOMMENDATIONS=$(echo "$PATTERN_RESULT" | jq -c '.recommendations // []')
-PATTERN_CLASSIFICATIONS=$(echo "$PATTERN_RESULT" | jq -c '.pattern_classifications // {}')
+PATTERNS_FOUND=$(printf '%s\n' "$PATTERN_RESULT" | jq -c '.patterns_found // []')
+SIMILAR_ISSUES=$(printf '%s\n' "$PATTERN_RESULT" | jq -c '.similar_issues // []')
+PATTERN_RECOMMENDATIONS=$(printf '%s\n' "$PATTERN_RESULT" | jq -c '.recommendations // []')
+PATTERN_CLASSIFICATIONS=$(printf '%s\n' "$PATTERN_RESULT" | jq -c '.pattern_classifications // {}')
 
 # Use pattern recommendations to shortlist docs in Phase 3
-PATTERN_COUNT=$(echo "$PATTERNS_FOUND" | jq 'length')
+PATTERN_COUNT=$(printf '%s\n' "$PATTERNS_FOUND" | jq 'length')
 if [ "$PATTERN_COUNT" -gt 0 ]; then
   echo "Pattern mining found $PATTERN_COUNT patterns — using to prioritize doc reading"
 fi
@@ -185,10 +185,10 @@ After all subagents complete, merge their outputs into the planning context:
 
 ```bash
 # Merge parallel doc gathering results
-ARCH_PATTERNS=$(echo "$ARCH_RESULT" | jq -r '.patterns')
-STANDARDS=$(echo "$STANDARDS_RESULT" | jq -r '.naming_conventions')
-SOURCE_FILES=$(echo "$SOURCE_RESULT" | jq -r '.files_to_modify')
-FILES_TO_READ=$(echo "$SOURCE_RESULT" | jq -r '.files_to_read')
+ARCH_PATTERNS=$(printf '%s\n' "$ARCH_RESULT" | jq -r '.patterns')
+STANDARDS=$(printf '%s\n' "$STANDARDS_RESULT" | jq -r '.naming_conventions')
+SOURCE_FILES=$(printf '%s\n' "$SOURCE_RESULT" | jq -r '.files_to_modify')
+FILES_TO_READ=$(printf '%s\n' "$SOURCE_RESULT" | jq -r '.files_to_read')
 ```
 
 **Fallback**: If any subagent fails, fall through to sequential doc reading for

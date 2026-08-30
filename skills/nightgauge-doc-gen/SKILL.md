@@ -87,7 +87,7 @@ This skill automatically generates and updates documentation by:
 BRANCH=$(git branch --show-current)
 
 # Extract issue number from branch (e.g., feat/42-description -> 42)
-ISSUE_NUMBER=$(echo "$BRANCH" | grep -oE '[0-9]+' | head -1)
+ISSUE_NUMBER=$(printf '%s\n' "$BRANCH" | grep -oE '[0-9]+' | head -1)
 
 echo "Branch: $BRANCH"
 echo "Issue: #$ISSUE_NUMBER"

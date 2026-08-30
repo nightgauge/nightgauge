@@ -98,7 +98,7 @@ jq -n \
   --argjson mobile_mcp_specs_run "${MOBILE_MCP_SPECS_RUN:-0}" \
   --argjson mobile_mcp_specs_passed "${MOBILE_MCP_SPECS_PASSED:-0}" \
   --argjson mobile_mcp_specs_failed "${MOBILE_MCP_SPECS_FAILED:-0}" \
-  --argjson mobile_mcp_results "$(echo "${MOBILE_MCP_RESULTS_JSON:-[]}" | jq -c .)" \
+  --argjson mobile_mcp_results "$(printf '%s\n' "${MOBILE_MCP_RESULTS_JSON:-[]}" | jq -c .)" \
   --arg mobile_mcp_evidence_dir "${MOBILE_MCP_EVIDENCE_DIR:-}" \
   --arg mobile_mcp_skipped_reason "${MOBILE_MCP_SKIPPED_REASON:-}" \
   --argjson mobile_mcp_active "$([ "${MOBILE_MCP_RAN:-false}" = "true" ] || [ -n "${MOBILE_MCP_SKIPPED_REASON:-}" ] && echo true || echo false)" \
@@ -106,19 +106,19 @@ jq -n \
   --argjson verify_ui_passed "${VERIFY_UI_PASSED:-false}" \
   --arg verify_ui_repo "${VERIFY_UI_REPO:-}" \
   --arg verify_ui_flow "${VERIFY_UI_FLOW:-}" \
-  --argjson verify_ui_report "$(echo "${VERIFY_UI_REPORT_JSON:-"{}"}" | jq -c .)" \
+  --argjson verify_ui_report "$(printf '%s\n' "${VERIFY_UI_REPORT_JSON:-"{}"}" | jq -c .)" \
   --arg verify_ui_artifacts_dir "${VERIFY_UI_ARTIFACTS_DIR:-}" \
   --arg verify_ui_skipped_reason "${VERIFY_UI_SKIPPED_REASON:-}" \
   --argjson verify_ui_active "$([ "${VERIFY_UI_RAN:-false}" = "true" ] || [ -n "${VERIFY_UI_SKIPPED_REASON:-}" ] && echo true || echo false)" \
-  --argjson dead_code_warnings "$(echo "${DEAD_CODE_JSON:-[]}" | jq -c .)" \
-  --argjson preexisting_failures "$(echo "${PREEXISTING_FAILURES:-[]}" | jq -c .)" \
-  --argjson skipped_phases "$(echo "${SKIPPED_PHASES:-[]}" | jq -c .)" \
+  --argjson dead_code_warnings "$(printf '%s\n' "${DEAD_CODE_JSON:-[]}" | jq -c .)" \
+  --argjson preexisting_failures "$(printf '%s\n' "${PREEXISTING_FAILURES:-[]}" | jq -c .)" \
+  --argjson skipped_phases "$(printf '%s\n' "${SKIPPED_PHASES:-[]}" | jq -c .)" \
   --arg ac_status "${AC_COMPLETION_STATUS:-skipped}" \
   --argjson ac_checked "${CHECKED:-0}" \
   --argjson ac_unchecked "${UNCHECKED:-0}" \
   --argjson ac_applicable "$([ "${AC_CHECK_REQUIRED:-false}" = "true" ] && echo true || echo false)" \
-  --argjson manual_checklist "$(echo "${MANUAL_CHECKLIST_JSON:-[]}" | jq -c .)" \
-  --argjson feedback "$(echo "${FEEDBACK_JSON:-[]}" | jq -c .)" \
+  --argjson manual_checklist "$(printf '%s\n' "${MANUAL_CHECKLIST_JSON:-[]}" | jq -c .)" \
+  --argjson feedback "$(printf '%s\n' "${FEEDBACK_JSON:-[]}" | jq -c .)" \
   --arg notes "${NOTES:-}" \
   --arg pre_push_status "${PREPUSH_STATUS:-skipped}" \
   --argjson min_dur_flagged "${MINIMUM_DURATION_FLAGGED:-false}" \

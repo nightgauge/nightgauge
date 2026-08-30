@@ -39,6 +39,8 @@ Markdown link check
 Mirror drift gate regression suite
 Issue-body contract gate regression suite
 Issue-body heading contract
+Skill echo-into-jq gate regression suite
+Skill echo-into-jq gate
 Plugin skills mirror in sync
 Mirror link gate regression suite
 Mirror link integrity

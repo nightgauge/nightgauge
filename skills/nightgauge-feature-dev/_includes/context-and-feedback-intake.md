@@ -45,7 +45,7 @@ block below (default `planning` if the line is absent).
 
 ```bash
 BRANCH=$(git branch --show-current)
-ISSUE_NUMBER=$(echo "$BRANCH" | grep -oE '[0-9]+' | head -1)
+ISSUE_NUMBER=$(printf '%s\n' "$BRANCH" | grep -oE '[0-9]+' | head -1)
 
 # INPUT_CONTEXT_TYPE was set above by reading this prompt's own Invocation
 # Context block — substitute the value here before running.
@@ -111,7 +111,7 @@ fi
 `planning-batch-{E}.json` where E matches the issue number from the branch.
 
 ```bash
-EPIC_NUMBER=$(echo "$BRANCH" | grep -oE '[0-9]+' | head -1)
+EPIC_NUMBER=$(printf '%s\n' "$BRANCH" | grep -oE '[0-9]+' | head -1)
 BATCH_PLANNING=".nightgauge/pipeline/planning-batch-${EPIC_NUMBER}.json"
 
 if [ -f "$BATCH_PLANNING" ]; then
@@ -204,16 +204,16 @@ if [ -f "$FEEDBACK_FILE" ]; then
     .emitted_by_stage == "feature-validate" or
     .signal_type == "CONFLICT_RESOLUTION_NEEDED"
   )]' "$FEEDBACK_FILE" 2>/dev/null)
-  SIGNAL_COUNT=$(echo "$DEV_SIGNALS" | jq 'length' 2>/dev/null || echo "0")
+  SIGNAL_COUNT=$(printf '%s\n' "$DEV_SIGNALS" | jq 'length' 2>/dev/null || echo "0")
 
   if [ "$SIGNAL_COUNT" -gt 0 ]; then
     IS_RETRY=true
-    RETRY_REASONS_JSON=$(echo "$DEV_SIGNALS" | jq '[.[] | .evidence[]] | unique' 2>/dev/null || echo "[]")
+    RETRY_REASONS_JSON=$(printf '%s\n' "$DEV_SIGNALS" | jq '[.[] | .evidence[]] | unique' 2>/dev/null || echo "[]")
 
     # Detect the conflict-resolution re-dispatch specifically — it needs the
     # branch-checkout + conflict-context handling in Step 0.7.1b, not a plain
     # plan re-read.
-    CONFLICT_SIGNAL_COUNT=$(echo "$DEV_SIGNALS" | jq '[.[] | select(.signal_type == "CONFLICT_RESOLUTION_NEEDED")] | length' 2>/dev/null || echo "0")
+    CONFLICT_SIGNAL_COUNT=$(printf '%s\n' "$DEV_SIGNALS" | jq '[.[] | select(.signal_type == "CONFLICT_RESOLUTION_NEEDED")] | length' 2>/dev/null || echo "0")
     [ "$CONFLICT_SIGNAL_COUNT" -gt 0 ] && IS_CONFLICT_RESOLUTION=true
 
     # Determine retry count from any existing dev-{N}.json

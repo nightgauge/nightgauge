@@ -42,7 +42,7 @@ For each `type:spike` sub-issue body assembled into a temp file `$BODY_FILE`:
 ```bash
 LABEL_LIST="<comma-separated label string for this sub-issue>"
 
-if echo "$LABEL_LIST" | grep -q "type:spike"; then
+if printf '%s\n' "$LABEL_LIST" | grep -q "type:spike"; then
   if ! nightgauge spike validate --body-file "$BODY_FILE"; then
     echo ""
     echo "ERROR: type:spike sub-issue body failed contract validation."

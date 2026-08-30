@@ -183,14 +183,14 @@ in `dev-{N}.json`.
 ```bash
 BUILD_RESULT=$(nightgauge build run --json 2>/dev/null || \
   echo '{"ran":false,"status":"skipped","commands":[],"output":"","timestamp":""}')
-BUILD_RAN=$(echo "$BUILD_RESULT" | jq -r '.ran')
-BUILD_STATUS=$(echo "$BUILD_RESULT" | jq -r '.status')
-BUILD_COMMANDS_JSON=$(echo "$BUILD_RESULT" | jq -c '.commands')
-BUILD_TIMESTAMP=$(echo "$BUILD_RESULT" | jq -r '.timestamp')
+BUILD_RAN=$(printf '%s\n' "$BUILD_RESULT" | jq -r '.ran')
+BUILD_STATUS=$(printf '%s\n' "$BUILD_RESULT" | jq -r '.status')
+BUILD_COMMANDS_JSON=$(printf '%s\n' "$BUILD_RESULT" | jq -c '.commands')
+BUILD_TIMESTAMP=$(printf '%s\n' "$BUILD_RESULT" | jq -r '.timestamp')
 
 if [ "$BUILD_STATUS" = "failed" ]; then
   echo "ERROR: Build failed — fix build errors before running tests"
-  echo "$BUILD_RESULT" | jq -r '.output'
+  printf '%s\n' "$BUILD_RESULT" | jq -r '.output'
 fi
 ```
 
@@ -253,7 +253,7 @@ E2E_SKIPPED_REASON="no-ui-files"
 ALL_CHANGED_FILES=$(echo "${FILES_CREATED_JSON:-[]} ${FILES_MODIFIED_JSON:-[]}" | \
   jq -sc 'add // []' 2>/dev/null || echo "[]")
 
-UI_FILES=$(echo "$ALL_CHANGED_FILES" | jq -r '.[] | select(
+UI_FILES=$(printf '%s\n' "$ALL_CHANGED_FILES" | jq -r '.[] | select(
   test("\\.(tsx|jsx|vue|svelte)$") or
   test("routes/") or
   test("pages/") or
@@ -357,12 +357,12 @@ UI_PATTERNS="\.tsx$|\.vue$|\.svelte$|routes/|pages/|/views/|/components/|/screen
 FILES_PLANNED_JSON=$(jq -s '.[0] + .[1]' \
   <(echo "${FILES_TO_CREATE:-[]}") \
   <(echo "${FILES_TO_MODIFY:-[]}"))
-ALL_CHANGED_FILES=$(echo "${FILES_PLANNED_JSON:-[]}" | jq -r '.[]')
+ALL_CHANGED_FILES=$(printf '%s\n' "${FILES_PLANNED_JSON:-[]}" | jq -r '.[]')
 
 HAS_UI_CHANGES=false
 while IFS= read -r f; do
   [ -z "$f" ] && continue
-  echo "$f" | grep -qE "$UI_PATTERNS" && HAS_UI_CHANGES=true && break
+  printf '%s\n' "$f" | grep -qE "$UI_PATTERNS" && HAS_UI_CHANGES=true && break
 done <<< "$ALL_CHANGED_FILES"
 
 echo "UI changes detected: $HAS_UI_CHANGES"

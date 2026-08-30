@@ -281,10 +281,10 @@ cd "$ASSESS_PATH"
 ECO_JSON=$(nightgauge scan ecosystem --workdir . --json 2>/dev/null \
   || echo '{"v":1,"ecosystems":[],"is_monorepo":false,"monorepo_kind":"","packages":[],"warnings":["scan ecosystem failed"]}')
 
-ECOSYSTEMS=( $(echo "$ECO_JSON" | jq -r '.ecosystems[]') )
-IS_MONOREPO=$(echo "$ECO_JSON" | jq -r '.is_monorepo')
-MONOREPO_KIND=$(echo "$ECO_JSON" | jq -r '.monorepo_kind')
-PACKAGES=( $(echo "$ECO_JSON" | jq -r '.packages[]') )
+ECOSYSTEMS=( $(printf '%s\n' "$ECO_JSON" | jq -r '.ecosystems[]') )
+IS_MONOREPO=$(printf '%s\n' "$ECO_JSON" | jq -r '.is_monorepo')
+MONOREPO_KIND=$(printf '%s\n' "$ECO_JSON" | jq -r '.monorepo_kind')
+PACKAGES=( $(printf '%s\n' "$ECO_JSON" | jq -r '.packages[]') )
 
 if [ ${#ECOSYSTEMS[@]} -eq 0 ]; then
   echo "WARNING: No recognized ecosystem detected."
@@ -475,9 +475,9 @@ are stable. See [docs/GO_BINARY.md](../../docs/GO_BINARY.md#scan--testsource-rat
 
 ```bash
 TESTS_JSON=$(nightgauge scan tests --workdir "$ASSESS_PATH" --json)
-TEST_FILE_COUNT=$(echo "$TESTS_JSON" | jq -r '.test_files')
-SOURCE_FILE_COUNT=$(echo "$TESTS_JSON" | jq -r '.source_files')
-TEST_RATIO=$(echo "$TESTS_JSON" | jq -r '.test_to_source_ratio')
+TEST_FILE_COUNT=$(printf '%s\n' "$TESTS_JSON" | jq -r '.test_files')
+SOURCE_FILE_COUNT=$(printf '%s\n' "$TESTS_JSON" | jq -r '.source_files')
+TEST_RATIO=$(printf '%s\n' "$TESTS_JSON" | jq -r '.test_to_source_ratio')
 ```
 
 The verb enforces the same exclude-dir set as Step 3.1 (`.git`,
@@ -534,7 +534,7 @@ semantics so existing scoring rubrics stay calibrated. See
 
 ```bash
 DEBT_JSON=$(nightgauge scan debt --workdir "$ASSESS_PATH" --json)
-DEBT_MARKERS=$(echo "$DEBT_JSON" | jq -r '.markers.total')
+DEBT_MARKERS=$(printf '%s\n' "$DEBT_JSON" | jq -r '.markers.total')
 
 echo "Debt markers (TODO/FIXME/HACK/XXX): $DEBT_MARKERS"
 ```
@@ -555,8 +555,8 @@ sections. Linter keys: `eslint`, `ruff`, `golangci`, `clippy`, `flake8`,
 
 ```bash
 TOOLING_JSON=$(nightgauge scan tooling --workdir "$ASSESS_PATH" --json)
-LINTER_PRESENT=$(echo "$TOOLING_JSON" | jq -r '.linter_present')
-FORMATTER_PRESENT=$(echo "$TOOLING_JSON" | jq -r '.formatter_present')
+LINTER_PRESENT=$(printf '%s\n' "$TOOLING_JSON" | jq -r '.linter_present')
+FORMATTER_PRESENT=$(printf '%s\n' "$TOOLING_JSON" | jq -r '.formatter_present')
 
 echo "Linter: $LINTER_PRESENT"
 echo "Formatter: $FORMATTER_PRESENT"

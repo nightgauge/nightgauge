@@ -250,7 +250,7 @@ validate_link_depth() {
   SOURCE_DEPTH=$(echo "$SOURCE_FILE" | tr -cd '/' | wc -c)
 
   # Count ../ prefixes in link
-  LINK_UP_COUNT=$(echo "$LINK" | grep -o '\.\.\/' | wc -l)
+  LINK_UP_COUNT=$(printf '%s\n' "$LINK" | grep -o '\.\.\/' | wc -l)
 
   # If link references root-level file but doesn't have enough ../
   if [[ "$LINK" == *".github/"* ]] || [[ "$LINK" == *"docs/"* ]]; then

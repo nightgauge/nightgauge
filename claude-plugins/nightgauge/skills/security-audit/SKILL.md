@@ -622,13 +622,13 @@ echo "=== Secret Detection ==="
 SECRETS_JSON=$(nightgauge scan secrets --workdir "$ASSESS_PATH" --json)
 
 # Per-pattern line counts (always populated — schema guarantees the six keys).
-SECRET_GENERIC=$(echo "$SECRETS_JSON" | jq -r '.patterns.generic_kv')
-SECRET_PEM=$(echo "$SECRETS_JSON" | jq -r '.patterns.pem_private_key')
-SECRET_AWS=$(echo "$SECRETS_JSON" | jq -r '.patterns.aws_access_key')
-SECRET_JWT=$(echo "$SECRETS_JSON" | jq -r '.patterns.jwt_bearer')
-SECRET_CONNSTR=$(echo "$SECRETS_JSON" | jq -r '.patterns.connection_string')
-SECRET_DOTENV=$(echo "$SECRETS_JSON" | jq -r '.patterns.dotenv_files')
-SECRET_TOTAL=$(echo "$SECRETS_JSON" | jq -r '.total')
+SECRET_GENERIC=$(printf '%s\n' "$SECRETS_JSON" | jq -r '.patterns.generic_kv')
+SECRET_PEM=$(printf '%s\n' "$SECRETS_JSON" | jq -r '.patterns.pem_private_key')
+SECRET_AWS=$(printf '%s\n' "$SECRETS_JSON" | jq -r '.patterns.aws_access_key')
+SECRET_JWT=$(printf '%s\n' "$SECRETS_JSON" | jq -r '.patterns.jwt_bearer')
+SECRET_CONNSTR=$(printf '%s\n' "$SECRETS_JSON" | jq -r '.patterns.connection_string')
+SECRET_DOTENV=$(printf '%s\n' "$SECRETS_JSON" | jq -r '.patterns.dotenv_files')
+SECRET_TOTAL=$(printf '%s\n' "$SECRETS_JSON" | jq -r '.total')
 
 echo "--- Generic key/value secrets ---"
 echo "Generic key/value patterns: $SECRET_GENERIC"

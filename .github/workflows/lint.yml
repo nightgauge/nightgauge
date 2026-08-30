@@ -60,6 +60,15 @@ jobs:
         run: bash scripts/test-issue-body-contract.sh
       - name: Issue-body heading contract
         run: python3 scripts/check-issue-body-contract.py
+      # Skill echo-into-jq gate (#1215): zsh's builtin `echo` expands backslash
+      # escapes, so a JSON `\n` reaches jq as a real newline, the parse aborts,
+      # and every downstream check reads an empty value. Self-test first — a
+      # gate nothing exercises degrades into an unconditional pass (the
+      # #539/#549 lesson).
+      - name: Skill echo-into-jq gate self-test
+        run: bash scripts/test-skill-echo-json.sh
+      - name: Skill echo-into-jq gate
+        run: python3 scripts/check-skill-echo-json.py
       # Stale-visibility-prose reintroduction gate (#697): fails on a tracked
       # artifact unconditionally asserting this repository is private — the
       # exact shape all four #697 instances took. Legitimate conditional

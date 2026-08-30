@@ -35,12 +35,12 @@ TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 CONTEXT_FILE=".nightgauge/pipeline/issue-${ISSUE_NUMBER}.json"
 
 # Extract labels and body from issue JSON for safe jq interpolation
-LABELS_JSON=$(echo "$ISSUE_JSON" | jq -c '[.labels[].name]')
-ISSUE_BODY=$(echo "$ISSUE_JSON" | jq -r '.body // ""')
+LABELS_JSON=$(printf '%s\n' "$ISSUE_JSON" | jq -c '[.labels[].name]')
+ISSUE_BODY=$(printf '%s\n' "$ISSUE_JSON" | jq -r '.body // ""')
 
 # Extract requirements from issue body
-REQ_SUMMARY=$(echo "$ISSUE_JSON" | jq -r '.body' | head -5 | tr '\n' ' ')
-REQ_AC=$(echo "$ISSUE_JSON" | jq -r '.body' | grep -E '^\s*-\s*\[' | jq -R -s 'split("\n") | map(select(. != ""))')
+REQ_SUMMARY=$(printf '%s\n' "$ISSUE_JSON" | jq -r '.body' | head -5 | tr '\n' ' ')
+REQ_AC=$(printf '%s\n' "$ISSUE_JSON" | jq -r '.body' | grep -E '^\s*-\s*\[' | jq -R -s 'split("\n") | map(select(. != ""))')
 
 jq -n \
   --argjson issue_number "$ISSUE_NUMBER" \
@@ -93,7 +93,7 @@ but scaffolding is opt-in — disabled unless `knowledge.enabled: true`).
 ```bash
 # Determine if this is an epic (check labels)
 IS_EPIC=false
-if echo "${LABELS:-}" | grep -q "type:epic"; then
+if printf '%s\n' "${LABELS:-}" | grep -q "type:epic"; then
   IS_EPIC=true
 fi
 
@@ -162,9 +162,9 @@ else
     SCAFFOLD_RESULT='{"skipped":true,"skip_reason":"nightgauge binary not found"}'
   fi
 
-  KNOWLEDGE_PATH=$(echo "$SCAFFOLD_RESULT" | jq -r '.knowledge_path // empty')
-  KNOWLEDGE_SKIPPED=$(echo "$SCAFFOLD_RESULT" | jq -r '.skipped // true')
-  SKIP_REASON=$(echo "$SCAFFOLD_RESULT" | jq -r '.skip_reason // empty')
+  KNOWLEDGE_PATH=$(printf '%s\n' "$SCAFFOLD_RESULT" | jq -r '.knowledge_path // empty')
+  KNOWLEDGE_SKIPPED=$(printf '%s\n' "$SCAFFOLD_RESULT" | jq -r '.skipped // true')
+  SKIP_REASON=$(printf '%s\n' "$SCAFFOLD_RESULT" | jq -r '.skip_reason // empty')
 
   if [ "$KNOWLEDGE_SKIPPED" != "true" ] && [ -n "$KNOWLEDGE_PATH" ]; then
     # Patch knowledge_path into the context file
@@ -174,7 +174,7 @@ else
     mv "$tmp" "$CONTEXT_FILE"
     echo "Knowledge directory scaffolded: $KNOWLEDGE_PATH"
   elif [ "$KNOWLEDGE_SKIPPED" = "true" ]; then
-    if echo "$SKIP_REASON" | grep -q "knowledge.enabled=false"; then
+    if printf '%s\n' "$SKIP_REASON" | grep -q "knowledge.enabled=false"; then
       echo "Knowledge scaffolding skipped (knowledge.enabled=false in config)"
     else
       echo "Knowledge scaffolding skipped: $SKIP_REASON"
@@ -216,8 +216,8 @@ if [ "$KNOWLEDGE_WORKSPACE_SCOPED" = "true" ] && [ "$KNOWLEDGE_ENABLED_FLAG" = "
   if [ -n "$BINARY" ]; then
     WS_INIT_RESULT=$("$BINARY" knowledge workspace-init --json 2>/dev/null || echo "")
     if [ -n "$WS_INIT_RESULT" ]; then
-      WS_SKIPPED=$(echo "$WS_INIT_RESULT" | jq -r '.skipped // false' 2>/dev/null)
-      WS_FILES_COUNT=$(echo "$WS_INIT_RESULT" | jq -r '.files_created | length' 2>/dev/null || echo "0")
+      WS_SKIPPED=$(printf '%s\n' "$WS_INIT_RESULT" | jq -r '.skipped // false' 2>/dev/null)
+      WS_FILES_COUNT=$(printf '%s\n' "$WS_INIT_RESULT" | jq -r '.files_created | length' 2>/dev/null || echo "0")
       if [ "$WS_SKIPPED" = "true" ]; then
         echo "Workspace KB already initialized — no changes."
       elif [ "$WS_FILES_COUNT" -gt 0 ]; then

@@ -40,12 +40,12 @@ CANDIDATES=$(gh project item-list "$PROJECT_NUMBER" --owner "$OWNER" --format js
 
 # Step 2: Filter out blocked issues using Go binary hook check-deps
 # (queries GitHub's native blockedBy/blocking GraphQL API)
-ISSUE=$(echo "$CANDIDATES" | jq -r '.[].number' | while read -r n; do
+ISSUE=$(printf '%s\n' "$CANDIDATES" | jq -r '.[].number' | while read -r n; do
   BINARY=$(command -v nightgauge 2>/dev/null || echo "nightgauge")
   RESULT=$("$BINARY" hook check-deps "$n" --check-only 2>/dev/null || echo '{"has_open_dependencies":false}')
-  HAS_DEPS=$(echo "$RESULT" | jq -r '.has_open_dependencies')
+  HAS_DEPS=$(printf '%s\n' "$RESULT" | jq -r '.has_open_dependencies')
   if [ "$HAS_DEPS" = "false" ]; then
-    echo "$CANDIDATES" | jq ".[] | select(.number == $n)" | head -1
+    printf '%s\n' "$CANDIDATES" | jq ".[] | select(.number == $n)" | head -1
     break
   fi
 done)
@@ -129,18 +129,18 @@ BLOCKED_ISSUES="[]"
 for n in $CANDIDATES; do
   BINARY=$(command -v nightgauge 2>/dev/null || echo "nightgauge")
   RESULT=$("$BINARY" hook check-deps "$n" 2>/dev/null || echo '{"has_open_dependencies":false}')
-  HAS_DEPS=$(echo "$RESULT" | jq -r '.has_open_dependencies')
+  HAS_DEPS=$(printf '%s\n' "$RESULT" | jq -r '.has_open_dependencies')
   if [ "$HAS_DEPS" = "true" ]; then
-    ENTRY=$(echo "$RESULT" | jq '{
+    ENTRY=$(printf '%s\n' "$RESULT" | jq '{
       number: .issue_number,
       blockers: .open_dependencies,
       blocker_count: .open_count
     }')
-    BLOCKED_ISSUES=$(echo "$BLOCKED_ISSUES" "[$ENTRY]" | jq -s 'add | sort_by(.blocker_count)')
+    BLOCKED_ISSUES=$(printf '%s\n' "$BLOCKED_ISSUES" "[$ENTRY]" | jq -s 'add | sort_by(.blocker_count)')
   fi
 done
 
-LEAST_BLOCKED=$(echo "$BLOCKED_ISSUES" | jq '.[0]')
+LEAST_BLOCKED=$(printf '%s\n' "$BLOCKED_ISSUES" | jq '.[0]')
 ```
 
 Display the least-blocked issue with its blockers. Offer options: Pick up

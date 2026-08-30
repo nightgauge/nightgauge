@@ -743,7 +743,7 @@ case "$ACTIVE_LENS" in
 esac
 
 for kw in $LENS_KEYWORDS; do
-  if echo "$PROPOSAL_TEXT" | grep -qi "$kw"; then
+  if printf '%s\n' "$PROPOSAL_TEXT" | grep -qi "$kw"; then
     FOCUS_ALIGNED=true
     FOCUS_KEYWORDS_MATCHED+=("$kw")
   fi

@@ -92,8 +92,8 @@ fi
 #### Step RF.3: Parse Response
 
 ```bash
-WHAT_WENT_WELL=$(echo "$RETROSPECTIVE_RESPONSE" | jq -r '.answers.q0 // ""' 2>/dev/null || echo "")
-WHAT_TO_IMPROVE=$(echo "$RETROSPECTIVE_RESPONSE" | jq -r '.answers.q1 // ""' 2>/dev/null || echo "")
+WHAT_WENT_WELL=$(printf '%s\n' "$RETROSPECTIVE_RESPONSE" | jq -r '.answers.q0 // ""' 2>/dev/null || echo "")
+WHAT_TO_IMPROVE=$(printf '%s\n' "$RETROSPECTIVE_RESPONSE" | jq -r '.answers.q1 // ""' 2>/dev/null || echo "")
 ```
 
 If either value is a JSON array (multi-select), convert it to a
@@ -102,8 +102,8 @@ comma-joined string:
 ```bash
 _join_if_array() {
   local val="$1"
-  if echo "$val" | jq -e 'type == "array"' >/dev/null 2>&1; then
-    echo "$val" | jq -r 'join(", ")'
+  if printf '%s\n' "$val" | jq -e 'type == "array"' >/dev/null 2>&1; then
+    printf '%s\n' "$val" | jq -r 'join(", ")'
   else
     echo "$val"
   fi
@@ -172,7 +172,7 @@ if [ -n "$WHAT_TO_IMPROVE" ]; then
   mkdir -p "$ASSESSMENT_DIR"
   ASSESSMENT_FILE="$ASSESSMENT_DIR/pr-merge-retrospective-${ISSUE_NUMBER}.json"
 
-  IMPROVEMENTS_JSON=$(echo "$WHAT_TO_IMPROVE" | jq -Rc 'split(", ")')
+  IMPROVEMENTS_JSON=$(printf '%s\n' "$WHAT_TO_IMPROVE" | jq -Rc 'split(", ")')
 
   cat > "$ASSESSMENT_FILE" <<RECORD
 {

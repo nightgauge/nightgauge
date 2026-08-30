@@ -110,7 +110,7 @@ Extract `--target`, `--section`, `--source`, `--dry-run`, and `--knowledge` from
 
 ```bash
 KNOWLEDGE_MODE=false
-if echo "$ARGUMENTS" | grep -q -- '--knowledge'; then
+if printf '%s\n' "$ARGUMENTS" | grep -q -- '--knowledge'; then
   KNOWLEDGE_MODE=true
 fi
 ```
@@ -151,7 +151,7 @@ Check for issue context from the current branch:
 
 ```bash
 BRANCH=$(git branch --show-current)
-ISSUE_NUMBER=$(echo "$BRANCH" | grep -oE '[0-9]+' | head -1)
+ISSUE_NUMBER=$(printf '%s\n' "$BRANCH" | grep -oE '[0-9]+' | head -1)
 CONTEXT_FILE=".nightgauge/pipeline/issue-${ISSUE_NUMBER}.json"
 
 if [ -f "$CONTEXT_FILE" ]; then
@@ -245,15 +245,15 @@ PATTERNS_FOUND=()
 # Extract matched slugs and their files from the JSON result.
 while IFS= read -r slug; do
   PATTERNS_FOUND+=("$slug")
-done < <(echo "$PATTERN_JSON" | jq -r '.patterns[].slug')
+done < <(printf '%s\n' "$PATTERN_JSON" | jq -r '.patterns[].slug')
 
 declare -A PATTERN_FILES
 while IFS=$'\t' read -r slug files; do
   PATTERN_FILES[$slug]="$files"
-done < <(echo "$PATTERN_JSON" | jq -r '.patterns[] | [.slug, (.files | join(","))] | @tsv')
+done < <(printf '%s\n' "$PATTERN_JSON" | jq -r '.patterns[] | [.slug, (.files | join(","))] | @tsv')
 
 # Log any warnings from the binary (unreadable files, etc.)
-echo "$PATTERN_JSON" | jq -r '.warnings[]?' | while IFS= read -r w; do
+printf '%s\n' "$PATTERN_JSON" | jq -r '.warnings[]?' | while IFS= read -r w; do
   echo "  ! $w"
 done
 ```
@@ -653,8 +653,8 @@ fi
 LINK_EXIT=$?
 
 # Schema v1 — fields are stable. Skills parse via fixed jq paths.
-LINKS_TOTAL=$(echo "$LINK_RESULT" | jq -r '.links_total')
-LINKS_BROKEN=$(echo "$LINK_RESULT" | jq -r '.links_broken')
+LINKS_TOTAL=$(printf '%s\n' "$LINK_RESULT" | jq -r '.links_total')
+LINKS_BROKEN=$(printf '%s\n' "$LINK_RESULT" | jq -r '.links_broken')
 ```
 
 `LINK_EXIT` is `0` when all links resolve, `1` when at least one is broken,
@@ -669,7 +669,7 @@ optional anchor, and a closed-enum `reason`
 (`file_not_found`, `outside_root`, `unreadable`).
 
 ```bash
-echo "$LINK_RESULT" | jq -r '.findings[] | "\(.file):\(.line)  \(.link)  → \(.resolved)  [\(.reason)]"'
+printf '%s\n' "$LINK_RESULT" | jq -r '.findings[] | "\(.file):\(.line)  \(.link)  → \(.resolved)  [\(.reason)]"'
 ```
 
 For each finding:

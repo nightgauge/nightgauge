@@ -38,7 +38,7 @@ PR_JSON=$("$BINARY" pr view "$PR_NUMBER" --json 2>/dev/null || echo '{}')
 
 # Early exit if PR was merged out-of-band before we reached this stage.
 # This prevents the skill from entering a CI wait loop on an already-merged PR.
-PR_STATE_EARLY=$(echo "$PR_JSON" | jq -r '.state // "UNKNOWN"')
+PR_STATE_EARLY=$(printf '%s\n' "$PR_JSON" | jq -r '.state // "UNKNOWN"')
 if [ "$PR_STATE_EARLY" = "MERGED" ]; then
   echo "PR #$PR_NUMBER was already merged (state=MERGED). Exiting cleanly."
   exit 0
@@ -80,7 +80,7 @@ INLINE_COMMENTS=$(curl -s \
   -H "X-GitHub-Api-Version: 2022-11-28" \
   "https://api.github.com/repos/${OWNER}/${REPO_NAME}/pulls/${PR_NUMBER}/comments" \
   2>/dev/null || echo "[]")
-echo "$INLINE_COMMENTS" | jq -r '.[] | "**\(.user.login)** at \(.path):\(.line // ""):\n\(.body)\n---"'
+printf '%s\n' "$INLINE_COMMENTS" | jq -r '.[] | "**\(.user.login)** at \(.path):\(.line // ""):\n\(.body)\n---"'
 ```
 
 #### Step 3.4: Get Review Summaries
@@ -92,7 +92,7 @@ REVIEW_SUMMARIES=$(curl -s \
   -H "X-GitHub-Api-Version: 2022-11-28" \
   "https://api.github.com/repos/${OWNER}/${REPO_NAME}/pulls/${PR_NUMBER}/reviews" \
   2>/dev/null || echo "[]")
-echo "$REVIEW_SUMMARIES" | jq -r '.[] | "\(.user.login): \(.state)"'
+printf '%s\n' "$REVIEW_SUMMARIES" | jq -r '.[] | "\(.user.login): \(.state)"'
 ```
 
 #### Step 3.5: Parse Automated Reviews

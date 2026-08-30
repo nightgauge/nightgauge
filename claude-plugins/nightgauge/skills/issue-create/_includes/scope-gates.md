@@ -147,7 +147,7 @@ if [ "${DISTINCT_TARGETS:-0}" -ge 6 ]; then
   OVERSIZED=true
   TRIGGERS="${TRIGGERS} ${DISTINCT_TARGETS} distinct target files (>=6);"
 fi
-if echo "${PREDICTED_SIZE}" | grep -qiE '^XL$'; then
+if printf '%s\n' "${PREDICTED_SIZE}" | grep -qiE '^XL$'; then
   OVERSIZED=true
   TRIGGERS="${TRIGGERS} predicted size == XL;"
 fi
@@ -164,7 +164,7 @@ if [ "$OVERSIZED" = "true" ]; then
 
   # An epic that is BEING decomposed now (sub-issues planned in Phase 2) is the
   # CORRECT shape for oversized scope — that is exactly what the gate wants.
-  if echo "${TYPE_LABEL}" | grep -qi "epic" && [ "${SUB_ISSUE_COUNT:-0}" -gt 0 ]; then
+  if printf '%s\n' "${TYPE_LABEL}" | grep -qi "epic" && [ "${SUB_ISSUE_COUNT:-0}" -gt 0 ]; then
     echo "Phase 2.85: PASS — oversized scope is decomposed into ${SUB_ISSUE_COUNT} sub-issues under an epic"
 
   elif [ "$SCOPE_OVERRIDE" = "true" ]; then
@@ -223,7 +223,7 @@ explicit shapes before any GitHub mutation.
 
 ```bash
 IS_EPIC=false
-if echo "${TYPE_LABEL}" | grep -qi "epic"; then
+if printf '%s\n' "${TYPE_LABEL}" | grep -qi "epic"; then
   IS_EPIC=true
 fi
 
@@ -244,12 +244,12 @@ else
   fi
 
   # Shape B: explicit placeholder marker in issue body
-  if echo "${ISSUE_BODY}" | grep -qi "nightgauge:decompose-later\|placeholder.*decompose later\|decompose later.*placeholder"; then
+  if printf '%s\n' "${ISSUE_BODY}" | grep -qi "nightgauge:decompose-later\|placeholder.*decompose later\|decompose later.*placeholder"; then
     HAS_PLACEHOLDER_MARKER=true
   fi
 
   # Shape C: standalone epic declaration
-  if echo "${ISSUE_BODY}" | grep -qi "nightgauge:standalone-epic\|standalone epic\|intentionally.*no sub-issues"; then
+  if printf '%s\n' "${ISSUE_BODY}" | grep -qi "nightgauge:standalone-epic\|standalone epic\|intentionally.*no sub-issues"; then
     HAS_STANDALONE_MARKER=true
   fi
 

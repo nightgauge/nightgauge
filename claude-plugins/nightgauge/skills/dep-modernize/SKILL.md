@@ -878,8 +878,8 @@ if [ "$AUTO_FIX" = true ]; then
       export GITHUB_TOKEN=$(nightgauge forge auth token 2>/dev/null || echo "")
       BRANCH_RESULT=$("$BINARY" git branch-create "$BRANCH_NAME" --json 2>/dev/null || \
         echo '{"success":false,"error":"binary not found"}')
-      if [ "$(echo "$BRANCH_RESULT" | jq -r '.success')" != "true" ]; then
-        echo "ERROR: Branch creation failed: $(echo "$BRANCH_RESULT" | jq -r '.error')" >&2
+      if [ "$(printf '%s\n' "$BRANCH_RESULT" | jq -r '.success')" != "true" ]; then
+        echo "ERROR: Branch creation failed: $(printf '%s\n' "$BRANCH_RESULT" | jq -r '.error')" >&2
         exit 1
       fi
       echo "Branch: $BRANCH_NAME"
@@ -922,8 +922,8 @@ if [ "$AUTO_FIX" = true ]; then
           echo "ERROR: PR creation failed: $PR_RESULT" >&2
           exit 1
         }
-        PR_URL=$(echo "$PR_RESULT" | jq -r '.url // empty')
-        PR_NUMBER=$(echo "$PR_RESULT" | jq -r '.number // empty')
+        PR_URL=$(printf '%s\n' "$PR_RESULT" | jq -r '.url // empty')
+        PR_NUMBER=$(printf '%s\n' "$PR_RESULT" | jq -r '.number // empty')
         echo "PR created: ${PR_URL:-"#${PR_NUMBER}"}"
       fi
     else

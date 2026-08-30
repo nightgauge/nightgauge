@@ -95,7 +95,7 @@ This skill generates comprehensive test suites by:
 BRANCH=$(git branch --show-current)
 
 # Extract issue number from branch (e.g., feat/42-description -> 42)
-ISSUE_NUMBER=$(echo "$BRANCH" | grep -oE '[0-9]+' | head -1)
+ISSUE_NUMBER=$(printf '%s\n' "$BRANCH" | grep -oE '[0-9]+' | head -1)
 
 echo "Branch: $BRANCH"
 echo "Issue: #$ISSUE_NUMBER"
@@ -140,7 +140,7 @@ Exclude non-testable files:
 
 ```bash
 # Exclude test files, configs, docs, assets
-echo "$FILES" | grep -v -E '(\.test\.|\.spec\.|__tests__|\.config\.|\.md$|\.json$|\.yaml$|\.yml$)'
+printf '%s\n' "$FILES" | grep -v -E '(\.test\.|\.spec\.|__tests__|\.config\.|\.md$|\.json$|\.yaml$|\.yml$)'
 ```
 
 #### Step 2.3: Analyze File Contents
