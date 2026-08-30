@@ -5,7 +5,6 @@ import (
 	"errors"
 	"io/fs"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"reflect"
 	"sync"
@@ -14,6 +13,8 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/intelligence/tokens"
 	"github.com/nightgauge/nightgauge/internal/runstate"
+
+	"github.com/nightgauge/nightgauge/internal/pidtest"
 )
 
 func TestNewRuntimeState(t *testing.T) {
@@ -798,21 +799,6 @@ func TestActualLinesChanged_PreservesMeasuredZeroAcrossSnapshotAndDisk(t *testin
 // the snapshot itself carries, and SealAndRemove — the ONE destructive,
 // file-owning operation — is where the refusal lands.
 
-// deadPID returns a pid that has certainly exited: a real child, reaped.
-// Invented "large number" pids are not reliably dead — the kernel recycles.
-func deadPID(t *testing.T) int {
-	t.Helper()
-	cmd := exec.Command("true")
-	if err := cmd.Run(); err != nil {
-		t.Fatalf("run throwaway child: %v", err)
-	}
-	pid := cmd.Process.Pid
-	if runstate.ProcessAlive(pid) {
-		t.Skipf("pid %d was recycled before the test could use it as a dead pid", pid)
-	}
-	return pid
-}
-
 // liveForeignPID returns a pid that is alive and is NOT this process — the test
 // binary's parent, which outlives every test in the binary. It stands in for
 // the `nightgauge run` scheduler process that owns the run while a separate
@@ -888,7 +874,7 @@ func TestSealAndRemove_RefusesWhileTheOwningProcessIsStillAlive(t *testing.T) {
 func TestSealAndRemove_ProceedsWhenTheOwningProcessIsGone(t *testing.T) {
 	dir := t.TempDir()
 	rs := NewRuntimeState("acme/platform", 557, "", testRunID())
-	rs.OwnerPID = deadPID(t)
+	rs.OwnerPID = pidtest.Reaped(t, runstate.ProcessAlive)
 	rs.BeginStage(StageFeatureDev)
 	if err := rs.Persist(dir); err != nil {
 		t.Fatalf("Persist: %v", err)
@@ -914,7 +900,7 @@ func TestSealAndRemove_ProceedsWhenTheOwningProcessIsGone(t *testing.T) {
 // one dead owner's snapshot and each be allowed to seal.
 func TestAdoptOwnership_TakesAGoneOwnersRunAndLeavesALiveOnesAlone(t *testing.T) {
 	gone := NewRuntimeState("acme/platform", 557, "", testRunID())
-	dead := deadPID(t)
+	dead := pidtest.Reaped(t, runstate.ProcessAlive)
 	gone.OwnerPID = dead
 	previous, moved := gone.AdoptOwnership()
 	if !moved {

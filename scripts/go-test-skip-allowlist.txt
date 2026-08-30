@@ -1,0 +1,35 @@
+# Go tests that are allowed to skip (#474).
+#
+# `go test ./...` prints `ok` for a package whose tests all skipped, so a skip
+# is indistinguishable from a pass. scripts/check-go-test-skips.py fails the run
+# on any skipped test that is not listed here, and names it.
+#
+# One "<package>.<Test>" per line. Every entry needs a reason: a skip with no
+# justification is a guard that has stopped guarding and nobody noticed.
+#
+# Adding a line is a review decision, not a formality. If the honest answer is
+# "the fixture is hard to build here", the fix is usually to build it (see
+# internal/pidtest for what replacing a self-cancelling precondition looks like),
+# not to record the skip.
+
+# Platform-conditional: setsid is present on Linux CI and absent on macOS. The
+# test needs a grandchild that survives a process-group kill, which has no
+# portable substitute.
+github.com/nightgauge/nightgauge/internal/e2e.TestRunCmd_Timeout_SurvivorHoldsPipe_ReturnsPromptly
+
+# Network/auth-gated: these assert the SHAPE of real GitHub responses, which is
+# the one thing a fixture cannot check. They skip without ambient credentials.
+github.com/nightgauge/nightgauge/internal/github.TestNoDeprecatedFieldsUsed
+github.com/nightgauge/nightgauge/internal/ipc.TestGitHub_BoardList_Shape
+github.com/nightgauge/nightgauge/internal/ipc.TestGitHub_EpicProgress_Shape_PercentComplete
+github.com/nightgauge/nightgauge/internal/ipc.TestGitHub_IssueView_Shape
+github.com/nightgauge/nightgauge/internal/ipc.TestRoundTrip_NonSequentialIDs_EchoedCorrectly
+github.com/nightgauge/nightgauge/internal/workspacemanifest.TestRealRepositoryManifestRoundTrip
+
+# Opt-in integration: runs only when the docker-compose harness is pointed at.
+github.com/nightgauge/nightgauge/internal/ipc.TestIPCPlatform_DockerCompose_SkipIfNotSet
+
+# Demonstration, not an assertion: it races OS process scheduling to catch a
+# detached `git gc` in the act, and documents in its own body that it must only
+# ever demonstrate or skip, never fail the build (#680).
+github.com/nightgauge/nightgauge/internal/gittest.TestBackgroundGitProcessCanOutliveItsParent
