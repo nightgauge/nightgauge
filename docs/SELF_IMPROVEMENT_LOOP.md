@@ -294,6 +294,23 @@ It reads `tokens.per_stage[*].model`, falling back to
 pre-#1213 record carries the same value in the sibling field, so the loop
 starts warm on existing history rather than from zero, with no separate verb.
 
+**Both ends of the loop are rooted at the RUN's repo, and that is not
+automatic (#1229).** The analyzer is invoked with `getRunRepoRoot()`, not
+`getPersistentRoot()`. `getPersistentRoot()` returns `mainRepoRoot`, which the
+slot factory seeds from the **runner** root — one fixed path for every slot —
+while the reader (`runPreFlightBudgetCheck`) resolves its history root from the
+working directory via `resolveMainRepoRoot()`, which walks a worktree back to
+its own repo and never crosses repos.
+
+In a single-repo workspace the two agree and the drift is invisible. On a
+cross-repo dispatch they name different repositories, and the loop cannot close:
+three consecutive runs in one dogfood workspace repo rewrote a SIBLING repo's
+calibration table, with a `total_records_analyzed` frozen at 38 because the
+analyzer was re-reading that sibling's history each time, while the dispatched
+repo's estimator went on reporting `historical-p75` and looking for a table one
+directory over. This is the writer-side twin of #1017, which was the same drift
+on the reader side.
+
 ### Survival Calibration (Issues #4152/#4153)
 
 **Files**: `internal/github/outcome_survival.go` (Go),

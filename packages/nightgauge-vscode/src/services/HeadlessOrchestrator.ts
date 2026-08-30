@@ -169,7 +169,7 @@ import {
   type BlockedFinding,
 } from "../utils/blockedFinding";
 import { clearAdapterAuthNotice, reportAdapterAuthFailure } from "../utils/adapterAuthNotice";
-import { loadAdaptiveBudgetOverrides } from "../utils/adaptiveBudgetLoader";
+import { loadAdaptiveBudgetOverrides, resolveMainRepoRoot } from "../utils/adaptiveBudgetLoader";
 import type { EstimateSource } from "../utils/adaptiveBudgetLoader";
 import { PipelineBudgetCeiling } from "../utils/pipelineBudgetCeiling";
 import { nextBudgetActions, livePipelineCostUsd } from "../utils/budgetStreamEnforcement";
@@ -1776,7 +1776,15 @@ export class HeadlessOrchestrator implements vscode.Disposable {
    * before the pin), which is the same repo in a single-repo workspace.
    */
   private getRunRepoRoot(): string {
-    return this.runRepoRoot ?? this.getPersistentRoot();
+    if (this.runRepoRoot) return this.runRepoRoot;
+    // Derive it rather than falling back to `getPersistentRoot()` (#1229).
+    // `mainRepoRoot` is seeded from the RUNNER root and is one fixed path for
+    // every slot, so on any cross-repo dispatch that did not go through
+    // `setRunRepoRoot()` — the interactive `setRepoOverride()` path — it names
+    // the wrong repo. The working directory always belongs to the run, and
+    // `resolveMainRepoRoot()` walks a worktree back to its owning repo, so this
+    // is correct for every path and identical in a single-repo workspace.
+    return resolveMainRepoRoot(this.getWorkingDirectory());
   }
 
   /**
@@ -12099,8 +12107,24 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     let analysisResult: PostPipelineAnalysisResult | null = null;
     if (completedStages.length > 1 || !!failedStage) {
       try {
+        // The RUN's repo, not the runner's (#1229). `getPersistentRoot()`
+        // returns `mainRepoRoot`, which the slot factory seeds from the RUNNER
+        // root — one fixed path for every slot. On a cross-repo dispatch that
+        // is a sibling repo, so the analyzer read that sibling's history and
+        // rewrote that sibling's `stage-model-calibration.json` and
+        // `calibration.json` while the run it was analysing lived elsewhere.
+        //
+        // The read side never had this drift: `runPreFlightBudgetCheck` resolves
+        // its history root from `getWorkingDirectory()` via
+        // `resolveMainRepoRoot()`, which only strips a `.worktrees/` suffix and
+        // never crosses repos. So writer and reader addressed DIFFERENT repos
+        // and the loop #1213 closed could never close: the estimator looked for
+        // a table that was being written one directory over.
+        //
+        // `getRunRepoRoot()` is the same path in a single-repo workspace, so
+        // this is a correction for the multi-repo case and a no-op elsewhere.
         analysisResult = await PostPipelineAnalyzer.analyze(
-          this.getPersistentRoot(),
+          this.getRunRepoRoot(),
           issueNumber,
           this.logger,
           // #1084: gate metrics are written by a skill running IN the worktree,
