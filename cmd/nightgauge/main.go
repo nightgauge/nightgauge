@@ -2835,6 +2835,83 @@ func projectCmd() *cobra.Command {
 // in-progress, in-review, done, backlog) are accepted and normalized.
 //
 // An empty input returns ("", nil) — callers treat that as "flag omitted".
+// boardStatusTokens is the enum the `project sync-status` / `project
+// move-status` POSITIONAL status argument accepts, in the spelling
+// `github.mapStatusLabel` consumes. Order is the order the error message lists.
+var boardStatusTokens = []string{
+	"backlog", "ready", "in-progress", "in-review", "done", "blocked", "needs-info",
+}
+
+// normalizeBoardStatusArg validates the positional status argument for the
+// board verbs and returns the canonical token (#1180).
+//
+// It accepts the BOARD'S OWN casing as well as the token: "In progress" is
+// exactly how the status reads on the project board, so it is the natural
+// thing for an operator to type, and rejecting it while accepting
+// "in-progress" makes the verb a trap whose valid input differs cosmetically
+// from the value it displays. `project add --status` already accepted board
+// casing via validateStatusFlag; the positional verbs accepted NOTHING —
+// no validation at all — and passed the raw string to GraphQL, where a bad
+// value is either a no-op or a confusing field error long after the fact.
+//
+// Normalization is deliberately narrow: case-fold, trim, and treat a space
+// like the hyphen. It does not guess at typos.
+func normalizeBoardStatusArg(value string) (string, error) {
+	folded := strings.ReplaceAll(strings.ToLower(strings.TrimSpace(value)), " ", "-")
+	for _, token := range boardStatusTokens {
+		if folded == token {
+			return token, nil
+		}
+	}
+	if strings.TrimSpace(value) == "" {
+		return "", fmt.Errorf("status argument is empty (valid: %s)", strings.Join(boardStatusTokens, ", "))
+	}
+	return "", fmt.Errorf(
+		"invalid status %q (valid: %s; the board's own casing such as %q is accepted too)",
+		value, strings.Join(boardStatusTokens, ", "), "In progress",
+	)
+}
+
+// exactStatusArgs is the Args validator for the two-positional board verbs.
+//
+// cobra.ExactArgs renders "accepts 2 arg(s), received 1", which names neither
+// argument nor the verb and — before SilenceUsage was set on these commands —
+// was buried under a full usage dump that reads as help rather than refusal
+// (#1180). This says what is missing and shows the working invocation.
+func exactStatusArgs(verb string) cobra.PositionalArgs {
+	return func(_ *cobra.Command, args []string) error {
+		if len(args) == 2 {
+			return nil
+		}
+		return fmt.Errorf(
+			"%s needs two arguments: <issue-number> <status> (got %d: %v)\n"+
+				"  valid statuses: %s\n"+
+				"  example: nightgauge project %s 210 in-progress",
+			verb, len(args), args, strings.Join(boardStatusTokens, ", "), verb,
+		)
+	}
+}
+
+// statusFlagErrorFunc turns cobra's bare "unknown flag: --status" into a
+// message that names the positional form (#1180).
+//
+// `--status "In progress"` is the invocation that was actually typed, and it
+// is a reasonable guess: `project add` really does take a --status FLAG. On
+// these two verbs the status is positional, so the operator needs to be told
+// the shape, not merely that a flag is unknown.
+func statusFlagErrorFunc(verb string) func(*cobra.Command, error) error {
+	return func(_ *cobra.Command, err error) error {
+		if err != nil && strings.Contains(err.Error(), "--status") {
+			return fmt.Errorf(
+				"%w — %s takes the status as a POSITIONAL argument\n"+
+					"  valid statuses: %s\n"+
+					"  example: nightgauge project %s 210 in-progress",
+				err, verb, strings.Join(boardStatusTokens, ", "), verb)
+		}
+		return err
+	}
+}
+
 func validateStatusFlag(value string) (string, error) {
 	if value == "" {
 		return "", nil
@@ -3020,16 +3097,30 @@ func projectSyncStatusCmd() *cobra.Command {
 		Short: "Update Status field via GraphQL",
 		Long: `Update the Status field for an issue on the project board.
 
-Valid statuses: ready, in-progress, in-review, done, blocked, needs-info`,
-		Args: cobra.ExactArgs(2),
+Status is a POSITIONAL argument, not a --status flag.
+
+Valid statuses: backlog, ready, in-progress, in-review, done, blocked, needs-info
+The board's own casing ("In progress", "In review") is accepted and normalized.`,
+		Args: exactStatusArgs("sync-status"),
 		Example: `  nightgauge project sync-status 103 in-progress
+  nightgauge project sync-status 103 "In progress"
   nightgauge project sync-status 103 done --repo nightgauge/other-repo`,
+		// #1180 — without this a rejected invocation dumps flags and global
+		// flags below the error, which reads as help output; the operator who
+		// filed this saw only the trailing block and took the run for a no-op.
+		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			number, err := strconv.Atoi(args[0])
 			if err != nil {
 				return fmt.Errorf("invalid issue number: %s", args[0])
 			}
-			status := args[1]
+			// Validate BEFORE any board resolution or network call: a bad value
+			// must cost nothing and must fail on the value, not downstream on a
+			// GraphQL field error (or silently, which is what it did).
+			status, err := normalizeBoardStatusArg(args[1])
+			if err != nil {
+				return err
+			}
 
 			// Resolve the board before any network call — see projectAddCmd.
 			ownerPart, repoPart := splitRepo(owner, repo)
@@ -3070,6 +3161,7 @@ Valid statuses: ready, in-progress, in-review, done, blocked, needs-info`,
 	repoNameFlag(cmd, &repo, "nightgauge", "Repository (owner/name or name)")
 	cmd.Flags().IntVar(&projectNumber, "project", 0, "Project board number")
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output as JSON")
+	cmd.SetFlagErrorFunc(statusFlagErrorFunc("sync-status"))
 	return cmd
 }
 
@@ -3516,16 +3608,27 @@ func projectMoveStatusCmd() *cobra.Command {
 		Short: "Move issue/epic through statuses",
 		Long: `Transition an issue or epic status.
 
-Valid statuses: ready, in-progress, in-review, done, blocked, needs-info`,
-		Args: cobra.ExactArgs(2),
+Status is a POSITIONAL argument, not a --status flag.
+
+Valid statuses: backlog, ready, in-progress, in-review, done, blocked, needs-info
+The board's own casing ("In progress", "In review") is accepted and normalized.`,
+		Args: exactStatusArgs("move-status"),
 		Example: `  nightgauge project move-status 295 in-review
   nightgauge project move-status 295 done`,
+		// #1180 — move-status shares sync-status's shape exactly (same enum in
+		// its Long text, same unvalidated positional, same usage-as-refusal),
+		// so it gets the same treatment rather than being left as the next
+		// report of this bug.
+		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			number, err := strconv.Atoi(args[0])
 			if err != nil {
 				return fmt.Errorf("invalid issue number: %s", args[0])
 			}
-			status := args[1]
+			status, err := normalizeBoardStatusArg(args[1])
+			if err != nil {
+				return err
+			}
 
 			client, err := clientFromConfig()
 			if err != nil {
@@ -3555,6 +3658,7 @@ Valid statuses: ready, in-progress, in-review, done, blocked, needs-info`,
 	repoNameFlag(cmd, &repo, "nightgauge", "Repository (owner/name or name)")
 	cmd.Flags().IntVar(&projectNumber, "project", 0, "Project board number")
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output as JSON")
+	cmd.SetFlagErrorFunc(statusFlagErrorFunc("move-status"))
 	return cmd
 }
 
