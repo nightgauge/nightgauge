@@ -561,13 +561,10 @@ export const TERMINAL_KIND_TABLE: TerminalKindTable = {
       "signal": false,
       "clauses": [
         [
-          "stale-slot-orphan"
-        ],
-        [
           "stage-no-output-timeout"
         ]
       ],
-      "why": "Zombie-run guards (#252). `[stale-slot-orphan]` is written by StaleSlotRecoveryService when a reload sweeps a run whose process died without its close handler; `[stage-no-output-timeout]` is the first-output watchdog killing a stage that never produced any session output. Both are transient-stall shaped: retry with backoff is the right recovery and neither should count against the lifetime failure cap."
+      "why": "Zombie-run guard (#252). `[stage-no-output-timeout]` is the first-output watchdog killing a stage that never produced any session output; its producer is HeadlessOrchestrator. It is transient-stall shaped: retry with backoff is the right recovery and it should not count against the lifetime failure cap. This row carried a second clause until #470 retired it — #427 had deleted its only producer, so it could no longer match anything."
     },
     {
       "id": "stall-kill",

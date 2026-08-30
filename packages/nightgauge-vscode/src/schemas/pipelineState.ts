@@ -195,8 +195,10 @@ export const StageStateSchema = z.object({
   total_phases: z.number().int().min(0).optional(),
   // `process_pid` used to sit here (Issue #1643), the stage child's pid for the
   // TypeScript stale-slot scanner. Its writer (`setStageProcessPid`) was an
-  // empty stub and its only reader was `StaleSlotRecoveryService`, which read a
-  // `state.json` nothing writes; both were deleted with #427. The stage-child
+  // empty stub and its only reader was that scanner, which read a `state.json`
+  // nothing writes; both were deleted with #427. (The scanner's class name is
+  // deliberately not repeated here — `tests/bootstrap/staleSlotScannerRemoved.test.ts`
+  // is the one place that names it, as the guard asserting it stays gone.) The stage-child
   // pid that actually decides liveness travels the IPC wire as `stagePid` on
   // `pipeline.notifyStageTransition` and lands on the Go runtime snapshot
   // (`RuntimeState.SetStageChild`), where the orphan ladder probes it —

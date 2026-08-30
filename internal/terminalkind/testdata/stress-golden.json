@@ -1166,21 +1166,6 @@
       "signal": ""
     },
     {
-      "input": "stale-slot-orphan",
-      "kind": "stall_kill",
-      "signal": ""
-    },
-    {
-      "input": "exit 1: stale-slot-orphan",
-      "kind": "stall_kill",
-      "signal": ""
-    },
-    {
-      "input": "STALE-SLOT-ORPHAN",
-      "kind": "stall_kill",
-      "signal": ""
-    },
-    {
       "input": "stage-no-output-timeout",
       "kind": "stall_kill",
       "signal": ""
@@ -1961,7 +1946,7 @@
       "signal": ""
     },
     {
-      "input": "network unavailable: extended github connectivity loss | stale-slot-orphan",
+      "input": "network unavailable: extended github connectivity loss | stage-no-output-timeout",
       "kind": "network_unavailable",
       "signal": ""
     },
@@ -2121,7 +2106,7 @@
       "signal": "stream_idle_timeout"
     },
     {
-      "input": "stream idle timeout | stale-slot-orphan",
+      "input": "stream idle timeout | stage-no-output-timeout",
       "kind": "stream_idle_timeout",
       "signal": "stream_idle_timeout"
     },
@@ -2281,7 +2266,7 @@
       "signal": "api_overloaded"
     },
     {
-      "input": "overloaded | stale-slot-orphan",
+      "input": "overloaded | stage-no-output-timeout",
       "kind": "api_overloaded",
       "signal": "api_overloaded"
     },
@@ -2441,7 +2426,7 @@
       "signal": "api_connection_lost"
     },
     {
-      "input": "socket connection was closed | stale-slot-orphan",
+      "input": "socket connection was closed | stage-no-output-timeout",
       "kind": "api_connection_lost",
       "signal": "api_connection_lost"
     },
@@ -2601,7 +2586,7 @@
       "signal": "rate_limit_quota_exhausted"
     },
     {
-      "input": "[rate-limit-quota-exhausted] | stale-slot-orphan",
+      "input": "[rate-limit-quota-exhausted] | stage-no-output-timeout",
       "kind": "rate_limit_quota_exhausted",
       "signal": "rate_limit_quota_exhausted"
     },
@@ -2761,7 +2746,7 @@
       "signal": ""
     },
     {
-      "input": "not_found_error model | stale-slot-orphan",
+      "input": "not_found_error model | stage-no-output-timeout",
       "kind": "model_unavailable",
       "signal": ""
     },
@@ -2921,7 +2906,7 @@
       "signal": ""
     },
     {
-      "input": "pipeline-start-failure issue-closed | stale-slot-orphan",
+      "input": "pipeline-start-failure issue-closed | stage-no-output-timeout",
       "kind": "issue_closed",
       "signal": ""
     },
@@ -3081,7 +3066,7 @@
       "signal": ""
     },
     {
-      "input": "[blocked-dependency] | stale-slot-orphan",
+      "input": "[blocked-dependency] | stage-no-output-timeout",
       "kind": "blocked_dependency",
       "signal": ""
     },
@@ -3241,7 +3226,7 @@
       "signal": "architecture_approval_required"
     },
     {
-      "input": "architecture approval required | stale-slot-orphan",
+      "input": "architecture approval required | stage-no-output-timeout",
       "kind": "architecture_approval_required",
       "signal": "architecture_approval_required"
     },
@@ -3401,7 +3386,7 @@
       "signal": "github_quota_low"
     },
     {
-      "input": "github-quota-low | stale-slot-orphan",
+      "input": "github-quota-low | stage-no-output-timeout",
       "kind": "github_quota_low",
       "signal": "github_quota_low"
     },
@@ -3561,7 +3546,7 @@
       "signal": "github_network_outage"
     },
     {
-      "input": "github-network-outage | stale-slot-orphan",
+      "input": "github-network-outage | stage-no-output-timeout",
       "kind": "github_network_outage",
       "signal": "github_network_outage"
     },
@@ -3721,7 +3706,7 @@
       "signal": ""
     },
     {
-      "input": "[pr-merge-unmerged | stale-slot-orphan",
+      "input": "[pr-merge-unmerged | stage-no-output-timeout",
       "kind": "pr_merge_unmerged",
       "signal": ""
     },
@@ -3881,7 +3866,7 @@
       "signal": ""
     },
     {
-      "input": "[stage:worktree-containment] | stale-slot-orphan",
+      "input": "[stage:worktree-containment] | stage-no-output-timeout",
       "kind": "containment_breach",
       "signal": ""
     },
@@ -4041,7 +4026,7 @@
       "signal": ""
     },
     {
-      "input": "[dev-produced-no-changes] | stale-slot-orphan",
+      "input": "[dev-produced-no-changes] | stage-no-output-timeout",
       "kind": "dev_produced_no_changes",
       "signal": ""
     },
@@ -4201,7 +4186,7 @@
       "signal": ""
     },
     {
-      "input": "[dev-handoff-missing] | stale-slot-orphan",
+      "input": "[dev-handoff-missing] | stage-no-output-timeout",
       "kind": "dev_handoff_missing",
       "signal": ""
     },
@@ -4361,7 +4346,7 @@
       "signal": ""
     },
     {
-      "input": "premature turn end | stale-slot-orphan",
+      "input": "premature turn end | stage-no-output-timeout",
       "kind": "premature_turn_end",
       "signal": ""
     },
@@ -4521,7 +4506,7 @@
       "signal": ""
     },
     {
-      "input": "worktree_uncommitted | stale-slot-orphan",
+      "input": "worktree_uncommitted | stage-no-output-timeout",
       "kind": "worktree_uncommitted",
       "signal": ""
     },
@@ -4681,7 +4666,7 @@
       "signal": ""
     },
     {
-      "input": "budget_ceiling_hit | stale-slot-orphan",
+      "input": "budget_ceiling_hit | stage-no-output-timeout",
       "kind": "budget_ceiling_hit",
       "signal": ""
     },
@@ -4841,7 +4826,7 @@
       "signal": ""
     },
     {
-      "input": "[runaway-progress-exceeded] | stale-slot-orphan",
+      "input": "[runaway-progress-exceeded] | stage-no-output-timeout",
       "kind": "runaway_progress",
       "signal": ""
     },
@@ -5001,7 +4986,7 @@
       "signal": ""
     },
     {
-      "input": "[runaway-ceiling-exceeded] | stale-slot-orphan",
+      "input": "[runaway-ceiling-exceeded] | stage-no-output-timeout",
       "kind": "stall_kill",
       "signal": ""
     },
@@ -5161,7 +5146,7 @@
       "signal": ""
     },
     {
-      "input": "[cost-cap-exceeded] | stale-slot-orphan",
+      "input": "[cost-cap-exceeded] | stage-no-output-timeout",
       "kind": "budget_exceeded",
       "signal": ""
     },
@@ -5221,162 +5206,162 @@
       "signal": ""
     },
     {
-      "input": "stale-slot-orphan | network unavailable: extended github connectivity loss",
+      "input": "stage-no-output-timeout | network unavailable: extended github connectivity loss",
       "kind": "network_unavailable",
       "signal": ""
     },
     {
-      "input": "stale-slot-orphan | stream idle timeout",
+      "input": "stage-no-output-timeout | stream idle timeout",
       "kind": "stream_idle_timeout",
       "signal": "stream_idle_timeout"
     },
     {
-      "input": "stale-slot-orphan | overloaded",
+      "input": "stage-no-output-timeout | overloaded",
       "kind": "api_overloaded",
       "signal": "api_overloaded"
     },
     {
-      "input": "stale-slot-orphan | socket connection was closed",
+      "input": "stage-no-output-timeout | socket connection was closed",
       "kind": "api_connection_lost",
       "signal": "api_connection_lost"
     },
     {
-      "input": "stale-slot-orphan | [rate-limit-quota-exhausted]",
+      "input": "stage-no-output-timeout | [rate-limit-quota-exhausted]",
       "kind": "rate_limit_quota_exhausted",
       "signal": "rate_limit_quota_exhausted"
     },
     {
-      "input": "stale-slot-orphan | not_found_error model",
+      "input": "stage-no-output-timeout | not_found_error model",
       "kind": "model_unavailable",
       "signal": ""
     },
     {
-      "input": "stale-slot-orphan | pipeline-start-failure issue-closed",
+      "input": "stage-no-output-timeout | pipeline-start-failure issue-closed",
       "kind": "issue_closed",
       "signal": ""
     },
     {
-      "input": "stale-slot-orphan | [blocked-dependency]",
+      "input": "stage-no-output-timeout | [blocked-dependency]",
       "kind": "blocked_dependency",
       "signal": ""
     },
     {
-      "input": "stale-slot-orphan | architecture approval required",
+      "input": "stage-no-output-timeout | architecture approval required",
       "kind": "architecture_approval_required",
       "signal": "architecture_approval_required"
     },
     {
-      "input": "stale-slot-orphan | github-quota-low",
+      "input": "stage-no-output-timeout | github-quota-low",
       "kind": "github_quota_low",
       "signal": "github_quota_low"
     },
     {
-      "input": "stale-slot-orphan | github-network-outage",
+      "input": "stage-no-output-timeout | github-network-outage",
       "kind": "github_network_outage",
       "signal": "github_network_outage"
     },
     {
-      "input": "stale-slot-orphan | [pr-merge-unmerged",
+      "input": "stage-no-output-timeout | [pr-merge-unmerged",
       "kind": "pr_merge_unmerged",
       "signal": ""
     },
     {
-      "input": "stale-slot-orphan | [stage:worktree-containment]",
+      "input": "stage-no-output-timeout | [stage:worktree-containment]",
       "kind": "containment_breach",
       "signal": ""
     },
     {
-      "input": "stale-slot-orphan | [dev-produced-no-changes]",
+      "input": "stage-no-output-timeout | [dev-produced-no-changes]",
       "kind": "dev_produced_no_changes",
       "signal": ""
     },
     {
-      "input": "stale-slot-orphan | [dev-handoff-missing]",
+      "input": "stage-no-output-timeout | [dev-handoff-missing]",
       "kind": "dev_handoff_missing",
       "signal": ""
     },
     {
-      "input": "stale-slot-orphan | premature turn end",
+      "input": "stage-no-output-timeout | premature turn end",
       "kind": "premature_turn_end",
       "signal": ""
     },
     {
-      "input": "stale-slot-orphan | worktree_uncommitted",
+      "input": "stage-no-output-timeout | worktree_uncommitted",
       "kind": "worktree_uncommitted",
       "signal": ""
     },
     {
-      "input": "stale-slot-orphan | budget_ceiling_hit",
+      "input": "stage-no-output-timeout | budget_ceiling_hit",
       "kind": "budget_ceiling_hit",
       "signal": ""
     },
     {
-      "input": "stale-slot-orphan | [runaway-progress-exceeded]",
+      "input": "stage-no-output-timeout | [runaway-progress-exceeded]",
       "kind": "runaway_progress",
       "signal": ""
     },
     {
-      "input": "stale-slot-orphan | [runaway-ceiling-exceeded]",
+      "input": "stage-no-output-timeout | [runaway-ceiling-exceeded]",
       "kind": "stall_kill",
       "signal": ""
     },
     {
-      "input": "stale-slot-orphan | [cost-cap-exceeded]",
+      "input": "stage-no-output-timeout | [cost-cap-exceeded]",
       "kind": "budget_exceeded",
       "signal": ""
     },
     {
-      "input": "stale-slot-orphan | [stall-killed]",
+      "input": "stage-no-output-timeout | [stall-killed]",
       "kind": "stall_kill",
       "signal": ""
     },
     {
-      "input": "stale-slot-orphan | pipeline_budget_exceeded",
+      "input": "stage-no-output-timeout | pipeline_budget_exceeded",
       "kind": "stall_kill",
       "signal": ""
     },
     {
-      "input": "stale-slot-orphan | schema validation",
+      "input": "stage-no-output-timeout | schema validation",
       "kind": "stall_kill",
       "signal": ""
     },
     {
-      "input": "stale-slot-orphan | [adapter-auth-failed]",
+      "input": "stage-no-output-timeout | [adapter-auth-failed]",
       "kind": "stall_kill",
       "signal": ""
     },
     {
-      "input": "stale-slot-orphan | [no-changes-produced]",
+      "input": "stage-no-output-timeout | [no-changes-produced]",
       "kind": "stall_kill",
       "signal": ""
     },
     {
-      "input": "stale-slot-orphan | [validation-failed]",
+      "input": "stage-no-output-timeout | [validation-failed]",
       "kind": "stall_kill",
       "signal": ""
     },
     {
-      "input": "stale-slot-orphan | [validation-inconclusive]",
+      "input": "stage-no-output-timeout | [validation-inconclusive]",
       "kind": "stall_kill",
       "signal": ""
     },
     {
-      "input": "stale-slot-orphan | [branch-forked]",
+      "input": "stage-no-output-timeout | [branch-forked]",
       "kind": "stall_kill",
       "signal": ""
     },
     {
-      "input": "stale-slot-orphan | [commit-orphaned]",
+      "input": "stage-no-output-timeout | [commit-orphaned]",
       "kind": "stall_kill",
       "signal": ""
     },
     {
-      "input": "stale-slot-orphan | [permission-denied]",
+      "input": "stage-no-output-timeout | [permission-denied]",
       "kind": "stall_kill",
       "signal": ""
     },
     {
-      "input": "stale-slot-orphan | subagent crash",
+      "input": "stage-no-output-timeout | subagent crash",
       "kind": "stall_kill",
       "signal": ""
     },
@@ -5486,7 +5471,7 @@
       "signal": ""
     },
     {
-      "input": "[stall-killed] | stale-slot-orphan",
+      "input": "[stall-killed] | stage-no-output-timeout",
       "kind": "stall_kill",
       "signal": ""
     },
@@ -5646,7 +5631,7 @@
       "signal": ""
     },
     {
-      "input": "pipeline_budget_exceeded | stale-slot-orphan",
+      "input": "pipeline_budget_exceeded | stage-no-output-timeout",
       "kind": "stall_kill",
       "signal": ""
     },
@@ -5806,7 +5791,7 @@
       "signal": ""
     },
     {
-      "input": "schema validation | stale-slot-orphan",
+      "input": "schema validation | stage-no-output-timeout",
       "kind": "stall_kill",
       "signal": ""
     },
@@ -5966,7 +5951,7 @@
       "signal": ""
     },
     {
-      "input": "[adapter-auth-failed] | stale-slot-orphan",
+      "input": "[adapter-auth-failed] | stage-no-output-timeout",
       "kind": "stall_kill",
       "signal": ""
     },
@@ -6126,7 +6111,7 @@
       "signal": ""
     },
     {
-      "input": "[no-changes-produced] | stale-slot-orphan",
+      "input": "[no-changes-produced] | stage-no-output-timeout",
       "kind": "stall_kill",
       "signal": ""
     },
@@ -6286,7 +6271,7 @@
       "signal": ""
     },
     {
-      "input": "[validation-failed] | stale-slot-orphan",
+      "input": "[validation-failed] | stage-no-output-timeout",
       "kind": "stall_kill",
       "signal": ""
     },
@@ -6446,7 +6431,7 @@
       "signal": ""
     },
     {
-      "input": "[validation-inconclusive] | stale-slot-orphan",
+      "input": "[validation-inconclusive] | stage-no-output-timeout",
       "kind": "stall_kill",
       "signal": ""
     },
@@ -6606,7 +6591,7 @@
       "signal": ""
     },
     {
-      "input": "[branch-forked] | stale-slot-orphan",
+      "input": "[branch-forked] | stage-no-output-timeout",
       "kind": "stall_kill",
       "signal": ""
     },
@@ -6766,7 +6751,7 @@
       "signal": ""
     },
     {
-      "input": "[commit-orphaned] | stale-slot-orphan",
+      "input": "[commit-orphaned] | stage-no-output-timeout",
       "kind": "stall_kill",
       "signal": ""
     },
@@ -6926,7 +6911,7 @@
       "signal": ""
     },
     {
-      "input": "[permission-denied] | stale-slot-orphan",
+      "input": "[permission-denied] | stage-no-output-timeout",
       "kind": "stall_kill",
       "signal": ""
     },
@@ -7086,7 +7071,7 @@
       "signal": ""
     },
     {
-      "input": "subagent crash | stale-slot-orphan",
+      "input": "subagent crash | stage-no-output-timeout",
       "kind": "stall_kill",
       "signal": ""
     },
