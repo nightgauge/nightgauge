@@ -102,10 +102,57 @@ jq -n \
     created_at: $created_at
   }' > "$CONTEXT_FILE"
 
-jq . "$CONTEXT_FILE" > /dev/null && \
-  echo "Dev context written: $CONTEXT_FILE" || \
+jq . "$CONTEXT_FILE" > /dev/null || \
   { echo "ERROR: dev context JSON invalid" >&2; exit 1; }
 ```
+
+### Step 7.2: Verify the SHAPE, not just the JSON (MANDATORY)
+
+`jq .` above only proves the file is well-formed. It does not prove it matches
+the contract — and a well-formed file in the **wrong shape** is exactly how a
+completed, lint-clean implementation was discarded by the post-condition gate
+for $6.12 (#1176/#1177): `files_changed` written as a flat array, against a
+`schema_version` recalled from an older contract.
+
+So run the deterministic checker. It applies the same rule table the gate
+applies, repairs what is repairable, stamps `schema_version` from the binary's
+own registry, and **exits 1 while you still have the context to fix it** — a
+stage that fails its own check for free beats a gate that fails it after the
+spend.
+
+```bash
+BINARY="${NIGHTGAUGE_BIN:-}"
+[ -n "$BINARY" ] && [ ! -x "$BINARY" ] && BINARY=""
+[ -z "$BINARY" ] && BINARY=$(command -v nightgauge 2>/dev/null || echo "")
+if [ -z "$BINARY" ]; then
+  REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+  [ -x "$REPO_ROOT/bin/nightgauge" ] && BINARY="$REPO_ROOT/bin/nightgauge"
+fi
+if [ -z "$BINARY" ]; then
+  GIT_COMMON_DIR="$(git rev-parse --git-common-dir 2>/dev/null || true)"
+  if [ -n "$GIT_COMMON_DIR" ]; then
+    CANONICAL_REPO="$(cd "$GIT_COMMON_DIR/.." 2>/dev/null && pwd)"
+    [ -n "$CANONICAL_REPO" ] && [ -x "$CANONICAL_REPO/bin/nightgauge" ] && BINARY="$CANONICAL_REPO/bin/nightgauge"
+  fi
+fi
+[ -z "$BINARY" ] && [ -x "$HOME/go/bin/nightgauge" ] && BINARY="$HOME/go/bin/nightgauge"
+
+if [ -n "$BINARY" ]; then
+  "$BINARY" gate check-deliverable --stage dev --issue "$ISSUE_NUMBER" || {
+    echo "ERROR: dev context does not match the contract — re-emit it with the jq template above, verbatim." >&2
+    exit 1
+  }
+else
+  echo "WARNING: nightgauge binary not found; dev context shape unverified" >&2
+fi
+echo "Dev context written and shape-verified: $CONTEXT_FILE"
+```
+
+**Do not hand-write this file.** Run the `jq -n` command above verbatim. If you
+find yourself typing a JSON object by hand you will reproduce a schema you
+remember rather than the one this include specifies — the tell in #1177 was
+`"committed": False` and `"commit_sha": None` in the emitted object, Python
+literals that no `jq` invocation can produce.
 
 ---
 

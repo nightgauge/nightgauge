@@ -1,0 +1,326 @@
+{
+  "$comment": "Shared conformance corpus for the deliverable-schema policy (issues #1182, #1176, #1177). Read by BOTH internal/orchestrator/gates/deliverable_policy_test.go and packages/nightgauge-sdk/src/__tests__/context/deliverablePolicy.test.ts. Two implementations of one policy drift silently; this file is the anti-drift device — a rule added on one side and not the other fails the other side's suite. Every row of the #1182 mismatch table appears here.",
+  "policy_version": "1",
+  "cases": [
+    {
+      "id": "dev-210.files_changed.array-with-complete-sibling-manifest",
+      "evidence": "#1176 — the run that cost $6.12",
+      "stage": "dev",
+      "input": {
+        "schema_version": "1.5",
+        "issue_number": 210,
+        "files_changed": ["docs/PRODUCT_REQUIREMENTS.md", "docs/a.md", "docs/b.md"],
+        "files_created": [],
+        "files_modified": ["docs/PRODUCT_REQUIREMENTS.md", "docs/a.md", "docs/b.md"],
+        "committed": false,
+        "commit_sha": null
+      },
+      "expect": {
+        "verdict": "repaired",
+        "notes": [
+          {
+            "field": "schema_version",
+            "disposition": "repaired",
+            "rule": "any.schema_version.stamped"
+          },
+          {
+            "field": "files_changed",
+            "disposition": "repaired",
+            "rule": "dev.files_changed.from_sibling_manifest"
+          }
+        ],
+        "doc": {
+          "schema_version": "1.8",
+          "issue_number": 210,
+          "files_changed": {
+            "created": [],
+            "modified": ["docs/PRODUCT_REQUIREMENTS.md", "docs/a.md", "docs/b.md"],
+            "deleted": []
+          },
+          "committed": false,
+          "commit_sha": null
+        }
+      }
+    },
+    {
+      "id": "dev.files_changed.array-without-sibling-manifest",
+      "evidence": "#1176 AC — a deliverable genuinely missing information must still fail",
+      "stage": "dev",
+      "input": {
+        "schema_version": "1.8",
+        "issue_number": 211,
+        "files_changed": ["src/a.ts", "src/b.ts"]
+      },
+      "expect": {
+        "verdict": "fatal",
+        "notes": [
+          {
+            "field": "files_changed",
+            "disposition": "fatal",
+            "rule": "dev.files_changed.no_sibling_manifest"
+          }
+        ]
+      }
+    },
+    {
+      "id": "dev.files_changed.sibling-manifest-does-not-account-for-every-path",
+      "evidence": "#1176 AC — repair must be TOTAL; a partial fill is a fatal, not a repair",
+      "stage": "dev",
+      "input": {
+        "schema_version": "1.8",
+        "issue_number": 212,
+        "files_changed": ["src/a.ts", "src/b.ts", "src/unaccounted.ts"],
+        "files_created": ["src/a.ts"],
+        "files_modified": ["src/b.ts"]
+      },
+      "expect": {
+        "verdict": "fatal",
+        "notes": [
+          {
+            "field": "files_changed",
+            "disposition": "fatal",
+            "rule": "dev.files_changed.sibling_manifest_incomplete"
+          }
+        ]
+      }
+    },
+    {
+      "id": "dev.files_changed.sibling-manifest-claims-a-path-the-array-does-not",
+      "evidence": "#1176 AC — the repair cannot invent a value the deliverable never carried",
+      "stage": "dev",
+      "input": {
+        "schema_version": "1.8",
+        "issue_number": 213,
+        "files_changed": ["src/a.ts"],
+        "files_created": ["src/a.ts"],
+        "files_modified": ["src/invented.ts"]
+      },
+      "expect": {
+        "verdict": "fatal",
+        "notes": [
+          {
+            "field": "files_changed",
+            "disposition": "fatal",
+            "rule": "dev.files_changed.sibling_manifest_incomplete"
+          }
+        ]
+      }
+    },
+    {
+      "id": "dev.files_changed.already-canonical",
+      "stage": "dev",
+      "input": {
+        "schema_version": "1.8",
+        "issue_number": 214,
+        "files_changed": { "created": ["a"], "modified": [], "deleted": [] }
+      },
+      "expect": { "verdict": "clean", "notes": [] }
+    },
+    {
+      "id": "dev-170.quality_checks.type_check-not-run",
+      "evidence": "#1182 table row 1 — logged as a warning, run shipped",
+      "stage": "dev",
+      "input": {
+        "schema_version": "1.8",
+        "issue_number": 170,
+        "quality_checks": { "type_check": "not run", "dead_code_scan": "not_run" }
+      },
+      "expect": {
+        "verdict": "repaired",
+        "notes": [
+          {
+            "field": "quality_checks.type_check",
+            "disposition": "repaired",
+            "rule": "any.quality_checks.vocabulary"
+          }
+        ],
+        "doc": {
+          "schema_version": "1.8",
+          "issue_number": 170,
+          "quality_checks": { "type_check": "not_run", "dead_code_scan": "not_run" }
+        }
+      }
+    },
+    {
+      "id": "dev-340.quality_checks.security_review-not-applicable",
+      "evidence": "#1182 table row 3 — logged as a warning, run shipped",
+      "stage": "dev",
+      "input": {
+        "schema_version": "1.8",
+        "issue_number": 340,
+        "quality_checks": { "security_review": "N/A" }
+      },
+      "expect": {
+        "verdict": "repaired",
+        "notes": [
+          {
+            "field": "quality_checks.security_review",
+            "disposition": "repaired",
+            "rule": "any.quality_checks.vocabulary"
+          }
+        ],
+        "doc": {
+          "schema_version": "1.8",
+          "issue_number": 340,
+          "quality_checks": { "security_review": "not_run" }
+        }
+      }
+    },
+    {
+      "id": "dev.quality_checks.vocabulary-outside-the-closed-table",
+      "evidence": "#1182 — an unknown verdict word is not guessed at; the field is quarantined",
+      "stage": "dev",
+      "input": {
+        "schema_version": "1.8",
+        "issue_number": 341,
+        "quality_checks": { "type_check": "mostly fine" }
+      },
+      "expect": {
+        "verdict": "quarantined",
+        "untrustworthy": ["quality_checks"],
+        "notes": [
+          {
+            "field": "quality_checks.type_check",
+            "disposition": "quarantined",
+            "rule": "any.quality_checks.unknown_vocabulary"
+          }
+        ],
+        "doc": {
+          "schema_version": "1.8",
+          "issue_number": 341,
+          "quality_checks": {}
+        }
+      }
+    },
+    {
+      "id": "validate-170.skipped_phases-string-entries",
+      "evidence": "#1182 table row 2 — `reason` is genuinely absent and cannot be invented",
+      "stage": "validate",
+      "input": {
+        "schema_version": "2.6",
+        "issue_number": 170,
+        "skipped_phases": ["lint", "e2e", { "phase": "unit", "reason": "no tests" }]
+      },
+      "expect": {
+        "verdict": "quarantined",
+        "untrustworthy": ["skipped_phases"],
+        "notes": [
+          {
+            "field": "skipped_phases.0",
+            "disposition": "quarantined",
+            "rule": "validate.skipped_phases.entry_not_an_object"
+          },
+          {
+            "field": "skipped_phases.1",
+            "disposition": "quarantined",
+            "rule": "validate.skipped_phases.entry_not_an_object"
+          }
+        ],
+        "doc": {
+          "schema_version": "2.6",
+          "issue_number": 170,
+          "skipped_phases": [{ "phase": "unit", "reason": "no tests" }]
+        }
+      }
+    },
+    {
+      "id": "validate-340.gate_metrics-missing-gate-name-and-result-vocabulary",
+      "evidence": "#1182 table row 4 — reached the gate-metrics record behind a warning",
+      "stage": "validate",
+      "input": {
+        "schema_version": "2.6",
+        "issue_number": 340,
+        "gate_metrics": [
+          { "name": "lint", "result": "passed" },
+          { "gate_name": "adversarial-review", "result": "failed" }
+        ]
+      },
+      "expect": {
+        "verdict": "quarantined",
+        "untrustworthy": ["gate_metrics"],
+        "notes": [
+          {
+            "field": "gate_metrics.0",
+            "disposition": "quarantined",
+            "rule": "validate.gate_metrics.missing_gate_name"
+          },
+          {
+            "field": "gate_metrics.1.result",
+            "disposition": "repaired",
+            "rule": "validate.gate_metrics.result_vocabulary"
+          }
+        ],
+        "doc": {
+          "schema_version": "2.6",
+          "issue_number": 340,
+          "gate_metrics": [{ "gate_name": "adversarial-review", "result": "fail" }]
+        }
+      }
+    },
+    {
+      "id": "validate-232.gate_metrics-missing-gate-name",
+      "evidence": "#1182 table row 5",
+      "stage": "validate",
+      "input": {
+        "schema_version": "2.6",
+        "issue_number": 232,
+        "gate_metrics": [{ "result": "pass", "duration_ms": 12 }]
+      },
+      "expect": {
+        "verdict": "quarantined",
+        "untrustworthy": ["gate_metrics"],
+        "notes": [
+          {
+            "field": "gate_metrics.0",
+            "disposition": "quarantined",
+            "rule": "validate.gate_metrics.missing_gate_name"
+          }
+        ],
+        "doc": {
+          "schema_version": "2.6",
+          "issue_number": 232,
+          "gate_metrics": []
+        }
+      }
+    },
+    {
+      "id": "validate.gate_metrics.judge-fail-is-not-a-mismatch",
+      "evidence": "#1182 — the deliverable enum was NARROWER than the record enum it feeds; that drift is the defect, not the emission",
+      "stage": "validate",
+      "input": {
+        "schema_version": "2.6",
+        "issue_number": 233,
+        "gate_metrics": [{ "gate_name": "judges", "result": "fail" }]
+      },
+      "expect": { "verdict": "clean", "notes": [] }
+    },
+    {
+      "id": "validate.schema_version.stale-claim-is-corrected",
+      "evidence": "#1177 — a skill writing its own version number is a claim, not a fact",
+      "stage": "validate",
+      "input": { "schema_version": "1.5", "issue_number": 234 },
+      "expect": {
+        "verdict": "repaired",
+        "notes": [
+          {
+            "field": "schema_version",
+            "disposition": "repaired",
+            "rule": "any.schema_version.stamped"
+          }
+        ],
+        "doc": { "schema_version": "2.6", "issue_number": 234 }
+      }
+    },
+    {
+      "id": "any.top-level-not-an-object",
+      "stage": "dev",
+      "input": [],
+      "expect": {
+        "verdict": "fatal",
+        "notes": [
+          { "field": "(top level)", "disposition": "fatal", "rule": "any.document.not_an_object" }
+        ]
+      }
+    }
+  ]
+}

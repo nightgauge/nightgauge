@@ -81,6 +81,10 @@ import {
   runAdapterAuthPreflight,
   createDefaultPreflightRunner,
   uuidV7,
+  applyDeliverablePolicy,
+  deliverableKindForStage,
+  stampPolicyMarker,
+  summarizePolicy,
   type NightgaugeAdapter,
   type RecoveryAction,
   type RecoveryRequiredPayload,
@@ -4904,17 +4908,73 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         return schemaErr;
       }
 
+      // #1182: the SAME policy the post-condition gate and the post-stage
+      // context validator apply. `validate-340`'s malformed gate_metrics was
+      // logged here a second time, as a prerequisite mismatch, and the run
+      // merged anyway — so a defect already tolerated once reached the
+      // gate-metrics record and the learning corpus behind two warnings. A
+      // prerequisite a consumer genuinely cannot read is now an error at this
+      // point too, and a repairable one is repaired before the consumer sees it.
+      const prereqKind = deliverableKindForStage(prereq.stage);
+      if (prereqKind) {
+        const policy = applyDeliverablePolicy(prereqKind, parsed);
+        if (!policy.ok) {
+          const detail = summarizePolicy(policy)
+            .map((line) => `  - ${line}`)
+            .join("\n");
+          this.logger.error(
+            `${stage} pre-condition failed: prerequisite deliverable does not match the contract`,
+            {
+              stage,
+              prerequisiteStage: prereq.stage,
+              contextPath,
+              issueNumber,
+              notes: `\n${detail}`,
+            }
+          );
+          const schemaErr = new ContextSchemaError(
+            contextPath,
+            `no total repair exists for the ${prereq.stage} deliverable:\n${detail}`
+          );
+          this.emitRecoveryRequired(schemaErr, issueNumber, stage).catch(() => {
+            /* dispatch errors are logged by the dispatcher */
+          });
+          return schemaErr;
+        }
+        if (policy.changed) {
+          stampPolicyMarker(policy, new Date());
+          parsed = policy.doc;
+          try {
+            fs.writeFileSync(contextPath, `${JSON.stringify(policy.doc, null, 2)}\n`, "utf-8");
+          } catch {
+            /* the repair still applies in memory for this read */
+          }
+          this.logger.warn("Prerequisite deliverable repaired by policy", {
+            stage,
+            prerequisiteStage: prereq.stage,
+            contextPath,
+            issueNumber,
+            verdict: policy.verdict,
+            untrustworthy: policy.untrustworthy,
+            notes: `\n${summarizePolicy(policy)
+              .map((line) => `  - ${line}`)
+              .join("\n")}`,
+          });
+        }
+      }
+
       const result = schema.safeParse(parsed);
       if (!result.success) {
         const issues = result.error.issues
           .map((i) => `  - ${i.path.join(".")}: ${i.message}`)
           .join("\n");
 
-        // Schema mismatches are warn-only — the file exists and is valid JSON.
-        // LLM agents produce field-name variations that don't affect the next
-        // stage's ability to read what it needs.
+        // Anything left after the policy ran is a mismatch the closed rule table
+        // has no entry for AND that no consumer's control flow reads. It is
+        // logged, deliberately, as a candidate for a new rule — not as blanket
+        // permission to continue on any mismatch at all.
         this.logger.warn(
-          "Prerequisite context file has schema mismatches (non-fatal, continuing)",
+          "Prerequisite context file has residual schema mismatches outside the policy table",
           {
             stage,
             prerequisiteStage: prereq.stage,

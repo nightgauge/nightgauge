@@ -21,6 +21,9 @@ import { flexEnum, optionalString } from "./helpers.js";
  *
  * @see docs/CONTEXT_ARCHITECTURE.md for field documentation
  */
+/** The single quality-check verdict vocabulary (#1182). */
+const QUALITY_CHECK_VERDICTS = ["passed", "failed", "skipped", "not_run"] as const;
+
 export const DevContextSchema = z
   .object({
     schema_version: z.string().regex(/^\d+\.\d+$/),
@@ -58,10 +61,17 @@ export const DevContextSchema = z
       .nullish(),
     quality_checks: z
       .object({
-        code_standards: flexEnum(["passed", "failed", "skipped"] as const).nullish(),
-        security_review: flexEnum(["passed", "failed", "skipped"] as const).nullish(),
-        type_check: flexEnum(["passed", "failed", "skipped"] as const).nullish(),
-        dead_code_scan: flexEnum(["passed", "failed", "not_run", "skipped"] as const).nullish(),
+        // #1182: all four verdicts share ONE vocabulary. Three of them used to
+        // omit `not_run` while `dead_code_scan` accepted it — and the include
+        // that authors this block defaults `dead_code_scan` to `not_run`, so a
+        // stage reporting the same honest thing about a type check produced an
+        // "invalid option" mismatch (dev-170, dev-340). A verdict word that is
+        // valid for one check and invalid for its neighbour is schema drift,
+        // not a bad emission.
+        code_standards: flexEnum(QUALITY_CHECK_VERDICTS).nullish(),
+        security_review: flexEnum(QUALITY_CHECK_VERDICTS).nullish(),
+        type_check: flexEnum(QUALITY_CHECK_VERDICTS).nullish(),
+        dead_code_scan: flexEnum(QUALITY_CHECK_VERDICTS).nullish(),
       })
       .nullish(),
     created_at: z.string().datetime().nullish(),
