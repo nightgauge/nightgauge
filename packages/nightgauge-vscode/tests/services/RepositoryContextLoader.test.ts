@@ -205,17 +205,10 @@ describe("RepositoryContextLoader", () => {
       expect(filePath).toBe(`${repoPath}/.nightgauge/pipeline/planning-42.json`);
     });
 
-    it("should return correct path for state.json", async () => {
-      const repo = new Repository("frontend", repoPath);
-      const manager = createMockWorkspaceManager(repo);
-
-      const loader = RepositoryContextLoader.getInstance();
-      await loader.initialize(manager);
-
-      const filePath = loader.getContextFile("state");
-
-      expect(filePath).toBe(`${repoPath}/.nightgauge/pipeline/state.json`);
-    });
+    // A case here asserted the path returned for the "state" context type.
+    // #471 removed that type: no live caller ever passed it (the
+    // stage→ContextFileType maps name only per-issue types), and nothing in
+    // the tree writes the file it named.
 
     it("should return correct path for batch-state.json", async () => {
       const repo = new Repository("frontend", repoPath);

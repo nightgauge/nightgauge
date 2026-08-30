@@ -75,7 +75,7 @@ function finalizedState() {
 function makeStateService(state: unknown) {
   return {
     getState: vi.fn(async () => state),
-    getStatePath: vi.fn(() => "/tmp/a-watched-repo/.nightgauge/pipeline/state.json"),
+    getRepoRoot: vi.fn(() => "/tmp/a-watched-repo"),
     onStageStart: vi.fn(() => ({ dispose: vi.fn() })),
     onStageError: vi.fn(() => ({ dispose: vi.fn() })),
     onStateChanged: vi.fn(() => ({ dispose: vi.fn() })),

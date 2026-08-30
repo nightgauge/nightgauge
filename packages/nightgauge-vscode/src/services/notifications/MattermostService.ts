@@ -291,8 +291,8 @@ export class MattermostService implements Notifier, vscode.Disposable {
     const state = await effectiveStateService.getState();
     if (!state || state.issue_number !== issueNumber) return;
 
-    const statePath = effectiveStateService.getStatePath();
-    let repoRoot = statePath.split("/.nightgauge/")[0];
+    // #471: was a state-file path getter split back to its directory; same value.
+    let repoRoot = effectiveStateService.getRepoRoot();
     repoRoot = repoRoot.replace(/\/\.worktrees\/[^/]+$/, "");
     const repoName = repoRoot.split("/").pop() ?? repoRoot;
 

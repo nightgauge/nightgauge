@@ -19,7 +19,8 @@ the issue-pickup stage:
 
 ## Phase 2.5: Signal Stage Start
 
-**PURPOSE**: Update state.json to indicate this stage has started.
+**PURPOSE**: Move the issue's board status to `in-progress` to signal that
+this stage has started.
 
 **IMPORTANT**: This phase runs AFTER issue selection because we need the
 `$ISSUE_NUMBER` variable.

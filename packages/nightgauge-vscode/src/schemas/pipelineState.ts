@@ -1,8 +1,12 @@
 /**
- * Zod schemas for PipelineState validation
+ * Zod schemas for pipeline stage/state sub-objects.
  *
- * These schemas provide runtime validation for state.json and batch-state.json,
- * catching corrupted or malformed data before it causes downstream errors.
+ * These schemas provide runtime validation for batch-state.json and for the
+ * stage-shaped payloads that cross the IPC boundary, catching corrupted or
+ * malformed data before it causes downstream errors.
+ *
+ * The top-level run-state object schema is NOT here — see the #471 tombstone
+ * below for why it was retired.
  *
  * @see Issue #414 - Harden Pipeline State Management
  * @see packages/nightgauge-sdk/src/context/schemas/ for SDK schema patterns
@@ -169,7 +173,7 @@ export const StageStateSchema = z.object({
    * Reason why this stage was skipped (Issue #843)
    *
    * Persisted when a stage is skipped via routing decisions or legacy config.
-   * Enables auditing of skip decisions in state.json and execution history.
+   * Enables auditing of skip decisions in the execution history record.
    */
   skip_reason: z.string().optional(),
   // `model_selection` used to sit here, carrying a THIRD copy of the selection
@@ -185,7 +189,7 @@ export const StageStateSchema = z.object({
   /**
    * Phase progress within this stage (Issue #1029)
    *
-   * Persisted to state.json for recovery on extension reload.
+   * Carried on the runtime snapshot for recovery on extension reload.
    * Cleared when the stage restarts (supports retries).
    */
   phases: z.array(StagePhaseSchema).optional(),
@@ -195,8 +199,8 @@ export const StageStateSchema = z.object({
   total_phases: z.number().int().min(0).optional(),
   // `process_pid` used to sit here (Issue #1643), the stage child's pid for the
   // TypeScript stale-slot scanner. Its writer (`setStageProcessPid`) was an
-  // empty stub and its only reader was that scanner, which read a `state.json`
-  // nothing writes; both were deleted with #427. (The scanner's class name is
+  // empty stub and its only reader was that scanner, which read a pipeline
+  // state file nothing writes; both were deleted with #427. (The scanner's class name is
   // deliberately not repeated here — `tests/bootstrap/staleSlotScannerRemoved.test.ts`
   // is the one place that names it, as the guard asserting it stays gone.) The stage-child
   // pid that actually decides liveness travels the IPC wire as `stagePid` on
@@ -241,88 +245,26 @@ export type Tokens = z.infer<typeof TokensSchema>;
 export const StagesSchema = z.record(z.string(), StageStateSchema);
 export type Stages = z.infer<typeof StagesSchema>;
 
-/**
- * Main PipelineState schema for state.json
+/*
+ * The top-level pipeline-state object schema and its inferred type used to sit
+ * here: the wire format of <worktree>/.nightgauge/pipeline/<the writer-less
+ * state file>. Retired by #471.
  *
- * Schema version: 1.0
+ * It had ZERO consumers in src. Nothing in Go, TypeScript or any skill has ever
+ * written that file, so the format it described never existed on disk, and the
+ * readers that reached for it all took their not-found fallback on every real
+ * run. The type it exported was not the one the extension uses either — the
+ * live PipelineState is a hand-written interface in PipelineStateService, whose
+ * _lastState is populated from Go over IPC (pipeline.stateChanged /
+ * applyRuntimeSnapshot) and never from a file read. The two had already drifted
+ * into independent shapes.
+ *
+ * The per-stage and sub-object schemas in this file (StageStateSchema,
+ * StagesSchema, PipelineStageSchema, StagePhase, BacktrackRecord,
+ * ModelEscalationRecord, StallEscalationLevel, PauseForStallPayload, ...) are
+ * live and stay — they are consumed by config/schema.ts, the tree providers and
+ * the orchestrator event dispatcher.
  */
-export const PipelineStateSchema = z.object({
-  schema_version: z.literal("1.0"),
-  issue_number: z.number().int().positive(),
-  title: z.string().min(1),
-  /**
-   * Feature branch for this run — `""` means "no branch has been determined
-   * yet", NOT "no value". This is #397's empty-means-undetermined contract,
-   * extended from the history record to pipeline state by #448.
-   *
-   * The `.min(1)` that stood here is what made the fabrications necessary:
-   * `initializePipeline` runs BEFORE issue-pickup resolves a branch, so the
-   * only way for the pipeline-state path to satisfy a non-empty branch was to
-   * invent `feat/{issue_number}` — a value byte-indistinguishable from a
-   * branch that really resolved, which then rode `notifyStageTransition` →
-   * `SeedRunContext` → `V2RunInput.Branch` into a durable history record.
-   * Go's `SeedRunContext` already ignores an empty branch (latest-wins only on
-   * a non-empty value), so `""` seeds nothing and the record stays honest.
-   *
-   * Readers must render it through `getBranchDisplayText` (which yields
-   * `UNDETERMINED_BRANCH_LABEL`) and must never hand it to a git command —
-   * every existing branch-consuming call site already guards on truthiness.
-   */
-  branch: z.string(),
-  base_branch: z.string().min(1),
-  started_at: z.string().datetime(),
-  updated_at: z.string().datetime(),
-  execution_mode: PipelineExecutionModeSchema,
-  paused: z.boolean(),
-  stages: StagesSchema,
-  tokens: TokensSchema,
-  /** Pipeline outcome classification for analytics (Issue #1005, #1047) */
-  outcome_type: z
-    .enum([
-      "productive",
-      "verify-and-close",
-      "already-resolved",
-      "budget-ceiling",
-      "cancelled",
-      "shipped-but-overbudget",
-      // Run ended with the PR unmerged behind a non-retryable repo-config
-      // blocker — a human must change repo config (#190).
-      "blocked",
-      // A stage ended in `failed` status — never a success outcome (#1109).
-      "partial",
-      // The post-condition gate detected a stage that exited 0 without doing
-      // the work. Refuted by a merged PR (#1120).
-      "skill-no-op",
-      // Pickup deferred — issue's native blockedBy dependencies still open
-      // (#189/#305). Non-failure; issue stays eligible for a later tick.
-      "deferred",
-    ])
-    .optional(),
-  /** Number of backtracks executed during this pipeline run (Issue #1342) */
-  backtrack_count: z.number().int().min(0).optional(),
-  /** History of backtrack events during this pipeline run (Issue #1342) */
-  backtracks: z.array(BacktrackRecordSchema).optional(),
-  /** Model escalations executed during this pipeline run (Issue #1343) */
-  model_escalations: z.array(ModelEscalationRecordSchema).optional(),
-  /** Proactive model escalations applied before stages run (Issue #1394) */
-  proactive_escalations: z.array(ProactiveEscalationRecordSchema).optional(),
-  /** Active health-gated policies applied at pipeline start (Issue #1395) */
-  active_health_policies: z
-    .object({
-      tier: z.string(),
-      retry_budget_increase: z.number().int().min(0),
-      escalate_all_stages: z.boolean(),
-      pause_auto_routing: z.boolean(),
-      reasons: z.array(z.string()),
-      score: z.number(),
-      applied_at: z.string().datetime(),
-    })
-    .optional(),
-  /** Issue labels from GitHub (e.g., "size:M", "priority:high") (Issue #1611) */
-  labels: z.array(z.string()).optional(),
-});
-export type PipelineState = z.infer<typeof PipelineStateSchema>;
-
 // ============================================================================
 // Stall Escalation Types (Issue #2656)
 // ============================================================================
@@ -379,10 +321,10 @@ export type PauseResolution = z.infer<typeof PauseResolutionSchema>;
 
 // `validatePipelineState` and its `ValidationResult` used to sit here: a
 // `safeParse` wrapper that flattened Zod's first issue into a string. It had
-// ZERO callers in src — this schema is consumed for types only — so it guarded
-// nothing while looking like a guard, which is precisely how the drifted
-// `model_selection` field survived here unnoticed until #446. Deleted with
-// #467; the two tests that reached for it now call `PipelineStateSchema.safeParse`
-// directly, as the rest of the schema tests already did. If a read site ever
-// genuinely needs validation, call `safeParse` at that site, where its result
-// can actually change what the code does.
+// ZERO callers in src — the schema it wrapped was consumed for types only — so
+// it guarded nothing while looking like a guard, which is precisely how the
+// drifted `model_selection` field survived here unnoticed until #446. Deleted
+// with #467. The schema it validated is itself gone as of #471 (see the
+// tombstone above). If a read site ever genuinely needs validation, call
+// `safeParse` at that site, where its result can actually change what the code
+// does.

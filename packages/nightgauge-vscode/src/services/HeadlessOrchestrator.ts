@@ -7467,28 +7467,21 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     // Epic branch sub-issues: PRs merge to the epic branch, not main.
     // The issue stays open until the epic→main PR merges (which GitHub
     // auto-closes via "Closes #N"). Do NOT treat this as a failure.
-    // NOTE: Read from state.json (persists after pipeline-finish) rather than
-    // issue-{N}.json (gets cleaned up before reconciliation runs).
+    // A `state.json` rung sat ahead of these until #471. Nothing writes that
+    // file, so it contributed "" on every run and issue-{N}.json was always the
+    // real primary source — this is the same ladder with the dead rung removed.
     try {
       const fs = require("fs");
-      // Primary source: state.json (always persists)
-      const statePath = `${workspaceRoot}/.nightgauge/pipeline/state.json`;
+      // Primary source: issue-{N}.json (if it still exists)
       let baseBranch = "";
-      if (fs.existsSync(statePath)) {
-        const state = JSON.parse(fs.readFileSync(statePath, "utf-8"));
-        baseBranch = state.base_branch ?? "";
-      }
-      // Fallback: issue-{N}.json (if it still exists)
-      if (!baseBranch) {
-        const contextPath = `${workspaceRoot}/.nightgauge/pipeline/issue-${issueNumber}.json`;
-        if (fs.existsSync(contextPath)) {
-          const ctx = JSON.parse(fs.readFileSync(contextPath, "utf-8"));
-          baseBranch = ctx.base_branch ?? "";
-        }
+      const contextPath = `${workspaceRoot}/.nightgauge/pipeline/issue-${issueNumber}.json`;
+      if (fs.existsSync(contextPath)) {
+        const ctx = JSON.parse(fs.readFileSync(contextPath, "utf-8"));
+        baseBranch = ctx.base_branch ?? "";
       }
       // Fallback: pr-{N}.json has the actual PR base branch from pr-create,
-      // which is always correct even when state.json has stale "main".
-      // @see Issue #137 — state.json base_branch stays "main" when
+      // which is always correct even when the context file has a stale "main".
+      // @see Issue #137 — base_branch stays "main" when
       // create-feature-branch.sh detects an epic branch after state init.
       if (!baseBranch.startsWith("epic/")) {
         const prContextPath = `${workspaceRoot}/.nightgauge/pipeline/pr-${issueNumber}.json`;

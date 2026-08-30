@@ -426,29 +426,54 @@ describe("abortPipeline Command", () => {
       );
     });
 
-    it("should delete context files in parallel, skipping state.json", async () => {
+    it("deletes context files but never the durable *-state.json files", async () => {
+      // `findFiles` here matches EVERY *.json in .nightgauge/pipeline/, not just
+      // per-issue context files, so the skip filter in abortPipeline is what
+      // stops an abort from destroying the queue and the run's own state.
+      //
+      // The previous version of this test used a `state.json` fixture and only
+      // asserted that issue-119.json WAS deleted — it never asserted the skip,
+      // so it stayed green whether or not the filter existed. It now names the
+      // three files that actually exist and asserts both directions (#471).
+      const DIR = "/test/workspace/.nightgauge/pipeline";
+      const PRESERVED = [
+        `${DIR}/run-state.json`,
+        `${DIR}/queue-state.json`,
+        `${DIR}/batch-state.json`,
+      ];
+
       (mockOrchestrator.getIsRunning as any).mockReturnValue(true);
       vi.mocked(vscode.window.showWarningMessage).mockResolvedValue("Abort" as any);
       vi.mocked(vscode.window.showQuickPick).mockResolvedValue("Keep branch" as any);
-      vi.mocked(vscode.workspace.findFiles)
-        .mockResolvedValueOnce([
-          {
-            fsPath: "/test/workspace/.nightgauge/pipeline/issue-119.json",
-          } as any,
-          {
-            fsPath: "/test/workspace/.nightgauge/pipeline/state.json",
-          } as any,
-        ])
-        .mockResolvedValueOnce([]);
+      // Key the mock on the glob, NOT on call order: abortPipeline builds the
+      // plan-file `findFiles` promises inside an `affectedIssues.map(...)`
+      // BEFORE the context-file one, so the plan queries are invoked first and
+      // a `mockResolvedValueOnce` chain hands the context list to the plan
+      // reader — which deletes unfiltered. That is how the earlier version of
+      // this test passed while exercising the wrong call entirely.
+      vi.mocked(vscode.workspace.findFiles).mockImplementation((pattern: any) =>
+        Promise.resolve(
+          pattern?.pattern === "*.json"
+            ? ([
+                { fsPath: `${DIR}/issue-119.json` },
+                ...PRESERVED.map((fsPath) => ({ fsPath })),
+              ] as any)
+            : ([] as any)
+        )
+      );
 
       await commandHandler();
 
-      // issue-119.json should be deleted (state.json skipped)
       expect(vscode.workspace.fs.delete).toHaveBeenCalledWith(
-        expect.objectContaining({
-          fsPath: "/test/workspace/.nightgauge/pipeline/issue-119.json",
-        })
+        expect.objectContaining({ fsPath: `${DIR}/issue-119.json` })
       );
+
+      const deleted = vi
+        .mocked(vscode.workspace.fs.delete)
+        .mock.calls.map((c) => (c[0] as { fsPath: string }).fsPath);
+      for (const survivor of PRESERVED) {
+        expect(deleted).not.toContain(survivor);
+      }
     });
   });
 });

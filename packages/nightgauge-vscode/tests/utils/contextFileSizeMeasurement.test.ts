@@ -7,7 +7,7 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { PipelineStateSchema } from "../../src/schemas/pipelineState";
+import { StageStateSchema } from "../../src/schemas/pipelineState";
 import { HistoryStageDetailSchema } from "../../src/schemas/executionHistory";
 import { PipelineConfigSchema } from "../../src/config/schema";
 
@@ -19,32 +19,21 @@ describe("Context File Size Measurement (Issue #1009)", () => {
     ).toBe(102_400);
   });
 
-  describe("Pipeline state schema accepts context_file_size_bytes", () => {
+  describe("Stage state schema accepts context_file_size_bytes", () => {
     it("should validate stage state with context_file_size_bytes", () => {
-      const state = createMockPipelineState({
-        stages: {
-          "pipeline-start": { status: "complete" },
-          "issue-pickup": {
-            status: "complete",
-            context_file_size_bytes: 5120,
-          },
-          "feature-planning": { status: "complete" },
-          "feature-dev": { status: "complete" },
-          "feature-validate": { status: "complete" },
-          "pr-create": { status: "complete" },
-          "pr-merge": { status: "complete" },
-          "pipeline-finish": { status: "complete" },
-        },
+      const result = StageStateSchema.safeParse({
+        status: "complete",
+        context_file_size_bytes: 5120,
       });
-
-      const result = PipelineStateSchema.safeParse(state);
       expect(result.success).toBe(true);
       // Assert the field SURVIVES the parse, not merely that the parse
       // succeeded: Zod strips unknown keys and still reports success, so a
       // success-only assertion stays green even if the schema drops the field
       // entirely. (It did — verified by mutation while repointing this off the
-      // deleted `validatePipelineState` in #467.)
-      expect(result.data?.stages["issue-pickup"]?.context_file_size_bytes).toBe(5120);
+      // deleted `validatePipelineState` in #467. Repointed again in #471 at
+      // the live stage-state schema, since the writer-less pipeline state
+      // schema that used to wrap it is gone.)
+      expect(result.data?.context_file_size_bytes).toBe(5120);
     });
   });
 
@@ -78,35 +67,3 @@ describe("Context File Size Measurement (Issue #1009)", () => {
     });
   });
 });
-
-function createMockPipelineState(overrides?: Record<string, unknown>) {
-  return {
-    schema_version: "1.0",
-    issue_number: 42,
-    title: "Test issue",
-    branch: "feat/42-test",
-    base_branch: "main",
-    started_at: new Date(Date.now() - 60000).toISOString(),
-    updated_at: new Date().toISOString(),
-    execution_mode: "automatic",
-    paused: false,
-    stages: {
-      "pipeline-start": { status: "complete" },
-      "issue-pickup": { status: "complete" },
-      "feature-planning": { status: "complete" },
-      "feature-dev": { status: "complete" },
-      "feature-validate": { status: "complete" },
-      "pr-create": { status: "complete" },
-      "pr-merge": { status: "complete" },
-      "pipeline-finish": { status: "complete" },
-    },
-    tokens: {
-      total_input: 10000,
-      total_output: 5000,
-      total_cache_read: 2000,
-      total_cache_creation: 1000,
-      estimated_cost_usd: 0.1,
-    },
-    ...overrides,
-  };
-}

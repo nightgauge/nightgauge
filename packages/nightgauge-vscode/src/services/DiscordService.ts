@@ -1022,19 +1022,17 @@ export class DiscordService implements Notifier, vscode.Disposable {
     const state = await effectiveStateService.getState();
     if (!state || state.issue_number !== issueNumber) return;
 
-    // Derive repo name from statePath (context-aware) rather than workspaceRoot
-    // (static initial value). statePath is updated by RepositoryContextLoader
-    // when the active repo changes, so it correctly reflects the platform repo
-    // during batch runs on acme-platform.
-    // e.g. ".../acme-platform/.nightgauge/pipeline/state.json"
-    //   → split by "/.nightgauge/" → ".../acme-platform"
-    //   → pop last segment → "acme-platform"
-    // Worktree paths: ".../repo/.worktrees/issue-63/.nightgauge/..."
-    //   → split by "/.nightgauge/" → ".../repo/.worktrees/issue-63"
+    // Derive the repo name from the state service's repo root (context-aware)
+    // rather than workspaceRoot (static initial value). The service's root is
+    // updated by RepositoryContextLoader when the active repo changes, so it
+    // correctly reflects the platform repo during batch runs on acme-platform.
+    // e.g. ".../acme-platform" → pop last segment → "acme-platform"
+    // Worktree roots: ".../repo/.worktrees/issue-63"
     //   → strip ".worktrees/..." → ".../repo"
     //   → pop last segment → "repo"
-    const statePath = effectiveStateService.getStatePath();
-    let repoRoot = statePath.split("/.nightgauge/")[0];
+    // (#471: this used to read a path getter and split the phantom state-file
+    // suffix back off to arrive at exactly this value.)
+    let repoRoot = effectiveStateService.getRepoRoot();
     // Strip worktree suffix so we get the actual repo name, not "issue-NNN"
     repoRoot = repoRoot.replace(/\/\.worktrees\/[^/]+$/, "");
     const repoName = repoRoot.split("/").pop() ?? repoRoot;

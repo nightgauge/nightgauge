@@ -105,7 +105,7 @@ results into human-readable findings.
 - `jq` installed for JSON processing (fallback data sources only)
 - Git repository with `.nightgauge/` directory
 - Pipeline history in `.nightgauge/pipeline/history/*.jsonl` (preferred) or
-  `state.json` files as fallback
+  pipeline context files (`dev-*.json`) as a minimal fallback
 
 **CRITICAL**: This skill runs headless. Do NOT use AskUserQuestion. Make
 autonomous decisions or fail with clear error.
@@ -151,7 +151,6 @@ Check for execution history in priority order:
 
 ```bash
 HISTORY_DIR=".nightgauge/pipeline/history"
-STATE_FILE=".nightgauge/pipeline/state.json"
 PIPELINE_DIR=".nightgauge/pipeline"
 
 DATA_SOURCE="none"
@@ -163,18 +162,12 @@ if ls "${HISTORY_DIR}"/*.jsonl 2>/dev/null | head -1 > /dev/null; then
   echo "Found execution history JSONL files"
 fi
 
-# Priority 2: Pipeline state.json
-if [ "$DATA_SOURCE" = "none" ] && [ -f "$STATE_FILE" ]; then
-  DATA_SOURCE="state"
-  echo "No JSONL history found. Falling back to state.json"
-fi
-
-# Priority 3: Pipeline context files (dev-*.json, planning-*.json, etc.)
+# Priority 2: Pipeline context files (dev-*.json, planning-*.json, etc.)
 if [ "$DATA_SOURCE" = "none" ]; then
   CONTEXT_FILES=$(ls -1 "${PIPELINE_DIR}"/dev-*.json 2>/dev/null)
   if [ -n "$CONTEXT_FILES" ]; then
     DATA_SOURCE="context"
-    echo "No history or state.json. Using pipeline context files"
+    echo "No JSONL history found. Using pipeline context files"
   fi
 fi
 
@@ -182,7 +175,6 @@ fi
 if [ "$DATA_SOURCE" = "none" ]; then
   echo "WARNING: No pipeline execution data found."
   echo "  Expected: ${HISTORY_DIR}/*.jsonl (from execution history)"
-  echo "  Fallback: ${STATE_FILE}"
   echo "  Minimum:  ${PIPELINE_DIR}/dev-*.json"
   echo ""
   echo "Run some pipeline stages first, or enable execution history (#649)."
@@ -341,27 +333,7 @@ aggregator computed, with these field renames (locked by the v1 contract):
 `count`, `median`, `mean`, `p90`, `min`, `max` — the analysis phase reads them
 directly instead of recomputing percentiles in Python.
 
-#### Step 2.2: Extract from state.json (Fallback)
-
-When `DATA_SOURCE="state"`, use jq to extract basic pipeline state:
-
-```bash
-jq '{
-  total_runs: (.runs // [] | length),
-  stages: (.runs // [] | map(.stages // []) | flatten |
-    group_by(.name) | map({
-      stage: .[0].name,
-      count: length,
-      statuses: ([.[].status] | group_by(.) |
-        map({(.[0]): length}) | add)
-    }))
-}' "$STATE_FILE" > /tmp/audit_extracted.json
-```
-
-Note: state.json provides minimal data. Most analysis categories will be
-unavailable. Output will indicate limited data source.
-
-#### Step 2.3: Extract from Context Files (Minimal Fallback)
+#### Step 2.2: Extract from Context Files (Minimal Fallback)
 
 When `DATA_SOURCE="context"`, extract from dev-\*.json pipeline context files:
 
@@ -1163,8 +1135,7 @@ Analyzes retry and backtrack patterns across pipeline runs:
 
 | Condition                          | Action                                                         |
 | ---------------------------------- | -------------------------------------------------------------- |
-| No JSONL history files             | Fall back to state.json                                        |
-| No state.json                      | Fall back to context files (dev-\*.json)                       |
+| No JSONL history files             | Fall back to context files (dev-\*.json)                       |
 | No data at all                     | Output friendly message, exit 0                                |
 | Malformed JSONL records            | Skip bad records, report count at end                          |
 | python3 not installed              | Error with install instructions                                |
@@ -1185,7 +1156,6 @@ UTILITIES (not part of main pipeline)
        ↑
   Use anytime to analyze pipeline efficiency
   Reads: .nightgauge/pipeline/history/*.jsonl
-  Reads: .nightgauge/pipeline/state.json (fallback)
   Reads: .nightgauge/pipeline/dev-*.json (minimal fallback)
 ```
 

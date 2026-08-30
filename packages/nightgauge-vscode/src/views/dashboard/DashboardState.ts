@@ -2539,9 +2539,12 @@ export class DashboardState {
     try {
       const files = await fs.readdir(pipelineDir);
 
-      // 1. Import from state*.json files (current + archived snapshots)
+      // 1. Import from per-issue offline snapshots (state-<N>.json, written by
+      // Go's OfflineStore). The bare `state.json` name was also matched here
+      // until #471; nothing in the tree has ever written that file, so the
+      // disjunct could only ever match nothing.
       const stateFiles = files.filter(
-        (f) => (f === "state.json" || f.match(/^state-\d+\.json$/)) && !f.includes(".corrupt")
+        (f) => f.match(/^state-\d+\.json$/) && !f.includes(".corrupt")
       );
 
       for (const file of stateFiles) {
@@ -3721,34 +3724,11 @@ export class DashboardState {
         }
       }
 
-      // Also try state.json for current run model_selection
-      if (!found) {
-        try {
-          const statePath = path.join(this.workspaceRoot, ".nightgauge", "pipeline", "state.json");
-          const stateContent = await fs.readFile(statePath, "utf-8");
-          const state = JSON.parse(stateContent);
-
-          if (state.issue_number === run.issueNumber && state.stages) {
-            for (const [stageName, stageData] of Object.entries(
-              state.stages as Record<
-                string,
-                { model_selection?: { model?: string; complexity?: string } }
-              >
-            )) {
-              if (stageData?.model_selection) {
-                result.push({
-                  stage: stageName as PipelineStage,
-                  model: stageData.model_selection.model ?? "sonnet",
-                  effort: stageData.model_selection.complexity ?? "medium",
-                  source: "state",
-                });
-              }
-            }
-          }
-        } catch {
-          // State file not available
-        }
-      }
+      // A second rung sat here, reading the current run's model_selection out
+      // of the writer-less pipeline state file and pushing rows tagged
+      // `source: "state"`. Nothing has ever written that file, so the read
+      // always threw ENOENT and the rung always fell through to the fallback
+      // below — #471 removed it, along with the unreachable `source` value.
 
       // Fill in fallback for stages with token data but no model info
       const knownStages = new Set(result.map((r) => r.stage));
