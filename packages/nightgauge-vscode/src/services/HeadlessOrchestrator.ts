@@ -53,6 +53,7 @@ import {
 } from "../orchestrator/context/ContextAssembler";
 import { OrchestratorEventDispatcher } from "../orchestrator/events/OrchestratorEventDispatcher";
 import { WorktreeManager } from "../utils/WorktreeManager";
+import { isValidBranchName } from "../utils/branchUtils";
 
 const execAsync = promisify(exec);
 import {
@@ -81,6 +82,10 @@ import {
   runAdapterAuthPreflight,
   createDefaultPreflightRunner,
   uuidV7,
+  applyDeliverablePolicy,
+  deliverableKindForStage,
+  stampPolicyMarker,
+  summarizePolicy,
   type NightgaugeAdapter,
   type RecoveryAction,
   type RecoveryRequiredPayload,
@@ -4904,17 +4909,73 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         return schemaErr;
       }
 
+      // #1182: the SAME policy the post-condition gate and the post-stage
+      // context validator apply. `validate-340`'s malformed gate_metrics was
+      // logged here a second time, as a prerequisite mismatch, and the run
+      // merged anyway — so a defect already tolerated once reached the
+      // gate-metrics record and the learning corpus behind two warnings. A
+      // prerequisite a consumer genuinely cannot read is now an error at this
+      // point too, and a repairable one is repaired before the consumer sees it.
+      const prereqKind = deliverableKindForStage(prereq.stage);
+      if (prereqKind) {
+        const policy = applyDeliverablePolicy(prereqKind, parsed);
+        if (!policy.ok) {
+          const detail = summarizePolicy(policy)
+            .map((line) => `  - ${line}`)
+            .join("\n");
+          this.logger.error(
+            `${stage} pre-condition failed: prerequisite deliverable does not match the contract`,
+            {
+              stage,
+              prerequisiteStage: prereq.stage,
+              contextPath,
+              issueNumber,
+              notes: `\n${detail}`,
+            }
+          );
+          const schemaErr = new ContextSchemaError(
+            contextPath,
+            `no total repair exists for the ${prereq.stage} deliverable:\n${detail}`
+          );
+          this.emitRecoveryRequired(schemaErr, issueNumber, stage).catch(() => {
+            /* dispatch errors are logged by the dispatcher */
+          });
+          return schemaErr;
+        }
+        if (policy.changed) {
+          stampPolicyMarker(policy, new Date());
+          parsed = policy.doc;
+          try {
+            fs.writeFileSync(contextPath, `${JSON.stringify(policy.doc, null, 2)}\n`, "utf-8");
+          } catch {
+            /* the repair still applies in memory for this read */
+          }
+          this.logger.warn("Prerequisite deliverable repaired by policy", {
+            stage,
+            prerequisiteStage: prereq.stage,
+            contextPath,
+            issueNumber,
+            verdict: policy.verdict,
+            untrustworthy: policy.untrustworthy,
+            notes: `\n${summarizePolicy(policy)
+              .map((line) => `  - ${line}`)
+              .join("\n")}`,
+          });
+        }
+      }
+
       const result = schema.safeParse(parsed);
       if (!result.success) {
         const issues = result.error.issues
           .map((i) => `  - ${i.path.join(".")}: ${i.message}`)
           .join("\n");
 
-        // Schema mismatches are warn-only — the file exists and is valid JSON.
-        // LLM agents produce field-name variations that don't affect the next
-        // stage's ability to read what it needs.
+        // Anything left after the policy ran is a mismatch the closed rule table
+        // has no entry for AND that no consumer's control flow reads. It is
+        // logged, deliberately, as a candidate for a new rule — not as blanket
+        // permission to continue on any mismatch at all.
         this.logger.warn(
-          "Prerequisite context file has schema mismatches (non-fatal, continuing)",
+          "Prerequisite context file has residual schema mismatches outside the policy table",
           {
             stage,
             prerequisiteStage: prereq.stage,
@@ -5615,7 +5676,11 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     expectedBranch: string,
     currentBranch: string
   ): Promise<boolean> {
-    if (!this.isValidBranchName(expectedBranch)) {
+    // One validator, not two (#498). This method used to carry a byte-for-byte
+    // copy of `branchUtils.isValidBranchName` — a dual-path-drift hazard on a
+    // security control, and the reason the old branch-sanitization test could
+    // only ever assert against a third copy of its own.
+    if (!isValidBranchName(expectedBranch)) {
       this.logger.error("Invalid expected branch name in context", {
         issueNumber,
         expectedBranch,
@@ -5683,37 +5748,6 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       });
       return false;
     }
-  }
-
-  /**
-   * Validate a branch name for safe git command usage.
-   */
-  private isValidBranchName(name: string): boolean {
-    if (!name || typeof name !== "string") {
-      return false;
-    }
-
-    const invalidPatterns = [
-      /\.\./, // No consecutive dots
-      /^[./]/, // Can't start with dot or slash
-      /[/.]$/, // Can't end with slash or dot
-      /@\{/, // No @{
-      /\\/, // No backslash
-      // eslint-disable-next-line no-control-regex
-      /[\x00-\x1f]/, // No control characters
-      /[\x7f]/, // No DEL
-      // eslint-disable-next-line no-useless-escape
-      /[ ~^:?*\[]/, // No shell/meta-confusing characters
-      /\.lock$/, // Can't end with .lock
-    ];
-
-    for (const pattern of invalidPatterns) {
-      if (pattern.test(name)) {
-        return false;
-      }
-    }
-
-    return true;
   }
 
   /**
@@ -7467,28 +7501,21 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     // Epic branch sub-issues: PRs merge to the epic branch, not main.
     // The issue stays open until the epic→main PR merges (which GitHub
     // auto-closes via "Closes #N"). Do NOT treat this as a failure.
-    // NOTE: Read from state.json (persists after pipeline-finish) rather than
-    // issue-{N}.json (gets cleaned up before reconciliation runs).
+    // A `state.json` rung sat ahead of these until #471. Nothing writes that
+    // file, so it contributed "" on every run and issue-{N}.json was always the
+    // real primary source — this is the same ladder with the dead rung removed.
     try {
       const fs = require("fs");
-      // Primary source: state.json (always persists)
-      const statePath = `${workspaceRoot}/.nightgauge/pipeline/state.json`;
+      // Primary source: issue-{N}.json (if it still exists)
       let baseBranch = "";
-      if (fs.existsSync(statePath)) {
-        const state = JSON.parse(fs.readFileSync(statePath, "utf-8"));
-        baseBranch = state.base_branch ?? "";
-      }
-      // Fallback: issue-{N}.json (if it still exists)
-      if (!baseBranch) {
-        const contextPath = `${workspaceRoot}/.nightgauge/pipeline/issue-${issueNumber}.json`;
-        if (fs.existsSync(contextPath)) {
-          const ctx = JSON.parse(fs.readFileSync(contextPath, "utf-8"));
-          baseBranch = ctx.base_branch ?? "";
-        }
+      const contextPath = `${workspaceRoot}/.nightgauge/pipeline/issue-${issueNumber}.json`;
+      if (fs.existsSync(contextPath)) {
+        const ctx = JSON.parse(fs.readFileSync(contextPath, "utf-8"));
+        baseBranch = ctx.base_branch ?? "";
       }
       // Fallback: pr-{N}.json has the actual PR base branch from pr-create,
-      // which is always correct even when state.json has stale "main".
-      // @see Issue #137 — state.json base_branch stays "main" when
+      // which is always correct even when the context file has a stale "main".
+      // @see Issue #137 — base_branch stays "main" when
       // create-feature-branch.sh detects an epic branch after state init.
       if (!baseBranch.startsWith("epic/")) {
         const prContextPath = `${workspaceRoot}/.nightgauge/pipeline/pr-${issueNumber}.json`;

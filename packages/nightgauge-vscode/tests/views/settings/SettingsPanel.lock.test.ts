@@ -10,8 +10,14 @@
  * @see Issue #921 - Per-section lock during pipeline execution
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { PIPELINE_LOCKED_SECTIONS, SETTINGS_SECTIONS } from "../../../src/views/settings/types";
+import { describe, it, expect, vi } from "vitest";
+import {
+  PIPELINE_LOCKED_SECTIONS,
+  SETTINGS_SECTIONS,
+  getSectionForPath,
+  isSectionLocked,
+} from "../../../src/views/settings/types";
+import { SettingsPanel } from "../../../src/views/settings/SettingsPanel";
 
 // Mock vscode module for SettingsPanel instantiation
 vi.mock("vscode", () => ({
@@ -69,27 +75,12 @@ describe("PIPELINE_LOCKED_SECTIONS constant", () => {
 });
 
 describe("SettingsPanel per-section lock behavior", () => {
-  // We test the path-to-section mapping logic that SettingsPanel uses internally.
-  // Since getSectionForPath is private, we replicate the logic here for unit testing.
-  // The integration behavior is tested via SettingsHtml.lock.test.ts.
-
-  function getSectionForPath(path: string): string | undefined {
-    const prefix = path.split(".")[0];
-    const sectionMap: Record<string, string> = {
-      pr: "pull_request",
-      pull_request: "pull_request",
-      ui: "core",
-      lm_studio: "core",
-      ollama: "core",
-      model_routing: "routing",
-    };
-    return sectionMap[prefix] ?? prefix;
-  }
-
-  function isSectionLocked(path: string, lockedSections: Set<string>): boolean {
-    const section = getSectionForPath(path);
-    return section !== undefined && lockedSections.has(section);
-  }
+  // #498 — this block used to carry a private copy of `getSectionForPath` /
+  // `isSectionLocked`, so it asserted against the copy and stayed green through
+  // any regression in the shipped mapping. Both now live in
+  // `src/views/settings/types.ts` and `SettingsPanel.isSectionLocked` delegates
+  // to them, so these assertions run the code the panel actually runs.
+  // The rendered-HTML side is covered by SettingsHtml.lock.test.ts.
 
   const lockedSections = new Set(PIPELINE_LOCKED_SECTIONS);
 
@@ -158,14 +149,49 @@ describe("SettingsPanel per-section lock behavior", () => {
     });
   });
 
-  describe("save behavior during lock", () => {
-    it("save should be allowed even when sections are locked", () => {
-      // Per the plan: handleSave() should not check lock state.
-      // Save persists whatever unlocked changes were made.
-      // This is verified by the removal of isLocked check in handleSave.
-      // We verify the constant exists and the design is correct.
-      expect(PIPELINE_LOCKED_SECTIONS.length).toBeGreaterThan(0);
-      // If save were blocked, users couldn't save changes to unlocked sections
+  // Unpinned-wiring guard (#498): the exported predicate above is only a real
+  // guard if SettingsPanel actually calls it. Drive the panel's own private
+  // `isSectionLocked` against a stand-in `this` carrying just `lockedSections`
+  // — if the delegation is ever replaced by a second copy of the mapping, this
+  // and the block above stop agreeing.
+  describe("SettingsPanel.isSectionLocked delegates to the exported predicate", () => {
+    type LockHost = { lockedSections: Set<string> };
+    const panelIsSectionLocked = (
+      SettingsPanel.prototype as unknown as {
+        isSectionLocked: (this: LockHost, path: string) => boolean;
+      }
+    ).isSectionLocked;
+
+    const host: LockHost = { lockedSections: new Set(PIPELINE_LOCKED_SECTIONS) };
+
+    const paths = [
+      "pipeline.ci_timeout",
+      "commands.test",
+      "ui.core.adapter",
+      "lm_studio.model",
+      "ollama.model",
+      "model_routing.mode",
+      "project.number",
+      "pull_request.merge_strategy",
+      "pr.merge_strategy",
+      "batch.max_issues",
+      "enforcement.dependencies.enabled",
+    ];
+
+    it("agrees with isSectionLocked(path, lockedSections) on every path", () => {
+      for (const path of paths) {
+        expect([path, panelIsSectionLocked.call(host, path)]).toEqual([
+          path,
+          isSectionLocked(path, host.lockedSections),
+        ]);
+      }
+    });
+
+    it("locks the pipeline-critical paths and leaves the rest editable", () => {
+      expect(panelIsSectionLocked.call(host, "ui.core.adapter")).toBe(true);
+      expect(panelIsSectionLocked.call(host, "model_routing.mode")).toBe(true);
+      expect(panelIsSectionLocked.call(host, "pr.merge_strategy")).toBe(false);
+      expect(panelIsSectionLocked.call(host, "project.number")).toBe(false);
     });
   });
 });

@@ -103,11 +103,13 @@ When a stage runs through the multi-agent orchestration engine (see
 `WorkflowExecutor` writes one append-only journal per run alongside the context
 files. It is **not** a context handoff file — it is a durable replay log:
 
-- One `JournalRecord` (`{ event, heartbeatMs }`) per `WorkflowEvent` emission, in
-  emission order. `event` is the canonical `schemaVersion: 4` node
-  (`WorkflowRun` / `WorkflowPhase` / `SubAgentNode` / `JudgeVerdict`) verbatim;
-  `heartbeatMs` is a node-level liveness signal so stale-slot recovery can tell a
-  wedged run from one still making progress.
+- One `JournalRecord` (`{ event }`) per `WorkflowEvent` emission, in emission
+  order. `event` is the canonical `schemaVersion: 4` node (`WorkflowRun` /
+  `WorkflowPhase` / `SubAgentNode` / `JudgeVerdict`) verbatim, and it is the
+  record's **only** key — a test pins that exactly. The record also carried a
+  `heartbeatMs` liveness stamp until #475, when it was removed along with its
+  sole reader (`isRunLive`, zero callers); run liveness is answered from the
+  scheduler's runtime registry (ADR 017), never from this file.
 - `resume(runId)` replays the journal to rebuild the node tree, re-emits the
   historical events so a fresh consumer sees the whole run, then re-dispatches
   **only** the not-yet-terminal nodes; completed agents replay their (sanitized)

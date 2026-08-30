@@ -29,16 +29,12 @@ package state
 // walker recurse.
 //
 // It also does not attempt V2Tokens/TokensSchema or V2RunRecord/
-// ExecutionHistoryRunRecordV2Schema: a prerequisite scan (this issue) found
-// those two structs already disagree on THREE fields unrelated to cost_source
-// (HistoryStageTokenUsageSchema declares `model`, `adapter_source`, and
-// `adapter_fallback_chain_used` with no Go writer for any of them — the same
-// bug class #682 fixes, just not in scope for #682 to fix three more times).
-// Wiring this guard onto that pair today would fail on those pre-existing
-// gaps, not on anything this change touches, and codifying it now would ship
-// a permanently-red guard rail — worse than not shipping one. See the
-// stageTokensKnownGaps allowlist on the one place those three DO leak into a
-// pinned pair below.
+// ExecutionHistoryRunRecordV2Schema: a prerequisite scan (#682) found those
+// two structs already disagree on fields unrelated to cost_source. Two of
+// those — `adapter_source` and `adapter_fallback_chain_used` — were deleted
+// from the TS schema by #693, having had neither a writer nor a reader in
+// either language; `model` remains and is justified in the
+// stageTokensKnownGaps allowlist below.
 
 import (
 	"os"
@@ -56,20 +52,26 @@ import (
 const executionHistoryTSSchemaPath = "../../packages/nightgauge-vscode/src/schemas/executionHistory.ts"
 
 // stageTokensKnownGaps lists TS-only HistoryStageTokenUsageSchema fields that
-// predate #682 and are OUT OF SCOPE for it — each one has no writer in either
-// language today (verified: `grep -rn "adapter_source\|adapter_fallback_chain_used"
-// packages/nightgauge-vscode/src` outside the schema file and its tests
-// returns nothing; V2StageTokens has no per-stage Model field either — model
-// attribution lives on V2StageDetail.ModelSelection.Model instead). Do NOT
-// add cost_source-related entries here — that field's parity is the whole
-// point of this test. Shrinking this list by wiring a real Go writer for one
-// of these fields is welcome; growing it to hide an unrelated new drift is
-// exactly what this test exists to prevent, so a new addition needs the same
-// justification these three got.
+// predate #682 and are OUT OF SCOPE for it. It is a HOLDING PEN, not a
+// resting place, and it held three entries. #693 emptied two of them the way
+// the holding-pen comment always intended: by DELETING the
+// declared-and-unused fields (`adapter_source`, `adapter_fallback_chain_used`)
+// rather than inventing a Go writer for them. Neither had a writer OR a
+// reader in either language, so wiring one would have repeated #682's
+// cost_source mistake in reverse.
+//
+// The one survivor is justified inline below: V2StageTokens has no per-stage
+// Model field because model attribution lives on
+// V2StageDetail.ModelSelection.Model instead.
+//
+// Do NOT add cost_source-related entries here — that field's parity is the
+// whole point of this test. Shrinking this list further, by wiring a real Go
+// writer or by deleting a dead field, is welcome; growing it to hide an
+// unrelated new drift is exactly what this test exists to prevent, so a new
+// addition needs the same justification the original three got, with a linked
+// issue.
 var stageTokensKnownGaps = map[string]bool{
-	"model":                       true, // no V2StageTokens field; model_selection.model covers stage-level attribution
-	"adapter_source":              true, // declared, zero writers in Go or TS
-	"adapter_fallback_chain_used": true, // declared, zero writers in Go or TS
+	"model": true, // no V2StageTokens field; model_selection.model covers stage-level attribution
 }
 
 // goJSONFieldNames returns the `json` tag field names (pre-comma-options) of

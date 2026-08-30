@@ -1137,19 +1137,19 @@ trending.
 
 | Level          | Scope                                 | Persistence              |
 | -------------- | ------------------------------------- | ------------------------ |
-| **Per-Stage**  | Input, output, cache tokens per stage | `state.json`             |
-| **Per-Run**    | Accumulated across all stages         | `state.json`             |
+| **Per-Stage**  | Input, output, cache tokens per stage | In memory + run snapshot |
+| **Per-Run**    | Accumulated across all stages         | In memory + run snapshot |
 | **Session**    | Aggregated within VSCode session      | VSCode workspace storage |
 | **Historical** | Last 50 runs with full breakdown      | VSCode workspace storage |
 
 ### Key Components
 
-| Component              | Responsibility                                      | Location                                          |
-| ---------------------- | --------------------------------------------------- | ------------------------------------------------- |
-| `PipelineStateService` | Authoritative state owner, persists to `state.json` | `packages/nightgauge-vscode/src/services/`        |
-| `DashboardState`       | ROI calculations, historical aggregation            | `packages/nightgauge-vscode/src/views/dashboard/` |
-| `TokenParser`          | Extracts usage from Claude CLI stream-json output   | `packages/nightgauge-vscode/src/utils/`           |
-| `TokenTracker`         | Per-stage in-memory tracking during execution       | `packages/nightgauge-sdk/src/tracking/`           |
+| Component              | Responsibility                                           | Location                                          |
+| ---------------------- | -------------------------------------------------------- | ------------------------------------------------- |
+| `PipelineStateService` | In-memory state owner; relays transitions to Go over IPC | `packages/nightgauge-vscode/src/services/`        |
+| `DashboardState`       | ROI calculations, historical aggregation                 | `packages/nightgauge-vscode/src/views/dashboard/` |
+| `TokenParser`          | Extracts usage from Claude CLI stream-json output        | `packages/nightgauge-vscode/src/utils/`           |
+| `TokenTracker`         | Per-stage in-memory tracking during execution            | `packages/nightgauge-sdk/src/tracking/`           |
 
 ### Data Flow
 
@@ -1162,7 +1162,7 @@ TokenAccumulator (sums across messages)
     ↓
 PipelineStateService.updateTokens()
     ↓
-state.json (atomic write)
+in-memory state (_lastState) + IPC relay to the Go binary
     ↓
 onStateChanged event
     ↓
@@ -1298,8 +1298,8 @@ flowchart TB
     end
 
     subgraph PERSIST["State Persistence"]
-        K["state.json — phases[] array per stage"]
-        L["Extension reload → syncFromState()<br/>restores PhaseTreeItem[] from disk"]
+        K["runtime-{issue}-{runId}.json — phases[] array per stage<br/>(written by the Go side)"]
+        L["Extension reload → syncFromState()<br/>restores PhaseTreeItem[] from the run snapshot"]
     end
 
     A --> B --> C --> D
@@ -1517,7 +1517,7 @@ consumers (orchestrators, analytics) can detect the schema change.
 `skipPhase()` unconditionally for every phase in `PHASE_REGISTRY[stage]`.
 `skipPhase` is idempotent — it returns early if the phase already exists with
 any status (complete, running, or skipped). This closes gaps where a phase
-marker was emitted but `startPhase` failed to persist it to state.json.
+marker was emitted but `startPhase` never recorded it.
 
 ---
 
@@ -1559,10 +1559,10 @@ immediately, with IPC as an optional sync mechanism.
 
 Phase progress reaches the dashboard tree view through two separate paths:
 
-| Path            | When Used                   | Mechanism                                                                                                                             |
-| --------------- | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| **Live events** | Stage actively running      | `PipelineStateService` emits `onPhaseStart` / `onPhaseComplete` events → tree item calls `StageTreeItem.setPhases()` in real-time     |
-| **State-sync**  | Extension reload / recovery | `PipelineStateService.getState()` reads `state.json` → `syncFromState()` loads `stageState.phases[]` into `StageTreeItem.setPhases()` |
+| Path            | When Used                   | Mechanism                                                                                                                                                                    |
+| --------------- | --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Live events** | Stage actively running      | `PipelineStateService` emits `onPhaseStart` / `onPhaseComplete` events → tree item calls `StageTreeItem.setPhases()` in real-time                                            |
+| **State-sync**  | Extension reload / recovery | `PipelineStateService.getState()` returns the state rehydrated from the Go runtime snapshot → `syncFromState()` loads `stageState.phases[]` into `StageTreeItem.setPhases()` |
 
 Both paths converge on `StageTreeItem.setPhases()`, so the tree renders
 identically whether phases arrive live or are restored from disk.
@@ -1624,7 +1624,8 @@ Phase names are converted from kebab-case to Title Case for display via
 
 ### Phase State Persistence
 
-Phases persist in `state.json` under `stages[stage].phases[]`:
+Phases live in the pipeline state under `stages[stage].phases[]`, and the Go
+side persists them in `runtime-{issue}-{runId}.json`:
 
 ```json
 {
@@ -1788,9 +1789,9 @@ implemented in `PipelineStateService.validateStagePreconditions()`.
 ### Pipeline State and Transitions
 
 `PipelineStateService` holds pipeline state in memory and relays every
-transition to the Go backend over IPC; its `getStatePath()` composes
-`<root>/.nightgauge/pipeline/state.json`, but nothing in the tree writes that
-file (#427). The durable per-run record is the Go runtime snapshot
+transition to the Go backend over IPC. There is no unified pipeline state file:
+nothing in the tree has ever written one under `.nightgauge/pipeline/` (#427).
+The durable per-run record is the Go runtime snapshot
 `.nightgauge/pipeline/runtime-{issue}-{runId}.json` (with
 `.nightgauge/pipeline/run-state.json` for the workspace-level view), and that is
 what recovery, UI rendering, and analytics read.
@@ -1849,7 +1850,7 @@ what recovery, UI rendering, and analytics read.
 
           ┌───────────────────── at any point ─────────────────────────┐
           │  User cancels  →  abortController.abort() + kill process   │
-          │  Extension crashes  →  state.json persists for recovery     │
+          │  Extension crashes  →  run snapshot persists for recovery   │
           │  Phase timeout  →  PhaseTimeoutManager fires event          │
           └────────────────────────────────────────────────────────────┘
 ```
@@ -1902,11 +1903,12 @@ sidebar tree view or the `nightgauge.stopPipeline` command.
 1. `HeadlessOrchestrator.stop()` is called:
    - `abortController.abort()` signals the running stage to stop
    - `killAllActiveProcesses()` terminates any orphaned skill subprocesses
-2. `stopPipeline` command sets `outcome_type: 'cancelled'` in `state.json`
+2. `stopPipeline` command sets `outcome_type: 'cancelled'` in the pipeline
+   state, which the Go side records in the run's `runtime-{issue}-{runId}.json`
 3. `resetGitHubStatus()` reverts the GitHub Project board Status field back to
    "Ready" (non-blocking — failures are logged but don't prevent UI cleanup)
 
-**After cancellation**, the state file is preserved. The user can resume or
+**After cancellation**, the run's durable record is preserved. The user can resume or
 restart the pipeline using the Resume flow.
 
 **Key components**: `HeadlessOrchestrator.stop()` /

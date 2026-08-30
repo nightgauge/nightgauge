@@ -57,6 +57,19 @@ export {
 } from "./context/ContextManager.js";
 
 // RunState — durable pipeline lifecycle (Issue #3238)
+export {
+  applyDeliverablePolicy,
+  stampPolicyMarker,
+  summarizePolicy,
+  canonicalSchemaVersion,
+  deliverableKindForStage,
+  POLICY_VERSION,
+  POLICY_MARKER_FIELD,
+  type Disposition,
+  type PolicyNote,
+  type PolicyOutcome,
+  type PolicyVerdict,
+} from "./context/deliverablePolicy.js";
 export { RunStateManager, uuidV7, type ResumeDetection } from "./context/RunStateManager.js";
 
 // Run identity — the ONE TypeScript definition of the shape uuidV7 mints, and
@@ -251,18 +264,15 @@ export {
   OrchestrationDisabledError,
   MAX_OUTPUT_REF_BYTES,
   DENY_NATIVE_PREFLIGHT,
-  SYSTEM_CLOCK,
   resolveBackend,
   clampSpecCeiling,
   sanitizeOutputRef,
   replayJournal,
-  isRunLive,
   fitsUnderAbsoluteCeiling,
   createNodeJournalFs,
   type VersionPreflight,
   type WorkflowBackend,
   type JournalFs,
-  type Clock,
   type JournalRecord,
   type WorkflowExecutorDeps,
   type WorkflowExecutionResult,

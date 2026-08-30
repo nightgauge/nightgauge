@@ -326,6 +326,8 @@ def _scan_init(
     ceiling,
     enc,
     tracked,
+    band_floor=None,
+    band_top=None,
 ):
     """Compile per-worker state once, not once per chunk."""
     global _SCAN
@@ -343,6 +345,25 @@ def _scan_init(
         "manifest": manifest_path,
         "ref_exempt": ref_exempt,
         "ceiling": ceiling,
+        # THE CROSSING BAND, `(band_floor, band_top]` (#1080).
+        #
+        # `band_floor` is the CEILING the diff base was measured at: above it is
+        # what the burn-down counted then. `band_top` is the MARK, which is the
+        # largest number this repository has actually issued: at or below it is
+        # what resolves now.
+        #
+        # The two edges are deliberately not the same quantity. Using the
+        # ceiling for both would sweep in the slack window -- numbers between
+        # the mark and the ceiling, which the ratchet stops counting but which
+        # the forge has not issued yet. Those are still dead links, so calling
+        # them "now resolves to unrelated work" is a false report, and it is a
+        # confident one: checked against the live forge, #1201 and #1205 sat in
+        # that window and 404 to this day.
+        #
+        # `None`/equal edges mean the mark did not move and the band is empty,
+        # so the worker scans exactly as it did before -- same reads, same hits.
+        "band_floor": ceiling if band_floor is None else min(band_floor, ceiling),
+        "band_top": 0 if band_top is None else band_top,
         "enc": enc,
         "tracked": tracked,
         "word": re.compile(r"[A-Za-z0-9_.-]+"),
@@ -358,6 +379,7 @@ def _scan_chunk(chunk):
     rule_hits = []
     token_hits = []
     tree_hits = []
+    band_hits = []
     for p in chunk:
         active = [r for r in c["rules"] if not any(matches(p, e) for e in r[2])]
         want_tokens = bool(c["token_hashes"]) and not (
@@ -397,7 +419,12 @@ def _scan_chunk(chunk):
                 continue  # binary or unreadable: not prose, not a citation
             if "#" not in strict:
                 continue  # cheap reject before the line-by-line walk
-            hits = list(_unresolvable_in_text(strict, c["ceiling"]))
+            # Scanned at the BAND FLOOR, which is <= the ceiling, so one pass
+            # yields both populations: above the ceiling is the burn-down, and
+            # inside the band is a crossing candidate (#1080). When the ceiling
+            # did not move, band_floor == ceiling and this is the old scan
+            # exactly -- same reads, same hits, no extra cost.
+            hits = list(_unresolvable_in_text(strict, c["band_floor"]))
             if not hits:
                 continue
             starts = [0]
@@ -405,8 +432,14 @@ def _scan_chunk(chunk):
                 if ch == "\n":
                     starts.append(i + 1)
             for num, token, pos in hits:
-                tree_hits.append((p, bisect.bisect_right(starts, pos), num, token))
-    return rule_hits, token_hits, tree_hits
+                line = bisect.bisect_right(starts, pos)
+                if num > c["ceiling"]:
+                    tree_hits.append((p, line, num, token))
+                elif num <= c["band_top"]:
+                    band_hits.append((p, line, num, token))
+                # else: the slack window. Not counted by the ratchet, not
+                # issued by the forge either -- neither population.
+    return rule_hits, token_hits, tree_hits, band_hits
 
 
 def _scan_jobs(path_count: int) -> int:
@@ -623,25 +656,20 @@ def _file_unresolvable_count(text: str, ceiling: int) -> int:
     return sum(1 for _ in _unresolvable_in_text(text, ceiling))
 
 
-def references_removed_since(base, ceiling, ref_exempt, tree_hits):
-    """How many unresolvable references this tree REMOVED relative to `base`.
+def _changed_sides(base):
+    """`(base_side, cur_side, ok)` -- the paths a diff against `base` touches.
 
-    Returns `(removed, comparable)`; `comparable` is False when git could not
-    be asked, and the caller must then advise nothing.
+    `base_side` is every path whose BASE blob exists (so it can be read at
+    `base`); `cur_side` is every path that still exists here. An untouched file
+    is in neither, which is what makes both callers below read a handful of
+    blobs rather than the tree: it counts identically on both sides and cannot
+    contribute to a difference.
 
-    This is what separates the two reasons the tree-wide count can fall
-    (#1129). A fall is only evidence of CLEANUP if references actually left the
-    tree; it is otherwise erosion -- the ceiling rose over numbers that were
-    already there and were already counted, and the tree did not change at all.
-    Recording an eroded fall as a lower baseline claims a sweep that never
-    happened, and the next branch (measuring at its own, lower ceiling) is then
-    blocked by references it never wrote.
-
-    Both sides are measured at the SAME `ceiling`, which is the whole trick:
-    the difference is then independent of where the ceiling sits, even though
-    each side's absolute count is not. Only files the diff reports as changed
-    can contribute to the difference -- an untouched file counts identically on
-    both sides -- so this reads a handful of blobs, not the tree.
+    Extracted so the count (`references_removed_since`) and the set
+    (`retired_reference_set`) walk the diff the SAME way. Two independent walks
+    of the same `-z` stream is how a rename gets parsed as a removal on one path
+    and not the other, and the two numbers then disagree with no way to tell
+    which is right.
     """
     r = subprocess.run(
         [
@@ -657,7 +685,7 @@ def references_removed_since(base, ceiling, ref_exempt, tree_hits):
         capture_output=True,
     )
     if r.returncode != 0:
-        return 0, False
+        return [], set(), False
     fields = r.stdout.decode("utf-8", "replace").split("\0")
     base_side: list[str] = []
     cur_side: set[str] = set()
@@ -683,19 +711,168 @@ def references_removed_since(base, ceiling, ref_exempt, tree_hits):
                 if status[0] != "D":
                     cur_side.add(path)
     except IndexError:
-        return 0, False  # truncated -z record: refuse to guess
+        return [], set(), False  # truncated -z record: refuse to guess
+    return base_side, cur_side, True
+
+
+def _blob_text(base, path):
+    """The utf-8 text of `path` at `base`, or None when there is none to read."""
+    blob = subprocess.run(["git", "show", f"{base}:{path}"], capture_output=True)
+    if blob.returncode != 0:
+        return None
+    try:
+        return blob.stdout.decode("utf-8")
+    except UnicodeDecodeError:
+        return None  # binary: the tree-wide scan skips these too
+
+
+def baseline_at(base, fallback):
+    """`issue_references.tree_baseline` as recorded at `base`, or `fallback`.
+
+    The advice below is `baseline - removed`, and it has to be measured from the
+    baseline the BASE COMMIT recorded, not the one in this working tree.
+
+    Both operands are otherwise measured against different points and the advice
+    stops being idempotent: lower the manifest to what a run names, re-run, and
+    the next run subtracts the SAME `removed` again from the number just
+    written. Following it twice records a sweep that happened once, which is the
+    precise thing AGENTS.md forbids -- and it is an easy mistake to make,
+    because the second run looks exactly as authoritative as the first.
+
+    Reading it from `base` makes the advice a fixed point: the same branch
+    against the same base names the same number however often it is run.
+    """
+    text = _blob_text(base, str(MANIFEST))
+    if text is None:
+        return fallback
+    try:
+        import yaml  # noqa: PLC0415
+
+        recorded = (yaml.safe_load(text) or {}).get("issue_references", {})
+    except Exception:  # noqa: BLE001 — a manifest we cannot parse is not advice
+        return fallback
+    value = recorded.get("tree_baseline") if isinstance(recorded, dict) else None
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return fallback
+    return value
+
+
+def retired_reference_set(base, ceiling, ref_exempt, tree_hits):
+    """`(path, number)` pairs that left the tree since `base` -- the SET (#1080).
+
+    The companion to `references_removed_since`, which answers the same question
+    as a count. Both are needed and neither substitutes for the other: the
+    ratchet advice needs OCCURRENCES (a file citing one dead number twice owes
+    two), while the report needs identities (naming the same number twice is
+    noise).
+
+    KEYED BY (path, number), NEVER BY LINE. A line-keyed set is rewritten by
+    every unrelated edit above a reference, so the diff of the set becomes
+    unreadable and the retired-vs-crossed classification turns to noise for
+    reasons that have nothing to do with references. The line is a run-time
+    display detail, and `tree_hits` carries it for the references that are still
+    here; a retired reference has no current line to report, which is why the
+    format below names only the path.
+    """
+    base_side, cur_side, comparable = _changed_sides(base)
+    if not comparable:
+        return [], False
+    now = {(h[0], h[2]) for h in tree_hits}
+    retired: set[tuple[str, int]] = set()
+    for path in base_side:
+        if any(matches(path, e) for e in ref_exempt):
+            continue
+        text = _blob_text(base, path)
+        if text is None:
+            continue
+        for num in _file_unresolvable_numbers(text, ceiling):
+            # A renamed file's references are not retired: they are present on
+            # the current side under the NEW path, and `_changed_sides` reports
+            # both. So a pair is only retired when the number is absent from
+            # every current-side path.
+            if not any((c, num) in now for c in cur_side) and (path, num) not in now:
+                retired.add((path, num))
+    return sorted(retired), True
+
+
+def crossed_reference_set(base, band_hits, ref_exempt):
+    """`(path, line, number)` for references the RISING MARK passed over (#1080).
+
+    `band_hits` are the references in `(base_ceiling, ceiling]`: numbers that
+    were above the ceiling at the diff base and are below it now. Two very
+    different things land in that band, and only one of them is a finding:
+
+    * a reference that was ALREADY IN THE FILE at base. It was counted in the
+      burn-down then and is not counted now, and nobody touched it. It did not
+      get fixed -- it stopped 404-ing and started resolving, confidently, to
+      unrelated live work. That is strictly worse than the dead link it was,
+      and it is what makes a falling `tree_baseline` unreadable as progress.
+    * a reference this change WROTE. The number is legal now (it is at or below
+      the ceiling), the author is citing live work on purpose, and reporting it
+      would be pure noise.
+
+    The base blob is what separates them, and it is read only for the handful of
+    paths that have a hit in the band at all -- normally zero, since the band is
+    empty whenever the ceiling did not move.
+    """
+    if not band_hits:
+        return [], True
+    wanted: dict[str, set[int]] = {}
+    for p, _line, num, _tok in band_hits:
+        if any(matches(p, e) for e in ref_exempt):
+            continue
+        wanted.setdefault(p, set()).add(num)
+    at_base: dict[str, set[int]] = {}
+    for p in wanted:
+        text = _blob_text(base, p)
+        if text is None:
+            continue  # not in the base tree: every number in it is newly written
+        at_base[p] = _file_unresolvable_numbers(text, 0)
+    # Keyed by (path, number) like the retired set, with the FIRST line kept for
+    # display. A file citing one crossed number on three lines is one finding
+    # with one fix, and listing it three times only buries the other two.
+    first_line: dict[tuple[str, int], int] = {}
+    for p, line, num, _tok in band_hits:
+        if num not in at_base.get(p, ()):
+            continue
+        key = (p, num)
+        if key not in first_line or line < first_line[key]:
+            first_line[key] = line
+    crossed = sorted((p, first_line[(p, num)], num) for (p, num) in first_line)
+    return crossed, True
+
+
+def references_removed_since(base, ceiling, ref_exempt, tree_hits):
+    """How many unresolvable references this tree REMOVED relative to `base`.
+
+    Returns `(removed, comparable)`; `comparable` is False when git could not
+    be asked, and the caller must then advise nothing.
+
+    This is what separates the two reasons the tree-wide count can fall
+    (#1129). A fall is only evidence of CLEANUP if references actually left the
+    tree; it is otherwise erosion -- the ceiling rose over numbers that were
+    already there and were already counted, and the tree did not change at all.
+    Recording an eroded fall as a lower baseline claims a sweep that never
+    happened, and the next branch (measuring at its own, lower ceiling) is then
+    blocked by references it never wrote.
+
+    Both sides are measured at the SAME `ceiling`, which is the whole trick:
+    the difference is then independent of where the ceiling sits, even though
+    each side's absolute count is not. Only files the diff reports as changed
+    can contribute to the difference -- an untouched file counts identically on
+    both sides -- so this reads a handful of blobs, not the tree.
+    """
+    base_side, cur_side, comparable = _changed_sides(base)
+    if not comparable:
+        return 0, False
 
     at_base = 0
     for path in base_side:
         if any(matches(path, e) for e in ref_exempt):
             continue
-        blob = subprocess.run(["git", "show", f"{base}:{path}"], capture_output=True)
-        if blob.returncode != 0:
+        text = _blob_text(base, path)
+        if text is None:
             continue
-        try:
-            text = blob.stdout.decode("utf-8")
-        except UnicodeDecodeError:
-            continue  # binary: the tree-wide scan skips these too
         at_base += _file_unresolvable_count(text, ceiling)
 
     # The current side is already measured: `tree_hits` is the same corpus,
@@ -815,6 +992,24 @@ def main() -> int:
             "  mark it had to invent. Failing closed.",
         )
     ceiling = mark + slack
+    # The ceiling the DIFF BASE was measured at (#1080). A reference between the
+    # two edges was counted in the burn-down at base and is not counted now, and
+    # that fall is not a fix: the repository issued a number past it, so it
+    # stopped 404-ing and started resolving to unrelated live work.
+    #
+    # Derived from the base commit rather than recorded anywhere, for the reason
+    # #1078 deleted the recorded mark: a snapshot of the set would be one more
+    # integer-shaped artifact to keep current, stale in silence, and wrong in
+    # exactly the situations it exists for. git already holds both sides.
+    #
+    # This is why the report fires where the crossing actually HAPPENS. On a
+    # pull request the base is `origin/main`, whose mark the branch also borrows
+    # (`ceiling_marks` takes the larger), so the two edges coincide and there is
+    # nothing to report -- correctly, because a branch that merges nothing
+    # crosses nothing. On the `push: [main]` run the base is `HEAD^`, the mark
+    # rose by exactly the merge that just landed, and the references it crossed
+    # are named. That is the run that observed 5801 -> 5796 in #1080.
+    base_ceiling = min(derived_high_water(base) + slack, ceiling)
 
     violations: list[str] = []
     tracked = tracked_paths()
@@ -966,11 +1161,14 @@ def main() -> int:
         ceiling,
         _enc,
         tracked_set,
+        base_ceiling,
+        mark,
     )
 
     rule_hits: dict[str, list] = {rid: [] for rid, _p, _e, _b in compiled_rules}
     token_violations: list[str] = []
     tree_hits: list = []
+    band_hits: list = []
 
     jobs = _scan_jobs(len(paths))
     if jobs > 1:
@@ -996,7 +1194,7 @@ def main() -> int:
         _scan_init(*_init_args)
         results = [_scan_chunk(paths)]
 
-    for chunk_rules, chunk_tokens, chunk_tree in results:
+    for chunk_rules, chunk_tokens, chunk_tree, chunk_band in results:
         for rid, hp, hn, snippet in chunk_rules:
             rule_hits[rid].append((hp, hn, snippet))
         for hp, hn in chunk_tokens:
@@ -1007,6 +1205,7 @@ def main() -> int:
                 f"    nightgauge-internal (strategy/) for the plaintext list."
             )
         tree_hits.extend(chunk_tree)
+        band_hits.extend(chunk_band)
 
     # ── 3 (emit). Forbidden content ──────────────────────────────────────────
     for rid, _pattern, _exempt, rule_baseline in compiled_rules:
@@ -1169,17 +1368,30 @@ def main() -> int:
         removed, comparable = references_removed_since(
             base, ceiling, ref_exempt, tree_hits
         )
+        # Subtract from the baseline recorded AT BASE, and never advise a number
+        # above the one already recorded here -- so re-running after taking the
+        # advice names the same value instead of walking the baseline down by
+        # `removed` on every run.
+        anchor = baseline_at(base, tree_baseline) if comparable else tree_baseline
         floor = (
-            max(tree_count, tree_baseline - removed) if comparable else tree_baseline
+            max(tree_count, min(tree_baseline, anchor - removed))
+            if comparable
+            else tree_baseline
         )
         if comparable and removed > 0:
+            done = floor >= tree_baseline
             print(
                 f"  issue references: tree-wide count is {tree_count}, BELOW the recorded "
                 f"baseline of {tree_baseline} ({at_ceiling}).\n"
                 f"    {removed} reference(s) were genuinely removed from the tree since "
                 f"{base_ref} ({base[:12]}), measured on both sides at that same ceiling.\n"
-                f"    Lower `issue_references.tree_baseline` to {floor} in {MANIFEST} "
-                f"so the ratchet holds."
+                + (
+                    f"    `issue_references.tree_baseline` is ALREADY at the attributable "
+                    f"floor of {floor}; the removals are recorded. Change nothing."
+                    if done
+                    else f"    Lower `issue_references.tree_baseline` to {floor} in "
+                    f"{MANIFEST} so the ratchet holds."
+                )
             )
             if floor > tree_count:
                 print(
@@ -1211,6 +1423,54 @@ def main() -> int:
         print(
             f"  issue references: {tree_count} unresolvable reference(s) tree-wide "
             f"across {tree_files} file(s), at the recorded baseline ({at_ceiling})."
+        )
+    # ── Which direction did the number actually move? (#1080) ────────────────
+    # `tree_count` is one scalar over a MOVING threshold, so a fall has two
+    # causes that look identical in it:
+    #
+    #   * a reference RETIRED by an edit -- genuine progress; and
+    #   * a reference CROSSED by the rising mark -- not progress at all. It was
+    #     a dead link and is now a live link to unrelated work, which is the
+    #     exact hazard the rule exists to prevent. The burn-down improves as the
+    #     problem gets worse.
+    #
+    # Both populations are named here, as a REPORT and never a gate. Gating a
+    # crossing would fail the pull request that merely raised the mark -- whose
+    # author introduced nothing and can fix nothing by editing their own diff --
+    # and a gate nobody can satisfy is a gate that gets bypassed. The ratchet on
+    # `tree_count` above is untouched and remains the hard failure.
+    retired, retired_ok = retired_reference_set(base, ceiling, ref_exempt, tree_hits)
+    crossed, _crossed_ok = crossed_reference_set(base, band_hits, ref_exempt)
+    _LIST_CAP = 25
+    if crossed:
+        print(
+            f"  issue references: {len(crossed)} reference(s) CROSSED the ceiling "
+            f"since {base_ref} ({base[:12]}).\n"
+            f"    The mark rose from {base_ceiling - slack} to {mark}; these were above "
+            f"the old ceiling of {base_ceiling} and are at or below the mark now.\n"
+            f"    Nobody edited them. Each one has stopped 404-ing and now resolves, "
+            f"confidently, to UNRELATED live work --\n"
+            f"    which reads as a correct citation and is worse than the dead link it "
+            f"replaced. Reported, never gated (#1080):"
+        )
+        for p, line, num in crossed[:_LIST_CAP]:
+            print(f"    crossed (now resolves to unrelated work): {p}:{line} #{num}")
+        if len(crossed) > _LIST_CAP:
+            print(f"    ... and {len(crossed) - _LIST_CAP} more")
+    if retired:
+        print(
+            f"  issue references: {len(retired)} reference(s) RETIRED by an edit "
+            f"since {base_ref} ({base[:12]}) -- this is the progress kind:"
+        )
+        for p, num in retired[:_LIST_CAP]:
+            print(f"    retired: {p} #{num}")
+        if len(retired) > _LIST_CAP:
+            print(f"    ... and {len(retired) - _LIST_CAP} more")
+    if not retired_ok:
+        print(
+            "  issue references: git would not answer the diff, so retired and crossed\n"
+            "    references could not be told apart. Read any fall in the count as "
+            "unattributed."
         )
     if carried_over:
         print(

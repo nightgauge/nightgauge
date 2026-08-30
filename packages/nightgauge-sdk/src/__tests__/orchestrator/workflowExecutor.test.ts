@@ -15,7 +15,8 @@
  *  (e) quota gating: a large fan-out into an exhausted quota is deferred (#3909),
  *  (f) the absolute ceiling + config caps clamp the spec,
  *  (g) per-node usage is recorded on the TokenTracker, and
- *  (h) node-level liveness keeps a fresh fan-out from being SIGTERM'd.
+ *  (h) a journal record carries EXACTLY the node emission and nothing else
+ *      (#475 removed the never-read `heartbeatMs` liveness stamp).
  */
 
 import { describe, it, expect } from "vitest";
@@ -28,10 +29,8 @@ import {
   clampSpecCeiling,
   sanitizeOutputRef,
   replayJournal,
-  isRunLive,
   fitsUnderAbsoluteCeiling,
   type JournalFs,
-  type Clock,
   type VersionPreflight,
   type WorkflowExecutorDeps,
 } from "../../orchestrator/WorkflowExecutor.js";
@@ -79,11 +78,6 @@ class FakeFs implements JournalFs {
   async readFile(file: string): Promise<string | null> {
     return this.files.get(file) ?? null;
   }
-}
-
-/** A clock returning a fixed (or scripted) ms + ISO. */
-function fakeClock(ms = 1_000_000): Clock {
-  return { now: () => ms, iso: () => new Date(ms).toISOString() };
 }
 
 /** A collecting sink for assertions. */
@@ -182,7 +176,6 @@ function baseDeps(over: Partial<WorkflowExecutorDeps>): WorkflowExecutorDeps {
     config: RESOLVED_ON,
     bindings: passingBindings(),
     fs: new FakeFs(),
-    clock: fakeClock(),
     ...over,
   };
 }
@@ -507,7 +500,11 @@ describe("WorkflowExecutor — durable journal + resume", () => {
     for (const line of lines) {
       const rec = JSON.parse(line);
       expect(rec.event.schemaVersion).toBe(WORKFLOW_SCHEMA_VERSION);
-      expect(typeof rec.heartbeatMs).toBe("number");
+      // A journal record is EXACTLY the node emission — no liveness stamp, no
+      // other side-band key. #475 deleted `heartbeatMs` because its only reader
+      // (`isRunLive`) had zero callers; this assertion is what makes a silent
+      // re-addition fail rather than accumulate unread bytes on every emission.
+      expect(Object.keys(rec)).toEqual(["event"]);
     }
   });
 
@@ -517,8 +514,7 @@ describe("WorkflowExecutor — durable journal + resume", () => {
     // never emitted, then resume.
     const fs = new FakeFs();
     const journalPath = ".nightgauge/pipeline/workflow-r1.jsonl";
-    const hb = 5_000;
-    const rec = (event: WorkflowEvent): string => JSON.stringify({ event, heartbeatMs: hb }) + "\n";
+    const rec = (event: WorkflowEvent): string => JSON.stringify({ event }) + "\n";
     const ts = new Date().toISOString();
     const lines =
       rec({
@@ -595,7 +591,6 @@ describe("WorkflowExecutor — durable journal + resume", () => {
           terminalKind: "success",
           outputRef: "../../etc/passwd",
         },
-        heartbeatMs: 1,
       }) + "\n";
     fs.files.set(journalPath, poisoned);
 
@@ -712,51 +707,61 @@ describe("WorkflowExecutor — token roll-up + liveness", () => {
     }
   });
 
-  it("isRunLive: a fresh heartbeat with running nodes is LIVE (must not be SIGTERM'd)", () => {
+  it("replayJournal: returns latestByNode + terminalNodeIds, and nothing else", () => {
     const ts = new Date().toISOString();
+    const rec = (event: unknown): string => JSON.stringify({ event }) + "\n";
     const raw =
-      JSON.stringify({
-        event: {
-          schemaVersion: WORKFLOW_SCHEMA_VERSION,
-          kind: "agent",
-          nodeId: "agent:r1:0:0",
-          parentId: "run:r1",
-          seq: 1,
-          ts,
-          status: "running",
-          agentId: "a0",
-          provider: "codex",
-          usage: zeroUsage(),
-        },
-        heartbeatMs: 10_000,
-      }) + "\n";
+      rec({
+        schemaVersion: WORKFLOW_SCHEMA_VERSION,
+        kind: "agent",
+        nodeId: "agent:r1:0:0",
+        parentId: "run:r1",
+        seq: 1,
+        ts,
+        status: "running",
+        agentId: "a0",
+        provider: "codex",
+        usage: zeroUsage(),
+      }) +
+      rec({
+        schemaVersion: WORKFLOW_SCHEMA_VERSION,
+        kind: "agent",
+        nodeId: "agent:r1:0:0",
+        parentId: "run:r1",
+        seq: 2,
+        ts,
+        status: "succeeded",
+        agentId: "a0",
+        provider: "codex",
+        usage: usage(),
+        terminalKind: "success",
+      }) +
+      rec({
+        schemaVersion: WORKFLOW_SCHEMA_VERSION,
+        kind: "agent",
+        nodeId: "agent:r1:0:1",
+        parentId: "run:r1",
+        seq: 3,
+        ts,
+        status: "running",
+        agentId: "a1",
+        provider: "codex",
+        usage: zeroUsage(),
+      }) +
+      "{ torn final line\n";
 
-    // now=10_500, staleAfter=1_000 → age 500ms, one running node → LIVE.
-    expect(isRunLive(raw, 10_500, 1_000)).toMatchObject({ live: true, runningNodeCount: 1 });
-    // now far ahead → stale → NOT live even though a node is "running".
-    expect(isRunLive(raw, 100_000, 1_000).live).toBe(false);
-  });
+    const out = replayJournal(raw);
 
-  it("isRunLive: a completed run (no running nodes) is NOT live", () => {
-    const ts = new Date().toISOString();
-    const raw =
-      JSON.stringify({
-        event: {
-          schemaVersion: WORKFLOW_SCHEMA_VERSION,
-          kind: "agent",
-          nodeId: "agent:r1:0:0",
-          parentId: "run:r1",
-          seq: 2,
-          ts,
-          status: "succeeded",
-          agentId: "a0",
-          provider: "codex",
-          usage: usage(),
-          terminalKind: "success",
-        },
-        heartbeatMs: 10_000,
-      }) + "\n";
-    expect(isRunLive(raw, 10_100, 1_000).live).toBe(false);
+    // Last write wins per node: a0's seq-2 terminal supersedes its seq-1 running.
+    expect(out.latestByNode.get("agent:r1:0:0")?.seq).toBe(2);
+    expect(out.latestByNode.get("agent:r1:0:1")?.seq).toBe(3);
+    // Only the node that reached a terminal state is skipped on resume.
+    expect([...out.terminalNodeIds]).toEqual(["agent:r1:0:0"]);
+    // The torn line was skipped, not thrown on.
+    expect(out.latestByNode.size).toBe(2);
+    // The replay result carries NO liveness field — #475 removed the heartbeat
+    // and its `latestHeartbeatMs` accumulator along with their only consumer.
+    expect(Object.keys(out).sort()).toEqual(["latestByNode", "terminalNodeIds"]);
   });
 });
 

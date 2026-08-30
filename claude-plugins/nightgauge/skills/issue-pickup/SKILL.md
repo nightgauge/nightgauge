@@ -217,8 +217,8 @@ explicitly requested with `-i` or `--interactive`.
 printf '<!-- phase:start name="signal-stage-start" index=2 total=14 stage="issue-pickup" -->\n'
 ```
 
-Signal the stage start in state.json (runs after issue selection so
-`$ISSUE_NUMBER` is set).
+Signal the stage start by moving the issue's board status to `in-progress`
+(runs after issue selection so `$ISSUE_NUMBER` is set).
 
 > **Read `skills/nightgauge-issue-pickup/_includes/issue-selection-and-gates.md` now and follow its instructions before continuing this phase.**
 

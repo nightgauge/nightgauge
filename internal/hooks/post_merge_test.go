@@ -32,6 +32,7 @@ type mockEpicAutoCloser struct {
 		repo          string
 		epicNumber    int
 		projectNumber int
+		ref           gh.EpicRef
 	}
 
 	orphanResult     *gh.OrphanCloseResult
@@ -40,11 +41,12 @@ type mockEpicAutoCloser struct {
 	orphanCalledWith int
 }
 
-func (m *mockEpicAutoCloser) AutoCloseSingle(ctx context.Context, owner, repo string, epicNumber, projectNumber int) (*gh.AutoCloseSingleResult, error) {
+func (m *mockEpicAutoCloser) AutoCloseSingle(ctx context.Context, ref gh.EpicRef, projectNumber int) (*gh.AutoCloseSingleResult, error) {
 	m.called = true
-	m.calledWith.owner = owner
-	m.calledWith.repo = repo
-	m.calledWith.epicNumber = epicNumber
+	m.calledWith.ref = ref
+	m.calledWith.owner = ref.Owner
+	m.calledWith.repo = ref.Repo
+	m.calledWith.epicNumber = ref.Number
 	m.calledWith.projectNumber = projectNumber
 	return m.result, m.err
 }

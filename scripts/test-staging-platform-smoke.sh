@@ -439,6 +439,50 @@ check "the integrity row names every key the empty body is missing" "$(contains 
 
 stop_server
 
+# --- Scenario 11: the workflow has no `schedule:` trigger (#1087) -----------
+# The daily cron failed 9/9 scheduled runs (08-20..08-28) at the credential
+# guard, because neither vars.STAGING_PLATFORM_BASE_URL nor
+# secrets.STAGING_SESSION_TOKEN is provisioned on this repository. A scheduled
+# run attaches its check-run to `main`'s HEAD, so it also made the post-merge
+# `check-runs` query AGENTS.md mandates report a failure against unrelated
+# merges.
+#
+# This asserts the trigger set directly, on the parsed YAML rather than on a
+# grep of the file (the re-enable instructions live in a COMMENT that contains
+# the word `schedule`, and a grep cannot tell a comment from a trigger). It is
+# deliberately NOT an assertion about the guard: scenario 3 above still proves
+# the job fails rather than skips on a missing credential, and that behaviour is
+# unchanged. Re-adding the cron makes this go red.
+WF=".github/workflows/staging-platform-smoke.yml"
+TRIGGERS="$(python3 - "$WF" <<'PYEOF'
+import sys, json
+
+# Stdlib-only: no PyYAML on a bare runner. `on:` is a top-level mapping whose
+# keys are the trigger names; take the keys of that block, ignoring comments.
+lines = open(sys.argv[1], encoding="utf-8").read().splitlines()
+triggers, inside = [], False
+for line in lines:
+    stripped = line.split("#", 1)[0].rstrip()
+    if not stripped:
+        continue
+    if not line.startswith((" ", "\t")):
+        inside = stripped.rstrip(":") in ("on", '"on"', "'on'") and stripped.endswith(":")
+        continue
+    if inside and len(line) - len(line.lstrip()) == 2:
+        key = stripped.strip().split(":", 1)[0].strip()
+        if key:
+            triggers.append(key)
+print(" ".join(triggers))
+PYEOF
+)"
+
+check "the smoke workflow still has a workflow_dispatch trigger" \
+  "$(printf '%s' "$TRIGGERS" | grep -qw workflow_dispatch && echo 0 || echo 1)"
+check "the smoke workflow has NO schedule trigger (#1087)" \
+  "$(printf '%s' "$TRIGGERS" | grep -qw schedule && echo 1 || echo 0)"
+check "the removed schedule says what re-enables it" \
+  "$(contains "$WF" "RE-ENABLE by restoring the block below" && echo 0 || echo 1)"
+
 echo ""
 echo "=== $PASS passed, $FAIL failed ==="
 [ "$FAIL" -eq 0 ]

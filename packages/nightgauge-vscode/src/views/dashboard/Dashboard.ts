@@ -2719,23 +2719,10 @@ export class Dashboard implements vscode.Disposable {
           title: currentRun.title,
         };
 
-        // Try to read labels from pipeline state file
-        try {
-          const fs = await import("node:fs/promises");
-          const path = await import("node:path");
-          const workspaceRoot = (await import("vscode")).workspace.workspaceFolders?.[0]?.uri
-            .fsPath;
-          if (workspaceRoot) {
-            const statePath = path.join(workspaceRoot, ".nightgauge", "pipeline", "state.json");
-            const content = await fs.readFile(statePath, "utf-8");
-            const state = JSON.parse(content);
-            if (state.labels && Array.isArray(state.labels)) {
-              metadata.labels = state.labels;
-            }
-          }
-        } catch {
-          // State file not available - use empty labels
-        }
+        // `metadata.labels` stays empty. Until #471 it was populated from the
+        // writer-less pipeline state file, so the read always threw and the
+        // catch always left labels `[]`. This is the same behaviour with the
+        // dead read removed, not a regression.
 
         const routing = this.state.getRouting();
         const skipStages = routing?.skippedStages ?? [];

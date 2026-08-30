@@ -28,7 +28,7 @@ vi.mock("vscode", () => ({
 }));
 
 /**
- * Create a mock pipeline state.json content for testing
+ * Create a mock pipeline state-42.json content for testing
  */
 function createMockStateJson(overrides: Record<string, unknown> = {}): string {
   const state = {
@@ -163,8 +163,8 @@ describe("DashboardState - Backfill from Pipeline Artifacts", () => {
     vi.useRealTimers();
   });
 
-  it("should import a completed pipeline run from state.json", async () => {
-    vi.mocked(fs.readdir).mockResolvedValue(["state.json"] as any);
+  it("should import a completed pipeline run from state-42.json", async () => {
+    vi.mocked(fs.readdir).mockResolvedValue(["state-42.json"] as any);
     vi.mocked(fs.readFile).mockResolvedValue(createMockStateJson());
 
     const state = new DashboardState(workspaceState, workspaceRoot);
@@ -188,7 +188,7 @@ describe("DashboardState - Backfill from Pipeline Artifacts", () => {
   });
 
   it("should not re-import runs already in history", async () => {
-    vi.mocked(fs.readdir).mockResolvedValue(["state.json"] as any);
+    vi.mocked(fs.readdir).mockResolvedValue(["state-42.json"] as any);
     vi.mocked(fs.readFile).mockResolvedValue(createMockStateJson());
 
     const state = new DashboardState(workspaceState, workspaceRoot);
@@ -217,7 +217,7 @@ describe("DashboardState - Backfill from Pipeline Artifacts", () => {
       },
     });
 
-    vi.mocked(fs.readdir).mockResolvedValue(["state.json"] as any);
+    vi.mocked(fs.readdir).mockResolvedValue(["state-42.json"] as any);
     vi.mocked(fs.readFile).mockResolvedValue(pendingState);
 
     const state = new DashboardState(workspaceState, workspaceRoot);
@@ -254,7 +254,7 @@ describe("DashboardState - Backfill from Pipeline Artifacts", () => {
       },
     });
 
-    vi.mocked(fs.readdir).mockResolvedValue(["state.json"] as any);
+    vi.mocked(fs.readdir).mockResolvedValue(["state-42.json"] as any);
     vi.mocked(fs.readFile).mockResolvedValue(failedState);
 
     const state = new DashboardState(workspaceState, workspaceRoot);
@@ -266,7 +266,7 @@ describe("DashboardState - Backfill from Pipeline Artifacts", () => {
   });
 
   it("should calculate ROI metrics for imported runs", async () => {
-    vi.mocked(fs.readdir).mockResolvedValue(["state.json"] as any);
+    vi.mocked(fs.readdir).mockResolvedValue(["state-42.json"] as any);
     vi.mocked(fs.readFile).mockResolvedValue(createMockStateJson());
 
     const state = new DashboardState(workspaceState, workspaceRoot);
@@ -290,7 +290,7 @@ describe("DashboardState - Backfill from Pipeline Artifacts", () => {
   });
 
   it("should skip corrupted state files without failing", async () => {
-    vi.mocked(fs.readdir).mockResolvedValue(["state.json"] as any);
+    vi.mocked(fs.readdir).mockResolvedValue(["state-42.json"] as any);
     vi.mocked(fs.readFile).mockResolvedValue("{ invalid json !!!");
 
     const state = new DashboardState(workspaceState, workspaceRoot);
@@ -301,13 +301,16 @@ describe("DashboardState - Backfill from Pipeline Artifacts", () => {
   });
 
   it("should skip .corrupt backup files", async () => {
-    vi.mocked(fs.readdir).mockResolvedValue(["state.json", "state.json.corrupt-2026-02-10"] as any);
+    vi.mocked(fs.readdir).mockResolvedValue([
+      "state-42.json",
+      "state-42.json.corrupt-2026-02-10",
+    ] as any);
     vi.mocked(fs.readFile).mockResolvedValue(createMockStateJson());
 
     const state = new DashboardState(workspaceState, workspaceRoot);
     const imported = await state.backfillFromPipelineArtifacts();
 
-    // Should only process state.json, not the corrupt backup
+    // Should only process state-42.json, not the corrupt backup
     expect(imported).toBe(1);
   });
 
@@ -319,7 +322,7 @@ describe("DashboardState - Backfill from Pipeline Artifacts", () => {
   });
 
   it("should extract per-stage token usage from pipeline state", async () => {
-    vi.mocked(fs.readdir).mockResolvedValue(["state.json"] as any);
+    vi.mocked(fs.readdir).mockResolvedValue(["state-42.json"] as any);
     vi.mocked(fs.readFile).mockResolvedValue(createMockStateJson());
 
     const state = new DashboardState(workspaceState, workspaceRoot);
@@ -334,7 +337,7 @@ describe("DashboardState - Backfill from Pipeline Artifacts", () => {
   });
 
   it("should persist imported history to workspace storage", async () => {
-    vi.mocked(fs.readdir).mockResolvedValue(["state.json"] as any);
+    vi.mocked(fs.readdir).mockResolvedValue(["state-42.json"] as any);
     vi.mocked(fs.readFile).mockResolvedValue(createMockStateJson());
 
     const state = new DashboardState(workspaceState, workspaceRoot);
@@ -349,7 +352,7 @@ describe("DashboardState - Backfill from Pipeline Artifacts", () => {
   // In-progress run import tests (Issue #639)
   // =========================================================================
 
-  it("should import an in-progress state.json with running stages but no complete stages", async () => {
+  it("should import an in-progress state-42.json with running stages but no complete stages", async () => {
     const inProgressState = createMockStateJson({
       issue_number: 99,
       title: "In-progress feature",
@@ -375,7 +378,7 @@ describe("DashboardState - Backfill from Pipeline Artifacts", () => {
       },
     });
 
-    vi.mocked(fs.readdir).mockResolvedValue(["state.json"] as any);
+    vi.mocked(fs.readdir).mockResolvedValue(["state-42.json"] as any);
     vi.mocked(fs.readFile).mockResolvedValue(inProgressState);
 
     const state = new DashboardState(workspaceState, workspaceRoot);
@@ -390,7 +393,7 @@ describe("DashboardState - Backfill from Pipeline Artifacts", () => {
     expect(run.status).toBe("running");
   });
 
-  it("should import a state.json with one complete and one running stage", async () => {
+  it("should import a state-42.json with one complete and one running stage", async () => {
     const mixedState = createMockStateJson({
       issue_number: 100,
       title: "Partially complete feature",
@@ -436,7 +439,7 @@ describe("DashboardState - Backfill from Pipeline Artifacts", () => {
       },
     });
 
-    vi.mocked(fs.readdir).mockResolvedValue(["state.json"] as any);
+    vi.mocked(fs.readdir).mockResolvedValue(["state-42.json"] as any);
     vi.mocked(fs.readFile).mockResolvedValue(mixedState);
 
     const state = new DashboardState(workspaceState, workspaceRoot);
@@ -464,7 +467,7 @@ describe("DashboardState - Backfill from Pipeline Artifacts", () => {
     expect(planningStage?.status).toBe("running");
   });
 
-  it("should not import a state.json matching the current active run issue number and startedAt", async () => {
+  it("should not import a state-42.json matching the current active run issue number and startedAt", async () => {
     // Use the same timestamp as the fake system time (what startRun will use)
     const activeIssueState = createMockStateJson({
       issue_number: 55,
@@ -484,7 +487,7 @@ describe("DashboardState - Backfill from Pipeline Artifacts", () => {
       },
     });
 
-    vi.mocked(fs.readdir).mockResolvedValue(["state.json"] as any);
+    vi.mocked(fs.readdir).mockResolvedValue(["state-42.json"] as any);
     vi.mocked(fs.readFile).mockResolvedValue(activeIssueState);
 
     const state = new DashboardState(workspaceState, workspaceRoot);
@@ -508,7 +511,7 @@ describe("DashboardState - Backfill from Pipeline Artifacts", () => {
       started_at: "2026-02-09T10:00:00.000Z",
     });
 
-    vi.mocked(fs.readdir).mockResolvedValue(["state.json"] as any);
+    vi.mocked(fs.readdir).mockResolvedValue(["state-42.json"] as any);
     vi.mocked(fs.readFile).mockResolvedValue(pastRunState);
 
     const state = new DashboardState(workspaceState, workspaceRoot);
@@ -703,13 +706,13 @@ describe("DashboardState - Backfill from JSONL History", () => {
     expect(state.getHistory()).toHaveLength(2);
   });
 
-  it("should deduplicate between state.json and JSONL records", async () => {
+  it("should deduplicate between state-42.json and JSONL records", async () => {
     vi.mocked(fs.readdir).mockImplementation(async (dirPath) => {
       const dir = dirPath.toString();
       if (dir.endsWith("history")) return ["2026-02-13.jsonl"] as any;
-      return ["state.json"] as any;
+      return ["state-42.json"] as any;
     });
-    // Both state.json and JSONL have issue #42 with matching started_at
+    // Both state-42.json and JSONL have issue #42 with matching started_at
     vi.mocked(fs.readFile).mockImplementation(async (filePath) => {
       const p = filePath.toString();
       if (p.endsWith(".jsonl")) {
@@ -724,7 +727,7 @@ describe("DashboardState - Backfill from JSONL History", () => {
     const state = new DashboardState(workspaceState, workspaceRoot);
     const imported = await state.backfillFromPipelineArtifacts();
 
-    // Should only import once (state.json is processed first)
+    // Should only import once (state-42.json is processed first)
     expect(imported).toBe(1);
     expect(state.getHistory()).toHaveLength(1);
   });
@@ -812,14 +815,14 @@ describe("DashboardState - Backfill from JSONL History", () => {
       if (dir.endsWith("history")) {
         throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
       }
-      return ["state.json"] as any;
+      return ["state-42.json"] as any;
     });
     vi.mocked(fs.readFile).mockResolvedValue(createMockStateJson());
 
     const state = new DashboardState(workspaceState, workspaceRoot);
     const imported = await state.backfillFromPipelineArtifacts();
 
-    // Should still import from state.json
+    // Should still import from state-42.json
     expect(imported).toBe(1);
   });
 
@@ -881,11 +884,11 @@ describe("DashboardState - Rescrub (Clear and Rebuild)", () => {
   });
 
   it("should clear existing history when rescrub is true", async () => {
-    // First, populate history with a state.json run
+    // First, populate history with a state-42.json run
     vi.mocked(fs.readdir).mockImplementation(async (dirPath) => {
       const dir = dirPath.toString();
       if (dir.endsWith("history")) return [] as any;
-      return ["state.json"] as any;
+      return ["state-42.json"] as any;
     });
     vi.mocked(fs.readFile).mockResolvedValue(createMockStateJson());
 
@@ -897,7 +900,7 @@ describe("DashboardState - Rescrub (Clear and Rebuild)", () => {
     vi.mocked(fs.readdir).mockImplementation(async (dirPath) => {
       const dir = dirPath.toString();
       if (dir.endsWith("history")) return ["2026-02-13.jsonl"] as any;
-      return [] as any; // No more state.json
+      return [] as any; // No more state-42.json
     });
     vi.mocked(fs.readFile).mockResolvedValue(
       createMockJsonlRecord({ issue_number: 200, title: "New run" })
@@ -909,7 +912,7 @@ describe("DashboardState - Rescrub (Clear and Rebuild)", () => {
 
     expect(imported).toBe(1);
     expect(state.getHistory()).toHaveLength(1);
-    // Should be the new JSONL run, not the old state.json run
+    // Should be the new JSONL run, not the old state-42.json run
     expect(state.getHistory()[0].issueNumber).toBe(200);
   });
 
@@ -917,7 +920,7 @@ describe("DashboardState - Rescrub (Clear and Rebuild)", () => {
     vi.mocked(fs.readdir).mockImplementation(async (dirPath) => {
       const dir = dirPath.toString();
       if (dir.endsWith("history")) return [] as any;
-      return ["state.json"] as any;
+      return ["state-42.json"] as any;
     });
     vi.mocked(fs.readFile).mockResolvedValue(createMockStateJson());
 

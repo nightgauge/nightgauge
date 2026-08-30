@@ -146,14 +146,11 @@ func TestClassifyTerminalKind(t *testing.T) {
 		{"hard_cap", "pr-create hard cap exceeded", TerminalKindStallKill},
 		// Issue #3207 — canonical IPC markers from PipelineBridge.
 		{"ipc_stall_marker", "[stall-killed] feature-dev terminated", TerminalKindStallKill},
-		// #252 — zombie-run guards: reload-swept orphan slots and the
-		// first-output watchdog both classify as transient stall (retry with
-		// backoff, no lifetime-cap increment).
-		{
-			"stale_slot_orphan_marker",
-			`[stale-slot-orphan] process not running after extension reload; stage was stuck in "running" (PID 12168 exited)`,
-			TerminalKindStallKill,
-		},
+		// #252 — zombie-run guard: the first-output watchdog classifies as a
+		// transient stall (retry with backoff, no lifetime-cap increment).
+		// This is the row's ONLY clause since #470 retired its sibling (whose
+		// producer #427 had deleted), so this case is what pins the row's
+		// survival. Assert the kind explicitly.
 		{
 			"stage_no_output_timeout_marker",
 			"[stage-no-output-timeout] Stage feature-dev produced no output within 10 minutes of start — presumed wedged during startup (pre-spawn await or silent session). Failing the stage so the run can terminate and retry. (#252)",

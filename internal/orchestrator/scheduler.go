@@ -8780,6 +8780,13 @@ func (s *Scheduler) tryDeterministicPRCreate(
 	// (line ~2874) and the post-condition gates already use for the same reason.
 	stageWS := stageWorkspace(runtime, workspaceRoot)
 	detResult, detErr := s.prCreateRunner.Run(ctx, item.Number, item.Repo, stageWS)
+	// The commit owner (#1179) runs inside the runner, before its create/punt
+	// decision, so its outcome is reported on EVERY path — including the punt
+	// that the trivial route takes when routing skipped feature-validate.
+	if detResult.CommitReason != "" {
+		log.Printf("#%d: pr-create commit owner: %s%s",
+			item.Number, detResult.CommitReason, commitSHASuffix(detResult.CommitSHA))
+	}
 	if detErr == nil && detResult.Path == pmstages.CreatePathPunt && ReasonIndicatesRateLimit(detResult.Reason) {
 		// Rate-limit punt → defer, do NOT run the LLM path (#3976). Leave
 		// execution_path unset; the post-cooldown retry records it accurately.
@@ -8802,11 +8809,14 @@ func (s *Scheduler) tryDeterministicPRCreate(
 				Stage:       string(stage),
 				Timestamp:   time.Now(),
 				Metadata: map[string]interface{}{
-					"path":        string(detResult.Path),
-					"pr_number":   detResult.PRNumber,
-					"pr_url":      detResult.PRURL,
-					"reason":      detResult.Reason,
-					"duration_ms": detResult.DurationMs,
+					"path":         string(detResult.Path),
+					"pr_number":    detResult.PRNumber,
+					"pr_url":       detResult.PRURL,
+					"reason":       detResult.Reason,
+					"duration_ms":  detResult.DurationMs,
+					"commit_owner": detResult.CommitReason,
+					"commit_sha":   detResult.CommitSHA,
+					"commit_made":  detResult.CommitPerformed,
 				},
 				SchemaVersion: "1",
 			})
@@ -8827,6 +8837,15 @@ func (s *Scheduler) tryDeterministicPRCreate(
 	runtime.RecordStagePuntReason(stage, puntReason)
 	s.emitStagePunt(ctx, runtime, stage, item.Number, puntReason)
 	return false, false
+}
+
+// commitSHASuffix renders " (<sha>)" for a non-empty commit SHA, so the
+// commit-owner log line reads the same whether or not the SHA was resolvable.
+func commitSHASuffix(sha string) string {
+	if sha == "" {
+		return ""
+	}
+	return " (" + sha + ")"
 }
 
 // emitStagePunt emits the stage_punt telemetry event recording that a

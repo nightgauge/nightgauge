@@ -21,7 +21,6 @@ import {
   HistoryStageDetailSchema,
   StageGateResultSchema,
 } from "../../src/schemas/executionHistory";
-import { PipelineStateSchema } from "../../src/schemas/pipelineState";
 import { MODEL_SELECTION_SOURCES } from "@nightgauge/sdk";
 
 describe("ExecutionHistory Schemas", () => {
@@ -913,76 +912,6 @@ describe("ExecutionHistory Schemas", () => {
       if (result.success) {
         expect(result.data.cache_hit_rate).toBe(0.75);
       }
-    });
-  });
-
-  describe("PipelineStateSchema outcome_type (Issue #1005)", () => {
-    const validState = {
-      schema_version: "1.0" as const,
-      issue_number: 42,
-      title: "Test issue",
-      branch: "feat/42-test",
-      base_branch: "main",
-      started_at: "2026-02-19T10:00:00.000Z",
-      updated_at: "2026-02-19T10:30:00.000Z",
-      execution_mode: "automatic" as const,
-      paused: false,
-      stages: {
-        "pipeline-start": { status: "complete" as const },
-        "issue-pickup": { status: "complete" as const },
-        "feature-dev": { status: "complete" as const },
-        "pipeline-finish": { status: "complete" as const },
-      },
-      tokens: {
-        total_input: 10000,
-        total_output: 5000,
-        total_cache_read: 2000,
-        total_cache_creation: 1000,
-        estimated_cost_usd: 0.1,
-      },
-    };
-
-    it("should accept state without outcome_type (backward compat)", () => {
-      const result = PipelineStateSchema.safeParse(validState);
-      expect(result.success).toBe(true);
-    });
-
-    it("should accept state with outcome_type productive", () => {
-      const result = PipelineStateSchema.safeParse({
-        ...validState,
-        outcome_type: "productive",
-      });
-      expect(result.success).toBe(true);
-      if (result.success) {
-        expect(result.data.outcome_type).toBe("productive");
-      }
-    });
-
-    it("should accept all outcome_type variants", () => {
-      for (const ot of ["productive", "verify-and-close", "already-resolved"] as const) {
-        const result = PipelineStateSchema.safeParse({
-          ...validState,
-          outcome_type: ot,
-        });
-        expect(result.success).toBe(true);
-      }
-    });
-
-    it("should reject invalid outcome_type value", () => {
-      const result = PipelineStateSchema.safeParse({
-        ...validState,
-        outcome_type: "invalid",
-      });
-      expect(result.success).toBe(false);
-    });
-
-    it("should preserve outcome_type through a successful parse", () => {
-      const result = PipelineStateSchema.safeParse({
-        ...validState,
-        outcome_type: "verify-and-close",
-      });
-      expect(result.success).toBe(true);
-      expect(result.data?.outcome_type).toBe("verify-and-close");
     });
   });
 

@@ -85,13 +85,10 @@ const SKIP_CASES: { text: string; kind: string; branch: string }[] = [
   },
   // WIDENED vs the pre-#306 regexes, deliberately. main's isStallKill matched
   // `[stall-killed]`/`stall idle threshold`/`exceeded stage_hard_cap` and none
-  // of these, so a zombie-run guard halted the queue; the table routes all three
+  // of these, so a zombie-run guard halted the queue; the table routes them
   // to stall_kill, which is the recovery they already got from the Go side.
-  {
-    text: "[stale-slot-orphan] reload swept a run whose process died",
-    kind: "stall_kill",
-    branch: "transient stall (widened: #252 zombie-run guard)",
-  },
+  // (A second zombie-run fixture sat here until #470 retired its table clause —
+  // #427 had already deleted that marker's only producer.)
   {
     text: "[stage-no-output-timeout] feature-dev produced no session output",
     kind: "stall_kill",

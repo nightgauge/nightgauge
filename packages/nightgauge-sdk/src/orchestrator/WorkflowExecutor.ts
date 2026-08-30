@@ -30,9 +30,8 @@
  *     emission) under `.nightgauge/pipeline/workflow-{runId}.jsonl` so a
  *     crashed/killed run can `resume(runId)`: the journal is replayed to rebuild
  *     the node tree and only pending/running nodes are re-dispatched. Completed
- *     nodes replay their `outputRef` from disk. A node-level liveness heartbeat
- *     lets stale-slot recovery distinguish a wedged run from one still making
- *     progress.
+ *     nodes replay their `outputRef` from disk. Replay + re-dispatch is the
+ *     journal's whole contract — it carries no liveness signal (#475).
  *
  * SECURITY (see docs/security/WORKFLOW_FANOUT_SECURITY.md — F-series):
  *  - The hard process/concurrency ceiling is a SAFETY control, never a budget
@@ -122,26 +121,19 @@ export interface JournalFs {
   readFile(file: string): Promise<string | null>;
 }
 
-/** A monotonic clock seam (ms + ISO) so tests control time and heartbeats. */
-export interface Clock {
-  /** Wall-clock ms (for heartbeat freshness). */
-  now(): number;
-  /** ISO 8601 timestamp (for event ts). */
-  iso(): string;
-}
-
-/** The default clock — real wall clock. */
-export const SYSTEM_CLOCK: Clock = {
-  now: () => Date.now(),
-  iso: () => new Date().toISOString(),
-};
-
-/** One durable journal record: a node emission plus a liveness heartbeat. */
+/**
+ * One durable journal record: exactly one node emission, nothing else.
+ *
+ * It carried a `heartbeatMs` liveness stamp until #475. Nothing ever read it:
+ * its only consumer was `isRunLive`, which was exported from the SDK barrel
+ * with zero in-tree callers and justified by a "stale-slot recovery" sweep that
+ * was deleted by #427 and never existed on the SDK side at all. Under the
+ * no-dead-paths doctrine the field went with its reader rather than waiting for
+ * a consumer that was never coming.
+ */
 export interface JournalRecord {
   /** The node emission, verbatim, so the tree replays exactly. */
   event: WorkflowEvent;
-  /** Wall-clock ms when this record was written — the node-level heartbeat. */
-  heartbeatMs: number;
 }
 
 /** Everything the executor needs to run, with every side-effect seam injected. */
@@ -165,8 +157,6 @@ export interface WorkflowExecutorDeps {
   versionPreflight?: VersionPreflight;
   /** Filesystem seam for the durable journal. */
   fs: JournalFs;
-  /** Clock seam (ms + ISO). Defaults to the system clock. */
-  clock?: Clock;
   /** Base dir for the journal. Defaults to `.nightgauge/pipeline`. */
   journalDir?: string;
 }
@@ -272,10 +262,10 @@ type TerminalUsageNode = SubAgentNode | JudgeVerdict;
 
 /**
  * A sink that wraps a downstream sink and ALSO mirrors every emission to the
- * durable journal (with a heartbeat), rolls per-node usage into a budget
- * accumulator, and records per-node usage on a `TokenTracker`. It is the
- * executor's single write boundary: both backends emit through it, so journal +
- * heartbeat + cost roll-up happen identically regardless of which backend ran.
+ * durable journal, rolls per-node usage into a budget accumulator, and records
+ * per-node usage on a `TokenTracker`. It is the executor's single write
+ * boundary: both backends emit through it, so the journal and the cost roll-up
+ * happen identically regardless of which backend ran.
  */
 class JournalingSink implements WorkflowEventSink {
   private pending: Promise<void> = Promise.resolve();
@@ -284,7 +274,6 @@ class JournalingSink implements WorkflowEventSink {
     private readonly downstream: WorkflowEventSink,
     private readonly fs: JournalFs,
     private readonly journalFile: string,
-    private readonly clock: Clock,
     private readonly onTerminalUsage?: (event: TerminalUsageNode) => void
   ) {}
 
@@ -300,7 +289,7 @@ class JournalingSink implements WorkflowEventSink {
       this.onTerminalUsage?.(event);
     }
 
-    const record: JournalRecord = { event, heartbeatMs: this.clock.now() };
+    const record: JournalRecord = { event };
     const line = JSON.stringify(record) + "\n";
     this.pending = this.pending.then(() => this.fs.appendFile(this.journalFile, line));
   }
@@ -324,7 +313,6 @@ export class WorkflowExecutor {
   private readonly quotaProvider?: QuotaStateProvider;
   private readonly versionPreflight: VersionPreflight;
   private readonly fs: JournalFs;
-  private readonly clock: Clock;
   private readonly journalDir: string;
 
   constructor(deps: WorkflowExecutorDeps) {
@@ -335,7 +323,6 @@ export class WorkflowExecutor {
     this.quotaProvider = deps.quotaProvider;
     this.versionPreflight = deps.versionPreflight ?? DENY_NATIVE_PREFLIGHT;
     this.fs = deps.fs;
-    this.clock = deps.clock ?? SYSTEM_CLOCK;
     this.journalDir = deps.journalDir ?? DEFAULT_JOURNAL_DIR;
   }
 
@@ -502,7 +489,7 @@ export class WorkflowExecutor {
     let accruedCostUsd = 0;
     let budgetStopped = false;
 
-    const journaling = new JournalingSink(sink, this.fs, journalFile, this.clock, (event) => {
+    const journaling = new JournalingSink(sink, this.fs, journalFile, (event) => {
       accruedCostUsd += event.usage.costUsd;
       this.tokenTracker?.recordWorkflowNode({
         nodeId: event.nodeId,
@@ -762,11 +749,9 @@ function sanitizeReplayedNode(node: WorkflowNode): WorkflowNode {
 export function replayJournal(raw: string): {
   latestByNode: Map<string, WorkflowNode>;
   terminalNodeIds: Set<string>;
-  latestHeartbeatMs: number;
 } {
   const latestByNode = new Map<string, WorkflowNode>();
   const terminalNodeIds = new Set<string>();
-  let latestHeartbeatMs = 0;
 
   for (const line of raw.split("\n")) {
     const trimmed = line.trim();
@@ -782,9 +767,6 @@ export function replayJournal(raw: string): {
     if (!event || typeof event.nodeId !== "string" || typeof event.seq !== "number") {
       continue;
     }
-    if (typeof record.heartbeatMs === "number") {
-      latestHeartbeatMs = Math.max(latestHeartbeatMs, record.heartbeatMs);
-    }
     const prior = latestByNode.get(event.nodeId);
     if (!prior || event.seq >= prior.seq) {
       latestByNode.set(event.nodeId, event);
@@ -795,29 +777,7 @@ export function replayJournal(raw: string): {
     }
   }
 
-  return { latestByNode, terminalNodeIds, latestHeartbeatMs };
-}
-
-/**
- * Whether a run's journal shows it is still alive (a fresh heartbeat) so a
- * stale-slot recovery sweep MUST NOT SIGTERM it. A run is "live" when its latest
- * journal heartbeat is within `staleAfterMs` of `nowMs` AND at least one node is
- * still running. This is the node-level liveness signal: a long fan-out that is
- * still making progress is not mistaken for a wedged slot.
- */
-export function isRunLive(
-  raw: string,
-  nowMs: number,
-  staleAfterMs: number
-): { live: boolean; runningNodeCount: number; ageMs: number } {
-  const { latestByNode, latestHeartbeatMs } = replayJournal(raw);
-  let runningNodeCount = 0;
-  for (const node of latestByNode.values()) {
-    if (node.status === "running") runningNodeCount += 1;
-  }
-  const ageMs = nowMs - latestHeartbeatMs;
-  const live = runningNodeCount > 0 && ageMs <= staleAfterMs;
-  return { live, runningNodeCount, ageMs };
+  return { latestByNode, terminalNodeIds };
 }
 
 /**

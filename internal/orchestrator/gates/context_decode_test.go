@@ -40,8 +40,17 @@ func TestFeatureDevGate_SchemaMismatchIsNotReportedAsInvalidJSON(t *testing.T) {
 	if !strings.Contains(joined, "files_changed") {
 		t.Errorf("evidence must name the offending field, got %v", res.Evidence)
 	}
-	if !strings.Contains(joined, "expected object") || !strings.Contains(joined, "got array") {
-		t.Errorf("evidence must state expected vs actual shape, got %v", res.Evidence)
+	// #1176/#1182: the deliverable-schema policy now sees this file first and
+	// classifies it. This fixture carries no files_created/files_modified, so
+	// the created/modified split is genuinely absent, no total repair exists,
+	// and the gate must still fail — but the evidence has to say WHY, not just
+	// restate the shape. `TestDescribeDecodeFailure_*` below still pins the
+	// expected-vs-actual wording on the decode path it belongs to.
+	if !strings.Contains(joined, "no_sibling_manifest") {
+		t.Errorf("evidence must name the policy rule that refused the repair, got %v", res.Evidence)
+	}
+	if !strings.Contains(joined, "genuinely absent") {
+		t.Errorf("evidence must explain that the missing values cannot be inferred, got %v", res.Evidence)
 	}
 	if strings.Contains(joined, "json:\\\"created\\\"") || strings.Contains(joined, "struct {") {
 		t.Errorf("evidence must not dump the raw Go struct type, got %v", res.Evidence)

@@ -1629,7 +1629,25 @@ export function resolveModel(
   };
 }
 
-function appendTail(buffer: string, chunk: string, maxChars: number): string {
+/**
+ * Size of the purpose-built stderr ring that backs the exit record's
+ * `stderr_tail` field (Issue #3605). Narrower than
+ * `OUTPUT_ERROR_TAIL_MAX_CHARS` on purpose so the on-disk exit record stays
+ * compact. Module-scope + exported since #456 so the cap the stage-exit
+ * self-checks have to survive can be exercised directly.
+ */
+export const STAGE_EXIT_STDERR_TAIL_MAX = 4 * 1024;
+
+/**
+ * Keep the LAST `maxChars` characters of `buffer + chunk`.
+ *
+ * Truncation is from the FRONT: the newest bytes always survive, which is why
+ * a self-check appended at stage exit still reaches the exit record even when
+ * the ring has been full of subprocess stderr for the whole stage. Exported so
+ * that property is testable (#456) — it was previously unreferenced by any
+ * test, so nothing noticed which end got cut.
+ */
+export function appendTail(buffer: string, chunk: string, maxChars: number): string {
   const combined = buffer + chunk;
   if (combined.length <= maxChars) {
     return combined;
@@ -2314,6 +2332,62 @@ export function describeToolCallCorrelationGap(args: {
     );
   }
   return undefined;
+}
+
+/**
+ * Every stage-exit forensic self-check, composed in one place (#456).
+ *
+ * The two detectors above are pure and unit-tested; the code that CALLED them
+ * was not. It lived inline in `runStageSkillHeadless`'s close handler — a
+ * function that spawns a subprocess — so the argument mapping, the two-arm
+ * ordering and the append to the exit-record tail were unreachable from any
+ * test. Mutation proved it: deleting either emission block wholesale, or
+ * swapping `retainedIndexedCalls` for the log's `size`, passed the full
+ * package suite. A detector nothing calls is exactly as silent as a detector
+ * that does not exist, which is the failure #147 and #402 were about.
+ *
+ * This is the ONLY producer of the `[forensic-capture-gap]` lines the runner
+ * appends; the close handler is one call plus one {@link appendTail} loop.
+ *
+ * @returns the warnings to emit, in emission order, each already newline
+ * terminated. Empty on a healthy stage — the common case.
+ */
+export function composeStageExitSelfChecks(args: {
+  stage: string;
+  parsedToolEventCount: number;
+  ring: RecentBashRing;
+  log: ToolCallLog;
+}): string[] {
+  const { stage, parsedToolEventCount, ring, log } = args;
+  const warnings: string[] = [];
+
+  // #147/#302 — the Bash ring behind `last_bash_command` / `recent_bash`.
+  const bashGap = describeForensicCaptureGap({
+    stage,
+    parsedToolEventCount,
+    retainedCommands: ring.size,
+    retainedIndexedCommands: ring.retainedIndexedCount,
+    capturedTotal: ring.capturedTotal,
+    correlatedExits: ring.correlatedExits,
+  });
+  if (bashGap) warnings.push(bashGap);
+
+  // #402 — the same divergence one level up, in the all-tools log (#144).
+  // `retainedIndexedCalls` is the log's INDEXED count, never its `size`: the
+  // arm asks "could any retained row ever have bound a result?", and `size`
+  // answers a different question that is non-zero in exactly the shape being
+  // reported, silently suppressing the warning.
+  const toolCallGap = describeToolCallCorrelationGap({
+    stage,
+    parsedToolEventCount,
+    retainedCalls: log.size,
+    retainedIndexedCalls: log.retainedIndexedCount,
+    capturedTotal: log.capturedTotal,
+    correlatedResults: log.correlatedResults,
+  });
+  if (toolCallGap) warnings.push(toolCallGap);
+
+  return warnings;
 }
 
 /**
@@ -5165,7 +5239,6 @@ export function runStageSkillHeadless(
   // is 50 KB and serves the V3 record. The narrower 4 KB ring is purpose-built
   // for the daily exit-record stderr_tail field — kept in lock-step with the
   // Go-side stageExitRecordMaxStderrTailBytes constant.
-  const STAGE_EXIT_STDERR_TAIL_MAX = 4 * 1024;
   let exitStderrTail: string = "";
 
   // Nudge grace period (Issue #3484): deferred kill gives Claude one last chance
@@ -6905,42 +6978,25 @@ export function runStageSkillHeadless(
     // the stream shape and the parser have diverged. Say so on stderr, which
     // is itself captured into `stderr_tail`, so the record carries evidence of
     // its own incompleteness instead of quietly under-reporting.
-    const gapWarning = describeForensicCaptureGap({
+    // Both self-checks come from one place (#456) — `composeStageExitSelfChecks`
+    // owns the argument mapping and the two-arm ordering, and it is unit-tested.
+    // Everything left here is delivery, and it happens for every warning
+    // identically: notify the caller, THEN append to `exitStderrTail`.
+    //
+    // The append is not redundant with the callback. `exitStderrTail` is fed
+    // ONLY by the subprocess's own stderr stream, so an onStderr callback does
+    // not reach it — the callback notifies the caller, it does not write the
+    // ring. Without the append the warning lands in the session log and the
+    // exit record still looks healthy and terse, which is the exact failure
+    // being reported on.
+    for (const selfCheck of composeStageExitSelfChecks({
       stage,
       parsedToolEventCount,
-      retainedCommands: recentBashRing.size,
-      retainedIndexedCommands: recentBashRing.retainedIndexedCount,
-      capturedTotal: recentBashRing.capturedTotal,
-      correlatedExits: recentBashRing.correlatedExits,
-    });
-    if (gapWarning) {
-      callbacks?.onStderr?.(gapWarning);
-      // `exitStderrTail` is fed ONLY by the subprocess's own stderr stream, so
-      // an onStderr callback does not reach it — the callback notifies the
-      // caller, it does not write the ring. Append explicitly, or this warning
-      // lands in the session log and the exit record still looks healthy and
-      // terse, which is the exact failure being reported on.
-      exitStderrTail = appendTail(exitStderrTail, gapWarning, STAGE_EXIT_STDERR_TAIL_MAX);
-    }
-
-    // The same divergence one level up (Issue #402). The all-tools log (#144)
-    // correlates by tool_use id too, so an id-less stage records calls that no
-    // tool_result ever joins — and because `result`, `error` and `duration_ms`
-    // are all optional, the Dashboard renders those rows exactly like calls
-    // that succeeded quietly. Reported on the same channel, and appended to the
-    // tail for the same reason: onStderr notifies the caller, it does not write
-    // the ring.
-    const toolCallGapWarning = describeToolCallCorrelationGap({
-      stage,
-      parsedToolEventCount,
-      retainedCalls: toolCallLog.size,
-      retainedIndexedCalls: toolCallLog.retainedIndexedCount,
-      capturedTotal: toolCallLog.capturedTotal,
-      correlatedResults: toolCallLog.correlatedResults,
-    });
-    if (toolCallGapWarning) {
-      callbacks?.onStderr?.(toolCallGapWarning);
-      exitStderrTail = appendTail(exitStderrTail, toolCallGapWarning, STAGE_EXIT_STDERR_TAIL_MAX);
+      ring: recentBashRing,
+      log: toolCallLog,
+    })) {
+      callbacks?.onStderr?.(selfCheck);
+      exitStderrTail = appendTail(exitStderrTail, selfCheck, STAGE_EXIT_STDERR_TAIL_MAX);
     }
 
     // ── Worktree write containment: verdict (Issue #129) ────────────────
