@@ -1726,6 +1726,199 @@ describe("AutoRetroService", () => {
   });
 
   // ===========================================================================
+  // #1178 — the DIRECTORY, which #1143 left wrong while fixing the filename.
+  //
+  // #1143 was verified against a filename, so it shipped half a fix: the log
+  // reads `dev-210.json` (right) under `<repo>/.nightgauge/pipeline/` (wrong).
+  // In worktree mode the stage wrote it inside the worktree:
+  //
+  //   .nightgauge/pipeline/                       calibration.json, queue-state.json
+  //   .worktrees/issue-210/.nightgauge/pipeline/  dev-210.json, planning-210.json, …
+  //
+  // These tests therefore exercise the worktree LAYOUT — a repo root that
+  // holds no deliverable and a worktree that does — which is exactly the gap a
+  // filename-only assertion cannot see.
+  //
+  // RED PROOF for this block, behavioural in every case:
+  //   (a) drop `deliverableRoot` from the roots list in collectEvidence so it
+  //       reads `[workspaceRoot]` again → "resolves from the worktree" and
+  //       "sources_analyzed includes pipeline_context" both fail: the worktree
+  //       path is never requested and the source is absent.
+  //   (b) delete the #1178 context-decode extractor → the gate-reason test
+  //       falls back to `unknown`, the reported symptom verbatim.
+  // Neither neuter is a compile error; both were observed red.
+  // ===========================================================================
+
+  describe("#1178 — deliverable resolution in worktree mode", () => {
+    const WORKTREE = `${WORKSPACE}/.worktrees/issue-${ISSUE_NUMBER}`;
+    const worktreeDeliverable = `${WORKTREE}/.nightgauge/pipeline/dev-${ISSUE_NUMBER}.json`;
+    const repoRootDeliverable = `${WORKSPACE}/.nightgauge/pipeline/dev-${ISSUE_NUMBER}.json`;
+
+    /**
+     * The real worktree-mode layout: the repo root's `pipeline/` directory
+     * exists but holds only run-level bookkeeping, and the stage deliverable
+     * lives one level down in the worktree. Reading the repo-root path is a
+     * guaranteed ENOENT — the ENOENT in the bug report.
+     */
+    function mockWorktreeLayout(deliverable: string): string[] {
+      const requested: string[] = [];
+      vi.mocked(fs.readFile).mockImplementation((async (target: unknown) => {
+        const key = String(target);
+        requested.push(key);
+        if (key === worktreeDeliverable) return deliverable;
+        throw Object.assign(new Error("ENOENT: no such file or directory"), { code: "ENOENT" });
+      }) as never);
+      return requested;
+    }
+
+    it("resolves the deliverable from the worktree the run executed in", async () => {
+      const requested = mockWorktreeLayout(JSON.stringify({ issue_number: ISSUE_NUMBER }));
+
+      await AutoRetroService.runAfterFailure(
+        WORKSPACE,
+        ISSUE_NUMBER,
+        "feature-dev",
+        logger as never,
+        undefined,
+        undefined,
+        WORKTREE
+      );
+
+      expect(requested, "the worktree deliverable was never opened").toContain(worktreeDeliverable);
+    });
+
+    it("reports pipeline_context in sources_analyzed for a worktree run", async () => {
+      mockWorktreeLayout(JSON.stringify({ issue_number: ISSUE_NUMBER, status: "failed" }));
+
+      await AutoRetroService.runAfterFailure(
+        WORKSPACE,
+        ISSUE_NUMBER,
+        "feature-dev",
+        logger as never,
+        undefined,
+        undefined,
+        WORKTREE
+      );
+
+      const written = vi.mocked(fs.writeFile).mock.calls.at(-1);
+      expect(written).toBeDefined();
+      const payload = JSON.parse(String(written![1]));
+      expect(
+        payload.sources_analyzed,
+        "the retro still reports the deliverable as unread"
+      ).toContain("pipeline_context");
+    });
+
+    it("falls back to the repo root when the run had no worktree", async () => {
+      // The interactive path passes no deliverableRoot; nothing may change for it.
+      const requested: string[] = [];
+      vi.mocked(fs.readFile).mockImplementation((async (target: unknown) => {
+        const key = String(target);
+        requested.push(key);
+        if (key === repoRootDeliverable) return JSON.stringify({ issue_number: ISSUE_NUMBER });
+        throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+      }) as never);
+
+      await AutoRetroService.runAfterFailure(
+        WORKSPACE,
+        ISSUE_NUMBER,
+        "feature-dev",
+        logger as never
+      );
+
+      expect(requested).toContain(repoRootDeliverable);
+      const payload = JSON.parse(String(vi.mocked(fs.writeFile).mock.calls.at(-1)![1]));
+      expect(payload.sources_analyzed).toContain("pipeline_context");
+    });
+
+    it("logs every root it tried when the deliverable is unreadable anywhere", async () => {
+      vi.mocked(fs.readFile).mockRejectedValue(
+        Object.assign(new Error("ENOENT"), { code: "ENOENT" })
+      );
+
+      await AutoRetroService.runAfterFailure(
+        WORKSPACE,
+        ISSUE_NUMBER,
+        "feature-dev",
+        logger as never,
+        undefined,
+        undefined,
+        WORKTREE
+      );
+
+      const logged = logger.info.mock.calls.find(
+        ([, detail]) =>
+          detail !== null &&
+          typeof detail === "object" &&
+          (detail as { contextFilesTried?: string[] }).contextFilesTried !== undefined
+      );
+      expect(logged, "the miss did not record which roots were searched").toBeDefined();
+      const tried = (logged![1] as { contextFilesTried: string[] }).contextFilesTried;
+      expect(tried).toContain(worktreeDeliverable);
+      expect(tried).toContain(repoRootDeliverable);
+    });
+
+    // The other half of #1178: an unreadable deliverable must not produce
+    // `unknown` when the gate said exactly what was wrong. The reported run
+    // was written up `category: "unknown", severity: "low"` while the terminal
+    // error carried `files_changed: expected object, got array`.
+    it("classifies from the context-decode gate's reason, not as unknown", async () => {
+      vi.mocked(fs.readFile).mockRejectedValue(
+        Object.assign(new Error("ENOENT"), { code: "ENOENT" })
+      );
+
+      // The gate's own wording — internal/orchestrator/gates/context_decode.go.
+      const gateReason =
+        "dev context does not match the expected schema: " +
+        `field "files_changed": expected object, got array`;
+
+      await AutoRetroService.runAfterFailure(
+        WORKSPACE,
+        ISSUE_NUMBER,
+        "feature-dev",
+        logger as never,
+        gateReason,
+        undefined,
+        WORKTREE
+      );
+
+      const payload = JSON.parse(String(vi.mocked(fs.writeFile).mock.calls.at(-1)![1]));
+      const categories = payload.findings.map((f: { category: string }) => f.category);
+      expect(categories, "the gate stated the cause and the retro said unknown").not.toContain(
+        "unknown"
+      );
+      expect(categories).toContain("state-management");
+      // The gate's words survive into the retro, not a paraphrase.
+      expect(JSON.stringify(payload.findings)).toContain("files_changed");
+    });
+
+    it("does not classify on schema prose that is only in the log corpus", async () => {
+      // Source-blindness is the #1144 defect. The phrase appears in any
+      // session log that merely LOGGED such a gate for another issue, so the
+      // extractor reads the gate's reason and nothing else.
+      vi.mocked(fs.readdir).mockResolvedValue(["2099-01-01_1_session.log"] as never);
+      vi.mocked(fs.readFile).mockImplementation((async (target: unknown) => {
+        if (String(target).endsWith(".log")) {
+          return "[INFO] some other run: planning context does not match the expected schema";
+        }
+        throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+      }) as never);
+
+      await AutoRetroService.runAfterFailure(
+        WORKSPACE,
+        ISSUE_NUMBER,
+        "feature-dev",
+        logger as never
+      );
+
+      const payload = JSON.parse(String(vi.mocked(fs.writeFile).mock.calls.at(-1)![1]));
+      expect(payload.findings.map((f: { category: string }) => f.category)).not.toContain(
+        "state-management"
+      );
+    });
+  });
+
+  // ===========================================================================
   // #1144 — a false budget-exceeded verdict
   //
   // A run that failed an acceptance-criteria gate was written up as
