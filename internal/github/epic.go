@@ -141,6 +141,32 @@ type EpicCompletionResult struct {
 		Number int    `json:"number"`
 		Title  string `json:"title"`
 	} `json:"openIssues,omitempty"`
+	// SubIssues is the epic's full sub-issue list, each carrying its own
+	// repository. It is the single membership record both epic paths read
+	// (#1181): the nightly sweep and the post-merge hook now answer "does this
+	// epic have sub-issues, and is issue X one of them?" from the same struct,
+	// so they cannot disagree the way they did when the hook looked the epic up
+	// in the wrong repository.
+	SubIssues []types.SubIssueRef `json:"subIssues,omitempty"`
+}
+
+// HasSubIssue reports whether the epic lists owner/repo#number among its
+// sub-issues. An empty repo matches on number alone (callers that genuinely do
+// not know the sub-issue's repository); a non-empty repo must match
+// case-insensitively, because a number alone is not an identity across repos.
+func (r *EpicCompletionResult) HasSubIssue(repo string, number int) bool {
+	if r == nil {
+		return false
+	}
+	for _, si := range r.SubIssues {
+		if si.Number != number {
+			continue
+		}
+		if repo == "" || si.Repo == "" || strings.EqualFold(si.Repo, repo) {
+			return true
+		}
+	}
+	return false
 }
 
 // CheckCompletion checks if all sub-issues of an epic are closed.
@@ -158,6 +184,8 @@ func (e *EpicService) CheckCompletion(ctx context.Context, owner, repo string, e
 		Repo:       issue.Repo,
 		Total:      len(issue.SubIssues),
 	}
+
+	result.SubIssues = append(result.SubIssues, issue.SubIssues...)
 
 	for _, si := range issue.SubIssues {
 		if strings.EqualFold(si.State, "CLOSED") {
@@ -644,7 +672,11 @@ func (e *EpicService) AutoClose(ctx context.Context, owner, repo string, project
 		wg.Add(1)
 		go func(i int, epicNumber int) {
 			defer wg.Done()
-			status, reason, cerr := e.closeOneEpic(ctx, owner, repo, epicNumber, projectNumber)
+			status, reason, cerr := e.closeOneEpic(ctx, EpicRef{
+				Owner:  owner,
+				Repo:   repo,
+				Number: epicNumber,
+			}, projectNumber)
 			ch <- closeResult{i, status, reason, cerr}
 		}(idx, epic.Number)
 	}
@@ -693,17 +725,80 @@ func (e *EpicService) AutoClose(ctx context.Context, owner, repo string, project
 	return result, nil
 }
 
+// EpicRef is the full coordinate of an epic: its OWN repository plus its
+// number. It exists because #1181 was caused by the number travelling without
+// the repository - closeOneEpic took (owner, repo, epicNumber) and the
+// post-merge hook passed the SUB-ISSUE's owner/repo, so a cross-repo epic
+// number resolved against the wrong repository. Issue numbers are per-repo, so
+// that never failed cleanly: it either hit a pull request (a loud
+// "Could not resolve to an Issue") or, far worse, hit an unrelated real issue
+// that happened to occupy the number and reported success.
+//
+// Passing a struct rather than two more positional strings is deliberate: a
+// caller must now name the fields it is filling, so handing over the
+// sub-issue's repository is a thing you have to write down rather than
+// something you get by default.
+type EpicRef struct {
+	// Owner and Repo are the epic's own repository.
+	Owner string
+	Repo  string
+	// Number is the epic's issue number WITHIN Owner/Repo.
+	Number int
+
+	// ExpectSubIssueNumber and ExpectSubIssueRepo describe a sub-issue that the
+	// caller already knows belongs to this epic - on the post-merge path, the
+	// issue whose PR just merged. When set, the epic MUST list it among its
+	// sub-issues; if it does not, the coordinate resolved to the wrong issue
+	// and the check fails loudly ("wrong_epic") instead of reporting the silent
+	// success that #1181 is named for. Leave zero on the sweep path, where
+	// there is no triggering sub-issue and "no sub-issues" is a real answer.
+	ExpectSubIssueNumber int
+	ExpectSubIssueRepo   string
+}
+
+// String renders the epic as owner/repo#number for diagnostics.
+func (r EpicRef) String() string {
+	if r.Owner == "" || r.Repo == "" {
+		return fmt.Sprintf("#%d", r.Number)
+	}
+	return fmt.Sprintf("%s/%s#%d", r.Owner, r.Repo, r.Number)
+}
+
 // closeOneEpic closes a single epic if all its sub-issues are closed.
 // Returns (status, reason, error).
+//
+// The epic is always resolved against ref.Owner/ref.Repo - its own repository -
+// never against a caller's ambient repo (#1181).
 //
 // When the initial check finds open sub-issues but the total is non-zero,
 // this is likely a GitHub eventual-consistency window after the final sub-issue
 // merge. We retry up to 3 times with exponential backoff (2s, 4s, 8s) to let
 // the API catch up before giving up.
-func (e *EpicService) closeOneEpic(ctx context.Context, owner, repo string, epicNumber, projectNumber int) (string, string, error) {
+func (e *EpicService) closeOneEpic(ctx context.Context, ref EpicRef, projectNumber int) (string, string, error) {
+	if ref.Owner == "" || ref.Repo == "" {
+		return "", "epic_repo_missing", fmt.Errorf("epic #%d: no repository given; an epic number without its repository is not a coordinate", ref.Number)
+	}
+	owner, repo, epicNumber := ref.Owner, ref.Repo, ref.Number
+
 	completion, err := e.CheckCompletion(ctx, owner, repo, epicNumber)
 	if err != nil {
 		return "", "check_failed", err
+	}
+
+	// Identity guard (#1181). The caller told us a sub-issue that belongs to
+	// this epic; if the issue we just fetched does not list it, we are looking
+	// at a different issue than the one intended and every answer below --
+	// "no_subs" most of all -- would be a confident lie. This is checked BEFORE
+	// the Total == 0 branch precisely because Total == 0 was the silent face of
+	// the bug.
+	if ref.ExpectSubIssueNumber > 0 && !completion.HasSubIssue(ref.ExpectSubIssueRepo, ref.ExpectSubIssueNumber) {
+		expected := fmt.Sprintf("#%d", ref.ExpectSubIssueNumber)
+		if ref.ExpectSubIssueRepo != "" {
+			expected = fmt.Sprintf("%s#%d", ref.ExpectSubIssueRepo, ref.ExpectSubIssueNumber)
+		}
+		return "", "wrong_epic", fmt.Errorf(
+			"epic %s does not list %s among its %d sub-issue(s): the epic number resolved to the wrong issue",
+			ref, expected, completion.Total)
 	}
 
 	if completion.Total == 0 {
@@ -746,12 +841,12 @@ func (e *EpicService) closeOneEpic(ctx context.Context, owner, repo string, epic
 
 	commentBody := fmt.Sprintf("Auto-closed: all %d sub-issues are complete.", completion.Total)
 	if err := issueSvc.AddComment(ctx, epicIssue.NodeID, commentBody); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: failed to add comment to #%d: %v\n", epicNumber, err)
+		fmt.Fprintf(os.Stderr, "Warning: failed to add comment to %s: %v\n", ref, err)
 	}
 
 	if projectNumber > 0 {
 		if err := e.moveToProjectDone(ctx, owner, repo, epicNumber, projectNumber); err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: failed to move #%d to Done: %v\n", epicNumber, err)
+			fmt.Fprintf(os.Stderr, "Warning: failed to move %s to Done: %v\n", ref, err)
 		}
 	}
 
@@ -766,19 +861,33 @@ func (e *EpicService) moveToProjectDone(ctx context.Context, owner, repo string,
 
 // AutoCloseSingleResult holds the result of auto-closing a single epic.
 type AutoCloseSingleResult struct {
-	EpicNumber int    `json:"epicNumber"`
-	Status     string `json:"status"` // "closed", "skipped", "error"
-	Reason     string `json:"reason,omitempty"`
-	Error      string `json:"error,omitempty"`
+	EpicNumber int `json:"epicNumber"`
+	// EpicRepo is the repository the epic was actually resolved against - the
+	// epic's own, not the caller's (#1181). Reported so an operator reading the
+	// hook's output can see which repo answered.
+	EpicRepo string `json:"epicRepo,omitempty"`
+	Status   string `json:"status"` // "closed", "skipped", "error"
+	Reason   string `json:"reason,omitempty"`
+	Error    string `json:"error,omitempty"`
 }
 
 // AutoCloseSingle checks and closes a single epic if all its sub-issues are closed.
 // It wraps closeOneEpic for use by the post-merge hook and other callers that target
 // a specific epic rather than sweeping all open epics.
-func (e *EpicService) AutoCloseSingle(ctx context.Context, owner, repo string, epicNumber, projectNumber int) (*AutoCloseSingleResult, error) {
-	status, reason, err := e.closeOneEpic(ctx, owner, repo, epicNumber, projectNumber)
+//
+// ref carries the epic's OWN repository. Callers on the post-merge path must
+// also set ref.ExpectSubIssueNumber/Repo to the merged sub-issue so a
+// mis-resolved epic is rejected rather than silently reported as having no
+// sub-issues (#1181).
+func (e *EpicService) AutoCloseSingle(ctx context.Context, ref EpicRef, projectNumber int) (*AutoCloseSingleResult, error) {
+	status, reason, err := e.closeOneEpic(ctx, ref, projectNumber)
+	epicRepo := ""
+	if ref.Owner != "" && ref.Repo != "" {
+		epicRepo = ref.Owner + "/" + ref.Repo
+	}
 	result := &AutoCloseSingleResult{
-		EpicNumber: epicNumber,
+		EpicNumber: ref.Number,
+		EpicRepo:   epicRepo,
 		Status:     status,
 		Reason:     reason,
 	}

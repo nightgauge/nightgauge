@@ -280,6 +280,13 @@ export interface IssueDetail {
   isEpic: boolean;
   parentIssueId?: string;
   parentIssueNumber?: number;
+  /**
+   * `owner/repo` of the parent, from the native sub-issue link (#1181).
+   * Issue numbers are per-repository, so `parentIssueNumber` alone is
+   * ambiguous in a multi-repo workspace — resolving it against the wrong
+   * repo is what #1181 fixed on the Go side.
+   */
+  parentIssueRepo?: string;
   milestone?: string;
   subIssues?: Array<{ number: number; title: string; state: string }>;
   blockedBy?: Array<{
