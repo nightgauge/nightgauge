@@ -163,6 +163,7 @@ import {
   writeBlockedFinding,
   type BlockedFinding,
 } from "../utils/blockedFinding";
+import { clearAdapterAuthNotice, reportAdapterAuthFailure } from "../utils/adapterAuthNotice";
 import { loadAdaptiveBudgetOverrides } from "../utils/adaptiveBudgetLoader";
 import type { EstimateSource } from "../utils/adaptiveBudgetLoader";
 import { PipelineBudgetCeiling } from "../utils/pipelineBudgetCeiling";
@@ -9549,6 +9550,29 @@ export class HeadlessOrchestrator implements vscode.Disposable {
           ),
         });
 
+        // #1168 — TELL THE OPERATOR. Until this call the log line above was the
+        // entire user-facing surface of a condition under which nothing can run
+        // at all: the observed incident was five dispatches refused in eighty
+        // seconds and an operator reporting "I restarted autonomous and
+        // everything stopped".
+        //
+        // This is the ONE layer that tells. ConcurrentPipelineManager's
+        // environmental skip for `adapter_auth_failed` (#1169) returns silently
+        // on purpose — see the module header for why the telling belongs here,
+        // including the deduplication (per adapter, across every concurrent
+        // slot) and the deliberate exclusion of `reason`, which carries adapter
+        // CLI auth-state output. Only the adapter name and the SDK's static
+        // `suggestedFix` remedy are surfaced.
+        reportAdapterAuthFailure(
+          preflight.failures.map(
+            (f: { adapter: NightgaugeAdapter; suggestedFix: string; timedOut: boolean }) => ({
+              adapter: f.adapter,
+              suggestedFix: f.suggestedFix,
+              timedOut: f.timedOut,
+            })
+          )
+        );
+
         const preflightResult: PipelineRunResult = {
           success: false,
           completedStages: [],
@@ -9577,6 +9601,13 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         this.abortController = null;
         return preflightResult;
       }
+      // #1168 — AUTO-RESOLVE. The adapter authenticated, so the standing
+      // condition is over: retract the surface and re-arm the dedupe so a
+      // later lapse is told again rather than swallowed by a stale entry.
+      // Unconditional, because clearing an adapter with no outstanding notice
+      // is a no-op — and because this pass path is the only place in the
+      // system that observes the condition ending.
+      clearAdapterAuthNotice(adapters);
       this.logger.info("Adapter auth pre-flight passed", {
         issueNumber,
         adapters,

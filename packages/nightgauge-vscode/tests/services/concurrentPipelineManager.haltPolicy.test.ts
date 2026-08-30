@@ -57,6 +57,16 @@ const SKIP_CASES: { text: string; kind: string; branch: string }[] = [
     kind: "network_unavailable",
     branch: "environmental",
   },
+  {
+    // #1169 — the pipeline-start auth gate's own wording, verbatim from
+    // HeadlessOrchestrator. Go routes this kind as retryable infra with an
+    // explicit "no pause"; this layer must not override that.
+    text:
+      "[adapter-auth-failed] Auth pre-flight failed — adapter not authenticated. " +
+      "Pipeline halted before AI stages (zero tokens spent).",
+    kind: "adapter_auth_failed",
+    branch: "environmental",
+  },
   { text: "API Error: Overloaded", kind: "api_overloaded", branch: "529 overload" },
   {
     text: "[stall-killed] stage exceeded stall idle threshold",
@@ -140,6 +150,7 @@ describe("queue-halt policy (ConcurrentPipelineManager)", () => {
       "stream_idle_timeout",
       "rate_limit_quota_exhausted",
       "network_unavailable",
+      "adapter_auth_failed",
     ]) {
       expect(source).toContain(`"${kind}"`);
     }

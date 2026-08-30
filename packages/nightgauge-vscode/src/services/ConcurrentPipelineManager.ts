@@ -53,6 +53,27 @@ const HALT_SKIP_ENVIRONMENTAL: ReadonlySet<string> = new Set([
   "stream_idle_timeout",
   "rate_limit_quota_exhausted",
   "network_unavailable",
+  // #1169 — the adapter auth pre-flight refused to launch. The Go layer
+  // already routes this kind as retryable infra and says so in as many words
+  // ("adapter_auth_failed … retryable infra, retry in %v (no lifetime-cap
+  // increment, no cascade feed, no pause)", autonomous.go), and
+  // autonomous_adapter_auth_test.go pins that a whole burst leaves the
+  // scheduler running. Omitting it here made this layer override that decision
+  // — the identical override the api_overloaded branch below was written to
+  // stop, one kind later. In the observed incident an operator restarted
+  // autonomous with the `claude` CLI logged out; the halt fired five times,
+  // once per repo (the #1148 repo-scoped halt working correctly on a global
+  // cause), and the fleet stopped.
+  //
+  // It belongs in the ENVIRONMENTAL set specifically, not in a toast branch of
+  // its own: an auth lapse is operator-local environment state, exactly like
+  // the quota and network entries beside it, and it costs zero tokens — the
+  // pre-flight runs before any stage. This path returns SILENTLY on purpose.
+  // The telling is owned by HeadlessOrchestrator (#1168), the layer that runs
+  // the probe and therefore knows the adapter name, the remedy command, and —
+  // uniquely — the later success that clears the notice. See
+  // src/utils/adapterAuthNotice.ts.
+  "adapter_auth_failed",
 ]);
 const HALT_SKIP_TRANSIENT_STALL: ReadonlySet<string> = new Set(["stall_kill"]);
 
