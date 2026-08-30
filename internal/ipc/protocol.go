@@ -313,17 +313,6 @@ type FailureClassifyParams struct {
 	Stderr   string `json:"stderr"`
 }
 
-// CostEstimateParams are parameters for intelligence.cost.
-//
-// Adapter names the execution adapter that will serve the run; the forecast is
-// priced through THAT provider's rate card (#696). Omitted means "the server
-// resolves it from config/env" — never "assume anthropic".
-type CostEstimateParams struct {
-	Stages          []string `json:"stages"`
-	ComplexityScore int      `json:"complexityScore"`
-	Adapter         string   `json:"adapter,omitempty"`
-}
-
 // --- Board mutation methods ---
 
 // BoardUpdateStatusParams are parameters for board.updateStatus.
@@ -1098,6 +1087,24 @@ type PipelineNotifyCompleteParams struct {
 	// outcome_type="deferred" — NOT a failure — and the live-view telemetry
 	// emits as a non-failure terminal event, never "failed".
 	Deferred bool `json:"deferred,omitempty"`
+	// BudgetEstimateUSD is the pre-flight projection this run was dispatched
+	// against, and BudgetEstimateSource / BudgetEstimateProvider say where the
+	// number came from and which rate card priced it (#1213).
+	//
+	// They travel here because the estimate is produced by the TypeScript
+	// pre-flight gate and lived only in the pipeline STATE's pipeline_meta —
+	// per-run ephemeral state that is gone once the run ends. Persisting them on
+	// the durable run record is what makes "is the estimate getting better?"
+	// answerable from the corpus (`nightgauge cost accuracy`) instead of from
+	// Slack messages.
+	//
+	// Absent means NOT ESTIMATED, never "estimated at zero": a source of
+	// "unpriced" carries no USD because the provider serves a band the registry
+	// cannot price.
+	BudgetEstimateUSD      float64 `json:"budgetEstimateUsd,omitempty"`
+	BudgetEstimateSource   string  `json:"budgetEstimateSource,omitempty"`
+	BudgetEstimateProvider string  `json:"budgetEstimateProvider,omitempty"`
+	BudgetCeilingUSD       float64 `json:"budgetCeilingUsd,omitempty"`
 	// StageExecutionPaths records, per stage name, whether the stage ran via the
 	// deterministic Go path or the LLM skill path ("deterministic" | "llm") on
 	// the TypeScript dogfood path (Issue #297/#309). It is the wire form of the

@@ -20,11 +20,12 @@
  */
 
 import type { ComplexityModel, MatchedPattern } from "../context/schemas/complexity-model.js";
-import type { EffortLevel } from "../eval/modelEvalSchemas.js";
+import type { EffortLevel, Provider } from "../eval/modelEvalSchemas.js";
+import { ratesForProviderTier, type ProviderTierRates } from "../eval/modelRegistry.js";
 import { TIER_BANDS, type TierBand } from "../eval/tierBands.js";
 import type { StageModelCalibrationTable } from "../services/StageModelCalibrationService.js";
 import { StageModelCalibrationService } from "../services/StageModelCalibrationService.js";
-import { DEFAULT_MODEL_COST_RATES } from "./types.js";
+import { ANTHROPIC_TIER_COST_RATES } from "./types.js";
 
 /**
  * Supported model tiers in ascending capability order @since Issue #730
@@ -456,6 +457,15 @@ export interface StageCostEstimate {
    * @since Issue #142
    */
   calibrated: boolean;
+  /** The provider this stage was priced against. @since Issue #1213 */
+  provider: Provider;
+  /**
+   * True when the registry has no rates for this `(provider, band)` pair, so
+   * the stage contributes 0 to a total that is therefore a FLOOR, not an
+   * estimate. The TypeScript analogue of Go's `Stamped=false` — reported, never
+   * silently priced at another provider's rates (#1213).
+   */
+  unpriced: boolean;
 }
 
 /** Full pipeline cost estimate @since Issue #948 */
@@ -473,6 +483,45 @@ export interface PipelineCostEstimate {
   calibrationUsed?: boolean;
   /** The static TOKEN_BASELINES total, always computed for comparison */
   baselineEstimatedCost?: number;
+  /** The provider every stage was priced against. @since Issue #1213 */
+  provider: Provider;
+  /**
+   * True when at least one non-skipped stage is `unpriced`. The total is then a
+   * floor and callers must render it as unpriced rather than as a number.
+   * @since Issue #1213
+   */
+  unpriced: boolean;
+}
+
+/**
+ * Inputs to {@link AutoModelSelector.estimatePipelineCost}.
+ *
+ * An options object, not more positional parameters: the signature already had
+ * four, and the two this issue adds are the two most often forgotten.
+ * @since Issue #1213
+ */
+export interface PipelineCostEstimateOptions {
+  skipStages?: string[];
+  stageModelCalibration?: StageModelCalibrationTable | null;
+  envelope?: ModelEnvelope;
+  /**
+   * The provider the run will dispatch to — `providerForAdapter(adapter)`.
+   *
+   * REQUIRED, with no default. The default WAS the bug: every band was priced
+   * from `getModelDescriptor(tier, "anthropic")`, so a grok or codex run was
+   * estimated at Claude rates while its actual was booked at the real rate
+   * (#1213, the TS half of #696).
+   */
+  provider: Provider;
+  /**
+   * Per-stage effort the run will ACTUALLY dispatch at, resolved from the mode
+   * envelope and stage pins. Stages absent here fall back to `deriveEffort()`.
+   *
+   * Without this the estimate re-derives effort from the size label alone, so
+   * two runs of the same size cost the same on paper however differently they
+   * are actually dispatched.
+   */
+  stageEfforts?: Partial<Record<string, ClaudeEffort>>;
 }
 
 /**
@@ -982,10 +1031,15 @@ export class AutoModelSelector {
    */
   estimatePipelineCost(
     metadata: IssueMetadata,
-    skipStages?: string[],
-    stageModelCalibration?: StageModelCalibrationTable | null,
-    envelope: ModelEnvelope = DEFAULT_MODEL_ENVELOPE
+    options: PipelineCostEstimateOptions
   ): PipelineCostEstimate {
+    const {
+      skipStages,
+      stageModelCalibration,
+      envelope = DEFAULT_MODEL_ENVELOPE,
+      provider,
+      stageEfforts,
+    } = options;
     const skipSet = new Set(skipStages ?? []);
     const complexity = this.extractComplexity(metadata);
     const stages: StageCostEstimate[] = [];
@@ -993,6 +1047,20 @@ export class AutoModelSelector {
     let baselineTotalCost = 0;
     let comparisonAllSonnet = 0;
     let calibrationUsed = false;
+    let anyUnpriced = false;
+
+    // ~5% of input is non-cached; the rest is priced at the cache-read rate.
+    const rawInputFraction = 0.05;
+    const priceFor = (
+      rates: ProviderTierRates,
+      inputTokens: number,
+      outputTokens: number
+    ): number => {
+      const cacheReadRate = rates.cacheReadPerMillion ?? rates.inputPerMillion;
+      const effectiveInputRate =
+        rawInputFraction * rates.inputPerMillion + (1 - rawInputFraction) * cacheReadRate;
+      return (inputTokens * effectiveInputRate + outputTokens * rates.outputPerMillion) / 1_000_000;
+    };
 
     for (const stage of PIPELINE_STAGES) {
       if (skipSet.has(stage)) {
@@ -1006,27 +1074,46 @@ export class AutoModelSelector {
           confidence: 1.0,
           skipped: true,
           calibrated: false,
+          provider,
+          unpriced: false,
         });
         continue;
       }
 
       const modelResult = this.selectModel(stage, metadata, undefined, undefined, envelope);
-      const effortResult = this.deriveEffort(stage, metadata);
-      const baseline = TOKEN_BASELINES[stage][effortResult.effort];
-      const rates = DEFAULT_MODEL_COST_RATES[modelResult.model];
-      // Input tokens are dominated by cache reads (~95%), so use cache_read
-      // rate for the bulk and raw input rate for a small fraction.
-      const cacheReadRate = rates.cacheReadPerMillion ?? rates.inputPerMillion;
-      const rawInputFraction = 0.05; // ~5% of input is non-cached
-      const effectiveInputRate =
-        rawInputFraction * rates.inputPerMillion + (1 - rawInputFraction) * cacheReadRate;
-      const baselineCost =
-        (baseline.input * effectiveInputRate + baseline.output * rates.outputPerMillion) /
-        1_000_000;
+      // The effort the run will ACTUALLY dispatch at wins over the one derived
+      // from the size label — that is what makes `high` and `low` differ for an
+      // identical issue (#1213).
+      const effort = stageEfforts?.[stage] ?? this.deriveEffort(stage, metadata).effort;
+      const baseline = TOKEN_BASELINES[stage][effort];
+
+      const rates = ratesForProviderTier(provider, modelResult.model);
+      if (!rates) {
+        // Unpriced, never substituted. A local provider (ollama, lm-studio) has
+        // no registry entries by design, and "free" and "unknown" are different
+        // answers — only one of them is safe to add into a total.
+        anyUnpriced = true;
+        stages.push({
+          stage,
+          model: modelResult.model,
+          effort,
+          estimatedInputTokens: baseline.input,
+          estimatedOutputTokens: baseline.output,
+          estimatedCost: 0,
+          confidence: modelResult.confidence,
+          skipped: false,
+          calibrated: false,
+          provider,
+          unpriced: true,
+        });
+        continue;
+      }
+
+      const baselineCost = priceFor(rates, baseline.input, baseline.output);
       baselineTotalCost += baselineCost;
 
       // Per-(stage, model) calibration: use the observed p75 once enough
-      // samples exist for this exact cell; no cross-model fallback (Issue #142).
+      // samples exist for this exact cell; no cross-model fallback (#142).
       let stageCost = baselineCost;
       let stageCalibrated = false;
       const { cell } = StageModelCalibrationService.lookupBucket(
@@ -1043,27 +1130,24 @@ export class AutoModelSelector {
       stages.push({
         stage,
         model: modelResult.model,
-        effort: effortResult.effort,
+        effort,
         estimatedInputTokens: baseline.input,
         estimatedOutputTokens: baseline.output,
         estimatedCost: stageCost,
         confidence: modelResult.confidence,
         skipped: false,
         calibrated: stageCalibrated,
+        provider,
+        unpriced: false,
       });
       totalCost += stageCost;
 
-      // All-sonnet comparison
-      const sonnetRates = DEFAULT_MODEL_COST_RATES["sonnet"];
-      const sonnetCacheReadRate = sonnetRates.cacheReadPerMillion ?? sonnetRates.inputPerMillion;
-      const effectiveSonnetInputRate =
-        rawInputFraction * sonnetRates.inputPerMillion +
-        (1 - rawInputFraction) * sonnetCacheReadRate;
-      const sonnetCost =
-        (baseline.input * effectiveSonnetInputRate +
-          baseline.output * sonnetRates.outputPerMillion) /
-        1_000_000;
-      comparisonAllSonnet += sonnetCost;
+      // All-sonnet comparison, priced WITHIN THE SAME PROVIDER — comparing a
+      // grok run against Anthropic sonnet answers a question nobody asked.
+      const sonnetRates = ratesForProviderTier(provider, "sonnet");
+      if (sonnetRates) {
+        comparisonAllSonnet += priceFor(sonnetRates, baseline.input, baseline.output);
+      }
     }
 
     return {
@@ -1074,6 +1158,8 @@ export class AutoModelSelector {
       estimatedAt: new Date().toISOString(),
       calibrationUsed,
       baselineEstimatedCost: baselineTotalCost,
+      provider,
+      unpriced: anyUnpriced,
     };
   }
 

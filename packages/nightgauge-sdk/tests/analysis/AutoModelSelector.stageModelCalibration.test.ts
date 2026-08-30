@@ -65,7 +65,10 @@ describe("AutoModelSelector.estimatePipelineCost + StageModelCalibrationService"
     ];
     const table = buildTable(records);
 
-    const result = selector.estimatePipelineCost(makeMetadata("M"), undefined, table);
+    const result = selector.estimatePipelineCost(makeMetadata("M"), {
+      provider: "anthropic",
+      stageModelCalibration: table,
+    });
 
     const devStage = result.stages.find((s) => s.stage === "feature-dev")!;
     const prCreateStage = result.stages.find((s) => s.stage === "pr-create")!;
@@ -91,8 +94,11 @@ describe("AutoModelSelector.estimatePipelineCost + StageModelCalibrationService"
 
   it("falls back to TOKEN_BASELINES for a stage without a calibrated cell", () => {
     const table = buildTable(generateRecords(10, "feature-dev", "sonnet", 40.0));
-    const baseline = selector.estimatePipelineCost(makeMetadata("M"));
-    const result = selector.estimatePipelineCost(makeMetadata("M"), undefined, table);
+    const baseline = selector.estimatePipelineCost(makeMetadata("M"), { provider: "anthropic" });
+    const result = selector.estimatePipelineCost(makeMetadata("M"), {
+      provider: "anthropic",
+      stageModelCalibration: table,
+    });
 
     const baselinePrCreate = baseline.stages.find((s) => s.stage === "pr-create")!;
     const resultPrCreate = result.stages.find((s) => s.stage === "pr-create")!;
@@ -103,7 +109,10 @@ describe("AutoModelSelector.estimatePipelineCost + StageModelCalibrationService"
 
   it("does not use a cell below MIN_CALIBRATION_SAMPLES", () => {
     const table = buildTable(generateRecords(4, "feature-dev", "sonnet", 40.0));
-    const result = selector.estimatePipelineCost(makeMetadata("M"), undefined, table);
+    const result = selector.estimatePipelineCost(makeMetadata("M"), {
+      provider: "anthropic",
+      stageModelCalibration: table,
+    });
 
     const devStage = result.stages.find((s) => s.stage === "feature-dev")!;
     expect(devStage.calibrated).toBe(false);
@@ -112,7 +121,10 @@ describe("AutoModelSelector.estimatePipelineCost + StageModelCalibrationService"
 
   it("uses a cell at exactly MIN_CALIBRATION_SAMPLES (boundary)", () => {
     const table = buildTable(generateRecords(5, "feature-dev", "sonnet", 40.0));
-    const result = selector.estimatePipelineCost(makeMetadata("M"), undefined, table);
+    const result = selector.estimatePipelineCost(makeMetadata("M"), {
+      provider: "anthropic",
+      stageModelCalibration: table,
+    });
 
     const devStage = result.stages.find((s) => s.stage === "feature-dev")!;
     expect(devStage.calibrated).toBe(true);
@@ -121,7 +133,10 @@ describe("AutoModelSelector.estimatePipelineCost + StageModelCalibrationService"
   it("does not fall back to a different model's calibrated cell for the same stage", () => {
     // Only opus has data for feature-dev; the M-size run routes feature-dev to sonnet.
     const table = buildTable(generateRecords(10, "feature-dev", "opus", 60.0));
-    const result = selector.estimatePipelineCost(makeMetadata("M"), undefined, table);
+    const result = selector.estimatePipelineCost(makeMetadata("M"), {
+      provider: "anthropic",
+      stageModelCalibration: table,
+    });
 
     const devStage = result.stages.find((s) => s.stage === "feature-dev")!;
     expect(devStage.model).toBe("sonnet");
@@ -130,7 +145,11 @@ describe("AutoModelSelector.estimatePipelineCost + StageModelCalibrationService"
 
   it("skipped stages remain $0 and uncalibrated regardless of table contents", () => {
     const table = buildTable(generateRecords(10, "pr-merge", "sonnet", 3.0));
-    const result = selector.estimatePipelineCost(makeMetadata("M"), ["pr-merge"], table);
+    const result = selector.estimatePipelineCost(makeMetadata("M"), {
+      provider: "anthropic",
+      skipStages: ["pr-merge"],
+      stageModelCalibration: table,
+    });
 
     const merge = result.stages.find((s) => s.stage === "pr-merge")!;
     expect(merge.skipped).toBe(true);
@@ -139,22 +158,28 @@ describe("AutoModelSelector.estimatePipelineCost + StageModelCalibrationService"
   });
 
   it("falls back to baselines entirely when the table is null", () => {
-    const withNull = selector.estimatePipelineCost(makeMetadata("M"), undefined, null);
-    const withoutArg = selector.estimatePipelineCost(makeMetadata("M"));
+    const withNull = selector.estimatePipelineCost(makeMetadata("M"), {
+      provider: "anthropic",
+      stageModelCalibration: null,
+    });
+    const withoutArg = selector.estimatePipelineCost(makeMetadata("M"), { provider: "anthropic" });
 
     expect(withNull.calibrationUsed).toBe(false);
     expect(withNull.totalEstimatedCost).toBeCloseTo(withoutArg.totalEstimatedCost, 10);
   });
 
   it("falls back to baselines entirely when the table is undefined", () => {
-    const result = selector.estimatePipelineCost(makeMetadata("M"));
+    const result = selector.estimatePipelineCost(makeMetadata("M"), { provider: "anthropic" });
     expect(result.calibrationUsed).toBe(false);
   });
 
   it("always reports baselineEstimatedCost for comparison, calibrated or not", () => {
     const table = buildTable(generateRecords(10, "feature-dev", "sonnet", 40.0));
-    const result = selector.estimatePipelineCost(makeMetadata("M"), undefined, table);
-    const baseline = selector.estimatePipelineCost(makeMetadata("M"));
+    const result = selector.estimatePipelineCost(makeMetadata("M"), {
+      provider: "anthropic",
+      stageModelCalibration: table,
+    });
+    const baseline = selector.estimatePipelineCost(makeMetadata("M"), { provider: "anthropic" });
 
     expect(result.baselineEstimatedCost).toBeCloseTo(baseline.totalEstimatedCost, 10);
   });
@@ -163,7 +188,11 @@ describe("AutoModelSelector.estimatePipelineCost + StageModelCalibrationService"
     const spy = vi.spyOn(selector, "selectModel");
     const restrictiveEnvelope: ModelEnvelope = { floor: "haiku", ceiling: "sonnet" };
 
-    selector.estimatePipelineCost(makeMetadata("L"), undefined, null, restrictiveEnvelope);
+    selector.estimatePipelineCost(makeMetadata("L"), {
+      provider: "anthropic",
+      stageModelCalibration: null,
+      envelope: restrictiveEnvelope,
+    });
 
     // Every non-skipped call should receive the passed envelope, not the default
     const calls = spy.mock.calls;
@@ -177,7 +206,7 @@ describe("AutoModelSelector.estimatePipelineCost + StageModelCalibrationService"
 
   it("defaults to DEFAULT_MODEL_ENVELOPE when no envelope is passed", () => {
     const spy = vi.spyOn(selector, "selectModel");
-    selector.estimatePipelineCost(makeMetadata("L"));
+    selector.estimatePipelineCost(makeMetadata("L"), { provider: "anthropic" });
 
     for (const call of spy.mock.calls) {
       expect(call[4]).toEqual(DEFAULT_MODEL_ENVELOPE);
@@ -192,12 +221,11 @@ describe("AutoModelSelector.estimatePipelineCost + StageModelCalibrationService"
     const table = buildTable(generateRecords(10, "feature-dev", "sonnet", 12.0));
     const restrictiveEnvelope: ModelEnvelope = { floor: "haiku", ceiling: "sonnet" };
 
-    const result = selector.estimatePipelineCost(
-      makeMetadata("L"),
-      undefined,
-      table,
-      restrictiveEnvelope
-    );
+    const result = selector.estimatePipelineCost(makeMetadata("L"), {
+      provider: "anthropic",
+      stageModelCalibration: table,
+      envelope: restrictiveEnvelope,
+    });
 
     const devStage = result.stages.find((s) => s.stage === "feature-dev")!;
     expect(devStage.model).toBe("sonnet");

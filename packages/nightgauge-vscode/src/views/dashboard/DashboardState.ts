@@ -3432,7 +3432,8 @@ export class DashboardState {
     metadata: import("@nightgauge/sdk").IssueMetadata,
     skipStages?: string[]
   ): Promise<import("@nightgauge/sdk").PipelineCostEstimate> {
-    const { AutoModelSelector, StageModelCalibrationService } = await import("@nightgauge/sdk");
+    const { AutoModelSelector, StageModelCalibrationService, providerForAdapter } =
+      await import("@nightgauge/sdk");
     const { getStageModelsMatrix } = await import("../../utils/nightgaugeConfig");
     const { toModelEnvelope } = await import("../../utils/modeProfiles");
     const stageMatrix = getStageModelsMatrix(this.workspaceRoot);
@@ -3455,12 +3456,18 @@ export class DashboardState {
       const { getPerformanceMode } = await import("../../utils/resolvers/monitoringResolver");
       mode = getPerformanceMode(this.workspaceRoot);
     }
-    this.costEstimate = selector.estimatePipelineCost(
-      metadata,
+    // The provider the run would dispatch to, so the widget prices against the
+    // rate card the run would actually be billed at (#1213).
+    const { resolveStageAdapter } = await import("../../utils/resolvers/adapterResolver");
+    const provider = providerForAdapter(
+      resolveStageAdapter("feature-dev", this.workspaceRoot).adapter
+    );
+    this.costEstimate = selector.estimatePipelineCost(metadata, {
       skipStages,
       stageModelCalibration,
-      toModelEnvelope(mode)
-    );
+      envelope: toModelEnvelope(mode),
+      provider,
+    });
     return this.costEstimate;
   }
 

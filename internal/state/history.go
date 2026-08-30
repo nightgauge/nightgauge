@@ -86,25 +86,33 @@ type V2RunRecord struct {
 	// nothing fabricates one — for records written from #397 onward. Records
 	// written earlier may carry a synthetic `feat/{IssueNumber}` for a run that
 	// resolved nothing, and cannot be distinguished after the fact.
-	Branch            string                   `json:"branch"`
-	BaseBranch        string                   `json:"base_branch"`
-	ExecutionMode     string                   `json:"execution_mode"`
-	StartedAt         string                   `json:"started_at"`
-	CompletedAt       string                   `json:"completed_at"`
-	TotalDuration     int64                    `json:"total_duration_ms"`
-	Outcome           string                   `json:"outcome"`
-	Labels            []string                 `json:"labels,omitempty"`
-	Size              *string                  `json:"size"`
-	Type              *string                  `json:"type"`
-	Priority          *string                  `json:"priority,omitempty"`
-	Stages            map[string]V2StageDetail `json:"stages"`
-	Tokens            V2Tokens                 `json:"tokens"`
-	OutcomeType       string                   `json:"outcome_type,omitempty"`
-	Files             V2Files                  `json:"files"`
-	Routing           V2Routing                `json:"routing"`
-	IsRecovery        bool                     `json:"is_recovery,omitempty"`
-	GateResults       []GateResult             `json:"gate_results,omitempty"`
-	OutcomePrediction *OutcomePrediction       `json:"outcome_prediction,omitempty"`
+	Branch        string                   `json:"branch"`
+	BaseBranch    string                   `json:"base_branch"`
+	ExecutionMode string                   `json:"execution_mode"`
+	StartedAt     string                   `json:"started_at"`
+	CompletedAt   string                   `json:"completed_at"`
+	TotalDuration int64                    `json:"total_duration_ms"`
+	Outcome       string                   `json:"outcome"`
+	Labels        []string                 `json:"labels,omitempty"`
+	Size          *string                  `json:"size"`
+	Type          *string                  `json:"type"`
+	Priority      *string                  `json:"priority,omitempty"`
+	Stages        map[string]V2StageDetail `json:"stages"`
+	Tokens        V2Tokens                 `json:"tokens"`
+	OutcomeType   string                   `json:"outcome_type,omitempty"`
+	Files         V2Files                  `json:"files"`
+	Routing       V2Routing                `json:"routing"`
+	// BudgetEstimate is the pre-flight projection this run was dispatched
+	// against, persisted so accuracy can be measured from the corpus (#1213).
+	//
+	// It lived only in the pipeline STATE's pipeline_meta, which is per-run
+	// ephemeral and gone once the run ends — so "is the estimate getting
+	// better?" was a question nothing on disk could answer, and the estimate's
+	// 4.4x miss was noticed by reading Slack messages instead.
+	BudgetEstimate    *V2BudgetEstimate  `json:"budget_estimate,omitempty"`
+	IsRecovery        bool               `json:"is_recovery,omitempty"`
+	GateResults       []GateResult       `json:"gate_results,omitempty"`
+	OutcomePrediction *OutcomePrediction `json:"outcome_prediction,omitempty"`
 	// ActualLinesChanged is captured before pr-merge and is absent when the run
 	// never reached pr-create. It is the non-circular source for
 	// OutcomePrediction.ActualSize (#369).
@@ -408,6 +416,23 @@ type V2StageTokens struct {
 	// canonical set. Empty string maps to absent on the wire via omitempty —
 	// readers must treat absence as adapter-unknown rather than defaulting.
 	Adapter string `json:"adapter,omitempty"`
+	// Model is the model band that served this stage — the SAME value written
+	// to V2StageDetail.ModelSelection.Model, resolved once and shared so the
+	// two attributions cannot disagree (the Adapter precedent, #3224).
+	//
+	// It exists because the per-(stage, model) calibration loop reads
+	// tokens.per_stage[*].model and nothing wrote it: PostPipelineAnalyzer's
+	// `.filter(([, usage]) => usage.model)` dropped every row, so
+	// stage-model-calibration.json did not exist in any workspace after
+	// hundreds of runs and estimatePipelineCost always fell through to the
+	// static baselines. docs/SELF_IMPROVEMENT_LOOP.md described that loop as
+	// working; it never produced a single data point (#1213).
+	//
+	// ASSIGNED, not accumulated, matching Adapter: the tokens of a
+	// backtracked stage sum across attempts, but the model that "served" it is
+	// the one the last attempt used — the same attempt stages[<name>]
+	// describes.
+	Model string `json:"model,omitempty"`
 	// CostSource records HOW CostUSD was priced (Issue #682): one of
 	// state.CostSourceNative (a vendor/CLI-reported measurement),
 	// state.CostSourceComputed (rate-card derived), state.CostSourceUnknown
@@ -436,6 +461,27 @@ type V2StageTokens struct {
 	// the same stage resolved cleanly. NOT forwarded to the platform V4
 	// telemetry payload — see pipelineRunV4Mapper.ts / execution_history_mapper.go.
 	CostUnstamped bool `json:"cost_unstamped,omitempty"`
+}
+
+// V2BudgetEstimate is the pre-flight projection a run was dispatched against.
+//
+// Recorded so `nightgauge cost accuracy` can report actual/estimate ratios over
+// the corpus, grouped by size, provider and source. Absent on a run the gate
+// never estimated — absent means "not estimated", never "estimated at zero".
+type V2BudgetEstimate struct {
+	// USD is the PUBLISHED projection. Zero with Source "unpriced" means the
+	// provider serves a band the registry cannot price; there is no number.
+	USD float64 `json:"usd,omitempty"`
+	// Source is which input produced USD: "static" | "historical-p75" |
+	// "stage-model" | "unpriced". Without it, a calibrated estimate and an
+	// uncalibrated one are indistinguishable in the corpus, so no report can
+	// say whether calibration is working.
+	Source string `json:"source,omitempty"`
+	// Provider is the registry provider USD was priced against. A run's
+	// estimate is only comparable to its actual within one rate card.
+	Provider string `json:"provider,omitempty"`
+	// CeilingUSD is the budget ceiling in force for the run.
+	CeilingUSD float64 `json:"ceiling_usd,omitempty"`
 }
 
 // V2Files matches the v2 files sub-schema.
@@ -654,6 +700,11 @@ type V2RunInput struct {
 	// its own adapter via RecordStageAdapter and this fallback stops being
 	// read. Empty string means "unknown" — leaves Adapter absent on the wire.
 	DefaultAdapter string
+	// BudgetEstimate is the pre-flight projection this run was dispatched
+	// against (#1213). Nil when the gate did not estimate — the record then
+	// omits the block, because "not estimated" and "estimated at zero" are
+	// different facts and only one of them belongs in an accuracy ratio.
+	BudgetEstimate *V2BudgetEstimate
 	// OutcomeType is a first-class, needs-human run outcome (e.g. "blocked" for
 	// a pr-merge blocked by a required-check/branch-ruleset config no retry can
 	// clear). Distinct from Outcome (complete|failed): it refines a FAILED run
@@ -1196,7 +1247,11 @@ func (hw *HistoryWriter) BuildV2Record(snap *RuntimeState, success bool, errMsg 
 		// The escalation branch maps the reason instead of passing it through:
 		// until #446 it assigned esc.Reason verbatim, so the record carried a
 		// terminal-kind string no reader's enum listed.
-		if m := snap.StageModels[stageName]; m != "" {
+		// Hoisted so the token accumulator below reads the SAME value the
+		// model_selection block writes — two attributions of one fact must not
+		// be able to drift (#1213).
+		stageModel := snap.StageModels[stageName]
+		if m := stageModel; m != "" {
 			source := ModelSourceScheduler
 			for _, fb := range snap.ModelRefusalFallbacks {
 				if fb.Stage == stageName {
@@ -1296,6 +1351,8 @@ func (hw *HistoryWriter) BuildV2Record(snap *RuntimeState, success bool, errMsg 
 		// OR-fold just above.
 		acc.CostSource = foldCostSource(acc.CostSource, sr.CostSource)
 		acc.Adapter = stageAdapter
+		// Assign, like Adapter and for the same reason — see the field's doc.
+		acc.Model = stageModel
 
 		// Cache hit rate: cache_read / (input + cache_read), recomputed from the
 		// accumulated totals so it describes the stage as a whole rather than
@@ -1360,6 +1417,12 @@ func (hw *HistoryWriter) BuildV2Record(snap *RuntimeState, success bool, errMsg 
 						CostUSD:       sr.CostUSD,
 						CacheHitRate:  cacheHitRate,
 						Adapter:       stageAdapter,
+						// Same source as the accumulate path above (#1213). A
+						// stage that failed on its terminating attempt still
+						// spent tokens on a known model, and a calibration
+						// corpus that silently omits the expensive failures is
+						// biased in the direction that matters most.
+						Model: snap.StageModels[stageName],
 						// RecordTerminatingStageTokens has no costSource
 						// parameter today (#682, same known gap as
 						// costUnstamped below), so this is always "" on this
@@ -1513,6 +1576,7 @@ func (hw *HistoryWriter) BuildV2Record(snap *RuntimeState, success bool, errMsg 
 			SkipStages:      skipStages,
 			ChangeClass:     input.ChangeClass,
 		},
+		BudgetEstimate:      input.BudgetEstimate,
 		IsRecovery:          input.IsRecovery,
 		TerminalFailureKind: input.TerminalFailureKind,
 		OutcomeType:         input.OutcomeType,

@@ -49,7 +49,15 @@ export const HistoryStageTokenUsageSchema = z.object({
   cache_read: z.number().int().min(0),
   cache_creation: z.number().int().min(0),
   cost_usd: z.number().min(0),
-  /** Model used for this stage (Issue #1006) */
+  /**
+   * The model band that served this stage (#1006, given a writer in #1213).
+   *
+   * Stays OPTIONAL, deliberately. The Go writer now always emits it, but every
+   * record already on disk predates that writer and genuinely lacks the field —
+   * making it required would reject the entire existing corpus, including the
+   * history the calibration loop backfills from via
+   * `stages[*].model_selection.model`.
+   */
   model: z.string().optional(),
   // `model_source` used to sit here, a second copy of the model_selection
   // vocabulary on the token block. It had no writer in any language — Go's
@@ -744,6 +752,26 @@ export const ExecutionHistoryRunRecordV2Schema = z.object({
     path: z.string(),
     skip_stages: z.array(z.string()),
   }),
+
+  /**
+   * The pre-flight projection this run was dispatched against (#1213).
+   *
+   * Optional because it is absent on every run the gate did not estimate,
+   * including the whole pre-#1213 corpus. Absent means NOT ESTIMATED — never
+   * "estimated at zero", which would become a division by zero in the accuracy
+   * report or a 0-cost "perfect" prediction.
+   *
+   * `usd` is absent when `source` is "unpriced": the provider serves a band the
+   * registry cannot price, so no number was published.
+   */
+  budget_estimate: z
+    .object({
+      usd: z.number().min(0).optional(),
+      source: z.string().optional(),
+      provider: z.string().optional(),
+      ceiling_usd: z.number().min(0).optional(),
+    })
+    .optional(),
 
   /**
    * Insertions + deletions captured against the PR base at pr-create exit

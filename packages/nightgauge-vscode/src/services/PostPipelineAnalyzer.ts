@@ -511,21 +511,37 @@ export class PostPipelineAnalyzer {
       // can calibrate each stage independently instead of rescaling a single
       // whole-run total.
       try {
-        const { StageModelCalibrationService } = await import("@nightgauge/sdk");
+        const { StageModelCalibrationService, normalizeCalibrationModelKey } =
+          await import("@nightgauge/sdk");
         const runRecords = rawRecords.filter(
           (r) => r.record_type === "run" && r.outcome === "complete"
         ) as ExecutionHistoryRunRecordV2[];
 
+        // `usage.model` had no writer until #1213, so this filter dropped
+        // EVERY row: stage-model-calibration.json did not exist in any
+        // workspace after hundreds of runs, and estimatePipelineCost always
+        // fell through to the static baselines while
+        // docs/SELF_IMPROVEMENT_LOOP.md described the loop as working.
+        //
+        // The Go writer now populates it. `model_selection.model` is the
+        // fallback so the loop starts WARM on the history already on disk
+        // rather than from zero — that is the backfill; it needs no separate
+        // verb, because every pre-fix record carries the same value in the
+        // sibling field.
         const stageModelInputs = runRecords.flatMap((r) =>
-          Object.entries(r.tokens.per_stage ?? {})
-            .filter(([, usage]) => usage.model)
-            .map(([stage, usage]) => ({
-              stage,
-              model: usage.model as string,
-              cost_usd: usage.cost_usd,
-              input_tokens: usage.input + usage.cache_read + usage.cache_creation,
-              output_tokens: usage.output,
-            }))
+          Object.entries(r.tokens.per_stage ?? {}).flatMap(([stage, usage]) => {
+            const model = usage.model ?? r.stages?.[stage]?.model_selection?.model;
+            if (!model) return [];
+            return [
+              {
+                stage,
+                model: normalizeCalibrationModelKey(model),
+                cost_usd: usage.cost_usd,
+                input_tokens: usage.input + usage.cache_read + usage.cache_creation,
+                output_tokens: usage.output,
+              },
+            ];
+          })
         );
 
         if (stageModelInputs.length > 0) {

@@ -466,26 +466,46 @@ export function computeCostUsd(modelId: string, tokens: TokenCounts): number {
   );
 }
 
+/** Per-million rates for one (provider, band) pair. */
+export interface ProviderTierRates {
+  inputPerMillion: number;
+  outputPerMillion: number;
+  /** Absent when the provider publishes no cache tier; callers fall back to the input rate. */
+  cacheReadPerMillion?: number;
+  /**
+   * ONE cache-creation rate, because every consumer holds an UNSPLIT
+   * cache-creation count. Per the #358 convention that is the 5m tier — the
+   * cheaper one, so a derived estimate is a floor.
+   */
+  cacheCreationPerMillion?: number;
+}
+
 /**
- * Derive the legacy tier-keyed `ModelCostRate` map from the registry, so the old
- * hand-maintained `DEFAULT_MODEL_COST_RATES` table has a single source. One entry
- * per Anthropic tier, taken from that tier's current (non-deprecated) model.
+ * Rates for a `(provider, band)` pair, or `undefined` when that provider
+ * serves no model in that band.
+ *
+ * `undefined` is the TypeScript analogue of Go's `Stamped=false`, and it is the
+ * whole point of this function: it NEVER falls back to another provider.
+ * `deriveDefaultModelCostRates()`, which this replaces, called
+ * `getModelDescriptor(tier, "anthropic")` for every band, so a run dispatched
+ * to xai or openai was estimated at Claude prices while the actual was booked
+ * at the real provider rate — the exact asymmetry #696 fixed on the Go side and
+ * left standing on this one (#1213).
+ *
+ * A local provider (ollama, lm-studio) has no registry entries by design; it
+ * reports unpriced rather than a confident $0, because "free" and "unknown" are
+ * different answers and only one of them is safe to add into a total.
  */
-export function deriveDefaultModelCostRates(): Record<string, ModelCostRate> {
-  const out: Record<string, ModelCostRate> = {};
-  for (const tier of TIER_BANDS) {
-    const m = getModelDescriptor(tier, "anthropic");
-    if (!m) continue;
-    out[tier] = {
-      inputPerMillion: m.rates.input,
-      outputPerMillion: m.rates.output,
-      cacheReadPerMillion: m.rates.cache_read,
-      // ModelCostRate carries ONE cache-creation rate because every consumer
-      // of it holds an UNSPLIT cache-creation count. Per the #358 convention
-      // that is the 5m tier — the cheaper one, so the derived estimate is a
-      // floor. It stops being an approximation once #390 plumbs the split.
-      cacheCreationPerMillion: m.rates.cache_creation_5m,
-    };
-  }
-  return out;
+export function ratesForProviderTier(
+  provider: Provider,
+  tier: string
+): ProviderTierRates | undefined {
+  const m = getModelDescriptor(tier, provider);
+  if (!m || m.provider !== provider) return undefined;
+  return {
+    inputPerMillion: m.rates.input,
+    outputPerMillion: m.rates.output,
+    cacheReadPerMillion: m.rates.cache_read,
+    cacheCreationPerMillion: m.rates.cache_creation_5m,
+  };
 }

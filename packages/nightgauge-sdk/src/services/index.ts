@@ -40,6 +40,7 @@ export {
 
 export {
   StageModelCalibrationService,
+  normalizeCalibrationModelKey,
   type StageModelCalibrationTable,
   type StageModelBucketCalibration,
   type StageModelCalibrationInput,

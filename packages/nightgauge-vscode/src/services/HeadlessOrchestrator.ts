@@ -9763,13 +9763,20 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         }
         this.stateService?.setMeta({
           complexity: preFlightResult.complexity,
-          budget_estimate_usd: preFlightResult.estimatedCost,
+          // Absent on an unpriced run rather than a confident 0 — the
+          // notification renders "unpriced" from the source field below.
+          budget_estimate_usd:
+            preFlightResult.estimateSource === "unpriced"
+              ? undefined
+              : preFlightResult.estimatedCost,
           budget_ceiling_usd: preFlightResult.ceilingUsd,
-          // Audit trail for the estimate (#198): "estimated $X under
-          // calibration-as-of-T in mode M" — makes post-run cost-vs-estimate
-          // deltas meaningful.
+          // Audit trail for the estimate (#198, #1213): "estimated $X from
+          // SOURCE, priced against PROVIDER, under calibration-as-of-T" —
+          // makes post-run cost-vs-estimate deltas meaningful AND lets a
+          // reader tell a calibrated estimate from an uncalibrated one.
           budget_estimate_captured_at: this.estimatorSnapshot?.capturedAt,
-          budget_estimate_mode: this.estimatorSnapshot?.mode,
+          budget_estimate_source: preFlightResult.estimateSource,
+          budget_estimate_provider: this.estimatorSnapshot?.provider,
           performance_mode: performanceMode,
           // Additively kept for one release — Discord/Dashboard read fallback (Issue #3009).
           is_supercharge: superchargeActive || undefined,
@@ -12586,9 +12593,15 @@ export class HeadlessOrchestrator implements vscode.Disposable {
                     labels: issueMetadataForEstimate?.labels ?? [],
                     title: issueMetadataForEstimate?.title ?? `Issue #${issueNumber}`,
                   },
-                  this.cachedRoutingTelemetry?.skip_stages ?? [],
-                  stageModelCalibration,
-                  toModelEnvelope(performanceMode)
+                  {
+                    skipStages: this.cachedRoutingTelemetry?.skip_stages ?? [],
+                    stageModelCalibration,
+                    envelope: toModelEnvelope(performanceMode),
+                    // The provider pinned at pipeline start, so a mid-run
+                    // config change cannot reprice the comparison (#198).
+                    provider: this.estimatorSnapshot?.provider ?? "anthropic",
+                    stageEfforts: this.estimatorSnapshot?.stageEfforts,
+                  }
                 );
                 estimatedCostUsd = estimate.totalEstimatedCost;
                 estimatedPerStageCosts = Object.fromEntries(

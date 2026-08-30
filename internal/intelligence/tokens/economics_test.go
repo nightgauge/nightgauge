@@ -2,8 +2,6 @@ package tokens
 
 import (
 	"testing"
-
-	"github.com/nightgauge/nightgauge/internal/models"
 )
 
 func TestBudget_Record(t *testing.T) {
@@ -74,30 +72,6 @@ func TestDefaultBudget(t *testing.T) {
 	}
 }
 
-func TestEstimateCost(t *testing.T) {
-	stages := []string{"issue-pickup", "feature-planning", "feature-dev", "feature-validate", "pr-create", "pr-merge"}
-	est := EstimateCost("claude", stages, 5)
-
-	if est.TotalCostUSD <= 0 {
-		t.Errorf("total cost = %f, want > 0", est.TotalCostUSD)
-	}
-	if len(est.StageBreakdown) != 6 {
-		t.Errorf("breakdown stages = %d, want 6", len(est.StageBreakdown))
-	}
-	if est.Confidence != "medium" {
-		t.Errorf("confidence = %s, want medium", est.Confidence)
-	}
-}
-
-func TestEstimateCost_HighComplexity(t *testing.T) {
-	low := EstimateCost("claude", []string{"feature-dev"}, 2)
-	high := EstimateCost("claude", []string{"feature-dev"}, 9)
-
-	if high.TotalCostUSD <= low.TotalCostUSD {
-		t.Errorf("high complexity cost %f should exceed low %f", high.TotalCostUSD, low.TotalCostUSD)
-	}
-}
-
 func TestCalculateCost_OpusPricing(t *testing.T) {
 	// 1M input + 1M output tokens → input_price + output_price dollars
 	cases := []struct {
@@ -123,114 +97,6 @@ func TestCalculateCost_OpusPricing(t *testing.T) {
 		if got != tc.wantTotal1M {
 			t.Errorf("CalculateCost(%s, 1M, 1M) = %f, want %f", tc.model, got, tc.wantTotal1M)
 		}
-	}
-}
-
-// Asserts the BAND, resolved through the registry — not a pinned id. See the
-// note on TestRecommendModel_ResolvesCurrentBandModel (#74): pinning the
-// concrete id is what let this layer keep naming a superseded model.
-func TestDefaultModelForEstimate_HighComplexityReturnsCurrentOpus(t *testing.T) {
-	want, ok := models.Get("opus")
-	if !ok {
-		t.Fatal("registry has no non-deprecated opus-band model")
-	}
-	got := defaultModelForEstimate("anthropic", "feature-dev", 9)
-	if got != want.ID {
-		t.Errorf("high-complexity feature-dev model = %s, want %s (current opus band)", got, want.ID)
-	}
-}
-
-// #696: the forecast and the recording must price one run from ONE rate card.
-// Before the fix EstimateCost resolved every tier through the registry's
-// anthropic default and priced it with CalculateCost, so a grok run was
-// forecast at claude-sonnet's $3/$15 while CalculateCostForAdapter recorded it
-// at grok-4.6's $0.34/$1.02 — an ~11x bias that made forecast-vs-actual
-// variance structurally wrong rather than noisy (#583, run 01a007d5).
-func TestEstimateCost_GrokPricesFromGrokRateCard(t *testing.T) {
-	const stage = "feature-planning"
-	const complexity = 5
-
-	xai, ok := models.Resolve("xai", models.BandSonnet)
-	if !ok {
-		t.Fatal("registry has no non-deprecated xai sonnet-band model")
-	}
-
-	est := EstimateCost("grok", []string{stage}, complexity)
-	if est.Provider != "xai" {
-		t.Errorf("provider = %q, want xai", est.Provider)
-	}
-	if len(est.StageBreakdown) != 1 {
-		t.Fatalf("breakdown stages = %d, want 1", len(est.StageBreakdown))
-	}
-	got := est.StageBreakdown[0]
-	if !got.Stamped || !est.Stamped {
-		t.Fatalf("grok forecast unstamped (stage=%v total=%v), want priced", got.Stamped, est.Stamped)
-	}
-	if got.Model != xai.ID {
-		t.Errorf("forecast model = %q, want %q — the tier must resolve against the SERVING provider", got.Model, xai.ID)
-	}
-
-	// The money itself, derived straight from the xai rate card — so the
-	// assertion fails on a wrong NUMBER, not only on a wrong model name.
-	tk := estimateStageTokens(stage, complexity)
-	counts := TokenCounts{Input: tk.Input, Output: tk.Output}
-	wantCost := (float64(counts.Input)*xai.Rates.Input + float64(counts.Output)*xai.Rates.Output) / 1_000_000
-	if got.CostUSD != wantCost {
-		t.Errorf("grok forecast = $%.6f, want $%.6f from xai's own rate card", got.CostUSD, wantCost)
-	}
-
-	// The recording side prices the same tokens for the same adapter. The two
-	// halves must agree to the cent; they cannot if one of them silently used
-	// anthropic's card.
-	recorded, stamped := CalculateCostForAdapter("grok", got.Model, counts)
-	if !stamped {
-		t.Fatal("CalculateCostForAdapter(grok) unstamped — fixture broken")
-	}
-	if got.CostUSD != recorded {
-		t.Errorf("forecast $%.6f != recorded $%.6f for the same grok tokens", got.CostUSD, recorded)
-	}
-
-	// And it must not be the anthropic figure the old code produced.
-	anthropicModel := defaultModelForEstimate("anthropic", stage, complexity)
-	anthropicCost := CalculateCost(anthropicModel, counts)
-	if got.CostUSD == anthropicCost {
-		t.Errorf("grok forecast $%.6f equals the anthropic-rate figure for %s — still adapter-blind",
-			got.CostUSD, anthropicModel)
-	}
-}
-
-// An unpriceable (provider, tier) pair must SAY it is unpriced rather than
-// return a confident anthropic-rate number — CalculateCostForAdapter's
-// stamped contract (#585), now honored by the forecasting half too.
-func TestEstimateCost_UnpriceableProviderIsUnstamped(t *testing.T) {
-	// "vendor-mystery-cli" is not a known adapter → provider "other", which
-	// carries no tier bands, so no stage can be priced.
-	est := EstimateCost("vendor-mystery-cli", []string{"feature-dev"}, 5)
-	if est.Provider != "other" {
-		t.Fatalf("provider = %q, want other", est.Provider)
-	}
-	if est.Stamped {
-		t.Error("estimate stamped for a provider with no rate card, want unstamped")
-	}
-	if est.TotalCostUSD != 0 {
-		t.Errorf("unpriced total = %f, want 0 (absence of a price, not a price)", est.TotalCostUSD)
-	}
-	for _, s := range est.StageBreakdown {
-		if s.Stamped {
-			t.Errorf("stage %s stamped, want unstamped", s.Stage)
-		}
-	}
-}
-
-// Local providers keep #56's honest $0: stamped, because zero marginal cost is
-// an answer, not a gap.
-func TestEstimateCost_LocalProviderIsStampedZero(t *testing.T) {
-	est := EstimateCost("ollama", []string{"feature-dev"}, 5)
-	if !est.Stamped {
-		t.Error("ollama estimate unstamped, want stamped $0 (#56)")
-	}
-	if est.TotalCostUSD != 0 {
-		t.Errorf("ollama total = %f, want 0", est.TotalCostUSD)
 	}
 }
 
@@ -380,3 +246,11 @@ func TestModelForProviderBand(t *testing.T) {
 		})
 	}
 }
+
+// The six EstimateCost tests that lived here are gone with the function
+// (#1213). Their INTENT was not lost: the grok-rate-card, unpriceable-provider
+// and local-provider-zero contracts they pinned (#696) are now asserted against
+// the one surviving estimator, in
+// packages/nightgauge-sdk/tests/analysis/AutoModelSelector.costEstimation.test.ts.
+// The Go forecast they covered priced feature-dev at 8k input tokens against a
+// measured 5.65M, so keeping it green would have pinned a wrong answer.

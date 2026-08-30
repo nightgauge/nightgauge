@@ -354,8 +354,20 @@ export interface PipelineMeta {
   budget_ceiling_usd?: number;
   /** When the estimator's inputs were pinned (#198 — auditability) */
   budget_estimate_captured_at?: string;
-  /** Performance mode the estimate was computed under (#198) */
-  budget_estimate_mode?: string;
+  /**
+   * Which source produced `budget_estimate_usd`: `static` | `historical-p75` |
+   * `stage-model` | `unpriced`. Without it a reader cannot tell a calibrated
+   * estimate from an uncalibrated one, which is how a median 3.9x
+   * under-estimate survived unnoticed (#1213).
+   *
+   * Replaces `budget_estimate_mode`, which held the PERFORMANCE mode —
+   * duplicating the adjacent `performance_mode`, with no reader anywhere.
+   * Renamed rather than reused: a field that silently changes meaning across
+   * records is worse than a new one.
+   */
+  budget_estimate_source?: string;
+  /** The registry provider the estimate was priced against (#1213). */
+  budget_estimate_provider?: string;
   /** Routing decision (standard/trivial/fast-track) */
   route?: string;
   /** Stages skipped by routing */
@@ -1360,6 +1372,16 @@ export class PipelineStateService implements vscode.Disposable {
     const runId = this.wireIdentityOrSkip("pipeline.notifyComplete");
     if (runId === null) return;
     try {
+      // The pre-flight estimate, forwarded so it lands on the DURABLE run
+      // record (#1213). It has only ever lived in pipeline_meta, which is
+      // per-run ephemeral state discarded when the run ends — so "is the
+      // estimate getting better?" was a question nothing on disk could answer,
+      // and a 4.4x miss was noticed by reading Slack rather than telemetry.
+      //
+      // Sent only when the gate actually estimated. Absent means NOT
+      // ESTIMATED; a zero here would become a division by zero in the
+      // accuracy report, or worse, a 0-cost "perfect" prediction.
+      const meta = this._lastState?.pipeline_meta;
       await this.ipc.call("pipeline.notifyComplete", {
         repo: this.runRepo,
         issueNumber: this.issueNumber ?? 0,
@@ -1370,6 +1392,14 @@ export class PipelineStateService implements vscode.Disposable {
         deferred: result.deferred ?? false,
         stageExecutionPaths: result.stageExecutionPaths ?? {},
         stagePuntReasons: result.stagePuntReasons ?? {},
+        ...(meta?.budget_estimate_source
+          ? {
+              budgetEstimateUsd: meta.budget_estimate_usd ?? 0,
+              budgetEstimateSource: meta.budget_estimate_source,
+              budgetEstimateProvider: meta.budget_estimate_provider ?? "",
+              budgetCeilingUsd: meta.budget_ceiling_usd ?? 0,
+            }
+          : {}),
         runId,
       } satisfies NotifyCompleteParams);
     } catch (err) {

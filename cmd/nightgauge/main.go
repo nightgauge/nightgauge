@@ -41,7 +41,6 @@ import (
 	"github.com/nightgauge/nightgauge/internal/intelligence/acparse"
 	"github.com/nightgauge/nightgauge/internal/intelligence/batch"
 	"github.com/nightgauge/nightgauge/internal/intelligence/changeClassifier"
-	"github.com/nightgauge/nightgauge/internal/intelligence/complexity"
 	"github.com/nightgauge/nightgauge/internal/intelligence/disciplineScore"
 	"github.com/nightgauge/nightgauge/internal/intelligence/failure"
 	"github.com/nightgauge/nightgauge/internal/intelligence/learning"
@@ -50,7 +49,6 @@ import (
 	"github.com/nightgauge/nightgauge/internal/intelligence/suggestions"
 	"github.com/nightgauge/nightgauge/internal/intelligence/survival"
 	"github.com/nightgauge/nightgauge/internal/intelligence/teams"
-	"github.com/nightgauge/nightgauge/internal/intelligence/tokens"
 	"github.com/nightgauge/nightgauge/internal/intelligence/typeinfer"
 	"github.com/nightgauge/nightgauge/internal/ipc"
 	"github.com/nightgauge/nightgauge/internal/notifications/inbound"
@@ -5058,106 +5056,209 @@ func healthGateMetricsCmd() *cobra.Command {
 
 // --- cost command ---
 
+// costCmd groups the cost verbs.
+//
+// It used to BE a forecast (`nightgauge cost --complexity N`), served by Go's
+// own EstimateCost. That estimator is gone (#1213): its per-stage baselines
+// were ~700x below the measured ones (feature-dev at 8k input tokens against a
+// measured 5.65M), it had no cache model, no effort ladder and no calibration,
+// and it was a second answer to a question the SDK's estimatePipelineCost —
+// which the pre-flight gate, the dashboard and the health widget all use —
+// already answers. Two estimators disagreeing is worse than one being wrong in
+// a known direction.
+//
+// What replaces it is the question nothing could answer: `cost accuracy`,
+// which reports actual-vs-estimate over the recorded corpus.
 func costCmd() *cobra.Command {
-	var complexityScore int
-	var adapter string
-
 	cmd := &cobra.Command{
 		Use:   "cost",
-		Short: "Estimate pipeline cost for an issue",
-		Example: `  nightgauge cost --complexity 5
-  nightgauge cost --complexity 8
-  nightgauge cost --adapter grok`,
+		Short: "Pipeline cost reporting (accuracy, by-class)",
+	}
+	cmd.AddCommand(costAccuracyCmd(), costByClassCmd())
+	return cmd
+}
+
+// accuracyRow is one grouping of the accuracy report.
+type accuracyRow struct {
+	Group   string  `json:"group"`
+	Key     string  `json:"key"`
+	Runs    int     `json:"runs"`
+	Median  float64 `json:"median_ratio"`
+	P90     float64 `json:"p90_ratio"`
+	Verdict string  `json:"verdict"`
+}
+
+// costAccuracyCmd implements `nightgauge cost accuracy [--days N] [--json]`.
+//
+// "Is the estimate getting better?" was previously answerable only by reading
+// Slack messages: the pre-flight projection lived in the pipeline STATE's
+// pipeline_meta, which is discarded when the run ends. #1213 persists it on the
+// durable run record, and this reports over that corpus.
+//
+// Ratios are actual/estimate, so >1 is an UNDER-estimate — the direction every
+// observed miss has taken. Grouped three ways because the three known biases
+// are independent: size (the baselines are per-size), provider (an
+// Anthropic-priced estimate of a grok run is wrong by the ratio between two
+// rate cards, #696), and source (a calibrated estimate should beat a static one
+// or the calibration is not working).
+func costAccuracyCmd() *cobra.Command {
+	var (
+		days       int
+		outputJSON bool
+	)
+	cmd := &cobra.Command{
+		Use:   "accuracy",
+		Short: "Report actual-vs-estimate cost accuracy over the run history",
+		Example: `  nightgauge cost accuracy
+  nightgauge cost accuracy --days 90 --json`,
+		Args:         cobra.NoArgs,
+		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			stages := []string{
-				"issue-pickup", "feature-planning", "feature-dev",
-				"feature-validate", "pr-create", "pr-merge",
+			workdir, err := os.Getwd()
+			if err != nil {
+				return fmt.Errorf("get working directory: %w", err)
+			}
+			records, err := pipeline.LoadHistory(workdir, "", "", days)
+			if err != nil {
+				return fmt.Errorf("load run history: %w", err)
 			}
 
-			// Also compute model routing for context
-			estimator := complexity.NewEstimator()
-			cplx := complexity.Score{Value: complexityScore, SizeLabel: "M"}
-			_ = estimator // used for type reference
+			bySize := map[string][]float64{}
+			byProvider := map[string][]float64{}
+			bySource := map[string][]float64{}
+			paired := 0
+			unpriced := 0
 
-			cwd, _ := os.Getwd()
-			router := routing.NewRouter(nil, cwd)
-			rec := router.Route(cmd.Context(), "feature-dev", cplx)
-
-			// The forecast must be priced against the adapter that will
-			// actually serve the run (#696), so resolve real adapter context
-			// instead of letting the estimator assume anthropic. --adapter
-			// outranks config; otherwise the canonical precedence chain runs
-			// against feature-dev, the same representative stage the model
-			// recommendation above is routed for.
-			resolvedAdapter := strings.TrimSpace(adapter)
-			adapterSource := "flag"
-			if resolvedAdapter == "" {
-				cfg, cfgErr := config.Load(cwd)
-				if cfgErr != nil {
-					cfg = nil
-				}
-				r := config.ResolveStageAdapter(cfg, "feature-dev", os.Getenv)
-				resolvedAdapter, adapterSource = r.Adapter, r.Source
-			}
-			if resolvedAdapter == "" {
-				// Nothing configured: the Go layer's own default adapter.
-				resolvedAdapter, adapterSource = "claude-headless", "layer-default"
-			}
-
-			est := tokens.EstimateCost(resolvedAdapter, stages, complexityScore)
-
-			fmt.Printf("Cost Estimate (complexity: %d/10)\n", complexityScore)
-			fmt.Printf("================================\n\n")
-			fmt.Printf("Adapter: %s (%s) → provider %s\n", est.Adapter, adapterSource, est.Provider)
-			// routing.Router.Route is provider-blind, so rec.Model is an
-			// anthropic id whatever adapter serves the run. Left as-is it
-			// contradicts the adapter line above and the stage table below
-			// (#696).
-			if recModel, ok := tokens.ModelForProviderBand(est.Provider, rec.Model); ok {
-				fmt.Printf("Model recommendation: %s\n", recModel)
-			} else {
-				fmt.Printf("Model recommendation: unresolved — provider %s serves no %s-band model\n",
-					est.Provider, recModel)
-			}
-			fmt.Printf("Reasoning: %s\n\n", rec.Reasoning)
-
-			fmt.Printf("%-20s %-25s %10s %8s\n", "Stage", "Model", "Cost", "Minutes")
-			fmt.Println(strings.Repeat("-", 65))
-			for _, s := range est.StageBreakdown {
-				if !s.Stamped {
-					fmt.Printf("%-20s %-25s %10s %7.1f\n", s.Stage, s.Model, "unpriced", s.Minutes)
+			for _, r := range records {
+				est := r.BudgetEstimate
+				if est == nil {
 					continue
 				}
-				fmt.Printf("%-20s %-25s $%8.4f %7.1f\n", s.Stage, s.Model, s.CostUSD, s.Minutes)
+				if est.Source == "unpriced" {
+					// No number was published, so there is no ratio. Counted
+					// separately rather than dropped — a corpus that is mostly
+					// unpriceable is itself the finding.
+					unpriced++
+					continue
+				}
+				actual := r.Tokens.EstimatedCostUSD
+				if est.USD <= 0 || actual <= 0 {
+					continue
+				}
+				ratio := actual / est.USD
+				paired++
+				size := "unknown"
+				if r.Size != nil && *r.Size != "" {
+					size = *r.Size
+				}
+				bySize[size] = append(bySize[size], ratio)
+				provider := est.Provider
+				if provider == "" {
+					provider = "unknown"
+				}
+				byProvider[provider] = append(byProvider[provider], ratio)
+				bySource[est.Source] = append(bySource[est.Source], ratio)
 			}
-			fmt.Println(strings.Repeat("-", 65))
-			switch {
-			case est.Stamped:
-				fmt.Printf("%-45s $%8.4f %7d\n", "TOTAL", est.TotalCostUSD, est.TotalDuration)
-			case est.TotalCostUSD == 0:
-				// Nothing priced at all. "$0.0000" would render the ABSENCE of
-				// a price as a price of zero — the exact shape the stamped
-				// contract exists to avoid, and what the stage rows already
-				// avoid by printing "unpriced".
-				fmt.Printf("%-45s %9s %7d\n", "TOTAL (unpriced)", "unpriced", est.TotalDuration)
-			default:
-				fmt.Printf("%-45s $%8.4f %7d\n", "TOTAL (partial)", est.TotalCostUSD, est.TotalDuration)
-			}
-			if !est.Stamped {
-				fmt.Printf("\nWARNING: provider %q has no registry rate for one or more stages;\n"+
-					"the total above omits them and is a floor, not the forecast.\n", est.Provider)
-			}
-			fmt.Printf("\nConfidence: %s\n", est.Confidence)
 
+			rows := []accuracyRow{}
+			rows = append(rows, accuracyRows("size", bySize)...)
+			rows = append(rows, accuracyRows("provider", byProvider)...)
+			rows = append(rows, accuracyRows("source", bySource)...)
+
+			if outputJSON {
+				return printJSON(map[string]any{
+					"runs_analyzed": len(records),
+					"runs_paired":   paired,
+					"runs_unpriced": unpriced,
+					"rows":          rows,
+				})
+			}
+
+			fmt.Printf("Cost estimate accuracy — %d run(s) in history, %d with a comparable estimate",
+				len(records), paired)
+			if unpriced > 0 {
+				fmt.Printf(", %d unpriced", unpriced)
+			}
+			fmt.Printf("\n\n")
+			if paired == 0 {
+				fmt.Println("No run carries both an estimate and an actual cost yet.")
+				fmt.Println("The estimate is recorded from the pre-flight gate (#1213); runs that")
+				fmt.Println("predate it have no estimate to compare against.")
+				return nil
+			}
+			fmt.Println("Ratio is actual/estimate — above 1.00 is an UNDER-estimate.")
+			fmt.Printf("\n%-10s %-16s %6s %10s %10s  %s\n",
+				"Group", "Key", "Runs", "Median", "p90", "Verdict")
+			fmt.Println(strings.Repeat("-", 72))
+			for _, row := range rows {
+				fmt.Printf("%-10s %-16s %6d %9.2fx %9.2fx  %s\n",
+					row.Group, row.Key, row.Runs, row.Median, row.P90, row.Verdict)
+			}
 			return nil
 		},
 	}
-
-	cmd.Flags().IntVar(&complexityScore, "complexity", 5, "Complexity score (1-10)")
-	cmd.Flags().StringVar(&adapter, "adapter", "",
-		"Execution adapter that will serve the run (default: resolved from config/env)")
-	cmd.AddCommand(costByClassCmd())
+	cmd.Flags().IntVar(&days, "days", 90, "Look back N days of run history")
+	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output as JSON")
 	return cmd
+}
+
+func accuracyRows(group string, buckets map[string][]float64) []accuracyRow {
+	keys := make([]string, 0, len(buckets))
+	for k := range buckets {
+		keys = append(keys, k)
+	}
+	// Sorted: this is a report a human compares against a previous run of
+	// itself, and map order would reshuffle identical data.
+	sort.Strings(keys)
+
+	rows := make([]accuracyRow, 0, len(keys))
+	for _, k := range keys {
+		v := append([]float64(nil), buckets[k]...)
+		sort.Float64s(v)
+		rows = append(rows, accuracyRow{
+			Group:   group,
+			Key:     k,
+			Runs:    len(v),
+			Median:  percentileOf(v, 50),
+			P90:     percentileOf(v, 90),
+			Verdict: accuracyVerdict(percentileOf(v, 50)),
+		})
+	}
+	return rows
+}
+
+// accuracyVerdict labels a median ratio using the SAME 0.8–1.25 band the
+// completion notification already renders as "≈ on estimate", so the report and
+// the notification cannot disagree about what "accurate" means.
+func accuracyVerdict(median float64) string {
+	switch {
+	case median >= 0.8 && median <= 1.25:
+		return "on estimate"
+	case median > 1.25:
+		return "under-estimating"
+	default:
+		return "over-estimating"
+	}
+}
+
+// percentileOf returns the p-th percentile of a SORTED slice, by linear
+// interpolation. Mirrors the TypeScript calibration percentile so the two
+// halves of the loop report the same number for the same data.
+func percentileOf(sorted []float64, p float64) float64 {
+	if len(sorted) == 0 {
+		return 0
+	}
+	if len(sorted) == 1 {
+		return sorted[0]
+	}
+	rank := (p / 100) * float64(len(sorted)-1)
+	lo := int(rank)
+	hi := lo + 1
+	if hi >= len(sorted) {
+		return sorted[len(sorted)-1]
+	}
+	frac := rank - float64(lo)
+	return sorted[lo] + frac*(sorted[hi]-sorted[lo])
 }
 
 // costByClassCmd implements `nightgauge cost by-class [--days N] [--json]`.

@@ -240,40 +240,59 @@ Builds calibration tables from pipeline outcome history. Maps size buckets (XS,
 S, M, L, XL) to observed cost/duration/token distributions, improving future
 size estimates.
 
-### Per-(Stage, Model) Cost Calibration (Issue #142)
+### Per-(Stage, Model) Cost Calibration (Issues #142, #1213)
 
-**File**: `packages/nightgauge-sdk/src/services/StageModelCalibrationService.ts`
+**Files**: `packages/nightgauge-sdk/src/services/StageModelCalibrationService.ts`,
+`internal/state/history.go` (the writer), `packages/nightgauge-vscode/src/services/PostPipelineAnalyzer.ts`
+
+> **This loop was dead from #142 until #1213.** Everything below the next
+> paragraph describes behaviour that is now real; before #1213 it described
+> behaviour that had never produced a single data point. The section is
+> retained with this note rather than quietly rewritten, because "the doc said
+> it worked" is the reason nobody looked.
+>
+> The loop reads `tokens.per_stage[*].model`, and **nothing wrote that field**.
+> `PostPipelineAnalyzer`'s `.filter(([, usage]) => usage.model)` therefore
+> dropped every row, `stage-model-calibration.json` did not exist in any
+> workspace after hundreds of runs, and `estimatePipelineCost` always fell
+> through to `TOKEN_BASELINES`. #1213 added the Go writer, so the field now has
+> a producer, and emptied `stageTokensKnownGaps` in
+> `history_schema_parity_test.go` — dropping the field again turns that test
+> red.
 
 The `(mode, size)` calibration above corrects the whole-run cost estimate but
-does not distinguish _which stage_ drove the actual cost — `AutoModelSelector`
-used to rescale every stage's static baseline by a single whole-run scale
-factor, which preserved the (often wrong) relative shape of `TOKEN_BASELINES`
-and produced near-zero rank correlation between estimated and actual per-stage
-cost. `StageModelCalibrationService` buckets observed cost and token usage by
+does not distinguish _which stage_ drove the actual cost.
+`StageModelCalibrationService` buckets observed cost and token usage by
 `(stage, model)` instead — e.g. `(feature-dev, sonnet)`, `(pr-create, haiku)` —
 from each completed run's `tokens.per_stage` history, mirroring
 `CalibrationService`'s percentile math and atomic-write pattern.
 
-`AutoModelSelector.estimatePipelineCost()` looks up the exact `(stage,
-selected-model)` cell for every non-skipped stage and, once a cell has ≥5
-samples, uses its observed p75 cost in place of the static
-`TOKEN_BASELINES` figure for that stage only — no cross-model fallback (a
-different model's cost distribution is not a meaningful default) and no
-special-casing for high-variance cells (e.g. `feature-dev` at mid-tier models):
-each cell reports its own honest p75, and the existing budget-ceiling gate
-(`budgetIntelligence.ts`) continues to own tail-risk enforcement. Stages
-without enough history still fall back to `TOKEN_BASELINES`, so the estimate
-improves stage-by-stage as history accumulates rather than waiting for every
-stage to calibrate at once.
+**One key scheme: the registry BAND.** The writer sees what actually served the
+stage, often a concrete id (`claude-sonnet-5`, `grok-4.6`); the estimator runs
+_before_ dispatch, so a concrete id is exactly what it cannot know.
+`normalizeCalibrationModelKey` resolves ids to bands on **both** sides — build
+and lookup — so the two halves cannot diverge. An id serving several bands
+(`grok-4.6` serves all four) stays its own key rather than being guessed into a
+band: a wrong cell the estimator trusts is worse than one it never finds.
 
-The estimator also now selects each stage's model against the run's actual
-performance-mode envelope (`modeProfiles.toModelEnvelope()`) rather than
-always defaulting to the Elevated envelope, so the estimated tier matches the
-tier the run will actually serve.
+`AutoModelSelector.estimatePipelineCost()` looks up the exact
+`(stage, selected-model)` cell for every non-skipped stage and, once a cell has
+≥5 samples, uses its observed p75 cost in place of the static `TOKEN_BASELINES`
+figure for that stage only — no cross-model fallback (a different model's cost
+distribution is not a meaningful default). Stages without enough history still
+fall back to `TOKEN_BASELINES`, so the estimate improves stage-by-stage.
+
+The estimator selects each stage's model against the run's actual
+performance-mode envelope (`modeProfiles.toModelEnvelope()`), and prices it
+against the run's actual **provider** and **per-stage effort** — see
+[GUARDRAILS_AND_BUDGETS.md](GUARDRAILS_AND_BUDGETS.md#pre-flight-cost-estimate-1213).
 
 `PostPipelineAnalyzer` rebuilds and persists
-`.nightgauge/pipeline/stage-model-calibration.json` after every completed run,
-parallel to the existing `(mode, size)` calibration table update.
+`.nightgauge/pipeline/stage-model-calibration.json` after every completed run.
+It reads `tokens.per_stage[*].model`, falling back to
+`stages[*].model_selection.model` — **that fallback is the backfill**: every
+pre-#1213 record carries the same value in the sibling field, so the loop
+starts warm on existing history rather than from zero, with no separate verb.
 
 ### Survival Calibration (Issues #4152/#4153)
 

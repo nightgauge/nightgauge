@@ -416,6 +416,12 @@ export class HealthWidgetService {
         : null;
       const history = this.dashboardState.getHistory().slice(0, 10);
 
+      const { providerForAdapter } = await import("@nightgauge/sdk");
+      const { resolveStageAdapter } = await import("../../utils/resolvers/adapterResolver");
+      const widgetProvider = providerForAdapter(
+        resolveStageAdapter("feature-dev", this.workspacePath).adapter
+      );
+
       for (const run of history) {
         if (run.status !== "complete") continue;
 
@@ -438,13 +444,28 @@ export class HealthWidgetService {
         // calibration is still consulted per stage.
         const estimate = selector.estimatePipelineCost(
           { labels: [`size:${sizeLabel}`], title: run.title },
-          run.routing?.skippedStages ?? [],
-          stageModelCalibration,
-          toModelEnvelope("elevated")
+          {
+            skipStages: run.routing?.skippedStages ?? [],
+            stageModelCalibration,
+            envelope: toModelEnvelope("elevated"),
+            // PipelineRunSummary carries no per-run adapter, so this prices
+            // against the configured provider. That is right for the common
+            // single-provider workspace and wrong for a run that used another
+            // one — which the `unpriced` guard below at least keeps from being
+            // reported as a confident overrun (#1213).
+            provider: widgetProvider,
+          }
         );
         const expectedCost = estimate.totalEstimatedCost;
 
-        if (expectedCost > 0 && actualCost > expectedCost * thresholdRatio && actualCost > minUsd) {
+        // An unpriced estimate is a floor, not a budget: comparing an actual
+        // against it would report an overrun for every unpriceable provider.
+        if (
+          !estimate.unpriced &&
+          expectedCost > 0 &&
+          actualCost > expectedCost * thresholdRatio &&
+          actualCost > minUsd
+        ) {
           // Find top stage by actual cost for the stage field
           const topStage = run.stages
             .filter((s) => s.tokenUsage?.costUsd)

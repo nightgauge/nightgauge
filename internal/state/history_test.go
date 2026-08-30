@@ -1737,3 +1737,138 @@ func TestBuildV2Record_BacktrackedStageDetailDescribesTheStandingAttempt(t *test
 			record.Tokens.EstimatedCostUSD, rs.TotalCostUSD)
 	}
 }
+
+// --- per-stage model attribution (#1213) ---
+//
+// The per-(stage, model) calibration loop reads tokens.per_stage[*].model and
+// NOTHING wrote it: PostPipelineAnalyzer's `.filter(([, usage]) => usage.model)`
+// dropped every row, stage-model-calibration.json did not exist in any
+// workspace after hundreds of runs, and estimatePipelineCost always fell
+// through to the static baselines — while docs/SELF_IMPROVEMENT_LOOP.md
+// described the loop as working.
+
+func TestBuildV2Record_PerStageTokensCarryTheServedModel(t *testing.T) {
+	hw := NewHistoryWriter(t.TempDir())
+	rs := NewRuntimeState("nightgauge/nightgauge", 1213, "item", testRunID())
+
+	rs.BeginStage(StageFeatureDev)
+	rs.RecordStageModel(StageFeatureDev, "opus")
+	rs.CompleteStage(0, tokens.TokenCounts{Input: 1000, Output: 100}, "", "")
+	rs.BeginStage(StagePRCreate)
+	rs.RecordStageModel(StagePRCreate, "haiku")
+	rs.CompleteStage(0, tokens.TokenCounts{Input: 200, Output: 20}, "", "")
+
+	rec := hw.BuildV2Record(rs, true, "", V2RunInput{Title: "t"}, time.Now())
+
+	for stage, want := range map[string]string{"feature-dev": "opus", "pr-create": "haiku"} {
+		got := rec.Tokens.PerStage[stage].Model
+		if got != want {
+			t.Errorf("tokens.per_stage[%q].model = %q, want %q", stage, got, want)
+		}
+		// The two attributions of one fact must agree — they read a single
+		// hoisted variable precisely so they cannot drift.
+		if sel := rec.Stages[stage].ModelSelection; sel == nil || sel.Model != got {
+			t.Errorf("stage %q: per_stage.model=%q disagrees with model_selection", stage, got)
+		}
+	}
+}
+
+func TestBuildV2Record_PerStageModelSurvivesJSONRoundTrip(t *testing.T) {
+	hw := NewHistoryWriter(t.TempDir())
+	rs := NewRuntimeState("nightgauge/nightgauge", 1213, "item", testRunID())
+	rs.BeginStage(StageFeatureDev)
+	rs.RecordStageModel(StageFeatureDev, "sonnet")
+	rs.CompleteStage(0, tokens.TokenCounts{Input: 1000, Output: 100}, "", "")
+
+	rec := hw.BuildV2Record(rs, true, "", V2RunInput{Title: "t"}, time.Now())
+	data, err := json.Marshal(rec)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	// The analyzer reads the WIRE, so the json tag is what matters.
+	if !strings.Contains(string(data), `"model":"sonnet"`) {
+		t.Error("marshalled record carries no per-stage model")
+	}
+	var back V2RunRecord
+	if err := json.Unmarshal(data, &back); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got := back.Tokens.PerStage["feature-dev"].Model; got != "sonnet" {
+		t.Errorf("round-tripped model = %q, want sonnet", got)
+	}
+}
+
+// A backtracked stage sums tokens across attempts but has ONE model: the one
+// the last attempt used — the same attempt stages[<name>] describes. Assigned,
+// never accumulated, matching Adapter.
+func TestBuildV2Record_PerStageModelIsTheLastAttempt(t *testing.T) {
+	hw := NewHistoryWriter(t.TempDir())
+	rs := NewRuntimeState("nightgauge/nightgauge", 1213, "item", testRunID())
+
+	rs.BeginStage(StageFeatureDev)
+	rs.RecordStageModel(StageFeatureDev, "sonnet")
+	rs.CompleteStage(1, tokens.TokenCounts{Input: 1000, Output: 100}, "", "")
+	rs.BeginStage(StageFeatureDev)
+	rs.RecordStageModel(StageFeatureDev, "opus") // escalated on the retry
+	rs.CompleteStage(0, tokens.TokenCounts{Input: 2000, Output: 200}, "", "")
+
+	rec := hw.BuildV2Record(rs, true, "", V2RunInput{Title: "t"}, time.Now())
+	usage := rec.Tokens.PerStage["feature-dev"]
+	if usage.Model != "opus" {
+		t.Errorf("model = %q, want opus (the attempt that stands)", usage.Model)
+	}
+	// Tokens still accumulate — the two folds are deliberately different.
+	if usage.Output != 300 {
+		t.Errorf("output = %d, want 300 (accumulated across attempts)", usage.Output)
+	}
+}
+
+// --- the durable budget estimate (#1213) ---
+
+func TestBuildV2Record_BudgetEstimateRoundTrips(t *testing.T) {
+	hw := NewHistoryWriter(t.TempDir())
+	rs := NewRuntimeState("nightgauge/nightgauge", 1213, "item", testRunID())
+	rs.BeginStage(StageFeatureDev)
+	rs.CompleteStage(0, tokens.TokenCounts{Input: 10, Output: 1}, "", "")
+
+	rec := hw.BuildV2Record(rs, true, "", V2RunInput{
+		Title: "t",
+		BudgetEstimate: &V2BudgetEstimate{
+			USD: 14.62, Source: "historical-p75", Provider: "anthropic", CeilingUSD: 50,
+		},
+	}, time.Now())
+
+	data, _ := json.Marshal(rec)
+	var back V2RunRecord
+	if err := json.Unmarshal(data, &back); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if back.BudgetEstimate == nil {
+		t.Fatal("budget_estimate lost in the round trip")
+	}
+	if back.BudgetEstimate.USD != 14.62 || back.BudgetEstimate.Source != "historical-p75" {
+		t.Errorf("budget_estimate = %+v, want the input values", *back.BudgetEstimate)
+	}
+	if back.BudgetEstimate.Provider != "anthropic" {
+		t.Errorf("provider = %q — an estimate is only comparable within one rate card",
+			back.BudgetEstimate.Provider)
+	}
+}
+
+// Absent means NOT ESTIMATED, never "estimated at zero" — a zero here becomes a
+// division by zero in the accuracy report, or a 0-cost "perfect" prediction.
+func TestBuildV2Record_NoEstimateOmitsTheBlock(t *testing.T) {
+	hw := NewHistoryWriter(t.TempDir())
+	rs := NewRuntimeState("nightgauge/nightgauge", 1213, "item", testRunID())
+	rs.BeginStage(StageFeatureDev)
+	rs.CompleteStage(0, tokens.TokenCounts{Input: 10, Output: 1}, "", "")
+
+	rec := hw.BuildV2Record(rs, true, "", V2RunInput{Title: "t"}, time.Now())
+	if rec.BudgetEstimate != nil {
+		t.Errorf("budget_estimate = %+v with no estimate supplied, want nil", *rec.BudgetEstimate)
+	}
+	data, _ := json.Marshal(rec)
+	if strings.Contains(string(data), "budget_estimate") {
+		t.Error("un-estimated record emits a budget_estimate key")
+	}
+}

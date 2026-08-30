@@ -5,7 +5,8 @@
  * and future sibling analyzers (BaselineCalculator #652).
  */
 
-import { deriveDefaultModelCostRates } from "../eval/modelRegistry.js";
+import { ratesForProviderTier } from "../eval/modelRegistry.js";
+import { TIER_BANDS } from "../eval/tierBands.js";
 
 /** Adapter-model composite identifier, e.g. "claude:sonnet", "codex:gpt-4o" */
 export type ModelIdentifier = string;
@@ -268,22 +269,36 @@ export interface ModelCostRate {
 }
 
 /**
- * Default cost rates per model tier for token-to-USD conversion.
+ * Anthropic per-band rates, for the "what would sonnet have cost?" hypothetical
+ * that `ModelPerformanceAnalyzer` and `TokenEfficiencyAnalyzer` compute against
+ * history records.
  *
- * 4-tier model strategy: Haiku (lightweight), Sonnet (default), Opus (heavy),
- * Fable (premium frontier, ~2× Opus). Rates are USD per million tokens.
- * Automatic routing caps at Opus; Fable is opt-in.
+ * NAMED FOR ITS PROVIDER ON PURPOSE. This was `ANTHROPIC_TIER_COST_RATES`, and
+ * the pre-flight estimator read it as though it were a provider-neutral
+ * default — so a run dispatched to xai or openai was estimated at Claude prices
+ * while the actual was booked at the real provider rate (#1213). The estimator
+ * now prices through `ratesForProviderTier(provider, band)`, which returns
+ * `undefined` rather than substituting a provider. Nothing may reintroduce a
+ * silent Anthropic fallback; a name that says "default" invites exactly that.
  *
- * **Derived** from the single-source model registry
- * (`packages/nightgauge-sdk/src/eval/model-registry.json`) — do NOT
- * hand-edit rates here; edit the registry. One tier entry per current
- * (non-deprecated) Anthropic model.
+ * The two analyzers above are provider-blind for a narrower reason — they
+ * compare a recorded actual against a same-provider hypothetical — and making
+ * them provider-aware is tracked separately rather than folded into #1213.
+ *
+ * Rates are derived from the single-source registry
+ * (`packages/nightgauge-sdk/src/eval/model-registry.json`) — do NOT hand-edit
+ * rates here; edit the registry. One tier entry per current (non-deprecated)
+ * Anthropic model.
  *
  * @see docs/decisions/011-model-eval-system.md - Issue #4169 (single-source registry)
- * @see Issue #725 - Haiku model routing for lightweight stages
+ * @see Issue #1213 - provider-aware estimation; this constant is no longer a default
  */
-export const DEFAULT_MODEL_COST_RATES: Record<string, ModelCostRate> =
-  deriveDefaultModelCostRates();
+export const ANTHROPIC_TIER_COST_RATES: Record<string, ModelCostRate> = Object.fromEntries(
+  TIER_BANDS.flatMap((tier) => {
+    const r = ratesForProviderTier("anthropic", tier);
+    return r ? [[tier, r] as const] : [];
+  })
+);
 
 /** Analyzer configuration */
 export interface ModelAnalyzerConfig {
