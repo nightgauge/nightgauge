@@ -2475,7 +2475,8 @@ export async function initializeServices(
     const knowledgeTreeProvider = new KnowledgeTreeProvider(
       workspaceRoot,
       pipelineStateService,
-      IpcClient.getInstance()
+      IpcClient.getInstance(),
+      configBridge
     );
     context.subscriptions.push(knowledgeTreeProvider);
 
@@ -2531,46 +2532,10 @@ export async function initializeServices(
     container.register("knowledgeTreeProvider", knowledgeTreeProvider);
     logger.info("KnowledgeTreeProvider initialized (three-section model #2964)");
 
-    // Initialize ActiveIssueKnowledgeProvider for the dedicated PRD/decisions
-    // panel (Issue #3599; migrated to IPC in #2964)
-    if (pipelineStateService) {
-      const { ActiveIssueKnowledgeProvider } =
-        await import("../providers/ActiveIssueKnowledgeProvider");
-      const activeKnowledgeProvider = new ActiveIssueKnowledgeProvider(
-        workspaceRoot,
-        pipelineStateService,
-        IpcClient.getInstance()
-      );
-      context.subscriptions.push(activeKnowledgeProvider);
-
-      const activeKnowledgeView = vscode.window.createTreeView(
-        "nightgauge.activeIssueKnowledgeView",
-        { treeDataProvider: activeKnowledgeProvider, showCollapseAll: true }
-      );
-      context.subscriptions.push(activeKnowledgeView);
-
-      context.subscriptions.push(
-        vscode.commands.registerCommand("nightgauge.activeKnowledge.refresh", () =>
-          activeKnowledgeProvider.refresh()
-        )
-      );
-
-      context.subscriptions.push(
-        vscode.commands.registerCommand(
-          "nightgauge.activeKnowledge.openFile",
-          async (filePath: string) => {
-            await vscode.commands.executeCommand("vscode.open", vscode.Uri.file(filePath));
-            // Telemetry is best-effort
-            IpcClient.getInstance()
-              .call("knowledge.telemetry", { event: "knowledge.read", path: filePath })
-              .catch(() => {});
-          }
-        )
-      );
-
-      container.register("activeKnowledgeProvider", activeKnowledgeProvider);
-      logger.info("ActiveIssueKnowledgeProvider initialized");
-    }
+    // The second "Active Issue Knowledge" view is gone (#1206). #2964 folded
+    // its function into KnowledgeTreeProvider above — same PRD/decisions rows,
+    // same knowledge.relatedToIssue feed — but left it registered, so the
+    // sidebar carried two views saying the same nothing.
   }
 
   // Register KnowledgeDocumentLinkProvider for [[wiki-link]] support (Issue #1687)

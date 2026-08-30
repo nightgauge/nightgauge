@@ -82,13 +82,6 @@
           "visibility": "collapsed"
         },
         {
-          "id": "nightgauge.activeIssueKnowledgeView",
-          "name": "Active Issue Knowledge",
-          "icon": "$(book)",
-          "contextualTitle": "Active Issue Knowledge",
-          "visibility": "collapsed"
-        },
-        {
           "id": "nightgauge.attentionView",
           "name": "Attention",
           "icon": "$(bell-dot)",
@@ -642,12 +635,6 @@
       {
         "command": "nightgauge.refreshKnowledgeView",
         "title": "Nightgauge: Refresh Knowledge View",
-        "icon": "$(refresh)",
-        "category": "Nightgauge Knowledge"
-      },
-      {
-        "command": "nightgauge.activeKnowledge.refresh",
-        "title": "Nightgauge: Refresh Active Issue Knowledge",
         "icon": "$(refresh)",
         "category": "Nightgauge Knowledge"
       },

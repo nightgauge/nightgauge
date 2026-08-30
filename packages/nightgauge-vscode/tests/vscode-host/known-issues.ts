@@ -65,7 +65,7 @@ export interface UncontributedCommand {
  * hide behind "most of this list looks deliberate" (#766).
  *
  * Fixed in #766: `saveQueryAs`, `autonomousClearIssueFailures`,
- * `refreshKnowledgeView`, `activeKnowledge.refresh`, `runSettingsMigration`,
+ * `refreshKnowledgeView`, `runSettingsMigration`,
  * `showNotifierSettings`, and `showPipelineSummary` were all genuinely
  * unreachable (no tree item, status bar, webview, or notification bound any
  * of them) and are now contributed. `openAnalyticsDashboard`,
@@ -79,11 +79,6 @@ export interface UncontributedCommand {
  * `syntheticViewCommandIds()` in `commands.suite.ts`.
  */
 export const REGISTERED_WITHOUT_CONTRIBUTION: readonly UncontributedCommand[] = [
-  {
-    id: "nightgauge.activeKnowledge.openFile",
-    reason: "tree-item",
-    note: "ActiveIssueKnowledgeTreeItem.ts — clicking a knowledge file row opens it.",
-  },
   {
     id: "nightgauge.configureForgeInstance",
     reason: "webview-internal",
