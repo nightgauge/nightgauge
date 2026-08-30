@@ -69,6 +69,13 @@ type prStageResultJSON struct {
 	Reason      string `json:"reason"`
 	RateLimited bool   `json:"rate_limited"`
 	DurationMs  int64  `json:"duration_ms"`
+
+	// Commit-owner outcome (#1179), additive — the TS shim ignores unknown
+	// fields. pr-create is the pipeline's commit owner, so its verdict must be
+	// observable from the path the extension actually drives.
+	CommitMade   bool   `json:"commit_made,omitempty"`
+	CommitSHA    string `json:"commit_sha,omitempty"`
+	CommitReason string `json:"commit_reason,omitempty"`
 }
 
 // resolvePrStageWorkspace resolves the workdir the runner reads context from and
@@ -181,6 +188,10 @@ func prStageCreateCmd() *cobra.Command {
 				PRURL:      res.PRURL,
 				Reason:     res.Reason,
 				DurationMs: res.DurationMs,
+
+				CommitMade:   res.CommitPerformed,
+				CommitSHA:    res.CommitSHA,
+				CommitReason: res.CommitReason,
 			}
 			if runErr != nil {
 				// Mirror the scheduler: an unexpected runner error is a punt to

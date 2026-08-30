@@ -324,12 +324,63 @@ func (f *fakePRClient) ListOpenPRsForBranch(_ context.Context, _, _, _ string) (
 }
 
 // fakeGit is a deterministic git client stub.
+//
+// Its zero value is the NORMAL (non-skipped) path: a clean tree one commit
+// ahead of base, which the commit owner (#1179) declines to touch. Tests that
+// drive the trivial/skip path set status + ahead explicitly.
 type fakeGit struct {
 	pushErr      error
 	pushCalls    int
 	remoteExists bool
 	remoteErr    error
 	remoteCalls  int
+
+	// Commit-owner surface (#1179).
+	branch        string
+	branchErr     error
+	status        string
+	statusErr     error
+	ahead         int
+	aheadErr      error
+	commitErr     error
+	commitCalls   int
+	commitMessage string
+	commitExhaust []string
+}
+
+func (f *fakeGit) CurrentBranch(_ context.Context, _ string) (string, error) {
+	if f.branchErr != nil {
+		return "", f.branchErr
+	}
+	if f.branch == "" {
+		return "feat/42-x", nil
+	}
+	return f.branch, nil
+}
+
+func (f *fakeGit) WorkingTreeStatus(_ context.Context, _ string) (string, error) {
+	return f.status, f.statusErr
+}
+
+func (f *fakeGit) CommitsAhead(_ context.Context, _, _ string) (int, error) {
+	if f.aheadErr != nil {
+		return 0, f.aheadErr
+	}
+	// Zero value = the normal path: feature-validate already committed.
+	if f.ahead == 0 && f.status == "" {
+		return 1, nil
+	}
+	return f.ahead, nil
+}
+
+func (f *fakeGit) CommitAll(_ context.Context, _, message string, exhaust []string) (string, error) {
+	f.commitCalls++
+	f.commitMessage = message
+	f.commitExhaust = exhaust
+	if f.commitErr != nil {
+		return "", f.commitErr
+	}
+	return "abc1234", nil
 }
 
 func (f *fakeGit) PushBranch(_ context.Context, _, _ string) error {
