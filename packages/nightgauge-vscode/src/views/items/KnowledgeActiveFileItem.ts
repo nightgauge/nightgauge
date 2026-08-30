@@ -1,7 +1,7 @@
 /**
  * KnowledgeActiveFileItem — leaf for a single file under the "Active Issue"
  * section of KnowledgeTreeProvider. Distinct from the existing
- * ActiveIssueKnowledgeFileItem (which is owned by ActiveIssueKnowledgeProvider)
+ * ActiveIssueKnowledgeFileItem (removed with its provider in #1206)
  * so the two panels can evolve independently.
  *
  * The `highlighted` flag is true when the file appears in `planning-{N}.json

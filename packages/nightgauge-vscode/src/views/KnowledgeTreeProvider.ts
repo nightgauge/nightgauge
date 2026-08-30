@@ -30,6 +30,8 @@ import { KnowledgeSearchResultItem } from "./items/KnowledgeSearchResultItem";
 import type { IpcClient } from "../services/IpcClient";
 import type { PipelineStateService } from "../services/PipelineStateService";
 import type { KnowledgeRecallHit } from "../services/IpcClientBase";
+import type { ConfigBridge } from "../services/ConfigBridge";
+import { issueContextCandidates, pipelineFileCandidates } from "../utils/issueContextCandidates";
 
 const RELATED_LIMIT = 10;
 const WATCHER_DEBOUNCE_MS = 500;
@@ -60,7 +62,8 @@ export class KnowledgeTreeProvider
   constructor(
     private workspaceRoot: string,
     private readonly pipelineStateService: PipelineStateService,
-    private readonly ipcClient: IpcClient
+    private readonly ipcClient: IpcClient,
+    private readonly configBridge?: ConfigBridge
   ) {
     const stateDisposable = pipelineStateService.onStateChanged(() => {
       this.relatedCache = null;
@@ -68,7 +71,30 @@ export class KnowledgeTreeProvider
     });
     this._disposables.push(stateDisposable);
 
+    // `knowledge.enabled` decides whether an empty Active Issue section means
+    // "opted out" or "something is broken", so the tree has to re-render when
+    // it changes.
+    if (this.configBridge) {
+      this._disposables.push(
+        this.configBridge.onConfigChanged(() => {
+          this.relatedCache = null;
+          this._onDidChangeTreeData.fire();
+        })
+      );
+    }
+
     this.initializeWatcher();
+  }
+
+  /**
+   * The repo name used by the Go manager's worktree leaf
+   * (`.nightgauge/worktrees/{repoName}-issue-N`). Falls back to the workspace
+   * directory name, which is what that leaf is in the ordinary layout.
+   */
+  private get repoName(): string {
+    const configured = this.configBridge?.getValue<string>("repo");
+    if (typeof configured === "string" && configured) return configured;
+    return path.basename(this.workspaceRoot);
   }
 
   private initializeWatcher(): void {
@@ -146,6 +172,12 @@ export class KnowledgeTreeProvider
 
     const knowledgePath = this.resolveKnowledgePath(issueNumber);
     if (!knowledgePath) {
+      // "Opted out" and "should be here and is not" are different situations
+      // and used to render identically, so a project that turned the knowledge
+      // base off saw a permanent complaint about a feature it does not use.
+      if (this.configBridge && this.configBridge.getValue<boolean>("knowledge.enabled") === false) {
+        return [new KnowledgeEmptyItem("Knowledge base disabled (knowledge.enabled: false)")];
+      }
       return [new KnowledgeEmptyItem("No knowledge base scaffolded for this issue")];
     }
 
@@ -217,12 +249,25 @@ export class KnowledgeTreeProvider
 
   /**
    * Resolve the knowledge directory for the given issue by reading
-   * `.nightgauge/pipeline/issue-{N}.json` and (optionally) `planning-{N}.json`.
+   * `issue-{N}.json` and (optionally) `planning-{N}.json`, at every layout
+   * those files can live in — the run's worktree included.
    */
   private resolveKnowledgePath(issueNumber: number): string | null {
+    // Search every worktree layout, most-specific first — NOT the workspace
+    // root only. On the scheduler path issue-{N}.json is written inside the
+    // run's worktree, so the root-only read found nothing every time and the
+    // section rendered "No knowledge base scaffolded for this issue" for the
+    // life of the view (#1206). Go fixed this for its own readers in #994; this
+    // is the port.
     const candidates = [
-      path.join(this.workspaceRoot, ".nightgauge", "pipeline", `issue-${issueNumber}.json`),
-      path.join(this.workspaceRoot, ".nightgauge", "pipeline", `planning-${issueNumber}.json`),
+      ...issueContextCandidates(this.workspaceRoot, "", this.repoName, issueNumber),
+      ...pipelineFileCandidates(
+        this.workspaceRoot,
+        "",
+        this.repoName,
+        issueNumber,
+        `planning-${issueNumber}.json`
+      ),
     ];
     for (const f of candidates) {
       try {
@@ -246,31 +291,39 @@ export class KnowledgeTreeProvider
    * highlights in that case.
    */
   private readKnowledgeReadSet(issueNumber: number, knowledgePath: string): Set<string> {
-    const planningFile = path.join(
+    // Same layout search as resolveKnowledgePath: planning-{N}.json sits beside
+    // issue-{N}.json and moves with it into the worktree. Each candidate is
+    // READ rather than stat'ed first — the read is the existence check, and a
+    // separate existsSync would add a race for nothing.
+    const candidates = pipelineFileCandidates(
       this.workspaceRoot,
-      ".nightgauge",
-      "pipeline",
+      "",
+      this.repoName,
+      issueNumber,
       `planning-${issueNumber}.json`
     );
-    try {
-      const raw = fs.readFileSync(planningFile, "utf8");
-      const parsed = JSON.parse(raw) as { knowledge_read?: string[] | null };
-      const arr = parsed.knowledge_read ?? [];
-      const set = new Set<string>();
-      for (const p of arr) {
-        set.add(p);
-        // Also store both basename and joined path to maximize match success
-        // against the variant the planning agent recorded (basename, rel, abs).
-        set.add(path.basename(p));
-        if (!path.isAbsolute(p)) {
-          set.add(path.join(this.workspaceRoot, p));
+    for (const planningFile of candidates) {
+      try {
+        const raw = fs.readFileSync(planningFile, "utf8");
+        const parsed = JSON.parse(raw) as { knowledge_read?: string[] | null };
+        const arr = parsed.knowledge_read ?? [];
+        const set = new Set<string>();
+        for (const p of arr) {
+          set.add(p);
+          // Also store both basename and joined path to maximize match success
+          // against the variant the planning agent recorded (basename, rel, abs).
+          set.add(path.basename(p));
+          if (!path.isAbsolute(p)) {
+            set.add(path.join(this.workspaceRoot, p));
+          }
+          set.add(path.relative(this.workspaceRoot, path.join(knowledgePath, path.basename(p))));
         }
-        set.add(path.relative(this.workspaceRoot, path.join(knowledgePath, path.basename(p))));
+        return set;
+      } catch {
+        // Continue to next candidate.
       }
-      return set;
-    } catch {
-      return new Set();
     }
+    return new Set();
   }
 
   refresh(): void {
