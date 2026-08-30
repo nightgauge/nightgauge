@@ -718,14 +718,13 @@ When creating 3+ findings as issues, create as an epic with sub-issues:
 nightgauge forge issue create \
   --title "epic: Pipeline health findings — ${SUMMARY}" \
   --body "${EPIC_BODY}" \
-  --label "type:epic,priority:high,size:L"
+  --labels "type:epic,priority:high,size:L"
 
-# Create sub-issues
-nightgauge issue create-sub <EPIC_NUMBER> "<FINDING_TITLE>" "<FINDING_BODY>"
-
-# Add labels separately (issue create-sub doesn't support --labels)
-nightgauge forge graphql -f query='mutation($id:ID!,$labels:[ID!]!){addLabelsToLabelable(input:{labelableId:$id,labelIds:$labels}){clientMutationId}}' \
-  -f id="$SUB_ISSUE_NODE_ID" -f labels="$LABEL_IDS"
+# Create sub-issues. --labels takes label NAMES and resolves them itself
+# (#1214); an unknown name fails before anything is created.
+nightgauge issue create-sub <EPIC_NUMBER> \
+  --title "<FINDING_TITLE>" --body "<FINDING_BODY>" \
+  --labels "type:bug,priority:medium"
 
 # Sync epic to project board
 nightgauge project add <EPIC_NUMBER>
