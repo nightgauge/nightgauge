@@ -190,8 +190,16 @@ export type WebViewToExtensionMessage =
   | {
       type: "slot:action";
       slotIndex: number;
-      action: "close" | "pin" | "reveal-github" | "open-log";
+      action: SlotAction;
     };
+
+/**
+ * The closed set of per-slot card actions the webview may request
+ * (Issues #2816, #2817, #1198). Named so the message shape, the type guard,
+ * and the callback signature cannot drift apart — they did, and the result
+ * was a dispatch case that was never written at all.
+ */
+export type SlotAction = "close" | "pin" | "reveal-github" | "open-log";
 
 /**
  * Serialized output entry for message passing (dates as ISO strings)
@@ -240,7 +248,7 @@ export interface MessageHandlerCallbacks {
   /** Called when user switches output tabs for concurrent slots (Issue #2705) */
   onTabSwitch?: (slotIndex: number | null) => void;
   /** Called when user triggers a per-tab action (close, pin, reveal-github, open-log) (Issue #2816) */
-  onSlotAction?: (slotIndex: number, action: string) => void;
+  onSlotAction?: (slotIndex: number, action: SlotAction) => void;
 }
 
 /**
@@ -350,6 +358,12 @@ export class OutputWindowMessageHandler {
       case "tab:switch":
         if (this.isValidTabSwitchMessage(msg)) {
           this.callbacks.onTabSwitch?.(msg.slotIndex);
+        }
+        break;
+
+      case "slot:action":
+        if (this.isValidSlotActionMessage(msg)) {
+          this.callbacks.onSlotAction?.(msg.slotIndex, msg.action);
         }
         break;
 
@@ -488,6 +502,30 @@ export class OutputWindowMessageHandler {
       "slotIndex" in msg &&
       (typeof (msg as { type: string; slotIndex: unknown }).slotIndex === "number" ||
         (msg as { type: string; slotIndex: unknown }).slotIndex === null)
+    );
+  }
+
+  /**
+   * Type guard for a per-slot card action (Issue #1198).
+   *
+   * `action` is checked against the closed set the webview emits rather than
+   * a bare `typeof === "string"`: this message reaches privileged extension
+   * work (opening an external URL, opening a file), so an unrecognised action
+   * must be dropped here rather than forwarded for the callback to interpret.
+   */
+  private isValidSlotActionMessage(
+    msg: WebViewToExtensionMessage
+  ): msg is { type: "slot:action"; slotIndex: number; action: SlotAction } {
+    if (msg.type !== "slot:action") return false;
+    const candidate = msg as { slotIndex?: unknown; action?: unknown };
+    return (
+      typeof candidate.slotIndex === "number" &&
+      Number.isInteger(candidate.slotIndex) &&
+      candidate.slotIndex >= 0 &&
+      (candidate.action === "close" ||
+        candidate.action === "pin" ||
+        candidate.action === "reveal-github" ||
+        candidate.action === "open-log")
     );
   }
 

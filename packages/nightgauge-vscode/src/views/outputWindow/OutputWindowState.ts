@@ -605,10 +605,10 @@ export class OutputWindowState {
       // sibling slot's (repo × issue) log file at stage boundaries. The root
       // and the issue number are resolved from the SAME owning slot so a
       // slot's bytes can never land under one repo with another slot's issue.
-      const logRoot =
-        (ownerSlotIndex !== undefined ? this.slotLogRoots.get(ownerSlotIndex) : undefined) ??
-        this.runLogRoot ??
-        this.workspaceRoot;
+      // Non-null inside this branch: `this.workspaceRoot` is the resolver's
+      // last rung and is already narrowed by the guard above. The coalesce is
+      // for the type checker, which cannot see through the method call.
+      const logRoot = this.resolveLogRoot(ownerSlotIndex) ?? this.workspaceRoot;
       // #192: FULL FIDELITY to disk. Truncation/collapse is a UI concern
       // that leaked into the only persistent record: entries were capped at
       // 200 chars and collapsed code blocks kept their real body only in
@@ -695,6 +695,27 @@ export class OutputWindowState {
   /** Set (or clear with null) the disk-log root for the sequential run (#191). */
   setRunLogRoot(repoRoot: string | null): void {
     this.runLogRoot = repoRoot;
+  }
+
+  /**
+   * Resolve the repo root a slot's session log lives under (#191).
+   *
+   * Per-slot root wins (concurrent runs in different repos each log to their
+   * own), then the sequential run's root, then the bootstrap workspace root
+   * for non-run output. Returns null when no root is known at all.
+   *
+   * This is the SINGLE implementation of that precedence. The disk-write path
+   * in `addEntry` and the log-reveal action (#1198) must agree about where a
+   * slot's bytes landed — two copies of this ladder would drift, and a reader
+   * that looks in a different directory from the writer finds nothing and
+   * reports "no log" for a log that exists.
+   */
+  resolveLogRoot(slotIndex?: number): string | null {
+    return (
+      (slotIndex !== undefined ? this.slotLogRoots.get(slotIndex) : undefined) ??
+      this.runLogRoot ??
+      this.workspaceRoot
+    );
   }
 
   registerSlot(slotIndex: number, issueNumber: number, title: string, repoSlug?: string): void {
@@ -1002,6 +1023,15 @@ export class OutputWindowState {
    */
   getActiveSlotIndex(): number | null {
     return this.activeSlotIndex;
+  }
+
+  /**
+   * Get one registered slot by index, or undefined when nothing is registered
+   * there (Issue #1198 — a card action must resolve its own slot before it can
+   * act on that slot's issue or log).
+   */
+  getSlot(slotIndex: number): SlotInfo | undefined {
+    return this.slotInfos.get(slotIndex);
   }
 
   /**
