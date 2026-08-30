@@ -337,7 +337,7 @@ export type PipelineStartRefusal =
   | "github-quota-low"
   /** api.github.com was unreachable. Environmental and transient (#4002). */
   | "github-network-outage"
-  /** The issue was already CLOSED at pickup. Zero-token non-failure; the board target is Done, never "In review" (#3661). */
+  /** The issue was already CLOSED at pickup. Zero-token non-failure; the board target is Done, never "In review". */
   | "issue-closed"
   /** An epic with open sub-issues was dispatched. A scheduler eligibility fault, not an issue defect — the remedy is on the sub-issues. */
   | "epic-with-open-sub-issues"
