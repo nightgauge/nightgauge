@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"time"
+
+	"github.com/nightgauge/nightgauge/internal/deliverable"
 )
 
 // FeatureDevGate verifies the post-conditions of feature-dev:
@@ -59,6 +62,29 @@ func (FeatureDevGate) Verify(_ context.Context, issueNumber int, workspace strin
 				}, KindNoOp, "", nil, 0
 			}
 			return false, "failed to read dev context file", []string{err.Error()}, KindFail, "", nil, 0
+		}
+
+		// #1176 / #1182: apply the deliverable-schema policy BEFORE decoding.
+		// The gate's only verb used to be `reject`, so a bookkeeping defect in
+		// the receipt was punished exactly as hard as a substantive one — #1176
+		// discarded a complete, lint-clean implementation because `files_changed`
+		// was a flat array while `files_created`/`files_modified` carried every
+		// value the schema wanted. The policy repairs that deterministically,
+		// records the repair in the deliverable, and still fails the stage when a
+		// value is genuinely absent. It is the SAME policy the TypeScript
+		// context-file validator applies, so one defect can no longer be a
+		// warning in one stage and a run-ender in the next.
+		policy, policyErr := deliverable.ApplyPolicyToFile("dev", ctxPath, time.Now())
+		if policyErr == nil && !policy.OK() {
+			evidence := append([]string{fmt.Sprintf("file: %s", ctxPath)}, policy.Summary()...)
+			return false, "dev context does not match the expected schema and no total repair exists",
+				evidence, KindFail, TerminalKindValidationError, nil, 0
+		}
+		if policyErr == nil && policy.Changed {
+			// Re-read: the policy wrote the normalized document back.
+			if repaired, err := os.ReadFile(ctxPath); err == nil {
+				data = repaired
+			}
 		}
 
 		var devCtx struct {
@@ -168,6 +194,10 @@ func (FeatureDevGate) Verify(_ context.Context, issueNumber int, workspace strin
 				len(devCtx.FilesChanged.Deleted),
 				devCtx.BuildVerification.Status),
 		}
+		// A repair that passes silently is a repair nobody fixes. The notes ride
+		// the GateResult into the run record, so a skill emitting a stale shape
+		// stays visible even when the gate lets the work through (#1176).
+		passEvidence = append(passEvidence, policy.Summary()...)
 		if work.Mode == "bookkeeping" {
 			passEvidence = append(passEvidence, fmt.Sprintf("deliverable=bookkeeping declared=%d confirmed=%d", work.DeclaredCount, work.ConfirmedCount))
 		}
