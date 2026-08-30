@@ -53,12 +53,20 @@ echo "CI-parity local validation — order mirrors .github/workflows/ci.yml"
 # 1. Go build + tests (internal/ + cmd/)
 if [ -f go.mod ]; then
   run_step "go build ./..." go build ./...
-  run_step "go test ./... -count=1" go test ./... -count=1
-  # Mirrors ci.yml's "Test (race, orchestrator)" step (#428). Scoped to one
-  # package: the race detector is the only thing that fails when a
-  # drainBackground() join is deleted from a test body.
-  run_step "go test -race -count=1 ./internal/orchestrator/" \
-    go test -race -count=1 ./internal/orchestrator/
+  # -json so the skip accounting has events to read (#474): a package whose
+  # tests all SKIPPED still prints `ok`, so without it a guard that stopped
+  # guarding is indistinguishable from one that passed. Piped back through
+  # go-test-json-echo.py so the log stays readable.
+  run_step "go test ./... -count=1 (with skip accounting)" \
+    bash -c 'set -o pipefail; go test -json ./... -count=1 | tee go-test.json | python3 scripts/go-test-json-echo.py && python3 scripts/check-go-test-skips.py go-test.json'
+  # Mirrors ci.yml's "Test (race, whole tree)" step (#493), which replaced the
+  # internal/orchestrator-scoped step from #428 — one race step, not two. The
+  # scoped step existed because the race detector is the only thing that fails
+  # when a drainBackground() join is deleted from a test body, and that argument
+  # was never specific to one package. Measured whole-tree cost: +3% over the
+  # plain run (2m55s -> 3m00s on an Apple M-series), not the ~3x once feared.
+  run_step "go test -race -count=1 ./..." \
+    go test -race -count=1 ./...
   run_step "gofmt -l ./internal ./cmd" \
     bash -c '! gofmt -l ./internal ./cmd | grep .'
 fi

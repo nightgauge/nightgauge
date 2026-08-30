@@ -147,20 +147,31 @@ jobs:
             echo "$UNFORMATTED"
             exit 1
           fi
+      # -json so the skip accounting below has something to read. A package
+      # whose tests all SKIPPED still prints `ok`, so without this step a guard
+      # that has stopped guarding is indistinguishable from one that passed
+      # (#474).
       - name: Test
         if: ${{ needs.changes.outputs.run_heavy != 'false' }}
-        run: go test ./... -count=1
-      # Scoped to internal/orchestrator (#428): the deterministic pins in
-      # autonomous_background_lifecycle_pin_test.go guard the production
-      # lifecycle, but nothing else detects a drainBackground() call being
-      # deleted from a test body — the tests pass with or without it, which is
-      # why the flake stayed invisible. The race detector is the only mechanism
-      # that fails on a removed drain. ~40s on top of the suite above.
-      # Whole-tree -race is a follow-up: it triples the Go job and surfaces
-      # unrelated pre-existing races this change neither owns nor worsens.
-      - name: Test (race, orchestrator)
+        run: |
+          set -o pipefail
+          go test -json ./... -count=1 | tee go-test.json | python3 scripts/go-test-json-echo.py
+          python3 scripts/check-go-test-skips.py go-test.json
+      # Whole-tree -race (#493), replacing the internal/orchestrator-scoped step
+      # #428 landed — one race step, not two. The scoped step existed because
+      # nothing else detects a drainBackground() join being deleted from a test
+      # body: the tests pass with or without it, which is why that flake stayed
+      # invisible. That argument was never specific to one package.
+      #
+      # Measured on this branch, whole tree, Apple M-series: 2m55s plain vs
+      # 3m00s with -race — about +3%, not the ~3x the scoped step's comment
+      # predicted, because the suite is dominated by subprocess and filesystem
+      # work rather than by instrumented Go. Zero DATA RACE reports over 108
+      # packages, so the gate arrives green; #490 and #491 are blockers for the
+      # -count=5 soak, not for this per-PR step.
+      - name: Test (race, whole tree)
         if: ${{ needs.changes.outputs.run_heavy != 'false' }}
-        run: go test -race -count=1 ./internal/orchestrator/
+        run: go test -race -count=1 ./...
       # The shell-side decision procedure AGENTS.md § Clean up on merge
       # defers to for `git branch -D` calls, kept aligned with the Go sweep's
       # own ancestry-acceptance door (#593). No npm/node needed, so it runs

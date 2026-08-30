@@ -23,9 +23,10 @@ import (
 // refusal branch would be unreachable and the security property untested.
 func withPeerUID(t *testing.T, fn func(net.Conn) (uint32, error)) {
 	t.Helper()
-	prev := peerUID
-	peerUID = fn
-	t.Cleanup(func() { peerUID = prev })
+	prev := peerUID.Load()
+	next := peerUIDFunc(fn)
+	peerUID.Store(&next)
+	t.Cleanup(func() { peerUID.Store(prev) })
 }
 
 // shortTempSocket returns a socket path short enough to bind.
@@ -68,11 +69,31 @@ func startSocketServer(t *testing.T) (string, *atomic.Int32) {
 	}()
 	<-ready
 
-	// ListenSocket creates the socket asynchronously; wait for the file.
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if _, err := os.Stat(path); err == nil {
+	// ListenSocket brings the socket up asynchronously; wait until it is
+	// genuinely ACCEPTING, not merely until the file exists.
+	//
+	// This used to poll os.Stat, which is a readiness test for the wrong event.
+	// net.Listen("unix", …) is socket(); bind(); listen() — and the file appears
+	// at bind(), one syscall BEFORE the listener exists. A dial landing in that
+	// window is refused with ECONNREFUSED, so the fixture handed back a path
+	// that was not yet usable and the test failed on `dial: connection refused`
+	// with nothing wrong in the code under test.
+	//
+	// It never showed up running this package alone; it took the whole-tree
+	// -race gate (#493), where ~108 packages compete for the machine and widen
+	// the window, to make it observable. Dialling is the only probe that
+	// actually answers "is it accepting?". A probe connection is harmless: it
+	// sends no request, so it can never move the invocations counter the
+	// refusal tests assert on.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		probe, err := net.Dial("unix", path)
+		if err == nil {
+			_ = probe.Close()
 			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("socket at %s never began accepting: %v", path, err)
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
