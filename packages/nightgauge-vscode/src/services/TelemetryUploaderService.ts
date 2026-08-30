@@ -16,8 +16,11 @@
  *                     upload verbatim — the (run_id, producer, seq) key makes
  *                     re-upload idempotent server-side)
  *
- * Maintains a per-file watermark at `.nightgauge/pipeline/.upload-watermarks.json`.
- * POSTs batches respecting per-stream batch size limits. Respects HTTP 429 with
+ * Maintains a per-file upload cursor at `.nightgauge/pipeline/.upload-watermarks.json`.
+ * Each cursor is a line count PLUS an anchor digest of the last uploaded line,
+ * so a rotated / pruned / truncated file is detected instead of silently
+ * yielding an empty slice forever (#1173). POSTs batches respecting per-stream
+ * batch size limits. Respects HTTP 429 with
  * exponential backoff. Per-stream consent gating via TelemetryConsentService.
  *
  * Follows the direct HTTP pattern established by AuditLogService — does NOT
@@ -26,10 +29,12 @@
  * @see Issue #3315 — Build TelemetryUploaderService for pipeline-run history JSONL
  * @see Issue #3316 — Extend Telemetry Uploader for Health-Snapshot + Recommendation Streams
  * @see Issue #3312 — Parent epic (platform endpoint implementation)
+ * @see Issue #1173 — A watermark past EOF silently killed the stream
  */
 
 import * as vscode from "vscode";
 import * as path from "node:path";
+import { createHash } from "node:crypto";
 import type { TelemetryConsentService } from "./TelemetryConsentService";
 import type { TelemetryStream } from "./telemetry/types";
 import type { Logger } from "../utils/logger";
@@ -94,9 +99,37 @@ const WATERMARK_SUBDIR = path.join(".nightgauge", "pipeline");
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
-/** Tracks how many lines from each JSONL file have been uploaded. */
+/**
+ * Per-file upload cursor.
+ *
+ * A bare line count is only a valid cursor while the file is append-only.
+ * Health history is rewritten by `HealthScoreHistoryWriter.pruneOldEntries`
+ * after EVERY append, and daily run-history files are pruned by retention —
+ * so files routinely get SHORTER while the count stays high, and
+ * `slice(count)` then yields `[]` forever (#1173).
+ *
+ * `anchor` is the witness that makes the count self-checking: the digest of
+ * the last line the count claims to have uploaded. If line `lines - 1` no
+ * longer digests to `anchor`, this is not the file the count was counting,
+ * and the cursor is re-derived from content instead of trusted.
+ */
+export interface WatermarkEntry {
+  /** Number of leading lines of the file already uploaded. */
+  lines: number;
+  /** Digest of the line at index `lines - 1` when the count was written. */
+  anchor?: string;
+}
+
+/**
+ * Stored value for one file. A bare `number` is the legacy (pre-#1173)
+ * count-only shape still present in every existing workspace; it is read,
+ * validated against the file, and upgraded in place on the next cycle.
+ */
+export type WatermarkValue = number | WatermarkEntry;
+
+/** Tracks how much of each JSONL file has been uploaded. */
 interface WatermarkStore {
-  [filename: string]: number;
+  [filename: string]: WatermarkValue;
 }
 
 interface StreamConfig {
@@ -120,6 +153,14 @@ interface StreamSummary {
   stream: TelemetryStream;
   uploaded: number;
   skipped: boolean;
+  /**
+   * True when a cursor for this stream was found to disagree with its file
+   * (rotation / prune / truncation) and had to be re-derived. Surfaced in the
+   * per-cycle summary so a recovering stream can never read identically to a
+   * quiet one — the indistinguishability was the defect under the defect
+   * (#1173).
+   */
+  rotated?: boolean;
   /**
    * True when a batch upload failed (endpoint down / non-2xx after retries).
    * The trace stream's per-file loop bails on the first failed file so an
@@ -166,6 +207,124 @@ const CONSOLIDATED_STREAM_CONFIGS: readonly StreamConfig[] = [
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// ─── Cursor (#1173) ───────────────────────────────────────────────────────────
+
+/**
+ * Anchor witness for one JSONL line. Truncated SHA-256 — 64 bits is ample to
+ * distinguish "this is the line the count pointed at" from "this is some other
+ * line", and keeps the watermark file readable.
+ */
+function lineDigest(line: string): string {
+  return createHash("sha256").update(line, "utf8").digest("hex").slice(0, 16);
+}
+
+/** Normalize a stored value (legacy number or entry) into an entry. */
+function readEntry(value: WatermarkValue | undefined): WatermarkEntry {
+  if (typeof value === "number") {
+    return { lines: Number.isFinite(value) && value > 0 ? Math.floor(value) : 0 };
+  }
+  if (value && typeof value === "object" && typeof value.lines === "number") {
+    const lines = Number.isFinite(value.lines) && value.lines > 0 ? Math.floor(value.lines) : 0;
+    return { lines, anchor: typeof value.anchor === "string" ? value.anchor : undefined };
+  }
+  return { lines: 0 };
+}
+
+/**
+ * Build the entry to persist for a cursor at `lines` over `allLines`. Always
+ * carries the anchor, so the very next cycle can tell whether the file moved
+ * under it.
+ */
+function makeEntry(allLines: string[], lines: number): WatermarkEntry {
+  if (lines > 0 && lines <= allLines.length) {
+    return { lines, anchor: lineDigest(allLines[lines - 1]!) };
+  }
+  return { lines };
+}
+
+interface CursorResolution {
+  /** Index into `allLines` where not-yet-uploaded content starts. */
+  start: number;
+  /** The stored cursor disagreed with the file and was re-derived. */
+  rotated: boolean;
+  /** A legacy count-only entry validated in place — persist the upgrade. */
+  upgraded: boolean;
+}
+
+/**
+ * Resolve a stored cursor against the file as it is NOW.
+ *
+ * Fast path (append-only, the overwhelmingly common case): one digest of line
+ * `lines - 1`. Matching the anchor proves the prefix is unchanged and the
+ * cursor is used verbatim — behaviour identical to the pre-#1173 `slice`.
+ *
+ * Mismatch means the file was rotated / pruned / truncated. Recovery searches
+ * the current file for the anchor line:
+ *   - found at index `i` → resume at `i + 1`. Exact: nothing re-sent, nothing
+ *     skipped, whatever the prune dropped from the head.
+ *   - not found → the last uploaded record is itself gone. Every line still in
+ *     the file was therefore written after it (retention prunes the head and
+ *     keeps the tail), so re-deriving from 0 uploads the survivors WITHOUT
+ *     duplicating anything already ingested.
+ *
+ * A legacy count-only entry has no anchor to check. `lines <= file length` is
+ * accepted (and upgraded to carry an anchor for next time); `lines > file
+ * length` is the observable #1173 symptom — impossible for an append-only
+ * file — and is logged at error and recovered from 0.
+ */
+function resolveCursor(
+  entry: WatermarkEntry,
+  allLines: string[],
+  logger: Logger | null | undefined,
+  ctx: Record<string, unknown>
+): CursorResolution {
+  const { lines, anchor } = entry;
+  if (lines <= 0) {
+    return { start: 0, rotated: false, upgraded: false };
+  }
+
+  const pastEof = lines > allLines.length;
+
+  if (anchor !== undefined) {
+    if (!pastEof && lineDigest(allLines[lines - 1]!) === anchor) {
+      return { start: lines, rotated: false, upgraded: false };
+    }
+
+    let found = -1;
+    for (let i = allLines.length - 1; i >= 0; i--) {
+      if (lineDigest(allLines[i]!) === anchor) {
+        found = i;
+        break;
+      }
+    }
+
+    if (found >= 0) {
+      logger?.warn(
+        "TelemetryUploaderService: upload cursor no longer matches its file (rotated/pruned) — resuming from the anchored record, not from the stale line count",
+        { ...ctx, watermark: lines, fileLines: allLines.length, resumedAt: found + 1 }
+      );
+      return { start: found + 1, rotated: true, upgraded: false };
+    }
+
+    logger?.error(
+      "TelemetryUploaderService: upload cursor is STALE and its anchor record is gone from the file — the stream was silently uploading nothing; re-deriving from the start of the file (surviving records are all newer than the last upload, so nothing is re-sent)",
+      { ...ctx, watermark: lines, fileLines: allLines.length }
+    );
+    return { start: 0, rotated: true, upgraded: false };
+  }
+
+  // Legacy count-only entry (pre-#1173 workspaces).
+  if (!pastEof) {
+    return { start: lines, rotated: false, upgraded: true };
+  }
+
+  logger?.error(
+    "TelemetryUploaderService: upload watermark is PAST END OF FILE — the file was rotated/pruned/truncated and this stream has been silently uploading nothing; re-deriving the cursor from the start of the file",
+    { ...ctx, watermark: lines, fileLines: allLines.length }
+  );
+  return { start: 0, rotated: true, upgraded: false };
 }
 
 async function loadWatermarks(uri: vscode.Uri, logger?: Logger | null): Promise<WatermarkStore> {
@@ -487,10 +646,15 @@ export class TelemetryUploaderService implements vscode.Disposable {
 
     // Single output-channel summary line per cycle
     const totalUploaded = summary.reduce((n, s) => n + s.uploaded, 0);
-    if (totalUploaded > 0 || summary.some((s) => s.skipped)) {
+    // A stream that recovered from a rotated cursor must never read like a
+    // quiet one, so the summary carries it explicitly and is emitted even on
+    // an otherwise silent cycle (#1173).
+    const rotatedStreams = summary.filter((s) => s.rotated).map((s) => s.stream);
+    if (totalUploaded > 0 || summary.some((s) => s.skipped) || rotatedStreams.length > 0) {
       this.logger?.info("TelemetryUploaderService: cycle complete", {
         streams: summary.map((s) => `${s.stream}:+${s.uploaded}`).join(", "),
         total: totalUploaded,
+        ...(rotatedStreams.length > 0 ? { cursorsRecovered: rotatedStreams.join(", ") } : {}),
       });
     }
   }
@@ -507,6 +671,7 @@ export class TelemetryUploaderService implements vscode.Disposable {
   private async uploadPipelineRunStream(token: string): Promise<StreamSummary> {
     let totalUploaded = 0;
     let anyScanned = false;
+    let anyRotated = false;
 
     for (const root of this.resolveHistoryScanRoots()) {
       const result = await this.uploadPipelineRunStreamForRoot(token, root);
@@ -514,12 +679,20 @@ export class TelemetryUploaderService implements vscode.Disposable {
       if (!result.skipped) {
         anyScanned = true;
       }
+      if (result.rotated) {
+        anyRotated = true;
+      }
       if (result.aborted) {
         break;
       }
     }
 
-    return { stream: "pipeline-run", uploaded: totalUploaded, skipped: !anyScanned };
+    return {
+      stream: "pipeline-run",
+      uploaded: totalUploaded,
+      skipped: !anyScanned,
+      rotated: anyRotated,
+    };
   }
 
   /**
@@ -531,7 +704,7 @@ export class TelemetryUploaderService implements vscode.Disposable {
   private async uploadPipelineRunStreamForRoot(
     token: string,
     root: string
-  ): Promise<{ uploaded: number; skipped: boolean; aborted: boolean }> {
+  ): Promise<{ uploaded: number; skipped: boolean; aborted: boolean; rotated: boolean }> {
     const historyDirUri = vscode.Uri.file(path.join(root, HISTORY_SUBDIR));
     const watermarkUri = vscode.Uri.file(path.join(root, WATERMARK_SUBDIR, WATERMARK_FILENAME));
 
@@ -541,7 +714,7 @@ export class TelemetryUploaderService implements vscode.Disposable {
       entries = await vscode.workspace.fs.readDirectory(historyDirUri);
     } catch {
       // History directory may not exist yet (e.g. root has never run a pipeline)
-      return { uploaded: 0, skipped: true, aborted: false };
+      return { uploaded: 0, skipped: true, aborted: false, rotated: false };
     }
 
     // Date-stamped daily history files ONLY (#1023).
@@ -563,13 +736,14 @@ export class TelemetryUploaderService implements vscode.Disposable {
       .map(([name]) => name);
 
     if (jsonlFiles.length === 0) {
-      return { uploaded: 0, skipped: false, aborted: false };
+      return { uploaded: 0, skipped: false, aborted: false, rotated: false };
     }
 
     const watermarks = await loadWatermarks(watermarkUri, this.logger);
     let watermarksDirty = false;
     let totalUploaded = 0;
     let rootAborted = false;
+    let rootRotated = false;
 
     for (const filename of jsonlFiles) {
       // History filenames are date-stamped (e.g. `2026-05-10.jsonl`), so two
@@ -605,7 +779,22 @@ export class TelemetryUploaderService implements vscode.Disposable {
 
       const allLines = content.split("\n").filter((line) => line.trim().length > 0);
 
-      const uploadedCount = watermarks[filename] ?? 0;
+      const cursor = resolveCursor(readEntry(watermarks[filename]), allLines, this.logger, {
+        stream: "pipeline-run",
+        filename,
+        root,
+      });
+      if (cursor.rotated) {
+        rootRotated = true;
+      }
+      if (cursor.upgraded) {
+        // Legacy count-only entry validated against the file — persist the
+        // anchored shape now, even if there is nothing new to upload, so the
+        // next rotation is detectable rather than silent.
+        watermarks[filename] = makeEntry(allLines, cursor.start);
+        watermarksDirty = true;
+      }
+      const uploadedCount = cursor.start;
       const newLines = allLines.slice(uploadedCount);
 
       if (newLines.length === 0) {
@@ -748,13 +937,13 @@ export class TelemetryUploaderService implements vscode.Disposable {
             "TelemetryUploaderService: giving up on rejected records after repeated cycles — advancing past them to unblock the file (records dropped; see prior rejection errors)",
             { filename, root, cycles }
           );
-          watermarks[filename] = allLines.length;
+          watermarks[filename] = makeEntry(allLines, allLines.length);
           watermarksDirty = true;
           this.rejectionRetryCycles.delete(retryKey);
         } else {
           this.rejectionRetryCycles.set(retryKey, cycles);
           if (advanceBy > 0) {
-            watermarks[filename] = uploadedCount + advanceBy;
+            watermarks[filename] = makeEntry(allLines, uploadedCount + advanceBy);
             watermarksDirty = true;
           }
         }
@@ -762,7 +951,7 @@ export class TelemetryUploaderService implements vscode.Disposable {
         // No rejection blocking progress — advance over the consumed prefix and
         // clear any stuck counter (advanceBy === newLines.length on a clean run).
         if (advanceBy > 0) {
-          watermarks[filename] = uploadedCount + advanceBy;
+          watermarks[filename] = makeEntry(allLines, uploadedCount + advanceBy);
           watermarksDirty = true;
         }
         if (advanceBy === newLines.length) this.rejectionRetryCycles.delete(retryKey);
@@ -797,7 +986,7 @@ export class TelemetryUploaderService implements vscode.Disposable {
       }
     }
 
-    return { uploaded: totalUploaded, skipped: false, aborted: rootAborted };
+    return { uploaded: totalUploaded, skipped: false, aborted: rootAborted, rotated: rootRotated };
   }
 
   /**
@@ -813,6 +1002,7 @@ export class TelemetryUploaderService implements vscode.Disposable {
    */
   private async uploadTraceStream(token: string): Promise<StreamSummary> {
     let totalUploaded = 0;
+    let anyRotated = false;
 
     for (const root of this.resolveHistoryScanRoots()) {
       const traceDirUri = vscode.Uri.file(path.join(root, TRACE_SUBDIR));
@@ -846,13 +1036,22 @@ export class TelemetryUploaderService implements vscode.Disposable {
           root
         );
         totalUploaded += result.uploaded;
+        if (result.rotated) {
+          anyRotated = true;
+        }
         if (result.failed) {
-          return { stream: "trace", uploaded: totalUploaded, skipped: false, failed: true };
+          return {
+            stream: "trace",
+            uploaded: totalUploaded,
+            skipped: false,
+            failed: true,
+            rotated: anyRotated,
+          };
         }
       }
     }
 
-    return { stream: "trace", uploaded: totalUploaded, skipped: false };
+    return { stream: "trace", uploaded: totalUploaded, skipped: false, rotated: anyRotated };
   }
 
   private async uploadConsolidatedStream(
@@ -899,11 +1098,29 @@ export class TelemetryUploaderService implements vscode.Disposable {
 
     const allLines = content.split("\n").filter((line) => line.trim().length > 0);
     const watermarks = await loadWatermarks(watermarkUri, this.logger);
-    const uploadedCount = watermarks[watermarkKey] ?? 0;
+    const cursor = resolveCursor(readEntry(watermarks[watermarkKey]), allLines, this.logger, {
+      stream: cfg.stream,
+      filename: watermarkKey,
+      root,
+    });
+    const uploadedCount = cursor.start;
     const newLines = allLines.slice(uploadedCount);
 
+    if (cursor.upgraded) {
+      // Legacy count-only entry validated against the file — persist the
+      // anchored shape now, even if there is nothing new to upload, so the
+      // next rotation is detectable rather than silent.
+      watermarks[watermarkKey] = makeEntry(allLines, cursor.start);
+      try {
+        await saveWatermarks(watermarkUri, watermarks);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        this.logger?.error("TelemetryUploaderService: failed to save watermarks", { error: msg });
+      }
+    }
+
     if (newLines.length === 0) {
-      return { stream: cfg.stream, uploaded: 0, skipped: false };
+      return { stream: cfg.stream, uploaded: 0, skipped: false, rotated: cursor.rotated };
     }
 
     // Parse new lines — skip malformed JSON
@@ -920,13 +1137,13 @@ export class TelemetryUploaderService implements vscode.Disposable {
 
     if (allRecords.length === 0) {
       // All malformed — advance watermark past unreadable lines
-      watermarks[watermarkKey] = allLines.length;
+      watermarks[watermarkKey] = makeEntry(allLines, allLines.length);
       try {
         await saveWatermarks(watermarkUri, watermarks);
       } catch {
         // Non-fatal
       }
-      return { stream: cfg.stream, uploaded: 0, skipped: false };
+      return { stream: cfg.stream, uploaded: 0, skipped: false, rotated: cursor.rotated };
     }
 
     // Apply optional record filter (e.g. recommendation: only metric_after populated)
@@ -938,7 +1155,7 @@ export class TelemetryUploaderService implements vscode.Disposable {
         stream: cfg.stream,
         totalNew: allRecords.length,
       });
-      return { stream: cfg.stream, uploaded: 0, skipped: false };
+      return { stream: cfg.stream, uploaded: 0, skipped: false, rotated: cursor.rotated };
     }
 
     // Upload in batches
@@ -985,14 +1202,14 @@ export class TelemetryUploaderService implements vscode.Disposable {
       }
 
       // Advance watermark per successful batch
-      watermarks[watermarkKey] = uploadedCount + batchStart + batch.length;
+      watermarks[watermarkKey] = makeEntry(allLines, uploadedCount + batchStart + batch.length);
       watermarksDirty = true;
       totalUploaded += batch.length;
 
       this.logger?.info("TelemetryUploaderService: batch uploaded", {
         stream: cfg.stream,
         count: batch.length,
-        watermark: watermarks[watermarkKey],
+        watermark: readEntry(watermarks[watermarkKey]).lines,
       });
 
       batchStart += batch.length;
@@ -1007,6 +1224,12 @@ export class TelemetryUploaderService implements vscode.Disposable {
       }
     }
 
-    return { stream: cfg.stream, uploaded: totalUploaded, skipped: false, failed: uploadFailed };
+    return {
+      stream: cfg.stream,
+      uploaded: totalUploaded,
+      skipped: false,
+      failed: uploadFailed,
+      rotated: cursor.rotated,
+    };
   }
 }

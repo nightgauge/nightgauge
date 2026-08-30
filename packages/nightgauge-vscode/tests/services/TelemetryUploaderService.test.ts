@@ -23,6 +23,7 @@ import {
   ACTIVE_RUN_UPLOAD_INTERVAL_MS,
   ACTIVE_RUN_FLUSH_EVENT_COUNT,
 } from "../../src/services/TelemetryUploaderService";
+import type { WatermarkValue } from "../../src/services/TelemetryUploaderService";
 import type { TelemetryStream } from "../../src/services/telemetry/types";
 import * as vscode from "vscode";
 
@@ -49,6 +50,26 @@ vi.stubGlobal("fetch", vi.fn());
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 const FILE_TYPE_FILE = 1;
+
+/**
+ * On-disk shape of `.upload-watermarks.json`. Each cursor is `{lines, anchor}`
+ * since #1173 — a bare number is the legacy shape and is still readable, which
+ * is exactly what the migration tests seed.
+ */
+type SavedWatermarks = Record<string, WatermarkValue>;
+
+/** Line count of a stored cursor, whichever shape it is on disk. */
+function wmLines(saved: SavedWatermarks, key: string): number | undefined {
+  const v = saved[key];
+  if (v === undefined) return undefined;
+  return typeof v === "number" ? v : v.lines;
+}
+
+/** Anchor digest of a stored cursor (undefined for a legacy count-only entry). */
+function wmAnchor(saved: SavedWatermarks, key: string): string | undefined {
+  const v = saved[key];
+  return typeof v === "number" || v === undefined ? undefined : v.anchor;
+}
 
 function makeLicenseKey(key: string | null = "test-license-key"): () => string | null {
   return () => key;
@@ -128,7 +149,7 @@ function encodeContent(str: string): Uint8Array {
  */
 function setupFs(
   files: Array<{ name: string; sizeBytes?: number; content?: string }>,
-  existingWatermarks: Record<string, number> = {},
+  existingWatermarks: SavedWatermarks = {},
   consolidatedFiles: Array<{ filename: string; sizeBytes?: number; content?: string }> = [],
   traceFiles: Array<{ name: string; sizeBytes?: number; content?: string }> = []
 ): void {
@@ -137,7 +158,7 @@ function setupFs(
   // Mutable watermark state — updated on each tmp write so subsequent
   // loadWatermarks() calls within the same cycle see accumulated keys from
   // all previously-processed streams (mirrors real file behaviour).
-  const watermarkState: Record<string, number> = { ...existingWatermarks };
+  const watermarkState: SavedWatermarks = { ...existingWatermarks };
 
   // Directory scans are path-routed: the pipeline-run stream scans history/,
   // the trace stream (ADR 013 / #180) scans trace/.
@@ -189,10 +210,9 @@ function setupFs(
     const fsPath = (uri as { fsPath: string }).fsPath;
     // Merge new watermark keys into live state so subsequent reads see them
     if (fsPath.endsWith(".upload-watermarks.json.tmp")) {
-      const parsed = JSON.parse(Buffer.from(data as Uint8Array).toString("utf8")) as Record<
-        string,
-        number
-      >;
+      const parsed = JSON.parse(
+        Buffer.from(data as Uint8Array).toString("utf8")
+      ) as SavedWatermarks;
       Object.assign(watermarkState, parsed);
     }
   });
@@ -215,7 +235,7 @@ function setupMultiRootFs(
   }>
 ): void {
   const fsMock = vi.mocked(vscode.workspace.fs);
-  const watermarkState: Record<string, Record<string, number>> = {};
+  const watermarkState: Record<string, SavedWatermarks> = {};
   for (const r of roots) {
     watermarkState[r.root] = {};
   }
@@ -269,10 +289,9 @@ function setupMultiRootFs(
     if (fsPath.endsWith(".upload-watermarks.json.tmp")) {
       const r = findRoot(fsPath);
       if (r) {
-        const parsed = JSON.parse(Buffer.from(data as Uint8Array).toString("utf8")) as Record<
-          string,
-          number
-        >;
+        const parsed = JSON.parse(
+          Buffer.from(data as Uint8Array).toString("utf8")
+        ) as SavedWatermarks;
         Object.assign(watermarkState[r.root], parsed);
       }
     }
@@ -326,8 +345,8 @@ describe("TelemetryUploaderService", () => {
     expect(writeCall).toBeTruthy();
     const savedWatermarks = JSON.parse(
       Buffer.from(writeCall![1] as Uint8Array).toString("utf8")
-    ) as Record<string, number>;
-    expect(savedWatermarks["2026-05-10.jsonl"]).toBe(5);
+    ) as SavedWatermarks;
+    expect(wmLines(savedWatermarks, "2026-05-10.jsonl")).toBe(5);
   });
 
   // ── #1023: the history directory is not exclusively run history ──────────
@@ -369,18 +388,18 @@ describe("TelemetryUploaderService", () => {
     expect(writeCall).toBeTruthy();
     const savedWatermarks = JSON.parse(
       Buffer.from(writeCall![1] as Uint8Array).toString("utf8")
-    ) as Record<string, number>;
+    ) as SavedWatermarks;
 
     // The real daily file is still processed — the filter must not be so tight
     // that it excludes the stream's actual subject.
-    expect(savedWatermarks["2026-05-10.jsonl"]).toBe(3);
+    expect(wmLines(savedWatermarks, "2026-05-10.jsonl")).toBe(3);
 
     // None of the strays may acquire a watermark. A watermark on a corpus file
     // is what made this permanent: the rows are consumed once and never
     // reconsidered, so the defect could not be fixed by re-running.
     for (const stray of ["outcomes.jsonl", "knowledge-events.jsonl", "tuning-audit.jsonl"]) {
       expect(
-        savedWatermarks[stray],
+        wmLines(savedWatermarks, stray),
         `${stray} is not run history and must never be watermarked`
       ).toBeUndefined();
     }
@@ -422,8 +441,8 @@ describe("TelemetryUploaderService", () => {
     expect(writeCall).toBeTruthy();
     const savedWatermarks = JSON.parse(
       Buffer.from(writeCall![1] as Uint8Array).toString("utf8")
-    ) as Record<string, number>;
-    expect(savedWatermarks["2026-05-10.jsonl"]).toBe(3);
+    ) as SavedWatermarks;
+    expect(wmLines(savedWatermarks, "2026-05-10.jsonl")).toBe(3);
   });
 
   // ── Test 2b: 404 logs at info; other non-2xx logs at error ──────────────────
@@ -743,11 +762,10 @@ describe("TelemetryUploaderService", () => {
       (uri as { fsPath: string }).fsPath.includes("upload-watermarks.json.tmp")
     );
     expect(writeCall).toBeTruthy();
-    const saved = JSON.parse(Buffer.from(writeCall![1] as Uint8Array).toString("utf8")) as Record<
-      string,
-      number
-    >;
-    expect(saved["health-history.jsonl"]).toBe(600);
+    const saved = JSON.parse(
+      Buffer.from(writeCall![1] as Uint8Array).toString("utf8")
+    ) as SavedWatermarks;
+    expect(wmLines(saved, "health-history.jsonl")).toBe(600);
   });
 
   // ── Test 9: Recommendation filter — only metric_after records uploaded ────
@@ -918,10 +936,9 @@ describe("TelemetryUploaderService", () => {
 
     // Collect all watermark saves and check the last one has all three keys
     const lastWrite = writeCalls[writeCalls.length - 1];
-    const saved = JSON.parse(Buffer.from(lastWrite[1] as Uint8Array).toString("utf8")) as Record<
-      string,
-      number
-    >;
+    const saved = JSON.parse(
+      Buffer.from(lastWrite[1] as Uint8Array).toString("utf8")
+    ) as SavedWatermarks;
 
     // Each stream uses its own basename key
     expect(saved).toHaveProperty("2026-05-10.jsonl");
@@ -929,9 +946,9 @@ describe("TelemetryUploaderService", () => {
     expect(saved).toHaveProperty("recommendation-history.jsonl");
 
     // Watermark values are independent
-    expect(saved["2026-05-10.jsonl"]).toBe(3);
-    expect(saved["health-history.jsonl"]).toBe(4);
-    expect(saved["recommendation-history.jsonl"]).toBe(3);
+    expect(wmLines(saved, "2026-05-10.jsonl")).toBe(3);
+    expect(wmLines(saved, "health-history.jsonl")).toBe(4);
+    expect(wmLines(saved, "recommendation-history.jsonl")).toBe(3);
   });
 
   // ── Test 14: Unmappable records are skipped, not uploaded, watermark advances ─
@@ -976,11 +993,10 @@ describe("TelemetryUploaderService", () => {
       (uri as { fsPath: string }).fsPath.includes("upload-watermarks.json.tmp")
     );
     expect(writeCall).toBeTruthy();
-    const saved = JSON.parse(Buffer.from(writeCall![1] as Uint8Array).toString("utf8")) as Record<
-      string,
-      number
-    >;
-    expect(saved["2026-05-10.jsonl"]).toBe(3);
+    const saved = JSON.parse(
+      Buffer.from(writeCall![1] as Uint8Array).toString("utf8")
+    ) as SavedWatermarks;
+    expect(wmLines(saved, "2026-05-10.jsonl")).toBe(3);
   });
 
   // ── Test 15: A 202 with rejected records does NOT advance past them ──────────
@@ -1016,12 +1032,9 @@ describe("TelemetryUploaderService", () => {
       (uri as { fsPath: string }).fsPath.includes("upload-watermarks.json.tmp")
     );
     const saved = writeCall
-      ? (JSON.parse(Buffer.from(writeCall[1] as Uint8Array).toString("utf8")) as Record<
-          string,
-          number
-        >)
+      ? (JSON.parse(Buffer.from(writeCall[1] as Uint8Array).toString("utf8")) as SavedWatermarks)
       : {};
-    expect(saved["2026-05-10.jsonl"] ?? 0).toBe(1);
+    expect(wmLines(saved, "2026-05-10.jsonl") ?? 0).toBe(1);
   });
 
   // ── Test 16: Poison-message safety valve — give up after MAX cycles ──────────
@@ -1058,12 +1071,11 @@ describe("TelemetryUploaderService", () => {
       (uri as { fsPath: string }).fsPath.includes("upload-watermarks.json.tmp")
     );
     const lastWrite = writeCalls[writeCalls.length - 1];
-    const saved = JSON.parse(Buffer.from(lastWrite![1] as Uint8Array).toString("utf8")) as Record<
-      string,
-      number
-    >;
+    const saved = JSON.parse(
+      Buffer.from(lastWrite![1] as Uint8Array).toString("utf8")
+    ) as SavedWatermarks;
     // After giving up, the whole new range is consumed so the stream unblocks.
-    expect(saved["2026-05-10.jsonl"]).toBe(3);
+    expect(wmLines(saved, "2026-05-10.jsonl")).toBe(3);
   });
 
   // ── Test 17: pipelineRunId threading ──────────────────────────────────────
@@ -1198,13 +1210,12 @@ describe("TelemetryUploaderService", () => {
       (uri as { fsPath: string }).fsPath.includes("upload-watermarks.json.tmp")
     );
     const lastWrite = writeCalls[writeCalls.length - 1];
-    const saved = JSON.parse(Buffer.from(lastWrite![1] as Uint8Array).toString("utf8")) as Record<
-      string,
-      number
-    >;
+    const saved = JSON.parse(
+      Buffer.from(lastWrite![1] as Uint8Array).toString("utf8")
+    ) as SavedWatermarks;
     // Watermark key is trace/-prefixed so run-id filenames can never collide
     // with history or consolidated keys.
-    expect(saved[`trace/${runId}.jsonl`]).toBe(3);
+    expect(wmLines(saved, `trace/${runId}.jsonl`)).toBe(3);
   });
 
   it("skips the trace stream when its consent stream is disabled", async () => {
@@ -1677,6 +1688,300 @@ describe("TelemetryUploaderService", () => {
         expect.stringContaining("giving up on rejected records"),
         expect.objectContaining({ filename, root: TARGET_ROOT })
       );
+    });
+  });
+
+  // ── #1173: cursor rotation — a watermark past EOF must never read as "quiet" ─
+  //
+  // A bare line count is only a valid cursor while the file is append-only.
+  // `HealthScoreHistoryWriter.pruneOldEntries` rewrites health-history.jsonl
+  // after EVERY append, and run-history retention prunes daily files — so a
+  // file routinely gets SHORTER than its watermark, `slice(count)` yields `[]`,
+  // and the stream is dead forever while logging "health:+0", which is exactly
+  // what a healthy idle stream logs. Live evidence: a real workspace carrying
+  // watermark 949 against a 232-line health-history.jsonl.
+  describe("#1173 — rotated / pruned / truncated files", () => {
+    /** The individual JSONL lines behind {@link makeJsonlContent}. */
+    function dailyLines(count: number): string[] {
+      return makeJsonlContent(count).split("\n");
+    }
+
+    /**
+     * Issue number of every record in a POSTed batch, in wire order. The
+     * run-history stream maps to the V4 wire shape (`issueNumber`); the
+     * consolidated streams upload records verbatim (`issue_number`).
+     */
+    function postedIssueNumbers(call: [string, RequestInit]): number[] {
+      const body = JSON.parse(call[1].body as string) as {
+        issueNumber?: number;
+        issue_number?: number;
+      }[];
+      return body.map((r) => r.issueNumber ?? r.issue_number ?? -1);
+    }
+
+    function lastSavedWatermarks(): SavedWatermarks {
+      const fsMock = vi.mocked(vscode.workspace.fs);
+      const writes = fsMock.writeFile.mock.calls.filter(([uri]) =>
+        (uri as { fsPath: string }).fsPath.includes("upload-watermarks.json.tmp")
+      );
+      if (writes.length === 0) return {};
+      return JSON.parse(
+        Buffer.from(writes[writes.length - 1]![1] as Uint8Array).toString("utf8")
+      ) as SavedWatermarks;
+    }
+
+    function makeService(logger: ReturnType<typeof makeLogger>): TelemetryUploaderService {
+      return new TelemetryUploaderService(
+        makeLicenseKey(),
+        makeConsentService() as never,
+        () => "https://api.example.com",
+        "/workspace",
+        logger as never
+      );
+    }
+
+    // ── Run-history path ───────────────────────────────────────────────────
+
+    it("run-history: a LEGACY count-only watermark past EOF is detected, logged at error, and recovered", async () => {
+      // The live shape: a pre-#1173 workspace whose count outran its file.
+      const lines = dailyLines(8);
+      const daily = {
+        name: "2026-05-10.jsonl",
+        content: lines.slice(5).join("\n"),
+        sizeBytes: 300,
+      };
+      setupFs([daily], { "2026-05-10.jsonl": 949 });
+      fetchMock.mockResolvedValue(okResponse());
+
+      const logger = makeLogger();
+      await makeService(logger).runUploadCycle();
+
+      // Detected and LOUD — not a silent empty slice.
+      expect(logger.error).toHaveBeenCalledWith(
+        expect.stringContaining("PAST END OF FILE"),
+        expect.objectContaining({ watermark: 949, fileLines: 3, filename: "2026-05-10.jsonl" })
+      );
+
+      // Recovered: the three surviving records actually upload.
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(postedIssueNumbers(fetchMock.mock.calls[0] as [string, RequestInit])).toEqual([
+        6, 7, 8,
+      ]);
+      expect(wmLines(lastSavedWatermarks(), "2026-05-10.jsonl")).toBe(3);
+    });
+
+    it("run-history: after a prune, records written afterwards upload and nothing already sent is re-sent", async () => {
+      const lines = dailyLines(7);
+      // Cycle 1 uploads lines 1..5 and anchors on line 5.
+      const daily = {
+        name: "2026-05-10.jsonl",
+        content: lines.slice(0, 5).join("\n"),
+        sizeBytes: 500,
+      };
+      setupFs([daily]);
+      fetchMock.mockResolvedValue(okResponse());
+
+      const logger = makeLogger();
+      const service = makeService(logger);
+      await service.runUploadCycle();
+      expect(postedIssueNumbers(fetchMock.mock.calls[0] as [string, RequestInit])).toEqual([
+        1, 2, 3, 4, 5,
+      ]);
+
+      // Retention drops the first three lines; two new records are appended.
+      daily.content = lines.slice(3, 7).join("\n");
+      await service.runUploadCycle();
+
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.stringContaining("no longer matches its file"),
+        expect.objectContaining({ watermark: 5, fileLines: 4, resumedAt: 2 })
+      );
+
+      // ONLY the post-rotation records — 4 and 5 survived the prune and are
+      // not re-sent, 6 and 7 are new and are no longer skipped.
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(postedIssueNumbers(fetchMock.mock.calls[1] as [string, RequestInit])).toEqual([6, 7]);
+      expect(wmLines(lastSavedWatermarks(), "2026-05-10.jsonl")).toBe(4);
+    });
+
+    it("run-history: when the anchored record is itself pruned away, every survivor uploads exactly once", async () => {
+      const lines = dailyLines(8);
+      const daily = {
+        name: "2026-05-10.jsonl",
+        content: lines.slice(0, 5).join("\n"),
+        sizeBytes: 500,
+      };
+      setupFs([daily]);
+      fetchMock.mockResolvedValue(okResponse());
+
+      const logger = makeLogger();
+      const service = makeService(logger);
+      await service.runUploadCycle();
+
+      // Everything uploaded so far is pruned; only never-uploaded records remain.
+      daily.content = lines.slice(5, 8).join("\n");
+      await service.runUploadCycle();
+
+      expect(logger.error).toHaveBeenCalledWith(
+        expect.stringContaining("anchor record is gone"),
+        expect.objectContaining({ watermark: 5, fileLines: 3 })
+      );
+      // The survivors are all newer than the last upload, so re-deriving from
+      // the start of the file cannot duplicate an already-ingested record.
+      expect(postedIssueNumbers(fetchMock.mock.calls[1] as [string, RequestInit])).toEqual([
+        6, 7, 8,
+      ]);
+    });
+
+    // ── Consolidated-stream path (health / recommendation) ─────────────────
+
+    it("health: the live 949-vs-232 watermark is detected, logged at error, and the stream resumes", async () => {
+      const lines = dailyLines(232);
+      const health = {
+        filename: "health-history.jsonl",
+        content: lines.join("\n"),
+        sizeBytes: 56513,
+      };
+      setupFs([], { "health-history.jsonl": 949 }, [health]);
+      fetchMock.mockResolvedValue(okResponse());
+
+      const logger = makeLogger();
+      await makeService(logger).runUploadCycle();
+
+      expect(logger.error).toHaveBeenCalledWith(
+        expect.stringContaining("PAST END OF FILE"),
+        expect.objectContaining({ watermark: 949, fileLines: 232, stream: "health" })
+      );
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(
+        (JSON.parse((fetchMock.mock.calls[0]![1] as RequestInit).body as string) as unknown[])
+          .length
+      ).toBe(232);
+      expect(wmLines(lastSavedWatermarks(), "health-history.jsonl")).toBe(232);
+    });
+
+    it("health: after a prune, snapshots written afterwards upload rather than being skipped", async () => {
+      const lines = dailyLines(10);
+      const health = {
+        filename: "health-history.jsonl",
+        content: lines.slice(0, 6).join("\n"),
+        sizeBytes: 6000,
+      };
+      setupFs([], {}, [health]);
+      fetchMock.mockResolvedValue(okResponse());
+
+      const logger = makeLogger();
+      const service = makeService(logger);
+      await service.runUploadCycle();
+      expect(postedIssueNumbers(fetchMock.mock.calls[0] as [string, RequestInit])).toEqual([
+        1, 2, 3, 4, 5, 6,
+      ]);
+
+      // pruneOldEntries drops the first four, then four new snapshots land.
+      health.content = lines.slice(4, 10).join("\n");
+      await service.runUploadCycle();
+
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(postedIssueNumbers(fetchMock.mock.calls[1] as [string, RequestInit])).toEqual([
+        7, 8, 9, 10,
+      ]);
+    });
+
+    it("a recovering stream is distinguishable from a quiet one in the cycle summary", async () => {
+      const health = {
+        filename: "health-history.jsonl",
+        content: dailyLines(3).join("\n"),
+        sizeBytes: 300,
+      };
+      setupFs([], { "health-history.jsonl": 949 }, [health]);
+      fetchMock.mockResolvedValue(okResponse());
+
+      const logger = makeLogger();
+      await makeService(logger).runUploadCycle();
+
+      // "cycle complete {streams: health:+3}" alone was indistinguishable from
+      // a healthy cycle; the summary must name the stream that had to recover.
+      expect(logger.info).toHaveBeenCalledWith(
+        expect.stringContaining("cycle complete"),
+        expect.objectContaining({ cursorsRecovered: "health" })
+      );
+    });
+
+    // ── Migration ──────────────────────────────────────────────────────────
+
+    it("upgrades an in-bounds LEGACY count-only entry to an anchored cursor without re-uploading", async () => {
+      const daily = { name: "2026-05-10.jsonl", content: makeJsonlContent(5), sizeBytes: 500 };
+      setupFs([daily], { "2026-05-10.jsonl": 2 });
+      fetchMock.mockResolvedValue(okResponse());
+
+      const logger = makeLogger();
+      await makeService(logger).runUploadCycle();
+
+      // Unchanged upload behaviour: only lines 3..5 go out.
+      expect(postedIssueNumbers(fetchMock.mock.calls[0] as [string, RequestInit])).toEqual([
+        3, 4, 5,
+      ]);
+      // …and the entry is now self-checking.
+      const saved = lastSavedWatermarks();
+      expect(wmLines(saved, "2026-05-10.jsonl")).toBe(5);
+      expect(wmAnchor(saved, "2026-05-10.jsonl")).toEqual(expect.any(String));
+      // A legacy in-bounds count is trusted, not treated as a rotation.
+      expect(logger.error).not.toHaveBeenCalledWith(
+        expect.stringContaining("PAST END OF FILE"),
+        expect.anything()
+      );
+    });
+
+    it("upgrades a LEGACY count-only entry that is already fully caught up, uploading nothing", async () => {
+      const health = {
+        filename: "health-history.jsonl",
+        content: dailyLines(4).join("\n"),
+        sizeBytes: 400,
+      };
+      setupFs([], { "health-history.jsonl": 4 }, [health]);
+
+      const logger = makeLogger();
+      await makeService(logger).runUploadCycle();
+
+      expect(fetchMock).not.toHaveBeenCalled();
+      const saved = lastSavedWatermarks();
+      expect(wmLines(saved, "health-history.jsonl")).toBe(4);
+      expect(wmAnchor(saved, "health-history.jsonl")).toEqual(expect.any(String));
+    });
+
+    // ── The hot path must be untouched ─────────────────────────────────────
+
+    it("append-only operation is unchanged: an anchored cursor uploads only the appended lines", async () => {
+      const lines = dailyLines(6);
+      const daily = {
+        name: "2026-05-10.jsonl",
+        content: lines.slice(0, 3).join("\n"),
+        sizeBytes: 300,
+      };
+      setupFs([daily]);
+      fetchMock.mockResolvedValue(okResponse());
+
+      const logger = makeLogger();
+      const service = makeService(logger);
+      await service.runUploadCycle();
+
+      daily.content = lines.join("\n"); // pure append
+      await service.runUploadCycle();
+
+      expect(postedIssueNumbers(fetchMock.mock.calls[1] as [string, RequestInit])).toEqual([
+        4, 5, 6,
+      ]);
+      // No rotation was reported, and no recovery was logged.
+      expect(logger.error).not.toHaveBeenCalled();
+      expect(logger.warn).not.toHaveBeenCalledWith(
+        expect.stringContaining("no longer matches its file"),
+        expect.anything()
+      );
+      expect(logger.info).not.toHaveBeenCalledWith(
+        expect.stringContaining("cycle complete"),
+        expect.objectContaining({ cursorsRecovered: expect.any(String) })
+      );
+      expect(wmLines(lastSavedWatermarks(), "2026-05-10.jsonl")).toBe(6);
     });
   });
 });
