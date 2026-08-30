@@ -498,7 +498,10 @@ printf '<!-- phase:start name="write-dev-context" index=14 total=18 stage="featu
 > **No commit or push in feature-dev.** Code is committed and pushed by
 > `/nightgauge-feature-validate` after validation passes. This ensures only
 > validated code reaches the remote branch and RALPH loop fixes are included.
-> See Issue #1608.
+> See Issue #1608. When routing SKIPS `feature-validate` (the fast-track
+> trivial route), the commit is still made — by the compiled commit owner at
+> the head of the `pr-create` deterministic runner (`stages.DecideCommit`,
+> #1179), never by this stage.
 
 **PURPOSE**: Write structured context file for downstream pipeline skills.
 
