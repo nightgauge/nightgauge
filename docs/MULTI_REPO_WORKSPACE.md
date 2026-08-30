@@ -636,6 +636,47 @@ supports:
 └─────────────────────────────────────────────────────────────────┘
 ```
 
+### Cross-Repo Epic Rollup (#1181)
+
+An epic number is not a coordinate.
+
+When a cross-repo sub-issue's PR merges, the post-merge hook auto-closes the
+parent epic once every sub-issue is closed. **The epic is resolved against its
+own repository**, taken from GitHub's native sub-issue link
+(`types.Issue.ParentIssueRepo`, from the same `repository { nameWithOwner }`
+selection sub-issues and blockers have always carried). Nothing parses issue
+bodies for `Part of owner/repo#N`; the native link is the single authority.
+
+This is load-bearing because **issue numbers are per-repository**. Resolving a
+parent epic's number against the _sub-issue's_ repo does not fail cleanly — it
+has two faces, both observed in one session on a three-repo workspace:
+
+| Face       | What the number hit in the wrong repo | Result                                       |
+| ---------- | ------------------------------------- | -------------------------------------------- |
+| **Loud**   | a merged **pull request**             | `Could not resolve to an Issue`, `failed`    |
+| **Silent** | an unrelated **real, closed issue**   | `Total == 0` → `no_subs`, **`failed:false`** |
+
+The silent face is the dangerous one: the hook reported success, the real epic
+was never evaluated, and the epic sat open with every child closed — the same
+outcome as epic #342 in `AGENTS.md`, through a different door.
+
+Two mechanisms keep it fixed:
+
+- **`github.EpicRef`** carries the epic's own `Owner`/`Repo` alongside its
+  `Number`. There is no "ambient repo" default to inherit by omission, and a
+  ref with no repository is refused (`epic_repo_missing`) before any API call.
+- **An identity guard.** The post-merge path also passes the merged sub-issue
+  (`ExpectSubIssueNumber`/`ExpectSubIssueRepo`). The epic must list it; if it
+  does not, the check fails with `wrong_epic` instead of answering `no_subs`.
+  `no_subs` therefore remains reachable only on the sweep path, where no
+  triggering sub-issue exists and "this epic has no sub-issues" is a real
+  answer.
+
+The nightly sweep and the post-merge hook now read the same membership record
+(`EpicCompletionResult.SubIssues`), so they cannot answer "does this epic have
+sub-issues?" differently the way they did when the hook was looking in the
+wrong repository.
+
 ### Cross-Repo Issue Creation
 
 Create issues in any workspace repository:

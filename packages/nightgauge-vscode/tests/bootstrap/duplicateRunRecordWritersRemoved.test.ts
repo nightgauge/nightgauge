@@ -36,22 +36,25 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 
 const SERVICES_PATH = path.resolve(__dirname, "../../src/bootstrap/services.ts");
+const PIPELINE_COMPLETE_PATH = path.resolve(__dirname, "../../src/bootstrap/pipelineComplete.ts");
 const DASHBOARD_PATH = path.resolve(__dirname, "../../src/views/dashboard/Dashboard.ts");
 const WRITER_PATH = path.resolve(__dirname, "../../src/utils/executionHistoryWriter.ts");
 const TELEMETRY_STORE_PATH = path.resolve(__dirname, "../../src/services/TelemetryStore.ts");
 
 const servicesSource = readFileSync(SERVICES_PATH, "utf-8");
+const pipelineCompleteSource = readFileSync(PIPELINE_COMPLETE_PATH, "utf-8");
 const dashboardSource = readFileSync(DASHBOARD_PATH, "utf-8");
 const writerSource = readFileSync(WRITER_PATH, "utf-8");
 const telemetryStoreSource = readFileSync(TELEMETRY_STORE_PATH, "utf-8");
 
 /**
- * Extracts the body of the `ipc.on("pipeline.complete", ...)` handler in the
- * bootstrap, bounded by the sibling registration that follows it.
+ * The handler moved to its own module (#500) so a test can execute it; the
+ * bootstrap now only registers it. The deletion pin therefore reads the
+ * extracted module, and separately asserts the registration still points at it.
  */
-function extractPipelineCompleteHandler(source: string): string {
+function pipelineCompleteRegistration(source: string): string {
   const start = source.indexOf('ipc.on("pipeline.complete"');
-  expect(start).toBeGreaterThan(-1); // handler must still exist
+  expect(start).toBeGreaterThan(-1); // registration must still exist
   const next = source.indexOf('ipc.on("pipeline.modelFallback"', start);
   expect(next).toBeGreaterThan(start);
   return source.slice(start, next);
@@ -59,7 +62,13 @@ function extractPipelineCompleteHandler(source: string): string {
 
 describe("run-record producers — duplicates removed (Issue #141)", () => {
   describe("bootstrap pipeline.complete handler", () => {
-    const handlerBody = extractPipelineCompleteHandler(servicesSource);
+    const handlerBody = pipelineCompleteSource;
+
+    it("is still wired up from the bootstrap", () => {
+      // Execution coverage lives in tests/bootstrap/pipelineComplete.test.ts;
+      // that test cannot see whether the extracted handler is still registered.
+      expect(pipelineCompleteRegistration(servicesSource)).toContain("handleGoPipelineComplete");
+    });
 
     it("appends no history record", () => {
       expect(handlerBody).not.toContain("appendRunRecord");
@@ -102,6 +111,7 @@ describe("run-record producers — duplicates removed (Issue #141)", () => {
   it("leaves exactly zero run-record producers in the extension sources", () => {
     for (const [name, source] of [
       ["services.ts", servicesSource],
+      ["pipelineComplete.ts", pipelineCompleteSource],
       ["Dashboard.ts", dashboardSource],
       ["TelemetryStore.ts", telemetryStoreSource],
       ["executionHistoryWriter.ts", writerSource],

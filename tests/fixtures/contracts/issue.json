@@ -13,6 +13,7 @@
   "milestone": "Sprint 1",
   "parentIssueId": "I_parent100",
   "parentIssueNumber": 40,
+  "parentIssueRepo": "acme/platform",
   "subIssues": [
     {
       "nodeId": "I_sub789",

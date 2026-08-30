@@ -53,6 +53,7 @@ import {
 } from "../orchestrator/context/ContextAssembler";
 import { OrchestratorEventDispatcher } from "../orchestrator/events/OrchestratorEventDispatcher";
 import { WorktreeManager } from "../utils/WorktreeManager";
+import { isValidBranchName } from "../utils/branchUtils";
 
 const execAsync = promisify(exec);
 import {
@@ -5615,7 +5616,11 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     expectedBranch: string,
     currentBranch: string
   ): Promise<boolean> {
-    if (!this.isValidBranchName(expectedBranch)) {
+    // One validator, not two (#498). This method used to carry a byte-for-byte
+    // copy of `branchUtils.isValidBranchName` — a dual-path-drift hazard on a
+    // security control, and the reason the old branch-sanitization test could
+    // only ever assert against a third copy of its own.
+    if (!isValidBranchName(expectedBranch)) {
       this.logger.error("Invalid expected branch name in context", {
         issueNumber,
         expectedBranch,
@@ -5683,37 +5688,6 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       });
       return false;
     }
-  }
-
-  /**
-   * Validate a branch name for safe git command usage.
-   */
-  private isValidBranchName(name: string): boolean {
-    if (!name || typeof name !== "string") {
-      return false;
-    }
-
-    const invalidPatterns = [
-      /\.\./, // No consecutive dots
-      /^[./]/, // Can't start with dot or slash
-      /[/.]$/, // Can't end with slash or dot
-      /@\{/, // No @{
-      /\\/, // No backslash
-      // eslint-disable-next-line no-control-regex
-      /[\x00-\x1f]/, // No control characters
-      /[\x7f]/, // No DEL
-      // eslint-disable-next-line no-useless-escape
-      /[ ~^:?*\[]/, // No shell/meta-confusing characters
-      /\.lock$/, // Can't end with .lock
-    ];
-
-    for (const pattern of invalidPatterns) {
-      if (pattern.test(name)) {
-        return false;
-      }
-    }
-
-    return true;
   }
 
   /**

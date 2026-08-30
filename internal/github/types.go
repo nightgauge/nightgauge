@@ -253,10 +253,20 @@ type issueQuery struct {
 			State       graphql.String
 			StateReason graphql.String
 			URL         graphql.String
-			Parent      struct {
-				ID     graphql.ID
-				Number graphql.Int
-				Title  graphql.String
+			// Parent selects the parent epic's OWN repository alongside its
+			// number (#1181). Issue numbers are per-repository, so a parent
+			// number without its repository is not a resolvable coordinate:
+			// resolving it against the sub-issue's repo silently lands on a
+			// different issue (or a PR) whenever the epic lives elsewhere.
+			// This mirrors the `repository { nameWithOwner }` selection that
+			// subIssueNode/blockingNode already carry.
+			Parent struct {
+				ID         graphql.ID
+				Number     graphql.Int
+				Title      graphql.String
+				Repository struct {
+					NameWithOwner graphql.String
+				}
 			}
 			Labels struct {
 				Nodes []labelNode

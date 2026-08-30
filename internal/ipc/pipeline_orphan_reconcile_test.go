@@ -5,12 +5,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/execution"
 	"github.com/nightgauge/nightgauge/internal/execution/adapters"
 	"github.com/nightgauge/nightgauge/internal/intelligence/tokens"
+	"github.com/nightgauge/nightgauge/internal/platform"
 	"github.com/nightgauge/nightgauge/internal/runstate"
 	"github.com/nightgauge/nightgauge/internal/state"
 )
@@ -800,5 +802,140 @@ func TestSkipRun_LivePidIsBoundedByTheSnapshotAgeCap(t *testing.T) {
 				t.Errorf("disposition = %s, want %s", d, want)
 			}
 		})
+	}
+}
+
+// --- The emission seam (#472) ------------------------------------------------
+
+// countingEmitter is the fake that makes the reconciler's terminal emission
+// OBSERVABLE. Before pipelineEventEmitter existed, s.analyticsSvc could only
+// hold a *platform.AnalyticsService — which needs a live platform client — so
+// every test here pinned the pure collector (what WOULD be emitted) and the
+// actual emit could be deleted with the whole package still green.
+//
+// Guarded because EmitPipelineEvent is reached from whatever goroutine runs the
+// reconcile pass, and -race is in this issue's definition of done.
+type countingEmitter struct {
+	mu     sync.Mutex
+	events []platform.PipelineEvent
+}
+
+func (c *countingEmitter) EmitPipelineEvent(_ context.Context, event platform.PipelineEvent) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.events = append(c.events, event)
+}
+
+func (c *countingEmitter) snapshot() []platform.PipelineEvent {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]platform.PipelineEvent(nil), c.events...)
+}
+
+// A server built without a platform client must leave analyticsSvc an ACTUALLY
+// nil interface. A nil *AnalyticsService stored in the interface is a non-nil
+// interface value: every `analyticsSvc != nil` guard would pass and the first
+// emission would dereference nothing.
+func TestServerWithoutPlatformClient_AnalyticsSvcIsNilInterface(t *testing.T) {
+	s := NewServer(nil)
+	if s.analyticsSvc != nil {
+		t.Fatalf("analyticsSvc must be a nil interface with no platform client, got %#v", s.analyticsSvc)
+	}
+	if s.getAnalyticsSvc() != nil {
+		t.Fatal("getAnalyticsSvc must be nil with no platform client")
+	}
+}
+
+// TestApplyReconcileAction_EmitAndRemoveEmitsExactlyOnce pins the EFFECT half:
+// exactly one terminal event actually reaches the platform, carrying this run's
+// identity, and the snapshot is gone. Deleting the emit in
+// applyReconcileAction's dispositionEmitAndRemove arm must turn this red.
+func TestApplyReconcileAction_EmitAndRemoveEmitsExactlyOnce(t *testing.T) {
+	root := t.TempDir()
+	stateDir := filepath.Join(root, ".nightgauge", "pipeline")
+	now := time.Now()
+	runID := newTestRunID()
+	file := staleSnapshot(t, stateDir, 472, runID, now)
+
+	fake := &countingEmitter{}
+	s := NewServer(nil, WithWorkspaceRoot(root))
+	s.analyticsSvc = fake
+
+	acts := collectReconcileActions(stateDir, s.serverEvidence(now), now)
+	if len(acts) != 1 || acts[0].Disposition != dispositionEmitAndRemove {
+		t.Fatalf("collector gave %+v, want exactly one emit+remove", acts)
+	}
+
+	s.applyReconcileAction(stateDir, acts[0])
+
+	events := fake.snapshot()
+	if len(events) != 1 {
+		t.Fatalf("got %d emitted events, want exactly 1", len(events))
+	}
+	ev := events[0]
+	if ev.RunID != runID {
+		t.Errorf("emitted RunID = %q, want %q", ev.RunID, runID)
+	}
+	if ev.IssueNumber != 472 {
+		t.Errorf("emitted IssueNumber = %d, want 472", ev.IssueNumber)
+	}
+	if ev.EventType != "pipeline_done" {
+		t.Errorf("emitted EventType = %q, want %q", ev.EventType, "pipeline_done")
+	}
+	if ev.Success == nil {
+		t.Fatal("emitted Success is nil; a reconciled orphan must be an explicit failure")
+	}
+	if *ev.Success {
+		t.Error("emitted Success = true, want false — the run never finished")
+	}
+	if _, err := os.Stat(file); !os.IsNotExist(err) {
+		t.Fatalf("snapshot must be removed after the emission, stat err = %v", err)
+	}
+}
+
+// The sibling arm: the two dispositions whose whole point is that the platform
+// was ALREADY told (or has nothing terminal to be told) must emit nothing.
+func TestApplyReconcileAction_RemoveDoesNotEmit(t *testing.T) {
+	root := t.TempDir()
+	stateDir := filepath.Join(root, ".nightgauge", "pipeline")
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	fake := &countingEmitter{}
+	s := NewServer(nil, WithWorkspaceRoot(root))
+	s.analyticsSvc = fake
+
+	// dispositionRemove: the terminal claim or abandonRun already emitted.
+	removeRunID := newTestRunID()
+	removePath := filepath.Join(stateDir, state.SnapshotFilename(600, removeRunID))
+	if err := os.WriteFile(removePath, []byte("{}"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	s.applyReconcileAction(stateDir, reconcileAction{
+		Path:        removePath,
+		Disposition: dispositionRemove,
+		RunID:       removeRunID,
+		Issue:       600,
+	})
+	if _, err := os.Stat(removePath); !os.IsNotExist(err) {
+		t.Fatalf("dispositionRemove must remove the file, stat err = %v", err)
+	}
+
+	// dispositionReleaseClaim: a pause survives; nothing terminal happened.
+	claimRunID := newTestRunID()
+	claimPath := filepath.Join(stateDir, state.SnapshotFilename(601, claimRunID)+".claim")
+	if err := os.WriteFile(claimPath, []byte("{}"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	s.applyReconcileAction(stateDir, reconcileAction{
+		Path:        claimPath,
+		Disposition: dispositionReleaseClaim,
+		RunID:       claimRunID,
+		Issue:       601,
+	})
+
+	if got := fake.snapshot(); len(got) != 0 {
+		t.Fatalf("got %d emitted events for non-emitting dispositions, want 0: %+v", len(got), got)
 	}
 }

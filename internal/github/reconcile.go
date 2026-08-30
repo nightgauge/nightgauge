@@ -209,7 +209,13 @@ func (e *EpicService) ReconcileBoard(ctx context.Context, owner string, projectN
 		// closeOneEpic re-checks completion (with EC retry), closes the epic,
 		// comments, and syncs it to Done — so we skip R1 for it on success.
 		if it.IsEpic && !closed && len(it.SubIssues) > 0 && allSubsClosed(it.SubIssues) {
-			status, reason, cerr := e.closeOneEpic(ctx, iOwner, iRepo, it.Number, projectNumber)
+			// The board item carries the epic's OWN owner/repo, so this path was
+			// already cross-repo correct; EpicRef makes that visible (#1181).
+			status, reason, cerr := e.closeOneEpic(ctx, EpicRef{
+				Owner:  iOwner,
+				Repo:   iRepo,
+				Number: it.Number,
+			}, projectNumber)
 			if cerr != nil {
 				res.Warnings = append(res.Warnings, fmt.Sprintf("epic #%d: auto-close failed: %v", it.Number, cerr))
 			} else if status == "closed" {

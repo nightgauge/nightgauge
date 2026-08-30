@@ -472,3 +472,102 @@ func TestRecoveryRegistry_ConflictExhaustionNamesFiles(t *testing.T) {
 		t.Errorf("terminal pr-merge error must name the conflicting file, got %q", lastErr)
 	}
 }
+
+// capturingRecoveryAction matches every failure and records the
+// recovery.StageFailure it was handed. It exists to observe the ONE thing #566
+// is about: what the scheduler puts in StageError / TerminalKind before the
+// auto-triage registry gets to look at it.
+type capturingRecoveryAction struct {
+	mu       sync.Mutex
+	executed int
+	failures []recovery.StageFailure
+}
+
+func (a *capturingRecoveryAction) Name() string { return "capturing-recovery" }
+
+func (a *capturingRecoveryAction) Description() string {
+	return "records the StageFailure it is matched against"
+}
+
+func (a *capturingRecoveryAction) Matches(_ recovery.StageFailure) bool { return true }
+
+func (a *capturingRecoveryAction) Execute(_ context.Context, f recovery.StageFailure) recovery.RecoveryResult {
+	a.mu.Lock()
+	a.executed++
+	a.failures = append(a.failures, f)
+	a.mu.Unlock()
+	return recovery.RecoveryResult{
+		Action:    a.Name(),
+		Recovered: true,
+		Reason:    "captured",
+		FollowUp:  recovery.FollowUpStageCanResume,
+	}
+}
+
+func (a *capturingRecoveryAction) observed() (int, []recovery.StageFailure) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	out := make([]recovery.StageFailure, len(a.failures))
+	copy(out, a.failures)
+	return a.executed, out
+}
+
+// TestRecoveryRegistry_FiresOnCLIPathStageError is the #566 / #533 pin on the
+// auto-triage registry's failure construction (`stageErrText :=
+// stageFailureText(err, result)` in scheduler.go).
+//
+// Before #533 that text was `err.Error()`. A CLI-mode failure arrives with
+// err == nil and the adapter's stderr reason on the result, so every matcher in
+// the registry saw StageError == "" and TerminalKind == "" — the whole
+// auto-triage system was structurally blind on the CLI path, and matched
+// nothing there no matter what the adapter reported.
+//
+// The IPC twin pins both shapes as equivalent: the registry must reach the same
+// StageError and TerminalKind whether the reason arrived as a Go error or on the
+// result. `executed == 1` is the "fired at all" assertion — pre-#533 the count
+// on the CLI shape was 0, because no matcher could see anything to match on.
+func TestRecoveryRegistry_FiresOnCLIPathStageError(t *testing.T) {
+	shapes := []struct {
+		name     string
+		ipcShape bool
+		issue    int
+	}{
+		{name: "cli_shape_err_nil_reason_on_result", ipcShape: false, issue: 6004},
+		{name: "ipc_shape_non_nil_err_empty_error_text", ipcShape: true, issue: 6005},
+	}
+
+	for _, shape := range shapes {
+		t.Run(shape.name, func(t *testing.T) {
+			root := t.TempDir()
+			seedRefusalRepo(t, root, allRefusalStageSkills)
+
+			runner := &failingStageRunner{ipcShape: shape.ipcShape}
+			s := newRefusalScheduler(root, runner)
+			action := &capturingRecoveryAction{}
+			s.WithRecoveryRegistry(recovery.New(1, action))
+
+			s.runPipeline(context.Background(), types.BoardItem{
+				Number: shape.issue, Repo: "nightgauge/nightgauge", ID: "item-recovery",
+			})
+
+			executed, failures := action.observed()
+			if executed != 1 {
+				t.Fatalf("recovery action executed %d time(s), want exactly 1 — the registry never "+
+					"saw this failure at all, which is the #533 CLI-path blindness", executed)
+			}
+			f := failures[0]
+			if !strings.Contains(f.StageError, "Not signed in") {
+				t.Errorf("StageFailure.StageError = %q, want it to CONTAIN %q\n"+
+					"the matchers pattern-match on this text; an empty StageError makes every "+
+					"text-based recovery action unreachable", f.StageError, "Not signed in")
+			}
+			if f.TerminalKind != TerminalKindAdapterAuthFailed {
+				t.Errorf("StageFailure.TerminalKind = %q, want %q — kind-keyed matchers cannot fire "+
+					"on a classification the scheduler never made", f.TerminalKind, TerminalKindAdapterAuthFailed)
+			}
+			if f.Stage != state.StageIssuePickup {
+				t.Errorf("StageFailure.Stage = %q, want %q", f.Stage, state.StageIssuePickup)
+			}
+		})
+	}
+}

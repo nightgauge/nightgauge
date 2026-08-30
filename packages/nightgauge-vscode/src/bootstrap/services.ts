@@ -14,6 +14,7 @@ import * as path from "node:path";
 import { type PipelineStage, parsePhaseMarker, uuidV7 } from "@nightgauge/sdk";
 import type { NotifyStageProgressParams } from "../services/ipcNotifyParams";
 import { handleIpcRejection } from "../services/ipcRejection";
+import { handleGoPipelineComplete, type GoPipelineCompleteDeps } from "./pipelineComplete";
 import { Logger, createMainLogger, installLogDiskSink } from "../utils/logger";
 import { StatusBarManager } from "../utils/statusBar";
 import { resolveActiveRepository } from "../utils/resolveActiveRepository";
@@ -2735,57 +2736,21 @@ export async function initializeServices(
   // the extension reads that record, it does not produce one.
   {
     const ipc = IpcClient.getInstance();
-    const disposeGoHistoryWriter = ipc.on("pipeline.complete", async (data: unknown) => {
-      const d = data as {
-        repo?: string;
-        runId?: string;
-        issueNumber: number;
-        success: boolean;
-        totalCostUSD: number;
-      };
-
-      // This handler used to assemble and write a SECOND history record for a
-      // run the Go scheduler had already recorded (#141). That record was a
-      // strict subset of the authoritative one — no run_id, no repo, no
-      // per-stage cache data, hardcoded zero cache/file counters — so it could
-      // not be de-duplicated against the real record and every completion
-      // appended another line. Worse, it went to `telemetryStore`, which is
-      // rooted at workspaceFolders[0], so a run belonging to a sibling repo
-      // landed in the launch repo's history. `Scheduler.recordV2History`
-      // already writes the full record into the run's OWN repo root
-      // (`runRoot(item.Repo)`), so the write here added nothing and corrupted
-      // the store. Deleted rather than repaired, for the same reason the
-      // #319 outcome writer was: a second writer keyed off bootstrap-level
-      // shared state cannot be made correct for a run it cannot identify.
-      //
-      // The remaining work is what only the extension can do: mark the issue
-      // so the legacy pipeline-finish handler skips its own write, refresh the
-      // dashboard, and record a health snapshot for concurrent slots (#2245),
-      // which per-slot PipelineStateServices never trigger on the singleton.
-      pipelineCompleteIssues.add(d.issueNumber);
-
-      try {
-        await dashboardHistoryReloader?.();
-        await dashboard.recordHealthSnapshotForRun(d.issueNumber, d.totalCostUSD);
-        logger.info("Pipeline complete: dashboard refreshed", {
-          repo: d.repo,
-          runId: d.runId,
-          issueNumber: d.issueNumber,
-          costUsd: d.totalCostUSD,
-        });
-      } catch {
-        // Non-critical — panel may not be open
-      }
-
-      // Trigger a telemetry upload after pipeline completion (#3315). This is a
-      // redundant, idempotent flush: the active-run counter + cadence are driven
-      // by the pipeline lifecycle IPC wiring (onRunStarted/onRunCompleted, set up
-      // near the uploader construction), so onPipelineCompleted() intentionally
-      // does NOT touch activeRunCount — no double-decrement (#234).
-      telemetryUploaderService?.onPipelineCompleted();
-    });
+    const goDeps: GoPipelineCompleteDeps = {
+      pipelineCompleteIssues,
+      get dashboardHistoryReloader() {
+        return dashboardHistoryReloader;
+      },
+      recordHealthSnapshotForRun: (issueNumber, costUsd) =>
+        dashboard.recordHealthSnapshotForRun(issueNumber, costUsd),
+      get telemetryUploaderService() {
+        return telemetryUploaderService;
+      },
+      logger,
+    };
+    const goCompleteSub = ipc.on("pipeline.complete", (d) => handleGoPipelineComplete(goDeps, d));
     context.subscriptions.push({
-      dispose: () => disposeGoHistoryWriter.dispose(),
+      dispose: () => goCompleteSub.dispose(),
     });
 
     // Model-unavailable fallback notifications (#42). The Go scheduler emits
