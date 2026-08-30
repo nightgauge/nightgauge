@@ -307,6 +307,43 @@ type FailedStageDisposition =
   | { kind: "blocked"; signal: PipelineFeedbackSignal; reason: string }
   | { kind: "halt" };
 
+/**
+ * Why a run was refused at `pipeline-start` — before any AI stage ran, with
+ * ZERO tokens spent (#1170).
+ *
+ * A CLOSED UNION, not a boolean and not a substring test on the error text,
+ * for the same reason `BlockedTerminalState.outOfScopeFinding` is a typed flag
+ * (#1147): it gates behaviour in another service. `ConcurrentPipelineManager`
+ * suppresses BOTH its "safety net" board move to "In review" AND its generic
+ * failure comment when it is set, because neither reaction is true of a run
+ * that never started — "In review" claims there is work to review, and the
+ * comment writes an environmental or scheduling condition into the permanent
+ * public history of an issue that has nothing wrong with it.
+ *
+ * Every member is a refusal that (a) spent no AI tokens, (b) happened before
+ * any stage, and (c) says nothing about the issue's own content that a human
+ * reviewer could act on. A run that ENTERED the pipeline and then failed — any
+ * `failedStage` past `pipeline-start` — carries no value here and keeps both
+ * reactions. Adding a member is a deliberate act: `tests/services/
+ * pipelineStartRefusalCoverage.test.ts` fails when a new `pipeline-start`
+ * refusal is added without one, so the choice is made rather than defaulted.
+ */
+export type PipelineStartRefusal =
+  /** The adapter auth pre-flight refused to launch — the adapter CLI is logged out, or its probe timed out. Operator-local credential state (#312, the #1170 incident). */
+  | "adapter-auth-failed"
+  /** The `gh` auth pre-check failed — no token or missing scopes. The `gh`-CLI sibling of the above; equally operator-local (#1141). */
+  | "github-auth-failed"
+  /** The GitHub API rate-limit bucket was below the headroom for one run. Environmental and self-clearing within the hour (#3896). */
+  | "github-quota-low"
+  /** api.github.com was unreachable. Environmental and transient (#4002). */
+  | "github-network-outage"
+  /** The issue was already CLOSED at pickup. Zero-token non-failure; the board target is Done, never "In review" (#3661). */
+  | "issue-closed"
+  /** An epic with open sub-issues was dispatched. A scheduler eligibility fault, not an issue defect — the remedy is on the sub-issues. */
+  | "epic-with-open-sub-issues"
+  /** The operator cancelled at the pre-flight budget warning. A deliberate stop, mirroring the existing `slot.userCancelled` suppression. */
+  | "budget-cancelled-by-user";
+
 export interface PipelineRunResult {
   success: boolean;
   completedStages: PipelineStage[];
@@ -325,6 +362,12 @@ export interface PipelineRunResult {
   terminalKind?: string;
   /** Set when the run ended blocked — PR unmerged behind a non-retryable blocker (#190) */
   blocked?: BlockedTerminalState;
+  /**
+   * Set when the run was refused at `pipeline-start` with zero tokens spent
+   * (#1170). See {@link PipelineStartRefusal} for the closed set and for what
+   * consumers must NOT do on such a run.
+   */
+  startRefusal?: PipelineStartRefusal;
   /**
    * True when pickup DEFERRED because the issue's native blockedBy
    * dependencies are still open (#189/#305). A deferral is NOT a failure:
@@ -6222,6 +6265,9 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       skippedStages: [],
       deferredStages: [],
       failedStage: "pipeline-start",
+      // #1170: zero tokens, no AI stage, nothing wrong with the issue —
+      // ConcurrentPipelineManager must not move the board or comment.
+      startRefusal: "epic-with-open-sub-issues",
       error: new Error(message),
       totalDurationMs: Date.now() - startTime,
     };
@@ -9301,6 +9347,9 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         skippedStages: [],
         deferredStages: [],
         failedStage: "pipeline-start",
+        // #1170: zero tokens, no AI stage, nothing wrong with the issue —
+        // ConcurrentPipelineManager must not move the board or comment.
+        startRefusal: "issue-closed",
         error: new Error(
           `Issue #${issueNumber} is already CLOSED. Pipeline halted — zero AI tokens consumed.\n\n` +
             `Use forceRerun: true to override this guard for legitimate re-runs.`
@@ -9364,6 +9413,9 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         skippedStages: [],
         deferredStages: [],
         failedStage: "pipeline-start",
+        // #1170: zero tokens, no AI stage, nothing wrong with the issue —
+        // ConcurrentPipelineManager must not move the board or comment.
+        startRefusal: "github-quota-low",
         // Embed the `[github-quota-low]` token in the error text itself (not
         // just the stderr marker): bootstrap/services.ts forwards error.message
         // as failureDetail, and the Go ClassifyTerminalKind fallback matches on
@@ -9414,6 +9466,9 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         skippedStages: [],
         deferredStages: [],
         failedStage: "pipeline-start",
+        // #1170: zero tokens, no AI stage, nothing wrong with the issue —
+        // ConcurrentPipelineManager must not move the board or comment.
+        startRefusal: "github-network-outage",
         // Embed the `[github-network-outage]` token in the error text itself
         // (not just the stderr marker): bootstrap/services.ts forwards
         // error.message as failureDetail, and the Go ClassifyTerminalKind
@@ -9458,6 +9513,9 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         skippedStages: [],
         deferredStages: [],
         failedStage: "pipeline-start",
+        // #1170: zero tokens, no AI stage, nothing wrong with the issue —
+        // ConcurrentPipelineManager must not move the board or comment.
+        startRefusal: "github-auth-failed",
         error: new Error(
           `GitHub auth pre-check failed — pipeline halted before AI stages.\n\n${authError}`
         ),
@@ -9555,6 +9613,9 @@ export class HeadlessOrchestrator implements vscode.Disposable {
           skippedStages: [],
           deferredStages: [],
           failedStage: "pipeline-start",
+          // #1170: zero tokens, no AI stage, nothing wrong with the issue —
+          // ConcurrentPipelineManager must not move the board or comment.
+          startRefusal: "adapter-auth-failed",
           error: new Error(errorMessage),
           totalDurationMs: Date.now() - startTime,
         };
@@ -9682,6 +9743,9 @@ export class HeadlessOrchestrator implements vscode.Disposable {
               skippedStages: [],
               deferredStages: [],
               failedStage: "pipeline-start",
+              // #1170: zero tokens, no AI stage, nothing wrong with the issue —
+              // ConcurrentPipelineManager must not move the board or comment.
+              startRefusal: "budget-cancelled-by-user",
               error: new Error(
                 `Pipeline cancelled by user after pre-flight budget warning. ` +
                   `Estimated cost: $${preFlightResult.estimatedCost.toFixed(2)}, ` +
