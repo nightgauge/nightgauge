@@ -29,7 +29,7 @@ import type {
 } from "./types.js";
 import { AUTOMATIC_MODEL_SELECTION_SOURCE } from "./types.js";
 import type { ExperimentReport } from "./experiment-types.js";
-import { DEFAULT_MODEL_COST_RATES } from "./types.js";
+import { ANTHROPIC_TIER_COST_RATES } from "./types.js";
 import { isLightweightModel, isHeavyweightModel } from "../eval/bandStrength.js";
 import { AutoModelSelector } from "./AutoModelSelector.js";
 import type { ComplexityLabel, ModelTier } from "./AutoModelSelector.js";
@@ -51,7 +51,7 @@ export class ModelPerformanceAnalyzer {
         config?.minSamplesPerModelPerStage ?? DEFAULT_CONFIG.minSamplesPerModelPerStage,
       recencyWeight: config?.recencyWeight ?? DEFAULT_CONFIG.recencyWeight,
       qualityThreshold: config?.qualityThreshold ?? DEFAULT_CONFIG.qualityThreshold,
-      costRates: config?.costRates ?? DEFAULT_MODEL_COST_RATES,
+      costRates: config?.costRates ?? ANTHROPIC_TIER_COST_RATES,
       dateRange: config?.dateRange,
     };
   }
@@ -634,7 +634,7 @@ export class ModelPerformanceAnalyzer {
     }
 
     // Estimate waste: difference between opus cost and sonnet cost
-    const costRates = this.config.costRates ?? DEFAULT_MODEL_COST_RATES;
+    const costRates = this.config.costRates ?? ANTHROPIC_TIER_COST_RATES;
     const opusRate = costRates["opus"];
     const sonnetRate = costRates["sonnet"];
 
@@ -848,7 +848,7 @@ export class ModelPerformanceAnalyzer {
    * Estimate cost savings of auto-selection vs using the static default (sonnet).
    */
   private estimateCostSavingsVsStatic(autoRecords: ExecutionHistoryRecord[]): number {
-    const costRates = this.config.costRates ?? DEFAULT_MODEL_COST_RATES;
+    const costRates = this.config.costRates ?? ANTHROPIC_TIER_COST_RATES;
     const sonnetRate = costRates["sonnet"];
     if (!sonnetRate) return 0;
 

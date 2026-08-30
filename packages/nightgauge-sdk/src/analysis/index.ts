@@ -148,7 +148,7 @@ export type {
   RecommendationAction,
 } from "./types.js";
 
-export { DEFAULT_MODEL_COST_RATES } from "./types.js";
+export { ANTHROPIC_TIER_COST_RATES } from "./types.js";
 
 // The single `model_selection.source` vocabulary authority (#446) — Go mirrors
 // it in internal/state/model_selection_source.go, every TS surface derives.

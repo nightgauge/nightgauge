@@ -62,6 +62,73 @@ is trusted to catch everything.
 
 ---
 
+### Pre-flight cost estimate (#1213)
+
+The `BudgetEnforcer` row above compares an actual against an _estimate_. This is
+where that estimate comes from, and what it is and is not.
+
+**There is exactly one estimator**: `AutoModelSelector.estimatePipelineCost()`
+in the SDK, used by the pre-flight gate, the dashboard cost widget and the
+health widget. Go's `EstimateCost` and the `intelligence.cost` IPC method were
+deleted in #1213 — Go's per-stage baselines were ~700x below the measured ones
+(`feature-dev` at 8k input tokens against a measured 5.65M), it had no cache
+model, no effort ladder and no calibration, and its only TypeScript wrapper had
+zero call sites. Two estimators disagreeing is worse than one being wrong in a
+known direction.
+
+**Inputs**, all pinned once at pipeline start into `EstimatorInputSnapshot`
+(#198) so a mid-run config change cannot move the number:
+
+| Input                        | Source                                         | Why it is pinned                                                                                   |
+| ---------------------------- | ---------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| size / labels / title        | the issue at pickup                            | size labels applied mid-run shift complexity → tier → baselines                                    |
+| provider                     | `providerForAdapter(resolveStageAdapter(...))` | pricing a grok run at Claude rates biases the estimate by the ratio between two rate cards         |
+| per-stage effort             | the resolved mode envelope and stage pins      | effort re-derived from the size label makes two differently-dispatched runs cost the same on paper |
+| `(stage, model)` calibration | `stage-model-calibration.json` as of run start | any run finishing in between rewrites a bucket                                                     |
+| history p75                  | `ExecutionHistoryReader.getCostByIssue`        | same                                                                                               |
+
+**Provider pricing is never substituted.** `ratesForProviderTier(provider,
+band)` returns `undefined` when a provider serves no model in a band, and the
+stage is reported **unpriced** — the TypeScript analogue of Go's
+`Stamped=false`. The total then excludes it and is a **floor**, not an estimate,
+and the notification renders "unpriced" rather than a number. A local provider
+(ollama, lm-studio) has no registry entries by design: "free" and "unknown" are
+different answers and only one of them is safe to add into a total. `copilot`,
+which _is_ in the registry at $0, prices as a real 0.
+
+**`budget_estimate_source`** records which input produced the published number,
+so a reader can tell a calibrated estimate from an uncalibrated one:
+
+| Source           | Condition                                                         | Threshold                 |
+| ---------------- | ----------------------------------------------------------------- | ------------------------- |
+| `unpriced`       | any non-skipped stage has no registry rate                        | —                         |
+| `stage-model`    | a `(stage, model)` cell qualified                                 | **5** samples in the cell |
+| `historical-p75` | comparable runs exist **and** their p75 exceeds the static figure | **3** comparable runs     |
+| `static`         | nothing else qualified                                            | —                         |
+
+The two thresholds genuinely differ — 3 for the whole-run history cohort, 5 for
+a per-stage cell — because a cell is a narrower slice of the same corpus. A p75
+_below_ the static figure is ignored: the static table has never over-estimated
+in this corpus, so that means the cohort is not comparable, not that runs got
+cheap.
+
+The published `estimatedCost` and the ceiling ratio are now the **same number**.
+Before #1213 they were not: the ratio used the p75 while the published estimate
+used the static table, so the gate warned on one figure and the notification
+rendered another — and the published number never improved with history, which
+is how a median 3.9x under-estimate (#112) survived unnoticed.
+`staticEstimatedCost` is always retained beside it for comparison.
+
+**Measuring it**: `nightgauge cost accuracy [--days N] [--json]` reports median
+and p90 of actual/estimate over the run corpus, grouped by size, by provider and
+by source. It reads `budget_estimate` on the durable run record — the estimate
+used to live only in the pipeline state's `pipeline_meta`, which is discarded
+when the run ends, so "is it getting better?" was a question nothing on disk
+could answer. Ratios above 1.0 are under-estimates; the `on estimate` verdict
+uses the same 0.8–1.25 band the completion notification already renders.
+
+---
+
 ## 3. Worked Example: the #3863 session (2026-05-31)
 
 A human-attended session on issue #3863 (the deterministic-Node-resolution fix)

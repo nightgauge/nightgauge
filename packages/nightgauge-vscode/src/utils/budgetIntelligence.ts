@@ -28,7 +28,23 @@ import {
   StageModelCalibrationService,
   type IssueMetadata,
   type PipelineCostEstimate,
+  type Provider,
 } from "@nightgauge/sdk";
+import type { ClaudeEffort, PipelineStage } from "@nightgauge/sdk";
+
+/**
+ * The stages the estimator prices. Mirrors the SDK's PIPELINE_STAGES; declared
+ * here so the snapshot can resolve one effort per stage without importing the
+ * SDK's internal iteration order.
+ */
+const ESTIMATOR_STAGES: PipelineStage[] = [
+  "issue-pickup",
+  "feature-planning",
+  "feature-dev",
+  "feature-validate",
+  "pr-create",
+  "pr-merge",
+];
 import { ExecutionHistoryReader } from "./executionHistoryReader";
 import type { NormalizedRunRecord } from "./executionHistoryReader";
 import { p75 } from "./adaptiveBudgetLoader";
@@ -140,6 +156,19 @@ export interface EstimatorInputSnapshot {
   mode: import("./modeProfiles").PerformanceMode;
   /** ISO timestamp — makes the estimate auditable ("under calibration as-of T") */
   capturedAt: string;
+  /**
+   * The adapter resolved at pipeline start, and the registry provider it maps
+   * to. Pinned for the same reason everything else here is: both are read from
+   * config and env, so an estimate taken after a config change would price a
+   * run against a provider it never dispatched to (#198, #1213).
+   */
+  adapter: string;
+  provider: Provider;
+  /**
+   * Per-stage effort resolved from the mode envelope and stage pins — what the
+   * run will ACTUALLY dispatch at, not what the size label implies.
+   */
+  stageEfforts: Partial<Record<string, ClaudeEffort>>;
 }
 
 /**
@@ -154,11 +183,28 @@ export async function captureEstimatorInputs(
   const stageModelCalibration = await StageModelCalibrationService.load(calibrationPath);
   const { getPerformanceMode } = await import("./resolvers/monitoringResolver");
   const mode = getPerformanceMode(historyRoot);
+
+  // Resolved here, in the extension host, rather than inside the SDK: the SDK
+  // stays pure and the resolvers are the extension's own config readers.
+  const { resolveStageAdapter } = await import("./resolvers/adapterResolver");
+  const { resolveStageEffort } = await import("./skillRunner");
+  const { providerForAdapter } = await import("@nightgauge/sdk");
+
+  const adapter = resolveStageAdapter("feature-dev" as PipelineStage, workspaceRoot).adapter;
+  const stageEfforts: Partial<Record<string, ClaudeEffort>> = {};
+  for (const stage of ESTIMATOR_STAGES) {
+    const effort = resolveStageEffort(stage, historyRoot, metadata);
+    if (effort) stageEfforts[stage] = effort;
+  }
+
   return {
     metadata: { ...metadata, labels: [...(metadata.labels ?? [])] },
     stageModelCalibration,
     mode,
     capturedAt: new Date().toISOString(),
+    adapter,
+    provider: providerForAdapter(adapter),
+    stageEfforts,
   };
 }
 
@@ -166,9 +212,40 @@ export async function captureEstimatorInputs(
  * Result of pre-flight budget analysis. Contains the cost estimate,
  * comparison to ceiling, and historical context for similar issues.
  */
+/**
+ * Which source produced the published `estimatedCost` (#1213).
+ *
+ * The distinction is the point: before this, `estimatedCost` was ALWAYS the
+ * static table's figure, so a reader could not tell a calibrated projection
+ * from an uncalibrated one — and the published number never improved with
+ * history even though the correction was being computed on every call.
+ */
+export type BudgetEstimateSource =
+  /** The static TOKEN_BASELINES figure — no source qualified. */
+  | "static"
+  /** p75 of comparable historical runs (≥ 3 samples). */
+  | "historical-p75"
+  /** Per-(stage, model) calibration cells (≥ 5 samples in a cell). */
+  | "stage-model"
+  /** The provider serves a band the registry cannot price; there is no number. */
+  | "unpriced";
+
 export interface PreFlightBudgetResult {
-  /** Estimated total pipeline cost from AutoModelSelector */
+  /**
+   * The PUBLISHED projection — calibrated when a source qualified.
+   *
+   * This used to be `estimate.totalEstimatedCost` unconditionally, while the
+   * p75 that "carries the whole gate" (#112) was computed two lines above and
+   * used only for the ceiling warning. Two runs on 2026-08-30: an L/55-file
+   * issue estimated at $14.62 landed at $63.86; an S/3-file docs issue
+   * estimated at $3.65 landed at $6.74. The direction is always the same
+   * because the number never saw the history (#1213).
+   */
   estimatedCost: number;
+  /** Which source produced `estimatedCost`. @since Issue #1213 */
+  estimateSource: BudgetEstimateSource;
+  /** The uncalibrated static figure, always retained for comparison. @since Issue #1213 */
+  staticEstimatedCost: number;
   /** Effective pipeline ceiling (USD) */
   ceilingUsd: number;
   /** Ratio of estimated cost to ceiling (0.0-1.0+) */
@@ -226,12 +303,13 @@ export async function runPreFlightBudgetCheck(
   const selector = new AutoModelSelector();
   const historyRoot = resolveMainRepoRoot(workspaceRoot);
   const snap = snapshot ?? (await captureEstimatorInputs(metadata, workspaceRoot));
-  const estimate: PipelineCostEstimate = selector.estimatePipelineCost(
-    snap.metadata,
+  const estimate: PipelineCostEstimate = selector.estimatePipelineCost(snap.metadata, {
     skipStages,
-    snap.stageModelCalibration,
-    toModelEnvelope(snap.mode)
-  );
+    stageModelCalibration: snap.stageModelCalibration,
+    envelope: toModelEnvelope(snap.mode),
+    provider: snap.provider,
+    stageEfforts: snap.stageEfforts,
+  });
 
   // Step 2: Calibrate the static estimate against what runs like this have
   // ACTUALLY cost. historyRoot already resolved above (Step 1) from main repo
@@ -263,8 +341,39 @@ export async function runPreFlightBudgetCheck(
     );
   }
 
-  // Step 3: Use the HIGHER of estimated cost and historical p75 for comparison
-  const projectedCost = Math.max(estimate.totalEstimatedCost, calibration.costUsd ?? 0);
+  // Step 3: Pick the source, and PUBLISH what it produced.
+  //
+  // Order, most-specific first:
+  //   unpriced      — the provider serves a band the registry cannot price, so
+  //                   there is no number to publish at all.
+  //   stage-model   — a (stage, model) cell met its 5-sample threshold; the
+  //                   estimate is already the observed p75 per stage.
+  //   historical-p75 — ≥ 3 comparable runs, and their p75 exceeds the static
+  //                   figure. The static table has never over-estimated in this
+  //                   corpus, so a p75 BELOW it means the cohort is not
+  //                   comparable rather than that runs got cheap.
+  //   static        — nothing qualified.
+  //
+  // The published number and the ceiling ratio are now the SAME number. They
+  // were not: the ratio used the p75 while the published estimate did not, so
+  // the gate warned on one figure and the notification rendered another.
+  const staticEstimatedCost = estimate.totalEstimatedCost;
+  let estimateSource: BudgetEstimateSource;
+  let projectedCost: number;
+  if (estimate.unpriced) {
+    estimateSource = "unpriced";
+    projectedCost = staticEstimatedCost;
+  } else if (estimate.calibrationUsed) {
+    estimateSource = "stage-model";
+    projectedCost = staticEstimatedCost;
+  } else if (calibration.costUsd !== null && calibration.costUsd > staticEstimatedCost) {
+    estimateSource = "historical-p75";
+    projectedCost = calibration.costUsd;
+  } else {
+    estimateSource = "static";
+    projectedCost = staticEstimatedCost;
+  }
+
   const ceilingRatio = ceilingUsd > 0 ? projectedCost / ceilingUsd : 0;
   const shouldWarn = ceilingRatio >= warningThreshold;
 
@@ -276,7 +385,10 @@ export async function runPreFlightBudgetCheck(
     skipped: s.skipped,
   }));
 
-  let summary = `Estimated cost: $${estimate.totalEstimatedCost.toFixed(2)}`;
+  let summary =
+    estimateSource === "unpriced"
+      ? `Estimated cost: UNPRICED (provider ${estimate.provider} has no registry rate for a selected band)`
+      : `Estimated cost: $${projectedCost.toFixed(2)} (${estimateSource})`;
   if (calibration.costUsd !== null) {
     const cohort = calibrationCohortLabel(calibration.source, estimate.complexity);
     summary += ` | Historical p75 (${cohort}): $${calibration.costUsd.toFixed(2)} (${calibration.sampleCount} runs)`;
@@ -296,7 +408,9 @@ export async function runPreFlightBudgetCheck(
   }
 
   return {
-    estimatedCost: estimate.totalEstimatedCost,
+    estimatedCost: projectedCost,
+    estimateSource,
+    staticEstimatedCost,
     ceilingUsd,
     ceilingRatio,
     shouldWarn,

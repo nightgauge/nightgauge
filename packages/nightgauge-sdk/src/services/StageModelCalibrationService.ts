@@ -21,6 +21,46 @@
 
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { TIER_BANDS } from "../eval/tierBands.js";
+import { getModelDescriptor } from "../eval/modelRegistry.js";
+
+/**
+ * Normalize a model identifier to the key both sides of the calibration loop
+ * use: the registry BAND (`haiku` | `sonnet` | `opus` | `fable`).
+ *
+ * ONE KEY SCHEME, and it has to be the band, because the two sides know
+ * different things. The WRITER sees what actually served the stage — often a
+ * concrete id like `claude-sonnet-5` or `grok-4.6`. The READER
+ * (`estimatePipelineCost`) runs BEFORE dispatch, so a concrete id is exactly
+ * what it cannot know; all it has is the band its selector chose. Keying on
+ * concrete ids would mean the estimator queried cells the writer never fills.
+ *
+ * A concrete id that serves exactly one band resolves to it. `grok-4.6` serves
+ * all four, so the id alone is ambiguous — pass `providerHint`/`bandHint` from
+ * the record's own attribution when available, and otherwise leave the id as
+ * its own key rather than guess: a wrong band pollutes a cell the estimator
+ * trusts, which is worse than a cell it never finds.
+ *
+ * @see Issue #1213
+ */
+export function normalizeCalibrationModelKey(idOrBand: string, bandHint?: string): string {
+  const value = (idOrBand ?? "").trim();
+  if (!value) return "";
+  if (TIER_BANDS.includes(value as (typeof TIER_BANDS)[number])) return value;
+
+  const descriptor = getModelDescriptor(value);
+  const tiers = descriptor?.tiers ?? [];
+  if (tiers.length === 1) return tiers[0];
+  if (tiers.length > 1) {
+    // Ambiguous: one model serving several bands. The record's own band
+    // attribution decides, when it has one.
+    if (bandHint && tiers.includes(bandHint as (typeof tiers)[number])) return bandHint;
+    return value;
+  }
+  // Unknown to the registry — key on itself. A cell nobody queries is inert;
+  // a cell keyed on a guessed band is actively wrong.
+  return value;
+}
 
 /** Minimum samples required before a (stage, model) cell overrides the static baseline. */
 export const MIN_CALIBRATION_SAMPLES = 5;
@@ -137,7 +177,9 @@ export class StageModelCalibrationService {
     stage: string,
     model: string
   ): { cell: StageModelBucketCalibration | null; sample_count: number } {
-    const cell = table?.buckets[stage]?.[model];
+    // Normalized on BOTH sides so a caller passing a concrete served id and a
+    // caller passing a band reach the same cell (#1213).
+    const cell = table?.buckets[stage]?.[normalizeCalibrationModelKey(model)];
     if (cell && cell.sample_count > 0) {
       return { cell, sample_count: cell.sample_count };
     }

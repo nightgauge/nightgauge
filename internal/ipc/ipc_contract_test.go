@@ -77,7 +77,6 @@ var contractTestedMethods = map[string]bool{
 	// Intelligence
 	"intelligence.classify":   true,
 	"intelligence.complexity": true,
-	"intelligence.cost":       true,
 	"intelligence.health":     true,
 	"intelligence.route":      true,
 	// Issue
@@ -967,11 +966,19 @@ func TestContract_Intelligence(t *testing.T) {
 		assertMethodRegistered(t, h.readResponseFor(id, nil), "intelligence.classify")
 	})
 
-	t.Run("intelligence.cost/registered", func(t *testing.T) {
+	// intelligence.cost was DELETED (#1213): it served a second, far less
+	// accurate estimator (feature-dev at 8k input tokens against a measured
+	// 5.65M) whose only TypeScript wrapper had zero call sites. Asserted
+	// ABSENT so a reintroduction is caught rather than silently restoring two
+	// estimators that disagree.
+	t.Run("intelligence.cost/not-registered", func(t *testing.T) {
 		id := h.sendRequest("intelligence.cost", map[string]interface{}{
-			"stages": []string{"feature-dev", "feature-validate"}, "complexityScore": 3,
+			"stages": []string{"feature-dev"}, "complexityScore": 3,
 		})
-		assertMethodRegistered(t, h.readResponseFor(id, nil), "intelligence.cost")
+		resp := h.readResponseFor(id, nil)
+		if resp.Error == nil {
+			t.Errorf("intelligence.cost answered %v — the method should be gone", resp.Result)
+		}
 	})
 
 	t.Run("intelligence.health/registered", func(t *testing.T) {

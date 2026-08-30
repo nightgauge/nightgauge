@@ -12,7 +12,7 @@
 
 import type { PipelineStage } from "@nightgauge/sdk";
 import type { ModelCostRate } from "@nightgauge/sdk/dist/analysis/types";
-import { DEFAULT_MODEL_COST_RATES } from "@nightgauge/sdk/dist/analysis/types";
+import { ANTHROPIC_TIER_COST_RATES } from "@nightgauge/sdk/dist/analysis/types";
 import type { PipelineRunSummary, StageTokenUsage } from "./DashboardState";
 import type { PerformanceMode } from "../../utils/modeProfiles";
 import type { SizeAwareBudget } from "../../utils/budgetEnforcer";
@@ -87,7 +87,7 @@ const DEFAULT_MODEL = "sonnet";
 export function calculateCostSummary(
   run: PipelineRunSummary,
   stageModels: StageModelInfo[],
-  costRates: Record<string, ModelCostRate> = DEFAULT_MODEL_COST_RATES,
+  costRates: Record<string, ModelCostRate> = ANTHROPIC_TIER_COST_RATES,
   defaultModel: string = DEFAULT_MODEL,
   modeFilter?: ModeFilter
 ): CostSummary | null {
@@ -337,7 +337,7 @@ function percentile(sortedValues: number[], p: number): number {
 export function calculatePerModeCostRollup(
   runs: PipelineRunSummary[],
   _stageModels: StageModelInfo[] = [],
-  _costRates: Record<string, ModelCostRate> = DEFAULT_MODEL_COST_RATES,
+  _costRates: Record<string, ModelCostRate> = ANTHROPIC_TIER_COST_RATES,
   _defaultModel: string = DEFAULT_MODEL
 ): PerModeCostRollup {
   const modes: PerformanceMode[] = ["efficiency", "elevated", "maximum", "frontier"];

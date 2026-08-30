@@ -45,7 +45,6 @@ import type {
   ConfigTierAuditResult,
   ConfigureForgeInstanceResult,
   CostAnalyticsResult,
-  CostEstimate,
   EpicContextResult,
   EpicProgress,
   ExecutionInfo,
@@ -305,10 +304,6 @@ export class IpcClientGenerated extends IpcClientBase {
 
   async intelligenceClassify(stage: string, exitCode: number, stderr: string): Promise<FailureClassification> {
     return this.call<FailureClassification>('intelligence.classify', { stage, exitCode, stderr });
-  }
-
-  async intelligenceCost(stages: string[], complexityScore: number, adapter?: string): Promise<CostEstimate> {
-    return this.call<CostEstimate>('intelligence.cost', { stages, complexityScore, adapter });
   }
 
   async healthAnalyze(workspaceRoot: string): Promise<HealthAnalysis> {

@@ -727,22 +727,6 @@ func (s *Server) workspaceRootPath() string {
 	return s.workspaceRoot
 }
 
-// resolvedEstimateAdapter is the execution adapter a cost forecast is priced
-// against when the client pinned none (#696). It runs the canonical adapter
-// precedence chain (#54) over "feature-dev" — the representative stage the
-// estimate's model routing is already based on — and falls back to the Go
-// layer's own default adapter rather than to an unstated anthropic assumption.
-func (s *Server) resolvedEstimateAdapter() string {
-	cfg, err := config.Load(s.workspaceRootPath())
-	if err != nil {
-		cfg = nil
-	}
-	if r := config.ResolveStageAdapter(cfg, "feature-dev", os.Getenv); r.Adapter != "" {
-		return r.Adapter
-	}
-	return "claude-headless"
-}
-
 // setWorkspaceRoot is THE ONLY WRITER of either field. It takes no other lock,
 // so it cannot participate in a lock cycle.
 //
@@ -1767,21 +1751,12 @@ func (s *Server) registerMethods() {
 		return failureClassifier.Classify(p.Stage, p.ExitCode, p.Stderr), nil
 	}
 
-	//ipc:method intelligenceCost params:CostEstimateParams result:CostEstimate
-	s.methods["intelligence.cost"] = func(_ context.Context, params json.RawMessage) (interface{}, error) {
-		var p CostEstimateParams
-		if err := json.Unmarshal(params, &p); err != nil {
-			return nil, fmt.Errorf("invalid params: %w", err)
-		}
-		// The forecast is priced through the serving adapter's provider
-		// (#696). A client that did not pin one gets the workspace's own
-		// resolved adapter, never a silent anthropic assumption.
-		adapter := strings.TrimSpace(p.Adapter)
-		if adapter == "" {
-			adapter = s.resolvedEstimateAdapter()
-		}
-		return tokens.EstimateCost(adapter, p.Stages, p.ComplexityScore), nil
-	}
+	// intelligence.cost is gone (#1213). It served a Go forecast whose
+	// per-stage baselines were ~700x below the measured ones (feature-dev at
+	// 8k input tokens against a measured 5.65M), with no cache model, no
+	// effort ladder and no calibration — and its only TypeScript wrapper had
+	// zero call sites. One estimator now: the SDK's estimatePipelineCost,
+	// which the pre-flight gate, the dashboard and the health widget all use.
 
 	// --- Platform methods ---
 
@@ -3514,6 +3489,18 @@ func (s *Server) registerMethods() {
 				Branch:      snap.Branch,
 				BaseBranch:  "main",
 				RoutingPath: "standard",
+			}
+			// Carried only when the gate actually estimated (#1213). A source
+			// of "" means no estimate was made, and an absent budget_estimate
+			// block says exactly that — better than a zero the accuracy report
+			// would divide by.
+			if p.BudgetEstimateSource != "" {
+				input.BudgetEstimate = &state.V2BudgetEstimate{
+					USD:        p.BudgetEstimateUSD,
+					Source:     p.BudgetEstimateSource,
+					Provider:   p.BudgetEstimateProvider,
+					CeilingUSD: p.BudgetCeilingUSD,
+				}
 			}
 			// A blocked-dependency deferral (#305) is a NON-FAILURE even
 			// though p.Success is false — skip the terminal-kind

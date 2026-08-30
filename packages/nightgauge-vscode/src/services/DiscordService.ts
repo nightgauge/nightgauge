@@ -154,6 +154,8 @@ interface PipelineStateSnapshot {
     epic_total?: number;
     epic_position?: number;
     budget_estimate_usd?: number;
+    budget_estimate_source?: string;
+    budget_estimate_provider?: string;
     budget_ceiling_usd?: number;
     route?: string;
     skip_stages?: string[];
@@ -1613,7 +1615,16 @@ export class DiscordService implements Notifier, vscode.Disposable {
     // Cost accuracy — predicted vs actual, the strongest single pipeline-health
     // signal in the message. Its own field, not a suffix (#333 decision G).
     const estimateUsd = meta?.budget_estimate_usd;
-    if (estimateUsd != null && estimateUsd > 0) {
+    if (meta?.budget_estimate_source === "unpriced") {
+      // No budget_estimate_usd exists on an unpriced run, so the guard below
+      // would drop the field entirely — and an absent field reads as "no
+      // estimate", not "unpriceable provider" (#1213).
+      fields.push({
+        name: "📊 Cost Accuracy",
+        value: `unpriced (${meta.budget_estimate_provider ?? "provider"} has no registry rate)`,
+        inline: true,
+      });
+    } else if (estimateUsd != null && estimateUsd > 0) {
       fields.push({
         name: "📊 Cost Accuracy",
         value: formatCostAccuracyValue(runTotalUsd, estimateUsd),

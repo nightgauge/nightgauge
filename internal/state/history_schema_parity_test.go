@@ -60,19 +60,25 @@ const executionHistoryTSSchemaPath = "../../packages/nightgauge-vscode/src/schem
 // reader in either language, so wiring one would have repeated #682's
 // cost_source mistake in reverse.
 //
-// The one survivor is justified inline below: V2StageTokens has no per-stage
-// Model field because model attribution lives on
-// V2StageDetail.ModelSelection.Model instead.
+// The last survivor was `model`, justified on the grounds that
+// V2StageDetail.ModelSelection.Model "covers stage-level attribution". It did
+// not: the per-(stage, model) calibration loop reads
+// tokens.per_stage[*].model, PostPipelineAnalyzer's
+// `.filter(([, usage]) => usage.model)` therefore dropped every row, and
+// stage-model-calibration.json did not exist in any workspace after hundreds
+// of runs. #1213 emptied the pen the way the comment above intends — by
+// wiring the real Go writer.
+//
+// The list is now EMPTY, and this test is what keeps it that way: dropping
+// V2StageTokens.Model turns it red rather than quietly restoring the dead
+// loop.
 //
 // Do NOT add cost_source-related entries here — that field's parity is the
-// whole point of this test. Shrinking this list further, by wiring a real Go
-// writer or by deleting a dead field, is welcome; growing it to hide an
-// unrelated new drift is exactly what this test exists to prevent, so a new
-// addition needs the same justification the original three got, with a linked
-// issue.
-var stageTokensKnownGaps = map[string]bool{
-	"model": true, // no V2StageTokens field; model_selection.model covers stage-level attribution
-}
+// whole point of this test. Shrinking this list, by wiring a real Go writer or
+// by deleting a dead field, is welcome; growing it to hide an unrelated new
+// drift is exactly what this test exists to prevent, so a new addition needs
+// the same justification the original three got, with a linked issue.
+var stageTokensKnownGaps = map[string]bool{}
 
 // goJSONFieldNames returns the `json` tag field names (pre-comma-options) of
 // a Go struct type, in declaration order. Fails loudly on any exported field

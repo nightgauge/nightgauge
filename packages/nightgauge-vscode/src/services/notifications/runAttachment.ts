@@ -108,6 +108,8 @@ export interface PipelineStateSnapshot {
     epic_total?: number;
     epic_position?: number;
     budget_estimate_usd?: number;
+    budget_estimate_source?: string;
+    budget_estimate_provider?: string;
     budget_ceiling_usd?: number;
     route?: string;
     skip_stages?: string[];
@@ -442,7 +444,16 @@ export function buildRunFields(
   }
 
   const estimateUsd = meta?.budget_estimate_usd;
-  if (estimateUsd != null && estimateUsd > 0) {
+  if (meta?.budget_estimate_source === "unpriced") {
+    // An unpriced run carries no budget_estimate_usd, so the guard below would
+    // simply drop the field — and an absent field reads as "no estimate was
+    // made", not "this provider cannot be priced". Say which (#1213).
+    fields.push({
+      title: "Cost Accuracy",
+      value: `unpriced (${meta.budget_estimate_provider ?? "provider"} has no registry rate)`,
+      short: true,
+    });
+  } else if (estimateUsd != null && estimateUsd > 0) {
     fields.push({
       // Plain title — every other Mattermost field title here is plain, and
       // one emoji among them reads as an error rather than an accent.

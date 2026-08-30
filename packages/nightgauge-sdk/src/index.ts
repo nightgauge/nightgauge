@@ -471,6 +471,7 @@ export {
   type SizeBucket,
   type CalibrationMode,
   StageModelCalibrationService,
+  normalizeCalibrationModelKey,
   type StageModelCalibrationTable,
   type StageModelBucketCalibration,
   type StageModelCalibrationInput,
@@ -839,7 +840,7 @@ export {
   providerForAdapter,
   isKnownModel,
   computeCostUsd,
-  deriveDefaultModelCostRates,
+  ratesForProviderTier,
   type TokenCounts,
   // Model-eval matrix runner (#4171)
   ModelEvalRunner,

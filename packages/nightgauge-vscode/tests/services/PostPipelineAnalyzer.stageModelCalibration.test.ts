@@ -262,7 +262,19 @@ describe("PostPipelineAnalyzer — per-(stage, model) calibration (Issue #142)",
     );
   });
 
-  it("skips per_stage entries without a model field", async () => {
+  // These two used to assert that a per_stage entry WITHOUT a `model` field was
+  // skipped. That was the correct description of the old code and the reason
+  // the loop was dead: `model` had no writer at all (#1213), so the "skip"
+  // branch was the only branch, and this test passed while
+  // stage-model-calibration.json never existed in any workspace.
+  //
+  // The analyzer now falls back to `stages[*].model_selection.model`, which is
+  // the BACKFILL — every pre-fix record carries the same value there, so the
+  // loop starts warm on existing history instead of from zero. The genuine
+  // claim survives below, narrowed to what it should always have been: a stage
+  // with NEITHER attribution contributes nothing.
+
+  it("backfills a per_stage entry from model_selection when the token block lacks a model", async () => {
     const record = createRunRecord();
     delete (record.tokens.per_stage!["pr-create"] as any).model;
     mockReadAll.mockResolvedValue([record]);
@@ -272,15 +284,18 @@ describe("PostPipelineAnalyzer — per-(stage, model) calibration (Issue #142)",
 
     const inputRecords = mockStageModelBuildFromHistory.mock.calls[0][0] as Array<{
       stage: string;
+      model: string;
     }>;
-    expect(inputRecords).toHaveLength(1);
-    expect(inputRecords[0].stage).toBe("feature-dev");
+    expect(inputRecords).toHaveLength(2);
+    expect(inputRecords.find((r) => r.stage === "pr-create")!.model).toBe("haiku");
   });
 
-  it("does not build or save a table when no run has per_stage model data", async () => {
+  it("does not build or save a table when a stage has NEITHER attribution", async () => {
     const record = createRunRecord();
     delete (record.tokens.per_stage!["feature-dev"] as any).model;
     delete (record.tokens.per_stage!["pr-create"] as any).model;
+    delete (record.stages as any)["feature-dev"].model_selection;
+    delete (record.stages as any)["pr-create"].model_selection;
     mockReadAll.mockResolvedValue([record]);
     mockAnalyzeSuccess();
 

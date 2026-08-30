@@ -3,7 +3,7 @@
  *
  * Asserts the registry is the single source of truth: cost computation matches
  * the previously-hardcoded rates (regression guard), the derived
- * DEFAULT_MODEL_COST_RATES equals the old hand-maintained table, tier/id
+ * per-(provider, band) rates equal the old hand-maintained table, tier/id
  * resolution is correct, and a non-Anthropic model resolves cleanly.
  */
 
@@ -18,7 +18,7 @@ import {
   providerForAdapter,
   isKnownModel,
   computeCostUsd,
-  deriveDefaultModelCostRates,
+  ratesForProviderTier,
   assertEffortLevelsMatchAuthority,
   assertTransportRatesCarryProvenance,
   assertNonDeprecatedModelsDeclareTransports,
@@ -28,7 +28,7 @@ import {
   mustTransportForAdapter,
 } from "../../src/eval/modelRegistry.js";
 import { EFFORT_LEVELS, ModelDescriptorSchema } from "../../src/eval/modelEvalSchemas.js";
-import { DEFAULT_MODEL_COST_RATES } from "../../src/analysis/types.js";
+import { ANTHROPIC_TIER_COST_RATES } from "../../src/analysis/types.js";
 
 describe("model registry — integrity", () => {
   it("every entry validates against ModelDescriptorSchema", () => {
@@ -244,9 +244,20 @@ describe("model registry — cost computation (parity with prior hardcoded rates
   });
 });
 
-describe("model registry — derived DEFAULT_MODEL_COST_RATES (regression guard)", () => {
-  it("derives exactly the previously hand-maintained tier table", () => {
-    expect(deriveDefaultModelCostRates()).toEqual({
+describe("model registry — per-(provider, band) rates (regression guard)", () => {
+  it("derives exactly the previously hand-maintained Anthropic tier table", () => {
+    // Same values the hand-maintained table carried; only the entry point
+    // changed. `deriveDefaultModelCostRates()` was replaced by
+    // `ratesForProviderTier(provider, band)` in #1213 because a function whose
+    // name says "default" invites exactly the silent Anthropic fallback that
+    // priced grok runs at Claude rates.
+    const anthropic = Object.fromEntries(
+      (["haiku", "sonnet", "opus", "fable"] as const).map((b) => [
+        b,
+        ratesForProviderTier("anthropic", b),
+      ])
+    );
+    expect(anthropic).toEqual({
       haiku: {
         inputPerMillion: 1.0,
         outputPerMillion: 5.0,
@@ -274,8 +285,26 @@ describe("model registry — derived DEFAULT_MODEL_COST_RATES (regression guard)
     });
   });
 
-  it("the analysis DEFAULT_MODEL_COST_RATES export is the derived table", () => {
-    expect(DEFAULT_MODEL_COST_RATES).toEqual(deriveDefaultModelCostRates());
+  it("the ANTHROPIC_TIER_COST_RATES export is that table", () => {
+    // Still exported, still Anthropic-only — but NAMED for its provider now,
+    // and read only by the two hypothetical-comparison analyzers, never by the
+    // estimator.
+    expect(ANTHROPIC_TIER_COST_RATES.sonnet).toEqual(ratesForProviderTier("anthropic", "sonnet"));
+  });
+
+  it("returns a DIFFERENT card for another provider serving the same band", () => {
+    // The defect #1213 fixed: every band was priced from the Anthropic
+    // descriptor whatever adapter served the run.
+    const anthropic = ratesForProviderTier("anthropic", "sonnet")!;
+    const xai = ratesForProviderTier("xai", "sonnet")!;
+    expect(xai.inputPerMillion).not.toBe(anthropic.inputPerMillion);
+    expect(xai.outputPerMillion).not.toBe(anthropic.outputPerMillion);
+  });
+
+  it("returns undefined — never another provider's rates — when a band is unserved", () => {
+    // The TypeScript analogue of Go's Stamped=false. ollama has no registry
+    // entries by design; substituting Anthropic's card here is the whole bug.
+    expect(ratesForProviderTier("ollama", "sonnet")).toBeUndefined();
   });
 });
 

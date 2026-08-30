@@ -23,7 +23,7 @@ import type {
   WastePattern,
   WasteSeverity,
 } from "./types.js";
-import { DEFAULT_MODEL_COST_RATES } from "./types.js";
+import { ANTHROPIC_TIER_COST_RATES } from "./types.js";
 
 const WASTE_CATEGORIES: WasteCategory[] = [
   "redundant-file-reads",
@@ -98,7 +98,7 @@ export class TokenEfficiencyAnalyzer {
     };
     this.minSamplesForOutliers = config?.minSamplesForOutliers ?? DEFAULT_MIN_SAMPLES;
     this.defaultCostRate = config?.defaultCostRate ?? DEFAULT_COST_RATE;
-    this.costRates = { ...DEFAULT_MODEL_COST_RATES, ...config?.costRates };
+    this.costRates = { ...ANTHROPIC_TIER_COST_RATES, ...config?.costRates };
     this.dateRange = config?.dateRange;
   }
 
