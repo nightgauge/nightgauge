@@ -170,6 +170,11 @@ func TestIssueContractValues(t *testing.T) {
 		Milestone:         "Sprint 1",
 		ParentIssueID:     "I_parent100",
 		ParentIssueNumber: 40,
+		// Deliberately a DIFFERENT repo from the issue's own (#1181): the
+		// parent epic usually lives elsewhere in a multi-repo workspace, and a
+		// fixture that made them identical would not notice a consumer that
+		// substitutes the issue's repo for the parent's.
+		ParentIssueRepo: "nightgauge/nightgauge-infra",
 		SubIssues: []types.SubIssueRef{
 			{NodeID: "I_sub789", Number: 43, Title: "Implement upload API", State: "OPEN", Repo: "nightgauge/nightgauge", Labels: []string{"size:M"}},
 		},

@@ -53,7 +53,13 @@ type PostMergeResult struct {
 	// non-blocking).
 	IssueDoneSync BoardSyncOutcome `json:"issueDoneSync"`
 	EpicNumber    int              `json:"epicNumber,omitempty"`
-	AutoClosed    bool             `json:"autoClosed"`
+	// EpicRepo is the "owner/repo" the parent epic was resolved against. In a
+	// multi-repo workspace this is usually NOT the merged issue's repository,
+	// and reporting it is the difference between seeing #1181 and not: the hook
+	// used to resolve the epic number against the sub-issue's repo, which lands
+	// on an unrelated issue whenever the epic lives elsewhere.
+	EpicRepo   string `json:"epicRepo,omitempty"`
+	AutoClosed bool   `json:"autoClosed"`
 	// OrphanSubsClosed counts sub-issues closed because the merged issue was
 	// itself an epic that shipped via an umbrella PR without enumerating
 	// `Closes #sub` for each sub (#3979).
@@ -126,7 +132,7 @@ type IssueCloser interface {
 // completed parent epic, and closing the orphaned open sub-issues of an
 // epic-umbrella PR. Both are implemented by *github.EpicService.
 type EpicAutoCloser interface {
-	AutoCloseSingle(ctx context.Context, owner, repo string, epicNumber, projectNumber int) (*gh.AutoCloseSingleResult, error)
+	AutoCloseSingle(ctx context.Context, ref gh.EpicRef, projectNumber int) (*gh.AutoCloseSingleResult, error)
 	CloseOrphanSubs(ctx context.Context, owner, repo string, epicNumber, projectNumber int, ownerType ...gh.OwnerType) (*gh.OrphanCloseResult, error)
 }
 
@@ -184,6 +190,17 @@ func syncIssueDone(ctx context.Context, boardSvc BoardSyncer, input PostMergeInp
 	}
 	fmt.Fprintf(os.Stderr, "Post-merge: added issue #%d to the board and set its status to Done\n", num)
 	return BoardSyncRepaired
+}
+
+// splitOwnerRepo splits an "owner/repo" string. ok is false for anything that
+// is not exactly two non-empty segments, so a malformed or absent value falls
+// back to the caller's default rather than producing a half-formed coordinate.
+func splitOwnerRepo(full string) (owner, repo string, ok bool) {
+	o, r, found := strings.Cut(full, "/")
+	if !found || o == "" || r == "" || strings.Contains(r, "/") {
+		return "", "", false
+	}
+	return o, r, true
 }
 
 // EvaluatePostMerge closes the merged issue and runs the post-merge epic
@@ -336,7 +353,34 @@ func EvaluatePostMerge(ctx context.Context, issueSvc IssueFetcher, issueCloser I
 
 	epicNumber := issue.ParentIssueNumber
 	out.EpicNumber = epicNumber
-	result, err := epicSvc.AutoCloseSingle(ctx, input.RepositoryOwner, input.RepositoryName, epicNumber, input.ProjectNumber)
+
+	// (#1181) Resolve the epic against ITS OWN repository. GitHub's native
+	// sub-issue link reports the parent's repository alongside its number
+	// (types.Issue.ParentIssueRepo, from the same `repository { nameWithOwner }`
+	// selection SubIssues and BlockedBy have always carried) — that is the
+	// existing authority, so nothing here parses bodies or infers coordinates.
+	//
+	// The fallback to the merged issue's repo covers a parent link that reports
+	// no repository at all. It is no longer able to be silently wrong: the
+	// ExpectSubIssue fields below make the epic prove it actually lists the
+	// merged issue, so a mis-resolved epic errors instead of reporting
+	// "no_subs" success.
+	epicOwner, epicRepo := input.RepositoryOwner, input.RepositoryName
+	if o, r, ok := splitOwnerRepo(issue.ParentIssueRepo); ok {
+		epicOwner, epicRepo = o, r
+	}
+	out.EpicRepo = epicOwner + "/" + epicRepo
+
+	result, err := epicSvc.AutoCloseSingle(ctx, gh.EpicRef{
+		Owner:  epicOwner,
+		Repo:   epicRepo,
+		Number: epicNumber,
+		// The merged issue is a sub-issue of the intended epic by construction
+		// (that is how we got epicNumber), so an epic that does not list it is
+		// the wrong issue.
+		ExpectSubIssueNumber: input.IssueNumber,
+		ExpectSubIssueRepo:   input.RepositoryOwner + "/" + input.RepositoryName,
+	}, input.ProjectNumber)
 
 	// BOTH failure shapes land on one reason word (#1025).
 	//
@@ -356,12 +400,12 @@ func EvaluatePostMerge(ctx context.Context, issueSvc IssueFetcher, issueCloser I
 		if err != nil {
 			out.Error = err.Error()
 		}
-		fmt.Fprintf(os.Stderr, "Warning: post-merge epic auto-close FAILED for #%d (%s): %s\n",
-			epicNumber, out.EpicReason, out.Error)
+		fmt.Fprintf(os.Stderr, "Warning: post-merge epic auto-close FAILED for %s#%d (%s): %s\n",
+			out.EpicRepo, epicNumber, out.EpicReason, out.Error)
 		return out
 	}
 
-	fmt.Fprintf(os.Stderr, "Post-merge epic check: #%d status=%s reason=%s\n", epicNumber, result.Status, result.Reason)
+	fmt.Fprintf(os.Stderr, "Post-merge epic check: %s#%d status=%s reason=%s\n", out.EpicRepo, epicNumber, result.Status, result.Reason)
 
 	out.AutoClosed = result.Status == "closed"
 	out.Reason = result.Status
