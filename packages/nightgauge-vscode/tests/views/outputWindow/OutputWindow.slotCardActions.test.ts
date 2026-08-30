@@ -236,18 +236,18 @@ describe("OutputWindow — overview card actions (Issue #1198)", () => {
 
   describe("reveal-github", () => {
     it("opens the slot's issue URL externally", async () => {
-      ow.registerSlotInfo(0, 348, "Client feature gating", "EdibuLLC/bowlsheet-flutter");
+      ow.registerSlotInfo(0, 348, "Feature gating and upsell surfaces", "acme/flutter-app");
 
       postFromWebview({ type: "slot:action", slotIndex: 0, action: "reveal-github" });
       await flush();
 
       expect(mockOpenExternal).toHaveBeenCalledTimes(1);
       const opened = mockOpenExternal.mock.calls[0][0];
-      expect(opened.parsed).toBe("https://github.com/EdibuLLC/bowlsheet-flutter/issues/348");
+      expect(opened.parsed).toBe("https://github.com/acme/flutter-app/issues/348");
     });
 
     it("warns instead of failing silently when the slot has no repo", async () => {
-      ow.registerSlotInfo(0, 348, "Client feature gating");
+      ow.registerSlotInfo(0, 348, "Feature gating and upsell surfaces");
 
       postFromWebview({ type: "slot:action", slotIndex: 0, action: "reveal-github" });
       await flush();
@@ -268,48 +268,40 @@ describe("OutputWindow — overview card actions (Issue #1198)", () => {
 
   describe("open-log", () => {
     it("opens the newest session log for the slot's issue", async () => {
-      ow.setLogConfig("/repos/bowlsheet-infra");
-      ow.registerSlotInfo(1, 210, "Docs reconciliation");
+      ow.setLogConfig("/repos/infra");
+      ow.registerSlotInfo(1, 210, "Docs reconciliation for decision 002");
       mockFindLatestLogForIssue.mockResolvedValue(
-        "/repos/bowlsheet-infra/.nightgauge/logs/2026-08-30_210_session.log"
+        "/repos/infra/.nightgauge/logs/2026-08-30_210_session.log"
       );
 
       postFromWebview({ type: "slot:action", slotIndex: 1, action: "open-log" });
       await flush();
 
-      expect(mockFindLatestLogForIssue).toHaveBeenCalledWith(
-        "/repos/bowlsheet-infra",
-        210,
-        undefined
-      );
+      expect(mockFindLatestLogForIssue).toHaveBeenCalledWith("/repos/infra", 210, undefined);
       expect(mockOpenTextDocument).toHaveBeenCalledTimes(1);
       expect(mockOpenTextDocument.mock.calls[0][0].fsPath).toBe(
-        "/repos/bowlsheet-infra/.nightgauge/logs/2026-08-30_210_session.log"
+        "/repos/infra/.nightgauge/logs/2026-08-30_210_session.log"
       );
       expect(mockShowTextDocument).toHaveBeenCalledTimes(1);
     });
 
     it("looks under the slot's own repo root, not the bootstrap root (#191)", async () => {
-      ow.setLogConfig("/repos/bowlsheet-infra");
-      ow.registerSlotInfo(1, 348, "Client feature gating", "EdibuLLC/bowlsheet-flutter");
-      ow.setSlotLogRoot(1, "/repos/bowlsheet-flutter");
+      ow.setLogConfig("/repos/infra");
+      ow.registerSlotInfo(1, 348, "Feature gating and upsell surfaces", "acme/flutter-app");
+      ow.setSlotLogRoot(1, "/repos/flutter-app");
       mockFindLatestLogForIssue.mockResolvedValue(
-        "/repos/bowlsheet-flutter/.nightgauge/logs/2026-08-30_348_session.log"
+        "/repos/flutter-app/.nightgauge/logs/2026-08-30_348_session.log"
       );
 
       postFromWebview({ type: "slot:action", slotIndex: 1, action: "open-log" });
       await flush();
 
-      expect(mockFindLatestLogForIssue).toHaveBeenCalledWith(
-        "/repos/bowlsheet-flutter",
-        348,
-        undefined
-      );
+      expect(mockFindLatestLogForIssue).toHaveBeenCalledWith("/repos/flutter-app", 348, undefined);
     });
 
     it("warns instead of failing silently when no log exists", async () => {
-      ow.setLogConfig("/repos/bowlsheet-infra");
-      ow.registerSlotInfo(1, 210, "Docs reconciliation");
+      ow.setLogConfig("/repos/infra");
+      ow.registerSlotInfo(1, 210, "Docs reconciliation for decision 002");
       mockFindLatestLogForIssue.mockResolvedValue(null);
 
       postFromWebview({ type: "slot:action", slotIndex: 1, action: "open-log" });

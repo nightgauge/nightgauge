@@ -195,7 +195,7 @@ export type WebViewToExtensionMessage =
 
 /**
  * The closed set of per-slot card actions the webview may request
- * (Issues #2816, #2817, #1198). Named so the message shape, the type guard,
+ * (legacy issues 2816 and 2817; #1198). Named so the message shape, the guard,
  * and the callback signature cannot drift apart — they did, and the result
  * was a dispatch case that was never written at all.
  */
