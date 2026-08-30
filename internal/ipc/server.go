@@ -5283,6 +5283,7 @@ func (s *Server) registerMethods() {
 	}
 
 	//ipc:method knowledgeRelatedToIssue params:KnowledgeRelatedToIssueParams result:KnowledgeRelatedToIssueResult
+
 	s.methods["knowledge.relatedToIssue"] = func(_ context.Context, raw json.RawMessage) (interface{}, error) {
 		var p KnowledgeRelatedToIssueParams
 		if len(raw) > 0 {
@@ -5315,19 +5316,32 @@ func (s *Server) registerMethods() {
 		if err != nil {
 			return nil, fmt.Errorf("build recall index: %w", err)
 		}
-		// Query by issue number — the BM25 tokenizer will index the digits.
-		// The issue's own KB files are filtered out below so the result is
-		// limited to *related* decisions, not the issue's own PRD/decisions.
-		query := fmt.Sprintf("issue %d", p.IssueNumber)
+		// Query by what the issue is ABOUT, not by the digits of its number.
+		//
+		// This used to be `fmt.Sprintf("issue %d", …)`, so a "related" hit was
+		// any file whose text happened to tokenize those digits — a version
+		// string, a line number, another issue's reference. A score of 0.69 on
+		// that query is noise, not relatedness (#1207). The title is already in
+		// the run's context file; when it is absent (the pickup stage has not
+		// written the file yet) there is nothing meaningful to ask, so the
+		// section reports that rather than ranking digit collisions.
+		query := relatedIssueQuery(root, p.IssueNumber)
+		if query == "" {
+			return KnowledgeRelatedToIssueResult{Hits: []KnowledgeRecallHit{}}, nil
+		}
 		res, err := recall.Query(idx, query, limit*2, scopes)
 		if err != nil {
 			return nil, fmt.Errorf("recall query: %w", err)
 		}
-		issuePrefix := fmt.Sprintf("%d-", p.IssueNumber)
 		filtered := make([]KnowledgeRecallHit, 0, len(res.Hits))
 		for _, h := range res.Hits {
-			// Skip hits that originate from the issue's own KB directory.
-			if strings.Contains(h.Path, issuePrefix) && h.IssueNumber == p.IssueNumber {
+			// Skip hits from the issue's own KB directory — the section is
+			// "related decisions", not "this issue's own PRD".
+			//
+			// Anchored on the DIRECTORY SEGMENT: `strings.Contains(path, "5-")`
+			// matched "5-" anywhere in a path, so issue 5 suppressed every KB
+			// whose slug contained those two characters.
+			if isOwnKnowledgeDir(h.Path, p.IssueNumber) && h.IssueNumber == p.IssueNumber {
 				continue
 			}
 			filtered = append(filtered, KnowledgeRecallHit{
@@ -5650,4 +5664,50 @@ func convertRecallHits(hits []recall.RecallHit, tagFilter []string) []KnowledgeR
 		})
 	}
 	return out
+}
+
+// relatedIssueQuery builds the recall query for "what else is about this?".
+//
+// It is the issue's TITLE, plus its type/component labels, read from the run's
+// context file. Empty when the context file is absent or carries no title — the
+// pickup stage writes that file, so before it runs there is genuinely nothing
+// to ask, and the caller reports no hits rather than ranking noise.
+//
+// It used to be `fmt.Sprintf("issue %d", n)`, so a "related" hit was any file
+// whose text tokenized those digits: a version string, a line number, another
+// issue's reference. That is what made a 0.69 score meaningless (#1207).
+func relatedIssueQuery(root string, issueNumber int) string {
+	cls := loadIssueClassification(root, "", issueNumber)
+	terms := []string{}
+	if title := strings.TrimSpace(cls.Title); title != "" {
+		terms = append(terms, title)
+	}
+	if len(terms) == 0 {
+		return ""
+	}
+	// Labels sharpen the query when a title is terse ("fix the sweep"), and
+	// cost nothing when it is not. Only the semantic ones: priority and size
+	// say nothing about subject matter.
+	for _, l := range cls.Labels {
+		if strings.HasPrefix(l, "component:") || strings.HasPrefix(l, "area:") {
+			terms = append(terms, strings.SplitN(l, ":", 2)[1])
+		}
+	}
+	return strings.Join(terms, " ")
+}
+
+// isOwnKnowledgeDir reports whether path lives in issue N's own KB directory,
+// matching the `<N>-<slug>` DIRECTORY SEGMENT rather than the substring.
+//
+// The substring form (`strings.Contains(path, "5-")`) matched anywhere in the
+// path — a slug, a date, another issue's number — so the self-filter silently
+// suppressed unrelated knowledge bases (#1207).
+func isOwnKnowledgeDir(path string, issueNumber int) bool {
+	prefix := fmt.Sprintf("%d-", issueNumber)
+	for _, seg := range strings.Split(filepath.ToSlash(path), "/") {
+		if strings.HasPrefix(seg, prefix) {
+			return true
+		}
+	}
+	return false
 }

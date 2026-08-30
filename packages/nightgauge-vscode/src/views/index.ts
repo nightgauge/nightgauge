@@ -83,14 +83,6 @@ export { BrownfieldDashboard } from "./brownfield/BrownfieldDashboard";
 // Knowledge Document Link Provider (Issue #1687)
 export { KnowledgeDocumentLinkProvider } from "./KnowledgeDocumentLinkProvider";
 
-// Live Workflow Tree — run → phase → agent → judge off the SDK EventBus (Issue #3919)
-export {
-  WorkflowTreeProvider,
-  WorkflowTreeModel,
-  type WorkflowEventSource,
-  type FoldedRun,
-} from "./workflow";
-
 // Action Center — DecisionRequest sidebar tree (ADR 015 / Issue #325)
 export {
   AttentionTreeProvider,

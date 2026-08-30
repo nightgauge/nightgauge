@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -424,4 +425,82 @@ func graduatedDestFor(idx *recall.Index, path string) string {
 		}
 	}
 	return ""
+}
+
+// --- Snippets survive a cwd that is not the workspace root (#1207) ---
+//
+// Document.Path is WORKSPACE-RELATIVE, and extractSnippet did os.ReadFile on it
+// with no root join, so it resolved against the process cwd. For the IPC daemon
+// that is not the workspace root — every snippet came back "", the sidebar fell
+// back to path.basename(hit.path), and every Related Decisions row rendered as
+// the filename plus a bare score: `decisions 0.69`.
+//
+// The chdir IS the test. Every existing test in this package runs with the cwd
+// at the package directory and would pass against the broken code for a
+// workspace that happened to be the cwd.
+func TestIntegration_SnippetSurvivesAForeignWorkingDirectory(t *testing.T) {
+	root := mkTempRoot(t)
+	scaffoldFixtures(t, root)
+
+	cfg := &config.KnowledgeConfig{}
+	idx, err := recall.BuildIndex(root, nil, cfg)
+	if err != nil {
+		t.Fatalf("BuildIndex: %v", err)
+	}
+	if idx.Root != root {
+		t.Fatalf("idx.Root = %q, want the index root %q — without it the "+
+			"snippet read has nothing to resolve against", idx.Root, root)
+	}
+
+	// Move away from anywhere the relative paths could accidentally resolve.
+	t.Chdir(t.TempDir())
+
+	result, err := recall.Query(idx, "bm25 scoring", 10, nil)
+	if err != nil {
+		t.Fatalf("Query: %v", err)
+	}
+	if len(result.Hits) == 0 {
+		t.Fatal("expected at least one hit for 'bm25 scoring'")
+	}
+
+	withSnippet := 0
+	for _, h := range result.Hits {
+		if h.Snippet != "" {
+			withSnippet++
+		}
+	}
+	if withSnippet == 0 {
+		t.Errorf("every one of %d hits has an empty snippet from a foreign cwd — "+
+			"this is #1207: the sidebar then renders `<filename> <score>` with "+
+			"nothing explaining either", len(result.Hits))
+	}
+}
+
+// The snippet must quote the line the query actually matched, not merely be
+// non-empty — the fallback branch returns the first non-heading line, which
+// would satisfy a non-emptiness check while explaining nothing.
+func TestIntegration_SnippetQuotesTheMatchingLine(t *testing.T) {
+	root := mkTempRoot(t)
+	scaffoldFixtures(t, root)
+
+	cfg := &config.KnowledgeConfig{}
+	idx, err := recall.BuildIndex(root, nil, cfg)
+	if err != nil {
+		t.Fatalf("BuildIndex: %v", err)
+	}
+	t.Chdir(t.TempDir())
+
+	result, err := recall.Query(idx, "bm25", 10, nil)
+	if err != nil {
+		t.Fatalf("Query: %v", err)
+	}
+	for _, h := range result.Hits {
+		if h.Snippet == "" {
+			continue
+		}
+		if containsAny(strings.ToLower(h.Snippet), []string{"bm25"}) {
+			return
+		}
+	}
+	t.Error("no hit quoted a line containing the query term")
 }
