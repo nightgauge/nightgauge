@@ -1965,3 +1965,150 @@ func TestCostUnpricedTotalIsNotRenderedAsZero(t *testing.T) {
 		t.Errorf("expected an explicitly unpriced total, got:\n%s", out)
 	}
 }
+
+// ============================================================================
+// #1180 — `project sync-status` silently no-ops on a bad status argument
+//
+// The verb took the status as an unvalidated positional and handed the raw
+// string to GraphQL. A wrong invocation printed a full usage dump — flags,
+// then global flags — which reads as help, not as a refusal; the operator who
+// filed this saw the trailing block and took the command for a no-op.
+//
+// RED PROOF for this whole block (behavioural, never a compile error):
+//   - replace `normalizeBoardStatusArg(args[1])` with `status := args[1]` in
+//     projectSyncStatusCmd / projectMoveStatusCmd → the bad-value tests fail
+//     because no error is returned at all.
+//   - drop `SilenceUsage: true` → the "must not dump usage" assertions fail.
+//   - restore `Args: cobra.ExactArgs(2)` → the missing-positional tests fail
+//     on a message naming neither the verb nor its arguments.
+//   - drop the SetFlagErrorFunc call → the --status hint test fails.
+// ============================================================================
+
+// runProjectVerb executes a project subcommand with output captured, so the
+// assertions can distinguish "printed an error" from "printed usage".
+func runProjectVerb(t *testing.T, args ...string) (string, error) {
+	t.Helper()
+	cmd := rootCmd()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs(args)
+	err := cmd.Execute()
+	return out.String(), err
+}
+
+func TestNormalizeBoardStatusArg(t *testing.T) {
+	valid := map[string]string{
+		"backlog":     "backlog",
+		"ready":       "ready",
+		"in-progress": "in-progress",
+		"in-review":   "in-review",
+		"done":        "done",
+		"blocked":     "blocked",
+		"needs-info":  "needs-info",
+		// The board's own casing — exactly how the status reads in the Status
+		// column, and therefore the natural thing for an operator to type.
+		"In progress":   "in-progress",
+		"In review":     "in-review",
+		"Done":          "done",
+		"Backlog":       "backlog",
+		"Ready":         "ready",
+		" In progress ": "in-progress",
+		"IN PROGRESS":   "in-progress",
+	}
+	for input, want := range valid {
+		got, err := normalizeBoardStatusArg(input)
+		if err != nil {
+			t.Errorf("normalizeBoardStatusArg(%q) returned error %v, want %q", input, err, want)
+			continue
+		}
+		if got != want {
+			t.Errorf("normalizeBoardStatusArg(%q) = %q, want %q", input, got, want)
+		}
+	}
+
+	for _, bad := range []string{"Bogus", "in progres", "", "   ", "in_progress"} {
+		got, err := normalizeBoardStatusArg(bad)
+		if err == nil {
+			t.Errorf("normalizeBoardStatusArg(%q) = %q, want an error", bad, got)
+			continue
+		}
+		if !strings.Contains(err.Error(), "in-progress") {
+			t.Errorf("normalizeBoardStatusArg(%q) error must list the accepted set, got: %v", bad, err)
+		}
+	}
+}
+
+func TestProjectSyncStatusRejectsBadStatusValue(t *testing.T) {
+	out, err := runProjectVerb(t, "project", "sync-status", "210", "Bogus")
+	if err == nil {
+		t.Fatal("a bad status value must be a non-zero exit, not a silent no-op")
+	}
+	// Names what was passed...
+	if !strings.Contains(err.Error(), `"Bogus"`) {
+		t.Errorf("error must name the rejected value, got: %v", err)
+	}
+	// ...and what is accepted, in the exact spelling.
+	for _, token := range []string{"in-progress", "in-review", "needs-info"} {
+		if !strings.Contains(err.Error(), token) {
+			t.Errorf("error must show the accepted spelling %q, got: %v", token, err)
+		}
+	}
+	// The refusal must not arrive dressed as help.
+	if strings.Contains(out, "Global Flags:") {
+		t.Errorf("a refusal must not dump usage; got:\n%s", out)
+	}
+}
+
+func TestProjectSyncStatusMissingPositionalIsNotBareUsage(t *testing.T) {
+	out, err := runProjectVerb(t, "project", "sync-status", "210")
+	if err == nil {
+		t.Fatal("a missing positional must fail")
+	}
+	// cobra's default is "accepts 2 arg(s), received 1", which names neither
+	// the verb nor what the arguments are.
+	if !strings.Contains(err.Error(), "<issue-number> <status>") {
+		t.Errorf("error must name the arguments it wants, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "sync-status") {
+		t.Errorf("error must name the verb, got: %v", err)
+	}
+	if strings.Contains(out, "Global Flags:") {
+		t.Errorf("a refusal must not dump usage; got:\n%s", out)
+	}
+}
+
+func TestProjectSyncStatusFlagFormNamesThePositionalShape(t *testing.T) {
+	// The reported invocation, verbatim.
+	_, err := runProjectVerb(t, "project", "sync-status", "210", "--status", "In progress")
+	if err == nil {
+		t.Fatal("--status is not a flag on this verb; it must fail")
+	}
+	if !strings.Contains(err.Error(), "POSITIONAL") {
+		t.Errorf("error must explain the status is positional, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "in-progress") {
+		t.Errorf("error must show the accepted spelling, got: %v", err)
+	}
+}
+
+// move-status shares sync-status's shape exactly — same documented enum, same
+// unvalidated positional, same usage-as-refusal. Fixing one and not the other
+// only moves the report.
+func TestProjectMoveStatusSharesTheSameGuards(t *testing.T) {
+	out, err := runProjectVerb(t, "project", "move-status", "210", "Bogus")
+	if err == nil {
+		t.Fatal("move-status must reject a bad status value too")
+	}
+	if !strings.Contains(err.Error(), `"Bogus"`) || !strings.Contains(err.Error(), "in-progress") {
+		t.Errorf("move-status error must name the value and the accepted set, got: %v", err)
+	}
+	if strings.Contains(out, "Global Flags:") {
+		t.Errorf("move-status refusal must not dump usage; got:\n%s", out)
+	}
+
+	if _, err := runProjectVerb(t, "project", "move-status", "210"); err == nil ||
+		!strings.Contains(err.Error(), "<issue-number> <status>") {
+		t.Errorf("move-status missing positional must be a named error, got: %v", err)
+	}
+}
