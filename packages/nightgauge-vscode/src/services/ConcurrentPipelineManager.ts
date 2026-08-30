@@ -1794,11 +1794,30 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
         // status (typically "In progress") so the user can resume cleanly.
         // Deferred slots skip this too (#305): a blockedBy deferral is not a
         // failure — the issue stays Ready/eligible, not moved to In review.
+        //
+        // And a run REFUSED AT THE DOOR skips it (#1170). The safety net exists
+        // so a failed run cannot strand an issue looking active — but a
+        // pipeline-start refusal has nothing to strand: the Go scheduler's own
+        // failure routing already reverts the board to Ready for exactly these
+        // kinds (`revertFailedIssueStatus` on the adapter_auth_failed /
+        // github_quota_low / transient-infra branches in autonomous.go), and on
+        // the TS-only path nothing ever moved the issue off Ready in the first
+        // place — `markStatusInReviewOnFailure` is gated on
+        // `completedStages.includes("issue-pickup")`, which a refusal never
+        // satisfies. So this write is not a net; it is the ONLY thing that puts
+        // the issue in "In review", overwriting a correct Ready with a status
+        // that claims there is work to review. Suppressing it leaves the issue
+        // Ready, which is the right answer, not a stranded one.
+        //
+        // Keyed on the typed `startRefusal` union, not a substring test on the
+        // error text — the same discipline as the #1147 `outOfScopeFinding`
+        // guard below.
         if (
           !pipelineSucceeded &&
           !pipelineDeferred &&
           !this.isShuttingDown &&
-          !slot.userCancelled
+          !slot.userCancelled &&
+          !pipelineResult?.startRefusal
         ) {
           try {
             // Use the slot's worktreeManager repo root — this is already resolved
@@ -1834,6 +1853,13 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
         // operator action, the comment's recommendations don't apply, and during
         // a GitHub outage the post can't succeed anyway (the original incident
         // tried to post "run `gh auth login`" over the dead network).
+        // Also skip a run REFUSED AT PIPELINE-START (#1170): zero tokens, no AI
+        // stage, and the cause — a logged-out adapter CLI, an exhausted GitHub
+        // quota, an epic dispatched with open children — says nothing about the
+        // issue that a reader of that issue could act on. The comment is
+        // durable public noise on an issue that is not the problem. The typed
+        // `startRefusal` union names every such kind; a run that started and
+        // then failed carries none of them and still comments.
         // Also skip when the run ended on a recorded out-of-scope blocked
         // finding (#1147): the orchestrator has already posted a comment that
         // names the signal, the rationale and the verbatim evidence, and it
@@ -1847,6 +1873,7 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
           !slot.userCancelled &&
           pipelineResult &&
           !pipelineResult.blocked?.outOfScopeFinding &&
+          !pipelineResult.startRefusal &&
           !isTransientNetworkFailureText(pipelineResult.error?.message ?? "")
         ) {
           try {
