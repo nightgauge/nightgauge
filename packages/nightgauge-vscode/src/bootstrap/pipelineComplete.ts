@@ -57,7 +57,7 @@ export interface GoPipelineCompleteDeps {
  * Order matters: the dashboard's history reload is awaited *before* the health
  * snapshot is recorded, so the snapshot is taken against the reloaded history
  * rather than the pre-run view. The snapshot exists for concurrent slots
- * (#2245), which per-slot `PipelineStateServices` never trigger on the
+ * (issue 2245), which per-slot `PipelineStateServices` never trigger on the
  * singleton.
  *
  * The dashboard work is best-effort — the panel may not be open — but the
