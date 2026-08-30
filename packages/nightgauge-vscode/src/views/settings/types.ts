@@ -152,6 +152,40 @@ export const PIPELINE_LOCKED_SECTIONS: readonly string[] = [
   "routing",
 ] as const;
 
+/**
+ * Extract the settings section ID that owns a config path.
+ *
+ * Config paths follow the pattern "section.field" or "section.nested.field".
+ * A handful of config prefixes do not match their section ID one-for-one and
+ * are remapped explicitly.
+ *
+ * Exported (rather than living as a `SettingsPanel` private) so the lock tests
+ * can exercise the SHIPPED mapping instead of a copy of it — see
+ * docs/TESTING.md § Testing Anti-Patterns ### 7 and Issue #498.
+ */
+export function getSectionForPath(path: string): string | undefined {
+  const prefix = path.split(".")[0];
+  const sectionMap: Record<string, string> = {
+    pr: "pull_request",
+    pull_request: "pull_request",
+    ui: "core",
+    lm_studio: "core",
+    ollama: "core",
+    model_routing: "routing",
+  };
+  return sectionMap[prefix] ?? prefix;
+}
+
+/**
+ * Whether the section owning `path` is in `lockedSections`.
+ *
+ * @see getSectionForPath
+ */
+export function isSectionLocked(path: string, lockedSections: ReadonlySet<string>): boolean {
+  const section = getSectionForPath(path);
+  return section !== undefined && lockedSections.has(section);
+}
+
 export const SETTINGS_SECTIONS: SettingsSectionMeta[] = [
   {
     id: "core",
