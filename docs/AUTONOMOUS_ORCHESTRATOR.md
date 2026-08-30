@@ -821,6 +821,49 @@ extension raises at halt time.
   `stall_kill`. Unchanged by #1148 and pinned by test — the Go scheduler
   auto-recovers all of them. This skip set predates #1148 and is
   deliberately untouched by it.
+- **`adapter_auth_failed`** (#1169). The pipeline-start auth pre-flight refused
+  to launch. Go already routes the kind as retryable infra and says so —
+  "no lifetime-cap increment, no cascade feed, no pause" — so halting here
+  overrode a decision that had already been made, exactly as the pre-#3835
+  `api_overloaded` path did. An auth lapse is operator-local environment state,
+  identical in kind to the quota and network entries above, and it costs zero
+  tokens because nothing has run yet. In the incident that produced this fix
+  the halt fired **five times, once per repo** — the repo-scoped halt working
+  correctly on a cause that was global.
+
+### Who tells the operator about an adapter auth lapse — #1168
+
+The environmental skip above returns **silently**, and for `adapter_auth_failed`
+that would leave a condition under which _nothing can run_ with no user-facing
+surface at all. The observed report was "I restarted autonomous and everything
+stopped."
+
+**Exactly one layer tells, and it is `HeadlessOrchestrator`'s pre-flight gate**
+(`packages/nightgauge-vscode/src/utils/adapterAuthNotice.ts`), not
+`ConcurrentPipelineManager`. The gate has the structured failures — adapter name
+and the SDK's per-adapter `suggestedFix` — where the halt path has only a
+composed error string; it covers manual runs as well as queued ones; and it is
+the only place that observes the later SUCCESS, which is what lets the surface
+auto-resolve. Three properties are pinned by test:
+
+- **Deduplicated per adapter, not per issue.** Five refused dispatches produce
+  one warning, not five. The outstanding set is module-scoped, so every
+  concurrent slot's orchestrator shares it.
+- **No credential material.** The probe's `reason` carries an adapter auth-state
+  blob; only the adapter name and the static remedy are surfaced. The blob stays
+  in the output channel.
+- **Retracted on success.** The pre-flight's pass path clears the notice, which
+  also re-arms it so a later lapse is reported again.
+
+An Action Center card would be the natural home for a standing, auto-resolving
+condition, and it is not available here: `attention.raise` forbids a raiseable
+producer from being `Standing`, and a sweep producer has no adapter state —
+giving it one would mean a second auth probe in a second layer.
+
+`tests/services/concurrentPipelineManager.goHaltParity.test.ts` reconciles the
+two layers directly: every kind Go's own branch declares no-pause for is either
+mirrored in the extension's skip policy or listed there with a reason, so the
+next kind cannot slip through the same gap.
 
 **Fallback.** A dispatch whose repo identity could not be determined cannot be
 scoped, so it falls back to the fleet-wide halt. Guessing a scope for an
