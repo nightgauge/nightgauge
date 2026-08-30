@@ -186,10 +186,17 @@ func printPrePushSummary(result hooks.PrePushResult) {
 			continue
 		}
 		icon := "✓"
-		if status == "failed" {
+		switch status {
+		case "failed":
 			icon = "✗"
-		} else if status == "skipped" {
+		case "skipped", "not-applicable":
+			// "not-applicable" is a phase this project has no script for
+			// (#1159) — reported, never silently folded into a pass.
 			icon = "–"
+		case "unknown":
+			// The gate could not determine whether the phase applies. It
+			// blocks; it does not read as a tick.
+			icon = "?"
 		}
 		fmt.Fprintf(os.Stderr, "  %s %-15s %s\n", icon, phase, status)
 	}

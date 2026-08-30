@@ -1,13 +1,26 @@
 # Staging Platform Smoke
 
 `.github/workflows/staging-platform-smoke.yml` runs
-`scripts/staging-platform-smoke.sh` on a daily schedule and on
-`workflow_dispatch`. It authenticates against the **real** staging platform
-API with a real signed-in credential and calls every platform-backed surface
-the Go daemon talks to, asserting on HTTP status codes and — for Health —
-that the 200 body is a `PipelineHealthScore` (`compositeScore`,
-`compositeGrade`, `computedAt`, `periodDays`, `totalRunsAnalyzed`). A 200
-whose body is some other contract still blanks the VSCode Health tab.
+`scripts/staging-platform-smoke.sh` on `workflow_dispatch`. It authenticates
+against the **real** staging platform API with a real signed-in credential and
+calls every platform-backed surface the Go daemon talks to, asserting on HTTP
+status codes and — for Health — that the 200 body is a `PipelineHealthScore`
+(`compositeScore`, `compositeGrade`, `computedAt`, `periodDays`,
+`totalRunsAnalyzed`). A 200 whose body is some other contract still blanks the
+VSCode Health tab.
+
+**There is no daily schedule.** It was removed in
+[#1087](https://github.com/nightgauge/nightgauge/issues/1087): the cron failed 9
+of 9 scheduled runs (08-20..08-28) at the credential guard, because neither
+`vars.STAGING_PLATFORM_BASE_URL` nor `secrets.STAGING_SESSION_TOKEN` is
+provisioned on this repository. It probed nothing on any of those days, and —
+because a scheduled run attaches its check-run to `main`'s HEAD commit — it made
+the post-merge verification `AGENTS.md` mandates report a failure against
+unrelated merges. The fail-closed guard itself is unchanged and still correct; a
+manual dispatch with no credential still fails loudly rather than skipping.
+Restore the `schedule:` block — the workflow carries it commented out, with
+instructions — the day both values are provisioned per
+[Required secrets / variables](#required-secrets--variables) below.
 
 This exists because every other test tier for the platform integration
 (unit tests, the Go/vitest mocks, the docker-compose E2E tier in

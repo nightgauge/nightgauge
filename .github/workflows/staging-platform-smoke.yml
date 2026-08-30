@@ -46,10 +46,33 @@ name: Staging Platform Smoke
 
 on:
   workflow_dispatch: {}
-  schedule:
-    # Daily, 06:41 UTC — an off-peak, non-round minute (avoids the top-of-hour
-    # scheduling stampede other scheduled workflows in this repo also avoid).
-    - cron: "41 6 * * *"
+  # NO `schedule:` TRIGGER — deliberately, and this is not a skip (#1087).
+  #
+  # The daily cron (06:41 UTC) ran for nine consecutive days, 08-20 through
+  # 08-28, and failed all nine times at the credential guard below, because
+  # neither `vars.STAGING_PLATFORM_BASE_URL` nor `secrets.STAGING_SESSION_TOKEN`
+  # is provisioned on this repository. It probed nothing on any of those days.
+  #
+  # It also made `main` look red: a scheduled run attaches its check-run to
+  # `main`'s HEAD commit, so the post-merge verification AGENTS.md mandates
+  # (`gh api repos/…/commits/<sha>/check-runs`) reported a failure against
+  # whatever merged most recently — a commit that had nothing to do with it.
+  #
+  # A guard wired to a credential nobody supplies is not coverage; it is a
+  # standing false alarm that teaches operators to disbelieve a red `main`.
+  # The fail-closed behaviour below is UNCHANGED and is still correct — this
+  # removes the trigger, not the guard.
+  #
+  # RE-ENABLE by restoring the block below, the day both values exist. The
+  # provisioning steps are in docs/STAGING_PLATFORM_SMOKE.md.
+  #
+  #   schedule:
+  #     # Daily, 06:41 UTC — off-peak, non-round minute (avoids the
+  #     # top-of-hour scheduling stampede other scheduled workflows avoid).
+  #     - cron: "41 6 * * *"
+  #
+  # Until then the canary runs on demand: `gh workflow run "Staging Platform
+  # Smoke"`, which still fails loudly on a missing credential.
 
 permissions:
   contents: read
