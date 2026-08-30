@@ -32,7 +32,7 @@
  * @see Issue #3009
  */
 import type { ModelEnvelope, PipelineStage } from "@nightgauge/sdk";
-import { resolveModelForAdapter } from "@nightgauge/sdk";
+import { resolveModelForAdapter, TIER_BANDS_STRONGEST_FIRST } from "@nightgauge/sdk";
 import type { ClaudeEffort, DefaultModel } from "./nightgaugeConfig";
 import type { ExecutionAdapter } from "./resolvers/modelResolver";
 
@@ -240,12 +240,46 @@ function isFrontierReasoningStage(stage: PipelineStage): boolean {
  * An explicit per-stage model is NOT clamped by this (or any) envelope; that is
  * the operator overriding the mode, not the pipeline choosing within it.
  */
-export function getRoutedTierEnvelope(mode: PerformanceMode, stage: PipelineStage): ModeEnvelope {
-  const envelope = getModeEnvelope(mode);
-  if (envelope.ceiling === "fable" && !isFrontierReasoningStage(stage)) {
-    return { ...envelope, ceiling: "opus" };
+export function getRoutedTierEnvelope(
+  mode: PerformanceMode,
+  stage: PipelineStage,
+  maxModel?: DefaultModel
+): ModeEnvelope {
+  const base = getModeEnvelope(mode);
+  const envelope =
+    base.ceiling === "fable" && !isFrontierReasoningStage(stage)
+      ? { ...base, ceiling: "opus" as const }
+      : base;
+  return applyMaxModel(envelope, maxModel);
+}
+
+/**
+ * Lower an envelope's ceiling to `maxModel`, never raise it (#1201).
+ * Go pair: `routing.ApplyMaxModel`.
+ *
+ * Never raising is deliberate. A cap ABOVE the mode's ceiling is a no-op rather
+ * than a widening: `max_model` answers "no higher than this", and letting it
+ * also mean "at least this" would make one key mean two opposite things and
+ * hand an operator a way out of the envelope their mode chose. Raising is what
+ * `minimum_model` is for.
+ *
+ * The floor is untouched even when the cap lands below it — a cap that dragged
+ * the floor down would widen the range of tiers a stage can reach, the opposite
+ * of a cap's purpose.
+ */
+export function applyMaxModel(
+  envelope: ModeEnvelope,
+  maxModel: DefaultModel | undefined
+): ModeEnvelope {
+  if (!maxModel) return envelope;
+  const capRank = TIER_BANDS_STRONGEST_FIRST.indexOf(maxModel);
+  const ceilingRank = TIER_BANDS_STRONGEST_FIRST.indexOf(envelope.ceiling);
+  // Strongest-first: a LARGER index is a WEAKER tier, so a cap only bites when
+  // its index is greater than the ceiling's.
+  if (capRank < 0 || ceilingRank < 0 || capRank <= ceilingRank) {
+    return envelope;
   }
-  return envelope;
+  return { ...envelope, ceiling: maxModel };
 }
 
 /**

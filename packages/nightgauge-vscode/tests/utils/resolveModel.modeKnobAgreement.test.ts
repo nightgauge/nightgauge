@@ -280,44 +280,79 @@ describe("resolveModel × resolveDispatchModel — mode × knob agreement (#340)
  * floor and the ceiling to every base it produces, so an unclamped TS branch
  * means one config file dispatches two different tiers.
  */
-describe("resolveModel Steps 1.6/1.7 stay inside the envelope (#340)", () => {
-  const POLICY_HAIKU_FLOOR_OPUS =
-    "model_routing:\n  mode: automatic\n  minimum_model:\n    feature-dev: opus\n" +
-    "  stage_overrides:\n    feature-dev: haiku\n";
-  const POLICY_OPUS =
-    "model_routing:\n  mode: automatic\n  stage_overrides:\n    feature-dev: opus\n";
-  const POLICY_VALIDATE_FABLE =
-    "model_routing:\n  mode: automatic\n  stage_overrides:\n    feature-validate: fable\n";
+/**
+ * `model_routing.max_model` (#1201) — an operator cap on the strongest tier
+ * AUTOMATIC routing may reach, independent of the performance mode.
+ *
+ * NOTE on what this suite can and cannot show. `AutoModelSelector` is out of
+ * the picture here (no issue metadata), so the frontier-reasoning escalation
+ * that dispatches Fable on an `L` feature-dev is NOT reachable from these
+ * cases. Asserting "cap turns fable into opus" here would pass without the cap
+ * existing at all, because the pick is already opus.
+ *
+ * So this suite asserts the cap where it genuinely binds on this path: against
+ * the `minimum_model` RAISE, which resolveModel clamps to the routed ceiling.
+ * The envelope arithmetic itself is covered directly in
+ * `modeProfiles.maxModel.test.ts`, and the Go mirror in
+ * `performance_mode_test.go`.
+ */
+describe("model_routing.max_model caps automatic routing (#1201)", () => {
+  it("premise: frontier lets a fable floor through on feature-dev", () => {
+    process.env.NIGHTGAUGE_PERFORMANCE_MODE = "frontier";
+    configText = "model_routing:\n  mode: automatic\n  minimum_model:\n    feature-dev: fable\n";
+    expect(
+      resolveModel(STAGE, "/test/workspace").model,
+      "if this is not fable, the cap assertion below proves nothing"
+    ).toBe("fable");
+  });
+
+  it("a cap of opus binds a fable floor that the mode would otherwise allow", () => {
+    process.env.NIGHTGAUGE_PERFORMANCE_MODE = "frontier";
+    configText =
+      "model_routing:\n  mode: automatic\n  max_model: opus\n" +
+      "  minimum_model:\n    feature-dev: fable\n";
+    expect(resolveModel(STAGE, "/test/workspace").model).toBe("opus");
+  });
+
+  it("an unset cap reproduces the mode's envelope exactly", () => {
+    process.env.NIGHTGAUGE_PERFORMANCE_MODE = "frontier";
+    configText = "model_routing:\n  mode: automatic\n  minimum_model:\n    feature-dev: fable\n";
+    const uncapped = resolveModel(STAGE, "/test/workspace").model;
+    configText =
+      "model_routing:\n  mode: automatic\n  max_model: fable\n" +
+      "  minimum_model:\n    feature-dev: fable\n";
+    expect(
+      resolveModel(STAGE, "/test/workspace").model,
+      "a cap AT the ceiling is a no-op, not a change"
+    ).toBe(uncapped);
+  });
+
+  it("never RAISES — a cap above the mode's ceiling is a no-op", () => {
+    process.env.NIGHTGAUGE_PERFORMANCE_MODE = "efficiency";
+    configText =
+      "model_routing:\n  mode: automatic\n  max_model: fable\n" +
+      "  minimum_model:\n    feature-dev: opus\n";
+    expect(
+      resolveModel(STAGE, "/test/workspace").model,
+      "max_model answers 'no higher than this'; letting it also mean 'at least this' " +
+        "would hand an operator a way out of the envelope their mode chose"
+    ).toBe("sonnet");
+  });
+
+  it("does not cap an explicit per-stage model — that is the operator naming a tier", () => {
+    process.env.NIGHTGAUGE_PERFORMANCE_MODE = "frontier";
+    configText =
+      "model_routing:\n  mode: hybrid\n  max_model: haiku\n" +
+      "pipeline:\n  stage_models:\n    feature-dev: opus\n";
+    expect(resolveModel(STAGE, "/test/workspace").model).toBe("opus");
+  });
+});
+
+describe("resolveModel Step 1.7 stays inside the envelope (#340)", () => {
   /** split_percent 100 → every issue lands in the treatment arm. */
   const EXPERIMENT_OPUS =
     "model_routing:\n  mode: automatic\n  experiment:\n    name: tier-probe\n    active: true\n" +
     "    split_percent: 100\n    control:\n      model: haiku\n    treatment:\n      model: opus\n";
-
-  it("Step 1.6: the minimum_model floor binds an adaptive-policy override", () => {
-    configText = POLICY_HAIKU_FLOOR_OPUS;
-    expect(
-      resolveModel(STAGE, "/test/workspace").model,
-      "Go applies the floor to every base it produces — an unfloored policy override is one config, two tiers"
-    ).toBe("opus");
-  });
-
-  it("Step 1.6: the mode ceiling binds an adaptive-policy override", () => {
-    process.env.NIGHTGAUGE_PERFORMANCE_MODE = "efficiency";
-    configText = POLICY_OPUS;
-    expect(
-      resolveModel(STAGE, "/test/workspace").model,
-      "a cost-capping mode that a policy override can raise out of caps nothing"
-    ).toBe("sonnet");
-  });
-
-  it("Step 1.6: frontier's fable ceiling still stops at Opus on feature-validate", () => {
-    process.env.NIGHTGAUGE_PERFORMANCE_MODE = "frontier";
-    configText = POLICY_VALIDATE_FABLE;
-    expect(
-      resolveModel(VALIDATE_STAGE, "/test/workspace").model,
-      "MODE_PROFILES.frontier: plumbing stays Haiku and feature-validate never exceeds Opus"
-    ).toBe("opus");
-  });
 
   it("Step 1.7: an A/B treatment is clamped like every other pipeline choice", () => {
     process.env.NIGHTGAUGE_PERFORMANCE_MODE = "efficiency";

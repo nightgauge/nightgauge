@@ -1653,6 +1653,74 @@ export function getComplexityThresholds(workspaceRoot?: string): ComplexityThres
  * Priority: NIGHTGAUGE_MODEL_ROUTING_MIN_MODEL_{STAGE} env → model_routing.minimum_model.{stage} → undefined
  * @see Issue #731 - Model routing configuration modes
  */
+/**
+ * Read `model_routing.max_model` — the operator cap on the strongest tier
+ * AUTOMATIC routing may reach, below the performance mode's own ceiling
+ * (#1201). Returns undefined when unset, which means "no cap" and reproduces
+ * the mode's envelope exactly.
+ *
+ * Go pair: `routing.resolveMaxModel`. Both fail open on an unreadable value —
+ * a cap that cannot be parsed must not silently reroute anything.
+ *
+ * This is a scalar, not a per-stage map: a per-stage cap is what
+ * `pipeline.stage_models` already is, and two per-stage mechanisms that clamp
+ * differently is how the drift this key was filed alongside started.
+ */
+export function getMaxModel(workspaceRoot?: string): DefaultModel | undefined {
+  const validModels: readonly DefaultModel[] = TIER_BANDS;
+
+  const envModel = process.env.NIGHTGAUGE_MODEL_ROUTING_MAX_MODEL;
+  if (envModel && validModels.includes(envModel as DefaultModel)) {
+    return envModel as DefaultModel;
+  }
+
+  const root = workspaceRoot ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  if (!root) {
+    return undefined;
+  }
+
+  try {
+    const pathResult = resolveConfigPathSync(root);
+    if (!pathResult.exists) {
+      return undefined;
+    }
+    if (pathResult.isLegacy) {
+      logDeprecationWarning(pathResult.path);
+    }
+
+    const lines = readEffectiveConfigTextSync(pathResult).split("\n");
+    let inModelRouting = false;
+
+    for (const line of lines) {
+      const trimmed = line.trim();
+
+      if (trimmed === "model_routing:") {
+        inModelRouting = true;
+        continue;
+      }
+      // A new TOP-LEVEL key ends the section. Nested keys (two-space indented)
+      // stay inside it — max_model is one of them.
+      if (inModelRouting && trimmed && !trimmed.startsWith("#") && !line.startsWith(" ")) {
+        inModelRouting = false;
+      }
+
+      if (inModelRouting) {
+        const m = trimmed.match(
+          new RegExp(`^max_model:\\s*['"]?(${validModels.join("|")})['"]?(?:\\s+#.*)?$`)
+        );
+        if (m) {
+          return m[1] as DefaultModel;
+        }
+      }
+    }
+
+    return undefined;
+  } catch (error) {
+    console.error("Failed to read max model from nightgauge config:", error);
+    return undefined;
+  }
+}
+
 export function getMinimumModel(
   stage: PipelineStage,
   workspaceRoot?: string

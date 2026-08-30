@@ -98,6 +98,36 @@ func readPerformanceModeFile(path string) PerformanceMode {
 	return parseMode(s.Mode)
 }
 
+// resolveMaxModel reads `model_routing.max_model` from the workspace's
+// config.yaml (#1201). Empty means no cap.
+//
+// This package deliberately does NOT import internal/config — config imports
+// routing (for ChangeRule), so the dependency runs one way only. The read is a
+// narrow struct over the one key, mirroring readPerformanceModeFile above
+// rather than duplicating the config loader.
+//
+// Every failure is "no cap": a missing file, unreadable yaml, or a tier the
+// registry has no band for. A cap that cannot be read must not reroute
+// anything, and failing open here matches the mode resolution directly above.
+func resolveMaxModel(workspaceRoot string) string {
+	if workspaceRoot == "" {
+		return ""
+	}
+	data, err := os.ReadFile(filepath.Join(workspaceRoot, ".nightgauge", "config.yaml"))
+	if err != nil {
+		return ""
+	}
+	var c struct {
+		ModelRouting struct {
+			MaxModel string `yaml:"max_model"`
+		} `yaml:"model_routing"`
+	}
+	if err := yaml.Unmarshal(data, &c); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(c.ModelRouting.MaxModel)
+}
+
 func parseMode(s string) PerformanceMode {
 	switch PerformanceMode(s) {
 	case ModeEfficiency, ModeElevated, ModeMaximum, ModeFrontier:
@@ -366,6 +396,47 @@ func RoutedTierEnvelope(mode PerformanceMode, stage string) ModeEnvelope {
 	if env.Ceiling == TierFable && !frontierReasoningStage(stage) {
 		env.Ceiling = TierOpus
 	}
+	return env
+}
+
+// RoutedTierEnvelopeForWorkspace is RoutedTierEnvelope with the workspace's
+// `model_routing.max_model` cap applied (#1201).
+//
+// Every Go dispatch site resolves its envelope through THIS function rather
+// than calling RoutedTierEnvelope and remembering to apply the cap — a cap that
+// each caller has to opt into is a cap the next caller forgets, which is the
+// shape of every dual-path drift this repo has had to fix.
+func RoutedTierEnvelopeForWorkspace(workspaceRoot string, mode PerformanceMode, stage string) ModeEnvelope {
+	return ApplyMaxModel(RoutedTierEnvelope(mode, stage), resolveMaxModel(workspaceRoot))
+}
+
+// ApplyMaxModel lowers an envelope's ceiling to maxModel, and never raises it.
+//
+// This is `model_routing.max_model` (#1201): an operator cap on the strongest
+// tier AUTOMATIC routing may reach, independent of the performance mode. Empty
+// maxModel, or a value the registry has no band for, returns env untouched —
+// an unreadable cap must not silently reroute anything.
+//
+// Never raises, deliberately. A cap ABOVE the mode's ceiling is a no-op rather
+// than a widening: `max_model` answers "no higher than this", and letting it
+// also mean "at least this" would make one key mean two opposite things and
+// give an operator a way to escape the envelope they chose by naming a mode.
+// Raising is what `minimum_model` is for.
+//
+// The floor is untouched even when maxModel lands below it. A cap that also
+// dragged the floor down would silently widen the range of tiers a stage can
+// route to, which is the opposite of what a cap is for; if the two cross, the
+// clamp helpers already resolve floor-then-ceiling deterministically.
+func ApplyMaxModel(env ModeEnvelope, maxModel string) ModeEnvelope {
+	band := TierBand(maxModel)
+	if band == "" {
+		return env
+	}
+	capRank, ceilingRank := tierRank(band), tierRank(env.Ceiling)
+	if capRank < 0 || ceilingRank < 0 || capRank >= ceilingRank {
+		return env
+	}
+	env.Ceiling = band
 	return env
 }
 

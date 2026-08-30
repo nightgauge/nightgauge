@@ -1285,6 +1285,41 @@ pipeline:
         disable_budget_ceiling: true
 ```
 
+### Capping automatic routing with `max_model`
+
+A performance mode's ceiling is all-or-nothing, and its escalation bars are not
+obvious. `frontier` widens the ceiling to Fable, and the frontier-reasoning
+escalation then fires on **`feature-planning` and `feature-dev` at complexity
+`L` or `XL`** — `L` is ordinary feature work, not the exceptional case the mode
+name suggests. Fable picked this way also runs at `xhigh` effort, the most
+expensive point in the envelope.
+
+Before `max_model` the only way to decline that was to leave `frontier`
+entirely, which also gives up the wider ceiling on `feature-planning` where it
+is comparatively cheap and useful.
+
+```yaml
+model_routing:
+  max_model: opus # automatic routing never exceeds Opus, whatever the mode
+```
+
+Three rules make it predictable:
+
+- **It never raises.** A cap above the mode's ceiling is a no-op. `max_model`
+  answers "no higher than this"; letting it also mean "at least this" would
+  make one key mean two opposite things and hand you a way out of the envelope
+  your mode chose. Raising is what `minimum_model` is for.
+- **It does not cap an explicit per-stage model.** `pipeline.stage_models` is
+  you naming a tier for a stage; the cap bounds what the pipeline picks on its
+  own.
+- **It is applied to the routed envelope**, so it lands _after_ the frontier
+  escalation. The escalation is deliberately last-write-wins over the
+  cost-health nudges, so a cap applied earlier would simply be overwritten.
+
+Both dispatch paths honour it — the Go scheduler resolves every envelope
+through `routing.RoutedTierEnvelopeForWorkspace`, and the extension through
+`getRoutedTierEnvelope`.
+
 `frontier` is the premium opt-in tier: it widens the routing ceiling to
 **Fable 5** (`claude-fable-5`, ~2× Opus). It **pins nothing** — the router
 reaches Fable only on a heavy reasoning stage (`feature-planning`,
@@ -3353,6 +3388,7 @@ is a cross-cutting concern placed at the top level (alongside `pipeline`,
 | `mode`                     | enum   | `"automatic"`                                | Model selection strategy (see below)                                                                                                                          |
 | `complexity_thresholds`    | object | -                                            | Score boundaries for auto model tier selection                                                                                                                |
 | `minimum_model`            | object | -                                            | Per-stage model floor (auto cannot go below)                                                                                                                  |
+| `max_model`                | enum   | -                                            | Cap on the strongest tier automatic routing may reach, below the performance mode's ceiling (see below). Never raises; does not cap an explicit stage model.  |
 | `confidence_threshold`     | number | `0.7`                                        | Min confidence for auto-selection (0.0-1.0)                                                                                                                   |
 | `stage_efforts`            | object | planning: medium, dev: medium, validate: low | Per-stage Claude effort (`low\|medium\|high\|xhigh\|max`)                                                                                                     |
 | `effort_auto`              | bool   | `true`                                       | Auto-derive effort from stage + complexity (automatic/hybrid)                                                                                                 |

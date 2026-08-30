@@ -2183,14 +2183,27 @@ export const ModelRoutingConfigSchema = z.object({
    */
   max_escalations_per_stage: z.number().int().min(0).max(3).optional(),
   /**
-   * Per-stage model routing overrides set by the adaptive policy engine.
+   * Cap on the strongest tier AUTOMATIC routing may reach, below the
+   * performance mode's own ceiling. Unset means no cap — the mode's envelope
+   * rules, exactly as before.
    *
-   * Written automatically by PostPipelineAnalyzer when routing-override
-   * decisions are applied. Read by resolveModel() via getStageOverrideModel().
+   * A mode's ceiling is all-or-nothing and its escalation bars are not
+   * obvious: `frontier` widens the ceiling to Fable, and the frontier-reasoning
+   * escalation then fires for feature-planning and feature-dev at complexity L
+   * — ordinary feature work. Before this key the only way to decline that was
+   * to abandon frontier everywhere, including on feature-planning where the
+   * wider ceiling is cheap.
    *
-   * @see Issue #1571 - Handle routing-override decisions in applyPolicyDecisions()
+   * Applied to the ROUTED envelope so it lands after the frontier escalation,
+   * which is deliberately last-write-wins over the cost-health nudges. An
+   * explicit per-stage model is NOT capped — that is the operator naming a
+   * tier, not the pipeline choosing one.
+   *
+   * Go pair: `ModelRoutingConfig.MaxModel` / `routing.ApplyMaxModel`.
+   *
+   * @see Issue #1201
    */
-  stage_overrides: z.record(z.string(), DefaultModelSchema).optional(),
+  max_model: DefaultModelSchema.optional(),
   /**
    * Per-stage × per-size model routing matrix.
    *

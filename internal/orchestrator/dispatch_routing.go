@@ -243,7 +243,7 @@ func stageBaseModel(
 	if configured := stageConfiguredModel(workspaceRoot, stage); configured != "" {
 		return configured, true
 	}
-	envelope := routing.RoutedTierEnvelope(mode, string(stage))
+	envelope := routing.RoutedTierEnvelopeForWorkspace(workspaceRoot, mode, string(stage))
 	if lightweight, ok := lightweightStageDefaults[stage]; ok {
 		return routing.ClampToEnvelope(lightweight, envelope), false
 	}

@@ -96,7 +96,6 @@ vi.mock("../../src/utils/nightgaugeConfig", async () => {
     getDefaultModel: vi.fn(() => "sonnet"),
     getStageModel: vi.fn(() => undefined),
     getStageEffort: vi.fn(() => undefined),
-    getStageOverrideModel: vi.fn(() => undefined),
     getModelRoutingMode: vi.fn(() => "automatic"),
     getPerformanceMode: vi.fn(() => "elevated"),
     getFallbackModel: vi.fn(() => undefined),

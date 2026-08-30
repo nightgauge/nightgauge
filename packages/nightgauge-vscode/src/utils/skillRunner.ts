@@ -102,7 +102,6 @@ import {
   getCostBudget,
   getStageModel,
   getStageEnvModel,
-  getStageOverrideModel,
   getStallThresholds,
   getStallKillMultiplier,
   getStallIdleMs,
@@ -121,6 +120,7 @@ import {
   getLargeDiffThreshold,
   getConfidenceThreshold,
   getMinimumModel,
+  getMaxModel,
   getModelRoutingMode,
   isEvalRecommendationsEnabled,
   getStageEffort,
@@ -994,7 +994,6 @@ function getDiffLineCount(workspaceRoot: string): number {
  *    env override suppresses the pin (#340), so it wins in every mode.
  * 1. getStageModel() — env var > config override > defaults (mode-aware)
  * 1.5. LIGHTWEIGHT_STAGE_DEFAULTS — built-in per-stage defaults (mode-agnostic)
- * 1.6. getStageOverrideModel() — adaptive policy routing override (automatic/hybrid only)
  * 2. AutoModelSelector — when getStageModel returns undefined (automatic/hybrid)
  * 3. getDefaultModel() — global default
  * 4. 'sonnet' — hardcoded final fallback
@@ -1392,7 +1391,7 @@ export function resolveModel(
   // fallback (4). Step 1 — the env override, `pipeline.stage_models`, the
   // manual-mode table — is the operator overriding the mode for one stage, and
   // is returned unclamped on both resolvers.
-  const modelEnvelope = getRoutedTierEnvelope(performanceMode, stage);
+  const modelEnvelope = getRoutedTierEnvelope(performanceMode, stage, getMaxModel(workspaceRoot));
 
   // The `model_routing.minimum_model` floor applies to EVERY tier the pipeline
   // chose, not just the selector's pick (#340). Before this it was reachable
@@ -1480,18 +1479,6 @@ export function resolveModel(
   // the `minimum_model` floor or the routed-tier ceiling — Go's
   // `resolveDispatchModel` applies both to every base it produces, and an
   // unclamped branch here means one config file dispatches two tiers.
-  if (routingMode === "automatic" || routingMode === "hybrid") {
-    const policyOverride = getStageOverrideModel(stage, workspaceRoot);
-    if (policyOverride !== undefined) {
-      return {
-        model: withFloor(policyOverride),
-        source: "config",
-        mode: routingMode,
-        effort,
-      };
-    }
-  }
-
   // Step 1.7: Active A/B experiment override (Issue #949)
   // Experiments override auto-selection but not explicit env/config overrides.
   //

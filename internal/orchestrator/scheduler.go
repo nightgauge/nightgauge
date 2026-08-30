@@ -8105,7 +8105,7 @@ func (s *Scheduler) resolveDispatchModel(
 	// plumbing on Fable under `frontier` — the exact behavior #19 deleted for
 	// having "empirically failed validation in dogfooding". stageBaseModel
 	// clamps its own branches against the same narrowed envelope.
-	envelope := routing.RoutedTierEnvelope(mode, string(stage))
+	envelope := routing.RoutedTierEnvelopeForWorkspace(workspaceRoot, mode, string(stage))
 	if capped := routing.ClampToCeiling(model, envelope); capped != model {
 		if explicitBase && routing.TierRank(capped) < routing.TierRank(baseModel) {
 			// The ceiling landed below the operator's own per-stage model.
