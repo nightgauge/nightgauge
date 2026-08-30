@@ -40,6 +40,10 @@ type issueClassification struct {
 	// reason; its general-purpose DISPATCH default lives at the dispatch site
 	// (orchestrator.defaultDispatchModel), where it never reaches the corpus.
 	PredictedModel string
+	// Title is the issue title. It is what makes a "related decisions" query
+	// mean something: querying the DIGITS of the issue number ranks any file
+	// that happens to tokenize them (#1207).
+	Title string
 }
 
 // loadIssueClassification reads the run's issue-{N}.json context file and
@@ -61,6 +65,7 @@ func loadIssueClassification(repoRoot, worktreeDir string, issueNumber int) issu
 		}
 		var ctx struct {
 			Type    string            `json:"type"`
+			Title   string            `json:"title"`
 			Labels  []json.RawMessage `json:"labels"`
 			Routing struct {
 				ComplexityScore      int `json:"complexity_score"`
@@ -83,6 +88,7 @@ func loadIssueClassification(repoRoot, worktreeDir string, issueNumber int) issu
 			Size:            state.ExtractSizeFromLabels(labels),
 			ComplexityScore: ctx.Routing.ComplexityScore,
 			PredictedModel:  ctx.Routing.PickupRecommendation.DevModel,
+			Title:           ctx.Title,
 		}
 	}
 	return issueClassification{}

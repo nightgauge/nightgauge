@@ -428,11 +428,27 @@ concrete value — never `undefined`**. The selection point and the
 
 The one canonical event tree is the single source every surface renders:
 
-- **VSCode** — the live `workflow → phases → agents → judge` sidebar tree
-  subscribes to the SDK EventBus (the in-process `WorkflowEventSink`) and folds
-  the node stream into a tree. Because the EventBus expresses even single-agent
-  pipeline runs on the same tree (via `PipelineRunEmitter`), the sidebar renders
-  ordinary runs and fanned-out runs through one code path.
+- **VSCode** — **no workflow surface today.** The extension had a Workflow
+  sidebar tree; it was removed in #1208 because it had no producer. This section
+  used to claim it "subscribes to the SDK EventBus", which was never what the
+  code did: the view's only input was the hosted platform's SSE stream, and
+  nothing publishes `WorkflowEvent` nodes there. The SDK's `PipelineOrchestrator`
+  emits them onto a **private in-process** `EventBus` whose only production
+  subscriber is the SDK CLI's stdout formatter; the extension never instantiates
+  that orchestrator; and the Go scheduler that actually runs the operator's
+  pipeline has no workflow-node code at all. `orchestration.disabled` defaults to
+  `true`, and `workflowAdapter` / `workflowBindings` are only ever set in tests,
+  so the fan-out shape the view was designed for is unreachable in production
+  too.
+
+  The Pipeline view already shows stage progress for single-agent runs. When
+  fan-out orchestration becomes reachable on the run path it should bring its own
+  transport and view rather than inherit a bridge to a stream nobody writes to.
+
+  The SDK contract is untouched — `WorkflowEvent`, `EventBus` and
+  `WorkflowEventSink` all remain, and the CLI formatter and the journal still use
+  them.
+
 - **Dashboard** — workflow canvas / phase timeline / fan-out layer / judge rail /
   cost heatmap / budget meter, mounted in the Project Studio shell, off the same
   V4 tree (tracked in the dashboard repo).

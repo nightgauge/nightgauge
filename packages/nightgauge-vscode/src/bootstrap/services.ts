@@ -49,7 +49,6 @@ import {
   RepositoriesTreeProvider,
   QueryResultsTreeProvider,
   BaseTreeItem,
-  WorkflowTreeProvider,
   AttentionTreeProvider,
   type AttentionTreeItem,
 } from "../views";
@@ -259,7 +258,6 @@ export interface ExtensionServices {
    * EventBus node stream. Wired to the EventStreamService in extension.ts once
    * the user authenticates and the SSE stream opens (#3919).
    */
-  workflowTreeProvider: WorkflowTreeProvider;
   /**
    * Action Center sidebar tree (ADR 015 / #325) — severity-ordered
    * DecisionRequest cards, live-updated off the local `attention.event` IPC
@@ -2309,17 +2307,6 @@ export async function initializeServices(
 
   // Connect TreeView to provider for title updates (Issue #306)
   treeProvider.setTreeView(treeView);
-
-  // Live workflow tree (run → phase → agent → judge) off the SDK EventBus node
-  // stream (#3919). Folding + rendering live here; it is attached to the
-  // EventStreamService in extension.ts once the SSE stream opens.
-  const workflowTreeProvider = new WorkflowTreeProvider();
-  context.subscriptions.push(workflowTreeProvider);
-  const workflowTreeView = vscode.window.createTreeView("nightgauge.workflowView", {
-    treeDataProvider: workflowTreeProvider,
-    showCollapseAll: true,
-  });
-  context.subscriptions.push(workflowTreeView);
 
   // Action Center — severity-ordered DecisionRequest cards (ADR 015 / #325).
   // Local-first (ADR 015 §C): attaches directly to the local Go daemon's IPC
@@ -4564,7 +4551,6 @@ export async function initializeServices(
     promptTemplateService,
     automationService,
     repositorySettingsService,
-    workflowTreeProvider,
     attentionTreeProvider,
     attentionTreeView,
     attentionSweepService,

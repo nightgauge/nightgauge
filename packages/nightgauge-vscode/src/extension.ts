@@ -74,7 +74,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     projectBoardProviders,
     contextViewer,
     dashboard,
-    workflowTreeProvider,
     outputWindow,
     pluginSetupService,
     codexSetupService,
@@ -446,11 +445,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           });
           eventStreamService.reconnect(platformBaseUrl, accessToken);
           dashboard?.setEventStreamService(eventStreamService);
-          // Drive the live workflow sidebar tree off the SDK EventBus node
-          // stream re-served over SSE (#3919). attach() is idempotent per
-          // service instance; reset clears any stale fold from a prior session.
-          workflowTreeProvider?.reset();
-          workflowTreeProvider?.attach(eventStreamService);
           logger.info("EventStreamService started", { platformBaseUrl });
 
           // Wire stream health into the status bar (Issue #3715).
@@ -466,7 +460,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           }
         } else if (event.current === "unauthenticated" || event.current === "error") {
           EventStreamService.resetInstance();
-          workflowTreeProvider?.reset();
         }
       } catch (err) {
         logger.warn("EventStreamService session handler failed", {

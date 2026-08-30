@@ -204,13 +204,6 @@
       "pending": "#746 slice 3 \u2014 tree views"
     },
     {
-      "id": "nightgauge.workflowView",
-      "kind": "tree-view",
-      "transport": "workflow journal over IPC",
-      "arrivalTest": null,
-      "pending": "#746 slice 3 \u2014 tree views"
-    },
-    {
       "id": "nightgauge.repositoriesView",
       "kind": "tree-view",
       "transport": "workspace manifest + board counts over IPC",

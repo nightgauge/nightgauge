@@ -25,7 +25,6 @@ import { materializePopulatedFixture } from "../fixture.js";
 /** The seven view ids contributed under the Nightgauge activity bar. */
 export const EXPECTED_TREE_VIEW_IDS = [
   "nightgauge.pipelineView",
-  "nightgauge.workflowView",
   "nightgauge.repositoriesView",
   "nightgauge.queryResults",
   "nightgauge.knowledgeView",

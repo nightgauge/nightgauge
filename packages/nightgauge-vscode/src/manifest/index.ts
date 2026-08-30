@@ -31,15 +31,6 @@ export const MANIFEST_CONTRIBUTES: ManifestContributes = {
         contextualTitle: "Nightgauge Pipeline",
       },
       {
-        // Live workflow node tree (run → phase → agent → judge) off the SDK
-        // EventBus stream re-served over SSE (#3919).
-        id: "nightgauge.workflowView",
-        name: "Workflow",
-        icon: "$(circuit-board)",
-        contextualTitle: "Live Workflow Tree",
-        visibility: "collapsed",
-      },
-      {
         id: "nightgauge.repositoriesView",
         name: "Repositories",
         icon: "$(repo)",

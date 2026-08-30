@@ -41,6 +41,11 @@ vi.mock("vscode", () => {
       this.id = id;
     }),
     Uri: { file: (p: string) => ({ fsPath: p }) },
+    // Takes the value like the real API does, so a tooltip built in one shot
+    // reads back and can be asserted on (#264).
+    MarkdownString: vi.fn(function (this: Record<string, unknown>, value?: string) {
+      this.value = value ?? "";
+    }),
     workspace: {
       createFileSystemWatcher: vi.fn(() => ({
         onDidCreate: vi.fn(),
