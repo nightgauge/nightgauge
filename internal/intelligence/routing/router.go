@@ -117,7 +117,7 @@ func (r *Router) routeLocal(stage string, cplx complexity.Score) Recommendation 
 	if pin := ModeStagePin(mode, stage); pin != "" {
 		model = currentModelForBand(pin)
 	} else {
-		envelope := RoutedTierEnvelope(mode, stage)
+		envelope := RoutedTierEnvelopeForWorkspace(r.workspaceRoot, mode, stage)
 		// Frontier-reasoning escalation: a fable ceiling is the ONLY way
 		// automatic routing reaches Fable, and only on a heavy reasoning stage
 		// at top complexity. Mirrors AutoModelSelector.selectModel; applied

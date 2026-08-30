@@ -94,7 +94,6 @@ vi.mock("../../src/utils/nightgaugeConfig", async () => {
     getDefaultModel: vi.fn(() => undefined),
     getStageModel: vi.fn(() => undefined),
     getStageEffort: vi.fn(() => "medium"),
-    getStageOverrideModel: vi.fn(() => undefined),
     getFallbackModel: vi.fn(() => undefined),
     getMaxTurns: vi.fn(() => undefined),
     getCostBudget: vi.fn(() => undefined),

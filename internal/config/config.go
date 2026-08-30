@@ -668,6 +668,25 @@ type ModelRoutingConfig struct {
 	// frontier tier.
 	MinimumModel map[string]string `json:"minimumModel,omitempty" yaml:"minimum_model,omitempty"`
 
+	// MaxModel caps the strongest tier AUTOMATIC routing may reach, below the
+	// performance mode's own ceiling. Empty (the default) means no cap — the
+	// mode's envelope rules, exactly as before.
+	//
+	// It exists because a mode's ceiling is all-or-nothing and its escalation
+	// bars are not obvious: `frontier` widens the ceiling to Fable, and the
+	// frontier-reasoning escalation then fires for feature-planning and
+	// feature-dev at complexity L — ordinary feature work, not the exceptional
+	// case the mode reads as. Before this key the only way to decline that was
+	// to abandon frontier everywhere, including on feature-planning where the
+	// wider ceiling is cheap and useful (#1201).
+	//
+	// Applied to the ROUTED envelope, so it lands after the frontier
+	// escalation rather than before it — the escalation is deliberately
+	// last-write-wins over the cost-health nudges, and a cap applied earlier
+	// would simply be overwritten. An explicit per-stage model is NOT capped:
+	// that is the operator naming a tier, not the pipeline choosing one.
+	MaxModel string `json:"maxModel,omitempty" yaml:"max_model,omitempty"`
+
 	// Mode selects how a stage's BASE model is chosen: "manual" (explicit
 	// pipeline.stage_models, falling back to the built-in per-stage table),
 	// "automatic" (defer every stage to the complexity router — the default),
