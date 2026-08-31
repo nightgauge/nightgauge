@@ -514,20 +514,29 @@ func TestE2E_FullPipelineLifecycle(t *testing.T) {
 			if success, ok := data["success"].(bool); !ok || !success {
 				t.Errorf("pipeline.complete success = %v, want true", data["success"])
 			}
+			if runID, ok := data["runId"].(string); !ok || runID == "" {
+				t.Errorf("pipeline.complete runId = %v, want a run identity", data["runId"])
+			}
 		}
 	}
 
-	// Assert: the run left exactly one runtime snapshot, under the
-	// identity-keyed name the scheduler's own Persist composes (ADR-017 D8).
+	// pipeline.complete is emitted from the scheduler's terminal defer just
+	// before SealAndRemove runs. Wait for that defer to finish, then assert the
+	// durable terminal contract rather than racing the transient snapshot.
 	stateDir := filepath.Join(workDir, ".nightgauge", "pipeline")
-	snapshots, err := state.FindPersistedStatesForIssue(stateDir, issueNumber)
-	if err != nil {
-		t.Fatalf("FindPersistedStatesForIssue: %v", err)
-	}
-	if len(snapshots) != 1 {
-		t.Errorf("expected exactly one runtime snapshot for #%d in %s, found %d", issueNumber, stateDir, len(snapshots))
-	} else if snapshots[0].RunID == "" {
-		t.Errorf("runtime snapshot carries no run identity")
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		snapshots, err := state.FindPersistedStatesForIssue(stateDir, issueNumber)
+		if err != nil {
+			t.Fatalf("FindPersistedStatesForIssue: %v", err)
+		}
+		if len(snapshots) == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("terminal runtime snapshot for #%d was not removed from %s", issueNumber, stateDir)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 
