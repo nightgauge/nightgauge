@@ -885,6 +885,53 @@ nightgauge issue ac-check 0 --body "- [x] one\n- [ ] two" --json
 # → {"v":1,"number":0,"status":"failed","checked_count":1,"unchecked_count":1,"total":2}
 ```
 
+#### `issue ac-mark` — the write half of the AC gate (#1233)
+
+`ac-check` returns a verdict. Until #1233 **nothing could act on it**: no skill
+wrote `- [x]`, no stage edited an issue body, and the gate's own failure message
+instructed a human who is not there. A `type:docs` issue whose author did not
+pre-tick its own acceptance criteria could never pass `feature-validate`, and
+retry re-ran the stage into the same wall at full cost.
+
+```bash
+# List the criteria (index, text, checked) without writing anything.
+nightgauge issue ac-mark <number> --list [--json]
+
+# Tick specific criteria by 1-based index, and write the body back.
+nightgauge issue ac-mark <number> --check 1 --check 3 [--json]
+
+# Offline: rewrite a body and print it, never sending an edit.
+nightgauge issue ac-mark 0 --body "- [ ] a\n- [ ] b" --check 1 --json
+```
+
+Indices are the same 1-based positions `ac-check` counts — both verbs share one
+traversal (`acparse.List`), so an index means the same criterion to each. Without
+that, a caller could mark a line the gate was not counting.
+
+The verb is deliberately **dumb about judgement**. It ticks exactly the indices
+it is given:
+
+- **Only the box changes.** Bullet, indentation, criterion text and line
+  terminator are preserved byte-for-byte. An issue body is a human artefact, and
+  a verb that reflows it while ticking a box will not be trusted with write
+  access.
+- **Idempotent.** An already-checked index is reported under `already_checked`
+  and changes nothing — a caller counting changes to decide whether to push an
+  edit will not push an empty one forever.
+- **An unknown index is an error**, not a silent skip. Folding a miscount into
+  success is how a gate comes to believe a criterion nobody marked.
+- **Fenced code blocks and mid-prose `- [ ]` mentions are never touched**, the
+  same exclusions `ac-check` applies.
+
+**Deciding what to mark is the caller's job, and must be evidence-backed.**
+`feature-validate` Step 0.6.2b enumerates the unchecked criteria, evaluates each
+against the stage's actual diff, records a per-criterion verdict with evidence,
+and passes back only the indices it can substantiate. Criteria it cannot
+substantiate stay unchecked and still fail the gate, which is the correct
+outcome — a stage that ticked every box because it reached that phase would be
+the `vacuous-assertion` / `self-granted-exemption` defect the gate exists to
+catch.
+
 ### Epic Operations
 
 ```bash
