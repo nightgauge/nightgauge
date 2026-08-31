@@ -25,6 +25,33 @@ repositories.
 > switcher describe the old behavior and are retained for historical
 > context. They will be rewritten in a follow-up pass.
 
+### The Repositories-view checkbox governs GitHub traffic, not just dispatch
+
+Each row's checkbox writes `autonomous.enabled_repos`. Unchecking a repo means
+"do not scan this repo", and that now binds the **view** as well as the
+scheduler: an excluded repo makes **no background GitHub calls**.
+
+Two mechanisms, because either alone leaks:
+
+1. **An excluded row renders collapsed.** VSCode only asks an expanded row for
+   its children, and each of those asks is a `board.counts` GraphQL call once
+   the board service's 5-minute cache lapses. Every row used to render
+   expanded, so a global refresh polled every repo — including the ones the
+   operator had explicitly switched off. The visible symptom was every row's
+   spinner lighting up at once; the invisible one was the quota.
+2. **An excluded repo's counts are fetched only on demand.** Expanding the row
+   for the first time fetches once — a row that showed a permanent zero would
+   be worse than useless — and after that the cached counts are served to every
+   background repaint. The two refresh commands
+   (`nightgauge.refreshRepositories` and the per-row
+   `nightgauge.refreshRepository`) grant a **one-shot** pass, because those are
+   reached only from an operator clicking Refresh. Nothing else can re-arm it.
+
+A repo that IS in the scan set is unaffected: it refetches on every render and
+is throttled solely by the board service's own cache. The empty allowlist still
+means scan-all, so a workspace that has never touched a checkbox sees no
+change.
+
 ## Overview
 
 Multi-repository workspace mode enables Nightgauge to coordinate operations

@@ -1761,8 +1761,15 @@ export function registerAutonomousCommands(
   // stopped it, so the operator is choosing between facts rather than repo
   // names. With exactly one halted repo it still prompts — releasing a human
   // gate is not something to do on an unconfirmed keystroke.
+  //
+  // The command also accepts a `RepositoryTreeItem` argument, which is how the
+  // inline ▶ action on a warning-badged row in the Repositories view invokes
+  // it. That path skips the quick pick (the operator already named the repo by
+  // clicking its row) but still confirms, for the reason above. Duck-typed on
+  // `haltedRepoKey` rather than importing the tree item, to keep the command
+  // layer free of a dependency on the view layer.
   disposables.push(
-    vscode.commands.registerCommand("nightgauge.autonomousResumeRepo", async () => {
+    vscode.commands.registerCommand("nightgauge.autonomousResumeRepo", async (arg?: unknown) => {
       try {
         const ipc = IpcClient.getInstance();
         const status = await ipc.autonomousStatus();
@@ -1773,15 +1780,47 @@ export function registerAutonomousCommands(
           );
           return;
         }
-        const picked = await vscode.window.showQuickPick(
-          halted.map((h) => ({
-            label: h.repo,
-            description: h.issue ? `#${h.issue} failed at ${h.stage || "unknown"}` : undefined,
-            detail: h.reason,
-            repo: h.repo,
-          })),
-          { title: "Resume a halted repository", placeHolder: "Select the repository to resume" }
-        );
+
+        const clickedKey =
+          typeof arg === "object" && arg !== null && "haltedRepoKey" in arg
+            ? (arg as { haltedRepoKey?: unknown }).haltedRepoKey
+            : undefined;
+
+        let picked: { repo: string; description?: string; detail?: string } | undefined;
+        if (typeof clickedKey === "string" && clickedKey.length > 0) {
+          // Re-resolve against live status rather than trusting the row: the
+          // badge may have been painted before someone else resumed the repo.
+          const match = halted.find((h) => h.repo === clickedKey);
+          if (!match) {
+            vscode.window.showInformationMessage(
+              `${clickedKey} is no longer halted — it was resumed already.`
+            );
+            return;
+          }
+          const why = match.issue
+            ? `#${match.issue} failed at ${match.stage || "unknown"}`
+            : match.reason || "unknown";
+          const confirm = await vscode.window.showWarningMessage(
+            `Resume autonomous dispatch for ${match.repo}?`,
+            {
+              modal: true,
+              detail: `Halted because ${why}. Resuming clears this repository's failure counts and backoff, so the pipeline may pick the same issue up again.`,
+            },
+            "Resume"
+          );
+          if (confirm !== "Resume") return;
+          picked = { repo: match.repo };
+        } else {
+          picked = await vscode.window.showQuickPick(
+            halted.map((h) => ({
+              label: h.repo,
+              description: h.issue ? `#${h.issue} failed at ${h.stage || "unknown"}` : undefined,
+              detail: h.reason,
+              repo: h.repo,
+            })),
+            { title: "Resume a halted repository", placeHolder: "Select the repository to resume" }
+          );
+        }
         if (!picked) return;
 
         const result = await ipc.autonomousResumeRepo(picked.repo);

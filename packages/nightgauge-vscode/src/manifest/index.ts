@@ -1205,6 +1205,16 @@ export const MANIFEST_CONTRIBUTES: ManifestContributes = {
         group: "inline@1",
       },
       {
+        // #1148 — inline Resume on a halted repository row. Only rendered for
+        // the `-halted` contextValue suffix: a repo-scoped halt leaves fleet
+        // status "running", so this row's warning badge and this action are
+        // the operator's only affordance for a repository that has silently
+        // stopped dispatching. Sorted first so it sits next to the badge.
+        command: "nightgauge.autonomousResumeRepo",
+        when: "view == nightgauge.repositoriesView && viewItem =~ /^repository.*-halted$/",
+        group: "inline@0",
+      },
+      {
         command: "nightgauge.openRepoInGitHub",
         when: "view == nightgauge.repositoriesView && viewItem =~ /^repository/",
         group: "inline@2",

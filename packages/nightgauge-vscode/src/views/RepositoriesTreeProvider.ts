@@ -22,7 +22,7 @@ import { ReadyIssueTreeItem } from "./items/ReadyIssueTreeItem";
 import { EpicGroupTreeItem, groupIssuesByEpic } from "./items/EpicGroupTreeItem";
 import { getProjectBoardSettings } from "../config/projectBoardSettings";
 import { IpcClient } from "../services/IpcClient";
-import type { IpcQueueState } from "../services/IpcClientBase";
+import type { AutonomousRepoPause, IpcQueueState } from "../services/IpcClientBase";
 import { withCallSource } from "../services/callSource";
 import { ConfigBridge } from "../services/ConfigBridge";
 import { Logger } from "../utils/logger";
@@ -275,6 +275,49 @@ export class RepositoriesTreeProvider
    * Cleared on `refreshAll()` and `onWorkspaceChanged`. Issue #3051.
    */
   private branchCache: Map<string, string> = new Map();
+
+  /**
+   * Repo-scoped autonomous halts (#1148), indexed by the fully-qualified
+   * `owner/repo` key the scheduler records them under, lowercased.
+   *
+   * Populated by {@link refreshHaltState} from `autonomous.status`. A halt
+   * leaves the FLEET status reading "running", so this is the ONLY signal
+   * that distinguishes "this repo has a Ready issue nobody is picking up
+   * because it is halted" from "…because it is unchecked" or "…because the
+   * scheduler is busy elsewhere".
+   */
+  private haltedRepos: Map<string, AutonomousRepoPause> = new Map();
+
+  /**
+   * Secondary index of {@link haltedRepos} by bare repo name (the segment
+   * after the slash), lowercased — the workspace tree keys rows by short
+   * folder name and a halt key is `owner/repo`. Ambiguous short names (two
+   * halted repos with the same name under different owners) are DELETED from
+   * this index rather than resolved arbitrarily: badging the wrong row is
+   * worse than badging neither, and the fully-qualified lookup still works
+   * for any repo whose config carries owner/repo.
+   */
+  private haltedReposByShortName: Map<string, AutonomousRepoPause> = new Map();
+
+  /**
+   * Repos whose board counts have been fetched at least once this session.
+   *
+   * Half of the "unchecked repo makes no background GitHub calls" gate — see
+   * {@link mayFetchCounts}. Cleared whenever a cache invalidation happens so
+   * an explicit refresh really does re-fetch.
+   */
+  private fetchedCountsRepos: Set<string> = new Set();
+
+  /**
+   * One-shot permission slips for repos the USER just asked to refresh.
+   *
+   * `invalidateAndRefreshRepo` is reached only from the two operator-facing
+   * refresh commands (`nightgauge.refreshRepositories` and the per-row
+   * `nightgauge.refreshRepository`), so it is the one place that can
+   * distinguish "the operator wants this now" from "something in the
+   * background thinks a repaint is due". Consumed by the next fetch.
+   */
+  private manualFetchRepos: Set<string> = new Set();
 
   /**
    * Recent self-originated `enabled_repos` writes, with their expected
@@ -562,6 +605,21 @@ export class RepositoriesTreeProvider
         }
         this.refreshAll();
       }),
+      // #1148 halt visibility — repo-scoped halts do NOT move the fleet
+      // status, so `autonomous.statusChanged` never fires for them and there
+      // is nothing else to poll. Deliberately NOT gated on
+      // `autoRefreshEnabled` or the visibility gate: repainting a halt badge
+      // makes no GitHub API calls (one local IPC status read, then per-row
+      // repaints of already-cached items), and the pause those gates exist to
+      // honour is about quota, not about hiding a stopped repository.
+      ipc.on("autonomous.repoHaltChanged", () => {
+        void this.applyHaltStateToRows();
+      }),
+      // A fleet-wide resume clears every repo halt at once, and a fleet pause
+      // is itself a reason a row may look idle. Re-read on any status change.
+      ipc.on("autonomous.statusChanged", () => {
+        void this.applyHaltStateToRows();
+      }),
       ipc.on("queue.changed", (data) => {
         if (!this.autoRefreshEnabled) return;
         // #360 — the queue only mutates while autonomous is dispatching, but
@@ -726,15 +784,17 @@ export class RepositoriesTreeProvider
     // including paths triggered by `onWorkspaceChanged` and extension
     // activation, where blocking calls froze every other extension for
     // minutes (Issue #1328 / project memory). Issue #3051.
-    await Promise.all(
-      repositories.map(async (repo) => {
+    await Promise.all([
+      ...repositories.map(async (repo) => {
         if (this.branchCache.has(repo.path)) return;
         const branch = await this.getCurrentBranch(repo.path);
         if (branch) {
           this.branchCache.set(repo.path, branch);
         }
-      })
-    );
+      }),
+      // Repo-scoped halts (#1148). One local IPC read, no GitHub traffic.
+      this.refreshHaltState(),
+    ]);
 
     // Create repository tree items
     const items: RepositoryTreeItem[] = [];
@@ -766,7 +826,8 @@ export class RepositoriesTreeProvider
         isSequential,
         maxConcurrent,
         currentBranch,
-        reposDerived
+        reposDerived,
+        this.haltFor(repo)
       );
       this.cachedRepositories.set(repo.name, item);
       items.push(item);
@@ -966,6 +1027,33 @@ export class RepositoriesTreeProvider
   /**
    * Get children for a repository (issue counts, pipeline status)
    */
+  /**
+   * Whether this render is allowed to spend GitHub quota on `repoName`.
+   *
+   * The row checkbox is `autonomous.enabled_repos` — "include this repo in
+   * autonomous board scans" — and an unchecked repo was still being polled by
+   * this view: every repository row renders EXPANDED, so every global refresh
+   * asked every row for children, and each of those is a `board.counts`
+   * GraphQL call once the 5-minute service cache lapses. The operator's read
+   * of the checkbox ("I turned this repo off") and the traffic it actually
+   * produced disagreed, and the disagreement was invisible except as spinners.
+   *
+   * Three ways to earn a fetch:
+   *   - the repo IS in the scan set (the normal case; `[]` means scan-all, so
+   *     a workspace that never touched the checkboxes is unaffected);
+   *   - the operator explicitly asked, via either refresh command
+   *     (`manualFetchRepos`, one-shot);
+   *   - we have never fetched this repo's counts, i.e. the row is being
+   *     expanded for the first time. Excluded rows render collapsed, so this
+   *     fires on a deliberate expand and then never again — the row shows real
+   *     numbers instead of a permanent zero, without joining the poll.
+   */
+  private mayFetchCounts(repoName: string): boolean {
+    if (isRepoEnabledForAutonomous(repoName, this.enabledRepos)) return true;
+    if (this.manualFetchRepos.has(repoName)) return true;
+    return !this.fetchedCountsRepos.has(repoName);
+  }
+
   private async getRepositoryChildren(repoItem: RepositoryTreeItem): Promise<BaseTreeItem[]> {
     const children: BaseTreeItem[] = [];
 
@@ -976,7 +1064,8 @@ export class RepositoriesTreeProvider
     const repoName = repoItem.repository.name;
     this.ensurePerRepoServices();
     const service = this.perRepoServices.get(repoName);
-    if (service) {
+    const mayFetch = this.mayFetchCounts(repoName);
+    if (service && mayFetch) {
       // Set isFetching guard to prevent onItemsUpdated → refreshAll() feedback loop
       this.isFetching = true;
       try {
@@ -1053,8 +1142,18 @@ export class RepositoriesTreeProvider
         });
       } finally {
         this.isFetching = false;
+        this.fetchedCountsRepos.add(repoName);
+        this.manualFetchRepos.delete(repoName);
       }
-    } else {
+    } else if (service && !mayFetch) {
+      // Excluded from the autonomous scan set and nobody asked for fresh
+      // numbers — serve the last counts we computed and spend no quota. See
+      // `mayFetchCounts` for why the checkbox governs this at all.
+      const cached = this.issueSummaryCache.get(repoName);
+      readyCount = cached?.get("ready")?.count ?? 0;
+      inProgressCount = cached?.get("inProgress")?.count ?? 0;
+      backlogCount = cached?.get("backlog")?.count ?? 0;
+    } else if (!service) {
       this.logger.warn("No ProjectBoardService found for repo", {
         repo: repoItem.repository.name,
         available: Array.from(this.perRepoServices.keys()),
@@ -1290,6 +1389,10 @@ export class RepositoriesTreeProvider
       if (service) {
         service.clearCache();
         this.issueSummaryCache.delete(repoName);
+        // Both refresh commands land here and only here, so this is where an
+        // excluded repo earns its one-shot pass through `mayFetchCounts`.
+        this.fetchedCountsRepos.delete(repoName);
+        this.manualFetchRepos.add(repoName);
         this.refreshRepository(repoName);
         return;
       }
@@ -1297,6 +1400,10 @@ export class RepositoriesTreeProvider
     // Fallback: no slug or slug not found — clear all caches
     for (const service of this.perRepoServices.values()) {
       service.clearCache();
+    }
+    for (const repo of this.workspaceManager.getAllRepositories()) {
+      this.fetchedCountsRepos.delete(repo.name);
+      this.manualFetchRepos.add(repo.name);
     }
     this.refreshAll();
   }
@@ -1533,6 +1640,98 @@ export class RepositoriesTreeProvider
    * No-op when the repo isn't in the cache yet — the next root render will
    * pick up the new state from `enabledRepos` naturally.
    */
+  /**
+   * Re-read the repo-scoped autonomous halts (#1148) from the scheduler.
+   *
+   * On IPC failure the previous map is KEPT rather than cleared. A transient
+   * read error is not evidence that a halt was released, and flickering the
+   * badge off and back on would train the operator to ignore it; the next
+   * successful read self-heals. The one thing that must never happen is a
+   * stale badge outliving a resume, and every resume path emits an event that
+   * drives a fresh read.
+   */
+  private async refreshHaltState(): Promise<void> {
+    let paused: Record<string, AutonomousRepoPause> | undefined;
+    try {
+      const status = await IpcClient.getInstance().autonomousStatus();
+      paused = status.pausedRepos ?? {};
+    } catch {
+      // Daemon down or not yet connected — keep what we have.
+      return;
+    }
+
+    const byKey = new Map<string, AutonomousRepoPause>();
+    const byShort = new Map<string, AutonomousRepoPause>();
+    const ambiguousShortNames = new Set<string>();
+
+    for (const [key, record] of Object.entries(paused)) {
+      const resolved: AutonomousRepoPause = { ...record, repo: record.repo || key };
+      byKey.set(key.toLowerCase(), resolved);
+
+      const short = key.includes("/") ? key.slice(key.lastIndexOf("/") + 1) : key;
+      const shortKey = short.toLowerCase();
+      if (byShort.has(shortKey)) {
+        ambiguousShortNames.add(shortKey);
+      } else {
+        byShort.set(shortKey, resolved);
+      }
+    }
+    for (const name of ambiguousShortNames) {
+      byShort.delete(name);
+    }
+
+    this.haltedRepos = byKey;
+    this.haltedReposByShortName = byShort;
+  }
+
+  /**
+   * Resolve the halt record for one workspace repository, if any.
+   *
+   * Halts are keyed `owner/repo` by the scheduler while the tree keys rows by
+   * short folder name, and not every repo config carries a `github:` block —
+   * so try the fully-qualified key first, then the row's own name as a key,
+   * then the unambiguous short-name index.
+   */
+  private haltFor(repo: Repository): AutonomousRepoPause | undefined {
+    const gh = repo.github;
+    if (gh?.owner && gh?.repo) {
+      const hit = this.haltedRepos.get(`${gh.owner}/${gh.repo}`.toLowerCase());
+      if (hit) return hit;
+    }
+    const name = repo.name.toLowerCase();
+    return this.haltedRepos.get(name) ?? this.haltedReposByShortName.get(name);
+  }
+
+  /**
+   * Re-read halt state and repaint only the rows whose halt actually changed.
+   *
+   * Scoped rather than a `refreshAll()` for the same reason the checkbox path
+   * is (#2988): a full refresh re-fetches every repo's board counts and lights
+   * up the whole spinner cascade. Repainting a cached row costs nothing, and
+   * `getRepositoryChildren` is not re-entered for rows that did not change.
+   */
+  private async applyHaltStateToRows(): Promise<void> {
+    // Fingerprint rather than a presence check: re-halting an already-halted
+    // repo REFRESHES the record (the second failure is the current reason it
+    // is stopped), so a tooltip that still names the first one is stale.
+    const fingerprint = (h: AutonomousRepoPause | undefined): string =>
+      h ? `${h.repo}|${h.issue ?? ""}|${h.stage ?? ""}|${h.pausedAt ?? ""}` : "";
+
+    const before = new Map<string, string>();
+    for (const [name, item] of this.cachedRepositories) {
+      before.set(name, fingerprint(item.halt));
+    }
+
+    await this.refreshHaltState();
+
+    for (const [name, item] of this.cachedRepositories) {
+      const halt = this.haltFor(item.repository);
+      if (before.get(name) === fingerprint(halt)) continue;
+      item.applyHaltState(halt);
+      this._onDidChangeTreeData.fire(item);
+    }
+  }
+
   private fireRepoRowRefresh(repoName: string): void {
     const item = this.cachedRepositories.get(repoName);
     if (!item) return;

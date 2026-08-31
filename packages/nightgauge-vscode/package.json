@@ -1138,6 +1138,11 @@
           "group": "inline@1"
         },
         {
+          "command": "nightgauge.autonomousResumeRepo",
+          "when": "view == nightgauge.repositoriesView && viewItem =~ /^repository.*-halted$/",
+          "group": "inline@0"
+        },
+        {
           "command": "nightgauge.openRepoInGitHub",
           "when": "view == nightgauge.repositoriesView && viewItem =~ /^repository/",
           "group": "inline@2"

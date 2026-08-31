@@ -4852,9 +4852,15 @@ func (s *Server) registerMethods() {
 		if reason == "" {
 			reason = "no reason provided"
 		}
-		if s.autonomousScheduler.PauseRepo(p.Repo, reason, triggeredBy, p.IssueNumber, p.Stage) &&
-			triggeredBy == "haltQueueOnSlotFailure" && p.IssueNumber != 0 {
-			s.autonomousScheduler.RaiseTerminalFailure(p.Repo, p.IssueNumber, p.Stage, p.TerminalKind, p.CostUsd)
+		if s.autonomousScheduler.PauseRepo(p.Repo, reason, triggeredBy, p.IssueNumber, p.Stage) {
+			// Push the new halt to the Repositories view before raising the
+			// card: the per-row badge is what tells an operator WHICH repo
+			// stopped, and it is the only such signal (fleet Status stays
+			// "running" by design).
+			s.emitRepoHaltChanged()
+			if triggeredBy == "haltQueueOnSlotFailure" && p.IssueNumber != 0 {
+				s.autonomousScheduler.RaiseTerminalFailure(p.Repo, p.IssueNumber, p.Stage, p.TerminalKind, p.CostUsd)
+			}
 		}
 		return s.autonomousScheduler.Status(), nil
 	}
