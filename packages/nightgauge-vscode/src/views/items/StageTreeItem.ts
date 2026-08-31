@@ -210,11 +210,10 @@ export class StageTreeItem extends BaseTreeItem {
     if (this.status === "running") {
       const registryPhases = PHASE_REGISTRY[this.stage as keyof typeof PHASE_REGISTRY];
       if (this.currentPhaseName && this.totalPhaseCount > 0) {
-        const rawCount = this.children.filter(
-          (c) =>
-            c instanceof PhaseTreeItem &&
-            (c.getStatus() === "complete" || c.getStatus() === "skipped")
-        ).length;
+        // `unreported` is NOT settled work and must not inflate the numerator
+        // (#1246): counting it is how a run that observed four phases reported
+        // 18/18. A deliberate skip is settled and still counts.
+        const rawCount = this.countSettledPhases();
         // Clamp: completed count must never exceed total (defensive guard
         // against skill/registry phase count mismatches)
         const completedCount = Math.min(rawCount, this.totalPhaseCount);
@@ -253,14 +252,18 @@ export class StageTreeItem extends BaseTreeItem {
 
     // Completed/failed stages with phases show compact summary
     if ((this.status === "complete" || this.status === "failed") && this.totalPhaseCount > 0) {
-      const rawCount = this.children.filter(
-        (c) =>
-          c instanceof PhaseTreeItem &&
-          (c.getStatus() === "complete" || c.getStatus() === "skipped")
-      ).length;
+      const rawCount = this.countSettledPhases();
       // Clamp: completed count must never exceed total
       const completedCount = Math.min(rawCount, this.totalPhaseCount);
-      const phaseSummary = `${completedCount}/${this.totalPhaseCount} phases`;
+      const unreportedCount = this.countPhasesWithStatus("unreported");
+      // Name the unreported number rather than folding it into the numerator
+      // (#1246). "18/18 phases" on a run that observed four of them is not a
+      // rounding problem — it is the reader being told the stage's own safety
+      // phases ran when the system has no evidence either way.
+      const phaseSummary =
+        unreportedCount > 0
+          ? `${completedCount}/${this.totalPhaseCount} phases · ${unreportedCount} unreported`
+          : `${completedCount}/${this.totalPhaseCount} phases`;
 
       // Still show token info alongside phase summary for completed stages
       if (this.executionMode === "interactive") {
@@ -561,6 +564,23 @@ export class StageTreeItem extends BaseTreeItem {
    *   When provided, the description shows this total instead of phases.length,
    *   giving an accurate count before all phases have emitted markers.
    */
+  /**
+   * Phases with a settled outcome: observed to run, or deliberately skipped.
+   * `unreported` is excluded — the stage said nothing about it, so it is not
+   * evidence of anything (#1246).
+   */
+  private countSettledPhases(): number {
+    return this.children.filter(
+      (c) =>
+        c instanceof PhaseTreeItem && (c.getStatus() === "complete" || c.getStatus() === "skipped")
+    ).length;
+  }
+
+  private countPhasesWithStatus(status: PhaseStatus): number {
+    return this.children.filter((c) => c instanceof PhaseTreeItem && c.getStatus() === status)
+      .length;
+  }
+
   setPhases(phases: StagePhase[], currentPhase?: string, totalPhases?: number): void {
     this.clearChildren();
     this.totalPhaseCount = totalPhases ?? phases.length;

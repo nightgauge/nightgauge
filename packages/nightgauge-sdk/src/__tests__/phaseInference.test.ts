@@ -196,3 +196,64 @@ describe("createPhaseInference — stages without rules", () => {
     expect(inf.start()).toBeNull();
   });
 });
+
+/**
+ * #1246 — the Testing waypoint decides whether the phase can fire at all, and
+ * inference is the only phase producer in ~89% of feature-dev runs. A
+ * toolchain missing from the matcher does not degrade gracefully: Testing
+ * reads unreported in EVERY repository that uses it. `flutter test` ran twice
+ * on issue #336 and the tree still showed Testing as skipped, because the
+ * matcher knew only the core repo's own commands.
+ */
+describe("createPhaseInference — test/build command coverage (#1246)", () => {
+  const advancesToTesting = (command: string): boolean => {
+    const inf = createPhaseInference("feature-dev");
+    inf.start();
+    // Put the cursor at implementation (8) so only a Testing match (9) can advance.
+    inf.observeToolUse("Write", { file_path: "src/app.ts" });
+    return inf.observeToolUse("Bash", { command })?.name === "testing";
+  };
+
+  it.each([
+    // The gap that motivated the issue.
+    "flutter test",
+    "flutter test --coverage",
+    "flutter analyze",
+    "dart test",
+    "dart analyze",
+    "cd packages/app && flutter test",
+    // Previously covered — must not regress.
+    "go test ./...",
+    "go build ./...",
+    "npm test",
+    "npm run build",
+    "npm run -w packages/nightgauge-vscode test",
+    "pytest -q",
+    "cargo test",
+    "npx vitest run",
+    // Newly covered toolchains.
+    "pnpm test",
+    "yarn build",
+    "go vet ./...",
+    "./gradlew test",
+    "mvn verify",
+    "dotnet test",
+    "swift test",
+    "bundle exec rspec",
+    "mix test",
+    "make test",
+    "bash scripts/ci-local.sh",
+  ])("advances to testing on %j", (command) => {
+    expect(advancesToTesting(command)).toBe(true);
+  });
+
+  it.each([
+    "git status --short",
+    "gh pr view 1245",
+    "ls -la src",
+    "cat README.md",
+    "git log --oneline -5",
+  ])("does not advance to testing on %j", (command) => {
+    expect(advancesToTesting(command)).toBe(false);
+  });
+});

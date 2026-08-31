@@ -63,12 +63,58 @@ function isDevContextPath(path: string): boolean {
   return /(^|\/)dev-\d+\.json$/.test(path) || /\.nightgauge\/pipeline\/dev-/.test(path);
 }
 
-/** Bash commands that signal the testing / build-verification phase. */
+/**
+ * Bash commands that signal the testing / build-verification phase.
+ *
+ * This matcher decides whether the Testing waypoint can fire AT ALL, and in
+ * ~89% of feature-dev runs inference is the only phase producer — so a
+ * toolchain missing from this list does not degrade gracefully, it renders
+ * Testing as permanently unreported in every repository that uses it. The
+ * original list covered only the JS/Go/Python/Rust commands the core repo
+ * happens to run, which is why `Testing` never once fired in a Flutter or
+ * Dart repository despite `flutter test` running on nearly every issue there
+ * (#1246).
+ *
+ * Verifier-style commands (`analyze`, `lint`, `vet`, `format --set-exit-if-
+ * changed`) count: the phase is "testing / build verification", and a stage
+ * that ran `flutter analyze` and nothing else did reach it.
+ *
+ * When adding a toolchain, add it here rather than in a caller — this is the
+ * single definition, and a per-caller variant is how the list drifted.
+ */
 function isTestOrBuildCommand(cmd: string): boolean {
-  return /\b(vitest|jest|go\s+test|go\s+build|npm\s+(run\s+)?(-w\s+\S+\s+)?(test|build)|pytest|cargo\s+test)\b/.test(
-    cmd
-  );
+  return TEST_OR_BUILD_COMMAND.test(cmd);
 }
+
+const TEST_OR_BUILD_COMMAND = new RegExp(
+  [
+    // JS/TS runners and package managers. `npm|pnpm|yarn|bun` cover both the
+    // bare and `run` forms, plus npm's `-w <workspace>` prefix.
+    String.raw`\b(vitest|jest|playwright|mocha|ava)\b`,
+    String.raw`\b(npm|pnpm|yarn|bun|npx)\s+(run\s+)?(-w\s+\S+\s+)?(test|build|lint|typecheck|check)\b`,
+    // Go.
+    String.raw`\bgo\s+(test|build|vet)\b`,
+    // Dart / Flutter — the gap that motivated #1246.
+    String.raw`\b(flutter|dart)\s+(test|analyze|build|format)\b`,
+    // Python.
+    String.raw`\b(pytest|tox|nox|unittest)\b`,
+    // Rust.
+    String.raw`\bcargo\s+(test|build|check|clippy)\b`,
+    // JVM.
+    String.raw`\b(gradle|gradlew|mvn|mvnw)\s+\S*(test|build|check|verify|assemble)`,
+    // .NET, Swift, Ruby, PHP, Elixir.
+    String.raw`\bdotnet\s+(test|build)\b`,
+    String.raw`\bswift\s+(test|build)\b`,
+    String.raw`\b(rspec|bundle\s+exec\s+rspec|rake\s+test)\b`,
+    String.raw`\b(phpunit|composer\s+test)\b`,
+    String.raw`\bmix\s+test\b`,
+    // Generic build entry points.
+    String.raw`\b(make|cmake|ctest|bazel|ninja)\s+\S*(test|build|check)`,
+    String.raw`\bmake\s+(test|build|check|all)\b`,
+    // The repo's own gate.
+    String.raw`\bci-local\.sh\b`,
+  ].join("|")
+);
 
 /** Bash commands that signal the project-status sync phase. */
 function isStatusSyncCommand(cmd: string): boolean {

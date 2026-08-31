@@ -20,6 +20,7 @@ function createMockStateService() {
     startPhase: vi.fn().mockResolvedValue(undefined),
     completePhase: vi.fn().mockResolvedValue(undefined),
     skipPhase: vi.fn().mockResolvedValue(undefined),
+    markPhaseUnreported: vi.fn().mockResolvedValue(undefined),
   };
 }
 
@@ -93,11 +94,13 @@ describe("createPhaseTracker", () => {
     // skipPhase returns early when a phase already exists; the mock always
     // resolves, so the call count reflects all registry phases.
     await vi.waitFor(() => {
-      expect(mockStateService.skipPhase).toHaveBeenCalledTimes(14);
+      expect(mockStateService.markPhaseUnreported).toHaveBeenCalledTimes(14);
     });
 
     // The 8 genuinely-untracked phases must still be in the skip list
-    const skippedNames = mockStateService.skipPhase.mock.calls.map((call: unknown[]) => call[1]);
+    const skippedNames = mockStateService.markPhaseUnreported.mock.calls.map(
+      (call: unknown[]) => call[1]
+    );
     expect(skippedNames).toContain("categorize-issues");
     expect(skippedNames).toContain("address-feedback");
     expect(skippedNames).toContain("freshness-check");
@@ -107,7 +110,7 @@ describe("createPhaseTracker", () => {
     expect(skippedNames).toContain("self-assessment");
   });
 
-  it("skips all registry phases via skipPhase (idempotent) when all phases are emitted", async () => {
+  it("back-fills all registry phases via markPhaseUnreported (idempotent) when all phases are emitted", async () => {
     const tracker = createPhaseTracker(mockStateService as any);
 
     // Emit all 14 pr-merge phases
@@ -151,7 +154,7 @@ describe("createPhaseTracker", () => {
     // the phases already exist so skipPhase is a no-op for each one, but
     // the mock always resolves so we see all 14 calls.
     await vi.waitFor(() => {
-      expect(mockStateService.skipPhase).toHaveBeenCalledTimes(14);
+      expect(mockStateService.markPhaseUnreported).toHaveBeenCalledTimes(14);
     });
   });
 
@@ -164,7 +167,7 @@ describe("createPhaseTracker", () => {
     // Wait for enqueued work
     await vi.waitFor(() => {
       // All 14 pr-merge phases should be skipped
-      expect(mockStateService.skipPhase).toHaveBeenCalledTimes(14);
+      expect(mockStateService.markPhaseUnreported).toHaveBeenCalledTimes(14);
     });
 
     expect(mockStateService.completePhase).not.toHaveBeenCalled();
@@ -251,7 +254,7 @@ describe("createPhaseTracker", () => {
       tracker.completeStagePhases("feature-validate" as PipelineStage);
 
       await vi.waitFor(() => {
-        expect(mockStateService.skipPhase).toHaveBeenCalled();
+        expect(mockStateService.markPhaseUnreported).toHaveBeenCalled();
       });
 
       // pr-merge's open phase is untouched: nothing closed it, and nothing

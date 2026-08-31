@@ -140,7 +140,14 @@ export type ProactiveEscalationRecord = z.infer<typeof ProactiveEscalationRecord
 
 export const StagePhaseSchema = z.object({
   name: z.string().min(1),
-  status: z.enum(["pending", "running", "complete", "skipped", "failed"]),
+  /**
+   * `skipped` — the stage decided not to run this phase.
+   * `unreported` — the stage ended having never reported it (#1246). The
+   * end-of-stage back-fill can only ever observe the second, and writing it
+   * as the first told operators that fourteen phases were deliberately
+   * skipped on a run whose gate record and session log prove two of them ran.
+   */
+  status: z.enum(["pending", "running", "complete", "skipped", "unreported", "failed"]),
   started_at: z.string().datetime().optional(),
   completed_at: z.string().datetime().optional(),
 });
