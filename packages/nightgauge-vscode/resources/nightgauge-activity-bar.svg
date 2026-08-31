@@ -2,12 +2,17 @@
   <!--
     Activity-bar glyph: the Nightgauge dial, needle in the go zone.
     VS Code themes this icon, so it stays MONOCHROME. Geometry matches the
-    full mark (240-degree sweep, needle at 12deg) but graduations are dropped
+    full mark (240-degree sweep, needle at 30deg) but graduations are dropped
     and the needle is a stroke - a filled taper reads as a smudge at 24px.
   -->
+  <g data-ng-role="dial" data-cx="12" data-cy="13.4" data-axis-deg="30" data-target-x="18.67" data-target-y="9.55" data-needle-tip-x="18.67" data-needle-tip-y="9.55">
   <g stroke="#c5c5c5" fill="none" stroke-linecap="round">
     <path d="M 5.33 17.25 A 7.7 7.7 0 1 1 18.67 17.25" stroke-width="2.2"/>
-    <path d="M 12 13.4 L 17.48 12.24" stroke-width="2.3"/>
+    <path d="M 12 13.4 L 18.67 9.55" stroke-width="2.3"/>
   </g>
   <circle cx="12" cy="13.4" r="2" fill="#c5c5c5"/>
+  <g data-ng-role="target-star" data-cx="18.67" data-cy="9.55">
+    <path d="M 18.67 7.55 Q 19.34 8.88 20.52 9.55 Q 19.34 10.22 18.67 11.4 Q 18 10.22 16.82 9.55 Q 18 8.88 18.67 7.55 Z" fill="#c5c5c5" stroke="#c5c5c5" stroke-width="0.22" stroke-linejoin="round" opacity="1"/>
+  </g>
+  </g>
 </svg>
