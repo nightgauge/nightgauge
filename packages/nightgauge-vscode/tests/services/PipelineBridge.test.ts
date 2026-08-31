@@ -333,6 +333,7 @@ describe("PipelineBridge — error classification in stageResult (Issue #2573)",
       startPhase: vi.fn().mockResolvedValue(undefined),
       completePhase: vi.fn().mockResolvedValue(undefined),
       skipPhase: vi.fn().mockResolvedValue(undefined),
+      markPhaseUnreported: vi.fn().mockResolvedValue(undefined),
     };
 
     const outputWindow = {

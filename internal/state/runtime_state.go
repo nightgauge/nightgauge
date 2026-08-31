@@ -384,7 +384,16 @@ type PhaseRecord struct {
 	// "abandoned" is a phase the stage got past without ever completing (#1009):
 	// it sat "running" for twenty-four minutes and the stage then finished, so
 	// leaving it running told every reader the run was stuck there.
-	Status      string     `json:"status"` // "running" | "complete" | "skipped" | "failed" | "abandoned"
+	//
+	// "unreported" (#1246) is the honest end-of-stage back-fill: the stage
+	// finished having never said anything about this phase. That is NOT the
+	// same claim as "skipped", which asserts the stage decided not to run it.
+	// The back-fill used to write "skipped" for both, so a feature-dev that
+	// demonstrably ran Testing and Write Dev Context reported them as
+	// deliberate skips — the phase markers are unconditional in the skill, and
+	// the model simply emits them in only ~11% of runs. A reader cannot act on
+	// a distinction the record does not draw.
+	Status      string     `json:"status"` // "running" | "complete" | "skipped" | "unreported" | "failed" | "abandoned"
 	StartedAt   time.Time  `json:"startedAt"`
 	CompletedAt *time.Time `json:"completedAt,omitempty"`
 }
@@ -1221,6 +1230,38 @@ func (rs *RuntimeState) SkipPhase(stage PipelineStage, name string, index, total
 		Index:       index,
 		Total:       total,
 		Status:      "skipped",
+		StartedAt:   now,
+		CompletedAt: &now,
+	})
+}
+
+// UnreportedPhase records a phase the stage never reported (#1246).
+//
+// Distinct from SkipPhase by design. A skip is a decision the stage made and
+// can defend; "unreported" is an absence of evidence, which is what the
+// end-of-stage back-fill actually observes. Collapsing the two let the tree
+// state that fourteen phases were skipped on a run whose own gate record and
+// session log prove two of them ran.
+//
+// Same append-and-idempotent shape as SkipPhase: terminal on arrival, keyed on
+// stage+name so a re-notification cannot double-count, and it never overwrites
+// a phase that already has a real outcome — an existing record always wins,
+// because it carries evidence this one does not.
+func (rs *RuntimeState) UnreportedPhase(stage PipelineStage, name string, index, total int) {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	for i := range rs.PhaseHistory {
+		if rs.PhaseHistory[i].Stage == stage && rs.PhaseHistory[i].Name == name {
+			return
+		}
+	}
+	now := time.Now()
+	rs.PhaseHistory = append(rs.PhaseHistory, PhaseRecord{
+		Stage:       stage,
+		Name:        name,
+		Index:       index,
+		Total:       total,
+		Status:      "unreported",
 		StartedAt:   now,
 		CompletedAt: &now,
 	})

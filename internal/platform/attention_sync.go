@@ -378,10 +378,25 @@ func (s *AttentionSyncService) online() bool {
 	return s != nil && s.client != nil && s.client.IsOnline()
 }
 
-// fingerprint is a stable content hash of a request. Any change — a lifecycle
-// transition or an in-place re-raise payload edit — changes it, so the watermark
-// diff pushes exactly the requests that actually changed.
+// fingerprint is a stable content hash of a request's MATERIAL state. Any
+// change an operator could act on — a lifecycle transition, an in-place
+// re-raise payload edit, a moved standing fingerprint — changes it, so the
+// watermark diff pushes exactly the requests that actually changed.
+//
+// `expires_at` is deliberately COARSENED to its calendar day rather than
+// hashed verbatim (#1244). A standing condition that is still true has its
+// expiry rewritten to now+StandingExpiry on EVERY sweep observation
+// (attention.Store.prepareObservations — "a condition that is still true must
+// never age out"), even when the sweep reports `refreshed`, i.e. the domain
+// fingerprint did not move and nothing material happened. Hashing that
+// nanosecond timestamp made every such no-op look dirty, so every standing
+// card re-pushed on every sweep, the platform mirrored it as an `updated` row,
+// and the dashboard's Live Activity printed a content-free `attention.event`
+// row per card per sweep — 7k of them in one journal. Day-bucketing keeps the
+// mirror's expiry within a day of the local value (nothing platform-side acts
+// on it; the local store is the authority) while collapsing the churn.
 func fingerprint(req attention.DecisionRequest) string {
+	req.ExpiresAt = expiryDay(req.ExpiresAt)
 	data, err := json.Marshal(req)
 	if err != nil {
 		// Fall back to a per-call unique value so a marshal failure forces a push
@@ -390,4 +405,15 @@ func fingerprint(req attention.DecisionRequest) string {
 	}
 	sum := sha256.Sum256(data)
 	return fmt.Sprintf("%x", sum[:])
+}
+
+// expiryDay truncates an RFC3339Nano expiry to its calendar day. An
+// unparseable value is returned verbatim — a timestamp this function cannot
+// read is not one it may claim is unchanged.
+func expiryDay(ts string) string {
+	t, err := time.Parse(time.RFC3339Nano, ts)
+	if err != nil {
+		return ts
+	}
+	return t.UTC().Format("2006-01-02")
 }

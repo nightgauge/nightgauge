@@ -13,7 +13,13 @@ import * as vscode from "vscode";
 import type { PipelineStage } from "@nightgauge/sdk";
 import { BaseTreeItem } from "./BaseTreeItem";
 
-export type PhaseStatus = "pending" | "running" | "complete" | "skipped" | "failed";
+/**
+ * `skipped` — the stage decided not to run this phase.
+ * `unreported` — the stage ended having never reported it (#1246). Distinct
+ * because the two carry opposite information about intent, and the
+ * end-of-stage back-fill can only ever observe the second.
+ */
+export type PhaseStatus = "pending" | "running" | "complete" | "skipped" | "unreported" | "failed";
 
 interface PhaseDisplayConfig {
   icon: string;
@@ -25,8 +31,25 @@ const PHASE_STATUS_CONFIG: Record<PhaseStatus, PhaseDisplayConfig> = {
   running: { icon: "sync~spin" },
   complete: { icon: "check", iconColor: "testing.iconPassed" },
   skipped: { icon: "debug-step-over" },
+  // Deliberately dimmer and distinct from the skip glyph: "no telemetry" must
+  // not read as a decision the stage made (#1246).
+  unreported: { icon: "question", iconColor: "disabledForeground" },
   failed: { icon: "error", iconColor: "testing.iconFailed" },
 };
+
+/**
+ * Runtime-state files written before #1246 carry `status: "skipped"` for
+ * back-filled phases, and an unknown status would index PHASE_STATUS_CONFIG to
+ * undefined and throw on `.iconColor` while rendering. Normalise at the read
+ * boundary rather than keeping a compat branch in the type: a status this
+ * component does not know renders as unreported, which is the honest reading
+ * of "we cannot tell what happened here".
+ */
+export function normalizePhaseStatus(status: string | undefined): PhaseStatus {
+  return status !== undefined && status in PHASE_STATUS_CONFIG
+    ? (status as PhaseStatus)
+    : "unreported";
+}
 
 /**
  * Convert a kebab-case phase name to Title Case.
@@ -60,7 +83,7 @@ export class PhaseTreeItem extends BaseTreeItem {
 
     this.phaseName = name;
     this.stage = stage;
-    this.status = status;
+    this.status = normalizePhaseStatus(status);
 
     this.updateDisplay();
   }

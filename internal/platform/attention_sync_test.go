@@ -494,3 +494,78 @@ func TestAttentionSync_RecoversOnceServerAccepts(t *testing.T) {
 		t.Errorf("unacked[%s] = %d after acceptance, want 0", id, misses)
 	}
 }
+
+// TestAttentionSync_StandingRefreshDoesNotRePush is the regression guard for
+// the refresh-churn bug (#1244): a standing condition that is still
+// true has its `expires_at` rewritten to now+StandingExpiry on every sweep
+// observation, even when the sweep reports `refreshed` (nothing material
+// moved). Hashing that nanosecond timestamp made every no-op observation look
+// dirty, so every standing card re-pushed on every sweep and the dashboard
+// printed a content-free `attention.event` row for each one.
+//
+// The test moves ONLY `expires_at`, by an hour, within the same UTC day — the
+// exact shape of a no-op refresh — and asserts no second push. It then moves
+// the expiry across a day boundary and moves the body, and asserts each is
+// still delivered: this suppresses churn, it does not stop syncing.
+func TestAttentionSync_StandingRefreshDoesNotRePush(t *testing.T) {
+	var hits int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&hits, 1)
+		echoAcceptAll(w, r)
+	}))
+	defer srv.Close()
+
+	svc := NewAttentionSyncService(onlineClient(t, srv.URL))
+	lister := &fakeLister{}
+
+	// A standing card whose expiry sits mid-day, so an hour's refresh cannot
+	// cross the day boundary and the first assertion tests what it claims to.
+	base := time.Date(2026, 8, 31, 6, 0, 0, 0, time.UTC)
+	req := sampleRequest("dr_01912d3e-7f4a-7b1e-8c2a-0000000000ff", attention.StateOpen)
+	req.Standing = true
+	req.Fingerprint = "uncovered:octocat/acme-web"
+	req.ExpiresAt = base.Format(time.RFC3339Nano)
+	lister.set([]attention.DecisionRequest{req})
+
+	if err := svc.SyncAll(context.Background(), lister); err != nil {
+		t.Fatalf("SyncAll #1: %v", err)
+	}
+	if got := atomic.LoadInt32(&hits); got != 1 {
+		t.Fatalf("first sweep pushes = %d, want 1", got)
+	}
+
+	// A `refreshed` observation: same domain fingerprint, same payload, expiry
+	// pushed out an hour. Nothing an operator could act on has changed.
+	refreshed := req
+	refreshed.ExpiresAt = base.Add(time.Hour).Format(time.RFC3339Nano)
+	lister.set([]attention.DecisionRequest{refreshed})
+	if err := svc.SyncAll(context.Background(), lister); err != nil {
+		t.Fatalf("SyncAll #2: %v", err)
+	}
+	if got := atomic.LoadInt32(&hits); got != 1 {
+		t.Fatalf("a no-op standing refresh re-pushed: pushes = %d, want 1", got)
+	}
+
+	// Expiry crossing into the next day still syncs, so the mirror's copy never
+	// drifts more than a day from the local authority.
+	nextDay := refreshed
+	nextDay.ExpiresAt = base.Add(24 * time.Hour).Format(time.RFC3339Nano)
+	lister.set([]attention.DecisionRequest{nextDay})
+	if err := svc.SyncAll(context.Background(), lister); err != nil {
+		t.Fatalf("SyncAll #3: %v", err)
+	}
+	if got := atomic.LoadInt32(&hits); got != 2 {
+		t.Fatalf("expiry crossing a day boundary was suppressed: pushes = %d, want 2", got)
+	}
+
+	// A genuine content change on an unchanged expiry still syncs.
+	edited := nextDay
+	edited.Body = "The breaker tripped again, with a new blocker."
+	lister.set([]attention.DecisionRequest{edited})
+	if err := svc.SyncAll(context.Background(), lister); err != nil {
+		t.Fatalf("SyncAll #4: %v", err)
+	}
+	if got := atomic.LoadInt32(&hits); got != 3 {
+		t.Fatalf("a material payload edit was suppressed: pushes = %d, want 3", got)
+	}
+}
