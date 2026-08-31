@@ -126,3 +126,54 @@ func TestPhaseTransition_StartAndCompleteStillWork(t *testing.T) {
 		t.Errorf("implementation = %+v, want a completed record", found)
 	}
 }
+
+// TestPhaseTransition_UnreportedReachesTheRecord pins the wire half of #1246.
+//
+// The extension's end-of-stage back-fill now distinguishes "the stage decided
+// not to run this" from "the stage ended without ever saying". The split is
+// worth nothing unless the durable record can carry it: a server that dropped
+// "unreported" — or worse, quietly mapped it onto "skipped" — would leave the
+// run record making the same false claim the tree used to make, which is the
+// exact asymmetry #1026 set out to end.
+func TestPhaseTransition_UnreportedReachesTheRecord(t *testing.T) {
+	root := t.TempDir()
+	s := NewServer(nil, WithWorkspaceRoot(root))
+
+	const (
+		repo  = "acme/platform"
+		issue = 1246
+	)
+	runID := newTestRunID()
+
+	mustCall(t, s, "pipeline.notifyStageTransition", PipelineNotifyStageTransitionParams{
+		Repo: repo, IssueNumber: issue, Stage: "feature-dev", Status: "running", RunID: runID,
+	})
+
+	// A real skip and an unreported back-fill, side by side.
+	mustCall(t, s, "pipeline.notifyPhaseTransition", PipelineNotifyPhaseTransitionParams{
+		Repo: repo, IssueNumber: issue, Stage: "feature-dev", Name: "e2e-testing",
+		Index: 10, Total: 18, EventType: "skip", RunID: runID,
+	})
+	mustCall(t, s, "pipeline.notifyPhaseTransition", PipelineNotifyPhaseTransitionParams{
+		Repo: repo, IssueNumber: issue, Stage: "feature-dev", Name: "testing",
+		Index: 9, Total: 18, EventType: "unreported", RunID: runID,
+	})
+
+	rt, _ := s.currentRunForIssue(repo, issue)
+	if rt == nil {
+		t.Fatal("no runtime registered for the run")
+	}
+
+	byName := map[string]string{}
+	for _, p := range rt.rs.PhaseHistory {
+		byName[p.Name] = p.Status
+	}
+	if byName["testing"] != "unreported" {
+		t.Errorf("testing = %q, want unreported — a back-fill is an absence of evidence, not a decision",
+			byName["testing"])
+	}
+	if byName["e2e-testing"] != "skipped" {
+		t.Errorf("e2e-testing = %q, want skipped — a deliberate skip must stay distinguishable",
+			byName["e2e-testing"])
+	}
+}

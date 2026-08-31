@@ -145,19 +145,31 @@ export function createPhaseTracker(stateService: PipelineStateService): PhaseTra
         await stateService.completePhase(stage, prev.name, total);
       }
 
-      // Auto-skip every registry phase not already recorded in state.json.
-      // skipPhase is idempotent: it returns early if the phase already
-      // exists with any status (complete, running, or skipped), so calling
-      // it for all registry phases is safe.
+      // Back-fill every registry phase not already recorded in state.json as
+      // UNREPORTED — not skipped (#1246).
+      //
+      // What this loop observes is silence: the stage ended and nothing ever
+      // reported this phase. It used to write that down as "skipped", which
+      // asserts something entirely different — that the stage decided not to
+      // run it. Every one of feature-dev's 18 phase markers is unconditional
+      // in the skill; the model emits them in ~11% of runs. So the silence is
+      // a telemetry fact, never an intent fact, and the tree was reporting
+      // fourteen deliberate skips on runs whose gate record (handoff_source=
+      // authored) and session log (flutter test, twice) prove otherwise.
+      //
+      // markPhaseUnreported is idempotent: it returns early if the phase
+      // already exists with any status (complete, running, skipped), so a
+      // phase that DID report keeps its real outcome and only genuine gaps
+      // are filled.
       //
       // Previously this used a seenPhases set to skip only phases the
       // stream handler never detected. But if a phase marker was emitted
       // (putting it in seenPhases) yet startPhase failed to persist it to
       // state.json, the phase would be absent from both the seen set bypass
       // and the phases array — resulting in a permanent gap in the count.
-      // Calling skipPhase unconditionally closes that gap. Issue #1232
+      // Calling it unconditionally closes that gap. Issue #1232
       for (let i = 0; i < registryPhases.length; i++) {
-        await stateService.skipPhase(stage, registryPhases[i].name, total, i);
+        await stateService.markPhaseUnreported(stage, registryPhases[i].name, total, i);
       }
     });
   }

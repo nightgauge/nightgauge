@@ -32,6 +32,13 @@ function makeStateService() {
       skipPhase: vi.fn(async (stage: string, name: string, total: number, index?: number) => {
         skipped.push({ stage, name, total, index });
       }),
+      // #1246: the end-of-stage back-fill records "unreported", not "skipped".
+      // This test is about the INDEX the back-fill records, which is unchanged.
+      markPhaseUnreported: vi.fn(
+        async (stage: string, name: string, total: number, index?: number) => {
+          skipped.push({ stage, name, total, index });
+        }
+      ),
     },
   };
 }

@@ -3887,6 +3887,21 @@ func (s *Server) registerMethods() {
 				"index":       p.Index,
 				"total":       p.Total,
 			})
+		case "unreported":
+			// #1246: the end-of-stage back-fill. Kept separate from "skip" so
+			// the durable record distinguishes a decision from an absence of
+			// evidence — a retro reading "skipped" for a phase that actually
+			// ran learns the opposite of the truth.
+			rt.UnreportedPhase(stage, p.Name, p.Index, p.Total)
+			s.Emit("phase.unreported", map[string]interface{}{
+				"repo":        p.Repo,
+				"issueNumber": p.IssueNumber,
+				"runId":       runID,
+				"stage":       p.Stage,
+				"name":        p.Name,
+				"index":       p.Index,
+				"total":       p.Total,
+			})
 		case "fail":
 			rt.FailPhase(stage, p.Name, p.Index, p.Total)
 			s.Emit("phase.fail", map[string]interface{}{
@@ -3904,7 +3919,7 @@ func (s *Server) registerMethods() {
 			// caller could not tell "recorded" from "silently discarded" — and
 			// that is exactly how a whole vocabulary went missing without any
 			// surface reporting a problem. Say so rather than answering ok.
-			return nil, fmt.Errorf("pipeline.notifyPhaseTransition: unknown eventType %q (want start|complete|skip|fail)", p.EventType)
+			return nil, fmt.Errorf("pipeline.notifyPhaseTransition: unknown eventType %q (want start|complete|skip|unreported|fail)", p.EventType)
 		}
 
 		return map[string]string{"status": "ok"}, nil

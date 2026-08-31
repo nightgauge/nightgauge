@@ -1450,6 +1450,67 @@ the registry — skills use this to ensure markers stay in sync with
 
 ---
 
+### Phase Status Vocabulary (#1246)
+
+A phase record carries one of five statuses, and two of them are easy to
+conflate — with real consequences, because a retro, a survival verdict and the
+tree all read the same record.
+
+| Status       | Claim                                                   | Producer                                                         |
+| ------------ | ------------------------------------------------------- | ---------------------------------------------------------------- |
+| `running`    | in flight                                               | `phase:start` marker, or inference                               |
+| `complete`   | observed to run and finish                              | marker/inference + stage end                                     |
+| `skipped`    | the stage **decided** not to run this phase             | a conditional phase; a deterministic execution path              |
+| `unreported` | the stage ended having **never said anything** about it | the end-of-stage back-fill in `phaseTracker.completeStagePhases` |
+| `failed`     | the phase errored                                       | `failPhase`                                                      |
+
+**`skipped` and `unreported` are not interchangeable.** The back-fill can only
+ever observe the second: it sweeps the registry at stage end and fills whatever
+has no record. Recording that as `skipped` asserts an intent the system never
+witnessed.
+
+This is not a hypothetical distinction. Every one of `feature-dev`'s 18 phase
+markers is unconditional in its SKILL.md — nothing gates them — but the markers
+are standalone `printf` calls in an edit-heavy stage, and the model emits them
+in roughly 11% of runs (118 of 1,063 recorded runs on the dogfood workspace).
+So the tree routinely showed 12-14 phases as deliberate skips. On issue #336 it
+reported `18/18 phases | complete` with `Testing` and `Write Dev Context`
+marked skipped, while that run's own gate record (`handoff_source=authored`)
+and session log (`flutter test`, twice) prove both ran.
+
+Three rules follow, and each is enforced by a regression test:
+
+1. **The back-fill writes `unreported`** (`phaseTracker.ts` →
+   `PipelineStateService.markPhaseUnreported` → IPC `eventType: "unreported"`
+   → `RuntimeState.UnreportedPhase`). It never overwrites a phase that already
+   carries a real outcome.
+2. **`unreported` is excluded from the completed count** and named separately
+   in the stage label (`4/18 phases · 14 unreported`). Counting unknowns as
+   done is how a run that observed four phases displayed `18/18`.
+3. **Rows render in registry-index order**, not arrival order
+   (`orderPhasesByRegistry`). `stageState.phases` is append-ordered, so #336
+   rendered `Sync Project Status` — index 15 of 18 — fourth, making the rows
+   beneath it look like they were skipped after it.
+
+### Phase Inference and Toolchain Coverage
+
+Because markers are unreliable, `phaseInference.ts` reconstructs progress from
+observed tool calls for the stages listed in `STAGE_RULES`. Its
+`isTestOrBuildCommand` matcher decides whether the Testing waypoint can fire at
+all — and since inference is the only phase producer in ~89% of runs, **a
+toolchain missing from that matcher does not degrade gracefully**: Testing
+reads `unreported` in every repository that uses it. That is why `Testing`
+never once fired in a Flutter or Dart repo before #1246, despite `flutter test`
+running on nearly every issue there. When adding a language or build tool to
+the workspace, add its test/build/analyze commands to that single matcher.
+
+Note that inference covers only `feature-dev` and `feature-planning`.
+Deterministic stages (`pr-merge`, `pr-create`, `issue-pickup`) run in the Go
+binary with no LLM to emit a marker and no inference rules, so they report no
+phase progress at all — see issue #1247.
+
+---
+
 ### Phase Registry Structure
 
 `PHASE_REGISTRY` in `packages/nightgauge-sdk/src/events/phaseRegistry.ts`

@@ -103,7 +103,13 @@ export interface StagePhase {
   name: string;
   index: number;
   total: number;
-  status?: "pending" | "running" | "complete" | "failed" | "skipped";
+  /**
+   * `skipped` means the stage DECIDED not to run this phase. `unreported`
+   * (#1246) means the stage ended having never said anything about it — the
+   * end-of-stage back-fill. They were one value until a feature-dev that
+   * demonstrably ran Testing and Write Dev Context reported both as skipped.
+   */
+  status?: "pending" | "running" | "complete" | "failed" | "skipped" | "unreported";
   started_at?: string;
   completed_at?: string;
   /**
@@ -1687,6 +1693,41 @@ export class PipelineStateService implements vscode.Disposable {
     total: number,
     registryIndex?: number
   ): Promise<void> {
+    return this.recordTerminalPhase(stage, phaseName, total, "skipped", registryIndex);
+  }
+
+  /**
+   * Record a phase the stage never reported (#1246).
+   *
+   * This is the end-of-stage back-fill, and it is deliberately NOT
+   * `skipPhase`. A skip asserts the stage decided not to run the phase; this
+   * asserts only that nothing was ever said about it. feature-dev's markers
+   * are unconditional in the skill and the model emits them in ~11% of runs,
+   * so the back-fill's silence is about telemetry, never about intent —
+   * writing "skipped" for it told operators fourteen phases were deliberately
+   * skipped on a run whose gate record and session log prove two of them ran.
+   */
+  async markPhaseUnreported(
+    stage: string,
+    phaseName: string,
+    total: number,
+    registryIndex?: number
+  ): Promise<void> {
+    return this.recordTerminalPhase(stage, phaseName, total, "unreported", registryIndex);
+  }
+
+  /**
+   * Shared body for the terminal, append-only phase outcomes (skip /
+   * unreported). Idempotent on name: a phase that already carries ANY status
+   * wins, because it carries evidence this back-fill does not.
+   */
+  private async recordTerminalPhase(
+    stage: string,
+    phaseName: string,
+    total: number,
+    status: "skipped" | "unreported",
+    registryIndex?: number
+  ): Promise<void> {
     if (!this._lastState) return;
     const stageState = this._lastState.stages[stage];
     if (!stageState) return;
@@ -1696,7 +1737,7 @@ export class PipelineStateService implements vscode.Disposable {
       name: phaseName,
       index: registryIndex ?? phases.length,
       total,
-      status: "skipped",
+      status,
     });
     stageState.phases = phases;
     stageState.total_phases = total;
@@ -1705,7 +1746,13 @@ export class PipelineStateService implements vscode.Disposable {
     // #1026: this used to stop here. Local state and the view knew about the
     // skip; the durable record never did, so the GUI and the run record could
     // not agree — which is the disagreement the epic set out to end.
-    this.notifyPhaseTransition(stage, phaseName, registryIndex ?? phases.length - 1, total, "skip");
+    this.notifyPhaseTransition(
+      stage,
+      phaseName,
+      registryIndex ?? phases.length - 1,
+      total,
+      status === "skipped" ? "skip" : "unreported"
+    );
   }
 
   async failPhase(stage: string, phaseName: string, error: string, total: number): Promise<void> {
@@ -1745,7 +1792,7 @@ export class PipelineStateService implements vscode.Disposable {
     phaseName: string,
     index: number,
     total: number,
-    eventType: "skip" | "fail"
+    eventType: "skip" | "unreported" | "fail"
   ): void {
     const runId = this.wireIdentityOrSkip("pipeline.notifyPhaseTransition", stage);
     if (runId === null) return;

@@ -33,6 +33,7 @@ function makeStateService() {
         completed.push(name);
       }),
       skipPhase: vi.fn(async () => {}),
+      markPhaseUnreported: vi.fn(async () => {}),
     },
   };
 }
