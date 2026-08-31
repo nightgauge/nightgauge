@@ -1692,8 +1692,10 @@ export async function initializeServices(
         // Issue #2245: health snapshots missing for concurrent pipeline runs.
         dashboard
           .reloadHistory()
-          .then(() => dashboard.recordHealthSnapshotForRun(issueNumber, costUsd))
-          .then(() => logger.info("Health snapshot recorded", { issueNumber, costUsd }))
+          // `repoSlug` is the slot's own repo — the whole point of a concurrent
+          // slot is that it may not be the dashboard's (#1231, #2245).
+          .then(() => dashboard.recordHealthSnapshotForRun(issueNumber, costUsd, repoSlug))
+          .then(() => logger.info("Health snapshot recorded", { issueNumber, costUsd, repoSlug }))
           .catch(() => {
             // Non-critical
           });
@@ -1773,11 +1775,12 @@ export async function initializeServices(
         if (costUsd > 0) {
           dashboard
             .reloadHistory()
-            .then(() => dashboard.recordHealthSnapshotForRun(issueNumber, costUsd))
+            .then(() => dashboard.recordHealthSnapshotForRun(issueNumber, costUsd, repoSlug))
             .then(() =>
               logger.info("Health snapshot recorded (failed run)", {
                 issueNumber,
                 costUsd,
+                repoSlug,
               })
             )
             .catch(() => {
@@ -2693,8 +2696,8 @@ export async function initializeServices(
       get dashboardHistoryReloader() {
         return dashboardHistoryReloader;
       },
-      recordHealthSnapshotForRun: (issueNumber, costUsd) =>
-        dashboard.recordHealthSnapshotForRun(issueNumber, costUsd),
+      recordHealthSnapshotForRun: (issueNumber, costUsd, repo, runId) =>
+        dashboard.recordHealthSnapshotForRun(issueNumber, costUsd, repo, runId),
       get telemetryUploaderService() {
         return telemetryUploaderService;
       },

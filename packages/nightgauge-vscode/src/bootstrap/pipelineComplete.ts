@@ -43,7 +43,12 @@ export interface GoPipelineCompleteDeps {
   /** Refreshes the dashboard's history view; absent until the Dashboard exists. */
   dashboardHistoryReloader?: (() => Promise<void>) | null;
   /** `Dashboard.recordHealthSnapshotForRun`, bound to the dashboard singleton. */
-  recordHealthSnapshotForRun: (issueNumber: number, costUsd: number) => Promise<void> | void;
+  recordHealthSnapshotForRun: (
+    issueNumber: number,
+    costUsd: number,
+    repo?: string,
+    runId?: string
+  ) => Promise<void> | void;
   /** Telemetry uploader; absent until it is constructed (or when disabled). */
   telemetryUploaderService?: { onPipelineCompleted(): void } | null;
   /** Optional structured logger. */
@@ -77,7 +82,11 @@ export async function handleGoPipelineComplete(
 
   try {
     await deps.dashboardHistoryReloader?.();
-    await deps.recordHealthSnapshotForRun(d.issueNumber, d.totalCostUSD);
+    // `d.repo` and `d.runId` were on the payload all along and were logged but
+    // never forwarded, so the snapshot was scored against the dashboard's
+    // history and filed under the dashboard's path however cross-repo the run
+    // was (#1231).
+    await deps.recordHealthSnapshotForRun(d.issueNumber, d.totalCostUSD, d.repo, d.runId);
     deps.logger?.info("Pipeline complete: dashboard refreshed", {
       repo: d.repo,
       runId: d.runId,
