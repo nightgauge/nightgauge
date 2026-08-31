@@ -234,6 +234,7 @@ record may carry both fields, neither, or only one.
 | `dev_produced_no_changes`    | feature-dev's gate found the stage workspace empty despite a truthful dev context — work landed where the pipeline never reads (Issue #202)                                                                                                                                                                       |
 | `adapter_auth_failed`        | Pipeline-start adapter auth gate refused to launch: probe timed out after retry, or the adapter CLI is logged out (Issue #312) — retryable infra                                                                                                                                                                  |
 | `no_changes_produced`        | pr-create's deterministic fallback confirmed zero commits ahead of base — genuinely nothing to open a PR for (Issue #317) — planning/scope                                                                                                                                                                        |
+| `not_pipeline_actionable`    | A stage declared the issue's deliverable is not producible by any pipeline lap — counsel sign-off, an operator-only credential, a human decision (Issue #1241) — not a failure and not a deferral                                                                                                                 |
 | `validation_failed`          | feature-validate honestly failed its quality gates (`validation_status="failed"`) — organic implementation failure (Issue #326)                                                                                                                                                                                   |
 | `branch_forked`              | The run's branch diverged from its remote; every push is rejected non-fast-forward (Issue #163) — unrecoverable by retry, needs human action                                                                                                                                                                      |
 | `abandoned_commit`           | A stage upstream of pr-create was killed/crashed after committing valid, unmerged work (clean tree, ahead of base) — the `abandoned-commit-recoverable` action matched but could neither self-heal nor set up a resume (Issue #191)                                                                               |
@@ -365,6 +366,54 @@ both classifiers: the scheduler wraps every `KindNoOp` gate reason in a
 swallows the narrower one on every text-classified path while the gate path
 reports it — the two disagreeing about one failure.
 
+`not_pipeline_actionable` (Issue #1241) is the third member of that family, and
+the one that says the quiet part: **the issue was never pipeline work.** It is
+raised by a STAGE'S OWN DECLARATION — a `NOT_PIPELINE_ACTIONABLE` feedback
+signal in `planning-{N}.json` or `dev-{N}.json` — not by an inference about an
+empty tree, and it is neither a failure nor a deferral:
+
+|                | `blocked_dependency` (#305) | `no_changes_produced` (#317) | `not_pipeline_actionable` (#1241) |
+| -------------- | --------------------------- | ---------------------------- | --------------------------------- |
+| What is true   | Not ready **yet**           | Human-only, discovered late  | Human-only, **declared**          |
+| What unblocks  | The blocker closing         | (n/a — it already failed)    | A person doing the thing          |
+| Re-dispatched? | Yes, on blocker close       | Yes — hence the repeat spend | **No.** Labelled and parked       |
+| Raised by      | The pickup dependency check | pr-create's create fallback  | The stage that read the issue     |
+
+The routing follows from "nothing here is defective": no
+`LifetimeIssueFailures` increment, no cascade-breaker feed, no queue pause, and
+— unlike every transient kind — **no retry and no board revert to Ready**. A
+transient failure is re-dispatched because the next attempt can differ; this one
+cannot, so re-queuing buys the identical verdict at the identical price forever.
+The run instead applies the `owner-action` label (the sole default entry of
+`autonomous.exclude_labels`, excluded by the candidate filter since #317), parks
+the row in Backlog, writes the durable blocked finding, comments on the issue
+and raises the Action Center card. The way back in is a human removing the
+label.
+
+**Ordered ahead of `dev_produced_no_changes` and `premature_turn_end` in both
+classifiers**, because it arrives through them. A stage that correctly refuses
+an unimplementable issue leaves an empty workspace, the gate fires its `KindNoOp`
+verdict, and the scheduler wraps that in the `premature turn end:` envelope — so
+all three rules match the same text, and the two later ones name an AGENT
+failure. That is precisely what happened on the specimen run: the specimen run — a privacy-policy legal review awaiting counsel, was dispatched as
+ordinary `type:docs` work; feature-dev refused it correctly and at length; the
+run was booked `dev_produced_no_changes`, and autonomous dispatch halted for the
+whole repository. The stage's own structured declaration outranks the gate's
+inference from an empty tree.
+
+A contributing defect is worth recording separately, because it is what made the
+refusal look like a lie: with no handoff written, the extension's deterministic
+fallback (`generateDeterministicDevContext`) synthesised one by diffing against
+the bare LOCAL `main`, which lagged `origin/main` by five squash-merges — so it
+stamped a handoff claiming six modified files belonging to other people's merged
+work. The Go gate's ground truth resolves `origin/main` first
+(`internal/ci.DefaultDiffBases`), found the tree empty, read the fabricated
+claim, and convicted the stage. Two base-ref resolvers disagreeing is the
+**dual-path drift** class below; here the disagreement was the difference
+between a gate passing and a repository halting. Both now walk the same ladder,
+and an unresolvable base records an EMPTY file list rather than inventing one
+from `HEAD~1`.
+
 `adapter_auth_failed` (Issue #312) is a **retryable-infra** kind. The
 pipeline-start auth gate probes each adapter's `claude auth status`; under a
 concurrent dispatch burst (autonomous restart fanning out N runs in seconds)
@@ -447,6 +496,7 @@ construction (`classifyTerminalKind` / `resolveTerminalKind` in
 | `dev_produced_no_changes`    | `agent` — the stage's delegation/turn-ending behavior, not the issue                        |
 | `adapter_auth_failed`        | `infrastructure` — probe starvation / credential state, not the issue                       |
 | `no_changes_produced`        | `agent` — planning/scope failure (dispatch-eligibility gap), not the model's implementation |
+| `not_pipeline_actionable`    | non-failure — the issue is misfiled, not defective; no lifetime-cap increment, no cascade   |
 | `validation_failed`          | `organic` — true implementation failure caught by feature-validate's own quality gate       |
 | `branch_forked`              | `infrastructure` — the pipeline's own orphaned push (or an operator's), not the code        |
 | `worktree_uncommitted`       | recoverable — work preserved, not counted as a failure                                      |
@@ -489,6 +539,7 @@ export const TerminalFailureKindSchema = z.enum([
   "adapter_auth_failed", // Issue #312
   "no_changes_produced", // Issue #317
   "validation_failed", // Issue #326
+  "not_pipeline_actionable", // Issue #1241
   "branch_forked", // Issue #163
 ]);
 

@@ -2414,6 +2414,28 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
       const isEnvironmentalFailure =
         (haltKind !== undefined && HALT_SKIP_ENVIRONMENTAL.has(haltKind)) ||
         /\b(?:session|usage)\s+limit\b/i.test(haltErrMsg);
+      // #1241: a stage DECLARED the issue is not pipeline work — its deliverable
+      // needs a human, so no lap of the pipeline can produce it. Halting the
+      // queue on that is the defect this kind was added to fix: discovering that
+      // ONE issue was misfiled says nothing about the rest of the repository's
+      // work, and the reported incident was exactly this — autonomous dispatch
+      // stopped for a whole repository because its single open issue was a legal
+      // review awaiting counsel.
+      //
+      // Keyed on the KIND rather than on `blocked.outOfScopeFinding` (which the
+      // branch above uses) on purpose: that flag is only true once the durable
+      // finding has actually landed on disk, so a run that classified itself
+      // correctly but could not write its artifact would still freeze the queue.
+      // The classification is the part that must not depend on a filesystem
+      // write.
+      if (haltKind === "not_pipeline_actionable") {
+        this.logger.info(
+          "Skipping haltQueueOnSlotFailure — the issue is not pipeline work; it is labelled owner-action and parked, and the rest of the queue is unaffected",
+          { failedIssue: slot.issueNumber }
+        );
+        return;
+      }
+
       if (isEnvironmentalFailure) {
         this.logger.info(
           "Skipping haltQueueOnSlotFailure — environmental failure auto-retries via cooldown",

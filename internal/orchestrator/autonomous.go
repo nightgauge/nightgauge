@@ -4813,6 +4813,48 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 			return
 		}
 
+		// #1241: the issue is not pipeline work at all. A stage read it and
+		// declared its deliverable unproducible by any lap of this pipeline —
+		// counsel sign-off, a credential only the operator holds, a decision
+		// reserved to a human.
+		//
+		// Nothing here is defective, so nothing here is punished: no
+		// LifetimeIssueFailures increment (the issue is fine, it is just not
+		// ours), no cascade-breaker feed (one misfiled issue says nothing about
+		// the factory's health), and no queue pause — the halt that reported
+		// this defect stopped every other issue in a repository on the strength
+		// of one legal review.
+		//
+		// AND NO RETRY, AND NO BOARD REVERT TO READY. This is where it parts
+		// company with every transient kind above, and the distinction is the
+		// whole point: a transient failure is re-dispatched because the next
+		// attempt can differ, and this one cannot. Re-queuing it buys the
+		// identical verdict at the identical price, forever. The issue is left
+		// exactly where the extension path parked it — labelled `owner-action`
+		// (which the candidate filter has excluded since #317) and moved to
+		// Backlog — so the way back in is a human removing the label, not a
+		// timer.
+		if terminalFailureKind == TerminalKindNotPipelineActionable {
+			detail := failureDetail
+			if detail == "" {
+				detail = "not pipeline-actionable — the issue's deliverable requires a human"
+			}
+			as.recordFailureLocked(repo, issue, title, now, detail)
+			log.Printf("autonomous: %s#%d not pipeline-actionable (non-failure) — left parked, no retry, no lifetime-cap increment, no pause — %s",
+				repo, issue, detail)
+			if as.safetyRails != nil {
+				as.safetyRails.RecordNonFaultOutcome(0)
+				safetySnap := as.safetyRails.State()
+				as.state.Safety = &safetySnap
+			}
+			as.persistStateLocked()
+			select {
+			case as.rescanCh <- struct{}{}:
+			default:
+			}
+			return
+		}
+
 		// Issue #3661: issue-closed is a recoverable non-failure. The issue was
 		// already closed (likely by the pipeline itself in a verify-and-close run)
 		// when issue-pickup started. Do NOT increment LifetimeIssueFailures, do

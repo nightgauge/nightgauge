@@ -349,6 +349,61 @@ branch alignment before implementing.
 
 ---
 
+#### Backstop: the issue is not pipeline work at all
+
+feature-planning is supposed to catch this and stop before you are dispatched
+(see its _Not-Pipeline-Actionable Signal_ section), but it can miss — and when
+it does, you are the last stage that can end the run honestly.
+
+If, having read the issue and the plan, the deliverable turns out to be
+something **no agent can produce** — a sign-off reserved to a licensed
+professional, an act only the operator can perform (rotate a credential, accept
+terms, pay an invoice, provision hardware), a physical-world step, or a decision
+that is the owner's to make — then there is no implementation to write, and
+writing one anyway would be a fabrication dressed as progress.
+
+**Stop here and declare it.** Do not implement, do not commit, and do not simply
+end your turn with an explanation: prose in a final message is invisible to
+every gate downstream. What the pipeline reads is the deliverable, so write
+`.nightgauge/pipeline/dev-{N}.json` with empty `files_changed` and this signal:
+
+```json
+{
+  "files_changed": { "created": [], "modified": [], "deleted": [] },
+  "feedback": [
+    {
+      "signal_type": "NOT_PIPELINE_ACTIONABLE",
+      "emitted_by_stage": "feature-dev",
+      "backtrack_target_stage": null,
+      "severity": "blocking",
+      "rationale": "<what the deliverable actually is, and why no code satisfies it>",
+      "evidence": ["<quoted issue text or owner comment that establishes it>"]
+    }
+  ]
+}
+```
+
+Ending the turn without this file is the failure mode that made #1241 worth
+fixing. In the specimen run, feature-dev refused a privacy-policy legal review,
+explained itself accurately and at length, and wrote nothing — so the gate saw
+only an empty workspace, the deterministic fallback stamped a handoff claiming
+six files it had picked up from a stale base ref, and the run was booked
+`dev_produced_no_changes`: an agent-class failure that halted the whole
+repository over a stage that had behaved correctly.
+
+With the signal, the same refusal ends the run `blocked`: the finding is
+persisted, the issue is commented and labelled `owner-action` so nothing
+dispatches it again, its board row parks in Backlog, an Action Center card goes
+to the operator, and no failure is charged to the issue or the pipeline.
+
+**The bar is "no agent could produce this artifact"** — not "this is hard",
+"the criteria are vague" (that is `ACCEPTANCE_CRITERIA_AMBIGUOUS`), or "this is
+bigger than planned" (`COMPLEXITY_UNDERESTIMATED`).
+
+@see Issue #1241
+
+---
+
 ### Phase 1.5: Knowledge Base Read
 
 ```bash

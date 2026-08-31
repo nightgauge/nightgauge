@@ -299,6 +299,38 @@ const REWINDABLE_SIGNAL_TYPES: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * Signal types that are TERMINAL by construction — they carry no rewind target
+ * because there is no stage to rewind to (#1241).
+ *
+ * `readFeedbackSignals` requires `backtrack_target_stage != null`, which is
+ * right for every type that existed when it was written: all of them ask for a
+ * lap of the pipeline, and one that names no target is malformed. It is exactly
+ * wrong for a signal whose whole content is "no lap of this pipeline can
+ * produce this deliverable" — such a signal would have to invent a rewind
+ * target it does not mean in order to be READ, and the reader would then drop
+ * it for being unrewindable if it named none. The one declaration the blocked
+ * fork exists to serve was the one declaration it could not receive.
+ *
+ * Membership here is the declared exemption from the target requirement.
+ * Nothing else changes: the signal still has to be `blocking`, and
+ * `notRewindableReason` still decides what happens to it.
+ */
+const TERMINAL_BLOCKING_SIGNAL_TYPES: ReadonlySet<string> = new Set(["NOT_PIPELINE_ACTIONABLE"]);
+
+/**
+ * The label that takes an issue out of the autonomous dispatch pool.
+ *
+ * It is the DEFAULT sole entry of `autonomous.exclude_labels`
+ * (internal/config.DefaultExcludeLabels), and the scheduler's candidate filter
+ * has honored it since #317. What never existed is a producer: the label was
+ * only ever applied by a human who already knew the issue was human-only, which
+ * is precisely the knowledge the dispatcher lacks. #1241 gives the pipeline a
+ * way to write down what it discovered, so the loop closes instead of
+ * rediscovering the same wall on the next tick.
+ */
+const OWNER_ACTION_LABEL = "owner-action";
+
+/**
  * Declared, machine-readable "this needs work outside the issue" marker in a
  * signal's `evidence` array (#1142) — the same convention the schema already
  * uses for provenance (`"operator-origin: action-center"`). It is deliberately
@@ -625,6 +657,13 @@ const SKILL_STAGES: PipelineStage[] = [
  * @see Issue #1143 — one shared stage → filename mapping
  */
 const FEEDBACK_EMITTING_STAGES: ReadonlySet<PipelineStage> = new Set<PipelineStage>([
+  // #1241 added feature-planning. It is the FIRST stage that reads the issue
+  // with a model, so it is the first that can tell an issue asking for code
+  // from one asking for a signature — and the only one that can say so before
+  // feature-dev's spend. In the specimen run planning ran to completion,
+  // handed dev a plan for a legal review, and dev burned another $0.25 to
+  // reach the verdict planning already had the evidence for.
+  "feature-planning",
   "feature-dev",
   "feature-validate",
 ]);
@@ -8678,7 +8717,13 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       return parsed.feedback.filter(
         (signal: PipelineFeedbackSignal) =>
           signal.severity === "blocking" &&
-          signal.backtrack_target_stage != null &&
+          // #1241: a rewind target is required of every signal that asks for a
+          // rewind, and of nothing else. TERMINAL_BLOCKING_SIGNAL_TYPES names
+          // the types whose meaning is "there is nowhere to rewind to"; see the
+          // declaration for why requiring a target of those made the blocked
+          // fork unreachable by its one intended producer.
+          (signal.backtrack_target_stage != null ||
+            TERMINAL_BLOCKING_SIGNAL_TYPES.has(signal.signal_type)) &&
           signal.signal_type !== "MODEL_ESCALATION_NEEDED"
       );
     } catch (err) {
@@ -8927,6 +8972,15 @@ export class HeadlessOrchestrator implements vscode.Disposable {
    * re-plan.
    */
   private notRewindableReason(signal: PipelineFeedbackSignal): string | null {
+    // #1241: checked FIRST and by type, because this is the one case where the
+    // reason a rewind cannot help is not "the blocker is elsewhere" but "the
+    // deliverable is not agent-producible at all". The two read alike in a log
+    // and route differently: an out-of-scope blocker clears when the other work
+    // lands, and this one never clears, so only this one earns the
+    // `owner-action` label that ends dispatch.
+    if (TERMINAL_BLOCKING_SIGNAL_TYPES.has(signal.signal_type)) {
+      return `${signal.signal_type} — the issue's deliverable cannot be produced by any pipeline stage; it needs a human`;
+    }
     const declared = (signal.evidence ?? []).find((entry) =>
       EXTERNAL_BLOCKER_EVIDENCE.test(String(entry))
     );
@@ -9085,7 +9139,98 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       stage,
     });
 
+    // #1241: for a HUMAN-ONLY issue the finding alone does not close the loop.
+    // It is a file under one machine's repo root, consulted by one pickup path;
+    // the issue itself is unchanged, so it stays Ready on the board and any
+    // other machine — or this one after a re-clone — dispatches it again. The
+    // label is the durable half.
+    if (TERMINAL_BLOCKING_SIGNAL_TYPES.has(signal.signal_type)) {
+      await this.markIssueOwnerAction(issueNumber, signal);
+    }
+
     return persisted;
+  }
+
+  /**
+   * Take a human-only issue out of the autonomous dispatch pool for good
+   * (#1241).
+   *
+   * The exclusion mechanism is not new — `autonomous.exclude_labels` defaults
+   * to `["owner-action"]` and the scheduler's candidate filter has honored it
+   * since #317. What was missing is a PRODUCER. The label could only be applied
+   * by a human who already knew the issue was human-only, and the dispatcher is
+   * precisely the party that does not know; so an issue nobody thought to label
+   * was dispatched, spent a planning and a dev stage discovering it was
+   * unimplementable, and — because the discovery was written nowhere the next
+   * tick reads — was eligible again immediately. the specimen run is the
+   * specimen: a legal review awaiting counsel sign-off, dispatched as ordinary
+   * `type:docs` work.
+   *
+   * Two effects, both best-effort and in this order:
+   *
+   *  1. **The label**, which is what actually ends dispatch. Created first in
+   *     case the repository has never used it (creation fails silently when it
+   *     exists), exactly as the architecture-approval path does.
+   *  2. **The board move to Backlog**, so a human reading the board sees the
+   *     issue parked rather than perpetually Ready. This is presentation: the
+   *     label is the enforcement, and a board that could not be reached must
+   *     not undo it.
+   *
+   * NEVER THROWS. This runs while the run's terminal outcome is being
+   * assembled; a GitHub hiccup here must not convert an honest `blocked`
+   * terminal into a crash. A failure is logged and the run still books
+   * `blocked` — the operator then has the finding, the comment and the card,
+   * and only loses the automatic exclusion.
+   */
+  private async markIssueOwnerAction(
+    issueNumber: number,
+    signal: PipelineFeedbackSignal
+  ): Promise<void> {
+    const cwd = this.getRunRepoRoot();
+    const repoArgs = this.ghRepoArgs();
+    try {
+      await execFileAsync(
+        "gh",
+        [
+          "label",
+          "create",
+          OWNER_ACTION_LABEL,
+          ...repoArgs,
+          "--color",
+          "d93f0b",
+          "--description",
+          "Human-only work — excluded from autonomous dispatch",
+        ],
+        { cwd, timeout: 15_000 }
+      ).catch(() => undefined);
+
+      await execFileAsync(
+        "gh",
+        ["issue", "edit", String(issueNumber), ...repoArgs, "--add-label", OWNER_ACTION_LABEL],
+        { cwd, timeout: 15_000 }
+      );
+
+      this.logger.info(
+        "Labelled the issue owner-action — it is human-only and leaves the dispatch pool (#1241)",
+        { issueNumber, signalType: signal.signal_type, rationale: signal.rationale }
+      );
+    } catch (err) {
+      this.logger.warn(
+        "Could not apply the owner-action label — the issue stays dispatch-eligible (#1241)",
+        { issueNumber, err: err instanceof Error ? err.message : String(err) }
+      );
+      return;
+    }
+
+    try {
+      await updateProjectItemStatus(issueNumber, "Backlog", cwd, this.logger, this.repoOverride);
+    } catch (err) {
+      // Presentation only — the label above already ended dispatch.
+      this.logger.warn("Could not park the human-only issue in Backlog (non-blocking, #1241)", {
+        issueNumber,
+        err: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 
   /**
@@ -11193,22 +11338,94 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         ) {
           const gateFail = await this.runPostConditionGate(stage, issueNumber);
           if (gateFail) {
+            // #1241: consult the deliverable BEFORE calling this a failure —
+            // the same fork the post-validate path has consulted since #1142,
+            // which this path never reached.
+            //
+            // A stage that correctly refuses an issue no agent can implement
+            // leaves an empty workspace, and an empty workspace is
+            // indistinguishable at the gate from a stage that promised work and
+            // produced none. The gate can only see the tree, so the tree's
+            // emptiness convicted both, and the honest refusal was booked
+            // `dev_produced_no_changes` — an AGENT-class terminal that
+            // increments the lifetime failure cap and halts the repository.
+            // That is what happened in the specimen run: feature-dev refused a
+            // legal review awaiting counsel, said so at length in its final
+            // message, and the repository stopped dispatching.
+            //
+            // The deliverable is where the difference is legible, so it is read
+            // here. A NOT_PIPELINE_ACTIONABLE signal routes into the
+            // first-class `blocked` terminal — durable finding, issue comment,
+            // Action Center card, `owner-action` label, no halt — and anything
+            // else falls through to the failure below exactly as before.
+            const gateDisposition = await this.evaluateFailedStageFeedback(
+              stage,
+              issueNumber,
+              callbacks
+            );
+            let gateError = gateFail.error;
+            let gateKind = gateFail.terminalKind;
+            if (gateDisposition.kind === "blocked") {
+              // RE-STAMP the terminal kind and the error text. The gate's own
+              // verdict is `dev_produced_no_changes` — accurate about the tree
+              // and wrong about the cause — and it is what the run record, the
+              // lifetime failure cap, the cascade breaker and the operator's
+              // halt card all read. Leaving it in place would book the
+              // first-class `blocked` outcome on one field while every routing
+              // decision still ran off an agent-class failure on another; the
+              // two would describe the same run differently, which is how a
+              // kind stops being trusted (docs/FAILURE_TAXONOMY.md).
+              //
+              // The `[not-pipeline-actionable]` marker is prefixed rather than
+              // substituted so the gate's evidence survives for whoever reads
+              // the record, and it is matched AHEAD of the gate's own kind in
+              // internal/terminalkind/table.json — see the ordering corpus row.
+              gateKind = "not_pipeline_actionable";
+              gateError = new Error(
+                `[not-pipeline-actionable] ${gateDisposition.reason} — ${gateFail.error.message}`
+              );
+              this.blockedTerminalState = {
+                blocker: `out-of-scope: ${gateDisposition.signal.signal_type}`,
+                remediation: gateDisposition.signal.rationale,
+                outOfScopeFinding: await this.recordOutOfScopeBlockedFinding(
+                  stage,
+                  issueNumber,
+                  gateDisposition.signal,
+                  gateDisposition.reason
+                ),
+              };
+              this.logger.error(
+                "Gate failed on a stage that declared the issue unworkable — ending BLOCKED, not failed (#1241)",
+                {
+                  issueNumber,
+                  stage,
+                  signalType: gateDisposition.signal.signal_type,
+                  reason: gateDisposition.reason,
+                }
+              );
+            }
+            // A `rewind` disposition is deliberately NOT honoured here. The
+            // post-validate site can rewind because it sits inside the stage
+            // loop with `stageIndex` in scope and a plan already on disk; this
+            // site is the generic gate check for issue-pickup / planning / dev,
+            // where a rewind target may be the stage that just failed. Only the
+            // terminal fork is served, and everything else halts as before.
             this.logger.error(
               "Post-condition gate failed — failing stage instead of recording false success",
-              { issueNumber, stage, error: gateFail.error.message }
+              { issueNumber, stage, error: gateError.message }
             );
             if (this.stateService) {
               try {
-                await this.stateService.failStage(stage, gateFail.error.message);
+                await this.stateService.failStage(stage, gateError.message);
               } catch {
                 // Non-critical — the break below still fails the pipeline.
               }
             }
             failedStage = stage;
-            gateTerminalKind = gateFail.terminalKind;
-            error = gateFail.error;
+            gateTerminalKind = gateKind;
+            error = gateError;
             if (earlySpinnerFired) {
-              this.eventDispatcher.onStageError(stage, gateFail.error);
+              this.eventDispatcher.onStageError(stage, gateError);
             }
             break;
           }

@@ -352,6 +352,24 @@
       "rationale": "ORDERING ROW. A breaching stage usually ALSO exits 0 with nothing in its own tree, so both matchers fire. Containment wins because it names the actual problem — work landed in a repository the run does not own — whereas premature_turn_end would tell the operator the agent did nothing."
     },
     {
+      "id": "not-pipeline-actionable-marker",
+      "input": "premature turn end: stage exited 0 with no state change (gate no-op): [not-pipeline-actionable] feature-dev declared the issue human-only: the deliverable is counsel sign-off, which no pipeline stage can produce",
+      "expected": "not_pipeline_actionable",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "feature-dev's NOT_PIPELINE_ACTIONABLE declaration, wrapped by the scheduler's no-op wrapper (#1241)",
+      "rationale": "The specimen run's shape. A stage that correctly refuses an unimplementable issue leaves an empty tree, so the gate fires its no-op verdict and the scheduler wraps it — the declaration has to survive that wrapper, which is what the marker is for."
+    },
+    {
+      "id": "order-not-pipeline-actionable-beats-dev-produced-no-changes",
+      "input": "premature turn end: stage exited 0 with no state change (gate no-op): [not-pipeline-actionable] the issue asks for a legal review; [dev-produced-no-changes] dev reported file changes but produced none in the stage workspace",
+      "expected": "not_pipeline_actionable",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "Composite of the stage's declaration and the gate's empty-tree verdict",
+      "rationale": "ORDERING ROW, and the one this change turns on. Both markers describe the SAME empty workspace and both rules match; they differ in who is at fault. dev_produced_no_changes is agent-class — it increments the lifetime failure cap and halts the repository — while the declaration says the stage did the right thing and the issue was misfiled. The stage's own structured declaration outranks the gate's inference from an empty tree, so this rule sits above it."
+    },
+    {
       "id": "order-dev-produced-no-changes-beats-premature-turn-end",
       "input": "premature turn end: [dev-produced-no-changes] feature-dev gate found a clean tree and a branch level with base",
       "expected": "dev_produced_no_changes",

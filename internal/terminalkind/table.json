@@ -203,6 +203,13 @@
       "why": "Write-containment breach (#129, classified in #230), emitted by the TS worktreeContainment check as `[stage:worktree-containment]`. Above the stage-behaviour rules because a breaching stage usually ALSO exits 0 cleanly, and premature_turn_end would otherwise claim it."
     },
     {
+      "id": "not-pipeline-actionable",
+      "kind": "not_pipeline_actionable",
+      "signal": false,
+      "clauses": [["[not-pipeline-actionable]"], ["not_pipeline_actionable"]],
+      "why": "A stage DECLARED the issue's deliverable is not producible by any pipeline lap (#1241) \u2014 counsel sign-off, an operator-only credential, a human decision. Ordered ahead of dev-produced-no-changes and premature-turn-end because it arrives THROUGH them: a correct refusal leaves an empty workspace, the gate reports its KindNoOp verdict, and the scheduler wraps that into a `premature turn end:` string carrying the `[dev-produced-no-changes]` marker. Both later rules match the same text and both name an AGENT failure \u2014 which is what convicted the honest refusal in the specimen run and halted the repository. Matching first is the point of the marker: the stage's own declaration outranks the gate's inference about an empty tree."
+    },
+    {
       "id": "dev-produced-no-changes",
       "kind": "dev_produced_no_changes",
       "signal": false,
