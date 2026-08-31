@@ -145,6 +145,23 @@ REQUIRED_CHECKS=$(printf '%s\n' "$CI_RESULT" | jq -r '.requiredCheckNames // [] 
 if [ -n "$REQUIRED_CHECKS" ]; then
   echo "[ci-gate] Waited on required checks: $REQUIRED_CHECKS"
 fi
+
+# #1248: checks that FAILED but are not required to merge. `--required-only`
+# computes .state from required checks alone — deliberately, since blocking on
+# an advisory job would hang the pipeline on any non-required check — so these
+# leave .state == SUCCESS and used to vanish entirely — two PRs in one
+# workspace repo merged minutes after a non-required end-to-end job went red,
+# with nothing anywhere to say so.
+#
+# This does NOT gate the merge. It makes the merge say what it proceeded past,
+# so the stage log and the run record carry it and an operator is not the only
+# detector.
+CI_ADVISORY_FAILED=$(printf '%s\n' "$CI_RESULT" | jq -r '.advisoryFailedNames // [] | join(", ")' 2>/dev/null)
+if [ -n "$CI_ADVISORY_FAILED" ]; then
+  echo "[ci-gate] WARNING: proceeding past FAILING non-required check(s): $CI_ADVISORY_FAILED"
+  echo "[ci-gate] These do not block the merge because they are absent from the branch's required-status-check list."
+  echo "[ci-gate] If one of them is meant to gate merges, add it to branch protection — the pipeline cannot infer intent from a check that runs but is not required."
+fi
 CI_FAILED_COUNT=$(printf '%s\n' "$CI_RESULT" | jq -r '.failed // 0')
 CI_PENDING_COUNT=$(printf '%s\n' "$CI_RESULT" | jq -r '.pending // 0')
 
