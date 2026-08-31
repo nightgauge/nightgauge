@@ -6782,6 +6782,24 @@ commit (Issue #317).
 - The excluded issue stays on the project board for a human to act on; it is
   not closed or relabeled.
 
+**The label has a producer now (Issue #1241).** The exclusion above only ever
+worked when a human already knew the issue was human-only and remembered to
+label it — which is precisely the knowledge the dispatcher lacks. An issue
+nobody thought to label was dispatched, spent a planning and a dev stage
+discovering it was unimplementable, and — because the discovery was written
+nowhere the next tick reads — became eligible again immediately.
+
+feature-planning and feature-dev can now declare it. When a stage finds the
+issue's deliverable is not producible by any agent (a sign-off reserved to a
+licensed professional, an operator-only credential, a physical act, a decision
+that is the owner's to make), it emits a `NOT_PIPELINE_ACTIONABLE` feedback
+signal in its deliverable. The run then ends `blocked` rather than failed, and
+applies this label itself — so the loop closes on the first discovery instead of
+repeating it. The row is parked in Backlog, the finding is persisted, the issue
+is commented, and an Action Center card goes to the operator.
+
+Removing the label is the way back in; nothing re-dispatches on a timer.
+
 ### Per-Repository Concurrency Cap
 
 The autonomous scheduler supports a per-repository ceiling on concurrent

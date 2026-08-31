@@ -503,6 +503,75 @@ pr-merge), running a lightweight close path instead.
 
 @see Issue #708
 
+### Not-Pipeline-Actionable Signal
+
+Some issues are filed on a board the pipeline reads, in a repository the
+pipeline works, and are still not pipeline work at all. Their deliverable is
+**not code, and not producible by any agent**:
+
+- a review, approval or sign-off reserved to a licensed professional (legal
+  counsel, an accountant, a medical or safety reviewer);
+- an act only an operator can perform — rotating a credential, accepting terms,
+  paying an invoice, registering a domain, provisioning hardware, filing with a
+  registrar;
+- a physical-world step (photograph a venue, mail a device, attend a meeting);
+- a decision that is the owner's to make and that no evidence in the repository
+  can settle.
+
+You are the FIRST stage that reads the issue with judgement, so you are the
+first that can tell these apart from ordinary work — and the only one that can
+say so before feature-dev spends a stage discovering it.
+
+**When the issue is one of these, do NOT write a plan for it.** A plan is a
+promise that a later stage can implement something, and there is nothing to
+implement; a plan written anyway sends feature-dev to reach the identical
+verdict at full price, and — because an empty workspace is indistinguishable
+from a stage that promised work and produced none — to be convicted of
+`dev_produced_no_changes` for having been right.
+
+Instead, write `planning-{N}.json` with a single blocking feedback signal and
+nothing else claimed:
+
+```json
+{
+  "feedback": [
+    {
+      "signal_type": "NOT_PIPELINE_ACTIONABLE",
+      "emitted_by_stage": "feature-planning",
+      "backtrack_target_stage": null,
+      "severity": "blocking",
+      "rationale": "The deliverable is counsel sign-off on the published privacy policy and terms. No code change satisfies it, and drafting legal text as if it were reviewed would be worse than doing nothing.",
+      "evidence": [
+        "issue body: 'Items requiring counsel sign-off (per PRIVACY_AND_RETENTION.md open items)'",
+        "issue body: 'Gate: Must complete before any real team is onboarded.'"
+      ]
+    }
+  ]
+}
+```
+
+`backtrack_target_stage` is `null` **by definition** — there is no stage to
+return to, because no lap of this pipeline changes the answer. That is what
+separates this signal from `PLAN_REVISION_NEEDED` (a different plan would work)
+and from an out-of-scope blocker (other work would unblock it): nothing
+unblocks this but a human doing the thing.
+
+`rationale` and `evidence` are read by a person, so quote the issue rather than
+paraphrasing it. The run then ends **`blocked`, not failed**: the finding is
+persisted, a comment goes on the issue, an Action Center card is raised, the
+issue is labelled `owner-action` so autonomous dispatch stops picking it up, and
+its board row is parked in Backlog. Nothing is halted and no failure is charged
+to the issue or to the pipeline.
+
+**Do not reach for this to avoid hard work.** The test is whether an agent with
+unlimited time and full repository access could produce the deliverable — not
+whether it is large, unclear, or unpleasant. An ambiguous acceptance criterion
+is `ACCEPTANCE_CRITERIA_AMBIGUOUS`; an under-estimate is
+`COMPLEXITY_UNDERESTIMATED`; work blocked on another issue is an out-of-scope
+blocker. Only "no agent can produce this artifact" is this signal.
+
+@see Issue #1241
+
 ### Phase 7: Self-Assessment Epilogue
 
 ```bash
@@ -532,7 +601,8 @@ Fail fast with actionable messages when:
 
 ## Completion Checklist
 
-- [ ] `.nightgauge/plans/{N}-*.md` exists and is complete
+- [ ] `.nightgauge/plans/{N}-*.md` exists and is complete — OR the issue was
+      declared `NOT_PIPELINE_ACTIONABLE` and no plan was written
 - [ ] `.nightgauge/pipeline/planning-{N}.json` written
 - [ ] Stage start/completion signaled
 - [ ] Next stage clearly indicated (`/nightgauge-feature-dev`)

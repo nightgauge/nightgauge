@@ -240,6 +240,7 @@ export type TerminalFailureKind =
   | "pr_merge_unmerged" // Issue #3691 — pr-merge's session exited cleanly but the PR was not actually merged
   | "blocked_dependency" // Issue #305 — the autonomous scheduler dispatched an issue whose blockedBy dependencies are still open; a non-failure deferral
   | "architecture_approval_required" // Issue #4098/#4222 — the architecture-approval gate halted the run before feature-dev for a human-owned decision
+  | "not_pipeline_actionable" // Issue #1241 — a stage DECLARED the issue's deliverable is not producible by any pipeline lap (counsel sign-off, an operator-only credential, a human decision); not a failure and not a deferral, so the issue is labelled owner-action and left parked rather than retried
   | "validation_inconclusive" // Issue #221 — feature-validate's unit-test tier ran but executed zero tests; usually an environmental misconfiguration
   // Declared-but-unmatched, mirroring Go: set by the recovery action from
   // structured evidence, never derived from error text, so
@@ -283,6 +284,7 @@ export const ALL_TERMINAL_FAILURE_KINDS: readonly TerminalFailureKind[] = [
   "blocked_dependency",
   "architecture_approval_required",
   "validation_inconclusive",
+  "not_pipeline_actionable",
   "abandoned_commit",
   "commit_orphaned",
   "permission_denied",

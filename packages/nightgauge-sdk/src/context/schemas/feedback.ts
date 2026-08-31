@@ -11,6 +11,7 @@ import { z } from "zod";
  * Schema versions:
  * - 1.0: Initial schema (issue #1341)
  * - 1.1: Added CONFLICT_RESOLUTION_NEEDED signal + ConflictContext (issue #4072)
+ * - 1.2: Added NOT_PIPELINE_ACTIONABLE signal (issue #1241)
  *
  * @see docs/CONTEXT_ARCHITECTURE.md — "Backward Edges & Feedback Signals" section
  * @see docs/FEEDBACK_LOOPS.md — CONFLICT_RESOLUTION_NEEDED + conflict-context-{N}.json
@@ -27,6 +28,23 @@ import { z } from "zod";
 // never triggers a rewind — the operator steer is background the next stage must
 // honor, not a command. Provenance is marked in `evidence` ("operator-origin:
 // action-center").
+// NOT_PIPELINE_ACTIONABLE (issue #1241) is the declaration that an issue's
+// deliverable is not something ANY agent lap can produce — counsel sign-off, a
+// credential only an operator holds, a physical or legal act, a decision
+// reserved to a human. It is categorically different from every other type
+// here, all of which describe a run that went wrong: this one describes a run
+// that should never have been dispatched. The pipeline is not failing; the work
+// is simply not pipeline work.
+//
+// It is deliberately NOT a variant of ACCEPTANCE_CRITERIA_AMBIGUOUS. Ambiguity
+// is answerable — a human settles the criterion and the SAME issue becomes
+// implementable. This is not: no answer makes the deliverable agent-producible,
+// so the remedy is to take the issue out of the dispatch pool permanently
+// (`owner-action`) rather than to ask a question and wait.
+//
+// `backtrack_target_stage` is null on this type by definition, and
+// readFeedbackSignals admits it on that basis — see TERMINAL_BLOCKING_SIGNAL_TYPES
+// in HeadlessOrchestrator.
 export const PipelineFeedbackSignalTypeSchema = z.enum([
   "PLAN_REVISION_NEEDED",
   "SCOPE_DISCOVERED",
@@ -35,6 +53,7 @@ export const PipelineFeedbackSignalTypeSchema = z.enum([
   "ACCEPTANCE_CRITERIA_AMBIGUOUS",
   "CONFLICT_RESOLUTION_NEEDED",
   "OPERATOR_STEER",
+  "NOT_PIPELINE_ACTIONABLE",
 ]);
 export type PipelineFeedbackSignalType = z.infer<typeof PipelineFeedbackSignalTypeSchema>;
 
