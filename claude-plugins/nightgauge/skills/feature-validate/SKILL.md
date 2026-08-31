@@ -139,7 +139,7 @@ printf '<!-- phase:start name="batch-detection" index=2 total=23 stage="feature-
 printf '<!-- phase:start name="ac-completion-check" index=3 total=23 stage="feature-validate" -->\n'
 ```
 
-> **Read `skills/nightgauge-feature-validate/_includes/context-load.md` now and follow its instructions before continuing this phase.** `type:docs` issues only (no-op otherwise): set `AC_CHECK_REQUIRED=true` when the label is present, else `AC_CHECK_REQUIRED=false` and `AC_CHECK_SKIP=true`. Steps 0.6.2 (run ac-check) and 0.6.3 (gate on result) live in the include; unchecked ACs → exit 1 listing uncompleted items.
+> **Read `skills/nightgauge-feature-validate/_includes/context-load.md` now and follow its instructions before continuing this phase.** `type:docs` issues only (no-op otherwise): set `AC_CHECK_REQUIRED=true` when the label is present, else `AC_CHECK_REQUIRED=false` and `AC_CHECK_SKIP=true`. Steps 0.6.2 (run ac-check), 0.6.2b (substantiate unchecked criteria against the diff and mark what the change demonstrably satisfies, #1233) and 0.6.3 (gate on result) live in the include — run all three; criteria that cannot be substantiated remain unchecked → exit 1 naming them.
 
 ### Phase 1: Detect Testing Environment (Deterministic)
 
