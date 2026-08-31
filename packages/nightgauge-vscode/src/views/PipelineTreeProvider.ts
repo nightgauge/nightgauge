@@ -90,6 +90,39 @@ const STAGE_ORDER: PipelineStage[] = [
  * tree view show live progress ("Implementation [7/17]") immediately from the
  * event without an async getState() round-trip to the persisted state file.
  */
+/**
+ * Order phases by their registry index — the stage's real execution order —
+ * rather than the order records happened to arrive (#1246).
+ *
+ * `stageState.phases` is append-ordered: live markers land as they occur and
+ * the end-of-stage back-fill appends everything else afterwards. For
+ * feature-dev on issue #336 that produced arrival order
+ * 0,1,8,15,2,3,4,5,6,11,7,9,10,13,12,14,16,17 — so `Sync Project Status`
+ * (index 15 of 18, one of the LAST things the stage does) rendered fourth,
+ * and the fourteen rows beneath it read as though the stage stopped there.
+ * The operator's question, "why does everything after Sync Project Status get
+ * skipped?", was a question the display invented.
+ *
+ * Phases absent from the registry (a skill emitted a marker the registry does
+ * not define) sort after the known ones in their existing relative order,
+ * rather than being dropped or silently reindexed.
+ */
+export function orderPhasesByRegistry(
+  phases: StagePhase[],
+  registryPhases: readonly { name: string }[]
+): StagePhase[] {
+  if (registryPhases.length === 0) return phases;
+  const rank = new Map(registryPhases.map((p, i) => [p.name, i]));
+  return phases
+    .map((phase, arrivalIndex) => ({ phase, arrivalIndex }))
+    .sort((a, b) => {
+      const ra = rank.get(a.phase.name) ?? Number.MAX_SAFE_INTEGER;
+      const rb = rank.get(b.phase.name) ?? Number.MAX_SAFE_INTEGER;
+      return ra !== rb ? ra - rb : a.arrivalIndex - b.arrivalIndex;
+    })
+    .map((entry) => entry.phase);
+}
+
 function buildSyntheticPhases(
   stage: string,
   phaseName: string,
@@ -626,7 +659,10 @@ export class PipelineTreeProvider
                   ...phasesForDisplay,
                   ...missing.map((r): StagePhase => ({
                     name: r.name,
-                    status: "skipped",
+                    // Absent from state.json entirely: nothing was ever
+                    // reported about it, which is `unreported`, not a
+                    // decision the stage made (#1246).
+                    status: "unreported",
                   })),
                 ];
               }
@@ -641,7 +677,11 @@ export class PipelineTreeProvider
               ? undefined
               : stageState.current_phase;
 
-          stageItem.setPhases(phasesForDisplay, currentPhaseForDisplay, totalForDisplay);
+          stageItem.setPhases(
+            orderPhasesByRegistry(phasesForDisplay, registryPhases),
+            currentPhaseForDisplay,
+            totalForDisplay
+          );
         } else if (stageItem.getPhaseCount() > 0 && stageState.status !== "running") {
           // Stage has no phases in state but tree still has children — clear them.
           // Skip for running stages: stateChanged events strip phase data from Go's

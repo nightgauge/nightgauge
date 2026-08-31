@@ -568,8 +568,13 @@ describe("PipelineTreeProvider — phase event subscription and syncing (Issue #
     });
 
     it("creates PhaseTreeItem children with correct phaseName values", async () => {
+      // Real feature-dev registry phases, in registry order. The fixture used
+      // to name `load-context` — a feature-planning/pr-create phase that
+      // feature-dev does not define — so once rows began rendering in
+      // registry-index order (#1246) it sorted after `implementation` as an
+      // unknown. The names have to be real for the assertion to mean anything.
       const phases = [
-        makePhase("load-context", "complete"),
+        makePhase("read-planning-context", "complete"),
         makePhase("implementation", "running"),
       ];
 
@@ -595,7 +600,7 @@ describe("PipelineTreeProvider — phase event subscription and syncing (Issue #
 
       const stageItem = provider.getStage("feature-dev")!;
       const children = stageItem.getChildren() as PhaseTreeItem[];
-      expect(children[0].phaseName).toBe("load-context");
+      expect(children[0].phaseName).toBe("read-planning-context");
       expect(children[1].phaseName).toBe("implementation");
     });
 
@@ -838,8 +843,12 @@ describe("PipelineTreeProvider — phase event subscription and syncing (Issue #
     });
 
     it("phase children have correct labels (kebab → Title Case)", async () => {
+      // Both names must be real feature-dev phases: rows render in
+      // registry-index order (#1246), so an invented name would sort last as
+      // an unknown and this assertion would be testing the sort, not the
+      // kebab→Title Case conversion it is about.
       const phases = [
-        makePhase("load-context", "complete"),
+        makePhase("validate-environment", "complete"),
         makePhase("read-planning-context", "running"),
       ];
 
@@ -866,7 +875,7 @@ describe("PipelineTreeProvider — phase event subscription and syncing (Issue #
       const stageItem = provider.getStage("feature-dev")!;
       const phaseItems = await provider.getChildren(stageItem);
 
-      expect((phaseItems[0] as PhaseTreeItem).label).toBe("Load Context");
+      expect((phaseItems[0] as PhaseTreeItem).label).toBe("Validate Environment");
       expect((phaseItems[1] as PhaseTreeItem).label).toBe("Read Planning Context");
     });
   });
