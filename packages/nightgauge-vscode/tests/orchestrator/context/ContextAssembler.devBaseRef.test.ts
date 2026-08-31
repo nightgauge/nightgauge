@@ -104,12 +104,15 @@ function staleLocalMainCheckout(): string {
 
   // Five merges land on origin AFTER this checkout last pulled — the files
   // the fabricated handoff claimed in the specimen run.
+  // Six paths, matching the count the fabricated handoff claimed in the
+  // specimen run. The names are deliberately generic: what matters is that
+  // they belong to commits this branch did not make, not what they are.
   const landed = [
-    ".github/workflows/ci.yml",
-    ".github/workflows/deploy.yml",
-    "src/content/pages/pricing.md",
-    "src/content/pages/privacy.md",
-    "src/content/pages/terms.md",
+    "config/build.yml",
+    "config/release.yml",
+    "src/content/pricing.md",
+    "src/content/privacy.md",
+    "src/content/terms.md",
     "src/pages/community.astro",
   ];
   for (const f of landed) {
