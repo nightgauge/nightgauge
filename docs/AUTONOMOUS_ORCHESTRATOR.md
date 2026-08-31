@@ -801,10 +801,31 @@ cleared **only** by an explicit human action:
 Nothing auto-clears it. Narrowing the blast radius does not remove the gate.
 
 **Discoverability.** A halted repo whose status line still reads `running` is a
-halted repo that gets forgotten, so the halt is surfaced in three places: the
+halted repo that gets forgotten, so the halt is surfaced in four places: the
 standing terminal-failure card (titled with the repo), the
-`Autonomous: Status` report's _Halted repositories_ section, and the modal the
-extension raises at halt time.
+`Autonomous: Status` report's _Halted repositories_ section, the modal the
+extension raises at halt time, and the **Repositories view's per-row warning
+badge**.
+
+The badge is the only one of the four that is passive — the first three are a
+notification you can miss, dismiss, or arrive too late for. On the tree, a
+halted repository renders with a ⚠ warning icon in place of its repo icon, an
+`⚠ Autonomous halted` description, and a tooltip naming the issue and stage
+that stopped it. It carries a `-halted` suffix on its `contextValue`, which
+gates an inline ▶ Resume action (`nightgauge.autonomousResumeRepo`) on that
+row; the action confirms, then releases that repo only.
+
+Without it the sole symptom on the tree is an absence — a Ready issue that
+never gets picked up — which is indistinguishable from the repo being
+unchecked, from an empty board, and from the scheduler being busy elsewhere.
+
+Because a repo halt deliberately does not move the fleet `status`,
+`autonomous.statusChanged` never fires for one. The IPC server emits
+`autonomous.repoHaltChanged` instead, from every path that raises or releases a
+halt (`autonomous.pauseRepo`, `resumeRepoAndEnsureRunning`, and the fleet
+`resumeAndEnsureRunning`, which clears them all). The payload carries only a
+count: a client that cares re-reads `autonomous.status` for the records, so
+halt data has one wire shape rather than two that can drift.
 
 ### Two things that deliberately do NOT halt
 

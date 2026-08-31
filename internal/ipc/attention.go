@@ -370,6 +370,9 @@ func (s *Server) resumeAndEnsureRunning(ctx context.Context) error {
 		return fmt.Errorf("autonomous scheduler not configured")
 	}
 	s.autonomousScheduler.Resume()
+	// A fleet resume clears every repo-scoped halt too, so the Repositories
+	// view's per-row halt badges must be told (#1148 visibility).
+	s.emitRepoHaltChanged()
 	if !s.autonomousScheduler.IsRunning() {
 		go func() {
 			if err := s.autonomousScheduler.Run(ctx); err != nil {
@@ -391,6 +394,7 @@ func (s *Server) resumeRepoAndEnsureRunning(ctx context.Context, repo string) er
 		return fmt.Errorf("autonomous scheduler not configured")
 	}
 	s.autonomousScheduler.ResumeRepo(repo)
+	s.emitRepoHaltChanged()
 	if !s.autonomousScheduler.IsRunning() {
 		go func() {
 			if err := s.autonomousScheduler.Run(ctx); err != nil {
@@ -399,6 +403,27 @@ func (s *Server) resumeRepoAndEnsureRunning(ctx context.Context, repo string) er
 		}()
 	}
 	return nil
+}
+
+// emitRepoHaltChanged tells connected clients that the set of repo-scoped
+// halts (#1148) may have changed.
+//
+// It exists because a repo halt deliberately does NOT move the fleet Status,
+// so `autonomous.statusChanged` never fires for one. Without this event the
+// Repositories view's per-row warning badge could only appear on the next
+// full tree render — which for a workspace sitting idle (exactly the state a
+// halt produces) may be a very long time.
+//
+// The payload carries only the count. A client that cares reads
+// `autonomous.status` for the records, so there is one wire shape for halt
+// data instead of two that can drift.
+func (s *Server) emitRepoHaltChanged() {
+	if s == nil || s.autonomousScheduler == nil {
+		return
+	}
+	s.Emit("autonomous.repoHaltChanged", map[string]interface{}{
+		"haltedCount": len(s.autonomousScheduler.PausedReposSnapshot()),
+	})
 }
 
 // redispatchAfterOverride clears the issue failure cooldown, requeues, and

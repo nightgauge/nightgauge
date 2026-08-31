@@ -11,6 +11,7 @@
 import * as vscode from "vscode";
 import { BaseTreeItem } from "./BaseTreeItem";
 import type { Repository } from "../../models/Repository";
+import type { AutonomousRepoPause } from "../../services/IpcClientBase";
 
 /**
  * Tree item representing a repository in the workspace
@@ -66,6 +67,22 @@ export class RepositoryTreeItem extends BaseTreeItem {
    */
   readonly isDerivedFromProject: boolean;
 
+  /**
+   * This repository's autonomous halt record (#1148), when one is in force.
+   *
+   * A repo-scoped halt leaves the FLEET status reading "running" — every
+   * other repository keeps dispatching — so nothing in the status bar or the
+   * global Resume button says that this row is stopped. Without a per-row
+   * marker the only symptom is an absence: a Ready issue that never gets
+   * picked up, indistinguishable from "unchecked", "nothing on the board" or
+   * "the scheduler is busy elsewhere". Hence the warning badge.
+   *
+   * Mutable so a live `autonomous.repoHaltChanged` event can repaint the
+   * cached row in place rather than forcing a full tree rebuild — see
+   * {@link applyHaltState}.
+   */
+  halt: AutonomousRepoPause | undefined;
+
   constructor(
     repository: Repository,
     isActive: boolean = false,
@@ -73,10 +90,23 @@ export class RepositoryTreeItem extends BaseTreeItem {
     isSequential: boolean = false,
     maxConcurrent: number | undefined = undefined,
     currentBranch: string | undefined = undefined,
-    isDerivedFromProject: boolean = false
+    isDerivedFromProject: boolean = false,
+    halt: AutonomousRepoPause | undefined = undefined
   ) {
-    // Set label and collapsible state
-    super(repository.name, vscode.TreeItemCollapsibleState.Expanded);
+    // Set label and collapsible state.
+    //
+    // A repo excluded from the autonomous scan set renders COLLAPSED. This is
+    // not cosmetic: VSCode only asks for an expanded row's children, and each
+    // of those asks is a `board.counts` GraphQL call once the service cache
+    // lapses. Rendering every row expanded meant an unchecked repo kept
+    // spending GitHub quota on a schedule — the opposite of what unchecking
+    // it says. Expanding one by hand still loads its counts on demand.
+    super(
+      repository.name,
+      inAutonomousScan === false
+        ? vscode.TreeItemCollapsibleState.Collapsed
+        : vscode.TreeItemCollapsibleState.Expanded
+    );
 
     this.repository = repository;
     this.isActive = isActive;
@@ -86,17 +116,10 @@ export class RepositoryTreeItem extends BaseTreeItem {
     this.maxConcurrent = maxConcurrent;
     this.currentBranch = currentBranch;
     this.isDerivedFromProject = isDerivedFromProject;
+    this.halt = halt;
 
-    // Set contextValue for context menu visibility — includes sequential state
-    // so the toggle command can target sequential vs concurrent repos.
-    // Uses the resolved this.isSequential (true when either the legacy bool
-    // is set or maxConcurrent === 1) so the existing toggle/menu wiring still
-    // applies when users opt into the numeric cap form.
-    if (isActive) {
-      this.contextValue = this.isSequential ? "repository-active-sequential" : "repository-active";
-    } else {
-      this.contextValue = this.isSequential ? "repository-sequential" : "repository";
-    }
+    // Set contextValue for context menu visibility.
+    this.setContextValue();
 
     // Set icon based on active state and role
     this.setRepositoryIcon();
@@ -127,10 +150,69 @@ export class RepositoryTreeItem extends BaseTreeItem {
   }
 
   /**
+   * Apply (or clear) this repository's autonomous halt and repaint every
+   * derived visual: icon, description, tooltip and contextValue.
+   *
+   * Separate from the constructor because a halt is raised and released while
+   * the row already exists. The provider caches `RepositoryTreeItem`s and
+   * refreshes them by firing `onDidChangeTreeData` with the SAME object, so a
+   * halt that only changed provider-side state would repaint nothing.
+   */
+  applyHaltState(halt: AutonomousRepoPause | undefined): void {
+    this.halt = halt;
+    this.setContextValue();
+    this.setRepositoryIcon();
+    this.setDescription();
+    this.setTooltipText();
+  }
+
+  /** True when autonomous dispatch is halted for this repository (#1148). */
+  get isHalted(): boolean {
+    return this.halt !== undefined;
+  }
+
+  /**
+   * The fully-qualified `owner/repo` key the halt is recorded under, or
+   * `undefined` when this repo is not halted. The inline Resume action reads
+   * this off the tree item so it resumes exactly the repo that was clicked,
+   * without having to re-derive the key from config.
+   */
+  get haltedRepoKey(): string | undefined {
+    return this.halt?.repo;
+  }
+
+  /**
+   * Set contextValue for context-menu / inline-action visibility.
+   *
+   * Includes sequential state so the toggle command can target sequential vs
+   * concurrent repos, and a `-halted` suffix so the inline "Resume Repository"
+   * action appears only on rows that actually have something to resume.
+   * Uses the resolved this.isSequential (true when either the legacy bool is
+   * set or maxConcurrent === 1) so the existing toggle/menu wiring still
+   * applies when users opt into the numeric cap form. Every menu contribution
+   * matches on the `repository` PREFIX, so appending suffixes is safe.
+   */
+  private setContextValue(): void {
+    const base = this.isActive
+      ? this.isSequential
+        ? "repository-active-sequential"
+        : "repository-active"
+      : this.isSequential
+        ? "repository-sequential"
+        : "repository";
+    this.contextValue = this.isHalted ? `${base}-halted` : base;
+  }
+
+  /**
    * Set the appropriate icon for this repository
    */
   private setRepositoryIcon(): void {
-    if (this.isActive) {
+    if (this.isHalted) {
+      // A halted repo outranks "active" for the icon slot: the fact that this
+      // repository has silently stopped dispatching is the thing the operator
+      // needs to see first, and which row has focus is already obvious.
+      this.setIconWithColor("warning", new vscode.ThemeColor("list.warningForeground"));
+    } else if (this.isActive) {
       // Active repository gets a filled icon with accent color
       this.setIconWithColor("repo", new vscode.ThemeColor("charts.blue"));
     } else {
@@ -154,6 +236,13 @@ export class RepositoryTreeItem extends BaseTreeItem {
    */
   private setDescription(): void {
     const parts: string[] = [];
+
+    // Halt leads the line, and carries its own glyph: a themed icon colour is
+    // the only other signal and it is invisible to anyone reading the tree in
+    // a high-contrast theme or a screenshot.
+    if (this.isHalted) {
+      parts.push("\u26A0 Autonomous halted");
+    }
 
     if (this.currentBranch) {
       parts.push(this.currentBranch);
@@ -211,6 +300,28 @@ export class RepositoryTreeItem extends BaseTreeItem {
       }
     } else if (this.isDerivedFromProject && this.repository.effectiveProjectNumber) {
       lines.push(`Project: #${this.repository.effectiveProjectNumber} *(via project link)*`);
+    }
+
+    if (this.halt) {
+      lines.push("");
+      lines.push("\u26A0\ufe0f **Autonomous dispatch is halted for this repository**");
+      const cause = this.halt.issue
+        ? `Issue #${this.halt.issue} failed at ${this.halt.stage || "an unknown stage"}`
+        : this.halt.reason || "unknown";
+      lines.push(`Cause: ${cause}`);
+      if (this.halt.issue && this.halt.reason) {
+        lines.push(`Reason: ${this.halt.reason}`);
+      }
+      if (this.halt.triggeredBy) {
+        lines.push(`Raised by: ${this.halt.triggeredBy}`);
+      }
+      if (this.halt.pausedAt) {
+        lines.push(`Halted at: ${this.halt.pausedAt}`);
+      }
+      lines.push("");
+      lines.push(
+        "Other repositories keep dispatching. Triage the failure, then use the inline \u25B6 Resume action on this row."
+      );
     }
 
     if (typeof this.maxConcurrent === "number" && this.maxConcurrent >= 2) {
