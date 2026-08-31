@@ -246,10 +246,15 @@ func writeGatePassingSkillOutput(workDir string, issueNumber int, stage string) 
 // to process it as a runStage event, false to skip.
 //
 // Returns channels for: dispatched stage names, all collected events, and done.
+// onFirstDispatch, when non-nil, is invoked exactly once — on the first
+// runStage event that passes the filter. That is a point at which the run is
+// GUARANTEED live, which is the only safe moment to observe state the run
+// deletes when it finishes (#1227/#1255).
 func pipelineStageResponder(
 	h *ipcTestHarness,
 	issueFilter func(issueNumber int) bool,
 	timeout time.Duration,
+	onFirstDispatch func(),
 ) (stages chan stageDispatch, events chan string, done chan struct{}) {
 	stages = make(chan stageDispatch, 64)
 	events = make(chan string, 256)
@@ -259,6 +264,8 @@ func pipelineStageResponder(
 		defer close(done)
 		timer := time.NewTimer(timeout)
 		defer timer.Stop()
+
+		dispatched := false
 
 		for {
 			select {
@@ -303,6 +310,16 @@ func pipelineStageResponder(
 					// Apply issue filter
 					if issueFilter != nil && !issueFilter(data.IssueNumber) {
 						continue
+					}
+
+					// Fire the mid-run hook before answering, so the caller
+					// observes a run that cannot yet have reached its terminal
+					// defer.
+					if !dispatched {
+						dispatched = true
+						if onFirstDispatch != nil {
+							onFirstDispatch()
+						}
 					}
 
 					// Record dispatched stage
@@ -462,8 +479,23 @@ func TestE2E_FullPipelineLifecycle(t *testing.T) {
 		t.Errorf("expected status=queued, got %v", result["status"])
 	}
 
+	// The runtime snapshot exists only WHILE THE RUN IS LIVE (#1227/#1255).
+	// `runPipeline`'s terminal defer calls runtime.SealAndRemove
+	// (scheduler.go, → os.Remove in state.RuntimeState.SealAndRemove), so the
+	// file is deleted a few hundred lines of bookkeeping AFTER the
+	// pipeline.complete event this test waits on. Observing it here — on the
+	// first stage dispatch, when the run provably cannot have reached that
+	// defer — is deterministic; observing it after completion was a race the
+	// test never declared, and it lost on a loaded CI runner.
+	stateDir := filepath.Join(workDir, ".nightgauge", "pipeline")
+	var liveSnapshots []*state.RuntimeState
+	var liveSnapshotErr error
+	observeOnce := func() {
+		liveSnapshots, liveSnapshotErr = state.FindPersistedStatesForIssue(stateDir, issueNumber)
+	}
+
 	// Now launch stage responder goroutine (sole consumer of h.lines from here)
-	stages, events, done := pipelineStageResponder(h, nil, 30*time.Second)
+	stages, events, done := pipelineStageResponder(h, nil, 30*time.Second, observeOnce)
 
 	// Wait for pipeline completion
 	allEvents := collectEvents(events, done)
@@ -517,17 +549,52 @@ func TestE2E_FullPipelineLifecycle(t *testing.T) {
 		}
 	}
 
-	// Assert: the run left exactly one runtime snapshot, under the
-	// identity-keyed name the scheduler's own Persist composes (ADR-017 D8).
-	stateDir := filepath.Join(workDir, ".nightgauge", "pipeline")
-	snapshots, err := state.FindPersistedStatesForIssue(stateDir, issueNumber)
-	if err != nil {
-		t.Fatalf("FindPersistedStatesForIssue: %v", err)
+	// Assert: WHILE RUNNING, the scheduler persisted exactly one snapshot under
+	// the identity-keyed name its own Persist composes (ADR-017 D8). Captured
+	// on the first stage dispatch — see the comment at observeOnce.
+	if liveSnapshotErr != nil {
+		t.Fatalf("FindPersistedStatesForIssue (mid-run): %v", liveSnapshotErr)
 	}
-	if len(snapshots) != 1 {
-		t.Errorf("expected exactly one runtime snapshot for #%d in %s, found %d", issueNumber, stateDir, len(snapshots))
-	} else if snapshots[0].RunID == "" {
+	if len(liveSnapshots) != 1 {
+		t.Errorf("expected exactly one runtime snapshot for #%d in %s while the run was live, found %d",
+			issueNumber, stateDir, len(liveSnapshots))
+	} else if liveSnapshots[0].RunID == "" {
 		t.Errorf("runtime snapshot carries no run identity")
+	}
+
+	// Assert: AFTER the run, the snapshot is GONE. This is the post-run
+	// contract, not a leak — scheduler_recovery_registry_test.go states it in
+	// as many words: since #440 the scheduler latches terminal and seals, "so
+	// a post-run PickPersistedStateForIssue finds nothing".
+	//
+	// This assertion used to demand `found 1` here, which is the exact
+	// opposite. It was written on 2026-08-09 (#370), before SealAndRemove was
+	// wired into runPipeline's terminal defer on 2026-08-23 (#377/#440). That
+	// commit inverted the assertion's premise and left it passing on timing
+	// alone: pipeline.complete is emitted at the TOP of the terminal defer and
+	// the removal happens at the bottom, so the test won a race it never
+	// declared — until a loaded 2-core runner under -race lost it, taking
+	// `main` red on a commit that touched only a VSCode icon.
+	//
+	// Polled, because removal is asynchronous relative to pipeline.complete.
+	// Asserting a bare `found 0` immediately would just be the same race
+	// pointed the other way.
+	deadline := time.Now().Add(10 * time.Second)
+	var remaining []*state.RuntimeState
+	for {
+		var findErr error
+		remaining, findErr = state.FindPersistedStatesForIssue(stateDir, issueNumber)
+		if findErr != nil {
+			t.Fatalf("FindPersistedStatesForIssue (post-run): %v", findErr)
+		}
+		if len(remaining) == 0 || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	if len(remaining) != 0 {
+		t.Errorf("runtime snapshot for #%d still present in %s after the run sealed; found %d — SealAndRemove did not run",
+			issueNumber, stateDir, len(remaining))
 	}
 }
 
