@@ -436,6 +436,8 @@ func (s *CIService) getRequiredOnlyStatusWithChecks(checks []CheckDetail, requir
 		annotatedChecks []CheckDetail
 	)
 
+	var advisoryFailedNames []string
+
 	for _, c := range checks {
 		total++
 		isRequired := requiredSet[strings.ToLower(c.Name)]
@@ -447,6 +449,12 @@ func (s *CIService) getRequiredOnlyStatusWithChecks(checks []CheckDetail, requir
 				successful++
 			} else {
 				failed++
+				// A failure that cannot block the merge still has to be
+				// SAYABLE (#1248) — State is required-only by design, so
+				// without this the check disappears from every consumer.
+				if !isRequired {
+					advisoryFailedNames = append(advisoryFailedNames, c.Name)
+				}
 			}
 		} else {
 			pending++
@@ -466,14 +474,15 @@ func (s *CIService) getRequiredOnlyStatusWithChecks(checks []CheckDetail, requir
 	}
 
 	status := &CheckStatus{
-		PRNumber:           prNumber,
-		Total:              total,
-		Completed:          completed,
-		Successful:         successful,
-		Failed:             failed,
-		Pending:            pending,
-		Checks:             annotatedChecks,
-		RequiredCheckNames: requiredNames,
+		PRNumber:            prNumber,
+		Total:               total,
+		Completed:           completed,
+		Successful:          successful,
+		Failed:              failed,
+		Pending:             pending,
+		Checks:              annotatedChecks,
+		RequiredCheckNames:  requiredNames,
+		AdvisoryFailedNames: advisoryFailedNames,
 	}
 
 	allRequiredDone := requiredTotal > 0 && requiredDone == requiredTotal

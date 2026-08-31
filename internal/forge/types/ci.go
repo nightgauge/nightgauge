@@ -20,6 +20,19 @@ type CheckStatus struct {
 	// still pending. WaitForChecks returns SUCCESS + MergedExternally=true so
 	// callers can distinguish "CI passed" from "PR was already merged."
 	MergedExternally bool `json:"mergedExternally,omitempty"`
+	// AdvisoryFailedNames are checks that FAILED but are not required to merge
+	// (#1248). `State` is computed from required checks only — deliberately,
+	// because blocking on an advisory job would hang the pipeline on any
+	// non-required check — so a failing one leaves State=="SUCCESS" and
+	// vanishes. Two PRs in a workspace repo were merged minutes after a
+	// non-required end-to-end job went red, with nothing in the stage log or
+	// the run record to say so; the only detector was an operator reading the
+	// Actions tab days later.
+	//
+	// Not blocking is the right call; discarding is not. These names exist so
+	// a caller that proceeds can SAY what it proceeded past. Nothing reads
+	// this to gate a merge — `RequiredPassed` remains the only gate input.
+	AdvisoryFailedNames []string `json:"advisoryFailedNames,omitempty"`
 }
 
 // CheckDetail represents a single CI check.

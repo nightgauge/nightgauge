@@ -485,3 +485,73 @@ func TestGetCheckStatus_OutOfBandMerge(t *testing.T) {
 		t.Error("want MergedExternally=true when PR was merged out-of-band")
 	}
 }
+
+// TestRequiredOnly_NamesFailingAdvisoryChecks is the regression guard for
+// #1248.
+//
+// `State` is computed from required checks only, deliberately: blocking on an
+// advisory job would hang the pipeline on any non-required check. But the
+// failing check then vanished entirely — no field carried it, so the merge
+// skill could not have mentioned it even if it wanted to. That is how two PRs
+// in one workspace repo merged minutes after a non-required end-to-end job
+// concluded FAILURE, with nothing in the run record.
+//
+// The gate stays unblocked. The failure becomes sayable.
+func TestRequiredOnly_NamesFailingAdvisoryChecks(t *testing.T) {
+	status, err := (&CIService{}).getRequiredOnlyStatusWithChecks([]CheckDetail{
+		{Name: "Build and Test", Status: "COMPLETED", Conclusion: "SUCCESS"},
+		{Name: "E2E (Docker)", Status: "COMPLETED", Conclusion: "FAILURE"},
+		{Name: "Smoke (integration)", Status: "COMPLETED", Conclusion: "SUCCESS"},
+	}, []string{"Build and Test"}, 42)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// The gate is unchanged: a failing advisory check must NOT block.
+	if status.State != "SUCCESS" {
+		t.Errorf("State = %q, want SUCCESS — an advisory failure must not block the merge", status.State)
+	}
+	if !status.RequiredPassed {
+		t.Error("RequiredPassed = false, want true — the required check passed")
+	}
+
+	// ...but it must be reportable.
+	if len(status.AdvisoryFailedNames) != 1 || status.AdvisoryFailedNames[0] != "E2E (Docker)" {
+		t.Errorf("AdvisoryFailedNames = %v, want [\"E2E (Docker)\"] — a merge that proceeds past a red check must be able to say which one",
+			status.AdvisoryFailedNames)
+	}
+}
+
+// A required failure is not an advisory one: it already blocks, and listing it
+// twice would double-report the same check.
+func TestRequiredOnly_RequiredFailureIsNotReportedAsAdvisory(t *testing.T) {
+	status, err := (&CIService{}).getRequiredOnlyStatusWithChecks([]CheckDetail{
+		{Name: "CI", Status: "COMPLETED", Conclusion: "FAILURE"},
+	}, []string{"CI"}, 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if status.State != "FAILURE" {
+		t.Errorf("State = %q, want FAILURE", status.State)
+	}
+	if len(status.AdvisoryFailedNames) != 0 {
+		t.Errorf("AdvisoryFailedNames = %v, want empty — a required failure blocks, it is not advisory",
+			status.AdvisoryFailedNames)
+	}
+}
+
+// An all-green PR must produce no advisory noise, or the merge report learns
+// to ignore the field.
+func TestRequiredOnly_NoAdvisoryNoiseWhenEverythingPasses(t *testing.T) {
+	status, err := (&CIService{}).getRequiredOnlyStatusWithChecks([]CheckDetail{
+		{Name: "CI", Status: "COMPLETED", Conclusion: "SUCCESS"},
+		{Name: "lint", Status: "COMPLETED", Conclusion: "SUCCESS"},
+		{Name: "skipped-job", Status: "COMPLETED", Conclusion: "SKIPPED"},
+	}, []string{"CI"}, 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(status.AdvisoryFailedNames) != 0 {
+		t.Errorf("AdvisoryFailedNames = %v, want empty on an all-green PR", status.AdvisoryFailedNames)
+	}
+}
