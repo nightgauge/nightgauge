@@ -1702,29 +1702,76 @@ export class ContextAssembler {
         // Fall back to main
       }
 
-      try {
-        await execFileAsync("git", ["rev-parse", "--verify", baseBranch], execOptions);
-      } catch {
-        baseBranch = "HEAD~1";
+      // RESOLVE THE REMOTE TIP FIRST, AND NEVER INVENT A BASE (#1241).
+      //
+      // This used to verify the bare local branch (`main`) and, failing that,
+      // fall back to `HEAD~1`. Both readings answer a DIFFERENT question than
+      // the one the deliverable claims to answer, and both fail toward
+      // over-reporting:
+      //
+      //  - A local `main` in a long-lived checkout lags `origin/main` by every
+      //    commit merged since the last `git pull`. `main...HEAD` then lists
+      //    the files of OTHER issues' already-merged work as this stage's
+      //    output. That is what happened in the specimen run: feature-dev
+      //    correctly wrote nothing, this generator diffed against a `main`
+      //    five squash-merges stale, and stamped a handoff claiming six
+      //    modified files across two workflows and four pages. The Go gate's
+      //    ground truth (internal/ci.DefaultDiffBases — `origin/main` FIRST)
+      //    saw the empty tree, read the fabricated claim, and convicted the
+      //    stage of `dev_produced_no_changes`: an agent-class failure that
+      //    halted the whole repository over a receipt this function wrote.
+      //  - `HEAD~1` names the previous commit whatever it is. In a fresh
+      //    worktree branched off the default branch that is a stranger's merge
+      //    commit, so the "cannot resolve a base" path produced the most
+      //    confident wrong answer of all.
+      //
+      // The base list is now `origin/<base>` then `<base>`, in that order —
+      // byte-for-byte the Go side's DefaultDiffBases ladder, because two
+      // resolvers disagreeing about which ref is the base is exactly the
+      // dual-path-drift class docs/FAILURE_TAXONOMY.md names, and here the
+      // disagreement is not cosmetic: it is the difference between a gate
+      // passing and a repository halting.
+      //
+      // When NOTHING resolves the file list stays EMPTY. That mirrors
+      // inspectDevWork's fail-open contract (`Determined: false` → cannot
+      // verify, do not accuse): an empty list makes the gate report its honest
+      // "dev context records zero file changes" no-op, while a fabricated one
+      // makes it report a stage that lied about work it did. The second is
+      // worse in both directions — it accuses the stage AND hides the real
+      // condition.
+      const diffBases = [`origin/${baseBranch}`, baseBranch];
+      let resolvedBase: string | null = null;
+      for (const candidate of diffBases) {
+        try {
+          await execFileAsync(
+            "git",
+            ["rev-parse", "--verify", `${candidate}^{commit}`],
+            execOptions
+          );
+          resolvedBase = candidate;
+          break;
+        } catch {
+          // Try the next candidate.
+        }
       }
 
       const created: string[] = [];
       const modified: string[] = [];
       const deleted: string[] = [];
 
+      if (resolvedBase === null) {
+        this.logger.warn(
+          "Deterministic dev context: no base ref resolved — recording an EMPTY file list rather than inventing one (#1241)",
+          { issueNumber, tried: diffBases }
+        );
+      }
+
       try {
-        let diffOutput: string;
-        try {
+        let diffOutput = "";
+        if (resolvedBase !== null) {
           const { stdout: diffRaw } = await execFileAsync(
             "git",
-            ["diff", "--name-status", `${baseBranch}...HEAD`],
-            execOptions
-          );
-          diffOutput = diffRaw.trim();
-        } catch {
-          const { stdout: diffRaw } = await execFileAsync(
-            "git",
-            ["diff", "--name-status", "HEAD~1"],
+            ["diff", "--name-status", `${resolvedBase}...HEAD`],
             execOptions
           );
           diffOutput = diffRaw.trim();

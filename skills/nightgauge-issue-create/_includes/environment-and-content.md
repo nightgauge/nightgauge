@@ -162,6 +162,30 @@ If prerequisites fail, stop with exact remediation command.
    - Status is set as a project board field via
      `nightgauge project sync-status`. Do NOT create or manipulate
      `status:*` labels.
+   - **`owner-action` when the deliverable is not producible by an agent**
+     (label). Ask one question before filing: _could an agent with full
+     repository access and unlimited time produce this artifact?_ When the
+     answer is no, the issue is a handoff to a human, and the label is what
+     records that — it is the sole default entry of
+     `autonomous.exclude_labels`, so the scheduler skips it and raises an
+     owner-action card instead of dispatching a pipeline at it.
+
+     Apply it to: sign-offs reserved to a licensed professional (legal,
+     financial, medical, safety); acts only an operator can perform — rotating
+     or issuing a credential, accepting terms, paying an invoice, registering a
+     domain, provisioning hardware, submitting to a store or registrar;
+     physical-world steps; and decisions that are the owner's to make and that
+     no evidence in the repository can settle.
+
+     The `type:` label is orthogonal and easy to mistake for this judgement. A
+     legal review of published policy pages is `type:docs` **and**
+     `owner-action`: it touches documentation, and no amount of agent effort
+     produces counsel's signature. Labelling it `type:docs` alone is what
+     dispatched the specimen issue into a pipeline that could only ever fail it.
+     If an issue's acceptance criteria read as a checklist of things a _person_
+     must confirm, it wants this label.
+
+     @see Issue #1241
 
 Keep issue text concise and actionable. Avoid placeholder-heavy boilerplate.
 

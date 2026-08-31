@@ -856,6 +856,36 @@
       "signal": ""
     },
     {
+      "input": "[not-pipeline-actionable]",
+      "kind": "not_pipeline_actionable",
+      "signal": ""
+    },
+    {
+      "input": "exit 1: [not-pipeline-actionable]",
+      "kind": "not_pipeline_actionable",
+      "signal": ""
+    },
+    {
+      "input": "[NOT-PIPELINE-ACTIONABLE]",
+      "kind": "not_pipeline_actionable",
+      "signal": ""
+    },
+    {
+      "input": "not_pipeline_actionable",
+      "kind": "not_pipeline_actionable",
+      "signal": ""
+    },
+    {
+      "input": "exit 1: not_pipeline_actionable",
+      "kind": "not_pipeline_actionable",
+      "signal": ""
+    },
+    {
+      "input": "NOT_PIPELINE_ACTIONABLE",
+      "kind": "not_pipeline_actionable",
+      "signal": ""
+    },
+    {
       "input": "[dev-produced-no-changes]",
       "kind": "dev_produced_no_changes",
       "signal": ""
@@ -1906,6 +1936,11 @@
       "signal": ""
     },
     {
+      "input": "network unavailable: extended github connectivity loss | [not-pipeline-actionable]",
+      "kind": "network_unavailable",
+      "signal": ""
+    },
+    {
       "input": "network unavailable: extended github connectivity loss | [dev-produced-no-changes]",
       "kind": "network_unavailable",
       "signal": ""
@@ -2062,6 +2097,11 @@
     },
     {
       "input": "stream idle timeout | [stage:worktree-containment]",
+      "kind": "stream_idle_timeout",
+      "signal": "stream_idle_timeout"
+    },
+    {
+      "input": "stream idle timeout | [not-pipeline-actionable]",
       "kind": "stream_idle_timeout",
       "signal": "stream_idle_timeout"
     },
@@ -2226,6 +2266,11 @@
       "signal": "api_overloaded"
     },
     {
+      "input": "overloaded | [not-pipeline-actionable]",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
       "input": "overloaded | [dev-produced-no-changes]",
       "kind": "api_overloaded",
       "signal": "api_overloaded"
@@ -2382,6 +2427,11 @@
     },
     {
       "input": "socket connection was closed | [stage:worktree-containment]",
+      "kind": "api_connection_lost",
+      "signal": "api_connection_lost"
+    },
+    {
+      "input": "socket connection was closed | [not-pipeline-actionable]",
       "kind": "api_connection_lost",
       "signal": "api_connection_lost"
     },
@@ -2546,6 +2596,11 @@
       "signal": "rate_limit_quota_exhausted"
     },
     {
+      "input": "[rate-limit-quota-exhausted] | [not-pipeline-actionable]",
+      "kind": "rate_limit_quota_exhausted",
+      "signal": "rate_limit_quota_exhausted"
+    },
+    {
       "input": "[rate-limit-quota-exhausted] | [dev-produced-no-changes]",
       "kind": "rate_limit_quota_exhausted",
       "signal": "rate_limit_quota_exhausted"
@@ -2702,6 +2757,11 @@
     },
     {
       "input": "not_found_error model | [stage:worktree-containment]",
+      "kind": "model_unavailable",
+      "signal": ""
+    },
+    {
+      "input": "not_found_error model | [not-pipeline-actionable]",
       "kind": "model_unavailable",
       "signal": ""
     },
@@ -2866,6 +2926,11 @@
       "signal": ""
     },
     {
+      "input": "pipeline-start-failure issue-closed | [not-pipeline-actionable]",
+      "kind": "issue_closed",
+      "signal": ""
+    },
+    {
       "input": "pipeline-start-failure issue-closed | [dev-produced-no-changes]",
       "kind": "issue_closed",
       "signal": ""
@@ -3022,6 +3087,11 @@
     },
     {
       "input": "[blocked-dependency] | [stage:worktree-containment]",
+      "kind": "blocked_dependency",
+      "signal": ""
+    },
+    {
+      "input": "[blocked-dependency] | [not-pipeline-actionable]",
       "kind": "blocked_dependency",
       "signal": ""
     },
@@ -3186,6 +3256,11 @@
       "signal": "architecture_approval_required"
     },
     {
+      "input": "architecture approval required | [not-pipeline-actionable]",
+      "kind": "architecture_approval_required",
+      "signal": "architecture_approval_required"
+    },
+    {
       "input": "architecture approval required | [dev-produced-no-changes]",
       "kind": "architecture_approval_required",
       "signal": "architecture_approval_required"
@@ -3342,6 +3417,11 @@
     },
     {
       "input": "github-quota-low | [stage:worktree-containment]",
+      "kind": "github_quota_low",
+      "signal": "github_quota_low"
+    },
+    {
+      "input": "github-quota-low | [not-pipeline-actionable]",
       "kind": "github_quota_low",
       "signal": "github_quota_low"
     },
@@ -3506,6 +3586,11 @@
       "signal": "github_network_outage"
     },
     {
+      "input": "github-network-outage | [not-pipeline-actionable]",
+      "kind": "github_network_outage",
+      "signal": "github_network_outage"
+    },
+    {
       "input": "github-network-outage | [dev-produced-no-changes]",
       "kind": "github_network_outage",
       "signal": "github_network_outage"
@@ -3662,6 +3747,11 @@
     },
     {
       "input": "[pr-merge-unmerged | [stage:worktree-containment]",
+      "kind": "pr_merge_unmerged",
+      "signal": ""
+    },
+    {
+      "input": "[pr-merge-unmerged | [not-pipeline-actionable]",
       "kind": "pr_merge_unmerged",
       "signal": ""
     },
@@ -3826,6 +3916,11 @@
       "signal": ""
     },
     {
+      "input": "[stage:worktree-containment] | [not-pipeline-actionable]",
+      "kind": "containment_breach",
+      "signal": ""
+    },
+    {
       "input": "[stage:worktree-containment] | [dev-produced-no-changes]",
       "kind": "containment_breach",
       "signal": ""
@@ -3926,6 +4021,171 @@
       "signal": ""
     },
     {
+      "input": "[not-pipeline-actionable] | network unavailable: extended github connectivity loss",
+      "kind": "network_unavailable",
+      "signal": ""
+    },
+    {
+      "input": "[not-pipeline-actionable] | stream idle timeout",
+      "kind": "stream_idle_timeout",
+      "signal": "stream_idle_timeout"
+    },
+    {
+      "input": "[not-pipeline-actionable] | overloaded",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "[not-pipeline-actionable] | socket connection was closed",
+      "kind": "api_connection_lost",
+      "signal": "api_connection_lost"
+    },
+    {
+      "input": "[not-pipeline-actionable] | [rate-limit-quota-exhausted]",
+      "kind": "rate_limit_quota_exhausted",
+      "signal": "rate_limit_quota_exhausted"
+    },
+    {
+      "input": "[not-pipeline-actionable] | not_found_error model",
+      "kind": "model_unavailable",
+      "signal": ""
+    },
+    {
+      "input": "[not-pipeline-actionable] | pipeline-start-failure issue-closed",
+      "kind": "issue_closed",
+      "signal": ""
+    },
+    {
+      "input": "[not-pipeline-actionable] | [blocked-dependency]",
+      "kind": "blocked_dependency",
+      "signal": ""
+    },
+    {
+      "input": "[not-pipeline-actionable] | architecture approval required",
+      "kind": "architecture_approval_required",
+      "signal": "architecture_approval_required"
+    },
+    {
+      "input": "[not-pipeline-actionable] | github-quota-low",
+      "kind": "github_quota_low",
+      "signal": "github_quota_low"
+    },
+    {
+      "input": "[not-pipeline-actionable] | github-network-outage",
+      "kind": "github_network_outage",
+      "signal": "github_network_outage"
+    },
+    {
+      "input": "[not-pipeline-actionable] | [pr-merge-unmerged",
+      "kind": "pr_merge_unmerged",
+      "signal": ""
+    },
+    {
+      "input": "[not-pipeline-actionable] | [stage:worktree-containment]",
+      "kind": "containment_breach",
+      "signal": ""
+    },
+    {
+      "input": "[not-pipeline-actionable] | [dev-produced-no-changes]",
+      "kind": "not_pipeline_actionable",
+      "signal": ""
+    },
+    {
+      "input": "[not-pipeline-actionable] | [dev-handoff-missing]",
+      "kind": "not_pipeline_actionable",
+      "signal": ""
+    },
+    {
+      "input": "[not-pipeline-actionable] | premature turn end",
+      "kind": "not_pipeline_actionable",
+      "signal": ""
+    },
+    {
+      "input": "[not-pipeline-actionable] | worktree_uncommitted",
+      "kind": "not_pipeline_actionable",
+      "signal": ""
+    },
+    {
+      "input": "[not-pipeline-actionable] | budget_ceiling_hit",
+      "kind": "not_pipeline_actionable",
+      "signal": ""
+    },
+    {
+      "input": "[not-pipeline-actionable] | [runaway-progress-exceeded]",
+      "kind": "not_pipeline_actionable",
+      "signal": ""
+    },
+    {
+      "input": "[not-pipeline-actionable] | [runaway-ceiling-exceeded]",
+      "kind": "not_pipeline_actionable",
+      "signal": ""
+    },
+    {
+      "input": "[not-pipeline-actionable] | [cost-cap-exceeded]",
+      "kind": "not_pipeline_actionable",
+      "signal": ""
+    },
+    {
+      "input": "[not-pipeline-actionable] | stage-no-output-timeout",
+      "kind": "not_pipeline_actionable",
+      "signal": ""
+    },
+    {
+      "input": "[not-pipeline-actionable] | [stall-killed]",
+      "kind": "not_pipeline_actionable",
+      "signal": ""
+    },
+    {
+      "input": "[not-pipeline-actionable] | pipeline_budget_exceeded",
+      "kind": "not_pipeline_actionable",
+      "signal": ""
+    },
+    {
+      "input": "[not-pipeline-actionable] | schema validation",
+      "kind": "not_pipeline_actionable",
+      "signal": ""
+    },
+    {
+      "input": "[not-pipeline-actionable] | [adapter-auth-failed]",
+      "kind": "not_pipeline_actionable",
+      "signal": ""
+    },
+    {
+      "input": "[not-pipeline-actionable] | [no-changes-produced]",
+      "kind": "not_pipeline_actionable",
+      "signal": ""
+    },
+    {
+      "input": "[not-pipeline-actionable] | [validation-failed]",
+      "kind": "not_pipeline_actionable",
+      "signal": ""
+    },
+    {
+      "input": "[not-pipeline-actionable] | [validation-inconclusive]",
+      "kind": "not_pipeline_actionable",
+      "signal": ""
+    },
+    {
+      "input": "[not-pipeline-actionable] | [branch-forked]",
+      "kind": "not_pipeline_actionable",
+      "signal": ""
+    },
+    {
+      "input": "[not-pipeline-actionable] | [commit-orphaned]",
+      "kind": "not_pipeline_actionable",
+      "signal": ""
+    },
+    {
+      "input": "[not-pipeline-actionable] | [permission-denied]",
+      "kind": "not_pipeline_actionable",
+      "signal": ""
+    },
+    {
+      "input": "[not-pipeline-actionable] | subagent crash",
+      "kind": "not_pipeline_actionable",
+      "signal": ""
+    },
+    {
       "input": "[dev-produced-no-changes] | network unavailable: extended github connectivity loss",
       "kind": "network_unavailable",
       "signal": ""
@@ -3988,6 +4248,11 @@
     {
       "input": "[dev-produced-no-changes] | [stage:worktree-containment]",
       "kind": "containment_breach",
+      "signal": ""
+    },
+    {
+      "input": "[dev-produced-no-changes] | [not-pipeline-actionable]",
+      "kind": "not_pipeline_actionable",
       "signal": ""
     },
     {
@@ -4151,6 +4416,11 @@
       "signal": ""
     },
     {
+      "input": "[dev-handoff-missing] | [not-pipeline-actionable]",
+      "kind": "not_pipeline_actionable",
+      "signal": ""
+    },
+    {
       "input": "[dev-handoff-missing] | [dev-produced-no-changes]",
       "kind": "dev_produced_no_changes",
       "signal": ""
@@ -4308,6 +4578,11 @@
     {
       "input": "premature turn end | [stage:worktree-containment]",
       "kind": "containment_breach",
+      "signal": ""
+    },
+    {
+      "input": "premature turn end | [not-pipeline-actionable]",
+      "kind": "not_pipeline_actionable",
       "signal": ""
     },
     {
@@ -4471,6 +4746,11 @@
       "signal": ""
     },
     {
+      "input": "worktree_uncommitted | [not-pipeline-actionable]",
+      "kind": "not_pipeline_actionable",
+      "signal": ""
+    },
+    {
       "input": "worktree_uncommitted | [dev-produced-no-changes]",
       "kind": "dev_produced_no_changes",
       "signal": ""
@@ -4628,6 +4908,11 @@
     {
       "input": "budget_ceiling_hit | [stage:worktree-containment]",
       "kind": "containment_breach",
+      "signal": ""
+    },
+    {
+      "input": "budget_ceiling_hit | [not-pipeline-actionable]",
+      "kind": "not_pipeline_actionable",
       "signal": ""
     },
     {
@@ -4791,6 +5076,11 @@
       "signal": ""
     },
     {
+      "input": "[runaway-progress-exceeded] | [not-pipeline-actionable]",
+      "kind": "not_pipeline_actionable",
+      "signal": ""
+    },
+    {
       "input": "[runaway-progress-exceeded] | [dev-produced-no-changes]",
       "kind": "dev_produced_no_changes",
       "signal": ""
@@ -4948,6 +5238,11 @@
     {
       "input": "[runaway-ceiling-exceeded] | [stage:worktree-containment]",
       "kind": "containment_breach",
+      "signal": ""
+    },
+    {
+      "input": "[runaway-ceiling-exceeded] | [not-pipeline-actionable]",
+      "kind": "not_pipeline_actionable",
       "signal": ""
     },
     {
@@ -5111,6 +5406,11 @@
       "signal": ""
     },
     {
+      "input": "[cost-cap-exceeded] | [not-pipeline-actionable]",
+      "kind": "not_pipeline_actionable",
+      "signal": ""
+    },
+    {
       "input": "[cost-cap-exceeded] | [dev-produced-no-changes]",
       "kind": "dev_produced_no_changes",
       "signal": ""
@@ -5268,6 +5568,11 @@
     {
       "input": "stage-no-output-timeout | [stage:worktree-containment]",
       "kind": "containment_breach",
+      "signal": ""
+    },
+    {
+      "input": "stage-no-output-timeout | [not-pipeline-actionable]",
+      "kind": "not_pipeline_actionable",
       "signal": ""
     },
     {
@@ -5431,6 +5736,11 @@
       "signal": ""
     },
     {
+      "input": "[stall-killed] | [not-pipeline-actionable]",
+      "kind": "not_pipeline_actionable",
+      "signal": ""
+    },
+    {
       "input": "[stall-killed] | [dev-produced-no-changes]",
       "kind": "dev_produced_no_changes",
       "signal": ""
@@ -5588,6 +5898,11 @@
     {
       "input": "pipeline_budget_exceeded | [stage:worktree-containment]",
       "kind": "containment_breach",
+      "signal": ""
+    },
+    {
+      "input": "pipeline_budget_exceeded | [not-pipeline-actionable]",
+      "kind": "not_pipeline_actionable",
       "signal": ""
     },
     {
@@ -5751,6 +6066,11 @@
       "signal": ""
     },
     {
+      "input": "schema validation | [not-pipeline-actionable]",
+      "kind": "not_pipeline_actionable",
+      "signal": ""
+    },
+    {
       "input": "schema validation | [dev-produced-no-changes]",
       "kind": "dev_produced_no_changes",
       "signal": ""
@@ -5908,6 +6228,11 @@
     {
       "input": "[adapter-auth-failed] | [stage:worktree-containment]",
       "kind": "containment_breach",
+      "signal": ""
+    },
+    {
+      "input": "[adapter-auth-failed] | [not-pipeline-actionable]",
+      "kind": "not_pipeline_actionable",
       "signal": ""
     },
     {
@@ -6071,6 +6396,11 @@
       "signal": ""
     },
     {
+      "input": "[no-changes-produced] | [not-pipeline-actionable]",
+      "kind": "not_pipeline_actionable",
+      "signal": ""
+    },
+    {
       "input": "[no-changes-produced] | [dev-produced-no-changes]",
       "kind": "dev_produced_no_changes",
       "signal": ""
@@ -6228,6 +6558,11 @@
     {
       "input": "[validation-failed] | [stage:worktree-containment]",
       "kind": "containment_breach",
+      "signal": ""
+    },
+    {
+      "input": "[validation-failed] | [not-pipeline-actionable]",
+      "kind": "not_pipeline_actionable",
       "signal": ""
     },
     {
@@ -6391,6 +6726,11 @@
       "signal": ""
     },
     {
+      "input": "[validation-inconclusive] | [not-pipeline-actionable]",
+      "kind": "not_pipeline_actionable",
+      "signal": ""
+    },
+    {
       "input": "[validation-inconclusive] | [dev-produced-no-changes]",
       "kind": "dev_produced_no_changes",
       "signal": ""
@@ -6548,6 +6888,11 @@
     {
       "input": "[branch-forked] | [stage:worktree-containment]",
       "kind": "containment_breach",
+      "signal": ""
+    },
+    {
+      "input": "[branch-forked] | [not-pipeline-actionable]",
+      "kind": "not_pipeline_actionable",
       "signal": ""
     },
     {
@@ -6711,6 +7056,11 @@
       "signal": ""
     },
     {
+      "input": "[commit-orphaned] | [not-pipeline-actionable]",
+      "kind": "not_pipeline_actionable",
+      "signal": ""
+    },
+    {
       "input": "[commit-orphaned] | [dev-produced-no-changes]",
       "kind": "dev_produced_no_changes",
       "signal": ""
@@ -6871,6 +7221,11 @@
       "signal": ""
     },
     {
+      "input": "[permission-denied] | [not-pipeline-actionable]",
+      "kind": "not_pipeline_actionable",
+      "signal": ""
+    },
+    {
       "input": "[permission-denied] | [dev-produced-no-changes]",
       "kind": "dev_produced_no_changes",
       "signal": ""
@@ -7028,6 +7383,11 @@
     {
       "input": "subagent crash | [stage:worktree-containment]",
       "kind": "containment_breach",
+      "signal": ""
+    },
+    {
+      "input": "subagent crash | [not-pipeline-actionable]",
+      "kind": "not_pipeline_actionable",
       "signal": ""
     },
     {

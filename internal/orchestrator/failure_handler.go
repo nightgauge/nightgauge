@@ -277,6 +277,46 @@ const (
 	// TerminalKindPrematureTurnEnd's "agent ended its turn on a promise"
 	// bucket — not a pipeline tooling/runtime defect. Issue #317.
 	TerminalKindNoChangesProduced = "no_changes_produced"
+	// TerminalKindNotPipelineActionable is set when a stage DECLARES that the
+	// issue's deliverable cannot be produced by any pipeline lap — counsel
+	// sign-off, a credential only an operator holds, a physical or legal act, a
+	// decision reserved to a human. The declaration is structural: a
+	// NOT_PIPELINE_ACTIONABLE feedback signal in the stage's own deliverable,
+	// never a text reading of its final message.
+	//
+	// This is NOT a failure and NOT a deferral, and it is worth being precise
+	// about why it is neither:
+	//
+	//   A FAILURE says something went wrong. Nothing did. The stage read the
+	//   issue, saw that no code could satisfy it, and said so — which is the
+	//   correct behaviour, and the ONLY correct behaviour: the alternative is a
+	//   stage that fabricates a docs commit to look productive over a legal
+	//   review it is not licensed to perform.
+	//
+	//   A DEFERRAL (TerminalKindBlockedDependency) says "not yet". This says
+	//   "not ever, by this pipeline". A deferral keeps the issue eligible
+	//   because a blocker will close; here nothing closes, so keeping it
+	//   eligible only guarantees the same discovery next tick, at the same
+	//   price. #1241's specimen — the specimen run — a privacy-policy legal
+	//   review — spent a planning stage and $0.25 of dev to conclude what its
+	//   own issue body said in its first line.
+	//
+	// Routing therefore matches TerminalKindBranchForked rather than the
+	// transient kinds: no LifetimeIssueFailures increment (the issue is not
+	// defective and neither is the factory), no cascade-breaker feed, no board
+	// revert to Ready, and no retry schedule — nothing should re-dispatch it.
+	// The way back in is the human: the extension path applies the
+	// `owner-action` label (the DEFAULT sole entry of
+	// autonomous.exclude_labels, honoured by the candidate filter since #317),
+	// parks the row in Backlog, writes the durable blocked finding, comments on
+	// the issue and raises the Action Center card.
+	//
+	// It does NOT pause the queue. Discovering that one issue was misfiled says
+	// nothing about the other work in the repository, and halting the fleet
+	// over it is how #1241 was reported in the first place — as an autonomous
+	// halt on a dogfood workspace repository whose sole open issue was that legal
+	// review.
+	TerminalKindNotPipelineActionable = "not_pipeline_actionable"
 	// TerminalKindValidationFailed is set when feature-validate honestly fails
 	// its quality gates: the skill exits 0 but writes
 	// `validation_status: "failed"` (+ an errorCategory) and deliberately
