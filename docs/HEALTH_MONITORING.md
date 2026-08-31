@@ -53,6 +53,38 @@ A health finding that a human must act on can itself become a
 [ADR 015](decisions/015-decision-requests.md), designed-for but not automated.
 See [ATTENTION_PRODUCERS.md](ATTENTION_PRODUCERS.md) for the authoring contract.
 
+### One repo per score (#1231)
+
+A health snapshot is derived from, and written under, **the repo whose run
+produced it** — never the runner's. Both entry points
+(`Dashboard.recordHealthSnapshotForRun`, fed by `pipeline.complete` and by
+concurrent-slot completion, and the polling path in `syncFromPipelineState`)
+funnel through `writeHealthSnapshot`, which resolves the run's repo from the
+`repo` slug the Go scheduler already sends and builds a `DashboardState` over
+that repo's `TelemetryStore`.
+
+This is not cosmetic bookkeeping. Before it, both paths scored a run against the
+dashboard's history and appended to the dashboard's path however cross-repo the
+run was, so a single `health-history.jsonl` accumulated **two populations**: the
+runner repo's runs scoring `costTrend` 100 and a dispatched repo's scoring 0,
+alternating at the same timestamp for the same issue number. The visible score
+depended on which path last evaluated, no reading described any one repository,
+and a trend drawn over the file compared different systems point to point.
+
+Two consequences worth knowing when reading a health file:
+
+- **A snapshot is written per run, keyed by `(repoRoot, issue, runId)`.** One
+  completed run appends exactly one record. The former guard was a single
+  `lastSnapshotIssueNumber` scalar on one of the two paths, which caught only an
+  immediate repeat — the real file held six byte-identical records at one
+  timestamp.
+- **A repo with no history of its own gets no snapshot.** Scoring every
+  component against an empty corpus produces a meaningless point; leaving the
+  trend short is better than seeding it with one.
+
+Records written before this landed cannot be attributed after the fact and
+should not be read as a single series.
+
 ## System Architecture
 
 ```mermaid

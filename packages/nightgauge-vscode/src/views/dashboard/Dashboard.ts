@@ -8,6 +8,7 @@
  */
 
 import * as vscode from "vscode";
+import * as path from "node:path";
 import { DashboardState, type ToolCallEntry, type HistoricalRunIdentity } from "./DashboardState";
 import {
   getDashboardHtml,
@@ -340,7 +341,15 @@ export class Dashboard implements vscode.Disposable {
   /** Guard to prevent overlapping metrics refreshes from concurrent event sources */
   private metricsRefreshInProgress = false;
   /** Guard to prevent duplicate health snapshots for the same pipeline run */
-  private lastSnapshotIssueNumber: number | null = null;
+  /**
+   * Runs already snapshotted, as `repoRoot|issue|runId` (#1231). Replaces a
+   * `lastSnapshotIssueNumber` scalar that only caught an immediate repeat on
+   * one of the two entry points.
+   */
+  private readonly recordedSnapshotKeys = new Set<string>();
+
+  /** Bound on {@link recordedSnapshotKeys} so a long session cannot grow it without limit. */
+  private static readonly MAX_SNAPSHOT_KEYS = 500;
   /** Guard: prevent duplicate execution history writes for the same issue */
 
   /** DI container — used to resolve ProjectBoardService instead of creating a new instance (Issue #2771) */
@@ -1095,7 +1104,8 @@ export class Dashboard implements vscode.Disposable {
         return;
       }
       // Pipeline still running - start tracking and reconcile completed stages (Issue #639)
-      this.lastSnapshotIssueNumber = null; // Reset guard for new run
+      // No guard to reset: the snapshot key includes the run identity, so a new
+      // run of the same issue is a new key and records on its own (#1231).
       this.state.startRun(
         pipelineState.issue_number,
         pipelineState.title ?? `Issue #${pipelineState.issue_number}`,
@@ -1176,14 +1186,12 @@ export class Dashboard implements vscode.Disposable {
       // pipeline state.json tokens.estimated_cost_usd. We prefer the pipeline state
       // value for snapshots because it's the single source of truth written by the
       // orchestrator; live token events may lag if the dashboard panel wasn't open.
-      // Guard: only record once per issue to prevent duplicate snapshots from
-      // repeated syncFromPipelineState calls after all stages are terminal.
-      if (this.lastSnapshotIssueNumber !== currentRun.issueNumber) {
-        this.lastSnapshotIssueNumber = currentRun.issueNumber;
-        this.recordHealthSnapshot(currentRun, pipelineState.tokens?.estimated_cost_usd ?? 0).catch(
-          () => {}
-        );
-      }
+      // Dedupe lives in writeHealthSnapshot(), keyed by (repo, issue, run), so
+      // it covers this path AND the IPC path rather than only guarding against
+      // an immediate repeat on this one (#1231).
+      this.recordHealthSnapshot(currentRun, pipelineState.tokens?.estimated_cost_usd ?? 0).catch(
+        () => {}
+      );
 
       // Auto-refresh all metrics after pipeline completion (Issue #998)
       // refreshAllMetrics() is async and non-blocking; the subsequent
@@ -1252,13 +1260,115 @@ export class Dashboard implements vscode.Disposable {
     run: import("./DashboardState").PipelineRunSummary,
     costUsd?: number
   ): Promise<void> {
+    // No repo attribution available on this path: `PipelineRunSummary` carries
+    // no repo, and this fires from `syncFromPipelineState` reading the
+    // singleton state service — which is the runner's. So it can only speak for
+    // the dashboard's own repo, and it says so rather than guessing (#1231).
+    const cost = costUsd ?? run.usage.costUsd;
+    await this.writeHealthSnapshot({
+      repoRoot: this.workspaceRoot,
+      issueNumber: run.issueNumber,
+      costUsd: cost,
+      // `runId` is optional on a PipelineRunSummary. Falling back to the start
+      // time keeps two runs of one issue distinguishable — without it both
+      // collapse to the same dedupe key and the second never records.
+      runId: run.runId ?? run.startedAt?.toISOString(),
+    });
+  }
+
+  /**
+   * Write one health snapshot, attributed to the repo whose run produced it.
+   *
+   * THE SNAPSHOT IS DERIVED FROM, AND WRITTEN UNDER, ONE REPO (#1231). Before
+   * this, both entry points built `HealthWidgetService(this.state,
+   * this.workspaceRoot)` — the dashboard's history and the dashboard's path —
+   * for a run that may have executed in a sibling repository. The result was a
+   * single `health-history.jsonl` holding two populations: the runner repo's
+   * runs scoring `costTrend` 100, and a dispatched repo's scoring 0, alternating
+   * at the same timestamp for the same issue. A score read off that file does
+   * not describe any repository, and a trend over it compares different systems
+   * point to point.
+   *
+   * When the run's repo is not the dashboard's, a DashboardState is built over
+   * THAT repo's `TelemetryStore` and loaded before the components are computed,
+   * so `getAggregates`/`getCostTrend`/`getHistory` all see the right corpus.
+   *
+   * Non-critical throughout: a snapshot must never break pipeline completion.
+   */
+  private async writeHealthSnapshot(args: {
+    repoRoot: string | undefined;
+    issueNumber: number;
+    costUsd: number;
+    runId?: string;
+  }): Promise<void> {
+    const { repoRoot, issueNumber, costUsd, runId } = args;
+    if (!repoRoot) return;
+
+    // One completed run appends exactly one snapshot (#1231). Both entry points
+    // funnel here, so the guard covers the IPC path AND the polling path — the
+    // old `lastSnapshotIssueNumber` scalar guarded only the latter, and only
+    // against an immediate repeat: two runs alternating issue numbers slipped
+    // straight through it. Keyed by run, not by issue, so a legitimate re-run of
+    // the same issue still records.
+    const key = `${repoRoot}|${issueNumber}|${runId ?? ""}`;
+    if (this.recordedSnapshotKeys.has(key)) return;
+    this.recordedSnapshotKeys.add(key);
+    if (this.recordedSnapshotKeys.size > Dashboard.MAX_SNAPSHOT_KEYS) {
+      // Bounded: drop the oldest insertion. A Set preserves insertion order, so
+      // the first key is the oldest.
+      const oldest = this.recordedSnapshotKeys.values().next().value;
+      if (oldest !== undefined) this.recordedSnapshotKeys.delete(oldest);
+    }
+
     try {
-      const service = new HealthWidgetService(this.state, this.workspaceRoot);
-      // Prefer authoritative cost from pipeline state; fall back to run usage
-      const cost = costUsd ?? run.usage.costUsd;
-      await service.recordSnapshot(run.issueNumber, cost);
+      const state = await this.stateForRepo(repoRoot);
+      if (!state) return;
+      await new HealthWidgetService(state, repoRoot).recordSnapshot(issueNumber, costUsd);
     } catch {
       // Non-critical — snapshot failure must not break pipeline
+    }
+  }
+
+  /**
+   * The DashboardState whose history belongs to `repoRoot`.
+   *
+   * Returns the dashboard's own state when the roots match — the common
+   * single-repo case, and the only case that was ever correct before #1231.
+   * Otherwise builds one over that repo's `TelemetryStore` and loads it.
+   * `computeHealthComponents()` reads only `getHistory()`, `getAggregates()`
+   * and `getCostTrend()`, all of which derive from the loaded history, so a
+   * state constructed without a Memento is sufficient — and is what keeps this
+   * from disturbing the dashboard's own cached view.
+   */
+  private async stateForRepo(repoRoot: string): Promise<DashboardState | null> {
+    if (this.workspaceRoot && path.resolve(repoRoot) === path.resolve(this.workspaceRoot)) {
+      return this.state;
+    }
+    try {
+      const { TelemetryStore } = await import("../../services/TelemetryStore");
+      const state = new DashboardState(undefined, repoRoot, new TelemetryStore(repoRoot));
+      const result = await state.loadFromTelemetryStore();
+      // An empty corpus scores every component against nothing; writing that
+      // would put a meaningless point on the sibling's trend.
+      if (!result.ok || state.getHistory().length === 0) return null;
+      return state;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Absolute root of the repo a `pipeline.complete` payload names, or the
+   * dashboard's own root when the payload carries no repo or names one this
+   * workspace does not know.
+   */
+  private resolveRepoRoot(repo?: string): string | undefined {
+    if (!repo || !this.workspaceRoot) return this.workspaceRoot;
+    try {
+      const found = WorkspaceManager.getInstance(this.workspaceRoot).findRepositoryByGitHub(repo);
+      return found?.path ?? this.workspaceRoot;
+    } catch {
+      return this.workspaceRoot;
     }
   }
 
@@ -1276,10 +1386,23 @@ export class Dashboard implements vscode.Disposable {
    *
    * @see Issue #2245 — health snapshots missing for concurrent pipeline runs
    */
-  async recordHealthSnapshotForRun(issueNumber: number, costUsd: number): Promise<void> {
+  async recordHealthSnapshotForRun(
+    issueNumber: number,
+    costUsd: number,
+    repo?: string,
+    runId?: string
+  ): Promise<void> {
     try {
-      const service = new HealthWidgetService(this.state, this.workspaceRoot);
-      await service.recordSnapshot(issueNumber, costUsd);
+      // `repo` is what makes this attributable (#1231). The Go scheduler has
+      // always sent it on `pipeline.complete`; the handler logged it and threw
+      // it away, so a cross-repo run was scored against the dashboard's history
+      // and filed under the dashboard's path.
+      await this.writeHealthSnapshot({
+        repoRoot: this.resolveRepoRoot(repo),
+        issueNumber,
+        costUsd,
+        runId,
+      });
 
       // Refresh health widget data and trigger a panel update so the
       // dashboard shows the new data point without manual refresh.

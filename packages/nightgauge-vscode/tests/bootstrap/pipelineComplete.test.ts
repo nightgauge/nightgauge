@@ -76,7 +76,7 @@ describe("handleGoPipelineComplete (Issue #500)", () => {
     // The snapshot must be taken against the RELOADED history, so the reload
     // has to have settled — not merely been started — before it is recorded.
     expect(h.calls).toEqual(["reload:start", "reload:end", "snapshot:42:1.5", "upload"]);
-    expect(h.recordHealthSnapshotForRun).toHaveBeenCalledWith(42, 1.5);
+    expect(h.recordHealthSnapshotForRun).toHaveBeenCalledWith(42, 1.5, undefined, undefined);
     expect(h.reloadResolved.value).toBe(true);
   });
 
@@ -95,7 +95,7 @@ describe("handleGoPipelineComplete (Issue #500)", () => {
 
     await expect(handleGoPipelineComplete(h.deps, PAYLOAD)).resolves.toBeUndefined();
 
-    expect(h.recordHealthSnapshotForRun).toHaveBeenCalledWith(42, 1.5);
+    expect(h.recordHealthSnapshotForRun).toHaveBeenCalledWith(42, 1.5, undefined, undefined);
     expect(h.onPipelineCompleted).toHaveBeenCalledTimes(1);
   });
 
@@ -105,7 +105,7 @@ describe("handleGoPipelineComplete (Issue #500)", () => {
     await expect(handleGoPipelineComplete(h.deps, PAYLOAD)).resolves.toBeUndefined();
 
     expect([...h.pipelineCompleteIssues]).toEqual([42]);
-    expect(h.recordHealthSnapshotForRun).toHaveBeenCalledWith(42, 1.5);
+    expect(h.recordHealthSnapshotForRun).toHaveBeenCalledWith(42, 1.5, undefined, undefined);
   });
 
   it("still flushes telemetry when the dashboard work throws", async () => {
@@ -121,5 +121,41 @@ describe("handleGoPipelineComplete (Issue #500)", () => {
 
     expect(h.onPipelineCompleted).toHaveBeenCalledTimes(1);
     expect([...h.pipelineCompleteIssues]).toEqual([42]);
+  });
+
+  /**
+   * #1231 — `repo` and `runId` are on the payload and were logged but never
+   * forwarded, so a cross-repo run's snapshot was scored against the
+   * dashboard's history and filed under the dashboard's path.
+   */
+  it("forwards the payload's repo and runId to the health snapshot", async () => {
+    const { deps, recordHealthSnapshotForRun } = makeDeps();
+
+    await handleGoPipelineComplete(deps, {
+      issueNumber: 349,
+      success: true,
+      totalCostUSD: 10.85,
+      repo: "acme/mobile",
+      runId: "run-abc",
+    });
+
+    expect(
+      recordHealthSnapshotForRun,
+      "without repo the snapshot cannot be attributed to the repo that ran"
+    ).toHaveBeenCalledWith(349, 10.85, "acme/mobile", "run-abc");
+  });
+
+  it("passes repo through as undefined when the payload omits it", async () => {
+    const { deps, recordHealthSnapshotForRun } = makeDeps();
+
+    await handleGoPipelineComplete(deps, {
+      issueNumber: 7,
+      success: true,
+      totalCostUSD: 2,
+    });
+
+    // Undefined, not a substituted default: the receiver decides what an
+    // unattributed run means, and it must be able to tell that it IS one.
+    expect(recordHealthSnapshotForRun).toHaveBeenCalledWith(7, 2, undefined, undefined);
   });
 });
