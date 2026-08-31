@@ -244,6 +244,25 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (*adapters.Ru
 	cmd := exec.CommandContext(execCtx, cmdName, args...)
 	cmd.Dir = worktreeDir
 
+	// Spawn the stage as its own PROCESS-GROUP LEADER (#1253) so every kill
+	// path can reach its descendants.
+	//
+	// Without this the stage shares the daemon's process group and there is no
+	// group to signal, so `Process.Signal`/`Process.Kill` reach exactly one
+	// pid. A stage that boots an emulator, a dev server or a database then
+	// leaves them running when it is cancelled: on SIGTERM a shell child MAY
+	// propagate through its own trap, but on SIGKILL — the path
+	// CancelWithGrace takes once the grace period expires — no trap runs at
+	// all, so the harder the kill the more certain the leak. The orphans are
+	// reparented to PID 1 with nothing tying them back to the run, which is
+	// the shape AGENTS.md describes for the spin loops that ran for eleven
+	// hours at load average 253.
+	//
+	// Setpgid also detaches the stage from the daemon's controlling terminal
+	// group, which is what we want for a headless child: an operator's Ctrl-C
+	// reaches the daemon, and the daemon decides how to tear the stage down.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+
 	// Merge environment
 	cmd.Env = composeStageEnv(os.Environ(), env, opts.SkillPath, runOpts.RunID)
 
@@ -543,7 +562,7 @@ func (m *Manager) StopExecution(repo string, issueNumber int) error {
 
 	// Send SIGTERM first for graceful shutdown
 	if execution.Process != nil {
-		_ = execution.Process.Signal(syscall.SIGTERM)
+		signalProcessTree(execution.Process, syscall.SIGTERM)
 
 		// Give 5 seconds for graceful shutdown
 		timer := time.NewTimer(5 * time.Second)
@@ -559,8 +578,9 @@ func (m *Manager) StopExecution(repo string, issueNumber int) error {
 		case <-done:
 			// Process exited gracefully
 		case <-timer.C:
-			// Force kill
-			_ = execution.Process.Kill()
+			// Force kill — the group, not the leader (#1253). SIGKILL runs no
+			// trap, so anything the stage spawned outlives a per-pid kill.
+			signalProcessTree(execution.Process, syscall.SIGKILL)
 		}
 	}
 
@@ -607,7 +627,7 @@ func (m *Manager) CancelWithGrace(key string, timeout time.Duration) (bool, erro
 
 	graceful := false
 	if ex.Process != nil {
-		_ = ex.Process.Signal(syscall.SIGTERM)
+		signalProcessTree(ex.Process, syscall.SIGTERM)
 
 		done := make(chan struct{})
 		go func() {
@@ -622,12 +642,44 @@ func (m *Manager) CancelWithGrace(key string, timeout time.Duration) (bool, erro
 		case <-done:
 			graceful = true
 		case <-timer.C:
-			_ = ex.Process.Kill()
+			// The grace period expired. SIGKILL cannot be trapped, so a
+			// per-pid kill here is precisely when descendants leak (#1253):
+			// no shell trap will run to take them down. Kill the group.
+			signalProcessTree(ex.Process, syscall.SIGKILL)
 		}
 	}
 
 	ex.Cancel()
 	return graceful, nil
+}
+
+// signalProcessTree delivers sig to the stage's whole PROCESS GROUP, falling
+// back to the single process when the group cannot be resolved (#1253).
+//
+// Stages are spawned with Setpgid (see startProcess), which makes the child a
+// group leader whose pgid equals its pid — so `kill(-pid, sig)` reaches the
+// stage AND everything it spawned. Signalling the bare pid reached only the
+// direct child, and every grandchild survived, reparented to PID 1.
+//
+// The fallback matters more than it looks. If a stage was started before this
+// change, or Setpgid failed, or the child already exited and its group is
+// gone, syscall.Kill(-pid, …) returns ESRCH — and a kill path that treated
+// that as "done" would silently signal NOTHING. Falling back to the process
+// keeps the old behaviour as the floor: this can reach more than before, never
+// less.
+//
+// Returns whether anything was signalled, so a caller can tell "reaped" from
+// "there was nothing to reap".
+func signalProcessTree(proc *os.Process, sig syscall.Signal) bool {
+	if proc == nil {
+		return false
+	}
+	// Negative pid == "the process group led by pid". Only meaningful because
+	// startProcess made the child a group leader.
+	if err := syscall.Kill(-proc.Pid, sig); err == nil {
+		return true
+	}
+	return proc.Signal(sig) == nil
 }
 
 // Stop stops a running execution by key (format: "owner/repo#number").
@@ -639,7 +691,7 @@ func (m *Manager) Stop(key string) {
 		return
 	}
 	if ex.Process != nil {
-		_ = ex.Process.Signal(syscall.SIGTERM)
+		signalProcessTree(ex.Process, syscall.SIGTERM)
 	}
 	ex.Cancel()
 }
@@ -653,7 +705,7 @@ func (m *Manager) Pause(key string) {
 		return
 	}
 	if ex.Process != nil {
-		_ = ex.Process.Signal(syscall.SIGSTOP)
+		signalProcessTree(ex.Process, syscall.SIGSTOP)
 	}
 }
 
@@ -666,7 +718,7 @@ func (m *Manager) Resume(key string) {
 		return
 	}
 	if ex.Process != nil {
-		_ = ex.Process.Signal(syscall.SIGCONT)
+		signalProcessTree(ex.Process, syscall.SIGCONT)
 	}
 }
 
