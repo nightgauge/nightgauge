@@ -655,6 +655,109 @@ func runAcCheck(t *testing.T, args ...string) ([]byte, error) {
 	return out, execErr
 }
 
+// Issue #1233: `ac-check` returned a verdict nothing in the pipeline could
+// satisfy — no skill wrote `- [x]`, no stage edited an issue body, and the
+// gate's own message instructed a human who is not there. `ac-mark` is the
+// deterministic write that closes it.
+func runAcMark(t *testing.T, args ...string) ([]byte, error) {
+	t.Helper()
+	prev := os.Stdout
+	rPipe, wPipe, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	os.Stdout = wPipe
+	t.Cleanup(func() { os.Stdout = prev })
+
+	cmd := rootCmd()
+	cmd.SetArgs(append([]string{"issue", "ac-mark"}, args...))
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	execErr := cmd.Execute()
+
+	wPipe.Close()
+	out, _ := io.ReadAll(rPipe)
+	os.Stdout = prev
+	return out, execErr
+}
+
+func TestIssueAcMarkOfflineTicksOnlyRequested(t *testing.T) {
+	out, err := runAcMark(t, "0", "--body", "- [ ] one\n- [ ] two\n", "--check", "1", "--json")
+	if err != nil {
+		t.Fatalf("unexpected error: %v\noutput: %s", err, string(out))
+	}
+	var got map[string]interface{}
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatalf("invalid JSON: %v\noutput: %s", err, string(out))
+	}
+	if body, _ := got["body"].(string); body != "- [x] one\n- [ ] two\n" {
+		t.Errorf("body = %q, want only criterion 1 ticked", body)
+	}
+	// Still failing overall: one criterion remains. A verb that reported
+	// "passed" here would hand the gate a false verdict.
+	if got["status"] != "failed" || got["unchecked_count"] != float64(1) {
+		t.Errorf("status=%v unchecked=%v, want failed/1", got["status"], got["unchecked_count"])
+	}
+}
+
+func TestIssueAcMarkListDoesNotWrite(t *testing.T) {
+	out, err := runAcMark(t, "0", "--body", "- [ ] alpha\n- [x] beta\n", "--list", "--json")
+	if err != nil {
+		t.Fatalf("unexpected error: %v\noutput: %s", err, string(out))
+	}
+	var got struct {
+		Total int `json:"total"`
+		Items []struct {
+			Index   int    `json:"index"`
+			Text    string `json:"text"`
+			Checked bool   `json:"checked"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatalf("invalid JSON: %v\noutput: %s", err, string(out))
+	}
+	if got.Total != 2 || len(got.Items) != 2 {
+		t.Fatalf("want 2 items, got %+v", got)
+	}
+	if got.Items[0].Text != "alpha" || got.Items[0].Checked {
+		t.Errorf("item 1 = %+v, want unchecked 'alpha'", got.Items[0])
+	}
+	if !got.Items[1].Checked {
+		t.Errorf("item 2 should report checked: %+v", got.Items[1])
+	}
+}
+
+func TestIssueAcMarkUnknownIndexIsAnError(t *testing.T) {
+	// Silently ignoring an index nobody can satisfy would let a caller that
+	// miscounted believe it had marked a criterion it never touched.
+	if _, err := runAcMark(t, "0", "--body", "- [ ] one\n", "--check", "7", "--json"); err == nil {
+		t.Error("expected an error for an out-of-range criterion index, got none")
+	}
+}
+
+func TestIssueAcMarkOfflineRequiresBody(t *testing.T) {
+	if _, err := runAcMark(t, "0", "--check", "1"); err == nil {
+		t.Error("expected error when offline mode is missing --body, got none")
+	}
+}
+
+func TestIssueAcMarkIsIdempotent(t *testing.T) {
+	out, err := runAcMark(t, "0", "--body", "- [x] done\n", "--check", "1", "--json")
+	if err != nil {
+		t.Fatalf("unexpected error: %v\noutput: %s", err, string(out))
+	}
+	var got map[string]interface{}
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if changed, _ := got["changed"].([]interface{}); len(changed) != 0 {
+		t.Errorf("re-marking a checked criterion reported a change: %v", changed)
+	}
+	if body, _ := got["body"].(string); body != "- [x] done\n" {
+		t.Errorf("body mutated on a no-op mark: %q", body)
+	}
+}
+
 func TestIssueAcCheckOfflineRequiresBody(t *testing.T) {
 	if _, err := runAcCheck(t, "0"); err == nil {
 		t.Error("expected error when offline mode is missing --body, got none")

@@ -637,6 +637,7 @@ func issueCmd() *cobra.Command {
 		issueRouteCmd(),
 		issueInferTypeCmd(),
 		issueAcCheckCmd(),
+		issueAcMarkCmd(),
 		issueListUnrefinedCmd(),
 		issueMarkRefinedCmd(),
 		issueHasLabelCmd(),
@@ -1974,6 +1975,164 @@ fence-toggle approach in internal/docs/checklinks.go.`,
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output as JSON")
 	cmd.Flags().StringVar(&bodyFlag, "body", "", "Override issue body (offline mode, or skip GitHub fetch online)")
 	return cmd
+}
+
+// issueAcMarkCmd ticks named acceptance-criteria checkboxes in an issue body.
+//
+// The WRITE half of the Phase 0.6 gate (#1233). `ac-check` counts and returns a
+// verdict, and nothing in the pipeline could ever satisfy that verdict: no skill
+// wrote `- [x]`, no stage edited an issue body, and the gate's own failure
+// message instructed a human who is not there. A `type:docs` issue whose author
+// did not pre-tick its criteria therefore deadlocked, and retry re-ran the same
+// stage into the same wall at full cost.
+//
+// The verb is deliberately dumb. It ticks EXACTLY the indices it is given and
+// reports which changed, which were already checked, and which do not exist. The
+// judgement of whether a criterion is actually satisfied belongs to the caller
+// and must be recorded as evidence there — a verb that decided for itself would
+// be the rubber stamp the gate exists to prevent.
+//
+// `--list` is the read side of that contract: a caller enumerates the criteria,
+// forms a per-criterion verdict, and passes back only the indices it can
+// substantiate. Indices are the same 1-based positions `ac-check` counts.
+func issueAcMarkCmd() *cobra.Command {
+	var (
+		owner      string
+		repo       string
+		outputJSON bool
+		bodyFlag   string
+		listOnly   bool
+		checkIdx   []int
+		dryRun     bool
+	)
+
+	cmd := &cobra.Command{
+		Use:   "ac-mark [number]",
+		Short: "Tick named acceptance-criteria checkboxes in an issue body",
+		Long: `Marks the acceptance-criteria checkboxes at the given 1-based indices,
+using the same start-of-line anchoring and fenced-code-block skipping as
+` + "`issue ac-check`" + `, so an index means the same criterion to both verbs.
+
+Only the box character changes: bullet, indentation, criterion text and line
+terminator are preserved byte-for-byte. Marking an already-checked index is a
+no-op success; an index that does not exist is reported and changes nothing.
+
+--list enumerates the criteria (index, text, checked) without writing, so a
+caller can form a per-criterion verdict before deciding what to mark.
+
+Online mode (default): fetches the body via GitHub and writes the result back.
+Offline mode (number 0): pass --body; the rewritten body is printed, never sent.`,
+		Args: cobra.ExactArgs(1),
+		Example: `  nightgauge issue ac-mark 355 --list --json
+  nightgauge issue ac-mark 355 --check 1 --check 3 --json
+  nightgauge issue ac-mark 0 --body "- [ ] a" --check 1 --json`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			number, err := strconv.Atoi(args[0])
+			if err != nil {
+				return fmt.Errorf("invalid issue number: %s", args[0])
+			}
+
+			body := bodyFlag
+			var nodeID string
+
+			if number > 0 {
+				client, cErr := clientFromConfig()
+				if cErr != nil {
+					return cErr
+				}
+				svc := gh.NewIssueService(client)
+				ownerPart, repoPart := splitRepo(owner, repo)
+				issue, gErr := svc.GetIssue(cmd.Context(), ownerPart, repoPart, number)
+				if gErr != nil {
+					return fmt.Errorf("get issue #%d: %w", number, enrichError(gErr))
+				}
+				if body == "" {
+					body = issue.Body
+				}
+				nodeID = issue.NodeID
+
+				if !listOnly && !dryRun {
+					newBody, res := acparse.Mark(body, checkIdx)
+					if len(res.NotFound) > 0 {
+						// Loud, not silent. An index nobody can satisfy means the
+						// caller miscounted, and marking the rest anyway would
+						// leave the gate believing a partial verdict.
+						return fmt.Errorf("no such acceptance criteria: %v (issue #%d has %d)",
+							res.NotFound, number, len(acparse.List(body)))
+					}
+					if len(res.Changed) > 0 {
+						if _, eErr := svc.EditIssue(cmd.Context(), nodeID, newBody); eErr != nil {
+							return fmt.Errorf("update issue #%d body: %w", number, enrichError(eErr))
+						}
+					}
+					return emitAcMark(number, newBody, res, outputJSON, false)
+				}
+			} else if body == "" {
+				return fmt.Errorf("offline mode (issue number 0) requires --body")
+			}
+
+			if listOnly {
+				items := acparse.List(body)
+				if outputJSON {
+					return printJSON(map[string]interface{}{
+						"v": 1, "number": number, "total": len(items), "items": items,
+					})
+				}
+				for _, it := range items {
+					box := " "
+					if it.Checked {
+						box = "x"
+					}
+					fmt.Printf("%d [%s] %s\n", it.Index, box, it.Text)
+				}
+				return nil
+			}
+
+			newBody, res := acparse.Mark(body, checkIdx)
+			if len(res.NotFound) > 0 {
+				return fmt.Errorf("no such acceptance criteria: %v (body has %d)",
+					res.NotFound, len(acparse.List(body)))
+			}
+			return emitAcMark(number, newBody, res, outputJSON, true)
+		},
+	}
+
+	cmd.Flags().StringVar(&owner, "owner", "nightgauge", "GitHub organization")
+	repoNameFlag(cmd, &repo, "nightgauge", "Repository (owner/name or name)")
+	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output as JSON")
+	cmd.Flags().StringVar(&bodyFlag, "body", "", "Override issue body (offline mode, or skip GitHub fetch online)")
+	cmd.Flags().BoolVar(&listOnly, "list", false, "List criteria (index, text, checked) without writing")
+	cmd.Flags().IntSliceVar(&checkIdx, "check", nil, "1-based criterion index to tick (repeatable)")
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Compute the rewrite and report it without sending the edit")
+	return cmd
+}
+
+// emitAcMark renders an ac-mark result. `printBody` is set only offline/dry-run,
+// where the rewritten body is the deliverable rather than something already sent.
+func emitAcMark(number int, newBody string, res acparse.MarkResult, outputJSON, printBody bool) error {
+	after := acparse.Parse(newBody)
+	if outputJSON {
+		out := map[string]interface{}{
+			"v":               res.V,
+			"number":          number,
+			"changed":         res.Changed,
+			"already_checked": res.AlreadyChecked,
+			"status":          after.Status,
+			"checked_count":   after.Checked,
+			"unchecked_count": after.Unchecked,
+			"total":           after.Total,
+		}
+		if printBody {
+			out["body"] = newBody
+		}
+		return printJSON(out)
+	}
+	fmt.Printf("changed=%v already_checked=%v status=%s checked=%d unchecked=%d\n",
+		res.Changed, res.AlreadyChecked, after.Status, after.Checked, after.Unchecked)
+	if printBody {
+		fmt.Print(newBody)
+	}
+	return nil
 }
 
 // upsertTypeLabel replaces (or appends) the type:* label so a CLI --type flag

@@ -25,7 +25,14 @@ const acContextLoadRel = "skills/nightgauge-feature-validate/_includes/context-l
 
 // acGateScript returns Step 0.6.2 (run the check) and Step 0.6.3 (gate on the
 // result) concatenated, as the stage runs them.
-func acGateScript(t *testing.T) string {
+func acGateScript(t *testing.T) string { return acGateScriptWith(t, "") }
+
+// acGateScriptWith assembles the stage's shell with `judgement` spliced in at
+// the point the skill expects the model's per-criterion verdict — between the
+// block that gathers the criteria and the block that acts on them. Seeding those
+// variables from the environment instead would be a test that cannot fail: the
+// first block assigns AC_SUBSTANTIATED="" and would clobber them.
+func acGateScriptWith(t *testing.T, judgement string) string {
 	t.Helper()
 	path := filepath.Join("..", "..", filepath.FromSlash(acContextLoadRel))
 	data, err := os.ReadFile(path)
@@ -35,8 +42,16 @@ func acGateScript(t *testing.T) string {
 	content := string(data)
 
 	run := fencedBashAfter(t, content, "### Step 0.6.2: Run AC Completion Check")
+	// Step 0.6.2b (#1233) sits between the check and the gate and is what makes
+	// the gate satisfiable at all. It has TWO fenced blocks — inputs, then the
+	// mark-and-recheck — with the model's per-criterion judgement in prose
+	// between them. Both must run here, or the step that closes the deadlock is
+	// never exercised and this harness certifies a gate nothing can pass.
+	subHead := "### Step 0.6.2b: Substantiate Unchecked Criteria Against the Change"
+	subA := fencedBashAfter(t, content, subHead)
+	subB := nthFencedBashAfter(t, content, subHead, 2)
 	gate := fencedBashAfter(t, content, "### Step 0.6.3: Gate on Result")
-	return run + "\n" + gate + "\necho \"AC_COMPLETION_STATUS=${AC_COMPLETION_STATUS:-<unset>}\"\n"
+	return run + "\n" + subA + "\n" + judgement + "\n" + subB + "\n" + gate + "\necho \"AC_COMPLETION_STATUS=${AC_COMPLETION_STATUS:-<unset>}\"\n"
 }
 
 // fencedBashAfter returns the first ```bash block following heading.
@@ -57,6 +72,35 @@ func fencedBashAfter(t *testing.T, content, heading string) string {
 		t.Fatalf("unterminated bash block under %q", heading)
 	}
 	return body[:end]
+}
+
+// nthFencedBashAfter returns the nth (1-based) ```bash block following heading.
+// A step whose shell is split around a prose instruction has more than one, and
+// running only the first would execute the inputs without the action.
+func nthFencedBashAfter(t *testing.T, content, heading string, n int) string {
+	t.Helper()
+	h := strings.Index(content, heading)
+	if h < 0 {
+		t.Fatalf("%s no longer contains heading %q", acContextLoadRel, heading)
+	}
+	rest := content[h:]
+	for i := 0; i < n; i++ {
+		open := strings.Index(rest, "```bash\n")
+		if open < 0 {
+			t.Fatalf("fewer than %d bash blocks under %q", n, heading)
+		}
+		body := rest[open+len("```bash\n"):]
+		end := strings.Index(body, "\n```")
+		if end < 0 {
+			t.Fatalf("unterminated bash block %d under %q", i+1, heading)
+		}
+		if i == n-1 {
+			return body[:end]
+		}
+		rest = body[end:]
+	}
+	t.Fatalf("unreachable")
+	return ""
 }
 
 // sandboxPath builds a PATH containing only the utilities the skill's shell
@@ -215,13 +259,172 @@ func TestACGate_PassedStillPasses(t *testing.T) {
 func TestACGate_FailedStillFails(t *testing.T) {
 	got := runACGate(t, stubBinary(t, `{"status":"failed","checked_count":1,"unchecked_count":2,"total":3}`, "", 0))
 	got.mustExit(t, "failed", 1)
-	got.mustContain(t, "failed", "AC COMPLETION CHECK FAILED — 2 unchecked box(es) remain")
+	// #1233 reworded this: "2 unchecked boxes" told a human nothing about WHICH
+	// sentence the change failed to satisfy.
+	got.mustContain(t, "failed", "AC COMPLETION CHECK FAILED — 2 criterion(a) could not be substantiated")
 }
 
 func TestACGate_NotApplicableStillPassesThrough(t *testing.T) {
 	got := runACGate(t, stubBinary(t, `{"status":"not_applicable","checked_count":0,"unchecked_count":0,"total":0}`, "", 0))
 	got.mustExit(t, "not_applicable", 0)
 	got.mustContain(t, "not_applicable", "not_applicable", "AC_COMPLETION_STATUS=not_applicable")
+}
+
+// ─── #1233: the gate must be satisfiable, and only by evidence ───────────────
+
+// A stub that answers ac-check with `before` until an `ac-mark` is issued, then
+// with `after`. It records every argv it was called with, so a test can assert
+// WHICH criteria were marked rather than only the resulting verdict.
+func stubMarkAwareBinary(t *testing.T, before, after string) (path, logPath string) {
+	t.Helper()
+	dir := t.TempDir()
+	path = filepath.Join(dir, "nightgauge")
+	logPath = filepath.Join(dir, "calls.log")
+	marker := filepath.Join(dir, "marked")
+	script := fmt.Sprintf(`#!/bin/sh
+echo "$@" >> %s
+case "$2" in
+  ac-mark)
+    for a in "$@"; do
+      if [ "$a" = "--list" ]; then
+        printf '%%s' '{"items":[{"index":1,"text":"one","checked":false},{"index":2,"text":"two","checked":false}]}'
+        exit 0
+      fi
+    done
+    : > %s
+    printf '%%s' '{"changed":[1]}'
+    exit 0
+    ;;
+  ac-check)
+    if [ -f %s ]; then printf '%%s' %s; else printf '%%s' %s; fi
+    exit 0
+    ;;
+esac
+exit 0
+`, shellQuote(logPath), shellQuote(marker), shellQuote(marker), shellQuote(after), shellQuote(before))
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatalf("write stub: %v", err)
+	}
+	return path, logPath
+}
+
+// runACGateWithEnv is runACGate with extra environment, so a test can supply the
+// AC_SUBSTANTIATED / AC_EVIDENCE_JSON the model's judgement would have set.
+func runACGateWithEnv(t *testing.T, binary string, judgement string) acGateResult {
+	t.Helper()
+	script := acGateScriptWith(t, judgement)
+	work := t.TempDir()
+	home := t.TempDir()
+	file := filepath.Join(work, "ac-gate.sh")
+	// `set -u` as in runACGate, but the substantiation vars are assigned by the
+	// model between the two fenced blocks; seed them the way the stage would.
+	if err := os.WriteFile(file, []byte("set -u\n"+script), 0o644); err != nil {
+		t.Fatalf("write gate script: %v", err)
+	}
+	cmd := exec.Command("bash", file)
+	cmd.Dir = work
+	cmd.Env = []string{
+		"PATH=" + sandboxPath(t),
+		"HOME=" + home,
+		"NIGHTGAUGE_BIN=" + binary,
+		"ISSUE_NUMBER=1233",
+		"AC_CHECK_REQUIRED=true",
+	}
+	out, err := cmd.CombinedOutput()
+	code := 0
+	if exitErr, ok := err.(*exec.ExitError); ok {
+		code = exitErr.ExitCode()
+	} else if err != nil {
+		t.Fatalf("run gate: %v\n%s", err, out)
+	}
+	return acGateResult{exitCode: code, output: string(out)}
+}
+
+// THE DEADLOCK. Before #1233 this was unreachable: ac-check said failed, nothing
+// wrote `- [x]`, and the stage exited 1 forever. Substantiating the criteria has
+// to be able to clear the gate, or a type:docs issue can never validate.
+func TestACGate_SubstantiatedCriteriaClearTheGate(t *testing.T) {
+	bin, calls := stubMarkAwareBinary(t,
+		`{"status":"failed","checked_count":0,"unchecked_count":2,"total":2}`,
+		`{"status":"passed","checked_count":2,"unchecked_count":0,"total":2}`)
+
+	got := runACGateWithEnv(t, bin, `AC_SUBSTANTIATED="1 2"
+AC_EVIDENCE_JSON='[{"index":1,"verdict":"substantiated","evidence":"doc.md section 3 rewritten"},{"index":2,"verdict":"substantiated","evidence":"mermaid graph updated"}]'`)
+
+	got.mustExit(t, "substantiated", 0)
+	got.mustContain(t, "substantiated", "Marked substantiated criteria: 1 2", "AC_COMPLETION_STATUS=passed")
+
+	log, _ := os.ReadFile(calls)
+	if !strings.Contains(string(log), "--check 1") || !strings.Contains(string(log), "--check 2") {
+		t.Errorf("ac-mark was not called with the substantiated indices:\n%s", log)
+	}
+	// The verdict must be RE-READ from the verb, never assumed from the write.
+	if strings.Count(string(log), "ac-check") < 2 {
+		t.Errorf("the gate did not re-check after marking:\n%s", log)
+	}
+}
+
+// The other half, and the one that keeps this from being a rubber stamp: a
+// criterion the stage could not substantiate still fails, and the operator is
+// told WHICH and WHY.
+func TestACGate_UnsubstantiatedCriteriaStillFail(t *testing.T) {
+	bin, _ := stubMarkAwareBinary(t,
+		`{"status":"failed","checked_count":0,"unchecked_count":2,"total":2}`,
+		`{"status":"failed","checked_count":1,"unchecked_count":1,"total":2}`)
+
+	got := runACGateWithEnv(t, bin, `AC_SUBSTANTIATED="1"
+AC_EVIDENCE_JSON='[{"index":1,"verdict":"substantiated","evidence":"doc.md updated"},{"index":2,"verdict":"unsubstantiated","evidence":"asserts a visual result the diff cannot show"}]'`)
+
+	got.mustExit(t, "partial", 1)
+	got.mustContain(t, "partial",
+		"AC COMPLETION CHECK FAILED",
+		"asserts a visual result the diff cannot show",
+	)
+}
+
+// Substantiating NOTHING must leave the gate exactly as it was — the deadlock
+// path is still a failure, not an accidental pass.
+func TestACGate_NoSubstantiationChangesNothing(t *testing.T) {
+	bin, calls := stubMarkAwareBinary(t,
+		`{"status":"failed","checked_count":0,"unchecked_count":3,"total":3}`,
+		`{"status":"passed","checked_count":3,"unchecked_count":0,"total":3}`)
+
+	got := runACGateWithEnv(t, bin, `AC_SUBSTANTIATED=""
+AC_EVIDENCE_JSON='[]'`)
+
+	got.mustExit(t, "none substantiated", 1)
+	log, _ := os.ReadFile(calls)
+	if strings.Contains(string(log), "--check") {
+		t.Errorf("ac-mark was called with nothing substantiated — that is the rubber stamp:\n%s", log)
+	}
+}
+
+// A failed write must not be laundered into a pass.
+func TestACGate_MarkFailureDoesNotPass(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "nightgauge")
+	script := `#!/bin/sh
+case "$2" in
+  ac-mark)
+    for a in "$@"; do
+      if [ "$a" = "--list" ]; then printf '%s' '{"items":[{"index":1,"text":"one","checked":false}]}'; exit 0; fi
+    done
+    echo "forge rejected the edit" >&2
+    exit 1
+    ;;
+  ac-check) printf '%s' '{"status":"failed","checked_count":0,"unchecked_count":1,"total":1}'; exit 0 ;;
+esac
+exit 0
+`
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatalf("write stub: %v", err)
+	}
+
+	got := runACGateWithEnv(t, bin, `AC_SUBSTANTIATED="1"
+AC_EVIDENCE_JSON='[{"index":1,"verdict":"substantiated","evidence":"x"}]'`)
+
+	got.mustExit(t, "mark failed", 1)
+	got.mustContain(t, "mark failed", "ac-mark failed")
 }
 
 // ─── `applicable` must mean what docs/CONTEXT_ARCHITECTURE.md says ───────────

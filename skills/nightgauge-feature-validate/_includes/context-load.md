@@ -214,6 +214,84 @@ else
 fi
 ```
 
+### Step 0.6.2b: Substantiate Unchecked Criteria Against the Change
+
+Runs only when Step 0.6.2 returned `failed`. This is the step that makes the
+gate satisfiable at all (#1233). Before it, `ac-check` returned a verdict and
+nothing in the pipeline could act on it: no stage wrote `- [x]`, no stage edited
+an issue body, and the gate's own message instructed a human who is not there. A
+`type:docs` issue whose author did not pre-tick its criteria could never
+validate, and retry re-ran this stage into the same wall at full cost.
+
+**This is NOT permission to tick the boxes because you reached this phase.**
+Reaching a phase is not evidence — that is the `vacuous-assertion` and
+`self-granted-exemption` defect class in `docs/FAILURE_TAXONOMY.md`, and the
+gate exists precisely to catch it. You are answering one question per criterion,
+against the diff in front of you: _does this change actually satisfy this
+sentence?_ A criterion you cannot substantiate stays unchecked and stops the
+line, which is the correct outcome.
+
+```bash
+AC_SUBSTANTIATED=""
+AC_EVIDENCE_JSON="[]"
+AC_ITEMS_JSON="[]"
+if [ "${AC_STATUS:-}" = "failed" ]; then
+  AC_ITEMS_JSON=$("$BINARY" issue ac-mark "$ISSUE_NUMBER" --list --json 2>/dev/null | jq -c '.items // []' 2>/dev/null || echo "[]")
+  echo "Unchecked criteria to substantiate:"
+  printf '%s\n' "$AC_ITEMS_JSON" | jq -r '.[] | select(.checked | not) | "  \(.index): \(.text)"'
+  # The change under validation. Both trees: the skill leaves work uncommitted
+  # on the validate path, so a staged-only or worktree-only diff sees half of it.
+  AC_DIFF=$( (git diff HEAD; git diff --cached) 2>/dev/null | head -c 60000 )
+  if [ -z "$AC_DIFF" ]; then
+    echo "No diff in the stage workspace — nothing can be substantiated."
+  fi
+fi
+```
+
+> **Evaluate now, one criterion at a time.** For each item in `AC_ITEMS_JSON`
+> with `checked: false`, read the criterion text and decide from `AC_DIFF`
+> alone whether the change satisfies it.
+>
+> - Substantiated → record the index, and the concrete evidence: the file and
+>   what in it satisfies the sentence.
+> - Not substantiated, or the diff does not speak to it, or it asserts something
+>   only a human can confirm (a visual result, a product decision, an external
+>   system's behaviour) → leave it out. Say which and why.
+>
+> Then set `AC_SUBSTANTIATED` to the space-separated indices you substantiated
+> (empty if none) and `AC_EVIDENCE_JSON` to a JSON array of
+> `{"index": N, "verdict": "substantiated"|"unsubstantiated", "evidence": "..."}`
+> covering **every** unchecked criterion — the ones you rejected included, since
+> the reason a criterion could not be verified is the diagnostic a human needs.
+
+```bash
+if [ "${AC_STATUS:-}" = "failed" ] && [ -n "$AC_SUBSTANTIATED" ]; then
+  AC_MARK_ARGS=""
+  for i in $AC_SUBSTANTIATED; do AC_MARK_ARGS="$AC_MARK_ARGS --check $i"; done
+  # shellcheck disable=SC2086
+  AC_MARK_OUT=$("$BINARY" issue ac-mark "$ISSUE_NUMBER" $AC_MARK_ARGS --json 2>&1)
+  AC_MARK_EXIT=$?
+  if [ "$AC_MARK_EXIT" -ne 0 ]; then
+    # A failed write must not be read as a pass. Leave AC_STATUS alone so the
+    # gate below still fails on the pre-write verdict.
+    echo "ac-mark failed (exit $AC_MARK_EXIT): $AC_MARK_OUT" >&2
+  else
+    echo "Marked substantiated criteria: $AC_SUBSTANTIATED"
+    # Re-read the verdict from the verb rather than assuming the write cleared
+    # it — criteria left unsubstantiated must still fail the gate.
+    AC_RESULT=$("$BINARY" issue ac-check "$ISSUE_NUMBER" --json 2>/dev/null)
+    if [ -n "$AC_RESULT" ]; then
+      AC_STATUS=$(printf '%s\n' "$AC_RESULT" | jq -r '.status // empty' 2>/dev/null || echo "")
+      CHECKED=$(printf '%s\n' "$AC_RESULT" | jq -r '.checked_count // 0')
+      UNCHECKED=$(printf '%s\n' "$AC_RESULT" | jq -r '.unchecked_count // 0')
+      [ -z "$AC_STATUS" ] && AC_CHECK_ERROR="re-check after ac-mark carried no .status field"
+    else
+      AC_CHECK_ERROR="re-check after ac-mark produced no output"
+    fi
+  fi
+fi
+```
+
 ### Step 0.6.3: Gate on Result
 
 ```bash
@@ -225,9 +303,13 @@ if [ "$AC_CHECK_REQUIRED" = "true" ]; then
     AC_COMPLETION_STATUS="error"
     exit 1
   elif [ "$AC_STATUS" = "failed" ]; then
-    echo "✗ AC COMPLETION CHECK FAILED — $UNCHECKED unchecked box(es) remain"
-    echo "Complete all acceptance criteria before validation can pass."
-    echo "Mark each completed item as '- [x]' in the issue body."
+    echo "✗ AC COMPLETION CHECK FAILED — $UNCHECKED criterion(a) could not be substantiated"
+    # Name them, with the reason Step 0.6.2b recorded. "3 unchecked boxes" tells
+    # a human nothing about which sentence the change failed to satisfy.
+    printf '%s\n' "${AC_EVIDENCE_JSON:-[]}" \
+      | jq -r '.[] | select(.verdict != "substantiated") | "  - [\(.index)] \(.evidence)"' 2>/dev/null \
+      || echo "  (no per-criterion evidence was recorded)"
+    echo "These remain unchecked because the change does not demonstrably satisfy them."
     AC_COMPLETION_STATUS="failed"
     exit 1
   elif [ "$AC_STATUS" = "not_applicable" ]; then
