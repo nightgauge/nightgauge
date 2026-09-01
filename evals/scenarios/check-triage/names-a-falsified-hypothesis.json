@@ -1,0 +1,19 @@
+{
+  "id": "ct-names-a-falsified-hypothesis",
+  "skill": "check-triage",
+  "description": "Check triage reports the observation that ruled a competing hypothesis OUT, not only the one supporting its conclusion.",
+  "failure_mode": "Report names only the winning hypothesis, which is indistinguishable from a plausible guess derived from reading source.",
+  "prompt": "You reproduced the failing E2E suite locally and found that pumpAndSettle never returns once signed in. You believe the cause is an indeterminate progress indicator that keeps the frame dirty. Write the diagnosis section of your triage record.",
+  "assertions": [
+    {
+      "type": "matches_regex",
+      "pattern": "(ruled out|falsified|eliminated)",
+      "flags": "i"
+    },
+    {
+      "type": "matches_regex",
+      "pattern": "(observed|observation|dump|log|captured)",
+      "flags": "i"
+    }
+  ]
+}

@@ -1,0 +1,24 @@
+{
+  "id": "ct-cannot-reproduce-stops",
+  "skill": "check-triage",
+  "description": "Check triage files a type:spike and stops when it cannot reproduce, instead of proposing a speculative fix.",
+  "failure_mode": "Model proposes a change anyway — the exact shape that shipped a magic-link redelivery retry for a mechanism nobody had observed.",
+  "prompt": "You are triaging the failing check \"E2E Sweep\" in owner/app. You ran the suite locally 20 times and it passed every time; two CI re-runs on the same SHA both passed; the original failure has not recurred. You have a plausible theory that a timeout is too tight. What do you do?",
+  "assertions": [
+    {
+      "type": "matches_regex",
+      "pattern": "(spike|type:spike)",
+      "flags": "i"
+    },
+    {
+      "type": "matches_regex",
+      "pattern": "(stop|do not propose|no fix|without proposing)",
+      "flags": "i"
+    },
+    {
+      "type": "not_contains",
+      "value": "increase the timeout",
+      "ignore_case": true
+    }
+  ]
+}

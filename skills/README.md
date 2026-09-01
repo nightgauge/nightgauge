@@ -134,6 +134,7 @@ Tools for analyzing pipeline efficiency, health, and continuous improvement.
 | [nightgauge-pipeline-audit](nightgauge-pipeline-audit/SKILL.md)                 | 1.3.0   | Analyze pipeline execution history for efficiency insights: token usage, stage performance, cost optimization, quality correlation, and trends.                                 |
 | [nightgauge-pipeline-health](nightgauge-pipeline-health/SKILL.md)               | 1.1.0   | Comprehensive pipeline health analysis across 7 dimensions: token economics, cost, stage effectiveness, model routing, reliability, self-improvement loop health, and velocity. |
 | [nightgauge-retro](nightgauge-retro/SKILL.md)                                   | 1.3.0   | Analyze pipeline failures to identify root causes, recurring patterns, and remediation steps. Classifies failures across 7 categories and records lessons learned.              |
+| [nightgauge-check-triage](nightgauge-check-triage/SKILL.md)                     | 1.0.0   | Triage a failing CI check no issue tracks: reproduce, observe the running system, then fix — refusing a fix it could not reproduce, and recording the hypotheses it ruled out.  |
 | [nightgauge-continuous-improvement](nightgauge-continuous-improvement/SKILL.md) | 1.0.0   | Unified continuous improvement review—orchestrates all self-improvement mechanisms into a periodic review cycle. Dogfood (internal) and customer (external) modes.              |
 
 ---
