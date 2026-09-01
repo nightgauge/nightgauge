@@ -78,9 +78,10 @@ func (a *ClaudeAdapter) BuildCommand(opts RunOptions) (string, []string, map[str
 	// replay 400 on claude CLI 2.1.154) was removed after the bug stopped
 	// reproducing on CLI 2.1.186 — three multi-turn replay runs with thinking
 	// enabled (up to 26 turns / 9 replayed blocks) completed without a 400;
-	// see docs/spikes/fable-5-behavior-porting.md §8.2. The spawn env is built
-	// on os.Environ() (manager.go), so an operator on an older CLI can restore
-	// the workaround without a rebuild: export CLAUDE_CODE_DISABLE_THINKING=1.
+	// see docs/PIPELINE_EXECUTION.md § Spawn Environment Inheritance. The spawn
+	// env is built on os.Environ() (manager.go), so an operator on an older
+	// CLI can restore the workaround without a rebuild: export
+	// CLAUDE_CODE_DISABLE_THINKING=1.
 
 	if opts.ContextFile != "" {
 		env["NIGHTGAUGE_CONTEXT_FILE"] = opts.ContextFile

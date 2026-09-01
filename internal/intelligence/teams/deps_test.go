@@ -135,7 +135,7 @@ func TestDetectDepsImportChains(t *testing.T) {
 // is what falsely serialized epic #71 behind one shared spike-doc reference.
 func TestExtractTargetFilesExcludesMarkdownLinks(t *testing.T) {
 	body := "Fix the cache in `internal/cache/lru.go`.\n" +
-		"Evidence: [the spike](docs/spikes/fable-5-behavior-porting.md) and " +
+		"Evidence: [the spike](docs/spikes/183-context-engineering-claude-5.md) and " +
 		"[current schema](packages/nightgauge-sdk/src/eval/modelEvalSchemas.ts).\n" +
 		"![diagram](docs/img/cache-flow.png)"
 
@@ -149,9 +149,9 @@ func TestExtractTargetFilesExcludesMarkdownLinks(t *testing.T) {
 // the documented author escape hatches are markdown links or an explicit
 // file_ownership declaration.
 func TestExtractTargetFilesBareProsePathStillCounts(t *testing.T) {
-	body := "See docs/spikes/fable-5-behavior-porting.md for background."
+	body := "See docs/spikes/183-context-engineering-claude-5.md for background."
 	files := ExtractTargetFiles(body)
-	if len(files) != 1 || files[0] != "docs/spikes/fable-5-behavior-porting.md" {
+	if len(files) != 1 || files[0] != "docs/spikes/183-context-engineering-claude-5.md" {
 		t.Errorf("bare prose path should still extract, got %v", files)
 	}
 }
