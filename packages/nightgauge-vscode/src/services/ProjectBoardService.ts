@@ -14,11 +14,11 @@
 import * as vscode from "vscode";
 import { IpcClient, type BoardItem } from "./IpcClient";
 import { IpcClientBase } from "./IpcClient";
-import type { StatusCounts } from "./IpcClientBase";
 import { getGitHubUser } from "../utils/nightgaugeConfig";
 import type { IWorkItemProvider } from "./types/WorkItemProvider";
 import {
   ALL_ITEMS_SCOPE,
+  COUNTS_SCOPE,
   sharedBoardSnapshots,
   type BoardSnapshotKey,
   type BoardSnapshotStore,
@@ -144,6 +144,18 @@ export interface RateLimitState {
  * NOT responsible for: primary issue discovery across the full repository
  * (use CompositeAdapter + GitHubIssuesAdapter for that).
  */
+/**
+ * Thrown inside a shared-store fetcher when the quota gate refuses the read,
+ * so the store declines to cache the refusal and every joined caller falls
+ * back to its last-known-good data. Never surfaces past this module.
+ */
+class RateLimitedError extends Error {
+  constructor() {
+    super("GitHub API rate limit exhausted; serving cached counts");
+    this.name = "RateLimitedError";
+  }
+}
+
 export class ProjectBoardService implements vscode.Disposable, IWorkItemProvider {
   private workspaceRoot: string;
   private owner: string | null = null;
@@ -157,8 +169,6 @@ export class ProjectBoardService implements vscode.Disposable, IWorkItemProvider
   private cacheTimes = new Map<string, number>();
   private allItemsCache: ReadyIssue[] | null = null;
   private allItemsCacheTime = 0;
-  private boardCountsCache: StatusCounts | null = null;
-  private boardCountsCacheTime = 0;
   private readonly cacheTtlMs: number;
   private static readonly DEFAULT_CACHE_TTL_MS = 300_000; // 5 minutes
   private ipc: IpcClient;
@@ -797,8 +807,6 @@ export class ProjectBoardService implements vscode.Disposable, IWorkItemProvider
     this.cacheTimes.clear();
     this.allItemsCache = null;
     this.allItemsCacheTime = 0;
-    this.boardCountsCache = null;
-    this.boardCountsCacheTime = 0;
     this.inFlightRequests.clear();
     this.inFlightAllItems = null;
     // Reset configLoaded so the next fetch re-reads project config from the
@@ -829,7 +837,6 @@ export class ProjectBoardService implements vscode.Disposable, IWorkItemProvider
     this.expireSharedSnapshots();
     this.cacheTimes.clear();
     this.allItemsCacheTime = 0;
-    this.boardCountsCacheTime = 0;
     this.inFlightRequests.clear();
     this.inFlightAllItems = null;
     this.configLoaded = false;
@@ -868,11 +875,12 @@ export class ProjectBoardService implements vscode.Disposable, IWorkItemProvider
     // (matches softInvalidate's documented discipline: invalidate cache
     // timestamps without discarding stale data). This fires on every
     // pipeline status move, so it is the MOST common invalidation path —
-    // nulling boardCountsCache here (instead of just expiring it) reopened
+    // dropping the counts here (instead of just expiring them) reopened
     // the #485 "zeros" symptom on that path: invalidate → tree re-renders →
     // getAggregatedStatusCounts finds no cache → checkRateLimit gates → `{}`
     // → every tab shows 0.
-    this.boardCountsCacheTime = 0;
+    const countsKey = this.snapshotKey(COUNTS_SCOPE);
+    if (countsKey) this.snapshots.expireScope(countsKey);
     this._onStatusChanged.fire({ repoSlug, statuses });
   }
 
@@ -962,38 +970,43 @@ export class ProjectBoardService implements vscode.Disposable, IWorkItemProvider
       return {};
     }
 
-    if (this.boardCountsCache && Date.now() - this.boardCountsCacheTime < this.cacheTtlMs) {
-      return { ...this.boardCountsCache };
-    }
-
-    // Check rate limit before making API calls — same gate the board-fetch
-    // path (fetchIssuesForStatus / fetchAllItemsInternal) uses, so the
-    // warning/pause state stays consistent regardless of which path tripped
-    // it. Serve the last successful counts (even past TTL) instead of
-    // spending quota or falling back to zeros.
-    const canProceed = await this.checkRateLimit();
-    if (!canProceed) {
-      return this.boardCountsCache ? { ...this.boardCountsCache } : {};
-    }
+    // Counts live in the shared store (#1277): every service on this board
+    // reads the same entry, and concurrent misses join one in-flight fetch.
+    // The Repositories tree renders every repository row at once, so before
+    // this, N rows on one board meant N identical `board.counts` queries.
+    const key = this.snapshotKey(COUNTS_SCOPE);
+    if (!key) return {};
+    const owner = this.owner;
+    const projectNumber = this.projectNumber;
+    const stale = (): Record<string, number> => {
+      const last = this.snapshots.staleCounts(key);
+      return last ? { ...last } : {};
+    };
 
     try {
-      // Uses board.counts IPC method — a single GraphQL query with aliases
-      // that returns only totalCount per status. No item data fetched.
-      const counts = await this.ipc.boardCounts(
-        this.owner,
-        this.projectNumber,
-        this.ownerType,
-        this.githubUser
-      );
-      this.boardCountsCache = counts;
-      this.boardCountsCacheTime = Date.now();
+      const counts = await this.snapshots.fetchCounts(key, this.cacheTtlMs, async () => {
+        // The rate-limit gate runs inside the fetcher so it is paid once per
+        // coalesced fetch, by the service that actually goes to the network,
+        // rather than once per repository row. Same gate the board-fetch path
+        // (fetchIssuesForStatus / fetchAllItemsInternal) uses, so the
+        // warning/pause state stays consistent regardless of which path
+        // tripped it. Throwing keeps the store from caching the refusal and
+        // sends every joined caller to the stale fallback below.
+        const canProceed = await this.checkRateLimit();
+        if (!canProceed) throw new RateLimitedError();
+        // Uses board.counts IPC method — a single GraphQL query with aliases
+        // that returns only totalCount per status. No item data fetched.
+        return this.ipc.boardCounts(owner, projectNumber, this.ownerType, this.githubUser);
+      });
       return { ...counts };
     } catch (err) {
-      log(`getAggregatedStatusCounts failed: ${err}`);
+      if (!(err instanceof RateLimitedError)) {
+        log(`getAggregatedStatusCounts failed: ${err}`);
+      }
       // Stale-if-error: never bypass the cache with zeros. A transient fetch
-      // error still leaves the last-known-good counts to fall back to; only
-      // a successful fetch is allowed to replace the cache.
-      return this.boardCountsCache ? { ...this.boardCountsCache } : {};
+      // error (or an exhausted quota) still leaves the last-known-good counts
+      // to fall back to; only a successful fetch is allowed to replace them.
+      return stale();
     }
   }
 
