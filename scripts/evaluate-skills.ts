@@ -32,7 +32,7 @@ import {
   LiveClaudeModelRunner,
   MockModelRunner,
   MODEL_TIERS,
-  PIPELINE_SKILLS,
+  EVAL_SKILLS,
   SkillEvalHarness,
   isLiveModeEnabled,
   loadFixtures,
@@ -52,7 +52,7 @@ import {
  * for on honest cells. Pass `--models fable` to opt in explicitly.
  */
 const ALL_MODELS: ModelTier[] = MODEL_TIERS.filter((tier) => tier !== "fable");
-type PipelineSkill = (typeof PIPELINE_SKILLS)[number];
+type EvalSkill = (typeof EVAL_SKILLS)[number];
 
 // Repo root is one level up from scripts/. Scenarios/fixtures live at the root.
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -60,14 +60,14 @@ const SCENARIOS_DIR = path.join(REPO_ROOT, "evals/scenarios");
 const FIXTURES_DIR = path.join(REPO_ROOT, "evals/fixtures");
 
 interface CliArgs {
-  skills: PipelineSkill[];
+  skills: EvalSkill[];
   models: ModelTier[];
   mode: EvalMode;
   baseline?: string;
 }
 
 function parseArgs(argv: string[]): CliArgs {
-  let skills: PipelineSkill[] = [...PIPELINE_SKILLS];
+  let skills: EvalSkill[] = [...EVAL_SKILLS];
   let models: ModelTier[] = [...ALL_MODELS];
   let mode: EvalMode = "mock";
   let baseline: string | undefined;
@@ -96,13 +96,13 @@ function parseArgs(argv: string[]): CliArgs {
   return { skills, models, mode, baseline };
 }
 
-function validateSkills(values: string[]): PipelineSkill[] {
+function validateSkills(values: string[]): EvalSkill[] {
   for (const v of values) {
-    if (!(PIPELINE_SKILLS as readonly string[]).includes(v)) {
-      throw new Error(`unknown skill "${v}". Valid: ${PIPELINE_SKILLS.join(", ")}`);
+    if (!(EVAL_SKILLS as readonly string[]).includes(v)) {
+      throw new Error(`unknown skill "${v}". Valid: ${EVAL_SKILLS.join(", ")}`);
     }
   }
-  return values as PipelineSkill[];
+  return values as EvalSkill[];
 }
 
 function validateModels(values: string[]): ModelTier[] {

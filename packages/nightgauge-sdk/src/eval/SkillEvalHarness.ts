@@ -19,10 +19,10 @@ import {
   type EvalCellResult,
   type EvalRunReport,
   type EvalScenario,
-  type PIPELINE_SKILLS,
+  type EVAL_SKILLS,
 } from "./schemas.js";
 
-type PipelineSkill = (typeof PIPELINE_SKILLS)[number];
+type EvalSkill = (typeof EVAL_SKILLS)[number];
 
 export interface SkillEvalHarnessRunOptions {
   /** Scenarios to evaluate (already loaded + validated). */
@@ -54,7 +54,7 @@ export class SkillEvalHarness {
       }
     }
 
-    const skills = unique(scenarios.map((s) => s.skill)) as PipelineSkill[];
+    const skills = unique(scenarios.map((s) => s.skill)) as EvalSkill[];
     const summary = {
       total: cells.length,
       passed: cells.filter((c) => c.verdict === "pass").length,

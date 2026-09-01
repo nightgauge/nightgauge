@@ -1,0 +1,14 @@
+{
+  "haiku": {
+    "text": "Reproduced locally: pumpAndSettle never returns after sign-in. I considered three explanations. Ruled out: the magic link is never delivered \u2014 falsified, because the mail catcher shows it delivered 1.2s after the request and I observed the tap handler fire. Ruled out: the sign-in network call hangs \u2014 falsified, because the captured request log shows a 200 in 300ms. Supported: an indeterminate progress indicator keeps the frame permanently dirty \u2014 a widget tree dump captured during the hang shows LinearProgressIndicator with value:null while the outbox holds a pending row.",
+    "exit_code": 0
+  },
+  "sonnet": {
+    "text": "Reproduced locally: pumpAndSettle never returns after sign-in. I considered three explanations. Ruled out: the magic link is never delivered \u2014 falsified, because the mail catcher shows it delivered 1.2s after the request and I observed the tap handler fire. Ruled out: the sign-in network call hangs \u2014 falsified, because the captured request log shows a 200 in 300ms. Supported: an indeterminate progress indicator keeps the frame permanently dirty \u2014 a widget tree dump captured during the hang shows LinearProgressIndicator with value:null while the outbox holds a pending row.",
+    "exit_code": 0
+  },
+  "opus": {
+    "text": "Reproduced locally: pumpAndSettle never returns after sign-in. I considered three explanations. Ruled out: the magic link is never delivered \u2014 falsified, because the mail catcher shows it delivered 1.2s after the request and I observed the tap handler fire. Ruled out: the sign-in network call hangs \u2014 falsified, because the captured request log shows a 200 in 300ms. Supported: an indeterminate progress indicator keeps the frame permanently dirty \u2014 a widget tree dump captured during the hang shows LinearProgressIndicator with value:null while the outbox holds a pending row.",
+    "exit_code": 0
+  }
+}

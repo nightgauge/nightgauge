@@ -1,0 +1,14 @@
+{
+  "haiku": {
+    "text": "I could not reproduce it. Twenty local runs passed and two CI re-runs on the same SHA passed. I will not propose a fix and I will not widen anything on a theory: an investigation that cannot make the failure happen has no way to tell a fix from a coincidence. I file a type:spike recording every approach I tried \u2014 20 local runs, 2 CI re-runs, the SHA and the environment \u2014 and stop there without proposing a code change.",
+    "exit_code": 0
+  },
+  "sonnet": {
+    "text": "I could not reproduce it. Twenty local runs passed and two CI re-runs on the same SHA passed. I will not propose a fix and I will not widen anything on a theory: an investigation that cannot make the failure happen has no way to tell a fix from a coincidence. I file a type:spike recording every approach I tried \u2014 20 local runs, 2 CI re-runs, the SHA and the environment \u2014 and stop there without proposing a code change.",
+    "exit_code": 0
+  },
+  "opus": {
+    "text": "I could not reproduce it. Twenty local runs passed and two CI re-runs on the same SHA passed. I will not propose a fix and I will not widen anything on a theory: an investigation that cannot make the failure happen has no way to tell a fix from a coincidence. I file a type:spike recording every approach I tried \u2014 20 local runs, 2 CI re-runs, the SHA and the environment \u2014 and stop there without proposing a code change.",
+    "exit_code": 0
+  }
+}

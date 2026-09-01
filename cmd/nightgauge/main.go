@@ -537,6 +537,7 @@ func rootCmd() *cobra.Command {
 		e2eCmd(),
 		formatCmd(),
 		gateCmd(),
+		triageCmd(),
 		prStageCmd(),
 		groundCmd(),
 		approvalGateCmd(),
@@ -6829,9 +6830,9 @@ func checkRunFailing(checks []gh.CheckDetail, name string) bool {
 func ciCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "ci",
-		Short: "CI check operations (wait, logs, parity, discover-commands)",
+		Short: "CI check operations (wait, logs, history, parity, discover-commands)",
 	}
-	cmd.AddCommand(ciWaitCmd(), ciLogsCmd(), ciParityCheckCmd(), ciDiscoverCommandsCmd(), ciClassifyCmd(), ciClassifyUISurfaceCmd())
+	cmd.AddCommand(ciWaitCmd(), ciLogsCmd(), ciHistoryCmd(), ciParityCheckCmd(), ciDiscoverCommandsCmd(), ciClassifyCmd(), ciClassifyUISurfaceCmd())
 	return cmd
 }
 

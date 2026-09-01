@@ -3959,6 +3959,63 @@ skipping the in-stage verb does not skip the gate — it only moves the failure 
 where the stage can no longer fix it. See
 [docs/STAGE_GATES.md § Evidence of execution](STAGE_GATES.md#evidence-of-execution-1261).
 
+### Ad-hoc Failure Triage (Issue #1262)
+
+```bash
+# Has this check ever been green?
+nightgauge ci history --repo <owner/repo> --workflow <file> [--branch <b>] [--limit 100] [--json]
+
+# Write a triage record and validate it against the contract
+nightgauge triage record [--file <path>|-] [--workdir <path>] [--json]
+nightgauge triage check --id <record-id> [--json]
+nightgauge triage list
+```
+
+**The problem.** Every skill is issue-driven, and an unowned red CI job has no
+issue behind it, so no pipeline stage can act on it. A nightly E2E sweep stayed
+red on every run for five weeks while merge after merge went green, because the
+sweep was a non-required check. `nightgauge-check-triage` is the entry point for
+"this check is failing — find out why and fix it"; these verbs are the parts of
+it that must not depend on a model.
+
+**`ci history` — never-green is not a regression.** The distinction changes what
+the whole investigation is looking for: a check that has never passed has no
+"what changed" to find, and a session that assumes otherwise spends itself
+bisecting a history in which nothing was ever different. The verb reports
+`ever_passed`, the last success, the consecutive-failure count, and a verdict
+phrased so a never-green check cannot be described as a regression. It sorts the
+run window by `created_at` itself rather than trusting the API's order, because
+"consecutive failures counted back from the newest run" is wrong in exactly the
+silent way if the slice arrives reversed.
+
+**`triage record` — the discipline, as a schema.** Two earlier attempts at that
+same investigation produced confident diagnoses derived from reading source
+rather than observing the running system, and both shipped code encoding the
+guess: a magic-link redelivery retry that would have re-hidden the real bug the
+moment anyone fixed it, and a cold-restart probe that reported "no session was
+persisted" about a session that had persisted, misdirecting the following
+session for its entire duration. Both passed review because both were framed as
+instrumentation. Prose could not tell them from a grounded report; a schema can.
+
+A record is rejected unless it:
+
+| Requirement                                              | Why                                                                                                                           |
+| -------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| answers `history.checked`                                | a never-green check is not a regression, and the wrong answer reframes everything downstream                                  |
+| carries evidence for a claimed reproduction              | otherwise it is a claim of reproduction, not a reproduction                                                                   |
+| names ≥1 **falsified** hypothesis with the observation   | several explanations always fit; the survivor is the one whose rivals were ruled out by something seen                        |
+| refuses a fix when nothing reproduced                    | an investigation that cannot make the failure happen cannot tell a fix from a coincidence — it files a `type:spike` and stops |
+| states `test_fails_without_fix`, or why there is no test | a test that passes either way is decoration, and decoration shipped as coverage tells the next person the case is guarded     |
+| links a tracking issue for a landed fix                  | otherwise the work exists only in a session transcript                                                                        |
+
+Records land in `.nightgauge/triage/<id>.json` — beside the other artifact
+directories rather than under `pipeline/`, because an ad-hoc triage has no issue
+number to be scoped by. **An invalid record is still written**, and the exit code
+carries the verdict: refusing to persist a failing investigation would destroy
+the record of what was tried, which is the part the next session needs most, and
+would push the author toward writing whatever the validator accepts rather than
+what happened.
+
 ### Knowledge Base Operations
 
 ```bash
