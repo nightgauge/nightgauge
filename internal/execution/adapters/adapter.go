@@ -107,7 +107,7 @@ type RunResult struct {
 	ServedModel string
 	// RefusalFallback* echo the CLI's system/model_refusal_fallback event
 	// when one was observed (#91). Attribution only — never used to retry.
-	// See docs/spikes/fable-5-behavior-porting.md §8.3.
+	// See docs/FAILURE_TAXONOMY.md § Model Refusal Fallback.
 	RefusalFallbackFrom     string
 	RefusalFallbackTo       string
 	RefusalFallbackCategory string

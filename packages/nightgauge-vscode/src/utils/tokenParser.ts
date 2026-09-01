@@ -295,7 +295,7 @@ export interface ParsedStreamMessage {
   /**
    * The CLI's silent model swap after a safety refusal (#91): the session
    * continues on `fallbackModel` and still exits 0. Attribution only.
-   * See docs/spikes/fable-5-behavior-porting.md §8.3.
+   * See docs/FAILURE_TAXONOMY.md § Model Refusal Fallback.
    */
   modelRefusalFallback?: {
     originalModel: string;
@@ -560,7 +560,7 @@ export function parseStreamJsonLine(line: string): ParsedStreamMessage | null {
     // System events (#91): `init` carries the canonicalized requested model;
     // `model_refusal_fallback` records the CLI's silent swap to a fallback
     // model after a safety refusal (the session continues and still exits 0).
-    // See docs/spikes/fable-5-behavior-porting.md §8.3 for a captured event.
+    // See docs/FAILURE_TAXONOMY.md § Model Refusal Fallback for a captured event.
     if (parsed.type === "system") {
       const msg: ParsedStreamMessage = { type: "system" };
       if (typeof parsed.subtype === "string") {

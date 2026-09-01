@@ -720,9 +720,9 @@ describe("parseStreamJsonLine", () => {
       expect(result?.modelRefusalFallback).toBeUndefined();
     });
 
-    it("parses the CLI's model_refusal_fallback event (spike §8.3 shape)", () => {
+    it("parses the CLI's model_refusal_fallback event (docs/FAILURE_TAXONOMY.md § Model Refusal Fallback shape)", () => {
       // Verbatim field shape captured live from claude CLI 2.1.186 —
-      // docs/spikes/fable-5-behavior-porting.md §8.3.
+      // docs/FAILURE_TAXONOMY.md § Model Refusal Fallback.
       const line = JSON.stringify({
         type: "system",
         subtype: "model_refusal_fallback",
