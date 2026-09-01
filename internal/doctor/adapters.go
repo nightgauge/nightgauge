@@ -43,8 +43,15 @@ type AdapterHealth struct {
 	Mcp             *AdapterMcpHealth `json:"mcp,omitempty"`        // codex only
 	ServerURL       string            `json:"server_url,omitempty"` // http kind: resolved local server base URL
 	ServerReachable bool              `json:"server_reachable"`     // http kind: base URL answered the probe (#57)
-	Model           string            `json:"model,omitempty"`      // http kind: resolved model id (env, else machine-tier config)
-	ModelOK         *bool             `json:"model_ok,omitempty"`   // http kind: configured model is in the /models catalog
+	// Model is the model id this adapter's health was assessed against: for
+	// kindHTTP the configured local model (env, else machine-tier config); for
+	// a kindCLI adapter with a wired model probe (#1274), the registry's
+	// current leader for spec.modelProbeBand.
+	Model string `json:"model,omitempty"`
+	// ModelOK reports whether that model is actually usable: for kindHTTP,
+	// present in the server's /models catalog; for kindCLI, accepted rather
+	// than rejected by the live probe. Nil means no model check ran.
+	ModelOK *bool `json:"model_ok,omitempty"`
 	// Catalog is the live-vs-registry model catalog comparison for kindCLI
 	// adapters with a wired catalog probe (#551; grok first-class). Nil means
 	// either the adapter has no catalog probe wired (an explicit,
@@ -153,21 +160,33 @@ type adapterSpec struct {
 	// "no catalog probe" is always an explicit, explained state rather than
 	// silently absent fields indistinguishable from "not gotten to yet."
 	catalogSkipReason string
+	// modelProbeBand / modelProbeArgs (#1274) wire a kindCLI adapter's
+	// MODEL-VALIDITY probe: the cheapest invocation that makes the provider
+	// accept or reject one concrete model id. A catalog probe cannot answer
+	// this — the claude CLI has no listing command at all (catalogSkipReason
+	// above), and even a listing would say the model exists without saying
+	// this ORGANIZATION may use it.
+	//
+	// modelProbeBand names a registry BAND, not an id, so registering a new
+	// band leader re-points the probe on the same commit that registers it.
+	modelProbeBand string
+	modelProbeArgs func(model string) []string
 }
 
 // adapterSpecs is keyed by canonical adapter name. The user-facing names from
 // the VSCode extension (claude, codex, gemini, gemini-sdk, lm-studio, ollama,
 // copilot) all resolve here after normalizeAdapterName.
 var adapterSpecs = map[string]adapterSpec{
-	"claude-headless": {binary: "claude", kind: kindCLI, catalogSkipReason: claudeNoCatalogReason},
-	"claude-sdk":      {kind: kindSDK, apiKeyEnvs: []string{"ANTHROPIC_API_KEY"}},
-	"codex":           {binary: "codex", kind: kindCLI, minVersion: "0.111.0", mcp: true, catalogSkipReason: codexNoCatalogReason},
-	"gemini":          {binary: "gemini", kind: kindCLI, minVersion: "0.29.0", catalogSkipReason: geminiNoCatalogReason},
-	"gemini-sdk":      {kind: kindSDK, apiKeyEnvs: []string{"GEMINI_API_KEY", "GOOGLE_API_KEY"}},
-	"ollama":          {kind: kindHTTP, modelEnv: "NIGHTGAUGE_OLLAMA_MODEL", modelConfigKey: "ollama.model", pullHint: "ollama pull", bridgeBinary: "claude", baseURLEnv: "NIGHTGAUGE_OLLAMA_BASE_URL", defaultBaseURL: "http://localhost:11434/v1"},
-	"lm-studio":       {kind: kindHTTP, modelEnv: "NIGHTGAUGE_LM_STUDIO_MODEL", modelConfigKey: "lm_studio.model", pullHint: "lms get", bridgeBinary: "claude", baseURLEnv: "NIGHTGAUGE_LM_STUDIO_BASE_URL", defaultBaseURL: "http://localhost:1234/v1"},
-	"copilot":         {binary: "copilot", kind: kindCLI, catalogSkipReason: copilotNoCatalogReason},
-	"grok":            {binary: "grok", kind: kindCLI, minVersion: "1.0.0", catalogArgs: []string{"models"}, catalogParser: parseGrokCatalog},
+	"claude-headless": {binary: "claude", kind: kindCLI, catalogSkipReason: claudeNoCatalogReason,
+		modelProbeBand: models.BandFable, modelProbeArgs: claudeModelProbeArgs},
+	"claude-sdk": {kind: kindSDK, apiKeyEnvs: []string{"ANTHROPIC_API_KEY"}},
+	"codex":      {binary: "codex", kind: kindCLI, minVersion: "0.111.0", mcp: true, catalogSkipReason: codexNoCatalogReason},
+	"gemini":     {binary: "gemini", kind: kindCLI, minVersion: "0.29.0", catalogSkipReason: geminiNoCatalogReason},
+	"gemini-sdk": {kind: kindSDK, apiKeyEnvs: []string{"GEMINI_API_KEY", "GOOGLE_API_KEY"}},
+	"ollama":     {kind: kindHTTP, modelEnv: "NIGHTGAUGE_OLLAMA_MODEL", modelConfigKey: "ollama.model", pullHint: "ollama pull", bridgeBinary: "claude", baseURLEnv: "NIGHTGAUGE_OLLAMA_BASE_URL", defaultBaseURL: "http://localhost:11434/v1"},
+	"lm-studio":  {kind: kindHTTP, modelEnv: "NIGHTGAUGE_LM_STUDIO_MODEL", modelConfigKey: "lm_studio.model", pullHint: "lms get", bridgeBinary: "claude", baseURLEnv: "NIGHTGAUGE_LM_STUDIO_BASE_URL", defaultBaseURL: "http://localhost:1234/v1"},
+	"copilot":    {binary: "copilot", kind: kindCLI, catalogSkipReason: copilotNoCatalogReason},
+	"grok":       {binary: "grok", kind: kindCLI, minVersion: "1.0.0", catalogArgs: []string{"models"}, catalogParser: parseGrokCatalog},
 }
 
 // No-catalog skip reasons (#604): each names the captured, real evidence
@@ -236,14 +255,20 @@ func normalizeAdapterName(name string) string {
 // adapterProbe bundles the side-effecting dependencies so tests can inject
 // fakes for binary lookup, the `--version` spawn, and filesystem reads.
 type adapterProbe struct {
-	lookPath     func(string) (string, error)
-	runVersion   func(path string) (string, error)                // combined output of `<path> --version`
-	runCatalog   func(path string, args []string) (string, error) // kindCLI: combined output of `<path> <catalogArgs...>` (#551)
-	readFile     func(string) ([]byte, error)
-	getenv       func(string) string
-	httpProbe    func(baseURL string) localServerProbeResult // kindHTTP: reachability + /models catalog (#520)
-	machineModel func(adapter string) string                 // kindHTTP: machine-tier model fallback
-	codexHome    string                                      // resolved $CODEX_HOME (or ~/.codex); injectable for tests
+	lookPath   func(string) (string, error)
+	runVersion func(path string) (string, error)                // combined output of `<path> --version`
+	runCatalog func(path string, args []string) (string, error) // kindCLI: combined output of `<path> <catalogArgs...>` (#551)
+	// runModelProbe is the kindCLI model-validity spawn (#1274). It is nil on
+	// the DEFAULT probe on purpose: the always-on availability check
+	// (checkAIAdapterAvailable) runs on every plain `nightgauge doctor` and
+	// must stay free, while this probe sends a real (tiny) request. Only the
+	// opt-in `--adapters` path wires it — see CheckAdapters.
+	runModelProbe func(path string, args []string) (string, error)
+	readFile      func(string) ([]byte, error)
+	getenv        func(string) string
+	httpProbe     func(baseURL string) localServerProbeResult // kindHTTP: reachability + /models catalog (#520)
+	machineModel  func(adapter string) string                 // kindHTTP: machine-tier model fallback
+	codexHome     string                                      // resolved $CODEX_HOME (or ~/.codex); injectable for tests
 }
 
 // catalogProbeTimeout bounds the live catalog-listing spawn (#551), mirroring
@@ -331,7 +356,18 @@ func checkAIAdapterAvailable(probe adapterProbe) (CheckItem, string) {
 // given order. Unknown adapter names yield an AdapterHealth with OK=false and a
 // remediation naming the valid set, rather than being dropped silently.
 func CheckAdapters(names []string) []AdapterHealth {
-	return checkAdaptersWithProbe(names, defaultAdapterProbe())
+	probe := defaultAdapterProbe()
+	// Wired here and NOT in defaultAdapterProbe: `--adapters` is the opt-in
+	// diagnostic where spending one tiny request to learn whether the frontier
+	// model is actually usable is the point. The plain `nightgauge doctor`
+	// availability check shares defaultAdapterProbe and must stay free (#1274).
+	probe.runModelProbe = func(path string, args []string) (string, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), modelProbeTimeout)
+		defer cancel()
+		out, err := exec.CommandContext(ctx, path, args...).CombinedOutput()
+		return string(out), err
+	}
+	return checkAdaptersWithProbe(names, probe)
 }
 
 func checkAdaptersWithProbe(names []string, probe adapterProbe) []AdapterHealth {
@@ -382,6 +418,7 @@ func checkAdapter(name string, probe adapterProbe) AdapterHealth {
 		case spec.catalogSkipReason != "":
 			applyCatalogSkip(&h, spec)
 		}
+		applyModelProbe(&h, spec, probe)
 
 	case kindSDK:
 		h.Installed = anyEnvSet(probe.getenv, spec.apiKeyEnvs)
@@ -540,6 +577,97 @@ func applyCatalogSkip(h *AdapterHealth, spec adapterSpec) {
 		return
 	}
 	h.CatalogWarning = "no catalog probe: " + spec.catalogSkipReason
+}
+
+// modelProbeTimeout bounds the model-validity spawn, matching the catalog
+// probe's bound so one unresponsive CLI cannot stall `doctor --adapters`.
+const modelProbeTimeout = 30 * time.Second
+
+// claudeModelProbeArgs is the cheapest invocation that makes Anthropic accept
+// or reject a concrete model id: a one-word non-interactive prompt. There is
+// no free validity endpoint on the claude CLI — `--model` only SELECTS
+// (claudeNoCatalogReason) — so the request itself is the check.
+func claudeModelProbeArgs(model string) []string {
+	return []string{"--model", model, "-p", "ok"}
+}
+
+// retentionRejectionMarker is the distinguishing phrase in Anthropic's
+// data-retention refusal. Fable 5.1 is a Covered Model: an org or workspace
+// configured for zero data retention is barred from it and every request
+// returns `400 invalid_request_error`, on a machine where the CLI is
+// installed, current, and authenticated. Matched on the retention phrase
+// alone rather than the pair with the status code, because the code is the
+// generic one every malformed request shares and carries no information here.
+const retentionRejectionMarker = "data retention"
+
+// retentionRejection reports whether a model probe failed because the caller's
+// organization or workspace does not meet a Covered Model's data-retention
+// requirement — as opposed to any of the other reasons a probe can fail
+// (unauthenticated, offline, a genuinely wrong id).
+//
+// The distinction is the whole point of the check. Both produce a rejected
+// model, but only one is fixed by changing a retention setting; reporting this
+// as a generic model-validity failure sends the operator to look for a typo in
+// an id that is spelled correctly (#1274).
+func retentionRejection(output string) bool {
+	return strings.Contains(strings.ToLower(output), retentionRejectionMarker)
+}
+
+// applyModelProbe runs a kindCLI adapter's model-validity probe against the
+// current leader of spec.modelProbeBand and records whether the provider
+// actually serves that model to THIS caller.
+//
+// Gated exactly like applyCatalogProbe: only when the adapter already passed
+// its baseline (binary present, version floor met) and the probe is wired —
+// nil runModelProbe is the plain-`doctor` path, which spends nothing. Like
+// the catalog probe it never flips h.OK: a model the org cannot use is a real
+// finding, but it is not "this adapter cannot run a stage" — every other band
+// still dispatches. It is reported as a named remediation instead.
+func applyModelProbe(h *AdapterHealth, spec adapterSpec, probe adapterProbe) {
+	if !h.Installed || !h.VersionOK || probe.runModelProbe == nil || spec.modelProbeArgs == nil {
+		return
+	}
+	m, ok := models.Get(spec.modelProbeBand)
+	if !ok {
+		return
+	}
+	h.Model = m.ID
+	out, err := probe.runModelProbe(h.Path, spec.modelProbeArgs(m.ID))
+	if err == nil && !retentionRejection(out) {
+		h.ModelOK = boolPtr(true)
+		return
+	}
+	h.ModelOK = boolPtr(false)
+	var remediation string
+	if retentionRejection(out) {
+		remediation = m.ID + " is a Covered Model and this organization or workspace does not meet its " +
+			"data-retention requirement, so every request to it returns 400 invalid_request_error. " +
+			"Enable 30-day data retention for the organization or workspace (or ask Anthropic to authorize " +
+			"zero-data-retention access), or pin a non-Covered model such as " + nonCoveredFallbackID() +
+			" for the stages that route to the " + spec.modelProbeBand + " band. The " + spec.binary +
+			" CLI itself is installed, current and authenticated — this is an account setting, not a bad model id."
+	} else {
+		remediation = spec.binary + " rejected model " + m.ID +
+			"; confirm the id is served to this account with `" + spec.binary + " --model " + m.ID + " -p ok`."
+		if strings.TrimSpace(out) != "" {
+			remediation += " CLI said: " + strings.TrimSpace(out)
+		}
+	}
+	if h.Remediation != "" {
+		h.Remediation += "; " + remediation
+	} else {
+		h.Remediation = remediation
+	}
+}
+
+// nonCoveredFallbackID names the strongest band below the probed one, read
+// from the registry rather than restated, so the remediation never points at a
+// model that has itself been superseded.
+func nonCoveredFallbackID() string {
+	if m, ok := models.Get(models.BandOpus); ok {
+		return m.ID
+	}
+	return models.BandOpus
 }
 
 // servedCLIModelDiff compares a live CLI catalog against the registry's

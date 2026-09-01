@@ -158,18 +158,36 @@ func recommendModel(complexityScore int) string {
 	return tier
 }
 
+// The nominal per-stage token mix estimateIssueCost prices through the
+// registry. These are calibration constants, not measurements: 0.15M input /
+// 0.03M output reproduces the $1.50 opus-band anchor the previous literal-id
+// switch carried, so the estimate's scale is unchanged for the models that
+// table already priced.
+const (
+	nominalStageInputMTok  = 0.15
+	nominalStageOutputMTok = 0.03
+)
+
+// unknownModelStageCost is the fallback for a model the registry does not
+// price: local/ollama ids (no entry by design) and the placeholder 0-rate
+// entries whose recorded figures are explicitly not vendor prices.
+const unknownModelStageCost = 0.10
+
+// estimateIssueCost prices one nominal pipeline stage for `model` off the
+// registry's own rate card, then scales by stage count and complexity.
+//
+// This was a switch over literal model ids, and a switch cannot price a model
+// nobody remembered to add a case for. claude-opus-5, claude-sonnet-5 and
+// claude-fable-5-1 all fell through to the unknown default, which made the
+// frontier tier estimate CHEAPER than the deprecated opus ids the switch did
+// list — the same stale-literal drift #74 fixed in recommendModel, in the
+// function right below it. The registry already carries every model's per-MTok
+// rates, so read them and a newly registered model is priced on the commit
+// that registers it (#1274).
 func estimateIssueCost(complexityScore int, model string) float64 {
-	// Rough estimate: 6 stages per issue
-	baseCost := 0.10
-	switch model {
-	case "claude-haiku-4-5-20251001":
-		baseCost = 0.05
-	case "claude-sonnet-4-6":
-		baseCost = 0.30
-	case "claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6":
-		baseCost = 1.50
-	case "claude-fable-5":
-		baseCost = 3.00 // premium frontier tier — ~2× Opus
+	baseCost := unknownModelStageCost
+	if m, ok := models.Get(model); ok && (m.Rates.Input > 0 || m.Rates.Output > 0) {
+		baseCost = m.Rates.Input*nominalStageInputMTok + m.Rates.Output*nominalStageOutputMTok
 	}
 	multiplier := 1.0 + float64(complexityScore-1)*0.15
 	return baseCost * 6 * multiplier // 6 stages

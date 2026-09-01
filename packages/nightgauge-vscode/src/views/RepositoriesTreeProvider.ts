@@ -130,6 +130,8 @@ class ConfigWarningItem extends BaseTreeItem {
 class ConfigWarningSectionItem extends BaseTreeItem {
   constructor(warnings: ConfigWarningEntry[]) {
     super(`Config Warnings (${warnings.length})`, vscode.TreeItemCollapsibleState.Expanded);
+    // Count lives in the label, identity does not (#1277).
+    this.id = "config-warnings";
     this.setIconWithColor("warning", new vscode.ThemeColor("problemsWarningIcon.foreground"));
     this.tooltip =
       "Autonomous scheduler config-coherence warnings. " +
@@ -176,6 +178,9 @@ export class RepositoriesTreeProvider
   }
 
   private cachedRepositories: Map<string, RepositoryTreeItem> = new Map();
+
+  /** Name of the repository currently marked active, as of the last render. */
+  private activeRepoName: string | undefined;
   /** One IWorkItemProvider per repo for live count fetching */
   private perRepoServices: Map<string, IWorkItemProvider> = new Map();
   /** Factory for creating per-repo providers (injected from bootstrap, falls back to ProjectBoardService) */
@@ -391,15 +396,17 @@ export class RepositoriesTreeProvider
     });
     this.disposables.push(workspaceDisposable);
 
-    // Refresh the "active repo" icon when the user focuses a different
+    // Repaint the "active repo" icon when the user focuses a different
     // editor (the helper derives active repo from the active editor).
+    // Element-scoped (#1277): this fires on every editor switch, and a full
+    // reset here collapsed every expanded node in the tree for an icon swap.
     // Guarded against tests that mock `vscode.window` without the event API.
     const onDidChange = vscode.window?.onDidChangeActiveTextEditor;
     if (typeof onDidChange === "function") {
       this.disposables.push(
         onDidChange(() => {
           if (!this.autoRefreshEnabled) return;
-          this._onDidChangeTreeData.fire();
+          this.repaintActiveRepoRows();
         })
       );
     }
@@ -800,6 +807,8 @@ export class RepositoriesTreeProvider
     const items: RepositoryTreeItem[] = [];
     const reposDerived = this.workspaceManager.areReposDerivedFromProject();
 
+    this.activeRepoName = activeRepo?.name;
+
     for (const repo of repositories) {
       const isActive = activeRepo?.name === repo.name;
 
@@ -1002,6 +1011,7 @@ export class RepositoriesTreeProvider
               defaultCollapsed: this.defaultEpicCollapsed,
               repoOwner: owner,
               repoName: item.repoName,
+              parentId: item.id,
             })
         );
       }
@@ -1012,6 +1022,7 @@ export class RepositoriesTreeProvider
             repoPath: repo?.path,
             repoName: item.repoName,
             enableCheckbox: item.statusType === "ready",
+            parentId: item.id,
           })
       );
     } catch (err) {
@@ -1732,6 +1743,26 @@ export class RepositoriesTreeProvider
     }
   }
 
+  /**
+   * Move the "active" marker to the repository the active editor is inside,
+   * repainting only the row that lost it and the row that gained it (#1277).
+   * Rows that were never rendered are left to the next root render, which
+   * derives the same answer from scratch.
+   */
+  private repaintActiveRepoRows(): void {
+    const next = resolveActiveRepository(this.workspaceManager)?.name;
+    const prev = this.activeRepoName;
+    if (next === prev) return;
+    this.activeRepoName = next;
+    for (const name of [prev, next]) {
+      if (!name) continue;
+      const item = this.cachedRepositories.get(name);
+      if (!item) continue;
+      item.applyActiveState(name === next);
+      this._onDidChangeTreeData.fire(item);
+    }
+  }
+
   private fireRepoRowRefresh(repoName: string): void {
     const item = this.cachedRepositories.get(repoName);
     if (!item) return;
@@ -2032,7 +2063,7 @@ export class RepositoriesTreeProvider
       // workspace-wide ceiling — the most a single repo can ever run.
       const cap = typeof value === "number" ? value : service.readWorkspaceMax();
       await service.writeRepoConcurrencyCap(repoName, cap);
-      this._onDidChangeTreeData.fire();
+      this.repaintConcurrency(repoName);
       const label =
         cap === 1 ? "sequential (1 pipeline at a time)" : `up to ${cap} concurrent pipelines`;
       vscode.window.showInformationMessage(
@@ -2045,6 +2076,22 @@ export class RepositoriesTreeProvider
       });
       vscode.window.showErrorMessage(`Failed to update concurrency cap for ${repoName}: ${msg}`);
     }
+  }
+
+  /**
+   * Re-read the per-repo cap from config and repaint just that row (#1277).
+   * A full reset here collapsed the whole tree to change one description.
+   */
+  private repaintConcurrency(repoName: string): void {
+    const item = this.cachedRepositories.get(repoName);
+    if (!item) {
+      this.refreshAll();
+      return;
+    }
+    const isSequential = this.sequentialRepoConfigService?.readSequentialRepo(repoName) ?? false;
+    const maxConcurrent = this.sequentialRepoConfigService?.readMaxConcurrentRepo(repoName);
+    item.applyConcurrency(isSequential, maxConcurrent);
+    this._onDidChangeTreeData.fire(item);
   }
 
   /**
@@ -2066,7 +2113,7 @@ export class RepositoriesTreeProvider
     try {
       const cap = goSequential ? 1 : service.readWorkspaceMax();
       await service.writeRepoConcurrencyCap(repoName, cap);
-      this._onDidChangeTreeData.fire();
+      this.repaintConcurrency(repoName);
       const label = goSequential
         ? "sequential (1 pipeline at a time)"
         : `concurrent (up to ${cap})`;

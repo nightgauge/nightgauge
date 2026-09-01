@@ -83,6 +83,16 @@ describe("getCostCapModelScale — model family resolution", () => {
     expect(getCostCapModelScale("claude-fable-5", "high")).toBe(10.0);
   });
 
+  it("carries a NEW fable id on the same substring, with no table edit (#1274)", () => {
+    // The family match is what lets a newly registered fable id inherit the
+    // band's cost head-room. Pinned rather than assumed: a future refactor to
+    // a closed-set enumeration would silently drop claude-fable-5-1 to the
+    // 1.0 unknown-model scale and cap a frontier run at sonnet's budget.
+    expect(getCostCapModelScale("claude-fable-5-1")).toBe(7.0);
+    expect(getCostCapModelScale("claude-fable-5-1", "high")).toBe(10.0);
+    expect(getCostCapModelScale("claude-fable-5-1", "xhigh")).toBe(12.0);
+  });
+
   it("resolves xhigh via the effort-keyed lookup (#73)", () => {
     expect(getCostCapModelScale("claude-fable-5", "xhigh")).toBe(12.0);
     expect(getCostCapModelScale("claude-opus-4-8", "xhigh")).toBe(6.0);
