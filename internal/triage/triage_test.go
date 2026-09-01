@@ -1,6 +1,8 @@
 package triage
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -235,5 +237,88 @@ func TestList_MissingDirIsEmpty(t *testing.T) {
 	ids, err := List(t.TempDir())
 	if err != nil || len(ids) != 0 {
 		t.Fatalf("List = %v (%v), want empty and no error", ids, err)
+	}
+}
+
+// writeForeign drops a file into the SHARED parent directory that
+// `.nightgauge/triage/` already was before #1262 — where backlog-groom writes
+// its reports and skills append `runs.jsonl`.
+func writeForeign(t *testing.T, workspace, name, body string) {
+	t.Helper()
+	dir := filepath.Join(workspace, ".nightgauge", "triage")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+}
+
+// TestForeignFilesInTheSharedDirAreInvisible is the regression for #1269.
+//
+// Every earlier fixture used t.TempDir(), which is empty by construction and
+// therefore could never surface a collision with an existing tenant. Against a
+// real workspace, `triage list` reported backlog-groom reports as records and
+// `triage check` parsed a 947 KB grooming report into a confident list of
+// contract violations, every line of it false.
+//
+// This pins the List/Read guards specifically: it goes red when those are
+// removed and stays green if only the `checks/` namespacing is. The namespacing
+// is pinned separately by TestDirIsNamespacedUnderChecks — two properties, two
+// tests, so a mutation to either is caught by name.
+func TestForeignFilesInTheSharedDirAreInvisible(t *testing.T) {
+	ws := t.TempDir()
+	writeForeign(t, ws, "backlog-groom-2026-08-29.json", `{"run":"wf_x","counts":{"keep":18}}`)
+	writeForeign(t, ws, "backlog-groom-runs.jsonl", "{}\n")
+	if _, _, err := Write(ws, grounded()); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+
+	ids, err := List(ws)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(ids) != 1 || ids[0] != grounded().ID {
+		t.Fatalf("List = %v, want only the real record — a neighbour's report is not a triage record", ids)
+	}
+	if _, err := Read(ws, "backlog-groom-2026-08-29"); err == nil {
+		t.Fatal("reading a neighbour's report must error, not yield a hollow record to validate")
+	}
+}
+
+// TestReadRejectsAForeignDocumentInChecks — the namespacing makes a foreign file
+// unlikely; this makes it harmless. Any JSON object unmarshals into Record with
+// every field zero, and validating that produces violations that are wrong,
+// specific and authoritative-sounding.
+func TestReadRejectsAForeignDocumentInChecks(t *testing.T) {
+	ws := t.TempDir()
+	if err := os.MkdirAll(Dir(ws), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(Dir(ws), "stray.json"), []byte(`{"run":"wf_x"}`), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	if _, err := Read(ws, "stray"); err == nil {
+		t.Fatal("a document with no schema version is not a record")
+	}
+	ids, err := List(ws)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(ids) != 0 {
+		t.Fatalf("List = %v, want empty", ids)
+	}
+}
+
+// TestDirIsNamespacedUnderChecks pins the path itself. Without this the
+// isolation tests above would still pass if someone moved the records back into
+// the shared parent and tightened List instead — which fixes the listing and
+// leaves `triage check --id <neighbour>` reachable.
+func TestDirIsNamespacedUnderChecks(t *testing.T) {
+	got := Dir("/ws")
+	want := filepath.Join("/ws", ".nightgauge", "triage", "checks")
+	if got != want {
+		t.Fatalf("Dir = %q, want %q", got, want)
 	}
 }

@@ -4055,9 +4055,17 @@ A record is rejected unless it:
 | states `test_fails_without_fix`, or why there is no test | a test that passes either way is decoration, and decoration shipped as coverage tells the next person the case is guarded     |
 | links a tracking issue for a landed fix                  | otherwise the work exists only in a session transcript                                                                        |
 
-Records land in `.nightgauge/triage/<id>.json` — beside the other artifact
-directories rather than under `pipeline/`, because an ad-hoc triage has no issue
-number to be scoped by. **An invalid record is still written**, and the exit code
+Records land in `.nightgauge/triage/checks/<id>.json` — under `.nightgauge/`
+rather than `pipeline/`, because an ad-hoc triage has no issue number to be
+scoped by, and under `checks/` because `.nightgauge/triage/` is a **shared**
+generated-reports directory that `backlog-groom` and the skills' `runs.jsonl`
+already occupied (#1269). Writing flat into it made `triage list` report
+grooming reports as records and `triage check` emit a confident, entirely false
+contract-violation list against one. `List` additionally returns only files that
+parse as a `v1` record, and `Read` rejects a document carrying any other schema
+version rather than decoding it to all-zero fields and validating that — any
+JSON object unmarshals successfully, so "it parsed" is not evidence it is a
+record. **An invalid record is still written**, and the exit code
 carries the verdict: refusing to persist a failing investigation would destroy
 the record of what was tried, which is the part the next session needs most, and
 would push the author toward writing whatever the validator accepts rather than

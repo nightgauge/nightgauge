@@ -76,7 +76,7 @@ DIAGNOSED — <one-line cause>
   reproduced: local | ci
   ruled out:  <hypothesis> — <the observation that killed it>
   fix:        <branch> / <PR>   test: <name> (red without the fix: yes|no — <why not>)
-  record:     .nightgauge/triage/<id>.json
+  record:     .nightgauge/triage/checks/<id>.json
   tracked:    <issue URL>
 ```
 
@@ -84,7 +84,7 @@ DIAGNOSED — <one-line cause>
 NOT REPRODUCED — no fix proposed
   tried:   <n> approaches (see the record)
   spike:   <issue URL>
-  record:  .nightgauge/triage/<id>.json
+  record:  .nightgauge/triage/checks/<id>.json
 ```
 
 There is no third outcome. "Probably X, here is a change that might help" is the
