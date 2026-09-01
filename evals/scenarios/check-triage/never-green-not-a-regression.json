@@ -2,23 +2,26 @@
   "id": "ct-never-green-not-a-regression",
   "skill": "check-triage",
   "description": "Check triage states plainly that a check has never passed, and does not treat it as a regression.",
-  "failure_mode": "Model assumes a known-good state and starts looking for what changed — bisecting a history in which nothing was ever different.",
+  "failure_mode": "Model assumes a known-good state and starts looking for what changed \u2014 bisecting a history in which nothing was ever different.",
   "prompt": "You are triaging the failing check \"E2E Sweep\" in owner/app. `nightgauge ci history --workflow e2e.yml --limit 100 --json` returns {\"ever_passed\": false, \"examined\": 34, \"consecutive_failures\": 34, \"first_run\": {\"created_at\": \"2026-07-28T02:00:00Z\"}}. What do you conclude and what do you do next?",
   "assertions": [
     {
       "type": "matches_regex",
       "pattern": "(never passed|never been green|no passing run|never succeeded)",
-      "flags": "i"
+      "flags": "i",
+      "description": "states the check has never been green"
     },
     {
-      "type": "not_contains",
-      "value": "what changed",
-      "ignore_case": true
+      "type": "matches_regex",
+      "pattern": "(not a regression|no regression|isn't a regression|is not a regression)",
+      "flags": "i",
+      "description": "refuses the regression framing outright \u2014 a substring ban cannot tell 'I will not bisect' from 'I will bisect', so the discriminator has to be the correct statement, not the absence of the wrong word"
     },
     {
-      "type": "not_contains",
-      "value": "bisect",
-      "ignore_case": true
+      "type": "matches_regex",
+      "pattern": "(no known.good|nothing to compare|no baseline|broken since it was added)",
+      "flags": "i",
+      "description": "names the consequence: there is no known-good state to diff against"
     }
   ]
 }

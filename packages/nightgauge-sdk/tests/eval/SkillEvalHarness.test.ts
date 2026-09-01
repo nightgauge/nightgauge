@@ -176,6 +176,21 @@ describe("end-to-end with disk scenarios + fixtures (mock mode)", () => {
     expect(failing, JSON.stringify(failing, null, 2)).toHaveLength(0);
   });
 
+  // A skill missing from EVAL_SKILLS is not an error — its directory is simply
+  // never read and its scenarios never run. That silence is the failure mode
+  // this asserts against: three scenario files no harness loads are decoration
+  // shipped as coverage (#1262).
+  it("loads the non-stage eval skills too", async () => {
+    const scenarios = await loadScenarios({ scenariosDir: SCENARIOS_DIR });
+    const triage = scenarios.filter((s) => s.skill === "check-triage");
+    expect(triage.length).toBeGreaterThanOrEqual(3);
+
+    const fixtureMap = await loadFixtures({ fixturesDir: FIXTURES_DIR });
+    for (const s of triage) {
+      expect(fixtureMap[s.id], `missing mock fixture for ${s.id}`).toBeDefined();
+    }
+  });
+
   it("ships at least 3 scenarios per pipeline skill", async () => {
     const scenarios = await loadScenarios({ scenariosDir: SCENARIOS_DIR });
     const counts = new Map<string, number>();

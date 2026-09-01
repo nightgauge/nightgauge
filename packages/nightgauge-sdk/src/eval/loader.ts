@@ -10,11 +10,11 @@
 
 import * as fs from "fs/promises";
 import * as path from "path";
-import { EvalScenarioSchema, PIPELINE_SKILLS, type EvalScenario } from "./schemas.js";
+import { EvalScenarioSchema, EVAL_SKILLS, type EvalScenario } from "./schemas.js";
 import type { ModelTier } from "../analysis/AutoModelSelector.js";
 import type { MockFixture, MockFixtureMap } from "./modelRunner.js";
 
-type PipelineSkill = (typeof PIPELINE_SKILLS)[number];
+type EvalSkill = (typeof EVAL_SKILLS)[number];
 
 /** Default repo-relative roots for scenarios and fixtures. */
 export const DEFAULT_SCENARIOS_DIR = "evals/scenarios";
@@ -63,12 +63,12 @@ export function parseScenario(contents: string, sourcePath: string): EvalScenari
  */
 export async function loadScenarios(
   options: {
-    skills?: PipelineSkill[];
+    skills?: EvalSkill[];
     scenariosDir?: string;
     reader?: DirReader;
   } = {}
 ): Promise<EvalScenario[]> {
-  const skills = options.skills ?? [...PIPELINE_SKILLS];
+  const skills = options.skills ?? [...EVAL_SKILLS];
   const baseDir = options.scenariosDir ?? DEFAULT_SCENARIOS_DIR;
   const reader = options.reader ?? defaultDirReader;
 
@@ -103,12 +103,12 @@ export async function loadScenarios(
  */
 export async function loadFixtures(
   options: {
-    skills?: PipelineSkill[];
+    skills?: EvalSkill[];
     fixturesDir?: string;
     reader?: DirReader;
   } = {}
 ): Promise<MockFixtureMap> {
-  const skills = options.skills ?? [...PIPELINE_SKILLS];
+  const skills = options.skills ?? [...EVAL_SKILLS];
   const baseDir = options.fixturesDir ?? DEFAULT_FIXTURES_DIR;
   const reader = options.reader ?? defaultDirReader;
 
