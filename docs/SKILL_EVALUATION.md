@@ -114,6 +114,21 @@ key-presence / JSON-shape / substring checks over full-output equality.
 (tolerating prose or code fences around it) and supports `a.b.c` and
 `a.b[0].c`. A resolved `null` counts as present.
 
+### Every scenario needs a positive assertion (#1267)
+
+**A scenario built only from `not_contains` cannot go red**, and the suite
+enforces that (see _The non-answer sentinel_ below). Beyond the mechanics, a
+banned substring is usually the wrong instrument: it cannot tell a refusal from
+a commitment. A `not_contains` on `"bisect"` written for the check-triage
+never-green scenario passed the conforming answer only because that answer
+happened to phrase its refusal as "I will **not** bisect" — the assertion could
+not have distinguished that from "I will bisect".
+
+What discriminates is the **correct statement being present**, not the wrong
+word being absent. Assert that the run says the check is "not a regression";
+keep `not_contains` for tokens that are wrong under any phrasing (a flag the
+binary rejects, a command that must not appear).
+
 ## Mock vs. live mode
 
 Two tiers, mirroring the `PLATFORM_TEST_URL` pattern from #2092:
@@ -132,6 +147,12 @@ Two tiers, mirroring the `PLATFORM_TEST_URL` pattern from #2092:
     "opus": { "text": "...", "exit_code": 0 }
   }
   ```
+
+  **The green baseline proves less than it looks like it does.** For each
+  scenario the same author writes the fixture text _and_ the assertions that
+  read it, so a green cell shows the assertions match that prose — not that they
+  discriminate a conforming answer from a non-conforming one. See the sentinel
+  below, which is what supplies the missing half.
 
 - **live** (`NIGHTGAUGE_SKILL_EVAL_LIVE=1`) — spawns
   `claude --print --model <tier>` and feeds the scenario prompt over stdin,
@@ -200,10 +221,34 @@ cp .nightgauge/skill-evals/multi-*.jsonl .nightgauge/skill-evals/baseline.jsonl
    good-output text per tier that satisfies the assertions (keep the mock
    baseline green).
 4. Run `npx -w @nightgauge/sdk vitest run tests/eval/` —
-   the end-to-end test asserts every shipped scenario passes in mock mode and
-   that each pipeline skill has ≥3 scenarios.
+   the end-to-end tests assert every shipped scenario passes in mock mode, that
+   each pipeline skill has ≥3 scenarios, and that every scenario **fails** the
+   non-answer sentinel.
 5. Optionally validate with the runner: `npx tsx scripts/evaluate-skills.ts
 --skills <skill>`.
+
+## The non-answer sentinel (#1267)
+
+The mock matrix is green by construction, so on its own it cannot tell a working
+assertion from one that matches anything. `SkillEvalHarness.test.ts` supplies
+the other half: it runs **every** scenario loaded from disk against a fixed
+non-answer — `"I don't know."` — and requires every cell to **fail**.
+
+A scenario that passes on a non-answer has assertions that do not discriminate,
+and the test names it. This is the `cannot-go-red` defect class
+([docs/FAILURE_TAXONOMY.md](FAILURE_TAXONOMY.md#defect-classes-cross-cutting-engineering-patterns))
+applied to the harness that exists to catch it elsewhere.
+
+It is deliberately a **universal sentinel** rather than a per-scenario near-miss
+answer. A near-miss corpus discriminates far more finely, and it also doubles the
+authoring cost of every scenario and rots the moment someone adds a scenario and
+forgets its counterpart — which is the same failure this test exists to prevent,
+one level up. The sentinel needs no maintenance and covers every future scenario
+the moment it lands.
+
+What it does **not** catch: an assertion that is too loose but still stricter
+than a bare non-answer — a regex matching any plausible on-topic response, say.
+A near-miss corpus is the right follow-up if that turns out to bite.
 
 ## Scope (this PR)
 
