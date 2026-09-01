@@ -3881,6 +3881,84 @@ Bypassed when the issue carries the configured bypass label (default
 `allow_downgrade: true`. Default config is **disabled** — opt in via
 `pipeline.version_downgrade_gate.enabled: true`.
 
+### Evidence of Execution — `gate check-test-execution` (Issue #1261)
+
+```bash
+# In-stage: fail while the stage can still fix it (feature-validate Step 2.5)
+nightgauge gate check-test-execution --issue <N> [--workdir <path>] [--base <ref>] [--json]
+
+# Writer: record that a specific test file was actually executed
+nightgauge gate record-test-execution --issue <N> --file <path> --outcome pass|fail \
+  [--command "<the command you ran>"] [--detail <note>] [--workdir <path>]
+```
+
+**What it answers.** Not "did the tests pass" — the quality gates already ask
+that — but _of the test files this change adds, does the repo's own test command
+even reach them?_ A suite the configured command structurally cannot run has
+never been executed by anything, so a green run says nothing about it.
+
+That was silently true three times running. In a downstream Flutter app, three
+sibling issues each added a suite under `integration_test/app_e2e/` carrying
+`@Tags(['app-e2e'])`, validated by a stage whose test command passes
+`--exclude-tags=app-e2e`. All three merged green, all three failed on every
+nightly sweep for five weeks, and two of the defects eventually found were
+assertions that could not have passed on any correct run — they would have died
+the first time the suite executed.
+
+**How a file is judged excluded.** Detection is pluggable
+(`testexec.Detector`); Dart/Flutter ships first and reports three mechanisms:
+
+| Mechanism              | Meaning                                                             |
+| ---------------------- | ------------------------------------------------------------------- |
+| `excluded-tag`         | the file declares a tag the command passes to `--exclude-tags`/`-x` |
+| `tag-filter`           | the command restricts to `--tags`/`-t` the file does not satisfy    |
+| `outside-target-paths` | the file is under none of the command's path targets                |
+
+The third matters as much as the first: `flutter test` with no path argument
+runs `test/` and nothing else, so anything under `integration_test/` is
+unreachable regardless of its tags.
+
+**Where the command comes from.** Re-resolved on every run — an explicit
+`pipeline.test_execution.command`, else `scan.SelectTestCommand`, else a
+`pubspec.yaml` → `flutter test` fallback that `scan` does not model. A repo that
+changes its exclusions is therefore re-evaluated rather than grandfathered
+against a value captured when the gate first saw it. Indirect entry points are
+expanded one level, because `make test` and `npm test` carry no flags at all and
+the exclusion lives in the recipe.
+
+**The record.** `record-test-execution` appends to
+`.nightgauge/pipeline/test-execution-{N}.jsonl`:
+
+```json
+{
+  "v": 1,
+  "file": "integration_test/app_e2e/setup_flow_test.dart",
+  "outcome": "pass",
+  "command": "flutter test --tags=app-e2e integration_test/app_e2e/setup_flow_test.dart",
+  "recorded_at": "2026-09-01T12:00:00Z"
+}
+```
+
+It names the command _as run_, not the command that should have been run: the
+failure this gate prevents is a claim about execution nobody checked against an
+execution, and a record carrying only an assertion would reproduce it one layer
+up. Only `pass` satisfies the check — `fail` is honest and still not a validated
+suite. The check also writes a `test_execution` block into `validate-{N}.json`,
+which is where epic #12's artifact manifest gains a mirror when that contract
+lands (one writer, two sinks — see `testexec.ApplyToValidateContext`).
+
+**Silence is the design.** No changed test files, no resolvable command, no
+detector for the ecosystem, a command that excludes nothing, an unresolvable
+diff, an unreadable config: every one exits 0 with no output. There is
+deliberately no enable/disable flag — the check is already inert wherever it has
+nothing to say, so a switch could only ever silence a true finding, which is the
+behaviour that let five weeks of red sweeps pass as validated.
+
+`FeatureValidateGate` re-runs the identical check after the stage exits, so
+skipping the in-stage verb does not skip the gate — it only moves the failure to
+where the stage can no longer fix it. See
+[docs/STAGE_GATES.md § Evidence of execution](STAGE_GATES.md#evidence-of-execution-1261).
+
 ### Knowledge Base Operations
 
 ```bash

@@ -140,18 +140,67 @@ version is **not** bumped.
 
 ## The six default gates
 
-| Stage              | Gate (Go)             | What it checks                                                                                                          |
-| ------------------ | --------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| `issue-pickup`     | `IssuePickupGate`     | `pipeline/issue-{N}.json` exists, parses, names a feature branch                                                        |
-| `feature-planning` | `FeaturePlanningGate` | `pipeline/planning-{N}.json` references a non-empty `plan_file`                                                         |
-| `feature-dev`      | `FeatureDevGate`      | `pipeline/dev-{N}.json` records ≥1 file change, build_verification ok — **and git agrees the workspace changed** (#202) |
-| `feature-validate` | `FeatureValidateGate` | every `gate-metrics.jsonl` quality-gate record `result == "pass"`                                                       |
-| `pr-create`        | `PrCreateGate`        | `pipeline/pr-{N}.json` records `pr_number`; `gh pr view` is OPEN                                                        |
-| `pr-merge`         | `PrMergeGate`         | `gh pr view` reports `state == "MERGED"`                                                                                |
+| Stage              | Gate (Go)             | What it checks                                                                                                                                                                |
+| ------------------ | --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `issue-pickup`     | `IssuePickupGate`     | `pipeline/issue-{N}.json` exists, parses, names a feature branch                                                                                                              |
+| `feature-planning` | `FeaturePlanningGate` | `pipeline/planning-{N}.json` references a non-empty `plan_file`                                                                                                               |
+| `feature-dev`      | `FeatureDevGate`      | `pipeline/dev-{N}.json` records ≥1 file change, build_verification ok — **and git agrees the workspace changed** (#202)                                                       |
+| `feature-validate` | `FeatureValidateGate` | every `gate-metrics.jsonl` quality-gate record `result == "pass"` — **and every added test file the repo's test command excludes carries a passing execution record** (#1261) |
+| `pr-create`        | `PrCreateGate`        | `pipeline/pr-{N}.json` records `pr_number`; `gh pr view` is OPEN                                                                                                              |
+| `pr-merge`         | `PrMergeGate`         | `gh pr view` reports `state == "MERGED"`                                                                                                                                      |
 
 Gates that call `gh` use a 3-attempt, 1-second-backoff internal retry to
 absorb transient API failures (rate-limit, transient 5xx) before reporting
 `passed: false`.
+
+### Evidence of execution (#1261)
+
+`FeatureValidateGate` ends with a second ground-truth check, aimed at a
+different lie than #202's. There the stage did the work somewhere nobody looked;
+here the stage looked in the right place and the work was never reachable at
+all.
+
+In a downstream Flutter app, three sibling issues each added a suite under
+`integration_test/app_e2e/` carrying `@Tags(['app-e2e'])`. The validate stage
+ran the analyzer and the repo's test command, and that command passes
+`--exclude-tags=app-e2e`. Every quality gate went green **without a single line
+of the added code being executed**. All three merged; all three failed on every
+nightly sweep for the next five weeks; two of the defects eventually found were
+structurally impossible assertions — a running total asserted before the inputs
+that determine it existed, and a widget finder that could never match — either
+of which would have failed on the first honest execution.
+
+So the gate asks `internal/testexec`: of the test files this change adds, which
+ones does the repo's own configured test command structurally not run? For each
+such file it requires an execution record (`nightgauge gate
+record-test-execution`) naming the file with a passing outcome. Absence blocks,
+with `TerminalKindValidationFailed`.
+
+Three properties keep it from becoming the next thing people route around:
+
+- **Quiet in the common case.** No changed test files, no resolvable test
+  command, no detector for the ecosystem, or a command that excludes nothing:
+  every one produces zero findings, zero warnings and output byte-identical to a
+  run from before the check existed. A gate that speaks up on ordinary work gets
+  muted, and a muted gate costs more than the bug it was added to catch.
+- **Fail-open on anything unverifiable.** An unresolvable diff, an unreadable
+  config, a corrupt record file — none of them are evidence that a suite went
+  unexecuted. Only a positive detection blocks.
+- **The escape hatch is evidence, not an opt-out.** There is deliberately no
+  enable/disable flag: the check is already inert wherever it has nothing to
+  say, so a switch could only ever be used to silence a true finding. What
+  unblocks it is running the suite and recording that you did.
+
+Detection is pluggable (`testexec.Detector`). Dart/Flutter ships first — it
+parses `@Tags([...])` against the command's `--exclude-tags` / `--tags`, and
+also catches a suite outside every path the command names, which is how
+`integration_test/` stayed unreachable regardless of tags. Other ecosystems are
+additions to the registry, not a rewrite of the gate.
+
+The command itself is re-resolved every run (config override →
+`scan.SelectTestCommand` → a Flutter fallback), and indirect entry points are
+expanded one level: `make test` and `npm test` carry no flags, and the exclusion
+lives in the recipe.
 
 ### Self-report vs ground truth (#202)
 
