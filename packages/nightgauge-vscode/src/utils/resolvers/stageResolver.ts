@@ -553,11 +553,14 @@ export function checkAdapterEffortSupported(
 /**
  * Conform a resolved effort to Fable 5's published guidance (#73).
  *
- * Anthropic documents `high` as Fable's server-side default and `xhigh` for
- * the most capability-sensitive work. Every effort default and derivation in
- * this file predates Fable and is calibrated for Sonnet/Opus, so passing
- * those values through unmodified would actively downgrade a frontier run
- * below the model's own default (e.g. `DEFAULT_STAGE_EFFORTS["feature-dev"]`
+ * A router-selected Fable conforms to `high` — the registry's own
+ * `effort_default` for the fable band, per #1274 and Anthropic's Fable 5.1
+ * guidance: at `xhigh`/`max` the model drafts long deliverables twice (once
+ * inside thinking, then again in the response), so `xhigh` is reserved for a
+ * deliberate pin rather than the router's default. Every effort default and
+ * derivation in this file predates Fable and is calibrated for Sonnet/Opus, so
+ * passing those values through unmodified would actively downgrade a frontier
+ * run below the model's own default (e.g. `DEFAULT_STAGE_EFFORTS["feature-dev"]`
  * is `medium`).
  *
  * Rules, in order:
