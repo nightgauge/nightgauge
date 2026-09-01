@@ -946,15 +946,16 @@ func TestFableOverlayReachesTheStagesThatDispatchIt(t *testing.T) {
 	}
 }
 
-// TestFableBatchingNudgeIsStageScoped pins the measurement gate from #1276.
+// TestFableBatchingNudgeIsStageScoped pins the stage scoping from #1276.
 //
-// The vendor guidance says to add the batching nudge only where the share of
-// assistant turns carrying more than one tool call is measured to be low, and
-// warns that over-batching shows up as calls issued before the results they
-// depend on. Nightgauge records no per-turn tool-call telemetry —
-// diagnostics.ToolCallRecord has no turn identifier, so the share is not
-// derivable even from a populated history record — so the nudge is scoped by
-// prose to the two bash-and-editor stages the guidance names.
+// The vendor scopes this fix by loop shape, not by a measurement: the symptom is
+// one tool call per turn in coding and computer-use loops where the next
+// independent calls are implied by the task rather than asked for, and the cost
+// is extra turns (tokens, round trips, wall-clock) rather than worse answers.
+// feature-dev and feature-validate are the pipeline's only stages of that shape,
+// so the nudge is scoped by prose to those two. No measurement gates it and none
+// could — diagnostics.ToolCallRecord has no assistant-turn identifier, so the
+// share of multi-call turns is not derivable even from a populated record.
 //
 // The composer injects one block per render, so that scoping lives in the
 // heading rather than in the cascade. This test is what stops the nudge

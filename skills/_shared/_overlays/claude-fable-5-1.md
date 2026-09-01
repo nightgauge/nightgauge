@@ -28,9 +28,9 @@ behavior the task asks for, completely.
 
 ### Operating autonomously
 
-The Autonomy Contract above is the pipeline's rule and still governs. This
-model holds it better in these words, so read them as reinforcement, not as a
-second rule.
+If an Autonomy Contract section appears above, it is the pipeline's rule and
+still governs. This model holds it better in these words, so read them as
+reinforcement, not as a second rule.
 
 You are operating autonomously. The user is not watching in real time and
 cannot answer questions mid-task, so asking "Want me to…?" or "Shall I…?" will
@@ -79,10 +79,8 @@ its output shows it to nobody.
 
 This block applies to those two stages only. They are the bash-and-editor loops
 Anthropic's guidance names, where the next independent reads are implied rather
-than asked for. The other stages are short and mostly single-call, and the
-pipeline records no per-turn tool-call telemetry to gate them on, so an
-unmeasured nudge there would only risk calls issued before the results they
-depend on. In feature-dev and feature-validate:
+than asked for. The other stages are short and mostly single-call, so there is
+nothing there for the nudge to batch. In feature-dev and feature-validate:
 
 First privately list what you need next; then request every item that doesn't
 depend on another's result in this one response.

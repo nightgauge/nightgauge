@@ -57,7 +57,7 @@ whole-file override exists. All four land at the `after-context-includes` site
 | `grok-build-0.1`   | The cheaper Grok coding model: stay inside the stage contract, no extra research loops.         |
 | `claude-fable-5-1` | The Fable 5.1 behavioral shifts (#1276), one named block each — see below.                      |
 
-`claude-fable-5-1.md` carries five named blocks, in this order:
+`claude-fable-5-1.md` carries six named blocks, in this order:
 
 | Block                     | What it does                                                                                    |
 | ------------------------- | ----------------------------------------------------------------------------------------------- |
@@ -65,7 +65,12 @@ whole-file override exists. All four land at the `after-context-includes` site
 | `Scope and test coverage` | No unrequested fixes; scratch checks stay out of the repo; commit tests only where asked.       |
 | `Operating autonomously`  | The unattended-run block. Reinforces `_shared/AUTONOMY_CONTRACT.md` rather than replacing it.   |
 | `Holding the scope`       | Don't narrow, widen, or swap the deliverable; a decided step is run, not announced.             |
+| `Progress updates`        | Opening line, updates while working, standalone closing recap; plus the hidden-output note.     |
 | `Batching tool requests`  | The one-response batching nudge, scoped in its heading to `feature-dev` and `feature-validate`. |
+
+`Progress updates` is the block the anti-narration sweep protects: a base-skill
+line telling a stage to hold its findings for the final response would fight it
+directly, which is why adding one is a change to make against this table.
 
 Three things are deliberately **not** in it. The registry `behavior` block
 already records this model's `thinking_default`, `effort_default`,
@@ -75,15 +80,32 @@ effort does not arise, because the effort conformer floors Fable at `high`.
 And `thinking.display: "updates"` is a request option the host sets, not prompt
 text.
 
+That last one leaves `Progress updates` short of the vendor's own step one. Its
+ordering is: first set `display: "updates"` so the model's between-tool-call
+notes reach anyone at all, then remove any prompt line that suppresses
+narration, and only then add the prompt line — which it offers conditionally,
+for pair programming and other human-in-the-loop work. The pipeline sets no such
+display option and runs headless, so the block is **not** a fully-applied
+mitigation and should not be read as one. What it earns here is the half that
+survives into the transcript and the stage's context file — the opening line and
+the standalone closing recap, read by whoever picks the run up afterwards rather
+than by a live user.
+
 The batching nudge is scoped by **prose in its heading**, not by the cascade:
 the composer injects one block per render, so a stage-scoped instruction has
-nowhere else to live short of duplicating the fragment per skill. The vendor
-guidance gates that nudge on measuring the share of assistant turns carrying
-more than one tool call, and the pipeline cannot measure it —
-`diagnostics.ToolCallRecord` (the `tool_calls` array on a `V2RunRecord`) has no
-turn identifier, so the share is not derivable even from a populated record.
-The two stages named are the bash-and-editor loops the guidance itself calls
-out. Widen it only against a real measurement.
+nowhere else to live short of duplicating the fragment per skill. The scoping is
+by loop shape, which is how the vendor scopes the fix — the symptom is one tool
+call per turn in coding and computer-use loops where the next independent calls
+are implied by the task rather than asked for, and the cost is extra turns
+(tokens, round trips, wall-clock) rather than worse answers. `feature-dev` and
+`feature-validate` are the pipeline's only stages of that shape; the rest are
+short and mostly single-call, so the nudge would have nothing to batch there.
+
+No measurement gates this, and none could: `diagnostics.ToolCallRecord` (the
+`tool_calls` array on a `V2RunRecord`) carries no assistant-turn identifier, so
+the share of turns holding more than one call is not derivable even from a
+populated record. Widen the scope when a stage starts running that kind of loop,
+not on a number.
 
 ## 3. The cascade and precedence
 
