@@ -1,0 +1,14 @@
+{
+  "haiku": {
+    "text": "This check has never passed: 34 of 34 examined runs concluded and none successfully, the oldest on 2026-07-28. That means there is no regression here and no known-good state to compare against. I will not look for a change that broke it and I will not bisect. Instead I move to the reproduce phase and try to make the failure happen on demand, treating the suite as having been broken since it was added.",
+    "exit_code": 0
+  },
+  "sonnet": {
+    "text": "This check has never passed: 34 of 34 examined runs concluded and none successfully, the oldest on 2026-07-28. That means there is no regression here and no known-good state to compare against. I will not look for a change that broke it and I will not bisect. Instead I move to the reproduce phase and try to make the failure happen on demand, treating the suite as having been broken since it was added.",
+    "exit_code": 0
+  },
+  "opus": {
+    "text": "This check has never passed: 34 of 34 examined runs concluded and none successfully, the oldest on 2026-07-28. That means there is no regression here and no known-good state to compare against. I will not look for a change that broke it and I will not bisect. Instead I move to the reproduce phase and try to make the failure happen on demand, treating the suite as having been broken since it was added.",
+    "exit_code": 0
+  }
+}

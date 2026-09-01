@@ -57,6 +57,25 @@ export const PIPELINE_SKILLS = [
   "pr-merge",
 ] as const;
 
+/**
+ * Every skill the scenario loader walks — the six stages plus the skills that
+ * are evaluated but are not pipeline stages.
+ *
+ * Kept separate from `PIPELINE_SKILLS` on purpose. That list also types
+ * `target_stages` and `stage` in the model-eval schemas, where a non-stage
+ * member would be meaningless; widening it in place would have quietly made
+ * "check-triage" a legal answer to "which stage does this model routing apply
+ * to". The loader's question is different — which directories hold scenarios —
+ * so it gets its own list.
+ *
+ * A skill missing from here is not an error: its scenario directory is simply
+ * never read, and its scenarios never run. That silence is why
+ * `nightgauge-check-triage` is registered in the same change that adds its
+ * scenarios (#1262) — three scenario files that no harness loads are the exact
+ * shape of decoration shipped as coverage.
+ */
+export const EVAL_SKILLS = [...PIPELINE_SKILLS, "check-triage"] as const;
+
 // ---------------------------------------------------------------------------
 // Assertions
 // ---------------------------------------------------------------------------
@@ -128,7 +147,7 @@ export const EvalScenarioSchema = z.object({
     .min(1)
     .regex(/^[a-z0-9-]+$/, "scenario id must be kebab-case ([a-z0-9-])"),
   /** Which pipeline-stage skill this scenario exercises. */
-  skill: z.enum(PIPELINE_SKILLS),
+  skill: z.enum(EVAL_SKILLS),
   /** One-line human description of the scenario. */
   description: z.string().min(1),
   /** The known failure mode this scenario guards against. */
@@ -170,7 +189,7 @@ export type AssertionFailure = z.infer<typeof AssertionFailureSchema>;
 /** One (scenario, model) matrix cell result. */
 export const EvalCellResultSchema = z.object({
   scenario_id: z.string(),
-  skill: z.enum(PIPELINE_SKILLS),
+  skill: z.enum(EVAL_SKILLS),
   model: ModelTierSchema,
   /** Concrete version label recorded for interpretation (reporting only). */
   model_version_label: z.string(),
@@ -192,7 +211,7 @@ export const EvalRunReportSchema = z.object({
   timestamp: z.string(),
   mode: EvalModeSchema,
   /** Skills covered by this run. */
-  skills: z.array(z.enum(PIPELINE_SKILLS)),
+  skills: z.array(z.enum(EVAL_SKILLS)),
   /** Model tiers covered by this run. */
   models: z.array(ModelTierSchema),
   cells: z.array(EvalCellResultSchema),

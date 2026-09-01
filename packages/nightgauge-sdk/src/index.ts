@@ -715,6 +715,7 @@ export {
   MODEL_TIERS,
   MODEL_TIER_VERSION_LABELS,
   PIPELINE_SKILLS,
+  EVAL_SKILLS,
   ModelTierSchema,
   EvalAssertionSchema,
   EvalScenarioSchema,
