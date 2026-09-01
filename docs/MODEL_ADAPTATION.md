@@ -44,6 +44,47 @@ a caller typed. Tier bands are still valid `--model` inputs — they resolve
 through the registry to a concrete id — but no band-keyed file is ever consulted
 (the band segment was retired with the band vocabulary in #582).
 
+### The corpus today
+
+Every shipped overlay is shared-scope; no skill-specific fragment and no
+whole-file override exists. All four land at the `after-context-includes` site
+(§4) because no base skill carries an `<!-- overlay -->` anchor.
+
+| Key                | Carries                                                                                         |
+| ------------------ | ----------------------------------------------------------------------------------------------- |
+| `xai`              | Grok Build as execution host: no Stop hooks, no `AskUserQuestion`, optional subagent fan-out.   |
+| `grok-4.6`         | Thinking-on-by-default; drop redundant verify-your-work scaffolding and extra review subagents. |
+| `grok-build-0.1`   | The cheaper Grok coding model: stay inside the stage contract, no extra research loops.         |
+| `claude-fable-5-1` | The Fable 5.1 behavioral shifts (#1276), one named block each — see below.                      |
+
+`claude-fable-5-1.md` carries five named blocks, in this order:
+
+| Block                     | What it does                                                                                    |
+| ------------------------- | ----------------------------------------------------------------------------------------------- |
+| `Targeted edits`          | Surgical edits over whole-file rewrites, which 5.1 reaches for more readily than Fable 5.       |
+| `Scope and test coverage` | No unrequested fixes; scratch checks stay out of the repo; commit tests only where asked.       |
+| `Operating autonomously`  | The unattended-run block. Reinforces `_shared/AUTONOMY_CONTRACT.md` rather than replacing it.   |
+| `Holding the scope`       | Don't narrow, widen, or swap the deliverable; a decided step is run, not announced.             |
+| `Batching tool requests`  | The one-response batching nudge, scoped in its heading to `feature-dev` and `feature-validate`. |
+
+Three things are deliberately **not** in it. The registry `behavior` block
+already records this model's `thinking_default`, `effort_default`,
+`thinking_disable_max_effort: never` and `narration: low`, so the overlay acts
+on those facts without restating them (§5 rule 1). Search triggering at `low`
+effort does not arise, because the effort conformer floors Fable at `high`.
+And `thinking.display: "updates"` is a request option the host sets, not prompt
+text.
+
+The batching nudge is scoped by **prose in its heading**, not by the cascade:
+the composer injects one block per render, so a stage-scoped instruction has
+nowhere else to live short of duplicating the fragment per skill. The vendor
+guidance gates that nudge on measuring the share of assistant turns carrying
+more than one tool call, and the pipeline cannot measure it —
+`diagnostics.ToolCallRecord` (the `tool_calls` array on a `V2RunRecord`) has no
+turn identifier, so the share is not derivable even from a populated record.
+The two stages named are the bash-and-editor loops the guidance itself calls
+out. Widen it only against a real measurement.
+
 ## 3. The cascade and precedence
 
 Two specificities (provider, concrete id) across two scopes (shared,
