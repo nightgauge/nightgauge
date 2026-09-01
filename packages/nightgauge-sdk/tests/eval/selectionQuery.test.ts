@@ -35,7 +35,7 @@ describe("candidateLadder — anthropic (rungs span models)", () => {
 
   it("derives one rung per band, strongest first, from registry membership", () => {
     expect(ladder.map((r) => [r.band, r.modelId])).toEqual([
-      ["fable", "claude-fable-5"],
+      ["fable", "claude-fable-5-1"],
       ["opus", "claude-opus-5"],
       ["sonnet", "claude-sonnet-5"],
       ["haiku", "claude-haiku-4-5-20251001"],
@@ -47,7 +47,7 @@ describe("candidateLadder — anthropic (rungs span models)", () => {
     // (TestCandidateLadderAnthropicSpansModels) rung for rung — the twin
     // pins must be symmetric, not spot-checked on one side.
     expect(ladder).toEqual<EnvelopeRung[]>([
-      { band: "fable", modelId: "claude-fable-5", effort: "high", thinking: "on" },
+      { band: "fable", modelId: "claude-fable-5-1", effort: "high", thinking: "on" },
       { band: "opus", modelId: "claude-opus-5", effort: "high", thinking: "on" },
       { band: "sonnet", modelId: "claude-sonnet-5", effort: "high", thinking: "on" },
       { band: "haiku", modelId: "claude-haiku-4-5-20251001", effort: undefined, thinking: "off" },

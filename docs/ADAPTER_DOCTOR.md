@@ -166,6 +166,39 @@ spawn) is a separate, already-shipped mechanism
 (`internal/models.CheckTransportServed`, #579); this probe only detects and
 reports.
 
+### Covered-Model retention block (`cli` kind, #1274)
+
+A catalog listing answers "does this model exist"; it cannot answer "may THIS
+organization use it". Anthropic's frontier models are **Covered Models**: an
+organization or workspace configured for zero data retention is barred from
+them, and every request returns `400 invalid_request_error` with
+`your organization or workspace must have data retention enabled` — on a
+machine where the CLI is installed, current, and authenticated. Nothing in
+that failure looks like a bad model id, so reporting it as a generic
+model-validity failure sends the operator hunting for a typo in an id that is
+spelled correctly.
+
+`doctor --adapters` therefore runs one **model-validity probe** for the
+`claude` adapter: the cheapest non-interactive request against the registry's
+current leader of the `fable` band (today `claude-fable-5-1`). It reports
+`model` (the id probed) and `model_ok`, and on the retention rejection it
+names the remediation — enable 30-day data retention for the organization or
+workspace, or pin a non-Covered model such as `claude-opus-5` for the stages
+that route to the `fable` band. Any other rejection gets the generic
+"confirm the id is served to this account" advice plus the CLI's own output.
+
+Two deliberate boundaries:
+
+- **It never fails the adapter.** A band the org cannot reach is a real
+  finding, but every other band still dispatches, so `ok` is untouched and the
+  finding surfaces as `model_ok: false` plus a remediation — the same
+  never-a-hard-failure rule the catalog probe follows.
+- **It runs only under `--adapters`.** The always-on `ai_adapter` row shares
+  the same probe plumbing but is wired without the model spawn, so a plain
+  `nightgauge doctor` stays free. The probe targets a registry BAND rather
+  than a literal id, so registering a new band leader re-points it on the same
+  commit.
+
 ### Binary self-check cascade (#277)
 
 The `binary` check in the default (non-adapter) `nightgauge doctor` output
