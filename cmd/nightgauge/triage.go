@@ -59,7 +59,7 @@ func triageRecordCmd() *cobra.Command {
 		Use:   "record",
 		Short: "Write a triage record and validate it against the contract",
 		Long: `Read a triage record as JSON (from --file, or stdin with "-") and write it to
-.nightgauge/triage/<id>.json. Exits 1 when the record is written but does not
+.nightgauge/triage/checks/<id>.json. Exits 1 when the record is written but does not
 meet the contract — the file is kept either way.`,
 		Example:      `  nightgauge triage record --file /tmp/triage.json`,
 		SilenceUsage: true,
