@@ -97,9 +97,17 @@ failure mode this skill exists to prevent.
   else, mechanically.
 - **Never push to a default branch.** Work lands on a branch and through the
   normal PR path — the merge policy in `AGENTS.md` applies unchanged.
-- **A diagnostic you add is code you are shipping.** Validate it against a
-  known-good and a known-bad case before you trust a word it says, or do not add
-  it. See Phase 2.
+- **UNOBSERVED-MECHANISM RULE (#1263)** — do not land a retry, a fallback, a
+  widened timeout, or added tolerance for a failure whose mechanism you have not
+  directly observed, and do not exempt it by calling it instrumentation. A
+  diagnostic you add to a harness must be exercised against a known-good and a
+  known-bad case before you trust a word it says; if that is impractical, do not
+  ship it. Deliberate mitigation carries
+  `NIGHTGAUGE-MITIGATION: issue=<owner/repo#N> mechanism=unobserved` beside the
+  code, never prose in a doc comment. Read
+  [`_shared/UNOBSERVED_MECHANISM.md`](../_shared/UNOBSERVED_MECHANISM.md) — the
+  redelivery retry and the misreporting probe are the worked example, including
+  why each was persuasive at the time.
 - See also [`_shared/GOTCHAS.md`](../_shared/GOTCHAS.md).
 
 ---
@@ -185,14 +193,21 @@ the system is the one whose rivals were killed by something observed. The record
 schema enforces this — a record with no falsified hypothesis is rejected by
 `nightgauge triage record`.
 
-**If you add a diagnostic to the harness to get this evidence**, exercise it
-first against a case whose answer you already know — one known-good and one
-known-bad. A probe you have not validated is a hypothesis wearing the costume of
-a measurement, and when it is wrong it does not merely fail to help; it
-authoritatively misdirects whoever reads it next. If validating it is
-impractical, do not ship it.
+**If you add a diagnostic to the harness to get this evidence**, the
+UNOBSERVED-MECHANISM RULE applies to it. Exercise it first against a case whose
+answer you already know — one known-good and one known-bad. A probe you have not
+validated is a hypothesis wearing the costume of a measurement, and when it is
+wrong it does not merely fail to help; it authoritatively misdirects whoever
+reads it next. If validating it is impractical, do not ship it.
 
 ### Phase 4: Fix
+
+**Fix the mechanism you observed in Phase 3, and nothing else.** A retry, a
+fallback, a widened timeout or added tolerance for anything you did NOT observe
+does not land here — see the UNOBSERVED-MECHANISM RULE above. If the honest
+answer is that the mechanism is still unknown, this skill's outcome is
+`NOT REPRODUCED` or a diagnosis without a fix, not a change that makes the
+symptom go away.
 
 Produce the change **plus a test that fails without it**. Prove that: revert the
 fix on a copy and watch the test go red. A test that passes either way is

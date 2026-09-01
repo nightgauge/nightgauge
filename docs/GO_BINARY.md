@@ -368,6 +368,9 @@ nightgauge preflight skill-portability --root . [--json]
 
 # Fail when disabled thinking is paired with an effort the model rejects (#76)
 nightgauge preflight thinking-effort --model opus --effort max [--stage feature-dev] [--json]
+
+# Fail when the unobserved-mechanism rule is missing, or a mitigation is untracked (#1263)
+nightgauge preflight mitigation-rule --root . [--json]
 ```
 
 **Exit codes (uniform across the family):**
@@ -402,6 +405,50 @@ points at another supporting file), `backslash_path` (a Windows `\` path
 separator), `missing_toc` (a long supporting file lacks a `## Contents`
 heading). The `skill-no-direct-gh` gate honors an allowlist
 (`scripts/lint-skills/allowlist.txt`) for the un-migrated forge tail.
+
+**`mitigation-rule` — the unobserved-mechanism gate (#1263).** Two mechanical
+halves of one rule that is otherwise pure judgement.
+
+The rule: **do not land a retry, a fallback, a widened timeout, or added
+tolerance for a failure whose mechanism has not been directly observed.** During
+an investigation into a nightly sweep that had been red for five weeks, two
+pieces of code shipped as "instrumentation", each encoding an unverified
+hypothesis about a failure nobody had yet observed. A **magic-link redelivery
+retry**, framed as a question rather than an answer, would have re-hidden the
+real bug the moment anyone fixed it — converting a genuine regression of "one
+tap signs you in" back into a green run. A **cold-restart probe** reported `no
+session was persisted, so verification genuinely never completed` about a session
+that _had_ persisted; being read-only, it looked like it could not do harm, but a
+stated finding stops the search, and it misdirected the following session for its
+entire duration. Both passed review because both were framed as diagnostics, and
+neither was ever exercised against a case whose answer was already known.
+
+No linter can tell an observed mechanism from a confident guess. What this gate
+refuses is the two silent failures around the rule:
+
+| Check              | Meaning                                                                                                 |
+| ------------------ | ------------------------------------------------------------------------------------------------------- |
+| `rule_missing`     | a skill that must state the `UNOBSERVED-MECHANISM RULE` does not — a rule nobody can find is not a rule |
+| `marker_untracked` | a `NIGHTGAUGE-MITIGATION:` marker names no `issue=` — an undertaking to come back that nothing records  |
+
+Deliberate mitigation is allowed. It carries a machine-readable marker beside the
+code, never prose in a doc comment, because prose cannot be swept, counted, or
+found again by anyone who does not already know it is there:
+
+```go
+// NIGHTGAUGE-MITIGATION: issue=owner/repo#123 mechanism=unobserved
+```
+
+A marker counts only inside a comment. The token also appears in this gate's own
+constant and in test fixtures that build a marker as data, and a gate that
+cannot tell its own definition from a violation fails on its first run — which is
+a perfect way to teach everyone to skip it.
+
+Enforcement is `TestMitigationRule_WorkingTreeIsClean`, which `go test
+./internal/preflight/` runs **ungated** in CI, for the same reason the other
+tree-content guards do: a docs-only edit that drops the rule from a SKILL.md is
+exactly the change class a run_heavy gate would skip. The worked example lives in
+[`skills/_shared/UNOBSERVED_MECHANISM.md`](../skills/_shared/UNOBSERVED_MECHANISM.md).
 
 **`skill-includes` — the dead-include gate (#337).** Include expansion is
 fail-open by contract: `ExpandIncludes` leaves a directive in place when its

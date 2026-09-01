@@ -165,3 +165,26 @@ func TestMitigationRule_UnreadableRootErrors(t *testing.T) {
 		t.Fatal("expected an error for a root that does not exist")
 	}
 }
+
+// TestMitigationRule_WorkingTreeIsClean is the enforcement path, not a
+// self-test of the fixtures above. `go test ./internal/preflight/` runs
+// ungated in CI precisely so tree-content guards cannot be skipped by a
+// change-class gate, and a docs-only edit that drops the rule from a SKILL.md
+// is exactly the shape that would slip past one.
+func TestMitigationRule_WorkingTreeIsClean(t *testing.T) {
+	root := repoRoot(t)
+	if _, err := os.Stat(filepath.Join(root, "skills")); err != nil {
+		t.Skipf("skills/ not present at %s: %v", root, err)
+	}
+	res := runMitigation(t, root)
+	if len(res.Findings) != 0 {
+		var b strings.Builder
+		for _, f := range res.Findings {
+			b.WriteString("\n  [" + f.Check + "] " + f.File + "  " + f.Match + "\n      " + f.Message)
+		}
+		t.Fatalf("%d mitigation-rule finding(s):%s", len(res.Findings), b.String())
+	}
+	if res.FilesScanned == 0 {
+		t.Fatal("expected to scan source files, scanned 0")
+	}
+}
