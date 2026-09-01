@@ -32,7 +32,10 @@ two have a real producer today, six have a partial one, and six have none.
 
 Every `partial` and `absent` verdict below names either a document section that
 shows the weaker form, or a search that returned nothing. Searches were run from
-the repository root on the branch this artifact lands on. Where the playbook is
+the repository root on the branch this artifact lands on, and their output is
+reproduced verbatim; where a search would otherwise match this document's own
+transcripts it carries `--exclude-dir=spikes`, which is the only edit made to
+any command shown here. Where the playbook is
 quoted it is quoted in a marked blockquote of one sentence or less; no
 recommendation `title` or `body` in the block at the end of this document
 contains fetched text — the materializer turns that block into GitHub issues, so
@@ -84,18 +87,22 @@ every writer of that directory outside the harness itself returns only the
 harness, its loader, its test, and its own documentation:
 
 ```
-$ grep -rn "evals/scenarios" docs/ skills/ scripts/ internal/ packages/
-docs/SKILL_EVALUATION.md:34, :68, :217
-scripts/evaluate-skills.ts:59
-packages/nightgauge-sdk/tests/eval/SkillEvalHarness.test.ts:19
-packages/nightgauge-sdk/src/eval/loader.ts:20
+$ grep -rn "evals/scenarios" docs/ skills/ scripts/ internal/ packages/ --exclude-dir=spikes
+docs/SKILL_EVALUATION.md:34:evals/scenarios/<skill>/*.json   ─┐
+docs/SKILL_EVALUATION.md:68:A scenario is a declarative JSON file at `evals/scenarios/<skill>/<name>.json`:
+docs/SKILL_EVALUATION.md:217:2. Write `evals/scenarios/<skill>/<name>.json` with a unique kebab-case `id`,
+scripts/evaluate-skills.ts:59:const SCENARIOS_DIR = path.join(REPO_ROOT, "evals/scenarios");
+packages/nightgauge-sdk/tests/eval/SkillEvalHarness.test.ts:19:const SCENARIOS_DIR = path.join(REPO_ROOT, "evals/scenarios");
+packages/nightgauge-sdk/src/eval/loader.ts:20:export const DEFAULT_SCENARIOS_DIR = "evals/scenarios";
 ```
 
 No pipeline stage, hook, or skill appears. The complementary search confirms the
 other side: neither
 [`skills/nightgauge-check-triage/`](../../skills/nightgauge-check-triage/) nor
-[`skills/nightgauge-retro/`](../../skills/nightgauge-retro/) mentions the
-harness, a scenario, or the scenarios directory at all. Corpus authoring is
+[`skills/nightgauge-retro/`](../../skills/nightgauge-retro/) mentions a
+scenario or the scenarios directory, and their only two matches on "harness"
+(SKILL.md:102 and :195 in check-triage) are about a diagnostic harness in the
+triage sense, not the skill-eval one. Corpus authoring is
 documented as a wholly manual seven-step procedure
 ([`docs/SKILL_EVALUATION.md`](../SKILL_EVALUATION.md) § _Adding a scenario_),
 and the same document states in its own words that nothing runs the harness on a
@@ -114,18 +121,23 @@ no artifact today.
 
 ### 3.3 Deploy — review runs in one direction
 
-Two searches, both empty of the thing being looked for. No workflow runs a
-review pass on pull requests:
+No workflow runs an agent review pass on pull requests. The search for the two
+mechanisms that would do it returns a single file:
 
 ```
 $ grep -rlniE "pull_request_target|claude-code-action" .github/workflows/
 .github/workflows/cla.yml
-.github/workflows/release-watchdog.yml
 ```
 
-Neither of those two reviews a diff — one checks contributor-licence signature,
-the other watches releases. And there is no repository-level definition of what
-the review passes are:
+That one match does not review a diff — `cla.yml` uses `pull_request_target`
+to check whether a contributor has signed the licence agreement. Six other
+workflows do fire on `pull_request` (`ci.yml`, `codeql.yml`, `lint.yml`,
+`static-analysis.yml`, `credential-scan.yml`, `publication-boundary.yml`), and
+CodeQL in particular emits severity-ranked findings, so the claim is not that a
+PR here is unchecked. It is that every one of those is a fixed analyser applying
+a rule set: none reads the change against the plan it was supposed to implement,
+which is what the playbook's review passes are for. And there is no
+repository-level definition of what those passes are:
 
 ```
 $ ls REVIEW.md .github/REVIEW.md
@@ -158,18 +170,43 @@ The playbook's Maintain loop starts from a specific mechanism:
 > A deterministic script watches production and invokes Claude when a control
 > band is breached.
 
-Statistical dispersion is used in exactly one place. The search for standard
-deviation or sigma across the analysis surface returns cost health and nothing
-else that bands a metric:
+Statistical dispersion is computed in several places, but nothing bands a
+metric. The search across the analysis surface, excluding this artifact's own
+self-hits under `docs/spikes/`:
 
 ```
-$ grep -rniE "std ?dev|standard deviation|sigma|σ" docs/ packages/nightgauge-sdk/src/
-docs/HEALTH_MONITORING.md:302  anomalyRate — fraction of runs exceeding mean + 2σ
-packages/nightgauge-sdk/src/analysis/health/dimensions/costHealth.ts:66, :254
-packages/nightgauge-sdk/src/analysis/health/statistics.ts:174
+$ grep -rniE "std ?dev|standard deviation|sigma|σ" docs/ packages/nightgauge-sdk/src/ --exclude-dir=spikes
+docs/HEALTH_MONITORING.md:153:overallScore = round(Σ(dimensionScore[d] × weight[d]) / Σ(weight[d]))
+docs/HEALTH_MONITORING.md:301:| `coefficientOfVariation` | `stdDev / mean` — cost predictability              |
+docs/HEALTH_MONITORING.md:302:| `anomalyRate`            | Fraction of runs exceeding mean + 2σ threshold     |
+docs/HEALTH_MONITORING.md:308:- Cost anomalies detected (runs exceeding mean + 2σ)
+docs/HEALTH_MONITORING.md:1009:| `packages/nightgauge-sdk/src/analysis/health/statistics.ts`                    | Statistical utilities (trend, percentile, mean, stddev)                   |
+docs/decisions/011-model-eval-system.md:95:**N times** (default 3) on a sampled cell; if the score's standard deviation
+packages/nightgauge-sdk/src/analysis/health/statistics.ts:174: * Compute standard deviation of a numeric array. Returns 0 for arrays with < 2 elements.
+packages/nightgauge-sdk/src/analysis/health/dimensions/costHealth.ts:66:/** Identify the issueNumbers whose per-run cost exceeds mean + 2*stdDev. */
+packages/nightgauge-sdk/src/analysis/health/dimensions/costHealth.ts:254:      description: `${anomalyCount} of ${sampleSize} pipeline run(s) exceeded the anomaly threshold (mean + 2σ = $${anomalyThreshold.toFixed(4)}).`,
+packages/nightgauge-sdk/src/eval/qualityScorer.ts:196:    if (stddev(scores) > threshold) lowConfidence.add(dimension);
+packages/nightgauge-sdk/src/eval/qualityScorer.ts:202:function stddev(xs: number[]): number {
+packages/nightgauge-sdk/src/__tests__/analysis/health/statistics.test.ts:140:  it("returns correct sample standard deviation for [2,4,6]", () => {
+packages/nightgauge-sdk/src/__tests__/analysis/health/statistics.test.ts:141:    // sample stddev of [2,4,6]: mean=4, diffs=[-2,0,2], sq=[4,0,4], sum=8, /2=4, sqrt=2
+packages/nightgauge-sdk/src/__tests__/analysis/health/dimensions/costHealth.test.ts:85:    // One run costs 10x the normal amount — exceeds mean + 2σ
 ```
 
-Every other trigger in the system is a fixed constant: health status cuts at
+Two places in that list use dispersion to drive a live decision, and neither is
+a band.
+`costHealth.ts`:66 and :254 flag a run whose cost exceeds `mean + 2σ`, and
+`qualityScorer.ts`:196 marks an eval dimension `low_confidence` when the spread
+of its repeated scores crosses a configured threshold — the reliability guard
+documented at
+[`docs/decisions/011-model-eval-system.md`](../decisions/011-model-eval-system.md):95.
+Both are a single cut yielding a binary in-band/out-of-band verdict. The
+remainder are not triggers at all: `coefficientOfVariation` is a reported
+statistic, `statistics.ts`:174 is the shared helper and its tests, and the Σ at
+`HEALTH_MONITORING.md`:153 is a summation rather than dispersion. Nothing in the
+list produces the playbook's graduated ladder, in which the same metric crossing
+1σ, 2σ and 3σ draws three different responses.
+
+Every trigger on the operational path is a fixed constant: health status cuts at
 90/70/50/30, `severityThreshold: "high"` decides which findings become issues,
 `epicGroupingThreshold: 3` decides when they become an epic
 ([`docs/HEALTH_MONITORING.md`](../HEALTH_MONITORING.md) § _Health Status and
@@ -202,7 +239,8 @@ refinement scan rewrites it with structured acceptance criteria and moves it to
 Ready ([`docs/AUTONOMOUS_ORCHESTRATOR.md`](../AUTONOMOUS_ORCHESTRATOR.md):223,
 :303). The original intent is preserved rather than overwritten: the refine skill
 lists preservation as its first stated principle and always appends the prior
-body verbatim inside a `<details>` block, even when that body was empty
+body verbatim inside a `<details>` block, even when that body was already
+structured
 ([`skills/nightgauge-issue-refine/`](../../skills/nightgauge-issue-refine/)
 SKILL.md:55 and § _Body Construction Rule_), and the autonomous path reaches the
 same skill rather than rewriting the body itself. What differs from the playbook
@@ -294,7 +332,7 @@ post-mortem, not a lost record.
 
 ### 4.6 Per-stage metrics mapping → **defer**
 
-The mapping in § 5 finds five of eleven with no producer. Filing one issue per
+The mapping in § 5 finds six of fourteen with no producer. Filing one issue per
 missing metric would be noise; the two that would actually change a decision are
 grouped into a single deferred recommendation, and the rest are recorded here as
 deliberately unbuilt.
@@ -401,10 +439,12 @@ recommendations:
     body: |
       The adversarial-review critics and the feature-validate gate are invoked
       by the run that authored the change, so a pull request opened by a human
-      or by any tool outside this pipeline receives neither. No workflow in
-      `.github/workflows/` reviews a diff, and there is no repository-level
-      definition of what the review passes are or how their findings are
-      ranked.
+      or by any tool outside this pipeline receives neither. The workflows in
+      `.github/workflows/` that fire on a pull request are all fixed analysers
+      (CodeQL, lint, static analysis, credential and publication-boundary
+      scans); none invokes an agent to read the change against the plan it was
+      meant to implement, and there is no repository-level definition of what
+      the review passes are or how their findings are ranked.
 
       Build the missing half: a review trigger on incoming pull requests, a
       committed definition of the passes (correctness, security, compliance
