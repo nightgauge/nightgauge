@@ -8,6 +8,16 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **Step 2.5 — Evidence of Execution Gate (#1261)** — Phase 2 now closes with
+  `nightgauge gate check-test-execution`, which fails when the change adds test
+  files the repo's own test command structurally cannot run (a Dart suite tagged
+  for exclusion, or one outside every path the command names). Resolving it
+  means running the suite and recording it with
+  `nightgauge gate record-test-execution`, not deleting the tag or widening the
+  test command. Silent and exit 0 in any repo that excludes nothing.
+
 ### Changed
 
 - **Web UI Verification Gate (Phase 2.45) runtime** — the chained

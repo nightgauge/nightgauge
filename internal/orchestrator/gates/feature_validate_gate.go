@@ -62,7 +62,18 @@ func (FeatureValidateGate) Verify(_ context.Context, issueNumber int, workspace 
 			return false, "quality gates did not all pass", failed, KindFail, TerminalKindValidationFailed
 		}
 
+		// #1261: a suite the configured test command structurally cannot run
+		// has never been executed by anything, so "all quality gates passed"
+		// is a statement about other code. This blocks, and it runs after the
+		// quality gates so a real test failure — which is more urgent and more
+		// actionable — is always the reported cause when both are true.
+		te := checkTestExecution(issueNumber, workspace)
+		if te.Blocked {
+			return false, te.Reason, te.Evidence, KindFail, TerminalKindValidationFailed
+		}
+
 		details := []string{fmt.Sprintf("gates=%d", len(results))}
+		details = append(details, te.Evidence...)
 		details = append(details, validatePolicy.Summary()...)
 		if summary := markUnexercisedDeliverable(issueNumber, workspace); summary != "" {
 			details = append(details, summary)

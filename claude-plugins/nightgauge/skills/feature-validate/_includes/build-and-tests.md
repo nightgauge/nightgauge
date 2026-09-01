@@ -10,6 +10,7 @@ Tests)**. Read this when those phases fire.
 - [Phase 1.6: Dead Code Detection](#phase-16-dead-code-detection)
 - [Phase 1.7: Baseline Comparison for Test Failures](#phase-17-baseline-comparison-for-test-failures)
 - [Phase 2: Run Tests](#phase-2-run-tests-redundancy-aware)
+- [Step 2.5: Evidence of Execution Gate](#step-25-evidence-of-execution-gate-1261)
 
 ---
 
@@ -1013,3 +1014,83 @@ echo "Mobile MCP: ran=$MOBILE_MCP_RAN passed=$MOBILE_MCP_PASSED specs=$MOBILE_MC
 The `MOBILE_MCP_*` variables flow into the `validate-{N}.json` writer
 (`context-and-board.md`, Phase 6) as the `mobile_mcp` block, which `pr-create`
 reads to attach screenshot evidence to the PR body.
+
+---
+
+## Step 2.5: Evidence of Execution Gate (#1261)
+
+Runs last in Phase 2, while the environment the earlier steps stood up is still
+up. The question it asks is not "did the tests pass" — the steps above already
+asked that — but **"of the test files this change adds, does the repo's own test
+command even reach them?"**
+
+It exists because that answer was silently "no" three times running.
+In a downstream Flutter app, three sibling issues each added a suite under
+`integration_test/app_e2e/` carrying `@Tags(['app-e2e'])`, against a validate
+stage whose test command passed `--exclude-tags=app-e2e`. Every quality gate was
+green. Every one of those suites then failed on every nightly sweep for five
+weeks, and two of the defects eventually found — a running total asserted before
+the inputs that determine it existed, and a widget finder that could never
+match — were structurally impossible assertions that would have failed on the
+very first honest execution. The suites were written, marked validated and
+merged without ever being run once.
+
+### Step 2.5.1: Ask the binary
+
+```bash
+nightgauge gate check-test-execution --issue "$ISSUE_NUMBER" --json > /tmp/ng-test-exec-$$.json
+CHECK_EXIT=$?
+cat /tmp/ng-test-exec-$$.json
+```
+
+Exit 0 with no findings is the ordinary case and needs no action — a repo whose
+test command excludes nothing sees no new output at all. **Do not add tests, do
+not change the test command, and do not report anything** when the check is
+quiet.
+
+### Step 2.5.2: When it exits non-zero
+
+Every finding names the file, the exclusion mechanism, and a **runnable
+remediation command**. Run that command. Then record what happened:
+
+```bash
+nightgauge gate record-test-execution --issue "$ISSUE_NUMBER" \
+  --file "integration_test/app_e2e/setup_flow_test.dart" \
+  --outcome pass \
+  --command "flutter test --tags=app-e2e integration_test/app_e2e/setup_flow_test.dart"
+```
+
+Re-run Step 2.5.1; it now exits 0.
+
+**The three things that are not a resolution:**
+
+- **Deleting the tag or widening the test command so the suite runs by
+  default.** The exclusion is usually deliberate and correct — an `app-e2e`
+  suite needs an emulator and a live stack, and forcing it into the default
+  command breaks the default command for everyone. Fixing the gate's complaint
+  by breaking the thing it was protecting is not a fix.
+- **Recording `--outcome pass` without having run it.** The record names the
+  command that was actually run because the failure this gate exists to prevent
+  is a claim about execution that nobody checked against an execution. A
+  fabricated record reproduces the bug one layer up, and does it in a file with
+  your name on it.
+- **Recording `--outcome fail` and moving on.** Honest, and still not a
+  validated suite. The gate stays red, correctly.
+
+If the suite genuinely cannot be executed here — no emulator, no live stack, no
+credentials — that is a real answer, and it is `VALIDATION_STATUS=failed` with
+the reason, not a green run. A suite nobody can run is a suite nobody is
+validating; say so and let a human decide, rather than deciding it silently by
+merging.
+
+### Step 2.5.3: What lands in the artifact
+
+The check writes a `test_execution` block into `validate-{N}.json` — the
+resolved command, its source, and every excluded file with its mechanism and
+remediation — so `pr-create`, the attention sweep and a later retro read the
+same facts the gate did instead of re-deriving them from a diff they may be too
+late to obtain.
+
+`FeatureValidateGate` re-runs the identical check after the stage exits, so
+skipping this step does not skip the gate; it only moves the failure to where
+the stage can no longer fix it.

@@ -2325,6 +2325,43 @@ NIGHTGAUGE_PIPELINE_BASELINE_CI_GATE_GREEN_THRESHOLD=2
 
 ---
 
+### pipeline.test_execution (Issue #1261)
+
+The evidence-of-execution gate's one knob. The gate asks whether the repo's own
+test command structurally reaches the test files a change adds; normally it
+resolves that command from the repo itself, and this key exists for the repo
+whose real invocation lives somewhere no scanner can see — a CI matrix, a
+wrapper script, a container entrypoint.
+
+```yaml
+pipeline:
+  test_execution:
+    command: "flutter test --exclude-tags=app-e2e"
+```
+
+| Field     | Type   | Default            | Description                                                                                                                     |
+| --------- | ------ | ------------------ | ------------------------------------------------------------------------------------------------------------------------------- |
+| `command` | string | resolved from repo | Overrides test-command resolution. Absent means scan the repo on every run, so a changed exclusion is re-evaluated, not cached. |
+
+**There is deliberately no enable/disable flag.** The check is already inert in
+any repo whose test command excludes nothing — no findings, no warnings, output
+byte-identical to a run from before it existed — so an off switch could only
+ever be used to silence a true finding. Silencing a true finding is exactly the
+behaviour that let a downstream Flutter app ship three E2E suites that had
+never executed once, and then fail on every nightly sweep for five weeks. What
+unblocks the gate is running the suite and recording that you did:
+
+```bash
+nightgauge gate record-test-execution --issue <N> \
+  --file integration_test/app_e2e/setup_flow_test.dart --outcome pass \
+  --command "flutter test --tags=app-e2e integration_test/app_e2e/setup_flow_test.dart"
+```
+
+See [docs/GO_BINARY.md § Evidence of Execution](GO_BINARY.md#evidence-of-execution--gate-check-test-execution-issue-1261)
+and [docs/STAGE_GATES.md § Evidence of execution](STAGE_GATES.md#evidence-of-execution-1261).
+
+---
+
 ### pipeline.scope_drift_gate (Issue #3040)
 
 Verifies that files modified for a `type:docs` or `type:chore` issue fall

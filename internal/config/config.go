@@ -1216,6 +1216,13 @@ type PipelineConfig struct {
 	// scheduler surfaces resolution failures instead of walking.
 	AdapterFallbackChain []string `yaml:"adapter_fallback_chain,omitempty" json:"adapterFallbackChain,omitempty"`
 
+	// TestExecution is the pipeline.test_execution: block (#1261) — the
+	// evidence-of-execution gate's one knob. Absent means the command is
+	// resolved from the repo itself, which is the intended path; the override
+	// exists for a repo whose real invocation lives somewhere no scanner can
+	// see (a CI matrix, a wrapper script).
+	TestExecution *TestExecutionConfig `yaml:"test_execution,omitempty" json:"testExecution,omitempty"`
+
 	// Logs holds the pipeline.logs: block — currently just
 	// history_retention_days, the ONE knob shared by the VSCode extension's
 	// execution-history cleanup and the Go writer's own prune pass (#674).
@@ -1223,6 +1230,33 @@ type PipelineConfig struct {
 	// max_entry_chars) govern the VSCode-only disk session log and have no Go
 	// consumer, so they are deliberately not modeled here.
 	Logs *PipelineLogsConfig `yaml:"logs,omitempty" json:"logs,omitempty"`
+}
+
+// TestExecutionConfig is the pipeline.test_execution: block (#1261).
+//
+//	pipeline:
+//	  test_execution:
+//	    command: "flutter test --exclude-tags=app-e2e"
+//
+// One key, deliberately. There is no enable/disable flag: the gate is inert in
+// any repo whose test command excludes nothing, so an off switch would only
+// ever be used to silence a true finding — and silencing a true finding is the
+// exact behaviour that let five weeks of red sweeps pass as validated.
+type TestExecutionConfig struct {
+	// Command overrides test-command resolution. Empty/absent means resolve
+	// from the repo (package.json scripts.test, a Makefile test: target,
+	// pubspec.yaml, …) on every run, so a repo that changes its exclusions is
+	// re-evaluated rather than grandfathered.
+	Command string `yaml:"command,omitempty" json:"command,omitempty"`
+}
+
+// ResolveTestExecutionCommand returns the configured test-command override, or
+// "" when the repo should be scanned. Safe on a nil receiver.
+func (p *PipelineConfig) ResolveTestExecutionCommand() string {
+	if p == nil || p.TestExecution == nil {
+		return ""
+	}
+	return p.TestExecution.Command
 }
 
 // PipelineLogsConfig is the pipeline.logs: block (#674).
