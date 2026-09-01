@@ -25,7 +25,7 @@ import (
 func preflightCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "preflight",
-		Short: "Pre-submission gates (links, syntax, secrets, skill-includes, skill-no-direct-gh, skill-anti-patterns, skill-portability, dependency-guard)",
+		Short: "Pre-submission gates (links, syntax, secrets, skill-includes, skill-no-direct-gh, skill-anti-patterns, skill-portability, dependency-guard, mitigation-rule)",
 		Long: `Deterministic pre-submission validation gates. Each subcommand inspects the
 working tree for a specific class of defect and exits non-zero when findings
 exist, so they can be chained in CI or git pre-push hooks. Replaces the
@@ -43,6 +43,7 @@ fragile bash + python3 + sed chains in skills/pr-preflight/SKILL.md
 	cmd.AddCommand(preflightDependencyGuardCmd())
 	cmd.AddCommand(preflightACReconcileCmd())
 	cmd.AddCommand(preflightThinkingEffortCmd())
+	cmd.AddCommand(preflightMitigationRuleCmd())
 	return cmd
 }
 
@@ -809,5 +810,90 @@ func printPreflightSecretsHuman(r *scan.SecretsScanResult) {
 	fmt.Printf("\ntotal: %d\n", r.Total)
 	for _, w := range r.Warnings {
 		fmt.Printf("  ! %s\n", w)
+	}
+}
+
+// preflightMitigationRuleCmd wraps `internal/preflight.RunMitigationRuleCheck`
+// and exits 1 when a required skill has lost the UNOBSERVED-MECHANISM RULE, or
+// when a deliberate mitigation marker names no tracking issue (#1263).
+//
+// The rule itself is judgement — no linter can tell an observed mechanism from
+// a confident guess. What this refuses is the two silent failures around it:
+// the guidance quietly disappearing from a skill during an edit, and an
+// intentional mitigation shipping with an undertaking to come back that nothing
+// records. Both are how the redelivery retry and the misreporting probe
+// survived review the first time.
+func preflightMitigationRuleCmd() *cobra.Command {
+	var (
+		jsonOutput bool
+		root       string
+	)
+	cmd := &cobra.Command{
+		Use:   "mitigation-rule",
+		Short: "Fail when the unobserved-mechanism rule is missing, or a mitigation marker is untracked",
+		Long: `Enforce the two mechanical halves of the unobserved-mechanism rule (#1263):
+
+  rule_missing      a skill that must state the UNOBSERVED-MECHANISM RULE does
+                    not — a rule nobody can find is a rule nobody follows.
+  marker_untracked  a NIGHTGAUGE-MITIGATION marker names no issue= — prose in a
+                    doc comment cannot be swept, counted, or found again by
+                    anyone who does not already know it is there.
+
+Whether a given retry was justified is not mechanizable and is not attempted
+here. Deliberate mitigation is allowed; it just has to be recorded somewhere
+that outlives the session that shipped it.
+
+Schema version 1 — field names (v, root, skills_checked, files_scanned,
+findings, warnings) and the check enum are stable.
+
+Exit codes:
+  0  no findings
+  1  one or more findings (gate fails)
+  2  hard error (e.g. unresolvable root)`,
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			result, err := preflight.RunMitigationRuleCheck(cmd.Context(), preflight.MitigationRuleOptions{
+				Root: root,
+			})
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "preflight mitigation-rule: %v\n", err)
+				os.Exit(2)
+			}
+			if jsonOutput {
+				if err := printJSON(result); err != nil {
+					fmt.Fprintf(os.Stderr, "warning: failed to encode JSON output: %v\n", err)
+				}
+			} else {
+				printPreflightMitigationRuleHuman(result)
+			}
+			if len(result.Findings) > 0 {
+				os.Exit(1)
+			}
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Output result as JSON (parsed by skills)")
+	cmd.Flags().StringVar(&root, "root", "", "Repository root (default: current working directory)")
+	return cmd
+}
+
+func printPreflightMitigationRuleHuman(r *preflight.MitigationRuleResult) {
+	fmt.Printf("nightgauge preflight mitigation-rule — schema v%d\n", r.V)
+	fmt.Printf("root: %s\n", r.Root)
+	fmt.Printf("skills checked: %d  files scanned: %d  findings: %d\n",
+		r.SkillsChecked, r.FilesScanned, len(r.Findings))
+	for _, f := range r.Findings {
+		if f.Line > 0 {
+			fmt.Printf("  ✗ [%s] %s:%d  %s\n", f.Check, f.File, f.Line, f.Match)
+		} else {
+			fmt.Printf("  ✗ [%s] %s  %s\n", f.Check, f.File, f.Match)
+		}
+		fmt.Printf("      %s\n", f.Message)
+	}
+	for _, w := range r.Warnings {
+		fmt.Printf("  ! %s\n", w)
+	}
+	if len(r.Findings) == 0 {
+		fmt.Println("the unobserved-mechanism rule is stated where it must be, and every mitigation marker is tracked ✓")
 	}
 }

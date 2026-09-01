@@ -6,7 +6,7 @@ description: Implement features following the approved PLAN.md and documented st
 license: Apache-2.0
 metadata:
   author: nightgauge
-  version: "1.15.0"
+  version: "1.16.0"
   source: https://github.com/nightgauge/nightgauge
 allowed-tools: Read Write Edit Glob Grep Bash Task
 orchestration:
@@ -111,6 +111,8 @@ This skill implements features by:
 - **Test-alongside** — Write tests as you implement, not after
 - **Security-first** — Apply rules from docs/SECURITY.md automatically
 - **Quality gates** — Review before committing
+- **Observe before you mitigate** — no retry, fallback or widened tolerance for a
+  mechanism nobody has seen (UNOBSERVED-MECHANISM RULE, below)
 - **Parallel execution** — Independent files created simultaneously for faster
   implementation
 
@@ -187,6 +189,18 @@ schema documentation.
   the context file says. Both ways to trip it look like success from inside the
   stage — delegating the implementation to a worktree-isolated subagent, or
   ending the turn while a background command is still running.
+- **UNOBSERVED-MECHANISM RULE (#1263)** — do not land a retry, a fallback, a
+  widened timeout, or added tolerance for a failure whose mechanism you have not
+  directly observed. Framing it as instrumentation does not exempt it: a
+  redelivery retry shipped as "diagnostic" would have re-hidden the real bug the
+  moment anyone fixed it, and a read-only probe shipped as "harmless" reported
+  the exact opposite of the truth and cost the next session its entire duration.
+  A diagnostic you add to a harness must be exercised against a known-good and a
+  known-bad case before you trust a word it says; if that is impractical, do not
+  ship it. Deliberate mitigation carries
+  `NIGHTGAUGE-MITIGATION: issue=<owner/repo#N> mechanism=unobserved` beside the
+  code, never prose in a doc comment. See
+  [`_shared/UNOBSERVED_MECHANISM.md`](../_shared/UNOBSERVED_MECHANISM.md).
 - **Never run the repo's full pre-submission suite here (#223).** `bash
 scripts/ci-local.sh` and its equivalents belong to feature-validate, which is
   the stage that commits and pushes (#1608). CLAUDE.md's "MANDATORY before every
