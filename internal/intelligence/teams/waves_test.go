@@ -393,8 +393,8 @@ func TestParentDir(t *testing.T) {
 
 func TestSerializeFileOverlapsDocsPathNotSerialized(t *testing.T) {
 	issues := []SubIssue{
-		{Number: 1, Files: []string{"docs/spikes/fable-5-behavior-porting.md", "src/a_module.ts"}},
-		{Number: 2, Files: []string{"docs/spikes/fable-5-behavior-porting.md", "src/b_module.ts"}},
+		{Number: 1, Files: []string{"docs/spikes/183-context-engineering-claude-5.md", "src/a_module.ts"}},
+		{Number: 2, Files: []string{"docs/spikes/183-context-engineering-claude-5.md", "src/b_module.ts"}},
 	}
 	deps, conflicts := SerializeFileOverlaps(issues, map[int][]int{})
 	if len(deps) != 0 {
@@ -407,12 +407,12 @@ func TestSerializeFileOverlapsDocsPathNotSerialized(t *testing.T) {
 
 func TestSerializableTargetFileDocsExclusion(t *testing.T) {
 	cases := map[string]bool{
-		"docs/spikes/fable-5-behavior-porting.md": false, // #79: docs never serialize
-		"docs/ARCHITECTURE.md":                    false,
-		"packages/foo/docs/api-notes.md":          false, // nested /docs/ segment
-		"skills/nightgauge-issue-audit/SKILL.md":  true,  // NOT under docs/ — real write target
-		"lib/pages/journal_entry_page.dart":       true,  // the #143/#144 class
-		"internal/state/runtime_state.go":         true,
+		"docs/spikes/183-context-engineering-claude-5.md": false, // #79: docs never serialize
+		"docs/ARCHITECTURE.md":                            false,
+		"packages/foo/docs/api-notes.md":                  false, // nested /docs/ segment
+		"skills/nightgauge-issue-audit/SKILL.md":          true,  // NOT under docs/ — real write target
+		"lib/pages/journal_entry_page.dart":               true,  // the #143/#144 class
+		"internal/state/runtime_state.go":                 true,
 	}
 	for f, want := range cases {
 		if got := serializableTargetFile(f); got != want {

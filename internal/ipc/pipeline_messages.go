@@ -246,7 +246,7 @@ type StageResultParams struct {
 	// (internal/orchestrator/outcome_semantics.go), which inverts the adapter
 	// mapping instead of collapsing a multi-band id onto its strongest band.
 	// See docs/OUTCOME_RECORDING.md and
-	// docs/spikes/fable-5-behavior-porting.md §8.3.
+	// docs/FAILURE_TAXONOMY.md § Model Refusal Fallback.
 	ServedModel string `json:"servedModel,omitempty"`
 	// ServedEffort/ServedThinking complete the served ENVELOPE next to
 	// ServedModel (#606, mirroring the #91 served-model flow): the wire

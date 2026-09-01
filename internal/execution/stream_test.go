@@ -872,7 +872,7 @@ func TestStreamFormatForAdapter(t *testing.T) {
 // containing the CLI's model_refusal_fallback event must attribute the
 // FALLBACK model as the served model, even though the session init still
 // reported the requested model and the run exits 0.
-// Event shape captured live in docs/spikes/fable-5-behavior-porting.md §8.3.
+// Event shape captured live in docs/FAILURE_TAXONOMY.md § Model Refusal Fallback.
 func TestServedModelTrackerRefusalFallback(t *testing.T) {
 	acc := &TokenAccumulator{}
 	tracker := &ServedModelTracker{}

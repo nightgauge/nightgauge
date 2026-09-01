@@ -480,6 +480,37 @@ runs and would mint a second, competing runtime for a Go-scheduled one.
 
 ---
 
+## Spawn Environment Inheritance (Issue #91)
+
+Every Claude CLI spawn — the Go adapters (`internal/execution/adapters/claude.go`,
+`claude_sdk.go`) and the TypeScript `SkillRunner`
+(`packages/nightgauge-vscode/src/utils/skillRunner.ts`) — builds its explicit
+environment map on top of the **parent process's own environment**: the Go
+adapters spawn via `os.Environ()` plus their explicit `NIGHTGAUGE_*` overrides
+(`internal/execution/manager.go`), and the TS path spreads `...process.env`
+first. Nothing in that chain strips or replaces the inherited environment; it is
+only ever added to.
+
+This inheritance is why thinking is **not** force-disabled on any Claude spawn
+today. A `CLAUDE_CODE_DISABLE_THINKING=1` workaround for the thinking-block
+replay `400` observed on claude CLI 2.1.154 was unconditionally
+set by all three spawn sites for a period. It was removed after the bug stopped
+reproducing on CLI 2.1.186 — three multi-turn tool-replay runs with thinking
+explicitly re-enabled (up to 26 turns / 9 replayed blocks) completed without a
+`400`, matching or exceeding the turn count the original bug report cited. None
+of the three spawn sites sets the variable any more.
+
+**Because the spawn env is inherited rather than fixed, restoring the workaround
+never requires a rebuild.** An operator who hits the replay bug again on an
+older CLI can set `export CLAUDE_CODE_DISABLE_THINKING=1` in their own shell (or
+in whatever process launches Nightgauge) and every subsequent Claude spawn picks
+it up automatically, because each adapter's explicit map is layered on top of —
+never in place of — the environment it inherited. This is a deliberate
+consequence of the inheritance model, not a fallback path Nightgauge implements
+or tests for.
+
+---
+
 ## Per-Stage Executor Dispatch (single-agent vs. fan-out)
 
 Independent of the manual/automated **mode** above, each stage is dispatched to

@@ -371,7 +371,7 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (*adapters.Ru
 			// log line the moment it fires (#91).
 			if fb := modelTracker.Observe(event); fb != nil {
 				fmt.Fprintf(os.Stderr,
-					"[model-refusal-fallback] %s#%d %s: claude CLI swapped %s → %s (category %q) after a safety refusal; attributing the served model — see docs/spikes/fable-5-behavior-porting.md §8.3 (#91)\n",
+					"[model-refusal-fallback] %s#%d %s: claude CLI swapped %s → %s (category %q) after a safety refusal; attributing the served model — see docs/FAILURE_TAXONOMY.md § Model Refusal Fallback (#91)\n",
 					opts.Repo, opts.IssueNumber, opts.Stage,
 					fb.OriginalModel, fb.FallbackModel, fb.RefusalCategory)
 			}

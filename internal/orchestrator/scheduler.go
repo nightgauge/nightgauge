@@ -148,7 +148,7 @@ type StageRunResult struct {
 	// Distinct from FallbackFromModel/ToModel above, which record OUR #42
 	// retry-engine downgrade, not the CLI's internal swap — this field must
 	// never feed routing, sticky downgrades, or retries.
-	// See docs/spikes/fable-5-behavior-porting.md §8.3.
+	// See docs/FAILURE_TAXONOMY.md § Model Refusal Fallback.
 	ServedModel string
 	// ServedEffort/ServedThinking are the envelope analogues of ServedModel
 	// (#606, mirroring the #91 flow): what the executor's last-mile
@@ -5339,7 +5339,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		// private resolution — so a Go-resolves-Y / TS-resolves-X /
 		// CLI-serves-X stage reported no servedModel at all and this
 		// correction could never fire.
-		// See docs/spikes/fable-5-behavior-porting.md §8.3.
+		// See docs/FAILURE_TAXONOMY.md § Model Refusal Fallback.
 		servedModel := model
 		if result != nil && result.ServedModel != "" {
 			servedModel = result.ServedModel
