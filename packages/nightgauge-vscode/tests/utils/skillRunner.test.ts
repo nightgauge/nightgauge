@@ -457,7 +457,8 @@ allowed-tools: Read
 
       // The #3801 thinking-block replay 400 stopped reproducing on claude CLI
       // 2.1.186, so the forced CLAUDE_CODE_DISABLE_THINKING=1 was removed —
-      // reasoning models run with thinking enabled (spike doc §8.2).
+      // reasoning models run with thinking enabled (docs/PIPELINE_EXECUTION.md
+      // § Spawn Environment Inheritance (Issue #91)).
       const call = vi.mocked(spawn).mock.calls.find(([cmd]) => cmd === "claude");
       expect(call).toBeDefined();
       const opts = call![2] as { env?: Record<string, string> };

@@ -492,13 +492,12 @@ first. Nothing in that chain strips or replaces the inherited environment; it is
 only ever added to.
 
 This inheritance is why thinking is **not** force-disabled on any Claude spawn
-today. A `CLAUDE_CODE_DISABLE_THINKING=1` workaround for the thinking-block
-replay `400` observed on claude CLI 2.1.154 was unconditionally
-set by all three spawn sites for a period. It was removed after the bug stopped
-reproducing on CLI 2.1.186 — three multi-turn tool-replay runs with thinking
-explicitly re-enabled (up to 26 turns / 9 replayed blocks) completed without a
-`400`, matching or exceeding the turn count the original bug report cited. None
-of the three spawn sites sets the variable any more.
+today. A `CLAUDE_CODE_DISABLE_THINKING=1` workaround was unconditionally set by
+all three spawn sites for a period and has since been removed; none of them
+sets the variable any more. See
+[TROUBLESHOOTING.md § Opus 4.8 fatal 400 "thinking blocks cannot be
+modified"](TROUBLESHOOTING.md#opus-48-fatal-400-thinking-blocks-cannot-be-modified)
+for the historical bug, the affected CLI versions, and the retirement evidence.
 
 **Because the spawn env is inherited rather than fixed, restoring the workaround
 never requires a rebuild.** An operator who hits the replay bug again on an

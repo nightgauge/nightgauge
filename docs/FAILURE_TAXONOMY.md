@@ -852,8 +852,10 @@ routed this deferral through the generic failure path and mislabeled it
 ### Model Refusal Fallback (Issue #91)
 
 A safety refusal from the served model is not a pipeline failure: the claude
-CLI itself absorbs it. When the model refuses mid-turn on a `reasoning_extraction`-class
-category, the CLI emits a `system` event with `subtype: "model_refusal_fallback"`
+CLI itself absorbs it. When the model refuses mid-turn — `api_refusal_category`
+values observed in the wild include `reasoning_extraction`, but the field is
+not restricted to that value; the Go tracker copies whatever category the CLI
+sends — the CLI emits a `system` event with `subtype: "model_refusal_fallback"`
 carrying `original_model`, `fallback_model`, and `api_refusal_category`, silently
 retries the turn on the fallback model, and the session still **exits 0**. Every
 assistant message after the event reports the fallback model; the session's own
@@ -861,15 +863,44 @@ assistant message after the event reports the fallback model; the session's own
 (`exitCode != 0` plus literal model-rejection wording) cannot see this — the swap
 happens one layer below our code, inside the CLI, before any result reaches us.
 
+**Captured event.** Verbatim shape from a live claude CLI 2.1.186 capture
+(`internal/execution/stream_test.go`, `TestServedModelTrackerRefusalFallback`):
+
+```json
+{
+  "type": "system",
+  "subtype": "model_refusal_fallback",
+  "trigger": "refusal",
+  "original_model": "claude-fable-5",
+  "fallback_model": "claude-opus-4-8",
+  "api_refusal_category": "reasoning_extraction",
+  "content": "…"
+}
+```
+
 **Fable 5.1 specifics.** The permitted server-side fallback targets for Fable 5.1
 are `claude-opus-4-8` and `claude-opus-5`. A refusal raised before any output
 token is produced is not billed at all. Where a mid-response refusal does trigger
 a fallback, the fallback credit refunds the cache cost of the model switch itself
 (the underlying turn's already-produced tokens are billed normally). The fallback
 model has no access to Fable 5.1's thinking blocks from before the swap — they
-are dropped, not replayed, and not billed. Consequently `fableFallbacks` records
-of shape `{from: "fable", to: "opus"}` are the correct attribution shape: the
-fallback is a same-turn model substitution, not a retry with a fresh context.
+are dropped, not replayed, and not billed.
+
+**Two distinct fallback mechanisms — do not conflate.** Everything above is the
+CLI's own **same-turn** substitution: one turn, one event, attributed via the
+`ServedModelTracker`/`ModelSelection.source` path described next. A second,
+unrelated mechanism lives in the extension orchestrator:
+`HeadlessOrchestrator.shouldFallbackFableToOpus()` retries an entire **failed
+stage** on Opus when that stage's effective model was Fable and the failure was
+a usage/quota-limit error — Fable has its own Max-plan usage bucket, separate
+from Opus/Sonnet, so a Fable-only exhaustion retries on Opus rather than
+pausing the whole pipeline for the global cooldown. This has nothing to do with
+`model_refusal_fallback` events: it fires on stage failure, not mid-turn, and
+it is a fresh stage retry with a new context, not a same-turn substitution. Each
+such retry is appended to `fableFallbacks` as `{stage, from: "fable", to:
+"opus"}` and surfaced via `quota_fallbacks` state meta (#26) — a record shape
+that looks superficially like the CLI fallback but is produced by, and only by,
+this orchestrator-level retry decision.
 
 **What we do about it: attribution only, never suppression or retry.** Both
 stream parsers track the served model as the LAST model observed in the stream
