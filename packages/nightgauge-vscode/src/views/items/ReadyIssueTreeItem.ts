@@ -50,6 +50,15 @@ export interface ReadyIssueTreeItemOptions {
   repoName?: string;
   /** Repository owner (e.g. 'nightgauge') — for cross-repo drag-and-drop */
   repoOwner?: string;
+  /**
+   * `id` of the parent node. When given, this item's `id` becomes
+   * `<parentId>/issue:<number>` so VS Code preserves its expansion state across
+   * refreshes (#1277). Parent-qualified because the same issue number can
+   * legitimately appear under more than one node of one tree — two
+   * repositories, or the same epic listed under two status buckets — and VS
+   * Code requires ids to be unique tree-wide.
+   */
+  parentId?: string;
 }
 
 /**
@@ -100,6 +109,12 @@ export class ReadyIssueTreeItem extends BaseTreeItem {
     const issueIsBlocked = isBlocked(issue);
     const labelSuffix = issueIsBlocked ? " (blocked)" : "";
     super(`#${issue.number} - ${issue.title}${labelSuffix}`, collapsibleState);
+
+    // Label-independent identity: the "(blocked)" suffix and the title both
+    // change without the issue becoming a different node.
+    if (options?.parentId) {
+      this.id = `${options.parentId}/issue:${issue.number}`;
+    }
 
     this.issueNumber = issue.number;
     this.issueUrl = issue.url;

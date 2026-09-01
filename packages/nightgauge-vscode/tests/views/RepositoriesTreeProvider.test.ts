@@ -368,6 +368,80 @@ describe("RepositoriesTreeProvider", () => {
     });
   });
 
+  describe("stable ids across refresh (#1277)", () => {
+    it("status summary ids are identical across renders even though the counts changed", async () => {
+      const repo = createMockRepository({ name: "alpha" });
+      const repoItem = new RepositoryTreeItem(repo, true, true);
+      mockWorkspaceManager = createMockWorkspaceManager({
+        getAllRepositories: vi.fn().mockReturnValue([repo]),
+      });
+      provider = new RepositoriesTreeProvider(mockWorkspaceManager);
+      const counts = vi
+        .fn()
+        .mockResolvedValueOnce({ ready: 3, inProgress: 1, backlog: 0 })
+        .mockResolvedValueOnce({ ready: 12, inProgress: 0, backlog: 5 });
+      provider.setProjectBoardServices(
+        new Map([["alpha", { getAggregatedStatusCounts: counts } as any]])
+      );
+
+      const first = await provider.getChildren(repoItem);
+      const second = await provider.getChildren(repoItem);
+
+      expect(first.map((c) => c.label)).not.toEqual(second.map((c) => c.label));
+      expect(first.map((c) => c.id)).toEqual(second.map((c) => c.id));
+      for (const c of second) {
+        expect(c.id).toBeDefined();
+        expect(c.id).not.toMatch(/\d+ issues?/);
+      }
+      expect(repoItem.id).toBe("repo:alpha");
+    });
+
+    it("switching the active editor repaints the two affected repo rows instead of resetting the tree", async () => {
+      const repoOne = createMockRepository({ name: "repo-one", path: "/ws/repo-one" });
+      const repoTwo = createMockRepository({
+        name: "repo-two",
+        path: "/ws/repo-two",
+        role: "secondary",
+      });
+      let onEditorChange: (() => void) | undefined;
+      const win = vscode.window as any;
+      win.onDidChangeActiveTextEditor = (cb: () => void) => {
+        onEditorChange = cb;
+        return { dispose: () => {} };
+      };
+      try {
+        mockWorkspaceManager = createMockWorkspaceManager({
+          getAllRepositories: vi.fn().mockReturnValue([repoOne, repoTwo]),
+          getRepositoryCount: vi.fn().mockReturnValue(2),
+        });
+        provider = new RepositoriesTreeProvider(mockWorkspaceManager);
+        const rows = (await provider.getChildren()) as RepositoryTreeItem[];
+        expect(rows.map((r) => r.isActive)).toEqual([true, false]);
+
+        const events: unknown[] = [];
+        provider.onDidChangeTreeData((e) => events.push(e));
+
+        win.activeTextEditor = {
+          document: { uri: { scheme: "file", fsPath: "/ws/repo-two/src/index.ts" } },
+        };
+        onEditorChange!();
+
+        expect(events).toHaveLength(2);
+        expect(events.every((e) => e instanceof RepositoryTreeItem)).toBe(true);
+        expect(events).not.toContain(undefined);
+        expect(rows.map((r) => r.isActive)).toEqual([false, true]);
+        expect(rows[1].contextValue).toBe("repository-active");
+
+        // Same editor again: nothing to repaint, nothing fired.
+        onEditorChange!();
+        expect(events).toHaveLength(2);
+      } finally {
+        delete win.onDidChangeActiveTextEditor;
+        delete win.activeTextEditor;
+      }
+    });
+  });
+
   describe("getParent()", () => {
     it("should return undefined for root items", () => {
       const repo = createMockRepository();

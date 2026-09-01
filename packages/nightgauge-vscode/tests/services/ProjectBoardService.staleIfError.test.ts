@@ -26,6 +26,7 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { ProjectBoardService } from "../../src/services/ProjectBoardService";
+import { sharedBoardSnapshots } from "../../src/services/BoardSnapshotStore";
 
 // Match the existing service test mocks (see ProjectBoardService.interface.test.ts).
 const mockBoardList = vi.fn();
@@ -90,6 +91,9 @@ describe("ProjectBoardService — stale-if-error counts (#485)", () => {
       ownerType: "organization",
     });
     mockGithubRateLimit.mockResolvedValue({ remaining: 5000, limit: 5000, resetAt: 0 });
+    // Counts live in the window-wide store since #1277; without this, one
+    // test's seeded counts would be the next test's "cache".
+    sharedBoardSnapshots.clear();
     service = new ProjectBoardService("/test/workspace", CACHE_TTL_MS);
   });
 
