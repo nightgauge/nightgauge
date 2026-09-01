@@ -33,6 +33,7 @@
 // Type-only, so it is erased at compile time and creates no runtime import
 // cycle with ProjectBoardService, which imports this module for real.
 import type { BoardItem } from "./IpcClient";
+import type { StatusCounts } from "./IpcClientBase";
 
 /** Identity of one board read. Everything the IPC call varies on appears here. */
 export interface BoardSnapshotKey {
@@ -49,6 +50,19 @@ export interface BoardSnapshotKey {
 /** Scope value for the unfiltered "every item on the board" read. */
 export const ALL_ITEMS_SCOPE = "__all_items__";
 
+/**
+ * Scope value for the per-status counts read (`board.counts`).
+ *
+ * Counts are the read the Repositories tree makes on EVERY root render — one
+ * per repository row — and they were the one board read this store did not
+ * cover. `ProjectBoardService` cached them in a private instance field, so N
+ * repositories on one board still issued N identical `board.counts` queries
+ * per cold refresh, in parallel, with nothing to coalesce them (#1277). The
+ * data is as repo-independent as the item lists: the IPC call takes (owner,
+ * project, ownerType, githubUser) and no repository.
+ */
+export const COUNTS_SCOPE = "__counts__";
+
 export interface BoardStoreMetrics {
   /** Served from a snapshot inside the caller's TTL. */
   hits: number;
@@ -58,8 +72,8 @@ export interface BoardStoreMetrics {
   coalesced: number;
 }
 
-interface Snapshot {
-  items: BoardItem[];
+interface Snapshot<T = unknown> {
+  value: T;
   fetchedAt: number;
 }
 
@@ -82,7 +96,7 @@ export function boardSnapshotKey(key: BoardSnapshotKey): string {
 
 export class BoardSnapshotStore {
   private snapshots = new Map<string, Snapshot>();
-  private inFlight = new Map<string, Promise<BoardItem[]>>();
+  private inFlight = new Map<string, Promise<unknown>>();
   private metrics: BoardStoreMetrics = { hits: 0, misses: 0, coalesced: 0 };
 
   /**
@@ -95,15 +109,24 @@ export class BoardSnapshotStore {
    * directions.
    */
   peek(key: BoardSnapshotKey, ttlMs: number): BoardItem[] | undefined {
-    const snapshot = this.snapshots.get(boardSnapshotKey(key));
-    if (!snapshot) return undefined;
-    if (Date.now() - snapshot.fetchedAt >= ttlMs) return undefined;
-    return snapshot.items;
+    return this.peekEntry<BoardItem[]>(boardSnapshotKey(key), ttlMs);
   }
 
   /** The snapshot regardless of age - the stale-if-error fallback. */
   stale(key: BoardSnapshotKey): BoardItem[] | undefined {
-    return this.snapshots.get(boardSnapshotKey(key))?.items;
+    return this.snapshots.get(boardSnapshotKey(key))?.value as BoardItem[] | undefined;
+  }
+
+  /** Counts counterpart of `stale`: the last successful counts, any age. */
+  staleCounts(key: BoardSnapshotKey): StatusCounts | undefined {
+    return this.snapshots.get(boardSnapshotKey(key))?.value as StatusCounts | undefined;
+  }
+
+  private peekEntry<T>(id: string, ttlMs: number): T | undefined {
+    const snapshot = this.snapshots.get(id);
+    if (!snapshot) return undefined;
+    if (Date.now() - snapshot.fetchedAt >= ttlMs) return undefined;
+    return snapshot.value as T;
   }
 
   /**
@@ -119,9 +142,25 @@ export class BoardSnapshotStore {
     ttlMs: number,
     fetcher: () => Promise<BoardItem[]>
   ): Promise<BoardItem[]> {
-    const id = boardSnapshotKey(key);
+    return this.fetchEntry(boardSnapshotKey(key), ttlMs, fetcher);
+  }
 
-    const fresh = this.peek(key, ttlMs);
+  /**
+   * `fetch` for the counts read. Same freshness, coalescing and never-cache-a-
+   * rejection rules; the only difference is the payload type. Callers pass a
+   * key whose scope is {@link COUNTS_SCOPE}, so `invalidateBoard` and
+   * `expireBoard` sweep counts together with the item lists.
+   */
+  async fetchCounts(
+    key: BoardSnapshotKey,
+    ttlMs: number,
+    fetcher: () => Promise<StatusCounts>
+  ): Promise<StatusCounts> {
+    return this.fetchEntry(boardSnapshotKey(key), ttlMs, fetcher);
+  }
+
+  private async fetchEntry<T>(id: string, ttlMs: number, fetcher: () => Promise<T>): Promise<T> {
+    const fresh = this.peekEntry<T>(id, ttlMs);
     if (fresh) {
       this.metrics.hits++;
       return fresh;
@@ -130,14 +169,14 @@ export class BoardSnapshotStore {
     const existing = this.inFlight.get(id);
     if (existing) {
       this.metrics.coalesced++;
-      return existing;
+      return existing as Promise<T>;
     }
 
     this.metrics.misses++;
     const promise = fetcher()
-      .then((items) => {
-        this.snapshots.set(id, { items, fetchedAt: Date.now() });
-        return items;
+      .then((value) => {
+        this.snapshots.set(id, { value, fetchedAt: Date.now() });
+        return value;
       })
       .finally(() => {
         if (this.inFlight.get(id) === promise) this.inFlight.delete(id);
@@ -175,6 +214,19 @@ export class BoardSnapshotStore {
     for (const [id, snapshot] of this.snapshots) {
       if (id.includes(marker)) snapshot.fetchedAt = 0;
     }
+  }
+
+  /**
+   * Expires exactly one (board, scope) entry, keeping it as the fallback.
+   *
+   * The counts path needs this on every pipeline status move: the numbers
+   * changed, so the next render must refetch, but the item lists on the same
+   * board are invalidated separately by the caller and must not be expired
+   * here — that would turn one status move into a 17-point board re-read.
+   */
+  expireScope(key: BoardSnapshotKey): void {
+    const snapshot = this.snapshots.get(boardSnapshotKey(key));
+    if (snapshot) snapshot.fetchedAt = 0;
   }
 
   /** Drops everything. For workspace or auth changes, and for test isolation. */
