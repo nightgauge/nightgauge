@@ -25,8 +25,10 @@ costing anything at this repository's volume, and each would add a standing
 surface to maintain. Intent capture is `skip`: the property the playbook asks
 for (the originator's own words survive the rewrite) is already enforced, and
 the only difference is the storage medium, which the issue puts out of scope.
-Of the fourteen per-stage measurements the playbook names across the six stages,
-two have a real producer today, six have a partial one, and six have none.
+The playbook's metrics table is one leading and one lagging cell per stage —
+twelve cells, six of which name two distinct measurements — so it names eighteen
+measurements in all. Of those eighteen, two have a real producer in Nightgauge
+today, eight have a partial one, and eight have none.
 
 ## 1. Method and what counts as evidence
 
@@ -182,15 +184,20 @@ docs/HEALTH_MONITORING.md:302:| `anomalyRate`            | Fraction of runs exce
 docs/HEALTH_MONITORING.md:308:- Cost anomalies detected (runs exceeding mean + 2σ)
 docs/HEALTH_MONITORING.md:1009:| `packages/nightgauge-sdk/src/analysis/health/statistics.ts`                    | Statistical utilities (trend, percentile, mean, stddev)                   |
 docs/decisions/011-model-eval-system.md:95:**N times** (default 3) on a sampled cell; if the score's standard deviation
-packages/nightgauge-sdk/src/analysis/health/statistics.ts:174: * Compute standard deviation of a numeric array. Returns 0 for arrays with < 2 elements.
 packages/nightgauge-sdk/src/analysis/health/dimensions/costHealth.ts:66:/** Identify the issueNumbers whose per-run cost exceeds mean + 2*stdDev. */
 packages/nightgauge-sdk/src/analysis/health/dimensions/costHealth.ts:254:      description: `${anomalyCount} of ${sampleSize} pipeline run(s) exceeded the anomaly threshold (mean + 2σ = $${anomalyThreshold.toFixed(4)}).`,
-packages/nightgauge-sdk/src/eval/qualityScorer.ts:196:    if (stddev(scores) > threshold) lowConfidence.add(dimension);
-packages/nightgauge-sdk/src/eval/qualityScorer.ts:202:function stddev(xs: number[]): number {
+packages/nightgauge-sdk/src/analysis/health/statistics.ts:174: * Compute standard deviation of a numeric array. Returns 0 for arrays with < 2 elements.
 packages/nightgauge-sdk/src/__tests__/analysis/health/statistics.test.ts:140:  it("returns correct sample standard deviation for [2,4,6]", () => {
 packages/nightgauge-sdk/src/__tests__/analysis/health/statistics.test.ts:141:    // sample stddev of [2,4,6]: mean=4, diffs=[-2,0,2], sq=[4,0,4], sum=8, /2=4, sqrt=2
 packages/nightgauge-sdk/src/__tests__/analysis/health/dimensions/costHealth.test.ts:85:    // One run costs 10x the normal amount — exceeds mean + 2σ
+packages/nightgauge-sdk/src/eval/qualityScorer.ts:196:    if (stddev(scores) > threshold) lowConfidence.add(dimension);
+packages/nightgauge-sdk/src/eval/qualityScorer.ts:202:function stddev(xs: number[]): number {
 ```
+
+Line order there is `grep`'s directory traversal order, which is a property of
+the checkout rather than of the tree's content, so a fresh run elsewhere may
+emit the same fourteen lines in a different sequence; the set of matches is what
+carries the argument, not their order.
 
 Two places in that list use dispersion to drive a live decision, and neither is
 a band.
@@ -332,47 +339,56 @@ post-mortem, not a lost record.
 
 ### 4.6 Per-stage metrics mapping → **defer**
 
-The mapping in § 5 finds six of fourteen with no producer. Filing one issue per
-missing metric would be noise; the two that would actually change a decision are
-grouped into a single deferred recommendation, and the rest are recorded here as
-deliberately unbuilt.
+The mapping in § 5 finds eight of eighteen with no producer and eight more with
+only a partial one. Filing one issue per missing metric would be noise; the three
+that would actually change a decision — per-change first-pass merge rate, plan
+fidelity, and a change failure rate over survival verdicts that are already
+recorded — are grouped into a single deferred recommendation, and the rest are
+recorded here as deliberately unbuilt.
 
 ## 5. Playbook metrics mapped to Nightgauge producers
 
-| Playbook metric                                  | Stage    | Nightgauge producer                                                                               | Status  |
-| ------------------------------------------------ | -------- | ------------------------------------------------------------------------------------------------- | ------- |
-| Time from first conversation to committed intent | Plan     | none — the refinement scan records no latency for the raw-issue-to-refined transition             | none    |
-| Survival rate of ideas (accepted vs. closed)     | Plan     | none — survival records measure whether a merged change held up, not whether an idea was accepted | none    |
-| Elapsed time between intent and spec             | Design   | none — Nightgauge has no separately-committed spec artifact to timestamp (§ 3.1)                  | none    |
-| Requirements rework after build starts           | Design   | partial — `SCOPE_DISCOVERED` backtracks are trace events, but nothing aggregates them as a rate   | partial |
-| Share of changes merging from the first pass     | Build    | partial — `overallFirstAttemptPassRate` is per stage execution, not per change through to merge   | partial |
-| Time from plan approval to merged PR             | Build    | partial — `avgRunDurationMs` / `p95RunDurationMs` cover the whole run, not the plan-approval span | partial |
-| Rework cycles per change                         | Build    | partial — `autoRecoveryRate` plus backtrack trace events; not surfaced as a per-change count      | partial |
-| How often the merged diff matched the saved plan | Build    | none — nothing compares the files `PLAN.md` named against the files the merged diff touched       | none    |
-| First-pass CI success rate                       | Test     | partial — `successRate_{stage}` for `feature-validate` proxies it; post-merge CI is not counted   | partial |
-| Time to first review                             | Deploy   | none — follows from § 3.3; with no review pass on unauthored PRs there is nothing to time         | none    |
-| Defects caught pre-merge vs. post-production     | Deploy   | partial — survival records give the post-merge half; adversarial findings are not persisted       | partial |
-| Share of findings that become merged fixes       | Maintain | `recommendationFollowThroughRate` and `recommendationEffectivenessRate`                           | present |
-| Repeat incidents over time                       | Maintain | the learning-effectiveness dimension's recurring-findings check (same title opened and closed 2+) | present |
-| Time from band breach to a queued finding        | Maintain | none — no bands exist to breach (§ 3.4)                                                           | none    |
+| Playbook metric                                                       | Stage    | Nightgauge producer                                                                                                                                            | Status  |
+| --------------------------------------------------------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
+| Time from first conversation to committed intent                      | Plan     | none — the refinement scan records no latency for the raw-issue-to-refined transition                                                                          | none    |
+| Survival rate of ideas (accepted vs. closed)                          | Plan     | none — survival records measure whether a merged change held up, not whether an idea was accepted                                                              | none    |
+| Edits to the intent made after the spec exists                        | Plan     | none — a refined issue body's later edits sit in GitHub's edit history and nothing reads them (§ 4.1)                                                          | none    |
+| Elapsed time between intent and spec                                  | Design   | none — Nightgauge has no separately-committed spec artifact to timestamp (§ 3.1)                                                                               | none    |
+| Requirements rework after build starts                                | Design   | partial — `SCOPE_DISCOVERED` backtracks are trace events, but nothing aggregates them as a rate                                                                | partial |
+| Share of changes merging from the first pass                          | Build    | partial — `overallFirstAttemptPassRate` is per stage execution, not per change through to merge                                                                | partial |
+| Time from plan approval to merged PR                                  | Build    | partial — `avgRunDurationMs` / `p95RunDurationMs` cover the whole run, not the plan-approval span                                                              | partial |
+| Rework cycles per change                                              | Build    | partial — `autoRecoveryRate` plus backtrack trace events; not surfaced as a per-change count                                                                   | partial |
+| How often the merged diff matched the saved plan                      | Build    | none — nothing compares the files `PLAN.md` named against the files the merged diff touched                                                                    | none    |
+| First-pass CI success rate                                            | Test     | partial — `successRate_{stage}` for `feature-validate` proxies it; post-merge CI is not counted                                                                | partial |
+| Review time per PR                                                    | Test     | partial — `bottleneckAvgDurationMs` and the per-stage P95 time the in-run review passes; the PR's own open-to-first-review interval is never read              | partial |
+| Change failure rate                                                   | Test     | partial — survival records carry a revert/breakage verdict per single-issue squash merge; nothing aggregates them into a rate and no incident tracker feeds it | partial |
+| Time to first review                                                  | Deploy   | none — follows from § 3.3; with no review pass on unauthored PRs there is nothing to time                                                                      | none    |
+| Share of review comments resolved without a human touching the branch | Deploy   | none — in-run review findings are consumed and never counted, and § 3.3 shows unauthored PRs get no pass to comment on                                         | none    |
+| Defects caught pre-merge vs. post-production                          | Deploy   | partial — survival records give the post-merge half; adversarial findings are not persisted                                                                    | partial |
+| Share of findings that become merged fixes                            | Maintain | `recommendationFollowThroughRate` and `recommendationEffectivenessRate`                                                                                        | present |
+| Repeat incidents over time                                            | Maintain | the learning-effectiveness dimension's recurring-findings check (same title opened and closed 2+)                                                              | present |
+| Time from band breach to a queued finding                             | Maintain | none — no bands exist to breach (§ 3.4)                                                                                                                        | none    |
 
 Producer definitions are in
 [`docs/HEALTH_MONITORING.md`](../HEALTH_MONITORING.md) § _The 8 Health
 Dimensions_; the surfaces that read them are
 [`skills/nightgauge-pipeline-health/`](../../skills/nightgauge-pipeline-health/)
 and [`skills/nightgauge-pipeline-audit/`](../../skills/nightgauge-pipeline-audit/).
-Three of the six `none` rows are structural and stay unbuilt on purpose: the two
-Plan-stage timings and the intent-to-spec elapsed time all presuppose separately
-committed intent and spec artifacts, which § 4.1 declines and § 3.1 explains
-Nightgauge does not have. Two more are downstream of decisions already taken
-here — time to first review follows the § 4.3 defer, and band-breach latency
-follows § 4.4. That leaves one genuinely missing measurement, plan fidelity,
-whose absence hides something a maintainer would act on: if most merged diffs
-depart from the plan that was approved before them, the planning stage is
-producing documents nobody follows and nothing today would say so. It pairs
-naturally with the strongest of the `partial` rows — first-pass merge rate,
-which is measured per stage execution rather than per change — and the two
-together are the last deferred recommendation below.
+Four of the eight `none` rows are structural and stay unbuilt on purpose: the two
+Plan-stage timings, the count of intent edits made after the spec exists, and the
+intent-to-spec elapsed time all presuppose separately committed intent and spec
+artifacts, which § 4.1 declines and § 3.1 explains Nightgauge does not have.
+Three more are downstream of decisions already taken here — time to first review
+and the share of review comments resolved without a human touching the branch
+both follow the § 4.3 defer, and band-breach latency follows § 4.4. That leaves
+one genuinely missing measurement, plan fidelity, whose absence hides something a
+maintainer would act on: if most merged diffs depart from the plan that was
+approved before them, the planning stage is producing documents nobody follows
+and nothing today would say so. It pairs naturally with two of the `partial`
+rows — first-pass merge rate, which is measured per stage execution rather than
+per change, and change failure rate, whose per-merge verdicts are already
+captured but never aggregated — and the three together are the last deferred
+recommendation below.
 
 ## 6. Out of scope
 
@@ -530,33 +546,44 @@ recommendations:
       not a lost record.
     depends_on: []
 
-  - id: first-pass-merge-and-plan-fidelity-metrics
+  - id: per-change-merge-fidelity-and-failure-metrics
     action: defer
-    title: "health: measure per-change first-pass merge rate and whether the merged diff matched the plan"
+    title: "health: measure per-change first-pass merge rate, plan fidelity, and change failure rate"
     type: feature
     priority: low
     size: M
     labels: ["component:sdk"]
     body: |
       Health analysis measures first-attempt pass rate per stage execution and
-      total run duration, neither of which answers the two questions a
-      maintainer actually asks about a change: did it reach a merge without
-      going back, and did what merged resemble the plan that was approved
-      before it was written.
+      total run duration, neither of which answers the questions a maintainer
+      actually asks about a change: did it reach a merge without going back,
+      did what merged resemble the plan that was approved before it was
+      written, and did it stay merged.
 
-      Add both as derived metrics over data the pipeline already emits — stage
-      executions, backtrack events, and the committed plan — rather than as new
-      instrumentation: a per-change first-pass merge rate that counts backtracks
-      and re-runs against the issue rather than the stage, and a plan-fidelity
-      signal comparing the files the plan named against the files the merged
-      diff touched.
+      Add all three as derived metrics over data the pipeline already emits —
+      stage executions, backtrack events, the committed plan, and the survival
+      records — rather than as new instrumentation:
+
+      - a per-change first-pass merge rate that counts backtracks and re-runs
+        against the issue rather than the stage;
+      - a plan-fidelity signal comparing the files the plan named against the
+        files the merged diff touched;
+      - a change failure rate over the terminal survival verdicts, which
+        already say per merged change whether it was reverted or broke the
+        default branch but are never aggregated into a rate.
 
       Plan fidelity is a signal, not a gate. A change that departs from its
       plan for a good reason is normal; the value is in noticing that it
       happens on most changes, which would mean the planning stage is producing
       documents nobody follows.
 
-      Deferred: neither metric changes a decision at current volume, and both
-      are cheap to add later because the inputs are already recorded.
+      The change failure rate has one honest caveat to carry into the
+      implementation: records still inside their observation window are not
+      failures, and counting them as successes would report a falsely low rate
+      on recent work. Compute it over finalized verdicts only and say how many
+      were excluded.
+
+      Deferred: none of the three changes a decision at current volume, and all
+      three are cheap to add later because the inputs are already recorded.
     depends_on: []
 ```
