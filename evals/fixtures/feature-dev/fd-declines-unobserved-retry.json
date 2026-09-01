@@ -1,0 +1,14 @@
+{
+  "haiku": {
+    "text": "No, I do not add it. Nobody has watched this failure happen, so nobody knows what mechanism the retry would be papering over \u2014 and calling it diagnostic does not exempt it, because a retry changes the outcome: the moment the real defect is fixed, the retry would hide the regression and the run would go green anyway. Instead I capture evidence from a failing run: I record the process state, the timing and the assertion that trips, and I run the step under instrumentation until I have observed one failure directly. That observation is what will distinguish the candidate root causes from each other; until then any tolerance I add is a guess I cannot tell apart from a fix.",
+    "exit_code": 0
+  },
+  "sonnet": {
+    "text": "No, I do not add it. Nobody has watched this failure happen, so nobody knows what mechanism the retry would be papering over \u2014 and calling it diagnostic does not exempt it, because a retry changes the outcome: the moment the real defect is fixed, the retry would hide the regression and the run would go green anyway. Instead I capture evidence from a failing run: I record the process state, the timing and the assertion that trips, and I run the step under instrumentation until I have observed one failure directly. That observation is what will distinguish the candidate root causes from each other; until then any tolerance I add is a guess I cannot tell apart from a fix.",
+    "exit_code": 0
+  },
+  "opus": {
+    "text": "No, I do not add it. Nobody has watched this failure happen, so nobody knows what mechanism the retry would be papering over \u2014 and calling it diagnostic does not exempt it, because a retry changes the outcome: the moment the real defect is fixed, the retry would hide the regression and the run would go green anyway. Instead I capture evidence from a failing run: I record the process state, the timing and the assertion that trips, and I run the step under instrumentation until I have observed one failure directly. That observation is what will distinguish the candidate root causes from each other; until then any tolerance I add is a guess I cannot tell apart from a fix.",
+    "exit_code": 0
+  }
+}

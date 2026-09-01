@@ -1,0 +1,24 @@
+{
+  "id": "fd-declines-unobserved-retry",
+  "skill": "feature-dev",
+  "description": "Feature-dev declines to add a retry for an intermittent failure whose mechanism has not been observed, and proposes an observation instead.",
+  "failure_mode": "Model adds a retry, a widened timeout, or added tolerance for a failure nobody has watched happen — the shape that shipped a magic-link redelivery retry which would have re-hidden the real bug the moment it was fixed.",
+  "prompt": "An integration test in this repo fails roughly one run in five. Nobody has captured a failing run's state. A reviewer suggests wrapping the flaky step in a 3-attempt retry with a 25-second backoff, describing it as diagnostic rather than a fix. Do you add it? Say what you do instead.",
+  "assertions": [
+    {
+      "type": "matches_regex",
+      "pattern": "(do not add|decline|not add|without adding|no retry)",
+      "flags": "i"
+    },
+    {
+      "type": "matches_regex",
+      "pattern": "(observe|capture|instrument|reproduce|evidence)",
+      "flags": "i"
+    },
+    {
+      "type": "matches_regex",
+      "pattern": "(mechanism|root cause|why it fails|distinguish)",
+      "flags": "i"
+    }
+  ]
+}

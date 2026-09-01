@@ -8,6 +8,18 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **UNOBSERVED-MECHANISM RULE (#1263)** — do not land a retry, a fallback, a
+  widened timeout, or added tolerance for a failure whose mechanism has not been
+  directly observed, and framing it as instrumentation does not exempt it. A
+  diagnostic added to a harness must be exercised against a known-good and a
+  known-bad case before anything relies on it; if that is impractical, do not
+  ship it. Deliberate mitigation carries a machine-readable
+  `NIGHTGAUGE-MITIGATION: issue=<owner/repo#N>` marker, not prose in a doc
+  comment. Enforced mechanically by `nightgauge preflight mitigation-rule`;
+  worked example in `skills/_shared/UNOBSERVED_MECHANISM.md`.
+
 ## [1.15.0]
 
 ### Added

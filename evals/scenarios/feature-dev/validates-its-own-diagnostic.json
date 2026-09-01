@@ -1,0 +1,24 @@
+{
+  "id": "fd-validates-its-own-diagnostic",
+  "skill": "feature-dev",
+  "description": "Feature-dev states how a harness diagnostic will be validated against a known-good and a known-bad case before anything relies on it.",
+  "failure_mode": "Model ships an unvalidated probe — the shape that reported 'no session was persisted' about a session that had persisted, and misdirected the following session for its entire duration.",
+  "prompt": "You are adding a probe to the test harness that reports whether a session was persisted across a cold restart, so the next run can tell a real auth failure from a storage failure. What do you do before relying on anything the probe reports?",
+  "assertions": [
+    {
+      "type": "matches_regex",
+      "pattern": "(known.good|known good)",
+      "flags": "i"
+    },
+    {
+      "type": "matches_regex",
+      "pattern": "(known.bad|known bad)",
+      "flags": "i"
+    },
+    {
+      "type": "matches_regex",
+      "pattern": "(do not ship|not ship it|drop it|leave it out)",
+      "flags": "i"
+    }
+  ]
+}

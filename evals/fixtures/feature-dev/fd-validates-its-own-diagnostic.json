@@ -1,0 +1,14 @@
+{
+  "haiku": {
+    "text": "Before I rely on a word the probe reports, I exercise it against two cases whose answer I already know. A known-good case where a session definitely was persisted: the probe must stay silent. A known-bad case where storage was definitely cleared: the probe must fire. A probe that fires on a healthy system tells me nothing when it fires on a sick one, and a probe that cannot detect the condition it was written for is a guaranteed false all-clear that will authoritatively misdirect whoever reads it next. If running both cases is impractical here, I do not ship it \u2014 an unvalidated probe left in the tree is read as a measurement by everyone who comes after.",
+    "exit_code": 0
+  },
+  "sonnet": {
+    "text": "Before I rely on a word the probe reports, I exercise it against two cases whose answer I already know. A known-good case where a session definitely was persisted: the probe must stay silent. A known-bad case where storage was definitely cleared: the probe must fire. A probe that fires on a healthy system tells me nothing when it fires on a sick one, and a probe that cannot detect the condition it was written for is a guaranteed false all-clear that will authoritatively misdirect whoever reads it next. If running both cases is impractical here, I do not ship it \u2014 an unvalidated probe left in the tree is read as a measurement by everyone who comes after.",
+    "exit_code": 0
+  },
+  "opus": {
+    "text": "Before I rely on a word the probe reports, I exercise it against two cases whose answer I already know. A known-good case where a session definitely was persisted: the probe must stay silent. A known-bad case where storage was definitely cleared: the probe must fire. A probe that fires on a healthy system tells me nothing when it fires on a sick one, and a probe that cannot detect the condition it was written for is a guaranteed false all-clear that will authoritatively misdirect whoever reads it next. If running both cases is impractical here, I do not ship it \u2014 an unvalidated probe left in the tree is read as a measurement by everyone who comes after.",
+    "exit_code": 0
+  }
+}
