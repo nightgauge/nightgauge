@@ -27,7 +27,7 @@ export class RepositoryTreeItem extends BaseTreeItem {
   readonly repository: Repository;
 
   /** Whether this is the currently active repository */
-  readonly isActive: boolean;
+  isActive: boolean;
 
   /**
    * Whether this repo is currently included in the autonomous scheduler's
@@ -46,13 +46,13 @@ export class RepositoryTreeItem extends BaseTreeItem {
    * `sequential: true` flag is set OR when the resolved per-repo cap
    * (`maxConcurrent`) is exactly 1.
    */
-  readonly isSequential: boolean;
+  isSequential: boolean;
 
   /**
    * Resolved per-repo concurrency cap from `MaxForRepo()` semantics.
    * `undefined` means "no per-repo cap" (defers to global). Issue #2987.
    */
-  readonly maxConcurrent: number | undefined;
+  maxConcurrent: number | undefined;
 
   /**
    * Current git branch for the working tree backing this row. Issue #3051.
@@ -108,6 +108,14 @@ export class RepositoryTreeItem extends BaseTreeItem {
         : vscode.TreeItemCollapsibleState.Expanded
     );
 
+    // Stable identity (#1277). VS Code keys expansion state on `id` when one
+    // is set and on `parentHandle/index:label` when it is not. Every refresh
+    // rebuilds this object, so without an id the row and everything under it
+    // collapses whenever anything above or in the label moves. Repository
+    // names are unique within the provider's cache, so the name alone is the
+    // identity; nothing volatile (branch, cap, halt) may appear here.
+    this.id = `repo:${repository.name}`;
+
     this.repository = repository;
     this.isActive = isActive;
     this.inAutonomousScan = inAutonomousScan;
@@ -162,6 +170,35 @@ export class RepositoryTreeItem extends BaseTreeItem {
     this.halt = halt;
     this.setContextValue();
     this.setRepositoryIcon();
+    this.setDescription();
+    this.setTooltipText();
+  }
+
+  /**
+   * Repaint this row as active / inactive in place (#1277).
+   *
+   * The active repository follows the active editor, which changes far more
+   * often than anything else in this tree. Rebuilding the whole tree for an
+   * icon swap threw away every expansion below every row; repainting the two
+   * rows whose state changed costs nothing and touches nothing else.
+   */
+  applyActiveState(isActive: boolean): void {
+    if (this.isActive === isActive) return;
+    this.isActive = isActive;
+    this.setContextValue();
+    this.setRepositoryIcon();
+    this.setTooltipText();
+  }
+
+  /**
+   * Repaint this row's per-repo concurrency cap in place (#1277) — the same
+   * discipline as {@link applyHaltState}, for the same reason: the provider
+   * refreshes cached rows by firing with the SAME object.
+   */
+  applyConcurrency(isSequential: boolean, maxConcurrent: number | undefined): void {
+    this.isSequential = isSequential || maxConcurrent === 1;
+    this.maxConcurrent = maxConcurrent;
+    this.setContextValue();
     this.setDescription();
     this.setTooltipText();
   }

@@ -114,6 +114,12 @@ export class EpicGroupTreeItem extends BaseTreeItem {
       repoOwner?: string;
       /** Repository name (e.g. 'acme-dashboard') */
       repoName?: string;
+      /**
+       * `id` of the parent node. When given, this group's `id` becomes
+       * `<parentId>/epic:<number|none>` and each child issue inherits it as
+       * its own parent, so expansion survives refreshes (#1277).
+       */
+      parentId?: string;
     }
   ) {
     const showDependencies = options?.showDependencies ?? true;
@@ -152,6 +158,12 @@ export class EpicGroupTreeItem extends BaseTreeItem {
           : vscode.TreeItemCollapsibleState.Expanded;
 
     super(label, collapsibleState);
+
+    // Label-independent identity: "(blocked)", "(empty)" and the title are
+    // all volatile; the epic number is not.
+    if (options?.parentId) {
+      this.id = `${options.parentId}/epic:${epic ? epic.number : "none"}`;
+    }
 
     this.epic = epic;
     this.repoOwner = options?.repoOwner;
@@ -205,6 +217,7 @@ export class EpicGroupTreeItem extends BaseTreeItem {
           showDependencies,
           enableCheckbox,
           checked: selectedIssueNumbers.has(issue.number),
+          parentId: this.id,
         })
       );
     }

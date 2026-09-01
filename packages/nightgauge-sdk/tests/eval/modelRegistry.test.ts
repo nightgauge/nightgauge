@@ -49,10 +49,21 @@ describe("model registry — integrity", () => {
       "claude-sonnet-5",
       "claude-haiku-4-5-20251001",
       "claude-fable-5",
+      "claude-fable-5-1",
     ]) {
       expect(ids.has(id)).toBe(true);
     }
     expect(getModelDescriptor("claude-sonnet-5")?.deprecated).toBeUndefined();
+  });
+
+  it("claude-fable-5-1 leads the fable band; 5 is deprecated behind it (#1274)", () => {
+    // The band invariant is a paired edit: the loader rejects two
+    // non-deprecated models on one (provider, band), so registering 5.1
+    // without deprecating 5 throws at load rather than resolving either one.
+    expect(getModelDescriptor("fable", "anthropic")?.id).toBe("claude-fable-5-1");
+    expect(getModelDescriptor("claude-fable-5-1")?.deprecated).toBeUndefined();
+    expect(getModelDescriptor("claude-fable-5")?.deprecated).toBe(true);
+    expect(getModelDescriptor("claude-fable-5")?.replacement).toBe("claude-fable-5-1");
   });
 
   it("declares Haiku's empty effort axis rather than inventing levels (#336)", () => {
@@ -204,6 +215,7 @@ describe("model registry — cost computation (parity with prior hardcoded rates
     ["claude-sonnet-4-6", 3.0 + 15.0],
     ["claude-opus-4-8", 5.0 + 25.0],
     ["claude-fable-5", 10.0 + 50.0],
+    ["claude-fable-5-1", 10.0 + 50.0],
   ];
   for (const [id, expected] of cases) {
     it(`${id} costs $${expected} for 1M in + 1M out`, () => {
@@ -242,6 +254,23 @@ describe("model registry — cost computation (parity with prior hardcoded rates
     expect(fiveMin).toBeCloseTo(6.25, 6);
     expect(oneHour).toBeCloseTo(10.0, 6);
   });
+
+  it("prices Fable 5.1 cache reads at its own $0.25/MTok, not the 0.1x line (#1274)", () => {
+    // Every other Anthropic entry reads at 0.1x input. 5.1 reads at 0.025x —
+    // $0.25/MTok on a $10.00 input sticker, a QUARTER of Fable 5's rate. A
+    // derivation-by-multiplier would price this pool 4x too high and make a
+    // cache-heavy frontier stage look far more expensive than it bills.
+    const only = (
+      t: Partial<Record<"cacheRead" | "cacheCreation5m" | "cacheCreation1h", number>>
+    ) => ({ input: 0, output: 0, ...t });
+    expect(computeCostUsd("claude-fable-5-1", only({ cacheRead: M }))).toBeCloseTo(0.25, 6);
+    expect(computeCostUsd("claude-fable-5", only({ cacheRead: M }))).toBeCloseTo(1.0, 6);
+
+    // The WRITE pools are unchanged between the two, so the read rate is the
+    // only axis that moved.
+    expect(computeCostUsd("claude-fable-5-1", only({ cacheCreation5m: M }))).toBeCloseTo(12.5, 6);
+    expect(computeCostUsd("claude-fable-5-1", only({ cacheCreation1h: M }))).toBeCloseTo(20.0, 6);
+  });
 });
 
 describe("model registry — per-(provider, band) rates (regression guard)", () => {
@@ -279,7 +308,11 @@ describe("model registry — per-(provider, band) rates (regression guard)", () 
       fable: {
         inputPerMillion: 10.0,
         outputPerMillion: 50.0,
-        cacheReadPerMillion: 1.0,
+        // 0.025x input, not the 0.1x every other Anthropic band takes: Fable
+        // 5.1 publishes $0.25/MTok cached reads, a quarter of Fable 5's rate
+        // (#1274). This row is the band LEADER's card, so it moved when the
+        // band leader did.
+        cacheReadPerMillion: 0.25,
         cacheCreationPerMillion: 12.5,
       },
     });

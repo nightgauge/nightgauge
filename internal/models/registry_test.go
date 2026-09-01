@@ -127,6 +127,7 @@ func TestRegistryIntegrity(t *testing.T) {
 	}
 	for _, id := range []string{
 		"claude-opus-4-8", "claude-sonnet-5", "claude-haiku-4-5-20251001", "claude-fable-5",
+		"claude-fable-5-1",
 	} {
 		if _, ok := Get(id); !ok {
 			t.Errorf("expected registry to contain %q", id)
@@ -179,6 +180,10 @@ func TestResolveProviderTierBands(t *testing.T) {
 		{"xai", "opus", "grok-4.6"},
 		{"xai", "fable", "grok-4.6"},
 		{"anthropic", "sonnet", "claude-sonnet-5"},
+		// Fable 5.1 is the band leader; 5 is deprecated behind it (#1274).
+		// Removing the `deprecated` flag from claude-fable-5 makes the
+		// one-leader-per-band check in TestBandUniquenessAcrossProviders fail.
+		{"anthropic", "fable", "claude-fable-5-1"},
 	}
 	for _, c := range cases {
 		got, ok := Resolve(c.provider, c.tier)
@@ -322,6 +327,7 @@ func TestActiveAnthropicModelsDeclareBehavior(t *testing.T) {
 	}{
 		{"claude-opus-5", true, "high", "high", 128000},
 		{"claude-sonnet-5", true, "", "high", 128000},
+		{"claude-fable-5-1", true, ThinkingDisableNever, "high", 128000},
 		{"claude-fable-5", true, ThinkingDisableNever, "high", 128000},
 		{"claude-haiku-4-5-20251001", false, "", "", 64000},
 	}
@@ -490,6 +496,28 @@ func TestPropensityAccessorsReadRegistryData(t *testing.T) {
 		t.Error("opus-5 and opus-4-8 report the same delegation propensity; the documented " +
 			"inversion between them is what the axis exists to capture")
 	}
+
+	// Fable 5.1 matches opus-5 on verification and delegation but drops to LOW
+	// narration: the 5.1 release notes call out fewer between-tool progress
+	// updates as a behavior change from Fable 5 (#1274). An overlay keyed on
+	// opus-5's `high` narration would fight a model that already narrates less.
+	fable51, ok := Get("claude-fable-5-1")
+	if !ok {
+		t.Fatal("claude-fable-5-1 missing from registry")
+	}
+	if got := fable51.VerificationPropensity(); got != PropensityHigh {
+		t.Errorf("fable-5-1 VerificationPropensity() = %q, want %q", got, PropensityHigh)
+	}
+	if got := fable51.DelegationPropensity(); got != PropensityHigh {
+		t.Errorf("fable-5-1 DelegationPropensity() = %q, want %q", got, PropensityHigh)
+	}
+	if got := fable51.NarrationPropensity(); got != PropensityLow {
+		t.Errorf("fable-5-1 NarrationPropensity() = %q, want %q", got, PropensityLow)
+	}
+	if fable51.NarrationPropensity() == opus5.NarrationPropensity() {
+		t.Error("fable-5-1 and opus-5 report the same narration propensity; the documented " +
+			"drop to fewer between-tool progress updates is what this axis records")
+	}
 }
 
 // TestPropensityDefaultsToNormal is the fail-open contract. Every accessor is
@@ -549,7 +577,9 @@ func TestUnknownModelHasNoThinkingConstraint(t *testing.T) {
 // multipliers, do NOT relax this test: add that id to an explicit exception
 // list here carrying the vendor's published per-1M number and a link to the
 // pricing page that states it. An exception must be visible and sourced; a
-// loosened assertion is neither.
+// loosened assertion is neither. cacheReadMultiplierOverrides below is that
+// list, and it is keyed per MODEL: one deviating entry never widens the
+// tolerance for the provider.
 //
 // Comparison note: 1.25 and 2.0 are exactly representable in binary floating
 // point, so the write rates match their products bit-for-bit. 0.1 is not
@@ -563,19 +593,34 @@ func TestAnthropicCacheRatesFollowPublishedMultipliers(t *testing.T) {
 		cacheCreation1hMultiplier = 2.0
 	)
 
+	// cacheReadMultiplierOverrides is the sourced per-model exception list for
+	// the READ pool. Fable 5.1 prices cached reads at $0.25/MTok against a
+	// $10.00/MTok input sticker — 0.025x, a quarter of Fable 5's rate and the
+	// first Anthropic entry to leave the 0.1x line. Source: "What's new in
+	// Claude Fable 5.1",
+	// https://platform.claude.com/docs/en/models/fable-5-1/whats-new-fable-5-1
+	// (#1274). Its cache WRITE pools are unchanged and stay on the derivation.
+	cacheReadMultiplierOverrides := map[string]float64{
+		"claude-fable-5-1": 0.025,
+	}
+
 	seen := 0
 	for _, m := range All() {
 		if m.Provider != "anthropic" {
 			continue
 		}
 		seen++
+		readMultiplier := cacheReadMultiplier
+		if override, ok := cacheReadMultiplierOverrides[m.ID]; ok {
+			readMultiplier = override
+		}
 		t.Run(m.ID, func(t *testing.T) {
 			for _, c := range []struct {
 				pool string
 				got  *float64
 				want float64
 			}{
-				{"cache_read", m.Rates.CacheRead, m.Rates.Input * cacheReadMultiplier},
+				{"cache_read", m.Rates.CacheRead, m.Rates.Input * readMultiplier},
 				{"cache_creation_5m", m.Rates.CacheCreation5m, m.Rates.Input * cacheCreation5mMultiplier},
 				{"cache_creation_1h", m.Rates.CacheCreation1h, m.Rates.Input * cacheCreation1hMultiplier},
 			} {

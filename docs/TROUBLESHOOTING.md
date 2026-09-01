@@ -1155,6 +1155,37 @@ consulted, so a cache does not remove the failing call; pinning would remove it
 but would also stop the tier from answering the question it exists to answer —
 does the extension come up in the VSCode people actually have.
 
+### A tree view collapses every expanded node on refresh (#1277)
+
+**Symptom**: expand a repository, its `Ready: N issues` bucket and an epic
+under it; switch editor tabs, press refresh, or let a count change — every
+node below the row snaps shut.
+
+**Cause**: VS Code preserves expansion across `onDidChangeTreeData` only for
+nodes whose `TreeItem.id` is set and unchanged. Without an id it keys identity
+on `parentHandle/index:label`, so a label that carries live data ("Ready: 12
+issues", "(blocked)", "(empty)") renames the node on the very refresh that
+changes it, VS Code treats it as new, and the constructor's hard-coded
+`Collapsed` wins. The Repositories tree set no ids at all until #1277.
+
+**Rule**: every item class rendered by a tree sets `this.id` from what the node
+IS (repo name, status bucket, epic number, issue number) and never from what it
+holds — no counts, suffixes, timestamps or array indexes. Ids must be unique
+tree-wide, so a shared item class takes a `parentId` option and derives
+`<parentId>/epic:N` / `<parentId>/issue:M`: the same epic legitimately appears
+under both the Ready and Backlog buckets of one repository. Repaint a cached
+row in place (`applyHaltState`, `applyActiveState`, `applyConcurrency`) and fire
+with that element; reserve `fire(undefined)` for structural changes. Pinned by
+`tests/views/items/stableTreeIds.test.ts` and the `stable ids across refresh`
+block in `tests/views/RepositoriesTreeProvider.test.ts`.
+
+**Related quota fact**: the same tree's per-row `board.counts` read was cached
+per `ProjectBoardService` instance while item lists were shared per board, so N
+repositories on one board cost N counts queries per cold refresh. Counts now
+live in `BoardSnapshotStore` under `COUNTS_SCOPE`; if the API ledger ever shows
+more than one `board.counts` per board per refresh, something is bypassing the
+store.
+
 ## Local Validation Traps
 
 Failures that read as success, and successes that read as failure. Every one

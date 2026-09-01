@@ -29,10 +29,15 @@ type fakeProbe struct {
 	probedURLs      []string
 	catalogOutputs  map[string]string // #551: path -> catalog-command combined output
 	catalogErrs     map[string]error  // #551: path -> error from the catalog-command spawn
+	// #1274 model-validity probe. modelProbe nil leaves runModelProbe nil,
+	// which is the plain-`doctor` state (probe not wired, nothing spent) —
+	// so every pre-existing test keeps exercising exactly that path.
+	modelProbe func(path string, args []string) (string, error)
 }
 
 func (f fakeProbe) toProbe() adapterProbe {
 	return adapterProbe{
+		runModelProbe: f.modelProbe,
 		lookPath: func(bin string) (string, error) {
 			if p, ok := f.paths[bin]; ok && p != "" {
 				return p, nil
@@ -159,6 +164,126 @@ func TestCheckAdapter_ClaudeAliasAndNoVersionFloor(t *testing.T) {
 	}
 	if h.Mcp != nil {
 		t.Error("expected no MCP section for claude")
+	}
+	// No model probe wired: this is the plain-`doctor` path, which must spend
+	// nothing and therefore assess no model (#1274).
+	if h.ModelOK != nil {
+		t.Errorf("ModelOK = %v with no probe wired; the free path must run no model check", *h.ModelOK)
+	}
+}
+
+// retentionRejectionOutput is the shape Anthropic returns when the caller's
+// organization or workspace is barred from a Covered Model. Captured wording
+// from the Fable 5.1 launch note (#1274).
+const retentionRejectionOutput = `API Error: 400 {"type":"error","error":` +
+	`{"type":"invalid_request_error","message":"To use this model, your organization or workspace ` +
+	`must have data retention enabled."}}`
+
+// TestCheckAdapter_ClaudeRetentionRejectionIsNamed is the #1274 regression
+// guard. Fable 5.1 is a Covered Model: an org configured for zero data
+// retention gets 400 invalid_request_error on EVERY request to it, while the
+// CLI is installed, current and authenticated. Nothing about that looks like a
+// bad model id, so a generic "the CLI rejected this model" sends the operator
+// hunting for a typo in an id that is spelled correctly. Deleting the
+// retentionRejection match makes this fall through to the generic branch and
+// the remediation assertions below fail.
+func TestCheckAdapter_ClaudeRetentionRejectionIsNamed(t *testing.T) {
+	var probedArgs []string
+	fp := fakeProbe{
+		paths:    map[string]string{"claude": "/opt/claude"},
+		versions: map[string]string{"/opt/claude": "claude 2.1.38 (Claude Code)\n"},
+		modelProbe: func(_ string, args []string) (string, error) {
+			probedArgs = args
+			return retentionRejectionOutput, errors.New("exit status 1")
+		},
+	}
+	h := checkAdapter("claude", fp.toProbe())
+
+	// The probe asks about the registry's CURRENT fable band leader — a band,
+	// not a literal, so registering a new leader re-points it automatically.
+	if h.Model != "claude-fable-5-1" {
+		t.Errorf("probed model = %q, want claude-fable-5-1 (the fable band leader)", h.Model)
+	}
+	if !strings.Contains(strings.Join(probedArgs, " "), "claude-fable-5-1") {
+		t.Errorf("probe argv %v did not name claude-fable-5-1", probedArgs)
+	}
+	if h.ModelOK == nil || *h.ModelOK {
+		t.Fatalf("ModelOK = %v, want false — the model was rejected", h.ModelOK)
+	}
+
+	// The retention remediation names BOTH ways out and says the id is fine.
+	for _, want := range []string{"data-retention", "30-day data retention", "claude-opus-5", "not a bad model id"} {
+		if !strings.Contains(h.Remediation, want) {
+			t.Errorf("remediation %q does not name %q", h.Remediation, want)
+		}
+	}
+	// And it must NOT be the generic "confirm the id" advice, which is wrong here.
+	if strings.Contains(h.Remediation, "confirm the id is served") {
+		t.Errorf("retention rejection fell through to the generic model-validity remediation: %q", h.Remediation)
+	}
+
+	// A model the org cannot use is not "this adapter cannot run a stage":
+	// every other band still dispatches, so OK stays true.
+	if !h.OK {
+		t.Errorf("adapter OK = false; a Covered-Model retention block must not fail the whole adapter")
+	}
+}
+
+// TestCheckAdapter_ClaudeModelProbeOutcomes covers the other two branches, so
+// the retention match is a DISCRIMINATOR rather than a phrase that happens to
+// be present: an accepted model reports ModelOK with no remediation, and an
+// unrelated rejection gets the generic advice, not the retention text.
+func TestCheckAdapter_ClaudeModelProbeOutcomes(t *testing.T) {
+	base := func(probe func(string, []string) (string, error)) fakeProbe {
+		return fakeProbe{
+			paths:      map[string]string{"claude": "/opt/claude"},
+			versions:   map[string]string{"/opt/claude": "claude 2.1.38 (Claude Code)\n"},
+			modelProbe: probe,
+		}
+	}
+
+	served := checkAdapter("claude", base(func(string, []string) (string, error) {
+		return "ok\n", nil
+	}).toProbe())
+	if served.ModelOK == nil || !*served.ModelOK {
+		t.Errorf("accepted model: ModelOK = %v, want true", served.ModelOK)
+	}
+	if served.Remediation != "" {
+		t.Errorf("accepted model produced a remediation: %q", served.Remediation)
+	}
+
+	other := checkAdapter("claude", base(func(string, []string) (string, error) {
+		return `API Error: 401 {"type":"error","error":{"type":"authentication_error"}}`, errors.New("exit status 1")
+	}).toProbe())
+	if other.ModelOK == nil || *other.ModelOK {
+		t.Errorf("rejected model: ModelOK = %v, want false", other.ModelOK)
+	}
+	if !strings.Contains(other.Remediation, "confirm the id is served") {
+		t.Errorf("unrelated rejection did not get the generic remediation: %q", other.Remediation)
+	}
+	if strings.Contains(other.Remediation, "data retention") {
+		t.Errorf("unrelated rejection was misreported as a retention block: %q", other.Remediation)
+	}
+}
+
+// TestCheckAdapter_ModelProbeGatedOnBaseline pins the gate: an adapter that
+// already failed its baseline gets no model probe at all. Spawning a request
+// through a CLI that is missing or below its version floor would spend money
+// to re-report a failure already named by Installed/VersionOK.
+func TestCheckAdapter_ModelProbeGatedOnBaseline(t *testing.T) {
+	spawned := false
+	fp := fakeProbe{
+		modelProbe: func(string, []string) (string, error) {
+			spawned = true
+			return "", nil
+		},
+	}
+	h := checkAdapter("claude", fp.toProbe()) // no claude on PATH
+	if spawned {
+		t.Error("model probe spawned for an adapter whose binary is not installed")
+	}
+	if h.ModelOK != nil {
+		t.Errorf("ModelOK = %v for an uninstalled adapter, want nil", *h.ModelOK)
 	}
 }
 

@@ -191,3 +191,79 @@ describe("ProjectBoardService - shared board across repositories", () => {
     expect(mockBoardList).toHaveBeenCalledTimes(2);
   });
 });
+
+/**
+ * The counts path (#1277). `getAggregatedStatusCounts` is what the
+ * Repositories tree calls for EVERY repository row on every root render, and
+ * it was the one board read cached per service instance instead of per board.
+ * Three rows on one board meant three identical `board.counts` queries plus
+ * three rate-limit probes, all in parallel with nothing to coalesce them.
+ */
+describe("ProjectBoardService - shared board counts across repositories", () => {
+  const COUNTS = { ready: 3, inProgress: 1, backlog: 12 };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    sharedBoardSnapshots.clear();
+    mockGithubRateLimit.mockResolvedValue({ remaining: 5000, limit: 5000, resetAt: 0 });
+    mockBoardCounts.mockResolvedValue(COUNTS);
+  });
+
+  it("issues one board.counts call and one rate-limit check for three concurrent repositories", async () => {
+    const services = ["alpha", "beta", "gamma"].map(serviceFor);
+
+    const results = await Promise.all(services.map((s) => s.getAggregatedStatusCounts()));
+
+    expect(mockBoardCounts).toHaveBeenCalledTimes(1);
+    expect(mockGithubRateLimit).toHaveBeenCalledTimes(1);
+    for (const r of results) expect(r).toEqual(COUNTS);
+  });
+
+  it("serves a later repository from the shared snapshot inside the TTL", async () => {
+    await serviceFor("alpha").getAggregatedStatusCounts();
+    await serviceFor("beta").getAggregatedStatusCounts();
+
+    expect(mockBoardCounts).toHaveBeenCalledTimes(1);
+  });
+
+  it("hands each caller its own copy - mutating one result cannot corrupt the shared counts", async () => {
+    const first = await serviceFor("alpha").getAggregatedStatusCounts();
+    first.ready = 999;
+
+    const second = await serviceFor("beta").getAggregatedStatusCounts();
+
+    expect(second.ready).toBe(COUNTS.ready);
+  });
+
+  it("clearCache on one service makes the next read go to the network again", async () => {
+    const alpha = serviceFor("alpha");
+    const beta = serviceFor("beta");
+    await alpha.getAggregatedStatusCounts();
+    expect(mockBoardCounts).toHaveBeenCalledTimes(1);
+
+    alpha.clearCache();
+    await beta.getAggregatedStatusCounts();
+
+    expect(mockBoardCounts).toHaveBeenCalledTimes(2);
+  });
+
+  it("an exhausted quota is not cached: joined callers get the stale counts and the next window refetches", async () => {
+    const alpha = serviceFor("alpha");
+    await alpha.getAggregatedStatusCounts();
+    alpha.softInvalidate();
+
+    mockGithubRateLimit.mockResolvedValue({
+      remaining: 0,
+      limit: 5000,
+      resetAt: Math.floor(Date.now() / 1000) + 3600,
+    });
+    const gated = await Promise.all(
+      ["alpha", "beta"].map((r) => serviceFor(r).getAggregatedStatusCounts())
+    );
+
+    // Still one network read - the refused fetch never happened - and both
+    // repositories were served the last-known-good counts, not zeros.
+    expect(mockBoardCounts).toHaveBeenCalledTimes(1);
+    for (const r of gated) expect(r).toEqual(COUNTS);
+  });
+});

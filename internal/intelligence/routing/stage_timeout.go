@@ -66,7 +66,7 @@ const defaultStageTimeout = 30 * time.Minute
 // ~2× the Opus head-room because it is the premium frontier tier.
 //
 // Matched on the tier family anywhere in the string so both the alias ("fable")
-// and the concrete id ("claude-fable-5") resolve. Unknown models return 1.0 —
+// and the concrete id ("claude-fable-5-1") resolve. Unknown models return 1.0 —
 // the historical ceiling, unchanged.
 //
 // #582 keep-with-reason (band-retirement sweep, PR #607): these substring

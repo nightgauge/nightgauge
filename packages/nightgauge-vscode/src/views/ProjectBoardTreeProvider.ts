@@ -72,6 +72,16 @@ export class ProjectBoardTreeProvider
   private projectBoardService: IWorkItemProvider;
   private tabId: TabId;
   private tabConfig: TabConfig;
+
+  /**
+   * Root of every node id in this view (#1277). One provider backs one status
+   * tab, so the tab is the natural namespace; the shared item classes derive
+   * `<prefix>/epic:N/issue:M` from it and VS Code keeps those nodes expanded
+   * across refreshes.
+   */
+  private get nodeIdPrefix(): string {
+    return `tab:${this.tabConfig.status}`;
+  }
   private sortBy: SortBy = "board";
   private sortDirection: SortDirection = "asc";
   private filterPriority: FilterPriority = "all";
@@ -712,6 +722,7 @@ export class ProjectBoardTreeProvider
               defaultCollapsed: this.defaultEpicCollapsed,
               enableCheckbox: this.multiSelectEnabled,
               selectedIssueNumbers: this.selectedIssueNumbers,
+              parentId: this.nodeIdPrefix,
             })
         );
 
@@ -753,6 +764,7 @@ export class ProjectBoardTreeProvider
         const item = new ReadyIssueTreeItem(issue, {
           ...treeItemOptions,
           checked: this.selectedIssueNumbers.has(issue.number),
+          parentId: this.nodeIdPrefix,
         });
         // Add backtrack indicator when this is the active pipeline issue (Issue #1349)
         if (this._activePipelineIssueNumber === issue.number && this._activeBacktrackCount > 0) {
