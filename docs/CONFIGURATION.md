@@ -1291,8 +1291,12 @@ A performance mode's ceiling is all-or-nothing, and its escalation bars are not
 obvious. `frontier` widens the ceiling to Fable, and the frontier-reasoning
 escalation then fires on **`feature-planning` and `feature-dev` at complexity
 `L` or `XL`** — `L` is ordinary feature work, not the exceptional case the mode
-name suggests. Fable picked this way also runs at `xhigh` effort, the most
-expensive point in the envelope.
+name suggests. Fable picked this way runs at `high` effort, the registry's
+`effort_default` for the band (it was `xhigh` before #1274; Fable 5.1's own
+guidance is to start at `high` and move up only on measured gain, because at
+`xhigh`/`max` the model drafts long deliverables inside thinking and writes
+them again, roughly doubling output tokens). `xhigh` remains reachable by an
+explicit `stage_efforts` pin.
 
 Before `max_model` the only way to decline that was to leave `frontier`
 entirely, which also gives up the wider ceiling on `feature-planning` where it
@@ -1321,7 +1325,7 @@ through `routing.RoutedTierEnvelopeForWorkspace`, and the extension through
 `getRoutedTierEnvelope`.
 
 `frontier` is the premium opt-in tier: it widens the routing ceiling to
-**Fable 5** (`claude-fable-5`, ~2× Opus). It **pins nothing** — the router
+**Fable 5.1** (`claude-fable-5-1`, ~2× Opus). It **pins nothing** — the router
 reaches Fable only on a heavy reasoning stage (`feature-planning`,
 `feature-dev`) at L/XL complexity, plumbing stays on Haiku, and
 `feature-validate` never exceeds Opus. (#19 removed the earlier
@@ -3611,13 +3615,18 @@ When using the Claude adapter, effort is resolved with this precedence:
 > `NIGHTGAUGE_CODEX_REASONING_EFFORT=xhigh` is rejected pre-spawn with the
 > same model/effort/ladder shape.
 
-> **Fable conformance (#73):** before an effort value reaches a Fable run it is
-> conformed to Anthropic's published guidance (`conformEffortForFable`): an
-> explicit `low`/`medium` is floored at `high` (Fable's own server-side default
-> — Sonnet-era config must not downgrade a frontier run), a router-selected
-> Fable stage (only reachable on L/XL planning/dev) gets `xhigh`, and a
-> deliberate Fable pin with no explicit effort omits the flag so the server
-> default applies. Coercions are logged on the stage's stderr stream.
+> **Fable conformance (#73, #1274):** before an effort value reaches a Fable
+> run it is conformed to Anthropic's published guidance
+> (`conformEffortForFable`): an explicit `low`/`medium` is floored at `high`
+> (Fable's own server-side default — Sonnet-era config must not downgrade a
+> frontier run), a router-selected Fable stage (only reachable on L/XL
+> planning/dev) also gets `high`, and a deliberate Fable pin with no explicit
+> effort omits the flag so the server default applies. Coercions are logged on
+> the stage's stderr stream. The router-selected case was `xhigh` until #1274:
+> Fable 5.1's guidance is to start at `high` and raise only on measured gain,
+> since at `xhigh`/`max` the model drafts complete files inside thinking and
+> then writes them again. An explicit `xhigh`/`max` still passes through
+> unchanged, so the higher levels remain available by deliberate pin.
 
 > **Note (Issue #944):** In manual mode, `DEFAULT_STAGE_EFFORTS` provides
 > sensible defaults (`medium` for planning/dev, `low` for validate). Lightweight

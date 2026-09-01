@@ -42,6 +42,12 @@ func TestResolveStageTimeout_ModelScaling(t *testing.T) {
 		{"claude-opus-4-8", time.Duration(1.5 * float64(base))},
 		{"fable", 2 * base},
 		{"claude-fable-5", 2 * base},
+		// The family-substring match is what carries a NEW fable id without a
+		// table edit — pinned rather than assumed, because the substring form
+		// is a deliberate keep-with-reason (#582/PR #607) and a future
+		// "tighten it to a closed set" refactor would silently drop 5.1 to the
+		// 1.0 historical ceiling (#1274).
+		{"claude-fable-5-1", 2 * base},
 		{"gpt-5", base}, // unknown model → historical ceiling, unchanged
 		{"", base},      // empty model → 1.0
 	}
@@ -58,7 +64,7 @@ func TestResolveStageTimeout_ModelScaling(t *testing.T) {
 // so the Go context deadline can never pre-empt it.
 func TestResolveStageTimeout_FrontierFeatureDevExceedsHardCap(t *testing.T) {
 	const tsProgressGatedHardCap = 90 * time.Minute
-	got := ResolveStageTimeout("feature-dev", "claude-fable-5")
+	got := ResolveStageTimeout("feature-dev", "claude-fable-5-1")
 	if got <= tsProgressGatedHardCap {
 		t.Fatalf("frontier Fable feature-dev timeout %v must exceed the TS 90-min hard cap; the 30-min guillotine regressed", got)
 	}

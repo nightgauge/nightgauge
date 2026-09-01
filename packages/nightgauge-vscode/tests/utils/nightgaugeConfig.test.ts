@@ -603,14 +603,22 @@ describe("conformEffortForFable (#73)", () => {
     });
   });
 
-  it("router-selected fable gets xhigh — the L/XL escalation IS the capability-sensitive case", () => {
+  it("router-selected fable gets high — the registry's own effort_default (#1274)", () => {
+    // Was `xhigh` (#73). Fable 5.1 guidance is to start at `high` and move up
+    // only on measured gain: at xhigh/max the model drafts complete files in
+    // thinking and writes them again, roughly doubling output tokens on every
+    // L/XL planning/dev run the router reaches.
     expect(conformEffortForFable("high", undefined, "auto")).toEqual({
-      effort: "xhigh",
-      coerced: true,
+      effort: "high",
+      coerced: false,
     });
     expect(conformEffortForFable(undefined, undefined, "auto-router")).toEqual({
-      effort: "xhigh",
+      effort: "high",
       coerced: false,
+    });
+    expect(conformEffortForFable("medium", undefined, "auto-router")).toEqual({
+      effort: "high",
+      coerced: true,
     });
   });
 

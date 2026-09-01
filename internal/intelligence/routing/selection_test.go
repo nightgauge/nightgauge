@@ -36,7 +36,7 @@ func TestCandidateLadderAnthropicSpansModels(t *testing.T) {
 	// Parity with the TS test: single-band models rung at their DECLARED
 	// default effort; haiku declares no effort axis and thinking off.
 	want := []EnvelopeRung{
-		{Band: "fable", ModelID: "claude-fable-5", Effort: "high", Thinking: "on"},
+		{Band: "fable", ModelID: "claude-fable-5-1", Effort: "high", Thinking: "on"},
 		{Band: "opus", ModelID: "claude-opus-5", Effort: "high", Thinking: "on"},
 		{Band: "sonnet", ModelID: "claude-sonnet-5", Effort: "high", Thinking: "on"},
 		{Band: "haiku", ModelID: "claude-haiku-4-5-20251001", Effort: "", Thinking: "off"},

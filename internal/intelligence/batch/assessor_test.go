@@ -116,3 +116,70 @@ func TestRecommendModel_ResolvesCurrentBandModel(t *testing.T) {
 		}
 	}
 }
+
+// TestEstimateIssueCost_PricesThroughRegistry pins the switch→registry cutover
+// (#1274). The literal-id switch it replaced carried cases for the deprecated
+// opus ids and claude-fable-5 only, so every model registered after it was
+// written — claude-opus-5, claude-sonnet-5, claude-fable-5-1 — silently fell to
+// the $0.10 unknown default, and the frontier tier estimated CHEAPER than a
+// superseded opus. Switching the lookup back to the literal switch makes the
+// first assertion fail.
+func TestEstimateIssueCost_PricesThroughRegistry(t *testing.T) {
+	fable51 := estimateIssueCost(1, "claude-fable-5-1")
+	opus5 := estimateIssueCost(1, "claude-opus-5")
+	sonnet5 := estimateIssueCost(1, "claude-sonnet-5")
+	haiku := estimateIssueCost(1, "claude-haiku-4-5-20251001")
+
+	if fable51 <= opus5 {
+		t.Errorf("estimateIssueCost(1, claude-fable-5-1) = %f, want > claude-opus-5 (%f): "+
+			"fable bills 2x opus per token, so the frontier tier must never estimate cheaper",
+			fable51, opus5)
+	}
+	if opus5 <= sonnet5 {
+		t.Errorf("estimateIssueCost(1, claude-opus-5) = %f, want > claude-sonnet-5 (%f)", opus5, sonnet5)
+	}
+	if sonnet5 <= haiku {
+		t.Errorf("estimateIssueCost(1, claude-sonnet-5) = %f, want > claude-haiku-4-5-20251001 (%f)",
+			sonnet5, haiku)
+	}
+
+	// A model the registry does not price still falls to the unknown default —
+	// local ids have no entry by design and must not be priced at $0.
+	wantDefault := unknownModelStageCost * 6
+	if got := estimateIssueCost(1, "llama3.1:70b"); !floatsClose(got, wantDefault) {
+		t.Errorf("estimateIssueCost(1, unregistered) = %f, want %f (the unknown-model default)",
+			got, wantDefault)
+	}
+
+	// Complexity still scales the estimate linearly on top of the rate card.
+	if got, want := estimateIssueCost(3, "claude-opus-5"), opus5*1.30; !floatsClose(got, want) {
+		t.Errorf("estimateIssueCost(3, claude-opus-5) = %f, want %f (1 + 2*0.15 of the score-1 cost)",
+			got, want)
+	}
+}
+
+// TestEstimateIssueCost_MatchesRegistryRates proves the number is DERIVED, not
+// a second hand-maintained table: it is the registry's own per-MTok rates
+// applied to the nominal stage mix. A rate edit in the registry moves this
+// estimate on the same commit, with no case to remember.
+func TestEstimateIssueCost_MatchesRegistryRates(t *testing.T) {
+	for _, id := range []string{"claude-fable-5-1", "claude-opus-5", "claude-sonnet-5"} {
+		m, ok := models.Get(id)
+		if !ok {
+			t.Fatalf("%s missing from registry", id)
+		}
+		want := (m.Rates.Input*nominalStageInputMTok + m.Rates.Output*nominalStageOutputMTok) * 6
+		if got := estimateIssueCost(1, id); !floatsClose(got, want) {
+			t.Errorf("estimateIssueCost(1, %s) = %f, want %f (registry rates x nominal stage mix x 6 stages)",
+				id, got, want)
+		}
+	}
+}
+
+func floatsClose(a, b float64) bool {
+	diff := a - b
+	if diff < 0 {
+		diff = -diff
+	}
+	return diff < 1e-9
+}

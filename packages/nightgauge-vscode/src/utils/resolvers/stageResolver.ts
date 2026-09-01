@@ -566,8 +566,13 @@ export function checkAdapterEffortSupported(
  *   model-blind config, not a deliberate frontier downgrade. The coercion is
  *   reported via `coerced` so the caller can log it.
  * - No explicit effort + router-selected fable (`auto` / `auto-router`
- *   source): `xhigh`. The router only reaches fable on L/XL planning/dev —
- *   by definition the "most capability-sensitive" case the guidance names.
+ *   source): `high` — the registry's own `effort_default` for the fable band.
+ *   This was `xhigh` until #1274. Anthropic's Fable 5.1 guidance is to start
+ *   at `high` and move up only on measured gain: at `xhigh`/`max` the model
+ *   drafts long deliverables (complete code files) inside thinking and then
+ *   writes them again, roughly doubling output tokens for work the router
+ *   reaches on every L/XL planning/dev issue. `xhigh` stays reachable by an
+ *   explicit pin, which is now the only way to ask for it.
  * - Otherwise (deliberate fable pin or default with no explicit effort):
  *   `undefined`, which omits `--effort` and lets Fable's own `high` default
  *   apply.
@@ -584,7 +589,7 @@ export function conformEffortForFable(
     return { effort: explicitEffort, coerced: false };
   }
   if (modelSource === "auto" || modelSource === "auto-router") {
-    return { effort: "xhigh", coerced: resolvedEffort !== "xhigh" && resolvedEffort !== undefined };
+    return { effort: "high", coerced: resolvedEffort !== "high" && resolvedEffort !== undefined };
   }
   return { effort: undefined, coerced: false };
 }

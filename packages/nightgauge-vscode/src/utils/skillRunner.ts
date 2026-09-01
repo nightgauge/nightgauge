@@ -4051,7 +4051,7 @@ export function runStageSkillHeadless(
       );
       if (conformed.coerced) {
         callbacks?.onStderr?.(
-          `[skillRunner] Effort ${effort} conformed to ${conformed.effort} for Fable (high is Fable's documented default; xhigh on router escalation)\n`
+          `[skillRunner] Effort ${effort} conformed to ${conformed.effort} for Fable (high is Fable's documented default, and the router-selected level since #1274; xhigh/max only by explicit pin)\n`
         );
       }
       effort = conformed.effort;
