@@ -191,6 +191,56 @@ describe("end-to-end with disk scenarios + fixtures (mock mode)", () => {
     }
   });
 
+  // The green matrix above proves nothing on its own. For each scenario the
+  // same author writes the fixture text AND the assertions that read it, so a
+  // green cell shows the assertions match that prose — not that they can tell a
+  // conforming answer from a non-conforming one. A regex that accidentally
+  // matches anything looks identical to one that works.
+  //
+  // That is the `cannot-go-red` defect class (docs/FAILURE_TAXONOMY.md), living
+  // inside the harness meant to catch it elsewhere, and it is not hypothetical
+  // here: a `not_contains` on "bisect" authored during #1262 passed only because
+  // the conforming fixture happened to phrase the refusal as "I will not
+  // bisect" — the assertion could not distinguish that from "I will bisect" at
+  // all. It was found by reading, not by this suite.
+  //
+  // So: run every scenario against a fixed non-answer and require every cell to
+  // FAIL. A scenario that passes on "I don't know." has assertions that do not
+  // discriminate. Deliberately a universal sentinel rather than a per-scenario
+  // near-miss corpus — it needs no maintenance, covers every future scenario for
+  // free, and cannot itself rot into the thing it is checking for (#1267).
+  it("fails every shipped scenario when handed a non-answer", async () => {
+    const scenarios = await loadScenarios({ scenariosDir: SCENARIOS_DIR });
+    expect(scenarios.length).toBeGreaterThan(0);
+
+    const nonAnswer = "I don't know.";
+    const sentinel: MockFixtureMap = {};
+    for (const s of scenarios) {
+      sentinel[s.id] = {
+        haiku: { text: nonAnswer, exit_code: 0 },
+        sonnet: { text: nonAnswer, exit_code: 0 },
+        opus: { text: nonAnswer, exit_code: 0 },
+      };
+    }
+
+    const harness = new SkillEvalHarness(new MockModelRunner(sentinel));
+    const report = await harness.run({
+      scenarios,
+      models: ["haiku", "sonnet", "opus"],
+      timestamp: TS,
+    });
+
+    const passedOnNothing = [
+      ...new Set(report.cells.filter((c) => c.verdict === "pass").map((c) => c.scenario_id)),
+    ];
+    expect(
+      passedOnNothing,
+      `these scenarios pass on ${JSON.stringify(nonAnswer)}, so their assertions cannot go red — ` +
+        `add a positive assertion that a conforming answer satisfies and a non-answer does not:\n  ` +
+        passedOnNothing.join("\n  ")
+    ).toHaveLength(0);
+  });
+
   it("ships at least 3 scenarios per pipeline skill", async () => {
     const scenarios = await loadScenarios({ scenariosDir: SCENARIOS_DIR });
     const counts = new Map<string, number>();
