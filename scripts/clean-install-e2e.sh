@@ -154,8 +154,16 @@ echo "vsix: $(basename "$VSIX") ($(du -h "$VSIX" | cut -f1))"
 
 step "build the clean-machine image"
 IMAGE="nightgauge-clean-install:$TS"
-docker build -q -t "$IMAGE" docker/clean-install
-echo "image: $IMAGE"
+# Not -q: a quiet build that fails prints only the Dockerfile snippet, not the
+# command's output, and the first CI run failed that way with the cause
+# invisible. The full log lands in the run directory; its tail is printed on
+# failure so the workflow log carries the reason.
+if ! docker build -t "$IMAGE" docker/clean-install >"$RUN_DIR/docker-build.log" 2>&1; then
+  echo "ERROR: image build failed — last 40 lines of $RUN_DIR/docker-build.log:" >&2
+  tail -n 40 "$RUN_DIR/docker-build.log" >&2
+  exit 1
+fi
+echo "image: $IMAGE (build log: $RUN_DIR/docker-build.log)"
 
 if [[ "$SMOKE" == "0" ]]; then
   step "throwaway repository $REPO (private) seeded from tests/clean-install/fixture"
