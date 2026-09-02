@@ -211,7 +211,7 @@ describe("StatusBarManager", () => {
     it("should show idle state", () => {
       statusBar.showIdle();
 
-      expect(mockStatusBarItem.text).toBe("$(nightgauge) Nightgauge");
+      expect(mockStatusBarItem.text).toBe("$(dashboard) Nightgauge");
       expect(mockStatusBarItem.tooltip).toBe("Nightgauge — Click to open Dashboard");
       expect(mockStatusBarItem.command).toBe("nightgauge.showDashboard");
     });
@@ -269,7 +269,7 @@ describe("StatusBarManager", () => {
       // Fast-forward time by 5 seconds
       vi.advanceTimersByTime(5000);
 
-      expect(mockStatusBarItem.text).toBe("$(nightgauge) Nightgauge");
+      expect(mockStatusBarItem.text).toBe("$(dashboard) Nightgauge");
 
       vi.useRealTimers();
     });

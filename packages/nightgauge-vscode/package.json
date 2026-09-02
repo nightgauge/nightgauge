@@ -1,7 +1,7 @@
 {
   "name": "nightgauge-vscode",
   "displayName": "Nightgauge",
-  "description": "The cockpit for the Nightgauge autonomous software factory — queue your backlog, watch the pipeline run dark, review evidence for every merge.",
+  "description": "Run an autonomous issue-to-merge pipeline from VS Code: queue GitHub issues, watch each stage, gate on evidence, review the PR.",
   "version": "0.1.0",
   "publisher": "nightgauge",
   "repository": {
@@ -13,9 +13,23 @@
   },
   "icon": "resources/nightgauge-icon.png",
   "categories": [
-    "Machine Learning",
+    "AI",
+    "SCM Providers",
     "Other"
   ],
+  "extensionKind": [
+    "workspace"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false,
+      "description": "Nightgauge runs git, gh and an AI coding agent against the workspace."
+    },
+    "virtualWorkspaces": {
+      "supported": false,
+      "description": "Requires a local git checkout."
+    }
+  },
   "keywords": [
     "nightgauge",
     "sdlc",
