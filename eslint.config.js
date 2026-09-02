@@ -205,6 +205,18 @@ export default [
     },
   },
 
+  // Clean-install gate driver and fixture (tests/clean-install/): plain
+  // CommonJS on purpose — loaded by a real VS Code extension host and by
+  // `node --test` inside a container with no build step.
+  {
+    files: ["tests/clean-install/**/*.js"],
+    languageOptions: {
+      ecmaVersion: 2022,
+      sourceType: "commonjs",
+      globals: nodeGlobals,
+    },
+  },
+
   // JavaScript config files (eslint.config.js, vite.config.js, etc.)
   {
     files: ["*.js", "*.mjs", "*.cjs"],

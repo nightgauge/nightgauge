@@ -1,0 +1,81 @@
+# Clean-machine install gate (docs/RELEASE_CHECKLIST.md, gate G1), automated.
+#
+# Packages the .vsix from the checked-out tree, builds an image with nothing
+# but VS Code, git, gh, Node and the claude CLI, installs the extension into a
+# fresh profile, creates a throwaway repository, and drives one issue to a
+# merged pull request with a real agent and a real forge. It spends real
+# model tokens and creates (then deletes) a real repository, so it never runs
+# on pull requests: manual dispatch and a weekly schedule only.
+#
+# Secrets (documented here; created by a maintainer, never by automation):
+#   ANTHROPIC_API_KEY       — agent auth for the claude CLI inside the container.
+#   CLEAN_INSTALL_GH_TOKEN  — a token that can create AND delete private
+#                             repositories under the nightgauge organization
+#                             and read/write projects (the walk provisions a
+#                             board). Scope it to a throwaway account if you can.
+name: Clean-install E2E (release gate G1)
+
+on:
+  workflow_dispatch:
+    inputs:
+      wall_clock_minutes:
+        description: "Give up after this many minutes of pipeline time"
+        required: false
+        default: "90"
+  schedule:
+    # Mondays 06:00 UTC.
+    - cron: "0 6 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: clean-install-e2e
+  cancel-in-progress: false
+
+jobs:
+  clean-install:
+    name: VSIX → fresh profile → merged PR
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Refuse to run without the documented secrets
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CLEAN_INSTALL_GH_TOKEN: ${{ secrets.CLEAN_INSTALL_GH_TOKEN }}
+        run: |
+          set -euo pipefail
+          missing=0
+          [[ -n "$ANTHROPIC_API_KEY" ]] || { echo "::error::ANTHROPIC_API_KEY secret is not set"; missing=1; }
+          [[ -n "$CLEAN_INSTALL_GH_TOKEN" ]] || { echo "::error::CLEAN_INSTALL_GH_TOKEN secret is not set"; missing=1; }
+          exit "$missing"
+
+      - name: Run the clean-install gate
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GH_TOKEN: ${{ secrets.CLEAN_INSTALL_GH_TOKEN }}
+          CLEAN_INSTALL_WALL_CLOCK_MINUTES: ${{ inputs.wall_clock_minutes || '90' }}
+        run: bash scripts/clean-install-e2e.sh
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: clean-install-e2e-logs
+          path: .clean-install-e2e/
+          if-no-files-found: warn
+          retention-days: 30

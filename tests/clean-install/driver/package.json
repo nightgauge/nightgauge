@@ -1,0 +1,14 @@
+{
+  "name": "clean-install-driver",
+  "displayName": "Nightgauge clean-install gate driver",
+  "description": "Loaded with --extensionDevelopmentPath by scripts/clean-install-e2e.sh. Drives the INSTALLED Nightgauge extension through the README Quick Start; contributes nothing itself.",
+  "version": "0.0.0",
+  "publisher": "nightgauge",
+  "private": true,
+  "license": "Apache-2.0",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "main": "./extension.js",
+  "activationEvents": []
+}

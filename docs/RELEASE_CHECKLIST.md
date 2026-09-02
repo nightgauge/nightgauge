@@ -296,6 +296,76 @@ user hits, it removes the product from the window entirely, and the only
 on-screen explanation is VS Code's generic banner, which never names
 Nightgauge.
 
+### Automated (2026-08-29)
+
+Step 5 is now a regression suite rather than a walk (#1150). One command
+packages the `.vsix` from the current tree, builds a container that has
+nothing but Ubuntu, VS Code from the official `.deb`, `git`, `gh`, Node 22
+and the `claude` CLI, installs the extension into a fresh
+`--extensions-dir` / `--user-data-dir` there, creates a private throwaway
+repository (`<owner>/e2e-clean-install-<utc-timestamp>`, seeded from
+`tests/clean-install/fixture/` with one unambiguous feature request from
+`tests/clean-install/issue.md`) and a throwaway project board, and drives that
+issue to a merged pull request with a real agent and a real forge:
+
+```bash
+bash scripts/clean-install-e2e.sh           # the gate; spends tokens, creates + deletes a repo
+bash scripts/clean-install-e2e.sh --smoke   # package, install, activate — no forge, no agent
+```
+
+Logs, the packaged VSIX and the driver's `report.json` land under
+`.clean-install-e2e/<timestamp>/` (gitignored). The same walk runs from
+`.github/workflows/clean-install-e2e.yml` on `workflow_dispatch` and weekly —
+never on pull requests — with the `ANTHROPIC_API_KEY` and
+`CLEAN_INSTALL_GH_TOKEN` secrets (the token must create and delete private
+repositories and projects under the owner), uploading the logs as an artifact.
+
+**What the container inherits from the host: agent authentication, and
+nothing else.** `ANTHROPIC_API_KEY` when set; otherwise a copy of the host's
+Claude Code OAuth credentials (exported from the macOS Keychain, or
+`~/.claude/.credentials.json` on Linux) mounted read-only and copied into the
+container user's `~/.claude/`, deleted with the run directory on exit. The
+gate is about the product's install path, not the agent's login flow. No
+`~/.nightgauge`, no `~/.vscode`, no `gh` keyring, no `PATH` binary: the
+entrypoint refuses to start if any of those exist, and if
+`NIGHTGAUGE_GO_BINARY_PATH` / `NIGHTGAUGE_BIN` are set, because either would
+short-circuit the binary-resolution cascade the gate exists to exercise.
+
+**What it proves**, each as an assertion with evidence in the log:
+
+- the extension activated from the VSIX (id, version, and that its path is
+  inside the fresh extensions dir and not a development path);
+- the binary the extension resolves at tier 3 is the bundle VS Code recorded
+  in `extensions.json`, is executable, and reports a version;
+- `nightgauge.pickupIssue` accepted the issue and a per-run record
+  (`runtime-<issue>-<runId>.json`) reached a terminal state within the wall
+  clock (90 min) and under the cost cap (15 USD, read from the run record);
+- the history record says `complete`, with non-zero cost and duration;
+- the forge says the PR is `MERGED` and the issue is `CLOSED`.
+
+**What it still cannot prove.** The "real clean machine" table above stays
+true in one respect and is now covered in the rest: `gh` login, the
+extensions directory, adapter config and the toolchain are all genuinely
+absent in the container — but the agent's own credentials are inherited, so
+a first `claude` login is not walked. Two Quick Start steps are not walked
+through the product either, and each is filed as a finding:
+
+| Step                      | How the gate walks it                                                                                                                                                                                          | Finding |
+| ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
+| 3 — Trust the folder      | `--disable-workspace-trust`; the banner click is a VS Code surface, and #900 already fixed the product side                                                                                                    | —       |
+| 4 — Initialize Repository | The command only opens an interactive `claude /nightgauge:repo-init` terminal. The container runs the VSIX's own binary verbs instead (`config init`, `label ensure`, `project ensure-fields`, board link)     | #1154   |
+| 4 — board link            | The skill's `nightgauge forge graphql` link step fails on the default GitHub forge; the container links the board with `gh api graphql`                                                                        | #1157   |
+| 5 — Pick Up Issue         | The command accepts only a live tree item and otherwise opens an input box; the driver types the number with `xdotool`                                                                                         | #1155   |
+| 6 — Watch it run          | `pre-push validate` blocks any Node project without an `npm run build` script (the first real run halted at feature-validate after ~3 USD); the fixture carries a placeholder `build` script until it is fixed | #1159   |
+
+The driver (`tests/clean-install/driver/`) is a plain-JavaScript extension
+loaded with `--extensionDevelopmentPath`; the product extension is always the
+installed VSIX, never a development path, and the driver asserts that.
+
+#### Findings from the first automated walk (2026-08-29)
+
+_Filled in below once the first real run completes._
+
 ### Still not walked
 
 **Step 5 has not been executed.** Steps 3–4 above were walked on 2026-08-25 and
