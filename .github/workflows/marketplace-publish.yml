@@ -117,16 +117,16 @@ jobs:
 
       # Split the canonical `npm run package` (build + vsce package) so we can
       # stamp `dist/build-info.json` AFTER the build pipeline writes into
-      # `dist/` but BEFORE `vsce package` freezes it. Pre-#3650 the stamp ran
+      # `dist/` but BEFORE `vsce package` freezes it. Before legacy issue 3650 the stamp ran
       # earlier and any future `dist/` rewrite (rm -rf in clean step, new
       # asset path) could silently omit it from the .vsix and leave
       # ExtensionStalenessService stuck in `state: "unknown"` on the
-      # installed extension. Issue #3650 (Part B).
+      # installed extension. legacy issue 3650 (Part B).
       - name: Build extension (pre-package)
         working-directory: packages/nightgauge-vscode
         run: npm run build
 
-      # Issue #3300 / #3650: stamp build provenance so ExtensionStalenessService
+      # Legacy issues 3300 / 3650: stamp build provenance so ExtensionStalenessService
       # can detect when the running extension is behind workspace HEAD and
       # refuse autonomous dispatch on critical-path drift. Stamping happens
       # AFTER `npm run build` so dist/ already exists in its final shape, and
