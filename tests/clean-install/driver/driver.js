@@ -259,6 +259,22 @@ async function watchRun(root, issueNumber, wallClockMs, costCapUsd) {
     if (terminal) break;
   }
 
+  // Say what the pipeline recorded BEFORE any assertion can end the driver:
+  // a run that latches terminal inside one poll interval leaves no snapshot,
+  // only a history record, and its reason must reach the workflow log.
+  if (history) {
+    const stageErrors = Object.entries(history.stages || {})
+      .filter(([, v]) => v && v.error)
+      .map(([k, v]) => `${k}: ${v.error}`)
+      .join(" | ");
+    log(
+      `history record: outcome=${history.outcome} type=${history.outcome_type || ""} ` +
+        `terminal_failure_kind=${history.terminal_failure_kind || ""} ` +
+        `duration_ms=${history.total_duration_ms || 0} stage_errors=${stageErrors || "(none)"}`
+    );
+  } else {
+    log("history record: none");
+  }
   assert("a run record was created for the issue", sawRuntime, runtimeFile || "no runtime-*.json");
   const terminal = (runtime && runtime.terminal === true) || Boolean(history);
   assert(
