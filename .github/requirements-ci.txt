@@ -1,0 +1,4 @@
+# Python dependencies the workflows install on hosted runners (the guard and
+# gate scripts parse YAML). Pinned here so Dependabot (pip ecosystem) tracks
+# them; the workflows install with `pip install -r .github/requirements-ci.txt`.
+PyYAML==6.0.3

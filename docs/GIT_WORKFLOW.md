@@ -133,7 +133,7 @@ gh pr merge <n> --squash --delete-branch
 
 **No `--admin`.** The `main` ruleset requires **zero** approving reviews while
 the project has one maintainer, so a plain squash merge succeeds on its own —
-and GitHub enforces the 12 required status checks itself. The gate is machine
+and GitHub enforces the 14 required status checks itself. The gate is machine
 -enforced: a merge is _impossible_ while a check is red or pending.
 
 This replaces an earlier policy that used `--admin` to satisfy a
@@ -657,7 +657,7 @@ they share one version.
 | Tier           | Purpose                        | Trigger                        | GitHub Environment |
 | -------------- | ------------------------------ | ------------------------------ | ------------------ |
 | **dev**        | Local development, feature PRs | `git push` / PR                | —                  |
-| **staging**    | Integration testing, QA, demo  | Tag: `v*.*.*-rc.*`             | `staging`          |
+| **staging**    | Integration testing, QA, demo  | Tag: `v*.*.*-rc.*`             | —                  |
 | **production** | Live release                   | Tag: `v*.*.*` (no pre-release) | `production`       |
 
 ### Git Tag Format
@@ -689,24 +689,27 @@ main ──●──●──●──●──●──
 1. Merge feature PRs to `main` as usual (CI validates on PR)
 2. When ready to validate a release: `git tag -a v0.2.0-rc.1 -m "RC1 for 0.2.0"`
 3. Push the tag: `git push origin v0.2.0-rc.1`
-4. `staging.yml` runs → builds artifacts, uploads them, records in GitHub
-   Environments — but does NOT publish or create a GitHub Release
+4. `staging.yml` runs → builds artifacts and uploads them as a run artifact —
+   but does NOT publish or create a GitHub Release
 5. Validate the RC artifacts (install VSIX, test Docker image, etc.)
 6. When satisfied: `git tag -a v0.2.0 -m "Release 0.2.0"` on the same commit
    (`release.yml` pins GoReleaser to the triggering tag via
    `GORELEASER_CURRENT_TAG`; without that pin the rc tag on the same commit
    wins git's version sort — #1296)
 7. Push the tag: `git push origin v0.2.0`
-8. `release.yml` runs → builds, creates GitHub Release, publishes artifacts
-   (gated by `production` environment)
+8. `release.yml` runs → builds, creates the GitHub Release with attested
+   assets, opens the Homebrew cask PR (gated by the `production` environment)
+9. `gh workflow run marketplace-publish.yml --ref v0.2.0 -f registries=both`
+   → publishes the per-target VSIXs to the VS Code Marketplace and Open VSX
+   (0.x on the pre-release channel; same environment gate)
 
 ### Per-Repository Workflows
 
-| Repository        | Staging (`v*-rc.*`)               | Production (`v*.*.*`)                   |
-| ----------------- | --------------------------------- | --------------------------------------- |
-| **nightgauge**    | Build VSIX + Go binary → artifact | Build → GitHub Release with VSIX        |
-| **acme-platform** | Build Docker → push GHCR staging  | Build Docker → push GHCR prod + Release |
-| **acme-mobile**   | Build release APK → artifact      | Build APK → GitHub Release              |
+| Repository        | Staging (`v*-rc.*`)               | Production (`v*.*.*`)                                    |
+| ----------------- | --------------------------------- | -------------------------------------------------------- |
+| **nightgauge**    | Build VSIX + Go binary → artifact | Build → GitHub Release with VSIX; registries on dispatch |
+| **acme-platform** | Build Docker → push GHCR staging  | Build Docker → push GHCR prod + Release                  |
+| **acme-mobile**   | Build release APK → artifact      | Build APK → GitHub Release                               |
 
 ### Cutting a Release — Step by Step
 
@@ -739,7 +742,30 @@ git push origin v0.2.0
 
 # 8. Watch production release
 gh run list --workflow=release.yml --limit 1
+
+# 9. Verify the merge commit's own run on main was green BEFORE step 6, and
+#    afterwards that the release carries every asset and its attestations verify:
+gh release view v0.2.0 --json assets --jq '.assets[].name'
+gh release download v0.2.0 -p 'nightgauge-vscode-darwin-arm64-*.vsix' -D /tmp/rel
+gh attestation verify /tmp/rel/nightgauge-vscode-darwin-arm64-*.vsix --owner nightgauge
+
+# 10. Publish to the registries — ON THE TAG, never from a branch. The run
+#     verifies VSCE_PAT / OVSX_PAT against the publisher before building, packages
+#     0.x as pre-release, attests, publishes. The `production` environment refuses
+#     a branch ref, and the workflow refuses anything that is not vX.Y.Z.
+gh workflow run marketplace-publish.yml --ref v0.2.0 -f registries=both
+gh run watch
+
+# 11. Confirm the listings serve the version, then run the post-merge hook for
+#     any issue the release closes (AGENTS.md § After Merge).
+npx --yes @vscode/vsce@3.9.1 show nightgauge.nightgauge-vscode --json | jq '.versions[]|{version,targetPlatform}'
+curl -s https://open-vsx.org/api/nightgauge/nightgauge-vscode | jq '{version,preRelease}'
 ```
+
+The registries do not receive the GitHub Release's VSIX bytes: the publish
+workflow rebuilds from the tag with the same recipe and attests its own
+output. A registry VSIX and the release asset of the same target are two
+attested artifacts of one tree; either verifies with `gh attestation verify`.
 
 ### Rollback
 
@@ -748,22 +774,30 @@ gh run list --workflow=release.yml --limit 1
 # (Homebrew: reinstall a previous GitHub Release directly;
 #  binaries/VSIX: download the previous GitHub Release assets)
 
-# Option 2: Create a hotfix
-git checkout -b hotfix/critical-issue v0.2.0
-# ... fix ...
-git checkout main && git merge hotfix/critical-issue
+# Option 2: Create a hotfix — a pull request like any other change (main is
+# squash-only and never pushed directly), then a new patch tag on the merge.
+git checkout -b fix/critical-issue main
+# ... fix, validate, push, open the PR, watch CI, `gh pr merge --squash` ...
+git checkout main && git pull --ff-only
 git tag -a v0.2.1 -m "Hotfix: critical issue"
-git push origin main v0.2.1
+git push origin v0.2.1
 ```
+
+Registry versions are immutable: a bad 0.2.x on the Marketplace or Open VSX
+is superseded by publishing the next patch, never overwritten. Unpublishing
+is the last resort and leaves installed copies in place.
 
 ### GitHub Environments
 
 Environments are configured in each repository's Settings → Environments:
 
-- **`staging`** — No protection rules (auto-approve). Scoped for staging
-  secrets when needed.
-- **`production`** — Add required reviewers and wait timers when the GitHub plan
-  supports it. Scoped for production secrets.
+- **`production`** — the only environment. Its deployment-branch policy admits
+  `v*` **tag** refs only, so `release.yml` (tag-triggered) and
+  `marketplace-publish.yml` (dispatched on a tag) run behind it and a dispatch
+  from a branch is refused before a runner is assigned. No required reviewer
+  (single maintainer); add one when there is a second.
+- There is no `staging` environment: `staging.yml` (rc tags) needs no secrets
+  beyond the job token and runs unbound.
 
 Benefits of environments even without upper-tier infrastructure:
 

@@ -33,6 +33,9 @@ updates:
   - package-ecosystem: npm
     # Root workspace plus the two standalone skill lockfiles that are outside the
     # npm workspace graph and were otherwise un-scanned (#131).
+    # Not listed: `/tests/clean-install/driver` (a plain-JavaScript extension
+    # with no dependencies) and `/tests/clean-install/fixture` (a throwaway seed
+    # repository -- it is what a stranger's project looks like, not ours).
     directories:
       - "/"
       - "/skills/nightgauge-product-audit"
@@ -82,6 +85,21 @@ updates:
         update-types:
           - minor
           - patch
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: pip
+    # The Python the workflows install on hosted runners (PyYAML for the
+    # publication-boundary guard and the two scheduled gates), pinned in
+    # .github/requirements-ci.txt so a bump is a reviewed pull request.
+    directory: /.github
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: America/Chicago
+    labels:
+      - dependencies
+      - ci
     open-pull-requests-limit: 5
 
   - package-ecosystem: docker
