@@ -100,13 +100,13 @@ describe("StatusBarManager — performance mode (Issue #3009)", () => {
   it("idle state shows no badge for Elevated and a bolt otherwise", () => {
     statusBar.setPerformanceMode("elevated");
     statusBar.showIdle();
-    expect(mainItem.text).toBe("$(nightgauge) Nightgauge");
+    expect(mainItem.text).toBe("$(dashboard) Nightgauge");
 
     statusBar.setPerformanceMode("maximum");
     statusBar.showIdle();
     // Mode label lives in the dedicated mode item; main item only shows a bolt
     // to avoid duplicating "Maximum" right next to "Mode: Maximum".
-    expect(mainItem.text).toBe("$(nightgauge) Nightgauge ⚡");
+    expect(mainItem.text).toBe("$(dashboard) Nightgauge ⚡");
     expect(String(mainItem.text)).not.toContain("MAXIMUM");
   });
 
@@ -148,7 +148,7 @@ describe("StatusBarManager — performance mode (Issue #3009)", () => {
     statusBar.setPerformanceMode("elevated");
     statusBar.setCustomOverridesActive(true);
     statusBar.showIdle();
-    expect(mainItem.text).toBe("$(nightgauge) Nightgauge ⚡");
+    expect(mainItem.text).toBe("$(dashboard) Nightgauge ⚡");
     expect(String(mainItem.tooltip)).toContain("Custom");
   });
 

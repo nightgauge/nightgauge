@@ -71,14 +71,14 @@ three.
 
 ### The publish path
 
-| #   | Gate                                                                                                                                    | State                                                                                                                                                                                                                                                                                                                                            |
-| --- | --------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| P1  | `release.yml` has fired at least once on a stable tag (dogfood-readiness gate D2)                                                       | **Done 2026-09-02** — run 33598909653 on `v0.2.1`: GitHub Release (11 assets: 3 CLI archives + SBOMs, checksums, manifest, 3 per-target VSIXs, all attested), cask PR `homebrew-tap#8` merged. The first attempt on `v0.2.0` exposed #1296 (GoReleaser released the rc tag on the same commit); `v0.2.0` stays tagged, unpublished.              |
-| P2  | Marketplace publish is double-gated (`MARKETPLACE_PUBLISH` repo variable **and** `VSCE_PAT`), with `vsce verify-pat` before any publish | **Done in the workflow, and it worked**: with `MARKETPLACE_PUBLISH=true` the preflight rejected the stored `VSCE_PAT` (401) and stopped before publishing anything. The PAT from 2026-07-22 is no longer valid — the owner must issue a new Azure DevOps token (Marketplace: Manage, all accessible organizations) and `gh secret set VSCE_PAT`. |
-| P3  | 0.x publishes to the Marketplace **pre-release** channel                                                                                | **Done** — #1289: `--pre-release` while the tag's major is 0. Not yet exercised: the Marketplace step has not run (P2).                                                                                                                                                                                                                          |
-| P4  | Open VSX                                                                                                                                | **Decided: not in the first release.** The namespace is claimed; publish there only after the Marketplace listing has soaked. No `ovsx` step exists — nothing to gate.                                                                                                                                                                           |
-| P5  | Recut the release candidate at the release commit; do not publish an older RC's artifacts                                               | **Done** — `v0.2.0-rc.25` (staging, green) at `35234944`, then `v0.2.0` there (unpublished, #1296), then `v0.2.1` at `57852243` = the same tree plus the release-pipeline fix and changelog.                                                                                                                                                     |
-| P6  | After the merge: the 72-hour quiet soak, then the announcement, then the Marketplace flip                                               | **Gate 1 complete 2026-09-02 06:40Z** (release + cask merged) — the 72-hour soak runs to 2026-09-05. Marketplace publish (Gate 2) waits only on P2; run `vsce publish --pre-release --packagePath <vsix>` for each attested VSIX from the release, or re-run the release workflow once the PAT is set.                                           |
+| #   | Gate                                                                                                                             | State                                                                                                                                                                                                                                                                                                                               |
+| --- | -------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| P1  | `release.yml` has fired at least once on a stable tag (dogfood-readiness gate D2)                                                | **Done 2026-09-02** — run 33598909653 on `v0.2.1`: GitHub Release (11 assets: 3 CLI archives + SBOMs, checksums, manifest, 3 per-target VSIXs, all attested), cask PR `homebrew-tap#8` merged. The first attempt on `v0.2.0` exposed #1296 (GoReleaser released the rc tag on the same commit); `v0.2.0` stays tagged, unpublished. |
+| P2  | Marketplace publish is its own manual dispatch (`marketplace-publish.yml`, #1299) that runs `vsce verify-pat` before any publish | **Done** — `marketplace-publish.yml` is the one publish path (#1300, #1307): it verifies `VSCE_PAT` against the publisher before building, packages 0.x as pre-release, attests, publishes. `MARKETPLACE_PUBLISH` is gone. The July PAT was rejected (401) on 2026-09-02 and replaced by the owner the same day.                    |
+| P3  | 0.x publishes to the Marketplace **pre-release** channel                                                                         | **Done** — #1289: `--pre-release` while the tag's major is 0. Not yet exercised: the Marketplace step has not run (P2).                                                                                                                                                                                                             |
+| P4  | Open VSX                                                                                                                         | **Decided: not in the first release.** The namespace is claimed; publish there only after the Marketplace listing has soaked. No `ovsx` step exists — nothing to gate.                                                                                                                                                              |
+| P5  | Recut the release candidate at the release commit; do not publish an older RC's artifacts                                        | **Done** — `v0.2.0-rc.25` (staging, green) at `35234944`, then `v0.2.0` there (unpublished, #1296), then `v0.2.1` at `57852243` = the same tree plus the release-pipeline fix and changelog.                                                                                                                                        |
+| P6  | After the merge: the 72-hour quiet soak, then the announcement, then the Marketplace flip                                        | **Gate 1 complete 2026-09-02 06:40Z** (release + cask merged); soak to 2026-09-05. Gate 2: `v0.2.2` is the first Marketplace build — the `v0.2.1` VSIXs shipped 23 MB of source maps (#1302) and were never published there.                                                                                                        |
 
 ### Dogfood before the tag
 
@@ -97,6 +97,33 @@ record the outcome in the private release runbook:
 
 Every card, dashboard row and history record those runs produce is the
 release's evidence. Regenerate the marketing imagery from the best of them.
+
+## Pre-publish review — 2026-09-02
+
+Before the Marketplace flip, two audits ran over the public tree: the
+workflows and repository security posture, and the listing itself. What
+they found and what landed:
+
+- **Repository posture** (already in place, verified): every action pinned
+  to a commit SHA and enforced server-side; secret scanning with push
+  protection; private vulnerability reporting; 0 open Dependabot, CodeQL or
+  secret-scanning alerts; squash-only linear history; tag protection; fork
+  PRs need approval; artifact attestations that verify.
+- **Landed** (#1306, #1307, #1304): the VSIX shipped 23 MB of source maps
+  and type declarations — fixed and guarded in every packaging workflow; the
+  six hand-built listing mockups replaced by generated renders; listing
+  metadata corrected; one Marketplace publish path; dead Azure-identity and
+  duplicate vulnerability-scan workflows deleted; timeouts and concurrency
+  on every job; CodeQL now analyzes the workflows themselves; Dependabot
+  covers the clean-install Docker image; the two scheduled LLM workflows no
+  longer hold write tokens in the job that runs the model; `Playwright
+webview tests` and `VSCode host smoke tests` are required checks;
+  AI-assisted secret detection enabled.
+- **Not done, deliberately**: signed commits are not required on `main`
+  (local commits are unsigned; squash merges through GitHub are signed
+  anyway); the organization-level Actions allowlist keeps patterns other
+  repositories use; no required reviewer on the `production` environment
+  (single maintainer).
 
 ## Verdict — 2026-09-01
 
@@ -133,7 +160,9 @@ open for triage in their own repositories and are not extension defects.
 What the first stable release run taught, in the order it happened:
 
 1. **`v0.2.0` + `MARKETPLACE_PUBLISH=true`** → preflight rejected `VSCE_PAT`
-   (401) and stopped. Nothing published. The double gate did its job.
+   (401) and stopped. Nothing published. The double gate did its job. (That
+   gate, and the variable, have since been removed from `release.yml`; the
+   Marketplace publish is the `marketplace-publish.yml` dispatch.)
 2. **Re-run with `MARKETPLACE_PUBLISH=false`** → GoReleaser released
    **`v0.2.0-rc.25`** (git's version sort ranks the rc tag above `v0.2.0` on
    the same commit), marked it Latest, opened an rc cask PR, then the manifest

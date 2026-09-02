@@ -10,7 +10,9 @@
 #
 # Built for the host's own platform (linux/arm64 on Apple Silicon Docker,
 # linux/amd64 in GitHub Actions); the .vsix mounted at run time must match.
-FROM ubuntu:24.04
+# Pinned by digest (multi-arch index); Dependabot's docker ecosystem keeps it
+# current.
+FROM ubuntu:24.04@sha256:33ceb71981b602c1a7443a53469e4dba065f7503eab3078a2d7a57a2ab987517
 
 ARG NODE_MAJOR=22
 ARG DEBIAN_FRONTEND=noninteractive
@@ -51,7 +53,8 @@ RUN ARCH="$(dpkg --print-architecture)" \
     && rm -rf /tmp/code-version-probe
 
 # The AI agent the extension drives by default (README § Before you start).
-RUN npm install -g @anthropic-ai/claude-code && npm cache clean --force
+# Pinned so the gate exercises a known CLI, not whatever shipped overnight.
+RUN npm install -g @anthropic-ai/claude-code@2.1.258 && npm cache clean --force
 
 # A user with nothing in their home directory. Auth arrives at run time only:
 # GH_TOKEN in the environment and either ANTHROPIC_API_KEY or a mounted

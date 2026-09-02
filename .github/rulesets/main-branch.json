@@ -11,7 +11,7 @@
   "bypass_actors": [
     {
       "actor_type": "OrganizationAdmin",
-      "actor_id": 1,
+      "actor_id": null,
       "bypass_mode": "pull_request"
     }
   ],
@@ -19,11 +19,17 @@
     {
       "type": "pull_request",
       "parameters": {
-        "required_approving_review_count": 1,
-        "require_code_owner_review": true,
+        "required_approving_review_count": 0,
         "dismiss_stale_reviews_on_push": true,
+        "required_reviewers": [],
+        "require_code_owner_review": false,
+        "dismissal_restriction": {
+          "enabled": false,
+          "allowed_actors": []
+        },
         "require_last_push_approval": false,
         "required_review_thread_resolution": true,
+        "require_extra_approval_for_unattributed_changes": true,
         "allowed_merge_methods": ["squash"]
       }
     },
@@ -33,20 +39,59 @@
         "strict_required_status_checks_policy": true,
         "do_not_enforce_on_create": false,
         "required_status_checks": [
-          { "context": "Go build & test" },
-          { "context": "SDK build & test" },
-          { "context": "VSCode build & test" },
-          { "context": "Security & license gates" },
-          { "context": "lint" },
-          { "context": "link-check" },
-          { "context": "publication boundary (allowlist, fail-closed)" },
-          { "context": "credential scan (tree + full history)" },
-          { "context": "cla" }
+          {
+            "context": "Go build & test"
+          },
+          {
+            "context": "SDK build & test"
+          },
+          {
+            "context": "VSCode build & test"
+          },
+          {
+            "context": "Security & license gates"
+          },
+          {
+            "context": "lint"
+          },
+          {
+            "context": "link-check"
+          },
+          {
+            "context": "publication boundary (allowlist, fail-closed)"
+          },
+          {
+            "context": "credential scan (tree + full history)"
+          },
+          {
+            "context": "cla"
+          },
+          {
+            "context": "Analyze (go)"
+          },
+          {
+            "context": "Analyze (javascript-typescript)"
+          },
+          {
+            "context": "CodeQL"
+          },
+          {
+            "context": "Playwright webview tests"
+          },
+          {
+            "context": "VSCode host smoke tests"
+          }
         ]
       }
     },
-    { "type": "required_linear_history" },
-    { "type": "non_fast_forward" },
-    { "type": "deletion" }
+    {
+      "type": "required_linear_history"
+    },
+    {
+      "type": "non_fast_forward"
+    },
+    {
+      "type": "deletion"
+    }
   ]
 }
