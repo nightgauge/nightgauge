@@ -244,7 +244,7 @@ cat <<TABLE
 | PR                        | ${PR_URL:-none} ($PR_STATE, merge $PR_MERGE_SHA) |
 | Issue                     | $ISSUE_STATE |
 | Cost / duration           | ${COST} USD / $((DURATION_MS / 1000)) s |
-| Findings                  | $(( $(jq -r '.findings | length' "$REPORT") + $(wc -l < "$OUT_DIR/findings.txt" 2>/dev/null || echo 0) )) (report.json + findings.txt) |
+| Findings                  | $(( $(jq -r '.findings | length' "$REPORT") + $([[ -f "$OUT_DIR/findings.txt" ]] && wc -l < "$OUT_DIR/findings.txt" || echo 0) )) (report.json + findings.txt) |
 | Result                    | $([[ "$FAILED" == "0" ]] && echo PASS || echo FAIL) |
 TABLE
 cp "$REPORT" "$RUN_DIR/report.json" 2>/dev/null || true
