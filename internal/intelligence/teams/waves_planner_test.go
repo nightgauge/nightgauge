@@ -199,13 +199,13 @@ func waveNumbers(w WaveAssignment) []int {
 func TestPlanWavesFromIssues_SharedDocCitationStaysParallel(t *testing.T) {
 	issues := []pkgtypes.Issue{
 		{Number: 72, Title: "eval axis",
-			Body: "Add the axis. Context: [spike](docs/spikes/fable-5-behavior-porting.md) §4."},
+			Body: "Add the axis. Context: [spike](docs/spikes/183-context-engineering-claude-5.md) §4."},
 		{Number: 73, Title: "fable budgets",
-			Body: "Fix budgets. Evidence in docs/spikes/fable-5-behavior-porting.md §3."},
+			Body: "Fix budgets. Evidence in docs/spikes/183-context-engineering-claude-5.md §3."},
 		{Number: 74, Title: "registry",
-			Body: "Update registry. See docs/spikes/fable-5-behavior-porting.md §6."},
+			Body: "Update registry. See docs/spikes/183-context-engineering-claude-5.md §6."},
 		{Number: 75, Title: "docs",
-			Body: "Document it. Per docs/spikes/fable-5-behavior-porting.md §7."},
+			Body: "Document it. Per docs/spikes/183-context-engineering-claude-5.md §7."},
 	}
 	result := PlanWavesFromIssues(issues)
 

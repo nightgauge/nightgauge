@@ -176,3 +176,7 @@ docs/strategy/
 # Captured output from scripts/ci-local.sh (see run_step)
 .ci-local-logs/
 go-test.json
+
+# Clean-install release gate (scripts/clean-install-e2e.sh) — per-run logs,
+# the packaged VSIX copy and the exported agent credentials live here.
+.clean-install-e2e/

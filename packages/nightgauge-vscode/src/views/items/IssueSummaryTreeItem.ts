@@ -56,6 +56,13 @@ export class IssueSummaryTreeItem extends BaseTreeItem {
 
     super(label, collapsibleState);
 
+    // Stable identity (#1277). The label carries the live count ("Ready: 12
+    // issues"), and the provider rewrites it again after the children load,
+    // so keying identity on the label meant every count change renamed the
+    // node and VS Code collapsed it as "new". The id names what the node IS
+    // — this repository's bucket for this status — and never what it holds.
+    this.id = `repo:${repoName}/status:${statusType}`;
+
     this.repoName = repoName;
 
     this.statusType = statusType;

@@ -98,12 +98,13 @@ no fourth convention and no file matched by more than one runner or by none
 tier shares vitest's runner and `*.test.ts` convention; it is a separate tier
 because of what it asserts, not how it runs.
 
-| Tier                                                  | Directory                                  | Naming convention                               | Runner                                                    | CI job                                     |
-| ----------------------------------------------------- | ------------------------------------------ | ----------------------------------------------- | --------------------------------------------------------- | ------------------------------------------ |
-| Unit / integration (Node, mocked VSCode API)          | `tests/**` (excluding `tests/playwright/`) | `*.test.ts`                                     | `vitest` (`vitest.config.ts`)                             | `vscode` (`.github/workflows/ci.yml`)      |
-| Data arrival (real transport stubbed at its boundary) | `tests/arrival/**`                         | `*.test.ts`                                     | `vitest` (`vitest.config.ts`)                             | `vscode` (`.github/workflows/ci.yml`)      |
-| Browser-driven webview (real Chromium)                | `tests/playwright/**`                      | `*.playwright.ts`                               | `@playwright/test` (`playwright.config.ts`)               | `playwright` (`.github/workflows/ci.yml`)  |
-| Extension host smoke (real headless VSCode)           | `tests/vscode-host/**`                     | `*.host.ts` (entry point), `*.suite.ts` (cases) | `@vscode/test-electron` via `tests/vscode-host/launch.ts` | `vscode-host` (`.github/workflows/ci.yml`) |
+| Tier                                                           | Directory                                  | Naming convention                                           | Runner                                                    | CI job                                                    |
+| -------------------------------------------------------------- | ------------------------------------------ | ----------------------------------------------------------- | --------------------------------------------------------- | --------------------------------------------------------- |
+| Unit / integration (Node, mocked VSCode API)                   | `tests/**` (excluding `tests/playwright/`) | `*.test.ts`                                                 | `vitest` (`vitest.config.ts`)                             | `vscode` (`.github/workflows/ci.yml`)                     |
+| Data arrival (real transport stubbed at its boundary)          | `tests/arrival/**`                         | `*.test.ts`                                                 | `vitest` (`vitest.config.ts`)                             | `vscode` (`.github/workflows/ci.yml`)                     |
+| Browser-driven webview (real Chromium)                         | `tests/playwright/**`                      | `*.playwright.ts`                                           | `@playwright/test` (`playwright.config.ts`)               | `playwright` (`.github/workflows/ci.yml`)                 |
+| Extension host smoke (real headless VSCode)                    | `tests/vscode-host/**`                     | `*.host.ts` (entry point), `*.suite.ts` (cases)             | `@vscode/test-electron` via `tests/vscode-host/launch.ts` | `vscode-host` (`.github/workflows/ci.yml`)                |
+| Clean-install release gate (packaged VSIX, real agent + forge) | `tests/clean-install/**` (repo root)       | `driver/driver.js` (in-host driver), `fixture/`, `issue.md` | `scripts/clean-install-e2e.sh` (Docker + Xvfb)            | `clean-install-e2e.yml` (dispatch + weekly; never on PRs) |
 
 Run each tier locally:
 

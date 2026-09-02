@@ -481,7 +481,7 @@ export interface SkillRunResult {
    * (`model_refusal_fallback`) and still exits 0, so the requested model is
    * not guaranteed to be the serving one. Forwarded to Go via
    * pipeline.stageResult for cost/telemetry/history attribution. (#91)
-   * See docs/spikes/fable-5-behavior-porting.md §8.3.
+   * See docs/FAILURE_TAXONOMY.md § Model Refusal Fallback.
    */
   servedModel?: string;
   /**
@@ -3168,9 +3168,10 @@ export function resolveTokenForSubprocess(
  * block replay 400 on claude CLI 2.1.154) was removed after the bug stopped
  * reproducing on CLI 2.1.186 — three multi-turn replay runs with thinking
  * enabled (up to 26 turns / 9 replayed blocks) completed without a 400; see
- * docs/spikes/fable-5-behavior-porting.md §8.2. Every Claude spawn spreads
- * `...process.env` first, so an operator on an older CLI can restore the
- * workaround without a rebuild: export CLAUDE_CODE_DISABLE_THINKING=1.
+ * docs/PIPELINE_EXECUTION.md § Spawn Environment Inheritance. Every Claude
+ * spawn spreads `...process.env` first, so an operator on an older CLI can
+ * restore the workaround without a rebuild: export
+ * CLAUDE_CODE_DISABLE_THINKING=1.
  * Mirrors the Go adapters (claude.go / claude_sdk.go).
  */
 
@@ -4051,7 +4052,7 @@ export function runStageSkillHeadless(
       );
       if (conformed.coerced) {
         callbacks?.onStderr?.(
-          `[skillRunner] Effort ${effort} conformed to ${conformed.effort} for Fable (high is Fable's documented default; xhigh on router escalation)\n`
+          `[skillRunner] Effort ${effort} conformed to ${conformed.effort} for Fable (high is Fable's documented default, and the router-selected level since #1274; xhigh/max only by explicit pin)\n`
         );
       }
       effort = conformed.effort;
@@ -4849,7 +4850,7 @@ export function runStageSkillHeadless(
   // fallback model on a safety refusal (model_refusal_fallback) and still
   // exit 0. Track the last model the stream reports so the result attributes
   // what actually served — never used to retry or re-route.
-  // See docs/spikes/fable-5-behavior-porting.md §8.3.
+  // See docs/FAILURE_TAXONOMY.md § Model Refusal Fallback.
   let servedModel: string | undefined;
   let modelRefusalFallback: SkillRunResult["modelRefusalFallback"];
   const observeServedModel = (parsed: ReturnType<typeof parseStreamJsonLine>): void => {

@@ -693,6 +693,9 @@ main ──●──●──●──●──●──
    Environments — but does NOT publish or create a GitHub Release
 5. Validate the RC artifacts (install VSIX, test Docker image, etc.)
 6. When satisfied: `git tag -a v0.2.0 -m "Release 0.2.0"` on the same commit
+   (`release.yml` pins GoReleaser to the triggering tag via
+   `GORELEASER_CURRENT_TAG`; without that pin the rc tag on the same commit
+   wins git's version sort — #1296)
 7. Push the tag: `git push origin v0.2.0`
 8. `release.yml` runs → builds, creates GitHub Release, publishes artifacts
    (gated by `production` environment)

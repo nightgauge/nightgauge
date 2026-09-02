@@ -254,13 +254,22 @@ jobs:
             [darwin-x64]=darwin-amd64
             [linux-x64]=linux-amd64
           )
+          # vsce records the pre-release flag in the VSIX manifest at PACKAGE
+          # time; `publish --pre-release` on a VSIX packaged without it is
+          # refused (#1299). 0.x is pre-release, as the publish step says.
+          VERSION="$(node -p "require('./package.json').version")"
+          CHANNEL=()
+          if [[ "${VERSION%%.*}" == "0" ]]; then
+            CHANNEL=(--pre-release)
+            echo "Version $VERSION is 0.x → packaging as pre-release"
+          fi
           mkdir -p dist/bin
           for T in darwin-arm64 darwin-x64 linux-x64; do
             SRC="../../bin/nightgauge-${BIN[$T]}"
             [[ -f "$SRC" ]] || { echo "ERROR: missing $SRC (did 'make build-all' run?)"; exit 1; }
             cp "$SRC" dist/bin/nightgauge
             chmod +x dist/bin/nightgauge
-            npx @vscode/vsce@3.9.1 package --no-dependencies --target "$T"
+            npx @vscode/vsce@3.9.1 package --no-dependencies --target "$T" ${CHANNEL[@]+"${CHANNEL[@]}"}
           done
           echo "Packaged:"; ls -1 *.vsix
 
@@ -318,6 +327,12 @@ jobs:
       # args come from the preflight: `--skip=homebrew` is appended when no tap
       # token is configured, so a missing token degrades gracefully instead of
       # failing after the GitHub Release has already been created.
+      # GORELEASER_CURRENT_TAG pins the release to the tag that triggered this
+      # run. Without it GoReleaser takes the highest tag pointing at HEAD by
+      # git's version sort, which ranks `v0.2.0-rc.25` ABOVE `v0.2.0` — so the
+      # first stable release, cut on the same commit as its last RC exactly as
+      # the git workflow prescribes, published an rc GitHub Release and an rc
+      # cask PR and then failed here looking for `v0.2.0` (#1296).
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:
@@ -327,6 +342,22 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+          GORELEASER_CURRENT_TAG: ${{ github.ref_name }}
+
+      # Every step below addresses the release by the triggering tag. Prove
+      # GoReleaser created THAT release before attaching anything to it.
+      - name: Verify GoReleaser released the triggering tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.version.outputs.tag }}"
+          if ! gh release view "$TAG" --json tagName --jq .tagName | grep -qx "$TAG"; then
+            echo "::error::GoReleaser did not create a GitHub Release for '$TAG' (#1296). Releases present:"
+            gh release list --limit 5
+            exit 1
+          fi
+          echo "GitHub Release $TAG exists"
 
       - name: Add VSIX checksums
         run: |
@@ -398,11 +429,23 @@ jobs:
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
         run: |
           set -euo pipefail
+          # 0.x ships on the Marketplace PRE-RELEASE channel (#1135,
+          # docs/RELEASE_CHECKLIST.md P3): users opt in with "Install
+          # Pre-Release Version" / `--pre-release`, and the listing carries the
+          # Pre-Release badge. The flag drops on its own at v1.0.0.
+          VERSION="${{ steps.version.outputs.version }}"
+          CHANNEL=()
+          if [[ "${VERSION%%.*}" == "0" ]]; then
+            CHANNEL=(--pre-release)
+            echo "Version $VERSION is 0.x → publishing to the pre-release channel"
+          else
+            echo "Version $VERSION is ${VERSION%%.*}.x → publishing to the stable channel"
+          fi
           # Each .vsix carries its targetPlatform in the manifest, so vsce
           # publishes it for the right platform without re-specifying --target.
           for VSIX in *.vsix; do
             echo "Publishing $VSIX"
-            npx @vscode/vsce@3.9.1 publish --no-dependencies --packagePath "$VSIX"
+            npx @vscode/vsce@3.9.1 publish --no-dependencies --packagePath "$VSIX" ${CHANNEL[@]+"${CHANNEL[@]}"}
           done
 
       - name: Marketplace publish skipped

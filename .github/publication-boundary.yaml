@@ -94,6 +94,9 @@ allow:
   - path: "tests/**"
     class: PUBLIC
     rationale: "Integration tests."
+  - path: "docker/**"
+    class: PUBLIC
+    rationale: "Container images for test harnesses (the clean-install release gate)."
   - path: "evals/**"
     class: PUBLIC
     rationale: "Skill/model evaluation harness and fixtures. Synthetic tasks only."
@@ -283,6 +286,7 @@ deny:
       - "docs/spikes/183-context-engineering-claude-5.md"
       - "docs/spikes/568-model-identity-axes.md"
       - "docs/spikes/662-adapter-usage-quota-signals.md"
+      - "docs/spikes/1272-ai-native-sdlc-playbook-gap-analysis.md"
     rationale: >-
       Company research artifacts require an explicit publication decision.
       The public README documents the product contract without publishing the
@@ -308,7 +312,15 @@ deny:
       command, and GitHub's published Copilot list price, which this tree
       already carries at packages/nightgauge-sdk/src/cli/adapterQuery.ts. It
       contains no per-run figures from real runs, no COGS, no customer data,
-      no account identifiers, and no unreleased roadmap material.
+      no account identifiers, and no unreleased roadmap material. Spike #1272
+      (gap analysis against Anthropic's publicly published AI-native SDLC
+      playbook) is reviewed and excepted on the same basis: it compares the
+      public core's documented stages and artifacts — docs/**, skills/**, and
+      the public health/eval surfaces — against a vendor blog post that anyone
+      can read, quotes that post only in short marked quotations, and names no
+      COGS, pricing, customer data, account identifiers, private repository
+      issue numbers, or unreleased roadmap material. The spike-materialize
+      stage requires the artifact at this path to file its follow-up issues.
   - path: "docs/epics/**"
     class: PRIVATE
     except:

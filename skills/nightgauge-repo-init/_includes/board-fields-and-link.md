@@ -136,7 +136,7 @@ if [ "$PROJECT_OWNER_TYPE" = "Organization" ]; then
         }
       }
     }
-  }' --jq '.data.organization.projectV2.views.nodes[].name')
+  }' | jq -r '.data.organization.projectV2.views.nodes[].name')
 else
   EXISTING_VIEWS=$(nightgauge forge graphql -f query='
   {
@@ -147,7 +147,7 @@ else
         }
       }
     }
-  }' --jq '.data.user.projectV2.views.nodes[].name')
+  }' | jq -r '.data.user.projectV2.views.nodes[].name')
 fi
 
 # Create each standard view if it doesn't already exist

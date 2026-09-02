@@ -21,9 +21,9 @@ row; `main` moves.
 
 ### The one gate that matters
 
-| #   | Gate                                                                                                                                                                                                                 | State                                                                                                                       |
-| --- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| G1  | **Clean-machine install, step 5**: install the packaged `.vsix` into a profile with no Nightgauge state, follow the README verbatim, and drive one issue to a merged PR. See _The clean-machine install gate_ below. | **Open.** Steps 1–4 walked (2026-08-24/25); all eight findings fixed (#862–#865, #898–#902). Step 5 never executed — #1137. |
+| #   | Gate                                                                                                                                                                                                                 | State                                                                                                                                                                                             |
+| --- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| G1  | **Clean-machine install, step 5**: install the packaged `.vsix` into a profile with no Nightgauge state, follow the README verbatim, and drive one issue to a merged PR. See _The clean-machine install gate_ below. | **Done — #1137.** Walked on the release commit `e6e98c76` on 2026-09-02: packaged VSIX, bare container, fixture issue → merged PR, unattended. See _Findings from the release-commit walk_ below. |
 
 The pipeline has proven itself end to end on a real repository — an
 M-sized feature issue went pickup → plan → dev → validate → PR → merge
@@ -71,14 +71,14 @@ three.
 
 ### The publish path
 
-| #   | Gate                                                                                                                                    | State                                                                                                                                                                  |
-| --- | --------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| P1  | `release.yml` has fired at least once on a stable tag (dogfood-readiness gate D2)                                                       | **Open.** No stable tag exists; only `v0.2.0-rc.*` (staging, publishes nothing).                                                                                       |
-| P2  | Marketplace publish is double-gated (`MARKETPLACE_PUBLISH` repo variable **and** `VSCE_PAT`), with `vsce verify-pat` before any publish | **Done** in the workflow. The variable is still `false` — flipping it _is_ the release decision.                                                                       |
-| P3  | 0.x publishes to the Marketplace **pre-release** channel                                                                                | **Open** — #1135. The runbook says pre-release channel; the publish step has no `--pre-release` flag.                                                                  |
-| P4  | Open VSX                                                                                                                                | **Decided: not in the first release.** The namespace is claimed; publish there only after the Marketplace listing has soaked. No `ovsx` step exists — nothing to gate. |
-| P5  | Recut the release candidate at the release commit; do not publish an older RC's artifacts                                               | **Open.** Tag `v0.2.0-rc.25` (or later) at the commit that passes G1, then `v0.2.0`.                                                                                   |
-| P6  | After the merge: the 72-hour quiet soak, then the announcement, then the Marketplace flip                                               | Sequenced in the private release runbook.                                                                                                                              |
+| #   | Gate                                                                                                                                    | State                                                                                                                                                                                                                                                                                                                                            |
+| --- | --------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| P1  | `release.yml` has fired at least once on a stable tag (dogfood-readiness gate D2)                                                       | **Done 2026-09-02** — run 33598909653 on `v0.2.1`: GitHub Release (11 assets: 3 CLI archives + SBOMs, checksums, manifest, 3 per-target VSIXs, all attested), cask PR `homebrew-tap#8` merged. The first attempt on `v0.2.0` exposed #1296 (GoReleaser released the rc tag on the same commit); `v0.2.0` stays tagged, unpublished.              |
+| P2  | Marketplace publish is double-gated (`MARKETPLACE_PUBLISH` repo variable **and** `VSCE_PAT`), with `vsce verify-pat` before any publish | **Done in the workflow, and it worked**: with `MARKETPLACE_PUBLISH=true` the preflight rejected the stored `VSCE_PAT` (401) and stopped before publishing anything. The PAT from 2026-07-22 is no longer valid — the owner must issue a new Azure DevOps token (Marketplace: Manage, all accessible organizations) and `gh secret set VSCE_PAT`. |
+| P3  | 0.x publishes to the Marketplace **pre-release** channel                                                                                | **Done** — #1289: `--pre-release` while the tag's major is 0. Not yet exercised: the Marketplace step has not run (P2).                                                                                                                                                                                                                          |
+| P4  | Open VSX                                                                                                                                | **Decided: not in the first release.** The namespace is claimed; publish there only after the Marketplace listing has soaked. No `ovsx` step exists — nothing to gate.                                                                                                                                                                           |
+| P5  | Recut the release candidate at the release commit; do not publish an older RC's artifacts                                               | **Done** — `v0.2.0-rc.25` (staging, green) at `35234944`, then `v0.2.0` there (unpublished, #1296), then `v0.2.1` at `57852243` = the same tree plus the release-pipeline fix and changelog.                                                                                                                                                     |
+| P6  | After the merge: the 72-hour quiet soak, then the announcement, then the Marketplace flip                                               | **Gate 1 complete 2026-09-02 06:40Z** (release + cask merged) — the 72-hour soak runs to 2026-09-05. Marketplace publish (Gate 2) waits only on P2; run `vsce publish --pre-release --packagePath <vsix>` for each attested VSIX from the release, or re-run the release workflow once the PAT is set.                                           |
 
 ### Dogfood before the tag
 
@@ -98,7 +98,56 @@ record the outcome in the private release runbook:
 Every card, dashboard row and history record those runs produce is the
 release's evidence. Regenerate the marketing imagery from the best of them.
 
-## Verdict
+## Verdict — 2026-09-01
+
+**GO for `v0.2.0` on the Marketplace pre-release channel** — executed as
+`v0.2.1` on 2026-09-02 (see P1, P2, P5 and _Release day_ below).
+
+Every row in _What is left before the first Marketplace version_ is closed
+or re-measured as not blocking:
+
+- G1 walked on the release commit (below). C1/C2 re-triaged over the 12 bugs
+  filed since 2026-08-29: none claims install, activation or a core stage
+  fails for a single-repo user; #1157 (board link on a fresh install) was the
+  one first-hour defect and is fixed (#1288). C4 unchanged.
+- L1–L7 done (#1134, #1289): supported-adapter sentence, no autonomous
+  production claim, absolute links, `0.2.0` changelog dated 2026-09-01.
+- P3 done (#1289): `release.yml` passes `--pre-release` while the major is 0.
+  P1/P5 close with the tag; P4 stays "not in the first release".
+- _Dogfood before the tag_: between 2026-08-29 and 2026-08-31 the downstream
+  workspace ran every class in the list unattended through the extension —
+  27 runs completed to a merged PR across four stacks (Flutter, Node API,
+  Angular, static site), 6 failed, and every failure was a stage gate refusing
+  to record a false success. The `blockedBy` pair was honoured in order; the
+  spike produced a written decision; the wrong-premise candidate turned out to
+  have a correct premise by the time it ran and was legitimately fixed. The
+  per-issue table lives in the private release plan.
+
+Deferred, deliberately: fable-routed runs cost ~10× a sonnet run of the same
+size (three of the 27); cap with `max_model` (#1216) in the README's
+recommended config before a stranger meets it. Two downstream failures are
+open for triage in their own repositories and are not extension defects.
+
+### Release day — 2026-09-02
+
+What the first stable release run taught, in the order it happened:
+
+1. **`v0.2.0` + `MARKETPLACE_PUBLISH=true`** → preflight rejected `VSCE_PAT`
+   (401) and stopped. Nothing published. The double gate did its job.
+2. **Re-run with `MARKETPLACE_PUBLISH=false`** → GoReleaser released
+   **`v0.2.0-rc.25`** (git's version sort ranks the rc tag above `v0.2.0` on
+   the same commit), marked it Latest, opened an rc cask PR, then the manifest
+   step failed on `release not found` for `v0.2.0`. The rc release was deleted
+   and the cask PR closed by hand within minutes; #1296 pins GoReleaser to the
+   triggering tag and guards that the release exists before anything attaches.
+3. **`v0.2.1`** on the fix commit → green end to end. Checksums in the cask PR
+   matched `checksums.txt`; the darwin-arm64 VSIX's SHA and its build
+   attestation verified locally before the cask PR was merged.
+
+Still open for the Marketplace: a valid `VSCE_PAT`. The three VSIXs on the
+release are the artifacts to publish; do not rebuild them.
+
+## Verdict — 2026-08-20
 
 **GO for `v0.2.0-rc.24`.**
 
@@ -296,14 +345,119 @@ user hits, it removes the product from the window entirely, and the only
 on-screen explanation is VS Code's generic banner, which never names
 Nightgauge.
 
-### Still not walked
+### Automated (landed 2026-09-01, #1150)
 
-**Step 5 has not been executed.** Steps 3–4 above were walked on 2026-08-25 and
-stopped at **Initialize Repository**, which hands control to an interactive
-agent session in a VS Code terminal. Driving one issue through to a merged PR
-as a fresh user remains the release gate, and no amount of green CI substitutes
-for it — every finding above came from running the packaged artifact, and none
-of them was visible to the test suite.
+Step 5 is now a regression suite rather than a walk (#1150). One command
+packages the `.vsix` from the current tree, builds a container that has
+nothing but Ubuntu, VS Code from the official `.deb`, `git`, `gh`, Node 22
+and the `claude` CLI, installs the extension into a fresh
+`--extensions-dir` / `--user-data-dir` there, creates a private throwaway
+repository (`<owner>/e2e-clean-install-<utc-timestamp>`, seeded from
+`tests/clean-install/fixture/` with one unambiguous feature request from
+`tests/clean-install/issue.md`) and a throwaway project board, and drives that
+issue to a merged pull request with a real agent and a real forge:
+
+```bash
+bash scripts/clean-install-e2e.sh           # the gate; spends tokens, creates + deletes a repo
+bash scripts/clean-install-e2e.sh --smoke   # package, install, activate — no forge, no agent
+```
+
+Logs, the packaged VSIX and the driver's `report.json` land under
+`.clean-install-e2e/<timestamp>/` (gitignored). The same walk runs from
+`.github/workflows/clean-install-e2e.yml` on `workflow_dispatch` and weekly —
+never on pull requests — with the `ANTHROPIC_API_KEY` and
+`CLEAN_INSTALL_GH_TOKEN` secrets (the token must create and delete private
+repositories and projects under the owner), uploading the logs as an artifact.
+
+**What the container inherits from the host: agent authentication, and
+nothing else.** `ANTHROPIC_API_KEY` when set; otherwise a copy of the host's
+Claude Code OAuth credentials (exported from the macOS Keychain, or
+`~/.claude/.credentials.json` on Linux) mounted read-only and copied into the
+container user's `~/.claude/`, deleted with the run directory on exit. The
+gate is about the product's install path, not the agent's login flow. No
+`~/.nightgauge`, no `~/.vscode`, no `gh` keyring, no `PATH` binary: the
+entrypoint refuses to start if any of those exist, and if
+`NIGHTGAUGE_GO_BINARY_PATH` / `NIGHTGAUGE_BIN` are set, because either would
+short-circuit the binary-resolution cascade the gate exists to exercise.
+
+**What it proves**, each as an assertion with evidence in the log:
+
+- the extension activated from the VSIX (id, version, and that its path is
+  inside the fresh extensions dir and not a development path);
+- the binary the extension resolves at tier 3 is the bundle VS Code recorded
+  in `extensions.json`, is executable, and reports a version;
+- `nightgauge.pickupIssue` accepted the issue and a per-run record
+  (`runtime-<issue>-<runId>.json`) reached a terminal state within the wall
+  clock (90 min) and under the cost cap (15 USD, read from the run record);
+- the history record says `complete`, with non-zero cost and duration;
+- the forge says the PR is `MERGED` and the issue is `CLOSED`.
+
+**What it still cannot prove.** The "real clean machine" table above stays
+true in one respect and is now covered in the rest: `gh` login, the
+extensions directory, adapter config and the toolchain are all genuinely
+absent in the container — but the agent's own credentials are inherited, so
+a first `claude` login is not walked. Two Quick Start steps are not walked
+through the product either, and each is filed as a finding:
+
+| Step                      | How the gate walks it                                                                                                                                                                                      | Finding |
+| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
+| 3 — Trust the folder      | `--disable-workspace-trust`; the banner click is a VS Code surface, and #900 already fixed the product side                                                                                                | —       |
+| 4 — Initialize Repository | The command only opens an interactive `claude /nightgauge:repo-init` terminal. The container runs the VSIX's own binary verbs instead (`config init`, `label ensure`, `project ensure-fields`, board link) | #1154   |
+| 4 — board link            | The skill's `nightgauge forge graphql` link step fails on the default GitHub forge; the container links the board with `gh api graphql`                                                                    | #1157   |
+| 5 — Pick Up Issue         | The command accepts only a live tree item and otherwise opens an input box; the driver types the number with `xdotool`                                                                                     | #1155   |
+| 6 — Watch it run          | `pre-push validate` blocked any Node project without an `npm run build` script (the first real run halted at feature-validate after ~3 USD); fixed in #1159, the fixture keeps its `build` script          | #1159   |
+
+The driver (`tests/clean-install/driver/`) is a plain-JavaScript extension
+loaded with `--extensionDevelopmentPath`; the product extension is always the
+installed VSIX, never a development path, and the driver asserts that.
+
+#### Findings from the first automated walks (2026-08-29 → 2026-09-02)
+
+Three full walks ran before this landed, each on a linux-arm64 VSIX packaged
+from the tree under test and installed into a container with nothing else:
+
+| Walk (UTC)       | Tree                     | Outcome                                                                                                                                                                                                                                |
+| ---------------- | ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 2026-08-29 21:38 | `6fb043b1`               | Halted at `feature-validate` after 3.21 USD: the fixture had no `build` script — #1159.                                                                                                                                                |
+| 2026-08-29 21:57 | `6fb043b1`               | Failed at `feature-dev` after 1.38 USD / 291 s: `dev context does not match the expected schema` — the deliverable-policy defect fixed the same day (#1190).                                                                           |
+| 2026-09-02 03:53 | `be184293` (this branch) | **Pickup → plan → dev → validate → PR → merge, unattended: 4.17 USD, 842 s.** The throwaway repo's PR #2 merged at 04:08Z (survival record `merge_commit_sha db76f14f`), the issue closed. The driver still reported FAIL — see below. |
+
+The third walk exposed a defect in the gate itself, not the product: the
+driver asserted the PR from the per-run `runtime-*.json` snapshot, which the
+pipeline removes when the run latches terminal, so the last poll predated
+`prUrl`. The driver now takes PR evidence from the survival record the merge
+writes (`pipeline/survival-records.jsonl`) when the snapshot lacks it. The
+three product findings the walks routed around are #1154 and #1155 (both
+harness-only: the product paths are interactive by design) and #1157, fixed
+in #1288 — the container tries `nightgauge forge graphql` first and falls
+back with a finding only if it fails, so the next walk records whether the
+fix holds on a fresh install.
+
+**Step 5 is therefore walked, once, on a pre-release tree.** The walk that
+counts for G1 is the one on the release commit, recorded next.
+
+#### Findings from the release-commit walk (2026-09-02, #1137)
+
+`bash scripts/clean-install-e2e.sh` on `main` @ `e6e98c76` (the #1150 merge),
+from the maintainer's machine, Docker linux/arm64:
+
+| Field           | Value                                                                                                                                                                                                                             |
+| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| VSIX            | `nightgauge-vscode-linux-arm64-0.1.0.vsix`, 20 MB, packaged from the tree; binary `v0.2.0-rc.24-235-ge6e98c76`                                                                                                                    |
+| Install         | fresh `--extensions-dir` / `--user-data-dir`; extension activated as `0.1.0`; the binary VS Code recorded in `extensions.json` is the one the extension resolved                                                                  |
+| Repository      | private throwaway, seeded from `tests/clean-install/fixture/`, one feature-request issue, one throwaway board                                                                                                                     |
+| Stages          | `feature-planning → feature-dev → feature-validate → pr-create → pr-merge`, unattended                                                                                                                                            |
+| Result          | PR #2 on the throwaway repo **MERGED** (`026bbc33`), issue **CLOSED**; run outcome `complete`                                                                                                                                     |
+| Cost / duration | 3.84 USD / 979 s                                                                                                                                                                                                                  |
+| Findings        | 2, both harness-only: #1154 (Initialize Repository is interactive by design) and #1155 (pickup has no programmatic path). **The #1157 finding is gone** — the board linked through `nightgauge forge graphql` on a fresh install. |
+| Cleanup         | container, repository and board deleted on exit; verified none remained                                                                                                                                                           |
+
+What this walk still does not prove, unchanged from the table above: the
+agent's own login (the container inherits the maintainer's Claude Code
+credentials), and the two interactive Quick Start steps, which are walked by
+their binary-verb equivalents. A second-machine pass by someone who is not
+the maintainer remains the honest next step and is not a blocker for a
+pre-release.
 
 ## What this checklist is not
 

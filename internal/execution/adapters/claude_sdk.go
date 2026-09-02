@@ -82,8 +82,9 @@ func (a *ClaudeSdkAdapter) BuildCommand(opts RunOptions) (string, []string, map[
 	}
 	// Thinking is deliberately NOT disabled — the #3801 replay-400 workaround
 	// was removed after re-validation on CLI 2.1.186 (see claude.go and
-	// docs/spikes/fable-5-behavior-porting.md §8.2). Operators can restore it
-	// via their environment: export CLAUDE_CODE_DISABLE_THINKING=1.
+	// docs/PIPELINE_EXECUTION.md § Spawn Environment Inheritance). Operators
+	// can restore it via their environment: export
+	// CLAUDE_CODE_DISABLE_THINKING=1.
 
 	if opts.ContextFile != "" {
 		env["NIGHTGAUGE_CONTEXT_FILE"] = opts.ContextFile

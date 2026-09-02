@@ -21,6 +21,7 @@ import { describe, it, expect } from "vitest";
 import { getModelDescriptor } from "@nightgauge/sdk";
 import {
   assertEffortSupported,
+  conformEffortForFable,
   modelSupportsEffort,
   supportedEffortsFor,
 } from "../../../src/utils/resolvers/stageResolver";
@@ -108,5 +109,55 @@ describe("assertEffortSupported — level validation, fails OPEN (#336)", () => 
     for (const level of supportedEffortsFor("opus") ?? []) {
       expect(() => assertEffortSupported(level, "opus", supportedEffortsFor("opus"))).not.toThrow();
     }
+  });
+});
+
+describe("conformEffortForFable — router-selected fable takes the registry default (#1274)", () => {
+  it("router-selected fable resolves to high, the fable band's declared effort_default", () => {
+    // Reverting the literal to `xhigh` makes this case fail. `high` is not a
+    // number picked here: it is what the registry declares for the band, and
+    // Fable 5.1's guidance is to start there and move up only on measured
+    // gain — at xhigh/max the model drafts complete files inside thinking and
+    // writes them again, roughly doubling output tokens.
+    expect(conformEffortForFable(undefined, undefined, "auto-router")).toEqual({
+      effort: "high",
+      coerced: false,
+    });
+    expect(getModelDescriptor("fable")?.behavior?.effort_default).toBe("high");
+  });
+
+  it("an explicit Sonnet-era medium still floors to high, and reports the coercion", () => {
+    expect(conformEffortForFable("medium", "medium", "config")).toEqual({
+      effort: "high",
+      coerced: true,
+    });
+    expect(conformEffortForFable("low", "low", "env")).toEqual({
+      effort: "high",
+      coerced: true,
+    });
+  });
+
+  it("an explicit xhigh or max passes through unchanged — the pin is the only way up", () => {
+    expect(conformEffortForFable("xhigh", "xhigh", "config")).toEqual({
+      effort: "xhigh",
+      coerced: false,
+    });
+    expect(conformEffortForFable("max", "max", "config")).toEqual({
+      effort: "max",
+      coerced: false,
+    });
+  });
+
+  it("the fable band leader declares every level conformance can return", () => {
+    // `modelSupportsEffort` answers the coarse "does this band take --effort at
+    // all" question; per-LEVEL membership is the ladder itself. Both matter
+    // here: dropping the router default to `high` is only safe if `xhigh` and
+    // `max` remain expressible, or the escape hatch the change relies on would
+    // be an effort the model rejects at dispatch.
+    expect(modelSupportsEffort("fable")).toBe(true);
+    const ladder = supportedEffortsFor("fable");
+    expect(ladder).toContain("high");
+    expect(ladder).toContain("xhigh");
+    expect(ladder).toContain("max");
   });
 });

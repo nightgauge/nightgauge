@@ -608,3 +608,48 @@ func TestForgeAdapter_SecurityIsLazyAndCached(t *testing.T) {
 		t.Error("Security() should return the same instance on repeated access")
 	}
 }
+
+// TestForgeAdapter_RouterClientExposesGraphQL pins #1157: the value the
+// forge router hands back for the default GitHub forge must satisfy the
+// optional forge.GraphQLService surface that `forge graphql` type-asserts,
+// and ExecuteGraphQL must reach the wire through the inner client.
+// Asserting on *Client alone is not enough — the router never returns one.
+func TestForgeAdapter_RouterClientExposesGraphQL(t *testing.T) {
+	var seen string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		seen = string(raw)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":{"viewer":{"login":"alice"}}}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	// Route through the real registry the way realForgeFromContext does,
+	// then point the resulting client at the stub server.
+	router := forge.NewRouter()
+	router.Register("github", forge.Config{Kind: forge.KindGitHub, Token: "fake", Owner: "nightgauge"})
+	fc, err := router.For("", "")
+	if err != nil {
+		t.Fatalf("router.For: %v", err)
+	}
+	adapter, ok := fc.(*ForgeAdapter)
+	if !ok {
+		t.Fatalf("router returned %T, want *ForgeAdapter", fc)
+	}
+	adapter.client = NewClientWithURL("fake", srv.URL+"/graphql")
+
+	gql, ok := fc.(forge.GraphQLService)
+	if !ok {
+		t.Fatalf("router's GitHub client (%T) does not satisfy forge.GraphQLService — `forge graphql` fails on the default forge", fc)
+	}
+	raw, err := gql.ExecuteGraphQL(context.Background(), "query{viewer{login}}", nil)
+	if err != nil {
+		t.Fatalf("ExecuteGraphQL: %v", err)
+	}
+	if !strings.Contains(string(raw), `"login":"alice"`) {
+		t.Errorf("envelope not passed through verbatim: %s", raw)
+	}
+	if !strings.Contains(seen, "viewer{login}") {
+		t.Errorf("query never reached the transport; request body = %s", seen)
+	}
+}

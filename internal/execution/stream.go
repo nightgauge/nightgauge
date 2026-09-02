@@ -47,7 +47,7 @@ type StreamEvent struct {
 	// OriginalModel/FallbackModel/RefusalCategory are set on the CLI's
 	// system/model_refusal_fallback event (#91): a safety refusal makes the
 	// CLI silently retry the turn on a fallback model and still exit 0.
-	// See docs/spikes/fable-5-behavior-porting.md §8.3 for a captured event.
+	// See docs/FAILURE_TAXONOMY.md § Model Refusal Fallback for a captured event.
 	OriginalModel   string `json:"original_model,omitempty"`
 	FallbackModel   string `json:"fallback_model,omitempty"`
 	RefusalCategory string `json:"api_refusal_category,omitempty"`
@@ -257,7 +257,7 @@ func (acc *TokenAccumulator) Total() int {
 // ModelRefusalFallback describes the claude CLI's internal model swap on a
 // safety refusal (#91): the CLI emits a system/model_refusal_fallback event,
 // silently retries the turn on the fallback model, and the session still
-// exits 0. See docs/spikes/fable-5-behavior-porting.md §8.3.
+// exits 0. See docs/FAILURE_TAXONOMY.md § Model Refusal Fallback.
 type ModelRefusalFallback struct {
 	OriginalModel   string
 	FallbackModel   string

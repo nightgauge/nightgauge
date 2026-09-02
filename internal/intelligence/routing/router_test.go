@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/nightgauge/nightgauge/internal/intelligence/complexity"
+	"github.com/nightgauge/nightgauge/internal/models"
 )
 
 func TestRouter_LowComplexity_UsesHaiku(t *testing.T) {
@@ -190,6 +191,22 @@ func TestRouter_FrontierMode_IsAnEnvelopeNotAPin(t *testing.T) {
 		if rec.Model == ModelFable {
 			t.Errorf("frontier feature-validate at complexity %d = %s — must never exceed Opus", c, rec.Model)
 		}
+	}
+
+	// The router speaks BANDS; the concrete id is the registry's answer for
+	// the band, and that indirection is what let #1274's gap stay invisible —
+	// `frontier` kept dispatching a model one generation behind while every
+	// band assertion above stayed green, because a stale id is still a valid
+	// string. Assert the id the band actually resolves to as well.
+	leader, ok := models.Get(ModelFable)
+	if !ok {
+		t.Fatal("fable band resolves to no registry model")
+	}
+	if leader.ID != "claude-fable-5-1" {
+		t.Errorf("frontier ceiling %q resolves to %q, want claude-fable-5-1", ModelFable, leader.ID)
+	}
+	if leader.Deprecated {
+		t.Errorf("fable band resolves to deprecated model %q", leader.ID)
 	}
 }
 

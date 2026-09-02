@@ -31,9 +31,10 @@ before the pipeline can run a single stage. See
   This is how the pipeline authenticates to GitHub. Signing in to Nightgauge
   inside VS Code (step 2 below) does **not** replace it.
 - **An AI coding agent** — the [`claude`
-  CLI](https://docs.claude.com/en/docs/claude-code/overview) is the supported
-  default. Other adapters are available but less exercised; see
-  [Settings](#settings).
+  CLI](https://docs.claude.com/en/docs/claude-code/overview) (Claude Code) is
+  the **supported** adapter path. The other adapters — Codex, Gemini, Copilot,
+  and direct API keys — are **beta**: they work, but are far less exercised
+  and rougher; see [Settings](#settings).
 
 Run **Nightgauge: Adapter Doctor** from the Command Palette at any point to
 check all three. (The `nightgauge` binary ships inside the extension and is
@@ -94,6 +95,10 @@ timestamped development version and is not a release-validation path.
   already running
 - **Batch Processing** - Process multiple issues through the full pipeline with
   dynamic queue addition
+- **Multi-repository workspaces and autonomous mode** - Route issues across
+  several repositories and let a scheduler pick up ready work on its own. Both
+  are available but materially less finished than the single-repository loop
+  above; treat them as beta and keep a human watching the Action Center
 - **Knowledge Value Dashboard** - Aggregates KB telemetry into header cards, a
   hit-rate gauge, per-stage bar chart, top-recalled/stale tables, and
   graduation history (see below)
@@ -456,7 +461,7 @@ bundled with the extension is not on your `PATH`.
 | Node.js 18.0.0 or higher                          |                                                                                                                                                                                                                                                               |
 | `git`                                             | With a GitHub remote configured on the repository you point Nightgauge at.                                                                                                                                                                                    |
 | [`gh` CLI](https://cli.github.com), authenticated | `gh auth login`. The pipeline resolves its GitHub token from `.nightgauge/config.yaml`, `GITHUB_TOKEN`, or `gh auth token` — in that order. The extension's **Sign In with GitHub** command authenticates a Nightgauge account and is not part of that chain. |
-| An AI coding agent                                | The [`claude` CLI](https://docs.claude.com/en/docs/claude-code/overview) is the supported default path. Adapters for other CLIs and for API keys exist and are less exercised.                                                                                |
+| An AI coding agent                                | The [`claude` CLI](https://docs.claude.com/en/docs/claude-code/overview) (Claude Code) is the **supported** adapter path. The other adapters — Codex, Gemini, Copilot, and direct API keys — are **beta**: they work, but are far less exercised and rougher. |
 
 macOS (Apple Silicon and Intel) and Linux x64 only — see
 [Installing](#installing).
@@ -466,7 +471,7 @@ Doctor**.
 
 ## License
 
-[Apache-2.0](LICENSE)
+[Apache-2.0](https://github.com/nightgauge/nightgauge/blob/main/LICENSE)
 
 ## Author
 

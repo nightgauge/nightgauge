@@ -213,7 +213,7 @@ export interface StageResult {
    * silently retries safety-refused turns on a fallback model
    * (`model_refusal_fallback`) and still exits 0 — Go attributes
    * cost/telemetry/history to this value when set.
-   * See docs/spikes/fable-5-behavior-porting.md §8.3.
+   * See docs/FAILURE_TAXONOMY.md § Model Refusal Fallback.
    */
   servedModel?: string;
   /**

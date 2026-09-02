@@ -44,6 +44,93 @@ a caller typed. Tier bands are still valid `--model` inputs — they resolve
 through the registry to a concrete id — but no band-keyed file is ever consulted
 (the band segment was retired with the band vocabulary in #582).
 
+### The corpus today
+
+Four shared-scope overlays ship, alongside two skill-specific fragments; no
+whole-file override exists. All six land at the `after-context-includes` site
+(§4) because no base skill carries an `<!-- overlay -->` anchor.
+
+| Key                | Carries                                                                                         |
+| ------------------ | ----------------------------------------------------------------------------------------------- |
+| `xai`              | Grok Build as execution host: no Stop hooks, no `AskUserQuestion`, optional subagent fan-out.   |
+| `grok-4.6`         | Thinking-on-by-default; drop redundant verify-your-work scaffolding and extra review subagents. |
+| `grok-build-0.1`   | The cheaper Grok coding model: stay inside the stage contract, no extra research loops.         |
+| `claude-fable-5-1` | The Fable 5.1 behavioral shifts (#1276), one named block each — see below.                      |
+
+Both skill-specific fragments are keyed `claude-fable-5-1`, and each carries the
+batching-nudge block and nothing else:
+
+| Path                                                               | Applies to         |
+| ------------------------------------------------------------------ | ------------------ |
+| `skills/nightgauge-feature-dev/_overlays/claude-fable-5-1.md`      | `feature-dev`      |
+| `skills/nightgauge-feature-validate/_overlays/claude-fable-5-1.md` | `feature-validate` |
+
+`_shared/_overlays/claude-fable-5-1.md` carries five named blocks, in this
+order:
+
+| Block                     | What it does                                                                                  |
+| ------------------------- | --------------------------------------------------------------------------------------------- |
+| `Targeted edits`          | Surgical edits over whole-file rewrites, which 5.1 reaches for more readily than Fable 5.     |
+| `Scope and test coverage` | No unrequested fixes; scratch checks stay out of the repo; commit tests only where asked.     |
+| `Operating autonomously`  | The unattended-run block. Reinforces `_shared/AUTONOMY_CONTRACT.md` rather than replacing it. |
+| `Holding the scope`       | Don't narrow, widen, or swap the deliverable; a decided step is run, not announced.           |
+| `Progress updates`        | Opening line, updates while working, standalone closing recap; plus the hidden-output note.   |
+
+A sixth block, `Batching tool requests`, is the one-response batching nudge. It
+ships in the two skill-specific fragments above rather than in the shared file,
+so only `feature-dev` and `feature-validate` carry it.
+
+`Progress updates` is the block the anti-narration sweep protects: a base-skill
+line telling a stage to hold its findings for the final response would fight it
+directly, which is why adding one is a change to make against this table.
+
+Three things are deliberately **not** in it. The registry `behavior` block
+already records this model's `thinking_default`, `effort_default`,
+`thinking_disable_max_effort: never` and `narration: low`, so the overlay acts
+on those facts without restating them (§5 rule 1). Search triggering at `low`
+effort does not arise, because the effort conformer floors Fable at `high`.
+And `thinking.display: "updates"` is a request option the host sets, not prompt
+text.
+
+That last one leaves `Progress updates` short of the vendor's own step one. Its
+ordering is: first set `display: "updates"` so the model's between-tool-call
+notes reach anyone at all, then remove any prompt line that suppresses
+narration, and only then add the prompt line — which it offers conditionally,
+for pair programming and other human-in-the-loop work. The pipeline sets no such
+display option and runs headless, so the block is **not** a fully-applied
+mitigation and should not be read as one. What it earns here is the half that
+survives into the transcript and the stage's context file — the opening line and
+the standalone closing recap, read by whoever picks the run up afterwards rather
+than by a live user.
+
+The batching nudge is scoped **by the cascade**, which is what the cascade is
+for. The composer collects the shared fragment and the skill-specific one and
+joins them into the same `## Model Adaptation` section (§3), so a block that
+belongs to two stages lives in those two skills' `_overlays/` directories and
+nothing is duplicated — the shared file carries the five blocks every stage
+wants, and the two per-skill files carry the sixth. Adding a third stage is a
+third one-block file, not a change to a heading.
+
+Which stages get it is decided by loop shape, which is how the vendor scopes the
+fix — the symptom is one tool call per turn in coding and computer-use loops
+where the next independent calls are implied by the task rather than asked for,
+and the cost is extra turns (tokens, round trips, wall-clock) rather than worse
+answers. `feature-dev` and `feature-validate` are the pipeline's only stages of
+that shape; the rest are short and mostly single-call, so the nudge would have
+nothing to batch there.
+
+The delivery differs from the vendor's, and the difference is not measured here:
+the guidance describes the nudge as a turn-scoped system message repeated on
+every turn, whereas the composer places it once, in the rendered prompt the
+stage starts from. Whether once-at-the-top holds across a long loop as well as
+per-turn reinforcement is unknown.
+
+No measurement gates the stage choice, and none could: `diagnostics.ToolCallRecord`
+(the `tool_calls` array on a `V2RunRecord`) carries no assistant-turn identifier,
+so the share of turns holding more than one call is not derivable even from a
+populated record. Widen the scope when a stage starts running that kind of loop,
+not on a number.
+
 ## 3. The cascade and precedence
 
 Two specificities (provider, concrete id) across two scopes (shared,

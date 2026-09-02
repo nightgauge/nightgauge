@@ -291,7 +291,7 @@ type RuntimeState struct {
 	// session still exits 0. Attribution only — the scheduler re-records
 	// StageModels with the served model and BuildV2Record marks the stage's
 	// ModelSelection source as "cli-refusal-fallback"; routing and retry
-	// never key off this. See docs/spikes/fable-5-behavior-porting.md §8.3.
+	// never key off this. See docs/FAILURE_TAXONOMY.md § Model Refusal Fallback.
 	ModelRefusalFallbacks []ModelRefusalFallback `json:"modelRefusalFallbacks,omitempty"`
 
 	// StageExecutionPaths captures the execution path resolved at each stage
