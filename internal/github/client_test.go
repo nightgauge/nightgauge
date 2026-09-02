@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -33,6 +34,70 @@ func TestIsRateLimited(t *testing.T) {
 				t.Errorf("isRateLimited(%v) = %v, want %v", tt.err, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestIsTemporaryConflict(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"nil error", nil, false},
+		{"regular error", errors.New("something broke"), false},
+		{"rate limit is not a conflict", errors.New("API rate limit exceeded"), false},
+		{"projects v2 conflict", errors.New("Your attempt to move this item created a temporary conflict. Please try again."), true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isTemporaryConflict(tt.err); got != tt.want {
+				t.Errorf("isTemporaryConflict(%v) = %v, want %v", tt.err, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestMutate_RetriesTemporaryConflict drives mutate against a server that
+// answers the first attempt with GitHub's transient Projects V2 conflict and
+// the second with data. Before the retry existed the first error was final:
+// this test fails on the old predicate (one request, error returned).
+func TestMutate_RetriesTemporaryConflict(t *testing.T) {
+	var calls int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := atomic.AddInt32(&calls, 1)
+		w.Header().Set("Content-Type", "application/json")
+		if n == 1 {
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"data": nil,
+				"errors": []map[string]interface{}{{
+					"message": "Your attempt to move this item created a temporary conflict. Please try again.",
+				}},
+			})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"data": map[string]interface{}{
+				"addProjectV2ItemById": map[string]interface{}{
+					"item": map[string]interface{}{"id": "PVTI_ok"},
+				},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	c := NewClientWithURL("test-token", srv.URL)
+	var m addProjectItemMutation
+	input := map[string]interface{}{
+		"input": AddProjectV2ItemByIdInput{ProjectID: "PVT_1", ContentID: "I_1"},
+	}
+	if err := c.mutate(context.Background(), &m, input); err != nil {
+		t.Fatalf("mutate should succeed on retry, got %v", err)
+	}
+	if got := atomic.LoadInt32(&calls); got != 2 {
+		t.Fatalf("expected 2 requests (conflict, then success), got %d", got)
+	}
+	if string(m.AddProjectV2ItemById.Item.ID) != "PVTI_ok" {
+		t.Fatalf("unexpected item id %q", m.AddProjectV2ItemById.Item.ID)
 	}
 }
 
