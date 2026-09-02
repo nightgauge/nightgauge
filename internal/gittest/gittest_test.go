@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -168,4 +169,51 @@ func TestBackgroundGitProcessCanOutliveItsParent(t *testing.T) {
 	}
 	t.Log("RemoveAll happened to win the race this run (gc finished between the poll and the removal) — " +
 		"the mechanism was still observed (gc.pid was present), this is just timing, not a failure")
+}
+
+// TestIsolateProcessDisarmsBackgroundWritersForInheritedGit is the #1293 proof:
+// git spawned by the CODE UNDER TEST — a plain exec.Command with no Env() —
+// must inherit the same gc/maintenance disarm as the commands this package
+// spawns, or a checkpoint commit forks a detached `gc --auto` that races
+// t.TempDir cleanup. It goes red if IsolateProcess stops applying the block.
+func TestIsolateProcessDisarmsBackgroundWritersForInheritedGit(t *testing.T) {
+	keys := []string{"GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0",
+		"GIT_CONFIG_KEY_1", "GIT_CONFIG_VALUE_1", "GIT_CONFIG_KEY_2", "GIT_CONFIG_VALUE_2",
+		"GIT_CONFIG_KEY_3", "GIT_CONFIG_VALUE_3"}
+	saved := map[string]string{}
+	for _, k := range keys {
+		saved[k] = os.Getenv(k)
+		os.Unsetenv(k)
+	}
+	t.Cleanup(func() {
+		for k, v := range saved {
+			if v == "" {
+				os.Unsetenv(k)
+			} else {
+				os.Setenv(k, v)
+			}
+		}
+	})
+
+	IsolateProcess()
+
+	dir := t.TempDir()
+	for key, want := range map[string]string{
+		"gc.auto":          "0",
+		"gc.autoDetach":    "false",
+		"maintenance.auto": "false",
+		"core.fsmonitor":   "false",
+	} {
+		// Deliberately NOT gittest.Command: this is the inherited-environment
+		// path the code under test uses.
+		cmd := exec.Command("git", "config", "--get", key)
+		cmd.Dir = dir
+		out, err := cmd.Output()
+		if err != nil {
+			t.Fatalf("git config --get %s after IsolateProcess: %v (the disarm did not reach an inherited-env git)", key, err)
+		}
+		if got := strings.TrimSpace(string(out)); got != want {
+			t.Fatalf("git config --get %s after IsolateProcess = %q, want %q", key, got, want)
+		}
+	}
 }
