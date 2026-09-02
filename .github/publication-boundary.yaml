@@ -94,6 +94,9 @@ allow:
   - path: "tests/**"
     class: PUBLIC
     rationale: "Integration tests."
+  - path: "docker/**"
+    class: PUBLIC
+    rationale: "Container images for test harnesses (the clean-install release gate)."
   - path: "evals/**"
     class: PUBLIC
     rationale: "Skill/model evaluation harness and fixtures. Synthetic tasks only."

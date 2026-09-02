@@ -62,6 +62,8 @@ export default [
       "**/out/**",
       "**/*.generated.ts",
       ".nightgauge/**",
+      // Clean-install gate run directories: seeded fixture copies and logs.
+      ".clean-install-e2e/**",
       // Per-issue pipeline worktrees — linting happens inside each worktree's
       // own CI run, not from the main checkout. Without this ignore, every
       // file in an active pipeline slot shows up as a lint failure in the
@@ -202,6 +204,18 @@ export default [
 
       "no-extra-semi": "off",
       "no-regex-spaces": "warn",
+    },
+  },
+
+  // Clean-install gate driver and fixture (tests/clean-install/): plain
+  // CommonJS on purpose — loaded by a real VS Code extension host and by
+  // `node --test` inside a container with no build step.
+  {
+    files: ["tests/clean-install/**/*.js"],
+    languageOptions: {
+      ecmaVersion: 2022,
+      sourceType: "commonjs",
+      globals: nodeGlobals,
     },
   },
 
