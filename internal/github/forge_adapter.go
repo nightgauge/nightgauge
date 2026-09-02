@@ -1,6 +1,8 @@
 package github
 
 import (
+	"context"
+
 	"github.com/nightgauge/nightgauge/internal/forge"
 )
 
@@ -24,6 +26,13 @@ var (
 	_ forge.SecurityService = (*SecurityService)(nil)
 	_ forge.GraphQLService  = (*Client)(nil)
 	_ forge.ForgeClient     = (*ForgeAdapter)(nil)
+
+	// The router never hands back a *Client — forge.New({Kind: "github"})
+	// returns *ForgeAdapter — so the GraphQLService assert on *Client alone
+	// proves nothing about what `forge graphql` actually type-asserts. This
+	// line is the one that keeps the verb working on the default GitHub
+	// forge (#1157).
+	_ forge.GraphQLService = (*ForgeAdapter)(nil)
 )
 
 // ForgeAdapter wraps a *Client (plus owner/projectNumber/ownerType) and
@@ -148,6 +157,17 @@ func (a *ForgeAdapter) Security() forge.SecurityService {
 		a.security = NewSecurityService(a.client)
 	}
 	return a.security
+}
+
+// ExecuteGraphQL satisfies forge.GraphQLService on the adapter itself —
+// the value forge.New / Router.For return — by forwarding to the inner
+// *Client's raw transport. Without this the optional-surface type
+// assertion in `forge graphql` (and knowledge graduate's repo-id lookup)
+// fails on every GitHub forge with "does not expose a GraphQL
+// transport" even though the client underneath speaks GraphQL for
+// every other operation (#1157).
+func (a *ForgeAdapter) ExecuteGraphQL(ctx context.Context, query string, variables map[string]interface{}) ([]byte, error) {
+	return a.client.ExecuteGraphQL(ctx, query, variables)
 }
 
 // Forge returns this Client wrapped as a forge.ForgeClient. Convenience
