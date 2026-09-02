@@ -113,12 +113,27 @@ func init() {
 // All of it is injected via GIT_CONFIG_COUNT/KEY_n/VALUE_n rather than an
 // on-disk config file, so it applies before any file exists to write it into.
 func Env() []string {
-	return append(os.Environ(),
-		"GIT_CONFIG_COUNT=4",
-		"GIT_CONFIG_KEY_0=gc.auto", "GIT_CONFIG_VALUE_0=0",
-		"GIT_CONFIG_KEY_1=gc.autoDetach", "GIT_CONFIG_VALUE_1=false",
-		"GIT_CONFIG_KEY_2=maintenance.auto", "GIT_CONFIG_VALUE_2=false",
-		"GIT_CONFIG_KEY_3=core.fsmonitor", "GIT_CONFIG_VALUE_3=false",
+	return append(append(os.Environ(), configBlock...), envTail()...)
+}
+
+// configBlock is the GIT_CONFIG_COUNT/KEY_n/VALUE_n injection that disarms
+// every background writer git can fork (#680). It is one list on purpose:
+// Env() hands it to the commands THIS package spawns, and IsolateProcess()
+// applies it to the current process so that git spawned by the CODE UNDER
+// TEST inherits it too (#1293 — a checkpoint `git commit` inside
+// Service.commitAll forked a detached `gc --auto` that raced t.TempDir
+// cleanup in the -race pass; Env() never reaches that exec.Command).
+var configBlock = []string{
+	"GIT_CONFIG_COUNT=4",
+	"GIT_CONFIG_KEY_0=gc.auto", "GIT_CONFIG_VALUE_0=0",
+	"GIT_CONFIG_KEY_1=gc.autoDetach", "GIT_CONFIG_VALUE_1=false",
+	"GIT_CONFIG_KEY_2=maintenance.auto", "GIT_CONFIG_VALUE_2=false",
+	"GIT_CONFIG_KEY_3=core.fsmonitor", "GIT_CONFIG_VALUE_3=false",
+}
+
+// envTail is the rest of what Env() layers on top of os.Environ().
+func envTail() []string {
+	return []string{
 		"GIT_CONFIG_NOSYSTEM=1",
 		"GIT_CONFIG_GLOBAL=/dev/null",
 		"GIT_CONFIG_SYSTEM=/dev/null",
@@ -126,7 +141,7 @@ func Env() []string {
 		"GIT_TERMINAL_PROMPT=0",
 		"GIT_AUTHOR_NAME=nightgauge-test", "GIT_AUTHOR_EMAIL=nightgauge-test@example.invalid",
 		"GIT_COMMITTER_NAME=nightgauge-test", "GIT_COMMITTER_EMAIL=nightgauge-test@example.invalid",
-	)
+	}
 }
 
 // IsolateProcess applies the ambient-config half of Env() to the CURRENT
@@ -174,6 +189,14 @@ func IsolateProcess() {
 		"GIT_COMMITTER_EMAIL": "nightgauge-test@example.invalid",
 	} {
 		// Setenv only fails on an invalid key; these are literals.
+		_ = os.Setenv(k, v)
+	}
+	// The background-writer disarm (#680) has to reach git processes the code
+	// under test spawns with a plain exec.Command, which inherit os.Environ()
+	// and never see Env(). Without this, a checkpoint commit in the -race pass
+	// forks a detached `gc --auto` that races t.TempDir cleanup (#1293).
+	for _, kv := range configBlock {
+		k, v, _ := strings.Cut(kv, "=")
 		_ = os.Setenv(k, v)
 	}
 }
