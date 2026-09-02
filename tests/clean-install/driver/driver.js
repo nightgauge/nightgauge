@@ -275,12 +275,26 @@ async function watchRun(root, issueNumber, wallClockMs, costCapUsd) {
     history = findHistoryRecord(historyDir, issueNumber);
   }
 
+  // The per-run snapshot is removed once the run latches terminal, so the last
+  // poll can predate the fields pr-merge writes (prUrl, mergedCommitSha). The
+  // survival record (pipeline/survival-records.jsonl) is written by the merge
+  // itself and names the PR and merge commit, so it is the durable evidence.
+  const survival = findSurvivalRecord(pipelineDir, issueNumber);
+  const prUrl =
+    (runtime && runtime.prUrl) ||
+    (survival && survival.repo && survival.pr_number
+      ? `https://github.com/${survival.repo}/pull/${survival.pr_number}`
+      : undefined);
+  const mergedCommitSha =
+    (runtime && runtime.mergedCommitSha) || (survival && survival.merge_commit_sha);
+
   report.run = {
     runId: runtime && runtime.runId,
     runtimeFile,
     terminalOutcome: runtime && runtime.terminalOutcome,
-    prUrl: runtime && runtime.prUrl,
-    mergedCommitSha: runtime && runtime.mergedCommitSha,
+    prUrl,
+    mergedCommitSha,
+    prEvidence: runtime && runtime.prUrl ? "runtime" : survival ? "survival-record" : "none",
     totalCostUsd: runtime && runtime.totalCostUsd,
     startedAt: runtime && runtime.startedAt,
     terminalAt: runtime && runtime.terminalAt,
@@ -314,9 +328,11 @@ async function watchRun(root, issueNumber, wallClockMs, costCapUsd) {
     )}`
   );
   assert(
-    "run record carries a PR URL",
-    Boolean(runtime && runtime.prUrl),
-    String(runtime && runtime.prUrl)
+    "run record carries a PR (runtime prUrl or survival record)",
+    Boolean(prUrl),
+    prUrl
+      ? `${prUrl} (${report.run.prEvidence})`
+      : "none in runtime snapshot or survival-records.jsonl"
   );
   const cost = Number(
     (history && history.tokens && history.tokens.estimated_cost_usd) ||
@@ -326,6 +342,29 @@ async function watchRun(root, issueNumber, wallClockMs, costCapUsd) {
   assert("recorded cost is non-zero", cost > 0, `${cost} USD`);
   const duration = Number((history && history.total_duration_ms) || 0);
   assert("recorded duration is non-zero", duration > 0, `${duration} ms`);
+}
+
+/** The survival record the merge writes (kind=survival, one line per merged PR). */
+function findSurvivalRecord(pipelineDir, issueNumber) {
+  let text;
+  try {
+    text = fs.readFileSync(path.join(pipelineDir, "survival-records.jsonl"), "utf8");
+  } catch {
+    return undefined;
+  }
+  let found;
+  for (const line of text.split("\n")) {
+    if (!line.trim()) continue;
+    try {
+      const rec = JSON.parse(line);
+      if (rec && rec.kind === "survival" && Number(rec.issue_number) === Number(issueNumber)) {
+        found = rec;
+      }
+    } catch {
+      // partial line
+    }
+  }
+  return found;
 }
 
 function findHistoryRecord(historyDir, issueNumber) {

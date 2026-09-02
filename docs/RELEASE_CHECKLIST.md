@@ -23,7 +23,7 @@ row; `main` moves.
 
 | #   | Gate                                                                                                                                                                                                                 | State                                                                                                                       |
 | --- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| G1  | **Clean-machine install, step 5**: install the packaged `.vsix` into a profile with no Nightgauge state, follow the README verbatim, and drive one issue to a merged PR. See _The clean-machine install gate_ below. | **Open.** Steps 1–4 walked (2026-08-24/25); all eight findings fixed (#862–#865, #898–#902). Step 5 never executed — #1137. |
+| G1  | **Clean-machine install, step 5**: install the packaged `.vsix` into a profile with no Nightgauge state, follow the README verbatim, and drive one issue to a merged PR. See _The clean-machine install gate_ below. | **Automated (#1150) and walked once** on 2026-09-02 (pre-release tree, merged PR). The walk on the release commit is #1137. |
 
 The pipeline has proven itself end to end on a real repository — an
 M-sized feature issue went pickup → plan → dev → validate → PR → merge
@@ -296,7 +296,7 @@ user hits, it removes the product from the window entirely, and the only
 on-screen explanation is VS Code's generic banner, which never names
 Nightgauge.
 
-### Automated (2026-08-29)
+### Automated (landed 2026-09-01, #1150)
 
 Step 5 is now a regression suite rather than a walk (#1150). One command
 packages the `.vsix` from the current tree, builds a container that has
@@ -350,30 +350,43 @@ absent in the container — but the agent's own credentials are inherited, so
 a first `claude` login is not walked. Two Quick Start steps are not walked
 through the product either, and each is filed as a finding:
 
-| Step                      | How the gate walks it                                                                                                                                                                                          | Finding |
-| ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
-| 3 — Trust the folder      | `--disable-workspace-trust`; the banner click is a VS Code surface, and #900 already fixed the product side                                                                                                    | —       |
-| 4 — Initialize Repository | The command only opens an interactive `claude /nightgauge:repo-init` terminal. The container runs the VSIX's own binary verbs instead (`config init`, `label ensure`, `project ensure-fields`, board link)     | #1154   |
-| 4 — board link            | The skill's `nightgauge forge graphql` link step fails on the default GitHub forge; the container links the board with `gh api graphql`                                                                        | #1157   |
-| 5 — Pick Up Issue         | The command accepts only a live tree item and otherwise opens an input box; the driver types the number with `xdotool`                                                                                         | #1155   |
-| 6 — Watch it run          | `pre-push validate` blocks any Node project without an `npm run build` script (the first real run halted at feature-validate after ~3 USD); the fixture carries a placeholder `build` script until it is fixed | #1159   |
+| Step                      | How the gate walks it                                                                                                                                                                                      | Finding |
+| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
+| 3 — Trust the folder      | `--disable-workspace-trust`; the banner click is a VS Code surface, and #900 already fixed the product side                                                                                                | —       |
+| 4 — Initialize Repository | The command only opens an interactive `claude /nightgauge:repo-init` terminal. The container runs the VSIX's own binary verbs instead (`config init`, `label ensure`, `project ensure-fields`, board link) | #1154   |
+| 4 — board link            | The skill's `nightgauge forge graphql` link step fails on the default GitHub forge; the container links the board with `gh api graphql`                                                                    | #1157   |
+| 5 — Pick Up Issue         | The command accepts only a live tree item and otherwise opens an input box; the driver types the number with `xdotool`                                                                                     | #1155   |
+| 6 — Watch it run          | `pre-push validate` blocked any Node project without an `npm run build` script (the first real run halted at feature-validate after ~3 USD); fixed in #1159, the fixture keeps its `build` script          | #1159   |
 
 The driver (`tests/clean-install/driver/`) is a plain-JavaScript extension
 loaded with `--extensionDevelopmentPath`; the product extension is always the
 installed VSIX, never a development path, and the driver asserts that.
 
-#### Findings from the first automated walk (2026-08-29)
+#### Findings from the first automated walks (2026-08-29 → 2026-09-02)
 
-_Filled in below once the first real run completes._
+Three full walks ran before this landed, each on a linux-arm64 VSIX packaged
+from the tree under test and installed into a container with nothing else:
 
-### Still not walked
+| Walk (UTC)       | Tree                     | Outcome                                                                                                                                                                                                                                |
+| ---------------- | ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 2026-08-29 21:38 | `6fb043b1`               | Halted at `feature-validate` after 3.21 USD: the fixture had no `build` script — #1159.                                                                                                                                                |
+| 2026-08-29 21:57 | `6fb043b1`               | Failed at `feature-dev` after 1.38 USD / 291 s: `dev context does not match the expected schema` — the deliverable-policy defect fixed the same day (#1190).                                                                           |
+| 2026-09-02 03:53 | `be184293` (this branch) | **Pickup → plan → dev → validate → PR → merge, unattended: 4.17 USD, 842 s.** The throwaway repo's PR #2 merged at 04:08Z (survival record `merge_commit_sha db76f14f`), the issue closed. The driver still reported FAIL — see below. |
 
-**Step 5 has not been executed.** Steps 3–4 above were walked on 2026-08-25 and
-stopped at **Initialize Repository**, which hands control to an interactive
-agent session in a VS Code terminal. Driving one issue through to a merged PR
-as a fresh user remains the release gate, and no amount of green CI substitutes
-for it — every finding above came from running the packaged artifact, and none
-of them was visible to the test suite.
+The third walk exposed a defect in the gate itself, not the product: the
+driver asserted the PR from the per-run `runtime-*.json` snapshot, which the
+pipeline removes when the run latches terminal, so the last poll predated
+`prUrl`. The driver now takes PR evidence from the survival record the merge
+writes (`pipeline/survival-records.jsonl`) when the snapshot lacks it. The
+three product findings the walks routed around are #1154 and #1155 (both
+harness-only: the product paths are interactive by design) and #1157, fixed
+in #1288 — the container tries `nightgauge forge graphql` first and falls
+back with a finding only if it fails, so the next walk records whether the
+fix holds on a fresh install.
+
+**Step 5 is therefore walked, once, on a pre-release tree.** The walk that
+counts for G1 is the one on the release commit; record it in the section
+below when it runs.
 
 ## What this checklist is not
 
