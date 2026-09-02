@@ -93,13 +93,22 @@ jobs:
             [darwin-x64]=darwin-amd64
             [linux-x64]=linux-amd64
           )
+          # vsce records the pre-release flag in the VSIX manifest at PACKAGE
+          # time; `publish --pre-release` on a VSIX packaged without it is
+          # refused (#1299). 0.x is pre-release, as the publish step says.
+          VERSION="$(node -p "require('./package.json').version")"
+          CHANNEL=()
+          if [[ "${VERSION%%.*}" == "0" ]]; then
+            CHANNEL=(--pre-release)
+            echo "Version $VERSION is 0.x → packaging as pre-release"
+          fi
           mkdir -p dist/bin
           for T in darwin-arm64 darwin-x64 linux-x64; do
             SRC="../../bin/nightgauge-${BIN[$T]}"
             [[ -f "$SRC" ]] || { echo "ERROR: missing $SRC (did 'make build-all' run?)"; exit 1; }
             cp "$SRC" dist/bin/nightgauge
             chmod +x dist/bin/nightgauge
-            npx @vscode/vsce@3.9.1 package --no-dependencies --target "$T"
+            npx @vscode/vsce@3.9.1 package --no-dependencies --target "$T" ${CHANNEL[@]+"${CHANNEL[@]}"}
           done
           echo "Packaged:"; ls -1 *.vsix
 

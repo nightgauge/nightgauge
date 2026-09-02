@@ -1,0 +1,251 @@
+# VS Code Marketplace publish (Gate 2), on demand — #1299.
+#
+# release.yml publishes to the Marketplace only inside the tag's own run, and
+# that run cannot be repeated once GoReleaser has released the tag. This
+# workflow is the re-runnable half: check out a tag, build the per-target
+# binaries and VSIXs exactly as release.yml does (pre-release for 0.x), verify
+# the PAT against the publisher, attest, publish. It never touches the GitHub
+# Release or the Homebrew tap.
+#
+# Secrets: VSCE_PAT (Azure DevOps PAT, Marketplace: Manage, all accessible
+# organizations, owned by a member of the `nightgauge` publisher).
+name: Marketplace publish
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to publish (e.g. v0.2.1); must already exist"
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: marketplace-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Package ${{ inputs.tag }} and publish to the Marketplace
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: production
+
+    permissions:
+      contents: read
+      id-token: write # artifact attestations (OIDC)
+      attestations: write # artifact attestations
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ inputs.tag }}
+          fetch-depth: 0
+
+      - name: Ensure full working tree
+        run: |
+          git sparse-checkout disable 2>/dev/null || true
+          git checkout -- . 2>/dev/null || true
+
+      - name: Setup Node 24
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Setup Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: go.sum
+
+      - name: Clear stale npx cache (arm64/x64 esbuild mismatch)
+        run: rm -rf ~/.npm/_npx
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Extract version from tag
+        id: version
+        run: |
+          TAG="${{ inputs.tag }}"
+          VERSION="${TAG#v}"
+          if [[ "$VERSION" == *-* ]]; then
+            echo "ERROR: '$TAG' is a pre-release tag; the Marketplace publishes stable tags only (0.x goes to the pre-release channel by version, not by tag suffix)."
+            exit 1
+          fi
+          git rev-parse -q --verify "refs/tags/$TAG" >/dev/null || { echo "ERROR: tag $TAG does not exist"; exit 1; }
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      # Verify the PAT BEFORE spending minutes on a build, and fail loudly:
+      # this workflow exists only to publish, so a missing or invalid PAT is
+      # an error here, not a skip.
+      - name: Verify VSCE_PAT against the publisher
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: |
+          set -euo pipefail
+          PUBLISHER=$(node -p "require('./packages/nightgauge-vscode/package.json').publisher")
+          [[ -n "${VSCE_PAT:-}" ]] || { echo "::error::VSCE_PAT secret is not set"; exit 1; }
+          npx --yes @vscode/vsce@3.9.1 verify-pat "$PUBLISHER"
+
+      # Cross-compile every target binary up front so each platform-specific
+      # .vsix can bundle the matching one. The extension loads its Go binary from
+      # the bundled dist/bin/ (no runtime download), so a single universal .vsix
+      # would ship one arch and break on the others. `make build-all` emits
+      # bin/nightgauge-{darwin-arm64,darwin-amd64,linux-amd64}.
+      - name: Build all Go binaries (per-target VSIX bundling)
+        run: make build-all VERSION=${{ steps.version.outputs.version }}
+
+      # Build EVERY workspace before testing, not just the SDK. The VSCode suite
+      # has an integration test (tests/integration/failureTaxonomyPackaging.test.ts)
+      # asserting `dist/failure-taxonomy.yaml` exists — a file only the extension's
+      # own `build:assets` step produces. Building the SDK alone left it absent, so
+      # `Run tests` could never pass here. ci.yml does not hit this because its
+      # VSCode job runs the root `npm run build` before testing.
+      - name: Build all workspaces (SDK + extension assets)
+        run: npm run build
+
+      - name: Inject release version
+        working-directory: packages/nightgauge-vscode
+        run: npm version ${{ steps.version.outputs.version }} --no-git-tag-version --allow-same-version
+
+      # Split the canonical `npm run package` (build + vsce package) so we can
+      # stamp `dist/build-info.json` AFTER the build pipeline writes into
+      # `dist/` but BEFORE `vsce package` freezes it. Before legacy issue 3650 the stamp ran
+      # earlier and any future `dist/` rewrite (rm -rf in clean step, new
+      # asset path) could silently omit it from the .vsix and leave
+      # ExtensionStalenessService stuck in `state: "unknown"` on the
+      # installed extension. legacy issue 3650 (Part B).
+      - name: Build extension (pre-package)
+        working-directory: packages/nightgauge-vscode
+        run: npm run build
+
+      # Legacy issues 3300 / 3650: stamp build provenance so ExtensionStalenessService
+      # can detect when the running extension is behind workspace HEAD and
+      # refuse autonomous dispatch on critical-path drift. Stamping happens
+      # AFTER `npm run build` so dist/ already exists in its final shape, and
+      # the helper script asserts the file is parseable JSON before we
+      # continue — a missing stamp is a hard fail, not a silent skip.
+      - name: Stamp build provenance
+        run: |
+          DIST=packages/nightgauge-vscode/dist
+          BUILD_SHA=$(git rev-parse HEAD)
+          BUILD_BRANCH=${{ inputs.tag }}
+          COMMIT_TIMESTAMP=$(git log -1 --format=%cI HEAD)
+          BUILD_TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          cat > "$DIST/build-info.json" <<EOF_BUILD_INFO
+          {
+            "commitSha": "$BUILD_SHA",
+            "branch": "$BUILD_BRANCH",
+            "commitTimestamp": "$COMMIT_TIMESTAMP",
+            "buildTimestamp": "$BUILD_TIMESTAMP",
+            "schemaVersion": "1"
+          }
+          EOF_BUILD_INFO
+          echo "Stamped: $BUILD_SHA ($BUILD_BRANCH @ $COMMIT_TIMESTAMP)"
+          bash packages/nightgauge-vscode/scripts/check-build-info.sh \
+            "$DIST/build-info.json"
+
+      # Package one .vsix PER VS Code target, each bundling the matching binary
+      # swapped into dist/bin/. `vsce package --target <t>` names the file
+      # nightgauge-vscode-<version>-<t>.vsix; the Marketplace serves the
+      # correct one per user automatically. A single universal .vsix would ship
+      # one arch and fail to launch the backend on every other platform.
+      - name: Package per-target VSIXs
+        working-directory: packages/nightgauge-vscode
+        run: |
+          set -euo pipefail
+          # vsce target -> Makefile binary suffix (GOOS-GOARCH)
+          declare -A BIN=(
+            [darwin-arm64]=darwin-arm64
+            [darwin-x64]=darwin-amd64
+            [linux-x64]=linux-amd64
+          )
+          # vsce records the pre-release flag in the VSIX manifest at PACKAGE
+          # time; `publish --pre-release` on a VSIX packaged without it is
+          # refused (#1299). 0.x is pre-release, as the publish step says.
+          VERSION="$(node -p "require('./package.json').version")"
+          CHANNEL=()
+          if [[ "${VERSION%%.*}" == "0" ]]; then
+            CHANNEL=(--pre-release)
+            echo "Version $VERSION is 0.x → packaging as pre-release"
+          fi
+          mkdir -p dist/bin
+          for T in darwin-arm64 darwin-x64 linux-x64; do
+            SRC="../../bin/nightgauge-${BIN[$T]}"
+            [[ -f "$SRC" ]] || { echo "ERROR: missing $SRC (did 'make build-all' run?)"; exit 1; }
+            cp "$SRC" dist/bin/nightgauge
+            chmod +x dist/bin/nightgauge
+            npx @vscode/vsce@3.9.1 package --no-dependencies --target "$T" ${CHANNEL[@]+"${CHANNEL[@]}"}
+          done
+          echo "Packaged:"; ls -1 *.vsix
+
+      # Defense-in-depth: every .vsix must carry the build-info stamp AND a
+      # bundled binary before GoReleaser hands them to consumers.
+      - name: Verify VSIX contents
+        working-directory: packages/nightgauge-vscode
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          COUNT=0
+          for VSIX in *.vsix; do
+            COUNT=$((COUNT + 1))
+            unzip -l "$VSIX" | grep -q 'extension/dist/build-info.json' \
+              || { echo "ERROR: $VSIX missing build-info.json (ExtensionStalenessService would report 'unknown')"; exit 1; }
+            unzip -l "$VSIX" | grep -q 'extension/dist/bin/nightgauge' \
+              || { echo "ERROR: $VSIX missing bundled Go binary"; exit 1; }
+            unzip -l "$VSIX" | grep -q 'extension/dist/sdk-cli.cjs' \
+              || { echo "ERROR: $VSIX missing bundled SDK CLI"; exit 1; }
+            echo "OK: $VSIX"
+          done
+          [[ "$COUNT" -eq 3 ]] || { echo "ERROR: expected 3 per-target VSIXs, found $COUNT"; exit 1; }
+
+      - name: Attest VSIXs
+        if: ${{ !github.event.repository.private }}
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-path: packages/nightgauge-vscode/*.vsix
+
+      # --- VS Code Marketplace ---
+      # Whether to publish was decided (and the PAT VERIFIED against the
+      # publisher) in the Preflight step, before anything was published. The
+      # `secrets` context cannot be used in a step-level `if:` — GitHub rejects
+      # the whole workflow at load time — so we gate on the preflight's output.
+      # Do NOT inline `secrets.VSCE_PAT` back into an `if:`.
+      - name: Publish per-target VSIXs to VS Code Marketplace
+        working-directory: packages/nightgauge-vscode
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: |
+          set -euo pipefail
+          # 0.x ships on the Marketplace PRE-RELEASE channel (#1135,
+          # docs/RELEASE_CHECKLIST.md P3): users opt in with "Install
+          # Pre-Release Version" / `--pre-release`, and the listing carries the
+          # Pre-Release badge. The flag drops on its own at v1.0.0.
+          VERSION="${{ steps.version.outputs.version }}"
+          CHANNEL=()
+          if [[ "${VERSION%%.*}" == "0" ]]; then
+            CHANNEL=(--pre-release)
+            echo "Version $VERSION is 0.x → publishing to the pre-release channel"
+          else
+            echo "Version $VERSION is ${VERSION%%.*}.x → publishing to the stable channel"
+          fi
+          # Each .vsix carries its targetPlatform in the manifest, so vsce
+          # publishes it for the right platform without re-specifying --target.
+          for VSIX in *.vsix; do
+            echo "Publishing $VSIX"
+            npx @vscode/vsce@3.9.1 publish --no-dependencies --packagePath "$VSIX" ${CHANNEL[@]+"${CHANNEL[@]}"}
+          done
+
+      - name: Upload the published VSIXs as a workflow artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: marketplace-vsix-${{ steps.version.outputs.version }}
+          path: packages/nightgauge-vscode/*.vsix
+          retention-days: 90
