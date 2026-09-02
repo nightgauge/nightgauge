@@ -33,9 +33,12 @@ jobs:
         with:
           fetch-depth: 0
       - name: Configure git identity
+        # Repository-scoped, not --global: nothing outside this checkout needs
+        # an identity, and a global one leaks into every other git call on the
+        # runner.
         run: |
-          git config --global user.email "ci@nightgauge.dev"
-          git config --global user.name "Nightgauge CI"
+          git config user.email "ci@nightgauge.dev"
+          git config user.name "Nightgauge CI"
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
@@ -59,22 +62,28 @@ jobs:
         run: npm ci
 
       - name: Build all Go binaries (per-target VSIX bundling)
-        run: make build-all VERSION=${{ steps.version.outputs.version }}
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: make build-all VERSION="$VERSION"
 
       - name: Build SDK + extension
         run: npm run build
 
       - name: Inject RC version
         working-directory: packages/nightgauge-vscode
-        run: npm version ${{ steps.version.outputs.version }} --no-git-tag-version --allow-same-version
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: npm version "$VERSION" --no-git-tag-version --allow-same-version
 
       - name: Stamp build provenance
+        env:
+          BUILD_BRANCH: ${{ github.ref_name }}
         run: |
           DIST=packages/nightgauge-vscode/dist
           cat > "$DIST/build-info.json" <<EOF
           {
             "commitSha": "$(git rev-parse HEAD)",
-            "branch": "${{ github.ref_name }}",
+            "branch": "$BUILD_BRANCH",
             "commitTimestamp": "$(git log -1 --format=%cI HEAD)",
             "buildTimestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
             "schemaVersion": "1"
@@ -112,6 +121,8 @@ jobs:
           done
           echo "Packaged:"; ls -1 *.vsix
 
+      # Every .vsix must carry the build-info stamp AND a bundled binary, and
+      # must NOT ship source maps or type declarations (.vscodeignore drift).
       - name: Verify VSIX contents
         working-directory: packages/nightgauge-vscode
         run: |
@@ -126,6 +137,7 @@ jobs:
               || { echo "ERROR: $VSIX missing bundled Go binary"; exit 1; }
             unzip -l "$VSIX" | grep -q 'extension/dist/sdk-cli.cjs' \
               || { echo "ERROR: $VSIX missing bundled SDK CLI"; exit 1; }
+            if unzip -l "$VSIX" | grep -qE '\.(map|d\.ts)$'; then echo "ERROR: $VSIX ships source maps or type declarations"; exit 1; fi
             echo "OK: $VSIX"
           done
           [[ "$COUNT" -eq 3 ]] || { echo "ERROR: expected 3 VSIXs, found $COUNT"; exit 1; }
@@ -187,6 +199,8 @@ jobs:
           retention-days: 14
 
       - name: Summary
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
         run: |
-          echo "### RC dry-run ${{ steps.version.outputs.tag }} — no publish" >> "$GITHUB_STEP_SUMMARY"
-          echo "Download **rc-artifacts-${{ steps.version.outputs.tag }}** from this run to install/test each platform's .vsix and the CLI tarballs." >> "$GITHUB_STEP_SUMMARY"
+          echo "### RC dry-run $TAG — no publish" >> "$GITHUB_STEP_SUMMARY"
+          echo "Download **rc-artifacts-$TAG** from this run to install/test each platform's .vsix and the CLI tarballs." >> "$GITHUB_STEP_SUMMARY"

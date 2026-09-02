@@ -1,4 +1,4 @@
-name: licence
+name: CLA
 
 # First-party CLA gate. The workflow never checks out or executes fork code.
 # Signatures are stored in the private nightgauge/.cla-signatures repository.
@@ -14,13 +14,22 @@ permissions:
   pull-requests: write # PR comments require this on cross-repository contributions
   statuses: write
 
+# One run per pull request at a time, never cancelled: a cancelled run would
+# leave the `cla` status wherever the previous run put it.
+concurrency:
+  group: cla-${{ github.event.pull_request.number || github.event.issue.number || github.run_id }}
+  cancel-in-progress: false
+
 jobs:
+  # The required status check context is `cla` (posted by cla-check.mjs), not
+  # this job's id — do not rename either.
   cla-workflow:
     if: >
       github.event.repository.visibility == 'public' &&
       ((github.event_name == 'issue_comment' && github.event.issue.pull_request) ||
       github.event_name == 'pull_request_target')
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

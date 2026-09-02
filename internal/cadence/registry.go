@@ -48,7 +48,7 @@ func Registry() []Automation {
 			Workflow: "release.yml",
 			// No TriggerEvent: this one is tag-triggered, and the verdict that
 			// matters is that it has never run AT ALL.
-			Remedy: "cut a stable tag; the publish is separately gated on VSCE_PAT and MARKETPLACE_PUBLISH",
+			Remedy: "cut a stable tag; the Marketplace publish is a separate manual dispatch (marketplace-publish.yml) gated on VSCE_PAT",
 		},
 	}
 }
