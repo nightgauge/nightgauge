@@ -46,7 +46,7 @@ jobs:
       # fetch-depth: 0 — the classifier diffs base...head, and both endpoints
       # must exist locally. A shallow clone makes the gate fail open (full
       # suite), which is safe but silently pointless.
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -77,7 +77,7 @@ jobs:
     if: ${{ !cancelled() }}
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
       - name: Configure git identity (tests create local repos)
@@ -190,7 +190,7 @@ jobs:
     if: ${{ !cancelled() }}
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Configure git identity
         # Identity is scoped to a per-job file via GIT_CONFIG_GLOBAL.
         if: ${{ needs.changes.outputs.run_heavy != 'false' }}
@@ -226,7 +226,7 @@ jobs:
     if: ${{ !cancelled() }}
     timeout-minutes: 40
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Configure git identity (tests create local repos)
         # Identity is scoped to a per-job file via GIT_CONFIG_GLOBAL.
         if: ${{ needs.changes.outputs.run_heavy != 'false' }}
@@ -293,7 +293,7 @@ jobs:
     if: ${{ !cancelled() }}
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         if: ${{ needs.changes.outputs.run_heavy != 'false' }}
         with:
@@ -386,7 +386,7 @@ jobs:
     if: ${{ !cancelled() }}
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         if: ${{ needs.changes.outputs.run_heavy != 'false' }}
         with:
@@ -424,7 +424,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
