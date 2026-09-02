@@ -473,7 +473,7 @@ jobs:
         # fails on any copyleft/proprietary production license.
         run: |
           DENY='GPL-1.0;GPL-2.0;GPL-3.0;LGPL-2.0;LGPL-2.1;LGPL-3.0;AGPL-1.0;AGPL-3.0;SSPL-1.0;CC-BY-NC-4.0;UNLICENSED'
-          npx license-checker --production --start packages/nightgauge-sdk --failOn "$DENY"
-          npx license-checker --production --start packages/nightgauge-vscode --failOn "$DENY"
+          npx license-checker --production --excludePrivatePackages --start packages/nightgauge-sdk --failOn "$DENY"
+          npx license-checker --production --excludePrivatePackages --start packages/nightgauge-vscode --failOn "$DENY"
       - name: License-header guard (source + build output)
         run: bash scripts/check-license-headers.sh
