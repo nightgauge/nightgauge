@@ -21,9 +21,9 @@ row; `main` moves.
 
 ### The one gate that matters
 
-| #   | Gate                                                                                                                                                                                                                 | State                                                                                                                       |
-| --- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| G1  | **Clean-machine install, step 5**: install the packaged `.vsix` into a profile with no Nightgauge state, follow the README verbatim, and drive one issue to a merged PR. See _The clean-machine install gate_ below. | **Automated (#1150) and walked once** on 2026-09-02 (pre-release tree, merged PR). The walk on the release commit is #1137. |
+| #   | Gate                                                                                                                                                                                                                 | State                                                                                                                                                                                             |
+| --- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| G1  | **Clean-machine install, step 5**: install the packaged `.vsix` into a profile with no Nightgauge state, follow the README verbatim, and drive one issue to a merged PR. See _The clean-machine install gate_ below. | **Done — #1137.** Walked on the release commit `e6e98c76` on 2026-09-02: packaged VSIX, bare container, fixture issue → merged PR, unattended. See _Findings from the release-commit walk_ below. |
 
 The pipeline has proven itself end to end on a real repository — an
 M-sized feature issue went pickup → plan → dev → validate → PR → merge
@@ -98,7 +98,36 @@ record the outcome in the private release runbook:
 Every card, dashboard row and history record those runs produce is the
 release's evidence. Regenerate the marketing imagery from the best of them.
 
-## Verdict
+## Verdict — 2026-09-01
+
+**GO for `v0.2.0` on the Marketplace pre-release channel.**
+
+Every row in _What is left before the first Marketplace version_ is closed
+or re-measured as not blocking:
+
+- G1 walked on the release commit (below). C1/C2 re-triaged over the 12 bugs
+  filed since 2026-08-29: none claims install, activation or a core stage
+  fails for a single-repo user; #1157 (board link on a fresh install) was the
+  one first-hour defect and is fixed (#1288). C4 unchanged.
+- L1–L7 done (#1134, #1289): supported-adapter sentence, no autonomous
+  production claim, absolute links, `0.2.0` changelog dated 2026-09-01.
+- P3 done (#1289): `release.yml` passes `--pre-release` while the major is 0.
+  P1/P5 close with the tag; P4 stays "not in the first release".
+- _Dogfood before the tag_: between 2026-08-29 and 2026-08-31 the downstream
+  workspace ran every class in the list unattended through the extension —
+  27 runs completed to a merged PR across four stacks (Flutter, Node API,
+  Angular, static site), 6 failed, and every failure was a stage gate refusing
+  to record a false success. The `blockedBy` pair was honoured in order; the
+  spike produced a written decision; the wrong-premise candidate turned out to
+  have a correct premise by the time it ran and was legitimately fixed. The
+  per-issue table lives in the private release plan.
+
+Deferred, deliberately: fable-routed runs cost ~10× a sonnet run of the same
+size (three of the 27); cap with `max_model` (#1216) in the README's
+recommended config before a stranger meets it. Two downstream failures are
+open for triage in their own repositories and are not extension defects.
+
+## Verdict — 2026-08-20
 
 **GO for `v0.2.0-rc.24`.**
 
@@ -385,8 +414,30 @@ back with a finding only if it fails, so the next walk records whether the
 fix holds on a fresh install.
 
 **Step 5 is therefore walked, once, on a pre-release tree.** The walk that
-counts for G1 is the one on the release commit; record it in the section
-below when it runs.
+counts for G1 is the one on the release commit, recorded next.
+
+#### Findings from the release-commit walk (2026-09-02, #1137)
+
+`bash scripts/clean-install-e2e.sh` on `main` @ `e6e98c76` (the #1150 merge),
+from the maintainer's machine, Docker linux/arm64:
+
+| Field           | Value                                                                                                                                                                                                                             |
+| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| VSIX            | `nightgauge-vscode-linux-arm64-0.1.0.vsix`, 20 MB, packaged from the tree; binary `v0.2.0-rc.24-235-ge6e98c76`                                                                                                                    |
+| Install         | fresh `--extensions-dir` / `--user-data-dir`; extension activated as `0.1.0`; the binary VS Code recorded in `extensions.json` is the one the extension resolved                                                                  |
+| Repository      | private throwaway, seeded from `tests/clean-install/fixture/`, one feature-request issue, one throwaway board                                                                                                                     |
+| Stages          | `feature-planning → feature-dev → feature-validate → pr-create → pr-merge`, unattended                                                                                                                                            |
+| Result          | PR #2 on the throwaway repo **MERGED** (`026bbc33`), issue **CLOSED**; run outcome `complete`                                                                                                                                     |
+| Cost / duration | 3.84 USD / 979 s                                                                                                                                                                                                                  |
+| Findings        | 2, both harness-only: #1154 (Initialize Repository is interactive by design) and #1155 (pickup has no programmatic path). **The #1157 finding is gone** — the board linked through `nightgauge forge graphql` on a fresh install. |
+| Cleanup         | container, repository and board deleted on exit; verified none remained                                                                                                                                                           |
+
+What this walk still does not prove, unchanged from the table above: the
+agent's own login (the container inherits the maintainer's Claude Code
+credentials), and the two interactive Quick Start steps, which are walked by
+their binary-verb equivalents. A second-machine pass by someone who is not
+the maintainer remains the honest next step and is not a blocker for a
+pre-release.
 
 ## What this checklist is not
 
