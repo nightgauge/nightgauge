@@ -132,9 +132,9 @@ $ grep -rlniE "pull_request_target|claude-code-action" .github/workflows/
 ```
 
 That one match does not review a diff — `cla.yml` uses `pull_request_target`
-to check whether a contributor has signed the licence agreement. Six other
+to check whether a contributor has signed the licence agreement. Five other
 workflows do fire on `pull_request` (`ci.yml`, `codeql.yml`, `lint.yml`,
-`static-analysis.yml`, `credential-scan.yml`, `publication-boundary.yml`), and
+`credential-scan.yml`, `publication-boundary.yml`), and
 CodeQL in particular emits severity-ranked findings, so the claim is not that a
 PR here is unchecked. It is that every one of those is a fixed analyser applying
 a rule set: none reads the change against the plan it was supposed to implement,
