@@ -58,7 +58,7 @@ jobs:
       create_issues: ${{ steps.gate.outputs.create_issues }}
       reason: ${{ steps.gate.outputs.reason }}
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install the gate's pinned parser dependency
         # Hosted runner images do not promise PyYAML, and the gate fails closed
@@ -108,7 +108,7 @@ jobs:
       # `secrets` is not one of the contexts available to a step-level `if:`.
       HAS_API_KEY: ${{ secrets.ANTHROPIC_API_KEY != '' }}
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # The review reads recent pipeline history to judge effectiveness, so
           # a shallow clone would have it grading a week it cannot see.
