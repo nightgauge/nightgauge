@@ -9,9 +9,27 @@ name: Continuous Improvement
 # `DiscoveryActivityService` read `improvement-runs/latest.json` from a
 # directory no producer had ever created.
 #
-# The run record is written even when the review itself is skipped, because
-# "the weekly review ran and proposed nothing" and "the weekly review has never
-# run" are different facts and the dashboard has to be able to tell them apart.
+# Shape of a run:
+#
+#   gate     Resolve the autonomous_discovery switches out of
+#            .nightgauge/config.yaml. Fails closed.
+#
+#   analyze  Run the continuous-improvement skill over this repository's
+#            pipeline history. READ-ONLY: `contents: read`, no forge token in
+#            the model's environment, one JSON proposal artifact out.
+#
+#   apply    Model-free. Holds the write scopes, validates the artifact
+#            against a closed schema (scripts/validate-proposal-artifact.mjs),
+#            files accepted proposals as issues, and ALWAYS closes the run
+#            record — "the weekly review ran and proposed nothing" and "the
+#            weekly review has never run" are different facts and the dashboard
+#            has to be able to tell them apart.
+#
+# WHY TWO JOBS. The review reads text the repository does not control in the
+# strict sense — commit messages, issue-derived telemetry, skill epilogues —
+# and runs with Bash. Holding `contents: write`, `issues: write` and a
+# GH_TOKEN in that same job was a prompt-injection-to-write path (#1304). The
+# model now runs where there is nothing to write with.
 #
 # State reaches a developer's checkout via the `discovery-state` branch; the
 # reasoning is in scripts/discovery-state-sync.sh.
@@ -86,25 +104,24 @@ jobs:
             echo "\`scheduled_tasks.continuous_improvement.enabled\` in \`.nightgauge/config.yaml\`."
           } >> "$GITHUB_STEP_SUMMARY"
 
-  review:
-    name: Review, propose, and record
+  analyze:
+    name: Review and propose (read-only)
     needs: gate
     if: ${{ needs.gate.outputs.enabled == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
-      # Push the run record to the `discovery-state` branch.
-      contents: write
-      # The skill files issues for accepted proposals.
-      issues: write
+      # Read-only by construction: the model runs here, so no write scope and
+      # no forge token may exist in this job.
+      contents: read
+    outputs:
+      review_outcome: ${{ steps.review.outcome }}
     env:
       # Dispatch inputs are bound here and referenced as "$VAR" inside `run:`,
       # never interpolated into the script text — interpolation splices the
       # value into the shell source before bash sees it.
       MODE: ${{ inputs.mode || 'dogfood' }}
       DRY_RUN: ${{ inputs.dry_run || false }}
-      TRIGGERED_BY: ${{ github.event_name }}
-      CREATE_ISSUES: ${{ needs.gate.outputs.create_issues }}
       # `secrets` is not one of the contexts available to a step-level `if:`.
       HAS_API_KEY: ${{ secrets.ANTHROPIC_API_KEY != '' }}
     steps:
@@ -113,13 +130,117 @@ jobs:
           # The review reads recent pipeline history to judge effectiveness, so
           # a shallow clone would have it grading a week it cannot see.
           fetch-depth: 0
+          # Do not leave the job token in .git/config where a Bash-equipped
+          # model could reuse it — "no forge credential reachable from the
+          # model" should be literally true, not merely scoped.
+          persist-credentials: false
+
+      - name: Carry forward the previous run's state
+        # Unauthenticated fetch of the public state branch; see
+        # persist-credentials above.
+        run: bash scripts/discovery-state-sync.sh
+
+      - name: Start from an empty proposal artifact
+        # Written before the model runs, so a skipped or failed review still
+        # uploads a well-formed "proposed nothing" artifact and `apply` can
+        # always close the run record from it.
+        run: |
+          set -euo pipefail
+          # Outside the checkout so the model cannot confuse it with repository state.
+          mkdir -p "$RUNNER_TEMP/proposals"
+          jq -n '{schema: 1, kind: "continuous-improvement", proposals: []}' > "$RUNNER_TEMP/proposals/proposals.json"
+
+      - name: Run the continuous-improvement review
+        id: review
+        # Degrades to a recorded no-op rather than a failure when no API key is
+        # configured: the review is the only part of this workflow that needs a
+        # model, so a key-less repository still gets an honest "ran, proposed
+        # nothing" record instead of a red run every Monday.
+        if: ${{ env.HAS_API_KEY == 'true' }}
+        env:
+          # The model's whole environment: a model key and a scratch path.
+          # Deliberately NO GH_TOKEN / GITHUB_TOKEN.
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          PROPOSAL_FILE: ${{ runner.temp }}/proposals/proposals.json
+        run: |
+          set -euo pipefail
+          npm install --global --no-fund --no-audit @anthropic-ai/claude-code@2.1.258
+
+          # Prompt on stdin with `-p`, matching the pipeline's own Claude
+          # adapter (internal/execution/adapters/claude.go). Not the
+          # `/nightgauge:continuous-improvement` slash command: that resolves
+          # through the plugin marketplace, which is not installed on a hosted
+          # runner. --allowedTools mirrors the SKILL.md frontmatter; the tools
+          # are the same, the job holding them is not.
+          claude -p \
+            --no-session-persistence \
+            --allowedTools "Bash,Read,Write,Glob,Grep" \
+            --max-turns 80 <<PROMPT
+          Execute the skill at skills/nightgauge-continuous-improvement/SKILL.md
+          in this repository, headlessly, with these arguments:
+
+            --mode ${MODE} --dry-run
+
+          You have no GitHub credentials and must not create issues, labels,
+          or commits, and must not modify .nightgauge/. Instead, for each
+          proposal the skill would have filed (priority high or critical),
+          write one entry to ${PROPOSAL_FILE} as JSON with EXACTLY this shape
+          and nothing else:
+
+            {"schema": 1, "kind": "continuous-improvement",
+             "proposals": [{"title": "...", "body": "...", "labels": ["..."]}]}
+
+          Rules: at most 10 proposals; title under 200 characters on one line;
+          body under 20000 characters of Markdown; labels must include
+          "continuous-improvement" and may add one priority:* and one type:*
+          label. Any other key or label is rejected downstream. If the review
+          proposes nothing, leave the file as it is.
+          PROMPT
+
+          node scripts/validate-proposal-artifact.mjs --kind continuous-improvement "$PROPOSAL_FILE"
+
+      - name: Upload the proposal artifact
+        # `always()` so `apply` has something to download even when the review
+        # failed — the empty default written above.
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: continuous-improvement-proposals
+          path: ${{ runner.temp }}/proposals/proposals.json
+          if-no-files-found: error
+          retention-days: 7
+
+  apply:
+    name: Validate, file, and record
+    needs: [gate, analyze]
+    # Runs after `analyze` whatever its result, so a failed review is recorded
+    # as a failed run rather than leaving the tab showing "running" until next
+    # Monday. Skipped only when the gate said not to run at all.
+    if: ${{ always() && needs.gate.outputs.enabled == 'true' && needs.analyze.result != 'skipped' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      # Push the run record to the `discovery-state` branch.
+      contents: write
+      # File the validated proposals as issues.
+      issues: write
+    env:
+      MODE: ${{ inputs.mode || 'dogfood' }}
+      DRY_RUN: ${{ inputs.dry_run || false }}
+      TRIGGERED_BY: ${{ github.event_name }}
+      CREATE_ISSUES: ${{ needs.gate.outputs.create_issues }}
+      REVIEW_OUTCOME: ${{ needs.analyze.outputs.review_outcome }}
+      RECORD: .nightgauge/improvement-runs/latest.json
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Carry forward the previous run's state
         run: bash scripts/discovery-state-sync.sh
 
       - name: Open the run record
-        # Before the model runs, for the same reason the watchdog does it: a
-        # run that dies mid-review must not be indistinguishable from a run
+        # Before anything is filed, for the same reason the watchdog does it: a
+        # run that dies mid-apply must not be indistinguishable from a run
         # that never happened.
         run: |
           set -euo pipefail
@@ -137,47 +258,36 @@ jobs:
             --triggered-by "$TRIGGERED_BY" \
             $ARGS
 
-      - name: Run the continuous-improvement review
-        id: review
-        # Degrades to a recorded no-op rather than a failure when no API key is
-        # configured: the review is the only part of this workflow that needs a
-        # model, so a key-less repository still gets an honest "ran, proposed
-        # nothing" record instead of a red run every Monday.
-        if: ${{ env.HAS_API_KEY == 'true' }}
+      - name: Download the proposal artifact
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: continuous-improvement-proposals
+          path: ${{ runner.temp }}/proposals
+
+      - name: Validate the proposal artifact
+        id: validate
+        # The gate. Exact keys, bounded sizes, a label allowlist and a
+        # proposal cap; anything else exits 1 and nothing below runs.
         env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PROPOSAL_FILE: ${{ runner.temp }}/proposals/proposals.json
+        run: node scripts/validate-proposal-artifact.mjs --kind continuous-improvement "$PROPOSAL_FILE"
+
+      - name: File the validated proposals as issues
+        id: file
+        if: ${{ env.CREATE_ISSUES == 'true' && env.DRY_RUN != 'true' }}
+        env:
+          PROPOSAL_FILE: ${{ runner.temp }}/proposals/proposals.json
         run: |
-          set -euo pipefail
-          npm install --global --no-fund --no-audit @anthropic-ai/claude-code
-
-          CREATE_FLAG=""
-          if [ "$CREATE_ISSUES" = "true" ] && [ "$DRY_RUN" != "true" ]; then
-            CREATE_FLAG="--create-issues"
-          fi
-
-          # Prompt on stdin with `-p`, matching the pipeline's own Claude
-          # adapter (internal/execution/adapters/claude.go). Not the
-          # `/nightgauge:continuous-improvement` slash command: that resolves
-          # through the plugin marketplace, which is not installed on a hosted
-          # runner. --allowedTools mirrors the SKILL.md frontmatter.
-          claude -p \
-            --no-session-persistence \
-            --allowedTools "Bash,Read,Write,Glob,Grep" \
-            --max-turns 80 <<PROMPT
-          Execute the skill at skills/nightgauge-continuous-improvement/SKILL.md
-          in this repository, headlessly, with these arguments:
-
-            --mode ${MODE} ${CREATE_FLAG}
-
-          Record the outcome in .nightgauge/improvement-runs/latest.json,
-          preserving the keys already in that file.
-          PROMPT
+          bash scripts/apply-proposal-artifact.sh \
+            --kind continuous-improvement \
+            --file "$PROPOSAL_FILE" \
+            --record "$RECORD"
 
       - name: Close the run record
         if: ${{ always() }}
         env:
-          REVIEW_OUTCOME: ${{ steps.review.outcome }}
+          VALIDATE_OUTCOME: ${{ steps.validate.outcome }}
+          FILE_OUTCOME: ${{ steps.file.outcome }}
         run: |
           set -euo pipefail
           STATUS=completed
@@ -192,6 +302,13 @@ jobs:
               ERROR="no ANTHROPIC_API_KEY configured — recorded without a review"
               ;;
           esac
+          if [ "$VALIDATE_OUTCOME" = "failure" ]; then
+            STATUS=failed
+            ERROR="proposal artifact rejected by the schema gate — nothing was filed"
+          elif [ "$FILE_OUTCOME" = "failure" ]; then
+            STATUS=failed
+            ERROR="issue creation failed — see the workflow run log"
+          fi
           python3 scripts/discovery-run-record.py close \
             --kind continuous-improvement \
             --mode "$MODE" \
@@ -209,13 +326,13 @@ jobs:
         if: ${{ always() }}
         env:
           GATE_REASON: ${{ needs.gate.outputs.reason }}
-          REVIEW_OUTCOME: ${{ steps.review.outcome }}
+          VALIDATE_OUTCOME: ${{ steps.validate.outcome }}
         run: |
           {
             echo "### Continuous improvement"
             echo
             echo "- mode: \`$MODE\`"
-            echo "- review: \`$REVIEW_OUTCOME\`"
+            echo "- review: \`$REVIEW_OUTCOME\`; artifact: \`$VALIDATE_OUTCOME\`"
             echo "- issue creation: \`$CREATE_ISSUES\` ($GATE_REASON)"
             echo
             echo "Run \`scripts/discovery-state-sync.sh\` locally to see this in the Discovery tab."

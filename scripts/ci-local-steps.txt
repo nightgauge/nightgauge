@@ -24,6 +24,7 @@ Band-vocabulary gate regression suite
 visibility-prose reintroduction gate
 Workflow-reference gate regression suite
 nonexistent-workflow-reference gate
+Proposal-artifact validator regression suite
 CLA gate regression suite
 Cache-boundary measurement smoke
 VSCode test-tree typecheck
