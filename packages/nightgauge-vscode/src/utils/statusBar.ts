@@ -196,7 +196,7 @@ export class StatusBarManager {
     const showBadge = this.customOverridesActive || this.performanceMode !== "elevated";
     const profile = MODE_PROFILES[this.performanceMode];
     const modeBadge = showBadge ? " ⚡" : "";
-    this.item.text = `$(nightgauge) Nightgauge${modeBadge}`;
+    this.item.text = `$(dashboard) Nightgauge${modeBadge}`;
     this.item.tooltip = this.customOverridesActive
       ? "Nightgauge — Mode: Custom (per-stage models) — Click to open Dashboard"
       : showBadge
