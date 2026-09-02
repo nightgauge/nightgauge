@@ -44,7 +44,15 @@ RUN curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" | bash - \
     && rm -rf /var/lib/apt/lists/*
 
 # VS Code stable from the official .deb for this image's architecture.
-RUN ARCH="$(dpkg --print-architecture)" \
+# VS Code names the amd64 build `x64` in its download URLs while dpkg says
+# `amd64`; arm64 happens to agree. Passing dpkg's name straight through
+# 404s on every amd64 runner (curl exit 22) — which is exactly where the CI
+# gate runs — while building fine on an Apple Silicon laptop.
+RUN case "$(dpkg --print-architecture)" in \
+      amd64) ARCH=x64 ;; \
+      arm64) ARCH=arm64 ;; \
+      *) echo "unsupported architecture: $(dpkg --print-architecture)" >&2; exit 1 ;; \
+    esac \
     && curl -fsSL -o /tmp/code.deb "https://update.code.visualstudio.com/latest/linux-deb-${ARCH}/stable" \
     && apt-get update \
     && apt-get install -y --no-install-recommends /tmp/code.deb \
