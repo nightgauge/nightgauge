@@ -5907,9 +5907,6 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       // Check for active authentication
       const isAuthenticated = output.includes("Logged in to");
 
-      // Check for repo scope (required for PR creation/merge)
-      const hasRepoScope = /\brepo\b/.test(output);
-
       if (!isAuthenticated) {
         return {
           isAuthenticated: false,
@@ -5918,14 +5915,57 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         };
       }
 
-      if (!hasRepoScope) {
-        return {
-          isAuthenticated: true,
-          hasRequiredScopes: false,
-          errorMessage:
-            "GitHub token lacks required `repo` scope for PR operations. " +
-            "Run `gh auth refresh -s repo` to add the scope.",
-        };
+      // Only classic OAuth tokens advertise scopes ("Token scopes: 'gist',
+      // 'repo'"). Fine-grained PATs (github_pat_…) and GitHub App tokens
+      // (ghs_…) carry per-repository permissions instead and `gh auth status`
+      // prints no scopes line for them — the clean-install gate's fine-grained
+      // token was refused here with "lacks required `repo` scope" while
+      // holding full Contents/Issues/Pull-requests write on the repository.
+      // So: a token that advertises scopes must list `repo`; a token that does
+      // not is checked by what it can actually do — its permission on the
+      // repository the pipeline is about to push to.
+      const scopesLine = output.match(/Token scopes:\s*(.*)/);
+      const advertisedScopes = scopesLine ? scopesLine[1].trim() : "";
+      const advertisesScopes = advertisedScopes !== "" && !/^none\b/i.test(advertisedScopes);
+
+      if (advertisesScopes) {
+        if (!/\brepo\b/.test(advertisedScopes)) {
+          return {
+            isAuthenticated: true,
+            hasRequiredScopes: false,
+            errorMessage:
+              "GitHub token lacks required `repo` scope for PR operations. " +
+              "Run `gh auth refresh -s repo` to add the scope.",
+          };
+        }
+      } else {
+        let permission = "";
+        let probeError = "";
+        try {
+          const { stdout } = await execAsync(
+            "gh repo view --json viewerPermission --jq .viewerPermission",
+            { encoding: "utf-8", cwd: workspaceRoot, timeout: 15000 }
+          );
+          permission = stdout.trim();
+        } catch (probeErr) {
+          probeError = [
+            probeErr instanceof Error ? probeErr.message : String(probeErr),
+            (probeErr as { stderr?: string })?.stderr ?? "",
+          ]
+            .join(" ")
+            .trim();
+        }
+        if (!["WRITE", "MAINTAIN", "ADMIN"].includes(permission)) {
+          return {
+            isAuthenticated: true,
+            hasRequiredScopes: false,
+            errorMessage:
+              "GitHub token cannot push to this repository " +
+              `(viewerPermission=${permission || "unknown"}${probeError ? `; ${probeError}` : ""}). ` +
+              "A fine-grained token needs Contents, Issues and Pull requests read/write on it; " +
+              "a classic token needs the `repo` scope (`gh auth refresh -s repo`).",
+          };
+        }
       }
 
       // Rate-limit headroom check (best-effort — IPC failure should not
