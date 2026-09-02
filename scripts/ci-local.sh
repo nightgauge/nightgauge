@@ -54,6 +54,9 @@ REQUIRED_FILES=(
   scripts/check-visibility-prose.py
   scripts/test-workflow-refs-check.sh
   scripts/check-workflow-refs.py
+  scripts/validate-proposal-artifact.mjs
+  scripts/apply-proposal-artifact.sh
+  scripts/test-validate-proposal-artifact.sh
   .github/scripts/cla-check.test.mjs
   scripts/test-measure-cache-boundary-loss.sh
   scripts/validate-phase-markers.ts
@@ -468,6 +471,11 @@ run_step "visibility-prose reintroduction gate" python3 scripts/check-visibility
 # a gate nothing exercises degrades into an unconditional pass.
 run_group "Workflow-reference gate regression suite" bash scripts/test-workflow-refs-check.sh
 run_step "nonexistent-workflow-reference gate" python3 scripts/check-workflow-refs.py
+
+# 5f2. Proposal-artifact validator regression suite (#1304) — the schema gate
+# between the read-only model job and the write job in release-watchdog.yml
+# and continuous-improvement.yml. Every case is a shape the gate must reject.
+run_group "Proposal-artifact validator regression suite" bash scripts/test-validate-proposal-artifact.sh
 
 # 5g. CLA gate regression suite (#976) — spawns the real .github/scripts/cla-check.mjs
 #     against a local HTTP stub and pins its bounded retry: a transient 5xx/429

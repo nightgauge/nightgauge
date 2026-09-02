@@ -27,9 +27,59 @@ not opted in — see [Configuration](#configuration). Both also support
 
 ## How a Run Works
 
-Each workflow is two jobs: a `gate` that reads the config, and the run itself.
-The gate is separate so a switched-off loop costs one five-minute job and says
-why in the run summary, instead of silently doing nothing inside a long job.
+Each workflow is three jobs: `gate` → `analyze` → `apply`. The gate is
+separate so a switched-off loop costs one five-minute job and says why in the
+run summary, instead of silently doing nothing inside a long job. The other two
+are separate for a security reason: **the job that runs the model holds no
+write scope and no forge token, and the job that writes runs no model.**
+
+### Why the model and the write scopes are in different jobs
+
+Both skills run `claude -p` with Bash over text this repository does not
+control — third-party release notes for release-watch, and commit messages,
+telemetry and skill epilogues for the weekly review. A single job that did that
+while also holding `contents: write`, `issues: write` and a `GH_TOKEN` was a
+prompt-injection-to-write path: a crafted release note could have filed
+anything or pushed to the state branch (issue 1304). So:
+
+- **`analyze`** runs with `permissions: contents: read`, checks out with
+  `persist-credentials: false`, and the `claude` step's environment contains
+  only `ANTHROPIC_API_KEY` and a scratch path. Anything it needs from GitHub
+  (the release payload) is fetched by an earlier step whose read token is
+  step-scoped and gone before the model starts. The skill is invoked with
+  `--dry-run` and told to write **one JSON proposal file** under
+  `$RUNNER_TEMP`, which is uploaded as a workflow artifact.
+- **`apply`** (`needs: [gate, analyze]`) holds `contents: write` and
+  `issues: write`, downloads the artifact, runs
+  `scripts/validate-proposal-artifact.mjs`, and only if that exits 0 files
+  issues with `scripts/apply-proposal-artifact.sh` (`gh issue create`, exact
+  title dedupe across open and closed issues, run-record bookkeeping), then
+  advances last-seen, closes the run record and publishes the state branch.
+  It runs with `always()` so a failed or rejected analysis is still recorded
+  as a `failed` run rather than left `running`.
+
+### The proposal artifact
+
+```json
+{
+  "schema": 1,
+  "kind": "release-watch",
+  "proposals": [{ "title": "…", "body": "…", "labels": ["source:auto-discovery"] }]
+}
+```
+
+The validator is a closed rule table, and `apply-proposal-artifact.sh` re-runs
+it before touching `gh` so a workflow that forgot the step still cannot file
+from an unchecked file. It rejects anything but: exactly these keys at each
+level; `schema` 1; `kind` equal to the workflow's; at most 10 proposals; a
+one-line title of 1–200 characters; a body of 1–20000 characters with no control
+characters beyond tab and newline; 1–6 unique labels from a per-kind allowlist
+(`source:auto-discovery`, `<provider>-release`, `component:*`, `priority:*`,
+`type:*` for release-watch; `continuous-improvement`, `priority:*`, `type:*`
+for the weekly review) that must include the kind's provenance label; and a
+file under 1 MiB. Exit `0` valid, `1` rejected, `2` usage error.
+`scripts/test-validate-proposal-artifact.sh` asserts every rule goes red and is
+part of `scripts/ci-local.sh`.
 
 ### Release-Watch (daily)
 
@@ -37,29 +87,36 @@ why in the run summary, instead of silently doing nothing inside a long job.
    `autonomous_discovery.enabled`, `scheduled_tasks.release_watch.enabled`,
    `kill_switch` and `score_threshold`. It **fails closed**: a missing,
    unreadable or unparseable config resolves to "disabled", never to defaults.
-2. **Carry state forward** — `scripts/discovery-state-sync.sh` fetches the last
-   run's `last-seen-<provider>.json` from the `discovery-state` branch. Without
-   this the runner would start from `0.0.0` every morning.
-3. **Detect** — `nightgauge release fetch --source <repo> --since <last-seen>`.
-   This is deterministic Go (`internal/cmd/release`), model-free, and drops
-   drafts and prereleases.
-4. **Open the run record** — `scripts/discovery-run-record.py open` writes a
-   `status: running` record _before_ any model work.
-5. **Assess** — when a release was found, the kill switch is off, and
+2. **Analyze: carry state forward** — `scripts/discovery-state-sync.sh` fetches
+   the last run's `last-seen-<provider>.json` from the `discovery-state` branch
+   (an unauthenticated fetch). Without this the runner would start from
+   `0.0.0` every morning.
+3. **Analyze: detect** — `nightgauge release fetch --source <repo> --since
+<last-seen>`. This is deterministic Go (`internal/cmd/release`), model-free,
+   and drops drafts and prereleases. The step-scoped read token ends here.
+4. **Analyze: assess** — when a release was found, the kill switch is off, and
    `ANTHROPIC_API_KEY` is configured, the release-watch skill runs headlessly
-   and files issues for changes scoring at or above `score_threshold`. Changes
-   below it go to `.nightgauge/release-watch/backlog.json`.
-6. **Advance last-seen** — including in detection-only mode, so the same release
-   is not re-detected forever.
-7. **Close the run record and publish** — `discovery-run-record.py close` stamps
-   the terminal status, and `scripts/discovery-state-publish.sh` pushes the
-   result to the `discovery-state` branch.
+   in `--dry-run` and writes a proposal for each change scoring at or above
+   `score_threshold`. An empty artifact is written first, so a skipped or
+   failed assessment still uploads a well-formed "proposed nothing".
+5. **Apply: open the run record** — `scripts/discovery-run-record.py open`
+   writes a `status: running` record _before_ anything is filed.
+6. **Apply: validate and file** — download, validate, `gh issue create` per
+   accepted proposal (when `create_issues` is on and not a dry run).
+7. **Apply: advance last-seen** — including in detection-only mode, so the same
+   release is not re-detected forever.
+8. **Apply: close the run record and publish** — `discovery-run-record.py
+close` stamps the terminal status (a rejected artifact is a `failed` run
+   with "nothing was filed"), and `scripts/discovery-state-publish.sh` pushes
+   the result to the `discovery-state` branch.
 
 ### Continuous Improvement (weekly)
 
-The same shape, with the review skill in place of release-watch: gate → carry
-state forward → open record → run the review (`--mode dogfood` by default) →
-close record → publish. The review is the only model-driven step.
+The same shape, with the review skill in place of release-watch: gate →
+analyze (carry state forward, run the review in `--dry-run` with
+`--mode dogfood` by default, upload the artifact) → apply (open record,
+validate, file, close record, publish). The review is the only model-driven
+step, and it runs where there is nothing to write with.
 
 ### Why the record is opened before the work
 
@@ -264,8 +321,10 @@ was used. The discriminator is the log line
 `no ANTHROPIC_API_KEY configured — recorded without a review`: present means
 degraded, absent means the key was picked up.
 
-`GITHUB_TOKEN` is supplied by Actions; the jobs request `contents: write` (to
-push the state branch) and `issues: write` (for the skills).
+`GITHUB_TOKEN` is supplied by Actions. Only the `apply` job requests
+`contents: write` (to push the state branch) and `issues: write` (to file the
+validated proposals); the `analyze` job that runs the model is `contents: read`
+and never sees the token.
 
 ---
 
@@ -277,7 +336,8 @@ push the state branch) and `issues: write` (for the skills).
 | Dashboard shows "No discovery activity yet"      | No state has been synced into this checkout          | Run `scripts/discovery-state-sync.sh`                                     |
 | Sync says the branch does not exist              | No run has published yet                             | Dispatch a run, or check whether the gate is skipping every scheduled run |
 | Run recorded, zero issues created                | `kill_switch: true`, or no `ANTHROPIC_API_KEY`       | Check the run summary's "issue creation" line                             |
-| Same release detected every day                  | `last-seen` never advanced — the publish step failed | Check the "Publish state" step; it needs `contents: write`                |
+| Same release detected every day                  | `last-seen` never advanced — the publish step failed | Check the `apply` job's "Publish state" step; it needs `contents: write`  |
+| Run `failed` with "proposal artifact rejected"   | The model wrote a file outside the schema            | Read the "Validate the proposal artifact" step; nothing was filed         |
 | Backlog grows but no issues created              | `score_threshold` too high                           | Lower `autonomous_discovery.score_threshold`                              |
 | Tab shows a run stuck in "running"               | The run was cancelled between `open` and `close`     | Expected, and deliberate — the next run replaces the record               |
 
