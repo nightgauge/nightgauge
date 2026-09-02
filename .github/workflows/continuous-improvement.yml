@@ -84,7 +84,7 @@ jobs:
         # silently mean "never run" rather than "run with defaults".
         run: |
           set -euo pipefail
-          python3 -m pip install --disable-pip-version-check PyYAML==6.0.3
+          python3 -m pip install --disable-pip-version-check -r .github/requirements-ci.txt
 
       - name: Read .nightgauge/config.yaml
         id: gate

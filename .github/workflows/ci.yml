@@ -206,7 +206,7 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         if: ${{ needs.changes.outputs.run_heavy != 'false' }}
         with:
-          node-version: 24
+          node-version-file: .nvmrc
           cache: npm
           cache-dependency-path: package-lock.json
       - name: Install
@@ -244,7 +244,7 @@ jobs:
       # was guaranteed to fail on exactly that classification.
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 24
+          node-version-file: .nvmrc
           cache: npm
           cache-dependency-path: package-lock.json
       - name: Install
@@ -297,7 +297,7 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         if: ${{ needs.changes.outputs.run_heavy != 'false' }}
         with:
-          node-version: 24
+          node-version-file: .nvmrc
           cache: npm
           cache-dependency-path: package-lock.json
       - name: Install
@@ -390,7 +390,7 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         if: ${{ needs.changes.outputs.run_heavy != 'false' }}
         with:
-          node-version: 24
+          node-version-file: .nvmrc
           cache: npm
           cache-dependency-path: package-lock.json
       - name: Install
@@ -432,7 +432,7 @@ jobs:
           cache-dependency-path: go.sum
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 24
+          node-version-file: .nvmrc
           cache: npm
           cache-dependency-path: package-lock.json
       - name: Install Node dependencies
@@ -473,7 +473,7 @@ jobs:
         # fails on any copyleft/proprietary production license.
         run: |
           DENY='GPL-1.0;GPL-2.0;GPL-3.0;LGPL-2.0;LGPL-2.1;LGPL-3.0;AGPL-1.0;AGPL-3.0;SSPL-1.0;CC-BY-NC-4.0;UNLICENSED'
-          npx license-checker --production --excludePrivatePackages --start packages/nightgauge-sdk --failOn "$DENY"
-          npx license-checker --production --excludePrivatePackages --start packages/nightgauge-vscode --failOn "$DENY"
+          npx license-checker@25.0.1 --production --excludePrivatePackages --start packages/nightgauge-sdk --failOn "$DENY"
+          npx license-checker@25.0.1 --production --excludePrivatePackages --start packages/nightgauge-vscode --failOn "$DENY"
       - name: License-header guard (source + build output)
         run: bash scripts/check-license-headers.sh

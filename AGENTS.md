@@ -118,7 +118,7 @@ git push -u origin feat/description-of-change
   judgement.
 
   The `main` ruleset requires **zero** approving reviews (single maintainer), so
-  the plain squash merge succeeds on its own and GitHub itself enforces the 12
+  the plain squash merge succeeds on its own and GitHub itself enforces the 14
   required status checks. That enforcement is the point: a merge must be
   impossible while a check is red or pending, not merely discouraged.
 

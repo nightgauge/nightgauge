@@ -1,22 +1,32 @@
 # VS Code Marketplace publish (Gate 2), on demand — #1299.
 #
-# This is the ONLY Marketplace publish path. release.yml builds the per-target
-# VSIXs and attaches them to the GitHub Release; it never publishes to the
-# Marketplace. This workflow is re-runnable on its own: check out a tag, build
-# the per-target binaries and VSIXs exactly as release.yml does (pre-release
-# for 0.x), verify the PAT against the publisher, attest, publish. It never
-# touches the GitHub Release or the Homebrew tap.
+# This is the ONLY Marketplace / Open VSX publish path. release.yml builds the
+# per-target VSIXs and attaches them to the GitHub Release; it never publishes
+# to a registry. This workflow is re-runnable on its own: build the per-target
+# binaries and VSIXs exactly as release.yml does (pre-release for 0.x), verify
+# the PAT against the publisher, attest, publish. It never touches the GitHub
+# Release or the Homebrew tap.
+#
+# Dispatch it ON THE TAG, never from a branch:
+#
+#   gh workflow run marketplace-publish.yml --ref v0.2.2 -f registries=both
+#
+# The tag is the run's own ref (`github.ref`), not a free-text input, for three
+# reasons: the build-provenance attestation then names the tag's commit as the
+# source (a dispatch from `main` would attest whatever `main` pointed at); the
+# `production` environment's tag-only branch policy applies, exactly as it does
+# to release.yml; and the workflow definition that runs is the one at the tag,
+# so a publish is reproducible against the tagged tree. A fix to this file
+# therefore ships by tagging the fix, which is the correct unit anyway.
 #
 # Secrets: VSCE_PAT (Azure DevOps PAT, Marketplace: Manage, all accessible
-# organizations, owned by a member of the `nightgauge` publisher).
+# organizations, owned by a member of the `nightgauge` publisher) and OVSX_PAT
+# (an Open VSX access token for the `nightgauge` namespace).
 name: Marketplace publish
 
 on:
   workflow_dispatch:
     inputs:
-      tag:
-        description: "Release tag to publish (e.g. v0.2.1); must already exist"
-        required: true
       registries:
         description: "Where to publish"
         required: true
@@ -41,12 +51,13 @@ concurrency:
 
 jobs:
   publish:
-    name: Package ${{ inputs.tag }} and publish (${{ inputs.registries }})
+    name: Package ${{ github.ref_name }} and publish (${{ inputs.registries }})
     runs-on: ubuntu-latest
-    timeout-minutes: 20
-    # No `environment: production` here: that environment admits tag refs only
-    # (release.yml runs on tags) and rejected the first dispatch from `main`.
-    # VSCE_PAT is a repository secret, so nothing here needs the environment.
+    timeout-minutes: 30
+    # The `production` environment admits `v*` tag refs only, so a dispatch
+    # from a branch is refused by GitHub before a runner is assigned -- the
+    # same gate release.yml runs behind.
+    environment: production
 
     permissions:
       contents: read
@@ -54,10 +65,25 @@ jobs:
       attestations: write # artifact attestations
 
     steps:
+      - name: Require a stable release tag as the run's ref
+        # Fails before anything is checked out: the environment policy above
+        # already refuses branches, and this rejects rc tags (the Marketplace
+        # publishes stable tags only; 0.x lands on the pre-release channel by
+        # version, not by tag suffix) and anything that is not vX.Y.Z.
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          [[ "$REF_TYPE" == "tag" ]] || { echo "::error::dispatch this workflow on a release tag (--ref vX.Y.Z), not '$TAG' ($REF_TYPE)"; exit 1; }
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::'$TAG' is not a stable release tag (vX.Y.Z); rc tags are not published"; exit 1; }
+
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.tag }}
+          # Nothing here pushes; do not leave a token in .git/config for npm
+          # postinstall scripts or the packaging tools to find.
+          persist-credentials: false
           fetch-depth: 0
 
       - name: Ensure full working tree
@@ -65,10 +91,10 @@ jobs:
           git sparse-checkout disable 2>/dev/null || true
           git checkout -- . 2>/dev/null || true
 
-      - name: Setup Node 24
+      - name: Setup Node (from .nvmrc)
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 24
+          node-version-file: .nvmrc
           cache: npm
           cache-dependency-path: package-lock.json
 
@@ -88,14 +114,13 @@ jobs:
       - name: Extract version from tag
         id: version
         env:
-          TAG: ${{ inputs.tag }}
+          TAG: ${{ github.ref_name }}
+          SHA: ${{ github.sha }}
         run: |
+          set -euo pipefail
           VERSION="${TAG#v}"
-          if [[ "$VERSION" == *-* ]]; then
-            echo "ERROR: '$TAG' is a pre-release tag; the Marketplace publishes stable tags only (0.x goes to the pre-release channel by version, not by tag suffix)."
-            exit 1
-          fi
-          git rev-parse -q --verify "refs/tags/$TAG" >/dev/null || { echo "ERROR: tag $TAG does not exist"; exit 1; }
+          # The checkout is the tag by construction; assert it rather than trust it.
+          [[ "$(git rev-parse "refs/tags/$TAG^{commit}")" == "$SHA" ]] || { echo "ERROR: checkout $SHA is not tag $TAG"; exit 1; }
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
@@ -169,7 +194,7 @@ jobs:
       # continue — a missing stamp is a hard fail, not a silent skip.
       - name: Stamp build provenance
         env:
-          BUILD_BRANCH: ${{ inputs.tag }}
+          BUILD_BRANCH: ${{ github.ref_name }}
         run: |
           DIST=packages/nightgauge-vscode/dist
           BUILD_SHA=$(git rev-parse HEAD)

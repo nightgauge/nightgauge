@@ -91,13 +91,28 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      - name: Validate dispatch inputs
+        # Every downstream job binds these through env (never interpolated),
+        # so they are data, not code -- but `provider` becomes a path segment
+        # and `source` reaches the forge CLI, so reject anything outside the
+        # shapes they are meant to hold before any job spends a runner on it.
+        env:
+          PROVIDER: ${{ inputs.provider || 'claude-code' }}
+          SOURCE: ${{ inputs.source || 'anthropics/claude-code' }}
+          SINCE_OVERRIDE: ${{ inputs.since }}
+        run: |
+          set -euo pipefail
+          [[ "$PROVIDER" =~ ^[a-z0-9][a-z0-9-]{0,63}$ ]] || { echo "::error::provider must be a lowercase slug, got '$PROVIDER'"; exit 1; }
+          [[ "$SOURCE" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || { echo "::error::source must be owner/repo, got '$SOURCE'"; exit 1; }
+          [[ -z "$SINCE_OVERRIDE" || "$SINCE_OVERRIDE" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]] || { echo "::error::since must be a bare semver (no leading v), got '$SINCE_OVERRIDE'"; exit 1; }
+
       - name: Install the gate's pinned parser dependency
         # Hosted runner images do not promise PyYAML, and the gate fails closed
         # if it cannot parse the config — so an unpinned import error would
         # silently mean "never run" rather than "run with defaults".
         run: |
           set -euo pipefail
-          python3 -m pip install --disable-pip-version-check PyYAML==6.0.3
+          python3 -m pip install --disable-pip-version-check -r .github/requirements-ci.txt
 
       - name: Read .nightgauge/config.yaml
         id: gate

@@ -7,6 +7,13 @@ The 2026-08-20 run (the sections after _What is left_) recorded the last
 published tag as **`v0.2.0-rc.23`** and set `v0.2.0-rc.24` as the candidate;
 `v0.2.0-rc.24` has since been tagged and `main` has moved on.
 
+**Status (2026-09-02): 0.2.2 is shipped** on every channel the release plan
+names — GitHub Release, Homebrew cask, VS Code Marketplace (pre-release
+channel) and Open VSX (pre-release). See _Post-release audit_ for what was
+verified against the live registries afterwards and what remains with the
+owner. The sections below are the record of how it got there; rows marked
+**Open** at the time now carry their closing evidence.
+
 Green CI on a PR is a prediction. The merge commit on `main` is the
 observation. Do not tag until that post-merge observation is green.
 
@@ -33,12 +40,12 @@ maintainer's install, which is exactly what G1 does not accept as evidence.
 
 ### Code readiness
 
-| #   | Gate                                                                                                                               | State                                                                                                                                                                              |
-| --- | ---------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| C1  | No open issue claims install, activation, or any of the six core stages fails for a single-repo user on their own keys             | **Done.** 92-issue v1 triage (2026-08-24): 0 block v1. Re-run the triage over bugs filed since before tagging.                                                                     |
-| C2  | Publish-blocker list empty (the four tests: stranger's first hour; no destructive or costly failure; fails loudly; clean boundary) | **2 left** of 11: #442 (compose reconcile can tear down a live stack outside the workspace) and #490 (merge-lock goroutine wedges on cancel). Fix or document both before tagging. |
-| C3  | `main`'s own post-merge run green at the release commit (not the PR prediction)                                                    | Re-check at tag time. The scheduled staging smoke attaching to head is not a merge regression — read the job name.                                                                 |
-| C4  | Known-issues baseline reviewed                                                                                                     | **Done** (below) — nothing in it is a product defect.                                                                                                                              |
+| #   | Gate                                                                                                                               | State                                                                                                                                                          |
+| --- | ---------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| C1  | No open issue claims install, activation, or any of the six core stages fails for a single-repo user on their own keys             | **Done.** 92-issue v1 triage (2026-08-24): 0 block v1. Re-run the triage over bugs filed since before tagging.                                                 |
+| C2  | Publish-blocker list empty (the four tests: stranger's first hour; no destructive or costly failure; fails loudly; clean boundary) | **Done** — all 11 closed; the last two, #442 (compose reconcile bounded to workspace roots) and #490 (dead merge-lock manager deleted), landed before the tag. |
+| C3  | `main`'s own post-merge run green at the release commit (not the PR prediction)                                                    | **Done** — `v0.2.2` is `1ac50c6f`; that commit's own run on `main`: 18 success, 2 skipped, 0 failed (re-read 2026-09-02).                                      |
+| C4  | Known-issues baseline reviewed                                                                                                     | **Done** (below) — nothing in it is a product defect.                                                                                                          |
 
 ### The listing is true
 
@@ -50,9 +57,9 @@ metadata and the CHANGELOG. Each must describe the product that ships.
 | L1  | Telemetry disclosure matches the code (opt-out, on by default, nothing uploaded without a license key or sign-in)       | **Done** — #1134. README previously claimed opt-in.                                                                                                     |
 | L2  | No relative links in the README (they 404 on the listing page)                                                          | **Done** — #1134.                                                                                                                                       |
 | L3  | `qna`, `pricing`, `galleryBanner`, `icon`, `license`, `homepage`, `bugs`, `repository` present; VSIX ships no dev files | **Done** — #1134 (`qna`, `pricing: Free`; test tsconfigs, `scripts/**` and stray `.vsix` excluded).                                                     |
-| L4  | The README states which adapter path is the supported one and does not advertise autonomous multi-repo mode as finished | **Open** — #1136. The v1 triage's honest-risk section: non-default adapters are rougher; multi-repo/autonomous is less finished.                        |
+| L4  | The README states which adapter path is the supported one and does not advertise autonomous multi-repo mode as finished | **Done** — #1136 / #1289: supported-adapter sentence, no autonomous-production claim.                                                                   |
 | L5  | Gallery imagery is generated from the product, not drawn, and regenerable in one command                                | **Done** — #1134 (`npm run -w nightgauge-vscode marketing:screenshots`). The six hand-captured README images still exist; replace or keep deliberately. |
-| L6  | CHANGELOG has an entry for the version being tagged                                                                     | **Open** — #1136. Only `[0.2.0] - 2026-07-28` exists and `main` is far past it.                                                                         |
+| L6  | CHANGELOG has an entry for the version being tagged                                                                     | **Done** — `[0.2.2]` and `[0.2.1]` entries, with a note that `0.2.0` never shipped (#1296).                                                             |
 | L7  | Privacy policy and terms the README links to exist and name the right entity                                            | **Done on the site side** (nightgauge.dev `/privacy/`, `/terms/`, sub-processors as a section); README links `/privacy/` — #1134.                       |
 
 ### Every surface is real
@@ -71,14 +78,14 @@ three.
 
 ### The publish path
 
-| #   | Gate                                                                                                                             | State                                                                                                                                                                                                                                                                                                                                                                                  |
-| --- | -------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| P1  | `release.yml` has fired at least once on a stable tag (dogfood-readiness gate D2)                                                | **Done 2026-09-02** — run 33598909653 on `v0.2.1`: GitHub Release (11 assets: 3 CLI archives + SBOMs, checksums, manifest, 3 per-target VSIXs, all attested), cask PR `homebrew-tap#8` merged. The first attempt on `v0.2.0` exposed #1296 (GoReleaser released the rc tag on the same commit); `v0.2.0` stays tagged, unpublished.                                                    |
-| P2  | Marketplace publish is its own manual dispatch (`marketplace-publish.yml`, #1299) that runs `vsce verify-pat` before any publish | **Done** — `marketplace-publish.yml` is the one publish path (#1300, #1307): it verifies `VSCE_PAT` against the publisher before building, packages 0.x as pre-release, attests, publishes. `MARKETPLACE_PUBLISH` is gone. The July PAT was rejected (401) on 2026-09-02 and replaced by the owner the same day.                                                                       |
-| P3  | 0.x publishes to the Marketplace **pre-release** channel                                                                         | **Done and exercised** — `marketplace-publish.yml` run 33632797220 published `v0.2.2` for darwin-arm64, darwin-x64 and linux-x64 on 2026-09-02 13:00Z with `--pre-release`; each VSIX carries `PreRelease=true` in its manifest.                                                                                                                                                       |
-| P4  | Open VSX                                                                                                                         | **Done 2026-09-02 17:39Z** — `marketplace-publish.yml` run 33661929053 (`registries=open-vsx`) published 0.2.2 for all three targets as pre-release; https://open-vsx.org/extension/nightgauge/nightgauge-vscode is live. Namespace ownership verification is pending with the Open VSX maintainers (their issue 12972); until it lands the listing shows the namespace as unverified. |
-| P5  | Recut the release candidate at the release commit; do not publish an older RC's artifacts                                        | **Done** — `v0.2.0-rc.25` (staging, green) at `35234944`, then `v0.2.0` there (unpublished, #1296), then `v0.2.1` at `57852243` = the same tree plus the release-pipeline fix and changelog.                                                                                                                                                                                           |
-| P6  | After the merge: the 72-hour quiet soak, then the announcement, then the Marketplace flip                                        | **Gate 1 complete 2026-09-02 06:40Z** (`v0.2.1`: release + cask). **Gate 2 complete 2026-09-02 13:00Z** (`v0.2.2`: Marketplace pre-release channel; cask and GitHub Release also at 0.2.2). The listing appears once the Marketplace finishes its post-publish verification. Soak to 2026-09-05; announce after.                                                                       |
+| #   | Gate                                                                                                                             | State                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| --- | -------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| P1  | `release.yml` has fired at least once on a stable tag (dogfood-readiness gate D2)                                                | **Done 2026-09-02** — run 33598909653 on `v0.2.1`: GitHub Release (11 assets: 3 CLI archives + SBOMs, checksums, manifest, 3 per-target VSIXs, all attested), cask PR `homebrew-tap#8` merged. The first attempt on `v0.2.0` exposed #1296 (GoReleaser released the rc tag on the same commit); `v0.2.0` stays tagged, unpublished.                                                                                                  |
+| P2  | Marketplace publish is its own manual dispatch (`marketplace-publish.yml`, #1299) that runs `vsce verify-pat` before any publish | **Done** — `marketplace-publish.yml` is the one publish path (#1300, #1307): it verifies `VSCE_PAT` against the publisher before building, packages 0.x as pre-release, attests, publishes. `MARKETPLACE_PUBLISH` is gone. The July PAT was rejected (401) on 2026-09-02 and replaced by the owner the same day. Since the post-release audit it is dispatched **on the tag** (`--ref vX.Y.Z`), behind the `production` environment. |
+| P3  | 0.x publishes to the Marketplace **pre-release** channel                                                                         | **Done and exercised** — `marketplace-publish.yml` run 33632797220 published `v0.2.2` for darwin-arm64, darwin-x64 and linux-x64 on 2026-09-02 13:00Z with `--pre-release`; each VSIX carries `PreRelease=true` in its manifest.                                                                                                                                                                                                     |
+| P4  | Open VSX                                                                                                                         | **Done 2026-09-02 17:39Z** — `marketplace-publish.yml` run 33661929053 (`registries=open-vsx`) published 0.2.2 for all three targets as pre-release; https://open-vsx.org/extension/nightgauge/nightgauge-vscode is live. Namespace ownership verification is pending with the Open VSX maintainers (their issue 12972); until it lands the listing shows the namespace as unverified.                                               |
+| P5  | Recut the release candidate at the release commit; do not publish an older RC's artifacts                                        | **Done** — `v0.2.0-rc.25` (staging, green) at `35234944`, then `v0.2.0` there (unpublished, #1296), then `v0.2.1` at `57852243` = the same tree plus the release-pipeline fix and changelog.                                                                                                                                                                                                                                         |
+| P6  | After the merge: the 72-hour quiet soak, then the announcement, then the Marketplace flip                                        | **Gate 1 complete 2026-09-02 06:40Z** (`v0.2.1`: release + cask). **Gate 2 complete 2026-09-02 13:00Z** (`v0.2.2`: Marketplace pre-release channel; cask and GitHub Release also at 0.2.2). The listing appears once the Marketplace finishes its post-publish verification. Soak to 2026-09-05; announce after.                                                                                                                     |
 
 ### Dogfood before the tag
 
@@ -125,6 +132,54 @@ webview tests` and `VSCode host smoke tests` are required checks;
   repositories use; no required reviewer on the `production` environment
   (single maintainer).
 
+## Post-release audit — 2026-09-02
+
+Run after the last publish, against the live registries and repository
+settings rather than the tree, to answer "did the extension actually go out
+correctly, with the right metadata, and is anything left open".
+
+### Verified live
+
+| Surface                 | Observation                                                                                                                                                                                                                           |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| GitHub Release `v0.2.2` | Latest, not draft, 11 assets (3 CLI archives + SPDX SBOMs, `checksums.txt`, `manifest.json`, 3 per-target VSIXs). `v0.2.1` below it; `v0.2.0` tagged, unpublished.                                                                    |
+| VS Code Marketplace     | `nightgauge.nightgauge-vscode` 0.2.2 for darwin-arm64, darwin-x64, linux-x64, each flagged pre-release; `ExtensionKind=workspace`, `Pricing=Free`, Q&A → Discussions, gallery banner `#0A0E1C` dark; engine `^1.85.0`.                |
+| Marketplace artifact    | The served darwin-arm64 VSIX's SHA-256 equals the listing's `VsixSha256`; `gh attestation verify` passes and names `marketplace-publish.yml` at `1ac50c6f`, which **is** the `v0.2.2` commit.                                         |
+| Open VSX                | `nightgauge/nightgauge-vscode` 0.2.2 pre-release on the same three targets, license `Apache-2.0`, links to the site, repo and issues. Namespace still **unverified** (Open VSX issue 12972 pending).                                  |
+| `main` at the tag       | `1ac50c6f`'s own run: 18 success, 2 skipped, 0 failed. Tip `a5974a39`: 15/15.                                                                                                                                                         |
+| Repository posture      | `scripts/verify-public-hardening.sh`: all assertions pass. 0 open Dependabot, code-scanning or secret-scanning alerts. Actions restricted to an allowlist with SHA pinning enforced; default token read-only; fork PRs need approval. |
+| Workflows               | All 63 `uses:` SHA-pinned with version comments; top-level `contents: read` everywhere; no `${{ }}` inside any `run:`; `pull_request_target` only in the CLA gate, which never executes fork code.                                    |
+
+### Inconsistencies found and fixed
+
+- `release.yml` cancelled an in-flight run on re-run of the same tag — the
+  documented recovery path after a partial publish. Now `cancel-in-progress:
+false`, and its budget is 40 min (the runs took 7–11).
+- `marketplace-publish.yml` took the tag as free text and ran from `main`, so
+  the Open VSX publish's attestation names `3772de8a` (that day's `main`),
+  not the tag. It now runs **on the tag ref**, refuses anything that is not
+  `vX.Y.Z`, asserts the checkout is that tag, and sits behind the
+  `production` environment like `release.yml`.
+- Publish and release checkouts no longer persist the job token into
+  `.git/config` for `npm ci` postinstall scripts to find.
+- The dependency-license gate ran an unpinned `npx license-checker`; the
+  gitleaks digest was fetched from the release it verified; the release
+  watchdog's dispatch inputs were bound but never validated; PyYAML pins were
+  invisible to Dependabot. All pinned, validated, or tracked now.
+- Docs said 12 required checks; the ruleset has 14. The release step-by-step
+  stopped at the GitHub Release and named a `staging` environment that does
+  not exist. Both corrected in `docs/GIT_WORKFLOW.md`.
+
+### Left with the owner
+
+| Item                                                                                                                                                                                                                                                                                                                                              | Why it is not done here                                                                                                                         |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Marketplace publisher domain is unverified** (`isDomainVerified: false`). Publisher management → Details → _Verified domain_ → `nightgauge.dev`, then add the DNS TXT record the page shows. The listing gains the verified badge.                                                                                                              | Needs the publisher owner's login and DNS access.                                                                                               |
+| **Open VSX namespace verification** — issue 12972 with the Eclipse maintainers.                                                                                                                                                                                                                                                                   | Their queue.                                                                                                                                    |
+| **`CLEAN_INSTALL_GH_TOKEN` is not set**, so the weekly `clean-install-e2e.yml` gate skips every Monday and G1 is only ever walked from a maintainer's machine.                                                                                                                                                                                    | A fine-grained token that can create and delete private repositories and projects under the owner; scope it to a throwaway account if possible. |
+| **Immutable releases** are off. Turning them on would freeze each GitHub Release's assets and tag after publish (a supply-chain guarantee worth having) but `release.yml` re-uploads `checksums.txt` and `manifest.json` _after_ GoReleaser publishes, which immutability forbids; move those into GoReleaser's `extra_files` first, then enable. | Changes the release pipeline's asset flow; validate on the next tag, not by hand on `main`.                                                     |
+| Signed commits on `main` (deliberately not required); a second-machine G1 pass by someone other than the maintainer; Dependabot #1308 (Ubuntu 26.04 base for the G1 image).                                                                                                                                                                       | Owner decisions.                                                                                                                                |
+
 ## Verdict — 2026-09-01
 
 **GO for `v0.2.0` on the Marketplace pre-release channel** — executed as
@@ -140,7 +195,8 @@ or re-measured as not blocking:
 - L1–L7 done (#1134, #1289): supported-adapter sentence, no autonomous
   production claim, absolute links, `0.2.0` changelog dated 2026-09-01.
 - P3 done (#1289): `release.yml` passes `--pre-release` while the major is 0.
-  P1/P5 close with the tag; P4 stays "not in the first release".
+  P1/P5 close with the tag; P4 stays "not in the first release" (it was then
+  done the same day — see P4).
 - _Dogfood before the tag_: between 2026-08-29 and 2026-08-31 the downstream
   workspace ran every class in the list unattended through the extension —
   27 runs completed to a merged PR across four stacks (Flutter, Node API,
@@ -173,8 +229,13 @@ What the first stable release run taught, in the order it happened:
    matched `checksums.txt`; the darwin-arm64 VSIX's SHA and its build
    attestation verified locally before the cask PR was merged.
 
-Still open for the Marketplace: a valid `VSCE_PAT`. The three VSIXs on the
-release are the artifacts to publish; do not rebuild them.
+4. **`v0.2.2`** — the PAT replaced, `marketplace-publish.yml` published the
+   Marketplace pre-release at 13:00Z and Open VSX at 17:39Z. The registries
+   do **not** carry the GitHub Release's VSIX bytes: the publish workflow
+   rebuilds from the tag with the same recipe and attests its own output, so
+   a registry VSIX and the release asset of the same target are two attested
+   artifacts of one tree. Verify either with
+   `gh attestation verify <file> --owner nightgauge`.
 
 ## Verdict — 2026-08-20
 
@@ -490,6 +551,7 @@ pre-release.
 
 ## What this checklist is not
 
-- It is not a GO to cut a stable `v0.2.0`.
+- It is not a GO to move 0.x off the Marketplace **pre-release** channel;
+  the stable-channel flip is the 1.0 decision, not a version bump.
 - It is not permission to ship producer/resume/restart/discard recovery.
 - It is not a claim that every contributed command was hand-tested.
