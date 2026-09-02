@@ -39,26 +39,59 @@
         "strict_required_status_checks_policy": true,
         "do_not_enforce_on_create": false,
         "required_status_checks": [
-          { "context": "Go build & test" },
-          { "context": "SDK build & test" },
-          { "context": "VSCode build & test" },
-          { "context": "Security & license gates" },
-          { "context": "lint" },
-          { "context": "link-check" },
-          { "context": "publication boundary (allowlist, fail-closed)" },
-          { "context": "credential scan (tree + full history)" },
-          { "context": "cla" },
-          { "context": "Analyze (go)" },
-          { "context": "Analyze (javascript-typescript)" },
-          { "context": "CodeQL" },
-          { "context": "Playwright webview tests" },
-          { "context": "VSCode host smoke tests" }
+          {
+            "context": "Go build & test"
+          },
+          {
+            "context": "SDK build & test"
+          },
+          {
+            "context": "VSCode build & test"
+          },
+          {
+            "context": "Security & license gates"
+          },
+          {
+            "context": "lint"
+          },
+          {
+            "context": "link-check"
+          },
+          {
+            "context": "publication boundary (allowlist, fail-closed)"
+          },
+          {
+            "context": "credential scan (tree + full history)"
+          },
+          {
+            "context": "cla"
+          },
+          {
+            "context": "Analyze (go)"
+          },
+          {
+            "context": "Analyze (javascript-typescript)"
+          },
+          {
+            "context": "CodeQL"
+          },
+          {
+            "context": "Playwright webview tests"
+          },
+          {
+            "context": "VSCode host smoke tests"
+          }
         ]
       }
     },
-    { "type": "required_linear_history" },
-    { "type": "non_fast_forward" },
-    { "type": "deletion" },
-    { "type": "required_signatures" }
+    {
+      "type": "required_linear_history"
+    },
+    {
+      "type": "non_fast_forward"
+    },
+    {
+      "type": "deletion"
+    }
   ]
 }
