@@ -17,6 +17,15 @@ on:
       tag:
         description: "Release tag to publish (e.g. v0.2.1); must already exist"
         required: true
+      registries:
+        description: "Where to publish"
+        required: true
+        default: "marketplace"
+        type: choice
+        options:
+          - marketplace
+          - open-vsx
+          - both
 
 permissions:
   contents: read
@@ -32,7 +41,7 @@ concurrency:
 
 jobs:
   publish:
-    name: Package ${{ inputs.tag }} and publish to the Marketplace
+    name: Package ${{ inputs.tag }} and publish (${{ inputs.registries }})
     runs-on: ubuntu-latest
     timeout-minutes: 20
     # No `environment: production` here: that environment admits tag refs only
@@ -94,6 +103,7 @@ jobs:
       # this workflow exists only to publish, so a missing or invalid PAT is
       # an error here, not a skip.
       - name: Verify VSCE_PAT against the publisher
+        if: ${{ inputs.registries == 'marketplace' || inputs.registries == 'both' }}
         env:
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
         run: |
@@ -101,6 +111,18 @@ jobs:
           PUBLISHER=$(node -p "require('./packages/nightgauge-vscode/package.json').publisher")
           [[ -n "${VSCE_PAT:-}" ]] || { echo "::error::VSCE_PAT secret is not set"; exit 1; }
           npx --yes @vscode/vsce@3.9.1 verify-pat "$PUBLISHER"
+
+      # Open VSX (#1316): the namespace is the same identifier as the
+      # Marketplace publisher. Verified before the build for the same reason.
+      - name: Verify OVSX_PAT against the namespace
+        if: ${{ inputs.registries == 'open-vsx' || inputs.registries == 'both' }}
+        env:
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}
+        run: |
+          set -euo pipefail
+          NAMESPACE=$(node -p "require('./packages/nightgauge-vscode/package.json').publisher")
+          [[ -n "${OVSX_PAT:-}" ]] || { echo "::error::OVSX_PAT secret is not set"; exit 1; }
+          npx --yes ovsx@1.1.1 verify-pat "$NAMESPACE"
 
       # Cross-compile every target binary up front so each platform-specific
       # .vsix can bundle the matching one. The extension loads its Go binary from
@@ -236,6 +258,7 @@ jobs:
       # the whole workflow at load time — so do NOT gate this step on
       # `secrets.VSCE_PAT`.
       - name: Publish per-target VSIXs to VS Code Marketplace
+        if: ${{ inputs.registries == 'marketplace' || inputs.registries == 'both' }}
         working-directory: packages/nightgauge-vscode
         env:
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
@@ -258,6 +281,25 @@ jobs:
           for VSIX in *.vsix; do
             echo "Publishing $VSIX"
             npx @vscode/vsce@3.9.1 publish --no-dependencies --packagePath "$VSIX" ${CHANNEL[@]+"${CHANNEL[@]}"}
+          done
+
+      - name: Publish per-target VSIXs to Open VSX
+        if: ${{ inputs.registries == 'open-vsx' || inputs.registries == 'both' }}
+        working-directory: packages/nightgauge-vscode
+        env:
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          # Same channel rule as the Marketplace: 0.x is a pre-release.
+          CHANNEL=()
+          if [[ "${VERSION%%.*}" == "0" ]]; then
+            CHANNEL=(--pre-release)
+            echo "Version $VERSION is 0.x → publishing to Open VSX as pre-release"
+          fi
+          for VSIX in *.vsix; do
+            echo "Publishing $VSIX to Open VSX"
+            npx --yes ovsx@1.1.1 publish "$VSIX" ${CHANNEL[@]+"${CHANNEL[@]}"}
           done
 
       - name: Upload the published VSIXs as a workflow artifact
