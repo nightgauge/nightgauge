@@ -318,6 +318,12 @@ jobs:
       # args come from the preflight: `--skip=homebrew` is appended when no tap
       # token is configured, so a missing token degrades gracefully instead of
       # failing after the GitHub Release has already been created.
+      # GORELEASER_CURRENT_TAG pins the release to the tag that triggered this
+      # run. Without it GoReleaser takes the highest tag pointing at HEAD by
+      # git's version sort, which ranks `v0.2.0-rc.25` ABOVE `v0.2.0` — so the
+      # first stable release, cut on the same commit as its last RC exactly as
+      # the git workflow prescribes, published an rc GitHub Release and an rc
+      # cask PR and then failed here looking for `v0.2.0` (#1296).
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:
@@ -327,6 +333,22 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+          GORELEASER_CURRENT_TAG: ${{ github.ref_name }}
+
+      # Every step below addresses the release by the triggering tag. Prove
+      # GoReleaser created THAT release before attaching anything to it.
+      - name: Verify GoReleaser released the triggering tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.version.outputs.tag }}"
+          if ! gh release view "$TAG" --json tagName --jq .tagName | grep -qx "$TAG"; then
+            echo "::error::GoReleaser did not create a GitHub Release for '$TAG' (#1296). Releases present:"
+            gh release list --limit 5
+            exit 1
+          fi
+          echo "GitHub Release $TAG exists"
 
       - name: Add VSIX checksums
         run: |

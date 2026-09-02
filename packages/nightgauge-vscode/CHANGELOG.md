@@ -7,7 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.2.0] - 2026-09-01
+## [0.2.1] - 2026-09-02
 
 First public version on the VS Code Marketplace, published as a **pre-release**
 (0.x) on the Marketplace pre-release channel. Builds ship for **macOS (Apple
@@ -16,6 +16,11 @@ Claude Code (`claude` CLI) adapter is the supported path; the Codex, Gemini,
 Copilot and direct-API adapters are beta. Multi-repository workspaces and
 autonomous mode are available but less finished than the single-repository
 loop.
+
+`0.2.0` was tagged on 2026-09-01 but never published: its release run resolved
+the release-candidate tag on the same commit and stopped before attaching any
+artifact. `0.2.1` is that tree plus the release-pipeline fix; nothing shipped
+under `0.2.0`.
 
 ### Added
 

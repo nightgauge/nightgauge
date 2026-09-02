@@ -140,6 +140,10 @@ jobs:
           distribution: goreleaser
           version: v2.17.0
           args: release --snapshot --clean
+        env:
+          # Same pin as release.yml (#1296): name the snapshot after the tag
+          # that triggered the run, not the highest tag on the commit.
+          GORELEASER_CURRENT_TAG: ${{ github.ref_name }}
 
       - name: Add VSIX checksums
         run: |
