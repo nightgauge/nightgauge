@@ -12,7 +12,7 @@
 # linux/amd64 in GitHub Actions); the .vsix mounted at run time must match.
 # Pinned by digest (multi-arch index); Dependabot's docker ecosystem keeps it
 # current.
-FROM ubuntu:24.04@sha256:33ceb71981b602c1a7443a53469e4dba065f7503eab3078a2d7a57a2ab987517
+FROM ubuntu:26.04@sha256:2260313b31c8c011cd2eebe728008efac1b3982be73eb71348ea2648d2c0e09b
 
 ARG NODE_MAJOR=22
 ARG DEBIAN_FRONTEND=noninteractive
