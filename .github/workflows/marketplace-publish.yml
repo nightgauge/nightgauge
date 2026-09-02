@@ -30,7 +30,9 @@ jobs:
     name: Package ${{ inputs.tag }} and publish to the Marketplace
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    environment: production
+    # No `environment: production` here: that environment admits tag refs only
+    # (release.yml runs on tags) and rejected the first dispatch from `main`.
+    # VSCE_PAT is a repository secret, so nothing here needs the environment.
 
     permissions:
       contents: read
