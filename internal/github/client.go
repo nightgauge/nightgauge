@@ -962,11 +962,19 @@ func (c *Client) mutate(ctx context.Context, m interface{}, input map[string]int
 			return nil
 		}
 
-		if !isRateLimited(err) || attempt == maxRetries {
+		// Mutations retry on two transient shapes: rate limiting (as query
+		// does) and the Projects V2 write conflict, which only mutations see.
+		if attempt == maxRetries || !(isRateLimited(err) || isTemporaryConflict(err)) {
 			return err
 		}
 
-		backoff := c.computeRateLimitBackoff(ctx, err, attempt)
+		var backoff time.Duration
+		if isTemporaryConflict(err) {
+			// Not a quota problem: no rateLimit query, just a short pause.
+			backoff = retryAfter(err, attempt)
+		} else {
+			backoff = c.computeRateLimitBackoff(ctx, err, attempt)
+		}
 		select {
 		case <-time.After(backoff):
 		case <-ctx.Done():
@@ -1232,6 +1240,21 @@ func (c *Client) GetRateLimit(ctx context.Context) (*RateLimitInfo, error) {
 		Limit:     int(q.RateLimit.Limit),
 		ResetAt:   resetTime.Unix(),
 	}, nil
+}
+
+// isTemporaryConflict reports GitHub's transient Projects V2 write conflict:
+// "Your attempt to move this item created a temporary conflict. Please try
+// again." GitHub returns it from addProjectV2ItemById /
+// updateProjectV2ItemFieldValue when a board was created or mutated moments
+// earlier and its item index has not settled; the same mutation succeeds on
+// retry. Observed on the clean-install gate (workflow run 33688164814):
+// `project add` on a board created ~20 s before, first attempt, fresh org.
+// The message is the only signal GitHub gives -- there is no error code.
+func isTemporaryConflict(err error) bool {
+	if err == nil {
+		return false
+	}
+	return contains(err.Error(), "created a temporary conflict")
 }
 
 // isRateLimited checks if an error is a GitHub rate limit error.
