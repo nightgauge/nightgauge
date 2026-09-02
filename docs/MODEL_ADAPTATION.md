@@ -46,8 +46,8 @@ through the registry to a concrete id — but no band-keyed file is ever consult
 
 ### The corpus today
 
-Every shipped overlay is shared-scope; no skill-specific fragment and no
-whole-file override exists. All four land at the `after-context-includes` site
+Four shared-scope overlays ship, alongside two skill-specific fragments; no
+whole-file override exists. All six land at the `after-context-includes` site
 (§4) because no base skill carries an `<!-- overlay -->` anchor.
 
 | Key                | Carries                                                                                         |
@@ -57,16 +57,28 @@ whole-file override exists. All four land at the `after-context-includes` site
 | `grok-build-0.1`   | The cheaper Grok coding model: stay inside the stage contract, no extra research loops.         |
 | `claude-fable-5-1` | The Fable 5.1 behavioral shifts (#1276), one named block each — see below.                      |
 
-`claude-fable-5-1.md` carries six named blocks, in this order:
+Both skill-specific fragments are keyed `claude-fable-5-1`, and each carries the
+batching-nudge block and nothing else:
 
-| Block                     | What it does                                                                                    |
-| ------------------------- | ----------------------------------------------------------------------------------------------- |
-| `Targeted edits`          | Surgical edits over whole-file rewrites, which 5.1 reaches for more readily than Fable 5.       |
-| `Scope and test coverage` | No unrequested fixes; scratch checks stay out of the repo; commit tests only where asked.       |
-| `Operating autonomously`  | The unattended-run block. Reinforces `_shared/AUTONOMY_CONTRACT.md` rather than replacing it.   |
-| `Holding the scope`       | Don't narrow, widen, or swap the deliverable; a decided step is run, not announced.             |
-| `Progress updates`        | Opening line, updates while working, standalone closing recap; plus the hidden-output note.     |
-| `Batching tool requests`  | The one-response batching nudge, scoped in its heading to `feature-dev` and `feature-validate`. |
+| Path                                                               | Applies to         |
+| ------------------------------------------------------------------ | ------------------ |
+| `skills/nightgauge-feature-dev/_overlays/claude-fable-5-1.md`      | `feature-dev`      |
+| `skills/nightgauge-feature-validate/_overlays/claude-fable-5-1.md` | `feature-validate` |
+
+`_shared/_overlays/claude-fable-5-1.md` carries five named blocks, in this
+order:
+
+| Block                     | What it does                                                                                  |
+| ------------------------- | --------------------------------------------------------------------------------------------- |
+| `Targeted edits`          | Surgical edits over whole-file rewrites, which 5.1 reaches for more readily than Fable 5.     |
+| `Scope and test coverage` | No unrequested fixes; scratch checks stay out of the repo; commit tests only where asked.     |
+| `Operating autonomously`  | The unattended-run block. Reinforces `_shared/AUTONOMY_CONTRACT.md` rather than replacing it. |
+| `Holding the scope`       | Don't narrow, widen, or swap the deliverable; a decided step is run, not announced.           |
+| `Progress updates`        | Opening line, updates while working, standalone closing recap; plus the hidden-output note.   |
+
+A sixth block, `Batching tool requests`, is the one-response batching nudge. It
+ships in the two skill-specific fragments above rather than in the shared file,
+so only `feature-dev` and `feature-validate` carry it.
 
 `Progress updates` is the block the anti-narration sweep protects: a base-skill
 line telling a stage to hold its findings for the final response would fight it
@@ -91,19 +103,31 @@ survives into the transcript and the stage's context file — the opening line a
 the standalone closing recap, read by whoever picks the run up afterwards rather
 than by a live user.
 
-The batching nudge is scoped by **prose in its heading**, not by the cascade:
-the composer injects one block per render, so a stage-scoped instruction has
-nowhere else to live short of duplicating the fragment per skill. The scoping is
-by loop shape, which is how the vendor scopes the fix — the symptom is one tool
-call per turn in coding and computer-use loops where the next independent calls
-are implied by the task rather than asked for, and the cost is extra turns
-(tokens, round trips, wall-clock) rather than worse answers. `feature-dev` and
-`feature-validate` are the pipeline's only stages of that shape; the rest are
-short and mostly single-call, so the nudge would have nothing to batch there.
+The batching nudge is scoped **by the cascade**, which is what the cascade is
+for. The composer collects the shared fragment and the skill-specific one and
+joins them into the same `## Model Adaptation` section (§3), so a block that
+belongs to two stages lives in those two skills' `_overlays/` directories and
+nothing is duplicated — the shared file carries the five blocks every stage
+wants, and the two per-skill files carry the sixth. Adding a third stage is a
+third one-block file, not a change to a heading.
 
-No measurement gates this, and none could: `diagnostics.ToolCallRecord` (the
-`tool_calls` array on a `V2RunRecord`) carries no assistant-turn identifier, so
-the share of turns holding more than one call is not derivable even from a
+Which stages get it is decided by loop shape, which is how the vendor scopes the
+fix — the symptom is one tool call per turn in coding and computer-use loops
+where the next independent calls are implied by the task rather than asked for,
+and the cost is extra turns (tokens, round trips, wall-clock) rather than worse
+answers. `feature-dev` and `feature-validate` are the pipeline's only stages of
+that shape; the rest are short and mostly single-call, so the nudge would have
+nothing to batch there.
+
+The delivery differs from the vendor's, and the difference is not measured here:
+the guidance describes the nudge as a turn-scoped system message repeated on
+every turn, whereas the composer places it once, in the rendered prompt the
+stage starts from. Whether once-at-the-top holds across a long loop as well as
+per-turn reinforcement is unknown.
+
+No measurement gates the stage choice, and none could: `diagnostics.ToolCallRecord`
+(the `tool_calls` array on a `V2RunRecord`) carries no assistant-turn identifier,
+so the share of turns holding more than one call is not derivable even from a
 populated record. Widen the scope when a stage starts running that kind of loop,
 not on a number.
 

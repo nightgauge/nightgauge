@@ -948,38 +948,53 @@ func TestFableOverlayReachesTheStagesThatDispatchIt(t *testing.T) {
 
 // TestFableBatchingNudgeIsStageScoped pins the stage scoping from #1276.
 //
-// The vendor scopes this fix by loop shape, not by a measurement: the symptom is
-// one tool call per turn in coding and computer-use loops where the next
-// independent calls are implied by the task rather than asked for, and the cost
-// is extra turns (tokens, round trips, wall-clock) rather than worse answers.
-// feature-dev and feature-validate are the pipeline's only stages of that shape,
-// so the nudge is scoped by prose to those two. No measurement gates it and none
-// could — diagnostics.ToolCallRecord has no assistant-turn identifier, so the
-// share of multi-call turns is not derivable even from a populated record.
+// The scoping lives in the cascade, not in prose. The composer collects BOTH
+// skills/_shared/_overlays/<key>.md and skills/<skill>/_overlays/<key>.md and
+// joins them into one "## Model Adaptation" section (render.go runs two collect
+// loops, shared then skill-specific), so a block that belongs to two stages
+// ships as a skill-specific fragment in exactly those two skill directories and
+// nothing is duplicated. Folding those two fragments back into the shared
+// overlay makes the absence half below fail for the other five stages; deleting
+// them makes the presence half fail for feature-dev and feature-validate.
 //
-// The composer injects one block per render, so that scoping lives in the
-// heading rather than in the cascade. This test is what stops the nudge
-// quietly becoming pipeline-wide advice if the heading is ever dropped.
+// The two stages are chosen on the vendor's own scoping axis, loop shape: the
+// symptom is one tool call per turn in coding and computer-use loops where the
+// next independent calls are implied by the task rather than explicitly
+// requested, and the cost is extra turns (tokens, round trips, wall-clock)
+// rather than worse answers. feature-dev and feature-validate are the
+// pipeline's only stages of that shape. No measurement gates the choice and
+// none could: diagnostics.ToolCallRecord (internal/diagnostics/exit_record.go)
+// carries no assistant-turn identifier, so the share of turns holding more than
+// one tool call is not derivable even from a fully populated record.
 func TestFableBatchingNudgeIsStageScoped(t *testing.T) {
 	root := filepath.Join("..", "..", "skills")
 	if _, err := os.Stat(root); err != nil {
 		t.Skipf("skills/ not present: %v", err)
 	}
 	const nudge = "First privately list what you need next"
-	const scope = "feature-dev and feature-validate only"
+	wantsNudge := map[string]bool{"feature-dev": true, "feature-validate": true}
 
-	for stage := range StageSkillDirs {
+	for stage, dir := range StageSkillDirs {
+		frag := filepath.Join(root, dir, "_overlays", "claude-fable-5-1.md")
+		_, err := os.Stat(frag)
+		if wantsNudge[stage] && err != nil {
+			t.Errorf("%s: the skill-specific fragment %s must exist: %v", stage, frag, err)
+		}
+		if !wantsNudge[stage] && err == nil {
+			t.Errorf("%s: unexpected skill-specific fragment %s — the nudge is scoped to feature-dev and feature-validate", stage, frag)
+		}
+
 		res := mustRender(t, Options{
 			Stage:       stage,
 			Model:       "claude-fable-5-1",
 			SkillsRoots: []string{root},
 		})
-		if !strings.Contains(res.Content, nudge) {
-			t.Errorf("%s: batching nudge missing from the overlay", stage)
-			continue
+		want := 0
+		if wantsNudge[stage] {
+			want = 1
 		}
-		if !strings.Contains(res.Content, scope) {
-			t.Errorf("%s: batching nudge present without its %q scope line", stage, scope)
+		if got := strings.Count(res.Content, nudge); got != want {
+			t.Errorf("%s: rendered prompt carries the batching nudge %d time(s), want %d", stage, got, want)
 		}
 	}
 }

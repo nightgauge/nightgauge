@@ -42,8 +42,10 @@ Before running a command that changes system state — a restart, a delete, a
 config edit — check that the evidence actually supports that specific action.
 A signal that pattern-matches to a known failure may have a different cause.
 
-Keep the verification this stage asks for. The Claude Opus 5 guidance to strip
-"check your work" instructions does not apply to this model.
+Keep the verification this stage asks for. (Nightgauge's own scoping, not
+vendor text: the `grok-4.6` overlay in this corpus tells its model to drop
+redundant verify-your-work scaffolding. That instruction is keyed to a
+different model and does not carry across to this one.)
 
 ### Holding the scope
 
@@ -74,13 +76,3 @@ Only you see a command's full output: the pipeline log keeps at most a tail of
 it and no human reads it during the run. If any of it matters, put it in your
 reply and in the stage's context file. Re-running a command to "show" someone
 its output shows it to nobody.
-
-### Batching tool requests — feature-dev and feature-validate only
-
-This block applies to those two stages only. They are the bash-and-editor loops
-Anthropic's guidance names, where the next independent reads are implied rather
-than asked for. The other stages are short and mostly single-call, so there is
-nothing there for the nudge to batch. In feature-dev and feature-validate:
-
-First privately list what you need next; then request every item that doesn't
-depend on another's result in this one response.
