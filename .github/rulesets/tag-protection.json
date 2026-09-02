@@ -11,7 +11,7 @@
   "bypass_actors": [
     {
       "actor_type": "OrganizationAdmin",
-      "actor_id": 1,
+      "actor_id": null,
       "bypass_mode": "always"
     }
   ],
