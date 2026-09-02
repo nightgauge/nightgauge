@@ -111,5 +111,9 @@ jobs:
         with:
           name: clean-install-e2e-logs
           path: .clean-install-e2e/
+          # The run directory is a dot-directory; upload-artifact skips hidden
+          # paths unless told otherwise, and the first two CI runs uploaded
+          # nothing ("No files were found") for exactly that reason.
+          include-hidden-files: true
           if-no-files-found: warn
           retention-days: 30
