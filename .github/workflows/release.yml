@@ -398,11 +398,23 @@ jobs:
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
         run: |
           set -euo pipefail
+          # 0.x ships on the Marketplace PRE-RELEASE channel (#1135,
+          # docs/RELEASE_CHECKLIST.md P3): users opt in with "Install
+          # Pre-Release Version" / `--pre-release`, and the listing carries the
+          # Pre-Release badge. The flag drops on its own at v1.0.0.
+          VERSION="${{ steps.version.outputs.version }}"
+          CHANNEL=()
+          if [[ "${VERSION%%.*}" == "0" ]]; then
+            CHANNEL=(--pre-release)
+            echo "Version $VERSION is 0.x → publishing to the pre-release channel"
+          else
+            echo "Version $VERSION is ${VERSION%%.*}.x → publishing to the stable channel"
+          fi
           # Each .vsix carries its targetPlatform in the manifest, so vsce
           # publishes it for the right platform without re-specifying --target.
           for VSIX in *.vsix; do
             echo "Publishing $VSIX"
-            npx @vscode/vsce@3.9.1 publish --no-dependencies --packagePath "$VSIX"
+            npx @vscode/vsce@3.9.1 publish --no-dependencies --packagePath "$VSIX" ${CHANNEL[@]+"${CHANNEL[@]}"}
           done
 
       - name: Marketplace publish skipped

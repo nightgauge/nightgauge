@@ -471,7 +471,7 @@ Doctor**.
 
 ## License
 
-[Apache-2.0](LICENSE)
+[Apache-2.0](https://github.com/nightgauge/nightgauge/blob/main/LICENSE)
 
 ## Author
 
