@@ -2,5 +2,5 @@
 # Every pull request REQUESTS review from the maintainers team; it does not
 # require one. The main-branch ruleset (.github/rulesets/main-branch.json)
 # requires zero approving reviews — single maintainer — and gates merges on
-# its 14 required status checks and signed commits instead.
+# its 14 required status checks instead.
 * @Nightgauge/maintainers
