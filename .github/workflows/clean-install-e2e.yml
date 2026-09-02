@@ -10,9 +10,20 @@
 # Secrets (documented here; created by a maintainer, never by automation):
 #   ANTHROPIC_API_KEY       — agent auth for the claude CLI inside the container.
 #   CLEAN_INSTALL_GH_TOKEN  — a token that can create AND delete private
-#                             repositories under the nightgauge organization
-#                             and read/write projects (the walk provisions a
-#                             board). Scope it to a throwaway account if you can.
+#                             repositories and read/write projects under the
+#                             owner the walk provisions into (the walk creates
+#                             a repository and a board, then deletes both).
+#
+# Variable (Settings → Secrets and variables → Actions → Variables):
+#   CLEAN_INSTALL_E2E_OWNER — the org or user that owns the throwaway repo and
+#                             board. Use a DEDICATED throwaway organization and
+#                             scope the token to that organization only: a token
+#                             with Administration write over the real
+#                             organization could delete every repository in it,
+#                             and nothing in this walk needs that. Defaults to
+#                             `nightgauge` when unset (owner-local runs of
+#                             scripts/clean-install-e2e.sh take E2E_OWNER).
+#   CLEAN_INSTALL_E2E_OWNER_TYPE — `org` (default) or `user`.
 name: Clean-install E2E (release gate G1)
 
 on:
@@ -89,6 +100,8 @@ jobs:
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           GH_TOKEN: ${{ secrets.CLEAN_INSTALL_GH_TOKEN }}
+          E2E_OWNER: ${{ vars.CLEAN_INSTALL_E2E_OWNER || 'nightgauge' }}
+          E2E_OWNER_TYPE: ${{ vars.CLEAN_INSTALL_E2E_OWNER_TYPE || 'org' }}
           CLEAN_INSTALL_WALL_CLOCK_MINUTES: ${{ inputs.wall_clock_minutes || '90' }}
         run: bash scripts/clean-install-e2e.sh
 
