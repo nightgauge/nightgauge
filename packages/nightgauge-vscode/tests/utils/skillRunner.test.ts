@@ -457,7 +457,8 @@ allowed-tools: Read
 
       // The #3801 thinking-block replay 400 stopped reproducing on claude CLI
       // 2.1.186, so the forced CLAUDE_CODE_DISABLE_THINKING=1 was removed —
-      // reasoning models run with thinking enabled (spike doc §8.2).
+      // reasoning models run with thinking enabled (docs/PIPELINE_EXECUTION.md
+      // § Spawn Environment Inheritance (Issue #91)).
       const call = vi.mocked(spawn).mock.calls.find(([cmd]) => cmd === "claude");
       expect(call).toBeDefined();
       const opts = call![2] as { env?: Record<string, string> };
@@ -4255,7 +4256,7 @@ describe("skillRunner - served-model attribution (#91)", () => {
     // Regression for #91: the claude CLI silently retries a safety-refused
     // turn on a fallback model and still exits 0. The recorded model MUST be
     // the fallback model, not the requested one. Event shape captured live —
-    // docs/spikes/fable-5-behavior-porting.md §8.3.
+    // docs/FAILURE_TAXONOMY.md § Model Refusal Fallback.
     const onComplete = vi.fn();
     const onStderr = vi.fn();
     runStageSkillHeadless("feature-dev", 91, { onComplete, onStderr });

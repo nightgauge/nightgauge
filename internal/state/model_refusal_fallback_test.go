@@ -11,7 +11,7 @@ import (
 // The claude CLI silently retries safety-refused turns on a fallback model
 // (its internal model_refusal_fallback event) and still exits 0. These tests
 // pin the RuntimeState record of that swap and its projection onto the V2
-// history record. See docs/spikes/fable-5-behavior-porting.md §8.3.
+// history record. See docs/FAILURE_TAXONOMY.md § Model Refusal Fallback.
 
 func TestRecordModelRefusalFallback(t *testing.T) {
 	rs := NewRuntimeState("o/r", 91, "item-1", testRunID())

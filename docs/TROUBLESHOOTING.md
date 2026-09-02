@@ -622,6 +622,10 @@ If you hit this 400 today, you are on an old claude CLI. Fix: upgrade the CLI
 `export CLAUDE_CODE_DISABLE_THINKING=1` restores the old workaround without a
 rebuild — but note `--effort` is moot while it is set.
 
+See [PIPELINE_EXECUTION.md § Spawn Environment Inheritance (Issue
+#91)](PIPELINE_EXECUTION.md#spawn-environment-inheritance-issue-91) for why the
+stopgap works with no rebuild.
+
 ### Frontier run recorded/billed as Opus — CLI refusal fallback (#91)
 
 **Not a bug in your config.** When Fable 5's safety classifier refuses a turn
@@ -636,6 +640,10 @@ served. If telemetry shows Opus on a frontier run, grep the session log for
 `model_refusal_fallback` — that's the CLI's own safety behavior, not a
 routing defect. Do not "fix" it by retrying; attribution is the designed
 response.
+
+See [FAILURE_TAXONOMY.md § Model Refusal Fallback (Issue
+#91)](FAILURE_TAXONOMY.md#model-refusal-fallback-issue-91) for the full event
+shape and the distinct `fableFallbacks` orchestrator-retry mechanism.
 
 ### PTC stage fails with "Model refused the request (stop_reason: refusal)" (#75)
 
