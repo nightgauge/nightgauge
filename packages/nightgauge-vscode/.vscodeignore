@@ -3,10 +3,14 @@ src/**
 *.ts
 tsconfig.json
 
-# Development files
+# Development files. vsce matches a bare `*.map` at the top level only, so
+# the recursive forms are required to keep source maps and type declarations
+# out of every directory under dist/.
 .gitignore
 .eslintrc*
-*.map
+**/*.map
+**/*.d.ts
+**/*.d.ts.map
 
 # Test files & artifacts
 **/*.test.js
@@ -30,13 +34,19 @@ scripts/**
 # purpose — the Marketplace renders them as the Details, Changelog and License
 # tabs of the listing. Excluding CHANGELOG.md drops the Changelog tab entirely.
 
-# Node modules from sibling packages
-../pattern-mining-sdk/**
+# Node modules
 **/node_modules/**
+
+# Plugin mirror: only the skill/command sources are runtime assets. Lockfiles,
+# test suites, helper scripts and test config are contributor material.
+dist/claude-plugins/**/package-lock.json
+dist/claude-plugins/**/tests/**
+dist/claude-plugins/**/*.py
+dist/claude-plugins/**/vitest.config.ts
 
 # Stale Go binary — BinaryResolver loads the binary from dist/bin/ (bundled by
 # dev-install.sh). A root-level bin/ is dead weight that ships ~15MB and misleads
-# binary-path triage (#3781). Never package it.
+# binary-path triage. Never package it.
 bin/**
 
 # Other

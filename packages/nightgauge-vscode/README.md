@@ -1,6 +1,6 @@
 # Nightgauge
 
-**The cockpit for the Nightgauge issue-to-PR pipeline, built into VS Code.**
+**The cockpit for the Nightgauge autonomous software factory, built into VS Code.**
 Nightgauge guides work through planning, implementation, validation, and pull
 request stages, and this extension is where you watch it
 work: queue issues, approve plans, follow live pipeline state, and review
@@ -16,7 +16,7 @@ conversation history, so context stays focused and any stage can be retried
 independently. Deterministic code verifies repository state and selected stage
 outputs; provider behavior and manual review remain part of the trust model.
 
-![Nightgauge dashboard — live pipeline slots, queued issues, model routing, and token/cost spend in the Overview tab](https://raw.githubusercontent.com/nightgauge/nightgauge/main/docs/images/screenshots/dashboard.png)
+![Nightgauge dashboard Overview tab — a completed run with per-stage durations and cost, active slots, and the token and cache totals for the day](https://raw.githubusercontent.com/nightgauge/nightgauge/main/docs/images/marketing/extension-dashboard-overview.png)
 
 ## Quick Start
 
@@ -109,35 +109,27 @@ timestamped development version and is not a release-validation path.
   window with no known ceiling shows an absolute figure rather than a bar, and
   an adapter nothing can meter is labelled unknown rather than zero
 
-## Screenshots
+## One run, every surface
 
-**Live in your sidebar** — standard VS Code TreeViews: running pipelines with
-per-stage status and token/cost per stage, repositories with epic grouping and
-`blockedBy` lock icons, and a knowledge graph that travels with you.
+Every image on this page is rendered from the same real pipeline run by
+`npm run -w nightgauge-vscode marketing:screenshots`: the dashboard HTML is the
+extension's own renderer and the notification cards are the exact payloads the
+Discord and Slack notifiers send. Only the window and chat chrome around them
+are mocked.
 
-![Nightgauge sidebar showing the Pipeline, Repositories, and Knowledge tree views alongside an open source file](https://raw.githubusercontent.com/nightgauge/nightgauge/main/docs/images/screenshots/sidebar.png)
+**Analytics** — the model, effort level, tokens and cost of every stage in the
+run, with the share of the total each stage took and the cost trend across
+recent runs.
 
-**Codebase health, scored** — six-dimensional health assessment with deduped
-findings, modernization recommendations, and 30-day trend deltas.
+![Nightgauge dashboard Analytics tab — per-stage model, effort, token and cost breakdown for one run](https://raw.githubusercontent.com/nightgauge/nightgauge/main/docs/images/marketing/extension-dashboard-analytics.png)
 
-![Health dashboard with six scored dimensions, findings, and trend deltas](https://raw.githubusercontent.com/nightgauge/nightgauge/main/docs/images/screenshots/health.png)
+**Notifications** — the Discord embed and Slack attachment posted when the same
+run merged. Configure either in `.nightgauge/config.yaml`.
 
-**Context that compounds** — per-issue PRDs, ADRs, lessons, and retro outcomes,
-read by future runs so context does not evaporate after a PR merges.
+![Discord notification card for a merged pipeline run — issue, PR, stage summary and cost](https://raw.githubusercontent.com/nightgauge/nightgauge/main/docs/images/marketing/notification-discord.png)
 
-![Knowledge Value dashboard showing recall telemetry, per-stage hit rates, and graduation history](https://raw.githubusercontent.com/nightgauge/nightgauge/main/docs/images/screenshots/knowledge.png)
+![Slack notification attachment for a merged pipeline run — issue, PR, stage summary and cost](https://raw.githubusercontent.com/nightgauge/nightgauge/main/docs/images/marketing/notification-slack.png)
 
-**Brownfield modernization, planned** — deterministic readiness scores across
-eight axes plus a phased modernization plan with characterization-test coverage.
-
-![Brownfield dashboard with readiness scores across eight axes and a phased modernization plan](https://raw.githubusercontent.com/nightgauge/nightgauge/main/docs/images/screenshots/brownfield.png)
-
-**Configuration with drift detection** — see which layer wins every key, spot
-drift between local and team config, and move overrides up the stack.
-
-![Settings panel showing layered configuration resolution and drift between local and team config](https://raw.githubusercontent.com/nightgauge/nightgauge/main/docs/images/screenshots/settings.png)
-
-> Screenshots show the extension populated with representative mock data.
 > Exact appearance varies with your VS Code theme, platform, and version.
 
 ## Privacy and Telemetry
@@ -161,15 +153,15 @@ A full, current list of contributed commands is visible in VS Code's
 Extensions view under this extension's "Feature Contributions" tab (sourced
 directly from `package.json`). The most commonly used:
 
-| Command                                      | Description                           |
-| -------------------------------------------- | ------------------------------------- |
-| `Nightgauge: Sign In with GitHub`            | Connect your GitHub account           |
-| `Nightgauge: Pick Up Issue`                  | Claim an issue and start the pipeline |
-| `Nightgauge: Run Stage...`                   | Run a single pipeline stage           |
-| `Nightgauge: Show Dashboard`                 | Open the pipeline dashboard           |
-| `Nightgauge: Open Knowledge Value Dashboard` | Open the Knowledge Value dashboard    |
-| `Nightgauge: Stop Pipeline`                  | Stop the currently running pipeline   |
-| `Nightgauge: Open Settings`                  | Open the visual settings panel        |
+| Command                                      | Description                                                                                                                                                              |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `Nightgauge: Sign In with GitHub`            | Connect a Nightgauge account for hosted features (optional); not how the pipeline reaches GitHub. `Nightgauge: Sign In` offers the same plus a browser device-code flow. |
+| `Nightgauge: Pick Up Issue`                  | Claim an issue and start the pipeline                                                                                                                                    |
+| `Nightgauge: Run Stage...`                   | Run a single pipeline stage                                                                                                                                              |
+| `Nightgauge: Show Dashboard`                 | Open the pipeline dashboard                                                                                                                                              |
+| `Nightgauge: Open Knowledge Value Dashboard` | Open the Knowledge Value dashboard                                                                                                                                       |
+| `Nightgauge: Stop Pipeline`                  | Stop the currently running pipeline                                                                                                                                      |
+| `Nightgauge: Open Settings`                  | Open the visual settings panel                                                                                                                                           |
 
 ## Active Issue Knowledge Panel
 
@@ -183,15 +175,11 @@ appears in the Nightgauge sidebar showing:
 The panel refreshes automatically when the active issue changes or when knowledge
 files are modified on disk. Click any file item to open it in the editor.
 
-<!-- TODO: capture a screenshot after a real pipeline run with
-     populated knowledge files. docs/screenshots/ does not exist yet; do not
-     reference an image path here until a real capture is added. -->
-
 ## Knowledge Value Dashboard
 
 Opens a webview that aggregates
 `.nightgauge/pipeline/history/knowledge-events.jsonl` into a single
-"Is my Knowledge doing anything?" view (#3600).
+"Is my Knowledge doing anything?" view.
 
 Surfaces:
 
@@ -225,9 +213,6 @@ Identical data is available on the CLI, from a clone of this repository:
 nightgauge knowledge metrics --window 7 --stale-days 30 --json
 ```
 
-<!-- TODO: capture after the extension is dev-installed and
-     a meaningful amount of telemetry has accumulated. -->
-
 ## Settings
 
 Configure the extension via VS Code Settings (`Preferences > Settings`):
@@ -248,12 +233,12 @@ telemetry, and more) is best browsed through
 
 The status bar shows the current pipeline state:
 
-| State    | Display                    | Action on Click |
-| -------- | -------------------------- | --------------- |
-| Idle     | `$(nightgauge) Nightgauge` | Run Pipeline    |
-| Running  | `$(sync~spin) {Stage}`     | Stop Pipeline   |
-| Complete | `$(check) Complete`        | Run Pipeline    |
-| Error    | `$(error) Error`           | Show Dashboard  |
+| State    | Display                   | Action on Click |
+| -------- | ------------------------- | --------------- |
+| Idle     | `$(dashboard) Nightgauge` | Run Pipeline    |
+| Running  | `$(sync~spin) {Stage}`    | Stop Pipeline   |
+| Complete | `$(check) Complete`       | Run Pipeline    |
+| Error    | `$(error) Error`          | Show Dashboard  |
 
 ## Ready Issues View
 
@@ -300,7 +285,7 @@ refreshes.
 
 When a pipeline is already running and you try to pick up another issue, the
 extension automatically queues the new issue for processing after the current
-pipeline completes (Issue #346).
+pipeline completes.
 
 **Key Features**:
 
@@ -326,110 +311,10 @@ pipeline completes (Issue #346).
 | XL         | 80,000         |
 | (no label) | 20,000         |
 
-## Architecture
+## Contributing
 
-The extension acts as a UI layer on top of the SDK:
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│  VS Code Extension (nightgauge-vscode)                              │
-│  ├── Commands (runPipeline, runStage, showDashboard)            │
-│  ├── Settings (auth provider, model selection)                   │
-│  ├── Status Bar (pipeline state visualization)                   │
-│  └── Output Channel (logs)                                       │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-                              │ imports & uses
-                              ▼
-┌─────────────────────────────────────────────────────────────────┐
-│  @nightgauge/sdk                                            │
-│  ├── PipelineOrchestrator (orchestrates pipeline execution)     │
-│  ├── EventBus (stage:start, stage:complete, approval:needed)   │
-│  ├── TokenTracker (usage metrics)                               │
-│  └── ContextManager (context file I/O)                          │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-## Event-Driven Updates
-
-The extension subscribes to SDK events for real-time UI updates:
-
-| SDK Event           | UI Update                              |
-| ------------------- | -------------------------------------- |
-| `stage:start`       | Status bar shows "Running: {stage}"    |
-| `stage:complete`    | Status bar shows "{stage} complete"    |
-| `stage:error`       | Status bar shows "Error", notification |
-| `approval:needed`   | Modal dialog for user approval         |
-| `pipeline:complete` | Status bar shows "Complete"            |
-| `token:usage`       | Logged to output channel               |
-
-## Development
-
-### Setup
-
-```bash
-npm install
-```
-
-No registry authentication is required — this repo depends on no private
-packages. Building the bundled Go binary additionally needs the Go toolchain
-(see `go.mod` for the required version).
-
-### Building
-
-```bash
-cd packages/nightgauge-vscode
-npm install
-npm run build
-```
-
-### Packaging
-
-```bash
-npm run package
-```
-
-This creates a `.vsix` file that can be installed in VS Code.
-
-### Testing
-
-Run the test suite:
-
-```bash
-npm run test        # Run tests in watch mode
-npm run test:run    # Run tests once
-```
-
-To manually verify a packaged build:
-
-1. Run `npm run package` to create the `.vsix` file
-2. In VS Code: `Extensions > ... > Install from VSIX...`
-3. Select the generated `.vsix` file
-
-Full contributor documentation (key directories, adding commands/settings,
-multi-repo workspace notes) is maintained in the project repository.
-
-## File Structure
-
-```
-packages/nightgauge-vscode/
-├── src/
-│   ├── extension.ts              # Main entry point
-│   ├── commands/
-│   │   ├── index.ts              # Command registration
-│   │   ├── runPipeline.ts        # Run full pipeline
-│   │   ├── runStage.ts           # Run individual stage
-│   │   ├── showDashboard.ts      # Dashboard
-│   │   └── stopPipeline.ts       # Stop running pipeline
-│   ├── config/
-│   │   └── settings.ts           # Settings accessor
-│   └── utils/
-│       ├── logger.ts             # OutputChannel wrapper
-│       └── statusBar.ts          # Status bar management
-├── package.json                  # Extension manifest
-├── tsconfig.json                 # TypeScript config
-└── README.md                     # This file
-```
+Contributing, architecture and the test tiers are documented in the repository:
+https://github.com/nightgauge/nightgauge/blob/main/CONTRIBUTING.md
 
 ## Repository Configuration Requirements
 
@@ -443,9 +328,9 @@ notification if enabled.
 merging to detect failures, apply corrections, and keep the UI in sync.
 Auto-merge bypasses these mechanisms and causes stale pipeline state.
 
-**To disable via VSCode:** Open the Command Palette and run
-`Nightgauge: Disable Repository Auto-Merge`, or click "Disable Auto-Merge"
-in the warning notification that appears on workspace load.
+**To disable via VS Code:** click **Disable Auto-Merge** in the warning
+notification that appears on workspace load; the extension turns the setting
+off through the GitHub API.
 
 **To disable via CLI:** from a clone of this repository, run
 `nightgauge repo disable-auto-merge --owner <org> --repo <repo>`. The binary
@@ -458,7 +343,6 @@ bundled with the extension is not on your `PATH`.
 | Requirement                                       | Notes                                                                                                                                                                                                                                                         |
 | ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | VS Code 1.85.0 or higher                          |                                                                                                                                                                                                                                                               |
-| Node.js 18.0.0 or higher                          |                                                                                                                                                                                                                                                               |
 | `git`                                             | With a GitHub remote configured on the repository you point Nightgauge at.                                                                                                                                                                                    |
 | [`gh` CLI](https://cli.github.com), authenticated | `gh auth login`. The pipeline resolves its GitHub token from `.nightgauge/config.yaml`, `GITHUB_TOKEN`, or `gh auth token` — in that order. The extension's **Sign In with GitHub** command authenticates a Nightgauge account and is not part of that chain. |
 | An AI coding agent                                | The [`claude` CLI](https://docs.claude.com/en/docs/claude-code/overview) (Claude Code) is the **supported** adapter path. The other adapters — Codex, Gemini, Copilot, and direct API keys — are **beta**: they work, but are far less exercised and rougher. |
