@@ -7,6 +7,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.2] - 2026-09-02
+
+The first build published to the VS Code Marketplace (pre-release channel).
+Same product as 0.2.1; the listing and the package were fixed before publishing.
+
+### Changed
+
+- The VSIX no longer ships source maps or type declarations (23 MB and 1,000+
+  files smaller) and drops the plugin mirror's test files (#1306)
+- Listing metadata: an `AI` category, `extensionKind: workspace`, and explicit
+  untrusted-/virtual-workspace declarations (#1306)
+- README is the Marketplace page: real dashboard and notification renders
+  replace the hand-built mockups; contributor sections moved to the repository
+  (#1306)
+- Status bar uses the `dashboard` codicon (#1306)
+- Release pipeline: one Marketplace publish path, pre-release packaging for
+  0.x, and a guard that no source maps ship (#1300, #1307)
+
 ## [0.2.1] - 2026-09-02
 
 First public version on the VS Code Marketplace, published as a **pre-release**
