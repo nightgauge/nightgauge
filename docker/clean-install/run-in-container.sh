@@ -155,5 +155,20 @@ if [[ -d "$WORK/.nightgauge/pipeline" ]]; then
   mkdir -p "$OUT/pipeline"
   cp -r "$WORK/.nightgauge/pipeline/." "$OUT/pipeline/" 2>/dev/null || true
 fi
+# VS Code persists every output channel (including the extension's own
+# logger) under the user-data dir, and that is the only place the reason for a
+# failure that never started a stage exists: the fourth CI run recorded
+# `terminal_failure_kind=subagent_crash` after 1.2 s with an empty stages map
+# and nothing else on disk. Copy the logs, then print the extension's channel
+# so the reason reaches the workflow log without downloading the artifact.
+if [[ -d "$USER_DIR/logs" ]]; then
+  mkdir -p "$OUT/vscode-logs"
+  cp -r "$USER_DIR/logs/." "$OUT/vscode-logs/" 2>/dev/null || true
+  echo "--- extension output channels (tail) ---"
+  find "$OUT/vscode-logs" -type f -path '*output_logging_*' -iname '*nightgauge*' -print0 2>/dev/null \
+    | while IFS= read -r -d '' f; do echo "== $f"; tail -n 60 "$f"; done
+  find "$OUT/vscode-logs" -type f -name 'exthost.log' -print0 2>/dev/null \
+    | while IFS= read -r -d '' f; do echo "== $f (errors)"; grep -aiE 'error|nightgauge' "$f" | tail -n 40; done
+fi
 [[ -f "$CLEAN_INSTALL_REPORT" ]] || { echo "ERROR: the driver never wrote its report — VS Code exited without running it"; exit 1; }
 python3 -c "import json,sys; r=json.load(open(sys.argv[1])); print('driver status:', r['status']); sys.exit(0 if r['status']=='pass' else 1)" "$CLEAN_INSTALL_REPORT"
