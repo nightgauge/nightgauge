@@ -12,15 +12,28 @@ name: Release Watchdog
 #
 # Shape of a run:
 #
-#   gate    Resolve autonomous_discovery.{enabled,kill_switch,score_threshold}
-#           and scheduled_tasks.release_watch.enabled out of
-#           .nightgauge/config.yaml. Fails closed — see
-#           scripts/discovery-config-gate.py.
+#   gate     Resolve autonomous_discovery.{enabled,kill_switch,score_threshold}
+#            and scheduled_tasks.release_watch.enabled out of
+#            .nightgauge/config.yaml. Fails closed — see
+#            scripts/discovery-config-gate.py.
 #
-#   watch   Detect deterministically (`nightgauge release fetch`, no model),
-#           optionally assess and file issues with the release-watch skill,
-#           and ALWAYS close a run record so the tab can tell "ran and found
-#           nothing" apart from "never ran".
+#   analyze  Detect deterministically (`nightgauge release fetch`, no model),
+#            then optionally assess with the release-watch skill. READ-ONLY:
+#            `contents: read`, no forge token in the model's environment, and
+#            the only thing it hands on is one JSON proposal artifact.
+#
+#   apply    Model-free. Holds the write scopes, downloads the artifact,
+#            validates it against a closed schema
+#            (scripts/validate-proposal-artifact.mjs), and only then files
+#            issues, advances last-seen, and ALWAYS closes a run record so the
+#            tab can tell "ran and found nothing" apart from "never ran".
+#
+# WHY TWO JOBS. The skill reads release notes from a third-party repository
+# and runs with Bash. One job that held `contents: write`, `issues: write` and
+# a GH_TOKEN while doing that was a prompt-injection-to-write path: a crafted
+# release note could have pushed state or filed anything (#1304). The model
+# now runs where there is nothing to write with, and everything it produces
+# passes through the validator before a token is anywhere near it.
 #
 # The state files are published to the `discovery-state` branch, not to `main`:
 # `main`'s ruleset requires a pull request, so no workflow token can push to
@@ -104,17 +117,23 @@ jobs:
             echo "\`scheduled_tasks.release_watch.enabled\` in \`.nightgauge/config.yaml\`."
           } >> "$GITHUB_STEP_SUMMARY"
 
-  watch:
-    name: Detect, assess, and record
+  analyze:
+    name: Detect and assess (read-only)
     needs: gate
     if: ${{ needs.gate.outputs.enabled == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
-      # Push the run record to the `discovery-state` branch.
-      contents: write
-      # The skill files issues for high-relevance changes.
-      issues: write
+      # Read-only by construction. The model runs in this job, so nothing here
+      # may be able to write to the forge: no `issues: write`, no
+      # `contents: write`, and — below — no token in the model step's env.
+      contents: read
+    outputs:
+      since: ${{ steps.detect.outputs.since }}
+      count: ${{ steps.detect.outputs.count }}
+      new_version: ${{ steps.detect.outputs.new_version }}
+      detect_outcome: ${{ steps.detect.outcome }}
+      assess_outcome: ${{ steps.assess.outcome }}
     env:
       # Every dispatch input is bound to an env var and referenced as "$VAR"
       # inside `run:`, never interpolated into the script text. Interpolation
@@ -125,12 +144,17 @@ jobs:
       SINCE_OVERRIDE: ${{ inputs.since }}
       DRY_RUN: ${{ inputs.dry_run || false }}
       SCORE_THRESHOLD: ${{ needs.gate.outputs.score_threshold }}
-      TRIGGERED_BY: ${{ github.event_name }}
       # `secrets` is not one of the contexts available to a step-level `if:`,
       # so the key's presence is resolved here, where it is.
       HAS_API_KEY: ${{ secrets.ANTHROPIC_API_KEY != '' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Do not leave the job token in .git/config where a Bash-equipped
+          # model could reuse it. The token is read-only here anyway; this
+          # makes "no forge credential reachable from the model" literally
+          # true rather than merely scoped.
+          persist-credentials: false
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
@@ -148,7 +172,8 @@ jobs:
       - name: Carry forward the previous run's state
         # last-seen-<provider>.json lives on the state branch, not in the
         # source tree. Without this the runner starts from 0.0.0 every day and
-        # re-detects every release it has already seen.
+        # re-detects every release it has already seen. The fetch is
+        # unauthenticated (public repository) — see persist-credentials above.
         run: bash scripts/discovery-state-sync.sh
 
       - name: Detect a new upstream release
@@ -182,27 +207,22 @@ jobs:
           echo "Detected $COUNT release(s) newer than '${SINCE:-<none>}'; newest='$NEW_VERSION'"
         env:
           # `release fetch` sends this as a bearer token when present, which
-          # lifts the unauthenticated api.github.com rate limit.
+          # lifts the unauthenticated api.github.com rate limit. Step-scoped:
+          # this is the last step that sees a forge token, and it runs before
+          # the model does. The payload it writes is what the model reads.
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Open the run record
-        # Opened BEFORE any model work so a run that dies mid-assessment still
-        # leaves a `status: running` record. A producer that only wrote on
-        # success would look identical to a producer that never ran — which is
-        # exactly the state this workflow exists to end.
-        env:
-          SINCE: ${{ steps.detect.outputs.since }}
-          NEW_VERSION: ${{ steps.detect.outputs.new_version }}
+      - name: Start from an empty proposal artifact
+        # Written before the model runs, so a skipped or failed assessment
+        # still uploads a well-formed "proposed nothing" artifact and `apply`
+        # can always close the run record from it.
         run: |
-          python3 scripts/discovery-run-record.py open \
-            --kind release-watch \
-            --provider "$PROVIDER" \
-            --source "$SOURCE" \
-            --triggered-by "$TRIGGERED_BY" \
-            --since-version "$SINCE" \
-            --new-version "$NEW_VERSION"
+          set -euo pipefail
+          # Outside the checkout so the model cannot confuse it with repository state.
+          mkdir -p "$RUNNER_TEMP/proposals"
+          jq -n '{schema: 1, kind: "release-watch", proposals: []}' > "$RUNNER_TEMP/proposals/proposals.json"
 
-      - name: Assess relevance and file issues
+      - name: Assess relevance and draft proposals
         id: assess
         # Three conditions, each of which independently degrades to
         # detection-only rather than failing the run:
@@ -211,18 +231,24 @@ jobs:
         #   - an API key exists for the model
         if: ${{ steps.detect.outputs.count != '0' && needs.gate.outputs.create_issues == 'true' && env.DRY_RUN != 'true' && env.HAS_API_KEY == 'true' }}
         env:
+          # The model's whole environment: a model key and a scratch path.
+          # Deliberately NO GH_TOKEN / GITHUB_TOKEN — the skill reads release
+          # notes the repository does not control, and a forge credential here
+          # would make any injected instruction a write.
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SINCE: ${{ steps.detect.outputs.since }}
+          PROPOSAL_FILE: ${{ runner.temp }}/proposals/proposals.json
+          RELEASES_FILE: ${{ runner.temp }}/releases.json
         run: |
           set -euo pipefail
-          npm install --global --no-fund --no-audit @anthropic-ai/claude-code
+          npm install --global --no-fund --no-audit @anthropic-ai/claude-code@2.1.258
 
           # Prompt on stdin with `-p`, matching how the pipeline's own Claude
           # adapter invokes the CLI (internal/execution/adapters/claude.go).
           # Not the `/nightgauge:release-watch` slash command: that resolves
           # through the plugin marketplace, which is not installed on a
-          # hosted runner. --allowedTools mirrors the SKILL.md frontmatter.
+          # hosted runner. --allowedTools mirrors the SKILL.md frontmatter;
+          # the tools are the same, the job holding them is not.
           claude -p \
             --no-session-persistence \
             --allowedTools "Bash,Read,Write,Glob,Grep" \
@@ -233,20 +259,115 @@ jobs:
             --provider ${PROVIDER}
             --source ${SOURCE}
             --since ${SINCE}
-            --create-issues
+            --dry-run
 
-          Only create issues for changes scoring at or above ${SCORE_THRESHOLD}.
-          Record the outcome in .nightgauge/release-watch/creation-log-${PROVIDER}.json,
-          preserving the keys already in that file.
+          The already-fetched release payload is at ${RELEASES_FILE}.
+
+          You have no GitHub credentials and must not create issues, labels,
+          or commits, and must not modify .nightgauge/. Instead, for each
+          change scoring at or above ${SCORE_THRESHOLD}, write one proposal to
+          ${PROPOSAL_FILE} as JSON with EXACTLY this shape and nothing else:
+
+            {"schema": 1, "kind": "release-watch",
+             "proposals": [{"title": "...", "body": "...", "labels": ["..."]}]}
+
+          Rules: at most 10 proposals; title under 200 characters on one line;
+          body under 20000 characters of Markdown; labels must include
+          "source:auto-discovery" and "${PROVIDER}-release" and may add one
+          type:* and one priority:* label from the skill's label strategy.
+          Any other key or label is rejected downstream. If nothing scores
+          above the threshold, leave the file as it is.
           PROMPT
+
+          node scripts/validate-proposal-artifact.mjs --kind release-watch "$PROPOSAL_FILE"
+
+      - name: Upload the proposal artifact
+        # `always()` so `apply` has something to download even when detection
+        # or assessment failed — the empty default written above.
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-watch-proposals
+          path: ${{ runner.temp }}/proposals/proposals.json
+          if-no-files-found: error
+          retention-days: 7
+
+  apply:
+    name: Validate, file, and record
+    needs: [gate, analyze]
+    # Runs after `analyze` whatever its result, so a failed assessment is
+    # recorded as a failed run rather than leaving the tab showing "running"
+    # until tomorrow. Skipped only when the gate said not to run at all.
+    if: ${{ always() && needs.gate.outputs.enabled == 'true' && needs.analyze.result != 'skipped' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      # Push the run record to the `discovery-state` branch.
+      contents: write
+      # File the validated proposals as issues.
+      issues: write
+    env:
+      PROVIDER: ${{ inputs.provider || 'claude-code' }}
+      SOURCE: ${{ inputs.source || 'anthropics/claude-code' }}
+      DRY_RUN: ${{ inputs.dry_run || false }}
+      TRIGGERED_BY: ${{ github.event_name }}
+      CREATE_ISSUES: ${{ needs.gate.outputs.create_issues }}
+      SINCE: ${{ needs.analyze.outputs.since }}
+      COUNT: ${{ needs.analyze.outputs.count }}
+      NEW_VERSION: ${{ needs.analyze.outputs.new_version }}
+      DETECT_OUTCOME: ${{ needs.analyze.outputs.detect_outcome }}
+      ASSESS_OUTCOME: ${{ needs.analyze.outputs.assess_outcome }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Carry forward the previous run's state
+        run: bash scripts/discovery-state-sync.sh
+
+      - name: Open the run record
+        # Opened BEFORE anything is filed so a run that dies mid-apply still
+        # leaves a `status: running` record. A producer that only wrote on
+        # success would look identical to a producer that never ran — which is
+        # exactly the state this workflow exists to end.
+        run: |
+          python3 scripts/discovery-run-record.py open \
+            --kind release-watch \
+            --provider "$PROVIDER" \
+            --source "$SOURCE" \
+            --triggered-by "$TRIGGERED_BY" \
+            --since-version "$SINCE" \
+            --new-version "$NEW_VERSION"
+
+      - name: Download the proposal artifact
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: release-watch-proposals
+          path: ${{ runner.temp }}/proposals
+
+      - name: Validate the proposal artifact
+        id: validate
+        # The gate. Exact keys, bounded sizes, a label allowlist and a
+        # proposal cap; anything else exits 1 and nothing below runs.
+        env:
+          PROPOSAL_FILE: ${{ runner.temp }}/proposals/proposals.json
+        run: node scripts/validate-proposal-artifact.mjs --kind release-watch "$PROPOSAL_FILE"
+
+      - name: File the validated proposals as issues
+        id: file
+        if: ${{ env.CREATE_ISSUES == 'true' && env.DRY_RUN != 'true' }}
+        env:
+          PROPOSAL_FILE: ${{ runner.temp }}/proposals/proposals.json
+        run: |
+          bash scripts/apply-proposal-artifact.sh \
+            --kind release-watch \
+            --file "$PROPOSAL_FILE" \
+            --record ".nightgauge/release-watch/creation-log-${PROVIDER}.json"
 
       - name: Advance last-seen
         # In detection-only mode (no key, or kill switch on) the skill never
         # runs, so nothing else advances the pointer and the same release is
         # re-detected every morning forever.
-        if: ${{ steps.detect.outputs.new_version != '' && env.DRY_RUN != 'true' }}
-        env:
-          NEW_VERSION: ${{ steps.detect.outputs.new_version }}
+        if: ${{ env.NEW_VERSION != '' && env.DRY_RUN != 'true' }}
         run: |
           set -euo pipefail
           LAST_SEEN=".nightgauge/release-watch/last-seen-${PROVIDER}.json"
@@ -267,8 +388,8 @@ jobs:
         # than leaving the tab showing "running" until tomorrow.
         if: ${{ always() }}
         env:
-          DETECT_OUTCOME: ${{ steps.detect.outcome }}
-          ASSESS_OUTCOME: ${{ steps.assess.outcome }}
+          VALIDATE_OUTCOME: ${{ steps.validate.outcome }}
+          FILE_OUTCOME: ${{ steps.file.outcome }}
         run: |
           STATUS=completed
           ERROR=""
@@ -278,6 +399,12 @@ jobs:
           elif [ "$ASSESS_OUTCOME" = "failure" ]; then
             STATUS=failed
             ERROR="release-watch assessment failed — see the workflow run log"
+          elif [ "$VALIDATE_OUTCOME" = "failure" ]; then
+            STATUS=failed
+            ERROR="proposal artifact rejected by the schema gate — nothing was filed"
+          elif [ "$FILE_OUTCOME" = "failure" ]; then
+            STATUS=failed
+            ERROR="issue creation failed — see the workflow run log"
           fi
           python3 scripts/discovery-run-record.py close \
             --kind release-watch \
@@ -289,8 +416,6 @@ jobs:
 
       - name: Publish state to the discovery-state branch
         if: ${{ always() }}
-        env:
-          NEW_VERSION: ${{ steps.detect.outputs.new_version }}
         run: |
           bash scripts/discovery-state-publish.sh \
             --message "chore(discovery): release-watch ${PROVIDER} ${NEW_VERSION:-no new release}"
@@ -298,10 +423,8 @@ jobs:
       - name: Summarize the run
         if: ${{ always() }}
         env:
-          SINCE: ${{ steps.detect.outputs.since }}
-          COUNT: ${{ steps.detect.outputs.count }}
-          CREATE_ISSUES: ${{ needs.gate.outputs.create_issues }}
           GATE_REASON: ${{ needs.gate.outputs.reason }}
+          VALIDATE_OUTCOME: ${{ steps.validate.outcome }}
         run: |
           {
             echo "### Release watchdog"
@@ -309,6 +432,7 @@ jobs:
             echo "- provider: \`$PROVIDER\` (\`$SOURCE\`)"
             echo "- since: \`$SINCE\`"
             echo "- releases detected: \`$COUNT\`"
+            echo "- assessment: \`$ASSESS_OUTCOME\`; artifact: \`$VALIDATE_OUTCOME\`"
             echo "- issue creation: \`$CREATE_ISSUES\` ($GATE_REASON)"
             echo
             echo "Run \`scripts/discovery-state-sync.sh\` locally to see this in the Discovery tab."
