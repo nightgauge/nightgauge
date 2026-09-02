@@ -62,6 +62,8 @@ export default [
       "**/out/**",
       "**/*.generated.ts",
       ".nightgauge/**",
+      // Clean-install gate run directories: seeded fixture copies and logs.
+      ".clean-install-e2e/**",
       // Per-issue pipeline worktrees — linting happens inside each worktree's
       // own CI run, not from the main checkout. Without this ignore, every
       // file in an active pipeline slot shows up as a lint failure in the

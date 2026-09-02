@@ -43,3 +43,6 @@ internal/terminalkind/testdata/captured-shapes.json
 # `make generate-terminal-kind-table` (#306). Reformatting it would make every
 # regeneration show a spurious drift, and the drift check compares bytes.
 internal/terminalkind/testdata/stress-golden.json
+
+# Clean-install gate run directories
+.clean-install-e2e/
