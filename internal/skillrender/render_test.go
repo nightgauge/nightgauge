@@ -576,10 +576,13 @@ func TestRealSkillsRenderClean(t *testing.T) {
 			if len(res.Content) < 1000 {
 				t.Errorf("suspiciously short render (%d bytes)", len(res.Content))
 			}
-			// No overlays exist yet (#81 authors them), so every shipped skill
-			// must render base-only today.
+			// This case passes no Model, so no key resolves and every shipped
+			// skill must render base-only — the fail-open contract, not a
+			// statement about which overlays exist. (Overlays do exist now:
+			// see TestFableOverlayReachesTheStagesThatDispatchIt for the
+			// with-a-model half.)
 			if len(res.Fragments) != 0 {
-				t.Errorf("unexpected fragments before #81: %v", res.Fragments)
+				t.Errorf("model-less render applied fragments: %v", res.Fragments)
 			}
 		})
 	}
@@ -868,5 +871,130 @@ func TestPRMergeBatchProbeSignalsContextPresence(t *testing.T) {
 	}
 	if got := runProbe(); got != "BATCH_CONTEXT_FOUND=.nightgauge/pipeline/dev-batch-367.json" {
 		t.Fatalf("probe with a batch file = %q, want the batch context signal", got)
+	}
+}
+
+// ─── Model overlays over the real corpus ─────────────────────────────────────
+
+// TestFableOverlayReachesTheStagesThatDispatchIt renders the shipped skills
+// against the real overlay corpus and proves the claude-fable-5-1 fragment
+// both applies and is scoped (#1276).
+//
+// It is written to be able to go red in both directions. Deleting
+// skills/_shared/_overlays/claude-fable-5-1.md fails the "want" half; moving
+// the same text up into a provider-level `anthropic.md` fragment fails the
+// "not want" half, because claude-opus-5 resolves that same provider key and
+// must still render base-only.
+//
+// The substrings are the load-bearing phrasings the vendor guidance gives
+// verbatim ("surgically edit a file", "operating autonomously"), not
+// paraphrases. A reflow that wraps a line between two of those words is a real
+// regression rather than a cosmetic one: the rendered prompt is what the model
+// reads, and the guidance is explicit that the exact wording carries the
+// effect.
+func TestFableOverlayReachesTheStagesThatDispatchIt(t *testing.T) {
+	root := filepath.Join("..", "..", "skills")
+	if _, err := os.Stat(root); err != nil {
+		t.Skipf("skills/ not present: %v", err)
+	}
+	overlay := filepath.Join(root, "_shared", "_overlays", "claude-fable-5-1.md")
+	if _, err := os.Stat(overlay); err != nil {
+		t.Fatalf("the claude-fable-5-1 overlay must exist: %v", err)
+	}
+
+	fableText := []string{
+		"surgically edit a file",   // targeted edits over whole-file rewrites
+		"operating autonomously",   // the unattended-run block
+		"report it as a follow-up", // scope and test coverage
+		"the scope is the deliverable",
+	}
+
+	for stage := range StageSkillDirs {
+		t.Run("fable/"+stage, func(t *testing.T) {
+			res := mustRender(t, Options{
+				Stage:       stage,
+				Model:       "claude-fable-5-1",
+				SkillsRoots: []string{root},
+			})
+			if res.ResolvedModel != "claude-fable-5-1" {
+				t.Fatalf("resolved model = %q, want claude-fable-5-1", res.ResolvedModel)
+			}
+			if len(res.Fragments) == 0 {
+				t.Fatalf("no overlay fragment applied; keys=%v", res.Keys)
+			}
+			for _, want := range fableText {
+				if !strings.Contains(res.Content, want) {
+					t.Errorf("rendered %s is missing overlay text %q", stage, want)
+				}
+			}
+		})
+	}
+
+	for stage := range StageSkillDirs {
+		t.Run("opus/"+stage, func(t *testing.T) {
+			res := mustRender(t, Options{
+				Stage:       stage,
+				Model:       "claude-opus-5",
+				SkillsRoots: []string{root},
+			})
+			for _, notWant := range fableText {
+				if strings.Contains(res.Content, notWant) {
+					t.Errorf("rendered %s for claude-opus-5 leaked overlay text %q", stage, notWant)
+				}
+			}
+		})
+	}
+}
+
+// TestFableBatchingNudgeIsStageScoped pins the stage scoping from #1276.
+//
+// The scoping lives in the cascade, not in prose. The composer collects BOTH
+// skills/_shared/_overlays/<key>.md and skills/<skill>/_overlays/<key>.md and
+// joins them into one "## Model Adaptation" section (render.go runs two collect
+// loops, shared then skill-specific), so a block that belongs to two stages
+// ships as a skill-specific fragment in exactly those two skill directories and
+// nothing is duplicated. Folding those two fragments back into the shared
+// overlay makes the absence half below fail for the other five stages; deleting
+// them makes the presence half fail for feature-dev and feature-validate.
+//
+// The two stages are chosen on the vendor's own scoping axis, loop shape: the
+// symptom is one tool call per turn in coding and computer-use loops where the
+// next independent calls are implied by the task rather than explicitly
+// requested, and the cost is extra turns (tokens, round trips, wall-clock)
+// rather than worse answers. feature-dev and feature-validate are the
+// pipeline's only stages of that shape. No measurement gates the choice and
+// none could: diagnostics.ToolCallRecord (internal/diagnostics/exit_record.go)
+// carries no assistant-turn identifier, so the share of turns holding more than
+// one tool call is not derivable even from a fully populated record.
+func TestFableBatchingNudgeIsStageScoped(t *testing.T) {
+	root := filepath.Join("..", "..", "skills")
+	if _, err := os.Stat(root); err != nil {
+		t.Skipf("skills/ not present: %v", err)
+	}
+	const nudge = "First privately list what you need next"
+	wantsNudge := map[string]bool{"feature-dev": true, "feature-validate": true}
+
+	for stage, dir := range StageSkillDirs {
+		frag := filepath.Join(root, dir, "_overlays", "claude-fable-5-1.md")
+		_, err := os.Stat(frag)
+		if wantsNudge[stage] && err != nil {
+			t.Errorf("%s: the skill-specific fragment %s must exist: %v", stage, frag, err)
+		}
+		if !wantsNudge[stage] && err == nil {
+			t.Errorf("%s: unexpected skill-specific fragment %s — the nudge is scoped to feature-dev and feature-validate", stage, frag)
+		}
+
+		res := mustRender(t, Options{
+			Stage:       stage,
+			Model:       "claude-fable-5-1",
+			SkillsRoots: []string{root},
+		})
+		want := 0
+		if wantsNudge[stage] {
+			want = 1
+		}
+		if got := strings.Count(res.Content, nudge); got != want {
+			t.Errorf("%s: rendered prompt carries the batching nudge %d time(s), want %d", stage, got, want)
+		}
 	}
 }
