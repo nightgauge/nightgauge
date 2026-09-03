@@ -3908,6 +3908,18 @@ func (as *AutonomousScheduler) prioritize(ctx context.Context, g *depgraph.Graph
 		// these burns tokens through issue-pickup → planning → feature-dev →
 		// validate and then fails at pr-create with nothing to commit (#317).
 		// Matched case-insensitively, mirroring the type:epic check above.
+		//
+		// The exclusion is only as good as the label list it reads. The board
+		// scan pages labels (labels(first: 8)) and flags an item whose page did
+		// not hold them all; on such an item "no excluded label visible" proves
+		// nothing, so it is refused outright — fail CLOSED, the polarity the
+		// refinement scan already uses (#993, #998). Nothing is dispatched from
+		// a label list that is known to be incomplete.
+		if node.LabelsTruncated {
+			bump("labels-truncated")
+			log.Printf("autonomous: refusing %s — its label list was truncated by the board scan (%d visible), so the human-only exclusion cannot be evaluated; remove labels until it fits or raise the board-scan label page", key, len(node.Labels))
+			continue
+		}
 		if label, excluded := excludedLabelMatch(node.Labels, resolvedExcludeLabels(as.config.ExcludeLabels)); excluded {
 			bump("excluded-label:" + strings.ToLower(label))
 			log.Printf("autonomous: skipping %s — carries human-only label %q (autonomous.exclude_labels); needs a human, no pipeline retry can clear it", key, label)

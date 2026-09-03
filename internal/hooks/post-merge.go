@@ -17,6 +17,15 @@ type PostMergeInput struct {
 	RepositoryName  string
 	ProjectNumber   int // Optional; 0 if not configured
 	PRNumber        int // Optional; 0 skips the PR-state guard
+	// MainChecks reads the merge commit's check runs so the hook can observe
+	// whether the merge turned the base branch red (#1249). Nil skips the
+	// verification and the result says so (MainChecksSkipped) — it never reads
+	// as green. Requires PRNumber > 0 and a PRMergeInfoFetcher, because the
+	// merge SHA comes from the same breadcrumb the survival record uses.
+	MainChecks MainCheckReader
+	// MainCheckWait bounds the verification poll. The zero value is a single
+	// read (see MainCheckWait); the pipeline passes DefaultMainCheckWait().
+	MainCheckWait MainCheckWait
 }
 
 // PRVerifier abstracts querying the current state of a PR so EvaluatePostMerge
@@ -32,7 +41,7 @@ type PRVerifier interface {
 // loop can later verify whether the merged code held up on main. Strictly
 // non-blocking — any error leaves the breadcrumb empty and never fails a merge.
 type PRMergeInfoFetcher interface {
-	GetPRMergeInfo(ctx context.Context, owner, repo string, prNumber int) (sha, mergedAt string, err error)
+	GetPRMergeInfo(ctx context.Context, owner, repo string, prNumber int) (gh.PRMergeInfo, error)
 }
 
 // PostMergeResult holds the outcome of the post-merge hook.
@@ -91,6 +100,15 @@ type PostMergeResult struct {
 	// wired and input.PRNumber > 0; empty on any fetch failure (non-blocking).
 	MergedCommitSha string `json:"mergedCommitSha,omitempty"`
 	MergedAt        string `json:"mergedAt,omitempty"`
+	// BaseRef is the branch the merge landed on, from the same breadcrumb.
+	BaseRef string `json:"baseRef,omitempty"`
+	// MainChecks is the post-merge observation of the base branch (#1249): the
+	// merge commit's own check runs, polled to completion within
+	// input.MainCheckWait. Nil when the hook refused before the merge was
+	// confirmed; MainChecksSkipped when no reader was wired or no SHA was
+	// captured. A red verdict does NOT set Failed — the hook did its job; what
+	// failed is main, and the Action Center card is where that goes.
+	MainChecks *MainCheckResult `json:"mainChecks,omitempty"`
 	// SurvivalEligible is true when this merge should seed a post-merge survival
 	// record (#4151): the issue closed, a merge commit SHA + mergedAt were
 	// captured, and the merged issue is a SINGLE issue (not an epic-umbrella PR,
@@ -234,7 +252,7 @@ func splitOwnerRepo(full string) (owner, repo string, ok bool) {
 //
 // This function is non-blocking: errors are logged to stderr but never returned.
 // The merge must not be blocked by a failing close, sync, or epic check.
-func EvaluatePostMerge(ctx context.Context, issueSvc IssueFetcher, issueCloser IssueCloser, epicSvc EpicAutoCloser, prVerifier PRVerifier, boardSvc BoardSyncer, input PostMergeInput) PostMergeResult {
+func EvaluatePostMerge(ctx context.Context, issueSvc IssueFetcher, issueCloser IssueCloser, epicSvc EpicAutoCloser, prVerifier PRVerifier, boardSvc BoardSyncer, input PostMergeInput) (out PostMergeResult) {
 	// Guard: verify the PR is actually MERGED before closing the issue.
 	// Skipped when PRNumber is 0 (caller does not know the PR number) or
 	// prVerifier is nil (no GitHub client available — e.g., some test paths).
@@ -255,16 +273,17 @@ func EvaluatePostMerge(ctx context.Context, issueSvc IssueFetcher, issueCloser I
 	// logs a warning and leaves the fields empty, and the issue-close +
 	// epic-reconcile path below runs unchanged regardless. Only attempted when
 	// the PR number is known and the verifier also exposes merge info.
-	var mergedSha, mergedAt string
+	var merge gh.PRMergeInfo
 	if input.PRNumber > 0 && prVerifier != nil {
 		if mf, ok := prVerifier.(PRMergeInfoFetcher); ok {
-			if sha, at, infoErr := mf.GetPRMergeInfo(ctx, input.RepositoryOwner, input.RepositoryName, input.PRNumber); infoErr != nil {
+			if info, infoErr := mf.GetPRMergeInfo(ctx, input.RepositoryOwner, input.RepositoryName, input.PRNumber); infoErr != nil {
 				fmt.Fprintf(os.Stderr, "Warning: post-merge hook: could not capture merge commit for PR #%d: %v\n", input.PRNumber, infoErr)
 			} else {
-				mergedSha, mergedAt = sha, at
+				merge = info
 			}
 		}
 	}
+	mergedSha, mergedAt := merge.SHA, merge.MergedAt
 
 	issue, err := issueSvc.GetIssue(ctx, input.RepositoryOwner, input.RepositoryName, input.IssueNumber)
 	if err != nil {
@@ -306,7 +325,12 @@ func EvaluatePostMerge(ctx context.Context, issueSvc IssueFetcher, issueCloser I
 	}
 	issueClosed := closedByUs || alreadyClosed
 
-	out := PostMergeResult{IssueClosed: issueClosed, MergedCommitSha: mergedSha, MergedAt: mergedAt}
+	out = PostMergeResult{IssueClosed: issueClosed, MergedCommitSha: mergedSha, MergedAt: mergedAt, BaseRef: merge.BaseRef}
+	// (#1249) Observe the base branch AFTER the fast reconciliation below has
+	// run, not before: the poll can take minutes, and the issue close, board
+	// sync and epic rollup must not wait on CI. Every return path past this
+	// point goes through verifyMain.
+	defer func() { out.MainChecks = verifyMain(ctx, input, out) }()
 
 	// (#4151) Mark this merge eligible to seed a survival record: the issue
 	// closed, both breadcrumb fields were captured, and the merged issue is a
@@ -411,4 +435,35 @@ func EvaluatePostMerge(ctx context.Context, issueSvc IssueFetcher, issueCloser I
 	out.Reason = result.Status
 	out.EpicReason = result.Reason
 	return out
+}
+
+// verifyMain runs the #1249 post-merge observation for a hook that confirmed
+// the merge and captured its SHA, and returns nil for one that did not. It is
+// the last thing EvaluatePostMerge does because it is the slow thing: the
+// reconciliation above is a handful of API calls, this is a bounded wait on CI.
+func verifyMain(ctx context.Context, input PostMergeInput, out PostMergeResult) *MainCheckResult {
+	if out.MergedCommitSha == "" {
+		return nil
+	}
+	res := VerifyMergeCommit(ctx, input.MainChecks, input.RepositoryOwner, input.RepositoryName, out.BaseRef, out.MergedCommitSha, input.MainCheckWait)
+	switch res.Verdict {
+	case MainChecksSkipped:
+		fmt.Fprintf(os.Stderr, "Post-merge: main verification skipped for %s (no check reader wired)\n", shortSHA(out.MergedCommitSha))
+	case MainChecksRed:
+		fmt.Fprintf(os.Stderr, "Warning: post-merge: %s is RED at merge commit %s — %d check(s) failed: %s\n",
+			out.BaseRef, shortSHA(out.MergedCommitSha), res.Bad, strings.Join(res.FailingNames(), ", "))
+	case MainChecksGreen:
+		fmt.Fprintf(os.Stderr, "Post-merge: %s is green at merge commit %s (%d checks, %d polls)\n",
+			out.BaseRef, shortSHA(out.MergedCommitSha), res.Total, res.Polls)
+	case MainChecksPending:
+		fmt.Fprintf(os.Stderr, "Post-merge: %s verification budget exhausted at merge commit %s — %d of %d checks still pending (not evidence of breakage)\n",
+			out.BaseRef, shortSHA(out.MergedCommitSha), res.Pending, res.Total)
+	case MainChecksNone:
+		fmt.Fprintf(os.Stderr, "Post-merge: no check runs appeared on merge commit %s within the grace — %s is NOT verified green\n",
+			shortSHA(out.MergedCommitSha), out.BaseRef)
+	case MainChecksError:
+		fmt.Fprintf(os.Stderr, "Warning: post-merge: could not read check runs for merge commit %s: %s\n",
+			shortSHA(out.MergedCommitSha), res.Error)
+	}
+	return &res
 }

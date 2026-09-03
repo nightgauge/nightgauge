@@ -160,9 +160,10 @@ type projectItemContent struct {
 		CreatedAt         graphql.String
 		UpdatedAt         graphql.String
 		AuthorAssociation graphql.String `graphql:"authorAssociation"`
-		Labels            struct {
-			Nodes []labelNode
-		} `graphql:"labels(first: 8)"`
+		// labelPage (not a bare Nodes slice) so a clipped page is detectable:
+		// every label-derived board decision, including the owner-action
+		// dispatch exclusion, must fail CLOSED on an incomplete set (#998).
+		Labels     labelPage `graphql:"labels(first: 8)"`
 		Repository struct {
 			NameWithOwner graphql.String
 		}
@@ -184,15 +185,13 @@ type projectItemContent struct {
 		}
 	} `graphql:"... on Issue"`
 	PRFields struct {
-		Number    graphql.Int
-		Title     graphql.String
-		State     graphql.String
-		URL       graphql.String
-		CreatedAt graphql.String
-		UpdatedAt graphql.String
-		Labels    struct {
-			Nodes []labelNode
-		} `graphql:"labels(first: 8)"`
+		Number     graphql.Int
+		Title      graphql.String
+		State      graphql.String
+		URL        graphql.String
+		CreatedAt  graphql.String
+		UpdatedAt  graphql.String
+		Labels     labelPage `graphql:"labels(first: 8)"`
 		Repository struct {
 			NameWithOwner graphql.String
 		}
@@ -229,6 +228,37 @@ type fieldValueNode struct {
 
 type labelNode struct {
 	Name graphql.String
+}
+
+// labelPage is one page of an issue's or PR's labels connection, read with
+// totalCount so a clipped page is detectable. It is the single definition of
+// what "truncated" means for a label list (#998): the connection holds more
+// labels than the page returned. totalCount is a scalar on the connection,
+// not a node, so selecting it adds nothing to the GraphQL node-count cost —
+// only the `first:` argument on the field tag does.
+//
+// The `first:` size lives on the field tag, not here, so each query keeps its
+// own budget (see TestBoardScanPaginationBudget); the meaning of exceeding it
+// is defined once, by truncated().
+type labelPage struct {
+	TotalCount graphql.Int
+	Nodes      []labelNode
+}
+
+// names returns the label names the page actually returned.
+func (p labelPage) names() []string {
+	out := make([]string, 0, len(p.Nodes))
+	for _, l := range p.Nodes {
+		out = append(out, string(l.Name))
+	}
+	return out
+}
+
+// truncated reports whether the connection holds labels the page did not
+// return. A caller that derives a decision from names() must treat a
+// truncated page as unknown, never as "nothing else was there".
+func (p labelPage) truncated() bool {
+	return int(p.TotalCount) > len(p.Nodes)
 }
 
 type pageInfo struct {
