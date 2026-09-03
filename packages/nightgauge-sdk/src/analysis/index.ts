@@ -222,12 +222,16 @@ export {
   analyzeLearningEffectiveness,
   analyzePipelineVelocity,
   analyzeSkillDrift,
+  flattenRunRecords,
   ALL_DIMENSIONS,
   DEFAULT_HEALTH_CONFIG,
   DEFAULT_CACHE_THRESHOLD,
   getHealthStatus,
 } from "./health/index.js";
 export type {
+  HistoryRunRecordInput,
+  HistoryRunStageInput,
+  HistoryRunStageTokensInput,
   HealthDimension,
   Severity as HealthSeverity,
   HealthStatus,

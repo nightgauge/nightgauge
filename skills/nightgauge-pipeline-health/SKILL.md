@@ -213,13 +213,21 @@ Timing and reliability analysis per pipeline stage:
 
 ### 4. Model Routing
 
-AI model selection analysis:
+AI model selection analysis. **This dimension is not computed here** — it is
+the SDK's `analyzeModelRouting` (`HealthAnalysisEngine`, dimension
+`model-routing`), fed per executed stage by `flattenRunRecords` (#461): each
+record carries that stage's `model` and `selectionSource` from
+`stages[*].model_selection`. Report the engine's `score`, `metrics` and
+`findings` for this dimension verbatim; do not re-derive them from the raw
+JSONL. The engine's metrics are:
 
-- Model usage distribution across stages
-- Cost impact of model selection decisions
-- Quality outcomes by model (success rate per model)
-- Opportunities for model downgrading on simple tasks
-- A/B experiment results for model routing changes
+- `autoSelectionSuccessRate` — success rate for stages whose dispatched model
+  ran unsubstituted (`selectionSource === "scheduler"`)
+- `underRoutingCount` / `overRoutingCount` — lightweight model on L/XL work
+  that failed; heavyweight model on XS/S work that succeeded first try
+- `distinctModelCount`, `model.{name}.successRate`,
+  `model.{name}.effectiveCostPerSuccess` — usage distribution, quality and
+  cost impact per model
 
 ### 5. Reliability & Failure Patterns
 
