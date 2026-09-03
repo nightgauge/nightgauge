@@ -4,12 +4,14 @@
  * Pure function that converts the VSCode aggregated dataset to the SDK-native
  * HealthAnalysisInput type, without importing from any service class.
  *
- * The executionHistory mapping follows the PipelineHealthRunner pattern:
- * one flat SDK record per pipeline run (not per stage), so the HealthAnalysisEngine
- * receives cost/duration data at run granularity.
+ * The executionHistory mapping is the SDK's `flattenRunRecords`: one flat
+ * record per executed stage, carrying that stage's `model` and
+ * `selectionSource`. `PipelineHealthRunner` and `PostPipelineAnalyzer` feed
+ * the same mapper — there is exactly one run-record → analyzer-record path.
  *
  * @see Issue #1570 - Connect real HealthAnalysisResult to health-gated policies
- * @see packages/nightgauge-sdk/src/analysis/health/types.ts
+ * @see Issue #461 - per-stage feeder makes the model-routing dimension reachable
+ * @see packages/nightgauge-sdk/src/analysis/health/executionHistoryFeeder.ts
  */
 
 import type { AggregatedDataset } from "../types/aggregation";
@@ -20,6 +22,7 @@ import type {
   HealthReportEntry,
 } from "@nightgauge/sdk";
 import type { ExecutionHistoryRecord as SdkExecutionHistoryRecord } from "@nightgauge/sdk";
+import { flattenRunRecords } from "@nightgauge/sdk";
 
 /**
  * Map an AggregatedDataset to a HealthAnalysisInput for use by HealthAnalysisEngine.
@@ -32,41 +35,11 @@ import type { ExecutionHistoryRecord as SdkExecutionHistoryRecord } from "@night
  * @returns HealthAnalysisInput ready to pass to HealthAnalysisEngine.analyze()
  */
 export function buildHealthInput(dataset: AggregatedDataset): HealthAnalysisInput {
-  // Map raw run records to SDK ExecutionHistoryRecord (one per run, not per stage).
-  // Matches PipelineHealthRunner.runAnalyzers() mapping approach to avoid circular imports.
-  const executionHistory: SdkExecutionHistoryRecord[] = dataset.executionHistory
-    .filter((r) => (r as { record_type?: string }).record_type === "run")
-    .map((r) => {
-      const run = r as unknown as {
-        issue_number?: number;
-        outcome?: string;
-        tokens?: {
-          total_input?: number;
-          total_output?: number;
-          total_cache_read?: number;
-          total_cache_creation?: number;
-          estimated_cost_usd?: number;
-        };
-        total_duration_ms?: number;
-        recorded_at: string;
-      };
-      const estimatedCostUsd = run.tokens?.estimated_cost_usd ?? 0;
-      const totalTokens = (run.tokens?.total_input ?? 0) + (run.tokens?.total_output ?? 0);
-      return {
-        issueNumber: run.issue_number ?? 0,
-        stage: "pipeline",
-        success: run.outcome === "complete",
-        retries: 0,
-        inputTokens: run.tokens?.total_input ?? 0,
-        outputTokens: run.tokens?.total_output ?? 0,
-        cacheReadTokens: run.tokens?.total_cache_read,
-        cacheCreationTokens: run.tokens?.total_cache_creation,
-        costUsd: estimatedCostUsd,
-        durationMs: run.total_duration_ms ?? 0,
-        timestamp: run.recorded_at,
-        isLocalModel: estimatedCostUsd === 0 && totalTokens > 0,
-      };
-    });
+  // One SDK record per EXECUTED STAGE, with `model` / `selectionSource`
+  // copied from the stage's `model_selection` block. Routing is a per-stage
+  // fact, so the model-routing dimension is only reachable from this shape;
+  // the per-run mapper this replaced left `selectionSource` unset (#461).
+  const executionHistory: SdkExecutionHistoryRecord[] = flattenRunRecords(dataset.executionHistory);
 
   // Map HealthScoreSnapshot → HealthScoreEntry (fields align directly)
   const healthScores: HealthScoreEntry[] = dataset.healthScores.map((s) => ({

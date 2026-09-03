@@ -359,6 +359,17 @@ mean across all stages.
 Evaluates model selection effectiveness including auto-selection accuracy and
 under/over-routing detection.
 
+**Feeder** (#461): `selectionSource` and `model` are per-stage facts
+(`stages[*].model_selection` on the JSONL run record), so every input to this
+dimension is built by the SDK's `flattenRunRecords`
+(`analysis/health/executionHistoryFeeder.ts`) — one record per executed stage
+(`complete` / `failed`; skipped stages dispatched no model and are dropped).
+`buildHealthInput`, `PipelineHealthRunner` and `PostPipelineAnalyzer.adaptRecords`
+all call it. Before #461 the health path built one record per run with neither
+field, so this dimension reported no data for every corpus; the
+`nightgauge-pipeline-health` skill reports the engine's output rather than
+computing its own.
+
 **Key metrics**:
 
 | Metric                                 | Description                                                                                     |

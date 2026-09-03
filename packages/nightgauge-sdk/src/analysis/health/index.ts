@@ -74,6 +74,14 @@ export { analyzeLearningEffectiveness } from "./dimensions/learningEffectiveness
 export { analyzePipelineVelocity } from "./dimensions/pipelineVelocity.js";
 export { analyzeSkillDrift } from "./dimensions/skillDrift.js";
 
+// Execution-history feeder — the one JSONL-run-record → per-stage mapper (#461)
+export { flattenRunRecords } from "./executionHistoryFeeder.js";
+export type {
+  HistoryRunRecordInput,
+  HistoryRunStageInput,
+  HistoryRunStageTokensInput,
+} from "./executionHistoryFeeder.js";
+
 export type {
   HealthDimension,
   HealthTrendEntry,

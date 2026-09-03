@@ -12,6 +12,7 @@
 
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { flattenRunRecords } from "@nightgauge/sdk";
 
 import { DataAggregator } from "./DataAggregator";
 import type { AggregatedDataset, AggregatedSummary } from "../types/aggregation";
@@ -98,46 +99,21 @@ export class PipelineHealthRunner {
   private static async runAnalyzers(dataset: AggregatedDataset): Promise<HealthFinding[]> {
     const findings: HealthFinding[] = [];
 
-    // Convert execution history to SDK-compatible format
-    const records = dataset.executionHistory
-      .filter((r) => r.record_type === "run")
-      .map((r) => {
-        const run = r as unknown as {
-          issue_number?: number;
-          outcome?: string;
-          tokens?: {
-            total_input?: number;
-            total_output?: number;
-            total_cache_read?: number;
-            total_cache_creation?: number;
-            estimated_cost_usd?: number;
-          };
-          total_duration_ms?: number;
-          recorded_at: string;
-        };
-        return {
-          issueNumber: run.issue_number ?? 0,
-          stage: "pipeline" as string,
-          success: run.outcome === "complete",
-          retries: 0,
-          inputTokens: run.tokens?.total_input ?? 0,
-          outputTokens: run.tokens?.total_output ?? 0,
-          cacheReadTokens: run.tokens?.total_cache_read,
-          cacheCreationTokens: run.tokens?.total_cache_creation,
-          costUsd: run.tokens?.estimated_cost_usd ?? 0,
-          durationMs: run.total_duration_ms ?? 0,
-          timestamp: run.recorded_at,
-        };
-      });
+    // One analyzer record per executed stage, `model` and `selectionSource`
+    // included — the same feeder `buildHealthInput` and `PostPipelineAnalyzer`
+    // use (#461). The data-sufficiency gate still counts RUNS: a single run
+    // fans out into several stage records and must not read as "enough".
+    const runCount = dataset.executionHistory.filter((r) => r.record_type === "run").length;
+    const records = flattenRunRecords(dataset.executionHistory);
 
-    if (records.length < 2) {
+    if (runCount < 2) {
       findings.push({
         id: "insufficient-data",
         dimension: "data-quality",
         severity: "info",
         title: "Insufficient pipeline data",
-        description: `Only ${records.length} pipeline run(s) found. Most analyses require at least 3 runs.`,
-        evidence: [`${records.length} run records in the selected period`],
+        description: `Only ${runCount} pipeline run(s) found. Most analyses require at least 3 runs.`,
+        evidence: [`${runCount} run records in the selected period`],
         impact: "Analysis accuracy is reduced with limited data",
         recommendation: "Run more pipelines to build up analysis data",
       });
