@@ -4453,6 +4453,28 @@ write still changes what a board read returns. `boardcache.WrapProject` treats
 an unnameable board as "drop everything": a cold cache costs one refetch, a
 confidently wrong one costs an operator acting on a board that has moved.
 
+#### The startup graph build bypassed it too
+
+An audit of a daemon log found the same Unpinned Wiring class one layer up.
+Every `nightgauge serve` start — every extension-host reload — called
+`RecoverOrphanedRunning`, whose trailing Backlog→Ready promotion scan built the
+whole cross-repo dependency graph, and `depgraph.BuildGraph` issued
+`gh.NewBoardService(...).ListOpenItems` **per repo on a raw client**. Six repos
+on one ~1,900-item shared board was six full reads of the same board at
+startup, past both the snapshot cache and the change probe, with autonomous
+mode `stopped`.
+
+Two fixes, because two things were wrong:
+
+| | |
+| --- | --- |
+| `depgraph.BoardProvider` | The builder reads boards through a provider. `BuildGraph` (the CLI) reads straight from the client; the daemon calls `AutonomousScheduler.SetBoardCache` with the server's `BoardCache()` — the one cache the IPC board verbs and the attention sweep's `cachedSweepForgeClientWith` also share — so a graph build inside a sweep's TTL issues nothing. Independently, the builder memoises by `(owner, project)` within one build: N repos on one board is one read even with no cache |
+| Lazy at daemon start | `RecoverOrphanedRunning` now runs only the orphan reset while the scheduler is stopped, and logs the deferral. `Run()` — `autonomous.start` — performs the same recovery with the promotion scan, and the first scan cycle builds the graph regardless, so nothing is lost, only moved to when someone asked for it |
+
+`TestBuildGraph_SharedBoardIsReadOnce` and
+`TestRecoverOrphanedRunning_StoppedSchedulerReadsNoBoard` pin both; each was
+red against the previous tree (3 reads and 1 read respectively, want 1 and 0).
+
 ### The Board Change Probe (Issue #847)
 
 The snapshot cache above removes duplicate reads *inside* one window. It does

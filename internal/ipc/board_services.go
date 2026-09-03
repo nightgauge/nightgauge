@@ -29,6 +29,21 @@ import (
 // So both halves are built here, together, and TestBoardServicesAreNotBypassed
 // fails the build if any handler constructs one directly instead.
 
+// WithBoardCache makes the server read boards through a cache it shares with
+// other readers in the process — the attention sweep's forge clients and the
+// autonomous scheduler's graph builds — so the daemon holds ONE snapshot per
+// board rather than one per subsystem. A nil cache keeps the default.
+func WithBoardCache(cache *boardcache.Cache) ServerOption {
+	return func(s *Server) {
+		if cache != nil {
+			s.boards = cache
+		}
+	}
+}
+
+// BoardCache is the server's shared board snapshot cache.
+func (s *Server) BoardCache() *boardcache.Cache { return s.boards }
+
 // boardServices is the read and write halves of one board, both bound to the
 // daemon's shared snapshot cache.
 //
