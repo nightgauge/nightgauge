@@ -2151,3 +2151,52 @@ func TestProjectMoveStatusSharesTheSameGuards(t *testing.T) {
 		t.Errorf("move-status missing positional must be a named error, got: %v", err)
 	}
 }
+
+// TestGateRepoFlagsOptIntoBackfill is the regression fence for the #536/#548
+// defect class: every gate whose --repo means "bare repository name" must be
+// registered through repoNameFlag so PersistentPreRunE back-fills it from
+// config; a future gate registered with a bare StringVar goes red here. The
+// negative control pins the commands whose --repo is a literal owner/name slug
+// (#222) — they must NOT carry the annotation, or they would silently receive
+// a bare repository name.
+func TestGateRepoFlagsOptIntoBackfill(t *testing.T) {
+	root := rootCmd()
+
+	optIn := [][]string{
+		{"baseline-gate", "check"},
+		{"baseline-gate", "promote"},
+		{"deps-gate", "check"},
+		{"deps-gate", "promote"},
+		{"size-gate", "check"},
+		{"backlog", "preflight"},
+		{"scope-drift", "check"},
+		{"version-downgrade", "check"},
+	}
+	for _, path := range optIn {
+		cmd := findSubcommand(t, root, path...)
+		if cmd.Flags().Lookup("repo") == nil {
+			t.Errorf("%s: no --repo flag", strings.Join(path, " "))
+			continue
+		}
+		if got := cmd.Annotations[repoBackfillAnnotation]; got != "true" {
+			t.Errorf("%s: Annotations[%q] = %q, want %q — register --repo via repoNameFlag", strings.Join(path, " "), repoBackfillAnnotation, got, "true")
+		}
+	}
+
+	slugOnly := [][]string{
+		{"attention", "list"},
+		{"pr-stage", "create"},
+		{"pr-stage", "merge"},
+		{"pipeline", "backfill"},
+	}
+	for _, path := range slugOnly {
+		cmd := findSubcommand(t, root, path...)
+		if cmd.Flags().Lookup("repo") == nil {
+			t.Errorf("%s: no --repo flag", strings.Join(path, " "))
+			continue
+		}
+		if got := cmd.Annotations[repoBackfillAnnotation]; got != "" {
+			t.Errorf("%s: Annotations[%q] = %q, want unset — its --repo is an owner/name slug and must never be back-filled (#222)", strings.Join(path, " "), repoBackfillAnnotation, got)
+		}
+	}
+}
