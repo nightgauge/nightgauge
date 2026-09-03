@@ -214,11 +214,148 @@ else
   echo "    output was: $STDOUT"
 fi
 
+# ── Test 6: an arrow-function class property handler (#1199) is extracted ──
+# Regression coverage for #1199: OutputWindowMessageHandler.ts,
+# SettingsMessageHandler.ts, TelemetrySettingsMessageHandler.ts and
+# NotifierSettingsMessageHandler.ts all declare `handleMessage` as an
+# arrow-function class property (`handleMessage = (message) => { ... }`)
+# rather than a method — a form the pre-#1199 extractor never matched, so
+# `handled.size === 0` classified all four as "not a webview" and their
+# coverage silently vanished. A clean arrow-property handler/poster pair
+# must still pass.
+echo ""
+echo "--- Test 6: an arrow-function class property handler is extracted and matches ---"
+cat > "$PANEL_FILE" <<'EOF'
+export class FixtureMessageHandler {
+  handleMessage = (message: { type: string }): void => {
+    switch (message.type) {
+      case "fixtureArrowClean":
+        this.doThing();
+        break;
+    }
+  };
+  private doThing(): void {}
+}
+EOF
+cat > "$HTML_FILE" <<'EOF'
+export function getFixtureHtml(): string {
+  return `
+    <script>
+      vscode.postMessage({ type: 'fixtureArrowClean' });
+    </script>
+  `;
+}
+EOF
+
+run_check
+if [ $EXIT -eq 0 ]; then
+  pass "arrow-property handler/post pair exits 0 (Test 6)"
+else
+  fail "arrow-property handler/post pair exits $EXIT (expected 0)"
+  echo "    output: $STDOUT"
+fi
+
+# ── Test 7: an unhandled post behind an arrow-property handler is caught ───
+# This is the #1199 regression proper: plant an unhandled message type in an
+# arrow-property webview (mirroring #1198's "slot:action" in
+# OutputWindowMessageHandler.ts) and assert the guard goes red. Mutation
+# check: narrowing HANDLE_MESSAGE_ARROW_RE back out (method-only extraction)
+# must turn this RED — i.e. the fixture's `handled` set goes empty, the group
+# is skipped by the `handled.size === 0` guard, and this posted type is never
+# reported. Verified by hand against the real four webviews in the issue
+# (see #1199's implementation notes); this fixture reproduces the same shape
+# in isolation so CI catches a regression to method-only extraction.
+echo ""
+echo "--- Test 7: an unhandled post behind an arrow-property handler is detected ---"
+cat > "$PANEL_FILE" <<'EOF'
+export class FixtureMessageHandler {
+  handleMessage = async (message: { type: string }): Promise<void> => {
+    switch (message.type) {
+      case "fixtureArrowClean":
+        this.doThing();
+        break;
+    }
+  };
+  private doThing(): void {}
+}
+EOF
+cat > "$HTML_FILE" <<'EOF'
+export function getFixtureHtml(): string {
+  return `
+    <script>
+      vscode.postMessage({ type: 'fixtureArrowClean' });
+      vscode.postMessage({ type: 'fixtureArrowOrphanPost' });
+    </script>
+  `;
+}
+EOF
+
+run_check
+if [ $EXIT -ne 0 ]; then
+  pass "unhandled post behind an arrow-property handler exits non-zero (Test 7)"
+else
+  fail "unhandled post behind an arrow-property handler exits 0 (expected non-zero) — arrow-property extraction regressed"
+  echo "    output: $STDOUT"
+fi
+if echo "$STDOUT" | grep -q 'UNHANDLED POST: "fixtureArrowOrphanPost"'; then
+  pass "unhandled post type named in the output (Test 7)"
+else
+  fail "unhandled post type NOT named in the output (Test 7)"
+  echo "    output was: $STDOUT"
+fi
+
+# ── Test 8: a handleMessage declaration neither extractor can parse is
+# reported as UNPARSED rather than silently skipped ──────────────────────
+# This is the second half of #1199: a webview whose `handleMessage` is
+# declared in some third form (here, a plain non-arrow function expression
+# assigned to the property) must not fall back to "not a message-handling
+# webview" — it must be flagged so the guard's own coverage stays
+# observable. Mutation check: removing HANDLE_MESSAGE_DECL_RE's unparsed
+# reporting (i.e. reverting to a plain `handled.size === 0` skip) must turn
+# this RED — the fixture would then pass silently instead of failing.
+echo ""
+echo "--- Test 8: an unparseable handleMessage declaration is reported, not skipped ---"
+cat > "$PANEL_FILE" <<'EOF'
+export class FixtureMessageHandler {
+  handleMessage = function (message: { type: string }): void {
+    switch (message.type) {
+      case "fixtureUnparsedClean":
+        this.doThing();
+        break;
+    }
+  };
+  private doThing(): void {}
+}
+EOF
+cat > "$HTML_FILE" <<'EOF'
+export function getFixtureHtml(): string {
+  return `
+    <script>
+      vscode.postMessage({ type: 'fixtureUnparsedClean' });
+    </script>
+  `;
+}
+EOF
+
+run_check
+if [ $EXIT -ne 0 ]; then
+  pass "unparseable handleMessage declaration exits non-zero (Test 8)"
+else
+  fail "unparseable handleMessage declaration exits 0 (expected non-zero) — the group was silently skipped"
+  echo "    output: $STDOUT"
+fi
+if echo "$STDOUT" | grep -q "UNPARSED handleMessage"; then
+  pass "unparsed declaration reported in the output (Test 8)"
+else
+  fail "unparsed declaration NOT reported in the output (Test 8)"
+  echo "    output was: $STDOUT"
+fi
+
 cleanup
 
-# ── Test 6: check passes again once the fixture is removed ─────────────────
+# ── Test 9: check passes again once the fixture is removed ─────────────────
 echo ""
-echo "--- Test 6: check passes after the fixture is removed ---"
+echo "--- Test 9: check passes after the fixture is removed ---"
 run_check
 if [ $EXIT -eq 0 ]; then
   pass "check-webview-message-handlers.mjs exits 0 after cleanup"
