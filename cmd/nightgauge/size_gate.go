@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -173,6 +174,22 @@ func resolveGateRepo(owner, repo string) (string, string, error) {
 		return "", "", fmt.Errorf("repo not configured (owner=%q, consulted %s): pass --repo, or set project.repo / repo (nested config) or defaultRepo / github.repo (flat config)", ownerPart, consulted)
 	}
 	return ownerPart, repoPart, nil
+}
+
+// fetchGateIssueLabels fetches an issue's labels through the config-resolved
+// GitHub client. It is the one seam the label-reading gates (scope-drift,
+// version-downgrade) share, and a package-level variable so tests can record
+// the exact owner/name slug a gate hands to the forge without a network.
+var fetchGateIssueLabels = func(ctx context.Context, owner, repo string, issueNum int) ([]string, error) {
+	client, err := clientFromConfig()
+	if err != nil {
+		return nil, fmt.Errorf("create GitHub client: %w", err)
+	}
+	issue, err := gh.NewIssueService(client).GetIssue(ctx, owner, repo, issueNum)
+	if err != nil {
+		return nil, fmt.Errorf("fetch issue #%d: %w", issueNum, enrichError(err))
+	}
+	return issue.Labels, nil
 }
 
 // sizeGateYAML is the YAML shape for pipeline.size_gate config section.
