@@ -398,6 +398,7 @@ func boardItemToNode(item *types.BoardItem, repoName string) *Node {
 		Size:              string(item.Size),
 		Priority:          string(item.Priority),
 		Labels:            item.Labels,
+		LabelsTruncated:   item.LabelsTruncated,
 		AuthorAssociation: item.AuthorAssociation,
 	}
 	if item.ParentNumber != 0 {

@@ -42,6 +42,7 @@ const BOARD_ITEM_GO_ONLY_FIELDS = new Set([
   "updatedAt",
   "isPR",
   "authorAssociation",
+  "labelsTruncated",
 ]);
 
 const BOARD_ITEM_ALL_KNOWN = new Set([
@@ -74,7 +75,7 @@ const ISSUE_TS_OPTIONAL: Record<string, string> = {
 };
 
 // Fields Go serializes but TS IssueDetail does not declare.
-const ISSUE_GO_ONLY_FIELDS = new Set(["nodeId", "repo"]);
+const ISSUE_GO_ONLY_FIELDS = new Set(["nodeId", "repo", "labelsTruncated"]);
 
 const ISSUE_ALL_KNOWN = new Set([
   ...Object.keys(ISSUE_TS_FIELDS),
