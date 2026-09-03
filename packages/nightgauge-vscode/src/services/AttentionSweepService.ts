@@ -9,18 +9,36 @@
  * still true, auto-resolving what is no longer true.
  *
  * NOT A DAEMON, by the sweep's own design commitment. There is no background
- * process here and no long-lived worker: a sweep is cheap, idempotent, and safe
- * to run redundantly, so it is triggered at the moments an operator is actually
+ * process here and no long-lived worker: a sweep is idempotent and safe to run
+ * redundantly, so it is triggered at the moments an operator is actually
  * looking rather than continuously:
  *
  *   1. Extension activation — the window opening is the operator arriving.
  *   2. Repository-view refresh — an explicit "tell me the current state".
  *   3. A conservative timer while the window is active.
  *   4. After any run terminates — a merge just changed the repo's shape.
+ *   5. Window focus regained after idling past the grace (#484).
  *
- * All four collapse into one throttled entry point. Redundancy is expected and
- * free: {@link minGapMs} coalesces bursts (a run terminating during activation),
- * and the daemon declines a second concurrent sweep outright.
+ * But a sweep is NOT cheap: it is ~64 GraphQL points plus 18 REST calls across
+ * a six-repo workspace (the ledger's post-#847 figure), against an intended
+ * cadence of four an hour. With only a sixty-second floor between triggers, an
+ * operator alt-tabbing or refreshing the tree swept up to sixty times an hour.
+ *
+ * So the triggers are two classes, and only one of them spends on its own say:
+ *
+ *   - The TIMER sweeps unconditionally. It is the cadence, and the only thing
+ *     that catches conditions the board probe cannot see (a red default branch,
+ *     a new dependabot alert — none of which move a ProjectV2 object).
+ *   - Every EVENT-DRIVEN trigger first asks the daemon's one-point board change
+ *     probe (`board.changed`, over #847's `ProjectUpdatedAt`) whether any bound
+ *     board moved since the last sweep, and sweeps only on a yes — or when a
+ *     full interval has elapsed anyway. On a no it re-renders the last sweep's
+ *     cards, which the store already holds.
+ *   - The MANUAL command always sweeps. It is the operator asking directly.
+ *
+ * The probe fails open: a daemon without the verb, a probe error, an adapter
+ * with no probe all read as "changed" and sweep. The probe may only ever save a
+ * sweep, never suppress one it cannot vouch against.
  *
  * Failure is never surfaced to the operator. A sweep that cannot run — no forge
  * token, no attention store, a rate limit — is a logged no-op, because the one
@@ -28,10 +46,12 @@
  *
  * @see internal/attention/sweep/sweep.go — the Sweeper and its producers
  * @see internal/ipc/attention_sweep.go — the IPC binding
+ * @see internal/ipc/board_changed.go — the probe in front of it
+ * @see docs/ATTENTION_PRODUCERS.md § Bounding cost — the trigger table
  */
 
 import * as vscode from "vscode";
-import type { AttentionSweepResult } from "./IpcClientBase";
+import type { AttentionSweepResult, BoardChangedResult } from "./IpcClientBase";
 import type { Logger } from "../utils/logger";
 
 /** What asked for a sweep. Echoed to the daemon log so a surprising burst of
@@ -42,6 +62,7 @@ export type SweepTrigger =
 /** The IPC slice this service needs — narrow so tests need no real client. */
 export interface AttentionSweepIpc {
   attentionSweep(repos?: string[], reason?: string): Promise<AttentionSweepResult>;
+  boardChanged(repos?: string[], since?: string): Promise<BoardChangedResult>;
   on(event: string, handler: (data: unknown) => void): { dispose(): void };
 }
 
@@ -55,6 +76,10 @@ export interface AttentionSweepDeps {
   /** Invoked after a sweep that changed something, so the tree re-reads even if
    * the `attention.event` push is not wired in this window. */
   onChanged?: () => void;
+  /** Invoked when an event-driven trigger was answered from the last sweep's
+   * cards instead of a new sweep — the probe said no board moved — so the
+   * surface still re-renders what the store holds. */
+  onRerender?: () => void;
   /** Overrides the config read (tests). */
   readConfig?: () => AttentionSweepConfig;
   /** Overrides the clock (tests). */
@@ -64,10 +89,8 @@ export interface AttentionSweepDeps {
 export interface AttentionSweepConfig {
   enabled: boolean;
   /** Timer period. Zero or negative disables the timer; the event-driven
-   * triggers still fire. */
+   * triggers still fire, gated by the probe against the default interval. */
   intervalMs: number;
-  /** Minimum gap between sweeps. Triggers inside this window are dropped. */
-  minGapMs: number;
 }
 
 /**
@@ -83,9 +106,6 @@ export const DEFAULT_SWEEP_INTERVAL_MINUTES = 15;
 /** Floor on the configured interval. A one-minute sweep across a multi-repo
  * workspace is a quota leak dressed as responsiveness. */
 export const MIN_SWEEP_INTERVAL_MINUTES = 5;
-
-/** Bursts inside this window collapse to one sweep. */
-export const SWEEP_MIN_GAP_MS = 60_000;
 
 /** The slice of WorkspaceManager the repo resolver needs. */
 export interface SweepRepoSource {
@@ -126,7 +146,7 @@ export function readSweepConfig(): AttentionSweepConfig {
   // A non-positive interval disables the timer without disabling the service —
   // "only sweep when I do something" is a legitimate preference.
   const intervalMs = minutes <= 0 ? 0 : Math.max(minutes, MIN_SWEEP_INTERVAL_MINUTES) * 60_000;
-  return { enabled, intervalMs, minGapMs: SWEEP_MIN_GAP_MS };
+  return { enabled, intervalMs };
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -432,10 +452,11 @@ export class AttentionSweepService implements vscode.Disposable {
 
       // #484 AC2 — when this consumer's own predicate (isWindowActive())
       // transitions closed→open — the window regains focus after being
-      // idle past the grace — fire one coalesced sweep instead of waiting
-      // out the rest of the interval. `sweep()`'s own minGap throttle still
-      // applies, so a burst of near-simultaneous transitions collapses to
-      // at most one call.
+      // idle past the grace — ask for a sweep instead of waiting out the
+      // rest of the interval. Like every event-driven trigger it consults
+      // the board probe first, so a burst of regains inside one interval
+      // costs one probe point each (memoised daemon-side) and no sweeps
+      // unless a board actually moved.
       this.disposables.push(
         PollingVisibilityGate.instance.onDidBecomeAllowed(
           () => PollingVisibilityGate.instance.isWindowActive(),
@@ -449,38 +470,36 @@ export class AttentionSweepService implements vscode.Disposable {
   }
 
   /**
-   * Run a sweep, unless one is already running or the last one finished inside
-   * the minimum gap. Returns the result, or undefined when the call was
-   * throttled or the service is disabled.
+   * Ask for a sweep. Returns the result, or undefined when the service is
+   * disabled, the workspace has no repos, or the trigger was answered from the
+   * last sweep's cards because no board has moved (see {@link shouldSweep}).
    *
-   * Never rejects: every failure mode is logged and swallowed, because three of
-   * the four callers are ambient triggers the operator did not ask for.
+   * Never rejects: every failure mode is logged and swallowed, because most
+   * callers are ambient triggers the operator did not ask for.
    */
   async sweep(trigger: SweepTrigger): Promise<AttentionSweepResult | undefined> {
     const config = this.config;
     if (!config.enabled) return undefined;
 
-    // A sweep already in flight covers this trigger — the whole point of an
-    // idempotent evaluation is that the second caller can ride the first.
+    // A decision-or-sweep already in flight covers this trigger — the whole
+    // point of an idempotent evaluation is that the second caller can ride the
+    // first. The probe is inside this window too, so a burst of triggers
+    // (a run terminating during activation) collapses to one probe, not one
+    // probe each racing to the same answer.
     if (this.inFlight) return this.inFlight;
 
-    // A manual sweep is the operator asking directly; honour it even inside the
-    // throttle window, or the button appears broken.
-    if (trigger !== "manual" && this.now() - this.lastSweepAt < config.minGapMs) {
-      this.deps.logger.debug("Attention sweep throttled", { trigger });
-      return undefined;
-    }
-
-    this.inFlight = this.run(trigger);
+    this.inFlight = this.decide(trigger, config);
     try {
       return await this.inFlight;
     } finally {
       this.inFlight = null;
-      this.lastSweepAt = this.now();
     }
   }
 
-  private async run(trigger: SweepTrigger): Promise<AttentionSweepResult | undefined> {
+  private async decide(
+    trigger: SweepTrigger,
+    config: AttentionSweepConfig
+  ): Promise<AttentionSweepResult | undefined> {
     let repos: string[];
     try {
       repos = await this.deps.resolveRepos();
@@ -493,8 +512,92 @@ export class AttentionSweepService implements vscode.Disposable {
     }
     if (repos.length === 0) return undefined;
 
+    if (!(await this.shouldSweep(trigger, config, repos))) {
+      this.deps.onRerender?.();
+      return undefined;
+    }
+    return this.run(trigger, repos);
+  }
+
+  /**
+   * The trigger table (docs/ATTENTION_PRODUCERS.md § Bounding cost):
+   *
+   *   manual  — always. The operator pressed the button; a "nothing changed"
+   *             answer from a probe reads as a broken button.
+   *   timer   — always. It IS the cadence, and the only trigger that catches
+   *             what the board probe is blind to (CI on the default branch,
+   *             dependabot alerts, branch protection — none move a board).
+   *   others  — only when a full interval has elapsed since the last sweep,
+   *             or the daemon's board probe says a bound board moved since
+   *             it. A window that has never swept has no cards to serve, so
+   *             it sweeps.
+   *
+   * The probe fails open. Any answer that is not a confident "nothing moved"
+   * — an IPC error, a daemon built without the verb, `unavailable` — sweeps.
+   */
+  private async shouldSweep(
+    trigger: SweepTrigger,
+    config: AttentionSweepConfig,
+    repos: string[]
+  ): Promise<boolean> {
+    if (trigger === "manual" || trigger === "timer") return true;
+    if (this.lastSweepAt === 0) return true;
+
+    // With the timer disabled ("only sweep when I do something"), the default
+    // period still bounds how stale an event-driven answer may be.
+    const intervalMs =
+      config.intervalMs > 0 ? config.intervalMs : DEFAULT_SWEEP_INTERVAL_MINUTES * 60_000;
+    const elapsed = this.now() - this.lastSweepAt;
+    if (elapsed >= intervalMs) return true;
+
+    try {
+      const probe = await this.deps.ipc.boardChanged(
+        repos,
+        new Date(this.lastSweepAt).toISOString()
+      );
+      if (probe.changed) {
+        this.deps.logger.debug("Attention sweep: a board moved since the last sweep", {
+          trigger,
+          probed: probe.probed,
+          unprobeable: probe.unprobeable,
+          unavailable: probe.unavailable,
+        });
+        return true;
+      }
+      this.deps.logger.debug("Attention sweep answered from the last sweep — no board moved", {
+        trigger,
+        probed: probe.probed,
+        sinceMs: elapsed,
+      });
+      return false;
+    } catch (err) {
+      // A daemon that is down, restarting, or built without the verb cannot
+      // vouch for the boards. The probe may only ever save a sweep, never
+      // suppress one it cannot answer for.
+      this.deps.logger.debug("Attention sweep: board probe unavailable, sweeping", {
+        trigger,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return true;
+    }
+  }
+
+  private async run(
+    trigger: SweepTrigger,
+    repos: string[]
+  ): Promise<AttentionSweepResult | undefined> {
+    // Stamped at the START of the sweep, not the end: a board that moves while
+    // the sweep is reading it is a board that moved after `since`, so the next
+    // probe sees it. Stamping at the end would hide exactly that window.
+    const startedAt = this.now();
     try {
       const result = await this.deps.ipc.attentionSweep(repos, trigger);
+      if (!result.unavailable && !result.busy && !result.throttled) {
+        // Only a sweep that actually looked moves the baseline. A declined
+        // one leaves the previous sweep's cards — and its timestamp — as the
+        // thing the next probe compares against.
+        this.lastSweepAt = startedAt;
+      }
       this.report(trigger, repos, result);
       return result;
     } catch (err) {

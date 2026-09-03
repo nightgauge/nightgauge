@@ -199,6 +199,16 @@ type RuntimeState struct {
 	MergedCommitSha string `json:"mergedCommitSha,omitempty"`
 	MergedAt        string `json:"mergedAt,omitempty"`
 
+	// MainCheckVerdict + MainCheckFailing are the post-merge observation of the
+	// base branch (#1249): whether the merge commit's own check runs went
+	// green, red, were still pending when the bounded wait ran out, never
+	// appeared, or could not be read (hooks.MainCheckVerdict vocabulary).
+	// Empty until the post-merge hook has run. This is the run record's copy of
+	// AGENTS.md's "main's own run is the observation" — the PR gate's green is
+	// on GateResults; this is what main actually did.
+	MainCheckVerdict string   `json:"mainCheckVerdict,omitempty"`
+	MainCheckFailing []string `json:"mainCheckFailing,omitempty"`
+
 	// License tracking — in-memory only, never persisted to disk
 	License              *LicenseSnapshot `json:"license,omitempty"`
 	LicenseExpiredMidRun bool             `json:"licenseExpiredMidRun,omitempty"`
@@ -1407,6 +1417,22 @@ func (rs *RuntimeState) SetMergeOutcome(sha, mergedAt string) {
 	}
 }
 
+// SetMainCheckOutcome records the post-merge observation of the base branch
+// (#1249). An empty verdict is ignored so a caller that has nothing to say
+// cannot erase an earlier observation. failing is copied.
+func (rs *RuntimeState) SetMainCheckOutcome(verdict string, failing []string) {
+	if verdict == "" {
+		return
+	}
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	rs.MainCheckVerdict = verdict
+	rs.MainCheckFailing = nil
+	if len(failing) > 0 {
+		rs.MainCheckFailing = append([]string(nil), failing...)
+	}
+}
+
 // SetLicenseExpiredMidRun sets the flag that indicates the license expired
 // during a running pipeline. Non-blocking — allows the current run to finish.
 func (rs *RuntimeState) SetLicenseExpiredMidRun(expired bool) {
@@ -2448,6 +2474,8 @@ func (rs *RuntimeState) snapshotLocked() *RuntimeState {
 		PrUrl:                    rs.PrUrl,
 		MergedCommitSha:          rs.MergedCommitSha,
 		MergedAt:                 rs.MergedAt,
+		MainCheckVerdict:         rs.MainCheckVerdict,
+		MainCheckFailing:         append([]string(nil), rs.MainCheckFailing...),
 		// The two durable latch halves travel with every copy and therefore
 		// with every byte persistLocked writes (ADR-017 Decision 5/12): the
 		// snapshot IS what a fresh process, the gate CLI and the reconciler

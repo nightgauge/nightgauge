@@ -70,6 +70,16 @@ type Record struct {
 	Verdict        Verdict `json:"verdict"`
 	ObservedAt     string  `json:"observed_at,omitempty"` // when finalized (RFC3339)
 	Evidence       string  `json:"evidence,omitempty"`    // one of the Evidence* constants
+	// MainCheckVerdict + MainCheckFailing are the IMMEDIATE post-merge
+	// observation (#1249): what the merge commit's own check runs did on the
+	// base branch, polled to completion within the hook's bounded wait — the
+	// hooks.MainCheckVerdict vocabulary (green / red / pending / no_checks /
+	// error / skipped). Distinct from Verdict, which is decided days later by the
+	// survival sweep from reverts and ancestry-correlated breakage; a record can
+	// be main_check_verdict=red and still finalize `survived` if main was fixed
+	// forward. Empty on records captured before the hook observed main.
+	MainCheckVerdict string   `json:"main_check_verdict,omitempty"`
+	MainCheckFailing []string `json:"main_check_failing,omitempty"`
 }
 
 // DefaultBaseRef is the base branch survival detection scans. Every pipeline PR

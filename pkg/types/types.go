@@ -26,21 +26,27 @@ const (
 
 // BoardItem represents an item on the GitHub Project Board.
 type BoardItem struct {
-	ID            string    `json:"id"`
-	NodeID        string    `json:"nodeId"`
-	Number        int       `json:"number"`
-	Title         string    `json:"title"`
-	State         string    `json:"state"`
-	Status        string    `json:"status"`
-	Priority      Priority  `json:"priority"`
-	Size          Size      `json:"size"`
-	PipelineStage string    `json:"pipelineStage,omitempty"`
-	Labels        []string  `json:"labels"`
-	Repo          string    `json:"repo"`
-	URL           string    `json:"url"`
-	CreatedAt     time.Time `json:"createdAt"`
-	UpdatedAt     time.Time `json:"updatedAt"`
-	IsPR          bool      `json:"isPR"`
+	ID            string   `json:"id"`
+	NodeID        string   `json:"nodeId"`
+	Number        int      `json:"number"`
+	Title         string   `json:"title"`
+	State         string   `json:"state"`
+	Status        string   `json:"status"`
+	Priority      Priority `json:"priority"`
+	Size          Size     `json:"size"`
+	PipelineStage string   `json:"pipelineStage,omitempty"`
+	Labels        []string `json:"labels"`
+	// LabelsTruncated is true when the board scan's label page did not hold
+	// every label the item carries (#998). Labels is then a prefix, not the
+	// set: anything that would exclude or classify the item from its labels
+	// (the owner-action dispatch guard above all) must fail closed and treat
+	// the item as not dispatchable rather than as "nothing matched".
+	LabelsTruncated bool      `json:"labelsTruncated,omitempty"`
+	Repo            string    `json:"repo"`
+	URL             string    `json:"url"`
+	CreatedAt       time.Time `json:"createdAt"`
+	UpdatedAt       time.Time `json:"updatedAt"`
+	IsPR            bool      `json:"isPR"`
 
 	// Sub-issue relationships (GitHub native)
 	IsEpic       bool          `json:"isEpic"`
@@ -73,11 +79,14 @@ type Issue struct {
 	// must be left untouched).
 	StateReason string   `json:"stateReason,omitempty"`
 	Labels      []string `json:"labels"`
-	Repo        string   `json:"repo"`
-	URL         string   `json:"url"`
-	Assignees   []string `json:"assignees"`
-	IsEpic      bool     `json:"isEpic"`
-	Milestone   string   `json:"milestone,omitempty"`
+	// LabelsTruncated mirrors BoardItem.LabelsTruncated for the list queries
+	// that page labels (#998): Labels is incomplete when set.
+	LabelsTruncated bool     `json:"labelsTruncated,omitempty"`
+	Repo            string   `json:"repo"`
+	URL             string   `json:"url"`
+	Assignees       []string `json:"assignees"`
+	IsEpic          bool     `json:"isEpic"`
+	Milestone       string   `json:"milestone,omitempty"`
 
 	// Sub-issue relationships
 	ParentIssueID string `json:"parentIssueId,omitempty"`
