@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math/rand/v2"
 	"strings"
 	"sync"
 	"time"
@@ -128,6 +129,26 @@ const SweepMinGap = 60 * time.Second
 // sleeping through it.
 var sweepNow = time.Now
 
+// sweepJitterRand supplies the uniform variate for the per-daemon gap jitter;
+// a test pins it (0.5 → exactly SweepMinGap).
+var sweepJitterRand = rand.Float64
+
+// jitteredSweepGap is SweepMinGap ±20%, drawn once per daemon at construction
+// so the daemons on one machine do not all become eligible to sweep — and
+// re-read every board — in the same second after a shared quota reset.
+func jitteredSweepGap() time.Duration {
+	return time.Duration(float64(SweepMinGap) * (0.8 + 0.4*sweepJitterRand()))
+}
+
+// sweepGap is this daemon's min gap; a Server built as a literal (tests)
+// has none and falls back to the unjittered constant.
+func (s *Server) sweepGap() time.Duration {
+	if s.sweepMinGap > 0 {
+		return s.sweepMinGap
+	}
+	return SweepMinGap
+}
+
 // handleAttentionSweep evaluates the registered repo-scoped producers against
 // each requested repo and reconciles the results into the shared store.
 func (s *Server) handleAttentionSweep(ctx context.Context, raw json.RawMessage) (interface{}, error) {
@@ -159,14 +180,14 @@ func (s *Server) handleAttentionSweep(ctx context.Context, raw json.RawMessage) 
 	// both read a stale lastSweepAt and both proceed — the exact shape of the
 	// 14-seconds-apart pair in #848.
 	now := sweepNow()
-	if !s.lastSweepAt.IsZero() {
-		if elapsed := now.Sub(s.lastSweepAt); elapsed < SweepMinGap {
+	if gap := s.sweepGap(); !s.lastSweepAt.IsZero() {
+		if elapsed := now.Sub(s.lastSweepAt); elapsed < gap {
 			// Not Busy: nothing is running. A sweep finished moments ago and
 			// its results already cover this caller, so re-reading every board
 			// would spend the most expensive call this product makes to
 			// re-derive an answer we hold.
 			res.Throttled = true
-			res.ThrottledForMs = (SweepMinGap - elapsed).Milliseconds()
+			res.ThrottledForMs = (gap - elapsed).Milliseconds()
 			return res, nil
 		}
 	}

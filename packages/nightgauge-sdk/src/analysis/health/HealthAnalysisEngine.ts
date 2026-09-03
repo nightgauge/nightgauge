@@ -16,9 +16,54 @@ import type {
   HealthAnalysisInput,
   HealthAnalysisResult,
   DimensionResult,
+  OverallHealthStatus,
 } from "./types.js";
 import { ALL_DIMENSIONS, DEFAULT_HEALTH_CONFIG, getHealthStatus } from "./types.js";
 import { clamp } from "./statistics.js";
+
+/** The slice of a DimensionResult the overall score reads. */
+export interface ScoredDimension {
+  dimension: HealthDimension;
+  score: number;
+  hasEnoughData: boolean;
+}
+
+/**
+ * Weighted overall score over the dimensions that HAVE data (#1197).
+ *
+ * A dimension with `hasEnoughData: false` is excluded and the surviving
+ * weights are re-normalised, so a starved analyzer's placeholder `score`
+ * (50 → "fair") never asserts mediocrity from absence of evidence. When no
+ * dimension has data — or the ones that do all weigh 0 — the answer is
+ * `null`, rendered as N/A, matching the `nightgauge-pipeline-health` SKILL.
+ *
+ * Engine and SKILL are pinned to one corpus:
+ * `skills/nightgauge-pipeline-health/overall-score-corpus.json`
+ * (tests/analysis/health/overallScore.corpusParity.test.ts). Change the rule
+ * there first.
+ */
+export function computeOverallHealthScore(
+  dimensions: Iterable<ScoredDimension>,
+  weights: Partial<Record<HealthDimension, number>>
+): number | null {
+  let weightedSum = 0;
+  let totalWeight = 0;
+
+  for (const result of dimensions) {
+    if (!result.hasEnoughData) continue;
+    const weight = weights[result.dimension] ?? 0;
+    weightedSum += result.score * weight;
+    totalWeight += weight;
+  }
+
+  if (totalWeight === 0) return null;
+  return clamp(Math.round(weightedSum / totalWeight), 0, 100);
+}
+
+/** Status for an overall score; `null` maps to `"no-data"`. */
+export function getOverallHealthStatus(score: number | null): OverallHealthStatus {
+  return score === null ? "no-data" : getHealthStatus(score);
+}
 import { analyzeTokenEconomics } from "./dimensions/tokenEconomics.js";
 import { analyzeCostHealth } from "./dimensions/costHealth.js";
 import { analyzeStageEffectiveness } from "./dimensions/stageEffectiveness.js";
@@ -86,9 +131,9 @@ export class HealthAnalysisEngine {
     // Cross-referencing second pass
     const crossReferences = crossReference(dimensionResults);
 
-    // Compute weighted overall score
-    const overallScore = this.computeOverallScore(dimensionResults);
-    const overallStatus = getHealthStatus(overallScore);
+    // Weighted overall score over the dimensions that have data (#1197)
+    const overallScore = computeOverallHealthScore(dimensionResults.values(), this.config.weights);
+    const overallStatus = getOverallHealthStatus(overallScore);
 
     // Generate summary
     const summary = this.generateSummary(
@@ -122,35 +167,21 @@ export class HealthAnalysisEngine {
   }
 
   /**
-   * Compute weighted overall score from dimension results.
-   * Uses auto-normalized weights so the sum doesn't need to equal 1.0.
-   */
-  private computeOverallScore(dimensionResults: Map<HealthDimension, DimensionResult>): number {
-    let weightedSum = 0;
-    let totalWeight = 0;
-
-    for (const [dimension, result] of dimensionResults) {
-      const weight = this.config.weights[dimension] ?? 0;
-      weightedSum += result.score * weight;
-      totalWeight += weight;
-    }
-
-    if (totalWeight === 0) return 0;
-    return clamp(Math.round(weightedSum / totalWeight), 0, 100);
-  }
-
-  /**
    * Generate a human-readable summary of the analysis.
    */
   private generateSummary(
     dimensionResults: Map<HealthDimension, DimensionResult>,
     crossReferences: ReturnType<typeof crossReference>,
-    overallScore: number,
-    overallStatus: string
+    overallScore: number | null,
+    overallStatus: OverallHealthStatus
   ): string {
     const parts: string[] = [];
 
-    parts.push(`Pipeline health: ${overallStatus} (${overallScore}/100).`);
+    parts.push(
+      overallScore === null
+        ? "Pipeline health: no-data (N/A — no dimension had enough data)."
+        : `Pipeline health: ${overallStatus} (${overallScore}/100).`
+    );
 
     // Highlight dimensions with data
     const withData = [...dimensionResults.values()].filter((r) => r.hasEnoughData);

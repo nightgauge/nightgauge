@@ -51,10 +51,15 @@ type ProjectService interface {
 
 // BoardService is a read-only subset of the project board surface used by
 // callers that only need to enumerate items (e.g. the state board snapshot).
+//
+// There is deliberately no CountsByStatus here. Per-status counts are an
+// aggregation over the open-item snapshot, computed once in
+// boardcache.CountsByStatus from whatever ListOpenItems returned — a
+// per-adapter count query was a second read of the same board that no cache
+// could collapse (#TBD-board-counts).
 type BoardService interface {
 	ListItems(ctx context.Context, statusFilter string) ([]forgetypes.BoardItem, error)
 	ListOpenItems(ctx context.Context) ([]forgetypes.BoardItem, int, error)
-	CountsByStatus(ctx context.Context) (*forgetypes.StatusCounts, error)
 
 	// GetItem fetches a single board item by issue number. Adapters return
 	// ErrNotFound when the issue exists but is not on the bound board (or

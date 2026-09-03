@@ -587,6 +587,20 @@ func TestAttentionRaiseBranchProtectionClassifiesDaemonSide(t *testing.T) {
 			wantRaised: true,
 			wantReason: "dirty-merge-state: BLOCKED",
 		},
+		// #1027: pr-merge's FIRST snapshot has no check run at all — GitHub has
+		// not created one yet. The predicate treats that as CI not started;
+		// the runner bounds the wait and punts `no-checks-created` (which
+		// IsBranchProtectionPunt does not match) if none ever appears. Carding
+		// it told the operator to fix a failing check that did not exist.
+		{
+			name: "BLOCKED with zero check runs created yet is CI not started, not branch protection",
+			params: AttentionRaiseParams{
+				PRState: "OPEN", Mergeable: "MERGEABLE", MergeStateStatus: "BLOCKED",
+				ReviewDecision: "",
+				Checks:         nil,
+			},
+			wantRaised: false,
+		},
 		{
 			name: "BLOCKED with no pending check at all is a real branch-protection block",
 			params: AttentionRaiseParams{

@@ -6,6 +6,8 @@ import (
 	"log"
 	"strings"
 
+	"github.com/nightgauge/nightgauge/internal/forge"
+	"github.com/nightgauge/nightgauge/internal/forge/boardcache"
 	gh "github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/pkg/types"
 )
@@ -44,19 +46,74 @@ func (rc RepoConfig) FullName() string {
 	return rc.Owner + "/" + rc.Name
 }
 
+// boardKey identifies the board a repo's items are read from. It is (owner,
+// project) — NOT repo — for the same reason the board snapshot cache keys that
+// way (#845): a shared-board workspace binds every repo to one board, and a
+// ProjectV2 read returns the whole board regardless of which repo asked.
+type boardKey struct {
+	owner   string
+	project int
+}
+
+func (rc RepoConfig) boardKey() boardKey {
+	return boardKey{owner: rc.Owner, project: rc.Project}
+}
+
+// BoardProvider resolves the board service a repo's open items are read
+// from. It is the seam through which a long-lived process hands the builder
+// its shared snapshot cache: the daemon reads every board through ONE
+// boardcache.Cache so a graph build inside the TTL of a sweep (or of the
+// previous cycle) costs nothing, and the board change probe (#847) decides
+// when a snapshot is stale instead of a fresh 17-point-per-page read.
+type BoardProvider func(repo RepoConfig) forge.BoardService
+
+// DefaultBoardProvider reads boards straight from the client — the shape a
+// one-shot CLI invocation wants, where a fresh process is a cold cache anyway.
+// The per-build board memo in buildGraphFromFetcherWithBatch still collapses
+// N repos on one board to one read.
+func DefaultBoardProvider(client *gh.Client) BoardProvider {
+	return func(repo RepoConfig) forge.BoardService {
+		return gh.NewBoardService(client, repo.Owner, repo.Project, repo.OwnerType)
+	}
+}
+
+// CachedBoardProvider reads boards through a shared snapshot cache. A nil
+// cache degrades to DefaultBoardProvider.
+func CachedBoardProvider(client *gh.Client, cache *boardcache.Cache) BoardProvider {
+	base := DefaultBoardProvider(client)
+	if cache == nil {
+		return base
+	}
+	return func(repo RepoConfig) forge.BoardService {
+		return cache.Wrap(base(repo), repo.Owner, repo.Project)
+	}
+}
+
 // BuildGraph constructs the full cross-repo dependency graph:
 //  1. Fetches all open issues from each repo's project board
 //  2. Reads blockedBy relationships from the board data
 //  3. Parses issue bodies for cross-repo references
 //  4. Builds the unified DAG
 //  5. Computes waves and critical path
+//
+// Boards are read straight from the client; a process that holds a board
+// snapshot cache should call BuildGraphWithBoards instead.
 func BuildGraph(ctx context.Context, client *gh.Client, repos []RepoConfig, repoAliases map[string]string) (*Graph, error) {
+	return BuildGraphWithBoards(ctx, client, DefaultBoardProvider(client), repos, repoAliases)
+}
+
+// BuildGraphWithBoards is BuildGraph with the board reads routed through the
+// given provider. Issue bodies are still fetched from client.
+func BuildGraphWithBoards(ctx context.Context, client *gh.Client, boards BoardProvider, repos []RepoConfig, repoAliases map[string]string) (*Graph, error) {
 	if len(repos) == 0 {
 		return nil, fmt.Errorf("no repos configured")
 	}
+	if boards == nil {
+		boards = DefaultBoardProvider(client)
+	}
 
 	fetcher := func(ctx context.Context, repo RepoConfig) ([]types.BoardItem, int, error) {
-		return FetchOpenBoardItems(ctx, client, repo)
+		return boards(repo).ListOpenItems(ctx)
 	}
 	issueSvc := gh.NewIssueService(client)
 	bodyFetcher := func(ctx context.Context, owner, name string, number int) (string, error) {
@@ -130,11 +187,30 @@ func buildGraphFromFetcherWithBatch(
 	totalPRsSkipped := 0
 	totalCrossListed := 0
 
+	// One board read per board per build. A ProjectV2 read returns the whole
+	// board, so repos bound to the same (owner, project) — every repo in a
+	// shared-board workspace — get identical items back; reading it once per
+	// repo was six 17-point-per-page reads of one ~1,900-item board at every
+	// daemon start. The per-repo loop below still runs per repo, because
+	// which board is "home" for an item depends on the repo being processed.
+	type fetched struct {
+		items    []types.BoardItem
+		rawCount int
+	}
+	boardsRead := make(map[boardKey]fetched)
+
 	for _, repo := range repos {
-		items, rawCount, err := fetcher(ctx, repo)
-		if err != nil {
-			return nil, fmt.Errorf("depgraph: fetch items for %s: %w", repo.FullName(), err)
+		key := repo.boardKey()
+		got, seen := boardsRead[key]
+		if !seen {
+			items, rawCount, err := fetcher(ctx, repo)
+			if err != nil {
+				return nil, fmt.Errorf("depgraph: fetch items for %s: %w", repo.FullName(), err)
+			}
+			got = fetched{items: items, rawCount: rawCount}
+			boardsRead[key] = got
 		}
+		items, rawCount := got.items, got.rawCount
 		totalRawNodes += rawCount
 
 		// Per-repo fetch diagnostic — without this, "graph has N nodes, scanning
@@ -371,14 +447,6 @@ func fetchBoardItems(ctx context.Context, client *gh.Client, repo RepoConfig) ([
 	// Use server-side "is:open" filter to avoid paginating through hundreds of
 	// closed/archived items. The autonomous scheduler only needs open issues.
 	return boardSvc.ListItems(ctx, "")
-}
-
-// FetchOpenBoardItems fetches only open items from a repo's project board.
-// Returns the filtered items, the raw node count from GraphQL (before
-// nodeToItem filtering), and any error.
-func FetchOpenBoardItems(ctx context.Context, client *gh.Client, repo RepoConfig) ([]types.BoardItem, int, error) {
-	boardSvc := gh.NewBoardService(client, repo.Owner, repo.Project, repo.OwnerType)
-	return boardSvc.ListOpenItems(ctx)
 }
 
 // boardItemToNode converts a BoardItem to a graph Node.

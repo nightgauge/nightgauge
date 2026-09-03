@@ -211,7 +211,12 @@ export type {
 } from "./health/index.js";
 
 // Health Analysis Engine (Issue #1101)
-export { HealthAnalysisEngine } from "./health/index.js";
+export {
+  HealthAnalysisEngine,
+  computeOverallHealthScore,
+  getOverallHealthStatus,
+  type ScoredDimension,
+} from "./health/index.js";
 export { crossReference } from "./health/index.js";
 export {
   analyzeTokenEconomics,
@@ -222,15 +227,20 @@ export {
   analyzeLearningEffectiveness,
   analyzePipelineVelocity,
   analyzeSkillDrift,
+  flattenRunRecords,
   ALL_DIMENSIONS,
   DEFAULT_HEALTH_CONFIG,
   DEFAULT_CACHE_THRESHOLD,
   getHealthStatus,
 } from "./health/index.js";
 export type {
+  HistoryRunRecordInput,
+  HistoryRunStageInput,
+  HistoryRunStageTokensInput,
   HealthDimension,
   Severity as HealthSeverity,
   HealthStatus,
+  OverallHealthStatus,
   Confidence as HealthConfidence,
   TrendDirection as HealthTrendDirection,
   Finding as HealthFinding,

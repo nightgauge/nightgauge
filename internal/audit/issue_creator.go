@@ -132,6 +132,12 @@ func GenerateEpicTitle(dimension, repo string) string {
 }
 
 // GenerateEpicBody returns the markdown body for an epic issue.
+//
+// The headings are the `epic` row of the issue-body contract
+// (skills/nightgauge-issue-audit/SKILL.md, Phase 5): Summary, Sub-Issues,
+// Acceptance Criteria, Verification — exact casing. These bodies are
+// machine-authored with no author in the loop, so the shape is pinned by
+// TestGenerateEpicBody_SatisfiesHeadingContract against that table (#1116).
 func GenerateEpicBody(epic *Epic) string {
 	sevCounts := map[string]int{
 		"critical": 0,
@@ -147,17 +153,34 @@ func GenerateEpicBody(epic *Epic) string {
 	}
 
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("## Audit Epic: %s\n\n", epic.Title))
-	sb.WriteString(fmt.Sprintf("**Dimension:** %s\n\n", epic.Dimension))
-	sb.WriteString(fmt.Sprintf("**Repository:** %s\n\n", epic.Repository))
-	sb.WriteString(fmt.Sprintf("**Total Findings:** %d\n\n", len(epic.Findings)))
-	sb.WriteString("### Severity Breakdown\n\n")
+	sb.WriteString("## Summary\n\n")
+	sb.WriteString(fmt.Sprintf("Audit epic for **%s** in **%s**: %d finding(s) from the `%s` dimension.\n\n",
+		epic.Title, epic.Repository, len(epic.Findings), epic.Dimension))
 	sb.WriteString("| Severity | Count |\n")
 	sb.WriteString("|----------|------:|\n")
 	for _, sev := range []string{"critical", "high", "medium", "low"} {
 		sb.WriteString(fmt.Sprintf("| %s | %d |\n", strings.Title(sev), sevCounts[sev]))
 	}
 	sb.WriteString("\n")
+
+	sb.WriteString("## Sub-Issues\n\n")
+	if len(epic.Findings) == 0 {
+		sb.WriteString("- None\n")
+	}
+	for _, f := range epic.Findings {
+		sb.WriteString(fmt.Sprintf("- %s\n", GenerateSubIssueTitle(f)))
+	}
+	sb.WriteString("\n")
+
+	sb.WriteString("## Acceptance Criteria\n\n")
+	sb.WriteString("- [ ] Every sub-issue listed above is closed\n")
+	sb.WriteString(fmt.Sprintf("- [ ] Re-running the audit reports zero `%s` findings for `%s`\n\n", epic.Dimension, epic.Repository))
+
+	sb.WriteString("## Verification\n\n")
+	sb.WriteString("- Every sub-issue linked to this epic shows state `closed`\n")
+	sb.WriteString(fmt.Sprintf("- `nightgauge audit synthesize` re-run against `%s` lists no findings under `%s`\n\n",
+		epic.Repository, epic.Dimension))
+
 	sb.WriteString(fmt.Sprintf("_Generated: %s_\n\n", time.Now().UTC().Format("2006-01-02")))
 	sb.WriteString("<!-- wave: 0 -->")
 	return sb.String()
@@ -174,20 +197,37 @@ func GenerateSubIssueTitle(finding *AuditFinding) string {
 }
 
 // GenerateSubIssueBody returns the markdown body for a sub-issue.
+//
+// The headings are the feature/docs/refactor row of the issue-body contract
+// (skills/nightgauge-issue-audit/SKILL.md, Phase 5): Summary, Acceptance
+// Criteria, Verification — exact casing. Verification carries one bullet per
+// acceptance criterion: the audit rule's own re-run returning zero findings
+// with this finding's id. Pinned by
+// TestGenerateSubIssueBody_SatisfiesHeadingContract (#1116).
 func GenerateSubIssueBody(finding *AuditFinding, wave int) string {
+	criteria := finding.AcceptanceCriteria
+	if len(criteria) == 0 {
+		criteria = []string{"Resolve finding and verify fix"}
+	}
+
 	var sb strings.Builder
-	sb.WriteString("## Finding Description\n\n")
+	sb.WriteString("## Summary\n\n")
 	sb.WriteString(finding.Description)
 	sb.WriteString("\n\n")
+
 	sb.WriteString("## Acceptance Criteria\n\n")
-	if len(finding.AcceptanceCriteria) == 0 {
-		sb.WriteString("- [ ] Resolve finding and verify fix\n")
-	} else {
-		for _, ac := range finding.AcceptanceCriteria {
-			sb.WriteString(fmt.Sprintf("- [ ] %s\n", ac))
-		}
+	for _, ac := range criteria {
+		sb.WriteString(fmt.Sprintf("- [ ] %s\n", ac))
 	}
 	sb.WriteString("\n")
+
+	sb.WriteString("## Verification\n\n")
+	for _, ac := range criteria {
+		sb.WriteString(fmt.Sprintf("- %s — `nightgauge audit synthesize` re-run reports zero `%s` findings with id `%s`\n",
+			ac, finding.Category, finding.ID))
+	}
+	sb.WriteString("\n")
+
 	sb.WriteString(fmt.Sprintf("<!-- wave: %d -->", wave))
 	return sb.String()
 }

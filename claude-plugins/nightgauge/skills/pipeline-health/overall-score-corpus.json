@@ -1,0 +1,78 @@
+{
+  "$comment": "Shared corpus for the pipeline-health OVERALL score (#1197). Two implementations answer 'what is the health score' for the same dimension results: the SDK engine (packages/nightgauge-sdk/src/analysis/health/HealthAnalysisEngine.ts, computeOverallHealthScore) and this skill's Phase 3 rule. Both are pinned to every case below by packages/nightgauge-sdk/tests/analysis/health/overallScore.corpusParity.test.ts, so a change to either has to change this file too. The rule: a dimension without enough data is EXCLUDED and the surviving weights are re-normalised; overall = round(sum(score * weight) / sum(weight)) over the dimensions that have data, clamped to [0, 100]; null (rendered N/A) when no dimension has data. A no-data dimension's placeholder score is never read.",
+  "cases": [
+    {
+      "id": "all-dimensions-have-data",
+      "rationale": "Baseline: every dimension counts at its table weight.",
+      "dimensions": [
+        { "dimension": "token-economics", "score": 80, "hasEnoughData": true, "weight": 0.2 },
+        { "dimension": "cost-health", "score": 60, "hasEnoughData": true, "weight": 0.2 },
+        { "dimension": "reliability", "score": 100, "hasEnoughData": true, "weight": 0.1 }
+      ],
+      "expected": 76
+    },
+    {
+      "id": "no-data-dimension-is-excluded",
+      "rationale": "The bug in #1197: model-routing with no data used to contribute 0.12 x 50 forever. Excluding it and re-normalising leaves the overall equal to the surviving dimensions' weighted mean.",
+      "dimensions": [
+        { "dimension": "token-economics", "score": 90, "hasEnoughData": true, "weight": 0.2 },
+        { "dimension": "reliability", "score": 90, "hasEnoughData": true, "weight": 0.2 },
+        { "dimension": "model-routing", "score": 50, "hasEnoughData": false, "weight": 0.12 }
+      ],
+      "expected": 90
+    },
+    {
+      "id": "placeholder-score-is-never-read",
+      "rationale": "Whatever number a starved analyzer leaves in `score` (50, 0, 100) must not move the overall.",
+      "dimensions": [
+        { "dimension": "cost-health", "score": 40, "hasEnoughData": true, "weight": 0.18 },
+        { "dimension": "model-routing", "score": 100, "hasEnoughData": false, "weight": 0.12 },
+        { "dimension": "skill-drift", "score": 0, "hasEnoughData": false, "weight": 0.08 }
+      ],
+      "expected": 40
+    },
+    {
+      "id": "renormalisation-uses-surviving-weights-only",
+      "rationale": "Weights do not need to sum to 1; the divisor is the sum over dimensions with data (0.3), not the table total (0.5).",
+      "dimensions": [
+        { "dimension": "token-economics", "score": 100, "hasEnoughData": true, "weight": 0.2 },
+        { "dimension": "cost-health", "score": 40, "hasEnoughData": true, "weight": 0.1 },
+        { "dimension": "pipeline-velocity", "score": 50, "hasEnoughData": false, "weight": 0.2 }
+      ],
+      "expected": 80
+    },
+    {
+      "id": "no-dimension-has-data",
+      "rationale": "Absence of evidence is N/A, not 0 (critical) and not 50 (fair).",
+      "dimensions": [
+        { "dimension": "token-economics", "score": 50, "hasEnoughData": false, "weight": 0.2 },
+        { "dimension": "model-routing", "score": 50, "hasEnoughData": false, "weight": 0.12 }
+      ],
+      "expected": null
+    },
+    {
+      "id": "empty-dimension-set",
+      "rationale": "A --dimensions filter that selects nothing has nothing to score.",
+      "dimensions": [],
+      "expected": null
+    },
+    {
+      "id": "zero-weight-dimension-with-data",
+      "rationale": "A dimension weighted 0 has data but no vote; if it is the only one with data there is still no score.",
+      "dimensions": [
+        { "dimension": "skill-drift", "score": 20, "hasEnoughData": true, "weight": 0 },
+        { "dimension": "reliability", "score": 50, "hasEnoughData": false, "weight": 0.2 }
+      ],
+      "expected": null
+    },
+    {
+      "id": "rounding-is-round-half-up",
+      "rationale": "Pins Math.round semantics: (70*0.5 + 71*0.5)/1 = 70.5 -> 71.",
+      "dimensions": [
+        { "dimension": "token-economics", "score": 70, "hasEnoughData": true, "weight": 0.5 },
+        { "dimension": "cost-health", "score": 71, "hasEnoughData": true, "weight": 0.5 }
+      ],
+      "expected": 71
+    }
+  ]
+}

@@ -144,7 +144,7 @@ export function makeMockBoard(
 // ---------------------------------------------------------------------------
 
 export function makeMockStatusCounts(overrides: Partial<MockStatusCounts> = {}): MockStatusCounts {
-  return { ready: 3, inProgress: 1, inReview: 0, done: 5, backlog: 2, ...overrides };
+  return { ready: 3, inProgress: 1, inReview: 0, backlog: 2, ...overrides };
 }
 
 // ---------------------------------------------------------------------------

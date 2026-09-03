@@ -46,7 +46,7 @@ export const PolicyEngineResultSchema = z.object({
   decisions: z.array(PolicyDecisionSchema),
   analyzed_at: z.string().datetime(),
   inputs_summary: z.object({
-    health_overall_score: z.number(),
+    health_overall_score: z.number().nullable(),
     health_overall_status: z.string(),
     model_records_analyzed: z.number(),
   }),
