@@ -151,3 +151,103 @@ func TestEmptyBoardItemsSerializesToArray(t *testing.T) {
 		t.Errorf("nil slice serialized to %s, expected null (this documents the Go behavior)", string(nilData))
 	}
 }
+
+// TestBoardService_GetItem_SendsRepoScopedFilter pins the exact Projects V2
+// `items(query:)` string GetItem asks the server for. The pre-fix shape
+// (`owner/repo#N`) is not parsed by the project item search: GitHub answers
+// it with zero rows and no error, so a Ready issue read as "not found on
+// board" and `nightgauge run <issue>` never dispatched. The old test could
+// not catch that — it stubbed an empty page and asserted ErrNotFound, which
+// the broken query also produced. This one reads the variables the client
+// actually sent.
+func TestBoardService_GetItem_SendsRepoScopedFilter(t *testing.T) {
+	var gotQuery string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Variables map[string]interface{} `json:"variables"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Errorf("decode request: %v", err)
+		}
+		gotQuery, _ = req.Variables["query"].(string)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"data": map[string]interface{}{
+				"organization": map[string]interface{}{
+					"projectV2": map[string]interface{}{
+						"id":    "PVT_X",
+						"title": "Board",
+						"items": map[string]interface{}{
+							"pageInfo": map[string]interface{}{"hasNextPage": false, "endCursor": ""},
+							"nodes":    []interface{}{},
+						},
+					},
+				},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	c := NewClientWithURL("test-token", srv.URL)
+	b := NewBoardService(c, "nightgauge", 3)
+	_, _ = b.GetItem(context.Background(), "nightgauge", "nightgauge", 1116)
+
+	const want = "repo:nightgauge/nightgauge #1116"
+	if gotQuery != want {
+		t.Fatalf("GetItem sent items(query: %q), want %q — the bare owner/repo#N slug is ignored by the Projects V2 search", gotQuery, want)
+	}
+}
+
+// TestBoardService_GetItem_ReturnsMatchingRow verifies that a row the server
+// returns for the filter comes back as a BoardItem with its identity fields
+// populated, and that a same-number row from another repository on a shared
+// board is not mistaken for it.
+func TestBoardService_GetItem_ReturnsMatchingRow(t *testing.T) {
+	issueNode := func(id, repo string, number int, title string) map[string]interface{} {
+		return map[string]interface{}{
+			"id": id,
+			"content": map[string]interface{}{
+				"__typename": "Issue",
+				"number":     number,
+				"title":      title,
+				"state":      "OPEN",
+				"url":        "https://github.com/" + repo + "/issues/1116",
+				"repository": map[string]interface{}{"nameWithOwner": repo},
+				"labels":     map[string]interface{}{"nodes": []interface{}{}},
+				"subIssues":  map[string]interface{}{"nodes": []interface{}{}},
+			},
+			"fieldValues": map[string]interface{}{"nodes": []interface{}{}},
+		}
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"data": map[string]interface{}{
+				"organization": map[string]interface{}{
+					"projectV2": map[string]interface{}{
+						"id":    "PVT_X",
+						"title": "Board",
+						"items": map[string]interface{}{
+							"pageInfo": map[string]interface{}{"hasNextPage": false, "endCursor": ""},
+							"nodes": []interface{}{
+								issueNode("PVTI_other", "nightgauge/nightgauge-platform", 1116, "same number, other repo"),
+								issueNode("PVTI_want", "nightgauge/nightgauge", 1116, "the row we asked for"),
+							},
+						},
+					},
+				},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	c := NewClientWithURL("test-token", srv.URL)
+	b := NewBoardService(c, "nightgauge", 3)
+	item, err := b.GetItem(context.Background(), "nightgauge", "nightgauge", 1116)
+	if err != nil {
+		t.Fatalf("GetItem: %v", err)
+	}
+	if item.ID != "PVTI_want" || item.Number != 1116 || item.Repo != "nightgauge/nightgauge" {
+		t.Fatalf("GetItem returned %+v, want the nightgauge/nightgauge#1116 row (PVTI_want)", item)
+	}
+}
