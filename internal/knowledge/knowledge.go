@@ -203,14 +203,20 @@ func Scaffold(workspaceRoot string, issueNumber int, title string, acceptanceCri
 	var filesCreated []string
 
 	prdPath := filepath.Join(knowledgePath, "PRD.md")
-	prdContent := generatePRD(issueNumber, title, acceptanceCriteria)
+	prdContent, err := generatePRD(issueNumber, title, acceptanceCriteria)
+	if err != nil {
+		return ScaffoldResult{}, err
+	}
 	if err := os.WriteFile(prdPath, []byte(prdContent), 0o644); err != nil {
 		return ScaffoldResult{}, fmt.Errorf("write PRD.md: %w", err)
 	}
 	filesCreated = append(filesCreated, "PRD.md")
 
 	decisionsPath := filepath.Join(knowledgePath, "decisions.md")
-	decisionsContent := generateDecisionsTemplate(issueNumber, title)
+	decisionsContent, err := generateDecisionsTemplate(issueNumber, title)
+	if err != nil {
+		return ScaffoldResult{}, err
+	}
 	if err := os.WriteFile(decisionsPath, []byte(decisionsContent), 0o644); err != nil {
 		return ScaffoldResult{}, fmt.Errorf("write decisions.md: %w", err)
 	}
@@ -487,14 +493,21 @@ func ScaffoldRepoTopic(workspaceRoot string, topicType RepoTopicType, slug strin
 		result.FilesCreated = append(result.FilesCreated, "README.md")
 
 		templatePath := filepath.Join(categoryDir, "_template.md")
-		if err := os.WriteFile(templatePath, []byte(generateRepoTopicTemplate(topicType, "slug")), 0o644); err != nil {
+		tmpl, err := generateRepoTopicTemplate(topicType, "slug")
+		if err != nil {
+			return RepoTopicResult{}, err
+		}
+		if err := os.WriteFile(templatePath, []byte(tmpl), 0o644); err != nil {
 			return RepoTopicResult{}, fmt.Errorf("write _template.md: %w", err)
 		}
 		result.FilesCreated = append(result.FilesCreated, "_template.md")
 	}
 
 	// Create the entry file.
-	entryContent := generateRepoTopicTemplate(topicType, slug)
+	entryContent, err := generateRepoTopicTemplate(topicType, slug)
+	if err != nil {
+		return RepoTopicResult{}, err
+	}
 	if err := os.WriteFile(entryPath, []byte(entryContent), 0o644); err != nil {
 		return RepoTopicResult{}, fmt.Errorf("write entry file: %w", err)
 	}
@@ -595,20 +608,17 @@ See ` + "`_template.md`" + ` for the file structure to follow when adding entrie
 	}
 }
 
-// generateRepoTopicTemplate produces a content template for a repo-topic entry.
-// The slug parameter is substituted into the heading.
-func generateRepoTopicTemplate(topicType RepoTopicType, slug string) string {
-	now := time.Now().UTC().Format(time.RFC3339)
-	switch topicType {
-	case RepoTopicArchitecture:
-		return fmt.Sprintf(`---
-type: architecture
-created: "%s"
-tags: [architecture, pattern, layer]
-status: draft
----
-
-# %s
+// repoTopicBodies maps a repo-topic category to its markdown body, with %s
+// standing in for the entry slug. The frontmatter block is rendered by the
+// shared contract renderer rather than written by hand, so every scaffold path
+// emits the same field set.
+var repoTopicBodies = map[RepoTopicType]struct {
+	tags []string
+	body string
+}{
+	RepoTopicArchitecture: {
+		tags: []string{"architecture", "pattern", "layer"},
+		body: `# %s
 
 ## Overview
 
@@ -625,16 +635,11 @@ status: draft
 ## Related
 
 <!-- TODO: Links to docs/, related issues, related architecture entries. -->
-`, now, slug)
-	case RepoTopicGlossary:
-		return fmt.Sprintf(`---
-type: glossary
-created: "%s"
-tags: [domain-term]
-status: draft
----
-
-# %s
+`,
+	},
+	RepoTopicGlossary: {
+		tags: []string{"domain-term"},
+		body: `# %s
 
 ## Definition
 
@@ -647,16 +652,11 @@ status: draft
 ## Examples
 
 <!-- TODO: Concrete examples of the term in use. -->
-`, now, slug)
-	case RepoTopicRunbook:
-		return fmt.Sprintf(`---
-type: runbook
-created: "%s"
-tags: [operational, procedure]
-status: draft
----
-
-# %s
+`,
+	},
+	RepoTopicRunbook: {
+		tags: []string{"operational", "procedure"},
+		body: `# %s
 
 ## Purpose
 
@@ -679,16 +679,11 @@ status: draft
 ## Rollback
 
 <!-- TODO: How to undo the steps if something goes wrong. -->
-`, now, slug)
-	case RepoTopicPostMortem:
-		return fmt.Sprintf(`---
-type: post-mortem
-created: "%s"
-tags: [incident, post-mortem]
-status: draft
----
-
-# %s
+`,
+	},
+	RepoTopicPostMortem: {
+		tags: []string{"incident", "post-mortem"},
+		body: `# %s
 
 ## Summary
 
@@ -715,10 +710,22 @@ status: draft
 ## Lessons Learned
 
 <!-- TODO: Key takeaways for the team. -->
-`, now, slug)
-	default:
-		return fmt.Sprintf("# %s\n\n<!-- TODO: Add content. -->\n", slug)
+`,
+	},
+}
+
+// generateRepoTopicTemplate produces a content template for a repo-topic entry.
+// The slug parameter is substituted into the heading.
+func generateRepoTopicTemplate(topicType RepoTopicType, slug string) (string, error) {
+	spec, ok := repoTopicBodies[topicType]
+	if !ok {
+		return fmt.Sprintf("# %s\n\n<!-- TODO: Add content. -->\n", slug), nil
 	}
+	fm, err := ScaffoldFrontmatter(string(topicType), WithTitle(slug), WithTags(spec.tags...))
+	if err != nil {
+		return "", err
+	}
+	return fm + "\n" + fmt.Sprintf(spec.body, slug), nil
 }
 
 // generateSlug converts a title to a URL-safe kebab-case slug ≤50 chars.
@@ -744,7 +751,7 @@ func generateSlug(title string) string {
 // Non-Functional Requirements. These are sections, not separate files — see
 // docs/KNOWLEDGE_BASE.md#information-architecture. The H2 section set and order
 // here MUST stay in parity with the TypeScript SDK.
-func generatePRD(issueNumber int, title string, acceptanceCriteria []string) string {
+func generatePRD(issueNumber int, title string, acceptanceCriteria []string) (string, error) {
 	acContent := "<!-- TODO: Testable checkboxes — each one a behavior feature-validate can verify\n- [ ] Criterion 1\n- [ ] Criterion 2 -->"
 	if len(acceptanceCriteria) > 0 {
 		var lines []string
@@ -754,7 +761,12 @@ func generatePRD(issueNumber int, title string, acceptanceCriteria []string) str
 		acContent = strings.Join(lines, "\n")
 	}
 
-	return fmt.Sprintf(`# PRD: #%d — %s
+	fm, err := ScaffoldFrontmatter(TypePRD, WithTitle(fmt.Sprintf("PRD: #%d — %s", issueNumber, title)))
+	if err != nil {
+		return "", err
+	}
+
+	return fm + "\n" + fmt.Sprintf(`# PRD: #%d — %s
 
 ## Summary
 
@@ -787,13 +799,18 @@ func generatePRD(issueNumber int, title string, acceptanceCriteria []string) str
 - [ ] Draft
 - [ ] Reviewed
 - [ ] Approved
-`, issueNumber, title, acContent)
+`, issueNumber, title, acContent), nil
 }
 
 // generateDecisionsTemplate produces decisions.md content matching
 // KnowledgeService.generateDecisionsTemplate().
-func generateDecisionsTemplate(issueNumber int, title string) string {
-	return fmt.Sprintf(`# Decisions: #%d — %s
+func generateDecisionsTemplate(issueNumber int, title string) (string, error) {
+	fm, err := ScaffoldFrontmatter(TypeDecisions, WithTitle(fmt.Sprintf("Decisions: #%d — %s", issueNumber, title)))
+	if err != nil {
+		return "", err
+	}
+
+	return fm + "\n" + fmt.Sprintf(`# Decisions: #%d — %s
 
 ## Architecture Decisions
 
@@ -806,7 +823,7 @@ func generateDecisionsTemplate(issueNumber int, title string) string {
 **Context**: [Background and constraints that led to this decision]
 **Decision**: [What was decided and why]
 **Consequences**: [Expected impact, trade-offs, and follow-up actions]
-`, issueNumber, title)
+`, issueNumber, title), nil
 }
 
 // contentIsSubstantive returns true when content has ≥30 chars of real text
@@ -823,7 +840,11 @@ var (
 )
 
 func contentIsSubstantive(content string) bool {
-	s := htmlCommentRe.ReplaceAllString(content, "")
+	// Frontmatter is metadata, never substance. Every scaffolded entry now
+	// carries a block, so counting its keys as content would make PruneEmpty a
+	// no-op on exactly the untouched directories it exists to remove.
+	_, body := SplitFrontmatter(content)
+	s := htmlCommentRe.ReplaceAllString(body, "")
 	s = headingRe.ReplaceAllString(s, "")
 	s = tableRowRe.ReplaceAllString(s, "")
 	s = checkboxRe.ReplaceAllString(s, "")

@@ -9,36 +9,34 @@ import {
 const NOW = "2026-01-01T00:00:00.000Z";
 const LATER = "2026-02-01T12:00:00.000Z";
 
-// Minimal valid KnowledgeEntry
-const minimalEntry = {
-  title: "My PRD",
-  type: "prd",
-  created: NOW,
-  updated: NOW,
-};
-
 // ──────────────────────────────────────────────────────────────
 // KnowledgeTypeSchema
 // ──────────────────────────────────────────────────────────────
 
 describe("KnowledgeTypeSchema", () => {
-  it.each(["decision", "prd", "conversation", "adr", "reference", "note"])(
-    'accepts valid type "%s"',
-    (type) => {
-      const result = KnowledgeTypeSchema.safeParse(type);
-      expect(result.success).toBe(true);
-    }
-  );
+  it.each([
+    "prd",
+    "decisions",
+    "adr",
+    "architecture",
+    "glossary",
+    "runbook",
+    "post-mortem",
+    "conversation",
+    "reference",
+    "note",
+  ])('accepts valid type "%s"', (type) => {
+    const result = KnowledgeTypeSchema.safeParse(type);
+    expect(result.success).toBe(true);
+  });
 
-  it("normalizes hyphens to underscores (flexEnum behavior)", () => {
-    // No hyphenated variants in the KnowledgeType enum, but flexEnum converts
-    // hyphens to underscores as a general defense. Verify a hyphenated string
-    // that matches a valid value after normalization (none apply here, so verify
-    // a non-hyphenated value passes the underlying path).
-    const result = KnowledgeTypeSchema.safeParse("prd");
+  it("keeps the hyphenated `post-mortem` value verbatim", () => {
+    // The Go binary writes `type: post-mortem`. A normalizing enum would
+    // rewrite it and split the vocabulary across the two layers.
+    const result = KnowledgeTypeSchema.safeParse("post-mortem");
     expect(result.success).toBe(true);
     if (result.success) {
-      expect(result.data).toBe("prd");
+      expect(result.data).toBe("post-mortem");
     }
   });
 
@@ -63,126 +61,130 @@ describe("KnowledgeTypeSchema", () => {
 // ──────────────────────────────────────────────────────────────
 
 describe("KnowledgeEntrySchema", () => {
-  it("validates a minimal valid entry (title, type, created, updated)", () => {
-    const result = KnowledgeEntrySchema.safeParse(minimalEntry);
+  it("validates a minimal valid entry (type only)", () => {
+    const result = KnowledgeEntrySchema.safeParse({ type: "prd" });
     expect(result.success).toBe(true);
     if (result.success) {
-      expect(result.data.title).toBe("My PRD");
       expect(result.data.type).toBe("prd");
-      expect(result.data.created).toBe(NOW);
-      expect(result.data.updated).toBe(NOW);
     }
   });
 
-  it("accepts optional tags field", () => {
-    const input = { ...minimalEntry, tags: ["architecture", "backend"] };
-    const result = KnowledgeEntrySchema.safeParse(input);
+  it("rejects missing required field: type", () => {
+    const result = KnowledgeEntrySchema.safeParse({ title: "My PRD" });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects an empty type", () => {
+    const result = KnowledgeEntrySchema.safeParse({ type: "" });
+    expect(result.success).toBe(false);
+  });
+
+  it("accepts an unknown type value (OKF consumer tolerance)", () => {
+    // The Go parser accepts any type string; the two layers must agree, or an
+    // entry a future producer wrote would parse in one and fail in the other.
+    const result = KnowledgeEntrySchema.safeParse({ type: "some-future-kind" });
     expect(result.success).toBe(true);
-    if (result.success) {
-      expect(result.data.tags).toEqual(["architecture", "backend"]);
-    }
   });
 
-  it("accepts optional related_issues field", () => {
-    const input = { ...minimalEntry, related_issues: [42, 100] };
-    const result = KnowledgeEntrySchema.safeParse(input);
-    expect(result.success).toBe(true);
-    if (result.success) {
-      expect(result.data.related_issues).toEqual([42, 100]);
-    }
-  });
-
-  it("accepts optional related_files field", () => {
+  it("accepts every field of the contract together", () => {
     const input = {
-      ...minimalEntry,
-      related_files: ["src/services/foo.ts", "docs/ARCHITECTURE.md"],
+      type: "decisions",
+      title: "Decisions: #7",
+      description: "What we decided on #7",
+      tags: ["kb", "adr"],
+      related: ["#7"],
+      repos: ["nightgauge"],
+      status: "draft",
+      superseded_by: "#9",
+      generated: { by: "feature-dev/claude-sonnet-5", at: NOW },
+      verified: [
+        { by: "process:retro", at: NOW },
+        { by: "human:octocat", at: LATER },
+      ],
+      sources: [
+        { resource: "https://github.com/nightgauge/nightgauge/issues/7", title: "The issue" },
+        { resource: "/architecture/go-ts-parity.md" },
+      ],
+      stale_after: LATER,
     };
     const result = KnowledgeEntrySchema.safeParse(input);
     expect(result.success).toBe(true);
-    if (result.success) {
-      expect(result.data.related_files).toEqual(["src/services/foo.ts", "docs/ARCHITECTURE.md"]);
+  });
+
+  it("rejects the deleted `superseded` status", () => {
+    const result = KnowledgeEntrySchema.safeParse({ type: "prd", status: "superseded" });
+    expect(result.success).toBe(false);
+  });
+
+  it("accepts the three lifecycle statuses", () => {
+    for (const status of ["draft", "stable", "deprecated"]) {
+      expect(KnowledgeEntrySchema.safeParse({ type: "prd", status }).success).toBe(true);
     }
   });
 
-  it("accepts all optional fields together", () => {
-    const input = {
-      ...minimalEntry,
-      updated: LATER,
-      tags: ["sdk", "schema"],
-      related_issues: [1674],
-      related_files: ["packages/nightgauge-sdk/src/context/schemas/knowledge.ts"],
-    };
-    const result = KnowledgeEntrySchema.safeParse(input);
-    expect(result.success).toBe(true);
+  it("rejects an actor outside the convention", () => {
+    for (const by of ["I wrote this", "feature-dev", "human:", "Feature-Dev/claude"]) {
+      const result = KnowledgeEntrySchema.safeParse({ type: "prd", generated: { by } });
+      expect(result.success).toBe(false);
+    }
+  });
+
+  it("accepts each actor form the binary constructs", () => {
+    for (const by of ["feature-dev/claude-sonnet-5", "human:octocat", "process:retro"]) {
+      const result = KnowledgeEntrySchema.safeParse({ type: "prd", generated: { by } });
+      expect(result.success).toBe(true);
+    }
+  });
+
+  it("rejects a source without a resource", () => {
+    const result = KnowledgeEntrySchema.safeParse({
+      type: "prd",
+      sources: [{ title: "no resource" }],
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects an invalid datetime for stale_after", () => {
+    const result = KnowledgeEntrySchema.safeParse({ type: "prd", stale_after: "2026-01-01" });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects non-array tags", () => {
+    const result = KnowledgeEntrySchema.safeParse({ type: "prd", tags: "architecture" });
+    expect(result.success).toBe(false);
   });
 
   it("allows extra fields via passthrough", () => {
-    const input = { ...minimalEntry, extra_field: "extra-value" };
-    const result = KnowledgeEntrySchema.safeParse(input);
+    const result = KnowledgeEntrySchema.safeParse({ type: "prd", extra_field: "extra-value" });
     expect(result.success).toBe(true);
     if (result.success) {
       expect((result.data as Record<string, unknown>).extra_field).toBe("extra-value");
     }
   });
 
-  it("rejects missing required field: title", () => {
-    const { title: _removed, ...rest } = minimalEntry;
-    const result = KnowledgeEntrySchema.safeParse(rest);
-    expect(result.success).toBe(false);
-  });
-
-  it("rejects empty string for title", () => {
-    const input = { ...minimalEntry, title: "" };
-    const result = KnowledgeEntrySchema.safeParse(input);
-    expect(result.success).toBe(false);
-  });
-
-  it("rejects missing required field: type", () => {
-    const { type: _removed, ...rest } = minimalEntry;
-    const result = KnowledgeEntrySchema.safeParse(rest);
-    expect(result.success).toBe(false);
-  });
-
-  it("rejects invalid type value", () => {
-    const input = { ...minimalEntry, type: "wiki" };
-    const result = KnowledgeEntrySchema.safeParse(input);
-    expect(result.success).toBe(false);
-  });
-
-  it("rejects invalid datetime for created", () => {
-    const input = { ...minimalEntry, created: "2026-01-01" };
-    const result = KnowledgeEntrySchema.safeParse(input);
-    expect(result.success).toBe(false);
-  });
-
-  it("rejects invalid datetime for updated", () => {
-    const input = { ...minimalEntry, updated: "not-a-date" };
-    const result = KnowledgeEntrySchema.safeParse(input);
-    expect(result.success).toBe(false);
-  });
-
-  it("rejects non-array tags", () => {
-    const input = { ...minimalEntry, tags: "architecture" };
-    const result = KnowledgeEntrySchema.safeParse(input);
-    expect(result.success).toBe(false);
-  });
-
-  it("rejects non-positive issue numbers in related_issues", () => {
-    const input = { ...minimalEntry, related_issues: [0] };
-    const result = KnowledgeEntrySchema.safeParse(input);
-    expect(result.success).toBe(false);
-  });
-
-  it("rejects negative issue numbers in related_issues", () => {
-    const input = { ...minimalEntry, related_issues: [-1] };
-    const result = KnowledgeEntrySchema.safeParse(input);
-    expect(result.success).toBe(false);
-  });
-
-  it("rejects non-integer issue numbers in related_issues", () => {
-    const input = { ...minimalEntry, related_issues: [1.5] };
-    const result = KnowledgeEntrySchema.safeParse(input);
-    expect(result.success).toBe(false);
+  it("carries no `created` or `updated` field — generated.at is the write stamp", () => {
+    // Parity guard: the Go FrontmatterBlock has no such fields either. Adding
+    // one back here reintroduces the dual-timestamp drift this contract removed.
+    const shape = Object.keys((KnowledgeEntrySchema as unknown as { shape: object }).shape);
+    expect(shape).not.toContain("created");
+    expect(shape).not.toContain("updated");
+    expect(shape).toEqual(
+      expect.arrayContaining([
+        "type",
+        "title",
+        "description",
+        "tags",
+        "related",
+        "repos",
+        "status",
+        "superseded_by",
+        "generated",
+        "verified",
+        "sources",
+        "stale_after",
+      ])
+    );
+    expect(shape).toHaveLength(12);
   });
 });
 

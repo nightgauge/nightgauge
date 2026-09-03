@@ -1,6 +1,10 @@
 ---
+type: decisions
 tags: [bm25, scoring, graduated]
-status: superseded
+status: deprecated
+generated:
+  by: process:knowledge-scaffold
+  at: "2026-01-01T00:00:00Z"
 ---
 
 # Decisions: #6 — Graduated BM25 Decision

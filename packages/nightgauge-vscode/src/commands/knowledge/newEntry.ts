@@ -18,7 +18,7 @@ import type { Logger } from "../../utils/logger.js";
 function typeToFilename(type: KnowledgeType): string {
   const map: Record<string, string> = {
     prd: "PRD.md",
-    decision: "decisions.md",
+    decisions: "decisions.md",
     adr: "decisions.md",
     conversation: "conversation.md",
     reference: "reference.md",
@@ -64,8 +64,8 @@ export function registerKnowledgeNewEntryCommand(logger: Logger): vscode.Disposa
         description: "Product requirements document",
       },
       {
-        label: "$(law) Decision",
-        value: "decision",
+        label: "$(law) Decisions",
+        value: "decisions",
         description: "Architecture/design decision",
       },
       {
