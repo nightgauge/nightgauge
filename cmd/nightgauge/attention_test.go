@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/nightgauge/nightgauge/internal/attention"
 	"github.com/nightgauge/nightgauge/internal/ipc"
@@ -27,19 +26,13 @@ func startTestDaemon(t *testing.T, dir string) {
 	t.Cleanup(cancel)
 
 	sockPath := ipc.DaemonSocketPath(dir)
-	go func() {
-		_ = srv.ListenSocket(ctx, sockPath)
-	}()
-
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if c, err := ipc.DialClient(ctx, sockPath, 50*time.Millisecond); err == nil {
-			c.Close()
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
+	// BindSocket is the readiness signal (#1158): it returns only once the
+	// kernel is accepting on sockPath, so callers may dial immediately.
+	ln, err := srv.BindSocket(sockPath)
+	if err != nil {
+		t.Fatalf("bind test daemon socket: %v", err)
 	}
-	t.Fatal("test daemon socket never became dialable")
+	go func() { _ = srv.ServeSocket(ctx, ln, sockPath) }()
 }
 
 // chdirTemp creates a temp workdir, chdirs into it, and restores the original

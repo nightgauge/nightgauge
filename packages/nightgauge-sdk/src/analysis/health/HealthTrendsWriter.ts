@@ -27,7 +27,7 @@ const HealthTrendEntrySchema = z.object({
   timestamp: z.string(),
   run_id: z.string(),
   issue_number: z.number(),
-  overall_score: z.number().min(0).max(100),
+  overall_score: z.number().min(0).max(100).nullable(),
   dimensions: z.record(z.string(), z.number()),
   significant_findings: z.array(z.string()),
 });

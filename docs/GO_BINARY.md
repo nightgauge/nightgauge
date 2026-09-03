@@ -2297,10 +2297,11 @@ partial view must never drive an auto-resolve. Both paths exit `0` unless
 
 **Registered repo-scoped producers:**
 
-| Producer                | Raises when                                       | Severity         |
-| ----------------------- | ------------------------------------------------- | ---------------- |
-| `default-branch-health` | A required check is failing on the default branch | `blocking_fleet` |
-| `human-gate`            | An open PR is green and blocked on a person       | `blocking_run`   |
+| Producer                | Raises when                                        | Severity         |
+| ----------------------- | -------------------------------------------------- | ---------------- |
+| `default-branch-health` | A required check is failing on the default branch  | `blocking_fleet` |
+| `default-branch-health` | Only non-required checks are failing on it (#1250) | `fyi`            |
+| `human-gate`            | An open PR is green and blocked on a person        | `blocking_run`   |
 
 Adding a producer is one self-contained file and requires no change to the
 sweep — see [ATTENTION_PRODUCERS.md](ATTENTION_PRODUCERS.md).
@@ -2420,7 +2421,10 @@ out a bounded CI budget, and on exhaustion punts `ci-wait-timeout` — a reason
 `IsBranchProtectionPunt` deliberately does not match. `attention.raise` applies
 the same exported predicate before classifying, because pr-merge starts
 immediately after pr-create and on repos whose CI takes minutes the first
-snapshot is routinely `BLOCKED`/`UNSTABLE` with checks still queued (#297).
+snapshot is routinely `BLOCKED`/`UNSTABLE` with checks still queued (#297) —
+or, seconds earlier, with **no check run created at all**, which the predicate
+also reads as CI not started (#1027; the runner bounds that case and punts
+`no-checks-created`, another reason the branch-protection matcher ignores).
 Without the exclusion those runs got a `blocking_run` card with a 48-hour TTL
 telling the operator to fix a check that was about to go green on its own. This
 also means `checks[].conclusion` must reach the daemon un-coerced: `""` is how
@@ -4355,11 +4359,31 @@ the **daemon** the saving is larger than this CLI measurement shows: each CLI
 invocation is a fresh process and therefore a cold cache, while a daemon holds
 one cache across every repo and every sweep inside the TTL.
 
-**`CountsByStatus` and `GetItem` are deliberately not cached.** Deriving counts
-from a cached item list would be a second implementation of the adapter's own
-aggregation, silently divergent the first time either side changes; and serving
-`GetItem` from a board-wide list would answer "not on the board" for an item
-added since the snapshot — the one answer callers act on destructively.
+**`GetItem` is deliberately not cached.** Serving it from a board-wide list
+would answer "not on the board" for an item added since the snapshot — the one
+answer callers act on destructively.
+
+**Per-status counts are derived from the snapshot, not asked of the forge.**
+`CountsByStatus` used to be a forge method — on GitHub a live five-alias
+`items(query:"status:… is:open"){totalCount}` document — that the cache
+deliberately forwarded, on the theory that deriving counts from the item list
+would be a second, divergent aggregation. An audit of the ledger showed the
+price of that theory: the VS Code Repositories tree calls `board.counts` once
+per repo on every refresh, expand and focus-regain, so on a six-repo shared
+board it was the **single largest idle consumer** of the GraphQL budget, and
+nothing could collapse the calls because they were not reads of the snapshot.
+The snapshot already holds every open item *with* its status. So the forge
+method is gone from every adapter, and `boardcache.CountsByStatus(ctx, board)`
+is the one aggregation: a loop over `ListOpenItems`, which on a wrapped board
+costs zero requests inside the TTL, one 1-point probe after it, and a full
+read only when the board moved. The daemon's `board.counts` verb goes through
+it via the same `boardServicesFor` accessor as `board.list`. `StatusCounts`
+lost its `done` bucket in the same change: Done items are closed and not in
+the `is:open` snapshot, and no surface ever read it — the tree wants Ready /
+In progress / Backlog, and the dashboard derives its own counts from the item
+list it already holds. `TestCountsWithinTTLReadTheSnapshotOnce` pins the
+cost claim (red before: two calls, two upstream count queries, zero snapshot
+reads).
 
 **Attribution through the cache (#860).** Inserting the cache initially moved
 every board read's attribution off the producers and onto `boardcache` — a
