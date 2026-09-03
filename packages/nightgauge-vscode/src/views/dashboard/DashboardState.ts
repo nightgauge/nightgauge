@@ -280,6 +280,8 @@ export interface PTCMetricsDisplayData {
  * Firewall dashboard data (Issue #387)
  */
 export interface FirewallDashboardData {
+  /** Resolved `sanitization.mode` from the Go config authority; null when unreadable (#986). */
+  mode: import("./tabs/FirewallTabHtml").FirewallMode;
   events: import("./FirewallTypes").SanitizationEvent[];
   filters: FirewallFilterState;
   aggregates: FirewallAggregates;
