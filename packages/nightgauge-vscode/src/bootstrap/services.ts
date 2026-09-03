@@ -15,6 +15,7 @@ import { type PipelineStage, parsePhaseMarker, uuidV7 } from "@nightgauge/sdk";
 import type { NotifyStageProgressParams } from "../services/ipcNotifyParams";
 import { handleIpcRejection } from "../services/ipcRejection";
 import { handleGoPipelineComplete, type GoPipelineCompleteDeps } from "./pipelineComplete";
+import { handleInteractivePipelineComplete } from "./pipelineFinish";
 import { Logger, createMainLogger, installLogDiskSink } from "../utils/logger";
 import { StatusBarManager } from "../utils/statusBar";
 import { resolveActiveRepository } from "../utils/resolveActiveRepository";
@@ -3669,48 +3670,38 @@ export async function initializeServices(
       logger.debug("Released the run identity", { reason, issueNumber, runId: held });
     };
 
-    const handlePipelineComplete = async (issueNumber: number) => {
-      logger.info("Pipeline complete", { issueNumber });
-      // Terminal point of the context-file route. Released FIRST so no exit
-      // path below (the summary's early return, the fallback notification's
-      // "Keep Open") can skip it.
-      releaseRunIdentity("pipeline-complete", issueNumber);
-
-      // Notify user with completion sound
-      if (notificationService) {
-        notificationService.notifyPipelineComplete(issueNumber);
-      }
-
-      // Show the pipeline summary panel (Issue #103)
-      // This displays comprehensive metrics and provides reset option
-      if (pipelineStateService) {
-        try {
-          const state = await pipelineStateService.getState();
-          if (state) {
-            // Initialize summary panel if not already created
+    // The interactive pipeline's completion terminal (Issue #1188). Extracted
+    // to src/bootstrap/pipelineFinish.ts so its behaviour is executed by a
+    // test rather than merely spelled in the handler's source text — see that
+    // file for why this is NOT consolidated with handleGoPipelineComplete
+    // (#500), the Go IPC pipeline.complete handler above.
+    const handlePipelineComplete = (issueNumber: number) =>
+      handleInteractivePipelineComplete(
+        {
+          releaseRunIdentity,
+          notifyPipelineComplete: notificationService
+            ? (n: number) => notificationService.notifyPipelineComplete(n)
+            : null,
+          getState: pipelineStateService ? () => pipelineStateService.getState() : null,
+          showSummary: async (state) => {
             if (!pipelineSummary) {
               pipelineSummary = new PipelineSummary(context.extensionUri);
             }
             await pipelineSummary.show(state);
-            logger.info("Pipeline summary displayed", { issueNumber });
-            return;
-          }
-        } catch (error) {
-          logger.warn("Failed to show pipeline summary, falling back to notification", { error });
-        }
-      }
-
-      // Fallback: Show simple completion notification if summary fails
-      const selection = await vscode.window.showInformationMessage(
-        `Pipeline complete for issue #${issueNumber}!`,
-        "Complete & Reset",
-        "Keep Open"
+          },
+          showCompletionPrompt: (n: number) =>
+            Promise.resolve(
+              vscode.window.showInformationMessage(
+                `Pipeline complete for issue #${n}!`,
+                "Complete & Reset",
+                "Keep Open"
+              )
+            ),
+          resetPipeline: (n?: number) => resetPipeline(n),
+          logger,
+        },
+        issueNumber
       );
-
-      if (selection === "Complete & Reset") {
-        await resetPipeline(issueNumber);
-      }
-    };
 
     // Reset pipeline state and context files
     // Uses nightgaugeRoot (git root) for correct .nightgauge directory location
