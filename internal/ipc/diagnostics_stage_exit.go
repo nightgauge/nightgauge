@@ -179,3 +179,28 @@ func buildStageExitRecordFromIPC(p RecordStageExitParams) diagnostics.StageExitR
 
 	return rec
 }
+
+// writePreDispatchExitRecord writes the exit record for a run that latched
+// terminal before any stage started (#1329). docs/STAGE_EXIT_DIAGNOSTIC.md
+// promises the exit record as "the one artifact written on every terminal
+// path"; a failure between pickup and the first stage exit had no subprocess
+// and so no diagnostics.recordStageExit call — the runtime snapshot was
+// removed at the latch and the history record carried only the generic kind.
+// Best-effort: a write failure is logged, never propagated — the history
+// record is the authoritative artifact and is written regardless.
+func writePreDispatchExitRecord(root, repo string, issue int, runID, terminalKind, detail string, elapsedMs int) {
+	rec := diagnostics.StageExitRecord{
+		Timestamp:     time.Now().UTC().Format(time.RFC3339Nano),
+		Repo:          repo,
+		Issue:         issue,
+		Stage:         diagnostics.StagePreDispatch,
+		RunID:         runID,
+		Success:       false,
+		TerminalKind:  terminalKind,
+		ElapsedMs:     int64(elapsedMs),
+		FailureDetail: diagnostics.BoundFailureDetail(detail),
+	}
+	if err := diagnostics.WriteStageExitRecord(root, rec); err != nil {
+		log.Printf("notifyComplete: #%d pre-dispatch exit record write failed (non-fatal): %v", issue, err)
+	}
+}

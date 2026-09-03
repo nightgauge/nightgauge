@@ -33,7 +33,7 @@ func (IssuePickupGate) Verify(_ context.Context, issueNumber int, workspace stri
 					fmt.Sprintf("expected %s", path),
 				}, KindNoOp, ""
 			}
-			return false, "failed to read issue context file", []string{err.Error()}, KindFail, ""
+			return false, "failed to read issue context file", []string{err.Error()}, KindFail, TerminalKindStageContextUnreadable
 		}
 
 		var ctx struct {

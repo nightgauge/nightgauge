@@ -162,12 +162,15 @@ const (
 	ReviewReviewRequired   ReviewDecision = "REVIEW_REQUIRED"
 )
 
-// StatusCounts holds per-status item counts from the project board.
+// StatusCounts holds per-status counts of the OPEN items on the project
+// board. It is derived from the board snapshot (`is:open`) rather than asked
+// of the forge, so it carries only the statuses an open item can hold: there
+// is no Done bucket, because Done items are closed and are not in the
+// snapshot — and no surface ever read one (#TBD-board-counts).
 type StatusCounts struct {
 	Ready      int `json:"ready"`
 	InProgress int `json:"inProgress"`
 	InReview   int `json:"inReview"`
-	Done       int `json:"done"`
 	Backlog    int `json:"backlog"`
 }
 

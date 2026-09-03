@@ -19,6 +19,7 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/execution"
 	"github.com/nightgauge/nightgauge/internal/execution/adapters"
+	"github.com/nightgauge/nightgauge/internal/orchestrator/gates"
 	"github.com/nightgauge/nightgauge/internal/state"
 	"github.com/nightgauge/nightgauge/pkg/types"
 )
@@ -2270,5 +2271,32 @@ func TestCLIRunnerCarriesFailureTextForEveryAdapter(t *testing.T) {
 					tt.binary, res.ErrorText, res.LastOutputLines)
 			}
 		})
+	}
+}
+
+// TestGateTerminalKindConstantsMirrorOrchestrator pins the gates-package
+// mirrors of the TerminalKind* constants to their orchestrator originals. The
+// mirrors exist because orchestrator imports gates (so gates cannot import
+// back); nothing but this test keeps the two spellings equal, and a drift
+// would let a gate emit a kind the taxonomy does not declare — which
+// internal/terminalkind's TestCorpus_CoversEveryKind cannot see, since it
+// reads only failure_handler.go.
+func TestGateTerminalKindConstantsMirrorOrchestrator(t *testing.T) {
+	pairs := map[string][2]string{
+		"ValidationError":             {gates.TerminalKindValidationError, TerminalKindValidationError},
+		"ValidationFailed":            {gates.TerminalKindValidationFailed, TerminalKindValidationFailed},
+		"DevProducedNoChanges":        {gates.TerminalKindDevProducedNoChanges, TerminalKindDevProducedNoChanges},
+		"DevHandoffMissing":           {gates.TerminalKindDevHandoffMissing, TerminalKindDevHandoffMissing},
+		"StageContextUnreadable":      {gates.TerminalKindStageContextUnreadable, TerminalKindStageContextUnreadable},
+		"DevBuildVerificationMissing": {gates.TerminalKindDevBuildVerificationMissing, TerminalKindDevBuildVerificationMissing},
+		"DevBuildVerificationFailed":  {gates.TerminalKindDevBuildVerificationFailed, TerminalKindDevBuildVerificationFailed},
+		"DevTestsFailed":              {gates.TerminalKindDevTestsFailed, TerminalKindDevTestsFailed},
+		"PrMergeLookupFailed":         {gates.TerminalKindPrMergeLookupFailed, TerminalKindPrMergeLookupFailed},
+	}
+	for name, p := range pairs {
+		if p[0] != p[1] {
+			t.Errorf("gates.TerminalKind%s = %q, orchestrator.TerminalKind%s = %q — the mirrors drifted",
+				name, p[0], name, p[1])
+		}
 	}
 }

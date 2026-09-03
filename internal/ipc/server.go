@@ -226,6 +226,9 @@ type Server struct {
 	// something finished, for the SweepMinGap check (#848). Read and written
 	// only while holding sweepMu, so it needs no lock of its own.
 	lastSweepAt time.Time
+	// sweepMinGap is this daemon's SweepMinGap with ±20% jitter, drawn once in
+	// NewServer; zero (a literal Server in tests) means the bare constant.
+	sweepMinGap time.Duration
 
 	// boards is the daemon-wide board snapshot cache (#845), shared by every
 	// board verb through boardServicesFor. One cache for the process, keyed by
@@ -282,7 +285,8 @@ func NewServer(client *gh.Client, opts ...ServerOption) *Server {
 		forgeRegistry:  make(map[string]ForgeInstanceConfig),
 		// Zero TTL takes boardcache.DefaultTTL. Constructed before options run
 		// so a test can still override it.
-		boards: boardcache.New(0),
+		boards:      boardcache.New(0),
+		sweepMinGap: jitteredSweepGap(),
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -1339,8 +1343,11 @@ func (s *Server) registerMethods() {
 		if err != nil {
 			return nil, err
 		}
-		return s.boardServicesFor(c, p.Owner, p.ProjectNumber, gh.ParseOwnerType(p.OwnerType)).
-			Board.CountsByStatus(ctx)
+		// Derived from the cached open-item snapshot, never asked of the
+		// forge: inside the TTL this costs zero requests, and after it one
+		// 1-point change probe (#TBD-board-counts).
+		return boardcache.CountsByStatus(ctx,
+			s.boardServicesFor(c, p.Owner, p.ProjectNumber, gh.ParseOwnerType(p.OwnerType)).Board)
 	}
 
 	//ipc:method githubRateLimit params:GitHubRateLimitParams result:RateLimitInfo
@@ -3469,6 +3476,10 @@ func (s *Server) registerMethods() {
 		}
 		if root := s.repoRoot(recordRepo); root != "" {
 			errMsg := ""
+			// preStageFailure: the run failed and no stage ever recorded an
+			// error — nothing exited, so nothing wrote an exit record and the
+			// only reason on hand is what the dispatcher forwarded (#1329).
+			preStageFailure := false
 			if !p.Success {
 				errMsg = snap.StageErrors[string(snap.Stage)]
 				if errMsg == "" {
@@ -3478,6 +3489,10 @@ func (s *Server) registerMethods() {
 							break
 						}
 					}
+				}
+				if errMsg == "" {
+					preStageFailure = true
+					errMsg = p.FailureDetail
 				}
 				if errMsg == "" {
 					errMsg = "pipeline failed"
@@ -3529,6 +3544,13 @@ func (s *Server) registerMethods() {
 					kind = orchestrator.TerminalKindSubagentCrash
 				}
 				input.TerminalFailureKind = kind
+				// The reason behind the kind, persisted (#1329). Until this a
+				// pre-stage failure wrote `subagent_crash` + `stages: {}` and
+				// the text existed only in the extension's output channel.
+				input.TerminalFailureDetail = errMsg
+				if preStageFailure && !p.Deferred {
+					writePreDispatchExitRecord(root, recordRepo, p.IssueNumber, snap.RunID, kind, errMsg, p.TotalDurationMs)
+				}
 				// Refine into a first-class outcome_type when the failure is a
 				// needs-human repo-config block (pr-merge blocked by a required
 				// check no retry can clear) so the dashboard shows "blocked",
@@ -5091,6 +5113,13 @@ func (s *Server) registerMethods() {
 	// and after a run terminates. No timer lives here.
 	//ipc:method attentionSweep params:AttentionSweepParams result:AttentionSweepResult
 	s.methods["attention.sweep"] = s.handleAttentionSweep
+
+	// The one-point question in front of the sweep: did any bound board move
+	// since the last one? The extension's event-driven triggers (focus
+	// regained, tree refresh, activation, run terminated) ask this first and
+	// sweep only on a yes; the timer alone sweeps unconditionally.
+	//ipc:method boardChanged params:BoardChangedParams result:BoardChangedResult
+	s.methods["board.changed"] = s.handleBoardChanged
 
 	//ipc:method issueRemoveBlockedBy params:IssueRemoveBlockedByParams result:void
 	s.methods["issue.removeBlockedBy"] = s.handleIssueRemoveBlockedBy

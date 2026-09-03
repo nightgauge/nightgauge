@@ -450,6 +450,41 @@ const (
 	// instead of looping forever. Classified `infrastructure` (harness
 	// behavior, not a code or issue defect) in docs/FAILURE_TAXONOMY.md.
 	TerminalKindPermissionDenied = "permission_denied"
+	// Gate-sourced structured kinds for the KindFail sites that used to emit an
+	// empty TerminalKind (#1237). Every one of them fell through
+	// ResolveTerminalKind's prose ladder, which has no clause for the
+	// scheduler's `stage gate failed: <reason>` wrapper, so the generic `exit `
+	// clause booked each honest quality-gate failure as subagent_crash — an
+	// infrastructure crash that never happened. The gate now names the failure
+	// at the point it detects it; the table rules for these kinds exist only
+	// for text-classified paths and historical records. The constants are
+	// mirrored in gates/gate.go (import cycle) and pinned equal by
+	// TestGateTerminalKindConstantsMirrorOrchestrator.
+	//
+	// TerminalKindStageContextUnreadable: the gate could not READ a file the
+	// stage's contract says it wrote — the stage context (`dev-N.json`,
+	// `planning-N.json`, …), the planning stage's `plan_file`, or
+	// `gate-metrics.jsonl` — for a reason other than absence (absence is the
+	// no-op / premature_turn_end path). EISDIR, ENOTDIR, EACCES: a filesystem
+	// or permissions fault, not a defect in the work. Infrastructure.
+	TerminalKindStageContextUnreadable = "stage_context_unreadable"
+	// TerminalKindDevBuildVerificationMissing: the dev context carries no
+	// `build_verification` object at all — the skill skipped the verification
+	// step the dev completion contract requires (#55). The agent's behaviour,
+	// not the code's.
+	TerminalKindDevBuildVerificationMissing = "dev_build_verification_missing"
+	// TerminalKindDevBuildVerificationFailed: `build_verification.status` is
+	// "failed" — the stage ran the build and it broke. Organic implementation
+	// failure caught by the pipeline's own gate.
+	TerminalKindDevBuildVerificationFailed = "dev_build_verification_failed"
+	// TerminalKindDevTestsFailed: `tests_status.failed` > 0 — the stage's own
+	// test run recorded failures. Organic, like the build case.
+	TerminalKindDevTestsFailed = "dev_tests_failed"
+	// TerminalKindPrMergeLookupFailed: pr-merge's gate could not establish the
+	// PR's state — `gh pr view` failed (or was rate-limited) on every attempt
+	// AND the local-git fallback found no merge commit. The merge may well have
+	// happened; the gate simply could not see it. Infrastructure.
+	TerminalKindPrMergeLookupFailed = "pr_merge_lookup_failed"
 )
 
 // ClassifyTerminalKind returns the terminal failure kind for the given error

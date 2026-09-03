@@ -299,7 +299,6 @@ func TestStatusCountsContractValues(t *testing.T) {
 		Ready:      5,
 		InProgress: 2,
 		InReview:   1,
-		Done:       12,
 		Backlog:    8,
 	}
 

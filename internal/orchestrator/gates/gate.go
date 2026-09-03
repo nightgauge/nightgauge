@@ -81,6 +81,20 @@ const TerminalKindDevProducedNoChanges = "dev_produced_no_changes"
 // scratch or builds on what exists.
 const TerminalKindDevHandoffMissing = "dev_handoff_missing"
 
+// The #1237 sweep: the structured kinds for every KindFail site that used to
+// emit an empty TerminalKind and so fell through to subagent_crash. Each
+// mirrors the same-named orchestrator.TerminalKind* constant for the
+// import-cycle reason above; orchestrator's
+// TestGateTerminalKindConstantsMirrorOrchestrator pins the pair equal. See
+// failure_handler.go for what each kind means.
+const (
+	TerminalKindStageContextUnreadable      = "stage_context_unreadable"
+	TerminalKindDevBuildVerificationMissing = "dev_build_verification_missing"
+	TerminalKindDevBuildVerificationFailed  = "dev_build_verification_failed"
+	TerminalKindDevTestsFailed              = "dev_tests_failed"
+	TerminalKindPrMergeLookupFailed         = "pr_merge_lookup_failed"
+)
+
 // GateResult is the in-process value returned by a StageGate.Verify call.
 // The scheduler copies this into a state.StageGateResult before persisting.
 type GateResult struct {
