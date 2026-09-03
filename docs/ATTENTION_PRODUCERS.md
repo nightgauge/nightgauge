@@ -428,7 +428,8 @@ Six rules on that wiring:
 - **Share the whole precondition, not just the classifier.** A pure decision
   function is rarely the entire Go rule — `stages.Decide` says
   `dirty-merge-state: BLOCKED` for a PR whose only blocker is a queued required
-  check, and the Go runner never acts on that punt because
+  check — or one GitHub has not created yet (#1027) — and the Go runner never
+  acts on that punt because
   `stages.MergeBlockedByPendingCI` intercepts first and waits out CI. A surface
   that reuses `Decide` and not that predicate reproduces the classifier and
   loses the guard, which is the same dual-path drift (#257) with the sign

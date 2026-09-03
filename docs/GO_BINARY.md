@@ -2421,7 +2421,10 @@ out a bounded CI budget, and on exhaustion punts `ci-wait-timeout` — a reason
 `IsBranchProtectionPunt` deliberately does not match. `attention.raise` applies
 the same exported predicate before classifying, because pr-merge starts
 immediately after pr-create and on repos whose CI takes minutes the first
-snapshot is routinely `BLOCKED`/`UNSTABLE` with checks still queued (#297).
+snapshot is routinely `BLOCKED`/`UNSTABLE` with checks still queued (#297) —
+or, seconds earlier, with **no check run created at all**, which the predicate
+also reads as CI not started (#1027; the runner bounds that case and punts
+`no-checks-created`, another reason the branch-protection matcher ignores).
 Without the exclusion those runs got a `blocking_run` card with a 48-hour TTL
 telling the operator to fix a check that was about to go green on its own. This
 also means `checks[].conclusion` must reach the daemon un-coerced: `""` is how

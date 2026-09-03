@@ -80,14 +80,17 @@ export function classifyMergeReadiness(snap: MergeSnapshot): MergeReadiness {
   }
 
   // BLOCKED/UNSTABLE with at least one in-flight check is exactly the
-  // "waiting on CI" case pr-merge hits right after pr-create.
+  // "waiting on CI" case pr-merge hits right after pr-create. An EMPTY check
+  // list is the same case one step earlier (#1027): GitHub has not created a
+  // check run yet. Mirrors Go `MergeBlockedByPendingCI`; the caller bounds
+  // how long a still-empty list is waited for.
   if (snap.mergeStateStatus === "BLOCKED" || snap.mergeStateStatus === "UNSTABLE") {
-    if (snap.checks.some((c) => isPendingConclusion(c.conclusion))) {
+    if (snap.checks.length === 0 || snap.checks.some((c) => isPendingConclusion(c.conclusion))) {
       return { kind: "pending" };
     }
   }
 
-  // DIRTY (conflict), BEHIND, DRAFT, HAS_HOOKS, or BLOCKED/UNSTABLE with no
-  // pending checks — structural, will not clear by waiting.
+  // DIRTY (conflict), BEHIND, DRAFT, HAS_HOOKS, or BLOCKED/UNSTABLE with every
+  // listed check concluded — structural, will not clear by waiting.
   return { kind: "blocked", reason: `dirty-merge-state: ${snap.mergeStateStatus}` };
 }
