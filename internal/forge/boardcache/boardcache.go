@@ -21,7 +21,9 @@ package boardcache
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"math/rand/v2"
 	"strings"
 	"sync"
 	"time"
@@ -56,6 +58,29 @@ const DefaultTTL = 90 * time.Second
 // worst case is bounded and stated. It is a ceiling on staleness, not a TTL:
 // crossing it forces the expensive read, it does not merely permit one.
 const MaxRenewedAge = 10 * time.Minute
+
+// ProbeTTL is how long one answer from the change probe stands in for the next
+// ask, when the probe is asked DIRECTLY through the cached board's own
+// ProjectUpdatedAt (the `board.changed` IPC verb's path).
+//
+// The verb exists so the extension's event-driven sweep triggers — focus
+// regained, a tree refresh, a run terminating — can ask "did anything move?"
+// for one point instead of re-reading every workspace board. An operator
+// alt-tabbing ten times in a minute would still spend ten points on ten
+// identical answers, so the answer is held briefly. Thirty seconds is short
+// enough that a change is noticed on the next trigger after it lands, and long
+// enough that a burst of triggers costs one point rather than one each.
+//
+// The renewal path inside refresh does NOT read this memo: a snapshot renewal
+// already tolerates the cache TTL of staleness and must not stack a second
+// window on top of it.
+const ProbeTTL = 30 * time.Second
+
+// ErrNoChangeProbe is returned by a cached board's ProjectUpdatedAt when the
+// adapter underneath offers no ChangeProbe. It is an error rather than a zero
+// time for the same reason the interface demands one: "I cannot tell" must
+// read as "assume it changed", never as "it changed at the epoch".
+var ErrNoChangeProbe = errors.New("boardcache: board offers no change probe")
 
 // ChangeProbe is an OPTIONAL capability on a forge.BoardService: the ability to
 // answer "when did this board last change?" far more cheaply than reading it.
@@ -114,13 +139,28 @@ func (s Snapshot) servedAt() time.Time {
 // Cache holds board snapshots keyed by (owner, project, query). One Cache is
 // shared by every consumer in a process; Wrap binds it to a particular board.
 type Cache struct {
-	ttl time.Duration
+	// ttl and maxRenewedAge are DefaultTTL / MaxRenewedAge with ±20% jitter
+	// applied once at construction, so the daemons on one machine do not all
+	// expire the same board in the same second and re-read it in lockstep.
+	ttl           time.Duration
+	maxRenewedAge time.Duration
 	// now is swappable so tests can drive expiry without sleeping. A test that
 	// sleeps to cross a TTL is a test that is slow and flaky at the same time.
 	now func() time.Time
 
 	mu      sync.Mutex
 	entries map[string]*entry
+	// probes memoises direct ProjectUpdatedAt answers per board for ProbeTTL.
+	// Keyed by board prefix alone (no query): the probe is a property of the
+	// board, not of any one read. Cleared with the snapshots on Invalidate,
+	// because a mutation we issued is a change the memo would otherwise hide.
+	probes map[string]probeMemo
+}
+
+// probeMemo is one held probe answer and when it was taken.
+type probeMemo struct {
+	updatedAt time.Time
+	askedAt   time.Time
 }
 
 // entry is either in flight or complete. `done` is closed exactly once, when
@@ -134,12 +174,28 @@ type entry struct {
 	err  error
 }
 
-// New returns a Cache with the given TTL; ttl <= 0 uses DefaultTTL.
+// jitterRand supplies the uniform variate for deadline jitter. A variable so a
+// test can pin it (0.5 → no jitter) and assert on exact TTLs.
+var jitterRand = rand.Float64
+
+// jitter spreads d by ±20%: d·(0.8 + 0.4·u) for u in [0, 1).
+func jitter(d time.Duration, u float64) time.Duration {
+	return time.Duration(float64(d) * (0.8 + 0.4*u))
+}
+
+// New returns a Cache with the given TTL; ttl <= 0 uses DefaultTTL. The TTL and
+// the MaxRenewedAge ceiling each get ±20% jitter, fixed for the cache's life.
 func New(ttl time.Duration) *Cache {
 	if ttl <= 0 {
 		ttl = DefaultTTL
 	}
-	return &Cache{ttl: ttl, now: time.Now, entries: map[string]*entry{}}
+	return &Cache{
+		ttl:           jitter(ttl, jitterRand()),
+		maxRenewedAge: jitter(MaxRenewedAge, jitterRand()),
+		now:           time.Now,
+		entries:       map[string]*entry{},
+		probes:        map[string]probeMemo{},
+	}
 }
 
 // SetClock replaces the time source. Tests only.
@@ -168,6 +224,7 @@ func (c *Cache) Invalidate(owner string, project int) {
 			delete(c.entries, k)
 		}
 	}
+	delete(c.probes, prefix)
 }
 
 // InvalidateAll drops every board. Used when the mutating caller cannot name
@@ -176,6 +233,7 @@ func (c *Cache) InvalidateAll() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.entries = map[string]*entry{}
+	c.probes = map[string]probeMemo{}
 }
 
 // Peek reports the cached snapshot for a query without fetching, and whether
@@ -275,7 +333,7 @@ func (c *Cache) renewableLocked(e *entry) (Snapshot, bool) {
 	if e.err != nil || e.snap.FetchedAt.IsZero() {
 		return Snapshot{}, false
 	}
-	if c.now().Sub(e.snap.FetchedAt) >= MaxRenewedAge {
+	if c.now().Sub(e.snap.FetchedAt) >= c.maxRenewedAge {
 		return Snapshot{}, false
 	}
 	return e.snap, true
@@ -349,17 +407,84 @@ func (b *cachedBoard) ListItems(ctx context.Context, statusFilter string) ([]for
 	return snap.Items, err
 }
 
-// CountsByStatus and GetItem are NOT cached, deliberately.
+// ProjectUpdatedAt exposes the wrapped adapter's change probe through the
+// cache, so a caller holding only the cached board (every sweep producer, and
+// the `board.changed` IPC verb) can still ask the one-point question. The
+// answer is memoised for ProbeTTL per board — see that constant for why.
 //
-// CountsByStatus returns a different type, and deriving it from a cached item
-// list would be a second implementation of the adapter's own aggregation —
-// silently divergent the first time either side changes. GetItem is per-issue:
-// serving it from a board-wide list would answer "not on the board" for an item
-// added since the snapshot, which is the one answer callers act on destructively.
-func (b *cachedBoard) CountsByStatus(ctx context.Context) (*forgetypes.StatusCounts, error) {
-	return b.inner.CountsByStatus(ctx)
+// The memo is consulted and written under the cache lock, but the probe itself
+// runs outside it: a forge round-trip must not serialise every other board
+// read in the process behind it. Two concurrent callers on a cold memo may
+// therefore both probe once; the memo exists to collapse a BURST, and that
+// property holds from the first answer onwards.
+func (b *cachedBoard) ProjectUpdatedAt(ctx context.Context) (time.Time, error) {
+	if b.probe == nil {
+		return time.Time{}, ErrNoChangeProbe
+	}
+	b.cache.mu.Lock()
+	memo, ok := b.cache.probes[b.prefix]
+	now := b.cache.now()
+	b.cache.mu.Unlock()
+	if ok && now.Sub(memo.askedAt) < ProbeTTL {
+		return memo.updatedAt, nil
+	}
+	updatedAt, err := b.probe(ctx)
+	if err != nil {
+		// A failed probe is never memoised, for the same reason a failed read
+		// is never cached: "I could not look" must not become "nothing moved"
+		// for the next thirty seconds.
+		return time.Time{}, err
+	}
+	b.cache.mu.Lock()
+	b.cache.probes[b.prefix] = probeMemo{updatedAt: updatedAt, askedAt: b.cache.now()}
+	b.cache.mu.Unlock()
+	return updatedAt, nil
 }
 
+// GetItem is NOT cached, deliberately. It is per-issue: serving it from a
+// board-wide list would answer "not on the board" for an item added since the
+// snapshot, which is the one answer callers act on destructively.
 func (b *cachedBoard) GetItem(ctx context.Context, owner, repo string, issueNumber int) (*forgetypes.BoardItem, error) {
 	return b.inner.GetItem(ctx, owner, repo, issueNumber)
+}
+
+// CountsByStatus reports how many of the board's OPEN items sit in each
+// status, derived from ListOpenItems — which, on a board this package wraps, is
+// the cached snapshot: zero requests inside the TTL, one 1-point probe after
+// it, and a full read only when the board actually moved.
+//
+// This used to be a forge method, and on GitHub it was a live five-alias
+// `items(query:){totalCount}` document that the cache deliberately forwarded
+// (the earlier worry being a second, divergent aggregation). Measured on a
+// six-repo shared board it was the single largest idle consumer of the
+// GraphQL budget: the Repositories tree asked it once per repo on every
+// refresh, expand and focus-regain, and nothing could collapse the calls
+// because they were not reads of the snapshot. The snapshot already holds
+// every open item WITH its status, so the counts are one loop over data the
+// process has already paid for. There is exactly one aggregation now, and it
+// is this one.
+//
+// Done is not reported: Done items are closed and therefore not in the
+// `is:open` snapshot, and no consumer ever read the bucket — the tree wants
+// Ready / In progress / Backlog, and the dashboard derives its own counts from
+// the item list it already holds.
+func CountsByStatus(ctx context.Context, board forge.BoardService) (*forgetypes.StatusCounts, error) {
+	items, _, err := board.ListOpenItems(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var out forgetypes.StatusCounts
+	for _, it := range items {
+		switch {
+		case strings.EqualFold(it.Status, "Ready"):
+			out.Ready++
+		case strings.EqualFold(it.Status, "In progress"):
+			out.InProgress++
+		case strings.EqualFold(it.Status, "In review"):
+			out.InReview++
+		case strings.EqualFold(it.Status, "Backlog"):
+			out.Backlog++
+		}
+	}
+	return &out, nil
 }

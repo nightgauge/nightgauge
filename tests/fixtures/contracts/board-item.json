@@ -9,6 +9,7 @@
   "size": "M",
   "pipelineStage": "feature-dev",
   "labels": ["type:feature", "priority:high"],
+  "labelsTruncated": true,
   "repo": "nightgauge/nightgauge",
   "url": "https://github.com/nightgauge/nightgauge/issues/42",
   "createdAt": "2025-01-15T10:30:00Z",

@@ -188,8 +188,8 @@ func TestPrMergeGate_RateLimit_LocalGitFallback_GitFails(t *testing.T) {
 	if gr.Passed {
 		t.Fatalf("expected fail when both gh and local git fail")
 	}
-	if gr.TerminalKind != "" {
-		t.Errorf("TerminalKind = %q, want empty (no clean constant match)", gr.TerminalKind)
+	if gr.TerminalKind != TerminalKindPrMergeLookupFailed {
+		t.Errorf("TerminalKind = %q, want %q (#1237)", gr.TerminalKind, TerminalKindPrMergeLookupFailed)
 	}
 }
 

@@ -3,7 +3,6 @@ package gitlab
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -143,39 +142,6 @@ func TestBoardService_GetItem_404ReturnsErrNotFound(t *testing.T) {
 	_, err := b.GetItem(context.Background(), "o", "r", 99)
 	if !errors.Is(err, forge.ErrNotFound) {
 		t.Errorf("err = %v, want ErrNotFound", err)
-	}
-}
-
-func TestBoardService_CountsByStatus_AggregatesAllBuckets(t *testing.T) {
-	srv := newStubServer(t)
-	srv.mux.HandleFunc("/api/v4/projects/o%2Fr/issues", func(w http.ResponseWriter, r *http.Request) {
-		labels := r.URL.Query().Get("labels")
-		var count int
-		switch labels {
-		case "Status::Ready":
-			count = 3
-		case "Status::In progress":
-			count = 2
-		case "Status::In review":
-			count = 1
-		case "Status::Done":
-			count = 7
-		case "Status::Backlog":
-			count = 5
-		}
-		w.Header().Set("X-Total", fmt.Sprintf("%d", count))
-		w.WriteHeader(200)
-		_, _ = w.Write([]byte("[]"))
-	})
-	c := NewClient(srv.srv.URL, "tok")
-	b := NewBoardServiceFor(c, "o", "r")
-
-	got, err := b.CountsByStatus(context.Background())
-	if err != nil {
-		t.Fatalf("CountsByStatus: %v", err)
-	}
-	if got.Ready != 3 || got.InProgress != 2 || got.InReview != 1 || got.Done != 7 || got.Backlog != 5 {
-		t.Errorf("got %+v", got)
 	}
 }
 

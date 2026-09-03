@@ -553,8 +553,8 @@ func TestStatusCounts_SmokeTest_VerifiesOrdering(t *testing.T) {
 	// Sanity: pkgtypes.StatusCounts hasn't changed shape under us.
 	var sc pkgtypes.StatusCounts
 	sc.Ready = 1
-	sc.Done = 2
-	if sc.Ready != 1 || sc.Done != 2 {
+	sc.Backlog = 2
+	if sc.Ready != 1 || sc.Backlog != 2 {
 		t.Error("StatusCounts shape changed unexpectedly")
 	}
 }

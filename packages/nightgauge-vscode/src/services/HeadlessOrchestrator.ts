@@ -1519,6 +1519,11 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         deferred: result.deferred ?? false,
         stageExecutionPaths,
         stagePuntReasons,
+        // #1329: the failure reason. For a run that latched terminal before
+        // any stage started this is the ONLY copy that reaches disk — the Go
+        // handler persists it as terminal_failure_detail and writes the
+        // pre-dispatch exit record from it. Success sends nothing.
+        failureDetail: result.success ? undefined : result.error?.message || undefined,
       });
     } catch {
       /* telemetry is best-effort; the run outcome is recorded regardless */

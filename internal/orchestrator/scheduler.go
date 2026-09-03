@@ -742,14 +742,19 @@ type QueueItem struct {
 	// "paused" (Issue #3001) means the item was waiting behind a pipeline that
 	// hit a terminal failure; PausedReason carries the cause. Items only resume
 	// via explicit operator action — never auto-resume when failure_mode=halt.
-	Status     string             `json:"status"`
-	Labels     []string           `json:"labels,omitempty"`
-	BlockedBy  []QueueBlockingRef `json:"blockedBy,omitempty"`
-	EpicOrder  *int               `json:"epicOrder,omitempty"`
-	IsBatch    bool               `json:"isBatch,omitempty"`
-	EpicNumber *int               `json:"epicNumber,omitempty"`
-	AddedAt    time.Time          `json:"addedAt"`
-	Position   int                `json:"position"` // 1-indexed
+	Status string   `json:"status"`
+	Labels []string `json:"labels,omitempty"`
+	// LabelsTruncated is true when Labels is a known-incomplete prefix of the
+	// issue's labels (the board scan pages them, #998). DequeueIndependent
+	// holds such an item instead of dispatching it: the human-only label
+	// guard cannot be evaluated on a partial set.
+	LabelsTruncated bool               `json:"labelsTruncated,omitempty"`
+	BlockedBy       []QueueBlockingRef `json:"blockedBy,omitempty"`
+	EpicOrder       *int               `json:"epicOrder,omitempty"`
+	IsBatch         bool               `json:"isBatch,omitempty"`
+	EpicNumber      *int               `json:"epicNumber,omitempty"`
+	AddedAt         time.Time          `json:"addedAt"`
+	Position        int                `json:"position"` // 1-indexed
 	// PausedReason is set when Status == "paused" (Issue #3001). Discriminated
 	// by Kind so future paused reasons (manual hold, license check) can be
 	// added without re-shaping callers.
@@ -780,6 +785,10 @@ type QueueItem struct {
 //     that matched (Summary repeats it as prose). The item is held, not
 //     discarded, so an operator who queued it can see why it is not running.
 //     (Issue #1146)
+//   - "labels_truncated" — the item's label list is a known-incomplete
+//     prefix (LabelsTruncated), so the human-only label guard could not be
+//     evaluated and the item is held rather than dispatched: fail closed.
+//     (Issue #998)
 //
 // FailedRunID is empty for kinds that are not associated with a specific
 // failed RunRecord (e.g. baseline_ci_red, blocked_dependency).
@@ -2388,6 +2397,21 @@ func (s *Scheduler) DequeueIndependent(ctx context.Context, maxSlots int, runnin
 		// PausedReason, reuses the existing operator affordances (Retry / Skip /
 		// Discard), and — because the paused guard above short-circuits before
 		// this one — the skip is logged exactly once instead of every cycle.
+		//
+		// A label list known to be incomplete cannot clear this guard (#998):
+		// the excluded label may be exactly the one that did not fit the page.
+		// Held with its own reason so the operator sees the cause, not a
+		// spurious "no excluded label" pass.
+		if item.LabelsTruncated {
+			log.Printf("DequeueIndependent: holding #%d — its label list is truncated (%d visible), so the human-only label guard cannot be evaluated", item.IssueNumber, len(item.Labels))
+			s.queue[i].Status = "paused"
+			s.queue[i].PausedReason = &QueuePausedReason{
+				Kind:    "labels_truncated",
+				Summary: fmt.Sprintf("label list truncated at %d labels; human-only label guard (autonomous.exclude_labels) cannot be evaluated", len(item.Labels)),
+			}
+			pausedByLabel = true
+			continue
+		}
 		if label, excluded := excludedLabelMatch(item.Labels, resolvedExcludeLabels(s.excludeLabels)); excluded {
 			log.Printf("DequeueIndependent: skipping #%d — carries human-only label %q (autonomous.exclude_labels)", item.IssueNumber, label)
 			s.queue[i].Status = "paused"
@@ -8040,6 +8064,7 @@ func (s *Scheduler) recordV2History(
 		SkipStages:             snap.SkippedStages,
 		ChangeClass:            resolveRecordedChangeClass(snap, workspaceRoot),
 		TerminalFailureKind:    terminalFailureKind,
+		TerminalFailureDetail:  errMsg,
 		StageOutputTails:       snap.StageOutputTails,
 		StageFailureCategories: stageFailureCategories,
 		OutcomeType:            OutcomeTypeForTerminalFailure(errMsg),

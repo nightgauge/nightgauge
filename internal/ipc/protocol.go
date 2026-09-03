@@ -1125,6 +1125,14 @@ type PipelineNotifyCompleteParams struct {
 	// authoritative history stage record, letting operators read WHY the
 	// expensive LLM path ran from history alone.
 	StagePuntReasons map[string]string `json:"stagePuntReasons,omitempty"`
+	// FailureDetail is the raw failure text the orchestrator observed when
+	// Success is false (#1329) — `PipelineRunResult.error.message`. It is the
+	// ONLY reason available for a run that latched terminal before any stage
+	// started (no stage error, no exit record): the handler persists it as the
+	// record's terminal_failure_detail and writes a `pre-dispatch` exit record
+	// from it. When a stage did fail, the stage's own error wins and this is
+	// only the classification fallback. Optional; empty on success.
+	FailureDetail string `json:"failureDetail,omitempty"`
 	// RunID is the run identity the server keys on (ADR-017 step 4, Decision
 	// 1). REQUIRED: absent is run_id_required, non-canonical is
 	// run_id_invalid. TERMINAL class (Decision 3) — this is THE CLAIM, so a
@@ -1696,6 +1704,19 @@ type AttentionSweepParams struct {
 	// "run-terminated") recorded in the daemon log so a surprising sweep can be
 	// traced back to what asked for it.
 	Reason string `json:"reason,omitempty"`
+}
+
+// BoardChangedParams asks whether any of the given repos' boards moved after
+// an instant — the one-point probe the extension's event-driven sweep triggers
+// consult before spending a full attention.sweep (see board_changed.go).
+type BoardChangedParams struct {
+	// Repos are "owner/name" specs whose boards to probe — the same list a
+	// sweep would take.
+	Repos []string `json:"repos,omitempty"`
+	// Since is the RFC 3339 instant to compare each board's last change
+	// against. Omitted, the daemon uses its own last sweep; with neither, the
+	// answer is "changed" because there are no last-sweep cards to serve.
+	Since string `json:"since,omitempty"`
 }
 
 // AttentionRaiseParams raises a RUN-SCOPED DecisionRequest from the extension

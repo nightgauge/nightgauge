@@ -95,7 +95,7 @@ func (FeatureDevGate) Verify(_ context.Context, issueNumber int, workspace strin
 					fmt.Sprintf("expected %s", ctxPath),
 				}, KindNoOp, "", nil, 0
 			}
-			return false, "failed to read dev context file", []string{err.Error()}, KindFail, "", nil, 0
+			return false, "failed to read dev context file", []string{err.Error()}, KindFail, TerminalKindStageContextUnreadable, nil, 0
 		}
 
 		// #1176 / #1182: apply the deliverable-schema policy BEFORE decoding.
@@ -169,7 +169,7 @@ func (FeatureDevGate) Verify(_ context.Context, issueNumber int, workspace strin
 			// gap the Claude-only Stop hook used to cover on one adapter (#55).
 			return false, "dev context lacks build_verification — the dev completion contract requires the verification step (nightgauge build run)", []string{
 				fmt.Sprintf("file: %s", ctxPath),
-			}, KindFail, "", nil, 0
+			}, KindFail, TerminalKindDevBuildVerificationMissing, nil, 0
 		}
 
 		if devCtx.BuildVerification.Ran &&
@@ -177,7 +177,7 @@ func (FeatureDevGate) Verify(_ context.Context, issueNumber int, workspace strin
 			// Build failure is a real fault, not a no-op — work happened, it broke.
 			return false, "dev context records build_verification.status=failed", []string{
 				fmt.Sprintf("file: %s", ctxPath),
-			}, KindFail, "", nil, 0
+			}, KindFail, TerminalKindDevBuildVerificationFailed, nil, 0
 		}
 
 		if devCtx.TestsStatus != nil && devCtx.TestsStatus.Failed != nil &&
@@ -185,7 +185,7 @@ func (FeatureDevGate) Verify(_ context.Context, issueNumber int, workspace strin
 			return false, "dev context records failing tests", []string{
 				fmt.Sprintf("file: %s", ctxPath),
 				fmt.Sprintf("tests_status.failed=%d", *devCtx.TestsStatus.Failed),
-			}, KindFail, "", nil, 0
+			}, KindFail, TerminalKindDevTestsFailed, nil, 0
 		}
 
 		// Ground truth (#202). Every check above reads the skill's own report

@@ -2,7 +2,6 @@ package github
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
 	"time"
@@ -64,7 +63,7 @@ func (b *BoardService) listItemsFiltered(ctx context.Context, statusFilter strin
 	var cursor *graphql.String
 
 	// "Done" items are typically closed issues — don't filter by is:open
-	// or they vanish from the board after merge. Matches CountsByStatus().
+	// or they vanish from the board after merge.
 	queryStr := fmt.Sprintf("status:\"%s\"", statusFilter)
 	if statusFilter != "Done" {
 		queryStr += " is:open"
@@ -198,9 +197,11 @@ func (b *BoardService) nodeToItem(node projectItemNode) *types.BoardItem {
 		item.UpdatedAt, _ = time.Parse(time.RFC3339, string(f.UpdatedAt))
 		item.IsPR = false
 		item.AuthorAssociation = string(f.AuthorAssociation)
-		for _, l := range f.Labels.Nodes {
-			item.Labels = append(item.Labels, string(l.Name))
-		}
+		item.Labels = f.Labels.names()
+		// Recorded rather than silently producing a short slice: the owner-action
+		// dispatch exclusion, IsEpic, Priority and Size all read item.Labels,
+		// and a clipped list would make every one of them fail open (#998).
+		item.LabelsTruncated = f.Labels.truncated()
 		// Sub-issue relationships (GitHub native)
 		for _, si := range f.SubIssues.Nodes {
 			item.SubIssues = append(item.SubIssues, types.SubIssueRef{
@@ -251,9 +252,8 @@ func (b *BoardService) nodeToItem(node projectItemNode) *types.BoardItem {
 		item.CreatedAt, _ = time.Parse(time.RFC3339, string(f.CreatedAt))
 		item.UpdatedAt, _ = time.Parse(time.RFC3339, string(f.UpdatedAt))
 		item.IsPR = true
-		for _, l := range f.Labels.Nodes {
-			item.Labels = append(item.Labels, string(l.Name))
-		}
+		item.Labels = f.Labels.names()
+		item.LabelsTruncated = f.Labels.truncated()
 	default:
 		log.Printf("depgraph: board: nodeToItem dropping item id=%v type=%q (DraftIssue or unknown)", node.ID, node.Content.TypeName)
 		return nil
@@ -347,78 +347,6 @@ func (b *BoardService) GetItem(ctx context.Context, owner, repo string, issueNum
 // can pin the exact string the server is asked for.
 func boardItemQuery(owner, repo string, issueNumber int) string {
 	return fmt.Sprintf("repo:%s/%s #%d", owner, repo, issueNumber)
-}
-
-// CountsByStatus fetches item counts for all statuses in a single GraphQL
-// request using aliases + totalCount. This avoids fetching any item data —
-// the response is ~200 bytes vs megabytes for a full items fetch.
-func (b *BoardService) CountsByStatus(ctx context.Context) (*types.StatusCounts, error) {
-	// Choose the correct GraphQL root resolver based on owner type
-	rootResolver := "organization"
-	if b.ownerType.IsUser() {
-		rootResolver = "user"
-	}
-	query := fmt.Sprintf(`query($owner: String!, $projectNumber: Int!) {
-  %s(login: $owner) {
-    projectV2(number: $projectNumber) {
-      ready: items(query: "status:\"Ready\" is:open") { totalCount }
-      inProgress: items(query: "status:\"In progress\" is:open") { totalCount }
-      inReview: items(query: "status:\"In review\" is:open") { totalCount }
-      done: items(query: "status:\"Done\"") { totalCount }
-      backlog: items(query: "status:\"Backlog\" is:open") { totalCount }
-    }
-  }
-}`, rootResolver)
-
-	vars := map[string]interface{}{
-		"owner":         b.owner,
-		"projectNumber": b.projectNumber,
-	}
-
-	body, err := b.client.queryRaw(ctx, query, vars)
-	if err != nil {
-		return nil, fmt.Errorf("count board items by status: %w", err)
-	}
-
-	// The JSON key matches the root resolver name (organization or user)
-	var resp struct {
-		Data   map[string]json.RawMessage `json:"data"`
-		Errors []struct {
-			Message string `json:"message"`
-		} `json:"errors"`
-	}
-	if err := json.Unmarshal(body, &resp); err != nil {
-		return nil, fmt.Errorf("parse counts response: %w", err)
-	}
-	if len(resp.Errors) > 0 {
-		return nil, fmt.Errorf("graphql error: %s", resp.Errors[0].Message)
-	}
-
-	ownerData, ok := resp.Data[rootResolver]
-	if !ok {
-		return nil, fmt.Errorf("missing %s key in response", rootResolver)
-	}
-	var ownerObj struct {
-		ProjectV2 struct {
-			Ready      struct{ TotalCount int } `json:"ready"`
-			InProgress struct{ TotalCount int } `json:"inProgress"`
-			InReview   struct{ TotalCount int } `json:"inReview"`
-			Done       struct{ TotalCount int } `json:"done"`
-			Backlog    struct{ TotalCount int } `json:"backlog"`
-		} `json:"projectV2"`
-	}
-	if err := json.Unmarshal(ownerData, &ownerObj); err != nil {
-		return nil, fmt.Errorf("parse %s data: %w", rootResolver, err)
-	}
-
-	p := ownerObj.ProjectV2
-	return &types.StatusCounts{
-		Ready:      p.Ready.TotalCount,
-		InProgress: p.InProgress.TotalCount,
-		InReview:   p.InReview.TotalCount,
-		Done:       p.Done.TotalCount,
-		Backlog:    p.Backlog.TotalCount,
-	}, nil
 }
 
 func priorityFromLabels(labels []string) types.Priority {

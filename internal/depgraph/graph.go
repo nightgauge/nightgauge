@@ -30,8 +30,11 @@ type Node struct {
 	Size        string   `json:"size"`        // XS, S, M, L, XL
 	Priority    string   `json:"priority"`    // P0, P1, P2, P3
 	Labels      []string `json:"labels"`
-	EpicNumber  int      `json:"epicNumber,omitempty"` // parent epic if sub-issue
-	Weight      int      `json:"weight"`               // size weight for critical path
+	// LabelsTruncated carries the board scan's flag (#998): Labels is a
+	// prefix of the real set and no label-derived exclusion can be trusted.
+	LabelsTruncated bool `json:"labelsTruncated,omitempty"`
+	EpicNumber      int  `json:"epicNumber,omitempty"` // parent epic if sub-issue
+	Weight          int  `json:"weight"`               // size weight for critical path
 	// AuthorAssociation is the issue author's relationship to the repo
 	// (OWNER, MEMBER, COLLABORATOR, ...). Used by the autonomous pipeline's
 	// author-trust gate (#270) — empty/unknown values are untrusted.

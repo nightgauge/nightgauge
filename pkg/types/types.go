@@ -26,21 +26,27 @@ const (
 
 // BoardItem represents an item on the GitHub Project Board.
 type BoardItem struct {
-	ID            string    `json:"id"`
-	NodeID        string    `json:"nodeId"`
-	Number        int       `json:"number"`
-	Title         string    `json:"title"`
-	State         string    `json:"state"`
-	Status        string    `json:"status"`
-	Priority      Priority  `json:"priority"`
-	Size          Size      `json:"size"`
-	PipelineStage string    `json:"pipelineStage,omitempty"`
-	Labels        []string  `json:"labels"`
-	Repo          string    `json:"repo"`
-	URL           string    `json:"url"`
-	CreatedAt     time.Time `json:"createdAt"`
-	UpdatedAt     time.Time `json:"updatedAt"`
-	IsPR          bool      `json:"isPR"`
+	ID            string   `json:"id"`
+	NodeID        string   `json:"nodeId"`
+	Number        int      `json:"number"`
+	Title         string   `json:"title"`
+	State         string   `json:"state"`
+	Status        string   `json:"status"`
+	Priority      Priority `json:"priority"`
+	Size          Size     `json:"size"`
+	PipelineStage string   `json:"pipelineStage,omitempty"`
+	Labels        []string `json:"labels"`
+	// LabelsTruncated is true when the board scan's label page did not hold
+	// every label the item carries (#998). Labels is then a prefix, not the
+	// set: anything that would exclude or classify the item from its labels
+	// (the owner-action dispatch guard above all) must fail closed and treat
+	// the item as not dispatchable rather than as "nothing matched".
+	LabelsTruncated bool      `json:"labelsTruncated,omitempty"`
+	Repo            string    `json:"repo"`
+	URL             string    `json:"url"`
+	CreatedAt       time.Time `json:"createdAt"`
+	UpdatedAt       time.Time `json:"updatedAt"`
+	IsPR            bool      `json:"isPR"`
 
 	// Sub-issue relationships (GitHub native)
 	IsEpic       bool          `json:"isEpic"`
@@ -73,11 +79,14 @@ type Issue struct {
 	// must be left untouched).
 	StateReason string   `json:"stateReason,omitempty"`
 	Labels      []string `json:"labels"`
-	Repo        string   `json:"repo"`
-	URL         string   `json:"url"`
-	Assignees   []string `json:"assignees"`
-	IsEpic      bool     `json:"isEpic"`
-	Milestone   string   `json:"milestone,omitempty"`
+	// LabelsTruncated mirrors BoardItem.LabelsTruncated for the list queries
+	// that page labels (#998): Labels is incomplete when set.
+	LabelsTruncated bool     `json:"labelsTruncated,omitempty"`
+	Repo            string   `json:"repo"`
+	URL             string   `json:"url"`
+	Assignees       []string `json:"assignees"`
+	IsEpic          bool     `json:"isEpic"`
+	Milestone       string   `json:"milestone,omitempty"`
 
 	// Sub-issue relationships
 	ParentIssueID string `json:"parentIssueId,omitempty"`
@@ -162,12 +171,15 @@ const (
 	ReviewReviewRequired   ReviewDecision = "REVIEW_REQUIRED"
 )
 
-// StatusCounts holds per-status item counts from the project board.
+// StatusCounts holds per-status counts of the OPEN items on the project
+// board. It is derived from the board snapshot (`is:open`) rather than asked
+// of the forge, so it carries only the statuses an open item can hold: there
+// is no Done bucket, because Done items are closed and are not in the
+// snapshot — and no surface ever read one (#TBD-board-counts).
 type StatusCounts struct {
 	Ready      int `json:"ready"`
 	InProgress int `json:"inProgress"`
 	InReview   int `json:"inReview"`
-	Done       int `json:"done"`
 	Backlog    int `json:"backlog"`
 }
 
