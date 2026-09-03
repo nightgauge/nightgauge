@@ -40,6 +40,13 @@ export type Severity = "critical" | "high" | "medium" | "low" | "info";
 
 export type HealthStatus = "excellent" | "good" | "fair" | "poor" | "critical";
 
+/**
+ * Status of the OVERALL score. `"no-data"` is the honest answer when no
+ * dimension had enough data to score (#1197) — the overall is then `null`,
+ * never a fabricated 0 (critical) or 50 (fair).
+ */
+export type OverallHealthStatus = HealthStatus | "no-data";
+
 export type Confidence = "high" | "medium" | "low";
 
 export type TrendDirection = "improving" | "stable" | "degrading";
@@ -167,8 +174,14 @@ export const DEFAULT_HEALTH_CONFIG: HealthAnalysisConfig = {
 export interface HealthAnalysisResult {
   dimensions: Partial<Record<HealthDimension, DimensionResult>>;
   crossReferences: CrossReference[];
-  overallScore: number;
-  overallStatus: HealthStatus;
+  /**
+   * Weighted mean over the dimensions that HAVE data, re-normalised to the
+   * surviving weights; `null` when none does. A dimension with
+   * `hasEnoughData: false` never contributes (#1197). The rule is pinned
+   * against `skills/nightgauge-pipeline-health/overall-score-corpus.json`.
+   */
+  overallScore: number | null;
+  overallStatus: OverallHealthStatus;
   summary: string;
   analyzedAt: string;
   config: HealthAnalysisConfig;
@@ -370,7 +383,7 @@ export interface HealthTrendEntry {
   timestamp: string; // ISO 8601 (analyzedAt from HealthAnalysisResult)
   run_id: string; // Derived: analyzedAt timestamp string (unique per analysis)
   issue_number: number; // 0 if unknown
-  overall_score: number; // 0-100
+  overall_score: number | null; // 0-100, null when no dimension had data (#1197)
   dimensions: Partial<Record<HealthDimension, number>>; // 7 dimension scores
   significant_findings: string[]; // Top 3 finding titles (for hover tooltip)
 }

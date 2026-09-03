@@ -224,12 +224,12 @@ describe("HealthAnalysisEngine.analyze() — empty dataset", () => {
     }
   });
 
-  it("overallScore is within 0–100", () => {
+  it("overallScore is null with status no-data — never a fabricated number (#1197)", () => {
     const engine = new HealthAnalysisEngine();
     const result = engine.analyze(makeEmptyDataset());
 
-    expect(result.overallScore).toBeGreaterThanOrEqual(0);
-    expect(result.overallScore).toBeLessThanOrEqual(100);
+    expect(result.overallScore).toBeNull();
+    expect(result.overallStatus).toBe("no-data");
   });
 
   it("summary mentions insufficient data when all dimensions lack data", () => {
@@ -439,7 +439,7 @@ describe("HealthAnalysisEngine — weighted score calculation", () => {
     expect(result.overallScore % 1).toBe(0);
   });
 
-  it("all-zero weights produce overallScore of 0", () => {
+  it("all-zero weights produce overallScore null — nothing voted (#1197)", () => {
     const zeroWeights = Object.fromEntries(ALL_DIMENSIONS.map((d) => [d, 0])) as Record<
       HealthDimension,
       number
@@ -450,7 +450,8 @@ describe("HealthAnalysisEngine — weighted score calculation", () => {
     });
     const result = engine.analyze(makeDataset());
 
-    expect(result.overallScore).toBe(0);
+    expect(result.overallScore).toBeNull();
+    expect(result.overallStatus).toBe("no-data");
   });
 
   it("single-dimension weight drives overallScore to that dimension score (rounded)", () => {
@@ -493,15 +494,18 @@ describe("HealthAnalysisEngine — weighted score calculation", () => {
     const engine = new HealthAnalysisEngine();
     const result = engine.analyze(makeDataset());
 
-    // Compute expected weighted score manually
+    // Compute expected weighted score manually, over the dimensions that
+    // have data — a starved dimension does not vote (#1197).
     let weightedSum = 0;
     let totalWeight = 0;
     for (const dim of ALL_DIMENSIONS) {
-      const score = result.dimensions[dim]?.score ?? 0;
+      const dimResult = result.dimensions[dim];
+      if (!dimResult?.hasEnoughData) continue;
       const weight = DEFAULT_HEALTH_CONFIG.weights[dim] ?? 0;
-      weightedSum += score * weight;
+      weightedSum += dimResult.score * weight;
       totalWeight += weight;
     }
+    expect(totalWeight).toBeGreaterThan(0);
     const expected = Math.round(weightedSum / totalWeight);
 
     expect(result.overallScore).toBe(expected);
@@ -547,14 +551,17 @@ describe("HealthAnalysisEngine — custom config", () => {
     const result = engine.analyze(makeDataset());
 
     // Manually compute expected score with only the two filtered dimensions
+    // that have data (#1197).
     let weightedSum = 0;
     let totalWeight = 0;
     for (const dim of dims) {
-      const score = result.dimensions[dim]?.score ?? 0;
+      const dimResult = result.dimensions[dim];
+      if (!dimResult?.hasEnoughData) continue;
       const weight = DEFAULT_HEALTH_CONFIG.weights[dim] ?? 0;
-      weightedSum += score * weight;
+      weightedSum += dimResult.score * weight;
       totalWeight += weight;
     }
+    expect(totalWeight).toBeGreaterThan(0);
     const expected = Math.round(weightedSum / totalWeight);
 
     expect(result.overallScore).toBe(expected);
