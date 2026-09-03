@@ -43,16 +43,18 @@ gh pr view <N> --json state,statusCheckRollup,mergeable,mergeStateStatus,reviewD
 
 It then evaluates a pure decision function over the typed snapshot:
 
-| `state`  | `mergeable`   | `mergeStateStatus`     | failed checks    | review        | Result                        |
-| -------- | ------------- | ---------------------- | ---------------- | ------------- | ----------------------------- |
-| `MERGED` | -             | -                      | -                | -             | merged                        |
-| `OPEN`   | `MERGEABLE`   | `CLEAN`                | none             | approved/none | merge → re-poll → merged      |
-| `OPEN`   | `MERGEABLE`   | `BLOCKED` / `UNSTABLE` | none, CI pending | approved/none | **wait for CI** → re-evaluate |
-| `OPEN`   | `CONFLICTING` | -                      | -                | -             | punt                          |
-| `OPEN`   | `MERGEABLE`   | `DIRTY` / `BEHIND`     | -                | -             | punt                          |
-| `OPEN`   | `MERGEABLE`   | `CLEAN`                | any              | -             | punt                          |
-| `OPEN`   | `MERGEABLE`   | `CLEAN`                | none             | required      | punt                          |
-| `CLOSED` | -             | -                      | -                | -             | punt                          |
+| `state`  | `mergeable`   | `mergeStateStatus`     | failed checks    | review        | Result                                                                   |
+| -------- | ------------- | ---------------------- | ---------------- | ------------- | ------------------------------------------------------------------------ |
+| `MERGED` | -             | -                      | -                | -             | merged                                                                   |
+| `OPEN`   | `MERGEABLE`   | `CLEAN`                | none             | approved/none | merge → re-poll → merged                                                 |
+| `OPEN`   | `MERGEABLE`   | `BLOCKED` / `UNSTABLE` | none, CI pending | approved/none | **wait for CI** → re-evaluate                                            |
+| `OPEN`   | `MERGEABLE`   | `BLOCKED` / `UNSTABLE` | **no check yet** | approved/none | **wait (grace)** → re-evaluate; punt `no-checks-created` if none appears |
+| `OPEN`   | `MERGEABLE`   | `BLOCKED` / `UNSTABLE` | all concluded    | approved/none | punt `dirty-merge-state`                                                 |
+| `OPEN`   | `CONFLICTING` | -                      | -                | -             | punt                                                                     |
+| `OPEN`   | `MERGEABLE`   | `DIRTY` / `BEHIND`     | -                | -             | punt                                                                     |
+| `OPEN`   | `MERGEABLE`   | `CLEAN`                | any              | -             | punt                                                                     |
+| `OPEN`   | `MERGEABLE`   | `CLEAN`                | none             | required      | punt                                                                     |
+| `CLOSED` | -             | -                      | -                | -             | punt                                                                     |
 
 ### Bounded CI wait (Issue #297)
 
@@ -71,10 +73,38 @@ punting. On each poll it re-evaluates: a check reporting `FAILURE`/`ERROR`, a
 conflict, or a required review appearing mid-wait ends the wait and punts with
 that reason; a `CLEAN` state issues the merge; exhausting the budget punts
 `ci-wait-timeout`. A structural blocker (`DIRTY`, `BEHIND`, `DRAFT`, or
-`BLOCKED`/`UNSTABLE` with no pending checks) never triggers a wait — it punts
-immediately so the LLM path still gets its turn. The classifier and wait are
-pure/bounded and unit-tested (`prmerge_test.go`, `TestMergeBlockedByPendingCI`,
-`TestDeterministicRunner_CIPending_*`).
+`BLOCKED`/`UNSTABLE` with every listed check concluded) never triggers a wait —
+it punts immediately so the LLM path still gets its turn. The classifier and
+wait are pure/bounded and unit-tested (`prmerge_test.go`,
+`TestMergeBlockedByPendingCI`, `TestDeterministicRunner_CIPending_*`,
+`TestDeterministicRunner_NoChecksYet_*`).
+
+#### Zero check runs created yet (Issue #1027)
+
+pr-merge starts **seconds** after pr-create — before GitHub has created a single
+check run — so the first snapshot of nearly every run is `BLOCKED` with an
+**empty** `statusCheckRollup`. That is neither "pending" (no check to be
+pending) nor structural, and pre-#1027 both the Go runner and the extension's
+`classifyMergeReadiness` classified it `dirty-merge-state: BLOCKED` and punted
+on the single most common transient state, making the deterministic path
+unreachable on most real merges (~$1.4/run of LLM babysitting).
+
+`MergeBlockedByPendingCI` now treats `MERGEABLE` + `BLOCKED`/`UNSTABLE` +
+review-clean + **zero checks** as "CI not started", i.e. pending. The runner
+bounds that case with a **grace window** that is a prefix of the CI budget —
+`DefaultCINoCheckGracePolls` × `DefaultCIPollInterval` = 4 × 30 s = 2 min. A
+check run appearing inside the window promotes the wait to the full budget;
+none appearing punts **`no-checks-created`** so the LLM spend is attributable
+and `dirty-merge-state: BLOCKED` stays reserved for a block the deterministic
+path actually diagnosed. The window is bounded so a repo with no CI at all
+cannot hold the path for the full 15 min.
+
+The predicate is exported and has three callers, which the zero-check change
+keeps consistent by construction: `DeterministicRunner.Run` (enter the wait),
+`waitForCleanMergeState` (keep waiting), and the Action Center's
+`attention.raise` verb (`internal/ipc/attention_raise.go`), which answers "is
+this block human-needed?" with **no** for the zero-check window instead of
+carding CI-not-started as a branch-protection block.
 
 After issuing the merge call, the runner re-polls (4 × 2 s) for `state == MERGED`
 to absorb GitHub's eventual-consistency window. If polls exhaust without
@@ -164,7 +194,8 @@ Per-stage `execution_path` is recorded on `V2StageDetail` (Go) /
 `punt_reason` (Issue #297) sits alongside `execution_path` on both
 `V2StageDetail.PuntReason` (Go) and `HistoryStageDetail.punt_reason` (TS Zod).
 It carries the machine-readable reason the deterministic path declined —
-`missing-dev-context`, `dirty-merge-state: BLOCKED`, `ci-wait-timeout`, … — and
+`missing-dev-context`, `dirty-merge-state: BLOCKED`, `ci-wait-timeout`,
+`no-checks-created`, … — and
 is present **only** when `execution_path == "llm"` and a deterministic hook
 actually ran and punted (absent on deterministic successes and on stages with no
 deterministic hook). This closes the diagnosis gap that made #288 take forensic

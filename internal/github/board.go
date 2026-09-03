@@ -306,7 +306,15 @@ func (b *BoardService) GetItem(ctx context.Context, owner, repo string, issueNum
 	// returned items looking for the matching repo + number. This keeps the
 	// implementation aligned with the existing list-items code path and
 	// reuses nodeToItem for field extraction.
-	queryStr := fmt.Sprintf("%s/%s#%d", owner, repo, issueNumber)
+	//
+	// The filter MUST be the `repo:<owner>/<repo> #<N>` form. The Projects V2
+	// item search does not parse a bare `owner/repo#N` slug — it returns zero
+	// rows for a row that is on the board, without an error — so the earlier
+	// shape made every caller (RunQueue, `project field-get`, the board
+	// cache) report a Ready issue as "not found on board". The repo qualifier
+	// keeps a shared board honest: two repos at the same number stay apart
+	// server-side, and the Repo+Number match below is the identity check.
+	queryStr := boardItemQuery(owner, repo, issueNumber)
 	vars := map[string]interface{}{
 		"owner":         graphql.String(b.owner),
 		"projectNumber": graphql.Int(b.projectNumber),
@@ -331,6 +339,13 @@ func (b *BoardService) GetItem(ctx context.Context, owner, repo string, issueNum
 		}
 	}
 	return nil, fmt.Errorf("board item %s/%s#%d: %w", owner, repo, issueNumber, forge.ErrNotFound)
+}
+
+// boardItemQuery is the Projects V2 `items(query:)` filter that selects one
+// issue on a board: `repo:<owner>/<repo> #<N>`. Kept as a function so a test
+// can pin the exact string the server is asked for.
+func boardItemQuery(owner, repo string, issueNumber int) string {
+	return fmt.Sprintf("repo:%s/%s #%d", owner, repo, issueNumber)
 }
 
 func priorityFromLabels(labels []string) types.Priority {

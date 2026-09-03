@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	gh "github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/internal/intelligence/scopeDriftGate"
 	"github.com/nightgauge/nightgauge/internal/platform"
 	"github.com/spf13/cobra"
@@ -89,29 +88,27 @@ func scopeDriftGateCheckCmd() *cobra.Command {
 			// Resolve issue type and labels. issueTypeOverride lets the caller
 			// skip GitHub API calls when type is already known (e.g., from
 			// issue-{N}.json in the pr-create skill).
+			//
+			// Resolve the target repository BEFORE any client or network work:
+			// an empty or malformed segment would otherwise be stitched into
+			// the slug "owner/" and surface as an opaque "Could not resolve to
+			// a Repository" GitHub error (#536, #548).
+			ownerPart, repoPart, err := resolveGateRepo(owner, repo)
+			if err != nil {
+				return err
+			}
 			var labels []string
 			issueType := strings.ToLower(strings.TrimSpace(issueTypeOverride))
 			if issueType == "" {
-				client, err := clientFromConfig()
+				labels, err = fetchGateIssueLabels(cmd.Context(), ownerPart, repoPart, issueNum)
 				if err != nil {
-					return fmt.Errorf("create GitHub client: %w", err)
+					return err
 				}
-				ownerPart, repoPart := splitRepo(owner, repo)
-				svc := gh.NewIssueService(client)
-				issue, err := svc.GetIssue(cmd.Context(), ownerPart, repoPart, issueNum)
-				if err != nil {
-					return fmt.Errorf("fetch issue #%d: %w", issueNum, enrichError(err))
-				}
-				labels = issue.Labels
 				issueType = inferIssueType(labels)
 			} else {
 				// Even when type is provided, fetch labels for the bypass check.
-				if client, err := clientFromConfig(); err == nil {
-					ownerPart, repoPart := splitRepo(owner, repo)
-					svc := gh.NewIssueService(client)
-					if issue, gerr := svc.GetIssue(cmd.Context(), ownerPart, repoPart, issueNum); gerr == nil {
-						labels = issue.Labels
-					}
+				if got, gerr := fetchGateIssueLabels(cmd.Context(), ownerPart, repoPart, issueNum); gerr == nil {
+					labels = got
 				}
 			}
 
@@ -163,7 +160,7 @@ func scopeDriftGateCheckCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&owner, "owner", "", "GitHub repository owner (defaults to config)")
-	cmd.Flags().StringVar(&repo, "repo", "", "GitHub repository name (defaults to config)")
+	repoNameFlag(cmd, &repo, "", "GitHub repository name (defaults to config)")
 	cmd.Flags().IntVar(&issueNum, "issue", 0, "GitHub issue number to evaluate (required)")
 	cmd.Flags().StringVar(&configPath, "config", ".nightgauge/config.yaml", "Path to config.yaml")
 	cmd.Flags().StringVar(&workdir, "workdir", "", "Workspace root (defaults to cwd) for locating dev-{N}.json")

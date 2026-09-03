@@ -213,13 +213,21 @@ Timing and reliability analysis per pipeline stage:
 
 ### 4. Model Routing
 
-AI model selection analysis:
+AI model selection analysis. **This dimension is not computed here** — it is
+the SDK's `analyzeModelRouting` (`HealthAnalysisEngine`, dimension
+`model-routing`), fed per executed stage by `flattenRunRecords` (#461): each
+record carries that stage's `model` and `selectionSource` from
+`stages[*].model_selection`. Report the engine's `score`, `metrics` and
+`findings` for this dimension verbatim; do not re-derive them from the raw
+JSONL. The engine's metrics are:
 
-- Model usage distribution across stages
-- Cost impact of model selection decisions
-- Quality outcomes by model (success rate per model)
-- Opportunities for model downgrading on simple tasks
-- A/B experiment results for model routing changes
+- `autoSelectionSuccessRate` — success rate for stages whose dispatched model
+  ran unsubstituted (`selectionSource === "scheduler"`)
+- `underRoutingCount` / `overRoutingCount` — lightweight model on L/XL work
+  that failed; heavyweight model on XS/S work that succeeded first try
+- `distinctModelCount`, `model.{name}.successRate`,
+  `model.{name}.effectiveCostPerSuccess` — usage distribution, quality and
+  cost impact per model
 
 ### 5. Reliability & Failure Patterns
 
@@ -602,9 +610,22 @@ section above. Write per-dimension results to `/tmp/health_dim_*.json`.
 **IMPORTANT**: Use `estimated_cost_usd` directly from records — do NOT
 recalculate from token counts.
 
----
+#### Overall score
 
-### Phase 4: Cross-Reference Analysis
+A dimension marked `insufficient-data` / `no-data` has **no score** — it is
+rendered `N/A` and it does **not** vote. The overall score is the weighted mean
+over the dimensions that have data, re-normalised to their weights:
+
+```text
+overall = round( Σ score[d] × weight[d]  /  Σ weight[d] )   over d with data
+          clamped to [0, 100]; N/A when no dimension has data
+```
+
+Never substitute a placeholder (50, "fair") for a starved dimension — that
+asserts mediocrity from absence of evidence. This is the same rule the SDK
+`HealthAnalysisEngine` runs (`computeOverallHealthScore`); both are pinned to
+the shared corpus in `overall-score-corpus.json` next to this file, so change
+the corpus first when the rule changes.
 
 Correlate findings across dimensions to identify root causes:
 
@@ -766,6 +787,7 @@ Write structured report to
     "total_tokens": 5000000,
     "cache_hit_rate": 0.82
   },
+  "overall_score": 77,
   "dimensions": {
     "token-economics": { "status": "analyzed", "metrics": {}, "findings": [] },
     "cost-health": { "status": "analyzed", "metrics": {}, "findings": [] },
@@ -855,6 +877,7 @@ SUMMARY
 
 DIMENSION HEALTH
 ───────────────────────────────────────────────────────────
+  Overall:                 ████████░░░░ 77%  (5 of 7 dimensions scored)
   Token Economics:         ██████████░░ 83%  [HEALTHY]
   Cost Health:             ████████░░░░ 67%  [WARNING]
   Stage Effectiveness:     █████████░░░ 75%  [HEALTHY]
