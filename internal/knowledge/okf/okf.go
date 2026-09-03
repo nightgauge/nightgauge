@@ -103,6 +103,10 @@ type Provenance struct {
 	By string `yaml:"by" json:"by"`
 	// At is an RFC3339 timestamp.
 	At string `yaml:"at,omitempty" json:"at,omitempty"`
+	// Extra holds keys a foreign producer wrote that this contract does not
+	// define, so a stamp round-trip preserves them instead of deleting them.
+	// The TypeScript ProvenanceSchema passes them through for the same reason.
+	Extra map[string]interface{} `yaml:"-" json:"-"`
 }
 
 // Source records material an entry was derived from: an issue URL, a merged
@@ -113,6 +117,9 @@ type Source struct {
 	Resource string `yaml:"resource" json:"resource"`
 	// Title is an optional human-readable label.
 	Title string `yaml:"title,omitempty" json:"title,omitempty"`
+	// Extra holds keys outside this contract, preserved across a stamp for
+	// the same reason as Provenance.Extra.
+	Extra map[string]interface{} `yaml:"-" json:"-"`
 }
 
 // Now is the clock frontmatter writers read. Tests replace it.

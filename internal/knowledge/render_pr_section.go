@@ -21,7 +21,6 @@ var wellKnownDescriptions = []struct {
 }{
 	{"PRD.md", "PRD", "Product requirements and design decisions"},
 	{"decisions.md", "Decisions", "Architecture and implementation decisions"},
-	{"outcomes.md", "Outcomes", ""},
 }
 
 // excludedScaffoldingFiles are filenames produced by scaffolding helpers
@@ -39,7 +38,7 @@ var excludedScaffoldingFiles = map[string]bool{
 //   - Locates `.nightgauge/knowledge/features/{issueNumber}-*/` (one match expected).
 //   - Returns ("", nil) when the directory is missing, has no qualifying entries,
 //     or contains only scaffolding files (README.md, _template.md).
-//   - Renders well-known entries (PRD.md, decisions.md, outcomes.md) in fixed
+//   - Renders well-known entries (PRD.md, decisions.md) in fixed
 //     order, then any remaining .md files in case-insensitive alphabetical order.
 //   - Output paths are repo-relative so GitHub renders them as clickable links.
 func RenderPRSection(workspaceRoot string, issueNumber int) (string, error) {

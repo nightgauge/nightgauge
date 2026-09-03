@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -20,48 +21,48 @@ type FrontmatterBlock struct {
 	// Type is the entry kind (prd, decisions, architecture, glossary,
 	// runbook, adr, reference, note, ...). Required on every non-reserved
 	// entry; unknown values are accepted for forward compatibility.
-	Type string `yaml:"type"`
+	Type string `yaml:"type" json:"type"`
 
 	// Title is the human-readable entry title. Falls back to the H1 when absent.
-	Title string `yaml:"title"`
+	Title string `yaml:"title" json:"title,omitempty"`
 
 	// Description is a one-line summary used in generated index pages.
-	Description string `yaml:"description"`
+	Description string `yaml:"description" json:"description,omitempty"`
 
 	// Repos lists the repository names this knowledge entry applies to.
 	// Nil or empty means workspace-wide (applies to all repos).
-	Repos []string `yaml:"repos"`
+	Repos []string `yaml:"repos" json:"repos,omitempty"`
 
 	// Tags holds optional topic tags for discovery.
-	Tags []string `yaml:"tags"`
+	Tags []string `yaml:"tags" json:"tags,omitempty"`
 
 	// Related holds related issue/PR references, e.g. ["#12", "#13"].
-	Related []string `yaml:"related"`
+	Related []string `yaml:"related" json:"related,omitempty"`
 
 	// Status is the lifecycle status of this knowledge entry: draft, stable
 	// or deprecated. Empty means DefaultStatus. `superseded` is rejected.
-	Status string `yaml:"status"`
+	Status string `yaml:"status" json:"status,omitempty"`
 
 	// SupersededBy holds the issue/PR reference or entry path that replaces
 	// this entry (used alongside Status=deprecated).
-	SupersededBy string `yaml:"superseded_by"`
+	SupersededBy string `yaml:"superseded_by" json:"superseded_by,omitempty"`
 
 	// Generated records the actor that produced this entry and when.
-	Generated *Provenance `yaml:"generated"`
+	Generated *Provenance `yaml:"generated" json:"generated,omitempty"`
 
 	// Verified records every confirmation event on this entry, oldest first.
-	Verified []Provenance `yaml:"verified"`
+	Verified []Provenance `yaml:"verified" json:"verified,omitempty"`
 
 	// Sources records the material this entry was derived from.
-	Sources []Source `yaml:"sources"`
+	Sources []Source `yaml:"sources" json:"sources,omitempty"`
 
 	// StaleAfter is an RFC3339 timestamp past which the entry is no longer
 	// treated as current guidance.
-	StaleAfter string `yaml:"stale_after"`
+	StaleAfter string `yaml:"stale_after" json:"stale_after,omitempty"`
 
 	// Raw holds the full parsed frontmatter as a map for forward-compatibility
 	// with future frontmatter fields.
-	Raw map[string]interface{}
+	Raw map[string]interface{} `json:"-"`
 }
 
 // EffectiveStatus returns the entry's status, substituting DefaultStatus when
@@ -258,6 +259,7 @@ func ParseFrontmatter(content string) (*FrontmatterBlock, error) {
 				}
 				src.Title = str
 			}
+			src.Extra = extraKeys(m, "resource", "title")
 			block.Sources = append(block.Sources, src)
 		}
 	}
@@ -303,7 +305,116 @@ func parseProvenance(v interface{}, field string) (Provenance, error) {
 		}
 		p.At = s
 	}
+	p.Extra = extraKeys(m, "by", "at")
 	return p, nil
+}
+
+// extraKeys returns the entries of m whose keys are not part of the contract,
+// so a stamp can render them back instead of deleting a foreign producer's
+// metadata. Returns nil when there are none.
+func extraKeys(m map[string]interface{}, known ...string) map[string]interface{} {
+	var extra map[string]interface{}
+	for k, v := range m {
+		if slices.Contains(known, k) {
+			continue
+		}
+		if extra == nil {
+			extra = map[string]interface{}{}
+		}
+		extra[k] = v
+	}
+	return extra
+}
+
+// nestedNode encodes a struct plus its preserved unknown keys as one mapping
+// node, contract fields first in declaration order, extras after in sorted
+// order.
+func nestedNode(known []MapItem, extra map[string]interface{}) (*yaml.Node, error) {
+	node := &yaml.Node{Kind: yaml.MappingNode}
+	add := func(k string, v interface{}) error {
+		val, err := encodeValue(v)
+		if err != nil {
+			return err
+		}
+		node.Content = append(node.Content, &yaml.Node{Kind: yaml.ScalarNode, Value: k}, val)
+		return nil
+	}
+	for _, item := range known {
+		if err := add(item.Key, item.Value); err != nil {
+			return nil, err
+		}
+	}
+	keys := make([]string, 0, len(extra))
+	for k := range extra {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		if err := add(k, extra[k]); err != nil {
+			return nil, err
+		}
+	}
+	return node, nil
+}
+
+// encodeValue encodes v as a YAML node, routing Provenance and Source through
+// their own encoders so nested unknown keys survive the round trip.
+func encodeValue(v interface{}) (*yaml.Node, error) {
+	switch t := v.(type) {
+	case *Provenance:
+		return t.yamlNode()
+	case Provenance:
+		return t.yamlNode()
+	case []Provenance:
+		seq := &yaml.Node{Kind: yaml.SequenceNode}
+		for _, p := range t {
+			n, err := p.yamlNode()
+			if err != nil {
+				return nil, err
+			}
+			seq.Content = append(seq.Content, n)
+		}
+		return seq, nil
+	case []Source:
+		seq := &yaml.Node{Kind: yaml.SequenceNode}
+		for _, src := range t {
+			n, err := src.yamlNode()
+			if err != nil {
+				return nil, err
+			}
+			seq.Content = append(seq.Content, n)
+		}
+		return seq, nil
+	}
+	node := &yaml.Node{}
+	if err := node.Encode(v); err != nil {
+		return nil, err
+	}
+	return node, nil
+}
+
+// MapItem is one ordered key/value pair used when rendering a nested mapping.
+type MapItem struct {
+	Key   string
+	Value interface{}
+}
+
+// yamlNode renders a Provenance, preserving any unknown keys it carries.
+func (p Provenance) yamlNode() (*yaml.Node, error) {
+	known := []MapItem{{Key: "by", Value: p.By}}
+	if p.At != "" {
+		known = append(known, MapItem{Key: "at", Value: p.At})
+	}
+	return nestedNode(known, p.Extra)
+}
+
+// yamlNode renders a Source, preserving any unknown keys it carries.
+func (s Source) yamlNode() (*yaml.Node, error) {
+	known := []MapItem{{Key: "resource", Value: s.Resource}}
+	if s.Title != "" {
+		known = append(known, MapItem{Key: "title", Value: s.Title})
+	}
+	return nestedNode(known, s.Extra)
 }
 
 // ParseFrontmatterFile reads path and parses its frontmatter, wrapping any
@@ -357,8 +468,8 @@ func RenderFrontmatter(b *FrontmatterBlock) (string, error) {
 	}
 	root := &yaml.Node{Kind: yaml.MappingNode}
 	set := func(k string, v interface{}) error {
-		val := &yaml.Node{}
-		if err := val.Encode(v); err != nil {
+		val, err := encodeValue(v)
+		if err != nil {
 			return fmt.Errorf("render frontmatter: encode %s: %w", k, err)
 		}
 		root.Content = append(root.Content,

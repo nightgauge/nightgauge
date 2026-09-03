@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/nightgauge/nightgauge/internal/knowledge/okf"
 )
 
 func setupOutcomeDir(t *testing.T) string {
@@ -82,7 +84,14 @@ func TestRecordOutcome_AppendsToDecisionsWhenPresent(t *testing.T) {
 	}
 }
 
-func TestRecordOutcome_CreatesOutcomesMdWhenNoDecisions(t *testing.T) {
+// TestRecordOutcome_CreatesConformantDecisionsWhenMissing pins the replacement
+// for the deleted outcomes.md fallback: the outcome always lands in
+// decisions.md, and a missing one is seeded with the frontmatter contract
+// rather than reported as an error. PruneEmpty deletes a whole issue
+// directory when nothing in it is substantive, so failing here would lose the
+// outcome — the one durable artifact of the run — over a file this function
+// can create correctly.
+func TestRecordOutcome_CreatesConformantDecisionsWhenMissing(t *testing.T) {
 	root := setupOutcomeDir(t)
 	makeFeatureDir(t, root, 99, "no-decisions")
 
@@ -101,10 +110,78 @@ func TestRecordOutcome_CreatesOutcomesMdWhenNoDecisions(t *testing.T) {
 		t.Error("expected Appended=true")
 	}
 	if !result.FileCreated {
-		t.Error("expected FileCreated=true (outcomes.md created)")
+		t.Error("expected FileCreated=true (decisions.md created)")
 	}
-	if !strings.HasSuffix(result.TargetFile, "outcomes.md") {
-		t.Errorf("expected target to be outcomes.md, got %s", result.TargetFile)
+	if !strings.HasSuffix(result.TargetFile, "decisions.md") {
+		t.Errorf("expected target to be decisions.md, got %s", result.TargetFile)
+	}
+
+	data, readErr := os.ReadFile(filepath.Join(root, result.TargetFile))
+	if readErr != nil {
+		t.Fatalf("read created file: %v", readErr)
+	}
+	block, parseErr := okf.ParseFrontmatter(string(data))
+	if parseErr != nil {
+		t.Fatalf("the file retro created must satisfy the contract: %v", parseErr)
+	}
+	if block == nil || block.Type != okf.TypeDecisions {
+		t.Errorf("seeded decisions.md carries %+v, want type %q", block, okf.TypeDecisions)
+	}
+	if !strings.Contains(string(data), "## Outcome") {
+		t.Errorf("outcome block missing from the seeded file:\n%s", string(data))
+	}
+}
+
+// TestRecordOutcome_StampsRetroVerification pins the review event that makes
+// an entry machine-confirmed: retro runs after the PR merged, so the decisions
+// it records survived a real merge rather than being an unreviewed draft.
+func TestRecordOutcome_StampsRetroVerification(t *testing.T) {
+	root := setupOutcomeDir(t)
+	dir := makeFeatureDir(t, root, 321, "verified")
+	if err := os.WriteFile(filepath.Join(dir, "decisions.md"),
+		[]byte("---\ntype: decisions\n---\n\n# Decisions: #321\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	const prURL = "https://github.com/nightgauge/nightgauge/pull/999"
+	result, err := RecordOutcome(root, RecordOutcomeInput{
+		IssueNumber: 321,
+		Status:      "complete",
+		PRURL:       prURL,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	block, err := okf.ParseFrontmatterFile(filepath.Join(root, result.TargetFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(block.Verified) != 1 || block.Verified[0].By != "process:retro" {
+		t.Fatalf("verified = %+v, want one process:retro event", block.Verified)
+	}
+	if block.Verified[0].At == "" {
+		t.Error("verified event carries no timestamp")
+	}
+	if len(block.Sources) != 1 || block.Sources[0].Resource != prURL {
+		t.Errorf("sources = %+v, want the merged PR", block.Sources)
+	}
+
+	// A second run must not append a duplicate event: de-duplication is on the
+	// actor alone, because `at` differs every run.
+	second := RecordOutcomeInput{IssueNumber: 321, Status: "complete", PRURL: prURL}
+	if _, err := RecordOutcome(root, second); err != nil {
+		t.Fatalf("second run: %v", err)
+	}
+	block, err = okf.ParseFrontmatterFile(filepath.Join(root, result.TargetFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(block.Verified) != 1 {
+		t.Errorf("verified grew to %d events across an idempotent re-run", len(block.Verified))
+	}
+	if len(block.Sources) != 1 {
+		t.Errorf("sources grew to %d entries across an idempotent re-run", len(block.Sources))
 	}
 }
 
@@ -167,7 +244,7 @@ func TestRecordOutcome_Idempotent(t *testing.T) {
 	}
 
 	// Read target file — should contain exactly one ## Outcome section.
-	targetPath := filepath.Join(root, ".nightgauge", "knowledge", "features", "77-idempotent", "outcomes.md")
+	targetPath := filepath.Join(root, ".nightgauge", "knowledge", "features", "77-idempotent", "decisions.md")
 	content, err := os.ReadFile(targetPath)
 	if err != nil {
 		t.Fatal(err)
@@ -190,7 +267,7 @@ func TestRecordOutcome_NarrativeDefaults(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	outcomesPath := filepath.Join(root, ".nightgauge", "knowledge", "features", "55-narrative-defaults", "outcomes.md")
+	outcomesPath := filepath.Join(root, ".nightgauge", "knowledge", "features", "55-narrative-defaults", "decisions.md")
 	content, err := os.ReadFile(outcomesPath)
 	if err != nil {
 		t.Fatal(err)
@@ -244,7 +321,7 @@ func TestRecordOutcome_NoCostInOutput(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	outcomesPath := filepath.Join(root, ".nightgauge", "knowledge", "features", "88-no-cost", "outcomes.md")
+	outcomesPath := filepath.Join(root, ".nightgauge", "knowledge", "features", "88-no-cost", "decisions.md")
 	content, err := os.ReadFile(outcomesPath)
 	if err != nil {
 		t.Fatal(err)

@@ -6596,18 +6596,78 @@ change in output.
 **render-pr-section** emits the Markdown `## Knowledge` block for the PR body
 of the given issue. Walks `.nightgauge/knowledge/features/{N}-*/` and
 emits one bullet per top-level `.md` file (excluding `README.md` and
-`_template.md`). Well-known filenames (`PRD.md`, `decisions.md`, `outcomes.md`)
+`_template.md`). Well-known filenames (`PRD.md`, `decisions.md`)
 render with fixed descriptions in deterministic order; remaining files render
 with title-cased labels in case-insensitive alphabetical order. Prints nothing
 and exits 0 when the directory is missing or contains no qualifying entries.
 Consumed by `pr-create` Phase 1.7 to replace a fixed-dictionary bash loop.
 
+**stamp** records provenance on a knowledge entry. It is the only writer of the
+`generated`, `verified`, `sources`, `status` and `stale_after` frontmatter
+fields — skills and stages call it instead of editing frontmatter with `sed` or
+a heredoc, so every value has been through the same validation.
+
+```bash
+nightgauge knowledge stamp <path> \
+  [--generated-by <actor>] \
+  [--verified-by <actor>] \
+  [--source <uri>]... \
+  [--status draft|stable|deprecated] \
+  [--stale-after <rfc3339>] \
+  [--workdir <path>] \
+  [--json]
+```
+
+| Flag | Type | Required | Description |
+| --- | --- | --- | --- |
+| `--generated-by` | string | no | Actor that produced the entry; replaces `generated` |
+| `--verified-by` | string | no | Actor confirming the entry; appended to `verified` |
+| `--source` | string[] | no | Material the entry was derived from; repeatable |
+| `--status` | string | no | Lifecycle status: `draft`, `stable`, `deprecated` |
+| `--stale-after` | string | no | RFC3339 instant past which the entry is not current guidance |
+| `--workdir` | string | no | Workspace root (default: cwd) |
+| `--json` | bool | no | Output the merged frontmatter and a `changed` flag |
+
+At least one field flag is required — an empty stamp is an error, not a silent
+no-op write.
+
+**The body is never touched.** The file is split, only the frontmatter block is
+rebuilt, and the two are re-joined.
+
+**Merge rules.** `generated` is replaced (it names the last producer, it is not
+a log). `verified` appends unless an event with the same actor exists, and
+de-duplication is on the actor **alone** — `at` differs on every run, so a
+`by`+`at` key would append forever and make retro non-idempotent. `sources`
+appends unless an entry with the same resource exists. `status` and
+`stale_after` are set only when passed, never cleared.
+
+**Actors** take one of three forms: `<producer>/<version>` for an agent stage
+and its model (`feature-dev/claude-sonnet-5`), `human:<id>` for a person,
+`process:<id>` for a deterministic writer. Validated against
+`^([a-z0-9._-]+/[A-Za-z0-9._-]+|human:\S+|process:\S+)$`.
+
+**Containment.** `<path>` must resolve inside `.nightgauge/knowledge/` — this
+is the first knowledge verb that takes a path from the command line rather than
+deriving it from an issue number. A `--source` is an `https://` URL, a
+bundle-absolute path beginning with `/`, or a repository-relative path that
+resolves inside the repository after cleaning and symlink evaluation. A
+rejected stamp exits non-zero having written nothing.
+
+**Exit codes**: `0` success (stamped or already stamped); `1` validation
+failure, containment rejection, or write error.
+
 **record-outcome** appends a structured `## Outcome` Markdown block to the
-knowledge base file for the given issue. Prefers `decisions.md` when it
-exists; otherwise creates and writes to `outcomes.md`. Idempotent — re-running
-with the same issue number is a no-op when the outcome block already exists
-(detected by the `**Issue**: #N` marker). When no knowledge directory is found
-for the issue, a minimal one is created under
+issue's `decisions.md`, then stamps a `verified` event from `process:retro` and
+records `--pr-url` as a source. Idempotent — re-running with the same issue
+number is a no-op when the outcome block already exists (detected by the
+`**Issue**: #N` marker), and the stamp de-duplicates on the actor.
+
+`decisions.md` is the only target. A missing one is **created** carrying the
+frontmatter contract rather than reported as an error: `knowledge prune`
+deletes a whole issue directory when nothing in it is substantive, and
+`knowledge.enabled: false` means it was never scaffolded — failing there would
+lose the outcome, the one durable artifact of the run. When no knowledge
+directory is found for the issue, a minimal one is created under
 `.nightgauge/knowledge/features/{N}-outcome/`.
 
 ```bash
@@ -6620,6 +6680,7 @@ nightgauge knowledge record-outcome \
   [--what-went-well "bullet points or prose"] \
   [--what-didnt "bullet points or prose"] \
   [--lessons-learned "bullet points or prose"] \
+  [--pr-url https://…] \
   [--workdir <path>] \
   [--json]
 ```
@@ -6634,6 +6695,7 @@ nightgauge knowledge record-outcome \
 | `--what-went-well` | string | no | Narrative: what went well (agent-provided) |
 | `--what-didnt` | string | no | Narrative: what didn't go well (agent-provided) |
 | `--lessons-learned` | string | no | Narrative: lessons learned (agent-provided) |
+| `--pr-url` | string | no | URL of the merged PR; recorded as a `sources` entry |
 | `--workdir` | string | no | Workspace root (default: cwd) |
 | `--json` | bool | no | Output result as JSON |
 
@@ -6908,7 +6970,7 @@ knowledge:
 ---
 
 All subcommands accept `--workdir` to override the workspace root
-(default: `cwd`); `scaffold`, `prune`, `index`, `record-outcome`,
+(default: `cwd`); `scaffold`, `prune`, `index`, `record-outcome`, `stamp`,
 `graduate`, `graduate-candidates`, and `recall` also accept `--json` for
 machine-readable output.
 
@@ -6950,7 +7012,7 @@ that have not opted into the KB.
 | ------------- | ------------------------------------------------------------------------------- |
 | `scaffold`    | `knowledge scaffold`, `knowledge workspace-create`, `knowledge workspace-init`  |
 | `read`        | `knowledge render`, `knowledge render-pr-section`, ad-hoc skill calls           |
-| `write`       | `knowledge new`, `knowledge record-outcome`, ad-hoc skill calls                 |
+| `write`       | `knowledge new`, `knowledge record-outcome`, `knowledge stamp`, ad-hoc skill calls |
 | `recall`      | Ad-hoc — emitted by callers wrapping a knowledge recall                          |
 | `recall_hit`  | Ad-hoc — caller reports it used result index N (see "Recall hits" below)         |
 | `graduate`    | `knowledge graduate`                                                            |

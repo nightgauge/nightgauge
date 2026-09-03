@@ -28,6 +28,7 @@ type autoCLIOptions struct {
 	BaseBranch    string
 	Owner         string
 	Repo          string
+	VerifiedBy    string
 }
 
 // runGraduateAuto is the entrypoint dispatched from knowledgeGraduateCmd when
@@ -103,6 +104,7 @@ func runGraduateAuto(cmd *cobra.Command, issueNumber int, opts autoCLIOptions) e
 		BaseBranch:    opts.BaseBranch,
 		Owner:         opts.Owner,
 		Repo:          opts.Repo,
+		VerifiedBy:    opts.VerifiedBy,
 		Git:           git,
 		Forge:         forgeAdapter,
 		Now:           time.Now,

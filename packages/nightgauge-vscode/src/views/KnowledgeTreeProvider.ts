@@ -5,8 +5,7 @@
  *
  *   📌 Active Issue (#N)
  *     ├── PRD.md          (highlighted when in planning.knowledge_read)
- *     ├── decisions.md    (highlighted when in planning.knowledge_read)
- *     └── outcomes.md     (when present)
+ *     └── decisions.md    (highlighted when in planning.knowledge_read)
  *   🔗 Related Decisions
  *     ├── <recall hit 1>
  *     └── …
@@ -35,7 +34,7 @@ import { issueContextCandidates, pipelineFileCandidates } from "../utils/issueCo
 
 const RELATED_LIMIT = 10;
 const WATCHER_DEBOUNCE_MS = 500;
-const ACTIVE_ISSUE_FILES = ["PRD.md", "decisions.md", "outcomes.md"];
+const ACTIVE_ISSUE_FILES = ["PRD.md", "decisions.md"];
 
 class KnowledgeEmptyItem extends BaseTreeItem {
   constructor(message: string) {

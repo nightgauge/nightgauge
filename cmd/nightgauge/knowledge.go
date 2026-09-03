@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/knowledge"
+	"github.com/nightgauge/nightgauge/internal/knowledge/okf"
 	"github.com/nightgauge/nightgauge/internal/knowledge/recall"
 	"github.com/nightgauge/nightgauge/internal/knowledge/telemetry"
 	"github.com/nightgauge/nightgauge/internal/knowledge/workspace"
@@ -47,7 +48,7 @@ func knowledgeCmd() *cobra.Command {
 		Short: "Knowledge base operations",
 		Long:  "Manage the .nightgauge/knowledge/ directory: scaffold entries, prune empty files, generate the index, and scaffold workspace-level entries.",
 	}
-	cmd.AddCommand(knowledgeScaffoldCmd(), knowledgePruneCmd(), knowledgeIndexCmd(), knowledgeWorkspaceCreateCmd(), knowledgeWorkspaceInitCmd(), knowledgeGraduateCmd(), knowledgeGraduateCandidatesCmd(), knowledgeStatsCmd(), knowledgeRenderCmd(), knowledgeRenderPRSectionCmd(), knowledgeNewCmd(), knowledgeValidateCmd(), knowledgeRecordOutcomeCmd(), knowledgeTelemetryCmd(), knowledgeMetricsCmd(), knowledgeRecallCmd(), knowledgeReindexCmd())
+	cmd.AddCommand(knowledgeScaffoldCmd(), knowledgePruneCmd(), knowledgeIndexCmd(), knowledgeWorkspaceCreateCmd(), knowledgeWorkspaceInitCmd(), knowledgeGraduateCmd(), knowledgeGraduateCandidatesCmd(), knowledgeStatsCmd(), knowledgeRenderCmd(), knowledgeRenderPRSectionCmd(), knowledgeNewCmd(), knowledgeValidateCmd(), knowledgeRecordOutcomeCmd(), knowledgeStampCmd(), knowledgeTelemetryCmd(), knowledgeMetricsCmd(), knowledgeRecallCmd(), knowledgeReindexCmd())
 	return cmd
 }
 
@@ -346,6 +347,7 @@ func knowledgeGraduateCmd() *cobra.Command {
 		ownerFlag     string
 		projectFlag   int
 		ownerType     string
+		verifiedBy    string
 	)
 
 	cmd := &cobra.Command{
@@ -391,6 +393,7 @@ See docs/KNOWLEDGE_BASE.md#graduation-workflow for the full workflow.`,
 					AllCandidates: allCandidates,
 					OutputJSON:    outputJSON,
 					BaseBranch:    baseBranch,
+					VerifiedBy:    verifiedBy,
 				})
 			}
 
@@ -424,10 +427,21 @@ See docs/KNOWLEDGE_BASE.md#graduation-workflow for the full workflow.`,
 				return err
 			}
 
+			graduationActor := verifiedBy
+			if graduationActor == "" {
+				graduationActor, err = okf.ProcessActor("knowledge-graduate")
+				if err != nil {
+					return err
+				}
+			} else if err := okf.ValidateActor(graduationActor); err != nil {
+				return err
+			}
+
 			if err := knowledge.WriteBacklink(knowledge.GraduateInput{
 				DecisionsPath: absDecisions,
 				ADRAnchor:     adrAnchor,
 				DocsSection:   section,
+				VerifiedBy:    graduationActor,
 			}); err != nil {
 				return err
 			}
@@ -527,6 +541,7 @@ See docs/KNOWLEDGE_BASE.md#graduation-workflow for the full workflow.`,
 	cmd.Flags().StringVar(&ownerFlag, "owner", "", "Owner namespace (org or user)")
 	cmd.Flags().IntVar(&projectFlag, "project", 0, "Project board number (1-based)")
 	cmd.Flags().StringVar(&ownerType, "owner-type", "", "Owner type: org or user (default org)")
+	cmd.Flags().StringVar(&verifiedBy, "verified-by", "", "Actor recorded on the source entry's verified log (default process:knowledge-graduate). Use human:<login> only when a person really reviewed the ADR.")
 
 	return cmd
 }
@@ -1069,7 +1084,7 @@ func knowledgeRenderPRSectionCmd() *cobra.Command {
 
 Walks .nightgauge/knowledge/features/{N}-*/ and emits one bullet per top-level
 .md file (excluding README.md and _template.md). Well-known filenames (PRD.md,
-decisions.md, outcomes.md) render with fixed descriptions in deterministic order;
+decisions.md) render with fixed descriptions in deterministic order;
 remaining files render with title-cased labels in case-insensitive alphabetical order.
 
 When --coverage-map is provided and the file exists, a "## PRD Coverage" section
@@ -1223,16 +1238,16 @@ func knowledgeStatsCmd() *cobra.Command {
 				return nil
 			}
 
-			// Human-readable table: issue# | prd_bytes | decisions_bytes | outcomes_bytes | last_write
-			fmt.Printf("%-8s %-12s %-16s %-14s %s\n", "ISSUE", "PRD_BYTES", "DECISIONS_BYTES", "OUTCOMES_BYTES", "LAST_WRITE")
-			fmt.Println(strings.Repeat("-", 72))
+			// Human-readable table: issue# | prd_bytes | decisions_bytes | last_write
+			fmt.Printf("%-8s %-12s %-16s %s\n", "ISSUE", "PRD_BYTES", "DECISIONS_BYTES", "LAST_WRITE")
+			fmt.Println(strings.Repeat("-", 58))
 			for _, s := range stats {
 				lastWrite := s.LastWrite
 				if lastWrite == "" {
 					lastWrite = "—"
 				}
-				fmt.Printf("%-8d %-12d %-16d %-14d %s\n",
-					s.IssueNumber, s.PRDBytes, s.DecisionsBytes, s.OutcomesBytes, lastWrite)
+				fmt.Printf("%-8d %-12d %-16d %s\n",
+					s.IssueNumber, s.PRDBytes, s.DecisionsBytes, lastWrite)
 			}
 			fmt.Printf("\nTotal entries: %d\n", len(stats))
 			return nil
@@ -1393,6 +1408,7 @@ func knowledgeRecordOutcomeCmd() *cobra.Command {
 		whatWentWell   string
 		whatDidnt      string
 		lessonsLearned string
+		prURL          string
 		workdir        string
 		outputJSON     bool
 	)
@@ -1401,10 +1417,16 @@ func knowledgeRecordOutcomeCmd() *cobra.Command {
 		Use:          "record-outcome",
 		Short:        "Append a pipeline outcome block to the knowledge base",
 		SilenceUsage: true,
-		Long: `Append a structured ## Outcome Markdown block to the knowledge base file for
-the given issue. Prefers decisions.md when it exists; otherwise creates and
-writes to outcomes.md. Idempotent — re-running with the same issue number is
-a no-op when the outcome block already exists.`,
+		Long: `Append a structured ## Outcome Markdown block to the issue's decisions.md,
+then record that retro confirmed the entry: a verified event from
+process:retro, plus the merged PR as a source when --pr-url is given.
+
+decisions.md is the only target. A missing one is created rather than
+reported — losing the outcome over a file this command can create correctly
+would defeat the point of recording it.
+
+Idempotent — re-running with the same issue number is a no-op when the
+outcome block already exists.`,
 		Example: `  nightgauge knowledge record-outcome --issue 42 --status complete --duration 30 --tokens 5000 --cost 1.23
   nightgauge knowledge record-outcome --issue 42 --status partial --duration 15 --tokens 2000 --cost 0.50 \
     --what-went-well "Tests passed." --what-didnt "CI flaked once." --lessons-learned "Cache builds."
@@ -1422,6 +1444,12 @@ a no-op when the outcome block already exists.`,
 				}
 			}
 
+			if prURL != "" {
+				if _, err := okf.ValidateSource(prURL, workdir); err != nil {
+					return err
+				}
+			}
+
 			start := time.Now()
 			result, err := knowledge.RecordOutcome(workdir, knowledge.RecordOutcomeInput{
 				IssueNumber:    issueNumber,
@@ -1432,6 +1460,7 @@ a no-op when the outcome block already exists.`,
 				WhatWentWell:   whatWentWell,
 				WhatDidnt:      whatDidnt,
 				LessonsLearned: lessonsLearned,
+				PRURL:          prURL,
 			})
 			if err != nil {
 				return err
@@ -1473,6 +1502,7 @@ a no-op when the outcome block already exists.`,
 	cmd.Flags().StringVar(&whatWentWell, "what-went-well", "", "Narrative: what went well (agent-provided)")
 	cmd.Flags().StringVar(&whatDidnt, "what-didnt", "", "Narrative: what didn't go well (agent-provided)")
 	cmd.Flags().StringVar(&lessonsLearned, "lessons-learned", "", "Narrative: lessons learned (agent-provided)")
+	cmd.Flags().StringVar(&prURL, "pr-url", "", "URL of the merged PR; recorded as a source on the entry")
 	cmd.Flags().StringVar(&workdir, "workdir", "", "Workspace root (default: cwd)")
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output result as JSON")
 	_ = cmd.MarkFlagRequired("issue")

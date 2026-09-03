@@ -323,7 +323,7 @@ describe("KnowledgeTreeProvider (three-section model #2964)", () => {
     );
     const root = await provider.getChildren();
     const children = await provider.getChildren(root[0]);
-    expect(children.map((c) => c.label)).toEqual(["PRD.md", "decisions.md", "outcomes.md"]);
+    expect(children.map((c) => c.label)).toEqual(["PRD.md", "decisions.md"]);
     provider.dispose();
   });
 
@@ -343,7 +343,7 @@ describe("KnowledgeTreeProvider (three-section model #2964)", () => {
     );
     const root = await provider.getChildren();
     const children = await provider.getChildren(root[0]);
-    expect(children.map((c) => c.label)).toEqual(["PRD.md", "decisions.md", "outcomes.md"]);
+    expect(children.map((c) => c.label)).toEqual(["PRD.md", "decisions.md"]);
     provider.dispose();
   });
 
@@ -361,7 +361,7 @@ describe("KnowledgeTreeProvider (three-section model #2964)", () => {
     );
     const root = await provider.getChildren();
     const children = await provider.getChildren(root[0]);
-    expect(children.map((c) => c.label)).toEqual(["PRD.md", "decisions.md", "outcomes.md"]);
+    expect(children.map((c) => c.label)).toEqual(["PRD.md", "decisions.md"]);
     provider.dispose();
   });
 

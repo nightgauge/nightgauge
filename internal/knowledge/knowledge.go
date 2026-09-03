@@ -74,7 +74,6 @@ type IssueStats struct {
 	Path           string `json:"path"`
 	PRDBytes       int64  `json:"prd_bytes"`
 	DecisionsBytes int64  `json:"decisions_bytes"`
-	OutcomesBytes  int64  `json:"outcomes_bytes"`
 	LastWrite      string `json:"last_write"`
 }
 
@@ -115,7 +114,7 @@ func Stats(workspaceRoot string) ([]IssueStats, error) {
 
 		var latestMod time.Time
 
-		for _, fname := range []string{"PRD.md", "decisions.md", "outcomes.md"} {
+		for _, fname := range []string{"PRD.md", "decisions.md"} {
 			fpath := filepath.Join(dirPath, fname)
 			info, err := os.Stat(fpath)
 			if err != nil {
@@ -130,8 +129,6 @@ func Stats(workspaceRoot string) ([]IssueStats, error) {
 				stat.PRDBytes = size
 			case "decisions.md":
 				stat.DecisionsBytes = size
-			case "outcomes.md":
-				stat.OutcomesBytes = size
 			}
 		}
 
