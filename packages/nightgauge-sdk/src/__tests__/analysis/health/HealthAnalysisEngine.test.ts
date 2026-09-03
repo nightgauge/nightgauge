@@ -153,7 +153,7 @@ describe("HealthAnalysisEngine", () => {
       const healthyResult = engine.analyze(healthyDataset);
       const unhealthyResult = engine.analyze(unhealthyDataset);
 
-      expect(healthyResult.overallScore).toBeGreaterThan(unhealthyResult.overallScore);
+      expect(healthyResult.overallScore).toBeGreaterThan(unhealthyResult.overallScore!);
     });
 
     it("summary string mentions the number of dimensions with data", () => {

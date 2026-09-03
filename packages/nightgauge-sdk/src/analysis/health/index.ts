@@ -4,7 +4,12 @@
  * @see Issue #1101 - Multi-Dimensional Health Analysis Engine
  */
 
-export { HealthAnalysisEngine } from "./HealthAnalysisEngine.js";
+export {
+  HealthAnalysisEngine,
+  computeOverallHealthScore,
+  getOverallHealthStatus,
+  type ScoredDimension,
+} from "./HealthAnalysisEngine.js";
 export { HealthTrendsWriter } from "./HealthTrendsWriter.js";
 export { FindingToIssueEngine } from "./FindingToIssueEngine.js";
 export { RecommendationTracker } from "./RecommendationTracker.js";
@@ -75,6 +80,7 @@ export type {
   HealthTrendsReadOptions,
   Severity,
   HealthStatus,
+  OverallHealthStatus,
   Confidence,
   TrendDirection,
   Finding,

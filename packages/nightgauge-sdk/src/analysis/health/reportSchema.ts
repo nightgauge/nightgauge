@@ -87,8 +87,9 @@ export const HealthReportSchema = z.object({
     analysis_duration_ms: z.number().min(0),
   }),
   summary: z.object({
-    overall_score: z.number().min(0).max(100),
-    overall_status: z.enum(["excellent", "good", "fair", "poor", "critical"]),
+    // null / "no-data" when no dimension had enough data to score (#1197)
+    overall_score: z.number().min(0).max(100).nullable(),
+    overall_status: z.enum(["excellent", "good", "fair", "poor", "critical", "no-data"]),
     total_findings: z.number().int().min(0),
     critical_findings: z.number().int().min(0),
     cross_references: z.number().int().min(0),
