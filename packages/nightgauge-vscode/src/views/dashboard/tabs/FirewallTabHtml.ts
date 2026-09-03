@@ -60,8 +60,16 @@ const FIREWALL_MODE_UNKNOWN: FirewallModeBadge = {
  * Generate firewall mode status badge HTML
  */
 function getFirewallModeBadgeHtml(mode: FirewallMode): string {
-  const { label, cssClass, title } =
-    mode === null ? FIREWALL_MODE_UNKNOWN : FIREWALL_MODE_BADGES[mode];
+  // `mode` is typed as FirewallMode, but this renders arbitrary fixture/IPC
+  // data too — an unrecognized or missing mode (undefined, a stale string
+  // predating this lookup) must fall back to "Unknown" rather than throw
+  // (#986). A daemon that hasn't reported a mode we recognize is exactly the
+  // case this badge exists to surface honestly.
+  const badge =
+    mode !== null && Object.prototype.hasOwnProperty.call(FIREWALL_MODE_BADGES, mode as string)
+      ? FIREWALL_MODE_BADGES[mode as SanitizationMode]
+      : FIREWALL_MODE_UNKNOWN;
+  const { label, cssClass, title } = badge;
   return `<span class="firewall-mode-badge ${cssClass}" data-firewall-mode="${mode ?? "unknown"}" title="${escapeHtml(title)}">Firewall: ${label}</span>`;
 }
 
