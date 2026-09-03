@@ -91,6 +91,16 @@ describe("classifyMergeReadiness", () => {
     expect((r as { reason: string }).reason).toContain("review-not-approved");
   });
 
+  it("BLOCKED with zero check runs created yet → pending, not dirty-merge-state (#1027)", () => {
+    // pr-merge's first snapshot after pr-create, before GitHub has created a
+    // single check run. This is CI not started, not a structural block.
+    const snap: MergeSnapshot = { ...base, mergeStateStatus: "BLOCKED", checks: [] };
+    expect(classifyMergeReadiness(snap)).toEqual({ kind: "pending" });
+    expect(classifyMergeReadiness({ ...snap, mergeStateStatus: "UNSTABLE" })).toEqual({
+      kind: "pending",
+    });
+  });
+
   it("BLOCKED with all checks concluded (no pending) → blocked, does not spin", () => {
     const snap: MergeSnapshot = {
       ...base,

@@ -230,7 +230,10 @@ func TestDefaultBranch_GreenBranchAutoResolvesByObservingNothing(t *testing.T) {
 	}
 }
 
-func TestDefaultBranch_NonRequiredFailureIsNotAFleetBlocker(t *testing.T) {
+func TestDefaultBranch_NonRequiredFailureRaisesAnFYINotAFleetBlocker(t *testing.T) {
+	// Issue #1250: the required-only assumption made this producer silent in
+	// exactly the configuration that let a red main go unnoticed — one required
+	// check green, one unrequired job failing every run.
 	p := newDefaultBranchProducer()
 	in := branchInput(
 		&repoSvc{defaultBranch: "main"},
@@ -238,7 +241,7 @@ func TestDefaultBranch_NonRequiredFailureIsNotAFleetBlocker(t *testing.T) {
 			required: []string{"build"},
 			runs: []forgetypes.CheckDetail{
 				{Name: "build", Status: "COMPLETED", Conclusion: "SUCCESS", CompletedAt: ago(time.Hour)},
-				{Name: "optional-bench", Status: "COMPLETED", Conclusion: "FAILURE", CompletedAt: ago(time.Hour)},
+				{Name: "e2e", Status: "COMPLETED", Conclusion: "FAILURE", CompletedAt: ago(time.Hour), DetailsURL: "https://forge/run/e2e", HeadSHA: "abcdef1234567"},
 			},
 		},
 	)
@@ -247,12 +250,42 @@ func TestDefaultBranch_NonRequiredFailureIsNotAFleetBlocker(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Evaluate: %v", err)
 	}
-	if len(got) != 0 {
-		t.Fatalf("observations = %d, want 0 — a non-required check blocks nothing", len(got))
+	if len(got) != 1 {
+		t.Fatalf("observations = %d, want exactly 1 — a red main on a non-required check is still a red main", len(got))
+	}
+	req := got[0]
+	// It blocks nothing, so it must not claim to. Below blocking_run too: no
+	// unit of work is stalled by it.
+	if req.Severity != attention.SeverityFYI {
+		t.Errorf("severity = %q, want %q", req.Severity, attention.SeverityFYI)
+	}
+	if !strings.Contains(req.Title, "e2e") {
+		t.Errorf("title %q does not name the failing check", req.Title)
+	}
+	// It must say what it observed, not borrow the blocking card's sentence.
+	wantTitle := `main is red — non-required check "e2e" is failing on octocat/acme`
+	if req.Title != wantTitle {
+		t.Errorf("title = %q, want %q", req.Title, wantTitle)
+	}
+	wantBlocker := "non-required check(s) failing on main: e2e"
+	if req.Context.Blocker != wantBlocker {
+		t.Errorf("blocker = %q, want %q", req.Context.Blocker, wantBlocker)
+	}
+	if strings.Contains(req.Body, "blocked until") {
+		t.Errorf("body claims PRs are blocked: %s", req.Body)
+	}
+	if req.Context.URL != "https://forge/run/e2e" {
+		t.Errorf("context URL = %q, want the failing run's URL", req.Context.URL)
+	}
+	if req.Fingerprint != "advisory-checks:e2e" {
+		t.Errorf("fingerprint = %q, want %q", req.Fingerprint, "advisory-checks:e2e")
+	}
+	if req.IdempotencyKey != "default-branch-health:octocat/acme:main" {
+		t.Errorf("idempotency key = %q — one card per branch, whatever its severity", req.IdempotencyKey)
 	}
 }
 
-func TestDefaultBranch_NoRequiredChecksConfiguredStaysSilent(t *testing.T) {
+func TestDefaultBranch_NoRequiredChecksConfiguredStillCardsARedBranch(t *testing.T) {
 	p := newDefaultBranchProducer()
 	in := branchInput(
 		&repoSvc{defaultBranch: "main"},
@@ -268,10 +301,120 @@ func TestDefaultBranch_NoRequiredChecksConfiguredStaysSilent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Evaluate: %v", err)
 	}
-	// Nothing is required to merge, so nothing is blocked — this producer's
-	// claim is "the fleet is stopped", and it would be false here.
+	// Nothing is required to merge, so nothing is BLOCKED — but the branch is
+	// red, and "no check is required" was precisely the configuration in which
+	// nobody was told (#1250).
+	if len(got) != 1 {
+		t.Fatalf("observations = %d, want 1", len(got))
+	}
+	if got[0].Severity != attention.SeverityFYI {
+		t.Errorf("severity = %q, want %q", got[0].Severity, attention.SeverityFYI)
+	}
+	if got[0].Fingerprint != "advisory-checks:build" {
+		t.Errorf("fingerprint = %q, want %q", got[0].Fingerprint, "advisory-checks:build")
+	}
+}
+
+func TestDefaultBranch_NoChecksAtAllStaysSilent(t *testing.T) {
+	p := newDefaultBranchProducer()
+	in := branchInput(&repoSvc{defaultBranch: "main"}, &branchCI{required: nil, runs: nil})
+
+	got, err := p.Evaluate(context.Background(), in)
+	if err != nil {
+		t.Fatalf("Evaluate: %v", err)
+	}
 	if len(got) != 0 {
-		t.Fatalf("observations = %d, want 0", len(got))
+		t.Fatalf("observations = %d, want 0 — a repo with no checks has nothing to be red about", len(got))
+	}
+}
+
+func TestDefaultBranch_NonRequiredFailuresInsideGraceAndPendingNeverRaise(t *testing.T) {
+	p := newDefaultBranchProducer()
+	in := branchInput(&repoSvc{defaultBranch: "main"}, &branchCI{
+		required: []string{"build"},
+		runs: []forgetypes.CheckDetail{
+			{Name: "build", Status: "COMPLETED", Conclusion: "SUCCESS", CompletedAt: ago(time.Hour)},
+			{Name: "e2e", Status: "COMPLETED", Conclusion: "FAILURE", CompletedAt: ago(2 * time.Minute)},
+			{Name: "bench", Status: "IN_PROGRESS", Conclusion: ""},
+		},
+	})
+
+	got, err := p.Evaluate(context.Background(), in)
+	if err != nil {
+		t.Fatalf("Evaluate: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("observations = %d, want 0 — grace and pending apply to advisory checks exactly as to required ones", len(got))
+	}
+}
+
+func TestDefaultBranch_AdvisoryFingerprintIsTheFailingSet(t *testing.T) {
+	p := newDefaultBranchProducer()
+	sweep := func(runs ...forgetypes.CheckDetail) attention.DecisionRequest {
+		t.Helper()
+		got, err := p.Evaluate(context.Background(), branchInput(
+			&repoSvc{defaultBranch: "main"},
+			&branchCI{required: []string{"build"}, runs: append([]forgetypes.CheckDetail{
+				{Name: "build", Status: "COMPLETED", Conclusion: "SUCCESS", CompletedAt: ago(time.Hour)},
+			}, runs...)},
+		))
+		if err != nil {
+			t.Fatalf("Evaluate: %v", err)
+		}
+		if len(got) != 1 {
+			t.Fatalf("observations = %d, want exactly 1", len(got))
+		}
+		return got[0]
+	}
+	e2e := func(n int) forgetypes.CheckDetail {
+		return forgetypes.CheckDetail{Name: "e2e", Status: "COMPLETED", Conclusion: "FAILURE", CompletedAt: ago(time.Duration(n) * time.Hour), HeadSHA: "sha" + string(rune('0'+n))}
+	}
+	bench := forgetypes.CheckDetail{Name: "bench", Status: "COMPLETED", Conclusion: "FAILURE", CompletedAt: ago(time.Hour)}
+
+	// Four runs of the same job on four commits: one unchanged condition, so
+	// the card refreshes without re-alerting.
+	first := sweep(e2e(1), e2e(2), e2e(3), e2e(4))
+	again := sweep(e2e(1), e2e(2), e2e(3), e2e(4), e2e(5))
+	if first.Fingerprint != again.Fingerprint {
+		t.Errorf("fingerprint moved on a re-run of an already-failing advisory check: %q -> %q", first.Fingerprint, again.Fingerprint)
+	}
+	if first.Fingerprint != "advisory-checks:e2e" {
+		t.Errorf("fingerprint = %q, want %q", first.Fingerprint, "advisory-checks:e2e")
+	}
+	// A second advisory check starting to fail is news.
+	changed := sweep(bench, e2e(1))
+	if changed.Fingerprint != "advisory-checks:bench,e2e" {
+		t.Errorf("fingerprint = %q, want %q", changed.Fingerprint, "advisory-checks:bench,e2e")
+	}
+	if changed.IdempotencyKey != first.IdempotencyKey {
+		t.Error("idempotency key moved with the condition — the card would duplicate instead of updating")
+	}
+}
+
+func TestDefaultBranch_RequiredFailureOutranksAdvisoryFailure(t *testing.T) {
+	// Both kinds failing at once: the blocking card is the one that stands, and
+	// it is byte-for-byte the card it was before #1250 — its fingerprint is
+	// still only the required set, so an advisory check flapping alongside a
+	// stuck required one cannot re-alert a muted fleet blocker.
+	p := newDefaultBranchProducer()
+	got, err := p.Evaluate(context.Background(), branchInput(&repoSvc{defaultBranch: "main"}, &branchCI{
+		required: []string{"build"},
+		runs: []forgetypes.CheckDetail{
+			{Name: "e2e", Status: "COMPLETED", Conclusion: "FAILURE", CompletedAt: ago(time.Hour)},
+			{Name: "build", Status: "COMPLETED", Conclusion: "FAILURE", CompletedAt: ago(time.Hour)},
+		},
+	}))
+	if err != nil {
+		t.Fatalf("Evaluate: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("observations = %d, want exactly 1", len(got))
+	}
+	if got[0].Severity != attention.SeverityBlockingFleet {
+		t.Errorf("severity = %q, want %q", got[0].Severity, attention.SeverityBlockingFleet)
+	}
+	if got[0].Fingerprint != "checks:build" {
+		t.Errorf("fingerprint = %q, want %q", got[0].Fingerprint, "checks:build")
 	}
 }
 

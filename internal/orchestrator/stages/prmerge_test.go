@@ -473,6 +473,13 @@ func TestMergeBlockedByPendingCI(t *testing.T) {
 		{"failed-check → no wait", PRViewSnapshot{State: "OPEN", Mergeable: "MERGEABLE", MergeStateStatus: "BLOCKED", StatusCheckRollup: []PRStatusCheckRow{{Name: "ci", Conclusion: "FAILURE"}}}, false},
 		{"review-required → no wait", PRViewSnapshot{State: "OPEN", Mergeable: "MERGEABLE", MergeStateStatus: "BLOCKED", ReviewDecision: "REVIEW_REQUIRED", StatusCheckRollup: []PRStatusCheckRow{pending}}, false},
 		{"blocked+all-checks-concluded → no wait", PRViewSnapshot{State: "OPEN", Mergeable: "MERGEABLE", MergeStateStatus: "BLOCKED", StatusCheckRollup: []PRStatusCheckRow{{Name: "ci", Conclusion: "SUCCESS"}}}, false},
+		// #1027: the first snapshot after pr-create is BLOCKED with NO check run
+		// created yet. That is CI not started, not a dirty merge state — the
+		// runner waits (bounded) and attention.raise stays silent.
+		{"blocked+zero-checks → wait (#1027)", PRViewSnapshot{State: "OPEN", Mergeable: "MERGEABLE", MergeStateStatus: "BLOCKED"}, true},
+		{"unstable+zero-checks → wait (#1027)", PRViewSnapshot{State: "OPEN", Mergeable: "MERGEABLE", MergeStateStatus: "UNSTABLE", StatusCheckRollup: []PRStatusCheckRow{}}, true},
+		{"blocked+zero-checks+review-required → no wait", PRViewSnapshot{State: "OPEN", Mergeable: "MERGEABLE", MergeStateStatus: "BLOCKED", ReviewDecision: "REVIEW_REQUIRED"}, false},
+		{"dirty+zero-checks → no wait", PRViewSnapshot{State: "OPEN", Mergeable: "MERGEABLE", MergeStateStatus: "DIRTY"}, false},
 		{"behind → no wait", PRViewSnapshot{State: "OPEN", Mergeable: "MERGEABLE", MergeStateStatus: "BEHIND", StatusCheckRollup: []PRStatusCheckRow{pending}}, false},
 		{"not-open → no wait", PRViewSnapshot{State: "MERGED", Mergeable: "MERGEABLE", MergeStateStatus: "BLOCKED", StatusCheckRollup: []PRStatusCheckRow{pending}}, false},
 	}
@@ -565,6 +572,94 @@ func TestDeterministicRunner_CIPending_ThenFails_Punts(t *testing.T) {
 	// that it is a punt, not a timeout, and not a merge.
 	if res.Reason == ReasonCIWaitTimeout {
 		t.Errorf("Reason = %q, want an early failure punt, not a CI-wait timeout", res.Reason)
+	}
+	if seq.mergeCalls != 0 {
+		t.Errorf("Merge must not be called when CI failed, got %d", seq.mergeCalls)
+	}
+}
+
+// ── Zero check runs created yet (Issue #1027) ─────────────────────────────
+//
+// pr-merge starts seconds after pr-create, before GitHub has created a single
+// check run, so the first snapshot is BLOCKED with an EMPTY rollup. Pre-#1027
+// that was neither "pending" (sawPending stayed false) nor structural, and the
+// runner punted `dirty-merge-state: BLOCKED` — the observed log line — while
+// the LLM skill paid to wait. The runner now waits a bounded grace window for
+// the first check run to appear, then the ordinary CI budget applies.
+
+func TestDeterministicRunner_NoChecksYet_WaitsThenMerges(t *testing.T) {
+	noChecks := PRViewSnapshot{State: "OPEN", Mergeable: "MERGEABLE", MergeStateStatus: "BLOCKED", ReviewDecision: ""}
+	pending := PRViewSnapshot{State: "OPEN", Mergeable: "MERGEABLE", MergeStateStatus: "BLOCKED", ReviewDecision: "", StatusCheckRollup: []PRStatusCheckRow{{Name: "ci", Conclusion: ""}}}
+	clean := PRViewSnapshot{State: "OPEN", Mergeable: "MERGEABLE", MergeStateStatus: "CLEAN", ReviewDecision: "", StatusCheckRollup: []PRStatusCheckRow{{Name: "ci", Conclusion: "SUCCESS"}}}
+	merged := PRViewSnapshot{State: "MERGED"}
+	seq := &sequenceGh{responses: []sequenceResp{
+		{snap: noChecks}, // initial fetch → BLOCKED, no check run exists yet
+		{snap: noChecks}, // wait poll 1 → still none
+		{snap: pending},  // wait poll 2 → first run created, in flight
+		{snap: pending},  // wait poll 3 → still running (past the grace window: a
+		{snap: pending},  // wait poll 4 →   seen check promotes to the full budget)
+		{snap: clean},    // wait poll 5 → green
+		{snap: merged},   // post-merge EC re-poll → MERGED
+	}}
+	r := newRunnerWithSeq(seq, 42, 10)
+	r.ciNoCheckGrace = 2
+
+	res, err := r.Run(context.Background(), 100, "owner/repo", "/tmp")
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if res.Path != PathMerged {
+		t.Fatalf("Path = %q (reason %q), want merged — a BLOCKED PR with no check run created yet is CI not started, not a dirty merge state (#1027)", res.Path, res.Reason)
+	}
+	if seq.mergeCalls != 1 {
+		t.Errorf("Merge call count = %d, want exactly 1", seq.mergeCalls)
+	}
+}
+
+func TestDeterministicRunner_NoChecksYet_GraceExpires_PuntsNoChecksCreated(t *testing.T) {
+	noChecks := PRViewSnapshot{State: "OPEN", Mergeable: "MERGEABLE", MergeStateStatus: "BLOCKED"}
+	seq := &sequenceGh{responses: []sequenceResp{{snap: noChecks}}} // no run ever appears
+	r := newRunnerWithSeq(seq, 42, 10)
+	r.ciNoCheckGrace = 2
+
+	res, err := r.Run(context.Background(), 100, "owner/repo", "/tmp")
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if res.Path != PathPunt {
+		t.Fatalf("Path = %q, want punt when no check run ever appears", res.Path)
+	}
+	if res.Reason != ReasonNoChecksCreated {
+		t.Errorf("Reason = %q, want %q — the punt must be attributable, not %q", res.Reason, ReasonNoChecksCreated, ReasonDirtyState)
+	}
+	// The grace window is a PREFIX of the CI budget, not the whole thing: a
+	// repo with no CI must not hold the deterministic path for all 10 polls.
+	if want := 1 + 2; seq.viewCalls != want {
+		t.Errorf("View calls = %d, want %d (initial fetch + grace polls only)", seq.viewCalls, want)
+	}
+	if seq.mergeCalls != 0 {
+		t.Errorf("Merge must not be called, got %d", seq.mergeCalls)
+	}
+}
+
+func TestDeterministicRunner_NoChecksYet_ThenFails_Punts(t *testing.T) {
+	noChecks := PRViewSnapshot{State: "OPEN", Mergeable: "MERGEABLE", MergeStateStatus: "BLOCKED"}
+	failed := PRViewSnapshot{State: "OPEN", Mergeable: "MERGEABLE", MergeStateStatus: "BLOCKED", StatusCheckRollup: []PRStatusCheckRow{{Name: "ci", Conclusion: "FAILURE"}}}
+	seq := &sequenceGh{responses: []sequenceResp{
+		{snap: noChecks}, // initial fetch
+		{snap: failed},   // wait poll 1 → the first run created already failed
+	}}
+	r := newRunnerWithSeq(seq, 42, 10)
+
+	res, err := r.Run(context.Background(), 100, "owner/repo", "/tmp")
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if res.Path != PathPunt {
+		t.Fatalf("Path = %q, want punt when the first check run fails", res.Path)
+	}
+	if res.Reason == ReasonNoChecksCreated || res.Reason == ReasonCIWaitTimeout {
+		t.Errorf("Reason = %q, want a hard-blocker punt, not a wait outcome", res.Reason)
 	}
 	if seq.mergeCalls != 0 {
 		t.Errorf("Merge must not be called when CI failed, got %d", seq.mergeCalls)
