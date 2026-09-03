@@ -1,70 +1,148 @@
 import { z } from "zod";
-import { flexEnum } from "./helpers.js";
 
 /**
- * KnowledgeTypeSchema — enum of knowledge entry types.
+ * KnowledgeTypeSchema — the entry types this codebase scaffolds and routes on.
  *
  * Values:
- * - decision: An architectural decision record (ADR)
- * - prd: A product requirements document
+ * - prd: A product requirements document (PRD.md)
+ * - decisions: The per-issue decision log (decisions.md)
+ * - adr: A single formal architecture decision record
+ * - architecture: A repo-wide architectural pattern or principle
+ * - glossary: A domain term definition
+ * - runbook: An operational procedure
+ * - post-mortem: An incident write-up
  * - conversation: A recorded design conversation
- * - adr: Formal ADR (more structured than decision)
  * - reference: External reference or link
  * - note: Freeform technical note
  *
- * Uses flexEnum for hyphen-normalization defense against AI agent output
- * variations (e.g., "decision" and "decision" both accepted).
+ * This enum is advisory: it names the types the pipeline itself produces and
+ * knows how to file. The frontmatter contract in KnowledgeEntrySchema accepts
+ * ANY non-empty `type` string, matching the Go parser, because an OKF consumer
+ * tolerates a type it does not understand rather than rejecting the entry.
+ *
+ * A plain enum, deliberately not flexEnum: that helper normalizes hyphens to
+ * underscores, which would rewrite `post-mortem` into a value the Go binary
+ * never writes and split the vocabulary across the two layers.
  */
-export const KnowledgeTypeSchema = flexEnum([
-  "decision",
+export const KnowledgeTypeSchema = z.enum([
   "prd",
-  "conversation",
+  "decisions",
   "adr",
+  "architecture",
+  "glossary",
+  "runbook",
+  "post-mortem",
+  "conversation",
   "reference",
   "note",
-] as const);
+]);
 
 export type KnowledgeType = z.infer<typeof KnowledgeTypeSchema>;
 
 /**
- * KnowledgeEntrySchema — metadata for a single knowledge base entry.
+ * ActorSchema — the actor convention shared by `generated.by` and
+ * `verified[].by`.
  *
- * Represents the structured metadata about a knowledge artifact
- * (PRD.md, decisions.md, or other future knowledge files). This schema
- * validates the metadata object, not the raw Markdown file content.
+ * `<producer>/<version>` for agents (e.g. `feature-dev/claude-sonnet-5`),
+ * `human:<id>` for a person, `process:<id>` for a deterministic writer.
+ * Mirrors actorRe in internal/knowledge/okf/okf.go — every actor the binary
+ * writes is built from stage and model identifiers, never from model prose.
+ */
+export const ActorSchema = z
+  .string()
+  .regex(/^([a-z0-9._-]+\/[A-Za-z0-9._-]+|human:\S+|process:\S+)$/, {
+    message: "actor must be <producer>/<version>, human:<id> or process:<id>",
+  });
+
+/**
+ * ProvenanceSchema — who produced or confirmed an entry, and when.
  *
- * Knowledge files do not use YAML frontmatter — this schema validates
- * in-memory metadata objects consistent with how KnowledgeService returns
- * a ScaffoldResult with metadata fields.
+ * The OKF v0.2 `generated` object, and each element of `verified`.
+ */
+export const ProvenanceSchema = z
+  .object({
+    /** Actor that produced or confirmed the entry */
+    by: ActorSchema,
+    /** ISO 8601 datetime of the event */
+    at: z.string().datetime().optional(),
+  })
+  .passthrough();
+
+export type Provenance = z.infer<typeof ProvenanceSchema>;
+
+/**
+ * SourceSchema — material an entry was derived from.
+ */
+export const SourceSchema = z
+  .object({
+    /** https:// URL, bundle-absolute path, or repository-relative path */
+    resource: z.string().min(1),
+    /** Optional human-readable label */
+    title: z.string().optional(),
+  })
+  .passthrough();
+
+export type Source = z.infer<typeof SourceSchema>;
+
+/**
+ * KnowledgeStatusSchema — lifecycle status of a knowledge entry.
  *
- * Schema version: 1.0
+ * `superseded` was deleted in favour of `deprecated` alongside
+ * `superseded_by`; it is rejected rather than aliased.
+ */
+export const KnowledgeStatusSchema = z.enum(["draft", "stable", "deprecated"]);
+
+export type KnowledgeStatus = z.infer<typeof KnowledgeStatusSchema>;
+
+/** Status an entry has when its frontmatter omits the field. */
+export const DEFAULT_KNOWLEDGE_STATUS: KnowledgeStatus = "stable";
+
+/** Open Knowledge Format revision whose field vocabulary this contract implements. */
+export const OKF_VERSION = "0.2";
+
+/**
+ * KnowledgeEntrySchema — the single knowledge frontmatter contract.
  *
- * @see docs/KNOWLEDGE_BASE.md for knowledge directory structure
+ * Every non-reserved `.md` under the knowledge root carries this block, with
+ * `type` required. The field set mirrors FrontmatterBlock in
+ * internal/knowledge/okf/frontmatter.go exactly — the two layers had drifted
+ * into disagreeing contracts, and this schema is the TypeScript half of the
+ * one that replaced them.
+ *
+ * Unknown keys pass through: an OKF consumer tolerates what it does not
+ * understand. `created`, `updated` and `superseded` are deleted — `generated`
+ * carries the write timestamp and `verified` carries the review history.
+ *
+ * Schema version: 2.0
+ *
+ * @see docs/KNOWLEDGE_BASE.md for the contract and the actor convention
  */
 export const KnowledgeEntrySchema = z
   .object({
+    /** Entry kind. Required; unknown values are accepted for forward compatibility. */
+    type: z.string().min(1),
     /** Human-readable title of the knowledge entry */
-    title: z.string().min(1),
-    /** Type of knowledge entry */
-    type: KnowledgeTypeSchema,
-    /** ISO 8601 datetime when entry was created */
-    created: z.string().datetime(),
-    /** ISO 8601 datetime of last update. Equal to created if not yet updated. */
-    updated: z.string().datetime(),
+    title: z.string().min(1).optional(),
+    /** One-line summary used in generated index pages */
+    description: z.string().optional(),
     /** Optional topic tags for discovery */
     tags: z.array(z.string()).optional(),
-    /** GitHub issue numbers this entry relates to */
-    related_issues: z.array(z.number().int().positive()).optional(),
-    /** Source file paths related to this entry */
-    related_files: z.array(z.string()).optional(),
-    /** Repository slugs this workspace-level entry is scoped to */
-    repos: z.array(z.string()).optional(),
     /** Related issue/PR references, e.g. ['#2090', '#2091'] */
     related: z.array(z.string()).optional(),
-    /** Lifecycle status of this knowledge entry */
-    status: z.enum(["draft", "stable", "superseded"]).optional(),
-    /** Issue number that supersedes this entry (when status=superseded) */
+    /** Repository slugs this entry is scoped to; empty means workspace-wide */
+    repos: z.array(z.string()).optional(),
+    /** Lifecycle status; absent means DEFAULT_KNOWLEDGE_STATUS */
+    status: KnowledgeStatusSchema.optional(),
+    /** Reference to the entry that replaces this one (with status=deprecated) */
     superseded_by: z.string().optional(),
+    /** Actor that produced this entry, and when */
+    generated: ProvenanceSchema.optional(),
+    /** Confirmation events on this entry, oldest first */
+    verified: z.array(ProvenanceSchema).optional(),
+    /** Material this entry was derived from */
+    sources: z.array(SourceSchema).optional(),
+    /** ISO 8601 datetime past which the entry is no longer current guidance */
+    stale_after: z.string().datetime().optional(),
   })
   .passthrough();
 

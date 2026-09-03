@@ -9,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	okf "github.com/nightgauge/nightgauge/internal/knowledge/okf"
 )
 
 // ValidCategories is the exhaustive list of allowed workspace knowledge categories.
@@ -122,13 +124,19 @@ func Create(input CreateInput) (CreateResult, error) {
 		return CreateResult{}, fmt.Errorf("create knowledge directory: %w", err)
 	}
 
-	prdContent := generatePRD(input.Repos, input.Slug)
+	prdContent, err := generatePRD(input.Repos, input.Slug)
+	if err != nil {
+		return CreateResult{}, err
+	}
 	if err := os.WriteFile(result.PRDPath, []byte(prdContent), 0644); err != nil {
 		return CreateResult{}, fmt.Errorf("write PRD.md: %w", err)
 	}
 	result.FilesCreated = append(result.FilesCreated, "PRD.md")
 
-	decisionsContent := generateDecisions(input.Repos, input.Slug)
+	decisionsContent, err := generateDecisions(input.Repos, input.Slug)
+	if err != nil {
+		return CreateResult{}, err
+	}
 	if err := os.WriteFile(result.DecisionsPath, []byte(decisionsContent), 0644); err != nil {
 		return CreateResult{}, fmt.Errorf("write decisions.md: %w", err)
 	}
@@ -137,16 +145,19 @@ func Create(input CreateInput) (CreateResult, error) {
 	return result, nil
 }
 
-func generatePRD(repos []string, slug string) string {
+func generatePRD(repos []string, slug string) (string, error) {
 	var sb strings.Builder
 
-	if len(repos) > 0 {
-		sb.WriteString("---\nrepos:\n")
-		for _, r := range repos {
-			fmt.Fprintf(&sb, "  - %s\n", r)
-		}
-		sb.WriteString("---\n\n")
+	fm, err := okf.ScaffoldFrontmatter(
+		okf.TypePRD,
+		okf.WithTitle(fmt.Sprintf("PRD: %s", slug)),
+		okf.WithRepos(repos...),
+	)
+	if err != nil {
+		return "", err
 	}
+	sb.WriteString(fm)
+	sb.WriteString("\n")
 
 	fmt.Fprintf(&sb, "# PRD: %s\n\n", slug)
 	sb.WriteString("## Summary\n\n")
@@ -158,24 +169,27 @@ func generatePRD(repos []string, slug string) string {
 	sb.WriteString("## Technical Notes\n\n")
 	sb.WriteString("<!-- TODO: Add technical context -->\n")
 
-	return sb.String()
+	return sb.String(), nil
 }
 
-func generateDecisions(repos []string, slug string) string {
+func generateDecisions(repos []string, slug string) (string, error) {
 	var sb strings.Builder
 
-	if len(repos) > 0 {
-		sb.WriteString("---\nrepos:\n")
-		for _, r := range repos {
-			fmt.Fprintf(&sb, "  - %s\n", r)
-		}
-		sb.WriteString("---\n\n")
+	fm, err := okf.ScaffoldFrontmatter(
+		okf.TypeDecisions,
+		okf.WithTitle(fmt.Sprintf("Decisions: %s", slug)),
+		okf.WithRepos(repos...),
+	)
+	if err != nil {
+		return "", err
 	}
+	sb.WriteString(fm)
+	sb.WriteString("\n")
 
 	fmt.Fprintf(&sb, "# Decisions: %s\n\n", slug)
 	sb.WriteString("## Architecture Decisions\n\n")
 	sb.WriteString("| Decision | Options Considered | Selected | Rationale |\n")
 	sb.WriteString("| -------- | ------------------ | -------- | --------- |\n")
 
-	return sb.String()
+	return sb.String(), nil
 }

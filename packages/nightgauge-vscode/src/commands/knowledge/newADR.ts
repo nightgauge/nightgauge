@@ -23,9 +23,10 @@ function buildAdrTemplate(numStr: string, title: string): string {
   return `---
 type: adr
 title: "${numStr} — ${title}"
-created: ${now}
-updated: ${now}
 status: draft
+generated:
+  by: process:vscode-new-adr
+  at: "${now}"
 ---
 
 # ADR ${numStr}: ${title}

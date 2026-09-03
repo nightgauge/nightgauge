@@ -473,35 +473,130 @@ None — all stages completed successfully.
 
 ## Frontmatter
 
-Repo-level knowledge files (`PRD.md`, `decisions.md`) support optional YAML
-frontmatter delimited by `---` sentinels. Frontmatter is opt-in — files without
-it parse correctly and are treated as having no structured metadata.
+Every non-reserved `.md` under the knowledge root carries a YAML frontmatter
+block delimited by `---` sentinels. There is **one** contract, shared by the Go
+binary (`internal/knowledge/okf`) and the TypeScript SDK
+(`KnowledgeEntrySchema`); the two layers had drifted into disagreeing
+contracts — repo-topic entries carried `type`/`created`/`tags`/`status`,
+issue-tier `PRD.md` and `decisions.md` carried nothing at all, and the SDK
+schema's comment claimed knowledge files did not use frontmatter — and this
+replaced both.
 
-### Supported frontmatter fields (repo-level)
+The field vocabulary is that of the [Open Knowledge Format
+v0.2](https://github.com/GoogleCloudPlatform/open-knowledge-format) (Google
+Cloud, Apache-2.0). **We adopt the vocabulary, not the reference tooling**: the
+spec is v0.2 from a single vendor and already broke compatibility once, three
+months after publication. Fields are cheap to carry; tooling is not something to
+build around.
+
+### The contract
 
 ```yaml
 ---
+type: decisions # required
+title: "Decisions: #2090 — Migrate auth"
+description: One-line summary used in generated index pages
 tags:
   - auth
   - pipeline
 related:
   - "#2090"
-  - "#2091"
-status: stable # draft | stable | superseded
-superseded_by: "#2100" # set when status: superseded
+repos: # workspace-level scope; empty means all repos
+  - nightgauge
+status: stable # draft | stable | deprecated  (default: stable)
+superseded_by: "#2100" # set alongside status: deprecated
+generated:
+  by: feature-dev/claude-sonnet-5
+  at: "2026-09-03T10:00:00Z"
+verified:
+  - by: process:retro
+    at: "2026-09-04T10:00:00Z"
+  - by: human:octocat
+    at: "2026-09-05T10:00:00Z"
+sources:
+  - resource: https://github.com/nightgauge/nightgauge/issues/2090
+    title: The issue
+  - resource: /architecture/go-ts-parity.md
+stale_after: "2027-01-01T00:00:00Z"
 ---
 ```
 
-| Field           | Type     | Description                                                                   |
-| --------------- | -------- | ----------------------------------------------------------------------------- |
-| `tags`          | string[] | Topic tags for discovery                                                      |
-| `related`       | string[] | Related issue/PR references (display format, e.g. `"#2090"`)                  |
-| `status`        | enum     | Lifecycle status: `draft`, `stable`, or `superseded`                          |
-| `superseded_by` | string   | Issue/PR reference that supersedes this entry (use with `status: superseded`) |
+| Field           | Type         | Description                                                                  |
+| --------------- | ------------ | ---------------------------------------------------------------------------- |
+| `type`          | string       | **Required.** Entry kind. Unknown values are accepted (see tolerance below). |
+| `title`         | string       | Human-readable title; falls back to the H1 when absent                       |
+| `description`   | string       | One-line summary used in generated `index.md` pages                          |
+| `tags`          | string[]     | Topic tags for discovery                                                     |
+| `related`       | string[]     | Related issue/PR references (display format, e.g. `"#2090"`)                 |
+| `repos`         | string[]     | Repository scope for workspace entries; empty means workspace-wide           |
+| `status`        | enum         | `draft`, `stable` or `deprecated`. Absent means `stable`.                    |
+| `superseded_by` | string       | Reference to the entry that replaces this one; use with `status: deprecated` |
+| `generated`     | provenance   | Actor that produced the entry, and when                                      |
+| `verified`      | provenance[] | Confirmation events, oldest first                                            |
+| `sources`       | source[]     | Material the entry was derived from: `{resource, title?}`                    |
+| `stale_after`   | RFC3339      | Instant past which the entry stops being current guidance                    |
 
-All fields are optional. Unknown fields are preserved in `Raw` for forward
-compatibility. The `repos` field (workspace-level scope declaration) continues to
-work unchanged — see [Workspace Knowledge](#workspace-knowledge) for that use case.
+`type` is the only required field. Everything else is optional, and unknown
+keys are preserved (in `Raw` on the Go side, via `.passthrough()` on the
+TypeScript side).
+
+**Consumer tolerance.** Unknown frontmatter keys, unknown `type` values and
+missing optional fields never fail parsing. An OKF consumer tolerates what it
+does not understand rather than rejecting the entry — and the two layers must
+agree on that, or an entry a future producer writes parses in one and fails in
+the other.
+
+**`created` and `updated` are deleted, not aliased.** `generated.at` is the
+write timestamp — one stamp, not two that drift apart. The lifecycle status
+that `deprecated` replaced is likewise rejected outright, with an error naming
+the file, so an unmigrated entry surfaces instead of silently ranking as an
+unknown status; migrate those to `status: deprecated` alongside
+`superseded_by`.
+
+### The actor convention
+
+`generated.by` and every `verified[].by` is an actor string in one of three
+forms:
+
+| Form                   | Meaning                      | Example                            |
+| ---------------------- | ---------------------------- | ---------------------------------- |
+| `<producer>/<version>` | An agent stage and its model | `feature-planning/claude-sonnet-5` |
+| `human:<id>`           | A person                     | `human:octocat`                    |
+| `process:<id>`         | A deterministic writer       | `process:retro`                    |
+
+Validated against `^([a-z0-9._-]+/[A-Za-z0-9._-]+|human:\S+|process:\S+)$` in
+both layers (`okf.ValidActor` / `ActorSchema`).
+
+**Actor strings are constructed, never quoted.** The binary builds them from
+the stage name and served model it reads out of the pipeline context file
+(`okf.StageActor`), or from a fixed process name (`okf.ProcessActor`). A value
+is never taken from model output or issue text — otherwise an entry could claim
+any provenance it liked, and the trust tier built on top of it would be
+worthless.
+
+### What the scaffold stamps
+
+Every scaffold path — issue-tier `PRD.md` and `decisions.md`, repo-topic
+templates, and the workspace scaffolder — writes the block through one
+renderer (`okf.ScaffoldFrontmatter` / `scaffoldFrontmatter`), stamping:
+
+```yaml
+---
+type: prd
+title: "PRD: #2090 — Migrate auth"
+status: draft
+generated:
+  by: process:knowledge-scaffold
+  at: "2026-09-03T10:00:00Z"
+---
+```
+
+Scaffolded content is a template nobody has reviewed, so it starts as a
+`draft`. A stage or a person promotes it later.
+
+Frontmatter is metadata, never substance: the boilerplate check behind
+`knowledge prune` strips the block before measuring content, so a scaffolded
+but untouched directory stays prunable.
 
 ### Title line convention
 
@@ -1072,14 +1167,20 @@ Use workspace knowledge for content that spans multiple repositories:
 | `product/`    | Product roadmaps, personas, and product-wide decisions             |
 | `cross-repo/` | Architecture decisions and features spanning multiple repositories |
 
-### Frontmatter (Workspace Files Only)
+### Frontmatter: the `repos` field
 
-Unlike per-repository knowledge files (which do not use frontmatter), workspace
-knowledge files support an optional YAML frontmatter block. The `repos` field
-declares which repositories the entry applies to:
+Workspace knowledge files carry the same single contract as every other entry
+(see [Frontmatter](#frontmatter)). The field that matters at this tier is
+`repos`, which declares which repositories the entry applies to:
 
 ```yaml
 ---
+type: prd
+title: "PRD: unified-auth"
+status: draft
+generated:
+  by: process:knowledge-scaffold
+  at: "2026-09-03T10:00:00Z"
 repos:
   - nightgauge
   - acme-platform
@@ -1093,15 +1194,17 @@ matching `repositories[].name` in `nightgauge-workspace.yaml`.
 The frontmatter block must appear at the very top of the file (before the H1
 title) and must be valid YAML.
 
-> **Note:** This frontmatter diverges intentionally from the per-repo knowledge
-> schema, which explicitly does not use frontmatter (see
-> [Frontmatter](#frontmatter) above). Workspace files require the `repos` field
-> as machine-readable scope metadata that cannot be expressed as a Markdown
-> section. The no-frontmatter rule applies only to repo-level files.
+> **Note:** `repos` is the only field whose meaning is tier-specific — it is
+> machine-readable scope metadata that cannot be expressed as a Markdown
+> section, and repo-level entries leave it empty. Workspace and repo tiers
+> otherwise share one contract; they used to diverge, and that divergence is
+> what the contract removed.
 
 ### Parsing
 
-Frontmatter is parsed by `internal/knowledge/parser.go` (Go deterministic layer).
+Frontmatter is parsed by `internal/knowledge/okf` (Go deterministic layer),
+re-exported from `internal/knowledge` and mirrored by `KnowledgeEntrySchema` in
+the SDK.
 
 **`ParseFrontmatter(content string) (*FrontmatterBlock, error)`**
 
@@ -1150,6 +1253,12 @@ repos:
 
 ```markdown
 ---
+type: decisions
+title: "Decisions: {title}"
+status: draft
+generated:
+  by: process:knowledge-scaffold
+  at: "{timestamp}"
 repos:
   - repo1
 ---
@@ -1180,14 +1289,14 @@ traceability: `{issueNumber}-{slug}` (e.g., `1695-workspace-knowledge-schema`).
 
 ### Schema Comparison: Workspace vs. Repo-Level
 
-| Property             | Repo-Level                                              | Workspace-Level                                                                                             |
-| -------------------- | ------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| Location             | `{repo}/.nightgauge/knowledge/`                         | `<workspace-root>/.nightgauge/knowledge/`                                                                   |
-| Categories           | `epics/`, `features/`                                   | `product/`, `cross-repo/`, `architecture/`                                                                  |
-| Frontmatter          | Optional (`tags`, `related`, `status`, `superseded_by`) | Optional (`repos` field only)                                                                               |
-| Scope                | Single repository                                       | Multiple repositories                                                                                       |
-| Pipeline scaffolding | Automatic (when enabled)                                | Automatic via `nightgauge knowledge workspace-init` (auto-run at issue-pickup when `workspace_scoped=true`) |
-| Slug source          | GitHub issue title                                      | Topic name or issue title                                                                                   |
+| Property             | Repo-Level                                                      | Workspace-Level                                                                                             |
+| -------------------- | --------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| Location             | `{repo}/.nightgauge/knowledge/`                                 | `<workspace-root>/.nightgauge/knowledge/`                                                                   |
+| Categories           | `epics/`, `features/`                                           | `product/`, `cross-repo/`, `architecture/`                                                                  |
+| Frontmatter          | One contract (`type` required; see [Frontmatter](#frontmatter)) | Same contract; `repos` declares the repository scope                                                        |
+| Scope                | Single repository                                               | Multiple repositories                                                                                       |
+| Pipeline scaffolding | Automatic (when enabled)                                        | Automatic via `nightgauge knowledge workspace-init` (auto-run at issue-pickup when `workspace_scoped=true`) |
+| Slug source          | GitHub issue title                                              | Topic name or issue title                                                                                   |
 
 ### Anchor Repo
 

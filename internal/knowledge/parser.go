@@ -1,40 +1,94 @@
-// Package knowledge implements workspace-level knowledge file parsing and validation.
-// Knowledge files use optional YAML frontmatter delimited by --- sentinels to declare
-// which repositories a knowledge entry applies to. See docs/KNOWLEDGE_BASE.md for the
-// full schema.
+// Package knowledge implements knowledge base scaffolding, indexing,
+// validation and recall. Knowledge files carry YAML frontmatter delimited by
+// --- sentinels using the Open Knowledge Format v0.2 field vocabulary — one
+// contract shared by the Go binary and the TypeScript SDK, implemented in
+// internal/knowledge/okf and re-exported here. See docs/KNOWLEDGE_BASE.md for
+// the full schema.
 package knowledge
 
 import (
 	"fmt"
 	"strings"
 
-	"gopkg.in/yaml.v3"
+	"github.com/nightgauge/nightgauge/internal/knowledge/okf"
 )
 
-// FrontmatterBlock holds parsed YAML frontmatter from a knowledge file.
-// When Repos is nil or empty, the entry applies to all repositories in the workspace.
-type FrontmatterBlock struct {
-	// Repos lists the repository names this knowledge entry applies to.
-	// Nil or empty means workspace-wide (applies to all repos).
-	Repos []string `yaml:"repos"`
+// The frontmatter contract lives in the leaf package internal/knowledge/okf so
+// that packages this one depends on can also write conformant entries. These
+// aliases keep it addressable as knowledge.X at every existing call site.
+type (
+	// FrontmatterBlock is the parsed frontmatter of a knowledge entry.
+	FrontmatterBlock = okf.FrontmatterBlock
+	// Provenance records who produced or confirmed an entry and when.
+	Provenance = okf.Provenance
+	// Source records material an entry was derived from.
+	Source = okf.Source
+)
 
-	// Tags holds optional topic tags for discovery.
-	Tags []string `yaml:"tags"`
+const (
+	// OKFVersion is the Open Knowledge Format revision this contract implements.
+	OKFVersion = okf.OKFVersion
 
-	// Related holds related issue/PR references, e.g. ["#2090", "#2091"].
-	Related []string `yaml:"related"`
+	// StatusDraft marks an entry nobody has reviewed.
+	StatusDraft = okf.StatusDraft
+	// StatusStable marks an entry treated as current guidance.
+	StatusStable = okf.StatusStable
+	// StatusDeprecated marks an entry kept for history only.
+	StatusDeprecated = okf.StatusDeprecated
+	// DefaultStatus is the status of an entry whose frontmatter omits it.
+	DefaultStatus = okf.DefaultStatus
 
-	// Status is the lifecycle status of this knowledge entry: draft, stable, or superseded.
-	// An unrecognized value is treated as a warning, not a hard error, for forward compatibility.
-	Status string `yaml:"status"`
+	// ScaffoldActor is the actor every deterministic scaffold path stamps.
+	ScaffoldActor = okf.ScaffoldActor
 
-	// SupersededBy holds the issue/PR reference that supersedes this entry (when Status=superseded).
-	SupersededBy string `yaml:"superseded_by"`
+	// Entry types stamped by the scaffold paths.
+	TypePRD          = okf.TypePRD
+	TypeDecisions    = okf.TypeDecisions
+	TypeIndex        = okf.TypeIndex
+	TypeLog          = okf.TypeLog
+	TypeArchitecture = okf.TypeArchitecture
+	TypeGlossary     = okf.TypeGlossary
+	TypeRunbook      = okf.TypeRunbook
+	TypePostMortem   = okf.TypePostMortem
+)
 
-	// Raw holds the full parsed frontmatter as a map for forward-compatibility
-	// with future frontmatter fields.
-	Raw map[string]interface{}
-}
+// ErrStatusSuperseded is returned when an entry still carries the deleted
+// `superseded` status.
+var ErrStatusSuperseded = okf.ErrStatusSuperseded
+
+var (
+	// ParseFrontmatter extracts and parses YAML frontmatter from markdown.
+	ParseFrontmatter = okf.ParseFrontmatter
+	// ParseFrontmatterFile parses a file's frontmatter, naming it on failure.
+	ParseFrontmatterFile = okf.ParseFrontmatterFile
+	// SplitFrontmatter separates a document into frontmatter YAML and body.
+	SplitFrontmatter = okf.SplitFrontmatter
+	// RenderFrontmatter serialises a block back to a --- delimited document.
+	RenderFrontmatter = okf.RenderFrontmatter
+	// WithFrontmatter prefixes a body with a rendered block.
+	WithFrontmatter = okf.WithFrontmatter
+	// ScaffoldFrontmatter renders the block every scaffolded entry carries.
+	ScaffoldFrontmatter = okf.ScaffoldFrontmatter
+	// WithTags, WithTitle and WithRepos are ScaffoldFrontmatter options.
+	WithTags  = okf.WithTags
+	WithTitle = okf.WithTitle
+	WithRepos = okf.WithRepos
+
+	// ValidActor reports whether s matches the actor convention.
+	ValidActor = okf.ValidActor
+	// ValidateActor returns an error naming a malformed actor string.
+	ValidateActor = okf.ValidateActor
+	// StageActor builds `<stage>/<served-model>`.
+	StageActor = okf.StageActor
+	// ProcessActor builds `process:<id>`.
+	ProcessActor = okf.ProcessActor
+	// HumanActor builds `human:<id>`.
+	HumanActor = okf.HumanActor
+	// NewProvenance builds a Provenance stamped at the current time.
+	NewProvenance = okf.NewProvenance
+	// NowStamp is the current time as an RFC3339 provenance timestamp.
+	NowStamp = okf.NowStamp
+)
 
 // WorkspaceRepository is a minimal interface for repo name validation.
 // The full struct lives in the TypeScript layer; Go uses this subset.
@@ -57,130 +111,6 @@ type ValidationError struct {
 
 func (e *ValidationError) Error() string {
 	return fmt.Sprintf("unknown repository names in frontmatter repos field: %s", strings.Join(e.UnknownRepos, ", "))
-}
-
-// ParseFrontmatter extracts and parses YAML frontmatter from markdown content.
-// Frontmatter must be delimited by --- on its own line at the start of the file.
-// Returns nil with no error when no frontmatter is present.
-// Returns an error when frontmatter is present but the YAML is malformed.
-func ParseFrontmatter(content string) (*FrontmatterBlock, error) {
-	content = strings.TrimLeft(content, "\r\n")
-
-	// Frontmatter must start with --- at the very beginning of the file.
-	if !strings.HasPrefix(content, "---") {
-		return nil, nil
-	}
-
-	// Find the closing --- sentinel. Skip the opening --- line.
-	rest := content[3:]
-	// Allow optional carriage return
-	rest = strings.TrimLeft(rest, "\r\n")
-
-	// The closing --- must appear as a line by itself.
-	// We search for \n--- or ---\n to find the terminator.
-	closeIdx := findClosingSentinel(rest)
-	if closeIdx < 0 {
-		return nil, fmt.Errorf("frontmatter: missing closing '---' sentinel")
-	}
-
-	yamlContent := rest[:closeIdx]
-
-	// Empty frontmatter block (--- \n ---) is valid — no repos declared.
-	if strings.TrimSpace(yamlContent) == "" {
-		return &FrontmatterBlock{}, nil
-	}
-
-	// Parse YAML into raw map for forward compatibility.
-	var raw map[string]interface{}
-	if err := yaml.Unmarshal([]byte(yamlContent), &raw); err != nil {
-		return nil, fmt.Errorf("frontmatter: malformed YAML: %w", err)
-	}
-
-	block := &FrontmatterBlock{Raw: raw}
-
-	// Extract repos field specifically.
-	if reposRaw, ok := raw["repos"]; ok && reposRaw != nil {
-		switch v := reposRaw.(type) {
-		case []interface{}:
-			for i, item := range v {
-				s, ok := item.(string)
-				if !ok {
-					return nil, fmt.Errorf("frontmatter: repos[%d] must be a string, got %T", i, item)
-				}
-				block.Repos = append(block.Repos, s)
-			}
-		default:
-			return nil, fmt.Errorf("frontmatter: repos must be a list of strings, got %T", reposRaw)
-		}
-	}
-
-	// Extract tags field.
-	if tagsRaw, ok := raw["tags"]; ok && tagsRaw != nil {
-		switch v := tagsRaw.(type) {
-		case []interface{}:
-			for i, item := range v {
-				s, ok := item.(string)
-				if !ok {
-					return nil, fmt.Errorf("frontmatter: tags[%d] must be a string, got %T", i, item)
-				}
-				block.Tags = append(block.Tags, s)
-			}
-		default:
-			return nil, fmt.Errorf("frontmatter: tags must be a list of strings, got %T", tagsRaw)
-		}
-	}
-
-	// Extract related field (issue/PR references like "#2090").
-	if relatedRaw, ok := raw["related"]; ok && relatedRaw != nil {
-		switch v := relatedRaw.(type) {
-		case []interface{}:
-			for i, item := range v {
-				s, ok := item.(string)
-				if !ok {
-					return nil, fmt.Errorf("frontmatter: related[%d] must be a string, got %T", i, item)
-				}
-				block.Related = append(block.Related, s)
-			}
-		default:
-			return nil, fmt.Errorf("frontmatter: related must be a list of strings, got %T", relatedRaw)
-		}
-	}
-
-	// Extract status field. Unknown values are accepted for forward compatibility.
-	if statusRaw, ok := raw["status"]; ok && statusRaw != nil {
-		s, ok := statusRaw.(string)
-		if !ok {
-			return nil, fmt.Errorf("frontmatter: status must be a string, got %T", statusRaw)
-		}
-		block.Status = s
-	}
-
-	// Extract superseded_by field.
-	if sbRaw, ok := raw["superseded_by"]; ok && sbRaw != nil {
-		s, ok := sbRaw.(string)
-		if !ok {
-			return nil, fmt.Errorf("frontmatter: superseded_by must be a string, got %T", sbRaw)
-		}
-		block.SupersededBy = s
-	}
-
-	return block, nil
-}
-
-// findClosingSentinel locates the position of the closing --- sentinel in the
-// YAML body (the text after the opening --- line has been consumed).
-// Returns the index of the start of the --- line, or -1 if not found.
-func findClosingSentinel(body string) int {
-	lines := strings.Split(body, "\n")
-	pos := 0
-	for _, line := range lines {
-		trimmed := strings.TrimRight(line, "\r")
-		if trimmed == "---" {
-			return pos
-		}
-		pos += len(line) + 1 // +1 for the \n
-	}
-	return -1
 }
 
 // ValidateRepos checks that every repo name in repoNames is declared in the

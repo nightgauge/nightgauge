@@ -541,3 +541,100 @@ func TestScaffoldWithConfig_IdempotentVsDisabled_DistinctSkipReasons(t *testing.
 		t.Errorf("idempotent and disabled skips should have different SkipReason values; both got %q", second.SkipReason)
 	}
 }
+
+// TestScaffold_FrontmatterContract pins the issue-tier half of the single
+// frontmatter contract: PRD.md and decisions.md are no longer bare markdown.
+func TestScaffold_FrontmatterContract(t *testing.T) {
+	root := t.TempDir()
+
+	res, err := knowledge.Scaffold(root, 4242, "Add photo upload", nil)
+	if err != nil {
+		t.Fatalf("Scaffold: %v", err)
+	}
+
+	for _, tc := range []struct {
+		path     string
+		wantType string
+	}{
+		{res.PRDPath, knowledge.TypePRD},
+		{res.DecisionsPath, knowledge.TypeDecisions},
+	} {
+		data, err := os.ReadFile(filepath.Join(root, tc.path))
+		if err != nil {
+			t.Fatalf("read %s: %v", tc.path, err)
+		}
+		if !strings.HasPrefix(string(data), "---\n") {
+			t.Errorf("%s does not open with a frontmatter block:\n%s", tc.path, string(data))
+		}
+		block, err := knowledge.ParseFrontmatter(string(data))
+		if err != nil {
+			t.Fatalf("parse %s: %v", tc.path, err)
+		}
+		if block == nil {
+			t.Fatalf("%s carries no frontmatter", tc.path)
+		}
+		if block.Type != tc.wantType {
+			t.Errorf("%s type = %q, want %q", tc.path, block.Type, tc.wantType)
+		}
+		if block.Generated == nil || block.Generated.By == "" || block.Generated.At == "" {
+			t.Errorf("%s generated = %+v, want a populated by/at", tc.path, block.Generated)
+		} else if !knowledge.ValidActor(block.Generated.By) {
+			t.Errorf("%s generated.by = %q is not a valid actor", tc.path, block.Generated.By)
+		}
+		if block.Status != knowledge.StatusDraft {
+			t.Errorf("%s status = %q, want %q", tc.path, block.Status, knowledge.StatusDraft)
+		}
+		// The body must be intact behind the block.
+		if !strings.Contains(string(data), "# ") {
+			t.Errorf("%s lost its body", tc.path)
+		}
+	}
+}
+
+// TestScaffoldRepoTopic_FrontmatterContract pins the repo-topic half: the
+// templates carry `generated` in place of the deleted `created` field.
+func TestScaffoldRepoTopic_FrontmatterContract(t *testing.T) {
+	root := t.TempDir()
+
+	for _, topic := range knowledge.ValidRepoTopicTypes {
+		res, err := knowledge.ScaffoldRepoTopic(root, topic, "some-slug")
+		if err != nil {
+			t.Fatalf("ScaffoldRepoTopic(%s): %v", topic, err)
+		}
+		data, err := os.ReadFile(filepath.Join(root, res.FilePath))
+		if err != nil {
+			t.Fatalf("read %s: %v", res.FilePath, err)
+		}
+		if strings.Contains(string(data), "created:") {
+			t.Errorf("%s still emits the deleted `created` field:\n%s", res.FilePath, string(data))
+		}
+		block, err := knowledge.ParseFrontmatter(string(data))
+		if err != nil {
+			t.Fatalf("parse %s: %v", res.FilePath, err)
+		}
+		if block == nil || block.Type != string(topic) {
+			t.Errorf("%s type = %+v, want %q", res.FilePath, block, topic)
+		}
+		if block.Generated == nil || !knowledge.ValidActor(block.Generated.By) {
+			t.Errorf("%s generated = %+v", res.FilePath, block.Generated)
+		}
+	}
+}
+
+// TestPruneEmpty_IgnoresFrontmatter guards the interaction the contract
+// introduces: a scaffolded-but-untouched directory is still boilerplate, so
+// frontmatter keys must not read as substance and keep it alive forever.
+func TestPruneEmpty_IgnoresFrontmatter(t *testing.T) {
+	root := t.TempDir()
+	if _, err := knowledge.Scaffold(root, 4243, "Untouched entry", nil); err != nil {
+		t.Fatalf("Scaffold: %v", err)
+	}
+
+	pruned, err := knowledge.PruneEmpty(root, true)
+	if err != nil {
+		t.Fatalf("PruneEmpty: %v", err)
+	}
+	if len(pruned) != 1 {
+		t.Fatalf("expected the untouched scaffold to be prunable, got %v", pruned)
+	}
+}

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nightgauge/nightgauge/internal/knowledge/okf"
 	"github.com/nightgauge/nightgauge/internal/knowledge/workspace"
 )
 
@@ -130,7 +131,7 @@ func TestCreate_WithRepos_Frontmatter(t *testing.T) {
 	}
 }
 
-func TestCreate_NoRepos_NoFrontmatter(t *testing.T) {
+func TestCreate_NoRepos_StillCarriesContractFrontmatter(t *testing.T) {
 	root := makeWorkspace(t)
 
 	_, err := workspace.Create(workspace.CreateInput{
@@ -142,10 +143,26 @@ func TestCreate_NoRepos_NoFrontmatter(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 
+	// Frontmatter is no longer conditional on repos: every entry carries the
+	// one contract, with a type and provenance, so the conformance check and
+	// lifecycle-aware recall have something to read.
 	prdPath := filepath.Join(root, ".nightgauge", "knowledge", "product", "no-repos", "PRD.md")
 	data, _ := os.ReadFile(prdPath)
-	if strings.HasPrefix(string(data), "---") {
-		t.Errorf("PRD.md should have no frontmatter when repos is empty, got:\n%s", string(data))
+	block, err := okf.ParseFrontmatter(string(data))
+	if err != nil {
+		t.Fatalf("ParseFrontmatter: %v", err)
+	}
+	if block == nil {
+		t.Fatalf("PRD.md carries no frontmatter:\n%s", string(data))
+	}
+	if block.Type != okf.TypePRD {
+		t.Errorf("type = %q, want %q", block.Type, okf.TypePRD)
+	}
+	if block.Generated == nil || block.Generated.By != okf.ScaffoldActor {
+		t.Errorf("generated.by = %+v, want %q", block.Generated, okf.ScaffoldActor)
+	}
+	if len(block.Repos) != 0 {
+		t.Errorf("repos = %v, want empty when none were requested", block.Repos)
 	}
 }
 

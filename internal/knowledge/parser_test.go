@@ -93,9 +93,9 @@ func TestParseFrontmatter(t *testing.T) {
 			wantStatus: "draft",
 		},
 		{
-			name:        "superseded_by field parsed",
-			input:       "---\nstatus: superseded\nsuperseded_by: '#2100'\n---\n# Doc",
-			wantStatus:  "superseded",
+			name:        "superseded_by field parsed alongside deprecated",
+			input:       "---\nstatus: deprecated\nsuperseded_by: '#2100'\n---\n# Doc",
+			wantStatus:  "deprecated",
 			wantSuperBy: "#2100",
 		},
 		{

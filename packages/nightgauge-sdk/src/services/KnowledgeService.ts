@@ -86,7 +86,7 @@ export interface KnowledgeSearchResult {
 export interface KnowledgeListFilter {
   type?: KnowledgeType;
   tags?: string[];
-  related_issues?: number[];
+  related?: string[];
 }
 
 export interface KnowledgeRegenResult {
@@ -115,11 +115,46 @@ export interface RepoTopicResult {
   files_created: string[];
 }
 
+/**
+ * Actor every deterministic scaffold path stamps into `generated.by`.
+ * Mirrors okf.ScaffoldActor in the Go binary.
+ */
+const SCAFFOLD_ACTOR = "process:knowledge-scaffold";
+
+/**
+ * Render the frontmatter block every scaffolded entry carries: its type, a
+ * draft status, and provenance naming the scaffolder. Field order matches
+ * okf.RenderFrontmatter so the Go and TypeScript scaffolds emit byte-identical
+ * blocks.
+ *
+ * Scaffolded content is a template nobody has reviewed, so it starts as a
+ * draft; `nightgauge knowledge stamp` promotes it once a stage or a person has
+ * been through it.
+ */
+function scaffoldFrontmatter(
+  type: string,
+  opts: { title?: string; tags?: string[]; at?: string } = {}
+): string {
+  const lines = ["---", `type: ${type}`];
+  if (opts.title) lines.push(`title: ${JSON.stringify(opts.title)}`);
+  if (opts.tags?.length) lines.push(`tags: [${opts.tags.join(", ")}]`);
+  lines.push("status: draft");
+  lines.push("generated:");
+  lines.push(`  by: ${SCAFFOLD_ACTOR}`);
+  lines.push(`  at: "${opts.at ?? new Date().toISOString()}"`);
+  lines.push("---");
+  return lines.join("\n") + "\n";
+}
+
 /** Map from KnowledgeType to default filename */
 const TYPE_FILENAME_MAP: Record<string, string> = {
   prd: "PRD.md",
-  decision: "decisions.md",
+  decisions: "decisions.md",
   adr: "decisions.md",
+  architecture: "entry.md",
+  glossary: "entry.md",
+  runbook: "entry.md",
+  "post-mortem": "entry.md",
   conversation: "conversation.md",
   reference: "reference.md",
   note: "note.md",
@@ -262,11 +297,10 @@ export class KnowledgeService {
     content: string,
     frontmatter: Partial<KnowledgeEntry>
   ): Promise<string> {
-    const now = new Date().toISOString();
     const merged: Partial<KnowledgeEntry> = {
       type,
-      created: now,
-      updated: now,
+      status: "draft",
+      generated: { by: SCAFFOLD_ACTOR, at: new Date().toISOString() },
       ...frontmatter,
     };
 
@@ -320,7 +354,9 @@ export class KnowledgeService {
   /**
    * Update a knowledge file, merging frontmatter and replacing body.
    *
-   * Always bumps the `updated` timestamp. Preserves the original `created` date.
+   * Bumps `generated.at` while preserving `generated.by`, so the block keeps
+   * naming the actor that produced the entry. Provenance fields other than the
+   * timestamp are written only by `nightgauge knowledge stamp`.
    * If the file has no existing frontmatter, injects a new frontmatter block.
    *
    * @param filePath - Absolute path or path relative to workspaceRoot
@@ -341,13 +377,15 @@ export class KnowledgeService {
     const merged: Partial<KnowledgeEntry> = {
       ...(existing.entry ?? {}),
       ...frontmatter,
-      updated: new Date().toISOString(),
     };
 
-    // Preserve original created date
-    if (existing.entry?.created) {
-      merged.created = existing.entry.created;
-    }
+    // `generated` is the write stamp: keep the producing actor, refresh the
+    // time. An entry that arrived without one is attributed to this writer.
+    merged.generated = {
+      ...(existing.entry?.generated ?? frontmatter.generated ?? { by: SCAFFOLD_ACTOR }),
+      ...(frontmatter.generated ?? {}),
+      at: new Date().toISOString(),
+    };
 
     const fileContent = this.serializeFrontmatter(merged) + "\n" + content;
     await fs.writeFile(resolvedPath, fileContent, "utf-8");
@@ -356,8 +394,8 @@ export class KnowledgeService {
   /**
    * List all knowledge entries, optionally filtered.
    *
-   * @param filter - Optional filter by type, tags, or related_issues
-   * @returns Array of entries sorted by created date (oldest first)
+   * @param filter - Optional filter by type, tags, or related references
+   * @returns Array of entries sorted by generated.at (oldest first)
    */
   async list(filter?: KnowledgeListFilter): Promise<KnowledgeListEntry[]> {
     const entries: KnowledgeListEntry[] = [];
@@ -377,14 +415,13 @@ export class KnowledgeService {
         if (filter.tags && (!entry.tags || !filter.tags.some((t) => entry.tags!.includes(t))))
           continue;
         if (
-          filter.related_issues &&
-          (!entry.related_issues ||
-            !filter.related_issues.some((i) => entry.related_issues!.includes(i)))
+          filter.related &&
+          (!entry.related || !filter.related.some((r) => entry.related!.includes(r)))
         )
           continue;
       } else if (filter && !entry) {
         // Files without frontmatter cannot match any filter
-        if (filter.type || filter.tags || filter.related_issues) continue;
+        if (filter.type || filter.tags || filter.related) continue;
       }
 
       entries.push({
@@ -394,12 +431,14 @@ export class KnowledgeService {
       });
     }
 
-    // Sort by created date (oldest first), files without frontmatter last
+    // Sort by generated.at (oldest first), files without a stamp last
     entries.sort((a, b) => {
-      if (!a.entry?.created && !b.entry?.created) return 0;
-      if (!a.entry?.created) return 1;
-      if (!b.entry?.created) return -1;
-      return a.entry.created.localeCompare(b.entry.created);
+      const at = a.entry?.generated?.at;
+      const bt = b.entry?.generated?.at;
+      if (!at && !bt) return 0;
+      if (!at) return 1;
+      if (!bt) return -1;
+      return at.localeCompare(bt);
     });
 
     return entries;
@@ -619,7 +658,11 @@ export class KnowledgeService {
    * @internal — implementation detail; use `isSubstantive()` for public access
    */
   static contentIsSubstantive(content: string): boolean {
-    const stripped = KnowledgeService.removeHtmlComments(content)
+    // Frontmatter is metadata, never substance. Every scaffolded entry now
+    // carries a block, so counting its keys as content would make pruneEmpty a
+    // no-op on exactly the untouched directories it exists to remove.
+    const body = content.replace(/^\uFEFF?\s*---\r?\n[\s\S]*?\r?\n---[ \t]*\r?\n/, "");
+    const stripped = KnowledgeService.removeHtmlComments(body)
       // Remove HTML comments (including TODO placeholders)
       // Remove markdown headings
       .replace(/^#+\s.*$/gm, "")
@@ -646,8 +689,8 @@ export class KnowledgeService {
    * Requirements, ## Out of Scope) from `issueBody` and rewrites PRD.md using
    * `update()`. Shares {@link renderPrdBody} with `generatePRD` so the
    * regenerated structure can never drift from the scaffold.
-   * Preserves existing frontmatter metadata (created, tags, related_issues).
-   * Always bumps the `updated` timestamp. decisions.md is never touched.
+   * Preserves existing frontmatter metadata (type, tags, provenance) and
+   * refreshes `generated.at`. decisions.md is never touched.
    *
    * @param issueNumber   - GitHub issue number
    * @param issueTitle    - Issue title (used in PRD heading)
@@ -689,7 +732,7 @@ export class KnowledgeService {
     await this.update(prdPath, newBody, {
       title: `PRD: #${issueNumber} — ${issueTitle}`,
       type: "prd",
-      related_issues: [issueNumber],
+      related: [`#${issueNumber}`],
     });
 
     const relativePrdPath = path.relative(this.workspaceRoot, prdPath);
@@ -928,16 +971,9 @@ See \`_template.md\` for the file structure to follow when adding entries.
    * Matches Go generateRepoTopicTemplate() output verbatim.
    */
   private generateRepoTopicTemplate(type: RepoTopicType, slug: string): string {
-    const now = new Date().toISOString();
     switch (type) {
       case "architecture":
-        return `---
-type: architecture
-created: "${now}"
-tags: [architecture, pattern, layer]
-status: draft
----
-
+        return `${scaffoldFrontmatter("architecture", { title: slug, tags: ["architecture", "pattern", "layer"] })}
 # ${slug}
 
 ## Overview
@@ -957,13 +993,7 @@ status: draft
 <!-- TODO: Links to docs/, related issues, related architecture entries. -->
 `;
       case "glossary":
-        return `---
-type: glossary
-created: "${now}"
-tags: [domain-term]
-status: draft
----
-
+        return `${scaffoldFrontmatter("glossary", { title: slug, tags: ["domain-term"] })}
 # ${slug}
 
 ## Definition
@@ -979,13 +1009,7 @@ status: draft
 <!-- TODO: Concrete examples of the term in use. -->
 `;
       case "runbook":
-        return `---
-type: runbook
-created: "${now}"
-tags: [operational, procedure]
-status: draft
----
-
+        return `${scaffoldFrontmatter("runbook", { title: slug, tags: ["operational", "procedure"] })}
 # ${slug}
 
 ## Purpose
@@ -1011,13 +1035,7 @@ status: draft
 <!-- TODO: How to undo the steps if something goes wrong. -->
 `;
       case "post-mortem":
-        return `---
-type: post-mortem
-created: "${now}"
-tags: [incident, post-mortem]
-status: draft
----
-
+        return `${scaffoldFrontmatter("post-mortem", { title: slug, tags: ["incident", "post-mortem"] })}
 # ${slug}
 
 ## Summary
@@ -1094,17 +1112,11 @@ status: draft
    * @internal — template generation detail; called only by scaffoldForIssue()
    */
   generatePRD(issueNumber: number, issueTitle: string, issueBody: string): string {
-    const now = new Date().toISOString();
+    const fm = scaffoldFrontmatter("prd", {
+      title: `PRD: #${issueNumber} — ${issueTitle}`,
+    });
 
-    return `---
-title: "PRD: #${issueNumber} — ${issueTitle}"
-type: prd
-created: "${now}"
-updated: "${now}"
-related_issues: [${issueNumber}]
----
-
-${this.renderPrdBody(issueNumber, issueTitle, issueBody)}`;
+    return `${fm}\n${this.renderPrdBody(issueNumber, issueTitle, issueBody)}`;
   }
 
   /**
@@ -1178,15 +1190,10 @@ ${outOfScope || "<!-- TODO: What this issue explicitly will NOT do — names the
    * @internal — template generation detail; called only by scaffoldForIssue()
    */
   generateDecisionsTemplate(issueNumber: number, issueTitle: string): string {
-    const now = new Date().toISOString();
-    return `---
-title: "Decisions: #${issueNumber} — ${issueTitle}"
-type: decision
-created: "${now}"
-updated: "${now}"
-related_issues: [${issueNumber}]
----
-
+    const fm = scaffoldFrontmatter("decisions", {
+      title: `Decisions: #${issueNumber} — ${issueTitle}`,
+    });
+    return `${fm}
 # Decisions: #${issueNumber} — ${issueTitle}
 
 ## Architecture Decisions

@@ -384,19 +384,23 @@ Implement widget rendering in the dashboard view using the existing component fr
     it("uses correct filename for each type", async () => {
       vi.mocked(fs.access).mockRejectedValue(new Error("ENOENT"));
 
-      await service.create("decision", "features/1-d", "", { title: "D" });
+      await service.create("decisions", "features/1-d", "", { title: "D" });
       const writePath = vi.mocked(fs.writeFile).mock.calls[0][0] as string;
       expect(writePath).toContain("decisions.md");
     });
 
-    it("defaults created/updated timestamps", async () => {
+    it("stamps type, draft status and scaffold provenance", async () => {
       vi.mocked(fs.access).mockRejectedValue(new Error("ENOENT"));
 
       await service.create("note", "features/1-t", "", { title: "T" });
 
       const writtenContent = vi.mocked(fs.writeFile).mock.calls[0][1] as string;
-      expect(writtenContent).toContain("created:");
-      expect(writtenContent).toContain("updated:");
+      expect(writtenContent).toContain("type: note");
+      expect(writtenContent).toContain("status: draft");
+      expect(writtenContent).toContain("by: process:knowledge-scaffold");
+      // The deleted fields never reappear.
+      expect(writtenContent).not.toContain("created:");
+      expect(writtenContent).not.toContain("updated:");
     });
   });
 
@@ -599,7 +603,7 @@ Implement widget rendering in the dashboard view using the existing component fr
     it("filters by related_issues", async () => {
       const relatedEntry = {
         ...VALID_ENTRY,
-        related_issues: [42, 100],
+        related: ["#42", "#100"],
       };
       setupWalkMock([
         {
@@ -608,7 +612,7 @@ Implement widget rendering in the dashboard view using the existing component fr
         },
       ]);
 
-      const results = await service.list({ related_issues: [42] });
+      const results = await service.list({ related: ["#42"] });
 
       expect(results).toHaveLength(1);
     });
