@@ -247,7 +247,15 @@ export type TerminalFailureKind =
   // classifyTerminalKind has no matcher for it either.
   | "abandoned_commit" // Issue #191 — a stage committed valid, unmerged work but was killed/crashed before pr-create ran
   | "commit_orphaned" // Issue #266 — a killed stage's commit landed on the wrong branch (a stray temp-pre-push-<n> left by a SIGKILL bypassing the pre-push restore-defer) and feature-validate's branch-identity self-heal could not recover it; unrecoverable by retry
-  | "permission_denied"; // Issue #289 — the harness denied a tool call outright (commonly a foreground `sleep` wait loop, reported as "User rejected tool use"). A denial is the harness saying "not that way", not a defect: the stage had turns left and could pick another approach. Routed like adapter_auth_failed — short backoff, board → Ready, no lifetime-cap increment, no cascade feed, no pause — but bounded by a max-attempt cap so a stage that keeps reaching for the same denied pattern stops re-dispatching
+  | "permission_denied" // Issue #289 — the harness denied a tool call outright (commonly a foreground `sleep` wait loop, reported as "User rejected tool use"). A denial is the harness saying "not that way", not a defect: the stage had turns left and could pick another approach. Routed like adapter_auth_failed — short backoff, board → Ready, no lifetime-cap increment, no cascade feed, no pause — but bounded by a max-attempt cap so a stage that keeps reaching for the same denied pattern stops re-dispatching
+  // Gate-sourced kinds from the #1237 sweep: every KindFail site in the stage
+  // gates now classifies itself instead of falling through the prose ladder to
+  // subagent_crash.
+  | "stage_context_unreadable" // Issue #1237 — a gate could not read a file the stage's contract says it wrote (context, plan_file, gate-metrics.jsonl) for a reason other than absence; filesystem fault, not the work
+  | "dev_build_verification_missing" // Issue #1237 — feature-dev's context has no build_verification object: the skill skipped the verification step the completion contract requires (#55)
+  | "dev_build_verification_failed" // Issue #1237 — feature-dev ran its build and recorded status=failed; organic implementation failure
+  | "dev_tests_failed" // Issue #1237 — feature-dev's own test run recorded failures; organic implementation failure
+  | "pr_merge_lookup_failed"; // Issue #1237 — pr-merge's gate could not establish the PR's state (gh failed on every attempt and local git found no merge commit); infrastructure
 
 /**
  * Every `TerminalFailureKind` union member, in declaration order. TS union
@@ -288,6 +296,11 @@ export const ALL_TERMINAL_FAILURE_KINDS: readonly TerminalFailureKind[] = [
   "abandoned_commit",
   "commit_orphaned",
   "permission_denied",
+  "stage_context_unreadable",
+  "dev_build_verification_missing",
+  "dev_build_verification_failed",
+  "dev_tests_failed",
+  "pr_merge_lookup_failed",
 ];
 
 /**
