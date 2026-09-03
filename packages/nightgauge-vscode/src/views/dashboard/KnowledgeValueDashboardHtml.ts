@@ -122,7 +122,9 @@ function renderBody(state: KnowledgeValueState): string {
   ${renderHitRateGauge(r)}
   ${renderPerStageChart(r)}
   ${renderTopRecalled(r)}
-  ${renderStaleEntries(r)}
+  ${renderTrustDistribution(r)}
+  ${renderLifecycleEntries(r)}
+  ${renderUntouchedEntries(r)}
   ${renderGraduationHistory(r)}`;
 }
 
@@ -267,11 +269,90 @@ function renderTopRecalled(r: KnowledgeMetricsResult): string {
   </section>`;
 }
 
-function renderStaleEntries(r: KnowledgeMetricsResult): string {
-  if (r.stale_entries.length === 0) {
-    return `<section class="kv-section"><h2>Stale Entries (>${r.stale_days}d)</h2><p>No stale entries.</p></section>`;
+/**
+ * Trust distribution — how much of the base anything has confirmed.
+ *
+ * Derived from each entry's `verified` log, never declared by the entry
+ * itself.
+ */
+function renderTrustDistribution(r: KnowledgeMetricsResult): string {
+  const dist = r.trust_distribution ?? {};
+  const tiers: Array<[string, string]> = [
+    ["human-reviewed", "Human reviewed"],
+    ["machine-confirmed", "Machine confirmed"],
+    ["unverified", "Unverified"],
+  ];
+  const total = tiers.reduce((sum, [key]) => sum + (dist[key] ?? 0), 0);
+  if (total === 0) {
+    return `<section class="kv-section"><h2>Trust Distribution</h2><p>No knowledge entries on disk.</p></section>`;
   }
-  const rows = r.stale_entries
+  const rows = tiers
+    .map(([key, label]) => {
+      const n = dist[key] ?? 0;
+      const pct = total === 0 ? 0 : Math.round((n / total) * 100);
+      return `
+      <tr>
+        <td class="kv-num">${n}</td>
+        <td class="kv-num">${pct}%</td>
+        <td>${escapeHtml(label)}</td>
+      </tr>`;
+    })
+    .join("");
+  return `
+  <section class="kv-section">
+    <h2>Trust Distribution</h2>
+    <table class="kv-table">
+      <thead><tr><th class="kv-num">Entries</th><th class="kv-num">Share</th><th>Tier</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+  </section>`;
+}
+
+/**
+ * Expired and deprecated entries — what the content says about itself, as
+ * opposed to the read-side "nobody looked at this" signal below.
+ */
+function renderLifecycleEntries(r: KnowledgeMetricsResult): string {
+  const expired = r.expired_entries ?? [];
+  const deprecated = r.deprecated_entries ?? [];
+  if (expired.length === 0 && deprecated.length === 0) {
+    return `<section class="kv-section"><h2>Lifecycle</h2><p>No expired or deprecated entries.</p></section>`;
+  }
+  const expiredRows = expired
+    .map(
+      (e) => `
+      <tr>
+        <td>expired</td>
+        <td>${escapeHtml(e.stale_after ?? "")}</td>
+        <td>${escapeHtml(e.path)}</td>
+      </tr>`
+    )
+    .join("");
+  const deprecatedRows = deprecated
+    .map(
+      (e) => `
+      <tr>
+        <td>deprecated</td>
+        <td>${escapeHtml(e.superseded_by ?? "")}</td>
+        <td>${escapeHtml(e.path)}</td>
+      </tr>`
+    )
+    .join("");
+  return `
+  <section class="kv-section">
+    <h2>Lifecycle</h2>
+    <table class="kv-table">
+      <thead><tr><th>State</th><th>Detail</th><th>Path</th></tr></thead>
+      <tbody>${expiredRows}${deprecatedRows}</tbody>
+    </table>
+  </section>`;
+}
+
+function renderUntouchedEntries(r: KnowledgeMetricsResult): string {
+  if (r.untouched_entries.length === 0) {
+    return `<section class="kv-section"><h2>Untouched Entries (>${r.stale_days}d)</h2><p>No untouched entries.</p></section>`;
+  }
+  const rows = r.untouched_entries
     .map(
       (e) => `
       <tr>
@@ -283,7 +364,7 @@ function renderStaleEntries(r: KnowledgeMetricsResult): string {
     .join("");
   return `
   <section class="kv-section">
-    <h2>Stale Entries (>${r.stale_days}d)</h2>
+    <h2>Untouched Entries (>${r.stale_days}d)</h2>
     <table class="kv-table">
       <thead><tr><th class="kv-num">Age</th><th>Last touched</th><th>Path</th></tr></thead>
       <tbody>${rows}</tbody>

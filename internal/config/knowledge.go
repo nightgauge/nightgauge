@@ -64,7 +64,45 @@ type RecallConfig struct {
 	// PlanningLimit is the maximum number of recalled decisions to inject.
 	// Default: 5.
 	PlanningLimit *int `yaml:"planning_limit" json:"planning_limit,omitempty"`
+	// Weights tunes the lifecycle multiplier applied on top of the BM25
+	// score. One set, no plain-BM25 mode: two scoring paths is how a ranking
+	// change ends up applying to one caller and not the other.
+	Weights *RecallWeights `yaml:"weights" json:"weights,omitempty"`
 }
+
+// RecallWeights are the lifecycle multipliers applied to a BM25 score.
+//
+// They compose multiplicatively: an unverified draft whose stale_after has
+// passed scores 0.85 x 0.9 x 0.5. Composing rather than picking one factor is
+// what lets "old and unreviewed" rank below "old" and below "unreviewed".
+type RecallWeights struct {
+	// HumanReviewed multiplies an entry a person confirmed (default 1.25).
+	HumanReviewed *float64 `yaml:"human_reviewed" json:"human_reviewed,omitempty"`
+	// MachineConfirmed multiplies an entry retro or graduation confirmed
+	// (default 1.0 — the reference point).
+	MachineConfirmed *float64 `yaml:"machine_confirmed" json:"machine_confirmed,omitempty"`
+	// Unverified multiplies an entry nothing has confirmed (default 0.85).
+	Unverified *float64 `yaml:"unverified" json:"unverified,omitempty"`
+	// StatusDraft multiplies an entry still marked draft (default 0.9).
+	StatusDraft *float64 `yaml:"status_draft" json:"status_draft,omitempty"`
+	// StatusDeprecated multiplies a deprecated entry (default 0.25). Kept
+	// non-zero on purpose: a deprecated decision is still the record of what
+	// was decided and why it changed, so it should rank last, not vanish.
+	StatusDeprecated *float64 `yaml:"status_deprecated" json:"status_deprecated,omitempty"`
+	// Expired multiplies an entry whose stale_after has passed (default 0.5).
+	Expired *float64 `yaml:"expired" json:"expired,omitempty"`
+}
+
+// Default lifecycle multipliers, applied when knowledge.recall.weights is
+// absent or a field within it is unset.
+const (
+	DefaultWeightHumanReviewed    = 1.25
+	DefaultWeightMachineConfirmed = 1.0
+	DefaultWeightUnverified       = 0.85
+	DefaultWeightStatusDraft      = 0.9
+	DefaultWeightStatusDeprecated = 0.25
+	DefaultWeightExpired          = 0.5
+)
 
 // IsTelemetryEnabled returns the effective knowledge telemetry setting.
 //
@@ -165,6 +203,36 @@ func (k *KnowledgeConfig) RecallPlanningLimit() int {
 		return *k.Recall.PlanningLimit
 	}
 	return 5
+}
+
+// ResolveRecallWeights returns a fully-populated weight set, substituting the
+// default for every field the config leaves unset. Downstream code never has
+// to re-check for nil, which is what keeps there being exactly one scoring
+// path.
+func (k *KnowledgeConfig) ResolveRecallWeights() RecallWeights {
+	pick := func(v *float64, def float64) *float64 {
+		if v != nil {
+			return v
+		}
+		d := def
+		return &d
+	}
+
+	var w *RecallWeights
+	if k != nil && k.Recall != nil {
+		w = k.Recall.Weights
+	}
+	if w == nil {
+		w = &RecallWeights{}
+	}
+	return RecallWeights{
+		HumanReviewed:    pick(w.HumanReviewed, DefaultWeightHumanReviewed),
+		MachineConfirmed: pick(w.MachineConfirmed, DefaultWeightMachineConfirmed),
+		Unverified:       pick(w.Unverified, DefaultWeightUnverified),
+		StatusDraft:      pick(w.StatusDraft, DefaultWeightStatusDraft),
+		StatusDeprecated: pick(w.StatusDeprecated, DefaultWeightStatusDeprecated),
+		Expired:          pick(w.Expired, DefaultWeightExpired),
+	}
 }
 
 // defaultTradeoffKeywords is the built-in fallback when the YAML file is missing.

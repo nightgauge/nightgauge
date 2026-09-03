@@ -237,7 +237,15 @@ describe("KnowledgeTreeProvider (three-section model #2964)", () => {
   it("routes Related Decisions through knowledge.relatedToIssue IPC", async () => {
     stubFs({ knowledgePath: KB_PATH });
     const hits: KnowledgeRecallHit[] = [
-      { rank: 1, score: 2.5, path: "a/b.md", kind: "issue", snippet: "Use BM25" },
+      {
+        rank: 1,
+        score: 2.5,
+        path: "a/b.md",
+        kind: "issue",
+        snippet: "Use BM25",
+        stale: false,
+        lifecycle_multiplier: 1,
+      },
     ];
     const ipc = makeIpcClient({
       knowledgeRelatedToIssue: vi.fn(async () => ({ hits })),
@@ -275,8 +283,24 @@ describe("KnowledgeTreeProvider (three-section model #2964)", () => {
     expect(searchChildren[0].label).toContain("Search Knowledge");
 
     provider.setSearchResults([
-      { rank: 1, score: 1.0, path: "x.md", kind: "issue", snippet: "match" },
-      { rank: 2, score: 0.9, path: "y.md", kind: "issue", snippet: "another" },
+      {
+        rank: 1,
+        score: 1.0,
+        path: "x.md",
+        kind: "issue",
+        snippet: "match",
+        stale: false,
+        lifecycle_multiplier: 1,
+      },
+      {
+        rank: 2,
+        score: 0.9,
+        path: "y.md",
+        kind: "issue",
+        snippet: "another",
+        stale: false,
+        lifecycle_multiplier: 1,
+      },
     ]);
     root = await provider.getChildren();
     searchChildren = await provider.getChildren(root[2]);
@@ -293,7 +317,15 @@ describe("KnowledgeTreeProvider (three-section model #2964)", () => {
       makeIpcClient()
     );
     provider.setSearchResults([
-      { rank: 1, score: 1.0, path: "x.md", kind: "issue", snippet: "match" },
+      {
+        rank: 1,
+        score: 1.0,
+        path: "x.md",
+        kind: "issue",
+        snippet: "match",
+        stale: false,
+        lifecycle_multiplier: 1,
+      },
     ]);
     provider.clearSearchResults();
     const root = await provider.getChildren();

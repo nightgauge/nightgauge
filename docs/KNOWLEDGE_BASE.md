@@ -561,6 +561,43 @@ is never taken from model output or issue text — otherwise an entry could clai
 any provenance it liked, and the trust tier built on top of it would be
 worthless.
 
+### Lifecycle and trust tier
+
+The base exists to make each run better than the last. Feeding a planning stage
+a deprecated decision or an expired runbook makes the next run _worse_, and
+silently. The lifecycle fields turn provenance from a label into behaviour.
+
+**Trust tier is derived, never declared.** An entry cannot assert its own tier;
+it is read off the `verified` log:
+
+| Tier                | Derived when                                        |
+| ------------------- | --------------------------------------------------- |
+| `human-reviewed`    | Any `verified[].by` starts with `human:`            |
+| `machine-confirmed` | At least one `verified` event, none of them human   |
+| `unverified`        | `verified` is empty — a draft nothing has confirmed |
+
+The highest tier present wins. Matching is on the `human:` **prefix**, not a
+substring: an actor like `feature-dev/human-review-model` is a stage, not a
+person, and a substring match would silently promote it to the top tier.
+
+**Recall ranks on it.** The final score is BM25 × a lifecycle multiplier
+composed from the tier, `status` and `stale_after` — see
+[GO_BINARY.md § knowledge recall](GO_BINARY.md#knowledge-recall) for the
+factors and the config keys. Every hit carries `trust_tier`, `status`, `stale`
+and `lifecycle_multiplier` in `--json`, so the ranking explains itself instead
+of being magic.
+
+**Metrics report it.** `nightgauge knowledge metrics` emits
+`trust_distribution` (how much of the base anything has confirmed),
+`expired_entries` and `deprecated_entries`.
+
+Those are distinct from `untouched_entries`, which carried the word "stale" in
+its name until both existed. "Untouched" is a **read-side proxy** — nobody has
+looked at the entry lately — while expired and deprecated are claims the
+**content makes about itself**. An entry can be heavily read and years out of
+date, or freshly written and never opened; conflating the two was exactly what
+the old name invited, so the two are now named apart.
+
 ### Conformance: enforcing the contract
 
 A contract that is not enforced drifts back into two contracts within a month.

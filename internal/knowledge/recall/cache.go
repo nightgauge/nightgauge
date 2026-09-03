@@ -10,7 +10,12 @@ import (
 )
 
 const (
-	cacheVersion = 1
+	// cacheVersion 2 added the lifecycle fields (trust tier, status,
+	// stale_after). The bump is load-bearing, not cosmetic: without it an
+	// existing warm cache with unchanged mtimes loads as valid and every
+	// document reads unverified/stable forever — the exact silent wrong
+	// answer lifecycle weighting exists to prevent.
+	cacheVersion = 2
 	cacheDir     = ".nightgauge/knowledge/.recall-cache"
 	cacheFile    = "index.jsonl"
 )
@@ -35,6 +40,12 @@ type CacheEntry struct {
 	TermFreq     map[string]int `json:"term_freq"`
 	Graduated    bool           `json:"graduated,omitempty"`
 	GraduateDest string         `json:"graduate_dest,omitempty"`
+	TrustTier    string         `json:"trust_tier,omitempty"`
+	Status       string         `json:"status,omitempty"`
+	// StaleAfter is cached as the raw stamp so expiry stays a query-time
+	// comparison. A cached bool would never flip: an entry expiring is a
+	// clock event with no file change, and the cache is keyed on mtime.
+	StaleAfter string `json:"stale_after,omitempty"`
 }
 
 func cachePath(workdir string) string {
@@ -115,6 +126,9 @@ func loadFromCache(workdir string, k1, b float64, refs []docRef) ([]*Document, e
 			TermFreq:     entry.TermFreq,
 			Graduated:    entry.Graduated,
 			GraduateDest: entry.GraduateDest,
+			TrustTier:    entry.TrustTier,
+			Status:       entry.Status,
+			StaleAfter:   entry.StaleAfter,
 		})
 	}
 
@@ -187,6 +201,9 @@ func saveToCache(workdir string, docs []*Document, k1, b float64) error {
 			TermFreq:     doc.TermFreq,
 			Graduated:    doc.Graduated,
 			GraduateDest: doc.GraduateDest,
+			TrustTier:    doc.TrustTier,
+			Status:       doc.Status,
+			StaleAfter:   doc.StaleAfter,
 		}
 		if err := enc.Encode(entry); err != nil {
 			return fmt.Errorf("write cache entry %s: %w", doc.Path, err)

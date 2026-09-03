@@ -41,6 +41,11 @@ const (
 	// ScaffoldActor is the actor every deterministic scaffold path stamps.
 	ScaffoldActor = okf.ScaffoldActor
 
+	// Trust tiers, derived from the verified log.
+	TrustHumanReviewed    = okf.TrustHumanReviewed
+	TrustMachineConfirmed = okf.TrustMachineConfirmed
+	TrustUnverified       = okf.TrustUnverified
+
 	// Entry types stamped by the scaffold paths.
 	TypePRD          = okf.TypePRD
 	TypeDecisions    = okf.TypeDecisions
@@ -88,6 +93,8 @@ var (
 	NewProvenance = okf.NewProvenance
 	// NowStamp is the current time as an RFC3339 provenance timestamp.
 	NowStamp = okf.NowStamp
+	// IsExpiredStamp reports whether a raw stale_after value has passed.
+	IsExpiredStamp = okf.IsExpiredStamp
 )
 
 // WorkspaceRepository is a minimal interface for repo name validation.

@@ -41,7 +41,7 @@ func TestAggregate_MissingFileReturnsEmpty(t *testing.T) {
 	if r.WindowDays != 7 || r.StaleDays != 30 {
 		t.Errorf("WindowDays/StaleDays not echoed: %+v", r)
 	}
-	if r.PerStage == nil || r.TopRecalled == nil || r.StaleEntries == nil || r.GraduationHistory == nil {
+	if r.PerStage == nil || r.TopRecalled == nil || r.UntouchedEntries == nil || r.GraduationHistory == nil {
 		t.Error("slices should be initialized to empty, not nil")
 	}
 }
@@ -137,7 +137,7 @@ func TestAggregate_TopRecalledOrdering(t *testing.T) {
 	}
 }
 
-func TestAggregate_StaleEntries(t *testing.T) {
+func TestAggregate_UntouchedEntries(t *testing.T) {
 	dir := t.TempDir()
 	now := time.Date(2026, 5, 16, 12, 0, 0, 0, time.UTC)
 	fresh := now.Add(-2 * 24 * time.Hour).Format(time.RFC3339)
@@ -154,7 +154,7 @@ func TestAggregate_StaleEntries(t *testing.T) {
 		t.Fatalf("Aggregate: %v", err)
 	}
 	paths := map[string]int{}
-	for _, s := range r.StaleEntries {
+	for _, s := range r.UntouchedEntries {
 		paths[s.Path] = s.DaysSinceTouch
 	}
 	if _, ok := paths["fresh.md"]; ok {
@@ -254,5 +254,73 @@ func TestAggregate_InvalidArgs(t *testing.T) {
 	}
 	if _, err := Aggregate(t.TempDir(), 7, -1); err == nil {
 		t.Error("expected error for staleDays<0")
+	}
+}
+
+// TestAggregate_LifecycleFactsAreIndependentOfTelemetry pins the trust
+// distribution and the two lifecycle lists.
+//
+// The scan runs before the telemetry file is opened on purpose: AggregateAt
+// returns early when knowledge-events.jsonl is absent, which is the common
+// case for a base that has never run the pipeline. Reporting an empty trust
+// distribution there would be wrong rather than merely unhelpful.
+func TestAggregate_LifecycleFactsAreIndependentOfTelemetry(t *testing.T) {
+	root := t.TempDir()
+	kb := filepath.Join(root, ".nightgauge", "knowledge", "features")
+
+	write := func(dir, body string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Join(kb, dir), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(kb, dir, "decisions.md"), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	write("1-unverified", "---\ntype: decisions\n---\n\n# One\n")
+	write("2-machine", "---\ntype: decisions\nverified:\n  - by: process:retro\n---\n\n# Two\n")
+	write("3-human", "---\ntype: decisions\nverified:\n  - by: process:retro\n  - by: human:octocat\n---\n\n# Three\n")
+	write("4-deprecated", "---\ntype: decisions\nstatus: deprecated\nsuperseded_by: \"#9\"\n---\n\n# Four\n")
+	write("5-expired", "---\ntype: decisions\nstale_after: \"2020-01-01T00:00:00Z\"\n---\n\n# Five\n")
+
+	// No knowledge-events.jsonl exists — the aggregator's early return must
+	// not take the lifecycle facts with it.
+	now := time.Date(2026, 9, 3, 0, 0, 0, 0, time.UTC)
+	r, err := AggregateAt(root, 7, 30, now)
+	if err != nil {
+		t.Fatalf("AggregateAt: %v", err)
+	}
+
+	want := map[string]int{"human-reviewed": 1, "machine-confirmed": 1, "unverified": 3}
+	for tier, n := range want {
+		if r.TrustDistribution[tier] != n {
+			t.Errorf("trust_distribution[%s] = %d, want %d (full: %v)", tier, r.TrustDistribution[tier], n, r.TrustDistribution)
+		}
+	}
+	if len(r.DeprecatedEntries) != 1 || r.DeprecatedEntries[0].SupersededBy != "#9" {
+		t.Errorf("deprecated_entries = %+v", r.DeprecatedEntries)
+	}
+	if len(r.ExpiredEntries) != 1 || r.ExpiredEntries[0].StaleAfter != "2020-01-01T00:00:00Z" {
+		t.Errorf("expired_entries = %+v", r.ExpiredEntries)
+	}
+	// Untouched is a read-side proxy driven by telemetry; with no events it
+	// is empty, which is exactly why it must not be confused with the above.
+	if len(r.UntouchedEntries) != 0 {
+		t.Errorf("untouched_entries = %+v, want empty with no telemetry", r.UntouchedEntries)
+	}
+}
+
+// TestAggregate_TrustDistributionAlwaysHasThreeBuckets keeps the dashboard
+// from rendering an absent bucket differently from a zero one.
+func TestAggregate_TrustDistributionAlwaysHasThreeBuckets(t *testing.T) {
+	r, err := AggregateAt(t.TempDir(), 7, 30, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tier := range []string{"human-reviewed", "machine-confirmed", "unverified"} {
+		if _, ok := r.TrustDistribution[tier]; !ok {
+			t.Errorf("trust_distribution missing the %q bucket: %v", tier, r.TrustDistribution)
+		}
 	}
 }

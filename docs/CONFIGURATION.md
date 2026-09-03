@@ -6361,17 +6361,43 @@ knowledge:
   wiki_links: true # Enable wiki-link resolution in knowledge docs
   index_on_commit: false # Regenerate index on commit (reserved for future use)
   auto_prune_on_merge: true # Remove boilerplate-only knowledge dirs after PR merge
+  recall:
+    bm25_k1: 1.5 # Term frequency saturation
+    bm25_b: 0.75 # Document length normalisation
+    weights: # Lifecycle multipliers applied on top of the BM25 score
+      human_reviewed: 1.25
+      machine_confirmed: 1.0
+      unverified: 0.85
+      status_draft: 0.9
+      status_deprecated: 0.25
+      expired: 0.5
 ```
 
-| Key                    | Type    | Default | Description                                                                                                |
-| ---------------------- | ------- | ------- | ---------------------------------------------------------------------------------------------------------- |
-| `enabled`              | boolean | `true`  | Master switch. When `false`, all knowledge operations are disabled                                         |
-| `auto_scaffold`        | boolean | `true`  | Automatically create knowledge directory during issue-pickup (requires `enabled: true`)                    |
-| `wiki_links`           | boolean | `true`  | Enable `[[wiki-link]]` resolution in knowledge documents                                                   |
-| `index_on_commit`      | boolean | `false` | Regenerate the knowledge index on every commit via a git hook (reserved for future git hook use)           |
-| `auto_prune_on_merge`  | boolean | `true`  | Remove knowledge directories that contain only boilerplate content after a PR is merged                    |
-| `recall.dev_threshold` | float   | `1.5`   | Minimum recall score for constraints shown to feature-dev. Higher than planning's default to reduce noise. |
-| `recall.dev_limit`     | integer | `5`     | Max recalled architectural constraints shown to feature-dev per invocation.                                |
+| Key                                | Type    | Default | Description                                                                                                 |
+| ---------------------------------- | ------- | ------- | ----------------------------------------------------------------------------------------------------------- |
+| `enabled`                          | boolean | `true`  | Master switch. When `false`, all knowledge operations are disabled                                          |
+| `auto_scaffold`                    | boolean | `true`  | Automatically create knowledge directory during issue-pickup (requires `enabled: true`)                     |
+| `wiki_links`                       | boolean | `true`  | Enable `[[wiki-link]]` resolution in knowledge documents                                                    |
+| `index_on_commit`                  | boolean | `false` | Regenerate the knowledge index on every commit via a git hook (reserved for future git hook use)            |
+| `auto_prune_on_merge`              | boolean | `true`  | Remove knowledge directories that contain only boilerplate content after a PR is merged                     |
+| `recall.dev_threshold`             | float   | `1.5`   | Minimum recall score for constraints shown to feature-dev. Higher than planning's default to reduce noise.  |
+| `recall.dev_limit`                 | integer | `5`     | Max recalled architectural constraints shown to feature-dev per invocation.                                 |
+| `recall.bm25_k1`                   | float   | `1.5`   | BM25 term-frequency saturation.                                                                             |
+| `recall.bm25_b`                    | float   | `0.75`  | BM25 document-length normalisation.                                                                         |
+| `recall.weights.human_reviewed`    | float   | `1.25`  | Multiplier for an entry a person confirmed.                                                                 |
+| `recall.weights.machine_confirmed` | float   | `1.0`   | Multiplier for an entry retro or graduation confirmed — the reference point.                                |
+| `recall.weights.unverified`        | float   | `0.85`  | Multiplier for an entry nothing has confirmed.                                                              |
+| `recall.weights.status_draft`      | float   | `0.9`   | Multiplier for `status: draft`.                                                                             |
+| `recall.weights.status_deprecated` | float   | `0.25`  | Multiplier for `status: deprecated`. Non-zero on purpose: a deprecated decision still records what changed. |
+| `recall.weights.expired`           | float   | `0.5`   | Multiplier when `stale_after` has passed, evaluated at query time.                                          |
+
+Lifecycle weights compose multiplicatively — an unverified draft whose
+`stale_after` has passed scores `0.85 × 0.9 × 0.5`. There is exactly one
+scoring path; there is no plain-BM25 mode.
+
+`recall.dev_threshold` and `recall.dev_limit` are read directly from
+`config.yaml` by the feature-dev skill and are not modelled in
+`config.RecallConfig`.
 
 ### Behavior
 

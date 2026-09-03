@@ -8,9 +8,11 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/knowledge"
+	"github.com/nightgauge/nightgauge/internal/knowledge/okf"
 )
 
 const (
@@ -33,6 +35,15 @@ type Document struct {
 	TermFreq     map[string]int // term → count within this doc
 	Graduated    bool           // true when <!-- graduated-to: --> marker present
 	GraduateDest string         // destination path when Graduated=true
+
+	// Lifecycle fields, from the frontmatter contract.
+	TrustTier string // human-reviewed | machine-confirmed | unverified
+	Status    string // draft | stable | deprecated
+	// StaleAfter is the RAW stamp, not a precomputed expiry bool. An entry
+	// expiring is a clock event with no file change, so a bool frozen at
+	// index time would stay false forever for every entry indexed before its
+	// stale_after — and the cache is keyed on mtime.
+	StaleAfter string
 }
 
 // Index is the in-memory BM25 index.
@@ -51,6 +62,54 @@ type Index struct {
 	AvgDocLen float64
 	K1        float64
 	B         float64
+
+	// Weights are the lifecycle multipliers. A zero value resolves to the
+	// built-in defaults, so a bare &Index{} literal still scores correctly.
+	Weights config.RecallWeights
+	// Now supplies the clock expiry is evaluated against. Nil means time.Now.
+	Now func() time.Time
+}
+
+// weights returns the index's multipliers, substituting defaults for a
+// zero-value set so there is exactly one scoring path.
+func (idx *Index) weights() config.RecallWeights {
+	if idx.Weights.HumanReviewed == nil {
+		var cfg *config.KnowledgeConfig
+		return cfg.ResolveRecallWeights()
+	}
+	return idx.Weights
+}
+
+func (idx *Index) now() time.Time {
+	if idx.Now == nil {
+		return time.Now()
+	}
+	return idx.Now()
+}
+
+// lifecycleMultiplier composes the trust, status and expiry factors for one
+// document. Composing multiplicatively rather than picking a single factor is
+// what lets "deprecated and expired" rank below either one alone.
+func lifecycleMultiplier(doc *Document, w config.RecallWeights, now time.Time) float64 {
+	m := *w.Unverified
+	switch doc.TrustTier {
+	case okf.TrustHumanReviewed:
+		m = *w.HumanReviewed
+	case okf.TrustMachineConfirmed:
+		m = *w.MachineConfirmed
+	}
+
+	switch doc.Status {
+	case okf.StatusDraft:
+		m *= *w.StatusDraft
+	case okf.StatusDeprecated:
+		m *= *w.StatusDeprecated
+	}
+
+	if okf.IsExpiredStamp(doc.StaleAfter, now) {
+		m *= *w.Expired
+	}
+	return m
 }
 
 // RecallHit is one ranked result.
@@ -63,6 +122,15 @@ type RecallHit struct {
 	Tags        []string `json:"tags,omitempty"`
 	Snippet     string   `json:"snippet"`
 	Graduated   bool     `json:"graduated,omitempty"`
+
+	// Lifecycle fields, so the ranking is explainable rather than magic.
+	TrustTier string `json:"trust_tier,omitempty"`
+	Status    string `json:"status,omitempty"`
+	// Stale and LifecycleMultiplier are emitted unconditionally: a false or
+	// 1.0 that vanishes from the JSON is indistinguishable, to a jq consumer,
+	// from an old binary that never had the field.
+	Stale               bool    `json:"stale"`
+	LifecycleMultiplier float64 `json:"lifecycle_multiplier"`
 }
 
 // RecallResult is the full output of a Query call.
@@ -104,7 +172,9 @@ func BuildIndex(workdir string, scopes []string, cfg *config.KnowledgeConfig) (*
 		docs = filterByScope(docs, scopes)
 	}
 
-	return buildIndexFromDocs(workdir, docs, k1, b), nil
+	idx := buildIndexFromDocs(workdir, docs, k1, b)
+	idx.Weights = cfg.ResolveRecallWeights()
+	return idx, nil
 }
 
 // Query scores all documents against query and returns the top limit hits.
@@ -115,9 +185,13 @@ func Query(idx *Index, query string, limit int, scopes []string) (RecallResult, 
 	queryTerms := TokenizeQuery(query)
 
 	type scored struct {
-		doc   *Document
-		score float64
+		doc        *Document
+		score      float64
+		multiplier float64
 	}
+
+	weights := idx.weights()
+	now := idx.now()
 
 	var candidates []scored
 	for _, doc := range idx.Docs {
@@ -145,7 +219,12 @@ func Query(idx *Index, query string, limit int, scopes []string) (RecallResult, 
 				}
 			}
 		}
-		candidates = append(candidates, scored{doc: doc, score: s})
+		// Lifecycle weighting is applied last, after the path and tag boosts,
+		// so the reported Score is the final ranked score and not a number
+		// that disagrees with the ordering.
+		mult := lifecycleMultiplier(doc, weights, now)
+		s *= mult
+		candidates = append(candidates, scored{doc: doc, score: s, multiplier: mult})
 	}
 
 	// Sort descending by score, tie-break by path (lexicographic).
@@ -183,6 +262,11 @@ func Query(idx *Index, query string, limit int, scopes []string) (RecallResult, 
 			Tags:        doc.Tags,
 			Snippet:     extractSnippet(idx.Root, doc.Path, queryTerms),
 			Graduated:   doc.Graduated,
+
+			TrustTier:           doc.TrustTier,
+			Status:              doc.Status,
+			Stale:               okf.IsExpiredStamp(doc.StaleAfter, now),
+			LifecycleMultiplier: math.Round(c.multiplier*1000) / 1000,
 		})
 		rank++
 	}
@@ -347,12 +431,18 @@ func indexFile(workdir, absPath, kind string, issueNumber int) (*Document, error
 	content := string(data)
 	relPath, _ := filepath.Rel(workdir, absPath)
 
-	// Parse frontmatter for tags and repos.
+	// Parse frontmatter for tags, repos and the lifecycle fields.
 	var tags, repos []string
-	fm, _ := knowledge.ParseFrontmatter(content)
-	if fm != nil {
+	trustTier := okf.TrustUnverified
+	status := okf.DefaultStatus
+	staleAfter := ""
+	fm, fmErr := knowledge.ParseFrontmatter(content)
+	if fmErr == nil && fm != nil {
 		tags = fm.Tags
 		repos = fm.Repos
+		trustTier = fm.TrustTier()
+		status = fm.EffectiveStatus()
+		staleAfter = fm.StaleAfter
 	}
 
 	// Detect graduation marker.
@@ -383,6 +473,9 @@ func indexFile(workdir, absPath, kind string, issueNumber int) (*Document, error
 		IssueNumber:  issueNumber,
 		Tags:         tags,
 		Repos:        repos,
+		TrustTier:    trustTier,
+		Status:       status,
+		StaleAfter:   staleAfter,
 		Tokens:       tokens,
 		TermFreq:     termFreq,
 		Graduated:    graduated,

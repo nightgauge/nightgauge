@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/knowledge/metrics"
+	"github.com/nightgauge/nightgauge/internal/knowledge/okf"
 	"github.com/nightgauge/nightgauge/internal/knowledge/telemetry"
 	"github.com/spf13/cobra"
 )
@@ -92,10 +93,32 @@ func renderMetricsHuman(r metrics.Result) error {
 			fmt.Printf("    %3d  %s\n", e.Hits, e.Path)
 		}
 	}
-	if len(r.StaleEntries) > 0 {
-		fmt.Println("  stale entries:")
-		for _, e := range r.StaleEntries {
+	if len(r.UntouchedEntries) > 0 {
+		fmt.Println("  untouched entries (nobody read them; not a claim about the content):")
+		for _, e := range r.UntouchedEntries {
 			fmt.Printf("    %4dd  %s\n", e.DaysSinceTouch, e.Path)
+		}
+	}
+	if len(r.TrustDistribution) > 0 {
+		fmt.Println("  trust distribution:")
+		for _, tier := range []string{okf.TrustHumanReviewed, okf.TrustMachineConfirmed, okf.TrustUnverified} {
+			fmt.Printf("    %4d  %s\n", r.TrustDistribution[tier], tier)
+		}
+	}
+	if len(r.ExpiredEntries) > 0 {
+		fmt.Println("  expired entries (stale_after has passed):")
+		for _, e := range r.ExpiredEntries {
+			fmt.Printf("    %s  %s\n", e.StaleAfter, e.Path)
+		}
+	}
+	if len(r.DeprecatedEntries) > 0 {
+		fmt.Println("  deprecated entries:")
+		for _, e := range r.DeprecatedEntries {
+			if e.SupersededBy != "" {
+				fmt.Printf("    %s (superseded by %s)\n", e.Path, e.SupersededBy)
+			} else {
+				fmt.Printf("    %s\n", e.Path)
+			}
 		}
 	}
 	return nil

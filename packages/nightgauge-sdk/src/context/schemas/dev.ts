@@ -122,6 +122,14 @@ export const DevContextSchema = z
             tags: z.array(z.string()).optional(),
             snippet: z.string(),
             graduated: z.boolean().optional(),
+            /** human-reviewed | machine-confirmed | unverified, derived from `verified`. */
+            trust_tier: z.string().optional(),
+            /** draft | stable | deprecated. */
+            status: z.string().optional(),
+            /** True when the entry's `stale_after` has passed. */
+            stale: z.boolean().optional(),
+            /** The lifecycle factor already folded into `score`. */
+            lifecycle_multiplier: z.number().optional(),
           })
           .passthrough()
       )

@@ -39,6 +39,8 @@ const HIT: KnowledgeRecallHit = {
   kind: "issue",
   issue_number: 390,
   snippet: "Decision: route counts through the Go native counter.",
+  stale: false,
+  lifecycle_multiplier: 1,
 };
 
 describe("KnowledgeSearchResultItem (#1207)", () => {

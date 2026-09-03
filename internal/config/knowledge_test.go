@@ -108,3 +108,43 @@ func TestIsAutoScaffold_ExplicitOptOut(t *testing.T) {
 		t.Error("auto_scaffold=false not respected — enabled but not automatic")
 	}
 }
+
+func TestKnowledgeRecallWeightsDefaults(t *testing.T) {
+	var absent *KnowledgeConfig
+	w := absent.ResolveRecallWeights()
+
+	cases := map[string]struct {
+		got  *float64
+		want float64
+	}{
+		"human_reviewed":    {w.HumanReviewed, 1.25},
+		"machine_confirmed": {w.MachineConfirmed, 1.0},
+		"unverified":        {w.Unverified, 0.85},
+		"status_draft":      {w.StatusDraft, 0.9},
+		"status_deprecated": {w.StatusDeprecated, 0.25},
+		"expired":           {w.Expired, 0.5},
+	}
+	for name, tc := range cases {
+		if tc.got == nil {
+			t.Fatalf("%s resolved to nil — downstream code must never re-check", name)
+		}
+		if *tc.got != tc.want {
+			t.Errorf("%s = %v, want %v", name, *tc.got, tc.want)
+		}
+	}
+}
+
+func TestKnowledgeRecallWeights_PartialOverrideKeepsOtherDefaults(t *testing.T) {
+	custom := 2.0
+	cfg := &KnowledgeConfig{Recall: &RecallConfig{
+		Weights: &RecallWeights{HumanReviewed: &custom},
+	}}
+
+	w := cfg.ResolveRecallWeights()
+	if *w.HumanReviewed != 2.0 {
+		t.Errorf("human_reviewed = %v, want the override", *w.HumanReviewed)
+	}
+	if *w.StatusDeprecated != 0.25 {
+		t.Errorf("status_deprecated = %v, want the default alongside an override", *w.StatusDeprecated)
+	}
+}
