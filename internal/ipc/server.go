@@ -5089,6 +5089,13 @@ func (s *Server) registerMethods() {
 	//ipc:method attentionSweep params:AttentionSweepParams result:AttentionSweepResult
 	s.methods["attention.sweep"] = s.handleAttentionSweep
 
+	// The one-point question in front of the sweep: did any bound board move
+	// since the last one? The extension's event-driven triggers (focus
+	// regained, tree refresh, activation, run terminated) ask this first and
+	// sweep only on a yes; the timer alone sweeps unconditionally.
+	//ipc:method boardChanged params:BoardChangedParams result:BoardChangedResult
+	s.methods["board.changed"] = s.handleBoardChanged
+
 	//ipc:method issueRemoveBlockedBy params:IssueRemoveBlockedByParams result:void
 	s.methods["issue.removeBlockedBy"] = s.handleIssueRemoveBlockedBy
 

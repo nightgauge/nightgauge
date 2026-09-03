@@ -362,7 +362,7 @@ not depend on registration order. Treat it as read-only advisory context.
 
 ## Bounding cost
 
-A sweep runs on activation, on refresh, on a timer, and after every run. Your
+A sweep runs on a timer, and on demand from several event-driven triggers. Your
 producer's forge traffic is therefore recurring, not one-off:
 
 - Cap how many entities you inspect, and say so in a constant with a comment.
@@ -370,6 +370,37 @@ producer's forge traffic is therefore recurring, not one-off:
   fetch per item.
 - When a backlog is large, consider collapsing into one aggregate card above a
   cap. Thirty cards is not thirty decisions, and it buries every other producer.
+
+### When a sweep actually runs
+
+A full sweep is ~64 GraphQL points plus 18 REST calls across a six-repo
+workspace, against an intended cadence of four an hour. The extension's
+`AttentionSweepService` therefore gates every trigger except the timer and the
+operator's own command behind the daemon's one-point board change probe
+(`board.changed`, over `ProjectUpdatedAt` from the board cache), memoised for
+`boardcache.ProbeTTL` so a burst of triggers costs one point.
+
+| Trigger                                                            | Sweeps when                                                               |
+| ------------------------------------------------------------------ | ------------------------------------------------------------------------- |
+| Timer (`sweepIntervalMinutes`, default 15, floor 5, window active) | Always — this is the cadence.                                             |
+| `nightgauge.attentionSweep` (the operator's command)               | Always — a "nothing changed" answer reads as a broken button.             |
+| Activation                                                         | First sweep of the window always; thereafter as below.                    |
+| Repository / Action Center refresh                                 | A bound board moved since the last sweep, OR a full interval has elapsed. |
+| Run terminated (`pipeline.complete` / `pipeline.error`)            | Same as refresh.                                                          |
+| Window focus regained (#484)                                       | Same as refresh.                                                          |
+
+When the probe answers "nothing moved", the trigger re-renders the cards the
+store already holds and issues no forge traffic beyond the probe. The probe
+fails open: a daemon without the verb, a probe error, an adapter with no probe
+(GitLab), and `unavailable` all sweep. A repo whose forge client does not
+resolve is skipped at zero cost — the sweep would skip it too — and does not
+vote.
+
+Producers whose condition does not move a ProjectV2 object — default-branch
+CI, dependabot alerts, branch protection — are therefore refreshed by the timer
+and the manual command only, never by an alt-tab. That is the intended trade:
+those conditions stand for hours, and the timer's period bounds how stale the
+answer can be.
 
 ## Testing
 
