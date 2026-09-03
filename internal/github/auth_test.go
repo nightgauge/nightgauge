@@ -167,6 +167,76 @@ func TestCheckTokenScopes_AllPresent(t *testing.T) {
 	}
 }
 
+// A fine-grained PAT or App installation token returns NO X-OAuth-Scopes
+// header: it has per-repository permissions, not scopes. It must be Valid
+// with ScopesAdvertised=false and no MissingScopes — this is the token the
+// clean-install gate runs with (workflow run 33700334912 refused it).
+func TestCheckTokenScopes_FineGrainedTokenAdvertisesNoScopes(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/rate_limit", func(w http.ResponseWriter, r *http.Request) {
+		// deliberately no X-OAuth-Scopes header
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"resources":{}}`))
+	})
+	mux.HandleFunc("/user", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]string{"login": "octocat"})
+	})
+	mux.HandleFunc("/user/orgs", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode([]map[string]string{})
+	})
+
+	c, _ := newTestServerWithHandlers(t, mux)
+	info, err := c.CheckTokenScopes(context.Background())
+	if err != nil {
+		t.Fatalf("CheckTokenScopes: %v", err)
+	}
+	if !info.Valid {
+		t.Errorf("expected Valid=true for a token that advertises no scopes; missing=%v", info.MissingScopes)
+	}
+	if info.ScopesAdvertised {
+		t.Errorf("expected ScopesAdvertised=false")
+	}
+	if len(info.MissingScopes) != 0 {
+		t.Errorf("MissingScopes = %v, want none", info.MissingScopes)
+	}
+}
+
+// An EMPTY X-OAuth-Scopes header is a classic token with no scopes at all —
+// a different case from the header being absent, and still invalid.
+func TestCheckTokenScopes_EmptyScopesHeaderIsStillInvalid(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/rate_limit", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-OAuth-Scopes", "")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"resources":{}}`))
+	})
+	mux.HandleFunc("/user", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]string{"login": "octocat"})
+	})
+	mux.HandleFunc("/user/orgs", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode([]map[string]string{})
+	})
+
+	c, _ := newTestServerWithHandlers(t, mux)
+	info, err := c.CheckTokenScopes(context.Background())
+	if err != nil {
+		t.Fatalf("CheckTokenScopes: %v", err)
+	}
+	if info.Valid {
+		t.Errorf("expected Valid=false for an empty scopes header")
+	}
+	if !info.ScopesAdvertised {
+		t.Errorf("expected ScopesAdvertised=true for a present-but-empty header")
+	}
+	if len(info.MissingScopes) != 2 {
+		t.Errorf("MissingScopes = %v, want [repo project]", info.MissingScopes)
+	}
+}
+
 func TestCheckTokenScopes_MissingProject(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/rate_limit", func(w http.ResponseWriter, r *http.Request) {

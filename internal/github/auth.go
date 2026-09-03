@@ -41,7 +41,7 @@ func (c *Client) Whoami(ctx context.Context) (*forgetypes.Actor, error) {
 // pipeline operations. It uses GET /rate_limit to read the X-OAuth-Scopes
 // header without consuming a meaningful API quota slot.
 func (c *Client) CheckTokenScopes(ctx context.Context) (*TokenScopeInfo, error) {
-	scopes, err := c.getOAuthScopes(ctx)
+	scopes, advertised, err := c.getOAuthScopes(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("get token scopes: %w", err)
 	}
@@ -57,42 +57,59 @@ func (c *Client) CheckTokenScopes(ctx context.Context) (*TokenScopeInfo, error) 
 		orgs = []string{}
 	}
 
-	missing := computeMissingScopes(scopes, requiredScopes)
+	// Only classic OAuth tokens advertise scopes. A fine-grained PAT or an App
+	// installation token returns no X-OAuth-Scopes header at all; requiring
+	// `repo` and `project` of it refused the clean-install gate's fine-grained
+	// token at `doctor` while it held full Contents/Issues/Pull-requests/
+	// Projects write on the repository (workflow run 33700334912). Such a
+	// token is valid here and its per-repository permission is checked where
+	// it matters, by the operations that need it.
+	missing := []string{}
+	if advertised {
+		missing = computeMissingScopes(scopes, requiredScopes)
+	}
 
 	return &TokenScopeInfo{
-		Scopes:         scopes,
-		Login:          login,
-		OrgMemberships: orgs,
-		Resolution:     "env", // NewClient always uses GITHUB_TOKEN env var
-		MissingScopes:  missing,
-		Valid:          len(missing) == 0,
+		Scopes:           scopes,
+		Login:            login,
+		OrgMemberships:   orgs,
+		Resolution:       "env", // NewClient always uses GITHUB_TOKEN env var
+		MissingScopes:    missing,
+		Valid:            len(missing) == 0,
+		ScopesAdvertised: advertised,
 	}, nil
 }
 
 // getOAuthScopes calls GET /rate_limit and returns the X-OAuth-Scopes header
-// parsed into individual scope strings.
-func (c *Client) getOAuthScopes(ctx context.Context) ([]string, error) {
+// parsed into individual scope strings, plus whether the header was present
+// at all. GitHub omits it for fine-grained PATs and App installation tokens,
+// which have permissions rather than scopes; an empty-but-present header is a
+// classic token with no scopes, which is a different (and invalid) case.
+func (c *Client) getOAuthScopes(ctx context.Context) ([]string, bool, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, githubAPIBase+"/rate_limit", nil)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	defer resp.Body.Close()
 	_, _ = io.ReadAll(resp.Body) // drain body
 
 	if resp.StatusCode == http.StatusUnauthorized {
-		return nil, fmt.Errorf("token is expired or revoked (HTTP 401)")
+		return nil, false, fmt.Errorf("token is expired or revoked (HTTP 401)")
 	}
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusForbidden {
-		return nil, fmt.Errorf("unexpected status %d from /rate_limit", resp.StatusCode)
+		return nil, false, fmt.Errorf("unexpected status %d from /rate_limit", resp.StatusCode)
 	}
 
-	raw := resp.Header.Get("X-OAuth-Scopes")
-	return parseScopes(raw), nil
+	raw, advertised := resp.Header[http.CanonicalHeaderKey("X-OAuth-Scopes")]
+	if !advertised {
+		return []string{}, false, nil
+	}
+	return parseScopes(strings.Join(raw, ",")), true, nil
 }
 
 // getCurrentUserLogin calls GET /user and returns the authenticated user's login.
