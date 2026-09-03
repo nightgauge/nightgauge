@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	gh "github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/internal/intelligence/versionDowngradeGate"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
@@ -75,15 +74,19 @@ func versionDowngradeCheckCmd() *cobra.Command {
 				}
 			}
 
-			// Discover labels for bypass check (best-effort).
+			// Discover labels for the bypass check. The fetch itself is
+			// best-effort, but the repository it targets is not: an empty or
+			// malformed segment is an operator error, reported before any
+			// client or network work rather than swallowed into a silent
+			// "owner/" lookup that never finds the bypass label (#536, #548).
 			var labels []string
 			if issueNum > 0 {
-				if client, err := clientFromConfig(); err == nil {
-					ownerPart, repoPart := splitRepo(owner, repo)
-					svc := gh.NewIssueService(client)
-					if issue, gerr := svc.GetIssue(cmd.Context(), ownerPart, repoPart, issueNum); gerr == nil {
-						labels = issue.Labels
-					}
+				ownerPart, repoPart, err := resolveGateRepo(owner, repo)
+				if err != nil {
+					return err
+				}
+				if got, gerr := fetchGateIssueLabels(cmd.Context(), ownerPart, repoPart, issueNum); gerr == nil {
+					labels = got
 				}
 			}
 
@@ -129,7 +132,7 @@ func versionDowngradeCheckCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&owner, "owner", "", "GitHub repository owner (defaults to config)")
-	cmd.Flags().StringVar(&repo, "repo", "", "GitHub repository name (defaults to config)")
+	repoNameFlag(cmd, &repo, "", "GitHub repository name (defaults to config)")
 	cmd.Flags().IntVar(&issueNum, "issue", 0, "GitHub issue number for label bypass + dev context lookup (optional)")
 	cmd.Flags().StringVar(&baselineBranch, "baseline", "main", "Baseline branch to compare against")
 	cmd.Flags().StringVar(&configPath, "config", ".nightgauge/config.yaml", "Path to config.yaml")

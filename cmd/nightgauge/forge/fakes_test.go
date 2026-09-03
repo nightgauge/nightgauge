@@ -317,9 +317,6 @@ func (f *fakeBoardService) ListItems(_ context.Context, _ string) ([]forgetypes.
 func (f *fakeBoardService) ListOpenItems(_ context.Context) ([]forgetypes.BoardItem, int, error) {
 	return nil, 0, nil
 }
-func (f *fakeBoardService) CountsByStatus(_ context.Context) (*forgetypes.StatusCounts, error) {
-	return nil, nil
-}
 func (f *fakeBoardService) GetItem(_ context.Context, _, _ string, _ int) (*forgetypes.BoardItem, error) {
 	if f.getResp != nil {
 		return f.getResp, nil

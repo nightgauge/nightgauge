@@ -39,18 +39,13 @@ function modelKey(record: ExecutionHistoryRecord): string {
  * record is evidence about routing rather than about a substitution. Until #446
  * this compared against `"auto"` — a value the writer cannot produce.
  *
- * The comparand is corrected; this dimension is NOT thereby live. The only
- * in-repo feeders of the health path build their records without a
- * `selectionSource` at all — `PipelineHealthRunner.runAnalyzers`' mapper
- * (PipelineHealthRunner.ts:116, one record per RUN) and `buildHealthInput`
- * (buildHealthInput.ts:55, zero src callers) — so this predicate is still false
- * for 100% of records the repo actually hands it, and `modelKey()` still
- * buckets everything as `"unknown"`. Populating those feeders forces a
- * per-run-vs-per-stage decision and is filed as a follow-up.
- *
- * The path that DID go live on #446 is
- * `PostPipelineAnalyzer.adaptRecords` → `ModelPerformanceAnalyzer`, which
- * copies `model_selection.source` onto every record it emits.
+ * `selectionSource` is a PER-STAGE fact (`stages[*].model_selection.source`
+ * on the run record), so every feeder of this dimension flattens runs into
+ * per-stage records through `flattenRunRecords` (../executionHistoryFeeder.ts,
+ * #461) — the health path (`PipelineHealthRunner`, `buildHealthInput`) and the
+ * post-pipeline path (`PostPipelineAnalyzer.adaptRecords`) alike. Before #461
+ * the health path built one record per RUN with no `selectionSource`, so this
+ * predicate was false for every record it was ever handed.
  *
  * See also AUTOMATIC_MODEL_SELECTION_SOURCE in ../../types.ts: `"scheduler"`
  * means "nothing substituted it", which is NOT the same as "a router, rather

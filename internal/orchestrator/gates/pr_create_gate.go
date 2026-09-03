@@ -62,7 +62,7 @@ func (PrCreateGate) Verify(ctx context.Context, issueNumber int, workspace strin
 					fmt.Sprintf("expected %s", ctxPath),
 				}, KindNoOp, ""
 			}
-			return false, "failed to read pr context file", []string{err.Error()}, KindFail, ""
+			return false, "failed to read pr context file", []string{err.Error()}, KindFail, TerminalKindStageContextUnreadable
 		}
 
 		var prCtx struct {

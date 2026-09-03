@@ -827,9 +827,10 @@ names a PR that is green and waiting on a person.
   for a failure inside its grace window (default 10 minutes, measured from the
   check's own completion time) — so a failure that is re-run green never
   surfaces. If you expect a card and do not see one, check both.
-- No required checks configured on the branch means **nothing is required to
-  merge**, so `default-branch-health` stays silent by design even if the branch
-  looks red.
+- A failing check that is **not required** to merge blocks nothing, so it is
+  carded at `fyi` rather than `blocking_fleet` (#1250) — including on a branch
+  with no required checks at all. It still names the check and links the run;
+  it just does not interrupt. A repo with no checks at all raises nothing.
 - If the sweep reports `skipped`, it could not trust its own view — an auth,
   permission, rate-limit, or deadline failure. Existing cards are deliberately
   left untouched rather than retracted. Fix the credential and re-run.
@@ -1184,7 +1185,10 @@ per `ProjectBoardService` instance while item lists were shared per board, so N
 repositories on one board cost N counts queries per cold refresh. Counts now
 live in `BoardSnapshotStore` under `COUNTS_SCOPE`; if the API ledger ever shows
 more than one `board.counts` per board per refresh, something is bypassing the
-store.
+store. Daemon-side, `board.counts` is no longer a query at all: it is derived
+from the cached open-item snapshot (`docs/GO_BINARY.md` § _The Board Snapshot
+Cache_), so a ledger showing five-alias `totalCount` documents means an old
+binary.
 
 ## Local Validation Traps
 

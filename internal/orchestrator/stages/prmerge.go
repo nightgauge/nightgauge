@@ -59,6 +59,16 @@ const (
 	// #297). Distinct from ReasonFailedChecks (a check reported FAILURE/ERROR):
 	// a timeout means CI was still in-flight when the budget expired.
 	ReasonCIWaitTimeout = "ci-wait-timeout"
+	// ReasonNoChecksCreated is recorded when the PR was BLOCKED/UNSTABLE with
+	// an EMPTY check rollup for the whole no-check grace window (#1027).
+	// pr-merge starts seconds after pr-create, before GitHub has created any
+	// check run, so the first snapshot is BLOCKED with zero checks — that is
+	// "CI has not started yet", not a dirty merge state, and the runner waits
+	// the grace window for a run to appear. If none does, the repo most likely
+	// has no CI that will ever satisfy the ruleset; the punt names that so the
+	// LLM spend is attributable, and `dirty-merge-state: BLOCKED` is reserved
+	// for a block the deterministic path actually diagnosed.
+	ReasonNoChecksCreated = "no-checks-created"
 )
 
 // CI-wait budget for the deterministic pr-merge path (Issue #297). When the
@@ -70,6 +80,13 @@ const (
 const (
 	DefaultCIPollInterval = 30 * time.Second
 	DefaultCIPollMax      = 30
+	// DefaultCINoCheckGracePolls bounds how many CI-wait polls the runner
+	// spends on a BLOCKED/UNSTABLE PR whose check rollup is still EMPTY
+	// (#1027): 4 × 30 s = 2 min for GitHub to create the first check run. It
+	// is a prefix of the CI-wait budget, not an addition to it, and it is
+	// bounded so a repo with no CI at all cannot hold the deterministic path
+	// for the full 15 min before punting `no-checks-created`.
+	DefaultCINoCheckGracePolls = 4
 )
 
 // PRMergeResult is the outcome of a single Run invocation.
@@ -194,6 +211,9 @@ type DeterministicRunner struct {
 	// budget for post-merge state propagation.
 	ciPollInterval time.Duration
 	ciPollMax      int
+	// ciNoCheckGrace bounds the prefix of the CI wait spent on a PR whose
+	// check rollup is still empty (#1027) — see DefaultCINoCheckGracePolls.
+	ciNoCheckGrace int
 	now            func() time.Time
 }
 
@@ -208,6 +228,7 @@ func NewDeterministicRunner() *DeterministicRunner {
 		pollMax:        DefaultECPolls,
 		ciPollInterval: DefaultCIPollInterval,
 		ciPollMax:      DefaultCIPollMax,
+		ciNoCheckGrace: DefaultCINoCheckGracePolls,
 		now:            time.Now,
 	}
 }
@@ -269,8 +290,15 @@ func (r *DeterministicRunner) Run(ctx context.Context, issueNumber int, _ string
 	// real per-run LLM spend for zero engineering work. On a hard blocker
 	// emerging mid-wait (a check fails, a conflict/review appears) or on timeout,
 	// re-Decide/return the appropriate punt so the LLM path still gets its turn.
+	//
+	// The predicate also holds for a BLOCKED/UNSTABLE PR with an EMPTY check
+	// rollup (#1027): GitHub has not created a check run yet, which is the
+	// shape of the very first snapshot on every run. That case is waited for
+	// a shorter grace window (ciNoCheckGrace polls) and punts
+	// `no-checks-created` if no run ever appears, so a repo without CI does
+	// not hold the deterministic path for the full budget.
 	if !decision.ShouldMerge && MergeBlockedByPendingCI(snap) {
-		waited, timedOut, waitErr := r.waitForCleanMergeState(ctx, prNumber, snap)
+		waited, outcome, waitErr := r.waitForCleanMergeState(ctx, prNumber, snap)
 		if waitErr != nil {
 			return finish(PRMergeResult{
 				Path:     PathPunt,
@@ -280,12 +308,20 @@ func (r *DeterministicRunner) Run(ctx context.Context, issueNumber int, _ string
 			}, nil)
 		}
 		snap = waited
-		if timedOut {
+		switch outcome {
+		case ciWaitTimedOut:
 			return finish(PRMergeResult{
 				Path:     PathPunt,
 				PRNumber: prNumber,
 				PRState:  snap.State,
 				Reason:   ReasonCIWaitTimeout,
+			}, nil)
+		case ciWaitNoChecksCreated:
+			return finish(PRMergeResult{
+				Path:     PathPunt,
+				PRNumber: prNumber,
+				PRState:  snap.State,
+				Reason:   ReasonNoChecksCreated,
 			}, nil)
 		}
 		decision = Decide(snap)
@@ -409,14 +445,26 @@ func (r *DeterministicRunner) fetchWithPolling(ctx context.Context, prNumber int
 }
 
 // MergeBlockedByPendingCI reports whether the ONLY thing preventing a clean
-// merge is in-flight CI (Issue #297): the PR is OPEN and MERGEABLE (no
-// conflict), no check has reported FAILURE/ERROR, review is not blocking, the
-// merge state is BLOCKED or UNSTABLE (required/optional checks not yet green),
-// and at least one check is still pending. Such a PR is expected to become
-// CLEAN once CI finishes, so the runner waits rather than punting. Hard blockers
-// (conflict → DIRTY/CONFLICTING, review required, a failed check, BEHIND/DRAFT)
-// return false: those will not self-resolve by waiting, so the LLM path should
-// get its turn immediately.
+// merge is CI that has not finished — or not started — yet (Issue #297,
+// #1027): the PR is OPEN and MERGEABLE (no conflict), no check has reported
+// FAILURE/ERROR, review is not blocking, the merge state is BLOCKED or UNSTABLE
+// (required/optional checks not yet green), and either at least one check is
+// still pending or NO check run has been created at all. Such a PR is expected
+// to become CLEAN once CI finishes, so the runner waits rather than punting.
+// Hard blockers (conflict → DIRTY/CONFLICTING, review required, a failed check,
+// BEHIND/DRAFT, or BLOCKED with every listed check concluded) return false:
+// those will not self-resolve by waiting, so the LLM path should get its turn
+// immediately.
+//
+// Zero checks is "pending", not "structural" (#1027): pr-merge starts seconds
+// after pr-create, before GitHub has created any check run, so the first
+// snapshot of nearly every run is BLOCKED with an empty rollup. Reading that
+// as `dirty-merge-state: BLOCKED` punted the deterministic path on the common
+// case and — through attention.raise — carded in-flight CI as a
+// branch-protection block. The predicate cannot tell "not created yet" from
+// "no CI will ever run" on one snapshot; that distinction is temporal, and
+// DeterministicRunner bounds it with a grace window (ciNoCheckGrace) that
+// punts ReasonNoChecksCreated when no run appears.
 //
 // EXPORTED for the attention.raise verb (#305). Decide() alone cannot see
 // pending CI — the interception lives OUT here, in DeterministicRunner.Run,
@@ -445,6 +493,12 @@ func MergeBlockedByPendingCI(snap PRViewSnapshot) bool {
 	if snap.ReviewDecision == "REVIEW_REQUIRED" || snap.ReviewDecision == "CHANGES_REQUESTED" {
 		return false
 	}
+	// No check run created yet — CI has not started. Waiting is the only
+	// thing that can tell this apart from a repo with no CI, and the runner
+	// bounds that wait (#1027).
+	if len(snap.StatusCheckRollup) == 0 {
+		return true
+	}
 	// Any already-failed check is a hard blocker — do not wait.
 	sawPending := false
 	for _, c := range snap.StatusCheckRollup {
@@ -455,28 +509,54 @@ func MergeBlockedByPendingCI(snap PRViewSnapshot) bool {
 			sawPending = true
 		}
 	}
-	// Require at least one in-flight check so we don't spin on a PR that is
-	// BLOCKED for a non-CI reason (e.g. a required check that will never run).
+	// With checks listed, require at least one in-flight so we don't spin on
+	// a PR that is BLOCKED for a non-CI reason (every listed check concluded
+	// green and the ruleset still says BLOCKED).
 	return sawPending
 }
 
+// ciWaitOutcome is how waitForCleanMergeState ended.
+type ciWaitOutcome int
+
+const (
+	// ciWaitResolved — the merge state resolved (CLEAN and mergeable, or a hard
+	// blocker/merge emerged); the caller re-runs Decide.
+	ciWaitResolved ciWaitOutcome = iota
+	// ciWaitTimedOut — the budget was exhausted with CI still pending (caller
+	// punts ReasonCIWaitTimeout so the LLM path runs).
+	ciWaitTimedOut
+	// ciWaitNoChecksCreated — the no-check grace window expired and GitHub
+	// still had not created a single check run (caller punts
+	// ReasonNoChecksCreated) (#1027).
+	ciWaitNoChecksCreated
+)
+
 // waitForCleanMergeState polls the PR up to ciPollMax times (ciPollInterval
 // apart) while it remains blocked solely by pending CI (Issue #297). It returns
-// the last observed snapshot and:
-//   - timedOut=true  → the budget was exhausted with CI still pending (caller
-//     punts ReasonCIWaitTimeout so the LLM path runs).
-//   - timedOut=false, err=nil → the merge state resolved (either CLEAN and
-//     mergeable, or a hard blocker/merge emerged); the caller re-runs Decide.
-//   - err != nil → a non-retryable fetch error (e.g. rate limit) surfaced.
+// the last observed snapshot, how the wait ended, and a non-nil error only for
+// a non-retryable fetch error (e.g. rate limit).
+//
+// While the check rollup is EMPTY the wait is capped at ciNoCheckGrace polls
+// (#1027): a check run appearing within the window promotes the wait to the
+// full budget; none appearing ends it with ciWaitNoChecksCreated. The grace is
+// a prefix of ciPollMax, so a grace larger than the budget degrades to the
+// plain timeout.
 //
 // The initial snapshot is passed so a runner configured with ciPollMax==0 (or a
 // PR that resolves on the first re-poll) degrades gracefully.
-func (r *DeterministicRunner) waitForCleanMergeState(ctx context.Context, prNumber int, initial PRViewSnapshot) (PRViewSnapshot, bool, error) {
+func (r *DeterministicRunner) waitForCleanMergeState(ctx context.Context, prNumber int, initial PRViewSnapshot) (PRViewSnapshot, ciWaitOutcome, error) {
 	last := initial
+	// Polls that observed an empty rollup, counted only while no check has
+	// been seen yet. Once a run exists the ordinary budget governs.
+	emptyPolls := 0
+	sawCheck := len(initial.StatusCheckRollup) > 0
 	for poll := 0; poll < r.ciPollMax; poll++ {
+		if !sawCheck && emptyPolls >= r.ciNoCheckGrace {
+			return last, ciWaitNoChecksCreated, nil
+		}
 		select {
 		case <-ctx.Done():
-			return last, false, ctx.Err()
+			return last, ciWaitResolved, ctx.Err()
 		case <-time.After(r.ciPollInterval):
 		}
 		snap, err := r.gh.View(ctx, prNumber)
@@ -484,7 +564,7 @@ func (r *DeterministicRunner) waitForCleanMergeState(ctx context.Context, prNumb
 			// Rate-limit errors are not retryable inside the deterministic path
 			// (#3020 / ADR-004) — surface immediately.
 			if isRateLimitErr(err) {
-				return last, false, err
+				return last, ciWaitResolved, err
 			}
 			// Transient fetch error — keep waiting until the budget expires.
 			continue
@@ -493,10 +573,18 @@ func (r *DeterministicRunner) waitForCleanMergeState(ctx context.Context, prNumb
 		// Resolved one way or another: either now mergeable/clean or a hard
 		// blocker (failed check, conflict, review, merged) has appeared.
 		if !MergeBlockedByPendingCI(snap) {
-			return snap, false, nil
+			return snap, ciWaitResolved, nil
+		}
+		if len(snap.StatusCheckRollup) > 0 {
+			sawCheck = true
+		} else {
+			emptyPolls++
 		}
 	}
-	return last, true, nil
+	if !sawCheck && emptyPolls >= r.ciNoCheckGrace {
+		return last, ciWaitNoChecksCreated, nil
+	}
+	return last, ciWaitTimedOut, nil
 }
 
 // readPRContextNumber reads .nightgauge/pipeline/pr-{N}.json and returns

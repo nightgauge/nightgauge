@@ -214,32 +214,37 @@ record may carry both fields, neither, or only one.
 
 ### Values
 
-| Kind                         | Meaning                                                                                                                                                                                                                                                                                                           |
-| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `stall_kill`                 | Subagent exceeded `stall_kill_multiplier × stall_thresholds` and was forcibly killed                                                                                                                                                                                                                              |
-| `budget_exceeded`            | Pipeline-level or per-stage **token** budget ceiling tripped (with grace buffer applied)                                                                                                                                                                                                                          |
-| `validation_error`           | Context schema validation failed terminally (e.g., missing output context for the stage)                                                                                                                                                                                                                          |
-| `subagent_crash`             | Subagent process exited non-zero with no recovery path (model escalation exhausted)                                                                                                                                                                                                                               |
-| `orchestrator_crash`         | Orchestrator process died mid-stage; record synthesized on next startup from a stale `current-run.json` sidecar                                                                                                                                                                                                   |
-| `network_unavailable`        | Extended GitHub connectivity loss aborted the run (Issue #3296) — environmental                                                                                                                                                                                                                                   |
-| `stream_idle_timeout`        | Anthropic API closed a streaming response mid-flight (Issue #3398) — environmental                                                                                                                                                                                                                                |
-| `rate_limit_quota_exhausted` | Idle stall fired while the rate-limit bucket was drained (Issue #3386) — environmental                                                                                                                                                                                                                            |
-| `worktree_uncommitted`       | Failure **recovered**: uncommitted work was auto-committed before cleanup (Issue #3542)                                                                                                                                                                                                                           |
-| `budget_ceiling_hit`         | The USD pipeline budget ceiling killed a running stage (Issue #3542) — real spend, not a defect                                                                                                                                                                                                                   |
-| `github_quota_low`           | GitHub API rate-limit bucket below headroom at the pipeline-start preflight (Issue #3896) — environmental                                                                                                                                                                                                         |
-| `api_connection_lost`        | Anthropic API transport drop mid-stage (socket close / DNS blip; Issue #4002) — environmental                                                                                                                                                                                                                     |
-| `github_network_outage`      | api.github.com unreachable at the pipeline-start preflight (Issue #4002) — environmental                                                                                                                                                                                                                          |
-| `model_unavailable`          | API rejected the selected model: not on plan / unknown ID / model usage cap (Issue #42) — triggers tier fallback                                                                                                                                                                                                  |
-| `premature_turn_end`         | Stage exited 0 but produced no state change — the agent ended its turn on a promise (Issue #74)                                                                                                                                                                                                                   |
-| `dev_produced_no_changes`    | feature-dev's gate found the stage workspace empty despite a truthful dev context — work landed where the pipeline never reads (Issue #202)                                                                                                                                                                       |
-| `adapter_auth_failed`        | Pipeline-start adapter auth gate refused to launch: probe timed out after retry, or the adapter CLI is logged out (Issue #312) — retryable infra                                                                                                                                                                  |
-| `no_changes_produced`        | pr-create's deterministic fallback confirmed zero commits ahead of base — genuinely nothing to open a PR for (Issue #317) — planning/scope                                                                                                                                                                        |
-| `not_pipeline_actionable`    | A stage declared the issue's deliverable is not producible by any pipeline lap — counsel sign-off, an operator-only credential, a human decision (Issue #1241) — not a failure and not a deferral                                                                                                                 |
-| `validation_failed`          | feature-validate honestly failed its quality gates (`validation_status="failed"`) — organic implementation failure (Issue #326)                                                                                                                                                                                   |
-| `branch_forked`              | The run's branch diverged from its remote; every push is rejected non-fast-forward (Issue #163) — unrecoverable by retry, needs human action                                                                                                                                                                      |
-| `abandoned_commit`           | A stage upstream of pr-create was killed/crashed after committing valid, unmerged work (clean tree, ahead of base) — the `abandoned-commit-recoverable` action matched but could neither self-heal nor set up a resume (Issue #191)                                                                               |
-| `commit_orphaned`            | A killed stage's commit landed on the wrong branch (a stray `temp-pre-push-<n>` left by a SIGKILL bypassing pre_push.go's restore-defer) and feature-validate's branch-identity self-heal could not check out the expected feature branch to recover it (Issue #266) — unrecoverable by retry, needs human action |
-| `permission_denied`          | Harness denied a tool call outright — most commonly a stage's foreground `sleep` wait loop (Issue #289) — harness fault, retryable                                                                                                                                                                                |
+| Kind                             | Meaning                                                                                                                                                                                                                                                                                                           |
+| -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `stall_kill`                     | Subagent exceeded `stall_kill_multiplier × stall_thresholds` and was forcibly killed                                                                                                                                                                                                                              |
+| `budget_exceeded`                | Pipeline-level or per-stage **token** budget ceiling tripped (with grace buffer applied)                                                                                                                                                                                                                          |
+| `validation_error`               | Context schema validation failed terminally (e.g., missing output context for the stage)                                                                                                                                                                                                                          |
+| `subagent_crash`                 | Subagent process exited non-zero with no recovery path (model escalation exhausted)                                                                                                                                                                                                                               |
+| `orchestrator_crash`             | Orchestrator process died mid-stage; record synthesized on next startup from a stale `current-run.json` sidecar                                                                                                                                                                                                   |
+| `network_unavailable`            | Extended GitHub connectivity loss aborted the run (Issue #3296) — environmental                                                                                                                                                                                                                                   |
+| `stream_idle_timeout`            | Anthropic API closed a streaming response mid-flight (Issue #3398) — environmental                                                                                                                                                                                                                                |
+| `rate_limit_quota_exhausted`     | Idle stall fired while the rate-limit bucket was drained (Issue #3386) — environmental                                                                                                                                                                                                                            |
+| `worktree_uncommitted`           | Failure **recovered**: uncommitted work was auto-committed before cleanup (Issue #3542)                                                                                                                                                                                                                           |
+| `budget_ceiling_hit`             | The USD pipeline budget ceiling killed a running stage (Issue #3542) — real spend, not a defect                                                                                                                                                                                                                   |
+| `github_quota_low`               | GitHub API rate-limit bucket below headroom at the pipeline-start preflight (Issue #3896) — environmental                                                                                                                                                                                                         |
+| `api_connection_lost`            | Anthropic API transport drop mid-stage (socket close / DNS blip; Issue #4002) — environmental                                                                                                                                                                                                                     |
+| `github_network_outage`          | api.github.com unreachable at the pipeline-start preflight (Issue #4002) — environmental                                                                                                                                                                                                                          |
+| `model_unavailable`              | API rejected the selected model: not on plan / unknown ID / model usage cap (Issue #42) — triggers tier fallback                                                                                                                                                                                                  |
+| `premature_turn_end`             | Stage exited 0 but produced no state change — the agent ended its turn on a promise (Issue #74)                                                                                                                                                                                                                   |
+| `dev_produced_no_changes`        | feature-dev's gate found the stage workspace empty despite a truthful dev context — work landed where the pipeline never reads (Issue #202)                                                                                                                                                                       |
+| `adapter_auth_failed`            | Pipeline-start adapter auth gate refused to launch: probe timed out after retry, or the adapter CLI is logged out (Issue #312) — retryable infra                                                                                                                                                                  |
+| `no_changes_produced`            | pr-create's deterministic fallback confirmed zero commits ahead of base — genuinely nothing to open a PR for (Issue #317) — planning/scope                                                                                                                                                                        |
+| `not_pipeline_actionable`        | A stage declared the issue's deliverable is not producible by any pipeline lap — counsel sign-off, an operator-only credential, a human decision (Issue #1241) — not a failure and not a deferral                                                                                                                 |
+| `validation_failed`              | feature-validate honestly failed its quality gates (`validation_status="failed"`) — organic implementation failure (Issue #326)                                                                                                                                                                                   |
+| `branch_forked`                  | The run's branch diverged from its remote; every push is rejected non-fast-forward (Issue #163) — unrecoverable by retry, needs human action                                                                                                                                                                      |
+| `abandoned_commit`               | A stage upstream of pr-create was killed/crashed after committing valid, unmerged work (clean tree, ahead of base) — the `abandoned-commit-recoverable` action matched but could neither self-heal nor set up a resume (Issue #191)                                                                               |
+| `commit_orphaned`                | A killed stage's commit landed on the wrong branch (a stray `temp-pre-push-<n>` left by a SIGKILL bypassing pre_push.go's restore-defer) and feature-validate's branch-identity self-heal could not check out the expected feature branch to recover it (Issue #266) — unrecoverable by retry, needs human action |
+| `permission_denied`              | Harness denied a tool call outright — most commonly a stage's foreground `sleep` wait loop (Issue #289) — harness fault, retryable                                                                                                                                                                                |
+| `stage_context_unreadable`       | A post-condition gate could not read a file the stage's contract says it wrote — its context file, planning's `plan_file`, or `gate-metrics.jsonl` — for a reason other than absence (EISDIR / ENOTDIR / EACCES; Issue #1237) — filesystem fault, not the work                                                    |
+| `dev_build_verification_missing` | feature-dev's context carries no `build_verification` object: the skill skipped the verification step the completion contract requires (Issue #1237, contract from #55) — agent behaviour                                                                                                                         |
+| `dev_build_verification_failed`  | feature-dev ran its build and recorded `build_verification.status="failed"` (Issue #1237) — organic implementation failure                                                                                                                                                                                        |
+| `dev_tests_failed`               | feature-dev's own test run recorded `tests_status.failed > 0` (Issue #1237) — organic implementation failure                                                                                                                                                                                                      |
+| `pr_merge_lookup_failed`         | pr-merge's gate could not establish the PR's state: `gh pr view` failed or was rate-limited on every attempt and the local-git fallback found no merge commit (Issue #1237) — infrastructure; the merge may have landed unseen                                                                                    |
 
 `permission_denied` (Issue #289) is a **harness-fault** kind, distinct from a
 stage failure. The harness rejects certain tool calls outright — the observed
@@ -478,29 +483,56 @@ construction (`classifyTerminalKind` / `resolveTerminalKind` in
 
 ### Relationship to `failure_category`
 
-| Terminal Kind                | Typical `failure_category` (heuristic)                                                      |
-| ---------------------------- | ------------------------------------------------------------------------------------------- |
-| `stall_kill`                 | `agent` — transient runtime issue                                                           |
-| `budget_exceeded`            | `agent` — call-pattern under operator control                                               |
-| `validation_error`           | `infrastructure` — pipeline contract failed                                                 |
-| `subagent_crash`             | `organic` — implementation failure, full weight                                             |
-| `orchestrator_crash`         | `infrastructure` — ours, not the model's                                                    |
-| `network_unavailable`        | `infrastructure` — environmental, excluded from calibration                                 |
-| `stream_idle_timeout`        | `infrastructure` — upstream API, not the issue                                              |
-| `rate_limit_quota_exhausted` | `infrastructure` — upstream API quota, not the issue                                        |
-| `github_quota_low`           | `infrastructure` — GitHub API quota, not the issue                                          |
-| `api_connection_lost`        | `infrastructure` — local network/transport, not the issue                                   |
-| `github_network_outage`      | `infrastructure` — local network/transport, not the issue                                   |
-| `model_unavailable`          | `infrastructure` — plan/limit environment, not the issue                                    |
-| `premature_turn_end`         | `agent` — the agent's turn-ending behavior, not the issue                                   |
-| `dev_produced_no_changes`    | `agent` — the stage's delegation/turn-ending behavior, not the issue                        |
-| `adapter_auth_failed`        | `infrastructure` — probe starvation / credential state, not the issue                       |
-| `no_changes_produced`        | `agent` — planning/scope failure (dispatch-eligibility gap), not the model's implementation |
-| `not_pipeline_actionable`    | non-failure — the issue is misfiled, not defective; no lifetime-cap increment, no cascade   |
-| `validation_failed`          | `organic` — true implementation failure caught by feature-validate's own quality gate       |
-| `branch_forked`              | `infrastructure` — the pipeline's own orphaned push (or an operator's), not the code        |
-| `worktree_uncommitted`       | recoverable — work preserved, not counted as a failure                                      |
-| `budget_ceiling_hit`         | recoverable — real spend, not a code defect                                                 |
+| Terminal Kind                    | Typical `failure_category` (heuristic)                                                      |
+| -------------------------------- | ------------------------------------------------------------------------------------------- |
+| `stall_kill`                     | `agent` — transient runtime issue                                                           |
+| `budget_exceeded`                | `agent` — call-pattern under operator control                                               |
+| `validation_error`               | `infrastructure` — pipeline contract failed                                                 |
+| `subagent_crash`                 | `organic` — implementation failure, full weight                                             |
+| `orchestrator_crash`             | `infrastructure` — ours, not the model's                                                    |
+| `network_unavailable`            | `infrastructure` — environmental, excluded from calibration                                 |
+| `stream_idle_timeout`            | `infrastructure` — upstream API, not the issue                                              |
+| `rate_limit_quota_exhausted`     | `infrastructure` — upstream API quota, not the issue                                        |
+| `github_quota_low`               | `infrastructure` — GitHub API quota, not the issue                                          |
+| `api_connection_lost`            | `infrastructure` — local network/transport, not the issue                                   |
+| `github_network_outage`          | `infrastructure` — local network/transport, not the issue                                   |
+| `model_unavailable`              | `infrastructure` — plan/limit environment, not the issue                                    |
+| `premature_turn_end`             | `agent` — the agent's turn-ending behavior, not the issue                                   |
+| `dev_produced_no_changes`        | `agent` — the stage's delegation/turn-ending behavior, not the issue                        |
+| `adapter_auth_failed`            | `infrastructure` — probe starvation / credential state, not the issue                       |
+| `no_changes_produced`            | `agent` — planning/scope failure (dispatch-eligibility gap), not the model's implementation |
+| `not_pipeline_actionable`        | non-failure — the issue is misfiled, not defective; no lifetime-cap increment, no cascade   |
+| `validation_failed`              | `organic` — true implementation failure caught by feature-validate's own quality gate       |
+| `branch_forked`                  | `infrastructure` — the pipeline's own orphaned push (or an operator's), not the code        |
+| `worktree_uncommitted`           | recoverable — work preserved, not counted as a failure                                      |
+| `budget_ceiling_hit`             | recoverable — real spend, not a code defect                                                 |
+| `stage_context_unreadable`       | `infrastructure` — the gate's own filesystem read failed, not the issue                     |
+| `dev_build_verification_missing` | `agent` — the skill skipped a contract step, not the issue                                  |
+| `dev_build_verification_failed`  | `organic` — the stage's own build broke                                                     |
+| `dev_tests_failed`               | `organic` — the stage's own tests failed                                                    |
+| `pr_merge_lookup_failed`         | `infrastructure` — gh / local git could not answer, not the issue                           |
+
+**The sweep (#1237).** #9 built the mechanism but left eleven `KindFail`
+sites emitting an empty `TerminalKind` — four in `feature_dev_gate.go`, two
+each in `feature_planning_gate.go` and `pr_merge_gate.go`, one each in
+`issue_pickup_gate.go`, `feature_validate_gate.go` and `pr_create_gate.go`.
+Empty is not "no opinion": `ResolveTerminalKind` falls back to the prose
+ladder, which had no clause for the scheduler's `stage gate failed: <reason>`
+wrapper, so the generic `exit ` clause of the `subagent-crash` rule decided and
+every one of those honest gate failures was booked as an infrastructure crash —
+corrupting failure weighting and sending auto-triage down a crash-recovery path
+for a fault that never happened. Every `KindFail` site now names its failure at
+the point it detects it, with five kinds added for the shapes no existing
+constant described: `stage_context_unreadable`, `dev_build_verification_missing`,
+`dev_build_verification_failed`, `dev_tests_failed`, `pr_merge_lookup_failed`
+(meanings in the Values table above). The rule table carries a matching rule
+per kind, gated on the wrapper text, for text-classified paths and records
+written before the sweep. Two guards keep it closed:
+`TestKindFail_AlwaysCarriesTerminalKind` in
+`internal/orchestrator/gates/gate_test.go` drives every gate into each of its
+`KindFail` branches and asserts a non-empty, non-`subagent_crash` kind, and
+`TestGateTerminalKindConstantsMirrorOrchestrator` pins the gates-package
+mirror constants to the orchestrator originals.
 
 The Go scheduler classifies the kind on every terminal-failure path; the
 synthesized record always carries it. Older V2 records (pre-#3001) have no

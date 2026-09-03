@@ -1330,6 +1330,9 @@ func TestIsBranchProtectionPuntMatchesDecideReasons(t *testing.T) {
 			StatusCheckRollup: []pmstages.PRStatusCheckRow{{Name: "ci", Conclusion: ""}}},
 		{State: "OPEN", Mergeable: "MERGEABLE", MergeStateStatus: "UNSTABLE",
 			StatusCheckRollup: []pmstages.PRStatusCheckRow{{Name: "ci", Conclusion: "PENDING"}}},
+		// #1027: no check run created yet — pr-merge's first snapshot. Same
+		// trap, one step earlier.
+		{State: "OPEN", Mergeable: "MERGEABLE", MergeStateStatus: "BLOCKED"},
 	}
 	for _, snap := range pendingCI {
 		d := pmstages.Decide(snap)
@@ -1340,6 +1343,15 @@ func TestIsBranchProtectionPuntMatchesDecideReasons(t *testing.T) {
 		if !pmstages.MergeBlockedByPendingCI(snap) {
 			t.Errorf("MergeBlockedByPendingCI(%+v) = false, want true — in-flight CI would be "+
 				"carded as branch protection", snap)
+		}
+	}
+
+	// The wait outcomes the runner punts AFTER the predicate held are not
+	// branch protection either: they mean CI never concluded / never started
+	// within budget, and no human can "fix the failing check" that implies.
+	for _, reason := range []string{pmstages.ReasonCIWaitTimeout, pmstages.ReasonNoChecksCreated} {
+		if IsBranchProtectionPunt(reason) {
+			t.Errorf("IsBranchProtectionPunt(%q) = true, want false — a CI-wait outcome is not a human-needed block", reason)
 		}
 	}
 }

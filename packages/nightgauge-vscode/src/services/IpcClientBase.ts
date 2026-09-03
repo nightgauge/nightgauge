@@ -239,12 +239,15 @@ export interface BoardItem {
   authorAssociation?: string;
 }
 
-/** Per-status item counts from board.counts (matches Go StatusCounts). */
+/**
+ * Per-status counts of the board's OPEN items from board.counts (matches Go
+ * StatusCounts). Derived daemon-side from the cached `is:open` snapshot, so
+ * there is no `done` bucket: Done items are closed and not in the snapshot.
+ */
 export interface StatusCounts {
   ready: number;
   inProgress: number;
   inReview: number;
-  done: number;
   backlog: number;
 }
 

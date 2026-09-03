@@ -215,10 +215,6 @@ func (b *countingSweepBoard) ListItems(context.Context, string) ([]forgetypes.Bo
 	return nil, nil
 }
 
-func (b *countingSweepBoard) CountsByStatus(context.Context) (*forgetypes.StatusCounts, error) {
-	return nil, nil
-}
-
 func (b *countingSweepBoard) GetItem(context.Context, string, string, int) (*forgetypes.BoardItem, error) {
 	return nil, nil
 }

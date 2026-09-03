@@ -3,8 +3,10 @@ package gates
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/nightgauge/nightgauge/internal/state"
@@ -175,5 +177,199 @@ func TestKindFailOnMalformedJSON(t *testing.T) {
 	if gr.Kind != KindFail {
 		t.Errorf("Kind = %q, want %q (malformed JSON is a hard error, not no-op)",
 			gr.Kind, KindFail)
+	}
+}
+
+// TestKindFail_AlwaysCarriesTerminalKind is the #1237 guard: every KindFail
+// branch of every gate must classify itself. An empty TerminalKind on a
+// KindFail result is not "no opinion" — ResolveTerminalKind falls back to the
+// prose ladder, which has no clause for the scheduler's `stage gate failed:
+// <reason>` wrapper, so the generic `exit ` rule books the honest gate
+// failure as subagent_crash: an infrastructure crash that never happened,
+// corrupting failure telemetry and sending auto-triage down a crash-recovery
+// path.
+//
+// One row per KindFail site. Each fixture is arranged so the gate reaches
+// that branch and no other (the Reason substring pins which one fired), and
+// the assertion is on the kind the site chose, so a new KindFail site cannot
+// regress to an empty kind without a row here going red — and a site that
+// switches kinds without updating the taxonomy is caught by
+// internal/terminalkind's TestCorpus_CoversEveryKind.
+func TestKindFail_AlwaysCarriesTerminalKind(t *testing.T) {
+	// unreadableContext makes the stage's context path a DIRECTORY so
+	// os.ReadFile fails with EISDIR — an error that is not IsNotExist, which
+	// is the one shape that reaches the "failed to read" branch rather than
+	// the no-op one.
+	unreadableContext := func(t *testing.T, ws, contextType string, issue int) {
+		t.Helper()
+		if err := os.MkdirAll(contextFilePath(ws, contextType, issue), 0o755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+	}
+	devContext := func(t *testing.T, ws string, extra map[string]any) {
+		t.Helper()
+		payload := map[string]any{
+			"files_changed": map[string]any{
+				"created":  []string{"foo.go"},
+				"modified": []string{},
+				"deleted":  []string{},
+			},
+		}
+		for k, v := range extra {
+			payload[k] = v
+		}
+		writeJSON(t, contextFilePath(ws, "dev", 42), payload)
+	}
+
+	cases := []struct {
+		name       string
+		gate       StageGate
+		arrange    func(t *testing.T, ws string)
+		wantReason string
+		wantKind   string
+	}{
+		{
+			name:       "issue-pickup/context unreadable",
+			gate:       IssuePickupGate{},
+			arrange:    func(t *testing.T, ws string) { unreadableContext(t, ws, "issue", 42) },
+			wantReason: "failed to read issue context file",
+			wantKind:   TerminalKindStageContextUnreadable,
+		},
+		{
+			name:       "feature-planning/context unreadable",
+			gate:       FeaturePlanningGate{},
+			arrange:    func(t *testing.T, ws string) { unreadableContext(t, ws, "planning", 42) },
+			wantReason: "failed to read planning context file",
+			wantKind:   TerminalKindStageContextUnreadable,
+		},
+		{
+			name: "feature-planning/plan_file unstatable",
+			gate: FeaturePlanningGate{},
+			arrange: func(t *testing.T, ws string) {
+				// A path whose parent is a regular file stats ENOTDIR, which
+				// is not IsNotExist — the only way past the no-op branch.
+				parent := filepath.Join(ws, "plan.md")
+				if err := os.WriteFile(parent, []byte("# plan"), 0o644); err != nil {
+					t.Fatalf("write: %v", err)
+				}
+				writeJSON(t, contextFilePath(ws, "planning", 42), map[string]any{
+					"plan_file": filepath.Join(parent, "child.md"),
+				})
+			},
+			wantReason: "failed to stat plan_file",
+			wantKind:   TerminalKindStageContextUnreadable,
+		},
+		{
+			name:       "feature-dev/context unreadable",
+			gate:       FeatureDevGate{},
+			arrange:    func(t *testing.T, ws string) { unreadableContext(t, ws, "dev", 42) },
+			wantReason: "failed to read dev context file",
+			wantKind:   TerminalKindStageContextUnreadable,
+		},
+		{
+			name:       "feature-dev/build_verification missing",
+			gate:       FeatureDevGate{},
+			arrange:    func(t *testing.T, ws string) { devContext(t, ws, nil) },
+			wantReason: "lacks build_verification",
+			wantKind:   TerminalKindDevBuildVerificationMissing,
+		},
+		{
+			name: "feature-dev/build_verification failed",
+			gate: FeatureDevGate{},
+			arrange: func(t *testing.T, ws string) {
+				devContext(t, ws, map[string]any{
+					"build_verification": map[string]any{"ran": true, "status": "failed"},
+				})
+			},
+			wantReason: "build_verification.status=failed",
+			wantKind:   TerminalKindDevBuildVerificationFailed,
+		},
+		{
+			name: "feature-dev/failing tests",
+			gate: FeatureDevGate{},
+			arrange: func(t *testing.T, ws string) {
+				devContext(t, ws, map[string]any{
+					"build_verification": map[string]any{"ran": true, "status": "passed"},
+					"tests_status":       map[string]any{"failed": 3},
+				})
+			},
+			wantReason: "failing tests",
+			wantKind:   TerminalKindDevTestsFailed,
+		},
+		{
+			name: "feature-validate/gate-metrics unreadable",
+			gate: FeatureValidateGate{},
+			arrange: func(t *testing.T, ws string) {
+				// `.nightgauge/health` as a regular file makes the open of
+				// health/gate-metrics.jsonl fail ENOTDIR, not ENOENT.
+				dir := filepath.Join(ws, ".nightgauge")
+				if err := os.MkdirAll(dir, 0o755); err != nil {
+					t.Fatalf("mkdir: %v", err)
+				}
+				if err := os.WriteFile(filepath.Join(dir, "health"), []byte("x"), 0o644); err != nil {
+					t.Fatalf("write: %v", err)
+				}
+			},
+			wantReason: "failed to read gate-metrics.jsonl",
+			wantKind:   TerminalKindStageContextUnreadable,
+		},
+		{
+			name:       "pr-create/context unreadable",
+			gate:       PrCreateGate{},
+			arrange:    func(t *testing.T, ws string) { unreadableContext(t, ws, "pr", 42) },
+			wantReason: "failed to read pr context file",
+			wantKind:   TerminalKindStageContextUnreadable,
+		},
+		{
+			name:       "pr-merge/context unreadable",
+			gate:       PrMergeGate{},
+			arrange:    func(t *testing.T, ws string) { unreadableContext(t, ws, "pr", 42) },
+			wantReason: "failed to read pr context file",
+			wantKind:   TerminalKindStageContextUnreadable,
+		},
+		{
+			name: "pr-merge/gh and local git both fail",
+			gate: PrMergeGate{},
+			arrange: func(t *testing.T, ws string) {
+				writeJSON(t, contextFilePath(ws, "pr", 42), map[string]any{"pr_number": 100})
+				stubExecGh(t, func(_ context.Context, _ ...string) ([]byte, error) {
+					return nil, errors.New("gh: connection reset")
+				})
+				stubExecGitForGate(t, func(_ context.Context, _ string, _ ...string) ([]byte, error) {
+					return nil, errors.New("fatal: not a git repository")
+				})
+			},
+			wantReason: "gh pr view failed after retries",
+			wantKind:   TerminalKindPrMergeLookupFailed,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ws := t.TempDir()
+			tc.arrange(t, ws)
+			// Relaxed: pr-merge's retry loop sleeps between attempts; one
+			// attempt is enough to reach the branch under test.
+			gr := tc.gate.Verify(WithRelaxed(context.Background(), true), 42, ws)
+			if gr.Passed {
+				t.Fatalf("expected fail; reason=%q", gr.Reason)
+			}
+			if gr.Kind != KindFail {
+				t.Fatalf("Kind = %q, want %q — fixture did not reach the KindFail branch (reason=%q)",
+					gr.Kind, KindFail, gr.Reason)
+			}
+			if !strings.Contains(gr.Reason, tc.wantReason) {
+				t.Fatalf("reason %q does not contain %q — fixture reached a different branch", gr.Reason, tc.wantReason)
+			}
+			if gr.TerminalKind == "" {
+				t.Errorf("TerminalKind is empty: ResolveTerminalKind would classify `stage gate failed: %s` as subagent_crash (#1237)", gr.Reason)
+			}
+			if gr.TerminalKind == "subagent_crash" {
+				t.Errorf("TerminalKind = subagent_crash: a gate failure is never a process crash (#1237)")
+			}
+			if gr.TerminalKind != tc.wantKind {
+				t.Errorf("TerminalKind = %q, want %q", gr.TerminalKind, tc.wantKind)
+			}
+		})
 	}
 }

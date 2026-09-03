@@ -101,6 +101,11 @@ export interface NotifyCompleteParams {
   deferred?: boolean;
   stageExecutionPaths?: Record<string, string>;
   stagePuntReasons?: Record<string, string>;
+  /**
+   * #1329: the raw failure text (`PipelineRunResult.error.message`) when
+   * `success` is false. The only reason a pre-stage failure leaves on disk.
+   */
+  failureDetail?: string;
   /** The run being claimed terminal. Accepted and ignored until step 4. */
   runId: string;
 }

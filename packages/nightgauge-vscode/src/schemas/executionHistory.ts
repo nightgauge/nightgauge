@@ -464,6 +464,11 @@ export type HistoryStageDetail = z.infer<typeof HistoryStageDetailSchema>;
  *  - `validation_failed` — feature-validate honestly failed its quality gates (validation_status="failed"); organic implementation failure, not a subagent crash (#326)
  *  - `branch_forked` — the run's branch diverged from its remote (killed mid-push, or an operator pushed to it); every push is rejected non-fast-forward and no retry clears it (#163)
  *  - `commit_orphaned` — a killed stage's commit landed on the wrong branch (a stray `temp-pre-push-<n>` left by a SIGKILL bypassing the pre-push restore-defer) and feature-validate's branch-identity self-heal could not recover it; unrecoverable by retry, needs human action (#266)
+ *  - `stage_context_unreadable` — a gate could not read a file the stage's contract says it wrote (context, plan_file, gate-metrics.jsonl) for a reason other than absence; filesystem fault (#1237)
+ *  - `dev_build_verification_missing` — feature-dev's context has no build_verification object; the skill skipped its verification step (#1237)
+ *  - `dev_build_verification_failed` — feature-dev ran its build and recorded status=failed; organic (#1237)
+ *  - `dev_tests_failed` — feature-dev's own test run recorded failures; organic (#1237)
+ *  - `pr_merge_lookup_failed` — pr-merge's gate could not establish the PR's state; infrastructure (#1237)
  *
  * MUST stay in lockstep with the Go constants in
  * internal/orchestrator/failure_handler.go and the SDK `TerminalFailureKind`
@@ -506,6 +511,13 @@ export const TerminalFailureKindSchema = z.enum([
   // override), never derived from error text.
   "abandoned_commit", // Issue #191 — a stage committed valid, unmerged work but was killed/crashed before pr-create ran
   "commit_orphaned", // Issue #266 — a killed stage's commit landed on the wrong branch and self-heal could not recover it; unrecoverable by retry
+  // Gate-sourced kinds from the #1237 sweep — every KindFail site in the stage
+  // gates classifies itself instead of falling through to subagent_crash.
+  "stage_context_unreadable", // Issue #1237 — a gate could not read a file the stage's contract says it wrote, for a reason other than absence; filesystem fault
+  "dev_build_verification_missing", // Issue #1237 — feature-dev's context has no build_verification object; the skill skipped its verification step
+  "dev_build_verification_failed", // Issue #1237 — feature-dev ran its build and recorded status=failed; organic
+  "dev_tests_failed", // Issue #1237 — feature-dev's own test run recorded failures; organic
+  "pr_merge_lookup_failed", // Issue #1237 — pr-merge's gate could not establish the PR's state (gh failed on every attempt, local git found no merge commit); infrastructure
 ]);
 export type TerminalFailureKind = z.infer<typeof TerminalFailureKindSchema>;
 
@@ -865,6 +877,12 @@ export const ExecutionHistoryRunRecordV3Schema = ExecutionHistoryRunRecordV2Sche
    * Absent on `outcome === "complete"`.
    */
   terminal_failure_kind: TerminalFailureKindSchema.optional(),
+  /**
+   * The failure text behind `terminal_failure_kind` (#1329): the failed
+   * stage's error, or the dispatcher's forwarded reason for a run that never
+   * started a stage. Bounded (2048 runes, tail-truncated) by the Go writer.
+   */
+  terminal_failure_detail: z.string().optional(),
 });
 export type ExecutionHistoryRunRecordV3 = z.infer<typeof ExecutionHistoryRunRecordV3Schema>;
 

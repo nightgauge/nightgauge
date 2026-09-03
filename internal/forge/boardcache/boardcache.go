@@ -369,17 +369,50 @@ func (b *cachedBoard) ListItems(ctx context.Context, statusFilter string) ([]for
 	return snap.Items, err
 }
 
-// CountsByStatus and GetItem are NOT cached, deliberately.
-//
-// CountsByStatus returns a different type, and deriving it from a cached item
-// list would be a second implementation of the adapter's own aggregation —
-// silently divergent the first time either side changes. GetItem is per-issue:
-// serving it from a board-wide list would answer "not on the board" for an item
-// added since the snapshot, which is the one answer callers act on destructively.
-func (b *cachedBoard) CountsByStatus(ctx context.Context) (*forgetypes.StatusCounts, error) {
-	return b.inner.CountsByStatus(ctx)
-}
-
+// GetItem is NOT cached, deliberately. It is per-issue: serving it from a
+// board-wide list would answer "not on the board" for an item added since the
+// snapshot, which is the one answer callers act on destructively.
 func (b *cachedBoard) GetItem(ctx context.Context, owner, repo string, issueNumber int) (*forgetypes.BoardItem, error) {
 	return b.inner.GetItem(ctx, owner, repo, issueNumber)
+}
+
+// CountsByStatus reports how many of the board's OPEN items sit in each
+// status, derived from ListOpenItems — which, on a board this package wraps, is
+// the cached snapshot: zero requests inside the TTL, one 1-point probe after
+// it, and a full read only when the board actually moved.
+//
+// This used to be a forge method, and on GitHub it was a live five-alias
+// `items(query:){totalCount}` document that the cache deliberately forwarded
+// (the earlier worry being a second, divergent aggregation). Measured on a
+// six-repo shared board it was the single largest idle consumer of the
+// GraphQL budget: the Repositories tree asked it once per repo on every
+// refresh, expand and focus-regain, and nothing could collapse the calls
+// because they were not reads of the snapshot. The snapshot already holds
+// every open item WITH its status, so the counts are one loop over data the
+// process has already paid for. There is exactly one aggregation now, and it
+// is this one.
+//
+// Done is not reported: Done items are closed and therefore not in the
+// `is:open` snapshot, and no consumer ever read the bucket — the tree wants
+// Ready / In progress / Backlog, and the dashboard derives its own counts from
+// the item list it already holds.
+func CountsByStatus(ctx context.Context, board forge.BoardService) (*forgetypes.StatusCounts, error) {
+	items, _, err := board.ListOpenItems(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var out forgetypes.StatusCounts
+	for _, it := range items {
+		switch {
+		case strings.EqualFold(it.Status, "Ready"):
+			out.Ready++
+		case strings.EqualFold(it.Status, "In progress"):
+			out.InProgress++
+		case strings.EqualFold(it.Status, "In review"):
+			out.InReview++
+		case strings.EqualFold(it.Status, "Backlog"):
+			out.Backlog++
+		}
+	}
+	return &out, nil
 }

@@ -1786,6 +1786,171 @@
       "signal": ""
     },
     {
+      "input": "stage_context_unreadable",
+      "kind": "stage_context_unreadable",
+      "signal": ""
+    },
+    {
+      "input": "exit 1: stage_context_unreadable",
+      "kind": "stage_context_unreadable",
+      "signal": ""
+    },
+    {
+      "input": "STAGE_CONTEXT_UNREADABLE",
+      "kind": "stage_context_unreadable",
+      "signal": ""
+    },
+    {
+      "input": "stage gate failed: failed to read",
+      "kind": "stage_context_unreadable",
+      "signal": ""
+    },
+    {
+      "input": "exit 1: stage gate failed: failed to read",
+      "kind": "stage_context_unreadable",
+      "signal": ""
+    },
+    {
+      "input": "STAGE GATE FAILED: FAILED TO READ",
+      "kind": "stage_context_unreadable",
+      "signal": ""
+    },
+    {
+      "input": "stage gate failed: failed to stat",
+      "kind": "stage_context_unreadable",
+      "signal": ""
+    },
+    {
+      "input": "exit 1: stage gate failed: failed to stat",
+      "kind": "stage_context_unreadable",
+      "signal": ""
+    },
+    {
+      "input": "STAGE GATE FAILED: FAILED TO STAT",
+      "kind": "stage_context_unreadable",
+      "signal": ""
+    },
+    {
+      "input": "dev_build_verification_missing",
+      "kind": "dev_build_verification_missing",
+      "signal": ""
+    },
+    {
+      "input": "exit 1: dev_build_verification_missing",
+      "kind": "dev_build_verification_missing",
+      "signal": ""
+    },
+    {
+      "input": "DEV_BUILD_VERIFICATION_MISSING",
+      "kind": "dev_build_verification_missing",
+      "signal": ""
+    },
+    {
+      "input": "dev context lacks build_verification",
+      "kind": "dev_build_verification_missing",
+      "signal": ""
+    },
+    {
+      "input": "exit 1: dev context lacks build_verification",
+      "kind": "dev_build_verification_missing",
+      "signal": ""
+    },
+    {
+      "input": "DEV CONTEXT LACKS BUILD_VERIFICATION",
+      "kind": "dev_build_verification_missing",
+      "signal": ""
+    },
+    {
+      "input": "dev_build_verification_failed",
+      "kind": "dev_build_verification_failed",
+      "signal": ""
+    },
+    {
+      "input": "exit 1: dev_build_verification_failed",
+      "kind": "dev_build_verification_failed",
+      "signal": ""
+    },
+    {
+      "input": "DEV_BUILD_VERIFICATION_FAILED",
+      "kind": "dev_build_verification_failed",
+      "signal": ""
+    },
+    {
+      "input": "build_verification.status=failed",
+      "kind": "dev_build_verification_failed",
+      "signal": ""
+    },
+    {
+      "input": "exit 1: build_verification.status=failed",
+      "kind": "dev_build_verification_failed",
+      "signal": ""
+    },
+    {
+      "input": "BUILD_VERIFICATION.STATUS=FAILED",
+      "kind": "dev_build_verification_failed",
+      "signal": ""
+    },
+    {
+      "input": "dev_tests_failed",
+      "kind": "dev_tests_failed",
+      "signal": ""
+    },
+    {
+      "input": "exit 1: dev_tests_failed",
+      "kind": "dev_tests_failed",
+      "signal": ""
+    },
+    {
+      "input": "DEV_TESTS_FAILED",
+      "kind": "dev_tests_failed",
+      "signal": ""
+    },
+    {
+      "input": "dev context records failing tests",
+      "kind": "dev_tests_failed",
+      "signal": ""
+    },
+    {
+      "input": "exit 1: dev context records failing tests",
+      "kind": "dev_tests_failed",
+      "signal": ""
+    },
+    {
+      "input": "DEV CONTEXT RECORDS FAILING TESTS",
+      "kind": "dev_tests_failed",
+      "signal": ""
+    },
+    {
+      "input": "pr_merge_lookup_failed",
+      "kind": "pr_merge_lookup_failed",
+      "signal": ""
+    },
+    {
+      "input": "exit 1: pr_merge_lookup_failed",
+      "kind": "pr_merge_lookup_failed",
+      "signal": ""
+    },
+    {
+      "input": "PR_MERGE_LOOKUP_FAILED",
+      "kind": "pr_merge_lookup_failed",
+      "signal": ""
+    },
+    {
+      "input": "gh pr view failed after retries",
+      "kind": "pr_merge_lookup_failed",
+      "signal": ""
+    },
+    {
+      "input": "exit 1: gh pr view failed after retries",
+      "kind": "pr_merge_lookup_failed",
+      "signal": ""
+    },
+    {
+      "input": "GH PR VIEW FAILED AFTER RETRIES",
+      "kind": "pr_merge_lookup_failed",
+      "signal": ""
+    },
+    {
       "input": "subagent crash",
       "kind": "subagent_crash",
       "signal": ""
@@ -2036,6 +2201,31 @@
       "signal": ""
     },
     {
+      "input": "network unavailable: extended github connectivity loss | stage_context_unreadable",
+      "kind": "network_unavailable",
+      "signal": ""
+    },
+    {
+      "input": "network unavailable: extended github connectivity loss | dev_build_verification_missing",
+      "kind": "network_unavailable",
+      "signal": ""
+    },
+    {
+      "input": "network unavailable: extended github connectivity loss | dev_build_verification_failed",
+      "kind": "network_unavailable",
+      "signal": ""
+    },
+    {
+      "input": "network unavailable: extended github connectivity loss | dev_tests_failed",
+      "kind": "network_unavailable",
+      "signal": ""
+    },
+    {
+      "input": "network unavailable: extended github connectivity loss | pr_merge_lookup_failed",
+      "kind": "network_unavailable",
+      "signal": ""
+    },
+    {
       "input": "network unavailable: extended github connectivity loss | subagent crash",
       "kind": "network_unavailable",
       "signal": ""
@@ -2197,6 +2387,31 @@
     },
     {
       "input": "stream idle timeout | [permission-denied]",
+      "kind": "stream_idle_timeout",
+      "signal": "stream_idle_timeout"
+    },
+    {
+      "input": "stream idle timeout | stage_context_unreadable",
+      "kind": "stream_idle_timeout",
+      "signal": "stream_idle_timeout"
+    },
+    {
+      "input": "stream idle timeout | dev_build_verification_missing",
+      "kind": "stream_idle_timeout",
+      "signal": "stream_idle_timeout"
+    },
+    {
+      "input": "stream idle timeout | dev_build_verification_failed",
+      "kind": "stream_idle_timeout",
+      "signal": "stream_idle_timeout"
+    },
+    {
+      "input": "stream idle timeout | dev_tests_failed",
+      "kind": "stream_idle_timeout",
+      "signal": "stream_idle_timeout"
+    },
+    {
+      "input": "stream idle timeout | pr_merge_lookup_failed",
       "kind": "stream_idle_timeout",
       "signal": "stream_idle_timeout"
     },
@@ -2366,6 +2581,31 @@
       "signal": "api_overloaded"
     },
     {
+      "input": "overloaded | stage_context_unreadable",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "overloaded | dev_build_verification_missing",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "overloaded | dev_build_verification_failed",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "overloaded | dev_tests_failed",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "overloaded | pr_merge_lookup_failed",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
       "input": "overloaded | subagent crash",
       "kind": "api_overloaded",
       "signal": "api_overloaded"
@@ -2527,6 +2767,31 @@
     },
     {
       "input": "socket connection was closed | [permission-denied]",
+      "kind": "api_connection_lost",
+      "signal": "api_connection_lost"
+    },
+    {
+      "input": "socket connection was closed | stage_context_unreadable",
+      "kind": "api_connection_lost",
+      "signal": "api_connection_lost"
+    },
+    {
+      "input": "socket connection was closed | dev_build_verification_missing",
+      "kind": "api_connection_lost",
+      "signal": "api_connection_lost"
+    },
+    {
+      "input": "socket connection was closed | dev_build_verification_failed",
+      "kind": "api_connection_lost",
+      "signal": "api_connection_lost"
+    },
+    {
+      "input": "socket connection was closed | dev_tests_failed",
+      "kind": "api_connection_lost",
+      "signal": "api_connection_lost"
+    },
+    {
+      "input": "socket connection was closed | pr_merge_lookup_failed",
       "kind": "api_connection_lost",
       "signal": "api_connection_lost"
     },
@@ -2696,6 +2961,31 @@
       "signal": "rate_limit_quota_exhausted"
     },
     {
+      "input": "[rate-limit-quota-exhausted] | stage_context_unreadable",
+      "kind": "rate_limit_quota_exhausted",
+      "signal": "rate_limit_quota_exhausted"
+    },
+    {
+      "input": "[rate-limit-quota-exhausted] | dev_build_verification_missing",
+      "kind": "rate_limit_quota_exhausted",
+      "signal": "rate_limit_quota_exhausted"
+    },
+    {
+      "input": "[rate-limit-quota-exhausted] | dev_build_verification_failed",
+      "kind": "rate_limit_quota_exhausted",
+      "signal": "rate_limit_quota_exhausted"
+    },
+    {
+      "input": "[rate-limit-quota-exhausted] | dev_tests_failed",
+      "kind": "rate_limit_quota_exhausted",
+      "signal": "rate_limit_quota_exhausted"
+    },
+    {
+      "input": "[rate-limit-quota-exhausted] | pr_merge_lookup_failed",
+      "kind": "rate_limit_quota_exhausted",
+      "signal": "rate_limit_quota_exhausted"
+    },
+    {
       "input": "[rate-limit-quota-exhausted] | subagent crash",
       "kind": "rate_limit_quota_exhausted",
       "signal": "rate_limit_quota_exhausted"
@@ -2857,6 +3147,31 @@
     },
     {
       "input": "not_found_error model | [permission-denied]",
+      "kind": "model_unavailable",
+      "signal": ""
+    },
+    {
+      "input": "not_found_error model | stage_context_unreadable",
+      "kind": "model_unavailable",
+      "signal": ""
+    },
+    {
+      "input": "not_found_error model | dev_build_verification_missing",
+      "kind": "model_unavailable",
+      "signal": ""
+    },
+    {
+      "input": "not_found_error model | dev_build_verification_failed",
+      "kind": "model_unavailable",
+      "signal": ""
+    },
+    {
+      "input": "not_found_error model | dev_tests_failed",
+      "kind": "model_unavailable",
+      "signal": ""
+    },
+    {
+      "input": "not_found_error model | pr_merge_lookup_failed",
       "kind": "model_unavailable",
       "signal": ""
     },
@@ -3026,6 +3341,31 @@
       "signal": ""
     },
     {
+      "input": "pipeline-start-failure issue-closed | stage_context_unreadable",
+      "kind": "issue_closed",
+      "signal": ""
+    },
+    {
+      "input": "pipeline-start-failure issue-closed | dev_build_verification_missing",
+      "kind": "issue_closed",
+      "signal": ""
+    },
+    {
+      "input": "pipeline-start-failure issue-closed | dev_build_verification_failed",
+      "kind": "issue_closed",
+      "signal": ""
+    },
+    {
+      "input": "pipeline-start-failure issue-closed | dev_tests_failed",
+      "kind": "issue_closed",
+      "signal": ""
+    },
+    {
+      "input": "pipeline-start-failure issue-closed | pr_merge_lookup_failed",
+      "kind": "issue_closed",
+      "signal": ""
+    },
+    {
       "input": "pipeline-start-failure issue-closed | subagent crash",
       "kind": "issue_closed",
       "signal": ""
@@ -3187,6 +3527,31 @@
     },
     {
       "input": "[blocked-dependency] | [permission-denied]",
+      "kind": "blocked_dependency",
+      "signal": ""
+    },
+    {
+      "input": "[blocked-dependency] | stage_context_unreadable",
+      "kind": "blocked_dependency",
+      "signal": ""
+    },
+    {
+      "input": "[blocked-dependency] | dev_build_verification_missing",
+      "kind": "blocked_dependency",
+      "signal": ""
+    },
+    {
+      "input": "[blocked-dependency] | dev_build_verification_failed",
+      "kind": "blocked_dependency",
+      "signal": ""
+    },
+    {
+      "input": "[blocked-dependency] | dev_tests_failed",
+      "kind": "blocked_dependency",
+      "signal": ""
+    },
+    {
+      "input": "[blocked-dependency] | pr_merge_lookup_failed",
       "kind": "blocked_dependency",
       "signal": ""
     },
@@ -3356,6 +3721,31 @@
       "signal": "architecture_approval_required"
     },
     {
+      "input": "architecture approval required | stage_context_unreadable",
+      "kind": "architecture_approval_required",
+      "signal": "architecture_approval_required"
+    },
+    {
+      "input": "architecture approval required | dev_build_verification_missing",
+      "kind": "architecture_approval_required",
+      "signal": "architecture_approval_required"
+    },
+    {
+      "input": "architecture approval required | dev_build_verification_failed",
+      "kind": "architecture_approval_required",
+      "signal": "architecture_approval_required"
+    },
+    {
+      "input": "architecture approval required | dev_tests_failed",
+      "kind": "architecture_approval_required",
+      "signal": "architecture_approval_required"
+    },
+    {
+      "input": "architecture approval required | pr_merge_lookup_failed",
+      "kind": "architecture_approval_required",
+      "signal": "architecture_approval_required"
+    },
+    {
       "input": "architecture approval required | subagent crash",
       "kind": "architecture_approval_required",
       "signal": "architecture_approval_required"
@@ -3517,6 +3907,31 @@
     },
     {
       "input": "github-quota-low | [permission-denied]",
+      "kind": "github_quota_low",
+      "signal": "github_quota_low"
+    },
+    {
+      "input": "github-quota-low | stage_context_unreadable",
+      "kind": "github_quota_low",
+      "signal": "github_quota_low"
+    },
+    {
+      "input": "github-quota-low | dev_build_verification_missing",
+      "kind": "github_quota_low",
+      "signal": "github_quota_low"
+    },
+    {
+      "input": "github-quota-low | dev_build_verification_failed",
+      "kind": "github_quota_low",
+      "signal": "github_quota_low"
+    },
+    {
+      "input": "github-quota-low | dev_tests_failed",
+      "kind": "github_quota_low",
+      "signal": "github_quota_low"
+    },
+    {
+      "input": "github-quota-low | pr_merge_lookup_failed",
       "kind": "github_quota_low",
       "signal": "github_quota_low"
     },
@@ -3686,6 +4101,31 @@
       "signal": "github_network_outage"
     },
     {
+      "input": "github-network-outage | stage_context_unreadable",
+      "kind": "github_network_outage",
+      "signal": "github_network_outage"
+    },
+    {
+      "input": "github-network-outage | dev_build_verification_missing",
+      "kind": "github_network_outage",
+      "signal": "github_network_outage"
+    },
+    {
+      "input": "github-network-outage | dev_build_verification_failed",
+      "kind": "github_network_outage",
+      "signal": "github_network_outage"
+    },
+    {
+      "input": "github-network-outage | dev_tests_failed",
+      "kind": "github_network_outage",
+      "signal": "github_network_outage"
+    },
+    {
+      "input": "github-network-outage | pr_merge_lookup_failed",
+      "kind": "github_network_outage",
+      "signal": "github_network_outage"
+    },
+    {
       "input": "github-network-outage | subagent crash",
       "kind": "github_network_outage",
       "signal": "github_network_outage"
@@ -3847,6 +4287,31 @@
     },
     {
       "input": "[pr-merge-unmerged | [permission-denied]",
+      "kind": "pr_merge_unmerged",
+      "signal": ""
+    },
+    {
+      "input": "[pr-merge-unmerged | stage_context_unreadable",
+      "kind": "pr_merge_unmerged",
+      "signal": ""
+    },
+    {
+      "input": "[pr-merge-unmerged | dev_build_verification_missing",
+      "kind": "pr_merge_unmerged",
+      "signal": ""
+    },
+    {
+      "input": "[pr-merge-unmerged | dev_build_verification_failed",
+      "kind": "pr_merge_unmerged",
+      "signal": ""
+    },
+    {
+      "input": "[pr-merge-unmerged | dev_tests_failed",
+      "kind": "pr_merge_unmerged",
+      "signal": ""
+    },
+    {
+      "input": "[pr-merge-unmerged | pr_merge_lookup_failed",
       "kind": "pr_merge_unmerged",
       "signal": ""
     },
@@ -4016,6 +4481,31 @@
       "signal": ""
     },
     {
+      "input": "[stage:worktree-containment] | stage_context_unreadable",
+      "kind": "containment_breach",
+      "signal": ""
+    },
+    {
+      "input": "[stage:worktree-containment] | dev_build_verification_missing",
+      "kind": "containment_breach",
+      "signal": ""
+    },
+    {
+      "input": "[stage:worktree-containment] | dev_build_verification_failed",
+      "kind": "containment_breach",
+      "signal": ""
+    },
+    {
+      "input": "[stage:worktree-containment] | dev_tests_failed",
+      "kind": "containment_breach",
+      "signal": ""
+    },
+    {
+      "input": "[stage:worktree-containment] | pr_merge_lookup_failed",
+      "kind": "containment_breach",
+      "signal": ""
+    },
+    {
       "input": "[stage:worktree-containment] | subagent crash",
       "kind": "containment_breach",
       "signal": ""
@@ -4177,6 +4667,31 @@
     },
     {
       "input": "[not-pipeline-actionable] | [permission-denied]",
+      "kind": "not_pipeline_actionable",
+      "signal": ""
+    },
+    {
+      "input": "[not-pipeline-actionable] | stage_context_unreadable",
+      "kind": "not_pipeline_actionable",
+      "signal": ""
+    },
+    {
+      "input": "[not-pipeline-actionable] | dev_build_verification_missing",
+      "kind": "not_pipeline_actionable",
+      "signal": ""
+    },
+    {
+      "input": "[not-pipeline-actionable] | dev_build_verification_failed",
+      "kind": "not_pipeline_actionable",
+      "signal": ""
+    },
+    {
+      "input": "[not-pipeline-actionable] | dev_tests_failed",
+      "kind": "not_pipeline_actionable",
+      "signal": ""
+    },
+    {
+      "input": "[not-pipeline-actionable] | pr_merge_lookup_failed",
       "kind": "not_pipeline_actionable",
       "signal": ""
     },
@@ -4346,6 +4861,31 @@
       "signal": ""
     },
     {
+      "input": "[dev-produced-no-changes] | stage_context_unreadable",
+      "kind": "dev_produced_no_changes",
+      "signal": ""
+    },
+    {
+      "input": "[dev-produced-no-changes] | dev_build_verification_missing",
+      "kind": "dev_produced_no_changes",
+      "signal": ""
+    },
+    {
+      "input": "[dev-produced-no-changes] | dev_build_verification_failed",
+      "kind": "dev_produced_no_changes",
+      "signal": ""
+    },
+    {
+      "input": "[dev-produced-no-changes] | dev_tests_failed",
+      "kind": "dev_produced_no_changes",
+      "signal": ""
+    },
+    {
+      "input": "[dev-produced-no-changes] | pr_merge_lookup_failed",
+      "kind": "dev_produced_no_changes",
+      "signal": ""
+    },
+    {
       "input": "[dev-produced-no-changes] | subagent crash",
       "kind": "dev_produced_no_changes",
       "signal": ""
@@ -4507,6 +5047,31 @@
     },
     {
       "input": "[dev-handoff-missing] | [permission-denied]",
+      "kind": "dev_handoff_missing",
+      "signal": ""
+    },
+    {
+      "input": "[dev-handoff-missing] | stage_context_unreadable",
+      "kind": "dev_handoff_missing",
+      "signal": ""
+    },
+    {
+      "input": "[dev-handoff-missing] | dev_build_verification_missing",
+      "kind": "dev_handoff_missing",
+      "signal": ""
+    },
+    {
+      "input": "[dev-handoff-missing] | dev_build_verification_failed",
+      "kind": "dev_handoff_missing",
+      "signal": ""
+    },
+    {
+      "input": "[dev-handoff-missing] | dev_tests_failed",
+      "kind": "dev_handoff_missing",
+      "signal": ""
+    },
+    {
+      "input": "[dev-handoff-missing] | pr_merge_lookup_failed",
       "kind": "dev_handoff_missing",
       "signal": ""
     },
@@ -4676,6 +5241,31 @@
       "signal": ""
     },
     {
+      "input": "premature turn end | stage_context_unreadable",
+      "kind": "premature_turn_end",
+      "signal": ""
+    },
+    {
+      "input": "premature turn end | dev_build_verification_missing",
+      "kind": "premature_turn_end",
+      "signal": ""
+    },
+    {
+      "input": "premature turn end | dev_build_verification_failed",
+      "kind": "premature_turn_end",
+      "signal": ""
+    },
+    {
+      "input": "premature turn end | dev_tests_failed",
+      "kind": "premature_turn_end",
+      "signal": ""
+    },
+    {
+      "input": "premature turn end | pr_merge_lookup_failed",
+      "kind": "premature_turn_end",
+      "signal": ""
+    },
+    {
       "input": "premature turn end | subagent crash",
       "kind": "premature_turn_end",
       "signal": ""
@@ -4837,6 +5427,31 @@
     },
     {
       "input": "worktree_uncommitted | [permission-denied]",
+      "kind": "worktree_uncommitted",
+      "signal": ""
+    },
+    {
+      "input": "worktree_uncommitted | stage_context_unreadable",
+      "kind": "worktree_uncommitted",
+      "signal": ""
+    },
+    {
+      "input": "worktree_uncommitted | dev_build_verification_missing",
+      "kind": "worktree_uncommitted",
+      "signal": ""
+    },
+    {
+      "input": "worktree_uncommitted | dev_build_verification_failed",
+      "kind": "worktree_uncommitted",
+      "signal": ""
+    },
+    {
+      "input": "worktree_uncommitted | dev_tests_failed",
+      "kind": "worktree_uncommitted",
+      "signal": ""
+    },
+    {
+      "input": "worktree_uncommitted | pr_merge_lookup_failed",
       "kind": "worktree_uncommitted",
       "signal": ""
     },
@@ -5006,6 +5621,31 @@
       "signal": ""
     },
     {
+      "input": "budget_ceiling_hit | stage_context_unreadable",
+      "kind": "budget_ceiling_hit",
+      "signal": ""
+    },
+    {
+      "input": "budget_ceiling_hit | dev_build_verification_missing",
+      "kind": "budget_ceiling_hit",
+      "signal": ""
+    },
+    {
+      "input": "budget_ceiling_hit | dev_build_verification_failed",
+      "kind": "budget_ceiling_hit",
+      "signal": ""
+    },
+    {
+      "input": "budget_ceiling_hit | dev_tests_failed",
+      "kind": "budget_ceiling_hit",
+      "signal": ""
+    },
+    {
+      "input": "budget_ceiling_hit | pr_merge_lookup_failed",
+      "kind": "budget_ceiling_hit",
+      "signal": ""
+    },
+    {
       "input": "budget_ceiling_hit | subagent crash",
       "kind": "budget_ceiling_hit",
       "signal": ""
@@ -5167,6 +5807,31 @@
     },
     {
       "input": "[runaway-progress-exceeded] | [permission-denied]",
+      "kind": "runaway_progress",
+      "signal": ""
+    },
+    {
+      "input": "[runaway-progress-exceeded] | stage_context_unreadable",
+      "kind": "runaway_progress",
+      "signal": ""
+    },
+    {
+      "input": "[runaway-progress-exceeded] | dev_build_verification_missing",
+      "kind": "runaway_progress",
+      "signal": ""
+    },
+    {
+      "input": "[runaway-progress-exceeded] | dev_build_verification_failed",
+      "kind": "runaway_progress",
+      "signal": ""
+    },
+    {
+      "input": "[runaway-progress-exceeded] | dev_tests_failed",
+      "kind": "runaway_progress",
+      "signal": ""
+    },
+    {
+      "input": "[runaway-progress-exceeded] | pr_merge_lookup_failed",
       "kind": "runaway_progress",
       "signal": ""
     },
@@ -5336,6 +6001,31 @@
       "signal": ""
     },
     {
+      "input": "[runaway-ceiling-exceeded] | stage_context_unreadable",
+      "kind": "stall_kill",
+      "signal": ""
+    },
+    {
+      "input": "[runaway-ceiling-exceeded] | dev_build_verification_missing",
+      "kind": "stall_kill",
+      "signal": ""
+    },
+    {
+      "input": "[runaway-ceiling-exceeded] | dev_build_verification_failed",
+      "kind": "stall_kill",
+      "signal": ""
+    },
+    {
+      "input": "[runaway-ceiling-exceeded] | dev_tests_failed",
+      "kind": "stall_kill",
+      "signal": ""
+    },
+    {
+      "input": "[runaway-ceiling-exceeded] | pr_merge_lookup_failed",
+      "kind": "stall_kill",
+      "signal": ""
+    },
+    {
       "input": "[runaway-ceiling-exceeded] | subagent crash",
       "kind": "stall_kill",
       "signal": ""
@@ -5497,6 +6187,31 @@
     },
     {
       "input": "[cost-cap-exceeded] | [permission-denied]",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "[cost-cap-exceeded] | stage_context_unreadable",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "[cost-cap-exceeded] | dev_build_verification_missing",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "[cost-cap-exceeded] | dev_build_verification_failed",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "[cost-cap-exceeded] | dev_tests_failed",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "[cost-cap-exceeded] | pr_merge_lookup_failed",
       "kind": "budget_exceeded",
       "signal": ""
     },
@@ -5666,6 +6381,31 @@
       "signal": ""
     },
     {
+      "input": "stage-no-output-timeout | stage_context_unreadable",
+      "kind": "stall_kill",
+      "signal": ""
+    },
+    {
+      "input": "stage-no-output-timeout | dev_build_verification_missing",
+      "kind": "stall_kill",
+      "signal": ""
+    },
+    {
+      "input": "stage-no-output-timeout | dev_build_verification_failed",
+      "kind": "stall_kill",
+      "signal": ""
+    },
+    {
+      "input": "stage-no-output-timeout | dev_tests_failed",
+      "kind": "stall_kill",
+      "signal": ""
+    },
+    {
+      "input": "stage-no-output-timeout | pr_merge_lookup_failed",
+      "kind": "stall_kill",
+      "signal": ""
+    },
+    {
       "input": "stage-no-output-timeout | subagent crash",
       "kind": "stall_kill",
       "signal": ""
@@ -5827,6 +6567,31 @@
     },
     {
       "input": "[stall-killed] | [permission-denied]",
+      "kind": "stall_kill",
+      "signal": ""
+    },
+    {
+      "input": "[stall-killed] | stage_context_unreadable",
+      "kind": "stall_kill",
+      "signal": ""
+    },
+    {
+      "input": "[stall-killed] | dev_build_verification_missing",
+      "kind": "stall_kill",
+      "signal": ""
+    },
+    {
+      "input": "[stall-killed] | dev_build_verification_failed",
+      "kind": "stall_kill",
+      "signal": ""
+    },
+    {
+      "input": "[stall-killed] | dev_tests_failed",
+      "kind": "stall_kill",
+      "signal": ""
+    },
+    {
+      "input": "[stall-killed] | pr_merge_lookup_failed",
       "kind": "stall_kill",
       "signal": ""
     },
@@ -5996,6 +6761,31 @@
       "signal": ""
     },
     {
+      "input": "pipeline_budget_exceeded | stage_context_unreadable",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "pipeline_budget_exceeded | dev_build_verification_missing",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "pipeline_budget_exceeded | dev_build_verification_failed",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "pipeline_budget_exceeded | dev_tests_failed",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "pipeline_budget_exceeded | pr_merge_lookup_failed",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
       "input": "pipeline_budget_exceeded | subagent crash",
       "kind": "budget_exceeded",
       "signal": ""
@@ -6157,6 +6947,31 @@
     },
     {
       "input": "schema validation | [permission-denied]",
+      "kind": "validation_error",
+      "signal": ""
+    },
+    {
+      "input": "schema validation | stage_context_unreadable",
+      "kind": "validation_error",
+      "signal": ""
+    },
+    {
+      "input": "schema validation | dev_build_verification_missing",
+      "kind": "validation_error",
+      "signal": ""
+    },
+    {
+      "input": "schema validation | dev_build_verification_failed",
+      "kind": "validation_error",
+      "signal": ""
+    },
+    {
+      "input": "schema validation | dev_tests_failed",
+      "kind": "validation_error",
+      "signal": ""
+    },
+    {
+      "input": "schema validation | pr_merge_lookup_failed",
       "kind": "validation_error",
       "signal": ""
     },
@@ -6326,6 +7141,31 @@
       "signal": "adapter_auth_failed"
     },
     {
+      "input": "[adapter-auth-failed] | stage_context_unreadable",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "[adapter-auth-failed] | dev_build_verification_missing",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "[adapter-auth-failed] | dev_build_verification_failed",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "[adapter-auth-failed] | dev_tests_failed",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "[adapter-auth-failed] | pr_merge_lookup_failed",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
+    },
+    {
       "input": "[adapter-auth-failed] | subagent crash",
       "kind": "adapter_auth_failed",
       "signal": "adapter_auth_failed"
@@ -6487,6 +7327,31 @@
     },
     {
       "input": "[no-changes-produced] | [permission-denied]",
+      "kind": "no_changes_produced",
+      "signal": ""
+    },
+    {
+      "input": "[no-changes-produced] | stage_context_unreadable",
+      "kind": "no_changes_produced",
+      "signal": ""
+    },
+    {
+      "input": "[no-changes-produced] | dev_build_verification_missing",
+      "kind": "no_changes_produced",
+      "signal": ""
+    },
+    {
+      "input": "[no-changes-produced] | dev_build_verification_failed",
+      "kind": "no_changes_produced",
+      "signal": ""
+    },
+    {
+      "input": "[no-changes-produced] | dev_tests_failed",
+      "kind": "no_changes_produced",
+      "signal": ""
+    },
+    {
+      "input": "[no-changes-produced] | pr_merge_lookup_failed",
       "kind": "no_changes_produced",
       "signal": ""
     },
@@ -6656,6 +7521,31 @@
       "signal": ""
     },
     {
+      "input": "[validation-failed] | stage_context_unreadable",
+      "kind": "validation_failed",
+      "signal": ""
+    },
+    {
+      "input": "[validation-failed] | dev_build_verification_missing",
+      "kind": "validation_failed",
+      "signal": ""
+    },
+    {
+      "input": "[validation-failed] | dev_build_verification_failed",
+      "kind": "validation_failed",
+      "signal": ""
+    },
+    {
+      "input": "[validation-failed] | dev_tests_failed",
+      "kind": "validation_failed",
+      "signal": ""
+    },
+    {
+      "input": "[validation-failed] | pr_merge_lookup_failed",
+      "kind": "validation_failed",
+      "signal": ""
+    },
+    {
       "input": "[validation-failed] | subagent crash",
       "kind": "validation_failed",
       "signal": ""
@@ -6817,6 +7707,31 @@
     },
     {
       "input": "[validation-inconclusive] | [permission-denied]",
+      "kind": "validation_inconclusive",
+      "signal": ""
+    },
+    {
+      "input": "[validation-inconclusive] | stage_context_unreadable",
+      "kind": "validation_inconclusive",
+      "signal": ""
+    },
+    {
+      "input": "[validation-inconclusive] | dev_build_verification_missing",
+      "kind": "validation_inconclusive",
+      "signal": ""
+    },
+    {
+      "input": "[validation-inconclusive] | dev_build_verification_failed",
+      "kind": "validation_inconclusive",
+      "signal": ""
+    },
+    {
+      "input": "[validation-inconclusive] | dev_tests_failed",
+      "kind": "validation_inconclusive",
+      "signal": ""
+    },
+    {
+      "input": "[validation-inconclusive] | pr_merge_lookup_failed",
       "kind": "validation_inconclusive",
       "signal": ""
     },
@@ -6986,6 +7901,31 @@
       "signal": ""
     },
     {
+      "input": "[branch-forked] | stage_context_unreadable",
+      "kind": "branch_forked",
+      "signal": ""
+    },
+    {
+      "input": "[branch-forked] | dev_build_verification_missing",
+      "kind": "branch_forked",
+      "signal": ""
+    },
+    {
+      "input": "[branch-forked] | dev_build_verification_failed",
+      "kind": "branch_forked",
+      "signal": ""
+    },
+    {
+      "input": "[branch-forked] | dev_tests_failed",
+      "kind": "branch_forked",
+      "signal": ""
+    },
+    {
+      "input": "[branch-forked] | pr_merge_lookup_failed",
+      "kind": "branch_forked",
+      "signal": ""
+    },
+    {
       "input": "[branch-forked] | subagent crash",
       "kind": "branch_forked",
       "signal": ""
@@ -7147,6 +8087,31 @@
     },
     {
       "input": "[commit-orphaned] | [permission-denied]",
+      "kind": "commit_orphaned",
+      "signal": ""
+    },
+    {
+      "input": "[commit-orphaned] | stage_context_unreadable",
+      "kind": "commit_orphaned",
+      "signal": ""
+    },
+    {
+      "input": "[commit-orphaned] | dev_build_verification_missing",
+      "kind": "commit_orphaned",
+      "signal": ""
+    },
+    {
+      "input": "[commit-orphaned] | dev_build_verification_failed",
+      "kind": "commit_orphaned",
+      "signal": ""
+    },
+    {
+      "input": "[commit-orphaned] | dev_tests_failed",
+      "kind": "commit_orphaned",
+      "signal": ""
+    },
+    {
+      "input": "[commit-orphaned] | pr_merge_lookup_failed",
       "kind": "commit_orphaned",
       "signal": ""
     },
@@ -7316,8 +8281,983 @@
       "signal": ""
     },
     {
+      "input": "[permission-denied] | stage_context_unreadable",
+      "kind": "permission_denied",
+      "signal": ""
+    },
+    {
+      "input": "[permission-denied] | dev_build_verification_missing",
+      "kind": "permission_denied",
+      "signal": ""
+    },
+    {
+      "input": "[permission-denied] | dev_build_verification_failed",
+      "kind": "permission_denied",
+      "signal": ""
+    },
+    {
+      "input": "[permission-denied] | dev_tests_failed",
+      "kind": "permission_denied",
+      "signal": ""
+    },
+    {
+      "input": "[permission-denied] | pr_merge_lookup_failed",
+      "kind": "permission_denied",
+      "signal": ""
+    },
+    {
       "input": "[permission-denied] | subagent crash",
       "kind": "permission_denied",
+      "signal": ""
+    },
+    {
+      "input": "stage_context_unreadable | network unavailable: extended github connectivity loss",
+      "kind": "network_unavailable",
+      "signal": ""
+    },
+    {
+      "input": "stage_context_unreadable | stream idle timeout",
+      "kind": "stream_idle_timeout",
+      "signal": "stream_idle_timeout"
+    },
+    {
+      "input": "stage_context_unreadable | overloaded",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "stage_context_unreadable | socket connection was closed",
+      "kind": "api_connection_lost",
+      "signal": "api_connection_lost"
+    },
+    {
+      "input": "stage_context_unreadable | [rate-limit-quota-exhausted]",
+      "kind": "rate_limit_quota_exhausted",
+      "signal": "rate_limit_quota_exhausted"
+    },
+    {
+      "input": "stage_context_unreadable | not_found_error model",
+      "kind": "model_unavailable",
+      "signal": ""
+    },
+    {
+      "input": "stage_context_unreadable | pipeline-start-failure issue-closed",
+      "kind": "issue_closed",
+      "signal": ""
+    },
+    {
+      "input": "stage_context_unreadable | [blocked-dependency]",
+      "kind": "blocked_dependency",
+      "signal": ""
+    },
+    {
+      "input": "stage_context_unreadable | architecture approval required",
+      "kind": "architecture_approval_required",
+      "signal": "architecture_approval_required"
+    },
+    {
+      "input": "stage_context_unreadable | github-quota-low",
+      "kind": "github_quota_low",
+      "signal": "github_quota_low"
+    },
+    {
+      "input": "stage_context_unreadable | github-network-outage",
+      "kind": "github_network_outage",
+      "signal": "github_network_outage"
+    },
+    {
+      "input": "stage_context_unreadable | [pr-merge-unmerged",
+      "kind": "pr_merge_unmerged",
+      "signal": ""
+    },
+    {
+      "input": "stage_context_unreadable | [stage:worktree-containment]",
+      "kind": "containment_breach",
+      "signal": ""
+    },
+    {
+      "input": "stage_context_unreadable | [not-pipeline-actionable]",
+      "kind": "not_pipeline_actionable",
+      "signal": ""
+    },
+    {
+      "input": "stage_context_unreadable | [dev-produced-no-changes]",
+      "kind": "dev_produced_no_changes",
+      "signal": ""
+    },
+    {
+      "input": "stage_context_unreadable | [dev-handoff-missing]",
+      "kind": "dev_handoff_missing",
+      "signal": ""
+    },
+    {
+      "input": "stage_context_unreadable | premature turn end",
+      "kind": "premature_turn_end",
+      "signal": ""
+    },
+    {
+      "input": "stage_context_unreadable | worktree_uncommitted",
+      "kind": "worktree_uncommitted",
+      "signal": ""
+    },
+    {
+      "input": "stage_context_unreadable | budget_ceiling_hit",
+      "kind": "budget_ceiling_hit",
+      "signal": ""
+    },
+    {
+      "input": "stage_context_unreadable | [runaway-progress-exceeded]",
+      "kind": "runaway_progress",
+      "signal": ""
+    },
+    {
+      "input": "stage_context_unreadable | [runaway-ceiling-exceeded]",
+      "kind": "stall_kill",
+      "signal": ""
+    },
+    {
+      "input": "stage_context_unreadable | [cost-cap-exceeded]",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "stage_context_unreadable | stage-no-output-timeout",
+      "kind": "stall_kill",
+      "signal": ""
+    },
+    {
+      "input": "stage_context_unreadable | [stall-killed]",
+      "kind": "stall_kill",
+      "signal": ""
+    },
+    {
+      "input": "stage_context_unreadable | pipeline_budget_exceeded",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "stage_context_unreadable | schema validation",
+      "kind": "validation_error",
+      "signal": ""
+    },
+    {
+      "input": "stage_context_unreadable | [adapter-auth-failed]",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "stage_context_unreadable | [no-changes-produced]",
+      "kind": "no_changes_produced",
+      "signal": ""
+    },
+    {
+      "input": "stage_context_unreadable | [validation-failed]",
+      "kind": "validation_failed",
+      "signal": ""
+    },
+    {
+      "input": "stage_context_unreadable | [validation-inconclusive]",
+      "kind": "validation_inconclusive",
+      "signal": ""
+    },
+    {
+      "input": "stage_context_unreadable | [branch-forked]",
+      "kind": "branch_forked",
+      "signal": ""
+    },
+    {
+      "input": "stage_context_unreadable | [commit-orphaned]",
+      "kind": "commit_orphaned",
+      "signal": ""
+    },
+    {
+      "input": "stage_context_unreadable | [permission-denied]",
+      "kind": "permission_denied",
+      "signal": ""
+    },
+    {
+      "input": "stage_context_unreadable | dev_build_verification_missing",
+      "kind": "stage_context_unreadable",
+      "signal": ""
+    },
+    {
+      "input": "stage_context_unreadable | dev_build_verification_failed",
+      "kind": "stage_context_unreadable",
+      "signal": ""
+    },
+    {
+      "input": "stage_context_unreadable | dev_tests_failed",
+      "kind": "stage_context_unreadable",
+      "signal": ""
+    },
+    {
+      "input": "stage_context_unreadable | pr_merge_lookup_failed",
+      "kind": "stage_context_unreadable",
+      "signal": ""
+    },
+    {
+      "input": "stage_context_unreadable | subagent crash",
+      "kind": "stage_context_unreadable",
+      "signal": ""
+    },
+    {
+      "input": "dev_build_verification_missing | network unavailable: extended github connectivity loss",
+      "kind": "network_unavailable",
+      "signal": ""
+    },
+    {
+      "input": "dev_build_verification_missing | stream idle timeout",
+      "kind": "stream_idle_timeout",
+      "signal": "stream_idle_timeout"
+    },
+    {
+      "input": "dev_build_verification_missing | overloaded",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "dev_build_verification_missing | socket connection was closed",
+      "kind": "api_connection_lost",
+      "signal": "api_connection_lost"
+    },
+    {
+      "input": "dev_build_verification_missing | [rate-limit-quota-exhausted]",
+      "kind": "rate_limit_quota_exhausted",
+      "signal": "rate_limit_quota_exhausted"
+    },
+    {
+      "input": "dev_build_verification_missing | not_found_error model",
+      "kind": "model_unavailable",
+      "signal": ""
+    },
+    {
+      "input": "dev_build_verification_missing | pipeline-start-failure issue-closed",
+      "kind": "issue_closed",
+      "signal": ""
+    },
+    {
+      "input": "dev_build_verification_missing | [blocked-dependency]",
+      "kind": "blocked_dependency",
+      "signal": ""
+    },
+    {
+      "input": "dev_build_verification_missing | architecture approval required",
+      "kind": "architecture_approval_required",
+      "signal": "architecture_approval_required"
+    },
+    {
+      "input": "dev_build_verification_missing | github-quota-low",
+      "kind": "github_quota_low",
+      "signal": "github_quota_low"
+    },
+    {
+      "input": "dev_build_verification_missing | github-network-outage",
+      "kind": "github_network_outage",
+      "signal": "github_network_outage"
+    },
+    {
+      "input": "dev_build_verification_missing | [pr-merge-unmerged",
+      "kind": "pr_merge_unmerged",
+      "signal": ""
+    },
+    {
+      "input": "dev_build_verification_missing | [stage:worktree-containment]",
+      "kind": "containment_breach",
+      "signal": ""
+    },
+    {
+      "input": "dev_build_verification_missing | [not-pipeline-actionable]",
+      "kind": "not_pipeline_actionable",
+      "signal": ""
+    },
+    {
+      "input": "dev_build_verification_missing | [dev-produced-no-changes]",
+      "kind": "dev_produced_no_changes",
+      "signal": ""
+    },
+    {
+      "input": "dev_build_verification_missing | [dev-handoff-missing]",
+      "kind": "dev_handoff_missing",
+      "signal": ""
+    },
+    {
+      "input": "dev_build_verification_missing | premature turn end",
+      "kind": "premature_turn_end",
+      "signal": ""
+    },
+    {
+      "input": "dev_build_verification_missing | worktree_uncommitted",
+      "kind": "worktree_uncommitted",
+      "signal": ""
+    },
+    {
+      "input": "dev_build_verification_missing | budget_ceiling_hit",
+      "kind": "budget_ceiling_hit",
+      "signal": ""
+    },
+    {
+      "input": "dev_build_verification_missing | [runaway-progress-exceeded]",
+      "kind": "runaway_progress",
+      "signal": ""
+    },
+    {
+      "input": "dev_build_verification_missing | [runaway-ceiling-exceeded]",
+      "kind": "stall_kill",
+      "signal": ""
+    },
+    {
+      "input": "dev_build_verification_missing | [cost-cap-exceeded]",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "dev_build_verification_missing | stage-no-output-timeout",
+      "kind": "stall_kill",
+      "signal": ""
+    },
+    {
+      "input": "dev_build_verification_missing | [stall-killed]",
+      "kind": "stall_kill",
+      "signal": ""
+    },
+    {
+      "input": "dev_build_verification_missing | pipeline_budget_exceeded",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "dev_build_verification_missing | schema validation",
+      "kind": "validation_error",
+      "signal": ""
+    },
+    {
+      "input": "dev_build_verification_missing | [adapter-auth-failed]",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "dev_build_verification_missing | [no-changes-produced]",
+      "kind": "no_changes_produced",
+      "signal": ""
+    },
+    {
+      "input": "dev_build_verification_missing | [validation-failed]",
+      "kind": "validation_failed",
+      "signal": ""
+    },
+    {
+      "input": "dev_build_verification_missing | [validation-inconclusive]",
+      "kind": "validation_inconclusive",
+      "signal": ""
+    },
+    {
+      "input": "dev_build_verification_missing | [branch-forked]",
+      "kind": "branch_forked",
+      "signal": ""
+    },
+    {
+      "input": "dev_build_verification_missing | [commit-orphaned]",
+      "kind": "commit_orphaned",
+      "signal": ""
+    },
+    {
+      "input": "dev_build_verification_missing | [permission-denied]",
+      "kind": "permission_denied",
+      "signal": ""
+    },
+    {
+      "input": "dev_build_verification_missing | stage_context_unreadable",
+      "kind": "stage_context_unreadable",
+      "signal": ""
+    },
+    {
+      "input": "dev_build_verification_missing | dev_build_verification_failed",
+      "kind": "dev_build_verification_missing",
+      "signal": ""
+    },
+    {
+      "input": "dev_build_verification_missing | dev_tests_failed",
+      "kind": "dev_build_verification_missing",
+      "signal": ""
+    },
+    {
+      "input": "dev_build_verification_missing | pr_merge_lookup_failed",
+      "kind": "dev_build_verification_missing",
+      "signal": ""
+    },
+    {
+      "input": "dev_build_verification_missing | subagent crash",
+      "kind": "dev_build_verification_missing",
+      "signal": ""
+    },
+    {
+      "input": "dev_build_verification_failed | network unavailable: extended github connectivity loss",
+      "kind": "network_unavailable",
+      "signal": ""
+    },
+    {
+      "input": "dev_build_verification_failed | stream idle timeout",
+      "kind": "stream_idle_timeout",
+      "signal": "stream_idle_timeout"
+    },
+    {
+      "input": "dev_build_verification_failed | overloaded",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "dev_build_verification_failed | socket connection was closed",
+      "kind": "api_connection_lost",
+      "signal": "api_connection_lost"
+    },
+    {
+      "input": "dev_build_verification_failed | [rate-limit-quota-exhausted]",
+      "kind": "rate_limit_quota_exhausted",
+      "signal": "rate_limit_quota_exhausted"
+    },
+    {
+      "input": "dev_build_verification_failed | not_found_error model",
+      "kind": "model_unavailable",
+      "signal": ""
+    },
+    {
+      "input": "dev_build_verification_failed | pipeline-start-failure issue-closed",
+      "kind": "issue_closed",
+      "signal": ""
+    },
+    {
+      "input": "dev_build_verification_failed | [blocked-dependency]",
+      "kind": "blocked_dependency",
+      "signal": ""
+    },
+    {
+      "input": "dev_build_verification_failed | architecture approval required",
+      "kind": "architecture_approval_required",
+      "signal": "architecture_approval_required"
+    },
+    {
+      "input": "dev_build_verification_failed | github-quota-low",
+      "kind": "github_quota_low",
+      "signal": "github_quota_low"
+    },
+    {
+      "input": "dev_build_verification_failed | github-network-outage",
+      "kind": "github_network_outage",
+      "signal": "github_network_outage"
+    },
+    {
+      "input": "dev_build_verification_failed | [pr-merge-unmerged",
+      "kind": "pr_merge_unmerged",
+      "signal": ""
+    },
+    {
+      "input": "dev_build_verification_failed | [stage:worktree-containment]",
+      "kind": "containment_breach",
+      "signal": ""
+    },
+    {
+      "input": "dev_build_verification_failed | [not-pipeline-actionable]",
+      "kind": "not_pipeline_actionable",
+      "signal": ""
+    },
+    {
+      "input": "dev_build_verification_failed | [dev-produced-no-changes]",
+      "kind": "dev_produced_no_changes",
+      "signal": ""
+    },
+    {
+      "input": "dev_build_verification_failed | [dev-handoff-missing]",
+      "kind": "dev_handoff_missing",
+      "signal": ""
+    },
+    {
+      "input": "dev_build_verification_failed | premature turn end",
+      "kind": "premature_turn_end",
+      "signal": ""
+    },
+    {
+      "input": "dev_build_verification_failed | worktree_uncommitted",
+      "kind": "worktree_uncommitted",
+      "signal": ""
+    },
+    {
+      "input": "dev_build_verification_failed | budget_ceiling_hit",
+      "kind": "budget_ceiling_hit",
+      "signal": ""
+    },
+    {
+      "input": "dev_build_verification_failed | [runaway-progress-exceeded]",
+      "kind": "runaway_progress",
+      "signal": ""
+    },
+    {
+      "input": "dev_build_verification_failed | [runaway-ceiling-exceeded]",
+      "kind": "stall_kill",
+      "signal": ""
+    },
+    {
+      "input": "dev_build_verification_failed | [cost-cap-exceeded]",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "dev_build_verification_failed | stage-no-output-timeout",
+      "kind": "stall_kill",
+      "signal": ""
+    },
+    {
+      "input": "dev_build_verification_failed | [stall-killed]",
+      "kind": "stall_kill",
+      "signal": ""
+    },
+    {
+      "input": "dev_build_verification_failed | pipeline_budget_exceeded",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "dev_build_verification_failed | schema validation",
+      "kind": "validation_error",
+      "signal": ""
+    },
+    {
+      "input": "dev_build_verification_failed | [adapter-auth-failed]",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "dev_build_verification_failed | [no-changes-produced]",
+      "kind": "no_changes_produced",
+      "signal": ""
+    },
+    {
+      "input": "dev_build_verification_failed | [validation-failed]",
+      "kind": "validation_failed",
+      "signal": ""
+    },
+    {
+      "input": "dev_build_verification_failed | [validation-inconclusive]",
+      "kind": "validation_inconclusive",
+      "signal": ""
+    },
+    {
+      "input": "dev_build_verification_failed | [branch-forked]",
+      "kind": "branch_forked",
+      "signal": ""
+    },
+    {
+      "input": "dev_build_verification_failed | [commit-orphaned]",
+      "kind": "commit_orphaned",
+      "signal": ""
+    },
+    {
+      "input": "dev_build_verification_failed | [permission-denied]",
+      "kind": "permission_denied",
+      "signal": ""
+    },
+    {
+      "input": "dev_build_verification_failed | stage_context_unreadable",
+      "kind": "stage_context_unreadable",
+      "signal": ""
+    },
+    {
+      "input": "dev_build_verification_failed | dev_build_verification_missing",
+      "kind": "dev_build_verification_missing",
+      "signal": ""
+    },
+    {
+      "input": "dev_build_verification_failed | dev_tests_failed",
+      "kind": "dev_build_verification_failed",
+      "signal": ""
+    },
+    {
+      "input": "dev_build_verification_failed | pr_merge_lookup_failed",
+      "kind": "dev_build_verification_failed",
+      "signal": ""
+    },
+    {
+      "input": "dev_build_verification_failed | subagent crash",
+      "kind": "dev_build_verification_failed",
+      "signal": ""
+    },
+    {
+      "input": "dev_tests_failed | network unavailable: extended github connectivity loss",
+      "kind": "network_unavailable",
+      "signal": ""
+    },
+    {
+      "input": "dev_tests_failed | stream idle timeout",
+      "kind": "stream_idle_timeout",
+      "signal": "stream_idle_timeout"
+    },
+    {
+      "input": "dev_tests_failed | overloaded",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "dev_tests_failed | socket connection was closed",
+      "kind": "api_connection_lost",
+      "signal": "api_connection_lost"
+    },
+    {
+      "input": "dev_tests_failed | [rate-limit-quota-exhausted]",
+      "kind": "rate_limit_quota_exhausted",
+      "signal": "rate_limit_quota_exhausted"
+    },
+    {
+      "input": "dev_tests_failed | not_found_error model",
+      "kind": "model_unavailable",
+      "signal": ""
+    },
+    {
+      "input": "dev_tests_failed | pipeline-start-failure issue-closed",
+      "kind": "issue_closed",
+      "signal": ""
+    },
+    {
+      "input": "dev_tests_failed | [blocked-dependency]",
+      "kind": "blocked_dependency",
+      "signal": ""
+    },
+    {
+      "input": "dev_tests_failed | architecture approval required",
+      "kind": "architecture_approval_required",
+      "signal": "architecture_approval_required"
+    },
+    {
+      "input": "dev_tests_failed | github-quota-low",
+      "kind": "github_quota_low",
+      "signal": "github_quota_low"
+    },
+    {
+      "input": "dev_tests_failed | github-network-outage",
+      "kind": "github_network_outage",
+      "signal": "github_network_outage"
+    },
+    {
+      "input": "dev_tests_failed | [pr-merge-unmerged",
+      "kind": "pr_merge_unmerged",
+      "signal": ""
+    },
+    {
+      "input": "dev_tests_failed | [stage:worktree-containment]",
+      "kind": "containment_breach",
+      "signal": ""
+    },
+    {
+      "input": "dev_tests_failed | [not-pipeline-actionable]",
+      "kind": "not_pipeline_actionable",
+      "signal": ""
+    },
+    {
+      "input": "dev_tests_failed | [dev-produced-no-changes]",
+      "kind": "dev_produced_no_changes",
+      "signal": ""
+    },
+    {
+      "input": "dev_tests_failed | [dev-handoff-missing]",
+      "kind": "dev_handoff_missing",
+      "signal": ""
+    },
+    {
+      "input": "dev_tests_failed | premature turn end",
+      "kind": "premature_turn_end",
+      "signal": ""
+    },
+    {
+      "input": "dev_tests_failed | worktree_uncommitted",
+      "kind": "worktree_uncommitted",
+      "signal": ""
+    },
+    {
+      "input": "dev_tests_failed | budget_ceiling_hit",
+      "kind": "budget_ceiling_hit",
+      "signal": ""
+    },
+    {
+      "input": "dev_tests_failed | [runaway-progress-exceeded]",
+      "kind": "runaway_progress",
+      "signal": ""
+    },
+    {
+      "input": "dev_tests_failed | [runaway-ceiling-exceeded]",
+      "kind": "stall_kill",
+      "signal": ""
+    },
+    {
+      "input": "dev_tests_failed | [cost-cap-exceeded]",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "dev_tests_failed | stage-no-output-timeout",
+      "kind": "stall_kill",
+      "signal": ""
+    },
+    {
+      "input": "dev_tests_failed | [stall-killed]",
+      "kind": "stall_kill",
+      "signal": ""
+    },
+    {
+      "input": "dev_tests_failed | pipeline_budget_exceeded",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "dev_tests_failed | schema validation",
+      "kind": "validation_error",
+      "signal": ""
+    },
+    {
+      "input": "dev_tests_failed | [adapter-auth-failed]",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "dev_tests_failed | [no-changes-produced]",
+      "kind": "no_changes_produced",
+      "signal": ""
+    },
+    {
+      "input": "dev_tests_failed | [validation-failed]",
+      "kind": "validation_failed",
+      "signal": ""
+    },
+    {
+      "input": "dev_tests_failed | [validation-inconclusive]",
+      "kind": "validation_inconclusive",
+      "signal": ""
+    },
+    {
+      "input": "dev_tests_failed | [branch-forked]",
+      "kind": "branch_forked",
+      "signal": ""
+    },
+    {
+      "input": "dev_tests_failed | [commit-orphaned]",
+      "kind": "commit_orphaned",
+      "signal": ""
+    },
+    {
+      "input": "dev_tests_failed | [permission-denied]",
+      "kind": "permission_denied",
+      "signal": ""
+    },
+    {
+      "input": "dev_tests_failed | stage_context_unreadable",
+      "kind": "stage_context_unreadable",
+      "signal": ""
+    },
+    {
+      "input": "dev_tests_failed | dev_build_verification_missing",
+      "kind": "dev_build_verification_missing",
+      "signal": ""
+    },
+    {
+      "input": "dev_tests_failed | dev_build_verification_failed",
+      "kind": "dev_build_verification_failed",
+      "signal": ""
+    },
+    {
+      "input": "dev_tests_failed | pr_merge_lookup_failed",
+      "kind": "dev_tests_failed",
+      "signal": ""
+    },
+    {
+      "input": "dev_tests_failed | subagent crash",
+      "kind": "dev_tests_failed",
+      "signal": ""
+    },
+    {
+      "input": "pr_merge_lookup_failed | network unavailable: extended github connectivity loss",
+      "kind": "network_unavailable",
+      "signal": ""
+    },
+    {
+      "input": "pr_merge_lookup_failed | stream idle timeout",
+      "kind": "stream_idle_timeout",
+      "signal": "stream_idle_timeout"
+    },
+    {
+      "input": "pr_merge_lookup_failed | overloaded",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "pr_merge_lookup_failed | socket connection was closed",
+      "kind": "api_connection_lost",
+      "signal": "api_connection_lost"
+    },
+    {
+      "input": "pr_merge_lookup_failed | [rate-limit-quota-exhausted]",
+      "kind": "rate_limit_quota_exhausted",
+      "signal": "rate_limit_quota_exhausted"
+    },
+    {
+      "input": "pr_merge_lookup_failed | not_found_error model",
+      "kind": "model_unavailable",
+      "signal": ""
+    },
+    {
+      "input": "pr_merge_lookup_failed | pipeline-start-failure issue-closed",
+      "kind": "issue_closed",
+      "signal": ""
+    },
+    {
+      "input": "pr_merge_lookup_failed | [blocked-dependency]",
+      "kind": "blocked_dependency",
+      "signal": ""
+    },
+    {
+      "input": "pr_merge_lookup_failed | architecture approval required",
+      "kind": "architecture_approval_required",
+      "signal": "architecture_approval_required"
+    },
+    {
+      "input": "pr_merge_lookup_failed | github-quota-low",
+      "kind": "github_quota_low",
+      "signal": "github_quota_low"
+    },
+    {
+      "input": "pr_merge_lookup_failed | github-network-outage",
+      "kind": "github_network_outage",
+      "signal": "github_network_outage"
+    },
+    {
+      "input": "pr_merge_lookup_failed | [pr-merge-unmerged",
+      "kind": "pr_merge_unmerged",
+      "signal": ""
+    },
+    {
+      "input": "pr_merge_lookup_failed | [stage:worktree-containment]",
+      "kind": "containment_breach",
+      "signal": ""
+    },
+    {
+      "input": "pr_merge_lookup_failed | [not-pipeline-actionable]",
+      "kind": "not_pipeline_actionable",
+      "signal": ""
+    },
+    {
+      "input": "pr_merge_lookup_failed | [dev-produced-no-changes]",
+      "kind": "dev_produced_no_changes",
+      "signal": ""
+    },
+    {
+      "input": "pr_merge_lookup_failed | [dev-handoff-missing]",
+      "kind": "dev_handoff_missing",
+      "signal": ""
+    },
+    {
+      "input": "pr_merge_lookup_failed | premature turn end",
+      "kind": "premature_turn_end",
+      "signal": ""
+    },
+    {
+      "input": "pr_merge_lookup_failed | worktree_uncommitted",
+      "kind": "worktree_uncommitted",
+      "signal": ""
+    },
+    {
+      "input": "pr_merge_lookup_failed | budget_ceiling_hit",
+      "kind": "budget_ceiling_hit",
+      "signal": ""
+    },
+    {
+      "input": "pr_merge_lookup_failed | [runaway-progress-exceeded]",
+      "kind": "runaway_progress",
+      "signal": ""
+    },
+    {
+      "input": "pr_merge_lookup_failed | [runaway-ceiling-exceeded]",
+      "kind": "stall_kill",
+      "signal": ""
+    },
+    {
+      "input": "pr_merge_lookup_failed | [cost-cap-exceeded]",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "pr_merge_lookup_failed | stage-no-output-timeout",
+      "kind": "stall_kill",
+      "signal": ""
+    },
+    {
+      "input": "pr_merge_lookup_failed | [stall-killed]",
+      "kind": "stall_kill",
+      "signal": ""
+    },
+    {
+      "input": "pr_merge_lookup_failed | pipeline_budget_exceeded",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "pr_merge_lookup_failed | schema validation",
+      "kind": "validation_error",
+      "signal": ""
+    },
+    {
+      "input": "pr_merge_lookup_failed | [adapter-auth-failed]",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "pr_merge_lookup_failed | [no-changes-produced]",
+      "kind": "no_changes_produced",
+      "signal": ""
+    },
+    {
+      "input": "pr_merge_lookup_failed | [validation-failed]",
+      "kind": "validation_failed",
+      "signal": ""
+    },
+    {
+      "input": "pr_merge_lookup_failed | [validation-inconclusive]",
+      "kind": "validation_inconclusive",
+      "signal": ""
+    },
+    {
+      "input": "pr_merge_lookup_failed | [branch-forked]",
+      "kind": "branch_forked",
+      "signal": ""
+    },
+    {
+      "input": "pr_merge_lookup_failed | [commit-orphaned]",
+      "kind": "commit_orphaned",
+      "signal": ""
+    },
+    {
+      "input": "pr_merge_lookup_failed | [permission-denied]",
+      "kind": "permission_denied",
+      "signal": ""
+    },
+    {
+      "input": "pr_merge_lookup_failed | stage_context_unreadable",
+      "kind": "stage_context_unreadable",
+      "signal": ""
+    },
+    {
+      "input": "pr_merge_lookup_failed | dev_build_verification_missing",
+      "kind": "dev_build_verification_missing",
+      "signal": ""
+    },
+    {
+      "input": "pr_merge_lookup_failed | dev_build_verification_failed",
+      "kind": "dev_build_verification_failed",
+      "signal": ""
+    },
+    {
+      "input": "pr_merge_lookup_failed | dev_tests_failed",
+      "kind": "dev_tests_failed",
+      "signal": ""
+    },
+    {
+      "input": "pr_merge_lookup_failed | subagent crash",
+      "kind": "pr_merge_lookup_failed",
       "signal": ""
     },
     {
@@ -7483,6 +9423,31 @@
     {
       "input": "subagent crash | [permission-denied]",
       "kind": "permission_denied",
+      "signal": ""
+    },
+    {
+      "input": "subagent crash | stage_context_unreadable",
+      "kind": "stage_context_unreadable",
+      "signal": ""
+    },
+    {
+      "input": "subagent crash | dev_build_verification_missing",
+      "kind": "dev_build_verification_missing",
+      "signal": ""
+    },
+    {
+      "input": "subagent crash | dev_build_verification_failed",
+      "kind": "dev_build_verification_failed",
+      "signal": ""
+    },
+    {
+      "input": "subagent crash | dev_tests_failed",
+      "kind": "dev_tests_failed",
+      "signal": ""
+    },
+    {
+      "input": "subagent crash | pr_merge_lookup_failed",
+      "kind": "pr_merge_lookup_failed",
       "signal": ""
     },
     {
