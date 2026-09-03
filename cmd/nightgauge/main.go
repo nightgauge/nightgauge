@@ -4021,6 +4021,25 @@ Safe to run multiple times — idempotent.`,
 
 // --- run command ---
 
+// resolveStageAdapter picks the CLI stage adapter for a scheduler that THIS
+// process executes itself (`run`, `queue run`, `autonomous run`), and returns
+// the raw explicit override alongside it so per-stage adapter config
+// (pipeline.stage_adapters.<stage>) can still apply when nothing was pinned.
+// Precedence: --adapter flag > NIGHTGAUGE_ADAPTER > ui.core.adapter >
+// claude-headless. `serve` deliberately does NOT call this — in IPC mode the
+// adapter is nil and stages run through the extension's IpcStageRunner.
+func resolveStageAdapter(flagValue, configDefault string) (adapters.SkillRunner, string, error) {
+	adapter, err := adapters.NewRegistry().Resolve(flagValue, configDefault)
+	if err != nil {
+		return nil, "", fmt.Errorf("adapter: %w", err)
+	}
+	explicit := flagValue
+	if explicit == "" {
+		explicit = os.Getenv("NIGHTGAUGE_ADAPTER")
+	}
+	return adapter, explicit, nil
+}
+
 func runCmd() *cobra.Command {
 	var (
 		owner         string
@@ -4071,17 +4090,11 @@ func runCmd() *cobra.Command {
 					globalAdapterDefault = runCfg.UI.Core.Adapter
 				}
 			}
-			registry := adapters.NewRegistry()
-			adapter, err := registry.Resolve(adapterName, globalAdapterDefault)
+			adapter, adapterExplicit, err := resolveStageAdapter(adapterName, globalAdapterDefault)
 			if err != nil {
-				return fmt.Errorf("adapter: %w", err)
+				return err
 			}
 			fmt.Printf("Using adapter: %s\n", adapter.Name())
-
-			adapterExplicit := adapterName
-			if adapterExplicit == "" {
-				adapterExplicit = os.Getenv("NIGHTGAUGE_ADAPTER")
-			}
 			excludeLabels := config.DefaultExcludeLabels
 			if cfgLoadErr == nil && runCfg != nil && runCfg.Autonomous != nil {
 				excludeLabels = runCfg.Autonomous.ResolvedExcludeLabels()
@@ -9824,6 +9837,7 @@ func autonomousRunCmd() *cobra.Command {
 		dryRun        bool
 		allowSelfRepo bool
 		outputJSON    bool
+		adapterName   string
 	)
 
 	cmd := &cobra.Command{
@@ -9928,7 +9942,21 @@ func autonomousRunCmd() *cobra.Command {
 				autoExcludeLabels = cfg.Autonomous.ResolvedExcludeLabels()
 				autoTrustedAuthorAssociations = cfg.Autonomous.TrustedAuthorAssociations
 			}
-			sched := orchestrator.NewScheduler(client, orchestrator.SchedulerConfig{
+			// The CLI-only dispatch branch (no IPC callback, no cloud
+			// dispatcher) runs stages through ExecutionManagerRunner, which
+			// needs a CLI adapter (#1336). Without one every dispatched issue
+			// failed at its first stage with "execution manager has no skill
+			// runner adapter configured" — the one verb built for unattended
+			// operation could not execute a stage on its own.
+			globalAdapterDefault := ""
+			if cfg != nil && cfg.UI != nil && cfg.UI.Core != nil {
+				globalAdapterDefault = cfg.UI.Core.Adapter
+			}
+			adapter, adapterExplicit, err := resolveStageAdapter(adapterName, globalAdapterDefault)
+			if err != nil {
+				return err
+			}
+			sched := orchestrator.NewScheduler(client, autonomousSchedulerConfig(autonomousSchedulerInputs{
 				Owner:                     owner,
 				OwnerType:                 getOwnerType(cmd),
 				ProjectNumber:             project,
@@ -9938,7 +9966,9 @@ func autonomousRunCmd() *cobra.Command {
 				ExcludeLabels:             autoExcludeLabels,
 				TrustedAuthorAssociations: autoTrustedAuthorAssociations,
 				RuntimeConfig:             cfg,
-			})
+				Adapter:                   adapter,
+				AdapterExplicit:           adapterExplicit,
+			}))
 
 			// Root a cross-repo run at its TARGET repo, and refuse the run when
 			// that repo cannot be resolved (#882).
@@ -10040,16 +10070,19 @@ func autonomousRunCmd() *cobra.Command {
 				}
 			}
 
-			// Wire dispatcher based on pipeline.executor config.
+			// Wire dispatcher based on pipeline.executor config, and say which
+			// executor will run stages so the mode is visible before dispatch.
+			stageExecutor := "cli:" + adapter.Name()
 			if cfg != nil && cfg.PipelineExecutor != nil && cfg.PipelineExecutor.ExecutorType() == "cloud" {
 				if cfg.PlatformURL != "" && cfg.APIKey != "" {
 					cloudDisp := orchestrator.NewCloudDispatcher(cfg.PlatformURL, cfg.Owner, cfg.APIKey)
 					autoSched.SetDispatcher(cloudDisp)
-					fmt.Printf("executor=cloud (platform=%s)\n", cfg.PlatformURL)
+					stageExecutor = "cloud (platform=" + cfg.PlatformURL + ")"
 				} else {
 					fmt.Println("WARNING: pipeline.executor=cloud requires platform_url and api_key; falling back to local")
 				}
 			}
+			fmt.Printf("Stage executor: %s\n", stageExecutor)
 
 			if dryRun {
 				fmt.Println("Running in dry-run mode — no pipelines will be executed")
@@ -10106,7 +10139,44 @@ func autonomousRunCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Show what would run without executing")
 	cmd.Flags().BoolVar(&allowSelfRepo, "allow-self-repo", false, "Permit dispatching issues in the running binary's own repo (#292 — a stage editing that repo can be destroyed by the unfixed version of itself)")
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output final status as JSON")
+	cmd.Flags().StringVar(&adapterName, "adapter", "", "AI adapter for stages this process runs itself (claude-headless, claude-sdk, codex, gemini, gemini-sdk); defaults to ui.core.adapter")
 	return cmd
+}
+
+// autonomousSchedulerInputs is everything `autonomous run` feeds the
+// scheduler. It exists so a test can assert the command's scheduler carries a
+// stage adapter (#1336) without standing up a forge client.
+type autonomousSchedulerInputs struct {
+	Owner                     string
+	OwnerType                 gh.OwnerType
+	ProjectNumber             int
+	MaxPerRepo                int
+	WorkspaceRoot             string
+	OnFailureStatus           string
+	ExcludeLabels             []string
+	TrustedAuthorAssociations []string
+	RuntimeConfig             *config.Config
+	Adapter                   adapters.SkillRunner
+	AdapterExplicit           string
+}
+
+// autonomousSchedulerConfig maps the command's inputs onto SchedulerConfig.
+// The adapter is mandatory here: the CLI-only dispatch branch cannot run a
+// stage without it.
+func autonomousSchedulerConfig(in autonomousSchedulerInputs) orchestrator.SchedulerConfig {
+	return orchestrator.SchedulerConfig{
+		Owner:                     in.Owner,
+		OwnerType:                 in.OwnerType,
+		ProjectNumber:             in.ProjectNumber,
+		MaxPerRepo:                in.MaxPerRepo,
+		WorkspaceRoot:             in.WorkspaceRoot,
+		OnFailureStatus:           in.OnFailureStatus,
+		ExcludeLabels:             in.ExcludeLabels,
+		TrustedAuthorAssociations: in.TrustedAuthorAssociations,
+		RuntimeConfig:             in.RuntimeConfig,
+		Adapter:                   in.Adapter,
+		AdapterExplicit:           in.AdapterExplicit,
+	}
 }
 
 // autonomousStateIsStalled reports whether a persisted "running"/"paused"
