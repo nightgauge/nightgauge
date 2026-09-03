@@ -105,7 +105,7 @@ attempt to populate that section itself; leave the placeholder from
 - `skills/nightgauge-pr-merge/_includes/batch-detection.md` — read conditionally in Phase 0.5 only when the batch context file exists (multi-issue close, batch context cleanup)
 - `skills/nightgauge-pr-merge/_includes/validate-environment.md` — read in Phase 1 (verify branch, PR state, pre-CI Go build check)
 - `skills/nightgauge-pr-merge/_includes/reviews.md` — read in Phase 3 (fetch & parse review feedback, CI status)
-- `skills/nightgauge-pr-merge/_includes/merge.md` — read in Phase 6 (ruleset pre-check, conflict resolution, merge gate, execute merge)
+- `skills/nightgauge-pr-merge/_includes/merge.md` — read in Phase 6 (ruleset pre-check, knowledge conformance gate, conflict resolution, merge gate, execute merge)
 - `skills/nightgauge-pr-merge/_includes/post-merge.md` — read in Phase 7 (post-merge build, issue close, epic completion, branch cleanup, outcome recording)
 - `skills/nightgauge-pr-merge/_includes/feedback.md` — read in Phase 7.8 (retrospective feedback)
 - `skills/nightgauge-pr-merge/_includes/failure-cleanup.md` — read in Failure Cleanup (cleanup_failed_pr function + exit-point usage)
@@ -392,9 +392,10 @@ fi
 printf '<!-- phase:start name="merge" index=9 total=14 stage="pr-merge" -->\n'
 ```
 
-Run the ruleset pre-check, final mergeable verification, conflict resolution,
-merge-strategy selection, the deterministic Go-binary merge (with its
-`blockedBy` gate), and merge verification.
+Run the ruleset pre-check, final mergeable verification, the knowledge
+conformance gate (every entry this issue wrote must carry the frontmatter
+contract), conflict resolution, merge-strategy selection, the deterministic
+Go-binary merge (with its `blockedBy` gate), and merge verification.
 
 > **NEVER pass `--admin` (or `--auto`) to any merge command — no admin bypass
 > exists in this pipeline.** A merge blocked by branch protection or required

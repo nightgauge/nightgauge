@@ -18,6 +18,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/nightgauge/nightgauge/internal/knowledge"
 )
 
 // PRMergePath is the outcome of a deterministic pr-merge attempt.
@@ -69,6 +71,17 @@ const (
 	// LLM spend is attributable, and `dirty-merge-state: BLOCKED` is reserved
 	// for a block the deterministic path actually diagnosed.
 	ReasonNoChecksCreated = "no-checks-created"
+	// ReasonKnowledgeNonConformant is recorded when an entry in the issue's
+	// knowledge directory does not carry the frontmatter contract (a
+	// parseable block with a `type`). A contract that is not enforced drifts
+	// back into two contracts within a month, and the merge is the only
+	// chokepoint every change passes through.
+	//
+	// The gate is deliberately scoped to THIS issue's directory. The
+	// knowledge base is local, gitignored, per-machine state, so a stale
+	// entry from an unrelated issue must never block someone's merge; the
+	// whole-base sweep is `knowledge validate --conformance`.
+	ReasonKnowledgeNonConformant = "knowledge-non-conformant"
 )
 
 // CI-wait budget for the deterministic pr-merge path (Issue #297). When the
@@ -215,6 +228,9 @@ type DeterministicRunner struct {
 	// check rollup is still empty (#1027) — see DefaultCINoCheckGracePolls.
 	ciNoCheckGrace int
 	now            func() time.Time
+	// knowledgeConformance checks the issue's knowledge entries against the
+	// frontmatter contract. Injectable for tests; nil disables the gate.
+	knowledgeConformance func(workdir string, issueNumber int) (*knowledge.ConformanceResult, error)
 }
 
 // NewDeterministicRunner builds a runner using a real `gh`-backed client.
@@ -230,6 +246,8 @@ func NewDeterministicRunner() *DeterministicRunner {
 		ciPollMax:      DefaultCIPollMax,
 		ciNoCheckGrace: DefaultCINoCheckGracePolls,
 		now:            time.Now,
+
+		knowledgeConformance: knowledge.ValidateConformanceForIssue,
 	}
 }
 
@@ -344,6 +362,25 @@ func (r *DeterministicRunner) Run(ctx context.Context, issueNumber int, _ string
 		}, nil)
 	}
 
+	// Knowledge conformance is the last gate before the merge itself. This
+	// is the deterministic path, which is the DEFAULT path — putting the
+	// check only in the pr-merge skill would leave it unenforced on every
+	// normal run, because the skill is reached only when this runner punts.
+	//
+	// A violation punts rather than erroring: the LLM path gets its turn and
+	// can repair the entry with `knowledge stamp`, which is a better outcome
+	// than failing the run outright. What it must not do is merge.
+	if r.knowledgeConformance != nil {
+		if conf, confErr := r.knowledgeConformance(workdir, issueNumber); confErr == nil && conf != nil && !conf.Valid {
+			return finish(PRMergeResult{
+				Path:     PathPunt,
+				PRNumber: prNumber,
+				PRState:  snap.State,
+				Reason:   fmt.Sprintf("%s: %s", ReasonKnowledgeNonConformant, conformanceSummary(conf)),
+			}, nil)
+		}
+	}
+
 	// Issue the merge. Idempotent at the GitHub level: re-issuing on an
 	// already-merged PR returns a benign error which we tolerate (the
 	// re-poll below confirms MERGED).
@@ -407,6 +444,21 @@ func (r *DeterministicRunner) Run(ctx context.Context, issueNumber int, _ string
 		PRState:  postSnap.State,
 		Reason:   ReasonMergeECTimeout,
 	}, nil)
+}
+
+// conformanceSummary renders the offending entries compactly enough for a
+// punt reason, naming at most three so the log line stays readable.
+func conformanceSummary(conf *knowledge.ConformanceResult) string {
+	const maxNamed = 3
+	names := make([]string, 0, maxNamed)
+	for i, v := range conf.Violations {
+		if i == maxNamed {
+			names = append(names, fmt.Sprintf("+%d more", len(conf.Violations)-maxNamed))
+			break
+		}
+		names = append(names, fmt.Sprintf("%s (%s)", v.Path, v.Reason))
+	}
+	return strings.Join(names, ", ")
 }
 
 // fetchWithPolling calls gh.View up to pollMax times with pollInterval between

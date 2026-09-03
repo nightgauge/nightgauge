@@ -2,9 +2,11 @@ package knowledge
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/nightgauge/nightgauge/internal/config"
@@ -175,4 +177,181 @@ Add at least one ADR block to decisions.md:
 Reference: docs/KNOWLEDGE_BASE.md
 Escape hatch: set knowledge.require_decisions: false in .nightgauge/config.yaml`)
 	return sb.String()
+}
+
+// Conformance violation reasons.
+const (
+	// ReasonNoFrontmatter is an entry with no frontmatter block at all.
+	ReasonNoFrontmatter = "no_frontmatter"
+	// ReasonUnparseableFrontmatter is a block that failed to parse — malformed
+	// YAML, a missing closing sentinel, or a lifecycle status the contract
+	// deleted.
+	ReasonUnparseableFrontmatter = "unparseable_frontmatter"
+	// ReasonMissingType is a parseable block whose required `type` is absent
+	// or empty.
+	ReasonMissingType = "missing_type"
+)
+
+// ReservedKnowledgeNames are the filenames that carry no entry frontmatter:
+// navigation and template files an Open Knowledge Format consumer reads
+// structurally rather than as knowledge.
+var ReservedKnowledgeNames = map[string]bool{
+	"index.md":     true,
+	"log.md":       true,
+	"README.md":    true,
+	"_template.md": true,
+}
+
+// ConformanceViolation names one entry that does not satisfy the frontmatter
+// contract, and why.
+type ConformanceViolation struct {
+	// Path is relative to the root that was checked, so output is stable
+	// across machines and safe to paste into a PR.
+	Path string `json:"path"`
+	// Reason is one of the Reason* constants above.
+	Reason string `json:"reason"`
+	// Detail carries the parser's message for unparseable blocks, with the
+	// absolute path stripped.
+	Detail string `json:"detail,omitempty"`
+}
+
+// ConformanceResult is the outcome of a conformance sweep.
+type ConformanceResult struct {
+	Root         string                 `json:"root"`
+	FilesChecked int                    `json:"files_checked"`
+	Skipped      int                    `json:"skipped"`
+	Valid        bool                   `json:"valid"`
+	Violations   []ConformanceViolation `json:"violations"`
+	Message      string                 `json:"message"`
+}
+
+// ValidateConformance walks root and reports every non-reserved `.md` file
+// that does not carry a parseable frontmatter block with a non-empty `type`.
+//
+// This is the check an external Open Knowledge Format consumer would apply,
+// and it is the single place that keeps every writer honest — including
+// model-driven stages. A contract that is not enforced drifts back into two
+// contracts within a month.
+//
+// Tolerance is deliberate and matches the parser: unknown keys, unknown `type`
+// values and missing optional fields are never violations.
+//
+// A missing root is not an error — a repository with no knowledge base is
+// trivially conformant.
+func ValidateConformance(root string) (*ConformanceResult, error) {
+	result := &ConformanceResult{
+		Root:       root,
+		Valid:      true,
+		Violations: []ConformanceViolation{},
+	}
+
+	info, err := os.Stat(root)
+	if err != nil {
+		if os.IsNotExist(err) {
+			result.Message = fmt.Sprintf("no knowledge base at %s — nothing to check", root)
+			return result, nil
+		}
+		return nil, fmt.Errorf("stat %s: %w", root, err)
+	}
+	if !info.IsDir() {
+		return nil, fmt.Errorf("%s is not a directory", root)
+	}
+
+	walkErr := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		name := d.Name()
+		if d.IsDir() {
+			// Dot-directories hold derived state, not entries — the recall
+			// cache under .recall-cache/ is the reason this exists.
+			if path != root && strings.HasPrefix(name, ".") {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(strings.ToLower(name), ".md") {
+			return nil
+		}
+		if ReservedKnowledgeNames[name] {
+			result.Skipped++
+			return nil
+		}
+
+		result.FilesChecked++
+		rel, relErr := filepath.Rel(root, path)
+		if relErr != nil {
+			rel = path
+		}
+		rel = filepath.ToSlash(rel)
+
+		block, parseErr := ParseFrontmatterFile(path)
+		switch {
+		case parseErr != nil:
+			result.Violations = append(result.Violations, ConformanceViolation{
+				Path:   rel,
+				Reason: ReasonUnparseableFrontmatter,
+				// The parser prefixes the absolute path; strip it so the
+				// output does not leak local filesystem layout into PR bodies
+				// and pipeline logs.
+				Detail: strings.TrimPrefix(strings.TrimPrefix(parseErr.Error(), path), ": "),
+			})
+		case block == nil:
+			result.Violations = append(result.Violations, ConformanceViolation{
+				Path:   rel,
+				Reason: ReasonNoFrontmatter,
+			})
+		case strings.TrimSpace(block.Type) == "":
+			result.Violations = append(result.Violations, ConformanceViolation{
+				Path:   rel,
+				Reason: ReasonMissingType,
+			})
+		}
+		return nil
+	})
+	if walkErr != nil {
+		return nil, fmt.Errorf("walk %s: %w", root, walkErr)
+	}
+
+	sort.Slice(result.Violations, func(i, j int) bool {
+		return result.Violations[i].Path < result.Violations[j].Path
+	})
+
+	result.Valid = len(result.Violations) == 0
+	if result.Valid {
+		result.Message = fmt.Sprintf("%d entr%s conform to the frontmatter contract", result.FilesChecked, plural(result.FilesChecked))
+	} else {
+		result.Message = fmt.Sprintf("%d of %d entr%s do not carry a parseable frontmatter block with a type",
+			len(result.Violations), result.FilesChecked, plural(result.FilesChecked))
+	}
+	return result, nil
+}
+
+func plural(n int) string {
+	if n == 1 {
+		return "y"
+	}
+	return "ies"
+}
+
+// ValidateConformanceForIssue checks only the knowledge directory belonging to
+// one issue.
+//
+// The per-issue scope is what makes the pre-merge gate usable: the knowledge
+// base is local, gitignored, per-machine state, so a stale entry from an
+// unrelated issue must never block someone's merge. The whole-base sweep is
+// the standalone audit form.
+//
+// An issue with no knowledge directory is trivially conformant.
+func ValidateConformanceForIssue(workspaceRoot string, issueNumber int) (*ConformanceResult, error) {
+	dir, err := findKnowledgePath(workspaceRoot, issueNumber)
+	if err != nil {
+		return &ConformanceResult{
+			Root:       "",
+			Valid:      true,
+			Violations: []ConformanceViolation{},
+			Message:    fmt.Sprintf("no knowledge directory for issue #%d — nothing to check", issueNumber),
+		}, nil
+	}
+	return ValidateConformance(dir)
 }

@@ -1,6 +1,10 @@
 ---
+type: decisions
 tags: [pipeline, stage, orchestration, sequential]
 status: stable
+generated:
+  by: process:knowledge-migrate
+  at: "2026-09-03T00:00:00Z"
 ---
 
 # Decisions: #4 — Pipeline Stage Architecture

@@ -6602,6 +6602,47 @@ with title-cased labels in case-insensitive alphabetical order. Prints nothing
 and exits 0 when the directory is missing or contains no qualifying entries.
 Consumed by `pr-create` Phase 1.7 to replace a fixed-dictionary bash loop.
 
+**validate** checks a knowledge base two ways.
+
+With an issue number it runs the decisions-population gate (tradeoff signals
+without an ADR block) **and** the frontmatter conformance check on that issue's
+knowledge directory. With `--conformance` and no issue number it sweeps the
+whole base.
+
+```bash
+nightgauge knowledge validate <issue-number> [--json] [--workdir <path>]
+nightgauge knowledge validate --conformance [--fix] [--json] [--workdir <path>]
+```
+
+| Flag | Type | Description |
+| --- | --- | --- |
+| `--conformance` | bool | Sweep the whole knowledge base; no issue number |
+| `--fix` | bool | With `--conformance`: stamp a type and `process:knowledge-migrate` provenance onto non-conformant entries |
+| `--workdir` | string | Workspace root (default: cwd) |
+| `--json` | bool | Output as JSON |
+
+Conformance means: every non-reserved `.md` under the knowledge root carries a
+parseable frontmatter block with a non-empty `type`. Reserved names
+(`index.md`, `log.md`, `README.md`, `_template.md`) and dot-directories are
+skipped. Unknown keys, unknown `type` values and missing optional fields are
+never violations. Violation reasons are `no_frontmatter`,
+`unparseable_frontmatter` and `missing_type`; paths are relative to the checked
+root so output is stable across machines.
+
+`--fix` never rewrites a block it could not parse — repairing malformed YAML is
+not something to guess at.
+
+**Exit codes**: `0` when everything conforms; `1` on any violation. This holds
+under `--json` too: the JSON branch encodes the result and *then* returns the
+error, so a scripted caller's exit code follows the verdict.
+
+**Enforcement.** The conformance check runs before every merge on the issue's
+own knowledge directory — in the deterministic pr-merge runner (which punts
+with reason `knowledge-non-conformant`) and in the pr-merge skill's Phase 6
+include. The deterministic runner is the default path, so a gate only in the
+skill would be unenforced on every normal run. Scoping to one issue keeps a
+stale entry from an unrelated issue out of somebody else's merge.
+
 **stamp** records provenance on a knowledge entry. It is the only writer of the
 `generated`, `verified`, `sources`, `status` and `stale_after` frontmatter
 fields — skills and stages call it instead of editing frontmatter with `sed` or

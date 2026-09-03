@@ -12,6 +12,7 @@ package okf
 
 import (
 	"fmt"
+	"path"
 	"regexp"
 	"strings"
 	"time"
@@ -187,4 +188,31 @@ func WithTitle(title string) func(*FrontmatterBlock) {
 // WithRepos scopes a scaffolded workspace entry to a repository set.
 func WithRepos(repos ...string) func(*FrontmatterBlock) {
 	return func(b *FrontmatterBlock) { b.Repos = repos }
+}
+
+// InferEntryType guesses the `type` for an entry being migrated, from its path
+// within the bundle. It is used only by the conformance repair path: an entry
+// written before the contract existed has no type, and the filename or its
+// category directory is the best evidence available.
+//
+// Anything it cannot place becomes "note", which is a valid contract value and
+// an honest one — the alternative is refusing to migrate, which leaves the
+// base non-conformant forever over a label nobody reads.
+func InferEntryType(bundleRelPath string) string {
+	base := strings.ToLower(path.Base(bundleRelPath))
+	switch base {
+	case "prd.md":
+		return TypePRD
+	case "decisions.md":
+		return TypeDecisions
+	}
+
+	// The first path segment of a repo-topic entry is its category.
+	if i := strings.IndexByte(bundleRelPath, '/'); i > 0 {
+		switch category := bundleRelPath[:i]; category {
+		case TypeArchitecture, TypeGlossary, TypeRunbook, TypePostMortem:
+			return category
+		}
+	}
+	return "note"
 }
