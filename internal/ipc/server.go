@@ -1336,8 +1336,11 @@ func (s *Server) registerMethods() {
 		if err != nil {
 			return nil, err
 		}
-		return s.boardServicesFor(c, p.Owner, p.ProjectNumber, gh.ParseOwnerType(p.OwnerType)).
-			Board.CountsByStatus(ctx)
+		// Derived from the cached open-item snapshot, never asked of the
+		// forge: inside the TTL this costs zero requests, and after it one
+		// 1-point change probe (#TBD-board-counts).
+		return boardcache.CountsByStatus(ctx,
+			s.boardServicesFor(c, p.Owner, p.ProjectNumber, gh.ParseOwnerType(p.OwnerType)).Board)
 	}
 
 	//ipc:method githubRateLimit params:GitHubRateLimitParams result:RateLimitInfo

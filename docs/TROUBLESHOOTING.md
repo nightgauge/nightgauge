@@ -1184,7 +1184,10 @@ per `ProjectBoardService` instance while item lists were shared per board, so N
 repositories on one board cost N counts queries per cold refresh. Counts now
 live in `BoardSnapshotStore` under `COUNTS_SCOPE`; if the API ledger ever shows
 more than one `board.counts` per board per refresh, something is bypassing the
-store.
+store. Daemon-side, `board.counts` is no longer a query at all: it is derived
+from the cached open-item snapshot (`docs/GO_BINARY.md` § _The Board Snapshot
+Cache_), so a ledger showing five-alias `totalCount` documents means an old
+binary.
 
 ## Local Validation Traps
 

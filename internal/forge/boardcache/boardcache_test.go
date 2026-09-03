@@ -46,10 +46,6 @@ func (b *countingBoard) ListItems(context.Context, string) ([]forgetypes.BoardIt
 	return b.items, b.err
 }
 
-func (b *countingBoard) CountsByStatus(context.Context) (*forgetypes.StatusCounts, error) {
-	return &forgetypes.StatusCounts{}, nil
-}
-
 func (b *countingBoard) GetItem(context.Context, string, string, int) (*forgetypes.BoardItem, error) {
 	return nil, nil
 }
