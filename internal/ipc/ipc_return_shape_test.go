@@ -341,12 +341,13 @@ func TestShape_Config_GetProjectConfig(t *testing.T) {
 		t.Fatalf("config.getProjectConfig error: %+v", resp.Error)
 	}
 
-	assertResultShape(t, resp.Result, nil, []string{"owner", "projectNumber"})
+	assertResultShape(t, resp.Result, nil, []string{"owner", "projectNumber", "sanitizationMode"})
 
 	data, _ := json.Marshal(resp.Result)
 	var result struct {
-		Owner         string `json:"owner"`
-		ProjectNumber int    `json:"projectNumber"`
+		Owner            string `json:"owner"`
+		ProjectNumber    int    `json:"projectNumber"`
+		SanitizationMode string `json:"sanitizationMode"`
 	}
 	if err := json.Unmarshal(data, &result); err != nil {
 		t.Fatalf("unmarshal config result: %v", err)
@@ -356,6 +357,13 @@ func TestShape_Config_GetProjectConfig(t *testing.T) {
 	}
 	if result.ProjectNumber <= 0 {
 		t.Errorf("config.getProjectConfig projectNumber = %d, want > 0", result.ProjectNumber)
+	}
+	// The firewall badge reads this field; it must always carry a resolved
+	// mode, never an empty string the client would have to default (#986).
+	switch result.SanitizationMode {
+	case "warn", "block", "disabled":
+	default:
+		t.Errorf("config.getProjectConfig sanitizationMode = %q, want warn|block|disabled", result.SanitizationMode)
 	}
 }
 

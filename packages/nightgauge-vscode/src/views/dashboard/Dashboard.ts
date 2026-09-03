@@ -44,6 +44,7 @@ import { PipelineStateService, type PipelineState } from "../../services/Pipelin
 import type { BacktrackRecord, ModelEscalationRecord } from "../../schemas/pipelineState";
 import { WorkspaceManager } from "../../services/WorkspaceManager";
 import { SanitizationLogService } from "../../services/SanitizationLogService";
+import type { FirewallMode } from "./tabs/FirewallTabHtml";
 import type {
   SanitizationEventType,
   SanitizationCategory,
@@ -234,6 +235,12 @@ export class Dashboard implements vscode.Disposable {
   private pipelineStateService: PipelineStateService | null = null;
   private workspaceManager: WorkspaceManager | null = null;
   private sanitizationLogService: SanitizationLogService | null = null;
+  /**
+   * Resolved `sanitization.mode` as reported by the Go config authority via
+   * `config.getProjectConfig`. `null` until the first read completes or when
+   * the read fails; the badge renders that as "Unknown", never as "warn" (#986).
+   */
+  private firewallMode: FirewallMode = null;
   private workspaceRoot: string | undefined;
   /** Project board service for fetching status counts (Issue #134) */
   private projectBoardService: IWorkItemProvider | null = null;
@@ -581,8 +588,42 @@ export class Dashboard implements vscode.Disposable {
     this.disposables.push(eventsChangedDisposable);
     this.disposables.push(this.sanitizationLogService);
 
-    // Initialize the service
-    await this.sanitizationLogService.initialize();
+    // The badge follows the config file, not the event log: re-read the
+    // resolved mode whenever any config tier changes (#986).
+    this.disposables.push(
+      ConfigBridge.getInstance().onConfigChanged(() => {
+        void this.refreshFirewallMode();
+      })
+    );
+
+    // Initialize the service and read the enforcement mode together
+    await Promise.all([this.sanitizationLogService.initialize(), this.refreshFirewallMode()]);
+  }
+
+  /**
+   * Read the resolved `sanitization.mode` from the Go binary — the same
+   * `config.Load` the sanitize hook enforces with — so the dashboard badge and
+   * the gate share one authority. A failed read leaves the mode `null`
+   * ("Unknown"); it never falls back to "warn" (#986).
+   */
+  private async refreshFirewallMode(): Promise<void> {
+    let next: FirewallMode = null;
+    try {
+      const ipc = (await import("../../services/IpcClient")).IpcClient.getInstance();
+      const result = await ipc.configGetProjectConfig(this.workspaceRoot);
+      const mode = result.sanitizationMode;
+      if (mode === "warn" || mode === "block" || mode === "disabled") {
+        next = mode;
+      } else {
+        this.logger.warn("firewallMode:unexpected", { mode });
+      }
+    } catch (err) {
+      this.logger.warn("firewallMode:readFailed", { error: String(err) });
+    }
+    if (next !== this.firewallMode) {
+      this.firewallMode = next;
+      this.updatePanel("firewallMode");
+    }
   }
 
   /**
@@ -1594,6 +1635,7 @@ export class Dashboard implements vscode.Disposable {
         const timeSeriesData = this.sanitizationLogService.getTimeSeriesData(filters, granularity);
 
         firewallData = {
+          mode: this.firewallMode,
           events,
           filters,
           aggregates: firewallAggregates,
@@ -1834,7 +1876,7 @@ export class Dashboard implements vscode.Disposable {
         ]);
         // Re-initialize firewall data if service is available
         if (this.sanitizationLogService) {
-          await this.sanitizationLogService.initialize();
+          await Promise.all([this.sanitizationLogService.initialize(), this.refreshFirewallMode()]);
         }
         this.updatePanel("msg:refresh");
         break;

@@ -47,6 +47,7 @@ export function setupIpcClientMock(): IpcMockHandle {
       owner: "nightgauge",
       projectNumber: 42,
       defaultRepo: "",
+      sanitizationMode: "warn",
     }),
     mockPipelineRun: vi.fn().mockResolvedValue({ success: true, runId: "run-1" }),
     mockPipelineGetState: vi.fn().mockResolvedValue(null),

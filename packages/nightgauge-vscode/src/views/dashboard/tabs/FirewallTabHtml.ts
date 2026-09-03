@@ -17,16 +17,52 @@ import { CATEGORY_LABELS } from "../FirewallTypes";
 import type { SanitizationMode } from "../../../config/schema";
 
 /**
+ * The firewall mode as the dashboard knows it: the resolved `sanitization.mode`
+ * from the Go config authority, or `null` when that read failed (IPC down,
+ * config unreadable). `null` is rendered as "Unknown" on purpose — there is no
+ * silent fallback to "warn", because a badge that guesses is a badge that lies
+ * about enforcement (#986).
+ */
+export type FirewallMode = SanitizationMode | null;
+
+interface FirewallModeBadge {
+  label: string;
+  cssClass: string;
+  title: string;
+}
+
+const FIREWALL_MODE_BADGES: Record<SanitizationMode, FirewallModeBadge> = {
+  warn: {
+    label: "Warn-Only",
+    cssClass: "firewall-mode-warn",
+    title: "sanitization.mode: warn — matches are logged and allowed through",
+  },
+  block: {
+    label: "Block",
+    cssClass: "firewall-mode-block",
+    title: "sanitization.mode: block — matching commands are denied",
+  },
+  disabled: {
+    label: "Disabled — not scanning",
+    cssClass: "firewall-mode-disabled",
+    title:
+      "sanitization.mode: disabled — no patterns are checked; an empty event list means nothing was looked at",
+  },
+};
+
+const FIREWALL_MODE_UNKNOWN: FirewallModeBadge = {
+  label: "Unknown",
+  cssClass: "firewall-mode-unknown",
+  title: "sanitization.mode could not be read from the workspace config",
+};
+
+/**
  * Generate firewall mode status badge HTML
  */
-function getFirewallModeBadgeHtml(mode: SanitizationMode): string {
-  const modeConfig: Record<SanitizationMode, { label: string; cssClass: string }> = {
-    warn: { label: "Warn-Only", cssClass: "firewall-mode-warn" },
-    block: { label: "Block", cssClass: "firewall-mode-block" },
-    disabled: { label: "Disabled", cssClass: "firewall-mode-disabled" },
-  };
-  const { label, cssClass } = modeConfig[mode] ?? modeConfig.warn;
-  return `<span class="firewall-mode-badge ${cssClass}">Firewall: ${label}</span>`;
+function getFirewallModeBadgeHtml(mode: FirewallMode): string {
+  const { label, cssClass, title } =
+    mode === null ? FIREWALL_MODE_UNKNOWN : FIREWALL_MODE_BADGES[mode];
+  return `<span class="firewall-mode-badge ${cssClass}" data-firewall-mode="${mode ?? "unknown"}" title="${escapeHtml(title)}">Firewall: ${label}</span>`;
 }
 
 /**
@@ -104,7 +140,7 @@ function getFirewallScript(): string {
 /**
  * Generate firewall summary metrics HTML
  */
-function getFirewallMetricsHtml(aggregates: FirewallAggregates, mode: SanitizationMode): string {
+function getFirewallMetricsHtml(aggregates: FirewallAggregates, mode: FirewallMode): string {
   const total = aggregates.totalBlocked + aggregates.totalWarned + aggregates.totalBypassed;
   const mostRecent = aggregates.mostRecentEvent
     ? formatRelativeTime(aggregates.mostRecentEvent)
@@ -363,7 +399,7 @@ function getFirewallSectionHtml(
   aggregates: FirewallAggregates,
   timeSeriesData: FirewallTimeSeriesPoint[],
   nonce: string,
-  mode: SanitizationMode = "warn"
+  mode: FirewallMode
 ): string {
   return `
     <details class="collapsible-section">
@@ -412,9 +448,19 @@ export function getFirewallTabStyles(): string {
       color: rgba(255, 99, 132, 1);
     }
 
+    /* "Off" must not read as "on and quiet": no warning tint, a struck-through
+       label and a dashed outline mark the absence of a detector (#986). */
     .firewall-mode-disabled {
+      background: transparent;
+      color: var(--vscode-descriptionForeground);
+      border: 1px dashed var(--vscode-errorForeground);
+      text-decoration: line-through;
+    }
+
+    .firewall-mode-unknown {
       background: var(--vscode-badge-background);
       color: var(--vscode-badge-foreground);
+      border: 1px dotted var(--vscode-badge-foreground);
     }
 
     .firewall-section {
