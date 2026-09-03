@@ -3466,6 +3466,10 @@ func (s *Server) registerMethods() {
 		}
 		if root := s.repoRoot(recordRepo); root != "" {
 			errMsg := ""
+			// preStageFailure: the run failed and no stage ever recorded an
+			// error — nothing exited, so nothing wrote an exit record and the
+			// only reason on hand is what the dispatcher forwarded (#1329).
+			preStageFailure := false
 			if !p.Success {
 				errMsg = snap.StageErrors[string(snap.Stage)]
 				if errMsg == "" {
@@ -3475,6 +3479,10 @@ func (s *Server) registerMethods() {
 							break
 						}
 					}
+				}
+				if errMsg == "" {
+					preStageFailure = true
+					errMsg = p.FailureDetail
 				}
 				if errMsg == "" {
 					errMsg = "pipeline failed"
@@ -3526,6 +3534,13 @@ func (s *Server) registerMethods() {
 					kind = orchestrator.TerminalKindSubagentCrash
 				}
 				input.TerminalFailureKind = kind
+				// The reason behind the kind, persisted (#1329). Until this a
+				// pre-stage failure wrote `subagent_crash` + `stages: {}` and
+				// the text existed only in the extension's output channel.
+				input.TerminalFailureDetail = errMsg
+				if preStageFailure && !p.Deferred {
+					writePreDispatchExitRecord(root, recordRepo, p.IssueNumber, snap.RunID, kind, errMsg, p.TotalDurationMs)
+				}
 				// Refine into a first-class outcome_type when the failure is a
 				// needs-human repo-config block (pr-merge blocked by a required
 				// check no retry can clear) so the dashboard shows "blocked",

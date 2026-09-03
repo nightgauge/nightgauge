@@ -229,6 +229,32 @@ type StageExitRecord struct {
 	//
 	// Empty on a healthy exit. Reclaim with `nightgauge stash sweep`.
 	UnreclaimedStashes []string `json:"unreclaimed_stashes,omitempty"`
+	// FailureDetail is the failure text for a run that latched terminal
+	// BEFORE any stage exited (#1329) — Stage == StagePreDispatch. Every other
+	// terminal path has a stage exit of its own and carries its reason in
+	// StderrTail / GateReason; this one had no subprocess, so the dispatcher's
+	// error text is the only reason there is. Bounded to
+	// PreDispatchDetailMaxRunes, tail-truncated.
+	FailureDetail string `json:"failure_detail,omitempty"`
+}
+
+// StagePreDispatch is the synthetic stage name of the exit record written for
+// a run that failed before any pipeline stage started (#1329). It keeps the
+// "one artifact written on every terminal path" promise true for the path
+// that has no stage exit of its own.
+const StagePreDispatch = "pre-dispatch"
+
+// PreDispatchDetailMaxRunes bounds StageExitRecord.FailureDetail.
+const PreDispatchDetailMaxRunes = 2048
+
+// BoundFailureDetail keeps the LAST PreDispatchDetailMaxRunes runes of s — the
+// cause of an error sits at its tail, behind the wrappers.
+func BoundFailureDetail(s string) string {
+	r := []rune(s)
+	if len(r) <= PreDispatchDetailMaxRunes {
+		return s
+	}
+	return "…" + string(r[len(r)-PreDispatchDetailMaxRunes:])
 }
 
 // exitRecordsSubdir is the project-relative directory the daily JSONL files

@@ -877,6 +877,12 @@ export const ExecutionHistoryRunRecordV3Schema = ExecutionHistoryRunRecordV2Sche
    * Absent on `outcome === "complete"`.
    */
   terminal_failure_kind: TerminalFailureKindSchema.optional(),
+  /**
+   * The failure text behind `terminal_failure_kind` (#1329): the failed
+   * stage's error, or the dispatcher's forwarded reason for a run that never
+   * started a stage. Bounded (2048 runes, tail-truncated) by the Go writer.
+   */
+  terminal_failure_detail: z.string().optional(),
 });
 export type ExecutionHistoryRunRecordV3 = z.infer<typeof ExecutionHistoryRunRecordV3Schema>;
 

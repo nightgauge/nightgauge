@@ -32,6 +32,7 @@ import {
   type ExecutionOutcome,
   foldWorkflowOutcomes,
   summarizeWorkflowOutcomes,
+  flattenRunRecords,
   type WorkflowEvent,
   type WorkflowCalibrationSignal,
 } from "@nightgauge/sdk";
@@ -62,11 +63,7 @@ export interface StageExecutionStats {
   durationStats: StageDurationStats[];
 }
 import { ExecutionHistoryReader, type IssueCostAggregation } from "../utils/executionHistoryReader";
-import type {
-  ExecutionHistoryRunRecord,
-  ExecutionHistoryRunRecordV2,
-  HistoryStageDetail,
-} from "../schemas/executionHistory";
+import type { ExecutionHistoryRunRecordV2, HistoryStageDetail } from "../schemas/executionHistory";
 import type { Logger } from "../utils/logger";
 import { GateMetricsWriter } from "../utils/gateMetricsWriter";
 import { SkillEffectivenessWriter } from "../utils/SkillEffectivenessWriter";
@@ -1105,9 +1102,10 @@ export class PostPipelineAnalyzer {
   /**
    * Adapt JSONL execution history records to SDK ExecutionHistoryRecord format.
    *
-   * The JSONL records (from ExecutionHistoryReader) are run-level records with
-   * nested `stages` objects. The SDK's ModelPerformanceAnalyzer expects flat
-   * per-stage records. This function flattens run records into per-stage records.
+   * Delegates to the SDK's `flattenRunRecords` — the one run-record → per-stage
+   * mapper shared with the health path (#461) — and keeps only stages that
+   * carried a `model_selection` block, since `ModelPerformanceAnalyzer`
+   * attributes outcomes to a model and an unrouted stage has none.
    *
    * @param rawRecords - Records from ExecutionHistoryReader.readAll()
    * @returns Flat per-stage records for ModelPerformanceAnalyzer
@@ -1115,49 +1113,7 @@ export class PostPipelineAnalyzer {
   static adaptRecords(
     rawRecords: Array<{ record_type: string; [key: string]: unknown }>
   ): SdkExecutionHistoryRecord[] {
-    const result: SdkExecutionHistoryRecord[] = [];
-
-    for (const record of rawRecords) {
-      if (record.record_type !== "run") continue;
-
-      const runRecord = record as unknown as ExecutionHistoryRunRecord;
-      if (!runRecord.stages) continue;
-
-      for (const [stageName, stageDetail] of Object.entries(runRecord.stages)) {
-        const stage = stageDetail as HistoryStageDetail;
-
-        // Skip stages without model selection data
-        if (!stage.model_selection) continue;
-
-        // Get per-stage token usage if available
-        const perStageTokens =
-          runRecord.tokens?.per_stage?.[stageName as keyof typeof runRecord.tokens.per_stage];
-
-        result.push({
-          issueNumber: runRecord.issue_number,
-          stage: stageName,
-          adapter: "claude",
-          model: stage.model_selection.model,
-          success: stage.status === "complete",
-          retries: (stage.auto_retry_count ?? 0) + (stage.manual_retry_count ?? 0),
-          inputTokens: perStageTokens?.input ?? 0,
-          outputTokens: perStageTokens?.output ?? 0,
-          cacheReadTokens: perStageTokens?.cache_read ?? 0,
-          cacheCreationTokens: perStageTokens?.cache_creation ?? 0,
-          costUsd: perStageTokens?.cost_usd ?? 0,
-          durationMs: stage.duration_ms ?? 0,
-          timestamp: stage.started_at ?? runRecord.started_at,
-          selectionSource: stage.model_selection.source,
-          selectedModel: stage.model_selection.model,
-          modelSelectionMode: stage.model_selection.mode,
-          autoSelectorConfidence: stage.model_selection.confidence,
-          autoSelectorComplexity: stage.model_selection.complexity,
-          failure_category: stage.failure_category,
-        });
-      }
-    }
-
-    return result;
+    return flattenRunRecords(rawRecords).filter((record) => record.model !== undefined);
   }
 
   /**
