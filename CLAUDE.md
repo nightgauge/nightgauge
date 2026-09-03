@@ -55,6 +55,24 @@ they cover:
 - **Issue creation and project board sync** — `.claude/rules/scripts.md`
   (scoped to `claude-plugins/**` and `scripts/**`).
 
+## Subagent Model Selection (orchestrating sessions)
+
+An orchestrating session picks the model per subagent; it never inherits the
+session's own model for every child. The tier is chosen by the shape of the
+task, not by its importance:
+
+| Task shape                                                                      | Model  |
+| ------------------------------------------------------------------------------- | ------ |
+| Lookups, log aggregation, file inventories, "does X exist"                      | Haiku  |
+| Well-specified single-package fixes with ACs and a red-before test              | Sonnet |
+| Read-only audits and code exploration that must cite file:line                  | Sonnet |
+| Multi-package changes, IPC/contract changes, anything that regenerates a client | Opus   |
+| Architecture, ADR-level design, and reviews that decide what to build           | Fable  |
+
+The orchestrator's own context stays lean: children return conclusions, not
+file dumps (`AGENTS.md` § _Context economy_). Recorded 2026-09-03 at the
+maintainer's direction.
+
 ## Documentation Map
 
 > This map helps AI agents find relevant documentation based on the task at
