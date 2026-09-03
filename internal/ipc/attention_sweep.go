@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math/rand/v2"
 	"strings"
 	"sync"
 	"time"
@@ -112,21 +113,41 @@ var sweepMu sync.Mutex
 //	2026/08/23 21:57:48  sweep
 //	2026/08/23 21:58:07  sweep     <- 19s later
 //
-// Both are well inside the extension's own SWEEP_MIN_GAP_MS of 60s. That guard
-// lives in AttentionSweepService and therefore only covers the triggers that
-// pass through it; the daemon is where the timer, activation, view-refresh,
+// Both were well inside the extension's then sixty-second floor. That guard
+// lived in AttentionSweepService and therefore only covered the triggers that
+// passed through it; the daemon is where the timer, activation, view-refresh,
 // run-terminated and manual paths all converge, so it is the only place a gap
 // can bind on all of them.
 //
-// Matched to the extension's 60s deliberately: the extension-side guard already
-// throttles every trigger it owns to this interval, so enforcing the same value
-// here changes nothing for those paths and catches only the ones that slip
-// underneath it.
+// The extension has since replaced its floor with the board change probe
+// (board_changed.go): its event-driven triggers sweep only when a board moved
+// or a full interval elapsed, so this gap now catches only what slips
+// underneath that — two windows on one daemon, or a manual sweep spammed.
 const SweepMinGap = 60 * time.Second
 
 // sweepNow is time.Now behind a variable so a test can cross the gap without
 // sleeping through it.
 var sweepNow = time.Now
+
+// sweepJitterRand supplies the uniform variate for the per-daemon gap jitter;
+// a test pins it (0.5 → exactly SweepMinGap).
+var sweepJitterRand = rand.Float64
+
+// jitteredSweepGap is SweepMinGap ±20%, drawn once per daemon at construction
+// so the daemons on one machine do not all become eligible to sweep — and
+// re-read every board — in the same second after a shared quota reset.
+func jitteredSweepGap() time.Duration {
+	return time.Duration(float64(SweepMinGap) * (0.8 + 0.4*sweepJitterRand()))
+}
+
+// sweepGap is this daemon's min gap; a Server built as a literal (tests)
+// has none and falls back to the unjittered constant.
+func (s *Server) sweepGap() time.Duration {
+	if s.sweepMinGap > 0 {
+		return s.sweepMinGap
+	}
+	return SweepMinGap
+}
 
 // handleAttentionSweep evaluates the registered repo-scoped producers against
 // each requested repo and reconciles the results into the shared store.
@@ -159,14 +180,14 @@ func (s *Server) handleAttentionSweep(ctx context.Context, raw json.RawMessage) 
 	// both read a stale lastSweepAt and both proceed — the exact shape of the
 	// 14-seconds-apart pair in #848.
 	now := sweepNow()
-	if !s.lastSweepAt.IsZero() {
-		if elapsed := now.Sub(s.lastSweepAt); elapsed < SweepMinGap {
+	if gap := s.sweepGap(); !s.lastSweepAt.IsZero() {
+		if elapsed := now.Sub(s.lastSweepAt); elapsed < gap {
 			// Not Busy: nothing is running. A sweep finished moments ago and
 			// its results already cover this caller, so re-reading every board
 			// would spend the most expensive call this product makes to
 			// re-derive an answer we hold.
 			res.Throttled = true
-			res.ThrottledForMs = (SweepMinGap - elapsed).Milliseconds()
+			res.ThrottledForMs = (gap - elapsed).Milliseconds()
 			return res, nil
 		}
 	}

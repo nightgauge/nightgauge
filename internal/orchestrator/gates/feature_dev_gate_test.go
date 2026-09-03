@@ -45,8 +45,8 @@ func TestFeatureDevGate_Fail_BuildFailed(t *testing.T) {
 	if gr.Passed {
 		t.Fatalf("expected fail when build_verification.status=failed")
 	}
-	if gr.TerminalKind != "" {
-		t.Errorf("TerminalKind = %q, want empty (no clean constant match)", gr.TerminalKind)
+	if gr.TerminalKind != TerminalKindDevBuildVerificationFailed {
+		t.Errorf("TerminalKind = %q, want %q (#1237)", gr.TerminalKind, TerminalKindDevBuildVerificationFailed)
 	}
 }
 

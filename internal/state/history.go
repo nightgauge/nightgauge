@@ -21,6 +21,11 @@ import (
 // before it lands in the JSONL history.
 const v2RunBodyMax = 8192
 
+// TerminalFailureDetailMax bounds V2RunRecord.TerminalFailureDetail in runes.
+// The detail is TAIL-truncated (clipHistoryRunesTail): wrappers and stack
+// frames prefix an error, the cause sits at its end.
+const TerminalFailureDetailMax = 2048
+
 // clipHistoryRunes truncates s to at most n runes (rune-safe — never splits a
 // multi-byte character), returning s unchanged when it already fits.
 func clipHistoryRunes(s string, n int) string {
@@ -32,6 +37,18 @@ func clipHistoryRunes(s string, n int) string {
 		return s
 	}
 	return string(r[:n])
+}
+
+// clipHistoryRunesTail keeps the LAST n runes of s.
+func clipHistoryRunesTail(s string, n int) string {
+	if n <= 0 {
+		return ""
+	}
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[len(r)-n:])
 }
 
 // V2RunRecord matches the TypeScript ExecutionHistoryRunRecordV2 / V3 Zod
@@ -122,6 +139,13 @@ type V2RunRecord struct {
 	// validation_error, subagent_crash, orchestrator_crash. Independent of
 	// per-stage failure_category (which buckets failures by responsibility).
 	TerminalFailureKind string `json:"terminal_failure_kind,omitempty"`
+	// TerminalFailureDetail is the failure text behind TerminalFailureKind
+	// (#1329): the failed stage's error, or — for a failure that never started
+	// a stage — the raw text the dispatcher forwarded. Bounded to
+	// TerminalFailureDetailMax runes, tail-truncated. Absent on success. This
+	// is the field that makes a `subagent_crash` (the generic "matched no
+	// classifier" fallback) readable without the output channel.
+	TerminalFailureDetail string `json:"terminal_failure_detail,omitempty"`
 	// RecoveryEvents records each Recovery Dialog interaction during a run
 	// (Issue #3239). Empty/omitted on runs that did not surface recovery.
 	// Additive — schema_version is not bumped.
@@ -685,6 +709,9 @@ type V2RunInput struct {
 	// and populates the terminal_failure_kind field. Only meaningful for
 	// failed runs. (Issue #3001)
 	TerminalFailureKind string
+	// TerminalFailureDetail is the failure text persisted alongside
+	// TerminalFailureKind (#1329). Bounded in BuildV2Record.
+	TerminalFailureDetail string
 	// StageOutputTails maps stage name → last 200 lines of subagent output
 	// captured at terminal failure. Populated on the matching V2StageDetail.
 	// (Issue #3001)
@@ -1579,10 +1606,12 @@ func (hw *HistoryWriter) BuildV2Record(snap *RuntimeState, success bool, errMsg 
 		BudgetEstimate:      input.BudgetEstimate,
 		IsRecovery:          input.IsRecovery,
 		TerminalFailureKind: input.TerminalFailureKind,
-		OutcomeType:         input.OutcomeType,
-		PerformanceMode:     dominantPerformanceMode(stages),
-		RecordedAt:          now.Format(time.RFC3339),
-		ToolCalls:           input.ToolCalls,
+		// Only meaningful next to a kind: a successful run carries no detail.
+		TerminalFailureDetail: clipHistoryRunesTail(input.TerminalFailureDetail, TerminalFailureDetailMax),
+		OutcomeType:           input.OutcomeType,
+		PerformanceMode:       dominantPerformanceMode(stages),
+		RecordedAt:            now.Format(time.RFC3339),
+		ToolCalls:             input.ToolCalls,
 	}
 	if snap.ActualLinesChanged != nil {
 		lines := *snap.ActualLinesChanged

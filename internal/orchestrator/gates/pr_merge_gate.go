@@ -43,7 +43,7 @@ func (PrMergeGate) Verify(ctx context.Context, issueNumber int, workspace string
 					fmt.Sprintf("expected %s", ctxPath),
 				}, KindNoOp, ""
 			}
-			return false, "failed to read pr context file", []string{err.Error()}, KindFail, ""
+			return false, "failed to read pr context file", []string{err.Error()}, KindFail, TerminalKindStageContextUnreadable
 		}
 
 		var prCtx struct {
@@ -143,7 +143,7 @@ func (PrMergeGate) Verify(ctx context.Context, issueNumber int, workspace string
 		return false, "gh pr view failed after retries and local git fallback found no merge commit", []string{
 			fmt.Sprintf("pr=%d", prCtx.PrNumber),
 			fmt.Sprintf("gh_failure=%s", truncate(failureReason, 200)),
-		}, KindFail, ""
+		}, KindFail, TerminalKindPrMergeLookupFailed
 	})
 }
 

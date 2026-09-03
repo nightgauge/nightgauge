@@ -42,6 +42,7 @@ var contractTestedMethods = map[string]bool{
 	"config.tierAudit":           true,
 	// Board
 	"board.counts":       true,
+	"board.changed":      true,
 	"board.list":         true,
 	"board.updateStatus": true,
 	// Branch
@@ -382,6 +383,13 @@ func TestContract_Board(t *testing.T) {
 			"owner": "test-org", "projectNumber": 1,
 		})
 		assertMethodRegistered(t, h.readResponseFor(id, nil), "board.counts")
+	})
+
+	t.Run("board.changed/registered", func(t *testing.T) {
+		id := h.sendRequest("board.changed", map[string]interface{}{
+			"repos": []string{"test-org/repo"},
+		})
+		assertMethodRegistered(t, h.readResponseFor(id, nil), "board.changed")
 	})
 
 	t.Run("board.updateStatus/registered", func(t *testing.T) {

@@ -24,6 +24,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/depgraph"
 	"github.com/nightgauge/nightgauge/internal/execution"
 	"github.com/nightgauge/nightgauge/internal/focus"
+	"github.com/nightgauge/nightgauge/internal/forge/boardcache"
 	gh "github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/internal/intelligence/baselineGate"
 	"github.com/nightgauge/nightgauge/internal/skillrender"
@@ -1042,9 +1043,15 @@ type AutonomousScheduler struct {
 	stuckEpicHistoryFn func(repo string, number int) (*state.V2RunRecord, bool)
 
 	// buildGraphFn is the function used to build the dependency graph.
-	// Defaults to wrapping depgraph.BuildGraph; overridable in tests without
-	// a real GitHub client.
+	// Defaults to depgraph.BuildGraphWithBoards over boardProvider;
+	// overridable in tests without a real GitHub client.
 	buildGraphFn func(ctx context.Context) (*depgraph.Graph, error)
+
+	// boardProvider is where graph builds read boards from. The default reads
+	// straight from ghClient; the daemon swaps in its shared snapshot cache
+	// via SetBoardCache so a build inside the TTL of a sweep — or of the
+	// previous cycle — issues no board read at all (#845, #847).
+	boardProvider depgraph.BoardProvider
 
 	// resolveDepStatesFn batch-resolves the true GitHub state ("OPEN"/"CLOSED")
 	// of dependency keys ("owner/repo#number") that have NO node in the graph
@@ -1219,9 +1226,11 @@ func NewAutonomousScheduler(
 	}
 
 	// Wire the default graph builder. Tests override this field to inject a fake
-	// without requiring a real GitHub client.
+	// without requiring a real GitHub client. The provider is read at call
+	// time so SetBoardCache after construction takes effect.
+	as.boardProvider = depgraph.DefaultBoardProvider(ghClient)
 	as.buildGraphFn = func(ctx context.Context) (*depgraph.Graph, error) {
-		return depgraph.BuildGraph(ctx, as.ghClient, as.repos, as.repoAliases)
+		return depgraph.BuildGraphWithBoards(ctx, as.ghClient, as.boardProvider, as.repos, as.repoAliases)
 	}
 
 	// Wire the default off-board dependency resolver. Tests override this
@@ -2998,7 +3007,7 @@ func (as *AutonomousScheduler) runCycle(ctx context.Context) {
 	} else {
 		graphWasFresh = true
 		var buildErr error
-		graph, buildErr = as.buildGraphFn(ctx)
+		graph, buildErr = as.buildGraph(ctx)
 		if buildErr != nil {
 			log.Printf("autonomous: graph build failed: %v", buildErr)
 			return
@@ -5343,7 +5352,21 @@ func (as *AutonomousScheduler) sidelineHalt(parent context.Context, repo string,
 // items on the GitHub project board as soon as the backend starts, without
 // requiring the user to click "Start Autonomous" first. Idempotent — a no-op
 // when state.Running is empty, safe to call concurrently with Run().
+//
+// Only the orphan reset runs while the scheduler is stopped. The daemon calls
+// this at every `serve` start — every extension-host reload — before anyone
+// has asked for autonomous mode, and the trailing Backlog->Ready promotion
+// scan builds the whole cross-repo graph: one full board read per board plus
+// an aliased issue-body query per repo, spent to promote items nobody will
+// dispatch. Run() performs the same recovery once the loop is up, and the
+// first scan cycle builds the graph regardless, so a stopped scheduler
+// defers the promotion rather than losing it.
 func (as *AutonomousScheduler) RecoverOrphanedRunning(ctx context.Context) {
+	if !as.IsRunning() {
+		as.recoverOrphanedRunningState(ctx)
+		log.Printf("autonomous: deferring startup Backlog->Ready promotion — scheduler is not running; the graph is built on autonomous.start instead")
+		return
+	}
 	as.recoverOrphanedRunning(ctx)
 }
 
@@ -5361,14 +5384,7 @@ func (as *AutonomousScheduler) RecoverOrphanedRunning(ctx context.Context) {
 // empty) is the overwhelmingly common case and is exactly when triaged,
 // unblocked Backlog issues would otherwise never get promoted (#288).
 func (as *AutonomousScheduler) recoverOrphanedRunning(ctx context.Context) {
-	as.mu.Lock()
-	orphaned := make([]RunningItem, len(as.state.Running))
-	copy(orphaned, as.state.Running)
-	as.mu.Unlock()
-
-	if len(orphaned) > 0 {
-		as.recoverOrphanedRunningItems(ctx, orphaned)
-	}
+	as.recoverOrphanedRunningState(ctx)
 
 	// Always reconcile Backlog -> Ready at startup, whether or not there was
 	// anything to recover — a clean start is the common case (#288).
@@ -5384,6 +5400,39 @@ func (as *AutonomousScheduler) recoverOrphanedRunning(ctx context.Context) {
 		return
 	}
 	as.promoteUnblockedOnStartup(ctx)
+}
+
+// buildGraph is the one graph-build entry for the promotion paths. Tests that
+// construct the scheduler as a struct literal leave buildGraphFn nil; the
+// fallback is the production builder over whatever provider is set (a nil
+// provider reads straight from the client).
+func (as *AutonomousScheduler) buildGraph(ctx context.Context) (*depgraph.Graph, error) {
+	if as.buildGraphFn != nil {
+		return as.buildGraphFn(ctx)
+	}
+	return depgraph.BuildGraphWithBoards(ctx, as.ghClient, as.boardProvider, as.repos, as.repoAliases)
+}
+
+// SetBoardCache routes every graph build through a shared board snapshot
+// cache. The daemon passes its own — the one its board verbs and the
+// attention sweep already read through — so six repos on one board are one
+// cached read, and a build inside the TTL of the last sweep costs nothing.
+// Wiring-time only: call before Run or RecoverOrphanedRunning.
+func (as *AutonomousScheduler) SetBoardCache(cache *boardcache.Cache) {
+	as.boardProvider = depgraph.CachedBoardProvider(as.ghClient, cache)
+}
+
+// recoverOrphanedRunningState is the orphan half of recoverOrphanedRunning:
+// reset whatever a dead session left in state.Running, and nothing else.
+func (as *AutonomousScheduler) recoverOrphanedRunningState(ctx context.Context) {
+	as.mu.Lock()
+	orphaned := make([]RunningItem, len(as.state.Running))
+	copy(orphaned, as.state.Running)
+	as.mu.Unlock()
+
+	if len(orphaned) > 0 {
+		as.recoverOrphanedRunningItems(ctx, orphaned)
+	}
 }
 
 // machineHaltSnapshot reports the latch state under as.mu, for callers that
@@ -5561,13 +5610,7 @@ func (as *AutonomousScheduler) promoteUnblockedOnStartup(ctx context.Context) {
 	opCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), boardRecoveryTimeout)
 	defer cancel()
 
-	var graph *depgraph.Graph
-	var err error
-	if as.buildGraphFn != nil {
-		graph, err = as.buildGraphFn(opCtx)
-	} else {
-		graph, err = depgraph.BuildGraph(opCtx, as.ghClient, as.repos, as.repoAliases)
-	}
+	graph, err := as.buildGraph(opCtx)
 	if err != nil {
 		log.Printf("autonomous: startup promotion: graph build failed: %v", err)
 		return
@@ -5654,11 +5697,7 @@ func (as *AutonomousScheduler) promoteUnblockedToReady(parent context.Context, c
 		graph = cached
 	} else {
 		var buildErr error
-		if as.buildGraphFn != nil {
-			graph, buildErr = as.buildGraphFn(ctx)
-		} else {
-			graph, buildErr = depgraph.BuildGraph(ctx, as.ghClient, as.repos, as.repoAliases)
-		}
+		graph, buildErr = as.buildGraph(ctx)
 		if buildErr != nil {
 			log.Printf("autonomous: promoteUnblockedToReady: graph build failed: %v", buildErr)
 			return

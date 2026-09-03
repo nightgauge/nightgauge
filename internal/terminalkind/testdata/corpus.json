@@ -1259,6 +1259,60 @@
       "source": "synthetic",
       "producer": "SkillRunner.extractTailError joining the last non-empty lines of a Claude CLI session, where a quota notice printed earlier is followed by the 529 that actually ended the stage.",
       "rationale": "The same ordering claim with the two phrases the OTHER way round, because the bound is about the interpreter's stage order and not about which phrase the text mentions first. Matching is containment, so a reader must be able to see that the answer does not move when the wording does; and a row where the extension's phrase comes first is the one a reader would otherwise expect the extension to win. api_overloaded is a transient blip with a short backoff — routing it to rate_limit_quota_exhausted instead would park every issue for the length of a quota window on a 529 that clears in seconds."
+    },
+    {
+      "id": "stage-context-unreadable-dev",
+      "input": "stage gate failed: failed to read dev context file",
+      "expected": "stage_context_unreadable",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "gates.FeatureDevGate's read-error branch, wrapped by internal/orchestrator/scheduler.go as `stage gate failed: <reason>`",
+      "rationale": "The exact wrapped text the scheduler emits when a gate cannot read the stage's own context for a reason other than absence (#1237). Before the sweep no rule matched the `stage gate failed:` wrapper at all, so the generic `exit ` fallback booked a filesystem fault as a subagent crash."
+    },
+    {
+      "id": "stage-context-unreadable-plan-file",
+      "input": "stage gate failed: failed to stat plan_file",
+      "expected": "stage_context_unreadable",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "gates.FeaturePlanningGate's plan_file stat-error branch, wrapped by the scheduler",
+      "rationale": "The second clause shape of the same kind: planning's plan_file exists as far as the context says but cannot be stat'ed (ENOTDIR, EACCES). Pinned separately so a clause deleted for `failed to stat` goes red on its own."
+    },
+    {
+      "id": "dev-build-verification-missing",
+      "input": "stage gate failed: dev context lacks build_verification — the dev completion contract requires the verification step (nightgauge build run)",
+      "expected": "dev_build_verification_missing",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "gates.FeatureDevGate check 3 (#55), wrapped by the scheduler",
+      "rationale": "The skill skipped its verification step (#1237). An agent-behaviour failure that a crash-recovery path cannot fix; it needs the stage to re-run its contract, not a retry of a process that never died."
+    },
+    {
+      "id": "dev-build-verification-failed",
+      "input": "stage gate failed: dev context records build_verification.status=failed",
+      "expected": "dev_build_verification_failed",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "gates.FeatureDevGate check 4, wrapped by the scheduler",
+      "rationale": "The stage's build broke (#1237) — organic, like validation_failed, and the record must say so or the failure weighting charges an infrastructure crash to the reliability score."
+    },
+    {
+      "id": "dev-tests-failed",
+      "input": "stage gate failed: dev context records failing tests",
+      "expected": "dev_tests_failed",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "gates.FeatureDevGate check 5 (#55), wrapped by the scheduler",
+      "rationale": "The stage's own tests failed (#1237). Same family as the build case, kept distinct so a triager knows whether to look at the build or the suite."
+    },
+    {
+      "id": "pr-merge-lookup-failed",
+      "input": "stage gate failed: gh pr view failed after retries and local git fallback found no merge commit",
+      "expected": "pr_merge_lookup_failed",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "gates.PrMergeGate's gh-and-git-both-failed branch, wrapped by the scheduler",
+      "rationale": "The gate could not see the PR (#1237) — gh failed or was rate-limited on every attempt and local git found no merge commit. Infrastructure: the merge may have landed. Must not read as pr_merge_unmerged (a PR the gate saw open) nor as a crash."
     }
   ]
 }

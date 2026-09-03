@@ -962,7 +962,6 @@ read, field read, field write, item add and item lookup must be GraphQL.
 | `AddItem`, `findItemID`, `updateField`, `createField`, `replaceFieldOptions`, `ResolveProject`, `getItemEstimate` | `project.go`        |
 | `FetchRepositoryLinkedProjects`, `FetchProjectLinkedRepos`                                                        | `project_repos.go`  |
 | `ViewService.List`                                                                                                | `views.go`          |
-| `BoardService.CountsByStatus`                                                                                     | `board.go`          |
 | `findProjectItemID`                                                                                               | `epic.go`           |
 | `ProjectNumbersForIssue`                                                                                          | `issue_projects.go` |
 

@@ -239,12 +239,15 @@ export interface BoardItem {
   authorAssociation?: string;
 }
 
-/** Per-status item counts from board.counts (matches Go StatusCounts). */
+/**
+ * Per-status counts of the board's OPEN items from board.counts (matches Go
+ * StatusCounts). Derived daemon-side from the cached `is:open` snapshot, so
+ * there is no `done` bucket: Done items are closed and not in the snapshot.
+ */
 export interface StatusCounts {
   ready: number;
   inProgress: number;
   inReview: number;
-  done: number;
   backlog: number;
 }
 
@@ -1270,6 +1273,38 @@ export interface AttentionSweepResult {
   throttledForMs?: number;
   /** Echo of the trigger label the caller sent. */
   reason?: string;
+}
+
+/** One repo's outcome from board.changed. */
+export interface BoardChangedRepoResult {
+  repo: string;
+  /** This repo's board moved after `since`. */
+  changed: boolean;
+  /** The board's last-change time as the probe reported it (RFC 3339). */
+  updatedAt?: string;
+  /** No forge client resolves for the repo — the sweep would skip it at zero
+   * cost too, so it does not vote on the answer. */
+  skipped?: boolean;
+  skipReason?: string;
+  /** The repo resolved but its board could not be probed (no probe
+   * capability, or the probe errored). Counts as changed. */
+  unprobeable?: boolean;
+  reason?: string;
+}
+
+/** Result from board.changed — the one-point question the event-driven sweep
+ * triggers ask before spending a full attention.sweep. Fails open: every path
+ * that is not a confident "nothing moved" answers `changed: true`. */
+export interface BoardChangedResult {
+  changed: boolean;
+  /** The instant the boards were compared against (RFC 3339). Empty when
+   * there was nothing to compare against, which reads as changed. */
+  since?: string;
+  repos: BoardChangedRepoResult[];
+  /** The daemon has no forge factory; `changed` is true alongside it. */
+  unavailable?: boolean;
+  probed: number;
+  unprobeable: number;
 }
 
 /** Payload of the `attention.event` push (created|updated|acknowledged|
