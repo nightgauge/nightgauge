@@ -623,3 +623,16 @@ func TestBuildGraphFromFetcher_DroppedItemsCount(t *testing.T) {
 		t.Errorf("expected WARN log line, got: %q", logBuf.String())
 	}
 }
+
+// TestBoardItemToNode_CarriesLabelsTruncated: the board scan's truncation
+// flag (#998) must survive the hop into the dependency graph, or the
+// autonomous candidate loop cannot fail closed on it.
+func TestBoardItemToNode_CarriesLabelsTruncated(t *testing.T) {
+	node := boardItemToNode(&types.BoardItem{Number: 1, Labels: []string{"a"}, LabelsTruncated: true}, "o/r")
+	if !node.LabelsTruncated {
+		t.Fatal("LabelsTruncated not carried from BoardItem to Node")
+	}
+	if boardItemToNode(&types.BoardItem{Number: 2}, "o/r").LabelsTruncated {
+		t.Fatal("LabelsTruncated set on a node whose item was complete")
+	}
+}

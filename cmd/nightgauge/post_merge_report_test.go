@@ -91,3 +91,56 @@ func TestPostMergeReportSuffixes(t *testing.T) {
 		t.Errorf("errorSuffix = %q", got)
 	}
 }
+
+// TestReportMainChecks_RedMergeReachesTheActionCenter pins the CLI half of
+// #1249: the hook is the writer on the extension and hand-merge paths, so a
+// red main observed here must land as a card in the store rooted at --workdir,
+// and a later green merge must retract it.
+func TestReportMainChecks_RedMergeReachesTheActionCenter(t *testing.T) {
+	root := t.TempDir()
+	red := hooks.PostMergeResult{
+		BaseRef:         "main",
+		MergedCommitSha: "feedface0000",
+		MainChecks: &hooks.MainCheckResult{
+			Verdict:        hooks.MainChecksRed,
+			MergeCommitSha: "feedface0000",
+			Total:          3, Bad: 1,
+			Failing: []hooks.FailingCheck{{Name: "e2e", Conclusion: "failure", URL: "https://ci/e2e"}},
+		},
+	}
+
+	reportMainChecks(root, "nightgauge", "nightgauge", 1249, 1360, red)
+
+	open, err := attention.New(root).List(attention.ListFilter{})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(open) != 1 {
+		t.Fatalf("got %d open card(s) after a red merge, want 1", len(open))
+	}
+	card := open[0]
+	if card.Producer != hooks.ProducerMergeCommitChecks {
+		t.Errorf("Producer = %q, want %s", card.Producer, hooks.ProducerMergeCommitChecks)
+	}
+	if card.Context.PR != 1360 || !strings.Contains(card.Body, "feedfac") || !strings.Contains(card.Body, "e2e") {
+		t.Errorf("card does not name the merge: PR=%d body=%q", card.Context.PR, card.Body)
+	}
+	if !card.Standing {
+		t.Error("card is not Standing — a green merge could never retract it")
+	}
+
+	green := hooks.PostMergeResult{
+		BaseRef:         "main",
+		MergedCommitSha: "0badf00d",
+		MainChecks:      &hooks.MainCheckResult{Verdict: hooks.MainChecksGreen, MergeCommitSha: "0badf00d", Total: 3},
+	}
+	reportMainChecks(root, "nightgauge", "nightgauge", 1250, 1361, green)
+	open, _ = attention.New(root).List(attention.ListFilter{})
+	if len(open) != 0 {
+		t.Errorf("%d open card(s) after the next merge went green, want 0", len(open))
+	}
+
+	// Nothing observed, nothing filed, no panic.
+	reportMainChecks(root, "nightgauge", "nightgauge", 1, 2, hooks.PostMergeResult{})
+	reportMainChecks("", "nightgauge", "nightgauge", 1, 2, red)
+}

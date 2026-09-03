@@ -168,6 +168,14 @@ gh api "repos/<owner>/<repo>/commits/<merge-sha>/check-runs" \
 
 Non-zero means `main` is red and it is the merger's to fix immediately.
 
+The pipeline runs this check itself (#1249): `nightgauge hook post-merge` —
+which both the extension and the Go scheduler call after every pipeline merge,
+and which `AGENTS.md` mandates after every hand merge — polls the merge commit's
+check runs to completion within a bounded budget and records the verdict on the
+run and survival records, raising a `merge-commit-checks` Action Center card
+when `main` goes red. An empty check-runs list is never read as green. See
+[PR_MERGE_STAGE.md § Post-merge verification](PR_MERGE_STAGE.md#post-merge-verification-of-the-base-branch-1249).
+
 Three classes only the post-merge run can catch, which is why this is not
 redundant with the PR gate:
 

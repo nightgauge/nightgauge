@@ -26,6 +26,9 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
+
+	gh "github.com/nightgauge/nightgauge/internal/github"
 )
 
 // contractTestedMethods is the authoritative set of all registered IPC method
@@ -42,6 +45,7 @@ var contractTestedMethods = map[string]bool{
 	"config.tierAudit":           true,
 	// Board
 	"board.counts":       true,
+	"board.changed":      true,
 	"board.list":         true,
 	"board.updateStatus": true,
 	// Branch
@@ -384,6 +388,13 @@ func TestContract_Board(t *testing.T) {
 		assertMethodRegistered(t, h.readResponseFor(id, nil), "board.counts")
 	})
 
+	t.Run("board.changed/registered", func(t *testing.T) {
+		id := h.sendRequest("board.changed", map[string]interface{}{
+			"repos": []string{"test-org/repo"},
+		})
+		assertMethodRegistered(t, h.readResponseFor(id, nil), "board.changed")
+	})
+
 	t.Run("board.updateStatus/registered", func(t *testing.T) {
 		id := h.sendRequest("board.updateStatus", map[string]interface{}{
 			"owner": "test-org", "projectNumber": 1,
@@ -391,6 +402,65 @@ func TestContract_Board(t *testing.T) {
 		})
 		assertMethodRegistered(t, h.readResponseFor(id, nil), "board.updateStatus")
 	})
+}
+
+// TestContract_Board_RegisteredSurvivesExhaustedQuota is the regression guard
+// for Issue #1348: "board.list/registered" above proves the verb exists, but
+// it says nothing about a machine whose real GitHub quota is spent — the
+// exact state this product's own daemon produces. This test plants a
+// remaining:0 fixture at the daemon's *isolated* rate-limit state path (see
+// ipcTestHome / TestMain's HOME isolation in server_integration_test.go) and
+// asserts the request still completes in well under the harness's 10s
+// nextLine timeout. Before the fix, the client's rate-limit gate would wait
+// up to maxFullExhaustionWait (75m, see internal/github/client.go) for a
+// window that was never real, and the subtest timed out.
+//
+// The choice recorded here — per docs/TESTING.md's "no contract test may
+// depend on live GitHub quota" rule — is the second option from Issue #1348:
+// rather than standing up an httptest GitHub stub, TestMain sets
+// NIGHTGAUGE_GITHUB_RATELIMIT_NO_WAIT=1 for every subprocess this package
+// spawns, which flips gh.Client.WithRateLimitWait() to a no-op so the gate
+// always fails fast (gh.ErrRateLimitGated -> JSON-RPC -32603) instead of
+// sleeping. assertMethodRegistered already accepts -32603 as "the method
+// ran" (see the package doc comment at the top of this file), so a gated
+// call still proves board.list is registered.
+func TestContract_Board_RegisteredSurvivesExhaustedQuota(t *testing.T) {
+	if ipcTestHome == "" {
+		t.Fatal("ipcTestHome not set — TestMain must isolate HOME before this test runs")
+	}
+
+	trackerPath := filepath.Join(ipcTestHome, ".nightgauge", "rate-limit.json")
+	tracker := gh.NewSharedRateLimitTracker(trackerPath)
+	if err := tracker.Set("", &gh.RateLimitInfo{
+		Remaining: 0,
+		Limit:     5000,
+		ResetAt:   time.Now().Add(45 * time.Minute).Unix(),
+	}); err != nil {
+		t.Fatalf("write isolated rate-limit fixture: %v", err)
+	}
+	// Restore "no data" for tests that run after this one in the same
+	// package invocation, so exhausting quota here doesn't leak into
+	// unrelated subtests later in the run.
+	t.Cleanup(func() {
+		if err := os.Remove(trackerPath); err != nil && !os.IsNotExist(err) {
+			t.Logf("cleanup rate-limit fixture: %v", err)
+		}
+	})
+
+	start := time.Now()
+
+	h := newIpcTestHarness(t)
+	h.awaitReady()
+
+	id := h.sendRequest("board.list", map[string]interface{}{
+		"owner": "test-org", "projectNumber": 1,
+	})
+	assertMethodRegistered(t, h.readResponseFor(id, nil), "board.list")
+
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("board.list/registered took %s with an exhausted-quota fixture; "+
+			"want < 2s — the rate-limit gate must fail fast, never sleep on quota state", elapsed)
+	}
 }
 
 // ─── GitHub ────────────────────────────────────────────────────────────────

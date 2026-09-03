@@ -27,11 +27,10 @@ import {
   AttentionSweepService,
   PollingVisibilityGate,
   WINDOW_FOCUS_GRACE_MS,
-  SWEEP_MIN_GAP_MS,
   type AttentionSweepConfig,
   type AttentionSweepIpc,
 } from "../../src/services/AttentionSweepService";
-import type { AttentionSweepResult } from "../../src/services/IpcClientBase";
+import type { AttentionSweepResult, BoardChangedResult } from "../../src/services/IpcClientBase";
 import type { Logger } from "../../src/utils/logger";
 
 // A mutable window-focus fixture the test controls directly, mirroring how
@@ -83,6 +82,17 @@ class FakeIpc implements AttentionSweepIpc {
     return this.result;
   }
 
+  /** The board probe's answer for the event-driven triggers. "Nothing moved"
+   * unless a test says otherwise — the quiet workspace is the case that
+   * distinguishes a probe-gated trigger from an unconditional one. */
+  changed = false;
+  probes = 0;
+
+  async boardChanged(repos?: string[]): Promise<BoardChangedResult> {
+    this.probes++;
+    return { changed: this.changed, repos: [], probed: repos?.length ?? 0, unprobeable: 0 };
+  }
+
   on(event: string, handler: (data: unknown) => void): { dispose(): void } {
     if (!this.handlers.has(event)) this.handlers.set(event, new Set());
     this.handlers.get(event)!.add(handler);
@@ -103,7 +113,6 @@ function makeService(overrides: { ipc?: FakeIpc; config?: Partial<AttentionSweep
   const config: AttentionSweepConfig = {
     enabled: true,
     intervalMs: 60_000,
-    minGapMs: SWEEP_MIN_GAP_MS,
     ...overrides.config,
   };
   const service = new AttentionSweepService({
@@ -313,19 +322,22 @@ describe("AttentionSweepService — timer respects the shared gate (#484 AC1, AC
     expect(ipc.calls).toHaveLength(1);
 
     // Regain focus mid-interval (not on a tick boundary) — the coalesced
-    // refresh must fire immediately, without waiting for the next tick.
+    // refresh must fire immediately, without waiting for the next tick. More
+    // than an interval has elapsed since activation, so it sweeps on that
+    // alone without consulting the probe.
     fireWindowFocusChange(true);
     await vi.advanceTimersByTimeAsync(0);
     expect(ipc.calls.map((c) => c.reason)).toEqual(["activation", "visibility-regained"]);
+    expect(ipc.probes).toBe(0);
 
-    // A burst of further "became visible" signals inside the throttle
-    // window collapses to the one refresh already fired — "at most one".
+    // A burst of further "became visible" signals inside the interval is
+    // answered by the probe ("nothing moved") — no further sweep.
     fireWindowFocusChange(false);
     fireWindowFocusChange(true);
     fireWindowFocusChange(false);
     fireWindowFocusChange(true);
     await vi.advanceTimersByTimeAsync(0);
-    expect(ipc.calls).toHaveLength(2); // unchanged — still throttled
+    expect(ipc.calls).toHaveLength(2); // unchanged — the probe said no
 
     // Normal cadence resumes: advancing a full interval past the coalesced
     // refresh produces exactly one further tick.
@@ -375,21 +387,56 @@ describe("AttentionSweepService — timer respects the shared gate (#484 AC1, AC
     service.start();
     await vi.advanceTimersByTimeAsync(0); // activation sweep
 
-    // Move well past both the focus grace and the sweep min-gap so the gate
-    // is closed and the throttle can't mask the assertion.
-    await vi.advanceTimersByTimeAsync(WINDOW_FOCUS_GRACE_MS + SWEEP_MIN_GAP_MS);
+    // Move well past both the focus grace and the sweep interval so the gate
+    // is closed and the interval gate can't mask the assertion.
+    await vi.advanceTimersByTimeAsync(WINDOW_FOCUS_GRACE_MS + 60_000);
     expect(PollingVisibilityGate.instance.isWindowActive()).toBe(false);
 
     ipc.emit("pipeline.complete");
     await vi.advanceTimersByTimeAsync(0);
     expect(ipc.calls.some((c) => c.reason === "run-terminated")).toBe(true);
 
-    // A second terminal event, spaced past the min-gap throttle, also fires.
-    await vi.advanceTimersByTimeAsync(SWEEP_MIN_GAP_MS + 1);
+    // A second terminal event, spaced past the interval, also fires.
+    await vi.advanceTimersByTimeAsync(60_000 + 1);
     const before = ipc.calls.filter((c) => c.reason === "run-terminated").length;
     ipc.emit("pipeline.error");
     await vi.advanceTimersByTimeAsync(0);
     expect(ipc.calls.filter((c) => c.reason === "run-terminated").length).toBe(before + 1);
+
+    service.dispose();
+  });
+
+  it("ten focus-regains inside one interval with an unchanged probe produce exactly one sweep", async () => {
+    // The leak this pins: an operator alt-tabbing through a fifteen-minute
+    // interval used to sweep once a minute, sixty-four points a time. With
+    // the probe answering "nothing moved", the whole burst costs probes only.
+    windowState = { focused: true };
+    const { service, ipc } = makeService({ config: { intervalMs: 15 * 60_000 } });
+    ipc.changed = false;
+
+    service.start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(ipc.calls.map((c) => c.reason)).toEqual(["activation"]);
+
+    for (let i = 0; i < 10; i++) {
+      // Idle past the grace so each regain is a genuine closed→open edge,
+      // then come back. Ten of these fit comfortably inside one interval.
+      fireWindowFocusChange(false);
+      await vi.advanceTimersByTimeAsync(WINDOW_FOCUS_GRACE_MS + 1);
+      fireWindowFocusChange(true);
+      await vi.advanceTimersByTimeAsync(0);
+    }
+
+    expect(ipc.probes).toBe(10);
+    expect(ipc.calls.map((c) => c.reason)).toEqual(["activation"]);
+
+    // And the moment a board moves, the next regain sweeps.
+    ipc.changed = true;
+    fireWindowFocusChange(false);
+    await vi.advanceTimersByTimeAsync(WINDOW_FOCUS_GRACE_MS + 1);
+    fireWindowFocusChange(true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(ipc.calls.map((c) => c.reason)).toEqual(["activation", "visibility-regained"]);
 
     service.dispose();
   });

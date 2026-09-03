@@ -296,7 +296,15 @@ func TestPaginationArguments(t *testing.T) {
 // Specifically pinned:
 //
 //	fieldValues  ≤  8 — we read 4 fields (Status, Priority, Size, Pipeline Stage)
-//	labels       ≤  8 — issues carry type:/component:/priority:/size: + a few more
+//	labels       ≤  8 — issues carry type:/component:/priority:/size: + a few more.
+//	                    Read as labelPage { totalCount nodes } since #998. The
+//	                    node-cost arithmetic is unchanged: GitHub charges by the
+//	                    nodes a `first:` argument can return (100 items × 8
+//	                    labels = 800 label nodes per page), and totalCount is a
+//	                    scalar on the connection, not a node — 0 added cost.
+//	                    Truncation is now DETECTED (BoardItem.LabelsTruncated)
+//	                    and fails closed at dispatch, so the page stays at 8
+//	                    rather than growing to chase the worst-case issue.
 //	subIssues    ≤ 12 — board scan only needs IsEpic detection + short ref list;
 //	                    full epic enumeration goes through GetEpicProgress (nodeQuery)
 //	blockedBy    ≤  5 — issues with > 5 distinct blockers are vanishingly rare
