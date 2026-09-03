@@ -44,6 +44,7 @@ import { PipelineStateService, type PipelineState } from "../../services/Pipelin
 import type { BacktrackRecord, ModelEscalationRecord } from "../../schemas/pipelineState";
 import { WorkspaceManager } from "../../services/WorkspaceManager";
 import { SanitizationLogService } from "../../services/SanitizationLogService";
+import type { FirewallMode } from "./tabs/FirewallTabHtml";
 import type {
   SanitizationEventType,
   SanitizationCategory,
@@ -234,6 +235,12 @@ export class Dashboard implements vscode.Disposable {
   private pipelineStateService: PipelineStateService | null = null;
   private workspaceManager: WorkspaceManager | null = null;
   private sanitizationLogService: SanitizationLogService | null = null;
+  /**
+   * Resolved `sanitization.mode` as reported by the Go config authority via
+   * `config.getProjectConfig`. `null` until the first read completes or when
+   * the read fails; the badge renders that as "Unknown", never as "warn" (#986).
+   */
+  private firewallMode: FirewallMode = null;
   private workspaceRoot: string | undefined;
   /** Project board service for fetching status counts (Issue #134) */
   private projectBoardService: IWorkItemProvider | null = null;
@@ -355,6 +362,16 @@ export class Dashboard implements vscode.Disposable {
   /** DI container — used to resolve ProjectBoardService instead of creating a new instance (Issue #2771) */
   private readonly container: Container | undefined;
 
+  /**
+   * Set once by the extension-lifetime {@link dispose}. Distinct from
+   * `!this.panel`, which is also true whenever the user just closed the tab
+   * and the dashboard is still perfectly alive — this flag means the logger's
+   * OutputChannel (and everything else `dispose()` tears down) is gone, so
+   * async work still in flight from before disposal must stop touching state
+   * and must not log through the dead channel (#986).
+   */
+  private disposed = false;
+
   // --- Diagnostic logging and render guard (Issue #780) ---
   /** Diagnostic logger for render cycle and event tracing */
   private logger = new Logger("Nightgauge Dashboard");
@@ -433,7 +450,13 @@ export class Dashboard implements vscode.Disposable {
     if (workspaceRoot) {
       this.subscribeToPipelineStateService(workspaceRoot);
       this.subscribeToWorkspaceManager(workspaceRoot, workspaceState);
-      this.initializeSanitizationLogService(workspaceRoot);
+      // Fire-and-forget from the constructor: no caller here to await it.
+      // Catch defensively so a rejection can never become unhandled even if
+      // a future edit reintroduces one on this path (#986).
+      this.initializeSanitizationLogService(workspaceRoot).catch((err) => {
+        if (this.disposed) return;
+        this.logger.warn("initializeSanitizationLogService:failed", { error: String(err) });
+      });
       this.initializeProjectBoardService(workspaceRoot);
       if (this.projectBoardService instanceof ProjectBoardService) {
         this.disposables.push(
@@ -581,8 +604,62 @@ export class Dashboard implements vscode.Disposable {
     this.disposables.push(eventsChangedDisposable);
     this.disposables.push(this.sanitizationLogService);
 
-    // Initialize the service
-    await this.sanitizationLogService.initialize();
+    // The badge follows the config file, not the event log: re-read the
+    // resolved mode whenever any config tier changes (#986).
+    this.disposables.push(
+      ConfigBridge.getInstance().onConfigChanged(() => {
+        void this.refreshFirewallMode();
+      })
+    );
+
+    // Initialize the service and read the enforcement mode together
+    await Promise.all([this.sanitizationLogService.initialize(), this.refreshFirewallMode()]);
+  }
+
+  /**
+   * Read the resolved `sanitization.mode` from the Go binary — the same
+   * `config.Load` the sanitize hook enforces with — so the dashboard badge and
+   * the gate share one authority. A failed read leaves the mode `null`
+   * ("Unknown"); it never falls back to "warn" (#986).
+   *
+   * Runs asynchronously and is fired-and-forgotten from several call sites
+   * (constructor, config-change subscription), so it must be a no-op once the
+   * dashboard is disposed — by the time the IPC round trip resolves, `dispose()`
+   * may already have torn down the logger's OutputChannel, and logging through
+   * a dead channel is itself a throw. Never lets a rejection escape: every
+   * branch after the checked `await` is guarded, and disposal is a routine
+   * "panel went away" outcome, not a warning (#986).
+   */
+  private async refreshFirewallMode(): Promise<void> {
+    if (this.disposed) return;
+    let next: FirewallMode = null;
+    let unexpectedMode: unknown;
+    let readError: unknown;
+    try {
+      const ipc = (await import("../../services/IpcClient")).IpcClient.getInstance();
+      if (this.disposed) return;
+      const result = await ipc.configGetProjectConfig(this.workspaceRoot);
+      if (this.disposed) return;
+      const mode = result.sanitizationMode;
+      if (mode === "warn" || mode === "block" || mode === "disabled") {
+        next = mode;
+      } else {
+        unexpectedMode = mode;
+      }
+    } catch (err) {
+      readError = err;
+    }
+    if (this.disposed) return;
+    if (unexpectedMode !== undefined) {
+      this.logger.warn("firewallMode:unexpected", { mode: unexpectedMode });
+    }
+    if (readError !== undefined) {
+      this.logger.warn("firewallMode:readFailed", { error: String(readError) });
+    }
+    if (next !== this.firewallMode) {
+      this.firewallMode = next;
+      this.updatePanel("firewallMode");
+    }
   }
 
   /**
@@ -1594,6 +1671,7 @@ export class Dashboard implements vscode.Disposable {
         const timeSeriesData = this.sanitizationLogService.getTimeSeriesData(filters, granularity);
 
         firewallData = {
+          mode: this.firewallMode,
           events,
           filters,
           aggregates: firewallAggregates,
@@ -1834,7 +1912,7 @@ export class Dashboard implements vscode.Disposable {
         ]);
         // Re-initialize firewall data if service is available
         if (this.sanitizationLogService) {
-          await this.sanitizationLogService.initialize();
+          await Promise.all([this.sanitizationLogService.initialize(), this.refreshFirewallMode()]);
         }
         this.updatePanel("msg:refresh");
         break;
@@ -4000,6 +4078,11 @@ export class Dashboard implements vscode.Disposable {
    * `disposePanelScoped()` instead (#809).
    */
   dispose(): void {
+    // Set first: any async work in flight (e.g. refreshFirewallMode's IPC
+    // read) that resumes after this point must see it and stop touching
+    // state or logging through the channel this method is about to dispose.
+    this.disposed = true;
+
     // The panel half first: its timers post into a webview that is about to go.
     this.disposePanelScoped();
 

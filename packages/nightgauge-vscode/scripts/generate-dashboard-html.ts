@@ -337,6 +337,9 @@ const mockHealthWidgetData = {
 };
 
 const mockFirewallData = {
+  // Explicit mode so the generated fixture shows a real badge instead of
+  // falling through the FirewallMode | null lookup as undefined (#986).
+  mode: "warn" as const,
   events: [
     {
       timestamp: new Date(now.getTime() - 1_800_000),

@@ -1200,6 +1200,9 @@ func (s *Server) registerMethods() {
 			Projects:      projects,
 			DefaultRepo:   cfg.DefaultRepo,
 			OwnerType:     cfg.OwnerType,
+			// Resolved through the same accessor the sanitize hook uses
+			// (cmd/nightgauge/hookoutput.go), never re-derived here (#986).
+			SanitizationMode: string(cfg.Sanitization.ResolvedMode()),
 		}, nil
 	}
 

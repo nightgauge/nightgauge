@@ -255,6 +255,27 @@ job_block() {
   ' "$WORKFLOW"
 }
 
+# block_matches <block> <pattern> — true iff a line of <block> matches the
+# ERE <pattern>. A here-string, not `printf ... | grep -qE ...`: `grep -q`
+# exits the instant it finds a match, without draining the rest of its stdin.
+# Piped into a live writer, that races the writer's own scheduling — under
+# ci-local.sh's concurrent phase (many more runnable processes than cores) the
+# writer side of `cmd | grep -q` can be descheduled long enough that `grep`
+# has already found its match and closed the pipe before the writer's next
+# write() runs, and that write() then dies of SIGPIPE (exit 141). With
+# `set -o pipefail` active, the PIPELINE's exit status becomes the writer's
+# 141, not grep's true 0 — so a line that is unquestionably present reads as
+# "no line matching". This reproduced under concurrent load in nightgauge#1290
+# (a grep exit code of 141 captured mid-race, on a block that visibly
+# contained the pattern) and never under a single, unloaded run, because the
+# writer normally finishes its one small write() before grep is even
+# scheduled. A here-string has no concurrent writer process — bash fills it
+# before grep ever runs — so the race cannot occur.
+block_matches() {
+  local block="$1" pattern="$2"
+  grep -qE "$pattern" <<<"$block"
+}
+
 assert_block() {
   local job="$1" pattern="$2" label="$3" block
   block="$(job_block "$job")"
@@ -262,7 +283,7 @@ assert_block() {
     bad "$label" "no '$job:' job found in $WORKFLOW"
     return 0
   fi
-  if printf '%s\n' "$block" | grep -qE "$pattern"; then
+  if block_matches "$block" "$pattern"; then
     ok "$label"
   else
     bad "$label" "job '$job' has no line matching /$pattern/"
@@ -276,7 +297,7 @@ refute_block() {
     bad "$label" "no '$job:' job found in $WORKFLOW"
     return 0
   fi
-  if printf '%s\n' "$block" | grep -qE "$pattern"; then
+  if block_matches "$block" "$pattern"; then
     bad "$label" "job '$job' unexpectedly matches /$pattern/"
   else
     ok "$label"
@@ -313,13 +334,20 @@ refute_block security '^    needs: changes$' \
 # "is this step gated?" is asked of that step alone. A `grep -B<n>` around the
 # marker answers a different question — it reaches into the PREVIOUS step's
 # `if:` and reports a gate that is not there.
+# Captured into a variable first, then fed to awk via a here-string — not
+# `job_block "$1" | awk ...`. This awk's own `exit` (below) makes it a
+# same-shaped early-exiting reader as block_matches' grep; a live pipe from
+# job_block would carry the identical SIGPIPE/pipefail race under concurrent
+# load (see block_matches). A here-string has no concurrent writer process.
 step_block() {
-  job_block "$1" | awk -v marker="$2" '
+  local block
+  block="$(job_block "$1")"
+  awk -v marker="$2" '
     /^      - / { if (found) exit; n = 0; delete buf }
     { buf[n++] = $0 }
     index($0, marker) { found = 1 }
     END { if (found) for (i = 0; i < n; i++) print buf[i] }
-  '
+  ' <<<"$block"
 }
 
 # assert_ungated_step <job> <marker> <label> <why> — the step must EXIST and
@@ -332,7 +360,7 @@ assert_ungated_step() {
   block="$(step_block "$job" "$marker")"
   if [ -z "$block" ]; then
     bad "$label" "no step in the '$job' job runs $marker"
-  elif printf '%s\n' "$block" | grep -qE '^[[:space:]]*if:'; then
+  elif block_matches "$block" '^[[:space:]]*if:'; then
     bad "$label" "that step carries an if: — $why"
   else
     ok "$label"
@@ -358,7 +386,11 @@ assert_ungated_step go './internal/preflight/' \
 # moved: the workflow would keep running a package that no longer guards
 # anything, on exactly the PRs where nothing else does.
 guard_step="$(step_block go './internal/preflight/')"
-guard_pkg="$(printf '%s\n' "$guard_step" | sed -n 's|^.*go test \(\./[A-Za-z0-9_./-]*\).*|\1|p' | head -1)"
+# A here-string, not `printf ... | sed ... | head -1` — `head -1` is the same
+# early-exiting-reader shape as block_matches' grep (see above) and would
+# carry the same race if this result were ever checked by exit status instead
+# of content.
+guard_pkg="$(sed -n 's|^.*go test \(\./[A-Za-z0-9_./-]*\).*|\1|p' <<<"$guard_step" | head -1)"
 if [ -z "$guard_pkg" ] || [ ! -d "$REPO_ROOT/${guard_pkg#./}" ]; then
   bad "the ungated guard step names a real package" \
     "could not resolve a package directory from: ${guard_step:-<no such step>}"

@@ -2970,9 +2970,19 @@ exports[`getDashboardHtml snapshots (Issue #1242) > active pipeline state — cu
       color: rgba(255, 99, 132, 1);
     }
 
+    /* "Off" must not read as "on and quiet": no warning tint, a struck-through
+       label and a dashed outline mark the absence of a detector (#986). */
     .firewall-mode-disabled {
+      background: transparent;
+      color: var(--vscode-descriptionForeground);
+      border: 1px dashed var(--vscode-errorForeground);
+      text-decoration: line-through;
+    }
+
+    .firewall-mode-unknown {
       background: var(--vscode-badge-background);
       color: var(--vscode-badge-foreground);
+      border: 1px dotted var(--vscode-badge-foreground);
     }
 
     .firewall-section {
@@ -9671,9 +9681,19 @@ exports[`getDashboardHtml snapshots (Issue #1242) > completed run with tool call
       color: rgba(255, 99, 132, 1);
     }
 
+    /* "Off" must not read as "on and quiet": no warning tint, a struck-through
+       label and a dashed outline mark the absence of a detector (#986). */
     .firewall-mode-disabled {
+      background: transparent;
+      color: var(--vscode-descriptionForeground);
+      border: 1px dashed var(--vscode-errorForeground);
+      text-decoration: line-through;
+    }
+
+    .firewall-mode-unknown {
       background: var(--vscode-badge-background);
       color: var(--vscode-badge-foreground);
+      border: 1px dotted var(--vscode-badge-foreground);
     }
 
     .firewall-section {
@@ -16420,9 +16440,19 @@ exports[`getDashboardHtml snapshots (Issue #1242) > empty state — no current r
       color: rgba(255, 99, 132, 1);
     }
 
+    /* "Off" must not read as "on and quiet": no warning tint, a struck-through
+       label and a dashed outline mark the absence of a detector (#986). */
     .firewall-mode-disabled {
+      background: transparent;
+      color: var(--vscode-descriptionForeground);
+      border: 1px dashed var(--vscode-errorForeground);
+      text-decoration: line-through;
+    }
+
+    .firewall-mode-unknown {
       background: var(--vscode-badge-background);
       color: var(--vscode-badge-foreground);
+      border: 1px dotted var(--vscode-badge-foreground);
     }
 
     .firewall-section {
@@ -23014,9 +23044,19 @@ exports[`getDashboardHtml snapshots (Issue #1242) > pagination controls rendered
       color: rgba(255, 99, 132, 1);
     }
 
+    /* "Off" must not read as "on and quiet": no warning tint, a struck-through
+       label and a dashed outline mark the absence of a detector (#986). */
     .firewall-mode-disabled {
+      background: transparent;
+      color: var(--vscode-descriptionForeground);
+      border: 1px dashed var(--vscode-errorForeground);
+      text-decoration: line-through;
+    }
+
+    .firewall-mode-unknown {
       background: var(--vscode-badge-background);
       color: var(--vscode-badge-foreground);
+      border: 1px dotted var(--vscode-badge-foreground);
     }
 
     .firewall-section {

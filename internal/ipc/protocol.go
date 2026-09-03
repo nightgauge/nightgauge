@@ -167,6 +167,10 @@ type ConfigGetProjectResult struct {
 	Projects      []ConfigProjectEntry `json:"projects,omitempty"`
 	DefaultRepo   string               `json:"defaultRepo,omitempty"`
 	OwnerType     string               `json:"ownerType,omitempty"` // "org" (default) or "user"
+	// SanitizationMode is the resolved `sanitization.mode` ("warn", "block" or
+	// "disabled") from the same config.Load the sanitize hook reads, so the
+	// dashboard's firewall badge and the gate can never disagree (#986).
+	SanitizationMode string `json:"sanitizationMode"`
 }
 
 type ConfigProjectEntry struct {

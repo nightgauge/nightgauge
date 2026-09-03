@@ -1171,7 +1171,7 @@ export function getDashboardHtml(
       </details>
 
       <!-- Firewall Dashboard (Issue #387) — charts removed, table remains -->
-      ${firewallData ? getFirewallSectionHtml(firewallData.events, firewallData.filters, firewallData.aggregates, firewallData.timeSeriesData, nonce) : ""}
+      ${firewallData ? getFirewallSectionHtml(firewallData.events, firewallData.filters, firewallData.aggregates, firewallData.timeSeriesData, nonce, firewallData.mode) : ""}
     </div>
 
     <div class="tab-panel${activeTab === "epics" ? " active" : ""}" id="tab-panel-epics" role="tabpanel" aria-labelledby="tab-epics">

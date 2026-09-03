@@ -23,6 +23,7 @@ import { SecretStorageService, SECRET_KEYS } from "./SecretStorageService";
 import { TokenStorage } from "../platform/TokenStorage";
 import { PlatformCredentialBridge } from "../platform/PlatformCredentialBridge";
 import { redactSecrets } from "../utils/redaction";
+import type { SanitizationMode } from "../config/schema";
 import { logDiagnosticMirror } from "../utils/logger";
 
 // ---------------------------------------------------------------------------
@@ -159,6 +160,12 @@ export interface CheckAuthorizationResult {
 export interface ConfigGetProjectResult {
   owner: string;
   projectNumber: number;
+  /**
+   * Resolved `sanitization.mode` from Go `config.Load` — the same source the
+   * sanitize hook enforces with, so the firewall badge cannot drift from the
+   * gate (#986). Always present; the server resolves the default.
+   */
+  sanitizationMode: SanitizationMode;
   projects?: Array<{
     name: string;
     number: number;
