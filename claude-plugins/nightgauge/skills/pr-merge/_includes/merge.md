@@ -92,6 +92,36 @@ for i in 1 2 3; do
 done
 ```
 
+**Knowledge conformance gate.** Every entry this issue's stages wrote must
+carry the frontmatter contract — a parseable YAML block with a `type`. A
+contract that is not enforced drifts back into two contracts within a month,
+and the merge is the only chokepoint every change passes through. The
+deterministic runner applies the same gate before it merges; this is the
+fallback path's copy of it.
+
+The check is scoped to **this issue's** knowledge directory on purpose. The
+knowledge base is local, gitignored, per-machine state, so a stale entry from
+an unrelated issue must never block this merge.
+
+```bash
+if [ -n "$BINARY" ] && [ -d ".nightgauge/knowledge" ]; then
+  KNOWLEDGE_CONF=$("$BINARY" knowledge validate "$ISSUE_NUMBER" --json 2>/dev/null) || true
+  if [ -n "$KNOWLEDGE_CONF" ]; then
+    CONF_VIOLATIONS=$(printf '%s\n' "$KNOWLEDGE_CONF" | jq -r '.conformance.violations[]? | "\(.path): \(.reason)"')
+    if [ -n "$CONF_VIOLATIONS" ]; then
+      echo "BLOCKED: knowledge entries do not satisfy the frontmatter contract:" >&2
+      printf '%s\n' "$CONF_VIOLATIONS" >&2
+      echo "Repair each entry with:" >&2
+      echo "  nightgauge knowledge stamp <path> --type <type> --generated-by <stage>/<model>" >&2
+      echo "Do NOT merge until this is clean." >&2
+      exit 1
+    fi
+  else
+    echo "WARNING: knowledge conformance check unavailable (binary or context missing) — skipping." >&2
+  fi
+fi
+```
+
 #### Step 6.1.5: Conflict Resolution (Concurrent Safety)
 
 If the PR has merge conflicts, attempt automatic resolution before failing. This

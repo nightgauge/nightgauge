@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/nightgauge/nightgauge/internal/config"
@@ -230,5 +231,187 @@ func TestValidateDecisions_Signals_PopulatedOnFailure(t *testing.T) {
 	}
 	if len(result.Signals) == 0 {
 		t.Error("expected result.Signals to be populated when HasTradeoffs=true")
+	}
+}
+
+// writeEntry writes a knowledge file under root, creating parent directories.
+func writeEntry(t *testing.T, root, rel, content string) string {
+	t.Helper()
+	p := filepath.Join(root, filepath.FromSlash(rel))
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+func TestValidateConformance(t *testing.T) {
+	root := t.TempDir()
+
+	writeEntry(t, root, "features/1-ok/PRD.md", "---\ntype: prd\n---\n\n# PRD\n")
+	writeEntry(t, root, "features/2-bare/PRD.md", "# PRD\n\nNo block at all.\n")
+	writeEntry(t, root, "features/3-empty-type/decisions.md", "---\ntype: \"\"\ntags: [a]\n---\n\n# Decisions\n")
+	// Unknown keys and unknown type values are never violations — the parser
+	// tolerates them, and the check must agree or the two disagree about what
+	// the contract is.
+	writeEntry(t, root, "architecture/future.md", "---\ntype: some-future-kind\nunknown_key: 7\n---\n\n# Future\n")
+	// Reserved navigation and template files carry no entry frontmatter.
+	writeEntry(t, root, "README.md", "# Knowledge Base\n")
+	writeEntry(t, root, "index.md", "# Index\n")
+	writeEntry(t, root, "log.md", "# Log\n")
+	writeEntry(t, root, "architecture/_template.md", "# Template\n")
+	// Derived state under a dot-directory is not an entry.
+	writeEntry(t, root, ".recall-cache/notes.md", "junk\n")
+	// Non-markdown files are ignored.
+	writeEntry(t, root, "features/1-ok/notes.txt", "text\n")
+
+	res, err := knowledge.ValidateConformance(root)
+	if err != nil {
+		t.Fatalf("ValidateConformance: %v", err)
+	}
+	if res.Valid {
+		t.Fatal("expected violations")
+	}
+
+	got := map[string]string{}
+	for _, v := range res.Violations {
+		got[v.Path] = v.Reason
+	}
+	want := map[string]string{
+		"features/2-bare/PRD.md":             knowledge.ReasonNoFrontmatter,
+		"features/3-empty-type/decisions.md": knowledge.ReasonMissingType,
+	}
+	if len(got) != len(want) {
+		t.Fatalf("violations = %v, want %v", got, want)
+	}
+	for path, reason := range want {
+		if got[path] != reason {
+			t.Errorf("%s = %q, want %q", path, got[path], reason)
+		}
+	}
+	if res.FilesChecked != 4 {
+		t.Errorf("files_checked = %d, want 4 (three entries plus the future one)", res.FilesChecked)
+	}
+	if res.Skipped != 4 {
+		t.Errorf("skipped = %d, want 4 reserved files", res.Skipped)
+	}
+}
+
+func TestValidateConformance_ReportsUnparseableBlocksWithoutAbsolutePaths(t *testing.T) {
+	root := t.TempDir()
+	writeEntry(t, root, "features/1-bad/PRD.md", "---\ntype: prd\n  bad indent: [\n---\n\n# PRD\n")
+	// A lifecycle status the contract deleted surfaces here rather than
+	// silently ranking as an unknown status.
+	writeEntry(t, root, "features/2-legacy/decisions.md", "---\ntype: decisions\nstatus: superseded\n---\n\n# Decisions\n")
+
+	res, err := knowledge.ValidateConformance(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Violations) != 2 {
+		t.Fatalf("violations = %+v, want 2", res.Violations)
+	}
+	for _, v := range res.Violations {
+		if v.Reason != knowledge.ReasonUnparseableFrontmatter {
+			t.Errorf("%s reason = %q", v.Path, v.Reason)
+		}
+		if filepath.IsAbs(v.Path) {
+			t.Errorf("path %q is absolute; output must be stable across machines", v.Path)
+		}
+		if strings.Contains(v.Detail, root) {
+			t.Errorf("detail leaks the local worktree path: %q", v.Detail)
+		}
+		if v.Detail == "" {
+			t.Errorf("%s: unparseable violations must say why", v.Path)
+		}
+	}
+}
+
+func TestValidateConformance_CleanBaseAndMissingRoot(t *testing.T) {
+	root := t.TempDir()
+	writeEntry(t, root, "features/1-ok/PRD.md", "---\ntype: prd\n---\n\n# PRD\n")
+
+	res, err := knowledge.ValidateConformance(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Valid || len(res.Violations) != 0 {
+		t.Fatalf("expected a clean base, got %+v", res.Violations)
+	}
+
+	// A repository with no knowledge base is trivially conformant, not an error.
+	res, err = knowledge.ValidateConformance(filepath.Join(root, "does-not-exist"))
+	if err != nil {
+		t.Fatalf("missing root must not be an error: %v", err)
+	}
+	if !res.Valid {
+		t.Error("missing root should be valid")
+	}
+}
+
+// TestValidateConformance_FreshScaffoldPasses is the criterion that actually
+// matters for the pipeline: everything the scaffolder writes must satisfy the
+// check it is about to be gated by.
+func TestValidateConformance_FreshScaffoldPasses(t *testing.T) {
+	root := t.TempDir()
+
+	if _, err := knowledge.Scaffold(root, 42, "Add photo upload", nil); err != nil {
+		t.Fatal(err)
+	}
+	for _, topic := range knowledge.ValidRepoTopicTypes {
+		if _, err := knowledge.ScaffoldRepoTopic(root, topic, "some-slug"); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	res, err := knowledge.ValidateConformance(filepath.Join(root, ".nightgauge", "knowledge"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Valid {
+		t.Errorf("a freshly scaffolded base violates the contract: %+v", res.Violations)
+	}
+	if res.FilesChecked == 0 {
+		t.Error("checked nothing — the walk found no entries")
+	}
+}
+
+func TestValidateConformanceForIssue_ScopesToOneDirectory(t *testing.T) {
+	root := t.TempDir()
+	kb := filepath.Join(root, ".nightgauge", "knowledge")
+
+	if _, err := knowledge.Scaffold(root, 42, "Good issue", nil); err != nil {
+		t.Fatal(err)
+	}
+	// A stale entry belonging to a different issue. The knowledge base is
+	// local, gitignored, per-machine state, so this must never block issue
+	// 42's merge.
+	writeEntry(t, kb, "features/99-stale/PRD.md", "# PRD\n\nNo block.\n")
+
+	res, err := knowledge.ValidateConformanceForIssue(root, 42)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Valid {
+		t.Errorf("issue 42 blocked by an unrelated issue's entry: %+v", res.Violations)
+	}
+
+	res, err = knowledge.ValidateConformanceForIssue(root, 99)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Valid {
+		t.Error("issue 99's own violation was not reported")
+	}
+
+	// An issue with no knowledge directory is trivially conformant.
+	res, err = knowledge.ValidateConformanceForIssue(root, 12345)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Valid {
+		t.Error("an issue with no knowledge directory should pass")
 	}
 }

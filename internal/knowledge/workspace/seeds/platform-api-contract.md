@@ -1,3 +1,12 @@
+---
+type: reference
+title: "Service API Contract"
+status: stable
+generated:
+  by: process:knowledge-migrate
+  at: "2026-09-03T00:00:00Z"
+---
+
 # Service API Contract
 
 Use this page as a pointer to the authoritative public API contract shared by

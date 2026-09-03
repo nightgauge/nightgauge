@@ -1513,15 +1513,21 @@ outcome block already exists.`,
 
 func knowledgeValidateCmd() *cobra.Command {
 	var (
-		workdir    string
-		outputJSON bool
+		workdir     string
+		outputJSON  bool
+		conformance bool
+		fix         bool
 	)
 
 	cmd := &cobra.Command{
-		Use:          "validate <issue-number>",
-		Short:        "Validate that decisions.md is populated when the plan has tradeoff signals",
+		Use:          "validate [issue-number]",
+		Short:        "Validate knowledge entries: decisions population, and OKF frontmatter conformance",
 		SilenceUsage: true,
-		Long: `Validate decisions.md population for a given issue.
+		Long: `Validate the knowledge base.
+
+With an issue number, checks that decisions.md is populated when the plan has
+tradeoff signals, AND that every entry in that issue's knowledge directory
+carries the frontmatter contract.
 
 When knowledge.require_decisions is true in .nightgauge/config.yaml, exits non-zero
 if the plan for <issue-number> contains 2+ distinct tradeoff keywords but decisions.md
@@ -1530,26 +1536,49 @@ lacks at least one ADR block (with Status, Context, Decision, Consequences field
 Tradeoff keywords are loaded from configs/knowledge-tradeoff-keywords.yaml (falls back to
 built-in defaults when the file is absent).
 
-Exits 0 when validation passes. Exits 1 when validation fails with an actionable message
-listing tradeoff signal locations and an ADR block template.
+With --conformance and no issue number, sweeps the whole knowledge base: every
+non-reserved .md file must carry a parseable frontmatter block with a non-empty
+type. Reserved names (index.md, log.md, README.md, _template.md) are skipped.
+Unknown keys, unknown type values and missing optional fields are never
+violations — this is exactly the check an external Open Knowledge Format
+consumer applies.
 
-To disable this gate: set knowledge.require_decisions: false in .nightgauge/config.yaml`,
-		Args: cobra.ExactArgs(1),
+--fix stamps a type and process:knowledge-migrate provenance onto every
+non-conformant entry, migrating a base written before the contract existed.
+An entry whose frontmatter cannot be parsed is reported rather than rewritten:
+repairing malformed YAML is not something to guess at.
+
+Exits 0 when validation passes, 1 when it fails with an actionable message.
+
+To disable the decisions gate: set knowledge.require_decisions: false in .nightgauge/config.yaml`,
+		Args: cobra.MaximumNArgs(1),
 		Example: `  nightgauge knowledge validate 42
   nightgauge knowledge validate 42 --json
-  nightgauge knowledge validate 42 --workdir /path/to/repo`,
+  nightgauge knowledge validate --conformance
+  nightgauge knowledge validate --conformance --json
+  nightgauge knowledge validate --conformance --fix`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			issueNumber := 0
-			if _, err := fmt.Sscanf(args[0], "%d", &issueNumber); err != nil || issueNumber <= 0 {
-				return fmt.Errorf("<issue-number> must be a positive integer, got %q", args[0])
-			}
-
 			if workdir == "" {
 				var err error
 				workdir, err = os.Getwd()
 				if err != nil {
 					return fmt.Errorf("get working directory: %w", err)
 				}
+			}
+
+			if len(args) == 0 {
+				if !conformance {
+					return fmt.Errorf("<issue-number> is required unless --conformance is given")
+				}
+				return runKnowledgeConformanceSweep(workdir, fix, outputJSON)
+			}
+			if fix {
+				return fmt.Errorf("--fix applies to the whole-base sweep; run `knowledge validate --conformance --fix`")
+			}
+
+			issueNumber := 0
+			if _, err := fmt.Sscanf(args[0], "%d", &issueNumber); err != nil || issueNumber <= 0 {
+				return fmt.Errorf("<issue-number> must be a positive integer, got %q", args[0])
 			}
 
 			// Load knowledge config from project config.yaml; use safe defaults on error.
@@ -1567,8 +1596,14 @@ To disable this gate: set knowledge.require_decisions: false in .nightgauge/conf
 			start := time.Now()
 			result, valErr := knowledge.ValidateDecisionsPopulation(issueNumber, workdir, knowledgeCfg)
 
+			conf, confErr := knowledge.ValidateConformanceForIssue(workdir, issueNumber)
+			if confErr != nil {
+				return confErr
+			}
+
+			failed := valErr != nil || !conf.Valid
 			validateStatus := "success"
-			if valErr != nil {
+			if failed {
 				validateStatus = "failure"
 			}
 			emitKnowledgeTelemetry(workdir, telemetry.Event{
@@ -1582,21 +1617,139 @@ To disable this gate: set knowledge.require_decisions: false in .nightgauge/conf
 			if outputJSON {
 				enc := json.NewEncoder(os.Stdout)
 				enc.SetIndent("", "  ")
-				return enc.Encode(result)
+				if err := enc.Encode(struct {
+					Decisions   *knowledge.ValidateResult    `json:"decisions"`
+					Conformance *knowledge.ConformanceResult `json:"conformance"`
+				}{Decisions: result, Conformance: conf}); err != nil {
+					return err
+				}
+				// The exit code must follow the verdict even under --json:
+				// returning right after encoding made every scripted caller
+				// see success no matter what the check found.
+				if failed {
+					return fmt.Errorf("validation failed for issue #%d", issueNumber)
+				}
+				return nil
 			}
 
 			if valErr != nil {
 				fmt.Fprintln(os.Stderr, result.Message)
+			}
+			if !conf.Valid {
+				fmt.Fprintln(os.Stderr, conf.Message)
+				for _, v := range conf.Violations {
+					fmt.Fprintf(os.Stderr, "  %s: %s\n", v.Path, v.Reason)
+				}
+				fmt.Fprintln(os.Stderr, "Fix with: nightgauge knowledge stamp <path> --generated-by <actor>")
+			}
+			if failed {
 				return fmt.Errorf("validation failed for issue #%d", issueNumber)
 			}
 
 			fmt.Println(result.Message)
+			fmt.Println(conf.Message)
 			return nil
 		},
 	}
 
 	cmd.Flags().StringVar(&workdir, "workdir", "", "Workspace root (default: cwd)")
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output result as JSON")
+	cmd.Flags().BoolVar(&conformance, "conformance", false, "Sweep the whole knowledge base for frontmatter contract violations (no issue number)")
+	cmd.Flags().BoolVar(&fix, "fix", false, "With --conformance: stamp type and process:knowledge-migrate provenance onto non-conformant entries")
 
 	return cmd
+}
+
+// runKnowledgeConformanceSweep checks every entry under the knowledge root and,
+// with fix set, migrates the ones a pre-contract writer produced.
+func runKnowledgeConformanceSweep(workdir string, fix, outputJSON bool) error {
+	root := okf.KnowledgeRoot(workdir)
+
+	start := time.Now()
+	result, err := knowledge.ValidateConformance(root)
+	if err != nil {
+		return err
+	}
+
+	var repaired []string
+	if fix {
+		repaired, err = repairConformance(root, result)
+		if err != nil {
+			return err
+		}
+		// Re-check so the reported result reflects the repaired tree.
+		result, err = knowledge.ValidateConformance(root)
+		if err != nil {
+			return err
+		}
+	}
+
+	status := "success"
+	if !result.Valid {
+		status = "failure"
+	}
+	emitKnowledgeTelemetry(workdir, telemetry.Event{
+		Type:       telemetry.EventValidate,
+		Scope:      "conformance",
+		DurationMs: time.Since(start).Milliseconds(),
+		Status:     status,
+	})
+
+	if outputJSON {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		if err := enc.Encode(struct {
+			*knowledge.ConformanceResult
+			Repaired []string `json:"repaired,omitempty"`
+		}{ConformanceResult: result, Repaired: repaired}); err != nil {
+			return err
+		}
+		if !result.Valid {
+			return fmt.Errorf("knowledge conformance: %d violation(s)", len(result.Violations))
+		}
+		return nil
+	}
+
+	for _, p := range repaired {
+		fmt.Printf("Migrated: %s\n", p)
+	}
+	if result.Valid {
+		fmt.Println(result.Message)
+		return nil
+	}
+	fmt.Fprintln(os.Stderr, result.Message)
+	for _, v := range result.Violations {
+		if v.Detail != "" {
+			fmt.Fprintf(os.Stderr, "  %s: %s (%s)\n", v.Path, v.Reason, v.Detail)
+		} else {
+			fmt.Fprintf(os.Stderr, "  %s: %s\n", v.Path, v.Reason)
+		}
+	}
+	fmt.Fprintln(os.Stderr, "Repair the missing blocks with: nightgauge knowledge validate --conformance --fix")
+	return fmt.Errorf("knowledge conformance: %d violation(s)", len(result.Violations))
+}
+
+// repairConformance stamps a type and migration provenance onto entries that
+// carry no frontmatter or no type. An unparseable block is left alone and
+// reported: repairing malformed YAML is not something to guess at, and a
+// `superseded` leftover needs a human decision about what replaced it.
+func repairConformance(root string, result *knowledge.ConformanceResult) ([]string, error) {
+	actor, err := okf.ProcessActor("knowledge-migrate")
+	if err != nil {
+		return nil, err
+	}
+
+	var repaired []string
+	for _, v := range result.Violations {
+		if v.Reason == knowledge.ReasonUnparseableFrontmatter {
+			continue
+		}
+		path := filepath.Join(root, filepath.FromSlash(v.Path))
+		entryType := okf.InferEntryType(v.Path)
+		if _, _, err := okf.Stamp(path, okf.StampInput{GeneratedBy: actor, Type: entryType}); err != nil {
+			return nil, fmt.Errorf("migrate %s: %w", v.Path, err)
+		}
+		repaired = append(repaired, v.Path)
+	}
+	return repaired, nil
 }

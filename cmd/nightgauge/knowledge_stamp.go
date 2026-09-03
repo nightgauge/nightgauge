@@ -21,6 +21,7 @@ type stampResult struct {
 
 func knowledgeStampCmd() *cobra.Command {
 	var (
+		entryType   string
 		generatedBy string
 		sources     []string
 		verifiedBy  string
@@ -46,6 +47,7 @@ frontmatter block is rebuilt, and the two are re-joined.
 
 Merge rules:
 
+  type         set only when the entry has none; never overwrites
   generated    replaced; it names the last producer, it is not a log
   verified     appended, unless an event with the same actor already exists
   sources      appended, unless an entry with the same resource already exists
@@ -83,6 +85,7 @@ is rejected and nothing is written.
 			// Validate every source before touching the file, so a rejected
 			// stamp leaves the entry byte-identical.
 			in := okf.StampInput{
+				Type:        entryType,
 				GeneratedBy: generatedBy,
 				VerifiedBy:  verifiedBy,
 				StaleAfter:  staleAfter,
@@ -97,7 +100,7 @@ is rejected and nothing is written.
 			}
 
 			if in.Empty() {
-				return fmt.Errorf("nothing to stamp: give at least one of --generated-by, --verified-by, --source, --status, --stale-after")
+				return fmt.Errorf("nothing to stamp: give at least one of --type, --generated-by, --verified-by, --source, --status, --stale-after")
 			}
 
 			start := time.Now()
@@ -134,6 +137,7 @@ is rejected and nothing is written.
 		},
 	}
 
+	cmd.Flags().StringVar(&entryType, "type", "", "Entry type, set only when the entry has none (never overwrites an existing type)")
 	cmd.Flags().StringVar(&generatedBy, "generated-by", "", "Actor that produced this entry (<producer>/<version>, human:<id> or process:<id>)")
 	cmd.Flags().StringArrayVar(&sources, "source", nil, "Material this entry was derived from; repeatable")
 	cmd.Flags().StringVar(&verifiedBy, "verified-by", "", "Actor confirming this entry; appended to the verified log")

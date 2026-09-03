@@ -1,3 +1,12 @@
+---
+type: reference
+title: "Shared Types"
+status: stable
+generated:
+  by: process:knowledge-migrate
+  at: "2026-09-03T00:00:00Z"
+---
+
 # Shared Types
 
 Document the package or schema that owns wire types shared across repositories.

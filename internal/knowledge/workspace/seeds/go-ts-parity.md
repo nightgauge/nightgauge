@@ -1,3 +1,12 @@
+---
+type: architecture
+title: "Go / TypeScript Parity"
+status: stable
+generated:
+  by: process:knowledge-migrate
+  at: "2026-09-03T00:00:00Z"
+---
+
 # Go / TypeScript Parity
 
 The Nightgauge pipeline engine runs on two languages with a deliberate

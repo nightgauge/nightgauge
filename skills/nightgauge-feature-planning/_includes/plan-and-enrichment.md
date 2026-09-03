@@ -177,10 +177,22 @@ except: print('false')
 " 2>/dev/null || echo "false")
 
   if [ "$KNOWLEDGE_ENABLED" = "true" ]; then
-    SLUG=$(echo "$TITLE" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/--*/-/g;s/^-//;s/-$//' | cut -c1-50)
-    KNOWLEDGE_PATH=".nightgauge/knowledge/features/${ISSUE_NUMBER}-${SLUG}"
-    mkdir -p "$KNOWLEDGE_PATH"
-    echo "Knowledge directory scaffolded by feature-planning (deferred from issue-pickup): $KNOWLEDGE_PATH"
+    # Scaffold through the binary, never by hand. It owns the directory name,
+    # the templates AND the frontmatter contract every entry must carry; a
+    # shell copy of any of the three drifts the moment the contract changes,
+    # and an entry written without a `type` is blocked at merge by
+    # `knowledge validate --conformance`.
+    SCAFFOLD_JSON=$(nightgauge knowledge scaffold \
+      --issue-number "$ISSUE_NUMBER" \
+      --title "$TITLE" \
+      --json 2>/dev/null) || SCAFFOLD_JSON=""
+    if [ -n "$SCAFFOLD_JSON" ]; then
+      KNOWLEDGE_PATH=$(printf '%s\n' "$SCAFFOLD_JSON" | jq -r '.knowledge_path // empty')
+      echo "Knowledge directory scaffolded by feature-planning (deferred from issue-pickup): $KNOWLEDGE_PATH"
+    else
+      echo "WARNING: nightgauge knowledge scaffold unavailable — skipping deferred scaffolding." >&2
+      KNOWLEDGE_PATH=""
+    fi
   fi
 fi
 
@@ -189,58 +201,14 @@ if [ -n "$KNOWLEDGE_PATH" ] && [ -d "$KNOWLEDGE_PATH" ]; then
   DECISIONS_FILE="${KNOWLEDGE_PATH}/decisions.md"
   TODAY=$(date -u +%Y-%m-%d)
 
-  # Create PRD.md if it doesn't exist (deferred scaffolding case).
-  # Seed the SAME structure as issue-pickup's scaffold so the deferred path is
-  # identical to the normal path: requirements + embedded TRD (Technical
-  # Approach) + embedded QRD (Quality & Non-Functional Requirements). The agent
-  # fills these placeholders in place during enrichment below.
-  if [ ! -f "$PRD_FILE" ]; then
-    cat > "$PRD_FILE" << PRDNEWEOF
-# PRD: #${ISSUE_NUMBER} — ${TITLE}
-
-## Summary
-
-<!-- TODO: 1-2 sentence problem statement — what is missing/broken and why it matters -->
-
-## User Story
-
-<!-- TODO: As a <role>, I want <capability> so that <benefit>. Omit for pure infra/chore work. -->
-
-## Acceptance Criteria
-
-<!-- TODO: Testable checkboxes — each one a behavior feature-validate can verify
-- [ ] Criterion 1
-- [ ] Criterion 2 -->
-
-## Technical Approach
-
-<!-- TODO (embedded TRD): design, key components/files, data flow, and implementation constraints.
-     This IS the technical requirements doc — keep it here, do not split into a separate TRD file. -->
-
-## Quality & Non-Functional Requirements
-
-<!-- TODO (embedded QRD): test strategy (unit/integration/e2e) plus any performance, security,
-     accessibility, or reliability budgets. "None beyond the acceptance criteria" is a valid answer. -->
-
-## Out of Scope
-
-<!-- TODO: What this issue explicitly will NOT do — names the boundary to prevent scope creep. -->
-
-## Status
-
-- [ ] Draft
-- [ ] Reviewed
-- [ ] Approved
-PRDNEWEOF
-  fi
-
-  # Create decisions.md if it doesn't exist (deferred scaffolding case)
-  if [ ! -f "$DECISIONS_FILE" ]; then
-    cat > "$DECISIONS_FILE" << DECNEWEOF
-# Decisions: #${ISSUE_NUMBER} — ${TITLE}
-
-## Architecture Decisions
-DECNEWEOF
+  # The binary's scaffold already wrote PRD.md and decisions.md, each with the
+  # frontmatter contract. Do NOT re-create them here with a heredoc: a shell
+  # copy of the templates emits no `type` and no `generated`, which the
+  # conformance check rejects at merge, and it silently forks the two
+  # scaffolding paths.
+  if [ ! -f "$PRD_FILE" ] || [ ! -f "$DECISIONS_FILE" ]; then
+    echo "WARNING: expected scaffolded entries at $KNOWLEDGE_PATH; re-running the scaffolder." >&2
+    nightgauge knowledge scaffold --issue-number "$ISSUE_NUMBER" --title "$TITLE" >/dev/null 2>&1 || true
   fi
 
   # --- Enrich PRD.md (in place) ---

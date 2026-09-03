@@ -12,6 +12,10 @@ import (
 // A zero-value field means "leave whatever is there alone" — the stamp never
 // clears a value it was not asked to set.
 type StampInput struct {
+	// Type sets `type` when the entry has none. It never overwrites an
+	// existing type: the stamp verb records provenance, and silently
+	// reclassifying an entry someone deliberately typed is not that.
+	Type string
 	// GeneratedBy replaces `generated` with this actor stamped at now.
 	GeneratedBy string
 	// Sources are appended to `sources`, skipping resources already present.
@@ -26,8 +30,8 @@ type StampInput struct {
 
 // Empty reports whether the input would change nothing.
 func (in StampInput) Empty() bool {
-	return in.GeneratedBy == "" && len(in.Sources) == 0 && in.VerifiedBy == "" &&
-		in.StaleAfter == "" && in.Status == ""
+	return in.Type == "" && in.GeneratedBy == "" && len(in.Sources) == 0 &&
+		in.VerifiedBy == "" && in.StaleAfter == "" && in.Status == ""
 }
 
 // Validate checks every field before any file is touched, so a rejected stamp
@@ -60,6 +64,9 @@ func (in StampInput) Validate() error {
 		if strings.TrimSpace(s.Resource) == "" {
 			return fmt.Errorf("--source[%d]: empty resource", i)
 		}
+	}
+	if in.Type != "" && strings.TrimSpace(in.Type) == "" {
+		return fmt.Errorf("--type: empty")
 	}
 	return nil
 }
@@ -111,6 +118,11 @@ func Stamp(path string, in StampInput) (*FrontmatterBlock, bool, error) {
 	_, body := SplitFrontmatter(content)
 
 	changed := false
+
+	if in.Type != "" && strings.TrimSpace(block.Type) == "" {
+		block.Type = in.Type
+		changed = true
+	}
 
 	if in.GeneratedBy != "" {
 		next := Provenance{By: in.GeneratedBy, At: NowStamp()}

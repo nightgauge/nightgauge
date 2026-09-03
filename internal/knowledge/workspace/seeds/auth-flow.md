@@ -1,3 +1,12 @@
+---
+type: reference
+title: "Authentication Flow"
+status: stable
+generated:
+  by: process:knowledge-migrate
+  at: "2026-09-03T00:00:00Z"
+---
+
 # Authentication Flow
 
 Document authentication only when it is part of the public architecture of the

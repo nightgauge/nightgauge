@@ -561,6 +561,70 @@ is never taken from model output or issue text — otherwise an entry could clai
 any provenance it liked, and the trust tier built on top of it would be
 worthless.
 
+### Conformance: enforcing the contract
+
+A contract that is not enforced drifts back into two contracts within a month.
+`nightgauge knowledge validate --conformance` is the single place that keeps
+every writer honest, including model-driven stages, and it is exactly the
+criterion an external Open Knowledge Format consumer would apply: **every
+non-reserved `.md` under the knowledge root must carry a parseable frontmatter
+block with a non-empty `type`.**
+
+Reserved names are skipped — `index.md`, `log.md`, `README.md` and
+`_template.md` are navigation and template files, read structurally rather than
+as knowledge. Directories beginning with `.` (the recall cache) hold derived
+state, not entries.
+
+Three reason codes:
+
+| Reason                    | Meaning                                                               |
+| ------------------------- | --------------------------------------------------------------------- |
+| `no_frontmatter`          | The file opens with no `---` block at all                             |
+| `unparseable_frontmatter` | Malformed YAML, a missing closing sentinel, or a deleted status value |
+| `missing_type`            | A parseable block whose `type` is absent or empty                     |
+
+**Tolerance is deliberate.** Unknown keys, unknown `type` values and missing
+optional fields are never violations — the check and the parser have to agree
+about what the contract is, or an entry a future producer writes fails in one
+and passes in the other.
+
+```bash
+# Sweep the whole base
+nightgauge knowledge validate --conformance
+nightgauge knowledge validate --conformance --json
+
+# Migrate a base written before the contract existed
+nightgauge knowledge validate --conformance --fix
+
+# Per-issue: decisions population AND conformance for that issue's directory
+nightgauge knowledge validate 42
+```
+
+`--fix` stamps a `type` inferred from the entry's path and
+`generated.by: process:knowledge-migrate` onto every entry missing them,
+leaving the body and any existing frontmatter untouched. An entry whose block
+cannot be **parsed** is reported rather than rewritten: repairing malformed
+YAML is not something to guess at, and a leftover deleted status value needs a
+human decision about what replaced it.
+
+#### Where it is enforced
+
+The check runs **before every merge**, on the issue's own knowledge directory:
+
+- the deterministic pr-merge runner (`internal/orchestrator/stages/prmerge.go`)
+  punts with `knowledge-non-conformant` instead of merging;
+- the pr-merge skill's Phase 6 include applies the same gate on the fallback
+  path.
+
+Both are needed. The deterministic runner is the **default** path — the skill
+is reached only when that runner punts — so a gate living only in the skill
+would be unenforced on every normal run.
+
+**The gate is scoped to one issue's directory on purpose.** The knowledge base
+is local, gitignored, per-machine state, so a stale entry belonging to an
+unrelated issue must never block someone's merge. The whole-base sweep is the
+standalone audit form.
+
 ### Recording provenance: `knowledge stamp`
 
 `nightgauge knowledge stamp <path>` is the **only** writer of the provenance

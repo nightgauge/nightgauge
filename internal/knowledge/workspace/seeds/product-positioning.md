@@ -1,3 +1,12 @@
+---
+type: reference
+title: "Product Context"
+status: stable
+generated:
+  by: process:knowledge-migrate
+  at: "2026-09-03T00:00:00Z"
+---
+
 # Product Context
 
 Use this page to record the public purpose and user-visible boundaries of the
