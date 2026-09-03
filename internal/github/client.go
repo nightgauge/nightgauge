@@ -39,6 +39,16 @@ var ErrRateLimitGated = errors.New("github rate limit gated by SharedRateLimitTr
 // back to the default.
 const rateLimitFloorEnv = "NIGHTGAUGE_GITHUB_RATELIMIT_FLOOR"
 
+// rateLimitNoWaitEnv forces every WithRateLimitWait() call on this process to
+// a no-op, so the pre-call gate always fails fast (ErrRateLimitGated)
+// regardless of what the caller wired. Set (non-empty) only by test
+// harnesses that spawn the real daemon binary — a "verb is registered"
+// contract test must never block on GitHub's real reset window (bounded by
+// maxFullExhaustionWait, up to 75m) or on the machine's persisted
+// ~/.nightgauge/rate-limit.json quota state. See
+// internal/ipc/server_integration_test.go and Issue #1348.
+const rateLimitNoWaitEnv = "NIGHTGAUGE_GITHUB_RATELIMIT_NO_WAIT"
+
 // defaultRateLimitFloor is the threshold below which the tracker gate trips
 // when no env override is provided. 100 leaves enough budget for a handful
 // of operations after gating begins (graceful degradation).
@@ -487,6 +497,9 @@ func (c *Client) WithRateLimitTracker(tracker *SharedRateLimitTracker, user stri
 //
 // Returns the client for fluent chaining.
 func (c *Client) WithRateLimitWait() *Client {
+	if os.Getenv(rateLimitNoWaitEnv) != "" {
+		return c
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.rateLimitWaitOnGate = true

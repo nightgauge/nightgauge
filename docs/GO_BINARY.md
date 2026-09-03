@@ -3621,6 +3621,17 @@ PRs are skipped (ambiguous N→1 attribution). The record is written to
 `.nightgauge/pipeline/survival-records.jsonl` (append-only; a terminal line
 supersedes its pending line on fold).
 
+Every record also carries the **immediate** post-merge observation of the base
+branch (#1249) — `main_check_verdict` (`green` | `red` | `pending` |
+`no_checks` | `error` | `skipped`) and `main_check_failing` — written by the same
+hook that seeds it, from a bounded poll of the merge commit's own check runs
+(`nightgauge hook post-merge --main-check-wait <duration>`, default 20m; `0` is
+one read). It is distinct from `verdict`, which the sweep decides days later
+from reverts and ancestry-correlated breakage: a record can be
+`main_check_verdict: red` and still finalize `survived` if main was fixed
+forward. See
+[PR_MERGE_STAGE.md § Post-merge verification](PR_MERGE_STAGE.md#post-merge-verification-of-the-base-branch-1249).
+
 "Automatic" was too strong, and the gap it hid cost the whole evidence base
 (#1019). Capture has **one writer per merge path**, and each depends on a
 contract nothing was checking:

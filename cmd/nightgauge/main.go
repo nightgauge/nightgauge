@@ -5865,6 +5865,7 @@ func hookPostMergeCmd() *cobra.Command {
 		projectNumber int
 		prNumber      int
 		workdir       string
+		mainCheckWait time.Duration
 		outputJSON    bool
 	)
 
@@ -5913,13 +5914,22 @@ cause the command to exit non-zero.`,
 				boardSvc = gh.NewProjectService(client, ownerPart, projectNumber)
 			}
 
+			// (#1249) The check reader is what lets the hook observe main after
+			// the merge — AGENTS.md's "main's own run is the observation", run
+			// by the pipeline instead of only by hand. --main-check-wait bounds
+			// it; 0 is a single read for an operator who will not wait out CI.
+			wait := hooks.DefaultMainCheckWait()
+			wait.Timeout = mainCheckWait
 			result := hooks.EvaluatePostMerge(cmd.Context(), issueSvc, issueSvc, epicSvc, prSvc, boardSvc, hooks.PostMergeInput{
 				IssueNumber:     issueNumber,
 				RepositoryOwner: ownerPart,
 				RepositoryName:  repoPart,
 				ProjectNumber:   projectNumber,
 				PRNumber:        prNumber,
+				MainChecks:      gh.NewCIService(client),
+				MainCheckWait:   wait,
 			})
+			reportMainChecks(workdir, ownerPart, repoPart, issueNumber, prNumber, result)
 
 			// (#4151) Seed a pending survival record for an eligible single-issue
 			// merge, mirroring the in-process scheduler path so the deterministic
@@ -5927,7 +5937,11 @@ cause the command to exit non-zero.`,
 			// rooted at the current working directory.
 			if result.SurvivalEligible && workdir != "" {
 				store := survival.NewStore(workdir)
-				rec := survival.NewPending(ownerPart+"/"+repoPart, issueNumber, prNumber, result.MergedCommitSha, result.MergedAt, "")
+				rec := survival.NewPending(ownerPart+"/"+repoPart, issueNumber, prNumber, result.MergedCommitSha, result.MergedAt, result.BaseRef)
+				if result.MainChecks != nil {
+					rec.MainCheckVerdict = string(result.MainChecks.Verdict)
+					rec.MainCheckFailing = result.MainChecks.FailingNames()
+				}
 				if _, appErr := store.Append(rec); appErr != nil {
 					fmt.Fprintf(os.Stderr, "Warning: post-merge survival capture failed: %v\n", appErr)
 				}
@@ -6036,6 +6050,7 @@ cause the command to exit non-zero.`,
 	cmd.Flags().IntVar(&projectNumber, "project", 0, "GitHub Project number for board sync (optional)")
 	cmd.Flags().IntVar(&prNumber, "pr", 0, "PR number to verify is MERGED before closing issue (optional; 0 skips verification, and skips the survival capture that needs its merge SHA)")
 	cmd.Flags().StringVar(&workdir, "workdir", "", "Root of the survival journal (default: current directory). Set this when the process cwd is a transient worktree.")
+	cmd.Flags().DurationVar(&mainCheckWait, "main-check-wait", hooks.DefaultMainCheckTimeout, "How long to wait for the merge commit's check runs on the base branch to conclude before recording the verdict (0 = one immediate read, no wait). Requires --pr.")
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output result as JSON")
 	_ = cmd.MarkFlagRequired("issue") // cobra MarkFlagRequired never errors for known flags
 	_ = cmd.MarkFlagRequired("owner") // cobra MarkFlagRequired never errors for known flags

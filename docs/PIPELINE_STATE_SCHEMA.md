@@ -173,7 +173,15 @@ the discovery regex and the atomic-write contract. This section documents the
 | Totals         | `inputTokens`, `outputTokens`, `totalCostUsd`, `authoritativeChangeClass`, `actualLinesChanged`                                                                                                                                                                                                                                     |
 | Progress       | `completedStages`, `supersededStages`, `skippedStages`, `phaseHistory`, `stageErrors`, `retryCount`, `escalationHistory`, `ralphIterations`                                                                                                                                                                                         |
 | Per-stage maps | `stageModes`, `stageAdapters`, `stageModels`, `stageServedModels`, `stageEfforts`, `stageThinking`, `stageServedEfforts`, `stageServedThinking`, `stageModelSelectionModes`, `stageExecutionPaths`, `stagePuntReasons`, `stageGateResults`, `stageAnomalies`, `stageRecoveryAttempts`, `stageOutputTails`, `terminatingStageTokens` |
-| Outcome        | `gateResults`, `prUrl`, `mergedCommitSha`, `mergedAt`, `license`, `licenseExpiredMidRun`, `toolCalls`, `modelRefusalFallbacks`                                                                                                                                                                                                      |
+| Outcome        | `gateResults`, `prUrl`, `mergedCommitSha`, `mergedAt`, `mainCheckVerdict`, `mainCheckFailing`, `license`, `licenseExpiredMidRun`, `toolCalls`, `modelRefusalFallbacks`                                                                                                                                                              |
+
+`mainCheckVerdict` / `mainCheckFailing` are the post-merge observation of the
+base branch (#1249): what the merge commit's own check runs did once the
+pipeline had merged — `green` | `red` | `pending` (bounded wait ran out with
+checks still running) | `no_checks` (none appeared within the grace) | `error` |
+`skipped` — and the distinct failing check names when red. `gateResults` is the
+PR gate's prediction; this is the observation, and only `green` means main
+passed.
 
 `terminalOutcome` has a closed vocabulary — `complete` | `cancelled` | `failed`
 — shared deliberately with the extension path so the two cannot drift.
