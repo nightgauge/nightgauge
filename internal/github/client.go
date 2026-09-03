@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math/rand/v2"
 	"net/http"
 	"net/url"
 	"os"
@@ -89,6 +90,127 @@ type Client struct {
 	// override this to capture log output deterministically. nil → use the
 	// default log package.
 	gateLogger func(format string, args ...interface{})
+
+	// gateJitterMax bounds the random extra sleep added to a gated wait
+	// (uniform in [0, gateJitterMax)); zero means defaultGateJitterMax.
+	// gateRand supplies the uniform variate (nil → math/rand/v2). gateGovernor
+	// paces the release (nil → the process-wide governor). Tests inject all
+	// three; production leaves them nil/zero.
+	gateJitterMax time.Duration
+	gateRand      func() float64
+	gateGovernor  *gateReleaseGovernor
+}
+
+// defaultGateJitterMax is the spread added to every gated wait. Every process
+// on a machine reads the same shared tracker file, so without it they all
+// compute the same release instant and re-fire in lockstep the moment a fresh
+// window opens — which is how a full window was drained in ten minutes on
+// 2026-09-03. Thirty seconds is small next to a 60-minute window and large
+// next to the sub-second scheduler skew between processes.
+const defaultGateJitterMax = 30 * time.Second
+
+// defaultGateReleaseInterval is the shortest gap between two gated callers
+// leaving the gate inside one process: a burst of N sleepers spreads over at
+// least (N-1) intervals instead of re-firing as one.
+const defaultGateReleaseInterval = time.Second
+
+// gateReleaseGovernor paces the callers leaving the rate-limit gate. It is a
+// pacer, not a bucket: each release claims the next free slot at least
+// `interval` after the previous one, so a burst spreads over time instead of
+// landing on the fresh window at once. It also counts the callers queued
+// behind the gate so the opening can be logged once per gating episode.
+type gateReleaseGovernor struct {
+	interval time.Duration
+
+	mu          sync.Mutex
+	nextRelease time.Time
+	queued      int
+	open        bool
+}
+
+func newGateReleaseGovernor(interval time.Duration) *gateReleaseGovernor {
+	if interval <= 0 {
+		interval = defaultGateReleaseInterval
+	}
+	return &gateReleaseGovernor{interval: interval}
+}
+
+// processGateGovernor is shared by every Client in the process; the tracker
+// file is machine-wide, so every client in a process is gated together.
+var processGateGovernor = newGateReleaseGovernor(defaultGateReleaseInterval)
+
+// enqueue records one more caller sleeping behind the gate.
+func (g *gateReleaseGovernor) enqueue() {
+	g.mu.Lock()
+	g.queued++
+	g.mu.Unlock()
+}
+
+// dequeue records a caller that stopped waiting (released or cancelled). When
+// the last one leaves the episode is over, so the next opening logs again.
+func (g *gateReleaseGovernor) dequeue() {
+	g.mu.Lock()
+	g.queued--
+	if g.queued <= 0 {
+		g.queued = 0
+		g.open = false
+	}
+	g.mu.Unlock()
+}
+
+// release claims the next slot and sleeps until it, bounded by ctx. The first
+// caller through after a gating episode logs the opening with the number of
+// callers still queued behind it.
+func (g *gateReleaseGovernor) release(ctx context.Context, logger func(string, ...interface{})) error {
+	now := time.Now()
+	g.mu.Lock()
+	if !g.open {
+		g.open = true
+		logger("github: rate limit gate opened — %d caller(s) queued, releasing at most one per %s",
+			g.queued, g.interval)
+	}
+	slot := g.nextRelease
+	if slot.Before(now) {
+		slot = now
+	}
+	g.nextRelease = slot.Add(g.interval)
+	g.mu.Unlock()
+	wait := slot.Sub(now)
+	if wait <= 0 {
+		return nil
+	}
+	select {
+	case <-time.After(wait):
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// gateJitter returns the random extra sleep for one gated wait.
+func (c *Client) gateJitter() time.Duration {
+	c.mu.Lock()
+	ceiling, r := c.gateJitterMax, c.gateRand
+	c.mu.Unlock()
+	if ceiling <= 0 {
+		ceiling = defaultGateJitterMax
+	}
+	if r == nil {
+		r = rand.Float64
+	}
+	return time.Duration(r() * float64(ceiling))
+}
+
+// governor returns the release governor this client pays: its own when a
+// test injected one, else the process-wide one.
+func (c *Client) governor() *gateReleaseGovernor {
+	c.mu.Lock()
+	g := c.gateGovernor
+	c.mu.Unlock()
+	if g == nil {
+		return processGateGovernor
+	}
+	return g
 }
 
 // TokenResolver is the interface for config-based token resolution.
@@ -791,17 +913,26 @@ func (c *Client) waitRateLimitGate(ctx context.Context) error {
 	if sleep > maxFullExhaustionWait {
 		sleep = maxFullExhaustionWait
 	}
+	// Jitter after the cap: the cap bounds how long the reset may keep us; the
+	// jitter is the deliberate spread between processes and must survive it.
+	jitter := c.gateJitter()
+	sleep += jitter
 	if logger == nil {
 		logger = log.Printf
 	}
-	logger("github: rate limit gated — waiting %s for reset before retrying (user=%q)",
-		sleep.Round(time.Second), user)
+	logger("github: rate limit gated — waiting %s for reset before retrying (jitter=%s user=%q)",
+		sleep.Round(time.Second), jitter.Round(time.Millisecond), user)
+	g := c.governor()
+	g.enqueue()
+	defer g.dequeue()
 	select {
 	case <-time.After(sleep):
-		return nil
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+	// The window is open. Leave one at a time so a burst of sleepers does not
+	// re-fire into the fresh window as a single wave.
+	return g.release(ctx, logger)
 }
 
 // ResolveTokenForUser returns the GitHub token for the given gh CLI user.

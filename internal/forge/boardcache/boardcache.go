@@ -22,6 +22,7 @@ package boardcache
 import (
 	"context"
 	"fmt"
+	"math/rand/v2"
 	"strings"
 	"sync"
 	"time"
@@ -114,7 +115,11 @@ func (s Snapshot) servedAt() time.Time {
 // Cache holds board snapshots keyed by (owner, project, query). One Cache is
 // shared by every consumer in a process; Wrap binds it to a particular board.
 type Cache struct {
-	ttl time.Duration
+	// ttl and maxRenewedAge are DefaultTTL / MaxRenewedAge with ±20% jitter
+	// applied once at construction, so the daemons on one machine do not all
+	// expire the same board in the same second and re-read it in lockstep.
+	ttl           time.Duration
+	maxRenewedAge time.Duration
 	// now is swappable so tests can drive expiry without sleeping. A test that
 	// sleeps to cross a TTL is a test that is slow and flaky at the same time.
 	now func() time.Time
@@ -134,12 +139,27 @@ type entry struct {
 	err  error
 }
 
-// New returns a Cache with the given TTL; ttl <= 0 uses DefaultTTL.
+// jitterRand supplies the uniform variate for deadline jitter. A variable so a
+// test can pin it (0.5 → no jitter) and assert on exact TTLs.
+var jitterRand = rand.Float64
+
+// jitter spreads d by ±20%: d·(0.8 + 0.4·u) for u in [0, 1).
+func jitter(d time.Duration, u float64) time.Duration {
+	return time.Duration(float64(d) * (0.8 + 0.4*u))
+}
+
+// New returns a Cache with the given TTL; ttl <= 0 uses DefaultTTL. The TTL and
+// the MaxRenewedAge ceiling each get ±20% jitter, fixed for the cache's life.
 func New(ttl time.Duration) *Cache {
 	if ttl <= 0 {
 		ttl = DefaultTTL
 	}
-	return &Cache{ttl: ttl, now: time.Now, entries: map[string]*entry{}}
+	return &Cache{
+		ttl:           jitter(ttl, jitterRand()),
+		maxRenewedAge: jitter(MaxRenewedAge, jitterRand()),
+		now:           time.Now,
+		entries:       map[string]*entry{},
+	}
 }
 
 // SetClock replaces the time source. Tests only.
@@ -275,7 +295,7 @@ func (c *Cache) renewableLocked(e *entry) (Snapshot, bool) {
 	if e.err != nil || e.snap.FetchedAt.IsZero() {
 		return Snapshot{}, false
 	}
-	if c.now().Sub(e.snap.FetchedAt) >= MaxRenewedAge {
+	if c.now().Sub(e.snap.FetchedAt) >= c.maxRenewedAge {
 		return Snapshot{}, false
 	}
 	return e.snap, true
