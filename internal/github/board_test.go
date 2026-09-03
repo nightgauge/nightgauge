@@ -230,7 +230,7 @@ func TestBoardService_GetItem_ReturnsMatchingRow(t *testing.T) {
 						"items": map[string]interface{}{
 							"pageInfo": map[string]interface{}{"hasNextPage": false, "endCursor": ""},
 							"nodes": []interface{}{
-								issueNode("PVTI_other", "nightgauge/nightgauge-platform", 1116, "same number, other repo"),
+								issueNode("PVTI_other", "nightgauge/sibling-repo", 1116, "same number, other repo"),
 								issueNode("PVTI_want", "nightgauge/nightgauge", 1116, "the row we asked for"),
 							},
 						},
