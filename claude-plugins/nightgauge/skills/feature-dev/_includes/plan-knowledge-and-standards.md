@@ -299,6 +299,20 @@ else
 fi
 ```
 
+**Recalled decisions are not automatically binding constraints.** Each hit
+carries `trust_tier` (`human-reviewed` / `machine-confirmed` / `unverified`),
+`status` (`draft` / `stable` / `deprecated`), `stale`, and the
+`lifecycle_multiplier` already folded into `.score`.
+
+- A hit with `stale: true` or `status: deprecated` records a decision that has
+  **expired or been replaced**. Do not implement to it. If it conflicts with
+  what you are building, that is evidence the constraint moved, not that your
+  change is wrong.
+- An `unverified` hit is a draft nothing has confirmed. Verify it against the
+  code before treating it as a constraint.
+- `.score` is the lifecycle-weighted score, so `dev_threshold` is compared
+  against the weighted number.
+
 When `ARCH_CONSTRAINT_COUNT > 0`, the above output serves as the "Architectural
 Constraints" block prepended to the implementation context. The agent MUST read
 it before writing any code. When `ARCH_CONSTRAINT_COUNT = 0`, no block is

@@ -1522,6 +1522,15 @@ type KnowledgeRecallHit struct {
 	Tags        []string `json:"tags,omitempty"`
 	Snippet     string   `json:"snippet"`
 	Graduated   bool     `json:"graduated,omitempty"`
+
+	// Lifecycle fields, mirroring recall.RecallHit exactly. Stale and
+	// LifecycleMultiplier carry no omitempty on purpose: a false or 1.0 that
+	// vanishes is indistinguishable from an old binary that never had the
+	// field.
+	TrustTier           string  `json:"trust_tier,omitempty"`
+	Status              string  `json:"status,omitempty"`
+	Stale               bool    `json:"stale"`
+	LifecycleMultiplier float64 `json:"lifecycle_multiplier"`
 }
 
 // KnowledgeSearchParams is the payload for knowledge.search (#2964).

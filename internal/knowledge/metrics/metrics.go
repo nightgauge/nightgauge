@@ -19,6 +19,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nightgauge/nightgauge/internal/knowledge"
+	"github.com/nightgauge/nightgauge/internal/knowledge/okf"
 	"github.com/nightgauge/nightgauge/internal/knowledge/telemetry"
 )
 
@@ -49,8 +51,26 @@ type Result struct {
 	Totals            Totals                   `json:"totals"`
 	PerStage          []PerStageEntry          `json:"per_stage"`
 	TopRecalled       []TopRecalledEntry       `json:"top_recalled"`
-	StaleEntries      []StaleEntry             `json:"stale_entries"`
+	UntouchedEntries  []UntouchedEntry         `json:"untouched_entries"`
 	GraduationHistory []GraduationHistoryEntry `json:"graduation_history"`
+
+	// Lifecycle facts, read from the entries on disk rather than from
+	// telemetry. They answer a different question from UntouchedEntries:
+	// "nobody has read this lately" is a usage signal, while "this says it
+	// expired" and "this says it is deprecated" are claims the content makes
+	// about itself. Conflating the two is why the touch-based counter used to
+	// be called stale.
+	TrustDistribution map[string]int   `json:"trust_distribution"`
+	ExpiredEntries    []LifecycleEntry `json:"expired_entries"`
+	DeprecatedEntries []LifecycleEntry `json:"deprecated_entries"`
+}
+
+// LifecycleEntry is one row in the expired- or deprecated-entries table.
+type LifecycleEntry struct {
+	Path         string `json:"path"`
+	Status       string `json:"status"`
+	StaleAfter   string `json:"stale_after,omitempty"`
+	SupersededBy string `json:"superseded_by,omitempty"`
 }
 
 // Totals is the header-card counter block. Each field maps to one event type
@@ -87,10 +107,15 @@ type TopRecalledEntry struct {
 	Hits int    `json:"hits"`
 }
 
-// StaleEntry is one row in the stale-entries table. DaysSinceTouch is the
-// floor of (now - LastTouchedAt) in days; entries never touched in-window
+// UntouchedEntry is one row in the untouched-entries table. DaysSinceTouch is
+// the floor of (now - LastTouchedAt) in days; entries never touched in-window
 // receive DaysSinceTouch = staleDays + 1 to surface them in the same place.
-type StaleEntry struct {
+//
+// "Untouched" is a READ-side proxy: it says nobody has looked at the entry
+// lately, which is not the same claim as the entry being out of date. The
+// content's own claim lives in ExpiredEntries and DeprecatedEntries. It was
+// called "stale" until both existed, which invited exactly that confusion.
+type UntouchedEntry struct {
 	Path           string `json:"path"`
 	LastTouchedAt  string `json:"last_touched_at,omitempty"`
 	DaysSinceTouch int    `json:"days_since_touch"`
@@ -135,9 +160,23 @@ func AggregateAt(workspaceRoot string, windowDays, staleDays int, now time.Time)
 		GeneratedAt:       now.UTC().Format(time.RFC3339),
 		PerStage:          []PerStageEntry{},
 		TopRecalled:       []TopRecalledEntry{},
-		StaleEntries:      []StaleEntry{},
+		UntouchedEntries:  []UntouchedEntry{},
 		GraduationHistory: []GraduationHistoryEntry{},
+		TrustDistribution: map[string]int{
+			okf.TrustHumanReviewed:    0,
+			okf.TrustMachineConfirmed: 0,
+			okf.TrustUnverified:       0,
+		},
+		ExpiredEntries:    []LifecycleEntry{},
+		DeprecatedEntries: []LifecycleEntry{},
 	}
+
+	// Lifecycle facts come off the entries on disk and are independent of
+	// telemetry. Scan BEFORE the telemetry file is opened: the open returns
+	// early when knowledge-events.jsonl is absent, which is the common case
+	// for a base that has never run the pipeline, and reporting an empty
+	// trust distribution there would be wrong rather than merely unhelpful.
+	scanLifecycle(workspaceRoot, &result, now)
 
 	path := telemetry.Path(workspaceRoot)
 	f, err := os.Open(path)
@@ -285,33 +324,33 @@ func AggregateAt(workspaceRoot string, windowDays, staleDays int, now time.Time)
 		result.TopRecalled = result.TopRecalled[:10]
 	}
 
-	// Stale: a touched path with no read/recall_hit since staleCutoff, OR a
-	// path that was scaffolded/written in the window but never read.
+	// Untouched: a touched path with no read/recall_hit since staleCutoff, OR
+	// a path that was scaffolded/written in the window but never read.
 	for p := range allPathsTouched {
 		last, hasRead := lastTouchByPath[p]
 		if !hasRead {
-			result.StaleEntries = append(result.StaleEntries, StaleEntry{
+			result.UntouchedEntries = append(result.UntouchedEntries, UntouchedEntry{
 				Path:           p,
 				DaysSinceTouch: staleDays + 1,
 			})
 			continue
 		}
 		if last.Before(staleCutoff) {
-			result.StaleEntries = append(result.StaleEntries, StaleEntry{
+			result.UntouchedEntries = append(result.UntouchedEntries, UntouchedEntry{
 				Path:           p,
 				LastTouchedAt:  last.UTC().Format(time.RFC3339),
 				DaysSinceTouch: int(now.Sub(last).Hours() / 24),
 			})
 		}
 	}
-	sort.SliceStable(result.StaleEntries, func(i, j int) bool {
-		if result.StaleEntries[i].DaysSinceTouch != result.StaleEntries[j].DaysSinceTouch {
-			return result.StaleEntries[i].DaysSinceTouch > result.StaleEntries[j].DaysSinceTouch
+	sort.SliceStable(result.UntouchedEntries, func(i, j int) bool {
+		if result.UntouchedEntries[i].DaysSinceTouch != result.UntouchedEntries[j].DaysSinceTouch {
+			return result.UntouchedEntries[i].DaysSinceTouch > result.UntouchedEntries[j].DaysSinceTouch
 		}
-		return result.StaleEntries[i].Path < result.StaleEntries[j].Path
+		return result.UntouchedEntries[i].Path < result.UntouchedEntries[j].Path
 	})
-	if len(result.StaleEntries) > 25 {
-		result.StaleEntries = result.StaleEntries[:25]
+	if len(result.UntouchedEntries) > 25 {
+		result.UntouchedEntries = result.UntouchedEntries[:25]
 	}
 
 	// Graduation history: most-recent first.
@@ -320,6 +359,52 @@ func AggregateAt(workspaceRoot string, windowDays, staleDays int, now time.Time)
 	})
 
 	return result, nil
+}
+
+// scanLifecycle reads every entry under the knowledge root and fills the
+// trust distribution plus the expired and deprecated lists. It uses the same
+// entry walker as the conformance check, so the two cannot disagree about
+// what counts as an entry.
+//
+// An unparseable entry is counted as unverified rather than dropped: it exists
+// in the base and nothing has confirmed it, which is exactly what that bucket
+// means.
+func scanLifecycle(workspaceRoot string, result *Result, now time.Time) {
+	root := filepath.Join(workspaceRoot, ".nightgauge", "knowledge")
+
+	_ = knowledge.WalkEntries(root, func(rel, _ string, block *knowledge.FrontmatterBlock, parseErr error) {
+		if parseErr != nil || block == nil {
+			result.TrustDistribution[okf.TrustUnverified]++
+			return
+		}
+		result.TrustDistribution[block.TrustTier()]++
+
+		status := block.EffectiveStatus()
+		if status == okf.StatusDeprecated {
+			result.DeprecatedEntries = append(result.DeprecatedEntries, LifecycleEntry{
+				Path:         rel,
+				Status:       status,
+				SupersededBy: block.SupersededBy,
+			})
+		}
+		if block.IsExpiredAt(now) {
+			result.ExpiredEntries = append(result.ExpiredEntries, LifecycleEntry{
+				Path:       rel,
+				Status:     status,
+				StaleAfter: block.StaleAfter,
+			})
+		}
+	}, nil)
+
+	capAndSort := func(list []LifecycleEntry) []LifecycleEntry {
+		sort.SliceStable(list, func(i, j int) bool { return list[i].Path < list[j].Path })
+		if len(list) > 25 {
+			return list[:25]
+		}
+		return list
+	}
+	result.ExpiredEntries = capAndSort(result.ExpiredEntries)
+	result.DeprecatedEntries = capAndSort(result.DeprecatedEntries)
 }
 
 // normalizePath converts an absolute or workspace-relative path emitted by

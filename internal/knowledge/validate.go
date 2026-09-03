@@ -245,19 +245,73 @@ func ValidateConformance(root string) (*ConformanceResult, error) {
 		Violations: []ConformanceViolation{},
 	}
 
-	info, err := os.Stat(root)
+	err := WalkEntries(root, func(rel, abs string, block *FrontmatterBlock, parseErr error) {
+		result.FilesChecked++
+		switch {
+		case parseErr != nil:
+			result.Violations = append(result.Violations, ConformanceViolation{
+				Path:   rel,
+				Reason: ReasonUnparseableFrontmatter,
+				// The parser prefixes the absolute path; strip it so the
+				// output does not leak local filesystem layout into PR bodies
+				// and pipeline logs.
+				Detail: strings.TrimPrefix(strings.TrimPrefix(parseErr.Error(), abs), ": "),
+			})
+		case block == nil:
+			result.Violations = append(result.Violations, ConformanceViolation{
+				Path:   rel,
+				Reason: ReasonNoFrontmatter,
+			})
+		case strings.TrimSpace(block.Type) == "":
+			result.Violations = append(result.Violations, ConformanceViolation{
+				Path:   rel,
+				Reason: ReasonMissingType,
+			})
+		}
+	}, &result.Skipped)
 	if err != nil {
 		if os.IsNotExist(err) {
 			result.Message = fmt.Sprintf("no knowledge base at %s — nothing to check", root)
 			return result, nil
 		}
-		return nil, fmt.Errorf("stat %s: %w", root, err)
-	}
-	if !info.IsDir() {
-		return nil, fmt.Errorf("%s is not a directory", root)
+		return nil, err
 	}
 
-	walkErr := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+	sort.Slice(result.Violations, func(i, j int) bool {
+		return result.Violations[i].Path < result.Violations[j].Path
+	})
+
+	result.Valid = len(result.Violations) == 0
+	if result.Valid {
+		result.Message = fmt.Sprintf("%d entr%s conform to the frontmatter contract", result.FilesChecked, plural(result.FilesChecked))
+	} else {
+		result.Message = fmt.Sprintf("%d of %d entr%s do not carry a parseable frontmatter block with a type",
+			len(result.Violations), result.FilesChecked, plural(result.FilesChecked))
+	}
+	return result, nil
+}
+
+// WalkEntries visits every knowledge entry under root, calling fn with the
+// entry's bundle-relative path, absolute path, parsed frontmatter (nil when
+// the file has none) and any parse error.
+//
+// This is the ONE definition of "what counts as an entry": a non-reserved
+// `.md` file outside a dot-directory. Conformance, metrics and anything else
+// that has an opinion about the base reads it from here, so the answers cannot
+// disagree.
+//
+// skipped, when non-nil, is incremented for each reserved file passed over.
+// A missing root returns fs.ErrNotExist for the caller to interpret.
+func WalkEntries(root string, fn func(rel, abs string, block *FrontmatterBlock, parseErr error), skipped *int) error {
+	info, err := os.Stat(root)
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("%s is not a directory", root)
+	}
+
+	return filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -274,57 +328,20 @@ func ValidateConformance(root string) (*ConformanceResult, error) {
 			return nil
 		}
 		if ReservedKnowledgeNames[name] {
-			result.Skipped++
+			if skipped != nil {
+				*skipped++
+			}
 			return nil
 		}
 
-		result.FilesChecked++
 		rel, relErr := filepath.Rel(root, path)
 		if relErr != nil {
 			rel = path
 		}
-		rel = filepath.ToSlash(rel)
-
 		block, parseErr := ParseFrontmatterFile(path)
-		switch {
-		case parseErr != nil:
-			result.Violations = append(result.Violations, ConformanceViolation{
-				Path:   rel,
-				Reason: ReasonUnparseableFrontmatter,
-				// The parser prefixes the absolute path; strip it so the
-				// output does not leak local filesystem layout into PR bodies
-				// and pipeline logs.
-				Detail: strings.TrimPrefix(strings.TrimPrefix(parseErr.Error(), path), ": "),
-			})
-		case block == nil:
-			result.Violations = append(result.Violations, ConformanceViolation{
-				Path:   rel,
-				Reason: ReasonNoFrontmatter,
-			})
-		case strings.TrimSpace(block.Type) == "":
-			result.Violations = append(result.Violations, ConformanceViolation{
-				Path:   rel,
-				Reason: ReasonMissingType,
-			})
-		}
+		fn(filepath.ToSlash(rel), path, block, parseErr)
 		return nil
 	})
-	if walkErr != nil {
-		return nil, fmt.Errorf("walk %s: %w", root, walkErr)
-	}
-
-	sort.Slice(result.Violations, func(i, j int) bool {
-		return result.Violations[i].Path < result.Violations[j].Path
-	})
-
-	result.Valid = len(result.Violations) == 0
-	if result.Valid {
-		result.Message = fmt.Sprintf("%d entr%s conform to the frontmatter contract", result.FilesChecked, plural(result.FilesChecked))
-	} else {
-		result.Message = fmt.Sprintf("%d of %d entr%s do not carry a parseable frontmatter block with a type",
-			len(result.Violations), result.FilesChecked, plural(result.FilesChecked))
-	}
-	return result, nil
 }
 
 func plural(n int) string {

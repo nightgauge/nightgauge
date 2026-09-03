@@ -28,7 +28,10 @@ function metrics(totals: Partial<KnowledgeMetricsResult["totals"]>): KnowledgeMe
     },
     per_stage: [],
     top_recalled: [],
-    stale_entries: [],
+    untouched_entries: [],
+    trust_distribution: { "human-reviewed": 0, "machine-confirmed": 0, unverified: 0 },
+    expired_entries: [],
+    deprecated_entries: [],
     graduation_history: [],
   };
 }

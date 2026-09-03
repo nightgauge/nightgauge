@@ -6968,12 +6968,43 @@ nightgauge knowledge recall "<query>" \
 **Scoring**: BM25 (Okapi BM25, `k1=1.5` `b=0.75` defaults) with:
 - **Path boost** (×1.5): when a query term appears as a substring of the document path
 - **Tag boost** (+0.5× per match): when a query term exactly matches a frontmatter tag
+- **Lifecycle multiplier**: applied last, so the reported `score` is the final ranked score
+
+Only the **body** is tokenised. Frontmatter is metadata: indexing it would put
+an actor like `process:retro` and a PR URL's host into every entry retro has
+touched, flattening IDF until a query for `retro` matched the whole corpus.
+
+**Lifecycle multiplier**: the base exists to make the next run better than the
+last, and feeding planning a deprecated decision or an expired runbook makes it
+worse, silently. Factors compose multiplicatively, so "deprecated *and*
+expired" ranks below either alone:
+
+| Factor                   | Default | Applies when                                  |
+| ------------------------ | ------- | ---------------------------------------------- |
+| `human_reviewed`         | 1.25    | Any `verified[].by` starts with `human:`       |
+| `machine_confirmed`      | 1.0     | Any `verified[]` entry, none of them human     |
+| `unverified`             | 0.85    | `verified` is empty                            |
+| `status_draft`           | 0.9     | `status: draft`                                |
+| `status_deprecated`      | 0.25    | `status: deprecated`                           |
+| `expired`                | 0.5     | `stale_after` is in the past                   |
+
+`status_deprecated` is deliberately non-zero: a deprecated decision is still
+the record of what was decided and why it changed, so it ranks last rather than
+vanishing.
+
+**Expiry is evaluated at query time**, not cached. An entry expiring is a clock
+event with no file change, and the cache is keyed on mtime — a flag frozen at
+index time would stay false forever for every entry indexed before its
+`stale_after`.
+
+There is exactly one scoring path: no plain-BM25 mode. Two paths is how a
+ranking change ends up applying to one caller and not the other.
 
 **Tie-breaking**: identical scores are broken by lexicographic path order (deterministic).
 
 **Graduated ADR de-duplication**: when a `decisions.md` has a `<!-- graduated-to: docs/path.md -->` marker and the graduation target also appears in results, the source is suppressed. The stable `docs/` location always wins. If the target is below `--limit`, the source appears with `"graduated": true`.
 
-**Cache**: index stored at `.nightgauge/knowledge/.recall-cache/index.jsonl` (JSONL, gitignored). Invalidation is by **document set plus per-file mtime**: the cache is rebuilt when a cached file's mtime changes, when a cached file is gone, **and when a document exists on disk that the cache has no entry for**. Full rebuild on `--update-cache` or BM25 parameter change.
+**Cache**: index stored at `.nightgauge/knowledge/.recall-cache/index.jsonl` (JSONL, gitignored), at `cacheVersion: 2`, which carries the lifecycle fields (`trust_tier`, `status`, and the raw `stale_after` stamp). The version bump is load-bearing: without it an existing warm cache with unchanged mtimes loads as valid and every document reads `unverified`/`stable` forever. Invalidation is by **document set plus per-file mtime**: the cache is rebuilt when a cached file's mtime changes, when a cached file is gone, **and when a document exists on disk that the cache has no entry for**. Full rebuild on `--update-cache` or BM25 parameter change.
 
 The membership half is load-bearing, not belt-and-braces. Validating only the entries the cache already holds answers "did anything I know about change?", which is structurally silent about *additions* — an unindexed file is never stat-ed, so it can never be found stale. A newly scaffolded knowledge document would then stay unreachable until some unrelated indexed file happened to change, and "nothing new was indexed" and "nothing new exists" would share one observable value: zero hits, exit 0. Membership is checked by directory enumeration only — no file reads, no tokenisation — so the warm path keeps the saving it exists for, and `BuildIndex` hands the same enumeration to both the cache validator and the scanner so the two cannot disagree about what belongs in the index.
 
@@ -6983,6 +7014,13 @@ knowledge:
   recall:
     bm25_k1: 1.5   # term frequency saturation (default 1.5)
     bm25_b: 0.75   # document length normalization (default 0.75)
+    weights:       # lifecycle multipliers; every field falls back to its default
+      human_reviewed: 1.25
+      machine_confirmed: 1.0
+      unverified: 0.85
+      status_draft: 0.9
+      status_deprecated: 0.25
+      expired: 0.5
 ```
 
 **JSON output shape** (`RecallResult`):
@@ -6999,7 +7037,11 @@ knowledge:
       "issue_number": 42,
       "tags": ["bm25", "scoring"],
       "snippet": "Use BM25 with k1=1.5 and b=0.75 defaults...",
-      "graduated": false
+      "graduated": false,
+      "trust_tier": "machine-confirmed",
+      "status": "stable",
+      "stale": false,
+      "lifecycle_multiplier": 1.0
     }
   ],
   "total_hits": 3

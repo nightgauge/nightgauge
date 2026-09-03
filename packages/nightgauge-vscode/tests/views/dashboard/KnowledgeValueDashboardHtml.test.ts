@@ -31,9 +31,14 @@ function makeResult(overrides: Partial<KnowledgeMetricsResult> = {}): KnowledgeM
       { path: "k/a.md", hits: 5 },
       { path: "k/b.md", hits: 3 },
     ],
-    stale_entries: [
+    untouched_entries: [
       { path: "old.md", last_touched_at: "2026-04-01T00:00:00Z", days_since_touch: 45 },
     ],
+    trust_distribution: { "human-reviewed": 1, "machine-confirmed": 2, unverified: 5 },
+    expired_entries: [
+      { path: "expired.md", status: "stable", stale_after: "2026-01-01T00:00:00Z" },
+    ],
+    deprecated_entries: [{ path: "old-adr.md", status: "deprecated", superseded_by: "#9" }],
     graduation_history: [
       {
         timestamp: "2026-05-15T10:00:00Z",
@@ -168,5 +173,45 @@ describe("KnowledgeValueDashboardHtml", () => {
     const html = getKnowledgeValueDashboardHtml(makeState(result));
     expect(html).not.toContain("<script>alert(1)</script>.md");
     expect(html).toContain("&lt;script&gt;alert(1)&lt;/script&gt;.md");
+  });
+});
+
+describe("lifecycle sections", () => {
+  it("renders the trust distribution with per-tier shares", () => {
+    const html = getKnowledgeValueDashboardHtml(makeState(makeResult()));
+
+    expect(html).toContain("Trust Distribution");
+    expect(html).toContain("Human reviewed");
+    expect(html).toContain("Machine confirmed");
+    expect(html).toContain("Unverified");
+    // 5 of 8 unverified → 63%.
+    expect(html).toContain("63%");
+  });
+
+  it("renders expired and deprecated entries separately from untouched ones", () => {
+    const html = getKnowledgeValueDashboardHtml(makeState(makeResult()));
+
+    // "Untouched" is a read-side proxy; "expired"/"deprecated" are claims the
+    // content makes about itself. Conflating them is what the rename fixed.
+    expect(html).toContain("Untouched Entries");
+    expect(html).not.toContain("Stale Entries");
+    expect(html).toContain("expired.md");
+    expect(html).toContain("old-adr.md");
+    expect(html).toContain("#9");
+  });
+
+  it("survives a payload with no lifecycle entries", () => {
+    const html = getKnowledgeValueDashboardHtml(
+      makeState(
+        makeResult({
+          trust_distribution: { "human-reviewed": 0, "machine-confirmed": 0, unverified: 0 },
+          expired_entries: [],
+          deprecated_entries: [],
+        })
+      )
+    );
+
+    expect(html).toContain("No knowledge entries on disk.");
+    expect(html).toContain("No expired or deprecated entries.");
   });
 });

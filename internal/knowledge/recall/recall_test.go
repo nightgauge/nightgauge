@@ -5,6 +5,9 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
+
+	"github.com/nightgauge/nightgauge/internal/config"
 )
 
 func TestTokenize_Basic(t *testing.T) {
@@ -311,5 +314,163 @@ func TestIndexFile_IgnoresFrontmatterTokens(t *testing.T) {
 	}
 	if res.TotalHits == 0 {
 		t.Error("body text is no longer indexed")
+	}
+}
+
+// lifecycleFixture writes five entries whose BODY text is identical and whose
+// frontmatter is the only thing that differs, so any ordering difference is
+// attributable to the lifecycle multiplier alone.
+func lifecycleFixture(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	const body = "\n# Decisions\n\nThe widget uses a ring buffer for the queue.\n"
+
+	entries := map[string]string{
+		"1-human":      "---\ntype: decisions\nverified:\n  - by: human:octocat\n---",
+		"2-machine":    "---\ntype: decisions\nverified:\n  - by: process:retro\n---",
+		"3-unverified": "---\ntype: decisions\n---",
+		"4-expired":    "---\ntype: decisions\nverified:\n  - by: process:retro\nstale_after: \"2020-01-01T00:00:00Z\"\n---",
+		"5-deprecated": "---\ntype: decisions\nverified:\n  - by: process:retro\nstatus: deprecated\n---",
+	}
+	for dir, fm := range entries {
+		p := filepath.Join(root, ".nightgauge", "knowledge", "features", dir)
+		if err := os.MkdirAll(p, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(p, "decisions.md"), []byte(fm+body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return root
+}
+
+func TestLifecycleRanking(t *testing.T) {
+	root := lifecycleFixture(t)
+
+	idx, err := BuildIndex(root, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	idx.Now = func() time.Time { return time.Date(2026, 9, 3, 0, 0, 0, 0, time.UTC) }
+
+	res, err := Query(idx, "ring buffer", 10, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Hits) != 5 {
+		t.Fatalf("hits = %d, want 5 (%+v)", len(res.Hits), res.Hits)
+	}
+
+	var order []string
+	for _, h := range res.Hits {
+		order = append(order, filepath.Base(filepath.Dir(h.Path)))
+	}
+	want := []string{"1-human", "2-machine", "3-unverified", "4-expired", "5-deprecated"}
+	for i := range want {
+		if order[i] != want[i] {
+			t.Fatalf("order = %v, want %v", order, want)
+		}
+	}
+
+	// Every hit explains its own ranking.
+	byDir := map[string]RecallHit{}
+	for _, h := range res.Hits {
+		byDir[filepath.Base(filepath.Dir(h.Path))] = h
+	}
+	if got := byDir["1-human"]; got.TrustTier != "human-reviewed" || got.LifecycleMultiplier != 1.25 {
+		t.Errorf("human hit = %+v", got)
+	}
+	if got := byDir["2-machine"]; got.TrustTier != "machine-confirmed" || got.LifecycleMultiplier != 1.0 {
+		t.Errorf("machine hit = %+v", got)
+	}
+	if got := byDir["3-unverified"]; got.TrustTier != "unverified" || got.LifecycleMultiplier != 0.85 {
+		t.Errorf("unverified hit = %+v", got)
+	}
+	// Multipliers compose: machine-confirmed 1.0 × expired 0.5.
+	if got := byDir["4-expired"]; !got.Stale || got.LifecycleMultiplier != 0.5 {
+		t.Errorf("expired hit = %+v", got)
+	}
+	// machine-confirmed 1.0 × deprecated 0.25.
+	if got := byDir["5-deprecated"]; got.Status != "deprecated" || got.LifecycleMultiplier != 0.25 {
+		t.Errorf("deprecated hit = %+v", got)
+	}
+}
+
+// TestLifecycleRanking_ExpiryIsEvaluatedAtQueryTime is the case a cached
+// boolean would fail. An entry expiring is a clock event with no file change,
+// and the recall cache is keyed on mtime — so a flag frozen at index time
+// would stay false forever.
+func TestLifecycleRanking_ExpiryIsEvaluatedAtQueryTime(t *testing.T) {
+	root := t.TempDir()
+	p := filepath.Join(root, ".nightgauge", "knowledge", "features", "1-widget")
+	if err := os.MkdirAll(p, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := "---\ntype: decisions\nstale_after: \"2026-06-01T00:00:00Z\"\n---\n\n# Decisions\n\nring buffer\n"
+	if err := os.WriteFile(filepath.Join(p, "decisions.md"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	idx, err := BuildIndex(root, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	idx.Now = func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) }
+	before, err := Query(idx, "ring buffer", 10, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before.Hits[0].Stale {
+		t.Error("entry read as stale before its stale_after")
+	}
+
+	// Same index, same file, later clock — nothing on disk changed.
+	idx.Now = func() time.Time { return time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC) }
+	after, err := Query(idx, "ring buffer", 10, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !after.Hits[0].Stale {
+		t.Error("entry did not become stale after its stale_after passed — expiry is not a query-time comparison")
+	}
+	if after.Hits[0].Score >= before.Hits[0].Score {
+		t.Errorf("expiring did not lower the score: %v then %v", before.Hits[0].Score, after.Hits[0].Score)
+	}
+}
+
+// TestLifecycleRanking_WeightsAreConfigurable proves the multipliers are read
+// from config rather than hard-coded, and that flattening them to 1.0 collapses
+// the ordering — the mutation that must make TestLifecycleRanking red.
+func TestLifecycleRanking_WeightsAreConfigurable(t *testing.T) {
+	root := lifecycleFixture(t)
+
+	one := 1.0
+	flat := &config.KnowledgeConfig{Recall: &config.RecallConfig{Weights: &config.RecallWeights{
+		HumanReviewed: &one, MachineConfirmed: &one, Unverified: &one,
+		StatusDraft: &one, StatusDeprecated: &one, Expired: &one,
+	}}}
+
+	idx, err := BuildIndex(root, nil, flat)
+	if err != nil {
+		t.Fatal(err)
+	}
+	idx.Now = func() time.Time { return time.Date(2026, 9, 3, 0, 0, 0, 0, time.UTC) }
+
+	res, err := Query(idx, "ring buffer", 10, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, h := range res.Hits {
+		if h.LifecycleMultiplier != 1.0 {
+			t.Errorf("%s multiplier = %v under flat weights", h.Path, h.LifecycleMultiplier)
+		}
+	}
+	// With every factor at 1.0 the five identical bodies tie and fall back to
+	// the path tie-break, which is lexicographic.
+	for i := 1; i < len(res.Hits); i++ {
+		if res.Hits[i-1].Score != res.Hits[i].Score {
+			t.Fatalf("flat weights should tie every score: %+v", res.Hits)
+		}
 	}
 }

@@ -5406,6 +5406,11 @@ func (s *Server) registerMethods() {
 				Tags:        h.Tags,
 				Snippet:     h.Snippet,
 				Graduated:   h.Graduated,
+
+				TrustTier:           h.TrustTier,
+				Status:              h.Status,
+				Stale:               h.Stale,
+				LifecycleMultiplier: h.LifecycleMultiplier,
 			})
 			if len(filtered) >= limit {
 				break
@@ -5714,6 +5719,11 @@ func convertRecallHits(hits []recall.RecallHit, tagFilter []string) []KnowledgeR
 			Tags:        h.Tags,
 			Snippet:     h.Snippet,
 			Graduated:   h.Graduated,
+
+			TrustTier:           h.TrustTier,
+			Status:              h.Status,
+			Stale:               h.Stale,
+			LifecycleMultiplier: h.LifecycleMultiplier,
 		})
 	}
 	return out

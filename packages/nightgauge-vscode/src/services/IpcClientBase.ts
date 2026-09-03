@@ -1436,10 +1436,25 @@ export interface KnowledgeMetricsTopRecalled {
   hits: number;
 }
 
-export interface KnowledgeMetricsStaleEntry {
+/**
+ * One row in the untouched-entries table.
+ *
+ * "Untouched" is a READ-side proxy: nobody has looked at the entry lately,
+ * which is not the same claim as the entry being out of date. The content's
+ * own claim lives in `expired_entries` and `deprecated_entries`.
+ */
+export interface KnowledgeMetricsUntouchedEntry {
   path: string;
   last_touched_at?: string;
   days_since_touch: number;
+}
+
+/** One row in the expired- or deprecated-entries table. */
+export interface KnowledgeMetricsLifecycleEntry {
+  path: string;
+  status: string;
+  stale_after?: string;
+  superseded_by?: string;
 }
 
 export interface KnowledgeMetricsGraduationEntry {
@@ -1462,6 +1477,14 @@ export interface KnowledgeRecallHit {
   tags?: string[];
   snippet: string;
   graduated?: boolean;
+  /** human-reviewed | machine-confirmed | unverified, derived from `verified`. */
+  trust_tier?: string;
+  /** draft | stable | deprecated. */
+  status?: string;
+  /** True when the entry's `stale_after` has passed, evaluated at query time. */
+  stale: boolean;
+  /** The lifecycle factor applied to the BM25 score, so ranking is explainable. */
+  lifecycle_multiplier: number;
 }
 
 /** Result from knowledge.search (#2964). */
@@ -1490,8 +1513,14 @@ export interface KnowledgeMetricsResult {
   totals: KnowledgeMetricsTotals;
   per_stage: KnowledgeMetricsPerStage[];
   top_recalled: KnowledgeMetricsTopRecalled[];
-  stale_entries: KnowledgeMetricsStaleEntry[];
+  untouched_entries: KnowledgeMetricsUntouchedEntry[];
   graduation_history: KnowledgeMetricsGraduationEntry[];
+  /** Entry count per trust tier; always carries all three keys. */
+  trust_distribution: Record<string, number>;
+  /** Entries whose `stale_after` has passed. */
+  expired_entries: KnowledgeMetricsLifecycleEntry[];
+  /** Entries marked `status: deprecated`. */
+  deprecated_entries: KnowledgeMetricsLifecycleEntry[];
 }
 
 /**

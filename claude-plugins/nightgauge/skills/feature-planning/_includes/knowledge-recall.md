@@ -169,6 +169,32 @@ else
 fi
 ```
 
+**Reading a recall hit.** Every hit carries lifecycle metadata alongside its
+score:
+
+| Field                  | Meaning                                                               |
+| ---------------------- | --------------------------------------------------------------------- |
+| `trust_tier`           | `human-reviewed`, `machine-confirmed`, or `unverified`                |
+| `status`               | `draft`, `stable`, or `deprecated`                                    |
+| `stale`                | `true` when the entry's `stale_after` has passed                      |
+| `lifecycle_multiplier` | The factor already applied to `score`, so the ranking explains itself |
+
+Treat them as follows, and say so in the plan when a hit's tier changes how you
+weigh it:
+
+- **`stale: true` or `status: deprecated` is context about the past, not
+  guidance.** It records what was decided and why it changed. Cite it when
+  explaining a reversal; never carry it forward as a current constraint.
+- **`unverified` is a model's unreviewed draft.** Nothing has confirmed it —
+  not a merge, not a person. Treat it as a hypothesis worth checking against
+  the code, not as an established decision.
+- **`human-reviewed` outranks `machine-confirmed` outranks `unverified`** at
+  equal relevance, and the ranking already reflects that.
+
+**`.score` is the lifecycle-weighted score**, not raw BM25 — the threshold
+below is compared against the weighted number, so a deprecated entry can fall
+under a threshold a relevance-equal current entry clears. That is the intent.
+
 **RECALL_HITS** is now set for use in:
 
 - Phase 4 (Produce Plan): include "## Prior Decisions" section when non-empty
