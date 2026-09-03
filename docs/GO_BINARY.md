@@ -2297,10 +2297,11 @@ partial view must never drive an auto-resolve. Both paths exit `0` unless
 
 **Registered repo-scoped producers:**
 
-| Producer                | Raises when                                       | Severity         |
-| ----------------------- | ------------------------------------------------- | ---------------- |
-| `default-branch-health` | A required check is failing on the default branch | `blocking_fleet` |
-| `human-gate`            | An open PR is green and blocked on a person       | `blocking_run`   |
+| Producer                | Raises when                                        | Severity         |
+| ----------------------- | -------------------------------------------------- | ---------------- |
+| `default-branch-health` | A required check is failing on the default branch  | `blocking_fleet` |
+| `default-branch-health` | Only non-required checks are failing on it (#1250) | `fyi`            |
+| `human-gate`            | An open PR is green and blocked on a person        | `blocking_run`   |
 
 Adding a producer is one self-contained file and requires no change to the
 sweep — see [ATTENTION_PRODUCERS.md](ATTENTION_PRODUCERS.md).

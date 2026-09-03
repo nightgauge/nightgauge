@@ -305,7 +305,10 @@ let any local process lift the hold on an issue nobody clicked on.
 `blocking_fleet` is a strong claim and the surface treats it as interrupt-worthy
 — it is named in the view header so it survives a collapsed tree. Make the claim
 only when it is literally true. A failing check that is not _required_ blocks no
-merge, so it is not `blocking_fleet` no matter how red it looks.
+merge, so it is not `blocking_fleet` no matter how red it looks — but "blocks
+nothing" is not "worth nothing". `default-branch-health` cards that case at
+`fyi` (#1250): silence there was the one configuration in which a red default
+branch was never reported by anything.
 
 ## Say only what you observed
 
