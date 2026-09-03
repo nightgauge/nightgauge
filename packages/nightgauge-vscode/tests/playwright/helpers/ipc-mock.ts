@@ -42,7 +42,6 @@ export interface MockStatusCounts {
   ready: number;
   inProgress: number;
   inReview: number;
-  done: number;
   backlog: number;
 }
 
@@ -148,7 +147,7 @@ export function createIpcMock(options: MockIpcOptions = {}) {
       },
       boardCounts: function(owner, projectNumber) {
         return mockMethod('boardCounts', [owner, projectNumber], function() {
-          return Promise.resolve(opts.boardCounts || { ready: 0, inProgress: 0, inReview: 0, done: 0, backlog: 0 });
+          return Promise.resolve(opts.boardCounts || { ready: 0, inProgress: 0, inReview: 0, backlog: 0 });
         });
       },
       configGetProjectConfig: function(root) {

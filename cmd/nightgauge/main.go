@@ -35,6 +35,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/executor"
 	"github.com/nightgauge/nightgauge/internal/focus"
 	"github.com/nightgauge/nightgauge/internal/forge"
+	"github.com/nightgauge/nightgauge/internal/forge/boardcache"
 	gitpkg "github.com/nightgauge/nightgauge/internal/git"
 	gh "github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/internal/hooks"
@@ -4582,7 +4583,14 @@ func serveCmd() *cobra.Command {
 			// root and the loaded config are passed in because the daemon's
 			// working directory is not a checkout — resolving from it bound
 			// project 0 and failed (billably) on every board read (#844).
-			opts = append(opts, ipc.WithForgeClientFactory(cachedSweepForgeClient(workspaceRoot, cfg)))
+			//
+			// The board snapshot cache is built here, once, and shared by the
+			// sweep's forge clients, the IPC board verbs and the autonomous
+			// scheduler's graph builds (#845): six repos on one board are one
+			// read, whichever subsystem asked first.
+			boards := boardcache.New(0)
+			opts = append(opts, ipc.WithForgeClientFactory(cachedSweepForgeClientWith(workspaceRoot, cfg, boards)))
+			opts = append(opts, ipc.WithBoardCache(boards))
 
 			// Export the configured GitHub token so deterministic `gh`
 			// subprocesses (gates, recovery, board status, skill shell-outs)
@@ -4924,6 +4932,10 @@ func serveCmd() *cobra.Command {
 						autoSched = orchestrator.NewAutonomousScheduler(
 							sched, client, repoConfigs, nil, autoCfg, workspaceRoot,
 						)
+						// Graph builds read boards through the daemon's shared
+						// snapshot cache rather than issuing their own full
+						// board read per repo (#845, #847).
+						autoSched.SetBoardCache(server.BoardCache())
 						// (#4151) Resolve the post-merge survival observation window
 						// from pipeline.survival.window_days (safe on a nil Pipeline).
 						autoSched.SetSurvivalWindowDays(cfg.Pipeline.ResolveSurvivalWindowDays())

@@ -19,6 +19,7 @@
  */
 
 import type { CostPerSuccessContext, ExecutionHistoryRecord } from "@nightgauge/sdk";
+import { flattenRunRecords } from "@nightgauge/sdk";
 import { ExecutionHistoryReader } from "./executionHistoryReader";
 import { getModelRoutingBoolean } from "./resolvers/modelResolver";
 
@@ -97,53 +98,14 @@ export function getCostPerSuccessContext(workspaceRoot: string): CostPerSuccessC
 }
 
 /**
- * Flatten run-level JSONL history records into the flat per-stage
- * `ExecutionHistoryRecord` shape the SDK aggregator expects. Only the fields
- * the cost-per-success aggregation needs are populated; the rest use safe
- * zeroes. Records without per-stage model-selection data are skipped.
+ * Per-stage records for the cost-per-success aggregation — the SDK's one
+ * run-record → analyzer-record mapper (#461), restricted to stages that
+ * carried a `model_selection` block since the aggregation keys on the model.
  */
-function flattenRunRecords(rawRecords: unknown[]): ExecutionHistoryRecord[] {
-  const flat: ExecutionHistoryRecord[] = [];
-  for (const raw of rawRecords) {
-    const run = raw as {
-      record_type?: string;
-      issue_number?: number;
-      started_at?: string;
-      stages?: Record<
-        string,
-        {
-          status?: string;
-          duration_ms?: number;
-          started_at?: string;
-          model_selection?: { model?: string };
-        }
-      >;
-      tokens?: {
-        per_stage?: Record<string, { input?: number; output?: number; cost_usd?: number }>;
-      };
-    };
-    if (run.record_type !== "run" || !run.stages) continue;
-
-    for (const [stageName, stage] of Object.entries(run.stages)) {
-      const model = stage.model_selection?.model;
-      if (!model) continue;
-      const perStage = run.tokens?.per_stage?.[stageName];
-      flat.push({
-        issueNumber: run.issue_number ?? 0,
-        stage: stageName,
-        adapter: "claude",
-        model,
-        success: stage.status === "complete",
-        retries: 0,
-        inputTokens: perStage?.input ?? 0,
-        outputTokens: perStage?.output ?? 0,
-        costUsd: perStage?.cost_usd ?? 0,
-        durationMs: stage.duration_ms ?? 0,
-        timestamp: stage.started_at ?? run.started_at ?? new Date().toISOString(),
-      });
-    }
-  }
-  return flat;
+function routedStageRecords(rawRecords: unknown[]): ExecutionHistoryRecord[] {
+  return flattenRunRecords(rawRecords as Array<Record<string, unknown>>).filter(
+    (record) => record.model !== undefined
+  );
 }
 
 /**
@@ -155,7 +117,7 @@ export async function refreshCostPerSuccessContext(workspaceRoot: string): Promi
   let context: CostPerSuccessContext | undefined;
   try {
     const rawRecords = await ExecutionHistoryReader.readAll(workspaceRoot);
-    context = buildCostPerSuccessFromRecords(flattenRunRecords(rawRecords));
+    context = buildCostPerSuccessFromRecords(routedStageRecords(rawRecords));
   } catch {
     context = undefined;
   }

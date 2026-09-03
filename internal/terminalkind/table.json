@@ -390,6 +390,45 @@
       "why": "Harness tool-call denial (#289) — most commonly a stage reaching for a forbidden foreground `sleep` wait loop, surfaced as `tool_use_result: \"User rejected tool use\"`. A denial is the harness saying \"not that way\", not a defect; above the crash fallback, whose `exit ` substring turned one rejected tool call into a permanently killed run and a fleet-wide pause. Deliberately NOT matched on the bare phrase `permission denied`: a filesystem `EACCES: permission denied` is an infrastructure fault with the opposite recovery."
     },
     {
+      "id": "stage-context-unreadable",
+      "kind": "stage_context_unreadable",
+      "signal": false,
+      "clauses": [
+        ["stage_context_unreadable"],
+        ["stage gate failed: failed to read"],
+        ["stage gate failed: failed to stat"]
+      ],
+      "why": "A post-condition gate could not READ a file the stage's contract says it wrote (#1237) — the stage context, planning's plan_file, or gate-metrics.jsonl — for a reason other than absence (EISDIR, ENOTDIR, EACCES). Absence is the no-op path and classifies premature_turn_end; this is a filesystem fault, not a defect in the work. The gate sets the kind structurally; these clauses cover text-classified paths and records written before the sweep. Gated on the scheduler's `stage gate failed:` wrapper so an unrelated stage that merely says `failed to read` keeps its own classification. Above the crash fallback, whose `exit ` substring booked every one of these as a process death."
+    },
+    {
+      "id": "dev-build-verification-missing",
+      "kind": "dev_build_verification_missing",
+      "signal": false,
+      "clauses": [["dev_build_verification_missing"], ["dev context lacks build_verification"]],
+      "why": "feature-dev's gate found no build_verification object in the dev context (#1237): the skill skipped the verification step the completion contract requires (#55). The agent's behaviour, not the code's — and not a crash, which is what the `exit ` fallback called it."
+    },
+    {
+      "id": "dev-build-verification-failed",
+      "kind": "dev_build_verification_failed",
+      "signal": false,
+      "clauses": [["dev_build_verification_failed"], ["build_verification.status=failed"]],
+      "why": "feature-dev ran its build and recorded status=failed (#1237). An organic implementation failure caught by the pipeline's own gate, in the same family as validation_failed; recording it as subagent_crash sent auto-triage down a crash-recovery path for a fault that never happened."
+    },
+    {
+      "id": "dev-tests-failed",
+      "kind": "dev_tests_failed",
+      "signal": false,
+      "clauses": [["dev_tests_failed"], ["dev context records failing tests"]],
+      "why": "feature-dev's own test run recorded tests_status.failed > 0 (#1237). Organic, like the build case, and kept apart from it because the two say different things about what to fix."
+    },
+    {
+      "id": "pr-merge-lookup-failed",
+      "kind": "pr_merge_lookup_failed",
+      "signal": false,
+      "clauses": [["pr_merge_lookup_failed"], ["gh pr view failed after retries"]],
+      "why": "pr-merge's gate could not establish the PR's state (#1237): `gh pr view` failed or was rate-limited on every attempt AND the local-git fallback found no merge commit. The merge may well have happened — the gate could not see it. Infrastructure, not the code; distinct from pr_merge_unmerged, which is a PR the gate DID see and found open."
+    },
+    {
       "id": "subagent-crash",
       "kind": "subagent_crash",
       "signal": false,

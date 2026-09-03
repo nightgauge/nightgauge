@@ -67,7 +67,13 @@ const STATUS_BADGES: Record<string, string> = {
   fair: "🟡",
   poor: "🟠",
   critical: "🔴",
+  "no-data": "⚪",
 };
+
+/** `null` (no dimension had data, #1197) renders as N/A, never as a number. */
+function formatOverallScore(score: number | null): string {
+  return score === null ? "N/A" : `${score}/100`;
+}
 
 // ── Sparkline Rendering ─────────────────────────────────────────────
 
@@ -226,7 +232,7 @@ export class HealthReportGenerator {
     lines.push("# Pipeline Health Report");
     lines.push("");
     lines.push(
-      `**Overall Score**: ${statusBadge} **${result.overallScore}/100** (${result.overallStatus})`
+      `**Overall Score**: ${statusBadge} **${formatOverallScore(result.overallScore)}** (${result.overallStatus})`
     );
     lines.push("");
     lines.push(`> ${result.summary}`);
@@ -328,7 +334,7 @@ export class HealthReportGenerator {
     const lines: string[] = [];
 
     lines.push(
-      `Pipeline Health: ${result.overallStatus.toUpperCase()} (${result.overallScore}/100)`
+      `Pipeline Health: ${result.overallStatus.toUpperCase()} (${formatOverallScore(result.overallScore)})`
     );
     lines.push("");
 
@@ -362,7 +368,11 @@ export class HealthReportGenerator {
     }
 
     // Baseline trend
-    if (options.baselineResult) {
+    if (
+      options.baselineResult &&
+      result.overallScore !== null &&
+      options.baselineResult.overallScore !== null
+    ) {
       const scoreChange = result.overallScore - options.baselineResult.overallScore;
       const dir = scoreChange > 0 ? "improving" : scoreChange < 0 ? "degrading" : "stable";
       lines.push("");
@@ -498,9 +508,19 @@ export class HealthReportGenerator {
     }
 
     const baseline = options.baselineResult;
-    const overallChange = result.overallScore - baseline.overallScore;
-    const overallDirection: "improving" | "stable" | "degrading" =
-      overallChange > 0 ? "improving" : overallChange < 0 ? "degrading" : "stable";
+    // Either side N/A → no overall delta; per-dimension deltas still apply.
+    const overallChange =
+      result.overallScore !== null && baseline.overallScore !== null
+        ? result.overallScore - baseline.overallScore
+        : undefined;
+    const overallDirection: "improving" | "stable" | "degrading" | undefined =
+      overallChange === undefined
+        ? undefined
+        : overallChange > 0
+          ? "improving"
+          : overallChange < 0
+            ? "degrading"
+            : "stable";
 
     const perDimension: Record<
       string,

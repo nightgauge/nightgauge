@@ -42,7 +42,7 @@ func (FeatureValidateGate) Verify(_ context.Context, issueNumber int, workspace 
 
 		results, err := state.ReadGateMetricsForIssue(workspace, issueNumber)
 		if err != nil {
-			return false, "failed to read gate-metrics.jsonl", []string{err.Error()}, KindFail, ""
+			return false, "failed to read gate-metrics.jsonl", []string{err.Error()}, KindFail, TerminalKindStageContextUnreadable
 		}
 		if len(results) == 0 {
 			// validate skill said success but never wrote any quality-gate

@@ -29,7 +29,7 @@ func (FeaturePlanningGate) Verify(_ context.Context, issueNumber int, workspace 
 					fmt.Sprintf("expected %s", ctxPath),
 				}, KindNoOp, ""
 			}
-			return false, "failed to read planning context file", []string{err.Error()}, KindFail, ""
+			return false, "failed to read planning context file", []string{err.Error()}, KindFail, TerminalKindStageContextUnreadable
 		}
 
 		var planCtx struct {
@@ -56,7 +56,7 @@ func (FeaturePlanningGate) Verify(_ context.Context, issueNumber int, workspace 
 					fmt.Sprintf("plan_file=%s", planCtx.PlanFile),
 				}, KindNoOp, ""
 			}
-			return false, "failed to stat plan_file", []string{err.Error()}, KindFail, ""
+			return false, "failed to stat plan_file", []string{err.Error()}, KindFail, TerminalKindStageContextUnreadable
 		}
 		if stat.Size() == 0 {
 			return false, "plan_file is empty", []string{

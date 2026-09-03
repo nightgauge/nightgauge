@@ -1125,6 +1125,14 @@ type PipelineNotifyCompleteParams struct {
 	// authoritative history stage record, letting operators read WHY the
 	// expensive LLM path ran from history alone.
 	StagePuntReasons map[string]string `json:"stagePuntReasons,omitempty"`
+	// FailureDetail is the raw failure text the orchestrator observed when
+	// Success is false (#1329) — `PipelineRunResult.error.message`. It is the
+	// ONLY reason available for a run that latched terminal before any stage
+	// started (no stage error, no exit record): the handler persists it as the
+	// record's terminal_failure_detail and writes a `pre-dispatch` exit record
+	// from it. When a stage did fail, the stage's own error wins and this is
+	// only the classification fallback. Optional; empty on success.
+	FailureDetail string `json:"failureDetail,omitempty"`
 	// RunID is the run identity the server keys on (ADR-017 step 4, Decision
 	// 1). REQUIRED: absent is run_id_required, non-canonical is
 	// run_id_invalid. TERMINAL class (Decision 3) — this is THE CLAIM, so a

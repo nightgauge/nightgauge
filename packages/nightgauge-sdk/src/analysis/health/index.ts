@@ -4,7 +4,12 @@
  * @see Issue #1101 - Multi-Dimensional Health Analysis Engine
  */
 
-export { HealthAnalysisEngine } from "./HealthAnalysisEngine.js";
+export {
+  HealthAnalysisEngine,
+  computeOverallHealthScore,
+  getOverallHealthStatus,
+  type ScoredDimension,
+} from "./HealthAnalysisEngine.js";
 export { HealthTrendsWriter } from "./HealthTrendsWriter.js";
 export { FindingToIssueEngine } from "./FindingToIssueEngine.js";
 export { RecommendationTracker } from "./RecommendationTracker.js";
@@ -69,12 +74,21 @@ export { analyzeLearningEffectiveness } from "./dimensions/learningEffectiveness
 export { analyzePipelineVelocity } from "./dimensions/pipelineVelocity.js";
 export { analyzeSkillDrift } from "./dimensions/skillDrift.js";
 
+// Execution-history feeder — the one JSONL-run-record → per-stage mapper (#461)
+export { flattenRunRecords } from "./executionHistoryFeeder.js";
+export type {
+  HistoryRunRecordInput,
+  HistoryRunStageInput,
+  HistoryRunStageTokensInput,
+} from "./executionHistoryFeeder.js";
+
 export type {
   HealthDimension,
   HealthTrendEntry,
   HealthTrendsReadOptions,
   Severity,
   HealthStatus,
+  OverallHealthStatus,
   Confidence,
   TrendDirection,
   Finding,
