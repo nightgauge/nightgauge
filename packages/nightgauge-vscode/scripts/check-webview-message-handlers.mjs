@@ -15,15 +15,27 @@
 //
 // ── Extraction strategy ──────────────────────────────────────────────────
 //
-// Every webview panel in this codebase (verified across all 14 as of #752)
-// routes `panel.webview.onDidReceiveMessage` to a method literally named
+// Every webview panel in this codebase (verified across all 18 as of #1199)
+// routes `panel.webview.onDidReceiveMessage` to a member literally named
 // `handleMessage` — either defined inline in the panel class, or in a
 // sibling `*MessageHandler.ts` class the panel delegates to
-// (`this.messageHandler.handleMessage`). That naming convention is what
+// (`this.messageHandler.handleMessage`), and declared either as a **method**
+// (`handleMessage(...) { ... }`) or an **arrow-function class property**
+// (`handleMessage = (...) => { ... }`, needed so `this` stays bound when the
+// function is torn off and handed to `onDidReceiveMessage` by reference — see
+// OutputWindowMessageHandler.ts, SettingsMessageHandler.ts,
+// TelemetrySettingsMessageHandler.ts, NotifierSettingsMessageHandler.ts,
+// invisible to this script before #1199). That naming convention is what
 // makes generic extraction possible without a hand-maintained per-webview
-// registry: find `handleMessage(...) { ... }`, take its balanced-brace body,
-// and read the dispatch out of it — a top-level `switch (x.type) { case
-// "...": }`, or an if/else chain of `x.type === "..."` comparisons.
+// registry: find either declaration form, take its balanced-brace body, and
+// read the dispatch out of it — a top-level `switch (x.type) { case "...":
+// }`, or an if/else chain of `x.type === "..."` comparisons.
+//
+// A third guard (`HANDLE_MESSAGE_DECL_RE`) scans for *any* declaration-shaped
+// `handleMessage` occurrence — modifiers/type-annotation-agnostic — so that a
+// declaration form neither extractor recognises is reported as UNPARSED
+// rather than silently dropping the whole webview out of coverage the way
+// the arrow-property form did pre-#1199 (`handled.size === 0` skip below).
 //
 // Scoping extraction to the `handleMessage` body (rather than scanning the
 // whole file for any `case "...":`) is what avoids the false positives a
@@ -154,21 +166,59 @@ function findMatchingClose(text, openIdx, openChar, closeChar) {
 // handleMessage body extraction
 // ---------------------------------------------------------------------------
 
-const HANDLE_MESSAGE_RE =
+// Method declaration: `handleMessage(...) { ... }` / `async handleMessage(...): T { ... }`
+const HANDLE_MESSAGE_METHOD_RE =
   /(?:private|public|protected)?\s*(?:static\s+)?(?:async\s+)?handleMessage\s*\([^)]*\)\s*(?::\s*[^{]+)?\{/g;
+
+// Arrow-function class property: `handleMessage = (...) => { ... }` /
+// `handleMessage = async (...): Promise<T> => { ... }`. This is the
+// declaration form the pre-#1199 extractor never matched (#1199).
+const HANDLE_MESSAGE_ARROW_RE =
+  /(?:private|public|protected)?\s*(?:readonly\s+)?(?:static\s+)?handleMessage\s*(?::\s*[^=]+)?=\s*(?:async\s+)?\([^)]*\)\s*(?::\s*[^=]+)?=>\s*\{/g;
+
+// Any declaration-shaped `handleMessage` occurrence, regardless of whether
+// either extractor above recognises it — used only to detect a declaration
+// form neither pattern parses, so it is reported as unparsed instead of
+// silently vanishing (see `findUnparsedDeclarations` and #1199). Excludes a
+// `.handleMessage` reference/call (e.g. `this.handleMessage(msg)`,
+// `handler.handleMessage`) via the negative lookbehind, and excludes a
+// longer identifier merely containing the substring (e.g.
+// `handleMessageSentFeedback`) via the leading/trailing word boundaries.
+const HANDLE_MESSAGE_DECL_RE = /(?<![.\w])handleMessage\b\s*[:=(]/g;
 
 function extractHandleMessageBodies(text) {
   const bodies = [];
-  HANDLE_MESSAGE_RE.lastIndex = 0;
-  let m;
-  while ((m = HANDLE_MESSAGE_RE.exec(text))) {
-    const openBraceIdx = m.index + m[0].length - 1;
-    const endIdx = findMatchingClose(text, openBraceIdx, "{", "}");
-    if (endIdx === -1) continue;
-    bodies.push(text.slice(openBraceIdx + 1, endIdx - 1));
-    HANDLE_MESSAGE_RE.lastIndex = endIdx;
+  const matchedRanges = []; // [start, end) covered by a recognised declaration + body
+  for (const re of [HANDLE_MESSAGE_METHOD_RE, HANDLE_MESSAGE_ARROW_RE]) {
+    re.lastIndex = 0;
+    let m;
+    while ((m = re.exec(text))) {
+      const openBraceIdx = m.index + m[0].length - 1;
+      const endIdx = findMatchingClose(text, openBraceIdx, "{", "}");
+      if (endIdx === -1) continue;
+      bodies.push(text.slice(openBraceIdx + 1, endIdx - 1));
+      matchedRanges.push([m.index, endIdx]);
+      re.lastIndex = endIdx;
+    }
   }
-  return bodies;
+  return { bodies, matchedRanges };
+}
+
+/** Declaration-shaped `handleMessage` occurrences not covered by either
+ * extraction pattern's matched range — a form the guard cannot parse. Returns
+ * 1-based line numbers for the report. */
+function findUnparsedDeclarations(text, matchedRanges) {
+  const lines = [];
+  HANDLE_MESSAGE_DECL_RE.lastIndex = 0;
+  let m;
+  while ((m = HANDLE_MESSAGE_DECL_RE.exec(text))) {
+    const idx = m.index;
+    const covered = matchedRanges.some(([start, end]) => idx >= start && idx < end);
+    if (!covered) {
+      lines.push(text.slice(0, idx).split("\n").length);
+    }
+  }
+  return lines;
 }
 
 const CASE_RE = /case\s+(['"])((?:\\.|(?!\1).)*)\1\s*:/g;
@@ -233,23 +283,27 @@ const KNOWN_PRE_EXISTING_ORPHANS = new Set(["views/summary::handler::close"]);
 // ---------------------------------------------------------------------------
 
 function analyze(files) {
-  /** @type {Map<string, {handled: Map<string,string[]>, posted: Map<string,string[]>}>} */
+  /** @type {Map<string, {handled: Map<string,string[]>, posted: Map<string,string[]>, unparsed: string[]}>} */
   const groups = new Map();
 
   for (const file of files) {
     const key = groupKeyFor(file);
     if (!groups.has(key)) {
-      groups.set(key, { handled: new Map(), posted: new Map() });
+      groups.set(key, { handled: new Map(), posted: new Map(), unparsed: [] });
     }
     const group = groups.get(key);
     const text = readFileSync(file, "utf8");
     const relFile = relative(PACKAGE_DIR, file);
 
-    for (const body of extractHandleMessageBodies(text)) {
+    const { bodies, matchedRanges } = extractHandleMessageBodies(text);
+    for (const body of bodies) {
       for (const type of extractHandledTypes(body)) {
         if (!group.handled.has(type)) group.handled.set(type, []);
         group.handled.get(type).push(relFile);
       }
+    }
+    for (const line of findUnparsedDeclarations(text, matchedRanges)) {
+      group.unparsed.push(`${relFile}:${line}`);
     }
     for (const type of extractPostedTypes(text)) {
       if (!group.posted.has(type)) group.posted.set(type, []);
@@ -268,8 +322,25 @@ function main() {
   const report = [];
   const allowlistedNotes = [];
 
-  for (const [key, { handled, posted }] of [...groups.entries()].sort()) {
-    if (handled.size === 0) continue; // not a message-handling webview
+  for (const [key, { handled, posted, unparsed }] of [...groups.entries()].sort()) {
+    // A group with no recognised handler AND no unparsed declaration really
+    // has no webview to check. A group with an unparsed declaration is
+    // reported below even when `handled` is otherwise empty — that is
+    // exactly the "lost a webview without saying so" failure #1199 fixed:
+    // silently treating it as "not a webview" is what let four go blind.
+    if (handled.size === 0 && unparsed.length === 0) continue;
+
+    let headerPrinted = false;
+    if (unparsed.length > 0) {
+      failed = true;
+      report.push(`\n${key}:`);
+      headerPrinted = true;
+      for (const loc of unparsed.sort()) {
+        report.push(
+          `  UNPARSED handleMessage: ${loc} declares \`handleMessage\` in a form this guard cannot extract (neither method nor arrow-property syntax matched). Fix the guard's extraction patterns, not this webview — losing coverage here defeats the whole check.`
+        );
+      }
+    }
 
     const orphanedHandlers = [...handled.keys()]
       .filter((t) => !posted.has(t))
@@ -295,7 +366,7 @@ function main() {
     if (orphanedHandlers.length === 0 && unhandledPosts.length === 0) continue;
 
     failed = true;
-    report.push(`\n${key}:`);
+    if (!headerPrinted) report.push(`\n${key}:`);
     for (const type of orphanedHandlers) {
       report.push(
         `  ORPHANED HANDLER: "${type}" is handled in ${handled.get(type).join(", ")} but no webview script posts it.`
