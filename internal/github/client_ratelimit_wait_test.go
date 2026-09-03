@@ -49,6 +49,7 @@ func TestRateLimitGate_WaitsThenProceeds_WhenEnabled(t *testing.T) {
 	t.Setenv(rateLimitFloorEnv, "100")
 
 	c := NewClientWithURL("test-token", srv.URL).WithRateLimitTracker(tr, "alice").WithRateLimitWait()
+	disableGateJitter(c)
 
 	start := time.Now()
 	if _, err := NewRepoService(c).RepoMetadata(context.Background(), "nightgauge", "nightgauge"); err != nil {

@@ -226,6 +226,9 @@ type Server struct {
 	// something finished, for the SweepMinGap check (#848). Read and written
 	// only while holding sweepMu, so it needs no lock of its own.
 	lastSweepAt time.Time
+	// sweepMinGap is this daemon's SweepMinGap with ±20% jitter, drawn once in
+	// NewServer; zero (a literal Server in tests) means the bare constant.
+	sweepMinGap time.Duration
 
 	// boards is the daemon-wide board snapshot cache (#845), shared by every
 	// board verb through boardServicesFor. One cache for the process, keyed by
@@ -282,7 +285,8 @@ func NewServer(client *gh.Client, opts ...ServerOption) *Server {
 		forgeRegistry:  make(map[string]ForgeInstanceConfig),
 		// Zero TTL takes boardcache.DefaultTTL. Constructed before options run
 		// so a test can still override it.
-		boards: boardcache.New(0),
+		boards:      boardcache.New(0),
+		sweepMinGap: jitteredSweepGap(),
 	}
 	for _, opt := range opts {
 		opt(s)
