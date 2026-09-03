@@ -71,6 +71,14 @@ var sweepForgeClient = func(root, repo string) (forge.ForgeClient, error) {
 // resolver already knows the request cannot succeed, so issuing it would spend
 // points to be told so.
 func cachedSweepForgeClient(workspaceRoot string, cfg *config.Config) func(repo string) (forge.ForgeClient, error) {
+	return cachedSweepForgeClientWith(workspaceRoot, cfg, boardcache.New(0))
+}
+
+// cachedSweepForgeClientWith is cachedSweepForgeClient over a caller-owned
+// board snapshot cache. The daemon passes the one cache its IPC board verbs
+// and the autonomous scheduler's graph builds also read through, so a graph
+// build inside the TTL of a sweep issues no board read at all.
+func cachedSweepForgeClientWith(workspaceRoot string, cfg *config.Config, boards *boardcache.Cache) func(repo string) (forge.ForgeClient, error) {
 	type routerKey struct {
 		owner   string
 		project int
@@ -78,12 +86,14 @@ func cachedSweepForgeClient(workspaceRoot string, cfg *config.Config) func(repo 
 	var (
 		mu      sync.Mutex
 		routers = map[routerKey]*forge.Router{}
-		// One cache for the whole factory, not one per repo: in a shared-board
-		// workspace several repos resolve to the SAME board, and keying the
-		// cache by (owner, project) rather than by repo is what lets the second
-		// repo's sweep reuse the first repo's snapshot (#845).
-		boards = boardcache.New(0)
 	)
+	// One cache for the whole factory, not one per repo: in a shared-board
+	// workspace several repos resolve to the SAME board, and keying the
+	// cache by (owner, project) rather than by repo is what lets the second
+	// repo's sweep reuse the first repo's snapshot (#845).
+	if boards == nil {
+		boards = boardcache.New(0)
+	}
 	return func(repo string) (forge.ForgeClient, error) {
 		project := config.ResolveRepoProject(cfg, config.RepoProjectQuery{
 			Repo:     repo,
