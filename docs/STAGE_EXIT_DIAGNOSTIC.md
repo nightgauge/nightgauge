@@ -88,6 +88,32 @@ leak is never **silent**: the exit record is the one artifact written on every
 terminal path, including the ones with no code of their own left to run, so it
 is where a stranded stash has to appear.
 
+### Pre-Dispatch Failures (#1329)
+
+"Every terminal path" includes the one with no stage exit at all: a run that
+latches terminal between issue pickup and the first stage exit (a spawn error,
+a missing config, a dispatcher exception). No subprocess ran, so nothing called
+`diagnostics.recordStageExit`, the runtime snapshot was removed at the latch,
+and the history record carried only the generic `subagent_crash` fallback kind
+with `stages: {}` — a red run with no reason anywhere on disk.
+
+The `pipeline.notifyComplete` handler now writes a synthetic exit record with
+`stage: "pre-dispatch"` for that path, and the reason lands in two places:
+
+| Field                     | Where                                | Content                                                                                                                       |
+| ------------------------- | ------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------- |
+| `failure_detail`          | exit record, `stage == pre-dispatch` | The extension's `PipelineRunResult.error.message`, forwarded as `failureDetail`. Tail-truncated to 2048 runes, `…`-prefixed.  |
+| `terminal_failure_detail` | history run record (V3)              | The same text — or, when a stage did fail, that stage's own error. Tail-truncated to 2048 runes. Present on every failed run. |
+
+Only the pre-dispatch path gets a synthetic exit record; a stage that exited
+already has a real one, and its reason is the stage's own error.
+
+```bash
+# Runs that died before any stage started, with their reason
+jq -r 'select(.stage=="pre-dispatch") | "\(.issue) \(.terminal_kind) \(.failure_detail)"' \
+  .nightgauge/pipeline/exit-records/$(date +%F).jsonl
+```
+
 Scoped to the record's own issue, so a concurrent run's stash is never
 attributed to this stage, and omitted entirely when nothing leaked — a field
 that is always present is a field readers learn to skip. Reclaim with
