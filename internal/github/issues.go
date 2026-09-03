@@ -403,16 +403,15 @@ func (s *IssueService) ListIssues(ctx context.Context, owner, repo string, label
 	// labels(first: 8) — issues rarely carry more than the canonical
 	// type:/component:/priority:/size: set. Was 20 before #3587 follow-up;
 	// paginated query at first: 100 makes labels-per-item the dominant
-	// nested cost.
+	// nested cost. Read as a labelPage so an issue with more than 8 labels
+	// is flagged LabelsTruncated instead of silently losing the rest (#998).
 	type issueNode struct {
-		ID     graphql.ID
-		Number graphql.Int
-		Title  graphql.String
-		State  graphql.String
-		URL    graphql.String
-		Labels struct {
-			Nodes []labelNode
-		} `graphql:"labels(first: 8)"`
+		ID        graphql.ID
+		Number    graphql.Int
+		Title     graphql.String
+		State     graphql.String
+		URL       graphql.String
+		Labels    labelPage `graphql:"labels(first: 8)"`
 		Milestone struct {
 			Title graphql.String
 		}
@@ -471,9 +470,8 @@ func (s *IssueService) ListIssues(ctx context.Context, owner, repo string, label
 			URL:       string(n.URL),
 			Milestone: string(n.Milestone.Title),
 		}
-		for _, l := range n.Labels.Nodes {
-			issue.Labels = append(issue.Labels, string(l.Name))
-		}
+		issue.Labels = n.Labels.names()
+		issue.LabelsTruncated = n.Labels.truncated()
 		issues = append(issues, issue)
 	}
 
@@ -862,10 +860,7 @@ func (s *IssueService) ListIssuesExcludingLabels(ctx context.Context, owner, rep
 		Title             graphql.String
 		CreatedAt         graphql.String
 		AuthorAssociation graphql.String `graphql:"authorAssociation"`
-		Labels            struct {
-			TotalCount graphql.Int
-			Nodes      []labelNode
-		} `graphql:"labels(first: 20)"`
+		Labels            labelPage      `graphql:"labels(first: 20)"`
 	}
 
 	var q struct {
@@ -893,14 +888,12 @@ func (s *IssueService) ListIssuesExcludingLabels(ctx context.Context, owner, rep
 
 	var results []UnrefinedIssue
 	for _, n := range q.Repository.Issues.Nodes {
-		labels := make([]string, 0, len(n.Labels.Nodes))
-		for _, l := range n.Labels.Nodes {
-			labels = append(labels, string(l.Name))
-		}
+		labels := n.Labels.names()
 
 		// Fail closed on a truncated label list: we cannot prove the issue
-		// lacks an excluded label, so we must not assert that it does.
-		if int(n.Labels.TotalCount) > len(n.Labels.Nodes) {
+		// lacks an excluded label, so we must not assert that it does. Same
+		// polarity as the board scan's LabelsTruncated (#998).
+		if n.Labels.truncated() {
 			log.Printf("issues: #%d in %s/%s carries %d labels but only %d were returned — "+
 				"excluding it from the candidate set rather than risk re-processing an already-labelled issue",
 				int(n.Number), owner, repo, int(n.Labels.TotalCount), len(n.Labels.Nodes))

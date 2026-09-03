@@ -197,9 +197,11 @@ func (b *BoardService) nodeToItem(node projectItemNode) *types.BoardItem {
 		item.UpdatedAt, _ = time.Parse(time.RFC3339, string(f.UpdatedAt))
 		item.IsPR = false
 		item.AuthorAssociation = string(f.AuthorAssociation)
-		for _, l := range f.Labels.Nodes {
-			item.Labels = append(item.Labels, string(l.Name))
-		}
+		item.Labels = f.Labels.names()
+		// Recorded rather than silently producing a short slice: the owner-action
+		// dispatch exclusion, IsEpic, Priority and Size all read item.Labels,
+		// and a clipped list would make every one of them fail open (#998).
+		item.LabelsTruncated = f.Labels.truncated()
 		// Sub-issue relationships (GitHub native)
 		for _, si := range f.SubIssues.Nodes {
 			item.SubIssues = append(item.SubIssues, types.SubIssueRef{
@@ -250,9 +252,8 @@ func (b *BoardService) nodeToItem(node projectItemNode) *types.BoardItem {
 		item.CreatedAt, _ = time.Parse(time.RFC3339, string(f.CreatedAt))
 		item.UpdatedAt, _ = time.Parse(time.RFC3339, string(f.UpdatedAt))
 		item.IsPR = true
-		for _, l := range f.Labels.Nodes {
-			item.Labels = append(item.Labels, string(l.Name))
-		}
+		item.Labels = f.Labels.names()
+		item.LabelsTruncated = f.Labels.truncated()
 	default:
 		log.Printf("depgraph: board: nodeToItem dropping item id=%v type=%q (DraftIssue or unknown)", node.ID, node.Content.TypeName)
 		return nil
