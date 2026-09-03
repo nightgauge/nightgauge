@@ -106,6 +106,25 @@ describe("PipelineStateService.notifyPipelineComplete — prMerged forwarding (#
     });
   });
 
+  // #1329: the terminal failure reason is forwarded verbatim so the Go handler
+  // can persist it as terminal_failure_detail for a run that never started a
+  // stage, and omitted on the wire when there is none.
+  it("forwards failureDetail verbatim and omits it when absent", async () => {
+    await make().notifyPipelineComplete({
+      success: false,
+      totalDurationMs: 1239,
+      stagesRun: [],
+      failureDetail: "spawn claude ENOENT",
+    });
+    let [, params] = callSpy.mock.calls[0] as [string, Record<string, unknown>];
+    expect(params).toMatchObject({ success: false, failureDetail: "spawn claude ENOENT" });
+
+    callSpy.mockClear();
+    await make().notifyPipelineComplete({ success: true, totalDurationMs: 10, stagesRun: [] });
+    [, params] = callSpy.mock.calls[0] as [string, Record<string, unknown>];
+    expect("failureDetail" in params).toBe(false);
+  });
+
   // Absent maps default to empty objects (Go omitempty drops them on the wire).
   it("defaults the execution-path maps to empty objects when omitted", async () => {
     await make().notifyPipelineComplete({

@@ -272,6 +272,11 @@ async function watchRun(root, issueNumber, wallClockMs, costCapUsd) {
         `terminal_failure_kind=${history.terminal_failure_kind || ""} ` +
         `duration_ms=${history.total_duration_ms || 0} stage_errors=${stageErrors || "(none)"}`
     );
+    // #1329: the reason behind the kind. A failure before the first stage has
+    // `stages: {}`, so this is the only place its cause appears in the log.
+    if (history.terminal_failure_detail) {
+      log(`history record: terminal_failure_detail=${history.terminal_failure_detail}`);
+    }
   } else {
     log("history record: none");
   }
@@ -322,6 +327,7 @@ async function watchRun(root, issueNumber, wallClockMs, costCapUsd) {
       totalDurationMs: history.total_duration_ms,
       estimatedCostUsd: history.tokens && history.tokens.estimated_cost_usd,
       terminalFailureKind: history.terminal_failure_kind,
+      terminalFailureDetail: history.terminal_failure_detail,
       stageErrors: Object.fromEntries(
         Object.entries(history.stages || {})
           .filter(([, v]) => v && v.error)

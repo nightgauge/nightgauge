@@ -1371,6 +1371,14 @@ export class PipelineStateService implements vscode.Disposable {
      * RuntimeState so `punt_reason` lands on the history stage record.
      */
     stagePuntReasons?: Record<string, string>;
+    /**
+     * #1329: the raw failure text when `success` is false. The Go
+     * notifyComplete handler persists it as the run record's
+     * terminal_failure_detail and — when no stage ever exited — writes the
+     * `pre-dispatch` exit record from it. Without it a failure before the
+     * first stage records only the generic `subagent_crash` kind.
+     */
+    failureDetail?: string;
   }): Promise<void> {
     // A terminal claim needs a run to close (Decision 3's terminal class), so
     // an identity-less service has nothing to claim and sends nothing — the
@@ -1398,6 +1406,7 @@ export class PipelineStateService implements vscode.Disposable {
         deferred: result.deferred ?? false,
         stageExecutionPaths: result.stageExecutionPaths ?? {},
         stagePuntReasons: result.stagePuntReasons ?? {},
+        ...(result.failureDetail ? { failureDetail: result.failureDetail } : {}),
         ...(meta?.budget_estimate_source
           ? {
               budgetEstimateUsd: meta.budget_estimate_usd ?? 0,

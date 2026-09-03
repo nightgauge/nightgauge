@@ -8032,6 +8032,7 @@ func (s *Scheduler) recordV2History(
 		SkipStages:             snap.SkippedStages,
 		ChangeClass:            resolveRecordedChangeClass(snap, workspaceRoot),
 		TerminalFailureKind:    terminalFailureKind,
+		TerminalFailureDetail:  errMsg,
 		StageOutputTails:       snap.StageOutputTails,
 		StageFailureCategories: stageFailureCategories,
 		OutcomeType:            OutcomeTypeForTerminalFailure(errMsg),
