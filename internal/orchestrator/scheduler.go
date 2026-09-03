@@ -645,6 +645,13 @@ type Scheduler struct {
 	evaluatePostMergeFn func(ctx context.Context, issueSvc hooks.IssueFetcher, issueCloser hooks.IssueCloser,
 		epicSvc hooks.EpicAutoCloser, prVerifier hooks.PRVerifier, boardSvc hooks.BoardSyncer,
 		input hooks.PostMergeInput) hooks.PostMergeResult
+	// mainCheckReaderFn builds the reader EvaluatePostMerge uses to observe the
+	// base branch after a merge (#1249). A seam for the same reason as
+	// evaluatePostMergeFn, plus one more: *github.CIService speaks REST to
+	// api.github.com whatever GraphQL URL the client was built with, so a
+	// hand-built test Scheduler must get no reader rather than a live one.
+	// Defaulted in NewScheduler.
+	mainCheckReaderFn func(client *gh.Client) hooks.MainCheckReader
 
 	// epicCheckpoint latches the autonomous scheduler's between-epic safety
 	// pause when an epic auto-closes.
@@ -902,6 +909,7 @@ func NewScheduler(client *gh.Client, cfg SchedulerConfig) *Scheduler {
 		// Default to the real evaluator; tests override to drive the
 		// AutoClosed branch without a live GitHub client (#991).
 		evaluatePostMergeFn:       hooks.EvaluatePostMerge,
+		mainCheckReaderFn:         func(c *gh.Client) hooks.MainCheckReader { return gh.NewCIService(c) },
 		client:                    client,
 		boardSvc:                  gh.NewBoardService(client, cfg.Owner, cfg.ProjectNumber, cfg.OwnerType),
 		issueSvc:                  gh.NewIssueService(client),
@@ -8687,6 +8695,11 @@ func (s *Scheduler) verifyPRMergeForStage(ctx context.Context, item types.BoardI
 	// process happens to be in. Skip the breadcrumb instead.
 	if pmResult.MergedCommitSha != "" || pmResult.MergedAt != "" {
 		runtime.SetMergeOutcome(pmResult.MergedCommitSha, pmResult.MergedAt)
+		// (#1249) The run record carries what main did with the merge, next to
+		// the breadcrumb that names the commit it did it to.
+		if mc := pmResult.MainChecks; mc != nil {
+			runtime.SetMainCheckOutcome(string(mc.Verdict), mc.FailingNames())
+		}
 		if runRoot := s.runRoot(item.Repo); runRoot != "" {
 			if persistErr := runtime.Persist(filepath.Join(runRoot, ".nightgauge", "pipeline")); persistErr != nil {
 				log.Printf("#%d: warning: failed to persist merge breadcrumb: %v", item.Number, persistErr)
@@ -8713,11 +8726,26 @@ func (s *Scheduler) verifyPRMergeForStage(ctx context.Context, item types.BoardI
 	// infers the owning repo from WHERE the file is.
 	if pmResult.SurvivalEligible && s.workspaceRoot != "" {
 		store := survival.NewStore(s.workspaceRoot)
-		rec := survival.NewPending(item.Repo, item.Number, mergedPRNumber, pmResult.MergedCommitSha, pmResult.MergedAt, "")
+		rec := survival.NewPending(item.Repo, item.Number, mergedPRNumber, pmResult.MergedCommitSha, pmResult.MergedAt, pmResult.BaseRef)
+		if mc := pmResult.MainChecks; mc != nil {
+			rec.MainCheckVerdict = string(mc.Verdict)
+			rec.MainCheckFailing = mc.FailingNames()
+		}
 		if added, appErr := store.Append(rec); appErr != nil {
 			log.Printf("#%d: warning: failed to record survival breadcrumb: %v", item.Number, appErr)
 		} else if added {
 			log.Printf("#%d: recorded pending survival record (merge %s)", item.Number, survivalShortSHA(pmResult.MergedCommitSha))
+		}
+	}
+
+	// (#1249) File the observation in the Action Center: a red merge raises the
+	// branch's standing merge-commit-checks card, a green one retracts it.
+	// s.attention is only wired on the autonomous path; the CLI hook is the
+	// writer everywhere else (cmd/nightgauge/post_merge_report.go).
+	if mc := pmResult.MainChecks; mc != nil {
+		owner, repo := splitOwnerRepo(item.Repo)
+		if note := hooks.ReportMainChecks(s.attention, owner, repo, pmResult.BaseRef, item.Number, mergedPRNumber, *mc); note != "" {
+			log.Printf("#%d: post-merge: %s", item.Number, note)
 		}
 	}
 	return false

@@ -39,10 +39,7 @@ func errorSuffix(errText string) string {
 // auto-retract. Fail-open throughout — the hook is non-blocking, and a card
 // that cannot be written must not turn a successful merge into an error.
 func raisePostMergeFailureCard(workdir, owner, repo string, issueNumber int, result hooks.PostMergeResult) {
-	root := config.MainCheckoutRoot(workdir)
-	if root == "" {
-		root = workdir
-	}
+	root := attentionRoot(workdir)
 	if root == "" {
 		return
 	}
@@ -79,5 +76,35 @@ func raisePostMergeFailureCard(workdir, owner, repo string, issueNumber int, res
 
 	if _, _, raiseErr := attention.New(root).Raise(req); raiseErr != nil {
 		fmt.Fprintf(os.Stderr, "Note: could not raise an attention card for the post-merge failure: %v\n", raiseErr)
+	}
+}
+
+// attentionRoot resolves the Action Center store root for the hook: the main
+// checkout when workdir is a worktree, else workdir itself. Empty when there is
+// nowhere to write.
+func attentionRoot(workdir string) string {
+	root := config.MainCheckoutRoot(workdir)
+	if root == "" {
+		root = workdir
+	}
+	return root
+}
+
+// reportMainChecks files the #1249 post-merge observation of the base branch in
+// the Action Center: a red merge raises the branch's standing
+// `merge-commit-checks` card, a green one retracts it, and every other verdict
+// says nothing. Lives here for the same reason raisePostMergeFailureCard does —
+// this CLI verb is the writer on the extension and hand-merge paths, where the
+// scheduler's store is not wired. Fail-open; the hook stays non-blocking.
+func reportMainChecks(workdir, owner, repo string, issueNumber, prNumber int, result hooks.PostMergeResult) {
+	if result.MainChecks == nil {
+		return
+	}
+	root := attentionRoot(workdir)
+	if root == "" {
+		return
+	}
+	if note := hooks.ReportMainChecks(attention.New(root), owner, repo, result.BaseRef, issueNumber, prNumber, *result.MainChecks); note != "" {
+		fmt.Fprintf(os.Stderr, "Post-merge: %s\n", note)
 	}
 }

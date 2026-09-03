@@ -213,6 +213,13 @@ const STAGE_NO_OUTPUT_TIMEOUT_MS = 10 * 60 * 1000;
  */
 const COMPLETION_RECONCILE_TIMEOUT_MS = 240 * 1000;
 const PR_MERGE_DIAGNOSIS_TIMEOUT_MS = 120 * 1000;
+/**
+ * Upper bound on `nightgauge hook post-merge` (#1249). The hook polls the merge
+ * commit's check runs on the base branch for up to hooks.DefaultMainCheckTimeout
+ * (20 min); this is that budget plus headroom for the issue-close, board-sync
+ * and epic-rollup calls around it. Killing the hook mid-poll records nothing.
+ */
+const POST_MERGE_HOOK_TIMEOUT_MS = 25 * 60 * 1000;
 
 /**
  * Reject `promise` if it hasn't settled within `timeoutMs`. The underlying
@@ -3543,10 +3550,15 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         args.splice(4, 0, "--pr", String(prNumber));
       }
 
+      // The hook now waits out the merge commit's check runs on the base
+      // branch (#1249): up to its own 20-minute budget, so main's run is
+      // observed rather than predicted. The old 30s timeout would kill it
+      // mid-poll and record nothing — this bound is the hook's budget plus
+      // headroom for the reconciliation calls around it.
       const { stdout } = await execFileAsync(binary, args, {
         cwd,
         encoding: "utf-8",
-        timeout: 30_000,
+        timeout: POST_MERGE_HOOK_TIMEOUT_MS,
       });
       this.logger.info("Post-merge hook completed", {
         issueNumber,

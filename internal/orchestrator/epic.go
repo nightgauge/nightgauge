@@ -41,13 +41,23 @@ func (s *Scheduler) checkEpicCompletion(ctx context.Context, item types.BoardIte
 	if evaluate == nil {
 		evaluate = hooks.EvaluatePostMerge
 	}
-	result := evaluate(ctx, s.issueSvc, s.issueSvc, epicSvc, prVerifier, boardSvc, hooks.PostMergeInput{
+	input := hooks.PostMergeInput{
 		IssueNumber:     item.Number,
 		RepositoryOwner: ownerPart,
 		RepositoryName:  repoPart,
 		ProjectNumber:   s.projectNumber,
 		PRNumber:        prNumber,
-	})
+	}
+	// (#1249) Wire the check reader so the hook observes main after the merge.
+	// Through the seam, not gh.NewCIService directly: the CI service speaks REST
+	// to api.github.com regardless of the client's GraphQL URL, so a test that
+	// builds a Scheduler by hand must not be able to reach the network by
+	// omission. NewScheduler installs the real reader.
+	if s.client != nil && s.mainCheckReaderFn != nil {
+		input.MainChecks = s.mainCheckReaderFn(s.client)
+		input.MainCheckWait = hooks.DefaultMainCheckWait()
+	}
+	result := evaluate(ctx, s.issueSvc, s.issueSvc, epicSvc, prVerifier, boardSvc, input)
 
 	if result.AutoClosed {
 		// Epic fully closed (all sub-issues merged) — bridge "closed" → "ready to
@@ -75,8 +85,8 @@ func (s *Scheduler) checkEpicCompletion(ctx context.Context, item types.BoardIte
 
 	// boardSync is logged because the hook is non-blocking: a board that failed
 	// to reach Done is otherwise invisible on this path too (#691).
-	log.Printf("#%d: post-merge hook: issueClosed=%v autoClosed=%v epic=#%d reason=%s boardSync=%s",
-		item.Number, result.IssueClosed, result.AutoClosed, result.EpicNumber, result.Reason, result.IssueDoneSync)
+	log.Printf("#%d: post-merge hook: issueClosed=%v autoClosed=%v epic=#%d reason=%s boardSync=%s mainChecks=%s",
+		item.Number, result.IssueClosed, result.AutoClosed, result.EpicNumber, result.Reason, result.IssueDoneSync, mainCheckWord(result))
 	return result
 }
 
@@ -129,4 +139,13 @@ func (s *Scheduler) FindReadySubIssues(ctx context.Context, epicOwner, epicRepo 
 	}
 
 	return ready, nil
+}
+
+// mainCheckWord is the log rendering of the #1249 verdict; "-" when the hook
+// never reached the observation.
+func mainCheckWord(result hooks.PostMergeResult) string {
+	if result.MainChecks == nil {
+		return "-"
+	}
+	return string(result.MainChecks.Verdict)
 }
