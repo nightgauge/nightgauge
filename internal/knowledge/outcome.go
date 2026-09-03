@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/nightgauge/nightgauge/internal/knowledge/okf"
 )
 
 // RecordOutcomeInput holds the inputs for RecordOutcome.
@@ -18,6 +20,7 @@ type RecordOutcomeInput struct {
 	WhatWentWell   string // optional narrative
 	WhatDidnt      string // optional narrative
 	LessonsLearned string // optional narrative
+	PRURL          string // optional; recorded as a source on the entry
 }
 
 // RecordOutcomeResult holds the result of RecordOutcome.
@@ -41,9 +44,23 @@ var validOutcomeStatuses = map[string]bool{
 	"failed":   true,
 }
 
-// RecordOutcome appends a structured ## Outcome Markdown block to the
-// knowledge base file for the given issue. It prefers decisions.md when
-// it already exists; otherwise creates and writes to outcomes.md.
+// RecordOutcome appends a structured ## Outcome Markdown block to the issue's
+// decisions.md, then stamps a `verified` event from process:retro and records
+// the merged PR as a source.
+//
+// decisions.md is the only target. The former outcomes.md fallback split the
+// retro learning loop across two filenames while decisions.md was the only one
+// anything read back; it never produced a file in this tree and is gone.
+//
+// A missing decisions.md is created rather than reported: PruneEmpty deletes a
+// whole issue directory when nothing in it is substantive, and
+// knowledge.enabled=false means it was never scaffolded. Failing there would
+// lose the outcome — the one durable artifact of the run — over a file this
+// function is perfectly able to create correctly.
+//
+// The verified event is what makes an entry machine-confirmed: retro runs
+// after the PR merged, so the decisions it records survived a real merge
+// rather than being a model's unreviewed first draft.
 //
 // The operation is idempotent: if an outcome block for this issue already
 // exists in the target file (detected by the "## Outcome" + "**Issue**: #N"
@@ -71,15 +88,8 @@ func RecordOutcome(workspaceRoot string, input RecordOutcomeInput) (RecordOutcom
 
 	relPath, _ := filepath.Rel(workspaceRoot, knowledgePath)
 
-	// Determine target file: prefer decisions.md when it exists.
-	decisionsPath := filepath.Join(knowledgePath, "decisions.md")
-	outcomesPath := filepath.Join(knowledgePath, "outcomes.md")
-
-	targetPath := outcomesPath
+	targetPath := filepath.Join(knowledgePath, "decisions.md")
 	fileCreated := false
-	if _, err := os.Stat(decisionsPath); err == nil {
-		targetPath = decisionsPath
-	}
 
 	relTarget, _ := filepath.Rel(workspaceRoot, targetPath)
 
@@ -104,6 +114,19 @@ func RecordOutcome(workspaceRoot string, input RecordOutcomeInput) (RecordOutcom
 		fileCreated = true
 	}
 
+	// Seed a conformant decisions.md when the directory has none, so the
+	// outcome lands in a file that carries the frontmatter contract rather
+	// than one the conformance check will reject.
+	if fileCreated {
+		seed, seedErr := seedDecisions(input.IssueNumber)
+		if seedErr != nil {
+			return RecordOutcomeResult{}, seedErr
+		}
+		if err := os.WriteFile(targetPath, []byte(seed), 0o644); err != nil {
+			return RecordOutcomeResult{}, fmt.Errorf("create %s: %w", relTarget, err)
+		}
+	}
+
 	block := formatOutcomeBlock(input)
 
 	f, err := os.OpenFile(targetPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
@@ -118,6 +141,11 @@ func RecordOutcome(workspaceRoot string, input RecordOutcomeInput) (RecordOutcom
 		return RecordOutcomeResult{}, fmt.Errorf("close %s: %w", relTarget, err)
 	}
 
+	// Stamp after the append, so the provenance describes the final file.
+	if err := stampRetroVerification(targetPath, input); err != nil {
+		return RecordOutcomeResult{}, err
+	}
+
 	return RecordOutcomeResult{
 		IssueNumber:   input.IssueNumber,
 		KnowledgePath: relPath,
@@ -130,6 +158,40 @@ func RecordOutcome(workspaceRoot string, input RecordOutcomeInput) (RecordOutcom
 		Tokens:        input.Tokens,
 		CostUSD:       input.CostUSD,
 	}, nil
+}
+
+// seedDecisions renders a minimal, contract-conformant decisions.md for an
+// issue whose knowledge directory was pruned or never scaffolded.
+func seedDecisions(issueNumber int) (string, error) {
+	fm, err := okf.ScaffoldFrontmatter(
+		okf.TypeDecisions,
+		okf.WithTitle(fmt.Sprintf("Decisions: #%d", issueNumber)),
+	)
+	if err != nil {
+		return "", fmt.Errorf("render decisions frontmatter: %w", err)
+	}
+	return fmt.Sprintf("%s\n# Decisions: #%d\n\n## Architecture Decisions\n", fm, issueNumber), nil
+}
+
+// stampRetroVerification records that retro confirmed this entry, and cites the
+// merged PR as the source. The actor is constructed, never a literal, so it
+// cannot drift from the contract's convention.
+func stampRetroVerification(targetPath string, input RecordOutcomeInput) error {
+	actor, err := okf.ProcessActor("retro")
+	if err != nil {
+		return err
+	}
+	in := okf.StampInput{VerifiedBy: actor}
+	if input.PRURL != "" {
+		in.Sources = []okf.Source{{
+			Resource: input.PRURL,
+			Title:    fmt.Sprintf("PR for #%d", input.IssueNumber),
+		}}
+	}
+	if _, _, err := okf.Stamp(targetPath, in); err != nil {
+		return fmt.Errorf("stamp retro verification: %w", err)
+	}
+	return nil
 }
 
 // findKnowledgePath locates the knowledge directory for the given issue by

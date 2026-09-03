@@ -11,6 +11,16 @@ and this project adheres to
 
 ### Changed
 
+- Outcomes always land in `decisions.md`. The `outcomes.md` fallback is gone: it
+  split the retro learning loop across two filenames while `decisions.md` was
+  the only one anything read back, and it never produced a file in this tree. A
+  missing `decisions.md` is now created carrying the frontmatter contract
+  rather than reported as an error — losing the outcome over a file the binary
+  can create correctly would defeat the point of recording it.
+- `knowledge record-outcome` now also records the verification event
+  (`verified: {by: process:retro}`) that promotes an entry from `unverified` to
+  `machine-confirmed`, and accepts `--pr-url` to cite the merged PR as a
+  source. Phase 9.2 reads that URL from `.nightgauge/pipeline/pr-{N}.json`.
 - Migrate all direct `gh` invocations to `nightgauge forge` (#3363, Wave 4 of forge-abstraction epic #3349). Skill now works against GitLab as well as GitHub via the forge abstraction.
 
 ## [1.2.0] - 2026-03

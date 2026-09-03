@@ -270,15 +270,15 @@ Counts: deterministic 1, probabilistic 5, borderline 4.
 
 Counts: deterministic 3, probabilistic 3, borderline 7.
 
-| #          | Phase                                                  | Lines       | Recommendation | Proposed mechanism                                                                                                                    |
-| ---------- | ------------------------------------------------------ | ----------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| 30         | Phase 2.1 — Batch failure extraction                   | L271-L332   | **adopt**      | `nightgauge pipeline batch-failures --issue N`                                                                                        |
-| (25 cont.) | Phase 2.2 — Non-complete runs from history             | L334-L403   | **adopt**      | Same `pipeline aggregate` verb with `--filter outcome!=complete`.                                                                     |
-| 31         | Phase 2.3 — Session-log failure regex scan             | L406-L484   | **adopt**      | `nightgauge logs scan-failures --since DATE --issue N` (consolidates with existing `scripts/retro/classifiers/failure_classifier.py`) |
-| 32         | Phase 4 — Failure category classification              | L567-L617   | **adopt**      | **Already exists**: `nightgauge failure classify`. Skill is drift — should call the existing verb (`component:skill`).                |
-| 33         | Phase 9 — Append outcome to decisions.md / outcomes.md | L1131-L1324 | **adopt**      | `nightgauge knowledge record-outcome --issue N --status STR --duration MIN --tokens N --cost USD`                                     |
-| —          | Phase 2.4 — Incomplete pipelines                       | L486-L521   | **defer**      | Tiny logic; fold into batch-failures.                                                                                                 |
-| —          | Phase 7 — Recommendation render                        | L805-L1002  | **defer**      | Templates fixed but action descriptions still need AI to fill in.                                                                     |
+| #          | Phase                                      | Lines       | Recommendation | Proposed mechanism                                                                                                                    |
+| ---------- | ------------------------------------------ | ----------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| 30         | Phase 2.1 — Batch failure extraction       | L271-L332   | **adopt**      | `nightgauge pipeline batch-failures --issue N`                                                                                        |
+| (25 cont.) | Phase 2.2 — Non-complete runs from history | L334-L403   | **adopt**      | Same `pipeline aggregate` verb with `--filter outcome!=complete`.                                                                     |
+| 31         | Phase 2.3 — Session-log failure regex scan | L406-L484   | **adopt**      | `nightgauge logs scan-failures --since DATE --issue N` (consolidates with existing `scripts/retro/classifiers/failure_classifier.py`) |
+| 32         | Phase 4 — Failure category classification  | L567-L617   | **adopt**      | **Already exists**: `nightgauge failure classify`. Skill is drift — should call the existing verb (`component:skill`).                |
+| 33         | Phase 9 — Append outcome to decisions.md   | L1131-L1324 | **adopt**      | `nightgauge knowledge record-outcome --issue N --status STR --duration MIN --tokens N --cost USD`                                     |
+| —          | Phase 2.4 — Incomplete pipelines           | L486-L521   | **defer**      | Tiny logic; fold into batch-failures.                                                                                                 |
+| —          | Phase 7 — Recommendation render            | L805-L1002  | **defer**      | Templates fixed but action descriptions still need AI to fill in.                                                                     |
 
 #### nightgauge-continuous-improvement (960 lines, 6 phases)
 

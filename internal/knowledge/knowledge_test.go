@@ -263,12 +263,6 @@ func TestStats_ReturnsPerIssueByteCounts(t *testing.T) {
 		t.Fatalf("Scaffold 99: %v", err)
 	}
 
-	// Write a fake outcomes.md for issue 42.
-	outcomesPath := filepath.Join(root, ".nightgauge", "knowledge", "features", "42-add-photo-upload", "outcomes.md")
-	if writeErr := os.WriteFile(outcomesPath, []byte("## Outcome\nAll good.\n"), 0o644); writeErr != nil {
-		t.Fatalf("write outcomes.md: %v", writeErr)
-	}
-
 	stats, err := knowledge.Stats(root)
 	if err != nil {
 		t.Fatalf("Stats: %v", err)
@@ -292,9 +286,6 @@ func TestStats_ReturnsPerIssueByteCounts(t *testing.T) {
 	}
 	if s42.DecisionsBytes == 0 {
 		t.Error("expected non-zero DecisionsBytes for issue #42")
-	}
-	if s42.OutcomesBytes == 0 {
-		t.Error("expected non-zero OutcomesBytes for issue #42 (outcomes.md was written)")
 	}
 	if s42.LastWrite == "" {
 		t.Error("expected non-empty LastWrite for issue #42")

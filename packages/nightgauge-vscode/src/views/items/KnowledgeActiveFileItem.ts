@@ -30,13 +30,7 @@ export class KnowledgeActiveFileItem extends BaseTreeItem {
     this.description = highlighted ? "read" : undefined;
 
     const icon =
-      filename === "PRD.md"
-        ? "file-text"
-        : filename === "decisions.md"
-          ? "lightbulb"
-          : filename === "outcomes.md"
-            ? "checklist"
-            : "file";
+      filename === "PRD.md" ? "file-text" : filename === "decisions.md" ? "lightbulb" : "file";
     if (highlighted) {
       this.iconPath = new vscode.ThemeIcon(icon, new vscode.ThemeColor("focusBorder"));
     } else {

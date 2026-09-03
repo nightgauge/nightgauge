@@ -14,6 +14,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/forge"
 	forgetypes "github.com/nightgauge/nightgauge/internal/forge/types"
 	"github.com/nightgauge/nightgauge/internal/knowledge"
+	"github.com/nightgauge/nightgauge/internal/knowledge/okf"
 )
 
 // AutoGraduateStatus enumerates the terminal statuses an AutoGraduate run can
@@ -59,6 +60,16 @@ type AutoGraduateInput struct {
 	// ProjectStatusReady is the option name applied to ProjectStatusField for
 	// graduation PRs. Defaults to "Ready" when empty.
 	ProjectStatusReady string
+	// VerifiedBy is the actor recorded on the source entry's `verified` log
+	// when a decision graduates. Defaults to process:knowledge-graduate.
+	//
+	// It is deliberately NOT human:<login>: renderPRBody opens the graduation
+	// PR with an unchecked reviewer checklist, so at this moment no person has
+	// reviewed anything — the PR is what the review is for. Stamping a human
+	// actor here would be a vacuous assertion in the one field whose entire
+	// value is that a person really looked. An operator who did review the ADR
+	// records that deliberately with `knowledge graduate --verified-by`.
+	VerifiedBy string
 	// Now lets tests inject a deterministic timestamp.
 	Now func() time.Time
 	// Git and Forge are required.
@@ -147,6 +158,15 @@ func AutoGraduate(ctx context.Context, in AutoGraduateInput) (AutoGraduateResult
 	}
 	if in.ProjectStatusReady == "" {
 		in.ProjectStatusReady = "Ready"
+	}
+	if in.VerifiedBy == "" {
+		actor, err := okf.ProcessActor("knowledge-graduate")
+		if err != nil {
+			return AutoGraduateResult{}, err
+		}
+		in.VerifiedBy = actor
+	} else if err := okf.ValidateActor(in.VerifiedBy); err != nil {
+		return AutoGraduateResult{}, err
 	}
 
 	// --all-candidates falls back to the retro-default MinScore; explicit
@@ -318,6 +338,7 @@ func processCandidate(ctx context.Context, in AutoGraduateInput, c Candidate, de
 		DecisionsPath: decisionsAbs,
 		ADRAnchor:     adrAnchor,
 		DocsSection:   docsSection,
+		VerifiedBy:    in.VerifiedBy,
 	}); err != nil {
 		outcome.Status = AutoStatusError
 		outcome.SkipReason = fmt.Sprintf("write graduated-to marker: %v", err)

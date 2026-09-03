@@ -225,22 +225,22 @@ The `{slug}` is derived from the issue title using the algorithm described in
 
 ## File Schema
 
-Each knowledge directory scaffolds two files on issue pickup and may gain an
-additional file later when the retro stage records an outcome:
+Each knowledge directory scaffolds two files on issue pickup:
 
-| File           | Lifecycle                         | Purpose                                               |
-| -------------- | --------------------------------- | ----------------------------------------------------- |
-| `PRD.md`       | Scaffolded on issue pickup        | Product requirements document for the issue           |
-| `decisions.md` | Scaffolded on issue pickup        | Architectural decision log for implementation         |
-| `outcomes.md`  | Created on demand by `retro` only | Outcome log when `retro` has no `decisions.md` to use |
+| File           | Lifecycle                  | Purpose                                       |
+| -------------- | -------------------------- | --------------------------------------------- |
+| `PRD.md`       | Scaffolded on issue pickup | Product requirements document for the issue   |
+| `decisions.md` | Scaffolded on issue pickup | Architectural decision log for implementation |
 
-`PRD.md` and `decisions.md` are the two files created during initial
-scaffolding. `outcomes.md` is not scaffolded up front; it is created later only
-when the retro stage needs to record an outcome and no `decisions.md` file is
-available.
+Both file names are fixed — the directory name provides the issue identity.
 
-All three file names are fixed — the directory name provides the issue
-identity.
+The retro stage appends its `## Outcome` block to `decisions.md`. There is no
+third file: a former `outcomes.md` fallback split the retro learning loop
+across two filenames while `decisions.md` was the only one anything read back.
+A missing `decisions.md` is created carrying the frontmatter contract rather
+than reported as an error — the outcome is the one durable artifact of a run,
+and losing it over a file the binary can create correctly would defeat the
+point of recording it.
 
 ### PRD.md
 
@@ -393,28 +393,13 @@ what options were considered, what was selected, and why.
 **Consequences**: No parser required; human and agent readable; structure is enforced by convention only.
 ```
 
-### outcomes.md
+### The retro outcome block
 
-`outcomes.md` is a first-class knowledge file, but unlike `PRD.md` and
-`decisions.md`, it is **not** created during issue pickup. The retro stage
-creates it only when all of the following are true:
+The retro stage appends this block to `decisions.md` when `knowledge_path` is
+set for the issue and outcome recording is enabled (`--record-outcome`, or
+auto-enabled because `knowledge_path` was found in the issue context).
 
-1. `knowledge_path` is set for the issue
-2. Outcome recording is enabled explicitly with `--record-outcome` or
-   auto-enabled because `knowledge_path` was found in the issue context
-3. `retro` cannot append to an existing `decisions.md`
-
-**File-selection behavior** (from `skills/nightgauge-retro/SKILL.md`):
-
-- Prefer appending the outcome to `decisions.md` when that file exists
-- Otherwise append to `outcomes.md`
-- If the knowledge directory does not exist yet, create it and write
-  `outcomes.md`
-- When `outcomes.md` is created for the first time, patch the issue context so
-  downstream readers can discover it
-
-**Template** (the block retro appends to either `decisions.md` or
-`outcomes.md`):
+**Template:**
 
 ```markdown
 ## Outcome
@@ -445,7 +430,7 @@ creates it only when all of the following are true:
 ```markdown
 ## Outcome
 
-**Issue**: #2890
+**Issue**: #890
 **Date**: 2026-04-21
 **Status**: complete
 
@@ -463,11 +448,13 @@ None — all stages completed successfully.
 
 - Keep `docs/KNOWLEDGE_BASE.md` aligned with skill behavior whenever the
   knowledge pipeline changes.
-- Document aspirational features in one roadmap section instead of burying
-  them as inline notes.
 
 ---
 ```
+
+Recording an outcome also stamps the entry: a `verified` event from
+`process:retro`, and the merged PR as a `sources` entry when `--pr-url` is
+given. See [Recording provenance](#recording-provenance-knowledge-stamp).
 
 ---
 
@@ -574,6 +561,72 @@ is never taken from model output or issue text — otherwise an entry could clai
 any provenance it liked, and the trust tier built on top of it would be
 worthless.
 
+### Recording provenance: `knowledge stamp`
+
+`nightgauge knowledge stamp <path>` is the **only** writer of the provenance
+fields. Skills and stages call it instead of editing frontmatter with `sed` or
+a heredoc, so every value that lands in the base has been through the same
+validation — an entry can never claim a provenance the binary did not
+construct.
+
+```bash
+nightgauge knowledge stamp features/42-photo-upload/PRD.md \
+  --generated-by feature-planning/claude-sonnet-5 \
+  --source https://github.com/nightgauge/nightgauge/issues/42
+```
+
+| Flag             | Effect                                               |
+| ---------------- | ---------------------------------------------------- |
+| `--generated-by` | Replaces `generated` with this actor, stamped at now |
+| `--verified-by`  | Appends a `verified` event                           |
+| `--source`       | Appends to `sources`; repeatable                     |
+| `--status`       | Sets `status` (`draft`, `stable`, `deprecated`)      |
+| `--stale-after`  | Sets `stale_after` (RFC3339)                         |
+| `--json`         | Prints the merged block and whether anything changed |
+
+**The body is never touched.** The file is split, only the block is rebuilt,
+and the two are re-joined.
+
+**Merge rules**, which are what make the verb idempotent:
+
+- `generated` is **replaced**. It names the last producer; it is not a log.
+- `verified` appends only when no existing event has the same actor.
+  De-duplication is on the actor **alone** — `at` differs on every run, so a
+  `by`+`at` key would append forever and make retro non-idempotent.
+- `sources` appends only when no existing entry has the same resource.
+- `status` and `stale_after` are set only when the flag is passed. An omitted
+  flag leaves the value alone; nothing is ever cleared.
+
+**Input containment.** `<path>` must resolve inside `.nightgauge/knowledge/`.
+Every other knowledge verb derives its path internally from an issue number or
+a slug, so this is the first that could be pointed at an arbitrary file;
+without the check, `knowledge stamp ../../../.zshrc --status stable` would
+prepend a YAML block to a shell config. A `--source` is an `https://` URL, a
+bundle-absolute path beginning with `/`, or a repository-relative path that
+resolves inside the repository after cleaning and symlink evaluation — a
+symlink pointing out of the tree is rejected. A rejected stamp writes nothing.
+
+### The two automatic verification points
+
+Two moments in the lifecycle append a `verified` event without anyone asking:
+
+| Moment                             | Actor                        | What it means                                                            |
+| ---------------------------------- | ---------------------------- | ------------------------------------------------------------------------ |
+| `knowledge record-outcome` (retro) | `process:retro`              | Retro runs after the PR merged, so these decisions survived a real merge |
+| `knowledge graduate`               | `process:knowledge-graduate` | The decision was distilled into `docs/` and opened as a graduation PR    |
+
+Graduation deliberately does **not** stamp `human:<login>`. The graduation PR
+opens with an unchecked reviewer checklist — the review is what the PR is
+_for_, so at that moment no person has reviewed anything. Stamping a human
+actor there would be a vacuous assertion in the one field whose entire value is
+that a person really looked. An operator who did review the ADR records that
+deliberately:
+
+```bash
+nightgauge knowledge graduate 42 --section docs/ARCHITECTURE.md#sse \
+  --adr ADR-001 --verified-by human:octocat
+```
+
 ### What the scaffold stamps
 
 Every scaffold path — issue-tier `PRD.md` and `decisions.md`, repo-topic
@@ -602,11 +655,10 @@ but untouched directory stays prunable.
 
 Both file types use a consistent H1 title format:
 
-| File           | Title format                                                      |
-| -------------- | ----------------------------------------------------------------- |
-| `PRD.md`       | `# PRD: #{issueNumber} — {issueTitle}`                            |
-| `decisions.md` | `# Decisions: #{issueNumber} — {issueTitle}`                      |
-| `outcomes.md`  | No dedicated H1 today; retro appends `## Outcome` blocks directly |
+| File           | Title format                                 |
+| -------------- | -------------------------------------------- |
+| `PRD.md`       | `# PRD: #{issueNumber} — {issueTitle}`       |
+| `decisions.md` | `# Decisions: #{issueNumber} — {issueTitle}` |
 
 The em dash (`—`) separator is part of the template — use it verbatim.
 
@@ -724,7 +776,6 @@ Both file names are fixed — do not rename them:
 | ------------ | ---------------------------- |
 | PRD          | `PRD.md`                     |
 | Decision log | `decisions.md`               |
-| Outcome log  | `outcomes.md`                |
 
 ### Directory name
 
@@ -994,15 +1045,15 @@ field.
 
 ### Stage integration table
 
-| Stage              | Reads                                                                                                      | Writes / Enriches                                                                                                                | Notes                                                                                             |
-| ------------------ | ---------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
-| `issue-pickup`     | Config flags and issue body                                                                                | Scaffolds directory, writes `PRD.md` and `decisions.md`, sets `knowledge_path` in `issue-{N}.json`                               | First scaffold; idempotent                                                                        |
-| `feature-planning` | `knowledge_path` from issue context; scaffolded `PRD.md`                                                   | Enriches `PRD.md`, populates `decisions.md`, and records `knowledge_path` plus `knowledge_entries` in `planning-{N}.json`        | Also scaffolds the directory itself when issue-pickup deferred it                                 |
-| `feature-dev`      | `knowledge_path` from planning or issue context; `PRD.md`; `decisions.md`; optional sibling-repo knowledge | Reads knowledge files before implementation and passes `knowledge_path` through in `dev-{N}.json`                                | No writes to the issue knowledge directory in this stage                                          |
-| `feature-validate` | `knowledge_path` from dev context                                                                          | Passes through                                                                                                                   | No writes to knowledge directory                                                                  |
-| `pr-create`        | `knowledge_path` and `knowledge_entries` from planning/dev context                                         | Builds a `## Knowledge` section in the PR body linking knowledge files and writes `knowledge_path` into `pr-{N}.json`            | Knowledge links are omitted entirely when there are no entries                                    |
-| `pr-merge`         | `knowledge_path` from PR context                                                                           | No writes                                                                                                                        | Context files cleaned up after merge                                                              |
-| `retro`            | `knowledge_path` from issue context; prior pipeline history                                                | Auto-enables outcome recording when `knowledge_path` is present, appends `## Outcome` to `decisions.md` or creates `outcomes.md` | Creates the knowledge directory if absent and patches context when `outcomes.md` is first created |
+| Stage              | Reads                                                                                                      | Writes / Enriches                                                                                                                                          | Notes                                                                     |
+| ------------------ | ---------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| `issue-pickup`     | Config flags and issue body                                                                                | Scaffolds directory, writes `PRD.md` and `decisions.md`, sets `knowledge_path` in `issue-{N}.json`                                                         | First scaffold; idempotent                                                |
+| `feature-planning` | `knowledge_path` from issue context; scaffolded `PRD.md`                                                   | Enriches `PRD.md`, populates `decisions.md`, and records `knowledge_path` plus `knowledge_entries` in `planning-{N}.json`                                  | Also scaffolds the directory itself when issue-pickup deferred it         |
+| `feature-dev`      | `knowledge_path` from planning or issue context; `PRD.md`; `decisions.md`; optional sibling-repo knowledge | Reads knowledge files before implementation and passes `knowledge_path` through in `dev-{N}.json`                                                          | No writes to the issue knowledge directory in this stage                  |
+| `feature-validate` | `knowledge_path` from dev context                                                                          | Passes through                                                                                                                                             | No writes to knowledge directory                                          |
+| `pr-create`        | `knowledge_path` and `knowledge_entries` from planning/dev context                                         | Builds a `## Knowledge` section in the PR body linking knowledge files and writes `knowledge_path` into `pr-{N}.json`                                      | Knowledge links are omitted entirely when there are no entries            |
+| `pr-merge`         | `knowledge_path` from PR context                                                                           | No writes                                                                                                                                                  | Context files cleaned up after merge                                      |
+| `retro`            | `knowledge_path` from issue context; prior pipeline history                                                | Auto-enables outcome recording when `knowledge_path` is present, appends `## Outcome` to `decisions.md` and stamps a `verified` event from `process:retro` | Creates the knowledge directory and a conformant `decisions.md` if absent |
 
 ### SDK Method Reference
 

@@ -302,3 +302,83 @@ func TestEnumerateADRBlocks_NoADRHeadings(t *testing.T) {
 		t.Errorf("got %d blocks, want 0", len(blocks))
 	}
 }
+
+// TestWriteBacklink_StampsGraduationVerified pins the second review point in
+// the lifecycle: a decision that graduated to docs/ earns a verification
+// event on its source entry. Both graduation paths reach this through the one
+// helper, so they cannot drift apart.
+func TestWriteBacklink_StampsGraduationVerified(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "decisions.md")
+	body := "---\ntype: decisions\n---\n\n# Decisions: #7\n\n## ADR-001: Use SSE\n\n**Status**: Accepted\n"
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	in := knowledge.GraduateInput{
+		DecisionsPath: path,
+		ADRAnchor:     "ADR-001",
+		DocsSection:   "docs/ARCHITECTURE.md#sse",
+		VerifiedBy:    "process:knowledge-graduate",
+	}
+	if err := knowledge.WriteBacklink(in); err != nil {
+		t.Fatalf("WriteBacklink: %v", err)
+	}
+
+	block, err := knowledge.ParseFrontmatterFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(block.Verified) != 1 || block.Verified[0].By != "process:knowledge-graduate" {
+		t.Fatalf("verified = %+v", block.Verified)
+	}
+
+	// Re-running graduation must not append a second event — the backlink
+	// short-circuit still has to reach the stamp, and the stamp de-duplicates.
+	if err := knowledge.WriteBacklink(in); err != nil {
+		t.Fatalf("second WriteBacklink: %v", err)
+	}
+	block, err = knowledge.ParseFrontmatterFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(block.Verified) != 1 {
+		t.Errorf("verified grew to %d events on a re-run", len(block.Verified))
+	}
+
+	// The backlink itself is still there exactly once.
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Count(string(data), knowledge.FormatGraduatedToComment("docs/ARCHITECTURE.md#sse")); got != 1 {
+		t.Errorf("backlink appears %d times, want 1", got)
+	}
+}
+
+// TestWriteBacklink_NoVerifiedByLeavesFrontmatterAlone keeps the stamp opt-in:
+// a caller that supplies no actor must not have one invented for it.
+func TestWriteBacklink_NoVerifiedByLeavesFrontmatterAlone(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "decisions.md")
+	body := "---\ntype: decisions\n---\n\n# Decisions: #7\n\n## ADR-001: Use SSE\n"
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := knowledge.WriteBacklink(knowledge.GraduateInput{
+		DecisionsPath: path,
+		ADRAnchor:     "ADR-001",
+		DocsSection:   "docs/ARCHITECTURE.md#sse",
+	}); err != nil {
+		t.Fatalf("WriteBacklink: %v", err)
+	}
+
+	block, err := knowledge.ParseFrontmatterFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(block.Verified) != 0 {
+		t.Errorf("verified = %+v, want none when no actor was given", block.Verified)
+	}
+}

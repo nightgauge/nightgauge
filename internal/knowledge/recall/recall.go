@@ -363,7 +363,14 @@ func indexFile(workdir, absPath, kind string, issueNumber int) (*Document, error
 		graduateDest = m[1]
 	}
 
-	tokens := Tokenize(content)
+	// Tokenize the body only. Frontmatter is metadata: indexing it puts an
+	// actor like `process:retro` and a PR URL's host into every document
+	// retro has ever touched, which flattens IDF for those terms and makes a
+	// query for "retro" match the entire corpus. The same reasoning already
+	// keeps frontmatter out of the boilerplate check in
+	// knowledge.contentIsSubstantive.
+	_, body := knowledge.SplitFrontmatter(content)
+	tokens := Tokenize(body)
 	termFreq := make(map[string]int, len(tokens))
 	for _, t := range tokens {
 		termFreq[t]++
@@ -438,7 +445,11 @@ func extractSnippet(root, relPath string, queryTerms []string) string {
 	if err != nil {
 		return ""
 	}
-	lines := strings.SplitN(string(data), "\n", 50)
+	// Snippets come from the body for the same reason the index does: a
+	// frontmatter line is metadata, and showing `by: process:retro` as the
+	// reason a document matched tells the reader nothing.
+	_, body := knowledge.SplitFrontmatter(string(data))
+	lines := strings.SplitN(body, "\n", 50)
 	for _, line := range lines {
 		lineLower := strings.ToLower(line)
 		for _, qt := range queryTerms {

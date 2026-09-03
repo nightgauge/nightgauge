@@ -220,3 +220,52 @@ func TestScaffoldFrontmatter_StampsTypeAndProvenance(t *testing.T) {
 		t.Errorf("generated.at = %q", b.Generated.At)
 	}
 }
+
+// TestRenderFrontmatter_PreservesNestedUnknownKeys pins the parity the
+// TypeScript ProvenanceSchema/SourceSchema already have via .passthrough():
+// a key a foreign producer wrote inside `generated`, `verified[]` or
+// `sources[]` survives a parse/render round trip instead of being silently
+// deleted the first time anything stamps the entry.
+func TestRenderFrontmatter_PreservesNestedUnknownKeys(t *testing.T) {
+	src := strings.Join([]string{
+		"---",
+		"type: prd",
+		"generated:",
+		"  by: process:retro",
+		"  at: \"2026-09-03T10:00:00Z\"",
+		"  run_id: abc123",
+		"verified:",
+		"  - by: human:octocat",
+		"    confidence: high",
+		"sources:",
+		"  - resource: https://example.com/1",
+		"    checksum: deadbeef",
+		"---",
+		"",
+		"# Body",
+		"",
+	}, "\n")
+
+	b, err := okf.ParseFrontmatter(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b.Generated.Extra["run_id"] != "abc123" {
+		t.Errorf("generated extras = %v", b.Generated.Extra)
+	}
+
+	_, body := okf.SplitFrontmatter(src)
+	out, err := okf.WithFrontmatter(b, body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"run_id: abc123", "confidence: high", "checksum: deadbeef"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("render dropped %q:\n%s", want, out)
+		}
+	}
+	// The contract fields still come first inside each nested mapping.
+	if !strings.Contains(out, "by: process:retro") || !strings.Contains(out, "resource: https://example.com/1") {
+		t.Errorf("render lost a contract field:\n%s", out)
+	}
+}

@@ -2,6 +2,8 @@ package recall
 
 import (
 	"math"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -269,4 +271,45 @@ func makeMinimalIndex(terms []string) *Index {
 		df[t] = 1
 	}
 	return &Index{K1: 1.5, B: 0.75, DF: df}
+}
+
+// TestIndexFile_IgnoresFrontmatterTokens guards the corpus against the
+// provenance the stamp verb now writes onto every entry. Indexing frontmatter
+// would put `process:retro` and a PR URL's host into every document retro has
+// touched, flattening IDF for those terms until a query for "retro" matches
+// the whole base.
+func TestIndexFile_IgnoresFrontmatterTokens(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, ".nightgauge", "knowledge", "features", "7-widget")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := "---\ntype: decisions\nverified:\n  - by: process:retro\n    at: \"2026-09-03T00:00:00Z\"\nsources:\n  - resource: https://github.com/nightgauge/nightgauge/pull/999\n---\n\n# Decisions: #7\n\nThe widget uses a ring buffer.\n"
+	if err := os.WriteFile(filepath.Join(dir, "decisions.md"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	idx, err := BuildIndex(root, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, term := range []string{"retro", "github", "nightgauge", "verified", "sources"} {
+		res, err := Query(idx, term, 10, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if res.TotalHits != 0 {
+			t.Errorf("query %q matched %d document(s) on frontmatter alone", term, res.TotalHits)
+		}
+	}
+
+	// The body is still indexed.
+	res, err := Query(idx, "ring buffer", 10, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.TotalHits == 0 {
+		t.Error("body text is no longer indexed")
+	}
 }

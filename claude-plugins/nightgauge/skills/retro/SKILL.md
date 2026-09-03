@@ -1022,10 +1022,26 @@ When the retro scope had **no failures** for the issue (all stages completed),
 #### Step 9.2: Record Outcome via Go Binary
 
 Call the deterministic Go binary to append the outcome block. The binary
-handles directory creation, file selection (prefers `decisions.md`), idempotency
-detection, and Markdown formatting:
+handles directory creation, idempotency detection, and Markdown formatting.
+The outcome always lands in `decisions.md`; a missing one is created carrying
+the frontmatter contract.
+
+The same call records the **verification event** — `verified: {by:
+process:retro}` — that promotes the entry from `unverified` to
+`machine-confirmed`. Retro runs after the PR merged, so the decisions it
+records survived a real merge rather than being a model's unreviewed first
+draft. Do **not** stamp that separately; `record-outcome` is the writer.
+
+Read the merged PR URL out of the PR context file first, when it exists, so
+the entry cites what confirmed it:
 
 ```bash
+PR_CONTEXT=".nightgauge/pipeline/pr-${ISSUE_NUMBER}.json"
+PR_URL=""
+if [ -f "$PR_CONTEXT" ]; then
+  PR_URL=$(jq -r '.pr_url // empty' "$PR_CONTEXT")
+fi
+
 nightgauge knowledge record-outcome \
   --issue "$ISSUE_NUMBER" \
   --status "$OUTCOME_STATUS" \
@@ -1034,7 +1050,8 @@ nightgauge knowledge record-outcome \
   --cost "$ESTIMATED_COST_USD" \
   --what-went-well "$WHAT_WENT_WELL" \
   --what-didnt "$WHAT_DIDNT" \
-  --lessons-learned "$LESSONS_LEARNED"
+  --lessons-learned "$LESSONS_LEARNED" \
+  ${PR_URL:+--pr-url "$PR_URL"}
 ```
 
 Exit code 0 = success (appended or idempotent no-op). Exit code 1 = error
@@ -1365,11 +1382,12 @@ UTILITIES (not part of main pipeline)
   Reads:  .nightgauge/pipeline/history/*.jsonl
   Reads:  .nightgauge/pipeline/{stage}-{N}.json
   Reads:  .nightgauge/pipeline/issue-{N}.json (for knowledge_path)
+  Reads:  .nightgauge/pipeline/pr-{N}.json (for pr_url, recorded as a source)
   Reads:  .nightgauge/pipeline/assessments/*.json (--epic, --skill-feedback)
   Reads:  .nightgauge/retros/*_retro.json (--epic cross-issue aggregation)
   Writes: .nightgauge/pipeline/retro-report-YYYY-MM-DD.json (optional)
   Writes: .nightgauge/pipeline/assessments/synthesis-epic-{N}.json (--epic)
-  Writes: {knowledge_path}/decisions.md or {knowledge_path}/outcomes.md (when knowledge_path set)
+  Writes: {knowledge_path}/decisions.md (when knowledge_path set)
   Creates: GitHub issues via nightgauge forge issue create (--create-issues only)
 ```
 

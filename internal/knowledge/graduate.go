@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/nightgauge/nightgauge/internal/knowledge/okf"
 )
 
 // GraduateInput describes a single graduation request.
@@ -22,6 +24,11 @@ type GraduateInput struct {
 	DecisionsPath string
 	ADRAnchor     string
 	DocsSection   string
+	// VerifiedBy, when set, is appended to the source entry's `verified` log
+	// after the backlink is written. Graduation is one of the two review
+	// points in the lifecycle where a decision stops being an unreviewed
+	// draft, so it is where the entry earns a verification event.
+	VerifiedBy string
 }
 
 // adrHeadingRe matches `## ADR-NNN: ...` headings (case-insensitive).
@@ -29,9 +36,12 @@ var adrHeadingRe = regexp.MustCompile(`(?i)^##\s+ADR-(\d+)\s*:`)
 
 // WriteBacklink appends a `<!-- graduated-to: <docs-section> -->`
 // HTML comment immediately after the ADR heading inside the file at
-// in.DecisionsPath. It is idempotent — if the same backlink is
-// already present inside the same ADR block, the file is left
-// unchanged and no error is returned.
+// in.DecisionsPath, then stamps in.VerifiedBy onto the entry when one is
+// given. It is idempotent — if the same backlink is already present inside
+// the same ADR block, the file is left unchanged and no error is returned.
+//
+// Both graduation paths (the manual verb and the auto sweep) reach the stamp
+// through this one helper, so the two cannot drift apart.
 //
 // Returns an error when the file is missing, the ADR anchor is not
 // found, or the file cannot be written.
@@ -63,7 +73,7 @@ func WriteBacklink(in GraduateInput) error {
 	backlink := FormatGraduatedToComment(in.DocsSection)
 	block := content[blockStart:blockEnd]
 	if strings.Contains(block, backlink) {
-		return nil
+		return stampGraduation(in)
 	}
 
 	// Insert the backlink on the line immediately after the heading.
@@ -78,6 +88,19 @@ func WriteBacklink(in GraduateInput) error {
 
 	if err := os.WriteFile(in.DecisionsPath, []byte(sb.String()), 0o644); err != nil {
 		return fmt.Errorf("write decisions file: %w", err)
+	}
+	return stampGraduation(in)
+}
+
+// stampGraduation appends the verification event for a graduated entry. It is
+// a no-op when no actor was supplied, and the stamp itself de-duplicates on
+// the actor, so a re-run of graduation adds nothing.
+func stampGraduation(in GraduateInput) error {
+	if strings.TrimSpace(in.VerifiedBy) == "" {
+		return nil
+	}
+	if _, _, err := okf.Stamp(in.DecisionsPath, okf.StampInput{VerifiedBy: in.VerifiedBy}); err != nil {
+		return fmt.Errorf("stamp graduation verification: %w", err)
 	}
 	return nil
 }
