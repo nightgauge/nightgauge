@@ -174,6 +174,8 @@ func RunDoctor(ctx context.Context, cfg *config.Config, client *gh.Client, adapt
 				errors = append(errors, scopeErr)
 				hasRequiredFailure = true
 				result.FailedChecks = append(result.FailedChecks, "scopes")
+			} else if !scopeInfo.ScopesAdvertised {
+				result.Checks["scopes"] = CheckItem{OK: true, Detail: "not advertised (fine-grained or App token): permissions are per repository, checked by the operations that need them"}
 			} else {
 				result.Checks["scopes"] = CheckItem{OK: true, Detail: strings.Join(scopeInfo.Scopes, ", ")}
 				if w := readOrgWarning(scopeInfo.Scopes); w != "" {

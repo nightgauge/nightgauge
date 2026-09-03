@@ -10689,7 +10689,11 @@ Resolution methods checked in order:
 			// Human-readable output
 			fmt.Printf("Authenticated user : %s\n", info.Login)
 			fmt.Printf("Token resolution   : %s\n", info.Resolution)
-			fmt.Printf("Scopes             : %s\n", strings.Join(info.Scopes, ", "))
+			if info.ScopesAdvertised {
+				fmt.Printf("Scopes             : %s\n", strings.Join(info.Scopes, ", "))
+			} else {
+				fmt.Println("Scopes             : not advertised (fine-grained or App token; permissions are per repository)")
+			}
 			if len(info.OrgMemberships) > 0 {
 				fmt.Printf("Org memberships    : %s\n", strings.Join(info.OrgMemberships, ", "))
 			}
