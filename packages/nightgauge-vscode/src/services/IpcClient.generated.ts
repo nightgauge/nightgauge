@@ -32,6 +32,7 @@ import type {
   AutonomousClearIssueFailuresResult,
   AutonomousClearQuotaCooldownResult,
   AutonomousStatusResult,
+  BoardChangedResult,
   BoardItem,
   CachedSkill,
   CancelActiveForNetworkOutageResult,
@@ -133,6 +134,10 @@ export class IpcClientGenerated extends IpcClientBase {
 
   async boardUpdateStatus(owner: string, projectNumber: number, itemId: string, status: string, ownerType?: string, githubUser?: string): Promise<void> {
     await this.call<void>('board.updateStatus', { owner, projectNumber, itemId, status, ownerType, githubUser });
+  }
+
+  async boardChanged(repos?: string[], since?: string): Promise<BoardChangedResult> {
+    return this.call<BoardChangedResult>('board.changed', { repos, since });
   }
 
 

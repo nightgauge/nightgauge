@@ -1,11 +1,16 @@
 /**
- * Tests for AttentionSweepService — the four invocation points of the
- * repo-scoped attention sweep (issue #93).
+ * Tests for AttentionSweepService — the invocation points of the repo-scoped
+ * attention sweep (issue #93).
  *
  * The sweep is deliberately not a daemon, so what needs pinning is WHEN it
  * fires and that it stays cheap when several triggers overlap: activation, an
  * Action Center / repositories refresh, the configured timer, and a run
  * terminating can all land inside the same second.
+ *
+ * A sweep is the most expensive thing the extension asks the daemon to do, so
+ * the second thing pinned is that the event-driven triggers consult the
+ * one-point board probe first and sweep only when a board moved or the
+ * interval has elapsed — while the timer and the operator's command never ask.
  *
  * Fake timers throughout — a test that waits out a 15-minute interval is not a
  * test, it is a hang.
@@ -18,11 +23,10 @@ import {
   readSweepConfig,
   DEFAULT_SWEEP_INTERVAL_MINUTES,
   MIN_SWEEP_INTERVAL_MINUTES,
-  SWEEP_MIN_GAP_MS,
   type AttentionSweepConfig,
   type AttentionSweepIpc,
 } from "../../src/services/AttentionSweepService";
-import type { AttentionSweepResult } from "../../src/services/IpcClientBase";
+import type { AttentionSweepResult, BoardChangedResult } from "../../src/services/IpcClientBase";
 import type { Logger } from "../../src/utils/logger";
 
 const getConfiguration = vi.fn();
@@ -40,17 +44,28 @@ const emptyResult = (): AttentionSweepResult => ({
   autoResolved: 0,
 });
 
-/** A fake IPC surface that records sweeps and lets a test emit pushes. */
+/** A fake IPC surface that records sweeps and probes and lets a test emit
+ * pushes. The probe answers "nothing moved" unless a test flips `changed` —
+ * the quiet workspace is the case the gating exists for. */
 class FakeIpc implements AttentionSweepIpc {
   calls: Array<{ repos?: string[]; reason?: string }> = [];
+  probes: Array<{ repos?: string[]; since?: string }> = [];
   result: AttentionSweepResult = emptyResult();
   error: Error | null = null;
+  changed = false;
+  probeError: Error | null = null;
   private handlers = new Map<string, Array<(data: unknown) => void>>();
 
   async attentionSweep(repos?: string[], reason?: string): Promise<AttentionSweepResult> {
     this.calls.push({ repos, reason });
     if (this.error) throw this.error;
     return this.result;
+  }
+
+  async boardChanged(repos?: string[], since?: string): Promise<BoardChangedResult> {
+    this.probes.push({ repos, since });
+    if (this.probeError) throw this.probeError;
+    return { changed: this.changed, repos: [], probed: repos?.length ?? 0, unprobeable: 0 };
   }
 
   on(event: string, handler: (data: unknown) => void): { dispose(): void } {
@@ -84,6 +99,7 @@ function makeService(
     config?: Partial<AttentionSweepConfig>;
     repos?: string[] | (() => Promise<string[]> | string[]);
     onChanged?: () => void;
+    onRerender?: () => void;
   } = {}
 ) {
   const ipc = overrides.ipc ?? new FakeIpc();
@@ -91,7 +107,6 @@ function makeService(
   const config: AttentionSweepConfig = {
     enabled: true,
     intervalMs: 15 * 60_000,
-    minGapMs: SWEEP_MIN_GAP_MS,
     ...overrides.config,
   };
   const repos = overrides.repos ?? ["octocat/acme-web"];
@@ -100,6 +115,7 @@ function makeService(
     logger,
     resolveRepos: typeof repos === "function" ? repos : () => repos,
     onChanged: overrides.onChanged,
+    onRerender: overrides.onRerender,
     readConfig: () => config,
     now: () => Date.now(),
   });
@@ -158,7 +174,10 @@ describe("AttentionSweepService", () => {
   });
 
   it("sweeps after a run terminates, for both the success and the error path", async () => {
-    const { service, ipc } = makeService({ config: { minGapMs: 0, intervalMs: 0 } });
+    const { service, ipc } = makeService({ config: { intervalMs: 0 } });
+    // A run terminating moves the board (an issue closed, an item to Done),
+    // which is what the probe reports here.
+    ipc.changed = true;
 
     service.start();
     await vi.advanceTimersByTimeAsync(0);
@@ -192,21 +211,141 @@ describe("AttentionSweepService", () => {
     service.dispose();
   });
 
-  it("honours the throttle window for ambient triggers but never for a manual one", async () => {
+  it("answers an ambient trigger from the last sweep when no board moved, re-rendering instead", async () => {
+    const onRerender = vi.fn();
+    const { service, ipc } = makeService({ config: { intervalMs: 15 * 60_000 }, onRerender });
+
+    service.start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(ipc.calls).toHaveLength(1); // activation — nothing to serve yet, no probe
+    expect(ipc.probes).toHaveLength(0);
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    await expect(service.sweep("view-refresh")).resolves.toBeUndefined();
+
+    expect(ipc.calls).toHaveLength(1);
+    expect(ipc.probes).toHaveLength(1);
+    expect(ipc.probes[0].repos).toEqual(["octocat/acme-web"]);
+    // `since` is the last sweep's start, so a board that moved during the
+    // sweep still reads as moved on the next probe.
+    expect(ipc.probes[0].since).toBe(new Date(Date.now() - 60_000).toISOString());
+    expect(onRerender).toHaveBeenCalledTimes(1);
+
+    service.dispose();
+  });
+
+  it("sweeps on an ambient trigger when the probe says a board moved", async () => {
+    const { service, ipc } = makeService({ config: { intervalMs: 15 * 60_000 } });
+
+    service.start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(ipc.calls).toHaveLength(1);
+
+    // Thirty seconds after activation — inside any floor a fixed gap would
+    // impose — a board moved. The probe, not the clock, decides.
+    ipc.changed = true;
+    await vi.advanceTimersByTimeAsync(30_000);
+    await service.sweep("view-refresh");
+
+    expect(ipc.probes).toHaveLength(1);
+    expect(ipc.calls.map((c) => c.reason)).toEqual(["activation", "view-refresh"]);
+
+    service.dispose();
+  });
+
+  it("the forced manual command always sweeps — never a probe, never a throttle", async () => {
+    const { service, ipc } = makeService({ config: { intervalMs: 15 * 60_000 } });
+
+    service.start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(ipc.calls).toHaveLength(1);
+
+    // Seconds after activation, with a probe that would say "nothing moved":
+    // the operator pressing the button is answered, or it reads as broken.
+    ipc.changed = false;
+    await vi.advanceTimersByTimeAsync(1_000);
+    await service.sweep("manual");
+    await service.sweep("manual");
+
+    expect(ipc.probes).toHaveLength(0);
+    expect(ipc.calls.map((c) => c.reason)).toEqual(["activation", "manual", "manual"]);
+
+    service.dispose();
+  });
+
+  it("sweeps on an ambient trigger once a full interval has elapsed, without asking the probe", async () => {
+    const { service, ipc } = makeService({ config: { intervalMs: 5 * 60_000 } });
+
+    service.start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(ipc.calls).toHaveLength(1);
+
+    // Just short of the interval: probe says no, so no sweep.
+    await vi.advanceTimersByTimeAsync(5 * 60_000 - 1);
+    await service.sweep("view-refresh");
+    expect(ipc.calls).toHaveLength(1);
+    expect(ipc.probes).toHaveLength(1);
+
+    // At the interval: the answer is stale on its own terms — sweep, no probe.
+    // (The timer tick at exactly this instant is the same sweep; a second
+    // view-refresh rides it or is answered from it.)
+    service.dispose(); // stop the timer so the elapsed path is what we observe
+    await vi.advanceTimersByTimeAsync(1);
+    await service.sweep("view-refresh");
+    expect(ipc.calls.map((c) => c.reason)).toEqual(["activation", "view-refresh"]);
+    expect(ipc.probes).toHaveLength(1);
+  });
+
+  it("with the timer disabled, the default interval still bounds an ambient trigger", async () => {
     const { service, ipc } = makeService({ config: { intervalMs: 0 } });
 
     service.start();
     await vi.advanceTimersByTimeAsync(0);
     expect(ipc.calls).toHaveLength(1);
 
-    // Inside the gap: an ambient trigger is dropped…
-    await expect(service.sweep("view-refresh")).resolves.toBeUndefined();
-    expect(ipc.calls).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(DEFAULT_SWEEP_INTERVAL_MINUTES * 60_000 - 1);
+    await service.sweep("view-refresh");
+    expect(ipc.calls).toHaveLength(1); // probe said no
 
-    // …but the operator pressing the button is answered, or it reads as broken.
+    await vi.advanceTimersByTimeAsync(1);
+    await service.sweep("view-refresh");
+    expect(ipc.calls).toHaveLength(2); // elapsed
+
+    service.dispose();
+  });
+
+  it("fails open — a probe the daemon cannot answer sweeps rather than suppresses", async () => {
+    const { service, ipc, logger } = makeService({ config: { intervalMs: 15 * 60_000 } });
+
+    service.start();
+    await vi.advanceTimersByTimeAsync(0);
+
+    ipc.probeError = new Error("method not found: board.changed");
+    await vi.advanceTimersByTimeAsync(1_000);
+    await service.sweep("view-refresh");
+
+    expect(ipc.calls.map((c) => c.reason)).toEqual(["activation", "view-refresh"]);
+    expect(logger.warn).not.toHaveBeenCalled(); // an ambient trigger stays quiet
+
+    service.dispose();
+  });
+
+  it("a sweep the daemon declined does not move the baseline the next probe compares against", async () => {
+    const { service, ipc } = makeService({ config: { intervalMs: 15 * 60_000 } });
+
+    service.start();
+    await vi.advanceTimersByTimeAsync(0);
+    const activationAt = new Date(Date.now()).toISOString();
+
+    // The daemon throttled the manual sweep: nothing was evaluated.
+    ipc.result = { ...emptyResult(), throttled: true, throttledForMs: 30_000 };
+    await vi.advanceTimersByTimeAsync(10_000);
     await service.sweep("manual");
-    expect(ipc.calls).toHaveLength(2);
-    expect(ipc.calls[1].reason).toBe("manual");
+
+    ipc.result = emptyResult();
+    await vi.advanceTimersByTimeAsync(10_000);
+    await service.sweep("view-refresh");
+    expect(ipc.probes[0].since).toBe(activationAt);
 
     service.dispose();
   });
@@ -226,7 +365,8 @@ describe("AttentionSweepService", () => {
   });
 
   it("runs no timer when the interval is zero, but keeps the event triggers", async () => {
-    const { service, ipc } = makeService({ config: { intervalMs: 0, minGapMs: 0 } });
+    const { service, ipc } = makeService({ config: { intervalMs: 0 } });
+    ipc.changed = true;
 
     service.start();
     await vi.advanceTimersByTimeAsync(60 * 60_000);
@@ -266,7 +406,7 @@ describe("AttentionSweepService", () => {
   it("notifies onChanged only when the sweep actually changed the inbox", async () => {
     const onChanged = vi.fn();
     const ipc = new FakeIpc();
-    const { service } = makeService({ ipc, onChanged, config: { intervalMs: 0, minGapMs: 0 } });
+    const { service } = makeService({ ipc, onChanged, config: { intervalMs: 0 } });
 
     service.start();
     await vi.advanceTimersByTimeAsync(0);
@@ -347,7 +487,6 @@ describe("readSweepConfig", () => {
     expect(readSweepConfig()).toEqual({
       enabled: true,
       intervalMs: DEFAULT_SWEEP_INTERVAL_MINUTES * 60_000,
-      minGapMs: SWEEP_MIN_GAP_MS,
     });
   });
 

@@ -1706,6 +1706,19 @@ type AttentionSweepParams struct {
 	Reason string `json:"reason,omitempty"`
 }
 
+// BoardChangedParams asks whether any of the given repos' boards moved after
+// an instant — the one-point probe the extension's event-driven sweep triggers
+// consult before spending a full attention.sweep (see board_changed.go).
+type BoardChangedParams struct {
+	// Repos are "owner/name" specs whose boards to probe — the same list a
+	// sweep would take.
+	Repos []string `json:"repos,omitempty"`
+	// Since is the RFC 3339 instant to compare each board's last change
+	// against. Omitted, the daemon uses its own last sweep; with neither, the
+	// answer is "changed" because there are no last-sweep cards to serve.
+	Since string `json:"since,omitempty"`
+}
+
 // AttentionRaiseParams raises a RUN-SCOPED DecisionRequest from the extension
 // operating mode (#305).
 //
