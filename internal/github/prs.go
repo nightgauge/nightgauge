@@ -31,15 +31,25 @@ func (s *PRService) GetPRState(ctx context.Context, owner, repo string, number i
 	return pr.State, nil
 }
 
-// GetPRMergeInfo fetches the merge commit SHA and ISO-8601 merge timestamp of a
-// merged PR. Both are empty on an un-merged PR. Satisfies hooks.PRMergeInfoFetcher
-// so the post-merge hook can capture the ground-truth breadcrumb (#4133).
-func (s *PRService) GetPRMergeInfo(ctx context.Context, owner, repo string, number int) (sha, mergedAt string, err error) {
+// PRMergeInfo is the ground-truth breadcrumb of a merged PR (#4133): the merge
+// commit on the base branch, GitHub's ISO-8601 merge timestamp, and the base
+// branch itself — which is the ref the post-merge verification (#1249) reads
+// check runs against and the key the resulting Action Center card is filed
+// under. All three are empty on an un-merged PR.
+type PRMergeInfo struct {
+	SHA      string
+	MergedAt string
+	BaseRef  string
+}
+
+// GetPRMergeInfo fetches the merge breadcrumb of a merged PR. Satisfies
+// hooks.PRMergeInfoFetcher so the post-merge hook can capture it.
+func (s *PRService) GetPRMergeInfo(ctx context.Context, owner, repo string, number int) (PRMergeInfo, error) {
 	pr, err := s.GetPR(ctx, owner, repo, number)
 	if err != nil {
-		return "", "", err
+		return PRMergeInfo{}, err
 	}
-	return pr.MergeCommitSHA, pr.MergedAt, nil
+	return PRMergeInfo{SHA: pr.MergeCommitSHA, MergedAt: pr.MergedAt, BaseRef: pr.BaseRef}, nil
 }
 
 // GetPR fetches a single pull request with review and check status.

@@ -395,6 +395,62 @@ indefinitely. The author-side prevention for #3979 lives in the pr-create
 skill: an epic-umbrella PR must enumerate `Closes #sub` for every shipped sub,
 not just `Closes #epic`.
 
+## Post-merge verification of the base branch (#1249)
+
+`AGENTS.md` states the rule: _a green PR check is a prediction; `main`'s own run
+is the observation._ Until #1249 only interactive sessions honoured it — the
+pipeline verified the PR reached `MERGED`, captured the merge SHA, and stopped.
+The three failure classes the PR gate structurally cannot see (nondeterministic
+tests, merge skew, environment differences) were invisible to the pipeline, and
+a red `main` was found by an operator reading the Actions tab.
+
+`hooks.EvaluatePostMerge` now ends with `hooks.VerifyMergeCommit`: a bounded poll
+of the **merge commit's own check runs** on the base branch, evaluated in the
+operator's three-number order —
+
+1. `total > 0` — an **empty** check-runs list is _never_ green. GitHub creates
+   check runs seconds after a push, so an empty list right after a merge means
+   CI has not started, not that there is nothing to fail (the #1027 lesson,
+   applied on the post-merge side). Bounded by a no-check grace (2 min).
+2. `pending == 0` — a queued or running check has no conclusion; only once every
+   run has concluded are conclusions read at all.
+3. `bad == 0` — then a conclusion outside `success` / `skipped` / `neutral`
+   (AGENTS.md's filter verbatim, so `cancelled` counts) makes the verdict `red`.
+
+The verdict vocabulary is closed — `green` | `red` | `pending` | `no_checks` |
+`error` | `skipped` — and only `red` is a failure. Budget exhaustion with checks
+still running is `pending`: still-pending checks are not evidence of breakage,
+and a card raised on them would be noise that trains operators to wait cards
+out. The hook stays non-blocking and exits 0 whatever the verdict.
+
+| Where the verdict lands       | Field                                            |
+| ----------------------------- | ------------------------------------------------ |
+| Hook result (`--json`)        | `mainChecks.{verdict,total,pending,bad,failing}` |
+| Run record (`runtime-*.json`) | `mainCheckVerdict`, `mainCheckFailing`           |
+| Survival record               | `main_check_verdict`, `main_check_failing`       |
+| Action Center                 | `merge-commit-checks` card, see below            |
+
+**The card.** A `red` verdict raises a **standing** `merge-commit-checks` card
+keyed per `(repo, branch)` — one card per red default branch — naming the merge
+commit, the PR, the issue, and each failing check with its run link. Severity is
+`blocking_fleet` when a required check failed and `fyi` when only non-required
+checks did (#1250 semantics). Its fingerprint is the merge SHA plus the failing
+set, so the same red merge re-observed refreshes silently, a _different_ merge
+going red re-alerts, and a human who dismissed one red merge is not handed it
+back. A later `green` verdict on the same branch **auto-resolves** the card
+(`Store.AutoResolveKey`), which is how "the default branch went green" is
+observed on this path: the pipeline's next merge is its instrument. The
+`default-branch-health` sweep cards the branch's _current_ head independently;
+this card is about _which merge_ turned it red.
+
+**The wait.** The pipeline holds the run for the observation — up to
+`hooks.DefaultMainCheckTimeout` (20 min, 30 s polls), the same shape as the
+deterministic runner's pre-merge CI budget. Both writers pass it:
+`Scheduler.checkEpicCompletion` via `mainCheckReaderFn`, and the extension via
+`nightgauge hook post-merge`, whose spawn timeout is 25 min for exactly this
+reason. Operators running the hook by hand can pass `--main-check-wait 0` for a
+single immediate read (the verdict then honestly says `pending`).
+
 ## Rebase-before-merge / wave merge-train (#4071)
 
 Within a single wave, multiple sub-issue PRs can be ready at once. They are

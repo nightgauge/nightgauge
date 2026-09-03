@@ -738,6 +738,7 @@ ADR-bearing first ticket as a normal blocker for the rest of the epic.
 | `autonomous run --owner ORG`        | Set GitHub org/owner                   |
 | `autonomous run --project N`        | Set project board number               |
 | `autonomous run --json`             | Output final status as JSON            |
+| `autonomous run --adapter NAME`     | Pin the CLI stage adapter (see below)  |
 | `autonomous status`                 | Show current state (human-readable)    |
 | `autonomous status --json`          | Machine-readable output                |
 | `autonomous resume`                 | Clear a halt/pause and resume (#405)   |
@@ -748,6 +749,23 @@ ADR-bearing first ticket as a normal blocker for the rest of the epic.
 | `graph build`                       | Build and display the dependency graph |
 | `graph build --json`                | Machine-readable graph output          |
 | `graph build --repos a,b,c`         | Specify repos for graph                |
+
+### Which executor runs the stages (#1336)
+
+The scheduler has three ways to execute a dispatched issue, chosen at start
+and printed as `Stage executor: …` before the first scan:
+
+| Entry point                        | Executor                                                                               | Needs                                                                                                             |
+| ---------------------------------- | -------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| VS Code → `nightgauge serve`       | `ipc` — the extension's `IpcStageRunner` spawns the agent CLI and streams progress     | the extension attached over the daemon socket                                                                     |
+| `nightgauge autonomous run`        | `cli:<adapter>` — the Go binary spawns the agent CLI itself (`ExecutionManagerRunner`) | a logged-in adapter on the host (`--adapter`, `NIGHTGAUGE_ADAPTER`, `ui.core.adapter`, default `claude-headless`) |
+| either, `pipeline.executor: cloud` | `cloud` — `POST /v1/pipeline/dispatch` on the platform                                 | `platform_url` and `api_key`                                                                                      |
+
+`autonomous run` used to build its scheduler with **no** adapter, so the CLI
+path scanned, selected, moved an issue to In progress, and then failed its
+first stage with `execution manager has no skill runner adapter configured`.
+It now resolves the adapter exactly as `nightgauge run` does. `serve` still
+deliberately carries no adapter: in IPC mode stages belong to the extension.
 
 ## VSCode Commands
 

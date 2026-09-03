@@ -2349,6 +2349,9 @@ export async function initializeServices(
     // transition the sweep writes; this covers the window where the push is not
     // yet wired (no autonomous scheduler attached).
     onChanged: () => void attentionTreeProvider.refresh(),
+    // An event-driven trigger the board probe answered with "nothing moved"
+    // still re-renders what the store holds — the operator asked to look.
+    onRerender: () => void attentionTreeProvider.refresh(),
   });
   context.subscriptions.push(attentionSweepService);
 

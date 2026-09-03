@@ -684,6 +684,55 @@ func TestMergedPRIndexSize_FitsOneGitHubPage(t *testing.T) {
 Naming `maxGraphQLPageSize` turns a magic number into a stated constraint, and
 the test fails the moment someone raises the other one.
 
+### No contract test may depend on live GitHub quota
+
+A "verb is registered" contract test (`internal/ipc/ipc_contract_test.go`
+`TestContract_*`) asserts one thing: the IPC method exists and does not
+return `-32601` method-not-found. It is not a test of GitHub connectivity,
+and it must never be able to fail — or hang — because of the operator's real
+API quota.
+
+Two ways that dependency creeps in, and both are load-bearing on this repo's
+own daemon:
+
+1. **A handler that calls GitHub for real.** `board.list` dispatches to a
+   client with the proactive rate-limit gate attached. On a machine whose
+   quota is genuinely exhausted — which is exactly the state this product's
+   own daemon produces after heavy use — a client wired with
+   `WithRateLimitWait()` sleeps for up to `maxFullExhaustionWait` (75
+   minutes, see `internal/github/client.go`) waiting for a reset that a
+   "registered" assertion never needed. `internal/ipc/server_integration_test.go`'s
+   `TestMain` sets `NIGHTGAUGE_GITHUB_RATELIMIT_NO_WAIT=1` for every `serve`
+   subprocess the package spawns, which flips
+   `gh.Client.WithRateLimitWait()` to a no-op so the gate always fails fast
+   (`gh.ErrRateLimitGated` → JSON-RPC `-32603`) instead of blocking.
+   `assertMethodRegistered` already accepts `-32603` as "the method ran", so
+   a gated call still proves the verb is registered.
+2. **A machine-global state file read from inside the test process.** The
+   rate-limit gate persists to `gh.DefaultSharedTrackerPath()`, which
+   resolves `$HOME/.nightgauge/rate-limit.json` — the same file the
+   developer's or CI runner's own `nightgauge serve` writes. A test harness
+   that inherits `os.Environ()` unmodified (every harness in
+   `internal/ipc` does, via `cmd.Env = append(os.Environ(), …)`) hands that
+   real, mutable, machine-wide file to the spawned binary. `TestMain` also
+   isolates `HOME` to a package-lifetime temp directory for this reason, so
+   the daemon's own read of its rate-limit state is under test control, not
+   the operator's.
+
+`TestContract_Board_RegisteredSurvivesExhaustedQuota` is the fixture-backed
+regression guard: it writes `remaining: 0` into the _isolated_
+`$HOME/.nightgauge/rate-limit.json` (via `gh.SharedRateLimitTracker.Set`, not
+hand-rolled JSON) and asserts the `board.list/registered` request still
+completes in under 2 seconds. Before both isolations above, the equivalent
+assertion timed out at the harness's 10s `nextLine` ceiling — proving the
+fixture actually exercises the failure mode rather than trivially passing.
+
+When adding a new IPC handler that calls out to a forge, do not assume the
+existing isolation covers it for free — check whether the handler's client
+carries `WithRateLimitWait()` and, if so, whether it is reachable from the
+package's shared `TestMain` isolation before treating a new "registered"
+subtest as gate-proof.
+
 ### Fail-open is a behaviour; failing silently is a bug
 
 A supplementary check that degrades rather than failing the operation is usually

@@ -33,6 +33,13 @@ import (
 // binaryPath is set by TestMain after building the binary.
 var binaryPath string
 
+// ipcTestHome is the package-lifetime $HOME TestMain isolates every spawned
+// `serve` subprocess to (see below). Tests that need to plant a fixture at
+// the daemon's default rate-limit state path — $HOME/.nightgauge/rate-limit.json,
+// see gh.DefaultSharedTrackerPath() — write under this directory rather than
+// the operator's real home. Issue #1348.
+var ipcTestHome string
+
 // TestMain builds the real binary once before running any integration tests.
 // The binary is placed in a temp directory and cleaned up after the suite.
 func TestMain(m *testing.M) {
@@ -74,6 +81,42 @@ func TestMain(m *testing.M) {
 	}
 	defer os.RemoveAll(machineConfigHome)
 	os.Setenv("NIGHTGAUGE_CONFIG_HOME", machineConfigHome)
+
+	// Point every spawned `serve` subprocess's $HOME at a package-lifetime
+	// directory instead of the real developer/CI account's home. The
+	// daemon's GitHub rate-limit gate persists to
+	// gh.DefaultSharedTrackerPath(), which resolves $HOME/.nightgauge/
+	// rate-limit.json (internal/github/ratelimit_tracker.go), and every
+	// harness in this package inherits os.Environ() — including HOME —
+	// into the subprocess env. Without this, a machine whose real GraphQL
+	// quota is exhausted makes "verb is registered" contract subtests read
+	// that real, global, mutable file and gate on it: the operator's quota
+	// state, not the tree under test, decides whether the suite is red.
+	// Issue #1348.
+	ipcTestHomeDir, err := os.MkdirTemp("", "nightgauge-ipc-home-*")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "TempDir (HOME isolation):", err)
+		os.Exit(1)
+	}
+	defer os.RemoveAll(ipcTestHomeDir)
+	os.Setenv("HOME", ipcTestHomeDir)
+	ipcTestHome = ipcTestHomeDir
+
+	// Disable the rate-limit gate's wait-for-reset behavior
+	// (gh.WithRateLimitWait, internal/github/client.go) for every `serve`
+	// subprocess this package spawns. server.NewServer wires
+	// WithRateLimitWait() onto every GitHub client it constructs (#3976) so
+	// production in-flight/recovery operations wait out a real reset
+	// instead of failing — but a "verb is registered" contract test is
+	// checking the IPC surface only, and must never block on GitHub's real
+	// reset window (up to 75m, see maxFullExhaustionWait) nor on the
+	// isolated rate-limit.json fixture above reporting quota exhausted.
+	// Setting this env var flips WithRateLimitWait() to a no-op for the
+	// whole test binary, so the gate always fails fast
+	// (gh.ErrRateLimitGated → JSON-RPC -32603), which
+	// assertMethodRegistered already accepts as "the method ran". Issue
+	// #1348.
+	os.Setenv("NIGHTGAUGE_GITHUB_RATELIMIT_NO_WAIT", "1")
 
 	os.Exit(m.Run())
 }

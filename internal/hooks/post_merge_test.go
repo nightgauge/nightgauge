@@ -471,6 +471,7 @@ type mockPRVerifierWithMerge struct {
 	err             error
 	sha             string
 	mergedAt        string
+	baseRef         string
 	infoErr         error
 	mergeInfoCalled bool
 }
@@ -479,12 +480,12 @@ func (m *mockPRVerifierWithMerge) GetPRState(_ context.Context, _, _ string, _ i
 	return m.state, m.err
 }
 
-func (m *mockPRVerifierWithMerge) GetPRMergeInfo(_ context.Context, _, _ string, _ int) (string, string, error) {
+func (m *mockPRVerifierWithMerge) GetPRMergeInfo(_ context.Context, _, _ string, _ int) (gh.PRMergeInfo, error) {
 	m.mergeInfoCalled = true
 	if m.infoErr != nil {
-		return "", "", m.infoErr
+		return gh.PRMergeInfo{}, m.infoErr
 	}
-	return m.sha, m.mergedAt, nil
+	return gh.PRMergeInfo{SHA: m.sha, MergedAt: m.mergedAt, BaseRef: m.baseRef}, nil
 }
 
 func TestPostMergeCapturesMergeBreadcrumb(t *testing.T) {
