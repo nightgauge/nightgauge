@@ -24,23 +24,14 @@ func newSocketTestServer(t *testing.T) (*Server, string) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
-	ready := make(chan struct{})
-	go func() {
-		close(ready)
-		_ = s.ListenSocket(ctx, sockPath)
-	}()
-	<-ready
-	// ListenSocket's net.Listen happens synchronously relative to the
-	// goroutine scheduling above being unreliable — poll briefly for the
-	// socket file to appear rather than assuming it's ready.
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if c, err := DialClient(ctx, sockPath, 50*time.Millisecond); err == nil {
-			c.Close()
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
+	// BindSocket is the readiness signal (#1158): it returns only once the
+	// kernel is accepting on sockPath, so no poll — of the file or of a dial
+	// — is needed before handing the path out.
+	ln, err := s.BindSocket(sockPath)
+	if err != nil {
+		t.Fatalf("bind socket: %v", err)
 	}
+	go func() { _ = s.ServeSocket(ctx, ln, sockPath) }()
 	return s, sockPath
 }
 
