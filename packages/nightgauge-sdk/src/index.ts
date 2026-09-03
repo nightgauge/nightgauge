@@ -630,6 +630,8 @@ export {
   type TerminalFailureKind,
   // Health Analysis Engine (Issue #1101)
   HealthAnalysisEngine,
+  computeOverallHealthScore,
+  getOverallHealthStatus,
   crossReference,
   analyzeTokenEconomics,
   analyzeCostHealth,
@@ -650,6 +652,7 @@ export {
   type HealthDimension,
   type HealthSeverity,
   type HealthStatus,
+  type OverallHealthStatus,
   type HealthConfidence,
   type HealthTrendDirection,
   type HealthFinding,

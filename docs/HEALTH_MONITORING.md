@@ -139,20 +139,30 @@ packages.
 3. Collect `DimensionResult` entries into a
    `Map<HealthDimension, DimensionResult>`
 4. Pass the map to `crossReference()` for a second cross-dimension pass
-5. Compute weighted overall score (auto-normalized weights)
-6. Derive `overallStatus` via `getHealthStatus(score)`
+5. Compute the weighted overall score over the dimensions that have data
+   (`computeOverallHealthScore`)
+6. Derive `overallStatus` via `getOverallHealthStatus(score)` — `"no-data"`
+   when the score is `null`
 7. Generate human-readable `summary` string
 8. Return `HealthAnalysisResult`
 
 ### Weighted Scoring Formula
 
-The overall score is computed from dimension scores using auto-normalized
-weights so the sum of active weights does not need to equal 1.0:
+The overall score is the weighted mean over the dimensions that **have
+data**, re-normalised to their weights so the sum does not need to equal 1.0:
 
 ```
 overallScore = round(Σ(dimensionScore[d] × weight[d]) / Σ(weight[d]))
-               clamped to [0, 100]
+               over d where hasEnoughData, clamped to [0, 100]
+             = null (status "no-data") when no dimension has data
 ```
+
+A dimension with `hasEnoughData: false` is excluded outright (#1197). Its
+placeholder `score` (50 → "fair") is never read, so a starved dimension cannot
+drag the overall towards mediocrity on no evidence. The rule is shared with the
+`nightgauge-pipeline-health` SKILL, which renders such dimensions as `N/A`;
+both are pinned to `skills/nightgauge-pipeline-health/overall-score-corpus.json`
+by `overallScore.corpusParity.test.ts`.
 
 Default weights (`DEFAULT_HEALTH_CONFIG`):
 
@@ -192,8 +202,8 @@ Each detected correlation produces a `CrossReference` with `id`, `dimensions`,
 interface HealthAnalysisResult {
   dimensions: Partial<Record<HealthDimension, DimensionResult>>;
   crossReferences: CrossReference[];
-  overallScore: number; // 0–100
-  overallStatus: HealthStatus;
+  overallScore: number | null; // 0–100, null when no dimension has data
+  overallStatus: OverallHealthStatus; // HealthStatus | "no-data"
   summary: string;
   analyzedAt: string; // ISO 8601
   config: HealthAnalysisConfig;

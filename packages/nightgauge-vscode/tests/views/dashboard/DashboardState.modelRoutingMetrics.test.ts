@@ -10,12 +10,19 @@
  * the Go writer produces, so they fail if the guard regresses to `Array.isArray`
  * or if the field plumbing goes back to reading `stage.stage` / `stage.tokens`
  * (neither of which exists on a stage detail).
+ *
+ * #1197: the fixtures stamp `AUTOMATIC_MODEL_SELECTION_SOURCE` ("scheduler",
+ * what Go writes) rather than the literal "auto" retired in #446. The filter
+ * in `getModelRoutingMetrics` compared against "auto" until #1197, which made
+ * it match nothing on any real workspace; fixtures written in the same dead
+ * vocabulary kept the tests green through that.
  */
 
 import { describe, it, expect, vi, afterEach } from "vitest";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { AUTOMATIC_MODEL_SELECTION_SOURCE } from "@nightgauge/sdk";
 import { createMockMemento } from "../../mocks/memento";
 
 vi.mock("vscode", () => ({
@@ -57,7 +64,7 @@ function runRecord(issueNumber: number) {
         started_at: "2026-03-01T00:00:00.000Z",
         model_selection: {
           model: "sonnet",
-          source: "auto",
+          source: AUTOMATIC_MODEL_SELECTION_SOURCE,
           mode: "automatic",
           confidence: 0.7,
           complexity: "S",
@@ -69,7 +76,7 @@ function runRecord(issueNumber: number) {
         started_at: "2026-03-01T00:30:00.000Z",
         model_selection: {
           model: "opus",
-          source: "auto",
+          source: AUTOMATIC_MODEL_SELECTION_SOURCE,
           mode: "automatic",
           confidence: 0.9,
           complexity: "L",
@@ -117,7 +124,7 @@ describe("getModelRoutingMetrics (#466)", () => {
     // Before #466 this was null on every workspace, because the Array.isArray
     // guard meant `records` was always empty.
     expect(metrics).not.toBeNull();
-    // Only the two `source: "auto"` stages count; "stage-default" is filtered.
+    // Only the two scheduler-sourced stages count; "stage-default" is filtered.
     expect(metrics!.totalAutoSelectedRuns).toBe(2);
     expect(metrics!.modelUsage).toEqual({ sonnet: 1, opus: 1 });
   });

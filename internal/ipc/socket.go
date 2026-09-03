@@ -27,17 +27,47 @@ func DaemonSocketPath(workspaceRoot string) string {
 	return filepath.Join(workspaceRoot, ".nightgauge", "daemon.sock")
 }
 
-// ListenSocket starts a Unix domain socket listener at path and serves
-// request/response JSON-RPC calls (reusing the Request/Response envelope
-// from protocol.go) until ctx is done. It is additive to Run's stdio loop —
-// stdio push events (Emit) are unaffected; socket clients receive only the
-// response to their own request, never the broadcast stream.
+// ListenSocket binds a Unix domain socket at path and serves request/response
+// JSON-RPC calls (reusing the Request/Response envelope from protocol.go)
+// until ctx is done. It is BindSocket followed by ServeSocket; the daemon
+// (`nightgauge serve`) runs it on a goroutine and never needs to know when
+// the socket became reachable. Anything that DOES need that — a test fixture,
+// a supervisor that hands the path to a client — must call the two halves
+// itself, because ListenSocket blocks for the daemon's lifetime and has no
+// moment at which "ready" could be reported.
+//
+// It is additive to Run's stdio loop — stdio push events (Emit) are
+// unaffected; socket clients receive only the response to their own request,
+// never the broadcast stream.
 //
 // Windows is unsupported (net.Listen("unix", ...) is POSIX-only); callers on
 // Windows get the listen error back and should log it non-fatally, matching
 // today's "no daemon reachable" fallback behavior on every OS (no
 // regression).
 func (s *Server) ListenSocket(ctx context.Context, path string) error {
+	ln, err := s.BindSocket(path)
+	if err != nil {
+		return err
+	}
+	return s.ServeSocket(ctx, ln, path)
+}
+
+// BindSocket creates the socket at path and returns the listener. It is the
+// readiness signal for the socket transport (#1158): when it returns nil
+// error, the kernel is accepting connections on path — bind() AND listen()
+// have both happened — and a client may dial immediately. Connections made
+// before ServeSocket starts accepting simply wait in the listen backlog; they
+// are not refused.
+//
+// This matters because the socket FILE is not that signal. net.Listen("unix")
+// is socket(); bind(); listen(), and the file appears at bind(), one syscall
+// before anyone is listening. A client that dials in that window gets
+// ECONNREFUSED. Readiness observed by polling os.Stat therefore lies under
+// load — exactly when the window is widest — which is how the peercred tests
+// failed on a loaded gate while passing in isolation. Callers that need to
+// know the socket is up call BindSocket synchronously and only then start
+// ServeSocket; nobody should poll the filesystem for it.
+func (s *Server) BindSocket(path string) (net.Listener, error) {
 	// Clear a stale socket file left by a crashed prior daemon — net.Listen
 	// fails with "address already in use" otherwise. A genuinely live
 	// listener holding the path still fails Listen correctly below.
@@ -45,19 +75,26 @@ func (s *Server) ListenSocket(ctx context.Context, path string) error {
 
 	if dir := filepath.Dir(path); dir != "" {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
-			return fmt.Errorf("ipc: create socket dir: %w", err)
+			return nil, fmt.Errorf("ipc: create socket dir: %w", err)
 		}
 	}
 
 	ln, err := net.Listen("unix", path)
 	if err != nil {
-		return fmt.Errorf("ipc: listen on socket %s: %w", path, err)
+		return nil, fmt.Errorf("ipc: listen on socket %s: %w", path, err)
 	}
 	if err := os.Chmod(path, 0o600); err != nil {
 		ln.Close()
-		return fmt.Errorf("ipc: chmod socket %s: %w", path, err)
+		return nil, fmt.Errorf("ipc: chmod socket %s: %w", path, err)
 	}
+	return ln, nil
+}
 
+// ServeSocket accepts connections on ln — a listener from BindSocket — and
+// serves each one until ctx is done, then closes the listener and removes
+// the socket file at path. It returns nil on a ctx-driven shutdown and the
+// accept error otherwise.
+func (s *Server) ServeSocket(ctx context.Context, ln net.Listener, path string) error {
 	go func() {
 		<-ctx.Done()
 		ln.Close()

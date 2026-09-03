@@ -49,24 +49,13 @@ func startGateRecordDaemon(t *testing.T, workspace string) {
 	if err := os.MkdirAll(filepath.Dir(sock), 0o700); err != nil {
 		t.Fatalf("create socket dir: %v", err)
 	}
-	listenErr := make(chan error, 1)
-	go func() { listenErr <- srv.ListenSocket(ctx, sock) }()
-
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		select {
-		case err := <-listenErr:
-			// Report the real reason rather than a bare timeout.
-			t.Fatalf("the test daemon's listener exited: %v", err)
-		default:
-		}
-		if c, err := ipc.DialClient(context.Background(), sock, 100*time.Millisecond); err == nil {
-			c.Close()
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
+	// BindSocket is the readiness signal (#1158): once it returns the kernel
+	// is accepting on sock, so the first DialClient below cannot be refused.
+	ln, err := srv.BindSocket(sock)
+	if err != nil {
+		t.Fatalf("bind the test daemon's socket: %v", err)
 	}
-	t.Fatal("the test daemon never came up on its socket")
+	go func() { _ = srv.ServeSocket(ctx, ln, sock) }()
 }
 
 // seedRun drives one run into existence on the daemon — a live registry entry

@@ -211,7 +211,12 @@ export type {
 } from "./health/index.js";
 
 // Health Analysis Engine (Issue #1101)
-export { HealthAnalysisEngine } from "./health/index.js";
+export {
+  HealthAnalysisEngine,
+  computeOverallHealthScore,
+  getOverallHealthStatus,
+  type ScoredDimension,
+} from "./health/index.js";
 export { crossReference } from "./health/index.js";
 export {
   analyzeTokenEconomics,
@@ -235,6 +240,7 @@ export type {
   HealthDimension,
   Severity as HealthSeverity,
   HealthStatus,
+  OverallHealthStatus,
   Confidence as HealthConfidence,
   TrendDirection as HealthTrendDirection,
   Finding as HealthFinding,

@@ -28,6 +28,7 @@ import type { IssueCostAggregation } from "../../utils/executionHistoryReader";
 import type { HealthWidgetData } from "./HealthWidgetTypes";
 import type { CostSummary, CostHistoryEntry } from "./CostSummaryCalculator";
 import type { PipelineCostEstimate, AutoModelSelectorConfig } from "@nightgauge/sdk";
+import { AUTOMATIC_MODEL_SELECTION_SOURCE } from "@nightgauge/sdk";
 import type { HealthCheckReport } from "../../types/pipelineHealth";
 import {
   isOrchestratorCrashRecord,
@@ -3349,8 +3350,13 @@ export class DashboardState {
         }
       }
 
-      // Filter to auto-selected records
-      const autoRecords = records.filter((r) => r.selectionSource === "auto");
+      // Filter to automatically-selected records. Until #1197 this compared
+      // against the literal "auto", a value retired in #446 that no writer
+      // has ever emitted (Go stamps "scheduler"), so the filter was always
+      // empty and the widget permanently null. The SDK owns the vocabulary.
+      const autoRecords = records.filter(
+        (r) => r.selectionSource === AUTOMATIC_MODEL_SELECTION_SOURCE
+      );
 
       if (autoRecords.length === 0) return null;
 
