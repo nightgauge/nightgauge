@@ -80,9 +80,6 @@ func (b *strandedBoard) ListItems(_ context.Context, statusFilter string) ([]for
 func (b *strandedBoard) ListOpenItems(context.Context) ([]forgetypes.BoardItem, int, error) {
 	return b.openItems, len(b.openItems), b.openItemsErr
 }
-func (b *strandedBoard) CountsByStatus(context.Context) (*forgetypes.StatusCounts, error) {
-	return nil, forge.ErrUnsupported
-}
 func (b *strandedBoard) GetItem(context.Context, string, string, int) (*forgetypes.BoardItem, error) {
 	return nil, forge.ErrUnsupported
 }

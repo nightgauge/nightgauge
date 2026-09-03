@@ -15,6 +15,7 @@ package ipc
 import (
 	"bufio"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -148,27 +149,56 @@ func newIpcTestHarnessWithGitHub(t *testing.T, githubURL string) *ipcTestHarness
 
 // ─── board.counts shape tests ──────────────────────────────────────────────
 
-// boardCountsGraphQLResponse returns a mock response for the raw CountsByStatus query.
-// The query uses aliases: ready, inProgress, inReview, done, backlog.
-func boardCountsGraphQLResponse() interface{} {
+// boardItemsGraphQLResponse is one page of the open-item board read with a
+// Status single-select value on each item. board.counts no longer has a
+// query of its own (#TBD-board-counts): the counts are derived daemon-side
+// from the cached `is:open` snapshot, so the mock serves the snapshot.
+func boardItemsGraphQLResponse(statuses ...string) interface{} {
+	nodes := make([]interface{}, 0, len(statuses))
+	for i, status := range statuses {
+		nodes = append(nodes, map[string]interface{}{
+			"id": fmt.Sprintf("PVI_%d", i),
+			"fieldValues": map[string]interface{}{
+				"nodes": []interface{}{
+					map[string]interface{}{
+						"__typename": "ProjectV2ItemFieldSingleSelectValue",
+						"name":       status,
+						"field":      map[string]interface{}{"name": "Status"},
+					},
+				},
+			},
+			"content": map[string]interface{}{
+				"__typename": "Issue",
+				"number":     i + 1,
+				"title":      "item",
+				"state":      "OPEN",
+				"url":        fmt.Sprintf("https://github.com/nightgauge/nightgauge/issues/%d", i+1),
+				"repository": map[string]interface{}{"nameWithOwner": "nightgauge/nightgauge"},
+				"labels":     map[string]interface{}{"nodes": []interface{}{}},
+				"subIssues":  map[string]interface{}{"nodes": []interface{}{}},
+				"parent":     map[string]interface{}{"number": 0, "title": ""},
+				"blockedBy":  map[string]interface{}{"nodes": []interface{}{}},
+				"blocking":   map[string]interface{}{"nodes": []interface{}{}},
+			},
+		})
+	}
 	return map[string]interface{}{
 		"organization": map[string]interface{}{
 			"projectV2": map[string]interface{}{
-				"ready":      map[string]interface{}{"totalCount": 5},
-				"inProgress": map[string]interface{}{"totalCount": 2},
-				"inReview":   map[string]interface{}{"totalCount": 1},
-				"done":       map[string]interface{}{"totalCount": 12},
-				"backlog":    map[string]interface{}{"totalCount": 8},
+				"items": map[string]interface{}{
+					"pageInfo": map[string]interface{}{"hasNextPage": false, "endCursor": ""},
+					"nodes":    nodes,
+				},
 			},
 		},
 	}
 }
 
 func TestGitHub_BoardCounts_Shape(t *testing.T) {
-	// board.counts uses queryRaw with the alias-based query.
-	// We match on "inProgress" which is unique to this query.
+	// board.counts reads the open-item snapshot (the projectV2 items query)
+	// and aggregates statuses; there is no counts query to mock.
 	srv := newMockGitHubServer(t, map[string]interface{}{
-		"inProgress": boardCountsGraphQLResponse(),
+		"projectV2": boardItemsGraphQLResponse("Ready", "Ready", "In progress", "Backlog"),
 	})
 
 	h := newIpcTestHarnessWithGitHub(t, srv.URL)
@@ -180,24 +210,25 @@ func TestGitHub_BoardCounts_Shape(t *testing.T) {
 		t.Fatalf("board.counts error: %+v", resp.Error)
 	}
 
-	assertResultShape(t, resp.Result, nil, []string{"ready", "inProgress", "inReview", "done", "backlog"})
+	fields := []string{"ready", "inProgress", "inReview", "backlog"}
+	assertResultShape(t, resp.Result, nil, fields)
 
 	data, _ := json.Marshal(resp.Result)
 	var result map[string]interface{}
 	json.Unmarshal(data, &result) //nolint:errcheck
 
-	for _, field := range []string{"ready", "inProgress", "inReview", "done", "backlog"} {
-		v, ok := result[field]
+	if _, has := result["done"]; has {
+		t.Errorf("board.counts must not carry a done bucket: %s", data)
+	}
+	want := map[string]float64{"ready": 2, "inProgress": 1, "inReview": 0, "backlog": 1}
+	for _, field := range fields {
+		num, ok := result[field].(float64)
 		if !ok {
-			continue // already caught by assertResultShape
-		}
-		num, ok := v.(float64)
-		if !ok {
-			t.Errorf("board.counts field %q must be a number, got %T", field, v)
+			t.Errorf("board.counts field %q must be a number, got %T", field, result[field])
 			continue
 		}
-		if num < 0 {
-			t.Errorf("board.counts field %q = %v, want >= 0", field, num)
+		if num != want[field] {
+			t.Errorf("board.counts.%s = %v, want %v (from the snapshot's statuses)", field, num, want[field])
 		}
 	}
 }
@@ -475,19 +506,10 @@ func TestGitHub_HTTP401_ReturnInternalError(t *testing.T) {
 }
 
 func TestGitHub_EmptyBoardItems_ReturnsEmptyArray(t *testing.T) {
-	// board.counts with all zeros — valid empty state
+	// board.counts over an empty open-item snapshot — valid empty state, and
+	// every bucket must still be present as a number rather than omitted.
 	srv := newMockGitHubServer(t, map[string]interface{}{
-		"inProgress": map[string]interface{}{
-			"organization": map[string]interface{}{
-				"projectV2": map[string]interface{}{
-					"ready":      map[string]interface{}{"totalCount": 0},
-					"inProgress": map[string]interface{}{"totalCount": 0},
-					"inReview":   map[string]interface{}{"totalCount": 0},
-					"done":       map[string]interface{}{"totalCount": 0},
-					"backlog":    map[string]interface{}{"totalCount": 0},
-				},
-			},
-		},
+		"projectV2": boardItemsGraphQLResponse(),
 	})
 
 	h := newIpcTestHarnessWithGitHub(t, srv.URL)
@@ -499,5 +521,5 @@ func TestGitHub_EmptyBoardItems_ReturnsEmptyArray(t *testing.T) {
 		t.Fatalf("board.counts error: %+v", resp.Error)
 	}
 
-	assertResultShape(t, resp.Result, nil, []string{"ready", "inProgress", "inReview", "done", "backlog"})
+	assertResultShape(t, resp.Result, nil, []string{"ready", "inProgress", "inReview", "backlog"})
 }
