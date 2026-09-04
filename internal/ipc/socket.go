@@ -12,12 +12,33 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net"
 	"os"
 	"path/filepath"
+	"time"
 )
+
+// ErrSocketInUse reports that a LIVE daemon is already accepting on the
+// socket path, so this process must not bind it.
+//
+// It is not an error the caller should treat as fatal. `serve` is two
+// transports: the stdio JSON-RPC loop, which is private to one extension
+// host and may legitimately run once per VS Code window, and this socket,
+// which is the workspace's single terminal-facing endpoint. A second window's
+// daemon losing the socket is correct and expected — it keeps its stdio pipe
+// and the terminal CLI keeps reaching the first daemon. Refusing to start
+// `serve` over this would be the outage #1349 already backed out of once.
+var ErrSocketInUse = errors.New("ipc: a live daemon is already listening on the socket")
+
+// bindProbeTimeout bounds the liveness probe in BindSocket. It only ever
+// dials a path on the local filesystem, where connect() either completes or
+// is refused immediately; the timeout exists so a socket file whose peer is
+// wedged (bound and listening but never accepting) cannot hang daemon
+// startup forever.
+const bindProbeTimeout = 250 * time.Millisecond
 
 // DaemonSocketPath returns the workspace-scoped Unix socket path a co-located
 // `nightgauge serve` daemon listens on. Cross-machine/cross-workspace
@@ -68,9 +89,32 @@ func (s *Server) ListenSocket(ctx context.Context, path string) error {
 // know the socket is up call BindSocket synchronously and only then start
 // ServeSocket; nobody should poll the filesystem for it.
 func (s *Server) BindSocket(path string) (net.Listener, error) {
-	// Clear a stale socket file left by a crashed prior daemon — net.Listen
-	// fails with "address already in use" otherwise. A genuinely live
-	// listener holding the path still fails Listen correctly below.
+	// A stale socket file left by a crashed prior daemon must be cleared —
+	// net.Listen fails with "address already in use" otherwise. But the file
+	// alone cannot tell stale from live, and unlinking unconditionally STEALS
+	// the path from a running daemon.
+	//
+	// The comment that used to sit here claimed "a genuinely live listener
+	// holding the path still fails Listen correctly below." That is false on
+	// POSIX and was verified false: unlink() detaches the NAME from the
+	// listening socket's inode. The first daemon keeps accepting on an inode
+	// nothing can reach any more, net.Listen on the freed name succeeds, and
+	// every subsequent dial lands on the second daemon. The first becomes
+	// silently unreachable — with the CLI's dial-with-fallback template
+	// (gate.go, attention.go) reporting no daemon rather than the wrong one.
+	//
+	// So probe first and only unlink what does not answer. The probe is a
+	// dial, which is the same question a client asks: a refused or absent
+	// path is stale and safe to clear; a path that accepts belongs to someone.
+	//
+	// This is not mutual exclusion — two daemons starting inside the probe
+	// window can still both bind, and closing THAT race is the serve lease's
+	// job (#1349), not this function's. What it closes is the common and
+	// entirely silent case: a second daemon starting while the first is up.
+	if c, err := net.DialTimeout("unix", path, bindProbeTimeout); err == nil {
+		c.Close()
+		return nil, fmt.Errorf("%w: %s", ErrSocketInUse, path)
+	}
 	_ = os.Remove(path)
 
 	if dir := filepath.Dir(path); dir != "" {

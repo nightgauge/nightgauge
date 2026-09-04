@@ -5042,7 +5042,18 @@ func serveCmd() *cobra.Command {
 			// fatal — the existing stdio daemon must keep working even if
 			// the socket cannot bind (e.g. a read-only .nightgauge mount).
 			go func() {
-				if err := server.ListenSocket(ctx, ipc.DaemonSocketPath(workspaceRoot)); err != nil {
+				switch err := server.ListenSocket(ctx, ipc.DaemonSocketPath(workspaceRoot)); {
+				case err == nil:
+				case errors.Is(err, ipc.ErrSocketInUse):
+					// Expected whenever a second VS Code window opens the same
+					// workspace. This daemon keeps its own stdio pipe — the
+					// extension host that spawned it is unaffected — and the
+					// terminal CLI keeps reaching the daemon that got there
+					// first. Logged as a fact, not a failure: the alternative
+					// (taking the socket) silently made the FIRST daemon
+					// unreachable.
+					log.Printf("ipc: %v — this daemon serves stdio only; terminal CLI calls reach the daemon that bound it first", err)
+				default:
 					log.Printf("ipc: socket listener exited: %v", err)
 				}
 			}()
