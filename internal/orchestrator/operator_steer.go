@@ -51,6 +51,14 @@ func WriteOperatorSteer(workspaceRoot string, issueNumber int, steerText, stageH
 	if workspaceRoot == "" {
 		return fmt.Errorf("operator steer: workspaceRoot is required")
 	}
+	if issueNumber <= 0 {
+		// feedback-{N}.json is keyed by issue, so a run-less card (the
+		// work-exhaustion producer raises one with an empty Context) would
+		// write feedback-0.json — a file no run ever reads (#1407). Refuse
+		// rather than leave a note nobody will see: the steer box should not
+		// have been offered on a card with no run to steer.
+		return fmt.Errorf("operator steer: an issue number is required (got %d)", issueNumber)
+	}
 	if steerText == "" {
 		return nil // nothing to pin
 	}
