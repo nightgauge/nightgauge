@@ -23,6 +23,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { TIER_BANDS } from "../eval/tierBands.js";
 import { getModelDescriptor } from "../eval/modelRegistry.js";
+import { atomicWriteJSON } from "../context/ContextManager.js";
 
 /**
  * Normalize a model identifier to the key both sides of the calibration loop
@@ -243,14 +244,8 @@ export class StageModelCalibrationService {
    * Save calibration table to disk with atomic write.
    */
   static async save(calibrationPath: string, table: StageModelCalibrationTable): Promise<void> {
-    const dir = path.dirname(calibrationPath);
-    await fs.mkdir(dir, { recursive: true });
-
-    const tempPath = `${calibrationPath}.tmp`;
     const json = JSON.stringify(table, null, 2);
-
-    await fs.writeFile(tempPath, json, "utf-8");
-    await fs.rename(tempPath, calibrationPath);
+    await atomicWriteJSON(calibrationPath, json);
   }
 
   /**
