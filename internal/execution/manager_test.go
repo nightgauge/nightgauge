@@ -654,3 +654,103 @@ func TestRunStage_DoesNotCreateASnapshotForARunThatHasNone(t *testing.T) {
 		t.Fatalf("the manager wrote %v into a state dir it must never author", names)
 	}
 }
+
+// sigtermTrapAdapter is a minimal agentic adapters.SkillRunner whose
+// BuildCommand spawns a shell that traps SIGTERM, echoes proof to stderr, and
+// exits 0 — the graceful-stop shape #564 exists for. No real CLI adapter
+// exercises this cheaply: they all shell out to a vendor binary that isn't
+// present in CI, so the fake is the only way to pin the trap-and-exit-0 race
+// against CancelWithGrace deterministically.
+type sigtermTrapAdapter struct{}
+
+func (sigtermTrapAdapter) Name() string { return "sigterm-trap-fake" }
+
+func (sigtermTrapAdapter) BuildCommand(adapters.RunOptions) (string, []string, map[string]string) {
+	return "sh", []string{"-c", `trap "echo received SIGTERM >&2; exit 0" TERM; sleep 30`}, nil
+}
+
+func (sigtermTrapAdapter) UsesStdin() bool { return false }
+func (sigtermTrapAdapter) Agentic() bool   { return true }
+
+// TestRunStage_GracefulStopExitZeroIsReportedCancelled is the #564 red test:
+// operator cancel goes through Manager.CancelWithGrace, which SIGTERMs the
+// stage and waits for it to exit BEFORE cancelling the execution context. A
+// CLI that traps SIGTERM and exits 0 — this fake stands in for one — comes
+// back from cmd.Wait() as err==nil, ExitCode==0: identical to a healthy
+// finish. Without RunResult.Cancelled there is no way for anything downstream
+// to tell the two apart, and the stage's own stderr (its explanation for
+// dying) is silently dropped.
+func TestRunStage_GracefulStopExitZeroIsReportedCancelled(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, ".nightgauge", "worktrees", "nightgauge-issue-564"), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	m := NewManager(root, sigtermTrapAdapter{})
+	key := "nightgauge/nightgauge#564"
+
+	resultCh := make(chan *adapters.RunResult, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		result, err := m.RunStage(context.Background(), StageOptions{
+			Repo:        "nightgauge/nightgauge",
+			IssueNumber: 564,
+			Stage:       "feature-dev",
+			Timeout:     30 * time.Second,
+		})
+		resultCh <- result
+		errCh <- err
+	}()
+
+	// Wait for RunStage to register the execution before requesting the stop —
+	// CancelWithGrace is a no-op (graceful=false, no error) against a key that
+	// isn't in m.running yet, which would make this test race the spawn
+	// instead of exercising the cancel path.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		m.mu.Lock()
+		_, ok := m.running[key]
+		m.mu.Unlock()
+		if ok {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("timed out waiting for RunStage to register its execution")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	// Registration happens right after cmd.Start(), which only forks+execs —
+	// the shell itself needs a moment to actually reach the `trap` builtin.
+	// A SIGTERM that lands before then hits sh's default (uncaught)
+	// disposition and kills it by signal instead of running the trap, which
+	// would surface as ExitCode == -1, not the graceful ExitCode == 0 this
+	// test exists to pin. Same startup-race guard as
+	// TestCancelWithGrace_ForceKill_WhenProcessIgnoresSIGTERM's sleep.
+	time.Sleep(50 * time.Millisecond)
+
+	graceful, err := m.CancelWithGrace(key, 5*time.Second)
+	if err != nil {
+		t.Fatalf("CancelWithGrace: %v", err)
+	}
+	if !graceful {
+		t.Fatal("expected graceful=true — the fake CLI traps SIGTERM and exits 0 well inside the grace period")
+	}
+
+	result := <-resultCh
+	if err := <-errCh; err != nil {
+		t.Fatalf("RunStage returned err = %v; a trapped-SIGTERM exit-0 is CLI mode's nil-error shape", err)
+	}
+	if result == nil {
+		t.Fatal("RunStage returned a nil result alongside a nil error")
+	}
+	if result.ExitCode != 0 {
+		t.Fatalf("ExitCode = %d, want 0 — the fake CLI traps SIGTERM and exits cleanly", result.ExitCode)
+	}
+	if !result.Cancelled {
+		t.Fatal("result.Cancelled = false, want true — CancelWithGrace requested this stop; " +
+			"the field does not exist / is never set on today's tree, which is exactly the #564 hole")
+	}
+	if !strings.Contains(result.Stderr, "received SIGTERM") {
+		t.Fatalf("result.Stderr = %q, want it to contain the trap's proof line %q", result.Stderr, "received SIGTERM")
+	}
+}

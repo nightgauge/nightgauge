@@ -2300,3 +2300,68 @@ func TestGateTerminalKindConstantsMirrorOrchestrator(t *testing.T) {
 		}
 	}
 }
+
+// TestCLIGracefulStop_ExitZeroStillCarriesFailureText is the #564 red test for
+// the scheduler half of the graceful-stop fix.
+//
+// execution.Manager.RunStage sets RunResult.Cancelled when
+// CancelWithGrace/StopExecution requested this exit (the ONLY component that
+// knows a stop was asked for). cliRunResultToStageResult is where that flag
+// must widen the #533 ExitCode!=0 carry gate — the extracted RunResult →
+// StageRunResult projection scheduler.go's RunStage delegates to
+// (internal/execution/manager.go:269, ExecutionManagerRunner.RunStage in this
+// package).
+func TestCLIGracefulStop_ExitZeroStillCarriesFailureText(t *testing.T) {
+	t.Run("Cancelled exit-0 still carries the CLI's own stderr as ErrorText", func(t *testing.T) {
+		result := &adapters.RunResult{
+			ExitCode:  0,
+			Cancelled: true,
+			Stderr:    "received SIGTERM, shutting down\n",
+		}
+
+		got := cliRunResultToStageResult(result)
+
+		if got.ErrorText == "" {
+			t.Fatal("ErrorText is empty for a graceful-stop exit-0 — the CLI's own " +
+				"explanation for dying was dropped, exactly the #564 hole")
+		}
+		if !strings.Contains(got.ErrorText, "received SIGTERM") {
+			t.Errorf("ErrorText = %q, want it to contain the stage's own stderr %q",
+				got.ErrorText, "received SIGTERM")
+		}
+
+		// The reason terminalFailureReason renders from this must not collapse
+		// to the pre-#533 "exit 0: <nil>" shape — err==nil AND failText!="" is
+		// exactly the branch that renders the CLI's own text instead.
+		reason := terminalFailureReason(got.ExitCode, nil, got.ErrorText)
+		if reason == "exit 0: <nil>" {
+			t.Fatalf("terminalFailureReason = %q — the graceful-stop reason was lost, "+
+				"reproducing the exact #533 shape this predicate exists to avoid", reason)
+		}
+		if !strings.HasPrefix(reason, "exit 0: received SIGTERM") {
+			t.Errorf("terminalFailureReason = %q, want it prefixed with the carried reason", reason)
+		}
+	})
+
+	// The success discriminator: this is what stops the Cancelled carry from
+	// re-introducing the #533 regression of publishing a HEALTHY stage's
+	// stderr as a failure reason. Without it, ExitCode==0 && !Cancelled would
+	// have to become the ONLY safe shape, and any accidental widening to a
+	// plain "stderr is non-empty" check would misreport routine chatter
+	// (deprecation notices, progress logs) as why a stage failed.
+	t.Run("exit-0 without Cancelled stays a healthy stage — no failure text", func(t *testing.T) {
+		result := &adapters.RunResult{
+			ExitCode:  0,
+			Cancelled: false,
+			Stderr:    "deprecation notice\n",
+		}
+
+		got := cliRunResultToStageResult(result)
+
+		if got.ErrorText != "" {
+			t.Fatalf("ErrorText = %q, want empty — an ordinary exit-0 stage's stderr "+
+				"must never be published as a failure reason (the #533 regression this "+
+				"predicate must not reintroduce)", got.ErrorText)
+		}
+	})
+}

@@ -111,6 +111,17 @@ type RunResult struct {
 	RefusalFallbackFrom     string
 	RefusalFallbackTo       string
 	RefusalFallbackCategory string
+
+	// Cancelled is true when execution.Manager itself requested this exit —
+	// CancelWithGrace/StopExecution SIGTERM'd the process and it left
+	// gracefully (#564). This is the ONLY component that knows a stop was
+	// asked for: a CLI that traps SIGTERM and exits 0 is indistinguishable
+	// from a healthy exit on ExitCode/err alone, and the scheduler's ctx is
+	// never the one CancelWithGrace cancels (the manager cancels its OWN
+	// execCtx, after the process has already exited), so ctx.Err() at the
+	// runner cannot see it either. Set once, here, so no second predicate for
+	// "was this a stop" grows anywhere else.
+	Cancelled bool
 }
 
 // OutputStreamer receives streamed output from a running skill process.

@@ -422,21 +422,41 @@ func (r *ExecutionManagerRunner) RunStage(ctx context.Context, params StageRunPa
 		return out, err
 	}
 
-	// CLI mode's terminal shape (#533): execution.Manager turns a non-zero exit
-	// into result.ExitCode and returns a NIL error, with the reason on
-	// result.Stderr. Every classification input in runPipeline used to derive
-	// only from that nil err, so ClassifyTerminalKind was handed the literal
-	// string "exit 1: <nil>" and answered subagent_crash (#520) for EVERY
-	// CLI-mode failure of every adapter — which then routed to an upward model
-	// escalation instead of, for a rejected model, the #42 sticky downgrade.
-	//
-	// Gated on a non-zero exit because that is the ONLY failure predicate CLI
-	// mode has: adapters.RunResult carries no Success field (the IPC result
-	// does, and IpcStageRunner reads it). Without the gate a successful stage's
-	// stderr — deprecation notices, progress chatter — would be published as a
-	// failure reason for a run that never failed.
+	return cliRunResultToStageResult(result), nil
+}
+
+// cliRunResultToStageResult projects a completed execution.Manager RunResult
+// (err == nil from RunStage) onto the cross-mode StageRunResult. Extracted
+// from ExecutionManagerRunner.RunStage (#564) so the failure-text carry —
+// including the graceful-stop exit-0 case below — is unit-testable at the
+// exact seam the scheduler uses, without spawning a process.
+//
+// CLI mode's terminal shape (#533): execution.Manager turns a non-zero exit
+// into result.ExitCode and returns a NIL error, with the reason on
+// result.Stderr. Every classification input in runPipeline used to derive
+// only from that nil err, so ClassifyTerminalKind was handed the literal
+// string "exit 1: <nil>" and answered subagent_crash (#520) for EVERY
+// CLI-mode failure of every adapter — which then routed to an upward model
+// escalation instead of, for a rejected model, the #42 sticky downgrade.
+//
+// Gated on result.ExitCode != 0 OR result.Cancelled (#564): ExitCode != 0 was
+// the only failure predicate CLI mode had at #533 time. result.Cancelled adds
+// the one exit-0 failure mode CLI mode actually has — operator cancel
+// (Manager.CancelWithGrace) SIGTERMs the stage and only THEN cancels its
+// context, so a CLI that traps SIGTERM and exits 0 is otherwise
+// indistinguishable from a healthy finish, and its stderr (its own
+// explanation for dying) would be silently dropped. Cancelled is set by
+// execution.Manager alone — see adapters.RunResult.Cancelled — so this stays
+// the ONLY place that reads it; nothing here re-derives "was this a stop"
+// from ctx.Err() or the exit code.
+//
+// Neither arm becomes a plain "stderr is non-empty" check: that would
+// re-publish a HEALTHY stage's stderr — deprecation notices, progress
+// chatter — as a failure reason, which is exactly the regression #533's own
+// review flagged and the reason the gate exists at all.
+func cliRunResultToStageResult(result *adapters.RunResult) *StageRunResult {
 	errorText, lastOutputLines := "", ""
-	if result.ExitCode != 0 {
+	if result.ExitCode != 0 || result.Cancelled {
 		errorText, lastOutputLines = cliFailureText(result.Stdout, result.Stderr)
 	}
 
@@ -452,7 +472,7 @@ func (r *ExecutionManagerRunner) RunStage(ctx context.Context, params StageRunPa
 		RefusalFallbackCategory: result.RefusalFallbackCategory,
 		ErrorText:               errorText,
 		LastOutputLines:         lastOutputLines,
-	}, nil
+	}
 }
 
 // issueGetter abstracts issue operations used by the scheduler for testability.
