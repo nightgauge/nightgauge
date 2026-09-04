@@ -69,6 +69,12 @@ type prStageResultJSON struct {
 	Reason      string `json:"reason"`
 	RateLimited bool   `json:"rate_limited"`
 	DurationMs  int64  `json:"duration_ms"`
+	// Phases are the transitions the deterministic runner reported, in order
+	// (#1397). The scheduler path writes these straight to the run's
+	// RuntimeState and to the live view; this path runs in a SEPARATE PROCESS
+	// with neither, so it returns them for the caller to replay. Omitted when
+	// empty so a punt before the first phase does not emit `"phases": null`.
+	Phases []orchestrator.PhaseTransition `json:"phases,omitempty"`
 
 	// Commit-owner outcome (#1179), additive — the TS shim ignores unknown
 	// fields. pr-create is the pipeline's commit owner, so its verdict must be
@@ -178,8 +184,15 @@ func prStageCreateCmd() *cobra.Command {
 			ctx, cancel := prStageContext(cmd, timeoutSec)
 			defer cancel()
 
+			// #1397: the runners report phases through a reporter on the
+			// context. The scheduler attaches one backed by RuntimeState and
+			// the live IPC events; out of process there is neither, so record
+			// the transitions, stream them to stderr as they happen, and hand
+			// the full array back in the result. The array alone would leave a
+			// caller at 0/14 until the process exits.
+			phases := newPrStagePhaseRecorder(cmd, outputJSON)
 			runner := orchestrator.NewDefaultPRCreateRunner(client)
-			res, runErr := runner.Run(ctx, issueNumber, repo, workspace)
+			res, runErr := runner.Run(pmstages.WithPhaseReporter(ctx, phases), issueNumber, repo, workspace)
 
 			out := prStageResultJSON{
 				Stage:      "pr-create",
@@ -192,6 +205,8 @@ func prStageCreateCmd() *cobra.Command {
 				CommitMade:   res.CommitPerformed,
 				CommitSHA:    res.CommitSHA,
 				CommitReason: res.CommitReason,
+
+				Phases: phases.Transitions(),
 			}
 			if runErr != nil {
 				// Mirror the scheduler: an unexpected runner error is a punt to
@@ -243,8 +258,10 @@ caller DEFERS instead of running the LLM into an exhausted bucket (#3976).`,
 			ctx, cancel := prStageContext(cmd, timeoutSec)
 			defer cancel()
 
+			// #1397 — see the pr-create verb above.
+			phases := newPrStagePhaseRecorder(cmd, outputJSON)
 			runner := pmstages.NewDeterministicRunner()
-			res, runErr := runner.Run(ctx, issueNumber, repo, workspace)
+			res, runErr := runner.Run(pmstages.WithPhaseReporter(ctx, phases), issueNumber, repo, workspace)
 
 			out := prStageResultJSON{
 				Stage:      "pr-merge",
@@ -253,6 +270,8 @@ caller DEFERS instead of running the LLM into an exhausted bucket (#3976).`,
 				PRState:    res.PRState,
 				Reason:     res.Reason,
 				DurationMs: res.DurationMs,
+
+				Phases: phases.Transitions(),
 			}
 			if runErr != nil {
 				out.Path = string(pmstages.PathPunt)
@@ -270,6 +289,23 @@ caller DEFERS instead of running the LLM into an exhausted bucket (#3976).`,
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Emit JSON instead of human output")
 	cmd.Flags().IntVar(&timeoutSec, "timeout", 1200, "Overall timeout in seconds (0 = no CLI timeout; bounds the CI-wait)")
 	return cmd
+}
+
+// newPrStagePhaseRecorder builds the runner's phase sink.
+//
+// In --json mode (how the VS Code extension always invokes these verbs) the
+// transitions are ALSO streamed to stderr as they happen, sentinel-prefixed, so
+// the caller's phase count advances during the run rather than jumping at exit.
+// stdout stays exactly one JSON object — that contract is what the extension's
+// parser depends on — so the live channel is stderr.
+//
+// Without --json there is a human at the terminal and no consumer for the
+// sentinel lines, so the recorder only accumulates.
+func newPrStagePhaseRecorder(cmd *cobra.Command, outputJSON bool) *orchestrator.PhaseRecorder {
+	if !outputJSON {
+		return orchestrator.NewPhaseRecorder()
+	}
+	return orchestrator.NewStreamingPhaseRecorder(cmd.ErrOrStderr())
 }
 
 // prStageContext derives the runner context, applying a CLI-level timeout
