@@ -38,6 +38,7 @@ REQUIRED_FILES=(
   scripts/test-ci-local-inventory.sh
   scripts/ci-local-steps.txt
   scripts/test-branch-merged-check.sh
+  scripts/test-post-merge-check.sh
   scripts/test-ci-change-class.sh
   scripts/npm-audit-check.js
   scripts/validate-skill-metadata.sh
@@ -351,6 +352,14 @@ run_step "gofmt -l ./internal ./cmd" \
 #     door (#593).
 run_group "branch-merged-check.sh regression suite" \
   bash scripts/test-branch-merged-check.sh
+
+# 1b2. post-merge-check.sh regression suite — the OTHER verification idiom
+#      AGENTS.md mandates and that hand-writing gets wrong (#1038). Its two
+#      motivating states — an empty check-run list and a still-running check —
+#      cannot be produced on demand against live CI, so they are only ever
+#      exercised here.
+run_group "post-merge-check.sh regression suite" \
+  bash scripts/test-post-merge-check.sh
 
 # 1c. CI change-class gate (#647) — drives scripts/ci-change-class.sh against
 #     real git fixtures AND asserts .github/workflows/ci.yml still consumes its

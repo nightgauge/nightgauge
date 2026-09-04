@@ -162,11 +162,45 @@ run on the merge commit is the **observation** of the tree that does. They can
 disagree, and when they do the disagreement is the finding:
 
 ```bash
-gh api "repos/<owner>/<repo>/commits/<merge-sha>/check-runs" \
-  --jq '[.check_runs[]|select(.conclusion!="success" and .conclusion!="skipped" and .conclusion!="neutral")]|length'
+scripts/post-merge-check.sh <merge-sha>   # repo defaults to this checkout's origin
 ```
 
-Non-zero means `main` is red and it is the merger's to fix immediately.
+It exits `0` GREEN / `1` RED / `2` NOT-YET. `1` means `main` is red and it is the
+merger's to fix immediately. Read the exit code **without a pipe** — a
+pipeline's status is the last command's, so `post-merge-check.sh <sha> | tail`
+always reports 0.
+
+#### Why this is a script (#1038)
+
+The idiom here used to be a one-liner that counted non-green check-runs and
+called a zero count green. It counted bad things **without first establishing
+that it had looked at anything**, and that fails in both directions:
+
+- Immediately after a merge, the workflows for the merge commit **have not been
+  created yet**. `.check_runs` is an empty array, the count is zero, and zero
+  was the documented signal for green. The check that exists to catch a red
+  `main` reported green precisely when run promptly — which is exactly when an
+  agent runs it. Two sessions in two repositories found this independently; the
+  second acted on a false green before re-querying.
+- A check still `in_progress` carries `conclusion: null`, which is not
+  success/skipped/neutral, so a healthy merge briefly read **red**. Less
+  dangerous on its own, but it teaches an operator to re-run the command until
+  the answer is nicer, which is how the false green above gets believed.
+
+`NOT-YET` exists as its own exit code because "I cannot tell yet" is a third
+answer, and folding it into either verdict is the entire defect. The general
+principle, the same shape as the "a green check on a job that skipped is not
+evidence" rule: **an absence of failures is not the presence of successes.**
+
+Note that the **Go** implementation was already correct — `nightgauge hook
+post-merge` polls to completion and never reads an empty list as green (below).
+Only the hand-written shell idiom was wrong, which is exactly the argument for
+scripting it: the same reasoning had already been done once, in the language
+that had a test suite.
+
+`scripts/test-post-merge-check.sh` pins all three verdicts against stubbed
+check-run payloads, because the two states that motivated this — an empty list
+and a still-running check — cannot be produced on demand against live CI.
 
 The pipeline runs this check itself (#1249): `nightgauge hook post-merge` —
 which both the extension and the Go scheduler call after every pipeline merge,
