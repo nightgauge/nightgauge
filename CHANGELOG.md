@@ -19,25 +19,6 @@ and this project adheres to
 
 ### Added
 
-#### `doctor` flags foreign processes holding open a pipeline worktree (#519)
-
-- `orphaned_processes` now runs a second, cwd-keyed classifier over **every**
-  process on the machine (not only ones the pipeline spawned): any process
-  whose cwd resolves inside a pipeline worktree base
-  (`.nightgauge/worktrees/*`, `.worktrees/*`, or `.claude/worktrees/*`) is
-  folded into the same report, tagged `[cwd inside worktree issue-N]` or
-  `[cwd inside REMOVED worktree issue-N]` when the worktree no longer appears
-  in `git worktree list` — the case that can also block a future
-  `git worktree remove` (#110), and detected even once the directory itself
-  is gone. Live-worktree holders are age-gated the same way #341's own scan
-  is (a stage or session that just started is not a leak); a REMOVED
-  worktree's holder is reported at any age. Stale-vs-live is decided per repo
-  root, so two repos legitimately mid-flight on the same issue number can
-  never paper over each other. Interactive agent harnesses (Claude Code,
-  Codex, the VSCode extension) can leak a detached shell into a worktree they
-  never clean up; this closes the blind spot in #341's argv-only scan.
-  Report-only, unchanged: no process is ever signaled.
-
 #### Supply-chain hardening for the release path (#136)
 
 - **All GitHub Actions SHA-pinned**: every `uses:` across `.github/workflows/*`
