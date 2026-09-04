@@ -199,12 +199,27 @@ jobs:
       # under errexit an unguarded `wait` on a failing pass aborts the step
       # before the other pass is ever waited on or reported — the failure would
       # be visible but its sibling's result would silently vanish.
+      #
+      # EACH PASS IS BOUNDED BY `timeout 25m`, INSIDE the job's 30-minute
+      # `timeout-minutes`, and that ordering is the whole point. Capturing to
+      # files means nothing is printed until both `wait`s return, so a pass
+      # that HANGS used to be the one failure this step could not report at
+      # all: GitHub cancels the step at the job timeout with both groups still
+      # unwritten and throws the capture files away with the runner. That is
+      # the exact shape the race pass exists to catch — nothing else detects a
+      # drainBackground() join deleted from a test body — and an unreadable
+      # failure log is its own kind of silent failure. With the inner bound,
+      # `timeout` kills the hung pass, `wait` returns 124, both groups replay
+      # in full, and 124 is NAMED as a hang rather than reported as a plain
+      # non-zero exit. The artifact upload below is the second half of that:
+      # `if: always()` so the three capture files survive even a cancellation
+      # the shell never gets to handle.
       - name: Test (plain and race, concurrently)
         if: ${{ needs.changes.outputs.run_heavy != 'false' }}
         run: |
-          go test -json ./... -count=1 > go-test.json 2> go-test.err &
+          timeout 25m go test -json ./... -count=1 > go-test.json 2> go-test.err &
           plain=$!
-          go test -race -count=1 ./... > go-test-race.log 2>&1 &
+          timeout 25m go test -race -count=1 ./... > go-test-race.log 2>&1 &
           race=$!
 
           plain_rc=0
@@ -223,10 +238,34 @@ jobs:
           skips_rc=0
           python3 scripts/check-go-test-skips.py go-test.json || skips_rc=$?
 
+          # 124 is `timeout`'s own kill signal, and it means something different
+          # from a test failure: the suite never finished, so the log above is a
+          # prefix and the last package named in it is where to look.
+          [ "$plain_rc" -ne 124 ] || echo "::error::go test ./... HUNG — killed after 25m; the plain log above is a prefix"
+          [ "$race_rc" -ne 124 ] || echo "::error::go test -race ./... HUNG — killed after 25m; the race log above is a prefix"
+
           [ "$plain_rc" -eq 0 ] || echo "::error::go test ./... failed (exit $plain_rc)"
           [ "$race_rc" -eq 0 ] || echo "::error::go test -race ./... failed (exit $race_rc)"
           [ "$skips_rc" -eq 0 ] || echo "::error::skip accounting failed (exit $skips_rc)"
           [ "$plain_rc" -eq 0 ] && [ "$race_rc" -eq 0 ] && [ "$skips_rc" -eq 0 ]
+      # Evidence that outlives the runner. Both passes write to files, so if the
+      # step is cancelled (job timeout, a runner OOM-kill) the replay groups
+      # never happen and the only record of how far each pass got is these three
+      # files. `if: always()` rather than `failure()` so a green run's skip
+      # accounting input is downloadable too, and `if-no-files-found: ignore`
+      # because on a docs-only PR the test step is skipped and there is nothing
+      # to collect.
+      - name: Upload Go test logs
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: go-test-logs
+          path: |
+            go-test.json
+            go-test.err
+            go-test-race.log
+          if-no-files-found: ignore
+          retention-days: 7
       # The shell-side decision procedure AGENTS.md § Clean up on merge
       # defers to for `git branch -D` calls, kept aligned with the Go sweep's
       # own ancestry-acceptance door (#593). No npm/node needed, so it runs

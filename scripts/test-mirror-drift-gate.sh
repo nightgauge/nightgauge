@@ -32,8 +32,9 @@
 # already-normalised TEMPLATE, so every arm still gets a private, byte-identical
 # sandbox it may mutate, rename or move (arms (g) and (h) destroy `.git`;
 # (h) relocates the whole tree) without any arm observing another's damage.
-# The count of full seeds is asserted at the bottom of this file, because a
-# reverted speed-up is otherwise invisible.
+# Arm (n) asserts how many times the generator ran, because a reverted
+# speed-up is otherwise invisible — and it counts the runs themselves rather
+# than trusting a call site to report them.
 #
 # Run: bash scripts/test-mirror-drift-gate.sh
 # Also run by .github/workflows/lint.yml and scripts/ci-local.sh.
@@ -50,18 +51,68 @@ FAIL=0
 TMP=""
 NEST=""
 TEMPLATE=""
-# How many times the suite paid for a full seed + generator normalisation.
-# Asserted at the end: the fixture is built ONCE and each arm resets from it.
-NORMALISE_RUNS=0
+# The cost guard's ledger: one line per `--generate-only` invocation anywhere
+# in this suite's process tree. Asserted by arm (n). See
+# `install_generate_counter` for why it is a ledger and not a variable.
+GEN_LEDGER=""
+SHIM_DIR=""
+# The `--generate-only` runs the suite legitimately pays for: ONE to normalise
+# the template, plus the three inside arms (j), (j2) and (m), each of which
+# runs the documented FIX command as part of what it asserts. Per-arm seeding
+# takes this to 20.
+EXPECTED_GENERATE_RUNS=4
 SUITE_START="$(date +%s)"
 
 cleanup() {
   [ -n "$TMP" ] && rm -rf "$TMP"
   [ -n "$NEST" ] && rm -rf "$NEST"
   [ -n "$TEMPLATE" ] && rm -rf "$TEMPLATE"
+  [ -n "$SHIM_DIR" ] && rm -rf "$SHIM_DIR"
+  [ -n "$GEN_LEDGER" ] && rm -f "$GEN_LEDGER"
   return 0
 }
 trap cleanup EXIT
+
+# COUNT THE EXPENSIVE OPERATION WHERE IT RUNS, NOT WHERE IT IS CALLED FROM.
+#
+# The first version of arm (n) incremented a shell variable next to
+# `build_template`'s own generator call, which measured the wrong thing
+# entirely: putting the per-arm `git archive` + `--generate-only` body back
+# inside `seed_repo` — origin/main's body verbatim, and by far the likeliest
+# way for this speed-up to come undone — left the guard green while the suite
+# went from 130s to 234s on the same machine. A counter that a regressing code
+# path can simply not touch is decoration, which is the defect class
+# `docs/FAILURE_TAXONOMY.md` names.
+#
+# So the count is taken from OUTSIDE the suite's own bookkeeping: a `bash` shim
+# first on `$PATH` for this process tree only. Every generator run in this file
+# is `bash <gate> --generate-only`, so the shim tallies each one into a ledger
+# file and then execs the real bash with its arguments untouched. A new code
+# path is counted whether or not it knows the counter exists, and the fixture's
+# copy of the gate stays byte-identical to the working tree — which the
+# asymmetry note above depends on.
+#
+# `--check-mirror` is deliberately NOT counted: every arm pays exactly one of
+# those and always did. The cost this change removed is the seeding.
+install_generate_counter() {
+  GEN_LEDGER="$(mktemp)"
+  SHIM_DIR="$(mktemp -d)"
+  local real_bash
+  # Resolved BEFORE the shim goes on `$PATH`, and absolute, so the shim's
+  # `exec` cannot find itself.
+  real_bash="$(command -v bash)"
+  cat >"$SHIM_DIR/bash" <<SHIM
+#!/bin/sh
+case " \$* " in *" --generate-only "*) echo x >> $(printf '%q' "$GEN_LEDGER") ;; esac
+exec $(printf '%q' "$real_bash") "\$@"
+SHIM
+  chmod +x "$SHIM_DIR/bash"
+  export PATH="$SHIM_DIR:$PATH"
+}
+
+generate_runs() {
+  wc -l <"$GEN_LEDGER" | tr -d ' '
+}
 
 # Build the ONE pristine fixture every arm is restored from.
 #
@@ -93,7 +144,7 @@ build_template() {
   cp "$HELPER" "$TEMPLATE/$HELPER"
   git -C "$TEMPLATE" init -q
   git -C "$TEMPLATE" add -A
-  repo_commit "$TEMPLATE" "fixture"
+  template_commit "fixture"
   # Normalise: regenerate and commit whatever HEAD was missing, so each case
   # starts from a provably in-sync mirror and tests only the drift it plants.
   # Without this, every case would inherit any real drift sitting in HEAD and
@@ -101,9 +152,8 @@ build_template() {
   # FIX command and is used here deliberately — the gate under test
   # (`--check-mirror`) writes nothing and so cannot normalise anything.
   bash "$TEMPLATE/$GATE" --generate-only >/dev/null 2>&1
-  NORMALISE_RUNS=$((NORMALISE_RUNS + 1))
   git -C "$TEMPLATE" add -A
-  repo_commit "$TEMPLATE" "normalise mirror"
+  template_commit "normalise mirror"
 }
 
 # Restore an arm's sandbox from the template.
@@ -163,15 +213,38 @@ tree_fingerprint() {
   (cd "$TMP" && find . -path ./.git -prune -o -type f -perm -u+x -print) | LC_ALL=C sort
 }
 
-repo_commit() {
-  git -C "$1" -c user.email=test@invalid -c user.name=test \
-    commit -qm "$2" >/dev/null 2>&1
-  return 0
+# The TEMPLATE's two commits must fail LOUDLY. The fixture is built once and
+# every arm is restored from it, so one silent failure here poisons all 16 arms
+# instead of printing 16 times — and the realistic causes (a global
+# `commit.gpgsign`, a `core.hooksPath` hook, a broken global git identity)
+# leave a suite that fails for a reason nothing on screen explains. On
+# origin/main this commit was unredirected precisely so it would surface;
+# folding it into a silent, unconditionally-`return 0` helper lost that.
+template_commit() {
+  local out
+  # NOTHING STAGED IS NOT A FAILURE, and it is the normal case for the
+  # `normalise mirror` commit: whenever HEAD's mirror is already in sync the
+  # regeneration produces no change at all. That benign no-op is the only
+  # reason the original helper was written tolerant, and it is the one case
+  # that must stay tolerant — everything else below is now loud.
+  [ -n "$(git -C "$TEMPLATE" status --porcelain)" ] || return 0
+  if ! out="$(git -C "$TEMPLATE" -c user.email=test@invalid -c user.name=test \
+      commit -qm "$1" 2>&1)"; then
+    printf '\033[31mfixture commit failed: %s\033[0m\n' "$1" >&2
+    printf '%s\n' "$out" | sed 's/^/        /' >&2
+    exit 1
+  fi
 }
 
+# An ARM's commit, and silent-and-tolerant on purpose: several arms plant drift
+# that stages nothing new, and `git commit` fails on an empty index. The arm's
+# own `expect_gate` is the assertion that matters, so a commit with nothing to
+# record is not a failure of the case.
 fixture_commit() {
   git -C "$TMP" add -A
-  repo_commit "$TMP" "$1"
+  git -C "$TMP" -c user.email=test@invalid -c user.name=test \
+    commit -qm "$1" >/dev/null 2>&1
+  return 0
 }
 
 # want: 0 (gate must pass) or "nonzero" (gate must fail).
@@ -208,6 +281,7 @@ expect_gate() {
 echo "plugin-skills mirror drift gate — fail-closed tests"
 echo ""
 
+install_generate_counter
 build_template
 
 # ── (a) A freshly regenerated tree passes ───────────────────────────────────
@@ -462,14 +536,19 @@ fixture_commit "add a stray exec bit to a mirrored markdown file"
 expect_gate nonzero "stray exec bit ADDED by the mirror is caught" \
   "$MIRROR/feature-dev/SKILL.md"
 
-# ── (n) The suite builds its fixture ONCE ────────────────────────────────────
-# A cost guard, and the only mechanical one there can be: seeding is a full
-# `git archive` plus a whole generator run, and paying it per arm is what made
-# this self-test the most expensive step in the PR gate. Wall clock cannot be
-# asserted on a shared runner, but the number of seeds can, and it is the thing
-# the wall clock was measuring.
-expect_true "the suite seeds and normalises exactly once (cost guard)" \
-  test "$NORMALISE_RUNS" = "1"
+# ── (n) The suite normalises its fixture ONCE ────────────────────────────────
+# A cost guard: seeding is a full `git archive` plus a whole generator run, and
+# paying it per arm is what made this self-test the most expensive step in the
+# PR gate. Wall clock cannot be asserted on a shared runner, but the number of
+# generator runs can, and it is the thing the wall clock was measuring.
+#
+# The count comes from the `bash` shim `install_generate_counter` puts on
+# `$PATH`, not from a variable this file increments — that is the difference
+# between a guard and a comment. Reinstating per-arm seeding inside `seed_repo`
+# takes the tally to 20 and lands here as a red even though the reinstated code
+# never mentions this counter.
+expect_true "the generator runs $EXPECTED_GENERATE_RUNS times, not once per arm (cost guard)" \
+  test "$(generate_runs)" = "$EXPECTED_GENERATE_RUNS"
 
 echo ""
 printf 'elapsed: %ss\n' "$(( $(date +%s) - SUITE_START ))"

@@ -34,19 +34,41 @@ STEPS=15
 MODE=""
 ARG=""
 
+# EVERY VALUE-TAKING OPTION VALIDATES ITS ARITY BEFORE SHIFTING. `shift 2`
+# with only one argument left shifts NOTHING and returns non-zero, so `$1`
+# stays the flag and the loop spins forever: `--pr` with no number burned 100%
+# of a core, silently, until killed. A hang is the worst possible failure for a
+# tool whose whole job is answering "why is CI slow?" on demand, and AGENTS.md
+# § Reap every background process already carries the scar of an unbounded
+# spin loop. `${2:-}` was not a fix — it defaulted the VALUE while leaving the
+# shift short.
+need_value() { # $1: flag name, $2: how many args are left including the flag
+  [ "$2" -ge 2 ] || { echo "$1 needs a value" >&2; exit 2; }
+}
+
 while [ $# -gt 0 ]; do
   case "$1" in
-    --repo) REPO="${2:-}"; shift 2 ;;
-    --steps) STEPS="${2:-15}"; shift 2 ;;
-    --pr) MODE="pr"; ARG="${2:-}"; shift 2 ;;
-    --sha) MODE="sha"; ARG="${2:-}"; shift 2 ;;
+    --repo) need_value --repo $#; REPO="$2"; shift 2 ;;
+    --steps) need_value --steps $#; STEPS="$2"; shift 2 ;;
+    --pr) need_value --pr $#; MODE="pr"; ARG="$2"; shift 2 ;;
+    --sha) need_value --sha $#; MODE="sha"; ARG="$2"; shift 2 ;;
     -h|--help)
-      sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'
+      # Terminate on the first non-comment line instead of a hard-coded range:
+      # `2,30p` overshot the header by one and printed `set -uo pipefail` as if
+      # it were help text, and any edit to the comment block moves the boundary
+      # again.
+      sed -n '2,${/^#/!q; s/^# \{0,1\}//; p;}' "$0"
       exit 0 ;;
     -*) echo "unknown option: $1" >&2; exit 2 ;;
     *) MODE="run"; ARG="$1"; shift ;;
   esac
 done
+
+# `head -n "$STEPS"` would fail late and cryptically on a non-number, after
+# every API call has already been paid for.
+case "$STEPS" in
+  ''|*[!0-9]*) echo "--steps needs a non-negative integer, got: $STEPS" >&2; exit 2 ;;
+esac
 
 if [ -z "$MODE" ] || [ -z "$ARG" ]; then
   echo "usage: scripts/ci-critical-path.sh <run-id> | --pr <number> | --sha <sha>" >&2
@@ -64,7 +86,7 @@ if [ -z "$REPO" ]; then
   REPO="${origin%.git}"
   REPO="${REPO%/}"
   _name="${REPO##*/}"
-  REPO="${REPO%/$_name}"
+  REPO="${REPO%/"$_name"}"
   _owner="${REPO##*[:/]}"
   REPO="$_owner/$_name"
 fi
@@ -179,8 +201,21 @@ done
 echo ""
 printf 'STEPS, longest first (top %s; share is of the critical path, %s)\n' \
   "$STEPS" "$(fmt "$CRITICAL")"
-printf '%s\n' "$STEP_LINES" | head -n "$STEPS" |
+
+# The job column is sized to the longest job name actually being printed, not
+# to a guess. A fixed `%-22s` silently degrades to no column at all on the real
+# names this repo has — `Analyze (javascript-typescript)` and `publication
+# boundary (allowlist, fail-closed)` both overflow it, and the step name then
+# runs straight into the job name while every shorter row still aligns at 22.
+# Alignment is the whole readability of a ranking.
+TOP_STEPS=$(printf '%s\n' "$STEP_LINES" | head -n "$STEPS")
+JOBW=$(printf '%s\n' "$TOP_STEPS" | cut -f2 |
+  LC_ALL=C awk '{ if (length($0) > m) m = length($0) } END { print m + 0 }')
+[ "$JOBW" -gt 0 ] || JOBW=22
+
+printf '%s\n' "$TOP_STEPS" |
   while IFS=$'\t' read -r secs job name; do
-    printf '  %7s  %3s%%  %-22s %s\n' \
-      "$(fmt "$secs")" "$((secs * 100 / (CRITICAL > 0 ? CRITICAL : 1)))" "$job" "$name"
+    printf '  %7s  %3s%%  %-*s %s\n' \
+      "$(fmt "$secs")" "$((secs * 100 / (CRITICAL > 0 ? CRITICAL : 1)))" \
+      "$JOBW" "$job" "$name"
   done
