@@ -6760,25 +6760,46 @@ func (as *AutonomousScheduler) runRefinementCycle(ctx context.Context) {
 	// round-robin across cycles (#502): the refinement semaphore below is
 	// SCHEDULER-WIDE, so a fixed scan order lets repos[0] win the single slot
 	// every cycle for as long as it has unrefined candidates, starving every
-	// other repo indefinitely — either they short-circuit on the exhaustion
-	// break below or scan and find the slot already taken. Rotating which
-	// repo is scanned first each cycle circulates the acquisition
-	// opportunity; the two #488 gates (the exhaustion break and the
-	// per-candidate acquisition refusal) are unchanged.
+	// other repo — either they short-circuit on the exhaustion break below or
+	// scan and find the slot already taken. Rotating which repo is scanned
+	// first circulates the acquisition opportunity; the two #488 gates (the
+	// exhaustion break and the per-candidate acquisition refusal) are
+	// unchanged.
+	//
+	// as.repos is snapshotted here under as.mu rather than re-read per
+	// iteration: ReplaceRepos and FilterRepos reassign as.repos from
+	// goroutines (the manifest poller, IPC workspace-update handlers) that
+	// run concurrently with this ticker and take no lock of their own. A
+	// stale `numRepos` bound combined with a live re-read of as.repos is a
+	// reachable index-out-of-range panic if the set shrinks mid-scan; a
+	// snapshot restores the same once-evaluated-slice-header semantics
+	// `range as.repos` used to give for free.
+	//
+	// The offset itself only advances past the repo that actually won a
+	// slot this cycle (tracked as winnerAbsIdx below), not once per tick.
+	// Advancing unconditionally aliases with the busy/free alternation that
+	// a refinement spanning more than one tick produces (RefinementMaxConcurrent
+	// default 1): a cycle that breaks immediately because the semaphore is
+	// still held from the previous cycle still consumed a rotation step, and
+	// with exactly two repos two such steps (one free, one busy) net back to
+	// the same starting repo — reproducing the indefinite starvation #502
+	// was filed to remove, just on a period of 2 instead of 1.
 	const refinementEmptyTTL = 5 * time.Minute
-	numRepos := len(as.repos)
+	as.mu.Lock()
+	repos := as.repos
+	numRepos := len(repos)
 	scanStart := 0
 	if numRepos > 0 {
-		as.mu.Lock()
 		scanStart = int(as.refinementScanOffset % uint64(numRepos))
-		as.refinementScanOffset++
-		as.mu.Unlock()
-		if numRepos > 1 {
-			log.Printf("[refinement] cycle scan starting at repo offset %d/%d", scanStart, numRepos)
-		}
 	}
+	as.mu.Unlock()
+	if numRepos > 1 {
+		log.Printf("[refinement] cycle scan starting at repo offset %d/%d", scanStart, numRepos)
+	}
+	winnerAbsIdx := -1
 	for scanIdx := 0; scanIdx < numRepos; scanIdx++ {
-		rc := as.repos[(scanStart+scanIdx)%numRepos]
+		absIdx := (scanStart + scanIdx) % numRepos
+		rc := repos[absIdx]
 		// Cycle-level quota short-circuit (#488). The refinement semaphore is
 		// SCHEDULER-WIDE — one channel shared by every repo — so once it is
 		// saturated, no repo scanned later in this cycle can dispatch anything.
@@ -6984,8 +7005,20 @@ func (as *AutonomousScheduler) runRefinementCycle(ctx context.Context) {
 		}
 
 		if dispatched > 0 {
+			winnerAbsIdx = absIdx
 			as.persistState()
 		}
+	}
+
+	// Advance the rotation only past a repo that actually won a slot this
+	// cycle. A cycle that dispatched nothing — every repo saturated or empty
+	// — leaves the offset where it was, so the next cycle gets a fair retry
+	// from the same starting point instead of burning a rotation step on a
+	// tick that never reached a repo at all.
+	if winnerAbsIdx >= 0 {
+		as.mu.Lock()
+		as.refinementScanOffset = uint64((winnerAbsIdx + 1) % numRepos)
+		as.mu.Unlock()
 	}
 }
 
