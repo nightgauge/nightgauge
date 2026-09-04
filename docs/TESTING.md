@@ -127,6 +127,38 @@ npm run -w nightgauge-vscode test:e2e
 npm run -w nightgauge-vscode test:host
 ```
 
+### The vitest suite provisions its own packaging artifacts (#1400)
+
+`tests/integration/*Packaging.test.ts` asserts on `dist/failure-taxonomy.yaml`,
+`dist/model-registry.json` and `THIRD_PARTY_NOTICES`. All three are gitignored
+build outputs, and the only things that write them are `build:assets` and
+`build:notices`. CI and `scripts/ci-local.sh` run the full build before vitest,
+so the suites passed there while **a fresh clone or worktree started with five
+red tests** — and five permanent failures teach everyone to wave a red
+integration suite through as "environmental".
+
+`tests/globalSetup.ts` (wired via `globalSetup` in `vitest.config.ts`) now
+provisions them. Two things about it are deliberate:
+
+- **It runs in `globalSetup`, not `pretest`.** The failing invocation is a bare
+  `npx vitest run` — what the issue reproduced, and what IDE gutters and
+  single-file runners use. npm lifecycle scripts never run on that path.
+  `globalSetup` also runs once in the main process, so workers cannot race the
+  same copy.
+- **It provisions only what is ABSENT, and never rebuilds an existing
+  `dist/`.** `build:assets` is a copy from the SDK source, and
+  `modelRegistryPackaging.test.ts`'s deep-equal assertion (#436) exists to catch
+  that copy going stale against the source. Re-copying before every run would
+  make the two equal by construction and that guard could never fail again. A
+  half-built tree stays a red test with a "run `npm run build` first" message,
+  which is the honest answer.
+
+This makes a fresh **worktree** green. A fresh **clone** additionally needs
+`npm run build --workspace=@nightgauge/sdk`, because 118 test files import
+`@nightgauge/sdk` whose `main` is `dist/index.js` and `npm install` does not
+build it. That failure is a loud module-resolution error, not a quiet
+assertion, so it is left as is.
+
 Both tiers previously existed without full coverage: three files under a
 now-deleted `tests/e2e-playwright/dashboard/` matched neither runner (wrong
 directory for vitest's exclude, wrong extension for Playwright's testMatch),

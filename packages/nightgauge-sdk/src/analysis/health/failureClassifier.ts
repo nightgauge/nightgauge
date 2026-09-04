@@ -227,6 +227,7 @@ export type TerminalFailureKind =
   | "github_quota_low" // Issue #3896 — GitHub API quota below headroom at pipeline-start; transient, cooldown until reset
   | "api_connection_lost" // Issue #4002 — Anthropic API transport drop (socket close / DNS blip); transient, retried without queue pause
   | "github_network_outage" // Issue #4002 — api.github.com unreachable at pipeline-start; transient, short global cooldown
+  | "github_rate_limited" // Issue #1391 — GitHub throttled a `gh` call mid-stage (secondary rate limit / emptied primary bucket / 429); transient, short per-issue backoff, no global cooldown
   | "model_unavailable" // Issue #42 — API rejected the selected model (not on plan / unknown / model usage cap); triggers tier-downgrade fallback
   | "premature_turn_end" // Issue #74 — stage exited 0 but its gate reported no state change (agent ended its turn on a promise)
   | "dev_produced_no_changes" // Issue #202 — feature-dev's gate found the stage workspace empty (clean tree, branch level with base) despite a truthful dev context; the work landed where the pipeline never reads
@@ -278,6 +279,7 @@ export const ALL_TERMINAL_FAILURE_KINDS: readonly TerminalFailureKind[] = [
   "github_quota_low",
   "api_connection_lost",
   "github_network_outage",
+  "github_rate_limited",
   "model_unavailable",
   "premature_turn_end",
   "dev_produced_no_changes",
