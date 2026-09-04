@@ -1,6 +1,7 @@
 package knowledge_test
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -187,42 +188,165 @@ func TestPruneEmpty_PreservesSubstantiveFiles(t *testing.T) {
 	}
 }
 
-func TestGenerateIndex_WritesIndex(t *testing.T) {
+func TestGenerateIndex_OKF(t *testing.T) {
 	root := mkTempRoot(t)
 
-	// Scaffold two entries.
-	_, err := knowledge.Scaffold(root, 10, "First Feature", nil)
-	if err != nil {
+	if _, err := knowledge.Scaffold(root, 10, "First Feature", nil); err != nil {
 		t.Fatalf("Scaffold 10: %v", err)
 	}
-	_, err = knowledge.Scaffold(root, 20, "Second Feature", nil)
-	if err != nil {
+	if _, err := knowledge.Scaffold(root, 20, "Second Feature", nil); err != nil {
 		t.Fatalf("Scaffold 20: %v", err)
+	}
+	if _, err := knowledge.ScaffoldRepoTopic(root, knowledge.RepoTopicArchitecture, "layering"); err != nil {
+		t.Fatalf("ScaffoldRepoTopic: %v", err)
 	}
 
 	relPath, err := knowledge.GenerateIndex(root)
 	if err != nil {
 		t.Fatalf("GenerateIndex: %v", err)
 	}
+	if filepath.Base(relPath) != "index.md" {
+		t.Fatalf("GenerateIndex returned %q, want an index.md", relPath)
+	}
 
-	readmePath := filepath.Join(root, relPath)
-	content, err := os.ReadFile(readmePath)
+	kb := filepath.Join(root, ".nightgauge", "knowledge")
+	content, err := os.ReadFile(filepath.Join(root, relPath))
 	if err != nil {
-		t.Fatalf("read README.md: %v", err)
+		t.Fatalf("read index.md: %v", err)
+	}
+	body := string(content)
+
+	// The root index is itself a conformant OKF document.
+	block, err := knowledge.ParseFrontmatter(body)
+	if err != nil {
+		t.Fatalf("root index frontmatter: %v", err)
+	}
+	if block == nil || block.Type != knowledge.TypeIndex {
+		t.Fatalf("root index type = %+v", block)
+	}
+	if block.Raw["okf_version"] != knowledge.OKFVersion {
+		t.Errorf("okf_version = %v, want %q", block.Raw["okf_version"], knowledge.OKFVersion)
 	}
 
-	body := string(content)
-	if !strings.Contains(body, "# Knowledge Base Index") {
-		t.Error("README.md missing index heading")
+	// Sections per category, bullets per entry, bundle-absolute links.
+	for _, want := range []string{
+		"# Features",
+		"# Architecture",
+		"* [PRD: #10 — First Feature](/features/10-first-feature/PRD.md)",
+		"(/architecture/layering.md)",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("index.md missing %q:\n%s", want, body)
+		}
 	}
-	if !strings.Contains(body, "#10") {
-		t.Errorf("README.md missing entry for issue #10:\n%s", body)
+
+	// Per-category index pages exist and are conformant too.
+	for _, cat := range []string{"features", "architecture"} {
+		catIndex := filepath.Join(kb, cat, "index.md")
+		data, readErr := os.ReadFile(catIndex)
+		if readErr != nil {
+			t.Fatalf("read %s: %v", catIndex, readErr)
+		}
+		catBlock, parseErr := knowledge.ParseFrontmatter(string(data))
+		if parseErr != nil || catBlock == nil || catBlock.Type != knowledge.TypeIndex {
+			t.Errorf("%s frontmatter = %+v (%v)", catIndex, catBlock, parseErr)
+		}
 	}
-	if !strings.Contains(body, "#20") {
-		t.Errorf("README.md missing entry for issue #20:\n%s", body)
+
+	// README.md is not written anywhere under the knowledge root.
+	if _, statErr := os.Stat(filepath.Join(kb, "README.md")); statErr == nil {
+		t.Error("GenerateIndex still writes a root README.md")
 	}
-	if !strings.Contains(body, "Total entries:** 2") {
-		t.Errorf("README.md missing total entries count:\n%s", body)
+
+	// The generated index does not index itself.
+	if strings.Contains(body, "/index.md") || strings.Contains(body, "/log.md") {
+		t.Errorf("index.md lists reserved navigation files as entries:\n%s", body)
+	}
+}
+
+// TestGenerateIndex_Deterministic guards the property the old map-iterating
+// table did not have: the same tree must produce the same index, or every
+// regeneration reads as a diff.
+func TestGenerateIndex_Deterministic(t *testing.T) {
+	root := mkTempRoot(t)
+	for _, n := range []int{3, 1, 2} {
+		if _, err := knowledge.Scaffold(root, n, fmt.Sprintf("Feature %d", n), nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, topic := range knowledge.ValidRepoTopicTypes {
+		if _, err := knowledge.ScaffoldRepoTopic(root, topic, "slug"); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	rel, err := knowledge.GenerateIndex(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := os.ReadFile(filepath.Join(root, rel))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for i := 0; i < 5; i++ {
+		if _, err := knowledge.GenerateIndex(root); err != nil {
+			t.Fatal(err)
+		}
+		again, err := os.ReadFile(filepath.Join(root, rel))
+		if err != nil {
+			t.Fatal(err)
+		}
+		// generated.at moves; the sections and bullets must not.
+		if bodyOf(t, string(again)) != bodyOf(t, string(first)) {
+			t.Fatalf("index run %d differs:\n--- first ---\n%s\n--- again ---\n%s", i, first, again)
+		}
+	}
+}
+
+// bodyOf strips the frontmatter block, whose generated.at legitimately changes
+// between runs.
+func bodyOf(t *testing.T, content string) string {
+	t.Helper()
+	_, body := knowledge.SplitFrontmatter(content)
+	return body
+}
+
+// TestGenerateIndex_TitlesAndDescriptionsComeFromFrontmatter pins the
+// progressive-disclosure value of the index: a reader should be able to pick
+// an entry without opening it.
+func TestGenerateIndex_TitlesAndDescriptionsComeFromFrontmatter(t *testing.T) {
+	root := mkTempRoot(t)
+	dir := filepath.Join(root, ".nightgauge", "knowledge", "architecture")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "titled.md"),
+		[]byte("---\ntype: architecture\ntitle: The Layering Rule\ndescription: Why the Go binary owns determinism.\n---\n\n# Ignore this H1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// No frontmatter title or description: falls back to the H1 and the first
+	// prose paragraph.
+	if err := os.WriteFile(filepath.Join(dir, "untitled.md"),
+		[]byte("---\ntype: architecture\n---\n\n# Fallback Heading\n\nThe first real paragraph.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	rel, err := knowledge.GenerateIndex(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(root, rel))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(data)
+
+	if !strings.Contains(body, "* [The Layering Rule](/architecture/titled.md) - Why the Go binary owns determinism.") {
+		t.Errorf("frontmatter title/description not used:\n%s", body)
+	}
+	if !strings.Contains(body, "* [Fallback Heading](/architecture/untitled.md) - The first real paragraph.") {
+		t.Errorf("H1/first-paragraph fallback not used:\n%s", body)
 	}
 }
 
@@ -330,15 +454,20 @@ func TestScaffoldRepoTopic_CreatesEntryAndCategoryFiles(t *testing.T) {
 				t.Errorf("entry file missing YAML frontmatter:\n%s", content)
 			}
 
-			// README.md and _template.md must exist (category was new).
+			// index.md and _template.md must exist (category was new). The
+			// category page is index.md, not README.md: README.md is not a
+			// filename an OKF bundle root can also use.
 			categoryDir := filepath.Join(root, result.KnowledgePath)
-			for _, fname := range []string{"README.md", "_template.md"} {
+			for _, fname := range []string{"index.md", "_template.md"} {
 				if _, err := os.Stat(filepath.Join(categoryDir, fname)); err != nil {
 					t.Errorf("expected %s in category dir: %v", fname, err)
 				}
 			}
+			if _, err := os.Stat(filepath.Join(categoryDir, "README.md")); err == nil {
+				t.Error("scaffold still writes a category README.md")
+			}
 
-			// FilesCreated must include the entry + README + _template.
+			// FilesCreated must include the entry + index + _template.
 			if len(result.FilesCreated) < 3 {
 				t.Errorf("expected ≥3 files created, got %d: %v", len(result.FilesCreated), result.FilesCreated)
 			}

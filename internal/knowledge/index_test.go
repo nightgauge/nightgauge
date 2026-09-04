@@ -289,3 +289,42 @@ func TestIndexEntryLifecycleFields(t *testing.T) {
 		t.Errorf("generated = %+v", e.Generated)
 	}
 }
+
+// TestIndexSkipsReservedFiles pins the one reserved-name definition. Five
+// separate `!= "README.md"` filters used to disagree about it, which is why
+// _template.md leaked into three scan results as though it were an entry.
+func TestIndexSkipsReservedFiles(t *testing.T) {
+	root := t.TempDir()
+	kb := filepath.Join(root, ".nightgauge", "knowledge")
+	dir := filepath.Join(kb, "features", "1-widget")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	entry := "---\ntype: decisions\n---\n\n# Decisions\n\nbody\n"
+	for _, f := range []string{"decisions.md", "index.md", "log.md", "README.md", "_template.md"} {
+		if err := os.WriteFile(filepath.Join(dir, f), []byte(entry), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, f := range []string{"index.md", "log.md", "README.md"} {
+		if err := os.WriteFile(filepath.Join(kb, f), []byte(entry), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	idx, err := knowledge.BuildMetadataIndex(root)
+	if err != nil {
+		t.Fatalf("BuildMetadataIndex: %v", err)
+	}
+
+	for _, e := range idx.Entries {
+		base := filepath.Base(e.Path)
+		if knowledge.IsReservedEntry(base) {
+			t.Errorf("reserved file %s was indexed as an entry", e.Path)
+		}
+	}
+	if len(idx.Entries) != 1 {
+		t.Errorf("entries = %d, want exactly the one real entry: %+v", len(idx.Entries), idx.Entries)
+	}
+}

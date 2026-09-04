@@ -241,7 +241,7 @@ export interface WorkspaceGitignoreResult {
  * the other three had no `.nightgauge/.gitignore` whatsoever.
  *
  * That is not cosmetic drift, and #332 is what it cost. With no `/knowledge/`
- * rule, the `.nightgauge/knowledge/README.md` the pipeline scaffolds at issue
+ * rule, the `.nightgauge/knowledge/index.md` the pipeline scaffolds at issue
  * pickup shows up as an untracked file forever, and `worktree sweep` read that
  * as "uncommitted changes" and refused to reclaim — permanently, on nine
  * worktrees, four of them deadlocked by that single file. The sweep now

@@ -216,3 +216,39 @@ func InferEntryType(bundleRelPath string) string {
 	}
 	return "note"
 }
+
+// Reserved filenames carry no entry frontmatter. They are navigation and
+// template files an Open Knowledge Format consumer reads structurally rather
+// than as knowledge, and every walker in the codebase skips them.
+//
+// This is the ONE definition. Five separate `!= "README.md"` filters used to
+// disagree about it, which is why `_template.md` leaked into three scan
+// results as though it were an entry.
+const (
+	// IndexFile is the OKF bundle index, at the root and per category.
+	IndexFile = "index.md"
+	// LogFile is the OKF change history, derived from telemetry.
+	LogFile = "log.md"
+	// TemplateFile is the per-category authoring template.
+	TemplateFile = "_template.md"
+	// LegacyIndexFile is the filename the index used before OKF. It stays
+	// reserved so a base written by an older binary does not suddenly index
+	// its old table of contents as an entry.
+	LegacyIndexFile = "README.md"
+)
+
+// reservedEntryNames is the reserved set, keyed for lookup.
+var reservedEntryNames = map[string]bool{
+	IndexFile:       true,
+	LogFile:         true,
+	TemplateFile:    true,
+	LegacyIndexFile: true,
+}
+
+// ReservedEntryNames returns the reserved filenames in a stable order.
+func ReservedEntryNames() []string {
+	return []string{IndexFile, LogFile, TemplateFile, LegacyIndexFile}
+}
+
+// IsReservedEntry reports whether a base filename is reserved.
+func IsReservedEntry(name string) bool { return reservedEntryNames[name] }

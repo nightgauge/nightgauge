@@ -162,18 +162,24 @@ if [ "$CONFIG_AUTO_INDEX" = "true" ] && [ -d "$KNOWLEDGE_DIR" ]; then
   # Check whether this merge touched any knowledge files
   KNOWLEDGE_FILES_CHANGED=$(git diff --name-only HEAD~1 HEAD 2>/dev/null | grep "^\.nightgauge/knowledge/" || true)
   if [ -n "$KNOWLEDGE_FILES_CHANGED" ]; then
-    echo "Regenerating knowledge index (.nightgauge/knowledge/README.md)..."
+    echo "Regenerating knowledge index (.nightgauge/knowledge/index.md)..."
     if [ -n "$BINARY" ]; then
       REGEN_RESULT=$("$BINARY" knowledge regenerate-index --json 2>/dev/null || echo '{"ok":false,"error":"binary command not available"}')
       REGEN_OK=$(printf '%s\n' "$REGEN_RESULT" | jq -r '.ok // false' 2>/dev/null || echo "false")
       if [ "$REGEN_OK" = "true" ]; then
         ENTRY_COUNT=$(printf '%s\n' "$REGEN_RESULT" | jq -r '.total_entries // "?"' 2>/dev/null || echo "?")
         echo "Knowledge index regenerated: $ENTRY_COUNT entries"
-        # Commit the updated README.md if it changed
-        if ! git diff --quiet "$KNOWLEDGE_DIR/README.md" 2>/dev/null; then
-          git add "$KNOWLEDGE_DIR/README.md"
+        # Commit the regenerated navigation files if they changed. index.md
+        # and log.md are the OKF bundle's entry points; README.md is listed
+        # only to stage the removal of one a previous binary left behind.
+        for NAV_FILE in "$KNOWLEDGE_DIR/index.md" "$KNOWLEDGE_DIR/log.md" "$KNOWLEDGE_DIR/README.md"; do
+          if ! git diff --quiet "$NAV_FILE" 2>/dev/null; then
+            git add "$NAV_FILE" 2>/dev/null || true
+          fi
+        done
+        if ! git diff --cached --quiet 2>/dev/null; then
           git commit -m "chore: regenerate knowledge index [skip ci]" --no-verify 2>/dev/null || true
-          echo "Knowledge README.md committed."
+          echo "Knowledge index committed."
         fi
       else
         echo "WARNING: knowledge regenerate-index failed: $(printf '%s\n' "$REGEN_RESULT" | jq -r '.error // "unknown"')" >&2
