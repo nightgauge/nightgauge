@@ -30,6 +30,7 @@ import { promisify } from "util";
 const execFileAsync = promisify(execFile);
 import { BinaryResolver } from "./BinaryResolver";
 import { IpcClient } from "./IpcClient";
+import { runWithPhaseStream, type PrStagePhaseTransition } from "./prStagePhaseStream";
 import type { AttentionRaiseCheck } from "./IpcClientBase";
 import {
   isGithubRateLimitError,
@@ -4075,12 +4076,27 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       reason?: string;
       rate_limited?: boolean;
       duration_ms?: number;
+      phases?: PrStagePhaseTransition[];
     };
+    // #1397 — the deterministic runners report phases through a reporter, and
+    // the Go scheduler attaches one. This route runs the SAME runners in a
+    // separate process, where there is no RuntimeState and no live callbacks,
+    // so the CLI streams its transitions on stderr and returns the full array
+    // in its result. Applying them live is what makes the count move: pr-merge
+    // waits out CI on a 30s x 30 budget, so a stage that only learned its
+    // phases at exit would sit at 0/14 for up to fifteen minutes and then jump.
+    let streamedPhases = 0;
+    const applyPhase = (t: PrStagePhaseTransition): void => {
+      streamedPhases++;
+      void this.recordDeterministicPhase(t);
+    };
+
     try {
-      const { stdout } = await execFileAsync(binary, args, {
-        encoding: "utf-8" as const,
+      const { stdout } = await runWithPhaseStream(binary, args, {
         cwd: workdir,
-        timeout: timeoutMs,
+        timeoutMs,
+        onPhase: applyPhase,
+        onLog: (line) => this.logger.debug(`pr-stage ${stage}: ${line}`),
       });
       parsed = JSON.parse(stdout.trim());
     } catch (err) {
@@ -4092,6 +4108,16 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       });
       this.stageExecutionPaths.set(stage, { path: "llm", puntReason: "runner-error" });
       return { kind: "llm" };
+    }
+
+    // The array is the durable authority and the fallback. When the stream
+    // delivered transitions they ARE this array — replaying it would double
+    // every record — so it is only applied when nothing arrived live (an older
+    // binary with no streaming, or a stderr channel that produced nothing).
+    if (streamedPhases === 0) {
+      for (const t of parsed.phases ?? []) {
+        await this.recordDeterministicPhase(t);
+      }
     }
 
     const reason = parsed.reason ?? "unknown";
@@ -4167,6 +4193,57 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       issueNumber,
     });
     return { kind: "llm" };
+  }
+
+  /**
+   * Apply one deterministic-runner phase transition to the pipeline state
+   * (#1397).
+   *
+   * This is the extension-side equivalent of the Go scheduler's
+   * deterministicPhaseReporter: the same four transitions, routed to the same
+   * two sinks PipelineStateService already writes to — its in-memory state and
+   * view events for the tree, and the IPC notification that keeps Go's
+   * RuntimeState in step. The result is that a deterministic stage looks the
+   * same whichever of the two routes ran it, which is the whole point:
+   * previously an operator saw real progress or a frozen 0/14 depending on a
+   * choice nothing on screen explained.
+   *
+   * Best-effort by design. Progress reporting must never fail the stage it is
+   * reporting on, so a state-service error is logged and swallowed — exactly
+   * how the surrounding startStage / completeStage calls already treat theirs.
+   */
+  private async recordDeterministicPhase(t: PrStagePhaseTransition): Promise<void> {
+    if (!this.stateService) return;
+    try {
+      switch (t.status) {
+        case "running":
+          await this.stateService.startPhase(t.stage, t.name, t.total, t.index);
+          break;
+        case "complete":
+          await this.stateService.completePhase(t.stage, t.name, t.total);
+          break;
+        case "skipped":
+          await this.stateService.skipPhase(t.stage, t.name, t.total, t.index);
+          break;
+        case "failed":
+          await this.stateService.failPhase(
+            t.stage,
+            t.name,
+            `deterministic ${t.stage} did not complete ${t.name}`,
+            t.total
+          );
+          break;
+        default:
+          // An unknown status is a contract change, not a state to guess at.
+          this.logger.warn("Deterministic pr-stage reported an unknown phase status", { t });
+      }
+    } catch (err) {
+      this.logger.warn("Deterministic pr-stage: failed to record a phase transition", {
+        phase: t.name,
+        stage: t.stage,
+        err,
+      });
+    }
   }
 
   /**
