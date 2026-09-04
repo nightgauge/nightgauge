@@ -15,6 +15,9 @@ package ipc
 
 import (
 	"bufio"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -514,19 +517,33 @@ func captureLicenseValidateBodies(handlers map[string]http.HandlerFunc) func() [
 }
 
 // assertMachineBinding checks that the platform received a machine-bound
-// validate request: a hashed machineId (never the raw fingerprint the caller
-// supplied) plus the hostname/platform binding context.
-func assertMachineBinding(t *testing.T, body map[string]interface{}, rawMachineID, hostname, platform string) {
+// validate request: the seat identity is HMAC-SHA256(licenseKey, rawMachineID)
+// exactly — never the raw machine id the caller supplied, and never a digest
+// that also folds in the volatile hostname — plus the hostname/platform
+// binding context in the clear.
+//
+// The expectation is derived here from the spec (the license key over the
+// machine id, and nothing else), not by calling into the daemon's own
+// derivation, so a change to that derivation fails this test instead of being
+// followed by it. That is the point of pinning it at THIS boundary: the digest
+// is the primary key of a license_machines row, and the value asserted here is
+// the one that actually left a separately-compiled daemon process.
+func assertMachineBinding(t *testing.T, body map[string]interface{}, licenseKey, rawMachineID, hostname, platform string) {
 	t.Helper()
+	mac := hmac.New(sha256.New, []byte(licenseKey))
+	mac.Write([]byte(rawMachineID))
+	want := hex.EncodeToString(mac.Sum(nil))
+
 	machineID, _ := body["machineId"].(string)
-	if machineID == "" {
+	switch {
+	case machineID == "":
 		t.Errorf("platform request body carries no machineId — machine seat limits cannot be enforced: %+v", body)
-	}
-	if machineID == rawMachineID {
-		t.Errorf("machineId = %q, want the contract hash of the fingerprint, not the raw fingerprint", machineID)
-	}
-	if len(machineID) != 64 {
-		t.Errorf("machineId = %q (len %d), want a 64-char hex HMAC-SHA256 digest", machineID, len(machineID))
+	case machineID == rawMachineID:
+		t.Errorf("machineId = %q, want the contract hash of the machine id, not the raw machine id", machineID)
+	case machineID != want:
+		t.Errorf("machineId = %q, want HMAC-SHA256(licenseKey, machineId) = %q — the seat identity derivation drifted;\n"+
+			"if hostname or platform were folded in, one installation re-binds as a new machine whenever it is renamed",
+			machineID, want)
 	}
 	if got, _ := body["hostname"].(string); got != hostname {
 		t.Errorf("hostname = %q, want %q", got, hostname)
@@ -564,7 +581,7 @@ func TestIPCPlatform_ValidateLicense_EnteredKeySendsMachineBinding(t *testing.T)
 	if len(got) == 0 {
 		t.Fatal("platform received no /v1/license/validate request")
 	}
-	assertMachineBinding(t, got[len(got)-1], "editor-install-uuid-1", "build-box", "darwin")
+	assertMachineBinding(t, got[len(got)-1], "ib_test_pro_abc123", "editor-install-uuid-1", "build-box", "darwin")
 }
 
 // TestIPCPlatform_ValidateLicense_SessionKeySendsMachineBinding covers the
@@ -602,5 +619,5 @@ func TestIPCPlatform_ValidateLicense_SessionKeySendsMachineBinding(t *testing.T)
 	if key, _ := last["key"].(string); key != "ib_test_pro_session" {
 		t.Fatalf("validate went to the wrong path: key = %q, want the session key", key)
 	}
-	assertMachineBinding(t, last, "editor-install-uuid-2", "laptop-7", "linux")
+	assertMachineBinding(t, last, "ib_test_pro_session", "editor-install-uuid-2", "laptop-7", "linux")
 }

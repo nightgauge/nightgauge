@@ -7428,11 +7428,33 @@ or `NIGHTGAUGE_PLATFORM_API_KEY` env var):
 
 **`machineId` is the RAW per-installation fingerprint, not a hash.** The caller
 sends `vscode.env.machineId` (plus `os.hostname()` and `process.platform`); the
-daemon derives the wire value itself as
-`HMAC-SHA256(licenseKey, "<machineId>|<hostname>|<platform>")`, hex-encoded, and
-puts that in the platform's `machineId` request field. Keying the digest with the
-license key means the same machine hashes differently under different licenses,
-and the raw fingerprint — which carries the hostname — never leaves the daemon.
+daemon derives the wire value itself as `HMAC-SHA256(licenseKey, machineId)`,
+hex-encoded, and puts that in the platform's `machineId` request field. Keying
+the digest with the license key means the same machine hashes differently under
+different licenses, and the raw machine id never leaves the daemon.
+
+**The digest covers the machine id and nothing else; `hostname` and `platform`
+travel beside it as cleartext binding context.** The seat identity has to be
+exactly as stable as the installation it names, and only the machine id is:
+`vscode.env.machineId` is a UUID that survives restarts and updates, and the
+daemon's fallback is a UUID persisted under the home directory. A hostname is
+not — macOS rewrites `.local` names on a network join, every devcontainer or
+Codespaces rebuild mints a fresh random one, and corporate re-imaging renames
+en masse — so folding it into the identity would re-bind one installation as a
+new machine on every change and burn a pro license's three seats on a single
+laptop, locking its owner out precisely because enforcement was switched on.
+`process.platform` is stable per install but adds nothing to a UUID while
+adding a second way to drift (`win32` here, `runtime.GOOS`'s `windows` on the
+daemon's own fallback path), so it stays out as well. The context fields are
+still sent, because the account UI needs to show *which* seat is which.
+
+Because the digest is the primary key of a `license_machines` row, its
+derivation is a wire contract: change it and every already-bound machine
+re-binds as a new seat, so a full license starts rejecting its own owner as
+`MACHINE_LIMIT`. `TestMachineInfo_Hash_PinsTheWireDigest` pins the exact bytes
+against digests computed outside Go (`openssl dgst -sha256 -hmac`), and
+`TestMachineInfo_Hash_IgnoresHostnameAndPlatform` pins the stability
+invariant.
 
 The daemon remembers the last identity a caller supplied, so the params-less
 `platform.license` method (which has nowhere to source one) re-presents the same

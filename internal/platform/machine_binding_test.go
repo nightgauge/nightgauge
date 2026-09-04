@@ -62,9 +62,15 @@ func onlineLicenseService(t *testing.T, baseURL, sessionKey string) *LicenseServ
 	return NewLicenseService(c)
 }
 
-func wantHash(key string, m MachineInfo) string {
+// wantHash re-derives the wire digest from the SPEC — HMAC-SHA256 keyed by the
+// license key over the machine id, and nothing else — taking the machine id as
+// a plain string. It deliberately does not call into MachineInfo, so a change
+// to the production derivation makes these tests fail instead of following
+// them; TestMachineInfo_Hash_PinsTheWireDigest pins the bytes themselves
+// against a value computed outside Go entirely.
+func wantHash(key, machineID string) string {
 	mac := hmac.New(sha256.New, []byte(key))
-	mac.Write([]byte(m.Fingerprint()))
+	mac.Write([]byte(machineID))
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
@@ -84,8 +90,8 @@ func TestLicenseService_Validate_SendsMachineBinding(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("platform received %d validate requests, want 1", len(got))
 	}
-	if id, _ := got[0]["machineId"].(string); id != wantHash("SESSION-KEY", machine) {
-		t.Errorf("machineId = %q, want HMAC-SHA256(licenseKey, fingerprint) = %q", id, wantHash("SESSION-KEY", machine))
+	if id, _ := got[0]["machineId"].(string); id != wantHash("SESSION-KEY", machine.MachineID) {
+		t.Errorf("machineId = %q, want HMAC-SHA256(licenseKey, fingerprint) = %q", id, wantHash("SESSION-KEY", machine.MachineID))
 	}
 	if host, _ := got[0]["hostname"].(string); host != "build-box" {
 		t.Errorf("hostname = %q, want build-box", host)
@@ -111,10 +117,10 @@ func TestLicenseService_ValidateKey_SendsMachineBinding(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("platform received %d validate requests, want 1", len(got))
 	}
-	if id, _ := got[0]["machineId"].(string); id != wantHash("ENTERED-KEY", machine) {
-		t.Errorf("machineId = %q, want the hash keyed by the entered key %q", id, wantHash("ENTERED-KEY", machine))
+	if id, _ := got[0]["machineId"].(string); id != wantHash("ENTERED-KEY", machine.MachineID) {
+		t.Errorf("machineId = %q, want the hash keyed by the entered key %q", id, wantHash("ENTERED-KEY", machine.MachineID))
 	}
-	if id, _ := got[0]["machineId"].(string); id == wantHash("SESSION-KEY", machine) {
+	if id, _ := got[0]["machineId"].(string); id == wantHash("SESSION-KEY", machine.MachineID) {
 		t.Error("machineId was keyed by the session key, not the entered key")
 	}
 }
@@ -140,9 +146,9 @@ func TestLicenseService_Validate_ReusesRememberedMachine(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("platform received %d validate requests, want 2", len(got))
 	}
-	if id, _ := got[1]["machineId"].(string); id != wantHash("SESSION-KEY", machine) {
+	if id, _ := got[1]["machineId"].(string); id != wantHash("SESSION-KEY", machine.MachineID) {
 		t.Errorf("second machineId = %q, want the remembered fingerprint hashed under the session key %q",
-			id, wantHash("SESSION-KEY", machine))
+			id, wantHash("SESSION-KEY", machine.MachineID))
 	}
 }
 
@@ -181,8 +187,8 @@ func TestMachineInfo_Hash_KeyedAndStable(t *testing.T) {
 	if len(h) != 64 {
 		t.Errorf("Hash length = %d, want 64 hex chars", len(h))
 	}
-	if h == m.Fingerprint() || h == m.MachineID {
-		t.Error("Hash leaked the raw fingerprint onto the wire")
+	if h == m.MachineID {
+		t.Error("Hash leaked the raw machine id onto the wire")
 	}
 	if m.Hash("KEY-A") != h {
 		t.Error("Hash is not stable for the same key and machine — each run would take a new seat")
@@ -194,7 +200,73 @@ func TestMachineInfo_Hash_KeyedAndStable(t *testing.T) {
 		t.Errorf("Hash with no license key = %q, want empty (nothing to bind)", got)
 	}
 	if got := (MachineInfo{}).Hash("KEY-A"); got != "" {
-		t.Errorf("Hash with no fingerprint material = %q, want empty", got)
+		t.Errorf("Hash with no machine id = %q, want empty", got)
+	}
+	// Context-only: nothing identifies the installation, so there is nothing
+	// to bind. A hash here would be a hash of hostname alone, which every
+	// machine on that host name would share.
+	if got := (MachineInfo{Hostname: "build-box", Platform: "darwin"}).Hash("KEY-A"); got != "" {
+		t.Errorf("Hash with context but no machine id = %q, want empty", got)
+	}
+	if other := (MachineInfo{MachineID: "editor-install-2", Hostname: "build-box", Platform: "darwin"}).Hash("KEY-A"); other == h {
+		t.Error("two installations hashed to one seat — the platform cannot count seats")
+	}
+}
+
+// TestMachineInfo_Hash_PinsTheWireDigest pins the exact wire bytes for a fixed
+// (license key, machine id) pair. The expected values were computed outside Go
+// entirely:
+//
+//	printf '%s' 'editor-install-1' | openssl dgst -sha256 -hmac 'KEY-A' -hex
+//
+// so no change to the derivation in machine_binding.go can move them and stay
+// green. That matters because this digest is the primary key of a
+// license_machines row: re-keying it re-binds every already-bound machine,
+// each installation takes a fresh seat, and a 3-seat pro license fills with
+// duplicates of the same laptops and then rejects its own owner as
+// MACHINE_LIMIT. Before #1334's review this was derived from the production
+// function under test, so reversing the hashed field order left both the
+// platform and ipc suites green.
+func TestMachineInfo_Hash_PinsTheWireDigest(t *testing.T) {
+	m := MachineInfo{MachineID: "editor-install-1", Hostname: "build-box", Platform: "darwin"}
+
+	const (
+		underKeyA       = "938e44a9b13926f9da3b21203557da335705a46b13fd3d39fd0b3a745935dfe0"
+		underSessionKey = "ff41728112fa8992d3dcb21dfcbe66bf552359da6804b1a65d72f9af7f833743"
+	)
+	if got := m.Hash("KEY-A"); got != underKeyA {
+		t.Errorf("Hash(KEY-A) = %q, want %q — the wire identity derivation changed;\n"+
+			"if that is intentional, every already-bound machine re-binds as a new seat",
+			got, underKeyA)
+	}
+	if got := m.Hash("SESSION-KEY"); got != underSessionKey {
+		t.Errorf("Hash(SESSION-KEY) = %q, want %q", got, underSessionKey)
+	}
+}
+
+// TestMachineInfo_Hash_IgnoresHostnameAndPlatform is the seat-stability
+// invariant: one installation keeps ONE seat for its whole life. The identity
+// is the machine id alone, so a rename — macOS appending .local on a network
+// join, a devcontainer rebuild minting a fresh random hostname, a corporate
+// re-image — must not mint a seat. Without this, turning enforcement on (the
+// point of #1334) locks a paying pro user out after three hostname changes.
+func TestMachineInfo_Hash_IgnoresHostnameAndPlatform(t *testing.T) {
+	const key = "PRO-KEY"
+	base := MachineInfo{MachineID: "editor-install-uuid", Hostname: "laptop", Platform: "darwin"}
+	want := base.Hash(key)
+
+	renames := []MachineInfo{
+		{MachineID: "editor-install-uuid", Hostname: "laptop.local", Platform: "darwin"}, // macOS .local rename
+		{MachineID: "editor-install-uuid", Hostname: "a3f91c2b7d04", Platform: "darwin"}, // container rebuild
+		{MachineID: "editor-install-uuid", Hostname: "", Platform: "darwin"},             // hostname unavailable
+		{MachineID: "editor-install-uuid", Hostname: "laptop", Platform: "win32"},        // process.platform vs runtime.GOOS drift
+		{MachineID: "editor-install-uuid", Hostname: "laptop", Platform: ""},             // platform omitted by the caller
+	}
+	for _, m := range renames {
+		if got := m.Hash(key); got != want {
+			t.Errorf("hostname=%q platform=%q hashed to a NEW seat (%s, want %s) — one installation would consume several of its license's seats",
+				m.Hostname, m.Platform, got, want)
+		}
 	}
 }
 

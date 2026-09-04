@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"os"
 	"runtime"
-	"strings"
 
 	api "github.com/nightgauge/nightgauge/api/generated/go/platform"
 )
@@ -23,11 +22,16 @@ import (
 // the key, so no license_machines row was ever written and the seat limits were
 // structurally unenforceable.
 type MachineInfo struct {
-	// MachineID is the raw per-installation fingerprint. It is NEVER sent to the
-	// platform as-is — Hash() derives the wire value from it.
+	// MachineID is the raw per-installation fingerprint and the ONLY field the
+	// seat identity is derived from. It is never sent to the platform as-is —
+	// Hash() derives the wire value from it.
 	MachineID string
-	Hostname  string
-	Platform  string
+	// Hostname and Platform are binding CONTEXT, not identity: the platform
+	// stores them in the clear so an account owner can recognise which of
+	// their seats is which. They are deliberately outside the hashed identity
+	// (see Hash) — a machine that renames itself must keep its seat.
+	Hostname string
+	Platform string
 }
 
 // Resolve fills any field the caller left empty from this host, so a validate
@@ -56,31 +60,43 @@ func (m MachineInfo) IsZero() bool {
 	return m.MachineID == "" && m.Hostname == "" && m.Platform == ""
 }
 
-// Fingerprint is the stable per-machine string the wire hash is computed over.
-// The separator and field order are part of the contract: two validate calls
-// from the same installation must produce the same fingerprint, or one machine
-// consumes two seats.
-func (m MachineInfo) Fingerprint() string {
-	return strings.Join([]string{m.MachineID, m.Hostname, m.Platform}, "|")
-}
-
 // Hash is the value the platform stores as the machine identity:
-// HMAC-SHA256(licenseKey, fingerprint), hex-encoded — the extension contract's
+// HMAC-SHA256(licenseKey, machineID), hex-encoded — the extension contract's
 // machineHash. Keying with the license key means the same machine hashes
-// differently under different licenses, so a fingerprint leaked from one
-// account cannot be correlated with another, and the raw fingerprint (which
-// includes the hostname) never leaves this process.
+// differently under different licenses, so an identifier leaked from one
+// account cannot be correlated with another, and the raw machine id never
+// leaves this process.
 //
-// Returns "" when there is nothing to bind — no license key, or no fingerprint
-// material at all — so callers omit the field rather than sending a hash of
-// emptiness that every unidentifiable machine would share.
+// The digest covers the machine id and NOTHING else. That is the whole point
+// of the seat identity: it must be exactly as stable as the installation it
+// names. MachineID is stable by construction — vscode.env.machineId is a UUID
+// that survives restarts and updates, and the daemon's own fallback is a UUID
+// persisted under the home directory. Hostname is not: macOS appends and
+// rewrites .local names when the network changes, every devcontainer or
+// Codespaces rebuild mints a fresh random one, and corporate re-imaging
+// renames en masse. Folding a volatile value into the identity would re-bind
+// one installation as a new machine on each change, so a pro license would
+// burn its three seats on one laptop and then lock its owner out. Platform is
+// stable per install but adds nothing to a UUID's uniqueness while adding a
+// second way to drift (process.platform says "win32" where runtime.GOOS says
+// "windows"), so it stays out too. Both travel as cleartext context instead —
+// see applyTo.
+//
+// Because this digest is the primary key of a license_machines row, its
+// derivation is a wire contract: changing it re-binds every already-bound
+// machine, each installation takes a fresh seat, and a full license rejects
+// its own owner as MACHINE_LIMIT. TestMachineInfo_Hash_PinsTheWireDigest
+// pins the exact bytes so that can never happen silently.
+//
+// Returns "" when there is nothing to bind — no license key, or no machine id
+// — so callers omit the field rather than sending a hash of emptiness that
+// every unidentifiable machine would share.
 func (m MachineInfo) Hash(licenseKey string) string {
-	fingerprint := m.Fingerprint()
-	if licenseKey == "" || strings.Trim(fingerprint, "|") == "" {
+	if licenseKey == "" || m.MachineID == "" {
 		return ""
 	}
 	mac := hmac.New(sha256.New, []byte(licenseKey))
-	mac.Write([]byte(fingerprint))
+	mac.Write([]byte(m.MachineID))
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
