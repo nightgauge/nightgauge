@@ -989,6 +989,13 @@ type AutonomousScheduler struct {
 	// refinementSem limits concurrent refinements (buffered channel as semaphore).
 	refinementSem chan struct{}
 
+	// refinementScanOffset is the round-robin start offset for
+	// runRefinementCycle's scan of as.repos (#502). Incremented once per
+	// cycle and read under as.mu, same as the other refinement bookkeeping
+	// fields in this block; zero value is a valid starting offset so no
+	// constructor initialization is needed.
+	refinementScanOffset uint64
+
 	// refinementCooldown maps "repo#number" → earliest-next-refine time.
 	// Prevents re-processing if pipeline:refined is manually removed quickly.
 	refinementCooldown map[string]time.Time
@@ -6749,9 +6756,29 @@ func (as *AutonomousScheduler) runRefinementCycle(ctx context.Context) {
 		}
 	}
 
-	// Scan each repo for unrefined issues
+	// Scan each repo for unrefined issues. The scan's starting point rotates
+	// round-robin across cycles (#502): the refinement semaphore below is
+	// SCHEDULER-WIDE, so a fixed scan order lets repos[0] win the single slot
+	// every cycle for as long as it has unrefined candidates, starving every
+	// other repo indefinitely — either they short-circuit on the exhaustion
+	// break below or scan and find the slot already taken. Rotating which
+	// repo is scanned first each cycle circulates the acquisition
+	// opportunity; the two #488 gates (the exhaustion break and the
+	// per-candidate acquisition refusal) are unchanged.
 	const refinementEmptyTTL = 5 * time.Minute
-	for _, rc := range as.repos {
+	numRepos := len(as.repos)
+	scanStart := 0
+	if numRepos > 0 {
+		as.mu.Lock()
+		scanStart = int(as.refinementScanOffset % uint64(numRepos))
+		as.refinementScanOffset++
+		as.mu.Unlock()
+		if numRepos > 1 {
+			log.Printf("[refinement] cycle scan starting at repo offset %d/%d", scanStart, numRepos)
+		}
+	}
+	for scanIdx := 0; scanIdx < numRepos; scanIdx++ {
+		rc := as.repos[(scanStart+scanIdx)%numRepos]
 		// Cycle-level quota short-circuit (#488). The refinement semaphore is
 		// SCHEDULER-WIDE — one channel shared by every repo — so once it is
 		// saturated, no repo scanned later in this cycle can dispatch anything.
