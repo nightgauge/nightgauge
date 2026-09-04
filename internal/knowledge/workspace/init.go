@@ -16,12 +16,14 @@ var seedFS embed.FS
 // its target location under the workspace knowledge root. Keys are source
 // basenames; values are workspace-root-relative destinations.
 //
-// Category README files are prefixed with "<category>-README.md" in the embed
-// FS and land as "README.md" inside their category directory.
+// Category index pages are prefixed with "<category>-index.md" in the embed FS
+// and land as "index.md" inside their category directory. They are NOT
+// README.md: that is not a filename an Open Knowledge Format bundle root can
+// also use, and `knowledge index` owns the file from the first run onward.
 var seedManifest = map[string]string{
-	"product-README.md":        "product/README.md",
-	"cross-repo-README.md":     "cross-repo/README.md",
-	"architecture-README.md":   "architecture/README.md",
+	"product-index.md":         "product/index.md",
+	"cross-repo-index.md":      "cross-repo/index.md",
+	"architecture-index.md":    "architecture/index.md",
 	"product-positioning.md":   "product/product-positioning.md",
 	"multi-surface.md":         "product/multi-surface.md",
 	"platform-api-contract.md": "cross-repo/platform-api-contract.md",

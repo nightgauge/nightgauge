@@ -1,3 +1,12 @@
+---
+type: index
+title: Product
+status: draft
+generated:
+  by: process:knowledge-scaffold
+  at: "2026-09-03T00:00:00Z"
+---
+
 # product/
 
 Workspace-level public product context shared across repositories.

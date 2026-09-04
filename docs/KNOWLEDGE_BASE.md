@@ -168,6 +168,8 @@ repository root:
 
 ```text
 {git_root}/.nightgauge/knowledge/
+├── index.md                 ← bundle index (generated)
+├── log.md                   ← change history (generated)
 ├── epics/
 │   └── {N}-{slug}/
 │       ├── PRD.md
@@ -177,19 +179,19 @@ repository root:
 │       ├── PRD.md
 │       └── decisions.md
 ├── architecture/
-│   ├── README.md
+│   ├── index.md
 │   ├── _template.md
 │   └── {slug}.md
 ├── glossary/
-│   ├── README.md
+│   ├── index.md
 │   ├── _template.md
 │   └── {slug}.md
 ├── runbooks/
-│   ├── README.md
+│   ├── index.md
 │   ├── _template.md
 │   └── {slug}.md
 └── post-mortems/
-    ├── README.md
+    ├── index.md
     ├── _template.md
     └── {slug}.md
 ```
@@ -207,7 +209,7 @@ repository root:
 
 **Issue-tier** entries use `{N}-{slug}/` subdirectories. **Repo-topic** entries
 use flat `{slug}.md` files directly inside the category directory. When a new
-repo-topic category is first created, `README.md` and `_template.md` are
+repo-topic category is first created, `index.md` and `_template.md` are
 auto-scaffolded alongside the first entry.
 
 ### Directory Naming

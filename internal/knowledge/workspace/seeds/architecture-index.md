@@ -1,3 +1,12 @@
+---
+type: index
+title: Architecture
+status: draft
+generated:
+  by: process:knowledge-scaffold
+  at: "2026-09-03T00:00:00Z"
+---
+
 # architecture/
 
 Workspace-level architecture knowledge. Ecosystem-level structural decisions

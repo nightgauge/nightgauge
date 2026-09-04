@@ -13,14 +13,14 @@ import (
 // Full set of workspace-root-relative paths that InitTree must materialize on
 // a fresh workspace.
 var expectedSeedPaths = []string{
-	"architecture/README.md",
 	"architecture/ecosystem-topology.md",
 	"architecture/go-ts-parity.md",
-	"cross-repo/README.md",
+	"architecture/index.md",
 	"cross-repo/auth-flow.md",
+	"cross-repo/index.md",
 	"cross-repo/platform-api-contract.md",
 	"cross-repo/shared-types.md",
-	"product/README.md",
+	"product/index.md",
 	"product/multi-surface.md",
 	"product/product-positioning.md",
 }
@@ -137,7 +137,7 @@ func TestInitTree_PartialState(t *testing.T) {
 	if err := os.MkdirAll(productDir, 0755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
-	for _, name := range []string{"README.md", "product-positioning.md", "multi-surface.md"} {
+	for _, name := range []string{"index.md", "product-positioning.md", "multi-surface.md"} {
 		path := filepath.Join(productDir, name)
 		if err := os.WriteFile(path, []byte("existing\n"), 0644); err != nil {
 			t.Fatalf("write existing: %v", err)
@@ -162,7 +162,7 @@ func TestInitTree_PartialState(t *testing.T) {
 	}
 
 	// And the three pre-existing product files still say "existing".
-	for _, name := range []string{"README.md", "product-positioning.md", "multi-surface.md"} {
+	for _, name := range []string{"index.md", "product-positioning.md", "multi-surface.md"} {
 		data, _ := os.ReadFile(filepath.Join(productDir, name))
 		if string(data) != "existing\n" {
 			t.Errorf("pre-existing product/%s was overwritten", name)
