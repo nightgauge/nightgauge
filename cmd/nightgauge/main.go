@@ -4574,6 +4574,37 @@ func serveCmd() *cobra.Command {
 			// the claim to expire on its own. The heartbeat stops the moment
 			// this process loses the parent that started it, which is what
 			// makes the claim a progress test rather than a pulse.
+			// Take the workspace's scheduler lease (#1349).
+			//
+			// The lease gates the SCHEDULER, not this command. `serve` is also
+			// the IPC server the extension talks to over stdio, one per
+			// extension host — two VS Code windows on one workspace folder
+			// legitimately run two of them, and failing the second would take
+			// that window's entire Nightgauge integration down to prevent a
+			// duplicate scheduler. So a held lease means this process serves
+			// IPC without attaching a scheduler, and says so; see the
+			// attachment site below.
+			//
+			// The sidecar's own collision rule stays last-writer-wins, on
+			// purpose: it is bookkeeping for doctor's orphan attribution
+			// (#388), and refusing to write a bookkeeping file would be a
+			// worse trade than an inaccurate one. The lease is the opposite
+			// contract, which is why it is a separate mechanism.
+			serveLease, leaseErr := runstate.AcquireServeLease(workspaceRoot)
+			switch {
+			case leaseErr == nil:
+				defer serveLease.Release()
+			case errors.Is(leaseErr, runstate.ErrServeLeaseHeld):
+				log.Printf("serve: %s — this process will serve IPC WITHOUT a scheduler. %s",
+					leaseErr, schedulerLeaseHolderLine(workspaceRoot))
+			default:
+				// A malfunction of the locking itself. A lease that fails open
+				// is not a lease, and what it fails open into is the
+				// two-scheduler state this exists to prevent.
+				return leaseErr
+			}
+			weHoldSchedulerLease := leaseErr == nil
+
 			stopServeSidecar := runstate.StartServeSidecar(workspaceRoot, log.Printf)
 			defer stopServeSidecar()
 
@@ -4941,7 +4972,16 @@ func serveCmd() *cobra.Command {
 						}
 					}
 
-					if len(repoConfigs) > 0 {
+					if len(repoConfigs) > 0 && !weHoldSchedulerLease {
+						// Another process holds the lease (#1349). IPC keeps
+						// serving above; the scheduler does not attach, because
+						// two of them against one workspace read the same board
+						// and dispatch the same issues — neither per-process
+						// slot ceiling can see the other's.
+						log.Printf("serve: autonomous scheduler NOT attached — another process holds this workspace's scheduler lease. %s",
+							schedulerLeaseHolderLine(workspaceRoot))
+					}
+					if len(repoConfigs) > 0 && weHoldSchedulerLease {
 						autoSched = orchestrator.NewAutonomousScheduler(
 							sched, client, repoConfigs, nil, autoCfg, workspaceRoot,
 						)
@@ -9865,6 +9905,7 @@ func autonomousRunCmd() *cobra.Command {
 		allowSelfRepo bool
 		outputJSON    bool
 		adapterName   string
+		attach        bool
 	)
 
 	cmd := &cobra.Command{
@@ -9874,6 +9915,31 @@ func autonomousRunCmd() *cobra.Command {
 		Example:      "  nightgauge autonomous run --interval 30s --budget 500000\n  nightgauge autonomous run --dry-run",
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// One scheduler per workspace (#1349).
+			//
+			// Checked before the GitHub client is built, so a refusal costs no
+			// API call and no token resolution. Until this existed, `serve`
+			// attached one scheduler in-process and this command constructed a
+			// second, independent one; the per-process activeRuntimes map and
+			// PerRepoMax ceiling cannot see across a process boundary, so both
+			// read the same board and dispatched the same issues, each
+			// correctly believing it was inside its own concurrency budget.
+			autoWorkdir, _ := os.Getwd()
+			autoLease, leaseErr := runstate.AcquireServeLease(autoWorkdir)
+			if leaseErr != nil {
+				if errors.Is(leaseErr, runstate.ErrServeLeaseHeld) {
+					if attach {
+						fmt.Fprintf(cmd.OutOrStdout(),
+							"A scheduler is already running for this workspace — nothing to start.\n  %s\n",
+							schedulerLeaseHolderLine(autoWorkdir))
+						return nil
+					}
+					return fmt.Errorf("%w\n\n%s", leaseErr, autonomousLeaseAdvice())
+				}
+				return leaseErr
+			}
+			defer autoLease.Release()
+
 			client, err := clientFromConfig()
 			if err != nil {
 				return fmt.Errorf("create github client: %w", err)
@@ -10167,6 +10233,8 @@ func autonomousRunCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&allowSelfRepo, "allow-self-repo", false, "Permit dispatching issues in the running binary's own repo (#292 — a stage editing that repo can be destroyed by the unfixed version of itself)")
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output final status as JSON")
 	cmd.Flags().StringVar(&adapterName, "adapter", "", "AI adapter for stages this process runs itself (claude-headless, claude-sdk, codex, gemini, gemini-sdk); defaults to ui.core.adapter")
+	cmd.Flags().BoolVar(&attach, "attach", false,
+		"Succeed quietly when a scheduler is already running for this workspace, instead of refusing")
 	return cmd
 }
 
@@ -10250,8 +10318,21 @@ func autonomousStatusCmd() *cobra.Command {
 				type statusWithStalled struct {
 					orchestrator.AutonomousState
 					Stalled bool `json:"stalled"`
+					// The scheduler lease (#1349). state.json says what the
+					// last scheduler wrote; these say whether one is running
+					// right now, which is a different question and the one a
+					// script checking "is anything moving?" actually asks.
+					LeaseHeld   bool                       `json:"lease_held"`
+					LeaseHolder *runstate.ServeLeaseHolder `json:"lease_holder,omitempty"`
 				}
-				out, _ := json.MarshalIndent(statusWithStalled{AutonomousState: state, Stalled: stalled}, "", "  ")
+				payload := statusWithStalled{AutonomousState: state, Stalled: stalled}
+				if cwd, cwdErr := os.Getwd(); cwdErr == nil {
+					if holder, held := runstate.InspectServeLease(cwd); held {
+						payload.LeaseHeld = true
+						payload.LeaseHolder = &holder
+					}
+				}
+				out, _ := json.MarshalIndent(payload, "", "  ")
 				fmt.Println(string(out))
 				return nil
 			}
@@ -10265,6 +10346,17 @@ func autonomousStatusCmd() *cobra.Command {
 				fmt.Printf("Autonomous Mode: Stalled (pid %d is not running)\n", state.PID)
 			} else {
 				fmt.Printf("Autonomous Mode: %s\n", statusDisplay)
+			}
+
+			// The scheduler lease (#1349), reported whether or not it is held.
+			//
+			// state.json above describes what THIS workspace's autonomous
+			// scheduler last wrote; the lease describes whether a scheduler is
+			// running at all. An operator whose queue is not moving needs to
+			// tell "something else is running it" from "nothing is running
+			// it", and those two were indistinguishable from this output.
+			if cwd, cwdErr := os.Getwd(); cwdErr == nil {
+				fmt.Println(describeSchedulerLease(cwd))
 			}
 
 			// #405 — the halt is a latch, not a status, precisely because
@@ -10850,6 +10942,7 @@ var doctorCheckOrder = []string{
 	"binary", "gh", "github_auth", "api_user", "scopes", "rate_limit", "config", "project",
 	"ai_adapter",
 	"compose_orphans", "worktree_leaks", "stranded_branches", "pipeline_stashes", "preserved_wip", "orphaned_processes",
+	"serve_lease",
 	"survival_backlog", "survival_coverage", "corpus_calibration", "scheduled_automations",
 }
 

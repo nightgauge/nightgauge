@@ -1648,6 +1648,77 @@ and a hand-run `git worktree prune` takes no lock of ours. The guard shrinks
 third-party exposure rather than eliminating it, which is the most a
 cooperative advisory scheme can do.
 
+### The Scheduler Lease — One Scheduler Per Workspace (Issue #1349)
+
+Two autonomous schedulers could run against one workspace, and nothing checked.
+`nightgauge serve` attaches one in-process; `nightgauge autonomous run`
+constructed a second, independent one. The `activeRuntimes` map and the
+`PerRepoMax` ceiling are **per process**, so neither could see the other: both
+read the same board, both dispatched the same issues, and each was correctly
+inside its own concurrency budget the whole time.
+
+The PID sidecar (#388) already recorded which process served which workspace,
+but it was never consulted as a lease. Its collision rule is deliberately
+last-writer-wins, because its job is orphan attribution for `doctor` and
+refusing to write a bookkeeping file would be a worse trade than an inaccurate
+one. A lease is the opposite contract — its whole purpose is to refuse — so it
+is a separate mechanism rather than a change of heart in that one.
+
+**A separate lock file, not the sidecar.** The sidecar is written through
+write-temp → fsync → rename, which replaces the inode on every heartbeat. An
+advisory lock lives on an _inode_, so a flock on the sidecar would be released
+by its own holder's next heartbeat: a lock that reports success and protects
+nothing, which is worse than no lock. The lease flocks
+`~/.nightgauge/serve/<sha16>.lock`, created once and never renamed, beside the
+`.json` the sidecar keeps.
+
+**flock is the authority; the sidecar is only the report.** The kernel releases
+an advisory lock when the holder dies, however it dies — SIGKILL, panic, power
+loss. That makes "is it held?" a direct observation of liveness, with none of
+the races a PID check has: a PID can be recycled between the read and the
+decision, and a heartbeat can be stale on a healthy daemon whose laptop was
+asleep. The PID and heartbeat answer _who_ holds it, never _whether_. An
+unreadable sidecar therefore downgrades the message ("another process") and
+never the verdict.
+
+The implementation moved out of `internal/gitworktree` into
+[`internal/flock`](#serialised-worktree-mutation-issue-1163) so there is one
+advisory lock in the tree. A second copy would be fixed in one place and not the
+other, and a locking bug stays invisible until the day two processes do the
+thing the lock existed to prevent.
+
+**What each entry point does with a held lease:**
+
+|                                |                                                                                                                           |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------- |
+| `nightgauge autonomous run`    | Refuses, naming the holder's PID and workspace. `--attach` makes it exit 0 instead — the running scheduler keeps the work |
+| `nightgauge serve`             | **Starts anyway**, serving IPC without attaching a scheduler, and logs why                                                |
+| `nightgauge autonomous status` | Prints the lease line whether held or free                                                                                |
+| `nightgauge doctor`            | `serve_lease` — clean when free or healthy, a finding only when wedged                                                    |
+
+`serve` does not refuse, and that asymmetry is deliberate. It is also the stdio
+IPC server the extension talks to, one per extension host, so **two VS Code
+windows on one workspace folder legitimately run two of them**. Failing the
+second would take that window's entire Nightgauge integration down in order to
+prevent a duplicate scheduler — trading a real outage for a hypothetical one.
+The lease gates the scheduler attachment, not the command.
+
+**A wedged holder is stale, not stealable.** A heartbeat older than
+`ServeLeaseStaleAfter` (two intervals — one missed tick is a slow disk, two is a
+daemon that stopped doing the one thing it does unconditionally) marks the lease
+stale. That is a _description_: the holder still holds the lock, and stealing a
+lock from a live process produces exactly the two-scheduler state this prevents.
+So staleness is what the refusal message and `doctor` report, never what makes a
+takeover legal. The repair is to stop that process; the lease frees itself the
+moment it exits.
+
+`doctor`'s `serve_lease` arm is distinct from `orphaned_processes` (#341) even
+though both read the same claim directory. That arm asks a machine-wide question
+and expires a claim after 24 hours, because its cost of being wrong is naming a
+healthy daemon an orphan. This one asks a workspace-scoped question on a
+two-heartbeat clock, because its cost of being wrong is an operator waiting on a
+daemon that is never coming back.
+
 ### Stash Reclamation (Issue #330)
 
 Same two-half shape as worktree reclamation, for the same reason. A stage that
