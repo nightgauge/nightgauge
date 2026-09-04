@@ -83,9 +83,9 @@ func TestAutonomousResume_StartsGoroutineWhenNotRunning(t *testing.T) {
 		t.Fatalf("autonomous.resume returned error: %v", err)
 	}
 
-	// The handler waits 50ms internally for status to settle. Allow a
-	// little extra slack for the goroutine's first scheduling.
-	time.Sleep(100 * time.Millisecond)
+	// No sleep: since #494 the handler returns only once it has observed the
+	// scheduler come up (or its deadline expire), so IsRunning() is readable
+	// immediately and a stale read here would be the bug, not a race.
 
 	if !as.IsRunning() {
 		t.Fatal("autonomous.resume did NOT spawn the dispatch goroutine — silent dead-state regression (#3303)")
@@ -125,7 +125,7 @@ func TestAutonomousResume_NoGoroutineLeakWhenAlreadyRunning(t *testing.T) {
 	if _, err := startHandler(ctx, nil); err != nil {
 		t.Fatalf("autonomous.start failed: %v", err)
 	}
-	time.Sleep(100 * time.Millisecond)
+	// See above (#494): autonomous.start does not return until the loop is up.
 	if !as.IsRunning() {
 		t.Fatal("autonomous.start did not spawn goroutine")
 	}

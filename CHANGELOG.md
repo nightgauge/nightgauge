@@ -138,6 +138,23 @@ table, carve-out rationale, and consequence analysis.
 
 ### Fixed
 
+#### `autonomous.*` IPC handlers synchronized on a 50ms sleep (#494)
+
+- `autonomous.start`, `autonomous.resume`, `autonomous.resumeRepo` and
+  `autonomous.stop` each signalled the scheduler and then slept a flat
+  `50 * time.Millisecond` before sampling `Status()`. A wall-clock guess is not
+  synchronization: the dispatch loop drains `stopCh` **between cycles**, so
+  whenever a cycle was in flight the guess expired first and the handler
+  answered with a state the scheduler had not reached — `autonomous.stop`
+  replying `running` being the visible shape.
+- **Go binary** (`internal/orchestrator/autonomous.go`): every write to the
+  scheduler's `running` flag now goes through one writer that also wakes a
+  broadcast channel, and the new `WaitForRunning(want, timeout)` blocks on
+  that transition. On timeout it reports the liveness it actually observed,
+  never the liveness the caller asked for.
+- **Go binary** (`internal/ipc/server.go`): the four handlers wait on that
+  primitive (2s ceiling) instead of sleeping, and log when the wait expires.
+
 #### Empty epics invisible in Repositories tree view (#3329)
 
 - A freshly-created epic (`type:epic` label, zero sub-issues) was filtered out
