@@ -212,6 +212,120 @@ func TestWriteStageExitRecord_ForwardsTSDiagnosticFields(t *testing.T) {
 	}
 }
 
+// TestWriteStageExitRecord_CLIFailureCarriesTerminalKindAndStderrTail pins
+// #563: a CLI-mode failure passes stageErr == nil (the executor never
+// returned a Go error — execution.Manager reported the reason on the
+// result's ErrorText instead), so the old classification here — stageErr,
+// then the runtime StageErrors map — saw nothing and wrote terminal_kind=""
+// and stderr_tail="". The history record (scheduler.go:6199) already
+// classifies from stageFailureText(err, result), so the two forensic
+// surfaces disagreed about the identical failure. This pins that they no
+// longer can.
+func TestWriteStageExitRecord_CLIFailureCarriesTerminalKindAndStderrTail(t *testing.T) {
+	s := newSchedulerForDeterministicTest()
+	root := t.TempDir()
+	runID := testRunID()
+	runtime := state.NewRuntimeState("nightgauge/nightgauge", 563, "item-id", runID)
+	item := types.BoardItem{Number: 563, Repo: "nightgauge/nightgauge"}
+
+	// Corpus row grok-not-signed-in (internal/terminalkind/testdata/corpus.json):
+	// the grok CLI's own stderr when no credentials are present, reaching the
+	// classifier verbatim via the CLI carry with no [adapter-auth-failed]
+	// marker.
+	const authFailureText = "Error: Not signed in. To authenticate without a browser, run: grok login --device-code"
+	result := &StageRunResult{ExitCode: 1, ErrorText: authFailureText}
+
+	s.writeStageExitRecord(item, state.StageFeatureDev, runtime, result,
+		1, nil, 0, "grok-4", 0, 0, 0, time.Now().Add(-time.Second), root, "", "")
+
+	recs := readExitRecords(t, root)
+	if len(recs) != 1 {
+		t.Fatalf("expected 1 record, got %d", len(recs))
+	}
+	got := recs[0]
+	if got.Success {
+		t.Errorf("Success = true, want false")
+	}
+	if got.TerminalKind != TerminalKindAdapterAuthFailed {
+		t.Errorf("TerminalKind = %q, want %q", got.TerminalKind, TerminalKindAdapterAuthFailed)
+	}
+	if got.StderrTail == "" || !strings.Contains(got.StderrTail, authFailureText) {
+		t.Errorf("StderrTail = %q, want it to contain %q", got.StderrTail, authFailureText)
+	}
+
+	// Parity: the exact classification the history record makes at
+	// scheduler.go:6199-6200 for this same input must agree with what this
+	// record wrote. No gate ran on this fixture, so gateRan=false and
+	// gateTerminalKind="" match what writeStageExitRecord read off the empty
+	// runtime snapshot.
+	want := ResolveTerminalKind(false, "", stageFailureText(nil, result))
+	if got.TerminalKind != want {
+		t.Errorf("TerminalKind = %q, disagrees with history-record classification %q", got.TerminalKind, want)
+	}
+}
+
+// TestWriteStageExitRecord_SuccessCarriesNoTerminalKindOrStderrTail guards
+// against a healthy stage's stderr (or a CLI carry left over from a prior
+// retry attempt) being misread as a failure signal. Success must classify
+// nothing.
+func TestWriteStageExitRecord_SuccessCarriesNoTerminalKindOrStderrTail(t *testing.T) {
+	s := newSchedulerForDeterministicTest()
+	root := t.TempDir()
+	runID := testRunID()
+	runtime := state.NewRuntimeState("nightgauge/nightgauge", 564, "item-id", runID)
+	item := types.BoardItem{Number: 564, Repo: "nightgauge/nightgauge"}
+	result := &StageRunResult{ExitCode: 0, ErrorText: ""}
+
+	s.writeStageExitRecord(item, state.StageFeatureDev, runtime, result,
+		0, nil, 0, "sonnet-4-5", 0, 0, 0, time.Now().Add(-time.Second), root, "", "")
+
+	recs := readExitRecords(t, root)
+	if len(recs) != 1 {
+		t.Fatalf("expected 1 record, got %d", len(recs))
+	}
+	got := recs[0]
+	if !got.Success {
+		t.Errorf("Success = false, want true")
+	}
+	if got.TerminalKind != "" {
+		t.Errorf("TerminalKind = %q, want empty on success", got.TerminalKind)
+	}
+	if got.StderrTail != "" {
+		t.Errorf("StderrTail = %q, want empty on success", got.StderrTail)
+	}
+}
+
+// TestWriteStageExitRecord_IPCStderrTailWinsOverCLICarry pins that when both
+// the IPC ring buffer (result.StderrTail) and the CLI carry
+// (result.ErrorText) are populated, the richer IPC tail is what's persisted
+// — the CLI carry exists only to fill the gap when IPC mode's StderrTail is
+// unset, never to overwrite it.
+func TestWriteStageExitRecord_IPCStderrTailWinsOverCLICarry(t *testing.T) {
+	s := newSchedulerForDeterministicTest()
+	root := t.TempDir()
+	runID := testRunID()
+	runtime := state.NewRuntimeState("nightgauge/nightgauge", 565, "item-id", runID)
+	item := types.BoardItem{Number: 565, Repo: "nightgauge/nightgauge"}
+	result := &StageRunResult{
+		ExitCode:   1,
+		StderrTail: "[skillRunner] richer IPC ring-buffer tail",
+		ErrorText:  "terser CLI-carried reason",
+	}
+
+	s.writeStageExitRecord(item, state.StageFeatureDev, runtime, result,
+		1, errors.New("subagent crashed"), 0, "sonnet-4-5", 0, 0, 0,
+		time.Now().Add(-time.Second), root, "", "")
+
+	recs := readExitRecords(t, root)
+	if len(recs) != 1 {
+		t.Fatalf("expected 1 record, got %d", len(recs))
+	}
+	got := recs[0]
+	if got.StderrTail != result.StderrTail {
+		t.Errorf("StderrTail = %q, want IPC tail %q (CLI carry must not win)", got.StderrTail, result.StderrTail)
+	}
+}
+
 // TestWriteStageExitRecord_ForwardsKillCeiling pins the #161 pair on the
 // Go-scheduler write path, so both dispatch paths produce the same forensic
 // shape and `jq 'select(.kill_ceiling=="nx-stall-multiple")'` finds the kill
