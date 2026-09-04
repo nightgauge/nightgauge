@@ -117,6 +117,43 @@ surfaces where the adapter is eligible.
 Attribution of what actually ran is kept where a concrete id belongs: the run
 record's per-stage `model_selection`.
 
+### A retry escalation is not a routing miss (#1002)
+
+`Calibrate` excludes any row with `Retries > 0` from the **model-accuracy
+denominator** (`ModelSamples`) — it does not touch the size pair, which has no
+equivalent exclusion.
+
+The retry engine's escalated tier becomes the dispatch override
+(`resolveDispatchModel` applies `retryEngine.CurrentModel(stage)`), and that
+override is re-recorded as `ActualModel`. A `haiku -> sonnet` escalation on a
+failed stage — the retry ladder doing exactly its job — therefore produces a
+pair that compares `PredictedModel` (the router's original recommendation)
+against `ActualModel` (the retry-escalated dispatch), and nothing in that
+comparison distinguishes "the router mispredicted" from "the retry ladder
+intervened". Before this exclusion, a week with a normal number of retries
+read as calibration degrading.
+
+`Retries > 0` is a superset of "the tier actually changed" — a retry that
+re-dispatched the same tier is excluded too — accepted deliberately because
+erring toward fewer false misses is preferable to erring toward inflated ones.
+Excluded rows are not silently dropped: `CalibrationReport.ModelSamplesExcludedRetry`
+counts them, so the sample loss stays visible instead of reading as an
+unexplained shrink in `ModelSamples`.
+
+There is no equivalent `performance_mode` segmentation anywhere in this
+component — nothing under `internal/intelligence/learning/` reads
+`performance_mode`, and `Calibrate` does not segment the size pair on it. The
+retry discriminator above is the first segmentation this component has ever
+had.
+
+**`modelAccuracy` measures divergence, not quality.** Even with the retry
+exclusion in place, and with the override chain (floor/ceiling/sticky-downgrade
+clamps) still fully in play, `modelAccuracy` measures whether what actually
+dispatched matched the router's recommendation — it does not measure whether
+the recommendation was any good. A test asserting `modelAccuracy == 1.0` on a
+happy-path run cannot go red on a bad router and proves nothing about routing
+quality.
+
 ### Stored telemetry across the band retirement is accept-void (#582)
 
 Spike #568 §5 decided the migration policy for both history stores when the
