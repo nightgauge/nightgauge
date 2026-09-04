@@ -98,7 +98,7 @@ const createMockService = (opts: {
   runId: string | null;
   issueNumber: number | null;
   paused?: boolean;
-}): PipelineStateService & MockRunService =>
+}): PipelineStateService =>
   ({
     runId: opts.runId,
     issueNumber: opts.issueNumber,
@@ -117,7 +117,7 @@ const createMockService = (opts: {
       )
     ),
     resumePipeline: vi.fn(() => Promise.resolve(true)),
-  }) as unknown as PipelineStateService & MockRunService;
+  }) as unknown as PipelineStateService;
 
 // concurrentPipelineManager with zero active slots reported via
 // activeSlotCount, so the legacy (non-Go-driven) resume path in
