@@ -19,18 +19,6 @@ and this project adheres to
 
 ### Added
 
-#### `nightgauge api-usage --budget` (#1428)
-
-- **`--budget` flag on `nightgauge api-usage`**: reports the hourly GraphQL
-  budget spent and remaining from the request ledger, and prices a full
-  ProjectV2 board read (17 points/100-item page) against what is left, so a
-  session can check before a bulk board pull instead of discovering the
-  exhaustion mid-poll.
-- **Agent guidance**: `AGENTS.md` and `docs/GO_BINARY.md` now name the cost of
-  a raw `gh` board pull (invisible to the ledger, ~340 points for the shared
-  board), the one-pull-into-a-file rule, and the REST check-runs idiom for
-  watching CI instead of the GraphQL `gh pr checks`.
-
 #### Supply-chain hardening for the release path (#136)
 
 - **All GitHub Actions SHA-pinned**: every `uses:` across `.github/workflows/*`
