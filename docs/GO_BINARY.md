@@ -1719,6 +1719,35 @@ healthy daemon an orphan. This one asks a workspace-scoped question on a
 two-heartbeat clock, because its cost of being wrong is an operator waiting on a
 daemon that is never coming back.
 
+#### The socket is a separate endpoint from the lease (#1429)
+
+The lease decides who _schedules_. It does not decide who owns
+`.nightgauge/daemon.sock`, and until #1429 nothing did: `BindSocket` unlinked
+the path unconditionally before listening, so a second `serve` took it from a
+live first one. `unlink()` detaches the name from the listening socket's inode
+— the first daemon kept accepting on an inode nothing could name, and every
+subsequent dial reached the second. No error, no log.
+
+`BindSocket` now probes before it clears: it dials the path, and unlinks only
+when nothing answers. A path that accepts belongs to someone and is refused
+with `ErrSocketInUse`; a refused or absent path is a crashed daemon's leftover
+and is cleared as before.
+
+`serve` treats that refusal as routine and keeps running. It is two transports:
+a private stdio pipe per extension host — legitimately one per VS Code window —
+and this one workspace-wide socket. The second window's daemon serves its own
+extension over stdio while terminal CLI calls keep reaching the daemon that
+bound the socket first.
+
+Two caveats, both deliberate:
+
+- **It is not mutual exclusion.** Two daemons starting inside the probe window
+  can still both bind. That race belongs to the lease, not to `BindSocket`.
+- **The socket owner is not necessarily the lease holder.** Whichever daemon
+  binds first keeps the socket, and it may be the one without the lease —
+  which matters because a lease-less daemon still has a wired pipeline
+  scheduler today (#1430).
+
 ### Stash Reclamation (Issue #330)
 
 Same two-half shape as worktree reclamation, for the same reason. A stage that
