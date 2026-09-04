@@ -4232,12 +4232,13 @@ computes hit rates. Output is deterministically sorted by gate name.
 ]
 ```
 
-### API Usage — The GitHub Request Ledger (Issue #843)
+### API Usage — The GitHub Request Ledger (Issue #843, always-on in #1347)
 
 ```bash
-NIGHTGAUGE_GITHUB_API_LOG=1 nightgauge serve --workspace .   # record
-nightgauge api-usage --since 1h                              # read it back
+nightgauge api-usage --since 1h              # the ledger is already recording
 nightgauge api-usage --by op --top 5 --json
+nightgauge api-usage --since 1h --resource graphql   # just the pool that runs out
+nightgauge doctor                            # the `github_api_budget` arm
 ```
 
 Every attempt to cut this product's GitHub API consumption before #842 reasoned
@@ -4266,6 +4267,78 @@ reaches the caller.
 
 Disabled, the whole path is one nil check per request. Enabled, a write failure
 is swallowed: instrumentation that can fail a pipeline run is worse than none.
+
+#### Always-on, and why (Issue #1347)
+
+The ledger shipped opt-in, behind `NIGHTGAUGE_GITHUB_API_LOG=1`. That made it
+useful to exactly one operator: the one who predicted, in advance, that they
+would need it. **Every quota exhaustion this workspace has hit was
+unattributable after the fact** — the instrument that prices a call was off
+while the spending happened, and an exhaustion is not reproducible on demand.
+The idle burn that causes one takes an hour of a real daemon against a real
+board, so "switch it on and try again" is not a diagnosis; it is a request to
+wait for the next outage.
+
+It is therefore **on by default**, bounded rather than unbounded:
+
+| | |
+| --- | --- |
+| File | `.nightgauge/logs/github-api.jsonl`, gitignored with the other logs |
+| Bound | 5 MB, one numbered backup (`.jsonl.1`) — ~20k requests, days of idle traffic |
+| Off switch | `github.api_ledger.enabled: false`, or `NIGHTGAUGE_GITHUB_API_LOG=0` |
+| Override | `NIGHTGAUGE_GITHUB_API_LOG=<path>` writes elsewhere; env wins over config in both directions |
+
+**Never sum the pools.** `graphql` and `core` have separate hourly quotas, so
+their total is not a budget — and derived cost cannot distinguish another
+process spending `core` on the shared token from our own spending. The first
+live run of the always-on ledger measured a **70-point GraphQL window and
+reported 2216**, almost all of it `core` drift. Every surface that compares
+spend against the 5000/hour GraphQL quota (`doctor`, the status-bar meter, the
+Action Center card) attributes GraphQL alone; `api-usage --resource graphql`
+is how a script asks for the same thing, and it includes `graphql_mutation`
+because mutations bill to the same pool. The human report prints an unfiltered
+per-resource table instead, which is honest because it labels each pool.
+
+**Read the rolling SET, not the live file.** The window anyone opens this report
+for is the busy one, and a busy hour is the hour that rotates: a reader that
+opens only `github-api.jsonl` reports a sudden collapse in spending at exactly
+the moment spending was heaviest. `api-usage` without `--file` reads the set
+(`github.LedgerFiles`); `--file` reads one named file, which is the archaeology
+case.
+
+Rotation is safe across the several nightgauge processes that share one
+workspace ledger. The writer sizes the **path**, not its open handle, so a
+process holding an inode a sibling already renamed detects the divergence and
+reopens instead of rotating a second time.
+
+#### Three surfaces read the same window
+
+The file only matters if someone reads it, and the operators who need it most
+are the ones who will never run `api-usage`. One hour of the ledger is
+therefore surfaced where an operator already looks:
+
+- **`nightgauge doctor` → `github_api_budget`.** Points spent in the last hour,
+  the projected hourly rate, and the top three callers. Warns when a window was
+  exhausted, or when the projected rate passes **50% of the 5000/hour quota** —
+  the point past which one open workspace can exhaust the budget on its own.
+  An absent ledger is not a finding: a fresh workspace and a deliberate opt-out
+  both legitimately have no file.
+- **The VS Code status bar.** The GraphQL item gains the *rate* beside the
+  *level* it already showed (`GQL 4,200/5000 3,100/h`), with the top caller in
+  the tooltip. Remaining alone was never actionable — it cannot distinguish a
+  busy pipeline from a runaway sweep. The reading comes from the Go
+  aggregation, not a second TypeScript one, so the two surfaces cannot
+  disagree about what was spent.
+- **An Action Center `fyi` card** (`api-budget` producer, workspace-scoped)
+  when a window was exhausted in the last six hours, naming the top spender.
+  Workspace-scoped because one token has one quota and every repo spends out of
+  it; carding a repo would blame whichever one was swept first. It ships a
+  dismiss and no repair verb — no bounded, deterministic action fixes "a caller
+  is too expensive", and a button that silently does nothing is worse than none.
+
+An exhausted window is the state that most needs a card and the state in which
+every producer that could raise one has just lost its ability to call the API.
+This producer answers from disk, which is the only reason it can speak at all.
 
 Reading it back, grouped by caller, is what turned #842 from a theory into a
 worklist:
