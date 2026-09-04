@@ -9951,6 +9951,21 @@ func autonomousRunCmd() *cobra.Command {
 			}
 			defer autoLease.Release()
 
+			// Sweep the machine-global claim registry (#1426). `serve` does
+			// this too, from StartServeSidecar — but this command writes into
+			// the same directory (a lock file per workspace) and starts no
+			// sidecar, so on a machine that only ever runs the scheduler
+			// directly nothing would ever clean up after it.
+			//
+			// After the lease is taken, never before: the sweep only unlinks a
+			// lock it can lock, so holding this workspace's own lease is what
+			// keeps it from reclaiming the file it is about to depend on.
+			if swept := runstate.PruneServeRegistry(time.Now()); swept.Removed() > 0 {
+				fmt.Fprintf(cmd.ErrOrStderr(),
+					"Pruned the machine-global claim registry: %d dead record(s), %d unheld lock file(s).\n",
+					swept.Records, swept.Locks)
+			}
+
 			client, err := clientFromConfig()
 			if err != nil {
 				return fmt.Errorf("create github client: %w", err)

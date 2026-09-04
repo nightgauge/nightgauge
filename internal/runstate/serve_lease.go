@@ -110,12 +110,19 @@ type ServeLease struct {
 
 // ServeLeasePath is the lock file for a workspace: the sidecar's name with a
 // .lock extension, in the same machine-global directory.
+//
+// That name is reversible (#1426), which matters far more here than it does
+// for the record beside it. A lock file has no contents at all, so its name is
+// the ONLY thing that can say which workspace a lock left behind by a killed
+// daemon belongs to; under the truncated sha256 this replaced, an orphan named
+// a workspace nothing on the machine could recover. See
+// ServeRegistryWorkspaceRoot.
 func ServeLeasePath(workspaceRoot string) (string, error) {
 	dir, err := ServeSidecarDir()
 	if err != nil {
 		return "", err
 	}
-	name := strings.TrimSuffix(ServeSidecarName(workspaceRoot), ".json") + ".lock"
+	name := strings.TrimSuffix(ServeSidecarName(workspaceRoot), serveRecordSuffix) + serveLockSuffix
 	return filepath.Join(dir, name), nil
 }
 

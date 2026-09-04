@@ -1717,8 +1717,10 @@ write-temp → fsync → rename, which replaces the inode on every heartbeat. An
 advisory lock lives on an _inode_, so a flock on the sidecar would be released
 by its own holder's next heartbeat: a lock that reports success and protects
 nothing, which is worse than no lock. The lease flocks
-`~/.nightgauge/serve/<sha16>.lock`, created once and never renamed, beside the
-`.json` the sidecar keeps.
+`~/.nightgauge/serve/<key>.lock`, created once and never renamed, beside the
+`.json` the sidecar keeps. That `<key>` encodes the workspace root reversibly —
+see [The serve registry](#the-serve-registry-issue-1426), which is where a lock
+file left behind by a killed daemon gets reclaimed.
 
 **flock is the authority; the sidecar is only the report.** The kernel releases
 an advisory lock when the holder dies, however it dies — SIGKILL, panic, power
@@ -1795,6 +1797,93 @@ Two caveats, both deliberate:
   binds first keeps the socket, and it may be the one without the lease —
   which matters because a lease-less daemon still has a wired pipeline
   scheduler today (#1430).
+
+### The Serve Registry (Issue #1426)
+
+`~/.nightgauge/serve/` is the only machine-local record of which workspace roots
+have run a daemon. It holds two files per workspace — the `.json` claim record
+(#388) and the `.lock` file the lease flocks (#1349) — and until #1426 it could
+not be used as a registry, because almost none of it was live. Measured on a
+maintainer machine: **150 records, 143 naming a workspace root that no longer
+existed; 191 lock files, 174 with no record at all.**
+
+A registry that is 95% dead is worse than no registry: it invites a feature to
+be built on it and then to be over-broad in a way that only shows up on a
+machine with history. [ADR-019](decisions/019-relayed-resolve-routing.md)
+rejected an approach for exactly that reason. Three separate mechanisms
+produced the state, and all three are closed.
+
+**Nothing ever removed anything.** `RemoveServeSidecar` runs only on a clean
+shutdown, and only while the record still names the exiting pid, so anything
+killed, crashed or reparented left its record behind permanently — and lock
+files were never unlinked by any path at all. `runstate.PruneServeRegistry` is
+the sweep that was missing. It runs on **daemon start** (`StartServeSidecar`)
+and at the top of `nightgauge autonomous run`, after that command has taken its
+lease; a machine that uses the directory at all therefore cleans it. It is
+best-effort by construction — no error, and a file it cannot remove is left for
+the next sweep — and it logs a line only when it actually removed something.
+
+What counts as dead is deliberately narrow, because every rule can fail toward
+deleting the evidence `doctor` reports on:
+
+| Record                                             | Verdict                                                                                                                                           |
+| -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Live pid, fresh heartbeat                          | **Kept** — healthy                                                                                                                                |
+| Live pid, cold heartbeat                           | **Kept** — this is doctor's `serve-lease-wedged` finding, and the report needs the record to name the holder                                      |
+| `workspace_root` no longer on disk                 | **Removed** — 143 of the 150 measured; no daemon serves a directory that is not there                                                             |
+| Dead pid **and** cold heartbeat                    | **Removed** — both, not either: a pid that died a minute ago still has a fresh heartbeat and doctor may still be attributing a recycled pid to it |
+| Unparsable                                         | **Removed** — writes are atomic, so this is not a torn write; it is a file no reader can use                                                      |
+| `stat` fails for any reason other than "not found" | **Kept** — a permission error or an unreachable network mount must not read as a deleted workspace                                                |
+
+**A lock file is removed only when this process can take it**, and only when no
+surviving record explains it. The flock is the authority on whether a lease is
+held — the kernel releases it however the holder dies — so "I got the lock" is
+the only proof that a lock file is litter, and the unlink happens _under_ the
+lock so a racing process cannot end up holding a lease on an unlinked inode. On
+a platform with no advisory lock nothing can be proved and no lock file is
+touched.
+
+**The name was one-way.** A file was named by the first 16 hex digits of
+`sha256(root)`. That is adequate for a record, which carries `workspace_root`
+inside it, and fatal for a `.lock`, which carries nothing: an orphaned lock
+named a workspace **nothing on the machine could recover**. The key is now a
+reversible encoding of the normalized root — `[A-Za-z0-9._-]` kept as itself,
+the path separator written `~`, every other byte `%XX` — so
+`~srv~acme~repo.json` says what it is and `ls` is legible:
+
+```text
+before:  d69863189a333ba5.lock          # names nothing recoverable
+after:   ~srv~acme~repo.lock            # runstate.ServeRegistryWorkspaceRoot decodes it
+```
+
+Base64 was rejected: it expands by a third against a `NAME_MAX` ceiling and
+gives back an unreadable listing, which was half of what the hash cost. Only
+uppercase hex is accepted in an escape, so one workspace can never have two
+names. A root too long to fit one path segment (the ceiling budget also covers
+the atomic writer's `.<random>.tmp` suffix) falls back to a bounded hash key,
+which `ServeRegistryWorkspaceRoot` reports as **undecodable rather than
+guessed** — the record still names its root, and the prune reclaims an orphaned
+lock without having to name it.
+
+**Two walkers would disagree.** `doctor`'s `eachServeClaim` walked the
+directory with its own `ReadDir` and its own suffix filter, and the prune would
+have been a second. `runstate.EachServeRegistryFile` is now the one
+enumeration: it owns the directory, the `.json`/`.lock` filter, the exclusion of
+in-flight `.tmp` files, and the key decode. `doctor` keeps its own record
+_shape_ — it is a reader of a schema it does not own — but no longer its own
+directory walk, and a source-level test pins that.
+
+**Tests no longer write into the operator's `HOME`.** The bulk of the 143 dead
+records were test suites resolving the machine-global directory against the real
+home: `t.TempDir()` roots under `/var/folders/...` and worktrees since
+reclaimed. That was handled one test at a time with `t.Setenv("HOME", ...)`,
+which is the wrong shape for it — forgetting is silent and only accumulates. The
+isolation is now the test **binary**'s, via `internal/hometest.Isolate` called
+from `TestMain` in every package that reaches the registry (`internal/runstate`,
+`internal/doctor`, `cmd/nightgauge`), and each of those packages pins it with a
+test that isolates nothing itself and asserts it still cannot reach the real
+home. Before the change a full run of those three suites left four
+unattributable `.lock` files in the ambient `HOME`; it now leaves none.
 
 ### Stash Reclamation (Issue #330)
 
@@ -4931,9 +5020,10 @@ There is no verb-shaped class. `serve` had one until **#388** — see below.
   it re-reads before every heartbeat, stands down when the record names another
   live PID, and its shutdown deletes the record only while that record still
   names its own pid.
-- **Serve claims are machine-global: `~/.nightgauge/serve/<hash>.json`.** One
-  file per workspace, named by a hash of the workspace root, with the root
-  itself inside the record. Not `.nightgauge/serve.json` in the workspace,
+- **Serve claims are machine-global: `~/.nightgauge/serve/<key>.json`.** One
+  file per workspace, named by a reversible encoding of the workspace root
+  ([#1426](#the-serve-registry-issue-1426)), with the root itself inside the
+  record as well. Not `.nightgauge/serve.json` in the workspace,
   because this carrier's two halves have different reach: `ps -axo` enumerates
   the **whole machine**, while the sidecar walk visits only the invoking
   workspace's roots. A workspace-local claim is therefore unreadable to a
