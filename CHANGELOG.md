@@ -138,6 +138,26 @@ table, carve-out rationale, and consequence analysis.
 
 ### Fixed
 
+#### Pause/Resume Pipeline commands could not target a concurrent-slot run (#423)
+
+- `Nightgauge: Pause Pipeline` / `Nightgauge: Resume Pipeline` used to act
+  only on the singleton `PipelineStateService`. With only a concurrent-slot
+  run live, the singleton holds no run identity (ADR-017 Decision 10), so the
+  command fell back to an honest but useless "not persisted (no run
+  identity)" refusal instead of pausing the run the operator meant.
+- **`packages/nightgauge-vscode/src/commands/runSelector.ts`** (new): resolves
+  the run a pause/resume command should act on — the singleton when it holds
+  a live run, one candidate per active concurrent slot otherwise, and a
+  `QuickPick` (by issue number and run-id prefix) when more than one run is
+  live.
+- **`pausePipeline.ts` / `resumePipeline.ts`**: now resolve their target via
+  `resolveTargetRunService` before checking pipeline state, instead of
+  hard-targeting the singleton. Global pause of the whole scheduler stays out
+  of scope (a separate verb).
+- **`PipelineStateService.getIssueNumber()`** (new): the issue number
+  `beginRun` installed alongside `getRunId()`'s identity — the run selector's
+  source of truth, independent of the last IPC state snapshot.
+
 #### Empty epics invisible in Repositories tree view (#3329)
 
 - A freshly-created epic (`type:epic` label, zero sub-issues) was filtered out
