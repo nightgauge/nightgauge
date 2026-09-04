@@ -138,6 +138,24 @@ table, carve-out rationale, and consequence analysis.
 
 ### Fixed
 
+#### Attention store writes interleaved across processes (#1425)
+
+- `Store.writeMaterializedLocked` staged every writer of a card at the same
+  `<id>.json.tmp`. The rename that publishes is atomic; the staging write is
+  not, so two processes materializing one card truncated each other's
+  in-flight bytes and the loser published a mix. The package's claimed
+  cross-process guarantee — "atomic temp+rename plus the terminal-state CAS" —
+  covered neither: the CAS runs before the write and guards the lifecycle
+  transition, and a rename is only atomic per rename.
+- **Go binary** (`internal/attention/store.go`, `streak.go`, `standing.go`):
+  the per-directory `sync.Mutex` is now layered over an advisory
+  `internal/flock` lock on `<dir>/nightgauge-attention.lock`, following the
+  worktree chokepoint (#1163), so the daemon, the `nightgauge attention` CLI
+  verbs and the sweep take one critical section. Staging paths are per-writer
+  (pid + entropy) so the deliberately fail-open lock degrades to lost
+  serialisation rather than torn bytes. The materialized write, the streak
+  read-modify-write and the journal append all nest inside the one section.
+
 #### Empty epics invisible in Repositories tree view (#3329)
 
 - A freshly-created epic (`type:epic` label, zero sub-issues) was filtered out
