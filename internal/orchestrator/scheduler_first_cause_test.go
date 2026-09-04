@@ -154,3 +154,57 @@ func TestPostConditionFailureRecordsTheFirstCause(t *testing.T) {
 		t.Errorf("recorded reason still LEADS with the symptom: %q", reason)
 	}
 }
+
+// TestPostConditionFailureRecordsTheFirstCauseKind is the second half of the
+// same attribution defect (#878), and the half the record actually keys on.
+//
+// The composed reason names the push failure; the KIND is what the V2 run
+// record books and what recovery routing and the retro path consume. This site
+// hardcoded validation_error for every missing-output failure, so a
+// credential-less push was booked as a stage that wrote a malformed context —
+// pointing the corpus at the pipeline's output contract instead of at the
+// machine's credentials.
+func TestPostConditionFailureRecordsTheFirstCauseKind(t *testing.T) {
+	root := t.TempDir()
+	seedRefusalRepo(t, root, allRefusalStageSkills)
+
+	runner := &firstCauseStageRunner{tail: authFailureTail}
+	s := newFirstCauseScheduler(root, runner)
+	s.runPipeline(context.Background(), types.BoardItem{Number: 881, Repo: "nightgauge/nightgauge", ID: "item-881"})
+
+	records := readDailyJSONLRecords(t, root)
+	if len(records) == 0 {
+		t.Fatal("no V2 run record written")
+	}
+	got := records[len(records)-1].TerminalFailureKind
+	if got != TerminalKindGitTransportAuthFailed {
+		t.Errorf("terminal_failure_kind = %q, want %q — the run died on a credential-less "+
+			"`git push`; the missing output context is the symptom the post-condition could "+
+			"observe, not what stopped the run", got, TerminalKindGitTransportAuthFailed)
+	}
+}
+
+// TestPostConditionFailureWithoutAFirstCauseStillRecordsValidationError is the
+// discriminator for the test above: the same post-condition, the same missing
+// output, and an output tail that names no credential problem. Without this
+// row, the assertion above would also pass on a build that had simply renamed
+// validation_error.
+func TestPostConditionFailureWithoutAFirstCauseStillRecordsValidationError(t *testing.T) {
+	root := t.TempDir()
+	seedRefusalRepo(t, root, allRefusalStageSkills)
+
+	runner := &firstCauseStageRunner{tail: "the stage ran out of ideas and stopped writing\n"}
+	s := newFirstCauseScheduler(root, runner)
+	s.runPipeline(context.Background(), types.BoardItem{Number: 882, Repo: "nightgauge/nightgauge", ID: "item-882"})
+
+	records := readDailyJSONLRecords(t, root)
+	if len(records) == 0 {
+		t.Fatal("no V2 run record written")
+	}
+	got := records[len(records)-1].TerminalFailureKind
+	if got != TerminalKindValidationError {
+		t.Errorf("terminal_failure_kind = %q, want %q — a missing output context with no "+
+			"upstream cause in the tail is still exactly what validation_error means",
+			got, TerminalKindValidationError)
+	}
+}

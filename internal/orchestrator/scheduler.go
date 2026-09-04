@@ -6585,7 +6585,8 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			// "which post-condition tripped" is still the fastest way to see
 			// where in the stage the run died.
 			stageFailReason := outputErr.Error()
-			if firstCause := firstCauseFromOutputTail(outputTailBeforeClear); firstCause != "" {
+			firstCause := firstCauseFromOutputTail(outputTailBeforeClear)
+			if firstCause != "" {
 				stageFailReason = firstCause + " — then " + outputErr.Error()
 				log.Printf("#%d: stage %s post-condition failed, but its first cause is upstream: %s",
 					item.Number, stage, firstCause)
@@ -6645,8 +6646,32 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 				})
 				continue // Retry same stage
 			}
-			// Issue #3001: missing output context is a validation_error.
+			// Issue #3001: missing output context is a validation_error —
+			// UNLESS the tail already named the cause (#878).
+			//
+			// The reason string above composes cause-then-symptom; the KIND was
+			// hardcoded, so every missing output booked validation_error and a
+			// credential-less `git push` was recorded as a stage that wrote a
+			// malformed context. terminal_kind is what the V2 record carries
+			// and what recovery routing and the retro path key on, so that
+			// pointed the learning corpus at the pipeline's output contract
+			// instead of at the machine's credentials.
+			//
+			// The FIRST CAUSE is classified, not the composed string: the
+			// composition retains the symptom phrase, which is itself a clause
+			// of premature-turn-end, so classifying the whole reason would make
+			// the answer depend on rule order rather than on the evidence. The
+			// rule table (#306) stays the only authority for what a cause is
+			// called — this site decides only WHICH TEXT to classify, and falls
+			// back to the symptom's own kind when the table does not recognise
+			// the cause (a filesystem EACCES, say, which is deliberately
+			// unmatched).
 			terminalFailureKind = TerminalKindValidationError
+			if firstCause != "" {
+				if causeKind := ClassifyTerminalKind(firstCause); causeKind != "" {
+					terminalFailureKind = causeKind
+				}
+			}
 			return // Pipeline failed
 		}
 

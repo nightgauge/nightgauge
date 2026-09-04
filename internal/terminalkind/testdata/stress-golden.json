@@ -1096,6 +1096,126 @@
       "signal": ""
     },
     {
+      "input": "invalid auth method",
+      "kind": "git_transport_auth_failed",
+      "signal": ""
+    },
+    {
+      "input": "exit 1: invalid auth method",
+      "kind": "git_transport_auth_failed",
+      "signal": ""
+    },
+    {
+      "input": "INVALID AUTH METHOD",
+      "kind": "git_transport_auth_failed",
+      "signal": ""
+    },
+    {
+      "input": "permission denied (publickey",
+      "kind": "git_transport_auth_failed",
+      "signal": ""
+    },
+    {
+      "input": "exit 1: permission denied (publickey",
+      "kind": "git_transport_auth_failed",
+      "signal": ""
+    },
+    {
+      "input": "PERMISSION DENIED (PUBLICKEY",
+      "kind": "git_transport_auth_failed",
+      "signal": ""
+    },
+    {
+      "input": "could not read username",
+      "kind": "git_transport_auth_failed",
+      "signal": ""
+    },
+    {
+      "input": "exit 1: could not read username",
+      "kind": "git_transport_auth_failed",
+      "signal": ""
+    },
+    {
+      "input": "COULD NOT READ USERNAME",
+      "kind": "git_transport_auth_failed",
+      "signal": ""
+    },
+    {
+      "input": "could not read password",
+      "kind": "git_transport_auth_failed",
+      "signal": ""
+    },
+    {
+      "input": "exit 1: could not read password",
+      "kind": "git_transport_auth_failed",
+      "signal": ""
+    },
+    {
+      "input": "COULD NOT READ PASSWORD",
+      "kind": "git_transport_auth_failed",
+      "signal": ""
+    },
+    {
+      "input": "invalid username or password",
+      "kind": "git_transport_auth_failed",
+      "signal": ""
+    },
+    {
+      "input": "exit 1: invalid username or password",
+      "kind": "git_transport_auth_failed",
+      "signal": ""
+    },
+    {
+      "input": "INVALID USERNAME OR PASSWORD",
+      "kind": "git_transport_auth_failed",
+      "signal": ""
+    },
+    {
+      "input": "authentication failed for",
+      "kind": "git_transport_auth_failed",
+      "signal": ""
+    },
+    {
+      "input": "exit 1: authentication failed for",
+      "kind": "git_transport_auth_failed",
+      "signal": ""
+    },
+    {
+      "input": "AUTHENTICATION FAILED FOR",
+      "kind": "git_transport_auth_failed",
+      "signal": ""
+    },
+    {
+      "input": "ssh: unable to authenticate",
+      "kind": "git_transport_auth_failed",
+      "signal": ""
+    },
+    {
+      "input": "exit 1: ssh: unable to authenticate",
+      "kind": "git_transport_auth_failed",
+      "signal": ""
+    },
+    {
+      "input": "SSH: UNABLE TO AUTHENTICATE",
+      "kind": "git_transport_auth_failed",
+      "signal": ""
+    },
+    {
+      "input": "bad credentials",
+      "kind": "git_transport_auth_failed",
+      "signal": ""
+    },
+    {
+      "input": "exit 1: bad credentials",
+      "kind": "git_transport_auth_failed",
+      "signal": ""
+    },
+    {
+      "input": "BAD CREDENTIALS",
+      "kind": "git_transport_auth_failed",
+      "signal": ""
+    },
+    {
       "input": "premature turn end",
       "kind": "premature_turn_end",
       "signal": ""
@@ -2216,6 +2336,11 @@
       "signal": ""
     },
     {
+      "input": "network unavailable: extended github connectivity loss | invalid auth method",
+      "kind": "network_unavailable",
+      "signal": ""
+    },
+    {
       "input": "network unavailable: extended github connectivity loss | premature turn end",
       "kind": "network_unavailable",
       "signal": ""
@@ -2407,6 +2532,11 @@
     },
     {
       "input": "stream idle timeout | [dev-handoff-missing]",
+      "kind": "stream_idle_timeout",
+      "signal": "stream_idle_timeout"
+    },
+    {
+      "input": "stream idle timeout | invalid auth method",
       "kind": "stream_idle_timeout",
       "signal": "stream_idle_timeout"
     },
@@ -2606,6 +2736,11 @@
       "signal": "api_overloaded"
     },
     {
+      "input": "overloaded | invalid auth method",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
       "input": "overloaded | premature turn end",
       "kind": "api_overloaded",
       "signal": "api_overloaded"
@@ -2797,6 +2932,11 @@
     },
     {
       "input": "socket connection was closed | [dev-handoff-missing]",
+      "kind": "api_connection_lost",
+      "signal": "api_connection_lost"
+    },
+    {
+      "input": "socket connection was closed | invalid auth method",
       "kind": "api_connection_lost",
       "signal": "api_connection_lost"
     },
@@ -2996,6 +3136,11 @@
       "signal": "rate_limit_quota_exhausted"
     },
     {
+      "input": "[rate-limit-quota-exhausted] | invalid auth method",
+      "kind": "rate_limit_quota_exhausted",
+      "signal": "rate_limit_quota_exhausted"
+    },
+    {
       "input": "[rate-limit-quota-exhausted] | premature turn end",
       "kind": "rate_limit_quota_exhausted",
       "signal": "rate_limit_quota_exhausted"
@@ -3187,6 +3332,11 @@
     },
     {
       "input": "[adapter-auth-failed] | [dev-handoff-missing]",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "[adapter-auth-failed] | invalid auth method",
       "kind": "adapter_auth_failed",
       "signal": "adapter_auth_failed"
     },
@@ -3386,6 +3536,11 @@
       "signal": ""
     },
     {
+      "input": "not_found_error model | invalid auth method",
+      "kind": "model_unavailable",
+      "signal": ""
+    },
+    {
       "input": "not_found_error model | premature turn end",
       "kind": "model_unavailable",
       "signal": ""
@@ -3577,6 +3732,11 @@
     },
     {
       "input": "pipeline-start-failure issue-closed | [dev-handoff-missing]",
+      "kind": "issue_closed",
+      "signal": ""
+    },
+    {
+      "input": "pipeline-start-failure issue-closed | invalid auth method",
       "kind": "issue_closed",
       "signal": ""
     },
@@ -3776,6 +3936,11 @@
       "signal": ""
     },
     {
+      "input": "[blocked-dependency] | invalid auth method",
+      "kind": "blocked_dependency",
+      "signal": ""
+    },
+    {
       "input": "[blocked-dependency] | premature turn end",
       "kind": "blocked_dependency",
       "signal": ""
@@ -3967,6 +4132,11 @@
     },
     {
       "input": "architecture approval required | [dev-handoff-missing]",
+      "kind": "architecture_approval_required",
+      "signal": "architecture_approval_required"
+    },
+    {
+      "input": "architecture approval required | invalid auth method",
       "kind": "architecture_approval_required",
       "signal": "architecture_approval_required"
     },
@@ -4166,6 +4336,11 @@
       "signal": "github_quota_low"
     },
     {
+      "input": "github-quota-low | invalid auth method",
+      "kind": "github_quota_low",
+      "signal": "github_quota_low"
+    },
+    {
       "input": "github-quota-low | premature turn end",
       "kind": "github_quota_low",
       "signal": "github_quota_low"
@@ -4357,6 +4532,11 @@
     },
     {
       "input": "github-network-outage | [dev-handoff-missing]",
+      "kind": "github_network_outage",
+      "signal": "github_network_outage"
+    },
+    {
+      "input": "github-network-outage | invalid auth method",
       "kind": "github_network_outage",
       "signal": "github_network_outage"
     },
@@ -4556,6 +4736,11 @@
       "signal": ""
     },
     {
+      "input": "secondary rate limit | invalid auth method",
+      "kind": "github_rate_limited",
+      "signal": ""
+    },
+    {
       "input": "secondary rate limit | premature turn end",
       "kind": "github_rate_limited",
       "signal": ""
@@ -4747,6 +4932,11 @@
     },
     {
       "input": "[pr-merge-unmerged | [dev-handoff-missing]",
+      "kind": "pr_merge_unmerged",
+      "signal": ""
+    },
+    {
+      "input": "[pr-merge-unmerged | invalid auth method",
       "kind": "pr_merge_unmerged",
       "signal": ""
     },
@@ -4946,6 +5136,11 @@
       "signal": ""
     },
     {
+      "input": "[stage:worktree-containment] | invalid auth method",
+      "kind": "containment_breach",
+      "signal": ""
+    },
+    {
       "input": "[stage:worktree-containment] | premature turn end",
       "kind": "containment_breach",
       "signal": ""
@@ -5137,6 +5332,11 @@
     },
     {
       "input": "[not-pipeline-actionable] | [dev-handoff-missing]",
+      "kind": "not_pipeline_actionable",
+      "signal": ""
+    },
+    {
+      "input": "[not-pipeline-actionable] | invalid auth method",
       "kind": "not_pipeline_actionable",
       "signal": ""
     },
@@ -5336,6 +5536,11 @@
       "signal": ""
     },
     {
+      "input": "[dev-produced-no-changes] | invalid auth method",
+      "kind": "dev_produced_no_changes",
+      "signal": ""
+    },
+    {
       "input": "[dev-produced-no-changes] | premature turn end",
       "kind": "dev_produced_no_changes",
       "signal": ""
@@ -5531,6 +5736,11 @@
       "signal": ""
     },
     {
+      "input": "[dev-handoff-missing] | invalid auth method",
+      "kind": "dev_handoff_missing",
+      "signal": ""
+    },
+    {
       "input": "[dev-handoff-missing] | premature turn end",
       "kind": "dev_handoff_missing",
       "signal": ""
@@ -5641,6 +5851,206 @@
       "signal": ""
     },
     {
+      "input": "invalid auth method | network unavailable: extended github connectivity loss",
+      "kind": "network_unavailable",
+      "signal": ""
+    },
+    {
+      "input": "invalid auth method | stream idle timeout",
+      "kind": "stream_idle_timeout",
+      "signal": "stream_idle_timeout"
+    },
+    {
+      "input": "invalid auth method | overloaded",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "invalid auth method | socket connection was closed",
+      "kind": "api_connection_lost",
+      "signal": "api_connection_lost"
+    },
+    {
+      "input": "invalid auth method | [rate-limit-quota-exhausted]",
+      "kind": "rate_limit_quota_exhausted",
+      "signal": "rate_limit_quota_exhausted"
+    },
+    {
+      "input": "invalid auth method | [adapter-auth-failed]",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "invalid auth method | not_found_error model",
+      "kind": "model_unavailable",
+      "signal": ""
+    },
+    {
+      "input": "invalid auth method | pipeline-start-failure issue-closed",
+      "kind": "issue_closed",
+      "signal": ""
+    },
+    {
+      "input": "invalid auth method | [blocked-dependency]",
+      "kind": "blocked_dependency",
+      "signal": ""
+    },
+    {
+      "input": "invalid auth method | architecture approval required",
+      "kind": "architecture_approval_required",
+      "signal": "architecture_approval_required"
+    },
+    {
+      "input": "invalid auth method | github-quota-low",
+      "kind": "github_quota_low",
+      "signal": "github_quota_low"
+    },
+    {
+      "input": "invalid auth method | github-network-outage",
+      "kind": "github_network_outage",
+      "signal": "github_network_outage"
+    },
+    {
+      "input": "invalid auth method | secondary rate limit",
+      "kind": "github_rate_limited",
+      "signal": ""
+    },
+    {
+      "input": "invalid auth method | [pr-merge-unmerged",
+      "kind": "pr_merge_unmerged",
+      "signal": ""
+    },
+    {
+      "input": "invalid auth method | [stage:worktree-containment]",
+      "kind": "containment_breach",
+      "signal": ""
+    },
+    {
+      "input": "invalid auth method | [not-pipeline-actionable]",
+      "kind": "not_pipeline_actionable",
+      "signal": ""
+    },
+    {
+      "input": "invalid auth method | [dev-produced-no-changes]",
+      "kind": "dev_produced_no_changes",
+      "signal": ""
+    },
+    {
+      "input": "invalid auth method | [dev-handoff-missing]",
+      "kind": "dev_handoff_missing",
+      "signal": ""
+    },
+    {
+      "input": "invalid auth method | premature turn end",
+      "kind": "git_transport_auth_failed",
+      "signal": ""
+    },
+    {
+      "input": "invalid auth method | worktree_uncommitted",
+      "kind": "git_transport_auth_failed",
+      "signal": ""
+    },
+    {
+      "input": "invalid auth method | budget_ceiling_hit",
+      "kind": "git_transport_auth_failed",
+      "signal": ""
+    },
+    {
+      "input": "invalid auth method | [runaway-progress-exceeded]",
+      "kind": "git_transport_auth_failed",
+      "signal": ""
+    },
+    {
+      "input": "invalid auth method | [runaway-ceiling-exceeded]",
+      "kind": "git_transport_auth_failed",
+      "signal": ""
+    },
+    {
+      "input": "invalid auth method | [cost-cap-exceeded]",
+      "kind": "git_transport_auth_failed",
+      "signal": ""
+    },
+    {
+      "input": "invalid auth method | stage-no-output-timeout",
+      "kind": "git_transport_auth_failed",
+      "signal": ""
+    },
+    {
+      "input": "invalid auth method | [stall-killed]",
+      "kind": "git_transport_auth_failed",
+      "signal": ""
+    },
+    {
+      "input": "invalid auth method | pipeline_budget_exceeded",
+      "kind": "git_transport_auth_failed",
+      "signal": ""
+    },
+    {
+      "input": "invalid auth method | schema validation",
+      "kind": "git_transport_auth_failed",
+      "signal": ""
+    },
+    {
+      "input": "invalid auth method | [no-changes-produced]",
+      "kind": "git_transport_auth_failed",
+      "signal": ""
+    },
+    {
+      "input": "invalid auth method | [validation-failed]",
+      "kind": "git_transport_auth_failed",
+      "signal": ""
+    },
+    {
+      "input": "invalid auth method | [validation-inconclusive]",
+      "kind": "git_transport_auth_failed",
+      "signal": ""
+    },
+    {
+      "input": "invalid auth method | [branch-forked]",
+      "kind": "git_transport_auth_failed",
+      "signal": ""
+    },
+    {
+      "input": "invalid auth method | [commit-orphaned]",
+      "kind": "git_transport_auth_failed",
+      "signal": ""
+    },
+    {
+      "input": "invalid auth method | [permission-denied]",
+      "kind": "git_transport_auth_failed",
+      "signal": ""
+    },
+    {
+      "input": "invalid auth method | stage_context_unreadable",
+      "kind": "git_transport_auth_failed",
+      "signal": ""
+    },
+    {
+      "input": "invalid auth method | dev_build_verification_missing",
+      "kind": "git_transport_auth_failed",
+      "signal": ""
+    },
+    {
+      "input": "invalid auth method | dev_build_verification_failed",
+      "kind": "git_transport_auth_failed",
+      "signal": ""
+    },
+    {
+      "input": "invalid auth method | dev_tests_failed",
+      "kind": "git_transport_auth_failed",
+      "signal": ""
+    },
+    {
+      "input": "invalid auth method | pr_merge_lookup_failed",
+      "kind": "git_transport_auth_failed",
+      "signal": ""
+    },
+    {
+      "input": "invalid auth method | subagent crash",
+      "kind": "git_transport_auth_failed",
+      "signal": ""
+    },
+    {
       "input": "premature turn end | network unavailable: extended github connectivity loss",
       "kind": "network_unavailable",
       "signal": ""
@@ -5728,6 +6138,11 @@
     {
       "input": "premature turn end | [dev-handoff-missing]",
       "kind": "dev_handoff_missing",
+      "signal": ""
+    },
+    {
+      "input": "premature turn end | invalid auth method",
+      "kind": "git_transport_auth_failed",
       "signal": ""
     },
     {
@@ -5926,6 +6341,11 @@
       "signal": ""
     },
     {
+      "input": "worktree_uncommitted | invalid auth method",
+      "kind": "git_transport_auth_failed",
+      "signal": ""
+    },
+    {
       "input": "worktree_uncommitted | premature turn end",
       "kind": "premature_turn_end",
       "signal": ""
@@ -6118,6 +6538,11 @@
     {
       "input": "budget_ceiling_hit | [dev-handoff-missing]",
       "kind": "dev_handoff_missing",
+      "signal": ""
+    },
+    {
+      "input": "budget_ceiling_hit | invalid auth method",
+      "kind": "git_transport_auth_failed",
       "signal": ""
     },
     {
@@ -6316,6 +6741,11 @@
       "signal": ""
     },
     {
+      "input": "[runaway-progress-exceeded] | invalid auth method",
+      "kind": "git_transport_auth_failed",
+      "signal": ""
+    },
+    {
       "input": "[runaway-progress-exceeded] | premature turn end",
       "kind": "premature_turn_end",
       "signal": ""
@@ -6508,6 +6938,11 @@
     {
       "input": "[runaway-ceiling-exceeded] | [dev-handoff-missing]",
       "kind": "dev_handoff_missing",
+      "signal": ""
+    },
+    {
+      "input": "[runaway-ceiling-exceeded] | invalid auth method",
+      "kind": "git_transport_auth_failed",
       "signal": ""
     },
     {
@@ -6706,6 +7141,11 @@
       "signal": ""
     },
     {
+      "input": "[cost-cap-exceeded] | invalid auth method",
+      "kind": "git_transport_auth_failed",
+      "signal": ""
+    },
+    {
       "input": "[cost-cap-exceeded] | premature turn end",
       "kind": "premature_turn_end",
       "signal": ""
@@ -6898,6 +7338,11 @@
     {
       "input": "stage-no-output-timeout | [dev-handoff-missing]",
       "kind": "dev_handoff_missing",
+      "signal": ""
+    },
+    {
+      "input": "stage-no-output-timeout | invalid auth method",
+      "kind": "git_transport_auth_failed",
       "signal": ""
     },
     {
@@ -7096,6 +7541,11 @@
       "signal": ""
     },
     {
+      "input": "[stall-killed] | invalid auth method",
+      "kind": "git_transport_auth_failed",
+      "signal": ""
+    },
+    {
       "input": "[stall-killed] | premature turn end",
       "kind": "premature_turn_end",
       "signal": ""
@@ -7288,6 +7738,11 @@
     {
       "input": "pipeline_budget_exceeded | [dev-handoff-missing]",
       "kind": "dev_handoff_missing",
+      "signal": ""
+    },
+    {
+      "input": "pipeline_budget_exceeded | invalid auth method",
+      "kind": "git_transport_auth_failed",
       "signal": ""
     },
     {
@@ -7486,6 +7941,11 @@
       "signal": ""
     },
     {
+      "input": "schema validation | invalid auth method",
+      "kind": "git_transport_auth_failed",
+      "signal": ""
+    },
+    {
       "input": "schema validation | premature turn end",
       "kind": "premature_turn_end",
       "signal": ""
@@ -7678,6 +8138,11 @@
     {
       "input": "[no-changes-produced] | [dev-handoff-missing]",
       "kind": "dev_handoff_missing",
+      "signal": ""
+    },
+    {
+      "input": "[no-changes-produced] | invalid auth method",
+      "kind": "git_transport_auth_failed",
       "signal": ""
     },
     {
@@ -7876,6 +8341,11 @@
       "signal": ""
     },
     {
+      "input": "[validation-failed] | invalid auth method",
+      "kind": "git_transport_auth_failed",
+      "signal": ""
+    },
+    {
       "input": "[validation-failed] | premature turn end",
       "kind": "premature_turn_end",
       "signal": ""
@@ -8068,6 +8538,11 @@
     {
       "input": "[validation-inconclusive] | [dev-handoff-missing]",
       "kind": "dev_handoff_missing",
+      "signal": ""
+    },
+    {
+      "input": "[validation-inconclusive] | invalid auth method",
+      "kind": "git_transport_auth_failed",
       "signal": ""
     },
     {
@@ -8266,6 +8741,11 @@
       "signal": ""
     },
     {
+      "input": "[branch-forked] | invalid auth method",
+      "kind": "git_transport_auth_failed",
+      "signal": ""
+    },
+    {
       "input": "[branch-forked] | premature turn end",
       "kind": "premature_turn_end",
       "signal": ""
@@ -8458,6 +8938,11 @@
     {
       "input": "[commit-orphaned] | [dev-handoff-missing]",
       "kind": "dev_handoff_missing",
+      "signal": ""
+    },
+    {
+      "input": "[commit-orphaned] | invalid auth method",
+      "kind": "git_transport_auth_failed",
       "signal": ""
     },
     {
@@ -8656,6 +9141,11 @@
       "signal": ""
     },
     {
+      "input": "[permission-denied] | invalid auth method",
+      "kind": "git_transport_auth_failed",
+      "signal": ""
+    },
+    {
       "input": "[permission-denied] | premature turn end",
       "kind": "premature_turn_end",
       "signal": ""
@@ -8848,6 +9338,11 @@
     {
       "input": "stage_context_unreadable | [dev-handoff-missing]",
       "kind": "dev_handoff_missing",
+      "signal": ""
+    },
+    {
+      "input": "stage_context_unreadable | invalid auth method",
+      "kind": "git_transport_auth_failed",
       "signal": ""
     },
     {
@@ -9046,6 +9541,11 @@
       "signal": ""
     },
     {
+      "input": "dev_build_verification_missing | invalid auth method",
+      "kind": "git_transport_auth_failed",
+      "signal": ""
+    },
+    {
       "input": "dev_build_verification_missing | premature turn end",
       "kind": "premature_turn_end",
       "signal": ""
@@ -9238,6 +9738,11 @@
     {
       "input": "dev_build_verification_failed | [dev-handoff-missing]",
       "kind": "dev_handoff_missing",
+      "signal": ""
+    },
+    {
+      "input": "dev_build_verification_failed | invalid auth method",
+      "kind": "git_transport_auth_failed",
       "signal": ""
     },
     {
@@ -9436,6 +9941,11 @@
       "signal": ""
     },
     {
+      "input": "dev_tests_failed | invalid auth method",
+      "kind": "git_transport_auth_failed",
+      "signal": ""
+    },
+    {
       "input": "dev_tests_failed | premature turn end",
       "kind": "premature_turn_end",
       "signal": ""
@@ -9631,6 +10141,11 @@
       "signal": ""
     },
     {
+      "input": "pr_merge_lookup_failed | invalid auth method",
+      "kind": "git_transport_auth_failed",
+      "signal": ""
+    },
+    {
       "input": "pr_merge_lookup_failed | premature turn end",
       "kind": "premature_turn_end",
       "signal": ""
@@ -9823,6 +10338,11 @@
     {
       "input": "subagent crash | [dev-handoff-missing]",
       "kind": "dev_handoff_missing",
+      "signal": ""
+    },
+    {
+      "input": "subagent crash | invalid auth method",
+      "kind": "git_transport_auth_failed",
       "signal": ""
     },
     {
