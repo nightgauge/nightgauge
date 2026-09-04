@@ -23,7 +23,17 @@
 # Every case runs against a TEMP GIT REPO seeded from this repo's HEAD, so a
 # case tests only the drift it plants. (The gate itself no longer writes to the
 # tree it judges — arm (l) proves that — but the fixtures still need a repo of
-# their own because `--generate-only` in seed_repo does write.)
+# their own because `--generate-only` in build_template does write.)
+#
+# THE FIXTURE IS BUILT ONCE AND COPIED PER ARM (#1218). Seeding is a `git
+# archive` plus a full generator run, and paying it 16 times made this
+# self-test the single most expensive step in the whole PR gate — 43% of the
+# critical-path job. `seed_repo` now restores each arm from a pristine
+# already-normalised TEMPLATE, so every arm still gets a private, byte-identical
+# sandbox it may mutate, rename or move (arms (g) and (h) destroy `.git`;
+# (h) relocates the whole tree) without any arm observing another's damage.
+# The count of full seeds is asserted at the bottom of this file, because a
+# reverted speed-up is otherwise invisible.
 #
 # Run: bash scripts/test-mirror-drift-gate.sh
 # Also run by .github/workflows/lint.yml and scripts/ci-local.sh.
@@ -39,15 +49,21 @@ PASS=0
 FAIL=0
 TMP=""
 NEST=""
+TEMPLATE=""
+# How many times the suite paid for a full seed + generator normalisation.
+# Asserted at the end: the fixture is built ONCE and each arm resets from it.
+NORMALISE_RUNS=0
+SUITE_START="$(date +%s)"
 
 cleanup() {
   [ -n "$TMP" ] && rm -rf "$TMP"
   [ -n "$NEST" ] && rm -rf "$NEST"
+  [ -n "$TEMPLATE" ] && rm -rf "$TEMPLATE"
   return 0
 }
 trap cleanup EXIT
 
-# Seed a throwaway git repo with this repo's committed tree.
+# Build the ONE pristine fixture every arm is restored from.
 #
 # THE FIXTURE IS DELIBERATELY ASYMMETRIC — do not "fix" it into consistency:
 #
@@ -62,31 +78,47 @@ trap cleanup EXIT
 #         that verified nothing, which is the exact defect #539 exists to end.
 #
 # The archive is scoped to the paths the gate actually reads. It skips ~13s of
-# irrelevant tree per case, and `.gitignore` is in the list on purpose: the gate
+# irrelevant tree, and `.gitignore` is in the list on purpose: the gate
 # still asserts against ignored generator output, so a fixture without the
 # ignore rules would not reproduce the repository it stands in for.
-seed_repo() {
-  [ -n "$TMP" ] && rm -rf "$TMP"
-  TMP="$(mktemp -d)"
-  git archive HEAD skills claude-plugins scripts .gitignore | tar -x -C "$TMP"
-  cp "$GATE" "$TMP/$GATE"
+build_template() {
+  TEMPLATE="$(mktemp -d)"
+  git archive HEAD skills claude-plugins scripts .gitignore | tar -x -C "$TEMPLATE"
+  cp "$GATE" "$TEMPLATE/$GATE"
   # Overlay the helper for the same reason as the gate itself: it is part of the
   # generator under test, so archiving HEAD's copy would validate a generator
   # half of which is not the one on disk. On the commit that INTRODUCES the
   # helper, HEAD has no copy at all and every arm dies on a missing file.
-  mkdir -p "$TMP/$(dirname "$HELPER")"
-  cp "$HELPER" "$TMP/$HELPER"
-  git -C "$TMP" init -q
-  git -C "$TMP" add -A
-  git -C "$TMP" -c user.email=test@invalid -c user.name=test commit -qm "fixture"
+  mkdir -p "$TEMPLATE/$(dirname "$HELPER")"
+  cp "$HELPER" "$TEMPLATE/$HELPER"
+  git -C "$TEMPLATE" init -q
+  git -C "$TEMPLATE" add -A
+  repo_commit "$TEMPLATE" "fixture"
   # Normalise: regenerate and commit whatever HEAD was missing, so each case
   # starts from a provably in-sync mirror and tests only the drift it plants.
   # Without this, every case would inherit any real drift sitting in HEAD and
   # go red for a reason it is not testing. `--generate-only` is the mutating
   # FIX command and is used here deliberately — the gate under test
   # (`--check-mirror`) writes nothing and so cannot normalise anything.
-  bash "$TMP/$GATE" --generate-only >/dev/null 2>&1
-  fixture_commit "normalise mirror"
+  bash "$TEMPLATE/$GATE" --generate-only >/dev/null 2>&1
+  NORMALISE_RUNS=$((NORMALISE_RUNS + 1))
+  git -C "$TEMPLATE" add -A
+  repo_commit "$TEMPLATE" "normalise mirror"
+}
+
+# Restore an arm's sandbox from the template.
+#
+# A COPY, not a `git checkout` + `git clean`: the normalised state includes
+# generator output git cannot carry back (the untrackable empty `tests/` dirs
+# arm (i) is built on) and output `.gitignore` hides (arm (f)), so a git-level
+# reset would hand later arms a fixture materially different from the one the
+# early arms ran against. It is also a fresh DIRECTORY every time, which is
+# what lets arm (g) rename `.git` away and arm (h) move the whole tree inside
+# an unrelated outer repo without either leaking into the next arm.
+seed_repo() {
+  [ -n "$TMP" ] && rm -rf "$TMP"
+  TMP="$(mktemp -d)"
+  cp -a "$TEMPLATE/." "$TMP/"
 }
 
 # Re-materialise the mirror exactly as `git clone` / `actions/checkout` does:
@@ -131,11 +163,15 @@ tree_fingerprint() {
   (cd "$TMP" && find . -path ./.git -prune -o -type f -perm -u+x -print) | LC_ALL=C sort
 }
 
+repo_commit() {
+  git -C "$1" -c user.email=test@invalid -c user.name=test \
+    commit -qm "$2" >/dev/null 2>&1
+  return 0
+}
+
 fixture_commit() {
   git -C "$TMP" add -A
-  git -C "$TMP" -c user.email=test@invalid -c user.name=test \
-    commit -qm "$1" >/dev/null 2>&1
-  return 0
+  repo_commit "$TMP" "$1"
 }
 
 # want: 0 (gate must pass) or "nonzero" (gate must fail).
@@ -171,6 +207,8 @@ expect_gate() {
 
 echo "plugin-skills mirror drift gate — fail-closed tests"
 echo ""
+
+build_template
 
 # ── (a) A freshly regenerated tree passes ───────────────────────────────────
 # `seed_repo` already regenerated and committed once, so this cannot detect
@@ -424,7 +462,29 @@ fixture_commit "add a stray exec bit to a mirrored markdown file"
 expect_gate nonzero "stray exec bit ADDED by the mirror is caught" \
   "$MIRROR/feature-dev/SKILL.md"
 
+# ── (n) The suite builds its fixture ONCE ────────────────────────────────────
+# A cost guard, and the only mechanical one there can be: seeding is a full
+# `git archive` plus a whole generator run, and paying it per arm is what made
+# this self-test the most expensive step in the PR gate. Wall clock cannot be
+# asserted on a shared runner, but the number of seeds can, and it is the thing
+# the wall clock was measuring.
+expect_true "the suite seeds and normalises exactly once (cost guard)" \
+  test "$NORMALISE_RUNS" = "1"
+
 echo ""
+printf 'elapsed: %ss\n' "$(( $(date +%s) - SUITE_START ))"
+
+# Every arm must still RUN. `$FAIL` only speaks for arms that executed, so an
+# arm deleted — or skipped by a precondition that quietly stopped holding —
+# would leave the suite green with less coverage. Counting the assertions is
+# what stops a speed-up from being bought with silence.
+EXPECTED_ASSERTIONS=24
+if [ $((PASS + FAIL)) -ne "$EXPECTED_ASSERTIONS" ]; then
+  printf '\033[31mran %s assertions, expected %s — an arm was added or lost\033[0m\n' \
+    "$((PASS + FAIL))" "$EXPECTED_ASSERTIONS"
+  exit 1
+fi
+
 if [ "$FAIL" -gt 0 ]; then
   printf '\033[31m%s passed, %s FAILED\033[0m\n' "$PASS" "$FAIL"
   exit 1

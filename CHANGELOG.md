@@ -19,6 +19,40 @@ and this project adheres to
 
 ### Added
 
+#### `scripts/ci-critical-path.sh` — where CI's time goes (#1218)
+
+- Ranks a run's **jobs** and **steps** by wall clock, with each step's share of
+  the critical path (the longest job). `--pr` / `--sha` aggregate across every
+  workflow run on a commit, because the PR gate is several separate runs and a
+  single run id cannot see the job that actually holds the critical path.
+- REST only: the jobs endpoint already embeds `steps[]`, so a full ranking is a
+  handful of 1-point calls with no GraphQL cost. Documented in
+  [docs/GIT_WORKFLOW.md](docs/GIT_WORKFLOW.md).
+
+### Changed
+
+#### The PR gate's two most expensive steps (#1218)
+
+- **Mirror drift self-test** was 41% of the critical-path `lint` job because
+  `seed_repo` paid for a full `git archive` plus a whole generator run for each
+  of its 16 arms. The fixture is now built and normalised **once** and each arm
+  is restored from it by copy — every arm still runs in its own private
+  sandbox, still fails closed, and a new cost guard asserts the seed count is 1
+  so the speed-up cannot silently revert. An assertion-count guard pins that no
+  arm was traded away for the speed. Locally 332s/230s → 184s/126s.
+- **Go `Test` and `Test (race, whole tree)`** were two sequential steps of one
+  job (1m55s + 3m15s). They now run **concurrently inside the same step**, each
+  captured to its own file and replayed into its own log group, with both exit
+  codes plus the skip accounting decisive. Deliberately not two jobs:
+  `Go build & test` is a pinned required-check context, and a split job would
+  report a context the live ruleset does not require — silently unenforcing the
+  race pass. What was verified locally is that both passes go green side by
+  side — the suites do not collide. The local timing was inconclusive (227s vs
+  240s and 418s vs 294s over two paired rounds) and a 10-core box is the wrong
+  regime for the question anyway, so whether the overlap pays is to be measured
+  on the hosted runner with `scripts/ci-critical-path.sh`; split the step back
+  into two if it does not.
+
 #### Supply-chain hardening for the release path (#136)
 
 - **All GitHub Actions SHA-pinned**: every `uses:` across `.github/workflows/*`

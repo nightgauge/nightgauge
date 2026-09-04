@@ -147,31 +147,86 @@ jobs:
             echo "$UNFORMATTED"
             exit 1
           fi
-      # -json so the skip accounting below has something to read. A package
-      # whose tests all SKIPPED still prints `ok`, so without this step a guard
+      # THE PLAIN AND RACE PASSES RUN CONCURRENTLY, IN ONE STEP (#1218).
+      #
+      # They were two sequential steps and the job paid for both end to end —
+      # 1m55s + 3m15s measured on `main`@d954fcb, over half the job. Neither
+      # pass needs the other's result, and the suite spends much of its time in
+      # spawned git and filesystem work rather than in instrumented Go (that is
+      # also why -race costs only ~6% more than plain, not the ~3x the old
+      # orchestrator-scoped step predicted), so the two can overlap wherever
+      # the runner is not already saturated.
+      #
+      # WHETHER IT PAYS IS A MEASUREMENT ON THE HOSTED RUNNER, NOT A CLAIM
+      # FROM A DEV MACHINE. What was verified locally is CORRECTNESS: both
+      # passes go green run side by side, so the two suites do not collide over
+      # ports, fixtures or the build cache. The local TIMING was inconclusive
+      # and should not be quoted as either result — two paired rounds came out
+      # 227s vs 240s and 418s vs 294s (sequential vs concurrent), a spread far
+      # wider than the effect, because a 10-core box is the wrong regime
+      # anyway: `go test ./...` already fans out to GOMAXPROCS package binaries
+      # and saturates it on its own. A 2-core runner, where each pass fans out
+      # to 2 and blocks on spawned git, is where the overlap has room to pay.
+      #
+      # So measure it here: `scripts/ci-critical-path.sh --sha <sha>` ranks
+      # this job's steps. If this step is not comfortably under the 1m55s +
+      # 3m15s it replaced, split it back into two sequential steps — that is a
+      # smaller change than the one that introduced it.
+      #
+      # ONE STEP, NOT TWO JOBS, on purpose: `Go build & test` is one of the 14
+      # contexts pinned in `.github/rulesets/main-branch.json`, and that file
+      # is documentation of the LIVE ruleset — nothing in this repo applies it.
+      # A new job would report a context the ruleset does not require, so the
+      # race pass would stop being enforced the moment it was split out. Steps
+      # are not contexts; splitting inside the job changes no required check.
+      #
+      # Whole-tree -race is #493, replacing the internal/orchestrator-scoped
+      # step #428 landed — one race pass, not two. The scoped step existed
+      # because nothing else detects a drainBackground() join being deleted
+      # from a test body: the tests pass with or without it, which is why that
+      # flake stayed invisible. That argument was never specific to one package.
+      #
+      # -json on the plain pass so the skip accounting has events to read. A
+      # package whose tests all SKIPPED still prints `ok`, so without it a guard
       # that has stopped guarding is indistinguishable from one that passed
-      # (#474).
-      - name: Test
+      # (#474). Each pass is captured to its own file and replayed into its own
+      # log group afterwards rather than tee'd live: two suites writing to one
+      # log interleave into something no one can read, which is its own kind of
+      # silent failure.
+      #
+      # EVERY exit code is captured and every one of them is decisive. `wait`
+      # is guarded with `|| rc=$?` because the runner's shell is `bash -e`, and
+      # under errexit an unguarded `wait` on a failing pass aborts the step
+      # before the other pass is ever waited on or reported — the failure would
+      # be visible but its sibling's result would silently vanish.
+      - name: Test (plain and race, concurrently)
         if: ${{ needs.changes.outputs.run_heavy != 'false' }}
         run: |
-          set -o pipefail
-          go test -json ./... -count=1 | tee go-test.json | python3 scripts/go-test-json-echo.py
-          python3 scripts/check-go-test-skips.py go-test.json
-      # Whole-tree -race (#493), replacing the internal/orchestrator-scoped step
-      # #428 landed — one race step, not two. The scoped step existed because
-      # nothing else detects a drainBackground() join being deleted from a test
-      # body: the tests pass with or without it, which is why that flake stayed
-      # invisible. That argument was never specific to one package.
-      #
-      # Measured on this branch, whole tree, Apple M-series: 2m48s plain vs
-      # 2m58s with -race — about +6%, not the ~3x the scoped step's comment
-      # predicted, because the suite is dominated by subprocess and filesystem
-      # work rather than by instrumented Go. Zero DATA RACE reports over 108
-      # packages, so the gate arrives green; #490 and #491 are blockers for the
-      # -count=5 soak, not for this per-PR step.
-      - name: Test (race, whole tree)
-        if: ${{ needs.changes.outputs.run_heavy != 'false' }}
-        run: go test -race -count=1 ./...
+          go test -json ./... -count=1 > go-test.json 2> go-test.err &
+          plain=$!
+          go test -race -count=1 ./... > go-test-race.log 2>&1 &
+          race=$!
+
+          plain_rc=0
+          wait "$plain" || plain_rc=$?
+          race_rc=0
+          wait "$race" || race_rc=$?
+
+          echo "::group::go test ./... (plain, exit $plain_rc)"
+          python3 scripts/go-test-json-echo.py < go-test.json
+          cat go-test.err
+          echo "::endgroup::"
+          echo "::group::go test -race ./... (exit $race_rc)"
+          cat go-test-race.log
+          echo "::endgroup::"
+
+          skips_rc=0
+          python3 scripts/check-go-test-skips.py go-test.json || skips_rc=$?
+
+          [ "$plain_rc" -eq 0 ] || echo "::error::go test ./... failed (exit $plain_rc)"
+          [ "$race_rc" -eq 0 ] || echo "::error::go test -race ./... failed (exit $race_rc)"
+          [ "$skips_rc" -eq 0 ] || echo "::error::skip accounting failed (exit $skips_rc)"
+          [ "$plain_rc" -eq 0 ] && [ "$race_rc" -eq 0 ] && [ "$skips_rc" -eq 0 ]
       # The shell-side decision procedure AGENTS.md § Clean up on merge
       # defers to for `git branch -D` calls, kept aligned with the Go sweep's
       # own ancestry-acceptance door (#593). No npm/node needed, so it runs
