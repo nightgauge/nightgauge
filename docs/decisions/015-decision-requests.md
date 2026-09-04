@@ -946,6 +946,22 @@ here. Issue numbers are validated as positive but not as existing, so the
 per-`(producer, repo, issue)` dedup key is still unbounded in the issue
 dimension.
 
+## Amendment: the relay's addressing is under-specified (#1421, 2026-09-04)
+
+Decision E specifies the relay — the platform validates an option server-side
+and relays an `attention_resolve` command to "the originating agent" — but
+never says what an agent _is_. It turns out to be a machine: registration
+upserts on `machine_id`, so every workspace daemon on one host shares a single
+agent row and a single command channel, while the store each daemon resolves
+against is per workspace. A relayed resolve can therefore reach a daemon that
+does not hold the card.
+
+[ADR-019](019-relayed-resolve-routing.md) records what follows from that: the
+non-owning daemon classifies and contains the misroute rather than resolving
+across roots or declining the ack, and per-workspace agent identity is deferred
+to a platform-side change. Decision E's "the originating agent" should be read
+as "the originating **machine**" until that lands.
+
 ## Alternatives considered
 
 - **Reuse the ADR-013 trace as the store** (raise/resolve as trace events).

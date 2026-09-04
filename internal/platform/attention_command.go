@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -51,7 +52,29 @@ type AttentionResolveOutcome struct {
 	// AlreadyResolved is true when the request was already terminal — the local
 	// resolution won and this command is a safe no-op (ADR 015 §D).
 	AlreadyResolved bool
+	// NotInThisWorkspace is true when the command named a request this daemon's
+	// store does not hold. The command is still acknowledged (see Consume), but
+	// the outcome says so rather than reporting a bare rejection — an operator
+	// reading a rejection reaches for the option or the verb, and neither is
+	// the problem (#1421, ADR-019).
+	NotInThisWorkspace bool
 }
+
+// ErrRelayedRequestNotHere reports that a relayed attention_resolve named a
+// request that is not in this daemon's attention store.
+//
+// The attention store is per-WORKSPACE and the platform's agent identity is
+// per-MACHINE, so on a machine running daemons for several workspaces a
+// relayed resolve can be delivered to a daemon that does not own the card. It
+// is a routing outcome, not a validation failure, and the two must not share
+// a log line: a rejection is a defect in the option or the verb, while this is
+// a defect in the addressing. The resolver classifies it; this package never
+// imports the attention store (ADR 015 §E layering), so the classification
+// crosses the boundary as this sentinel.
+//
+// Routing it to the owning daemon needs a platform-side change and is deferred
+// (#1421, ADR-019 § Deferred).
+var ErrRelayedRequestNotHere = errors.New("platform: relayed request is not in this daemon's attention store")
 
 // AttentionResolver applies a relayed resolution through the attention store's
 // single authoritative writer (CAS) and executes the bound verb via the verb
@@ -68,9 +91,9 @@ type AgentCommandAcker func(ctx context.Context, agentID, commandID string) (str
 
 // AttentionCommandConsumer consumes attention_resolve agent-commands and applies
 // them locally. It ALWAYS acknowledges a well-formed command exactly once —
-// whether the resolution applied, was already-resolved, or was rejected — so a
-// consumed command is never redelivered forever; the distinction is logged and
-// returned in the outcome.
+// whether the resolution applied, was already-resolved, was rejected, or named
+// a card this daemon's store does not hold — so a consumed command is never
+// redelivered forever; the distinction is logged and returned in the outcome.
 type AttentionCommandConsumer struct {
 	resolver AttentionResolver
 	ack      AgentCommandAcker
@@ -105,6 +128,20 @@ func (c *AttentionCommandConsumer) Consume(ctx context.Context, cmd PendingComma
 	// Acknowledge in every case — the command is consumed exactly once.
 	c.acknowledge(ctx, cmd.ID)
 	if err != nil {
+		if errors.Is(err, ErrRelayedRequestNotHere) {
+			// NOT a rejection. This daemon was handed a resolve for a card it
+			// does not own, because the command is addressed to a per-machine
+			// agent identity while the store is per-workspace (#1421). The ack
+			// stays — declining it would redeliver onto the SAME agent channel
+			// that just misrouted it, which is an unbounded retry, not a fix,
+			// and the three always-ack tests below exist for that reason. What
+			// changes is that the loss is now named and greppable instead of
+			// reading as a bad option or a broken verb.
+			log.Printf("attention_resolve: id=%s option=%s NOT IN THIS DAEMON'S STORE — acked and dropped; "+
+				"the card belongs to another workspace on this machine and no daemon will retry it (#1421): %v",
+				p.RequestID, p.OptionID, err)
+			return AttentionResolveOutcome{NotInThisWorkspace: true}, nil
+		}
 		// Rejected client-side (defense in depth) or verb failed: the platform
 		// should have validated server-side, and a verb failure now short-circuits
 		// ApplyRelayedResolve into this same error return (no persisted mutation
