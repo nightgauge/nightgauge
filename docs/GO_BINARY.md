@@ -4797,7 +4797,7 @@ Plus the leaked-machine-state checks (#330 / #332 / #341), all **warning-only**:
 | `worktree_leaks`     | Registered pipeline worktrees older than 24h that `sweep` cannot reclaim, with repo, age, skip reason, and the paths that blocked them |
 | `stranded_branches`  | Local branches whose content is already in `origin/<default>` and that **no worktree holds**, per repo — report only, nothing is deleted |
 | `pipeline_stashes`   | Stashes carrying the `nightgauge:` marker that were never reclaimed, per repo, with age |
-| `orphaned_processes` | Running `nightgauge` processes older than 1h that no live sidecar claims, with PID, age, and argv |
+| `orphaned_processes` | Running `nightgauge` processes older than 1h that no live sidecar claims, with PID, age, and argv — plus (#519) any process, regardless of parentage, whose cwd sits inside a `.nightgauge/worktrees/*` directory |
 
 The worktree and stash carriers exist because a 2026-08-04 workspace audit found
 **9 leaked worktrees and 5 leaked stashes** — all of them by running `git
@@ -4939,6 +4939,54 @@ Accepted limitations, documented rather than papered over:
 The parser is exercised against a **captured, redacted process table** from a
 real machine (`internal/doctor/testdata/orphaned-processes/`, captured with the
 committed `capture-ps-snapshot.sh`), not an invented one.
+
+##### Foreign cwd holders (issue #519)
+
+The classification above only ever looks for processes the pipeline itself
+spawned — it filters to `argv[0]`'s basename being `nightgauge`. But a
+`.nightgauge/worktrees/issue-N` directory is also where **interactive** agent
+harnesses (Claude Code, Codex, both inside VSCode) run their own shells, and
+those harnesses can leak a detached one: an operator found several `/bin/zsh`
+processes still parked with cwd inside `.nightgauge/worktrees/issue-488`, held
+open by a VSCode extension-host background task long after the session ended
+and the worktree itself was already removed. None of those shells was ever a
+nightgauge process, so the argv-basename filter could never have seen them.
+
+`orphaned_processes` runs a second, cwd-keyed classifier over **every** row
+(nightgauge or not, `self` excluded) and folds any hit into the same check:
+
+- **cwd source, one bounded call per platform.** macOS shells
+  `lsof -a -d cwd -Fpn -p <comma-joined pids>` **once** for every pid in the
+  table (never one `lsof` per process) under a 10s timeout; Linux reads
+  `os.Readlink("/proc/<pid>/cwd")` per pid directly, no subprocess. A pid this
+  reader cannot resolve (already exited, owned by another user) is simply
+  absent from the result — routine on a machine-wide scan — but the mechanism
+  itself failing outright (unsupported platform, `lsof` produces nothing at
+  all) skips this half of the scan entirely rather than guessing.
+- **Containment by `filepath.Rel` after `filepath.EvalSymlinks` on both
+  sides**, never a string prefix: `.../worktrees-old/x` shares the literal
+  prefix `.../worktrees` with `.../worktrees/x` but resolves to
+  `../worktrees-old/x`, which is rejected. A symlink-eval failure reports
+  "not contained" — under-reporting is the safe direction for a check that
+  only ever names evidence.
+- **Stale distinction from `git worktree list --porcelain`**
+  (`execution.ActiveWorktreeIssues`, the same parser #110's worktree
+  reclamation and `checkLeakedWorktrees` use). A holder whose worktree is
+  still registered is tagged `[cwd inside worktree issue-N]`; one whose
+  worktree has already been `git worktree remove`d — the shape that can also
+  block a **future** removal — is tagged `[cwd inside REMOVED worktree
+  issue-N]` and sorted before the live-worktree holders. An undetermined
+  active-worktree read (git failed) skips this half rather than risking a
+  wrong live/REMOVED verdict.
+- **Report-only, same contract as #341.** The line names PID, elapsed time,
+  cwd, and command, then says "verify and terminate manually" — nothing here
+  ever signals a process.
+
+This half is scoped to `.nightgauge/worktrees/*` specifically (where
+`execution`'s worktree manager creates a pipeline worktree), not to "wherever
+`git worktree list` points" — a process sitting in some unrelated,
+hand-created worktree elsewhere in a repo is not evidence of the interactive-
+harness leak this half exists to catch.
 
 **Exit codes**:
 

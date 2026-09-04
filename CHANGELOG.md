@@ -19,6 +19,19 @@ and this project adheres to
 
 ### Added
 
+#### `doctor` flags foreign processes holding open a pipeline worktree (#519)
+
+- `orphaned_processes` now runs a second, cwd-keyed classifier over **every**
+  process on the machine (not only ones the pipeline spawned): any process
+  whose cwd resolves inside a `.nightgauge/worktrees/*` directory is folded
+  into the same report, tagged `[cwd inside worktree issue-N]` or
+  `[cwd inside REMOVED worktree issue-N]` when the worktree no longer appears
+  in `git worktree list` — the case that can also block a future
+  `git worktree remove` (#110). Interactive agent harnesses (Claude Code,
+  Codex) can leak a detached shell into a worktree they never clean up; this
+  closes the blind spot in #341's argv-only scan. Report-only, unchanged: no
+  process is ever signaled.
+
 #### Supply-chain hardening for the release path (#136)
 
 - **All GitHub Actions SHA-pinned**: every `uses:` across `.github/workflows/*`
