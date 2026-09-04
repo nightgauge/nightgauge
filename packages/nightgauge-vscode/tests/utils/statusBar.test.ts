@@ -549,6 +549,87 @@ describe("StatusBarManager", () => {
       });
     });
   });
+  // ── Measured API spend meter (Issue #1347) ──────────────────────────
+  //
+  // The remaining count is a level; the spend is a rate. Both live on one
+  // item because separately they read as unrelated facts — which is how every
+  // quota exhaustion in this workspace was noticed only after it happened.
+  describe("API spend meter", () => {
+    const quota = {
+      remaining: 4200,
+      limit: 5000,
+      resetAt: 1788500000,
+      exhausted: false,
+      low: false,
+    };
+
+    it("renders the hourly spend beside the remaining count", () => {
+      statusBar.updateRateLimit(quota);
+      statusBar.updateApiSpend({
+        points: 3100,
+        calls: 42,
+        topCaller: "sweep.Producers",
+        topCallerPoints: 2900,
+      });
+      expect(mockRateLimitItem.text).toContain("4,200/5000");
+      expect(mockRateLimitItem.text).toContain("3,100/h");
+      expect(mockRateLimitItem.tooltip).toContain("sweep.Producers");
+      expect(mockRateLimitItem.tooltip).toContain("42");
+    });
+
+    it("shows no rate at all when the spend is unmeasurable", () => {
+      statusBar.updateRateLimit(quota);
+      statusBar.updateApiSpend(null);
+      // Absent must render as absent. A "0/h" here would draw a quiet
+      // workspace over one whose ledger simply could not be read.
+      expect(mockRateLimitItem.text).not.toContain("/h");
+      expect(mockRateLimitItem.tooltip).not.toContain("Spent in the last hour");
+    });
+
+    it("re-renders when the spend arrives after the quota reading", () => {
+      statusBar.updateRateLimit(quota);
+      expect(mockRateLimitItem.text).not.toContain("/h");
+      statusBar.updateApiSpend({
+        points: 90,
+        calls: 3,
+        topCaller: "board.Read",
+        topCallerPoints: 90,
+      });
+      expect(mockRateLimitItem.text).toContain("90/h");
+    });
+
+    it("stays hidden until a quota reading exists, even if spend arrives first", () => {
+      statusBar.updateApiSpend({
+        points: 90,
+        calls: 3,
+        topCaller: "board.Read",
+        topCallerPoints: 90,
+      });
+      // Nothing to render against — the item must not appear showing a rate
+      // with no budget to compare it to.
+      expect(mockRateLimitItem.show).not.toHaveBeenCalled();
+    });
+
+    it("says so explicitly when nothing in the window was attributed", () => {
+      statusBar.updateRateLimit(quota);
+      statusBar.updateApiSpend({ points: 0, calls: 5, topCaller: null, topCallerPoints: 0 });
+      expect(mockRateLimitItem.tooltip).toContain("No spend attributed");
+    });
+
+    it("keeps the exhausted styling when a spend reading lands", () => {
+      statusBar.updateRateLimit({ ...quota, remaining: 0, exhausted: true });
+      statusBar.updateApiSpend({
+        points: 5000,
+        calls: 300,
+        topCaller: "sweep.Producers",
+        topCallerPoints: 5000,
+      });
+      expect(mockRateLimitItem.text).toContain("GQL 0/5000");
+      expect((mockRateLimitItem.backgroundColor as { id: string }).id).toBe(
+        "statusBarItem.errorBackground"
+      );
+    });
+  });
 });
 
 // ── Issue #3446: Autonomous quota cooldown status-bar visibility ──────────

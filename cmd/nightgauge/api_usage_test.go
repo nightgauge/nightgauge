@@ -100,3 +100,42 @@ func TestAPIUsageKeyAlwaysAttributes(t *testing.T) {
 		}
 	}
 }
+
+// The pools have separate hourly quotas. Summing them yields a number that is
+// not a budget — and the first live run of the always-on ledger reported 2216
+// points for a 70-point GraphQL window on exactly that arithmetic.
+func TestFilterAPIUsageResource(t *testing.T) {
+	recs := []apiUsageRecord{
+		{Kind: "graphql", Cost: 17},
+		{Kind: "graphql_mutation", Cost: 1},
+		{Kind: "core", Cost: 976},
+		{Kind: "GraphQL", Cost: 5}, // header casing is not guaranteed
+		{Kind: "search", Cost: 2},
+	}
+
+	graphql := filterAPIUsageResource(recs, "graphql")
+	if len(graphql) != 3 {
+		t.Fatalf("graphql filter kept %d records, want 3 (graphql + graphql_mutation + mixed case)", len(graphql))
+	}
+	total := 0
+	for _, r := range graphql {
+		total += r.Cost
+	}
+	if total != 23 {
+		t.Errorf("filtered points = %d, want 23 — mutations share the GraphQL quota and must not drop out", total)
+	}
+
+	if got := len(filterAPIUsageResource(recs, "core")); got != 1 {
+		t.Errorf("core filter kept %d records, want 1", got)
+	}
+	if got := len(filterAPIUsageResource(recs, "")); got != len(recs) {
+		t.Errorf("empty filter kept %d records, want all %d", got, len(recs))
+	}
+	if got := len(filterAPIUsageResource(recs, "nonesuch")); got != 0 {
+		t.Errorf("unknown resource kept %d records, want 0", got)
+	}
+	// A filter must not alias the caller's backing array.
+	if recs[0].Kind != "graphql" || len(recs) != 5 {
+		t.Errorf("input slice was mutated: %+v", recs)
+	}
+}

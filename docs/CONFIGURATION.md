@@ -468,6 +468,35 @@ model_routing:
 
 ## Configuration Sections
 
+### github.api_ledger
+
+The GitHub request ledger (#843), which records one JSONL line per HTTP request
+with the points GitHub actually billed it. **On by default since #1347** — set
+`enabled: false` to stop writing it.
+
+```yaml
+github:
+  api_ledger:
+    enabled: false # default: true
+```
+
+It is on by default because an exhausted GraphQL quota is never reproducible on
+demand, so an opt-in instrument is reliably switched off during the only hours
+that matter. The file is bounded — `.nightgauge/logs/github-api.jsonl`, 5 MB
+with one rotated backup, gitignored — and the disabled path costs one nil check
+per request.
+
+`NIGHTGAUGE_GITHUB_API_LOG` overrides this setting in **both** directions, as
+`NIGHTGAUGE_*` overrides do everywhere: `0` switches the ledger off even when
+config enables it, `1` switches it on even when config disables it, and any
+other value is a path to write to instead of the default.
+
+Read it with `nightgauge api-usage --since 1h`. `nightgauge doctor` reports the
+last hour as the `github_api_budget` check, the VS Code status bar shows the
+hourly rate beside the remaining quota, and an Action Center `fyi` card names
+the top spender after an exhaustion. See
+[docs/GO_BINARY.md](GO_BINARY.md#api-usage--the-github-request-ledger-issue-843-always-on-in-1347).
+
 ### github_user
 
 Per-repository GitHub user identity for multi-account workspaces. When set,

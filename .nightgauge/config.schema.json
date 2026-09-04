@@ -13,6 +13,32 @@
       "type": "string",
       "description": "GitHub repository name."
     },
+    "github": {
+      "type": "object",
+      "description": "GitHub-wide settings. owner/repo here are the legacy member-config form; api_ledger is the request-ledger opt-out (#1347).",
+      "properties": {
+        "owner": {
+          "type": "string",
+          "description": "Legacy member-config owner. Prefer the top-level owner."
+        },
+        "repo": {
+          "type": "string",
+          "description": "Legacy member-config repo. Prefer the top-level repo."
+        },
+        "api_ledger": {
+          "type": "object",
+          "description": "The GitHub API request ledger: one JSONL record per HTTP request, with the points GitHub billed it. On by default and bounded to a rolling 5 MB file, because an exhausted quota is never reproducible on demand and an opt-in instrument is reliably off when it matters. Read it with `nightgauge api-usage`; `nightgauge doctor` reports the last hour as `github_api_budget`.",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": true,
+              "description": "Set false to stop writing the ledger. NIGHTGAUGE_GITHUB_API_LOG overrides this in both directions."
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
     "project": {
       "type": "object",
       "description": "GitHub Project board configuration.",

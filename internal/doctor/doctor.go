@@ -423,6 +423,16 @@ func RunDoctor(ctx context.Context, cfg *config.Config, client *gh.Client, adapt
 	// it — which is precisely what a dead writer produces. This arm keys on the
 	// outcome corpus's row count instead, because that is written by a
 	// different mechanism on the same merges.
+	// The GitHub API budget (#1347). Placed with the other file-backed arms:
+	// it reads the request ledger, which is now written unattended, so this is
+	// the first check in the tree that can report on an outage NOBODY was
+	// watching for at the time it happened.
+	apiBudget, apiBudgetWarning := checkGitHubAPIBudget(cwd, time.Now())
+	result.Checks["github_api_budget"] = apiBudget
+	if apiBudgetWarning != "" {
+		warnings = append(warnings, apiBudgetWarning)
+	}
+
 	survivalCoverage, coverageWarning := checkSurvivalCoverage(cwd)
 	result.Checks["survival_coverage"] = survivalCoverage
 	if coverageWarning != "" {

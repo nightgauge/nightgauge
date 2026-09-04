@@ -143,7 +143,7 @@ func withTestLedger(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("create ledger: %v", err)
 	}
-	testLedgerOverride.Store(&apiLedger{f: f, enc: json.NewEncoder(f), prev: map[string]int{}})
+	testLedgerOverride.Store(&apiLedger{path: path, f: f, enc: json.NewEncoder(f), prev: map[string]int{}})
 	t.Cleanup(func() {
 		testLedgerOverride.Store((*apiLedger)(nil))
 		f.Close()
@@ -232,7 +232,7 @@ func TestLedgerWriteFailureNeverBreaksTheRequest(t *testing.T) {
 		t.Fatalf("create: %v", err)
 	}
 	f.Close() // every subsequent write fails
-	testLedgerOverride.Store(&apiLedger{f: f, enc: json.NewEncoder(f), prev: map[string]int{}})
+	testLedgerOverride.Store(&apiLedger{path: f.Name(), f: f, enc: json.NewEncoder(f), prev: map[string]int{}})
 	t.Cleanup(func() { testLedgerOverride.Store((*apiLedger)(nil)) })
 
 	body, err := c.restGet(context.Background(), "/repos/o/r")
