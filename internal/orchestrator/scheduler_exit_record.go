@@ -33,10 +33,14 @@ import (
 //     bootstrap so the autonomous scheduler's full sibling list (including
 //     cross-repo) reaches every diagnostic write.
 //
-//   - Populated by Go when set on the runtime / err: terminal_kind (via
-//     ClassifyTerminalKind for failures), with a fallback to the runtime
-//     StageErrors map for IPC-mode failures where stageErr is nil but the
-//     skill set the stage error text directly (#3207).
+//   - Populated by Go when set on the runtime / err: terminal_kind, via
+//     the same stageFailureText(stageErr, result) the scheduler already
+//     classifies from for the V3 history record (scheduler.go:6199) — so a
+//     CLI-mode failure (stageErr nil, reason on result.ErrorText) is
+//     classified identically here instead of writing terminal_kind="" (#563).
+//     Falls back to the runtime StageErrors map for IPC-mode failures where
+//     stageErr is nil but the skill set the stage error text directly
+//     (#3207).
 //
 //   - Forwarded verbatim from TS SkillRunner via StageResultParams /
 //     StageRunResult: session_id, signal, signal_source, idle_ms_at_exit,
@@ -118,17 +122,20 @@ func (s *Scheduler) writeStageExitRecord(
 		}
 	}
 
-	// Classify terminal kind from whichever error text we have. stageErr is
-	// the most reliable source (it's what the orchestrator already classifies
-	// against for the V3 record). Fall back to the runtime's per-stage error
-	// map for IPC-mode failures where stageErr was nil but the SkillRunner
-	// surfaced the kill marker via SetStageError (#3207). Prefers the gate's
-	// structured terminal kind over prose classification (Issue #9).
+	// Classify terminal kind from whichever error text we have.
+	// stageFailureText is the same function the V3 history record classifies
+	// from (scheduler.go:6199): stageErr wins when the executor returned a Go
+	// error, and result.ErrorText supplies the text for the CLI-mode shape
+	// where stageErr is nil and execution.Manager reported the failure reason
+	// on the result instead (#563 — before this, a CLI-mode failure wrote
+	// terminal_kind="" here while the history record classified the same
+	// input, so the two forensic surfaces disagreed). Falls back to the
+	// runtime's per-stage error map for IPC-mode failures where neither
+	// source has text but the SkillRunner surfaced the kill marker via
+	// SetStageError (#3207). Prefers the gate's structured terminal kind over
+	// prose classification (Issue #9).
 	if !success {
-		errText := ""
-		if stageErr != nil {
-			errText = stageErr.Error()
-		}
+		errText := stageFailureText(stageErr, result)
 		if errText == "" && snap != nil && snap.StageErrors != nil {
 			errText = snap.StageErrors[string(stage)]
 		}
@@ -157,7 +164,16 @@ func (s *Scheduler) writeStageExitRecord(
 		// IPC write path calls, so both produce identical on-disk shapes.
 		rec.RecentBash = diagnostics.BoundRecentBash(result.RecentBash)
 		rec.StopHookErrored = result.StopHookErrored
-		rec.StderrTail = truncExitRecordStderrTail(result.StderrTail)
+		// Prefer the IPC ring buffer (StderrTail) over the CLI carry
+		// (ErrorText): only fall back to ErrorText when IPC mode never set a
+		// tail, so a CLI-mode failure — which has no ring buffer, only the
+		// exit reason on ErrorText — still leaves the record a stderr tail to
+		// read instead of writing stderr_tail="" (#563).
+		stderrTail := result.StderrTail
+		if stderrTail == "" {
+			stderrTail = result.ErrorText
+		}
+		rec.StderrTail = truncExitRecordStderrTail(stderrTail)
 		// Prefer the TS-provided elapsed over the Go-side fallback when present —
 		// TS captures the actual subprocess wall time (Go's stageStartedAt is
 		// slightly earlier because it brackets the deterministic-merge fast path).
