@@ -38,6 +38,15 @@ export default defineConfig({
     // actually catches that case and fails CI on it.
     exclude: ["tests/playwright/**"],
     setupFiles: ["tests/setup.ts"],
+    // #1400 — provision the gitignored packaging artifacts (dist/ data files,
+    // THIRD_PARTY_NOTICES) that tests/integration/*Packaging.test.ts assert on,
+    // so a fresh worktree starts green instead of with five red tests nobody
+    // can act on. globalSetup rather than `pretest` because the failing
+    // invocation is a bare `npx vitest run`, which never runs npm lifecycle
+    // scripts; and it runs once in the MAIN process, so workers cannot race the
+    // same copy. It provisions only what is ABSENT — see tests/globalSetup.ts
+    // for why rebuilding unconditionally would gut the #436 stale-dist guard.
+    globalSetup: ["tests/globalSetup.ts"],
     coverage: {
       provider: "v8",
       reporter: ["text", "json", "html"],
