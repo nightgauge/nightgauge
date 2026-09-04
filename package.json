@@ -46,8 +46,8 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "@google/genai": "^2.19.0",
-    "@typescript-eslint/eslint-plugin": "^8.68.0",
+    "@google/genai": "^2.20.0",
+    "@typescript-eslint/eslint-plugin": "^8.69.0",
     "@typescript-eslint/parser": "^8.64.0",
     "eslint": "^10.9.1",
     "eslint-config-prettier": "^10.1.8",
