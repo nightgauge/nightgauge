@@ -109,6 +109,13 @@ export interface TerminalKindSignalExtension {
 export interface TerminalKindTable {
   $comment: string[];
   schema_version: number;
+  /**
+   * The input shape Classify/Match receive and the ordering guarantee: `+"`exit N: `"+`
+   * plus the last 3 non-empty stderr lines a CLI stage wrote (never stdout,
+   * capped at 2KB before the line split), matched as one string where the
+   * first satisfied rule wins regardless of which line its terms sit on.
+   */
+  input_contract: string;
   predicates: TerminalKindPredicateDoc[];
   dead_terms: TerminalKindDeadTerm[];
   kinds_without_rules: string[];

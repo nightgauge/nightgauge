@@ -49,6 +49,7 @@
     "consumer follows automatically; none of them can be changed on its own."
   ],
   "schema_version": 2,
+  "input_contract": "errorText is `exit N: ` followed by the LAST 3 non-empty lines a CLI stage wrote to its OWN stderr, hard-capped at 2KB before the line split (internal/orchestrator/scheduler.go: stderrFailureReason, stderrReasonMaxLines=3, stderrReasonMaxBytes=2048). It is never stdout — stdout for an agentic CLI is the whole streaming-JSON transcript (model prose, tool_result payloads), and classifying that would misroute an ordinary tool-output line quoting a table term. Since #533 this text is frequently ADAPTER-AUTHORED: whatever the vendor CLI happened to print, not a string Nightgauge synthesized, so a rule written for one producer's exact wording can be satisfied by an unrelated CLI's incidental phrasing. Match is over the WHOLE joined string, not per-line: a clause's terms need not share a line, and a rule earlier in `rules` wins even when its match sits on an earlier line than a later rule's more specific match on the real failure. There is no structured envelope alternative — adapter stderr reaches Classify exactly as printed, by design (#565); the mitigation for a false hit is rule ORDER, not a second input shape.",
   "predicates": [
     {
       "name": "mentions_registry_model",
@@ -121,6 +122,18 @@
         ["usage balance exhausted"]
       ],
       "why": "Stamped by skillRunner (#3386) when an idle stall coincides with a quota-exhausted rate_limit_event. Above the stall-kill rules: the kill reason embeds `idle` / `stall idle threshold` and would otherwise retry in minutes against a bucket that resets in hours. `usage balance exhausted` is the FOURTH producer of this same taxonomy kind (#560, split from #533's AC2): the grok Build CLI's own vendor 402 wording — `API error (status 402 Payment Required): Grok Build usage balance exhausted` — reaching the classifier as an ordinary stderr/API-error reason, not through skillRunner's bracketed stamp. Pre-#560 it satisfied no rule and fell through to subagent_crash, exactly the misclassification the sibling adapter-auth-failed clause (#591) was added to stop for grok's auth failures; this is the same fix for grok's billing failures. Added here rather than as a new rule/kind because a 402 usage-balance exhaustion IS a rate-limit-quota-exhausted event by meaning — one authority for one classification, per the route the issue recommends over widening the SDK-only `QUOTA_RE` regex in grokStream.ts, which would leave the Go CLI path unfixed and create a second authority for the same answer."
+    },
+    {
+      "id": "adapter-auth-failed",
+      "kind": "adapter_auth_failed",
+      "signal": true,
+      "clauses": [
+        ["[adapter-auth-failed]"],
+        ["adapter-auth-failed"],
+        ["adapter_auth_failed"],
+        ["not signed in"]
+      ],
+      "why": "The pipeline-start auth gate refused to launch (#312) — an adapter probe timed out after a retry (transient starvation under a concurrent dispatch burst) or the adapter CLI is logged out. Above the subagent-crash fallback, whose `exit ` substring would otherwise feed the cascade breaker a false crash. All three spellings: the wrapped pipeline-start form carries the marker BARE, which the SDK mirror missed on a real observed failure (#306). `not signed in` is the FOURTH producer of this same taxonomy kind (#591): the grok Build CLI's own vendor text — `Error: Not signed in. To authenticate without a browser, run: grok login --device-code…` — when credentials are absent. That text carries none of the three markers above; it never passes through the pipeline-start probe at all because the CLI fails too fast for the probe to run, so it reaches the classifier only as the adapter's raw stderr reason (#533's cliFailureText carry) and fell all the way through to subagent_crash before this clause existed. MOVED HERE FROM BELOW model-unavailable/issue-closed/…/stall-kill BY #565: adapter-auth-failed and rate-limit-quota-exhausted are the two rules that exist specifically to classify RAW, unmarked vendor CLI stderr (#560/#591 are the same fix for two different grok failures) rather than a pipeline-stamped marker, and every rule between the old and new position matches on bare, generic-sounding literals (`hard cap`, `budget ceiling`, `premature turn end`, …) that a vendor CLI's own unrelated log chatter can satisfy incidentally. #565's negative-control corpus row (multiline-grok-hard-cap-notice-then-not-signed-in) pins the concrete case this closes: a retry-configuration line mentioning `hard cap` printed before the real `Not signed in` failure used to win under stall-kill's old higher position, sending an unauthenticated CLI through backoff-and-retry recovery for a failure retrying can never fix. Matching is over the WHOLE joined string, not per line, so position IN THE TEXT never protected this — only position in the RULE TABLE does."
     },
     {
       "id": "model-unavailable",
@@ -324,18 +337,6 @@
         ["missing prerequisite"]
       ],
       "why": "Schema / output-validation failures. The `did not write expected output context` phrase deliberately lives in premature-turn-end instead: its only producer, validateStageOutput, runs exclusively on exit-0 paths."
-    },
-    {
-      "id": "adapter-auth-failed",
-      "kind": "adapter_auth_failed",
-      "signal": true,
-      "clauses": [
-        ["[adapter-auth-failed]"],
-        ["adapter-auth-failed"],
-        ["adapter_auth_failed"],
-        ["not signed in"]
-      ],
-      "why": "The pipeline-start auth gate refused to launch (#312) — an adapter probe timed out after a retry (transient starvation under a concurrent dispatch burst) or the adapter CLI is logged out. Above the subagent-crash fallback, whose `exit ` substring would otherwise feed the cascade breaker a false crash. All three spellings: the wrapped pipeline-start form carries the marker BARE, which the SDK mirror missed on a real observed failure (#306). `not signed in` is the FOURTH producer of this same taxonomy kind (#591): the grok Build CLI's own vendor text — `Error: Not signed in. To authenticate without a browser, run: grok login --device-code…` — when credentials are absent. That text carries none of the three markers above; it never passes through the pipeline-start probe at all because the CLI fails too fast for the probe to run, so it reaches the classifier only as the adapter's raw stderr reason (#533's cliFailureText carry) and fell all the way through to subagent_crash before this clause existed."
     },
     {
       "id": "no-changes-produced",
