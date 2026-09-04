@@ -878,6 +878,74 @@ The em dash (`—`) separator is part of the template — use it verbatim.
 
 ---
 
+## Exporting a portable bundle
+
+Wiki-links stay the **authoring** syntax: they are terse, and they survive a
+file move. They are also readable by no consumer we did not write, so an Open
+Knowledge Format reader sees nodes and no edges.
+
+`nightgauge knowledge export --okf <dir>` closes that gap without changing how
+anyone writes:
+
+```bash
+nightgauge knowledge export --okf /tmp/okf-out
+```
+
+Every `[[wiki-link]]` in an entry **body** becomes a bundle-absolute markdown
+link — `[#1234](/features/1234-widget/decisions.md#adr-001)` — so the bundle
+can be handed to a customer, another agent framework, or a graph viewer with no
+translation layer and no Nightgauge dependency.
+
+| Authoring form          | Exported as                                   |
+| ----------------------- | --------------------------------------------- |
+| `[[#1234]]`             | `[#1234](/features/1234-widget/decisions.md)` |
+| `[[#1234#adr-001]]`     | `[#1234 § adr-001](/…/decisions.md#adr-001)`  |
+| `[[topic:ring-buffer]]` | `[ring-buffer](/glossary/ring-buffer.md)`     |
+| `[[architecture:slug]]` | `[slug](/architecture/slug.md)`               |
+| `[[PRD]]` (sibling)     | `[PRD](/features/1234-widget/PRD.md)`         |
+
+**An issue-ref resolves to a file, not a directory.** `[[#1234]]` names an
+issue, and an issue is a directory — but a directory renders no edge in any
+consumer, so the export picks the entry a reader following that link actually
+wants: `decisions.md`, then `PRD.md`, then the first entry alphabetically.
+
+**Frontmatter is not rewritten.** It is a machine contract; the export resolves
+the body and re-attaches the original block byte for byte.
+
+**Reserved files are copied verbatim.** `index.md` and `log.md` are navigation,
+and their links are already bundle-absolute.
+
+**Code spans are left alone.** An entry that documents the wiki-link syntax
+keeps its examples — rewriting them would turn documentation into a lie.
+
+### Degradation and containment
+
+A link the exporter cannot resolve degrades to its **display text** with a
+warning on stderr. It is never dropped silently, and the exported bundle
+carries no `[[` outside a code example.
+
+That is deliberately different from `knowledge render`, which keeps an
+unresolvable link as literal `[[...]]`. Brackets are a visible "fix me" for a
+human reading the base in place; in an exported bundle they are noise a
+consumer cannot act on. The two renderers coexist rather than one becoming a
+flag on the other.
+
+A resolution whose cleaned path leaves the bundle root is **rejected**, and so
+is one that gets there through a symlink. The authoring resolver joins link
+text onto a directory with no such check, so `[[../../../../secrets]]` renders
+a working link whenever that file exists — in a bundle whose entire purpose is
+to be handed to someone else, that is a way to smuggle a pointer, or file
+content, out of the tree.
+
+`[[repo:path]]` names a file in a sibling repository. It is outside the bundle
+by definition, so it degrades rather than being rewritten into a link that
+cannot resolve.
+
+The export directory must not be inside the knowledge root — exporting a bundle
+into itself would make the walk consume its own output — and the result is
+checked with `knowledge validate --conformance` before the command exits, so a
+bundle that would fail an external consumer's own check fails here first.
+
 ## Wiki-Link Format
 
 Knowledge files may reference other issues or documents using wiki-link syntax.

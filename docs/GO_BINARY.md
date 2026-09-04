@@ -6673,6 +6673,53 @@ include. The deterministic runner is the default path, so a gate only in the
 skill would be unenforced on every normal run. Scoping to one issue keeps a
 stale entry from an unrelated issue out of somebody else's merge.
 
+**export** copies the knowledge base to a directory with every wiki-link
+resolved to a bundle-absolute markdown link.
+
+```bash
+nightgauge knowledge export --okf <dir> [--workdir <path>] [--json]
+```
+
+| Flag | Type | Description |
+| --- | --- | --- |
+| `--okf` | bool | **Required.** Export in Open Knowledge Format; the only format |
+| `--workdir` | string | Workspace root (default: cwd) |
+| `--json` | bool | Output the file count, resolved-link count and warnings as JSON |
+
+Wiki-links stay the authoring syntax — terse, and they survive a file move —
+but they are readable by no consumer we did not write, so an OKF reader sees
+nodes and no edges. The export resolves them so the bundle needs no translation
+layer and no Nightgauge dependency.
+
+Entry bodies are resolved; frontmatter is re-attached byte for byte, because it
+is a machine contract rather than prose. Reserved files (`index.md`, `log.md`)
+are copied verbatim — they are navigation and their links are already
+bundle-absolute. Code spans are left alone, so an entry documenting the
+wiki-link syntax keeps its examples.
+
+An issue-ref resolves to a FILE, not the issue directory: a directory renders
+no edge. Preference is `decisions.md`, then `PRD.md`, then the first entry
+alphabetically.
+
+**Degradation**: an unresolvable link becomes its display text with a warning
+on stderr — never dropped silently, and the exported bundle carries no `[[`
+outside a code example. This differs from `knowledge render`, which keeps
+literal brackets: brackets are a visible "fix me" for a human reading the base
+in place, and noise a bundle consumer cannot act on.
+
+**Containment**: a resolution whose cleaned path leaves the bundle root is
+rejected, including one reached through a symlink. `[[repo:path]]` is outside
+the bundle by definition and degrades. The export directory must not be inside
+the knowledge root.
+
+The exported bundle is run through the conformance check before the command
+exits, so a bundle that would fail an external consumer's check fails here
+first.
+
+**Exit codes**: `0` on a clean export; `1` on a missing base, a rejected target
+directory, or a conformance violation in the result. Warnings alone do not fail
+the export.
+
 **stamp** records provenance on a knowledge entry. It is the only writer of the
 `generated`, `verified`, `sources`, `status` and `stale_after` frontmatter
 fields — skills and stages call it instead of editing frontmatter with `sed` or
@@ -7084,8 +7131,8 @@ knowledge:
 
 All subcommands accept `--workdir` to override the workspace root
 (default: `cwd`); `scaffold`, `prune`, `index`, `record-outcome`, `stamp`,
-`graduate`, `graduate-candidates`, and `recall` also accept `--json` for
-machine-readable output.
+`export`, `graduate`, `graduate-candidates`, and `recall` also accept `--json`
+for machine-readable output.
 
 #### Knowledge Telemetry
 
