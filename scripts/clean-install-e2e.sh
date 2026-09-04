@@ -79,6 +79,23 @@ cleanup() {
         || echo "WARN: failed to delete project $OWNER/$PROJECT_NUMBER — delete it by hand"
     fi
   fi
+  # Scrub the HOST side of the evidence too (#1335). The container scrubs
+  # /out, but the workflow uploads the whole `.clean-install-e2e/` tree — and
+  # `host.log` is this script's own tee'd stdout, which includes everything the
+  # container printed. So the identical bytes were being published in a second
+  # file that the container's scrub could not reach, alongside
+  # `docker-build.log` and anything else written here.
+  #
+  # In the cleanup trap so it covers every exit path, including `die` and a
+  # ^C — the failure path is where a token is most likely to have been printed.
+  #
+  # Everything after this point is a path, not a credential. Output written from
+  # here on reaches host.log through the `tee` above and is therefore NOT
+  # covered; that is why this sits as late as it does.
+  if [[ -x "$ROOT/docker/clean-install/scrub-evidence.sh" ]]; then
+    "$ROOT/docker/clean-install/scrub-evidence.sh" "$RUN_DIR" \
+      || echo "ERROR: host evidence scrub FAILED — $RUN_DIR may still contain credentials" >&2
+  fi
   echo "logs: $RUN_DIR"
   exit "$rc"
 }
@@ -190,6 +207,7 @@ step "run the container"
 docker run --name "$CONTAINER" --shm-size=1g \
   -v "$RUN_DIR/vsix:/vsix:ro" \
   -v "$ROOT/docker/clean-install/run-in-container.sh:/harness/bin/run-in-container.sh:ro" \
+  -v "$ROOT/docker/clean-install/scrub-evidence.sh:/harness/bin/scrub-evidence.sh:ro" \
   -v "$ROOT/tests/clean-install/driver:/harness/driver:ro" \
   -v "$ROOT/tests/clean-install/issue.md:/harness/issue.md:ro" \
   -v "$OUT_DIR:/out" \
