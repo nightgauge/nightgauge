@@ -14,8 +14,8 @@
  *
  * Patterns covered:
  *   - PEM blocks (PRIVATE KEY, RSA PRIVATE KEY, EC PRIVATE KEY, etc.)
- *   - Token prefixes: ghp_, gho_, ghs_, ghr_, github_pat_, sk-, sk_live_,
- *     sk_test_, xox[bpars]-, AKIA…, ASIA…, glpat-… (GitLab PAT)
+ *   - Token prefixes: ghp_, gho_, ghu_, ghs_, ghr_, github_pat_, sk-ant-, sk-,
+ *     sk_live_, sk_test_, xox[bpars]-, AKIA…, ASIA…, glpat-… (GitLab PAT)
  *   - JWTs (three base64url segments separated by dots, length-bounded)
  *   - Bearer credentials, Gemini API keys, and webhook URLs
  *   - "...KEY=…", "...TOKEN=…", "...SECRET=…", "...PASSWORD=…" assignments
@@ -68,8 +68,11 @@ export function redactSecrets(input: string): string {
   // PEM blocks — match across newlines (real and literal "\n")
   s = redactPemBlocks(s);
   // Token prefixes — capture up to a non-token boundary
-  s = s.replace(/\b(ghp|gho|ghs|ghr|github_pat)_[A-Za-z0-9_]{16,}/g, "[REDACTED:GH_TOKEN]");
+  // `ghu` (user-to-server) was missing from this list until #1335 — the same
+  // sweep that found a github_pat_ value reaching an evidence artifact.
+  s = s.replace(/\b(ghp|gho|ghu|ghs|ghr|github_pat)_[A-Za-z0-9_]{16,}/g, "[REDACTED:GH_TOKEN]");
   s = s.replace(/\bglpat-[A-Za-z0-9_-]{16,}/g, "[REDACTED:GITLAB_TOKEN]");
+  s = s.replace(/\bsk-ant-[A-Za-z0-9-_]{16,}/g, "[REDACTED:ANTHROPIC_KEY]");
   s = s.replace(/\bsk-[A-Za-z0-9-_]{16,}/g, "[REDACTED:OPENAI_KEY]");
   s = s.replace(/\bsk_(?:live|test)_[A-Za-z0-9]{16,}/g, "[REDACTED:STRIPE_KEY]");
   s = s.replace(/\bxox[bpars]-[A-Za-z0-9-]{10,}/g, "[REDACTED:SLACK_TOKEN]");

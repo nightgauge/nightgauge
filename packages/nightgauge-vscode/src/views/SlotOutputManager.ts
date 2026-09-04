@@ -12,6 +12,7 @@
  */
 
 import * as vscode from "vscode";
+import { redactSecrets } from "../utils/redaction";
 import type { PipelineStage } from "@nightgauge/sdk";
 
 /**
@@ -109,12 +110,30 @@ export class SlotOutputManager implements vscode.Disposable {
    * Write output to a slot's channel. `stage` is the emitting stage when the
    * producer knows it (#283) — threaded through so consumers never have to
    * re-derive it from the (early-advancing) slot stage pointer.
+   *
+   * REDACTED HERE, AT THE SINK (#1335). This method carried the raw stage
+   * stream verbatim to two places: the output channel, and `onOutput`, which
+   * #1330 copies into the run's evidence artifact. In one clean-install CI run
+   * a `feature-dev` agent echoed GH_TOKEN, the value arrived inside a Bash
+   * tool_result, and a live `github_pat_` credential was published in a
+   * public-repo workflow artifact.
+   *
+   * The sink is the right choke point rather than the stream-json parser: the
+   * text reaching here has already been flattened out of assistant text,
+   * tool_use input, tool_result content and stderr alike, so redacting once
+   * here covers every block shape BY CONSTRUCTION. Redacting per-block would
+   * have to enumerate the shapes, and the shape nobody enumerated is exactly
+   * how this leaked.
+   *
+   * The callback gets the redacted text too, not just the channel — the
+   * evidence artifact reads the callback, and it was the artifact that leaked.
    */
   appendOutput(issueNumber: number, text: string, stage?: PipelineStage): void {
     const slot = this.channels.get(issueNumber);
     if (slot) {
-      slot.channel.appendLine(text);
-      this.callbacks.onOutput?.(slot.slotIndex, issueNumber, text, "info", stage);
+      const safe = redactSecrets(text);
+      slot.channel.appendLine(safe);
+      this.callbacks.onOutput?.(slot.slotIndex, issueNumber, safe, "info", stage);
     }
   }
 
@@ -124,8 +143,9 @@ export class SlotOutputManager implements vscode.Disposable {
   appendError(issueNumber: number, text: string, stage?: PipelineStage): void {
     const slot = this.channels.get(issueNumber);
     if (slot) {
-      slot.channel.appendLine(`[ERROR] ${text}`);
-      this.callbacks.onOutput?.(slot.slotIndex, issueNumber, text, "error", stage);
+      const safe = redactSecrets(text);
+      slot.channel.appendLine(`[ERROR] ${safe}`);
+      this.callbacks.onOutput?.(slot.slotIndex, issueNumber, safe, "error", stage);
     }
   }
 

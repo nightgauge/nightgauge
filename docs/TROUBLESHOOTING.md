@@ -1197,6 +1197,47 @@ from the cached open-item snapshot (`docs/GO_BINARY.md` § _The Board Snapshot
 Cache_), so a ledger showing five-alias `totalCount` documents means an old
 binary.
 
+## A secret in a tool result reaching a public artifact (#1335)
+
+**The incident.** During a clean-install CI dispatch a `feature-dev` agent
+echoed the raw value of `GH_TOKEN`. The value arrived inside a Bash
+**tool_result**, `SlotOutputManager` wrote it verbatim to the slot's output
+channel, #1330 copied that channel into the run's evidence artifact, and a live
+`github_pat_` fine-grained credential was downloadable from a public repo's
+workflow artifact for roughly ten minutes. GitHub Actions masked the value in
+the workflow **log**; an uploaded **artifact** gets no such treatment.
+
+**Why two layers both missed it.**
+
+1. The output-channel path had **no redaction at all**. `redactSecrets` existed
+   and already covered `github_pat_`, but nothing on the slot-channel path
+   called it — so the shape coverage was never the problem.
+2. The harness uploaded `/out` without scrubbing the secret values it had
+   itself been given.
+
+**The shape of the fix, and why it is at the sink.** Redaction now happens in
+`SlotOutputManager.appendOutput` / `appendError`. By the time text reaches
+those methods it has already been flattened out of assistant text, `tool_use`
+input, `tool_result` content and stderr alike, so redacting once there covers
+every block shape **by construction**. A per-block sanitizer has to enumerate
+the shapes, and the shape nobody enumerated is exactly how this leaked. Both
+the channel write and the `onOutput` callback get the redacted text — the
+evidence artifact reads the callback, and it was the artifact that leaked.
+
+`docker/clean-install/scrub-evidence.sh` is the second layer, and it is
+deliberately **different in kind**: the sanitizer matches secret _shapes_,
+which can only cover shapes someone thought of, while the scrub matches the
+exact _values_ the harness was handed. A credential in a format nobody has a
+pattern for is still caught.
+
+**What to check when changing evidence collection.** Any change that copies a
+log, a channel, or a context file into an uploadable directory inherits this
+class. Ask: does this path carry model-authored text, and is it redacted at its
+sink? Adding a new artifact directory means adding it to the scrub, not
+trusting the producer. `scripts/test-scrub-evidence.sh` runs in `ci-local.sh`
+because the scrub itself only ever executes inside the clean-install container
+— without that step the layer is unverified until the next incident.
+
 ## Local Validation Traps
 
 Failures that read as success, and successes that read as failure. Every one
