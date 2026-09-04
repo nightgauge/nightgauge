@@ -17,31 +17,6 @@ and this project adheres to
 > version. When the first release is cut, rename this heading to that tag
 > (e.g. `## [0.2.0] - YYYY-MM-DD`).
 
-### Fixed
-
-#### Goroutine lifecycle pin widened to wave_orchestrator.go and epic.go (#491)
-
-- **Go binary** (`internal/orchestrator/wave_orchestrator.go`): `runSubagent`
-  spawned a second, vestigial goroutine that only ever waited on `<-done` and
-  did nothing — a dead completion-channel listener left over from a callback
-  path (`completionCh`) nothing ever wrote to. Removed the goroutine, the
-  unused channel, and the dead `originalOnComplete` capture; the pipeline
-  result is now read directly from `readPipelineState` after the join. The
-  package's 3 remaining spawns in this file (wave-parallel and wave-scaled
-  workers, and `runSubagent`'s pipeline runner) are all joined — via
-  `wg.Wait()` or the done-channel `select` — before their enclosing function
-  returns, and each now carries a one-line lifecycle comment saying so.
-- **Go binary** (`internal/orchestrator/autonomous_background_lifecycle_pin_test.go`):
-  the #428 AST source pin (`TestEveryDetachedSpawnInAutonomousGoesThroughGoTracked`)
-  widened from `autonomous.go` only to a table over `autonomous.go`,
-  `wave_orchestrator.go` and `epic.go`. The latter two have no single
-  wrapping seam like `goTracked`, so each is pinned by an explicit
-  `file:line` allowlist instead of a containing-function scan; any detached
-  spawn (a `go` statement or `.Go(...)` call) at a line not in its file's
-  allowlist fails, naming the file and line — including a second, unreviewed
-  spawn added next to an already-allowlisted one. `scheduler.go` stays out of
-  scope (owned by #463).
-
 ### Added
 
 #### Supply-chain hardening for the release path (#136)
