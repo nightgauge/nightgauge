@@ -244,6 +244,74 @@ func TestCalibrate_UnmeasurableRowsDoNotDilute(t *testing.T) {
 	}
 }
 
+// A retry escalation is not a routing miss. resolveDispatchModel applies the
+// retry engine's escalated tier as the dispatch override, and that override is
+// re-recorded as ActualModel — so a haiku->sonnet escalation on a failed stage
+// (the retry ladder doing exactly its job) produced a pair that read
+// indistinguishable from the router simply mispredicting. Retries > 0 is the
+// discriminator: it is a superset of "the tier actually changed" (a retry with
+// no tier change also gets excluded), accepted deliberately because erring
+// toward fewer false misses beats erring toward inflated ones (issue #1002).
+func TestCalibrate_RetriedRowIsNotAModelMiss(t *testing.T) {
+	dir := t.TempDir()
+	r := &Recorder{filePath: filepath.Join(dir, "outcomes.jsonl")}
+
+	if err := r.Record(Outcome{
+		IssueNumber: 1, PredictedModel: "haiku", ActualModel: "sonnet",
+		Retries: 1, CompletedAt: time.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Record(Outcome{
+		IssueNumber: 2, PredictedModel: "haiku", ActualModel: "sonnet",
+		Retries: 0, CompletedAt: time.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := r.Calibrate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.ModelSamples != 1 {
+		t.Errorf("ModelSamples = %d, want 1 — the retried row must not enter the denominator", report.ModelSamples)
+	}
+	if report.ModelMatches != 0 {
+		t.Errorf("ModelMatches = %d, want 0 — the surviving row is a genuine haiku!=sonnet miss", report.ModelMatches)
+	}
+	if report.ModelSamplesExcludedRetry != 1 {
+		t.Errorf("ModelSamplesExcludedRetry = %d, want 1 — the excluded row must be visible, not silently dropped", report.ModelSamplesExcludedRetry)
+	}
+}
+
+// Guards against the fix over-excluding: a non-retry override (a floor,
+// ceiling, or sticky-downgrade clamp applied with no retry involved) still
+// changes PredictedModel vs ActualModel with Retries == 0, and that is a real
+// divergence the corpus must still count — Retries > 0 is the only exclusion
+// signal, not "predicted != actual" in general.
+func TestCalibrate_NonRetryOverrideStillBooksDivergence(t *testing.T) {
+	dir := t.TempDir()
+	r := &Recorder{filePath: filepath.Join(dir, "outcomes.jsonl")}
+
+	if err := r.Record(Outcome{
+		IssueNumber: 1, PredictedModel: "opus", ActualModel: "sonnet",
+		Retries: 0, CompletedAt: time.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := r.Calibrate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.ModelSamples != 1 {
+		t.Errorf("ModelSamples = %d, want 1 — a non-retry override must still be measured", report.ModelSamples)
+	}
+	if report.ModelMatches != 0 {
+		t.Errorf("ModelMatches = %d, want 0", report.ModelMatches)
+	}
+}
+
 func TestRecorder_CreatesDirectory(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "sub", "dir")
 	r := &Recorder{filePath: filepath.Join(dir, "outcomes.jsonl")}
