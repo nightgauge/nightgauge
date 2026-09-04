@@ -54,6 +54,7 @@ func apiUsageCmd() *cobra.Command {
 		resource string
 		top      int
 		asJSON   bool
+		budget   bool
 	)
 	cmd := &cobra.Command{
 		Use:   "api-usage",
@@ -81,9 +82,20 @@ the ledger off; set it to a path to write somewhere other than the default
   nightgauge api-usage --by resource --json
   nightgauge api-usage --since 1h --resource graphql   # just the pool that runs out`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if budget && !cmd.Flags().Changed("since") {
+				// The GraphQL quota resets on a rolling hour, not on whatever
+				// window the operator happened to ask for last — default the
+				// budget report to that hour so "remaining" means the number
+				// GitHub is actually about to enforce.
+				since = time.Hour
+			}
 			recs, err := readAPIUsage(path, since)
 			if err != nil {
 				return err
+			}
+			if budget {
+				printAPIBudget(cmd.OutOrStdout(), recs, since)
+				return nil
 			}
 			recs = filterAPIUsageResource(recs, resource)
 			if len(recs) == 0 {
@@ -120,6 +132,9 @@ the ledger off; set it to a path to write somewhere other than the default
 			"graphql includes graphql_mutation — they share one quota")
 	cmd.Flags().IntVar(&top, "top", 15, "Show at most this many rows")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "Output as JSON")
+	cmd.Flags().BoolVar(&budget, "budget", false,
+		"Report the remaining hourly GraphQL budget and what a full board read would cost against it "+
+			"(defaults --since to 1h; overrides --by/--resource/--top/--json)")
 	return cmd
 }
 
@@ -309,6 +324,35 @@ func sinceSuffix(since time.Duration) string {
 		return ""
 	}
 	return " in the last " + since.String()
+}
+
+// printAPIBudget answers "can I afford another board read this hour?" from
+// the ledger alone — no request against GitHub is needed, which matters
+// because the whole failure this guards against (#1428) is an agent
+// discovering the exhaustion mid-poll, via a failing `gh pr checks`, instead
+// of checking first.
+func printAPIBudget(w io.Writer, recs []apiUsageRecord, since time.Duration) {
+	spent := 0
+	for _, r := range recs {
+		kind := strings.ToLower(r.Kind)
+		if kind == "graphql" || strings.HasPrefix(kind, "graphql_") {
+			spent += r.Cost
+		}
+	}
+	remaining := github.GraphQLHourlyLimit - spent
+	if remaining < 0 {
+		remaining = 0
+	}
+	pages := remaining / github.BoardReadPointsPerPage
+	items := pages * github.BoardReadItemsPerPage
+
+	fmt.Fprintf(w, "GitHub GraphQL budget — %d pts/hour\n\n", github.GraphQLHourlyLimit)
+	fmt.Fprintf(w, "  Spent%s:      %d pts\n", sinceSuffix(since), spent)
+	fmt.Fprintf(w, "  Remaining (est.): %d pts\n\n", remaining)
+	fmt.Fprintf(w, "  A ProjectV2 board read costs ~%d pts per %d-item page.\n",
+		github.BoardReadPointsPerPage, github.BoardReadItemsPerPage)
+	fmt.Fprintf(w, "  What's left affords ~%d more page(s) (~%d items) before the hour resets.\n",
+		pages, items)
 }
 
 func printAPIUsage(w io.Writer, recs []apiUsageRecord, groups []apiUsageGroup, total int, by string, top int, since time.Duration) {

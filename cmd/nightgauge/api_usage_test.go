@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
@@ -137,5 +138,42 @@ func TestFilterAPIUsageResource(t *testing.T) {
 	// A filter must not alias the caller's backing array.
 	if recs[0].Kind != "graphql" || len(recs) != 5 {
 		t.Errorf("input slice was mutated: %+v", recs)
+	}
+}
+
+// AC1/#1428: `nightgauge api-usage --budget` prices what remains of the
+// hourly GraphQL quota and what a full board read would cost against it, so
+// an agent can check before spending 7% of the hour on a board pull instead
+// of discovering the exhaustion when `gh pr checks` starts failing.
+func TestAPIUsageBudgetReportsRemainingAndBoardCost(t *testing.T) {
+	recent := time.Now().Add(-5 * time.Minute).UTC().Format(time.RFC3339Nano)
+	old := time.Now().Add(-3 * time.Hour).UTC().Format(time.RFC3339Nano)
+	path := writeLedger(t,
+		`{"ts":"`+recent+`","kind":"graphql","cost":680,"caller":"agent"}`,
+		// Outside the 1h budget window (the hourly quota resets — a 3h-old
+		// spend must not count against what remains this hour).
+		`{"ts":"`+old+`","kind":"graphql","cost":4000,"caller":"stale"}`,
+	)
+
+	cmd := apiUsageCmd()
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+	cmd.SetArgs([]string{"--file", path, "--budget"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("api-usage --budget: %v", err)
+	}
+	out := buf.String()
+
+	if !strings.Contains(out, "680 pts") {
+		t.Errorf("output does not report the in-window spend (680 pts): %q", out)
+	}
+	if !strings.Contains(out, "4320 pts") {
+		t.Errorf("output does not report the remaining budget (5000-680=4320): %q", out)
+	}
+	if !strings.Contains(out, "17 pts per 100-item page") {
+		t.Errorf("output does not price a board read at 17 pts/100-item page: %q", out)
+	}
+	if strings.Contains(out, "4000") {
+		t.Errorf("the 3h-stale record leaked into the 1h budget window: %q", out)
 	}
 }
