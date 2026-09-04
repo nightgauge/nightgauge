@@ -138,6 +138,21 @@ table, carve-out rationale, and consequence analysis.
 
 ### Fixed
 
+#### Fixed-temp-path race in two more write-then-rename sites (#786)
+
+- `workTimeFeedback.ts` (`appendObservationToYAML`) and
+  `TelemetryUploaderService.ts` (`saveWatermarks`) each wrote a fixed
+  `<target>.tmp` before renaming it onto the target — the same shape #777
+  fixed in `TelemetryStore.writeIndex`. Two concurrent writers raced: the
+  first `rename` won, the second failed `ENOENT` on a temp file the winner
+  had already consumed, and the failure went unreported.
+- Both now use a temp name unique per write (pid + random hex) with
+  cleanup-on-failure, matching `writeFileAtomic`'s idiom.
+  `executionHistoryWriter.ts` already used `writeFileAtomic` (fixed earlier by
+  #1212) and needed no change. See
+  [docs/TESTING.md § Write-then-rename sites](docs/TESTING.md#write-then-rename-sites-the-fixed-temp-path-race-and-the-tree-wide-sweep-786)
+  for the full sweep of every such site in `nightgauge-vscode`.
+
 #### Empty epics invisible in Repositories tree view (#3329)
 
 - A freshly-created epic (`type:epic` label, zero sub-issues) was filtered out
