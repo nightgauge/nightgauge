@@ -98,6 +98,19 @@ class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.0"
 
     def do_GET(self):  # noqa: N802
+        # /status/NNN answers NNN to EVERY user agent, so markdown-link-check
+        # gets a real status and the link lands on the ANSWERED path rather
+        # than on the Status: 0 path the other cases exercise (#1404).
+        if self.path.startswith("/status/"):
+            try:
+                code = int(self.path.rsplit("/", 1)[1])
+            except ValueError:
+                code = 500
+            self.send_response(code)
+            self.send_header("Content-Type", "text/plain")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         agent = self.headers.get("User-Agent", "")
         if "nightgauge-link-check" in agent:
             body = b"ok"
@@ -148,6 +161,10 @@ printf '# case 3\n\n[a bot-walled host](http://127.0.0.1:%s/docs)\n' "$PORT" \
   > "$FIX/bot-walled.md"
 printf '# case 4\n\n[a closed port](http://127.0.0.1:%s/docs)\n' "$CLOSED_PORT" \
   > "$FIX/closed-port.md"
+printf '# case 5\n\n[a host having a bad day](http://127.0.0.1:%s/status/500)\n' "$PORT" \
+  > "$FIX/server-error.md"
+printf '# case 7\n\n[a genuinely missing page](http://127.0.0.1:%s/status/404)\n' "$PORT" \
+  > "$FIX/not-found.md"
 
 run_gate() { # run_gate <fixture> -> writes $TMP/out, returns the gate's exit
   MD_LINK_CHECK_FILES="$FIX/$1" bash "$GATE" > "$TMP/out" 2>&1
@@ -186,6 +203,36 @@ check "a closed port is classed unreachable-from-runner" \
   "$(grep -qE 'Link classes: 0 dead, [1-9]' "$TMP/out" && echo 0 || echo 1)"
 check "the unreachable report names the curl exit code" \
   "$(grep -qE 'curl exit [0-9]+' "$TMP/out" && echo 0 || echo 1)"
+
+# --- Cases 5-7: an answered status is not automatically a dead link (#1404) --
+#
+# `Status: 0` was re-probed from the start (#1004), but a link the checker got a
+# REAL status for went straight to fatal. A 5xx is the server failing, not the
+# document being missing — the same condition #1004 exists to tolerate, only
+# carrying a number instead of a zero. A Google 500 on a URL that answered 200
+# three times a minute later failed the mandatory pre-submission gate for a
+# branch that did not touch the file.
+#
+# The 404 case is the other half: the exemption must be narrow, or this becomes
+# a blanket exemption rather than a classification fix.
+#
+# There is deliberately NO 429 case. A first draft added one, and mutating the
+# 429 arm out of the gate left it passing — `.markdown-link-check.json` already
+# lists 401/403/429 in `aliveStatusCodes`, so they never reach the gate's
+# classification at all. The arm was unreachable and the test was vacuous; both
+# were removed rather than kept as decoration.
+
+run_gate server-error.md
+RC=$?
+check "a 5xx does not fail the gate" "$([ "$RC" -eq 0 ] && echo 0 || echo 1)"
+check "a 5xx is classed alive-after-reprobe, not dead" \
+  "$(grep -qE 'Link classes: 0 dead, 0 unreachable-from-runner, [1-9]' "$TMP/out" && echo 0 || echo 1)"
+
+run_gate not-found.md
+RC=$?
+check "a 404 STILL fails the gate" "$([ "$RC" -ne 0 ] && echo 0 || echo 1)"
+check "a 404 is still classed dead" \
+  "$(grep -qE 'Link classes: [1-9]' "$TMP/out" && echo 0 || echo 1)"
 
 echo ""
 echo "=== $PASS passed, $FAIL failed ==="
