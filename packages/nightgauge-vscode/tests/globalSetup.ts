@@ -54,6 +54,20 @@ import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+/**
+ * The data files `build:assets` copies into `dist/`, as [destination, source].
+ *
+ * Mirrors the two `cp`s in package.json's `build:assets`. The marketplace half
+ * of that script is deliberately not reproduced: no vitest assertion reads it
+ * (the `dist/skills` and `dist/claude-plugins` hits in the skillRunner tests
+ * are synthetic string paths), so provisioning it would be work the suite does
+ * not need.
+ */
+const PACKAGED_DATA_FILES = [
+  ["dist/failure-taxonomy.yaml", "../nightgauge-sdk/src/analysis/failure-taxonomy.yaml"],
+  ["dist/model-registry.json", "../nightgauge-sdk/src/eval/model-registry.json"],
+] as const;
+
 /** One provisioning command, with the reason it is being run. */
 export interface PackagingStep {
   /** Why this step is needed — surfaced in the log line before it runs. */
@@ -79,14 +93,36 @@ export function planPackagingArtifacts(pkgDir: string): PackagingStep[] {
   const repoRoot = resolve(pkgDir, "..", "..");
   const steps: PackagingStep[] = [];
 
-  // Gate on the DIRECTORY, not on each data file inside it. A present dist/
-  // with a missing file is a half-built tree, which the suite's own assertions
-  // report better than a silent repair would.
-  if (!existsSync(join(pkgDir, "dist"))) {
+  // Gate PER DATA FILE, not on the `dist/` directory.
+  //
+  // The first version gated on the directory, reasoning that a present dist/
+  // with a missing file was a half-built tree the suite should report rather
+  // than repair. That is wrong about how dist/ comes to exist: `build:types`
+  // (`tsc --emitDeclarationOnly`, outDir dist/) and `build:bundle` (esbuild
+  // --outfile=dist/extension.cjs) each CREATE dist/ with neither data file, and
+  // `build:types` runs FIRST in the full `build` chain — so an interrupted or
+  // failed build, or a bare `npm run watch`, leaves exactly that state. The
+  // planner then did nothing and four of the five tests stayed red.
+  //
+  // COPIED PER FILE RATHER THAN BY SHELLING TO `build:assets`, and that is the
+  // load-bearing detail. `build:assets` recopies BOTH data files, so invoking
+  // it because ONE is missing would silently overwrite a present-but-stale
+  // sibling — healing exactly the drift modelRegistryPackaging's #436
+  // deep-equal assertion exists to expose. Gating per file is not enough;
+  // copying per file is what keeps that guard able to fail.
+  for (const [dest, src] of PACKAGED_DATA_FILES) {
+    // A present file is never touched, so #436 stays able to fail.
+    if (existsSync(join(pkgDir, dest))) continue;
     steps.push({
-      reason: "dist/ is absent — the packaging suites assert on files build:assets copies there",
-      command: "npm",
-      args: ["run", "build:assets"],
+      reason: `${dest} is absent — the packaging suites assert on it`,
+      command: "bash",
+      args: [
+        "-c",
+        `mkdir -p "$(dirname "$1")" && cp "$2" "$1"`,
+        "--",
+        join(pkgDir, dest),
+        resolve(pkgDir, src),
+      ],
       cwd: pkgDir,
     });
   }
@@ -122,7 +158,6 @@ const execStep: StepRunner = (step) => {
  */
 export function ensurePackagingArtifacts(pkgDir: string, run: StepRunner = execStep): void {
   for (const step of planPackagingArtifacts(pkgDir)) {
-    // eslint-disable-next-line no-console
     console.log(`[packaging] ${step.reason} — running \`${step.command} ${step.args.join(" ")}\``);
     run(step);
   }
