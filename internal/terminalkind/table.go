@@ -124,8 +124,18 @@ type SignalExtension struct {
 
 // Table is the parsed canonical rule table.
 type Table struct {
-	Comment           []string          `json:"$comment"`
-	SchemaVersion     int               `json:"schema_version"`
+	Comment       []string `json:"$comment"`
+	SchemaVersion int      `json:"schema_version"`
+	// InputContract names the exact shape Classify/Match receive and the
+	// ordering guarantee the ladder gives it, in prose rather than code: the
+	// shape is "exit N: " + the last 3 non-empty stderr lines a CLI stage
+	// wrote (never stdout, capped at 2KB before the line split), and the
+	// first satisfied rule wins over the WHOLE joined string regardless of
+	// which line a term sits on. Declared here (#565) because that text is
+	// frequently adapter-authored — whatever the vendor CLI printed, not a
+	// string this repo synthesized — and a reader of table.json has no other
+	// way to learn what a rule is being asked to survive.
+	InputContract     string            `json:"input_contract"`
 	Predicates        []Predicate       `json:"predicates"`
 	DeadTerms         []DeadTerm        `json:"dead_terms"`
 	KindsWithoutRules []string          `json:"kinds_without_rules"`

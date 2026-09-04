@@ -361,6 +361,66 @@
       "signal": "rate_limit_quota_exhausted"
     },
     {
+      "input": "[adapter-auth-failed]",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "exit 1: [adapter-auth-failed]",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "[ADAPTER-AUTH-FAILED]",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "adapter-auth-failed",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "exit 1: adapter-auth-failed",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "ADAPTER-AUTH-FAILED",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "adapter_auth_failed",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "exit 1: adapter_auth_failed",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "ADAPTER_AUTH_FAILED",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "not signed in",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "exit 1: not signed in",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "NOT SIGNED IN",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
+    },
+    {
       "input": "not_found_error model",
       "kind": "model_unavailable",
       "signal": ""
@@ -1466,66 +1526,6 @@
       "signal": ""
     },
     {
-      "input": "[adapter-auth-failed]",
-      "kind": "adapter_auth_failed",
-      "signal": "adapter_auth_failed"
-    },
-    {
-      "input": "exit 1: [adapter-auth-failed]",
-      "kind": "adapter_auth_failed",
-      "signal": "adapter_auth_failed"
-    },
-    {
-      "input": "[ADAPTER-AUTH-FAILED]",
-      "kind": "adapter_auth_failed",
-      "signal": "adapter_auth_failed"
-    },
-    {
-      "input": "adapter-auth-failed",
-      "kind": "adapter_auth_failed",
-      "signal": "adapter_auth_failed"
-    },
-    {
-      "input": "exit 1: adapter-auth-failed",
-      "kind": "adapter_auth_failed",
-      "signal": "adapter_auth_failed"
-    },
-    {
-      "input": "ADAPTER-AUTH-FAILED",
-      "kind": "adapter_auth_failed",
-      "signal": "adapter_auth_failed"
-    },
-    {
-      "input": "adapter_auth_failed",
-      "kind": "adapter_auth_failed",
-      "signal": "adapter_auth_failed"
-    },
-    {
-      "input": "exit 1: adapter_auth_failed",
-      "kind": "adapter_auth_failed",
-      "signal": "adapter_auth_failed"
-    },
-    {
-      "input": "ADAPTER_AUTH_FAILED",
-      "kind": "adapter_auth_failed",
-      "signal": "adapter_auth_failed"
-    },
-    {
-      "input": "not signed in",
-      "kind": "adapter_auth_failed",
-      "signal": "adapter_auth_failed"
-    },
-    {
-      "input": "exit 1: not signed in",
-      "kind": "adapter_auth_failed",
-      "signal": "adapter_auth_failed"
-    },
-    {
-      "input": "NOT SIGNED IN",
-      "kind": "adapter_auth_failed",
-      "signal": "adapter_auth_failed"
-    },
-    {
       "input": "[no-changes-produced]",
       "kind": "no_changes_produced",
       "signal": ""
@@ -2061,6 +2061,11 @@
       "signal": ""
     },
     {
+      "input": "network unavailable: extended github connectivity loss | [adapter-auth-failed]",
+      "kind": "network_unavailable",
+      "signal": ""
+    },
+    {
       "input": "network unavailable: extended github connectivity loss | not_found_error model",
       "kind": "network_unavailable",
       "signal": ""
@@ -2166,11 +2171,6 @@
       "signal": ""
     },
     {
-      "input": "network unavailable: extended github connectivity loss | [adapter-auth-failed]",
-      "kind": "network_unavailable",
-      "signal": ""
-    },
-    {
       "input": "network unavailable: extended github connectivity loss | [no-changes-produced]",
       "kind": "network_unavailable",
       "signal": ""
@@ -2247,6 +2247,11 @@
     },
     {
       "input": "stream idle timeout | [rate-limit-quota-exhausted]",
+      "kind": "stream_idle_timeout",
+      "signal": "stream_idle_timeout"
+    },
+    {
+      "input": "stream idle timeout | [adapter-auth-failed]",
       "kind": "stream_idle_timeout",
       "signal": "stream_idle_timeout"
     },
@@ -2356,11 +2361,6 @@
       "signal": "stream_idle_timeout"
     },
     {
-      "input": "stream idle timeout | [adapter-auth-failed]",
-      "kind": "stream_idle_timeout",
-      "signal": "stream_idle_timeout"
-    },
-    {
       "input": "stream idle timeout | [no-changes-produced]",
       "kind": "stream_idle_timeout",
       "signal": "stream_idle_timeout"
@@ -2437,6 +2437,11 @@
     },
     {
       "input": "overloaded | [rate-limit-quota-exhausted]",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "overloaded | [adapter-auth-failed]",
       "kind": "api_overloaded",
       "signal": "api_overloaded"
     },
@@ -2546,11 +2551,6 @@
       "signal": "api_overloaded"
     },
     {
-      "input": "overloaded | [adapter-auth-failed]",
-      "kind": "api_overloaded",
-      "signal": "api_overloaded"
-    },
-    {
       "input": "overloaded | [no-changes-produced]",
       "kind": "api_overloaded",
       "signal": "api_overloaded"
@@ -2627,6 +2627,11 @@
     },
     {
       "input": "socket connection was closed | [rate-limit-quota-exhausted]",
+      "kind": "api_connection_lost",
+      "signal": "api_connection_lost"
+    },
+    {
+      "input": "socket connection was closed | [adapter-auth-failed]",
       "kind": "api_connection_lost",
       "signal": "api_connection_lost"
     },
@@ -2736,11 +2741,6 @@
       "signal": "api_connection_lost"
     },
     {
-      "input": "socket connection was closed | [adapter-auth-failed]",
-      "kind": "api_connection_lost",
-      "signal": "api_connection_lost"
-    },
-    {
       "input": "socket connection was closed | [no-changes-produced]",
       "kind": "api_connection_lost",
       "signal": "api_connection_lost"
@@ -2819,6 +2819,11 @@
       "input": "[rate-limit-quota-exhausted] | socket connection was closed",
       "kind": "api_connection_lost",
       "signal": "api_connection_lost"
+    },
+    {
+      "input": "[rate-limit-quota-exhausted] | [adapter-auth-failed]",
+      "kind": "rate_limit_quota_exhausted",
+      "signal": "rate_limit_quota_exhausted"
     },
     {
       "input": "[rate-limit-quota-exhausted] | not_found_error model",
@@ -2926,11 +2931,6 @@
       "signal": "rate_limit_quota_exhausted"
     },
     {
-      "input": "[rate-limit-quota-exhausted] | [adapter-auth-failed]",
-      "kind": "rate_limit_quota_exhausted",
-      "signal": "rate_limit_quota_exhausted"
-    },
-    {
       "input": "[rate-limit-quota-exhausted] | [no-changes-produced]",
       "kind": "rate_limit_quota_exhausted",
       "signal": "rate_limit_quota_exhausted"
@@ -2991,6 +2991,196 @@
       "signal": "rate_limit_quota_exhausted"
     },
     {
+      "input": "[adapter-auth-failed] | network unavailable: extended github connectivity loss",
+      "kind": "network_unavailable",
+      "signal": ""
+    },
+    {
+      "input": "[adapter-auth-failed] | stream idle timeout",
+      "kind": "stream_idle_timeout",
+      "signal": "stream_idle_timeout"
+    },
+    {
+      "input": "[adapter-auth-failed] | overloaded",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "[adapter-auth-failed] | socket connection was closed",
+      "kind": "api_connection_lost",
+      "signal": "api_connection_lost"
+    },
+    {
+      "input": "[adapter-auth-failed] | [rate-limit-quota-exhausted]",
+      "kind": "rate_limit_quota_exhausted",
+      "signal": "rate_limit_quota_exhausted"
+    },
+    {
+      "input": "[adapter-auth-failed] | not_found_error model",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "[adapter-auth-failed] | pipeline-start-failure issue-closed",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "[adapter-auth-failed] | [blocked-dependency]",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "[adapter-auth-failed] | architecture approval required",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "[adapter-auth-failed] | github-quota-low",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "[adapter-auth-failed] | github-network-outage",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "[adapter-auth-failed] | [pr-merge-unmerged",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "[adapter-auth-failed] | [stage:worktree-containment]",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "[adapter-auth-failed] | [not-pipeline-actionable]",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "[adapter-auth-failed] | [dev-produced-no-changes]",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "[adapter-auth-failed] | [dev-handoff-missing]",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "[adapter-auth-failed] | premature turn end",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "[adapter-auth-failed] | worktree_uncommitted",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "[adapter-auth-failed] | budget_ceiling_hit",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "[adapter-auth-failed] | [runaway-progress-exceeded]",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "[adapter-auth-failed] | [runaway-ceiling-exceeded]",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "[adapter-auth-failed] | [cost-cap-exceeded]",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "[adapter-auth-failed] | stage-no-output-timeout",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "[adapter-auth-failed] | [stall-killed]",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "[adapter-auth-failed] | pipeline_budget_exceeded",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "[adapter-auth-failed] | schema validation",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "[adapter-auth-failed] | [no-changes-produced]",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "[adapter-auth-failed] | [validation-failed]",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "[adapter-auth-failed] | [validation-inconclusive]",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "[adapter-auth-failed] | [branch-forked]",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "[adapter-auth-failed] | [commit-orphaned]",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "[adapter-auth-failed] | [permission-denied]",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "[adapter-auth-failed] | stage_context_unreadable",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "[adapter-auth-failed] | dev_build_verification_missing",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "[adapter-auth-failed] | dev_build_verification_failed",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "[adapter-auth-failed] | dev_tests_failed",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "[adapter-auth-failed] | pr_merge_lookup_failed",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "[adapter-auth-failed] | subagent crash",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
+    },
+    {
       "input": "not_found_error model | network unavailable: extended github connectivity loss",
       "kind": "network_unavailable",
       "signal": ""
@@ -3014,6 +3204,11 @@
       "input": "not_found_error model | [rate-limit-quota-exhausted]",
       "kind": "rate_limit_quota_exhausted",
       "signal": "rate_limit_quota_exhausted"
+    },
+    {
+      "input": "not_found_error model | [adapter-auth-failed]",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
     },
     {
       "input": "not_found_error model | pipeline-start-failure issue-closed",
@@ -3116,11 +3311,6 @@
       "signal": ""
     },
     {
-      "input": "not_found_error model | [adapter-auth-failed]",
-      "kind": "model_unavailable",
-      "signal": ""
-    },
-    {
       "input": "not_found_error model | [no-changes-produced]",
       "kind": "model_unavailable",
       "signal": ""
@@ -3204,6 +3394,11 @@
       "input": "pipeline-start-failure issue-closed | [rate-limit-quota-exhausted]",
       "kind": "rate_limit_quota_exhausted",
       "signal": "rate_limit_quota_exhausted"
+    },
+    {
+      "input": "pipeline-start-failure issue-closed | [adapter-auth-failed]",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
     },
     {
       "input": "pipeline-start-failure issue-closed | not_found_error model",
@@ -3306,11 +3501,6 @@
       "signal": ""
     },
     {
-      "input": "pipeline-start-failure issue-closed | [adapter-auth-failed]",
-      "kind": "issue_closed",
-      "signal": ""
-    },
-    {
       "input": "pipeline-start-failure issue-closed | [no-changes-produced]",
       "kind": "issue_closed",
       "signal": ""
@@ -3394,6 +3584,11 @@
       "input": "[blocked-dependency] | [rate-limit-quota-exhausted]",
       "kind": "rate_limit_quota_exhausted",
       "signal": "rate_limit_quota_exhausted"
+    },
+    {
+      "input": "[blocked-dependency] | [adapter-auth-failed]",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
     },
     {
       "input": "[blocked-dependency] | not_found_error model",
@@ -3496,11 +3691,6 @@
       "signal": ""
     },
     {
-      "input": "[blocked-dependency] | [adapter-auth-failed]",
-      "kind": "blocked_dependency",
-      "signal": ""
-    },
-    {
       "input": "[blocked-dependency] | [no-changes-produced]",
       "kind": "blocked_dependency",
       "signal": ""
@@ -3584,6 +3774,11 @@
       "input": "architecture approval required | [rate-limit-quota-exhausted]",
       "kind": "rate_limit_quota_exhausted",
       "signal": "rate_limit_quota_exhausted"
+    },
+    {
+      "input": "architecture approval required | [adapter-auth-failed]",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
     },
     {
       "input": "architecture approval required | not_found_error model",
@@ -3686,11 +3881,6 @@
       "signal": "architecture_approval_required"
     },
     {
-      "input": "architecture approval required | [adapter-auth-failed]",
-      "kind": "architecture_approval_required",
-      "signal": "architecture_approval_required"
-    },
-    {
       "input": "architecture approval required | [no-changes-produced]",
       "kind": "architecture_approval_required",
       "signal": "architecture_approval_required"
@@ -3774,6 +3964,11 @@
       "input": "github-quota-low | [rate-limit-quota-exhausted]",
       "kind": "rate_limit_quota_exhausted",
       "signal": "rate_limit_quota_exhausted"
+    },
+    {
+      "input": "github-quota-low | [adapter-auth-failed]",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
     },
     {
       "input": "github-quota-low | not_found_error model",
@@ -3876,11 +4071,6 @@
       "signal": "github_quota_low"
     },
     {
-      "input": "github-quota-low | [adapter-auth-failed]",
-      "kind": "github_quota_low",
-      "signal": "github_quota_low"
-    },
-    {
       "input": "github-quota-low | [no-changes-produced]",
       "kind": "github_quota_low",
       "signal": "github_quota_low"
@@ -3964,6 +4154,11 @@
       "input": "github-network-outage | [rate-limit-quota-exhausted]",
       "kind": "rate_limit_quota_exhausted",
       "signal": "rate_limit_quota_exhausted"
+    },
+    {
+      "input": "github-network-outage | [adapter-auth-failed]",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
     },
     {
       "input": "github-network-outage | not_found_error model",
@@ -4066,11 +4261,6 @@
       "signal": "github_network_outage"
     },
     {
-      "input": "github-network-outage | [adapter-auth-failed]",
-      "kind": "github_network_outage",
-      "signal": "github_network_outage"
-    },
-    {
       "input": "github-network-outage | [no-changes-produced]",
       "kind": "github_network_outage",
       "signal": "github_network_outage"
@@ -4154,6 +4344,11 @@
       "input": "[pr-merge-unmerged | [rate-limit-quota-exhausted]",
       "kind": "rate_limit_quota_exhausted",
       "signal": "rate_limit_quota_exhausted"
+    },
+    {
+      "input": "[pr-merge-unmerged | [adapter-auth-failed]",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
     },
     {
       "input": "[pr-merge-unmerged | not_found_error model",
@@ -4256,11 +4451,6 @@
       "signal": ""
     },
     {
-      "input": "[pr-merge-unmerged | [adapter-auth-failed]",
-      "kind": "pr_merge_unmerged",
-      "signal": ""
-    },
-    {
       "input": "[pr-merge-unmerged | [no-changes-produced]",
       "kind": "pr_merge_unmerged",
       "signal": ""
@@ -4344,6 +4534,11 @@
       "input": "[stage:worktree-containment] | [rate-limit-quota-exhausted]",
       "kind": "rate_limit_quota_exhausted",
       "signal": "rate_limit_quota_exhausted"
+    },
+    {
+      "input": "[stage:worktree-containment] | [adapter-auth-failed]",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
     },
     {
       "input": "[stage:worktree-containment] | not_found_error model",
@@ -4446,11 +4641,6 @@
       "signal": ""
     },
     {
-      "input": "[stage:worktree-containment] | [adapter-auth-failed]",
-      "kind": "containment_breach",
-      "signal": ""
-    },
-    {
       "input": "[stage:worktree-containment] | [no-changes-produced]",
       "kind": "containment_breach",
       "signal": ""
@@ -4534,6 +4724,11 @@
       "input": "[not-pipeline-actionable] | [rate-limit-quota-exhausted]",
       "kind": "rate_limit_quota_exhausted",
       "signal": "rate_limit_quota_exhausted"
+    },
+    {
+      "input": "[not-pipeline-actionable] | [adapter-auth-failed]",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
     },
     {
       "input": "[not-pipeline-actionable] | not_found_error model",
@@ -4636,11 +4831,6 @@
       "signal": ""
     },
     {
-      "input": "[not-pipeline-actionable] | [adapter-auth-failed]",
-      "kind": "not_pipeline_actionable",
-      "signal": ""
-    },
-    {
       "input": "[not-pipeline-actionable] | [no-changes-produced]",
       "kind": "not_pipeline_actionable",
       "signal": ""
@@ -4724,6 +4914,11 @@
       "input": "[dev-produced-no-changes] | [rate-limit-quota-exhausted]",
       "kind": "rate_limit_quota_exhausted",
       "signal": "rate_limit_quota_exhausted"
+    },
+    {
+      "input": "[dev-produced-no-changes] | [adapter-auth-failed]",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
     },
     {
       "input": "[dev-produced-no-changes] | not_found_error model",
@@ -4826,11 +5021,6 @@
       "signal": ""
     },
     {
-      "input": "[dev-produced-no-changes] | [adapter-auth-failed]",
-      "kind": "dev_produced_no_changes",
-      "signal": ""
-    },
-    {
       "input": "[dev-produced-no-changes] | [no-changes-produced]",
       "kind": "dev_produced_no_changes",
       "signal": ""
@@ -4914,6 +5104,11 @@
       "input": "[dev-handoff-missing] | [rate-limit-quota-exhausted]",
       "kind": "rate_limit_quota_exhausted",
       "signal": "rate_limit_quota_exhausted"
+    },
+    {
+      "input": "[dev-handoff-missing] | [adapter-auth-failed]",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
     },
     {
       "input": "[dev-handoff-missing] | not_found_error model",
@@ -5016,11 +5211,6 @@
       "signal": ""
     },
     {
-      "input": "[dev-handoff-missing] | [adapter-auth-failed]",
-      "kind": "dev_handoff_missing",
-      "signal": ""
-    },
-    {
       "input": "[dev-handoff-missing] | [no-changes-produced]",
       "kind": "dev_handoff_missing",
       "signal": ""
@@ -5104,6 +5294,11 @@
       "input": "premature turn end | [rate-limit-quota-exhausted]",
       "kind": "rate_limit_quota_exhausted",
       "signal": "rate_limit_quota_exhausted"
+    },
+    {
+      "input": "premature turn end | [adapter-auth-failed]",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
     },
     {
       "input": "premature turn end | not_found_error model",
@@ -5206,11 +5401,6 @@
       "signal": ""
     },
     {
-      "input": "premature turn end | [adapter-auth-failed]",
-      "kind": "premature_turn_end",
-      "signal": ""
-    },
-    {
       "input": "premature turn end | [no-changes-produced]",
       "kind": "premature_turn_end",
       "signal": ""
@@ -5294,6 +5484,11 @@
       "input": "worktree_uncommitted | [rate-limit-quota-exhausted]",
       "kind": "rate_limit_quota_exhausted",
       "signal": "rate_limit_quota_exhausted"
+    },
+    {
+      "input": "worktree_uncommitted | [adapter-auth-failed]",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
     },
     {
       "input": "worktree_uncommitted | not_found_error model",
@@ -5396,11 +5591,6 @@
       "signal": ""
     },
     {
-      "input": "worktree_uncommitted | [adapter-auth-failed]",
-      "kind": "worktree_uncommitted",
-      "signal": ""
-    },
-    {
       "input": "worktree_uncommitted | [no-changes-produced]",
       "kind": "worktree_uncommitted",
       "signal": ""
@@ -5484,6 +5674,11 @@
       "input": "budget_ceiling_hit | [rate-limit-quota-exhausted]",
       "kind": "rate_limit_quota_exhausted",
       "signal": "rate_limit_quota_exhausted"
+    },
+    {
+      "input": "budget_ceiling_hit | [adapter-auth-failed]",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
     },
     {
       "input": "budget_ceiling_hit | not_found_error model",
@@ -5586,11 +5781,6 @@
       "signal": ""
     },
     {
-      "input": "budget_ceiling_hit | [adapter-auth-failed]",
-      "kind": "budget_ceiling_hit",
-      "signal": ""
-    },
-    {
       "input": "budget_ceiling_hit | [no-changes-produced]",
       "kind": "budget_ceiling_hit",
       "signal": ""
@@ -5674,6 +5864,11 @@
       "input": "[runaway-progress-exceeded] | [rate-limit-quota-exhausted]",
       "kind": "rate_limit_quota_exhausted",
       "signal": "rate_limit_quota_exhausted"
+    },
+    {
+      "input": "[runaway-progress-exceeded] | [adapter-auth-failed]",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
     },
     {
       "input": "[runaway-progress-exceeded] | not_found_error model",
@@ -5776,11 +5971,6 @@
       "signal": ""
     },
     {
-      "input": "[runaway-progress-exceeded] | [adapter-auth-failed]",
-      "kind": "runaway_progress",
-      "signal": ""
-    },
-    {
       "input": "[runaway-progress-exceeded] | [no-changes-produced]",
       "kind": "runaway_progress",
       "signal": ""
@@ -5864,6 +6054,11 @@
       "input": "[runaway-ceiling-exceeded] | [rate-limit-quota-exhausted]",
       "kind": "rate_limit_quota_exhausted",
       "signal": "rate_limit_quota_exhausted"
+    },
+    {
+      "input": "[runaway-ceiling-exceeded] | [adapter-auth-failed]",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
     },
     {
       "input": "[runaway-ceiling-exceeded] | not_found_error model",
@@ -5966,11 +6161,6 @@
       "signal": ""
     },
     {
-      "input": "[runaway-ceiling-exceeded] | [adapter-auth-failed]",
-      "kind": "stall_kill",
-      "signal": ""
-    },
-    {
       "input": "[runaway-ceiling-exceeded] | [no-changes-produced]",
       "kind": "stall_kill",
       "signal": ""
@@ -6054,6 +6244,11 @@
       "input": "[cost-cap-exceeded] | [rate-limit-quota-exhausted]",
       "kind": "rate_limit_quota_exhausted",
       "signal": "rate_limit_quota_exhausted"
+    },
+    {
+      "input": "[cost-cap-exceeded] | [adapter-auth-failed]",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
     },
     {
       "input": "[cost-cap-exceeded] | not_found_error model",
@@ -6156,11 +6351,6 @@
       "signal": ""
     },
     {
-      "input": "[cost-cap-exceeded] | [adapter-auth-failed]",
-      "kind": "budget_exceeded",
-      "signal": ""
-    },
-    {
       "input": "[cost-cap-exceeded] | [no-changes-produced]",
       "kind": "budget_exceeded",
       "signal": ""
@@ -6244,6 +6434,11 @@
       "input": "stage-no-output-timeout | [rate-limit-quota-exhausted]",
       "kind": "rate_limit_quota_exhausted",
       "signal": "rate_limit_quota_exhausted"
+    },
+    {
+      "input": "stage-no-output-timeout | [adapter-auth-failed]",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
     },
     {
       "input": "stage-no-output-timeout | not_found_error model",
@@ -6346,11 +6541,6 @@
       "signal": ""
     },
     {
-      "input": "stage-no-output-timeout | [adapter-auth-failed]",
-      "kind": "stall_kill",
-      "signal": ""
-    },
-    {
       "input": "stage-no-output-timeout | [no-changes-produced]",
       "kind": "stall_kill",
       "signal": ""
@@ -6434,6 +6624,11 @@
       "input": "[stall-killed] | [rate-limit-quota-exhausted]",
       "kind": "rate_limit_quota_exhausted",
       "signal": "rate_limit_quota_exhausted"
+    },
+    {
+      "input": "[stall-killed] | [adapter-auth-failed]",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
     },
     {
       "input": "[stall-killed] | not_found_error model",
@@ -6536,11 +6731,6 @@
       "signal": ""
     },
     {
-      "input": "[stall-killed] | [adapter-auth-failed]",
-      "kind": "stall_kill",
-      "signal": ""
-    },
-    {
       "input": "[stall-killed] | [no-changes-produced]",
       "kind": "stall_kill",
       "signal": ""
@@ -6624,6 +6814,11 @@
       "input": "pipeline_budget_exceeded | [rate-limit-quota-exhausted]",
       "kind": "rate_limit_quota_exhausted",
       "signal": "rate_limit_quota_exhausted"
+    },
+    {
+      "input": "pipeline_budget_exceeded | [adapter-auth-failed]",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
     },
     {
       "input": "pipeline_budget_exceeded | not_found_error model",
@@ -6726,11 +6921,6 @@
       "signal": ""
     },
     {
-      "input": "pipeline_budget_exceeded | [adapter-auth-failed]",
-      "kind": "budget_exceeded",
-      "signal": ""
-    },
-    {
       "input": "pipeline_budget_exceeded | [no-changes-produced]",
       "kind": "budget_exceeded",
       "signal": ""
@@ -6814,6 +7004,11 @@
       "input": "schema validation | [rate-limit-quota-exhausted]",
       "kind": "rate_limit_quota_exhausted",
       "signal": "rate_limit_quota_exhausted"
+    },
+    {
+      "input": "schema validation | [adapter-auth-failed]",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
     },
     {
       "input": "schema validation | not_found_error model",
@@ -6916,11 +7111,6 @@
       "signal": ""
     },
     {
-      "input": "schema validation | [adapter-auth-failed]",
-      "kind": "validation_error",
-      "signal": ""
-    },
-    {
       "input": "schema validation | [no-changes-produced]",
       "kind": "validation_error",
       "signal": ""
@@ -6981,196 +7171,6 @@
       "signal": ""
     },
     {
-      "input": "[adapter-auth-failed] | network unavailable: extended github connectivity loss",
-      "kind": "network_unavailable",
-      "signal": ""
-    },
-    {
-      "input": "[adapter-auth-failed] | stream idle timeout",
-      "kind": "stream_idle_timeout",
-      "signal": "stream_idle_timeout"
-    },
-    {
-      "input": "[adapter-auth-failed] | overloaded",
-      "kind": "api_overloaded",
-      "signal": "api_overloaded"
-    },
-    {
-      "input": "[adapter-auth-failed] | socket connection was closed",
-      "kind": "api_connection_lost",
-      "signal": "api_connection_lost"
-    },
-    {
-      "input": "[adapter-auth-failed] | [rate-limit-quota-exhausted]",
-      "kind": "rate_limit_quota_exhausted",
-      "signal": "rate_limit_quota_exhausted"
-    },
-    {
-      "input": "[adapter-auth-failed] | not_found_error model",
-      "kind": "model_unavailable",
-      "signal": ""
-    },
-    {
-      "input": "[adapter-auth-failed] | pipeline-start-failure issue-closed",
-      "kind": "issue_closed",
-      "signal": ""
-    },
-    {
-      "input": "[adapter-auth-failed] | [blocked-dependency]",
-      "kind": "blocked_dependency",
-      "signal": ""
-    },
-    {
-      "input": "[adapter-auth-failed] | architecture approval required",
-      "kind": "architecture_approval_required",
-      "signal": "architecture_approval_required"
-    },
-    {
-      "input": "[adapter-auth-failed] | github-quota-low",
-      "kind": "github_quota_low",
-      "signal": "github_quota_low"
-    },
-    {
-      "input": "[adapter-auth-failed] | github-network-outage",
-      "kind": "github_network_outage",
-      "signal": "github_network_outage"
-    },
-    {
-      "input": "[adapter-auth-failed] | [pr-merge-unmerged",
-      "kind": "pr_merge_unmerged",
-      "signal": ""
-    },
-    {
-      "input": "[adapter-auth-failed] | [stage:worktree-containment]",
-      "kind": "containment_breach",
-      "signal": ""
-    },
-    {
-      "input": "[adapter-auth-failed] | [not-pipeline-actionable]",
-      "kind": "not_pipeline_actionable",
-      "signal": ""
-    },
-    {
-      "input": "[adapter-auth-failed] | [dev-produced-no-changes]",
-      "kind": "dev_produced_no_changes",
-      "signal": ""
-    },
-    {
-      "input": "[adapter-auth-failed] | [dev-handoff-missing]",
-      "kind": "dev_handoff_missing",
-      "signal": ""
-    },
-    {
-      "input": "[adapter-auth-failed] | premature turn end",
-      "kind": "premature_turn_end",
-      "signal": ""
-    },
-    {
-      "input": "[adapter-auth-failed] | worktree_uncommitted",
-      "kind": "worktree_uncommitted",
-      "signal": ""
-    },
-    {
-      "input": "[adapter-auth-failed] | budget_ceiling_hit",
-      "kind": "budget_ceiling_hit",
-      "signal": ""
-    },
-    {
-      "input": "[adapter-auth-failed] | [runaway-progress-exceeded]",
-      "kind": "runaway_progress",
-      "signal": ""
-    },
-    {
-      "input": "[adapter-auth-failed] | [runaway-ceiling-exceeded]",
-      "kind": "stall_kill",
-      "signal": ""
-    },
-    {
-      "input": "[adapter-auth-failed] | [cost-cap-exceeded]",
-      "kind": "budget_exceeded",
-      "signal": ""
-    },
-    {
-      "input": "[adapter-auth-failed] | stage-no-output-timeout",
-      "kind": "stall_kill",
-      "signal": ""
-    },
-    {
-      "input": "[adapter-auth-failed] | [stall-killed]",
-      "kind": "stall_kill",
-      "signal": ""
-    },
-    {
-      "input": "[adapter-auth-failed] | pipeline_budget_exceeded",
-      "kind": "budget_exceeded",
-      "signal": ""
-    },
-    {
-      "input": "[adapter-auth-failed] | schema validation",
-      "kind": "validation_error",
-      "signal": ""
-    },
-    {
-      "input": "[adapter-auth-failed] | [no-changes-produced]",
-      "kind": "adapter_auth_failed",
-      "signal": "adapter_auth_failed"
-    },
-    {
-      "input": "[adapter-auth-failed] | [validation-failed]",
-      "kind": "adapter_auth_failed",
-      "signal": "adapter_auth_failed"
-    },
-    {
-      "input": "[adapter-auth-failed] | [validation-inconclusive]",
-      "kind": "adapter_auth_failed",
-      "signal": "adapter_auth_failed"
-    },
-    {
-      "input": "[adapter-auth-failed] | [branch-forked]",
-      "kind": "adapter_auth_failed",
-      "signal": "adapter_auth_failed"
-    },
-    {
-      "input": "[adapter-auth-failed] | [commit-orphaned]",
-      "kind": "adapter_auth_failed",
-      "signal": "adapter_auth_failed"
-    },
-    {
-      "input": "[adapter-auth-failed] | [permission-denied]",
-      "kind": "adapter_auth_failed",
-      "signal": "adapter_auth_failed"
-    },
-    {
-      "input": "[adapter-auth-failed] | stage_context_unreadable",
-      "kind": "adapter_auth_failed",
-      "signal": "adapter_auth_failed"
-    },
-    {
-      "input": "[adapter-auth-failed] | dev_build_verification_missing",
-      "kind": "adapter_auth_failed",
-      "signal": "adapter_auth_failed"
-    },
-    {
-      "input": "[adapter-auth-failed] | dev_build_verification_failed",
-      "kind": "adapter_auth_failed",
-      "signal": "adapter_auth_failed"
-    },
-    {
-      "input": "[adapter-auth-failed] | dev_tests_failed",
-      "kind": "adapter_auth_failed",
-      "signal": "adapter_auth_failed"
-    },
-    {
-      "input": "[adapter-auth-failed] | pr_merge_lookup_failed",
-      "kind": "adapter_auth_failed",
-      "signal": "adapter_auth_failed"
-    },
-    {
-      "input": "[adapter-auth-failed] | subagent crash",
-      "kind": "adapter_auth_failed",
-      "signal": "adapter_auth_failed"
-    },
-    {
       "input": "[no-changes-produced] | network unavailable: extended github connectivity loss",
       "kind": "network_unavailable",
       "signal": ""
@@ -7194,6 +7194,11 @@
       "input": "[no-changes-produced] | [rate-limit-quota-exhausted]",
       "kind": "rate_limit_quota_exhausted",
       "signal": "rate_limit_quota_exhausted"
+    },
+    {
+      "input": "[no-changes-produced] | [adapter-auth-failed]",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
     },
     {
       "input": "[no-changes-produced] | not_found_error model",
@@ -7301,11 +7306,6 @@
       "signal": ""
     },
     {
-      "input": "[no-changes-produced] | [adapter-auth-failed]",
-      "kind": "adapter_auth_failed",
-      "signal": "adapter_auth_failed"
-    },
-    {
       "input": "[no-changes-produced] | [validation-failed]",
       "kind": "no_changes_produced",
       "signal": ""
@@ -7384,6 +7384,11 @@
       "input": "[validation-failed] | [rate-limit-quota-exhausted]",
       "kind": "rate_limit_quota_exhausted",
       "signal": "rate_limit_quota_exhausted"
+    },
+    {
+      "input": "[validation-failed] | [adapter-auth-failed]",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
     },
     {
       "input": "[validation-failed] | not_found_error model",
@@ -7491,11 +7496,6 @@
       "signal": ""
     },
     {
-      "input": "[validation-failed] | [adapter-auth-failed]",
-      "kind": "adapter_auth_failed",
-      "signal": "adapter_auth_failed"
-    },
-    {
       "input": "[validation-failed] | [no-changes-produced]",
       "kind": "no_changes_produced",
       "signal": ""
@@ -7574,6 +7574,11 @@
       "input": "[validation-inconclusive] | [rate-limit-quota-exhausted]",
       "kind": "rate_limit_quota_exhausted",
       "signal": "rate_limit_quota_exhausted"
+    },
+    {
+      "input": "[validation-inconclusive] | [adapter-auth-failed]",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
     },
     {
       "input": "[validation-inconclusive] | not_found_error model",
@@ -7681,11 +7686,6 @@
       "signal": ""
     },
     {
-      "input": "[validation-inconclusive] | [adapter-auth-failed]",
-      "kind": "adapter_auth_failed",
-      "signal": "adapter_auth_failed"
-    },
-    {
       "input": "[validation-inconclusive] | [no-changes-produced]",
       "kind": "no_changes_produced",
       "signal": ""
@@ -7764,6 +7764,11 @@
       "input": "[branch-forked] | [rate-limit-quota-exhausted]",
       "kind": "rate_limit_quota_exhausted",
       "signal": "rate_limit_quota_exhausted"
+    },
+    {
+      "input": "[branch-forked] | [adapter-auth-failed]",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
     },
     {
       "input": "[branch-forked] | not_found_error model",
@@ -7871,11 +7876,6 @@
       "signal": ""
     },
     {
-      "input": "[branch-forked] | [adapter-auth-failed]",
-      "kind": "adapter_auth_failed",
-      "signal": "adapter_auth_failed"
-    },
-    {
       "input": "[branch-forked] | [no-changes-produced]",
       "kind": "no_changes_produced",
       "signal": ""
@@ -7954,6 +7954,11 @@
       "input": "[commit-orphaned] | [rate-limit-quota-exhausted]",
       "kind": "rate_limit_quota_exhausted",
       "signal": "rate_limit_quota_exhausted"
+    },
+    {
+      "input": "[commit-orphaned] | [adapter-auth-failed]",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
     },
     {
       "input": "[commit-orphaned] | not_found_error model",
@@ -8061,11 +8066,6 @@
       "signal": ""
     },
     {
-      "input": "[commit-orphaned] | [adapter-auth-failed]",
-      "kind": "adapter_auth_failed",
-      "signal": "adapter_auth_failed"
-    },
-    {
       "input": "[commit-orphaned] | [no-changes-produced]",
       "kind": "no_changes_produced",
       "signal": ""
@@ -8144,6 +8144,11 @@
       "input": "[permission-denied] | [rate-limit-quota-exhausted]",
       "kind": "rate_limit_quota_exhausted",
       "signal": "rate_limit_quota_exhausted"
+    },
+    {
+      "input": "[permission-denied] | [adapter-auth-failed]",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
     },
     {
       "input": "[permission-denied] | not_found_error model",
@@ -8251,11 +8256,6 @@
       "signal": ""
     },
     {
-      "input": "[permission-denied] | [adapter-auth-failed]",
-      "kind": "adapter_auth_failed",
-      "signal": "adapter_auth_failed"
-    },
-    {
       "input": "[permission-denied] | [no-changes-produced]",
       "kind": "no_changes_produced",
       "signal": ""
@@ -8334,6 +8334,11 @@
       "input": "stage_context_unreadable | [rate-limit-quota-exhausted]",
       "kind": "rate_limit_quota_exhausted",
       "signal": "rate_limit_quota_exhausted"
+    },
+    {
+      "input": "stage_context_unreadable | [adapter-auth-failed]",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
     },
     {
       "input": "stage_context_unreadable | not_found_error model",
@@ -8441,11 +8446,6 @@
       "signal": ""
     },
     {
-      "input": "stage_context_unreadable | [adapter-auth-failed]",
-      "kind": "adapter_auth_failed",
-      "signal": "adapter_auth_failed"
-    },
-    {
       "input": "stage_context_unreadable | [no-changes-produced]",
       "kind": "no_changes_produced",
       "signal": ""
@@ -8524,6 +8524,11 @@
       "input": "dev_build_verification_missing | [rate-limit-quota-exhausted]",
       "kind": "rate_limit_quota_exhausted",
       "signal": "rate_limit_quota_exhausted"
+    },
+    {
+      "input": "dev_build_verification_missing | [adapter-auth-failed]",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
     },
     {
       "input": "dev_build_verification_missing | not_found_error model",
@@ -8631,11 +8636,6 @@
       "signal": ""
     },
     {
-      "input": "dev_build_verification_missing | [adapter-auth-failed]",
-      "kind": "adapter_auth_failed",
-      "signal": "adapter_auth_failed"
-    },
-    {
       "input": "dev_build_verification_missing | [no-changes-produced]",
       "kind": "no_changes_produced",
       "signal": ""
@@ -8714,6 +8714,11 @@
       "input": "dev_build_verification_failed | [rate-limit-quota-exhausted]",
       "kind": "rate_limit_quota_exhausted",
       "signal": "rate_limit_quota_exhausted"
+    },
+    {
+      "input": "dev_build_verification_failed | [adapter-auth-failed]",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
     },
     {
       "input": "dev_build_verification_failed | not_found_error model",
@@ -8821,11 +8826,6 @@
       "signal": ""
     },
     {
-      "input": "dev_build_verification_failed | [adapter-auth-failed]",
-      "kind": "adapter_auth_failed",
-      "signal": "adapter_auth_failed"
-    },
-    {
       "input": "dev_build_verification_failed | [no-changes-produced]",
       "kind": "no_changes_produced",
       "signal": ""
@@ -8904,6 +8904,11 @@
       "input": "dev_tests_failed | [rate-limit-quota-exhausted]",
       "kind": "rate_limit_quota_exhausted",
       "signal": "rate_limit_quota_exhausted"
+    },
+    {
+      "input": "dev_tests_failed | [adapter-auth-failed]",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
     },
     {
       "input": "dev_tests_failed | not_found_error model",
@@ -9011,11 +9016,6 @@
       "signal": ""
     },
     {
-      "input": "dev_tests_failed | [adapter-auth-failed]",
-      "kind": "adapter_auth_failed",
-      "signal": "adapter_auth_failed"
-    },
-    {
       "input": "dev_tests_failed | [no-changes-produced]",
       "kind": "no_changes_produced",
       "signal": ""
@@ -9094,6 +9094,11 @@
       "input": "pr_merge_lookup_failed | [rate-limit-quota-exhausted]",
       "kind": "rate_limit_quota_exhausted",
       "signal": "rate_limit_quota_exhausted"
+    },
+    {
+      "input": "pr_merge_lookup_failed | [adapter-auth-failed]",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
     },
     {
       "input": "pr_merge_lookup_failed | not_found_error model",
@@ -9201,11 +9206,6 @@
       "signal": ""
     },
     {
-      "input": "pr_merge_lookup_failed | [adapter-auth-failed]",
-      "kind": "adapter_auth_failed",
-      "signal": "adapter_auth_failed"
-    },
-    {
       "input": "pr_merge_lookup_failed | [no-changes-produced]",
       "kind": "no_changes_produced",
       "signal": ""
@@ -9284,6 +9284,11 @@
       "input": "subagent crash | [rate-limit-quota-exhausted]",
       "kind": "rate_limit_quota_exhausted",
       "signal": "rate_limit_quota_exhausted"
+    },
+    {
+      "input": "subagent crash | [adapter-auth-failed]",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
     },
     {
       "input": "subagent crash | not_found_error model",
@@ -9389,11 +9394,6 @@
       "input": "subagent crash | schema validation",
       "kind": "validation_error",
       "signal": ""
-    },
-    {
-      "input": "subagent crash | [adapter-auth-failed]",
-      "kind": "adapter_auth_failed",
-      "signal": "adapter_auth_failed"
     },
     {
       "input": "subagent crash | [no-changes-produced]",
@@ -9531,6 +9531,26 @@
       "signal": "rate_limit_quota_exhausted"
     },
     {
+      "input": "[adapter-auth-failed] | session limit",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "session limit | [adapter-auth-failed]",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "[adapter-auth-failed] | usage limit",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "usage limit | [adapter-auth-failed]",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
+    },
+    {
       "input": "architecture approval required | session limit",
       "kind": "architecture_approval_required",
       "signal": "architecture_approval_required"
@@ -9589,26 +9609,6 @@
       "input": "usage limit | github-network-outage",
       "kind": "github_network_outage",
       "signal": "github_network_outage"
-    },
-    {
-      "input": "[adapter-auth-failed] | session limit",
-      "kind": "adapter_auth_failed",
-      "signal": "adapter_auth_failed"
-    },
-    {
-      "input": "session limit | [adapter-auth-failed]",
-      "kind": "adapter_auth_failed",
-      "signal": "adapter_auth_failed"
-    },
-    {
-      "input": "[adapter-auth-failed] | usage limit",
-      "kind": "adapter_auth_failed",
-      "signal": "adapter_auth_failed"
-    },
-    {
-      "input": "usage limit | [adapter-auth-failed]",
-      "kind": "adapter_auth_failed",
-      "signal": "adapter_auth_failed"
     }
   ]
 }

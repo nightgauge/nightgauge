@@ -1313,6 +1313,87 @@
       "source": "synthetic",
       "producer": "gates.PrMergeGate's gh-and-git-both-failed branch, wrapped by the scheduler",
       "rationale": "The gate could not see the PR (#1237) — gh failed or was rate-limited on every attempt and local git found no merge commit. Infrastructure: the merge may have landed. Must not read as pr_merge_unmerged (a PR the gate saw open) nor as a crash."
+    },
+    {
+      "id": "multiline-claude-headless-socket-drop-after-retry-notice",
+      "input": "exit 1: Retrying request to /v1/messages in 2000ms\nAPI Error: The socket connection was closed unexpectedly",
+      "expected": "api_connection_lost",
+      "expected_signal": "api_connection_lost",
+      "source": "synthetic",
+      "producer": "claude-headless (internal/execution/adapters/claude.go, registry.go factory \"claude-headless\") — the Claude CLI's own SDK retry log line followed by its transport-drop wording (#4002), reaching the classifier as raw stderr via stderrFailureReason's last-3-lines join, wrapped in the scheduler's `exit N: ` prefix (#565 AC1's input_contract).",
+      "rationale": "Multi-line adapter-authored coverage for the claude-headless constructor (#565 AC2): a benign retry-backoff line the CLI prints to stderr before the fatal transport drop must not stop the real error's own wording (`socket connection was closed`) from being seen and claimed by api-connection-lost. Above the crash rules so a seconds-long blip is not misread as a process death."
+    },
+    {
+      "id": "multiline-claude-sdk-agent-sdk-traceback-overloaded",
+      "input": "exit 1: Traceback (most recent call last):\n  File \"agent_sdk/client.py\", line 214, in _stream\nanthropic.APIStatusError: Error code: 529 - Overloaded",
+      "expected": "api_overloaded",
+      "expected_signal": "api_overloaded",
+      "source": "synthetic",
+      "producer": "claude-sdk (internal/execution/adapters/claude_sdk.go, registry.go factory \"claude-sdk\") — a Python Agent SDK traceback ending in Anthropic's 529 (#3835 WS4), reaching the classifier as raw stderr rather than the CLI's stream-json result envelope, because the SDK path never produces one.",
+      "rationale": "Multi-line adapter-authored coverage for the claude-sdk constructor (#565 AC2): the SDK surfaces the same 529 as the headless CLI but shaped as a stack trace, with the traceback frame lines carrying no table term at all — only the last line does. `overloaded` is distinctive to this API error and must win over the stall-kill/crash rules so a momentary capacity blip gets a short backoff, not a lifetime-failure increment."
+    },
+    {
+      "id": "multiline-codex-usage-limit-no-model-named",
+      "input": "[codex] retrying tool call after backoff\ncodex: usage limit reached for this account",
+      "expected": "",
+      "expected_signal": "rate_limit_quota_exhausted",
+      "source": "synthetic",
+      "producer": "codex (internal/execution/adapters/codex.go, registry.go factory \"codex\") — the Codex CLI's own quota wording preceded by an unrelated retry-progress line, reaching the classifier as raw stderr (no skillRunner bracketed stamp exists on this path).",
+      "rationale": "Multi-line adapter-authored coverage for the codex constructor (#565 AC2), and a genuine exercise of the session-usage-limit-quota signal extension on a realistic multi-line tail: no rule above names a model, so the record ladder answers nothing and the extension is the ONLY thing standing between this text and subagent_crash. The leading `[codex] retrying tool call after backoff` line is deliberately inert — it carries no table term — to show the extension's `~usage limit` boundary triggers on the real second line regardless of what came before it."
+    },
+    {
+      "id": "multiline-gemini-model-not-found-after-catalog-fetch",
+      "input": "exit 1: Fetching model catalog...\nError: model not found: gemini-3.0-ultra-preview",
+      "expected": "model_unavailable",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "gemini (internal/execution/adapters/gemini.go, registry.go factory \"gemini\") — the Gemini CLI's own model-lookup failure (#42) preceded by an inert progress line, reaching the classifier as raw stderr.",
+      "rationale": "Multi-line adapter-authored coverage for the gemini constructor (#565 AC2): the `Fetching model catalog...` line is real CLI chatter with no table term, and the actual failure (`model not found`) sits alone on the last line. Pins that a benign preceding line cannot suppress the specific model-unavailable match that follows it."
+    },
+    {
+      "id": "multiline-gemini-sdk-adc-credentials-error-falls-through",
+      "input": "exit 1: Loading application default credentials\ngoogle.auth.exceptions.DefaultCredentialsError: Could not automatically determine credentials. Please set GOOGLE_APPLICATION_CREDENTIALS or explicitly create credentials and re-run the application.",
+      "expected": "subagent_crash",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "gemini-sdk (internal/execution/adapters/gemini_sdk.go, registry.go factory \"gemini-sdk\") — Google's real, well-known Application Default Credentials error text, reaching the classifier as raw stderr with no bracketed marker of any kind.",
+      "rationale": "Multi-line adapter-authored coverage for the gemini-sdk constructor (#565 AC2), and a DELIBERATE negative finding: no rule in the table recognises Google's ADC credential wording (it says nothing like `not signed in`), so this real vendor shape falls all the way through to the generic `exit ` fallback and records subagent_crash. That is the correct, intended behaviour for an unrecognised reason (table.go's package doc: no match anywhere yields the empty kind and callers fall back to the most generic kind) — not a bug to fix here, but worth pinning so a future reader does not mistake the silence for an oversight."
+    },
+    {
+      "id": "multiline-ollama-local-daemon-connection-refused",
+      "input": "exit 1: Connecting to http://localhost:11434 ...\nError: dial tcp 127.0.0.1:11434: connect: connection refused",
+      "expected": "subagent_crash",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "ollama (internal/execution/adapters/ollama.go, registry.go factory \"ollama\") — a realistic local-daemon-not-running failure. The ollama bridge is non-agentic and its execution bottoms out in the TypeScript fetch/SSE adapters (adapter.go's Agentic doc), but the reason text still reaches Classify through the same stderr path.",
+      "rationale": "Multi-line adapter-authored coverage for the ollama constructor (#565 AC2): `connection refused` alone does NOT satisfy api-connection-lost, which gates that alternative on the co-occurring literal `api error` specifically so an unrelated infrastructure refusal does not misclassify as an Anthropic transport drop (the rule's own `why`). A bare Go `dial tcp ... connect: connection refused` is exactly the unrelated shape that gate exists to keep out, so this correctly falls to the generic fallback."
+    },
+    {
+      "id": "multiline-lm-studio-local-server-econnrefused",
+      "input": "exit 1: POST http://localhost:1234/v1/chat/completions\nError: connect ECONNREFUSED 127.0.0.1:1234",
+      "expected": "subagent_crash",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "lm-studio (internal/execution/adapters/lmstudio.go, registry.go factory \"lm-studio\") — a realistic local LM Studio server failure, same non-agentic bridge shape as ollama.",
+      "rationale": "Multi-line adapter-authored coverage for the lm-studio constructor (#565 AC2): mirrors multiline-ollama-local-daemon-connection-refused for the sibling bridge. `econnrefused` alone does not satisfy api-connection-lost's `[\"api error\", \"econnrefused\"]` alternative because the request line naming the local port is not an Anthropic `API Error:` envelope, so this correctly falls to the generic fallback rather than being misread as an Anthropic transport drop."
+    },
+    {
+      "id": "multiline-copilot-gh-secondary-rate-limit",
+      "input": "exit 1: gh: You have exceeded a secondary rate limit for the GitHub API\nPlease wait a few minutes before you try again",
+      "expected": "subagent_crash",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "copilot (internal/execution/adapters/copilot.go, registry.go factory \"copilot\") — `gh`'s own real secondary-rate-limit wording, which the Copilot CLI wraps.",
+      "rationale": "Multi-line adapter-authored coverage for the copilot constructor (#565 AC2), and a DELIBERATE out-of-scope finding: github-quota-low exists for a semantically different producer (HeadlessOrchestrator.preCheckAuth's own GraphQL board-budget preflight, stamped `[pipeline-start-failure] github-quota-low`), not for `gh`'s native secondary-rate-limit throttle mid-stage. This real vendor wording matches no rule and falls to subagent_crash, which books a lifetime failure for a window that clears on its own — a genuine gap, but a new rule is out of scope for #565 and is reported rather than fixed here."
+    },
+    {
+      "id": "multiline-grok-hard-cap-notice-then-not-signed-in",
+      "input": "exit 1: Increasing per-request retry hard cap to 5 attempts\nError: Not signed in. To authenticate without a browser, run: grok login --device-code.",
+      "expected": "adapter_auth_failed",
+      "expected_signal": "adapter_auth_failed",
+      "source": "synthetic",
+      "producer": "grok (internal/execution/adapters/grok.go, registry.go factory \"grok\") — the grok Build CLI's real `Not signed in` auth wording (#591), preceded by an unrelated retry-configuration notice that happens to contain the bare literal `hard cap`.",
+      "rationale": "THE #565 AC3 NEGATIVE CONTROL. Matching is over the WHOLE joined string, not per line (table.json's input_contract), so a rule's bare literal can be satisfied by an EARLIER, unrelated line even when a LATER line names the real, more specific failure. Before #565 this input classified stall_kill: stall-kill's bare `hard cap` clause sat at ladder position 23 while adapter-auth-failed's `not signed in` sat at position 26, so the retry-configuration noise line won over the actual auth failure that ended the stage. #565 moved adapter-auth-failed to directly follow rate-limit-quota-exhausted, grouping it with the OTHER rule that exists specifically to classify raw, unmarked vendor CLI stderr (#560/#591 are siblings), which is what this row now pins as passing. A retry-loop mentioning a hard cap is not itself a stall; a CLI that never authenticated is never going to retry its way out, and reporting stall_kill sent it down a backoff-and-retry recovery path for a failure retrying cannot fix."
     }
   ]
 }
