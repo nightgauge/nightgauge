@@ -161,6 +161,14 @@ table, carve-out rationale, and consequence analysis.
   Text prints `skipped <path> (active-run: paused-snapshot, 13d)`; `--json`
   adds `"reasonDetail"` beside `"reason"`. All six arms used to print the same
   `active-run` word.
+- **Second consumer named, not left to inherit silently**
+  (`internal/orchestrator/autonomous_compose_reconcile.go`): the same scan feeds
+  the autonomous compose reconcile, whose action is `docker compose down -v`. Its
+  doc comment claimed a pause protects its stack unconditionally, which the cap
+  makes false; it now states the bound. Under `serve` nothing changes — the orphan
+  reconciler in that process was already collecting the snapshot past the same cap
+  — and under `autonomous run` a fortnight-old pause is debris by the same
+  reasoning, named in a warning before anything is torn down.
 
 #### Empty epics invisible in Repositories tree view (#3329)
 

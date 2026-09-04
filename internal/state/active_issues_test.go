@@ -493,7 +493,21 @@ func TestActiveIssuesFromSnapshots_ProtectionReasonPerArm(t *testing.T) {
 	// Arm: a deliberate pause, inside the retention cap.
 	paused := NewRuntimeState("owner/repo", 4443, "item", mustRunID(t))
 	paused.SetPaused(true)
-	backdate(t, persistSnapshot(t, dir, paused), now.Add(-72*time.Hour))
+	pausedPath := persistSnapshot(t, dir, paused)
+	backdate(t, pausedPath, now.Add(-72*time.Hour))
+
+	// Arm: a name/body identity mismatch, inside the retention cap. Those bytes
+	// carry #4443's run id under a filename claiming #4446's, and the mismatch
+	// arm is reached before the paused one, so this row is not a second pause.
+	pausedBytes, err := os.ReadFile(pausedPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mismatch := filepath.Join(dir, SnapshotFilename(4446, mustRunID(t)))
+	if err := os.WriteFile(mismatch, pausedBytes, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	backdate(t, mismatch, now.Add(-2*time.Minute))
 
 	// Arm: an unreadable body, inside the retention cap.
 	corrupt := filepath.Join(dir, SnapshotFilename(4444, mustRunID(t)))
@@ -521,6 +535,7 @@ func TestActiveIssuesFromSnapshots_ProtectionReasonPerArm(t *testing.T) {
 		4443: "paused-snapshot",
 		4444: "corrupt-snapshot",
 		4445: "terminal-tail",
+		4446: "identity-mismatch",
 	}
 	for issue, arm := range wantArm {
 		if !res.Issues[issue] {
@@ -533,5 +548,114 @@ func TestActiveIssuesFromSnapshots_ProtectionReasonPerArm(t *testing.T) {
 	}
 	if len(res.Protected) != len(res.Issues) {
 		t.Errorf("every protected issue needs exactly one arm: Issues = %v, Protected = %v", res.Issues, res.Protected)
+	}
+}
+
+// TestActiveIssuesFromSnapshots_IdentityMismatchAgesOut is the same bound at the
+// third and last bounded arm. A file whose name promises one run identity and
+// whose body carries another is conservatively ACTIVE while it is fresh — it
+// still names a real run and that directory must not be destroyed — but past the
+// retention cap it is debris with a filename, and the unbounded shape #443 names
+// is exactly "this arm protects a worktree forever".
+//
+// Without this the arm is revert-proof: flipping its `age >= SnapshotRetention`
+// guard to `false` leaves the whole package green, because
+// TestActiveIssuesFromSnapshots_NameBodyMismatchIsActive only ever writes a
+// FRESH file and therefore only covers the still-protects side.
+func TestActiveIssuesFromSnapshots_IdentityMismatchAgesOut(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Now()
+	rs := NewRuntimeState("owner/repo", 4433, "item", mustRunID(t))
+	real := persistSnapshot(t, dir, rs)
+	data, err := os.ReadFile(real)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Same bytes under a filename claiming a different run: name and body now
+	// disagree about which run this is.
+	mismatch := filepath.Join(dir, SnapshotFilename(4434, mustRunID(t)))
+	if err := os.WriteFile(mismatch, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	backdate(t, mismatch, now.Add(-13*24*time.Hour))
+	res, err := activeIssuesFromSnapshotsAt(dir, now)
+	if err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	if !res.Issues[4434] {
+		t.Fatalf("a mismatch inside the retention cap must still protect; got %v (warnings %v)", res.Issues, res.Warnings)
+	}
+	if got := res.Protected[4434]; !strings.HasPrefix(got, "identity-mismatch") {
+		t.Errorf("Protected[4434] = %q, want the identity-mismatch arm", got)
+	}
+	if got := res.Protected[4434]; !strings.Contains(got, "13d") {
+		t.Errorf("Protected[4434] = %q, want the evidence age beside the arm", got)
+	}
+
+	backdate(t, mismatch, now.Add(-15*24*time.Hour))
+	res, err = activeIssuesFromSnapshotsAt(dir, now)
+	if err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	if res.Issues[4434] {
+		t.Errorf("a name/body mismatch past the %s retention cap must NOT protect the worktree forever; got %v", runstate.SnapshotRetention, res.Issues)
+	}
+	if _, ok := res.Protected[4434]; ok {
+		t.Errorf("an unprotected issue must carry no protecting arm; Protected = %v", res.Protected)
+	}
+	joined := strings.Join(res.Warnings, "\n")
+	if !strings.Contains(joined, "15d") || !strings.Contains(joined, "retention") {
+		t.Errorf("the aged-out mismatch must be named with its age and the retention cap; warnings = %v", res.Warnings)
+	}
+	// The real snapshot beside it is untouched by the mismatch's expiry.
+	if !res.Issues[4433] {
+		t.Errorf("the valid fresh snapshot must still protect its own issue; got %v", res.Issues)
+	}
+}
+
+// TestActiveIssuesFromSnapshots_UnstattableSnapshotIsUnboundedlyActive pins the
+// ONE arm that is deliberately exempt from the retention cap, and pins the arm
+// string `unstattable-snapshot` that docs/GO_BINARY.md publishes. Retention needs
+// an mtime; this is the entry whose mtime could not be read, so there is nothing
+// to compare against a cap and the conservative answer is the only one available.
+//
+// The fixture is a real stat failure, not a fake: a directory with read but no
+// SEARCH permission still enumerates (`getdents` needs r) while every `lstat`
+// inside it fails with EACCES (which needs x). Root ignores both bits, so the
+// test skips there rather than asserting something the kernel will not do.
+func TestActiveIssuesFromSnapshots_UnstattableSnapshotIsUnboundedlyActive(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses directory search permission, so no entry can be made unstattable")
+	}
+	dir := t.TempDir()
+	now := time.Now()
+	rs := NewRuntimeState("owner/repo", 4435, "item", mustRunID(t))
+	path := persistSnapshot(t, dir, rs)
+	// Old enough that every bounded arm would have aged out — the point is that
+	// this one cannot age out, because its age is exactly what is unreadable.
+	backdate(t, path, now.Add(-90*24*time.Hour))
+
+	if err := os.Chmod(dir, 0o400); err != nil {
+		t.Fatalf("drop search permission: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+
+	if _, err := os.Stat(path); err == nil {
+		t.Skip("this filesystem still permits stat without directory search permission")
+	}
+
+	res, err := activeIssuesFromSnapshotsAt(dir, now)
+	if err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	if !res.Issues[4435] {
+		t.Fatalf("a snapshot the scan could not stat must count as ACTIVE at any age; got %v (warnings %v)", res.Issues, res.Warnings)
+	}
+	if got := res.Protected[4435]; got != "unstattable-snapshot" {
+		t.Errorf("Protected[4435] = %q, want the bare unstattable-snapshot arm (there is no age to report)", got)
+	}
+	if !strings.Contains(strings.Join(res.Warnings, "\n"), "could not stat") {
+		t.Errorf("the unstattable entry must be named; warnings = %v", res.Warnings)
 	}
 }

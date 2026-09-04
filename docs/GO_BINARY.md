@@ -1309,6 +1309,19 @@ it: the reconciler collects past the cap, and this scan stops protecting past
 it. Two copies of that number would be two answers to "is that run still
 there?" waiting to disagree.
 
+**The scan has a second consumer, and the bound reaches it too.**
+`ActiveIssuesFromSnapshots` also feeds the autonomous compose reconcile
+(`snapshotInFlightIssues` → `sweepOrphanedComposeProjects`), whose action is
+`docker compose down -v` — named volumes nothing recovers. So the same fourteen
+days now bound how long a paused run's **compose stack** is vouched for, not
+only its worktree. Under `serve` that is not a behaviour change at all: the IPC
+orphan reconciler runs in the same process and was already collecting the
+snapshot past that cap, so the file the arm read was disappearing underneath it
+anyway. Under `nightgauge autonomous run`, where no orphan reconciler exists,
+the bound is the intended semantics — a pause nobody resumed in a fortnight is
+not a pending decision. Either way the scan's warnings are logged before the
+teardown, so an aged-out pause is named rather than silently swept.
+
 **Every protection names its arm.** `ActiveIssues.Protected` carries, per
 protected issue, the arm that vouched for it and the evidence that arm read —
 `live-sidecar, pid 431`, `stage-child, pid 4312`, `timestamp-lease, 12m`,
@@ -1317,8 +1330,12 @@ protected issue, the arm that vouched for it and the evidence that arm read —
 sidecar is read first because it is the only arm whose evidence is current. The
 sweep carries that string onto `SkippedWorktree.ReasonDetail`, so the CLI prints
 `skipped <path> (active-run: paused-snapshot, 13d)` and `--json` adds
-`"reasonDetail"` beside `"reason"`. Before #443 all six arms printed the
-identical `active-run` word and an operator auditing a refusal had to open the
+`"reasonDetail"` beside `"reason"`. All eight arm strings are pinned: seven by
+`TestActiveIssuesFromSnapshots_ProtectionReasonPerArm`, and
+`unstattable-snapshot` by its own fixture, which needs a directory with read but
+no search permission so that enumeration succeeds while every `lstat` inside it
+fails. A renamed arm therefore breaks a test rather than the operator surface. Before
+#443 every arm printed the identical `active-run` word and an operator auditing a refusal had to open the
 state directory to tell a live process from a fortnight-old pause. The field is
 empty for a caller with no arms to name — the autonomous reconcile protects from
 its in-process registry — because a detail on a skip nobody attributed would be
