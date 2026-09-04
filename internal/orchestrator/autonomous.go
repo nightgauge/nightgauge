@@ -4553,11 +4553,24 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 		// stream died on a socket close / DNS failure (local network blip)
 		// rather than a 529. Identical recovery — the blip clears on its own
 		// within seconds-to-minutes and nothing about the issue is at fault.
+		//
+		// github_rate_limited (#1391) is the GitHub-side sibling: `gh` was
+		// throttled mid-stage by a secondary rate limit, an emptied primary
+		// bucket, or a 429. Same recovery for the same reason, and deliberately
+		// NOT the github_quota_low branch above — that one waits on a reset time
+		// read from the PRIMARY-bucket tracker and applies a global cooldown to
+		// it, which is the wrong clock for a secondary throttle (the primary
+		// bucket can be full while it is active) and a reset a secondary limit
+		// never publishes. Exponential backoff converges without needing one.
 		if terminalFailureKind == TerminalKindApiOverloaded ||
-			terminalFailureKind == TerminalKindApiConnectionLost {
+			terminalFailureKind == TerminalKindApiConnectionLost ||
+			terminalFailureKind == TerminalKindGitHubRateLimited {
 			label := "api-overloaded (Anthropic 529, transient)"
-			if terminalFailureKind == TerminalKindApiConnectionLost {
+			switch terminalFailureKind {
+			case TerminalKindApiConnectionLost:
 				label = "api-connection-lost (Anthropic transport drop, transient)"
+			case TerminalKindGitHubRateLimited:
+				label = "github-rate-limited (GitHub API throttle mid-stage, transient)"
 			}
 			priorAttempts := as.retryBackoff[key].Attempts
 			if priorAttempts >= apiOverloadedMaxAttempts {
