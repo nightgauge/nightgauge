@@ -229,12 +229,7 @@ func (as *AutonomousScheduler) auditAttentionTransition(entry attention.JournalE
 	default:
 		return
 	}
-	root := as.workspaceRoot
-	if as.scheduler != nil {
-		if r := as.scheduler.runRoot(req.Context.Repo); r != "" {
-			root = r
-		}
-	}
+	root := as.steerRootFor(req.Context.Repo)
 	w := trace.NewWriter(root, req.Context.RunID, req.Context.Repo, req.Context.Issue)
 	payload := trace.DecisionRequestPayload{
 		ID:         req.ID,
@@ -1719,4 +1714,25 @@ func BuildOutOfScopeBlocker(repo string, issue int, runID, stage string) attenti
 		Steer: &attention.Steer{Enabled: true,
 			Hint: "Note which work this actually depends on, or why it should stay blocked"},
 	}
+}
+
+// steerRootFor resolves the root a run-scoped artifact for `repo` belongs in:
+// the per-repo run root when the scheduler can resolve one, else the daemon's
+// launch root.
+//
+// Extracted (#1407) because two callers need it and only one had it. The trace
+// listener resolved the per-repo root from the day it was written; the operator
+// steer writer, 1,050 lines away in the same subsystem, closed over the launch
+// root instead. The reader — runPipeline, via resolveRunRoot(item.Repo) — uses
+// the per-repo root, so on a multi-repo workspace the operator's note was
+// written to a directory the run never opens and was silently discarded while
+// the card resolved successfully.
+func (as *AutonomousScheduler) steerRootFor(repo string) string {
+	root := as.workspaceRoot
+	if as.scheduler != nil {
+		if r := as.scheduler.runRoot(repo); r != "" {
+			root = r
+		}
+	}
+	return root
 }
