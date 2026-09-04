@@ -6,6 +6,36 @@ import {
 } from "../../src/orchestrator/PipelineOrchestrator.js";
 import { createMockQuery, createFailingQuery } from "../mocks/agent-sdk.js";
 
+/**
+ * Wait until the orchestrator is parked on its approval gate (#1423).
+ *
+ * These tests used `await new Promise(r => setTimeout(r, 10))` and then called
+ * approve()/reject(). That is a BET that the gate has armed, and approve() /
+ * reject() are silent no-ops when it has not — they check `approvalResolver`
+ * and return. When the bet lost under load the call landed on nothing, the run
+ * promise never settled, and the test died on vitest's 5s budget rather than on
+ * an assertion, naming nothing about what went wrong.
+ *
+ * Polling the real state makes the ordering enforced instead of assumed. The
+ * cap exists so a genuine hang still fails as a test failure rather than
+ * spinning to the suite timeout.
+ */
+async function untilAwaitingApproval(
+  orchestrator: PipelineOrchestrator,
+  timeoutMs = 2000
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!orchestrator.isAwaitingApproval()) {
+    if (Date.now() > deadline) {
+      throw new Error(
+        `orchestrator never reached its approval gate within ${timeoutMs}ms ` +
+          `(isRunning=${orchestrator.getIsRunning()}, stage=${orchestrator.getCurrentStage()})`
+      );
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1));
+  }
+}
+
 describe("PipelineOrchestrator", () => {
   describe("constructor", () => {
     it("should create with default config", () => {
@@ -176,7 +206,7 @@ describe("PipelineOrchestrator", () => {
 
       // Give event loop a tick: the orchestrator is parked on feature-planning
       // and has NOT executed the stage (no phase started yet).
-      await new Promise((resolve) => setTimeout(resolve, 10));
+      await untilAwaitingApproval(orchestrator);
 
       expect(orchestrator.getIsRunning()).toBe(true);
       expect(orchestrator.getCurrentStage()).toBe("feature-planning");
@@ -187,6 +217,34 @@ describe("PipelineOrchestrator", () => {
       expect(result.stagesCompleted).toContain("feature-planning");
     });
 
+    // The mechanism the sleep-based version was betting against (#1423).
+    //
+    // approve()/reject()/skip() all check `approvalResolver` and return
+    // silently when it is null. So acting before the gate arms is not an
+    // error — it is nothing, and the run then never continues. That is why the
+    // old tests failed as a 5s TIMEOUT rather than as an assertion: the reject
+    // landed on nothing and the promise never settled.
+    it("reject() before the gate arms is a silent no-op — which is why the wait exists", async () => {
+      const orchestrator = new PipelineOrchestrator(createMockQuery(), {
+        stages: ["feature-planning", "feature-dev"],
+      });
+
+      // Before run() there is no gate at all.
+      expect(orchestrator.isAwaitingApproval()).toBe(false);
+      expect(() => orchestrator.reject()).not.toThrow();
+
+      const runPromise = orchestrator.run(42);
+      await untilAwaitingApproval(orchestrator);
+
+      // Only now does it do anything.
+      expect(orchestrator.isAwaitingApproval()).toBe(true);
+      orchestrator.reject();
+      expect(orchestrator.isAwaitingApproval()).toBe(false);
+
+      const result = await runPromise;
+      expect(result.stagesCompleted).not.toContain("feature-dev");
+    });
+
     it("should stop pipeline on reject", async () => {
       const orchestrator = new PipelineOrchestrator(createMockQuery(), {
         stages: ["feature-planning", "feature-dev"],
@@ -194,7 +252,7 @@ describe("PipelineOrchestrator", () => {
 
       const runPromise = orchestrator.run(42);
 
-      await new Promise((resolve) => setTimeout(resolve, 10));
+      await untilAwaitingApproval(orchestrator);
       orchestrator.reject();
 
       const result = await runPromise;
@@ -211,7 +269,7 @@ describe("PipelineOrchestrator", () => {
 
       const runPromise = orchestrator.run(42);
 
-      await new Promise((resolve) => setTimeout(resolve, 10));
+      await untilAwaitingApproval(orchestrator);
       await orchestrator.stop();
 
       const result = await runPromise;
