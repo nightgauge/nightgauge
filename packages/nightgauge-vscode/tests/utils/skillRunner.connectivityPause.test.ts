@@ -20,20 +20,35 @@
  *        the network,
  *      - emit a `connectivity_resumed` stall event.
  *
- * This file mirrors the decision logic in skillRunner.ts so future changes
- * cannot quietly drop the offline gate without breaking the contract.
+ * #498 — this file used to carry its own copies of that decision
+ * (`shouldKillWithConnectivity`, `runStallTick`) and assert against the copies,
+ * so it stayed green through any regression in ship (docs/TESTING.md § Testing
+ * Anti-Patterns ### 7). The two halves are now named exports —
+ * `evaluateConnectivityGate` and `evaluateStallKill` — and the helpers below
+ * compose the real ones in the same order the ticker does.
  */
 
 import { describe, it, expect } from "vitest";
 
-type ConnState = "online" | "degraded" | "offline";
+import {
+  evaluateConnectivityGate,
+  evaluateStallKill,
+  STALL_NUDGE_GRACE_MS,
+  type ConnectivityGateState,
+} from "../../src/utils/skillRunner";
+import type { ConnectionState } from "../../src/platform/types";
+
+type ConnState = ConnectionState;
 
 /**
- * Mirrors the kill-decision in skillRunner.ts post-#3203. Keep in sync —
- * search the file for `connectivityOfflineSinceMs` to find the source.
+ * Runs the ticker's two real decision functions in the ticker's order:
+ * connectivity gate first (it may suspend everything), then the stall gate on
+ * offline-adjusted elapsed time. Only the result shape is adapted for these
+ * cases — every value asserted is produced by shipped code.
  *
- * Returns the kill decision plus the accumulated offline duration that should
- * be subtracted from `elapsed` for hard-cap comparisons.
+ * `nudgeAttempted: true` past its grace window is passed so the idle path
+ * resolves to a kill on the tick it trips, matching what these cases describe
+ * (the #3484 nudge grace is covered in skillRunner.idleStallKill.test.ts).
  */
 function shouldKillWithConnectivity(args: {
   idleMs: number;
@@ -43,17 +58,34 @@ function shouldKillWithConnectivity(args: {
   connState: ConnState;
   /** Accumulated offline time across prior outages within this stage. */
   accumulatedOfflineMs: number;
-}): { kill: boolean; path: "idle" | "hard_cap" | "none"; suspended: boolean } {
-  if (args.connState === "offline") {
-    // All kill checks suspended while offline.
+}): { kill: boolean; path: "idle" | "hard_cap" | "quota" | "none"; suspended: boolean } {
+  const nowMs = Date.now();
+  const gate = evaluateConnectivityGate(
+    {
+      connectivityOfflineSinceMs: args.connState === "offline" ? nowMs - 1 : null,
+      connectivityAccumulatedOfflineMs: args.accumulatedOfflineMs,
+    },
+    { connState: args.connState, nowMs }
+  );
+  if (gate.suspendChecks) {
     return { kill: false, path: "none", suspended: true };
   }
-  const effectiveElapsed = args.elapsedMs - args.accumulatedOfflineMs;
-  const idleKillThresholdReached = args.stallKillMs > 0 && args.idleMs >= args.stallKillMs;
-  const hardCapReached = args.hardCapMs > 0 && effectiveElapsed >= args.hardCapMs;
-  if (hardCapReached) return { kill: true, path: "hard_cap", suspended: false };
-  if (idleKillThresholdReached) return { kill: true, path: "idle", suspended: false };
-  return { kill: false, path: "none", suspended: false };
+  const decision = evaluateStallKill({
+    idleMs: args.idleMs,
+    stallKillMs: args.stallKillMs,
+    elapsedMs: args.elapsedMs - gate.next.connectivityAccumulatedOfflineMs,
+    hardCapMs: args.hardCapMs,
+    timeCapActive: true,
+    noProductiveProgress: true,
+    quotaFastFailReached: false,
+    stallKilled: false,
+    stallKillDisabled: false,
+    nudgeAttempted: true,
+    nudgeAtMs: nowMs - STALL_NUDGE_GRACE_MS - 1,
+    nowMs,
+    nudgeGraceMs: STALL_NUDGE_GRACE_MS,
+  });
+  return { kill: decision.kill, path: decision.path, suspended: false };
 }
 
 describe("connectivity-aware stall gating (#3203)", () => {
@@ -173,13 +205,16 @@ interface TickerState {
 
 interface TickerResult {
   killed: boolean;
-  path: "idle" | "hard_cap" | "none";
+  path: "idle" | "hard_cap" | "quota" | "none";
   emittedResume: boolean;
 }
 
 /**
- * Mirrors the resume-tick early-return contract from skillRunner.ts (#3247).
- * On a tick where the resume branch fires, the kill check MUST NOT run.
+ * The ticker's tick, assembled from the two real exports in the real order.
+ * `idleMs` is computed FIRST — before the gate runs — exactly as the ticker
+ * does, which is what made #3220 possible; the contract under test is that
+ * `evaluateConnectivityGate` still reports `suspendChecks` on the resume tick,
+ * so that stale `idleMs` never reaches `evaluateStallKill`.
  */
 function runStallTick(
   state: TickerState,
@@ -188,28 +223,36 @@ function runStallTick(
   const idleMs = args.now - state.lastChunkAtMs;
   const elapsed = args.now - state.startedAtMs;
 
-  if (args.connState === "offline") {
-    if (state.connectivityOfflineSinceMs === null) {
-      state.connectivityOfflineSinceMs = args.now;
-    }
-    return { killed: false, path: "none", emittedResume: false };
+  const gateState: ConnectivityGateState = {
+    connectivityOfflineSinceMs: state.connectivityOfflineSinceMs,
+    connectivityAccumulatedOfflineMs: state.connectivityAccumulatedOfflineMs,
+  };
+  const gate = evaluateConnectivityGate(gateState, { connState: args.connState, nowMs: args.now });
+  state.connectivityOfflineSinceMs = gate.next.connectivityOfflineSinceMs;
+  state.connectivityAccumulatedOfflineMs = gate.next.connectivityAccumulatedOfflineMs;
+  if (gate.resetIdleWindow) {
+    state.lastChunkAtMs = args.now;
+  }
+  if (gate.suspendChecks) {
+    return { killed: false, path: "none", emittedResume: gate.action === "resume" };
   }
 
-  if (state.connectivityOfflineSinceMs !== null) {
-    const offlineDuration = args.now - state.connectivityOfflineSinceMs;
-    state.connectivityAccumulatedOfflineMs += offlineDuration;
-    state.connectivityOfflineSinceMs = null;
-    state.lastChunkAtMs = args.now; // reset idle window
-    // Resume tick: do NOT run kill checks. Next tick will run the full flow.
-    return { killed: false, path: "none", emittedResume: true };
-  }
-
-  const effectiveElapsed = elapsed - state.connectivityAccumulatedOfflineMs;
-  const idleKill = args.stallKillMs > 0 && idleMs >= args.stallKillMs;
-  const hardCap = args.hardCapMs > 0 && effectiveElapsed >= args.hardCapMs;
-  if (hardCap) return { killed: true, path: "hard_cap", emittedResume: false };
-  if (idleKill) return { killed: true, path: "idle", emittedResume: false };
-  return { killed: false, path: "none", emittedResume: false };
+  const decision = evaluateStallKill({
+    idleMs,
+    stallKillMs: args.stallKillMs,
+    elapsedMs: elapsed - state.connectivityAccumulatedOfflineMs,
+    hardCapMs: args.hardCapMs,
+    timeCapActive: true,
+    noProductiveProgress: true,
+    quotaFastFailReached: false,
+    stallKilled: false,
+    stallKillDisabled: false,
+    nudgeAttempted: true,
+    nudgeAtMs: args.now - STALL_NUDGE_GRACE_MS - 1,
+    nowMs: args.now,
+    nudgeGraceMs: STALL_NUDGE_GRACE_MS,
+  });
+  return { killed: decision.kill, path: decision.path, emittedResume: false };
 }
 
 describe("resume-tick early return (#3247)", () => {

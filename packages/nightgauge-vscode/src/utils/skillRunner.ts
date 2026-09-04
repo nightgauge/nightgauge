@@ -93,6 +93,7 @@ import { BinaryResolver } from "../services/BinaryResolver";
 import { killProcessTree, DescendantTracker } from "./processTree";
 import { RepositoryContextLoader } from "../services/RepositoryContextLoader";
 import { ConnectivityStateBus } from "../platform/ConnectivityStateBus";
+import type { ConnectionState } from "../platform/types";
 import {
   getAuthProvider,
   getExecutionAdapter,
@@ -2319,6 +2320,201 @@ export function describeToolCallCorrelationGap(args: {
     );
   }
   return undefined;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Stall-ticker decision core (extracted for #498).
+//
+// These two functions ARE the stall ticker's decision logic. They were inline
+// in `runStageSkillHeadless`'s `setInterval` callback, which is only reachable
+// by spawning a subprocess and waiting minutes of wall-clock — so the two
+// contract tests that guarded them (skillRunner.idleStallKill.test.ts,
+// skillRunner.connectivityPause.test.ts) each carried their own copy of the
+// logic and asserted against the copy. That is the mirror anti-pattern
+// (docs/TESTING.md § Testing Anti-Patterns ### 7): gutting the shipped ticker
+// left both files green. Lifting the decision out as named exports is the
+// first sanctioned fix — the same call #404 made for `resolveAgentRunnerRoot`.
+//
+// Both are pure: they take the ticker's mutable state as input and return the
+// next state plus what the caller must emit. The caller still owns the I/O
+// (stall events, stderr lines, SIGTERM) and the clock.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Nudge grace period (#3484): deferred kill gives the agent one last chance. */
+export const STALL_NUDGE_GRACE_MS = 60_000;
+
+/** Which ceiling fired, when one did. */
+export type StallKillPath = "idle" | "hard_cap" | "quota" | "none";
+
+export interface StallKillTickInputs {
+  /** ms since the last stdout/stderr chunk from the subprocess. */
+  idleMs: number;
+  /** Idle threshold; 0 disables the idle gate entirely (cold start). */
+  stallKillMs: number;
+  /** Offline-adjusted elapsed runtime (see `evaluateConnectivityGate`). */
+  elapsedMs: number;
+  /** Absolute ceiling; 0 disables the hard cap. */
+  hardCapMs: number;
+  /** Time-cap mode (no meaningful cost signal): the cap is unconditional. */
+  timeCapActive: boolean;
+  /** #3851: outside time-cap mode the cap only fires with no productive progress. */
+  noProductiveProgress: boolean;
+  /** #3386/#3448: the API quota bucket is exhausted; fast-fail without grace. */
+  quotaFastFailReached: boolean;
+  stallKilled: boolean;
+  stallKillDisabled: boolean;
+  nudgeAttempted: boolean;
+  nudgeAtMs: number | undefined;
+  nowMs: number;
+  nudgeGraceMs: number;
+}
+
+export interface StallKillDecision {
+  kill: boolean;
+  path: StallKillPath;
+  /** The caller must emit the `[stall-nudge]` line on this tick. */
+  emitNudge: boolean;
+  /** Next value of the ticker's `nudgeAttempted`. */
+  nudgeAttempted: boolean;
+  /** Next value of the ticker's `nudgeAtMs`. */
+  nudgeAtMs: number | undefined;
+  idleKillThresholdReached: boolean;
+  /** The wall-clock cap was crossed (before the #3851 progress gate). */
+  hardCapElapsedReached: boolean;
+  /** The cap actually fires (after the #3851 progress gate). */
+  hardCapReached: boolean;
+}
+
+/**
+ * The idle-vs-elapsed stall-kill split (#338 / #3155) plus the nudge grace
+ * period (#3484) and the progress-gated hard cap (#3851).
+ *
+ * Idle time — not total elapsed — drives the stall gate, so a productive long
+ * stage that is still emitting chunks is never killed for merely running long.
+ * The absolute ceiling is enforced separately and, outside time-cap mode, only
+ * when the stage is also making no productive progress.
+ */
+export function evaluateStallKill(args: StallKillTickInputs): StallKillDecision {
+  const idleKillThresholdReached = args.stallKillMs > 0 && args.idleMs >= args.stallKillMs;
+  const hardCapElapsedReached = args.hardCapMs > 0 && args.elapsedMs >= args.hardCapMs;
+  const hardCapReached = args.timeCapActive
+    ? hardCapElapsedReached
+    : hardCapElapsedReached && args.noProductiveProgress;
+
+  let nudgeAttempted = args.nudgeAttempted;
+  let nudgeAtMs = args.nudgeAtMs;
+  let emitNudge = false;
+
+  // Reset nudge state when new output arrives (idle threshold no longer met).
+  if (!idleKillThresholdReached && nudgeAttempted) {
+    nudgeAttempted = false;
+    nudgeAtMs = undefined;
+  }
+  // Hard-cap and quota-fast-fail skip the grace period to avoid cost overruns.
+  if (
+    idleKillThresholdReached &&
+    !hardCapReached &&
+    !args.quotaFastFailReached &&
+    !nudgeAttempted &&
+    !args.stallKilled &&
+    !args.stallKillDisabled
+  ) {
+    nudgeAttempted = true;
+    nudgeAtMs = args.nowMs;
+    emitNudge = true;
+  }
+
+  const pastNudgeGrace =
+    nudgeAttempted && nudgeAtMs !== undefined && args.nowMs - nudgeAtMs >= args.nudgeGraceMs;
+  const kill =
+    ((idleKillThresholdReached && (!nudgeAttempted || pastNudgeGrace)) ||
+      hardCapReached ||
+      args.quotaFastFailReached) &&
+    !args.stallKilled &&
+    !args.stallKillDisabled;
+
+  const path: StallKillPath = !kill
+    ? "none"
+    : hardCapReached
+      ? "hard_cap"
+      : args.quotaFastFailReached
+        ? "quota"
+        : "idle";
+
+  return {
+    kill,
+    path,
+    emitNudge,
+    nudgeAttempted,
+    nudgeAtMs,
+    idleKillThresholdReached,
+    hardCapElapsedReached,
+    hardCapReached,
+  };
+}
+
+/** What the ticker must do about connectivity on this tick. */
+export type ConnectivityGateAction = "pause" | "offline" | "resume" | "proceed";
+
+export interface ConnectivityGateState {
+  /** When the current outage started, or null when online/degraded. */
+  connectivityOfflineSinceMs: number | null;
+  /** Offline time accumulated across outages within this stage. */
+  connectivityAccumulatedOfflineMs: number;
+}
+
+export interface ConnectivityGateDecision {
+  action: ConnectivityGateAction;
+  /** The ticker must return early — no kill, escalation, warn or cost checks. */
+  suspendChecks: boolean;
+  /** The caller must reset `lastChunkAtMs` to `nowMs` (fresh idle budget). */
+  resetIdleWindow: boolean;
+  /** Length of the outage that just ended; only set on `resume`. */
+  offlineDurationMs?: number;
+  next: ConnectivityGateState;
+}
+
+/**
+ * Connectivity-aware stall gating (#3203) and the resume-tick early return
+ * (#3247).
+ *
+ * While the network is offline the subagent is blocked on HTTP and emits no
+ * chunks, so every kill/warn check is suspended. On reconnect the outage is
+ * accumulated (so it does not count toward the hard cap), the idle window is
+ * reset, and the ticker still returns early: `idleMs` was computed before the
+ * reset, so running the kill check on the resume tick would fire on the stale
+ * offline-window value — the legacy issue 3220 sighting.
+ */
+export function evaluateConnectivityGate(
+  state: ConnectivityGateState,
+  args: { connState: ConnectionState; nowMs: number }
+): ConnectivityGateDecision {
+  if (args.connState === "offline") {
+    if (state.connectivityOfflineSinceMs === null) {
+      return {
+        action: "pause",
+        suspendChecks: true,
+        resetIdleWindow: false,
+        next: { ...state, connectivityOfflineSinceMs: args.nowMs },
+      };
+    }
+    return { action: "offline", suspendChecks: true, resetIdleWindow: false, next: { ...state } };
+  }
+  if (state.connectivityOfflineSinceMs !== null) {
+    const offlineDurationMs = args.nowMs - state.connectivityOfflineSinceMs;
+    return {
+      action: "resume",
+      suspendChecks: true,
+      resetIdleWindow: true,
+      offlineDurationMs,
+      next: {
+        connectivityOfflineSinceMs: null,
+        connectivityAccumulatedOfflineMs:
+          state.connectivityAccumulatedOfflineMs + offlineDurationMs,
+      },
+    };
+  }
+  return { action: "proceed", suspendChecks: false, resetIdleWindow: false, next: { ...state } };
 }
 
 /**
@@ -5232,7 +5428,7 @@ export function runStageSkillHeadless(
   // Nudge grace period (Issue #3484): deferred kill gives Claude one last chance
   // to resume output before SIGTERM fires. Hard-cap and quota-fast-fail paths
   // skip this grace period to avoid prolonging already-overbudget runs.
-  const NUDGE_GRACE_MS = 60_000;
+  const NUDGE_GRACE_MS = STALL_NUDGE_GRACE_MS;
   let nudgeAttempted = false;
   let nudgeAtMs: number | undefined;
 
@@ -5421,39 +5617,29 @@ export function runStageSkillHeadless(
     // Connectivity-aware stall gating (Issue #3203). Suspend kill checks when
     // the network is offline; reset the idle window when connectivity returns.
     const connState = ConnectivityStateBus.state;
-    if (connState === "offline") {
-      if (connectivityOfflineSinceMs === null) {
-        connectivityOfflineSinceMs = Date.now();
-        const pauseEvent: StallEvent = {
-          timestamp: new Date().toISOString(),
-          elapsed_ms: elapsed,
-          threshold_ms: effectiveHardCapMs > 0 ? effectiveHardCapMs : stallKillMs,
-          action: "connectivity_paused",
-        };
-        stallEvents.push(pauseEvent);
-        callbacks?.onStallEvent?.(pauseEvent);
-        callbacks?.onStderr?.(
-          `[skillRunner] Connectivity offline — stall-kill suspended for ${stage}.\n`
-        );
-      }
-      // Skip every kill / warn check while offline. Cost-cap is also gated
-      // because token accounting cannot advance during a network outage.
-      return;
+    const connectivityGate = evaluateConnectivityGate(
+      { connectivityOfflineSinceMs, connectivityAccumulatedOfflineMs },
+      { connState, nowMs: Date.now() }
+    );
+    connectivityOfflineSinceMs = connectivityGate.next.connectivityOfflineSinceMs;
+    connectivityAccumulatedOfflineMs = connectivityGate.next.connectivityAccumulatedOfflineMs;
+    if (connectivityGate.action === "pause") {
+      const pauseEvent: StallEvent = {
+        timestamp: new Date().toISOString(),
+        elapsed_ms: elapsed,
+        threshold_ms: effectiveHardCapMs > 0 ? effectiveHardCapMs : stallKillMs,
+        action: "connectivity_paused",
+      };
+      stallEvents.push(pauseEvent);
+      callbacks?.onStallEvent?.(pauseEvent);
+      callbacks?.onStderr?.(
+        `[skillRunner] Connectivity offline — stall-kill suspended for ${stage}.\n`
+      );
     }
-    if (connectivityOfflineSinceMs !== null) {
-      // Just transitioned back to online or degraded — record the outage,
-      // reset the idle budget, emit the resume event, and RETURN. The kill /
-      // warn / cost-cap checks below intentionally do not run on the resume
-      // tick because `idleMs` was already computed at the top of the tick
-      // (before the reset), and would still reflect the stale offline-window
-      // value — firing the kill on the same tick we declared "we're back"
-      // (#3247). The next ticker fire (HEADLESS_STALL_CHECK_INTERVAL_MS later)
-      // recomputes `idleMs` against the freshly-reset `lastChunkAtMs` and
-      // resumes the normal flow.
-      const offlineDuration = Date.now() - connectivityOfflineSinceMs;
-      connectivityAccumulatedOfflineMs += offlineDuration;
-      connectivityOfflineSinceMs = null;
-      lastChunkAtMs = Date.now();
+    if (connectivityGate.action === "resume") {
+      if (connectivityGate.resetIdleWindow) {
+        lastChunkAtMs = Date.now();
+      }
       const resumeEvent: StallEvent = {
         timestamp: new Date().toISOString(),
         elapsed_ms: Date.now() - startedAtMs,
@@ -5464,8 +5650,13 @@ export function runStageSkillHeadless(
       callbacks?.onStallEvent?.(resumeEvent);
       callbacks?.onStderr?.(
         `[skillRunner] Connectivity restored — resuming stall checks ` +
-          `(was offline for ${formatElapsed(offlineDuration)}).\n`
+          `(was offline for ${formatElapsed(connectivityGate.offlineDurationMs ?? 0)}).\n`
       );
+    }
+    // Suspend every kill / warn / cost-cap check while offline, and on the
+    // resume tick itself: `idleMs` above predates the idle-window reset and
+    // would still carry the stale offline value (#3203 / #3247).
+    if (connectivityGate.suspendChecks) {
       return;
     }
 
@@ -5751,22 +5942,27 @@ export function runStageSkillHeadless(
     // could legitimately reach 60–120s. Idle thresholds are still tuned
     // higher than that (default feature-validate is 1200s = 20 min idle),
     // so those legitimate Bash silences continue to be tolerated.
-    const idleKillThresholdReached = stallKillMs > 0 && idleMs >= stallKillMs;
-    // Absolute hard-cap reached on wall-clock.
-    const hardCapElapsedReached = effectiveHardCapMs > 0 && effectiveElapsed >= effectiveHardCapMs;
-    // Issue #3851: the elapsed hard-cap is PROGRESS-GATED — it only kills when
-    // the cap is reached AND the stage is making no productive progress (no
-    // commits / new-file writes / phase markers / CI progress within the
-    // no-progress window). A stage that is steadily committing at 91 minutes is
-    // NEVER killed by the cap — that would re-introduce the #2982/#3840 blunt
-    // elapsed-kill class. The time-cap mode (provider_scale=0, no meaningful
-    // cost signal) keeps the original unconditional behaviour because there is
-    // no cost-driven progress monitor to consult for those adapters.
     const noProductiveProgress =
       progressMonitor.msSinceLastProductiveProgress > progressRunawayWindowMs;
-    const hardCapReached = timeCapActive
-      ? hardCapElapsedReached
-      : hardCapElapsedReached && noProductiveProgress;
+    const stallDecision = evaluateStallKill({
+      idleMs,
+      stallKillMs,
+      elapsedMs: effectiveElapsed,
+      hardCapMs: effectiveHardCapMs,
+      timeCapActive,
+      noProductiveProgress,
+      quotaFastFailReached,
+      stallKilled,
+      stallKillDisabled,
+      nudgeAttempted,
+      nudgeAtMs,
+      nowMs: Date.now(),
+      nudgeGraceMs: NUDGE_GRACE_MS,
+    });
+    const { hardCapElapsedReached, hardCapReached } = stallDecision;
+    nudgeAttempted = stallDecision.nudgeAttempted;
+    nudgeAtMs = stallDecision.nudgeAtMs;
+
     if (hardCapElapsedReached && !hardCapReached && !hardCapProgressGateLogged) {
       hardCapProgressGateLogged = true;
       callbacks?.onStderr?.(
@@ -5778,36 +5974,13 @@ export function runStageSkillHeadless(
       );
     }
 
-    // Nudge grace period (Issue #3484): when the idle threshold is first reached,
-    // log a [stall-nudge] warning and defer SIGTERM by NUDGE_GRACE_MS (60s).
-    // Hard-cap and quota-fast-fail paths skip this grace to avoid cost overruns.
-    // Reset nudge state when new output arrives (idleKillThresholdReached becomes false).
-    if (!idleKillThresholdReached && nudgeAttempted) {
-      nudgeAttempted = false;
-      nudgeAtMs = undefined;
-    }
-    if (
-      idleKillThresholdReached &&
-      !hardCapReached &&
-      !quotaFastFailReached &&
-      !nudgeAttempted &&
-      !stallKilled &&
-      !stallKillDisabled
-    ) {
-      nudgeAttempted = true;
-      nudgeAtMs = Date.now();
+    if (stallDecision.emitNudge) {
       const nudgeMsg = `[stall-nudge] Stage ${stage} idle for ${formatElapsed(idleMs)}. Waiting ${NUDGE_GRACE_MS / 1000}s before kill.\n`;
       stderrBuffer = appendTail(stderrBuffer, nudgeMsg, OUTPUT_ERROR_TAIL_MAX_CHARS);
       callbacks?.onStderr?.(nudgeMsg);
     }
-    const pastNudgeGrace =
-      nudgeAttempted && nudgeAtMs !== undefined && Date.now() - nudgeAtMs >= NUDGE_GRACE_MS;
-    const shouldKill =
-      ((idleKillThresholdReached && (!nudgeAttempted || pastNudgeGrace)) ||
-        hardCapReached ||
-        quotaFastFailReached) &&
-      !stallKilled &&
-      !stallKillDisabled;
+
+    const shouldKill = stallDecision.kill;
 
     if (shouldKill) {
       stallKilled = true;

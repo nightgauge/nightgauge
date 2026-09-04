@@ -19,15 +19,33 @@
  * The two checks live in the same ticker (skillRunner.ts) and either can
  * fire independently. This file documents the decision matrix so future
  * changes don't quietly merge the two thresholds back together.
+ *
+ * #498 — this file used to carry its own `shouldKill` copy of that decision
+ * and assert against the copy, so it stayed green through any regression in
+ * ship (docs/TESTING.md § Testing Anti-Patterns ### 7). The decision is now a
+ * named export, `evaluateStallKill`, and these cases drive the real one. The
+ * ticker calls exactly this function; it owns only the clock and the I/O.
  */
 
 import { describe, it, expect } from "vitest";
 
-const NUDGE_GRACE_MS = 60_000;
+import {
+  evaluateStallKill,
+  STALL_NUDGE_GRACE_MS,
+  type StallKillDecision,
+  type StallKillTickInputs,
+} from "../../src/utils/skillRunner";
+
+const NUDGE_GRACE_MS = STALL_NUDGE_GRACE_MS;
 
 /**
- * Mirrors the kill-decision logic in skillRunner.ts. Keep in sync —
- * search the file for `idleKillThresholdReached` to find the source.
+ * Calls the real `evaluateStallKill` with the ticker's defaults filled in, and
+ * projects its result down to the {kill, path, nudge} triple these cases were
+ * written against. Only the shape is adapted — every value asserted here is
+ * produced by shipped code.
+ *
+ * `timeCapActive: true` is the default because these cases predate the #3851
+ * progress gate and describe the unconditional hard cap.
  */
 function shouldKill(args: {
   idleMs: number;
@@ -39,29 +57,29 @@ function shouldKill(args: {
   nudgeAttempted?: boolean;
   nudgeAtMs?: number;
   nowMs?: number;
-}): { kill: boolean; path: "idle" | "hard_cap" | "none"; nudge?: boolean } {
-  const idleKillThresholdReached = args.stallKillMs > 0 && args.idleMs >= args.stallKillMs;
-  const hardCapReached = args.hardCapMs > 0 && args.elapsedMs >= args.hardCapMs;
-  if (args.stallKilled || args.stallKillDisabled) return { kill: false, path: "none" };
-  if (hardCapReached) return { kill: true, path: "hard_cap" };
-
-  // Nudge grace period logic
-  const nudgeAttempted = args.nudgeAttempted ?? false;
-  const nudgeAtMs = args.nudgeAtMs;
-  const nowMs = args.nowMs ?? Date.now();
-  const pastNudgeGrace =
-    nudgeAttempted && nudgeAtMs !== undefined && nowMs - nudgeAtMs >= NUDGE_GRACE_MS;
-
-  if (idleKillThresholdReached && !nudgeAttempted) {
-    return { kill: false, path: "none", nudge: true };
-  }
-  if (idleKillThresholdReached && nudgeAttempted && pastNudgeGrace) {
-    return { kill: true, path: "idle" };
-  }
-  if (idleKillThresholdReached && nudgeAttempted && !pastNudgeGrace) {
-    return { kill: false, path: "none" };
-  }
-  return { kill: false, path: "none" };
+  timeCapActive?: boolean;
+  noProductiveProgress?: boolean;
+  quotaFastFailReached?: boolean;
+}): { kill: boolean; path: StallKillDecision["path"]; nudge?: boolean } {
+  const inputs: StallKillTickInputs = {
+    idleMs: args.idleMs,
+    stallKillMs: args.stallKillMs,
+    elapsedMs: args.elapsedMs,
+    hardCapMs: args.hardCapMs,
+    timeCapActive: args.timeCapActive ?? true,
+    noProductiveProgress: args.noProductiveProgress ?? true,
+    quotaFastFailReached: args.quotaFastFailReached ?? false,
+    stallKilled: args.stallKilled,
+    stallKillDisabled: args.stallKillDisabled,
+    nudgeAttempted: args.nudgeAttempted ?? false,
+    nudgeAtMs: args.nudgeAtMs,
+    nowMs: args.nowMs ?? Date.now(),
+    nudgeGraceMs: NUDGE_GRACE_MS,
+  };
+  const decision = evaluateStallKill(inputs);
+  return decision.emitNudge
+    ? { kill: decision.kill, path: decision.path, nudge: true }
+    : { kill: decision.kill, path: decision.path };
 }
 
 describe("idle-vs-elapsed stall-kill split (#3155)", () => {
@@ -261,5 +279,86 @@ describe("stall_idle_ms override (#3484)", () => {
       nudgeAttempted: false,
     });
     expect(result).toEqual({ kill: true, path: "hard_cap" });
+  });
+});
+
+// Two arms the mirror could not reach at all, because its copy of the decision
+// predated them: the #3851 progress gate on the elapsed cap, and the #3386
+// quota fast-fail path. Both are now driven through the real function.
+describe("progress-gated hard cap (#3851)", () => {
+  const base = {
+    idleMs: 30_000,
+    stallKillMs: 1_200_000,
+    elapsedMs: 5_460_000, // 91 min
+    hardCapMs: 5_400_000, // 90 min
+    quotaFastFailReached: false,
+    stallKilled: false,
+    stallKillDisabled: false,
+    nudgeAttempted: false,
+    nudgeAtMs: undefined,
+    nowMs: Date.now(),
+    nudgeGraceMs: STALL_NUDGE_GRACE_MS,
+  };
+
+  it("does NOT kill a stage past the cap that is still making productive progress", () => {
+    const d = evaluateStallKill({ ...base, timeCapActive: false, noProductiveProgress: false });
+    expect(d.hardCapElapsedReached).toBe(true); // caller logs the gate on this pair
+    expect(d.hardCapReached).toBe(false);
+    expect(d.kill).toBe(false);
+    expect(d.path).toBe("none");
+  });
+
+  it("kills once productive progress stops", () => {
+    const d = evaluateStallKill({ ...base, timeCapActive: false, noProductiveProgress: true });
+    expect(d.kill).toBe(true);
+    expect(d.path).toBe("hard_cap");
+  });
+
+  it("time-cap mode keeps the cap unconditional (no cost signal to gate on)", () => {
+    const d = evaluateStallKill({ ...base, timeCapActive: true, noProductiveProgress: false });
+    expect(d.kill).toBe(true);
+    expect(d.path).toBe("hard_cap");
+  });
+});
+
+describe("quota fast-fail path (#3386)", () => {
+  it("kills immediately on quota exhaustion, skipping the nudge grace", () => {
+    const d = evaluateStallKill({
+      idleMs: 1_201_000,
+      stallKillMs: 1_200_000,
+      elapsedMs: 1_201_000,
+      hardCapMs: 0,
+      timeCapActive: true,
+      noProductiveProgress: true,
+      quotaFastFailReached: true,
+      stallKilled: false,
+      stallKillDisabled: false,
+      nudgeAttempted: false,
+      nudgeAtMs: undefined,
+      nowMs: Date.now(),
+      nudgeGraceMs: STALL_NUDGE_GRACE_MS,
+    });
+    expect(d.emitNudge).toBe(false);
+    expect(d.kill).toBe(true);
+    expect(d.path).toBe("quota");
+  });
+
+  it("hard_cap outranks quota when both trip in the same tick", () => {
+    const d = evaluateStallKill({
+      idleMs: 30_000,
+      stallKillMs: 1_200_000,
+      elapsedMs: 1_801_000,
+      hardCapMs: 1_800_000,
+      timeCapActive: true,
+      noProductiveProgress: true,
+      quotaFastFailReached: true,
+      stallKilled: false,
+      stallKillDisabled: false,
+      nudgeAttempted: false,
+      nudgeAtMs: undefined,
+      nowMs: Date.now(),
+      nudgeGraceMs: STALL_NUDGE_GRACE_MS,
+    });
+    expect(d.path).toBe("hard_cap");
   });
 });
