@@ -71,6 +71,16 @@ func raisePostMergeFailureCard(workdir, owner, repo string, issueNumber int, res
 			Repo:  fmt.Sprintf("%s/%s", owner, repo),
 			Issue: issueNumber,
 		},
+		Options: []attention.Option{
+			// The only honest button: nothing here can re-run the hook for
+			// you, so resolving records that a human saw it and clears the
+			// card. Every other producer supplies one, and this card carried
+			// none — which is how 27 of them ended up published with
+			// `"options":null` and rejected by the platform on arrival
+			// (#1405). An empty array would satisfy the contract and still
+			// leave an FYI nobody can ever dismiss from a remote surface.
+			{ID: "dismiss", Label: "Dismiss — I've seen it", Verb: attention.VerbNoop, Style: attention.StyleDefault},
+		},
 		DefaultAction: attention.ExpireNoop,
 	}
 
