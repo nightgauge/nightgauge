@@ -2,7 +2,7 @@
 # Runs INSIDE the clean-install container as the empty-home `tester` user.
 # Mounted by scripts/clean-install-e2e.sh:
 #   /vsix/*.vsix                 the packaged extension (read-only)
-#   /harness/bin/                this script (read-only)
+#   /harness/bin/                this script + scrub-evidence.sh (read-only)
 #   /harness/driver/             the driver extension (read-only)
 #   /auth/.credentials.json      OPTIONAL: Claude Code OAuth credentials (read-only)
 #   /out/                        logs and the JSON report (read-write)
@@ -17,6 +17,34 @@ exec > >(tee -a "$OUT/container.log") 2>&1
 
 step() { printf '\n=== %s ===\n' "$*"; }
 finding() { echo "FINDING: $*"; echo "$*" >> "$OUT/findings.txt"; }
+
+# Scrub this container's own credentials out of the evidence on EVERY exit path
+# (#1335). Actions masks registered secrets in the workflow LOG; an uploaded
+# artifact gets no such treatment. In one run a feature-dev agent echoed
+# GH_TOKEN, the value reached a VS Code output channel, that channel was copied
+# into $OUT, and a live fine-grained token was downloadable from a public repo's
+# artifact for about ten minutes.
+#
+# A TRAP, NOT A FINAL STEP. This script runs under `set -euo pipefail` and has
+# several explicit `exit 1`s, and the workflow uploads the artifact with
+# `if: always()`. A scrub in tail position therefore runs only when everything
+# ELSE succeeded — which is precisely the run whose logs are least interesting.
+# The failure path is where a token is most likely to have been printed, and it
+# was the one path the scrub never covered.
+#
+# A failed scrub forces a non-zero exit even on an otherwise-green run: leaving
+# the artifact as unsafe as before while reporting success is the outcome this
+# whole change exists to prevent.
+scrub_evidence_on_exit() {
+  local rc=$?
+  set +e
+  if ! /harness/bin/scrub-evidence.sh "$OUT"; then
+    echo "ERROR: evidence scrub FAILED — the artifact may still contain credentials" >&2
+    [ "$rc" -eq 0 ] && rc=1
+  fi
+  exit "$rc"
+}
+trap scrub_evidence_on_exit EXIT
 
 step "clean-machine preconditions"
 whoami; echo "HOME=$HOME"
