@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -84,6 +85,39 @@ type Execution struct {
 	Process     *os.Process
 	Cancel      context.CancelFunc
 	Streamer    adapters.OutputStreamer
+
+	// stopRequested is set the instant CancelWithGrace/StopExecution decide to
+	// stop this execution — before SIGTERM is even sent — so RunStage can
+	// later tell "the CLI trapped our SIGTERM and exited 0" apart from an
+	// ordinary healthy exit (#564). It must be set before signalling, not
+	// after the process exits: cmd.Wait() in RunStage races the goroutine
+	// that observes the SIGTERM'd process exit, so a flag set only after that
+	// race would sometimes lose it. atomic.Bool because CancelWithGrace reads
+	// the map under m.mu but touches the Execution after releasing it.
+	stopRequested atomic.Bool
+
+	// done is closed by RunStage the instant its OWN cmd.Wait() returns (#564).
+	// CancelWithGrace/StopExecution select on it instead of calling
+	// Process.Wait() themselves.
+	//
+	// The reason: os.Process.Wait() calls syscall.Wait4 directly with no
+	// dedup across callers (go.dev/issue/67642) — two concurrent Wait()s on
+	// the SAME *os.Process both race the kernel reaper, and whichever loses
+	// gets ECHILD ("wait: no child processes"), not the real exit status.
+	// RunStage always calls cmd.Wait() (== Process.Wait() on this same
+	// pointer) once the process exits; a second concurrent Wait() from
+	// CancelWithGrace's own goroutine — the pre-#564 design — would win that
+	// race often enough to matter (~40% locally): cmd.Wait() in RunStage then
+	// returns the syscall error instead of a clean ExitCode 0, and this
+	// feature's whole "ExitCode==0, Cancelled==true" shape never gets a
+	// chance to form. done lets CancelWithGrace learn "the process exited"
+	// from the ONE caller that actually reaps it, instead of reaping a
+	// second time.
+	//
+	// nil for an Execution built outside RunStage (legacy direct-construction
+	// tests, and any future caller with no reaper of its own): CancelWithGrace
+	// falls back to reaping itself, unchanged from before this fix.
+	done chan struct{}
 }
 
 // NewManager creates an execution manager.
@@ -307,6 +341,10 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (*adapters.Ru
 		Process:     cmd.Process,
 		Cancel:      cancel,
 		Streamer:    opts.Streamer,
+		// done is set HERE, not left nil, so CancelWithGrace/StopExecution's
+		// waitForExit defers to this function's own cmd.Wait() below instead
+		// of reaping the process a second time (#564 — see waitForExit).
+		done: make(chan struct{}),
 	}
 
 	m.mu.Lock()
@@ -418,6 +456,12 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (*adapters.Ru
 	// Wait for output to drain, then wait for process
 	wg.Wait()
 	err = cmd.Wait()
+	// Signal waitForExit callers (CancelWithGrace/StopExecution) that the
+	// process is reaped, THIS function is the one that reaped it — closing
+	// immediately after cmd.Wait() returns, not after the map deletion below,
+	// keeps the window a concurrent CancelWithGrace could still be blocked in
+	// its own Process.Wait() as short as possible.
+	close(execution.done)
 
 	// Unregister execution
 	m.mu.Lock()
@@ -445,6 +489,13 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (*adapters.Ru
 	}
 
 	result := runResultFromAccumulator(string(stdoutBuf), string(stderrBuf), tokenAcc, modelTracker)
+	// #564: a graceful-stop CLI that traps SIGTERM and exits 0 is otherwise
+	// indistinguishable from a healthy stage — ExitCode is 0 and cmd.Wait()
+	// returns a nil error either way. execution.stopRequested is the ONLY
+	// place that predicate is evaluated (per the issue's single-predicate
+	// constraint); every other consumer reads RunResult.Cancelled instead of
+	// re-deriving it from ctx.Err() or exit code.
+	result.Cancelled = execution.stopRequested.Load()
 	// The scheduler's legacy runner projection intentionally remains untouched:
 	// stage-keyed runtime handoff lets its existing CompleteStage call consume
 	// the cache pools without widening or editing scheduler.go.
@@ -560,6 +611,8 @@ func (m *Manager) StopExecution(repo string, issueNumber int) error {
 		return fmt.Errorf("no running execution for %s", execKey)
 	}
 
+	execution.stopRequested.Store(true)
+
 	// Send SIGTERM first for graceful shutdown
 	if execution.Process != nil {
 		signalProcessTree(execution.Process, syscall.SIGTERM)
@@ -568,14 +621,8 @@ func (m *Manager) StopExecution(repo string, issueNumber int) error {
 		timer := time.NewTimer(5 * time.Second)
 		defer timer.Stop()
 
-		done := make(chan struct{})
-		go func() {
-			_, _ = execution.Process.Wait()
-			close(done)
-		}()
-
 		select {
-		case <-done:
+		case <-waitForExit(execution):
 			// Process exited gracefully
 		case <-timer.C:
 			// Force kill — the group, not the leader (#1253). SIGKILL runs no
@@ -586,6 +633,34 @@ func (m *Manager) StopExecution(repo string, issueNumber int) error {
 
 	execution.Cancel()
 	return nil
+}
+
+// waitForExit reports when ex's process has exited, without itself reaping it
+// when something else already will.
+//
+// ex.done, when set, is closed by RunStage's OWN cmd.Wait() (#564) — reuse
+// that signal instead of calling ex.Process.Wait() a second time. Two
+// concurrent Wait() calls on the same *os.Process both race the kernel
+// reaper (os.Process.Wait calls syscall.Wait4 with no dedup across callers,
+// go.dev/issue/67642): whichever loses gets ECHILD, not the real exit status.
+// For an execution RunStage owns, that loser was reliably cmd.Wait() itself —
+// observed locally as `wait: wait: no child processes` on ~40% of runs, which
+// would have made this fix's own reported ExitCode/Cancelled shape as
+// unreliable as the bug it exists to close.
+//
+// ex.done is nil for an Execution built outside RunStage (direct-construction
+// tests, any future caller with no reaper of its own) — fall back to the
+// pre-#564 self-reap so that shape is unaffected.
+func waitForExit(ex *Execution) <-chan struct{} {
+	if ex.done != nil {
+		return ex.done
+	}
+	done := make(chan struct{})
+	go func() {
+		_, _ = ex.Process.Wait()
+		close(done)
+	}()
+	return done
 }
 
 // ListRunning returns all currently running executions.
@@ -625,21 +700,17 @@ func (m *Manager) CancelWithGrace(key string, timeout time.Duration) (bool, erro
 		return false, nil
 	}
 
+	ex.stopRequested.Store(true)
+
 	graceful := false
 	if ex.Process != nil {
 		signalProcessTree(ex.Process, syscall.SIGTERM)
-
-		done := make(chan struct{})
-		go func() {
-			_, _ = ex.Process.Wait()
-			close(done)
-		}()
 
 		timer := time.NewTimer(timeout)
 		defer timer.Stop()
 
 		select {
-		case <-done:
+		case <-waitForExit(ex):
 			graceful = true
 		case <-timer.C:
 			// The grace period expired. SIGKILL cannot be trapped, so a
