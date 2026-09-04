@@ -247,13 +247,27 @@ type CalibrationReport struct {
 	// SizeSamples / ModelSamples are the DENOMINATORS: rows where both halves
 	// of the pair are non-empty. Always reported, so a caller can tell a
 	// confident number from one computed over three rows.
-	SizeSamples    int      `json:"sizeSamples"`
-	SizeAccuracy   *float64 `json:"sizeAccuracy"` // fraction of SizeSamples where predicted == actual; nil when SizeSamples == 0
-	ModelSamples   int      `json:"modelSamples"`
-	ModelAccuracy  *float64 `json:"modelAccuracy"` // fraction of ModelSamples where predicted == actual; nil when ModelSamples == 0
-	AvgCostPerRun  float64  `json:"avgCostPerRun"`
-	SuccessRate    float64  `json:"successRate"`
-	TrendImproving bool     `json:"trendImproving"`
+	SizeSamples   int      `json:"sizeSamples"`
+	SizeAccuracy  *float64 `json:"sizeAccuracy"` // fraction of SizeSamples where predicted == actual; nil when SizeSamples == 0
+	ModelSamples  int      `json:"modelSamples"`
+	ModelMatches  int      `json:"modelMatches"`  // numerator behind ModelAccuracy, exposed so a caller can re-derive without re-walking the corpus
+	ModelAccuracy *float64 `json:"modelAccuracy"` // fraction of ModelSamples where predicted == actual; nil when ModelSamples == 0
+	// ModelSamplesExcludedRetry counts rows with a measurable model pair
+	// (PredictedModel and ActualModel both non-empty) that were EXCLUDED from
+	// ModelSamples because Retries > 0. A retry escalation applies
+	// retryEngine.CurrentModel(stage) as the dispatch override, and that
+	// override is re-recorded as ActualModel — so a haiku->sonnet escalation on
+	// a failed stage (the retry ladder doing its job) is indistinguishable from
+	// a router misprediction unless this row is pulled out of the denominator.
+	// Retries > 0 is a superset of "the tier changed" (a retry with no tier
+	// change is also excluded), accepted because it errs toward fewer false
+	// misses rather than toward inflated ones (issue #1002). This counter
+	// exists so the sample loss is visible instead of silently shrinking
+	// ModelSamples with no explanation.
+	ModelSamplesExcludedRetry int     `json:"modelSamplesExcludedRetry"`
+	AvgCostPerRun             float64 `json:"avgCostPerRun"`
+	SuccessRate               float64 `json:"successRate"`
+	TrendImproving            bool    `json:"trendImproving"`
 }
 
 // Calibrate analyzes recorded outcomes and produces a calibration report.
@@ -268,6 +282,15 @@ type CalibrationReport struct {
 // Mixed old/new history needs no discriminator field for this: a legacy row is
 // excluded by the same guard, because its halves are exactly the ones that are
 // empty.
+//
+// The model half additionally excludes any row with Retries > 0 (#1002). The
+// retry engine's escalated tier becomes the dispatch override
+// (resolveDispatchModel applies retryEngine.CurrentModel(stage)), and that
+// override is re-recorded as ActualModel — so a haiku->sonnet escalation on a
+// failed stage, the retry ladder doing exactly its job, was booked as a
+// routing miss against a prediction that never changed. The size half has no
+// equivalent exclusion: size is decided once at pickup and is not subject to
+// retry-driven revision, so nothing there needs the same guard.
 func (r *Recorder) Calibrate() (*CalibrationReport, error) {
 	outcomes, err := r.LoadAll()
 	if err != nil {
@@ -277,7 +300,7 @@ func (r *Recorder) Calibrate() (*CalibrationReport, error) {
 		return &CalibrationReport{}, nil
 	}
 
-	var sizeMatches, sizeSamples, modelMatches, modelSamples, successes int
+	var sizeMatches, sizeSamples, modelMatches, modelSamples, excludedRetry, successes int
 	var totalCost float64
 
 	for _, o := range outcomes {
@@ -288,9 +311,13 @@ func (r *Recorder) Calibrate() (*CalibrationReport, error) {
 			}
 		}
 		if o.PredictedModel != "" && o.ActualModel != "" {
-			modelSamples++
-			if o.PredictedModel == o.ActualModel {
-				modelMatches++
+			if o.Retries > 0 {
+				excludedRetry++
+			} else {
+				modelSamples++
+				if o.PredictedModel == o.ActualModel {
+					modelMatches++
+				}
 			}
 		}
 		if o.Success {
@@ -301,13 +328,15 @@ func (r *Recorder) Calibrate() (*CalibrationReport, error) {
 
 	n := len(outcomes)
 	report := &CalibrationReport{
-		TotalRuns:     n,
-		SizeSamples:   sizeSamples,
-		SizeAccuracy:  ratio(sizeMatches, sizeSamples),
-		ModelSamples:  modelSamples,
-		ModelAccuracy: ratio(modelMatches, modelSamples),
-		AvgCostPerRun: totalCost / float64(n),
-		SuccessRate:   float64(successes) / float64(n),
+		TotalRuns:                 n,
+		SizeSamples:               sizeSamples,
+		SizeAccuracy:              ratio(sizeMatches, sizeSamples),
+		ModelSamples:              modelSamples,
+		ModelMatches:              modelMatches,
+		ModelAccuracy:             ratio(modelMatches, modelSamples),
+		ModelSamplesExcludedRetry: excludedRetry,
+		AvgCostPerRun:             totalCost / float64(n),
+		SuccessRate:               float64(successes) / float64(n),
 	}
 
 	// Check trend: compare recent 10 vs previous 10
