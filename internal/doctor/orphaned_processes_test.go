@@ -892,9 +892,9 @@ func TestParseLsofCwd(t *testing.T) {
 
 // foreignCwdFixture builds a leakRepo with one live pipeline worktree
 // (issue-488) already registered with git, plus the derived facts
-// (worktreesRoots, ActiveWorktreeIssues) a real buildForeignCwdScan would
-// produce for it — assembled by hand here so each test can stub only the cwd
-// half without spawning `ps` or `lsof`.
+// (RepoRoots, ActiveByRepo) a real buildForeignCwdScan would produce for it —
+// assembled by hand here so each test can stub only the cwd half without
+// spawning `ps` or `lsof`.
 func foreignCwdFixture(t *testing.T) (r *leakRepo, liveWorktree string) {
 	t.Helper()
 	r = newLeakRepo(t)
@@ -903,19 +903,33 @@ func foreignCwdFixture(t *testing.T) (r *leakRepo, liveWorktree string) {
 	return r, liveWorktree
 }
 
+// activeByRepoFixture computes, per repo root, the same active-worktree set
+// buildForeignCwdScan itself would produce (one execution.ActiveWorktreeIssues
+// call per root — see that function's doc comment for why per-root and not
+// merged).
+func activeByRepoFixture(t *testing.T, repoRoots []string) map[string]map[int]bool {
+	t.Helper()
+	out := make(map[string]map[int]bool, len(repoRoots))
+	for _, root := range repoRoots {
+		active, determined := execution.ActiveWorktreeIssues([]string{root})
+		if !determined {
+			t.Fatalf("active worktree set undetermined for %s", root)
+		}
+		out[root] = active
+	}
+	return out
+}
+
 func TestForeignCwdHolder_Flagged(t *testing.T) {
 	r, liveWorktree := foreignCwdFixture(t)
 
 	row := fmt.Sprintf("%d %s %s", 42488, "02:00:00", "/bin/zsh")
 	procs := parseRows(t, row)
+	repoRoots := config.WorkspaceRepoRoots(r.dir)
 	fc := &foreignCwdScan{
-		Cwds:           map[int]string{42488: liveWorktree},
-		WorktreesRoots: worktreesRoots(r.dir),
-	}
-	var determined bool
-	fc.ActiveIssues, determined = execution.ActiveWorktreeIssues(config.WorkspaceRepoRoots(r.dir))
-	if !determined {
-		t.Fatal("active worktree set undetermined")
+		Cwds:         map[int]string{42488: liveWorktree},
+		RepoRoots:    repoRoots,
+		ActiveByRepo: activeByRepoFixture(t, repoRoots),
 	}
 
 	item, warning := orphanedProcessReport(procs, map[int]bool{}, nil, fc)
@@ -933,29 +947,37 @@ func TestForeignCwdHolder_Flagged(t *testing.T) {
 	}
 }
 
+// TestForeignCwdHolder_StaleWorktree reproduces the headline #519 incident
+// with a REAL removed worktree — `git worktree add` followed by `git worktree
+// remove --force`, the shape a leftover interactive-harness shell actually
+// sits in — rather than a directory that was never a worktree at all. Before
+// the fix, worktreeDirContaining started with filepath.EvalSymlinks(cwd),
+// which fails ENOENT once the directory is gone, so the removed-worktree
+// holder was silently invisible and this test could not go red for the real
+// incident (adversarial review of #519, finding 1).
 func TestForeignCwdHolder_StaleWorktree(t *testing.T) {
 	r, liveWorktree := foreignCwdFixture(t)
 
-	// A leftover directory git no longer tracks as a worktree — the shape left
-	// behind by `git worktree remove`, and the case that can also block a
-	// worktree removal (#110). Deliberately no `git worktree add` for this one.
 	staleWorktree := filepath.Join(r.dir, ".nightgauge", "worktrees", "issue-489")
-	if err := os.MkdirAll(staleWorktree, 0o755); err != nil {
-		t.Fatalf("mkdir: %v", err)
+	r.git("worktree", "add", "-q", staleWorktree, "-b", "fix/489", "main")
+	r.git("worktree", "remove", "--force", staleWorktree)
+	if _, err := os.Stat(staleWorktree); !os.IsNotExist(err) {
+		t.Fatalf("fixture bug: staleWorktree still exists on disk (%v) — this is not a REMOVED worktree", err)
 	}
 
+	// The removed-worktree holder is given an age WELL BELOW staleProcessAge
+	// on purpose: a REMOVED worktree has no legitimate occupant at any age (see
+	// classifyForeignCwdHolders), so it must be reported immediately, unlike
+	// the age-gated live holder below.
 	procs := parseRows(t,
 		fmt.Sprintf("%d %s %s", 42488, "01:00:00", "/bin/zsh"),
-		fmt.Sprintf("%d %s %s", 42489, "03:00:00", "/bin/bash"),
+		fmt.Sprintf("%d %s %s", 42489, "00:00:03", "/bin/bash"),
 	)
+	repoRoots := config.WorkspaceRepoRoots(r.dir)
 	fc := &foreignCwdScan{
-		Cwds:           map[int]string{42488: liveWorktree, 42489: staleWorktree},
-		WorktreesRoots: worktreesRoots(r.dir),
-	}
-	var determined bool
-	fc.ActiveIssues, determined = execution.ActiveWorktreeIssues(config.WorkspaceRepoRoots(r.dir))
-	if !determined {
-		t.Fatal("active worktree set undetermined")
+		Cwds:         map[int]string{42488: liveWorktree, 42489: staleWorktree},
+		RepoRoots:    repoRoots,
+		ActiveByRepo: activeByRepoFixture(t, repoRoots),
 	}
 
 	item, _ := orphanedProcessReport(procs, map[int]bool{}, nil, fc)
@@ -973,6 +995,88 @@ func TestForeignCwdHolder_StaleWorktree(t *testing.T) {
 	}
 }
 
+// TestForeignCwdHolder_YoungLiveHolderNotFlagged pins the age floor a live
+// worktree holder must have: every pipeline stage and every interactive agent
+// session legitimately runs with cwd inside a LIVE worktree the instant it
+// starts, so reporting one at age zero told the operator to "verify and
+// terminate" work that was simply running (adversarial review of #519,
+// finding 3).
+func TestForeignCwdHolder_YoungLiveHolderNotFlagged(t *testing.T) {
+	r, liveWorktree := foreignCwdFixture(t)
+
+	procs := parseRows(t, fmt.Sprintf("%d %s %s", 42488, "00:00:03", "/bin/zsh"))
+	repoRoots := config.WorkspaceRepoRoots(r.dir)
+	fc := &foreignCwdScan{
+		Cwds:         map[int]string{42488: liveWorktree},
+		RepoRoots:    repoRoots,
+		ActiveByRepo: activeByRepoFixture(t, repoRoots),
+	}
+
+	item, warning := orphanedProcessReport(procs, map[int]bool{}, nil, fc)
+
+	if !item.OK || warning != "" {
+		t.Fatalf("a 3-second-old process in a LIVE worktree was flagged: OK=%v warning=%q", item.OK, warning)
+	}
+}
+
+// TestForeignCwdHolder_CrossRepoIssueNumberIsNotConflated is a multi-repo
+// workspace where repo A's issue-488 worktree was removed and repo B's own
+// issue-488 worktree is live. Before the fix, execution.ActiveWorktreeIssues
+// was called once over BOTH repo roots and returned one map[int]bool keyed on
+// bare issue number, so repo B's live worktree made repo A's holder read
+// Stale=false. Each repo's issue numbers are its own (adversarial review of
+// #519, finding 2).
+func TestForeignCwdHolder_CrossRepoIssueNumberIsNotConflated(t *testing.T) {
+	repoA := newLeakRepo(t)
+	staleInA := filepath.Join(repoA.dir, ".nightgauge", "worktrees", "issue-488")
+	repoA.git("worktree", "add", "-q", staleInA, "-b", "fix/488", "main")
+	repoA.git("worktree", "remove", "--force", staleInA)
+
+	repoB := newLeakRepo(t)
+	liveInB := filepath.Join(repoB.dir, ".nightgauge", "worktrees", "issue-488")
+	repoB.git("worktree", "add", "-q", liveInB, "-b", "fix/488", "main")
+
+	procs := parseRows(t, fmt.Sprintf("%d %s %s", 42488, "05:00:00", "/bin/zsh"))
+	repoRoots := []string{repoA.dir, repoB.dir}
+	fc := &foreignCwdScan{
+		Cwds:         map[int]string{42488: staleInA},
+		RepoRoots:    repoRoots,
+		ActiveByRepo: activeByRepoFixture(t, repoRoots),
+	}
+
+	item, _ := orphanedProcessReport(procs, map[int]bool{}, nil, fc)
+
+	if !strings.Contains(item.Error, "[cwd inside REMOVED worktree issue-488]") {
+		t.Fatalf("repo A's removed issue-488 was reported live because repo B's issue-488 is live: %q", item.Error)
+	}
+}
+
+// TestForeignCwdHolder_ExtensionWorktreeBaseIsScanned pins the second live
+// worktree layout on a real machine: the VSCode extension's default base
+// (`.worktrees`, WorktreeManager.ts), which the leaked-shell incident #519
+// narrates was produced by an extension-host background task in the first
+// place. Before the fix, worktreesRoots hard-coded only
+// `.nightgauge/worktrees` and this holder was invisible (adversarial review
+// of #519, finding 5).
+func TestForeignCwdHolder_ExtensionWorktreeBaseIsScanned(t *testing.T) {
+	r := newLeakRepo(t)
+	extWorktree := r.strandedWorktree(490) // <repo>/.worktrees/issue-490, live
+
+	procs := parseRows(t, fmt.Sprintf("%d %s %s", 42490, "05:00:00", "/bin/zsh"))
+	repoRoots := config.WorkspaceRepoRoots(r.dir)
+	fc := &foreignCwdScan{
+		Cwds:         map[int]string{42490: extWorktree},
+		RepoRoots:    repoRoots,
+		ActiveByRepo: activeByRepoFixture(t, repoRoots),
+	}
+
+	item, _ := orphanedProcessReport(procs, map[int]bool{}, nil, fc)
+
+	if !strings.Contains(item.Error, "[cwd inside worktree issue-490]") {
+		t.Fatalf("a holder in the VSCode extension's default worktree base was not found: %q", item.Error)
+	}
+}
+
 func TestForeignCwdHolder_PrefixIsNotContainment(t *testing.T) {
 	r, _ := foreignCwdFixture(t)
 
@@ -983,8 +1087,48 @@ func TestForeignCwdHolder_PrefixIsNotContainment(t *testing.T) {
 		t.Fatalf("mkdir: %v", err)
 	}
 
-	if base, ok := worktreeDirContaining(decoy, worktreesRoots(r.dir)); ok {
+	if _, base, ok := worktreeDirContaining(decoy, config.WorkspaceRepoRoots(r.dir)); ok {
 		t.Fatalf("a sibling directory sharing a string prefix was treated as contained: base=%q", base)
+	}
+}
+
+// TestBuildForeignCwdScan_UnreadableRepoRootIsUndetermined mirrors
+// TestCheckPipelineStashes_UnreadableRootIsNeverHealthy's fixture: a workspace
+// manifest names a repo path that exists on disk but is not a git repository
+// (a manifest entry outliving the repo it pointed at). `git worktree list`
+// then fails for that root, which must undetermine the WHOLE cwd-half scan —
+// not silently drop that one root — because a partial answer here is
+// indistinguishable from a complete one at the call site (adversarial review
+// of #519, finding 4).
+func TestBuildForeignCwdScan_UnreadableRepoRootIsUndetermined(t *testing.T) {
+	r := newLeakRepo(t)
+	notARepo := filepath.Join(r.dir, "..", "not-a-repo")
+	if err := os.MkdirAll(notARepo, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	r.write(".vscode/nightgauge-workspace.yaml",
+		"workspace:\n  name: Test\nrepositories:\n"+
+			"  - name: primary\n    path: .\n    role: primary\n"+
+			"  - name: broken\n    path: ../not-a-repo\n    role: primary\n")
+
+	if _, ok := buildForeignCwdScan(r.dir, nil); ok {
+		t.Fatal("buildForeignCwdScan reported determined with an unreadable repo root in scope")
+	}
+
+	// The check as a whole must not report healthy off the back of that: a
+	// process table that DOES include this process (so the earlier #296 guard
+	// is satisfied) but whose cwd half could not run must be unverifiable, not
+	// OK=true.
+	raw := fmt.Sprintf("%d 00:01 nightgauge-doctor-test\n", os.Getpid())
+	item, warning := processTableReport(r.dir, raw, map[int]bool{}, nil)
+	if item.OK {
+		t.Fatalf("a scan whose cwd half could not run reported healthy: %+v", item)
+	}
+	if !strings.Contains(item.Error, "unverifiable") {
+		t.Errorf("the error does not say the scan could not run: %q", item.Error)
+	}
+	if warning == "" {
+		t.Error("an undetermined cwd-half scan must produce a warning too")
 	}
 }
 

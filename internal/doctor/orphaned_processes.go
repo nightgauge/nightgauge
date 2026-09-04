@@ -501,7 +501,18 @@ func processTableReport(startDir, raw string, claimed map[int]bool, staleServe m
 			"the parsed table has %d row(s) and does not include this process (pid %d), so it did not enumerate this machine",
 			len(procs), os.Getpid()))
 	}
-	return orphanedProcessReport(procs, claimed, staleServe, buildForeignCwdScan(startDir, procs))
+	fc, cwdScanOK := buildForeignCwdScan(startDir, procs)
+	if !cwdScanOK {
+		// The mechanism itself did not work — `git worktree list` failed, or
+		// the cwd source (lsof/proc) could not be read. That is a scan that
+		// never ran, not a scan that found nothing, and the two must not
+		// collapse into the same "OK" the process-table half already guards
+		// against above (#296). Distinct from the len(repoRoots)==0 case
+		// inside buildForeignCwdScan, which legitimately has nothing to say.
+		return unverifiableProcessScan(fmt.Errorf(
+			"the process table parsed, but the cwd-inside-worktree half could not run: `git worktree list` failed, or the process cwd source (lsof/proc) was unavailable"))
+	}
+	return orphanedProcessReport(procs, claimed, staleServe, fc)
 }
 
 // listsPID reports whether pid appears in the parsed table.
@@ -540,7 +551,7 @@ func orphanedProcessReport(procs []runningProcess, claimed map[int]bool, staleSe
 	scan := classifyProcesses(procs, claimed, os.Getpid())
 	var holders []foreignCwdHolder
 	if fc != nil {
-		holders = classifyForeignCwdHolders(procs, fc.Cwds, fc.WorktreesRoots, fc.ActiveIssues, os.Getpid())
+		holders = classifyForeignCwdHolders(procs, fc.Cwds, fc.RepoRoots, fc.ActiveByRepo, os.Getpid())
 	}
 	detail := fmt.Sprintf("%d nightgauge process(es): %d owned, %d recent, %d orphaned",
 		scan.Scanned, scan.Owned, scan.Recent, len(scan.Orphans))
@@ -610,14 +621,20 @@ func orphanedProcessReport(procs []runningProcess, claimed map[int]bool, staleSe
 // by hand, and never signals one itself.
 
 // foreignCwdScan bundles the OS- and git-derived facts orphanedProcessReport
-// needs to run the cwd half of the scan. A nil pointer means the half did not
-// run at all — no worktrees root on this workspace, or the cwd source could
-// not be read — and the report says nothing about it, the safe direction for
-// a carrier that only ever names evidence.
+// needs to run the cwd half of the scan. A nil pointer means there is
+// genuinely nothing to scan — no repo root in this workspace has ever held a
+// pipeline worktree — which is distinct from the mechanism failing; see
+// buildForeignCwdScan's second return value for that case.
+//
+// ActiveByRepo is keyed per REPO ROOT, not merged into one issue-number set
+// across the workspace: two repos can legally both be mid-flight on the same
+// issue number (each repo's issue numbers are its own), so a live worktree
+// for issue-488 in repo B must never mark a holder sitting in repo A's
+// already-removed issue-488 worktree as live (#519 review finding).
 type foreignCwdScan struct {
-	Cwds           map[int]string
-	WorktreesRoots []string
-	ActiveIssues   map[int]bool
+	Cwds         map[int]string
+	RepoRoots    []string
+	ActiveByRepo map[string]map[int]bool
 }
 
 // foreignCwdHolder is one process — not necessarily a nightgauge one — whose
@@ -639,39 +656,57 @@ type foreignCwdHolder struct {
 // `doctor`, the same discipline psTimeout applies to `ps` itself.
 const cwdTimeout = 10 * time.Second
 
-// worktreesRoots is every `.nightgauge/worktrees` directory across the
-// workspace's repo roots — the ONE location this scan treats as a pipeline
-// worktree (execution/worktree.go's ensureWorktree writes here). Deliberately
-// narrower than execution.ActiveWorktreeIssues' own notion of "a worktree":
-// that answers "what has git registered?" anywhere on disk, which is right
-// for reclaiming stray worktrees a maintainer hand-created elsewhere, but
-// wrong here — a process with cwd in some unrelated hand-made worktree is not
-// evidence of the interactive-harness leak this half exists to catch.
-func worktreesRoots(startDir string) []string {
-	var roots []string
-	for _, root := range config.WorkspaceRepoRoots(startDir) {
-		roots = append(roots, filepath.Join(root, ".nightgauge", "worktrees"))
-	}
-	return roots
+// worktreeBaseDirs is every directory name, relative to a repo root, this
+// scan treats as a pipeline worktree base. There are three live layouts on a
+// real machine, not one: the Go execution.Manager's own default
+// (.nightgauge/worktrees, execution/worktree.go's ensureWorktree), the VSCode
+// extension's default (.worktrees, WorktreeManager.ts) — the interactive
+// harness whose leaked shells motivated #519 in the first place — and Claude
+// Code's own worktree base (.claude/worktrees). See
+// docs/GO_BINARY.md's worktree-layout table and
+// worktreeContainment.ts's isLinkedWorktree doc comment, which independently
+// names the same three.
+//
+// Best-effort, not authoritative: `pipeline.worktree_base` lets an operator
+// configure a fourth location, and that setting is TypeScript-side config
+// this Go binary does not parse — a custom base is invisible to this scan.
+// Deliberately narrower than execution.ActiveWorktreeIssues' own notion of "a
+// worktree": that answers "what has git registered?" anywhere on disk, which
+// is right for reclaiming stray worktrees a maintainer hand-created
+// elsewhere, but wrong here — a process with cwd in some unrelated hand-made
+// worktree is not evidence of the interactive-harness leak this half exists
+// to catch.
+var worktreeBaseDirs = []string{
+	filepath.Join(".nightgauge", "worktrees"),
+	".worktrees",
+	filepath.Join(".claude", "worktrees"),
 }
 
-// buildForeignCwdScan gathers the cwd-half inputs for this run, or returns nil
-// when the half cannot answer anything: no worktrees root at all, or the cwd
-// source itself could not be read (unsupported platform, `lsof`/`/proc`
-// unreachable). A stale-vs-live verdict this scan cannot back with a real
-// `git worktree list` read is worse than no verdict — reporting a live
-// worktree's holder as REMOVED (or the reverse) could send an operator to
-// force-kill a process that is doing legitimate work — so an undetermined
-// active-worktree read also skips this half rather than guessing.
-func buildForeignCwdScan(startDir string, procs []runningProcess) *foreignCwdScan {
-	roots := worktreesRoots(startDir)
-	if len(roots) == 0 {
-		return nil
-	}
+// buildForeignCwdScan gathers the cwd-half inputs for this run. The second
+// return value is false only when the MECHANISM did not work — `git worktree
+// list` failed in some repo root, or the cwd source itself could not be read
+// (unsupported platform, `lsof`/`/proc` unreachable) — which the caller must
+// route through unverifiableProcessScan rather than silently reporting clean
+// (#296). A workspace with no repo root at all has genuinely nothing to scan;
+// that is the one case that legitimately returns (nil, true).
+//
+// Active worktrees are resolved ONE REPO ROOT AT A TIME and kept in that
+// shape (foreignCwdScan.ActiveByRepo) rather than merged into one
+// workspace-wide issue-number set: two repos can each have their own
+// issue-488, live or removed independently, and merging would let one repo's
+// live worktree paper over another repo's removed one.
+func buildForeignCwdScan(startDir string, procs []runningProcess) (*foreignCwdScan, bool) {
 	repoRoots := config.WorkspaceRepoRoots(startDir)
-	activeIssues, determined := execution.ActiveWorktreeIssues(repoRoots)
-	if !determined {
-		return nil
+	if len(repoRoots) == 0 {
+		return nil, true
+	}
+	activeByRepo := make(map[string]map[int]bool, len(repoRoots))
+	for _, root := range repoRoots {
+		active, determined := execution.ActiveWorktreeIssues([]string{root})
+		if !determined {
+			return nil, false
+		}
+		activeByRepo[root] = active
 	}
 	pids := make([]int, 0, len(procs))
 	for _, p := range procs {
@@ -679,20 +714,28 @@ func buildForeignCwdScan(startDir string, procs []runningProcess) *foreignCwdSca
 	}
 	cwds, determined := lookupCwds(pids)
 	if !determined {
-		return nil
+		return nil, false
 	}
-	return &foreignCwdScan{Cwds: cwds, WorktreesRoots: roots, ActiveIssues: activeIssues}
+	return &foreignCwdScan{Cwds: cwds, RepoRoots: repoRoots, ActiveByRepo: activeByRepo}, true
 }
 
 // classifyForeignCwdHolders finds every process (self excluded) whose cwd
-// resolves inside one of worktreesRoots, tagging each as holding a live or a
-// REMOVED worktree.
+// resolves inside one of repoRoots' worktree bases, tagging each as holding a
+// live or a REMOVED worktree.
 //
 // Runs over ALL rows, unlike classifyProcesses — the whole point of this half
 // is the processes #341's isNightgauge() filter can never see. self is still
 // excluded: a stage legitimately runs `doctor` FROM inside its own worktree,
 // and that is not a leak.
-func classifyForeignCwdHolders(procs []runningProcess, cwds map[int]string, worktreesRoots []string, activeIssues map[int]bool, self int) []foreignCwdHolder {
+//
+// A LIVE worktree is exactly where every pipeline stage and every interactive
+// agent session legitimately runs (execution.Manager sets cmd.Dir to it,
+// and so does every harness worktreeBaseDirs names) — flagging one the
+// instant it starts would tell an operator to "verify and terminate" work
+// that is currently running. staleProcessAge gates live holders the same way
+// it gates #341's own half; a REMOVED worktree has no legitimate occupant at
+// any age, so it is reported regardless — that is the headline #519 incident.
+func classifyForeignCwdHolders(procs []runningProcess, cwds map[int]string, repoRoots []string, activeByRepo map[string]map[int]bool, self int) []foreignCwdHolder {
 	var holders []foreignCwdHolder
 	for _, p := range procs {
 		if p.PID == self {
@@ -702,7 +745,7 @@ func classifyForeignCwdHolders(procs []runningProcess, cwds map[int]string, work
 		if !ok || cwd == "" {
 			continue
 		}
-		base, ok := worktreeDirContaining(cwd, worktreesRoots)
+		repoRoot, base, ok := worktreeDirContaining(cwd, repoRoots)
 		if !ok {
 			continue
 		}
@@ -710,9 +753,13 @@ func classifyForeignCwdHolders(procs []runningProcess, cwds map[int]string, work
 		if !ok {
 			continue
 		}
+		stale := !activeByRepo[repoRoot][issueNum]
+		if !stale && p.Age < staleProcessAge {
+			continue
+		}
 		holders = append(holders, foreignCwdHolder{
 			PID: p.PID, Age: p.Age, Command: p.Command, Cwd: cwd,
-			IssueNumber: issueNum, Stale: !activeIssues[issueNum],
+			IssueNumber: issueNum, Stale: stale,
 		})
 	}
 	// Stale-first (the case that can also block a worktree removal, #110), and
@@ -726,38 +773,51 @@ func classifyForeignCwdHolders(procs []runningProcess, cwds map[int]string, work
 	return holders
 }
 
-// worktreeDirContaining reports whether cwd resolves inside one of
-// worktreesRoots and, if so, the immediate child directory name — the
-// worktree's own basename (e.g. "issue-488" or "myrepo-issue-488").
+// worktreeDirContaining reports whether cwd resolves inside one of repoRoots'
+// known worktree bases (worktreeBaseDirs) and, if so, which repo root matched
+// and the immediate child directory name — the worktree's own basename (e.g.
+// "issue-488" or "myrepo-issue-488").
 //
-// Both sides are resolved with filepath.EvalSymlinks first (macOS's /tmp →
-// /private/tmp is the routine case) and containment is decided by
-// filepath.Rel, never a string prefix: "…/worktrees-old/x" shares the literal
-// prefix "…/worktrees" with "…/worktrees/x" but is Rel-relative "../worktrees-old/x",
-// which is rejected. A symlink-eval failure (the path no longer exists, a
-// permission error) reports false — under-reporting is the safe direction for
-// a check that only ever names evidence, the same doctrine isNightgauge's own
-// comment states for its narrower ambiguity.
-func worktreeDirContaining(cwd string, worktreesRoots []string) (base string, ok bool) {
-	rc, err := filepath.EvalSymlinks(cwd)
-	if err != nil {
-		return "", false
-	}
-	for _, root := range worktreesRoots {
-		rr, err := filepath.EvalSymlinks(root)
+// cwd is deliberately NOT required to exist: `git worktree remove` deletes
+// the directory outright, and a shell still parked there — the headline #519
+// incident — must still be found. cwd is only Clean'd and made absolute
+// (lexically, never filepath.EvalSymlinks, which fails ENOENT on a removed
+// directory); only the worktree-base side is resolved with EvalSymlinks
+// (macOS's /tmp → /private/tmp is the routine case there), because that
+// parent directory — unlike the specific worktree subdirectory that may have
+// been removed — still exists whenever this scan has anything to find.
+// Containment is decided by filepath.Rel, never a string prefix:
+// "…/worktrees-old/x" shares the literal prefix "…/worktrees" with
+// "…/worktrees/x" but is Rel-relative "../worktrees-old/x", which is
+// rejected. A base directory that was never created (this repo never used
+// that harness) simply fails EvalSymlinks and is skipped, not fatal to the
+// other bases or repo roots.
+func worktreeDirContaining(cwd string, repoRoots []string) (repoRoot, base string, ok bool) {
+	clean := filepath.Clean(cwd)
+	if !filepath.IsAbs(clean) {
+		abs, err := filepath.Abs(clean)
 		if err != nil {
-			continue
+			return "", "", false
 		}
-		rel, err := filepath.Rel(rr, rc)
-		if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-			continue
-		}
-		if i := strings.IndexByte(rel, filepath.Separator); i >= 0 {
-			rel = rel[:i]
-		}
-		return rel, true
+		clean = abs
 	}
-	return "", false
+	for _, root := range repoRoots {
+		for _, baseDir := range worktreeBaseDirs {
+			rr, err := filepath.EvalSymlinks(filepath.Join(root, baseDir))
+			if err != nil {
+				continue
+			}
+			rel, err := filepath.Rel(rr, clean)
+			if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+				continue
+			}
+			if i := strings.IndexByte(rel, filepath.Separator); i >= 0 {
+				rel = rel[:i]
+			}
+			return root, rel, true
+		}
+	}
+	return "", "", false
 }
 
 // lookupCwds resolves the cwd of every pid in ONE bounded call per platform —
@@ -787,11 +847,18 @@ func lookupCwds(pids []int) (map[int]string, bool) {
 // lookupCwdsLinux reads /proc/<pid>/cwd directly — no subprocess, no timeout
 // needed. A pid this reader cannot resolve (already exited, owned by another
 // user) is simply absent from the result.
+//
+// The kernel appends " (deleted)" to the readlink target when the directory
+// itself no longer exists — exactly the #519 headline case, a process still
+// parked in a worktree `git worktree remove` deleted out from under it — and
+// that suffix is stripped here, at the source, so every downstream consumer
+// (worktreeDirContaining above all) sees a plain path rather than needing its
+// own copy of this platform-specific shape.
 func lookupCwdsLinux(pids []int) map[int]string {
 	cwds := make(map[int]string, len(pids))
 	for _, pid := range pids {
 		if link, err := os.Readlink(fmt.Sprintf("/proc/%d/cwd", pid)); err == nil {
-			cwds[pid] = link
+			cwds[pid] = strings.TrimSuffix(link, " (deleted)")
 		}
 	}
 	return cwds
