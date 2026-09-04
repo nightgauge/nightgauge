@@ -74,6 +74,15 @@ const HALT_SKIP_ENVIRONMENTAL: ReadonlySet<string> = new Set([
   // uniquely — the later success that clears the notice. See
   // src/utils/adapterAuthNotice.ts.
   "adapter_auth_failed",
+  // #1391 — GitHub throttled a `gh` call mid-stage. Go routes this kind with
+  // api_overloaded / api_connection_lost: short per-issue backoff, no global
+  // cooldown, no lifetime-cap increment, explicitly no pause. Halting here
+  // would override that decision and force a manual Resume for a throttle that
+  // clears in minutes — the identical override the api_overloaded branch was
+  // written to stop. Environmental rather than a toast branch of its own: it is
+  // upstream-provider state, exactly like the quota and network entries beside
+  // it, and nothing about the issue is at fault.
+  "github_rate_limited",
 ]);
 const HALT_SKIP_TRANSIENT_STALL: ReadonlySet<string> = new Set(["stall_kill"]);
 
@@ -91,7 +100,9 @@ const HALT_SKIP_TRANSIENT_STALL: ReadonlySet<string> = new Set(["stall_kill"]);
  * asks the canonical classifier for the kind and tests membership, so the only
  * thing local to this file is the SET of kinds that skip the halt — a routing
  * policy, which is genuinely this layer's decision. The vocabulary it names is
- * pinned by TERMINAL_KINDS_SKIPPING_HALT below.
+ * pinned by HALT_SKIP_ENVIRONMENTAL and HALT_SKIP_TRANSIENT_STALL above, and by
+ * tests/services/concurrentPipelineManager.haltPolicy.test.ts against the kinds
+ * the table can actually produce.
  */
 function isTransientNetworkFailureText(errMsg: string): boolean {
   const kind = classifyTerminalKind(errMsg);

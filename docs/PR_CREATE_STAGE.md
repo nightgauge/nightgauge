@@ -258,6 +258,19 @@ not author:
 - Spike artifact authoring (`type:spike` issues bypass the runner).
 - Batch / cross-repo PR bodies.
 
+## Phase reporting on both routes (#1247, #1397)
+
+`pr-create` reports its phases exactly as `pr-merge` does, through the same
+`stages.PhaseReporter` on the context, and both of its routes — the Go
+scheduler and the extension's `nightgauge pr-stage create --json` subprocess —
+are wired the same way. The two verbs are wired **separately**, so one being
+instrumented says nothing about the other; `TestPrStageCreate_EmitsPhases`
+pins this one.
+
+The contract (the live stderr stream, the `phases` array, the precedence rule
+between them, and the cross-language sentinel guard) is documented once, in
+[PR_MERGE_STAGE.md § Phase reporting on both routes](PR_MERGE_STAGE.md#phase-reporting-on-both-routes-1247-1397).
+
 ## Telemetry
 
 Per-stage `execution_path` is recorded on `V2StageDetail` (Go) /
