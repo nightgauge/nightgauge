@@ -100,6 +100,25 @@ export class StatusBarManager {
    * window reload.
    */
   private selectedUsageWindowId: string | null = null;
+  /**
+   * Last GraphQL rate-limit reading, retained so the spend meter (#1347) can
+   * re-render the item without a fresh board call — the two facts arrive from
+   * different sources on different cadences.
+   */
+  private rateLimitState: {
+    remaining: number;
+    limit: number;
+    resetAt: number;
+    exhausted: boolean;
+    low: boolean;
+  } | null = null;
+  /** Last measured hourly API spend (Issue #1347); null when unmeasurable. */
+  private apiSpend: {
+    points: number;
+    calls: number;
+    topCaller: string | null;
+    topCallerPoints: number;
+  } | null = null;
 
   constructor() {
     // Main pipeline status item (leftmost)
@@ -797,24 +816,77 @@ export class StatusBarManager {
     exhausted: boolean;
     low: boolean;
   }): void {
+    this.rateLimitState = state;
+    this.renderRateLimitItem();
+  }
+
+  /**
+   * Report the last hour of measured GitHub API spend (Issue #1347).
+   *
+   * The remaining count above answers "how close is the cliff?"; this answers
+   * "how fast am I walking towards it, and who is walking?". They are rendered
+   * on ONE item on purpose — split across two, an operator reads a falling
+   * number and a spend rate as unrelated facts, which is how every previous
+   * exhaustion here was noticed only after it had already happened.
+   *
+   * Passing null clears the spend half (the meter could not read the ledger)
+   * without disturbing the remaining count, because an absent measurement must
+   * render as absent rather than as zero.
+   */
+  updateApiSpend(
+    spend: {
+      points: number;
+      calls: number;
+      topCaller: string | null;
+      topCallerPoints: number;
+    } | null
+  ): void {
+    this.apiSpend = spend;
+    if (this.rateLimitState) {
+      this.renderRateLimitItem();
+    }
+  }
+
+  private renderRateLimitItem(): void {
+    const state = this.rateLimitState;
+    if (!state) {
+      return;
+    }
     const { remaining, limit, resetAt, exhausted, low } = state;
     const resetDate = new Date(resetAt * 1000);
     const resetsIn = Math.max(0, Math.ceil((resetDate.getTime() - Date.now()) / 60_000));
+    const spend = this.apiSpend;
+    // The rate rides in the label itself, not only the tooltip: a tooltip is
+    // read after someone already suspects a problem, and the entire point of
+    // this number is to be seen before that.
+    const rate = spend ? ` ${spend.points.toLocaleString()}/h` : "";
     const label = exhausted
-      ? `$(error) GQL 0/${limit}`
+      ? `$(error) GQL 0/${limit}${rate}`
       : low
-        ? `$(warning) GQL ${remaining.toLocaleString()}/${limit}`
-        : `$(github) GQL ${remaining.toLocaleString()}/${limit}`;
+        ? `$(warning) GQL ${remaining.toLocaleString()}/${limit}${rate}`
+        : `$(github) GQL ${remaining.toLocaleString()}/${limit}${rate}`;
     this.rateLimitItem.text = label;
-    this.rateLimitItem.tooltip = [
+
+    const lines = [
       `GitHub GraphQL API quota`,
       `${remaining.toLocaleString()} / ${limit} remaining`,
       exhausted
         ? `Exhausted — resets in ${resetsIn} min (${resetDate.toLocaleTimeString()})`
         : `Resets in ${resetsIn} min (${resetDate.toLocaleTimeString()})`,
-      ``,
-      `Click to open Dashboard`,
-    ].join("\n");
+    ];
+    if (spend) {
+      lines.push(
+        ``,
+        `Spent in the last hour: ${spend.points.toLocaleString()} point(s) over ${spend.calls.toLocaleString()} request(s)`,
+        spend.topCaller
+          ? `Top caller: ${spend.topCaller} (${spend.topCallerPoints.toLocaleString()} pts)`
+          : `No spend attributed in that window`,
+        `Full breakdown: nightgauge api-usage --since 1h`
+      );
+    }
+    lines.push(``, `Click to open Dashboard`);
+    this.rateLimitItem.tooltip = lines.join("\n");
+
     this.rateLimitItem.backgroundColor = exhausted
       ? new vscode.ThemeColor("statusBarItem.errorBackground")
       : low

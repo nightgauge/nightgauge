@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nightgauge/nightgauge/internal/github"
 	"github.com/spf13/cobra"
 )
 
@@ -47,16 +48,17 @@ const apiUsageDefaultPath = ".nightgauge/logs/github-api.jsonl"
 
 func apiUsageCmd() *cobra.Command {
 	var (
-		path   string
-		since  time.Duration
-		byWhat string
-		top    int
-		asJSON bool
+		path     string
+		since    time.Duration
+		byWhat   string
+		resource string
+		top      int
+		asJSON   bool
 	)
 	cmd := &cobra.Command{
 		Use:   "api-usage",
 		Short: "Report GitHub API points by caller from the request ledger",
-		Long: `Aggregate the GitHub API ledger written when NIGHTGAUGE_GITHUB_API_LOG is set.
+		Long: `Aggregate the GitHub API ledger, which is written by default (#1347).
 
 The ledger records every request at the HTTP transport with the points GitHub
 actually billed it, so this report answers "what is consuming the budget?" with
@@ -64,41 +66,58 @@ measurement rather than a code audit. A ProjectV2 board read costs 17 GraphQL
 points per page; a REST GET costs 1. Counting call sites cannot see that
 difference — this can.
 
-Enable the ledger, reproduce the window you care about, then read it back:
+The ledger runs unattended, so the window you care about is already on disk
+when you go looking — including the window in which a quota was exhausted,
+which is never reproducible on demand:
 
-  NIGHTGAUGE_GITHUB_API_LOG=1 nightgauge serve --workspace .
-  nightgauge api-usage --since 1h`,
+  nightgauge api-usage --since 1h
+
+Set NIGHTGAUGE_GITHUB_API_LOG=0 (or github.api_ledger.enabled: false) to switch
+the ledger off; set it to a path to write somewhere other than the default
+.nightgauge/logs/github-api.jsonl.`,
 		SilenceUsage: true,
 		Example: `  nightgauge api-usage
   nightgauge api-usage --since 30m --by op
-  nightgauge api-usage --by resource --json`,
+  nightgauge api-usage --by resource --json
+  nightgauge api-usage --since 1h --resource graphql   # just the pool that runs out`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			recs, err := readAPIUsage(path, since)
 			if err != nil {
 				return err
 			}
+			recs = filterAPIUsageResource(recs, resource)
 			if len(recs) == 0 {
 				fmt.Fprintf(cmd.OutOrStdout(),
-					"no ledger records%s — set NIGHTGAUGE_GITHUB_API_LOG=1 and reproduce the window\n",
+					"no ledger records%s — the workspace made no GitHub requests in that window\n",
 					sinceSuffix(since))
 				return nil
 			}
 			groups, total := groupAPIUsage(recs, byWhat)
 			if asJSON {
-				return json.NewEncoder(cmd.OutOrStdout()).Encode(map[string]interface{}{
+				payload := map[string]interface{}{
 					"records": len(recs),
 					"points":  total,
 					"by":      byWhat,
 					"groups":  groups,
-				})
+				}
+				if resource != "" {
+					// Named in the payload so a consumer cannot mistake a
+					// filtered total for the whole bill — the two differ by
+					// more than an order of magnitude on a normal window.
+					payload["resource"] = resource
+				}
+				return json.NewEncoder(cmd.OutOrStdout()).Encode(payload)
 			}
 			printAPIUsage(cmd.OutOrStdout(), recs, groups, total, byWhat, top, since)
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&path, "file", "", "Ledger path (default .nightgauge/logs/github-api.jsonl)")
+	cmd.Flags().StringVar(&path, "file", "", "Read one specific ledger file (default: the rolling set at .nightgauge/logs/github-api.jsonl)")
 	cmd.Flags().DurationVar(&since, "since", 0, "Only records newer than this (e.g. 30m, 2h)")
 	cmd.Flags().StringVar(&byWhat, "by", "caller", "Group by: caller, op, resource, path")
+	cmd.Flags().StringVar(&resource, "resource", "",
+		"Only records billed to this rate-limit pool (e.g. graphql, core). "+
+			"graphql includes graphql_mutation — they share one quota")
 	cmd.Flags().IntVar(&top, "top", 15, "Show at most this many rows")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "Output as JSON")
 	return cmd
@@ -108,27 +127,61 @@ Enable the ledger, reproduce the window you care about, then read it back:
 // A malformed line is skipped rather than fatal: the ledger is append-only
 // from a live process, so a truncated final line is normal, not corruption.
 func readAPIUsage(path string, since time.Duration) ([]apiUsageRecord, error) {
-	if path == "" {
-		path = apiUsageDefaultPath
+	var cutoff time.Time
+	if since > 0 {
+		cutoff = time.Now().Add(-since)
+	}
+
+	// An explicit --file is read exactly as given — that is the archaeology
+	// case, pointed at one preserved file. The DEFAULT path is the live,
+	// rolling ledger (#1347), so it is read as the rolling SET: oldest backup
+	// first, live file last. Reading only the live file would report a sudden
+	// collapse in spending at precisely the moment spending was heavy enough
+	// to rotate, which is the one window anybody opens this report for.
+	var files []string
+	if path != "" {
+		files = []string{path}
+	} else {
 		wd, err := os.Getwd()
 		if err != nil {
 			return nil, fmt.Errorf("api-usage: resolve working dir: %w", err)
 		}
-		path = filepath.Join(wd, path)
+		path = filepath.Join(wd, apiUsageDefaultPath)
+		files = github.LedgerFiles(path)
+		if len(files) == 0 {
+			return nil, fmt.Errorf("api-usage: no ledger at %s (the ledger is on by default; %s=0 switches it off)", path, apiLedgerEnvName)
+		}
 	}
+
+	var out []apiUsageRecord
+	for _, file := range files {
+		recs, err := readAPIUsageFile(file, cutoff)
+		if err != nil {
+			if os.IsNotExist(err) && len(files) > 1 {
+				continue // rotated away between listing and opening
+			}
+			return nil, err
+		}
+		out = append(out, recs...)
+	}
+	return out, nil
+}
+
+// apiLedgerEnvName is the env var the ledger reads, named here for the error
+// message above so the CLI and the writer cannot drift apart silently.
+const apiLedgerEnvName = "NIGHTGAUGE_GITHUB_API_LOG"
+
+func readAPIUsageFile(path string, cutoff time.Time) ([]apiUsageRecord, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("api-usage: no ledger at %s (set NIGHTGAUGE_GITHUB_API_LOG=1 to start one)", path)
+			return nil, fmt.Errorf("api-usage: no ledger at %s (the ledger is on by default; %s=0 switches it off): %w",
+				path, apiLedgerEnvName, os.ErrNotExist)
 		}
 		return nil, fmt.Errorf("api-usage: open ledger: %w", err)
 	}
 	defer f.Close()
 
-	var cutoff time.Time
-	if since > 0 {
-		cutoff = time.Now().Add(-since)
-	}
 	var out []apiUsageRecord
 	sc := bufio.NewScanner(f)
 	// Ledger lines are small, but a long GraphQL op name plus a caller path
@@ -155,6 +208,35 @@ func readAPIUsage(path string, since time.Duration) ([]apiUsageRecord, error) {
 		return nil, fmt.Errorf("api-usage: read ledger: %w", err)
 	}
 	return out, nil
+}
+
+// filterAPIUsageResource keeps only records billed to one rate-limit pool.
+//
+// The pools have SEPARATE hourly quotas, so a report that sums them is not a
+// budget: a live run of the always-on ledger showed a 70-point GraphQL window
+// whose headline total read 2216, because REST traffic on the `core` pool was
+// added in — and most of that 2216 was another process spending `core` between
+// two of our calls, which derived cost cannot tell apart from our own.
+//
+// A consumer asking "how close am I to the GraphQL cliff?" must be able to ask
+// for the GraphQL pool alone. An empty filter keeps everything, which is the
+// right default for the human report (it prints a per-resource table alongside).
+func filterAPIUsageResource(recs []apiUsageRecord, resource string) []apiUsageRecord {
+	resource = strings.TrimSpace(strings.ToLower(resource))
+	if resource == "" {
+		return recs
+	}
+	out := recs[:0:0]
+	for _, r := range recs {
+		kind := strings.ToLower(r.Kind)
+		// graphql and graphql_mutation are one quota, so the obvious filter
+		// "graphql" must match both — otherwise every mutation silently drops
+		// out of the number an operator is watching.
+		if kind == resource || strings.HasPrefix(kind, resource+"_") {
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 // groupAPIUsage buckets records by the requested dimension and returns them

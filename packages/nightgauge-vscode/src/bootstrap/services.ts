@@ -175,6 +175,7 @@ import { PipelineBridge } from "../services/PipelineBridge";
 import { PromptTemplateService } from "../services/PromptTemplateService";
 import { RepositorySettingsService } from "../services/RepositorySettingsService";
 import { BinaryResolver } from "../services/BinaryResolver";
+import { API_BUDGET_REFRESH_MS, readApiBudget } from "../services/apiBudget/ApiBudgetService";
 
 // createWorkItemProvider lives in its own focused module (#3754) so it can be
 // imported without the whole service graph. Re-exported here (imported above)
@@ -2383,6 +2384,35 @@ export async function initializeServices(
   context.subscriptions.push(
     projectBoardService.onRateLimitState((state) => statusBar.updateRateLimit(state))
   );
+
+  // Wire the measured API spend meter (#1347) → the same status bar item.
+  //
+  // The remaining count above is a level; this is the RATE, and the level
+  // alone has never been actionable: an operator watching it fall has no way
+  // to tell a busy pipeline from a runaway sweep, so every exhaustion in this
+  // workspace's history was diagnosed only after the fact. The reading comes
+  // from the Go binary's aggregation of the request ledger, not from a second
+  // TypeScript aggregator, so the status bar and `nightgauge doctor` cannot
+  // disagree about what was spent.
+  //
+  // Costs no GitHub quota — it reads a local file — which is the point: a
+  // meter that spent quota to report on quota would appear in its own report.
+  if (workspaceRoot) {
+    const apiBudgetTimer = setInterval(() => {
+      void (async () => {
+        const binaryPath = await BinaryResolver.fromVSCode().resolve();
+        if (!binaryPath) {
+          statusBar.updateApiSpend(null);
+          return;
+        }
+        statusBar.updateApiSpend(await readApiBudget({ binaryPath, cwd: workspaceRoot }));
+      })();
+    }, API_BUDGET_REFRESH_MS);
+    // Unref so a pending refresh cannot hold the extension host alive at
+    // shutdown; the dispose below is what actually stops it.
+    apiBudgetTimer.unref?.();
+    context.subscriptions.push({ dispose: () => clearInterval(apiBudgetTimer) });
+  }
 
   // ── DI Container (Issue #2771 — Part 1: GitHub services; Issue #2772 — Part 2: Pipeline services) ──
   // Simple typed registry. Services are registered here and resolved by callers

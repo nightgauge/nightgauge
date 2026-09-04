@@ -755,6 +755,10 @@ type Config struct {
 	GitHubUser string            `json:"githubUser,omitempty" yaml:"github_user,omitempty"`
 	GitHubAuth *GitHubAuthConfig `json:"githubAuth,omitempty" yaml:"github_auth,omitempty"`
 
+	// GitHubAPILedger is `github.api_ledger` (#1347) — nil means the default,
+	// which is on. Applied via config.ApplyAPILedgerSetting.
+	GitHubAPILedger *APILedgerConfig `json:"githubApiLedger,omitempty" yaml:"-"`
+
 	// Platform settings
 	PlatformEnabled *bool  `json:"platformEnabled,omitempty"`
 	PlatformURL     string `json:"platformUrl,omitempty"`
@@ -1647,6 +1651,21 @@ func ResolvedMaxConcurrent(cfg *Config) int {
 type githubBlock struct {
 	Owner string `yaml:"owner"`
 	Repo  string `yaml:"repo"`
+	// APILedger controls the GitHub request ledger (#1347). It lives in this
+	// otherwise-legacy block because `github:` is the only place a reader
+	// looks for a GitHub-wide setting, and inventing a second top-level key
+	// for one flag would be the compat shim this repo does not keep.
+	APILedger *APILedgerConfig `yaml:"api_ledger,omitempty"`
+}
+
+// APILedgerConfig is the opt-out for the always-on GitHub request ledger.
+//
+// Enabled is a *bool because the tri-state matters: unset means "on" (the
+// #1347 default), and a plain bool would make an unset field read as an
+// explicit false — silently switching the instrument off for every existing
+// config in the workspace, which is exactly the outage this issue is about.
+type APILedgerConfig struct {
+	Enabled *bool `yaml:"enabled,omitempty" json:"enabled,omitempty"`
 }
 
 // yamlConfigNested is the current nested YAML format:
@@ -1781,6 +1800,20 @@ func DefaultConfig() *Config {
 // shadows the developer's machine setting, which is almost always a
 // setup mistake. See docs/SETTINGS_ARCHITECTURE.md for the tier model.
 func Load(workspaceRoot string) (*Config, error) {
+	cfg, err := load(workspaceRoot)
+	// The GitHub request ledger is a process-wide instrument switched on
+	// before anything has read config, so the opt-out has to be pushed to it
+	// from here (#1347). Applied on EVERY successful load, not once: a
+	// workspace whose config says the ledger is off must be honoured no matter
+	// which entry point loaded it, and the setter latches — turning it off is
+	// sticky, turning it on is the default and a no-op.
+	if err == nil {
+		ApplyAPILedgerSetting(cfg)
+	}
+	return cfg, err
+}
+
+func load(workspaceRoot string) (*Config, error) {
 	projectPath := filepath.Join(workspaceRoot, ".nightgauge", "config.yaml")
 	if _, err := os.Stat(projectPath); err != nil {
 		if !os.IsNotExist(err) {
@@ -1908,6 +1941,9 @@ func parseYAMLNested(data []byte) (*Config, error) {
 	}
 	cfg.GitHubUser = nested.GitHubUser
 	cfg.GitHubAuth = nested.GitHubAuth
+	if nested.GitHub.APILedger != nil {
+		cfg.GitHubAPILedger = nested.GitHub.APILedger
+	}
 	cfg.Sanitization = nested.Sanitization
 	cfg.FeedbackLoop = nested.FeedbackLoop
 	cfg.Telemetry = nested.Platform.Telemetry
