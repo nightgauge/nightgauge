@@ -138,42 +138,6 @@ table, carve-out rationale, and consequence analysis.
 
 ### Fixed
 
-#### Attention store writes interleaved across processes (#1425)
-
-- `Store.writeMaterializedLocked` staged every writer of a card at the same
-  `<id>.json.tmp`. The rename that publishes is atomic; the staging write is
-  not, so two processes materializing one card truncated each other's
-  in-flight bytes and the loser published a mix. The package's claimed
-  cross-process guarantee — "atomic temp+rename plus the terminal-state CAS" —
-  covered neither: the CAS runs before the write and guards the lifecycle
-  transition, and a rename is only atomic per rename.
-- **Go binary** (`internal/attention/store.go`, `streak.go`, `standing.go`):
-  the per-directory `sync.Mutex` is now layered over an advisory
-  `internal/flock` lock on `<dir>/nightgauge-attention.lock`, following the
-  worktree chokepoint (#1163), so the daemon, the `nightgauge attention` CLI
-  verbs and the sweep take one critical section. Staging paths are per-writer
-  (pid + entropy) so the deliberately fail-open lock degrades to lost
-  serialisation rather than torn bytes. The materialized write, the streak
-  read-modify-write and the journal append all nest inside the one section.
-- **The hold is bounded, because the wait is.** `Store.Resolve` runs an
-  option's verb _inside_ that section to keep exactly-once verb execution, and
-  the verb was unbounded: the daemon's `issue.close` calls the GitHub client,
-  which sleeps through a fully exhausted rate limit for up to 75 minutes —
-  while the API-budget sweep raises the very cards reporting that exhaustion.
-  Every other producer's bounded wait then expired onto the fail-open branch,
-  so the new serialisation lapsed exactly when the store was busiest. The verb
-  now runs under `verbTimeout`, strictly below `flockTimeout`, which makes lock
-  expiry mean what its comment claims (a wedged holder) instead of "somebody is
-  legitimately still working". A verb that blows the ceiling fails, and
-  `Resolve`'s existing contract leaves the card open for a retry.
-- **Corollary, `internal/ipc/attention.go`:** the autonomous resume verb spawns
-  the fleet dispatch loop, and used to hand it the verb's own context — safe
-  only while that context happened to be the server-lifetime one. Under the new
-  ceiling the same line would have killed the loop the moment the verb
-  returned, reintroducing the "running but never dispatching" dead state
-  (#405) through a context lifetime. Long-lived spawns now detach
-  (`detachedRunCtx`).
-
 #### Empty epics invisible in Repositories tree view (#3329)
 
 - A freshly-created epic (`type:epic` label, zero sub-issues) was filtered out
