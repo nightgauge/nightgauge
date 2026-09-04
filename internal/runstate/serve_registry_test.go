@@ -1,6 +1,7 @@
 package runstate
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -431,5 +432,213 @@ func TestServeRegistryNeverResolvesUnderTheRealHome(t *testing.T) {
 	}
 	if real := hometest.RealPath(".nightgauge"); real != "" && strings.HasPrefix(dir, real+string(filepath.Separator)) {
 		t.Fatalf("ServeSidecarDir() = %q resolves inside the real home's %q", dir, real)
+	}
+}
+
+// A record that could not be READ is not a record that says its daemon is
+// gone. The walker hands the prune nil bytes for both an unreadable file and
+// an empty one, and reading nil as "dead" deletes the claim of a perfectly
+// healthy daemon — here, this test process itself, with a heartbeat one
+// instant old.
+//
+// The blast radius is what makes this more than one file. Descriptor
+// exhaustion at sweep time makes every os.ReadFile in the pass fail, so a
+// single prune would erase the claims of every live daemon on the machine —
+// the exact "fail toward deleting the evidence doctor reports on" outcome each
+// rule in PruneServeRegistry is written to avoid, and the opposite of the bias
+// servePathExists already takes for a failed stat.
+func TestPruneServeRegistry_KeepsARecordItCouldNotRead(t *testing.T) {
+	isolatedHome(t)
+	live := t.TempDir()
+	if err := WriteServeSidecar(live, ServeSidecar{
+		PID: os.Getpid(), StartedAt: time.Now(), LastHeartbeatAt: time.Now(),
+	}); err != nil {
+		t.Fatalf("WriteServeSidecar: %v", err)
+	}
+	path, err := ServeSidecarPath(live)
+	if err != nil {
+		t.Fatalf("ServeSidecarPath: %v", err)
+	}
+	if err := os.Chmod(path, 0o000); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(path, 0o644) })
+	if _, err := os.ReadFile(path); err == nil {
+		t.Skip("this filesystem or user can read a 0o000 file, so there is no unreadable record to plant")
+	}
+
+	res := PruneServeRegistry(time.Now())
+
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		t.Fatalf("the prune deleted the record of a LIVE daemon (pid %d, heartbeat now) because the file could not be read; res = %+v",
+			os.Getpid(), res)
+	}
+}
+
+// The same read failure, one level out: deleting the record sets
+// recordSurvives = false, so the same pass then takes the live daemon's lock
+// file as an orphan nothing explains.
+func TestPruneServeRegistry_KeepsTheLockOfARecordItCouldNotRead(t *testing.T) {
+	isolatedHome(t)
+	if !flock.Supported {
+		t.Skip("no advisory file lock on this platform")
+	}
+	live := t.TempDir()
+	if err := WriteServeSidecar(live, ServeSidecar{
+		PID: os.Getpid(), StartedAt: time.Now(), LastHeartbeatAt: time.Now(),
+	}); err != nil {
+		t.Fatalf("WriteServeSidecar: %v", err)
+	}
+	recordPath, err := ServeSidecarPath(live)
+	if err != nil {
+		t.Fatalf("ServeSidecarPath: %v", err)
+	}
+	lockPath, err := ServeLeasePath(live)
+	if err != nil {
+		t.Fatalf("ServeLeasePath: %v", err)
+	}
+	if err := os.WriteFile(lockPath, nil, 0o644); err != nil {
+		t.Fatalf("plant lock: %v", err)
+	}
+	if err := os.Chmod(recordPath, 0o000); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(recordPath, 0o644) })
+	if _, err := os.ReadFile(recordPath); err == nil {
+		t.Skip("this filesystem or user can read a 0o000 file, so there is no unreadable record to plant")
+	}
+
+	res := PruneServeRegistry(time.Now())
+
+	if _, err := os.Stat(lockPath); os.IsNotExist(err) {
+		t.Fatalf("the prune unlinked a live daemon's lock file because its record could not be read; res = %+v", res)
+	}
+}
+
+// holdRegistryGuard takes the registry mutation guard from a descriptor of
+// this test's own, standing in for the other process that would hold it.
+//
+// flock is per open-file-description, so a second fd in this process contends
+// with runstate's exactly as another process would — the same property
+// TestPruneServeRegistry_LeavesAHeldLockAlone relies on.
+func holdRegistryGuard(t *testing.T) {
+	t.Helper()
+	if !flock.Supported {
+		t.Skip("no advisory file lock on this platform")
+	}
+	path := filepath.Join(registryDir(t), serveRegistryGuardName)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o644)
+	if err != nil {
+		t.Fatalf("open guard: %v", err)
+	}
+	if err := flock.Exclusive(f, 0); err != nil {
+		t.Fatalf("take guard: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = flock.Unlock(f)
+		_ = f.Close()
+	})
+	// So the assertions below do not sit for the production wait.
+	prev := serveRegistryGuardWait
+	serveRegistryGuardWait = 50 * time.Millisecond
+	t.Cleanup(func() { serveRegistryGuardWait = prev })
+}
+
+// The sweep half of the mutual exclusion (#1426).
+//
+// Unlinking a lock file is the first thing in the tree that ever made a lease
+// lock's path stop naming the inode an acquirer had already opened. An
+// acquirer sits between `open(path)` and `flock(fd)` — invisible to the sweep,
+// which sees only a lock file no record explains — and an unlink landing there
+// leaves it holding a lease on an unlinked inode while the next acquirer
+// creates a fresh file at the same path and locks that. Two holders of one
+// workspace's lease, which is the state #1349 exists to prevent.
+//
+// So the sweep must not run at all while an acquisition is in flight. The
+// guard is what an in-flight acquirer holds; with the sweep unguarded this
+// orphan is unlinked and the test goes red.
+func TestPruneServeRegistry_RemovesNothingWhileALeaseAcquisitionIsInFlight(t *testing.T) {
+	isolatedHome(t)
+	orphan := deadWorkspaceRoot(t)
+	lockPath, err := ServeLeasePath(orphan)
+	if err != nil {
+		t.Fatalf("ServeLeasePath: %v", err)
+	}
+	holdRegistryGuard(t)
+	if err := os.WriteFile(lockPath, nil, 0o644); err != nil {
+		t.Fatalf("plant lock: %v", err)
+	}
+
+	res := PruneServeRegistry(time.Now())
+
+	if _, err := os.Stat(lockPath); os.IsNotExist(err) {
+		t.Fatalf("the sweep unlinked a lock file while a lease acquisition held the registry guard; res = %+v", res)
+	}
+	if res.Removed() != 0 {
+		t.Errorf("Removed() = %d, want 0 — a sweep that cannot hold the guard must remove nothing", res.Removed())
+	}
+}
+
+// The acquisition half of the same exclusion. Resolved the other way round,
+// the race produces a spurious refusal rather than two holders: the acquirer's
+// flock is a deliberate single try, so a lock momentarily held by a sweep of
+// somebody else's lock file reads as a live daemon and the refusal is
+// permanent — `serve` then runs its whole life with no scheduler attached, and
+// `autonomous run` exits.
+//
+// The fix is that the acquirer does not reach its open at all while the sweep
+// holds the guard. What it must never do is mistake the sweep for a holder.
+func TestAcquireServeLease_DoesNotRaceASweepAndDoesNotMistakeItForAHolder(t *testing.T) {
+	isolatedHome(t)
+	root := t.TempDir()
+	lockPath, err := ServeLeasePath(root)
+	if err != nil {
+		t.Fatalf("ServeLeasePath: %v", err)
+	}
+	holdRegistryGuard(t)
+
+	lease, err := AcquireServeLease(root)
+	if err == nil {
+		lease.Release()
+		t.Fatal("took the lease while a registry sweep held the guard — the open and the flock can then be split by an unlink, leaving this lease on an inode no longer at its path")
+	}
+	if errors.Is(err, ErrServeLeaseHeld) {
+		t.Fatalf("a sweep was reported as a live scheduler holding the lease, which is a permanent refusal for a momentary condition: %v", err)
+	}
+	if _, statErr := os.Stat(lockPath); statErr == nil {
+		t.Errorf("the lock file at %s was created before the guard was taken, so the sweep could have unlinked it mid-acquisition", lockPath)
+	}
+}
+
+// The guard is state in the registry directory, so the walkers have to skip it
+// structurally — and the sweep above all, since a sweep that reclaimed its own
+// guard would unlink the file it is holding.
+func TestRegistryGuardIsNotItselfARegistryFile(t *testing.T) {
+	isolatedHome(t)
+	if !flock.Supported {
+		t.Skip("no advisory file lock on this platform")
+	}
+	guardPath := filepath.Join(registryDir(t), serveRegistryGuardName)
+	if strings.HasSuffix(serveRegistryGuardName, serveRecordSuffix) || strings.HasSuffix(serveRegistryGuardName, serveLockSuffix) {
+		t.Fatalf("the guard is named %q, which the registry walkers treat as a record or a lock", serveRegistryGuardName)
+	}
+
+	lease, err := AcquireServeLease(t.TempDir())
+	if err != nil {
+		t.Fatalf("AcquireServeLease: %v", err)
+	}
+	defer lease.Release()
+	if _, err := os.Stat(guardPath); err != nil {
+		t.Fatalf("acquiring a lease did not create the guard, so nothing serialises it against the sweep: %v", err)
+	}
+
+	EachServeRegistryFile(func(f ServeRegistryFile) {
+		if f.Name == serveRegistryGuardName {
+			t.Errorf("EachServeRegistryFile visited the guard %q; the sweep would try to reclaim the lock it is holding", f.Name)
+		}
+	})
+	PruneServeRegistry(time.Now())
+	if _, err := os.Stat(guardPath); err != nil {
+		t.Fatalf("the sweep removed its own guard: %v", err)
 	}
 }

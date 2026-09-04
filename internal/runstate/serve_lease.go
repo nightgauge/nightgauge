@@ -152,13 +152,43 @@ func acquireServeLease(workspaceRoot string, now time.Time) (*ServeLease, error)
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, fmt.Errorf("serve lease: create claim directory: %w", err)
 	}
+
+	// The open and the flock below are ONE operation, and the registry guard
+	// is what makes them one (#1426).
+	//
+	// PruneServeRegistry unlinks lock files nobody holds. Between the two
+	// statements below this process holds an open descriptor on a lock file it
+	// has not locked yet — indistinguishable, to the sweep, from a lock file
+	// nobody holds — so an unlink landing there leaves this process holding a
+	// lease on an inode that is no longer at `path`, while the next acquirer
+	// creates a fresh file there and locks that. Two holders of one
+	// workspace's lease, which is the state this whole file exists to prevent.
+	// The guard is released the moment the lease is taken; see
+	// lockServeRegistry for the interleaving and for why serialising is the
+	// fix rather than retrying.
+	switch guard, guardErr := lockServeRegistry(); {
+	case guardErr == nil:
+		defer guard()
+	case errors.Is(guardErr, flock.ErrUnsupported):
+		// removeUnheldServeLock needs the same advisory lock this guard does,
+		// so on a platform without one nothing ever unlinks a lock file and
+		// there is no window to close.
+	default:
+		// A lease that fails open is not a lease, and this is the locking
+		// itself malfunctioning rather than a lease being held.
+		return nil, fmt.Errorf("serve lease: registry guard: %w", guardErr)
+	}
+
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o644)
 	if err != nil {
 		return nil, fmt.Errorf("serve lease: open %s: %w", path, err)
 	}
 
 	// Zero timeout: one try. The caller's job is to REPORT the holder and
-	// stop, not to queue behind a daemon that may run for days.
+	// stop, not to queue behind a daemon that may run for days. Safe as one
+	// try only because the guard above excludes the sweep: without it a
+	// momentary sweep of another workspace's lock reads as a held lease here,
+	// and one try means that refusal is permanent.
 	lockErr := flock.Exclusive(f, 0)
 	switch {
 	case lockErr == nil:

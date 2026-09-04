@@ -9891,6 +9891,25 @@ func autonomousStuckEpicsCmd() *cobra.Command {
 	return cmd
 }
 
+// pruneServeClaimRegistry sweeps the machine-global claim registry and reports
+// to w what it removed, if anything.
+//
+// A named function rather than four lines inline because it is one of the two
+// arms of the #1426 sweep and the only one no other test can reach:
+// StartServeSidecar's arm is pinned by the runstate suite, while this one is
+// behind `autonomous run`'s lease acquisition. Deleting it inline left every
+// test in the tree green, which is the same "an arm the completion claim names
+// and no test holds" shape this repo treats as a defect.
+func pruneServeClaimRegistry(w io.Writer) runstate.ServeRegistryPrune {
+	swept := runstate.PruneServeRegistry(time.Now())
+	if swept.Removed() > 0 {
+		fmt.Fprintf(w,
+			"Pruned the machine-global claim registry: %d dead record(s), %d unheld lock file(s).\n",
+			swept.Records, swept.Locks)
+	}
+	return swept
+}
+
 func autonomousCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "autonomous",
@@ -9959,12 +9978,10 @@ func autonomousRunCmd() *cobra.Command {
 			//
 			// After the lease is taken, never before: the sweep only unlinks a
 			// lock it can lock, so holding this workspace's own lease is what
-			// keeps it from reclaiming the file it is about to depend on.
-			if swept := runstate.PruneServeRegistry(time.Now()); swept.Removed() > 0 {
-				fmt.Fprintf(cmd.ErrOrStderr(),
-					"Pruned the machine-global claim registry: %d dead record(s), %d unheld lock file(s).\n",
-					swept.Records, swept.Locks)
-			}
+			// keeps it from reclaiming the file it is about to depend on. And
+			// before the GitHub client, so the sweep happens on every start
+			// rather than only on the ones that get as far as a token.
+			pruneServeClaimRegistry(cmd.ErrOrStderr())
 
 			client, err := clientFromConfig()
 			if err != nil {

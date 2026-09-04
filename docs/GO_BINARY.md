@@ -1832,16 +1832,62 @@ deleting the evidence `doctor` reports on:
 | Live pid, cold heartbeat                           | **Kept** — this is doctor's `serve-lease-wedged` finding, and the report needs the record to name the holder                                      |
 | `workspace_root` no longer on disk                 | **Removed** — 143 of the 150 measured; no daemon serves a directory that is not there                                                             |
 | Dead pid **and** cold heartbeat                    | **Removed** — both, not either: a pid that died a minute ago still has a fresh heartbeat and doctor may still be attributing a recycled pid to it |
-| Unparsable                                         | **Removed** — writes are atomic, so this is not a torn write; it is a file no reader can use                                                      |
+| Read, and unparsable                               | **Removed** — writes are atomic, so this is not a torn write; it is a file no reader can use                                                      |
+| Could not be **read** at all                       | **Kept** — see below; the opposite verdict from the row above, and deliberately so                                                                |
 | `stat` fails for any reason other than "not found" | **Kept** — a permission error or an unreachable network mount must not read as a deleted workspace                                                |
+
+The last two rows are one rule seen from both sides, and the pair is the point.
+`os.ReadFile` failing says **nothing whatever** about the daemon a record
+describes — an `EACCES`, an `EIO` or an `EMFILE` is a fact about this sweep, not
+about that process — so it cannot be collapsed into the same nil byte slice an
+empty file produces. Doing so deletes a live daemon's claim, and the blast
+radius is not one file: descriptor exhaustion mid-sweep makes every record in
+the directory unreadable at once, so a single pass would erase the claims of
+every live daemon on the machine and, with them, the lock files those claims
+explain. `runstate.ServeRegistryFile.ReadErr` is what keeps the two apart.
 
 **A lock file is removed only when this process can take it**, and only when no
 surviving record explains it. The flock is the authority on whether a lease is
 held — the kernel releases it however the holder dies — so "I got the lock" is
-the only proof that a lock file is litter, and the unlink happens _under_ the
-lock so a racing process cannot end up holding a lease on an unlinked inode. On
-a platform with no advisory lock nothing can be proved and no lock file is
-touched.
+the only proof that a lock file is litter. On a platform with no advisory lock
+nothing can be proved and no lock file is touched.
+
+**The sweep and lease acquisition are mutually exclusive.** Unlinking a lock
+file is the first thing in the tree that ever made a lease lock's path stop
+naming the inode an acquirer had already opened, and `acquireServeLease` opens
+the path and flocks the descriptor as two statements. Interleave an unlink
+between them and one workspace has two lease holders — the state
+[#1349](#the-scheduler-lease--one-scheduler-per-workspace-issue-1349) exists to
+prevent:
+
+```text
+acquirer: open(path) -> fd on inode I            (not locked yet)
+sweep:    flock(I) ok -> unlink(path) -> unlock   (no record explained I)
+acquirer: flock(fd) ok                           -- on an UNLINKED inode
+next:     open(path) O_CREATE -> inode J -> flock(J) ok
+```
+
+The window is not exotic: the sweep targets a lock precisely when no record
+explains it, which is the state of every daemon between taking its lease and
+writing its first sidecar. Resolved the other way — the sweep still holding the
+flock when the acquirer tries — the acquirer's deliberate zero timeout turns a
+momentary sweep into a **permanent** refusal, which for `serve` means a process
+that runs its whole life with no scheduler attached and for `autonomous run` a
+hard exit.
+
+Neither is a timing problem to be widened away. Both are the absence of mutual
+exclusion between a compound read-modify-write ("open then flock") and a
+compound mutation ("flock then unlink"), so one guard —
+`~/.nightgauge/serve/nightgauge-registry.guard`, held across each of them and
+across neither anything else — removes both. Same shape as the
+[worktree mutation guard](#serialised-worktree-mutation-issue-1163). Nobody
+holding it ever blocks on a second lock (both flock the lease file with a zero
+timeout), so there is no lock ordering to get wrong; the guard's name ends in
+neither `.json` nor `.lock`, so the walkers skip it structurally and no sweep
+can reclaim the file it is holding; and where the platform has no advisory lock
+the guard is skipped, because nothing can unlink a lock file there either. A
+sweep that cannot take the guard removes **nothing**, and a lease acquisition
+that cannot take it **fails** rather than failing open.
 
 **The name was one-way.** A file was named by the first 16 hex digits of
 `sha256(root)`. That is adequate for a record, which carries `workspace_root`
