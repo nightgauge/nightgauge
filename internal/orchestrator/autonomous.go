@@ -1287,7 +1287,16 @@ func NewAutonomousScheduler(
 	if workspaceRoot != "" {
 		as.attention = attention.New(workspaceRoot)
 		as.attention.SetSteerWriter(func(req *attention.DecisionRequest, steerText string) error {
-			return WriteOperatorSteer(workspaceRoot, req.Context.Issue, steerText, req.Context.Stage)
+			// The steer must land where the RUN will read it (#1407). The
+			// reader is runPipeline, which resolves its root per repo via
+			// resolveRunRoot(item.Repo); writing to the daemon's launch root
+			// put the note in a directory the run never opens, so on a
+			// multi-repo workspace the operator's note was silently discarded
+			// while the card resolved successfully.
+			//
+			// Same shape as auditAttentionTransition below, which has resolved
+			// the per-repo root since it was written.
+			return WriteOperatorSteer(as.steerRootFor(req.Context.Repo), req.Context.Issue, steerText, req.Context.Stage)
 		})
 		as.attention.Subscribe(as.auditAttentionTransition)
 		// Share the one store with the inner Scheduler so run-scoped producers
