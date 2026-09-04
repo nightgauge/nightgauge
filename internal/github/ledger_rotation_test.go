@@ -106,6 +106,11 @@ func TestLedgerEnablementPrecedence(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
+			// A real workspace: the default path only writes into one that
+			// already exists (see TestLedgerDoesNotCreateAWorkspaceAtTheDefaultPath).
+			if err := os.MkdirAll(filepath.Join(dir, ".nightgauge"), 0o755); err != nil {
+				t.Fatalf("mkdir: %v", err)
+			}
 			t.Chdir(dir)
 			if tc.setEnv {
 				t.Setenv(apiLedgerEnv, tc.env)
@@ -275,5 +280,60 @@ func TestSummarizeWindowAttributesGraphQLOnly(t *testing.T) {
 	}
 	if len(w.TopCallers) != 1 || w.TopCallers[0].Points != 35 {
 		t.Fatalf("TopCallers = %+v, want one caller at 35 points — the sum of the rows must equal Points", w.TopCallers)
+	}
+}
+
+// An always-on ledger must never CREATE a .nightgauge/ directory. `go test`
+// runs each package with its own source directory as the cwd, so the first run
+// after this became default-on left .nightgauge/logs/ inside four internal/
+// packages — untracked, unignored, and scattered through the source tree. The
+// rule also matches the semantics: the ledger is per-workspace, and a process
+// running outside a workspace has no workspace to bill.
+func TestLedgerDoesNotCreateAWorkspaceAtTheDefaultPath(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	t.Setenv(apiLedgerEnv, "")
+
+	if l := openAPILedger(); l != nil {
+		l.close()
+		t.Fatal("a ledger was opened in a directory with no .nightgauge/ — the source tree gets littered")
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".nightgauge")); !os.IsNotExist(err) {
+		t.Errorf("the ledger created %s/.nightgauge", dir)
+	}
+}
+
+func TestLedgerWritesIntoAnExistingWorkspace(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, ".nightgauge"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	t.Chdir(dir)
+	t.Setenv(apiLedgerEnv, "")
+
+	l := openAPILedger()
+	if l == nil {
+		t.Fatal("no ledger opened inside a real workspace")
+	}
+	t.Cleanup(l.close)
+	if _, err := os.Stat(filepath.Join(dir, ".nightgauge", "logs", "github-api.jsonl")); err != nil {
+		t.Errorf("ledger file not created inside the workspace: %v", err)
+	}
+}
+
+// An explicitly named path is an operator's statement, not an accident, so its
+// directories are created even outside a workspace.
+func TestLedgerExplicitPathCreatesItsDirectories(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "deep", "nested", "ledger.jsonl")
+	t.Setenv(apiLedgerEnv, target)
+
+	l := openAPILedger()
+	if l == nil {
+		t.Fatal("no ledger opened for an explicitly configured path")
+	}
+	t.Cleanup(l.close)
+	if _, err := os.Stat(target); err != nil {
+		t.Errorf("explicit ledger path not created: %v", err)
 	}
 }

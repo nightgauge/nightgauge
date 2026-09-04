@@ -192,8 +192,10 @@ func openAPILedger() *apiLedger {
 		return nil // `github.api_ledger.enabled: false`
 	}
 	path := raw
+	explicitPath := true
 	if path == "" || path == "1" || path == "true" || path == "on" {
 		path = apiLedgerDefaultPath
+		explicitPath = false
 	}
 	if !filepath.IsAbs(path) {
 		wd, err := os.Getwd()
@@ -201,6 +203,22 @@ func openAPILedger() *apiLedger {
 			return nil
 		}
 		path = filepath.Join(wd, path)
+	}
+	// At the DEFAULT path, the ledger writes into an existing workspace and
+	// never conjures one. An always-on instrument that creates .nightgauge/
+	// wherever it happens to be started scatters the tree: `go test` runs each
+	// package with its own directory as the cwd, so the first run after this
+	// became default-on left .nightgauge/logs/ inside four internal/ packages,
+	// untracked and unignored. The rule also matches the semantics — the
+	// ledger is per-workspace, and a process running outside one has no
+	// workspace to bill.
+	//
+	// An explicitly configured path is a different statement: the operator
+	// named a file, so the directories for it are created.
+	if !explicitPath {
+		if _, err := os.Stat(filepath.Dir(filepath.Dir(path))); err != nil {
+			return nil // no .nightgauge/ here — this is not a workspace
+		}
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil
