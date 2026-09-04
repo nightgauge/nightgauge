@@ -81,7 +81,14 @@ func (s *Store) saveStreaksLocked(f streakFile) error {
 		return fmt.Errorf("attention: marshal streaks: %w", err)
 	}
 	path := s.streakPath()
-	tmp := path + ".tmp"
+	// Per-writer temp path, for the reason materializedTempPath spells out
+	// (#1425): the read-modify-write above is serialised by acquireDir, but
+	// that lock is fail-open, and a shared staging name turns a lost lock into
+	// a corrupted counts file rather than a lost update.
+	tmp, err := materializedTempPath(path)
+	if err != nil {
+		return err
+	}
 	if err := os.WriteFile(tmp, data, 0o644); err != nil {
 		return fmt.Errorf("attention: write temp streaks: %w", err)
 	}
@@ -102,9 +109,8 @@ func (s *Store) IncrementStreak(key string) (int, error) {
 		return 0, fmt.Errorf("attention: increment streak requires a key")
 	}
 
-	mu := lockFor(s.dir)
-	mu.Lock()
-	defer mu.Unlock()
+	release := acquireDir(s.dir)
+	defer release()
 
 	f := s.loadStreaksLocked()
 	f.Counts[key] = f.Counts[key] + 1
@@ -123,9 +129,8 @@ func (s *Store) ResetStreak(key string) error {
 		return fmt.Errorf("attention: reset streak requires a key")
 	}
 
-	mu := lockFor(s.dir)
-	mu.Lock()
-	defer mu.Unlock()
+	release := acquireDir(s.dir)
+	defer release()
 
 	f := s.loadStreaksLocked()
 	if _, ok := f.Counts[key]; !ok {
@@ -137,9 +142,8 @@ func (s *Store) ResetStreak(key string) error {
 
 // StreakCount reports the current count for key without changing it.
 func (s *Store) StreakCount(key string) int {
-	mu := lockFor(s.dir)
-	mu.Lock()
-	defer mu.Unlock()
+	release := acquireDir(s.dir)
+	defer release()
 
 	return s.loadStreaksLocked().Counts[key]
 }

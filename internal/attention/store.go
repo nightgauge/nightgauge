@@ -2,6 +2,8 @@ package attention
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nightgauge/nightgauge/internal/flock"
 	"github.com/nightgauge/nightgauge/internal/history"
 	"github.com/nightgauge/nightgauge/internal/runstate"
 )
@@ -47,16 +50,132 @@ var idPattern = regexp.MustCompile(`^dr_[A-Za-z0-9-]{8,80}$`)
 // still match.
 var ErrRequestNotFound = errors.New("not found")
 
+// Two locks guard one attention directory, deliberately (#1425, following the
+// worktree chokepoint's #1163 reasoning).
+//
 // dirLocks provides per-directory serialization so concurrent goroutines inside
 // one process (parallel producers, the sweep, and a resolve) never interleave a
-// read-modify-write on the same attention store — the #316 lesson. Cross-process
-// safety comes from atomic temp+rename on the materialized file plus the
-// terminal-state CAS (a losing writer no-ops).
-var dirLocks sync.Map // abs dir -> *sync.Mutex
+// read-modify-write on the same attention store — the #316 lesson.
+//
+// It does not cover a second process, and nightgauge genuinely has several
+// writing this directory: the daemon, via `attention.resolve` over IPC and via
+// the platform relay's ApplyRelayedResolve; `nightgauge attention raise` /
+// `resolve`, which construct their own Store in an operator's shell; and the
+// sweep. The serve lease (#1349) guarantees one SCHEDULER per workspace, not
+// one writer. So the in-process mutex is layered over an advisory flock on
+// `<dir>/nightgauge-attention.lock`, which every nightgauge process takes for
+// the same critical section. The kernel releases an flock when its holder
+// dies, so a crashed writer cannot wedge the store.
+//
+// WHAT THE OLDER ARGUMENT MISSED. This package used to claim cross-process
+// safety came from "atomic temp+rename plus the terminal-state CAS". Neither
+// delivers it. The CAS guards the lifecycle transition — it runs before the
+// write and says nothing about bytes. temp+rename is atomic per rename, which
+// is sufficient only when each writer stages at its own temp path; every
+// writer of a card used to open the same `<id>.json.tmp` and their writes
+// interleaved into whatever the loser published.
+//
+// So both halves are fixed: the section is serialised across processes here,
+// and materializedTempPath stages every writer at its own path so the
+// deliberately fail-open branches below (an unsupported platform, an
+// unwritable dir, a wedged holder outlasting the bounded wait) degrade to lost
+// serialisation rather than to torn bytes.
+//
+// EVERYTHING NESTED INSIDE THE SECTION INHERITS IT. writeMaterializedLocked,
+// the streak file's read-modify-write (streak.go), and the journal append in
+// emitLocked are all reached only from a caller holding this lock, so one
+// chokepoint covers all three.
+var dirLocks sync.Map // dir -> *sync.Mutex
 
-func lockFor(dir string) *sync.Mutex {
+// flockTimeout bounds the WAIT for the cross-process lock. A wedged holder
+// must not stall every producer in the daemon indefinitely, so the wait
+// expires and the caller proceeds under the in-process lock alone, loudly. A
+// crashed holder never needs the timeout — the kernel drops its flock.
+var flockTimeout = 30 * time.Second
+
+// verbTimeout bounds the HOLD, and the two numbers are one mechanism.
+//
+// A bounded wait over an unbounded hold is not a lock. Resolve runs the
+// option's verb inside the critical section on purpose (ADR-015 §D, and see
+// Resolve), so the verb's duration IS the time every other producer — every
+// raise, ack, sweep and streak bump, in this process and in every other
+// nightgauge process — spends waiting on this directory. Leave that unbounded
+// and a single slow verb pushes the queue past flockTimeout, every waiter
+// takes the fail-open branch, and the #1425 interleave is back precisely when
+// the store is busiest.
+//
+// This is not theoretical. The daemon's issue.close verb calls the GitHub
+// client on the server-lifetime context, and that client deliberately sleeps
+// through a fully exhausted primary rate limit for up to maxFullExhaustionWait
+// (75 minutes, internal/github/client.go) — while the API-budget sweep is
+// raising the very cards that report the exhaustion. Without a ceiling the
+// store would be surrendered for over an hour, and the flockTimeout comment's
+// promise that expiry means "a wedged holder" would be false.
+//
+// So the verb gets its own deadline, strictly below flockTimeout (asserted in
+// TestVerbTimeoutKeepsTheHoldBelowTheWait), which makes expiry mean what it
+// says. A verb that blows the ceiling fails with its context error, and
+// Resolve's existing contract takes over unchanged: the request is left
+// untouched on disk, the card stays open, and the operator's retry hits the
+// same code path fresh once the underlying condition clears. Failing one
+// resolution is strictly better than handing the whole store's serialisation
+// to a GitHub outage.
+//
+// The ceiling only binds a verb that honours its context. That is the verb
+// contract (VerbExecutor, verbs.go) and the daemon's arms satisfy it, since
+// every remote call they make threads ctx through. A verb that blocks
+// ignoring ctx is a bug in that verb, not something a deadline can repair.
+var verbTimeout = 20 * time.Second
+
+// lockFileName is the advisory lock file inside the store directory. It ends
+// in `.lock`, not `.json`, so the card scanners (List, scanLocked,
+// SweepExpired) skip it structurally rather than by name.
+const lockFileName = "nightgauge-attention.lock"
+
+// acquireDir takes both locks for dir and returns the release func.
+func acquireDir(dir string) func() {
 	m, _ := dirLocks.LoadOrStore(dir, &sync.Mutex{})
-	return m.(*sync.Mutex)
+	mu := m.(*sync.Mutex)
+	mu.Lock()
+
+	unflock := flockDir(dir)
+	return func() {
+		if unflock != nil {
+			unflock()
+		}
+		mu.Unlock()
+	}
+}
+
+// flockDir takes the advisory cross-process lock, returning the release func,
+// or nil when no cross-process lock could be taken (an uncreatable or
+// unwritable store dir, an unsupported platform, or a timeout). Every nil path
+// is fail-open by design: the in-process lock is still held, the temp paths are
+// still per-writer, and refusing to raise a decision request because a lock
+// file could not be opened would turn a hardening measure into an outage —
+// on the very path whose job is to tell an operator something is wrong.
+func flockDir(dir string) func() {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return nil
+	}
+	path := filepath.Join(dir, lockFileName)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o644)
+	if err != nil {
+		return nil
+	}
+	if err := flock.Exclusive(f, flockTimeout); err != nil {
+		_ = f.Close()
+		if !errors.Is(err, flock.ErrUnsupported) {
+			fmt.Fprintf(os.Stderr,
+				"[WARN] attention: cross-process store lock on %s unavailable (%v) — proceeding with the in-process lock only; a concurrent nightgauge process could read-modify-write this store inside this operation's window\n",
+				path, err)
+		}
+		return nil
+	}
+	return func() {
+		_ = flock.Unlock(f)
+		_ = f.Close()
+	}
 }
 
 // NewID returns a fresh request id: `dr_<uuidv7>` (time-ordered, ADR-015 §A).
@@ -240,9 +359,8 @@ func (s *Store) Raise(req DecisionRequest) (RaiseOutcome, string, error) {
 	}
 	s.applyRaiseDefaults(&req)
 
-	mu := lockFor(s.dir)
-	mu.Lock()
-	defer mu.Unlock()
+	release := acquireDir(s.dir)
+	defer release()
 
 	stored, err := s.scanLocked()
 	if err != nil {
@@ -540,9 +658,8 @@ func (s *Store) Acknowledge(id, actor string) (*DecisionRequest, error) {
 		// an actor the platform requires to be non-empty.
 		return nil, fmt.Errorf("attention: acknowledging %s requires an actor", id)
 	}
-	mu := lockFor(s.dir)
-	mu.Lock()
-	defer mu.Unlock()
+	release := acquireDir(s.dir)
+	defer release()
 
 	path, req, err := s.loadLocked(id)
 	if err != nil {
@@ -579,13 +696,20 @@ type ResolveResult struct {
 // Resolve applies a resolution once (terminal-state CAS): it executes the
 // option's registered verb WHILE STILL HOLDING the store lock, and persists
 // the resolved transition only if the verb succeeds (ADR-015 §D). This
-// serializes all resolves for one repo's request directory for the duration
-// of the verb call — a deliberate trade-off, since resolutions are
+// serializes ALL mutations of one repo's request directory — in this process
+// and, since #1425, in every other nightgauge process — for the duration of
+// the verb call. That is a deliberate trade-off, since resolutions are
 // human-paced, not a hot path, and the alternative (a per-request lock, or
 // re-validating a torn CAS after re-acquiring the lock post-verb) is
-// meaningfully more complex for no observed concurrency problem. It also
-// keeps exactly-once verb execution: a losing concurrent resolve never gets
-// past the terminal-state check, so it never runs the verb at all.
+// meaningfully more complex and loses the stronger property: exactly-once verb
+// execution, where a losing concurrent resolve never gets past the
+// terminal-state check and so never runs the verb at all. Release-then-verb
+// would run the verb twice under contention and only then discover the race.
+//
+// The trade-off is only defensible while the verb's duration is BOUNDED, so it
+// is — by verbTimeout, strictly below flockTimeout. Everything the section
+// costs every other producer is capped there rather than by whatever remote
+// call the verb happens to make.
 //
 // A replayed resolve on an already-terminal request is a safe no-op. An
 // unknown option or unregistered verb is rejected WITHOUT transitioning
@@ -594,16 +718,15 @@ type ResolveResult struct {
 // mutation, no persist, no journal entry — so the card stays open and a
 // retry after the underlying condition clears hits the same code path fresh.
 func (s *Store) Resolve(ctx context.Context, id, optionID, actor, steerText, note string, exec VerbExecutor) (ResolveResult, error) {
-	mu := lockFor(s.dir)
-	mu.Lock()
+	release := acquireDir(s.dir)
 
 	path, req, err := s.loadLocked(id)
 	if err != nil {
-		mu.Unlock()
+		release()
 		return ResolveResult{}, err
 	}
 	if req.Lifecycle.State.IsTerminal() {
-		mu.Unlock()
+		release()
 		return ResolveResult{Request: req, AlreadyResolved: true}, nil
 	}
 	if strings.TrimSpace(actor) == "" {
@@ -617,12 +740,12 @@ func (s *Store) Resolve(ctx context.Context, id, optionID, actor, steerText, not
 		// is, and inventing one puts a false name in an audit record. The
 		// callers that DO know supply it — the CLI via attentionActor(), the
 		// IPC layer via its own fallback.
-		mu.Unlock()
+		release()
 		return ResolveResult{}, fmt.Errorf("attention: resolving %s requires an actor", id)
 	}
 	opt, err := ValidateOption(req, optionID)
 	if err != nil {
-		mu.Unlock()
+		release()
 		return ResolveResult{}, err
 	}
 	// THE STEER MUST BE ON DISK BEFORE THE VERB RUNS (#1410).
@@ -655,8 +778,15 @@ func (s *Store) Resolve(ctx context.Context, id, optionID, actor, steerText, not
 	}
 
 	if exec != nil {
-		if verr := exec.ExecuteVerb(ctx, req, opt); verr != nil {
-			mu.Unlock()
+		// Bounded, because this call is the lock's hold time — see verbTimeout.
+		// The deadline is request-scoped by construction: a verb that spawns
+		// something long-lived must detach the context it hands the spawn
+		// (internal/ipc/attention.go does), never keep this one.
+		vctx, cancelVerb := context.WithTimeout(ctx, verbTimeout)
+		verr := exec.ExecuteVerb(vctx, req, opt)
+		cancelVerb()
+		if verr != nil {
+			release()
 			return ResolveResult{}, verr
 		}
 	}
@@ -670,7 +800,7 @@ func (s *Store) Resolve(ctx context.Context, id, optionID, actor, steerText, not
 		Note:      note,
 	}
 	if err := s.writeMaterializedLocked(path, req); err != nil {
-		mu.Unlock()
+		release()
 		return ResolveResult{}, err
 	}
 	s.emitLocked(JournalEntry{
@@ -681,7 +811,7 @@ func (s *Store) Resolve(ctx context.Context, id, optionID, actor, steerText, not
 		OptionID: optionID,
 		At:       at,
 	}, req)
-	mu.Unlock()
+	release()
 
 	// The steer was written above, before the verb (#1410); its error is
 	// reported here unchanged, so callers that inspect SteerErr are unaffected.
@@ -696,12 +826,11 @@ func (s *Store) Resolve(ctx context.Context, id, optionID, actor, steerText, not
 func (s *Store) SweepExpired(ctx context.Context, exec VerbExecutor) (int, error) {
 	now := s.nowUTC()
 
-	mu := lockFor(s.dir)
-	mu.Lock()
+	release := acquireDir(s.dir)
 
 	entries, err := os.ReadDir(s.dir)
 	if err != nil {
-		mu.Unlock()
+		release()
 		if os.IsNotExist(err) {
 			return 0, nil
 		}
@@ -750,7 +879,7 @@ func (s *Store) SweepExpired(ctx context.Context, exec VerbExecutor) (int, error
 			}
 		}
 	}
-	mu.Unlock()
+	release()
 
 	if exec != nil {
 		for _, p := range toExecute {
@@ -778,7 +907,10 @@ func (s *Store) loadLocked(id string) (string, *DecisionRequest, error) {
 }
 
 // writeMaterializedLocked persists the request via write-temp + rename so a
-// reader never observes a half-written record (ADR-015 §C).
+// reader never observes a half-written record (ADR-015 §C). The temp path is
+// per-writer (materializedTempPath) and the whole section is held under
+// acquireDir, so a concurrent writer in another process can neither share this
+// staging file nor be inside this function at the same time (#1425).
 func (s *Store) writeMaterializedLocked(path string, req *DecisionRequest) error {
 	if err := os.MkdirAll(s.dir, 0o755); err != nil {
 		return fmt.Errorf("attention: create store dir: %w", err)
@@ -788,7 +920,10 @@ func (s *Store) writeMaterializedLocked(path string, req *DecisionRequest) error
 	if err != nil {
 		return fmt.Errorf("attention: marshal request: %w", err)
 	}
-	tmp := path + ".tmp"
+	tmp, err := materializedTempPath(path)
+	if err != nil {
+		return err
+	}
 	if err := os.WriteFile(tmp, data, 0o644); err != nil {
 		return fmt.Errorf("attention: write temp: %w", err)
 	}
@@ -836,8 +971,16 @@ func normalizeForWire(req *DecisionRequest) {
 }
 
 // emitLocked appends the journal line and fires the OnTransition hook. Called
-// under the per-dir mutex; the hook must not re-enter the store (it drives
+// under the per-dir lock; the hook must not re-enter the store (it drives
 // event push / external audit legs only).
+//
+// The journal append needs no lock of its own on either axis (#1425). Every
+// caller is already inside acquireDir's critical section, so it is covered
+// cross-process by the same flock as the materialized write; and
+// history.AppendJSONL is independently safe anyway, opening O_APPEND per call
+// and writing one marshalled record, which POSIX makes atomic against
+// concurrent appenders. Belt and braces, deliberately: the flock is fail-open,
+// and losing it must not corrupt the audit record.
 func (s *Store) emitLocked(entry JournalEntry, req *DecisionRequest) {
 	entry.SchemaVersion = SchemaVersion
 	if entry.At == "" {
@@ -892,4 +1035,22 @@ func readRequest(path string) (*DecisionRequest, error) {
 		return nil, fmt.Errorf("attention: parse %s: %w", filepath.Base(path), err)
 	}
 	return &req, nil
+}
+
+// materializedTempPath is the scratch path a writer stages bytes at before the
+// rename that publishes them. It is unique per writer — pid plus 64 bits of
+// entropy — because the rename is atomic and the staging write is not: with
+// one shared `<path>.tmp`, two writers open the same inode, the second
+// truncates what the first is still writing, and the loser publishes a mix or
+// a NUL-padded prefix of two payloads (#1425).
+//
+// The name stays in the target's own directory so the rename never crosses a
+// filesystem, and ends in `.tmp` so an in-flight write is skipped by the
+// `.json`-only card scanners instead of surfacing as a phantom card.
+func materializedTempPath(path string) (string, error) {
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", fmt.Errorf("attention: temp name entropy: %w", err)
+	}
+	return fmt.Sprintf("%s.%d.%s.tmp", path, os.Getpid(), hex.EncodeToString(b[:])), nil
 }
