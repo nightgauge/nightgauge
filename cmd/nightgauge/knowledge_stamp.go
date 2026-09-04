@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/knowledge/okf"
@@ -19,9 +20,29 @@ type stampResult struct {
 	Block   *okf.FrontmatterBlock `json:"frontmatter"`
 }
 
+// dispatchModelEnvVar carries the model a stage was dispatched to run on. The
+// adapters export it alongside NIGHTGAUGE_STAGE.
+const dispatchModelEnvVar = "NIGHTGAUGE_DISPATCH_MODEL"
+
+// stageActorFromEnv builds the provenance actor for a stage from its name and
+// the dispatched model, both of which the binary controls. Neither is ever
+// taken from model output.
+func stageActorFromEnv(stage string) (string, error) {
+	model := strings.TrimSpace(os.Getenv(dispatchModelEnvVar))
+	if model == "" {
+		return "", fmt.Errorf("--stage needs %s to build the actor; it is exported by the adapters, so this is an out-of-pipeline invocation — pass --generated-by explicitly", dispatchModelEnvVar)
+	}
+	actor, err := okf.StageActor(stage, model)
+	if err != nil {
+		return "", err
+	}
+	return actor, nil
+}
+
 func knowledgeStampCmd() *cobra.Command {
 	var (
 		entryType   string
+		stage       string
 		generatedBy string
 		sources     []string
 		verifiedBy  string
@@ -57,12 +78,24 @@ Merge rules:
 Actors take one of three forms: <producer>/<version> for an agent stage and
 its model, human:<id> for a person, process:<id> for a deterministic writer.
 
+A stage records its own provenance with --stage rather than --generated-by:
+the binary reads the dispatched model out of NIGHTGAUGE_DISPATCH_MODEL and
+builds the actor itself, so no model-authored string can become a provenance
+claim. NIGHTGAUGE_DISPATCH_MODEL is the model the stage was DISPATCHED to run
+on — the served model is only observable after the stage exits, so it cannot
+be an input to a stamp the stage itself makes.
+
 A --source is an https:// URL, a bundle-absolute path beginning with "/", or a
 repository-relative path that resolves inside the repository. Everything else
 is rejected and nothing is written.
 
 <path> must resolve inside .nightgauge/knowledge/.`,
-		Example: `  nightgauge knowledge stamp features/42-photo-upload/PRD.md \
+		Example: `  # From a pipeline stage
+  nightgauge knowledge stamp features/42-photo-upload/PRD.md \
+    --stage "$NIGHTGAUGE_STAGE" \
+    --source https://github.com/nightgauge/nightgauge/issues/42
+
+  nightgauge knowledge stamp features/42-photo-upload/PRD.md \
     --generated-by feature-planning/claude-sonnet-5 \
     --source https://github.com/nightgauge/nightgauge/issues/42
 
@@ -80,6 +113,19 @@ is rejected and nothing is written.
 			entryPath, err := okf.ResolveEntryPath(args[0], workdir)
 			if err != nil {
 				return err
+			}
+
+			// --stage is the form skills use: the binary constructs the actor
+			// from the stage name and the dispatched model, so no model-
+			// authored string can ever become a provenance claim.
+			if stage != "" {
+				if generatedBy != "" {
+					return fmt.Errorf("--stage and --generated-by are alternatives; pass one")
+				}
+				generatedBy, err = stageActorFromEnv(stage)
+				if err != nil {
+					return err
+				}
 			}
 
 			// Validate every source before touching the file, so a rejected
@@ -100,7 +146,7 @@ is rejected and nothing is written.
 			}
 
 			if in.Empty() {
-				return fmt.Errorf("nothing to stamp: give at least one of --type, --generated-by, --verified-by, --source, --status, --stale-after")
+				return fmt.Errorf("nothing to stamp: give at least one of --type, --stage, --generated-by, --verified-by, --source, --status, --stale-after")
 			}
 
 			start := time.Now()
@@ -137,6 +183,7 @@ is rejected and nothing is written.
 		},
 	}
 
+	cmd.Flags().StringVar(&stage, "stage", "", "Pipeline stage; the actor is built from this and the dispatched model (NIGHTGAUGE_DISPATCH_MODEL)")
 	cmd.Flags().StringVar(&entryType, "type", "", "Entry type, set only when the entry has none (never overwrites an existing type)")
 	cmd.Flags().StringVar(&generatedBy, "generated-by", "", "Actor that produced this entry (<producer>/<version>, human:<id> or process:<id>)")
 	cmd.Flags().StringArrayVar(&sources, "source", nil, "Material this entry was derived from; repeatable")

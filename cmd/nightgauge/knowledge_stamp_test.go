@@ -238,3 +238,60 @@ func TestKnowledgeStamp_SeedsFrontmatterOnAnEntryWithout(t *testing.T) {
 		t.Errorf("body lost:\n%s", data)
 	}
 }
+
+// TestKnowledgeStamp_StageBuildsTheActorFromTheDispatchedModel pins the form
+// skills use. The binary constructs the actor from the stage name and the
+// dispatched model it exported itself, so no model-authored string can ever
+// become a provenance claim.
+func TestKnowledgeStamp_StageBuildsTheActorFromTheDispatchedModel(t *testing.T) {
+	root, rel := stampFixture(t, stampBody)
+	abs := filepath.Join(root, ".nightgauge", "knowledge", rel)
+
+	t.Setenv("NIGHTGAUGE_DISPATCH_MODEL", "claude-sonnet-5")
+	if err := runStamp(t, rel, "--workdir", root, "--stage", "feature-planning"); err != nil {
+		t.Fatalf("stamp: %v", err)
+	}
+
+	block, err := okf.ParseFrontmatterFile(abs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if block.Generated == nil || block.Generated.By != "feature-planning/claude-sonnet-5" {
+		t.Fatalf("generated = %+v", block.Generated)
+	}
+	if block.TrustTier() != okf.TrustUnverified {
+		t.Errorf("producing an entry is not verifying it: tier = %q", block.TrustTier())
+	}
+}
+
+func TestKnowledgeStamp_StageWithoutADispatchedModelIsAnError(t *testing.T) {
+	root, rel := stampFixture(t, stampBody)
+	abs := filepath.Join(root, ".nightgauge", "knowledge", rel)
+	before, err := os.ReadFile(abs)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("NIGHTGAUGE_DISPATCH_MODEL", "")
+	// Guessing a model, or falling back to a process: actor, would record a
+	// provenance nobody can check. Refusing is the honest outcome.
+	if err := runStamp(t, rel, "--workdir", root, "--stage", "feature-planning"); err == nil {
+		t.Fatal("expected an error when the dispatched model is unknown")
+	}
+	after, err := os.ReadFile(abs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) {
+		t.Error("a rejected stamp still wrote to the entry")
+	}
+}
+
+func TestKnowledgeStamp_StageAndGeneratedByAreAlternatives(t *testing.T) {
+	root, rel := stampFixture(t, stampBody)
+	t.Setenv("NIGHTGAUGE_DISPATCH_MODEL", "claude-sonnet-5")
+	if err := runStamp(t, rel, "--workdir", root,
+		"--stage", "feature-planning", "--generated-by", "process:retro"); err == nil {
+		t.Fatal("expected --stage and --generated-by together to be rejected")
+	}
+}

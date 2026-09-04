@@ -640,6 +640,12 @@
         "category": "Nightgauge Knowledge"
       },
       {
+        "command": "nightgauge.knowledge.toggleUnverifiedOnly",
+        "title": "Nightgauge: Show Only Unverified Knowledge",
+        "icon": "$(filter)",
+        "category": "Nightgauge Knowledge"
+      },
+      {
         "command": "nightgauge.refreshKnowledgeView",
         "title": "Nightgauge: Refresh Knowledge View",
         "icon": "$(refresh)",
@@ -1038,6 +1044,11 @@
           "command": "nightgauge.knowledge.scaffoldForIssue",
           "when": "view == nightgauge.knowledgeView",
           "group": "navigation@3"
+        },
+        {
+          "command": "nightgauge.knowledge.toggleUnverifiedOnly",
+          "when": "view == nightgauge.knowledgeView",
+          "group": "navigation@4"
         },
         {
           "command": "nightgauge.attentionRefresh",

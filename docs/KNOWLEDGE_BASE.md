@@ -561,6 +561,42 @@ is never taken from model output or issue text — otherwise an entry could clai
 any provenance it liked, and the trust tier built on top of it would be
 worthless.
 
+### Which stage stamps what
+
+| Stage                | Writes                                   | Field       | Actor                        |
+| -------------------- | ---------------------------------------- | ----------- | ---------------------------- |
+| `knowledge scaffold` | `PRD.md`, `decisions.md`                 | `generated` | `process:knowledge-scaffold` |
+| `feature-planning`   | both, after enrichment                   | `generated` | `<stage>/<dispatched-model>` |
+| `feature-dev`        | `decisions.md`, **only when it changed** | `generated` | `<stage>/<dispatched-model>` |
+| `retro`              | `decisions.md`                           | `verified`  | `process:retro`              |
+| `knowledge graduate` | the source entry                         | `verified`  | `process:knowledge-graduate` |
+
+A stage records its own provenance with `knowledge stamp --stage
+"$NIGHTGAUGE_STAGE"`. The binary reads `NIGHTGAUGE_DISPATCH_MODEL` — which the
+adapters export alongside `NIGHTGAUGE_STAGE` — and builds the actor itself, so
+no model-authored string can become a provenance claim. Without that variable
+the stamp **fails** rather than guessing: a provenance nobody can check is
+worse than none.
+
+That variable is the model the stage was **dispatched** to run on. The _served_
+model is only observable after the stage exits, so it cannot be an input to a
+stamp the stage itself makes.
+
+**feature-dev's stamp is conditional.** That stage reads the knowledge base far
+more often than it writes to it — its knowledge phase has no write site at all
+— so it stamps only when a checksum taken before implementation differs
+afterwards. `generated.by` names the actor that _produced_ the entry; stamping
+unconditionally would attribute planning's work to feature-dev and reset a
+provenance chain nobody asked to change.
+
+`.index.json` carries `trust_tier`, `generated`, `status` and `stale_after` per
+entry (schema 2), and the VS Code knowledge tree shows the tier on each row
+with a distinct icon for `unverified` plus an "unverified only" filter. The
+tree derives the tier from the file's frontmatter rather than from
+`.index.json`, because that index is only rebuilt by a manual `knowledge
+reindex` and would show a tier that stopped being true the moment a stage
+stamped the entry.
+
 ### Lifecycle and trust tier
 
 The base exists to make each run better than the last. Feeding a planning stage

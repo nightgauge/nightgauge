@@ -30,6 +30,7 @@ import type { IpcClient } from "../services/IpcClient";
 import type { PipelineStateService } from "../services/PipelineStateService";
 import type { KnowledgeRecallHit } from "../services/IpcClientBase";
 import type { ConfigBridge } from "../services/ConfigBridge";
+import { TRUST_UNVERIFIED, trustTierOfContent, type TrustTier } from "@nightgauge/sdk";
 import { issueContextCandidates, pipelineFileCandidates } from "../utils/issueContextCandidates";
 
 const RELATED_LIMIT = 10;
@@ -53,6 +54,8 @@ export class KnowledgeTreeProvider
   readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
 
   private searchResults: KnowledgeRecallHit[] = [];
+  /** When true, the Active Issue section shows only unverified entries. */
+  private unverifiedOnly = false;
   private relatedCache: { issueNumber: number; hits: KnowledgeRecallHit[] } | null = null;
   private watcher: vscode.FileSystemWatcher | null = null;
   private debounceTimer: NodeJS.Timeout | null = null;
@@ -163,6 +166,37 @@ export class KnowledgeTreeProvider
     }
   }
 
+  /**
+   * Derive an entry's trust tier from the file on disk.
+   *
+   * Read straight from the frontmatter rather than from `.index.json`: that
+   * index is only built by a manual `knowledge reindex`, so a tree fed from it
+   * would show a tier that stopped being true the moment a stage stamped the
+   * entry. The derivation itself is the SDK's, shared with the Go binary.
+   */
+  private readTrustTier(filePath: string): TrustTier {
+    try {
+      return trustTierOfContent(fs.readFileSync(filePath, "utf8"));
+    } catch {
+      return TRUST_UNVERIFIED;
+    }
+  }
+
+  /**
+   * Toggle the "unverified only" filter, which turns the pile of entries
+   * nobody has checked into a reviewable list.
+   */
+  setUnverifiedOnly(on: boolean): void {
+    if (this.unverifiedOnly === on) return;
+    this.unverifiedOnly = on;
+    this.refresh();
+  }
+
+  /** Whether the "unverified only" filter is active. */
+  isUnverifiedOnly(): boolean {
+    return this.unverifiedOnly;
+  }
+
   private getActiveIssueChildren(): BaseTreeItem[] {
     const issueNumber = this.pipelineStateService.getActiveIssueBlockingPickup();
     if (issueNumber === null) {
@@ -188,10 +222,15 @@ export class KnowledgeTreeProvider
       if (!fs.existsSync(filePath)) continue;
       const rel = path.relative(this.workspaceRoot, filePath);
       const highlighted = readSet.has(rel) || readSet.has(filePath) || readSet.has(name);
-      items.push(new KnowledgeActiveFileItem(filePath, highlighted));
+      const trustTier = this.readTrustTier(filePath);
+      if (this.unverifiedOnly && trustTier !== TRUST_UNVERIFIED) continue;
+      items.push(new KnowledgeActiveFileItem(filePath, highlighted, trustTier));
     }
 
     if (items.length === 0) {
+      if (this.unverifiedOnly) {
+        return [new KnowledgeEmptyItem("No unverified entries — clear the filter to see all")];
+      }
       return [new KnowledgeEmptyItem("Knowledge directory exists but is empty")];
     }
     return items;

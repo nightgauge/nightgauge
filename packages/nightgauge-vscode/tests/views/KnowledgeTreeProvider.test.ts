@@ -458,3 +458,91 @@ describe("KnowledgeTreeProvider (three-section model #2964)", () => {
     expect(() => provider.dispose()).not.toThrow();
   });
 });
+
+describe("KnowledgeTreeProvider trust tier", () => {
+  const KB = "/workspace/.nightgauge/knowledge/features/42-x";
+
+  function stubEntries(entries: Record<string, string>) {
+    vi.mocked(fsModule.existsSync).mockImplementation(() => true);
+    vi.mocked(fsModule.readFileSync).mockImplementation((p: unknown) => {
+      const filePath = String(p);
+      if (filePath.endsWith("issue-42.json")) {
+        return JSON.stringify({ knowledge_path: KB });
+      }
+      if (filePath.endsWith("planning-42.json")) {
+        return JSON.stringify({ knowledge_read: [] });
+      }
+      for (const [name, content] of Object.entries(entries)) {
+        if (filePath.endsWith(name)) return content;
+      }
+      throw new Error(`ENOENT: ${filePath}`);
+    });
+  }
+
+  it("shows the derived tier on each entry", async () => {
+    stubEntries({
+      "PRD.md": "---\ntype: prd\nverified:\n  - by: human:octocat\n---\n\n# PRD\n",
+      "decisions.md": "---\ntype: decisions\n---\n\n# Decisions\n",
+    });
+
+    const provider = new KnowledgeTreeProvider(
+      "/workspace",
+      makePipelineState(42),
+      makeIpcClient()
+    );
+    const root = await provider.getChildren();
+    const children = await provider.getChildren(root[0]);
+
+    const descriptions = children.map((c) => String(c.description ?? ""));
+    expect(descriptions.some((d) => d.includes("human-reviewed"))).toBe(true);
+    expect(descriptions.some((d) => d.includes("unverified"))).toBe(true);
+    provider.dispose();
+  });
+
+  it("does not promote a stage whose model name contains 'human'", async () => {
+    // A substring match would put this in the top tier and quietly shrink the
+    // backlog a maintainer is meant to review.
+    stubEntries({
+      "PRD.md": "---\ntype: prd\nverified:\n  - by: feature-dev/human-review-model\n---\n\n# PRD\n",
+      "decisions.md": "---\ntype: decisions\n---\n\n# Decisions\n",
+    });
+
+    const provider = new KnowledgeTreeProvider(
+      "/workspace",
+      makePipelineState(42),
+      makeIpcClient()
+    );
+    const root = await provider.getChildren();
+    const children = await provider.getChildren(root[0]);
+
+    const descriptions = children.map((c) => String(c.description ?? ""));
+    expect(descriptions.some((d) => d.includes("human-reviewed"))).toBe(false);
+    expect(descriptions.some((d) => d.includes("machine-confirmed"))).toBe(true);
+    provider.dispose();
+  });
+
+  it("the unverified-only filter hides confirmed entries", async () => {
+    stubEntries({
+      "PRD.md": "---\ntype: prd\nverified:\n  - by: human:octocat\n---\n\n# PRD\n",
+      "decisions.md": "---\ntype: decisions\n---\n\n# Decisions\n",
+    });
+
+    const provider = new KnowledgeTreeProvider(
+      "/workspace",
+      makePipelineState(42),
+      makeIpcClient()
+    );
+
+    expect(provider.isUnverifiedOnly()).toBe(false);
+    provider.setUnverifiedOnly(true);
+    expect(provider.isUnverifiedOnly()).toBe(true);
+
+    const root = await provider.getChildren();
+    const children = await provider.getChildren(root[0]);
+    const labels = children.map((c) => String(c.label));
+
+    expect(labels).toContain("decisions.md");
+    expect(labels).not.toContain("PRD.md");
+    provider.dispose();
+  });
+});

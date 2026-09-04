@@ -243,6 +243,49 @@ DECEOF
 
   echo "decisions.md populated: $DECISIONS_FILE"
 
+  # Resolve the Go binary once; both the provenance stamp below and the
+  # tradeoff gate further down use it.
+  BINARY="${NIGHTGAUGE_BIN:-}"
+  [ -n "$BINARY" ] && [ ! -x "$BINARY" ] && BINARY=""
+  [ -z "$BINARY" ] && BINARY=$(command -v nightgauge 2>/dev/null || echo "")
+  if [ -z "$BINARY" ]; then
+    REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+    [ -x "$REPO_ROOT/bin/nightgauge" ] && BINARY="$REPO_ROOT/bin/nightgauge"
+  fi
+  if [ -z "$BINARY" ]; then
+    GIT_COMMON_DIR="$(git rev-parse --git-common-dir 2>/dev/null || true)"
+    if [ -n "$GIT_COMMON_DIR" ]; then
+      CANONICAL_REPO="$(cd "$GIT_COMMON_DIR/.." 2>/dev/null && pwd)"
+      [ -n "$CANONICAL_REPO" ] && [ -x "$CANONICAL_REPO/bin/nightgauge" ] && BINARY="$CANONICAL_REPO/bin/nightgauge"
+    fi
+  fi
+  [ -z "$BINARY" ] && [ -x "$HOME/go/bin/nightgauge" ] && BINARY="$HOME/go/bin/nightgauge"
+  [ -n "$BINARY" ] && export PATH="$(dirname "$BINARY"):$PATH"
+
+  # --- Record provenance on both entries ---
+  # `knowledge stamp` is the ONLY writer of the provenance fields. Never edit
+  # frontmatter here with sed, awk or a heredoc: the actor has to be built by
+  # the binary from the stage name and the dispatched model, or an entry could
+  # claim any provenance it liked and the trust tier recall ranks on would be
+  # worthless.
+  #
+  # --stage does exactly that. It reads NIGHTGAUGE_DISPATCH_MODEL, which the
+  # adapters export alongside NIGHTGAUGE_STAGE.
+  if [ -n "$BINARY" ]; then
+    ISSUE_URL=$("$BINARY" forge issue view "$ISSUE_NUMBER" --json 2>/dev/null | jq -r '.url // empty')
+
+    for KB_ENTRY in "$PRD_FILE" "$DECISIONS_FILE"; do
+      [ -f "$KB_ENTRY" ] || continue
+      "$BINARY" knowledge stamp "$KB_ENTRY" \
+        --stage "${NIGHTGAUGE_STAGE:-feature-planning}" \
+        ${ISSUE_URL:+--source "$ISSUE_URL"} \
+        >/dev/null 2>&1 \
+        || echo "WARNING: could not stamp provenance on $KB_ENTRY" >&2
+    done
+  else
+    echo "WARNING: nightgauge binary unavailable — knowledge provenance not stamped." >&2
+  fi
+
   # --- Enrichment quality validation ---
   # Verify the AI replaced the seeded TODO placeholders with real content. The
   # embedded TRD/QRD markers only exist in unfilled scaffold comments, so their
@@ -290,22 +333,7 @@ DECEOF
   # When knowledge.require_decisions is true, enforce that decisions.md contains
   # at least one ADR block when the plan has 2+ distinct tradeoff keywords.
   # Tradeoff keywords are loaded from configs/knowledge-tradeoff-keywords.yaml.
-  BINARY="${NIGHTGAUGE_BIN:-}"
-  [ -n "$BINARY" ] && [ ! -x "$BINARY" ] && BINARY=""
-  [ -z "$BINARY" ] && BINARY=$(command -v nightgauge 2>/dev/null || echo "")
-  if [ -z "$BINARY" ]; then
-    REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-    [ -x "$REPO_ROOT/bin/nightgauge" ] && BINARY="$REPO_ROOT/bin/nightgauge"
-  fi
-  if [ -z "$BINARY" ]; then
-    GIT_COMMON_DIR="$(git rev-parse --git-common-dir 2>/dev/null || true)"
-    if [ -n "$GIT_COMMON_DIR" ]; then
-      CANONICAL_REPO="$(cd "$GIT_COMMON_DIR/.." 2>/dev/null && pwd)"
-      [ -n "$CANONICAL_REPO" ] && [ -x "$CANONICAL_REPO/bin/nightgauge" ] && BINARY="$CANONICAL_REPO/bin/nightgauge"
-    fi
-  fi
-  [ -z "$BINARY" ] && [ -x "$HOME/go/bin/nightgauge" ] && BINARY="$HOME/go/bin/nightgauge"
-  [ -n "$BINARY" ] && export PATH="$(dirname "$BINARY"):$PATH"
+  # $BINARY was resolved above, before the provenance stamp.
   if [ -n "$BINARY" ]; then
     VALIDATE_OUTPUT=$("$BINARY" knowledge validate "$ISSUE_NUMBER" --workdir "." 2>&1)
     VALIDATE_EXIT=$?

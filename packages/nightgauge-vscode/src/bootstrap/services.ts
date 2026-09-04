@@ -2501,6 +2501,20 @@ export async function initializeServices(
       )
     );
 
+    // "Unverified only" filter (#1369) — an entry is unverified when nothing
+    // has confirmed it, so this is the maintainer's review queue.
+    context.subscriptions.push(
+      vscode.commands.registerCommand("nightgauge.knowledge.toggleUnverifiedOnly", () => {
+        const next = !knowledgeTreeProvider.isUnverifiedOnly();
+        knowledgeTreeProvider.setUnverifiedOnly(next);
+        vscode.window.showInformationMessage(
+          next
+            ? "Knowledge view: showing unverified entries only."
+            : "Knowledge view: showing all entries."
+        );
+      })
+    );
+
     // Copy wiki-link context menu — emits [[#NNNN]] for issue dirs or
     // [[relative-path]] for other markdown files.
     context.subscriptions.push(
