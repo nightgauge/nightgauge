@@ -181,6 +181,61 @@ cannot author:
   [FEEDBACK_LOOPS.md](FEEDBACK_LOOPS.md#conflict-resolution_needed-4072).
 - Future: opt-in release-note authoring (out of scope for #3264).
 
+## Phase reporting on both routes (#1247, #1397)
+
+A deterministic stage has no model in the loop, so it emits none of the
+`<!-- phase:start … -->` markers the extension parses, and `phaseInference`
+covers only `feature-dev` / `feature-planning`. Before #1247 that showed as a
+`pr-merge` stuck at 0/14 for its whole run and then rendering all fourteen
+phases `skipped` on success. The runners now report their waypoints directly
+through `stages.PhaseReporter`.
+
+There are **two routes to these runners**, and both must report:
+
+| Route                                                             | Reporter                     | Sinks                                                 |
+| ----------------------------------------------------------------- | ---------------------------- | ----------------------------------------------------- |
+| Go scheduler (`runPipeline` → `s.prMergeRunner`)                  | `deterministicPhaseReporter` | `RuntimeState.PhaseHistory` + live IPC events         |
+| VS Code (`HeadlessOrchestrator` → `nightgauge pr-stage … --json`) | `orchestrator.PhaseRecorder` | the CLI's stderr stream + the result's `phases` array |
+
+#1247 instrumented only the first. The second runs the SAME runners in a
+separate process, where there is neither a `RuntimeState` to write to nor a
+live callback to fire, so it still showed 0/14 — the dual-path-drift class, on
+the route an ordinary VS Code user takes.
+
+`nightgauge pr-stage create|merge --json` now reports phases **two ways, and
+both are load-bearing**:
+
+- **A live stream on stderr.** Each transition is written the moment it is
+  reported, as `@@nightgauge-phase@@{json}`. This is what makes a counter move:
+  the runner waits out in-flight CI on a 30s × 30 budget, so a consumer that
+  learned the phases only at process exit would sit at 0/14 for up to fifteen
+  minutes and then jump to the end — the symptom, not a fix for it. stdout
+  stays exactly one JSON object, which is why the live channel is stderr and is
+  sentinel-prefixed.
+- **A `phases` array in the result.** The ordered transitions with their
+  terminal states. This is the durable authority, and the fallback when nothing
+  streamed. The extension applies the array **only** when the stream was
+  silent — they carry the same data, so applying both would record every phase
+  twice.
+
+The sentinel is a literal in two languages (`PhaseStreamPrefix` in
+`internal/orchestrator/phase_recorder.go`, `PHASE_STREAM_PREFIX` in
+`packages/nightgauge-vscode/src/services/prStagePhaseStream.ts`). Its failure
+mode is **silent** — a changed prefix does not error, the reader just stops
+recognising phase lines and the tree returns to 0/14 — so
+`TestPhaseStreamPrefixParityWithTypeScript` reads the TS source and fails on
+drift.
+
+`TestPhaseRecorderMatchesTheSchedulerReporter` tees one real runner run into
+both reporters and requires the resulting durable records to be **identical**,
+rather than merely requiring that each route produces something.
+
+**On a punt**, no skips are written and the phase the runner was inside is
+recorded `failed`, so the skill's own markers continue without contradiction.
+The `skipped` status is reserved for the explicitly off-path phases on a
+deterministic **success** — a true statement that the stage decided not to run
+them.
+
 ## Telemetry
 
 Per-stage `execution_path` is recorded on `V2StageDetail` (Go) /

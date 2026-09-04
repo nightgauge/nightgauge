@@ -392,10 +392,22 @@ origin/main` does not raise it.** The ceiling is derived from the trailing
   forked. The rules above forbid force-push and rebase, which makes merging the
   only permitted way to update a branch and therefore the one path that never
   helps: a long-lived branch measures against an ever-staler ceiling. The
-  checker compensates by taking the larger of the branch's mark and its base
-  ref's, so **keep `origin/main` fetched** — an unfetched base ref puts the lag
-  back. A lower ceiling leaves more numbers above it, so the same tree measures
-  a **higher** unresolvable count on a lagging branch.
+  checker compensates by reading the mark off `origin/main` directly as well as
+  off the branch and taking the larger, so **keep `origin/main` fetched** — an
+  unfetched mainline puts the lag back. A lower ceiling leaves more numbers
+  above it, so the same tree measures a **higher** unresolvable count on a
+  lagging branch.
+
+  Until #1291 that compensation was keyed to the checker's _diff base_, which
+  `scripts/test-publication-boundary.sh` pins to `HEAD` so its cases do not
+  depend on branch topology — right for the diff, and fatal for the ceiling:
+  both reads became the branch's own lagging line and the compensation
+  cancelled itself out. A branch forked at #1110 with `origin/main` merged in
+  measured 6572 references against a 5768 baseline through the local gate, and
+  5295 without it. **The diff base and the ceiling source are different
+  questions**, and the mainline is now consulted for the ceiling regardless of
+  what the diff is measured against.
+
 - **Never hand-lower `issue_references.tree_baseline` on a falling count.** The
   baseline is one global integer compared against a ceiling-dependent count, so
   a fall has two causes — references genuinely removed, and the ceiling rising

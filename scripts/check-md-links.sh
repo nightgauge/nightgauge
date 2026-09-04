@@ -124,6 +124,36 @@ reprobe_url() {
   printf 'unreachable-from-runner curl exit %s\n' "$rc"
 }
 
+# record_reprobe FILE URL — re-probe URL and file the verdict into the counters.
+#
+# Shared by both callers: links the checker could not get a status for at all
+# (`Status: 0`, #1004) and links it got a 5xx/429 for (#1404). One decision
+# procedure, so the two cannot drift into disagreeing about what "dead" means.
+#
+# Mutates FILE_FATAL / N_* / *_LINES in the caller's scope, which is why it is a
+# function rather than a subshell.
+record_reprobe() {
+  local f="$1" url="$2" verdict class detail
+  verdict="$(reprobe_url "$url")"
+  class="${verdict%% *}"
+  detail="${verdict#* }"
+  case "$class" in
+    dead)
+      FILE_FATAL=1
+      N_DEAD=$((N_DEAD + 1))
+      DEAD_LINES="${DEAD_LINES}"$'\n'"    ${f}: ${url} (${detail})"
+      ;;
+    unreachable-from-runner)
+      N_UNREACHABLE=$((N_UNREACHABLE + 1))
+      UNREACHABLE_LINES="${UNREACHABLE_LINES}"$'\n'"    ${f}: ${url} (${detail})"
+      ;;
+    alive-after-reprobe)
+      N_ALIVE=$((N_ALIVE + 1))
+      ALIVE_LINES="${ALIVE_LINES}"$'\n'"    ${f}: ${url} (${detail})"
+      ;;
+  esac
+}
+
 FAIL=0
 FAILED_FILES=""
 COUNT=0
@@ -151,15 +181,43 @@ while IFS= read -r f; do
 
   FILE_FATAL=0
 
-  # A link the checker got a real status for is this gate's own verdict —
+  # A link the checker got a real status for is USUALLY this gate's own verdict —
   # internal/relative links land here (a missing file reads Status: 400) and are
   # always fatal.
+  #
+  # EXCEPT 5xx (#1404). A 5xx is the server failing, not the document being
+  # missing — precisely the condition #1004 exists to tolerate, only carrying a
+  # status number instead of a zero, so it skipped the re-probe and went
+  # straight to fatal. A Google 500 on a URL that answered 200 three times a
+  # minute later failed the mandatory pre-submission gate for a branch that does
+  # not touch the file.
+  #
+  # It takes the SAME re-probe path as `Status: 0`, so the verdict is a property
+  # of the host across four attempts rather than of one unlucky request, and the
+  # three-class vocabulary is unchanged. Everything else — every 4xx, and
+  # therefore every missing relative link — stays fatal on the first answer.
+  #
+  # ONLY 5xx, and that is not an oversight. The other "come back later" statuses
+  # are already handled one layer up: `.markdown-link-check.json` lists
+  # 401/403/429 in `aliveStatusCodes`, so they are never reported as failures
+  # and can never reach this branch. An arm for them here would be unreachable
+  # code that no test could exercise — which was the first draft of this fix,
+  # caught by mutating the arm away and watching its test still pass.
   if [ -n "$ANSWERED" ]; then
-    FILE_FATAL=1
     while IFS= read -r line; do
       [ -z "$line" ] && continue
-      N_DEAD=$((N_DEAD + 1))
-      DEAD_LINES="${DEAD_LINES}"$'\n'"    ${f}: ${line% *} (Status: ${line##* })"
+      url="${line% *}"
+      code="${line##* }"
+      case "$code" in
+        5??)
+          record_reprobe "$f" "$url"
+          ;;
+        *)
+          FILE_FATAL=1
+          N_DEAD=$((N_DEAD + 1))
+          DEAD_LINES="${DEAD_LINES}"$'\n'"    ${f}: ${url} (Status: ${code})"
+          ;;
+      esac
     done <<EOF
 $ANSWERED
 EOF
@@ -168,24 +226,7 @@ EOF
   if [ -n "$ERRORED" ]; then
     while IFS= read -r url; do
       [ -z "$url" ] && continue
-      verdict="$(reprobe_url "$url")"
-      class="${verdict%% *}"
-      detail="${verdict#* }"
-      case "$class" in
-        dead)
-          FILE_FATAL=1
-          N_DEAD=$((N_DEAD + 1))
-          DEAD_LINES="${DEAD_LINES}"$'\n'"    ${f}: ${url} (${detail})"
-          ;;
-        unreachable-from-runner)
-          N_UNREACHABLE=$((N_UNREACHABLE + 1))
-          UNREACHABLE_LINES="${UNREACHABLE_LINES}"$'\n'"    ${f}: ${url} (${detail})"
-          ;;
-        alive-after-reprobe)
-          N_ALIVE=$((N_ALIVE + 1))
-          ALIVE_LINES="${ALIVE_LINES}"$'\n'"    ${f}: ${url} (${detail})"
-          ;;
-      esac
+      record_reprobe "$f" "$url"
     done <<EOF
 $ERRORED
 EOF
