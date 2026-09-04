@@ -799,13 +799,50 @@ placed **above** `premature-turn-end` in `internal/terminalkind/table.json`. Its
 terms are the transport's own wording — `invalid auth method`,
 `permission denied (publickey`, `could not read Username` / `Password`,
 `invalid username or password`, `authentication failed for`,
-`ssh: unable to authenticate`, `bad credentials` — matching the git-auth
-spellings `orchestrator.permissionPhrases` already acts on, so the escalation
-gate and the recorded kind agree on the same evidence. The bare spellings from
-that list (`permission denied`, `unauthorized`, `forbidden`, the HTTP codes) are
-deliberately absent: this rule matches the whole joined string and sits above
-sixteen others, and those words appear in unrelated failure prose that the
-corpus already pins as unmatched.
+`authentication required`, `ssh: unable to authenticate`, `bad credentials`,
+`http 401`, `401 unauthorized`.
+
+Those terms are a **deliberate subset** of `orchestrator.permissionPhrases`, not
+a copy of it, because the two lists answer different questions at different
+prices. The gate asks _could a stronger model possibly fix this?_ and pays one
+skipped retry for a false yes, matching per line against a curated classifier.
+The rule table asks _what is this failure called?_, matches the whole joined
+string, is first-match-wins, and sits above sixteen other rules — so a term here
+that appears in someone else's failure prose silently retitles their failure.
+Four spellings are therefore excluded, each pinned by a corpus row that would go
+red:
+
+| Excluded                        | Pinned by                                                | Why                                                                                                 |
+| ------------------------------- | -------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| bare `permission denied`        | `permission-denied-negative-eacces`                      | A filesystem EACCES is not a transport refusal; only the `(publickey` form is taken.                |
+| bare `authentication failed`    | `git-transport-auth-negative-bare-authentication-failed` | A model adapter's own logged-out text, a different remedy; narrowed to `authentication failed for`. |
+| bare `unauthorized`/`forbidden` | `boundary-negative-left-edge-session-limit`              | Both words appear in unrelated refusal prose.                                                       |
+| the 403 forms                   | `boundary-negative-left-edge-session-limit`              | 403 is GitHub's **throttle** code as much as its refusal code.                                      |
+
+A run whose only evidence is a bare 403 therefore still books `validation_error`
+while the gate still declines to escalate it. That divergence is the
+conservative answer on both sides, not a gap: the gate's wrong answer costs one
+retry, this rule's wrong answer mislabels someone else's failure. The 401 forms
+have no such ambiguity and are in.
+
+### The cause the daemon logs has to reach the record it books (#878)
+
+Naming the kind is worthless if the evidence never arrives. In the observed run
+the `invalid auth method` line was **not** the subagent's: it came from
+`Scheduler.ensureEpicBranchForItem`, which pushes the epic base branch on the
+stage's behalf, is deliberately non-blocking, and did nothing with the failure
+but `log.Printf` it. Every mechanism above reads `runtime.StageOutputTail(stage)`
+— the SUBAGENT's captured output — so the first-cause scan found a clean tail,
+the escalation gate saw no permission evidence and escalated `haiku → sonnet`,
+and the record booked the post-condition symptom. The fix was in place and could
+not fire.
+
+`ensureEpicBranchForItem` now returns its failure text instead of only logging
+it, and `runPipeline` appends that text to the stage's evidence through
+`RuntimeState.AppendStageOutputTail` (which appends rather than replaces, so the
+subagent's own tail is kept). **Non-blocking has never meant invisible**: a
+failure the orchestrator performs on a stage's behalf belongs in that stage's
+evidence, or every consumer built on that evidence is structurally blind to it.
 
 ---
 
@@ -1012,6 +1049,7 @@ operators.
 | `skill-no-op`            | high     | pr-merge context (#3275)                        | pr-merge LLM path reported success but post-merge verification found the PR is not actually merged.                   |
 | `adapter-unavailable`    | high     | dispatcher envelope                             | Primary adapter prereq failed; no fallback walked (#3223).                                                            |
 | `no-adapter-available`   | high     | dispatcher envelope                             | Full fallback chain exhausted (#3231).                                                                                |
+| `credential-failure`     | high     | run record `terminal_failure_kind`              | `git_transport_auth_failed` — a git or forge transport refused the machine's credentials (#878).                      |
 | `unknown`                | low      | fallback                                        | No structured signal or keyword match.                                                                                |
 
 ### Time-Gated `stop-hook-error` (Issue #3275)

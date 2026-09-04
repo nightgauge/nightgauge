@@ -389,11 +389,11 @@
     },
     {
       "id": "order-git-transport-auth-beats-premature-turn-end",
-      "input": "error: failed to push some refs: invalid auth method \u2014 then stage issue-pickup exited 0 but did not write expected output context: /w/.nightgauge/context/issue-pickup.json",
+      "input": "error: failed to push some refs: invalid auth method — then stage issue-pickup exited 0 but did not write expected output context: /w/.nightgauge/context/issue-pickup.json",
       "expected": "git_transport_auth_failed",
       "expected_signal": "",
       "source": "synthetic",
-      "producer": "The post-condition site's composed reason (scheduler.go: `<first cause> \u2014 then <post-condition symptom>`, #878)",
+      "producer": "The post-condition site's composed reason (scheduler.go: `<first cause> — then <post-condition symptom>`, #878)",
       "rationale": "THE #878 ROW. The composed reason carries BOTH the cause and the symptom, and the symptom phrase is a clause of premature-turn-end. Whichever rule sits earlier wins the whole string, so ordering is the entire fix: a credential-less push booked as a turn-end tells the retro path the agent gave up when in fact the machine had no credential, and routes recovery at the agent instead of at the environment."
     },
     {
@@ -458,6 +458,33 @@
       "source": "synthetic",
       "producer": "The GitHub API's 401 body as `gh` prints it",
       "rationale": "The forge-API sibling of the transport failures above: the token is present but rejected, so every board read, PR create and merge in the run will fail the same way. Matched on the API's own words rather than on `401`, because the bare code appears in issue numbers and temp paths — the same trap that made orchestrator.permissionPhrases spell its codes out."
+    },
+    {
+      "id": "git-transport-auth-go-git-authentication-required",
+      "input": "epic branch auto-create: push epic branch epic/900-example: push branch epic/900-example: authentication required",
+      "expected": "git_transport_auth_failed",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "go-git's transport.ErrAuthenticationRequired, as the scheduler's epic-branch auto-create surfaces it when the remote wants credentials and none were supplied",
+      "rationale": "The spelling permissionPhrases lists and FAILURE_TAXONOMY names as a git-transport form, and the one this rule shipped WITHOUT: the escalation gate declined to escalate this exact text while the record still booked validation_error, so the run simultaneously concluded 'permission failure, no model can fix it' and 'the stage wrote a malformed context'. Unambiguous at whole-string scope — nothing but a transport asks for authentication in these words — which is why it is in and the bare 403 forms are not. The prefix is the observed #878 shape: the failing push is the SCHEDULER's, appended to the stage's evidence by AppendStageOutputTail because it never passes through the subagent's output at all."
+    },
+    {
+      "id": "git-transport-auth-forge-http-401",
+      "input": "forge api: HTTP 401: Requires authentication (https://api.example.org/graphql)",
+      "expected": "git_transport_auth_failed",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "A forge REST/GraphQL 401 as the CLI prints the status line, with no `Bad credentials` body",
+      "rationale": "Pins `http 401` on its own: the sibling row git-transport-auth-forge-bad-credentials also contains HTTP 401, so without this row the clause could be deleted and the suite would stay green on the other row's `bad credentials` term. 401 is the ONE HTTP code that means exactly 'your credentials were refused' — unlike 403, which is also GitHub's throttle code and is therefore excluded (boundary-negative-left-edge-session-limit). Written form only, never the bare code: `#401` is an issue number and `/tmp/Test401.../` is a path."
+    },
+    {
+      "id": "git-transport-auth-forge-401-unauthorized",
+      "input": "remote rejected the deploy token: 401 Unauthorized",
+      "expected": "git_transport_auth_failed",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "The other written form of the same status, as an HTTP transport or a forge client wraps it",
+      "rationale": "The second written 401 form permissionPhrases carries, pinned separately because the two spellings share no substring — `http 401` does not appear in `401 Unauthorized` and deleting either clause has to go red on its own row. Bare `unauthorized` is still absent: it appears in unrelated refusal prose, and this rule matches the whole joined string above sixteen other rules."
     },
     {
       "id": "premature-turn-end-gate",

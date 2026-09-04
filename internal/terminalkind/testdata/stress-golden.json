@@ -1186,6 +1186,21 @@
       "signal": ""
     },
     {
+      "input": "authentication required",
+      "kind": "git_transport_auth_failed",
+      "signal": ""
+    },
+    {
+      "input": "exit 1: authentication required",
+      "kind": "git_transport_auth_failed",
+      "signal": ""
+    },
+    {
+      "input": "AUTHENTICATION REQUIRED",
+      "kind": "git_transport_auth_failed",
+      "signal": ""
+    },
+    {
       "input": "ssh: unable to authenticate",
       "kind": "git_transport_auth_failed",
       "signal": ""
@@ -1212,6 +1227,36 @@
     },
     {
       "input": "BAD CREDENTIALS",
+      "kind": "git_transport_auth_failed",
+      "signal": ""
+    },
+    {
+      "input": "http 401",
+      "kind": "git_transport_auth_failed",
+      "signal": ""
+    },
+    {
+      "input": "exit 1: http 401",
+      "kind": "git_transport_auth_failed",
+      "signal": ""
+    },
+    {
+      "input": "HTTP 401",
+      "kind": "git_transport_auth_failed",
+      "signal": ""
+    },
+    {
+      "input": "401 unauthorized",
+      "kind": "git_transport_auth_failed",
+      "signal": ""
+    },
+    {
+      "input": "exit 1: 401 unauthorized",
+      "kind": "git_transport_auth_failed",
+      "signal": ""
+    },
+    {
+      "input": "401 UNAUTHORIZED",
       "kind": "git_transport_auth_failed",
       "signal": ""
     },
