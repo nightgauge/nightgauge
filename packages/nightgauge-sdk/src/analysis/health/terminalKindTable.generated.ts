@@ -427,6 +427,31 @@ export const TERMINAL_KIND_TABLE: TerminalKindTable = {
       "why": "api.github.com unreachable at the pipeline-start preflight (#4002) — the connectivity sibling of github-quota-low. Above the generic rules so the `pipeline-start-failure` wrapper does not bucket it elsewhere."
     },
     {
+      "id": "github-rate-limited",
+      "kind": "github_rate_limited",
+      "signal": false,
+      "clauses": [
+        [
+          "secondary rate limit"
+        ],
+        [
+          "api rate limit exceeded"
+        ],
+        [
+          "was submitted too quickly"
+        ],
+        [
+          "too many requests",
+          "github"
+        ],
+        [
+          "http 429",
+          "github"
+        ]
+      ],
+      "why": "GitHub itself throttled a `gh` call MID-STAGE (#1391) — the vendor-CLI sibling of github-quota-low, which is Nightgauge's OWN pipeline-start preflight marker and therefore a semantically different producer. Before this rule EVERY GitHub throttle wording fell through to subagent_crash, a LIFETIME failure kind, so the pipeline abandoned a run that a short backoff would have recovered and booked the outcome against the wrong class in the learning corpus. A NEW KIND rather than rate_limit_quota_exhausted: that is the ANTHROPIC bucket and its recovery waits out a published five-hour reset. A new kind rather than github_quota_low: that one's recovery reads a reset time from the live PRIMARY-bucket tracker and applies a global cooldown keyed to it, which is the wrong clock for a secondary limit — the primary bucket can be full while a secondary throttle is active. github_rate_limited routes with api_overloaded / api_connection_lost instead: short exponential per-issue backoff, no global cooldown, no lifetime-cap increment, capped consecutive attempts — which converges on the secondary limit (clears in minutes) and on the primary one alike, without needing a reset time that is reliably published for neither. Placed with its github siblings, below the Anthropic quota block so Anthropic wording is never stolen, and far above the subagent_crash fallback. The two generic literals are conjoined with `github` because `too many requests` and `http 429` are shapes any vendor emits; the bare-half negative-control rows in the corpus are what stop that conjunction being widened to a disjunction with every suite green."
+    },
+    {
       "id": "pr-merge-unmerged",
       "kind": "pr_merge_unmerged",
       "signal": false,

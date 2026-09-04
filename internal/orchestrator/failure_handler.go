@@ -152,6 +152,29 @@ const (
 	// HeadlessOrchestrator.preCheckAuth as
 	// `[pipeline-start-failure] github-network-outage`. Issue #4002.
 	TerminalKindGitHubNetworkOutage = "github_network_outage"
+	// TerminalKindGitHubRateLimited is set when GITHUB ITSELF throttled a `gh`
+	// call MID-STAGE: a secondary rate limit ("You have exceeded a secondary
+	// rate limit", "was submitted too quickly"), a primary bucket emptying
+	// during the run ("API rate limit exceeded for user ID"), or a 429. The
+	// vendor-CLI sibling of TerminalKindGitHubQuotaLow, which is Nightgauge's
+	// OWN pipeline-start preflight marker and therefore a different producer
+	// describing the same underlying condition.
+	//
+	// Before #1391 every one of those wordings matched no rule and fell to
+	// TerminalKindSubagentCrash — a LIFETIME kind — so the pipeline abandoned a
+	// run that a short backoff would have recovered, incremented
+	// LifetimeIssueFailures, and fed the cascade breaker for a window that
+	// clears on its own.
+	//
+	// Routed with api_overloaded / api_connection_lost rather than with
+	// github_quota_low: that branch reads a reset time off the live PRIMARY
+	// bucket tracker and applies a GLOBAL cooldown to it, which is the wrong
+	// clock here — the primary bucket can be full while a secondary throttle is
+	// active, and a secondary limit publishes no reset at all. So: short
+	// exponential per-issue backoff, NO global cooldown, no lifetime-cap
+	// increment, no queue pause, board → Ready, capped consecutive attempts.
+	// Issue #1391.
+	TerminalKindGitHubRateLimited = "github_rate_limited"
 	// TerminalKindModelUnavailable is set when the Anthropic API REJECTS the
 	// selected model rather than failing transiently (#42): unknown/invalid
 	// model ID (HTTP 404 `not_found_error` with message `model: <id>`), a
