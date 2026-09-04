@@ -250,6 +250,25 @@ through the same in-process mutex the append path already provides. This
 eliminates by construction the multi-writer races #316 hit — there is no
 "resolve on disk from two places" path to lose.
 
+> **Amended by #1425.** "Exactly one process" was aspiration, not enforcement.
+> `nightgauge attention raise` / `resolve` construct their own `Store` in an
+> operator's shell, and the serve lease (#1349) guarantees one _scheduler_ per
+> workspace, not one writer. The in-process mutex is therefore layered over an
+> advisory `internal/flock` lock on `<dir>/nightgauge-attention.lock` that
+> every nightgauge process takes for the same critical section (the #1163
+> pattern), and each writer stages its write-temp at its own path rather than
+> a shared `<id>.json.tmp`. The lock is fail-open by design, which the
+> per-writer staging path is what makes safe.
+>
+> The section is also **bounded**, and that is part of the same mechanism: a
+> bounded wait over an unbounded hold is not a lock. Because §D keeps the verb
+> inside the section, the verb's duration is what every other producer — in
+> every process — waits out, so it runs under its own ceiling (`verbTimeout`)
+> strictly below the lock's wait (`flockTimeout`). Lock expiry therefore means
+> a genuinely wedged holder, not a peer still working. The corollary for verb
+> authors: a verb's context is **request-scoped**, so anything a verb spawns
+> and leaves running must detach from it.
+
 **Identity and idempotency.** `id` (`dr_<uuidv7>`) is the durable key.
 `idempotency_key` enforces **at most one open request per condition**: a
 producer that re-detects the same blocker (e.g. the fleet is still exhausted on
