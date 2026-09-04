@@ -610,8 +610,48 @@ def derived_high_water(rev: str = "HEAD") -> int:
     return max((int(m.group(1)) for m in trailing if m), default=0)
 
 
+# The forge-controlled mainline, consulted for the ceiling regardless of what
+# the DIFF base is pinned to. Ordered: the remote-tracking ref first, because a
+# local `main` can be behind.
+CEILING_MAINLINE_REFS = ("origin/main", "main")
+
+
+def base_band_floor(base: str, slack: int, ceiling: int) -> int:
+    """The LOWER edge of the crossing band: the ceiling as of `base`.
+
+    BOTH EDGES MUST BE MEASURED THE SAME WAY (#1291). `ceiling_marks` is
+    mainline-aware; leaving this edge on a bare `derived_high_water(base)` split
+    one comparison across two definitions, and the guard then manufactured a
+    crossing out of nothing — with the diff base pinned to HEAD there is no
+    commit between `base` and now, and the band still read 100 -> 300, naming
+    references as "CROSSED the ceiling since HEAD". A confidently false report
+    is worse than a missed one.
+
+    SCOPED BY MERGE-BASE, not by a plain max over the mainline refs. A plain max
+    would raise this floor to the mainline's mark on the `push: [main]` path
+    (where base is HEAD^) and empty the band there too — deleting the #1080
+    detection this report exists for. Asking how far the mainline had got AS OF
+    `base` gives a merge-updated base the mark it already contains (band empty,
+    nothing reported), while a genuinely older base still shows the rise.
+
+    Named rather than inline so the crossing band is driven by shipped code in
+    the tests: the first version of this fix was pinned only by a test that
+    recomputed the same arithmetic, which reverting the fix left green.
+    """
+    base_mark = derived_high_water(base)
+    for mainline_ref in CEILING_MAINLINE_REFS:
+        if not _rev_ok(mainline_ref):
+            continue
+        merged = subprocess.run(
+            ["git", "merge-base", mainline_ref, base], capture_output=True
+        )
+        if merged.returncode == 0 and merged.stdout.strip():
+            base_mark = max(base_mark, derived_high_water(merged.stdout.decode().strip()))
+    return min(base_mark + slack, ceiling)
+
+
 def ceiling_marks(base_ref: str | None) -> tuple[int, str]:
-    """The mark to use, and the ref it came from: the LARGER of two lines.
+    """The mark to use, and the ref it came from: the LARGEST of several lines.
 
     Why alignment rather than a ceiling-independent count (#1129). The
     tree-wide count is a function of the ceiling -- a LOWER ceiling leaves more
@@ -635,14 +675,40 @@ def ceiling_marks(base_ref: str | None) -> tuple[int, str]:
 
     `max` is deliberate. This can only ever RAISE the ceiling toward the
     mainline's, never lower it below what the branch itself proves was issued,
-    and both inputs are first-parent lines, so the anti-crafted-title property
-    of `derived_high_water` is preserved on both.
+    and every input is a first-parent line, so the anti-crafted-title property
+    of `derived_high_water` is preserved on all of them.
+
+    THE DIFF BASE AND THE CEILING SOURCE ARE DIFFERENT QUESTIONS (#1291). The
+    regression suite pins `NG_BOUNDARY_DIFF_BASE=HEAD` so its cases do not
+    depend on branch topology -- which is right for the DIFF, and fatal for the
+    CEILING: `base_ref` is then "HEAD", `derived_high_water("HEAD")` is the
+    branch's own lagging line, and the compensation above cancels itself out.
+
+    That is not hypothetical, and it is not cosmetic. On a branch forked at
+    #1110 with `origin/main` merged in -- the only permitted way to update a
+    branch, since force-push and rebase are forbidden -- the same working tree
+    measures 6572 references against a 5768 baseline through the pin, and 5295
+    without it. A false red that names nothing the branch did, on a branch that
+    cannot be rebased out of it.
+
+    So the mainline is consulted directly, always, in addition to whatever the
+    diff base happens to be. It stays FAIL-CLOSED: an unfetched or missing
+    mainline contributes nothing rather than inventing a mark, and a tree where
+    no line carries a marker still leaves `mark == 0` for the caller to die on.
     """
     mark, source = derived_high_water(), "HEAD"
-    if base_ref:
-        base_mark = derived_high_water(base_ref)
-        if base_mark > mark:
-            mark, source = base_mark, base_ref
+
+    candidates = list(CEILING_MAINLINE_REFS)
+    if base_ref and base_ref not in candidates:
+        candidates.insert(0, base_ref)
+
+    for ref in candidates:
+        if not _rev_ok(ref):
+            # An unfetched mainline must not raise the ceiling on a guess.
+            continue
+        ref_mark = derived_high_water(ref)
+        if ref_mark > mark:
+            mark, source = ref_mark, ref
     return mark, source
 
 
@@ -1009,7 +1075,7 @@ def main() -> int:
     # crosses nothing. On the `push: [main]` run the base is `HEAD^`, the mark
     # rose by exactly the merge that just landed, and the references it crossed
     # are named. That is the run that observed 5801 -> 5796 in #1080.
-    base_ceiling = min(derived_high_water(base) + slack, ceiling)
+    base_ceiling = base_band_floor(base, slack, ceiling)
 
     violations: list[str] = []
     tracked = tracked_paths()
