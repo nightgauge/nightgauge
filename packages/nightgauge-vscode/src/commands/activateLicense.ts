@@ -8,7 +8,9 @@
  *     honors a passed key that differs from the session key (it routes to
  *     LicenseService.ValidateKey, which validates the arbitrary key WITHOUT
  *     touching the session cache), so we learn whether the entered key is good
- *     before persisting anything.
+ *     before persisting anything. The call carries this machine's fingerprint,
+ *     hostname and platform so the platform binds the seat to the same machine
+ *     identity the pipeline preflight will later present (#1334).
  *  3. On success, persist the key to SecretStorage under
  *     SECRET_KEYS.platformLicenseKey — the source of truth that
  *     IpcClientBase.resolveLicenseKey() reads and forwardPlatformEnv() injects
@@ -17,10 +19,13 @@
  *     applies after a window reload, which we offer inline.
  *
  * @see Issue #1138 - Commercialization: in-extension license activation
+ * @see Issue #1334 - license validate must carry the machine binding
  */
 
+import * as os from "node:os";
 import * as vscode from "vscode";
 import { IpcClient } from "../services/IpcClient";
+import { MachineFingerprint } from "../platform/MachineFingerprint";
 import { SecretStorageService, SECRET_KEYS } from "../services/SecretStorageService";
 import type { LicensePreflight } from "../platform/LicensePreflight";
 import type { TrialStateStore } from "../platform/TrialState";
@@ -64,7 +69,18 @@ export function registerActivateLicenseCommand(
           cancellable: false,
         },
         async () => {
-          const info = await ipcClient.platformValidateLicense(key);
+          // (#1334) Bind the seat to THIS machine. The daemon hashes the
+          // fingerprint into the contract machineId; omitting these three made
+          // it fall back to a host-derived identity that cannot reproduce
+          // vscode.env.machineId, so activating and then running the pipeline
+          // would take two seats for one installation. Same three arguments,
+          // same order, as LicensePreflight.validate().
+          const info = await ipcClient.platformValidateLicense(
+            key,
+            MachineFingerprint.initialize().getMachineId(),
+            os.hostname(),
+            process.platform
+          );
           valid = info.valid === true;
           tier = String(info.tier ?? "");
         }

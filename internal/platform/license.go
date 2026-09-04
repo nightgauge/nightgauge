@@ -73,6 +73,12 @@ type LicenseService struct {
 	client *Client
 	mu     sync.RWMutex
 	cached *LicenseInfo
+	// machine is the last machine identity a caller supplied (#1334). The
+	// params-less "platform.license" IPC method carries none, and a
+	// host-derived fallback identity would bind a SECOND seat for a machine
+	// the editor has already bound — so remember what the editor sent and
+	// reuse it.
+	machine MachineInfo
 }
 
 // NewLicenseService creates a license validation service.
@@ -81,7 +87,14 @@ func NewLicenseService(client *Client) *LicenseService {
 }
 
 // Validate checks the license, returning cached data if fresh.
-func (s *LicenseService) Validate(ctx context.Context) (*LicenseInfo, error) {
+//
+// machine identifies the machine the seat is bound to (#1334). Pass the
+// identity the editor supplied over IPC; pass the zero MachineInfo when the
+// caller has none and the last-remembered (or host-derived) identity should
+// stand in.
+func (s *LicenseService) Validate(ctx context.Context, machine MachineInfo) (*LicenseInfo, error) {
+	machine = s.rememberMachine(machine)
+
 	// Check cache first
 	s.mu.RLock()
 	if s.cached != nil && s.isCacheValid() {
@@ -102,9 +115,10 @@ func (s *LicenseService) Validate(ctx context.Context) (*LicenseInfo, error) {
 		return s.communityInfo(), nil
 	}
 
-	resp, err := s.client.api.LicenseValidateWithResponse(ctx, api.LicenseValidateJSONRequestBody{
-		Key: licenseKey,
-	})
+	body := api.LicenseValidateJSONRequestBody{Key: licenseKey}
+	machine.applyTo(&body)
+
+	resp, err := s.client.api.LicenseValidateWithResponse(ctx, body)
 	if err != nil {
 		// Genuine transport/connectivity failure → grace fallback.
 		return s.offlineFallback(), nil
@@ -174,7 +188,9 @@ func licenseInfoFromBody(body *api.LicenseValidateBody) *LicenseInfo {
 // s.cached and never substitutes the community key — an empty key, a 4xx, or an
 // offline/transport failure all report Valid=false so the UI can tell the user
 // the key wasn't accepted (rather than silently degrading to community).
-func (s *LicenseService) ValidateKey(ctx context.Context, key string) (*LicenseInfo, error) {
+func (s *LicenseService) ValidateKey(ctx context.Context, key string, machine MachineInfo) (*LicenseInfo, error) {
+	machine = s.rememberMachine(machine)
+
 	if key == "" {
 		return s.rejectedInfo(401, nil), nil
 	}
@@ -184,9 +200,10 @@ func (s *LicenseService) ValidateKey(ctx context.Context, key string) (*LicenseI
 		return invalidInfo(), nil
 	}
 
-	resp, err := s.client.api.LicenseValidateWithResponse(ctx, api.LicenseValidateJSONRequestBody{
-		Key: key,
-	})
+	body := api.LicenseValidateJSONRequestBody{Key: key}
+	machine.applyTo(&body)
+
+	resp, err := s.client.api.LicenseValidateWithResponse(ctx, body)
 	if err != nil {
 		return invalidInfo(), nil
 	}
@@ -202,6 +219,20 @@ func (s *LicenseService) ValidateKey(ctx context.Context, key string) (*LicenseI
 	info := licenseInfoFromBody(resp.JSON200)
 	info.CachedAt = time.Now()
 	return info, nil
+}
+
+// rememberMachine records a caller-supplied machine identity and returns the
+// identity to validate with: the supplied one when it carries anything, else
+// whatever a previous caller supplied (zero when none ever did, which
+// MachineInfo.Resolve then fills from this host).
+func (s *LicenseService) rememberMachine(machine MachineInfo) MachineInfo {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !machine.IsZero() {
+		s.machine = machine
+		return machine
+	}
+	return s.machine
 }
 
 // ConfiguredKey returns the license key the client was constructed with (the

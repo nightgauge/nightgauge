@@ -5,8 +5,10 @@
  */
 
 import { describe, it, expect, beforeEach, vi, type Mock } from "vitest";
+import * as os from "node:os";
 import * as vscode from "vscode";
 import { registerActivateLicenseCommand } from "../../src/commands/activateLicense";
+import { MachineFingerprint } from "../../src/platform/MachineFingerprint";
 import { IpcClient } from "../../src/services/IpcClient";
 import { SecretStorageService, SECRET_KEYS } from "../../src/services/SecretStorageService";
 import type { Logger } from "../../src/utils/logger";
@@ -48,6 +50,10 @@ describe("activateLicense", () => {
       async (_opts: unknown, task: () => Promise<unknown>) => task()
     );
     (vscode.window as unknown as Record<string, unknown>)["showInputBox"] = vi.fn();
+    // vscode.env.machineId is the fingerprint source MachineFingerprint wraps;
+    // the shared mock omits it (#1334).
+    (vscode.env as unknown as Record<string, unknown>)["machineId"] = "vscode-install-uuid";
+    MachineFingerprint.resetInstance();
     logger = {
       info: vi.fn(),
       error: vi.fn(),
@@ -71,8 +77,13 @@ describe("activateLicense", () => {
 
     await handlerFor()();
 
-    // Verified the trimmed key (not the padded input).
-    expect(platformValidateLicense).toHaveBeenCalledWith("IB-REAL-KEY-1234");
+    // Verified the trimmed key (not the padded input), bound to this machine.
+    expect(platformValidateLicense).toHaveBeenCalledWith(
+      "IB-REAL-KEY-1234",
+      "vscode-install-uuid",
+      os.hostname(),
+      process.platform
+    );
     // Persisted under the SecretStorage key IpcClientBase reads.
     expect(setSecret).toHaveBeenCalledWith(SECRET_KEYS.platformLicenseKey, "IB-REAL-KEY-1234");
     expect(clearCache).toHaveBeenCalled();
@@ -84,6 +95,28 @@ describe("activateLicense", () => {
       "Reload Window"
     );
     expect(vscode.commands.executeCommand).toHaveBeenCalledWith("workbench.action.reloadWindow");
+  });
+
+  // Activation is the ValidateKey half of the seat binding. Verifying a key
+  // without the machine fields left the daemon to fall back to a host-derived
+  // identity that cannot reproduce vscode.env.machineId, so one installation
+  // consumed two seats — and before the daemon carried them at all, none.
+  //
+  // @see Issue #1334
+  it("sends the machine binding so the platform can bind exactly one seat", async () => {
+    (vscode.window.showInputBox as Mock).mockResolvedValue("IB-PRO-KEY");
+    platformValidateLicense.mockResolvedValue({ valid: true, tier: "pro" });
+    (vscode.window.showInformationMessage as Mock).mockResolvedValue(undefined);
+
+    await handlerFor()();
+
+    const args = platformValidateLicense.mock.calls[0]!;
+    expect(args[0]).toBe("IB-PRO-KEY");
+    // Same three arguments, same order, as LicensePreflight.validate() — the
+    // two paths must present one identity, not two.
+    expect(args[1]).toBe("vscode-install-uuid");
+    expect(args[2]).toBe(os.hostname());
+    expect(args[3]).toBe(process.platform);
   });
 
   it("does not store a key the platform rejects as invalid", async () => {

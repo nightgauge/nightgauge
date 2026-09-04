@@ -47,7 +47,7 @@ func TestLicenseService_Validate_Online(t *testing.T) {
 	c.setMode(ModeOnline)
 
 	svc := NewLicenseService(c)
-	info, err := svc.Validate(context.Background())
+	info, err := svc.Validate(context.Background(), MachineInfo{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,7 +100,7 @@ func TestLicenseService_Validate_Rejected4xx(t *testing.T) {
 	c.setMode(ModeOnline)
 
 	svc := NewLicenseService(c)
-	info, err := svc.Validate(context.Background())
+	info, err := svc.Validate(context.Background(), MachineInfo{})
 	if err != nil {
 		t.Fatalf("Validate returned error: %v", err)
 	}
@@ -146,7 +146,7 @@ func TestLicenseService_Validate_Rejected4xx_ExpiredCode(t *testing.T) {
 	c.setMode(ModeOnline)
 
 	svc := NewLicenseService(c)
-	info, err := svc.Validate(context.Background())
+	info, err := svc.Validate(context.Background(), MachineInfo{})
 	if err != nil {
 		t.Fatalf("Validate returned error: %v", err)
 	}
@@ -177,7 +177,7 @@ func TestLicenseService_Validate_Rejected4xx_UnknownCode(t *testing.T) {
 	c.setMode(ModeOnline)
 
 	svc := NewLicenseService(c)
-	info, err := svc.Validate(context.Background())
+	info, err := svc.Validate(context.Background(), MachineInfo{})
 	if err != nil {
 		t.Fatalf("Validate returned error: %v", err)
 	}
@@ -204,7 +204,7 @@ func TestLicenseService_CommunityInfo_NoExpiry(t *testing.T) {
 	c.setMode(ModeOnline)
 
 	svc := NewLicenseService(c)
-	info, err := svc.Validate(context.Background())
+	info, err := svc.Validate(context.Background(), MachineInfo{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -233,7 +233,7 @@ func TestLicenseService_Validate_Offline_Cached(t *testing.T) {
 		CachedAt: time.Now().Add(-1 * time.Hour), // Within grace period
 	}
 
-	info, err := svc.Validate(context.Background())
+	info, err := svc.Validate(context.Background(), MachineInfo{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -258,7 +258,7 @@ func TestLicenseService_Validate_Offline_NoCacheGracePeriodExpired(t *testing.T)
 		CachedAt: time.Now().Add(-8 * 24 * time.Hour), // Past 7-day grace
 	}
 
-	info, err := svc.Validate(context.Background())
+	info, err := svc.Validate(context.Background(), MachineInfo{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -279,7 +279,7 @@ func TestLicenseService_NoLicenseKey(t *testing.T) {
 	c.setMode(ModeOnline)
 
 	svc := NewLicenseService(c)
-	info, err := svc.Validate(context.Background())
+	info, err := svc.Validate(context.Background(), MachineInfo{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -347,7 +347,7 @@ func TestLicenseService_ValidateKey_UsesPassedKeyAndDoesNotCache(t *testing.T) {
 	c.setMode(ModeOnline)
 	svc := NewLicenseService(c)
 
-	info, err := svc.ValidateKey(context.Background(), "ENTERED-KEY-TO-CHECK")
+	info, err := svc.ValidateKey(context.Background(), "ENTERED-KEY-TO-CHECK", MachineInfo{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -394,7 +394,7 @@ func TestLicenseService_ValidateKey_Rejected4xx(t *testing.T) {
 	c.setMode(ModeOnline)
 	svc := NewLicenseService(c)
 
-	info, err := svc.ValidateKey(context.Background(), "BAD-ENTERED-KEY")
+	info, err := svc.ValidateKey(context.Background(), "BAD-ENTERED-KEY", MachineInfo{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -412,7 +412,7 @@ func TestLicenseService_ValidateKey_EmptyInvalid(t *testing.T) {
 		t.Fatal(err)
 	}
 	svc := NewLicenseService(c)
-	info, err := svc.ValidateKey(context.Background(), "")
+	info, err := svc.ValidateKey(context.Background(), "", MachineInfo{})
 	if err != nil {
 		t.Fatal(err)
 	}

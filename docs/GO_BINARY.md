@@ -7423,8 +7423,29 @@ or `NIGHTGAUGE_PLATFORM_API_KEY` env var):
 {"id":2,"method":"platform.license"}
 
 # Validate a license key and bind machine
-{"id":3,"method":"platform.validateLicense","params":{"licenseKey":"ib_live_...","machineId":"sha256-hash"}}
+{"id":3,"method":"platform.validateLicense","params":{"licenseKey":"ib_live_...","machineId":"vscode-install-uuid","hostname":"build-box","platform":"darwin"}}
+```
 
+**`machineId` is the RAW per-installation fingerprint, not a hash.** The caller
+sends `vscode.env.machineId` (plus `os.hostname()` and `process.platform`); the
+daemon derives the wire value itself as
+`HMAC-SHA256(licenseKey, "<machineId>|<hostname>|<platform>")`, hex-encoded, and
+puts that in the platform's `machineId` request field. Keying the digest with the
+license key means the same machine hashes differently under different licenses,
+and the raw fingerprint — which carries the hostname — never leaves the daemon.
+
+The daemon remembers the last identity a caller supplied, so the params-less
+`platform.license` method (which has nowhere to source one) re-presents the same
+machine rather than a second one. With nothing ever supplied — a headless CLI
+daemon — it falls back to this host: `ResolveMachineID()`, `os.Hostname()`,
+`runtime.GOOS`. That fallback identifies a real machine but cannot reproduce
+`vscode.env.machineId`, so every editor-side caller must pass the fields: an
+omitted fingerprint binds a *second* seat for one installation, and before #1334
+the handler unmarshalled the three fields and dropped them, so it bound none at
+all and the per-tier machine limits (community 1 / pro 3 / team+enterprise
+unlimited) were structurally unenforceable.
+
+```bash
 # Resolve skill content for a pipeline stage
 {"id":4,"method":"platform.resolveSkill","params":{"skillId":"feature-dev","model":"sonnet","complexityScore":5}}
 
