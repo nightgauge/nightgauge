@@ -171,7 +171,7 @@ table, carve-out rationale, and consequence analysis.
   only while that context happened to be the server-lifetime one. Under the new
   ceiling the same line would have killed the loop the moment the verb
   returned, reintroducing the "running but never dispatching" dead state
-  (#3303/#405) through a context lifetime. Long-lived spawns now detach
+  (#405) through a context lifetime. Long-lived spawns now detach
   (`detachedRunCtx`).
 
 #### Empty epics invisible in Repositories tree view (#3329)

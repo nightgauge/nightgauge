@@ -37,7 +37,7 @@ func staysRunning(t *testing.T, isRunning func() bool, window time.Duration, msg
 // because that context happened to be the server-lifetime one. Under the
 // store's ceiling the same line kills the loop microseconds after the operator
 // clicks Resume — the fleet reporting "running" while nothing dispatches,
-// which is the silent dead state #3303 and #405 exist to prevent, reintroduced
+// which is the silent dead state #405 exists to prevent, reintroduced
 // through a context lifetime instead of a status flag.
 //
 // The test cancels the verb context exactly where Store.Resolve does: right

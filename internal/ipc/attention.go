@@ -461,7 +461,7 @@ func (s *Server) resumeAndEnsureRunning(ctx context.Context) error {
 // defeats the bounded wait. Inheriting it here would have killed the autonomous
 // dispatch loop twenty seconds after an operator clicked Resume on a card —
 // the fleet reporting "running" while nothing dispatches, which is the exact
-// silent dead state #3303 and #405 were fixed to remove, reintroduced through
+// silent dead state #405 was fixed to remove, reintroduced through
 // a context lifetime rather than a status flag.
 //
 // The rule is general: a long-lived spawn never keeps a caller's context.
