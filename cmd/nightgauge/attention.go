@@ -313,7 +313,7 @@ func attentionResolveCmd() *cobra.Command {
 				callErr := client.Call(ctx, "attention.resolve", ipc.AttentionResolveParams{
 					ID:        args[0],
 					OptionID:  option,
-					Actor:     actor,
+					Actor:     attentionActor(actor, root),
 					SteerText: steer,
 					Note:      note,
 				}, &res)
@@ -336,7 +336,11 @@ func attentionResolveCmd() *cobra.Command {
 			store.SetSteerWriter(func(req *attention.DecisionRequest, steerText string) error {
 				return orchestrator.WriteOperatorSteer(root, req.Context.Issue, steerText, req.Context.Stage)
 			})
-			res, err := store.Resolve(ctx, args[0], option, actor, steer, note, cliVerbExecutor{workspaceRoot: root})
+			// Resolved through attentionActor, not passed raw (#1418). #1405 refuses
+			// an empty actor at the store boundary, so a bare
+			// `attention resolve <id> --option X` — no --actor — failed outright
+			// instead of recording who did it. That regression is this call.
+			res, err := store.Resolve(ctx, args[0], option, attentionActor(actor, root), steer, note, cliVerbExecutor{workspaceRoot: root})
 			if err != nil {
 				return err
 			}
