@@ -82,11 +82,14 @@ the ledger off; set it to a path to write somewhere other than the default
   nightgauge api-usage --by resource --json
   nightgauge api-usage --since 1h --resource graphql   # just the pool that runs out`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			if budget && !cmd.Flags().Changed("since") {
+			if budget && (since <= 0 || since > time.Hour) {
 				// The GraphQL quota resets on a rolling hour, not on whatever
-				// window the operator happened to ask for last — default the
-				// budget report to that hour so "remaining" means the number
-				// GitHub is actually about to enforce.
+				// window the operator happened to ask for — clamp the budget
+				// report to that hour (regardless of an explicit --since)
+				// so "remaining" means the number GitHub is actually about
+				// to enforce. An unclamped wider window sums spend across
+				// hours that have already reset, which reads as a false
+				// exhaustion (#1428 review).
 				since = time.Hour
 			}
 			recs, err := readAPIUsage(path, since)
@@ -134,7 +137,7 @@ the ledger off; set it to a path to write somewhere other than the default
 	cmd.Flags().BoolVar(&asJSON, "json", false, "Output as JSON")
 	cmd.Flags().BoolVar(&budget, "budget", false,
 		"Report the remaining hourly GraphQL budget and what a full board read would cost against it "+
-			"(defaults --since to 1h; overrides --by/--resource/--top/--json)")
+			"(clamps --since to at most 1h — the GraphQL quota window; overrides --by/--resource/--top/--json)")
 	return cmd
 }
 
@@ -326,29 +329,71 @@ func sinceSuffix(since time.Duration) string {
 	return " in the last " + since.String()
 }
 
+// toLedgerRecords adapts the CLI's tolerant apiUsageRecord to the shared
+// github.APILedgerRecord shape so printAPIBudget can hand the window to
+// github.SummarizeWindow instead of re-deriving its own opinion of "how much
+// is left" from summed cost alone.
+func toLedgerRecords(recs []apiUsageRecord) []github.APILedgerRecord {
+	out := make([]github.APILedgerRecord, len(recs))
+	for i, r := range recs {
+		out[i] = github.APILedgerRecord{
+			TS:        r.TS,
+			Kind:      r.Kind,
+			Method:    r.Method,
+			Path:      r.Path,
+			Op:        r.Op,
+			Caller:    r.Caller,
+			Status:    r.Status,
+			Cost:      r.Cost,
+			Remaining: r.Remaining,
+			Cached:    r.Cached,
+		}
+	}
+	return out
+}
+
 // printAPIBudget answers "can I afford another board read this hour?" from
 // the ledger alone — no request against GitHub is needed, which matters
 // because the whole failure this guards against (#1428) is an agent
 // discovering the exhaustion mid-poll, via a failing `gh pr checks`, instead
 // of checking first.
+//
+// It reports GitHub's own observed X-RateLimit-Remaining
+// (github.LedgerWindow.LowWaterRemaining), not a total derived from summing
+// this process's own Cost column: the ledger cannot attribute another
+// process's spend (a raw `gh` call outside the binary — precisely #1428's
+// scenario), so a derived total silently ignores exactly the spend it exists
+// to catch. When no record in the window carried that observation, the
+// report says so instead of printing a confident number computed from zero
+// evidence — an absence of counted spend is not the presence of budget.
 func printAPIBudget(w io.Writer, recs []apiUsageRecord, since time.Duration) {
-	spent := 0
-	for _, r := range recs {
-		kind := strings.ToLower(r.Kind)
-		if kind == "graphql" || strings.HasPrefix(kind, "graphql_") {
-			spent += r.Cost
-		}
+	fmt.Fprintf(w, "GitHub GraphQL budget — %d pts/hour\n\n", github.GraphQLHourlyLimit)
+
+	lw := github.SummarizeWindow(toLedgerRecords(recs), time.Time{}, time.Time{})
+
+	if lw.GraphQLCalls == 0 {
+		fmt.Fprintf(w, "  No GraphQL calls observed%s in the ledger — cannot tell how much\n", sinceSuffix(since))
+		fmt.Fprintf(w, "  of the hourly budget is left. This is not the same as a full budget:\n")
+		fmt.Fprintf(w, "  it means the ledger made no observation in this window (a raw `gh`\n")
+		fmt.Fprintf(w, "  call outside this binary would not appear here either).\n")
+		return
 	}
-	remaining := github.GraphQLHourlyLimit - spent
-	if remaining < 0 {
-		remaining = 0
+	if lw.LowWaterRemaining < 0 {
+		fmt.Fprintf(w, "  %d GraphQL call(s) observed%s, but none carried GitHub's own\n", lw.GraphQLCalls, sinceSuffix(since))
+		fmt.Fprintf(w, "  rate-limit header — cannot tell how much of the hourly budget is left.\n")
+		return
 	}
+
+	remaining := lw.LowWaterRemaining
 	pages := remaining / github.BoardReadPointsPerPage
 	items := pages * github.BoardReadItemsPerPage
 
-	fmt.Fprintf(w, "GitHub GraphQL budget — %d pts/hour\n\n", github.GraphQLHourlyLimit)
-	fmt.Fprintf(w, "  Spent%s:      %d pts\n", sinceSuffix(since), spent)
-	fmt.Fprintf(w, "  Remaining (est.): %d pts\n\n", remaining)
+	fmt.Fprintf(w, "  Spent%s:      %d pts\n", sinceSuffix(since), lw.Points)
+	if lw.Exhausted {
+		fmt.Fprintf(w, "  Remaining (observed): 0 pts — GitHub reported this pool EXHAUSTED\n\n")
+	} else {
+		fmt.Fprintf(w, "  Remaining (observed): %d pts\n\n", remaining)
+	}
 	fmt.Fprintf(w, "  A ProjectV2 board read costs ~%d pts per %d-item page.\n",
 		github.BoardReadPointsPerPage, github.BoardReadItemsPerPage)
 	fmt.Fprintf(w, "  What's left affords ~%d more page(s) (~%d items) before the hour resets.\n",
