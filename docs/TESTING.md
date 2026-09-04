@@ -212,6 +212,15 @@ Three implementation notes that are load-bearing rather than incidental:
    command in `xvfb-run --auto-servernum`. The launcher also fails when the
    in-host module wrote no transcript, so a VSCode that dies before running
    the tests cannot exit 0.
+4. **A render timeout cannot leak its panel or hide its timing (#1327).**
+   `waitForRenderThenDispose` (`tests/vscode-host/fixture.ts`) wraps each
+   panel's render probe: it logs the elapsed time in a grep-able
+   `render-ms <panel> <ms>` line — pass or fail — and disposes the panel from
+   a `finally`, so a render that never settles cannot skip disposal and
+   cascade into "no panel from this suite is left open" as a second,
+   unrelated-looking failure. The per-panel timing is what will let a future
+   change justify Dashboard's render budget from measured CI distributions
+   instead of the single anecdotal data point that motivated this.
 
 Findings the tier recorded on its first run — real defects, deliberately not
 fixed in the PR that found them — live in

@@ -138,6 +138,22 @@ table, carve-out rationale, and consequence analysis.
 
 ### Fixed
 
+#### A timed-out webview render leaked its panel and hid its timing (#1327)
+
+- On `main`'s own post-merge run, a webview panel that crossed the host
+  smoke tier's render budget under hosted-runner load skipped disposal —
+  its `dispose()` call sat after the awaited render probe, guarded by
+  nothing — so one flake reported as two failures: the render timeout, then
+  "no panel from this suite is left open" as an unrelated-looking follow-on.
+- **`tests/vscode-host/fixture.ts`**: new `waitForRenderThenDispose()` logs
+  each panel's elapsed render time in a grep-able `render-ms <panel> <ms>`
+  line — pass or fail — and disposes the panel from a `finally`, so a render
+  that never settles can no longer skip disposal or cascade into the
+  leaked-panel assertion.
+- **`tests/vscode-host/suites/webviews.suite.ts`**: the per-panel case now
+  goes through `waitForRenderThenDispose()` instead of an unguarded
+  `waitFor` + `dispose()` pair.
+
 #### Empty epics invisible in Repositories tree view (#3329)
 
 - A freshly-created epic (`type:epic` label, zero sub-issues) was filtered out

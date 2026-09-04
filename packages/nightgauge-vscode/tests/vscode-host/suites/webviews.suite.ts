@@ -29,7 +29,12 @@ import * as assert from "node:assert/strict";
 import * as vscode from "vscode";
 import { suite, test } from "../harness.js";
 import { capturedPanels, panelsCreatedBy, type CapturedPanel } from "../observe.js";
-import { delay, materializePopulatedFixture, waitFor } from "../fixture.js";
+import {
+  delay,
+  materializePopulatedFixture,
+  waitFor,
+  waitForRenderThenDispose,
+} from "../fixture.js";
 import { extension } from "./activation.suite.js";
 
 import { AdapterDoctorPanel } from "../../../src/views/doctor/AdapterDoctorPanel.js";
@@ -257,17 +262,21 @@ suite("webviews", () => {
           `Panels created instead: ${JSON.stringify(created.map((entry) => entry.viewType))}`
       );
 
-      const html = await waitFor(
+      // Elapsed time is logged and the panel is disposed unconditionally —
+      // pass or timeout — so a render that never settles cannot skip
+      // disposal and cascade into "no panel from this suite is left open"
+      // as a second, unrelated-looking failure (#1327).
+      const html = await waitForRenderThenDispose(
+        panelCase.name,
         () => {
           const body = match.panel.webview.html;
           return body && body.trim().length > 0 ? body : undefined;
         },
         RENDER_BUDGET_MS,
-        `${panelCase.name} to render a non-empty body`
+        () => match.panel.dispose()
       );
       assert.ok(html.length > 0);
 
-      match.panel.dispose();
       await waitFor(
         () => match.disposed || undefined,
         2_000,
