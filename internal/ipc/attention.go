@@ -426,9 +426,8 @@ func (s *Server) applyThenAction(ctx context.Context, then, repo string) error {
 // too, because a halt now survives a boot. One helper, so the next surface
 // added cannot get half of it.
 //
-// ctx is the server-lifetime context (IPC handlers and ExecuteVerb both
-// receive it), so the spawned loop dies with the daemon and not with the
-// request that started it.
+// The spawned loop must outlive the call that started it, so it runs on
+// detachedRunCtx(ctx) rather than on ctx itself.
 func (s *Server) resumeAndEnsureRunning(ctx context.Context) error {
 	if s.autonomousScheduler == nil {
 		return fmt.Errorf("autonomous scheduler not configured")
@@ -438,13 +437,38 @@ func (s *Server) resumeAndEnsureRunning(ctx context.Context) error {
 	// view's per-row halt badges must be told (#1148 visibility).
 	s.emitRepoHaltChanged()
 	if !s.autonomousScheduler.IsRunning() {
+		runCtx := detachedRunCtx(ctx)
 		go func() {
-			if err := s.autonomousScheduler.Run(ctx); err != nil {
+			if err := s.autonomousScheduler.Run(runCtx); err != nil {
 				log.Printf("autonomous scheduler exited: %v", err)
 			}
 		}()
 	}
 	return nil
+}
+
+// detachedRunCtx strips cancellation from a context that is about to be handed
+// to a goroutine outliving its caller, keeping the values.
+//
+// This used to be unnecessary by accident. Both callers reached the scheduler
+// loop on what was always the server-lifetime context — IPC handlers and
+// ExecuteVerb received Server.Run's ctx verbatim — so "dies with the daemon"
+// came from the caller's context happening never to be cancelled sooner.
+//
+// #1425 made that assumption load-bearing and false: Store.Resolve now gives
+// the verb a request-scoped deadline (attention.verbTimeout), because the verb
+// runs inside the store's cross-process critical section and an unbounded hold
+// defeats the bounded wait. Inheriting it here would have killed the autonomous
+// dispatch loop twenty seconds after an operator clicked Resume on a card —
+// the fleet reporting "running" while nothing dispatches, which is the exact
+// silent dead state #3303 and #405 were fixed to remove, reintroduced through
+// a context lifetime rather than a status flag.
+//
+// The rule is general: a long-lived spawn never keeps a caller's context.
+// Cancellation now expires with the process, which is the lifetime intended
+// all along and no longer depends on who the caller is.
+func detachedRunCtx(ctx context.Context) context.Context {
+	return context.WithoutCancel(ctx)
 }
 
 // resumeRepoAndEnsureRunning is the repo-scoped twin of
@@ -460,8 +484,9 @@ func (s *Server) resumeRepoAndEnsureRunning(ctx context.Context, repo string) er
 	s.autonomousScheduler.ResumeRepo(repo)
 	s.emitRepoHaltChanged()
 	if !s.autonomousScheduler.IsRunning() {
+		runCtx := detachedRunCtx(ctx)
 		go func() {
-			if err := s.autonomousScheduler.Run(ctx); err != nil {
+			if err := s.autonomousScheduler.Run(runCtx); err != nil {
 				log.Printf("autonomous scheduler exited: %v", err)
 			}
 		}()

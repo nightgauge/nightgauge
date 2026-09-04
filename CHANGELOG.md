@@ -155,6 +155,24 @@ table, carve-out rationale, and consequence analysis.
   (pid + entropy) so the deliberately fail-open lock degrades to lost
   serialisation rather than torn bytes. The materialized write, the streak
   read-modify-write and the journal append all nest inside the one section.
+- **The hold is bounded, because the wait is.** `Store.Resolve` runs an
+  option's verb _inside_ that section to keep exactly-once verb execution, and
+  the verb was unbounded: the daemon's `issue.close` calls the GitHub client,
+  which sleeps through a fully exhausted rate limit for up to 75 minutes —
+  while the API-budget sweep raises the very cards reporting that exhaustion.
+  Every other producer's bounded wait then expired onto the fail-open branch,
+  so the new serialisation lapsed exactly when the store was busiest. The verb
+  now runs under `verbTimeout`, strictly below `flockTimeout`, which makes lock
+  expiry mean what its comment claims (a wedged holder) instead of "somebody is
+  legitimately still working". A verb that blows the ceiling fails, and
+  `Resolve`'s existing contract leaves the card open for a retry.
+- **Corollary, `internal/ipc/attention.go`:** the autonomous resume verb spawns
+  the fleet dispatch loop, and used to hand it the verb's own context — safe
+  only while that context happened to be the server-lifetime one. Under the new
+  ceiling the same line would have killed the loop the moment the verb
+  returned, reintroducing the "running but never dispatching" dead state
+  (#3303/#405) through a context lifetime. Long-lived spawns now detach
+  (`detachedRunCtx`).
 
 #### Empty epics invisible in Repositories tree view (#3329)
 

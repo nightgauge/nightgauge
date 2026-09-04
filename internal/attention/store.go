@@ -87,11 +87,45 @@ var ErrRequestNotFound = errors.New("not found")
 // chokepoint covers all three.
 var dirLocks sync.Map // dir -> *sync.Mutex
 
-// flockTimeout bounds the wait for the cross-process lock. A wedged holder
+// flockTimeout bounds the WAIT for the cross-process lock. A wedged holder
 // must not stall every producer in the daemon indefinitely, so the wait
 // expires and the caller proceeds under the in-process lock alone, loudly. A
 // crashed holder never needs the timeout — the kernel drops its flock.
 var flockTimeout = 30 * time.Second
+
+// verbTimeout bounds the HOLD, and the two numbers are one mechanism.
+//
+// A bounded wait over an unbounded hold is not a lock. Resolve runs the
+// option's verb inside the critical section on purpose (ADR-015 §D, and see
+// Resolve), so the verb's duration IS the time every other producer — every
+// raise, ack, sweep and streak bump, in this process and in every other
+// nightgauge process — spends waiting on this directory. Leave that unbounded
+// and a single slow verb pushes the queue past flockTimeout, every waiter
+// takes the fail-open branch, and the #1425 interleave is back precisely when
+// the store is busiest.
+//
+// This is not theoretical. The daemon's issue.close verb calls the GitHub
+// client on the server-lifetime context, and that client deliberately sleeps
+// through a fully exhausted primary rate limit for up to maxFullExhaustionWait
+// (75 minutes, internal/github/client.go) — while the API-budget sweep is
+// raising the very cards that report the exhaustion. Without a ceiling the
+// store would be surrendered for over an hour, and the flockTimeout comment's
+// promise that expiry means "a wedged holder" would be false.
+//
+// So the verb gets its own deadline, strictly below flockTimeout (asserted in
+// TestVerbTimeoutKeepsTheHoldBelowTheWait), which makes expiry mean what it
+// says. A verb that blows the ceiling fails with its context error, and
+// Resolve's existing contract takes over unchanged: the request is left
+// untouched on disk, the card stays open, and the operator's retry hits the
+// same code path fresh once the underlying condition clears. Failing one
+// resolution is strictly better than handing the whole store's serialisation
+// to a GitHub outage.
+//
+// The ceiling only binds a verb that honours its context. That is the verb
+// contract (VerbExecutor, verbs.go) and the daemon's arms satisfy it, since
+// every remote call they make threads ctx through. A verb that blocks
+// ignoring ctx is a bug in that verb, not something a deadline can repair.
+var verbTimeout = 20 * time.Second
 
 // lockFileName is the advisory lock file inside the store directory. It ends
 // in `.lock`, not `.json`, so the card scanners (List, scanLocked,
@@ -662,13 +696,20 @@ type ResolveResult struct {
 // Resolve applies a resolution once (terminal-state CAS): it executes the
 // option's registered verb WHILE STILL HOLDING the store lock, and persists
 // the resolved transition only if the verb succeeds (ADR-015 §D). This
-// serializes all resolves for one repo's request directory for the duration
-// of the verb call — a deliberate trade-off, since resolutions are
+// serializes ALL mutations of one repo's request directory — in this process
+// and, since #1425, in every other nightgauge process — for the duration of
+// the verb call. That is a deliberate trade-off, since resolutions are
 // human-paced, not a hot path, and the alternative (a per-request lock, or
 // re-validating a torn CAS after re-acquiring the lock post-verb) is
-// meaningfully more complex for no observed concurrency problem. It also
-// keeps exactly-once verb execution: a losing concurrent resolve never gets
-// past the terminal-state check, so it never runs the verb at all.
+// meaningfully more complex and loses the stronger property: exactly-once verb
+// execution, where a losing concurrent resolve never gets past the
+// terminal-state check and so never runs the verb at all. Release-then-verb
+// would run the verb twice under contention and only then discover the race.
+//
+// The trade-off is only defensible while the verb's duration is BOUNDED, so it
+// is — by verbTimeout, strictly below flockTimeout. Everything the section
+// costs every other producer is capped there rather than by whatever remote
+// call the verb happens to make.
 //
 // A replayed resolve on an already-terminal request is a safe no-op. An
 // unknown option or unregistered verb is rejected WITHOUT transitioning
@@ -737,7 +778,14 @@ func (s *Store) Resolve(ctx context.Context, id, optionID, actor, steerText, not
 	}
 
 	if exec != nil {
-		if verr := exec.ExecuteVerb(ctx, req, opt); verr != nil {
+		// Bounded, because this call is the lock's hold time — see verbTimeout.
+		// The deadline is request-scoped by construction: a verb that spawns
+		// something long-lived must detach the context it hands the spawn
+		// (internal/ipc/attention.go does), never keep this one.
+		vctx, cancelVerb := context.WithTimeout(ctx, verbTimeout)
+		verr := exec.ExecuteVerb(vctx, req, opt)
+		cancelVerb()
+		if verr != nil {
 			release()
 			return ResolveResult{}, verr
 		}
