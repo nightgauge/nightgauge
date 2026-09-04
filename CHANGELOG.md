@@ -138,28 +138,6 @@ table, carve-out rationale, and consequence analysis.
 
 ### Fixed
 
-#### Fixed-temp-path race in four more write-then-rename sites (#786)
-
-- `workTimeFeedback.ts` (`appendObservationToYAML`) and
-  `TelemetryUploaderService.ts` (`saveWatermarks`) in `nightgauge-vscode`,
-  and `CalibrationService.ts` / `StageModelCalibrationService.ts` (`save`) in
-  `nightgauge-sdk`, each wrote a fixed `<target>.tmp` before renaming it onto
-  the target — the same shape #777 fixed in `TelemetryStore.writeIndex`. Two
-  concurrent writers raced: the first `rename` won, the second failed
-  `ENOENT` on a temp file the winner had already consumed. In the calibration
-  services the failure went unreported by construction — both callers in
-  `PostPipelineAnalyzer` only `logger.debug` a rejected `save()`.
-- The two `nightgauge-vscode` sites now use a temp name unique per write (pid
-  and random hex) with cleanup-on-failure, matching `writeFileAtomic`'s idiom.
-  The two `nightgauge-sdk` sites now delegate to the SDK's own
-  `atomicWriteJSON` (already used by `ContextManager`/`RunStateManager`)
-  instead of hand-rolling the write+rename.
-  `executionHistoryWriter.ts` already used `writeFileAtomic` (fixed earlier by
-  #1212) and needed no change. See
-  [docs/TESTING.md § Write-then-rename sites](docs/TESTING.md#write-then-rename-sites-the-fixed-temp-path-race-and-the-workspace-wide-sweep-786)
-  for the full sweep of every such site in `nightgauge-vscode` and
-  `nightgauge-sdk`.
-
 #### Empty epics invisible in Repositories tree view (#3329)
 
 - A freshly-created epic (`type:epic` label, zero sub-issues) was filtered out
