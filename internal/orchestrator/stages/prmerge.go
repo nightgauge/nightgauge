@@ -270,8 +270,9 @@ func (r *DeterministicRunner) Run(ctx context.Context, issueNumber int, _ string
 
 	// If the underlying client supports per-call workdir binding (the real
 	// exec-backed client does), inject the workdir for this Run.
-	if wb, ok := r.gh.(workdirBoundClient); ok {
-		r.gh = wb.withWorkdir(workdir)
+	gh := r.gh
+	if wb, ok := gh.(workdirBoundClient); ok {
+		gh = wb.withWorkdir(workdir)
 	}
 
 	ph := newPhaseEmitter(ctx, prMergePhases)
@@ -294,7 +295,7 @@ func (r *DeterministicRunner) Run(ctx context.Context, issueNumber int, _ string
 
 	// Pre-flight + eventual-consistency polling.
 	ph.start("ci-gate")
-	snap, fetchErr := r.fetchWithPolling(ctx, prNumber)
+	snap, fetchErr := r.fetchWithPolling(ctx, gh, prNumber)
 	if fetchErr != nil {
 		ph.failInFlight()
 		return finish(PRMergeResult{
@@ -324,7 +325,7 @@ func (r *DeterministicRunner) Run(ctx context.Context, issueNumber int, _ string
 	// `no-checks-created` if no run ever appears, so a repo without CI does
 	// not hold the deterministic path for the full budget.
 	if !decision.ShouldMerge && MergeBlockedByPendingCI(snap) {
-		waited, outcome, waitErr := r.waitForCleanMergeState(ctx, prNumber, snap)
+		waited, outcome, waitErr := r.waitForCleanMergeState(ctx, gh, prNumber, snap)
 		if waitErr != nil {
 			ph.failInFlight()
 			return finish(PRMergeResult{
@@ -414,7 +415,7 @@ func (r *DeterministicRunner) Run(ctx context.Context, issueNumber int, _ string
 	// already-merged PR returns a benign error which we tolerate (the
 	// re-poll below confirms MERGED).
 	ph.start("merge")
-	if mergeErr := r.gh.Merge(ctx, prNumber); mergeErr != nil {
+	if mergeErr := gh.Merge(ctx, prNumber); mergeErr != nil {
 		ph.failInFlight()
 		if isRateLimitErr(mergeErr) {
 			return finish(PRMergeResult{
@@ -433,7 +434,7 @@ func (r *DeterministicRunner) Run(ctx context.Context, issueNumber int, _ string
 	}
 
 	// Re-poll for MERGED with the same EC budget.
-	postSnap, postErr := r.fetchWithPolling(ctx, prNumber)
+	postSnap, postErr := r.fetchWithPolling(ctx, gh, prNumber)
 	if postErr != nil {
 		ph.failInFlight()
 		// Merge call succeeded but post-verification failed — we cannot OBSERVE
@@ -501,11 +502,11 @@ func conformanceSummary(conf *knowledge.ConformanceResult) string {
 
 // fetchWithPolling calls gh.View up to pollMax times with pollInterval between
 // attempts, returning early once state is MERGED.
-func (r *DeterministicRunner) fetchWithPolling(ctx context.Context, prNumber int) (PRViewSnapshot, error) {
+func (r *DeterministicRunner) fetchWithPolling(ctx context.Context, gh ghClient, prNumber int) (PRViewSnapshot, error) {
 	var last PRViewSnapshot
 	var lastErr error
 	for poll := 0; poll < r.pollMax; poll++ {
-		snap, err := r.gh.View(ctx, prNumber)
+		snap, err := gh.View(ctx, prNumber)
 		if err == nil {
 			last = snap
 			if snap.State == "MERGED" {
@@ -634,7 +635,7 @@ const (
 //
 // The initial snapshot is passed so a runner configured with ciPollMax==0 (or a
 // PR that resolves on the first re-poll) degrades gracefully.
-func (r *DeterministicRunner) waitForCleanMergeState(ctx context.Context, prNumber int, initial PRViewSnapshot) (PRViewSnapshot, ciWaitOutcome, error) {
+func (r *DeterministicRunner) waitForCleanMergeState(ctx context.Context, gh ghClient, prNumber int, initial PRViewSnapshot) (PRViewSnapshot, ciWaitOutcome, error) {
 	last := initial
 	// Polls that observed an empty rollup, counted only while no check has
 	// been seen yet. Once a run exists the ordinary budget governs.
@@ -649,7 +650,7 @@ func (r *DeterministicRunner) waitForCleanMergeState(ctx context.Context, prNumb
 			return last, ciWaitResolved, ctx.Err()
 		case <-time.After(r.ciPollInterval):
 		}
-		snap, err := r.gh.View(ctx, prNumber)
+		snap, err := gh.View(ctx, prNumber)
 		if err != nil {
 			// Rate-limit errors are not retryable inside the deterministic path
 			// (#3020 / ADR-004) — surface immediately.
