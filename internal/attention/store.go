@@ -3,6 +3,7 @@ package attention
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -29,6 +30,22 @@ const tsLayout = time.RFC3339Nano
 // idPattern guards a request id against path traversal before it is used as a
 // filename: `dr_` followed by uuidv7-ish characters (hex + dashes).
 var idPattern = regexp.MustCompile(`^dr_[A-Za-z0-9-]{8,80}$`)
+
+// ErrRequestNotFound reports that no card with this id lives in THIS store's
+// directory. It is a routing fact, not a rejection.
+//
+// The distinction is load-bearing on the platform-relayed path. A card id is
+// only ever a filename under one workspace's `.nightgauge/attention/`
+// (pathFor), while the platform addresses a relayed resolve to an agent
+// identity that is per-MACHINE — so a daemon can be handed a resolve for a
+// card that is valid, open, and owned by a different workspace on the same
+// machine (#1421, ADR-019). "I do not hold this card" and "this card refused
+// the resolution" are different answers with different remedies, and a
+// formatted string cannot carry that difference across a package boundary.
+//
+// The wrapped message text is unchanged, so callers matching on the string
+// still match.
+var ErrRequestNotFound = errors.New("not found")
 
 // dirLocks provides per-directory serialization so concurrent goroutines inside
 // one process (parallel producers, the sweep, and a resolve) never interleave a
@@ -753,7 +770,7 @@ func (s *Store) loadLocked(id string) (string, *DecisionRequest, error) {
 	req, err := readRequest(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return "", nil, fmt.Errorf("attention: request %s not found", id)
+			return "", nil, fmt.Errorf("attention: request %s %w", id, ErrRequestNotFound)
 		}
 		return "", nil, err
 	}

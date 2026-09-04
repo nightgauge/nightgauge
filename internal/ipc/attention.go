@@ -10,6 +10,7 @@ package ipc
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -143,6 +144,11 @@ func (s *Server) handleAttentionResolve(ctx context.Context, raw json.RawMessage
 // (ValidateOption against the persisted request AND the verb registry — §J
 // defense in depth); an unknown option / unregistered verb returns an error and
 // the request is left untouched.
+//
+// A command naming a card this store does not hold is classified separately and
+// returned as platform.ErrRelayedRequestNotHere — it is a misrouted command, not
+// a rejected one, and this daemon never resolves it on the owner's behalf
+// (#1421, ADR-019).
 func (s *Server) ApplyRelayedResolve(ctx context.Context, requestID, optionID, actor, steerText string) (platform.AttentionResolveOutcome, error) {
 	store := s.attentionStore()
 	if store == nil {
@@ -150,6 +156,33 @@ func (s *Server) ApplyRelayedResolve(ctx context.Context, requestID, optionID, a
 	}
 	res, err := store.Resolve(ctx, requestID, optionID, ipcAttentionActor(actor, actorSurfacePlatform), steerText, "", s)
 	if err != nil {
+		if errors.Is(err, attention.ErrRequestNotFound) {
+			// #1421: the command was addressed correctly and delivered to the
+			// wrong daemon. The platform upserts an agent row per MACHINE, so
+			// every workspace daemon on this machine shares one agent id and
+			// one command channel; the store it resolves against is per
+			// WORKSPACE. Whichever daemon holds the stream consumes the frame,
+			// and if the card was raised elsewhere this one cannot apply it.
+			//
+			// This daemon deliberately does NOT reach into the owning
+			// workspace's store: the verb executor is this server — its
+			// scheduler, its repo resolver, its steer root — so a cross-root
+			// write would persist the resolution under one workspace and run
+			// the verb against another. Write containment
+			// (docs/MULTI_REPO_WORKSPACE.md) forbids it for that reason, and
+			// the store has no cross-process lock to make it safe even if it
+			// did not.
+			//
+			// So the honest move is to say precisely what happened, naming
+			// this daemon's root — without it, an operator reading the log
+			// cannot tell which of several daemons answered.
+			log.Printf("attention_resolve: request %s is not in this daemon's attention store "+
+				"(workspace root %s, store dir %s) — the card was raised under a different workspace "+
+				"on this machine; routing it needs a platform-side change (#1421, ADR-019)",
+				requestID, s.workspaceRoot, store.Dir())
+			return platform.AttentionResolveOutcome{NotInThisWorkspace: true},
+				fmt.Errorf("%w: %w", platform.ErrRelayedRequestNotHere, err)
+		}
 		return platform.AttentionResolveOutcome{}, err
 	}
 	return platform.AttentionResolveOutcome{
