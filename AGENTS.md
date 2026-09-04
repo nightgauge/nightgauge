@@ -131,14 +131,37 @@ git push -u origin feat/description-of-change
   misconfigured — fix the configuration instead.
 
 - **A green PR check is a prediction; `main`'s own run is the observation.**
-  After every merge, verify the merge commit's checks actually went green:
+  After every merge, verify the merge commit's checks actually went green —
+  **do not hand-write the query, run `scripts/post-merge-check.sh <merge-sha>`**:
 
   ```bash
-  gh api "repos/<owner>/<repo>/commits/<merge-sha>/check-runs" \
-    --jq '[.check_runs[]|select(.conclusion!="success" and .conclusion!="skipped" and .conclusion!="neutral")]|length'
+  scripts/post-merge-check.sh <merge-sha>   # repo defaults to this checkout's origin
   ```
 
-  Non-zero means `main` is red and it is yours to fix immediately. PR checks run
+  It exits `0` GREEN / `1` RED / `2` NOT-YET, and only `0` is evidence. Read the
+  **exit code**, and read it without a pipe — a pipeline's status is the last
+  command's, so `post-merge-check.sh <sha> | tail` always reports 0.
+
+  **`2` is a real answer, not a soft `0`.** It means the merge commit has no
+  check-runs yet, or some are still running, and the honest response is to wait
+  and run it again. This is the whole reason the idiom is scripted: the
+  one-liner this replaced counted failures without first establishing that it
+  had looked at anything, and **an absence of failures is not the presence of
+  successes** (#1038). Immediately after a merge the workflows for the merge
+  commit have not been created, `.check_runs` is an empty array, the count is
+  zero — and zero was the documented signal for green. The check that exists to
+  catch a red `main` reported green precisely when run promptly, which is
+  exactly when an agent runs it. It failed the other way too: a check still
+  `in_progress` has `conclusion: null`, so a healthy merge briefly read red,
+  which teaches an operator to re-run until the answer is nicer — and then
+  believe the false green. Both were found independently by two sessions in two
+  repositories, the second after acting on a false green.
+
+  Any check that counts bad things must first establish that it looked at
+  anything at all. That is the same shape as the "a green check on a job that
+  skipped is not evidence" rule this file already carries.
+
+  A `1` means `main` is red and it is yours to fix immediately. PR checks run
   against a _predicted_ merge; three classes only the post-merge run can catch —
   **nondeterministic tests** (a coin-flip test passes the PR and fails `main` on
   the identical tree — this is exactly how #572 was found), **merge skew** (two

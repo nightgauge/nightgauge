@@ -4,6 +4,7 @@ go test ./... -count=1 (with skip accounting)
 go test -race -count=1 ./...
 gofmt -l ./internal ./cmd
 branch-merged-check.sh regression suite
+post-merge-check.sh regression suite
 CI change-class gate regression suite
 make generate-ipc-client
 generated IPC client in sync
