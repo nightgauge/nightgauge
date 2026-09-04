@@ -206,3 +206,86 @@ func TestBuildMetadataIndex_atomicWrite(t *testing.T) {
 		t.Errorf("leftover .tmp file: err=%v", err)
 	}
 }
+
+// TestIndexEntryTrustTier pins the tier derivation as it reaches .index.json.
+// The tree view ranks the unverified backlog on this, so a fixture that
+// promotes a stage to human-reviewed would make that list silently wrong.
+func TestIndexEntryTrustTier(t *testing.T) {
+	root := t.TempDir()
+	kb := filepath.Join(root, ".nightgauge", "knowledge", "features")
+
+	fixtures := map[string]struct {
+		frontmatter string
+		wantTier    string
+	}{
+		"1-none":    {"---\ntype: decisions\n---", knowledge.TrustUnverified},
+		"2-process": {"---\ntype: decisions\nverified:\n  - by: process:retro\n---", knowledge.TrustMachineConfirmed},
+		"3-stage":   {"---\ntype: decisions\nverified:\n  - by: feature-dev/claude-sonnet-5\n---", knowledge.TrustMachineConfirmed},
+		"4-human":   {"---\ntype: decisions\nverified:\n  - by: human:mark\n---", knowledge.TrustHumanReviewed},
+		"5-both":    {"---\ntype: decisions\nverified:\n  - by: process:retro\n  - by: human:mark\n---", knowledge.TrustHumanReviewed},
+		// The discriminating case: a substring match on "human" would promote
+		// this stage to the top tier.
+		"6-humanish": {"---\ntype: decisions\nverified:\n  - by: feature-dev/human-review-model\n---", knowledge.TrustMachineConfirmed},
+	}
+
+	for dir, f := range fixtures {
+		p := filepath.Join(kb, dir)
+		if err := os.MkdirAll(p, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		body := f.frontmatter + "\n\n# Decisions\n\nbody\n"
+		if err := os.WriteFile(filepath.Join(p, "decisions.md"), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	idx, err := knowledge.BuildMetadataIndex(root)
+	if err != nil {
+		t.Fatalf("BuildMetadataIndex: %v", err)
+	}
+
+	byDir := map[string]knowledge.IndexEntry{}
+	for _, e := range idx.Entries {
+		byDir[filepath.Base(filepath.Dir(e.Path))] = e
+	}
+	for dir, f := range fixtures {
+		got, ok := byDir[dir]
+		if !ok {
+			t.Fatalf("index missing %s (entries: %d)", dir, len(idx.Entries))
+		}
+		if got.TrustTier != f.wantTier {
+			t.Errorf("%s trust_tier = %q, want %q", dir, got.TrustTier, f.wantTier)
+		}
+	}
+}
+
+// TestIndexEntryLifecycleFields pins the rest of what .index.json now carries.
+func TestIndexEntryLifecycleFields(t *testing.T) {
+	root := t.TempDir()
+	p := filepath.Join(root, ".nightgauge", "knowledge", "features", "7-widget")
+	if err := os.MkdirAll(p, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := "---\ntype: decisions\nstatus: deprecated\nstale_after: \"2027-01-01T00:00:00Z\"\ngenerated:\n  by: feature-dev/claude-sonnet-5\n  at: \"2026-09-03T10:00:00Z\"\n---\n\n# Decisions\n\nbody\n"
+	if err := os.WriteFile(filepath.Join(p, "decisions.md"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	idx, err := knowledge.BuildMetadataIndex(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(idx.Entries) != 1 {
+		t.Fatalf("entries = %d", len(idx.Entries))
+	}
+	e := idx.Entries[0]
+	if e.Status != "deprecated" {
+		t.Errorf("status = %q", e.Status)
+	}
+	if e.StaleAfter != "2027-01-01T00:00:00Z" {
+		t.Errorf("stale_after = %q", e.StaleAfter)
+	}
+	if e.Generated == nil || e.Generated.By != "feature-dev/claude-sonnet-5" {
+		t.Errorf("generated = %+v", e.Generated)
+	}
+}

@@ -205,3 +205,69 @@ export type KnowledgeIndex = z.infer<typeof KnowledgeIndexSchema>;
 export const RepoTopicTypeSchema = z.enum(["architecture", "glossary", "runbook", "post-mortem"]);
 
 export type RepoTopicType = z.infer<typeof RepoTopicTypeSchema>;
+
+/**
+ * Trust tiers rank an entry by who has confirmed it.
+ *
+ * The tier is DERIVED from the `verified` log, never declared — an entry
+ * cannot assert its own trust. Mirrors the constants and the derivation in
+ * internal/knowledge/okf/lifecycle.go.
+ */
+export const TRUST_HUMAN_REVIEWED = "human-reviewed";
+export const TRUST_MACHINE_CONFIRMED = "machine-confirmed";
+export const TRUST_UNVERIFIED = "unverified";
+
+export type TrustTier =
+  typeof TRUST_HUMAN_REVIEWED | typeof TRUST_MACHINE_CONFIRMED | typeof TRUST_UNVERIFIED;
+
+/**
+ * Derive an entry's trust tier from its verification log. The highest tier
+ * present wins: one human event outranks any number of machine ones.
+ *
+ * Actor matching is on the `human:` PREFIX, not a substring. An actor like
+ * `feature-dev/human-review-model` is a stage, not a person, and a substring
+ * match would silently promote it to the top tier — which would make the
+ * "unverified backlog" a maintainer reviews quietly wrong.
+ */
+export function trustTierOf(entry: Pick<KnowledgeEntry, "verified"> | null | undefined): TrustTier {
+  const verified = entry?.verified;
+  if (!verified || verified.length === 0) return TRUST_UNVERIFIED;
+  for (const event of verified) {
+    if (typeof event?.by === "string" && event.by.startsWith("human:") && event.by.length > 6) {
+      return TRUST_HUMAN_REVIEWED;
+    }
+  }
+  return TRUST_MACHINE_CONFIRMED;
+}
+
+/**
+ * Read the trust tier straight out of a markdown file's frontmatter.
+ *
+ * Deliberately tolerant: a file with no block, an unparseable block, or a
+ * block the schema rejects reads as `unverified` rather than throwing. It
+ * exists in the base and nothing has confirmed it, which is exactly what that
+ * tier means.
+ */
+export function trustTierOfContent(content: string): TrustTier {
+  if (!content.startsWith("---\n") && !content.startsWith("---\r\n")) {
+    return TRUST_UNVERIFIED;
+  }
+  const endIndex = content.indexOf("\n---", 3);
+  if (endIndex === -1) return TRUST_UNVERIFIED;
+
+  try {
+    // Only the `verified` list matters here, and it is a list of {by, at}
+    // mappings — a targeted scan avoids pulling a YAML parser into the
+    // extension's synchronous tree-rendering path.
+    const block = content.slice(4, endIndex);
+    const actors = block.match(/^\s*-\s*by:\s*(\S+)/gm) ?? [];
+    if (actors.length === 0) return TRUST_UNVERIFIED;
+    for (const line of actors) {
+      const by = line.replace(/^\s*-\s*by:\s*/, "").replace(/^["']|["']$/g, "");
+      if (by.startsWith("human:") && by.length > 6) return TRUST_HUMAN_REVIEWED;
+    }
+    return TRUST_MACHINE_CONFIRMED;
+  } catch {
+    return TRUST_UNVERIFIED;
+  }
+}

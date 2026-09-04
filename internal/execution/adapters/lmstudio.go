@@ -77,6 +77,13 @@ func (a *LmStudioAdapter) BuildCommand(opts RunOptions) (string, []string, map[s
 		"NIGHTGAUGE_OUTPUT_FORMAT": "stream-json",
 		"NIGHTGAUGE_ADAPTER":       "lm-studio",
 	}
+	// NIGHTGAUGE_DISPATCH_MODEL is the model this stage was dispatched to run
+	// on. It is what `knowledge stamp --stage` builds the provenance actor
+	// from: the SERVED model is only observable after the stage exits, so it
+	// cannot be an input to a stamp the stage itself makes.
+	if opts.Model != "" {
+		env["NIGHTGAUGE_DISPATCH_MODEL"] = opts.Model
+	}
 
 	if opts.ContextFile != "" {
 		env["NIGHTGAUGE_CONTEXT_FILE"] = opts.ContextFile

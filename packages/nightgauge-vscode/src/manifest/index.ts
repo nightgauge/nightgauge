@@ -627,6 +627,13 @@ export const MANIFEST_CONTRIBUTES: ManifestContributes = {
       category: "Nightgauge Knowledge",
     },
     {
+      // Turns the pile of entries nobody has checked into a reviewable list.
+      command: "nightgauge.knowledge.toggleUnverifiedOnly",
+      title: "Nightgauge: Show Only Unverified Knowledge",
+      icon: "$(filter)",
+      category: "Nightgauge Knowledge",
+    },
+    {
       // Both views auto-refresh via a file watcher; these are the manual
       // force-refresh fallbacks, previously registered with no way to
       // invoke them (#766).
@@ -1081,6 +1088,11 @@ export const MANIFEST_CONTRIBUTES: ManifestContributes = {
         command: "nightgauge.knowledge.scaffoldForIssue",
         when: "view == nightgauge.knowledgeView",
         group: "navigation@3",
+      },
+      {
+        command: "nightgauge.knowledge.toggleUnverifiedOnly",
+        when: "view == nightgauge.knowledgeView",
+        group: "navigation@4",
       },
       {
         // Action Center refresh button (ADR 015 / #325).

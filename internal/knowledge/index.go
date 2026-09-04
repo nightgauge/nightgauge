@@ -23,7 +23,10 @@ const (
 	// metadataIndexSchemaVersion is bumped when the on-disk format changes
 	// incompatibly. LoadMetadataIndex treats a mismatch as "no index" so the
 	// next reindex call rebuilds from scratch.
-	metadataIndexSchemaVersion = 1
+	// Schema 2 added the lifecycle fields (trust_tier, generated, status,
+	// stale_after) so a reader can see which entries a model wrote and
+	// nobody checked, without parsing every file.
+	metadataIndexSchemaVersion = 2
 
 	// metadataIndexPath is the workspace-relative path for the persistent
 	// metadata index. Gitignored — see decisions.md ADR-001.
@@ -42,6 +45,17 @@ type IndexEntry struct {
 	Backlinks []string `json:"backlinks"` // workspace-relative paths that [[wiki-link]] to this file
 	Mtime     int64    `json:"mtime"`     // UnixNano
 	Kind      string   `json:"kind"`      // "issue" | "repo-topic" | "workspace"
+
+	// TrustTier is derived from the entry's verified log, never declared by
+	// the entry: "human-reviewed", "machine-confirmed" or "unverified".
+	TrustTier string `json:"trust_tier"`
+	// Generated names the actor that produced the entry, and when.
+	Generated *Provenance `json:"generated,omitempty"`
+	// Status is the lifecycle status, defaulted when the entry omits it.
+	Status string `json:"status,omitempty"`
+	// StaleAfter is the raw RFC3339 stamp, so expiry stays a read-time
+	// comparison rather than a fact frozen at index time.
+	StaleAfter string `json:"stale_after,omitempty"`
 }
 
 // MetadataIndex is the full persistent index stored at .index.json.
@@ -240,8 +254,19 @@ func indexFile(workdir, absPath, kind string) (IndexEntry, bool) {
 	}
 
 	var tags []string
-	if fm, _ := ParseFrontmatter(content); fm != nil {
+	// An entry whose frontmatter will not parse is indexed as unverified
+	// rather than dropped: it exists in the base and nothing has confirmed
+	// it, which is exactly what that tier means.
+	trustTier := TrustUnverified
+	status := DefaultStatus
+	staleAfter := ""
+	var generated *Provenance
+	if fm, fmErr := ParseFrontmatter(content); fmErr == nil && fm != nil {
 		tags = fm.Tags
+		trustTier = fm.TrustTier()
+		status = fm.EffectiveStatus()
+		staleAfter = fm.StaleAfter
+		generated = fm.Generated
 	}
 
 	title := extractTitle(content, absPath)
@@ -253,6 +278,11 @@ func indexFile(workdir, absPath, kind string) (IndexEntry, bool) {
 		Backlinks: nil, // populated in computeBacklinks
 		Mtime:     info.ModTime().UnixNano(),
 		Kind:      kind,
+
+		TrustTier:  trustTier,
+		Generated:  generated,
+		Status:     status,
+		StaleAfter: staleAfter,
 	}, true
 }
 

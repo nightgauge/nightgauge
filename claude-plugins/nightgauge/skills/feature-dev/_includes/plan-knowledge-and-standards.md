@@ -118,6 +118,18 @@ if [ -n "$KNOWLEDGE_PATH" ] && [ -d "$KNOWLEDGE_PATH" ]; then
     fi
   fi
 
+  # Record the checksum of decisions.md now. This phase only READS the
+  # knowledge base — it has no write site — so provenance is stamped later,
+  # and only if implementation actually changed the file. Stamping
+  # unconditionally would record that feature-dev produced an entry it never
+  # touched, which is a false provenance claim in the one field the trust
+  # tier is built on.
+  if [ -f "$DECISIONS_FILE" ]; then
+    KB_DECISIONS_SUM_BEFORE=$(shasum -a 256 "$DECISIONS_FILE" 2>/dev/null | cut -d" " -f1)
+    export KB_DECISIONS_SUM_BEFORE
+    export KB_DECISIONS_FILE="$DECISIONS_FILE"
+  fi
+
   if [ "$HAS_SUBSTANTIVE" = "true" ]; then
     echo "Use the above knowledge base content as additional context for implementation."
     echo "Build on these requirements and decisions rather than re-deriving them."
@@ -369,3 +381,31 @@ cat docs/TESTING.md 2>/dev/null
 
 Extract: test naming conventions, coverage requirements, mocking strategies,
 test file organization.
+
+### Recording provenance when implementation adds a decision
+
+If implementation records a new ADR in `decisions.md` — a decision made while
+building that planning did not anticipate — stamp the entry so recall can rank
+it. Run this **after** the implementation phase, not here:
+
+```bash
+if [ -n "$KB_DECISIONS_FILE" ] && [ -f "$KB_DECISIONS_FILE" ]; then
+  KB_DECISIONS_SUM_AFTER=$(shasum -a 256 "$KB_DECISIONS_FILE" 2>/dev/null | cut -d" " -f1)
+  if [ "$KB_DECISIONS_SUM_AFTER" != "$KB_DECISIONS_SUM_BEFORE" ]; then
+    "$BINARY" knowledge stamp "$KB_DECISIONS_FILE" \
+      --stage "${NIGHTGAUGE_STAGE:-feature-dev}" \
+      >/dev/null 2>&1 \
+      || echo "WARNING: could not stamp provenance on $KB_DECISIONS_FILE" >&2
+  fi
+fi
+```
+
+The checksum guard is the point. This stage reads the knowledge base far more
+often than it writes to it, and `generated.by` names the actor that **produced**
+the entry. Stamping on every run would attribute planning's work to feature-dev
+and reset a provenance chain nobody asked to change.
+
+`knowledge stamp` is the only writer of these fields — never edit frontmatter
+with `sed`, `awk` or a heredoc. `--stage` makes the binary construct the actor
+from the stage name and the dispatched model, so no model-authored string can
+become a provenance claim.

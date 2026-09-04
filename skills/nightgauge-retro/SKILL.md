@@ -1030,7 +1030,13 @@ The same call records the **verification event** — `verified: {by:
 process:retro}` — that promotes the entry from `unverified` to
 `machine-confirmed`. Retro runs after the PR merged, so the decisions it
 records survived a real merge rather than being a model's unreviewed first
-draft. Do **not** stamp that separately; `record-outcome` is the writer.
+draft.
+
+**Do not call `knowledge stamp` here.** `record-outcome` is the writer for this
+event; a separate stamp would either duplicate it or, worse, record a
+provenance the outcome path did not actually establish. The other stages stamp
+what they _produce_ (`generated`); retro records what it _confirms_
+(`verified`), and those are different fields with different meanings.
 
 Read the merged PR URL out of the PR context file first, when it exists, so
 the entry cites what confirmed it:

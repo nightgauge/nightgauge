@@ -73,6 +73,13 @@ func (a *ClaudeAdapter) BuildCommand(opts RunOptions) (string, []string, map[str
 		"NIGHTGAUGE_OUTPUT_FORMAT": "stream-json",
 		"NIGHTGAUGE_ADAPTER":       "claude",
 	}
+	// NIGHTGAUGE_DISPATCH_MODEL is the model this stage was dispatched to run
+	// on. It is what `knowledge stamp --stage` builds the provenance actor
+	// from: the SERVED model is only observable after the stage exits, so it
+	// cannot be an input to a stamp the stage itself makes.
+	if opts.Model != "" {
+		env["NIGHTGAUGE_DISPATCH_MODEL"] = opts.Model
+	}
 	// Thinking is deliberately NOT disabled here. The forced
 	// CLAUDE_CODE_DISABLE_THINKING=1 workaround for #3801 (thinking-block
 	// replay 400 on claude CLI 2.1.154) was removed after the bug stopped
