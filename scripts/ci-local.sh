@@ -39,6 +39,8 @@ REQUIRED_FILES=(
   scripts/ci-local-steps.txt
   scripts/test-branch-merged-check.sh
   scripts/test-post-merge-check.sh
+  scripts/test-scrub-evidence.sh
+  docker/clean-install/scrub-evidence.sh
   scripts/test-ci-change-class.sh
   scripts/npm-audit-check.js
   scripts/validate-skill-metadata.sh
@@ -360,6 +362,16 @@ run_group "branch-merged-check.sh regression suite" \
 #      exercised here.
 run_group "post-merge-check.sh regression suite" \
   bash scripts/test-post-merge-check.sh
+
+# 1b3. scrub-evidence.sh regression suite (#1335) — the second of the two
+#      layers that must each stop a credential reaching a public artifact. The
+#      first is the output-channel sanitizer, which matches secret SHAPES; this
+#      one matches the exact VALUES the harness was handed, so a credential in a
+#      format nobody has a pattern for is still caught. It only ever runs inside
+#      the clean-install container, which no ordinary change exercises — so
+#      without this step the layer is unverified until the next incident.
+run_group "scrub-evidence.sh regression suite" \
+  bash scripts/test-scrub-evidence.sh
 
 # 1c. CI change-class gate (#647) — drives scripts/ci-change-class.sh against
 #     real git fixtures AND asserts .github/workflows/ci.yml still consumes its

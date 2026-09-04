@@ -53,33 +53,37 @@ vi.mock("../../src/services/BinaryResolver", () => ({
 }));
 
 // Mutable state shared between the hoisted mock factory and the tests.
-const { prStageCalls, prStageCreate, prStageMerge, gatePrMergePassed } = vi.hoisted(() => ({
-  prStageCalls: { value: [] as Array<{ verb: string; args: string[] }> },
-  // Default: both stages succeed deterministically.
-  prStageCreate: {
-    value: {
-      stage: "pr-create",
-      path: "created",
-      pr_number: 999,
-      pr_url: "https://github.com/TestOrg/test-repo/pull/999",
-      reason: "rich-context",
-      rate_limited: false,
-      duration_ms: 4,
-    } as Record<string, unknown>,
-  },
-  prStageMerge: {
-    value: {
-      stage: "pr-merge",
-      path: "merged",
-      pr_number: 999,
-      pr_state: "MERGED",
-      reason: "clean-mergeable: merged",
-      rate_limited: false,
-      duration_ms: 6,
-    } as Record<string, unknown>,
-  },
-  gatePrMergePassed: { value: true },
-}));
+const { prStageCalls, prStageCreate, prStageMerge, gatePrMergePassed, prStagePhaseLines } =
+  vi.hoisted(() => ({
+    prStageCalls: { value: [] as Array<{ verb: string; args: string[] }> },
+    // Default: both stages succeed deterministically.
+    prStageCreate: {
+      value: {
+        stage: "pr-create",
+        path: "created",
+        pr_number: 999,
+        pr_url: "https://github.com/TestOrg/test-repo/pull/999",
+        reason: "rich-context",
+        rate_limited: false,
+        duration_ms: 4,
+      } as Record<string, unknown>,
+    },
+    prStageMerge: {
+      value: {
+        stage: "pr-merge",
+        path: "merged",
+        pr_number: 999,
+        pr_state: "MERGED",
+        reason: "clean-mergeable: merged",
+        rate_limited: false,
+        duration_ms: 6,
+      } as Record<string, unknown>,
+    },
+    gatePrMergePassed: { value: true },
+    // #1397 — the sentinel-prefixed phase transitions the fake pr-stage binary
+    // writes to stderr while it "runs".
+    prStagePhaseLines: { value: [] as string[] },
+  }));
 
 vi.mock("child_process", async () => {
   const actual = await vi.importActual<typeof import("child_process")>("child_process");
@@ -165,10 +169,50 @@ vi.mock("child_process", async () => {
     return Promise.resolve({ stdout: issueJson, stderr: "" });
   };
 
+  // #1397: the deterministic pr-stage call moved from execFile to spawn, so the
+  // extension can consume the CLI's phase transitions AS THEY HAPPEN rather
+  // than only when the process exits. pr-merge waits out CI on a 30s x 30
+  // budget, so an exit-only reader shows 0/14 for up to fifteen minutes.
+  const { EventEmitter } = await vi.importActual<typeof import("events")>("events");
+  const { Readable } = await vi.importActual<typeof import("stream")>("stream");
+
+  const spawnMock: any = vi.fn((cmd: string, args: string[]) => {
+    const a = args ?? [];
+    const child: any = new EventEmitter();
+    child.stdout = new Readable({ read() {} });
+    child.stderr = new Readable({ read() {} });
+    child.kill = vi.fn();
+
+    const isBinary = typeof cmd === "string" && cmd.includes("nightgauge");
+    const isPrStage = isBinary && a[0] === "pr-stage";
+    if (isPrStage) {
+      const verb = a[1]; // "create" | "merge"
+      prStageCalls.value.push({ verb, args: a });
+      const payload = verb === "create" ? prStageCreate.value : prStageMerge.value;
+      setImmediate(() => {
+        // stderr first, as the real binary does: the transitions are reported
+        // during the run, the result only at the end.
+        for (const line of prStagePhaseLines.value) child.stderr.push(`${line}\n`);
+        child.stdout.push(JSON.stringify(payload));
+        child.stdout.push(null);
+        child.stderr.push(null);
+        child.emit("close", 0);
+      });
+    } else {
+      setImmediate(() => {
+        child.stdout.push(null);
+        child.stderr.push(null);
+        child.emit("close", 0);
+      });
+    }
+    return child;
+  });
+
   return {
     ...actual,
     exec: execMock,
     execFile: execFileMock,
+    spawn: spawnMock,
     execSync: vi.fn().mockReturnValue(authStatus),
     execFileSync: vi.fn().mockReturnValue(issueJson),
   };
@@ -281,6 +325,7 @@ function createMockStateService(runningStage: "pr-create" | "pr-merge"): Pipelin
     setLabels: vi.fn().mockResolvedValue(undefined),
     recordBacktrack: vi.fn().mockResolvedValue(undefined),
     failPhase: vi.fn().mockResolvedValue(undefined),
+    skipPhase: vi.fn().mockResolvedValue(undefined),
   } as unknown as PipelineStateService;
 }
 
@@ -302,6 +347,7 @@ describe("HeadlessOrchestrator deterministic-first pr-stage (Issue #300)", () =>
   beforeEach(() => {
     vi.clearAllMocks();
     prStageCalls.value = [];
+    prStagePhaseLines.value = [];
     gatePrMergePassed.value = true;
     // Reset to the deterministic-success defaults each test.
     prStageCreate.value = {
@@ -350,6 +396,119 @@ describe("HeadlessOrchestrator deterministic-first pr-stage (Issue #300)", () =>
     expect(mergeCall!.args[mergeCall!.args.indexOf("--workdir") + 1]).toBe(WORKTREE);
 
     expect(result.success).toBe(true);
+  });
+
+  // ── Phase reporting on this route (#1397) ───────────────────────────────
+  //
+  // #1247 gave the deterministic runners real phase reporting, but only the Go
+  // scheduler attached a reporter. This route runs the SAME runners in a
+  // separate process, so it reported nothing and showed 0/14 for the whole
+  // stage — two routes to one stage, one instrumented and one not, and the
+  // uninstrumented one is the route an ordinary VS Code user takes.
+
+  const phaseLine = (t: Record<string, unknown>): string =>
+    "@@nightgauge-phase@@" +
+    JSON.stringify({
+      stage: "pr-merge",
+      name: "ci-gate",
+      index: 3,
+      total: 14,
+      status: "running",
+      ...t,
+    });
+
+  it("pr-merge: streamed phase transitions are recorded as they arrive (#1397)", async () => {
+    prStagePhaseLines.value = [
+      phaseLine({ name: "read-pr-context", index: 0, status: "running" }),
+      phaseLine({ name: "read-pr-context", index: 0, status: "complete" }),
+      phaseLine({ name: "ci-gate", index: 3, status: "running" }),
+      phaseLine({ name: "ci-gate", index: 3, status: "complete" }),
+      phaseLine({ name: "output-summary", index: 12, status: "skipped" }),
+    ];
+    mockSkillSuccess();
+    const state = createMockStateService("pr-merge");
+    const orchestrator = new HeadlessOrchestrator(state, mockLogger, { contextFileWaitMs: 0 });
+    orchestrator.setWorktreeOverride(WORKTREE);
+
+    await orchestrator.runPipeline(300);
+
+    // Every transition reached the state service with its registry position —
+    // the tree renders "n/14" from index/total.
+    expect(vi.mocked(state.startPhase).mock.calls).toEqual(
+      expect.arrayContaining([
+        ["pr-merge", "read-pr-context", 14, 0],
+        ["pr-merge", "ci-gate", 14, 3],
+      ])
+    );
+    expect(vi.mocked(state.completePhase).mock.calls).toEqual(
+      expect.arrayContaining([
+        ["pr-merge", "read-pr-context", 14],
+        ["pr-merge", "ci-gate", 14],
+      ])
+    );
+    expect(vi.mocked(state.skipPhase).mock.calls).toEqual(
+      expect.arrayContaining([["pr-merge", "output-summary", 14, 12]])
+    );
+  });
+
+  it("pr-merge: falls back to the result array when nothing streamed (#1397)", async () => {
+    // An older binary streams nothing but still returns the array. The durable
+    // record must still be written — and exactly once, which is why the array
+    // is applied ONLY when the stream was silent.
+    prStagePhaseLines.value = [];
+    prStageMerge.value = {
+      ...prStageMerge.value,
+      phases: [
+        { stage: "pr-merge", name: "merge", index: 9, total: 14, status: "running" },
+        { stage: "pr-merge", name: "merge", index: 9, total: 14, status: "complete" },
+      ],
+    };
+    mockSkillSuccess();
+    const state = createMockStateService("pr-merge");
+    const orchestrator = new HeadlessOrchestrator(state, mockLogger, { contextFileWaitMs: 0 });
+    orchestrator.setWorktreeOverride(WORKTREE);
+
+    await orchestrator.runPipeline(300);
+
+    expect(vi.mocked(state.startPhase).mock.calls).toEqual([["pr-merge", "merge", 14, 9]]);
+    expect(vi.mocked(state.completePhase).mock.calls).toEqual([["pr-merge", "merge", 14]]);
+  });
+
+  it("pr-merge: a streamed run does NOT also replay the array — no double records (#1397)", async () => {
+    // The array and the stream carry the SAME transitions. Applying both would
+    // record every phase twice, which is a worse record than none.
+    prStagePhaseLines.value = [phaseLine({ name: "merge", index: 9, status: "running" })];
+    prStageMerge.value = {
+      ...prStageMerge.value,
+      phases: [{ stage: "pr-merge", name: "merge", index: 9, total: 14, status: "running" }],
+    };
+    mockSkillSuccess();
+    const state = createMockStateService("pr-merge");
+    const orchestrator = new HeadlessOrchestrator(state, mockLogger, { contextFileWaitMs: 0 });
+    orchestrator.setWorktreeOverride(WORKTREE);
+
+    await orchestrator.runPipeline(300);
+
+    expect(vi.mocked(state.startPhase).mock.calls).toEqual([["pr-merge", "merge", 14, 9]]);
+  });
+
+  it("pr-merge: a malformed phase line never fails the stage (#1397)", async () => {
+    // This is a progress channel. A bad line must not take down the merge that
+    // was reporting progress.
+    prStagePhaseLines.value = [
+      "@@nightgauge-phase@@{not json",
+      "2026/09/04 gh: ordinary log output",
+      phaseLine({ name: "merge", index: 9, status: "running" }),
+    ];
+    mockSkillSuccess();
+    const state = createMockStateService("pr-merge");
+    const orchestrator = new HeadlessOrchestrator(state, mockLogger, { contextFileWaitMs: 0 });
+    orchestrator.setWorktreeOverride(WORKTREE);
+
+    const result = await orchestrator.runPipeline(300);
+
+    expect(result.success).toBe(true);
+    expect(vi.mocked(state.startPhase).mock.calls).toEqual([["pr-merge", "merge", 14, 9]]);
   });
 
   it("pr-merge: 'punt' records the reason and falls through to the LLM skill", async () => {
