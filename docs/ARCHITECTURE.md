@@ -1505,9 +1505,46 @@ running on nearly every issue there. When adding a language or build tool to
 the workspace, add its test/build/analyze commands to that single matcher.
 
 Note that inference covers only `feature-dev` and `feature-planning`.
-Deterministic stages (`pr-merge`, `pr-create`, `issue-pickup`) run in the Go
-binary with no LLM to emit a marker and no inference rules, so they report no
-phase progress at all — see issue #1247.
+
+### Deterministic stages report their own phases (#1247)
+
+`pr-merge` and `pr-create` have a deterministic-first path: the Go binary does
+the work (`internal/orchestrator/stages/prmerge.go`, `prcreate.go`) with no LLM
+in the loop. Markers are a skill protocol and inference does not cover these
+stages, so a deterministic `pr-merge` used to show **0/14 phases for its whole
+run** and then render all fourteen `skipped` on success.
+
+The runners report their waypoints directly instead. A `stages.PhaseReporter`
+travels on the context — never on the runner, which is shared across concurrent
+runs — and the scheduler's implementation writes each transition to BOTH
+`RuntimeState.PhaseHistory` (the durable record `BuildV2Record` projects into
+`V2StageDetail.Phases`) and the live `phase.start` / `phase.complete` /
+`phase.fail` / `phase.skip` IPC events the extension already consumes from the
+marker path.
+
+Every registry phase carries one explicit role in
+`internal/orchestrator/stages/phases.go` — nothing is inferred from "whatever
+the runner did not touch":
+
+| Role           | Meaning                                                    | pr-merge examples                                                                                       |
+| -------------- | ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| `phaseRunner`  | the runner does this work and reports it                   | `read-pr-context`, `ci-gate`, `freshness-check`, `merge`                                                |
+| `phaseCaller`  | on the deterministic path, but done by the runner's caller | `post-merge-cleanup` (the scheduler's branch/worktree teardown)                                         |
+| `phaseOffPath` | exists only on the LLM path — a genuine `skipped`          | `auto-fix-retry`, `fetch-reviews`, `categorize-issues`, `address-feedback`, `retrospective-feedback`, … |
+
+**A punt writes no skips.** When the runner declines mid-stage, the pr-merge
+skill runs and genuinely executes the off-path phases. `SkipPhase` is
+append-only and first-writer-wins, so a skip written during a punt would
+permanently outrank the skill's real record and the run would close asserting it
+declined work it demonstrably did. The runner instead closes the phase it was
+inside as `failed` — a truthful record of the deterministic attempt, which the
+skill's own `running` → `complete` records then sit alongside without
+contradiction.
+
+`issue-pickup` is **not** a deterministic stage despite older notes here saying
+so: `pr-stage` has only `create` and `merge` verbs, and `IssuePickupStageRunner`
+delegates straight to `executeSkill`. Its fourteen phases come from the markers
+in its `SKILL.md`.
 
 ---
 
