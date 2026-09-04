@@ -1380,11 +1380,74 @@
     {
       "id": "multiline-copilot-gh-secondary-rate-limit",
       "input": "exit 1: gh: You have exceeded a secondary rate limit for the GitHub API\nPlease wait a few minutes before you try again",
-      "expected": "subagent_crash",
+      "expected": "github_rate_limited",
       "expected_signal": "",
       "source": "synthetic",
       "producer": "copilot (internal/execution/adapters/copilot.go, registry.go factory \"copilot\") — `gh`'s own real secondary-rate-limit wording, which the Copilot CLI wraps.",
-      "rationale": "Multi-line adapter-authored coverage for the copilot constructor (#565 AC2), and a DELIBERATE out-of-scope finding: github-quota-low exists for a semantically different producer (HeadlessOrchestrator.preCheckAuth's own GraphQL board-budget preflight, stamped `[pipeline-start-failure] github-quota-low`), not for `gh`'s native secondary-rate-limit throttle mid-stage. This real vendor wording matches no rule and falls to subagent_crash, which books a lifetime failure for a window that clears on its own — a genuine gap, but a new rule is out of scope for #565 and is reported rather than fixed here."
+      "rationale": "Multi-line adapter-authored coverage for the copilot constructor (#565 AC2), and the row that #1391 was filed against: it used to assert subagent_crash, documenting today's behaviour rather than the correct one. `gh`'s own secondary-rate-limit wording is a TRANSIENT GitHub throttle that clears within minutes, and subagent_crash is a LIFETIME kind, so the pipeline abandoned a run a short backoff would have recovered. It is not github_quota_low: that rule is keyed to Nightgauge's own GraphQL board-budget preflight marker (`[pipeline-start-failure] github-quota-low`), a different producer whose recovery waits on the PRIMARY bucket's published reset — the wrong clock for a secondary limit."
+    },
+    {
+      "id": "gh-secondary-rate-limit-http-403",
+      "input": "exit 1: HTTP 403: You have exceeded a secondary rate limit. Please wait a few minutes before you try again. (https://api.github.com/graphql)",
+      "expected": "github_rate_limited",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "`gh` surfacing GitHub's HTTP 403 secondary-limit body verbatim, the shape a GraphQL board read hits.",
+      "rationale": "The same throttle as the copilot row, reached through the raw HTTP wrapper rather than gh's own prose. Pins that the rule keys on GitHub's stable `secondary rate limit` phrase and not on the `gh:` prefix, so a throttle raised by any surface that shells out to the API classifies the same way."
+    },
+    {
+      "id": "gh-api-rate-limit-exceeded-primary",
+      "input": "exit 1: gh: API rate limit exceeded for user ID 12345.",
+      "expected": "github_rate_limited",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "`gh`'s PRIMARY rate-limit wording, emitted mid-stage when the hourly bucket empties during a run.",
+      "rationale": "The primary-bucket sibling of the secondary limit, and it fell to subagent_crash for exactly the same reason. It shares the kind because the recovery is the same shape — back off and retry, never a lifetime failure — and because the alternative, github_quota_low, is the PREFLIGHT's marker: routing a mid-stage exhaustion there would apply a global cooldown read off a tracker snapshot the failing run never refreshed."
+    },
+    {
+      "id": "gh-submitted-too-quickly",
+      "input": "exit 1: gh: You have exceeded a secondary rate limit and have been temporarily blocked from content creation. Please retry your request again later.\nwas submitted too quickly",
+      "expected": "github_rate_limited",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "GitHub's content-creation secondary-limit wording, seen when pr-create opens PRs in quick succession.",
+      "rationale": "GitHub uses distinct prose for the content-creation secondary limit, which is precisely the one an autonomous pipeline trips: several runs opening PRs within a minute. Pinned as its own row because the `was submitted too quickly` clause is the only thing that catches the wording when the leading line is truncated away by the 3-line stderr tail."
+    },
+    {
+      "id": "gh-http-429-too-many-requests",
+      "input": "exit 1: HTTP 429: Too Many Requests (https://api.github.com/repos/nightgauge/nightgauge/pulls)",
+      "expected": "github_rate_limited",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "GitHub returning 429 rather than 403 for a throttled REST call, surfaced by gh as an HTTP error.",
+      "rationale": "GitHub answers some throttles with 429 instead of 403, and gh prints the status line with the API URL. Both conjunctive clauses (`too many requests`+`github`, `http 429`+`github`) are satisfied here; the bare-half rows below are what prove the `github` conjunct is load-bearing rather than decorative."
+    },
+    {
+      "id": "negative-too-many-requests-without-github",
+      "input": "exit 1: upstream proxy replied: too many requests, slow down",
+      "expected": "subagent_crash",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "A non-GitHub vendor emitting the same generic phrase — the false positive the conjunction exists to prevent.",
+      "rationale": "`too many requests` is a shape any HTTP client prints, and the input contract says adapter stderr reaches Classify exactly as the vendor wrote it. Widening the clause to that term alone would move this row off subagent_crash, which is what makes the `github` conjunct provably necessary rather than incidental."
+    },
+    {
+      "id": "negative-http-429-without-github",
+      "input": "exit 1: model gateway returned http 429 after 3 retries",
+      "expected": "subagent_crash",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "A non-GitHub gateway printing the bare HTTP status — the other half of the same false positive.",
+      "rationale": "The same argument as the `too many requests` control, for the second conjunctive clause. A 429 from an inference gateway is not a GitHub throttle and must not be routed to a GitHub backoff; widening `http 429` to fire alone would move this row and the conjunction test says so."
+    },
+    {
+      "id": "negative-github-without-throttle-wording",
+      "input": "exit 1: gh: failed to run git: could not read from remote repository github.com",
+      "expected": "subagent_crash",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "An ordinary `gh` failure that merely names github — the half that would swallow the world if widened.",
+      "rationale": "`github` appears in a large share of this pipeline's failure text, so widening either conjunction to that term alone would claim almost every gh failure as a throttle. This row pins that half for BOTH conjunctive clauses, and is the reason the rule cannot quietly become a disjunction with every suite still green."
     },
     {
       "id": "multiline-grok-hard-cap-notice-then-not-signed-in",

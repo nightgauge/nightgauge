@@ -831,6 +831,96 @@
       "signal": "github_network_outage"
     },
     {
+      "input": "secondary rate limit",
+      "kind": "github_rate_limited",
+      "signal": ""
+    },
+    {
+      "input": "exit 1: secondary rate limit",
+      "kind": "github_rate_limited",
+      "signal": ""
+    },
+    {
+      "input": "SECONDARY RATE LIMIT",
+      "kind": "github_rate_limited",
+      "signal": ""
+    },
+    {
+      "input": "api rate limit exceeded",
+      "kind": "github_rate_limited",
+      "signal": ""
+    },
+    {
+      "input": "exit 1: api rate limit exceeded",
+      "kind": "github_rate_limited",
+      "signal": ""
+    },
+    {
+      "input": "API RATE LIMIT EXCEEDED",
+      "kind": "github_rate_limited",
+      "signal": ""
+    },
+    {
+      "input": "was submitted too quickly",
+      "kind": "github_rate_limited",
+      "signal": ""
+    },
+    {
+      "input": "exit 1: was submitted too quickly",
+      "kind": "github_rate_limited",
+      "signal": ""
+    },
+    {
+      "input": "WAS SUBMITTED TOO QUICKLY",
+      "kind": "github_rate_limited",
+      "signal": ""
+    },
+    {
+      "input": "too many requests github",
+      "kind": "github_rate_limited",
+      "signal": ""
+    },
+    {
+      "input": "exit 1: too many requests github",
+      "kind": "github_rate_limited",
+      "signal": ""
+    },
+    {
+      "input": "TOO MANY REQUESTS GITHUB",
+      "kind": "github_rate_limited",
+      "signal": ""
+    },
+    {
+      "input": "too many requests",
+      "kind": "",
+      "signal": ""
+    },
+    {
+      "input": "github",
+      "kind": "",
+      "signal": ""
+    },
+    {
+      "input": "http 429 github",
+      "kind": "github_rate_limited",
+      "signal": ""
+    },
+    {
+      "input": "exit 1: http 429 github",
+      "kind": "github_rate_limited",
+      "signal": ""
+    },
+    {
+      "input": "HTTP 429 GITHUB",
+      "kind": "github_rate_limited",
+      "signal": ""
+    },
+    {
+      "input": "http 429",
+      "kind": "",
+      "signal": ""
+    },
+    {
       "input": "[pr-merge-unmerged",
       "kind": "pr_merge_unmerged",
       "signal": ""
@@ -2096,6 +2186,11 @@
       "signal": ""
     },
     {
+      "input": "network unavailable: extended github connectivity loss | secondary rate limit",
+      "kind": "network_unavailable",
+      "signal": ""
+    },
+    {
       "input": "network unavailable: extended github connectivity loss | [pr-merge-unmerged",
       "kind": "network_unavailable",
       "signal": ""
@@ -2282,6 +2377,11 @@
     },
     {
       "input": "stream idle timeout | github-network-outage",
+      "kind": "stream_idle_timeout",
+      "signal": "stream_idle_timeout"
+    },
+    {
+      "input": "stream idle timeout | secondary rate limit",
       "kind": "stream_idle_timeout",
       "signal": "stream_idle_timeout"
     },
@@ -2476,6 +2576,11 @@
       "signal": "api_overloaded"
     },
     {
+      "input": "overloaded | secondary rate limit",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
       "input": "overloaded | [pr-merge-unmerged",
       "kind": "api_overloaded",
       "signal": "api_overloaded"
@@ -2662,6 +2767,11 @@
     },
     {
       "input": "socket connection was closed | github-network-outage",
+      "kind": "api_connection_lost",
+      "signal": "api_connection_lost"
+    },
+    {
+      "input": "socket connection was closed | secondary rate limit",
       "kind": "api_connection_lost",
       "signal": "api_connection_lost"
     },
@@ -2856,6 +2966,11 @@
       "signal": "rate_limit_quota_exhausted"
     },
     {
+      "input": "[rate-limit-quota-exhausted] | secondary rate limit",
+      "kind": "rate_limit_quota_exhausted",
+      "signal": "rate_limit_quota_exhausted"
+    },
+    {
       "input": "[rate-limit-quota-exhausted] | [pr-merge-unmerged",
       "kind": "rate_limit_quota_exhausted",
       "signal": "rate_limit_quota_exhausted"
@@ -3042,6 +3157,11 @@
     },
     {
       "input": "[adapter-auth-failed] | github-network-outage",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "[adapter-auth-failed] | secondary rate limit",
       "kind": "adapter_auth_failed",
       "signal": "adapter_auth_failed"
     },
@@ -3236,6 +3356,11 @@
       "signal": ""
     },
     {
+      "input": "not_found_error model | secondary rate limit",
+      "kind": "model_unavailable",
+      "signal": ""
+    },
+    {
       "input": "not_found_error model | [pr-merge-unmerged",
       "kind": "model_unavailable",
       "signal": ""
@@ -3422,6 +3547,11 @@
     },
     {
       "input": "pipeline-start-failure issue-closed | github-network-outage",
+      "kind": "issue_closed",
+      "signal": ""
+    },
+    {
+      "input": "pipeline-start-failure issue-closed | secondary rate limit",
       "kind": "issue_closed",
       "signal": ""
     },
@@ -3616,6 +3746,11 @@
       "signal": ""
     },
     {
+      "input": "[blocked-dependency] | secondary rate limit",
+      "kind": "blocked_dependency",
+      "signal": ""
+    },
+    {
       "input": "[blocked-dependency] | [pr-merge-unmerged",
       "kind": "blocked_dependency",
       "signal": ""
@@ -3802,6 +3937,11 @@
     },
     {
       "input": "architecture approval required | github-network-outage",
+      "kind": "architecture_approval_required",
+      "signal": "architecture_approval_required"
+    },
+    {
+      "input": "architecture approval required | secondary rate limit",
       "kind": "architecture_approval_required",
       "signal": "architecture_approval_required"
     },
@@ -3996,6 +4136,11 @@
       "signal": "github_quota_low"
     },
     {
+      "input": "github-quota-low | secondary rate limit",
+      "kind": "github_quota_low",
+      "signal": "github_quota_low"
+    },
+    {
       "input": "github-quota-low | [pr-merge-unmerged",
       "kind": "github_quota_low",
       "signal": "github_quota_low"
@@ -4186,6 +4331,11 @@
       "signal": "github_quota_low"
     },
     {
+      "input": "github-network-outage | secondary rate limit",
+      "kind": "github_network_outage",
+      "signal": "github_network_outage"
+    },
+    {
       "input": "github-network-outage | [pr-merge-unmerged",
       "kind": "github_network_outage",
       "signal": "github_network_outage"
@@ -4321,6 +4471,201 @@
       "signal": "github_network_outage"
     },
     {
+      "input": "secondary rate limit | network unavailable: extended github connectivity loss",
+      "kind": "network_unavailable",
+      "signal": ""
+    },
+    {
+      "input": "secondary rate limit | stream idle timeout",
+      "kind": "stream_idle_timeout",
+      "signal": "stream_idle_timeout"
+    },
+    {
+      "input": "secondary rate limit | overloaded",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "secondary rate limit | socket connection was closed",
+      "kind": "api_connection_lost",
+      "signal": "api_connection_lost"
+    },
+    {
+      "input": "secondary rate limit | [rate-limit-quota-exhausted]",
+      "kind": "rate_limit_quota_exhausted",
+      "signal": "rate_limit_quota_exhausted"
+    },
+    {
+      "input": "secondary rate limit | [adapter-auth-failed]",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "secondary rate limit | not_found_error model",
+      "kind": "model_unavailable",
+      "signal": ""
+    },
+    {
+      "input": "secondary rate limit | pipeline-start-failure issue-closed",
+      "kind": "issue_closed",
+      "signal": ""
+    },
+    {
+      "input": "secondary rate limit | [blocked-dependency]",
+      "kind": "blocked_dependency",
+      "signal": ""
+    },
+    {
+      "input": "secondary rate limit | architecture approval required",
+      "kind": "architecture_approval_required",
+      "signal": "architecture_approval_required"
+    },
+    {
+      "input": "secondary rate limit | github-quota-low",
+      "kind": "github_quota_low",
+      "signal": "github_quota_low"
+    },
+    {
+      "input": "secondary rate limit | github-network-outage",
+      "kind": "github_network_outage",
+      "signal": "github_network_outage"
+    },
+    {
+      "input": "secondary rate limit | [pr-merge-unmerged",
+      "kind": "github_rate_limited",
+      "signal": ""
+    },
+    {
+      "input": "secondary rate limit | [stage:worktree-containment]",
+      "kind": "github_rate_limited",
+      "signal": ""
+    },
+    {
+      "input": "secondary rate limit | [not-pipeline-actionable]",
+      "kind": "github_rate_limited",
+      "signal": ""
+    },
+    {
+      "input": "secondary rate limit | [dev-produced-no-changes]",
+      "kind": "github_rate_limited",
+      "signal": ""
+    },
+    {
+      "input": "secondary rate limit | [dev-handoff-missing]",
+      "kind": "github_rate_limited",
+      "signal": ""
+    },
+    {
+      "input": "secondary rate limit | premature turn end",
+      "kind": "github_rate_limited",
+      "signal": ""
+    },
+    {
+      "input": "secondary rate limit | worktree_uncommitted",
+      "kind": "github_rate_limited",
+      "signal": ""
+    },
+    {
+      "input": "secondary rate limit | budget_ceiling_hit",
+      "kind": "github_rate_limited",
+      "signal": ""
+    },
+    {
+      "input": "secondary rate limit | [runaway-progress-exceeded]",
+      "kind": "github_rate_limited",
+      "signal": ""
+    },
+    {
+      "input": "secondary rate limit | [runaway-ceiling-exceeded]",
+      "kind": "github_rate_limited",
+      "signal": ""
+    },
+    {
+      "input": "secondary rate limit | [cost-cap-exceeded]",
+      "kind": "github_rate_limited",
+      "signal": ""
+    },
+    {
+      "input": "secondary rate limit | stage-no-output-timeout",
+      "kind": "github_rate_limited",
+      "signal": ""
+    },
+    {
+      "input": "secondary rate limit | [stall-killed]",
+      "kind": "github_rate_limited",
+      "signal": ""
+    },
+    {
+      "input": "secondary rate limit | pipeline_budget_exceeded",
+      "kind": "github_rate_limited",
+      "signal": ""
+    },
+    {
+      "input": "secondary rate limit | schema validation",
+      "kind": "github_rate_limited",
+      "signal": ""
+    },
+    {
+      "input": "secondary rate limit | [no-changes-produced]",
+      "kind": "github_rate_limited",
+      "signal": ""
+    },
+    {
+      "input": "secondary rate limit | [validation-failed]",
+      "kind": "github_rate_limited",
+      "signal": ""
+    },
+    {
+      "input": "secondary rate limit | [validation-inconclusive]",
+      "kind": "github_rate_limited",
+      "signal": ""
+    },
+    {
+      "input": "secondary rate limit | [branch-forked]",
+      "kind": "github_rate_limited",
+      "signal": ""
+    },
+    {
+      "input": "secondary rate limit | [commit-orphaned]",
+      "kind": "github_rate_limited",
+      "signal": ""
+    },
+    {
+      "input": "secondary rate limit | [permission-denied]",
+      "kind": "github_rate_limited",
+      "signal": ""
+    },
+    {
+      "input": "secondary rate limit | stage_context_unreadable",
+      "kind": "github_rate_limited",
+      "signal": ""
+    },
+    {
+      "input": "secondary rate limit | dev_build_verification_missing",
+      "kind": "github_rate_limited",
+      "signal": ""
+    },
+    {
+      "input": "secondary rate limit | dev_build_verification_failed",
+      "kind": "github_rate_limited",
+      "signal": ""
+    },
+    {
+      "input": "secondary rate limit | dev_tests_failed",
+      "kind": "github_rate_limited",
+      "signal": ""
+    },
+    {
+      "input": "secondary rate limit | pr_merge_lookup_failed",
+      "kind": "github_rate_limited",
+      "signal": ""
+    },
+    {
+      "input": "secondary rate limit | subagent crash",
+      "kind": "github_rate_limited",
+      "signal": ""
+    },
+    {
       "input": "[pr-merge-unmerged | network unavailable: extended github connectivity loss",
       "kind": "network_unavailable",
       "signal": ""
@@ -4379,6 +4724,11 @@
       "input": "[pr-merge-unmerged | github-network-outage",
       "kind": "github_network_outage",
       "signal": "github_network_outage"
+    },
+    {
+      "input": "[pr-merge-unmerged | secondary rate limit",
+      "kind": "github_rate_limited",
+      "signal": ""
     },
     {
       "input": "[pr-merge-unmerged | [stage:worktree-containment]",
@@ -4571,6 +4921,11 @@
       "signal": "github_network_outage"
     },
     {
+      "input": "[stage:worktree-containment] | secondary rate limit",
+      "kind": "github_rate_limited",
+      "signal": ""
+    },
+    {
       "input": "[stage:worktree-containment] | [pr-merge-unmerged",
       "kind": "pr_merge_unmerged",
       "signal": ""
@@ -4759,6 +5114,11 @@
       "input": "[not-pipeline-actionable] | github-network-outage",
       "kind": "github_network_outage",
       "signal": "github_network_outage"
+    },
+    {
+      "input": "[not-pipeline-actionable] | secondary rate limit",
+      "kind": "github_rate_limited",
+      "signal": ""
     },
     {
       "input": "[not-pipeline-actionable] | [pr-merge-unmerged",
@@ -4951,6 +5311,11 @@
       "signal": "github_network_outage"
     },
     {
+      "input": "[dev-produced-no-changes] | secondary rate limit",
+      "kind": "github_rate_limited",
+      "signal": ""
+    },
+    {
       "input": "[dev-produced-no-changes] | [pr-merge-unmerged",
       "kind": "pr_merge_unmerged",
       "signal": ""
@@ -5139,6 +5504,11 @@
       "input": "[dev-handoff-missing] | github-network-outage",
       "kind": "github_network_outage",
       "signal": "github_network_outage"
+    },
+    {
+      "input": "[dev-handoff-missing] | secondary rate limit",
+      "kind": "github_rate_limited",
+      "signal": ""
     },
     {
       "input": "[dev-handoff-missing] | [pr-merge-unmerged",
@@ -5331,6 +5701,11 @@
       "signal": "github_network_outage"
     },
     {
+      "input": "premature turn end | secondary rate limit",
+      "kind": "github_rate_limited",
+      "signal": ""
+    },
+    {
       "input": "premature turn end | [pr-merge-unmerged",
       "kind": "pr_merge_unmerged",
       "signal": ""
@@ -5519,6 +5894,11 @@
       "input": "worktree_uncommitted | github-network-outage",
       "kind": "github_network_outage",
       "signal": "github_network_outage"
+    },
+    {
+      "input": "worktree_uncommitted | secondary rate limit",
+      "kind": "github_rate_limited",
+      "signal": ""
     },
     {
       "input": "worktree_uncommitted | [pr-merge-unmerged",
@@ -5711,6 +6091,11 @@
       "signal": "github_network_outage"
     },
     {
+      "input": "budget_ceiling_hit | secondary rate limit",
+      "kind": "github_rate_limited",
+      "signal": ""
+    },
+    {
       "input": "budget_ceiling_hit | [pr-merge-unmerged",
       "kind": "pr_merge_unmerged",
       "signal": ""
@@ -5899,6 +6284,11 @@
       "input": "[runaway-progress-exceeded] | github-network-outage",
       "kind": "github_network_outage",
       "signal": "github_network_outage"
+    },
+    {
+      "input": "[runaway-progress-exceeded] | secondary rate limit",
+      "kind": "github_rate_limited",
+      "signal": ""
     },
     {
       "input": "[runaway-progress-exceeded] | [pr-merge-unmerged",
@@ -6091,6 +6481,11 @@
       "signal": "github_network_outage"
     },
     {
+      "input": "[runaway-ceiling-exceeded] | secondary rate limit",
+      "kind": "github_rate_limited",
+      "signal": ""
+    },
+    {
       "input": "[runaway-ceiling-exceeded] | [pr-merge-unmerged",
       "kind": "pr_merge_unmerged",
       "signal": ""
@@ -6279,6 +6674,11 @@
       "input": "[cost-cap-exceeded] | github-network-outage",
       "kind": "github_network_outage",
       "signal": "github_network_outage"
+    },
+    {
+      "input": "[cost-cap-exceeded] | secondary rate limit",
+      "kind": "github_rate_limited",
+      "signal": ""
     },
     {
       "input": "[cost-cap-exceeded] | [pr-merge-unmerged",
@@ -6471,6 +6871,11 @@
       "signal": "github_network_outage"
     },
     {
+      "input": "stage-no-output-timeout | secondary rate limit",
+      "kind": "github_rate_limited",
+      "signal": ""
+    },
+    {
       "input": "stage-no-output-timeout | [pr-merge-unmerged",
       "kind": "pr_merge_unmerged",
       "signal": ""
@@ -6659,6 +7064,11 @@
       "input": "[stall-killed] | github-network-outage",
       "kind": "github_network_outage",
       "signal": "github_network_outage"
+    },
+    {
+      "input": "[stall-killed] | secondary rate limit",
+      "kind": "github_rate_limited",
+      "signal": ""
     },
     {
       "input": "[stall-killed] | [pr-merge-unmerged",
@@ -6851,6 +7261,11 @@
       "signal": "github_network_outage"
     },
     {
+      "input": "pipeline_budget_exceeded | secondary rate limit",
+      "kind": "github_rate_limited",
+      "signal": ""
+    },
+    {
       "input": "pipeline_budget_exceeded | [pr-merge-unmerged",
       "kind": "pr_merge_unmerged",
       "signal": ""
@@ -7039,6 +7454,11 @@
       "input": "schema validation | github-network-outage",
       "kind": "github_network_outage",
       "signal": "github_network_outage"
+    },
+    {
+      "input": "schema validation | secondary rate limit",
+      "kind": "github_rate_limited",
+      "signal": ""
     },
     {
       "input": "schema validation | [pr-merge-unmerged",
@@ -7231,6 +7651,11 @@
       "signal": "github_network_outage"
     },
     {
+      "input": "[no-changes-produced] | secondary rate limit",
+      "kind": "github_rate_limited",
+      "signal": ""
+    },
+    {
       "input": "[no-changes-produced] | [pr-merge-unmerged",
       "kind": "pr_merge_unmerged",
       "signal": ""
@@ -7419,6 +7844,11 @@
       "input": "[validation-failed] | github-network-outage",
       "kind": "github_network_outage",
       "signal": "github_network_outage"
+    },
+    {
+      "input": "[validation-failed] | secondary rate limit",
+      "kind": "github_rate_limited",
+      "signal": ""
     },
     {
       "input": "[validation-failed] | [pr-merge-unmerged",
@@ -7611,6 +8041,11 @@
       "signal": "github_network_outage"
     },
     {
+      "input": "[validation-inconclusive] | secondary rate limit",
+      "kind": "github_rate_limited",
+      "signal": ""
+    },
+    {
       "input": "[validation-inconclusive] | [pr-merge-unmerged",
       "kind": "pr_merge_unmerged",
       "signal": ""
@@ -7799,6 +8234,11 @@
       "input": "[branch-forked] | github-network-outage",
       "kind": "github_network_outage",
       "signal": "github_network_outage"
+    },
+    {
+      "input": "[branch-forked] | secondary rate limit",
+      "kind": "github_rate_limited",
+      "signal": ""
     },
     {
       "input": "[branch-forked] | [pr-merge-unmerged",
@@ -7991,6 +8431,11 @@
       "signal": "github_network_outage"
     },
     {
+      "input": "[commit-orphaned] | secondary rate limit",
+      "kind": "github_rate_limited",
+      "signal": ""
+    },
+    {
       "input": "[commit-orphaned] | [pr-merge-unmerged",
       "kind": "pr_merge_unmerged",
       "signal": ""
@@ -8179,6 +8624,11 @@
       "input": "[permission-denied] | github-network-outage",
       "kind": "github_network_outage",
       "signal": "github_network_outage"
+    },
+    {
+      "input": "[permission-denied] | secondary rate limit",
+      "kind": "github_rate_limited",
+      "signal": ""
     },
     {
       "input": "[permission-denied] | [pr-merge-unmerged",
@@ -8371,6 +8821,11 @@
       "signal": "github_network_outage"
     },
     {
+      "input": "stage_context_unreadable | secondary rate limit",
+      "kind": "github_rate_limited",
+      "signal": ""
+    },
+    {
       "input": "stage_context_unreadable | [pr-merge-unmerged",
       "kind": "pr_merge_unmerged",
       "signal": ""
@@ -8559,6 +9014,11 @@
       "input": "dev_build_verification_missing | github-network-outage",
       "kind": "github_network_outage",
       "signal": "github_network_outage"
+    },
+    {
+      "input": "dev_build_verification_missing | secondary rate limit",
+      "kind": "github_rate_limited",
+      "signal": ""
     },
     {
       "input": "dev_build_verification_missing | [pr-merge-unmerged",
@@ -8751,6 +9211,11 @@
       "signal": "github_network_outage"
     },
     {
+      "input": "dev_build_verification_failed | secondary rate limit",
+      "kind": "github_rate_limited",
+      "signal": ""
+    },
+    {
       "input": "dev_build_verification_failed | [pr-merge-unmerged",
       "kind": "pr_merge_unmerged",
       "signal": ""
@@ -8939,6 +9404,11 @@
       "input": "dev_tests_failed | github-network-outage",
       "kind": "github_network_outage",
       "signal": "github_network_outage"
+    },
+    {
+      "input": "dev_tests_failed | secondary rate limit",
+      "kind": "github_rate_limited",
+      "signal": ""
     },
     {
       "input": "dev_tests_failed | [pr-merge-unmerged",
@@ -9131,6 +9601,11 @@
       "signal": "github_network_outage"
     },
     {
+      "input": "pr_merge_lookup_failed | secondary rate limit",
+      "kind": "github_rate_limited",
+      "signal": ""
+    },
+    {
       "input": "pr_merge_lookup_failed | [pr-merge-unmerged",
       "kind": "pr_merge_unmerged",
       "signal": ""
@@ -9319,6 +9794,11 @@
       "input": "subagent crash | github-network-outage",
       "kind": "github_network_outage",
       "signal": "github_network_outage"
+    },
+    {
+      "input": "subagent crash | secondary rate limit",
+      "kind": "github_rate_limited",
+      "signal": ""
     },
     {
       "input": "subagent crash | [pr-merge-unmerged",
