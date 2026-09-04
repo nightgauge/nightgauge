@@ -813,6 +813,22 @@ export class PipelineOrchestrator {
   }
 
   /**
+   * Whether the pipeline is parked on an approval gate right now (#1423).
+   *
+   * `approve()`, `reject()` and `skip()` are all SILENT NO-OPS when the gate is
+   * not armed — they check `approvalResolver` and return. So a caller that acts
+   * before the gate exists gets no error and no effect, and the run simply
+   * never continues. There was no way to ask, which left every driver of this
+   * API — the tests included — inferring it from timing.
+   *
+   * `getCurrentStage()` is NOT a substitute: it is set before the gate arms, so
+   * polling it still races.
+   */
+  isAwaitingApproval(): boolean {
+    return this.approvalResolver !== null;
+  }
+
+  /**
    * Wait for user approval
    */
   private waitForApproval(): Promise<boolean> {

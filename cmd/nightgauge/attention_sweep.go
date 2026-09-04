@@ -17,7 +17,6 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -270,7 +269,7 @@ func attentionAckCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			req, err := attention.New(root).Acknowledge(args[0], attentionActor(actor))
+			req, err := attention.New(root).Acknowledge(args[0], attentionActor(actor, root))
 			if err != nil {
 				return err
 			}
@@ -304,7 +303,7 @@ The card stays in the inbox at its severity. Muting is not resolving.`,
 			if err != nil {
 				return err
 			}
-			req, err := attention.New(root).Mute(args[0], attentionActor(actor))
+			req, err := attention.New(root).Mute(args[0], attentionActor(actor, root))
 			if err != nil {
 				return err
 			}
@@ -336,7 +335,7 @@ func attentionUnmuteCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			req, err := attention.New(root).Unmute(args[0], attentionActor(actor))
+			req, err := attention.New(root).Unmute(args[0], attentionActor(actor, root))
 			if err != nil {
 				return err
 			}
@@ -349,14 +348,36 @@ func attentionUnmuteCmd() *cobra.Command {
 	return cmd
 }
 
-// attentionActor falls back to the OS user so a local CLI action is still
-// attributable in the audit trail.
-func attentionActor(actor string) string {
-	if actor != "" {
+// attentionActor resolves who is acting, for the audit trail:
+// --actor, then the configured GitHub login, then the honest "cli".
+//
+// $USER WAS THE SECOND RUNG AND HAS BEEN REMOVED (#1418). Its doc comment said
+// it kept a local CLI action "attributable", and that was the wrong way round:
+// a macOS account name is an identity on exactly one machine and resolves to
+// nobody anywhere else — including on the platform, which mirrors this field
+// and renders it on other surfaces. It produced two spellings of one human in
+// the audit trail on this machine (23 rows under the GitHub login, 4 under the
+// OS name), and only one of them names an account that exists.
+//
+// "cli" is honest about being unattributed. An OS username is DISHONEST: it
+// looks like an identity and is not one. Same argument #1405 used for refusing
+// an empty actor rather than inventing a name, one rung further out — which is
+// why $USER is dropped rather than demoted. Kept as a middle rung it would
+// simply recreate the ambiguity on any machine where the two differ.
+//
+// THE TERMINAL RUNG IS NON-EMPTY BY CONSTRUCTION, and that is load-bearing:
+// #1405 refuses an empty actor at the store boundary, so a chain that could
+// yield "" would fail the resolve outright rather than record a poor name.
+func attentionActor(actor, workspaceRoot string) string {
+	if strings.TrimSpace(actor) != "" {
 		return actor
 	}
-	if u := os.Getenv("USER"); u != "" {
-		return u
+	// Best-effort: an unreadable or absent config is not a reason to fail an
+	// operator action, and the "cli" rung below is always available.
+	if cfg, err := config.Load(workspaceRoot); err == nil && cfg != nil {
+		if u := strings.TrimSpace(cfg.GitHubUser); u != "" {
+			return u
+		}
 	}
 	return "cli"
 }

@@ -608,6 +608,35 @@ func (s *Store) Resolve(ctx context.Context, id, optionID, actor, steerText, not
 		mu.Unlock()
 		return ResolveResult{}, err
 	}
+	// THE STEER MUST BE ON DISK BEFORE THE VERB RUNS (#1410).
+	//
+	// A verb that re-dispatches the issue starts a run that reads
+	// feedback-{N}.json at stage start. Writing the steer after the verb — and
+	// after the unlock, as this did — races the run against the note it was
+	// supposed to carry, and a steer that silently fails to arrive is
+	// indistinguishable from one that worked.
+	//
+	// Latent until an option re-dispatches, which is exactly why it is fixed
+	// now: at that point the bug would be attributed to the new option rather
+	// than to the ordering that was always wrong.
+	//
+	// INSIDE THE LOCK, and that is a deliberate narrowing of the writer's
+	// contract. It was outside because an injected writer "may touch GitHub /
+	// the scheduler / a different store". The alternative — release, write,
+	// re-acquire — reintroduces the compare-and-swap-after-reacquire the design
+	// avoids and breaks exactly-once verb execution, which is the stronger
+	// property. So the contract is now stated rather than assumed: a steer
+	// writer runs under the per-directory mutex and must not block
+	// indefinitely. Both writers wired today (autonomous.go and the attention
+	// CLI) are WriteOperatorSteer, a local file write.
+	var steerErr error
+	s.listenerMu.Lock()
+	steer := s.steerWriter
+	s.listenerMu.Unlock()
+	if steerText != "" && steer != nil {
+		steerErr = steer(req, steerText)
+	}
+
 	if exec != nil {
 		if verr := exec.ExecuteVerb(ctx, req, opt); verr != nil {
 			mu.Unlock()
@@ -637,16 +666,9 @@ func (s *Store) Resolve(ctx context.Context, id, optionID, actor, steerText, not
 	}, req)
 	mu.Unlock()
 
-	// The steer write runs OUTSIDE the lock: it may touch GitHub / the
-	// scheduler / a different store, and must not hold the per-dir mutex.
-	res := ResolveResult{Request: req, Option: opt}
-	s.listenerMu.Lock()
-	steer := s.steerWriter
-	s.listenerMu.Unlock()
-	if steerText != "" && steer != nil {
-		res.SteerErr = steer(req, steerText)
-	}
-	return res, nil
+	// The steer was written above, before the verb (#1410); its error is
+	// reported here unchanged, so callers that inspect SteerErr are unaffected.
+	return ResolveResult{Request: req, Option: opt, SteerErr: steerErr}, nil
 }
 
 // SweepExpired transitions every open-ish request past its expires_at to

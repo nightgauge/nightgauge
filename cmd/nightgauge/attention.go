@@ -313,7 +313,7 @@ func attentionResolveCmd() *cobra.Command {
 				callErr := client.Call(ctx, "attention.resolve", ipc.AttentionResolveParams{
 					ID:        args[0],
 					OptionID:  option,
-					Actor:     actor,
+					Actor:     attentionActor(actor, root),
 					SteerText: steer,
 					Note:      note,
 				}, &res)
@@ -334,9 +334,25 @@ func attentionResolveCmd() *cobra.Command {
 			// No daemon reachable — fall back to the local, file-based path.
 			store := attention.New(root)
 			store.SetSteerWriter(func(req *attention.DecisionRequest, steerText string) error {
+				// SCOPE NOTE (#1407). The daemon path resolves the per-repo run
+				// root, because the reader (runPipeline) does. This fallback
+				// cannot: resolveRunRoot is a Scheduler method and there is no
+				// scheduler here — that is the definition of this branch.
+				//
+				// `root` is the workspace the CLI was pointed at, so on a
+				// multi-repo workspace this can still write to a root the run
+				// does not read. It is bounded: this path only runs when no
+				// daemon is reachable, and the daemon is what the extension and
+				// the autonomous scheduler both use. Named here rather than
+				// silently left, because a steer that goes nowhere looks
+				// identical to one that worked.
 				return orchestrator.WriteOperatorSteer(root, req.Context.Issue, steerText, req.Context.Stage)
 			})
-			res, err := store.Resolve(ctx, args[0], option, actor, steer, note, cliVerbExecutor{workspaceRoot: root})
+			// Resolved through attentionActor, not passed raw (#1418). #1405 refuses
+			// an empty actor at the store boundary, so a bare
+			// `attention resolve <id> --option X` — no --actor — failed outright
+			// instead of recording who did it. That regression is this call.
+			res, err := store.Resolve(ctx, args[0], option, attentionActor(actor, root), steer, note, cliVerbExecutor{workspaceRoot: root})
 			if err != nil {
 				return err
 			}
