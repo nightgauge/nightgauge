@@ -274,8 +274,12 @@ func (r *DeterministicRunner) Run(ctx context.Context, issueNumber int, _ string
 		r.gh = wb.withWorkdir(workdir)
 	}
 
+	ph := newPhaseEmitter(ctx, prMergePhases)
+
+	ph.start("read-pr-context")
 	prNumber, err := r.prContextRead(workdir, issueNumber)
 	if err != nil {
+		ph.failInFlight()
 		// No pr-{N}.json or unreadable. Punt — the LLM skill path can decide
 		// whether to author the PR or fail the run. Don't silently treat as
 		// merged: a missing PR context is structurally unexpected at this
@@ -286,9 +290,13 @@ func (r *DeterministicRunner) Run(ctx context.Context, issueNumber int, _ string
 		}, nil)
 	}
 
+	ph.complete("read-pr-context")
+
 	// Pre-flight + eventual-consistency polling.
+	ph.start("ci-gate")
 	snap, fetchErr := r.fetchWithPolling(ctx, prNumber)
 	if fetchErr != nil {
+		ph.failInFlight()
 		return finish(PRMergeResult{
 			Path:     PathPunt,
 			PRNumber: prNumber,
@@ -318,6 +326,7 @@ func (r *DeterministicRunner) Run(ctx context.Context, issueNumber int, _ string
 	if !decision.ShouldMerge && MergeBlockedByPendingCI(snap) {
 		waited, outcome, waitErr := r.waitForCleanMergeState(ctx, prNumber, snap)
 		if waitErr != nil {
+			ph.failInFlight()
 			return finish(PRMergeResult{
 				Path:     PathPunt,
 				PRNumber: prNumber,
@@ -328,6 +337,7 @@ func (r *DeterministicRunner) Run(ctx context.Context, issueNumber int, _ string
 		snap = waited
 		switch outcome {
 		case ciWaitTimedOut:
+			ph.failInFlight()
 			return finish(PRMergeResult{
 				Path:     PathPunt,
 				PRNumber: prNumber,
@@ -335,6 +345,7 @@ func (r *DeterministicRunner) Run(ctx context.Context, issueNumber int, _ string
 				Reason:   ReasonCIWaitTimeout,
 			}, nil)
 		case ciWaitNoChecksCreated:
+			ph.failInFlight()
 			return finish(PRMergeResult{
 				Path:     PathPunt,
 				PRNumber: prNumber,
@@ -344,7 +355,12 @@ func (r *DeterministicRunner) Run(ctx context.Context, issueNumber int, _ string
 		}
 		decision = Decide(snap)
 	}
+	ph.complete("ci-gate")
 
+	// freshness-check is the merge-state verdict itself: whether the snapshot
+	// the runner is holding is still clean, unconflicted and review-satisfied
+	// after whatever waiting happened above.
+	ph.start("freshness-check")
 	if !decision.ShouldMerge {
 		// Already merged or punt path — no merge call.
 		path := PathPunt
@@ -352,6 +368,14 @@ func (r *DeterministicRunner) Run(ctx context.Context, issueNumber int, _ string
 		if snap.State == "MERGED" {
 			path = PathMerged
 			headRef = snap.HeadRefName
+			// Someone else merged it. The verdict was reached, so
+			// freshness-check completed; `merge` is a phase this run decided
+			// not to perform, which is what `skipped` means.
+			ph.complete("freshness-check")
+			ph.skip("merge")
+			ph.skipOffPath()
+		} else {
+			ph.failInFlight()
 		}
 		return finish(PRMergeResult{
 			Path:        path,
@@ -370,6 +394,11 @@ func (r *DeterministicRunner) Run(ctx context.Context, issueNumber int, _ string
 	// A violation punts rather than erroring: the LLM path gets its turn and
 	// can repair the entry with `knowledge stamp`, which is a better outcome
 	// than failing the run outright. What it must not do is merge.
+	ph.complete("freshness-check")
+
+	// The conformance gate maps to no registry phase — the pr-merge skill has
+	// no knowledge gate of its own — so it runs between spans rather than
+	// being filed under a phase name it does not correspond to.
 	if r.knowledgeConformance != nil {
 		if conf, confErr := r.knowledgeConformance(workdir, issueNumber); confErr == nil && conf != nil && !conf.Valid {
 			return finish(PRMergeResult{
@@ -384,7 +413,9 @@ func (r *DeterministicRunner) Run(ctx context.Context, issueNumber int, _ string
 	// Issue the merge. Idempotent at the GitHub level: re-issuing on an
 	// already-merged PR returns a benign error which we tolerate (the
 	// re-poll below confirms MERGED).
+	ph.start("merge")
 	if mergeErr := r.gh.Merge(ctx, prNumber); mergeErr != nil {
+		ph.failInFlight()
 		if isRateLimitErr(mergeErr) {
 			return finish(PRMergeResult{
 				Path:     PathPunt,
@@ -404,6 +435,7 @@ func (r *DeterministicRunner) Run(ctx context.Context, issueNumber int, _ string
 	// Re-poll for MERGED with the same EC budget.
 	postSnap, postErr := r.fetchWithPolling(ctx, prNumber)
 	if postErr != nil {
+		ph.failInFlight()
 		// Merge call succeeded but post-verification failed — we cannot OBSERVE
 		// MERGED, so we must NOT self-report merged. Punt and let the canonical
 		// scheduler gate (verifyPRMerged) be the sole MERGED authority (#4070).
@@ -417,6 +449,11 @@ func (r *DeterministicRunner) Run(ctx context.Context, issueNumber int, _ string
 		}, nil)
 	}
 	if postSnap.State == "MERGED" {
+		ph.complete("merge")
+		// Only here — a merge this runner issued and then OBSERVED — is the
+		// stage terminal on the deterministic path, so only here may the
+		// LLM-only phases be recorded as a decision not to run (AC5).
+		ph.skipOffPath()
 		headRef := postSnap.HeadRefName
 		if headRef == "" {
 			// Some eventual-consistency windows return a leaner payload on the
@@ -438,6 +475,7 @@ func (r *DeterministicRunner) Run(ctx context.Context, issueNumber int, _ string
 	// the scheduler does not proceed to EvaluatePostMerge and close the issue
 	// on an unconfirmed merge. The autonomous scheduler will retry on the next
 	// tick when the PR's state becomes observable.
+	ph.failInFlight()
 	return finish(PRMergeResult{
 		Path:     PathPunt,
 		PRNumber: prNumber,

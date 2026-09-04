@@ -668,7 +668,12 @@ type Scheduler struct {
 	onStateChanged     func(repo string, issue int, runtime *state.RuntimeState)
 	onModelFallback    func(repo string, issue int, stage, fromModel, toModel, reason string)
 	onPhaseDetected    func(repo string, issue int, stage, name string, index, total int)
-	onScalingDecision  func(epicNumber int, decision ScalingDecision)
+	// onPhaseSettled is onPhaseDetected's terminal arm (#1247). A skill-driven
+	// stage only ever needed the start half here, because the extension owned
+	// the completion side; a deterministic stage has no extension in the loop,
+	// so without this the live view would watch phases open and never close.
+	onPhaseSettled    func(repo string, issue int, stage, name string, index, total int, status string)
+	onScalingDecision func(epicNumber int, decision ScalingDecision)
 
 	// activeStages tracks the cancel function for each currently-running
 	// per-issue stage context (Issue #3296). When the TS-side stall watchdog
@@ -3232,6 +3237,14 @@ func (s *Scheduler) fireModelFallback(repo string, issue int, stage state.Pipeli
 // OnPhaseDetected sets a callback invoked when a phase marker is detected in skill output.
 func (s *Scheduler) OnPhaseDetected(fn func(repo string, issue int, stage, name string, index, total int)) {
 	s.onPhaseDetected = fn
+}
+
+// OnPhaseSettled sets a callback invoked when a phase reaches a terminal
+// status ("complete", "failed", "skipped"). Wired by the IPC server to the
+// phase.complete / phase.fail / phase.skip events the extension already
+// consumes from the marker path.
+func (s *Scheduler) OnPhaseSettled(fn func(repo string, issue int, stage, name string, index, total int, status string)) {
+	s.onPhaseSettled = fn
 }
 
 // OnScalingDecision sets a callback invoked when the wave orchestrator makes a
@@ -8837,7 +8850,11 @@ func (s *Scheduler) tryDeterministicPRMerge(
 	// `missing-pr-context` and fall through to the LLM path every time. Mirrors the
 	// pr-create fix and stageWorkspace's documented contract.
 	stageWS := stageWorkspace(runtime, workspaceRoot)
-	detResult, detErr := s.prMergeRunner.Run(ctx, item.Number, item.Repo, stageWS)
+	// #1247: hand the runner a phase reporter so its waypoints reach the
+	// durable PhaseHistory and the live tree instead of the stage rendering
+	// 0/14 for its whole duration and 14/14 skipped on success.
+	phases := s.newDeterministicPhaseReporter(runtime, item.Repo, item.Number)
+	detResult, detErr := s.prMergeRunner.Run(pmstages.WithPhaseReporter(ctx, phases), item.Number, item.Repo, stageWS)
 	if detErr == nil && detResult.Reason == pmstages.ReasonRateLimited {
 		// Rate-limit punt → defer, do NOT run the LLM path. Leave execution_path
 		// unset: neither path produced a result this attempt; the post-cooldown
@@ -8867,7 +8884,18 @@ func (s *Scheduler) tryDeterministicPRMerge(
 				SchemaVersion: "1",
 			})
 		}
+		// post-merge-cleanup is a registry phase whose work lives HERE, not in
+		// the runner — so the runner deliberately neither claims nor skips it
+		// (phaseCaller in prMergePhases) and the owner of the teardown reports
+		// it.
+		if phases != nil {
+			idx, total := pmstages.PhasePosition("pr-merge", "post-merge-cleanup")
+			phases.PhaseStart(string(stage), "post-merge-cleanup", idx, total)
+		}
 		s.cleanupMergedRemoteBranch(item.Number, stageWS, detResult.HeadRefName)
+		if phases != nil {
+			phases.PhaseComplete(string(stage), "post-merge-cleanup")
+		}
 		return true, detResult.PRState, false
 	}
 
@@ -8954,7 +8982,9 @@ func (s *Scheduler) tryDeterministicPRCreate(
 	// forcing the expensive LLM fallback. stageWorkspace mirrors what the LLM path
 	// (line ~2874) and the post-condition gates already use for the same reason.
 	stageWS := stageWorkspace(runtime, workspaceRoot)
-	detResult, detErr := s.prCreateRunner.Run(ctx, item.Number, item.Repo, stageWS)
+	// #1247 — see tryDeterministicPRMerge.
+	phases := s.newDeterministicPhaseReporter(runtime, item.Repo, item.Number)
+	detResult, detErr := s.prCreateRunner.Run(pmstages.WithPhaseReporter(ctx, phases), item.Number, item.Repo, stageWS)
 	// The commit owner (#1179) runs inside the runner, before its create/punt
 	// decision, so its outcome is reported on EVERY path — including the punt
 	// that the trivial route takes when routing skipped feature-validate.

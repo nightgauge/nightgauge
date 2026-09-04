@@ -506,11 +506,16 @@ func (r *DeterministicPRCreateRunner) Run(ctx context.Context, issueNumber int, 
 		return res, err
 	}
 
+	ph := newPhaseEmitter(ctx, prCreatePhases)
+
+	ph.start("load-context")
 	snap, err := r.readContext(workdir, issueNumber)
 	if err != nil {
+		ph.failInFlight()
 		return finish(PRCreateResult{Path: CreatePathPunt, Reason: ReasonContextInvalidJSON}, nil)
 	}
 	snap.IssueNumber = issueNumber
+	ph.complete("load-context")
 
 	// Own the commit BEFORE deciding anything (#1179). Placement is the whole
 	// fix: above DecideCreate so a punt (the trivial path punts with
@@ -519,23 +524,36 @@ func (r *DeterministicPRCreateRunner) Run(ctx context.Context, issueNumber int, 
 	// client-wiring check so a missing GitHub client cannot disable it.
 	commit = r.ensureWorkCommitted(ctx, workdir, snap)
 
+	// preflight-checks spans everything the runner must establish before it may
+	// open a PR: the create decision, that its clients are wired, that the repo
+	// is addressable, and that the branch is on the remote.
+	ph.start("preflight-checks")
+
 	decision := DecideCreate(snap)
 	if !decision.ShouldCreate {
+		ph.failInFlight()
 		return finish(PRCreateResult{Path: CreatePathPunt, Reason: decision.Reason}, nil)
 	}
 
 	if r.prClient == nil || r.git == nil {
+		ph.failInFlight()
 		return finish(PRCreateResult{Path: CreatePathPunt, Reason: ReasonClientUnavailable}, nil)
 	}
 
 	owner, repoName := splitOwnerRepo(repo)
 	if owner == "" || repoName == "" {
+		ph.failInFlight()
 		return finish(PRCreateResult{Path: CreatePathPunt, Reason: ReasonClientUnavailable}, nil)
 	}
 
 	// Re-use existing open PR for this branch if present (idempotency).
 	existing, listErr := r.prClient.ListOpenPRsForBranch(ctx, owner, repoName, snap.Branch)
 	if listErr == nil && len(existing) > 0 {
+		ph.complete("preflight-checks")
+		ph.skip("create-pr")
+		ph.start("verify-pr-created")
+		ph.complete("verify-pr-created")
+		ph.start("write-context")
 		title := RenderTitle(snap)
 		body := RenderBody(snap)
 		_ = r.writeContext(workdir, prContextPayload{
@@ -546,6 +564,8 @@ func (r *DeterministicPRCreateRunner) Run(ctx context.Context, issueNumber int, 
 			BaseBranch:    snap.BaseBranch,
 			KnowledgePath: snap.KnowledgePath,
 		})
+		ph.complete("write-context")
+		ph.skipOffPath()
 		return finish(PRCreateResult{
 			Path:     CreatePathCreated,
 			PRNumber: existing[0].Number,
@@ -567,14 +587,19 @@ func (r *DeterministicPRCreateRunner) Run(ctx context.Context, issueNumber int, 
 	if pushErr := r.git.PushBranch(ctx, workdir, snap.Branch); pushErr != nil {
 		exists, existsErr := r.git.RemoteBranchExists(ctx, workdir, snap.Branch)
 		if existsErr != nil || !exists {
+			ph.failInFlight()
 			return finish(PRCreateResult{Path: CreatePathPunt, Reason: fmt.Sprintf("%s: %s", ReasonPushFailed, truncateErr(pushErr, 200))}, nil)
 		}
 		// Branch already on origin — proceed to open the PR from it.
 		createReason = ReasonPushedRemoteExists
 	}
 
+	ph.complete("preflight-checks")
+
+	ph.start("create-pr")
 	repoID, idErr := r.prClient.GetRepoID(ctx, owner, repoName)
 	if idErr != nil {
+		ph.failInFlight()
 		return finish(PRCreateResult{Path: CreatePathPunt, Reason: fmt.Sprintf("%s: %s", ReasonCreateFailed, truncateErr(idErr, 200))}, nil)
 	}
 
@@ -582,12 +607,19 @@ func (r *DeterministicPRCreateRunner) Run(ctx context.Context, issueNumber int, 
 	body := RenderBody(snap)
 	pr, createErr := r.prClient.CreatePR(ctx, repoID, title, body, snap.Branch, snap.BaseBranch)
 	if createErr != nil {
+		ph.failInFlight()
 		return finish(PRCreateResult{Path: CreatePathPunt, Reason: fmt.Sprintf("%s: %s", ReasonCreateFailed, truncateErr(createErr, 200))}, nil)
 	}
+	ph.complete("create-pr")
+
+	ph.start("verify-pr-created")
 	if pr == nil || pr.Number <= 0 {
+		ph.failInFlight()
 		return finish(PRCreateResult{Path: CreatePathPunt, Reason: ReasonCreateFailed}, nil)
 	}
+	ph.complete("verify-pr-created")
 
+	ph.start("write-context")
 	if writeErr := r.writeContext(workdir, prContextPayload{
 		IssueNumber:   issueNumber,
 		PRNumber:      pr.Number,
@@ -596,6 +628,10 @@ func (r *DeterministicPRCreateRunner) Run(ctx context.Context, issueNumber int, 
 		BaseBranch:    snap.BaseBranch,
 		KnowledgePath: snap.KnowledgePath,
 	}); writeErr != nil {
+		// The PR exists, so the stage still succeeded deterministically — but
+		// pr-{N}.json did not land, so write-context failed and says so.
+		ph.failInFlight()
+		ph.skipOffPath()
 		return finish(PRCreateResult{
 			Path:     CreatePathCreated,
 			PRNumber: pr.Number,
@@ -605,6 +641,8 @@ func (r *DeterministicPRCreateRunner) Run(ctx context.Context, issueNumber int, 
 			Reason:   fmt.Sprintf("%s + context-write-warn: %s", createReason, truncateErr(writeErr, 200)),
 		}, nil)
 	}
+	ph.complete("write-context")
+	ph.skipOffPath()
 
 	return finish(PRCreateResult{
 		Path:     CreatePathCreated,

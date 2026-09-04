@@ -709,6 +709,29 @@ func (s *Server) initSchedulerCallbacks(sched *orchestrator.Scheduler) {
 			"total":       pTotal,
 		})
 	})
+	sched.OnPhaseSettled(func(cbRepo string, issue int, pStage, pName string, pIndex, pTotal int, status string) {
+		// The terminal arm of the scheduler's phase fan-out (#1247). Reuses the
+		// event names notifyPhaseTransition already publishes, so the extension
+		// consumes a deterministic stage's phases through exactly the same
+		// channel as a skill's markers — no second vocabulary to keep in sync.
+		event := map[string]string{
+			"complete": "phase.complete",
+			"failed":   "phase.fail",
+			"skipped":  "phase.skip",
+		}[status]
+		if event == "" {
+			return
+		}
+		s.Emit(event, map[string]interface{}{
+			"repo":        cbRepo,
+			"issueNumber": issue,
+			"runId":       sched.RunIDForIssue(issue),
+			"stage":       pStage,
+			"name":        pName,
+			"index":       pIndex,
+			"total":       pTotal,
+		})
+	})
 }
 
 // WithWorkspaceRoot sets the workspace root for git operations.
