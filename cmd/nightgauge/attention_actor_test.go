@@ -12,9 +12,14 @@ import (
 // $USER kept a local action "attributable". That is the wrong way round: a
 // macOS account name is an identity on exactly one machine and resolves to
 // nobody anywhere else, including on the platform, which mirrors this field.
-// It produced two spellings of one human in the audit trail on this machine —
-// 23 rows under the GitHub login, 4 under the OS name — and only one of them
-// names an account that exists.
+// On the machine where this was found it had produced two near-identical
+// spellings of one human in the audit trail — 23 rows under the GitHub login,
+// 4 under the OS name — and only one of them names an account that exists.
+//
+// The fixtures below are SYNTHETIC and differ by one character, which is the
+// property that matters. The real pair is a private identifier and belongs
+// nowhere in this tree; the publication-boundary guard caught the first draft
+// of this file for exactly that.
 
 func writeConfigWithUser(t *testing.T, root, user string) {
 	t.Helper()
@@ -42,17 +47,17 @@ func TestAttentionActor_PrefersTheExplicitFlag(t *testing.T) {
 
 func TestAttentionActor_FallsBackToTheConfiguredGitHubLogin(t *testing.T) {
 	root := t.TempDir()
-	writeConfigWithUser(t, root, "markamccorkle")
+	writeConfigWithUser(t, root, "octoacat")
 
 	// $USER is deliberately set to the OTHER spelling. The whole point is that
 	// it must be ignored, not merely ranked below.
-	t.Setenv("USER", "markmccorkle")
+	t.Setenv("USER", "octocat")
 
 	got := attentionActor("", root)
-	if got != "markamccorkle" {
+	if got != "octoacat" {
 		t.Errorf("attentionActor = %q, want the configured GitHub login", got)
 	}
-	if got == "markmccorkle" {
+	if got == "octocat" {
 		t.Error("the OS username reached the audit trail — it resolves to no account off this machine")
 	}
 }

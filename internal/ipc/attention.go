@@ -44,24 +44,38 @@ type AttentionAcknowledgeResult struct {
 	Ok bool `json:"ok"`
 }
 
-// attentionStore returns the shared DecisionRequest store, or nil when no
-// autonomous scheduler is attached (the store lives on it).
-// ipcAttentionActor names who resolved a card when the payload does not (#1405).
+// Surfaces a resolve can arrive from, used as the fallback actor label when the
+// payload does not name one. The label must name the surface that ACTUALLY
+// acted: "vscode" on a relayed platform resolve would be a false attribution,
+// dishonest in exactly the way `$USER` was (#1418).
+const (
+	actorSurfaceVSCode   = "vscode"
+	actorSurfacePlatform = "platform"
+)
+
+// ipcAttentionActor names who resolved a card when the payload does not
+// (#1405), labelled by the surface the request arrived from (#1418).
 //
 // The store refuses an empty actor because the card contract requires one and
 // it cannot know who the operator is. This layer does know the SHAPE of the
-// caller — a request over the extension's IPC socket is an operator acting in
-// VS Code — so it supplies that rather than letting an operator's click fail.
+// caller, so it supplies that rather than letting an operator's click fail.
 //
-// Mirrors the CLI's attentionActor(), which has defaulted to $USER then "cli"
-// since the verb was written; the IPC path simply never got the same treatment,
-// which is how one card was persisted with actor="".
-func ipcAttentionActor(actor string) string {
+// EVERY Store.Resolve / Store.Acknowledge CALLER MUST GO THROUGH A FALLBACK
+// LIKE THIS ONE, and #1418 exists because three of the four did.
+// ApplyRelayedResolve passed its actor raw while its two siblings in this same
+// file did not — and that one is the worst of the four to miss: a CLI resolve
+// with an empty actor fails loudly, whereas a relayed one has its error acked
+// as consumed and never retried (#1421), so the dashboard reports success and
+// the card stays open. Loud and silent versions of one defect.
+func ipcAttentionActor(actor, surface string) string {
 	if strings.TrimSpace(actor) != "" {
 		return actor
 	}
-	return "vscode"
+	return surface
 }
+
+// attentionStore returns the shared DecisionRequest store, or nil when no
+// autonomous scheduler is attached (the store lives on it).
 
 func (s *Server) attentionStore() *attention.Store {
 	if s.autonomousScheduler == nil {
@@ -108,7 +122,7 @@ func (s *Server) handleAttentionResolve(ctx context.Context, raw json.RawMessage
 	if store == nil {
 		return nil, fmt.Errorf("attention.resolve: attention store not configured")
 	}
-	res, err := store.Resolve(ctx, p.ID, p.OptionID, ipcAttentionActor(p.Actor), p.SteerText, p.Note, s)
+	res, err := store.Resolve(ctx, p.ID, p.OptionID, ipcAttentionActor(p.Actor, actorSurfaceVSCode), p.SteerText, p.Note, s)
 	if err != nil {
 		log.Printf("attention.resolve: rejected id=%s option=%s: %v", p.ID, p.OptionID, err)
 		return nil, fmt.Errorf("attention.resolve: could not resolve request")
@@ -134,7 +148,7 @@ func (s *Server) ApplyRelayedResolve(ctx context.Context, requestID, optionID, a
 	if store == nil {
 		return platform.AttentionResolveOutcome{}, fmt.Errorf("attention store not configured")
 	}
-	res, err := store.Resolve(ctx, requestID, optionID, actor, steerText, "", s)
+	res, err := store.Resolve(ctx, requestID, optionID, ipcAttentionActor(actor, actorSurfacePlatform), steerText, "", s)
 	if err != nil {
 		return platform.AttentionResolveOutcome{}, err
 	}
@@ -157,7 +171,7 @@ func (s *Server) handleAttentionAcknowledge(_ context.Context, raw json.RawMessa
 	if store == nil {
 		return nil, fmt.Errorf("attention.acknowledge: attention store not configured")
 	}
-	if _, err := store.Acknowledge(p.ID, ipcAttentionActor(p.Actor)); err != nil {
+	if _, err := store.Acknowledge(p.ID, ipcAttentionActor(p.Actor, actorSurfaceVSCode)); err != nil {
 		return nil, fmt.Errorf("attention.acknowledge: %w", err)
 	}
 	return AttentionAcknowledgeResult{Ok: true}, nil
