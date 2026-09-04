@@ -60,6 +60,10 @@ func fastWait(polls, grace int) MainCheckWait {
 		PollInterval: time.Second,
 		NoCheckGrace: time.Duration(grace-1) * time.Second,
 		Sleep:        noSleep,
+		// Swallow the wait's progress lines (#1414) so the existing cases keep
+		// their quiet output. TestVerifyMergeCommit_TheWaitReportsItsProgress
+		// supplies its own recorder.
+		Progress: func(string) {},
 	}
 }
 
@@ -593,4 +597,79 @@ func (o *orderedReader) GetIndividualCheckRuns(ctx context.Context, owner, repo,
 
 func (o *orderedReader) GetRequiredCheckNames(ctx context.Context, owner, repo, branch string) ([]string, error) {
 	return o.inner.GetRequiredCheckNames(ctx, owner, repo, branch)
+}
+
+// TestVerifyMergeCommit_TheWaitReportsItsProgress is #1414.
+//
+// The wait is bounded, but it printed NOTHING until it finished — so from
+// outside the process it was a silent block at ~0.1s CPU for up to twenty
+// minutes, indistinguishable from a hang. Two sessions independently read it
+// that way; one reaped it by PID after twelve minutes and wrote "the hook hangs
+// when no daemon is reachable" into a handoff. That diagnosis is wrong (with
+// zero daemons the same binary returns in seconds once checks have concluded),
+// but a silent wait is what made it the reasonable conclusion.
+func TestVerifyMergeCommit_TheWaitReportsItsProgress(t *testing.T) {
+	// Two frames: still-running, then green. So the loop sleeps exactly once
+	// and must have said so before it did.
+	reader := &scriptedChecks{frames: [][]forgetypes.CheckDetail{
+		{run("build", "in_progress", ""), run("lint", "completed", "success")},
+		{run("build", "completed", "success"), run("lint", "completed", "success")},
+	}}
+
+	var lines []string
+	w := fastWait(4, 2)
+	w.Progress = func(line string) { lines = append(lines, line) }
+
+	res := VerifyMergeCommit(context.Background(), reader, "o", "r", "main", "abc1234def", w)
+	if res.Verdict != MainChecksGreen {
+		t.Fatalf("setup: verdict = %v, want green", res.Verdict)
+	}
+
+	if len(lines) == 0 {
+		t.Fatal("the wait emitted nothing before blocking — a silent bounded wait is " +
+			"indistinguishable from a hang, which is how two sessions came to reap it")
+	}
+
+	joined := strings.Join(lines, "\n")
+
+	// The bound must be stated BEFORE blocking, not implied by the poll count
+	// in the final summary.
+	if !strings.Contains(lines[0], "up to") {
+		t.Errorf("the first line does not state the bound: %q", lines[0])
+	}
+	// And the escape hatch must be named where it is read. `--main-check-wait 0`
+	// already existed; neither session that reaped a waiting hook had found it,
+	// which is the difference between a bounded wait and one people kill.
+	if !strings.Contains(lines[0], "--main-check-wait") {
+		t.Errorf("the first line does not name the way to skip the wait: %q", lines[0])
+	}
+	// And each poll that will sleep says what it is waiting on.
+	if !strings.Contains(joined, "still running") {
+		t.Errorf("no line reports what is still pending:\n%s", joined)
+	}
+	if !strings.Contains(joined, "abc1234") {
+		t.Errorf("no line names the commit being waited on:\n%s", joined)
+	}
+}
+
+// TestVerifyMergeCommit_NoPerPollNoiseWhenItConcludesImmediately: a wait that
+// finishes on its first read must not narrate a wait that did not happen.
+func TestVerifyMergeCommit_NoPerPollNoiseWhenItConcludesImmediately(t *testing.T) {
+	reader := &scriptedChecks{frames: [][]forgetypes.CheckDetail{
+		{run("build", "completed", "success")},
+	}}
+
+	var lines []string
+	w := fastWait(4, 2)
+	w.Progress = func(line string) { lines = append(lines, line) }
+
+	if res := VerifyMergeCommit(context.Background(), reader, "o", "r", "main", "abc1234def", w); res.Verdict != MainChecksGreen {
+		t.Fatalf("setup: verdict = %v, want green", res.Verdict)
+	}
+
+	for _, l := range lines {
+		if strings.Contains(l, "poll ") {
+			t.Errorf("a wait that concluded on its first read narrated a poll: %q", l)
+		}
+	}
 }

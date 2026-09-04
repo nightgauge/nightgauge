@@ -31,6 +31,7 @@ package hooks
 import (
 	"context"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -62,6 +63,20 @@ type MainCheckWait struct {
 	NoCheckGrace time.Duration
 	// Sleep overrides the inter-poll sleep (tests). Nil sleeps on a timer.
 	Sleep func(ctx context.Context, d time.Duration) error
+	// Progress receives one line per poll while the wait is still going.
+	//
+	// WHY THIS EXISTS (#1414). The wait is bounded — maxPolls below — but it
+	// printed nothing until it finished, so from outside the process it was a
+	// silent block at ~0.1s CPU for up to twenty minutes. Two sessions
+	// independently read that as a hang; one reaped it by PID after twelve
+	// minutes and recorded "the hook hangs when no daemon is reachable" in a
+	// handoff. That is wrong — with zero daemons running the same binary
+	// returns in seconds against a merge commit whose checks have concluded —
+	// but a silent wait is indistinguishable from a stuck one, so the wrong
+	// diagnosis was the reasonable one to reach.
+	//
+	// Nil sends progress to stderr. Tests substitute a recorder.
+	Progress func(line string)
 }
 
 const (
@@ -91,6 +106,17 @@ func (w MainCheckWait) pollInterval() time.Duration {
 		return w.PollInterval
 	}
 	return DefaultMainCheckPollInterval
+}
+
+// progress reports one line of wait progress. Stderr by default: stdout is
+// reserved for the hook's own machine-readable output.
+func (w MainCheckWait) progress(format string, args ...any) {
+	line := fmt.Sprintf(format, args...)
+	if w.Progress != nil {
+		w.Progress(line)
+		return
+	}
+	fmt.Fprintln(os.Stderr, line)
 }
 
 func (w MainCheckWait) noCheckGrace() time.Duration {
@@ -206,6 +232,16 @@ func VerifyMergeCommit(ctx context.Context, reader MainCheckReader, owner, repo,
 		gracePolls = maxPolls
 	}
 
+	// State the bound BEFORE blocking. "It is waiting and here is for how long"
+	// is the difference between a legible wait and an apparent hang.
+	// Names the escape hatch, because this line is read at exactly the moment
+	// someone is deciding whether to kill the process. `--main-check-wait 0`
+	// already existed and neither session that reaped one had found it — a
+	// bounded wait nobody knows how to skip is, in practice, an unbounded one.
+	wait.progress("Post-merge: waiting for %s@%s checks — up to %d poll(s) every %s (%s budget; "+
+		"--main-check-wait 0 records the verdict from one immediate read instead)",
+		repo, shortSHA(sha), maxPolls, interval, wait.Timeout)
+
 	var last []forgetypes.CheckDetail
 	for {
 		runs, err := reader.GetIndividualCheckRuns(ctx, owner, repo, sha)
@@ -246,6 +282,15 @@ func VerifyMergeCommit(ctx context.Context, reader MainCheckReader, owner, repo,
 			// budget; the verdict is still "nothing observed".
 			res.Verdict = MainChecksNone
 			return res
+		}
+		// Emitted only when another sleep follows, so a wait that concludes on
+		// its first read stays a single summary line.
+		if total == 0 {
+			wait.progress("Post-merge: poll %d/%d — no check runs on %s yet",
+				res.Polls, maxPolls, shortSHA(sha))
+		} else {
+			wait.progress("Post-merge: poll %d/%d — %d of %d check(s) still running on %s",
+				res.Polls, maxPolls, pending, total, shortSHA(sha))
 		}
 		if err := wait.sleep(ctx, interval); err != nil {
 			res.Verdict = MainChecksError
