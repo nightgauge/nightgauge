@@ -21,6 +21,13 @@
  * unit-tests the extracted helper with the same shape of failure: a probe
  * that never resolves, under a tiny injected budget, so the timeout is
  * deterministic instead of CI-load-dependent.
+ *
+ * The real call site (`webviews.suite.ts`) never passes a `log` argument, so
+ * the two cases above — both of which inject a spy — never exercise the
+ * arm that actually runs in CI: the `console.log` default. The third case
+ * below calls the helper the same way the suite does (four arguments) and
+ * spies on `console.log` itself, so the shipped configuration, not just the
+ * extracted unit, is under test.
  */
 import { describe, expect, it, vi } from "vitest";
 import { waitForRenderThenDispose } from "../vscode-host/fixture.js";
@@ -63,5 +70,26 @@ describe("waitForRenderThenDispose", () => {
     // in a form the orchestrator can grep out of raw CI output.
     expect(log).toHaveBeenCalledTimes(1);
     expect(log.mock.calls[0][0]).toMatch(/^render-ms Dashboard \d+$/);
+  });
+
+  it("logs through console.log by default when called with no log argument, as the suite does", async () => {
+    const dispose = vi.fn();
+    const consoleLog = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    try {
+      const html = await waitForRenderThenDispose(
+        "Getting Started",
+        () => "<html>ok</html>",
+        1_000,
+        dispose
+      );
+
+      expect(html).toBe("<html>ok</html>");
+      expect(dispose).toHaveBeenCalledTimes(1);
+      expect(consoleLog).toHaveBeenCalledTimes(1);
+      expect(consoleLog.mock.calls[0][0]).toMatch(/^render-ms Getting Started \d+$/);
+    } finally {
+      consoleLog.mockRestore();
+    }
   });
 });
