@@ -518,6 +518,11 @@ func sortInbox(reqs []DecisionRequest) {
 // Acknowledge marks a request seen without resolving it (non-blocking — ADR-015
 // §A). Terminal or already-acknowledged requests are a no-op.
 func (s *Store) Acknowledge(id, actor string) (*DecisionRequest, error) {
+	if strings.TrimSpace(actor) == "" {
+		// Same contract as Resolve (#1405): the acknowledgement record carries
+		// an actor the platform requires to be non-empty.
+		return nil, fmt.Errorf("attention: acknowledging %s requires an actor", id)
+	}
 	mu := lockFor(s.dir)
 	mu.Lock()
 	defer mu.Unlock()
@@ -583,6 +588,20 @@ func (s *Store) Resolve(ctx context.Context, id, optionID, actor, steerText, not
 	if req.Lifecycle.State.IsTerminal() {
 		mu.Unlock()
 		return ResolveResult{Request: req, AlreadyResolved: true}, nil
+	}
+	if strings.TrimSpace(actor) == "" {
+		// The card contract requires a non-empty resolver (the platform's
+		// LifecycleSchema is `actor: z.string().min(1)`), and a resolution
+		// nobody is named for is not worth recording (#1405). Refused BEFORE
+		// the verb runs, so a caller that forgot the actor does not get a
+		// half-applied resolution it cannot persist.
+		//
+		// Refused rather than defaulted: the store cannot know who the operator
+		// is, and inventing one puts a false name in an audit record. The
+		// callers that DO know supply it — the CLI via attentionActor(), the
+		// IPC layer via its own fallback.
+		mu.Unlock()
+		return ResolveResult{}, fmt.Errorf("attention: resolving %s requires an actor", id)
 	}
 	opt, err := ValidateOption(req, optionID)
 	if err != nil {
@@ -725,6 +744,7 @@ func (s *Store) writeMaterializedLocked(path string, req *DecisionRequest) error
 	if err := os.MkdirAll(s.dir, 0o755); err != nil {
 		return fmt.Errorf("attention: create store dir: %w", err)
 	}
+	normalizeForWire(req)
 	data, err := json.MarshalIndent(req, "", "  ")
 	if err != nil {
 		return fmt.Errorf("attention: marshal request: %w", err)
@@ -738,6 +758,42 @@ func (s *Store) writeMaterializedLocked(path string, req *DecisionRequest) error
 		return fmt.Errorf("attention: rename: %w", err)
 	}
 	return nil
+}
+
+// normalizeForWire fixes up the shapes Go's zero values produce but the card
+// contract cannot express (#1405).
+//
+// THE ONE THAT MATTERED. `Options []Option` marshals a nil slice as
+// `"options":null`, and the platform's card schema is
+// `options: z.array(OptionSchema).max(20)` — required, not nullable, not
+// optional. So a producer that simply never set Options published a card the
+// platform rejected on arrival, forever: 27 such cards on this machine, all
+// from post-merge-hook, retried on every sweep and visible on no remote
+// surface.
+//
+// `omitempty` would NOT have fixed it. The key is REQUIRED, so dropping it
+// turns "expected array, received null" into "expected array, received
+// undefined" and the card stays exactly as invisible. An empty array is what
+// the schema accepts — `.max(20)` has no lower bound — so the field must be
+// present and empty, not absent.
+//
+// NORMALIZED HERE, AT THE SINGLE PERSIST CHOKEPOINT, rather than at the one
+// producer that has the bug today. Every raise, ack and resolve funnels through
+// this function, so a producer added tomorrow cannot reintroduce the shape by
+// forgetting a field — which is exactly how this one arrived. Raise's own
+// option validation is a range loop, and a nil slice iterates zero times, so
+// local validation could never see it.
+//
+// Deliberately NOT a place to invent data: it repairs shapes, never values. An
+// empty resolver actor is rejected at the boundary instead (see Resolve),
+// because guessing who resolved a card is worse than refusing to record it.
+func normalizeForWire(req *DecisionRequest) {
+	if req == nil {
+		return
+	}
+	if req.Options == nil {
+		req.Options = []Option{}
+	}
 }
 
 // emitLocked appends the journal line and fires the OnTransition hook. Called

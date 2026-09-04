@@ -46,6 +46,23 @@ type AttentionAcknowledgeResult struct {
 
 // attentionStore returns the shared DecisionRequest store, or nil when no
 // autonomous scheduler is attached (the store lives on it).
+// ipcAttentionActor names who resolved a card when the payload does not (#1405).
+//
+// The store refuses an empty actor because the card contract requires one and
+// it cannot know who the operator is. This layer does know the SHAPE of the
+// caller — a request over the extension's IPC socket is an operator acting in
+// VS Code — so it supplies that rather than letting an operator's click fail.
+//
+// Mirrors the CLI's attentionActor(), which has defaulted to $USER then "cli"
+// since the verb was written; the IPC path simply never got the same treatment,
+// which is how one card was persisted with actor="".
+func ipcAttentionActor(actor string) string {
+	if strings.TrimSpace(actor) != "" {
+		return actor
+	}
+	return "vscode"
+}
+
 func (s *Server) attentionStore() *attention.Store {
 	if s.autonomousScheduler == nil {
 		return nil
@@ -91,7 +108,7 @@ func (s *Server) handleAttentionResolve(ctx context.Context, raw json.RawMessage
 	if store == nil {
 		return nil, fmt.Errorf("attention.resolve: attention store not configured")
 	}
-	res, err := store.Resolve(ctx, p.ID, p.OptionID, p.Actor, p.SteerText, p.Note, s)
+	res, err := store.Resolve(ctx, p.ID, p.OptionID, ipcAttentionActor(p.Actor), p.SteerText, p.Note, s)
 	if err != nil {
 		log.Printf("attention.resolve: rejected id=%s option=%s: %v", p.ID, p.OptionID, err)
 		return nil, fmt.Errorf("attention.resolve: could not resolve request")
@@ -140,7 +157,7 @@ func (s *Server) handleAttentionAcknowledge(_ context.Context, raw json.RawMessa
 	if store == nil {
 		return nil, fmt.Errorf("attention.acknowledge: attention store not configured")
 	}
-	if _, err := store.Acknowledge(p.ID, p.Actor); err != nil {
+	if _, err := store.Acknowledge(p.ID, ipcAttentionActor(p.Actor)); err != nil {
 		return nil, fmt.Errorf("attention.acknowledge: %w", err)
 	}
 	return AttentionAcknowledgeResult{Ok: true}, nil

@@ -1,6 +1,9 @@
 package main
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -143,4 +146,60 @@ func TestReportMainChecks_RedMergeReachesTheActionCenter(t *testing.T) {
 	// Nothing observed, nothing filed, no panic.
 	reportMainChecks(root, "nightgauge", "nightgauge", 1, 2, hooks.PostMergeResult{})
 	reportMainChecks("", "nightgauge", "nightgauge", 1, 2, red)
+}
+
+// TestPostMergeCardIsActionable is #1405's third half.
+//
+// This producer built its DecisionRequest with no Options at all, which
+// persisted as `"options":null` and was rejected by the platform on arrival —
+// 27 cards on one machine, all from here, invisible on every remote surface.
+//
+// Normalizing nil to `[]` at the store makes the card VALID; it does not make
+// it USEFUL. An FYI with zero options cannot be cleared from any surface, so it
+// sits until it expires. Every other producer supplies a button, and this
+// asserts that this one does too.
+func TestPostMergeCardIsActionable(t *testing.T) {
+	dir := t.TempDir()
+	raisePostMergeFailureCard(dir, "octocat", "acme", 4242, hooks.PostMergeResult{
+		Reason: "the board sync failed",
+	})
+
+	entries, err := os.ReadDir(filepath.Join(dir, ".nightgauge", "attention"))
+	if err != nil {
+		t.Fatalf("the producer raised no card at all: %v", err)
+	}
+	var raw []byte
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), "dr_") && strings.HasSuffix(e.Name(), ".json") {
+			raw, err = os.ReadFile(filepath.Join(dir, ".nightgauge", "attention", e.Name()))
+			if err != nil {
+				t.Fatalf("read card: %v", err)
+			}
+			break
+		}
+	}
+	if raw == nil {
+		t.Fatal("no decision-request file was written")
+	}
+
+	var card struct {
+		Producer string `json:"producer"`
+		Options  []struct {
+			ID   string `json:"id"`
+			Verb string `json:"verb"`
+		} `json:"options"`
+	}
+	if err := json.Unmarshal(raw, &card); err != nil {
+		t.Fatalf("card is not JSON: %v", err)
+	}
+	if card.Producer != "post-merge-hook" {
+		t.Fatalf("producer = %q, want post-merge-hook", card.Producer)
+	}
+	if len(card.Options) == 0 {
+		t.Fatalf("the post-merge card offers no option — it is valid but nobody can ever "+
+			"clear it from a remote surface (#1405):\n%s", raw)
+	}
+	if !strings.Contains(string(raw), `"options": [`) {
+		t.Errorf("options did not marshal as an array:\n%s", raw)
+	}
 }
