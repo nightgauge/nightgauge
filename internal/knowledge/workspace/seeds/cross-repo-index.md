@@ -1,3 +1,12 @@
+---
+type: index
+title: Cross Repo
+status: draft
+generated:
+  by: process:knowledge-scaffold
+  at: "2026-09-03T00:00:00Z"
+---
+
 # cross-repo/
 
 Workspace-level knowledge for contracts and conventions shared by two or more

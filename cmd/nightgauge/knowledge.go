@@ -48,7 +48,7 @@ func knowledgeCmd() *cobra.Command {
 		Short: "Knowledge base operations",
 		Long:  "Manage the .nightgauge/knowledge/ directory: scaffold entries, prune empty files, generate the index, and scaffold workspace-level entries.",
 	}
-	cmd.AddCommand(knowledgeScaffoldCmd(), knowledgePruneCmd(), knowledgeIndexCmd(), knowledgeWorkspaceCreateCmd(), knowledgeWorkspaceInitCmd(), knowledgeGraduateCmd(), knowledgeGraduateCandidatesCmd(), knowledgeStatsCmd(), knowledgeRenderCmd(), knowledgeRenderPRSectionCmd(), knowledgeNewCmd(), knowledgeValidateCmd(), knowledgeRecordOutcomeCmd(), knowledgeStampCmd(), knowledgeTelemetryCmd(), knowledgeMetricsCmd(), knowledgeRecallCmd(), knowledgeReindexCmd())
+	cmd.AddCommand(knowledgeScaffoldCmd(), knowledgePruneCmd(), knowledgeIndexCmd(), knowledgeWorkspaceCreateCmd(), knowledgeWorkspaceInitCmd(), knowledgeGraduateCmd(), knowledgeGraduateCandidatesCmd(), knowledgeStatsCmd(), knowledgeRenderCmd(), knowledgeRenderPRSectionCmd(), knowledgeNewCmd(), knowledgeValidateCmd(), knowledgeRecordOutcomeCmd(), knowledgeStampCmd(), knowledgeExportCmd(), knowledgeTelemetryCmd(), knowledgeMetricsCmd(), knowledgeRecallCmd(), knowledgeReindexCmd())
 	return cmd
 }
 
