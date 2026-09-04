@@ -468,6 +468,17 @@ func RunDoctor(ctx context.Context, cfg *config.Config, client *gh.Client, adapt
 
 	// A killed stage leaks its worktree; a stage that is never killed leaks
 	// ITSELF (#341). Report-only — this check never signals a process.
+	// The scheduler lease (#1349). Placed with the other machine-state arms
+	// because it reads the same claim directory as the orphan scan, but it
+	// asks a workspace-scoped question on a much tighter clock: a wedged
+	// holder blocks every start here while looking, from outside, exactly
+	// like a healthy daemon.
+	serveLease, serveLeaseWarning := checkServeLease(cwd, now)
+	result.Checks["serve_lease"] = serveLease
+	if serveLeaseWarning != "" {
+		warnings = append(warnings, serveLeaseWarning)
+	}
+
 	processLeaks, processWarning := checkOrphanedProcesses(cwd, now)
 	result.Checks["orphaned_processes"] = processLeaks
 	if processWarning != "" {
