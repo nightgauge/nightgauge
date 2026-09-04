@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/nightgauge/nightgauge/internal/config"
+	"github.com/nightgauge/nightgauge/internal/knowledge/okf"
 )
 
 // adrHeaderRe matches ADR block headings of the form "## ADR-NNN: ...".
@@ -192,15 +193,11 @@ const (
 	ReasonMissingType = "missing_type"
 )
 
-// ReservedKnowledgeNames are the filenames that carry no entry frontmatter:
-// navigation and template files an Open Knowledge Format consumer reads
-// structurally rather than as knowledge.
-var ReservedKnowledgeNames = map[string]bool{
-	"index.md":     true,
-	"log.md":       true,
-	"README.md":    true,
-	"_template.md": true,
-}
+// IsReservedEntry reports whether a base filename is reserved — navigation
+// and template files an Open Knowledge Format consumer reads structurally
+// rather than as knowledge. Re-exported from the leaf package so there is one
+// definition and the walkers cannot disagree about what an entry is.
+var IsReservedEntry = okf.IsReservedEntry
 
 // ConformanceViolation names one entry that does not satisfy the frontmatter
 // contract, and why.
@@ -327,7 +324,7 @@ func WalkEntries(root string, fn func(rel, abs string, block *FrontmatterBlock, 
 		if !strings.HasSuffix(strings.ToLower(name), ".md") {
 			return nil
 		}
-		if ReservedKnowledgeNames[name] {
+		if IsReservedEntry(name) {
 			if skipped != nil {
 				*skipped++
 			}

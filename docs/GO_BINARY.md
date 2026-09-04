@@ -1319,7 +1319,8 @@ The dirtiness test is **not** "does `git status` report anything". It is
 
 **Why this exists.** A workspace audit found nine leaked worktrees that `sweep`
 refused permanently. `.worktrees/issue-1181` had zero tracked changes and
-exactly one untracked file — `.nightgauge/knowledge/README.md`, the scaffold
+exactly one untracked file — the knowledge index (`README.md` at the time;
+`index.md` since #1370), the scaffold
 _the pipeline itself writes at issue pickup_. That made the tree read as dirty,
 `sweep` skipped as `uncommitted-changes`, and because nothing ever removes that
 file the skip was permanent. Since the worktree held the branch, `git branch -D`
@@ -6553,15 +6554,44 @@ comment placeholders). Use `--dry-run` to preview what would be deleted. Mirrors
 the `KnowledgeService.pruneEmpty()` threshold: ≥30 non-whitespace chars required
 to be considered substantive.
 
-**index** generates `.nightgauge/knowledge/README.md` as a table-of-contents
-listing all entries grouped by category. Matches the output of
-`KnowledgeService.generateIndex()`.
+**index** generates the Open Knowledge Format bundle index: `index.md` at the
+knowledge root and one per category, plus `log.md` derived from the telemetry
+event stream. `index.md` and `log.md` are the two files every OKF consumer
+reads first; without them a bundle is a folder of loose files.
+
+The root `index.md` carries `okf_version: "0.2"` in its frontmatter, and each
+page is `# <Category>` sections of `* [Title](/bundle/path) - description`
+bullets. Titles and descriptions come from the entry's frontmatter, falling
+back to its first H1 and first prose paragraph — so the index supports picking
+an entry without opening it, which the old table of issue numbers and
+filenames could not.
+
+Output is deterministic: categories and entries are sorted, where the previous
+implementation iterated a Go map and produced a different section order on
+every run of the same command.
+
+`log.md` is newest-date-first `## YYYY-MM-DD` headings with one
+`* **<Event>**: [path](/bundle/path)` bullet per scaffold, write, graduate and
+prune event in the last 90 days. Reads and recalls are excluded: it is a change
+history, not a usage log. It is written best-effort — a missing or unreadable
+event stream never fails the index the pipeline depends on.
+
+`README.md` is no longer written anywhere under the knowledge root. It stays in
+the reserved-name set so a base written by an older binary does not suddenly
+index its old table of contents as an entry.
+
+**Reserved names.** `index.md`, `log.md`, `README.md` and `_template.md` are
+navigation and template files, skipped by every walker: the metadata index, the
+recall corpus, the conformance check, the PR-body renderer and the cross-repo
+and workspace scans. That set has exactly one definition (`okf.IsReservedEntry`)
+— five separate `!= "README.md"` filters used to disagree about it, which is
+why `_template.md` leaked into three scan results as though it were an entry.
 
 Optional flags extend the JSON output with cross-repository and workspace-level
 knowledge context:
 
 - `--cross-repo` — reads `.vscode/nightgauge-workspace.yaml` and enumerates
-  `.md` files (excluding `README.md`) under each sibling repo's
+  `.md` files (excluding reserved names) under each sibling repo's
   `.nightgauge/knowledge/` directory. Repos whose knowledge directory is
   absent are silently skipped. No-op when the workspace config file is missing.
 - `--workspace` — enumerates top-level `.md` files under
@@ -6575,7 +6605,7 @@ includes additional fields:
 
 ```json
 {
-  "index_path": ".nightgauge/knowledge/README.md",
+  "index_path": ".nightgauge/knowledge/index.md",
   "cross_repo_knowledge": [
     { "repo": "platform", "path": "path/to/knowledge", "entries": ["features/1-slug/PRD.md"] }
   ],

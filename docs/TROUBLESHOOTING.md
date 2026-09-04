@@ -1085,6 +1085,13 @@ is untracked exhaust in most worktrees and **tracked content** in some. Deleting
 a tracked one produces a staged deletion, and the removal then refuses for a
 genuinely different reason.
 
+> **Present tense (#1370).** The index is now `index.md`, not `README.md`, and
+> it has exactly one owner: `knowledge index`. The transcript above is left as
+> the historical record of #332 — do not read the filename in it as current.
+> Classification never depended on the filename: `ci.IsBookkeepingPath` is a
+> prefix test on `.nightgauge`/`.claude`, so `index.md` classifies as exhaust
+> the instant it is written, with no code change.
+
 **Do not "just exclude `.nightgauge`".** A staged change to a tracked file under
 `.nightgauge/` can be the whole deliverable — #701's was 209 staged deletions
 under `.nightgauge/pipeline/assessments/`. The tracked/untracked distinction is

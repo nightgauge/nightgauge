@@ -17,6 +17,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/nightgauge/nightgauge/internal/knowledge/okf"
 )
 
 const (
@@ -188,7 +190,7 @@ func scanKBFiles(workdir string) ([]IndexEntry, error) {
 			issueAbs := filepath.Join(base, issueDir.Name())
 			mdFiles, _ := os.ReadDir(issueAbs)
 			for _, mde := range mdFiles {
-				if mde.IsDir() || !strings.HasSuffix(mde.Name(), ".md") || mde.Name() == "README.md" {
+				if mde.IsDir() || !strings.HasSuffix(mde.Name(), ".md") || okf.IsReservedEntry(mde.Name()) {
 					continue
 				}
 				abs := filepath.Join(issueAbs, mde.Name())
@@ -209,7 +211,7 @@ func scanKBFiles(workdir string) ([]IndexEntry, error) {
 			if info.IsDir() {
 				return nil
 			}
-			if !strings.HasSuffix(info.Name(), ".md") || info.Name() == "README.md" {
+			if !strings.HasSuffix(info.Name(), ".md") || okf.IsReservedEntry(info.Name()) {
 				return nil
 			}
 			if e, ok := indexFile(workdir, p, "workspace"); ok {

@@ -27,8 +27,18 @@ else
     # Create standard subdirectories
     mkdir -p "$KNOWLEDGE_DIR/epics" "$KNOWLEDGE_DIR/features"
 
-    # Create README.md
-    cat > "$KNOWLEDGE_DIR/README.md" << 'READMEEOF'
+    # Seed the bundle index. `nightgauge knowledge index` owns this file from
+    # here on and overwrites the seed on its first run — README.md is not a
+    # filename an Open Knowledge Format bundle root can also use.
+    cat > "$KNOWLEDGE_DIR/index.md" << 'READMEEOF'
+---
+type: index
+title: Knowledge Base
+status: draft
+generated:
+  by: process:knowledge-scaffold
+---
+
 # .nightgauge/knowledge/
 
 This directory stores persistent context for GitHub issues managed by the
@@ -74,7 +84,7 @@ READMEEOF
     echo "  + created: .nightgauge/knowledge/"
     echo "  + created: .nightgauge/knowledge/epics/"
     echo "  + created: .nightgauge/knowledge/features/"
-    echo "  + created: .nightgauge/knowledge/README.md"
+    echo "  + created: .nightgauge/knowledge/index.md"
   fi
 fi
 ````

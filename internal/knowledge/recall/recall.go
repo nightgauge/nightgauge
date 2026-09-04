@@ -409,7 +409,10 @@ func walkKBPaths(dir, defaultKind string) []docRef {
 		issueDir := filepath.Join(dir, e.Name())
 		mdEntries, _ := os.ReadDir(issueDir)
 		for _, mde := range mdEntries {
-			if mde.IsDir() || !strings.HasSuffix(mde.Name(), ".md") || mde.Name() == "README.md" {
+			// Reserved files are navigation, not knowledge. Without this,
+			// index.md and log.md become BM25 hits for every query — the
+			// exact noise the README.md exclusion existed to prevent.
+			if mde.IsDir() || !strings.HasSuffix(mde.Name(), ".md") || okf.IsReservedEntry(mde.Name()) {
 				continue
 			}
 			refs = append(refs, docRef{

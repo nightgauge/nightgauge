@@ -765,12 +765,20 @@ Implement widget rendering in the dashboard view using the existing component fr
       expect(index.categories["features"][0].issue_number).toBe(42);
       expect(index.categories["features"][0].slug).toBe("photo-upload");
       expect(index.categories["features"][0].files).toContain("PRD.md");
-      expect(fs.writeFile).toHaveBeenCalled(); // README.md written
+      expect(fs.writeFile).toHaveBeenCalled(); // index.md written
 
-      // Verify README content
-      const readmeContent = vi.mocked(fs.writeFile).mock.calls[0][1] as string;
-      expect(readmeContent).toContain("Knowledge Base Index");
-      expect(readmeContent).toContain("#42");
+      // The index is written to index.md, not README.md: README.md is not a
+      // filename an OKF bundle root can also use, and the Go binary writes
+      // index.md, so a README.md here would fork the navigation.
+      const indexPath = vi.mocked(fs.writeFile).mock.calls[0][0] as string;
+      expect(indexPath).toContain("index.md");
+      expect(indexPath).not.toContain("README.md");
+
+      const indexContent = vi.mocked(fs.writeFile).mock.calls[0][1] as string;
+      expect(indexContent).toContain('okf_version: "0.2"');
+      expect(indexContent).toContain("type: index");
+      expect(indexContent).toContain("# Features");
+      expect(indexContent).toContain("](/features/42-photo-upload)");
     });
 
     it("returns empty index when knowledge root does not exist", async () => {
@@ -841,7 +849,7 @@ Implement widget rendering in the dashboard view using the existing component fr
       expect(index.categories["features"][0].entry!.title).toBe("Test Entry");
     });
 
-    it("README includes type, title from PRD H1, and last-modified columns", async () => {
+    it("index bullets use the PRD H1 as the title", async () => {
       const readdirMock = vi.mocked(fs.readdir);
       let callIndex = 0;
 
@@ -868,14 +876,11 @@ Implement widget rendering in the dashboard view using the existing component fr
 
       await service.generateIndex();
 
-      const readmeContent = vi.mocked(fs.writeFile).mock.calls[0][1] as string;
-      expect(readmeContent).toContain("| Issue | Type | Title | Last Modified |");
-      expect(readmeContent).toContain("feature");
-      expect(readmeContent).toContain("My Feature Title");
-      expect(readmeContent).toContain("2026-04-15");
+      const indexContent = vi.mocked(fs.writeFile).mock.calls[0][1] as string;
+      expect(indexContent).toContain("* [My Feature Title](/features/42-photo-upload)");
     });
 
-    it("README uses slug-derived title when PRD.md has no H1", async () => {
+    it("index falls back to the slug-derived title when PRD.md has no H1", async () => {
       const readdirMock = vi.mocked(fs.readdir);
       let callIndex = 0;
 
@@ -902,11 +907,11 @@ Implement widget rendering in the dashboard view using the existing component fr
 
       await service.generateIndex();
 
-      const readmeContent = vi.mocked(fs.writeFile).mock.calls[0][1] as string;
-      expect(readmeContent).toContain("my feature");
+      const indexContent = vi.mocked(fs.writeFile).mock.calls[0][1] as string;
+      expect(indexContent).toContain("my feature");
     });
 
-    it("README uses 'epic' type for epics category", async () => {
+    it("index renders the epics category as its own section", async () => {
       const readdirMock = vi.mocked(fs.readdir);
       let callIndex = 0;
 
@@ -933,9 +938,9 @@ Implement widget rendering in the dashboard view using the existing component fr
 
       await service.generateIndex();
 
-      const readmeContent = vi.mocked(fs.writeFile).mock.calls[0][1] as string;
-      expect(readmeContent).toContain("epic");
-      expect(readmeContent).toContain("Epic Title");
+      const indexContent = vi.mocked(fs.writeFile).mock.calls[0][1] as string;
+      expect(indexContent).toContain("# Epics");
+      expect(indexContent).toContain("Epic Title");
     });
   });
 

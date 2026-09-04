@@ -5,7 +5,8 @@
 // Before #330/#332 each reclamation tool answered that for itself, and every
 // one of them answered it wrong in the same direction. `worktree sweep` asked
 // git "is this tree dirty?", got yes because the pipeline had scaffolded
-// `.nightgauge/knowledge/README.md` into it, and refused to reclaim — forever,
+// the knowledge index into it (`README.md` at the time of #332, `index.md`
+// since #1370), and refused to reclaim — forever,
 // since nothing ever removes that file. Nine worktrees deadlocked on the
 // pipeline's own exhaust, and because each held a branch, `git branch -D`
 // refused too: cleanup blocked at both ends by a file the pipeline itself

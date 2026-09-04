@@ -21,6 +21,7 @@ import {
   KnowledgeEntrySchema,
   KnowledgeIndexSchema,
   RepoTopicTypeSchema,
+  OKF_VERSION,
   type KnowledgeEntry,
   type KnowledgeIndex,
   type KnowledgeType,
@@ -120,6 +121,29 @@ export interface RepoTopicResult {
  * Mirrors okf.ScaffoldActor in the Go binary.
  */
 const SCAFFOLD_ACTOR = "process:knowledge-scaffold";
+
+/** Actor recorded on every generated index page. */
+const INDEX_ACTOR = "process:knowledge-index";
+
+/**
+ * Reserved filenames carry no entry frontmatter: navigation and template files
+ * an OKF consumer reads structurally rather than as knowledge. Mirrors
+ * okf.IsReservedEntry in the Go binary — five separate `!== "README.md"`
+ * filters used to disagree about this set.
+ */
+const RESERVED_INDEX_FILE = "index.md";
+const RESERVED_ENTRY_NAMES = new Set([RESERVED_INDEX_FILE, "log.md", "_template.md", "README.md"]);
+
+function isReservedEntry(name: string): boolean {
+  return RESERVED_ENTRY_NAMES.has(name);
+}
+
+/** "cross-repo" -> "Cross Repo". Matches titleCaseCategory in the Go binary. */
+function titleCaseCategory(name: string): string {
+  const parts = name.split(/[-_]/).filter(Boolean);
+  if (parts.length === 0) return name;
+  return parts.map((p) => p[0].toUpperCase() + p.slice(1)).join(" ");
+}
 
 /**
  * Render the frontmatter block every scaffolded entry carries: its type, a
@@ -496,7 +520,7 @@ export class KnowledgeService {
    * Generate a knowledge index from all entries under the knowledge directory.
    *
    * Scans category directories, parses frontmatter, builds a KnowledgeIndex
-   * object, validates it, and writes a README.md table of contents.
+   * object, validates it, and writes the OKF bundle index at `index.md`.
    *
    * @returns The validated KnowledgeIndex object
    */
@@ -616,10 +640,12 @@ export class KnowledgeService {
     // Validate
     KnowledgeIndexSchema.parse(index);
 
-    // Write README.md
-    const readmePath = path.join(knowledgeRoot, "README.md");
+    // Write index.md — the OKF bundle index. README.md is not a filename an
+    // OKF bundle root can also use, and the Go binary writes index.md, so a
+    // README.md here would fork the navigation across the two layers.
+    const indexPath = path.join(knowledgeRoot, RESERVED_INDEX_FILE);
     await fs.mkdir(knowledgeRoot, { recursive: true });
-    await fs.writeFile(readmePath, this.renderIndexReadme(index), "utf-8");
+    await fs.writeFile(indexPath, this.renderBundleIndex(index), "utf-8");
 
     return index;
   }
@@ -812,7 +838,7 @@ export class KnowledgeService {
    * Scaffold a repo-topic knowledge entry (idempotent).
    *
    * Creates `.nightgauge/knowledge/{type}/{slug}.md`. When the category
-   * directory is new, also creates `README.md` and `_template.md`. Returns
+   * directory is new, also creates `index.md` and `_template.md`. Returns
    * `created: false` when the entry file already exists.
    *
    * Templates match Go `generateRepoTopicTemplate()` output verbatim.
@@ -850,11 +876,11 @@ export class KnowledgeService {
       };
     }
 
-    // Create README.md and _template.md when the category dir is brand new.
+    // Create index.md and _template.md when the category dir is brand new.
     if (!categoryExists) {
-      const readmePath = path.join(categoryDir, "README.md");
+      const readmePath = path.join(categoryDir, RESERVED_INDEX_FILE);
       await fs.writeFile(readmePath, this.generateRepoTopicREADME(type), "utf-8");
-      filesCreated.push("README.md");
+      filesCreated.push(RESERVED_INDEX_FILE);
 
       const templatePath = path.join(categoryDir, "_template.md");
       await fs.writeFile(templatePath, this.generateRepoTopicTemplate(type, "slug"), "utf-8");
@@ -874,7 +900,7 @@ export class KnowledgeService {
   }
 
   /**
-   * Generate README.md content for a repo-topic category directory.
+   * Generate index.md content for a repo-topic category directory.
    * Matches Go generateRepoTopicREADME() output verbatim.
    */
   private generateRepoTopicREADME(type: RepoTopicType): string {
@@ -1268,7 +1294,7 @@ ${outOfScope || "<!-- TODO: What this issue explicitly will NOT do — names the
 
   /**
    * Recursively yield absolute paths to all .md files under the knowledge directory.
-   * Skips README.md (the index file).
+   * Skips reserved navigation and template files.
    */
   private async *walkKnowledgeDirectory(): AsyncGenerator<string> {
     const knowledgeRoot = path.join(this.workspaceRoot, ".nightgauge", "knowledge");
@@ -1283,7 +1309,8 @@ ${outOfScope || "<!-- TODO: What this issue explicitly will NOT do — names the
   }
 
   /**
-   * Recursively walk a directory yielding .md file paths (excluding README.md).
+   * Recursively walk a directory yielding .md file paths, excluding reserved
+   * navigation and template files.
    */
   private async *walkDirectory(dirPath: string): AsyncGenerator<string> {
     let names: string[];
@@ -1303,37 +1330,61 @@ ${outOfScope || "<!-- TODO: What this issue explicitly will NOT do — names the
       }
       if (stat.isDirectory()) {
         yield* this.walkDirectory(fullPath);
-      } else if (stat.isFile() && name.endsWith(".md") && name !== "README.md") {
+      } else if (stat.isFile() && name.endsWith(".md") && !isReservedEntry(name)) {
         yield fullPath;
       }
     }
   }
 
   /**
-   * Render the knowledge index as a Markdown README.
+   * Render the Open Knowledge Format bundle index.
+   *
+   * `# <Category>` sections of `* [Title](/bundle/path)` bullets, matching
+   * `GenerateIndex` in the Go binary — the two layers write the same file, so
+   * they have to agree on its shape.
+   *
+   * Categories and entries are sorted. The previous table iterated object keys
+   * in insertion order, so the same tree could produce a different index
+   * between runs and every regeneration read as a diff.
    */
-  private renderIndexReadme(index: KnowledgeIndex): string {
-    let content = `# Knowledge Base Index\n\n`;
-    content += `> Auto-generated by \`KnowledgeService.generateIndex()\`\n`;
-    content += `> Generated at: ${index.generated_at}\n\n`;
-    content += `**Total entries:** ${index.total_entries}\n\n`;
+  private renderBundleIndex(index: KnowledgeIndex): string {
+    const lines: string[] = [
+      "---",
+      "type: index",
+      "title: Knowledge Base",
+      `description: ${index.total_entries} entries`,
+      "status: stable",
+      "generated:",
+      `  by: ${INDEX_ACTOR}`,
+      `  at: "${index.generated_at}"`,
+      `okf_version: "${OKF_VERSION}"`,
+      "---",
+      "",
+    ];
 
-    for (const [category, entries] of Object.entries(index.categories)) {
-      const type = category === "epics" ? "epic" : "feature";
-      content += `## ${category}\n\n`;
-      content += `| Issue | Type | Title | Last Modified |\n`;
-      content += `| ----- | ---- | ----- | ------------- |\n`;
+    const categories = Object.keys(index.categories).sort();
+    for (const category of categories) {
+      const entries = [...index.categories[category]].sort((a, b) => a.path.localeCompare(b.path));
+      lines.push(`# ${titleCaseCategory(category)}`, "");
       for (const entry of entries) {
-        const extEntry = entry as typeof entry & { prd_title?: string; last_modified?: string };
+        const extEntry = entry as typeof entry & { prd_title?: string };
         const title = extEntry.prd_title ?? entry.slug.replace(/-/g, " ");
-        const link = `[#${entry.issue_number}](${entry.path})`;
-        const lastMod = extEntry.last_modified ? extEntry.last_modified.slice(0, 10) : "";
-        content += `| ${link} | ${type} | ${title} | ${lastMod} |\n`;
+        // Bundle-absolute: rooted at the knowledge root, not the workspace.
+        // That is the form an OKF consumer resolves, and what the Go binary
+        // emits.
+        const bundlePath = entry.path
+          .replace(/\\/g, "/")
+          .replace(/^.*?\.nightgauge\/knowledge\//, "")
+          .replace(/^\/+/, "");
+        lines.push(`* [${title}](/${bundlePath})`);
       }
-      content += `\n`;
+      lines.push("");
+    }
+    if (categories.length === 0) {
+      lines.push("# Knowledge Base", "", "No entries yet.", "");
     }
 
-    return content;
+    return lines.join("\n");
   }
 
   /** Extract the first H1 heading text from markdown content. */

@@ -2918,7 +2918,7 @@ export const KnowledgeConfigSchema = z.object({
   wiki_links: z.boolean().optional(),
   /** Regenerate knowledge index on every commit (reserved for future git hook use) */
   index_on_commit: z.boolean().optional(),
-  /** Auto-regenerate .nightgauge/knowledge/README.md after a successful merge that touched knowledge files (default: true) */
+  /** Auto-regenerate .nightgauge/knowledge/index.md and log.md after a successful merge that touched knowledge files (default: true) */
   auto_index: z.boolean().optional(),
   /** When true in a multi-repo workspace, aggregate knowledge from all repositories */
   aggregate: z.boolean().optional(),

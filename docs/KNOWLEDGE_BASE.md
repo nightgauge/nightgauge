@@ -634,6 +634,66 @@ looked at the entry lately — while expired and deprecated are claims the
 date, or freshly written and never opened; conflating the two was exactly what
 the old name invited, so the two are now named apart.
 
+### The bundle index: `index.md` and `log.md`
+
+`nightgauge knowledge index` writes the two files every Open Knowledge Format
+consumer reads first. Without them a bundle is a folder of loose files.
+
+`index.md` sits at the knowledge root and in each category directory:
+
+```markdown
+---
+type: index
+title: Knowledge Base
+description: 12 entries across 3 categories
+status: stable
+generated:
+  by: process:knowledge-index
+  at: "2026-09-03T10:00:00Z"
+okf_version: "0.2"
+---
+
+# Features
+
+- [PRD: #42 — Add photo upload](/features/42-add-photo-upload/PRD.md) - Users can attach images to a report.
+```
+
+Titles and descriptions come from the entry's frontmatter, falling back to its
+first H1 and first prose paragraph. That is what makes the index a
+progressive-disclosure entry point — the cheapest page first — which a table of
+issue numbers and filenames could not support.
+
+The output is deterministic. The previous implementation iterated a Go map, so
+the same tree produced a different section order on every run and every
+regeneration read as a diff.
+
+`log.md` is the change history, derived from the telemetry event stream:
+newest-date-first `## YYYY-MM-DD` headings with one bullet per scaffold, write,
+graduate and prune event. Reads and recalls are excluded — a log dominated by
+"someone searched" says nothing about how the knowledge got there. It is
+written best-effort: it renders data that is already queryable through
+`knowledge telemetry` and `knowledge metrics`, so a missing event stream must
+never fail the index the pipeline depends on.
+
+**`README.md` is gone from the knowledge root.** It is not a filename an OKF
+bundle root can also use, and it had no single owner — the index verb wrote one
+and the category scaffolder wrote another. Giving the file one owner also
+closes the untracked-index worktree-reclamation footgun recorded in
+[docs/TROUBLESHOOTING.md](TROUBLESHOOTING.md).
+
+#### Reserved names
+
+`index.md`, `log.md`, `README.md` and `_template.md` carry no entry
+frontmatter. Every walker skips them: the metadata index, the recall corpus,
+the conformance check, the PR-body renderer, and the cross-repo and workspace
+scans.
+
+There is exactly one definition of that set. Five separate `!= "README.md"`
+filters used to disagree about it, which is why `_template.md` leaked into
+three scan results as though it were an entry. `README.md` stays reserved so a
+base written by an older binary does not suddenly index its old table of
+contents.
+
 ### Conformance: enforcing the contract
 
 A contract that is not enforced drifts back into two contracts within a month.
@@ -1116,12 +1176,12 @@ when scripting bulk graduation reviews.
 
 The knowledge base is controlled by flags in `.nightgauge/config.yaml`:
 
-| Key                             | Type    | Default | Description                                                                                           |
-| ------------------------------- | ------- | ------- | ----------------------------------------------------------------------------------------------------- |
-| `knowledge.enabled`             | boolean | `false` | Master switch. Must be `true` for any scaffolding to occur.                                           |
-| `knowledge.auto_scaffold`       | boolean | `true`  | When `true`, scaffold automatically on issue pickup. Requires `enabled: true`.                        |
-| `knowledge.auto_index`          | boolean | `true`  | When `true`, regenerate `.nightgauge/knowledge/README.md` after a merge that touched knowledge files. |
-| `knowledge.auto_prune_on_merge` | boolean | `true`  | When `true`, prune boilerplate-only knowledge directories after a successful merge.                   |
+| Key                             | Type    | Default | Description                                                                                                         |
+| ------------------------------- | ------- | ------- | ------------------------------------------------------------------------------------------------------------------- |
+| `knowledge.enabled`             | boolean | `false` | Master switch. Must be `true` for any scaffolding to occur.                                                         |
+| `knowledge.auto_scaffold`       | boolean | `true`  | When `true`, scaffold automatically on issue pickup. Requires `enabled: true`.                                      |
+| `knowledge.auto_index`          | boolean | `true`  | When `true`, regenerate `.nightgauge/knowledge/index.md` (and `log.md`) after a merge that touched knowledge files. |
+| `knowledge.auto_prune_on_merge` | boolean | `true`  | When `true`, prune boilerplate-only knowledge directories after a successful merge.                                 |
 
 **Behavior matrix:**
 
@@ -1581,7 +1641,7 @@ the merge is not affected.
 ### Auto-Index on Merge
 
 When `knowledge.auto_index: true` (the default), the pr-merge skill
-automatically regenerates `.nightgauge/knowledge/README.md` after a PR is
+automatically regenerates `.nightgauge/knowledge/index.md` after a PR is
 successfully merged that touched any knowledge files. The regenerated index is
 committed as part of the merge so the table-of-contents stays browseable on
 GitHub without manual maintenance.

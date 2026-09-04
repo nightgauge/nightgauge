@@ -7,12 +7,17 @@ package knowledge
 import (
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/nightgauge/nightgauge/internal/knowledge/okf"
+	"github.com/nightgauge/nightgauge/internal/knowledge/telemetry"
 )
 
 // EventType enumerates structured telemetry events emitted by knowledge operations.
@@ -327,10 +332,18 @@ func PruneEmpty(workspaceRoot string, dryRun bool) ([]string, error) {
 	return pruned, nil
 }
 
-// GenerateIndex writes .nightgauge/knowledge/README.md listing all
-// knowledge entries grouped by category.
+// GenerateIndex writes the Open Knowledge Format bundle index: `index.md` at
+// the knowledge root and one per category, plus `log.md` derived from the
+// telemetry event stream.
 //
-// Returns the path of the written README.md (relative to workspaceRoot).
+// `index.md` and `log.md` are the two files every OKF consumer reads first;
+// without them a bundle is a folder of loose files. The index is also how the
+// planning stage should enter the base — cheapest page first — which the old
+// `README.md` table of issue numbers and filenames could not support: it
+// carried no titles, no descriptions, and iterated a Go map, so the section
+// order changed between runs of the same command.
+//
+// Returns the path of the root index (relative to workspaceRoot).
 func GenerateIndex(workspaceRoot string) (string, error) {
 	knowledgeRoot := filepath.Join(workspaceRoot, ".nightgauge", "knowledge")
 
@@ -338,77 +351,253 @@ func GenerateIndex(workspaceRoot string) (string, error) {
 		return "", fmt.Errorf("create knowledge root: %w", err)
 	}
 
-	categoryEntries, err := os.ReadDir(knowledgeRoot)
+	categories, total, err := collectIndexCategories(knowledgeRoot)
 	if err != nil {
-		return "", fmt.Errorf("read knowledge root: %w", err)
+		return "", err
 	}
 
-	type entry struct {
-		IssueNumber int
-		Slug        string
-		Files       []string
+	// Per-category index pages first, so the root index links to pages that
+	// already exist.
+	for _, cat := range categories {
+		if err := writeCategoryIndex(filepath.Join(knowledgeRoot, cat.name), cat); err != nil {
+			return "", err
+		}
 	}
-	categories := map[string][]entry{}
-	totalEntries := 0
 
-	for _, cat := range categoryEntries {
-		if !cat.IsDir() {
+	rootPath := filepath.Join(knowledgeRoot, okf.IndexFile)
+	if err := writeRootIndex(rootPath, categories, total); err != nil {
+		return "", err
+	}
+
+	// The change log is best-effort: it is a rendering of telemetry that is
+	// already queryable, so a missing or unreadable event stream must not fail
+	// the index the pipeline actually depends on.
+	_ = telemetry.WriteLogMarkdown(workspaceRoot, filepath.Join(knowledgeRoot, okf.LogFile))
+
+	relPath, _ := filepath.Rel(workspaceRoot, rootPath)
+	return relPath, nil
+}
+
+// indexEntryRef is one bullet in a generated index page.
+type indexEntryRef struct {
+	// BundlePath is rooted at the knowledge root, e.g.
+	// "/features/42-widget/PRD.md" — the form an OKF consumer resolves.
+	BundlePath  string
+	Title       string
+	Description string
+}
+
+// indexCategory is one section of the root index.
+type indexCategory struct {
+	name    string
+	entries []indexEntryRef
+}
+
+// collectIndexCategories walks the knowledge root and gathers every entry,
+// grouped by its top-level category directory, sorted deterministically.
+func collectIndexCategories(knowledgeRoot string) ([]indexCategory, int, error) {
+	dirEntries, err := os.ReadDir(knowledgeRoot)
+	if err != nil {
+		return nil, 0, fmt.Errorf("read knowledge root: %w", err)
+	}
+
+	var categories []indexCategory
+	total := 0
+
+	for _, cat := range dirEntries {
+		if !cat.IsDir() || strings.HasPrefix(cat.Name(), ".") {
 			continue
 		}
 		categoryPath := filepath.Join(knowledgeRoot, cat.Name())
 
-		issueDirs, err := os.ReadDir(categoryPath)
-		if err != nil {
+		var entries []indexEntryRef
+		_ = filepath.WalkDir(categoryPath, func(path string, d fs.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				return nil
+			}
+			if d.IsDir() {
+				if strings.HasPrefix(d.Name(), ".") && path != categoryPath {
+					return fs.SkipDir
+				}
+				return nil
+			}
+			if !strings.HasSuffix(d.Name(), ".md") || okf.IsReservedEntry(d.Name()) {
+				return nil
+			}
+			rel, relErr := filepath.Rel(knowledgeRoot, path)
+			if relErr != nil {
+				return nil
+			}
+			title, description := indexTitleAndDescription(path)
+			entries = append(entries, indexEntryRef{
+				BundlePath:  "/" + filepath.ToSlash(rel),
+				Title:       title,
+				Description: description,
+			})
+			return nil
+		})
+
+		if len(entries) == 0 {
 			continue
 		}
+		sort.Slice(entries, func(i, j int) bool { return entries[i].BundlePath < entries[j].BundlePath })
+		categories = append(categories, indexCategory{name: cat.Name(), entries: entries})
+		total += len(entries)
+	}
 
-		for _, issueDir := range issueDirs {
-			if !issueDir.IsDir() {
-				continue
-			}
+	// Map iteration used to decide section order, so the same tree produced a
+	// different index on every run and every regeneration looked like a diff.
+	sort.Slice(categories, func(i, j int) bool { return categories[i].name < categories[j].name })
+	return categories, total, nil
+}
 
-			// Parse {N}-{slug} directory name.
-			parts := strings.SplitN(issueDir.Name(), "-", 2)
-			if len(parts) != 2 {
-				continue
-			}
-			issueNum := 0
-			fmt.Sscanf(parts[0], "%d", &issueNum)
-			slug := parts[1]
+// indexTitleAndDescription reads an entry's display text, preferring the
+// frontmatter contract and falling back to the document itself.
+func indexTitleAndDescription(path string) (title, description string) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return strings.TrimSuffix(filepath.Base(path), ".md"), ""
+	}
+	content := string(data)
 
-			mdFiles, _ := listMDFiles(filepath.Join(categoryPath, issueDir.Name()))
+	if block, parseErr := ParseFrontmatter(content); parseErr == nil && block != nil {
+		title = strings.TrimSpace(block.Title)
+		description = strings.TrimSpace(block.Description)
+	}
 
-			categories[cat.Name()] = append(categories[cat.Name()], entry{
-				IssueNumber: issueNum,
-				Slug:        slug,
-				Files:       mdFiles,
-			})
-			totalEntries++
+	_, body := SplitFrontmatter(content)
+	if title == "" {
+		if m := firstH1Re.FindStringSubmatch(body); m != nil {
+			title = strings.TrimSpace(m[1])
 		}
 	}
+	if title == "" {
+		title = strings.TrimSuffix(filepath.Base(path), ".md")
+	}
+	if description == "" {
+		description = firstParagraph(body)
+	}
+	return title, description
+}
+
+// firstParagraph returns the first prose paragraph of a markdown body,
+// skipping headings, HTML comments, list markers and table rows. Returns ""
+// when the body is all boilerplate, which is the common case for a freshly
+// scaffolded entry.
+func firstParagraph(body string) string {
+	body = htmlCommentRe.ReplaceAllString(body, "")
+	for _, line := range strings.Split(body, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") ||
+			strings.HasPrefix(trimmed, "|") || strings.HasPrefix(trimmed, "-") ||
+			strings.HasPrefix(trimmed, "*") || strings.HasPrefix(trimmed, ">") ||
+			strings.HasPrefix(trimmed, "```") {
+			continue
+		}
+		if len(trimmed) > 160 {
+			trimmed = strings.TrimSpace(trimmed[:157]) + "…"
+		}
+		return trimmed
+	}
+	return ""
+}
+
+// writeRootIndex emits the bundle root index: OKF frontmatter carrying
+// okf_version, then one `# <Category>` section of `* [Title](/path) -
+// description` bullets.
+func writeRootIndex(path string, categories []indexCategory, total int) error {
+	block := &FrontmatterBlock{
+		Type:        okf.TypeIndex,
+		Title:       "Knowledge Base",
+		Description: fmt.Sprintf("%d entr%s across %d categor%s", total, plural(total), len(categories), pluralY(len(categories))),
+		Status:      StatusStable,
+		Raw:         map[string]interface{}{"okf_version": okf.OKFVersion},
+	}
+	gen, err := NewProvenance(indexActor)
+	if err != nil {
+		return err
+	}
+	block.Generated = &gen
 
 	var sb strings.Builder
-	sb.WriteString("# Knowledge Base Index\n\n")
-	sb.WriteString("> Auto-generated by `nightgauge knowledge index`\n\n")
-	fmt.Fprintf(&sb, "**Total entries:** %d\n\n", totalEntries)
-
-	for catName, entries := range categories {
-		fmt.Fprintf(&sb, "## %s\n\n", catName)
-		sb.WriteString("| Issue | Slug | Files |\n")
-		sb.WriteString("| ----- | ---- | ----- |\n")
-		for _, e := range entries {
-			fmt.Fprintf(&sb, "| #%d | %s | %s |\n", e.IssueNumber, e.Slug, strings.Join(e.Files, ", "))
-		}
+	for _, cat := range categories {
+		fmt.Fprintf(&sb, "# %s\n\n", titleCaseCategory(cat.name))
+		writeEntryBullets(&sb, cat.entries)
 		sb.WriteString("\n")
 	}
-
-	readmePath := filepath.Join(knowledgeRoot, "README.md")
-	if err := os.WriteFile(readmePath, []byte(sb.String()), 0o644); err != nil {
-		return "", fmt.Errorf("write README.md: %w", err)
+	if len(categories) == 0 {
+		sb.WriteString("# Knowledge Base\n\nNo entries yet.\n")
 	}
 
-	relPath, _ := filepath.Rel(workspaceRoot, readmePath)
-	return relPath, nil
+	out, err := WithFrontmatter(block, sb.String())
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(path, []byte(out), 0o644); err != nil {
+		return fmt.Errorf("write %s: %w", okf.IndexFile, err)
+	}
+	return nil
+}
+
+// writeCategoryIndex emits one category's index page.
+func writeCategoryIndex(dir string, cat indexCategory) error {
+	block := &FrontmatterBlock{
+		Type:        okf.TypeIndex,
+		Title:       titleCaseCategory(cat.name),
+		Description: fmt.Sprintf("%d entr%s", len(cat.entries), plural(len(cat.entries))),
+		Status:      StatusStable,
+	}
+	gen, err := NewProvenance(indexActor)
+	if err != nil {
+		return err
+	}
+	block.Generated = &gen
+
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "# %s\n\n", titleCaseCategory(cat.name))
+	writeEntryBullets(&sb, cat.entries)
+
+	out, err := WithFrontmatter(block, sb.String())
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(dir, okf.IndexFile), []byte(out), 0o644)
+}
+
+func writeEntryBullets(sb *strings.Builder, entries []indexEntryRef) {
+	for _, e := range entries {
+		if e.Description != "" {
+			fmt.Fprintf(sb, "* [%s](%s) - %s\n", e.Title, e.BundlePath, e.Description)
+		} else {
+			fmt.Fprintf(sb, "* [%s](%s)\n", e.Title, e.BundlePath)
+		}
+	}
+}
+
+// indexActor is the deterministic writer of every generated index page.
+const indexActor = "process:knowledge-index"
+
+// titleCaseCategory renders a directory name as a section heading:
+// "cross-repo" -> "Cross Repo".
+func titleCaseCategory(name string) string {
+	parts := strings.FieldsFunc(name, func(r rune) bool { return r == '-' || r == '_' })
+	for i, p := range parts {
+		if p == "" {
+			continue
+		}
+		parts[i] = strings.ToUpper(p[:1]) + p[1:]
+	}
+	if len(parts) == 0 {
+		return name
+	}
+	return strings.Join(parts, " ")
+}
+
+func pluralY(n int) string {
+	if n == 1 {
+		return "y"
+	}
+	return "ies"
 }
 
 // RepoTopicType enumerates valid repo-topic knowledge categories.
@@ -481,13 +670,20 @@ func ScaffoldRepoTopic(workspaceRoot string, topicType RepoTopicType, slug strin
 		return result, nil
 	}
 
-	// Create README.md and _template.md when the category dir is brand new.
+	// Create index.md and _template.md when the category dir is brand new.
+	// The seed is replaced by the generated page on the next `knowledge index`
+	// — one owner for the filename, which also closes the untracked-README
+	// worktree-reclamation footgun in docs/TROUBLESHOOTING.md.
 	if categoryIsNew {
-		readmePath := filepath.Join(categoryDir, "README.md")
-		if err := os.WriteFile(readmePath, []byte(generateRepoTopicREADME(topicType)), 0o644); err != nil {
-			return RepoTopicResult{}, fmt.Errorf("write README.md: %w", err)
+		seed, err := generateRepoTopicIndex(topicType)
+		if err != nil {
+			return RepoTopicResult{}, err
 		}
-		result.FilesCreated = append(result.FilesCreated, "README.md")
+		indexPath := filepath.Join(categoryDir, okf.IndexFile)
+		if err := os.WriteFile(indexPath, []byte(seed), 0o644); err != nil {
+			return RepoTopicResult{}, fmt.Errorf("write %s: %w", okf.IndexFile, err)
+		}
+		result.FilesCreated = append(result.FilesCreated, okf.IndexFile)
 
 		templatePath := filepath.Join(categoryDir, "_template.md")
 		tmpl, err := generateRepoTopicTemplate(topicType, "slug")
@@ -514,10 +710,18 @@ func ScaffoldRepoTopic(workspaceRoot string, topicType RepoTopicType, slug strin
 }
 
 // generateRepoTopicREADME produces the README.md for a repo-topic category directory.
-func generateRepoTopicREADME(topicType RepoTopicType) string {
+func generateRepoTopicIndex(topicType RepoTopicType) (string, error) {
+	fm, err := ScaffoldFrontmatter(okf.TypeIndex, WithTitle(titleCaseCategory(string(topicType))))
+	if err != nil {
+		return "", err
+	}
+	return fm + "\n" + repoTopicIndexBody(topicType), nil
+}
+
+func repoTopicIndexBody(topicType RepoTopicType) string {
 	switch topicType {
 	case RepoTopicArchitecture:
-		return `# Knowledge Base — architecture/
+		return `# Architecture
 
 Stores cross-issue architectural principles, layer diagrams, and pattern docs.
 
@@ -538,7 +742,7 @@ will be relevant to future pipeline runs.
 See ` + "`_template.md`" + ` for the file structure to follow when adding entries.
 `
 	case RepoTopicGlossary:
-		return `# Knowledge Base — glossary/
+		return `# Glossary
 
 Stores one-file-per-term definitions of domain vocabulary used across issues.
 
@@ -558,7 +762,7 @@ more than one sentence to explain correctly.
 See ` + "`_template.md`" + ` for the file structure to follow when adding entries.
 `
 	case RepoTopicRunbook:
-		return `# Knowledge Base — runbooks/
+		return `# Runbook
 
 Stores operational procedures for recurring maintenance tasks and recovery workflows.
 
@@ -580,7 +784,7 @@ preserve the steps for next time.
 See ` + "`_template.md`" + ` for the file structure to follow when adding entries.
 `
 	case RepoTopicPostMortem:
-		return `# Knowledge Base — post-mortems/
+		return `# Post Mortem
 
 Stores incident write-ups and retrospective analyses.
 
@@ -601,7 +805,7 @@ unexpected outage that took more than 30 minutes to resolve.
 See ` + "`_template.md`" + ` for the file structure to follow when adding entries.
 `
 	default:
-		return fmt.Sprintf("# Knowledge Base — %s/\n\nSee `_template.md` for the file structure to follow.\n", topicType)
+		return fmt.Sprintf("# %s\n\nSee `_template.md` for the file structure to follow.\n", titleCaseCategory(string(topicType)))
 	}
 }
 
@@ -917,7 +1121,7 @@ func ScanCrossRepoKnowledge(workspaceRoot string, limit int) ([]CrossRepoEntry, 
 			if err != nil || info.IsDir() {
 				return nil
 			}
-			if strings.HasSuffix(info.Name(), ".md") && info.Name() != "README.md" {
+			if strings.HasSuffix(info.Name(), ".md") && !okf.IsReservedEntry(info.Name()) {
 				rel, _ := filepath.Rel(knowledgeDir, path)
 				entries = append(entries, rel)
 			}
@@ -976,7 +1180,7 @@ func ScanWorkspaceKB(workspaceRoot string, limit int) ([]WorkspaceKBEntry, error
 			if total >= limit {
 				break
 			}
-			if !e.IsDir() && strings.HasSuffix(e.Name(), ".md") && e.Name() != "README.md" {
+			if !e.IsDir() && strings.HasSuffix(e.Name(), ".md") && !okf.IsReservedEntry(e.Name()) {
 				entries = append(entries, e.Name())
 				total++
 			}
@@ -1095,7 +1299,7 @@ func listMDFiles(dir string) ([]string, error) {
 	}
 	var files []string
 	for _, e := range entries {
-		if !e.IsDir() && strings.HasSuffix(e.Name(), ".md") && e.Name() != "README.md" {
+		if !e.IsDir() && strings.HasSuffix(e.Name(), ".md") && !okf.IsReservedEntry(e.Name()) {
 			files = append(files, e.Name())
 		}
 	}
