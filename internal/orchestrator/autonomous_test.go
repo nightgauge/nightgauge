@@ -1063,6 +1063,7 @@ func TestTransientFailuresNeverTripTheCircuitBreaker(t *testing.T) {
 		TerminalKindStallKill,
 		TerminalKindGitHubQuotaLow,
 		TerminalKindGitHubNetworkOutage,
+		TerminalKindGitHubRateLimited,
 		TerminalKindRateLimitQuotaExhausted,
 		TerminalKindAdapterAuthFailed,
 		TerminalKindModelUnavailable,

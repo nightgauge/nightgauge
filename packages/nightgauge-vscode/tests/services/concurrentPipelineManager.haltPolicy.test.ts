@@ -69,6 +69,18 @@ const SKIP_CASES: { text: string; kind: string; branch: string }[] = [
   },
   { text: "API Error: Overloaded", kind: "api_overloaded", branch: "529 overload" },
   {
+    // #1391 — GitHub's own secondary-limit wording, verbatim from `gh`. Go
+    // routes this kind with the transient-infra branch and says "no pause" in
+    // as many words; this layer must not override that. Before the kind
+    // existed the text classified as subagent_crash and therefore HALTED the
+    // queue on a throttle that clears in minutes.
+    text:
+      "exit 1: gh: You have exceeded a secondary rate limit for the GitHub API\n" +
+      "Please wait a few minutes before you try again",
+    kind: "github_rate_limited",
+    branch: "environmental",
+  },
+  {
     text: "[stall-killed] stage exceeded stall idle threshold",
     kind: "stall_kill",
     branch: "transient stall",
@@ -148,6 +160,7 @@ describe("queue-halt policy (ConcurrentPipelineManager)", () => {
       "rate_limit_quota_exhausted",
       "network_unavailable",
       "adapter_auth_failed",
+      "github_rate_limited",
     ]) {
       expect(source).toContain(`"${kind}"`);
     }
