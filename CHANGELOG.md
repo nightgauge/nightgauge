@@ -138,43 +138,6 @@ table, carve-out rationale, and consequence analysis.
 
 ### Fixed
 
-#### A credential-less push records its own terminal kind (#878)
-
-- A stage that died on a `git push` with no usable credentials was booked as
-  `premature_turn_end` (the classifier saw the retained post-condition symptom
-  phrase) or `validation_error` (the post-condition site hardcoded it). Both
-  name agent behaviour or a broken output contract for a fault that is neither.
-  `terminal_kind` is what the V2 run record carries and what recovery routing
-  and the retro path key on, so the misattribution poisoned the learning corpus.
-- **New terminal kind** `git_transport_auth_failed`, added as one rule in
-  `internal/terminalkind/table.json` **above** `premature-turn-end`, matching the
-  transport's own wording (`invalid auth method`, `permission denied (publickey`,
-  `could not read Username`/`Password`, `authentication failed for`,
-  `authentication required`, `ssh: unable to authenticate`, `bad credentials`,
-  `http 401`, `401 unauthorized`) — a deliberate subset of
-  `orchestrator.permissionPhrases`, not a copy: the bare words and the 403 forms
-  stay out because this ladder matches the whole joined string above sixteen
-  other rules, and each exclusion is pinned by a corpus row that would otherwise
-  go red. One authority: the SDK mirror and the stress golden are regenerated
-  from that file, not hand-written.
-- **Go binary** (`internal/orchestrator/scheduler.go`): the missing-output
-  post-condition now derives its terminal kind by classifying the FIRST CAUSE
-  line it already found in the stage's output tail, falling back to
-  `validation_error` only when the table does not recognise it.
-- **The cause the daemon logs now reaches the record it books.** The observed
-  run's `invalid auth method` came from the scheduler's own non-blocking
-  epic-branch auto-create, which only ever called `log.Printf` — so the
-  first-cause scan, the escalation gate and the terminal kind were all reading a
-  stage output tail that never contained it, and the run still escalated
-  haiku → sonnet and booked `validation_error`. `ensureEpicBranchForItem` now
-  returns its failure text and `runPipeline` appends it to the stage's evidence
-  via the new `RuntimeState.AppendStageOutputTail`.
-- **Retro** (`AutoRetroService`): the authoritative `terminal_failure_kind` map
-  gained the new kind, with a `credential-failure` category. Without it the
-  extractor returned null for the #878 record and the prose keyword table won on
-  the retained `did not write expected output context` phrase, answering
-  `state-management` and recommending a context re-run for a credential fault.
-
 #### Empty epics invisible in Repositories tree view (#3329)
 
 - A freshly-created epic (`type:epic` label, zero sub-issues) was filtered out
