@@ -138,6 +138,30 @@ table, carve-out rationale, and consequence analysis.
 
 ### Fixed
 
+#### Paused/corrupt snapshot protection was unbounded without a resident server (#443)
+
+- The 14-day snapshot age cap lived as a private constant in the IPC orphan
+  reconciler, which runs only from a server's startup timer. In a CLI-only
+  workspace — no `nightgauge serve`, no extension — nothing ever aged a paused
+  or corrupt snapshot out, and `state.ActiveIssuesFromSnapshots` then protected
+  that issue's worktree **forever**: `nightgauge worktree sweep` reported it as
+  `active-run` on every run and could never reclaim it.
+- **Go binary** (`internal/runstate/concurrent.go`): the cap moved beside
+  `LivenessWindow` as the exported `SnapshotRetention`, imported by both
+  readers — the reconciler collects past it, the CLI-side scan stops protecting
+  past it. The IPC-local constant is deleted; the literal exists once in the
+  tree.
+- **Go binary** (`internal/state/active_issues.go`): the paused, corrupt and
+  name/body-mismatch arms apply that cap and warn by name when they stop
+  vouching. The `stat`-failure arm stays unbounded and says why: retention
+  needs an mtime.
+- **Operator surface** (`internal/execution/worktree_sweep.go`,
+  `cmd/nightgauge/worktree.go`): `ActiveIssues.Protected` names the arm and its
+  evidence per protected issue, carried onto `SkippedWorktree.ReasonDetail`.
+  Text prints `skipped <path> (active-run: paused-snapshot, 13d)`; `--json`
+  adds `"reasonDetail"` beside `"reason"`. All six arms used to print the same
+  `active-run` word.
+
 #### Empty epics invisible in Repositories tree view (#3329)
 
 - A freshly-created epic (`type:epic` label, zero sub-issues) was filtered out

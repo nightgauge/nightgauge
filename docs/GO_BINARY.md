@@ -1287,11 +1287,42 @@ snapshot is:
   sidecar arm exists — it is the one signal that path writes while the run is
   alive; or
 - **paused** — a deliberate "resume later" that powers the restore prompt days
-  later, so it is never aged out by the liveness lease; or
+  later, so it is never aged out by the 30-minute liveness lease. It **is** aged
+  out by `runstate.SnapshotRetention` (14 days, see below); or
 - **terminal within the tail window** — the terminal marker lands before the
   worktree goes on both dispatch paths; or
 - **unreadable / name-body mismatched** — counted as active and reported as a
-  warning.
+  warning, and likewise bounded by `runstate.SnapshotRetention`. The one arm
+  with no bound is a snapshot the scan could not `stat` at all: retention needs
+  an mtime, and inventing "old enough" for the entry whose mtime failed to read
+  would be the permissive guess in the one place a guess destroys directories.
+
+**Retention does not require a resident server (#443).** The 14-day cap used to
+live as a private constant inside the IPC orphan reconciler, which runs only
+from a server's startup timer and `workspace.setRoot`. In a workspace where
+`nightgauge serve` and the extension never run, nothing ever removed a paused or
+corrupt snapshot — and the arms above then protected that issue's worktree
+**forever**, turning the operator's own reclaim command into a permanent no-op
+(the structural-no-op class, pointing the other way). The value now lives in
+`runstate.SnapshotRetention` beside `LivenessWindow`, and both readers import
+it: the reconciler collects past the cap, and this scan stops protecting past
+it. Two copies of that number would be two answers to "is that run still
+there?" waiting to disagree.
+
+**Every protection names its arm.** `ActiveIssues.Protected` carries, per
+protected issue, the arm that vouched for it and the evidence that arm read —
+`live-sidecar, pid 431`, `stage-child, pid 4312`, `timestamp-lease, 12m`,
+`paused-snapshot, 13d`, `corrupt-snapshot, 1h`, `identity-mismatch, 2m`,
+`unstattable-snapshot`. The first arm to grant a protection owns the reason; the
+sidecar is read first because it is the only arm whose evidence is current. The
+sweep carries that string onto `SkippedWorktree.ReasonDetail`, so the CLI prints
+`skipped <path> (active-run: paused-snapshot, 13d)` and `--json` adds
+`"reasonDetail"` beside `"reason"`. Before #443 all six arms printed the
+identical `active-run` word and an operator auditing a refusal had to open the
+state directory to tell a live process from a fortnight-old pause. The field is
+empty for a caller with no arms to name — the autonomous reconcile protects from
+its in-process registry — because a detail on a skip nobody attributed would be
+a claim with no source.
 
 Accepted residuals, stated rather than hidden: a live run with **no snapshot at
 all** is not protected (that is a bug elsewhere; `--dry-run` remains for the
