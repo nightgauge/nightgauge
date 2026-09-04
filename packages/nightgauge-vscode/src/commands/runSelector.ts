@@ -14,8 +14,18 @@
  * This resolves the intended target: the singleton when it holds a live
  * run, plus one candidate per active concurrent slot whose state service
  * holds a live run.
- *   - Zero candidates -> `null`. The caller keeps its existing "no active
- *     pipeline" refusal; no run identity exists anywhere to act on.
+ *   - Zero identity-bearing candidates but the singleton still holds STATE ->
+ *     the singleton, keyed by `state.issue_number` (no runId/issueNumber
+ *     required). This is the pre-#423 behavior for the documented
+ *     identity-less-but-paused shape (ADR-017 step 8): the activation-time
+ *     pause-restore path populates `_lastState` from disk before any
+ *     `beginRun` installs an identity (bootstrap/services.ts). Losing this
+ *     fallback regresses a working case — `pausePipeline()`/`resumePipeline()`
+ *     already handle "no identity" by returning `false` and the caller
+ *     already reports "not persisted"; that refusal must come from THERE,
+ *     not from this resolver finding zero candidates.
+ *   - Zero candidates and no singleton state either -> `null`. The caller
+ *     keeps its existing "no active pipeline" refusal.
  *   - One candidate -> returned directly, no prompt.
  *   - More than one -> `vscode.window.showQuickPick`, labelled by issue
  *     number and a short run-id prefix. Cancelling the picker (Escape)
@@ -42,9 +52,11 @@ interface RunCandidate extends TargetRun {
 /**
  * Resolve the `PipelineStateService` a pause/resume command should act on.
  *
- * @returns `null` when no run is live anywhere (singleton and every active
- *   slot are all identity-less) or when the operator cancels a multi-run
- *   picker. Otherwise the resolved `{ service, issueNumber }`.
+ * @returns `null` when no run is live anywhere AND the singleton holds no
+ *   state at all, or when the operator cancels a multi-run picker. Otherwise
+ *   the resolved `{ service, issueNumber }` — including the singleton
+ *   fallback keyed off `state.issue_number` when it holds state but no run
+ *   identity (see the class doc above).
  */
 export async function resolveTargetRunService(
   stateService: PipelineStateService | null,
@@ -72,6 +84,20 @@ export async function resolveTargetRunService(
   }
 
   if (candidates.length === 0) {
+    // Fall back to the singleton's own state (#423 finding: a service can
+    // hold real pipeline state — `paused: true` included — with no run
+    // identity installed, e.g. right after activation restores a persisted
+    // pause but before any dispatch calls `beginRun`). `getState()?.issue_number`
+    // is deliberately used here rather than `getIssueNumber()`, which returns
+    // `null` in exactly this shape by design (see its doc comment on
+    // PipelineStateService) and would just reproduce the loss this fallback
+    // exists to undo.
+    if (stateService) {
+      const state = await stateService.getState();
+      if (state && typeof state.issue_number === "number") {
+        return { service: stateService, issueNumber: state.issue_number };
+      }
+    }
     return null;
   }
   if (candidates.length === 1) {

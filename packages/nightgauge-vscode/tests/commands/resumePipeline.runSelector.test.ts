@@ -12,6 +12,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import * as vscode from "vscode";
 import { registerResumePipelineCommand } from "../../src/commands/resumePipeline";
 import type { HeadlessOrchestrator } from "../../src/services/HeadlessOrchestrator";
 import type { Logger } from "../../src/utils/logger";
@@ -63,6 +64,13 @@ vi.mock("vscode", () => ({
 const createMockOrchestrator = (): HeadlessOrchestrator =>
   ({
     runPipeline: vi.fn(() => Promise.resolve({ success: true, completedStages: [] })),
+    // #423: resumePipeline.ts checks this to decide whether the singleton's
+    // own runPipeline() call is already HOLDING at its pause boundary (the
+    // hold design) rather than redriving with a second call. Default false —
+    // "no live call backing this state", matching every existing test here,
+    // which target a slot (isSingletonTarget is false, so this is never
+    // read) or an idle singleton with no state at all.
+    getIsRunning: vi.fn(() => false),
   }) as unknown as HeadlessOrchestrator;
 
 const createMockLogger = (): Logger =>
@@ -236,6 +244,90 @@ describe("resumePipeline run selector", () => {
     await handler();
 
     expect((idleSingleton as unknown as MockRunService).resumePipeline).not.toHaveBeenCalled();
+    expect(mockOrchestrator.runPipeline).not.toHaveBeenCalled();
+  });
+
+  it("(d) cancelling the QuickPick resumes nothing (finding: the cancel arm was unpinned)", async () => {
+    const serviceA = createMockService({
+      runId: "01911f6e-0000-7000-8000-0000000000aa",
+      issueNumber: 601,
+      paused: true,
+    });
+    const serviceB = createMockService({
+      runId: "01911f6e-0000-7000-8000-0000000000bb",
+      issueNumber: 602,
+      paused: true,
+    });
+    const cpm = createMockConcurrentPipelineManager(
+      [
+        { slotIndex: 0, issueNumber: 601, service: serviceA },
+        { slotIndex: 1, issueNumber: 602, service: serviceB },
+      ],
+      2
+    );
+
+    // showQuickPick resolves undefined — the operator pressed Escape.
+    quickPickImpl = () => undefined;
+
+    const idleSingleton = createMockService({ runId: null, issueNumber: null });
+    const handler = registerAndGetHandler(idleSingleton, cpm);
+    await handler();
+
+    expect((serviceA as unknown as MockRunService).resumePipeline).not.toHaveBeenCalled();
+    expect((serviceB as unknown as MockRunService).resumePipeline).not.toHaveBeenCalled();
+    expect((idleSingleton as unknown as MockRunService).resumePipeline).not.toHaveBeenCalled();
+    expect(mockOrchestrator.runPipeline).not.toHaveBeenCalled();
+    expect(vscode.window.showInformationMessage).toHaveBeenCalledWith(
+      "No active pipeline to resume."
+    );
+  });
+
+  it("(e) falls back to the singleton when it holds state but no run identity (#423 regression)", async () => {
+    // The activation-time pause-restore shape: getState() returns real
+    // pipeline state (paused: true) but getRunId()/getIssueNumber() are both
+    // null because no dispatch has called beginRun() yet (ADR-017 step 8).
+    // On main this always targeted the singleton and dispatched
+    // orchestrator.runPipeline() for it; losing this fallback made the
+    // command refuse instead — a real regression demonstrated against the
+    // same mock shape on origin/main vs this branch.
+    const identityLessButPaused = createMockService({ runId: null, issueNumber: null });
+    vi.mocked(identityLessButPaused.getState).mockResolvedValue({
+      issue_number: 77,
+      stages: PENDING_STAGES,
+      paused: true,
+    } as any);
+    const cpm = createMockConcurrentPipelineManager([], 0);
+
+    const handler = registerAndGetHandler(identityLessButPaused, cpm);
+    await handler();
+
+    expect(
+      (identityLessButPaused as unknown as MockRunService).resumePipeline
+    ).toHaveBeenCalledTimes(1);
+    // No live call was holding this run (getIsRunning() defaults to false
+    // and activeSlotCount is 0) — a fresh runPipeline() dispatch is correct.
+    expect(mockOrchestrator.runPipeline).toHaveBeenCalledWith(77);
+  });
+
+  it("(f) does not redrive a singleton run that is already held at its pause boundary", async () => {
+    // Same identity-less-but-paused state as (e), but this time a live
+    // orchestrator call IS still holding at the pause boundary (the hold
+    // design, #423) — getIsRunning() reports true. Redriving here would
+    // race the held call and, for a real orchestrator, throw against the
+    // duplicate-dispatch guard ("Pipeline is already running").
+    const heldSingleton = createMockService({ runId: null, issueNumber: null });
+    vi.mocked(heldSingleton.getState).mockResolvedValue({
+      issue_number: 88,
+      stages: PENDING_STAGES,
+      paused: true,
+    } as any);
+    vi.mocked(mockOrchestrator.getIsRunning).mockReturnValue(true);
+    const cpm = createMockConcurrentPipelineManager([], 0);
+
+    const handler = registerAndGetHandler(heldSingleton, cpm);
+    await handler();
+
+    expect((heldSingleton as unknown as MockRunService).resumePipeline).toHaveBeenCalledTimes(1);
     expect(mockOrchestrator.runPipeline).not.toHaveBeenCalled();
   });
 });

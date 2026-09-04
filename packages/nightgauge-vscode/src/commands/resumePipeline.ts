@@ -129,23 +129,40 @@ export function registerResumePipelineCommand(
       // Set pipeline running context
       vscode.commands.executeCommand("setContext", "nightgauge.pipelineRunning", true);
 
-      // Check if the Go-driven concurrent pipeline is active.
-      // When it is, the Go scheduler drives stage progression — we just
-      // need to restore the UI state and let it continue naturally.
+      // Check if a live runPipeline() call is already HOLDING this run at its
+      // pause boundary (#423) instead of having returned. Since the stage
+      // loop now waits at the pause check rather than breaking out of it,
+      // clearing the flag above is enough for that SAME call to continue —
+      // calling runPipeline() again here would race it and, for the
+      // singleton, hit the duplicate-dispatch guard ("Pipeline is already
+      // running").
+      //   - A concurrent-slot target is held whenever any slot is active:
+      //     the target was enumerated from `getActiveSlots()` moments ago by
+      //     `resolveTargetRunService`, and under the hold design a paused
+      //     slot's `runSlotPipeline` promise stays pending, so it is still
+      //     counted there.
+      //   - The singleton target is held when `orchestrator.getIsRunning()`
+      //     is true — the case that fresh-redrives below is a singleton
+      //     whose PAUSED state was restored from disk with no live call
+      //     backing it (e.g. after an extension reload; see ADR-017 step 8).
+      const isSingletonTarget = service === stateService;
       const goActive = concurrentPipelineManager && concurrentPipelineManager.activeSlotCount > 0;
+      const singletonHeld = isSingletonTarget && orchestrator.getIsRunning();
+      const runIsHeld = goActive || singletonHeld;
 
-      if (goActive) {
-        // Go scheduler is driving — restore UI without calling
+      if (runIsHeld) {
+        // A live call already holds this run — restore UI without calling
         // HeadlessOrchestrator.runPipeline() (which would create a
-        // duplicate legacy execution path and reset pipelineRunning
-        // to false on completion, hiding the control buttons).
+        // duplicate execution path and, for the singleton, throw against the
+        // duplicate-dispatch guard).
         // Show running state — use the next pending stage or fallback to pipeline-start
         const goResumeStage = nextStage ?? "pipeline-start";
         statusBar.showRunning(goResumeStage);
         vscode.window.showInformationMessage(`Pipeline resumed.${notPersisted}`);
-        logger.info("Pipeline resumed (Go-driven path)", {
+        logger.info("Pipeline resumed (held run continues)", {
           issueNumber,
-          activeSlots: concurrentPipelineManager.activeSlotCount,
+          activeSlots: concurrentPipelineManager?.activeSlotCount ?? 0,
+          singletonHeld,
         });
       } else if (nextStage) {
         // Legacy HeadlessOrchestrator path — no Go slots active
