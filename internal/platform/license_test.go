@@ -178,7 +178,7 @@ func TestLicenseService_Validate_Rejected4xx_MachineLimitCode(t *testing.T) {
 	c.setMode(ModeOnline)
 
 	svc := NewLicenseService(c)
-	info, err := svc.Validate(context.Background())
+	info, err := svc.Validate(context.Background(), MachineInfo{})
 	if err != nil {
 		t.Fatalf("Validate returned error: %v", err)
 	}
@@ -465,7 +465,7 @@ func TestLicenseService_ValidateKey_Rejected4xx_MachineLimitCode(t *testing.T) {
 	c.setMode(ModeOnline)
 	svc := NewLicenseService(c)
 
-	info, err := svc.ValidateKey(context.Background(), "BAD-ENTERED-KEY")
+	info, err := svc.ValidateKey(context.Background(), "BAD-ENTERED-KEY", MachineInfo{})
 	if err != nil {
 		t.Fatal(err)
 	}
