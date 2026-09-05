@@ -21,6 +21,10 @@
 #      with no extension file at all, and a missing root section still fails.
 #  11. `--extract Unreleased` prints exactly the [Unreleased] body; a root with
 #      no [Unreleased] exits 1.
+#  12. `--extract` never requires the extension changelog: with the default
+#      (nonexistent) extension path and no `--extension none`, it still prints
+#      the root section (a single-changelog repository's first tag failed its
+#      own release gate this way).
 #
 # All arms run against throwaway files under mktemp; the tag list is injected
 # with --tags-from so the suite never depends on this clone's tags.
@@ -211,6 +215,14 @@ rc=$?
 ok=1
 [ "$rc" -eq 1 ] && grep -q "has no \[Unreleased\] section" <<<"$OUT" && ok=0
 check "arm 11b: --extract Unreleased on a root without one exits 1" "$ok"
+
+# --- Arm 12: --extract is root-only, extension file irrelevant ---------------
+OUT="$(bash "$GATE" --root "$TMP/root.md" --extension "$TMP/does-not-exist.md" --tags-from "$TAGS_FROM" --extract v0.2.0 2>&1)"
+rc=$?
+expected=$'### Fixed\n\n- A thing (#2)'
+ok=1
+[ "$rc" -eq 0 ] && [ "$OUT" = "$expected" ] && ok=0
+check "arm 12: --extract ignores a missing extension changelog" "$ok"
 
 echo
 echo "check-changelog regression suite: $PASS passed, $FAIL failed"

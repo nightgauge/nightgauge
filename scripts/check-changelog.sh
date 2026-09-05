@@ -79,8 +79,19 @@ done
 
 # FILES is every changelog under contract: the root always, the extension
 # unless the caller said `none`. Every per-file arm iterates FILES.
+#
+# `--extract` reads the ROOT only, by definition — it is how a single-changelog
+# repository's release workflow gets its notes — so it must not require the
+# extension file to exist. A single-changelog repository's first tag failed at
+# its own release gate because the extract call omitted `--extension none` and
+# this check, applied unconditionally, looked for the VS Code changelog in a
+# repository that has none.
 FILES=("$ROOT")
-[ "$EXT" = "none" ] || FILES+=("$EXT")
+if [ -n "$EXTRACT_TAG" ]; then
+  EXT="none"
+elif [ "$EXT" != "none" ]; then
+  FILES+=("$EXT")
+fi
 for f in "${FILES[@]}"; do
   if [ ! -r "$f" ]; then
     echo "check-changelog: cannot read $f" >&2

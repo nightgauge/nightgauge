@@ -14,6 +14,14 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+### Fixed
+
+- `scripts/check-changelog.sh --extract` reads the root changelog only and no
+  longer requires the extension changelog to exist — a single-changelog
+  repository's first release run failed at its own changelog gate because its
+  extract call omitted `--extension none` and the readability check applied to
+  every mode (#1473)
+
 ## [0.2.3] - 2026-09-05
 
 The first release cut under the changelog contract: every entry below was
