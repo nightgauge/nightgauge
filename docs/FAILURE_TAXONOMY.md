@@ -812,6 +812,15 @@ on `failure.CatPermission` and nothing else:
   the first version of this gate refused to escalate two of three issues in a
   wave test purely because they were numbered #401 and #403. The codes are
   honored in their written forms (`http 403`, `403 forbidden`) instead.
+- **The bare phrase `permission denied` does not trigger the gate either
+  (#1447).** Go's standard library reports an ordinary filesystem EACCES as
+  `open /some/path: permission denied`, which is capability-fixable and has
+  nothing to do with forge/git-auth — but was matching the same bare clause
+  the gate uses for a genuine credential denial, and blocked escalation on it.
+  The gate honors only the unambiguous transport forms
+  (`permission denied (publickey)`, `remote: permission denied`); the shared
+  `failure.Classifier`'s own bare clause is left as-is, since it stays broad
+  on purpose for its own curated-stderr callers.
 
 The git-transport spellings (`invalid auth method`, `authentication required`,
 `could not read Username`, `Bad credentials`, …) were added to

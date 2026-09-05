@@ -23,10 +23,21 @@ var escalationClassifier = failure.NewClassifier()
 // The codes are still honored in their unambiguous written forms below. Nothing
 // is changed in the shared classifier — its bare-code clauses remain right for
 // its own callers.
+//
+// The bare "permission denied" entry has the identical problem (#1447): Go's
+// standard library reports an ordinary filesystem EACCES as
+// `open /some/path: permission denied`, which a stage's raw output tail can
+// contain for reasons that have nothing to do with forge/git-auth — the agent
+// tried to write somewhere it should not have, a scratch dir got cleaned up
+// mid-run, a temp file lost its permissions. That is a capability-fixable
+// failure, exactly what escalation exists to retry with a stronger model; the
+// bare phrase was blocking escalation on it. It is narrowed below to the
+// unambiguous forms actually seen from git/ssh/forge transports.
 var permissionPhrases = []string{
 	"unauthorized",
 	"forbidden",
-	"permission denied",
+	"permission denied (publickey)",
+	"remote: permission denied",
 	"invalid auth method",
 	"authentication required",
 	"authentication failed",
