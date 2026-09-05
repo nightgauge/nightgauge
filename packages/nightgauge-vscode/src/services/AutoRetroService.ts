@@ -45,7 +45,11 @@ import type { Logger } from "../utils/logger";
 import { IpcClient } from "./IpcClient";
 import { getRepoIdentity } from "../utils/configPathResolver";
 import { stageContextFileName } from "../orchestrator/context/stageContextFiles";
-import type { PipelineFeedbackSignal, PipelineFeedbackSignalType } from "@nightgauge/sdk";
+import type {
+  PipelineFeedbackSignal,
+  PipelineFeedbackSignalType,
+  TerminalFailureKind,
+} from "@nightgauge/sdk";
 
 // ============================================================================
 // Types
@@ -78,7 +82,43 @@ import type { PipelineFeedbackSignal, PipelineFeedbackSignalType } from "@nightg
  * pipeline should report success and the queue should NOT be cleared. See
  * #3108 for the incident this category was introduced for.
  *
+ * Categories added in #1448, when the run record's `terminal_failure_kind`
+ * went from a five-kind map to the whole canonical vocabulary. Each exists
+ * because the remedy for its kinds is not the remedy for any category above
+ * it — an unmapped kind used to borrow one of those wrong remedies:
+ *
+ *   - `quota-exhausted` — a provider or forge quota WINDOW is closed
+ *     (Anthropic session/usage limit, GitHub primary or secondary rate limit,
+ *     quota below start-up headroom). Distinct from `budget-exceeded`, which
+ *     is Nightgauge's own configured ceiling: nothing in the config caused
+ *     this and nothing in the config fixes it — the window reopens on a clock.
+ *   - `model-unavailable` — the API REJECTED the selected model (not on the
+ *     plan, unknown id, per-model cap). Distinct from `model-capability`,
+ *     where the model ran and its output fell short; here it never ran.
+ *   - `permission-denied` — the harness refused a tool call outright. Not a
+ *     defect and not an outage: the stage had turns left and could have
+ *     picked another approach.
+ *   - `human-decision-required` — a gate stopped for a decision only a person
+ *     can make (architecture approval), or a stage declared the deliverable
+ *     is not producible by any pipeline lap. Parked, not broken.
+ *   - `dependency-blocked` — the run was dispatched over an open `blockedBy`
+ *     edge. The defect is in the dispatch decision, not in the stage.
+ *   - `no-work-required` — the run ended because there was nothing to
+ *     produce: the issue was already closed, or the branch is level with base
+ *     so there is no PR to open.
+ *   - `work-stranded` — the run's work EXISTS but not where the pipeline
+ *     looks: uncommitted in a worktree, on a stray branch, on a diverged
+ *     remote, or committed but never turned into a PR. Re-running before
+ *     recovering it either duplicates or destroys it.
+ *   - `containment-breach` — the stage wrote outside the repository it owns
+ *     (#129/#230). It exits 0 and reports success, so nothing else marks it
+ *     failed; the writes must be attributed before anything else happens.
+ *   - `validation-inconclusive` — a validation tier RAN and executed zero
+ *     tests. Distinct from `validation-failure`: no test failed, so "review
+ *     failing tests" names nothing an operator can open.
+ *
  * @see skills/nightgauge-retro/SKILL.md
+ * @see Issue #1448 - every canonical terminal kind maps to a category
  */
 export type RetroFailureCategory =
   | "budget-exceeded"
@@ -97,6 +137,15 @@ export type RetroFailureCategory =
   | "merge-blocked"
   | "adapter-unavailable"
   | "no-adapter-available"
+  | "quota-exhausted"
+  | "model-unavailable"
+  | "permission-denied"
+  | "human-decision-required"
+  | "dependency-blocked"
+  | "no-work-required"
+  | "work-stranded"
+  | "containment-breach"
+  | "validation-inconclusive"
   | "unknown";
 
 export interface RetroFinding {
@@ -403,6 +452,116 @@ function isPreResultStopHook(text: string): boolean {
 }
 
 /**
+ * The run record's `terminal_failure_kind` → retro category, for EVERY kind in
+ * the canonical vocabulary (#1448).
+ *
+ * `terminal_failure_kind` is not a guess. `internal/terminalkind/table.json` —
+ * the single definition of how a failure's error text becomes a terminal kind —
+ * already decided it, Go booked it on the run record, and by the time the retro
+ * reads it the cause is NAMED. So this map must decide, and the one thing it may
+ * never do is return nothing and let the classifier go fishing for a keyword in
+ * prose. That is not a hypothetical: a credential fault whose kind the record
+ * carried exactly was written up as `state-management`, recommending "re-run the
+ * failed stage after verifying context" (#878) — a remedy that cannot work.
+ * Before #1448 five kinds were mapped out of thirty-nine, so thirty-four kinds
+ * took that path by default.
+ *
+ * The `Record<TerminalFailureKind, …>` type is the guard, not a decoration: the
+ * union is exhaustive, so a kind added to the vocabulary makes THIS OBJECT a
+ * compile error until someone chooses its category. The union in turn is pinned
+ * to Go's `TerminalKind*` constants by failureClassifier.parity.test.ts (#229),
+ * and table.json's kinds are pinned to those constants by
+ * TestTable_EveryKindHasCorpusCoverage — so a new kind cannot reach table.json
+ * without arriving here. AutoRetroService.terminalKindCoverage.test.ts closes
+ * the loop from the other end, reading table.json directly and failing when a
+ * kind in it produces no category.
+ *
+ * A category is shared only where the REMEDY is genuinely shared; the kind
+ * itself always rides along on the finding's evidence line, so grouping never
+ * costs the operator the specific name.
+ */
+const TERMINAL_KIND_CATEGORY: Record<TerminalFailureKind, RetroFailureCategory> = {
+  // The subagent stopped producing, or produced without bound. Same diagnostic
+  // file, same next step; runaway_progress is documented as "treated like
+  // stall_kill", and subagent_crash is the process-death fallback.
+  stall_kill: "stall-kill",
+  subagent_crash: "stall-kill",
+  runaway_progress: "stall-kill",
+
+  // Nightgauge's OWN configured ceilings tripped. Actionable in config.
+  budget_exceeded: "budget-exceeded",
+  budget_ceiling_hit: "budget-exceeded",
+
+  // A quality gate ran and honestly failed. There is a failing test, type
+  // error or build to open.
+  validation_error: "validation-failure",
+  validation_failed: "validation-failure",
+  dev_tests_failed: "validation-failure",
+  dev_build_verification_failed: "validation-failure",
+
+  // A tier ran and executed nothing — no failure to read, usually an
+  // environmental or tag-filter misconfiguration (#221).
+  validation_inconclusive: "validation-inconclusive",
+
+  // The pipeline's own contract state is missing or unreadable: the file a
+  // stage's contract says it wrote is absent, empty, or unreadable.
+  orchestrator_crash: "state-management",
+  stage_context_unreadable: "state-management",
+  dev_handoff_missing: "state-management",
+
+  // The stage exited 0 and its post-condition gate found the work absent, or
+  // found the contract step skipped. Inspect the gate result, not the logs.
+  pr_merge_unmerged: "skill-no-op",
+  premature_turn_end: "skill-no-op",
+  dev_produced_no_changes: "skill-no-op",
+  dev_build_verification_missing: "skill-no-op",
+
+  // Transport or provider infrastructure, transient by construction: retry
+  // when it clears, and there is nothing in the repo to fix.
+  network_unavailable: "infrastructure-outage",
+  api_connection_lost: "infrastructure-outage",
+  api_overloaded: "infrastructure-outage",
+  github_network_outage: "infrastructure-outage",
+  stream_idle_timeout: "infrastructure-outage",
+  pr_merge_lookup_failed: "infrastructure-outage",
+
+  // A quota WINDOW is closed. It reopens on a clock; no config change helps.
+  rate_limit_quota_exhausted: "quota-exhausted",
+  github_rate_limited: "quota-exhausted",
+  github_quota_low: "quota-exhausted",
+
+  // The API rejected the model itself, so the stage never ran.
+  model_unavailable: "model-unavailable",
+
+  // The adapter could not authenticate before the stage started.
+  adapter_auth_failed: "adapter-unavailable",
+
+  // The harness refused a tool call. Not a defect — a "not that way".
+  permission_denied: "permission-denied",
+
+  // A person owns the next move.
+  architecture_approval_required: "human-decision-required",
+  not_pipeline_actionable: "human-decision-required",
+
+  // Dispatched over an open dependency edge: a scheduler decision, not a stage
+  // failure.
+  blocked_dependency: "dependency-blocked",
+
+  // There was nothing to produce.
+  issue_closed: "no-work-required",
+  no_changes_produced: "no-work-required",
+
+  // The work exists somewhere the pipeline does not look. Recover it FIRST.
+  worktree_uncommitted: "work-stranded",
+  abandoned_commit: "work-stranded",
+  commit_orphaned: "work-stranded",
+  branch_forked: "work-stranded",
+
+  // The stage wrote into a repository it does not own.
+  containment_breach: "containment-breach",
+};
+
+/**
  * Structured-signal extractors. Each returns 0-or-1 signal for a given
  * evidence corpus. Order matters when multiple signals are present: the FIRST
  * extractor that fires becomes the primary finding; the rest become secondary.
@@ -418,19 +577,20 @@ const SIGNAL_EXTRACTORS: Array<(input: ExtractorInput) => StructuredSignal | nul
     const m = text.match(/"terminal_failure_kind"\s*:\s*"([a-z_]+)"/);
     if (!m) return null;
     const kind = m[1];
-    const map: Record<string, RetroFailureCategory> = {
-      stall_kill: "stall-kill",
-      budget_exceeded: "budget-exceeded",
-      validation_error: "validation-failure",
-      subagent_crash: "stall-kill",
-      orchestrator_crash: "state-management",
-    };
-    const cat = map[kind];
+    // Every kind THIS BUILD knows is decided by TERMINAL_KIND_CATEGORY — the
+    // exhaustive Record makes that a compile-time property, not a convention.
+    // The miss below is reachable only across version skew: a record written by
+    // a newer binary naming a kind this build's vocabulary does not contain.
+    // Then, and only then, the prose passes are a better answer than a category
+    // picked at random, so the extractor declines instead of guessing.
+    const cat = TERMINAL_KIND_CATEGORY[kind as TerminalFailureKind] as
+      RetroFailureCategory | undefined;
     if (!cat) return null;
+    // No severityHint: buildFinding takes severity from the category's own
+    // dictionary, so a hint here would be a second, silently divergent opinion.
     return {
       category: cat,
       evidence: `Run record terminal_failure_kind: ${kind}`,
-      severityHint: cat === "stall-kill" ? "medium" : "high",
     };
   },
   // skillRunner stall-kill log line, idle OR hard-cap.
@@ -1556,6 +1716,24 @@ export class AutoRetroService {
         "Stage halted at start — primary adapter prereq failed and fallback was disabled or the chain was empty",
       "no-adapter-available":
         "Every adapter in the fallback chain failed prereq at stage start — no adapter is available to run the stage",
+      "quota-exhausted":
+        "A provider or forge quota window is closed — the run hit a session/usage limit or a GitHub rate limit, not a Nightgauge budget",
+      "model-unavailable":
+        "The API rejected the selected model — not on the plan, unknown id, or a per-model usage cap; the stage never ran",
+      "permission-denied":
+        "The harness denied a tool call outright — the stage reached for a pattern it is not allowed to use",
+      "human-decision-required":
+        "The run stopped for a decision only a person can make, or the deliverable is not producible by any pipeline lap",
+      "dependency-blocked":
+        "The run was dispatched while a blockedBy dependency was still open — a scheduler decision, not a stage failure",
+      "no-work-required":
+        "The run ended because there was nothing to produce — the issue was already closed, or the branch holds no commits to open a PR for",
+      "work-stranded":
+        "The run's work exists but not where the pipeline looks — uncommitted, on a stray branch, on a diverged remote, or committed with no PR",
+      "containment-breach":
+        "The stage wrote into a repository it does not own — the write-containment check caught it while the stage reported success",
+      "validation-inconclusive":
+        "A validation tier ran and executed zero tests — nothing failed, so nothing was actually verified",
       unknown: "Pipeline failure detected but category could not be determined",
     };
 
@@ -1590,6 +1768,24 @@ export class AutoRetroService {
         "The primary adapter resolved for this stage failed its prereq probe (auth, missing CLI, missing env var, etc.) and no fallback ran. Either fix the primary adapter's auth/install or — if you want automatic recovery — set `pipeline.disable_fallback: false` (the default) and configure `pipeline.adapter_fallback_chain` or `pipeline.stage_adapter_fallback.<stage>`.",
       "no-adapter-available":
         "Every adapter in the effective fallback chain failed prereq at stage start. Inspect the `adapters_tried=[…]` list in the envelope: at least one of those adapters needs a valid auth/install before the stage can run. Either broaden the chain (`pipeline.adapter_fallback_chain`) or fix one of the listed adapters' prereqs. See `nightgauge doctor --json` for per-adapter status.",
+      "quota-exhausted":
+        "A quota window closed mid-run (Anthropic session/usage limit, GitHub primary or secondary rate limit, or quota below start-up headroom). Nothing in `pipeline.*` caused this and nothing there fixes it — the window reopens on a clock, and the scheduler's own cooldown handles the wait. Re-queue after the reset time named in the evidence. If this repeats every run, the account's plan or the workspace's API call rate is the thing to change (`nightgauge api-usage` shows the top callers).",
+      "model-unavailable":
+        "The API rejected the model itself, so the stage never ran — the model is not on the plan, the id is unknown to the provider, or its per-model cap is spent. Check the resolved model for the failed stage (`nightgauge doctor --adapters`) against what the account can serve, then fix the routing (`pipeline.stage_models`, the mode profile's ceiling) rather than re-running into the same rejection. Tier-downgrade fallback should have covered this; if it did not, the fallback chain is the defect.",
+      "permission-denied":
+        'The harness refused a tool call — commonly a foreground `sleep` wait loop reported as "User rejected tool use". This is not a defect and not an outage: the stage had turns left and could have chosen another approach. If the same denied pattern keeps appearing, fix the skill that reaches for it (or the permission rule that should allow it); a plain re-run will reach for it again.',
+      "human-decision-required":
+        "The run is parked, not broken: an approval gate stopped it for a decision only a person can make, or a stage declared the deliverable is not producible by any pipeline lap (counsel sign-off, an operator-only credential, a product call). Make the decision and record it — an ADR for an architecture halt, the `owner-action` label for a non-actionable issue — then re-queue. Re-running without the decision reproduces the halt exactly.",
+      "dependency-blocked":
+        "The issue's blockedBy dependencies were still open when the scheduler dispatched it, so the run deferred. The stage is fine; the dispatch decision was wrong. Land the blockers, or drop the edge if it is stale — the issue re-dispatches on its own once nothing blocks it. A repeat here means the dependency graph the scheduler reads disagrees with the board.",
+      "no-work-required":
+        "There was nothing for the pipeline to produce: the issue was already closed before the run started, or pr-create confirmed the branch holds no commits ahead of base. Neither is a failure. Dequeue the issue; if it is genuinely open work, the real question is why the previous lap produced no commits — look at the feature-dev deliverable rather than re-running pr-create.",
+      "work-stranded":
+        "The run's work EXISTS and the pipeline cannot see it — uncommitted in a worktree, on a stray branch, on a remote that diverged, or committed but never turned into a PR. Recover it BEFORE anything else: `nightgauge wip list` for preserved work-in-progress, `nightgauge doctor` for leaked worktrees, branches and stashes. Re-running first either duplicates the work or destroys it, and after a reclaim sweep you can no longer tell which.",
+      "containment-breach":
+        "The stage wrote into a repository it does not own (#129). It exited 0 and reported success, so no other signal marks the run failed. Attribute the out-of-worktree writes before touching anything: the containment record names the files and the repository. Then fix why the stage reached outside — usually a hard-coded path or a sibling-repo edit that belongs in its own session — rather than re-running and writing there again.",
+      "validation-inconclusive":
+        "A validation tier ran and executed zero tests, so the suite proved nothing while reporting no failures. There is no failing test to open. Check the tier's target paths and tag filters (`exclude-tags`, the test-execution record under `.nightgauge/pipeline/`) against where the change actually landed — a green suite that ran nothing is the failure mode this kind exists to name.",
       unknown: "Review logs manually. Run /nightgauge:retro for AI-powered root cause analysis.",
     };
 
@@ -1610,6 +1806,19 @@ export class AutoRetroService {
       "merge-blocked": "medium",
       "adapter-unavailable": "high",
       "no-adapter-available": "high",
+      // Severity drives auto-issue creation (the default threshold is `high`),
+      // so these are set by "does a human need to change something in this
+      // repo", not by how loud the run was. A quota window that reopens on a
+      // clock and a deferral the scheduler will retry must not open issues.
+      "quota-exhausted": "low",
+      "model-unavailable": "high",
+      "permission-denied": "medium",
+      "human-decision-required": "medium",
+      "dependency-blocked": "low",
+      "no-work-required": "low",
+      "work-stranded": "high",
+      "containment-breach": "high",
+      "validation-inconclusive": "medium",
       unknown: "low",
     };
 
