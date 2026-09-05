@@ -29,7 +29,12 @@ import * as assert from "node:assert/strict";
 import * as vscode from "vscode";
 import { suite, test } from "../harness.js";
 import { capturedPanels, panelsCreatedBy, type CapturedPanel } from "../observe.js";
-import { delay, materializePopulatedFixture, waitFor } from "../fixture.js";
+import {
+  delay,
+  materializePopulatedFixture,
+  waitFor,
+  waitForRenderThenDispose,
+} from "../fixture.js";
 import { extension } from "./activation.suite.js";
 
 import { AdapterDoctorPanel } from "../../../src/views/doctor/AdapterDoctorPanel.js";
@@ -38,7 +43,22 @@ import { ApprovalDialog } from "../../../src/views/approval/ApprovalDialog.js";
 import { RecoveryDialog } from "../../../src/views/recovery/RecoveryDialog.js";
 import type { PipelineState } from "../../../src/services/PipelineStateService.js";
 
-/** How long a panel gets to assign `webview.html` after it is created. */
+/**
+ * How long a panel gets to assign `webview.html` after it is created.
+ *
+ * Why 5 s stays, measured rather than asserted (#1327): every case prints
+ * `render-ms <panel> <n>` so the distribution is visible in each CI run. The
+ * first hosted run with that logging (PR #1441, 2026-09-04) measured the two
+ * heaviest panels at Dashboard 203 ms and BrownfieldDashboard 201 ms, with
+ * every other panel at 0 ms (rendered before the first probe) — roughly 25x
+ * headroom under this budget. The 5 074 ms failure that motivated the issue
+ * was therefore runner starvation, not render cost, so the budget is not
+ * widened and the render is not "made faster"; what changed is that a
+ * timed-out render now still disposes its panel, so one starved run reports
+ * as one failure instead of cascading into the leaked-panel assertion. If a
+ * future run shows the heavy panels drifting toward the budget, the per-case
+ * `render-ms` lines are the measurement to derive a new one from.
+ */
 const RENDER_BUDGET_MS = 5_000;
 
 interface PanelCase {
@@ -257,17 +277,21 @@ suite("webviews", () => {
           `Panels created instead: ${JSON.stringify(created.map((entry) => entry.viewType))}`
       );
 
-      const html = await waitFor(
+      // Elapsed time is logged and the panel is disposed unconditionally —
+      // pass or timeout — so a render that never settles cannot skip
+      // disposal and cascade into "no panel from this suite is left open"
+      // as a second, unrelated-looking failure (#1327).
+      const html = await waitForRenderThenDispose(
+        panelCase.name,
         () => {
           const body = match.panel.webview.html;
           return body && body.trim().length > 0 ? body : undefined;
         },
         RENDER_BUDGET_MS,
-        `${panelCase.name} to render a non-empty body`
+        () => match.panel.dispose()
       );
       assert.ok(html.length > 0);
 
-      match.panel.dispose();
       await waitFor(
         () => match.disposed || undefined,
         2_000,

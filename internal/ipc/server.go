@@ -1055,26 +1055,64 @@ func (s *Server) Run(ctx context.Context) error {
 		"protocolVersion": ProtocolVersion,
 	})
 
-	scanner := bufio.NewScanner(os.Stdin)
-	// Allow up to 10MB per message
-	scanner.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
+	// The stdio loop runs on its own goroutine so this one can select on the
+	// run context. A read on os.Stdin is not interruptible, so a loop that
+	// only ended at EOF made `nightgauge serve` unable to observe its own
+	// shutdown: the SIGTERM handler in cmd/nightgauge cancels the context and
+	// nothing else, and with stdin still open (a terminal, or an extension
+	// host that has not exited yet) Run never came back at all. The reader
+	// goroutine is left parked in that read on the cancellation path — the
+	// process is on its way out, and it holds nothing but the pipe.
+	stdin := os.Stdin
+	scanDone := make(chan struct{})
+	var scanErr error
+	go func() {
+		defer close(scanDone)
+		scanner := bufio.NewScanner(stdin)
+		// Allow up to 10MB per message
+		scanner.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
 
-	for scanner.Scan() {
-		line := scanner.Bytes()
-		if len(line) == 0 {
-			continue
+		for scanner.Scan() {
+			line := scanner.Bytes()
+			if len(line) == 0 {
+				continue
+			}
+
+			var req Request
+			if err := json.Unmarshal(line, &req); err != nil {
+				s.sendError(0, ErrInvalidParams, fmt.Sprintf("invalid JSON: %v", err))
+				continue
+			}
+
+			go s.handleRequest(ctx, req)
 		}
+		scanErr = scanner.Err()
+	}()
 
-		var req Request
-		if err := json.Unmarshal(line, &req); err != nil {
-			s.sendError(0, ErrInvalidParams, fmt.Sprintf("invalid JSON: %v", err))
-			continue
-		}
-
-		go s.handleRequest(ctx, req)
+	var err error
+	select {
+	case <-scanDone:
+		// close(scanDone) is the happens-before edge that makes this read safe;
+		// the cancellation arm below must NOT touch scanErr.
+		err = scanErr
+	case <-ctx.Done():
+		// A cancelled run context is how a shutdown arrives, not a failure —
+		// returning ctx.Err() here would make `serve` exit non-zero on every
+		// clean SIGTERM.
 	}
 
-	return scanner.Err()
+	// Bounded teardown (#489). This is the last moment anything can join the
+	// autonomous scheduler's detached board-recovery goroutines: they are
+	// deliberately built to survive an 80-minute rate-limit pause
+	// (boardRecoveryTimeout), and a process that exits through here while one
+	// is mid-MoveStatus abandons a board write with nothing to notice. Bounded
+	// rather than unconditional, because the same ceiling that makes those ops
+	// survivable would otherwise hang a SIGTERM for over an hour.
+	if s.autonomousScheduler != nil {
+		s.autonomousScheduler.Shutdown(orchestrator.BackgroundDrainGrace)
+	}
+
+	return err
 }
 
 func (s *Server) handleRequest(ctx context.Context, req Request) {

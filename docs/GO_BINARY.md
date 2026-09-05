@@ -4507,6 +4507,47 @@ By caller:
 Two producers, the same board, one sweep, 81% of the bill — the finding that
 `--by caller` makes unmissable and a call-site count cannot show at all.
 
+#### Agent Guidance: A Raw `gh` Board Pull Is Invisible Here (Issue #1428)
+
+The ledger wraps the Go binary's transport. It cannot see a request made by
+anything else — and the most expensive GitHub client in this workspace on a
+normal day is an **agent session running `gh` in a shell**, which is a separate
+process with its own token resolution. A `ProjectV2` board read costs 17 points
+per 100-item page (see above); the shared board has ~1,960 items, so
+
+```
+gh project item-list 3 --owner nightgauge --limit 3000
+  = 20 pages x 17 pts = ~340 GraphQL points, in one command
+```
+
+Three such pulls inside a few minutes — an agent iterating on a board-drift
+audit — consumes the hourly GraphQL budget outright (#1428). The failure then
+surfaces somewhere else entirely: `gh pr checks` starts returning `GraphQL: API
+rate limit already exceeded`, because it is **also GraphQL**, so watching CI
+during exactly the window a board audit exhausted the quota fails too — and the
+natural workaround, polling `gh pr checks` again, spends more of the same pool.
+Two rules follow directly from that:
+
+- **Pull the board once, into a file — never iterate against the API.**
+  `gh project item-list 3 --owner nightgauge --limit 3000 --format json >
+  board.json`, then filter, grep, or script against `board.json`. A second
+  question about the same board is a second read of the file, not a second
+  `gh project item-list`.
+- **Watch CI over REST, not GraphQL.** `gh pr checks` calls GraphQL and shares
+  the same 5,000-point pool a board pull just spent. Use the REST check-runs
+  endpoint instead — the same call `scripts/post-merge-check.sh` already uses
+  post-merge:
+
+  ```bash
+  sha=$(gh pr view <PR> --json headRefOid --jq .headRefOid)
+  gh api "repos/{owner}/{repo}/commits/$sha/check-runs" --paginate
+  ```
+
+Before a bulk read, check what it would cost against what is left this hour:
+`nightgauge api-usage --budget` reports the remaining GraphQL budget for the
+current hour and prices a full board read against it, entirely from the local
+ledger — no GitHub request needed to ask the question.
+
 ### The Sweep's Board Binding (Issue #844)
 
 The ledger's first finding was not a cadence problem. Two of the three top
@@ -4845,7 +4886,7 @@ Plus the leaked-machine-state checks (#330 / #332 / #341), all **warning-only**:
 | `worktree_leaks`     | Registered pipeline worktrees older than 24h that `sweep` cannot reclaim, with repo, age, skip reason, and the paths that blocked them |
 | `stranded_branches`  | Local branches whose content is already in `origin/<default>` and that **no worktree holds**, per repo — report only, nothing is deleted |
 | `pipeline_stashes`   | Stashes carrying the `nightgauge:` marker that were never reclaimed, per repo, with age |
-| `orphaned_processes` | Running `nightgauge` processes older than 1h that no live sidecar claims, with PID, age, and argv |
+| `orphaned_processes` | Running `nightgauge` processes older than 1h that no live sidecar claims, with PID, age, and argv — plus (#519) any process, regardless of parentage, whose cwd sits inside a pipeline worktree base (`.nightgauge/worktrees`, `.worktrees`, `.claude/worktrees`) |
 
 The worktree and stash carriers exist because a 2026-08-04 workspace audit found
 **9 leaked worktrees and 5 leaked stashes** — all of them by running `git
@@ -4987,6 +5028,77 @@ Accepted limitations, documented rather than papered over:
 The parser is exercised against a **captured, redacted process table** from a
 real machine (`internal/doctor/testdata/orphaned-processes/`, captured with the
 committed `capture-ps-snapshot.sh`), not an invented one.
+
+##### Foreign cwd holders (issue #519)
+
+The classification above only ever looks for processes the pipeline itself
+spawned — it filters to `argv[0]`'s basename being `nightgauge`. But a
+pipeline worktree directory is also where **interactive** agent harnesses
+(Claude Code, Codex, the VSCode extension) run their own shells, and those
+harnesses can leak a detached one: an operator found several `/bin/zsh`
+processes still parked with cwd inside `.nightgauge/worktrees/issue-488`, held
+open by a VSCode extension-host background task long after the session ended
+and the worktree itself was already removed. None of those shells was ever a
+nightgauge process, so the argv-basename filter could never have seen them.
+
+`orphaned_processes` runs a second, cwd-keyed classifier over **every** row
+(nightgauge or not, `self` excluded) and folds any hit into the same check:
+
+- **cwd source, one bounded call per platform.** macOS shells
+  `lsof -a -d cwd -Fpn -p <comma-joined pids>` **once** for every pid in the
+  table (never one `lsof` per process) under a 10s timeout; Linux reads
+  `os.Readlink("/proc/<pid>/cwd")` per pid directly, no subprocess, stripping
+  the kernel's `" (deleted)"` suffix so a removed directory's path still reads
+  plain. A pid this reader cannot resolve (already exited, owned by another
+  user) is simply absent from the result — routine on a machine-wide scan —
+  but the mechanism itself failing outright (unsupported platform, `lsof`
+  produces nothing at all) is a MECHANISM FAILURE, not "nothing found": it
+  routes the whole check through `unverifiableProcessScan` rather than
+  reporting clean off a scan that never ran (#296).
+- **Three known worktree bases per repo root**:
+  `.nightgauge/worktrees` (the Go `execution.Manager`'s own default),
+  `.worktrees` (the VSCode extension's default, `WorktreeManager.ts`), and
+  `.claude/worktrees` (Claude Code's own base) — the same three
+  `worktreeContainment.ts`'s `isLinkedWorktree` doc comment names. Best-effort,
+  not authoritative: a workspace-configured `pipeline.worktree_base` is
+  TypeScript-side config this Go binary does not parse, so a custom base is
+  invisible to this scan.
+- **Containment is decided lexically, and cwd need not exist.** Only the
+  worktree-base directory (e.g. `<repo>/.nightgauge/worktrees`) is resolved
+  with `filepath.EvalSymlinks` — it still exists whenever this scan has
+  anything to find, even once the specific worktree subdirectory inside it is
+  gone. cwd itself is only `filepath.Clean`ed and made absolute, deliberately
+  **not** symlink-resolved: `git worktree remove` deletes the worktree
+  directory outright, and `EvalSymlinks` on a path that no longer exists fails
+  ENOENT — the exact way the removed-worktree case went undetected before this
+  fix. Containment is then `filepath.Rel`, never a string prefix:
+  `.../worktrees-old/x` shares the literal prefix `.../worktrees` with
+  `.../worktrees/x` but resolves to `../worktrees-old/x`, which is rejected.
+- **Stale distinction from `git worktree list --porcelain`**
+  (`execution.ActiveWorktreeIssues`, the same parser #110's worktree
+  reclamation and `checkLeakedWorktrees` use), called **once per repo root**
+  and kept in that shape rather than merged into one workspace-wide
+  issue-number set — two repos can each legitimately hold their own
+  issue-488, live in one and removed in the other, and merging would let the
+  live one paper over the removed one. A holder whose worktree is still
+  registered **in its own repo** is tagged `[cwd inside worktree issue-N]`;
+  one whose worktree has already been `git worktree remove`d there — the
+  shape that can also block a **future** removal — is tagged `[cwd inside
+  REMOVED worktree issue-N]` and sorted before the live-worktree holders. A
+  `git worktree list` failure in any one repo root undetermines the whole cwd
+  half (routed through `unverifiableProcessScan`), the same doctrine as the
+  cwd-source mechanism failure above.
+- **Live holders are age-gated; REMOVED holders are not.** Every pipeline
+  stage and every interactive session legitimately runs with cwd inside a
+  LIVE worktree the moment it starts, so a live-worktree holder younger than
+  `staleProcessAge` (1h, the same floor #341's own scan uses) is not reported
+  — otherwise the check would tell an operator to "verify and terminate"
+  work that is simply running. A REMOVED worktree has no legitimate occupant
+  at any age, so it is reported immediately regardless — that is the headline
+  #519 incident.
+- **Report-only, same contract as #341.** The line names PID, elapsed time,
+  cwd, and command, then says "verify and terminate manually" — nothing here
+  ever signals a process.
 
 **Exit codes**:
 

@@ -1,6 +1,7 @@
 package orchestrator
 
-// Regression pins for the background-goroutine lifecycle (#428).
+// Regression pins for the background-goroutine lifecycle (#428, widened by
+// #491).
 //
 // The production change is invisible to assertions: 22 detached spawns routed
 // through goTracked, six board-recovery ops re-parented onto the lifecycle
@@ -9,17 +10,17 @@ package orchestrator
 // not assumed. These five pins are what makes the mechanism load-bearing, and
 // none of them needs the race detector or a sleep:
 //
-//	P1 source shape   — no untracked spawn can return to autonomous.go
+//	P1 source shape   — no untracked spawn can return to a covered file
 //	P2 the join       — a spawn that is not counted makes the join return early
 //	P3 the cancel     — cancellation actually reaches the in-flight `gh` exec
 //	P4 the re-arm     — work spawned after a drain is not born cancelled
 //	P5 the generation — a drain releases even with a LIVE Run context
 //
-// Scope note: P1 covers autonomous.go only. scheduler.go (3 spawns),
-// wave_orchestrator.go (4) and epic.go (1) legitimately hold
-// bare spawns today; scheduler.go is owned by queued issues #463/#444/#441, and
-// widening this pin belongs to whichever change gives those files a lifecycle.
-
+// Scope note: P1 covers autonomous.go, wave_orchestrator.go and epic.go.
+// scheduler.go (3 spawns: runEpicBackstopSweep, dispatchItem, onQueueChanged)
+// is explicitly excluded — it is owned by queued issue #463, and widening
+// this pin to scheduler.go belongs to whichever change gives that file a
+// lifecycle.
 import (
 	"context"
 	"errors"
@@ -31,33 +32,78 @@ import (
 	"time"
 )
 
-// TestEveryDetachedSpawnInAutonomousGoesThroughGoTracked is the #428
-// resurrection pin. autonomous.go may contain exactly ONE detached-spawn
-// construct: the one inside goTracked. Any other is a goroutine that outlives
-// whatever it reads, and the repo's plain `go test` gate would not notice its
-// return — the leak shows up as a ~25-50% flake in some other test, or not at
-// all.
+// spawnFileSpec tells TestEveryDetachedSpawnInAutonomousGoesThroughGoTracked
+// how to validate one source file's detached spawns.
 //
-// The sanctioned construct is goTracked's `wg.Go(...)` (sync.WaitGroup.Go),
-// so the pin recognises both spawn shapes — a `go` statement and a `.Go(...)`
-// call — which makes it a strict superset of "every `go` statement".
+// A file is validated one of two ways:
+//   - trackedFunc set: every detached-spawn construct (a `go` statement or a
+//     `.Go(...)` call) must lie textually inside that function's body — the
+//     autonomous.go shape, where goTracked is the single sanctioned seam.
+//   - allowedLines set (trackedFunc empty): the file has no single wrapping
+//     seam, so spawns are pinned by exact source line instead. Each entry
+//     documents why that specific spawn is exempt (its own WaitGroup, or a
+//     process-lifetime comment in the source); any detached-spawn construct
+//     at a line NOT in this map is reported as bare, naming file and line —
+//     so a second, unreviewed spawn added to an already-allowlisted file
+//     still fails the pin.
+type spawnFileSpec struct {
+	trackedFunc  string
+	allowedLines map[int]string
+}
+
+var spawnPinTable = map[string]spawnFileSpec{
+	"autonomous.go": {trackedFunc: "goTracked"},
+	"wave_orchestrator.go": {allowedLines: map[int]string{
+		485: "runWaveParallel — joined via wg.Wait() before the function returns",
+		542: "runWaveScaled — joined via wg.Wait() before the batch loop continues",
+		591: "runSubagent — joined via the done-channel select below (ctx.Done()/<-done)",
+	}},
+	"epic.go": {allowedLines: map[int]string{
+		72: "checkEpicCompletion — process-lifetime, 35s-bounded, WithoutCancel; documented at the call site",
+	}},
+}
+
+// TestEveryDetachedSpawnInAutonomousGoesThroughGoTracked is the #428
+// resurrection pin, widened by #491 to a table over every file whose
+// lifecycle has been reviewed. Each detached-spawn construct — a `go`
+// statement or a `.Go(...)` call (sync.WaitGroup.Go), a strict superset of
+// "every `go` statement" — must be either textually inside the file's tracked
+// function (autonomous.go's goTracked) or at an exact line the file's
+// allowlist names (wave_orchestrator.go, epic.go). Any other detached spawn
+// is a goroutine that outlives whatever it reads, and the repo's plain
+// `go test` gate would not notice its return — the leak shows up as a
+// ~25-50% flake in some other test, or not at all.
 func TestEveryDetachedSpawnInAutonomousGoesThroughGoTracked(t *testing.T) {
+	for file, spec := range spawnPinTable {
+		t.Run(file, func(t *testing.T) {
+			if spec.trackedFunc != "" {
+				checkTrackedFuncSpawns(t, file, spec.trackedFunc)
+			} else {
+				checkAllowlistedSpawns(t, file, spec.allowedLines)
+			}
+		})
+	}
+}
+
+// checkTrackedFuncSpawns pins the autonomous.go shape: exactly one
+// detached-spawn construct, and it must live inside trackedFuncName's body.
+func checkTrackedFuncSpawns(t *testing.T, file, trackedFuncName string) {
 	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, "autonomous.go", nil, 0)
+	astFile, err := parser.ParseFile(fset, file, nil, 0)
 	if err != nil {
-		t.Fatalf("parse autonomous.go: %v", err) // positive control: unreadable/moved file fails
+		t.Fatalf("parse %s: %v", file, err) // positive control: unreadable/moved file fails
 	}
 
 	var tracked *ast.FuncDecl
-	ast.Inspect(file, func(n ast.Node) bool {
-		if fn, ok := n.(*ast.FuncDecl); ok && fn.Name.Name == "goTracked" {
+	ast.Inspect(astFile, func(n ast.Node) bool {
+		if fn, ok := n.(*ast.FuncDecl); ok && fn.Name.Name == trackedFuncName {
 			tracked = fn
 		}
 		return true
 	})
 	if tracked == nil {
-		t.Fatal("no goTracked func in autonomous.go — the background-goroutine " +
-			"lifecycle (#428) was removed; restore it, or amend this pin deliberately")
+		t.Fatalf("no %s func in %s — the background-goroutine lifecycle (#428) "+
+			"was removed; restore it, or amend this pin deliberately", trackedFuncName, file)
 	}
 
 	within := func(n ast.Node) bool {
@@ -66,7 +112,7 @@ func TestEveryDetachedSpawnInAutonomousGoesThroughGoTracked(t *testing.T) {
 
 	inside := 0
 	var bare []string
-	ast.Inspect(file, func(n ast.Node) bool {
+	ast.Inspect(astFile, func(n ast.Node) bool {
 		switch node := n.(type) {
 		case *ast.GoStmt:
 			if within(node) {
@@ -75,8 +121,6 @@ func TestEveryDetachedSpawnInAutonomousGoesThroughGoTracked(t *testing.T) {
 			}
 			bare = append(bare, fset.Position(node.Pos()).String()+" (`go` statement)")
 		case *ast.CallExpr:
-			// sync.WaitGroup.Go — the spawn goTracked actually uses. Counted the
-			// same way as a `go` statement: it detaches a goroutine.
 			sel, ok := node.Fun.(*ast.SelectorExpr)
 			if !ok || sel.Sel.Name != "Go" {
 				return true
@@ -91,14 +135,64 @@ func TestEveryDetachedSpawnInAutonomousGoesThroughGoTracked(t *testing.T) {
 	})
 
 	if inside != 1 { // positive control: zero spawn constructs must FAIL, not pass
-		t.Fatalf("goTracked contains %d detached-spawn construct(s), want exactly 1 — this pin can "+
-			"no longer tell a tracked spawn from an untracked one", inside)
+		t.Fatalf("%s contains %d detached-spawn construct(s), want exactly 1 — this pin can "+
+			"no longer tell a tracked spawn from an untracked one", trackedFuncName, inside)
 	}
 	for _, pos := range bare {
-		t.Errorf("untracked detached spawn at %s — route it through as.goTracked so the "+
+		t.Errorf("untracked detached spawn at %s — route it through as.%s so the "+
 			"scheduler can cancel and join it (#428). If this spawn genuinely owns its "+
 			"own lifecycle (its own WaitGroup, or a documented process-lifetime "+
-			"goroutine), amend this pin in the same commit and say which.", pos)
+			"goroutine), amend this pin in the same commit and say which.", pos, trackedFuncName)
+	}
+}
+
+// checkAllowlistedSpawns pins the wave_orchestrator.go/epic.go shape: no
+// single wrapping seam, so every detached-spawn construct must sit at an
+// exact, reviewed source line. A spawn at any other line — including a
+// SECOND spawn added next to an already-allowlisted one — fails, naming file
+// and line.
+func checkAllowlistedSpawns(t *testing.T, file string, allowed map[int]string) {
+	fset := token.NewFileSet()
+	astFile, err := parser.ParseFile(fset, file, nil, 0)
+	if err != nil {
+		t.Fatalf("parse %s: %v", file, err) // positive control: unreadable/moved file fails
+	}
+
+	seen := make(map[int]bool, len(allowed))
+	var bare []string
+	record := func(pos token.Pos, shape string) {
+		line := fset.Position(pos).Line
+		if _, ok := allowed[line]; ok {
+			seen[line] = true
+			return
+		}
+		bare = append(bare, fset.Position(pos).String()+" ("+shape+")")
+	}
+	ast.Inspect(astFile, func(n ast.Node) bool {
+		switch node := n.(type) {
+		case *ast.GoStmt:
+			record(node.Pos(), "`go` statement")
+		case *ast.CallExpr:
+			sel, ok := node.Fun.(*ast.SelectorExpr)
+			if !ok || sel.Sel.Name != "Go" {
+				return true
+			}
+			record(node.Pos(), "`.Go(...)` spawn")
+		}
+		return true
+	})
+
+	for _, pos := range bare {
+		t.Errorf("untracked detached spawn at %s — not in %s's reviewed allowlist. Give it a "+
+			"lifecycle (route it through a tracked seam) or add it to spawnPinTable in "+
+			"this test file with a one-line citation of why it owns its own lifecycle (#491).",
+			pos, file)
+	}
+	for line, why := range allowed {
+		if !seen[line] {
+			t.Errorf("%s:%d: allowlisted spawn %q was not found — the line moved or the "+
+				"spawn was removed; update spawnPinTable in this test file", file, line, why)
+		}
 	}
 }
 
