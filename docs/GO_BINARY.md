@@ -4507,6 +4507,47 @@ By caller:
 Two producers, the same board, one sweep, 81% of the bill — the finding that
 `--by caller` makes unmissable and a call-site count cannot show at all.
 
+#### Agent Guidance: A Raw `gh` Board Pull Is Invisible Here (Issue #1428)
+
+The ledger wraps the Go binary's transport. It cannot see a request made by
+anything else — and the most expensive GitHub client in this workspace on a
+normal day is an **agent session running `gh` in a shell**, which is a separate
+process with its own token resolution. A `ProjectV2` board read costs 17 points
+per 100-item page (see above); the shared board has ~1,960 items, so
+
+```
+gh project item-list 3 --owner nightgauge --limit 3000
+  = 20 pages x 17 pts = ~340 GraphQL points, in one command
+```
+
+Three such pulls inside a few minutes — an agent iterating on a board-drift
+audit — consumes the hourly GraphQL budget outright (#1428). The failure then
+surfaces somewhere else entirely: `gh pr checks` starts returning `GraphQL: API
+rate limit already exceeded`, because it is **also GraphQL**, so watching CI
+during exactly the window a board audit exhausted the quota fails too — and the
+natural workaround, polling `gh pr checks` again, spends more of the same pool.
+Two rules follow directly from that:
+
+- **Pull the board once, into a file — never iterate against the API.**
+  `gh project item-list 3 --owner nightgauge --limit 3000 --format json >
+  board.json`, then filter, grep, or script against `board.json`. A second
+  question about the same board is a second read of the file, not a second
+  `gh project item-list`.
+- **Watch CI over REST, not GraphQL.** `gh pr checks` calls GraphQL and shares
+  the same 5,000-point pool a board pull just spent. Use the REST check-runs
+  endpoint instead — the same call `scripts/post-merge-check.sh` already uses
+  post-merge:
+
+  ```bash
+  sha=$(gh pr view <PR> --json headRefOid --jq .headRefOid)
+  gh api "repos/{owner}/{repo}/commits/$sha/check-runs" --paginate
+  ```
+
+Before a bulk read, check what it would cost against what is left this hour:
+`nightgauge api-usage --budget` reports the remaining GraphQL budget for the
+current hour and prices a full board read against it, entirely from the local
+ledger — no GitHub request needed to ask the question.
+
 ### The Sweep's Board Binding (Issue #844)
 
 The ledger's first finding was not a cadence problem. Two of the three top
