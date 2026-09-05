@@ -3596,10 +3596,15 @@ func (s *Server) registerMethods() {
 				// Issue body captured at pickup (#183). Empty unless the
 				// runtime state carried a body (autonomous path); flows to
 				// the telemetry wire's issueBody when present.
-				Body:        snap.Body,
-				Branch:      snap.Branch,
-				BaseBranch:  "main",
-				RoutingPath: "standard",
+				Body:       snap.Body,
+				Branch:     snap.Branch,
+				BaseBranch: "main",
+				// RoutingPath and SkipStages are filled in below from the run's
+				// own evidence (#1484). They are NOT set here: this literal used
+				// to hard-code `RoutingPath: "standard"` with no SkipStages, so
+				// every extension/HeadlessOrchestrator run recorded the standard
+				// route and an empty skip list — including runs the TS
+				// orchestrator had genuinely fast-tracked.
 			}
 			// Carried only when the gate actually estimated (#1213). A source
 			// of "" means no estimate was made, and an absent budget_estimate
@@ -3668,6 +3673,28 @@ func (s *Server) registerMethods() {
 			// corpus field, leaving one field with two meanings and no
 			// discriminator (#304).
 			input.ComplexityScore = cls.ComplexityScore
+			// The route the run was picked up under, and the stages that route
+			// actually removed (#1484). The record used to say `standard` with
+			// an empty skip list for EVERY run on this path, while the same
+			// run's trace carried `stage_skip {"source":"routing"}` lines — a
+			// record that contradicted its own run, and the reason #1482 read
+			// as "skip_stages declared but the stage ran".
+			//
+			// Both halves come from the run's own evidence, not from a
+			// re-derivation this handler is in no position to make:
+			//
+			//   - Path is routing.suggested_route out of the same
+			//     issue-{N}.json `cls` was just read from. Empty stays empty —
+			//     BuildV2Record spells the unknown as "standard", and doing it
+			//     there keeps ONE writer of that default.
+			//   - SkipStages is snap.SkippedStages, which the TS orchestrator
+			//     already populated: every routing skip calls
+			//     PipelineStateService.skipStage → pipeline.notifyStageTransition
+			//     with status "skipped" → rt.SkipStage. So this is what the run
+			//     DID, observed, not what a router would have said — the same
+			//     source the scheduler path records from.
+			input.RoutingPath = cls.SuggestedRoute
+			input.SkipStages = snap.SkippedStages
 			if snap.Branch == "" {
 				// Mirror the scheduler path: the persisted empty value is the
 				// honest "undetermined" state, but the resolution gap must also

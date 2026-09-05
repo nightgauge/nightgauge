@@ -13,6 +13,10 @@ import (
 
 // writeIssueContext writes a well-formed issue-{N}.json — the shape the
 // issue-pickup stage actually produces in the field — at the given root.
+//
+// The route's key is `suggested_route` (#1484). This fixture wrote `path`, a
+// key no producer has ever emitted into an issue context, which is precisely
+// why the reader's matching mistake survived: the fixture agreed with the bug.
 func writeIssueContext(t *testing.T, root string, issue int, devModel string, complexity int) {
 	t.Helper()
 	dir := filepath.Join(root, ".nightgauge", "pipeline")
@@ -20,7 +24,7 @@ func writeIssueContext(t *testing.T, root string, issue int, devModel string, co
 		t.Fatalf("mkdir: %v", err)
 	}
 	body := `{"routing":{"complexity_score":` + strconv.Itoa(complexity) +
-		`,"path":"standard","pickup_recommendation":{"dev_model":"` + devModel + `"}}}`
+		`,"suggested_route":"standard","pickup_recommendation":{"dev_model":"` + devModel + `"}}}`
 	if err := os.WriteFile(filepath.Join(dir, "issue-"+strconv.Itoa(issue)+".json"), []byte(body), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
 	}

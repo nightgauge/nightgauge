@@ -182,7 +182,7 @@ All context files include a `schema_version` field for future compatibility.
 | `routing.change_type`               | string | Yes      | Detected change type: docs, config, code                                                 |
 | `routing.task_type`                 | string | Yes      | Task type for routing: feature, bugfix, verification, docs-only, refactor, chore (v1.3+) |
 | `routing.complexity_score`          | number | Yes      | Fibonacci complexity score (1, 2, 3, 5, 8)                                               |
-| `routing.suggested_route`           | string | Yes      | Routing path: trivial, standard, extensive                                               |
+| `routing.suggested_route`           | string | Yes      | Routing path: trivial, standard, extensive. **The route's only key here** — see below    |
 | `routing.skip_stages`               | array  | Yes      | Stages to skip (feature-planning, feature-validate, pr-create, pr-merge)                 |
 | `routing.rationale`                 | string | Yes      | Human-readable explanation of routing decision                                           |
 | `routing.estimated_time_minutes`    | number | Yes      | Estimated pipeline time in minutes                                                       |
@@ -196,6 +196,23 @@ All context files include a `schema_version` field for future compatibility.
 | `dependencies.enforcement_override` | bool   | Yes      | True if user acknowledged blockers in warn mode                                          |
 | `created_at`                        | string | Yes      | ISO 8601 timestamp                                                                       |
 | `knowledge_path`                    | string | No       | Path to knowledge directory for this issue (v1.5+)                                       |
+
+#### The route is `suggested_route` here and `path` on the run record (#1484)
+
+They are the same value under two names, one layer apart, and the two names must
+not be confused:
+
+| Layer                                       | Key                       |
+| ------------------------------------------- | ------------------------- |
+| Issue context (`issue-{N}.json`, this file) | `routing.suggested_route` |
+| Run record (history JSONL, `V2Routing`)     | `routing.path`            |
+
+No producer writes `routing.path` into an issue context. A reader that decodes
+`path` from one therefore always gets `""`, which the record writer coerces to
+`"standard"` — so every run recorded the standard route, including trivial-route
+runs whose own trace showed the fast-track firing. That was the state of
+`scheduler.loadIssueContext` until #1484; a reader added here must decode
+`suggested_route`.
 
 ### planning-{N}.json
 

@@ -28,6 +28,35 @@ Skipped stages are recorded as `skipped` (not `failed`/`completed`) and count
 toward success (`completed + skipped == 6`). `force_full_pipeline: true` and the
 label-based `risk_high` floor both disable skipping.
 
+### Two orchestrators skip; one record writer says so (#1484)
+
+There are **two** stage loops, and which one runs depends on how the pipeline was
+started:
+
+| Path                            | Stage loop                            | Skip source                                               | Run record written by         |
+| ------------------------------- | ------------------------------------- | --------------------------------------------------------- | ----------------------------- |
+| Go scheduler                    | `orchestrator.Scheduler.runPipeline`  | `deriveRoutingDecision` (deterministic, re-derived)       | `OnPipelineComplete`          |
+| Autonomous / extension dispatch | TS `HeadlessOrchestrator.runPipeline` | `makeRoutingDecision` over `issue-{N}.json` + user config | IPC `pipeline.notifyComplete` |
+
+Autonomous dispatch goes `autonomous.go` → `LocalDispatcher.Dispatch` → IPC →
+`HeadlessOrchestrator`, which never round-trips Go's scheduler. **Both loops do
+honour the skip list** — the TS loop consults `shouldSkipStage` before every
+stage and reports each skip over `pipeline.notifyStageTransition` with status
+`skipped`, which the Go handler folds into `RuntimeState.SkippedStages`.
+
+What was wrong until #1484 was only the **record**: `notifyComplete` built its
+`V2RunInput` with a hard-coded `RoutingPath: "standard"` and no `SkipStages`, so
+every record from this path claimed the standard route and an empty skip list
+while the same run's trace carried `stage_skip {"source":"routing"}` lines. That
+is what made a run look like it had declared `skip_stages: [feature-planning]`
+and then run `feature-planning` (#1482) — the record contradicted its own run,
+and reading the record backwards produced a bug that did not exist.
+
+Both fields now come from the run's own evidence: the route from the issue
+context's `routing.suggested_route`, the skip list from `SkippedStages` — what
+the run **did**, observed, not what a router would have said. The `"standard"`
+default for an unknown route has exactly one writer, `state.BuildV2Record`.
+
 ### A skippable stage may not be the sole owner of a required side effect (#1179)
 
 Skipping is safe only for work the rest of the chain does not depend on. It was

@@ -278,7 +278,7 @@ func TestLoadIssueContext_DoesNotFabricateAPrediction(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, "issue-81.json"),
-		[]byte(`{"routing":{"complexity_score":5,"path":"standard"}}`), 0o644); err != nil {
+		[]byte(`{"routing":{"complexity_score":5,"suggested_route":"standard"}}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	score, _, model := loadIssueContext(root, "", "", 81)

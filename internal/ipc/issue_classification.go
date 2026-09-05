@@ -40,6 +40,12 @@ type issueClassification struct {
 	// reason; its general-purpose DISPATCH default lives at the dispatch site
 	// (orchestrator.defaultDispatchModel), where it never reaches the corpus.
 	PredictedModel string
+	// SuggestedRoute is routing.suggested_route — the route the issue was
+	// picked up under ("trivial" | "standard" | "extensive"). Empty means the
+	// context named none; it is NOT defaulted here, because the single writer
+	// of the "standard" default is state.BuildV2Record and a second one would
+	// make an absent route indistinguishable from a recorded one (#1484).
+	SuggestedRoute string
 	// Title is the issue title. It is what makes a "related decisions" query
 	// mean something: querying the DIGITS of the issue number ranks any file
 	// that happens to tokenize them (#1207).
@@ -68,7 +74,13 @@ func loadIssueClassification(repoRoot, worktreeDir string, issueNumber int) issu
 			Title   string            `json:"title"`
 			Labels  []json.RawMessage `json:"labels"`
 			Routing struct {
-				ComplexityScore      int `json:"complexity_score"`
+				ComplexityScore int `json:"complexity_score"`
+				// suggested_route is the key the schema defines and every
+				// producer writes (RoutingSchema in
+				// packages/nightgauge-sdk/src/context/schemas/issue.ts). There
+				// is no `path` key on an issue context — that name belongs to
+				// the run RECORD's routing block (#1484).
+				SuggestedRoute       string `json:"suggested_route"`
 				PickupRecommendation struct {
 					DevModel string `json:"dev_model"`
 				} `json:"pickup_recommendation"`
@@ -88,6 +100,7 @@ func loadIssueClassification(repoRoot, worktreeDir string, issueNumber int) issu
 			Size:            state.ExtractSizeFromLabels(labels),
 			ComplexityScore: ctx.Routing.ComplexityScore,
 			PredictedModel:  ctx.Routing.PickupRecommendation.DevModel,
+			SuggestedRoute:  ctx.Routing.SuggestedRoute,
 			Title:           ctx.Title,
 		}
 	}

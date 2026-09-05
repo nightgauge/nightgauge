@@ -821,3 +821,72 @@ describe("spike task routing", () => {
     expect(skipped).toContain("feature-validate");
   });
 });
+
+// Issue #1484: the autonomous dispatch path (autonomous.go → LocalDispatcher →
+// IPC → HeadlessOrchestrator) executes its stages here, not in the Go stage
+// loop. `HeadlessOrchestrator.shouldSkipStage` consults the decision this
+// module returns, so a trivial route's skip list must be absent from
+// `executeStages` — otherwise the run record's `skip_stages` (now written from
+// the run's own skipped-stage transitions, #1484) would name stages that ran.
+describe("trivial route skip parity with the Go scheduler (#1484)", () => {
+  const analysis = createMockAnalysis({
+    taskType: "bugfix",
+    suggestedRoute: "trivial",
+    complexityScore: 1,
+    sizeLabel: "XS",
+    skipStages: ["feature-planning", "feature-validate"],
+  });
+
+  it("removes both skippable stages from the executed list", () => {
+    const decision = makeRoutingDecision(analysis);
+
+    expect(decision.route).toBe("trivial");
+    expect(decision.skipStages).toEqual(["feature-planning", "feature-validate"]);
+    expect(decision.executeStages).not.toContain("feature-planning");
+    expect(decision.executeStages).not.toContain("feature-validate");
+    // The Go scheduler's schedulerSkippableStages honours exactly these two and
+    // always runs the rest, so every pipeline still produces and merges a PR.
+    expect(decision.executeStages).toEqual([
+      "issue-pickup",
+      "feature-dev",
+      "pr-create",
+      "pr-merge",
+    ]);
+    // executeStages + skipStages partition the full order — a stage may not
+    // vanish from both.
+    expect([...decision.executeStages, ...decision.skipStages].sort()).toEqual([
+      "feature-dev",
+      "feature-planning",
+      "feature-validate",
+      "issue-pickup",
+      "pr-create",
+      "pr-merge",
+    ]);
+  });
+
+  it("reports each skipped stage as skipped, which is what feeds the record", () => {
+    // HeadlessOrchestrator sends `pipeline.notifyStageTransition {status:
+    // "skipped"}` for each of these, and the Go notifyComplete handler records
+    // the resulting RuntimeState.SkippedStages as routing.skip_stages.
+    for (const stage of ["feature-planning", "feature-validate"] as PipelineStage[]) {
+      expect(shouldSkipStage(stage, analysis)).toBe(true);
+    }
+    for (const stage of [
+      "issue-pickup",
+      "feature-dev",
+      "pr-create",
+      "pr-merge",
+    ] as PipelineStage[]) {
+      expect(shouldSkipStage(stage, analysis)).toBe(false);
+    }
+  });
+
+  it("forceFullPipeline restores every stage, so the record cannot claim a skip", () => {
+    const config: RoutingConfig = { ...DEFAULT_ROUTING_CONFIG, forceFullPipeline: true };
+    const decision = makeRoutingDecision(analysis, config);
+
+    expect(decision.skipStages).toEqual([]);
+    expect(decision.executeStages).toContain("feature-planning");
+    expect(decision.executeStages).toContain("feature-validate");
+  });
+});
