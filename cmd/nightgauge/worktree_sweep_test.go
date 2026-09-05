@@ -585,3 +585,110 @@ func TestWorktreeSweep_StrandedBranchCommandIsRepoQualified(t *testing.T) {
 		}
 	}
 }
+
+// TestWorktreeSweep_ActiveRunSkipNamesTheArm is #443's operator half at the
+// command surface. `skipped … (active-run)` was printed for six structurally
+// different protections — a process executing right now and a paused snapshot
+// from thirteen days ago read identically — so the only way to audit a refusal
+// to reclaim was to open the state directory by hand. Both output modes carry
+// the arm now, and the paused arm is the fixture because it is the one whose
+// protection used to be unbounded.
+func TestWorktreeSweep_ActiveRunSkipNamesTheArm(t *testing.T) {
+	root, wt := sweepRepo(t, 4436)
+	snap := writeLiveSnapshot(t, root, 4436, 0)
+	pauseSnapshot(t, root, snap)
+	aged := time.Now().Add(-13 * 24 * time.Hour)
+	if err := os.Chtimes(snap, aged, aged); err != nil {
+		t.Fatalf("age the snapshot: %v", err)
+	}
+
+	out, err := runWorktreeSweep(t, "--workdir", root, "--dry-run")
+	if err != nil {
+		t.Fatalf("sweep: %v (%s)", err, out)
+	}
+	if _, statErr := os.Stat(wt); statErr != nil {
+		t.Fatalf("a paused run's worktree must still be protected inside the cap: %v", statErr)
+	}
+	if !strings.Contains(out, "active-run: paused-snapshot, 13d") {
+		t.Errorf("the skip line does not name the arm that vouched for it; output:\n%s", out)
+	}
+
+	jsonOut, _, jsonErr := runWorktreeSweepSplit(t, "--workdir", root, "--dry-run", "--json")
+	if jsonErr != nil {
+		t.Fatalf("sweep --json: %v (%s)", jsonErr, jsonOut)
+	}
+	var decoded struct {
+		Results []struct {
+			Skipped []struct {
+				Path         string `json:"path"`
+				Reason       string `json:"reason"`
+				ReasonDetail string `json:"reasonDetail"`
+			} `json:"skipped"`
+		} `json:"results"`
+	}
+	if err := json.Unmarshal([]byte(jsonOut), &decoded); err != nil {
+		t.Fatalf("decode --json: %v\n%s", err, jsonOut)
+	}
+	var found bool
+	for _, r := range decoded.Results {
+		for _, s := range r.Skipped {
+			if s.Path == wt {
+				found = true
+				if s.Reason != "active-run" || s.ReasonDetail != "paused-snapshot, 13d" {
+					t.Errorf("skipped entry = %+v, want active-run attributed to the paused arm", s)
+				}
+			}
+		}
+	}
+	if !found {
+		t.Errorf("the protected worktree is absent from --json skipped; output:\n%s", jsonOut)
+	}
+}
+
+// TestWorktreeSweep_PausedSnapshotPastRetentionStopsProtecting is #443's
+// retention half at the command surface, in the workspace shape that had NO
+// retention at all: a CLI-only checkout where `serve` and the extension never
+// run, so the IPC orphan reconciler never executes and nothing ever removed the
+// file. The paused arm protected that worktree forever — the structural-no-op
+// class pointing the other way, with the operator's own reclaim command as the
+// permanent no-op.
+func TestWorktreeSweep_PausedSnapshotPastRetentionStopsProtecting(t *testing.T) {
+	root, wt := sweepRepo(t, 4437)
+	snap := writeLiveSnapshot(t, root, 4437, 0)
+	pauseSnapshot(t, root, snap)
+	aged := time.Now().Add(-runstate.SnapshotRetention - time.Hour)
+	if err := os.Chtimes(snap, aged, aged); err != nil {
+		t.Fatalf("age the snapshot: %v", err)
+	}
+
+	out, errOut, err := runWorktreeSweepSplit(t, "--workdir", root)
+	if err != nil {
+		t.Fatalf("sweep: %v (%s%s)", err, out, errOut)
+	}
+	if _, statErr := os.Stat(wt); !os.IsNotExist(statErr) {
+		t.Fatalf("a pause nobody resumed in two weeks still pinned its worktree (err=%v)\noutput:\n%s%s", statErr, out, errOut)
+	}
+	if !strings.Contains(errOut, "retention cap") {
+		t.Errorf("the worktree became reclaimable with no warning naming the arm that stopped vouching; stderr:\n%s", errOut)
+	}
+}
+
+// pauseSnapshot re-persists an existing snapshot with the pause flag set,
+// through the state package's own writer — never hand-authored JSON of the
+// shape under test.
+func pauseSnapshot(t *testing.T, root, path string) {
+	t.Helper()
+	issue, runID, ok := state.ParseSnapshotFilename(filepath.Base(path))
+	if !ok {
+		t.Fatalf("parse snapshot filename %q", path)
+	}
+	dir := state.PipelineStateDir(root)
+	rs, err := state.LoadSnapshotByIdentity(dir, issue, runID)
+	if err != nil || rs == nil {
+		t.Fatalf("load snapshot: %v", err)
+	}
+	rs.SetPaused(true)
+	if err := rs.Persist(dir); err != nil {
+		t.Fatalf("persist paused snapshot: %v", err)
+	}
+}

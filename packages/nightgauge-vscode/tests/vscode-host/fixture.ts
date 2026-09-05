@@ -112,3 +112,35 @@ export async function waitFor<T>(
     await delay(50);
   }
 }
+
+/**
+ * Wait for a panel's render probe to succeed, then dispose it — with the
+ * elapsed time logged and the disposal run unconditionally, pass or fail.
+ *
+ * #1327: on main's own post-merge run (0415c27c, run 33688162874), Dashboard's
+ * first render crossed a uniform render budget by ~74ms under hosted-runner
+ * load. The webview suite's dispose call sat *after* the awaited render
+ * probe with nothing guarding it, so the timeout skipped disposal and the
+ * one flake reported as two failures: the render timeout itself, then "no
+ * panel from this suite is left open" as an unrelated-looking follow-on.
+ *
+ * `dispose` now runs in a `finally`, so a hung render still releases its
+ * panel. The elapsed time is logged in a grep-able `render-ms <name> <ms>`
+ * line on every case — including a failure — so the distribution is visible
+ * in raw CI output regardless of whether this mechanism ever fires again.
+ */
+export async function waitForRenderThenDispose<T>(
+  name: string,
+  probe: () => T | undefined | null,
+  budgetMs: number,
+  dispose: () => void,
+  log: (line: string) => void = console.log
+): Promise<T> {
+  const startedAt = Date.now();
+  try {
+    return await waitFor(probe, budgetMs, `${name} to render a non-empty body`);
+  } finally {
+    log(`render-ms ${name} ${Date.now() - startedAt}`);
+    dispose();
+  }
+}

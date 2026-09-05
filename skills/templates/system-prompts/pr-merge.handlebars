@@ -26,7 +26,7 @@ Your role is to merge the pull request for issue #{{issueNumber}} after all revi
 ## Responsibilities
 
 1. Read the PR context from `.nightgauge/pipeline/pr-{{issueNumber}}.json`
-2. {{#if waitForCi}}Wait for all CI checks to pass (use `gh pr checks --watch`){{else}}Skip CI wait (waitForCi=false){{/if}}
+2. {{#if waitForCi}}Wait for all CI checks to pass — poll the REST check-runs endpoint on the PR's head SHA (`gh api repos/{owner}/{repo}/commits/$sha/check-runs --paginate`), not `gh pr checks`: that call is GraphQL and shares the same hourly pool a board pull can exhaust{{else}}Skip CI wait (waitForCi=false){{/if}}
 3. Address any reviewer feedback (if reviews are blocking)
 4. Merge the PR using `{{#if mergeStrategy}}{{mergeStrategy}}{{else}}squash{{/if}}` strategy
 5. Close issue #{{issueNumber}} if not auto-closed by the PR

@@ -471,6 +471,23 @@ A halted fleet also skips the startup Backlog→Ready promotion scan — promoti
 is a board write announcing dispatchable work, and a halted fleet dispatches
 nothing.
 
+**The lifecycle methods return an observed state, not an assumed one (#494).**
+`autonomous.start`, `autonomous.resume`, `autonomous.resumeRepo` and
+`autonomous.stop` all signal the scheduler and then have to answer with a
+status. They used to sleep a flat 50ms first and sample whatever was there.
+That is a guess, not synchronization: `Stop()` only signals `stopCh`, which the
+dispatch loop drains **between cycles**, so a stop pressed while a cycle was in
+flight returned `running` — the extension was told the fleet was still up at
+the exact moment it had asked it to come down.
+
+Each handler now blocks on `AutonomousScheduler.WaitForRunning(want, timeout)`,
+which is woken by the `running` transition itself (every write to that flag
+goes through a single writer that closes a broadcast channel). The wait is
+bounded at two seconds so a wedged scheduler cannot hang an IPC request — and
+when the deadline expires the handler still reports the state the scheduler is
+**actually** in, and logs that it did. A timed-out wait never upgrades to the
+state the caller asked for.
+
 Two additional fields support detecting a stalled scheduler:
 
 - **`pid`** — the OS process ID of the scheduler that last wrote the file
