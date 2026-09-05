@@ -200,7 +200,7 @@ func TestServerRun_DrainsBackgroundOnExit(t *testing.T) {
 	cancel()
 
 	deadline := time.Now().Add(20 * time.Second)
-	for !logs.contains("draining 1 background op(s)") {
+	for !logs.contains("draining 1 background op(s) (1 board recovery)") {
 		select {
 		case err := <-returned:
 			t.Fatalf("Server.Run returned (%v) without draining detached board-recovery work — "+
@@ -247,11 +247,19 @@ func TestServerRun_DrainsBackgroundOnExit(t *testing.T) {
 	}
 }
 
-// TestAutonomousStop_ReportsBackgroundInFlight pins the operator-visible half.
-// `autonomous.stop` is a PAUSE — it deliberately neither cancels nor joins, so
-// the tail of detached board work outlives it — and the only way an operator
-// can see that tail is the count in the status response.
-func TestAutonomousStop_ReportsBackgroundInFlight(t *testing.T) {
+// TestAutonomousStop_ReportsBoardRecoveryInFlight pins the operator-visible
+// half. `autonomous.stop` is a PAUSE — it deliberately neither cancels nor
+// joins, so the tail of detached board work outlives it — and the only way an
+// operator can see that tail is the count in the status response.
+//
+// It also pins the counted POPULATION end-to-end: the op parked here is a real
+// revert-to-Ready spawned by the production onPipelineComplete path, so the
+// count can only read 1 if that spawn goes through goTrackedBoardOp. A count
+// taken off the tracked total would read 1 here too — and would also read 1
+// with nothing but the refinement loop running, which is what
+// TestStatus_BoardTailIsZeroWhileTheRefinementLoopRuns pins in the
+// orchestrator package.
+func TestAutonomousStop_ReportsBoardRecoveryInFlight(t *testing.T) {
 	_, server, _, release, _ := parkedBoardRecovery(t)
 
 	stop, ok := server.methods["autonomous.stop"]
@@ -271,12 +279,12 @@ func TestAutonomousStop_ReportsBackgroundInFlight(t *testing.T) {
 			t.Fatalf("marshal status result: %v", err)
 		}
 		var decoded struct {
-			BackgroundInFlight int `json:"backgroundInFlight"`
+			BoardRecoveryInFlight int `json:"boardRecoveryInFlight"`
 		}
 		if err := json.Unmarshal(encoded, &decoded); err != nil {
 			t.Fatalf("unmarshal status result: %v", err)
 		}
-		return decoded.BackgroundInFlight
+		return decoded.BoardRecoveryInFlight
 	}
 
 	res, err := stop(t.Context(), nil)
@@ -284,7 +292,7 @@ func TestAutonomousStop_ReportsBackgroundInFlight(t *testing.T) {
 		t.Fatalf("autonomous.stop: %v", err)
 	}
 	if got := inFlightFrom(t, res); got != 1 {
-		t.Errorf("autonomous.stop reported backgroundInFlight = %d, want 1 — the operator cannot "+
+		t.Errorf("autonomous.stop reported boardRecoveryInFlight = %d, want 1 — the operator cannot "+
 			"see the detached board work the pause left running (#489)", got)
 	}
 
@@ -301,7 +309,7 @@ func TestAutonomousStop_ReportsBackgroundInFlight(t *testing.T) {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("autonomous.status still reports backgroundInFlight = %d after the op "+
+			t.Fatalf("autonomous.status still reports boardRecoveryInFlight = %d after the op "+
 				"completed — the count never falls", got)
 		}
 		time.Sleep(5 * time.Millisecond)

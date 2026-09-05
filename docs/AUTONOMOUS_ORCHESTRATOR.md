@@ -975,7 +975,7 @@ board mutation with nothing to notice.
 | Exit                              | Behavior                                                                                                                                                                                                    |
 | --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `autonomous.stop` (a **pause**)   | Neither cancels nor joins. The instance stays alive for `start`/`resume`, and cancelling here would abort an in-flight `MoveStatus` for no reason. The tail keeps running — and is **reported**, see below. |
-| `serve` teardown (SIGTERM/SIGINT) | **Grace-then-cancel.** Waits up to `BackgroundDrainGrace` (**30s**) for the tail to finish, then cancels what is left and joins it.                                                                         |
+| `serve` teardown (SIGTERM/SIGINT) | **Grace-then-cancel, then a bounded join.** Waits up to `BackgroundDrainGrace` (**30s**), cancels what is left, and joins it for at most `backgroundCancelJoinCeiling` (**5s**, capped by the grace).       |
 
 The drain runs in the IPC server's teardown, which is also why the stdio loop
 now ends on the run **context**: `serve`'s signal handler cancels that context
@@ -986,17 +986,44 @@ at all.
 `MoveStatus` leaves an issue "In progress", which the next start's orphan
 recovery reverts to Ready; an unbounded wait would hang shutdown on the
 80-minute ceiling, with no backstop at all. It is a fixed constant, not a
-config knob. Every outcome is logged: `draining N background op(s), up to 30s`,
-then either `drained` or `cancelled N still in flight after 30s`.
+config knob.
+
+**Both halves are bounded, and the second one is not decoration.** A cancel is
+a request, not a guarantee: a tracked body that never reads its context never
+returns, however long the join waits. Exactly one such body exists — the
+status-change emit spawn, whose listener in `serve` blocks on a write to
+stdout — and it is created _at_ teardown, because cancelling the run context
+makes the scheduler `complete("cancelled")`, which fires a status change. A
+`Shutdown` that cancelled and then joined without a bound would hang on that
+body forever, which is the unbounded exit this mechanism exists to remove,
+merely relocated past the cancel. So the join after the cancel gets its own
+ceiling, and returning while a goroutine is still parked is a named outcome
+rather than a bug: the process is leaving, and the parked body holds nothing
+but a pipe.
+
+Every outcome is logged:
+`draining N background op(s) (M board recovery), up to 30s`, then one of
+`drained`, `cancelled N still in flight after 30s — M of them mid board write`,
+or `abandoned N op(s) still parked … after the cancel`.
 
 ### Seeing the tail
 
-`AutonomousState.backgroundInFlight` (returned by `autonomous.status`,
+`AutonomousState.boardRecoveryInFlight` (returned by `autonomous.status`,
 `autonomous.stop` and every other `autonomous.*` status response) counts the
-detached ops still running. It is live, never persisted to `state.json`, and
-the VSCode status report prints it as
+detached **board** ops still running. It is live, never persisted to
+`state.json`, and the VSCode status report prints it as
 `Board recovery in flight: N op(s)` — because a status reading `STOPPED` while
 board mutations are still landing is true and misleading at the same time.
+
+It counts the `goTrackedBoardOp` population — revert-to-Ready, move-to-Done,
+promote-unblocked, sideline-halt — and **not** every tracked goroutine. The
+tracked population also holds the refinement loop, a queued pipeline run and
+the status-change emit; with the default `refinement_enabled: true` the refinement
+loop is tracked for the whole life of a run, so a count taken off the total
+would report a pending board mutation the entire time autonomous is up, and
+the line above would say so in words. The total still exists — it is what the
+shutdown drain has to join, and what its log lines report — but no operator
+surface reads it.
 
 ## Safety Rails Reference
 

@@ -112,7 +112,7 @@ function createMockStatus(overrides?: Partial<AutonomousStatusResult>): Autonomo
     tokensSpent: 100_000,
     tokensCeiling: 500_000,
     cyclesRun: 10,
-    backgroundInFlight: 0,
+    boardRecoveryInFlight: 0,
     ...overrides,
   };
 }
@@ -1251,14 +1251,14 @@ describe("formatStatus (via autonomousStatus command output)", () => {
   // `status` would read STOPPED while board mutations were still landing.
   it("names detached board-recovery work still in flight", async () => {
     const lines = await runStatusWith(
-      createMockStatus({ status: "stopped", backgroundInFlight: 3 })
+      createMockStatus({ status: "stopped", boardRecoveryInFlight: 3 })
     );
     const combined = lines.join("\n");
     expect(combined).toContain("Board recovery in flight: 3 op(s)");
   });
 
   it("stays silent about board recovery when nothing is in flight", async () => {
-    const lines = await runStatusWith(createMockStatus({ backgroundInFlight: 0 }));
+    const lines = await runStatusWith(createMockStatus({ boardRecoveryInFlight: 0 }));
     expect(lines.join("\n")).not.toContain("Board recovery in flight");
   });
 

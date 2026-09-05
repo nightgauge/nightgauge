@@ -1046,10 +1046,10 @@ function formatStatus(status: AutonomousStatusResult, now: Date = new Date()): s
   // deliberately neither cancels nor joins board recovery, so a status reading
   // STOPPED with three board mutations still going is a true and misleading
   // line on its own — the same shape as the halted-repositories block above.
-  if (status.backgroundInFlight > 0) {
+  if (status.boardRecoveryInFlight > 0) {
     lines.push("");
     lines.push(
-      `Board recovery in flight: ${status.backgroundInFlight} op(s) — status moves still completing in the background`
+      `Board recovery in flight: ${status.boardRecoveryInFlight} op(s) — status moves still completing in the background`
     );
   }
 

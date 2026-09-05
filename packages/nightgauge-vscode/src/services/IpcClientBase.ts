@@ -946,15 +946,19 @@ export interface AutonomousStatusResult {
   cyclesRun: number;
   /**
    * Detached board-recovery goroutines still running in the Go scheduler
-   * (revert-to-Ready, move-to-Done, promote-unblocked) — #489.
+   * (revert-to-Ready, move-to-Done, promote-unblocked, sideline-halt) — #489.
    *
    * `autonomousStop` is a PAUSE: it neither cancels nor joins this work, on
    * purpose, because cancelling would abort an in-flight MoveStatus and leave
    * an issue stuck "In progress". So a stop can return with a tail of board
    * mutations still in flight, and this count is the only surface that says
    * so. Always present (0 when settled) — never treat absence as zero.
+   *
+   * It is board writes ONLY, not the scheduler's whole background population:
+   * the refinement loop is a tracked goroutine for the life of a run, so a
+   * count of everything would read >= 1 whenever autonomous is up.
    */
-  backgroundInFlight: number;
+  boardRecoveryInFlight: number;
   safety?: {
     tripReason?: string;
     consecutiveFailures: number;
