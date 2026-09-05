@@ -716,6 +716,86 @@ func TestMergedPRIndexSize_FitsOneGitHubPage(t *testing.T) {
 Naming `maxGraphQLPageSize` turns a magic number into a stated constraint, and
 the test fails the moment someone raises the other one.
 
+### Write-then-rename sites: the fixed-temp-path race, and the workspace-wide sweep (#786)
+
+`TelemetryStore.writeIndex` wrote a fixed `index.json.tmp`, then renamed it
+onto the target (#777). Two concurrent writers race: both write the same temp
+file, the first `rename` wins, and the second fails `ENOENT` — the temp file
+it expects was already consumed. The failure was swallowed and the dashboard
+showed zero runs with no indication anything had gone wrong. Any other
+write-temp-then-rename site in the tree has the same failure mode available to
+it, silently, because a single-writer test can never observe it.
+
+Two fix idioms are in play, one per package, and both give the same
+guarantee (unique temp name per write, cleanup on failure):
+
+- `packages/nightgauge-vscode/src/utils/atomicWrite.ts` (`writeFileAtomic`):
+  temp name `${target}.${pid}.${random hex}.tmp`, write, rename, delete the
+  writer's own temp file on failure before rethrowing. Every
+  `node:fs/promises` write-then-rename site in `nightgauge-vscode` should use
+  this.
+- `packages/nightgauge-sdk/src/context/ContextManager.ts` (`atomicWriteJSON`,
+  exported from `@nightgauge/sdk`): temp name `${target}.${crypto.randomUUID()}.tmp`,
+  write, `fsync` the file, rename, best-effort `fsync` the parent directory,
+  delete the writer's own temp file on failure before rethrowing. Every JSON
+  write-then-rename site in `nightgauge-sdk` should use this — it was already
+  the idiom `RunStateManager` and `ContextManager` itself used before #786,
+  and #786 brought the two calibration-service sites that had drifted from it
+  into line rather than introducing a third helper.
+
+**#786 audited every write-then-rename site under `packages/nightgauge-vscode/src`
+and `packages/nightgauge-sdk/src`:**
+
+- **Fixed in this issue:**
+  - `packages/nightgauge-vscode/src/utils/workTimeFeedback.ts`
+    (`appendObservationToYAML`) — now calls `writeFileAtomic`.
+  - `packages/nightgauge-vscode/src/services/TelemetryUploaderService.ts`
+    (`saveWatermarks`) — this one writes through `vscode.workspace.fs`, not
+    `node:fs/promises`, so it can't call the shared helper directly; it now
+    applies the same idiom (pid + random-hex temp suffix, cleanup-on-failure)
+    against the `vscode.workspace.fs` API instead.
+  - `packages/nightgauge-sdk/src/services/CalibrationService.ts` (`save`) and
+    `packages/nightgauge-sdk/src/services/StageModelCalibrationService.ts`
+    (`save`) — both wrote a fixed `${calibrationPath}.tmp`, the same shape
+    #777 fixed. Both call sites sit inside `PostPipelineAnalyzer` behind a
+    `try/catch` that only `logger.debug`s on failure
+    (`packages/nightgauge-vscode/src/services/PostPipelineAnalyzer.ts`), so
+    the race was invisible in practice — the calibration table would
+    silently stop updating rather than surface an error. Both now delegate to
+    `atomicWriteJSON` instead of hand-rolling the write+rename.
+- **Already fixed, no change needed:**
+  `packages/nightgauge-vscode/src/utils/executionHistoryWriter.ts`
+  (`writeHistoryIndex`) already calls `writeFileAtomic` — landed by
+  `2dc8dfcb` / #1212 (2026-08-30), an unrelated fix for #1210's torn-read
+  problem that happened to also give this site the #777 shape. #786's own
+  audit note (written 2026-08-29, one day before #1212 landed) is stale on
+  this point; verified directly against source at `d954fcbf`.
+- **Already safe, do not re-audit:** these all rename onto a target from a
+  temp/source name that already varies per writer, so two concurrent writers
+  can never collide on one temp file:
+  - `packages/nightgauge-vscode/src/services/TelemetryStore.ts`
+    (`writeIndex`) — pid + random suffix (the original #777 fix).
+  - `packages/nightgauge-vscode/src/services/usage/claudeStatusLineSetup.ts`
+    — pid + timestamp suffix.
+  - `packages/nightgauge-vscode/src/services/usage/ClaudeRateLimitStore.ts`
+    — pid + counter suffix.
+  - `packages/nightgauge-vscode/src/commands/migrateConfig.ts` — renames a
+    pre-existing **legacy** config file to its new name; there is exactly one
+    such file per workspace, so there is nothing for a second writer to race
+    against.
+  - `packages/nightgauge-sdk/src/context/ContextManager.ts` and
+    `packages/nightgauge-sdk/src/context/RunStateManager.ts` — already call
+    `atomicWriteJSON`.
+
+A future write-then-rename site is not exempt from this list by association —
+sweep again with `grep -rnE '(\$\{[A-Za-z]+\}|fsPath \+ ")\.tmp'
+packages --include='*.ts'`, which matches only a same-name-every-write temp
+path and returns nothing (besides comments and test fixtures) on a tree where
+every production site uses one of the two unique-suffix idioms above. The
+sweep must cover `packages/`, not one package under it — #786's own first
+pass scoped this grep to `packages/nightgauge-vscode/src` alone and missed
+the two `nightgauge-sdk` sites above; do not repeat that scoping.
+
 ### No contract test may depend on live GitHub quota
 
 A "verb is registered" contract test (`internal/ipc/ipc_contract_test.go`

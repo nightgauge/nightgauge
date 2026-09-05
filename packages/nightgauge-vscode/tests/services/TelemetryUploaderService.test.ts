@@ -38,6 +38,7 @@ vi.mock("vscode", () => ({
       readFile: vi.fn(),
       writeFile: vi.fn(),
       rename: vi.fn(),
+      delete: vi.fn(),
     },
   },
   Uri: {
@@ -209,7 +210,7 @@ function setupFs(
   fsMock.writeFile.mockImplementation(async (uri, data) => {
     const fsPath = (uri as { fsPath: string }).fsPath;
     // Merge new watermark keys into live state so subsequent reads see them
-    if (fsPath.endsWith(".upload-watermarks.json.tmp")) {
+    if (/\.upload-watermarks\.json\.\d+\.[0-9a-f]+\.tmp$/.test(fsPath)) {
       const parsed = JSON.parse(
         Buffer.from(data as Uint8Array).toString("utf8")
       ) as SavedWatermarks;
@@ -286,7 +287,7 @@ function setupMultiRootFs(
 
   fsMock.writeFile.mockImplementation(async (uri, data) => {
     const fsPath = (uri as { fsPath: string }).fsPath;
-    if (fsPath.endsWith(".upload-watermarks.json.tmp")) {
+    if (/\.upload-watermarks\.json\.\d+\.[0-9a-f]+\.tmp$/.test(fsPath)) {
       const r = findRoot(fsPath);
       if (r) {
         const parsed = JSON.parse(
@@ -340,7 +341,7 @@ describe("TelemetryUploaderService", () => {
 
     const fsMock = vi.mocked(vscode.workspace.fs);
     const writeCall = fsMock.writeFile.mock.calls.find(([uri]) =>
-      (uri as { fsPath: string }).fsPath.includes("upload-watermarks.json.tmp")
+      /\.upload-watermarks\.json\.\d+\.[0-9a-f]+\.tmp$/.test((uri as { fsPath: string }).fsPath)
     );
     expect(writeCall).toBeTruthy();
     const savedWatermarks = JSON.parse(
@@ -383,7 +384,7 @@ describe("TelemetryUploaderService", () => {
 
     const fsMock = vi.mocked(vscode.workspace.fs);
     const writeCall = fsMock.writeFile.mock.calls.find(([uri]) =>
-      (uri as { fsPath: string }).fsPath.includes("upload-watermarks.json.tmp")
+      /\.upload-watermarks\.json\.\d+\.[0-9a-f]+\.tmp$/.test((uri as { fsPath: string }).fsPath)
     );
     expect(writeCall).toBeTruthy();
     const savedWatermarks = JSON.parse(
@@ -436,7 +437,7 @@ describe("TelemetryUploaderService", () => {
 
     const fsMock = vi.mocked(vscode.workspace.fs);
     const writeCall = fsMock.writeFile.mock.calls.find(([uri]) =>
-      (uri as { fsPath: string }).fsPath.includes("upload-watermarks.json.tmp")
+      /\.upload-watermarks\.json\.\d+\.[0-9a-f]+\.tmp$/.test((uri as { fsPath: string }).fsPath)
     );
     expect(writeCall).toBeTruthy();
     const savedWatermarks = JSON.parse(
@@ -759,7 +760,7 @@ describe("TelemetryUploaderService", () => {
 
     const fsMock = vi.mocked(vscode.workspace.fs);
     const writeCall = fsMock.writeFile.mock.calls.find(([uri]) =>
-      (uri as { fsPath: string }).fsPath.includes("upload-watermarks.json.tmp")
+      /\.upload-watermarks\.json\.\d+\.[0-9a-f]+\.tmp$/.test((uri as { fsPath: string }).fsPath)
     );
     expect(writeCall).toBeTruthy();
     const saved = JSON.parse(
@@ -830,7 +831,7 @@ describe("TelemetryUploaderService", () => {
     // Watermark file should NOT have been written (no upload happened)
     const fsMock = vi.mocked(vscode.workspace.fs);
     const writeCall = fsMock.writeFile.mock.calls.find(([uri]) =>
-      (uri as { fsPath: string }).fsPath.includes("upload-watermarks.json.tmp")
+      /\.upload-watermarks\.json\.\d+\.[0-9a-f]+\.tmp$/.test((uri as { fsPath: string }).fsPath)
     );
     expect(writeCall).toBeUndefined();
   });
@@ -930,7 +931,7 @@ describe("TelemetryUploaderService", () => {
 
     const fsMock = vi.mocked(vscode.workspace.fs);
     const writeCalls = fsMock.writeFile.mock.calls.filter(([uri]) =>
-      (uri as { fsPath: string }).fsPath.includes("upload-watermarks.json.tmp")
+      /\.upload-watermarks\.json\.\d+\.[0-9a-f]+\.tmp$/.test((uri as { fsPath: string }).fsPath)
     );
     expect(writeCalls.length).toBeGreaterThan(0);
 
@@ -990,7 +991,7 @@ describe("TelemetryUploaderService", () => {
     // … but the watermark advances past them so they aren't reprocessed forever.
     const fsMock = vi.mocked(vscode.workspace.fs);
     const writeCall = fsMock.writeFile.mock.calls.find(([uri]) =>
-      (uri as { fsPath: string }).fsPath.includes("upload-watermarks.json.tmp")
+      /\.upload-watermarks\.json\.\d+\.[0-9a-f]+\.tmp$/.test((uri as { fsPath: string }).fsPath)
     );
     expect(writeCall).toBeTruthy();
     const saved = JSON.parse(
@@ -1029,7 +1030,7 @@ describe("TelemetryUploaderService", () => {
     // NOT silently advanced past the dropped record (the original bug).
     const fsMock = vi.mocked(vscode.workspace.fs);
     const writeCall = fsMock.writeFile.mock.calls.find(([uri]) =>
-      (uri as { fsPath: string }).fsPath.includes("upload-watermarks.json.tmp")
+      /\.upload-watermarks\.json\.\d+\.[0-9a-f]+\.tmp$/.test((uri as { fsPath: string }).fsPath)
     );
     const saved = writeCall
       ? (JSON.parse(Buffer.from(writeCall[1] as Uint8Array).toString("utf8")) as SavedWatermarks)
@@ -1068,7 +1069,7 @@ describe("TelemetryUploaderService", () => {
 
     const fsMock = vi.mocked(vscode.workspace.fs);
     const writeCalls = fsMock.writeFile.mock.calls.filter(([uri]) =>
-      (uri as { fsPath: string }).fsPath.includes("upload-watermarks.json.tmp")
+      /\.upload-watermarks\.json\.\d+\.[0-9a-f]+\.tmp$/.test((uri as { fsPath: string }).fsPath)
     );
     const lastWrite = writeCalls[writeCalls.length - 1];
     const saved = JSON.parse(
@@ -1207,7 +1208,7 @@ describe("TelemetryUploaderService", () => {
 
     const fsMock = vi.mocked(vscode.workspace.fs);
     const writeCalls = fsMock.writeFile.mock.calls.filter(([uri]) =>
-      (uri as { fsPath: string }).fsPath.includes("upload-watermarks.json.tmp")
+      /\.upload-watermarks\.json\.\d+\.[0-9a-f]+\.tmp$/.test((uri as { fsPath: string }).fsPath)
     );
     const lastWrite = writeCalls[writeCalls.length - 1];
     const saved = JSON.parse(
@@ -1537,7 +1538,7 @@ describe("TelemetryUploaderService", () => {
       // Each root persists its own watermark file.
       const fsMock = vi.mocked(vscode.workspace.fs);
       const writeCalls = fsMock.writeFile.mock.calls.filter(([uri]) =>
-        (uri as { fsPath: string }).fsPath.includes("upload-watermarks.json.tmp")
+        /\.upload-watermarks\.json\.\d+\.[0-9a-f]+\.tmp$/.test((uri as { fsPath: string }).fsPath)
       );
       expect(
         writeCalls.some(([uri]) => (uri as { fsPath: string }).fsPath.startsWith(PRIMARY_ROOT))
@@ -1722,7 +1723,7 @@ describe("TelemetryUploaderService", () => {
     function lastSavedWatermarks(): SavedWatermarks {
       const fsMock = vi.mocked(vscode.workspace.fs);
       const writes = fsMock.writeFile.mock.calls.filter(([uri]) =>
-        (uri as { fsPath: string }).fsPath.includes("upload-watermarks.json.tmp")
+        /\.upload-watermarks\.json\.\d+\.[0-9a-f]+\.tmp$/.test((uri as { fsPath: string }).fsPath)
       );
       if (writes.length === 0) return {};
       return JSON.parse(

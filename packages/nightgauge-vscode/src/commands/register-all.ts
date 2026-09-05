@@ -643,7 +643,8 @@ export function registerAllCommands(deps: AllCommandDeps): void {
       headlessOrchestrator,
       pipelineStateService ?? null,
       logger,
-      statusBar
+      statusBar,
+      concurrentPipelineManager
     ),
     registerResumePipelineCommand(
       headlessOrchestrator,
