@@ -219,6 +219,34 @@ redundant with the PR gate:
 | **Merge skew**             | Two PRs green apart, broken together. `strict_required_status_checks_policy` closes most of this, but not the window between last check and merge.    |
 | **Environment difference** | `main` runs have secrets and permissions that PR runs — especially from forks — do not.                                                               |
 
+### Where CI's time actually goes (#1218)
+
+"CI is slow" is answerable, and the answer changes as the tree does, so it is a
+script rather than a remembered `gh api` incantation:
+
+```bash
+scripts/ci-critical-path.sh <run-id>        # one workflow run
+scripts/ci-critical-path.sh --pr <number>   # every workflow run on that PR's head commit
+scripts/ci-critical-path.sh --sha <sha>     # every workflow run on that commit
+```
+
+It prints the jobs longest-first, then the steps longest-first with each step's
+share of the **critical path** — the longest job. Shortening anything else
+changes nothing, which is the whole reason to rank before optimising.
+
+Two things about it are deliberate:
+
+- **`--pr` / `--sha` aggregate across workflow runs.** The PR gate is not one
+  workflow: `ci.yml`, `lint.yml`, CodeQL, the boundary guard and the rest are
+  separate runs on the same commit. A single run id ranks one workflow's jobs
+  and structurally cannot see the job that holds the critical path.
+- **REST only, never GraphQL.** `/actions/runs/<id>/jobs` already embeds each
+  job's `steps[]`, so a full ranking costs a handful of 1-point REST calls and
+  nothing on the GraphQL budget the API ledger tracks.
+
+It was written for #1218, where it showed the `lint` job holding a 7m40s
+critical path with 41% of it inside one gate's own self-test.
+
 ### Working one repository from two sessions at once
 
 Running two interactive sessions against the same checkout is a supported way to
