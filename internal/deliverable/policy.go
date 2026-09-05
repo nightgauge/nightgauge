@@ -58,7 +58,7 @@ import (
 
 // PolicyVersion identifies the rule table. Bump it when a rule is added,
 // removed, or changes disposition.
-const PolicyVersion = "1"
+const PolicyVersion = "2"
 
 // PolicyMarkerField is the key under which the policy records what it did, in
 // the deliverable itself. Every context schema is `.passthrough()`, so this
@@ -285,6 +285,7 @@ func ApplyPolicy(stage string, decoded any) PolicyOutcome {
 	case "dev":
 		applyDevFilesChangedRule(doc, &out)
 		applyQualityChecksRule(doc, &out)
+		applyDevBuildVerificationRule(doc, &out)
 	case "validate":
 		applySkippedPhasesRule(doc, &out)
 		applyGateMetricsRule(doc, &out)
@@ -536,6 +537,71 @@ func applyQualityChecksRule(doc map[string]any, out *PolicyOutcome) {
 			Detail:      fmt.Sprintf("%q is not a quality-check verdict and no closed rule maps it; the field was dropped rather than reported as a verdict it does not mean", s),
 		})
 	}
+}
+
+// applyDevBuildVerificationRule names an absent `build_verification` as
+// untrustworthy when the deliverable recorded its build somewhere else (#1482).
+//
+// The observed shape is a stage that ran its build, wrote the outcome as free
+// text under `quality_checks.build` ("hugo --minify succeeded…"), and never
+// emitted the `{ran, status}` object the contract requires. The schema-version
+// rule then stamped "1.9" onto that document and the policy said nothing else
+// — a certified version on a document the policy had not checked the shape of,
+// handed to a gate that rejects the shape. Stamping is the strongest claim this
+// table makes; making it in silence over a missing required object is what
+// #1482 cost a completed run.
+//
+// The disposition is QUARANTINED, not REPAIRED, and that boundary is the whole
+// point of the closed table. `quality_checks.build` is prose. Reading "succeeded"
+// out of it and writing `{ran: true, status: "passed"}` is an inference — the
+// one thing every rule here is forbidden to do — and it would certify a build
+// verdict no rule witnessed, which is exactly the self-granted exemption
+// docs/FAILURE_TAXONOMY.md names. So the field is named untrustworthy instead,
+// and the gate derives `build_verification.status = "unverified"` from git;
+// feature-validate then runs the suite for real.
+//
+// Nothing is dropped: `quality_checks.build` stays in the document as the
+// operator-facing evidence of what the stage believed it ran. The rule fires
+// only when that evidence is present — a deliverable with no build record
+// anywhere is #55's genuinely-skipped-verification case, which the gate already
+// handles and which this table has no value to be untrustworthy about.
+func applyDevBuildVerificationRule(doc map[string]any, out *PolicyOutcome) {
+	if raw, present := doc["build_verification"]; present && raw != nil {
+		return
+	}
+	qc, ok := doc["quality_checks"].(map[string]any)
+	if !ok {
+		return
+	}
+	build, has := qc["build"]
+	if !has || build == nil {
+		return
+	}
+	out.Notes = append(out.Notes, Note{
+		Field:       "build_verification",
+		Disposition: DispositionQuarantined,
+		Rule:        "dev.build_verification.recorded_as_prose",
+		Detail: fmt.Sprintf(
+			"build_verification is absent and quality_checks.build carries the build outcome as free text (%s); no closed rule maps prose to {ran, status} without inferring a verdict, so the object is named untrustworthy rather than certified alongside the stamped schema_version",
+			truncateForDetail(build)),
+	})
+}
+
+// truncateForDetail renders an arbitrary deliverable value for an operator note
+// without letting a paragraph of prose become the note.
+func truncateForDetail(v any) string {
+	s, ok := v.(string)
+	if !ok {
+		return jsonShape(v)
+	}
+	s = strings.TrimSpace(s)
+	const max = 80
+	// Count runes, not bytes: slicing mid-rune would put a replacement
+	// character in an operator's evidence line.
+	if r := []rune(s); len(r) > max {
+		s = string(r[:max]) + "…"
+	}
+	return fmt.Sprintf("%q", s)
 }
 
 // applySkippedPhasesRule quarantines `skipped_phases` entries that are not

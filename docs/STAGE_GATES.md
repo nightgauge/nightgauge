@@ -140,18 +140,57 @@ version is **not** bumped.
 
 ## The six default gates
 
-| Stage              | Gate (Go)             | What it checks                                                                                                                                                                |
-| ------------------ | --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `issue-pickup`     | `IssuePickupGate`     | `pipeline/issue-{N}.json` exists, parses, names a feature branch                                                                                                              |
-| `feature-planning` | `FeaturePlanningGate` | `pipeline/planning-{N}.json` references a non-empty `plan_file`                                                                                                               |
-| `feature-dev`      | `FeatureDevGate`      | `pipeline/dev-{N}.json` records ≥1 file change, build_verification ok — **and git agrees the workspace changed** (#202)                                                       |
-| `feature-validate` | `FeatureValidateGate` | every `gate-metrics.jsonl` quality-gate record `result == "pass"` — **and every added test file the repo's test command excludes carries a passing execution record** (#1261) |
-| `pr-create`        | `PrCreateGate`        | `pipeline/pr-{N}.json` records `pr_number`; `gh pr view` is OPEN                                                                                                              |
-| `pr-merge`         | `PrMergeGate`         | `gh pr view` reports `state == "MERGED"`                                                                                                                                      |
+| Stage              | Gate (Go)             | What it checks                                                                                                                                                                                                     |
+| ------------------ | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `issue-pickup`     | `IssuePickupGate`     | `pipeline/issue-{N}.json` exists, parses, names a feature branch                                                                                                                                                   |
+| `feature-planning` | `FeaturePlanningGate` | `pipeline/planning-{N}.json` references a non-empty `plan_file`                                                                                                                                                    |
+| `feature-dev`      | `FeatureDevGate`      | `pipeline/dev-{N}.json` records ≥1 file change, build_verification ok — **and git agrees the workspace changed** (#202); a missing file or a missing `build_verification` is derived from git first (#1076, #1482) |
+| `feature-validate` | `FeatureValidateGate` | every `gate-metrics.jsonl` quality-gate record `result == "pass"` — **and every added test file the repo's test command excludes carries a passing execution record** (#1261)                                      |
+| `pr-create`        | `PrCreateGate`        | `pipeline/pr-{N}.json` records `pr_number`; `gh pr view` is OPEN                                                                                                                                                   |
+| `pr-merge`         | `PrMergeGate`         | `gh pr view` reports `state == "MERGED"`                                                                                                                                                                           |
 
 Gates that call `gh` use a 3-attempt, 1-second-backoff internal retry to
 absorb transient API failures (rate-limit, transient 5xx) before reporting
 `passed: false`.
+
+### Deriving the dev handoff instead of failing over it (#1076, #1482)
+
+`FeatureDevGate` runs a check 0 before any of the checks above: whenever the
+dev deliverable cannot be trusted to describe the tree **and git proves the
+stage workspace changed**, the deliverable is rebuilt from git and the gate
+judges the rebuilt document. Three conditions trigger it:
+
+| Condition                          | Issue |
+| ---------------------------------- | ----- |
+| `dev-{N}.json` is absent           | #1076 |
+| it records zero file changes       | #1076 |
+| it carries no `build_verification` | #1482 |
+
+The derived document records `handoff_source: "derived"` and
+`build_verification.status: "unverified"` — never `"passed"`. It states what
+git can prove and nothing else; `feature-validate` re-runs the suite for real,
+as it always did. Narrative fields the stage did write (approach, decisions,
+`knowledge_path`) are preserved, as is the `_deliverable_policy` marker, so the
+defect that triggered the derivation stays visible in the file and in the gate
+evidence.
+
+The boundary is git, not tolerance. When the worktree is clean the derivation
+declines and every original verdict stands unchanged — a missing
+`build_verification` over an empty tree is still
+`dev_build_verification_missing`, and a `build_verification.status: "failed"`
+is still terminal, because derivation repairs an **absent** record, never a bad
+one.
+
+#1482 is why the third row exists. A docs-only run changed five files, ran its
+build clean, recorded the outcome as prose under `quality_checks.build`, and
+never emitted the object. The deliverable policy stamped the contract version
+onto that document and said nothing about the missing object; check 3 then
+failed the stage, the issue went back to Ready with backoff, and the repository
+halted behind it with the implementation sitting uncommitted in its worktree.
+The policy now names the absent object untrustworthy
+(`dev.build_verification.recorded_as_prose`) rather than certifying a version
+onto a shape it did not check — see
+[CONTEXT_ARCHITECTURE.md § The rule table](CONTEXT_ARCHITECTURE.md#the-rule-table).
 
 ### Evidence of execution (#1261)
 

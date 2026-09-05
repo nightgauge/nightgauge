@@ -10,11 +10,12 @@ import (
 
 // FeatureDevGate verifies the post-conditions of feature-dev:
 //
-//  0. pipeline/dev-{N}.json EXISTS (#1076). If it does not, or it records
-//     nothing, but git proves the workspace changed, it is derived from git
-//     before any check below reads it. The handoff stopped being a step the
-//     model had to remember; checks 1-6 now judge a document that is
-//     guaranteed to describe the tree.
+//  0. pipeline/dev-{N}.json EXISTS AND CARRIES ITS REQUIRED OBJECTS (#1076,
+//     #1482). If it does not exist, records nothing, or is missing
+//     `build_verification`, but git proves the workspace changed, it is
+//     derived from git before any check below reads it. The handoff stopped
+//     being a step the model had to remember; checks 1-6 now judge a document
+//     that is guaranteed to describe the tree.
 //  1. pipeline/dev-{N}.json exists and parses
 //  2. files_changed records at least one created or modified file (a dev
 //     stage that records zero file changes is a skill-no-op)
@@ -23,7 +24,10 @@ import (
 //     build run` — provider-neutral). A missing object means the skill
 //     skipped verification entirely; status=="skipped" with the object
 //     present is legitimate (repo with no build system, fast-track
-//     docs-only change).
+//     docs-only change). Since #1482 this check is reached only when check 0
+//     could not derive the object — i.e. when git also finds no work — so it
+//     now convicts a stage that verified nothing AND produced nothing,
+//     rather than one that did the work and filed the receipt wrong.
 //  4. build_verification did not record status=="failed"
 //  5. tests_status, when recorded, has no failing tests (#55)
 //  6. GROUND TRUTH (#202): git agrees that the stage workspace actually
@@ -167,6 +171,12 @@ func (FeatureDevGate) Verify(_ context.Context, issueNumber int, workspace strin
 		if devCtx.BuildVerification == nil {
 			// The skill skipped its verification step entirely — the exact
 			// gap the Claude-only Stop hook used to cover on one adapter (#55).
+			//
+			// #1482: ensureDevHandoff already offered to derive this object
+			// from git and declined, so reaching this line means the stage
+			// workspace is clean too. The convicted case is now "verified
+			// nothing and produced nothing", not "did the work and wrote the
+			// receipt in the wrong shape" — that one is a derived pass above.
 			return false, "dev context lacks build_verification — the dev completion contract requires the verification step (nightgauge build run)", []string{
 				fmt.Sprintf("file: %s", ctxPath),
 			}, KindFail, TerminalKindDevBuildVerificationMissing, nil, 0

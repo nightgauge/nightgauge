@@ -16,6 +16,19 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- A completed feature-dev run whose deliverable is missing `build_verification`
+  is now derived from git rather than failed, when the stage worktree holds real
+  changes — the same repair #1076 already applied to an absent handoff, stamping
+  `handoff_source=derived` and `build_verification.status=unverified` so
+  feature-validate runs the suite for real. A docs-only run that changed five
+  files and ran its build clean was failing here, reverting its issue to Ready
+  and halting the whole repository behind it. A clean worktree, and a recorded
+  build failure, still fail exactly as before (#1482)
+- The deliverable policy no longer stamps a contract version onto a document
+  whose required objects it has not checked: a `build_verification` recorded as
+  free text under `quality_checks.build` is named untrustworthy rather than
+  silently certified, because mapping prose to a build verdict is the inference
+  the closed rule table forbids (#1482)
 - `scripts/check-changelog.sh --extract` reads the root changelog only and no
   longer requires the extension changelog to exist — a single-changelog
   repository's first release run failed at its own changelog gate because its
