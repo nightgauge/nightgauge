@@ -972,7 +972,11 @@ func (hw *HistoryWriter) appendAndIndex(record V2RunRecord, now time.Time) error
 	// process (#674). This is the ONLY retention enforcement a headless/
 	// CLI-only workspace gets — it never runs the VSCode extension's
 	// ExecutionHistoryWriter.cleanupOldFiles.
-	hw.pruneOldRecordsLocked()
+	//
+	// `now` is the write's own clock — the SAME instant that chose the daily
+	// filename above — and `key` exempts the record just appended, so the
+	// prune can never undo the append it rides along with (#1455).
+	hw.pruneOldRecordsLocked(now, key)
 
 	c.seen[key] = rich
 	return nil
@@ -983,11 +987,25 @@ func (hw *HistoryWriter) appendAndIndex(record V2RunRecord, now time.Time) error
 // index never outlives the file it summarizes (#674). Caller MUST hold the
 // directory coordinator lock (mirrors updateIndexLocked's contract).
 //
+// `now` is the instant the append that triggered this prune filed its record
+// under — the same value that chose the daily filename — and NOT a second,
+// independent clock read. Reading time.Now() here gave the write path two
+// clocks: a record filed under `now` was then measured against a different
+// instant, so the prune could delete the daily file and the index entry the
+// append had just produced. That is the whole of #1455 — a hand-dated test
+// fixture flipped to failing the day the wall clock passed record-date plus
+// retention, first on the UTC runner and a day later on a UTC-6 machine.
+//
+// `keepKey` is the run key of the record being written. The append is
+// authoritative: its record is never pruned by its own write, even when the
+// producer-supplied recorded_at that dates the index entry disagrees with the
+// `now` that dated the file. Every OTHER stale entry is still dropped.
+//
 // Best-effort like updateIndexLocked: errors are logged to stderr, never
 // returned, so a disk problem here cannot fail the run-record write it rides
 // along with.
-func (hw *HistoryWriter) pruneOldRecordsLocked() {
-	cutoff := historyDateCutoff(time.Now(), hw.effectiveRetentionDays())
+func (hw *HistoryWriter) pruneOldRecordsLocked(now time.Time, keepKey string) {
+	cutoff := historyDateCutoff(now, hw.effectiveRetentionDays())
 
 	entries, err := os.ReadDir(hw.dir)
 	if err != nil {
@@ -1010,13 +1028,15 @@ func (hw *HistoryWriter) pruneOldRecordsLocked() {
 		}
 	}
 
-	hw.pruneIndexEntriesLocked(cutoff)
+	hw.pruneIndexEntriesLocked(cutoff, keepKey)
 }
 
 // historyDateCutoff is the local-midnight cutoff for retention: a daily file
 // or index entry dated strictly before this instant is out of the retention
 // window. Mirrors the TypeScript ExecutionHistoryWriter.cleanupOldFiles cutoff
-// (now, minus retentionDays, truncated to local midnight).
+// (now, minus retentionDays, truncated to local midnight). `now` is supplied by
+// the caller — the write path passes the instant it filed its record under, so
+// the append and the prune share one clock (#1455).
 func historyDateCutoff(now time.Time, retentionDays int) time.Time {
 	local := now.Local()
 	return time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, local.Location()).
@@ -1030,7 +1050,14 @@ func historyDateCutoff(now time.Time, retentionDays int) time.Time {
 // entry's file": an entry orphaned by an earlier process, a manual `rm`, or a
 // version of this binary that predates pruning is cleaned up too, not just
 // entries this exact call happens to touch.
-func (hw *HistoryWriter) pruneIndexEntriesLocked(cutoff time.Time) {
+//
+// keepKey — the run key of the record the calling append just wrote — is the
+// one exception (#1455). The entry's date comes from recorded_at (started_at
+// as a fallback), a producer-supplied field that need not equal the `now` the
+// daily filename was derived from; without the exemption the prune could drop
+// the index entry for a record that is demonstrably on disk in a surviving
+// daily file. An empty keepKey exempts nothing.
+func (hw *HistoryWriter) pruneIndexEntriesLocked(cutoff time.Time, keepKey string) {
 	idx, ok := hw.readIndex()
 	if !ok || len(idx.Entries) == 0 {
 		return
@@ -1040,7 +1067,7 @@ func (hw *HistoryWriter) pruneIndexEntriesLocked(cutoff time.Time) {
 	dropped := 0
 	for _, e := range idx.Entries {
 		d, ok := entryHistoryDate(e)
-		if ok && d.Before(cutoff) {
+		if ok && d.Before(cutoff) && indexEntryKey(e) != keepKey {
 			dropped++
 			continue
 		}
