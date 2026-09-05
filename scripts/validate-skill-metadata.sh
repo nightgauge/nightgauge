@@ -102,7 +102,7 @@ check_description_quality() {
   # Third person (ERROR): reject a leading first/second-person pronoun. Scope to
   # the leading word so board-view names like "My items" or mid-sentence "you"
   # do not false-positive.
-  if echo "$desc" | grep -qiE '^(I |I'\''m |We |We'\''re |You |You can|You should|My |Our )'; then
+  if [[ "$(printf '%s\n' "$desc" | grep -ciE '^(I |I'\''m |We |We'\''re |You |You can|You should|My |Our )')" -gt 0 ]]; then
     echo "ERROR: $file — description is not third person (leading first/second-person pronoun)"
     ((ERRORS++))
   fi
@@ -110,14 +110,14 @@ check_description_quality() {
   # No literal XML/HTML tag pairs (ERROR). Match an opening tag with a matching
   # closing tag, e.g. <tag>...</tag>. Bare placeholders like <N> or <number> are
   # allowed because they have no closing partner.
-  if echo "$desc" | grep -qE '<[A-Za-z][A-Za-z0-9]*>.*</[A-Za-z][A-Za-z0-9]*>'; then
+  if [[ "$(printf '%s\n' "$desc" | grep -cE '<[A-Za-z][A-Za-z0-9]*>.*</[A-Za-z][A-Za-z0-9]*>')" -gt 0 ]]; then
     echo "ERROR: $file — description contains literal XML/HTML tags"
     ((ERRORS++))
   fi
 
   # "When to use" trigger token (WARNING). The description should state both what
   # the skill does and when to use it.
-  if ! echo "$desc" | grep -qiE '\b(use |used |run before|run after|run weekly|run on|run anytime|invoked by|before |after |when |periodically|on a regular|on a periodic)'; then
+  if [[ "$(printf '%s\n' "$desc" | grep -ciE '\b(use |used |run before|run after|run weekly|run on|run anytime|invoked by|before |after |when |periodically|on a regular|on a periodic)')" -eq 0 ]]; then
     echo "WARNING: $file — description has no 'when to use' trigger (state what AND when)"
     ((WARNINGS++))
   fi
@@ -143,6 +143,48 @@ check_command_parity() {
     echo "WARNING: $cmd_file — description differs from $skill_file (sync command description to SKILL.md)"
     ((WARNINGS++))
   fi
+}
+
+# --- Spawn-free frontmatter queries (#1442) ---------------------------------
+#
+# Every field check used to be `echo "$frontmatter" | grep -qE "^field:"` and
+# every value read `grep -E ... | head -1`, under `set -o pipefail`. Both
+# readers exit on their first match; when the writer has not finished, it takes
+# SIGPIPE (141) and pipefail turns a PRESENT field into "missing required
+# field". Whether that schedule happens depends on machine load, so the gate
+# went red on a busy machine and green on the same tree a minute later — the
+# #856 shape one layer down: a check that could not run, reported as a file
+# that is wrong. These helpers walk the already-read buffer with shell builtins
+# and spawn nothing, so there is no pipe to break.
+
+# frontmatter_has <line-prefix> — true if some line starts with the prefix.
+frontmatter_has() {
+  local prefix="$1" line
+  while IFS= read -r line; do
+    [[ "$line" == "$prefix"* ]] && return 0
+  done <<< "$frontmatter"
+  return 1
+}
+
+# frontmatter_first <line-prefix> — print the first line starting with the
+# prefix (empty output if none).
+frontmatter_first() {
+  local prefix="$1" line
+  while IFS= read -r line; do
+    if [[ "$line" == "$prefix"* ]]; then
+      printf '%s\n' "$line"
+      return 0
+    fi
+  done <<< "$frontmatter"
+  return 0
+}
+
+# value_after <line> <prefix> — the line with the prefix and any following
+# spaces removed.
+value_after() {
+  local rest="${1#"$2"}"
+  while [[ "$rest" == " "* ]]; do rest="${rest# }"; done
+  printf '%s' "$rest"
 }
 
 check_skill() {
@@ -207,12 +249,12 @@ check_skill() {
   # Check required top-level fields
   for field in "${REQUIRED_FIELDS[@]}"; do
     if [[ "$field" == "metadata" ]]; then
-      if ! echo "$frontmatter" | grep -qE "^metadata:"; then
+      if ! frontmatter_has "metadata:"; then
         echo "ERROR: $file — missing required field: metadata"
         ((ERRORS++))
       fi
     else
-      if ! echo "$frontmatter" | grep -qE "^${field}:"; then
+      if ! frontmatter_has "${field}:"; then
         echo "ERROR: $file — missing required field: $field"
         ((ERRORS++))
       fi
@@ -221,7 +263,7 @@ check_skill() {
 
   # Check metadata sub-fields
   for subfield in author version source; do
-    if ! echo "$frontmatter" | grep -qE "^  ${subfield}:"; then
+    if ! frontmatter_has "  ${subfield}:"; then
       echo "ERROR: $file — missing required field: metadata.${subfield}"
       ((ERRORS++))
     fi
@@ -229,10 +271,10 @@ check_skill() {
 
   # Check metadata.source matches canonical URL
   local source_line
-  source_line=$(echo "$frontmatter" | grep -E "^  source:" | head -1)
+  source_line=$(frontmatter_first "  source:")
   if [[ -n "$source_line" ]]; then
     local source_value
-    source_value=$(echo "$source_line" | sed 's/^  source: *//')
+    source_value=$(value_after "$source_line" "  source:")
     if [[ "$source_value" != "$CANONICAL_SOURCE" ]]; then
       echo "ERROR: $file — metadata.source is '$source_value', expected '$CANONICAL_SOURCE'"
       ((ERRORS++))
@@ -241,10 +283,10 @@ check_skill() {
 
   # Check name matches directory name
   local name_line
-  name_line=$(echo "$frontmatter" | grep -E "^name:" | head -1)
+  name_line=$(frontmatter_first "name:")
   if [[ -n "$name_line" ]]; then
     local name_value
-    name_value=$(echo "$name_line" | sed 's/^name: *//')
+    name_value=$(value_after "$name_line" "name:")
     if [[ "$name_value" != "$dir_name" ]]; then
       echo "ERROR: $file — name is '$name_value', expected '$dir_name'"
       ((ERRORS++))
@@ -261,14 +303,14 @@ check_skill() {
   while IFS= read -r line; do
     ((line_num++))
     for field in name description license metadata allowed-tools disable-model-invocation; do
-      if echo "$line" | grep -qE "^${field}:"; then
+      if [[ "$line" == "${field}:"* ]]; then
         field_lines[$field]=$line_num
       fi
     done
     # `disable-model-invocation` is the only key we still scan for above purely
     # so we can REJECT it on skills (see forbidden-field check below).
     for field in programmatic-tools context agent model hooks; do
-      if echo "$line" | grep -qE "^${field}:"; then
+      if [[ "$line" == "${field}:"* ]]; then
         if [[ $line_num -lt $first_optional_line ]]; then
           first_optional_line=$line_num
         fi
@@ -294,7 +336,7 @@ check_skill() {
   # shape only — the classification itself is a human review decision made at
   # PR time by adding the marker, not something this script infers.
   local chainable_line
-  chainable_line=$(echo "$frontmatter" | grep -E "^  chainable:" | head -1)
+  chainable_line=$(frontmatter_first "  chainable:")
   if [[ -n "$chainable_line" ]]; then
     local chainable_value
     chainable_value=$(echo "$chainable_line" | sed 's/^  chainable: *//' | tr -d '[:space:]')
