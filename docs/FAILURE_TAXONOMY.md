@@ -871,6 +871,32 @@ on `failure.CatPermission` and nothing else:
   the first version of this gate refused to escalate two of three issues in a
   wave test purely because they were numbered #401 and #403. The codes are
   honored in their written forms (`http 403`, `403 forbidden`) instead.
+- **A filesystem EACCES does not trigger the gate (#1447), but the bare
+  phrase `permission denied` still does.** Go's standard library reports an
+  ordinary filesystem permission fault as
+  `open /some/path: permission denied`, which is capability-fixable and has
+  nothing to do with forge/git-auth — but was matching the same bare clause
+  the gate uses for a genuine credential denial, and blocked escalation on it.
+  The fix is a **negative guard**, not a narrower needle list: the gate still
+  matches the bare phrase (so it keeps catching every real denial spelling —
+  multi-auth-method OpenSSH lines like
+  `Permission denied (publickey,password).`, this repo's own
+  `forge: permission denied` sentinel, `gh`/GraphQL denials, and provider
+  denials such as `Permission denied to access model`), then excludes only
+  lines shaped like `os.PathError.Error()` — a syscall verb (`open`, `read`,
+  `write`, `mkdir`, `stat`, …) followed by a colon-free path and
+  `: permission denied`, or any line containing `EACCES`. An earlier version
+  of this fix instead enumerated specific transport spellings
+  (`permission denied (publickey)`, `remote: permission denied`); that
+  narrowed correctly for the one GitHub example in the issue's AC but
+  silently stopped blocking every multi-method SSH line, this repo's own
+  forge sentinel, and the documented Vertex/model-provider denials below —
+  an allowlist of denial spellings is provably incomplete and fails open
+  (escalation proceeds) on whatever spelling was not anticipated, where the
+  negative guard fails closed (still blocks) on anything it does not
+  recognize as filesystem-shaped. The shared `failure.Classifier`'s own bare
+  clause is left as-is, since it stays broad on purpose for its own
+  curated-stderr callers.
 
 The git-transport spellings (`invalid auth method`, `authentication required`,
 `could not read Username`, `Bad credentials`, …) were added to
