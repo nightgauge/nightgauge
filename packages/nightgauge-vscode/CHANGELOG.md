@@ -7,6 +7,69 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **One scheduler per workspace** — a second `nightgauge serve` attaches to the
+  running scheduler instead of starting a rival (#1349)
+- The GitHub API ledger is always on; the status bar meter and `nightgauge
+api-usage --budget` read it, and the budget prices a board pull before it
+  spends the hour's quota (#1347, #1428)
+- Knowledge tree shows each entry's trust tier and provenance; `knowledge
+export --okf` produces a portable bundle (#1369, #1371)
+- The pipeline watches `main`'s own run after a merge and raises an Action
+  Center card when the default branch goes red (#1249)
+- Deterministic stages and the `pr-create`/`pr-merge` route report their
+  phases live, instead of jumping from 0/14 to 14/14 skipped (#1247, #1397)
+- `nightgauge doctor` flags foreign processes holding a pipeline worktree open
+  (#519)
+- Published to Open VSX alongside the Marketplace (#1316)
+
+### Changed
+
+- Pause/Resume Pipeline act on the live run, with a picker when more than one
+  is live (#423)
+- `nightgauge serve` shuts down through a bounded drain instead of abandoning
+  board writes (#489)
+- Paused or corrupt snapshot protection is bounded everywhere, and `worktree
+sweep` names which arm protected each issue (#443)
+- The GitHub auth pre-check and `doctor` accept fine-grained and GitHub App
+  tokens (#1331, #1333)
+- Board reads come from the daemon's snapshot cache; the rate-limit gate
+  releases with jitter (#1343, #1344, #1346)
+
+### Fixed
+
+- A `MACHINE_LIMIT` license rejection is reported as a full seat, not "key not
+  accepted" (#1334, #1454)
+- Action Center: cross-process writes no longer tear a card (#1425); actions
+  are attributed to the GitHub login (#1418); an operator steer reaches disk
+  before its verb runs (#1407, #1410); a persisted card cannot carry a shape
+  the platform rejects (#1405); a relayed resolve is never mistaken for a
+  rejection (#1421); default-branch health raises an FYI when only
+  non-required checks fail (#1250); event-driven sweeps are gated behind the
+  board change probe (#1345)
+- `nightgauge run <issue>` finds Ready issues again (#1337)
+- The `autonomous.*` lifecycle handlers report the state they observed (#494);
+  a second daemon cannot steal a live socket (#1429)
+- The append's own retention prune no longer deletes the run record it just
+  wrote (#1455); a failure before any stage persists its reason (#1329)
+- A timed-out webview render still disposes its panel (#1327); the webview
+  message-handler gate fails closed on unparsed forms (#1199); the dashboard
+  firewall badge reflects the resolved sanitization mode (#986); the slot
+  output channel is redacted at its sink (#1335); the last write-then-rename
+  sites use a unique temp name (#786)
+- A GitHub throttle is a transient backoff, not a lifetime failure (#1391); a
+  credential-less push is booked as `git_transport_auth_failed` (#878)
+- A retry escalation is not booked as a model-routing miss (#1002); a
+  dimension with no data no longer votes in the health score (#1197)
+
+### Security
+
+- `golang.org/x/crypto` v0.56.0 (GO-2026-6354, GO-2026-6355) (#1323);
+  `fast-uri` 3.1.7 (#1317)
+
 ## [0.2.2] - 2026-09-02
 
 The first build published to the VS Code Marketplace (pre-release channel).
@@ -179,6 +242,12 @@ under `0.2.0`.
 - Resolved Go and JavaScript CodeQL findings, including two polynomial-ReDoS
   regexes, and cleared high-severity npm advisories (#72, #317, #320)
 
+## [0.2.0] - 2026-09-01
+
+Tagged but never published. The release run resolved the release-candidate tag
+on the same commit and stopped before attaching any artifact (#1296). The tree
+shipped as [0.2.1].
+
 ## [0.1.0] - 2026-01-15
 
 ### Added
@@ -199,8 +268,7 @@ under `0.2.0`.
 - Settings for authentication provider, model selection, and paths
 - Settings for notification sounds, volume, and Do Not Disturb respect
 
-<!--
-Compare/release links intentionally omitted: only release-candidate tags
-(v0.2.0-rc.*) have been pushed to nightgauge/nightgauge, so a v0.1.0...v0.2.0
-compare link would 404. Add tag-based links here once v0.2.0 is tagged.
--->
+[Unreleased]: https://github.com/nightgauge/nightgauge/compare/v0.2.2...HEAD
+[0.2.2]: https://github.com/nightgauge/nightgauge/compare/v0.2.1...v0.2.2
+[0.2.1]: https://github.com/nightgauge/nightgauge/compare/v0.2.0...v0.2.1
+[0.2.0]: https://github.com/nightgauge/nightgauge/tree/v0.2.0

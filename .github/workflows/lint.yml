@@ -33,6 +33,18 @@ jobs:
         run: npm run lint
       - name: License-header guard (no proprietary markers)
         run: bash scripts/check-license-headers.sh
+      # Changelog ↔ release contract (docs/GIT_WORKFLOW.md § Changelog). Three
+      # tags were released while CHANGELOG.md still said no release had been
+      # cut, and nothing mechanical noticed. Every released tag must have a
+      # section in the root changelog and the extension's; the self-test first
+      # proves the gate can still go red. Tags are fetched because the default
+      # checkout is shallow and tagless — a tagless clone would pass vacuously.
+      - name: Changelog gate self-test
+        run: bash scripts/test-check-changelog.sh
+      - name: Changelog names every released tag
+        run: |
+          git fetch --tags --force --quiet origin
+          bash scripts/check-changelog.sh
       # Self-test first, same reasoning as the band-vocabulary and mirror-link
       # gates below: the validator reported a missing field once, on a file that
       # provably had it, because a frontmatter block that never closed handed the

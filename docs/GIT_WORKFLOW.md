@@ -784,6 +784,11 @@ main ──●──●──●──●──●──
 ### Cutting a Release — Step by Step
 
 ```bash
+# 0. Land the changelog rollover PR first (§ Changelog): [Unreleased] becomes
+#    [X.Y.Z] - date in CHANGELOG.md and the extension's changelog. release.yml
+#    refuses a tag without it.
+bash scripts/check-changelog.sh --tag v0.2.0   # exit 0 before tagging
+
 # 1. Ensure main is up to date
 git checkout main && git pull origin main
 
@@ -878,10 +883,54 @@ Benefits of environments even without upper-tier infrastructure:
 
 ### Changelog
 
-Major changes should be documented in:
+`CHANGELOG.md` at the repository root is the product's changelog and the
+source of truth for what a release contains. It follows
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/): one `## [Unreleased]`
+section at the top, then one `## [X.Y.Z] - YYYY-MM-DD` section per released
+tag, newest first, with compare links at the bottom. `packages/nightgauge-vscode/CHANGELOG.md`
+is the extension-facing excerpt the Marketplace renders; it names every
+version the root names and carries the subset an extension user can see.
 
-- Git tag annotation message (primary source of truth)
-- GitHub Release notes (auto-generated from tag)
+**Why this is enforced.** `v0.2.0`, `v0.2.1` and `v0.2.2` were released while
+the root changelog still read "no release has been cut yet" under a lone
+`[Unreleased]` heading, and an agent later filed its review log
+(`#### #1450` / `- test`) as changelog entries. Neither the tag workflow nor
+the release checklist looked at the file. `scripts/check-changelog.sh` now
+does, on every PR (`lint.yml`, `ci-local.sh`) and as the first gate in
+`release.yml`.
+
+**An entry is written for the reader of the release, not the author of the
+PR.** It says what changed and why it matters to someone running Nightgauge,
+in one to three lines, under `Added` / `Changed` / `Fixed` / `Removed` /
+`Security`, citing the issue or PR in parentheses at the end. It is not a
+review log, a verification note, a list of files, or a bare issue number as a
+heading — the gate rejects `#### #1234` by shape. If a change is invisible to
+a user (a test-only refactor, a CI timing change nobody depends on), it needs
+no entry.
+
+**Every behaviour-changing PR adds its entry under `[Unreleased]`** in the
+root changelog, and in the extension's when the change is visible from VS
+Code. The pipeline's `pr-create` stage and an interactive session are held to
+the same rule.
+
+**Cutting a release starts with the rollover PR, before the tag:**
+
+1. Rename `## [Unreleased]` to `## [X.Y.Z] - YYYY-MM-DD` in both files, add a
+   fresh empty `## [Unreleased]` above it, and update the compare links.
+2. `bash scripts/check-changelog.sh --tag vX.Y.Z` must exit 0 locally.
+3. Merge that PR, verify `main`'s own run is green, then tag.
+
+`release.yml` runs the same `--tag` check first and refuses a tag with no
+section, so nothing is published under a version the changelog does not
+describe. It then feeds the section body to GoReleaser as the GitHub Release
+notes (`--release-notes`), so the Release page and the changelog say the same
+thing; the tag annotation carries the same summary. A tag pushed without the
+rollover fails in seconds with the instruction to land it.
+
+The rule is the same in every Nightgauge repository — the platform, the
+dashboard, the Flutter app — with the same script and gate; the workspace-wide
+contract and per-repo status are tracked privately in `nightgauge-internal`
+(`strategy/RELEASE_STRATEGY.md`).
 
 ## Pre-Submission Validation (CRITICAL)
 
