@@ -47,6 +47,13 @@ import (
 // config and the fix so a multi-repo-workspace operator (no root config.yaml)
 // is not left guessing — the bare "scheduler not configured" gave no signal
 // that the workspace simply lacked an owner + project.number. See #3860.
+// defaultAutonomousWaitTimeout bounds the autonomous.* lifecycle handlers'
+// wait for the scheduler goroutine to reach the requested state. Long enough
+// to cover a dispatch loop that is mid-cycle (the case a 50ms guess used to
+// get wrong), short enough that a wedged scheduler answers an IPC request
+// with the truth instead of hanging it.
+const defaultAutonomousWaitTimeout = 2 * time.Second
+
 const errSchedulerNotConfigured = "scheduler not configured — no workspace-root .nightgauge/config.yaml (owner + project.number) and the workspace manifest did not yield one; run `nightgauge workspace-init` or add a root config.yaml"
 
 // Server handles JSON-over-stdio IPC communication with VSCode.
@@ -168,6 +175,13 @@ type Server struct {
 	// autonomousScheduler is the cross-repo autonomous scheduler (optional).
 	autonomousScheduler *orchestrator.AutonomousScheduler
 
+	// autonomousWaitTimeout bounds how long the autonomous.* lifecycle
+	// handlers wait for the scheduler goroutine to reach the state their
+	// caller asked for before answering with the state it is actually in
+	// (#494). Set by NewServer; overridden only by tests that need the
+	// deadline arm to fire quickly.
+	autonomousWaitTimeout time.Duration
+
 	// ipcRunner and licenseChecker are shared across all concurrent pipeline.runItem
 	// and pipeline.run invocations. Creating these per-request caused a TOCTOU race:
 	// each call overwrote srv.methods["pipeline.stageResult"], orphaning earlier
@@ -287,6 +301,11 @@ func NewServer(client *gh.Client, opts ...ServerOption) *Server {
 		// so a test can still override it.
 		boards:      boardcache.New(0),
 		sweepMinGap: jitteredSweepGap(),
+		// The autonomous lifecycle handlers observe a real state transition
+		// rather than sleeping through one (#494); this bounds the wait so a
+		// wedged scheduler cannot hang an IPC request. On expiry the handler
+		// still answers with the scheduler's ACTUAL state.
+		autonomousWaitTimeout: defaultAutonomousWaitTimeout,
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -4889,8 +4908,15 @@ func (s *Server) registerMethods() {
 				}
 			}()
 		}
-		// Brief delay to let the scheduler start and update its status
-		time.Sleep(50 * time.Millisecond)
+		// Wait for the loop to actually come up, then report what was
+		// observed (#494). A flat sleep here was a guess about how long
+		// Run() takes to reach its first select, and Status() sampled before
+		// the transition is a status the scheduler was never in. On timeout
+		// WaitForRunning reports the real state and Status() below returns
+		// that same truth, so a slow start is visible rather than assumed.
+		if !s.autonomousScheduler.WaitForRunning(true, s.autonomousWaitTimeout) {
+			log.Printf("autonomous: start returned before the dispatch loop came up (waited %s) — reporting the scheduler's actual state", s.autonomousWaitTimeout)
+		}
 		return s.autonomousScheduler.Status(), nil
 	}
 
@@ -4986,7 +5012,9 @@ func (s *Server) registerMethods() {
 		if err := s.resumeRepoAndEnsureRunning(ctx, p.Repo); err != nil {
 			return nil, err
 		}
-		time.Sleep(50 * time.Millisecond)
+		if !s.autonomousScheduler.WaitForRunning(true, s.autonomousWaitTimeout) {
+			log.Printf("autonomous: resumeRepo %q returned before the dispatch loop came up (waited %s) — reporting the scheduler's actual state", p.Repo, s.autonomousWaitTimeout)
+		}
 		return s.autonomousScheduler.Status(), nil
 	}
 
@@ -5016,9 +5044,11 @@ func (s *Server) registerMethods() {
 		if err := s.resumeAndEnsureRunning(ctx); err != nil {
 			return nil, err
 		}
-		// Brief delay to let the scheduler start and update its status,
-		// matching autonomous.start's behavior.
-		time.Sleep(50 * time.Millisecond)
+		// Observe the loop coming up rather than sleeping through it,
+		// matching autonomous.start's behavior (#494).
+		if !s.autonomousScheduler.WaitForRunning(true, s.autonomousWaitTimeout) {
+			log.Printf("autonomous: resume returned before the dispatch loop came up (waited %s) — reporting the scheduler's actual state", s.autonomousWaitTimeout)
+		}
 		return s.autonomousScheduler.Status(), nil
 	}
 
@@ -5028,8 +5058,15 @@ func (s *Server) registerMethods() {
 			return nil, fmt.Errorf("autonomous scheduler not configured")
 		}
 		s.autonomousScheduler.Stop()
-		// Brief delay to let the scheduler process the stop signal
-		time.Sleep(50 * time.Millisecond)
+		// Stop() only SIGNALS; the dispatch loop drains stopCh between
+		// cycles, so the transition lands whenever the current cycle ends —
+		// not 50ms later. Wait for the loop to observe it, then report the
+		// state that was actually observed: on timeout that is "still
+		// running", which is the truth the caller needs, and not the stopped
+		// state the old sleep asserted on its behalf (#494).
+		if !s.autonomousScheduler.WaitForRunning(false, s.autonomousWaitTimeout) {
+			log.Printf("autonomous: stop signalled but the dispatch loop had not observed it after %s — reporting the scheduler's actual state", s.autonomousWaitTimeout)
+		}
 		return s.autonomousScheduler.Status(), nil
 	}
 

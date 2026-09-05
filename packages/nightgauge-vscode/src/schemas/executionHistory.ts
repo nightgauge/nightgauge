@@ -456,6 +456,7 @@ export type HistoryStageDetail = z.infer<typeof HistoryStageDetailSchema>;
  *  - `api_connection_lost` — Anthropic API transport drop (socket close / DNS blip mid-stage); transient, no pause (#4002)
  *  - `github_network_outage` — api.github.com unreachable at pipeline-start; transient, short global cooldown (#4002)
  *  - `github_rate_limited` — GitHub throttled a `gh` call mid-stage (secondary rate limit, emptied primary bucket, or 429); transient, short per-issue backoff, no global cooldown (#1391)
+ *  - `git_transport_auth_failed` — a git or forge transport refused the credentials the machine offered (go-git's `invalid auth method` against an SSH remote, `Permission denied (publickey)`, `could not read Username` with prompts disabled, the forge API's `Bad credentials`); environmental, and matched above `premature_turn_end` because the post-condition reason retains that rule's symptom phrase (#878)
  *  - `premature_turn_end` — stage exited 0 but its post-condition gate reported no state change; agent ended its turn on a promise (#74)
  *  - `dev_produced_no_changes` — feature-dev's gate found the stage workspace empty (clean tree, branch level with base) despite the dev context reporting changed files; work was done somewhere the pipeline never reads (#202)
  *  - `dev_handoff_missing` — the inverse: the dev context is absent or empty and git finds the changed files right there; the stage did the work and ended without writing its handoff, so the work must be preserved rather than re-derived (#223)
@@ -495,6 +496,7 @@ export const TerminalFailureKindSchema = z.enum([
   "github_network_outage", // Issue #4002 — api.github.com unreachable at pipeline-start; transient, short global cooldown
   "github_rate_limited", // Issue #1391 — GitHub throttled a `gh` call mid-stage (secondary rate limit / emptied primary bucket / 429); transient, short per-issue backoff, no global cooldown
   "model_unavailable", // Issue #42 — API rejected the selected model (not on plan / unknown / model usage cap); triggers tier-downgrade fallback
+  "git_transport_auth_failed", // Issue #878 — a git or forge transport refused the credentials the machine offered (go-git's `invalid auth method` against an SSH remote, `Permission denied (publickey)`, `could not read Username` with prompts disabled, the forge API's `Bad credentials`); environment class, unclearable by rerun or a stronger model
   "premature_turn_end", // Issue #74 — stage exited 0 but its gate reported no state change (agent ended its turn on a promise)
   "dev_produced_no_changes", // Issue #202 — feature-dev's gate found the stage workspace empty despite a truthful dev context; work landed where the pipeline never reads
   "dev_handoff_missing", // Issue #223 — the inverse of the above: the dev context is absent or empty and git finds the changed files in the workspace; the stage did the work and ended without writing its handoff
