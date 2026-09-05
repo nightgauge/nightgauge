@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -386,6 +387,45 @@ func TestAttentionShowCLI_AnnotatesUnavailableOptions(t *testing.T) {
 	}
 	if strings.Contains(buf2.String(), "unavailable from this CLI") {
 		t.Errorf("no option should be annotated unavailable when a daemon is reachable:\n%s", buf2.String())
+	}
+}
+
+// TestCliVerbExecutor_ExpiredContextRejectsWrite covers #1449: the store
+// wraps every ExecuteVerb call in context.WithTimeout(ctx, verbTimeout)
+// specifically to bound how long a verb resolution may run, but
+// cliVerbExecutor.ExecuteVerb used to discard its ctx parameter entirely
+// (named `_`) and perform the file write unconditionally. Passing an
+// already-cancelled context must produce a *attention.VerbExecutionError and
+// must NOT write the budget-ceiling override file.
+func TestCliVerbExecutor_ExpiredContextRejectsWrite(t *testing.T) {
+	dir := t.TempDir()
+	exec := cliVerbExecutor{workspaceRoot: dir}
+
+	req := &attention.DecisionRequest{
+		Context: attention.Context{Repo: "octocat/acme", Issue: 3},
+	}
+	opt := attention.Option{
+		ID:    "raise",
+		Label: "Raise ceiling",
+		Verb:  attention.VerbBudgetRaiseCeiling,
+		Args:  map[string]any{"ceilingUsd": 50.0},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // already cancelled before the call
+
+	err := exec.ExecuteVerb(ctx, req, opt)
+	if err == nil {
+		t.Fatal("expected an error when ctx is already cancelled, got nil")
+	}
+	var verr *attention.VerbExecutionError
+	if !errors.As(err, &verr) {
+		t.Fatalf("expected a *attention.VerbExecutionError, got %T: %v", err, err)
+	}
+
+	overridePath := filepath.Join(dir, ".nightgauge", "pipeline", "budget-override.json")
+	if _, statErr := os.Stat(overridePath); !os.IsNotExist(statErr) {
+		t.Errorf("override file must not be written for a cancelled context; stat err = %v", statErr)
 	}
 }
 
