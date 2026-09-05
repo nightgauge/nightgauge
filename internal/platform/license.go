@@ -21,6 +21,13 @@ const (
 	LicenseStatusExpired   = "expired"
 	LicenseStatusRevoked   = "revoked"
 	LicenseStatusSuspended = "suspended"
+	// LicenseStatusMachineLimit is a 403 LICENSE_MACHINE_LIMIT rejection
+	// (#1454): the key itself is fine, but this machine can't take a seat
+	// because the license's machine cap is already full. Distinct from
+	// Expired/Revoked/Suspended (lifecycle states of the license) so the
+	// extension can tell the operator "seats are full" instead of "your key
+	// is invalid".
+	LicenseStatusMachineLimit = "machine_limit"
 )
 
 // LicenseInfo holds cached license validation results.
@@ -38,7 +45,7 @@ const (
 type LicenseInfo struct {
 	Valid bool   `json:"valid"`
 	Tier  string `json:"tier"`
-	// Status is one of LicenseStatusActive/Expired/Revoked/Suspended, or ""
+	// Status is one of LicenseStatusActive/Expired/Revoked/Suspended/MachineLimit, or ""
 	// when unknown (e.g. a generic 4xx with no parseable error code).
 	Status       string     `json:"status,omitempty"`
 	ExpiresAt    *time.Time `json:"expiresAt,omitempty"`
@@ -73,6 +80,12 @@ type LicenseService struct {
 	client *Client
 	mu     sync.RWMutex
 	cached *LicenseInfo
+	// machine is the last machine identity a caller supplied (#1334). The
+	// params-less "platform.license" IPC method carries none, and a
+	// host-derived fallback identity would bind a SECOND seat for a machine
+	// the editor has already bound — so remember what the editor sent and
+	// reuse it.
+	machine MachineInfo
 }
 
 // NewLicenseService creates a license validation service.
@@ -81,7 +94,14 @@ func NewLicenseService(client *Client) *LicenseService {
 }
 
 // Validate checks the license, returning cached data if fresh.
-func (s *LicenseService) Validate(ctx context.Context) (*LicenseInfo, error) {
+//
+// machine identifies the machine the seat is bound to (#1334). Pass the
+// identity the editor supplied over IPC; pass the zero MachineInfo when the
+// caller has none and the last-remembered (or host-derived) identity should
+// stand in.
+func (s *LicenseService) Validate(ctx context.Context, machine MachineInfo) (*LicenseInfo, error) {
+	machine = s.rememberMachine(machine)
+
 	// Check cache first
 	s.mu.RLock()
 	if s.cached != nil && s.isCacheValid() {
@@ -102,9 +122,10 @@ func (s *LicenseService) Validate(ctx context.Context) (*LicenseInfo, error) {
 		return s.communityInfo(), nil
 	}
 
-	resp, err := s.client.api.LicenseValidateWithResponse(ctx, api.LicenseValidateJSONRequestBody{
-		Key: licenseKey,
-	})
+	body := api.LicenseValidateJSONRequestBody{Key: licenseKey}
+	machine.applyTo(&body)
+
+	resp, err := s.client.api.LicenseValidateWithResponse(ctx, body)
 	if err != nil {
 		// Genuine transport/connectivity failure → grace fallback.
 		return s.offlineFallback(), nil
@@ -174,7 +195,9 @@ func licenseInfoFromBody(body *api.LicenseValidateBody) *LicenseInfo {
 // s.cached and never substitutes the community key — an empty key, a 4xx, or an
 // offline/transport failure all report Valid=false so the UI can tell the user
 // the key wasn't accepted (rather than silently degrading to community).
-func (s *LicenseService) ValidateKey(ctx context.Context, key string) (*LicenseInfo, error) {
+func (s *LicenseService) ValidateKey(ctx context.Context, key string, machine MachineInfo) (*LicenseInfo, error) {
+	machine = s.rememberMachine(machine)
+
 	if key == "" {
 		return s.rejectedInfo(401, nil), nil
 	}
@@ -184,9 +207,10 @@ func (s *LicenseService) ValidateKey(ctx context.Context, key string) (*LicenseI
 		return invalidInfo(), nil
 	}
 
-	resp, err := s.client.api.LicenseValidateWithResponse(ctx, api.LicenseValidateJSONRequestBody{
-		Key: key,
-	})
+	body := api.LicenseValidateJSONRequestBody{Key: key}
+	machine.applyTo(&body)
+
+	resp, err := s.client.api.LicenseValidateWithResponse(ctx, body)
 	if err != nil {
 		return invalidInfo(), nil
 	}
@@ -202,6 +226,20 @@ func (s *LicenseService) ValidateKey(ctx context.Context, key string) (*LicenseI
 	info := licenseInfoFromBody(resp.JSON200)
 	info.CachedAt = time.Now()
 	return info, nil
+}
+
+// rememberMachine records a caller-supplied machine identity and returns the
+// identity to validate with: the supplied one when it carries anything, else
+// whatever a previous caller supplied (zero when none ever did, which
+// MachineInfo.Resolve then fills from this host).
+func (s *LicenseService) rememberMachine(machine MachineInfo) MachineInfo {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !machine.IsZero() {
+		s.machine = machine
+		return machine
+	}
+	return s.machine
 }
 
 // ConfiguredKey returns the license key the client was constructed with (the
@@ -345,15 +383,18 @@ type licenseErrorBody struct {
 }
 
 // statusFromErrorCode maps a platform ApiLicenseErrorCode to a LicenseStatus.
-// Only REVOKED/EXPIRED map to a specific status — the others (INVALID,
-// TIER_EXCEEDED, MACHINE_LIMIT) aren't lifecycle states of the license itself,
-// so they're left "" (unknown); Valid=false already blocks regardless.
+// REVOKED/EXPIRED/MACHINE_LIMIT map to a specific status — the remaining
+// codes (INVALID, TIER_EXCEEDED) aren't lifecycle states of the license
+// itself, so they're left "" (unknown); Valid=false already blocks
+// regardless.
 func statusFromErrorCode(code string) string {
 	switch code {
 	case "LICENSE_REVOKED":
 		return LicenseStatusRevoked
 	case "LICENSE_EXPIRED":
 		return LicenseStatusExpired
+	case "LICENSE_MACHINE_LIMIT":
+		return LicenseStatusMachineLimit
 	default:
 		return ""
 	}

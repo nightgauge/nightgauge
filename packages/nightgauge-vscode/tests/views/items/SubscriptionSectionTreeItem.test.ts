@@ -283,6 +283,43 @@ describe("SubscriptionSectionTreeItem", () => {
     });
   });
 
+  describe("machine limit reached (#1454)", () => {
+    it('shows "Machine Limit Reached" description, not "Free Plan"', () => {
+      const item = new SubscriptionSectionTreeItem();
+      item.update(makeData({ tier: "community", status: "machine_limit" }));
+      expect(item.description).toBe("Machine Limit Reached");
+    });
+
+    it("uses warning icon, terminal.ansiYellow color — not the community star", () => {
+      const item = new SubscriptionSectionTreeItem();
+      item.update(makeData({ tier: "community", status: "machine_limit" }));
+      expect((item.iconPath as { id: string }).id).toBe("warning");
+      expect((item.iconPath as { color?: { id: string } }).color?.id).toBe("terminal.ansiYellow");
+    });
+
+    it('returns "Machine Limit Reached" child and "Manage Machines" action, not "Upgrade to Pro"', () => {
+      const item = new SubscriptionSectionTreeItem();
+      item.update(makeData({ tier: "community", status: "machine_limit" }));
+      const children = item.getChildren();
+      const planItem = children.find((c) => c.contextValue === "subscription-plan");
+      const manageItem = children.find((c) => c.contextValue === "subscription-manage-machines");
+      const upgradeItem = children.find((c) => c.contextValue === "subscription-upgrade");
+      expect(planItem?.label).toBe("Machine Limit Reached");
+      expect(manageItem).toBeDefined();
+      expect(upgradeItem).toBeUndefined();
+    });
+
+    it('"Manage Machines" child has nightgauge.openSubscriptionUrl command', () => {
+      const item = new SubscriptionSectionTreeItem();
+      item.update(makeData({ tier: "community", status: "machine_limit" }));
+      const children = item.getChildren();
+      const manageItem = children.find((c) => c.contextValue === "subscription-manage-machines");
+      expect((manageItem?.command as { command: string } | undefined)?.command).toBe(
+        "nightgauge.openSubscriptionUrl"
+      );
+    });
+  });
+
   describe("offline state", () => {
     it('appends "Offline — showing cached data" child', () => {
       const item = new SubscriptionSectionTreeItem();
@@ -349,6 +386,13 @@ describe("SubscriptionSectionTreeItem", () => {
       item.update(makeData({ status: "revoked" }));
       expect((item.iconPath as { id: string }).id).toBe("error");
       expect((item.iconPath as { color?: { id: string } }).color?.id).toBe("errorForeground");
+    });
+
+    it("machine_limit → warning icon, terminal.ansiYellow color, not the community star", () => {
+      const item = new SubscriptionSectionTreeItem();
+      item.update(makeData({ status: "machine_limit" }));
+      expect((item.iconPath as { id: string }).id).toBe("warning");
+      expect((item.iconPath as { color?: { id: string } }).color?.id).toBe("terminal.ansiYellow");
     });
   });
 

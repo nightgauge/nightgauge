@@ -113,6 +113,7 @@ function createMockStatus(overrides?: Partial<AutonomousStatusResult>): Autonomo
     tokensSpent: 0,
     tokensCeiling: 0,
     cyclesRun: 0,
+    boardRecoveryInFlight: 0,
     ...overrides,
   };
 }

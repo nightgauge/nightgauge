@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -4629,6 +4630,43 @@ func TestRunCycle_GraphCacheMissAfterTTL(t *testing.T) {
 
 	if buildCalls != 2 {
 		t.Errorf("expected BuildGraph called twice (once per TTL window), got %d", buildCalls)
+	}
+}
+
+// TestRunCycle_GraphBuildFailure_FiresOnCycleComplete pins the cycle-boundary
+// contract on the one runCycle early return that used to skip it: a failed
+// graph build. onCycleComplete is documented as "fired after each scan cycle"
+// and every sibling gate in runCycle (quota cooldown, GitHub-quota headroom,
+// no-effective-slots) persists state and fires the callback before returning.
+// The graph-build-failure branch returned bare, so a consumer waiting on the
+// callback as a cycle tick waited forever whenever the build errored, and the
+// cycle's own CyclesRun/LastScanAt increment never reached disk. Issue #1446.
+func TestRunCycle_GraphBuildFailure_FiresOnCycleComplete(t *testing.T) {
+	root := t.TempDir()
+	cycleCompletes := 0
+	as := &AutonomousScheduler{
+		config: AutonomousConfig{
+			MaxConcurrent: 3,
+			GraphCacheTTL: 5 * time.Minute,
+		},
+		state:                &AutonomousState{Status: "running"},
+		rescanCh:             make(chan struct{}, 1),
+		perIssueFailureCount: map[string]int{},
+		retryBackoff:         map[string]retryPlan{},
+		workspaceRoot:        root,
+	}
+	as.buildGraphFn = func(_ context.Context) (*depgraph.Graph, error) {
+		return nil, errors.New("graph build boom")
+	}
+	as.onCycleComplete = func() { cycleCompletes++ }
+
+	as.runCycle(context.Background())
+
+	if cycleCompletes != 1 {
+		t.Errorf("onCycleComplete fired %d times after a failed graph build, want 1", cycleCompletes)
+	}
+	if _, err := os.Stat(filepath.Join(root, autonomousStateFile)); err != nil {
+		t.Errorf("expected state persisted after a failed graph build, stat: %v", err)
 	}
 }
 

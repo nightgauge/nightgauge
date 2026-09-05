@@ -328,9 +328,7 @@ func sidecarPIDs(startDir string, now time.Time) map[int]bool {
 //
 // A minimal local struct on purpose, like every other sidecar shape in this
 // file: doctor is a READER of records other packages own, and importing their
-// types would make their schemas answerable to `doctor`. Only the directory is
-// borrowed from runstate, because a path two packages spell independently is a
-// path that eventually disagrees.
+// types would make their schemas answerable to `doctor`.
 type serveClaimRecord struct {
 	PID             int    `json:"pid"`
 	StartedAt       string `json:"started_at"`
@@ -345,24 +343,25 @@ type serveClaimRecord struct {
 // store. A missing directory (no daemon has ever run here) and a malformed
 // file are both simply skipped — the same direction every unreadable sidecar
 // fails in this file, toward UNOWNED and therefore toward REPORTING.
+//
+// The DIRECTORY WALK is runstate's, not this file's (#1426). It used to be a
+// local ReadDir with a local `.json` suffix filter, which made this the second
+// independent spelling of a layout runstate owns — the hazard the comment
+// above already named for the path alone, and the registry now has a lock
+// suffix, a temp-file shape and a reversible key for a second walker to
+// disagree about too. What stays local is the record SHAPE, which is the part
+// doctor is genuinely entitled to its own opinion of.
 func eachServeClaim(visit func(serveClaimRecord)) {
-	dir, err := runstate.ServeSidecarDir()
-	if err != nil {
-		return
-	}
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return
-	}
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
-			continue
+	runstate.EachServeRegistryFile(func(f runstate.ServeRegistryFile) {
+		if f.Lock || len(f.Data) == 0 {
+			return
 		}
 		var sc serveClaimRecord
-		if readJSONFile(filepath.Join(dir, e.Name()), &sc) {
-			visit(sc)
+		if json.Unmarshal(f.Data, &sc) != nil {
+			return
 		}
-	}
+		visit(sc)
+	})
 }
 
 // staleServeClaims maps the PID of every serve claim that has STOPPED making
@@ -371,8 +370,8 @@ func eachServeClaim(visit func(serveClaimRecord)) {
 // This is the shape #388 exists to surface: a daemon that outlived its host
 // stops refreshing (runstate.serveClaim.tick) and its record goes cold, so when
 // a still-running process matches one of these PIDs, this is what tells the
-// operator WHICH workspace's daemon they are looking at — the claim's file name
-// is a hash and carries nothing. Evidence, never ownership: a recycled PID
+// operator WHICH workspace's daemon they are looking at. Evidence, never
+// ownership: a recycled PID
 // would be attributed to the wrong process, the same accepted edge as every
 // other claim here, which is why it only ever decorates a line the report was
 // already going to print.

@@ -81,6 +81,17 @@ type APILedgerRecord struct {
 	Cost      int   `json:"cost"`
 	Remaining int   `json:"remaining"`
 	Reset     int64 `json:"reset,omitempty"`
+	// HeaderObserved is true exactly when this request's response carried a
+	// parseable X-RateLimit-Remaining header — independent of Cost and
+	// Cached. A cached (304) hit legitimately costs 0 points (Cost is the
+	// drop since the previous call, and a call made while already exhausted
+	// computes 0-0=0), so "Cost is zero" and "the header was never observed"
+	// are different facts; without this field the aggregator could not tell
+	// them apart and a real remaining:0 header from a cached call read as
+	// "unknown" instead of "exhausted" (#1452). Records written before this
+	// field existed decode it as false, so they conservatively read as
+	// header-not-observed rather than being misread as a spurious exhaustion.
+	HeaderObserved bool `json:"header_observed,omitempty"`
 	// Cached marks a conditional GET the server answered 304 — free, and the
 	// ratio of these to full-price GETs is the headline number for whether
 	// conditional requests are actually working.
@@ -266,6 +277,7 @@ func (l *apiLedger) record(rec APILedgerRecord, remainingHdr string) {
 	if remainingHdr != "" {
 		if n, err := strconv.Atoi(remainingHdr); err == nil {
 			rec.Remaining = n
+			rec.HeaderObserved = true
 			if prev, ok := l.prev[rec.Kind]; ok && prev >= n {
 				rec.Cost = prev - n
 			}

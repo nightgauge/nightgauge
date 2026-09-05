@@ -102,10 +102,20 @@ git push -u origin feat/description-of-change
   friction. (This does not override genuine product-direction decisions, which
   are still the user's call.)
 - **Manual PR merges only, and `--admin` is NOT the routine path.** Auto-merge
-  is disabled on all workspace repos. Watch CI (`gh pr checks`), fix/rerun real
-  failures (never dismiss a failing test as "flaky" without root-causing it),
-  then **`gh pr merge --squash`** — never `--auto`, and **never `--admin` as a
-  matter of course**.
+  is disabled on all workspace repos. Watch CI over REST, not `gh pr checks` —
+  that call is GraphQL and shares the same hourly pool a board pull can
+  exhaust. Use the REST check-runs endpoint on the PR's head SHA instead (the
+  same call `scripts/post-merge-check.sh` already uses post-merge), fix/rerun
+  real failures (never dismiss a failing test as "flaky" without
+  root-causing it), then **`gh pr merge --squash`** — never `--auto`, and
+  **never `--admin` as a matter of course**.
+
+  **A raw `gh` board pull is invisible to the ledger below and can cost ~340
+  points in one command.** Pull the board once into a file rather than
+  iterating against the API, and check `nightgauge api-usage --budget` before
+  a bulk read. See
+  [docs/GO_BINARY.md § Agent Guidance: A Raw `gh` Board Pull](docs/GO_BINARY.md#agent-guidance-a-raw-gh-board-pull-is-invisible-here-issue-1428)
+  for the full guidance (#1428).
 
   **Green checks are the go signal, not a prompt to ask for one.** An agent that
   finishes the work, watches CI go green and then stops to ask permission to

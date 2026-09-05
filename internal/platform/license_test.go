@@ -47,7 +47,7 @@ func TestLicenseService_Validate_Online(t *testing.T) {
 	c.setMode(ModeOnline)
 
 	svc := NewLicenseService(c)
-	info, err := svc.Validate(context.Background())
+	info, err := svc.Validate(context.Background(), MachineInfo{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,7 +100,7 @@ func TestLicenseService_Validate_Rejected4xx(t *testing.T) {
 	c.setMode(ModeOnline)
 
 	svc := NewLicenseService(c)
-	info, err := svc.Validate(context.Background())
+	info, err := svc.Validate(context.Background(), MachineInfo{})
 	if err != nil {
 		t.Fatalf("Validate returned error: %v", err)
 	}
@@ -146,12 +146,47 @@ func TestLicenseService_Validate_Rejected4xx_ExpiredCode(t *testing.T) {
 	c.setMode(ModeOnline)
 
 	svc := NewLicenseService(c)
-	info, err := svc.Validate(context.Background())
+	info, err := svc.Validate(context.Background(), MachineInfo{})
 	if err != nil {
 		t.Fatalf("Validate returned error: %v", err)
 	}
 	if info.Status != LicenseStatusExpired {
 		t.Errorf("status = %q, want %q", info.Status, LicenseStatusExpired)
+	}
+}
+
+// TestLicenseService_Validate_Rejected4xx_MachineLimitCode (#1454):
+// LICENSE_MACHINE_LIMIT maps to LicenseStatusMachineLimit rather than being
+// left "" (unknown) — a seat-limit rejection must read as a seat limit, not
+// as a bare invalid key.
+func TestLicenseService_Validate_Rejected4xx_MachineLimitCode(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/license/validate" {
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write([]byte(`{"error":{"code":"LICENSE_MACHINE_LIMIT","message":"machine limit reached"}}`))
+			return
+		}
+		w.WriteHeader(404)
+	}))
+	defer srv.Close()
+
+	cfg := Config{BaseURL: srv.URL, LicenseKey: "IB-TEST-MACH-LIMI-TXXX"}
+	c, err := NewClient(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.setMode(ModeOnline)
+
+	svc := NewLicenseService(c)
+	info, err := svc.Validate(context.Background(), MachineInfo{})
+	if err != nil {
+		t.Fatalf("Validate returned error: %v", err)
+	}
+	if info.Valid {
+		t.Error("a machine-limit rejection must not be reported as valid")
+	}
+	if info.Status != LicenseStatusMachineLimit {
+		t.Errorf("status = %q, want %q", info.Status, LicenseStatusMachineLimit)
 	}
 }
 
@@ -177,7 +212,7 @@ func TestLicenseService_Validate_Rejected4xx_UnknownCode(t *testing.T) {
 	c.setMode(ModeOnline)
 
 	svc := NewLicenseService(c)
-	info, err := svc.Validate(context.Background())
+	info, err := svc.Validate(context.Background(), MachineInfo{})
 	if err != nil {
 		t.Fatalf("Validate returned error: %v", err)
 	}
@@ -204,7 +239,7 @@ func TestLicenseService_CommunityInfo_NoExpiry(t *testing.T) {
 	c.setMode(ModeOnline)
 
 	svc := NewLicenseService(c)
-	info, err := svc.Validate(context.Background())
+	info, err := svc.Validate(context.Background(), MachineInfo{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -233,7 +268,7 @@ func TestLicenseService_Validate_Offline_Cached(t *testing.T) {
 		CachedAt: time.Now().Add(-1 * time.Hour), // Within grace period
 	}
 
-	info, err := svc.Validate(context.Background())
+	info, err := svc.Validate(context.Background(), MachineInfo{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -258,7 +293,7 @@ func TestLicenseService_Validate_Offline_NoCacheGracePeriodExpired(t *testing.T)
 		CachedAt: time.Now().Add(-8 * 24 * time.Hour), // Past 7-day grace
 	}
 
-	info, err := svc.Validate(context.Background())
+	info, err := svc.Validate(context.Background(), MachineInfo{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -279,7 +314,7 @@ func TestLicenseService_NoLicenseKey(t *testing.T) {
 	c.setMode(ModeOnline)
 
 	svc := NewLicenseService(c)
-	info, err := svc.Validate(context.Background())
+	info, err := svc.Validate(context.Background(), MachineInfo{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -347,7 +382,7 @@ func TestLicenseService_ValidateKey_UsesPassedKeyAndDoesNotCache(t *testing.T) {
 	c.setMode(ModeOnline)
 	svc := NewLicenseService(c)
 
-	info, err := svc.ValidateKey(context.Background(), "ENTERED-KEY-TO-CHECK")
+	info, err := svc.ValidateKey(context.Background(), "ENTERED-KEY-TO-CHECK", MachineInfo{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -394,12 +429,51 @@ func TestLicenseService_ValidateKey_Rejected4xx(t *testing.T) {
 	c.setMode(ModeOnline)
 	svc := NewLicenseService(c)
 
-	info, err := svc.ValidateKey(context.Background(), "BAD-ENTERED-KEY")
+	info, err := svc.ValidateKey(context.Background(), "BAD-ENTERED-KEY", MachineInfo{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if info.Valid {
 		t.Error("a 4xx-rejected entered key must yield Valid=false")
+	}
+}
+
+// TestLicenseService_ValidateKey_Rejected4xx_MachineLimitCode (#1454): same
+// mapping as TestLicenseService_Validate_Rejected4xx_MachineLimitCode, but
+// through the entered-key path.
+func TestLicenseService_ValidateKey_Rejected4xx_MachineLimitCode(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/health":
+			jsonResponse(w, map[string]interface{}{
+				"status": "ok", "version": "1.0.0", "uptime_seconds": 1, "dependencies": map[string]interface{}{},
+			})
+		case "/v1/license/validate":
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write([]byte(`{"error":{"code":"LICENSE_MACHINE_LIMIT","message":"machine limit reached"}}`))
+		default:
+			w.WriteHeader(404)
+		}
+	}))
+	defer srv.Close()
+
+	cfg := Config{BaseURL: srv.URL, LicenseKey: "SESSION-KEY"}
+	c, err := NewClient(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.setMode(ModeOnline)
+	svc := NewLicenseService(c)
+
+	info, err := svc.ValidateKey(context.Background(), "BAD-ENTERED-KEY", MachineInfo{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Valid {
+		t.Error("a machine-limit-rejected entered key must yield Valid=false")
+	}
+	if info.Status != LicenseStatusMachineLimit {
+		t.Errorf("status = %q, want %q", info.Status, LicenseStatusMachineLimit)
 	}
 }
 
@@ -412,7 +486,7 @@ func TestLicenseService_ValidateKey_EmptyInvalid(t *testing.T) {
 		t.Fatal(err)
 	}
 	svc := NewLicenseService(c)
-	info, err := svc.ValidateKey(context.Background(), "")
+	info, err := svc.ValidateKey(context.Background(), "", MachineInfo{})
 	if err != nil {
 		t.Fatal(err)
 	}
