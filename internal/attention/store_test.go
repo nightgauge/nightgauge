@@ -2,7 +2,9 @@ package attention
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -578,6 +580,62 @@ func TestExpirySweepAppliesDefault(t *testing.T) {
 	// Sweep is idempotent — a second sweep expires nothing.
 	if n2, _ := s.SweepExpired(context.Background(), NoopExecutor{}); n2 != 0 {
 		t.Errorf("second sweep expired %d, want 0", n2)
+	}
+}
+
+// TestExpirySweepRecordsVerbFailure guards #1450: SweepExpired's default_action
+// verb runs after the expiry transition is already committed (see the doc
+// comment on SweepExpired), so a verb failure has nowhere else to surface. It
+// must not be discarded — the returned error must reflect it, and a durable
+// journal record must name the request.
+func TestExpirySweepRecordsVerbFailure(t *testing.T) {
+	s := New(t.TempDir())
+	req := validRequest(mustID(t), "stale-verb")
+	req.ExpiresAt = time.Now().UTC().Add(-time.Minute).Format(tsLayout)
+	if _, _, err := s.Raise(req); err != nil {
+		t.Fatalf("Raise: %v", err)
+	}
+
+	sentinel := errors.New("no daemon reachable")
+	exec := verbFunc(func(context.Context, *DecisionRequest, Option) error {
+		return sentinel
+	})
+	n, err := s.SweepExpired(context.Background(), exec)
+	if n != 1 {
+		t.Fatalf("swept %d, want 1", n)
+	}
+	if err == nil {
+		t.Fatal("SweepExpired returned a nil error despite the default_action verb failing")
+	}
+	if !errors.Is(err, sentinel) {
+		t.Fatalf("SweepExpired error = %v, want it to wrap the verb's sentinel error", err)
+	}
+
+	// The request itself is still expired — a verb failure changes reporting,
+	// not the expired-count/state semantics (AC: unchanged).
+	got, _, err := s.Get(req.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Lifecycle.State != StateExpired {
+		t.Errorf("state = %q, want expired even though the verb failed", got.Lifecycle.State)
+	}
+
+	entries, rerr := s.ReadJournal()
+	if rerr != nil {
+		t.Fatalf("ReadJournal: %v", rerr)
+	}
+	var sawFailure bool
+	for _, e := range entries {
+		if e.ID != req.ID {
+			continue
+		}
+		if e.Action != ActionExpired && strings.Contains(e.Error, sentinel.Error()) {
+			sawFailure = true
+		}
+	}
+	if !sawFailure {
+		t.Fatalf("journal has no discoverable trace of the verb failure for %s: %+v", req.ID, entries)
 	}
 }
 

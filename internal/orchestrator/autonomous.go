@@ -869,7 +869,18 @@ type AutonomousScheduler struct {
 
 	mu      sync.Mutex
 	running bool
-	stopCh  chan struct{} // signals dispatch loop only — one reader
+	// runningChangedCh is closed — and replaced with a fresh channel — every
+	// time `running` is written, so a caller can WAIT on the transition
+	// instead of guessing how long it takes (#494). Lazily created under mu:
+	// most tests in this package build the scheduler as a bare struct
+	// literal, so the zero value must be usable.
+	runningChangedCh chan struct{}
+	// runningSeq counts those writes. A waiter that was descheduled long
+	// enough to miss a whole transition (started and exited again, say) sees
+	// the sequence move and reports the state as it actually is, rather than
+	// waiting out its deadline on a transition that already happened.
+	runningSeq uint64
+	stopCh     chan struct{} // signals dispatch loop only — one reader
 
 	// Background-goroutine lifecycle (#428). Every detached spawn in this file
 	// goes through goTracked so in-flight work can be cancelled and joined.
@@ -1327,7 +1338,7 @@ func (as *AutonomousScheduler) Run(ctx context.Context) error {
 			log.Printf("autonomous: PANIC: %s\n%s", panicMsg, stack)
 			as.mu.Lock()
 			as.state.Status = "crashed"
-			as.running = false
+			as.setRunningLocked(false)
 			as.mu.Unlock()
 			as.writeCrashExitEvent(panicMsg, stack)
 		}
@@ -1338,7 +1349,7 @@ func (as *AutonomousScheduler) Run(ctx context.Context) error {
 		as.mu.Unlock()
 		return fmt.Errorf("autonomous scheduler is already running")
 	}
-	as.running = true
+	as.setRunningLocked(true)
 	as.stopRequested = false
 	// #405 — starting the loop is not triage. A latched machine halt stays in
 	// force: the loop comes up alive-but-halted, exactly as the halt left it,
@@ -1661,6 +1672,17 @@ func (as *AutonomousScheduler) SetDispatcher(d Dispatcher) {
 	as.dispatcher = d
 }
 
+// SetBuildGraph replaces the dependency-graph builder every scan cycle and
+// every startup promotion goes through — the one expensive, forge-touching
+// call on the dispatch loop's path. Cross-package callers that must drive the
+// loop without a forge (and without wall-clock guesses about how long a cycle
+// takes) inject it here; in-package tests set buildGraphFn directly.
+// Call before Run(); the injected builder runs on the scheduler goroutine
+// with as.mu released, so it may call back into the scheduler.
+func (as *AutonomousScheduler) SetBuildGraph(fn func(ctx context.Context) (*depgraph.Graph, error)) {
+	as.buildGraphFn = fn
+}
+
 // OnDispatch sets a callback for dispatching issues to the pipeline.
 // When set, the autonomous scheduler delegates to this callback instead of
 // using the Go scheduler queue directly — allowing the TypeScript extension
@@ -1961,6 +1983,71 @@ func (as *AutonomousScheduler) IsRunning() bool {
 	as.mu.Lock()
 	defer as.mu.Unlock()
 	return as.running
+}
+
+// setRunningLocked is the ONLY writer of as.running. Every write also bumps
+// runningSeq and wakes the WaitForRunning waiters, so a transition can never
+// happen that an observer cannot see — which is the property the callers of
+// WaitForRunning are relying on. Caller must hold as.mu.
+func (as *AutonomousScheduler) setRunningLocked(v bool) {
+	as.running = v
+	as.runningSeq++
+	if as.runningChangedCh != nil {
+		close(as.runningChangedCh)
+		as.runningChangedCh = nil
+	}
+}
+
+// runningChangedLocked returns the channel that will be closed on the next
+// write to as.running, creating it on first use. Caller must hold as.mu.
+func (as *AutonomousScheduler) runningChangedLocked() chan struct{} {
+	if as.runningChangedCh == nil {
+		as.runningChangedCh = make(chan struct{})
+	}
+	return as.runningChangedCh
+}
+
+// WaitForRunning blocks until the scheduler goroutine's liveness equals want,
+// and reports whether that is what it actually observed.
+//
+// This is the primitive the autonomous.* IPC handlers use instead of sleeping
+// a flat 50ms and assuming the transition landed (#494). A wall-clock guess
+// is not synchronisation: when the dispatch loop is mid-cycle the guess
+// expires first and the handler answers with a state the scheduler has not
+// reached — `autonomous.stop` replying "running" is the visible shape.
+//
+// It returns early rather than waiting out the deadline in two cases the
+// caller cares about: the state already equals want, and the state changed
+// while the caller waited but not to want (the loop started and exited again,
+// say). On timeout it returns the CURRENT liveness compared against want, so
+// a false return always means "the transition did not happen", never "I
+// stopped looking". Callers must report the state they read after this
+// returns — its verdict is evidence about a moment, not a promise.
+func (as *AutonomousScheduler) WaitForRunning(want bool, timeout time.Duration) bool {
+	deadline := time.NewTimer(timeout)
+	defer deadline.Stop()
+
+	as.mu.Lock()
+	startSeq := as.runningSeq
+	for {
+		if as.running == want {
+			as.mu.Unlock()
+			return true
+		}
+		if as.runningSeq != startSeq {
+			got := as.running
+			as.mu.Unlock()
+			return got == want
+		}
+		changed := as.runningChangedLocked()
+		as.mu.Unlock()
+		select {
+		case <-changed:
+		case <-deadline.C:
+			return as.IsRunning() == want
+		}
+		as.mu.Lock()
+	}
 }
 
 // RunningSiblings returns `owner/repo#number` keys for every in-flight
@@ -3019,6 +3106,17 @@ func (as *AutonomousScheduler) runCycle(ctx context.Context) {
 		graph, buildErr = as.buildGraph(ctx)
 		if buildErr != nil {
 			log.Printf("autonomous: graph build failed: %v", buildErr)
+			// #1446: a failed build ends the cycle like any other gate above,
+			// so it owes the same two closing acts. Without them the
+			// CyclesRun/LastScanAt increment taken just above this block never
+			// reaches disk, and onCycleComplete — documented as firing after
+			// *each* scan cycle, and used as the cycle tick rather than a
+			// sleep — never fires, so anything waiting on that tick waits for
+			// the next successful build instead of the next cycle.
+			as.persistState()
+			if as.onCycleComplete != nil {
+				as.onCycleComplete()
+			}
 			return
 		}
 		log.Printf("autonomous: graph built fresh: %d nodes, scanning %d repos",
@@ -6095,7 +6193,7 @@ func (as *AutonomousScheduler) complete(reason string) {
 	as.mu.Lock()
 	defer as.mu.Unlock()
 	as.state.Status = reason
-	as.running = false
+	as.setRunningLocked(false)
 	as.persistStateLocked()
 	as.fireStatusChangeLocked()
 	log.Printf("autonomous: scheduler completed with status=%s (cycles=%d, completed=%d, failed=%d)",

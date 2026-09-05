@@ -154,3 +154,156 @@ func TestPostConditionFailureRecordsTheFirstCause(t *testing.T) {
 		t.Errorf("recorded reason still LEADS with the symptom: %q", reason)
 	}
 }
+
+// TestPostConditionFailureRecordsTheFirstCauseKind is the second half of the
+// same attribution defect (#878), and the half the record actually keys on.
+//
+// The composed reason names the push failure; the KIND is what the V2 run
+// record books and what recovery routing and the retro path consume. This site
+// hardcoded validation_error for every missing-output failure, so a
+// credential-less push was booked as a stage that wrote a malformed context —
+// pointing the corpus at the pipeline's output contract instead of at the
+// machine's credentials.
+func TestPostConditionFailureRecordsTheFirstCauseKind(t *testing.T) {
+	root := t.TempDir()
+	seedRefusalRepo(t, root, allRefusalStageSkills)
+
+	runner := &firstCauseStageRunner{tail: authFailureTail}
+	s := newFirstCauseScheduler(root, runner)
+	s.runPipeline(context.Background(), types.BoardItem{Number: 881, Repo: "nightgauge/nightgauge", ID: "item-881"})
+
+	records := readDailyJSONLRecords(t, root)
+	if len(records) == 0 {
+		t.Fatal("no V2 run record written")
+	}
+	got := records[len(records)-1].TerminalFailureKind
+	if got != TerminalKindGitTransportAuthFailed {
+		t.Errorf("terminal_failure_kind = %q, want %q — the run died on a credential-less "+
+			"`git push`; the missing output context is the symptom the post-condition could "+
+			"observe, not what stopped the run", got, TerminalKindGitTransportAuthFailed)
+	}
+}
+
+// TestPostConditionFailureWithoutAFirstCauseStillRecordsValidationError is the
+// discriminator for the test above: the same post-condition, the same missing
+// output, and an output tail that names no credential problem. Without this
+// row, the assertion above would also pass on a build that had simply renamed
+// validation_error.
+func TestPostConditionFailureWithoutAFirstCauseStillRecordsValidationError(t *testing.T) {
+	root := t.TempDir()
+	seedRefusalRepo(t, root, allRefusalStageSkills)
+
+	runner := &firstCauseStageRunner{tail: "the stage ran out of ideas and stopped writing\n"}
+	s := newFirstCauseScheduler(root, runner)
+	s.runPipeline(context.Background(), types.BoardItem{Number: 882, Repo: "nightgauge/nightgauge", ID: "item-882"})
+
+	records := readDailyJSONLRecords(t, root)
+	if len(records) == 0 {
+		t.Fatal("no V2 run record written")
+	}
+	got := records[len(records)-1].TerminalFailureKind
+	if got != TerminalKindValidationError {
+		t.Errorf("terminal_failure_kind = %q, want %q — a missing output context with no "+
+			"upstream cause in the tail is still exactly what validation_error means",
+			got, TerminalKindValidationError)
+	}
+}
+
+// schedulerObservedAuthFailure is the line the observed #878 run put in the
+// DAEMON LOG and nowhere else: `ensureEpicBranchForItem`'s push, performed by
+// the scheduler on the stage's behalf after the subagent had already returned.
+const schedulerObservedAuthFailure = "epic branch auto-create: push epic branch epic/900-example: " +
+	"push branch epic/900-example: invalid auth method"
+
+// cleanStageTail is a stage output tail that names no failure at all — the
+// second half of the observed run's shape. The subagent did not fail; it just
+// never wrote its context file.
+const cleanStageTail = `Reading the issue and the linked epic...
+Drafted the pickup summary.
+`
+
+// TestSchedulerObservedPushFailureReachesTheRunRecord is the #878 reproduction
+// the other tests in this file do NOT exercise.
+//
+// Every assertion above hands the auth text to the fake stage runner as
+// StageRunResult.LastOutputLines, i.e. it assumes the SUBAGENT printed it. In
+// the run the issue actually reports, the subagent printed nothing of the kind:
+// the push was `ensureEpicBranchForItem`'s, it is non-blocking, and it only
+// ever reached a log.Printf. So the first-cause scan found an empty tail, the
+// escalation gate saw no permission evidence and escalated haiku -> sonnet, and
+// the record booked the post-condition symptom.
+//
+// The premise under test is therefore the ROUTING, not the classification: a
+// failure the scheduler observes on a stage's behalf has to land in that
+// stage's evidence. The stage tail here deliberately names no credential
+// problem, so the only way either assertion can pass is through that routing.
+func TestSchedulerObservedPushFailureReachesTheRunRecord(t *testing.T) {
+	root := t.TempDir()
+	seedRefusalRepo(t, root, allRefusalStageSkills)
+
+	runner := &firstCauseStageRunner{tail: cleanStageTail}
+	s := newFirstCauseScheduler(root, runner)
+	s.epicBranchEnsurer = func(context.Context, string, types.BoardItem) string {
+		return schedulerObservedAuthFailure
+	}
+	s.runPipeline(context.Background(), types.BoardItem{
+		Number: 883, Repo: "nightgauge/nightgauge", ID: "item-883", ParentNumber: 900,
+	})
+
+	if got := runner.dispatches(); len(got) != 1 {
+		t.Errorf("stage dispatched %d time(s) (models %v), want exactly 1 — the scheduler's own "+
+			"push had already failed on credentials; escalating re-sends the whole prompt to fail "+
+			"at the identical line", len(got), got)
+	}
+
+	if runner.rt == nil {
+		t.Fatal("stage runner never captured a *state.RuntimeState")
+	}
+	snap := runner.rt.Snapshot()
+	if reason := snap.StageErrors[string(snap.Stage)]; !strings.Contains(reason, "invalid auth method") {
+		t.Errorf("recorded reason = %q\nwant it to NAME the push failure the scheduler logged; the "+
+			"missing output context is the symptom", reason)
+	}
+
+	records := readDailyJSONLRecords(t, root)
+	if len(records) == 0 {
+		t.Fatal("no V2 run record written")
+	}
+	got := records[len(records)-1].TerminalFailureKind
+	if got != TerminalKindGitTransportAuthFailed {
+		t.Errorf("terminal_failure_kind = %q, want %q — the cause the daemon logged must be the "+
+			"cause the record books", got, TerminalKindGitTransportAuthFailed)
+	}
+}
+
+// TestSchedulerObservedEpicBranchSuccessRecordsNothing is the discriminator: an
+// epic-branch ensure that SUCCEEDS must add nothing to the stage's evidence, so
+// the run above cannot be passing because the seam is wired unconditionally.
+func TestSchedulerObservedEpicBranchSuccessRecordsNothing(t *testing.T) {
+	root := t.TempDir()
+	seedRefusalRepo(t, root, allRefusalStageSkills)
+
+	runner := &firstCauseStageRunner{tail: cleanStageTail}
+	s := newFirstCauseScheduler(root, runner)
+	called := false
+	s.epicBranchEnsurer = func(context.Context, string, types.BoardItem) string {
+		called = true
+		return ""
+	}
+	s.runPipeline(context.Background(), types.BoardItem{
+		Number: 884, Repo: "nightgauge/nightgauge", ID: "item-884", ParentNumber: 900,
+	})
+
+	if !called {
+		t.Fatal("epic-branch ensure never ran — the sub-issue path did not reach it, so the " +
+			"test above proves nothing about routing")
+	}
+	records := readDailyJSONLRecords(t, root)
+	if len(records) == 0 {
+		t.Fatal("no V2 run record written")
+	}
+	if got := records[len(records)-1].TerminalFailureKind; got != TerminalKindValidationError {
+		t.Errorf("terminal_failure_kind = %q, want %q — nothing failed on the credential path, so "+
+			"the missing output context is the whole story", got, TerminalKindValidationError)
+	}
+}
