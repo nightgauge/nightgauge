@@ -33,6 +33,19 @@ import (
 // workspace burn?" question.
 const GraphQLHourlyLimit = 5000
 
+// BoardReadPointsPerPage is the GraphQL cost of one page of a ProjectV2 board
+// read (#842's measurement, after the nested `first:` values were already
+// tuned 16x down — the cost is not the query's shape, it is how many times it
+// is issued). BoardReadItemsPerPage is the item count each page pulls.
+//
+// This is the one multiplier every "what would a full board read cost?"
+// estimate needs — `nightgauge api-usage --budget` (#1428) and the sweep's
+// own read-count accounting both price against it.
+const (
+	BoardReadPointsPerPage = 17
+	BoardReadItemsPerPage  = 100
+)
+
 // IdleBudgetWarnFraction is the share of the hourly GraphQL budget a workspace
 // may spend before `doctor` warns.
 //

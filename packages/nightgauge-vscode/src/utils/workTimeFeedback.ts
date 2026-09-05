@@ -20,6 +20,7 @@ import * as yaml from "js-yaml";
 import type { PipelineState } from "../services/PipelineStateService";
 import type { PipelineStage } from "@nightgauge/sdk";
 import type { SizeLabel, TaskType } from "./changeAnalyzer";
+import { writeFileAtomic } from "./atomicWrite";
 
 /**
  * Work-time observation captured after PR merge
@@ -208,8 +209,8 @@ export async function appendObservationToYAML(
   // Recalculate size averages
   feedback.size_averages = calculateSizeAverages(feedback.observations);
 
-  // Atomic write: temp file + rename
-  const tempPath = `${yamlPath}.tmp`;
+  // Atomic write: unique-suffix temp file + rename (#786 — a fixed temp
+  // path races two concurrent writers the same way #777 did).
   const yamlContent = yaml.dump(
     { work_time_feedback: feedback },
     {
@@ -218,8 +219,7 @@ export async function appendObservationToYAML(
     }
   );
 
-  await fs.writeFile(tempPath, yamlContent, "utf-8");
-  await fs.rename(tempPath, yamlPath);
+  await writeFileAtomic(yamlPath, yamlContent);
 }
 
 /**

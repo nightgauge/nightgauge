@@ -482,7 +482,7 @@ func (wo *WaveOrchestrator) runWaveParallel(ctx context.Context, wave teams.Wave
 
 	for i, si := range wave.Issues {
 		wg.Add(1)
-		go func(idx int, issue teams.SubIssue) {
+		go func(idx int, issue teams.SubIssue) { // lifecycle: joined via wg.Wait() below (#491 pin)
 			defer wg.Done()
 			budget := wo.budgetForIssue(budgetResult, issue.Number)
 			results[idx] = wo.runSubagent(ctx, issue, epicItem, waveIdx, budget)
@@ -539,7 +539,7 @@ func (wo *WaveOrchestrator) runWaveScaled(ctx context.Context, wave teams.WaveAs
 		var wg sync.WaitGroup
 		for i, si := range batchIssues {
 			wg.Add(1)
-			go func(globalIdx int, issue teams.SubIssue) {
+			go func(globalIdx int, issue teams.SubIssue) { // lifecycle: joined via wg.Wait() below (#491 pin)
 				defer wg.Done()
 				budget := wo.budgetForIssue(budgetResult, issue.Number)
 				results[globalIdx] = wo.runSubagent(ctx, issue, epicItem, waveIdx, budget)
@@ -585,24 +585,12 @@ func (wo *WaveOrchestrator) runSubagent(ctx context.Context, si teams.SubIssue, 
 	var pipelineSuccess bool
 	var pipelineRuntime *state.RuntimeState
 
-	// Capture pipeline completion
-	originalOnComplete := wo.scheduler.onPipelineComplete
-	completionCh := make(chan struct {
-		success bool
-		runtime *state.RuntimeState
-	}, 1)
-
-	// Run the pipeline synchronously (runPipeline blocks until done)
+	// Run the pipeline synchronously (runPipeline blocks until done).
+	// lifecycle: joined below via the done-channel select (ctx.Done()/<-done)
+	// before this function returns — #491 pin allowlist cites this line.
 	go func() {
 		defer close(done)
 		wo.scheduler.runPipeline(subCtx, subItem)
-	}()
-
-	// Also set up a completion listener via the callback
-	// Note: runPipeline fires onPipelineComplete in its defer
-	go func() {
-		<-done
-		// Pipeline has finished — runtime state was already captured by onPipelineComplete
 	}()
 
 	// Wait for pipeline completion or context cancellation
@@ -617,17 +605,9 @@ func (wo *WaveOrchestrator) runSubagent(ctx context.Context, si teams.SubIssue, 
 		return result
 	}
 
-	// Read the completion data from the callback if available
-	select {
-	case data := <-completionCh:
-		pipelineSuccess = data.success
-		pipelineRuntime = data.runtime
-	default:
-		// Callback may not have fired through our channel — check state file
-		pipelineSuccess, pipelineRuntime = wo.readPipelineState(si.Number)
-	}
-
-	_ = originalOnComplete // Restore (already set)
+	// runPipeline fires onPipelineComplete in its defer, which persists the
+	// runtime state — read it back from the state file.
+	pipelineSuccess, pipelineRuntime = wo.readPipelineState(si.Number)
 
 	result.Success = pipelineSuccess
 	result.Duration = time.Since(start)
