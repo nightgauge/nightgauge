@@ -705,20 +705,15 @@ func TestRunStage_GracefulStopExitZeroIsReportedCancelled(t *testing.T) {
 	// Wait for RunStage to register the execution before requesting the stop —
 	// CancelWithGrace is a no-op (graceful=false, no error) against a key that
 	// isn't in m.running yet, which would make this test race the spawn
-	// instead of exercising the cancel path.
-	deadline := time.Now().Add(5 * time.Second)
-	for {
+	// instead of exercising the cancel path. Same helper and budget as the
+	// #555 waits above, for the same class of fact: a just-spawned
+	// subprocess publishing something this process does not observe directly.
+	pollUntil(t, "RunStage to register its execution", 30*time.Second, func() bool {
 		m.mu.Lock()
 		_, ok := m.running[key]
 		m.mu.Unlock()
-		if ok {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("timed out waiting for RunStage to register its execution")
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+		return ok
+	})
 	// Registration happens right after cmd.Start(), which only forks+execs —
 	// the shell itself needs a moment to actually reach the `trap` builtin.
 	// A SIGTERM that lands before then hits sh's default (uncaught)

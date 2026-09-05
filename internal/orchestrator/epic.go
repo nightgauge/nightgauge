@@ -67,6 +67,8 @@ func (s *Scheduler) checkEpicCompletion(ctx context.Context, item types.BoardIte
 		// so a hung webhook must not block the pipeline (the pipeline ctx may also
 		// be cancelled once the run returns) (#4076 review).
 		repo, epic := item.Repo, result.EpicNumber
+		// lifecycle: process-lifetime, 35s-bounded — deliberately detached, not
+		// routed through goTracked (#491 pin allowlist cites this line).
 		go func() {
 			nctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 35*time.Second)
 			defer cancel()

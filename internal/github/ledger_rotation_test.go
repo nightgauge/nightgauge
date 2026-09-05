@@ -194,10 +194,10 @@ func TestReadLedgerSinceSpansRotatedBackups(t *testing.T) {
 func TestSummarizeWindowExhaustionAndRate(t *testing.T) {
 	now := time.Now().UTC()
 	recs := []APILedgerRecord{
-		{TS: now.Add(-50 * time.Minute).Format(time.RFC3339Nano), Kind: "graphql", Caller: "board.Read", Cost: 1700, Remaining: 3300, Status: 200},
-		{TS: now.Add(-20 * time.Minute).Format(time.RFC3339Nano), Kind: "graphql", Caller: "board.Read", Cost: 3300, Remaining: 0, Status: 200},
-		{TS: now.Add(-10 * time.Minute).Format(time.RFC3339Nano), Kind: "core", Caller: "rest.Get", Cost: 1, Remaining: 4999, Status: 304, Cached: true},
-		{TS: now.Add(-90 * time.Minute).Format(time.RFC3339Nano), Kind: "graphql", Caller: "outside.Window", Cost: 999, Remaining: 10, Status: 200},
+		{TS: now.Add(-50 * time.Minute).Format(time.RFC3339Nano), Kind: "graphql", Caller: "board.Read", Cost: 1700, Remaining: 3300, Status: 200, HeaderObserved: true},
+		{TS: now.Add(-20 * time.Minute).Format(time.RFC3339Nano), Kind: "graphql", Caller: "board.Read", Cost: 3300, Remaining: 0, Status: 200, HeaderObserved: true},
+		{TS: now.Add(-10 * time.Minute).Format(time.RFC3339Nano), Kind: "core", Caller: "rest.Get", Cost: 1, Remaining: 4999, Status: 304, Cached: true, HeaderObserved: true},
+		{TS: now.Add(-90 * time.Minute).Format(time.RFC3339Nano), Kind: "graphql", Caller: "outside.Window", Cost: 999, Remaining: 10, Status: 200, HeaderObserved: true},
 	}
 	w := SummarizeWindow(recs, now.Add(-time.Hour), now)
 
@@ -227,12 +227,76 @@ func TestSummarizeWindowExhaustionAndRate(t *testing.T) {
 	}
 }
 
+// A cached (304) call that is genuinely exhausted — the transport preserves
+// the 304's own X-RateLimit-Remaining, so `Cached: true, Cost: 0, Remaining:
+// 0` with the header observed is real data, not the absence of it — must
+// still be reported as exhausted. Before this fix, the aggregator's only
+// evidence that a header was present was `Remaining > 0 || Cost > 0`, which
+// is false for this exact shape and collapses a real exhaustion into
+// "unknown" (#1452).
+func TestSummarizeWindowExhaustionOnCachedZeroRemaining(t *testing.T) {
+	now := time.Now().UTC()
+	recs := []APILedgerRecord{
+		{TS: now.Add(-5 * time.Minute).Format(time.RFC3339Nano), Kind: "graphql", Caller: "board.Read", Cost: 0, Remaining: 0, Status: 304, Cached: true, HeaderObserved: true},
+	}
+	w := SummarizeWindow(recs, now.Add(-time.Hour), now)
+
+	if !w.Exhausted {
+		t.Errorf("Exhausted = false, want true — a cached call with a genuinely observed remaining:0 header is a real exhaustion")
+	}
+	if w.LowWaterRemaining != 0 {
+		t.Errorf("LowWaterRemaining = %d, want 0", w.LowWaterRemaining)
+	}
+}
+
+// A record written by a binary built before HeaderObserved existed decodes
+// the field as its JSON zero value (false), but its nonzero Remaining and
+// Cost still prove a header really was parsed at write time (record() in
+// apiledger.go only ever sets either field inside the header-parse branch).
+// SummarizeWindow must trust that evidence instead of reading every
+// pre-upgrade ledger record as unknown quota — several nightgauge processes
+// can share one workspace ledger, so a lagging daemon would otherwise blind
+// the exhaustion arm indefinitely rather than for one upgrade instant.
+func TestSummarizeWindowTrustsPreMigrationRecordsWithRealQuotaData(t *testing.T) {
+	now := time.Now().UTC()
+	recs := []APILedgerRecord{
+		{TS: now.Add(-5 * time.Minute).Format(time.RFC3339Nano), Kind: "graphql", Cost: 17, Remaining: 4983, Status: 200},
+	}
+	w := SummarizeWindow(recs, now.Add(-time.Hour), now)
+
+	if w.LowWaterRemaining != 4983 {
+		t.Errorf("LowWaterRemaining = %d, want 4983 (trusted from Cost/Remaining) for a pre-migration record with no HeaderObserved field", w.LowWaterRemaining)
+	}
+	if w.Exhausted {
+		t.Error("Exhausted = true on a nonzero-remaining record")
+	}
+}
+
+// A pre-migration record whose Remaining genuinely hit zero must still be
+// caught as exhausted: Cost > 0 there (the drop from a nonzero previous
+// Remaining to 0) is the same header-parse evidence as above, just at the
+// boundary the Exhausted branch cares about.
+func TestSummarizeWindowExhaustionOnPreMigrationRecord(t *testing.T) {
+	now := time.Now().UTC()
+	recs := []APILedgerRecord{
+		{TS: now.Add(-5 * time.Minute).Format(time.RFC3339Nano), Kind: "graphql", Caller: "boardcache.Refresh", Cost: 1000, Remaining: 0, Status: 200},
+	}
+	w := SummarizeWindow(recs, now.Add(-time.Hour), now)
+
+	if !w.Exhausted {
+		t.Error("Exhausted = false, want true — a pre-migration record with Cost > 0 and Remaining == 0 proves a real header parse")
+	}
+	if w.LowWaterRemaining != 0 {
+		t.Errorf("LowWaterRemaining = %d, want 0", w.LowWaterRemaining)
+	}
+}
+
 // A window shorter than a minute must not project a five-figure hourly rate
 // out of three calls — that is a threshold crossed by the divisor, not by spend.
 func TestPointsPerHourIgnoresSubMinuteWindows(t *testing.T) {
 	now := time.Now().UTC()
 	w := SummarizeWindow(
-		[]APILedgerRecord{{TS: now.Format(time.RFC3339Nano), Kind: "graphql", Cost: 100, Remaining: 4900, Status: 200}},
+		[]APILedgerRecord{{TS: now.Format(time.RFC3339Nano), Kind: "graphql", Cost: 100, Remaining: 4900, Status: 200, HeaderObserved: true}},
 		now.Add(-10*time.Second), now,
 	)
 	if got := w.PointsPerHour(); got != 0 {
@@ -258,9 +322,9 @@ func TestReadLedgerSinceMissingFile(t *testing.T) {
 func TestSummarizeWindowAttributesGraphQLOnly(t *testing.T) {
 	now := time.Now().UTC()
 	recs := []APILedgerRecord{
-		{TS: now.Add(-30 * time.Minute).Format(time.RFC3339Nano), Kind: "core", Caller: "doctor.RunDoctor", Cost: 976, Remaining: 4024, Status: 200},
-		{TS: now.Add(-20 * time.Minute).Format(time.RFC3339Nano), Kind: "graphql", Caller: "doctor.checkBoardPopulation", Cost: 34, Remaining: 4910, Status: 200},
-		{TS: now.Add(-10 * time.Minute).Format(time.RFC3339Nano), Kind: "graphql_mutation", Caller: "doctor.checkBoardPopulation", Cost: 1, Remaining: 4909, Status: 200},
+		{TS: now.Add(-30 * time.Minute).Format(time.RFC3339Nano), Kind: "core", Caller: "doctor.RunDoctor", Cost: 976, Remaining: 4024, Status: 200, HeaderObserved: true},
+		{TS: now.Add(-20 * time.Minute).Format(time.RFC3339Nano), Kind: "graphql", Caller: "doctor.checkBoardPopulation", Cost: 34, Remaining: 4910, Status: 200, HeaderObserved: true},
+		{TS: now.Add(-10 * time.Minute).Format(time.RFC3339Nano), Kind: "graphql_mutation", Caller: "doctor.checkBoardPopulation", Cost: 1, Remaining: 4909, Status: 200, HeaderObserved: true},
 	}
 	w := SummarizeWindow(recs, now.Add(-time.Hour), now)
 

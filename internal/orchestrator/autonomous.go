@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/attention"
@@ -247,6 +248,27 @@ type AutonomousState struct {
 	TokensCeiling int64           `json:"tokensCeiling"`
 	CyclesRun     int             `json:"cyclesRun"`
 	Safety        *SafetyState    `json:"safety,omitempty"`
+
+	// BoardRecoveryInFlight is the number of detached BOARD-RECOVERY goroutines
+	// still running (#489) — revert-to-Ready, move-to-Done,
+	// promote-unblocked, sideline-halt, and nothing else. It counts the
+	// goTrackedBoardOp population, not every tracked goroutine: the tracked
+	// population also holds the refinement loop, a queued pipeline run and the
+	// status-change emit, none of which has a board mutation to lose, and the
+	// refinement loop alone would make this field read 1 forever in the default
+	// config.
+	//
+	// Runtime-only: Status() stamps it onto the snapshot it returns, never onto
+	// as.state, so the persisted state.json always carries 0 and loadState
+	// never resurrects a stale count.
+	//
+	// It exists because `autonomous.stop` is a PAUSE — it neither cancels nor
+	// joins this work, deliberately — so after a stop there can be a tail of
+	// board mutations in flight with no other surface reporting it. No
+	// omitempty: "zero in flight" is an answer the operator needs, and
+	// omitting it would make a settled scheduler indistinguishable from a
+	// client too old to know the field.
+	BoardRecoveryInFlight int `json:"boardRecoveryInFlight"`
 
 	// LifetimeIssueFailures tracks failures across sessions (NOT cleared on
 	// Resume). Used to enforce the per-issue terminal-failure cap so a single
@@ -892,9 +914,8 @@ type AutonomousScheduler struct {
 	// GitHub work through the ctx-aware GraphQL client
 	// (http.NewRequestWithContext) for the five board movers, and through
 	// exec.CommandContext for the one `gh` subprocess on the path — the
-	// sidelineHalt PR-state probe. No production path cancels today: Stop
-	// deliberately abstains (see Stop's doc), so drainBackground/cancelBackground
-	// have test callers only.
+	// sidelineHalt PR-state probe. Stop does NOT cancel (see Stop's doc); the
+	// one production path that does is Shutdown, at process teardown (#489).
 	//
 	// A generation is retired by nilling all three under bgMu; the next use
 	// lazily creates the successor. That is what makes the WaitGroup safe to
@@ -908,6 +929,34 @@ type AutonomousScheduler struct {
 	bgWG     *sync.WaitGroup
 	bgCtx    context.Context
 	bgCancel context.CancelFunc
+
+	// bgInFlight counts tracked goroutines that have been spawned and not yet
+	// returned, ACROSS generations — a retired generation's goroutines are
+	// still in flight until they return, and a shutdown that ignored them
+	// would under-report the tail it is about to abandon. Atomic rather than
+	// bgMu-guarded because Shutdown reads it while a WaitGroup Wait is
+	// outstanding and Status reads it under mu; bgMu is never held across
+	// either.
+	//
+	// It is the SHUTDOWN's number, not the operator's: it counts everything
+	// goTracked spawns, which includes the refinement loop, a queued pipeline
+	// run and the status-change emit. Shutdown has to join all of those, and
+	// none of them is a board mutation — see bgBoardOps.
+	bgInFlight atomic.Int64
+
+	// bgBoardOps counts the subset of bgInFlight that is detached board
+	// recovery: the goTrackedBoardOp population (revert-to-Ready,
+	// move-to-Done, promote-unblocked, sideline-halt). This is the number
+	// reported to operators as AutonomousState.BoardRecoveryInFlight (#489),
+	// because `autonomous.stop` is a pause that leaves exactly this work
+	// running and the count is the only surface that says so.
+	//
+	// Kept separate from bgInFlight rather than derived from it: with the
+	// default RefinementEnabled the refinement loop is tracked for the whole
+	// life of a run, so the total is permanently ≥1 while zero board writes
+	// are pending, and a UI line reading "board recovery in flight: 1" off the
+	// total would be false in the ordinary running case.
+	bgBoardOps atomic.Int64
 
 	// stopRefinementCh signals the refinement goroutine to exit. Kept separate
 	// from stopCh so each channel has exactly one reader, eliminating the race
@@ -2135,6 +2184,35 @@ const minGitHubQuotaHeadroom = 200
 // is safe. Issue #3976.
 const boardRecoveryTimeout = 80 * time.Minute
 
+// BackgroundDrainGrace bounds how long a process teardown waits for detached
+// board-recovery work before cancelling it (#489). It is deliberately NOT
+// boardRecoveryTimeout: that 80-minute ceiling exists so a rate-limited
+// MoveStatus can pause and complete, which is the right answer for a live
+// process and an unacceptable one for a shutdown — `nightgauge serve` would
+// hang for over an hour on a SIGTERM.
+//
+// 30 seconds is the trade the two failure modes pick out. An abandoned
+// MoveStatus leaves an issue "In progress", which the next startup's orphan
+// recovery (RecoverOrphanedRunning) reverts to Ready; an unbounded shutdown has
+// no such backstop. A fixed constant, not a config knob: there is no workspace
+// for which a different value is correct, and a knob would be one more thing
+// that can be set to zero.
+const BackgroundDrainGrace = 30 * time.Second
+
+// backgroundCancelJoinCeiling bounds the SECOND half of Shutdown: the join
+// after the cancel (#489). A cancel is a request, not a guarantee — a tracked
+// body that never looks at its context (fireStatusChangeLocked's emit spawn
+// discards it, and the listener it calls in `serve` blocks on a write) never
+// returns however long the join waits. Without this ceiling the grace would
+// bound only the wait BEFORE the cancel, and shutdown would still be unbounded
+// on exactly the body that is spawned at teardown.
+//
+// A ctx-aware op returns in milliseconds once cancelled — an in-flight
+// GraphQL request aborts with the request context — so this only has to cover
+// scheduling, not work. Shutdown caps it at the caller's grace, so a 50ms
+// shutdown stays a 50ms shutdown.
+const backgroundCancelJoinCeiling = 5 * time.Second
+
 // backgroundContext returns the current generation's parent context for
 // detached background work, creating the generation on first use. Detached
 // board-recovery ops derive their boardRecoveryTimeout deadline from the
@@ -2177,11 +2255,58 @@ func (as *AutonomousScheduler) ensureBackgroundLocked() (context.Context, *sync.
 // there would let a parked Wait return and the joining goroutine race the
 // fatal panic — in a test binary, a drain that returns into half-torn-down
 // state.
+//
+// The bgInFlight increment happens on the CALLER's goroutine, before the spawn:
+// incrementing inside the body would let a Status/Shutdown that runs between
+// the spawn and the body's first instruction report zero for work that is
+// already committed.
 func (as *AutonomousScheduler) goTracked(fn func(ctx context.Context)) {
 	as.bgMu.Lock()
 	ctx, wg := as.ensureBackgroundLocked()
 	as.bgMu.Unlock()
-	wg.Go(func() { fn(ctx) })
+	as.bgInFlight.Add(1)
+	wg.Go(func() {
+		defer as.bgInFlight.Add(-1)
+		fn(ctx)
+	})
+}
+
+// goTrackedBoardOp is goTracked for a detached BOARD mutation — the ops that
+// move an issue's status on the project board (revert-to-Ready, move-to-Done,
+// promote-unblocked, sideline-halt). It exists only to keep the operator-facing
+// count honest: every such spawn goes through here so BoardRecoveryInFlight
+// reports pending board writes and nothing else (#489).
+//
+// The increment is on the CALLER's goroutine, before the spawn, for the same
+// reason goTracked's is: a count taken between the spawn and the body's first
+// instruction must not read zero for work already committed. The decrement is
+// deferred INSIDE the tracked body, so it lands before goTracked's own
+// decrement and the board count can never exceed the total.
+func (as *AutonomousScheduler) goTrackedBoardOp(fn func(ctx context.Context)) {
+	as.bgBoardOps.Add(1)
+	as.goTracked(func(ctx context.Context) {
+		defer as.bgBoardOps.Add(-1)
+		fn(ctx)
+	})
+}
+
+// BackgroundInFlight reports how many tracked background goroutines have been
+// spawned and not yet returned — ALL of them: board recovery, the refinement
+// loop, a queued pipeline run, a status-change emit. It is what Shutdown must
+// join, and it is deliberately not the operator-facing number, because a
+// running scheduler with the default RefinementEnabled reports at least 1 here
+// with nothing whatsoever pending on the board. Use BoardRecoveryInFlight for
+// anything an operator reads (#489).
+func (as *AutonomousScheduler) BackgroundInFlight() int {
+	return int(as.bgInFlight.Load())
+}
+
+// BoardRecoveryInFlight reports how many detached board-recovery ops have been
+// spawned and not yet returned. This is the population that matters to an
+// operator: it survives `autonomous.stop`, which is a pause, so this count is
+// what tells them there is still a tail of board mutations running (#489).
+func (as *AutonomousScheduler) BoardRecoveryInFlight() int {
+	return int(as.bgBoardOps.Load())
 }
 
 // cancelBackground cancels the current generation's lifecycle context,
@@ -2254,6 +2379,93 @@ func (as *AutonomousScheduler) drainBackground() {
 	// deadlocks against its own child's Add.
 	if wg != nil {
 		wg.Wait()
+	}
+}
+
+// Shutdown is the bounded teardown: it waits up to grace for detached
+// background work to finish, then cancels whatever is left and joins it (#489).
+// Call it once, on a process's way out — `internal/ipc`'s Server.Run teardown
+// is the production call site, reached when `nightgauge serve` cancels the run
+// context from its SIGTERM/SIGINT handler.
+//
+// It is NOT a pause, and it is not Stop's job. Stop leaves the instance alive
+// for autonomous.start/resume to restart, so cancelling there would abort an
+// in-flight revertFailedIssueStatus mid-MoveStatus for no reason (see Stop's
+// doc). Shutdown cancels because the process is leaving anyway: past that
+// point the choice is between a lost board write — recoverable, the next
+// startup's orphan recovery reverts a stuck "In progress" — and a shutdown
+// that hangs on boardRecoveryTimeout's 80-minute ceiling, which is not.
+//
+// BOTH halves are bounded, and that is the point. The wait before the cancel
+// is bounded by grace; the join AFTER the cancel is bounded by
+// backgroundCancelJoinCeiling, because a cancel is a request and not every
+// tracked body is obliged to honour it — fireStatusChangeLocked's emit spawn
+// discards its context and calls a listener that may block on a write, and it
+// is spawned at exactly the moment of teardown (cancelling the run context
+// makes the scheduler complete("cancelled"), which fires the status change).
+// A Shutdown that cancelled and then joined without a bound would hang the
+// serve teardown on such a body forever — reintroducing the unbounded exit
+// this whole mechanism exists to remove.
+//
+// Returning while a goroutine is still parked is therefore a deliberate
+// outcome, named in the log as "abandoned": the process is leaving, the parked
+// body holds nothing but a pipe or a socket, and the alternative is not
+// exiting at all.
+//
+// The joiner runs on a time.AfterFunc callback rather than a `go` statement.
+// autonomous.go admits exactly one detached-spawn construct — the one inside
+// goTracked, pinned by TestEveryDetachedSpawnInAutonomousGoesThroughGoTracked
+// — and this goroutine could not go through goTracked anyway: it would add
+// itself to the very WaitGroup it then waits on. A zero-delay AfterFunc fires
+// immediately on a runtime-owned goroutine that holds only `as` and one
+// channel, and it is the one goroutine in this file allowed to outlive its
+// spawner, on the abandon arm. Do not "simplify" it into a bare `go`.
+func (as *AutonomousScheduler) Shutdown(grace time.Duration) {
+	n := as.BackgroundInFlight()
+	if n == 0 {
+		// Nothing detached. Say so rather than staying silent: "no drain line
+		// in the log" must not be ambiguous between a quiet shutdown and a
+		// teardown that never reached the drain at all.
+		log.Printf("autonomous: shutdown drain: no background ops in flight")
+		return
+	}
+	log.Printf("autonomous: shutdown drain: draining %d background op(s) (%d board recovery), up to %s",
+		n, as.BoardRecoveryInFlight(), grace)
+
+	joined := make(chan struct{})
+	time.AfterFunc(0, func() {
+		as.waitBackground()
+		close(joined)
+	})
+
+	select {
+	case <-joined:
+		log.Printf("autonomous: shutdown drain: drained")
+		return
+	case <-time.After(grace):
+	}
+
+	still, stillBoard := as.BackgroundInFlight(), as.BoardRecoveryInFlight()
+	as.cancelBackground()
+
+	// The cancel is bounded by the grace it already spent, so a caller asking
+	// for a 50ms shutdown does not silently get a five-second one.
+	joinBound := min(grace, backgroundCancelJoinCeiling)
+	select {
+	case <-joined:
+		if still == 0 {
+			// The last op returned in the same instant the grace expired; the
+			// cancel reached nothing.
+			log.Printf("autonomous: shutdown drain: drained")
+			return
+		}
+		log.Printf("autonomous: shutdown drain: cancelled %d still in flight after %s — "+
+			"%d of them mid board write, abandoned; the next startup's orphan recovery reverts those issues",
+			still, grace, stillBoard)
+	case <-time.After(joinBound):
+		log.Printf("autonomous: shutdown drain: abandoned %d op(s) still parked %s after the cancel "+
+			"(%d mid board write) — they do not observe cancellation; exiting anyway",
+			as.BackgroundInFlight(), joinBound, as.BoardRecoveryInFlight())
 	}
 }
 
@@ -2868,6 +3080,12 @@ func (as *AutonomousScheduler) Status() AutonomousState {
 		safetySnap := as.safetyRails.State()
 		snapshot.Safety = &safetySnap
 	}
+	// Live, and stamped on the SNAPSHOT only — as.state must never carry it,
+	// or persistStateLocked would write a count that is meaningless the
+	// moment the file is closed (#489). Board ops only: the total tracked
+	// count includes the refinement loop, so reporting it here would tell an
+	// operator board mutations are pending whenever autonomous is running.
+	snapshot.BoardRecoveryInFlight = as.BoardRecoveryInFlight()
 	return snapshot
 }
 
@@ -3113,6 +3331,17 @@ func (as *AutonomousScheduler) runCycle(ctx context.Context) {
 		graph, buildErr = as.buildGraph(ctx)
 		if buildErr != nil {
 			log.Printf("autonomous: graph build failed: %v", buildErr)
+			// #1446: a failed build ends the cycle like any other gate above,
+			// so it owes the same two closing acts. Without them the
+			// CyclesRun/LastScanAt increment taken just above this block never
+			// reaches disk, and onCycleComplete — documented as firing after
+			// *each* scan cycle, and used as the cycle tick rather than a
+			// sleep — never fires, so anything waiting on that tick waits for
+			// the next successful build instead of the next cycle.
+			as.persistState()
+			if as.onCycleComplete != nil {
+				as.onCycleComplete()
+			}
 			return
 		}
 		log.Printf("autonomous: graph built fresh: %d nodes, scanning %d repos",
@@ -4450,7 +4679,7 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 		// Promote newly-unblocked downstream issues from Backlog → Ready.
 		// This runs in a goroutine because it makes network calls (graph build +
 		// MoveStatus) and we're holding the mutex.
-		as.goTracked(func(genCtx context.Context) { as.promoteUnblockedToReady(genCtx, repo, issue) })
+		as.goTrackedBoardOp(func(genCtx context.Context) { as.promoteUnblockedToReady(genCtx, repo, issue) })
 	} else {
 		key := fmt.Sprintf("%s#%d", repo, issue)
 
@@ -4520,7 +4749,7 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 			log.Printf("autonomous: github-quota-low for %s — environmental, retry after %s (no lifetime-cap increment)",
 				key, resetAt.UTC().Format(time.RFC3339))
 			as.persistStateLocked()
-			as.goTracked(func(genCtx context.Context) { as.revertFailedIssueStatus(genCtx, repo, issue) })
+			as.goTrackedBoardOp(func(genCtx context.Context) { as.revertFailedIssueStatus(genCtx, repo, issue) })
 			select {
 			case as.rescanCh <- struct{}{}:
 			default:
@@ -4554,7 +4783,7 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 			log.Printf("autonomous: github-network-outage for %s — environmental, retry after %s (no lifetime-cap increment, no pause)",
 				key, resetAt.UTC().Format(time.RFC3339))
 			as.persistStateLocked()
-			as.goTracked(func(genCtx context.Context) { as.revertFailedIssueStatus(genCtx, repo, issue) })
+			as.goTrackedBoardOp(func(genCtx context.Context) { as.revertFailedIssueStatus(genCtx, repo, issue) })
 			select {
 			case as.rescanCh <- struct{}{}:
 			default:
@@ -4595,7 +4824,7 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 			log.Printf("autonomous: %s for %s — environmental failure, retry in %v (no lifetime-cap increment)",
 				label, key, streamIdleTimeoutBackoff)
 			as.persistStateLocked()
-			as.goTracked(func(genCtx context.Context) { as.revertFailedIssueStatus(genCtx, repo, issue) })
+			as.goTrackedBoardOp(func(genCtx context.Context) { as.revertFailedIssueStatus(genCtx, repo, issue) })
 			// Trigger an immediate re-scan so other unblocked items proceed
 			// while this one waits out its backoff.
 			select {
@@ -4629,7 +4858,7 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 			log.Printf("autonomous: stall-kill for %s — transient, retry in %v (no lifetime-cap increment)",
 				key, stallKillBackoff)
 			as.persistStateLocked()
-			as.goTracked(func(genCtx context.Context) { as.revertFailedIssueStatus(genCtx, repo, issue) })
+			as.goTrackedBoardOp(func(genCtx context.Context) { as.revertFailedIssueStatus(genCtx, repo, issue) })
 			select {
 			case as.rescanCh <- struct{}{}:
 			default:
@@ -4692,7 +4921,7 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 					delete(as.retryBackoff, key)
 				}
 				as.persistStateLocked()
-				as.goTracked(func(genCtx context.Context) { as.revertFailedIssueStatus(genCtx, repo, issue) })
+				as.goTrackedBoardOp(func(genCtx context.Context) { as.revertFailedIssueStatus(genCtx, repo, issue) })
 				select {
 				case as.rescanCh <- struct{}{}:
 				default:
@@ -4712,7 +4941,7 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 			log.Printf("autonomous: %s for %s — transient, retry in %v (attempt %d, no lifetime-cap increment, no pause)",
 				terminalFailureKind, key, backoff, priorAttempts+1)
 			as.persistStateLocked()
-			as.goTracked(func(genCtx context.Context) { as.revertFailedIssueStatus(genCtx, repo, issue) })
+			as.goTrackedBoardOp(func(genCtx context.Context) { as.revertFailedIssueStatus(genCtx, repo, issue) })
 			select {
 			case as.rescanCh <- struct{}{}:
 			default:
@@ -4749,7 +4978,7 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 			log.Printf("autonomous: adapter_auth_failed for %s — retryable infra, retry in %v (no lifetime-cap increment, no cascade feed, no pause)",
 				key, stallKillBackoff)
 			as.persistStateLocked()
-			as.goTracked(func(genCtx context.Context) { as.revertFailedIssueStatus(genCtx, repo, issue) })
+			as.goTrackedBoardOp(func(genCtx context.Context) { as.revertFailedIssueStatus(genCtx, repo, issue) })
 			select {
 			case as.rescanCh <- struct{}{}:
 			default:
@@ -4792,7 +5021,7 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 					delete(as.retryBackoff, key)
 				}
 				as.persistStateLocked()
-				as.goTracked(func(genCtx context.Context) { as.revertFailedIssueStatus(genCtx, repo, issue) })
+				as.goTrackedBoardOp(func(genCtx context.Context) { as.revertFailedIssueStatus(genCtx, repo, issue) })
 				select {
 				case as.rescanCh <- struct{}{}:
 				default:
@@ -4811,7 +5040,7 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 			log.Printf("autonomous: permission_denied for %s — retryable harness fault, retry in %v (attempt %d, no lifetime-cap increment, no cascade feed, no pause)",
 				key, permissionDeniedBackoff, priorAttempts+1)
 			as.persistStateLocked()
-			as.goTracked(func(genCtx context.Context) { as.revertFailedIssueStatus(genCtx, repo, issue) })
+			as.goTrackedBoardOp(func(genCtx context.Context) { as.revertFailedIssueStatus(genCtx, repo, issue) })
 			select {
 			case as.rescanCh <- struct{}{}:
 			default:
@@ -4840,7 +5069,7 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 			log.Printf("autonomous: model_unavailable for %s — environmental, retry in %v (no lifetime-cap increment, no pause)",
 				key, streamIdleTimeoutBackoff)
 			as.persistStateLocked()
-			as.goTracked(func(genCtx context.Context) { as.revertFailedIssueStatus(genCtx, repo, issue) })
+			as.goTrackedBoardOp(func(genCtx context.Context) { as.revertFailedIssueStatus(genCtx, repo, issue) })
 			select {
 			case as.rescanCh <- struct{}{}:
 			default:
@@ -4869,7 +5098,7 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 			log.Printf("autonomous: %s for %s — recoverable, retry in %v (no lifetime-cap increment)",
 				terminalFailureKind, key, stallKillBackoff)
 			as.persistStateLocked()
-			as.goTracked(func(genCtx context.Context) { as.revertFailedIssueStatus(genCtx, repo, issue) })
+			as.goTrackedBoardOp(func(genCtx context.Context) { as.revertFailedIssueStatus(genCtx, repo, issue) })
 			select {
 			case as.rescanCh <- struct{}{}:
 			default:
@@ -4898,7 +5127,7 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 			log.Printf("autonomous: validation_inconclusive for %s — recoverable, retry in %v (no lifetime-cap increment)",
 				key, stallKillBackoff)
 			as.persistStateLocked()
-			as.goTracked(func(genCtx context.Context) { as.revertFailedIssueStatus(genCtx, repo, issue) })
+			as.goTrackedBoardOp(func(genCtx context.Context) { as.revertFailedIssueStatus(genCtx, repo, issue) })
 			select {
 			case as.rescanCh <- struct{}{}:
 			default:
@@ -4932,7 +5161,7 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 			log.Printf("autonomous: %s#%d blocked-dependency deferral (non-failure) — board → Ready, retry in %v (no lifetime-cap increment, no pause) — %s",
 				repo, issue, blockedDependencyBackoff, detail)
 			as.persistStateLocked()
-			as.goTracked(func(genCtx context.Context) { as.revertFailedIssueStatus(genCtx, repo, issue) })
+			as.goTrackedBoardOp(func(genCtx context.Context) { as.revertFailedIssueStatus(genCtx, repo, issue) })
 			select {
 			case as.rescanCh <- struct{}{}:
 			default:
@@ -5009,7 +5238,7 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 				as.state.Safety = &safetySnap
 			}
 			as.persistStateLocked()
-			as.goTracked(func(genCtx context.Context) { as.moveIssueToDone(genCtx, repo, issue) })
+			as.goTrackedBoardOp(func(genCtx context.Context) { as.moveIssueToDone(genCtx, repo, issue) })
 			select {
 			case as.rescanCh <- struct{}{}:
 			default:
@@ -5153,7 +5382,7 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 			// requeue the issue. Raised after persistState so the record and the
 			// card cannot disagree about the issue's state.
 			as.raiseArchitectureApproval(repo, issue, title, detail)
-			as.goTracked(func(genCtx context.Context) { as.sidelineHalt(genCtx, repo, issue, "architecture approval required") })
+			as.goTrackedBoardOp(func(genCtx context.Context) { as.sidelineHalt(genCtx, repo, issue, "architecture approval required") })
 			select {
 			case as.rescanCh <- struct{}{}:
 			default:
@@ -5175,7 +5404,7 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 				as.state.Safety = &safetySnap
 			}
 			as.persistStateLocked()
-			as.goTracked(func(genCtx context.Context) { as.sidelineHalt(genCtx, repo, issue, "pr-merge: PR was not merged") })
+			as.goTrackedBoardOp(func(genCtx context.Context) { as.sidelineHalt(genCtx, repo, issue, "pr-merge: PR was not merged") })
 			select {
 			case as.rescanCh <- struct{}{}:
 			default:
@@ -5255,7 +5484,7 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 		// idempotent — MoveStatus to Ready is a no-op if the issue is already
 		// at Ready (e.g., terminal kill before status moved). Runs in a
 		// goroutine to avoid holding as.mu during a network call.
-		as.goTracked(func(genCtx context.Context) { as.revertFailedIssueStatus(genCtx, repo, issue) })
+		as.goTrackedBoardOp(func(genCtx context.Context) { as.revertFailedIssueStatus(genCtx, repo, issue) })
 	}
 
 	// Record completion with safety rails (tokens are tracked via AddTokensSpent)
