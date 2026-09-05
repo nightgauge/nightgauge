@@ -751,7 +751,7 @@ func TestOrphanReconcile_SchedulerOwnedStageSilentPastTheWindowSurvivesOnItsLive
 // forever — an immortal snapshot and a platform run row stuck at 'running',
 // which is the phantom-in-flight symptom this whole reconciler exists to end.
 //
-// RED-FIRST: drop the `now.Sub(modTime) <= snapshotAgeCap` conjunct from arm 3
+// RED-FIRST: drop the `now.Sub(modTime) <= runstate.SnapshotRetention` conjunct from arm 3
 // and the past-the-cap case below skips instead of being collected.
 func TestSkipRun_LivePidIsBoundedByTheSnapshotAgeCap(t *testing.T) {
 	stateDir := t.TempDir()
@@ -766,7 +766,7 @@ func TestSkipRun_LivePidIsBoundedByTheSnapshotAgeCap(t *testing.T) {
 		wantSkip bool
 	}{
 		{"stale by the liveness window — the live child carries it", 2 * livenessWindow, true},
-		{"older than the 14-day cap — 7.4's last row outranks the pid", 2 * snapshotAgeCap, false},
+		{"older than the 14-day cap — 7.4's last row outranks the pid", 2 * runstate.SnapshotRetention, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			runID := newTestRunID()

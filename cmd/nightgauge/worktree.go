@@ -272,7 +272,11 @@ created for a run about to start), and any issue with a run in flight.`,
 					RepoRoot:      root,
 					DefaultBranch: defaultBranch,
 					ActiveIssues:  active.Issues,
-					DryRun:        dryRun,
+					// The arm that vouched for each protected issue, carried
+					// so the skip line can be audited without opening the
+					// state directory (#443).
+					Protected: active.Protected,
+					DryRun:    dryRun,
 					// Report-only, and the only place an operator sees it
 					// without running `doctor` (#912).
 					ReportStrandedBranches: true,
@@ -333,7 +337,17 @@ created for a run about to start), and any issue with a run in flight.`,
 					fmt.Fprintf(out, "  %-14s %s (branch %s, door %s)\n", verb, wt.Path, wt.Branch, wt.Door)
 				}
 				for _, wt := range res.Skipped {
-					fmt.Fprintf(out, "  %-14s %s (%s)\n", "skipped", wt.Path, wt.Reason)
+					// The ARM is printed beside the reason (#443), for the same
+					// reason the reclaim door is: `active-run` is granted by six
+					// structurally different protections and named none of them,
+					// so "a process is executing in there" and "a paused
+					// snapshot from thirteen days ago exists" reached the
+					// operator as one indistinguishable line.
+					reason := string(wt.Reason)
+					if wt.ReasonDetail != "" {
+						reason += ": " + wt.ReasonDetail
+					}
+					fmt.Fprintf(out, "  %-14s %s (%s)\n", "skipped", wt.Path, reason)
 				}
 				// Report-only and printed LAST, after the worktree verdicts, so
 				// nothing here reads as something the sweep did. The wording

@@ -34,7 +34,7 @@
 
 import * as vscode from "vscode";
 import * as path from "node:path";
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import type { TelemetryConsentService } from "./TelemetryConsentService";
 import type { TelemetryStream } from "./telemetry/types";
 import type { Logger } from "../utils/logger";
@@ -373,11 +373,34 @@ async function loadWatermarks(uri: vscode.Uri, logger?: Logger | null): Promise<
   }
 }
 
-async function saveWatermarks(uri: vscode.Uri, store: WatermarkStore): Promise<void> {
-  const tempUri = vscode.Uri.file(uri.fsPath + ".tmp");
+/**
+ * Atomically replace the watermark file's contents: write a unique-suffix
+ * temp file beside the target, then rename over it.
+ *
+ * The temp name carries the pid and random bytes so two concurrent flushes
+ * (the active-run flush timer and an end-of-cycle flush, say) cannot collide
+ * on one temp file. A fixed name is not merely untidy: with two writers, the
+ * first rename wins and the second fails `ENOENT` on a temp file the winner
+ * already consumed — the same shape #777 fixed in `TelemetryStore.writeIndex`
+ * (#786). On failure the temp file is removed before rethrowing, since a
+ * per-write temp name only stays leak-free if a failed write cleans up after
+ * itself.
+ */
+export async function saveWatermarks(uri: vscode.Uri, store: WatermarkStore): Promise<void> {
+  const tempUri = vscode.Uri.file(
+    `${uri.fsPath}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`
+  );
   const bytes = Buffer.from(JSON.stringify(store, null, 2), "utf8");
-  await vscode.workspace.fs.writeFile(tempUri, bytes);
-  await vscode.workspace.fs.rename(tempUri, uri, { overwrite: true });
+  try {
+    await vscode.workspace.fs.writeFile(tempUri, bytes);
+    await vscode.workspace.fs.rename(tempUri, uri, { overwrite: true });
+  } catch (err) {
+    await vscode.workspace.fs.delete(tempUri, { useTrash: false }).then(
+      () => undefined,
+      () => undefined
+    );
+    throw err;
+  }
 }
 
 /**

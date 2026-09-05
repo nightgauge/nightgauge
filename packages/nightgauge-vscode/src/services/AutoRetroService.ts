@@ -97,6 +97,7 @@ export type RetroFailureCategory =
   | "merge-blocked"
   | "adapter-unavailable"
   | "no-adapter-available"
+  | "credential-failure"
   | "unknown";
 
 export interface RetroFinding {
@@ -418,12 +419,21 @@ const SIGNAL_EXTRACTORS: Array<(input: ExtractorInput) => StructuredSignal | nul
     const m = text.match(/"terminal_failure_kind"\s*:\s*"([a-z_]+)"/);
     if (!m) return null;
     const kind = m[1];
+    // #1056 — the authoritative record field, so a kind that lands here must
+    // be DECIDED here. A kind the map does not carry returns null and the
+    // classifier falls through to the prose keyword table below, which is the
+    // inversion this extractor exists to prevent: for the #878 credential
+    // failure the composed reason retains `did not write expected output
+    // context`, so the fallthrough answers state-management and recommends
+    // "re-run the failed stage after verifying context" — a remedy that cannot
+    // work, for a fault the record had already named exactly (#878).
     const map: Record<string, RetroFailureCategory> = {
       stall_kill: "stall-kill",
       budget_exceeded: "budget-exceeded",
       validation_error: "validation-failure",
       subagent_crash: "stall-kill",
       orchestrator_crash: "state-management",
+      git_transport_auth_failed: "credential-failure",
     };
     const cat = map[kind];
     if (!cat) return null;
@@ -1556,6 +1566,8 @@ export class AutoRetroService {
         "Stage halted at start — primary adapter prereq failed and fallback was disabled or the chain was empty",
       "no-adapter-available":
         "Every adapter in the fallback chain failed prereq at stage start — no adapter is available to run the stage",
+      "credential-failure":
+        "A git or forge transport refused the credentials the machine offered — the run could not authenticate, and no rerun, stronger model or better plan changes that",
       unknown: "Pipeline failure detected but category could not be determined",
     };
 
@@ -1590,6 +1602,8 @@ export class AutoRetroService {
         "The primary adapter resolved for this stage failed its prereq probe (auth, missing CLI, missing env var, etc.) and no fallback ran. Either fix the primary adapter's auth/install or — if you want automatic recovery — set `pipeline.disable_fallback: false` (the default) and configure `pipeline.adapter_fallback_chain` or `pipeline.stage_adapter_fallback.<stage>`.",
       "no-adapter-available":
         "Every adapter in the effective fallback chain failed prereq at stage start. Inspect the `adapters_tried=[…]` list in the envelope: at least one of those adapters needs a valid auth/install before the stage can run. Either broaden the chain (`pipeline.adapter_fallback_chain`) or fix one of the listed adapters' prereqs. See `nightgauge doctor --json` for per-adapter status.",
+      "credential-failure":
+        "Fix the machine's git/forge credentials, then re-queue — the work itself was never attempted. Check the remote's scheme against what is configured (`git remote -v`): an SSH remote needs a loaded agent key, an HTTPS remote needs a credential helper or a token the forge still accepts. `Bad credentials` / HTTP 401 from the API means the token is present but rejected, so every board read, PR create and merge in the run would have failed the same way. Do NOT re-run at a higher model tier: no model can supply a credential, which is why the escalation gate declines this class (#878).",
       unknown: "Review logs manually. Run /nightgauge:retro for AI-powered root cause analysis.",
     };
 
@@ -1610,6 +1624,7 @@ export class AutoRetroService {
       "merge-blocked": "medium",
       "adapter-unavailable": "high",
       "no-adapter-available": "high",
+      "credential-failure": "high",
       unknown: "low",
     };
 
