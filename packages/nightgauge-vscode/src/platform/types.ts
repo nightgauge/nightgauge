@@ -179,7 +179,7 @@ export interface SkillResolveResponse {
 
 export type LicenseKeyFormat = "live" | "test" | "ci";
 
-export type LicenseStatus = "active" | "expired" | "revoked" | "suspended";
+export type LicenseStatus = "active" | "expired" | "revoked" | "suspended" | "machine_limit";
 
 /** Result returned by POST /v1/license/validate. */
 export interface LicenseValidationResult {

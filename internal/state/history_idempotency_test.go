@@ -588,3 +588,106 @@ func TestHistory_TwoRunsOfOneIssueProduceTwoRecords(t *testing.T) {
 		t.Errorf("history lost a run: got %v, want %s and %s", seen, first.RunID, second.RunID)
 	}
 }
+
+// --- Issue #1455: the append's own retention prune must not undo the append ---
+
+// TestAppendAndIndex_PruneMeasuresRetentionFromTheWritesOwnClock pins the
+// mechanism behind #1455. appendAndIndex dates the daily JSONL file from the
+// caller-supplied `now`, but the prune pass that rides along with every append
+// used to read a SECOND, independent clock (time.Now()). With two clocks the
+// write and the retention decision disagree about what "now" is, and the prune
+// deletes the daily file — and the index entry — the append just produced.
+//
+// That is exactly how the reported CI failure happened: the fixture's records
+// are dated by hand, so the retention window silently marched over them as the
+// wall clock advanced, and the test flipped to failing once the real clock
+// passed record-date + retention. historyDateCutoff truncates to LOCAL
+// midnight, so a UTC runner crossed that boundary six hours before a UTC-6
+// host did — hence "failed once on CI, 0/30 locally on the identical tree".
+//
+// Measured from `now`, this record is dated at the filing instant itself and
+// is inside a 7-day window whenever the test runs, so the assertion no longer
+// depends on the calendar or on the host's timezone.
+func TestAppendAndIndex_PruneMeasuresRetentionFromTheWritesOwnClock(t *testing.T) {
+	dir := t.TempDir()
+	hw := NewHistoryWriter(dir)
+	hw.SetRetentionDays(7)
+
+	rec := makeRunRec("run-own-clock", 1455, fixedNow.Format(time.RFC3339), "issue-pickup", "feature-dev")
+	if err := hw.WriteV2Record(rec, fixedNow); err != nil {
+		t.Fatal(err)
+	}
+
+	if lines := rawDailyLines(t, dir); len(lines) != 1 {
+		t.Fatalf("daily JSONL lines = %d, want 1 — the prune pass that rides along with "+
+			"the append deleted the daily file the append had just written", len(lines))
+	}
+	idx := readIndexFile(t, dir)
+	if idx.TotalRuns != 1 || len(idx.Entries) != 1 {
+		t.Fatalf("index total_runs=%d entries=%d, want 1/1 — retention must be measured "+
+			"against the instant that dated the record, not a second clock read", idx.TotalRuns, len(idx.Entries))
+	}
+}
+
+// TestAppendAndIndex_JustWrittenEntrySurvivesItsOwnRetentionPrune pins the
+// second half: a successful append and the prune riding along with it must not
+// contradict each other about the record being written.
+//
+// The daily file is chosen from `now`, while the index entry's date comes from
+// the producer-supplied recorded_at (started_at when that is absent). Those are
+// two different fields and nothing forces them to agree — so a record filed
+// under today's daily file can carry a recorded_at outside the retention
+// window, and the prune would drop the index entry for a record that is
+// demonstrably on disk. The record just appended is authoritative and is never
+// pruned by its own write.
+func TestAppendAndIndex_JustWrittenEntrySurvivesItsOwnRetentionPrune(t *testing.T) {
+	dir := t.TempDir()
+	hw := NewHistoryWriter(dir)
+	hw.SetRetentionDays(7)
+
+	// recorded_at 30 days before the filing instant — well outside the window.
+	backdated := makeRunRec("run-backdated", 1455,
+		fixedNow.AddDate(0, 0, -30).Format(time.RFC3339), "issue-pickup")
+	if err := hw.WriteV2Record(backdated, fixedNow); err != nil {
+		t.Fatal(err)
+	}
+
+	if lines := rawDailyLines(t, dir); len(lines) != 1 {
+		t.Fatalf("daily JSONL lines = %d, want 1", len(lines))
+	}
+	idx := readIndexFile(t, dir)
+	if idx.TotalRuns != 1 || len(idx.Entries) != 1 {
+		t.Fatalf("index total_runs=%d entries=%d, want 1/1 — the index must describe the "+
+			"record the append just put on disk", idx.TotalRuns, len(idx.Entries))
+	}
+}
+
+// TestAppendAndIndex_PruneStillDropsStaleEntriesOtherThanTheOneBeingWritten
+// guards the exemption above from becoming "retention no longer prunes the
+// index": only the entry for the record being written is spared, and a stale
+// entry from an earlier write is still dropped when a later write's cutoff
+// passes it.
+func TestAppendAndIndex_PruneStillDropsStaleEntriesOtherThanTheOneBeingWritten(t *testing.T) {
+	dir := t.TempDir()
+	hw := NewHistoryWriter(dir)
+	hw.SetRetentionDays(7)
+
+	staleAt := fixedNow.AddDate(0, 0, -30)
+	stale := makeRunRec("run-stale", 1455, staleAt.Format(time.RFC3339), "issue-pickup")
+	if err := hw.WriteV2Record(stale, staleAt); err != nil {
+		t.Fatal(err)
+	}
+	fresh := makeRunRec("run-fresh", 1456, fixedNow.Format(time.RFC3339), "issue-pickup")
+	if err := hw.WriteV2Record(fresh, fixedNow); err != nil {
+		t.Fatal(err)
+	}
+
+	idx := readIndexFile(t, dir)
+	if idx.TotalRuns != 1 || len(idx.Entries) != 1 {
+		t.Fatalf("index total_runs=%d entries=%d, want 1/1 (the stale entry pruned)",
+			idx.TotalRuns, len(idx.Entries))
+	}
+	if idx.Entries[0].RunID != "run-fresh" {
+		t.Fatalf("surviving index entry run_id = %q, want \"run-fresh\"", idx.Entries[0].RunID)
+	}
+}

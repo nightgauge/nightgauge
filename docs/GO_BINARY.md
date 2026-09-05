@@ -1287,11 +1287,59 @@ snapshot is:
   sidecar arm exists — it is the one signal that path writes while the run is
   alive; or
 - **paused** — a deliberate "resume later" that powers the restore prompt days
-  later, so it is never aged out by the liveness lease; or
+  later, so it is never aged out by the 30-minute liveness lease. It **is** aged
+  out by `runstate.SnapshotRetention` (14 days, see below); or
 - **terminal within the tail window** — the terminal marker lands before the
   worktree goes on both dispatch paths; or
 - **unreadable / name-body mismatched** — counted as active and reported as a
-  warning.
+  warning, and likewise bounded by `runstate.SnapshotRetention`. The one arm
+  with no bound is a snapshot the scan could not `stat` at all: retention needs
+  an mtime, and inventing "old enough" for the entry whose mtime failed to read
+  would be the permissive guess in the one place a guess destroys directories.
+
+**Retention does not require a resident server (#443).** The 14-day cap used to
+live as a private constant inside the IPC orphan reconciler, which runs only
+from a server's startup timer and `workspace.setRoot`. In a workspace where
+`nightgauge serve` and the extension never run, nothing ever removed a paused or
+corrupt snapshot — and the arms above then protected that issue's worktree
+**forever**, turning the operator's own reclaim command into a permanent no-op
+(the structural-no-op class, pointing the other way). The value now lives in
+`runstate.SnapshotRetention` beside `LivenessWindow`, and both readers import
+it: the reconciler collects past the cap, and this scan stops protecting past
+it. Two copies of that number would be two answers to "is that run still
+there?" waiting to disagree.
+
+**The scan has a second consumer, and the bound reaches it too.**
+`ActiveIssuesFromSnapshots` also feeds the autonomous compose reconcile
+(`snapshotInFlightIssues` → `sweepOrphanedComposeProjects`), whose action is
+`docker compose down -v` — named volumes nothing recovers. So the same fourteen
+days now bound how long a paused run's **compose stack** is vouched for, not
+only its worktree. Under `serve` that is not a behaviour change at all: the IPC
+orphan reconciler runs in the same process and was already collecting the
+snapshot past that cap, so the file the arm read was disappearing underneath it
+anyway. Under `nightgauge autonomous run`, where no orphan reconciler exists,
+the bound is the intended semantics — a pause nobody resumed in a fortnight is
+not a pending decision. Either way the scan's warnings are logged before the
+teardown, so an aged-out pause is named rather than silently swept.
+
+**Every protection names its arm.** `ActiveIssues.Protected` carries, per
+protected issue, the arm that vouched for it and the evidence that arm read —
+`live-sidecar, pid 431`, `stage-child, pid 4312`, `timestamp-lease, 12m`,
+`paused-snapshot, 13d`, `corrupt-snapshot, 1h`, `identity-mismatch, 2m`,
+`unstattable-snapshot`. The first arm to grant a protection owns the reason; the
+sidecar is read first because it is the only arm whose evidence is current. The
+sweep carries that string onto `SkippedWorktree.ReasonDetail`, so the CLI prints
+`skipped <path> (active-run: paused-snapshot, 13d)` and `--json` adds
+`"reasonDetail"` beside `"reason"`. All eight arm strings are pinned: seven by
+`TestActiveIssuesFromSnapshots_ProtectionReasonPerArm`, and
+`unstattable-snapshot` by its own fixture, which needs a directory with read but
+no search permission so that enumeration succeeds while every `lstat` inside it
+fails. A renamed arm therefore breaks a test rather than the operator surface. Before
+#443 every arm printed the identical `active-run` word and an operator auditing a refusal had to open the
+state directory to tell a live process from a fortnight-old pause. The field is
+empty for a caller with no arms to name — the autonomous reconcile protects from
+its in-process registry — because a detail on a skip nobody attributed would be
+a claim with no source.
 
 Accepted residuals, stated rather than hidden: a live run with **no snapshot at
 all** is not protected (that is a bug elsewhere; `--dry-run` remains for the
@@ -1669,8 +1717,10 @@ write-temp → fsync → rename, which replaces the inode on every heartbeat. An
 advisory lock lives on an _inode_, so a flock on the sidecar would be released
 by its own holder's next heartbeat: a lock that reports success and protects
 nothing, which is worse than no lock. The lease flocks
-`~/.nightgauge/serve/<sha16>.lock`, created once and never renamed, beside the
-`.json` the sidecar keeps.
+`~/.nightgauge/serve/<key>.lock`, created once and never renamed, beside the
+`.json` the sidecar keeps. That `<key>` encodes the workspace root reversibly —
+see [The serve registry](#the-serve-registry-issue-1426), which is where a lock
+file left behind by a killed daemon gets reclaimed.
 
 **flock is the authority; the sidecar is only the report.** The kernel releases
 an advisory lock when the holder dies, however it dies — SIGKILL, panic, power
@@ -1747,6 +1797,139 @@ Two caveats, both deliberate:
   binds first keeps the socket, and it may be the one without the lease —
   which matters because a lease-less daemon still has a wired pipeline
   scheduler today (#1430).
+
+### The Serve Registry (Issue #1426)
+
+`~/.nightgauge/serve/` is the only machine-local record of which workspace roots
+have run a daemon. It holds two files per workspace — the `.json` claim record
+(#388) and the `.lock` file the lease flocks (#1349) — and until #1426 it could
+not be used as a registry, because almost none of it was live. Measured on a
+maintainer machine: **150 records, 143 naming a workspace root that no longer
+existed; 191 lock files, 174 with no record at all.**
+
+A registry that is 95% dead is worse than no registry: it invites a feature to
+be built on it and then to be over-broad in a way that only shows up on a
+machine with history. [ADR-019](decisions/019-relayed-resolve-routing.md)
+rejected an approach for exactly that reason. Three separate mechanisms
+produced the state, and all three are closed.
+
+**Nothing ever removed anything.** `RemoveServeSidecar` runs only on a clean
+shutdown, and only while the record still names the exiting pid, so anything
+killed, crashed or reparented left its record behind permanently — and lock
+files were never unlinked by any path at all. `runstate.PruneServeRegistry` is
+the sweep that was missing. It runs on **daemon start** (`StartServeSidecar`)
+and at the top of `nightgauge autonomous run`, after that command has taken its
+lease; a machine that uses the directory at all therefore cleans it. It is
+best-effort by construction — no error, and a file it cannot remove is left for
+the next sweep — and it logs a line only when it actually removed something.
+
+What counts as dead is deliberately narrow, because every rule can fail toward
+deleting the evidence `doctor` reports on:
+
+| Record                                             | Verdict                                                                                                                                           |
+| -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Live pid, fresh heartbeat                          | **Kept** — healthy                                                                                                                                |
+| Live pid, cold heartbeat                           | **Kept** — this is doctor's `serve-lease-wedged` finding, and the report needs the record to name the holder                                      |
+| `workspace_root` no longer on disk                 | **Removed** — 143 of the 150 measured; no daemon serves a directory that is not there                                                             |
+| Dead pid **and** cold heartbeat                    | **Removed** — both, not either: a pid that died a minute ago still has a fresh heartbeat and doctor may still be attributing a recycled pid to it |
+| Read, and unparsable                               | **Removed** — writes are atomic, so this is not a torn write; it is a file no reader can use                                                      |
+| Could not be **read** at all                       | **Kept** — see below; the opposite verdict from the row above, and deliberately so                                                                |
+| `stat` fails for any reason other than "not found" | **Kept** — a permission error or an unreachable network mount must not read as a deleted workspace                                                |
+
+The last two rows are one rule seen from both sides, and the pair is the point.
+`os.ReadFile` failing says **nothing whatever** about the daemon a record
+describes — an `EACCES`, an `EIO` or an `EMFILE` is a fact about this sweep, not
+about that process — so it cannot be collapsed into the same nil byte slice an
+empty file produces. Doing so deletes a live daemon's claim, and the blast
+radius is not one file: descriptor exhaustion mid-sweep makes every record in
+the directory unreadable at once, so a single pass would erase the claims of
+every live daemon on the machine and, with them, the lock files those claims
+explain. `runstate.ServeRegistryFile.ReadErr` is what keeps the two apart.
+
+**A lock file is removed only when this process can take it**, and only when no
+surviving record explains it. The flock is the authority on whether a lease is
+held — the kernel releases it however the holder dies — so "I got the lock" is
+the only proof that a lock file is litter. On a platform with no advisory lock
+nothing can be proved and no lock file is touched.
+
+**The sweep and lease acquisition are mutually exclusive.** Unlinking a lock
+file is the first thing in the tree that ever made a lease lock's path stop
+naming the inode an acquirer had already opened, and `acquireServeLease` opens
+the path and flocks the descriptor as two statements. Interleave an unlink
+between them and one workspace has two lease holders — the state
+[#1349](#the-scheduler-lease--one-scheduler-per-workspace-issue-1349) exists to
+prevent:
+
+```text
+acquirer: open(path) -> fd on inode I            (not locked yet)
+sweep:    flock(I) ok -> unlink(path) -> unlock   (no record explained I)
+acquirer: flock(fd) ok                           -- on an UNLINKED inode
+next:     open(path) O_CREATE -> inode J -> flock(J) ok
+```
+
+The window is not exotic: the sweep targets a lock precisely when no record
+explains it, which is the state of every daemon between taking its lease and
+writing its first sidecar. Resolved the other way — the sweep still holding the
+flock when the acquirer tries — the acquirer's deliberate zero timeout turns a
+momentary sweep into a **permanent** refusal, which for `serve` means a process
+that runs its whole life with no scheduler attached and for `autonomous run` a
+hard exit.
+
+Neither is a timing problem to be widened away. Both are the absence of mutual
+exclusion between a compound read-modify-write ("open then flock") and a
+compound mutation ("flock then unlink"), so one guard —
+`~/.nightgauge/serve/nightgauge-registry.guard`, held across each of them and
+across neither anything else — removes both. Same shape as the
+[worktree mutation guard](#serialised-worktree-mutation-issue-1163). Nobody
+holding it ever blocks on a second lock (both flock the lease file with a zero
+timeout), so there is no lock ordering to get wrong; the guard's name ends in
+neither `.json` nor `.lock`, so the walkers skip it structurally and no sweep
+can reclaim the file it is holding; and where the platform has no advisory lock
+the guard is skipped, because nothing can unlink a lock file there either. A
+sweep that cannot take the guard removes **nothing**, and a lease acquisition
+that cannot take it **fails** rather than failing open.
+
+**The name was one-way.** A file was named by the first 16 hex digits of
+`sha256(root)`. That is adequate for a record, which carries `workspace_root`
+inside it, and fatal for a `.lock`, which carries nothing: an orphaned lock
+named a workspace **nothing on the machine could recover**. The key is now a
+reversible encoding of the normalized root — `[A-Za-z0-9._-]` kept as itself,
+the path separator written `~`, every other byte `%XX` — so
+`~srv~acme~repo.json` says what it is and `ls` is legible:
+
+```text
+before:  d69863189a333ba5.lock          # names nothing recoverable
+after:   ~srv~acme~repo.lock            # runstate.ServeRegistryWorkspaceRoot decodes it
+```
+
+Base64 was rejected: it expands by a third against a `NAME_MAX` ceiling and
+gives back an unreadable listing, which was half of what the hash cost. Only
+uppercase hex is accepted in an escape, so one workspace can never have two
+names. A root too long to fit one path segment (the ceiling budget also covers
+the atomic writer's `.<random>.tmp` suffix) falls back to a bounded hash key,
+which `ServeRegistryWorkspaceRoot` reports as **undecodable rather than
+guessed** — the record still names its root, and the prune reclaims an orphaned
+lock without having to name it.
+
+**Two walkers would disagree.** `doctor`'s `eachServeClaim` walked the
+directory with its own `ReadDir` and its own suffix filter, and the prune would
+have been a second. `runstate.EachServeRegistryFile` is now the one
+enumeration: it owns the directory, the `.json`/`.lock` filter, the exclusion of
+in-flight `.tmp` files, and the key decode. `doctor` keeps its own record
+_shape_ — it is a reader of a schema it does not own — but no longer its own
+directory walk, and a source-level test pins that.
+
+**Tests no longer write into the operator's `HOME`.** The bulk of the 143 dead
+records were test suites resolving the machine-global directory against the real
+home: `t.TempDir()` roots under `/var/folders/...` and worktrees since
+reclaimed. That was handled one test at a time with `t.Setenv("HOME", ...)`,
+which is the wrong shape for it — forgetting is silent and only accumulates. The
+isolation is now the test **binary**'s, via `internal/hometest.Isolate` called
+from `TestMain` in every package that reaches the registry (`internal/runstate`,
+`internal/doctor`, `cmd/nightgauge`), and each of those packages pins it with a
+test that isolates nothing itself and asserts it still cannot reach the real
+home. Before the change a full run of those three suites left four
+unattributable `.lock` files in the ambient `HOME`; it now leaves none.
 
 ### Stash Reclamation (Issue #330)
 
@@ -4459,6 +4642,47 @@ By caller:
 Two producers, the same board, one sweep, 81% of the bill — the finding that
 `--by caller` makes unmissable and a call-site count cannot show at all.
 
+#### Agent Guidance: A Raw `gh` Board Pull Is Invisible Here (Issue #1428)
+
+The ledger wraps the Go binary's transport. It cannot see a request made by
+anything else — and the most expensive GitHub client in this workspace on a
+normal day is an **agent session running `gh` in a shell**, which is a separate
+process with its own token resolution. A `ProjectV2` board read costs 17 points
+per 100-item page (see above); the shared board has ~1,960 items, so
+
+```
+gh project item-list 3 --owner nightgauge --limit 3000
+  = 20 pages x 17 pts = ~340 GraphQL points, in one command
+```
+
+Three such pulls inside a few minutes — an agent iterating on a board-drift
+audit — consumes the hourly GraphQL budget outright (#1428). The failure then
+surfaces somewhere else entirely: `gh pr checks` starts returning `GraphQL: API
+rate limit already exceeded`, because it is **also GraphQL**, so watching CI
+during exactly the window a board audit exhausted the quota fails too — and the
+natural workaround, polling `gh pr checks` again, spends more of the same pool.
+Two rules follow directly from that:
+
+- **Pull the board once, into a file — never iterate against the API.**
+  `gh project item-list 3 --owner nightgauge --limit 3000 --format json >
+  board.json`, then filter, grep, or script against `board.json`. A second
+  question about the same board is a second read of the file, not a second
+  `gh project item-list`.
+- **Watch CI over REST, not GraphQL.** `gh pr checks` calls GraphQL and shares
+  the same 5,000-point pool a board pull just spent. Use the REST check-runs
+  endpoint instead — the same call `scripts/post-merge-check.sh` already uses
+  post-merge:
+
+  ```bash
+  sha=$(gh pr view <PR> --json headRefOid --jq .headRefOid)
+  gh api "repos/{owner}/{repo}/commits/$sha/check-runs" --paginate
+  ```
+
+Before a bulk read, check what it would cost against what is left this hour:
+`nightgauge api-usage --budget` reports the remaining GraphQL budget for the
+current hour and prices a full board read against it, entirely from the local
+ledger — no GitHub request needed to ask the question.
+
 ### The Sweep's Board Binding (Issue #844)
 
 The ledger's first finding was not a cadence problem. Two of the three top
@@ -4797,7 +5021,7 @@ Plus the leaked-machine-state checks (#330 / #332 / #341), all **warning-only**:
 | `worktree_leaks`     | Registered pipeline worktrees older than 24h that `sweep` cannot reclaim, with repo, age, skip reason, and the paths that blocked them |
 | `stranded_branches`  | Local branches whose content is already in `origin/<default>` and that **no worktree holds**, per repo — report only, nothing is deleted |
 | `pipeline_stashes`   | Stashes carrying the `nightgauge:` marker that were never reclaimed, per repo, with age |
-| `orphaned_processes` | Running `nightgauge` processes older than 1h that no live sidecar claims, with PID, age, and argv |
+| `orphaned_processes` | Running `nightgauge` processes older than 1h that no live sidecar claims, with PID, age, and argv — plus (#519) any process, regardless of parentage, whose cwd sits inside a pipeline worktree base (`.nightgauge/worktrees`, `.worktrees`, `.claude/worktrees`) |
 
 The worktree and stash carriers exist because a 2026-08-04 workspace audit found
 **9 leaked worktrees and 5 leaked stashes** — all of them by running `git
@@ -4883,9 +5107,10 @@ There is no verb-shaped class. `serve` had one until **#388** — see below.
   it re-reads before every heartbeat, stands down when the record names another
   live PID, and its shutdown deletes the record only while that record still
   names its own pid.
-- **Serve claims are machine-global: `~/.nightgauge/serve/<hash>.json`.** One
-  file per workspace, named by a hash of the workspace root, with the root
-  itself inside the record. Not `.nightgauge/serve.json` in the workspace,
+- **Serve claims are machine-global: `~/.nightgauge/serve/<key>.json`.** One
+  file per workspace, named by a reversible encoding of the workspace root
+  ([#1426](#the-serve-registry-issue-1426)), with the root itself inside the
+  record as well. Not `.nightgauge/serve.json` in the workspace,
   because this carrier's two halves have different reach: `ps -axo` enumerates
   the **whole machine**, while the sidecar walk visits only the invoking
   workspace's roots. A workspace-local claim is therefore unreadable to a
@@ -4939,6 +5164,77 @@ Accepted limitations, documented rather than papered over:
 The parser is exercised against a **captured, redacted process table** from a
 real machine (`internal/doctor/testdata/orphaned-processes/`, captured with the
 committed `capture-ps-snapshot.sh`), not an invented one.
+
+##### Foreign cwd holders (issue #519)
+
+The classification above only ever looks for processes the pipeline itself
+spawned — it filters to `argv[0]`'s basename being `nightgauge`. But a
+pipeline worktree directory is also where **interactive** agent harnesses
+(Claude Code, Codex, the VSCode extension) run their own shells, and those
+harnesses can leak a detached one: an operator found several `/bin/zsh`
+processes still parked with cwd inside `.nightgauge/worktrees/issue-488`, held
+open by a VSCode extension-host background task long after the session ended
+and the worktree itself was already removed. None of those shells was ever a
+nightgauge process, so the argv-basename filter could never have seen them.
+
+`orphaned_processes` runs a second, cwd-keyed classifier over **every** row
+(nightgauge or not, `self` excluded) and folds any hit into the same check:
+
+- **cwd source, one bounded call per platform.** macOS shells
+  `lsof -a -d cwd -Fpn -p <comma-joined pids>` **once** for every pid in the
+  table (never one `lsof` per process) under a 10s timeout; Linux reads
+  `os.Readlink("/proc/<pid>/cwd")` per pid directly, no subprocess, stripping
+  the kernel's `" (deleted)"` suffix so a removed directory's path still reads
+  plain. A pid this reader cannot resolve (already exited, owned by another
+  user) is simply absent from the result — routine on a machine-wide scan —
+  but the mechanism itself failing outright (unsupported platform, `lsof`
+  produces nothing at all) is a MECHANISM FAILURE, not "nothing found": it
+  routes the whole check through `unverifiableProcessScan` rather than
+  reporting clean off a scan that never ran (#296).
+- **Three known worktree bases per repo root**:
+  `.nightgauge/worktrees` (the Go `execution.Manager`'s own default),
+  `.worktrees` (the VSCode extension's default, `WorktreeManager.ts`), and
+  `.claude/worktrees` (Claude Code's own base) — the same three
+  `worktreeContainment.ts`'s `isLinkedWorktree` doc comment names. Best-effort,
+  not authoritative: a workspace-configured `pipeline.worktree_base` is
+  TypeScript-side config this Go binary does not parse, so a custom base is
+  invisible to this scan.
+- **Containment is decided lexically, and cwd need not exist.** Only the
+  worktree-base directory (e.g. `<repo>/.nightgauge/worktrees`) is resolved
+  with `filepath.EvalSymlinks` — it still exists whenever this scan has
+  anything to find, even once the specific worktree subdirectory inside it is
+  gone. cwd itself is only `filepath.Clean`ed and made absolute, deliberately
+  **not** symlink-resolved: `git worktree remove` deletes the worktree
+  directory outright, and `EvalSymlinks` on a path that no longer exists fails
+  ENOENT — the exact way the removed-worktree case went undetected before this
+  fix. Containment is then `filepath.Rel`, never a string prefix:
+  `.../worktrees-old/x` shares the literal prefix `.../worktrees` with
+  `.../worktrees/x` but resolves to `../worktrees-old/x`, which is rejected.
+- **Stale distinction from `git worktree list --porcelain`**
+  (`execution.ActiveWorktreeIssues`, the same parser #110's worktree
+  reclamation and `checkLeakedWorktrees` use), called **once per repo root**
+  and kept in that shape rather than merged into one workspace-wide
+  issue-number set — two repos can each legitimately hold their own
+  issue-488, live in one and removed in the other, and merging would let the
+  live one paper over the removed one. A holder whose worktree is still
+  registered **in its own repo** is tagged `[cwd inside worktree issue-N]`;
+  one whose worktree has already been `git worktree remove`d there — the
+  shape that can also block a **future** removal — is tagged `[cwd inside
+  REMOVED worktree issue-N]` and sorted before the live-worktree holders. A
+  `git worktree list` failure in any one repo root undetermines the whole cwd
+  half (routed through `unverifiableProcessScan`), the same doctrine as the
+  cwd-source mechanism failure above.
+- **Live holders are age-gated; REMOVED holders are not.** Every pipeline
+  stage and every interactive session legitimately runs with cwd inside a
+  LIVE worktree the moment it starts, so a live-worktree holder younger than
+  `staleProcessAge` (1h, the same floor #341's own scan uses) is not reported
+  — otherwise the check would tell an operator to "verify and terminate"
+  work that is simply running. A REMOVED worktree has no legitimate occupant
+  at any age, so it is reported immediately regardless — that is the headline
+  #519 incident.
+- **Report-only, same contract as #341.** The line names PID, elapsed time,
+  cwd, and command, then says "verify and terminate manually" — nothing here
+  ever signals a process.
 
 **Exit codes**:
 
@@ -7423,8 +7719,51 @@ or `NIGHTGAUGE_PLATFORM_API_KEY` env var):
 {"id":2,"method":"platform.license"}
 
 # Validate a license key and bind machine
-{"id":3,"method":"platform.validateLicense","params":{"licenseKey":"ib_live_...","machineId":"sha256-hash"}}
+{"id":3,"method":"platform.validateLicense","params":{"licenseKey":"ib_live_...","machineId":"vscode-install-uuid","hostname":"build-box","platform":"darwin"}}
+```
 
+**`machineId` is the RAW per-installation fingerprint, not a hash.** The caller
+sends `vscode.env.machineId` (plus `os.hostname()` and `process.platform`); the
+daemon derives the wire value itself as `HMAC-SHA256(licenseKey, machineId)`,
+hex-encoded, and puts that in the platform's `machineId` request field. Keying
+the digest with the license key means the same machine hashes differently under
+different licenses, and the raw machine id never leaves the daemon.
+
+**The digest covers the machine id and nothing else; `hostname` and `platform`
+travel beside it as cleartext binding context.** The seat identity has to be
+exactly as stable as the installation it names, and only the machine id is:
+`vscode.env.machineId` is a UUID that survives restarts and updates, and the
+daemon's fallback is a UUID persisted under the home directory. A hostname is
+not — macOS rewrites `.local` names on a network join, every devcontainer or
+Codespaces rebuild mints a fresh random one, and corporate re-imaging renames
+en masse — so folding it into the identity would re-bind one installation as a
+new machine on every change and burn a pro license's three seats on a single
+laptop, locking its owner out precisely because enforcement was switched on.
+`process.platform` is stable per install but adds nothing to a UUID while
+adding a second way to drift (`win32` here, `runtime.GOOS`'s `windows` on the
+daemon's own fallback path), so it stays out as well. The context fields are
+still sent, because the account UI needs to show *which* seat is which.
+
+Because the digest is the primary key of a `license_machines` row, its
+derivation is a wire contract: change it and every already-bound machine
+re-binds as a new seat, so a full license starts rejecting its own owner as
+`MACHINE_LIMIT`. `TestMachineInfo_Hash_PinsTheWireDigest` pins the exact bytes
+against digests computed outside Go (`openssl dgst -sha256 -hmac`), and
+`TestMachineInfo_Hash_IgnoresHostnameAndPlatform` pins the stability
+invariant.
+
+The daemon remembers the last identity a caller supplied, so the params-less
+`platform.license` method (which has nowhere to source one) re-presents the same
+machine rather than a second one. With nothing ever supplied — a headless CLI
+daemon — it falls back to this host: `ResolveMachineID()`, `os.Hostname()`,
+`runtime.GOOS`. That fallback identifies a real machine but cannot reproduce
+`vscode.env.machineId`, so every editor-side caller must pass the fields: an
+omitted fingerprint binds a *second* seat for one installation, and before #1334
+the handler unmarshalled the three fields and dropped them, so it bound none at
+all and the per-tier machine limits (community 1 / pro 3 / team+enterprise
+unlimited) were structurally unenforceable.
+
+```bash
 # Resolve skill content for a pipeline stage
 {"id":4,"method":"platform.resolveSkill","params":{"skillId":"feature-dev","model":"sonnet","complexityScore":5}}
 
@@ -7443,6 +7782,20 @@ or `NIGHTGAUGE_PLATFORM_API_KEY` env var):
 # Platform API health check
 {"id":9,"method":"platform.healthCheck"}
 ```
+
+Both `platform.license` and `platform.validateLicense` return the Go
+`platform.LicenseInfo` struct as-is (no shape translation over the wire), and
+its `status` field carries one of the following extension-facing values
+(#1454):
+
+| `status`        | Meaning                                                                |
+| --------------- | ----------------------------------------------------------------------- |
+| `active`        | Valid, currently-enforced license.                                      |
+| `expired`       | The license's term has ended.                                           |
+| `revoked`       | The platform revoked the license.                                      |
+| `suspended`     | The license is suspended (e.g. billing failure).                        |
+| `machine_limit` | The key is valid, but this machine can't take a seat — the license's machine cap is already full. Distinct from the lifecycle states above: the fix is freeing or adding a seat, not renewing or contacting support. |
+| `""` (empty)    | Unknown — either a connectivity/5xx fallback, or a 4xx with no parseable license error code. |
 
 #### Per-Operation Identity Resolution
 

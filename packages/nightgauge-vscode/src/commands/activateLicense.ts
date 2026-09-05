@@ -8,7 +8,9 @@
  *     honors a passed key that differs from the session key (it routes to
  *     LicenseService.ValidateKey, which validates the arbitrary key WITHOUT
  *     touching the session cache), so we learn whether the entered key is good
- *     before persisting anything.
+ *     before persisting anything. The call carries this machine's fingerprint,
+ *     hostname and platform so the platform binds the seat to the same machine
+ *     identity the pipeline preflight will later present (#1334).
  *  3. On success, persist the key to SecretStorage under
  *     SECRET_KEYS.platformLicenseKey — the source of truth that
  *     IpcClientBase.resolveLicenseKey() reads and forwardPlatformEnv() injects
@@ -17,12 +19,16 @@
  *     applies after a window reload, which we offer inline.
  *
  * @see Issue #1138 - Commercialization: in-extension license activation
+ * @see Issue #1334 - license validate must carry the machine binding
  */
 
+import * as os from "node:os";
 import * as vscode from "vscode";
 import { IpcClient } from "../services/IpcClient";
+import { MachineFingerprint } from "../platform/MachineFingerprint";
 import { SecretStorageService, SECRET_KEYS } from "../services/SecretStorageService";
 import type { LicensePreflight } from "../platform/LicensePreflight";
+import { messageForBlockedStatus } from "../platform/LicensePreflight";
 import type { TrialStateStore } from "../platform/TrialState";
 import type { Logger } from "../utils/logger";
 
@@ -56,6 +62,7 @@ export function registerActivateLicenseCommand(
 
     let valid = false;
     let tier = "";
+    let status = "";
     try {
       await vscode.window.withProgress(
         {
@@ -64,9 +71,21 @@ export function registerActivateLicenseCommand(
           cancellable: false,
         },
         async () => {
-          const info = await ipcClient.platformValidateLicense(key);
+          // (#1334) Bind the seat to THIS machine. The daemon hashes the
+          // fingerprint into the contract machineId; omitting these three made
+          // it fall back to a host-derived identity that cannot reproduce
+          // vscode.env.machineId, so activating and then running the pipeline
+          // would take two seats for one installation. Same three arguments,
+          // same order, as LicensePreflight.validate().
+          const info = await ipcClient.platformValidateLicense(
+            key,
+            MachineFingerprint.initialize().getMachineId(),
+            os.hostname(),
+            process.platform
+          );
           valid = info.valid === true;
           tier = String(info.tier ?? "");
+          status = String(info.status ?? "");
         }
       );
     } catch (err) {
@@ -84,6 +103,16 @@ export function registerActivateLicenseCommand(
     // A valid paid/trial license reports a non-community tier. `community` (or
     // an empty tier) means the platform did not accept the key as a paid one.
     if (!valid || tier === "" || tier === "community") {
+      // A rejected key on a machine-limit status is not "invalid" — the key
+      // itself is fine, this machine just didn't fit under the seat cap.
+      // Name that specifically (reusing LicensePreflight's copy) instead of
+      // telling the operator to double-check a key that was never the
+      // problem (#1454).
+      if (status === "machine_limit") {
+        const { reason } = messageForBlockedStatus("machine_limit");
+        vscode.window.showErrorMessage(`Nightgauge: ${reason}`);
+        return;
+      }
       vscode.window.showErrorMessage(
         "Nightgauge: That license key was not accepted (invalid, expired, or revoked). Double-check the key and try again."
       );

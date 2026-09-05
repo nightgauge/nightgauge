@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nightgauge/nightgauge/internal/config"
+	"github.com/nightgauge/nightgauge/internal/execution"
 	"github.com/nightgauge/nightgauge/internal/runstate"
 )
 
@@ -344,7 +346,7 @@ func TestStaleServeClaims_NameTheWorkspaceAColdClaimBelongedTo(t *testing.T) {
 	}
 	// …and it reaches the operator, which is the only place attribution counts.
 	procs := parseRows(t, derivedRow(t, 4156, "10-00:00:00", "serve --workspace "+cold))
-	_, warning := orphanedProcessReport(procs, sidecarPIDs(r.dir, scanClock), stale)
+	_, warning := orphanedProcessReport(procs, sidecarPIDs(r.dir, scanClock), stale, nil)
 	if !strings.Contains(warning, cold) {
 		t.Errorf("the orphan report does not name the workspace whose claim went cold: %q", warning)
 	}
@@ -609,7 +611,7 @@ func TestOrphanedProcessReport_CapsTheEnumeratedList(t *testing.T) {
 		rows = append(rows, derivedRow(t, 9000+i, "05-00:00:00", "pipeline run --issue 341"))
 	}
 
-	item, warning := orphanedProcessReport(parseRows(t, rows...), map[int]bool{}, nil)
+	item, warning := orphanedProcessReport(parseRows(t, rows...), map[int]bool{}, nil, nil)
 
 	if item.OK {
 		t.Fatalf("orphans reported as healthy: %+v", item)
@@ -631,7 +633,7 @@ func TestOrphanedProcessReport_CapsTheEnumeratedList(t *testing.T) {
 func TestOrphanedProcessReport_NamesEvidenceAndRefusesToAct(t *testing.T) {
 	item, _ := orphanedProcessReport(
 		parseRows(t, derivedRow(t, 7788, "01-07:12:03", "autonomous run --dry-run")),
-		map[int]bool{}, nil)
+		map[int]bool{}, nil, nil)
 
 	for _, want := range []string{"7788", "31h", "autonomous run --dry-run", "verify and terminate manually"} {
 		if !strings.Contains(item.Error, want) {
@@ -652,7 +654,7 @@ func TestOrphanedProcessReport_HealthyPathWritesAnOKEntry(t *testing.T) {
 		t.Fatal("the captured table did not parse")
 	}
 
-	item, warning := orphanedProcessReport(procs, map[int]bool{capturedServeRow(t).PID: true}, nil)
+	item, warning := orphanedProcessReport(procs, map[int]bool{capturedServeRow(t).PID: true}, nil, nil)
 
 	if !item.OK {
 		t.Fatalf("the captured (clean) machine must pass: %+v", item)
@@ -775,7 +777,7 @@ func TestProcessTableReport_ATableWithoutThisProcessIsUnverifiable(t *testing.T)
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			item, warning := processTableReport(tt.raw, map[int]bool{}, nil)
+			item, warning := processTableReport(t.TempDir(), tt.raw, map[int]bool{}, nil)
 
 			if item.OK {
 				t.Fatalf("a table that never listed this process reported healthy: %+v", item)
@@ -795,7 +797,7 @@ func TestProcessTableReport_ATableContainingThisProcessIsRead(t *testing.T) {
 	raw := derivedRow(t, os.Getpid(), "10:00", "doctor --json") + "\n" +
 		derivedRow(t, os.Getpid()+1, "05-00:00:00", "autonomous run --dry-run") + "\n"
 
-	item, _ := processTableReport(raw, map[int]bool{}, nil)
+	item, _ := processTableReport(t.TempDir(), raw, map[int]bool{}, nil)
 
 	if strings.Contains(item.Error, "unverifiable") {
 		t.Fatalf("a table containing this process was rejected: %q", item.Error)
@@ -842,4 +844,358 @@ func TestCapturedFixtureRedactionHoldsOnEveryRun(t *testing.T) {
 	if home != filepath.Clean("/Users/operator") && strings.Contains(raw, home) {
 		t.Errorf("the captured table contains this machine's home path %q", home)
 	}
+}
+
+// #519. A `.nightgauge/worktrees/issue-N` directory is not only where the
+// pipeline runs — interactive agent harnesses (Claude Code, Codex, both
+// inside VSCode) run their shells there too, and can leak a detached one. An
+// operator found several `/bin/zsh` processes still parked with cwd inside
+// `.nightgauge/worktrees/issue-488`, held open by a VSCode extension-host
+// background task long after the session ended and the worktree was removed.
+// None of those shells was ever a nightgauge process, so #341's argv filter
+// could never have seen them — this half of the scan is keyed on cwd instead.
+
+func TestParseLsofCwd(t *testing.T) {
+	raw := "p101\nfcwd\nn/Users/operator/work/a\n" +
+		"p102\nfcwd\nn/Users/operator/work/b\n" +
+		"p103\nfcwd\nn/Users/operator/work/c\n"
+
+	cwds, determined := parseLsofCwd(raw)
+	if !determined {
+		t.Fatal("parseLsofCwd reported undetermined on a well-formed table")
+	}
+	want := map[int]string{
+		101: "/Users/operator/work/a",
+		102: "/Users/operator/work/b",
+		103: "/Users/operator/work/c",
+	}
+	if len(cwds) != len(want) {
+		t.Fatalf("got %d cwds, want %d: %+v", len(cwds), len(want), cwds)
+	}
+	for pid, path := range want {
+		if cwds[pid] != path {
+			t.Errorf("pid %d: got cwd %q, want %q", pid, cwds[pid], path)
+		}
+	}
+
+	// A malformed block — an 'n' line with no preceding 'p' — is skipped, not
+	// fatal to the well-formed block that follows it.
+	raw2 := "n/orphaned/no/pid\np201\nfcwd\nn/Users/operator/work/d\n"
+	cwds2, determined2 := parseLsofCwd(raw2)
+	if !determined2 {
+		t.Fatal("a malformed block undetermined the whole table")
+	}
+	if len(cwds2) != 1 || cwds2[201] != "/Users/operator/work/d" {
+		t.Errorf("the well-formed block after a malformed one was lost: %+v", cwds2)
+	}
+}
+
+// foreignCwdFixture builds a leakRepo with one live pipeline worktree
+// (issue-488) already registered with git, plus the derived facts
+// (RepoRoots, ActiveByRepo) a real buildForeignCwdScan would produce for it —
+// assembled by hand here so each test can stub only the cwd half without
+// spawning `ps` or `lsof`.
+func foreignCwdFixture(t *testing.T) (r *leakRepo, liveWorktree string) {
+	t.Helper()
+	r = newLeakRepo(t)
+	liveWorktree = filepath.Join(r.dir, ".nightgauge", "worktrees", "issue-488")
+	r.git("worktree", "add", "-q", liveWorktree, "-b", "fix/488", "main")
+	return r, liveWorktree
+}
+
+// activeByRepoFixture computes, per repo root, the same active-worktree set
+// buildForeignCwdScan itself would produce (one execution.ActiveWorktreeIssues
+// call per root — see that function's doc comment for why per-root and not
+// merged).
+func activeByRepoFixture(t *testing.T, repoRoots []string) map[string]map[int]bool {
+	t.Helper()
+	out := make(map[string]map[int]bool, len(repoRoots))
+	for _, root := range repoRoots {
+		active, determined := execution.ActiveWorktreeIssues([]string{root})
+		if !determined {
+			t.Fatalf("active worktree set undetermined for %s", root)
+		}
+		out[root] = active
+	}
+	return out
+}
+
+func TestForeignCwdHolder_Flagged(t *testing.T) {
+	r, liveWorktree := foreignCwdFixture(t)
+
+	row := fmt.Sprintf("%d %s %s", 42488, "02:00:00", "/bin/zsh")
+	procs := parseRows(t, row)
+	repoRoots := config.WorkspaceRepoRoots(r.dir)
+	fc := &foreignCwdScan{
+		Cwds:         map[int]string{42488: liveWorktree},
+		RepoRoots:    repoRoots,
+		ActiveByRepo: activeByRepoFixture(t, repoRoots),
+	}
+
+	item, warning := orphanedProcessReport(procs, map[int]bool{}, nil, fc)
+
+	if item.OK {
+		t.Fatalf("a foreign process with cwd inside a live worktree reported healthy: %+v", item)
+	}
+	for _, want := range []string{"42488", "2h", "/bin/zsh", liveWorktree, "[cwd inside worktree issue-488]"} {
+		if !strings.Contains(item.Error, want) {
+			t.Errorf("the report does not carry %q: %q", want, item.Error)
+		}
+	}
+	if warning == "" {
+		t.Error("a foreign cwd holder must produce a warning, not just a check entry")
+	}
+}
+
+// TestForeignCwdHolder_StaleWorktree reproduces the headline #519 incident
+// with a REAL removed worktree — `git worktree add` followed by `git worktree
+// remove --force`, the shape a leftover interactive-harness shell actually
+// sits in — rather than a directory that was never a worktree at all. Before
+// the fix, worktreeDirContaining started with filepath.EvalSymlinks(cwd),
+// which fails ENOENT once the directory is gone, so the removed-worktree
+// holder was silently invisible and this test could not go red for the real
+// incident (adversarial review of #519, finding 1).
+func TestForeignCwdHolder_StaleWorktree(t *testing.T) {
+	r, liveWorktree := foreignCwdFixture(t)
+
+	staleWorktree := filepath.Join(r.dir, ".nightgauge", "worktrees", "issue-489")
+	r.git("worktree", "add", "-q", staleWorktree, "-b", "fix/489", "main")
+	r.git("worktree", "remove", "--force", staleWorktree)
+	if _, err := os.Stat(staleWorktree); !os.IsNotExist(err) {
+		t.Fatalf("fixture bug: staleWorktree still exists on disk (%v) — this is not a REMOVED worktree", err)
+	}
+
+	// The removed-worktree holder is given an age WELL BELOW staleProcessAge
+	// on purpose: a REMOVED worktree has no legitimate occupant at any age (see
+	// classifyForeignCwdHolders), so it must be reported immediately, unlike
+	// the age-gated live holder below.
+	procs := parseRows(t,
+		fmt.Sprintf("%d %s %s", 42488, "01:00:00", "/bin/zsh"),
+		fmt.Sprintf("%d %s %s", 42489, "00:00:03", "/bin/bash"),
+	)
+	repoRoots := config.WorkspaceRepoRoots(r.dir)
+	fc := &foreignCwdScan{
+		Cwds:         map[int]string{42488: liveWorktree, 42489: staleWorktree},
+		RepoRoots:    repoRoots,
+		ActiveByRepo: activeByRepoFixture(t, repoRoots),
+	}
+
+	item, _ := orphanedProcessReport(procs, map[int]bool{}, nil, fc)
+
+	liveTag := "[cwd inside worktree issue-488]"
+	staleTag := "[cwd inside REMOVED worktree issue-489]"
+	if !strings.Contains(item.Error, liveTag) {
+		t.Fatalf("the live-worktree holder was not tagged: %q", item.Error)
+	}
+	if !strings.Contains(item.Error, staleTag) {
+		t.Fatalf("the removed-worktree holder was not distinctly tagged REMOVED: %q", item.Error)
+	}
+	if strings.Index(item.Error, staleTag) > strings.Index(item.Error, liveTag) {
+		t.Errorf("the stale (REMOVED) holder must sort before the live one: %q", item.Error)
+	}
+}
+
+// TestForeignCwdHolder_YoungLiveHolderNotFlagged pins the age floor a live
+// worktree holder must have: every pipeline stage and every interactive agent
+// session legitimately runs with cwd inside a LIVE worktree the instant it
+// starts, so reporting one at age zero told the operator to "verify and
+// terminate" work that was simply running (adversarial review of #519,
+// finding 3).
+func TestForeignCwdHolder_YoungLiveHolderNotFlagged(t *testing.T) {
+	r, liveWorktree := foreignCwdFixture(t)
+
+	procs := parseRows(t, fmt.Sprintf("%d %s %s", 42488, "00:00:03", "/bin/zsh"))
+	repoRoots := config.WorkspaceRepoRoots(r.dir)
+	fc := &foreignCwdScan{
+		Cwds:         map[int]string{42488: liveWorktree},
+		RepoRoots:    repoRoots,
+		ActiveByRepo: activeByRepoFixture(t, repoRoots),
+	}
+
+	item, warning := orphanedProcessReport(procs, map[int]bool{}, nil, fc)
+
+	if !item.OK || warning != "" {
+		t.Fatalf("a 3-second-old process in a LIVE worktree was flagged: OK=%v warning=%q", item.OK, warning)
+	}
+}
+
+// TestForeignCwdHolder_CrossRepoIssueNumberIsNotConflated is a multi-repo
+// workspace where repo A's issue-488 worktree was removed and repo B's own
+// issue-488 worktree is live. Before the fix, execution.ActiveWorktreeIssues
+// was called once over BOTH repo roots and returned one map[int]bool keyed on
+// bare issue number, so repo B's live worktree made repo A's holder read
+// Stale=false. Each repo's issue numbers are its own (adversarial review of
+// #519, finding 2).
+func TestForeignCwdHolder_CrossRepoIssueNumberIsNotConflated(t *testing.T) {
+	repoA := newLeakRepo(t)
+	staleInA := filepath.Join(repoA.dir, ".nightgauge", "worktrees", "issue-488")
+	repoA.git("worktree", "add", "-q", staleInA, "-b", "fix/488", "main")
+	repoA.git("worktree", "remove", "--force", staleInA)
+
+	repoB := newLeakRepo(t)
+	liveInB := filepath.Join(repoB.dir, ".nightgauge", "worktrees", "issue-488")
+	repoB.git("worktree", "add", "-q", liveInB, "-b", "fix/488", "main")
+
+	procs := parseRows(t, fmt.Sprintf("%d %s %s", 42488, "05:00:00", "/bin/zsh"))
+	repoRoots := []string{repoA.dir, repoB.dir}
+	fc := &foreignCwdScan{
+		Cwds:         map[int]string{42488: staleInA},
+		RepoRoots:    repoRoots,
+		ActiveByRepo: activeByRepoFixture(t, repoRoots),
+	}
+
+	item, _ := orphanedProcessReport(procs, map[int]bool{}, nil, fc)
+
+	if !strings.Contains(item.Error, "[cwd inside REMOVED worktree issue-488]") {
+		t.Fatalf("repo A's removed issue-488 was reported live because repo B's issue-488 is live: %q", item.Error)
+	}
+}
+
+// TestForeignCwdHolder_ExtensionWorktreeBaseIsScanned pins the second live
+// worktree layout on a real machine: the VSCode extension's default base
+// (`.worktrees`, WorktreeManager.ts), which the leaked-shell incident #519
+// narrates was produced by an extension-host background task in the first
+// place. Before the fix, worktreesRoots hard-coded only
+// `.nightgauge/worktrees` and this holder was invisible (adversarial review
+// of #519, finding 5).
+func TestForeignCwdHolder_ExtensionWorktreeBaseIsScanned(t *testing.T) {
+	r := newLeakRepo(t)
+	extWorktree := r.strandedWorktree(490) // <repo>/.worktrees/issue-490, live
+
+	procs := parseRows(t, fmt.Sprintf("%d %s %s", 42490, "05:00:00", "/bin/zsh"))
+	repoRoots := config.WorkspaceRepoRoots(r.dir)
+	fc := &foreignCwdScan{
+		Cwds:         map[int]string{42490: extWorktree},
+		RepoRoots:    repoRoots,
+		ActiveByRepo: activeByRepoFixture(t, repoRoots),
+	}
+
+	item, _ := orphanedProcessReport(procs, map[int]bool{}, nil, fc)
+
+	if !strings.Contains(item.Error, "[cwd inside worktree issue-490]") {
+		t.Fatalf("a holder in the VSCode extension's default worktree base was not found: %q", item.Error)
+	}
+}
+
+func TestForeignCwdHolder_PrefixIsNotContainment(t *testing.T) {
+	r, _ := foreignCwdFixture(t)
+
+	// Shares the literal string prefix ".../worktrees" with the real root but
+	// is a SIBLING directory, not something inside it.
+	decoy := filepath.Join(r.dir, ".nightgauge", "worktrees-old", "x")
+	if err := os.MkdirAll(decoy, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	if _, base, ok := worktreeDirContaining(decoy, config.WorkspaceRepoRoots(r.dir)); ok {
+		t.Fatalf("a sibling directory sharing a string prefix was treated as contained: base=%q", base)
+	}
+}
+
+// TestBuildForeignCwdScan_UnreadableRepoRootIsUndetermined mirrors
+// TestCheckPipelineStashes_UnreadableRootIsNeverHealthy's fixture: a workspace
+// manifest names a repo path that exists on disk but is not a git repository
+// (a manifest entry outliving the repo it pointed at). `git worktree list`
+// then fails for that root, which must undetermine the WHOLE cwd-half scan —
+// not silently drop that one root — because a partial answer here is
+// indistinguishable from a complete one at the call site (adversarial review
+// of #519, finding 4).
+func TestBuildForeignCwdScan_UnreadableRepoRootIsUndetermined(t *testing.T) {
+	r := newLeakRepo(t)
+	notARepo := filepath.Join(r.dir, "..", "not-a-repo")
+	if err := os.MkdirAll(notARepo, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	r.write(".vscode/nightgauge-workspace.yaml",
+		"workspace:\n  name: Test\nrepositories:\n"+
+			"  - name: primary\n    path: .\n    role: primary\n"+
+			"  - name: broken\n    path: ../not-a-repo\n    role: primary\n")
+
+	if _, ok := buildForeignCwdScan(r.dir, nil); ok {
+		t.Fatal("buildForeignCwdScan reported determined with an unreadable repo root in scope")
+	}
+
+	// The check as a whole must not report healthy off the back of that: a
+	// process table that DOES include this process (so the earlier #296 guard
+	// is satisfied) but whose cwd half could not run must be unverifiable, not
+	// OK=true.
+	raw := fmt.Sprintf("%d 00:01 nightgauge-doctor-test\n", os.Getpid())
+	item, warning := processTableReport(r.dir, raw, map[int]bool{}, nil)
+	if item.OK {
+		t.Fatalf("a scan whose cwd half could not run reported healthy: %+v", item)
+	}
+	if !strings.Contains(item.Error, "unverifiable") {
+		t.Errorf("the error does not say the scan could not run: %q", item.Error)
+	}
+	if warning == "" {
+		t.Error("an undetermined cwd-half scan must produce a warning too")
+	}
+}
+
+// TestOrphanedProcesses_NeverSignals pins the report-only contract at the
+// source level: this file must never call a signal primitive. The positive
+// control proves the detector actually trips on an offending call rather than
+// passing because neither string happens to appear in healthy source.
+func TestOrphanedProcesses_NeverSignals(t *testing.T) {
+	src, err := os.ReadFile("orphaned_processes.go")
+	if err != nil {
+		t.Fatalf("read source: %v", err)
+	}
+
+	if found := forbiddenSignalCalls(string(src)); len(found) != 0 {
+		t.Errorf("orphaned_processes.go calls a signal primitive — this carrier must never signal a process: %v", found)
+	}
+
+	poisoned := string(src) + "\nfunc neverCalled() { syscall.Kill(1, 9); var p *os.Process; p.Signal(nil) }\n"
+	if found := forbiddenSignalCalls(poisoned); len(found) != 2 {
+		t.Fatalf("positive control did not trip the detector: found %v — the check cannot be trusted to go red", found)
+	}
+}
+
+func forbiddenSignalCalls(src string) []string {
+	var found []string
+	for _, sym := range []string{"syscall.Kill", ".Signal("} {
+		if strings.Contains(src, sym) {
+			found = append(found, sym)
+		}
+	}
+	return found
+}
+
+// TestEachServeClaim_HasNoDirectoryWalkOfItsOwn pins AC4 of #1426 at the
+// source level, in the same shape as the report-only pin above and for the
+// same reason: what it asserts is the ABSENCE of a second code path, which no
+// behavioural test can observe until the two paths have already drifted.
+//
+// The registry's layout — which suffixes are files, which are the atomic
+// writer's in-flight temp state, and how a file name decodes to a workspace
+// root — belongs to internal/runstate. This file walked it independently with
+// its own ReadDir and its own `.json` filter, so every one of those became a
+// fact spelled twice. The record SHAPE stays local (doctor is a reader of a
+// schema it does not own); the directory is runstate's to enumerate.
+func TestEachServeClaim_HasNoDirectoryWalkOfItsOwn(t *testing.T) {
+	src, err := os.ReadFile("orphaned_processes.go")
+	if err != nil {
+		t.Fatalf("read source: %v", err)
+	}
+
+	if found := ownServeRegistryWalk(string(src)); len(found) != 0 {
+		t.Errorf("orphaned_processes.go resolves the serve registry itself instead of going through "+
+			"runstate.EachServeRegistryFile — a directory layout spelled twice eventually disagrees: %v", found)
+	}
+
+	poisoned := string(src) + "\nfunc neverCalled() { d, _ := runstate.ServeSidecarDir(); es, _ := os.ReadDir(d); _ = es }\n"
+	if found := ownServeRegistryWalk(poisoned); len(found) != 1 {
+		t.Fatalf("positive control did not trip the detector: found %v — the check cannot be trusted to go red", found)
+	}
+}
+
+func ownServeRegistryWalk(src string) []string {
+	var found []string
+	for _, sym := range []string{"runstate.ServeSidecarDir"} {
+		if strings.Contains(src, sym) {
+			found = append(found, sym)
+		}
+	}
+	return found
 }

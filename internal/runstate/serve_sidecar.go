@@ -1,8 +1,6 @@
 package runstate
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -71,10 +69,11 @@ type ServeSidecar struct {
 	PID             int       `json:"pid"`
 	StartedAt       time.Time `json:"started_at"`
 	LastHeartbeatAt time.Time `json:"last_heartbeat_at"`
-	// WorkspaceRoot is the workspace this daemon serves. The FILE NAME is a
-	// hash, so without this field a directory of claims is opaque to the
-	// operator who has to act on it, and a claim that went cold could not be
-	// attributed to anything. doctor names it when it reports the daemon.
+	// WorkspaceRoot is the workspace this daemon serves. The file name now
+	// encodes the same root reversibly (#1426), but this field remains the
+	// authority: it survives a record that was copied, moved, or written
+	// under a root too long to fit in one path segment. doctor names it when
+	// it reports the daemon, and the prune trusts it over the name.
 	WorkspaceRoot string `json:"workspace_root"`
 }
 
@@ -95,16 +94,20 @@ func ServeSidecarDir() (string, error) {
 	return filepath.Join(home, ".nightgauge", serveSidecarDirName), nil
 }
 
-// ServeSidecarName is the file a workspace's claim occupies: the first 16 hex
-// digits of sha256(workspace root), plus `.json`.
+// ServeSidecarName is the file a workspace's claim occupies: the workspace
+// root encoded as one path segment, plus `.json`.
 //
-// A hash because the name has to be one path segment on every filesystem while
-// a workspace root is an arbitrary absolute path. 64 bits is far past collision
-// range for the handful of workspaces one user has open, and nothing ever has
-// to reverse it — the record carries workspace_root.
+// It used to be the first 16 hex digits of sha256(root), on the reasoning that
+// the name has to be one path segment while a root is an arbitrary absolute
+// path, and that nothing ever has to reverse it because the record carries
+// workspace_root. The first half still holds. The second holds for the record
+// and FAILS for its `.lock` sibling, which carries nothing at all (#1426): an
+// orphaned lock named a workspace that nothing on the machine could recover,
+// so it could be neither attributed nor explained. The key is reversible now
+// — see encodeServeRegistryKey — which also makes a directory listing legible
+// to the operator who has to act on it.
 func ServeSidecarName(workspaceRoot string) string {
-	sum := sha256.Sum256([]byte(normalizeWorkspaceRoot(workspaceRoot)))
-	return hex.EncodeToString(sum[:])[:16] + ".json"
+	return encodeServeRegistryKey(normalizeWorkspaceRoot(workspaceRoot)) + serveRecordSuffix
 }
 
 // ServeSidecarPath is where this workspace's claim is written and read.
@@ -117,7 +120,7 @@ func ServeSidecarPath(workspaceRoot string) (string, error) {
 }
 
 // normalizeWorkspaceRoot collapses the spellings of one workspace root to a
-// single hash input, so a relative path and its absolute form do not claim two
+// single key input, so a relative path and its absolute form do not claim two
 // different files for the same workspace.
 func normalizeWorkspaceRoot(workspaceRoot string) string {
 	if abs, err := filepath.Abs(workspaceRoot); err == nil {
@@ -133,7 +136,7 @@ func normalizeWorkspaceRoot(workspaceRoot string) string {
 // a healthy daemon as an orphan.
 //
 // The record's WorkspaceRoot is stamped here rather than taken from the caller,
-// so the file's contents can never disagree with the workspace its name hashes.
+// so the file's contents can never disagree with the workspace its name encodes.
 func WriteServeSidecar(workspaceRoot string, sc ServeSidecar) error {
 	path, err := ServeSidecarPath(workspaceRoot)
 	if err != nil {
@@ -259,6 +262,26 @@ func startServeSidecar(workspaceRoot string, pid int, ppid func() int, every tim
 		log:       log,
 		done:      make(chan struct{}),
 	}
+	// Sweep the registry this daemon is about to write into (#1426).
+	//
+	// A daemon start is the right moment for it because it is the one event
+	// guaranteed to happen on a machine that uses this directory at all, and
+	// because the alternative — `doctor` — is a reporter, and a reporter that
+	// deletes what it reports on is a different tool. Best-effort by
+	// construction: the sweep returns no error, and a file it could not
+	// remove is simply left for the next start.
+	//
+	// It runs BEFORE the claim, which is safe in both directions. This
+	// workspace's own prior record is either live (kept) or dead (removed,
+	// and about to be rewritten by ClaimServeSidecar anyway); and its lock
+	// file cannot be swept, because by the time serve starts the sidecar the
+	// scheduler lease is either held by THIS process or refused to it by a
+	// live one — and PruneServeRegistry only unlinks a lock it can take.
+	if swept := PruneServeRegistry(time.Now()); swept.Removed() > 0 {
+		log("serve: pruned the machine-global claim registry — %d dead record(s), %d unheld lock file(s)",
+			swept.Records, swept.Locks)
+	}
+
 	sc, err := ClaimServeSidecar(workspaceRoot, pid, time.Now(), log)
 	if err != nil {
 		log("WARN: could not write serve sidecar: %v — this daemon will read as unclaimed in `nightgauge doctor`", err)

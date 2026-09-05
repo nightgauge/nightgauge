@@ -511,8 +511,14 @@ describe("AutoRetroService", () => {
           text:
             "pr-merge reported success but PR #73 is not merged (state: OPEN). " +
             'blocked by failing check "Sync E2E (Docker)" (mergeStateStatus=UNSTABLE). ' +
-            "Pipeline halted after 2 verification attempts.",
-          sourcesAnalyzed: ["terminal_reason"],
+            "Pipeline halted after 2 verification attempts.\n" +
+            // The run record the collector always appends, carrying the kind
+            // the pr-merge gate emits for this very case (#1448). Without it
+            // this guard measured a corpus production never produces, and the
+            // ordering it exists to protect was not actually pinned.
+            '{"schema_version":"3","issue_number":73,"terminal_failure_kind":"pr_merge_unmerged"}',
+          sourcesAnalyzed: ["terminal_reason", "execution_history"],
+          terminalKind: "pr_merge_unmerged",
         },
         "pr-merge"
       );
@@ -653,6 +659,35 @@ describe("AutoRetroService", () => {
       expect(noAdapter[0].recommendation).not.toBe(adapterUnavail[0].recommendation);
     });
 
+    it('classifies as "credential-failure" on terminal_failure_kind=git_transport_auth_failed (Issue #878)', () => {
+      // The #878 record, verbatim: the reason composes cause-then-symptom, so
+      // the SAME text also contains the state-management keyword `did not write
+      // expected output context`. Before the record-field map carried this kind
+      // the extractor returned null and the prose table won, answering
+      // state-management with "re-run the failed stage after verifying context"
+      // — a remedy for a fault the record had already named as a credential
+      // refusal. The authoritative field must beat the keyword guess.
+      const findings = AutoRetroService.classifyFailure(
+        {
+          text: '{"terminal_failure_kind":"git_transport_auth_failed","terminal_reason":"error: failed to push some refs: invalid auth method — then stage issue-pickup exited 0 but did not write expected output context"}',
+          sourcesAnalyzed: ["session_log"],
+          // #1448: the record's kind reaches the classifier as a structured
+          // field, decided by TERMINAL_KIND_CATEGORY — never re-parsed out of
+          // prose that may be quoting another run's record.
+          terminalKind: "git_transport_auth_failed",
+          terminalReason:
+            "error: failed to push some refs: invalid auth method — then stage issue-pickup exited 0 but did not write expected output context",
+        },
+        "issue-pickup"
+      );
+      expect(findings[0].category).toBe("credential-failure");
+      expect(findings[0].severity).toBe("high");
+      expect(findings[0].evidence[0]).toContain("git_transport_auth_failed");
+      // The remedy must not send the operator at the output contract.
+      expect(findings[0].recommendation).not.toContain("verifying context");
+      expect(findings[0].recommendation).toContain("credentials");
+    });
+
     it('classifies as "stop-hook-error" on Claude CLI stop-hook notification (no terminal result event)', () => {
       // Genuine #3204 case: stop-hook fires and the subagent goes silent —
       // no terminal result event ever lands. The time-gate (#3275) treats
@@ -711,11 +746,16 @@ describe("AutoRetroService", () => {
         {
           text: '{"schema_version":"3","issue_number":3204,"outcome":"failed","terminal_failure_kind":"stall_kill","total_duration_ms":6812294}',
           sourcesAnalyzed: ["execution_history"],
+          // Threaded the way the collector delivers it (#1448):
+          // `readRecordTerminalKind` lifts the kind off the run record for
+          // THIS issue, so the classifier consults one authoritative field
+          // instead of first-match-wins over the joined evidence corpus.
+          terminalKind: "stall_kill",
         },
         "feature-dev"
       );
       expect(findings[0].category).toBe("stall-kill");
-      expect(findings[0].evidence.join("\n")).toContain("terminal_failure_kind");
+      expect(findings[0].evidence.join("\n")).toContain("stall_kill");
     });
 
     it("source-tagged: extension TypeError noise does NOT trip validation-failure", () => {
@@ -1554,9 +1594,12 @@ describe("AutoRetroService", () => {
       const findings = AutoRetroService.classifyFailure(
         {
           // Deliberately unhelpful prose: on the real run the gate reason was
-          // never in the corpus the classifier read.
-          text: "",
-          sourcesAnalyzed: ["terminal_reason"],
+          // never in the corpus the classifier read. The run record IS present
+          // though — the collector always appends it (#1448) — and passing
+          // `text: ""` here is what let this pin stay green while the kind's
+          // category was re-pointed at `state-management` underneath it.
+          text: '{"schema_version":"3","issue_number":1056,"terminal_failure_kind":"dev_handoff_missing"}',
+          sourcesAnalyzed: ["terminal_reason", "execution_history"],
           terminalReason: "",
           terminalKind: "dev_handoff_missing",
         },
@@ -1574,8 +1617,15 @@ describe("AutoRetroService", () => {
         {
           // The real merge-blocked shape: a deterministically-known blocker. Declining
           // to merge a red PR is CORRECT behaviour, not a skill no-op.
-          text: 'blocked by failing check "Sync E2E (Docker)" (mergeStateStatus=UNSTABLE)',
-          sourcesAnalyzed: ["terminal_reason"],
+          //
+          // The record JSON is part of that shape (#1448). Omitting it made
+          // this guard blind to the very ordering it names: the extractor that
+          // reads the kind saw no record, so it could not displace
+          // merge-blocked here no matter where it sat in the list.
+          text:
+            'blocked by failing check "Sync E2E (Docker)" (mergeStateStatus=UNSTABLE)\n' +
+            '{"schema_version":"3","issue_number":1056,"terminal_failure_kind":"premature_turn_end"}',
+          sourcesAnalyzed: ["terminal_reason", "execution_history"],
           terminalReason:
             'blocked by failing check "Sync E2E (Docker)" (mergeStateStatus=UNSTABLE)',
           terminalKind: "premature_turn_end",

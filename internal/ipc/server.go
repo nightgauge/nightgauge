@@ -47,6 +47,13 @@ import (
 // config and the fix so a multi-repo-workspace operator (no root config.yaml)
 // is not left guessing — the bare "scheduler not configured" gave no signal
 // that the workspace simply lacked an owner + project.number. See #3860.
+// defaultAutonomousWaitTimeout bounds the autonomous.* lifecycle handlers'
+// wait for the scheduler goroutine to reach the requested state. Long enough
+// to cover a dispatch loop that is mid-cycle (the case a 50ms guess used to
+// get wrong), short enough that a wedged scheduler answers an IPC request
+// with the truth instead of hanging it.
+const defaultAutonomousWaitTimeout = 2 * time.Second
+
 const errSchedulerNotConfigured = "scheduler not configured — no workspace-root .nightgauge/config.yaml (owner + project.number) and the workspace manifest did not yield one; run `nightgauge workspace-init` or add a root config.yaml"
 
 // Server handles JSON-over-stdio IPC communication with VSCode.
@@ -168,6 +175,13 @@ type Server struct {
 	// autonomousScheduler is the cross-repo autonomous scheduler (optional).
 	autonomousScheduler *orchestrator.AutonomousScheduler
 
+	// autonomousWaitTimeout bounds how long the autonomous.* lifecycle
+	// handlers wait for the scheduler goroutine to reach the state their
+	// caller asked for before answering with the state it is actually in
+	// (#494). Set by NewServer; overridden only by tests that need the
+	// deadline arm to fire quickly.
+	autonomousWaitTimeout time.Duration
+
 	// ipcRunner and licenseChecker are shared across all concurrent pipeline.runItem
 	// and pipeline.run invocations. Creating these per-request caused a TOCTOU race:
 	// each call overwrote srv.methods["pipeline.stageResult"], orphaning earlier
@@ -287,6 +301,11 @@ func NewServer(client *gh.Client, opts ...ServerOption) *Server {
 		// so a test can still override it.
 		boards:      boardcache.New(0),
 		sweepMinGap: jitteredSweepGap(),
+		// The autonomous lifecycle handlers observe a real state transition
+		// rather than sleeping through one (#494); this bounds the wait so a
+		// wedged scheduler cannot hang an IPC request. On expiry the handler
+		// still answers with the scheduler's ACTUAL state.
+		autonomousWaitTimeout: defaultAutonomousWaitTimeout,
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -1036,26 +1055,64 @@ func (s *Server) Run(ctx context.Context) error {
 		"protocolVersion": ProtocolVersion,
 	})
 
-	scanner := bufio.NewScanner(os.Stdin)
-	// Allow up to 10MB per message
-	scanner.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
+	// The stdio loop runs on its own goroutine so this one can select on the
+	// run context. A read on os.Stdin is not interruptible, so a loop that
+	// only ended at EOF made `nightgauge serve` unable to observe its own
+	// shutdown: the SIGTERM handler in cmd/nightgauge cancels the context and
+	// nothing else, and with stdin still open (a terminal, or an extension
+	// host that has not exited yet) Run never came back at all. The reader
+	// goroutine is left parked in that read on the cancellation path — the
+	// process is on its way out, and it holds nothing but the pipe.
+	stdin := os.Stdin
+	scanDone := make(chan struct{})
+	var scanErr error
+	go func() {
+		defer close(scanDone)
+		scanner := bufio.NewScanner(stdin)
+		// Allow up to 10MB per message
+		scanner.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
 
-	for scanner.Scan() {
-		line := scanner.Bytes()
-		if len(line) == 0 {
-			continue
+		for scanner.Scan() {
+			line := scanner.Bytes()
+			if len(line) == 0 {
+				continue
+			}
+
+			var req Request
+			if err := json.Unmarshal(line, &req); err != nil {
+				s.sendError(0, ErrInvalidParams, fmt.Sprintf("invalid JSON: %v", err))
+				continue
+			}
+
+			go s.handleRequest(ctx, req)
 		}
+		scanErr = scanner.Err()
+	}()
 
-		var req Request
-		if err := json.Unmarshal(line, &req); err != nil {
-			s.sendError(0, ErrInvalidParams, fmt.Sprintf("invalid JSON: %v", err))
-			continue
-		}
-
-		go s.handleRequest(ctx, req)
+	var err error
+	select {
+	case <-scanDone:
+		// close(scanDone) is the happens-before edge that makes this read safe;
+		// the cancellation arm below must NOT touch scanErr.
+		err = scanErr
+	case <-ctx.Done():
+		// A cancelled run context is how a shutdown arrives, not a failure —
+		// returning ctx.Err() here would make `serve` exit non-zero on every
+		// clean SIGTERM.
 	}
 
-	return scanner.Err()
+	// Bounded teardown (#489). This is the last moment anything can join the
+	// autonomous scheduler's detached board-recovery goroutines: they are
+	// deliberately built to survive an 80-minute rate-limit pause
+	// (boardRecoveryTimeout), and a process that exits through here while one
+	// is mid-MoveStatus abandons a board write with nothing to notice. Bounded
+	// rather than unconditional, because the same ceiling that makes those ops
+	// survivable would otherwise hang a SIGTERM for over an hour.
+	if s.autonomousScheduler != nil {
+		s.autonomousScheduler.Shutdown(orchestrator.BackgroundDrainGrace)
+	}
+
+	return err
 }
 
 func (s *Server) handleRequest(ctx context.Context, req Request) {
@@ -1815,7 +1872,10 @@ func (s *Server) registerMethods() {
 		if s.getLicenseSvc() == nil {
 			return platform.CommunityLicenseInfo(), nil
 		}
-		info, err := s.getLicenseSvc().Validate(ctx)
+		// params:none — this method carries no machine context, so pass the zero
+		// MachineInfo and let LicenseService reuse the identity a previous
+		// platform.validateLicense supplied (falling back to this host's own).
+		info, err := s.getLicenseSvc().Validate(ctx, platform.MachineInfo{})
 		if err != nil {
 			return nil, err
 		}
@@ -1852,10 +1912,20 @@ func (s *Server) registerMethods() {
 		// "Activate License" flow verifying a key before it's persisted — validate
 		// that arbitrary key directly, bypassing the session cache so the result
 		// reflects the entered key, not the current session license.
-		if p.LicenseKey != "" && p.LicenseKey != s.getLicenseSvc().ConfiguredKey() {
-			return s.getLicenseSvc().ValidateKey(ctx, p.LicenseKey)
+		//
+		// (#1334) The machine fields were unmarshalled and then dropped here, so
+		// every validate request reached the platform carrying only the key — no
+		// license_machines row was written and the per-tier machine limits were
+		// unenforceable. Carry them through on BOTH branches.
+		machine := platform.MachineInfo{
+			MachineID: p.MachineID,
+			Hostname:  p.Hostname,
+			Platform:  p.Platform,
 		}
-		return s.getLicenseSvc().Validate(ctx)
+		if p.LicenseKey != "" && p.LicenseKey != s.getLicenseSvc().ConfiguredKey() {
+			return s.getLicenseSvc().ValidateKey(ctx, p.LicenseKey, machine)
+		}
+		return s.getLicenseSvc().Validate(ctx, machine)
 	}
 
 	//ipc:method platformStartTrial params:PlatformStartTrialParams result:TrialResult
@@ -4851,8 +4921,15 @@ func (s *Server) registerMethods() {
 				}
 			}()
 		}
-		// Brief delay to let the scheduler start and update its status
-		time.Sleep(50 * time.Millisecond)
+		// Wait for the loop to actually come up, then report what was
+		// observed (#494). A flat sleep here was a guess about how long
+		// Run() takes to reach its first select, and Status() sampled before
+		// the transition is a status the scheduler was never in. On timeout
+		// WaitForRunning reports the real state and Status() below returns
+		// that same truth, so a slow start is visible rather than assumed.
+		if !s.autonomousScheduler.WaitForRunning(true, s.autonomousWaitTimeout) {
+			log.Printf("autonomous: start returned before the dispatch loop came up (waited %s) — reporting the scheduler's actual state", s.autonomousWaitTimeout)
+		}
 		return s.autonomousScheduler.Status(), nil
 	}
 
@@ -4948,7 +5025,9 @@ func (s *Server) registerMethods() {
 		if err := s.resumeRepoAndEnsureRunning(ctx, p.Repo); err != nil {
 			return nil, err
 		}
-		time.Sleep(50 * time.Millisecond)
+		if !s.autonomousScheduler.WaitForRunning(true, s.autonomousWaitTimeout) {
+			log.Printf("autonomous: resumeRepo %q returned before the dispatch loop came up (waited %s) — reporting the scheduler's actual state", p.Repo, s.autonomousWaitTimeout)
+		}
 		return s.autonomousScheduler.Status(), nil
 	}
 
@@ -4978,9 +5057,11 @@ func (s *Server) registerMethods() {
 		if err := s.resumeAndEnsureRunning(ctx); err != nil {
 			return nil, err
 		}
-		// Brief delay to let the scheduler start and update its status,
-		// matching autonomous.start's behavior.
-		time.Sleep(50 * time.Millisecond)
+		// Observe the loop coming up rather than sleeping through it,
+		// matching autonomous.start's behavior (#494).
+		if !s.autonomousScheduler.WaitForRunning(true, s.autonomousWaitTimeout) {
+			log.Printf("autonomous: resume returned before the dispatch loop came up (waited %s) — reporting the scheduler's actual state", s.autonomousWaitTimeout)
+		}
 		return s.autonomousScheduler.Status(), nil
 	}
 
@@ -4990,8 +5071,15 @@ func (s *Server) registerMethods() {
 			return nil, fmt.Errorf("autonomous scheduler not configured")
 		}
 		s.autonomousScheduler.Stop()
-		// Brief delay to let the scheduler process the stop signal
-		time.Sleep(50 * time.Millisecond)
+		// Stop() only SIGNALS; the dispatch loop drains stopCh between
+		// cycles, so the transition lands whenever the current cycle ends —
+		// not 50ms later. Wait for the loop to observe it, then report the
+		// state that was actually observed: on timeout that is "still
+		// running", which is the truth the caller needs, and not the stopped
+		// state the old sleep asserted on its behalf (#494).
+		if !s.autonomousScheduler.WaitForRunning(false, s.autonomousWaitTimeout) {
+			log.Printf("autonomous: stop signalled but the dispatch loop had not observed it after %s — reporting the scheduler's actual state", s.autonomousWaitTimeout)
+		}
 		return s.autonomousScheduler.Status(), nil
 	}
 

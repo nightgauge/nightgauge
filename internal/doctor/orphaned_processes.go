@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/config"
+	"github.com/nightgauge/nightgauge/internal/execution"
 	workspace "github.com/nightgauge/nightgauge/internal/knowledge/workspace"
 	"github.com/nightgauge/nightgauge/internal/runstate"
 )
@@ -326,9 +328,7 @@ func sidecarPIDs(startDir string, now time.Time) map[int]bool {
 //
 // A minimal local struct on purpose, like every other sidecar shape in this
 // file: doctor is a READER of records other packages own, and importing their
-// types would make their schemas answerable to `doctor`. Only the directory is
-// borrowed from runstate, because a path two packages spell independently is a
-// path that eventually disagrees.
+// types would make their schemas answerable to `doctor`.
 type serveClaimRecord struct {
 	PID             int    `json:"pid"`
 	StartedAt       string `json:"started_at"`
@@ -343,24 +343,25 @@ type serveClaimRecord struct {
 // store. A missing directory (no daemon has ever run here) and a malformed
 // file are both simply skipped — the same direction every unreadable sidecar
 // fails in this file, toward UNOWNED and therefore toward REPORTING.
+//
+// The DIRECTORY WALK is runstate's, not this file's (#1426). It used to be a
+// local ReadDir with a local `.json` suffix filter, which made this the second
+// independent spelling of a layout runstate owns — the hazard the comment
+// above already named for the path alone, and the registry now has a lock
+// suffix, a temp-file shape and a reversible key for a second walker to
+// disagree about too. What stays local is the record SHAPE, which is the part
+// doctor is genuinely entitled to its own opinion of.
 func eachServeClaim(visit func(serveClaimRecord)) {
-	dir, err := runstate.ServeSidecarDir()
-	if err != nil {
-		return
-	}
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return
-	}
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
-			continue
+	runstate.EachServeRegistryFile(func(f runstate.ServeRegistryFile) {
+		if f.Lock || len(f.Data) == 0 {
+			return
 		}
 		var sc serveClaimRecord
-		if readJSONFile(filepath.Join(dir, e.Name()), &sc) {
-			visit(sc)
+		if json.Unmarshal(f.Data, &sc) != nil {
+			return
 		}
-	}
+		visit(sc)
+	})
 }
 
 // staleServeClaims maps the PID of every serve claim that has STOPPED making
@@ -369,8 +370,8 @@ func eachServeClaim(visit func(serveClaimRecord)) {
 // This is the shape #388 exists to surface: a daemon that outlived its host
 // stops refreshing (runstate.serveClaim.tick) and its record goes cold, so when
 // a still-running process matches one of these PIDs, this is what tells the
-// operator WHICH workspace's daemon they are looking at — the claim's file name
-// is a hash and carries nothing. Evidence, never ownership: a recycled PID
+// operator WHICH workspace's daemon they are looking at. Evidence, never
+// ownership: a recycled PID
 // would be attributed to the wrong process, the same accepted edge as every
 // other claim here, which is why it only ever decorates a line the report was
 // already going to print.
@@ -477,14 +478,14 @@ func checkOrphanedProcesses(startDir string, now time.Time) (CheckItem, string) 
 	if err != nil {
 		return unverifiableProcessScan(err)
 	}
-	return processTableReport(raw, sidecarPIDs(startDir, now), staleServeClaims(now))
+	return processTableReport(startDir, raw, sidecarPIDs(startDir, now), staleServeClaims(now))
 }
 
 // processTableReport parses a raw `ps` table and reports on it, or explains why
 // it could not. Split from checkOrphanedProcesses so every route out of a real
 // table — parsed, unparsable, implausible — is reachable from a test without
 // spawning a process.
-func processTableReport(raw string, claimed map[int]bool, staleServe map[int]string) (CheckItem, string) {
+func processTableReport(startDir, raw string, claimed map[int]bool, staleServe map[int]string) (CheckItem, string) {
 	procs, determined := parseProcessTable(raw)
 	if !determined {
 		return unverifiableProcessScan(fmt.Errorf("`ps` output could not be parsed"))
@@ -499,7 +500,18 @@ func processTableReport(raw string, claimed map[int]bool, staleServe map[int]str
 			"the parsed table has %d row(s) and does not include this process (pid %d), so it did not enumerate this machine",
 			len(procs), os.Getpid()))
 	}
-	return orphanedProcessReport(procs, claimed, staleServe)
+	fc, cwdScanOK := buildForeignCwdScan(startDir, procs)
+	if !cwdScanOK {
+		// The mechanism itself did not work — `git worktree list` failed, or
+		// the cwd source (lsof/proc) could not be read. That is a scan that
+		// never ran, not a scan that found nothing, and the two must not
+		// collapse into the same "OK" the process-table half already guards
+		// against above (#296). Distinct from the len(repoRoots)==0 case
+		// inside buildForeignCwdScan, which legitimately has nothing to say.
+		return unverifiableProcessScan(fmt.Errorf(
+			"the process table parsed, but the cwd-inside-worktree half could not run: `git worktree list` failed, or the process cwd source (lsof/proc) was unavailable"))
+	}
+	return orphanedProcessReport(procs, claimed, staleServe, fc)
 }
 
 // listsPID reports whether pid appears in the parsed table.
@@ -528,27 +540,387 @@ func unverifiableProcessScan(cause error) (CheckItem, string) {
 // cold on it (see staleServeClaims). It only ever adds a clause to a line that
 // was already going to be printed — an orphan is an orphan whether or not this
 // map knows anything about it.
-func orphanedProcessReport(procs []runningProcess, claimed map[int]bool, staleServe map[int]string) (CheckItem, string) {
+//
+// fc is the second, unrelated half added by #519: foreign (non-nightgauge)
+// processes whose cwd sits inside a pipeline worktree. nil means that half did
+// not run (no worktrees root, or the cwd source was unavailable) and the
+// report says nothing about it — the same "this half answers nothing" shape
+// classifyProcesses already has for an empty claimed map.
+func orphanedProcessReport(procs []runningProcess, claimed map[int]bool, staleServe map[int]string, fc *foreignCwdScan) (CheckItem, string) {
 	scan := classifyProcesses(procs, claimed, os.Getpid())
+	var holders []foreignCwdHolder
+	if fc != nil {
+		holders = classifyForeignCwdHolders(procs, fc.Cwds, fc.RepoRoots, fc.ActiveByRepo, os.Getpid())
+	}
 	detail := fmt.Sprintf("%d nightgauge process(es): %d owned, %d recent, %d orphaned",
 		scan.Scanned, scan.Owned, scan.Recent, len(scan.Orphans))
-	if len(scan.Orphans) == 0 {
+	if len(holders) > 0 {
+		detail += fmt.Sprintf(", %d with cwd inside a worktree", len(holders))
+	}
+	if len(scan.Orphans) == 0 && len(holders) == 0 {
 		return CheckItem{OK: true, Detail: detail}, ""
 	}
 
-	parts := make([]string, 0, maxLeaksReported+1)
-	for i, p := range scan.Orphans {
-		if i == maxLeaksReported {
-			parts = append(parts, fmt.Sprintf("… and %d more", len(scan.Orphans)-maxLeaksReported))
-			break
+	var msg string
+	if len(scan.Orphans) > 0 {
+		parts := make([]string, 0, maxLeaksReported+1)
+		for i, p := range scan.Orphans {
+			if i == maxLeaksReported {
+				parts = append(parts, fmt.Sprintf("… and %d more", len(scan.Orphans)-maxLeaksReported))
+				break
+			}
+			part := fmt.Sprintf("%d (%dh): %s", p.PID, int(p.Age.Hours()), p.Command)
+			if ws := staleServe[p.PID]; ws != "" {
+				part += fmt.Sprintf(" [its serve claim for %s stopped making progress]", ws)
+			}
+			parts = append(parts, part)
 		}
-		part := fmt.Sprintf("%d (%dh): %s", p.PID, int(p.Age.Hours()), p.Command)
-		if ws := staleServe[p.PID]; ws != "" {
-			part += fmt.Sprintf(" [its serve claim for %s stopped making progress]", ws)
-		}
-		parts = append(parts, part)
+		msg = "orphaned nightgauge processes: " + strings.Join(parts, "; ") +
+			" — no live sidecar claims these PIDs; verify and terminate manually"
 	}
-	msg := "orphaned nightgauge processes: " + strings.Join(parts, "; ") +
-		" — no live sidecar claims these PIDs; verify and terminate manually"
+	if len(holders) > 0 {
+		parts := make([]string, 0, maxLeaksReported+1)
+		for i, h := range holders {
+			if i == maxLeaksReported {
+				parts = append(parts, fmt.Sprintf("… and %d more", len(holders)-maxLeaksReported))
+				break
+			}
+			tag := fmt.Sprintf("cwd inside worktree issue-%d", h.IssueNumber)
+			if h.Stale {
+				tag = fmt.Sprintf("cwd inside REMOVED worktree issue-%d", h.IssueNumber)
+			}
+			parts = append(parts, fmt.Sprintf("%d (%dh): %s (cwd %s) [%s]", h.PID, int(h.Age.Hours()), h.Command, h.Cwd, tag))
+		}
+		fcMsg := "processes with cwd inside a pipeline worktree: " + strings.Join(parts, "; ") +
+			" — verify and terminate manually"
+		if msg != "" {
+			msg += "; " + fcMsg
+		} else {
+			msg = fcMsg
+		}
+	}
 	return CheckItem{OK: false, Detail: detail, Error: msg}, msg
+}
+
+// --- Foreign cwd holders (#519) ---
+//
+// #341's scan only ever looked for processes the PIPELINE spawned. But a
+// `.nightgauge/worktrees/issue-N` directory is also where interactive agent
+// harnesses (Claude Code, Codex, both inside VSCode) run their shells, and
+// those harnesses can leak detached ones: an operator found several `/bin/zsh`
+// processes still parked with cwd inside `.nightgauge/worktrees/issue-488`,
+// held open by a VSCode extension-host background task long after the session
+// ended and the worktree itself was removed. None of those shells was ever a
+// nightgauge process, so #341's argv-based filter could never have seen them —
+// this half of the scan is keyed on cwd instead of parentage, and runs over
+// EVERY row, nightgauge or not.
+//
+// Report-only, same as #341: this half only ever reads `ps`, `lsof`/`/proc`
+// and `git worktree list` — it names PIDs for an operator to verify and kill
+// by hand, and never signals one itself.
+
+// foreignCwdScan bundles the OS- and git-derived facts orphanedProcessReport
+// needs to run the cwd half of the scan. A nil pointer means there is
+// genuinely nothing to scan — no repo root in this workspace has ever held a
+// pipeline worktree — which is distinct from the mechanism failing; see
+// buildForeignCwdScan's second return value for that case.
+//
+// ActiveByRepo is keyed per REPO ROOT, not merged into one issue-number set
+// across the workspace: two repos can legally both be mid-flight on the same
+// issue number (each repo's issue numbers are its own), so a live worktree
+// for issue-488 in repo B must never mark a holder sitting in repo A's
+// already-removed issue-488 worktree as live (#519 review finding).
+type foreignCwdScan struct {
+	Cwds         map[int]string
+	RepoRoots    []string
+	ActiveByRepo map[string]map[int]bool
+}
+
+// foreignCwdHolder is one process — not necessarily a nightgauge one — whose
+// cwd resolves inside a pipeline worktree.
+type foreignCwdHolder struct {
+	PID         int
+	Age         time.Duration
+	Command     string
+	Cwd         string
+	IssueNumber int
+	// Stale is true when the worktree this cwd sits inside no longer appears
+	// in `git worktree list` — the process is holding open a directory the
+	// pipeline itself considers gone, which is the shape most worth an
+	// operator's attention: it can also block `git worktree remove` (#110).
+	Stale bool
+}
+
+// cwdTimeout bounds the cwd lookup so a wedged `lsof`/`/proc` read cannot hang
+// `doctor`, the same discipline psTimeout applies to `ps` itself.
+const cwdTimeout = 10 * time.Second
+
+// worktreeBaseDirs is every directory name, relative to a repo root, this
+// scan treats as a pipeline worktree base. There are three live layouts on a
+// real machine, not one: the Go execution.Manager's own default
+// (.nightgauge/worktrees, execution/worktree.go's ensureWorktree), the VSCode
+// extension's default (.worktrees, WorktreeManager.ts) — the interactive
+// harness whose leaked shells motivated #519 in the first place — and Claude
+// Code's own worktree base (.claude/worktrees). See
+// docs/GO_BINARY.md's worktree-layout table and
+// worktreeContainment.ts's isLinkedWorktree doc comment, which independently
+// names the same three.
+//
+// Best-effort, not authoritative: `pipeline.worktree_base` lets an operator
+// configure a fourth location, and that setting is TypeScript-side config
+// this Go binary does not parse — a custom base is invisible to this scan.
+// Deliberately narrower than execution.ActiveWorktreeIssues' own notion of "a
+// worktree": that answers "what has git registered?" anywhere on disk, which
+// is right for reclaiming stray worktrees a maintainer hand-created
+// elsewhere, but wrong here — a process with cwd in some unrelated hand-made
+// worktree is not evidence of the interactive-harness leak this half exists
+// to catch.
+var worktreeBaseDirs = []string{
+	filepath.Join(".nightgauge", "worktrees"),
+	".worktrees",
+	filepath.Join(".claude", "worktrees"),
+}
+
+// buildForeignCwdScan gathers the cwd-half inputs for this run. The second
+// return value is false only when the MECHANISM did not work — `git worktree
+// list` failed in some repo root, or the cwd source itself could not be read
+// (unsupported platform, `lsof`/`/proc` unreachable) — which the caller must
+// route through unverifiableProcessScan rather than silently reporting clean
+// (#296). A workspace with no repo root at all has genuinely nothing to scan;
+// that is the one case that legitimately returns (nil, true).
+//
+// Active worktrees are resolved ONE REPO ROOT AT A TIME and kept in that
+// shape (foreignCwdScan.ActiveByRepo) rather than merged into one
+// workspace-wide issue-number set: two repos can each have their own
+// issue-488, live or removed independently, and merging would let one repo's
+// live worktree paper over another repo's removed one.
+func buildForeignCwdScan(startDir string, procs []runningProcess) (*foreignCwdScan, bool) {
+	repoRoots := config.WorkspaceRepoRoots(startDir)
+	if len(repoRoots) == 0 {
+		return nil, true
+	}
+	activeByRepo := make(map[string]map[int]bool, len(repoRoots))
+	for _, root := range repoRoots {
+		active, determined := execution.ActiveWorktreeIssues([]string{root})
+		if !determined {
+			return nil, false
+		}
+		activeByRepo[root] = active
+	}
+	pids := make([]int, 0, len(procs))
+	for _, p := range procs {
+		pids = append(pids, p.PID)
+	}
+	cwds, determined := lookupCwds(pids)
+	if !determined {
+		return nil, false
+	}
+	return &foreignCwdScan{Cwds: cwds, RepoRoots: repoRoots, ActiveByRepo: activeByRepo}, true
+}
+
+// classifyForeignCwdHolders finds every process (self excluded) whose cwd
+// resolves inside one of repoRoots' worktree bases, tagging each as holding a
+// live or a REMOVED worktree.
+//
+// Runs over ALL rows, unlike classifyProcesses — the whole point of this half
+// is the processes #341's isNightgauge() filter can never see. self is still
+// excluded: a stage legitimately runs `doctor` FROM inside its own worktree,
+// and that is not a leak.
+//
+// A LIVE worktree is exactly where every pipeline stage and every interactive
+// agent session legitimately runs (execution.Manager sets cmd.Dir to it,
+// and so does every harness worktreeBaseDirs names) — flagging one the
+// instant it starts would tell an operator to "verify and terminate" work
+// that is currently running. staleProcessAge gates live holders the same way
+// it gates #341's own half; a REMOVED worktree has no legitimate occupant at
+// any age, so it is reported regardless — that is the headline #519 incident.
+func classifyForeignCwdHolders(procs []runningProcess, cwds map[int]string, repoRoots []string, activeByRepo map[string]map[int]bool, self int) []foreignCwdHolder {
+	var holders []foreignCwdHolder
+	for _, p := range procs {
+		if p.PID == self {
+			continue
+		}
+		cwd, ok := cwds[p.PID]
+		if !ok || cwd == "" {
+			continue
+		}
+		repoRoot, base, ok := worktreeDirContaining(cwd, repoRoots)
+		if !ok {
+			continue
+		}
+		issueNum, ok := execution.IssueNumberFromWorktreeDir(base)
+		if !ok {
+			continue
+		}
+		stale := !activeByRepo[repoRoot][issueNum]
+		if !stale && p.Age < staleProcessAge {
+			continue
+		}
+		holders = append(holders, foreignCwdHolder{
+			PID: p.PID, Age: p.Age, Command: p.Command, Cwd: cwd,
+			IssueNumber: issueNum, Stale: stale,
+		})
+	}
+	// Stale-first (the case that can also block a worktree removal, #110), and
+	// within each group the same oldest-first order classifyProcesses uses.
+	sort.Slice(holders, func(i, j int) bool {
+		if holders[i].Stale != holders[j].Stale {
+			return holders[i].Stale
+		}
+		return holders[i].Age > holders[j].Age
+	})
+	return holders
+}
+
+// worktreeDirContaining reports whether cwd resolves inside one of repoRoots'
+// known worktree bases (worktreeBaseDirs) and, if so, which repo root matched
+// and the immediate child directory name — the worktree's own basename (e.g.
+// "issue-488" or "myrepo-issue-488").
+//
+// cwd is deliberately NOT required to exist: `git worktree remove` deletes
+// the directory outright, and a shell still parked there — the headline #519
+// incident — must still be found. cwd is only Clean'd and made absolute
+// (lexically, never filepath.EvalSymlinks, which fails ENOENT on a removed
+// directory); only the worktree-base side is resolved with EvalSymlinks
+// (macOS's /tmp → /private/tmp is the routine case there), because that
+// parent directory — unlike the specific worktree subdirectory that may have
+// been removed — still exists whenever this scan has anything to find.
+// Containment is decided by filepath.Rel, never a string prefix:
+// "…/worktrees-old/x" shares the literal prefix "…/worktrees" with
+// "…/worktrees/x" but is Rel-relative "../worktrees-old/x", which is
+// rejected. A base directory that was never created (this repo never used
+// that harness) simply fails EvalSymlinks and is skipped, not fatal to the
+// other bases or repo roots.
+func worktreeDirContaining(cwd string, repoRoots []string) (repoRoot, base string, ok bool) {
+	clean := filepath.Clean(cwd)
+	if !filepath.IsAbs(clean) {
+		abs, err := filepath.Abs(clean)
+		if err != nil {
+			return "", "", false
+		}
+		clean = abs
+	}
+	for _, root := range repoRoots {
+		for _, baseDir := range worktreeBaseDirs {
+			rr, err := filepath.EvalSymlinks(filepath.Join(root, baseDir))
+			if err != nil {
+				continue
+			}
+			rel, err := filepath.Rel(rr, clean)
+			if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+				continue
+			}
+			if i := strings.IndexByte(rel, filepath.Separator); i >= 0 {
+				rel = rel[:i]
+			}
+			return root, rel, true
+		}
+	}
+	return "", "", false
+}
+
+// lookupCwds resolves the cwd of every pid in ONE bounded call per platform —
+// never one invocation per process, which would make a machine-wide scan
+// spawn a subprocess per row — and reports whether the answer is DETERMINED.
+// determined=false means the mechanism itself did not work (unsupported
+// platform, the command timed out or produced nothing at all); a specific pid
+// simply missing from the returned map (permission denied on someone else's
+// process, or it exited mid-scan) is routine and does NOT undetermine the
+// whole lookup — the same "one gap does not undetermine an unrelated
+// narrowing filter" doctrine sidecarPIDs already applies to an unreadable
+// sidecar.
+func lookupCwds(pids []int) (map[int]string, bool) {
+	if len(pids) == 0 {
+		return map[int]string{}, true
+	}
+	switch runtime.GOOS {
+	case "darwin":
+		return lookupCwdsDarwin(pids)
+	case "linux":
+		return lookupCwdsLinux(pids), true
+	default:
+		return nil, false
+	}
+}
+
+// lookupCwdsLinux reads /proc/<pid>/cwd directly — no subprocess, no timeout
+// needed. A pid this reader cannot resolve (already exited, owned by another
+// user) is simply absent from the result.
+//
+// The kernel appends " (deleted)" to the readlink target when the directory
+// itself no longer exists — exactly the #519 headline case, a process still
+// parked in a worktree `git worktree remove` deleted out from under it — and
+// that suffix is stripped here, at the source, so every downstream consumer
+// (worktreeDirContaining above all) sees a plain path rather than needing its
+// own copy of this platform-specific shape.
+func lookupCwdsLinux(pids []int) map[int]string {
+	cwds := make(map[int]string, len(pids))
+	for _, pid := range pids {
+		if link, err := os.Readlink(fmt.Sprintf("/proc/%d/cwd", pid)); err == nil {
+			cwds[pid] = strings.TrimSuffix(link, " (deleted)")
+		}
+	}
+	return cwds
+}
+
+// lookupCwdsDarwin shells `lsof -a -d cwd -Fpn -p <pid list>` ONCE for every
+// pid this scan cares about. `lsof` exits non-zero whenever ANY requested pid
+// could not be inspected (already exited, owned by another user) — routine on
+// a machine-wide scan and not a failure of the mechanism itself; only the
+// absence of ANY usable output (the binary is missing, every pid was
+// inaccessible, the timeout fired) means the mechanism did not work.
+func lookupCwdsDarwin(pids []int) (map[int]string, bool) {
+	strs := make([]string, len(pids))
+	for i, p := range pids {
+		strs[i] = strconv.Itoa(p)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), cwdTimeout)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "lsof", "-a", "-d", "cwd", "-Fpn", "-p", strings.Join(strs, ",")).Output()
+	if len(out) == 0 {
+		if err != nil {
+			return nil, false
+		}
+		return map[int]string{}, true
+	}
+	cwds, _ := parseLsofCwd(string(out))
+	return cwds, true
+}
+
+// parseLsofCwd parses `lsof -Fpn` output into pid → cwd. The format is
+// repeating `p<pid>` blocks; a `cwd`-filtered block ("-d cwd") also carries an
+// `f` (file-descriptor) line this scan does not need, so every field but `p`
+// and `n` is read and ignored rather than assumed absent. A block whose
+// shape this parser does not recognize (an `n` line with no preceding `p`, an
+// unparsable pid) is skipped and logged, not fatal to the rest of the table —
+// the malformed block is the one entry lost, not the whole scan.
+func parseLsofCwd(raw string) (map[int]string, bool) {
+	cwds := map[int]string{}
+	curPID, havePID := 0, false
+	for _, line := range strings.Split(raw, "\n") {
+		if line == "" {
+			continue
+		}
+		tag, val := line[0], line[1:]
+		switch tag {
+		case 'p':
+			pid, err := strconv.Atoi(val)
+			if err != nil || pid <= 0 {
+				log.Printf("orphaned-processes: lsof -Fpn: malformed pid line %q — skipped", line)
+				havePID = false
+				continue
+			}
+			curPID, havePID = pid, true
+		case 'n':
+			if !havePID {
+				log.Printf("orphaned-processes: lsof -Fpn: %q with no preceding pid — skipped", line)
+				continue
+			}
+			cwds[curPID] = val
+		default:
+			// 'f' (the cwd file descriptor) and anything else lsof emits:
+			// evidence this parser does not need.
+		}
+	}
+	return cwds, true
 }

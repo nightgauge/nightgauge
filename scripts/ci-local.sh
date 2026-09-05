@@ -337,8 +337,9 @@ run_step "ci-local.sh step inventory" bash scripts/test-ci-local-inventory.sh
 run_step "go build ./..." go build ./...
 run_group "go test ./... -count=1 (with skip accounting)" \
   bash -c 'set -o pipefail; go test -json ./... -count=1 | tee go-test.json | python3 scripts/go-test-json-echo.py && python3 scripts/check-go-test-skips.py go-test.json'
-# Mirrors ci.yml's "Test (race, whole tree)" step (#493), which replaced the
-# internal/orchestrator-scoped step from #428 — one race step, not two. The
+# Mirrors the race half of ci.yml's "Test (plain and race, concurrently)" step
+# (#493, merged with the plain pass in #1218), which replaced the
+# internal/orchestrator-scoped step from #428 — one race pass, not two. The
 # scoped step existed because the race detector is the only thing that fails
 # when a drainBackground() join is deleted from a test body, and that argument
 # was never specific to one package. Measured whole-tree cost: +6% over the

@@ -250,6 +250,25 @@
       "why": "The inverse kind (#223), matched here for the same reason and with the same urgency: its gate reason is embedded in exactly the `premature turn end:` wrapper on some paths. The distinction is what tells a triager whether there is anything on disk worth saving."
     },
     {
+      "id": "git-transport-auth-failed",
+      "kind": "git_transport_auth_failed",
+      "signal": false,
+      "clauses": [
+        ["invalid auth method"],
+        ["permission denied (publickey"],
+        ["could not read username"],
+        ["could not read password"],
+        ["invalid username or password"],
+        ["authentication failed for"],
+        ["authentication required"],
+        ["ssh: unable to authenticate"],
+        ["bad credentials"],
+        ["http 401"],
+        ["401 unauthorized"]
+      ],
+      "why": "A git or forge transport refused the credentials the machine offered (#878) \u2014 environment class, and the one thing on this ladder that no rerun, no stronger model and no better plan can clear. PLACED ABOVE premature-turn-end DELIBERATELY, and that position is the whole fix: the post-condition site composes its reason as `<first cause> \u2014 then <post-condition symptom>` (#878's first half), so the string carries `invalid auth method` AND `exited 0 but did not write expected output context` \u2014 a clause of premature-turn-end. Matching is over the whole joined string, so whichever rule sits earlier takes it, and the observed run booked a credential-less epic-branch push as an agent that ended its turn on a promise. terminal_kind is what the V2 run record carries and what recovery routing and the retro path consume, so that misattribution teaches the learning loop the stage under-performed when the machine was simply not authenticated. TERMS ARE THE TRANSPORT'S OWN WORDING, matching the git-auth spellings orchestrator.permissionPhrases already acts on so the escalation gate and the recorded kind agree on the same evidence: go-git's `invalid auth method` (transport.ErrInvalidAuthMethod, what it returns for an *http.BasicAuth against an SSH remote \u2014 #593), ssh's `permission denied (publickey`, git's credential-prompt failures, and the forge API's `bad credentials`. THE TERMS ARE A DELIBERATE SUBSET OF permissionPhrases, NOT A COPY OF IT, and the difference is not an oversight \u2014 the two lists answer different questions at different costs. The gate asks \"could a stronger model possibly fix this?\" and pays one skipped retry for a false yes, matching PER LINE against a curated classifier. This ladder asks \"what is this failure CALLED?\", matches the WHOLE joined string, is first-match-wins, and sits above sixteen other rules \u2014 so a term here that appears in someone else's failure prose silently retitles their failure. Every spelling that is unambiguous at that price is present, including `authentication required`, `http 401` and `401 unauthorized` (a 401 is a credential refusal and nothing else; the written forms are used because the bare code appears in issue numbers and temp paths, the same trap that made permissionPhrases spell them out). FOUR SPELLINGS FROM THAT LIST ARE DELIBERATELY ABSENT, each pinned by a corpus row that would go red. Bare `permission denied`: corpus row permission-denied-negative-eacces pins a filesystem EACCES as unmatched, and the permission-denied rule below already refuses that literal for the same reason \u2014 so this rule takes only the `(publickey` form, which no filesystem error carries. Bare `authentication failed`: corpus row git-transport-auth-negative-bare-authentication-failed pins a MODEL adapter's own logged-out text, a different remedy \u2014 hence the narrowed `authentication failed for`, git's own wording. Bare `unauthorized`/`forbidden` and the 403 forms: 403 is GitHub's THROTTLE code as much as its refusal code, so `403 forbidden; browser_session limit exceeded` is corpus row boundary-negative-left-edge-session-limit, expected unmatched, and would be stolen. A run whose only evidence is a bare 403 therefore still books validation_error while the gate still declines to escalate it: that divergence is the conservative answer on both sides, not a gap \u2014 the gate's wrong answer costs a retry, this rule's wrong answer mislabels someone else's failure. BELOW adapter-auth-failed (#312) on purpose: that is the MODEL adapter refusing to launch, a different remedy from a git remote refusing a key, and it must keep its signal:true reaction. signal:false like its neighbours: this is a RECORD-attribution rule, and the fleet's reaction to a credential fault is unchanged by it."
+    },
+    {
       "id": "premature-turn-end",
       "kind": "premature_turn_end",
       "signal": false,
