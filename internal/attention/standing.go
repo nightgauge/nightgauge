@@ -176,9 +176,8 @@ func (s *Store) ReconcileStanding(sw StandingSweep) (StandingResult, error) {
 		evaluated[p] = true
 	}
 
-	mu := lockFor(s.dir)
-	mu.Lock()
-	defer mu.Unlock()
+	release := acquireDir(s.dir)
+	defer release()
 
 	stored, err := s.scanLocked()
 	if err != nil {
@@ -253,9 +252,8 @@ func (s *Store) AutoResolveUnobserved(producer string, observed []string) (int, 
 		stillTrue[k] = true
 	}
 
-	mu := lockFor(s.dir)
-	mu.Lock()
-	defer mu.Unlock()
+	release := acquireDir(s.dir)
+	defer release()
 
 	stored, err := s.scanLocked()
 	if err != nil {
@@ -298,9 +296,8 @@ func (s *Store) AutoResolveKey(producer, idempotencyKey string) (bool, error) {
 		return false, fmt.Errorf("attention: auto-resolve requires an idempotency_key")
 	}
 
-	mu := lockFor(s.dir)
-	mu.Lock()
-	defer mu.Unlock()
+	release := acquireDir(s.dir)
+	defer release()
 
 	stored, err := s.scanLocked()
 	if err != nil {
@@ -559,9 +556,8 @@ func latestResolvedByKey(stored []storedRequest, key string) (*DecisionRequest, 
 // no-op, and re-muting an already-muted request re-pins to the current
 // fingerprint rather than erroring.
 func (s *Store) Mute(id, actor string) (*DecisionRequest, error) {
-	mu := lockFor(s.dir)
-	mu.Lock()
-	defer mu.Unlock()
+	release := acquireDir(s.dir)
+	defer release()
 
 	path, req, err := s.loadLocked(id)
 	if err != nil {
@@ -591,9 +587,8 @@ func (s *Store) Mute(id, actor string) (*DecisionRequest, error) {
 
 // Unmute restores alerting. Unmuting an unmuted request is a no-op.
 func (s *Store) Unmute(id, actor string) (*DecisionRequest, error) {
-	mu := lockFor(s.dir)
-	mu.Lock()
-	defer mu.Unlock()
+	release := acquireDir(s.dir)
+	defer release()
 
 	path, req, err := s.loadLocked(id)
 	if err != nil {

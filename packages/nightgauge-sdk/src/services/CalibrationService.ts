@@ -17,6 +17,7 @@
 
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { atomicWriteJSON } from "../context/ContextManager.js";
 
 /** Size buckets matching the Fibonacci complexity scoring */
 export type SizeBucket = "XS" | "S" | "M" | "L" | "XL";
@@ -448,14 +449,8 @@ export class CalibrationService {
    * Save calibration table to disk with atomic write.
    */
   static async save(calibrationPath: string, table: CalibrationTable): Promise<void> {
-    const dir = path.dirname(calibrationPath);
-    await fs.mkdir(dir, { recursive: true });
-
-    const tempPath = `${calibrationPath}.tmp`;
     const json = JSON.stringify(table, null, 2);
-
-    await fs.writeFile(tempPath, json, "utf-8");
-    await fs.rename(tempPath, calibrationPath);
+    await atomicWriteJSON(calibrationPath, json);
   }
 
   /**
