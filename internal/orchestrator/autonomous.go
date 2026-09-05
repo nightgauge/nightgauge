@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/attention"
@@ -247,6 +248,19 @@ type AutonomousState struct {
 	TokensCeiling int64           `json:"tokensCeiling"`
 	CyclesRun     int             `json:"cyclesRun"`
 	Safety        *SafetyState    `json:"safety,omitempty"`
+
+	// BackgroundInFlight is the number of detached board-recovery goroutines
+	// still running (#489). Runtime-only: Status() stamps it onto the snapshot
+	// it returns, never onto as.state, so the persisted state.json always
+	// carries 0 and loadState never resurrects a stale count.
+	//
+	// It exists because `autonomous.stop` is a PAUSE — it neither cancels nor
+	// joins this work, deliberately — so after a stop there can be a tail of
+	// board mutations in flight with no other surface reporting it. No
+	// omitempty: "zero in flight" is an answer the operator needs, and
+	// omitting it would make a settled scheduler indistinguishable from a
+	// client too old to know the field.
+	BackgroundInFlight int `json:"backgroundInFlight"`
 
 	// LifetimeIssueFailures tracks failures across sessions (NOT cleared on
 	// Resume). Used to enforce the per-issue terminal-failure cap so a single
@@ -881,9 +895,8 @@ type AutonomousScheduler struct {
 	// GitHub work through the ctx-aware GraphQL client
 	// (http.NewRequestWithContext) for the five board movers, and through
 	// exec.CommandContext for the one `gh` subprocess on the path — the
-	// sidelineHalt PR-state probe. No production path cancels today: Stop
-	// deliberately abstains (see Stop's doc), so drainBackground/cancelBackground
-	// have test callers only.
+	// sidelineHalt PR-state probe. Stop does NOT cancel (see Stop's doc); the
+	// one production path that does is Shutdown, at process teardown (#489).
 	//
 	// A generation is retired by nilling all three under bgMu; the next use
 	// lazily creates the successor. That is what makes the WaitGroup safe to
@@ -897,6 +910,17 @@ type AutonomousScheduler struct {
 	bgWG     *sync.WaitGroup
 	bgCtx    context.Context
 	bgCancel context.CancelFunc
+
+	// bgInFlight counts tracked goroutines that have been spawned and not yet
+	// returned, ACROSS generations — a retired generation's goroutines are
+	// still in flight until they return, and a shutdown that ignored them
+	// would under-report the tail it is about to abandon. Atomic rather than
+	// bgMu-guarded because Shutdown reads it while a WaitGroup Wait is
+	// outstanding and Status reads it under mu; bgMu is never held across
+	// either. Reported to operators as AutonomousState.BackgroundInFlight
+	// (#489), since `autonomous.stop` is a pause that leaves this work
+	// running and the count is the only way to see it.
+	bgInFlight atomic.Int64
 
 	// stopRefinementCh signals the refinement goroutine to exit. Kept separate
 	// from stopCh so each channel has exactly one reader, eliminating the race
@@ -2041,6 +2065,21 @@ const minGitHubQuotaHeadroom = 200
 // is safe. Issue #3976.
 const boardRecoveryTimeout = 80 * time.Minute
 
+// BackgroundDrainGrace bounds how long a process teardown waits for detached
+// board-recovery work before cancelling it (#489). It is deliberately NOT
+// boardRecoveryTimeout: that 80-minute ceiling exists so a rate-limited
+// MoveStatus can pause and complete, which is the right answer for a live
+// process and an unacceptable one for a shutdown — `nightgauge serve` would
+// hang for over an hour on a SIGTERM.
+//
+// 30 seconds is the trade the two failure modes pick out. An abandoned
+// MoveStatus leaves an issue "In progress", which the next startup's orphan
+// recovery (RecoverOrphanedRunning) reverts to Ready; an unbounded shutdown has
+// no such backstop. A fixed constant, not a config knob: there is no workspace
+// for which a different value is correct, and a knob would be one more thing
+// that can be set to zero.
+const BackgroundDrainGrace = 30 * time.Second
+
 // backgroundContext returns the current generation's parent context for
 // detached background work, creating the generation on first use. Detached
 // board-recovery ops derive their boardRecoveryTimeout deadline from the
@@ -2083,11 +2122,29 @@ func (as *AutonomousScheduler) ensureBackgroundLocked() (context.Context, *sync.
 // there would let a parked Wait return and the joining goroutine race the
 // fatal panic — in a test binary, a drain that returns into half-torn-down
 // state.
+//
+// The bgInFlight increment happens on the CALLER's goroutine, before the spawn:
+// incrementing inside the body would let a Status/Shutdown that runs between
+// the spawn and the body's first instruction report zero for work that is
+// already committed.
 func (as *AutonomousScheduler) goTracked(fn func(ctx context.Context)) {
 	as.bgMu.Lock()
 	ctx, wg := as.ensureBackgroundLocked()
 	as.bgMu.Unlock()
-	wg.Go(func() { fn(ctx) })
+	as.bgInFlight.Add(1)
+	wg.Go(func() {
+		defer as.bgInFlight.Add(-1)
+		fn(ctx)
+	})
+}
+
+// BackgroundInFlight reports how many tracked background goroutines have been
+// spawned and not yet returned. Detached board-recovery work (revert-to-Ready,
+// move-to-Done, promote-unblocked) is the population that matters: it survives
+// `autonomous.stop`, which is a pause, so this count is what tells an operator
+// there is still a tail of board mutations running (#489).
+func (as *AutonomousScheduler) BackgroundInFlight() int {
+	return int(as.bgInFlight.Load())
 }
 
 // cancelBackground cancels the current generation's lifecycle context,
@@ -2161,6 +2218,64 @@ func (as *AutonomousScheduler) drainBackground() {
 	if wg != nil {
 		wg.Wait()
 	}
+}
+
+// Shutdown is the bounded teardown: it waits up to grace for detached
+// background work to finish, then cancels whatever is left and joins it (#489).
+// Call it once, on a process's way out — `internal/ipc`'s Server.Run teardown
+// is the production call site, reached when `nightgauge serve` cancels the run
+// context from its SIGTERM/SIGINT handler.
+//
+// It is NOT a pause, and it is not Stop's job. Stop leaves the instance alive
+// for autonomous.start/resume to restart, so cancelling there would abort an
+// in-flight revertFailedIssueStatus mid-MoveStatus for no reason (see Stop's
+// doc). Shutdown cancels because the process is leaving anyway: past that
+// point the choice is between a lost board write — recoverable, the next
+// startup's orphan recovery reverts a stuck "In progress" — and a shutdown
+// that hangs on boardRecoveryTimeout's 80-minute ceiling, which is not.
+//
+// The grace timer is a time.AfterFunc rather than a `go func` racing a
+// time.After, on purpose. autonomous.go admits exactly one detached-spawn
+// construct — the one inside goTracked, pinned by
+// TestEveryDetachedSpawnInAutonomousGoesThroughGoTracked — and a helper
+// goroutine here could not go through goTracked anyway: it would add itself to
+// the very WaitGroup it then waits on. AfterFunc's callback is fully joined
+// before Shutdown returns: timer.Stop reporting true proves it never ran, and
+// reporting false means it has started, so the receive below waits for it.
+// Do not "simplify" this into a bare `go`.
+func (as *AutonomousScheduler) Shutdown(grace time.Duration) {
+	n := as.BackgroundInFlight()
+	if n == 0 {
+		// Nothing detached. Say so rather than staying silent: "no drain line
+		// in the log" must not be ambiguous between a quiet shutdown and a
+		// teardown that never reached the drain at all.
+		log.Printf("autonomous: shutdown drain: no background ops in flight")
+		return
+	}
+	log.Printf("autonomous: shutdown drain: draining %d background op(s), up to %s", n, grace)
+
+	timedOut := make(chan int, 1)
+	timer := time.AfterFunc(grace, func() {
+		still := as.BackgroundInFlight()
+		as.cancelBackground()
+		timedOut <- still
+	})
+
+	as.waitBackground()
+
+	if timer.Stop() {
+		log.Printf("autonomous: shutdown drain: drained")
+		return
+	}
+	still := <-timedOut
+	if still == 0 {
+		// The last op returned in the same instant the timer fired; the cancel
+		// reached nothing.
+		log.Printf("autonomous: shutdown drain: drained")
+		return
+	}
+	log.Printf("autonomous: shutdown drain: cancelled %d still in flight after %s — "+
+		"their board writes are abandoned and the next startup's orphan recovery will revert them", still, grace)
 }
 
 // Stop signals the autonomous scheduler to stop.
@@ -2774,6 +2889,10 @@ func (as *AutonomousScheduler) Status() AutonomousState {
 		safetySnap := as.safetyRails.State()
 		snapshot.Safety = &safetySnap
 	}
+	// Live, and stamped on the SNAPSHOT only — as.state must never carry it,
+	// or persistStateLocked would write a count that is meaningless the
+	// moment the file is closed (#489).
+	snapshot.BackgroundInFlight = as.BackgroundInFlight()
 	return snapshot
 }
 

@@ -944,6 +944,17 @@ export interface AutonomousStatusResult {
   tokensSpent: number;
   tokensCeiling: number;
   cyclesRun: number;
+  /**
+   * Detached board-recovery goroutines still running in the Go scheduler
+   * (revert-to-Ready, move-to-Done, promote-unblocked) — #489.
+   *
+   * `autonomousStop` is a PAUSE: it neither cancels nor joins this work, on
+   * purpose, because cancelling would abort an in-flight MoveStatus and leave
+   * an issue stuck "In progress". So a stop can return with a tail of board
+   * mutations still in flight, and this count is the only surface that says
+   * so. Always present (0 when settled) — never treat absence as zero.
+   */
+  backgroundInFlight: number;
   safety?: {
     tripReason?: string;
     consecutiveFailures: number;
