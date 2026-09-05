@@ -106,6 +106,37 @@ func TestAPILedgerCostIsDropInRemaining(t *testing.T) {
 	}
 }
 
+// HeaderObserved is the explicit signal SummarizeWindow now relies on instead
+// of inferring "the header was there" from Cost or Status (#1452); record()
+// must set it whenever the header actually parses, and leave it false when
+// there was nothing to parse — the latter case (Kind only, no header) is
+// exactly how the first call on a resource looks, and must not be mistaken
+// for an observed remaining:0.
+func TestAPILedgerRecordSetsHeaderObserved(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "api.jsonl")
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	l := &apiLedger{f: f, enc: json.NewEncoder(f), prev: map[string]int{}}
+
+	l.record(APILedgerRecord{Kind: "graphql"}, "4900")
+	l.record(APILedgerRecord{Kind: "graphql"}, "")
+	f.Close()
+
+	recs := readLedgerRecords(t, path)
+	if len(recs) != 2 {
+		t.Fatalf("got %d records, want 2", len(recs))
+	}
+	if !recs[0].HeaderObserved {
+		t.Error("record 0: HeaderObserved = false, want true — remainingHdr was a parseable \"4900\"")
+	}
+	if recs[1].HeaderObserved {
+		t.Error("record 1: HeaderObserved = true, want false — remainingHdr was empty, nothing was parsed")
+	}
+}
+
 func TestAPILedgerNilIsNoOp(t *testing.T) {
 	var l *apiLedger
 	// A disabled ledger is the common case; it must not panic on the hot path.

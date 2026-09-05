@@ -78,6 +78,11 @@ const createMockStateService = (overrides = {}): PipelineStateService =>
   ({
     getState: vi.fn(() => Promise.resolve(null)),
     pausePipeline: vi.fn(() => Promise.resolve()),
+    // #423: pausePipeline.ts resolves its target via runSelector, which reads
+    // these before ever calling getState(). Default to "no run installed" —
+    // tests that exercise an active pipeline set both explicitly below.
+    getRunId: vi.fn(() => null),
+    getIssueNumber: vi.fn(() => null),
     ...overrides,
   }) as unknown as PipelineStateService;
 
@@ -134,6 +139,8 @@ describe("pausePipeline Command", () => {
   });
 
   it("should show info when pipeline is already paused", async () => {
+    vi.mocked(mockStateService.getRunId).mockReturnValue("01911f6e-0000-7000-8000-000000000042");
+    vi.mocked(mockStateService.getIssueNumber).mockReturnValue(42);
     vi.mocked(mockStateService.getState).mockResolvedValue({
       paused: true,
       issue_number: 42,
@@ -150,6 +157,8 @@ describe("pausePipeline Command", () => {
   });
 
   it("should pause pipeline and update status bar", async () => {
+    vi.mocked(mockStateService.getRunId).mockReturnValue("01911f6e-0000-7000-8000-000000000042");
+    vi.mocked(mockStateService.getIssueNumber).mockReturnValue(42);
     vi.mocked(mockStateService.getState).mockResolvedValue({
       paused: false,
       issue_number: 42,

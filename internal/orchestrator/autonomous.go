@@ -3324,6 +3324,17 @@ func (as *AutonomousScheduler) runCycle(ctx context.Context) {
 		graph, buildErr = as.buildGraph(ctx)
 		if buildErr != nil {
 			log.Printf("autonomous: graph build failed: %v", buildErr)
+			// #1446: a failed build ends the cycle like any other gate above,
+			// so it owes the same two closing acts. Without them the
+			// CyclesRun/LastScanAt increment taken just above this block never
+			// reaches disk, and onCycleComplete — documented as firing after
+			// *each* scan cycle, and used as the cycle tick rather than a
+			// sleep — never fires, so anything waiting on that tick waits for
+			// the next successful build instead of the next cycle.
+			as.persistState()
+			if as.onCycleComplete != nil {
+				as.onCycleComplete()
+			}
 			return
 		}
 		log.Printf("autonomous: graph built fresh: %d nodes, scanning %d repos",

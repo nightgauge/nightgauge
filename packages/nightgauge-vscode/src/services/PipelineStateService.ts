@@ -880,6 +880,17 @@ export class PipelineStateService implements vscode.Disposable {
   }
 
   /**
+   * The issue number `beginRun` installed alongside {@link runId}, or `null`
+   * when no run is installed here. Set atomically with `runId` (both cleared
+   * together on `endRun`), so this is the identity source of truth for a
+   * run selector — unlike `getState()?.issue_number`, which reflects the
+   * last IPC snapshot and can lag or be absent right after `beginRun`.
+   */
+  getIssueNumber(): number | null {
+    return this.runId === null ? null : this.issueNumber;
+  }
+
+  /**
    * How many inbound events took Decision 6's empty-id fallback. Read by
    * tests. Non-zero is expected — the scheduler's stage.* pair carries no id —
    * so assertions target the run-bearing envelopes rather than the total.

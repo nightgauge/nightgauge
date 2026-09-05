@@ -1446,19 +1446,24 @@ the gate.
 
 ### `timeout` does not exist on macOS
 
-`timeout 900 gh pr checks --watch` exits **127** immediately with
-`command not found`, and a backgrounded wrapper reports that as its own exit
-status — so a watch that never ran can look like a watch that completed. GNU
-coreutils ships it as `gtimeout` if installed. Prefer a bounded poll loop, and
-always read the log body rather than the exit code alone.
+`timeout 900 gh api "repos/{owner}/{repo}/commits/$sha/check-runs" --paginate`
+exits **127** immediately with `command not found`, and a backgrounded wrapper
+reports that as its own exit status — so a watch that never ran can look like
+a watch that completed. GNU coreutils ships it as `gtimeout` if installed.
+Prefer a bounded poll loop, and always read the log body rather than the exit
+code alone.
 
 ### A poll loop must distinguish "false" from "I could not measure it"
 
-The natural form of a wait-for-CI loop exits on the wrong condition:
+The natural form of a wait-for-CI loop exits on the wrong condition. (Poll the
+REST check-runs endpoint on the PR's head SHA, not `gh pr checks` — that call
+is GraphQL and shares the same hourly pool a board pull can exhaust; see
+[docs/GO_BINARY.md § Agent Guidance: A Raw `gh` Board Pull](GO_BINARY.md#agent-guidance-a-raw-gh-board-pull-is-invisible-here-issue-1428).)
 
 ```bash
 # WRONG — exits when `gh` ERRORS, not when the checks settle
-until ! gh pr checks "$N" --jq 'any(.[]; .bucket=="pending")' | grep -q true; do
+until ! gh api "repos/{owner}/{repo}/commits/$sha/check-runs" --paginate \
+    --jq '[.check_runs[].status] | any(. != "completed")' | grep -q true; do
   sleep 30
 done
 echo SETTLED
@@ -1473,7 +1478,8 @@ Capture the output, bail to a `sleep` on a non-zero exit, and compare against
 the literal `false` rather than testing for the absence of `true`:
 
 ```bash
-out=$(gh pr checks "$N" --json bucket --jq 'any(.[]; .bucket=="pending")' 2>/dev/null) \
+out=$(gh api "repos/{owner}/{repo}/commits/$sha/check-runs" --paginate \
+    --jq '[.check_runs[].status] | any(. != "completed")' 2>/dev/null) \
   || { sleep 30; continue; }
 [ "$out" = "false" ] && break
 ```
