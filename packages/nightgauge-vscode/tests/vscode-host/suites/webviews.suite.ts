@@ -43,7 +43,22 @@ import { ApprovalDialog } from "../../../src/views/approval/ApprovalDialog.js";
 import { RecoveryDialog } from "../../../src/views/recovery/RecoveryDialog.js";
 import type { PipelineState } from "../../../src/services/PipelineStateService.js";
 
-/** How long a panel gets to assign `webview.html` after it is created. */
+/**
+ * How long a panel gets to assign `webview.html` after it is created.
+ *
+ * Why 5 s stays, measured rather than asserted (#1327): every case prints
+ * `render-ms <panel> <n>` so the distribution is visible in each CI run. The
+ * first hosted run with that logging (PR #1441, 2026-09-04) measured the two
+ * heaviest panels at Dashboard 203 ms and BrownfieldDashboard 201 ms, with
+ * every other panel at 0 ms (rendered before the first probe) — roughly 25x
+ * headroom under this budget. The 5 074 ms failure that motivated the issue
+ * was therefore runner starvation, not render cost, so the budget is not
+ * widened and the render is not "made faster"; what changed is that a
+ * timed-out render now still disposes its panel, so one starved run reports
+ * as one failure instead of cascading into the leaked-panel assertion. If a
+ * future run shows the heavy panels drifting toward the budget, the per-case
+ * `render-ms` lines are the measurement to derive a new one from.
+ */
 const RENDER_BUDGET_MS = 5_000;
 
 interface PanelCase {
