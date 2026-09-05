@@ -20,6 +20,7 @@
 #   E2E_OWNER_TYPE (org)           org | user
 #   CLEAN_INSTALL_WALL_CLOCK_MINUTES (90), CLEAN_INSTALL_COST_CAP_USD (15)
 #   CLEAN_INSTALL_KEEP_REPO=1      do not delete the throwaway repo/board on exit (debugging)
+#   CLEAN_INSTALL_KEEP_IMAGE=1     keep the ~2 GB per-run image on exit (debugging)
 #   CLEAN_INSTALL_VSIX=<path>      skip packaging and use this VSIX (must match the docker target)
 set -euo pipefail
 
@@ -67,6 +68,15 @@ cleanup() {
     docker rm -f "$CONTAINER" >/dev/null 2>&1 && echo "removed container $CONTAINER"
   fi
   ! docker ps -a --format '{{.Names}}' | grep -qx "$CONTAINER" || echo "WARN: container $CONTAINER still present"
+  # The per-run image is ~2 GB and tagged with $TS, so nothing dangling-only
+  # (the runner's scheduled `docker image prune`) ever reclaims it — twelve of
+  # them held 24 GB on the ci-docker host on 2026-09-04. Remove it on every
+  # exit path unless the caller wants to poke at it afterwards.
+  if [[ -n "${IMAGE:-}" && "${CLEAN_INSTALL_KEEP_IMAGE:-0}" != "1" ]]; then
+    docker image rm -f "$IMAGE" >/dev/null 2>&1 && echo "removed image $IMAGE"
+  elif [[ -n "${IMAGE:-}" ]]; then
+    echo "CLEAN_INSTALL_KEEP_IMAGE=1: keeping image $IMAGE"
+  fi
   rm -rf "$RUN_DIR/auth"
   if [[ "${CLEAN_INSTALL_KEEP_REPO:-0}" == "1" ]]; then
     echo "CLEAN_INSTALL_KEEP_REPO=1: keeping $REPO and project $PROJECT_NUMBER"
