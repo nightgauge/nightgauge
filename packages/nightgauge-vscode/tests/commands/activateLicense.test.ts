@@ -111,6 +111,25 @@ describe("activateLicense", () => {
     expect(vscode.window.showErrorMessage).toHaveBeenCalled();
   });
 
+  it("names the machine limit rather than calling the key invalid (#1454)", async () => {
+    (vscode.window.showInputBox as Mock).mockResolvedValue("IB-KEY-AT-CAP");
+    platformValidateLicense.mockResolvedValue({
+      valid: false,
+      tier: "",
+      status: "machine_limit",
+    });
+
+    await handlerFor()();
+
+    expect(setSecret).not.toHaveBeenCalled();
+    expect(vscode.window.showErrorMessage).toHaveBeenCalledWith(
+      expect.stringContaining("machine limit")
+    );
+    expect(vscode.window.showErrorMessage).not.toHaveBeenCalledWith(
+      expect.stringContaining("was not accepted")
+    );
+  });
+
   it("does nothing when the input box is cancelled", async () => {
     (vscode.window.showInputBox as Mock).mockResolvedValue(undefined);
 

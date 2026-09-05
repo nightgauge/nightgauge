@@ -23,6 +23,7 @@ import * as vscode from "vscode";
 import { IpcClient } from "../services/IpcClient";
 import { SecretStorageService, SECRET_KEYS } from "../services/SecretStorageService";
 import type { LicensePreflight } from "../platform/LicensePreflight";
+import { messageForBlockedStatus } from "../platform/LicensePreflight";
 import type { TrialStateStore } from "../platform/TrialState";
 import type { Logger } from "../utils/logger";
 
@@ -56,6 +57,7 @@ export function registerActivateLicenseCommand(
 
     let valid = false;
     let tier = "";
+    let status = "";
     try {
       await vscode.window.withProgress(
         {
@@ -67,6 +69,7 @@ export function registerActivateLicenseCommand(
           const info = await ipcClient.platformValidateLicense(key);
           valid = info.valid === true;
           tier = String(info.tier ?? "");
+          status = String(info.status ?? "");
         }
       );
     } catch (err) {
@@ -84,6 +87,16 @@ export function registerActivateLicenseCommand(
     // A valid paid/trial license reports a non-community tier. `community` (or
     // an empty tier) means the platform did not accept the key as a paid one.
     if (!valid || tier === "" || tier === "community") {
+      // A rejected key on a machine-limit status is not "invalid" — the key
+      // itself is fine, this machine just didn't fit under the seat cap.
+      // Name that specifically (reusing LicensePreflight's copy) instead of
+      // telling the operator to double-check a key that was never the
+      // problem (#1454).
+      if (status === "machine_limit") {
+        const { reason } = messageForBlockedStatus("machine_limit");
+        vscode.window.showErrorMessage(`Nightgauge: ${reason}`);
+        return;
+      }
       vscode.window.showErrorMessage(
         "Nightgauge: That license key was not accepted (invalid, expired, or revoked). Double-check the key and try again."
       );
