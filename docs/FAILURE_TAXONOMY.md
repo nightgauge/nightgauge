@@ -1632,3 +1632,43 @@ yes, that reading needs its own state.
 
 **Related classes:** Silent No-Op (the fail-open half), Vacuous Assertion (what
 step 3 exists to prevent).
+
+### Two Clocks In One Write Path (Issue #1455)
+
+**Shape:** one operation takes a time-dependent decision twice, from two
+independent reads of the clock, and the two readings are compared against each
+other. The window between them is normally sub-millisecond, so the code passes
+every test and every review — until the two readings straddle a boundary
+(midnight, a retention edge, a timezone difference between two machines), and
+then the operation contradicts itself.
+
+**The instance.** `HistoryWriter.appendAndIndex` files a run record under a
+caller-supplied `now` — that instant chooses the daily `YYYY-MM-DD.jsonl`
+filename — and then ran a retention prune whose cutoff came from its own
+`time.Now()`. Two clocks, one write: a record filed under `now` was measured
+against a different instant, so the prune riding along with the append could
+delete the daily file and the `index.json` entry the append had just produced.
+The symptom was a test whose fixture is dated by hand — a record at
+`2026-06-06`, a 90-day window — flipping to failing the day the wall clock
+passed record-date plus retention. It failed on the UTC runner and passed 30/30
+on a UTC-6 machine the same afternoon, because the two hosts were on opposite
+sides of the boundary for six hours. Nothing in the diff, the branch or the test
+was involved; the calendar was.
+
+**Diagnosis:** grep the operation for every clock read. More than one, and ask
+which of them the operation's own output is dated by — that is the only clock
+the rest of the operation may use. Prefer an injected instant threaded through
+the whole call over a convenient `time.Now()` in a helper: a helper that reads
+the clock itself cannot be made consistent with its caller by any test.
+
+**The paired invariant.** A single clock is necessary but not sufficient. Where
+a write and a cleanup share a critical section, the cleanup must also be
+forbidden from removing the thing the write just produced, because the two can
+disagree on _which_ date describes a record even when they agree on now: the
+history index entry's date comes from producer-supplied `recorded_at`, the
+filename from `now`, and nothing forces those to match. Exempt the record being
+written by identity, not by re-deriving its date.
+
+**Related classes:** Dual-Path Drift (two implementations of one decision, here
+two readings of one input), Silent No-Op (the write reports success and leaves
+nothing behind).
