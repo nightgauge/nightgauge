@@ -229,6 +229,7 @@ export type TerminalFailureKind =
   | "github_network_outage" // Issue #4002 — api.github.com unreachable at pipeline-start; transient, short global cooldown
   | "github_rate_limited" // Issue #1391 — GitHub throttled a `gh` call mid-stage (secondary rate limit / emptied primary bucket / 429); transient, short per-issue backoff, no global cooldown
   | "model_unavailable" // Issue #42 — API rejected the selected model (not on plan / unknown / model usage cap); triggers tier-downgrade fallback
+  | "git_transport_auth_failed" // Issue #878 — a git or forge transport refused the credentials the machine offered (`invalid auth method` from go-git against an SSH remote, `Permission denied (publickey)`, `could not read Username` with prompts disabled, `Bad credentials` from the forge API). Environment class: no rerun, stronger model or better plan clears it. Matched ABOVE premature_turn_end because the post-condition site composes `<first cause> — then <symptom>` and the symptom phrase is a premature-turn-end clause
   | "premature_turn_end" // Issue #74 — stage exited 0 but its gate reported no state change (agent ended its turn on a promise)
   | "dev_produced_no_changes" // Issue #202 — feature-dev's gate found the stage workspace empty (clean tree, branch level with base) despite a truthful dev context; the work landed where the pipeline never reads
   | "containment_breach" // Issue #230 — the write-containment check (#129) found the stage wrote into a repository it does not own; it exits 0 and reports success, so nothing else marks it failed
@@ -281,6 +282,7 @@ export const ALL_TERMINAL_FAILURE_KINDS: readonly TerminalFailureKind[] = [
   "github_network_outage",
   "github_rate_limited",
   "model_unavailable",
+  "git_transport_auth_failed",
   "premature_turn_end",
   "dev_produced_no_changes",
   "containment_breach",
