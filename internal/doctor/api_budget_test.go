@@ -33,14 +33,15 @@ func writeLedger(t *testing.T, root string, recs ...github.APILedgerRecord) {
 
 func rec(now time.Time, ago time.Duration, caller string, cost, remaining int) github.APILedgerRecord {
 	return github.APILedgerRecord{
-		TS:        now.Add(-ago).UTC().Format(time.RFC3339Nano),
-		Kind:      "graphql",
-		Method:    "POST",
-		Path:      "/graphql",
-		Caller:    caller,
-		Status:    200,
-		Cost:      cost,
-		Remaining: remaining,
+		TS:             now.Add(-ago).UTC().Format(time.RFC3339Nano),
+		Kind:           "graphql",
+		Method:         "POST",
+		Path:           "/graphql",
+		Caller:         caller,
+		Status:         200,
+		Cost:           cost,
+		Remaining:      remaining,
+		HeaderObserved: true,
 	}
 }
 
