@@ -7,4 +7,11 @@ regexTarget = "match"
 regexes = [
   '''ghp_1234567890abcdefghijklmn''',
   '''representative_123456789''',
+  # internal/platform/machine_binding_test.go pins the wire digest of the
+  # machine binding (#1334): two SHA-256 hex strings that MUST stay exact, so
+  # a change to the derivation re-keys every bound seat and goes red. They are
+  # digests of synthetic inputs, not credentials; gitleaks reads any 64-hex
+  # string next to "key" as a generic-api-key.
+  '''938e44a9b13926f9da3b21203557da335705a46b13fd3d39fd0b3a745935dfe0''',
+  '''ff41728112fa8992d3dcb21dfcbe66bf552359da6804b1a65d72f9af7f833743''',
 ]

@@ -453,7 +453,7 @@ func TestOrphanReconcile_PausedAndIdentityLessSnapshotsStillSkipped(t *testing.T
 	oldPause := newInterruptedRuntime(471, newTestRunID())
 	oldPause.SetPaused(true)
 	oldPath := writeRuntimeSnapshot(t, stateDir, oldPause)
-	backdate(t, oldPath, now.Add(-snapshotAgeCap-time.Hour))
+	backdate(t, oldPath, now.Add(-runstate.SnapshotRetention-time.Hour))
 
 	// No identity in the name: the Go legacy sweep owns these (Migration), and
 	// this reconciler must not touch them.
@@ -465,8 +465,8 @@ func TestOrphanReconcile_PausedAndIdentityLessSnapshotsStillSkipped(t *testing.T
 	if err := os.WriteFile(sidecar, []byte(`{"state":"running"}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	backdate(t, legacy, now.Add(-snapshotAgeCap-time.Hour))
-	backdate(t, sidecar, now.Add(-snapshotAgeCap-time.Hour))
+	backdate(t, legacy, now.Add(-runstate.SnapshotRetention-time.Hour))
+	backdate(t, sidecar, now.Add(-runstate.SnapshotRetention-time.Hour))
 
 	// The capped pause is emitted for before it goes: it was never reconciled.
 	acts := collectReconcileActions(stateDir, s.serverEvidence(now), now)
@@ -598,9 +598,9 @@ func TestClassifyCandidate_TableIsEvaluatedTopToBottom(t *testing.T) {
 		// "Unageable" must not mean "immortal": 7.4's last row says ANYTHING
 		// past the cap goes, and an undated abandonment is no evidence that
 		// abandonRun emitted, so this row emits before it removes.
-		{"an unageable abandonment past the cap is still collected", reconcileCandidate{snap: undatedAbandoned, modTime: now.Add(-snapshotAgeCap - time.Hour)}, runEvidence{}, dispositionEmitAndRemove},
+		{"an unageable abandonment past the cap is still collected", reconcileCandidate{snap: undatedAbandoned, modTime: now.Add(-runstate.SnapshotRetention - time.Hour)}, runEvidence{}, dispositionEmitAndRemove},
 		{"a fresh pause is exempt", reconcileCandidate{snap: paused, modTime: now.Add(-72 * time.Hour)}, runEvidence{}, dispositionKeep},
-		{"a capped pause is not", reconcileCandidate{snap: paused, modTime: now.Add(-snapshotAgeCap - time.Hour)}, runEvidence{}, dispositionEmitAndRemove},
+		{"a capped pause is not", reconcileCandidate{snap: paused, modTime: now.Add(-runstate.SnapshotRetention - time.Hour)}, runEvidence{}, dispositionEmitAndRemove},
 		{"a live claim is untouched", reconcileCandidate{claim: true, claimAgeKnown: true, claimAge: time.Second}, runEvidence{}, dispositionKeep},
 		{"an unageable claim is untouched", reconcileCandidate{claim: true}, runEvidence{}, dispositionKeep},
 		{"a stale claim is released", reconcileCandidate{claim: true, claimAgeKnown: true, claimAge: startupGrace + time.Second}, runEvidence{}, dispositionReleaseClaim},

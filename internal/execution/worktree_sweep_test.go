@@ -2,6 +2,7 @@ package execution
 
 import (
 	"bytes"
+	"encoding/json"
 	"log"
 	"os"
 	"os/exec"
@@ -954,4 +955,93 @@ func writeFile(t *testing.T, path, content string) {
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("write %s: %v", path, err)
 	}
+}
+
+// TestSweepMergedWorktrees_ActiveRunSkipCarriesTheProtectingArm is the operator
+// half of #443. Every protected worktree reported the identical `active-run`
+// skip, so "the stage child is executing right now" and "a paused snapshot from
+// thirteen days ago exists" were indistinguishable in both the text and the
+// --json surface — the operator had to open the state directory to audit a
+// refusal. The arm travels with the skip or the refusal is unfalsifiable.
+func TestSweepMergedWorktrees_ActiveRunSkipCarriesTheProtectingArm(t *testing.T) {
+	f := newSweepFixture(t)
+	arms := map[int]string{
+		1141: "stage-child, pid 4312",
+		1142: "paused-snapshot, 13d",
+		1143: "corrupt-snapshot, 1h",
+	}
+	paths := map[int]string{}
+	active := map[int]bool{}
+	for issue := range arms {
+		branch := "fix/" + strconv.Itoa(issue) + "-protected"
+		wt := f.addWorktree(issue, branch)
+		f.commitIn(wt, "fix-"+strconv.Itoa(issue)+".txt", "fixed\n")
+		f.squashMergeToMain(branch)
+		paths[issue] = wt
+		active[issue] = true
+	}
+
+	res, err := SweepMergedWorktrees(WorktreeSweepOptions{
+		RepoRoot:     f.root,
+		ActiveIssues: active,
+		Protected:    arms,
+	})
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if len(res.Reclaimed) != 0 {
+		t.Fatalf("no protected worktree may be reclaimed, got %+v", res.Reclaimed)
+	}
+	for issue, want := range arms {
+		assertSkippedDetail(t, res, paths[issue], SkipActiveRun, want)
+	}
+
+	// The field is omitempty and every other skip leaves it empty: a detail on a
+	// skip nobody attributed would be a claim with no source.
+	blob, err := json.Marshal(res.Skipped)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(blob), `"reasonDetail":"paused-snapshot, 13d"`) {
+		t.Errorf("--json must carry the arm beside the reason; got %s", blob)
+	}
+	if strings.Contains(string(blob), `"reason":"primary-checkout","reasonDetail"`) {
+		t.Errorf("a skip nobody attributed must carry no detail; got %s", blob)
+	}
+}
+
+// TestSweepMergedWorktrees_ActiveRunWithNoArmSaysNothing: the in-process
+// scheduler sweep protects from its own registry and has no snapshot arm to
+// name. An empty detail must stay empty rather than inventing an attribution.
+func TestSweepMergedWorktrees_ActiveRunWithNoArmSaysNothing(t *testing.T) {
+	f := newSweepFixture(t)
+	wt := f.addWorktree(1144, "fix/1144-registry-protected")
+	f.commitIn(wt, "fix.txt", "fixed\n")
+	f.squashMergeToMain("fix/1144-registry-protected")
+
+	res, err := SweepMergedWorktrees(WorktreeSweepOptions{
+		RepoRoot:     f.root,
+		ActiveIssues: map[int]bool{1144: true},
+	})
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	assertSkippedDetail(t, res, wt, SkipActiveRun, "")
+}
+
+func assertSkippedDetail(t *testing.T, res WorktreeSweepResult, path string, want SkipReason, wantDetail string) {
+	t.Helper()
+	for _, s := range res.Skipped {
+		if s.Path != path {
+			continue
+		}
+		if s.Reason != want {
+			t.Errorf("skip reason for %s = %q, want %q", path, s.Reason, want)
+		}
+		if s.ReasonDetail != wantDetail {
+			t.Errorf("skip detail for %s = %q, want %q", path, s.ReasonDetail, wantDetail)
+		}
+		return
+	}
+	t.Errorf("%s not reported as skipped; skipped=%+v", path, res.Skipped)
 }
