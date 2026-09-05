@@ -1872,7 +1872,10 @@ func (s *Server) registerMethods() {
 		if s.getLicenseSvc() == nil {
 			return platform.CommunityLicenseInfo(), nil
 		}
-		info, err := s.getLicenseSvc().Validate(ctx)
+		// params:none — this method carries no machine context, so pass the zero
+		// MachineInfo and let LicenseService reuse the identity a previous
+		// platform.validateLicense supplied (falling back to this host's own).
+		info, err := s.getLicenseSvc().Validate(ctx, platform.MachineInfo{})
 		if err != nil {
 			return nil, err
 		}
@@ -1909,10 +1912,20 @@ func (s *Server) registerMethods() {
 		// "Activate License" flow verifying a key before it's persisted — validate
 		// that arbitrary key directly, bypassing the session cache so the result
 		// reflects the entered key, not the current session license.
-		if p.LicenseKey != "" && p.LicenseKey != s.getLicenseSvc().ConfiguredKey() {
-			return s.getLicenseSvc().ValidateKey(ctx, p.LicenseKey)
+		//
+		// (#1334) The machine fields were unmarshalled and then dropped here, so
+		// every validate request reached the platform carrying only the key — no
+		// license_machines row was written and the per-tier machine limits were
+		// unenforceable. Carry them through on BOTH branches.
+		machine := platform.MachineInfo{
+			MachineID: p.MachineID,
+			Hostname:  p.Hostname,
+			Platform:  p.Platform,
 		}
-		return s.getLicenseSvc().Validate(ctx)
+		if p.LicenseKey != "" && p.LicenseKey != s.getLicenseSvc().ConfiguredKey() {
+			return s.getLicenseSvc().ValidateKey(ctx, p.LicenseKey, machine)
+		}
+		return s.getLicenseSvc().Validate(ctx, machine)
 	}
 
 	//ipc:method platformStartTrial params:PlatformStartTrialParams result:TrialResult
