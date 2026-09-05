@@ -136,6 +136,39 @@ check "a truncated SKILL.md is NOT reported as a missing field" \
 check "the summary counts it under 'unreadable', not 'errors'" \
   "$(grep -qF '0 errors, 0 warnings, 1 unreadable' "$TMP/out" && echo 0 || echo 1)"
 
+# --- Case 4: a reader that exits early cannot turn a present field into a
+# missing one (#1442) ---------------------------------------------------------
+# The validator runs under `set -o pipefail`. Its field checks used to be
+# `echo "$frontmatter" | grep -q` and its value reads `grep | head -1`; both
+# readers exit on the first match, the writer takes SIGPIPE (141) and pipefail
+# reports a PRESENT field as missing. That schedule depends on machine load, so
+# the gate went red on a busy machine and green on the identical tree a minute
+# later. This arm makes the schedule deterministic: a `grep`/`head` shim on
+# PATH that behaves as an early-exiting reader — exit 141 without reading
+# whenever it is asked to stop at the first match — so any surviving pipeline
+# of that shape fails on every run, not one run in fifty.
+SHIM="$TMP/shim"
+mkdir -p "$SHIM"
+REAL_GREP="$(command -v grep)"
+REAL_HEAD="$(command -v head)"
+{
+  echo '#!/usr/bin/env bash'
+  echo 'for a in "$@"; do case "$a" in -*q*) exit 141 ;; esac; done'
+  echo "exec \"$REAL_GREP\" \"\$@\""
+} > "$SHIM/grep"
+{
+  echo '#!/usr/bin/env bash'
+  echo 'for a in "$@"; do case "$a" in -1|-n) exit 141 ;; esac; done'
+  echo "exec \"$REAL_HEAD\" \"\$@\""
+} > "$SHIM/head"
+chmod +x "$SHIM/grep" "$SHIM/head"
+PATH="$SHIM:$PATH" run_validator "$ROOT_OK"
+RC=$?
+check "a well-formed skill still exits zero when every early-exiting reader dies with SIGPIPE (#1442)" \
+  "$([ "$RC" -eq 0 ] && echo 0 || echo 1)"
+check "no 'missing required field' is reported for a present field under the early-exit shim (#1442)" \
+  "$(grep -qF 'missing required field' "$TMP/out" && echo 1 || echo 0)"
+
 echo ""
 echo "=== $PASS passed, $FAIL failed ==="
 [ "$FAIL" -eq 0 ]
