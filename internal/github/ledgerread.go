@@ -256,15 +256,19 @@ func SummarizeWindow(recs []APILedgerRecord, since, until time.Time) LedgerWindo
 			w.GraphQLCalls++
 			w.Points += r.Cost
 			if r.Remaining >= 0 && (w.LowWaterRemaining < 0 || r.Remaining < w.LowWaterRemaining) {
-				// Remaining is only meaningful when the response carried the
-				// header; a record without one leaves Remaining at zero, which
-				// would otherwise read as "exhausted". Cost or a 2xx status is
-				// the evidence the header was there.
-				if r.Remaining > 0 || r.Cost > 0 {
+				// Remaining is only meaningful when the response actually
+				// carried the header; a record without one leaves Remaining
+				// at its zero value, which would otherwise read as
+				// "exhausted". HeaderObserved is the explicit signal that the
+				// header was there — Cost and Status cannot serve as a
+				// stand-in: a cached (304) hit legitimately has Cost == 0
+				// while still carrying a real, current Remaining value
+				// (#1452).
+				if r.HeaderObserved {
 					w.LowWaterRemaining = r.Remaining
 				}
 			}
-			if r.Remaining == 0 && r.Cost > 0 && !w.Exhausted {
+			if r.HeaderObserved && r.Remaining == 0 && !w.Exhausted {
 				w.Exhausted = true
 				w.ExhaustedResource = resource
 				w.LowWaterRemaining = 0
