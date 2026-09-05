@@ -72,6 +72,18 @@ type ActiveIssues struct {
 	// Issues holds the issue numbers with a run this scan believes is in
 	// flight. Never nil.
 	Issues map[int]bool
+	// Protected names, for every issue in Issues, the ARM that vouched for it
+	// and the evidence that arm read — "paused-snapshot, 13d",
+	// "live-sidecar, pid 431", "timestamp-lease, 12m". Never nil, and exactly
+	// one entry per true entry in Issues.
+	//
+	// Without it the protected direction is opaque where the unprotected
+	// direction is loud: `Issues` reports THAT an issue is protected and never
+	// WHICH arm did it, so "a paused snapshot from thirteen days ago exists"
+	// and "the stage child is executing right now" reach the operator as the
+	// same `active-run` skip. An operator auditing a worktree the sweep refuses
+	// to reclaim had to open the state directory to tell them apart (#443).
+	Protected map[int]string
 	// Warnings describes each file the scan could not fully account for, and
 	// each non-terminal snapshot whose liveness lease has expired (i.e. an
 	// issue this scan deliberately does NOT protect).
@@ -107,7 +119,7 @@ func ActiveIssuesFromSnapshots(stateDir string) (ActiveIssues, error) {
 // clock, so the age matrix is testable without sleeping — the same seam
 // classifyCandidate takes for the reconciler's table.
 func activeIssuesFromSnapshotsAt(stateDir string, now time.Time) (ActiveIssues, error) {
-	res := ActiveIssues{Issues: map[int]bool{}}
+	res := ActiveIssues{Issues: map[int]bool{}, Protected: map[int]string{}}
 
 	entries, err := os.ReadDir(stateDir)
 	if err != nil {
@@ -122,8 +134,8 @@ func activeIssuesFromSnapshotsAt(stateDir string, now time.Time) (ActiveIssues, 
 	// sidecar's pid is the running orchestrator's, stamped at stage start, while
 	// a snapshot's pid is either 0 (the stage-start write clears it, #534) or a
 	// stage child that had already exited when the file was written.
-	if issue, warning := sidecarInFlightIssue(stateDir); issue > 0 {
-		res.Issues[issue] = true
+	if issue, pid, warning := sidecarInFlightIssue(stateDir); issue > 0 {
+		res.protect(issue, "live-sidecar", fmt.Sprintf("pid %d", pid))
 	} else if warning != "" {
 		res.Warnings = append(res.Warnings, warning)
 	}
@@ -147,20 +159,46 @@ func activeIssuesFromSnapshotsAt(stateDir string, now time.Time) (ActiveIssues, 
 		snap, loadErr := LoadSnapshotByIdentity(stateDir, issueNumber, runID)
 		switch {
 		case infoErr != nil:
-			res.Issues[issueNumber] = true
+			// The ONE arm that stays unbounded, because the bound needs an
+			// mtime and this is precisely the entry whose mtime could not be
+			// read. Retention cannot be applied to evidence that does not
+			// exist, and inventing "old enough" for a file we failed to stat
+			// would be the permissive guess in the one place a guess destroys
+			// directories.
+			res.protect(issueNumber, "unstattable-snapshot", "")
 			res.Warnings = append(res.Warnings, fmt.Sprintf(
 				"%s: could not stat the snapshot (%v) — treating #%d as ACTIVE", name, infoErr, issueNumber))
 			continue
 		case loadErr != nil || snap == nil:
-			res.Issues[issueNumber] = true
+			// A body nobody can parse is the run whose directory must least of
+			// all be destroyed — while the file is still young enough to be a
+			// run at all. Past the retention cap it is debris with a filename,
+			// and protecting on it forever is the unbounded shape #443 names.
+			age := now.Sub(info.ModTime())
+			if age >= runstate.SnapshotRetention {
+				res.Warnings = append(res.Warnings, fmt.Sprintf(
+					"%s: unreadable or corrupt snapshot (%v) last written %s ago, past the %s retention cap — this arm no longer protects #%d; delete the file to silence this",
+					name, loadErr, formatAge(age), formatAge(runstate.SnapshotRetention), issueNumber))
+				continue
+			}
+			res.protect(issueNumber, "corrupt-snapshot", formatAge(age))
 			res.Warnings = append(res.Warnings, fmt.Sprintf(
 				"%s: unreadable or corrupt snapshot (%v) — treating #%d as ACTIVE", name, loadErr, issueNumber))
 			continue
 		case snap.RunID != runID:
 			// The name promised an identity and the body delivered a different
 			// one. The reconciler refuses such a file rather than acting on it;
-			// so does this reader, in the conservative direction.
-			res.Issues[issueNumber] = true
+			// so does this reader, in the conservative direction — and, like
+			// the corrupt arm above, only for as long as the file is young
+			// enough to stand for a run.
+			age := now.Sub(info.ModTime())
+			if age >= runstate.SnapshotRetention {
+				res.Warnings = append(res.Warnings, fmt.Sprintf(
+					"%s: carries run %q in its body and was last written %s ago, past the %s retention cap — this arm no longer protects #%d (name/body identity mismatch)",
+					name, snap.RunID, formatAge(age), formatAge(runstate.SnapshotRetention), issueNumber))
+				continue
+			}
+			res.protect(issueNumber, "identity-mismatch", formatAge(age))
 			res.Warnings = append(res.Warnings, fmt.Sprintf(
 				"%s: carries run %q in its body — treating #%d as ACTIVE (name/body identity mismatch)",
 				name, snap.RunID, issueNumber))
@@ -175,7 +213,7 @@ func activeIssuesFromSnapshotsAt(stateDir string, now time.Time) (ActiveIssues, 
 			// remove failed, which is the one shape where the tail window is both
 			// real and observable.
 			if terminalTailProtects(snap, info, now) {
-				res.Issues[issueNumber] = true
+				res.protect(issueNumber, "terminal-tail", formatAge(terminalTailAge(snap, info, now)))
 			}
 			continue
 		}
@@ -187,18 +225,26 @@ func activeIssuesFromSnapshotsAt(stateDir string, now time.Time) (ActiveIssues, 
 		// it removes the file past the 14-day cap, and this reader protects
 		// exactly as long as the file exists.
 		//
-		// RESIDUAL, stated where the protection is granted: that retention
-		// depends on an IPC server having started on this root. The reconcile
-		// pass runs only from the server's startup timer and workspace.setRoot
-		// (internal/ipc/pipeline_orphan_reconcile.go), over ITS scan roots — so
-		// in a CLI-only workspace, where `serve`/the extension never runs on this
-		// repo, nothing ages a paused snapshot out and this arm protects that
-		// issue's worktree indefinitely. `--dry-run` shows it, and deleting the
-		// snapshot is the operator's door. Bounding it here would need the 14-day
-		// cap to become a shared constant rather than a second number invented
-		// beside it.
+		// RETENTION IS APPLIED HERE TOO, not only in the reconciler (#443). The
+		// reconcile pass runs from the IPC server's startup timer and
+		// workspace.setRoot over ITS scan roots — so in a CLI-only workspace,
+		// where `serve`/the extension never runs on this repo, nothing removed
+		// the file and this arm protected that issue's worktree FOREVER. The cap
+		// is not a second number invented beside the reconciler's: both readers
+		// import runstate.SnapshotRetention, which is why the constant moved.
 		if snap.Paused {
-			res.Issues[issueNumber] = true
+			age := now.Sub(info.ModTime())
+			if age >= runstate.SnapshotRetention {
+				// 7.4's last row, reached without a resident server: a pause
+				// nobody resumed in two weeks is not a pending decision. Named,
+				// never silent — a worktree that suddenly became reclaimable
+				// must say which arm stopped vouching for it.
+				res.Warnings = append(res.Warnings, fmt.Sprintf(
+					"%s: paused snapshot last written %s ago, past the %s retention cap — the pause no longer protects #%d; resume the run or delete the snapshot to keep its worktree",
+					name, formatAge(age), formatAge(runstate.SnapshotRetention), issueNumber))
+				continue
+			}
+			res.protect(issueNumber, "paused-snapshot", formatAge(age))
 			continue
 		}
 
@@ -209,7 +255,7 @@ func activeIssuesFromSnapshotsAt(stateDir string, now time.Time) (ActiveIssues, 
 		// already exited (see the block comment). The sidecar arm above is what
 		// covers a Go-dispatched run.
 		if runstate.ProcessAlive(snap.PID) {
-			res.Issues[issueNumber] = true
+			res.protect(issueNumber, "stage-child", fmt.Sprintf("pid %d", snap.PID))
 			continue
 		}
 
@@ -220,8 +266,8 @@ func activeIssuesFromSnapshotsAt(stateDir string, now time.Time) (ActiveIssues, 
 		// stage boundary happened recently", not "the run breathed recently", and
 		// a healthy long stage can outlive it while very much alive. That is why
 		// it is the LAST arm rather than the load-bearing one.
-		if now.Sub(info.ModTime()) < runstate.LivenessWindow {
-			res.Issues[issueNumber] = true
+		if age := now.Sub(info.ModTime()); age < runstate.LivenessWindow {
+			res.protect(issueNumber, "timestamp-lease", formatAge(age))
 			continue
 		}
 
@@ -279,30 +325,79 @@ type currentRunSidecar struct {
 }
 
 // sidecarInFlightIssue reports the issue number the in-flight sidecar vouches
-// for, or 0 when nothing does. The second result is a warning for the one shape
-// worth surfacing: a sidecar that exists and cannot be parsed.
+// for and the live pid that vouches for it, or 0 when nothing does. The last
+// result is a warning for the one shape worth surfacing: a sidecar that exists
+// and cannot be parsed.
 //
 // The gate is LIVENESS, not existence. A sidecar outlives a crashed orchestrator
 // (that is what it is for — the crash synthesizer reads it at the next startup),
 // so protecting on existence alone would pin the crashed run's worktree until an
 // orchestrator happened to start again in that repo.
-func sidecarInFlightIssue(stateDir string) (int, string) {
+func sidecarInFlightIssue(stateDir string) (int, int, string) {
 	path := filepath.Join(stateDir, currentRunSidecarName)
 	data, err := os.ReadFile(path)
 	if err != nil {
 		// Absent is the normal case: no run is executing here.
-		return 0, ""
+		return 0, 0, ""
 	}
 	var sc currentRunSidecar
 	if err := json.Unmarshal(data, &sc); err != nil {
-		return 0, fmt.Sprintf(
+		return 0, 0, fmt.Sprintf(
 			"%s: in-flight sidecar is present but unparseable (%v) — it cannot name the issue it belongs to, so it protects nothing",
 			currentRunSidecarName, err)
 	}
 	if sc.IssueNumber <= 0 || !runstate.ProcessAlive(sc.PID) {
-		return 0, ""
+		return 0, 0, ""
 	}
-	return sc.IssueNumber, ""
+	return sc.IssueNumber, sc.PID, ""
+}
+
+// protect records one issue as in-flight together with the arm that vouched for
+// it and the evidence that arm read, rendered as "arm" or "arm, evidence".
+//
+// FIRST ARM WINS, and the order in the scan is deliberate: the in-flight sidecar
+// is read before the snapshots because it is the only arm whose evidence is
+// CURRENT, so an issue the sidecar already vouched for is not re-attributed to a
+// snapshot's timestamp. Nothing here can turn a protection off — a second arm
+// disagreeing is not evidence, and the reason string must name the arm that
+// actually granted the protection, not the last one to look.
+func (a *ActiveIssues) protect(issue int, arm, evidence string) {
+	if a.Issues[issue] {
+		return
+	}
+	a.Issues[issue] = true
+	if evidence == "" {
+		a.Protected[issue] = arm
+		return
+	}
+	a.Protected[issue] = arm + ", " + evidence
+}
+
+// formatAge renders a duration at the coarsest unit that still says something —
+// "13d", "3h", "12m", "40s". This is operator prose printed beside a skip, not a
+// parsed field: a lease measured in seconds and a pause measured in days share
+// one line, and `312h0m0s` beside `active-run` reads as noise.
+func formatAge(d time.Duration) string {
+	switch {
+	case d >= 24*time.Hour:
+		return fmt.Sprintf("%dd", int(d.Hours()/24))
+	case d >= time.Hour:
+		return fmt.Sprintf("%dh", int(d.Hours()))
+	case d >= time.Minute:
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	default:
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	}
+}
+
+// terminalTailAge is the age terminalTailProtects measured, so the reason string
+// quotes the evidence the arm actually read rather than re-deriving it from a
+// different field.
+func terminalTailAge(snap *RuntimeState, info os.FileInfo, now time.Time) time.Duration {
+	if snap.TerminalAt != nil {
+		return now.Sub(*snap.TerminalAt)
+	}
+	return now.Sub(info.ModTime())
 }
 
 // terminalTailProtects reports whether a TERMINAL snapshot still stands for a run

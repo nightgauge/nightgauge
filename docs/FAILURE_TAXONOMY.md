@@ -214,37 +214,38 @@ record may carry both fields, neither, or only one.
 
 ### Values
 
-| Kind                             | Meaning                                                                                                                                                                                                                                                                                                           |
-| -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `stall_kill`                     | Subagent exceeded `stall_kill_multiplier × stall_thresholds` and was forcibly killed                                                                                                                                                                                                                              |
-| `budget_exceeded`                | Pipeline-level or per-stage **token** budget ceiling tripped (with grace buffer applied)                                                                                                                                                                                                                          |
-| `validation_error`               | Context schema validation failed terminally (e.g., missing output context for the stage)                                                                                                                                                                                                                          |
-| `subagent_crash`                 | Subagent process exited non-zero with no recovery path (model escalation exhausted)                                                                                                                                                                                                                               |
-| `orchestrator_crash`             | Orchestrator process died mid-stage; record synthesized on next startup from a stale `current-run.json` sidecar                                                                                                                                                                                                   |
-| `network_unavailable`            | Extended GitHub connectivity loss aborted the run (Issue #3296) — environmental                                                                                                                                                                                                                                   |
-| `stream_idle_timeout`            | Anthropic API closed a streaming response mid-flight (Issue #3398) — environmental                                                                                                                                                                                                                                |
-| `rate_limit_quota_exhausted`     | Idle stall fired while the rate-limit bucket was drained (Issue #3386) — environmental                                                                                                                                                                                                                            |
-| `worktree_uncommitted`           | Failure **recovered**: uncommitted work was auto-committed before cleanup (Issue #3542)                                                                                                                                                                                                                           |
-| `budget_ceiling_hit`             | The USD pipeline budget ceiling killed a running stage (Issue #3542) — real spend, not a defect                                                                                                                                                                                                                   |
-| `github_quota_low`               | GitHub API rate-limit bucket below headroom at the pipeline-start preflight (Issue #3896) — environmental                                                                                                                                                                                                         |
-| `api_connection_lost`            | Anthropic API transport drop mid-stage (socket close / DNS blip; Issue #4002) — environmental                                                                                                                                                                                                                     |
-| `github_network_outage`          | api.github.com unreachable at the pipeline-start preflight (Issue #4002) — environmental                                                                                                                                                                                                                          |
-| `model_unavailable`              | API rejected the selected model: not on plan / unknown ID / model usage cap (Issue #42) — triggers tier fallback                                                                                                                                                                                                  |
-| `premature_turn_end`             | Stage exited 0 but produced no state change — the agent ended its turn on a promise (Issue #74)                                                                                                                                                                                                                   |
-| `dev_produced_no_changes`        | feature-dev's gate found the stage workspace empty despite a truthful dev context — work landed where the pipeline never reads (Issue #202)                                                                                                                                                                       |
-| `adapter_auth_failed`            | Pipeline-start adapter auth gate refused to launch: probe timed out after retry, or the adapter CLI is logged out (Issue #312) — retryable infra                                                                                                                                                                  |
-| `no_changes_produced`            | pr-create's deterministic fallback confirmed zero commits ahead of base — genuinely nothing to open a PR for (Issue #317) — planning/scope                                                                                                                                                                        |
-| `not_pipeline_actionable`        | A stage declared the issue's deliverable is not producible by any pipeline lap — counsel sign-off, an operator-only credential, a human decision (Issue #1241) — not a failure and not a deferral                                                                                                                 |
-| `validation_failed`              | feature-validate honestly failed its quality gates (`validation_status="failed"`) — organic implementation failure (Issue #326)                                                                                                                                                                                   |
-| `branch_forked`                  | The run's branch diverged from its remote; every push is rejected non-fast-forward (Issue #163) — unrecoverable by retry, needs human action                                                                                                                                                                      |
-| `abandoned_commit`               | A stage upstream of pr-create was killed/crashed after committing valid, unmerged work (clean tree, ahead of base) — the `abandoned-commit-recoverable` action matched but could neither self-heal nor set up a resume (Issue #191)                                                                               |
-| `commit_orphaned`                | A killed stage's commit landed on the wrong branch (a stray `temp-pre-push-<n>` left by a SIGKILL bypassing pre_push.go's restore-defer) and feature-validate's branch-identity self-heal could not check out the expected feature branch to recover it (Issue #266) — unrecoverable by retry, needs human action |
-| `permission_denied`              | Harness denied a tool call outright — most commonly a stage's foreground `sleep` wait loop (Issue #289) — harness fault, retryable                                                                                                                                                                                |
-| `stage_context_unreadable`       | A post-condition gate could not read a file the stage's contract says it wrote — its context file, planning's `plan_file`, or `gate-metrics.jsonl` — for a reason other than absence (EISDIR / ENOTDIR / EACCES; Issue #1237) — filesystem fault, not the work                                                    |
-| `dev_build_verification_missing` | feature-dev's context carries no `build_verification` object: the skill skipped the verification step the completion contract requires (Issue #1237, contract from #55) — agent behaviour                                                                                                                         |
-| `dev_build_verification_failed`  | feature-dev ran its build and recorded `build_verification.status="failed"` (Issue #1237) — organic implementation failure                                                                                                                                                                                        |
-| `dev_tests_failed`               | feature-dev's own test run recorded `tests_status.failed > 0` (Issue #1237) — organic implementation failure                                                                                                                                                                                                      |
-| `pr_merge_lookup_failed`         | pr-merge's gate could not establish the PR's state: `gh pr view` failed or was rate-limited on every attempt and the local-git fallback found no merge commit (Issue #1237) — infrastructure; the merge may have landed unseen                                                                                    |
+| Kind                             | Meaning                                                                                                                                                                                                                                                                                                             |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `stall_kill`                     | Subagent exceeded `stall_kill_multiplier × stall_thresholds` and was forcibly killed                                                                                                                                                                                                                                |
+| `budget_exceeded`                | Pipeline-level or per-stage **token** budget ceiling tripped (with grace buffer applied)                                                                                                                                                                                                                            |
+| `validation_error`               | Context schema validation failed terminally (e.g., missing output context for the stage)                                                                                                                                                                                                                            |
+| `subagent_crash`                 | Subagent process exited non-zero with no recovery path (model escalation exhausted)                                                                                                                                                                                                                                 |
+| `orchestrator_crash`             | Orchestrator process died mid-stage; record synthesized on next startup from a stale `current-run.json` sidecar                                                                                                                                                                                                     |
+| `network_unavailable`            | Extended GitHub connectivity loss aborted the run (Issue #3296) — environmental                                                                                                                                                                                                                                     |
+| `stream_idle_timeout`            | Anthropic API closed a streaming response mid-flight (Issue #3398) — environmental                                                                                                                                                                                                                                  |
+| `rate_limit_quota_exhausted`     | Idle stall fired while the rate-limit bucket was drained (Issue #3386) — environmental                                                                                                                                                                                                                              |
+| `worktree_uncommitted`           | Failure **recovered**: uncommitted work was auto-committed before cleanup (Issue #3542)                                                                                                                                                                                                                             |
+| `budget_ceiling_hit`             | The USD pipeline budget ceiling killed a running stage (Issue #3542) — real spend, not a defect                                                                                                                                                                                                                     |
+| `github_quota_low`               | GitHub API rate-limit bucket below headroom at the pipeline-start preflight (Issue #3896) — environmental                                                                                                                                                                                                           |
+| `api_connection_lost`            | Anthropic API transport drop mid-stage (socket close / DNS blip; Issue #4002) — environmental                                                                                                                                                                                                                       |
+| `github_network_outage`          | api.github.com unreachable at the pipeline-start preflight (Issue #4002) — environmental                                                                                                                                                                                                                            |
+| `model_unavailable`              | API rejected the selected model: not on plan / unknown ID / model usage cap (Issue #42) — triggers tier fallback                                                                                                                                                                                                    |
+| `premature_turn_end`             | Stage exited 0 but produced no state change — the agent ended its turn on a promise (Issue #74)                                                                                                                                                                                                                     |
+| `git_transport_auth_failed`      | A git or forge transport refused the credentials the machine offered — go-git's `invalid auth method` against an SSH remote, `Permission denied (publickey)`, `could not read Username` with prompts disabled, the forge API's `Bad credentials` (Issue #878) — environmental; no rerun or stronger model clears it |
+| `dev_produced_no_changes`        | feature-dev's gate found the stage workspace empty despite a truthful dev context — work landed where the pipeline never reads (Issue #202)                                                                                                                                                                         |
+| `adapter_auth_failed`            | Pipeline-start adapter auth gate refused to launch: probe timed out after retry, or the adapter CLI is logged out (Issue #312) — retryable infra                                                                                                                                                                    |
+| `no_changes_produced`            | pr-create's deterministic fallback confirmed zero commits ahead of base — genuinely nothing to open a PR for (Issue #317) — planning/scope                                                                                                                                                                          |
+| `not_pipeline_actionable`        | A stage declared the issue's deliverable is not producible by any pipeline lap — counsel sign-off, an operator-only credential, a human decision (Issue #1241) — not a failure and not a deferral                                                                                                                   |
+| `validation_failed`              | feature-validate honestly failed its quality gates (`validation_status="failed"`) — organic implementation failure (Issue #326)                                                                                                                                                                                     |
+| `branch_forked`                  | The run's branch diverged from its remote; every push is rejected non-fast-forward (Issue #163) — unrecoverable by retry, needs human action                                                                                                                                                                        |
+| `abandoned_commit`               | A stage upstream of pr-create was killed/crashed after committing valid, unmerged work (clean tree, ahead of base) — the `abandoned-commit-recoverable` action matched but could neither self-heal nor set up a resume (Issue #191)                                                                                 |
+| `commit_orphaned`                | A killed stage's commit landed on the wrong branch (a stray `temp-pre-push-<n>` left by a SIGKILL bypassing pre_push.go's restore-defer) and feature-validate's branch-identity self-heal could not check out the expected feature branch to recover it (Issue #266) — unrecoverable by retry, needs human action   |
+| `permission_denied`              | Harness denied a tool call outright — most commonly a stage's foreground `sleep` wait loop (Issue #289) — harness fault, retryable                                                                                                                                                                                  |
+| `stage_context_unreadable`       | A post-condition gate could not read a file the stage's contract says it wrote — its context file, planning's `plan_file`, or `gate-metrics.jsonl` — for a reason other than absence (EISDIR / ENOTDIR / EACCES; Issue #1237) — filesystem fault, not the work                                                      |
+| `dev_build_verification_missing` | feature-dev's context carries no `build_verification` object: the skill skipped the verification step the completion contract requires (Issue #1237, contract from #55) — agent behaviour                                                                                                                           |
+| `dev_build_verification_failed`  | feature-dev ran its build and recorded `build_verification.status="failed"` (Issue #1237) — organic implementation failure                                                                                                                                                                                          |
+| `dev_tests_failed`               | feature-dev's own test run recorded `tests_status.failed > 0` (Issue #1237) — organic implementation failure                                                                                                                                                                                                        |
+| `pr_merge_lookup_failed`         | pr-merge's gate could not establish the PR's state: `gh pr view` failed or was rate-limited on every attempt and the local-git fallback found no merge commit (Issue #1237) — infrastructure; the merge may have landed unseen                                                                                      |
 
 `permission_denied` (Issue #289) is a **harness-fault** kind, distinct from a
 stage failure. The harness rejects certain tool calls outright — the observed
@@ -760,6 +761,12 @@ exactly that:
 Both symptoms are real observations. Neither is why the run could not proceed,
 and in both the FIRST cause was already in the log.
 
+Neither is recorded that way now. A credential-less push books
+`git_transport_auth_failed` (#878). A render refusal books its own refusal's
+kind rather than the rescue's (#875) — `validation_error`, which is generic but
+is at least the failure the pipeline actually hit, not a hygiene condition
+someone else found on the way past.
+
 **The rule: a later refusal is context, never a replacement.**
 
 - `refusePreDispatch` keeps the refusal's own kind. The #3542 uncommitted-work
@@ -777,13 +784,65 @@ and in both the FIRST cause was already in the log.
   `<first cause> — then <post-condition symptom>` when the stage's captured
   output tail names a permission-class cause. The symptom is retained: it is
   still the fastest way to see where in the stage the run died.
+- That site's terminal **kind** is derived from the same first cause, not
+  hardcoded (#878). It used to book `validation_error` for every missing output,
+  so a credential-less push was recorded as a stage that wrote a malformed
+  context. It now classifies the first-cause line through the rule table and
+  falls back to `validation_error` only when the table does not recognise it.
+  The composed string is deliberately **not** what gets classified: it retains
+  the symptom phrase, which is itself a `premature-turn-end` clause, so
+  classifying the whole reason would make the answer depend on rule order rather
+  than on the evidence.
 
-**Known gap.** There is no terminal kind that says "this stage's skill would not
-compose" or "the push had no credentials". A render refusal records
-`validation_error` and a credential-less push still classifies
-`premature_turn_end` from the retained symptom phrase. Adding either kind is a
-cross-surface change (`internal/terminalkind/table.json` + the generated SDK
-mirror + the corpus + this document) and is tracked separately.
+The kind that closes the credential half is `git_transport_auth_failed`, a rule
+placed **above** `premature-turn-end` in `internal/terminalkind/table.json`. Its
+terms are the transport's own wording — `invalid auth method`,
+`permission denied (publickey`, `could not read Username` / `Password`,
+`invalid username or password`, `authentication failed for`,
+`authentication required`, `ssh: unable to authenticate`, `bad credentials`,
+`http 401`, `401 unauthorized`.
+
+Those terms are a **deliberate subset** of `orchestrator.permissionPhrases`, not
+a copy of it, because the two lists answer different questions at different
+prices. The gate asks _could a stronger model possibly fix this?_ and pays one
+skipped retry for a false yes, matching per line against a curated classifier.
+The rule table asks _what is this failure called?_, matches the whole joined
+string, is first-match-wins, and sits above sixteen other rules — so a term here
+that appears in someone else's failure prose silently retitles their failure.
+Four spellings are therefore excluded, each pinned by a corpus row that would go
+red:
+
+| Excluded                        | Pinned by                                                | Why                                                                                                 |
+| ------------------------------- | -------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| bare `permission denied`        | `permission-denied-negative-eacces`                      | A filesystem EACCES is not a transport refusal; only the `(publickey` form is taken.                |
+| bare `authentication failed`    | `git-transport-auth-negative-bare-authentication-failed` | A model adapter's own logged-out text, a different remedy; narrowed to `authentication failed for`. |
+| bare `unauthorized`/`forbidden` | `boundary-negative-left-edge-session-limit`              | Both words appear in unrelated refusal prose.                                                       |
+| the 403 forms                   | `boundary-negative-left-edge-session-limit`              | 403 is GitHub's **throttle** code as much as its refusal code.                                      |
+
+A run whose only evidence is a bare 403 therefore still books `validation_error`
+while the gate still declines to escalate it. That divergence is the
+conservative answer on both sides, not a gap: the gate's wrong answer costs one
+retry, this rule's wrong answer mislabels someone else's failure. The 401 forms
+have no such ambiguity and are in.
+
+### The cause the daemon logs has to reach the record it books (#878)
+
+Naming the kind is worthless if the evidence never arrives. In the observed run
+the `invalid auth method` line was **not** the subagent's: it came from
+`Scheduler.ensureEpicBranchForItem`, which pushes the epic base branch on the
+stage's behalf, is deliberately non-blocking, and did nothing with the failure
+but `log.Printf` it. Every mechanism above reads `runtime.StageOutputTail(stage)`
+— the SUBAGENT's captured output — so the first-cause scan found a clean tail,
+the escalation gate saw no permission evidence and escalated `haiku → sonnet`,
+and the record booked the post-condition symptom. The fix was in place and could
+not fire.
+
+`ensureEpicBranchForItem` now returns its failure text instead of only logging
+it, and `runPipeline` appends that text to the stage's evidence through
+`RuntimeState.AppendStageOutputTail` (which appends rather than replaces, so the
+subagent's own tail is kept). **Non-blocking has never meant invisible**: a
+failure the orchestrator performs on a stage's behalf belongs in that stage's
+evidence, or every consumer built on that evidence is structurally blind to it.
 
 ---
 
@@ -812,6 +871,32 @@ on `failure.CatPermission` and nothing else:
   the first version of this gate refused to escalate two of three issues in a
   wave test purely because they were numbered #401 and #403. The codes are
   honored in their written forms (`http 403`, `403 forbidden`) instead.
+- **A filesystem EACCES does not trigger the gate (#1447), but the bare
+  phrase `permission denied` still does.** Go's standard library reports an
+  ordinary filesystem permission fault as
+  `open /some/path: permission denied`, which is capability-fixable and has
+  nothing to do with forge/git-auth — but was matching the same bare clause
+  the gate uses for a genuine credential denial, and blocked escalation on it.
+  The fix is a **negative guard**, not a narrower needle list: the gate still
+  matches the bare phrase (so it keeps catching every real denial spelling —
+  multi-auth-method OpenSSH lines like
+  `Permission denied (publickey,password).`, this repo's own
+  `forge: permission denied` sentinel, `gh`/GraphQL denials, and provider
+  denials such as `Permission denied to access model`), then excludes only
+  lines shaped like `os.PathError.Error()` — a syscall verb (`open`, `read`,
+  `write`, `mkdir`, `stat`, …) followed by a colon-free path and
+  `: permission denied`, or any line containing `EACCES`. An earlier version
+  of this fix instead enumerated specific transport spellings
+  (`permission denied (publickey)`, `remote: permission denied`); that
+  narrowed correctly for the one GitHub example in the issue's AC but
+  silently stopped blocking every multi-method SSH line, this repo's own
+  forge sentinel, and the documented Vertex/model-provider denials below —
+  an allowlist of denial spellings is provably incomplete and fails open
+  (escalation proceeds) on whatever spelling was not anticipated, where the
+  negative guard fails closed (still blocks) on anything it does not
+  recognize as filesystem-shaped. The shared `failure.Classifier`'s own bare
+  clause is left as-is, since it stays broad on purpose for its own
+  curated-stderr callers.
 
 The git-transport spellings (`invalid auth method`, `authentication required`,
 `could not read Username`, `Bad credentials`, …) were added to
@@ -990,6 +1075,7 @@ operators.
 | `skill-no-op`            | high     | pr-merge context (#3275)                        | pr-merge LLM path reported success but post-merge verification found the PR is not actually merged.                   |
 | `adapter-unavailable`    | high     | dispatcher envelope                             | Primary adapter prereq failed; no fallback walked (#3223).                                                            |
 | `no-adapter-available`   | high     | dispatcher envelope                             | Full fallback chain exhausted (#3231).                                                                                |
+| `credential-failure`     | high     | run record `terminal_failure_kind`              | `git_transport_auth_failed` — a git or forge transport refused the machine's credentials (#878).                      |
 | `unknown`                | low      | fallback                                        | No structured signal or keyword match.                                                                                |
 
 ### Time-Gated `stop-hook-error` (Issue #3275)

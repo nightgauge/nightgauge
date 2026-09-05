@@ -139,7 +139,23 @@ func (as *AutonomousScheduler) sweepOrphanedComposeProjects(ctx context.Context)
 //
 // A paused run's snapshot protects its stack here, which is the intended
 // semantics of a pause: `--resume later` means the containers are still that
-// run's, not debris.
+// run's, not debris. THAT PROTECTION IS BOUNDED (#443): every snapshot arm
+// except the unstattable one stops vouching once the file is older than
+// runstate.SnapshotRetention, so a pause nobody resumed in fourteen days no
+// longer appears in res.Issues and its stack becomes an orphan candidate here
+// as well as a reclaimable worktree in the CLI sweep. This consumer is named
+// deliberately rather than left to inherit the change silently: its action is
+// `docker compose down -v`, which destroys named volumes.
+//
+// Under `serve` this is not even a behaviour change: the IPC orphan reconciler
+// runs in that same process and already COLLECTS a paused snapshot past the same
+// runstate.SnapshotRetention, so the file this arm used to read was already
+// being deleted underneath it. Under `autonomous run`, where no orphan
+// reconciler exists, the bound is the intended semantics — a pause nobody
+// resumed in a fortnight is not a pending decision, it is a stack holding
+// volumes and a worktree against a run that will never continue. Either way the
+// scan's warnings are logged just below, so an aged-out pause is named before
+// anything it used to protect is torn down.
 func (as *AutonomousScheduler) snapshotInFlightIssues(roots []string) (map[int]bool, bool) {
 	out := map[int]bool{}
 	for _, root := range roots {

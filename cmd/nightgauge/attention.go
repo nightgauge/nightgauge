@@ -383,7 +383,21 @@ type cliVerbExecutor struct {
 	workspaceRoot string
 }
 
-func (e cliVerbExecutor) ExecuteVerb(_ context.Context, req *attention.DecisionRequest, opt attention.Option) error {
+// ExecuteVerb honors ctx before doing anything else: the attention store
+// wraps every ExecuteVerb call in context.WithTimeout(ctx, verbTimeout) to
+// bound how long a verb resolution may hold the store's lock (store.go), and
+// an executor that ignores ctx makes that ceiling unenforceable. Today's
+// verbs are fast, local, non-blocking file writes, so this early exit is the
+// whole contract for now — but it is the pattern any future slower verb
+// added under the switch below must extend, not assume already covered.
+func (e cliVerbExecutor) ExecuteVerb(ctx context.Context, req *attention.DecisionRequest, opt attention.Option) error {
+	if err := ctx.Err(); err != nil {
+		return &attention.VerbExecutionError{
+			Verb:      opt.Verb,
+			Retryable: true,
+			Err:       fmt.Errorf("verb %q: %w", opt.Verb, err),
+		}
+	}
 	actor := ""
 	if req.Lifecycle.Resolved != nil {
 		actor = req.Lifecycle.Resolved.Actor

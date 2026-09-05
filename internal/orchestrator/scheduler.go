@@ -557,6 +557,15 @@ type Scheduler struct {
 	composeLister   func(ctx context.Context) ([]dockercompose.Project, error)
 	composeTeardown func(ctx context.Context, name string, opts dockercompose.TeardownOptions) (dockercompose.TeardownResult, error)
 
+	// epicBranchEnsurer is a seam over the epic base-branch auto-create so the
+	// #878 evidence routing is testable without a real remote and a real
+	// credential fault. What is under test is not the push — it is that a
+	// failure the SCHEDULER observed on the stage's behalf reaches the run's
+	// evidence, and therefore reaches the escalation gate and the recorded
+	// terminal kind. Returns the failure text, or "" when the branch was
+	// ensured. nil -> the real ensureEpicBranchForItem.
+	epicBranchEnsurer func(ctx context.Context, workspaceRoot string, item types.BoardItem) string
+
 	// StageRunner abstracts skill execution (auto mode vs IPC mode)
 	stageRunner StageRunner
 
@@ -5486,7 +5495,23 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			}
 			// Auto-create epic branch if this is a sub-issue and config allows
 			if item.ParentNumber != 0 {
-				s.ensureEpicBranchForItem(ctx, workspaceRoot, item)
+				ensure := s.ensureEpicBranchForItem
+				if s.epicBranchEnsurer != nil {
+					ensure = s.epicBranchEnsurer
+				}
+				// #878: this push is the scheduler's, not the subagent's, and
+				// it is non-blocking — the observed run's `invalid auth method`
+				// reached the daemon log and nothing else. The post-condition
+				// check further down this same loop body then reported a
+				// missing output context, scanned the stage's tail for a first
+				// cause, and found nothing, because the only place that cause
+				// existed was a log line. Appending it to the stage's evidence
+				// is what makes the cause visible to every consumer built on
+				// that evidence: the escalation gate (no model can supply a
+				// credential) and the recorded terminal kind.
+				if epicFailure := ensure(ctx, workspaceRoot, item); epicFailure != "" {
+					runtime.AppendStageOutputTail(stage, epicFailure)
+				}
 			}
 			// Scaffold the knowledge base HERE rather than in the skill
 			// (#1205). The skill's bash block called `knowledge scaffold`
@@ -6585,7 +6610,8 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			// "which post-condition tripped" is still the fastest way to see
 			// where in the stage the run died.
 			stageFailReason := outputErr.Error()
-			if firstCause := firstCauseFromOutputTail(outputTailBeforeClear); firstCause != "" {
+			firstCause := firstCauseFromOutputTail(outputTailBeforeClear)
+			if firstCause != "" {
 				stageFailReason = firstCause + " — then " + outputErr.Error()
 				log.Printf("#%d: stage %s post-condition failed, but its first cause is upstream: %s",
 					item.Number, stage, firstCause)
@@ -6645,8 +6671,32 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 				})
 				continue // Retry same stage
 			}
-			// Issue #3001: missing output context is a validation_error.
+			// Issue #3001: missing output context is a validation_error —
+			// UNLESS the tail already named the cause (#878).
+			//
+			// The reason string above composes cause-then-symptom; the KIND was
+			// hardcoded, so every missing output booked validation_error and a
+			// credential-less `git push` was recorded as a stage that wrote a
+			// malformed context. terminal_kind is what the V2 record carries
+			// and what recovery routing and the retro path key on, so that
+			// pointed the learning corpus at the pipeline's output contract
+			// instead of at the machine's credentials.
+			//
+			// The FIRST CAUSE is classified, not the composed string: the
+			// composition retains the symptom phrase, which is itself a clause
+			// of premature-turn-end, so classifying the whole reason would make
+			// the answer depend on rule order rather than on the evidence. The
+			// rule table (#306) stays the only authority for what a cause is
+			// called — this site decides only WHICH TEXT to classify, and falls
+			// back to the symptom's own kind when the table does not recognise
+			// the cause (a filesystem EACCES, say, which is deliberately
+			// unmatched).
 			terminalFailureKind = TerminalKindValidationError
+			if firstCause != "" {
+				if causeKind := ClassifyTerminalKind(firstCause); causeKind != "" {
+					terminalFailureKind = causeKind
+				}
+			}
 			return // Pipeline failed
 		}
 
@@ -8449,16 +8499,24 @@ func (s *Scheduler) cleanupMergedRemoteBranch(issueNumber int, workdir, headRefN
 // sub-issue of an epic. It is non-blocking: errors are logged and do not abort
 // the pipeline. The TypeScript enforceEpicBaseBranch() will fall back to main
 // if the branch still does not exist.
-func (s *Scheduler) ensureEpicBranchForItem(ctx context.Context, workspaceRoot string, item types.BoardItem) {
+//
+// It RETURNS the failure text ("" on success) rather than only logging it
+// (#878). Non-blocking has never meant invisible: the observed run's whole
+// terminal failure was this function's `invalid auth method`, and because the
+// only record of it was a log.Printf, the post-condition check a few hundred
+// lines below reported "issue context file missing" as the run's cause and the
+// escalation gate re-dispatched a 67,610-character prompt at a higher tier to
+// hit the identical credential. The caller appends what comes back to the
+// stage's captured evidence, which is where every downstream consumer looks.
+func (s *Scheduler) ensureEpicBranchForItem(ctx context.Context, workspaceRoot string, item types.BoardItem) string {
 	if !getAutoCreateEpicBranch(workspaceRoot) {
 		log.Printf("#%d: auto_create_epic_branch disabled — skipping epic branch creation", item.Number)
-		return
+		return ""
 	}
 
 	gitSvc, err := git.NewService(workspaceRoot)
 	if err != nil {
-		log.Printf("#%d: epic branch auto-create: git service unavailable: %v", item.Number, err)
-		return
+		return logEpicBranchFailure(item.Number, fmt.Sprintf("git service unavailable: %v", err))
 	}
 
 	// Prefer ParentTitle from board data; fall back to GitHub API
@@ -8467,16 +8525,15 @@ func (s *Scheduler) ensureEpicBranchForItem(ctx context.Context, workspaceRoot s
 		owner, repo := splitOwnerRepo(item.Repo)
 		epicIssue, apiErr := s.issueSvc.GetIssue(ctx, owner, repo, item.ParentNumber)
 		if apiErr != nil {
-			log.Printf("#%d: epic branch auto-create: fetch epic #%d title: %v", item.Number, item.ParentNumber, apiErr)
-			return
+			return logEpicBranchFailure(item.Number,
+				fmt.Sprintf("fetch epic #%d title: %v", item.ParentNumber, apiErr))
 		}
 		epicTitle = epicIssue.Title
 	}
 
 	branchName, created, err := gitSvc.EnsureEpicBranch(item.ParentNumber, epicTitle)
 	if err != nil {
-		log.Printf("#%d: epic branch auto-create: %v", item.Number, err)
-		return
+		return logEpicBranchFailure(item.Number, err.Error())
 	}
 
 	if created {
@@ -8484,6 +8541,16 @@ func (s *Scheduler) ensureEpicBranchForItem(ctx context.Context, workspaceRoot s
 	} else {
 		log.Printf("#%d: epic branch already exists: %s", item.Number, branchName)
 	}
+	return ""
+}
+
+// logEpicBranchFailure logs an epic-branch auto-create failure and returns the
+// same one-line text for the caller to record as stage evidence, so the log and
+// the run record cannot drift apart (#878).
+func logEpicBranchFailure(issueNumber int, detail string) string {
+	line := "epic branch auto-create: " + detail
+	log.Printf("#%d: %s", issueNumber, line)
+	return line
 }
 
 // getAutoCreateEpicBranch returns whether epic branch auto-creation is enabled.

@@ -16,6 +16,7 @@ import type { ConcurrentPipelineManager } from "../services/ConcurrentPipelineMa
 import type { Logger } from "../utils/logger";
 import type { StatusBarManager } from "../utils/statusBar";
 import { getStageLabel } from "../utils/skillRunner";
+import { resolveTargetRunService } from "./runSelector";
 
 /**
  * Pipeline stages in order for finding next stage
@@ -65,8 +66,19 @@ export function registerResumePipelineCommand(
       return;
     }
 
+    // Resolve which live run this command should act on — the singleton
+    // when it holds a run, one of the active concurrent slots otherwise, or
+    // a QuickPick when more than one run is live. `null` means no run
+    // anywhere holds an identity to resume.
+    const target = await resolveTargetRunService(stateService, concurrentPipelineManager);
+    if (!target) {
+      vscode.window.showInformationMessage("No active pipeline to resume.");
+      return;
+    }
+    const { service, issueNumber } = target;
+
     // Check if there's an active pipeline
-    const state = await stateService.getState();
+    const state = await service.getState();
     if (!state) {
       vscode.window.showInformationMessage("No active pipeline to resume.");
       return;
@@ -97,7 +109,7 @@ export function registerResumePipelineCommand(
     }
 
     logger.info("Resuming pipeline", {
-      issueNumber: state.issue_number,
+      issueNumber,
       lastCompletedStage,
       nextStage,
     });
@@ -106,7 +118,7 @@ export function registerResumePipelineCommand(
       // Clear paused flag in state service. Reports whether the CLEAR reached
       // Go; `false` means the persisted pause is still on disk and will
       // re-prompt on the next activation (no run identity — ADR-017 step 8).
-      const persisted = await stateService.resumePipeline();
+      const persisted = await service.resumePipeline();
       const notPersisted = persisted
         ? ""
         : " This session only — the persisted pause was not cleared (no run identity; ADR-017 step 8).";
@@ -117,23 +129,40 @@ export function registerResumePipelineCommand(
       // Set pipeline running context
       vscode.commands.executeCommand("setContext", "nightgauge.pipelineRunning", true);
 
-      // Check if the Go-driven concurrent pipeline is active.
-      // When it is, the Go scheduler drives stage progression — we just
-      // need to restore the UI state and let it continue naturally.
+      // Check if a live runPipeline() call is already HOLDING this run at its
+      // pause boundary (#423) instead of having returned. Since the stage
+      // loop now waits at the pause check rather than breaking out of it,
+      // clearing the flag above is enough for that SAME call to continue —
+      // calling runPipeline() again here would race it and, for the
+      // singleton, hit the duplicate-dispatch guard ("Pipeline is already
+      // running").
+      //   - A concurrent-slot target is held whenever any slot is active:
+      //     the target was enumerated from `getActiveSlots()` moments ago by
+      //     `resolveTargetRunService`, and under the hold design a paused
+      //     slot's `runSlotPipeline` promise stays pending, so it is still
+      //     counted there.
+      //   - The singleton target is held when `orchestrator.getIsRunning()`
+      //     is true — the case that fresh-redrives below is a singleton
+      //     whose PAUSED state was restored from disk with no live call
+      //     backing it (e.g. after an extension reload; see ADR-017 step 8).
+      const isSingletonTarget = service === stateService;
       const goActive = concurrentPipelineManager && concurrentPipelineManager.activeSlotCount > 0;
+      const singletonHeld = isSingletonTarget && orchestrator.getIsRunning();
+      const runIsHeld = goActive || singletonHeld;
 
-      if (goActive) {
-        // Go scheduler is driving — restore UI without calling
+      if (runIsHeld) {
+        // A live call already holds this run — restore UI without calling
         // HeadlessOrchestrator.runPipeline() (which would create a
-        // duplicate legacy execution path and reset pipelineRunning
-        // to false on completion, hiding the control buttons).
+        // duplicate execution path and, for the singleton, throw against the
+        // duplicate-dispatch guard).
         // Show running state — use the next pending stage or fallback to pipeline-start
         const goResumeStage = nextStage ?? "pipeline-start";
         statusBar.showRunning(goResumeStage);
         vscode.window.showInformationMessage(`Pipeline resumed.${notPersisted}`);
-        logger.info("Pipeline resumed (Go-driven path)", {
-          issueNumber: state.issue_number,
-          activeSlots: concurrentPipelineManager.activeSlotCount,
+        logger.info("Pipeline resumed (held run continues)", {
+          issueNumber,
+          activeSlots: concurrentPipelineManager?.activeSlotCount ?? 0,
+          singletonHeld,
         });
       } else if (nextStage) {
         // Legacy HeadlessOrchestrator path — no Go slots active
@@ -146,22 +175,22 @@ export function registerResumePipelineCommand(
 
         // Use runPipeline() for unified execution path (Issue #531, #535)
         logger.info("Calling runPipeline for resume", {
-          issueNumber: state.issue_number,
+          issueNumber,
           nextStage,
         });
 
         // Run pipeline asynchronously - don't await to allow UI to update
         orchestrator
-          .runPipeline(state.issue_number)
+          .runPipeline(issueNumber)
           .then((result) => {
             if (result.success) {
               logger.info("Pipeline resumed and completed successfully", {
-                issueNumber: state.issue_number,
+                issueNumber,
                 completedStages: result.completedStages,
               });
             } else {
               logger.error("Pipeline resumed but failed", {
-                issueNumber: state.issue_number,
+                issueNumber,
                 failedStage: result.failedStage,
                 error: result.error,
               });
@@ -169,7 +198,7 @@ export function registerResumePipelineCommand(
           })
           .catch((error) => {
             logger.error("Pipeline resume error", {
-              issueNumber: state.issue_number,
+              issueNumber,
               error: error instanceof Error ? error.message : String(error),
             });
             vscode.window.showErrorMessage(

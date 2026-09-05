@@ -388,6 +388,105 @@
       "rationale": "ORDERING ROW, and the inverse of the one above. The distinction is not cosmetic: this kind means there IS work on disk worth preserving before the next worktree sweep, and the generic kind means there is not."
     },
     {
+      "id": "order-git-transport-auth-beats-premature-turn-end",
+      "input": "error: failed to push some refs: invalid auth method — then stage issue-pickup exited 0 but did not write expected output context: /w/.nightgauge/context/issue-pickup.json",
+      "expected": "git_transport_auth_failed",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "The post-condition site's composed reason (scheduler.go: `<first cause> — then <post-condition symptom>`, #878)",
+      "rationale": "THE #878 ROW. The composed reason carries BOTH the cause and the symptom, and the symptom phrase is a clause of premature-turn-end. Whichever rule sits earlier wins the whole string, so ordering is the entire fix: a credential-less push booked as a turn-end tells the retro path the agent gave up when in fact the machine had no credential, and routes recovery at the agent instead of at the environment."
+    },
+    {
+      "id": "git-transport-auth-ssh-publickey",
+      "input": "git@example.org: Permission denied (publickey).\nfatal: Could not read from remote repository.",
+      "expected": "git_transport_auth_failed",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "ssh's own refusal, as git surfaces it when PushBranch shells out to the git CLI against an SSH remote (#880)",
+      "rationale": "The default remote shape for anyone who cloned over SSH, and the reason the bare phrase `permission denied` is NOT a term: this row matches on `(publickey`, which no filesystem EACCES carries. Pair it with permission-denied-negative-eacces to see the boundary — one is a key the remote will not take, the other is a directory the process cannot write, and they have opposite remedies."
+    },
+    {
+      "id": "git-transport-auth-https-no-credential-helper",
+      "input": "fatal: could not read Username for 'https://example.org': terminal prompts disabled",
+      "expected": "git_transport_auth_failed",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "git CLI over an HTTPS remote with no credential helper and GIT_TERMINAL_PROMPT=0",
+      "rationale": "The headless half of the same fault: there is no credential to offer and nobody to ask for one. Without this rule it read as an ordinary non-zero exit and fell to subagent_crash, which counts toward the lifetime failure cap for a machine that was simply never given a token."
+    },
+    {
+      "id": "git-transport-auth-https-password",
+      "input": "fatal: could not read Password for 'https://bot@example.org': No such device or address",
+      "expected": "git_transport_auth_failed",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "git CLI over HTTPS when the username resolved from the URL but no password source exists",
+      "rationale": "The password half of git's credential prompt, spelled separately because git emits one message or the other depending on which half of the pair it already has. Pinning both keeps a future edit from collapsing them into a single `could not read` term, which would also claim `could not read from remote repository` — the SSH row's second line, and a different failure."
+    },
+    {
+      "id": "git-transport-auth-invalid-username-or-password",
+      "input": "remote: Invalid username or password.\nfatal: Authentication failed for 'https://example.org/acme/widget.git/'",
+      "expected": "git_transport_auth_failed",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "A forge's HTTPS push rejection as git relays it (`remote:` prefix plus git's own fatal)",
+      "rationale": "Pins two clauses at once on the string a real HTTPS push rejection produces, and pins the NARROWED form `authentication failed for`: git always names the remote it failed against, so the `for` is free, and requiring it keeps an adapter CLI's bare `authentication failed` — a MODEL credential, a different remedy — out of a git-transport kind."
+    },
+    {
+      "id": "git-transport-auth-negative-bare-authentication-failed",
+      "input": "API Error: authentication failed while opening the model stream",
+      "expected": "",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "Negative case protecting the narrowing of the `authentication failed for` term",
+      "rationale": "THE TRAP ROW for this rule. A vendor CLI's own bare `authentication failed` is the MODEL adapter refusing, not a git remote: its remedy is `claude login`, not an SSH key or a token in a credential helper. This rule sits above sixteen others and matches the whole joined string, so widening the term to the bare phrase would let it claim adapter and forge failures alike — the exact single-ladder mistake #306 exists to prevent."
+    },
+    {
+      "id": "git-transport-auth-ssh-agent-exhausted",
+      "input": "ssh: unable to authenticate, attempted methods [none publickey], no supported methods remain",
+      "expected": "git_transport_auth_failed",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "golang.org/x/crypto/ssh, surfaced through go-git's SSH transport",
+      "rationale": "The go-git-side spelling of the SSH refusal, distinct from the CLI's `Permission denied (publickey)` because the two transports print nothing in common. #593's workaround was present on one write path and absent on another; the classification has to cover both producers or the kind depends on which call site happened to run."
+    },
+    {
+      "id": "git-transport-auth-forge-bad-credentials",
+      "input": "gh: Bad credentials (HTTP 401)",
+      "expected": "git_transport_auth_failed",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "The GitHub API's 401 body as `gh` prints it",
+      "rationale": "The forge-API sibling of the transport failures above: the token is present but rejected, so every board read, PR create and merge in the run will fail the same way. Matched on the API's own words rather than on `401`, because the bare code appears in issue numbers and temp paths — the same trap that made orchestrator.permissionPhrases spell its codes out."
+    },
+    {
+      "id": "git-transport-auth-go-git-authentication-required",
+      "input": "epic branch auto-create: push epic branch epic/900-example: push branch epic/900-example: authentication required",
+      "expected": "git_transport_auth_failed",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "go-git's transport.ErrAuthenticationRequired, as the scheduler's epic-branch auto-create surfaces it when the remote wants credentials and none were supplied",
+      "rationale": "The spelling permissionPhrases lists and FAILURE_TAXONOMY names as a git-transport form, and the one this rule shipped WITHOUT: the escalation gate declined to escalate this exact text while the record still booked validation_error, so the run simultaneously concluded 'permission failure, no model can fix it' and 'the stage wrote a malformed context'. Unambiguous at whole-string scope — nothing but a transport asks for authentication in these words — which is why it is in and the bare 403 forms are not. The prefix is the observed #878 shape: the failing push is the SCHEDULER's, appended to the stage's evidence by AppendStageOutputTail because it never passes through the subagent's output at all."
+    },
+    {
+      "id": "git-transport-auth-forge-http-401",
+      "input": "forge api: HTTP 401: Requires authentication (https://api.example.org/graphql)",
+      "expected": "git_transport_auth_failed",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "A forge REST/GraphQL 401 as the CLI prints the status line, with no `Bad credentials` body",
+      "rationale": "Pins `http 401` on its own: the sibling row git-transport-auth-forge-bad-credentials also contains HTTP 401, so without this row the clause could be deleted and the suite would stay green on the other row's `bad credentials` term. 401 is the ONE HTTP code that means exactly 'your credentials were refused' — unlike 403, which is also GitHub's throttle code and is therefore excluded (boundary-negative-left-edge-session-limit). Written form only, never the bare code: `#401` is an issue number and `/tmp/Test401.../` is a path."
+    },
+    {
+      "id": "git-transport-auth-forge-401-unauthorized",
+      "input": "remote rejected the deploy token: 401 Unauthorized",
+      "expected": "git_transport_auth_failed",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "The other written form of the same status, as an HTTP transport or a forge client wraps it",
+      "rationale": "The second written 401 form permissionPhrases carries, pinned separately because the two spellings share no substring — `http 401` does not appear in `401 Unauthorized` and deleting either clause has to go red on its own row. Bare `unauthorized` is still absent: it appears in unrelated refusal prose, and this rule matches the whole joined string above sixteen other rules."
+    },
+    {
       "id": "premature-turn-end-gate",
       "input": "premature turn end: feature-planning gate reported no state change",
       "expected": "premature_turn_end",

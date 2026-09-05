@@ -199,6 +199,32 @@ const (
 	// first in ClassifyTerminalKind. Agent-class for weighted reliability
 	// scoring (the behavior is the agent's, not the environment's).
 	TerminalKindPrematureTurnEnd = "premature_turn_end"
+	// TerminalKindGitTransportAuthFailed is set when a git or forge transport
+	// refused the credentials the machine offered — `invalid auth method` from
+	// go-git against an SSH remote, `Permission denied (publickey)` from ssh,
+	// `could not read Username` when the CLI has no credential helper and
+	// prompts are disabled, `Bad credentials` from the forge API. Environment
+	// class: nothing in the issue, the plan or the model produced it and
+	// nothing any of them can do will clear it.
+	//
+	// It exists because the failure had no name (#878). The observed run died
+	// on a credential-less epic-branch push, and every mechanism downstream saw
+	// only what it could observe locally: the post-condition check saw a
+	// missing output context and booked validation_error, and the classifier
+	// saw the retained symptom phrase and answered premature_turn_end — the
+	// kind for an agent that ended its turn on a promise. `terminal_kind` is
+	// what the V2 run record carries and what recovery routing and the retro
+	// path key on, so booking a credential fault as agent behaviour is corpus
+	// poisoning: it teaches the learning loop that the stage under-performed
+	// when the machine was simply not authenticated.
+	//
+	// Distinct from TerminalKindAdapterAuthFailed (the MODEL adapter is logged
+	// out, refused at pipeline start) and from TerminalKindPermissionDenied
+	// (#289, the harness denied a tool call). Those two are about who refused;
+	// this one is the git/forge remote. Matched above premature-turn-end
+	// because the composed post-condition reason contains BOTH spellings and
+	// the earlier rule takes the whole string.
+	TerminalKindGitTransportAuthFailed = "git_transport_auth_failed"
 	// TerminalKindDevProducedNoChanges is set when feature-dev's gate finds the
 	// stage workspace empty — clean working tree, branch level with its base —
 	// while the dev context reports files changed. A narrower, better-named

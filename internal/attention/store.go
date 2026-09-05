@@ -207,6 +207,11 @@ type JournalEntry struct {
 	// Muted records that alerting was suppressed at this transition. Consumed
 	// by ShouldNotify.
 	Muted bool `json:"muted,omitempty"`
+	// Error carries a verb-execution failure's message. Set only on
+	// ActionExpireVerbFailed — a default_action verb that failed after the
+	// expiry transition it belongs to (Action == ActionExpired, a separate
+	// entry) had already been committed (#1450).
+	Error string `json:"error,omitempty"`
 }
 
 // Journal action constants.
@@ -216,6 +221,11 @@ const (
 	ActionAcknowledged = "acknowledged"
 	ActionResolved     = "resolved"
 	ActionExpired      = "expired"
+	// ActionExpireVerbFailed records that a non-noop default_action's verb
+	// failed during SweepExpired, after the request was already committed as
+	// expired (#1450). Distinct from ActionExpired so a log-scraper can find
+	// verb failures without conflating them with a normal successful expiry.
+	ActionExpireVerbFailed = "expire_verb_failed"
 )
 
 // TransitionListener is notified after each transition is durably persisted
@@ -823,6 +833,13 @@ func (s *Store) Resolve(ctx context.Context, id, optionID, actor, steerText, not
 // writer, so expiry cannot race a concurrent resolve — a request already
 // resolved is skipped. Returns the number expired. Verbs for non-noop defaults
 // execute outside the lock.
+//
+// A verb failure does not undo the already-committed expiry (unlike Resolve,
+// which aborts the transition on a verb error, SweepExpired's transition is
+// already durable by the time the verb runs — see the loop below). Each
+// failure is instead recorded as its own ActionExpireVerbFailed journal entry
+// and joined into the returned error, so a caller that already checks
+// SweepExpired's error (e.g. sweepAttentionExpired) surfaces it (#1450).
 func (s *Store) SweepExpired(ctx context.Context, exec VerbExecutor) (int, error) {
 	now := s.nowUTC()
 
@@ -881,12 +898,39 @@ func (s *Store) SweepExpired(ctx context.Context, exec VerbExecutor) (int, error
 	}
 	release()
 
+	var verbErrs []error
 	if exec != nil {
 		for _, p := range toExecute {
-			_ = exec.ExecuteVerb(ctx, p.req, p.opt)
+			if verr := exec.ExecuteVerb(ctx, p.req, p.opt); verr != nil {
+				s.emitVerbFailure(p.req.ID, p.opt.ID, verr)
+				verbErrs = append(verbErrs, fmt.Errorf(
+					"attention: default_action verb failed for %s (option %q): %w", p.req.ID, p.opt.ID, verr))
+			}
 		}
 	}
-	return expired, nil
+	return expired, errors.Join(verbErrs...)
+}
+
+// emitVerbFailure durably records that a default_action verb failed after
+// SweepExpired already committed the expiry transition it belongs to. Not
+// emitLocked: this runs after release() with no per-dir mutex held (verbs
+// execute outside the lock by design, see SweepExpired above), and
+// history.AppendJSONL's own O_APPEND write is independently atomic against
+// concurrent appenders — the same fail-open reasoning emitLocked documents.
+func (s *Store) emitVerbFailure(id, appliedOption string, verr error) {
+	entry := JournalEntry{
+		SchemaVersion: SchemaVersion,
+		Action:        ActionExpireVerbFailed,
+		ID:            id,
+		State:         StateExpired,
+		Applied:       appliedOption,
+		At:            s.nowUTC().Format(tsLayout),
+		Error:         verr.Error(),
+	}
+	if err := history.AppendJSONL(filepath.Join(s.dir, journalFile), entry); err != nil {
+		fmt.Fprintf(os.Stderr, "attention: journal append failed (fail-open): %v\n", err)
+	}
+	fmt.Fprintf(os.Stderr, "attention: default_action verb failed for %s (option %q): %v\n", id, appliedOption, verr)
 }
 
 // --- locked helpers (caller holds the per-dir mutex) ---
