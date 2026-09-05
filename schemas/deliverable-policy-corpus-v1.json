@@ -1,6 +1,6 @@
 {
   "$comment": "Shared conformance corpus for the deliverable-schema policy (issues #1182, #1176, #1177). Read by BOTH internal/orchestrator/gates/deliverable_policy_test.go and packages/nightgauge-sdk/src/__tests__/context/deliverablePolicy.test.ts. Two implementations of one policy drift silently; this file is the anti-drift device — a rule added on one side and not the other fails the other side's suite. Every row of the #1182 mismatch table appears here.",
-  "policy_version": "1",
+  "policy_version": "2",
   "cases": [
     {
       "id": "dev-210.files_changed.array-with-complete-sibling-manifest",
@@ -189,6 +189,59 @@
           "schema_version": "1.9",
           "issue_number": 341,
           "quality_checks": {}
+        }
+      }
+    },
+    {
+      "id": "dev-1482.build_verification-recorded-as-prose-under-quality_checks",
+      "evidence": "#1482 — the version was stamped onto a document missing a required object, and the gate then failed the completed run over that object",
+      "stage": "dev",
+      "input": {
+        "schema_version": "1.0",
+        "issue_number": 69,
+        "files_changed": { "created": [], "modified": ["content/index.md"], "deleted": [] },
+        "quality_checks": { "build": "hugo --minify succeeded with no errors" }
+      },
+      "expect": {
+        "verdict": "quarantined",
+        "untrustworthy": ["build_verification"],
+        "notes": [
+          {
+            "field": "schema_version",
+            "disposition": "repaired",
+            "rule": "any.schema_version.stamped"
+          },
+          {
+            "field": "build_verification",
+            "disposition": "quarantined",
+            "rule": "dev.build_verification.recorded_as_prose"
+          }
+        ],
+        "doc": {
+          "schema_version": "1.9",
+          "issue_number": 69,
+          "files_changed": { "created": [], "modified": ["content/index.md"], "deleted": [] },
+          "quality_checks": { "build": "hugo --minify succeeded with no errors" }
+        }
+      }
+    },
+    {
+      "id": "dev.build_verification-absent-with-no-build-record-anywhere",
+      "evidence": "#55 — a deliverable with no build evidence at all is the gate's genuinely-skipped-verification case; the policy has nothing to be untrustworthy about",
+      "stage": "dev",
+      "input": {
+        "schema_version": "1.9",
+        "issue_number": 70,
+        "files_changed": { "created": [], "modified": ["main.go"], "deleted": [] }
+      },
+      "expect": {
+        "verdict": "clean",
+        "untrustworthy": [],
+        "notes": [],
+        "doc": {
+          "schema_version": "1.9",
+          "issue_number": 70,
+          "files_changed": { "created": [], "modified": ["main.go"], "deleted": [] }
         }
       }
     },

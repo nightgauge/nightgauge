@@ -36,7 +36,7 @@
  */
 
 /** Identifies the rule table. Must match `deliverable.PolicyVersion` in Go. */
-export const POLICY_VERSION = "1";
+export const POLICY_VERSION = "2";
 
 /** The key under which the policy records what it did, in the deliverable. */
 export const POLICY_MARKER_FIELD = "_deliverable_policy";
@@ -208,6 +208,7 @@ export function applyDeliverablePolicy(kind: string, decoded: unknown): PolicyOu
   if (kind === "dev") {
     applyDevFilesChangedRule(doc, notes);
     applyQualityChecksRule(doc, notes);
+    applyDevBuildVerificationRule(doc, notes);
   } else if (kind === "validate") {
     applySkippedPhasesRule(doc, notes);
     applyGateMetricsRule(doc, notes);
@@ -406,6 +407,56 @@ function applyQualityChecksRule(doc: Record<string, unknown>, notes: PolicyNote[
       detail: `"${v}" is not a quality-check verdict and no closed rule maps it; the field was dropped rather than reported as a verdict it does not mean`,
     });
   }
+}
+
+/**
+ * Name an absent `build_verification` untrustworthy when the deliverable
+ * recorded its build somewhere else (#1482).
+ *
+ * The observed shape is a stage that ran its build, wrote the outcome as free
+ * text under `quality_checks.build` ("hugo --minify succeeded…"), and never
+ * emitted the `{ran, status}` object the contract requires. The schema-version
+ * rule then stamped `"1.9"` onto that document and the policy said nothing else
+ * — a certified version on a document whose shape had not been checked, handed
+ * to a gate that rejects the shape.
+ *
+ * Quarantined, never repaired. `quality_checks.build` is prose; reading
+ * "succeeded" out of it and writing `{ran: true, status: "passed"}` is the
+ * inference every rule here is forbidden to make, and it would certify a build
+ * verdict no rule witnessed. The field is named untrustworthy instead and the
+ * Go gate derives `build_verification.status = "unverified"` from git;
+ * feature-validate runs the suite for real.
+ *
+ * Nothing is dropped — `quality_checks.build` stays as the operator's evidence
+ * of what the stage believed it ran. The rule fires only when that evidence is
+ * present: a deliverable with no build record anywhere is #55's
+ * genuinely-skipped-verification case, which the gate already handles.
+ */
+function applyDevBuildVerificationRule(doc: Record<string, unknown>, notes: PolicyNote[]): void {
+  if (doc.build_verification !== undefined && doc.build_verification !== null) return;
+  const qc = doc.quality_checks;
+  if (!isPlainObject(qc)) return;
+  const build = qc.build;
+  if (build === undefined || build === null) return;
+  notes.push({
+    field: "build_verification",
+    disposition: "quarantined",
+    rule: "dev.build_verification.recorded_as_prose",
+    detail:
+      `build_verification is absent and quality_checks.build carries the build outcome as free text (${truncateForDetail(build)}); ` +
+      "no closed rule maps prose to {ran, status} without inferring a verdict, so the object is named untrustworthy rather than certified alongside the stamped schema_version",
+  });
+}
+
+/** Render an arbitrary deliverable value for a note without pasting a paragraph. */
+function truncateForDetail(v: unknown): string {
+  if (typeof v !== "string") return jsonShape(v);
+  const s = v.trim();
+  const max = 80;
+  // Count code points, not UTF-16 units, so the Go half truncates identically
+  // and a surrogate pair never gets cut in half in an operator's evidence line.
+  const r = [...s];
+  return `"${r.length > max ? `${r.slice(0, max).join("")}…` : s}"`;
 }
 
 /**

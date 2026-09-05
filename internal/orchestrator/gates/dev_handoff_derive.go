@@ -165,6 +165,19 @@ func ensureDevHandoff(workspace string, issueNumber int, ctxPath string, now tim
 			return authoredOutcome
 		}
 		if declaredFileCount(doc) > 0 {
+			// #1482: a file list is not a complete deliverable. A stage that
+			// recorded every file it touched and never wrote
+			// `build_verification` is the same defect as one that wrote no
+			// handoff at all — the receipt is missing an object the contract
+			// requires, and git can supply the honest degraded version of it.
+			// Failing here instead discarded a completed docs run and halted
+			// the repo behind it. The absent-object condition derives exactly
+			// as the absent-file condition does: status "unverified", never
+			// "passed", with feature-validate running the suite for real.
+			if condition, missing := missingRequiredDevObject(doc); missing {
+				return deriveHandoff(workspace, issueNumber, ctxPath,
+					condition, doc, now, authoredOutcome)
+			}
 			return authoredOutcome
 		}
 		return deriveHandoff(workspace, issueNumber, ctxPath,
@@ -223,6 +236,11 @@ func deriveHandoff(workspace string, issueNumber int, ctxPath, condition string,
 	} else {
 		notes = append(notes, "no stage-authored handoff existed — approach, decisions and known gaps are lost for this run")
 	}
+	// The policy verdict on the document the STAGE wrote. Re-applying the
+	// policy below judges the derived document, which is healthy by
+	// construction and therefore silent — so the only place the defect that
+	// triggered this derivation is still visible is here (#1482).
+	notes = append(notes, declined.Policy.Summary()...)
 	// Re-apply the policy to the document just written, so the gate judges
 	// the derived deliverable by the same rule table as an authored one.
 	// Deriving a document that the schema would reject is a defect this
@@ -313,6 +331,12 @@ var narrativeFields = []string{
 	"architectural_constraints",
 	"commit_sha",
 	"created_at",
+	// What the policy did to the stage's own document, carried across the
+	// derivation. Re-applying the policy to the derived document finds a
+	// healthy deliverable and stamps nothing, so without this the note that
+	// explains WHY the derivation happened — #1482's quarantined
+	// `build_verification` — would be erased by the repair it triggered.
+	deliverable.PolicyMarkerField,
 }
 
 // probeMode reports which ground-truth probe produced the file list, so a
@@ -364,6 +388,28 @@ func writeDevContext(path string, doc map[string]any) error {
 		return err
 	}
 	return os.Rename(tmpName, path)
+}
+
+// missingRequiredDevObject reports whether a present, file-listing dev context
+// is missing an object the gate's checks require, and names the condition for
+// the derivation record (#1482).
+//
+// Only `build_verification` qualifies. It is the one object whose absence the
+// gate treats as terminal in its own right — `tests_status` is optional by
+// design (check 5 reads it only when recorded), and `quality_checks` feeds no
+// control flow. A condition list that grew past what the gate actually rejects
+// would start deriving over documents that would have passed, replacing a
+// stage's own narrative with git's for no gain.
+//
+// A `build_verification` that is PRESENT is never touched here, whatever it
+// says: `status: "failed"` is a real fault over real work and must keep
+// reaching check 4 as a terminal failure. Derivation repairs an absent record,
+// not a bad one.
+func missingRequiredDevObject(doc map[string]any) (string, bool) {
+	if raw, present := doc["build_verification"]; !present || raw == nil {
+		return "dev context lacks build_verification", true
+	}
+	return "", false
 }
 
 // declaredFileCount counts the paths a decoded dev context claims, across the
