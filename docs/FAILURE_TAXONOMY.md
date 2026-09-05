@@ -1058,25 +1058,93 @@ under `.nightgauge/retros/`. These categories drive the retro
 dashboard view, auto-issue creation, and recommendations surfaced to
 operators.
 
-| Category                 | Severity | Source                                          | Notes                                                                                                                 |
-| ------------------------ | -------- | ----------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| `budget-exceeded`        | high     | extension log: budget enforcer                  | Token or cost ceiling tripped before grace.                                                                           |
-| `shipped-but-overbudget` | low      | state-aware override                            | `budget-exceeded` finding with a MERGED PR — work shipped (#3108).                                                    |
-| `false-negative-shipped` | low      | state-aware override (#3275)                    | Generalizes the shipped-but-merged path: ANY pr-merge failure where `gh pr view` shows MERGED reclassifies here.      |
-| `state-management`       | high     | extension log: schema/context errors            | Pipeline contract failed (missing context file, schema validation).                                                   |
-| `ci-infrastructure`      | medium   | gh CLI / CI poll                                | External CI checks failed.                                                                                            |
-| `model-capability`       | high     | extension parser                                | Empty/garbled model output.                                                                                           |
-| `timeout`                | medium   | free-form                                       | Configurable stage timeout (distinct from skillRunner stall-kill).                                                    |
-| `validation-failure`     | high     | subagent stdout                                 | Tests/typecheck/build failed.                                                                                         |
-| `stall-kill`             | medium   | skillRunner                                     | Subagent went silent past idle/hard-cap threshold.                                                                    |
-| `cost-cap`               | high     | skillRunner log line OR diagnostic file (#3275) | Per-stage `pipeline.stage_cost_caps` fired. The file-existence check (`<stage>-cost-capped.log`) is deterministic.    |
-| `infrastructure-outage`  | low      | OfflineManager / DNS                            | Network outage during the run.                                                                                        |
-| `stop-hook-error`        | medium   | Claude CLI notification (time-gated #3275)      | Pre-result `stop-hook-error` notification — the genuine #3204 silent-hang signature. Post-result emissions are noise. |
-| `skill-no-op`            | high     | pr-merge context (#3275)                        | pr-merge LLM path reported success but post-merge verification found the PR is not actually merged.                   |
-| `adapter-unavailable`    | high     | dispatcher envelope                             | Primary adapter prereq failed; no fallback walked (#3223).                                                            |
-| `no-adapter-available`   | high     | dispatcher envelope                             | Full fallback chain exhausted (#3231).                                                                                |
-| `credential-failure`     | high     | run record `terminal_failure_kind`              | `git_transport_auth_failed` — a git or forge transport refused the machine's credentials (#878).                      |
-| `unknown`                | low      | fallback                                        | No structured signal or keyword match.                                                                                |
+| Category                  | Severity | Source                                          | Notes                                                                                                                 |
+| ------------------------- | -------- | ----------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `budget-exceeded`         | high     | extension log: budget enforcer                  | Token or cost ceiling tripped before grace.                                                                           |
+| `shipped-but-overbudget`  | low      | state-aware override                            | `budget-exceeded` finding with a MERGED PR — work shipped (#3108).                                                    |
+| `false-negative-shipped`  | low      | state-aware override (#3275)                    | Generalizes the shipped-but-merged path: ANY pr-merge failure where `gh pr view` shows MERGED reclassifies here.      |
+| `state-management`        | high     | extension log: schema/context errors            | Pipeline contract failed (missing context file, schema validation).                                                   |
+| `ci-infrastructure`       | medium   | gh CLI / CI poll                                | External CI checks failed.                                                                                            |
+| `model-capability`        | high     | extension parser                                | Empty/garbled model output.                                                                                           |
+| `timeout`                 | medium   | free-form                                       | Configurable stage timeout (distinct from skillRunner stall-kill).                                                    |
+| `validation-failure`      | high     | subagent stdout                                 | Tests/typecheck/build failed.                                                                                         |
+| `stall-kill`              | medium   | skillRunner                                     | Subagent went silent past idle/hard-cap threshold.                                                                    |
+| `cost-cap`                | high     | skillRunner log line OR diagnostic file (#3275) | Per-stage `pipeline.stage_cost_caps` fired. The file-existence check (`<stage>-cost-capped.log`) is deterministic.    |
+| `infrastructure-outage`   | low      | OfflineManager / DNS                            | Network outage during the run.                                                                                        |
+| `stop-hook-error`         | medium   | Claude CLI notification (time-gated #3275)      | Pre-result `stop-hook-error` notification — the genuine #3204 silent-hang signature. Post-result emissions are noise. |
+| `skill-no-op`             | high     | pr-merge context (#3275)                        | pr-merge LLM path reported success but post-merge verification found the PR is not actually merged.                   |
+| `adapter-unavailable`     | high     | dispatcher envelope                             | Primary adapter prereq failed; no fallback walked (#3223).                                                            |
+| `no-adapter-available`    | high     | dispatcher envelope                             | Full fallback chain exhausted (#3231).                                                                                |
+| `quota-exhausted`         | low      | run record kind (#1448)                         | A provider or forge quota WINDOW is closed. Reopens on a clock; no config change helps.                               |
+| `model-unavailable`       | high     | run record kind (#1448)                         | The API rejected the selected model, so the stage never ran. Routing/plan fault, not model quality.                   |
+| `permission-denied`       | medium   | run record kind (#1448)                         | The harness refused a tool call. Not a defect — fix the pattern the stage reached for.                                |
+| `human-decision-required` | medium   | run record kind (#1448)                         | Architecture approval halt, or a stage declared the deliverable is not producible by any lap. Parked, not broken.     |
+| `dependency-blocked`      | low      | run record kind (#1448)                         | Dispatched over an open `blockedBy` edge. The dispatch decision is the defect, not the stage.                         |
+| `no-work-required`        | low      | run record kind (#1448)                         | Nothing to produce: the issue was already closed, or the branch holds no commits to open a PR for.                    |
+| `work-stranded`           | high     | run record kind (#1448)                         | The work EXISTS where the pipeline does not look (uncommitted, stray branch, diverged remote, commit with no PR).     |
+| `containment-breach`      | high     | run record kind (#1448)                         | The stage wrote into a repository it does not own (#129) while reporting success.                                     |
+| `validation-inconclusive` | medium   | run record kind (#1448)                         | A validation tier ran and executed zero tests — nothing failed, so nothing was verified (#221).                       |
+| `credential-failure`      | high     | run record `terminal_failure_kind`              | `git_transport_auth_failed` — a git or forge transport refused the machine's credentials (#878).                      |
+| `unknown`                 | low      | fallback                                        | No structured signal or keyword match.                                                                                |
+
+### The Record's Kind Is Decided Here, Not Guessed (Issue #1448)
+
+`terminal_failure_kind` on the V3 run record is the authoritative field: the
+kind was decided by `internal/terminalkind/table.json` and booked by Go, so by
+the time `AutoRetroService` reads it the cause is already named. Its extractor
+must therefore DECIDE — dropping the kind and falling through to the prose
+keyword passes is how a credential fault whose kind the record carried exactly
+was written up as `state-management`, with the remedy "re-run the failed stage
+after verifying context" (#878).
+
+**Authoritative does not mean first.** The extractor sits after the
+`merge-blocked` and `skill-no-op` extractors and before the `stop-hook-error`
+and context-decode ones, and every one of those positions is load-bearing. A
+kind names _how the run ended_; an extractor that owns a case knows _whether
+ending that way was correct_. The pr-merge gate proves the two are not the same
+verdict: for one run against a non-mergeable PR it emits `pr_merge_unmerged` as
+the kind **and** `mergeStateStatus=BLOCKED` in the reason. Ordered first, the
+kind wins and a correctly declined red PR is written up as "the stage reported
+success but the work never landed" — a bug report against a run that did its
+job. Ordered where it is, `merge-blocked` keeps the case and the kind rides
+along as a secondary finding.
+
+The kind is read from the **threaded field**, never by regexing the joined
+evidence corpus. That corpus concatenates the terminal reason, the scoped
+session log, the deliverable and the history record, so a
+`"terminal_failure_kind"` key belonging to some other run quoted in a log would
+win on first match — the source-blindness #134 and #1144 both fixed.
+`collectEvidence` fills the field from the run record for _this_ issue
+(`readRecordTerminalKind`) whenever the failing gate supplied no kind, which it
+does on every non-gate failure, so there is one path rather than two.
+
+The stage-authored `feedback[]` pass runs **unconditionally**, not only when the
+structured passes come up empty. "Only if pass 1 is empty" meant "never" once
+the record decided all thirty-nine kinds, because every V3 failure record
+carries one. A category the structured passes already found absorbs the
+feedback detail, so the stage's own rationale and evidence ride on the finding
+they explain instead of being dropped as a duplicate.
+
+Until #1448 the map held five kinds against a vocabulary of thirty-nine, and
+the other thirty-four took that path by default. It is now exhaustive, and
+exhaustive by construction rather than by discipline:
+
+- `TERMINAL_KIND_CATEGORY` is typed `Record<TerminalFailureKind, …>`, so a kind
+  added to the vocabulary is a **compile error** until someone chooses its
+  category.
+- `TerminalFailureKind` is pinned to Go's `TerminalKind*` constants in both
+  directions by `failureClassifier.parity.test.ts` (#229), and every
+  `table.json` kind is pinned to those constants by
+  `TestTable_EveryKindHasCorpusCoverage`. A new kind cannot reach `table.json`
+  without arriving in the map.
+- `AutoRetroService.terminalKindCoverage.test.ts` closes the loop from the
+  retro end: it reads `table.json` itself and fails when a kind in it produces
+  no category through the record extractor.
+
+Categories are shared between kinds only where the **remedy** is genuinely
+shared; the kind's own name always rides along on the finding's evidence line
+(`<stage> ended with terminal kind <kind>: <reason>`), so grouping never costs
+the operator the specific cause.
 
 ### Time-Gated `stop-hook-error` (Issue #3275)
 
