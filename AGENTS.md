@@ -96,6 +96,15 @@ git push -u origin feat/description-of-change
   deprecation shims, migration fallbacks, or compat knobs. Consolidate N
   overlapping options to one, delete the rest from schema/config/docs, and
   surface the single resolved value. Consistency over compatibility.
+- **A behaviour-changing PR carries its changelog entry.** Add it under
+  `## [Unreleased]` in `CHANGELOG.md` (and the extension's changelog when the
+  change is visible from VS Code), written for the reader of the release —
+  what changed and why it matters, one to three lines, issue number in
+  parentheses. Never a review log, a verification note, or a bare `#### #1234`
+  heading; `scripts/check-changelog.sh` rejects that shape. A release is cut
+  by a rollover PR **before** the tag, and `release.yml` refuses a tag the
+  changelog does not name. See
+  [docs/GIT_WORKFLOW.md § Changelog](docs/GIT_WORKFLOW.md#changelog).
 - **Ship the best solution; don't offer menus.** If you spot a real gap or a
   better approach, file the issue and execute it. Propose the recommended fix
   and do it — avoid "quick fix vs proper fix" choices and "want me to…?"

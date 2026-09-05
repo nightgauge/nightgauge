@@ -110,6 +110,23 @@ jobs:
           echo "Production release: $TAG (version $VERSION)"
 
       # ---------------------------------------------------------------------
+      # CHANGELOG GATE — the tag must already have its section in CHANGELOG.md
+      # and the extension's changelog (docs/GIT_WORKFLOW.md § Changelog). This
+      # runs before any credential probe or build so a missing rollover PR
+      # fails in seconds and publishes nothing. The section body becomes the
+      # GitHub Release notes in place of GoReleaser's raw commit list.
+      # ---------------------------------------------------------------------
+      - name: Changelog has a section for this tag
+        id: changelog
+        run: |
+          set -euo pipefail
+          bash scripts/check-changelog.sh --tag "${GITHUB_REF_NAME}"
+          NOTES="${RUNNER_TEMP}/release-notes.md"
+          bash scripts/check-changelog.sh --extract "${GITHUB_REF_NAME}" > "$NOTES"
+          echo "notes=$NOTES" >> "$GITHUB_OUTPUT"
+          echo "Release notes ($(wc -l < "$NOTES") lines) from CHANGELOG.md § [${GITHUB_REF_NAME#v}]"
+
+      # ---------------------------------------------------------------------
       # PREFLIGHT — validate the Homebrew tap credential BEFORE anything is
       # published. GoReleaser creates the GitHub Release before it pushes the
       # cask, so a tap token found wanting late leaves a half-published
@@ -163,10 +180,10 @@ jobs:
                 ;;
             esac
 
-            echo "goreleaser_args=release --clean" >> "$GITHUB_OUTPUT"
+            echo "goreleaser_args=release --clean --release-notes ${{ steps.changelog.outputs.notes }}" >> "$GITHUB_OUTPUT"
           else
             echo "::notice::HOMEBREW_TAP_GITHUB_TOKEN not set — skipping the Homebrew cask push. Binaries and VSIXs still publish."
-            echo "goreleaser_args=release --clean --skip=homebrew" >> "$GITHUB_OUTPUT"
+            echo "goreleaser_args=release --clean --skip=homebrew --release-notes ${{ steps.changelog.outputs.notes }}" >> "$GITHUB_OUTPUT"
           fi
 
       # Cross-compile every target binary up front so each platform-specific

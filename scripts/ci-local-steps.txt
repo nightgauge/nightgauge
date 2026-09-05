@@ -39,6 +39,8 @@ Generated VSCode contributions in sync
 @types/vscode <= engines.vscode
 Link-check gate regression suite
 Markdown link check
+Changelog gate regression suite
+Changelog names every released tag
 Mirror drift gate regression suite
 Issue-body contract gate regression suite
 Issue-body heading contract

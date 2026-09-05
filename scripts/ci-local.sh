@@ -67,6 +67,8 @@ REQUIRED_FILES=(
   packages/nightgauge-vscode/scripts/check-engine-types.mjs
   scripts/check-md-links.sh
   scripts/test-check-md-links.sh
+  scripts/check-changelog.sh
+  scripts/test-check-changelog.sh
   scripts/test-mirror-drift-gate.sh
   scripts/test-issue-body-contract.sh
   scripts/check-issue-body-contract.py
@@ -557,6 +559,13 @@ run_step "@types/vscode <= engines.vscode" \
 #     no longer failing on a dead internal link.
 run_group "Link-check gate regression suite" bash scripts/test-check-md-links.sh
 run_group "Markdown link check" bash scripts/check-md-links.sh
+
+# Changelog ↔ release contract (docs/GIT_WORKFLOW.md § Changelog): every
+# released tag has a section in CHANGELOG.md and the extension's changelog, and
+# no heading is a bare issue number. Self-test first so the gate is proven
+# able to go red before it is trusted to be green.
+run_group "Changelog gate regression suite" bash scripts/test-check-changelog.sh
+run_group "Changelog names every released tag" bash scripts/check-changelog.sh
 
 # 11. Drift-gate self-test — proves the mirror gate below still fails closed
 #     rather than passing vacuously, the defect it was created to fix (#539),

@@ -538,7 +538,12 @@ git show main:skills/your-skill/SKILL.md | grep version
 
 ### Updating Changelogs
 
-When making changes to a skill, update its `CHANGELOG.md`:
+Every behaviour-changing PR adds an entry to the **root `CHANGELOG.md`** under
+`## [Unreleased]` — see
+[docs/GIT_WORKFLOW.md § Changelog](docs/GIT_WORKFLOW.md#changelog) for what an
+entry is and how a release section is cut; `scripts/check-changelog.sh`
+enforces the contract in CI. Skills additionally keep their own per-skill
+changelog. When making changes to a skill, update its `CHANGELOG.md`:
 
 1. Add entry to the `[Unreleased]` section
 2. Use the appropriate subsection:
@@ -617,7 +622,7 @@ Before submitting:
 - [ ] SKILL.md follows agentskills.io specification (if applicable)
 - [ ] Version number is appropriate (not downgraded)
 - [ ] **Version consistency**: plugin.json matches SKILL.md version
-- [ ] **Changelog updated**: CHANGELOG.md has entry for changes
+- [ ] **Changelog updated**: root `CHANGELOG.md` has an entry under `[Unreleased]` (and the skill's own changelog, for skill changes)
 - [ ] No hardcoded secrets or credentials
 - [ ] Documentation is clear and complete
 - [ ] All JSON/YAML files are valid syntax
