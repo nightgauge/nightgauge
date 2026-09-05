@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/flock"
+	"github.com/nightgauge/nightgauge/internal/hometest"
 )
 
 // leaseHolderEnv makes the test binary re-exec itself as a lease holder.
@@ -26,12 +27,22 @@ const (
 // only ever refuses a second call inside one process would pass those tests and
 // still let the real failure through, so the contract is exercised against a
 // real second process here.
+// It also carries this package's HOME isolation, because Go allows one
+// TestMain per package and this is where it lives. See internal/hometest for
+// why the isolation is the binary's job rather than each test's: the claim
+// directory is machine-global, and a test that forgets t.Setenv writes into —
+// and on cleanup deletes from — the operator's own registry (#1426).
 func TestMain(m *testing.M) {
 	if root := os.Getenv(leaseHolderEnv); root != "" {
+		// The holder subprocess takes its HOME from the parent test, not from
+		// a fresh isolated one: the point is to contend for the SAME lock.
 		holdLeaseAndBlock(root)
 		return
 	}
-	os.Exit(m.Run())
+	cleanup := hometest.Isolate()
+	code := m.Run()
+	cleanup()
+	os.Exit(code)
 }
 
 func holdLeaseAndBlock(root string) {

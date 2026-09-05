@@ -399,6 +399,28 @@ describe("LicensePreflight", () => {
       expect(result.actionUrl).toContain("github.com/nightgauge/nightgauge/issues");
     });
 
+    it("reports status=machine_limit and a seat-limit message for a machine-limit rejection (#1454)", async () => {
+      mockClient.platformValidateLicense.mockResolvedValue({
+        valid: false,
+        tier: "",
+        status: "machine_limit",
+      });
+      const preflight = new LicensePreflight(
+        mockClient.client,
+        machineFingerprint,
+        () => "ib_live_abc123"
+      );
+
+      const result = await preflight.validate();
+      expect(result.allowed).toBe(false);
+      // Must NOT collapse to "expired" (normalizeLicenseStatus's unknown-status
+      // fallback) — the whole point is telling the operator seats are full,
+      // not that the key itself is invalid.
+      expect(result.status).toBe("machine_limit");
+      expect(result.reason).toContain("machine limit");
+      expect(result.actionUrl).toContain("/billing");
+    });
+
     it("reports status=expired and a renew actionUrl for an expired license", async () => {
       mockClient.platformValidateLicense.mockResolvedValue({
         valid: false,

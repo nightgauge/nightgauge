@@ -12,6 +12,7 @@
  * - Paid tier, active: plan name + renewal date + "Manage Subscription" action
  * - Expired: warning + "Update Payment" action
  * - Revoked / suspended: error + "Contact Support" action
+ * - Machine limit reached: warning + "Manage Machines" action
  * - Offline: appends "Offline — showing cached data" child
  *
  * @see Issue #1477 - Add subscription status display to dashboard sidebar
@@ -88,6 +89,7 @@ class SubscriptionChildItem extends BaseTreeItem {
  *   (#4156), and "Manage Subscription" action.
  * When expired: shows warning icon, "Update Payment" action.
  * When revoked/suspended: shows error icon, "Contact Support" action.
+ * When machine_limit: shows warning icon, "Manage Machines" action.
  * When offline: appends "Offline — showing cached data" child in any state.
  *
  * @example
@@ -158,6 +160,14 @@ export class SubscriptionSectionTreeItem extends BaseTreeItem {
       this.label = "Subscription";
       this.description = "Canceled";
       this.iconPath = new vscode.ThemeIcon("error", new vscode.ThemeColor("errorForeground"));
+      this.collapsibleState = vscode.TreeItemCollapsibleState.Collapsed;
+      return;
+    }
+
+    if (status === "machine_limit") {
+      this.label = "Subscription";
+      this.description = "Machine Limit Reached";
+      this.iconPath = new vscode.ThemeIcon("warning", new vscode.ThemeColor("terminal.ansiYellow"));
       this.collapsibleState = vscode.TreeItemCollapsibleState.Collapsed;
       return;
     }
@@ -236,6 +246,28 @@ export class SubscriptionSectionTreeItem extends BaseTreeItem {
           },
           tooltip: "Contact support for assistance",
           contextValue: "subscription-contact-support",
+        })
+      );
+    } else if (status === "machine_limit") {
+      children.push(
+        new SubscriptionChildItem("Machine Limit Reached", {
+          icon: "warning",
+          iconColor: "terminal.ansiYellow",
+          contextValue: "subscription-plan",
+          tooltip: "Your license has reached its machine limit for this account.",
+        })
+      );
+      children.push(
+        new SubscriptionChildItem("Manage Machines", {
+          icon: "gear",
+          iconColor: "terminal.ansiYellow",
+          command: {
+            command: "nightgauge.openSubscriptionUrl",
+            title: "Manage Machines",
+            arguments: [buildAccountUrl()],
+          },
+          tooltip: "Remove a machine or upgrade your plan to add this one",
+          contextValue: "subscription-manage-machines",
         })
       );
     } else if (status === "community" || tier === "community") {

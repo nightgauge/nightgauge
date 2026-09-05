@@ -15,6 +15,9 @@ package ipc
 
 import (
 	"bufio"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -482,4 +485,139 @@ func TestIPCPlatform_MockServerReceivesRequest(t *testing.T) {
 	if healthCalls == 0 {
 		t.Errorf("mock server received no /v1/health requests, received: %v", received)
 	}
+}
+
+// ─── Machine binding (#1334) ───────────────────────────────────────────────
+
+// captureLicenseValidateBodies swaps the default /v1/license/validate handler
+// for one that records every decoded request body before replying with the
+// standard valid-pro fixture. The returned func snapshots what the platform
+// actually received.
+func captureLicenseValidateBodies(handlers map[string]http.HandlerFunc) func() []map[string]interface{} {
+	var (
+		mu     sync.Mutex
+		bodies []map[string]interface{}
+	)
+	handlers["/v1/license/validate"] = func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]interface{}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		mu.Lock()
+		bodies = append(bodies, body)
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(licenseValidResponse) //nolint:errcheck
+	}
+	return func() []map[string]interface{} {
+		mu.Lock()
+		defer mu.Unlock()
+		out := make([]map[string]interface{}, len(bodies))
+		copy(out, bodies)
+		return out
+	}
+}
+
+// assertMachineBinding checks that the platform received a machine-bound
+// validate request: the seat identity is HMAC-SHA256(licenseKey, rawMachineID)
+// exactly — never the raw machine id the caller supplied, and never a digest
+// that also folds in the volatile hostname — plus the hostname/platform
+// binding context in the clear.
+//
+// The expectation is derived here from the spec (the license key over the
+// machine id, and nothing else), not by calling into the daemon's own
+// derivation, so a change to that derivation fails this test instead of being
+// followed by it. That is the point of pinning it at THIS boundary: the digest
+// is the primary key of a license_machines row, and the value asserted here is
+// the one that actually left a separately-compiled daemon process.
+func assertMachineBinding(t *testing.T, body map[string]interface{}, licenseKey, rawMachineID, hostname, platform string) {
+	t.Helper()
+	mac := hmac.New(sha256.New, []byte(licenseKey))
+	mac.Write([]byte(rawMachineID))
+	want := hex.EncodeToString(mac.Sum(nil))
+
+	machineID, _ := body["machineId"].(string)
+	switch {
+	case machineID == "":
+		t.Errorf("platform request body carries no machineId — machine seat limits cannot be enforced: %+v", body)
+	case machineID == rawMachineID:
+		t.Errorf("machineId = %q, want the contract hash of the machine id, not the raw machine id", machineID)
+	case machineID != want:
+		t.Errorf("machineId = %q, want HMAC-SHA256(licenseKey, machineId) = %q — the seat identity derivation drifted;\n"+
+			"if hostname or platform were folded in, one installation re-binds as a new machine whenever it is renamed",
+			machineID, want)
+	}
+	if got, _ := body["hostname"].(string); got != hostname {
+		t.Errorf("hostname = %q, want %q", got, hostname)
+	}
+	if got, _ := body["platform"].(string); got != platform {
+		t.Errorf("platform = %q, want %q", got, platform)
+	}
+}
+
+// TestIPCPlatform_ValidateLicense_EnteredKeySendsMachineBinding covers the
+// "Activate License" path (an entered key that differs from the session key →
+// LicenseService.ValidateKey). The extension supplies machineId/hostname/
+// platform over IPC; they must reach the platform's validate request body.
+//
+// @see Issue #1334
+func TestIPCPlatform_ValidateLicense_EnteredKeySendsMachineBinding(t *testing.T) {
+	handlers := defaultPlatformHandlers()
+	bodies := captureLicenseValidateBodies(handlers)
+	srv := newMockPlatformServer(t, handlers)
+	h := newIpcTestHarnessWithPlatform(t, srv.URL, "test-api-key")
+	h.awaitReady()
+
+	id := h.sendRequest("platform.validateLicense", map[string]interface{}{
+		"licenseKey": "ib_test_pro_abc123",
+		"machineId":  "editor-install-uuid-1",
+		"hostname":   "build-box",
+		"platform":   "darwin",
+	})
+	resp := h.readResponseFor(id, nil)
+	if resp.Error != nil {
+		t.Fatalf("platform.validateLicense returned error: %+v", resp.Error)
+	}
+
+	got := bodies()
+	if len(got) == 0 {
+		t.Fatal("platform received no /v1/license/validate request")
+	}
+	assertMachineBinding(t, got[len(got)-1], "ib_test_pro_abc123", "editor-install-uuid-1", "build-box", "darwin")
+}
+
+// TestIPCPlatform_ValidateLicense_SessionKeySendsMachineBinding covers the
+// session-key path (the key the daemon was spawned with → LicenseService.
+// Validate, the cached path LicensePreflight actually takes on every pipeline
+// run). It is the path the staging activation took when no license_machines
+// row was written.
+//
+// @see Issue #1334
+func TestIPCPlatform_ValidateLicense_SessionKeySendsMachineBinding(t *testing.T) {
+	t.Setenv("NIGHTGAUGE_LICENSE_KEY", "ib_test_pro_session")
+
+	handlers := defaultPlatformHandlers()
+	bodies := captureLicenseValidateBodies(handlers)
+	srv := newMockPlatformServer(t, handlers)
+	h := newIpcTestHarnessWithPlatform(t, srv.URL, "test-api-key")
+	h.awaitReady()
+
+	id := h.sendRequest("platform.validateLicense", map[string]interface{}{
+		"licenseKey": "ib_test_pro_session",
+		"machineId":  "editor-install-uuid-2",
+		"hostname":   "laptop-7",
+		"platform":   "linux",
+	})
+	resp := h.readResponseFor(id, nil)
+	if resp.Error != nil {
+		t.Fatalf("platform.validateLicense returned error: %+v", resp.Error)
+	}
+
+	got := bodies()
+	if len(got) == 0 {
+		t.Fatal("platform received no /v1/license/validate request")
+	}
+	last := got[len(got)-1]
+	if key, _ := last["key"].(string); key != "ib_test_pro_session" {
+		t.Fatalf("validate went to the wrong path: key = %q, want the session key", key)
+	}
+	assertMachineBinding(t, last, "ib_test_pro_session", "editor-install-uuid-2", "laptop-7", "linux")
 }

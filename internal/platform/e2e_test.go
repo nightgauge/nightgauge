@@ -139,7 +139,7 @@ func TestE2E_License_Validate(t *testing.T) {
 	}
 
 	svc := platform.NewLicenseService(c)
-	info, err := svc.Validate(context.Background())
+	info, err := svc.Validate(context.Background(), platform.MachineInfo{})
 	if err != nil {
 		t.Fatalf("validate license: %v", err)
 	}
@@ -196,7 +196,7 @@ func TestE2E_OfflineFallback(t *testing.T) {
 
 	// License should fall back to community
 	svc := platform.NewLicenseService(c)
-	info, err := svc.Validate(context.Background())
+	info, err := svc.Validate(context.Background(), platform.MachineInfo{})
 	if err != nil {
 		t.Fatalf("validate: %v", err)
 	}
