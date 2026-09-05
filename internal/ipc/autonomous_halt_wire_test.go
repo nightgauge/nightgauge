@@ -51,9 +51,19 @@ func newHaltedServer(t *testing.T, state orchestrator.AutonomousState) (*Server,
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(func() {
 		cancel()
-		deadline := time.Now().Add(2 * time.Second)
+		// Cancelling ctx no longer stops a loop these tests start: the resume
+		// verb spawns Run on detachedRunCtx (#1425), so the loop outlives every
+		// context the test holds. Stop it explicitly and refuse to return while
+		// it is alive — a loop that survives its test keeps writing to the
+		// process-wide logger and races the next test's log capture, which is
+		// how main went red at d9818067 (TestNotifyComplete_DiagnosesAnUnregisteredServedModel).
+		as.Stop()
+		deadline := time.Now().Add(10 * time.Second)
 		for as.IsRunning() && time.Now().Before(deadline) {
 			time.Sleep(20 * time.Millisecond)
+		}
+		if as.IsRunning() {
+			t.Errorf("the autonomous dispatch loop is still running after Stop(); a leaked loop races later tests' log capture")
 		}
 	})
 	return server, as, ctx
