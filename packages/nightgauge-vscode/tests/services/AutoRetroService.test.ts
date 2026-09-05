@@ -511,8 +511,14 @@ describe("AutoRetroService", () => {
           text:
             "pr-merge reported success but PR #73 is not merged (state: OPEN). " +
             'blocked by failing check "Sync E2E (Docker)" (mergeStateStatus=UNSTABLE). ' +
-            "Pipeline halted after 2 verification attempts.",
-          sourcesAnalyzed: ["terminal_reason"],
+            "Pipeline halted after 2 verification attempts.\n" +
+            // The run record the collector always appends, carrying the kind
+            // the pr-merge gate emits for this very case (#1448). Without it
+            // this guard measured a corpus production never produces, and the
+            // ordering it exists to protect was not actually pinned.
+            '{"schema_version":"3","issue_number":73,"terminal_failure_kind":"pr_merge_unmerged"}',
+          sourcesAnalyzed: ["terminal_reason", "execution_history"],
+          terminalKind: "pr_merge_unmerged",
         },
         "pr-merge"
       );
@@ -711,11 +717,16 @@ describe("AutoRetroService", () => {
         {
           text: '{"schema_version":"3","issue_number":3204,"outcome":"failed","terminal_failure_kind":"stall_kill","total_duration_ms":6812294}',
           sourcesAnalyzed: ["execution_history"],
+          // Threaded the way the collector delivers it (#1448):
+          // `readRecordTerminalKind` lifts the kind off the run record for
+          // THIS issue, so the classifier consults one authoritative field
+          // instead of first-match-wins over the joined evidence corpus.
+          terminalKind: "stall_kill",
         },
         "feature-dev"
       );
       expect(findings[0].category).toBe("stall-kill");
-      expect(findings[0].evidence.join("\n")).toContain("terminal_failure_kind");
+      expect(findings[0].evidence.join("\n")).toContain("stall_kill");
     });
 
     it("source-tagged: extension TypeError noise does NOT trip validation-failure", () => {
@@ -1554,9 +1565,12 @@ describe("AutoRetroService", () => {
       const findings = AutoRetroService.classifyFailure(
         {
           // Deliberately unhelpful prose: on the real run the gate reason was
-          // never in the corpus the classifier read.
-          text: "",
-          sourcesAnalyzed: ["terminal_reason"],
+          // never in the corpus the classifier read. The run record IS present
+          // though — the collector always appends it (#1448) — and passing
+          // `text: ""` here is what let this pin stay green while the kind's
+          // category was re-pointed at `state-management` underneath it.
+          text: '{"schema_version":"3","issue_number":1056,"terminal_failure_kind":"dev_handoff_missing"}',
+          sourcesAnalyzed: ["terminal_reason", "execution_history"],
           terminalReason: "",
           terminalKind: "dev_handoff_missing",
         },
@@ -1574,8 +1588,15 @@ describe("AutoRetroService", () => {
         {
           // The real merge-blocked shape: a deterministically-known blocker. Declining
           // to merge a red PR is CORRECT behaviour, not a skill no-op.
-          text: 'blocked by failing check "Sync E2E (Docker)" (mergeStateStatus=UNSTABLE)',
-          sourcesAnalyzed: ["terminal_reason"],
+          //
+          // The record JSON is part of that shape (#1448). Omitting it made
+          // this guard blind to the very ordering it names: the extractor that
+          // reads the kind saw no record, so it could not displace
+          // merge-blocked here no matter where it sat in the list.
+          text:
+            'blocked by failing check "Sync E2E (Docker)" (mergeStateStatus=UNSTABLE)\n' +
+            '{"schema_version":"3","issue_number":1056,"terminal_failure_kind":"premature_turn_end"}',
+          sourcesAnalyzed: ["terminal_reason", "execution_history"],
           terminalReason:
             'blocked by failing check "Sync E2E (Docker)" (mergeStateStatus=UNSTABLE)',
           terminalKind: "premature_turn_end",

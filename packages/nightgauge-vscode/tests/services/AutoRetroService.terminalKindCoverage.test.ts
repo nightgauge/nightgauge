@@ -65,14 +65,28 @@ function canonicalKinds(): string[] {
   return [...kinds].sort();
 }
 
-/** A minimal V3 run record carrying exactly one terminal kind and nothing else. */
-function classifyRecord(kind: string) {
+/**
+ * A V3 run record carrying exactly one terminal kind, shaped the way the
+ * COLLECTOR delivers it.
+ *
+ * `terminalKind` is threaded alongside the record text, because that is what
+ * `collectEvidence` does: the failing gate supplies the kind on the two gate
+ * paths, and for every other kind `readRecordTerminalKind` lifts it off the
+ * run record for this issue. Feeding only the record JSON — as this helper
+ * originally did — measured the map in isolation and left every extractor
+ * after the record one unreachable, so the guard could not go red on a
+ * misordering. That is the hole #1448's review found, and it is why the
+ * contested kinds below get a full corpus rather than a bare record.
+ */
+function classifyRecord(kind: string, stage = "feature-dev") {
+  const record = `{"schema_version":"3","issue_number":1448,"outcome":"failed","terminal_failure_kind":"${kind}","total_duration_ms":1000}`;
   return AutoRetroService.classifyFailure(
     {
-      text: `{"schema_version":"3","issue_number":1448,"outcome":"failed","terminal_failure_kind":"${kind}","total_duration_ms":1000}`,
+      text: record,
       sourcesAnalyzed: ["execution_history"],
+      terminalKind: kind,
     },
-    "feature-dev"
+    stage
   );
 }
 
@@ -93,7 +107,7 @@ describe("AutoRetroService: terminal-kind coverage (#1448)", () => {
       const findings = classifyRecord(kind);
       const primary = findings[0];
       const fromRecord = primary.evidence.some((line) =>
-        line.includes(`Run record terminal_failure_kind: ${kind}`)
+        line.includes(`ended with terminal kind ${kind}`)
       );
       if (!fromRecord || primary.category === "unknown") {
         undecided.push(`${kind} -> ${primary.category}`);
@@ -149,6 +163,10 @@ describe("AutoRetroService: terminal-kind coverage (#1448)", () => {
       ["architecture_approval_required", "human-decision-required"],
       ["issue_closed", "no-work-required"],
       ["pr_merge_unmerged", "skill-no-op"],
+      // `state-management` recommends "re-run the failed stage after verifying
+      // context". This kind means the work EXISTS on disk and must be
+      // preserved, so that remedy is the one thing it must never get (#1056).
+      ["dev_handoff_missing", "skill-no-op"],
       ["stage_context_unreadable", "state-management"],
       ["api_overloaded", "infrastructure-outage"],
     ];
@@ -156,6 +174,147 @@ describe("AutoRetroService: terminal-kind coverage (#1448)", () => {
     it.each(PINNED)("%s classifies as %s", (kind, expected) => {
       expect(kinds, `${kind} is no longer a canonical kind`).toContain(kind);
       expect(classifyRecord(kind)[0].category).toBe(expected);
+    });
+  });
+
+  /**
+   * The kinds another extractor already OWNS, exercised with the corpus
+   * production actually produces.
+   *
+   * A run does not carry its terminal kind alone. `internal/orchestrator/gates`
+   * returns a gate reason, `scheduler.go` wraps it, the collector appends the
+   * history record, and all three arrive together. The bare-record cases above
+   * cannot see an ordering mistake because with no terminal reason and no
+   * companion signal every extractor after the record one returns null by
+   * construction — so these cases supply the reason too, and assert on the
+   * PRIMARY verdict, which is the one an operator reads and the one that
+   * carries the recommendation.
+   */
+  describe("a kind never displaces an extractor that owns the case", () => {
+    // The Go premise, verbatim from the source: the pr-merge gate returns
+    // `PR #%d is not MERGED (state=%s, mergeStateStatus=%s)` with KindNoOp
+    // (internal/orchestrator/gates/pr_merge_gate.go), and scheduler.go wraps a
+    // KindNoOp gate as `premature turn end: ... (gate no-op): <reason>`. One
+    // run therefore carries BOTH the mergeStateStatus blocker and the kind.
+    const declineReason =
+      "premature turn end: stage exited 0 with no state change (gate no-op): " +
+      "PR #73 is not MERGED (state=OPEN, mergeStateStatus=BLOCKED)";
+
+    it.each(["pr_merge_unmerged", "premature_turn_end"])(
+      "a pr-merge decline against a non-mergeable PR stays merge-blocked, not skill-no-op (%s)",
+      (kind) => {
+        const findings = AutoRetroService.classifyFailure(
+          {
+            text: `${declineReason}\n{"schema_version":"3","issue_number":1448,"terminal_failure_kind":"${kind}"}`,
+            sourcesAnalyzed: ["terminal_reason", "execution_history"],
+            terminalReason: declineReason,
+            terminalKind: kind,
+          },
+          "pr-merge"
+        );
+
+        // Declining to merge a red PR is CORRECT behaviour. `skill-no-op`
+        // reads "the stage reported success but the work never landed" and
+        // recommends acting on that — a bug report for a run that did its job.
+        expect(findings[0].category).toBe("merge-blocked");
+        expect(findings[0].severity).toBe("medium");
+      }
+    );
+
+    it("keeps dev_handoff_missing on the remedy that preserves the work", () => {
+      const reason = "dev handoff missing: files changed on disk but no deliverable was written";
+      const findings = AutoRetroService.classifyFailure(
+        {
+          text: `${reason}\n{"schema_version":"3","issue_number":1448,"terminal_failure_kind":"dev_handoff_missing"}`,
+          sourcesAnalyzed: ["terminal_reason", "execution_history"],
+          terminalReason: reason,
+          terminalKind: "dev_handoff_missing",
+        },
+        "feature-dev"
+      );
+
+      expect(findings[0].category).toBe("skill-no-op");
+      // The remedy that must NOT be reached: "re-run the failed stage after
+      // verifying context", for a kind whose whole meaning is that the work
+      // exists and re-deriving it would destroy it.
+      expect(findings.map((f) => f.category)).not.toContain("state-management");
+      expect(findings[0].recommendation).not.toContain("Re-run the failed stage");
+    });
+
+    it("reads the run's own kind, not a stale one quoted elsewhere in the corpus", () => {
+      // The corpus joins the terminal reason, the scoped session log, the
+      // deliverable and the history record. A session log that quotes another
+      // run's record used to win on first match, because the extractor regexed
+      // the joined text instead of the threaded field.
+      const findings = AutoRetroService.classifyFailure(
+        {
+          text:
+            '[log] previous run record: {"terminal_failure_kind":"issue_closed"}\n' +
+            '{"schema_version":"3","issue_number":1448,"terminal_failure_kind":"containment_breach"}',
+          sourcesAnalyzed: ["session_log", "execution_history"],
+          terminalReason: "stage wrote outside the repository it owns",
+          terminalKind: "containment_breach",
+        },
+        "feature-dev"
+      );
+
+      expect(findings[0].category).toBe("containment-breach");
+      expect(findings.map((f) => f.category)).not.toContain("no-work-required");
+    });
+
+    it("still delivers the stage's own rationale when the record named a kind", () => {
+      // Pass 1.5 used to run only when pass 1 came up empty. Once the record
+      // decided all 39 kinds that meant never, and the stage's authored
+      // reason — the one thing it writes specifically for the retro — stopped
+      // reaching the finding.
+      const findings = AutoRetroService.classifyFailure(
+        {
+          text: '{"schema_version":"3","issue_number":1448,"terminal_failure_kind":"validation_failed"}',
+          sourcesAnalyzed: ["pipeline_context", "execution_history"],
+          terminalReason: "stage could not proceed",
+          terminalKind: "validation_failed",
+          feedbackSignals: [
+            {
+              signal_type: "ACCEPTANCE_CRITERIA_AMBIGUOUS",
+              severity: "blocking",
+              rationale: "AC3 does not say which binary must be rebuilt",
+              evidence: ["issue body AC3"],
+              emitted_by_stage: "feature-validate",
+            },
+          ] as never,
+        },
+        "feature-validate"
+      );
+
+      expect(findings[0].category).toBe("validation-failure");
+      const evidence = findings[0].evidence.join("\n");
+      expect(evidence).toContain("ACCEPTANCE_CRITERIA_AMBIGUOUS");
+      expect(evidence).toContain("AC3 does not say which binary must be rebuilt");
+    });
+
+    it("lets a blocking conflict signal hold the merge-blocked verdict", () => {
+      const findings = AutoRetroService.classifyFailure(
+        {
+          text: '{"schema_version":"3","issue_number":1448,"terminal_failure_kind":"pr_merge_unmerged"}',
+          sourcesAnalyzed: ["pipeline_context", "execution_history"],
+          terminalReason: "stage could not proceed",
+          terminalKind: "pr_merge_unmerged",
+          feedbackSignals: [
+            {
+              signal_type: "CONFLICT_RESOLUTION_NEEDED",
+              severity: "blocking",
+              rationale: "the branch conflicts with base in two files",
+              evidence: ["src/a.ts", "src/b.ts"],
+              emitted_by_stage: "pr-merge",
+            },
+          ] as never,
+        },
+        "pr-merge"
+      );
+
+      // The stage said the PR cannot merge as-is. That is the same verdict the
+      // mergeStateStatus arm reaches, so it must win the same way.
+      expect(findings[0].category).toBe("merge-blocked");
     });
   });
 });

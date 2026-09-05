@@ -1006,10 +1006,38 @@ operators.
 `terminal_failure_kind` on the V3 run record is the authoritative field: the
 kind was decided by `internal/terminalkind/table.json` and booked by Go, so by
 the time `AutoRetroService` reads it the cause is already named. Its extractor
-is therefore first in `SIGNAL_EXTRACTORS` and must DECIDE — dropping the kind
-and falling through to the prose keyword passes is how a credential fault whose
-kind the record carried exactly was written up as `state-management`, with the
-remedy "re-run the failed stage after verifying context" (#878).
+must therefore DECIDE — dropping the kind and falling through to the prose
+keyword passes is how a credential fault whose kind the record carried exactly
+was written up as `state-management`, with the remedy "re-run the failed stage
+after verifying context" (#878).
+
+**Authoritative does not mean first.** The extractor sits after the
+`merge-blocked` and `skill-no-op` extractors and before the `stop-hook-error`
+and context-decode ones, and every one of those positions is load-bearing. A
+kind names _how the run ended_; an extractor that owns a case knows _whether
+ending that way was correct_. The pr-merge gate proves the two are not the same
+verdict: for one run against a non-mergeable PR it emits `pr_merge_unmerged` as
+the kind **and** `mergeStateStatus=BLOCKED` in the reason. Ordered first, the
+kind wins and a correctly declined red PR is written up as "the stage reported
+success but the work never landed" — a bug report against a run that did its
+job. Ordered where it is, `merge-blocked` keeps the case and the kind rides
+along as a secondary finding.
+
+The kind is read from the **threaded field**, never by regexing the joined
+evidence corpus. That corpus concatenates the terminal reason, the scoped
+session log, the deliverable and the history record, so a
+`"terminal_failure_kind"` key belonging to some other run quoted in a log would
+win on first match — the source-blindness #134 and #1144 both fixed.
+`collectEvidence` fills the field from the run record for _this_ issue
+(`readRecordTerminalKind`) whenever the failing gate supplied no kind, which it
+does on every non-gate failure, so there is one path rather than two.
+
+The stage-authored `feedback[]` pass runs **unconditionally**, not only when the
+structured passes come up empty. "Only if pass 1 is empty" meant "never" once
+the record decided all thirty-nine kinds, because every V3 failure record
+carries one. A category the structured passes already found absorbs the
+feedback detail, so the stage's own rationale and evidence ride on the finding
+they explain instead of being dropped as a duplicate.
 
 Until #1448 the map held five kinds against a vocabulary of thirty-nine, and
 the other thirty-four took that path by default. It is now exhaustive, and
@@ -1029,8 +1057,8 @@ exhaustive by construction rather than by discipline:
 
 Categories are shared between kinds only where the **remedy** is genuinely
 shared; the kind's own name always rides along on the finding's evidence line
-(`Run record terminal_failure_kind: <kind>`), so grouping never costs the
-operator the specific cause.
+(`<stage> ended with terminal kind <kind>: <reason>`), so grouping never costs
+the operator the specific cause.
 
 ### Time-Gated `stop-hook-error` (Issue #3275)
 

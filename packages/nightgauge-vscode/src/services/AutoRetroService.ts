@@ -403,6 +403,17 @@ interface ExtractorInput {
    * (#1056). Empty string when absent, so extractors can compare directly.
    */
   terminalKind: string;
+  /**
+   * The stage deliverable's `feedback[]` signals (#1144). Empty array when the
+   * collector could not read a deliverable, so extractors can iterate freely.
+   *
+   * Only the merge-blocked extractor reads these: `CONFLICT_RESOLUTION_NEEDED`
+   * is the stage's OWN statement that the PR cannot merge as-is, which is the
+   * same verdict that extractor derives from `mergeStateStatus`. A conflict
+   * reported by signal rather than in prose otherwise fell through to the
+   * terminal kind and was written up as a skill no-op (#1448).
+   */
+  feedbackSignals: PipelineFeedbackSignal[];
 }
 
 /**
@@ -507,14 +518,22 @@ const TERMINAL_KIND_CATEGORY: Record<TerminalFailureKind, RetroFailureCategory> 
   // stage's contract says it wrote is absent, empty, or unreadable.
   orchestrator_crash: "state-management",
   stage_context_unreadable: "state-management",
-  dev_handoff_missing: "state-management",
 
   // The stage exited 0 and its post-condition gate found the work absent, or
   // found the contract step skipped. Inspect the gate result, not the logs.
+  //
+  // `dev_handoff_missing` belongs HERE rather than with the state-management
+  // kinds above, and that is a decision this file already made once (#1056):
+  // `state-management` recommends "re-run the failed stage after verifying
+  // context", which contradicts the gate's own verdict that the work EXISTS on
+  // disk and must be preserved rather than re-derived. Filing it under
+  // state-management reintroduces the exact wrong-remedy shape #1448 was
+  // opened to remove, one kind to the left.
   pr_merge_unmerged: "skill-no-op",
   premature_turn_end: "skill-no-op",
   dev_produced_no_changes: "skill-no-op",
   dev_build_verification_missing: "skill-no-op",
+  dev_handoff_missing: "skill-no-op",
 
   // Transport or provider infrastructure, transient by construction: retry
   // when it clears, and there is nothing in the repo to fix.
@@ -568,31 +587,12 @@ const TERMINAL_KIND_CATEGORY: Record<TerminalFailureKind, RetroFailureCategory> 
  *
  * The extractor signature accepts the wider {text, sourcesAnalyzed, failedStage}
  * input (added in #3275) so extractors can inspect the source list (for the
- * file-existence cost-cap signal) and the failed stage (for the pr-merge
- * skill-no-op signal). Most extractors only use `text`.
+ * file-existence cost-cap signal), the failed stage (for the pr-merge
+ * skill-no-op signal), the threaded terminal reason and kind, and the stage's
+ * own `feedback[]` (for the merge-blocked conflict arm). Most extractors only
+ * use `text`.
  */
 const SIGNAL_EXTRACTORS: Array<(input: ExtractorInput) => StructuredSignal | null> = [
-  // V3 RunRecord field — authoritative when present.
-  ({ text }) => {
-    const m = text.match(/"terminal_failure_kind"\s*:\s*"([a-z_]+)"/);
-    if (!m) return null;
-    const kind = m[1];
-    // Every kind THIS BUILD knows is decided by TERMINAL_KIND_CATEGORY — the
-    // exhaustive Record makes that a compile-time property, not a convention.
-    // The miss below is reachable only across version skew: a record written by
-    // a newer binary naming a kind this build's vocabulary does not contain.
-    // Then, and only then, the prose passes are a better answer than a category
-    // picked at random, so the extractor declines instead of guessing.
-    const cat = TERMINAL_KIND_CATEGORY[kind as TerminalFailureKind] as
-      RetroFailureCategory | undefined;
-    if (!cat) return null;
-    // No severityHint: buildFinding takes severity from the category's own
-    // dictionary, so a hint here would be a second, silently divergent opinion.
-    return {
-      category: cat,
-      evidence: `Run record terminal_failure_kind: ${kind}`,
-    };
-  },
   // skillRunner stall-kill log line, idle OR hard-cap.
   ({ text }) => {
     if (
@@ -701,7 +701,7 @@ const SIGNAL_EXTRACTORS: Array<(input: ExtractorInput) => StructuredSignal | nul
   // classify AHEAD of skill-no-op below. The orchestrator threads the blocker
   // reason into the terminal_reason source, e.g.
   // `blocked by failing check "Sync E2E (Docker)" (mergeStateStatus=UNSTABLE)`.
-  ({ text, failedStage }) => {
+  ({ text, failedStage, feedbackSignals }) => {
     if (failedStage !== "pr-merge") return null;
     const m = text.match(
       /blocked by (?:failing check|required review|review|merge conflict|non-mergeable state)[^\n]*/i
@@ -712,6 +712,23 @@ const SIGNAL_EXTRACTORS: Array<(input: ExtractorInput) => StructuredSignal | nul
         evidence: m
           ? `pr-merge declined: PR ${m[0]}`
           : "pr-merge declined: PR is not in a mergeable state (failing check / required review / conflict)",
+        severityHint: "medium",
+      };
+    }
+    // Same verdict, stated by the stage instead of by the forge. A conflict
+    // the stage reports as a blocking signal is still a correct decline, and
+    // without this arm it fell through to the run's terminal kind and was
+    // reported as a skill no-op — the #3924 misclassification by another
+    // route (#1448).
+    const conflict = feedbackSignals.find(
+      (sig) => sig.signal_type === "CONFLICT_RESOLUTION_NEEDED" && sig.severity === "blocking"
+    );
+    if (conflict) {
+      return {
+        category: "merge-blocked",
+        evidence: `pr-merge declined: ${
+          conflict.emitted_by_stage ?? failedStage
+        } reported CONFLICT_RESOLUTION_NEEDED`,
         severityHint: "medium",
       };
     }
@@ -783,36 +800,52 @@ const SIGNAL_EXTRACTORS: Array<(input: ExtractorInput) => StructuredSignal | nul
     }
     return null;
   },
-  // #1056 — the orchestrator's own structured terminal kind. The pipeline
-  // emits an enum about itself; matching it exactly beats pattern-matching
-  // English in a codebase whose subject matter IS pipeline failure handling.
-  // A real run reported category `unknown` with severity `low` while holding
-  // `dev_handoff_missing`, a kind it had emitted and logged twice.
+  // #1056 / #1448 — the run's own structured terminal kind, mapped through
+  // TERMINAL_KIND_CATEGORY. The pipeline emits an enum about itself; matching
+  // it exactly beats pattern-matching English in a codebase whose subject
+  // matter IS pipeline failure handling. A real run reported category
+  // `unknown` with severity `low` while holding `dev_handoff_missing`, a kind
+  // it had emitted and logged twice.
   //
-  // PLACEMENT IS LOAD-BEARING. This sits AFTER the merge-blocked and
-  // skill-no-op extractors on purpose. The "authoritative kind wins, so put it
-  // first" instinct would let a pr-merge kind displace the merge-blocked
-  // verdict that the extractor above deliberately orders ahead of skill-no-op
-  // — shipping a new misclassification for a case that is currently correct.
+  // PLACEMENT IS LOAD-BEARING, and #1448 is why it is now written down with
+  // the incident attached. This sits AFTER the merge-blocked and skill-no-op
+  // extractors on purpose. The "authoritative kind wins, so put it first"
+  // instinct is what #1448 first shipped, and it let a pr-merge run against a
+  // genuinely non-mergeable PR displace the merge-blocked verdict the
+  // extractor above deliberately orders ahead of skill-no-op: the Go gate
+  // emits BOTH facts for one run — `pr_merge_unmerged` as the kind and
+  // `mergeStateStatus=BLOCKED` in the reason — so a correctly declined red PR
+  // was written up as "the stage reported success but the work never landed",
+  // carrying that remedy. It equally sits BEFORE the stop-hook-error and
+  // context-decode extractors, both of which state in their own comments that
+  // they must lose to a terminal kind.
   //
-  // Mapped to `skill-no-op`, not `state-management`: the latter recommends
-  // "re-run the failed stage after verifying context", which directly
-  // contradicts the gate's own verdict that the work exists and must be
-  // preserved rather than re-derived. A dedicated category would be a taxonomy
-  // change, not this fix.
+  // The kind is read from the THREADED field, never by regexing the joined
+  // evidence corpus. The corpus concatenates the terminal reason, the scoped
+  // session log, the deliverable and the history record, so a
+  // `"terminal_failure_kind"` key belonging to some OTHER run quoted in a log
+  // wins on first match — the source-blindness #134 and #1144 both fixed.
+  // `collectEvidence` fills the field from the run record for THIS issue when
+  // the failing gate supplied no kind, so there is one path here, not two.
   ({ terminalKind, terminalReason, failedStage }) => {
-    const NO_OP_KINDS = new Set([
-      "dev_handoff_missing",
-      "dev_produced_no_changes",
-      "premature_turn_end",
-    ]);
-    if (!terminalKind || !NO_OP_KINDS.has(terminalKind)) return null;
+    if (!terminalKind) return null;
+    // Every kind THIS BUILD knows is decided by TERMINAL_KIND_CATEGORY — the
+    // exhaustive Record makes that a compile-time property, not a convention.
+    // The miss below is reachable only across version skew: a record written
+    // by a newer binary naming a kind this build's vocabulary does not
+    // contain. Then, and only then, the prose passes are a better answer than
+    // a category picked at random, so the extractor declines instead of
+    // guessing.
+    const cat = TERMINAL_KIND_CATEGORY[terminalKind as TerminalFailureKind] as
+      RetroFailureCategory | undefined;
+    if (!cat) return null;
+    // No severityHint: buildFinding takes severity from the category's own
+    // dictionary, so a hint here would be a second, silently divergent opinion.
     return {
-      category: "skill-no-op",
+      category: cat,
       evidence: terminalReason
         ? `${failedStage} ended with terminal kind ${terminalKind}: ${terminalReason}`
-        : `${failedStage} ended with terminal kind ${terminalKind} — the stage exited without the state its post-condition gate requires`,
-      severityHint: "high",
+        : `${failedStage} ended with terminal kind ${terminalKind}`,
     };
   },
   // Claude CLI stop-hook-error notification — the #3204 incident signature.
@@ -1277,6 +1310,17 @@ export class AutoRetroService {
     // Source 3: JSONL history entry for THIS issue. Pre-#3204 this took the
     // last line of the file, which in concurrent-mode could belong to a
     // different slot's run. Now we filter by issue_number.
+    //
+    // `recordKind` is the record's own `terminal_failure_kind`, read off the
+    // record for THIS issue (#1448). The call site's `terminalKind` argument
+    // is set on the two GATE paths only, so for every kind Go's terminalkind
+    // table derives from error text — network_unavailable,
+    // rate_limit_quota_exhausted, containment_breach — the record is the only
+    // source there is. Reading it HERE, where the record for this issue has
+    // already been singled out, is what lets the classifier consult one
+    // authoritative field instead of taking a first-match regex over four
+    // concatenated sources, one of which is the agent's own session log.
+    let recordKind = "";
     try {
       const historyDir = path.join(workspaceRoot, ".nightgauge", "pipeline", "history");
       const historyFiles = await fs.readdir(historyDir);
@@ -1289,6 +1333,7 @@ export class AutoRetroService {
           parts.push(matched);
           sourcesAnalyzed.push("execution_history");
           lines.push({ source: "extension", text: matched });
+          recordKind = this.readRecordTerminalKind(matched);
         }
       }
     } catch {
@@ -1332,9 +1377,32 @@ export class AutoRetroService {
       sourcesAnalyzed,
       lines,
       terminalReason: failureReason?.trim() ?? "",
-      terminalKind: terminalKind?.trim() ?? "",
+      // The gate-supplied kind first — it is this run's failing gate speaking
+      // about itself — then the run record as the fill-in for every non-gate
+      // failure, which the gate paths never see (#1448).
+      terminalKind: terminalKind?.trim() || recordKind,
       feedbackSignals,
     };
+  }
+
+  /**
+   * Pull `terminal_failure_kind` off a single V3 run-record line (#1448).
+   *
+   * Parsed as JSON rather than regexed. The record is one JSON document and
+   * `findRunRecordForIssue` has already proved it belongs to this issue, so
+   * parsing reads the record's own field; a regex would equally match the same
+   * key quoted inside a string value the record happens to carry. Never
+   * throws: a truncated or non-JSON line yields no kind, and the classifier's
+   * prose passes remain available.
+   */
+  private static readRecordTerminalKind(record: string): string {
+    try {
+      const parsed = JSON.parse(record) as { terminal_failure_kind?: unknown };
+      const kind = parsed.terminal_failure_kind;
+      return typeof kind === "string" ? kind.trim() : "";
+    } catch {
+      return "";
+    }
   }
 
   /**
@@ -1443,7 +1511,7 @@ export class AutoRetroService {
   }
 
   /**
-   * Classify failure using a two-pass approach (rewritten in #3204).
+   * Classify failure using a layered approach (rewritten in #3204).
    *
    *   Pass 1 — Structured signals (authoritative).
    *     The skillRunner / OfflineManager / orchestrator emit deterministic
@@ -1452,7 +1520,14 @@ export class AutoRetroService {
    *     extractor that fires is the primary finding; later signals become
    *     secondary findings (sorted highest severity first).
    *
-   *   Pass 2 — Source-tagged keyword fallback (only if pass 1 is empty).
+   *   Pass 1.5 — Stage-authored `feedback[]` (#1144). ALWAYS runs, not only
+   *     when pass 1 came up empty (#1448): the run record's terminal kind
+   *     decides every kind in the vocabulary, so "only when pass 1 is empty"
+   *     meant "never" and the stage's own rationale stopped reaching the
+   *     retro. A category pass 1 already found absorbs the feedback detail;
+   *     a new category is appended among the secondaries.
+   *
+   *   Pass 2 — Source-tagged keyword fallback (only if passes 1/1.5 are empty).
    *     Patterns are scoped to the source of the line they match
    *     (subagent stdout vs. extension cleanup logs) so cleanup-noise
    *     `TypeError: fetch failed` cannot trip the validation-failure path
@@ -1486,16 +1561,13 @@ export class AutoRetroService {
       failedStage,
       terminalReason: evidence.terminalReason ?? "",
       terminalKind: evidence.terminalKind ?? "",
+      feedbackSignals: evidence.feedbackSignals ?? [],
     };
     for (const extractor of SIGNAL_EXTRACTORS) {
       const signal = extractor(extractorInput);
       if (!signal || seen.has(signal.category)) continue;
       seen.add(signal.category);
       findings.push(this.buildFinding(signal.category, failedStage, signal.evidence));
-    }
-
-    if (findings.length > 0) {
-      return this.orderFindings(findings);
     }
 
     // Pass 1.5: stage-authored feedback signals (#1144).
@@ -1506,9 +1578,42 @@ export class AutoRetroService {
     // so the keyword table below is not consulted at all. Guessing from prose
     // while the deliverable says what happened is how an acceptance-criteria
     // gate failure was written up as `budget-exceeded`, severity high.
-    const feedbackFindings = this.classifyFromFeedback(evidence.feedbackSignals, failedStage, seen);
-    if (feedbackFindings.length > 0) {
-      return this.orderFindings(feedbackFindings);
+    //
+    // This pass runs UNCONDITIONALLY, not only when pass 1 came up empty
+    // (#1448). "Only if pass 1 is empty" was survivable while the record's
+    // terminal kind decided five kinds out of thirty-nine; once it decided all
+    // thirty-nine it meant "never", because every V3 failure record carries a
+    // kind — and the stage's own rationale silently stopped reaching the
+    // retro, which is the one thing this pass exists to deliver.
+    //
+    // A category pass 1 already found keeps its position in the ordering and
+    // ABSORBS the feedback detail, so the stage's words ride on the finding
+    // they explain rather than being dropped as a duplicate. A category pass 1
+    // did not find is appended, and `orderFindings` sorts it among the
+    // secondaries — it never displaces a deterministic gate verdict.
+    const feedbackFindings = this.classifyFromFeedback(
+      evidence.feedbackSignals,
+      failedStage,
+      new Set<RetroFailureCategory>()
+    );
+    for (const feedbackFinding of feedbackFindings) {
+      const existing = findings.find((f) => f.category === feedbackFinding.category);
+      if (!existing) {
+        seen.add(feedbackFinding.category);
+        findings.push(feedbackFinding);
+        continue;
+      }
+      // Splice the absorbed lines in AHEAD of the trailing "Failed stage:"
+      // line buildFinding appends, so the finding still reads pattern →
+      // rationale → stage rather than trailing the stage in the middle.
+      const tail = existing.evidence.findIndex((line) => line.startsWith("Failed stage: "));
+      const at = tail === -1 ? existing.evidence.length : tail;
+      const absorbed = feedbackFinding.evidence.filter((line) => !existing.evidence.includes(line));
+      existing.evidence.splice(at, 0, ...absorbed);
+    }
+
+    if (findings.length > 0) {
+      return this.orderFindings(findings);
     }
 
     // Pass 2: source-tagged keyword matching. Use tagged lines if the
