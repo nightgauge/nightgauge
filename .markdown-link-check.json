@@ -5,6 +5,10 @@
     { "pattern": "^#" },
     { "pattern": "\\.(png|jpe?g|gif|svg|webp)$" },
     {
+      "pattern": "^https://github\\.com/nightgauge/nightgauge/compare/v[0-9]+\\.[0-9]+\\.[0-9]+\\.\\.\\.(HEAD|v[0-9]+\\.[0-9]+\\.[0-9]+)$",
+      "comment": "CHANGELOG.md compare links for a release section. The contract (docs/GIT_WORKFLOW.md § Changelog) lands the rollover PR BEFORE the tag is pushed, so at PR time the newest section's compare URLs 404 by construction -- the tag does not exist yet. scripts/check-changelog.sh guarantees every released tag has its section, and the tag's existence makes the links resolve; nothing else about the URL can be wrong, since the version segment is the same string the gate checks. Scoped to this repo's own compare URLs only."
+    },
+    {
       "pattern": "^https://docs\\.openai\\.com/codex$",
       "comment": "Confirmed NXDOMAIN (#697 re-enablement sweep, 2026-08-18) -- docs.openai.com does not resolve at all. Genuinely dead; the doc should point at platform.openai.com/docs/codex or similar. Content fix is a separate, out-of-scope change; this ignore is deliberately URL-scoped, not a blanket exclusion."
     },

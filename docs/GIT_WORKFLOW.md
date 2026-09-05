@@ -920,6 +920,11 @@ the same rule.
 2. `bash scripts/check-changelog.sh --tag vX.Y.Z` must exit 0 locally.
 3. Merge that PR, verify `main`'s own run is green, then tag.
 
+The new section's compare links (`compare/vX.Y.Z...HEAD`, `compare/vPREV...vX.Y.Z`)
+404 until the tag exists — that is the ordering, not a mistake — so
+`.markdown-link-check.json` ignores exactly that URL shape for this repository;
+the changelog gate is what guarantees they resolve once the tag is pushed.
+
 `release.yml` runs the same `--tag` check first and refuses a tag with no
 section, so nothing is published under a version the changelog does not
 describe. It then feeds the section body to GoReleaser as the GitHub Release
