@@ -19,9 +19,9 @@ func TestEscalationBlockedByCategory_FilesystemEACCESNotBlocked(t *testing.T) {
 
 // TestEscalationBlockedByCategory_ForgeAuthDenialStillBlocked preserves the
 // original #878 behavior: a genuine forge/git-transport permission denial
-// must still block escalation.
+// (the canonical single-method OpenSSH form) must still block escalation.
 func TestEscalationBlockedByCategory_ForgeAuthDenialStillBlocked(t *testing.T) {
-	text := "remote: Permission denied (publickey).\nfatal: Could not read from remote repository."
+	text := "git@github.com: Permission denied (publickey).\nfatal: Could not read from remote repository."
 	blocked, reason := EscalationBlockedByCategory(text)
 	if !blocked {
 		t.Fatalf("EscalationBlockedByCategory(%q) = not blocked; want blocked (forge/git-transport auth denial, #878)", text)
@@ -31,19 +31,77 @@ func TestEscalationBlockedByCategory_ForgeAuthDenialStillBlocked(t *testing.T) {
 	}
 }
 
-// TestEscalationBlockedByCategory_ForgeAuthPasswordDenialStillBlocked covers
-// the password-auth (non-publickey) shape of a git-transport denial. This
-// line matches ONLY the "remote: permission denied" entry — no other entry
-// in permissionPhrases fires for it — so this test exists specifically to
-// keep that entry from being silently removable.
-func TestEscalationBlockedByCategory_ForgeAuthPasswordDenialStillBlocked(t *testing.T) {
-	text := "remote: Permission denied, please try again."
-	blocked, reason := EscalationBlockedByCategory(text)
-	if !blocked {
-		t.Fatalf("EscalationBlockedByCategory(%q) = not blocked; want blocked (forge/git-transport password auth denial)", text)
+// TestEscalationBlockedByCategory_MultiMethodSSHDenialsStillBlocked covers the
+// method-list shapes OpenSSH actually emits when a server advertises more
+// than one auth method — the normal case for self-hosted GitLab, Gerrit, and
+// generic SSH remotes (docs/SELF_HOSTED_GITLAB_SETUP.md,
+// docs/FORGE_ABSTRACTION.md). A prior version of this fix narrowed the needle
+// to "permission denied (publickey)" with the closing paren immediately
+// after "publickey", which fails every one of these; the bare "permission
+// denied" phrase plus the filesystem negative-guard must still catch them
+// all.
+func TestEscalationBlockedByCategory_MultiMethodSSHDenialsStillBlocked(t *testing.T) {
+	cases := []string{
+		"git@gitlab.example.com: Permission denied (publickey,gssapi-keyex,gssapi-with-mic).\nfatal: Could not read from remote repository.",
+		"Permission denied (publickey,password).\nfatal: Could not read from remote repository.",
+		"Permission denied (publickey,keyboard-interactive).\nfatal: Could not read from remote repository.",
+		"Permission denied, please try again.",
 	}
-	if reason == "" {
-		t.Fatalf("EscalationBlockedByCategory(%q) returned blocked=true but an empty reason", text)
+	for _, text := range cases {
+		blocked, reason := EscalationBlockedByCategory(text)
+		if !blocked {
+			t.Errorf("EscalationBlockedByCategory(%q) = not blocked; want blocked (forge/git-transport auth denial)", text)
+			continue
+		}
+		if reason == "" {
+			t.Errorf("EscalationBlockedByCategory(%q) returned blocked=true but an empty reason", text)
+		}
+	}
+}
+
+// TestEscalationBlockedByCategory_ForgeSentinelStillBlocked covers this
+// repo's own forge permission sentinel and gh's denial spellings
+// (internal/forge/errors.go's ErrPermissionDenied, and the GraphQL/REST
+// shapes fixtured in internal/github/issues_test.go and prs_test.go) — a
+// board/issue mutation refused for lack of scope must still block
+// escalation, same as a git-transport denial.
+func TestEscalationBlockedByCategory_ForgeSentinelStillBlocked(t *testing.T) {
+	cases := []string{
+		"read alerts: forge: permission denied",
+		"gh: Permission denied",
+		"GraphQL: Permission denied (addProjectV2ItemById)",
+	}
+	for _, text := range cases {
+		blocked, reason := EscalationBlockedByCategory(text)
+		if !blocked {
+			t.Errorf("EscalationBlockedByCategory(%q) = not blocked; want blocked (forge permission denial)", text)
+			continue
+		}
+		if reason == "" {
+			t.Errorf("EscalationBlockedByCategory(%q) returned blocked=true but an empty reason", text)
+		}
+	}
+}
+
+// TestEscalationBlockedByCategory_ModelProviderDenialsStillBlocked covers the
+// model-provider auth denials documented as real symptoms in
+// docs/TROUBLESHOOTING.md — escalating to a stronger model the project has no
+// IAM grant for re-dispatches the whole prompt to fail identically, exactly
+// #878's observed waste.
+func TestEscalationBlockedByCategory_ModelProviderDenialsStillBlocked(t *testing.T) {
+	cases := []string{
+		"Permission denied to access model",
+		"google: Permission denied on resource project foo.",
+	}
+	for _, text := range cases {
+		blocked, reason := EscalationBlockedByCategory(text)
+		if !blocked {
+			t.Errorf("EscalationBlockedByCategory(%q) = not blocked; want blocked (provider permission denial)", text)
+			continue
+		}
+		if reason == "" {
+			t.Errorf("EscalationBlockedByCategory(%q) returned blocked=true but an empty reason", text)
+		}
 	}
 }
 
@@ -60,8 +118,8 @@ func TestFirstCauseFromOutputTail_FilesystemEACCESNotPickedAsCause(t *testing.T)
 // TestFirstCauseFromOutputTail_ForgeAuthDenialStillPickedAsCause preserves the
 // original #878 behavior for the cause-naming helper.
 func TestFirstCauseFromOutputTail_ForgeAuthDenialStillPickedAsCause(t *testing.T) {
-	tail := "attempting push\nremote: Permission denied (publickey).\nfatal: Could not read from remote repository."
-	want := "remote: Permission denied (publickey)."
+	tail := "attempting push\ngit@github.com: Permission denied (publickey).\nfatal: Could not read from remote repository."
+	want := "git@github.com: Permission denied (publickey)."
 	if got := firstCauseFromOutputTail(tail); got != want {
 		t.Fatalf("firstCauseFromOutputTail(%q) = %q; want %q", tail, got, want)
 	}
