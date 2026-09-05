@@ -250,27 +250,44 @@ func TestSummarizeWindowExhaustionOnCachedZeroRemaining(t *testing.T) {
 }
 
 // A record written by a binary built before HeaderObserved existed decodes
-// the field as its JSON zero value (false), even though its nonzero
-// Remaining/Cost prove a header really was parsed at the time. Reporting
-// LowWaterRemaining as unknown for that record — rather than trusting
-// Remaining — is an accepted, one-directional migration cost: it favors
-// "unknown" over risking a spurious read from a genuinely ambiguous old
-// record, and it is the only way this fix's use of HeaderObserved (instead of
-// the old Remaining>0||Cost>0 heuristic) is observable outside the
-// Remaining==0 case, which the Exhausted branch already forces to 0 on its
-// own.
-func TestSummarizeWindowTreatsPreMigrationRecordsAsUnknown(t *testing.T) {
+// the field as its JSON zero value (false), but its nonzero Remaining and
+// Cost still prove a header really was parsed at write time (record() in
+// apiledger.go only ever sets either field inside the header-parse branch).
+// SummarizeWindow must trust that evidence instead of reading every
+// pre-upgrade ledger record as unknown quota — several nightgauge processes
+// can share one workspace ledger, so a lagging daemon would otherwise blind
+// the exhaustion arm indefinitely rather than for one upgrade instant.
+func TestSummarizeWindowTrustsPreMigrationRecordsWithRealQuotaData(t *testing.T) {
 	now := time.Now().UTC()
 	recs := []APILedgerRecord{
 		{TS: now.Add(-5 * time.Minute).Format(time.RFC3339Nano), Kind: "graphql", Cost: 17, Remaining: 4983, Status: 200},
 	}
 	w := SummarizeWindow(recs, now.Add(-time.Hour), now)
 
-	if w.LowWaterRemaining != -1 {
-		t.Errorf("LowWaterRemaining = %d, want -1 (unknown) for a record with no HeaderObserved signal", w.LowWaterRemaining)
+	if w.LowWaterRemaining != 4983 {
+		t.Errorf("LowWaterRemaining = %d, want 4983 (trusted from Cost/Remaining) for a pre-migration record with no HeaderObserved field", w.LowWaterRemaining)
 	}
 	if w.Exhausted {
 		t.Error("Exhausted = true on a nonzero-remaining record")
+	}
+}
+
+// A pre-migration record whose Remaining genuinely hit zero must still be
+// caught as exhausted: Cost > 0 there (the drop from a nonzero previous
+// Remaining to 0) is the same header-parse evidence as above, just at the
+// boundary the Exhausted branch cares about.
+func TestSummarizeWindowExhaustionOnPreMigrationRecord(t *testing.T) {
+	now := time.Now().UTC()
+	recs := []APILedgerRecord{
+		{TS: now.Add(-5 * time.Minute).Format(time.RFC3339Nano), Kind: "graphql", Caller: "boardcache.Refresh", Cost: 1000, Remaining: 0, Status: 200},
+	}
+	w := SummarizeWindow(recs, now.Add(-time.Hour), now)
+
+	if !w.Exhausted {
+		t.Error("Exhausted = false, want true — a pre-migration record with Cost > 0 and Remaining == 0 proves a real header parse")
+	}
+	if w.LowWaterRemaining != 0 {
+		t.Errorf("LowWaterRemaining = %d, want 0", w.LowWaterRemaining)
 	}
 }
 
