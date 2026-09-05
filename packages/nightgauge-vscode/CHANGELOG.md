@@ -9,6 +9,8 @@ and this project adheres to
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-09-05
+
 ### Added
 
 - **One scheduler per workspace** — a second `nightgauge serve` attaches to the
@@ -268,7 +270,8 @@ shipped as [0.2.1].
 - Settings for authentication provider, model selection, and paths
 - Settings for notification sounds, volume, and Do Not Disturb respect
 
-[Unreleased]: https://github.com/nightgauge/nightgauge/compare/v0.2.2...HEAD
+[Unreleased]: https://github.com/nightgauge/nightgauge/compare/v0.2.3...HEAD
+[0.2.3]: https://github.com/nightgauge/nightgauge/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/nightgauge/nightgauge/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/nightgauge/nightgauge/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/nightgauge/nightgauge/tree/v0.2.0

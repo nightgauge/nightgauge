@@ -19,6 +19,8 @@
 #   9. --extract prints exactly the section body, no heading, no links.
 #  10. `--extension none` (a single-changelog repository): the fixture passes
 #      with no extension file at all, and a missing root section still fails.
+#  11. `--extract Unreleased` prints exactly the [Unreleased] body; a root with
+#      no [Unreleased] exits 1.
 #
 # All arms run against throwaway files under mktemp; the tag list is injected
 # with --tags-from so the suite never depends on this clone's tags.
@@ -194,6 +196,21 @@ OUT="$(bash "$GATE" --root "$TMP/root-no-010.md" --extension none --tags-from "$
 rc=$?
 [ "$rc" -eq 1 ] && grep -q "tag v0.1.0 was released but $TMP/root-no-010.md has no" <<<"$OUT"
 check "arm 10b: --extension none still fails a tag with no root section" "$?"
+
+# --- Arm 11: --extract Unreleased -------------------------------------------
+OUT="$(bash "$GATE" --root "$TMP/root.md" --extension none --tags-from "$TAGS_FROM" --extract Unreleased 2>&1)"
+rc=$?
+expected=$'### Added\n\n- Something new (#3)'
+ok=1
+[ "$rc" -eq 0 ] && [ "$OUT" = "$expected" ] && ok=0
+check "arm 11a: --extract Unreleased prints exactly the Unreleased body" "$ok"
+
+good_root | grep -v '^## \[Unreleased\]$' >"$TMP/root-no-unreleased.md"
+OUT="$(bash "$GATE" --root "$TMP/root-no-unreleased.md" --extension none --tags-from "$TAGS_FROM" --extract Unreleased 2>&1)"
+rc=$?
+ok=1
+[ "$rc" -eq 1 ] && grep -q "has no \[Unreleased\] section" <<<"$OUT" && ok=0
+check "arm 11b: --extract Unreleased on a root without one exits 1" "$ok"
 
 echo
 echo "check-changelog regression suite: $PASS passed, $FAIL failed"

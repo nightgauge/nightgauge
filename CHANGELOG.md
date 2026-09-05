@@ -14,6 +14,13 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-09-05
+
+The first release cut under the changelog contract: every entry below was
+written for the reader of this release, the tag was refused until this section
+existed, and these notes are the GitHub Release notes verbatim. 100 commits
+since 0.2.2.
+
 ### Added
 
 - **The changelog is part of the release.** This file is reconciled with the
@@ -383,7 +390,8 @@ with GitHub Project board integration, dashboard, context file viewer, and
 the first set of commands and settings. Recorded so the extension's changelog
 and this one name the same versions.
 
-[Unreleased]: https://github.com/nightgauge/nightgauge/compare/v0.2.2...HEAD
+[Unreleased]: https://github.com/nightgauge/nightgauge/compare/v0.2.3...HEAD
+[0.2.3]: https://github.com/nightgauge/nightgauge/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/nightgauge/nightgauge/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/nightgauge/nightgauge/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/nightgauge/nightgauge/tree/v0.2.0

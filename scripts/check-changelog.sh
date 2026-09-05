@@ -32,6 +32,9 @@
 #   check-changelog.sh --extract vX.Y.Z
 #                                      print the root section body for vX.Y.Z
 #                                      on stdout (the GitHub Release notes)
+#   check-changelog.sh --extract Unreleased
+#                                      the same for the [Unreleased] section
+#                                      (store-notes previews, dry runs)
 #
 # Options:
 #   --root <path>        root changelog (default CHANGELOG.md)
@@ -95,15 +98,20 @@ violation() { # violation <message>
 headings() { grep -E '^## \[' "$1"; }
 # The versions a file names, one per line, without brackets or dates.
 versions() { headings "$1" | sed -nE 's/^## \[([0-9]+\.[0-9]+\.[0-9]+)\].*/\1/p'; }
-# section_body <file> <X.Y.Z>: the lines between that version's heading and the
+# section_body <file> <X.Y.Z|Unreleased>: the lines between that heading and the
 # next `## ` heading or the first reference-link line (`[x]: url`), with leading
 # and trailing blank lines removed. awk only — BSD and GNU sed disagree on the
-# multi-line idioms.
+# multi-line idioms. A version heading carries a date (`## [X.Y.Z] - ...`);
+# the Unreleased heading is the bare `## [Unreleased]`.
 section_body() {
-  awk -v v="$2" '
+  # Match by exact prefix, not regex: `awk -v` re-processes backslash escapes,
+  # so a regex with `\[` in it does not survive the trip.
+  local hdr
+  if [ "$2" = "Unreleased" ]; then hdr='## [Unreleased]'; else hdr="## [$2] "; fi
+  awk -v hdr="$hdr" -v exact="$([ "$2" = "Unreleased" ] && echo 1 || echo 0)" '
     found && (/^## / || /^\[[^]]+\]: /) { exit }
     found { buf[n++] = $0 }
-    $0 ~ "^## \\[" v "\\] " { found = 1 }
+    (exact == 1 && $0 == hdr) || (exact == 0 && index($0, hdr) == 1) { found = 1 }
     END {
       s = 0; e = n - 1
       while (s <= e && buf[s] ~ /^[ \t]*$/) s++
@@ -117,7 +125,12 @@ section_body() {
 # release workflow can read notes for a tag the arms already admitted.
 if [ -n "$EXTRACT_TAG" ]; then
   v="${EXTRACT_TAG#v}"
-  if ! headings "$ROOT" | grep -qE "^## \[$v\] "; then
+  if [ "$v" = "Unreleased" ]; then
+    if ! grep -qE '^## \[Unreleased\]$' "$ROOT"; then
+      echo "check-changelog: $ROOT has no [Unreleased] section" >&2
+      exit 1
+    fi
+  elif ! headings "$ROOT" | grep -qE "^## \[$v\] "; then
     echo "check-changelog: $ROOT has no section for $EXTRACT_TAG" >&2
     exit 1
   fi
