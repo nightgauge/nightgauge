@@ -170,10 +170,12 @@ none of it can be done from this repository.
 - **#1421 itself** remains the tracker for the platform-side routing key. It is
   not re-filed here: its acceptance criteria 1 and 2 already state the
   requirement, and the change is blocked on a repository this one cannot reach.
-- **#1425** — the store's write-temp-then-rename uses a fixed temp path
-  (`path + ".tmp"`), so two processes materializing one card interleave. The
+- **#1425** — the store's write-temp-then-rename used a fixed temp path
+  (`path + ".tmp"`), so two processes materializing one card interleaved. The
   prerequisite for any future cross-root or multi-writer design, and the reason
-  § 4 rejects one now.
+  § 4 rejects one now. **Closed**: the store directory's critical section is
+  now serialised across processes by an advisory `internal/flock` lock and
+  every writer stages at its own temp path.
 - **#1426** — serve-registry hygiene. The measurements quoted in § 4 are the
   issue's evidence: dead records, orphaned `.lock` files whose root is
   unrecoverable, and test suites writing into a real `HOME`.

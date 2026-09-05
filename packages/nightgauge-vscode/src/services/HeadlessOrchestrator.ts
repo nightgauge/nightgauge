@@ -582,7 +582,25 @@ export interface PipelineExecutionConfig {
    * @see Issue #696 - Orchestrator must pre-check issue state before running pipeline
    */
   forceRerun?: boolean;
+  /**
+   * How often the stage loop re-checks `isPaused()` while holding at a pause
+   * boundary (#423), in ms. Test-only knob — production code relies on the
+   * default; tests shrink it so a pause/resume cycle doesn't cost real wall
+   * time.
+   * @default 1000
+   */
+  pausePollIntervalMs?: number;
 }
+
+/**
+ * How often the stage loop re-checks `isPaused()` while holding at a pause
+ * boundary (#423). `isPaused()` is a cheap in-memory read
+ * (`PipelineStateService._lastState.paused`), not an IPC round trip, so a
+ * short interval costs nothing while keeping resume latency low. Declared
+ * ahead of `DEFAULT_CONFIG`, which references it — both are module-level
+ * `const`s evaluated in file order.
+ */
+const PAUSE_POLL_INTERVAL_MS = 1000;
 
 /**
  * Default execution configuration
@@ -597,6 +615,7 @@ const DEFAULT_CONFIG: Required<PipelineExecutionConfig> = {
   contextFileWaitMs: 5000,
   deferMerge: false,
   forceRerun: false,
+  pausePollIntervalMs: PAUSE_POLL_INTERVAL_MS,
 };
 
 /**
@@ -11926,15 +11945,46 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         }
 
         // Check if pipeline was paused (Issue #239)
-        // If paused, gracefully break after completing current stage
+        //
+        // HOLD at the boundary instead of breaking out of the loop (#423).
+        // Breaking here returns `{success:false, failedStage:undefined}` from
+        // runPipeline() while the run is merely paused, not done. On the
+        // singleton that is cosmetic (resume issues a fresh runPipeline()
+        // call, see resumePipeline.ts). On a ConcurrentPipelineManager slot
+        // it is not: `processSlot`'s four-arm terminal classification has no
+        // "paused" arm, so the return is booked as a slot FAILURE — the slot
+        // is deleted and its state service disposed (haltQueueOnSlotFailure /
+        // cleanupSlot), and the paused run can never be targeted by Resume
+        // again (the very capability #423 exists to add).
+        //
+        // Holding keeps THIS runPipeline() call in flight — `isRunning` stays
+        // true, the slot stays in `ConcurrentPipelineManager.slots`, and
+        // `getActiveSlots()`/`getSlotStateService()` keep resolving it — so a
+        // Resume that only clears the paused flag (`resumePipeline.ts`'s
+        // Go-driven / active-slot branch, which deliberately does not call
+        // `runPipeline()` again to avoid a duplicate execution path) lets the
+        // SAME call continue exactly where it left off. Still responsive to
+        // abort/stop: the wait loop re-checks the abort signal every poll
+        // tick, same as the per-stage check at the top of this loop.
         if (this.stateService) {
-          const isPaused = await this.stateService.isPaused();
+          let isPaused = await this.stateService.isPaused();
           if (isPaused) {
-            this.logger.info("Pipeline paused after stage complete", {
+            this.logger.info("Pipeline paused after stage complete — holding", {
               stage,
               issueNumber,
             });
-            break;
+            while (isPaused && !this.abortController?.signal.aborted) {
+              await this.delay(this.config.pausePollIntervalMs ?? PAUSE_POLL_INTERVAL_MS);
+              isPaused = await this.stateService.isPaused();
+            }
+            if (this.abortController?.signal.aborted) {
+              this.logger.info("Pipeline aborted while paused", { stage, issueNumber });
+              break;
+            }
+            this.logger.info("Pipeline resumed — continuing stage loop", {
+              stage,
+              issueNumber,
+            });
           }
         }
 
