@@ -100,6 +100,15 @@ type SkippedWorktree struct {
 	Path   string     `json:"path"`
 	Branch string     `json:"branch,omitempty"`
 	Reason SkipReason `json:"reason"`
+	// ReasonDetail names the ARM behind a reason that has more than one cause.
+	// Today that is SkipActiveRun: the in-flight set protects a worktree for
+	// six different reasons and reported all six as the same word, so an
+	// operator auditing a refusal to reclaim had to open the state directory
+	// to learn whether a process was executing or a fortnight-old paused
+	// snapshot was standing in for one (#443). Empty when the caller supplied
+	// no attribution — a detail on a skip nobody attributed would be a claim
+	// with no source.
+	ReasonDetail string `json:"reasonDetail,omitempty"`
 	// Blocking names the paths that produced a SkipDirty verdict, capped at
 	// maxBlockingReported. Without it "uncommitted-changes" is unfalsifiable
 	// from the sweep's own output: the operator has to open the worktree and
@@ -147,6 +156,12 @@ type WorktreeSweepOptions struct {
 	// are never reclaimed, however merged their branch looks — a run whose PR
 	// has just landed may still have stages to execute in that directory.
 	ActiveIssues map[int]bool
+	// Protected optionally names, per issue in ActiveIssues, the arm that
+	// vouched for it — state.ActiveIssues.Protected, verbatim. It decides
+	// nothing; it is carried onto SkippedWorktree.ReasonDetail so the skip can
+	// be audited from the sweep's own output. Nil for a caller whose in-flight
+	// set is an in-process registry with no arms to name.
+	Protected map[int]string
 	// DryRun classifies without removing anything.
 	DryRun bool
 	// MergedPRLookup is an optional fail-open second door for merged-ness.
@@ -229,7 +244,8 @@ func SweepMergedWorktrees(opts WorktreeSweepOptions) (WorktreeSweepResult, error
 		verdict := classifyWorktree(wt, i == 0, defaultBranch, baseRef, opts)
 		if verdict.Skip != "" {
 			res.Skipped = append(res.Skipped, SkippedWorktree{
-				Path: wt.Path, Branch: wt.Branch, Reason: verdict.Skip, Blocking: verdict.Blocking,
+				Path: wt.Path, Branch: wt.Branch, Reason: verdict.Skip,
+				ReasonDetail: verdict.ReasonDetail, Blocking: verdict.Blocking,
 			})
 			continue
 		}
@@ -285,6 +301,11 @@ type worktreeVerdict struct {
 	IssueNumber int
 	// Blocking names the paths behind a SkipDirty verdict.
 	Blocking []string
+	// ReasonDetail names the arm behind a skip whose reason has several causes
+	// (SkipActiveRun). Copied from the caller's attribution, never derived
+	// here: this package has no access to the evidence that granted the
+	// protection.
+	ReasonDetail string
 	// KeepBranch suppresses branch deletion during reclamation. Set for a
 	// pipeline worktree parked on the default branch: the directory is the
 	// leak, the branch is everyone's.
@@ -327,7 +348,11 @@ func classifyWorktree(wt worktreeRecord, isPrimary bool, defaultBranch, baseRef 
 		return worktreeVerdict{Skip: SkipNotPipelineManaged}
 	}
 	if opts.ActiveIssues[num] {
-		return worktreeVerdict{Skip: SkipActiveRun, IssueNumber: num}
+		// The arm travels with the skip (#443). Six different arms grant this
+		// one verdict and they printed identically, so an operator auditing a
+		// refusal could not tell a live process from a fortnight-old paused
+		// snapshot without opening the state directory.
+		return worktreeVerdict{Skip: SkipActiveRun, IssueNumber: num, ReasonDetail: opts.Protected[num]}
 	}
 	onDefaultBranch := wt.Branch == "main" || wt.Branch == "master" || wt.Branch == defaultBranch
 

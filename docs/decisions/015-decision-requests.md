@@ -282,7 +282,13 @@ runs stuck-epic detection and the survival sweep) — transitions expired `open`
 requests to `expired`, applying `default_action` (which may be `expire_noop`).
 The sweep is idempotent and is itself the single writer, so expiry cannot race
 a concurrent resolve (the CAS loses gracefully). No request lingers forever;
-none silently mutates the fleet without a declared default.
+none silently mutates the fleet without a declared default. A non-noop
+default's verb runs after the expiry transition is already committed (so a
+slow or unreachable verb never holds the store's lock, unlike Resolve's
+in-critical-section verb); if that verb fails, the failure is not discarded —
+it is recorded as its own `expire_verb_failed` journal entry (id, applied
+option, error text) and joined into the sweep's returned error, so a caller
+that checks that error surfaces it (#1450).
 
 ### D — Resolution semantics: one queue, many mirrors
 

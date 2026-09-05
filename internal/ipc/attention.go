@@ -233,9 +233,11 @@ func (s *Server) handleIssueRemoveBlockedBy(ctx context.Context, raw json.RawMes
 }
 
 // ExecuteVerb implements attention.VerbExecutor for the daemon: it binds each
-// registered verb to the trusted primitive the fleet already exposes. The store
-// calls this AFTER the resolution is persisted (CAS), so a verb failure is
-// audited but never leaves the request half-open.
+// registered verb to the trusted primitive the fleet already exposes. The
+// store calls this BEFORE it applies and persists the resolution (CAS): a
+// verb failure short-circuits Resolve's error return and the request stays
+// untouched — open, unpersisted, unjournaled — instead of being silently
+// consumed.
 func (s *Server) ExecuteVerb(ctx context.Context, req *attention.DecisionRequest, opt attention.Option) error {
 	repo := req.Context.Repo
 	issue := req.Context.Issue

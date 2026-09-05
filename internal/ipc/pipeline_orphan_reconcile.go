@@ -69,13 +69,6 @@ const (
 	// token minted slightly AHEAD of this reader's clock, never a grace period
 	// added to startupGrace. There is exactly one release threshold.
 	claimSkewTolerance = 60 * time.Second
-
-	// snapshotAgeCap is 7.4's last row: anything with an identity that nothing
-	// has collected in two weeks is debris, INCLUDING a paused snapshot. A pause
-	// is never reconciled while it is fresh (C5 — it powers the restore prompt at
-	// the next activation, possibly days later), but a pause nobody resumed in two
-	// weeks is not a pending decision.
-	snapshotAgeCap = 14 * 24 * time.Hour
 )
 
 // --- The liveness ladder (ADR-017 7.2) -------------------------------------
@@ -179,7 +172,7 @@ func skipRun(ev runEvidence, runID string, snap *state.RuntimeState, modTime, no
 		return true // 1. this server's registry, lease inside the window
 	case ev.schedulerLive != nil && ev.schedulerLive(runID):
 		return true // 2. the Go scheduler's registry (Decision 11)
-	case snap != nil && ev.processAlive != nil && now.Sub(modTime) <= snapshotAgeCap && ev.processAlive(snap.PID):
+	case snap != nil && ev.processAlive != nil && now.Sub(modTime) <= runstate.SnapshotRetention && ev.processAlive(snap.PID):
 		// 3. the run's own stage child — BOUNDED BY 7.4's LAST ROW, and the only
 		// arm that is. Arms 1, 2 and 5 are this process's own evidence and expire
 		// on their own; arm 3 reads a pid out of a FILE and asks the kernel about
@@ -324,7 +317,7 @@ func classifyCandidate(c reconcileCandidate, ev runEvidence, now time.Time) disp
 	if c.snap.Abandoned {
 		switch {
 		case c.snap.AbandonedAt == nil:
-			if now.Sub(c.modTime) <= snapshotAgeCap {
+			if now.Sub(c.modTime) <= runstate.SnapshotRetention {
 				return dispositionKeep
 			}
 		case now.Sub(*c.snap.AbandonedAt) <= livenessWindow:
@@ -337,7 +330,7 @@ func classifyCandidate(c reconcileCandidate, ev runEvidence, now time.Time) disp
 	// paused, fresh: never reconciled — it powers the restore prompt (C1/C5).
 	// "Fresh" here is the AGE CAP, not the liveness window: the prompt is read at
 	// the next activation, which may be days later.
-	if c.snap.Paused && now.Sub(c.modTime) <= snapshotAgeCap {
+	if c.snap.Paused && now.Sub(c.modTime) <= runstate.SnapshotRetention {
 		return dispositionKeep
 	}
 

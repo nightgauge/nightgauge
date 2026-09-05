@@ -471,6 +471,23 @@ A halted fleet also skips the startup Backlog→Ready promotion scan — promoti
 is a board write announcing dispatchable work, and a halted fleet dispatches
 nothing.
 
+**The lifecycle methods return an observed state, not an assumed one (#494).**
+`autonomous.start`, `autonomous.resume`, `autonomous.resumeRepo` and
+`autonomous.stop` all signal the scheduler and then have to answer with a
+status. They used to sleep a flat 50ms first and sample whatever was there.
+That is a guess, not synchronization: `Stop()` only signals `stopCh`, which the
+dispatch loop drains **between cycles**, so a stop pressed while a cycle was in
+flight returned `running` — the extension was told the fleet was still up at
+the exact moment it had asked it to come down.
+
+Each handler now blocks on `AutonomousScheduler.WaitForRunning(want, timeout)`,
+which is woken by the `running` transition itself (every write to that flag
+goes through a single writer that closes a broadcast channel). The wait is
+bounded at two seconds so a wedged scheduler cannot hang an IPC request — and
+when the deadline expires the handler still reports the state the scheduler is
+**actually** in, and logs that it did. A timed-out wait never upgrades to the
+state the caller asked for.
+
 Two additional fields support detecting a stalled scheduler:
 
 - **`pid`** — the OS process ID of the scheduler that last wrote the file
@@ -517,6 +534,33 @@ autonomous:
     epic_checkpoint: true # Pause between epics for review
     health_gate_min: 30 # Minimum health score (0-100)
 ```
+
+### One config builder for both entry points (#1445)
+
+Two entry points attach an autonomous scheduler: the `serve` daemon (behind the
+workspace scheduler lease) and `nightgauge autonomous run`. Both get their
+`AutonomousConfig` from a single builder, `buildAutonomousConfig` in
+`cmd/nightgauge/autonomous_config.go`.
+
+That is a correctness requirement, not tidiness. The two used to assemble the
+struct by hand, independently, and drifted: `auto_actionable`,
+`trusted_author_associations`, `disable_epic_blockedby_cascade` and the three
+`refinement_*` keys were read only on the `run` path and silently ignored under
+`serve` — the primary long-running daemon — while `serve` alone got the
+documented adaptive-cadence and graph-cache defaults. Neither half warned; the
+scheduler simply behaved as if the keys were absent.
+
+Every `autonomous:` key is therefore read in exactly one place. The five values
+`autonomous run` owns — `--interval`, `--max-concurrent`, `--budget`,
+`--dry-run`, `--allow-self-repo` — are passed to the builder as explicit
+overrides, because those flags have already fallen back to `config.yaml` where
+the flag was absent; passing them as pointers keeps a deliberate `--budget 0`
+from being re-filled from the file. `serve` has no such flags and passes none,
+so the file decides everything.
+
+A source-level guard test asserts that any function constructing an
+`orchestrator.AutonomousScheduler` also calls the builder, so a third entry
+point cannot quietly grow a fourth copy of the field list.
 
 ### Self-repo dispatch guard (allow_self_repo, #292)
 

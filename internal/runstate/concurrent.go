@@ -73,6 +73,23 @@ func DetectConcurrent(baseDir string) (bool, *ConcurrentRunRefusedError) {
 // the exact failure ProcessAlive was exported to end (#341).
 const LivenessWindow = 30 * time.Minute
 
+// SnapshotRetention is how long a runtime snapshot's mere EXISTENCE vouches for
+// the issue it names when no liveness arm does — ADR-017 7.4's last row: an
+// identity nothing has collected in two weeks is debris, INCLUDING a paused one.
+// A pause is never aged out while it is fresh (it powers the restore prompt at
+// the next activation, possibly days later), but a pause nobody resumed in two
+// weeks is not a pending decision.
+//
+// It lives HERE, beside LivenessWindow and ProcessAlive, for the same reason
+// that constant does: it has two readers that must not disagree. The IPC orphan
+// reconciler (internal/ipc) collects past this cap; the snapshot-derived
+// in-flight set the CLI worktree sweep uses (internal/state) stops PROTECTING
+// past it. While the number lived privately in internal/ipc the second reader
+// had no cap at all, so in a workspace where `serve`/the extension never runs,
+// nothing ever aged a paused or corrupt snapshot out and its worktree was
+// protected forever (#443).
+const SnapshotRetention = 14 * 24 * time.Hour
+
 // ProcessAlive reports whether `pid` is a live process on the current host.
 // Exported as the ONE liveness probe (#341): `autonomous status` carried an
 // inline copy of this body, and two probes are two answers to "is the writer

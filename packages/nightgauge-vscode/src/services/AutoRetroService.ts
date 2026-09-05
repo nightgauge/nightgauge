@@ -146,6 +146,7 @@ export type RetroFailureCategory =
   | "work-stranded"
   | "containment-breach"
   | "validation-inconclusive"
+  | "credential-failure"
   | "unknown";
 
 export interface RetroFinding {
@@ -557,6 +558,7 @@ const TERMINAL_KIND_CATEGORY: Record<TerminalFailureKind, RetroFailureCategory> 
 
   // The harness refused a tool call. Not a defect — a "not that way".
   permission_denied: "permission-denied",
+  git_transport_auth_failed: "credential-failure",
 
   // A person owns the next move.
   architecture_approval_required: "human-decision-required",
@@ -1839,6 +1841,8 @@ export class AutoRetroService {
         "The stage wrote into a repository it does not own — the write-containment check caught it while the stage reported success",
       "validation-inconclusive":
         "A validation tier ran and executed zero tests — nothing failed, so nothing was actually verified",
+      "credential-failure":
+        "A git or forge transport refused the credentials the machine offered — the run could not authenticate, and no rerun, stronger model or better plan changes that",
       unknown: "Pipeline failure detected but category could not be determined",
     };
 
@@ -1891,6 +1895,8 @@ export class AutoRetroService {
         "The stage wrote into a repository it does not own (#129). It exited 0 and reported success, so no other signal marks the run failed. Attribute the out-of-worktree writes before touching anything: the containment record names the files and the repository. Then fix why the stage reached outside — usually a hard-coded path or a sibling-repo edit that belongs in its own session — rather than re-running and writing there again.",
       "validation-inconclusive":
         "A validation tier ran and executed zero tests, so the suite proved nothing while reporting no failures. There is no failing test to open. Check the tier's target paths and tag filters (`exclude-tags`, the test-execution record under `.nightgauge/pipeline/`) against where the change actually landed — a green suite that ran nothing is the failure mode this kind exists to name.",
+      "credential-failure":
+        "Fix the machine's git/forge credentials, then re-queue — the work itself was never attempted. Check the remote's scheme against what is configured (`git remote -v`): an SSH remote needs a loaded agent key, an HTTPS remote needs a credential helper or a token the forge still accepts. `Bad credentials` / HTTP 401 from the API means the token is present but rejected, so every board read, PR create and merge in the run would have failed the same way. Do NOT re-run at a higher model tier: no model can supply a credential, which is why the escalation gate declines this class (#878).",
       unknown: "Review logs manually. Run /nightgauge:retro for AI-powered root cause analysis.",
     };
 
@@ -1924,6 +1930,7 @@ export class AutoRetroService {
       "work-stranded": "high",
       "containment-breach": "high",
       "validation-inconclusive": "medium",
+      "credential-failure": "high",
       unknown: "low",
     };
 

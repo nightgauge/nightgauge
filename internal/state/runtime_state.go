@@ -1496,6 +1496,43 @@ func (rs *RuntimeState) RecordStageOutputTail(stage PipelineStage, raw string) {
 	rs.StageOutputTails[string(stage)] = tail
 }
 
+// AppendStageOutputTail adds evidence the ORCHESTRATOR observed for a stage to
+// that stage's captured tail, keeping whatever the subagent already reported.
+//
+// RecordStageOutputTail replaces, because its one caller owns the whole
+// subagent tail. This appends, because its callers own a single line the
+// subagent could not have printed: a git or forge operation the scheduler
+// itself performs on the stage's behalf (#878).
+//
+// The observed #878 run died on a credential-less epic-branch push that
+// `Scheduler.ensureEpicBranchForItem` performs AFTER the stage returns. That
+// failure was non-blocking and log-only, so nothing downstream could see it:
+// the post-condition check one block later found a missing output context,
+// looked in the tail for a first cause, found only the subagent's own clean
+// chatter, and recorded the symptom as the run's terminal reason — the exact
+// misattribution #878 reports. A cause the daemon logged has to reach the
+// evidence the record is built from, or every consumer of that evidence is
+// structurally blind to it.
+//
+// Appends at the END so the line survives TruncateOutputTail (which keeps the
+// LAST lines) and so firstCauseFromOutputTail — last match wins — reports the
+// thing that happened last.
+func (rs *RuntimeState) AppendStageOutputTail(stage PipelineStage, raw string) {
+	if raw == "" {
+		return
+	}
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	if rs.StageOutputTails == nil {
+		rs.StageOutputTails = make(map[string]string)
+	}
+	joined := raw
+	if existing := rs.StageOutputTails[string(stage)]; existing != "" {
+		joined = strings.TrimRight(existing, "\n") + "\n" + raw
+	}
+	rs.StageOutputTails[string(stage)] = TruncateOutputTail(joined)
+}
+
 // ClearStageOutputTail drops any captured tail for a stage.
 //
 // A stage that fails and is then re-dispatched (model escalation, recovery
