@@ -155,6 +155,41 @@ func TestLicenseService_Validate_Rejected4xx_ExpiredCode(t *testing.T) {
 	}
 }
 
+// TestLicenseService_Validate_Rejected4xx_MachineLimitCode (#1454):
+// LICENSE_MACHINE_LIMIT maps to LicenseStatusMachineLimit rather than being
+// left "" (unknown) — a seat-limit rejection must read as a seat limit, not
+// as a bare invalid key.
+func TestLicenseService_Validate_Rejected4xx_MachineLimitCode(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/license/validate" {
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write([]byte(`{"error":{"code":"LICENSE_MACHINE_LIMIT","message":"machine limit reached"}}`))
+			return
+		}
+		w.WriteHeader(404)
+	}))
+	defer srv.Close()
+
+	cfg := Config{BaseURL: srv.URL, LicenseKey: "IB-TEST-MACH-LIMI-TXXX"}
+	c, err := NewClient(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.setMode(ModeOnline)
+
+	svc := NewLicenseService(c)
+	info, err := svc.Validate(context.Background())
+	if err != nil {
+		t.Fatalf("Validate returned error: %v", err)
+	}
+	if info.Valid {
+		t.Error("a machine-limit rejection must not be reported as valid")
+	}
+	if info.Status != LicenseStatusMachineLimit {
+		t.Errorf("status = %q, want %q", info.Status, LicenseStatusMachineLimit)
+	}
+}
+
 // TestLicenseService_Validate_Rejected4xx_UnknownCode: a 4xx with no
 // recognizable license error code leaves Status "" (unknown) rather than
 // guessing — Valid=false already blocks regardless.
@@ -400,6 +435,45 @@ func TestLicenseService_ValidateKey_Rejected4xx(t *testing.T) {
 	}
 	if info.Valid {
 		t.Error("a 4xx-rejected entered key must yield Valid=false")
+	}
+}
+
+// TestLicenseService_ValidateKey_Rejected4xx_MachineLimitCode (#1454): same
+// mapping as TestLicenseService_Validate_Rejected4xx_MachineLimitCode, but
+// through the entered-key path.
+func TestLicenseService_ValidateKey_Rejected4xx_MachineLimitCode(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/health":
+			jsonResponse(w, map[string]interface{}{
+				"status": "ok", "version": "1.0.0", "uptime_seconds": 1, "dependencies": map[string]interface{}{},
+			})
+		case "/v1/license/validate":
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write([]byte(`{"error":{"code":"LICENSE_MACHINE_LIMIT","message":"machine limit reached"}}`))
+		default:
+			w.WriteHeader(404)
+		}
+	}))
+	defer srv.Close()
+
+	cfg := Config{BaseURL: srv.URL, LicenseKey: "SESSION-KEY"}
+	c, err := NewClient(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.setMode(ModeOnline)
+	svc := NewLicenseService(c)
+
+	info, err := svc.ValidateKey(context.Background(), "BAD-ENTERED-KEY")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Valid {
+		t.Error("a machine-limit-rejected entered key must yield Valid=false")
+	}
+	if info.Status != LicenseStatusMachineLimit {
+		t.Errorf("status = %q, want %q", info.Status, LicenseStatusMachineLimit)
 	}
 }
 

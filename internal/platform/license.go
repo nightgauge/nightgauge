@@ -21,6 +21,13 @@ const (
 	LicenseStatusExpired   = "expired"
 	LicenseStatusRevoked   = "revoked"
 	LicenseStatusSuspended = "suspended"
+	// LicenseStatusMachineLimit is a 403 LICENSE_MACHINE_LIMIT rejection
+	// (#1454): the key itself is fine, but this machine can't take a seat
+	// because the license's machine cap is already full. Distinct from
+	// Expired/Revoked/Suspended (lifecycle states of the license) so the
+	// extension can tell the operator "seats are full" instead of "your key
+	// is invalid".
+	LicenseStatusMachineLimit = "machine_limit"
 )
 
 // LicenseInfo holds cached license validation results.
@@ -38,7 +45,7 @@ const (
 type LicenseInfo struct {
 	Valid bool   `json:"valid"`
 	Tier  string `json:"tier"`
-	// Status is one of LicenseStatusActive/Expired/Revoked/Suspended, or ""
+	// Status is one of LicenseStatusActive/Expired/Revoked/Suspended/MachineLimit, or ""
 	// when unknown (e.g. a generic 4xx with no parseable error code).
 	Status       string     `json:"status,omitempty"`
 	ExpiresAt    *time.Time `json:"expiresAt,omitempty"`
@@ -345,15 +352,18 @@ type licenseErrorBody struct {
 }
 
 // statusFromErrorCode maps a platform ApiLicenseErrorCode to a LicenseStatus.
-// Only REVOKED/EXPIRED map to a specific status — the others (INVALID,
-// TIER_EXCEEDED, MACHINE_LIMIT) aren't lifecycle states of the license itself,
-// so they're left "" (unknown); Valid=false already blocks regardless.
+// REVOKED/EXPIRED/MACHINE_LIMIT map to a specific status — the remaining
+// codes (INVALID, TIER_EXCEEDED) aren't lifecycle states of the license
+// itself, so they're left "" (unknown); Valid=false already blocks
+// regardless.
 func statusFromErrorCode(code string) string {
 	switch code {
 	case "LICENSE_REVOKED":
 		return LicenseStatusRevoked
 	case "LICENSE_EXPIRED":
 		return LicenseStatusExpired
+	case "LICENSE_MACHINE_LIMIT":
+		return LicenseStatusMachineLimit
 	default:
 		return ""
 	}

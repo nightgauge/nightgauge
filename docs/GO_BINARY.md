@@ -7444,6 +7444,20 @@ or `NIGHTGAUGE_PLATFORM_API_KEY` env var):
 {"id":9,"method":"platform.healthCheck"}
 ```
 
+Both `platform.license` and `platform.validateLicense` return the Go
+`platform.LicenseInfo` struct as-is (no shape translation over the wire), and
+its `status` field carries one of the following extension-facing values
+(#1454):
+
+| `status`        | Meaning                                                                |
+| --------------- | ----------------------------------------------------------------------- |
+| `active`        | Valid, currently-enforced license.                                      |
+| `expired`       | The license's term has ended.                                           |
+| `revoked`       | The platform revoked the license.                                      |
+| `suspended`     | The license is suspended (e.g. billing failure).                        |
+| `machine_limit` | The key is valid, but this machine can't take a seat — the license's machine cap is already full. Distinct from the lifecycle states above: the fix is freeing or adding a seat, not renewing or contacting support. |
+| `""` (empty)    | Unknown — either a connectivity/5xx fallback, or a 4xx with no parseable license error code. |
+
 #### Per-Operation Identity Resolution
 
 In multi-repo workspaces where different repos use different GitHub identities,

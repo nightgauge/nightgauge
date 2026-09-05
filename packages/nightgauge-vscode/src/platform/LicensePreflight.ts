@@ -256,6 +256,7 @@ const KNOWN_LICENSE_STATUSES: ReadonlySet<string> = new Set([
   "expired",
   "revoked",
   "suspended",
+  "machine_limit",
 ]);
 
 /**
@@ -291,6 +292,12 @@ export function messageForBlockedStatus(status: LicenseStatus | "community"): {
       return {
         reason: "Your license has been suspended. Contact support for assistance.",
         actionUrl: "https://github.com/nightgauge/nightgauge/issues",
+      };
+    case "machine_limit":
+      return {
+        reason:
+          "Your license has reached its machine limit. Remove a machine or upgrade your plan to add this one.",
+        actionUrl: buildAccountUrl(),
       };
     case "expired":
     case "community":
