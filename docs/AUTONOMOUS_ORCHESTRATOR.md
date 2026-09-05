@@ -518,6 +518,33 @@ autonomous:
     health_gate_min: 30 # Minimum health score (0-100)
 ```
 
+### One config builder for both entry points (#1445)
+
+Two entry points attach an autonomous scheduler: the `serve` daemon (behind the
+workspace scheduler lease) and `nightgauge autonomous run`. Both get their
+`AutonomousConfig` from a single builder, `buildAutonomousConfig` in
+`cmd/nightgauge/autonomous_config.go`.
+
+That is a correctness requirement, not tidiness. The two used to assemble the
+struct by hand, independently, and drifted: `auto_actionable`,
+`trusted_author_associations`, `disable_epic_blockedby_cascade` and the three
+`refinement_*` keys were read only on the `run` path and silently ignored under
+`serve` — the primary long-running daemon — while `serve` alone got the
+documented adaptive-cadence and graph-cache defaults. Neither half warned; the
+scheduler simply behaved as if the keys were absent.
+
+Every `autonomous:` key is therefore read in exactly one place. The five values
+`autonomous run` owns — `--interval`, `--max-concurrent`, `--budget`,
+`--dry-run`, `--allow-self-repo` — are passed to the builder as explicit
+overrides, because those flags have already fallen back to `config.yaml` where
+the flag was absent; passing them as pointers keeps a deliberate `--budget 0`
+from being re-filled from the file. `serve` has no such flags and passes none,
+so the file decides everything.
+
+A source-level guard test asserts that any function constructing an
+`orchestrator.AutonomousScheduler` also calls the builder, so a third entry
+point cannot quietly grow a fourth copy of the field list.
+
 ### Self-repo dispatch guard (allow_self_repo, #292)
 
 Autonomous **refuses to dispatch an issue belonging to the repository that
