@@ -11,9 +11,15 @@ import (
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/config"
+	"github.com/nightgauge/nightgauge/internal/orchestrator"
 )
 
 func boolPtr(v bool) *bool { return &v }
+
+// stuckEpicWebhookEnvForTest is a synthetic env var name so the watchdog's
+// webhook resolution can be asserted without touching the real
+// NIGHTGAUGE_STUCK_EPIC_WEBHOOK a developer machine may have set.
+const stuckEpicWebhookEnvForTest = "NIGHTGAUGE_TEST_STUCK_EPIC_WEBHOOK"
 
 // TestBuildAutonomousConfigServePathHonorsConfigKeys pins the config.yaml keys
 // that the `serve` daemon's autonomous scheduler silently dropped (#1445).
@@ -27,8 +33,26 @@ func TestBuildAutonomousConfigServePathHonorsConfigKeys(t *testing.T) {
 			RefinementEnabled:           boolPtr(false),
 			RefinementInterval:          config.YAMLDuration(90 * time.Second),
 			RefinementMaxConcurrent:     3,
+			PickupBacklog:               boolPtr(true),
+			ExcludeLabels:               []string{"needs-human", " design-review "},
+			SafetyRails: &config.SafetyRailsConfig{
+				BudgetCeiling:     12345,
+				CircuitBreakerMax: 4,
+				RateLimitPerHour:  9,
+				HealthGateMin:     55,
+			},
+			StuckEpicDetection: &config.StuckEpicDetectionConfig{
+				Enabled:           boolPtr(false),
+				ReAlertAfter:      config.YAMLDuration(2 * time.Hour),
+				DiscordWebhookEnv: stuckEpicWebhookEnvForTest,
+			},
+		},
+		Concurrency: &config.ConcurrencyConfig{
+			PerRepoMax:          4,
+			RepositoryOverrides: map[string]int{"acme-mobile": 2},
 		},
 	}
+	t.Setenv(stuckEpicWebhookEnvForTest, "https://example.invalid/hook")
 
 	got := buildAutonomousConfig(cfg, autonomousConfigOverrides{})
 
@@ -49,6 +73,99 @@ func TestBuildAutonomousConfigServePathHonorsConfigKeys(t *testing.T) {
 	}
 	if got.RefinementMaxConcurrent != 3 {
 		t.Errorf("RefinementMaxConcurrent = %d, want 3", got.RefinementMaxConcurrent)
+	}
+	if !got.PickupBacklog {
+		t.Errorf("PickupBacklog = false, want true (autonomous.pickup_backlog: true was set)")
+	}
+	// Trimmed and empty-dropped by ResolvedExcludeLabels, never the default set.
+	if !reflect.DeepEqual(got.ExcludeLabels, []string{"needs-human", "design-review"}) {
+		t.Errorf("ExcludeLabels = %#v, want [\"needs-human\" \"design-review\"]", got.ExcludeLabels)
+	}
+	if got.SafetyRails == nil {
+		t.Fatal("SafetyRails = nil, want the configured autonomous.safety_rails block")
+	}
+	wantRails := orchestrator.SafetyConfig{
+		BudgetCeiling:     12345,
+		CircuitBreakerMax: 4,
+		RateLimitPerHour:  9,
+		// epic_checkpoint was omitted, so ResolveEpicCheckpoint keeps the
+		// default true — copying the zero field would opt out silently (#991).
+		EpicCheckpoint: true,
+		HealthGateMin:  55,
+	}
+	if *got.SafetyRails != wantRails {
+		t.Errorf("SafetyRails = %#v, want %#v", *got.SafetyRails, wantRails)
+	}
+	if got.PerRepoMax != 4 {
+		t.Errorf("PerRepoMax = %d, want 4 (concurrency.per_repo_max: 4 was set)", got.PerRepoMax)
+	}
+	if !reflect.DeepEqual(got.RepositoryMaxConcurrent, map[string]int{"acme-mobile": 2}) {
+		t.Errorf("RepositoryMaxConcurrent = %#v, want {\"acme-mobile\": 2}", got.RepositoryMaxConcurrent)
+	}
+	if got.StuckEpicDetectionEnabled {
+		t.Errorf("StuckEpicDetectionEnabled = true, want false (stuck_epic_detection.enabled: false was set)")
+	}
+	if got.StuckEpicReAlertAfter != 2*time.Hour {
+		t.Errorf("StuckEpicReAlertAfter = %v, want 2h", got.StuckEpicReAlertAfter)
+	}
+	if got.StuckEpicWebhookURL != "https://example.invalid/hook" {
+		t.Errorf("StuckEpicWebhookURL = %q, want the URL from %s", got.StuckEpicWebhookURL, stuckEpicWebhookEnvForTest)
+	}
+}
+
+// TestBuildAutonomousConfigResolvesEpicCheckpoint pins the two halves of the
+// pointer resolution the builder owns: an omitted epic_checkpoint keeps the
+// between-epic human pause, an explicit false removes it. A builder that
+// copied the field straight across would pass the second case and fail the
+// first, which is how the pause was lost once already.
+func TestBuildAutonomousConfigResolvesEpicCheckpoint(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		value *bool
+		want  bool
+	}{
+		{name: "omitted", value: nil, want: true},
+		{name: "explicit-false", value: boolPtr(false), want: false},
+		{name: "explicit-true", value: boolPtr(true), want: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &config.Config{Autonomous: &config.AutonomousConfig{
+				SafetyRails: &config.SafetyRailsConfig{
+					// A real config tunes some other rail; epic_checkpoint
+					// rides along.
+					CircuitBreakerMax: 3,
+					EpicCheckpoint:    tc.value,
+				},
+			}}
+			got := buildAutonomousConfig(cfg, autonomousConfigOverrides{})
+			if got.SafetyRails == nil {
+				t.Fatal("SafetyRails = nil, want the configured block")
+			}
+			if got.SafetyRails.EpicCheckpoint != tc.want {
+				t.Errorf("EpicCheckpoint = %v, want %v", got.SafetyRails.EpicCheckpoint, tc.want)
+			}
+		})
+	}
+}
+
+// TestBuildAutonomousConfigKeepsWatchdogAndRailDefaults is the other arm: with
+// no safety_rails, no concurrency and no stuck_epic_detection block, the
+// builder must still leave the watchdog armed at its documented cadence and
+// resolve the per-repo cap, rather than handing the scheduler a zeroed struct.
+func TestBuildAutonomousConfigKeepsWatchdogAndRailDefaults(t *testing.T) {
+	got := buildAutonomousConfig(&config.Config{}, autonomousConfigOverrides{})
+
+	if !got.StuckEpicDetectionEnabled {
+		t.Error("StuckEpicDetectionEnabled = false, want true (watchdog is on by default)")
+	}
+	if got.StuckEpicReAlertAfter != 6*time.Hour {
+		t.Errorf("StuckEpicReAlertAfter = %v, want 6h", got.StuckEpicReAlertAfter)
+	}
+	if got.PerRepoMax != config.DefaultPerRepoMax {
+		t.Errorf("PerRepoMax = %d, want %d", got.PerRepoMax, config.DefaultPerRepoMax)
+	}
+	if got.SafetyRails != nil {
+		t.Errorf("SafetyRails = %#v, want nil so the orchestrator applies its own rail defaults", *got.SafetyRails)
 	}
 }
 
