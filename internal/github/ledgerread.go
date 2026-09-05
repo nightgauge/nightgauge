@@ -33,6 +33,19 @@ import (
 // workspace burn?" question.
 const GraphQLHourlyLimit = 5000
 
+// BoardReadPointsPerPage is the GraphQL cost of one page of a ProjectV2 board
+// read (#842's measurement, after the nested `first:` values were already
+// tuned 16x down — the cost is not the query's shape, it is how many times it
+// is issued). BoardReadItemsPerPage is the item count each page pulls.
+//
+// This is the one multiplier every "what would a full board read cost?"
+// estimate needs — `nightgauge api-usage --budget` (#1428) and the sweep's
+// own read-count accounting both price against it.
+const (
+	BoardReadPointsPerPage = 17
+	BoardReadItemsPerPage  = 100
+)
+
 // IdleBudgetWarnFraction is the share of the hourly GraphQL budget a workspace
 // may spend before `doctor` warns.
 //
@@ -256,15 +269,30 @@ func SummarizeWindow(recs []APILedgerRecord, since, until time.Time) LedgerWindo
 			w.GraphQLCalls++
 			w.Points += r.Cost
 			if r.Remaining >= 0 && (w.LowWaterRemaining < 0 || r.Remaining < w.LowWaterRemaining) {
-				// Remaining is only meaningful when the response carried the
-				// header; a record without one leaves Remaining at zero, which
-				// would otherwise read as "exhausted". Cost or a 2xx status is
-				// the evidence the header was there.
-				if r.Remaining > 0 || r.Cost > 0 {
+				// Remaining is only meaningful when the response actually
+				// carried the header; a record without one leaves Remaining
+				// at its zero value, which would otherwise read as
+				// "exhausted". HeaderObserved is the signal #1452 added for
+				// the case Cost and Status cannot cover on their own: a
+				// cached (304) hit legitimately has Cost == 0 while still
+				// carrying a real, current Remaining value.
+				//
+				// A record written by a binary built before HeaderObserved
+				// existed decodes it as false regardless — but its nonzero
+				// Remaining or Cost still proves a header really was parsed
+				// at write time (record() in apiledger.go only ever sets
+				// either field inside the header-parse branch), so both are
+				// accepted here as additional signals rather than dropped.
+				// Trusting only HeaderObserved would read every ledger
+				// record from a pre-upgrade binary as unknown quota, and
+				// since several nightgauge processes can share one
+				// workspace ledger, a lagging daemon keeps writing such
+				// records indefinitely.
+				if r.HeaderObserved || r.Remaining > 0 || r.Cost > 0 {
 					w.LowWaterRemaining = r.Remaining
 				}
 			}
-			if r.Remaining == 0 && r.Cost > 0 && !w.Exhausted {
+			if (r.HeaderObserved || r.Cost > 0) && r.Remaining == 0 && !w.Exhausted {
 				w.Exhausted = true
 				w.ExhaustedResource = resource
 				w.LowWaterRemaining = 0

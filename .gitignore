@@ -173,9 +173,13 @@ docs/strategy/
 .branch-context
 .nightgauge/planning-summary-*.txt
 
-# Captured output from scripts/ci-local.sh (see run_step)
+# Captured output from scripts/ci-local.sh (see run_step) and from the CI job's
+# concurrent plain/race Go passes, which capture each pass to its own file so
+# two suites cannot interleave into one unreadable log (#1218).
 .ci-local-logs/
 go-test.json
+go-test.err
+go-test-race.log
 
 # Clean-install release gate (scripts/clean-install-e2e.sh) — per-run logs,
 # the packaged VSIX copy and the exported agent credentials live here.

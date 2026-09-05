@@ -1039,6 +1039,20 @@ function formatStatus(status: AutonomousStatusResult, now: Date = new Date()): s
     }
   }
 
+  // ─── Detached board work (#489) ────────────────────────────────────
+  //
+  // Printed next to "Running" because it is the OTHER kind of in-flight work,
+  // and the only kind a stop leaves behind: "Stop Autonomous" is a pause that
+  // deliberately neither cancels nor joins board recovery, so a status reading
+  // STOPPED with three board mutations still going is a true and misleading
+  // line on its own — the same shape as the halted-repositories block above.
+  if (status.boardRecoveryInFlight > 0) {
+    lines.push("");
+    lines.push(
+      `Board recovery in flight: ${status.boardRecoveryInFlight} op(s) — status moves still completing in the background`
+    );
+  }
+
   // ─── Remaining (queue depth) ───────────────────────────────────────
   if (status.remaining > 0) {
     lines.push("");

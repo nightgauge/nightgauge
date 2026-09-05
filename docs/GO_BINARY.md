@@ -4642,6 +4642,47 @@ By caller:
 Two producers, the same board, one sweep, 81% of the bill — the finding that
 `--by caller` makes unmissable and a call-site count cannot show at all.
 
+#### Agent Guidance: A Raw `gh` Board Pull Is Invisible Here (Issue #1428)
+
+The ledger wraps the Go binary's transport. It cannot see a request made by
+anything else — and the most expensive GitHub client in this workspace on a
+normal day is an **agent session running `gh` in a shell**, which is a separate
+process with its own token resolution. A `ProjectV2` board read costs 17 points
+per 100-item page (see above); the shared board has ~1,960 items, so
+
+```
+gh project item-list 3 --owner nightgauge --limit 3000
+  = 20 pages x 17 pts = ~340 GraphQL points, in one command
+```
+
+Three such pulls inside a few minutes — an agent iterating on a board-drift
+audit — consumes the hourly GraphQL budget outright (#1428). The failure then
+surfaces somewhere else entirely: `gh pr checks` starts returning `GraphQL: API
+rate limit already exceeded`, because it is **also GraphQL**, so watching CI
+during exactly the window a board audit exhausted the quota fails too — and the
+natural workaround, polling `gh pr checks` again, spends more of the same pool.
+Two rules follow directly from that:
+
+- **Pull the board once, into a file — never iterate against the API.**
+  `gh project item-list 3 --owner nightgauge --limit 3000 --format json >
+  board.json`, then filter, grep, or script against `board.json`. A second
+  question about the same board is a second read of the file, not a second
+  `gh project item-list`.
+- **Watch CI over REST, not GraphQL.** `gh pr checks` calls GraphQL and shares
+  the same 5,000-point pool a board pull just spent. Use the REST check-runs
+  endpoint instead — the same call `scripts/post-merge-check.sh` already uses
+  post-merge:
+
+  ```bash
+  sha=$(gh pr view <PR> --json headRefOid --jq .headRefOid)
+  gh api "repos/{owner}/{repo}/commits/$sha/check-runs" --paginate
+  ```
+
+Before a bulk read, check what it would cost against what is left this hour:
+`nightgauge api-usage --budget` reports the remaining GraphQL budget for the
+current hour and prices a full board read against it, entirely from the local
+ledger — no GitHub request needed to ask the question.
+
 ### The Sweep's Board Binding (Issue #844)
 
 The ledger's first finding was not a cadence problem. Two of the three top
@@ -7678,8 +7719,51 @@ or `NIGHTGAUGE_PLATFORM_API_KEY` env var):
 {"id":2,"method":"platform.license"}
 
 # Validate a license key and bind machine
-{"id":3,"method":"platform.validateLicense","params":{"licenseKey":"ib_live_...","machineId":"sha256-hash"}}
+{"id":3,"method":"platform.validateLicense","params":{"licenseKey":"ib_live_...","machineId":"vscode-install-uuid","hostname":"build-box","platform":"darwin"}}
+```
 
+**`machineId` is the RAW per-installation fingerprint, not a hash.** The caller
+sends `vscode.env.machineId` (plus `os.hostname()` and `process.platform`); the
+daemon derives the wire value itself as `HMAC-SHA256(licenseKey, machineId)`,
+hex-encoded, and puts that in the platform's `machineId` request field. Keying
+the digest with the license key means the same machine hashes differently under
+different licenses, and the raw machine id never leaves the daemon.
+
+**The digest covers the machine id and nothing else; `hostname` and `platform`
+travel beside it as cleartext binding context.** The seat identity has to be
+exactly as stable as the installation it names, and only the machine id is:
+`vscode.env.machineId` is a UUID that survives restarts and updates, and the
+daemon's fallback is a UUID persisted under the home directory. A hostname is
+not — macOS rewrites `.local` names on a network join, every devcontainer or
+Codespaces rebuild mints a fresh random one, and corporate re-imaging renames
+en masse — so folding it into the identity would re-bind one installation as a
+new machine on every change and burn a pro license's three seats on a single
+laptop, locking its owner out precisely because enforcement was switched on.
+`process.platform` is stable per install but adds nothing to a UUID while
+adding a second way to drift (`win32` here, `runtime.GOOS`'s `windows` on the
+daemon's own fallback path), so it stays out as well. The context fields are
+still sent, because the account UI needs to show *which* seat is which.
+
+Because the digest is the primary key of a `license_machines` row, its
+derivation is a wire contract: change it and every already-bound machine
+re-binds as a new seat, so a full license starts rejecting its own owner as
+`MACHINE_LIMIT`. `TestMachineInfo_Hash_PinsTheWireDigest` pins the exact bytes
+against digests computed outside Go (`openssl dgst -sha256 -hmac`), and
+`TestMachineInfo_Hash_IgnoresHostnameAndPlatform` pins the stability
+invariant.
+
+The daemon remembers the last identity a caller supplied, so the params-less
+`platform.license` method (which has nowhere to source one) re-presents the same
+machine rather than a second one. With nothing ever supplied — a headless CLI
+daemon — it falls back to this host: `ResolveMachineID()`, `os.Hostname()`,
+`runtime.GOOS`. That fallback identifies a real machine but cannot reproduce
+`vscode.env.machineId`, so every editor-side caller must pass the fields: an
+omitted fingerprint binds a *second* seat for one installation, and before #1334
+the handler unmarshalled the three fields and dropped them, so it bound none at
+all and the per-tier machine limits (community 1 / pro 3 / team+enterprise
+unlimited) were structurally unenforceable.
+
+```bash
 # Resolve skill content for a pipeline stage
 {"id":4,"method":"platform.resolveSkill","params":{"skillId":"feature-dev","model":"sonnet","complexityScore":5}}
 
@@ -7698,6 +7782,20 @@ or `NIGHTGAUGE_PLATFORM_API_KEY` env var):
 # Platform API health check
 {"id":9,"method":"platform.healthCheck"}
 ```
+
+Both `platform.license` and `platform.validateLicense` return the Go
+`platform.LicenseInfo` struct as-is (no shape translation over the wire), and
+its `status` field carries one of the following extension-facing values
+(#1454):
+
+| `status`        | Meaning                                                                |
+| --------------- | ----------------------------------------------------------------------- |
+| `active`        | Valid, currently-enforced license.                                      |
+| `expired`       | The license's term has ended.                                           |
+| `revoked`       | The platform revoked the license.                                      |
+| `suspended`     | The license is suspended (e.g. billing failure).                        |
+| `machine_limit` | The key is valid, but this machine can't take a seat — the license's machine cap is already full. Distinct from the lifecycle states above: the fix is freeing or adding a seat, not renewing or contacting support. |
+| `""` (empty)    | Unknown — either a connectivity/5xx fallback, or a 4xx with no parseable license error code. |
 
 #### Per-Operation Identity Resolution
 

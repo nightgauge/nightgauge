@@ -4884,47 +4884,10 @@ func serveCmd() *cobra.Command {
 				// so customers can use autonomous mode from any repo — the
 				// `autonomous:` config section is optional (sensible defaults).
 				{
-					autoCfg := orchestrator.DefaultAutonomousConfig()
-					// Unified slot ceiling: pipeline.max_concurrent is the
-					// source of truth. autonomous.max_concurrent is honored
-					// only as a legacy fallback so existing configs keep
-					// working unchanged. See config.ResolvedMaxConcurrent.
-					autoCfg.MaxConcurrent = config.ResolvedMaxConcurrent(cfg)
-					if cfg.Autonomous != nil {
-						autoCfg.ExcludeLabels = cfg.Autonomous.ResolvedExcludeLabels()
-						if d := cfg.Autonomous.ScanInterval.Duration(); d > 0 {
-							autoCfg.ScanInterval = d
-						}
-						if cfg.Autonomous.BudgetCeiling > 0 {
-							autoCfg.BudgetCeiling = cfg.Autonomous.BudgetCeiling
-						}
-						if cfg.Autonomous.DryRun != nil {
-							autoCfg.DryRun = *cfg.Autonomous.DryRun
-						}
-						if cfg.Autonomous.PickupBacklog != nil {
-							autoCfg.PickupBacklog = *cfg.Autonomous.PickupBacklog
-						}
-						if cfg.Autonomous.AllowSelfRepo {
-							autoCfg.AllowSelfRepo = true
-						}
-						if cfg.Autonomous.SafetyRails != nil {
-							src := cfg.Autonomous.SafetyRails
-							autoCfg.SafetyRails = &orchestrator.SafetyConfig{
-								BudgetCeiling:     src.BudgetCeiling,
-								CircuitBreakerMax: src.CircuitBreakerMax,
-								RateLimitPerHour:  src.RateLimitPerHour,
-								// Resolved, not copied: an omitted key must keep the default.
-								EpicCheckpoint: config.ResolveEpicCheckpoint(cfg),
-								HealthGateMin:  src.HealthGateMin,
-							}
-						}
-						rc := config.ResolveConcurrency(cfg)
-						autoCfg.PerRepoMax = rc.PerRepoMax
-						if cfg.Concurrency != nil && len(cfg.Concurrency.RepositoryOverrides) > 0 {
-							autoCfg.RepositoryMaxConcurrent = cfg.Concurrency.RepositoryOverrides
-						}
-					}
-					applyStuckEpicConfig(&autoCfg, cfg)
+					// `serve` has no autonomous flags, so every value comes
+					// from config.yaml via the one shared builder both entry
+					// points use (#1445).
+					autoCfg := buildAutonomousConfig(cfg, autonomousConfigOverrides{})
 
 					// Resolve the autonomous repo set. The workspace manifest
 					// (.vscode/nightgauge-workspace.yaml) is authoritative when
@@ -10110,83 +10073,19 @@ func autonomousRunCmd() *cobra.Command {
 			// that repo cannot be resolved (#882).
 			sched.WithWorkspaceRepoRegistry(workdir)
 
-			// Create autonomous scheduler
-			pickupBacklog := false
-			if cfg != nil && cfg.Autonomous != nil && cfg.Autonomous.PickupBacklog != nil {
-				pickupBacklog = *cfg.Autonomous.PickupBacklog
-			}
-
-			// Bridge refinement config
-			refinementEnabled := true
-			refinementInterval := 60 * time.Second
-			refinementMaxConcurrent := 1
-			autoActionable := false
-
-			if cfg != nil && cfg.Autonomous != nil {
-				if cfg.Autonomous.RefinementEnabled != nil {
-					refinementEnabled = *cfg.Autonomous.RefinementEnabled
-				}
-				if cfg.Autonomous.RefinementInterval.Duration() >= 30*time.Second {
-					refinementInterval = cfg.Autonomous.RefinementInterval.Duration()
-				}
-				if cfg.Autonomous.RefinementMaxConcurrent > 0 {
-					refinementMaxConcurrent = cfg.Autonomous.RefinementMaxConcurrent
-				}
-				if cfg.Autonomous.AutoActionable != nil {
-					autoActionable = *cfg.Autonomous.AutoActionable
-				}
-			}
-
-			var trustedAuthorAssociations []string
-			if cfg != nil && cfg.Autonomous != nil {
-				trustedAuthorAssociations = cfg.Autonomous.TrustedAuthorAssociations
-			}
-
-			autoCfg := orchestrator.AutonomousConfig{
-				ScanInterval:              interval,
-				MaxConcurrent:             maxSlots,
-				BudgetCeiling:             budget,
-				DebounceRepos:             true,
-				DryRun:                    dryRun,
-				AllowSelfRepo:             allowSelfRepo,
-				PickupBacklog:             pickupBacklog,
-				RefinementEnabled:         refinementEnabled,
-				RefinementInterval:        refinementInterval,
-				RefinementMaxConcurrent:   refinementMaxConcurrent,
-				RefinementCooldown:        5 * time.Minute,
-				AutoActionable:            autoActionable,
-				TrustedAuthorAssociations: trustedAuthorAssociations,
-				// Stuck-epic watchdog defaults; applyStuckEpicConfig refines from config.
-				StuckEpicDetectionEnabled: true,
-				StuckEpicReAlertAfter:     6 * time.Hour,
-				ExcludeLabels:             autoExcludeLabels,
-			}
-
-			// Bridge safety rails config from config.yaml
-			if cfg != nil && cfg.Autonomous != nil && cfg.Autonomous.SafetyRails != nil {
-				src := cfg.Autonomous.SafetyRails
-				autoCfg.SafetyRails = &orchestrator.SafetyConfig{
-					BudgetCeiling:     src.BudgetCeiling,
-					CircuitBreakerMax: src.CircuitBreakerMax,
-					RateLimitPerHour:  src.RateLimitPerHour,
-					// Resolved, not copied: an omitted key must keep the default.
-					EpicCheckpoint: config.ResolveEpicCheckpoint(cfg),
-					HealthGateMin:  src.HealthGateMin,
-				}
-			}
-
-			// Per-repo concurrency from the unified concurrency: block.
-			if cfg != nil {
-				rc := config.ResolveConcurrency(cfg)
-				autoCfg.PerRepoMax = rc.PerRepoMax
-				if cfg.Concurrency != nil && len(cfg.Concurrency.RepositoryOverrides) > 0 {
-					autoCfg.RepositoryMaxConcurrent = cfg.Concurrency.RepositoryOverrides
-				}
-			}
-			if cfg != nil && cfg.Autonomous != nil && cfg.Autonomous.DisableEpicBlockedByCascade {
-				autoCfg.DisableEpicBlockedByCascade = true
-			}
-			applyStuckEpicConfig(&autoCfg, cfg)
+			// Create autonomous scheduler.
+			// Every config.yaml-derived field comes from the one shared
+			// builder `serve` also uses (#1445); the five values this command
+			// owns are passed as explicit overrides, because the flags above
+			// have already absorbed config.yaml where a flag was absent — so
+			// an explicit `--budget 0` must not be re-filled from the file.
+			autoCfg := buildAutonomousConfig(cfg, autonomousConfigOverrides{
+				ScanInterval:  &interval,
+				MaxConcurrent: &maxSlots,
+				BudgetCeiling: &budget,
+				DryRun:        &dryRun,
+				AllowSelfRepo: &allowSelfRepo,
+			})
 
 			autoSched := orchestrator.NewAutonomousScheduler(
 				sched, client, repoConfigs, nil, autoCfg, workdir,
