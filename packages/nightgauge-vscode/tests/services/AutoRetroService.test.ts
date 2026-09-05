@@ -653,6 +653,29 @@ describe("AutoRetroService", () => {
       expect(noAdapter[0].recommendation).not.toBe(adapterUnavail[0].recommendation);
     });
 
+    it('classifies as "credential-failure" on terminal_failure_kind=git_transport_auth_failed (Issue #878)', () => {
+      // The #878 record, verbatim: the reason composes cause-then-symptom, so
+      // the SAME text also contains the state-management keyword `did not write
+      // expected output context`. Before the record-field map carried this kind
+      // the extractor returned null and the prose table won, answering
+      // state-management with "re-run the failed stage after verifying context"
+      // — a remedy for a fault the record had already named as a credential
+      // refusal. The authoritative field must beat the keyword guess.
+      const findings = AutoRetroService.classifyFailure(
+        {
+          text: '{"terminal_failure_kind":"git_transport_auth_failed","terminal_reason":"error: failed to push some refs: invalid auth method — then stage issue-pickup exited 0 but did not write expected output context"}',
+          sourcesAnalyzed: ["session_log"],
+        },
+        "issue-pickup"
+      );
+      expect(findings[0].category).toBe("credential-failure");
+      expect(findings[0].severity).toBe("high");
+      expect(findings[0].evidence[0]).toContain("git_transport_auth_failed");
+      // The remedy must not send the operator at the output contract.
+      expect(findings[0].recommendation).not.toContain("verifying context");
+      expect(findings[0].recommendation).toContain("credentials");
+    });
+
     it('classifies as "stop-hook-error" on Claude CLI stop-hook notification (no terminal result event)', () => {
       // Genuine #3204 case: stop-hook fires and the subagent goes silent —
       // no terminal result event ever lands. The time-gate (#3275) treats

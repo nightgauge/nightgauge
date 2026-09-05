@@ -3292,6 +3292,13 @@ automatically deleted.
 | `dir`                    | string  | `".nightgauge/logs"` | Log directory location                       |
 | `history_retention_days` | integer | `90`                 | Days to retain execution history JSONL files |
 
+`history_retention_days` is enforced by the Go writer on every run-record
+append (it is the only retention enforcement a headless workspace gets). The
+cutoff is measured from the instant the record being appended is filed under —
+the same instant that names its daily `YYYY-MM-DD.jsonl` file — so an append
+can never delete the file or `index.json` entry it just produced (#1455).
+Older daily files and their index entries are dropped in the same pass.
+
 **Default Behavior: Infinite Retention**
 
 By default, all pipeline execution logs are retained indefinitely
