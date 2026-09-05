@@ -1161,3 +1161,41 @@ func forbiddenSignalCalls(src string) []string {
 	}
 	return found
 }
+
+// TestEachServeClaim_HasNoDirectoryWalkOfItsOwn pins AC4 of #1426 at the
+// source level, in the same shape as the report-only pin above and for the
+// same reason: what it asserts is the ABSENCE of a second code path, which no
+// behavioural test can observe until the two paths have already drifted.
+//
+// The registry's layout — which suffixes are files, which are the atomic
+// writer's in-flight temp state, and how a file name decodes to a workspace
+// root — belongs to internal/runstate. This file walked it independently with
+// its own ReadDir and its own `.json` filter, so every one of those became a
+// fact spelled twice. The record SHAPE stays local (doctor is a reader of a
+// schema it does not own); the directory is runstate's to enumerate.
+func TestEachServeClaim_HasNoDirectoryWalkOfItsOwn(t *testing.T) {
+	src, err := os.ReadFile("orphaned_processes.go")
+	if err != nil {
+		t.Fatalf("read source: %v", err)
+	}
+
+	if found := ownServeRegistryWalk(string(src)); len(found) != 0 {
+		t.Errorf("orphaned_processes.go resolves the serve registry itself instead of going through "+
+			"runstate.EachServeRegistryFile — a directory layout spelled twice eventually disagrees: %v", found)
+	}
+
+	poisoned := string(src) + "\nfunc neverCalled() { d, _ := runstate.ServeSidecarDir(); es, _ := os.ReadDir(d); _ = es }\n"
+	if found := ownServeRegistryWalk(poisoned); len(found) != 1 {
+		t.Fatalf("positive control did not trip the detector: found %v — the check cannot be trusted to go red", found)
+	}
+}
+
+func ownServeRegistryWalk(src string) []string {
+	var found []string
+	for _, sym := range []string{"runstate.ServeSidecarDir"} {
+		if strings.Contains(src, sym) {
+			found = append(found, sym)
+		}
+	}
+	return found
+}
