@@ -244,8 +244,27 @@ acceptance criteria, labels, and sizing before dispatch.
 - Consequence: a slot freed mid-cycle can still be won by a later repo, but only
   if the exhaustion check passed when that repo was scanned. When the semaphore
   is saturated at scan time, remaining repos wait for the next cycle (at most
-  one `refinement_interval` of delay). Repo order therefore decides ties every
-  cycle; rotating that order is tracked as separate follow-up work.
+  one `refinement_interval` of delay).
+- The scan's starting repo rotates round-robin across cycles (#502): a fixed
+  scan order let `repos[0]` win the single workspace-wide slot every cycle for
+  as long as it had unrefined candidates, starving every later repo
+  indefinitely. A stored offset advances **only past the repo that actually
+  won a slot this cycle** — not once per tick — so the repo scanned first, and
+  therefore first in line for the semaphore, circulates. Advancing
+  unconditionally would alias with the busy/free alternation a refinement
+  spanning more than one `refinement_interval` produces: a cycle that finds
+  the semaphore still held from the previous one breaks before scanning
+  anything, and with the default `refinement_max_concurrent` of 1 that no-op
+  cycle and the free cycle before it would otherwise net back to the same
+  starting repo with as few as two repos in play — reintroducing the exact
+  starvation this rotation exists to remove. A cycle that dispatches nothing
+  leaves the offset untouched, so the next cycle gets a fair retry from the
+  same starting point instead. A debug line
+  (`[refinement] cycle scan starting at repo offset %d/%d`) reports the
+  chosen offset whenever there is more than one repo, so starvation is
+  diagnosable from the offset sequence rather than indistinguishable from
+  "nothing to refine". Both gates above are unchanged — only the scan order,
+  and when the rotation offset advances, changed.
 - The cap bounds **in-flight dispatches**, not completed refinements. In
   IPC/VSCode mode the slot is released at handoff — `refineIssue` returns
   shortly after `onRefinementDispatch` hands the issue to the extension — so the
