@@ -206,3 +206,120 @@ describe("NOT_PIPELINE_ACTIONABLE (#1241)", () => {
     expect(disposition.signal?.emitted_by_stage).toBe("feature-planning");
   });
 });
+
+/**
+ * The OTHER unreachable declaration (#1504).
+ *
+ * #1241 widened `readFeedbackSignals` for a TYPE. The second declared way to
+ * say "no lap of this pipeline helps" is the `EXTERNAL_BLOCKER_EVIDENCE` marker
+ * that `notRewindableReason` has honoured since #1142 — and the shape the
+ * feature-planning skill MANDATES for an open prerequisite is
+ * `PLAN_REVISION_NEEDED` + `backtrack_target_stage: null` + a `blocked-on:`
+ * evidence entry + no plan file. That is a rewindable type naming no target, so
+ * the filter dropped it before the branch written for it was ever reached: the
+ * marker branch was dead code in production for its whole first life.
+ *
+ * The producer contract and the reader therefore disagreed, and the run was
+ * booked `premature_turn_end` — a repo halt, a public failure comment, and the
+ * issue reverted to Ready to be convicted again on the next tick.
+ *
+ * The signal below is the specimen, trimmed — the reported run
+ * 01a0772b-9f16-7684-ac5d-d1ce9988a505, 2026-09-06.
+ *
+ * RED-PROOFS (each leaves the code compiling):
+ *   D. Drop the `declaresExternalBlocker(signal)` clause from
+ *      `readFeedbackSignals`'s filter → both "keeps" and "routes" tests go red
+ *      (zero signals, disposition `halt`), which is the reported bug exactly.
+ *   E. Widen the clause to `signal.evidence.length > 0` → "a rewindable signal
+ *      with no marker is still dropped" goes red, proving the admission is
+ *      keyed to the marker and not merely to having evidence.
+ *
+ * @see Issue #1504
+ */
+describe("external-blocker marker (#1504)", () => {
+  /** The shape skills/nightgauge-feature-planning/SKILL.md § open prerequisite mandates. */
+  function openPrerequisiteSignal(): Record<string, unknown> {
+    return {
+      signal_type: "PLAN_REVISION_NEEDED",
+      emitted_by_stage: "feature-planning",
+      // Null by mandate: the skill tells the stage to write no target, because
+      // no stage of THIS issue is where the work is.
+      backtrack_target_stage: null,
+      severity: "blocking",
+      rationale:
+        "The issue body declares this blocked by two OPEN upstream issues; the " +
+        "question-generation endpoint is a stub until they merge, so no plan can " +
+        "satisfy the acceptance criteria.",
+      evidence: [
+        "blocked-on: acme-org/upstream-service#1253 (OPEN) — declared in the issue body",
+        "blocked-on: acme-org/upstream-service#1252 (OPEN) — Wave-1-first rule",
+        "issue-692.json: dependencies.blockedBy == [] — the declaration is prose only",
+      ],
+    };
+  }
+
+  it("keeps a rewindable signal that declares an external blocker and names no target", () => {
+    stageDeliverable("planning", [openPrerequisiteSignal()]);
+
+    const signals = (orch as unknown as Internals).readFeedbackSignals("feature-planning", ISSUE);
+
+    expect(signals).toHaveLength(1);
+    expect(signals[0].signal_type).toBe("PLAN_REVISION_NEEDED");
+    expect(signals[0].backtrack_target_stage).toBeNull();
+  });
+
+  it("routes the planning skill's open-prerequisite signal to `blocked`, not a halt", async () => {
+    stageDeliverable("planning", [openPrerequisiteSignal()]);
+
+    const disposition = await (orch as unknown as Internals).evaluateFailedStageFeedback(
+      "feature-planning",
+      ISSUE
+    );
+
+    // `blocked` and not `rewind`: a re-plan cannot close someone else's issue.
+    // `blocked` and not `halt`: halting is what booked this run
+    // premature_turn_end and stopped the whole repository.
+    expect(disposition.kind).toBe("blocked");
+    // Asserted alongside the kind for the same reason as the #1241 tests: three
+    // routes reach `blocked` and only the text tells the operator which wall
+    // they hit. This one must quote the blocker, because the blocker closing is
+    // what makes the issue workable again.
+    expect(disposition.reason).toContain("out-of-scope blocker");
+    expect(disposition.reason).toContain("acme-org/upstream-service#1253");
+  });
+
+  it("still drops a rewindable signal with a null target and no marker", () => {
+    // The admission is keyed to the MARKER, not relaxed for every signal that
+    // happens to carry evidence. A PLAN_REVISION_NEEDED naming no target and
+    // declaring no external blocker is still malformed.
+    stageDeliverable("planning", [
+      {
+        ...openPrerequisiteSignal(),
+        evidence: [
+          "issue-692.json: dependencies.blockedBy == []",
+          "the plan misread the module layout",
+        ],
+      },
+    ]);
+
+    expect(
+      (orch as unknown as Internals).readFeedbackSignals("feature-planning", ISSUE)
+    ).toHaveLength(0);
+  });
+
+  it("still excludes MODEL_ESCALATION_NEEDED even when it carries the marker", () => {
+    // Escalation retries the SAME stage on a stronger model; it is not a
+    // backtrack and never was one, so the marker must not smuggle it into the
+    // blocked fork and turn a recoverable retry into a terminal outcome.
+    stageDeliverable("planning", [
+      {
+        ...openPrerequisiteSignal(),
+        signal_type: "MODEL_ESCALATION_NEEDED",
+      },
+    ]);
+
+    expect(
+      (orch as unknown as Internals).readFeedbackSignals("feature-planning", ISSUE)
+    ).toHaveLength(0);
+  });
+});
