@@ -63,19 +63,17 @@ type defaultCase struct {
 func defaultCases() []defaultCase {
 	return []defaultCase{
 		{
-			// Go's IsEnabled still answers false here. That flip is a live
-			// behaviour change with its own issue in flight, so this row pins
-			// the three sources that already agree and leaves the Go column
-			// unchecked rather than pretending the disagreement is gone.
-			key: "knowledge.enabled", ship: "true",
+			key:        "knowledge.enabled",
+			ship:       "true",
+			goVal:      func() string { return fmt.Sprint((*KnowledgeConfig)(nil).IsEnabled()) },
 			ts:         "knowledge.enabled",
 			docsAnchor: "## Knowledge Base Configuration", docsRow: "enabled",
 			initPath: "knowledge.enabled",
 		},
 		{
-			// Gated by knowledge.enabled on the Go side (ADR-005), so its Go
-			// column moves with the row above.
-			key: "knowledge.auto_scaffold", ship: "true",
+			key:        "knowledge.auto_scaffold",
+			ship:       "true",
+			goVal:      func() string { return fmt.Sprint((&KnowledgeConfig{}).IsAutoScaffold()) },
 			ts:         "knowledge.auto_scaffold",
 			docsAnchor: "## Knowledge Base Configuration", docsRow: "auto_scaffold",
 			initPath: "knowledge.auto_scaffold",

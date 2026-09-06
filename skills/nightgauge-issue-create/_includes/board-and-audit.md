@@ -296,7 +296,7 @@ if [ "$SCAFFOLD_SUCCESS" = "true" ] && [ -n "$KNOWLEDGE_PATH" ] && [ "$KNOWLEDGE
 elif [ "$KNOWLEDGE_SKIPPED" = "true" ]; then
   SKIP_REASON=$(printf '%s\n' "$SCAFFOLD_RESULT" | jq -r '.skip_reason // "unknown"')
   echo "Knowledge scaffolding skipped: $SKIP_REASON"
-  echo "  To enable: set knowledge.enabled: true in .nightgauge/config.yaml"
+  echo "  Knowledge is on by default; this repo opted out with knowledge.enabled: false"
 else
   echo "WARNING: Knowledge scaffolding failed: $(printf '%s\n' "$SCAFFOLD_RESULT" | jq -r '.error // "unknown error"')"
 fi

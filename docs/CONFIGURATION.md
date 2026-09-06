@@ -6415,7 +6415,7 @@ knowledge:
 
 | Key                                | Type    | Default             | Description                                                                                                 |
 | ---------------------------------- | ------- | ------------------- | ----------------------------------------------------------------------------------------------------------- |
-| `enabled`                          | boolean | `true`              | Master switch. When `false`, all knowledge operations are disabled                                          |
+| `enabled`                          | boolean | `true`              | Master switch. **Absent means on** (ADR-020). When `false`, all knowledge operations are disabled           |
 | `auto_scaffold`                    | boolean | `true`              | Automatically create knowledge directory during issue-pickup (requires `enabled: true`)                     |
 | `wiki_links`                       | boolean | `true`              | Enable `[[wiki-link]]` resolution in knowledge documents                                                    |
 | `index_on_commit`                  | boolean | `false`             | Regenerate the knowledge index on every commit via a git hook (reserved for future git hook use)            |
@@ -6446,8 +6446,15 @@ scoring path; there is no plain-BM25 mode.
 
 ### Behavior
 
+- The knowledge base is **on by default**, including in a repo with no
+  `knowledge:` section: a feature that adds value to a workspace defaults ON
+  ([ADR-020](decisions/020-value-adding-features-default-on.md)).
 - Setting `enabled: false` disables all knowledge operations — scaffolding,
-  indexing, and wiki-link resolution are all skipped.
+  indexing, and wiki-link resolution are all skipped. It is the supported
+  opt-out, and exists for exactly two reasons: **repo footprint** (the knowledge
+  base writes files under `.nightgauge/knowledge/` and commits them) and
+  **per-run token cost** (recall and enrichment add tokens to every pipeline
+  run). It is not a way to hide the feature.
 - `auto_scaffold: true` causes issue-pickup to create a
   `.nightgauge/knowledge/{epics|features}/{N}-{slug}/` directory with
   `PRD.md` and `decisions.md` templates.

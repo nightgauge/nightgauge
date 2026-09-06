@@ -9,6 +9,14 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Changed
+
+- The knowledge base is on by default, so the Knowledge view and the New Entry /
+  New ADR / Scaffold commands work in a workspace that never set
+  `nightgauge.knowledge.enabled`. They previously reported "Knowledge base is
+  disabled" whenever the setting was simply absent; only an explicit `false`
+  disables them now (#1513)
+
 ### Added
 
 - After Stop, the status bar says whether a window reload is safe —

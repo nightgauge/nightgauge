@@ -12,12 +12,10 @@ import (
 // of config.yaml. These settings control scaffolding, validation gates, and
 // enrichment behavior during planning.
 type KnowledgeConfig struct {
-	// Enabled controls whether the knowledge base is active. Defaults to false
-	// (opt-in) on this side while the extension's DEFAULT_CONFIG, the docs
-	// table and the `config init` template all say true — the one disagreement
-	// #1517 deliberately does NOT resolve, because flipping the Go resolver is
-	// a live behaviour change owned by its own issue. TestDefaultsAgree leaves
-	// this row's Go column unchecked and pins the other three.
+	// Enabled controls whether the knowledge base is active. Defaults to
+	// TRUE when unset (ADR-020): a feature that adds value to a workspace
+	// defaults on, and `knowledge.enabled: false` is the explicit opt-out for
+	// repo footprint and per-run token cost.
 	Enabled *bool `yaml:"enabled" json:"enabled,omitempty"`
 	// AutoScaffold controls whether the knowledge directory is automatically
 	// scaffolded at issue pickup when Enabled is true. Resolved via
@@ -123,10 +121,14 @@ const (
 //   - telemetry.enabled unset → returns true  (default on once KB is on)
 //   - telemetry.enabled explicit → returns the explicit value
 func (k *KnowledgeConfig) IsTelemetryEnabled() bool {
-	if k == nil || !k.IsEnabled() {
+	// No `k == nil` short-circuit: IsEnabled tolerates a nil receiver and
+	// resolves it to true (ADR-020), and a nil test here would silently
+	// reinstate the old absent-means-off default for exactly the repos that
+	// have no `knowledge:` section.
+	if !k.IsEnabled() {
 		return false
 	}
-	if k.Telemetry == nil || k.Telemetry.Enabled == nil {
+	if k == nil || k.Telemetry == nil || k.Telemetry.Enabled == nil {
 		return true
 	}
 	return *k.Telemetry.Enabled
@@ -142,10 +144,14 @@ func (k *KnowledgeConfig) IsTelemetryEnabled() bool {
 //   - auto_scaffold unset    → true  (docs/KNOWLEDGE_BASE.md behaviour matrix)
 //   - auto_scaffold explicit → the explicit value
 func (k *KnowledgeConfig) IsAutoScaffold() bool {
-	if k == nil || !k.IsEnabled() {
+	// No `k == nil` short-circuit: IsEnabled tolerates a nil receiver and
+	// resolves it to true (ADR-020), and a nil test here would silently
+	// reinstate the old absent-means-off default for exactly the repos that
+	// have no `knowledge:` section.
+	if !k.IsEnabled() {
 		return false
 	}
-	if k.AutoScaffold == nil {
+	if k == nil || k.AutoScaffold == nil {
 		return true
 	}
 	return *k.AutoScaffold
@@ -161,10 +167,22 @@ func (k *KnowledgeConfig) IsWorkspaceScoped() bool {
 	return *k.WorkspaceScoped
 }
 
-// IsEnabled returns true when knowledge base is enabled (opt-in, defaults to false).
+// IsEnabled returns the effective knowledge.enabled setting.
+//
+// Absent means ON (ADR-020). A repo with no `knowledge:` section — and a repo
+// with a `knowledge:` section that never names `enabled` — gets the knowledge
+// base, because a feature that adds value to a workspace must not ship hidden
+// behind an opt-in. `knowledge.enabled: false` is the explicit opt-out, and
+// exists for two reasons only: repo footprint (the KB writes and commits files
+// under .nightgauge/knowledge/) and per-run token cost.
+//
+// A nil receiver resolves the same way as an unset field. `Config.Knowledge`
+// is a pointer, so nil is precisely the "no `knowledge:` section at all" case —
+// the majority case this change exists for. A nil that still meant "false"
+// would reintroduce the old default by the back door.
 func (k *KnowledgeConfig) IsEnabled() bool {
 	if k == nil || k.Enabled == nil {
-		return false
+		return true
 	}
 	return *k.Enabled
 }

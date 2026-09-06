@@ -63,15 +63,16 @@ Issues with the `type:epic` label go under `epics/`. All others go under
 
 ## Activation
 
-The knowledge base is **opt-in**. Enable it in `.nightgauge/config.yaml`:
+The knowledge base is **on by default** (ADR-020). Opt out in
+`.nightgauge/config.yaml` only for repo footprint (it writes and commits files
+under `.nightgauge/knowledge/`) or per-run token cost:
 
 ```yaml
 knowledge:
-  enabled: true
-  auto_scaffold: true
+  enabled: false
 ```
 
-Once enabled, running `/nightgauge:issue-pickup` automatically creates a
+While enabled, running `/nightgauge:issue-pickup` automatically creates a
 `{N}-{slug}/` directory with `PRD.md` and `decisions.md` pre-populated from the
 issue body.
 
