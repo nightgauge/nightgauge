@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/attention"
+	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/depgraph"
 	"github.com/nightgauge/nightgauge/internal/execution"
 	"github.com/nightgauge/nightgauge/internal/focus"
@@ -222,6 +223,28 @@ type FailedItem struct {
 	Reason        string `json:"reason,omitempty"`
 	AttemptCount  int    `json:"attemptCount,omitempty"`
 	FirstFailedAt string `json:"firstFailedAt,omitempty"`
+
+	// Kind is the terminal failure kind (`TerminalKind*`) the entry was
+	// recorded with — the same vocabulary the classifier, the run records and
+	// docs/FAILURE_TAXONOMY.md already speak, stored verbatim rather than
+	// mapped into a second retryability enum that would then have to be kept
+	// in lockstep with it. Retryability is derived from it by
+	// HoldForTerminalKind.
+	//
+	// It exists because "sidelined pending a human", "parked as not pipeline
+	// work" and "crashed, retry later" were three different states stored as
+	// one. The graph reconcile that recovers crashed runs therefore also
+	// recovered the ones a human was supposed to look at: an
+	// architecture-approval halt was re-admitted 21ms after it was raised and
+	// re-dispatched three seconds later, spending a full planning + dev lap on
+	// a production-touching change nobody had approved (#1486).
+	//
+	// Empty is meaningful, and is the only reading of an absent field: an
+	// entry written before this field existed, or one whose failure carried no
+	// classified kind, is retryable — which is precisely what the reconcile did
+	// for every entry before #1486, so old state files keep their behaviour
+	// without a migration.
+	Kind string `json:"kind,omitempty"`
 }
 
 // RefinementItem tracks an in-flight or completed refinement operation.
@@ -2689,6 +2712,10 @@ func (as *AutonomousScheduler) ResumeRepo(repo string) bool {
 			delete(as.conflictRestartCount, k)
 		}
 	}
+	// A repo resume is an explicit operator act, so it releases this repo's
+	// operator-held failures too (#1486) — otherwise "resume this repo" leaves
+	// its not-pipeline-actionable parks excluded from dispatch forever.
+	as.releaseOperatorHoldsLocked(repo)
 	as.persistStateLocked()
 	as.mu.Unlock()
 	log.Printf("autonomous: repo halt released for %s", repo)
@@ -2820,6 +2847,11 @@ func (as *AutonomousScheduler) Resume() {
 		// signal, which is the failure the exhaustion card exists to prevent.
 		as.refinementWarned = make(map[string]bool)
 		as.refinementLabelCheck = make(map[string]refinementLabelVerdict)
+		// Resume is the explicit operator act that HoldOperatorResume waits for
+		// (#1486): release every not-pipeline-actionable park so the next
+		// reconcile re-admits it. Architecture-approval holds are untouched —
+		// see releaseOperatorHoldsLocked.
+		as.releaseOperatorHoldsLocked("")
 		as.persistStateLocked()
 		as.fireStatusChangeLocked()
 		// Trigger an immediate re-scan
@@ -2960,6 +2992,43 @@ func (as *AutonomousScheduler) QuotaCooldownSnapshot() (until, reason string, ac
 	return until, reason, time.Now().Before(deadline)
 }
 
+// releaseOperatorHoldsLocked drops the Failed entries whose terminal kind is
+// held for an explicit operator act (HoldOperatorResume), so the next graph
+// reconcile re-admits them and the candidate filter stops excluding them.
+// `scope` is "" for the whole fleet, a "owner/repo" prefix for one repo, or an
+// exact "owner/repo#number" key for one issue. Returns the keys released.
+//
+// It releases ONLY HoldOperatorResume. HoldArchitectureApproval is left in
+// place on purpose: an operator resume means "go again", not "I have reviewed
+// this architecture", and the gate would re-halt the run anyway — at the price
+// of the planning lap that #1486 exists to stop. That grant has exactly two
+// forms, the label and the approval file, and neither is a side effect of
+// pressing Resume.
+//
+// Caller MUST hold as.mu.
+func (as *AutonomousScheduler) releaseOperatorHoldsLocked(scope string) []string {
+	if as.state == nil || len(as.state.Failed) == 0 {
+		return nil
+	}
+	var released []string
+	kept := make([]FailedItem, 0, len(as.state.Failed))
+	for _, f := range as.state.Failed {
+		key := fmt.Sprintf("%s#%d", f.Repo, f.Number)
+		inScope := scope == "" || key == scope || f.Repo == scope
+		if inScope && HoldForTerminalKind(f.Kind) == HoldOperatorResume {
+			released = append(released, key)
+			log.Printf("autonomous: released %s — operator resume clears the %q hold", key, f.Kind)
+			continue
+		}
+		kept = append(kept, f)
+	}
+	if len(released) == 0 {
+		return nil
+	}
+	as.state.Failed = kept
+	return released
+}
+
 // ClearIssueFailures resets the lifetime failure counter for a single issue
 // (or all issues if key == ""). Used by the IPC handler that the VSCode UI
 // invokes when the user manually triages a chronically-failing issue. Returns
@@ -2981,18 +3050,41 @@ func (as *AutonomousScheduler) ClearIssueFailures(key string) (cleared int, circ
 	if as.safetyRails != nil {
 		circuitBreakerTripped = as.safetyRails.IsTripped()
 	}
+	// Released FIRST, and before the LifetimeIssueFailures early returns below
+	// (#1486). A HoldOperatorResume kind — not_pipeline_actionable — never
+	// increments the lifetime counter, so its key is absent from that map and
+	// every return path below would leave the hold in place. Clearing an
+	// issue's failures IS the explicit operator act the hold waits for.
+	released := as.releaseOperatorHoldsLocked(key)
+	// An issue is counted once whether it was carrying a lifetime counter, a
+	// hold, or both — `cleared` is a count of issues, not of records.
+	countReleasedOutside := func(lifetime map[string]int) int {
+		n := 0
+		for _, k := range released {
+			if _, ok := lifetime[k]; !ok {
+				n++
+			}
+		}
+		return n
+	}
 	if as.state.LifetimeIssueFailures == nil {
-		return 0, circuitBreakerTripped
+		if len(released) > 0 {
+			as.persistStateLocked()
+		}
+		return len(released), circuitBreakerTripped
 	}
 	if key == "" {
-		n := len(as.state.LifetimeIssueFailures)
+		n := len(as.state.LifetimeIssueFailures) + countReleasedOutside(as.state.LifetimeIssueFailures)
 		as.state.LifetimeIssueFailures = make(map[string]int)
 		as.state.QuarantinedIssues = nil
 		as.persistStateLocked()
 		return n, circuitBreakerTripped
 	}
 	if _, ok := as.state.LifetimeIssueFailures[key]; !ok {
-		return 0, circuitBreakerTripped
+		if len(released) > 0 {
+			as.persistStateLocked()
+		}
+		return len(released), circuitBreakerTripped
 	}
 	delete(as.state.LifetimeIssueFailures, key)
 	if as.state.QuarantinedIssues != nil {
@@ -4078,6 +4170,19 @@ func (as *AutonomousScheduler) prioritize(ctx context.Context, g *depgraph.Graph
 	for _, c := range as.state.Completed {
 		completedSet[fmt.Sprintf("%s#%d", c.Repo, c.Number)] = true
 	}
+	// Items held for a human decision (#1486). Read straight off state.Failed,
+	// which the graph reconcile now KEEPS for held kinds instead of re-admitting
+	// them, so the exclusion is in force from the instant the halt is recorded —
+	// it does not wait for the sideline's asynchronous board move to land. That
+	// independence is the whole point: the board move to In review / In progress
+	// is a goTrackedBoardOp, and the cycle that raised the halt used to reach
+	// dispatch before it completed.
+	humanHeldSet := make(map[string]string)
+	for _, f := range as.state.Failed {
+		if hold := HoldForTerminalKind(f.Kind); hold != HoldNone {
+			humanHeldSet[fmt.Sprintf("%s#%d", f.Repo, f.Number)] = hold
+		}
+	}
 	// Snapshot backoff map under the lock so we don't hold it during the loop.
 	backoffSnapshot := make(map[string]time.Time, len(as.retryBackoff))
 	for k, v := range as.retryBackoff {
@@ -4209,6 +4314,17 @@ func (as *AutonomousScheduler) prioritize(ctx context.Context, g *depgraph.Graph
 		}
 		if completedSet[key] {
 			bump("already-completed")
+			continue
+		}
+
+		// Skip items a run deliberately handed to a human (#1486): the
+		// architecture-approval gate, or a stage's declaration that the issue
+		// is not pipeline work. Dispatching walks straight back into a gate
+		// only a person can open — ~$4 and ~18 minutes per lap, on a change
+		// nobody approved.
+		if hold, held := humanHeldSet[key]; held {
+			bump("human-hold:" + hold)
+			log.Printf("autonomous: skipping %s — held for a human decision, awaiting %s; no rescan releases it", key, hold)
 			continue
 		}
 
@@ -4705,7 +4821,7 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 				// Re-queue with minimal backoff — the branch collision is self-healing
 				// once the TypeScript layer creates a fresh branch from current main.
 				as.recordFailureLocked(repo, issue, title, now,
-					fmt.Sprintf("conflict restart #%d — fresh branch will be created", restartNum))
+					fmt.Sprintf("conflict restart #%d — fresh branch will be created", restartNum), terminalFailureKind)
 				// Short backoff: 30s so the fresh branch is ready before the next scan.
 				as.scheduleRetryLocked(key, "conflict_restart",
 					fmt.Sprintf("branch collision — fresh branch will be created (restart #%d)", restartNum),
@@ -4742,7 +4858,7 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 				resetAt = time.Now().Add(time.Minute)
 			}
 			as.recordFailureLocked(repo, issue, title, now,
-				"github-quota-low (GitHub API) — environmental, will retry after bucket reset")
+				"github-quota-low (GitHub API) — environmental, will retry after bucket reset", terminalFailureKind)
 			as.scheduleRetryLocked(key, terminalFailureKind,
 				"GitHub API quota low — waiting for the rate-limit bucket to reset", resetAt)
 			as.applyGitHubQuotaCooldownLocked(resetAt, "pipeline-start preflight: bucket below headroom")
@@ -4776,7 +4892,7 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 		if terminalFailureKind == TerminalKindGitHubNetworkOutage {
 			resetAt := time.Now().Add(githubNetworkOutageCooldown)
 			as.recordFailureLocked(repo, issue, title, now,
-				"github-network-outage (api.github.com unreachable) — environmental, will retry after cooldown")
+				"github-network-outage (api.github.com unreachable) — environmental, will retry after cooldown", terminalFailureKind)
 			as.scheduleRetryLocked(key, terminalFailureKind,
 				"api.github.com unreachable — network outage", resetAt)
 			as.applyGitHubQuotaCooldownLocked(resetAt, "pipeline-start preflight: api.github.com unreachable (network outage)")
@@ -4815,7 +4931,7 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 				label = "rate-limit-quota-exhausted"
 			}
 			as.recordFailureLocked(repo, issue, title, now,
-				fmt.Sprintf("%s (Anthropic API) — environmental, will retry after 1h", label))
+				fmt.Sprintf("%s (Anthropic API) — environmental, will retry after 1h", label), terminalFailureKind)
 			as.scheduleRetryLocked(key, terminalFailureKind, label, time.Now().Add(streamIdleTimeoutBackoff))
 			// #3431: GLOBAL cooldown derived from the failure-text resetsAt
 			// hint when present (preferred — runs until the actual bucket
@@ -4853,7 +4969,7 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 		// time — which defeats the purpose of autonomous mode.
 		if terminalFailureKind == TerminalKindStallKill {
 			as.recordFailureLocked(repo, issue, title, now,
-				"stall-killed (transient) — will retry after backoff")
+				"stall-killed (transient) — will retry after backoff", terminalFailureKind)
 			as.scheduleRetryLocked(key, terminalFailureKind, "stage stalled and was killed", time.Now().Add(stallKillBackoff))
 			log.Printf("autonomous: stall-kill for %s — transient, retry in %v (no lifetime-cap increment)",
 				key, stallKillBackoff)
@@ -4914,7 +5030,7 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 				// PendingRetry — that absence is the "stopped re-dispatching"
 				// signal the dashboard already renders correctly.
 				as.recordFailureLocked(repo, issue, title, now,
-					label+fmt.Sprintf(" — exceeded %d consecutive transient failures, pausing re-dispatch (no lifetime-cap increment)", apiOverloadedMaxAttempts))
+					label+fmt.Sprintf(" — exceeded %d consecutive transient failures, pausing re-dispatch (no lifetime-cap increment)", apiOverloadedMaxAttempts), terminalFailureKind)
 				log.Printf("autonomous: %s for %s exceeded %d consecutive transient failures — pausing re-dispatch, no lifetime-cap increment",
 					terminalFailureKind, key, apiOverloadedMaxAttempts)
 				if as.retryBackoff != nil {
@@ -4936,7 +5052,7 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 			}
 			backoff := apiOverloadedBackoffFor(priorAttempts)
 			as.recordFailureLocked(repo, issue, title, now,
-				label+" — will retry after backoff")
+				label+" — will retry after backoff", terminalFailureKind)
 			as.scheduleRetryLocked(key, terminalFailureKind, label, time.Now().Add(backoff))
 			log.Printf("autonomous: %s for %s — transient, retry in %v (attempt %d, no lifetime-cap increment, no pause)",
 				terminalFailureKind, key, backoff, priorAttempts+1)
@@ -4973,7 +5089,7 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 				detail = "adapter auth pre-flight failed (probe timed out or logged out)"
 			}
 			as.recordFailureLocked(repo, issue, title, now,
-				"adapter-auth-failed (retryable infra) — will retry after backoff — "+detail)
+				"adapter-auth-failed (retryable infra) — will retry after backoff — "+detail, terminalFailureKind)
 			as.scheduleRetryLocked(key, terminalFailureKind, "adapter auth pre-flight failed", time.Now().Add(stallKillBackoff))
 			log.Printf("autonomous: adapter_auth_failed for %s — retryable infra, retry in %v (no lifetime-cap increment, no cascade feed, no pause)",
 				key, stallKillBackoff)
@@ -5014,7 +5130,7 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 			priorAttempts := as.retryBackoff[key].Attempts
 			if priorAttempts >= permissionDeniedMaxAttempts {
 				as.recordFailureLocked(repo, issue, title, now,
-					fmt.Sprintf("permission-denied (retryable, harness fault) — exceeded %d consecutive denials, pausing re-dispatch (no lifetime-cap increment) — %s", permissionDeniedMaxAttempts, detail))
+					fmt.Sprintf("permission-denied (retryable, harness fault) — exceeded %d consecutive denials, pausing re-dispatch (no lifetime-cap increment) — %s", permissionDeniedMaxAttempts, detail), terminalFailureKind)
 				log.Printf("autonomous: permission_denied for %s exceeded %d consecutive denials — pausing re-dispatch, no lifetime-cap increment",
 					key, permissionDeniedMaxAttempts)
 				if as.retryBackoff != nil {
@@ -5035,7 +5151,7 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 				return
 			}
 			as.recordFailureLocked(repo, issue, title, now,
-				"permission-denied (retryable, harness fault) — will retry after backoff — "+detail)
+				"permission-denied (retryable, harness fault) — will retry after backoff — "+detail, terminalFailureKind)
 			as.scheduleRetryLocked(key, terminalFailureKind, detail, time.Now().Add(permissionDeniedBackoff))
 			log.Printf("autonomous: permission_denied for %s — retryable harness fault, retry in %v (attempt %d, no lifetime-cap increment, no cascade feed, no pause)",
 				key, permissionDeniedBackoff, priorAttempts+1)
@@ -5064,7 +5180,7 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 		// per-run state and reset).
 		if terminalFailureKind == TerminalKindModelUnavailable {
 			as.recordFailureLocked(repo, issue, title, now,
-				"model unavailable on plan (downgrade ladder exhausted) — will retry after backoff")
+				"model unavailable on plan (downgrade ladder exhausted) — will retry after backoff", terminalFailureKind)
 			as.scheduleRetryLocked(key, terminalFailureKind, "model unavailable from the provider", time.Now().Add(streamIdleTimeoutBackoff))
 			log.Printf("autonomous: model_unavailable for %s — environmental, retry in %v (no lifetime-cap increment, no pause)",
 				key, streamIdleTimeoutBackoff)
@@ -5093,7 +5209,7 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 		if terminalFailureKind == TerminalKindWorktreeUncommitted ||
 			terminalFailureKind == TerminalKindBudgetCeiling {
 			as.recordFailureLocked(repo, issue, title, now,
-				fmt.Sprintf("%s (recoverable) — will retry after backoff", terminalFailureKind))
+				fmt.Sprintf("%s (recoverable) — will retry after backoff", terminalFailureKind), terminalFailureKind)
 			as.scheduleRetryLocked(key, terminalFailureKind, "recoverable — work was preserved", time.Now().Add(stallKillBackoff))
 			log.Printf("autonomous: %s for %s — recoverable, retry in %v (no lifetime-cap increment)",
 				terminalFailureKind, key, stallKillBackoff)
@@ -5122,7 +5238,7 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 		// or a subsequent commit that adds tests, resolves it on retry).
 		if terminalFailureKind == TerminalKindValidationInconclusive {
 			as.recordFailureLocked(repo, issue, title, now,
-				"validation_inconclusive (zero tests run, recoverable) — will retry after backoff")
+				"validation_inconclusive (zero tests run, recoverable) — will retry after backoff", terminalFailureKind)
 			as.scheduleRetryLocked(key, terminalFailureKind, "zero-test run — recoverable", time.Now().Add(stallKillBackoff))
 			log.Printf("autonomous: validation_inconclusive for %s — recoverable, retry in %v (no lifetime-cap increment)",
 				key, stallKillBackoff)
@@ -5156,7 +5272,7 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 			if detail == "" {
 				detail = "blocked-dependency deferral — blockedBy dependencies still open"
 			}
-			as.recordFailureLocked(repo, issue, title, now, detail)
+			as.recordFailureLocked(repo, issue, title, now, detail, terminalFailureKind)
 			as.scheduleRetryLocked(key, terminalFailureKind, detail, time.Now().Add(blockedDependencyBackoff))
 			log.Printf("autonomous: %s#%d blocked-dependency deferral (non-failure) — board → Ready, retry in %v (no lifetime-cap increment, no pause) — %s",
 				repo, issue, blockedDependencyBackoff, detail)
@@ -5205,7 +5321,7 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 			if detail == "" {
 				detail = "not pipeline-actionable — the issue's deliverable requires a human"
 			}
-			as.recordFailureLocked(repo, issue, title, now, detail)
+			as.recordFailureLocked(repo, issue, title, now, detail, terminalFailureKind)
 			log.Printf("autonomous: %s#%d not pipeline-actionable (non-failure) — left parked, no retry, no lifetime-cap increment, no pause — %s",
 				repo, issue, detail)
 			if as.safetyRails != nil {
@@ -5229,7 +5345,7 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 		// genuinely closed.
 		if terminalFailureKind == TerminalKindIssueClosed {
 			as.recordFailureLocked(repo, issue, title, now,
-				"issue-closed (non-failure) — issue was already closed when pipeline started")
+				"issue-closed (non-failure) — issue was already closed when pipeline started", terminalFailureKind)
 			log.Printf("autonomous: %s#%d pipeline-start-failure:issue-closed — already closed, moving board to Done (no lifetime-cap increment)",
 				repo, issue)
 			if as.safetyRails != nil {
@@ -5265,7 +5381,7 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 			if detail == "" {
 				detail = "branch forked from origin — pushes rejected as non-fast-forward"
 			}
-			as.recordFailureLocked(repo, issue, title, now, detail)
+			as.recordFailureLocked(repo, issue, title, now, detail, terminalFailureKind)
 			log.Printf("autonomous: %s#%d branch-forked (unrecoverable by retry — left for human triage, queue continues) — %s",
 				repo, issue, detail)
 			if as.safetyRails != nil {
@@ -5297,7 +5413,7 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 			if detail == "" {
 				detail = "commit stranded off the feature branch after a killed stage — needs a human to push it or open a PR"
 			}
-			as.recordFailureLocked(repo, issue, title, now, detail)
+			as.recordFailureLocked(repo, issue, title, now, detail, terminalFailureKind)
 			log.Printf("autonomous: %s#%d commit-orphaned (unrecoverable by retry — left for human triage, queue continues) — %s",
 				repo, issue, detail)
 			if as.safetyRails != nil {
@@ -5358,7 +5474,7 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 			if detail == "" {
 				detail = "architecture approval required — a human must approve this decision before feature-dev proceeds"
 			}
-			as.recordFailureLocked(repo, issue, title, now, detail)
+			as.recordFailureLocked(repo, issue, title, now, detail, terminalFailureKind)
 			log.Printf("autonomous: %s#%d architecture-approval-required (human decision point — sidelined to In review, no lifetime-cap increment, no consecutive-failure increment, queue continues) — %s",
 				repo, issue, detail)
 			// Deliberately NOT RecordCompletion(success=false) — the reasoning
@@ -5395,7 +5511,7 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 			if detail == "" {
 				detail = "pr-merge: PR was not merged"
 			}
-			as.recordFailureLocked(repo, issue, title, now, detail)
+			as.recordFailureLocked(repo, issue, title, now, detail, terminalFailureKind)
 			log.Printf("autonomous: %s#%d pr-merge-unmerged (externally blocked — sidelined to In review, queue continues) — %s",
 				repo, issue, detail)
 			if as.safetyRails != nil {
@@ -5412,7 +5528,7 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 			return
 		}
 
-		as.recordFailureLocked(repo, issue, title, now, "pipeline failure")
+		as.recordFailureLocked(repo, issue, title, now, "pipeline failure", terminalFailureKind)
 
 		// #3605 bullet C: feed the cascading-failure breaker. Only counts
 		// genuine pipeline failures (not stall_kill / quota_exhausted /
@@ -5667,8 +5783,35 @@ func (as *AutonomousScheduler) moveIssueToInProgress(parent context.Context, rep
 			repo, issue, reason, err)
 		return
 	}
-	log.Printf("autonomous: move-to-in-progress: moved %s#%d → In progress (%s — no PR exists, no re-dispatch)",
+	// "no re-dispatch" is a claim about the scheduler, not about the board, so
+	// it is read off the thing that actually enforces it: the human hold on the
+	// issue's Failed entry, which the candidate filter honours. Pre-#1486 this
+	// line was printed unconditionally and was false when it mattered most —
+	// the architecture-approval halt it announced had already been re-admitted
+	// by the reconcile and was dispatched two seconds later.
+	if hold := as.humanHoldFor(repo, issue); hold != HoldNone {
+		log.Printf("autonomous: move-to-in-progress: moved %s#%d → In progress (%s — no PR exists, no re-dispatch: held awaiting %s)",
+			repo, issue, reason, hold)
+		return
+	}
+	log.Printf("autonomous: move-to-in-progress: moved %s#%d → In progress (%s — no PR exists; the board status is not dispatchable, but nothing holds the issue against a re-admit)",
 		repo, issue, reason)
+}
+
+// humanHoldFor returns the human action the issue's recorded failure is
+// waiting for, or HoldNone when nothing holds it.
+func (as *AutonomousScheduler) humanHoldFor(repo string, issue int) string {
+	as.mu.Lock()
+	defer as.mu.Unlock()
+	if as.state == nil {
+		return HoldNone
+	}
+	for _, f := range as.state.Failed {
+		if f.Repo == repo && f.Number == issue {
+			return HoldForTerminalKind(f.Kind)
+		}
+	}
+	return HoldNone
 }
 
 // sidelineHalt parks a halted issue off the dispatch path and picks the
@@ -6713,12 +6856,17 @@ func (as *AutonomousScheduler) loadState() {
 // state file and the status display. Besides the display clutter, the state
 // file grew unboundedly for retry-heavy issues. Dedup-on-write keeps one row
 // per issue with `AttemptCount` + first/last timestamps.
-func (as *AutonomousScheduler) recordFailureLocked(repo string, number int, title, failedAt, reason string) {
+func (as *AutonomousScheduler) recordFailureLocked(repo string, number int, title, failedAt, reason, kind string) {
 	for i := range as.state.Failed {
 		f := &as.state.Failed[i]
 		if f.Repo == repo && f.Number == number {
 			f.FailedAt = failedAt
 			f.Reason = reason
+			// Kind tracks the latest attempt alongside FailedAt/Reason: a
+			// human-decision halt on the newest attempt must hold the item
+			// even when an earlier attempt was a plain crash, and equally a
+			// retryable crash after an approval landed must not keep it held.
+			f.Kind = kind
 			if f.AttemptCount < 1 {
 				// Legacy entry without count — treat as one prior attempt.
 				f.AttemptCount = 1
@@ -6739,6 +6887,7 @@ func (as *AutonomousScheduler) recordFailureLocked(repo string, number int, titl
 		Title:         title,
 		FailedAt:      failedAt,
 		Reason:        reason,
+		Kind:          kind,
 		AttemptCount:  1,
 		FirstFailedAt: failedAt,
 	})
@@ -6782,6 +6931,10 @@ func dedupeFailedItems(items []FailedItem) []FailedItem {
 			if f.Reason != "" {
 				existing.Reason = f.Reason
 			}
+			// Kind follows FailedAt/Reason — the merged row must describe the
+			// latest attempt, or a legacy duplicate pair could collapse a
+			// human-decision hold into a retryable one (#1486).
+			existing.Kind = f.Kind
 		}
 		// FirstFailedAt = earliest non-empty timestamp.
 		candidateFirst := f.FirstFailedAt
@@ -6807,7 +6960,94 @@ func dedupeFailedItems(items []FailedItem) []FailedItem {
 // recorded success/failure but failed to close the issue (e.g., cross-repo
 // routing bug) or where VS Code restarted with stale state. Items whose issues
 // are genuinely CLOSED remain in the lists to avoid re-processing.
+// architectureApprovalLabel resolves the label a human applies to grant the
+// architecture-approval gate, from pipeline.architecture_approval.approval_label
+// with the same default the gate uses. Read through config so the reconcile and
+// `nightgauge approval-gate` can never disagree about which label is the grant.
+func (as *AutonomousScheduler) architectureApprovalLabel() string {
+	if as == nil || as.workspaceRoot == "" {
+		return config.DefaultArchitectureApprovalLabel
+	}
+	cfg, err := config.Load(as.workspaceRoot)
+	if err != nil || cfg == nil {
+		return config.DefaultArchitectureApprovalLabel
+	}
+	return cfg.Pipeline.ResolveArchitectureApprovalLabel()
+}
+
+// holdReleased reports whether the human action that a held FailedItem is
+// waiting for has landed, and names what it looked at either way.
+//
+// HoldArchitectureApproval is released by exactly the two grants
+// `nightgauge approval-gate` reads: the approval label on the issue, or
+// `.nightgauge/pipeline/approval-<n>.json` carrying `{"approved": true}`. A
+// truncated label list (#998) can only hide a label that IS there, so it can
+// only extend the hold — the safe direction, and the approval file still
+// releases it.
+//
+// HoldOperatorResume is never released here. The kind means a person must do
+// something outside the pipeline, so nothing the pipeline observes about the
+// issue can stand in for that; the release paths are Resume, ResumeRepo and
+// ClearIssueFailures, which drop the entry outright.
+//
+// Deliberately NOT a board-status check. The sideline's board move is
+// asynchronous (goTrackedBoardOp), so at reconcile time the row can still read
+// the status it had before the halt — which makes "the status changed" and "the
+// move has not landed yet" indistinguishable. That ambiguity is bug #1486's
+// third symptom, and reading the board here would reintroduce it.
+//
+// Caller MUST hold as.mu.
+func (as *AutonomousScheduler) holdReleased(f FailedItem, node *depgraph.Node, approvalLabel string) (bool, string) {
+	switch HoldForTerminalKind(f.Kind) {
+	case HoldArchitectureApproval:
+		for _, l := range node.Labels {
+			if strings.EqualFold(l, approvalLabel) {
+				return true, fmt.Sprintf("issue carries the %q label", approvalLabel)
+			}
+		}
+		if as.architectureApprovalFileGranted(f.Repo, f.Number) {
+			return true, fmt.Sprintf(".nightgauge/pipeline/approval-%d.json grants approval", f.Number)
+		}
+		return false, fmt.Sprintf("the %q label or an approval file", approvalLabel)
+	case HoldOperatorResume:
+		return false, "an explicit `autonomous resume` / clear-failures for the issue"
+	}
+	return true, "kind is retryable"
+}
+
+// architectureApprovalFileGranted reports whether the issue's approval file
+// grants the architecture gate, read from the repo root the run itself would
+// use so a multi-repo workspace looks in the checkout the approving human
+// wrote to. An unresolvable root or an unreadable/absent file is "not
+// approved" — the hold stands, which is the direction that cannot bypass a
+// human.
+func (as *AutonomousScheduler) architectureApprovalFileGranted(repo string, issue int) bool {
+	root := as.workspaceRoot
+	if as.scheduler != nil {
+		if resolved, err := as.scheduler.resolveRunRoot(repo); err == nil && resolved != "" {
+			root = resolved
+		}
+	}
+	if root == "" {
+		return false
+	}
+	b, err := os.ReadFile(filepath.Join(root, ".nightgauge", "pipeline", fmt.Sprintf("approval-%d.json", issue)))
+	if err != nil {
+		return false
+	}
+	var v struct {
+		Approved bool `json:"approved"`
+	}
+	return json.Unmarshal(b, &v) == nil && v.Approved
+}
+
 func (as *AutonomousScheduler) reconcileStateAgainstGraph(g *depgraph.Graph) {
+	// Resolved before the lock: config.Load reads the filesystem, and the
+	// architecture-approval hold below needs the same label name the gate
+	// itself resolves (pipeline.architecture_approval.approval_label) rather
+	// than a second hard-coded copy of the default.
+	approvalLabel := as.architectureApprovalLabel()
+
 	as.mu.Lock()
 	defer as.mu.Unlock()
 
@@ -6847,9 +7087,20 @@ func (as *AutonomousScheduler) reconcileStateAgainstGraph(g *depgraph.Graph) {
 
 	// Reconcile failed list — re-admit items still OPEN so they can be retried,
 	// and prune items whose issue is CLOSED or no longer on the project board.
+	//
+	// "Still OPEN" is NOT on its own a licence to re-admit (#1486). A run that
+	// halted on a human decision point — the architecture-approval gate, or a
+	// stage declaring the issue not pipeline work — is recorded in the same
+	// `state.Failed` list as a crash, and its issue is of course still open:
+	// that is what it means to be waiting for a person. Re-admitting it here
+	// hands it straight back to the candidate loop, which is how an approval
+	// gate raised at 16:53:15.322 was re-dispatched at 16:53:18.575. Held kinds
+	// leave the reconcile only when the human action their message names has
+	// landed.
 	keptFailed := make([]FailedItem, 0, len(as.state.Failed))
 	readmittedFailed := 0
 	prunedFailed := 0
+	heldFailed := 0
 	for _, f := range as.state.Failed {
 		key := fmt.Sprintf("%s#%d", f.Repo, f.Number)
 		node, exists := g.Nodes[key]
@@ -6860,7 +7111,19 @@ func (as *AutonomousScheduler) reconcileStateAgainstGraph(g *depgraph.Graph) {
 			continue
 		}
 		if strings.EqualFold(node.State, "OPEN") {
-			// Still open — re-admit for potential retry.
+			if hold := HoldForTerminalKind(f.Kind); hold != HoldNone {
+				released, why := as.holdReleased(f, node, approvalLabel)
+				if !released {
+					// Kept, not re-admitted: the entry IS the hold, and the
+					// candidate loop reads it (see prioritize).
+					heldFailed++
+					keptFailed = append(keptFailed, f)
+					log.Printf("autonomous: holding %s — %s (%s) awaits %s, not the rescan", key, f.Kind, hold, why)
+					continue
+				}
+				log.Printf("autonomous: releasing %s — %s hold cleared: %s", key, hold, why)
+			}
+			// Still open and not held — re-admit for potential retry.
 			readmittedFailed++
 			log.Printf("autonomous: re-admitting %s — marked failed but still OPEN on GitHub", key)
 			continue
@@ -6898,9 +7161,9 @@ func (as *AutonomousScheduler) reconcileStateAgainstGraph(g *depgraph.Graph) {
 		}
 	}
 
-	if readmitted > 0 || readmittedFailed > 0 || prunedFailed > 0 || prunedLifetime > 0 || prunedQuarantine > 0 {
-		log.Printf("autonomous: reconciled state — re-admitted %d completed + %d failed items still OPEN; pruned %d closed failures, %d stale lifetime-failure keys, %d stale quarantine keys",
-			readmitted, readmittedFailed, prunedFailed, prunedLifetime, prunedQuarantine)
+	if readmitted > 0 || readmittedFailed > 0 || prunedFailed > 0 || heldFailed > 0 || prunedLifetime > 0 || prunedQuarantine > 0 {
+		log.Printf("autonomous: reconciled state — re-admitted %d completed + %d failed items still OPEN; held %d awaiting a human; pruned %d closed failures, %d stale lifetime-failure keys, %d stale quarantine keys",
+			readmitted, readmittedFailed, heldFailed, prunedFailed, prunedLifetime, prunedQuarantine)
 		as.persistStateLocked()
 	}
 }

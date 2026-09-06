@@ -16,6 +16,16 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- A run halted for a human — the architecture-approval gate, or a stage
+  declaring an issue not pipeline work — now stays halted. The autonomous
+  rescan re-admitted every still-open failed item, which is exactly what an
+  issue awaiting a person looks like, so an approval gate was re-dispatched
+  three seconds after raising it and spent 17.6 minutes and $4.25 on a
+  production-touching change nobody had approved. Failed items now carry their
+  terminal kind, and a human-decision kind is released only by the action its
+  message names: the `approved:architecture` label or approval file, or an
+  explicit `autonomous resume`. Ordinary failures are still retried, and state
+  files written before the field loads unchanged (#1486)
 - A completed feature-dev run whose deliverable is missing `build_verification`
   is now derived from git rather than failed, when the stage worktree holds real
   changes — the same repair #1076 already applied to an absent handoff, stamping

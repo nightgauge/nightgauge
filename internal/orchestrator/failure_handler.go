@@ -536,6 +536,57 @@ const (
 	TerminalKindPrMergeLookupFailed = "pr_merge_lookup_failed"
 )
 
+// Hold* name the human action that releases a Failed entry whose terminal kind
+// records a human DECISION POINT rather than a fault. They answer the question
+// the scheduler's state could not answer before #1486: given that this issue is
+// in `state.Failed` and its issue is still OPEN, may the rescan re-admit it?
+const (
+	// HoldNone — the kind is retryable and the rescan re-admits it on its own.
+	// This is the value for every kind that is not a human decision point, and
+	// for the empty kind, so a state file written before FailedItem.Kind
+	// existed keeps exactly the behaviour it had.
+	HoldNone = ""
+	// HoldArchitectureApproval — released by the grant the gate itself reads:
+	// the configured approval label on the issue (default
+	// `approved:architecture`), or `.nightgauge/pipeline/approval-<n>.json`
+	// with `{"approved": true}`. Both are what `nightgauge approval-gate`
+	// consults, so the reconcile and the gate cannot disagree about whether a
+	// human approved the decision.
+	HoldArchitectureApproval = "architecture-approval"
+	// HoldOperatorResume — released only by an explicit operator act:
+	// `autonomous resume` (fleet or repo) or clearing the issue's failures.
+	// Nothing the pipeline does on its own can clear it, which is the point —
+	// the kind means a person must do something outside the pipeline.
+	HoldOperatorResume = "operator-resume"
+)
+
+// HoldForTerminalKind reports which human action releases a Failed entry
+// recorded with this terminal kind, or HoldNone when the graph reconcile may
+// re-admit it unaided.
+//
+// The two held kinds are the two that halt a run on purpose and say so:
+// TerminalKindArchitectureApprovalRequired ("This is NOT a failure — a human
+// must approve this decision") and TerminalKindNotPipelineActionable ("the
+// deliverable requires a human"). Both already refuse a retry and a board
+// revert to Ready at the point they are raised; before #1486 the graph
+// reconcile then undid that within the same cycle, because `state.Failed` had
+// no notion of WHY an item was in it.
+//
+// The kinds that are unrecoverable by retry but not human decisions —
+// branch_forked, commit_orphaned, abandoned_commit — are deliberately NOT held.
+// Each has an automatic reclamation path that resolves it without a person, and
+// holding them would strand work waiting for an operator act that the taxonomy
+// never asks for.
+func HoldForTerminalKind(kind string) string {
+	switch kind {
+	case TerminalKindArchitectureApprovalRequired:
+		return HoldArchitectureApproval
+	case TerminalKindNotPipelineActionable:
+		return HoldOperatorResume
+	}
+	return HoldNone
+}
+
 // ClassifyTerminalKind returns the terminal failure kind for the given error
 // text, or "" when nothing matches; callers fall back to
 // TerminalKindSubagentCrash (the most generic).

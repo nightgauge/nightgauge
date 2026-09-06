@@ -420,6 +420,32 @@ between a gate passing and a repository halting. Both now walk the same ladder,
 and an unresolvable base records an EMPTY file list rather than inventing one
 from `HEAD~1`.
 
+### Retryability: the two kinds the rescan may not re-admit (#1486)
+
+Every kind above is retryable by the autonomous scheduler's graph reconcile —
+that is what recovers a crashed run — with exactly two exceptions, and they are
+the two that halt on purpose and say so:
+
+| Kind                             | Held for                                    | Released by                                                                                         |
+| -------------------------------- | ------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `architecture_approval_required` | A human approving a high-impact decision    | The approval label (`approved:architecture` by default) or `.nightgauge/pipeline/approval-<n>.json` |
+| `not_pipeline_actionable`        | A human doing the thing the pipeline cannot | An explicit `autonomous resume` (fleet or repo), or clearing the issue's failures                   |
+
+The scheduler records the kind on the `failed` entry (`FailedItem.Kind`) and
+derives the hold from it via `HoldForTerminalKind`, so retryability has one
+definition and this table is not a second one. An entry with **no** kind — a
+state file written before the field existed — reads as retryable, which is the
+behaviour every entry had before #1486.
+
+Held entries stay in `failed` and the dispatch candidate filter excludes them
+from the instant the halt is recorded, independently of the sideline's board
+move landing. The mechanics and the incident that produced them are in
+[AUTONOMOUS_ORCHESTRATOR.md § A human decision point is held, not re-admitted](AUTONOMOUS_ORCHESTRATOR.md#a-human-decision-point-is-held-not-re-admitted-1486).
+
+`branch_forked`, `commit_orphaned` and `abandoned_commit` are unrecoverable by
+_retry_ but are **not** held: they are pipeline-created conditions with
+automatic reclamation paths, not decisions reserved to a person.
+
 `adapter_auth_failed` (Issue #312) is a **retryable-infra** kind. The
 pipeline-start auth gate probes each adapter's `claude auth status`; under a
 concurrent dispatch burst (autonomous restart fanning out N runs in seconds)

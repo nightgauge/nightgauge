@@ -531,6 +531,62 @@ had a chance to run. The `--json` output carries the same check as a
 `"stalled": true/false` field so scripting can detect it without a duplicate
 PID check — the human and JSON output paths share one liveness-check helper.
 
+#### A human decision point is held, not re-admitted (#1486)
+
+Each `failed` entry carries a **`kind`** — the terminal failure kind of its
+latest attempt, the vocabulary of
+[FAILURE_TAXONOMY.md](FAILURE_TAXONOMY.md). It exists because `failed` stores
+two categories of thing that need opposite treatment:
+
+| `kind`                             | What it means                     | Re-admitted by the rescan?                                    |
+| ---------------------------------- | --------------------------------- | ------------------------------------------------------------- |
+| `architecture_approval_required`   | A human must approve a decision   | **No.** Only the approval label or the approval file          |
+| `not_pipeline_actionable`          | The deliverable requires a human  | **No.** Only an explicit `autonomous resume` / clear-failures |
+| anything else, including no `kind` | A fault; the next attempt differs | Yes — the pre-existing behaviour, unchanged                   |
+
+`reconcileStateAgainstGraph` re-admits a still-OPEN `failed` entry so a crashed
+run is recovered. Before #1486 it did that for **every** entry, and "still open"
+is exactly what an issue waiting for a person looks like — so the reconcile
+undid the two halts above within milliseconds of raising them. On the first
+autonomous day an architecture-approval gate raised at `16:53:15.322` was
+re-admitted at `16:53:15.343` and dispatched at `16:53:18.575`; the run then
+spent 17.6 minutes and $4.25 changing an Android application id, an iOS
+xcconfig, fastlane and three workflows that nobody had approved.
+
+Held entries **stay in `failed`**, and that is what excludes them: the dispatch
+candidate filter refuses any issue whose entry carries a held kind. That
+exclusion is in force from the instant the halt is recorded and does **not**
+depend on the sideline's board move to _In review_ / _In progress_ having
+landed — the move is a detached board operation, and the cycle that raised the
+halt used to reach dispatch before it completed.
+
+Releasing a hold is the human action the halt's own message names, and nothing
+else:
+
+- **`architecture_approval_required`** — the approval label on the issue
+  (`pipeline.architecture_approval.approval_label`, default
+  `approved:architecture`), or `.nightgauge/pipeline/approval-<n>.json`
+  carrying `{"approved": true}`. These are precisely the two grants
+  `nightgauge approval-gate` itself reads, so the reconcile and the gate cannot
+  disagree about whether a human approved. An `autonomous resume` deliberately
+  does **not** grant it: resume means "go again", not "I reviewed this
+  architecture", and the gate would re-halt the run at the price of another
+  planning lap.
+- **`not_pipeline_actionable`** — `autonomous resume` (fleet or repo), or
+  `ClearIssueFailures` for the issue. Nothing the pipeline can observe about
+  the issue stands in for a person doing the thing.
+
+The board status is deliberately **not** a release signal. The sideline's board
+move is asynchronous, so at reconcile time the row can still read the status it
+had before the halt — which makes "a human moved this" and "the move has not
+landed yet" indistinguishable. That ambiguity is the same defect from the other
+direction.
+
+Kinds that are unrecoverable by retry but are not human decisions —
+`branch_forked`, `commit_orphaned`, `abandoned_commit` — are **not** held: each
+has an automatic reclamation path, and holding them would strand work waiting
+for an operator act the taxonomy never asks for.
+
 ## Configuration
 
 Configuration can be set via CLI flags or `config.yaml`:
@@ -1274,6 +1330,12 @@ an actual promotable count.
   `autonomous status`
 - All pipeline slots may be full — wait for a completion or increase
   `--max-concurrent`
+- The issue may be **held for a human decision** (#1486) — look for
+  `autonomous: skipping <key> — held for a human decision, awaiting <hold>`.
+  `architecture-approval` is released by the approval label or the approval
+  file; `operator-resume` by `autonomous resume` or clearing the issue's
+  failures. See
+  [A human decision point is held, not re-admitted](#a-human-decision-point-is-held-not-re-admitted-1486)
 
 ### Cross-repo dependencies not detected
 
