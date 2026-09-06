@@ -42,13 +42,31 @@ type Outcome struct {
 	SchemaVersion string `json:"schema_version,omitempty"`
 	IssueNumber   int    `json:"issueNumber"`
 	Repo          string `json:"repo"`
-	// PredictedSize is the router's pre-run size estimate, as
-	// small|medium|large. Empty when the issue carried no size input to
-	// predict from (the board Size field or a size:* label —
-	// orchestrator.OutcomeSizeInput) — the complexity score defaults to the M
-	// base score in that case, so scoring it would record the default as a
-	// prediction.
+	// PredictedSize is the pre-run size estimate, as small|medium|large.
+	//
+	// Two sources can produce it (orchestrator.OutcomePredictedSize): the
+	// issue's own size term — board Size field or a size:* label — bucketed
+	// through the router's complexity score, or, when the issue carried no such
+	// term, the size the run's feature-planning stage assessed for itself
+	// (#1515). SizeSource says which.
+	//
+	// Empty when neither existed. The estimator, which is the run RECORD's
+	// third size source, deliberately does not feed this field: it is a second
+	// reading of the same metadata the prediction would be scored against and
+	// it is available for nearly every run, so admitting it would fill the
+	// accuracy denominator with rows that measure arithmetic rather than the
+	// router.
 	PredictedSize string `json:"predictedSize"`
+	// SizeSource names where PredictedSize came from — "label" or "planner"
+	// (orchestrator.SizeSource*). Absent on rows written before #1515 and on
+	// rows with no size at all.
+	//
+	// It is recorded because the two sources are not the same measurement: a
+	// label is a human's pre-run guess that the router actually scored, and a
+	// planner assessment is an agent's judgement after reading the issue and
+	// the code. A consumer that wants to compare them — or to weight one — can
+	// only do so if the corpus says which it is reading.
+	SizeSource string `json:"sizeSource,omitempty"`
 	// ActualSize is how big the change the run produced turned out to be, in
 	// the same small|medium|large vocabulary, bucketed from lines ACTUALLY
 	// changed (the definition in github.OutcomeService.getActualSizeBucket).

@@ -327,7 +327,7 @@ func TestLearningOutcomeFor_ModelPairMatchesWhenRoutedRight_MissesWhenNot(t *tes
 
 	// The run as captured: the router said sonnet, feature-dev served
 	// claude-sonnet-5. Correctly routed → the pair must AGREE.
-	hit, decision := learningOutcomeFor(base, cls, nil, "acme/widget", time.Now())
+	hit, decision := learningOutcomeFor(base, cls, sizeResFor(cls), nil, "acme/widget", time.Now())
 	if decision != outcomeRecord {
 		t.Fatalf("decision = %s, want %s", decision, outcomeRecord)
 	}
@@ -349,7 +349,7 @@ func TestLearningOutcomeFor_ModelPairMatchesWhenRoutedRight_MissesWhenNot(t *tes
 	dev.ModelSelection = &state.V2ModelSelect{Model: "claude-opus-5", Source: dev.ModelSelection.Source}
 	misrouted.Stages[string(orchestrator.OutcomeModelStage)] = dev
 
-	miss, _ := learningOutcomeFor(misrouted, cls, nil, "acme/widget", time.Now())
+	miss, _ := learningOutcomeFor(misrouted, cls, sizeResFor(cls), nil, "acme/widget", time.Now())
 	if miss.ActualModel != "opus" {
 		t.Errorf("ActualModel = %q, want %q — actual must be the model the implementation stage served", miss.ActualModel, "opus")
 	}
@@ -628,7 +628,7 @@ func TestLearningOutcomeFor_FromCapturedRunRecord(t *testing.T) {
 	rec.Routing.ComplexityScore = cls.ComplexityScore
 	rec.Size = &cls.Size
 
-	o, decision := learningOutcomeFor(rec, cls, nil, "acme/widget", time.Now())
+	o, decision := learningOutcomeFor(rec, cls, sizeResFor(cls), nil, "acme/widget", time.Now())
 	if decision != outcomeRecord {
 		t.Fatalf("decision = %s, want %s for a completed real run", decision, outcomeRecord)
 	}
@@ -686,7 +686,7 @@ func TestLearningOutcomeFor_UnknownSizeAndScoreStayEmpty(t *testing.T) {
 			rec.Size, rec.Routing.ComplexityScore)
 	}
 
-	o, decision := learningOutcomeFor(rec, issueClassification{}, nil, "acme/widget", time.Now())
+	o, decision := learningOutcomeFor(rec, issueClassification{}, orchestrator.SizeResolution{}, nil, "acme/widget", time.Now())
 	if decision != outcomeRecord {
 		t.Fatalf("decision = %s, want %s", decision, outcomeRecord)
 	}
@@ -738,7 +738,7 @@ func TestLearningOutcomeFor_SizePresenceMatchesTheSchedulerWriter(t *testing.T) 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			cls := issueClassification{Labels: tc.labels, ComplexityScore: tc.score}
-			o, decision := learningOutcomeFor(rec, cls, nil, "acme/widget", time.Now())
+			o, decision := learningOutcomeFor(rec, cls, sizeResFor(cls), nil, "acme/widget", time.Now())
 			if decision != outcomeRecord {
 				t.Fatalf("decision = %s, want %s", decision, outcomeRecord)
 			}
@@ -747,7 +747,7 @@ func TestLearningOutcomeFor_SizePresenceMatchesTheSchedulerWriter(t *testing.T) 
 			}
 			// The scheduler writer, given the SAME raw inputs, must land on the
 			// same value — one rule, expressed once.
-			if peer := orchestrator.OutcomePredictedSize("", tc.labels, tc.score); peer != o.PredictedSize {
+			if peer := orchestrator.OutcomePredictedSize(orchestrator.ResolveRunSize("", tc.labels, "", ""), tc.score); peer != o.PredictedSize {
 				t.Errorf("this writer recorded %q where the shared resolver yields %q — the argument diverged again",
 					o.PredictedSize, peer)
 			}
@@ -769,26 +769,26 @@ func TestLearningOutcomeFor_SizePresenceMatchesTheSchedulerWriter(t *testing.T) 
 // issue, so a `score <= 0` guard is dead code and ~95% of real runs record a
 // fabricated "small" through it.
 func TestOutcomePredictedSize_AbsenceComesFromMissingInputs(t *testing.T) {
-	if got := orchestrator.OutcomePredictedSize("", nil, 3); got != "" {
+	if got := orchestrator.OutcomePredictedSize(orchestrator.ResolveRunSize("", nil, "", ""), 3); got != "" {
 		t.Errorf("no size input with the DEFAULT score 3 = %q, want \"\" — that score's size term is the router's default, not a prediction; a guard on score<=0 never fires because nothing writes 0", got)
 	}
-	if got := orchestrator.OutcomePredictedSize("M", nil, 0); got != "" {
+	if got := orchestrator.OutcomePredictedSize(orchestrator.ResolveRunSize("M", nil, "", ""), 0); got != "" {
 		t.Errorf("unscored run = %q, want \"\"", got)
 	}
-	if got := orchestrator.OutcomePredictedSize("HUGE", nil, 5); got != "" {
+	if got := orchestrator.OutcomePredictedSize(orchestrator.ResolveRunSize("HUGE", nil, "", ""), 5); got != "" {
 		t.Errorf("unrecognized board size = %q, want \"\"", got)
 	}
-	if got := orchestrator.OutcomePredictedSize("", []string{"type:bug", "size:HUGE"}, 5); got != "" {
+	if got := orchestrator.OutcomePredictedSize(orchestrator.ResolveRunSize("", []string{"type:bug", "size:HUGE"}, "", ""), 5); got != "" {
 		t.Errorf("unrecognized size:* label = %q, want \"\"", got)
 	}
 	for label, want := range map[string]string{"XS": "small", "M": "medium", "XL": "large"} {
 		score := map[string]int{"XS": 1, "M": 5, "XL": 8}[label]
 		// Board field and size:* label are two spellings of ONE input, resolved
 		// in the router's own order — so both writers agree on presence.
-		if got := orchestrator.OutcomePredictedSize(label, nil, score); got != want {
+		if got := orchestrator.OutcomePredictedSize(orchestrator.ResolveRunSize(label, nil, "", ""), score); got != want {
 			t.Errorf("board size %q = %q, want %q", label, got, want)
 		}
-		if got := orchestrator.OutcomePredictedSize("", []string{"size:" + label}, score); got != want {
+		if got := orchestrator.OutcomePredictedSize(orchestrator.ResolveRunSize("", []string{"size:" + label}, "", ""), score); got != want {
 			t.Errorf("size:%s label = %q, want %q", label, got, want)
 		}
 	}
@@ -871,7 +871,7 @@ func TestServedDevModel_AdapterTranslationIsNotADivergence(t *testing.T) {
 func TestLearningOutcomeFor_FromCapturedFailedRunRecord(t *testing.T) {
 	rec := loadCapturedRunRecord(t, "run-record-failed.json")
 
-	o, decision := learningOutcomeFor(rec, issueClassification{}, nil, "acme/widget", time.Now())
+	o, decision := learningOutcomeFor(rec, issueClassification{}, orchestrator.SizeResolution{}, nil, "acme/widget", time.Now())
 	if decision != outcomeRecord {
 		t.Fatalf("decision = %s, want %s", decision, outcomeRecord)
 	}
@@ -924,13 +924,13 @@ func TestLearningOutcomeFor_SkipVerdictsFromRecordFields(t *testing.T) {
 	deferred.Outcome = "cancelled"
 	deferred.TerminalFailureKind = ""
 	deferred.OutcomeType = orchestrator.OutcomeTypeDeferred
-	if _, d := learningOutcomeFor(deferred, issueClassification{}, nil, "acme/widget", time.Now()); d != outcomeSkipDeferred {
+	if _, d := learningOutcomeFor(deferred, issueClassification{}, orchestrator.SizeResolution{}, nil, "acme/widget", time.Now()); d != outcomeSkipDeferred {
 		t.Errorf("deferred record: decision = %s, want %s", d, outcomeSkipDeferred)
 	}
 
 	netdown := base
 	netdown.TerminalFailureKind = orchestrator.TerminalKindNetworkUnavailable
-	if _, d := learningOutcomeFor(netdown, issueClassification{}, nil, "acme/widget", time.Now()); d != outcomeSkipNetworkUnavailable {
+	if _, d := learningOutcomeFor(netdown, issueClassification{}, orchestrator.SizeResolution{}, nil, "acme/widget", time.Now()); d != outcomeSkipNetworkUnavailable {
 		t.Errorf("network-unavailable record: decision = %s, want %s", d, outcomeSkipNetworkUnavailable)
 	}
 }
@@ -1022,4 +1022,13 @@ func TestOutcomeDiagnosticsAreSharedWithTheSchedulerWriter(t *testing.T) {
 	if !strings.Contains(out, want) {
 		t.Errorf("extension writer did not emit the shared diagnostic.\nwant substring: %s\ngot:\n%s", want, out)
 	}
+}
+
+// sizeResFor is the LABEL-ONLY size resolution — what every caller in this file
+// used to get implicitly, before #1515 gave the resolution three sources and
+// made it an argument. Kept as a helper so these tests keep asserting the
+// label path exactly; the planner and estimator sources have their own tests in
+// server_size_precedence_test.go.
+func sizeResFor(cls issueClassification) orchestrator.SizeResolution {
+	return orchestrator.ResolveRunSize("", cls.Labels, "", "")
 }

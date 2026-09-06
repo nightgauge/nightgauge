@@ -496,3 +496,21 @@ func buildRationale(route, changeType string, complexity int, size, priority, ta
 	}
 	return suffix
 }
+
+// SizeForBaseScore is SizeBaseScore's exact inverse: the XS|S|M|L|XL bucket
+// whose base score is `score`, or "" for anything that is not one of the five.
+//
+// It exists for the planner-size feedback path (#1515). The feature-planning
+// skill writes `complexity_assessment.computed_score` on the SAME Fibonacci
+// scale this map defines (1/2/3/5/8), so a plan that assessed a score but no
+// `size_label` still names a bucket exactly — no rounding, no nearest-match.
+// A score off that scale records "" rather than the closest bucket: an
+// invented size is worse than an absent one everywhere the corpus is read.
+func SizeForBaseScore(score int) string {
+	for size, base := range sizeBaseScore {
+		if base == score {
+			return size
+		}
+	}
+	return ""
+}

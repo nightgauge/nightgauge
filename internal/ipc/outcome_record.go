@@ -69,6 +69,7 @@ func (d outcomeDecision) String() string {
 func learningOutcomeFor(
 	record state.V2RunRecord,
 	cls issueClassification,
+	sizeRes orchestrator.SizeResolution,
 	snap *state.RuntimeState,
 	repo string,
 	now time.Time,
@@ -101,13 +102,16 @@ func learningOutcomeFor(
 		// at pr-create exit and projected onto the built run record. It is absent
 		// when that stage never ran; it is never re-derived from the size:* input.
 		//
-		// The size input goes in RAW, through the same resolver the scheduler
-		// uses (board Size field → size:* label → absent). The board term is
-		// empty here and always will be under the current wire contract:
-		// issue-{N}.json carries `labels` and `routing`, never the board field.
-		// Passing a pre-resolved label instead is how the two writers ended up
-		// keying one corpus field's presence on two different sources.
-		PredictedSize:   orchestrator.OutcomePredictedSize("", cls.Labels, cls.ComplexityScore),
+		// The size comes in as a RESOLUTION, produced by the same
+		// orchestrator.RunSizeResolution the scheduler calls — board Size field
+		// → size:* label → the planner's own assessment → the estimator (#1515).
+		// The board term is empty on this path and always will be under the
+		// current wire contract: issue-{N}.json carries `labels` and `routing`,
+		// never the board field. Resolving it here instead of accepting the
+		// caller's resolution is how the two writers ended up keying one corpus
+		// field's presence on two different sources.
+		PredictedSize:   orchestrator.OutcomePredictedSize(sizeRes, cls.ComplexityScore),
+		SizeSource:      orchestrator.OutcomeSizeSource(sizeRes, cls.ComplexityScore),
 		ActualSize:      measuredActualSize(record),
 		PredictedModel:  orchestrator.OutcomeModelBand(cls.PredictedModel),
 		ActualModel:     servedDevModel(record, snap, cls.PredictedModel),

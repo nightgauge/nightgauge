@@ -6747,6 +6747,17 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			})
 		}
 
+		// #1515: feature-planning has just written its assessment. If the
+		// issue carries no size:* label, put the planner's size on it — one
+		// additive REST call, no model spend — so the router and the pre-flight
+		// cost estimate have a size for the NEXT run of this issue, and the
+		// backlog stops being the reason calibration has nothing to join on.
+		// Never overwrites a label that already exists, agreeing or not.
+		if stage == state.StageFeaturePlanning && s.client != nil {
+			BackfillPlannerSizeLabel(ctx, gh.NewIssueService(s.client), item.Repo, item.Number,
+				item.Labels, workspaceRoot, stageWorkspace(runtime, workspaceRoot))
+		}
+
 		// Issue #3542: after a successful feature-dev stage, check whether the
 		// Stop hook signaled incomplete tasks (stop-hook-status-{N}.json). In
 		// the #3365 incident the stop hook returned OK=false while the agent
@@ -8058,10 +8069,18 @@ func (s *Scheduler) recordOutcome(item types.BoardItem, snap *state.RuntimeState
 	// ActualSize is deliberately unset: no lines-changed measurement exists at
 	// this boundary, and the size:* label it used to be derived from is one of
 	// the same pre-run inputs the prediction came from.
+	//
+	// The three-source size precedence, shared with the extension writer
+	// (#1515). Until this, PredictedSize was keyed on the issue's `size:*`
+	// label alone, and 12 of 14 runs completed on 2026-09-06 carried no such
+	// label — so the corpus recorded "" for the size prediction on nearly every
+	// run while the run's OWN plan had assessed a size and written it down.
+	sizeRes := s.runSizeResolution(item, snap, runRoot)
 	outcome := learning.Outcome{
 		IssueNumber:     item.Number,
 		Repo:            item.Repo,
-		PredictedSize:   OutcomePredictedSize(string(item.Size), item.Labels, complexityScore),
+		PredictedSize:   OutcomePredictedSize(sizeRes, complexityScore),
+		SizeSource:      OutcomeSizeSource(sizeRes, complexityScore),
 		PredictedModel:  OutcomeModelBand(predictedModel),
 		ActualModel:     OutcomeActualBand(OutcomeServedDevModel(snap), predictedModel),
 		Success:         success,
@@ -8100,6 +8119,7 @@ func (s *Scheduler) recordOutcome(item types.BoardItem, snap *state.RuntimeState
 		log.Printf("#%d: learning outcome has no routing.complexity_score — no issue context reached this handler, so the run records no size prediction at all (#304)",
 			item.Number)
 	}
+	LogSizeResolution(item.Number, sizeRes)
 	if err := learning.NewRecorder(runRoot).Record(outcome); err != nil {
 		log.Printf("#%d: failed to record outcome: %v", item.Number, err)
 	}
@@ -8113,6 +8133,46 @@ func (s *Scheduler) recordOutcome(item types.BoardItem, snap *state.RuntimeState
 		ActualSize:     outcome.ActualSize,
 		PredictedModel: outcome.PredictedModel,
 		ActualModel:    outcome.ActualModel,
+	}
+}
+
+// runSizeResolution applies the three-source size precedence for one run
+// (#1515), assembling the arguments this path has: the board Size field the
+// scheduler dispatched against, the item's labels, and the plan the run's own
+// feature-planning stage wrote into its worktree.
+func (s *Scheduler) runSizeResolution(item types.BoardItem, snap *state.RuntimeState, runRoot string) SizeResolution {
+	worktreeDir, body := "", ""
+	if snap != nil {
+		worktreeDir, body = snap.WorktreeDir, snap.Body
+	}
+	return RunSizeResolution(runRoot, worktreeDir, item.Repo, item.Number,
+		string(item.Size), item.Labels, item.Title, body)
+}
+
+// LogSizeResolution says where a run's size came from, and says it loudly when
+// it came from nowhere.
+//
+// The #112 warning now fires only when ALL THREE sources are absent, which is
+// the whole point of the change: it used to fire on any run without a `size:*`
+// label and therefore on nearly every run, which is how an operator learns to
+// read it as noise. A planner-sourced size is reported too — it is the run
+// telling us the backlog's labels are missing, and BackfillPlannerSizeLabel
+// acts on exactly that after the planning stage.
+func LogSizeResolution(issueNumber int, res SizeResolution) {
+	if res.Size == "" {
+		log.Printf("#%d: no size from ANY source — no size:* label, no planner assessment in planning-%d.json, "+
+			"and too few signals for the estimator; this run record cannot calibrate the pre-flight cost estimate (#112, #1515)",
+			issueNumber, issueNumber)
+		return
+	}
+	if res.Disagrees() {
+		log.Printf("#%d: size label %q disagrees with the planner's assessment %q — the LABEL wins and nothing is relabelled; "+
+			"both are recorded so the disagreement is itself learnable (#1515)",
+			issueNumber, res.LabelSize, res.PlannerSize)
+		return
+	}
+	if res.Source != SizeSourceLabel {
+		log.Printf("#%d: size %q resolved from the %s, not a size:* label (#1515)", issueNumber, res.Size, res.Source)
 	}
 }
 
@@ -8158,6 +8218,13 @@ func (s *Scheduler) recordV2History(
 
 	issueType := state.ExtractTypeFromLabels(item.Labels)
 
+	// Same resolution, same rule, same inputs as recordOutcome's (#1515). The
+	// record's `size` is the join key the VSCode pre-flight estimator matches
+	// history on, so a record written without it is unusable as calibration
+	// input (#112) — and the issue's label was only ever one of the three
+	// places the run's size is actually known.
+	sizeRes := s.runSizeResolution(item, snap, workspaceRoot)
+
 	errMsg := ""
 	if !success && snap.Stage != "" {
 		if stageErr, ok := snap.StageErrors[string(snap.Stage)]; ok {
@@ -8175,7 +8242,9 @@ func (s *Scheduler) recordV2History(
 		Branch:                 branch,
 		BaseBranch:             "main",
 		Labels:                 item.Labels,
-		Size:                   string(item.Size),
+		Size:                   sizeRes.Size,
+		SizeSource:             sizeRes.Source,
+		PlannerSize:            sizeRes.PlannerSize,
 		IssueType:              issueType,
 		ComplexityScore:        complexityScore,
 		RoutingPath:            routingPath,

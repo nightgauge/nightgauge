@@ -19,6 +19,11 @@ and this project adheres to
 
 ### Added
 
+- A pipeline run started from VS Code now labels its own issue: when
+  feature-planning finishes and the issue carries no `size:*` label, the size
+  the planner assessed is applied to it. Runs in this mode were recording no
+  size at all, so the pre-flight cost estimate had almost no history to project
+  from — and an existing size label is never overwritten (#1515)
 - After Stop, the status bar says whether a window reload is safe —
   `Autonomous: Stopped — 2 running` while pipelines are still finishing, then
   `Stopped — safe to reload` when the last one lands, updating as they go. Stop
