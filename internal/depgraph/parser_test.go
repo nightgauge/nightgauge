@@ -1,6 +1,7 @@
 package depgraph
 
 import (
+	"strconv"
 	"testing"
 )
 
@@ -990,7 +991,12 @@ func TestParseDependencyRefs_NegativesStayProse(t *testing.T) {
 		{"closes keyword", "Closes #1187"},
 		{"prose with a number", "Rewrote the #1187 handler naming."},
 		{"non-gating marker", "⏸️ Depends on #1187 — recorded for context"},
-		{"deferred text", "Depends-on note: deferred, see #1187"},
+		// The hyphenated "Depends-on" this case originally used as a
+		// deliberately-not-a-keyword spelling IS a keyword since #1505, which
+		// made the case exercise the declaration-beats-"deferred" precedence
+		// pinned positively in the next test rather than the non-gating token
+		// it is named for. Restated with prose that carries no declaration.
+		{"deferred text", "Deferred for now: see #1187"},
 		{"before the keyword on the same line", "Closes #99 — depends on #100"},
 	}
 	for _, tc := range cases {
@@ -1247,5 +1253,85 @@ func TestParseDependencyRefs_PerKeywordSourceOnOneLine(t *testing.T) {
 		if got[num] != src {
 			t.Errorf("#%d source = %q, want %q", num, got[num], src)
 		}
+	}
+}
+
+// --- Field-name spellings of the dependency keyword (#1505) -----------------
+//
+// Authors write the board edge's own field name — `blockedBy`, `depends-on`,
+// `**Depends on:**` — copied from the project field they are mirroring. Every
+// pattern used to accept the prose spelling only, so a body that declared a
+// cross-repo blocker outright produced no edge and the issue was dispatched
+// over it. One shared keyword alternation now backs all of them.
+
+func TestParseDependencyRefs_KeywordSpellings(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		want []int
+	}{
+		{"camelCase in a code span", "This is `blockedBy` #12", []int{12}},
+		{"camelCase bare", "blockedBy #12", []int{12}},
+		{"hyphenated", "blocked-by #12", []int{12}},
+		{"underscored", "blocked_by #12", []int{12}},
+		{"dependsOn camelCase", "dependsOn #12", []int{12}},
+		{"depends-on hyphenated", "depends-on #12", []int{12}},
+		{"depends_on underscored", "depends_on #12", []int{12}},
+		{"bold with colon", "**Depends on:** #3, #4", []int{3, 4}},
+		{"bold camelCase", "**blockedBy:** #7", []int{7}},
+		// A code span naming the field with no reference after it is
+		// documentation about the field, not a declaration.
+		{"keyword with no reference", "The board field is `blockedBy`.", nil},
+		// The keyword must end on a word boundary: this is an identifier.
+		{"identifier is not a keyword", "blockedBySomething#5 is a symbol", nil},
+		{"identifier with a space", "blockedByDefault #5 is a flag", nil},
+		// The halves stay paired — no cross-product.
+		{"blocked on is not the keyword", "blocked on #5", nil},
+		{"depends by is not the keyword", "depends by #5", nil},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := sameRepoNumbers(t, tc.body)
+			if len(got) != len(tc.want) {
+				t.Fatalf("got %v, want %v", got, tc.want)
+			}
+			for i := range tc.want {
+				if got[i] != tc.want[i] {
+					t.Fatalf("got %v, want %v", got, tc.want)
+				}
+			}
+		})
+	}
+}
+
+// The specimen from #1505: a dashboard issue whose "Reassessment correction"
+// paragraph declared two cross-repo blockers in one sentence, the second
+// behind a comma clause. It produced no edge at all and was dispatched.
+func TestParseDependencyRefs_Issue1505Specimen(t *testing.T) {
+	const body = "## Reassessment correction\n\n" +
+		"This issue is `blockedBy` acme/platform#1253 and, per " +
+		"the epic's Wave-1-first rule, acme/platform#1252 — do " +
+		"not retry until both close.\n"
+
+	got := map[string]bool{}
+	for _, r := range ParseDependencyRefs(body, selfRepo, nil) {
+		got[r.Repo+"#"+strconv.Itoa(r.Number)] = true
+		if r.Source != "body_text" {
+			t.Errorf("%s#%d source = %q, want body_text", r.Repo, r.Number, r.Source)
+		}
+	}
+
+	want := []string{
+		"acme/platform#1253",
+		"acme/platform#1252",
+	}
+	for _, w := range want {
+		if !got[w] {
+			t.Errorf("missing edge %s (got %v)", w, got)
+		}
+	}
+	if len(got) != len(want) {
+		t.Errorf("got %v, want exactly %v", got, want)
 	}
 }

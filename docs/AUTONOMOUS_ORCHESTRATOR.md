@@ -736,7 +736,35 @@ Depends on acme-mobile #127
 Depends on: #1187
 Depends on #1187, #1190 and #1195
 Blocked by #1187
+`blockedBy` acme/platform#1253
+**Depends on:** #3, #4
 ```
+
+**Every spelling of the keyword is accepted, including the board field's own
+name.** The two halves may be joined by a space, a `-`, an `_` or nothing at
+all — `blocked by`, `blocked-by`, `blocked_by`, `blockedBy`, and likewise
+`depends on` / `depends-on` / `depends_on` / `dependsOn` — matched
+case-insensitively, and backticks or asterisks around the keyword are ignored,
+so `` `blockedBy` `` and `**Depends on:**` both declare. The keyword must end
+on a word boundary, so the identifier `blockedBySomething#5` declares nothing.
+The halves stay paired: `blocked on` and `depends by` are not keywords.
+
+Until #1505 only the two prose spellings matched, while authors habitually copy
+the `blockedBy` / `dependsOn` field name out of the board — a dashboard issue
+that said "This issue is `` `blockedBy` `` acme/platform#1253" produced no edge
+and dispatched over an open blocker, and the planning stage then paid to
+rediscover it. One keyword alternation is defined once in
+`internal/depgraph/parser.go` and composed into every pattern, so no pattern
+can drift out of step with the others again.
+
+A keyword also claims **repo-qualified** references throughout its sentence,
+not only the one immediately after it, which is how the second blocker in
+
+```
+`blockedBy` acme/platform#1253 and, per the Wave-1-first rule, acme/platform#1252
+```
+
+is honoured — the same claim the bare `#N` forms have always had.
 
 Short names (`platform`, `flutter`, `angular`, `core`) are resolved via a
 built-in alias map. A reference with **no** repo token resolves to the
