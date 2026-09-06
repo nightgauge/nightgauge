@@ -87,6 +87,38 @@ machine/local values apply uniformly to every key, including inside pipeline
 worktrees (the TS `WorktreeManager` copies `config.local.yaml` into each new
 worktree, mirroring the Go path).
 
+## Write Targets
+
+Precedence (above) says which tier _wins on read_. This table says which file a
+write _lands in_, which is a separate question and the one #1516 got wrong: a
+concurrency change, an applied dashboard recommendation, a per-setting reset and
+the startup `max_concurrent` migration all rewrote the committed team file.
+
+| Write                                                                                                         | Target file                     | Enforced by                                                                                                                           |
+| ------------------------------------------------------------------------------------------------------------- | ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| Any runtime/UI write of a key **not** in `MACHINE_TIER_KEY_PATHS`                                             | `.nightgauge/config.local.yaml` | TS `NightgaugeYamlService.writeRuntimeValue` → `runtimeWriteTierFor` (`views/settings/tierRouting.ts`); Go `config.WriteRuntimeValue` |
+| Any runtime/UI write of a **machine-tier** key (identity, credentials, model choice)                          | `~/.nightgauge/config.yaml`     | same two entry points; the key sets are TS `MACHINE_TIER_KEY_PATHS` and Go `config.MachineTierKeys`                                   |
+| Ephemeral UI state (`TIER_3_KEY_PATHS`, e.g. the pause flag)                                                  | VSCode memento                  | `SettingsPanel.handleSave` → `RuntimeStateStore`                                                                                      |
+| Secrets (`SECRET_KEY_PATHS`)                                                                                  | OS keychain                     | `SettingsPanel.handleSave` → `SecretStorageService`                                                                                   |
+| An explicit user action that **names** the team file — the Settings panel's _Project_ tab, "Edit team config" | `.nightgauge/config.yaml`       | `NightgaugeYamlService.write(config, "project")`, the only project-tier writer                                                        |
+
+Two rules follow, and both are tested:
+
+1. **No background write touches `.nightgauge/config.yaml`.** Not an activation
+   migration, not a daemon, not a slider. `config.RuntimeWriteTarget` cannot
+   return the team path, and `runtimeWriteTierFor` cannot return `"project"`.
+2. **When the team file _is_ written, it round-trips.** Both writers apply only
+   the keys that changed, through the YAML document API — TS
+   `serializePreservingComments` (`views/settings/yamlDocumentWriter.ts`, on the
+   `yaml` package's `parseDocument`) and Go `yaml.Node` in
+   `internal/config/writer.go`. A write that changes nothing leaves the file
+   byte-identical, header comments and blank lines included.
+
+The team file is the public-core safety default ("cloning must never authorise
+work"). A writer that targets it will eventually get that change committed by
+accident, and until then every session inherits a dirty tree it has to remember
+not to commit.
+
 ## Tier 1: Team
 
 Stable, reviewed via PR. The UI **displays** these values but does not write

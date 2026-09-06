@@ -4,7 +4,12 @@
  * Maps recommendation categories to config patches, applies them via
  * NightgaugeYamlService, and manages a 30-second revert window.
  *
+ * Applying a dashboard recommendation is a runtime action, not a team-policy
+ * edit: the patch goes to the local tier (or the machine tier for a
+ * machine-tier key), never to the committed `.nightgauge/config.yaml` (#1516).
+ *
  * @see Issue #787 - Actionable Dashboard Recommendations
+ * @see Issue #1516 - runtime writes must not dirty the committed team config
  */
 
 import { NightgaugeYamlService } from "../views/settings/NightgaugeYamlService";
@@ -41,21 +46,13 @@ export class RecommendationApplier {
 
   async apply(category: string, configPath: string, value: unknown): Promise<ApplyResult> {
     try {
-      // Read current config
-      const readResult = await this.yamlService.read();
-      const currentConfig: NightgaugeConfig = readResult.config ?? {};
+      // Read the merged view so the captured revert value is the one that
+      // was actually in effect, not just the team file's.
+      const merged = await this.yamlService.readMerged();
+      const previousValue = getNestedValue(merged.config as NightgaugeConfig, configPath);
 
-      // Get current value at path for revert
-      const previousValue = getNestedValue(currentConfig, configPath);
-
-      // Build partial config from dot-notation path
-      const patch = buildPartialConfig(configPath, value);
-
-      // Merge patch into current config
-      const mergedConfig = deepMerge(currentConfig, patch);
-
-      // Write merged config
-      const writeResult = await this.yamlService.write(mergedConfig, "project");
+      // Write only the addressed key, to the tier a runtime write belongs in.
+      const writeResult = await this.yamlService.writeRuntimeValue(configPath, value);
       if (!writeResult.success) {
         return {
           success: false,
@@ -97,16 +94,11 @@ export class RecommendationApplier {
     }
 
     try {
-      // Read current config
-      const readResult = await this.yamlService.read();
-      const currentConfig: NightgaugeConfig = readResult.config ?? {};
-
-      // Build patch with original value
-      const patch = buildPartialConfig(state.configPath, state.previousValue);
-      const mergedConfig = deepMerge(currentConfig, patch);
-
-      // Write reverted config
-      const writeResult = await this.yamlService.write(mergedConfig, "project");
+      // Restore the original value in the same tier the apply wrote to.
+      const writeResult = await this.yamlService.writeRuntimeValue(
+        state.configPath,
+        state.previousValue
+      );
       if (!writeResult.success) {
         return {
           success: false,
@@ -163,57 +155,4 @@ function getNestedValue(obj: Record<string, unknown>, path: string): unknown {
     current = (current as Record<string, unknown>)[part];
   }
   return current;
-}
-
-function buildPartialConfig(path: string, value: unknown): Record<string, unknown> {
-  const parts = path.split(".");
-  for (const part of parts) {
-    if (part === "__proto__" || part === "prototype" || part === "constructor") {
-      throw new Error("Unsafe configuration path");
-    }
-  }
-  const result: Record<string, unknown> = {};
-  let current = result;
-
-  for (let i = 0; i < parts.length - 1; i++) {
-    current[parts[i]] = {};
-    current = current[parts[i]] as Record<string, unknown>;
-  }
-
-  current[parts[parts.length - 1]] = value;
-  return result;
-}
-
-function deepMerge<T extends Record<string, unknown>>(
-  target: T,
-  source: Record<string, unknown>
-): T {
-  const result = { ...target } as Record<string, unknown>;
-
-  for (const key in source) {
-    const sourceValue = source[key];
-    const targetValue = target[key];
-
-    if (sourceValue === undefined) {
-      continue;
-    }
-
-    if (
-      typeof sourceValue === "object" &&
-      sourceValue !== null &&
-      !Array.isArray(sourceValue) &&
-      typeof targetValue === "object" &&
-      targetValue !== null &&
-      !Array.isArray(targetValue)
-    ) {
-      result[key] = deepMerge(
-        targetValue as Record<string, unknown>,
-        sourceValue as Record<string, unknown>
-      );
-    } else {
-      result[key] = sourceValue;
-    }
-  }
-
-  return result as T;
 }

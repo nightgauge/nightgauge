@@ -224,7 +224,7 @@ GitLab equivalent: PUT issue with 'remove_labels'. Same syntax as add.
 const longAuth = `Token status and config-file token management.
 
 GitLab equivalent: glab auth status / login. The auth subcommand reads
-and writes the token in .nightgauge/config.yaml under
+and writes the token in the machine-tier ~/.nightgauge/config.yaml under
 github_auth.token (or the GitLab equivalent for non-github forges).
 Browser-based OAuth is intentionally out of scope; the implementation
 manages tokens already obtained via 'gh auth login' or PAT generation.

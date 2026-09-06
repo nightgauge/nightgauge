@@ -16,6 +16,19 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Changed
 
+- **A runtime toggle no longer rewrites the committed team config.** Moving the
+  concurrency slider, applying a dashboard recommendation, resetting a setting
+  to the project tier or letting the startup `max_concurrent` migration run all
+  used to rewrite `.nightgauge/config.yaml` — stripping its header comments and
+  blank lines and leaving every checkout permanently dirty, one `git commit -a`
+  away from publishing a personal preference as team policy. Runtime and UI
+  writes now target `.nightgauge/config.local.yaml`, or `~/.nightgauge/config.yaml`
+  for a machine-tier key; the team file changes only from an explicit user
+  action that names it, and that write now round-trips through the YAML
+  document so untouched keys keep their own comments. `nightgauge forge auth`
+  likewise writes `github_auth.token` to the machine tier instead of the
+  committed file (#1516)
+
 - The knowledge base is **on by default**. `knowledge.enabled` now resolves to
   `true` when unset, so a repo with no `knowledge:` section scaffolds PRDs and
   decision logs at issue pickup instead of logging `knowledge.enabled=false and

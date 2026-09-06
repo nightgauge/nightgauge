@@ -21,8 +21,9 @@ const STATE_KEY = "nightgauge.maxConcurrentMigrationCompleted";
  * Read both `pipeline.max_concurrent` and `autonomous.max_concurrent` from
  * the merged config tier (project + local) and prompt the user to consolidate
  * when they disagree. The chosen value is written to `pipeline.max_concurrent`
- * in the same tier the original `autonomous.max_concurrent` lived in, and the
- * legacy key is removed.
+ * in the LOCAL tier — an activation-time migration never rewrites the
+ * committed `.nightgauge/config.yaml` (#1516) — and the legacy key is removed
+ * from the local tier.
  *
  * Returns `true` if a migration was performed, `false` otherwise.
  */
@@ -131,50 +132,52 @@ function pickMaxConcurrent(raw: unknown): number | undefined {
 }
 
 /**
- * Write the resolved value to `pipeline.max_concurrent` in whichever tier
- * the legacy key currently lives in (local-first, then project) and remove
- * the legacy key from that tier.
+ * Write the resolved value to `pipeline.max_concurrent` in the LOCAL tier and
+ * drop the legacy key from the local tier.
+ *
+ * This migration runs on extension activation, which is not an explicit user
+ * action naming the committed team file — so it must not write
+ * `.nightgauge/config.yaml`, however small the diff (#1516). When the legacy
+ * key lives only in the team file it stays there; the local tier's
+ * `pipeline.max_concurrent` outranks it in the merge chain, so behaviour is
+ * already correct, and removing the deprecated key from a committed file is a
+ * reviewed PR, not a startup side effect.
  */
 async function consolidateInto(
   yaml: NightgaugeYamlService,
-  projectCfg: Record<string, unknown> | null,
+  _projectCfg: Record<string, unknown> | null,
   localCfg: Record<string, unknown> | null,
   value: number
 ): Promise<void> {
-  const localAutonomous = pickMaxConcurrent(
-    (localCfg?.autonomous as { max_concurrent?: unknown } | undefined)?.max_concurrent
-  );
-  if (localAutonomous !== undefined) {
-    await writeTier(yaml, localCfg, value, /* tier */ "local");
-    return;
-  }
-  await writeTier(yaml, projectCfg, value, /* tier */ "project");
+  await writeTier(yaml, localCfg, value);
 }
 
 /**
- * Remove `autonomous.max_concurrent` from whichever tier holds it, leaving
- * pipeline.max_concurrent untouched.
+ * Remove `autonomous.max_concurrent` from the local tier when it holds it,
+ * leaving pipeline.max_concurrent untouched. The committed team file is never
+ * rewritten from activation (#1516).
  */
 async function dropAutonomousMaxConcurrent(
   yaml: NightgaugeYamlService,
-  projectCfg: Record<string, unknown> | null,
+  _projectCfg: Record<string, unknown> | null,
   localCfg: Record<string, unknown> | null
 ): Promise<void> {
   const localAutonomous = pickMaxConcurrent(
     (localCfg?.autonomous as { max_concurrent?: unknown } | undefined)?.max_concurrent
   );
-  if (localAutonomous !== undefined) {
-    await writeTier(yaml, localCfg, /* keepValue */ undefined, "local");
+  if (localAutonomous === undefined) {
+    // The redundant key lives only in the committed team file. Leave it —
+    // an activation-time migration never edits `.nightgauge/config.yaml`
+    // (#1516).
     return;
   }
-  await writeTier(yaml, projectCfg, /* keepValue */ undefined, "project");
+  await writeTier(yaml, localCfg, /* keepValue */ undefined);
 }
 
 async function writeTier(
   yaml: NightgaugeYamlService,
   cfg: Record<string, unknown> | null,
-  keepValue: number | undefined,
-  tier: "project" | "local"
+  keepValue: number | undefined
 ): Promise<void> {
   const next: Record<string, unknown> = { ...(cfg ?? {}) };
 
@@ -196,9 +199,5 @@ async function writeTier(
     }
   }
 
-  if (tier === "local") {
-    await yaml.writeLocal(next as Parameters<typeof yaml.writeLocal>[0]);
-  } else {
-    await yaml.write(next as Parameters<typeof yaml.write>[0], "project");
-  }
+  await yaml.writeLocal(next as Parameters<typeof yaml.writeLocal>[0]);
 }

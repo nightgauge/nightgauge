@@ -2,6 +2,7 @@ package forgecmd
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -595,63 +596,50 @@ var authSourceAndMaskedToken = func() (source, masked string) {
 	return "config", "****"
 }
 
-// writeTokenToConfig writes the token to .nightgauge/config.yaml under
-// github_auth.token. The function is permissive — it creates the file if
-// missing and preserves any existing fields.
+// writeTokenToConfig writes the token under github_auth.token in the
+// MACHINE tier (~/.nightgauge/config.yaml). `github_auth` is a machine-tier
+// key (config.MachineTierKeys): a credential must never land in the committed
+// .nightgauge/config.yaml, which this used to target (#1516). The function is
+// permissive — it creates the file if missing and preserves existing fields
+// and their comments.
 var writeTokenToConfig = func(token string) (string, error) {
 	wd, err := os.Getwd()
 	if err != nil {
 		return "", err
 	}
-	dir := filepath.Join(wd, ".nightgauge")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return "", err
-	}
-	path := filepath.Join(dir, "config.yaml")
-	doc, err := loadYAMLDoc(path)
-	if err != nil {
-		return "", err
-	}
-	if err := setNestedString(doc, []string{"github_auth", "token"}, token); err != nil {
-		return "", err
-	}
-	out, err := yaml.Marshal(doc)
-	if err != nil {
-		return "", err
-	}
-	if err := os.WriteFile(path, out, 0o600); err != nil {
-		return "", err
-	}
-	return path, nil
+	return config.WriteRuntimeValue(wd, "github_auth.token", token)
 }
 
-// clearTokenFromConfig removes github_auth.token from the project
-// config.yaml. Returns (path, cleared, err); cleared is false when no
-// token was previously written.
+// clearTokenFromConfig removes github_auth.token from the machine-tier
+// config (~/.nightgauge/config.yaml) — the same file writeTokenToConfig
+// targets. Returns (path, cleared, err); cleared is false when no token was
+// previously written there.
 var clearTokenFromConfig = func() (string, bool, error) {
 	wd, err := os.Getwd()
 	if err != nil {
 		return "", false, err
 	}
-	path := filepath.Join(wd, ".nightgauge", "config.yaml")
-	if _, err := os.Stat(path); os.IsNotExist(err) {
+	path, err := config.RuntimeWriteTarget(wd, "github_auth.token")
+	if err != nil {
+		return "", false, err
+	}
+	if _, statErr := os.Stat(path); os.IsNotExist(statErr) {
 		return path, false, nil
-	} else if err != nil {
-		return path, false, err
+	} else if statErr != nil {
+		return path, false, statErr
 	}
-	doc, err := loadYAMLDoc(path)
+	before, err := os.ReadFile(path)
 	if err != nil {
 		return path, false, err
 	}
-	cleared := deleteNestedKey(doc, []string{"github_auth", "token"})
-	out, err := yaml.Marshal(doc)
+	if _, err := config.WriteRuntimeValue(wd, "github_auth.token", nil); err != nil {
+		return path, false, err
+	}
+	after, err := os.ReadFile(path)
 	if err != nil {
-		return path, cleared, err
+		return path, false, err
 	}
-	if err := os.WriteFile(path, out, 0o600); err != nil {
-		return path, cleared, err
-	}
-	return path, cleared, nil
+	return path, !bytes.Equal(before, after), nil
 }
 
 // readGHToken shells out to `gh auth token`. Tests override this.
