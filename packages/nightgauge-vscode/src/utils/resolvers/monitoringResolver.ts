@@ -1915,6 +1915,14 @@ const DEFAULT_CATASTROPHIC_LIMIT_USD = 200;
 const DEFAULT_CHURN_TOOL_THRESHOLD = 40;
 
 /**
+ * How long external progress (a live declared child, a growing declared log,
+ * an in-flight tool call) may defer a kill (Issue #1488). 20 minutes, matching
+ * `WEDGED_TOOL_CALL_CEILING_S` in skillRunner so the two "how long may a stage
+ * legitimately wait?" answers cannot drift apart.
+ */
+const DEFAULT_EXTERNAL_PROGRESS_CEILING_MS = 20 * 60_000;
+
+/**
  * Resolve progress-based runaway detection configuration.
  *
  * Priority:
@@ -1943,6 +1951,7 @@ export function getProgressRunawayConfig(
   let minCostToActivateUsd = DEFAULT_MIN_COST_TO_ACTIVATE_USD;
   let churnToolThreshold = DEFAULT_CHURN_TOOL_THRESHOLD;
   let catastrophicLimitUsd = DEFAULT_CATASTROPHIC_LIMIT_USD;
+  let externalProgressCeilingMs = DEFAULT_EXTERNAL_PROGRESS_CEILING_MS;
 
   // Env var overrides
   const envEnabled = process.env["NIGHTGAUGE_PIPELINE_PROGRESS_RUNAWAY_ENABLED"];
@@ -1972,6 +1981,13 @@ export function getProgressRunawayConfig(
   if (envChurn !== undefined && envChurn !== "") {
     const parsed = Number.parseInt(envChurn, 10);
     if (!Number.isNaN(parsed) && parsed >= 0) churnToolThreshold = parsed;
+  }
+
+  const envExternalCeiling =
+    process.env["NIGHTGAUGE_PIPELINE_PROGRESS_RUNAWAY_EXTERNAL_CEILING_MS"];
+  if (envExternalCeiling !== undefined && envExternalCeiling !== "") {
+    const parsed = Number.parseInt(envExternalCeiling, 10);
+    if (!Number.isNaN(parsed) && parsed >= 0) externalProgressCeilingMs = parsed;
   }
 
   // Config file overrides (only if no env override already changed the default)
@@ -2028,6 +2044,11 @@ export function getProgressRunawayConfig(
               const parsed = Number.parseInt(churnMatch[1], 10);
               if (!Number.isNaN(parsed) && parsed >= 0) churnToolThreshold = parsed;
             }
+            const externalCeilingMatch = trimmed.match(/^external_progress_ceiling_ms\s*:\s*(\d+)/);
+            if (externalCeilingMatch && envExternalCeiling === undefined) {
+              const parsed = Number.parseInt(externalCeilingMatch[1], 10);
+              if (!Number.isNaN(parsed) && parsed >= 0) externalProgressCeilingMs = parsed;
+            }
           }
         }
       }
@@ -2053,6 +2074,7 @@ export function getProgressRunawayConfig(
     observeOnly,
     churnToolThreshold,
     catastrophicKill,
+    externalProgressCeilingMs,
   };
 }
 

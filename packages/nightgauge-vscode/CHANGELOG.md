@@ -11,6 +11,10 @@ and this project adheres to
 
 ### Fixed
 
+- Validation stages that wait on a long test suite, docker run or emulator boot
+  are no longer killed mid-run. The runaway monitor reads a declared child
+  process, a growing declared log, and a tool call still in flight as proof the
+  stage is working, so waiting on real work no longer looks like a stall (#1488)
 - Pressing Stop no longer counts the stages it kills against their issues.
   A stopped run is recorded as `operator_stop` — exempt from the per-issue
   failure cap and from the cascading-failures breaker — so a pause no longer

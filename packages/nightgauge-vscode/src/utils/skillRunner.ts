@@ -6365,6 +6365,72 @@ export function runStageSkillHeadless(
   const longToolCallReportedBucket = new Map<string, number>();
   const timeoutOverrunReported = new Set<string>();
 
+  // Tool calls issued with no matching tool_result yet (#1488).
+  //
+  // This is the liveness signal `tool_progress` heartbeats (#1083) were meant
+  // to be, without their dependency: `tool_progress` is an optional stream
+  // event and NEITHER of the runs that motivated #1488 produced one, so a
+  // stage waiting inside a single long call — one run died with its own
+  // `git commit` still running — had every clock go cold while behaving
+  // perfectly. tool_use / tool_result ids are emitted by every adapter, so
+  // this cannot go silent the same way.
+  //
+  // Bounded like `toolCallDeclarations`: a lost tool_result must not pin an id
+  // forever, so the set is trimmed oldest-first at the same cap.
+  const inFlightToolCallIds = new Set<string>();
+  const syncInFlightToolCalls = (): void => {
+    while (inFlightToolCallIds.size > TOOL_CALL_DECLARATIONS_MAX) {
+      const oldest = inFlightToolCallIds.values().next();
+      if (oldest.done) break;
+      inFlightToolCallIds.delete(oldest.value);
+    }
+    progressMonitor.setInFlightToolCalls(inFlightToolCallIds.size);
+  };
+
+  // A stage declaring a long external process it is waiting on (#1488).
+  //
+  // Deliberately NOT a productive signal: it says "something real is running",
+  // not "the deliverable moved", so it can only defer a kill.
+  //
+  // Read from BOTH surfaces on purpose. The raw-stdout arm matches how
+  // `CI_PROGRESS:` is consumed, but stdout here is stream-json, so a line a
+  // skill echoes from a Bash command actually arrives inside a tool_result —
+  // the same place phase markers come from. Handling only one of the two is
+  // how a declaration silently never reaches the monitor.
+  const observeExternalProgressDeclarations = (text: string): boolean => {
+    if (!text.includes("NIGHTGAUGE_PROGRESS:")) return false;
+    let sawDeclaration = false;
+    for (const rawLine of text.split("\n")) {
+      const marker = rawLine.indexOf("NIGHTGAUGE_PROGRESS:");
+      if (marker === -1) continue;
+      try {
+        const declared = JSON.parse(rawLine.slice(marker + "NIGHTGAUGE_PROGRESS:".length)) as {
+          pid?: unknown;
+          log?: unknown;
+          label?: unknown;
+        };
+        const pid = typeof declared.pid === "number" ? declared.pid : undefined;
+        const log = typeof declared.log === "string" ? declared.log : undefined;
+        const label = typeof declared.label === "string" ? declared.label : undefined;
+        if (pid === undefined && log === undefined) continue;
+        progressMonitor.declareExternalProgress({
+          ...(pid !== undefined ? { pid } : {}),
+          ...(log !== undefined ? { log } : {}),
+          ...(label !== undefined ? { label } : {}),
+        });
+        sawDeclaration = true;
+        callbacks?.onStderr?.(
+          `[skillRunner] external progress declared: ${label ?? "external"}` +
+            `${pid !== undefined ? ` pid=${pid}` : ""}` +
+            `${log !== undefined ? ` log=${log}` : ""} (Issue #1488)\n`
+        );
+      } catch {
+        /* ignore malformed progress declaration */
+      }
+    }
+    return sawDeclaration;
+  };
+
   const rememberToolCallDeclaration = (name: string, input: unknown, id?: string): void => {
     if (id === undefined) return;
     if (toolCallDeclarations.size >= TOOL_CALL_DECLARATIONS_MAX) {
@@ -6477,6 +6543,10 @@ export function runStageSkillHeadless(
     // timeout, and the task it is polling, are visible. Heartbeats arrive
     // later carrying nothing but a tool_use id.
     rememberToolCallDeclaration(name, input, id);
+    if (id !== undefined) {
+      inFlightToolCallIds.add(id);
+      syncInFlightToolCalls();
+    }
     polledTasks.observePoll(name, input, id, Date.now());
 
     callbacks?.onToolUse?.(name, input, id);
@@ -6532,6 +6602,11 @@ export function runStageSkillHeadless(
 
     // Process complete lines
     for (const line of lines) {
+      // A stage declaring a long external process it is waiting on (#1488).
+      if (observeExternalProgressDeclarations(line)) {
+        continue;
+      }
+
       // Detect CI progress from wait-for-ci-checks.sh (Issue #902)
       if (line.startsWith("CI_PROGRESS:")) {
         try {
@@ -6770,6 +6845,12 @@ export function runStageSkillHeadless(
       // The parser now surfaces every block; walk all of them, so a change in
       // the CLI's framing cannot silently starve the runaway monitor.
       for (const toolResult of parsed?.toolResults ?? []) {
+        // The call is done — it stops proving liveness the moment it returns,
+        // so a stage that finished waiting is killable again (#1488).
+        if (inFlightToolCallIds.delete(toolResult.toolUseId)) {
+          syncInFlightToolCalls();
+        }
+        observeExternalProgressDeclarations(toolResult.content);
         for (const marker of parsePhaseMarkers(toolResult.content)) {
           lastPhaseName = marker.name;
           phaseInference.observeRealMarker(marker.index); // real marker wins (#3760)
