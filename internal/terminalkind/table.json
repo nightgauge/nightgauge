@@ -68,7 +68,7 @@
       "why": "PRESERVED VERBATIM AND PROVABLY UNREACHABLE. Terms are matched against the LOWERCASED error text, and this one carries capitals, so its clause (`exitSignalSource` AND `runaway-progress`) can never be satisfied by any input. It has been dead in Go since it was written; the SDK mirror silently omitted it, which is precisely the kind of one-sided difference #306 exists to remove. Lowercasing it would be a live routing change and is out of scope for a unification, so it stays exactly as Go has it and is declared here instead: the schema lint requires every term with an uppercase character to be listed, and the corpus pins the fall-through (row runaway-progress-exit-signal-source-dead-branch)."
     }
   ],
-  "kinds_without_rules": ["orchestrator_crash", "abandoned_commit"],
+  "kinds_without_rules": ["orchestrator_crash", "abandoned_commit", "operator_stop"],
   "rules": [
     {
       "id": "network-unavailable",

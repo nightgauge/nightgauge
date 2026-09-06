@@ -170,7 +170,8 @@ export const TERMINAL_KIND_TABLE: TerminalKindTable = {
   ],
   "kinds_without_rules": [
     "orchestrator_crash",
-    "abandoned_commit"
+    "abandoned_commit",
+    "operator_stop"
   ],
   "rules": [
     {

@@ -9881,6 +9881,7 @@ func autonomousCmd() *cobra.Command {
 	cmd.AddCommand(autonomousRunCmd())
 	cmd.AddCommand(autonomousStatusCmd())
 	cmd.AddCommand(autonomousResumeCmd())
+	cmd.AddCommand(autonomousClearFailuresCmd())
 	cmd.AddCommand(autonomousStopCmd())
 	cmd.AddCommand(autonomousStuckEpicsCmd())
 	return cmd
@@ -10374,6 +10375,51 @@ func autonomousStatusCmd() *cobra.Command {
 				}
 			}
 
+			// Per-issue lifetime failure counters and the quarantine they
+			// produce (#1487). The cap is enforced at dispatch — an issue at
+			// the cap is skipped silently by every later scan — so without
+			// this block the only surface that ever named a quarantine was a
+			// single log line at the moment it was applied. An operator asking
+			// "why is this issue not moving?" hours later had nowhere to look.
+			//
+			// The counter is printed for every issue that carries one, not
+			// only the quarantined ones: "1/2" the cycle before a quarantine
+			// is the reading that lets an operator act before the issue is
+			// locked out, which is the whole point of showing it.
+			if len(state.LifetimeIssueFailures) > 0 {
+				keys := make([]string, 0, len(state.LifetimeIssueFailures))
+				for k := range state.LifetimeIssueFailures {
+					keys = append(keys, k)
+				}
+				sort.Strings(keys)
+				quarantined := 0
+				for _, k := range keys {
+					if state.LifetimeIssueFailures[k] >= orchestrator.MaxLifetimeFailuresPerIssue {
+						quarantined++
+					}
+				}
+				fmt.Printf("\nLifetime failures (%d issue(s), %d quarantined):\n", len(keys), quarantined)
+				for _, k := range keys {
+					n := state.LifetimeIssueFailures[k]
+					marker := " "
+					note := ""
+					if n >= orchestrator.MaxLifetimeFailuresPerIssue {
+						marker = "\u2717"
+						note = "  QUARANTINED — `nightgauge autonomous clear-failures " + k + "`"
+					}
+					fmt.Printf("  %s %-32s %d/%d%s\n", marker, k, n, orchestrator.MaxLifetimeFailuresPerIssue, note)
+				}
+				// A quarantine record whose counter is gone (the issue was
+				// pruned from the board, or refunded as a product fault) is
+				// reported rather than hidden: it is the difference between
+				// "state.json is stale" and "the issue is held".
+				for k := range state.QuarantinedIssues {
+					if _, counted := state.LifetimeIssueFailures[k]; !counted {
+						fmt.Printf("  \u2717 %-32s quarantine record with no counter — stale\n", k)
+					}
+				}
+			}
+
 			// Remaining
 			if state.Remaining > 0 {
 				fmt.Printf("\nRemaining: %d issues\n", state.Remaining)
@@ -10495,6 +10541,127 @@ func autonomousResumeCmd() *cobra.Command {
 			return nil
 		},
 	}
+	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output the result as JSON")
+	return cmd
+}
+
+// autonomousIssueKeyRE matches the one key shape state.json stores for a
+// per-issue lifetime failure counter: "owner/repo#number". Accepting a looser
+// form would be worse than rejecting it — a key that does not match an entry
+// clears nothing and reports "0 cleared", which reads identically to "the
+// issue was already clean".
+var autonomousIssueKeyRE = regexp.MustCompile(`^[^/\s#]+/[^/\s#]+#[1-9][0-9]*$`)
+
+// autonomousClearFailuresCmd is the CLI half of ClearIssueFailures — the only
+// way out of the per-issue lifetime failure cap (#1487).
+//
+// It existed only as an IPC method and a VS Code command, so an operator on a
+// headless host, or an agent doing forge-side triage, could not lift a
+// quarantine without hand-editing state.json. Three issues hit 2/2 on a gate
+// defect that had already been fixed and shipped, and the fix could not reach
+// them.
+//
+// Two paths, one meaning, mirroring `autonomous resume`: with a co-located
+// daemon the clear goes through IPC so the LIVE scheduler forgets the
+// counters and its next scan dispatches; without one it rewrites the state
+// file through ClearIssueFailuresOffline, which drives the same
+// ClearIssueFailures method.
+func autonomousClearFailuresCmd() *cobra.Command {
+	var (
+		outputJSON bool
+		all        bool
+	)
+
+	cmd := &cobra.Command{
+		Use:   "clear-failures [owner/repo#N]",
+		Short: "Clear the per-issue lifetime failure counter that quarantines an issue",
+		Long: "Lifts the per-issue lifetime failure cap for one issue, or for every issue with --all. " +
+			"A quarantined issue is skipped by the dispatch loop until this runs — including when the " +
+			"failures that quarantined it were the pipeline's fault and have since been fixed.",
+		Example:      "  nightgauge autonomous clear-failures nightgauge/nightgauge.dev#69\n  nightgauge autonomous clear-failures --all",
+		Args:         cobra.MaximumNArgs(1),
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			key := ""
+			switch {
+			case all && len(args) > 0:
+				return fmt.Errorf("pass an issue key or --all, not both")
+			case all:
+				// key stays "" — ClearIssueFailures reads that as "all".
+			case len(args) == 1:
+				key = args[0]
+				if !autonomousIssueKeyRE.MatchString(key) {
+					return fmt.Errorf("%q is not an issue key — use owner/repo#number (e.g. nightgauge/nightgauge#1487) or --all", key)
+				}
+			default:
+				return fmt.Errorf("pass an issue key (owner/repo#number) or --all")
+			}
+
+			workdir, _ := os.Getwd()
+			out := cmd.OutOrStdout()
+			ctx := context.Background()
+			scope := key
+			if scope == "" {
+				scope = "every issue"
+			}
+
+			// Live daemon: clear on the scheduler that is actually running.
+			if client, dialErr := ipc.DialClient(ctx, ipc.DaemonSocketPath(workdir), daemonDialTimeout); dialErr == nil {
+				defer client.Close()
+				var res ipc.AutonomousClearIssueFailuresResult
+				if err := client.Call(ctx, "autonomous.clearIssueFailures", ipc.AutonomousClearIssueFailuresParams{Key: key}, &res); err != nil {
+					return err
+				}
+				if outputJSON {
+					return printJSON(map[string]any{
+						"daemon":                true,
+						"key":                   key,
+						"cleared":               res.Cleared,
+						"circuitBreakerTripped": res.CircuitBreakerTripped,
+					})
+				}
+				if res.Cleared == 0 {
+					fmt.Fprintf(out, "Nothing to clear for %s — no lifetime failures are recorded.\n", scope)
+				} else {
+					fmt.Fprintf(out, "Cleared lifetime failures for %d issue(s) (%s) on the running scheduler.\n", res.Cleared, scope)
+				}
+				// The fleet-wide breaker is a SEPARATE breaker from the
+				// per-issue cap and this verb deliberately does not touch it
+				// (#150). Saying so is the difference between "cleared, and
+				// the queue will move" and "cleared, and nothing will move
+				// until you also resume".
+				if res.CircuitBreakerTripped {
+					fmt.Fprintln(out, "The fleet-wide circuit breaker is still tripped — run `nightgauge autonomous resume` before anything dispatches.")
+				}
+				return nil
+			}
+
+			// No daemon — clear the counters in the state file.
+			cleared, found, err := orchestrator.ClearIssueFailuresOffline(workdir, key)
+			if err != nil {
+				return err
+			}
+			if outputJSON {
+				return printJSON(map[string]any{
+					"daemon":  false,
+					"key":     key,
+					"cleared": cleared,
+					"found":   found,
+				})
+			}
+			if !found {
+				fmt.Fprintln(out, "No autonomous scheduler state found. Run 'nightgauge autonomous run' first.")
+				return nil
+			}
+			if cleared == 0 {
+				fmt.Fprintf(out, "Nothing to clear for %s — no lifetime failures are recorded.\n", scope)
+				return nil
+			}
+			fmt.Fprintf(out, "Cleared lifetime failures for %d issue(s) (%s). No scheduler is running — start one with `nightgauge autonomous run`.\n", cleared, scope)
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&all, "all", false, "Clear the lifetime failure counter for every issue")
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output the result as JSON")
 	return cmd
 }

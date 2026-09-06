@@ -106,6 +106,9 @@ import type {
  *   - `no-work-required` — the run ended because there was nothing to
  *     produce: the issue was already closed, or the branch is level with base
  *     so there is no PR to open.
+ *   - `operator-stopped` — the SCHEDULER killed the stage: someone pressed
+ *     Stop, or a cancel tore the run down. Nothing failed and nothing in the
+ *     repository is wrong; the run simply did not finish.
  *   - `work-stranded` — the run's work EXISTS but not where the pipeline
  *     looks: uncommitted in a worktree, on a stray branch, on a diverged
  *     remote, or committed but never turned into a PR. Re-running before
@@ -143,6 +146,7 @@ export type RetroFailureCategory =
   | "human-decision-required"
   | "dependency-blocked"
   | "no-work-required"
+  | "operator-stopped"
   | "work-stranded"
   | "containment-breach"
   | "validation-inconclusive"
@@ -580,6 +584,11 @@ const TERMINAL_KIND_CATEGORY: Record<TerminalFailureKind, RetroFailureCategory> 
 
   // The stage wrote into a repository it does not own.
   containment_breach: "containment-breach",
+
+  // The scheduler killed the stage on an operator's instruction. Its own
+  // category rather than a fold into `no-work-required`: there WAS work, it
+  // was interrupted, and the remedy is a resume rather than a dequeue (#1487).
+  operator_stop: "operator-stopped",
 };
 
 /**
@@ -1835,6 +1844,8 @@ export class AutoRetroService {
         "The run was dispatched while a blockedBy dependency was still open — a scheduler decision, not a stage failure",
       "no-work-required":
         "The run ended because there was nothing to produce — the issue was already closed, or the branch holds no commits to open a PR for",
+      "operator-stopped":
+        "The scheduler killed the stage on an operator's instruction — a Stop or a cancel, not a failure of the issue or the pipeline",
       "work-stranded":
         "The run's work exists but not where the pipeline looks — uncommitted, on a stray branch, on a diverged remote, or committed with no PR",
       "containment-breach":
@@ -1887,6 +1898,8 @@ export class AutoRetroService {
         "The run is parked, not broken: an approval gate stopped it for a decision only a person can make, or a stage declared the deliverable is not producible by any pipeline lap (counsel sign-off, an operator-only credential, a product call). Make the decision and record it — an ADR for an architecture halt, the `owner-action` label for a non-actionable issue — then re-queue. Re-running without the decision reproduces the halt exactly.",
       "dependency-blocked":
         "The issue's blockedBy dependencies were still open when the scheduler dispatched it, so the run deferred. The stage is fine; the dispatch decision was wrong. Land the blockers, or drop the edge if it is stale — the issue re-dispatches on its own once nothing blocks it. A repeat here means the dependency graph the scheduler reads disagrees with the board.",
+      "operator-stopped":
+        "Nothing to fix and nothing to read: someone pressed Stop, or a cancel tore the run down, and the stage took the SIGTERM mid-flight. The issue is back at Ready and is charged no lifetime failure, so `nightgauge autonomous resume` re-dispatches it from the top. If you did NOT stop this run, the question is what cancelled it — look for a second scheduler, a daemon restart, or the machine sleeping — not at the stage.",
       "no-work-required":
         "There was nothing for the pipeline to produce: the issue was already closed before the run started, or pr-create confirmed the branch holds no commits ahead of base. Neither is a failure. Dequeue the issue; if it is genuinely open work, the real question is why the previous lap produced no commits — look at the feature-dev deliverable rather than re-running pr-create.",
       "work-stranded":
@@ -1927,6 +1940,7 @@ export class AutoRetroService {
       "human-decision-required": "medium",
       "dependency-blocked": "low",
       "no-work-required": "low",
+      "operator-stopped": "low",
       "work-stranded": "high",
       "containment-breach": "high",
       "validation-inconclusive": "medium",
