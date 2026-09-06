@@ -257,6 +257,13 @@ export const PullRequestConfigSchema = z.object({
   merge_strategy: MergeStrategySchema.optional(),
   delete_branch: z.boolean().optional(),
   /** @deprecated Accepted for compatibility but has no runtime effect. */
+  /**
+   * Open every PR as a draft. Default false.
+   *
+   * OFF because a draft PR does not run the required checks on some forge
+   * configurations, which turns the pipeline's own gate off as a side effect.
+   * Repositories that want a human read before CI spends anything turn it on.
+   */
   draft_by_default: z.boolean().optional(),
   reviewers: z.array(z.string()).optional(),
   auto_merge: z.boolean().optional(),
@@ -895,6 +902,12 @@ export const PipelineConfigSchema = z.object({
    * @env NIGHTGAUGE_PIPELINE_ADAPTIVE_STALL_RECOVERY
    * @see Issue #3005 — Adaptive stall-recovery
    * @see docs/decisions/004-adaptive-stall-recovery.md
+   */
+  /**
+   * Rewind to feature-planning once on the first stall-kill. Default false.
+   *
+   * OFF for PER-RUN COST: the rewind is one extra planning + dev pass, paid on
+   * every stall whether or not re-planning would have helped.
    */
   adaptive_stall_recovery: z.boolean().optional(),
   /**
@@ -1612,6 +1625,13 @@ export type RoutingConfig = z.infer<typeof RoutingConfigSchema>;
 export const DependencyEnforcementConfigSchema = z.object({
   enabled: z.boolean().optional(),
   mode: EnforcementModeSchema.optional(),
+  /**
+   * Follow dependency edges transitively when deciding whether an issue is
+   * blocked. Default false.
+   *
+   * OFF for PER-RUN COST in GitHub API quota: each hop is another issue fetch,
+   * and a deep graph turns one readiness check into dozens.
+   */
   check_transitive: z.boolean().optional(),
 });
 export type DependencyEnforcementConfig = z.infer<typeof DependencyEnforcementConfigSchema>;
@@ -1669,6 +1689,14 @@ export type CommandsConfig = z.infer<typeof CommandsConfigSchema>;
  */
 export const ValidationConfigSchema = z.object({
   require_tests: z.boolean().optional(),
+  /**
+   * Refuse a PR that does not touch the changelog. Default false.
+   *
+   * OFF for REPOSITORY FOOTPRINT: it forces a changelog edit into every PR,
+   * including ones whose change is invisible to a release reader. This
+   * repository turns it on in its own config; a library or a private service
+   * reasonably would not.
+   */
   require_changelog: z.boolean().optional(),
   max_files_changed: z.number().int().min(1).optional(),
   max_lines_changed: z.number().int().min(1).optional(),
@@ -2695,6 +2723,13 @@ export type UIReadyItemsFiltersConfig = z.infer<typeof UIReadyItemsFiltersConfig
  * @see tests/config/ui.ready_items.behavior.test.ts
  */
 export const UIReadyItemsConfigSchema = z.object({
+  /**
+   * Poll the board on a timer. Default false.
+   *
+   * OFF for PER-RUN COST in GitHub API quota: a refresh is a board query, and
+   * an idle editor left open all day spends the same quota an active pipeline
+   * needs. `refresh_interval` is the knob for operators who want it.
+   */
   auto_refresh: z.boolean().optional(),
   refresh_interval: z.number().int().min(60).optional(),
   sort_by: SortBySchema.optional(),

@@ -466,6 +466,76 @@ model_routing:
     feature-validate: medium
 ```
 
+## The annotated example config
+
+[`configs/config.example.yaml`](../configs/config.example.yaml) writes every
+shipped default out with the reason for it beside the value. Copying it into
+`.nightgauge/config.yaml` and changing nothing changes nothing — it exists so
+you can see what you are running under without reading the source.
+
+`nightgauge config init` writes a much shorter file: the nine keys a new
+workspace has to answer. The example is the reference, not the starting point.
+
+`TestDefaultsAgree` (`internal/config`) pins every value in the example against
+the resolver that applies it, alongside the extension's `DEFAULT_CONFIG`, the
+init template and the tables in this document. The example cannot drift into
+fiction without failing CI.
+
+## What ships on, and what it costs
+
+Nightgauge follows one rule for defaults
+([ADR-020](decisions/020-value-adding-features-default-on.md),
+[ADR-021](decisions/021-shipped-defaults-follow-the-default-on-rule.md)):
+
+> A feature that adds value to a workspace **defaults on**. An opt-out exists
+> for **repository footprint** or **per-run cost** — and, where a switch takes
+> an action a person would want to authorise, for **authorisation**. The reason
+> is written next to the switch.
+
+Everything below is on for a workspace that has configured nothing. Each row
+names what turning it off buys you, so the opt-out is a decision rather than a
+guess.
+
+| Key                                           | Default                    | What it costs while on                                                                                                                                                                                                          |
+| --------------------------------------------- | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `pipeline.adversarial_review.enabled`         | `true`                     | **Per-run cost.** One or more extra LLM critic passes on every `feature-validate`. It is the fresh-eyes read the implementing model cannot give itself                                                                          |
+| `pipeline.grounding_gate.enabled`             | `true`                     | **Nothing measurable.** Deterministic pre-`feature-dev` check that the worktree is on the branch the run thinks it is. No model call                                                                                            |
+| `pipeline.test_execution`                     | `true`                     | **Nothing measurable.** Inert in a repo whose test command excludes nothing; it has no off switch by design (see its section)                                                                                                   |
+| `pipeline.progress_runaway.*`                 | `true`                     | **Nothing measurable.** Replaces the dollar-ceiling kill with a forward-progress signal, so a slow-but-working stage is no longer killed for being slow                                                                         |
+| `pipeline.survival.window_days`               | `7`                        | **Repository footprint**, small: one survival record per merge under `.nightgauge/`, aged out automatically                                                                                                                     |
+| `pipeline.gemini_context.*`                   | `true`                     | **Repository footprint.** Writes a `GEMINI.md` into the tree for the Gemini adapter. Irrelevant unless that adapter is selected                                                                                                 |
+| `autonomous.discipline_gate.enabled`          | `true`                     | **Nothing measurable.** A local readiness score (`min_score: 30`, `mode: block`) that steers an under-prepared repo — no real test suite, no CI — toward human-in-the-loop rather than full autonomy                            |
+| `autonomous.stuck_epic_detection.enabled`     | `true`                     | **Per-run cost**, negligible: one Discord message per stalled epic, at most once per `re_alert_after` (6h). Needs a webhook env var to deliver anything                                                                         |
+| `ready_to_ship.enabled`                       | `true`                     | **Per-run cost**, negligible: one Discord message when an epic fully closes. It posts the deploy command; it never runs it                                                                                                      |
+| `remote_commands.enabled`                     | `true`                     | **Per-run cost** in GitHub API quota: the polling loop that lets the dashboard drive a local daemon. Inert without a platform                                                                                                   |
+| `attention.dependabot_stale_remediation_days` | `7`                        | **Nothing measurable.** Threshold, not a switch: how long a Dependabot remediation PR may sit before the Action Center cards it. It is also the card's re-alert bucket width                                                    |
+| `audit.*`                                     | follows `platform.enabled` | **Per-run cost**, negligible, and only when a platform is configured: batched event POSTs with an offline queue. There is no independent `audit.enabled` — see ADR-021                                                          |
+| `epic.summary.enabled`                        | `true`                     | **Repository footprint and per-run cost** at the full tier: an LLM pass that commits a summary document. The tier classifier decides which epics get it                                                                         |
+| `automations.enabled`                         | `true`                     | **Nothing until you configure it.** Inert while `automations.triggers` is empty — which is the shipped state. Worth knowing because the action set includes `run_script`, so a populated `triggers` list executes what it names |
+
+## Off by default, and why
+
+The rule cuts both ways: a switch that ships **off** owes a reason, and the
+reason must be footprint, per-run cost, authorisation, or a missing credential.
+"Conservative rollout" and "for backward compatibility" are migration reasons —
+legitimate during a migration, never as a default (ADR-021).
+
+| Key                                                                                                | Default | Reason                                                                                                                                                          |
+| -------------------------------------------------------------------------------------------------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `autonomous.auto_actionable`                                                                       | `false` | **Authorisation.** Moving an issue to Ready is what makes the scheduler spend money on it — the last point a human sees the work                                |
+| `autonomous.auto_redispatch_stalled`                                                               | `false` | **Authorisation.** It merges code into the default branch with no human in the loop                                                                             |
+| `pipeline.feedback_loop.auto_retro.auto_create_issues`                                             | `false` | **Authorisation.** It files issues into the tracker on the pipeline's own judgement                                                                             |
+| `autonomous.pickup_backlog`                                                                        | `false` | **Per-run cost.** A backlog is where under-specified work sits; dispatching it spends a full pipeline per issue to discover that                                |
+| `enforcement.dependencies.check_transitive`                                                        | `false` | **Per-run cost** in GitHub API quota: each hop is another issue fetch, and a deep graph turns one readiness check into dozens                                   |
+| `ui.ready_items.auto_refresh`                                                                      | `false` | **Per-run cost** in GitHub API quota: an idle editor left open all day spends the quota an active pipeline needs. `refresh_interval` is the knob                |
+| `validation.require_changelog`                                                                     | `false` | **Repository footprint.** It forces a changelog edit into every PR, including ones invisible to a release reader. This repository turns it on in its own config |
+| `pipeline.adaptive_stall_recovery`                                                                 | `false` | **Per-run cost.** One extra planning + dev pass, paid on every stall whether or not re-planning would have helped                                               |
+| `project.sprint.enabled`, `project.sprint.auto_assign`                                             | `false` | **Needs a board field.** Without an iteration field on the Project, there is nothing to assign to                                                               |
+| `pull_request.draft_by_default`                                                                    | `false` | **It can disable the gate.** A draft PR does not run required checks on some forge configurations, which turns the pipeline's own CI gate off as a side effect  |
+| `notifications.discord.enabled`, `notifications.mattermost.enabled`, `notifications.slack.enabled` | `false` | **Needs a credential.** Without a webhook or bot token in the environment, turning them on produces failed deliveries and nothing else                          |
+| `project.sync.enabled`                                                                             | `false` | **Repository/board footprint.** It writes to the board on every change; a workspace that has not asked for that should not have its board rewritten             |
+| `pull_request.auto_merge`, `pull_request.auto_merge_epic`                                          | `false` | **Authorisation.** The `pr-merge` stage merges when CI is green; forge-side auto-merge on top lands the PR past that decision                                   |
+
 ## Configuration Sections
 
 ### github.api_ledger
