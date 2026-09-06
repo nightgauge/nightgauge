@@ -76,12 +76,14 @@ func buildAutonomousConfig(cfg *config.Config, over autonomousConfigOverrides) o
 		if cfg.Autonomous.SafetyRails != nil {
 			src := cfg.Autonomous.SafetyRails
 			autoCfg.SafetyRails = &orchestrator.SafetyConfig{
-				BudgetCeiling:     src.BudgetCeiling,
 				CircuitBreakerMax: src.CircuitBreakerMax,
 				RateLimitPerHour:  src.RateLimitPerHour,
 				// Resolved, not copied: an omitted key must keep the default.
+				// A safety_rails: block written to tune one rail used to zero
+				// out every rail the operator did not restate (#991, #1517).
+				BudgetCeiling:  config.ResolveSafetyBudgetCeiling(cfg),
 				EpicCheckpoint: config.ResolveEpicCheckpoint(cfg),
-				HealthGateMin:  src.HealthGateMin,
+				HealthGateMin:  config.ResolveHealthGateMin(cfg),
 			}
 		}
 	}

@@ -91,13 +91,10 @@ func modelRoutingMode(cfg *config.Config) string {
 	if env := strings.TrimSpace(os.Getenv("NIGHTGAUGE_MODEL_ROUTING_MODE")); state.IsModelRoutingMode(env) {
 		return env
 	}
-	if cfg == nil || cfg.ModelRouting == nil {
-		return "automatic"
+	if cfg == nil {
+		return config.DefaultModelRoutingMode
 	}
-	if m := strings.TrimSpace(cfg.ModelRouting.Mode); state.IsModelRoutingMode(m) {
-		return m
-	}
-	return "automatic"
+	return cfg.ModelRouting.ResolveMode()
 }
 
 // validStageModel keeps a per-stage operator value to the registry band

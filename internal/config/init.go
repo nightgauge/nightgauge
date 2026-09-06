@@ -141,7 +141,7 @@ func BuildTemplate(opts InitOptions) (string, error) {
 	b.WriteString("\n")
 	b.WriteString("# Knowledge base — persistent context per issue (PRD + decision logs)\n")
 	b.WriteString("knowledge:\n")
-	b.WriteString("  enabled: false # Set to true to enable automatic knowledge scaffolding\n")
+	b.WriteString("  enabled: true # Persistent per-issue context (PRD + decision logs)\n")
 	b.WriteString("  auto_scaffold: true # Scaffold automatically on issue pickup (requires enabled: true)\n")
 
 	return b.String(), nil

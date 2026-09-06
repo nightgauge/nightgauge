@@ -12,7 +12,12 @@ import (
 // of config.yaml. These settings control scaffolding, validation gates, and
 // enrichment behavior during planning.
 type KnowledgeConfig struct {
-	// Enabled controls whether the knowledge base is active. Defaults to false (opt-in).
+	// Enabled controls whether the knowledge base is active. Defaults to false
+	// (opt-in) on this side while the extension's DEFAULT_CONFIG, the docs
+	// table and the `config init` template all say true — the one disagreement
+	// #1517 deliberately does NOT resolve, because flipping the Go resolver is
+	// a live behaviour change owned by its own issue. TestDefaultsAgree leaves
+	// this row's Go column unchecked and pins the other three.
 	Enabled *bool `yaml:"enabled" json:"enabled,omitempty"`
 	// AutoScaffold controls whether the knowledge directory is automatically
 	// scaffolded at issue pickup when Enabled is true. Resolved via
@@ -26,8 +31,11 @@ type KnowledgeConfig struct {
 	// WikiLinks controls whether [[wiki-link]] syntax is resolved in knowledge documents.
 	WikiLinks *bool `yaml:"wiki_links" json:"wiki_links,omitempty"`
 	// RequireDecisions controls whether the decisions.md validation gate is enforced
-	// during planning when the plan contains tradeoff signals. Defaults to false for
-	// backward compatibility; new projects should set this to true.
+	// during planning when the plan contains tradeoff signals. Defaults to TRUE,
+	// matching the TS KnowledgeConfigSchema JSDoc and the docs/CONFIGURATION.md
+	// table (#1517). It previously defaulted to false "for backward
+	// compatibility" — a pre-customer compat knob that made the same key mean
+	// two different things depending on which surface read it.
 	RequireDecisions *bool `yaml:"require_decisions" json:"require_decisions,omitempty"`
 	// WorkspaceScoped controls whether the workspace-level KB tree
 	// (product/, cross-repo/, architecture/) is auto-scaffolded at issue-pickup.
@@ -161,12 +169,17 @@ func (k *KnowledgeConfig) IsEnabled() bool {
 	return *k.Enabled
 }
 
+// DefaultKnowledgeRequireDecisions is the shipped default for
+// knowledge.require_decisions — see ResolveRequireDecisions.
+const DefaultKnowledgeRequireDecisions = true
+
 // ResolveRequireDecisions returns the effective require_decisions setting.
-// Defaults to false for backward compatibility with existing projects.
-// New project configs should set knowledge.require_decisions: true explicitly.
+// Defaults to DefaultKnowledgeRequireDecisions (true): a plan that trades one
+// approach off against another records why, and the gate only fires when the
+// plan itself carries tradeoff signals.
 func (k *KnowledgeConfig) ResolveRequireDecisions() bool {
 	if k == nil || k.RequireDecisions == nil {
-		return false
+		return DefaultKnowledgeRequireDecisions
 	}
 	return *k.RequireDecisions
 }

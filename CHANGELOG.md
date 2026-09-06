@@ -16,6 +16,13 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Added
 
+- A shipped default now has one value. `TestDefaultsAgree` in
+  `internal/config` reads the extension's `DEFAULT_CONFIG`, the
+  `nightgauge config init` template and the `docs/CONFIGURATION.md` reference
+  tables and fails when any of them disagrees with the Go resolver, so the
+  next divergence is a red build rather than a surprise in someone's
+  workspace (#1517)
+
 - `nightgauge autonomous status` now answers whether a VS Code reload is safe:
   `Stopped — 2 pipeline(s) still running (#313 flutter, #1429 platform); reload
 is not safe yet`, and `Stopped — 0 running; safe to reload` once they land.
@@ -32,6 +39,23 @@ is not safe yet`, and `Stopped — 0 running; safe to reload` once they land.
   `n/2` and marks the ones at the cap (#1487)
 
 ### Fixed
+
+- Nineteen configuration keys shipped a different default depending on which
+  surface you asked. `platform.telemetry.enabled` was documented as opt-out
+  and shipped off; `pipeline.ci_timeout` was 10 in the extension and 300 in
+  the docs, in different units; `pipeline.max_concurrent` was 1 in one place
+  and 3 in two others; `pull_request.auto_merge` defaulted on against a
+  documented off; `knowledge.auto_prune_on_merge` was read by the pr-merge
+  stage but stripped by the extension's schema. Each now has one value stated
+  once. `autonomous.safety_rails.budget_ceiling` and `health_gate_min` are no
+  longer described as "0 = unlimited/disabled" — they always resolved to
+  500000 and 30, and they now resolve through `config.ResolveSafetyBudgetCeiling`
+  and `config.ResolveHealthGateMin` so writing the block to tune one rail no
+  longer zeroes the others (#1517)
+- `model_routing.mode` and the top-level `feedback_loop.*` thresholds had
+  defaults only on the TypeScript side, so a CLI-only workspace with no config
+  block routed and monitored differently from the same repository opened in
+  VS Code. Both now resolve in `internal/config` (#1517)
 
 - An Action Center card no longer asks for a decision without showing what is
   being decided. Every card naming a repo and an issue (or PR) now leads with

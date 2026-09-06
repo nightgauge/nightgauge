@@ -785,7 +785,7 @@ GitHub Project board integration settings.
 | ------------ | ------- | ------- | ------------------------------------------ |
 | `number`     | number  | -       | GitHub Project number (from project URL)   |
 | `owner`      | string  | -       | Project owner (defaults to repo owner)     |
-| `auto_dates` | boolean | `false` | Auto-populate Start/Target date fields     |
+| `auto_dates` | boolean | `true`  | Auto-populate Start/Target date fields     |
 | `sprint`     | object  | -       | Sprint/iteration configuration (see below) |
 
 **Example:**
@@ -1221,15 +1221,18 @@ export NIGHTGAUGE_BRANCH_PROTECTED=main,develop
 
 Issue creation and assignment settings.
 
-| Option           | Type   | Default     | Description                                            |
-| ---------------- | ------ | ----------- | ------------------------------------------------------ |
-| `default_status` | string | `"backlog"` | Default project board status: `"backlog"` or `"ready"` |
+| Option           | Type     | Default     | Description                                            |
+| ---------------- | -------- | ----------- | ------------------------------------------------------ |
+| `default_status` | string   | `"backlog"` | Default project board status: `"backlog"` or `"ready"` |
+| `default_labels` | string[] | `[]`        | Labels applied to every issue this workspace creates   |
+| `auto_assign`    | boolean  | `true`      | Assign the acting GitHub user on issue pickup          |
 
 **Example:**
 
 ```yaml
 issue:
   default_status: backlog
+  auto_assign: true
 ```
 
 **Environment overrides:**
@@ -1250,16 +1253,17 @@ export NIGHTGAUGE_ISSUE_DEFAULT_LABELS=needs-triage
 
 Pipeline execution settings.
 
-| Option                    | Type    | Default      | Description                                                                    |
-| ------------------------- | ------- | ------------ | ------------------------------------------------------------------------------ |
-| `ci_timeout`              | number  | `300`        | Timeout for CI checks in seconds                                               |
-| `auto_fix`                | boolean | `true`       | Auto-fix linting issues in feature-dev                                         |
-| `skip`                    | object  | -            | Skip specific validation checks                                                |
-| `max_turns`               | integer | _(no limit)_ | Max turns per headless CLI invocation (Issue #626)                             |
-| `auto_create_epic_branch` | boolean | `true`       | Auto-create epic branch from default branch when first sub-issue is dispatched |
-| `failure_mode`            | enum    | `halt`       | Behavior on terminal pipeline failure (Issue #3001)                            |
-| `adaptive_stall_recovery` | boolean | `false`      | Rewind to feature-planning once on first stall-kill (Issue #3005)              |
-| `performance_mode`        | object  | -            | Default performance mode + per-mode overrides (Issue #3009)                    |
+| Option                    | Type    | Default      | Description                                                                                                                                                                   |
+| ------------------------- | ------- | ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ci_timeout`              | number  | `300`        | Timeout for CI checks, in **seconds**                                                                                                                                         |
+| `auto_fix`                | boolean | `true`       | Auto-fix linting issues in feature-dev                                                                                                                                        |
+| `skip`                    | object  | -            | Skip specific validation checks                                                                                                                                               |
+| `max_turns`               | integer | _(no limit)_ | Max turns per headless CLI invocation (Issue #626)                                                                                                                            |
+| `auto_create_epic_branch` | boolean | `true`       | Auto-create epic branch from default branch when first sub-issue is dispatched                                                                                                |
+| `failure_mode`            | enum    | `halt`       | Behavior on terminal pipeline failure (Issue #3001)                                                                                                                           |
+| `adaptive_stall_recovery` | boolean | `false`      | Rewind to feature-planning once on first stall-kill (Issue #3005)                                                                                                             |
+| `adaptive_budget`         | boolean | `true`       | Derive per-stage token budgets from this repo's own exit records once ≥5 successful samples exist for the (repo, stage, size) group; falls back to the static table otherwise |
+| `performance_mode`        | object  | -            | Default performance mode + per-mode overrides (Issue #3009)                                                                                                                   |
 
 **Skip object:**
 
@@ -5300,7 +5304,7 @@ Project board display settings.
 | Option                   | Type    | Default | Description                            |
 | ------------------------ | ------- | ------- | -------------------------------------- |
 | `group_by_epic`          | boolean | `true`  | Group issues under parent epic         |
-| `default_epic_collapsed` | boolean | `false` | Default collapse state for epic groups |
+| `default_epic_collapsed` | boolean | `true`  | Default collapse state for epic groups |
 
 **Example:**
 
@@ -5308,7 +5312,7 @@ Project board display settings.
 ui:
   project_board:
     group_by_epic: true
-    default_epic_collapsed: false
+    default_epic_collapsed: true
 ```
 
 ---
@@ -6409,23 +6413,28 @@ knowledge:
       expired: 0.5
 ```
 
-| Key                                | Type    | Default | Description                                                                                                 |
-| ---------------------------------- | ------- | ------- | ----------------------------------------------------------------------------------------------------------- |
-| `enabled`                          | boolean | `true`  | Master switch. When `false`, all knowledge operations are disabled                                          |
-| `auto_scaffold`                    | boolean | `true`  | Automatically create knowledge directory during issue-pickup (requires `enabled: true`)                     |
-| `wiki_links`                       | boolean | `true`  | Enable `[[wiki-link]]` resolution in knowledge documents                                                    |
-| `index_on_commit`                  | boolean | `false` | Regenerate the knowledge index on every commit via a git hook (reserved for future git hook use)            |
-| `auto_prune_on_merge`              | boolean | `true`  | Remove knowledge directories that contain only boilerplate content after a PR is merged                     |
-| `recall.dev_threshold`             | float   | `1.5`   | Minimum recall score for constraints shown to feature-dev. Higher than planning's default to reduce noise.  |
-| `recall.dev_limit`                 | integer | `5`     | Max recalled architectural constraints shown to feature-dev per invocation.                                 |
-| `recall.bm25_k1`                   | float   | `1.5`   | BM25 term-frequency saturation.                                                                             |
-| `recall.bm25_b`                    | float   | `0.75`  | BM25 document-length normalisation.                                                                         |
-| `recall.weights.human_reviewed`    | float   | `1.25`  | Multiplier for an entry a person confirmed.                                                                 |
-| `recall.weights.machine_confirmed` | float   | `1.0`   | Multiplier for an entry retro or graduation confirmed — the reference point.                                |
-| `recall.weights.unverified`        | float   | `0.85`  | Multiplier for an entry nothing has confirmed.                                                              |
-| `recall.weights.status_draft`      | float   | `0.9`   | Multiplier for `status: draft`.                                                                             |
-| `recall.weights.status_deprecated` | float   | `0.25`  | Multiplier for `status: deprecated`. Non-zero on purpose: a deprecated decision still records what changed. |
-| `recall.weights.expired`           | float   | `0.5`   | Multiplier when `stale_after` has passed, evaluated at query time.                                          |
+| Key                                | Type    | Default             | Description                                                                                                 |
+| ---------------------------------- | ------- | ------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `enabled`                          | boolean | `true`              | Master switch. When `false`, all knowledge operations are disabled                                          |
+| `auto_scaffold`                    | boolean | `true`              | Automatically create knowledge directory during issue-pickup (requires `enabled: true`)                     |
+| `wiki_links`                       | boolean | `true`              | Enable `[[wiki-link]]` resolution in knowledge documents                                                    |
+| `index_on_commit`                  | boolean | `false`             | Regenerate the knowledge index on every commit via a git hook (reserved for future git hook use)            |
+| `auto_index`                       | boolean | `true`              | Regenerate `index.md` and `log.md` after a merge that touched knowledge files (read by the pr-merge stage)  |
+| `auto_prune_on_merge`              | boolean | `true`              | Remove knowledge directories that contain only boilerplate content after a PR is merged                     |
+| `telemetry.enabled`                | boolean | _follows `enabled`_ | Emit `knowledge-events.jsonl`. Unset follows `knowledge.enabled` (ADR-005); always off when the KB is off   |
+| `require_decisions`                | boolean | `true`              | Gate planning completion when the plan carries tradeoff signals and `decisions.md` has no ADR block         |
+| `workspace_scoped`                 | boolean | `true`              | Also scaffold the workspace-level KB tree (`product/`, `cross-repo/`, `architecture/`); gated by `enabled`  |
+| `aggregate`                        | boolean | `false`             | In a multi-repo workspace, aggregate knowledge across every repository                                      |
+| `recall.dev_threshold`             | float   | `1.5`               | Minimum recall score for constraints shown to feature-dev. Higher than planning's default to reduce noise.  |
+| `recall.dev_limit`                 | integer | `5`                 | Max recalled architectural constraints shown to feature-dev per invocation.                                 |
+| `recall.bm25_k1`                   | float   | `1.5`               | BM25 term-frequency saturation.                                                                             |
+| `recall.bm25_b`                    | float   | `0.75`              | BM25 document-length normalisation.                                                                         |
+| `recall.weights.human_reviewed`    | float   | `1.25`              | Multiplier for an entry a person confirmed.                                                                 |
+| `recall.weights.machine_confirmed` | float   | `1.0`               | Multiplier for an entry retro or graduation confirmed — the reference point.                                |
+| `recall.weights.unverified`        | float   | `0.85`              | Multiplier for an entry nothing has confirmed.                                                              |
+| `recall.weights.status_draft`      | float   | `0.9`               | Multiplier for `status: draft`.                                                                             |
+| `recall.weights.status_deprecated` | float   | `0.25`              | Multiplier for `status: deprecated`. Non-zero on purpose: a deprecated decision still records what changed. |
+| `recall.weights.expired`           | float   | `0.5`               | Multiplier when `stale_after` has passed, evaluated at query time.                                          |
 
 Lifecycle weights compose multiplicatively — an unverified draft whose
 `stale_after` has passed scores `0.85 × 0.9 × 0.5`. There is exactly one
@@ -6804,7 +6813,7 @@ autonomous:
   # max_concurrent: DEPRECATED — set pipeline.max_concurrent instead.
   # The autonomous scheduler resolves through pipeline.max_concurrent first
   # and only falls back to this key for configs predating Issue #3195.
-  budget_ceiling: 500000 # Global token budget, 0 = unlimited (default: 0)
+  budget_ceiling: 500000 # Global token budget across all runs (default: 500000)
   enabled_repos: # Optional allowlist — scan only these repos (default: all)
     - acme-platform
   exclude_labels: # Labels never dispatched (default: ["owner-action", "blocked"])
@@ -6823,8 +6832,34 @@ autonomous:
     circuit_breaker_max: 3 # Consecutive failures before trip (default: 3)
     rate_limit_per_hour: 20 # Max pipeline starts per hour (default: 20)
     epic_checkpoint: true # Pause after each epic wave (default: true)
-    health_gate_min: 30 # Min health score to continue (default: 0)
+    health_gate_min: 30 # Min health score (0–100) to continue (default: 30)
+  debounce_repos: true # Only re-query repos with recent completions (default: true)
 ```
+
+#### autonomous scheduler options
+
+| Option                      | Type     | Default | Description                                                                                  |
+| --------------------------- | -------- | ------- | -------------------------------------------------------------------------------------------- |
+| `scan_interval`             | duration | `30s`   | How often the scheduler re-scans project boards                                              |
+| `debounce_repos`            | boolean  | `true`  | Re-query only repositories with recent completions between scans — a GitHub API quota saving |
+| `pickup_backlog`            | boolean  | `false` | Dispatch Backlog items once every Ready item is done                                         |
+| `auto_actionable`           | boolean  | `false` | Move auto-refined issues straight to Ready                                                   |
+| `refinement_enabled`        | boolean  | `true`  | Run the autonomous refinement scheduler                                                      |
+| `refinement_interval`       | duration | `60s`   | Time between refinement scans (minimum `30s`)                                                |
+| `refinement_max_concurrent` | integer  | `1`     | Concurrent refinement operations (1–3)                                                       |
+
+#### autonomous.safety_rails
+
+Every rail below ships **on**. Omitting a key inside `safety_rails:` keeps its
+default; there is no value that disables a rail by accident.
+
+| Option                | Type    | Default  | Description                                                                        |
+| --------------------- | ------- | -------- | ---------------------------------------------------------------------------------- |
+| `budget_ceiling`      | integer | `500000` | Global token budget across all autonomous runs. Raise it by naming a larger number |
+| `circuit_breaker_max` | integer | `3`      | Consecutive failures before the breaker trips                                      |
+| `rate_limit_per_hour` | integer | `20`     | Maximum pipeline starts per hour                                                   |
+| `epic_checkpoint`     | boolean | `true`   | Pause after each epic wave for human review                                        |
+| `health_gate_min`     | integer | `30`     | Minimum workspace health score (0–100) required to keep dispatching                |
 
 **Omitting a key inside `safety_rails:` preserves its default — it is not an
 opt-out.** This is worth stating because it was not true until #991:
@@ -6833,6 +6868,13 @@ opt-out.** This is worth stating because it was not true until #991:
 checkpoint to `false` and silently removed the between-epic human pause. The key
 is now resolved through `config.ResolveEpicCheckpoint`, which distinguishes an
 omitted key from an explicit `false`.
+
+`budget_ceiling` and `health_gate_min` had the same shape of bug through #1517:
+both were documented as `0 = unlimited` / `0 = disabled`, while the scheduler
+substituted `500000` and `30` for an unconfigured rail. Neither is ever
+"unlimited" — they resolve through `config.ResolveSafetyBudgetCeiling` and
+`config.ResolveHealthGateMin`, and the only way to lift a rail is to name a
+larger number.
 
 **When the checkpoint fires, it stops the whole fleet, not one repo**, and the
 halt is machine-raised: it survives a restart and Start will refuse to resume it

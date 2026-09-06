@@ -75,5 +75,5 @@ human_in_the_loop:
 
 # Knowledge base — persistent context per issue (PRD + decision logs)
 knowledge:
-  enabled: false # Set to true to enable automatic knowledge scaffolding
+  enabled: true # Persistent per-issue context (PRD + decision logs)
   auto_scaffold: true # Scaffold automatically on issue pickup (requires enabled: true)
