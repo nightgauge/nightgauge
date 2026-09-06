@@ -66,7 +66,7 @@ func TestRunRefinementCycle_ReposShrinkMidScanDoesNotPanic(t *testing.T) {
 		{Owner: "o", Name: "r3", Project: 3},
 	}, nil, cfg, t.TempDir())
 	as.state.Status = "running"
-	as.OnRefinementDispatch(func(_, _ string, _ int) {})
+	as.WithRefinementRunner(func(_ context.Context, _, _ string, _ int) error { return nil })
 
 	panicked := make(chan any, 1)
 	done := make(chan struct{})
@@ -148,12 +148,13 @@ func TestRunRefinementCycle_OffsetDoesNotAdvanceOnSaturatedCycle(t *testing.T) {
 	var dispatchedRepo string
 	holdSlot := make(chan struct{})
 	started := make(chan struct{})
-	as.OnRefinementDispatch(func(_, repo string, _ int) {
+	as.WithRefinementRunner(func(_ context.Context, _, repo string, _ int) error {
 		mu.Lock()
 		dispatchedRepo = repo
 		mu.Unlock()
 		close(started) // signal BEFORE blocking, so a waiter never races the assignment above
 		<-holdSlot
+		return nil
 	})
 	observed := func() string {
 		mu.Lock()

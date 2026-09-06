@@ -2731,7 +2731,7 @@ func TestRefinementIsViable_DispatcherRegistered_True(t *testing.T) {
 		Adapter:       nil,
 	})
 	as := NewAutonomousScheduler(sched, nil, nil, nil, DefaultAutonomousConfig(), t.TempDir())
-	as.OnRefinementDispatch(func(owner, repo string, issueNumber int) { /* no-op */ })
+	as.WithRefinementRunner(func(_ context.Context, owner, repo string, issueNumber int) error { return nil })
 
 	if !as.refinementIsViable() {
 		t.Error("expected viability=true when an IPC dispatcher is registered, even if adapter is nil")

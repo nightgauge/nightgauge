@@ -339,10 +339,11 @@ func TestRunRefinementCycle_RefinesInDispatchOrder(t *testing.T) {
 
 	var mu sync.Mutex
 	refined := map[int]bool{}
-	as.OnRefinementDispatch(func(_, _ string, n int) {
+	as.WithRefinementRunner(func(_ context.Context, _, _ string, n int) error {
 		mu.Lock()
 		refined[n] = true
 		mu.Unlock()
+		return nil
 	})
 	as.markRefinedFn = func(context.Context, string, string, int) error { return nil }
 
@@ -390,7 +391,7 @@ var hookItem = CandidateItem{Repo: "o/r", Number: 7, Title: "issue", BoardStatus
 func TestRefineBeforeDispatch_RefinesThenDispatches(t *testing.T) {
 	as := hookScheduler(t, 1)
 	refined := make(chan int, 1)
-	as.OnRefinementDispatch(func(_, _ string, n int) { refined <- n })
+	as.WithRefinementRunner(func(_ context.Context, _, _ string, n int) error { refined <- n; return nil })
 
 	if !as.refineBeforeDispatch(context.Background(), hookGraph(), hookItem) {
 		t.Fatal("hook should have refined the unrefined item")
@@ -415,8 +416,9 @@ func TestRefineBeforeDispatch_RefinesThenDispatches(t *testing.T) {
 func TestRefineBeforeDispatch_NoSlotDispatchesUnrefined(t *testing.T) {
 	logs := withCapturedLog(t)
 	as := hookScheduler(t, 1)
-	as.OnRefinementDispatch(func(_, _ string, _ int) {
+	as.WithRefinementRunner(func(_ context.Context, _, _ string, _ int) error {
 		t.Error("no refinement may run while the only slot is held")
+		return nil
 	})
 	as.refinementSem <- struct{}{} // the one slot is occupied
 
@@ -435,8 +437,9 @@ func TestRefineBeforeDispatch_NoSlotDispatchesUnrefined(t *testing.T) {
 func TestRefineBeforeDispatch_RateRailExhaustedDispatchesUnrefined(t *testing.T) {
 	logs := withCapturedLog(t)
 	as := hookScheduler(t, 1)
-	as.OnRefinementDispatch(func(_, _ string, _ int) {
+	as.WithRefinementRunner(func(_ context.Context, _, _ string, _ int) error {
 		t.Error("no refinement may run once the rate rail is spent")
+		return nil
 	})
 	as.safetyRails = NewSafetyRails(SafetyConfig{RefinementRateLimitPerHour: 1})
 	as.safetyRails.RecordRefinementStart()
@@ -460,7 +463,10 @@ func TestRefineBeforeDispatch_RateRailExhaustedDispatchesUnrefined(t *testing.T)
 func TestRefineBeforeDispatch_AlreadyRefinedIsSilent(t *testing.T) {
 	logs := withCapturedLog(t)
 	as := hookScheduler(t, 1)
-	as.OnRefinementDispatch(func(_, _ string, _ int) { t.Error("must not refine an already-refined issue") })
+	as.WithRefinementRunner(func(_ context.Context, _, _ string, _ int) error {
+		t.Error("must not refine an already-refined issue")
+		return nil
+	})
 
 	if as.refineBeforeDispatch(context.Background(), hookGraph(gh.LabelRefined), hookItem) {
 		t.Fatal("hook must not refine an issue carrying pipeline:refined")
@@ -475,7 +481,10 @@ func TestRefineBeforeDispatch_AlreadyRefinedIsSilent(t *testing.T) {
 // wrong answer here rewrites a human-reviewed body (#993/#998).
 func TestRefineBeforeDispatch_TruncatedLabelsFailClosed(t *testing.T) {
 	as := hookScheduler(t, 1)
-	as.OnRefinementDispatch(func(_, _ string, _ int) { t.Error("must not refine on a truncated label list") })
+	as.WithRefinementRunner(func(_ context.Context, _, _ string, _ int) error {
+		t.Error("must not refine on a truncated label list")
+		return nil
+	})
 	g := hookGraph()
 	g.Nodes["o/r#7"].LabelsTruncated = true
 
@@ -490,7 +499,10 @@ func TestRefineBeforeDispatch_TruncatedLabelsFailClosed(t *testing.T) {
 func TestRefineBeforeDispatch_UntrustedAuthorDispatchesUnrefined(t *testing.T) {
 	logs := withCapturedLog(t)
 	as := hookScheduler(t, 1)
-	as.OnRefinementDispatch(func(_, _ string, _ int) { t.Error("must not refine an untrusted author's issue") })
+	as.WithRefinementRunner(func(_ context.Context, _, _ string, _ int) error {
+		t.Error("must not refine an untrusted author's issue")
+		return nil
+	})
 	g := hookGraph()
 	g.Nodes["o/r#7"].AuthorAssociation = "NONE"
 

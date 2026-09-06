@@ -228,10 +228,32 @@ export type { AdapterDecision, AdapterSource } from "./resolvers/adapterResolver
 export const INTERACTIVE_TIMEOUT_MS = 30 * 60 * 1000;
 
 /**
- * Maps pipeline stages to their skill directory names
+ * The autonomous scheduler's refinement dispatch (#1529).
+ *
+ * It is NOT a pipeline stage — it never appears in `STAGE_ORDER`, has no board
+ * column and no place in the tree view's stage list — but it is executed by
+ * exactly the same machinery: the Go scheduler resolves the whole dispatch
+ * envelope and sends it over `pipeline.runStage`, and the result comes back as
+ * `pipeline.stageResult` like any stage. Before this existed, refinement had no
+ * execution path in extension mode at all and was silently off for every
+ * extension user while the product default said it was on.
+ */
+export const REFINEMENT_STAGE = "issue-refine" as const;
+
+/**
+ * Anything this executor can be asked to run: the pipeline stages, plus the
+ * refinement dispatch. Deliberately a separate type from `PipelineStage` —
+ * widening that union would put refinement into every stage ORDERING,
+ * progression and board-status table in the codebase, which is precisely what
+ * it must never join.
+ */
+export type RunnableStage = PipelineStage | typeof REFINEMENT_STAGE;
+
+/**
+ * Maps runnable stages to their skill directory names
  * Bookend stages (pipeline-start, pipeline-finish) have no skill files
  */
-const STAGE_TO_SKILL_DIR: Record<PipelineStage, string> = {
+const STAGE_TO_SKILL_DIR: Record<RunnableStage, string> = {
   "pipeline-start": "", // Bookend stage - executed synchronously
   "issue-pickup": "nightgauge-issue-pickup",
   "feature-planning": "nightgauge-feature-planning",
@@ -240,6 +262,7 @@ const STAGE_TO_SKILL_DIR: Record<PipelineStage, string> = {
   "pr-create": "nightgauge-pr-create",
   "pr-merge": "nightgauge-pr-merge",
   "pipeline-finish": "", // Bookend stage - executed synchronously
+  [REFINEMENT_STAGE]: "nightgauge-issue-refine",
 };
 
 /**
@@ -2813,8 +2836,8 @@ export function getNextStage(currentStage: PipelineStage): PipelineStage | null 
 /**
  * Get human-readable stage label
  */
-export function getStageLabel(stage: PipelineStage): string {
-  const labels: Record<PipelineStage, string> = {
+export function getStageLabel(stage: RunnableStage): string {
+  const labels: Record<RunnableStage, string> = {
     "pipeline-start": "Initialize",
     "issue-pickup": "Issue Pickup",
     "feature-planning": "Feature Planning",
@@ -2823,6 +2846,7 @@ export function getStageLabel(stage: PipelineStage): string {
     "pr-create": "PR Creation",
     "pr-merge": "PR Merge",
     "pipeline-finish": "Completion",
+    [REFINEMENT_STAGE]: "Issue Refinement",
   };
   return labels[stage];
 }

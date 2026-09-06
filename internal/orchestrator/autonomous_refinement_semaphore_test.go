@@ -116,17 +116,18 @@ func TestRunRefinementCycle_RefusedSemaphoreGatesDispatch(t *testing.T) {
 	// for that long between candidate #11 and candidate #12, #11 has already
 	// RELEASED its slot and even CORRECT code legitimately dispatches [11 12] —
 	// which is the regression signature this test exists to catch. Blocking
-	// inside the dispatch callback pins the slot for the whole candidate loop:
-	// onRefinementDispatch is invoked synchronously inside refineIssue, BEFORE
-	// its release defer runs. Do not "simplify" this channel away.
+	// inside the refinement runner pins the slot for the whole candidate loop: the
+	// runner is invoked synchronously inside refineIssue, BEFORE its release
+	// defer runs. Do not "simplify" this channel away.
 	holdSlot := make(chan struct{})
-	// Registering the IPC dispatch callback is also what makes refinement
-	// viable without a CLI adapter, exactly as in the #270 test.
-	as.OnRefinementDispatch(func(_, _ string, issueNumber int) {
+	// Registering a refinement runner is also what makes refinement viable
+	// without a CLI adapter, exactly as in the #270 test.
+	as.WithRefinementRunner(func(_ context.Context, _, _ string, issueNumber int) error {
 		mu.Lock()
 		dispatched = append(dispatched, issueNumber)
 		mu.Unlock()
 		<-holdSlot
+		return nil
 	})
 	observed := func() []int {
 		mu.Lock()
@@ -210,7 +211,7 @@ func TestRunRefinementCycle_SaturatedCycleSpendsNoAPIQuota(t *testing.T) {
 	as.state.Status = "running"
 	// Registering the IPC callback is what makes refinement viable without a
 	// CLI adapter; the cycle must short-circuit before it is ever called.
-	as.OnRefinementDispatch(func(_, _ string, _ int) {})
+	as.WithRefinementRunner(func(_ context.Context, _, _ string, _ int) error { return nil })
 
 	// Saturate the scheduler-wide semaphore before the cycle starts, exactly
 	// as a refinement still running from an earlier cycle would.

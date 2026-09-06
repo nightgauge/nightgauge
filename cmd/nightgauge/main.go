@@ -4948,6 +4948,20 @@ func serveCmd() *cobra.Command {
 						autoSched = orchestrator.NewAutonomousScheduler(
 							sched, client, repoConfigs, nil, autoCfg, workspaceRoot,
 						)
+						// Refinement runs through the same stage bridge every
+						// pipeline stage crosses in extension (IPC) mode —
+						// pipeline.runStage / pipeline.stageResult, executed by
+						// the extension's SkillRunner (#1529). Without this the
+						// scheduler has no CLI adapter and no runner, so
+						// refinementIsViable() is false and every cycle returns
+						// before selecting anything: refinement was a CLI-only
+						// feature while the product default is on.
+						//
+						// Registered here, after server.SetScheduler above has
+						// attached the IpcStageRunner, so the runner it reaches
+						// for is already in place.
+						autoSched.WithIPCRefinement()
+
 						// Graph builds read boards through the daemon's shared
 						// snapshot cache rather than issuing their own full
 						// board read per repo (#845, #847).

@@ -46,6 +46,10 @@ and this project adheres to
 
 ### Fixed
 
+- The extension now executes issue refinement. The Go daemon dispatches it over
+  the same stage bridge it uses for pipeline stages, and the refine skill runs
+  headless in the checkout of the repo the issue belongs to. Before this,
+  refinement was silently off for every extension user (#1529)
 - An Action Center card no longer asks for a decision without showing what is
   being decided. Every card naming a repo and an issue (or PR) now leads with
   `Open in browser` — the link is derived when the producer set none — and a

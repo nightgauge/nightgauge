@@ -22,10 +22,10 @@ import (
 func newRefinementTestScheduler(t *testing.T) *AutonomousScheduler {
 	t.Helper()
 	as := NewAutonomousScheduler(nil, nil, nil, nil, DefaultAutonomousConfig(), t.TempDir())
-	// The IPC path short-circuits refineViaCLI, which would otherwise need an
-	// execution manager and a skill on disk. Refinement "succeeds"; what is
-	// under test is everything after it.
-	as.onRefinementDispatch = func(string, string, int) {}
+	// A registered runner short-circuits refineViaCLI, which would otherwise
+	// need an execution manager and a skill on disk. Refinement "succeeds";
+	// what is under test is everything after it.
+	as.refinementRunner = func(context.Context, string, string, int) error { return nil }
 	return as
 }
 
@@ -38,7 +38,7 @@ func refineOnce(t *testing.T, as *AutonomousScheduler, number int) {
 	as.refineIssue(context.Background(), "O", "R", gh.UnrefinedIssue{
 		Number: number,
 		Title:  "Test issue",
-	})
+	}, refinementOrigin{tier: refinementTierReady, source: refinementSourceCycle})
 }
 
 // TestRefineIssue_MarkRefinedFailure_RecordsFailedNotCompleted is the guard for

@@ -254,8 +254,11 @@ while a tier-1 or tier-2 issue **anywhere in the workspace** is still
 unrefined, so the hourly rate rail is never spent on the backlog while
 work that is about to run is unsized. Issues labelled `auto-process` are
 exempt from both tier gates — that label is the operator asking for one
-issue by name. 3. Qualifying issues are dispatched to the `nightgauge-issue-refine` skill
-via the execution manager (CLI mode) or IPC callback (VSCode mode) 4. On success: `pipeline:refined` label is added, `auto-process` label is
+issue by name. 3. Qualifying issues run the `nightgauge-issue-refine` skill —
+through the execution manager directly (CLI mode), or across the
+`pipeline.runStage` / `pipeline.stageResult` bridge every pipeline stage
+uses (extension/IPC mode, #1529). Either way the call is **synchronous**:
+it returns when the refinement has finished, with the outcome. 4. On success: `pipeline:refined` label is added, `auto-process` label is
 removed (if present), and the issue is moved to Ready status on the board 5. On failure — including a failure to ADD the `pipeline:refined` label, which
 was previously logged and dropped — the run is recorded in
 `state.RefinementFailed` with its reason, the per-issue consecutive-failure
@@ -298,13 +301,13 @@ failure retried at the rail's cap indefinitely (#993)
   diagnosable from the offset sequence rather than indistinguishable from
   "nothing to refine". Both gates above are unchanged — only the scan order,
   and when the rotation offset advances, changed.
-- The cap bounds **in-flight dispatches**, not completed refinements. In
-  IPC/VSCode mode the slot is released at handoff — `refineIssue` returns
-  shortly after `onRefinementDispatch` hands the issue to the extension — so the
-  practical ceiling is roughly `refinement_max_concurrent` issues handed off per
-  `refinement_interval`, regardless of how long the extension then takes.
-  Holding the slot until the extension reports completion is a separate design
-  question, tracked as follow-up work.
+- The cap bounds **in-flight refinements**, in every mode (#503). The slot is
+  released when the refine skill exits — not when the work was handed to
+  someone else. In extension (IPC) mode that means it is held across the stage
+  bridge until the extension delivers `pipeline.stageResult`, bounded by the
+  refinement timeout so an extension host that goes away mid-stage cannot park
+  a slot for the life of the daemon. There is no dispatch-rate-limiter variant
+  of this cap.
 - Refinement has its own rate limiter (default: 10/hour) separate from the
   dispatch rate limiter. A refused candidate is not counted against it — only an
   acquired slot records a refinement start.
@@ -331,6 +334,25 @@ unrefined:
 ```text
 [refinement] pre-dispatch: refining acme/app#7 before dispatch
 [refinement] pre-dispatch: dispatching acme/app#7 unrefined — no refinement slot free
+```
+
+**Execution paths and what they log.** Every refinement, from either source,
+writes exactly one outcome line naming the tier it was selected from and which
+of the two sources ran it:
+
+```text
+[refinement] refined acme/app#7 (tier=1, source=cycle)
+[refinement] refined acme/app#7 (tier=1, source=pre-dispatch)
+[refinement] failed acme/app#7 (tier=2, source=cycle): refinement stage exited with code 2
+```
+
+The "no execution path" line is now the exception it was meant to be — it
+appears only when refinement is switched off, or when a scheduler has neither a
+CLI adapter nor a registered refinement runner:
+
+```text
+[refinement] disabled: no refinement runner registered and no CLI adapter configured — skipping refinement cycles
+[refinement] pre-dispatch: dispatching acme/app#7 unrefined — refinement is disabled (autonomous.refinement_enabled)
 ```
 
 This makes refinement demand-driven for the issues that matter, so a cold
