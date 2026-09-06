@@ -82,6 +82,31 @@ using the signal's structured fields only — its `signal_type`, and a declared
 `rationale`). A marker overrides the type: a `PLAN_REVISION_NEEDED` that
 declares an external blocker is blocked, not rewindable.
 
+**The reader that feeds that fork accepts the marker too (#1504).**
+`readFeedbackSignals` keeps a blocking signal when it names a
+`backtrack_target_stage`, when its `signal_type` is terminal by construction
+(`NOT_PIPELINE_ACTIONABLE`, #1241), **or when it carries an external-blocker
+evidence marker** — regardless of type or target. The third clause is not a
+convenience: the shape
+[`skills/nightgauge-feature-planning/SKILL.md`](../skills/nightgauge-feature-planning/SKILL.md)
+mandates for an open prerequisite is `PLAN_REVISION_NEEDED` with
+`backtrack_target_stage: null`, a `blocked-on:` evidence entry and no plan file,
+which is a rewindable type naming no target. The filter dropped it before the
+fork above could see it, so the branch written for the marker was unreachable by
+its one intended producer, and a correct refusal was booked
+`premature_turn_end` — an agent-class failure that halted the whole repository
+and reverted the issue to Ready to be convicted again. Both call sites test the
+marker through one shared reader; a second copy of its shape would be exactly
+the dual-path drift that caused the defect.
+
+The terminal kind stamped on that run is `not_pipeline_actionable`, which is
+matched ahead of `dev_produced_no_changes` and `premature_turn_end` in both
+classifiers and carries no lifetime-failure increment, no cascade feed and no
+halt (see [FAILURE_TAXONOMY.md](FAILURE_TAXONOMY.md)). Its permanent
+consequence — the `owner-action` park — is gated on the signal **type**, not on
+the kind, so an out-of-scope blocker gets the finding, comment and card without
+being parked forever: it clears when the other work lands.
+
 Such a run terminates as the first-class **`blocked`** outcome rather than a
 stage failure, and leaves three things behind:
 

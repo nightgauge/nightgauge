@@ -347,6 +347,29 @@ const OWNER_ACTION_LABEL = "owner-action";
  */
 const EXTERNAL_BLOCKER_EVIDENCE = /^\s*(blocked-on|blocked-by|external-blocker|out-of-scope)\s*:/i;
 
+/**
+ * The first `evidence` entry declaring an out-of-scope blocker, or undefined
+ * (#1504).
+ *
+ * Two call sites need this answer: `readFeedbackSignals`, which must KEEP such
+ * a signal even though it names no rewind target, and `notRewindableReason`,
+ * which must route it to `blocked` and quote the entry back to the operator.
+ * They ask the same question of the same field, so they share one reader — the
+ * regex above stays the single definition of the marker's shape, and neither
+ * site can drift into a private variant of it.
+ */
+function externalBlockerEvidence(signal: PipelineFeedbackSignal): string | undefined {
+  const declared = (signal.evidence ?? []).find((entry) =>
+    EXTERNAL_BLOCKER_EVIDENCE.test(String(entry))
+  );
+  return declared === undefined ? undefined : String(declared);
+}
+
+/** Whether a signal declares work outside this issue's scope (#1504). */
+function declaresExternalBlocker(signal: PipelineFeedbackSignal): boolean {
+  return externalBlockerEvidence(signal) !== undefined;
+}
+
 /** What the post-validate gate must do with a failed stage's feedback (#1142). */
 type FailedStageDisposition =
   | { kind: "rewind"; targetIndex: number }
@@ -8843,9 +8866,13 @@ export class HeadlessOrchestrator implements vscode.Disposable {
   /**
    * Read feedback signals from a completed stage's context file.
    *
-   * Extracts the `.feedback` array from dev-{N}.json or validate-{N}.json,
-   * filters for blocking signals with a backtrack_target_stage, and excludes
-   * MODEL_ESCALATION_NEEDED signals (which retry same stage, not backtrack).
+   * Extracts the `.feedback` array from dev-{N}.json or validate-{N}.json and
+   * keeps the blocking ones that this orchestrator can act on: those naming a
+   * `backtrack_target_stage` (a rewind request), plus the two declared ways of
+   * saying "there is nowhere to rewind to" — a TERMINAL_BLOCKING_SIGNAL_TYPES
+   * type (#1241) and an EXTERNAL_BLOCKER_EVIDENCE marker (#1504).
+   * MODEL_ESCALATION_NEEDED is excluded throughout (it retries the same stage,
+   * it does not backtrack).
    */
   private readFeedbackSignals(stage: PipelineStage, issueNumber: number): PipelineFeedbackSignal[] {
     // Which stages emit backtrack feedback is POLICY and stays here. Which
@@ -8875,8 +8902,25 @@ export class HeadlessOrchestrator implements vscode.Disposable {
           // the types whose meaning is "there is nowhere to rewind to"; see the
           // declaration for why requiring a target of those made the blocked
           // fork unreachable by its one intended producer.
+          //
+          // #1504: the SAME unreachability, one class wider. #1241 widened the
+          // filter for a TYPE; the other declared way to say "no lap of this
+          // pipeline helps" is the EXTERNAL_BLOCKER_EVIDENCE marker, and the
+          // feature-planning skill mandates exactly that shape —
+          // PLAN_REVISION_NEEDED, null target, `blocked-on:` evidence, no plan
+          // file. A rewindable TYPE carrying that marker is not malformed for
+          // naming no target: the marker IS the statement that there is nowhere
+          // to rewind to, and `notRewindableReason` has honoured it since #1142.
+          // Dropping it here meant the consumer never reached the branch written
+          // for it, so the producer contract and the reader disagreed and the
+          // run was booked `premature_turn_end` instead of `blocked`.
+          //
+          // The regex is the ONE declared in EXTERNAL_BLOCKER_EVIDENCE. A second
+          // copy of the marker's shape here is the dual-path drift this file
+          // names by hand elsewhere.
           (signal.backtrack_target_stage != null ||
-            TERMINAL_BLOCKING_SIGNAL_TYPES.has(signal.signal_type)) &&
+            TERMINAL_BLOCKING_SIGNAL_TYPES.has(signal.signal_type) ||
+            declaresExternalBlocker(signal)) &&
           signal.signal_type !== "MODEL_ESCALATION_NEEDED"
       );
     } catch (err) {
@@ -9116,9 +9160,14 @@ export class HeadlessOrchestrator implements vscode.Disposable {
    *
    * The feedback schema has NO first-class field for "blocked on external work"
    * (see packages/nightgauge-sdk/src/context/schemas/feedback.ts) — the marker
-   * above is the honest interim, and a producing skill has to be taught to write
-   * it before the declared form appears in real runs. Until then the type list
-   * is the only discriminator that fires, and the budget/oscillation guards in
+   * above is the honest interim. The feature-planning skill was since taught to
+   * write it (§ open prerequisite: PLAN_REVISION_NEEDED, null target,
+   * `blocked-on:` evidence, no plan file), and #1504 is what it cost to have the
+   * producer taught while `readFeedbackSignals` still dropped that shape before
+   * this method ever saw it — the marker branch below was dead code in
+   * production for its whole first life. The reader now keeps a marker-bearing
+   * signal regardless of type or target, so both discriminators fire; the
+   * budget/oscillation guards in
    * `evaluateBacktrack` remain the bound on a wrong call: a misfiled
    * PLAN_REVISION_NEEDED costs at most `max_backtracks` laps (default 1) and
    * then halts. A wrong fork decision degrades to a halt, never to an unbounded
@@ -9134,11 +9183,9 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     if (TERMINAL_BLOCKING_SIGNAL_TYPES.has(signal.signal_type)) {
       return `${signal.signal_type} — the issue's deliverable cannot be produced by any pipeline stage; it needs a human`;
     }
-    const declared = (signal.evidence ?? []).find((entry) =>
-      EXTERNAL_BLOCKER_EVIDENCE.test(String(entry))
-    );
-    if (declared) {
-      return `the signal declares an out-of-scope blocker (${String(declared).trim()})`;
+    const declared = externalBlockerEvidence(signal);
+    if (declared !== undefined) {
+      return `the signal declares an out-of-scope blocker (${declared.trim()})`;
     }
     if (!REWINDABLE_SIGNAL_TYPES.has(signal.signal_type)) {
       return `${signal.signal_type} is not a plan-fixable signal — no re-plan can clear it`;
@@ -11533,6 +11580,32 @@ export class HeadlessOrchestrator implements vscode.Disposable {
               // substituted so the gate's evidence survives for whoever reads
               // the record, and it is matched AHEAD of the gate's own kind in
               // internal/terminalkind/table.json — see the ordering corpus row.
+              //
+              // #1504 asked whether an OUT-OF-SCOPE blocker (which clears when
+              // other work lands) deserves a different kind from a human-only
+              // declaration (which never clears). It does semantically, and
+              // docs/FAILURE_TAXONOMY.md's only other blocked kind is
+              // `blocked_dependency` — but that one is not available here and
+              // inventing a third is out of bounds. `blocked_dependency` is a
+              // SCHEDULER-ROUTING constant (internal/orchestrator/
+              // failure_handler.go) for a pickup-time, zero-token deferral; the
+              // taxonomy states it is deliberately never written into a run
+              // record's `terminal_failure_kind`, and its auto-resume reads a
+              // paused item carrying `BlockingIssues` off the issue's native
+              // `blockedBy` edges. None of that exists at a mid-run gate failure
+              // over a blocker declared in issue PROSE — the specimen's
+              // `dependencies.blockedBy` was empty, which is why it was
+              // dispatched at all. Stamping it would name a deferral the
+              // scheduler has no paused item to resume.
+              //
+              // `not_pipeline_actionable` is what this field accepts and it
+              // buys exactly the routing #1504 asks for: matched ahead of
+              // `dev_produced_no_changes` and `premature_turn_end` (the two that
+              // convicted the specimen), no `LifetimeIssueFailures` increment,
+              // no cascade feed, no repo halt. The one consequence that must
+              // NOT follow — the permanent `owner-action` park, which would be
+              // wrong for a blocker that clears — is already gated by signal
+              // TYPE in recordOutOfScopeBlockedFinding, not by this kind.
               gateKind = "not_pipeline_actionable";
               gateError = new Error(
                 `[not-pipeline-actionable] ${gateDisposition.reason} — ${gateFail.error.message}`

@@ -32,6 +32,20 @@ changelog, and the release workflow refuses a tag that does not.
   keyword now claims every repo-qualified reference in its sentence, not just
   the one next to it. An issue whose body said "`blockedBy` owner/repo#N"
   produced no edge and was dispatched over an open cross-repo blocker (#1505)
+- A planning stage that refuses an issue blocked on someone else's open work now
+  ends the run `blocked` instead of halting the repository. The feature-planning
+  skill mandates one shape for an open prerequisite — a `PLAN_REVISION_NEEDED`
+  signal with no backtrack target, a `blocked-on:` evidence marker and no plan
+  file — and `readFeedbackSignals` dropped exactly that shape before the fork
+  written to handle it could run, so a correct refusal was booked
+  `premature_turn_end`: a public failure comment, a repo-wide autonomous halt,
+  and the issue reverted to Ready to be dispatched and convicted again. The
+  reader now keeps a blocking signal carrying an external-blocker marker
+  regardless of its type or target, through the same single marker definition
+  the fork uses, and the run leaves the blocked finding, issue comment and
+  Action Center card behind. The permanent `owner-action` park stays gated on
+  the signal type, so a blocker that will clear does not park the issue for
+  good (#1504)
 - A dependency keyword in an issue body now claims only its own sentence rather
   than every `#N` to the end of the line, and every keyword on a line is
   honoured rather than only the first. A line reading "Blocked by Epic #295"
