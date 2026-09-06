@@ -14,6 +14,19 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+### Changed
+
+- The knowledge base is **on by default**. `knowledge.enabled` now resolves to
+  `true` when unset, so a repo with no `knowledge:` section scaffolds PRDs and
+  decision logs at issue pickup instead of logging `knowledge.enabled=false and
+knowledge_path is null` on every run. Every layer that read an absent key as
+  "off" — the Go resolver, the SDK scaffold guard, the VS Code command guards
+  and the skills' shell readers — now reads it as the default; only an explicit
+  `knowledge.enabled: false` opts out, and the two reasons to (repo footprint
+  and per-run token cost) are documented beside the flag. A feature that adds
+  value to a workspace defaults ON — see
+  [ADR-020](docs/decisions/020-value-adding-features-default-on.md) (#1513)
+
 ### Added
 
 - `nightgauge autonomous status` now answers whether a VS Code reload is safe:

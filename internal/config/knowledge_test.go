@@ -26,13 +26,6 @@ func TestIsWorkspaceScoped_ExplicitOverride(t *testing.T) {
 }
 
 func TestIsTelemetryEnabled_OffWhenKnowledgeDisabled(t *testing.T) {
-	if (*KnowledgeConfig)(nil).IsTelemetryEnabled() {
-		t.Error("nil receiver: IsTelemetryEnabled = true, want false")
-	}
-	empty := &KnowledgeConfig{}
-	if empty.IsTelemetryEnabled() {
-		t.Error("knowledge.enabled unset: telemetry should be off")
-	}
 	tr := true
 	disabled := false
 	cfg := &KnowledgeConfig{Enabled: &disabled, Telemetry: &KnowledgeTelemetryConfig{Enabled: &tr}}
@@ -46,6 +39,38 @@ func TestIsTelemetryEnabled_DefaultsOnWhenKnowledgeOn(t *testing.T) {
 	cfg := &KnowledgeConfig{Enabled: &tr}
 	if !cfg.IsTelemetryEnabled() {
 		t.Error("knowledge.enabled=true with telemetry unset must default to true")
+	}
+	// And knowledge.enabled unset resolves the same way, because absent means
+	// on (ADR-020) — the nil receiver is the "no knowledge: section" case.
+	if !(*KnowledgeConfig)(nil).IsTelemetryEnabled() {
+		t.Error("nil receiver: IsTelemetryEnabled = false, want true (absent ⇒ enabled)")
+	}
+	if !(&KnowledgeConfig{}).IsTelemetryEnabled() {
+		t.Error("knowledge.enabled unset: telemetry should be on")
+	}
+}
+
+// --- IsEnabled (#1513, ADR-020) ---
+
+func TestIsEnabled_DefaultsOnWhenAbsent(t *testing.T) {
+	// The majority case: a repo with no `knowledge:` section at all. A default
+	// of false here is what made the feature invisible in every such repo.
+	if !(*KnowledgeConfig)(nil).IsEnabled() {
+		t.Error("nil receiver: IsEnabled = false, want true (absent ⇒ enabled)")
+	}
+	if !(&KnowledgeConfig{}).IsEnabled() {
+		t.Error("enabled unset: IsEnabled = false, want true (absent ⇒ enabled)")
+	}
+}
+
+func TestIsEnabled_ExplicitOptOut(t *testing.T) {
+	fa := false
+	tr := true
+	if (&KnowledgeConfig{Enabled: &fa}).IsEnabled() {
+		t.Error("explicit enabled=false not respected — the opt-out must still work")
+	}
+	if !(&KnowledgeConfig{Enabled: &tr}).IsEnabled() {
+		t.Error("explicit enabled=true not respected")
 	}
 }
 
@@ -92,11 +117,13 @@ func TestIsAutoScaffold_OffWhenKnowledgeDisabled(t *testing.T) {
 	if cfg.IsAutoScaffold() {
 		t.Error("enabled=false, auto_scaffold=true: IsAutoScaffold = true, want false")
 	}
-	if (*KnowledgeConfig)(nil).IsAutoScaffold() {
-		t.Error("nil receiver: IsAutoScaffold = true, want false")
+	// A nil receiver and an empty config now resolve enabled ⇒ true
+	// (ADR-020), so auto_scaffold defaults on with them.
+	if !(*KnowledgeConfig)(nil).IsAutoScaffold() {
+		t.Error("nil receiver: IsAutoScaffold = false, want true (absent ⇒ enabled)")
 	}
-	if (&KnowledgeConfig{}).IsAutoScaffold() {
-		t.Error("empty config (enabled unset ⇒ false): IsAutoScaffold = true, want false")
+	if !(&KnowledgeConfig{}).IsAutoScaffold() {
+		t.Error("empty config (enabled unset ⇒ true): IsAutoScaffold = false, want true")
 	}
 }
 

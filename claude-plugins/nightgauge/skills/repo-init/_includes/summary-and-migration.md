@@ -58,7 +58,7 @@ Project:     #2 — Nightgauge Platform
 
 ── Knowledge ───────────────────────────────────────────────────────
   + created: .nightgauge/knowledge/ (epics/, features/, README.md)
-  (disabled by default — set knowledge.enabled: true in config.yaml to activate)
+  (enabled by default — set knowledge.enabled: false in config.yaml to opt out)
   [or if --skip-knowledge was passed]:
   -- skipped: --skip-knowledge flag was set
   [or if already existed]:

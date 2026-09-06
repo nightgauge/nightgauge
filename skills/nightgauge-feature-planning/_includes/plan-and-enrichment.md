@@ -168,13 +168,14 @@ KNOWLEDGE_PATH=$(jq -r '.knowledge_path // empty' ".nightgauge/pipeline/issue-${
 # extractable sections, scaffold now — planning has the richest context.
 if [ -z "$KNOWLEDGE_PATH" ] || [ ! -d "$KNOWLEDGE_PATH" ]; then
   # Check if knowledge is enabled in config
+  # Absent means ON (ADR-020) — only an explicit `false` opts out.
   KNOWLEDGE_ENABLED=$(python3 -c "
 import yaml, sys
 try:
   cfg = yaml.safe_load(open('.nightgauge/config.yaml'))
-  print('true' if cfg.get('knowledge', {}).get('enabled') else 'false')
-except: print('false')
-" 2>/dev/null || echo "false")
+  print('false' if cfg.get('knowledge', {}).get('enabled') is False else 'true')
+except: print('true')
+" 2>/dev/null || echo "true")
 
   if [ "$KNOWLEDGE_ENABLED" = "true" ]; then
     # Scaffold through the binary, never by hand. It owns the directory name,
