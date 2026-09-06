@@ -89,6 +89,20 @@ function getHandler(disposable: any): () => Promise<void> {
   return (disposable as any).handler;
 }
 
+/**
+ * The setting is absent entirely, so `get` returns whatever default the caller
+ * passed. ADR-020 makes that default `true`: a workspace that never set
+ * `nightgauge.knowledge.enabled` must still get the knowledge commands.
+ */
+function mockGetConfigurationUnset(): void {
+  vi.mocked(vscode.workspace.getConfiguration).mockReturnValue({
+    get: vi.fn((_key: string, defaultVal: any) => defaultVal),
+    update: vi.fn(),
+    has: vi.fn(),
+    inspect: vi.fn(),
+  } as any);
+}
+
 function mockGetConfiguration(enabled: boolean): void {
   vi.mocked(vscode.workspace.getConfiguration).mockReturnValue({
     get: vi.fn((key: string, defaultVal: any) => {
@@ -164,6 +178,17 @@ describe("registerKnowledgeNewEntryCommand", () => {
       "Knowledge base is disabled. Enable it in settings (nightgauge.knowledge.enabled)."
     );
     expect(mockCreate).not.toHaveBeenCalled();
+  });
+
+  it("does not report disabled when the setting is unset (ADR-020: absent means on)", async () => {
+    mockGetConfigurationUnset();
+    vi.mocked(vscode.window.showQuickPick).mockResolvedValue(undefined);
+
+    await handler();
+
+    expect(vscode.window.showInformationMessage).not.toHaveBeenCalledWith(
+      "Knowledge base is disabled. Enable it in settings (nightgauge.knowledge.enabled)."
+    );
   });
 
   it("should show error message when service.create() throws", async () => {

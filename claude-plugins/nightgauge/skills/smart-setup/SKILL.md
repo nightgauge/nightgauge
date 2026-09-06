@@ -316,11 +316,11 @@ Your repository is mostly AI-ready! Only 2 files need attention.
 - If `KNOWLEDGE_DIR_EXISTS=false`: Report the following recommendation:
 
 ```
-ℹ️  Knowledge base not enabled. To activate, add to .nightgauge/config.yaml:
+ℹ️  Knowledge base directory not present yet. It is enabled by default and is
+    scaffolded on the next issue pickup — no config needed. To opt out (repo
+    footprint or per-run token cost), add to .nightgauge/config.yaml:
     knowledge:
-      enabled: true
-      auto_scaffold: true
-    This scaffolds PRD.md and decisions.md for each issue as it enters the pipeline.
+      enabled: false
     See: docs/KNOWLEDGE_BASE.md
 ```
 

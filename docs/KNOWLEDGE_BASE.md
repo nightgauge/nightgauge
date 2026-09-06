@@ -77,9 +77,21 @@ root the same way, so it is safe to run from inside a worktree.
 - Enables future AI agents to load issue-specific context without querying
   GitHub
 
-**Activation:** The knowledge base is **opt-in** — product default
-`knowledge.enabled: false`. Set `knowledge.enabled: true` in your project config
-to activate it. See [Configuration](#configuration).
+**Activation:** The knowledge base is **on by default** — product default
+`knowledge.enabled: true`, and a repo with no `knowledge:` section at all gets
+it. A feature that adds value to a workspace defaults ON; an opt-out exists for
+footprint and cost, never to hide value
+([ADR-020](decisions/020-value-adding-features-default-on.md)).
+
+Set `knowledge.enabled: false` in your project config to **opt out**. There are
+exactly two legitimate reasons to:
+
+- **Repo footprint** — the knowledge base writes files under
+  `.nightgauge/knowledge/` and commits them, so the tree and its history grow.
+- **Per-run token cost** — recall and enrichment add tokens to every pipeline
+  run.
+
+See [Configuration](#configuration).
 
 > **Not the same as epic context.** The per-epic `epic-context-{E}.json`
 > accumulator and its forward-injection into sibling sub-issue prompts (#4096,
@@ -1248,7 +1260,7 @@ The knowledge base is controlled by flags in `.nightgauge/config.yaml`:
 
 | Key                             | Type    | Default | Description                                                                                                         |
 | ------------------------------- | ------- | ------- | ------------------------------------------------------------------------------------------------------------------- |
-| `knowledge.enabled`             | boolean | `false` | Master switch. Must be `true` for any scaffolding to occur.                                                         |
+| `knowledge.enabled`             | boolean | `true`  | Master switch. **Absent means on.** Set `false` to opt out — see below.                                             |
 | `knowledge.auto_scaffold`       | boolean | `true`  | When `true`, scaffold automatically on issue pickup. Requires `enabled: true`.                                      |
 | `knowledge.auto_index`          | boolean | `true`  | When `true`, regenerate `.nightgauge/knowledge/index.md` (and `log.md`) after a merge that touched knowledge files. |
 | `knowledge.auto_prune_on_merge` | boolean | `true`  | When `true`, prune boilerplate-only knowledge directories after a successful merge.                                 |
@@ -1257,6 +1269,7 @@ The knowledge base is controlled by flags in `.nightgauge/config.yaml`:
 
 | `enabled` | `auto_scaffold` | Effect                                                                       |
 | --------- | --------------- | ---------------------------------------------------------------------------- |
+| unset     | unset           | Scaffold automatically on issue pickup — both default to `true`.             |
 | `false`   | any             | No scaffolding. `knowledge_path` = `null`.                                   |
 | `true`    | unset           | Scaffold automatically on issue pickup — `auto_scaffold` defaults to `true`. |
 | `true`    | `true`          | Scaffold automatically on issue pickup.                                      |
@@ -1266,12 +1279,22 @@ Both flags are resolved by `config.KnowledgeConfig.IsAutoScaffold()`. Until
 #1205 nothing in Go read `auto_scaffold` at all, so the flag had no effect in
 either direction.
 
-**Example `.nightgauge/config.yaml`:**
+**Example `.nightgauge/config.yaml`** — this is the default and does not need
+writing; it is shown so the resolved values are visible:
 
 ```yaml
 knowledge:
   enabled: true
   auto_scaffold: true
+```
+
+**Opting out.** One key, and only two reasons to use it — **repo footprint**
+(the KB writes and commits files under `.nightgauge/knowledge/`) and **per-run
+token cost** (recall and enrichment add tokens to every run):
+
+```yaml
+knowledge:
+  enabled: false
 ```
 
 > **Config placement:** Set `knowledge.enabled` in the project config

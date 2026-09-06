@@ -34,11 +34,13 @@ describe("KnowledgeService", () => {
       expect(result.knowledge_path).toBe("");
     });
 
-    it("returns skipped=true when knowledge.enabled is undefined (falsy)", async () => {
+    // ADR-020: an absent `enabled` means ON. The old `!config.enabled` guard
+    // read undefined and false as the same thing, which disabled the knowledge
+    // base for every caller that passed a config without the key.
+    it("does not skip when knowledge.enabled is undefined (absent means on)", async () => {
       const result = await service.scaffoldForIssue(42, "My feature", "", false, {});
 
-      expect(result.skipped).toBe(true);
-      expect(result.skip_reason).toBe("knowledge.enabled is false");
+      expect(result.skip_reason).not.toBe("knowledge.enabled is false");
     });
 
     it("returns skipped=true when knowledge.auto_scaffold is false", async () => {
