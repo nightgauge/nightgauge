@@ -36,25 +36,70 @@ var DefaultRepoAliases = map[string]string{
 	"acme/dashboard":        "acme/dashboard",
 }
 
+// The dependency keyword, defined ONCE and composed into every pattern that
+// needs it. Before #1505 each pattern spelled its own `blocked\s+by` /
+// `depends?\s+on`, which meant the prose spelling was the only one recognised
+// — and authors routinely write the board edge's own field name instead,
+// copied straight from `blockedBy` / `dependsOn`. A body reading
+//
+//	This issue is `blockedBy` acme/platform#1253 …
+//
+// produced no edge at all and the issue was dispatched over an open blocker.
+//
+// The keyword therefore accepts every spelling of the same word pair: the two
+// halves may be joined by whitespace, `-`, `_`, or nothing at all (camelCase,
+// which is case-insensitive here and so needs no separate branch), and the
+// whole keyword may be wrapped in the backticks or asterisks Markdown authors
+// put around a field name.
+//
+// The trailing `\b` is load-bearing: without it `blockedBySomething#5` — an
+// identifier, not a declaration — would match and gate the issue on #5.
+const (
+	// depBlockedByCore and depDependsOnCore are the two halves. They are kept
+	// as complete pairs rather than a `(?:blocked|depends?)…(?:by|on)`
+	// cross-product so that "blocked on" and "depends by" stay unmatched.
+	depBlockedByCore = `blocked[\s_-]*by\b`
+	depDependsOnCore = `depends?[\s_-]*on\b`
+
+	// depKeywordCore is either of them.
+	depKeywordCore = `(?:` + depBlockedByCore + `|` + depDependsOnCore + `)`
+
+	// depKeywordWrap is the Markdown emphasis that may hug the keyword:
+	// `` `blockedBy` ``, `**Depends on**`.
+	depKeywordWrap = "[`*]*"
+
+	// depKeyword is the keyword plus its optional wrapping. Compile it
+	// case-insensitively — every pattern below does.
+	depKeyword = depKeywordWrap + depKeywordCore + depKeywordWrap
+
+	// depKeywordLead is what may sit between the keyword and the reference it
+	// introduces: the closing wrapper, an optional colon, more wrapping
+	// (`**Depends on:**`), and whitespace.
+	depKeywordLead = depKeywordWrap + `\s*:?` + depKeywordWrap + `\s*`
+)
+
 // Compiled regex patterns for parsing cross-repo references.
 var (
 	// "Blocked by platform #535" / "blocked by acme-mobile #127"
-	// Also matches "Blocked by acme/platform#535"
+	// Also matches "Blocked by acme/platform#535" and "`blockedBy` acme/platform#535".
 	reBlockedBy = regexp.MustCompile(
-		`(?i)blocked\s+by\s+([\w-]+(?:/[\w-]+)?)\s*#(\d+)`,
+		`(?i)` + depKeywordWrap + depBlockedByCore + depKeywordLead +
+			`([\w-]+(?:/[\w-]+)?)\s*#(\d+)`,
 	)
 
 	// "Depends on: platform #NNN" / "depends on acme/platform#NNN"
 	// Can match multiple comma/semicolon separated refs on the same line.
 	reDependsOn = regexp.MustCompile(
-		`(?i)depends?\s+on:?\s+([\w-]+(?:/[\w-]+)?)\s*#(\d+)`,
+		`(?i)` + depKeywordWrap + depDependsOnCore + depKeywordLead +
+			`([\w-]+(?:/[\w-]+)?)\s*#(\d+)`,
 	)
 
 	// A dependency DECLARATION keyword anywhere on a line: "Blocked by …",
-	// "Depends on …". Used by the same-repo pass to decide whether the bare
-	// `#N` tokens on that line are dependencies or ordinary prose references.
+	// "Depends on …", "`blockedBy`", "**Depends on:**". Used by the same-repo
+	// pass to decide whether the bare `#N` tokens on that line are
+	// dependencies or ordinary prose references.
 	reDeclKeyword = regexp.MustCompile(
-		`(?i)(blocked\s+by|depends?\s+on)\s*:?`,
+		`(?i)` + depKeywordWrap + depKeywordCore + depKeywordLead,
 	)
 
 	// A sentence terminator: `.`, `;`, `!` or `?` FOLLOWED BY whitespace or the
@@ -138,7 +183,8 @@ var (
 	// anywhere else in the body (Goal prose, Plan steps, "see also" links)
 	// are descriptive references, not dependencies. See #3635.
 	reDepSectionHeader = regexp.MustCompile(
-		`(?im)^#{1,3}\s+(blocked\s+by|depends?\s+on|dependencies|cross[- ]?repo\s+dependenc)`,
+		`(?im)^#{1,3}\s+` + depKeywordWrap +
+			`(?:` + depKeywordCore + `|dependencies|cross[- ]?repo\s+dependenc)`,
 	)
 
 	// Matches any ## header — used to terminate a dependency section.
@@ -148,7 +194,7 @@ var (
 	// URLs appearing on such a line are treated as deps even when the
 	// line is outside a dep section (e.g. "Blocked by https://github.com/o/r/issues/42").
 	reBlockedByOrDependsOnMarker = regexp.MustCompile(
-		`(?i)(blocked\s+by|depends?\s+on)`,
+		`(?i)` + depKeyword,
 	)
 
 	// Full GitHub issue URL: https://github.com/owner/repo/issues/N
@@ -416,6 +462,41 @@ func ParseCrossRepoRefs(body string, repoAliases map[string]string) []CrossRepoR
 		num, _ := strconv.Atoi(body[m[4]:m[5]])
 		if repo != "" && num > 0 {
 			addRef(CrossRepoRef{Repo: repo, Number: num, Source: "depends_on", SourceLine: line})
+		}
+	}
+
+	// 3b. Repo-qualified references elsewhere in a keyword's own SENTENCE.
+	// Patterns 1 and 3 only see a reference sitting immediately after the
+	// keyword, so a sentence that enumerates two blockers across a clause —
+	//
+	//	This issue is `blockedBy` acme/platform#1253 and, per the epic's
+	//	Wave-1-first rule, acme/platform#1252 …
+	//
+	// declared two and yielded one. The bare-`#N` pass already treats a
+	// keyword's whole sentence as its claim (see depDeclarationFragments);
+	// this makes the qualified spelling agree with it, which is the same
+	// symmetry #1492 restored between the cross-repo and same-repo forms.
+	//
+	// Section fragments are excluded: their references have no keyword and are
+	// governed by the structured-entry pattern and its ✅/⏸️ markers.
+	for _, frag := range depDeclarationFragments(body) {
+		if frag.source == "structured_section" {
+			continue
+		}
+		for _, m := range reQualifiedRef.FindAllStringSubmatchIndex(frag.text, -1) {
+			repo := resolveAlias(frag.text[m[2]:m[3]], repoAliases)
+			if repo == "" {
+				continue // prose in front of a bare reference, not a repo
+			}
+			num, _ := strconv.Atoi(strings.TrimPrefix(frag.text[m[5]:m[1]], "#"))
+			if num > 0 {
+				addRef(CrossRepoRef{
+					Repo:       repo,
+					Number:     num,
+					Source:     frag.source,
+					SourceLine: frag.line,
+				})
+			}
 		}
 	}
 
