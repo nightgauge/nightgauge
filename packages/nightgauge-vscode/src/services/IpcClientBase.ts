@@ -939,6 +939,19 @@ export interface AutonomousStatusResult {
     attemptCount?: number;
     /** Timestamp of the first failure for this issue. Legacy rows omit. */
     firstFailedAt?: string;
+    /**
+     * Terminal failure kind of the latest attempt (`architecture_approval_required`,
+     * `not_pipeline_actionable`, `subagent_crash`, …) — the vocabulary of
+     * docs/FAILURE_TAXONOMY.md.
+     *
+     * It is what distinguishes "sidelined pending a human" from "crashed,
+     * retry later" in a list that stores both (#1486). An entry whose kind is a
+     * human decision point is HELD: the rescan will not re-admit it, and only
+     * the action its message names — the approval label / approval file, or an
+     * explicit resume — releases it. Absent on rows written before the field
+     * existed, which read as retryable.
+     */
+    kind?: string;
   }[];
   remaining: number;
   tokensSpent: number;

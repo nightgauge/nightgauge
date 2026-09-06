@@ -3139,7 +3139,7 @@ func TestRecordFailureLocked_DedupsByIssue(t *testing.T) {
 	for i := 1; i <= 6; i++ {
 		ts := time.Date(2026, 4, 10, 1, 0, i, 0, time.UTC).Format(time.RFC3339)
 		as.recordFailureLocked("nightgauge/repo", 2530, "Title v"+string(rune('0'+i)), ts,
-			"pipeline failure")
+			"pipeline failure", TerminalKindSubagentCrash)
 	}
 
 	if got := len(as.state.Failed); got != 1 {
@@ -3159,9 +3159,9 @@ func TestRecordFailureLocked_DedupsByIssue(t *testing.T) {
 
 func TestRecordFailureLocked_DistinctIssuesStaySeparate(t *testing.T) {
 	as := &AutonomousScheduler{state: &AutonomousState{}}
-	as.recordFailureLocked("r", 1, "A", "2026-04-10T01:00:00Z", "x")
-	as.recordFailureLocked("r", 2, "B", "2026-04-10T01:00:01Z", "y")
-	as.recordFailureLocked("r", 1, "A", "2026-04-10T01:00:02Z", "x2")
+	as.recordFailureLocked("r", 1, "A", "2026-04-10T01:00:00Z", "x", "")
+	as.recordFailureLocked("r", 2, "B", "2026-04-10T01:00:01Z", "y", "")
+	as.recordFailureLocked("r", 1, "A", "2026-04-10T01:00:02Z", "x2", "")
 
 	if got := len(as.state.Failed); got != 2 {
 		t.Fatalf("expected 2 entries for 2 distinct issues, got %d", got)
