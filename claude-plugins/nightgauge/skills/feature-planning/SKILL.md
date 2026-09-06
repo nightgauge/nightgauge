@@ -350,6 +350,24 @@ Write `.nightgauge/pipeline/planning-{N}.json` with:
 - `complexity_assessment` — use **exactly** these field names (values from Phase
   2):
 
+  **`size_label` is ALWAYS populated, and it is YOUR assessment — never `null`.**
+  It is the size you judged this issue to be after reading it and the code, in
+  the `XS`/`S`/`M`/`L`/`XL` vocabulary. If the issue carries a `size:*` label
+  and you agree with it, write that bucket. If you disagree, **write your own
+  assessment** — the disagreement is recorded and is the most useful row the
+  calibration corpus gets. If the issue carries no size label at all, this
+  field is the only place the size exists, and the orchestrator applies it to
+  the issue as a `size:` label once planning completes (#1515).
+
+  Writing `null` here costs the pipeline a run's worth of calibration data: the
+  run record's `size` is the join key the pre-flight cost estimate matches
+  history on, and most issues carry no size label (#112). "There was no label
+  to copy" is not a reason to leave it empty — it is exactly when it matters.
+
+  Keep `computed_score` on the Fibonacci scale (`1`/`2`/`3`/`5`/`8`), where
+  `XS`=1, `S`=2, `M`=3, `L`=5, `XL`=8, so a reader can recover the bucket from
+  the score alone.
+
 **Critical field constraints (schema-enforced — wrong names cause pipeline
 failure):**
 
@@ -369,7 +387,7 @@ Minimal required skeleton:
 
 ```json
 {
-  "schema_version": "1.8",
+  "schema_version": "1.9",
   "issue_number": N,
   "plan_file": ".nightgauge/plans/{N}-*.md",
   "approach": "...",

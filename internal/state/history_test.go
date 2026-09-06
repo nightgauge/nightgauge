@@ -1872,3 +1872,53 @@ func TestBuildV2Record_NoEstimateOmitsTheBlock(t *testing.T) {
 		t.Error("un-estimated record emits a budget_estimate key")
 	}
 }
+
+// The run record's `size` is the join key the pre-flight cost estimator matches
+// history on (#112), and #1515 gave it three possible sources. A record that
+// carries the size without saying where it came from puts three populations in
+// one field with no discriminator — the exact defect the corpus's other fields
+// were fixed for.
+func TestBuildV2Record_SizeSourceAndPlannerSize(t *testing.T) {
+	dir := t.TempDir()
+	hw := NewHistoryWriter(dir)
+	rs := NewRuntimeState("acme/widget", 1429, "item", testRunID())
+	rs.BeginStage(StageFeaturePlanning)
+	rs.CompleteStage(0, tokens.TokenCounts{Input: 10, Output: 5}, "", "")
+
+	rec := hw.BuildV2Record(rs.Snapshot(), true, "", V2RunInput{
+		Size:        "L",
+		SizeSource:  "planner",
+		PlannerSize: "L",
+	}, time.Now())
+	if rec.Size == nil || *rec.Size != "L" {
+		t.Fatalf("Size = %v, want L", rec.Size)
+	}
+	if rec.SizeSource != "planner" {
+		t.Errorf("SizeSource = %q, want \"planner\"", rec.SizeSource)
+	}
+	if rec.PlannerSize != "L" {
+		t.Errorf("PlannerSize = %q, want \"L\"", rec.PlannerSize)
+	}
+
+	// A disagreement: the label wins, and the planner's assessment is still
+	// recorded, because that disagreement is the most learnable row there is.
+	rec = hw.BuildV2Record(rs.Snapshot(), true, "", V2RunInput{
+		Size:        "S",
+		SizeSource:  "label",
+		PlannerSize: "L",
+	}, time.Now())
+	if rec.SizeSource != "label" || rec.PlannerSize != "L" {
+		t.Errorf("disagreement recorded as source=%q planner=%q, want label/L", rec.SizeSource, rec.PlannerSize)
+	}
+
+	// Provenance for a size that is not there names the provenance of nothing,
+	// and reads to a consumer scanning populated fields as a record that HAS a
+	// size.
+	rec = hw.BuildV2Record(rs.Snapshot(), true, "", V2RunInput{SizeSource: "estimator"}, time.Now())
+	if rec.Size != nil {
+		t.Fatalf("Size = %v, want nil", rec.Size)
+	}
+	if rec.SizeSource != "" {
+		t.Errorf("SizeSource = %q with no size, want \"\"", rec.SizeSource)
+	}
+}

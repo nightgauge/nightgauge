@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/nightgauge/nightgauge/internal/execution"
+	"github.com/nightgauge/nightgauge/internal/intelligence/complexity"
 	"github.com/nightgauge/nightgauge/internal/intelligence/routing"
 	"github.com/nightgauge/nightgauge/internal/models"
 	"github.com/nightgauge/nightgauge/internal/state"
@@ -230,6 +232,175 @@ func OutcomeSizeInput(boardSize string, labels []string) string {
 	return ""
 }
 
+// Size sources, in the precedence order ResolveRunSize applies (#1515). The
+// resolved source is recorded on the run record (`size_source`) and on the
+// learning outcome (`sizeSource`), because a corpus field whose provenance is
+// unrecorded is a field with several meanings and no discriminator — the exact
+// defect rule 1 above exists to prevent.
+const (
+	// SizeSourceLabel: the issue's own board Size field or `size:*` label —
+	// the term the ROUTER scored, and the only source whose complexity score
+	// is a function of the size.
+	SizeSourceLabel = "label"
+	// SizeSourcePlanner: `complexity_assessment` in the run's own
+	// planning-{N}.json. An assessment made by an agent that had read the
+	// issue and the code, which is strictly more evidence than the label
+	// carries — but the router did not see it, so the run's complexity score
+	// is NOT derived from it.
+	SizeSourcePlanner = "planner"
+	// SizeSourceEstimator: complexity.Estimator over the issue's own metadata.
+	// The weakest source, and the last resort.
+	SizeSourceEstimator = "estimator"
+)
+
+// SizeResolution is the outcome of the three-source size precedence (#1515).
+//
+// Size/Source are the resolved answer; the three per-source fields are kept
+// because a DISAGREEMENT is itself learnable. An issue labelled size:S whose
+// planner assessed L is the most interesting row in the corpus — it is the
+// router's input being wrong — and collapsing it to one winner throws away the
+// only evidence that the two disagreed.
+type SizeResolution struct {
+	// Size is the winning XS|S|M|L|XL bucket, or "" when no source had one.
+	Size string
+	// Source is one of SizeSourceLabel/Planner/Estimator, or "" when Size is.
+	Source string
+	// LabelSize / PlannerSize / EstimatorSize are the per-source values, each
+	// "" when that source produced nothing recognized.
+	LabelSize     string
+	PlannerSize   string
+	EstimatorSize string
+}
+
+// Disagrees reports a label and a planner assessment that name different
+// buckets. Nothing relabels on a disagreement — the label is the human's, and
+// an agent silently overwriting it is a worse failure than the disagreement —
+// but both halves are recorded so the disagreement can be measured.
+func (r SizeResolution) Disagrees() bool {
+	return r.LabelSize != "" && r.PlannerSize != "" && r.LabelSize != r.PlannerSize
+}
+
+// ResolveRunSize applies the three-source precedence: the issue's own size term
+// (board Size field, then `size:*` label — OutcomeSizeInput's order), then the
+// planner's assessment, then the estimator's score-derived bucket.
+//
+// Each candidate is validated against the recognized bucket set
+// (routing.SizeBaseScore > 0) before it can win, so a plan that wrote
+// "medium" or "Large" contributes nothing rather than a bucket no reader
+// recognizes.
+//
+// Both terminal record writers call this — Scheduler.recordV2History on the
+// autonomous path and the notifyComplete handler in internal/ipc on the
+// extension path — for the same reason every other helper in this file is
+// shared: two writers of one field, each with its own precedence, is one field
+// with two meanings.
+func ResolveRunSize(boardSize string, labels []string, plannerSize, estimatorSize string) SizeResolution {
+	r := SizeResolution{
+		LabelSize:     recognizedSize(OutcomeSizeInput(boardSize, labels)),
+		PlannerSize:   recognizedSize(plannerSize),
+		EstimatorSize: recognizedSize(estimatorSize),
+	}
+	switch {
+	case r.LabelSize != "":
+		r.Size, r.Source = r.LabelSize, SizeSourceLabel
+	case r.PlannerSize != "":
+		r.Size, r.Source = r.PlannerSize, SizeSourcePlanner
+	case r.EstimatorSize != "":
+		r.Size, r.Source = r.EstimatorSize, SizeSourceEstimator
+	}
+	return r
+}
+
+// RunSizeResolution resolves one run's size from all three sources, reading the
+// planner's assessment off the run's own planning-{N}.json.
+//
+// This is the function BOTH terminal record writers call. It exists rather than
+// each writer assembling its own arguments because "a shared helper whose
+// ARGUMENT differs per caller is not shared" — the lesson OutcomeSizeInput's
+// doc comment records from round 3, where two writers called one helper and
+// still keyed absence on two different sources.
+//
+// boardSize is the project board's Size field, empty on the extension path
+// (issue-{N}.json never carries it). title/body feed the estimator; body is
+// empty on the extension path too, which is exactly why the estimator's own
+// confidence gates it below.
+func RunSizeResolution(
+	runRoot, worktreeDir, repo string,
+	issueNumber int,
+	boardSize string,
+	labels []string,
+	title, body string,
+) SizeResolution {
+	assessment := execution.LoadPlannerAssessment(runRoot, worktreeDir, repo, issueNumber)
+	return ResolveRunSize(
+		boardSize,
+		labels,
+		PlannerSizeFromAssessment(assessment.SizeLabel, assessment.Score),
+		EstimatorSize(title, body, labels),
+	)
+}
+
+// EstimatorSize is the third and weakest size source: complexity.Estimator run
+// over the issue's own metadata.
+//
+// GATED ON THE ESTIMATOR'S OWN CONFIDENCE, and that gate is the point. Estimate
+// clamps its score to [1,10] and always names a bucket, so an ungated estimator
+// source is available for literally every run — which would make the resolved
+// size never absent, retire the #112 "no size at all" warning into dead code,
+// and fill the record's join key with a bucket derived from a title's word
+// count. A "low" confidence is the estimator saying it had fewer than two
+// signals to work with; that is not a measurement, and rule 2 says an unknown
+// is spelled "", never a plausible-looking default.
+func EstimatorSize(title, body string, labels []string) string {
+	score := complexity.NewEstimator().Estimate(complexity.Input{
+		Title:  title,
+		Body:   body,
+		Labels: labels,
+	})
+	if score.Confidence == "low" {
+		return ""
+	}
+	return score.SizeLabel
+}
+
+// PlannerSizeFromAssessment names the bucket a planning context assessed:
+// its `size_label` when it wrote one, otherwise the bucket its Fibonacci
+// `computed_score` maps to exactly.
+//
+// The score path is an EXACT inverse (routing.SizeForBaseScore), never a
+// nearest match: a score off the 1/2/3/5/8 scale names no bucket, because an
+// invented size reaches the corpus indistinguishable from a real one.
+func PlannerSizeFromAssessment(sizeLabel string, score int) string {
+	if s := recognizedSize(sizeLabel); s != "" {
+		return s
+	}
+	return routing.SizeForBaseScore(score)
+}
+
+// recognizedSize normalizes a bucket and returns it only if it is one of the
+// five the router scores; everything else is "" — absent, per rule 2.
+func recognizedSize(size string) string {
+	normalized := strings.ToUpper(strings.TrimSpace(size))
+	if routing.SizeBaseScore(normalized) > 0 {
+		return normalized
+	}
+	return ""
+}
+
+// OutcomeSizeSource names the source behind OutcomePredictedSize, and is empty
+// exactly when that value is.
+//
+// Provenance for a value that was never recorded is worse than no provenance:
+// a row carrying sizeSource "estimator" with predictedSize "" reads, to a
+// consumer scanning for populated fields, as a row that has a prediction. The
+// two fields are written together or not at all.
+func OutcomeSizeSource(res SizeResolution, complexityScore int) string {
+	if OutcomePredictedSize(res, complexityScore) == "" {
+		return ""
+	}
+	return res.Source
+}
+
 // OutcomePredictedSize expresses the router's pre-run size prediction in the
 // corpus's small|medium|large vocabulary, or "" when the run carried no size
 // input to predict from.
@@ -244,14 +415,32 @@ func OutcomeSizeInput(boardSize string, labels []string) string {
 // guard keyed on it is dead code that lets ~95% of real runs record a
 // fabricated "small". A run whose size term was the router's default has no
 // size prediction to score, so it records none.
-func OutcomePredictedSize(boardSize string, labels []string, complexityScore int) string {
-	if OutcomeSizeInput(boardSize, labels) == "" {
-		return "" // no recognized size input — the score's size term is a default
+func OutcomePredictedSize(res SizeResolution, complexityScore int) string {
+	switch res.Source {
+	case SizeSourceLabel:
+		// The router scored THIS term, so the score is the prediction.
+		if complexityScore <= 0 {
+			return "" // unscored
+		}
+		return SizeBucketForScore(complexityScore)
+	case SizeSourcePlanner:
+		// The router did NOT see the planner's assessment: for a label-less
+		// issue its complexity score used the M default, so bucketing the
+		// score here would record the default under a new name. The
+		// assessment's own base score is the prediction instead — a real size
+		// term, expressed in the corpus's vocabulary through the same
+		// bucketing the label path uses.
+		return SizeBucketForScore(routing.SizeBaseScore(res.Size))
+	default:
+		// Absent, or estimator-derived. The estimator's bucket is a second
+		// reading of the same title/body/labels the prediction would be
+		// scored against, and it is available for very nearly every run — so
+		// admitting it here would fill the accuracy denominator with rows that
+		// measure the arithmetic rather than the router (rules 2 and 3). It is
+		// still recorded as the run record's `size` join key, where nothing
+		// compares it to a measurement; it just never becomes a PREDICTION.
+		return ""
 	}
-	if complexityScore <= 0 {
-		return "" // unscored
-	}
-	return SizeBucketForScore(complexityScore)
 }
 
 // NOTE ON THE ACTUAL SIZE — its shared implementation lives in

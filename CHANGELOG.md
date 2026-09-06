@@ -29,6 +29,18 @@ knowledge_path is null` on every run. Every layer that read an absent key as
 
 ### Added
 
+- A run's size now comes from three sources, not one: the issue's `size:*`
+  label, then the size the run's own feature-planning stage assessed, then the
+  complexity estimator — with `size_source` recorded beside it, and
+  `planner_size` kept even when a label won so a disagreement stays measurable.
+  Twelve of fourteen runs on 2026-09-06 recorded no size at all, and every one
+  of them had already assessed one, so cost calibration was learning from almost
+  nothing (#1515)
+- When feature-planning finishes and the issue carries no `size:*` label, the
+  planner's assessed size is applied to the issue — one REST call, no model
+  spend — so the next run of that backlog is routed from a real size instead of
+  the router's default. An existing label is never overwritten, agreeing or not
+  (#1515)
 - `nightgauge autonomous status` now answers whether a VS Code reload is safe:
   `Stopped — 2 pipeline(s) still running (#313 flutter, #1429 platform); reload
 is not safe yet`, and `Stopped — 0 running; safe to reload` once they land.
@@ -237,6 +249,14 @@ validate` enforces OKF conformance pre-merge, recall and metrics weigh trust
 
 ### Changed
 
+- The feature-planning context's `complexity_assessment.size_label` is the
+  planner's own assessed size and is always populated. It was documented as
+  "Size label from issue", which told the skill to echo a label back — so a
+  label-less issue wrote `null` and the size the planner had plainly reasoned
+  about was never recorded (#1515)
+- The "this run cannot calibrate the pre-flight cost estimate" warning fires
+  only when a run has no size from any of the three sources. It used to fire
+  whenever an issue had no `size:*` label, i.e. on nearly every run (#1515)
 - The autonomous refinement scan now refines issues in **dispatch order**
   instead of oldest-first: board `Ready`, then board `Backlog` with a Priority,
   and only then the rest of the open backlog. Issues that can never dispatch —
