@@ -1068,3 +1068,99 @@ func TestParseDependencyRefs_Deduplicates(t *testing.T) {
 		t.Fatalf("same dependency declared twice must yield one ref, got %v", got)
 	}
 }
+
+// --- #1497: a parent link in a dependency section is not a dependency ---
+//
+// PR #1495 made every non-empty line under a `## Dependencies` header a
+// dependency declaration. Real bodies put the epic membership line inside that
+// region, so `Part of #308` became an edge to the parent epic — and an epic
+// never closes before its children, which deadlocks the issue and every
+// sibling reached through the epic cascade. These pin the regression body
+// verbatim, because the shape of the body is the bug.
+
+func TestParseDependencyRefs_ParentLinkInDependencySectionIsNotADep(t *testing.T) {
+	// The body from the regression, verbatim. #308 is the parent epic.
+	body := `## Dependencies
+
+Blocked by #300.
+
+(Wave 3)
+
+Part of #308
+`
+	got := sameRepoNumbers(t, body)
+	if len(got) != 1 || got[0] != 300 {
+		t.Fatalf("got %v, want [300] — only the blocker is a dependency", got)
+	}
+	for _, r := range ParseDependencyRefs(body, selfRepo, nil) {
+		if r.Number == 308 {
+			t.Fatalf("parent epic #308 became a dependency edge (source=%q line=%q) — "+
+				"an epic never closes before its children, so this deadlocks the issue",
+				r.Source, r.SourceLine)
+		}
+	}
+}
+
+func TestParseDependencyRefs_ListedDepSurvivesAParentLink(t *testing.T) {
+	body := "## Dependencies\n\n- #101\n\nPart of #5\n"
+	got := sameRepoNumbers(t, body)
+	if len(got) != 1 || got[0] != 101 {
+		t.Fatalf("got %v, want [101] — the list item gates, the parent link does not", got)
+	}
+}
+
+// A dependency whose DESCRIPTION mentions one of the bookkeeping words is
+// still a dependency: the relation has to introduce the reference. Matching
+// the word anywhere on the line would drop real edges, which is the same
+// "fails toward never dispatching" direction #1497 is about.
+func TestParseDependencyRefs_BookkeepingWordInProseStillGates(t *testing.T) {
+	body := "## Dependencies\n\n- #535 — needed for the epic rollout\n"
+	got := sameRepoNumbers(t, body)
+	if len(got) != 1 || got[0] != 535 {
+		t.Fatalf("got %v, want [535] — 'epic' as prose must not disarm a real dependency", got)
+	}
+}
+
+func TestParseDependencyRefs_BookkeepingRelationsInASection(t *testing.T) {
+	cases := []struct {
+		name string
+		line string
+	}{
+		{"part of", "Part of #308"},
+		{"lowercase", "part of #308"},
+		{"parent", "Parent: #308"},
+		{"parent issue", "Parent issue #308"},
+		{"epic", "Epic: #308"},
+		{"sub-issue of", "Sub-issue of #308"},
+		{"subissue of", "Sub issue of #308"},
+		{"child of", "Child of #308"},
+		{"tracks", "Tracks #308"},
+		{"tracked by", "Tracked by #308"},
+		{"related", "Related #308"},
+		{"related to", "Related to #308"},
+		{"see also", "See also #308"},
+		{"closes", "Closes #308"},
+		{"fixes", "Fixes #308"},
+		{"resolves", "Resolves #308"},
+		{"list item parent link", "- Part of #308"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := sameRepoNumbers(t, "## Dependencies\n\n"+tc.line+"\n")
+			if len(got) != 0 {
+				t.Fatalf("%q under a dependency header yielded %v — it names an "+
+					"issue for a reason that is not a dependency", tc.line, got)
+			}
+		})
+	}
+}
+
+// The Wave parenthetical carries a number that is not an issue reference at
+// all; it must not become one, with or without a `#`.
+func TestParseDependencyRefs_WaveParentheticalIsNotARef(t *testing.T) {
+	for _, line := range []string{"(Wave 3)", "(Wave #3)"} {
+		if got := sameRepoNumbers(t, "## Dependencies\n\n"+line+"\n"); len(got) != 0 {
+			t.Errorf("%q yielded %v, want none", line, got)
+		}
+	}
+}

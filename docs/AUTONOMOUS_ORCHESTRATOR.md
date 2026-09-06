@@ -760,6 +760,16 @@ Two rules keep the bare form from over-matching:
   reference, not a blocker: promoting incidental mentions to hard edges
   silently stalls dispatch, which is why URL extraction was already scoped to
   these same contexts.
+- Inside a dependency section, a `#N` **introduced by a parent/child or
+  bookkeeping relation is not a dependency**: `Part of #N`, `Parent`, `Epic`,
+  `Sub-issue of`, `Child of`, `Tracks`, `Tracked by`, `Related` / `Related to`,
+  `See also`, `Closes`, `Fixes`, `Resolves`, and the `(Wave N)` planning
+  parenthetical. The section rule reads a line's _position_ as the declaration,
+  and authors put the epic membership line inside the section — so without this
+  `Part of #308` became an edge to the parent epic, which never closes before
+  its children, deadlocking the issue and every sibling reached through the
+  epic cascade (#1497). The relation must sit immediately in front of the
+  reference: `- #535 — needed for the epic rollout` is still a dependency.
 - A `#N` already qualified by a repo token ("platform #535",
   `acme/platform#535`) is **not** also read as a same-repo reference, which
   would block on an unrelated issue that happens to share a number.

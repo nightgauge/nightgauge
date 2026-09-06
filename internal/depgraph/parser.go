@@ -89,6 +89,31 @@ var (
 		`(?i)\bdeferred\b|\bnot[- ]gating\b|\bnon[- ]gating\b`,
 	)
 
+	// A reference INTRODUCED by a parent/child or bookkeeping relation:
+	// "Part of #308", "Epic: #5", "Closes #99", "See also #12". This is the
+	// SINGLE definition of "this `#N` names an issue for a reason that is not
+	// a dependency" — see maskBookkeepingRefs.
+	//
+	// `Part of #N` is the workspace's parent-epic convention, written by
+	// internal/github (sub-issue creation), internal/cmd/spike (materialize)
+	// and the PR body builder in internal/orchestrator/stages; it is the line
+	// that put this regex here. The rest are the other relations authors
+	// habitually park in the same section — closing keywords, tracking links,
+	// "see also" — plus the `(Wave N)` planning parenthetical, which carries
+	// its own number and must not be mistaken for one.
+	//
+	// The relation word must sit immediately in front of the reference, so a
+	// genuine dependency whose PROSE happens to use one of these words —
+	// "- #535 — needed for the epic rollout" — is still a dependency. Matching
+	// the word anywhere on the line would reintroduce the quiet direction this
+	// regex exists to remove.
+	reBookkeepingRef = regexp.MustCompile(
+		`(?i)\b(part\s+of|parent(?:\s+issue)?|epic|sub[- ]?issue\s+of|` +
+			`child\s+of|tracks|tracked\s+by|related\s+to|related|see\s+also|` +
+			`closes|closed\s+by|fixes|fixed\s+by|resolves|resolved\s+by|` +
+			`wave)\b[\s:.,;—–-]*#\d+`,
+	)
+
 	// Section header detection for "## Cross-Repo Dependencies"
 	reCrossRepoSection = regexp.MustCompile(
 		`(?im)^#{1,3}\s+cross[- ]?repo\s+dependenc`,
@@ -161,6 +186,47 @@ func isNonGatingLine(line string) bool {
 		return false
 	}
 	return reNonGatingText.MatchString(line)
+}
+
+// maskBookkeepingRefs blanks every reference introduced by a parent/child or
+// bookkeeping relation, preserving length, so that what survives a
+// dependency-section line is only the references that actually declare a
+// dependency. `Part of #308` yields nothing; `- #101` is untouched.
+//
+// It exists because the dependency-section pass reads a line's POSITION as the
+// declaration — there is no keyword to trim against — and authors put the
+// membership line inside that section. The body that produced the regression
+// was exactly:
+//
+//	## Dependencies
+//
+//	Blocked by #300.
+//
+//	(Wave 3)
+//
+//	Part of #308
+//
+// #308 is the parent epic, and an epic never closes before its children, so
+// reading `Part of #308` as a dependency deadlocks the issue and — through the
+// epic cascade — every sibling in the wave, permanently and silently. That is
+// the "fails toward never dispatching" direction: quieter than #1492 and
+// strictly worse for throughput (#1497).
+//
+// Masking rather than dropping the whole line is deliberate: a dependency
+// whose description merely mentions one of these words — "- #535 — needed for
+// the epic rollout" — must stay a dependency.
+func maskBookkeepingRefs(s string) string {
+	locs := reBookkeepingRef.FindAllStringIndex(s, -1)
+	if len(locs) == 0 {
+		return s
+	}
+	b := []byte(s)
+	for _, loc := range locs {
+		for i := loc[0]; i < loc[1]; i++ {
+			b[i] = ' '
+		}
+	}
+	return string(b)
 }
 
 // lineAt returns the whole line containing byte offset off in s, trimmed of
@@ -403,7 +469,10 @@ type depFragment struct {
 //     / `## Cross-Repo Dependencies` header, until the next header.
 //
 // Lines the author marked non-gating (⏸️, "deferred", "not-gating") yield
-// nothing, exactly as they do for every other pattern.
+// nothing, exactly as they do for every other pattern, and so do references
+// introduced by a parent/child or bookkeeping relation — `Part of #N` in a
+// dependency section is epic membership, not a blocker (see
+// maskBookkeepingRefs, #1497).
 func depDeclarationFragments(body string) []depFragment {
 	if body == "" {
 		return nil
@@ -455,8 +524,16 @@ func depDeclarationFragments(body string) []depFragment {
 			if reDeclKeyword.MatchString(line) {
 				continue
 			}
+			// A parent link, a tracking link or a closing keyword names an
+			// issue for a reason that is not a dependency. In this pass the
+			// line's position IS the declaration, so nothing else would stop
+			// "Part of #308" from becoming an edge to the parent epic (#1497).
+			text := maskBookkeepingRefs(line)
+			if strings.TrimSpace(text) == "" {
+				continue
+			}
 			out = append(out, depFragment{
-				text:   line,
+				text:   text,
 				line:   strings.TrimSpace(line),
 				source: "structured_section",
 			})
