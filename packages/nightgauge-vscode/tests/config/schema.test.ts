@@ -469,7 +469,8 @@ describe("NightgaugeConfigSchema", () => {
 
     it("applies pipeline defaults", () => {
       const config = mergeWithDefaults({ pipeline: {} });
-      expect(config.pipeline?.ci_timeout).toBe(10);
+      // Seconds (#1517) — was 10 here and 300 in the docs, same key, two units.
+      expect(config.pipeline?.ci_timeout).toBe(300);
       expect(config.pipeline?.auto_fix).toBe(true);
     });
 

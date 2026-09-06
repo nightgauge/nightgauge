@@ -2045,7 +2045,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > default config render 1`] = `
                id="pull_request.auto_merge"
                class="toggle-input"
                data-path="pull_request.auto_merge"
-               checked
+
                disabled>
         <label for="pull_request.auto_merge" class="toggle-switch"></label>
       </div>
@@ -2276,7 +2276,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > default config render 1`] = `
                 class="select-input"
                 data-path="pipeline.max_concurrent"
                 disabled>
-          <option value="1" selected>1 (sequential)</option><option value="2" >2</option><option value="3" >3</option><option value="4" >4</option><option value="5" >5</option>
+          <option value="1" >1 (sequential)</option><option value="2" >2</option><option value="3" selected>3</option><option value="4" >4</option><option value="5" >5</option>
         </select>
       </div>
     </div>
@@ -2285,7 +2285,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > default config render 1`] = `
     <div class="setting-row ">
       <div class="setting-info">
         <label for="pipeline.ci_timeout" class="setting-label">CI Timeout </label>
-        <p class="setting-description">Maximum time to wait for CI checks (minutes)</p>
+        <p class="setting-description">Maximum time to wait for CI checks (seconds)</p>
 
       </div>
       <div class="setting-control">
@@ -2293,9 +2293,9 @@ exports[`getSettingsHtml snapshots (Issue #1242) > default config render 1`] = `
                id="pipeline.ci_timeout"
                class="number-input"
                data-path="pipeline.ci_timeout"
-               value="10"
-               min="1"
-               max="60"
+               value="300"
+               min="30"
+               max="3600"
 
                disabled>
       </div>
@@ -6228,7 +6228,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > global tier view 1`] = `
                id="pull_request.auto_merge"
                class="toggle-input"
                data-path="pull_request.auto_merge"
-               checked
+
                >
         <label for="pull_request.auto_merge" class="toggle-switch"></label>
       </div>
@@ -6459,7 +6459,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > global tier view 1`] = `
                 class="select-input"
                 data-path="pipeline.max_concurrent"
                 >
-          <option value="1" selected>1 (sequential)</option><option value="2" >2</option><option value="3" >3</option><option value="4" >4</option><option value="5" >5</option>
+          <option value="1" >1 (sequential)</option><option value="2" >2</option><option value="3" selected>3</option><option value="4" >4</option><option value="5" >5</option>
         </select>
       </div>
     </div>
@@ -6468,7 +6468,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > global tier view 1`] = `
     <div class="setting-row ">
       <div class="setting-info">
         <label for="pipeline.ci_timeout" class="setting-label">CI Timeout </label>
-        <p class="setting-description">Maximum time to wait for CI checks (minutes)</p>
+        <p class="setting-description">Maximum time to wait for CI checks (seconds)</p>
 
       </div>
       <div class="setting-control">
@@ -6476,9 +6476,9 @@ exports[`getSettingsHtml snapshots (Issue #1242) > global tier view 1`] = `
                id="pipeline.ci_timeout"
                class="number-input"
                data-path="pipeline.ci_timeout"
-               value="10"
-               min="1"
-               max="60"
+               value="300"
+               min="30"
+               max="3600"
 
                >
       </div>
@@ -10409,7 +10409,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > local tier view 1`] = `
                id="pull_request.auto_merge"
                class="toggle-input"
                data-path="pull_request.auto_merge"
-               checked
+
                >
         <label for="pull_request.auto_merge" class="toggle-switch"></label>
       </div>
@@ -10640,7 +10640,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > local tier view 1`] = `
                 class="select-input"
                 data-path="pipeline.max_concurrent"
                 >
-          <option value="1" selected>1 (sequential)</option><option value="2" >2</option><option value="3" >3</option><option value="4" >4</option><option value="5" >5</option>
+          <option value="1" >1 (sequential)</option><option value="2" >2</option><option value="3" selected>3</option><option value="4" >4</option><option value="5" >5</option>
         </select>
       </div>
     </div>
@@ -10649,7 +10649,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > local tier view 1`] = `
     <div class="setting-row ">
       <div class="setting-info">
         <label for="pipeline.ci_timeout" class="setting-label">CI Timeout </label>
-        <p class="setting-description">Maximum time to wait for CI checks (minutes)</p>
+        <p class="setting-description">Maximum time to wait for CI checks (seconds)</p>
 
       </div>
       <div class="setting-control">
@@ -10657,9 +10657,9 @@ exports[`getSettingsHtml snapshots (Issue #1242) > local tier view 1`] = `
                id="pipeline.ci_timeout"
                class="number-input"
                data-path="pipeline.ci_timeout"
-               value="10"
-               min="1"
-               max="60"
+               value="300"
+               min="30"
+               max="3600"
 
                >
       </div>
@@ -14606,7 +14606,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > locked section — pipeline r
                id="pull_request.auto_merge"
                class="toggle-input"
                data-path="pull_request.auto_merge"
-               checked
+
                disabled>
         <label for="pull_request.auto_merge" class="toggle-switch"></label>
       </div>
@@ -14837,7 +14837,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > locked section — pipeline r
                 class="select-input"
                 data-path="pipeline.max_concurrent"
                 disabled>
-          <option value="1" selected>1 (sequential)</option><option value="2" >2</option><option value="3" >3</option><option value="4" >4</option><option value="5" >5</option>
+          <option value="1" >1 (sequential)</option><option value="2" >2</option><option value="3" selected>3</option><option value="4" >4</option><option value="5" >5</option>
         </select>
       </div>
     </div>
@@ -14846,7 +14846,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > locked section — pipeline r
     <div class="setting-row ">
       <div class="setting-info">
         <label for="pipeline.ci_timeout" class="setting-label">CI Timeout </label>
-        <p class="setting-description">Maximum time to wait for CI checks (minutes)</p>
+        <p class="setting-description">Maximum time to wait for CI checks (seconds)</p>
 
       </div>
       <div class="setting-control">
@@ -14854,9 +14854,9 @@ exports[`getSettingsHtml snapshots (Issue #1242) > locked section — pipeline r
                id="pipeline.ci_timeout"
                class="number-input"
                data-path="pipeline.ci_timeout"
-               value="10"
-               min="1"
-               max="60"
+               value="300"
+               min="30"
+               max="3600"
 
                disabled>
       </div>
@@ -18789,7 +18789,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > project tier view 1`] = `
                id="pull_request.auto_merge"
                class="toggle-input"
                data-path="pull_request.auto_merge"
-               checked
+
                >
         <label for="pull_request.auto_merge" class="toggle-switch"></label>
       </div>
@@ -19020,7 +19020,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > project tier view 1`] = `
                 class="select-input"
                 data-path="pipeline.max_concurrent"
                 >
-          <option value="1" selected>1 (sequential)</option><option value="2" >2</option><option value="3" >3</option><option value="4" >4</option><option value="5" >5</option>
+          <option value="1" >1 (sequential)</option><option value="2" >2</option><option value="3" selected>3</option><option value="4" >4</option><option value="5" >5</option>
         </select>
       </div>
     </div>
@@ -19029,7 +19029,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > project tier view 1`] = `
     <div class="setting-row ">
       <div class="setting-info">
         <label for="pipeline.ci_timeout" class="setting-label">CI Timeout </label>
-        <p class="setting-description">Maximum time to wait for CI checks (minutes)</p>
+        <p class="setting-description">Maximum time to wait for CI checks (seconds)</p>
 
       </div>
       <div class="setting-control">
@@ -19037,9 +19037,9 @@ exports[`getSettingsHtml snapshots (Issue #1242) > project tier view 1`] = `
                id="pipeline.ci_timeout"
                class="number-input"
                data-path="pipeline.ci_timeout"
-               value="10"
-               min="1"
-               max="60"
+               value="300"
+               min="30"
+               max="3600"
 
                >
       </div>

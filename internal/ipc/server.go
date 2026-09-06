@@ -1296,41 +1296,17 @@ func (s *Server) registerMethods() {
 		if err != nil {
 			return nil, fmt.Errorf("load config: %w", err)
 		}
-		// Apply defaults matching HealthActionService TypeScript defaults
-		warningThreshold := 70.0
-		criticalThreshold := 50.0
-		emergencyThreshold := 30.0
-		actionsEnabled := true
-		policiesEnabled := true
-		feedbackLoopEnabled := true
-		if cfg.FeedbackLoop != nil {
-			fl := cfg.FeedbackLoop
-			if fl.WarningThreshold != 0 {
-				warningThreshold = fl.WarningThreshold
-			}
-			if fl.CriticalThreshold != 0 {
-				criticalThreshold = fl.CriticalThreshold
-			}
-			if fl.EmergencyThreshold != 0 {
-				emergencyThreshold = fl.EmergencyThreshold
-			}
-			if fl.ActionsEnabled != nil {
-				actionsEnabled = *fl.ActionsEnabled
-			}
-			if fl.PoliciesEnabled != nil {
-				policiesEnabled = *fl.PoliciesEnabled
-			}
-			if fl.AutoRetroactive != nil {
-				feedbackLoopEnabled = *fl.AutoRetroactive
-			}
-		}
+		// Defaults come from internal/config, which is the one place they are
+		// named (#1517). They used to be literals here, which made this handler
+		// a second source of truth for numbers the extension also ships.
+		fl := cfg.FeedbackLoop
 		return &ConfigGetHealthThresholdsResult{
-			WarningThreshold:    warningThreshold,
-			CriticalThreshold:   criticalThreshold,
-			EmergencyThreshold:  emergencyThreshold,
-			ActionsEnabled:      actionsEnabled,
-			PoliciesEnabled:     policiesEnabled,
-			FeedbackLoopEnabled: feedbackLoopEnabled,
+			WarningThreshold:    fl.ResolveWarningThreshold(),
+			CriticalThreshold:   fl.ResolveCriticalThreshold(),
+			EmergencyThreshold:  fl.ResolveEmergencyThreshold(),
+			ActionsEnabled:      fl.ResolveActionsEnabled(),
+			PoliciesEnabled:     fl.ResolvePoliciesEnabled(),
+			FeedbackLoopEnabled: fl.ResolveAutoRetroactive(),
 		}, nil
 	}
 

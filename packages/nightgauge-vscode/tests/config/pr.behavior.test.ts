@@ -458,7 +458,10 @@ describe("pr.behavior", () => {
       expect(DEFAULT_CONFIG.pull_request?.merge_strategy).toBe("squash");
       expect(DEFAULT_CONFIG.pull_request?.delete_branch).toBe(true);
       expect(DEFAULT_CONFIG.pull_request?.draft_by_default).toBe(false);
-      expect(DEFAULT_CONFIG.pull_request?.auto_merge).toBe(true);
+      // #1517: false. The pr-merge stage merges once CI is green; forge-side
+      // auto-merge on top removes the one gate the forge itself enforces,
+      // and docs/CONFIGURATION.md has always said false.
+      expect(DEFAULT_CONFIG.pull_request?.auto_merge).toBe(false);
       expect(DEFAULT_CONFIG.pull_request?.reviewers).toEqual([]);
     });
 

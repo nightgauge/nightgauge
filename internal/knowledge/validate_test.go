@@ -148,15 +148,37 @@ func TestValidateDecisions_RequireDecisionsFalse_SkipsGate(t *testing.T) {
 	}
 }
 
-func TestValidateDecisions_NilRequireDecisions_DefaultsFalse(t *testing.T) {
-	// RequireDecisions not set → defaults to false → gate is skipped.
+func TestValidateDecisions_NilRequireDecisions_DefaultsTrue(t *testing.T) {
+	// RequireDecisions not set → defaults to TRUE (#1517), so the gate RUNS.
+	// It previously defaulted to false "for backward compatibility", which made
+	// the same key mean two different things: the extension's schema, the docs
+	// table and this resolver each answered differently for an unset key.
+	//
+	// The gate still only fires on a plan that carries tradeoff signals — an
+	// unset key does not turn every plan into a decisions requirement.
 	root := setupValidateFixtures(t, 42, planWithTradeoffs, "# Decisions: #42\n")
 	result, err := knowledge.ValidateDecisionsPopulation(42, root, &config.KnowledgeConfig{})
+	if err == nil {
+		t.Error("expected the gate to run and fail on a tradeoff plan with no ADR block")
+	}
+	if result.Valid {
+		t.Error("expected result.Valid=false when RequireDecisions is unset (defaults true)")
+	}
+	if result.Skipped {
+		t.Error("expected result.Skipped=false — an unset key no longer disables the gate")
+	}
+}
+
+func TestValidateDecisions_NilRequireDecisions_NoTradeoffs_Passes(t *testing.T) {
+	// The other half of the default flip: on by default does not mean every
+	// plan needs a decisions block, only one that trades approaches off.
+	root := setupValidateFixtures(t, 42, planWithoutTradeoffs, "# Decisions: #42\n")
+	result, err := knowledge.ValidateDecisionsPopulation(42, root, &config.KnowledgeConfig{})
 	if err != nil {
-		t.Errorf("expected nil RequireDecisions to skip gate, got error: %v", err)
+		t.Errorf("expected validation to pass (no tradeoffs), got error: %v", err)
 	}
 	if !result.Valid {
-		t.Error("expected result.Valid=true when RequireDecisions is unset (defaults false)")
+		t.Errorf("expected result.Valid=true; message: %s", result.Message)
 	}
 }
 

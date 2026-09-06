@@ -1108,7 +1108,7 @@ export const PipelineConfigSchema = z.object({
     .object({
       /** Enable pipeline-level cost ceiling (default: true) */
       enabled: z.boolean().optional(),
-      /** Maximum total cost in USD for a single pipeline run (default: 150) */
+      /** Maximum total cost in USD for a single pipeline run (default: 75) */
       ceiling_usd: z.number().min(0).optional(),
       /**
        * Absolute USD spend at which to log a warning WITHOUT killing the
@@ -2920,6 +2920,8 @@ export const KnowledgeConfigSchema = z.object({
   index_on_commit: z.boolean().optional(),
   /** Auto-regenerate .nightgauge/knowledge/index.md and log.md after a successful merge that touched knowledge files (default: true) */
   auto_index: z.boolean().optional(),
+  /** Prune boilerplate-only knowledge directories after a successful merge (default: true). Read by the pr-merge stage; it was absent from this schema, so Zod stripped it from any config that set it (#1517). */
+  auto_prune_on_merge: z.boolean().optional(),
   /** When true in a multi-repo workspace, aggregate knowledge from all repositories */
   aggregate: z.boolean().optional(),
   /** Gate planning completion when plan has tradeoff signals and decisions.md lacks ADR blocks (default: true) */
@@ -2929,7 +2931,7 @@ export const KnowledgeConfigSchema = z.object({
   /** KB telemetry settings backing the Knowledge Value dashboard (#3600). */
   telemetry: z
     .object({
-      /** Opt-in to emitting knowledge-events.jsonl entries (default: false) */
+      /** Emit knowledge-events.jsonl entries. Unset FOLLOWS knowledge.enabled (ADR-005): on when the KB is on, always off when it is off. There is no static default here for that reason. */
       enabled: z.boolean().optional(),
       /** Stale-entry threshold in days for the dashboard's stale list (default: 30) */
       stale_days: z.number().int().positive().optional(),
@@ -3050,8 +3052,10 @@ export const PLATFORM_ENV_PRESETS: Record<PlatformEnvironment, string> = {
  */
 export const PlatformConfigSchema = z.object({
   /**
-   * Master kill switch. When false, all platform communication is disabled.
-   * @default true
+   * Opt-in master switch for platform communication. Off until an operator
+   * supplies a platform URL and key; with neither, every platform call is
+   * inert anyway.
+   * @default false
    */
   enabled: z.boolean().optional(),
 
@@ -3720,7 +3724,10 @@ export const DEFAULT_CONFIG: NightgaugeConfig = {
     epic_merge_strategy: "merge",
     delete_branch: true,
     draft_by_default: false,
-    auto_merge: true,
+    // #1517: false — docs/CONFIGURATION.md and the pr-merge stage have always
+    // said false. The stage merges once CI is green; forge-side auto-merge on
+    // top of it removes the one gate the forge itself enforces.
+    auto_merge: false,
     auto_merge_epic: true,
     reviewers: [],
   },
@@ -3742,7 +3749,9 @@ export const DEFAULT_CONFIG: NightgaugeConfig = {
     default_status: "backlog",
   },
   pipeline: {
-    ci_timeout: 10,
+    // Seconds, matching docs/CONFIGURATION.md and pull_request.ci_check_timeout.
+    // Was 10 here and 300 in the docs — the same key in two units (#1517).
+    ci_timeout: 300,
     auto_fix: true,
     skip_checks: {
       tests: false,
@@ -3774,7 +3783,9 @@ export const DEFAULT_CONFIG: NightgaugeConfig = {
     },
     large_diff_threshold: 500,
     auto_create_epic_branch: true,
-    max_concurrent: 1,
+    // #1517: 3, the value Go's DefaultPipelineMaxConcurrent, the docs table and
+    // the settings panel all use. Deprecated in favour of concurrency.*.
+    max_concurrent: 3,
     worktree_base: ".worktrees",
     cache: {
       alert_threshold: 40,
@@ -3822,6 +3833,7 @@ export const DEFAULT_CONFIG: NightgaugeConfig = {
       per_stage: {},
     },
     max_backtracks: 1,
+    adaptive_budget: true,
   },
   model_routing: {
     mode: "automatic",
@@ -4011,6 +4023,8 @@ export const DEFAULT_CONFIG: NightgaugeConfig = {
     auto_scaffold: true,
     wiki_links: true,
     index_on_commit: false,
+    auto_index: true,
+    auto_prune_on_merge: true,
     aggregate: false,
     require_decisions: true,
     workspace_scoped: true,
@@ -4025,6 +4039,8 @@ export const DEFAULT_CONFIG: NightgaugeConfig = {
     max_concurrency: 0,
   },
   platform: {
+    // Opt-in: the platform needs a URL and a key, and without them every
+    // platform call is a no-op. The schema JSDoc claimed @default true (#1517).
     enabled: false,
     environment: "production" as const,
     api_url: "https://api.nightgauge.dev",
@@ -4035,7 +4051,10 @@ export const DEFAULT_CONFIG: NightgaugeConfig = {
       backoff_multiplier: 2,
     },
     telemetry: {
-      enabled: false,
+      // Opt-out, matching Go's TelemetryConfig.IsEnabled and the docs table.
+      // This was `false` while both of those said true — the DEFAULT_CONFIG
+      // entry was the bug, not the documented behaviour (#1517).
+      enabled: true,
     },
     feature_flags: {},
   },

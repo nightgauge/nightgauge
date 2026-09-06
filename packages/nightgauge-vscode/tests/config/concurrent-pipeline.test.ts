@@ -77,8 +77,10 @@ describe("Concurrent pipeline config schema", () => {
   });
 
   describe("DEFAULT_CONFIG", () => {
-    it("has max_concurrent defaulting to 1", () => {
-      expect(DEFAULT_CONFIG.pipeline?.max_concurrent).toBe(1);
+    // #1517: 3, matching Go's DefaultPipelineMaxConcurrent, the docs table
+    // and the settings panel's own fallback.
+    it("has max_concurrent defaulting to 3", () => {
+      expect(DEFAULT_CONFIG.pipeline?.max_concurrent).toBe(3);
     });
 
     it("has worktree_base defaulting to .worktrees", () => {

@@ -181,7 +181,12 @@ func DefaultAgentTeamsConfig() *AgentTeamsConfig {
 
 // SafetyRailsConfig holds safety rail thresholds for autonomous execution.
 type SafetyRailsConfig struct {
-	// BudgetCeiling is the global token limit across all pipeline runs. 0 = unlimited.
+	// BudgetCeiling is the global token limit across all pipeline runs.
+	// 0/absent → DefaultSafetyBudgetCeiling (500_000). It is NOT "unlimited":
+	// the rail ships on, and the only way to lift it is to name a larger
+	// number. Resolve with ResolveSafetyBudgetCeiling, never by reading the
+	// field — a safety_rails: block written to tune any OTHER rail leaves this
+	// one at 0, and a bare read then silently removes the ceiling (#991 class).
 	BudgetCeiling int64 `yaml:"budget_ceiling" json:"budgetCeiling,omitempty"`
 	// CircuitBreakerMax is the consecutive failure threshold. 0 = disabled.
 	CircuitBreakerMax int `yaml:"circuit_breaker_max" json:"circuitBreakerMax,omitempty"`
@@ -198,7 +203,10 @@ type SafetyRailsConfig struct {
 	//
 	// Resolve with ResolveEpicCheckpoint, never by reading the field directly.
 	EpicCheckpoint *bool `yaml:"epic_checkpoint,omitempty" json:"epicCheckpoint,omitempty"`
-	// HealthGateMin is the minimum health score (0–100) to continue. 0 = disabled.
+	// HealthGateMin is the minimum health score (0–100) to continue.
+	// 0/absent → DefaultSafetyHealthGateMin (30), which is what the
+	// orchestrator's DefaultSafetyConfig has always enforced. Resolve with
+	// ResolveHealthGateMin — same #991 hazard as BudgetCeiling above.
 	HealthGateMin int `yaml:"health_gate_min" json:"healthGateMin,omitempty"`
 }
 
@@ -295,7 +303,8 @@ type AutonomousConfig struct {
 	ScanInterval YAMLDuration `yaml:"scan_interval" json:"scanInterval,omitempty"`
 	// BudgetCeiling is the global token budget ceiling. 0 = unlimited.
 	BudgetCeiling int64 `yaml:"budget_ceiling" json:"budgetCeiling,omitempty"`
-	// DebounceRepos only re-queries repos with recent completions. Default: true.
+	// DebounceRepos only re-queries repos with recent completions.
+	// Default: DefaultDebounceRepos (true). Resolve with ResolveDebounceRepos.
 	DebounceRepos *bool `yaml:"debounce_repos" json:"debounceRepos,omitempty"`
 	// DryRun shows what would run without executing. Default: false.
 	DryRun *bool `yaml:"dry_run" json:"dryRun,omitempty"`
@@ -724,6 +733,7 @@ type ModelRoutingConfig struct {
 	// the IPC path — before that this key was inert on autonomous runs.
 	// Mirrors getModelRoutingMode in
 	// packages/nightgauge-vscode/src/utils/resolvers/modelResolver.ts.
+	// Empty/absent → DefaultModelRoutingMode. Resolve with ResolveMode.
 	Mode string `json:"mode,omitempty" yaml:"mode,omitempty"`
 
 	// UseEvalRecommendations opts routing into the eval advisor's
@@ -980,7 +990,6 @@ type GitLabInboundConfig struct {
 	ReplayWindowSec int    `json:"replay_window_sec,omitempty" yaml:"replay_window_sec"` // default: 300
 	DedupeWindowSec int    `json:"dedupe_window_sec,omitempty" yaml:"dedupe_window_sec"` // default: 3600
 	DedupeDBPath    string `json:"dedupe_db_path,omitempty"   yaml:"dedupe_db_path"`     // default: ":memory:"
-	MetricsEnabled  bool   `json:"metrics_enabled,omitempty"  yaml:"metrics_enabled"`    // default: true
 }
 
 // DefaultGitLabInboundPort is the default port for the GitLab webhook receiver.
@@ -1331,8 +1340,24 @@ func (p *PipelineConfig) ResolveHistoryRetentionDays() int {
 //	  token_budget_ceiling:
 //	    ceiling_usd: 75
 type TokenBudgetCeilingConfig struct {
-	// CeilingUSD is the per-pipeline budget ceiling in USD. 0/absent → default.
+	// CeilingUSD is the per-pipeline budget ceiling in USD.
+	// 0/absent → DefaultTokenBudgetCeilingUSD. Resolve with
+	// ResolveTokenBudgetCeilingUSD.
 	CeilingUSD float64 `yaml:"ceiling_usd,omitempty" json:"ceilingUsd,omitempty"`
+}
+
+// DefaultTokenBudgetCeilingUSD is the shipped per-run cost ceiling in USD —
+// the same 75 the extension's DEFAULT_CONFIG applies. Named here so the Go
+// side has a constant to point at like every sibling default (#1517).
+const DefaultTokenBudgetCeilingUSD = 75.0
+
+// ResolveTokenBudgetCeilingUSD returns the effective per-run USD ceiling.
+// Safe on a nil receiver.
+func (p *PipelineConfig) ResolveTokenBudgetCeilingUSD() float64 {
+	if p == nil || p.TokenBudgetCeiling == nil || p.TokenBudgetCeiling.CeilingUSD <= 0 {
+		return DefaultTokenBudgetCeilingUSD
+	}
+	return p.TokenBudgetCeiling.CeilingUSD
 }
 
 // SurvivalConfig is the pipeline.survival: block (#4151, spike #4134).

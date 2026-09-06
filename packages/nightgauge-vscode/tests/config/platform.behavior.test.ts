@@ -179,9 +179,12 @@ describe("platform default values", () => {
     expect(defaults.platform?.retry_policy?.backoff_multiplier).toBe(2);
   });
 
-  it("platform.telemetry.enabled defaults to false", () => {
+  // #1517: telemetry is opt-OUT — Go's TelemetryConfig.IsEnabled and the
+  // docs table both said true while this default said false. The default was
+  // the bug, not the documented behaviour.
+  it("platform.telemetry.enabled defaults to true (opt-out)", () => {
     const defaults = getDefaultConfig();
-    expect(defaults.platform?.telemetry?.enabled).toBe(false);
+    expect(defaults.platform?.telemetry?.enabled).toBe(true);
   });
 
   it("platform.feature_flags defaults to empty object", () => {

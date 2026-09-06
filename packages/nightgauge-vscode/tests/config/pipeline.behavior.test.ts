@@ -711,7 +711,8 @@ describe("pipeline.behavior", () => {
 
   describe("default values", () => {
     it("DEFAULT_CONFIG.pipeline has correct defaults", () => {
-      expect(DEFAULT_CONFIG.pipeline?.ci_timeout).toBe(10);
+      // Seconds (#1517) — DEFAULT_PIPELINE_CONFIG above already said 300.
+      expect(DEFAULT_CONFIG.pipeline?.ci_timeout).toBe(300);
       expect(DEFAULT_CONFIG.pipeline?.auto_fix).toBe(true);
       expect(DEFAULT_CONFIG.pipeline?.skip_checks?.tests).toBe(false);
       expect(DEFAULT_CONFIG.pipeline?.skip_checks?.lint).toBe(false);
