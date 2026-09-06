@@ -25,6 +25,10 @@ and this project adheres to
   lets running slots finish; reloading the window aborts them, and nothing used
   to say when the drain was done. `dev-install.sh` now names the running issues
   and asks before a rebuild that would kill them (`--force` skips) (#1511)
+- `autonomous.refinement_backlog` is accepted in `.nightgauge/config.yaml`
+  (default `false`). It turns on refinement of the open backlog; with it off,
+  refinement only touches board work that is about to dispatch, plus anything
+  labelled `auto-process` (#1514)
 
 ### Fixed
 

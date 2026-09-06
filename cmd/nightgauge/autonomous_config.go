@@ -64,6 +64,9 @@ func buildAutonomousConfig(cfg *config.Config, over autonomousConfigOverrides) o
 		if cfg.Autonomous.RefinementMaxConcurrent > 0 {
 			autoCfg.RefinementMaxConcurrent = cfg.Autonomous.RefinementMaxConcurrent
 		}
+		if cfg.Autonomous.RefinementBacklog != nil {
+			autoCfg.RefinementBacklog = *cfg.Autonomous.RefinementBacklog
+		}
 		if cfg.Autonomous.AutoActionable != nil {
 			autoCfg.AutoActionable = *cfg.Autonomous.AutoActionable
 		}

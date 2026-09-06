@@ -117,6 +117,10 @@ func TestRunRefinementCycle_RotatesScanStartAcrossCycles(t *testing.T) {
 	defer srv.Close()
 
 	cfg := DefaultAutonomousConfig()
+	// These fixtures are off-board issues — tier 3 under #1514, which the
+	// default refuses. This test is about round-robin fairness, not about the tier gate, so the
+	// backlog sweep is turned on to keep the fixtures candidates.
+	cfg.RefinementBacklog = true
 	cfg.RefinementMaxConcurrent = 1 // one scheduler-wide slot, two repos each with one candidate
 
 	client := gh.NewClientWithURL("test-token", srv.URL)

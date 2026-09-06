@@ -217,21 +217,52 @@ acceptance criteria, labels, and sizing before dispatch.
    completion and would re-select the same issues forever (#993). Fix with
    `nightgauge label ensure --owner O --repo R`.
 1. On each refinement tick (default: 60s), the scanner queries all configured
-   repos for open issues that lack the `pipeline:refined` label
+   repos for open issues that lack the `pipeline:refined` label. **One listing
+   per repo per cycle** — the ordering and skips below are decided from the
+   board graph the dispatch scan already built, so they cost no extra GraphQL
+   (#482).
 2. Issues already running through refinement, on cooldown, or already in a
    pipeline slot are skipped
-3. Qualifying issues are dispatched to the `nightgauge-issue-refine` skill
-   via the execution manager (CLI mode) or IPC callback (VSCode mode)
-4. On success: `pipeline:refined` label is added, `auto-process` label is
-   removed (if present), and the issue is moved to Ready status on the board
-5. On failure — including a failure to ADD the `pipeline:refined` label, which
-   was previously logged and dropped — the run is recorded in
-   `state.RefinementFailed` with its reason, the per-issue consecutive-failure
-   counter is incremented, and the issue enters a cooldown (default: 5 minutes)
-6. After **3 consecutive failures** the candidate loop stops re-selecting that
-   issue and raises an Action Center card. The cooldown bounds how OFTEN an
-   issue is retried; this bounds how MANY times. Without it a deterministic
-   failure retried at the rail's cap indefinitely (#993)
+   2a. **Candidates are ordered by dispatch relevance, not by age** (#1514).
+   Three tiers, highest first, and within a tier the dispatch scan's own
+   priority ordering (P0 → P3, then oldest issue number):
+
+   | Tier | What it is                                        | Refined by default                |
+   | ---- | ------------------------------------------------- | --------------------------------- |
+   | 1    | On a project board with Status `Ready`            | yes                               |
+   | 2    | On the board in `Backlog` **with a Priority set** | yes                               |
+   | 3    | Every other open issue, oldest first              | **no** — see `refinement_backlog` |
+
+   The scan used to take whatever the listing returned first, which is
+   GitHub's default order: the OLDEST open issues. On a workspace with 165
+   unrefined issues that spends roughly 17 hours of Sonnet calls on the
+   backlog — issues that may never dispatch — while the issues about to run
+   stay unrefined and unsized.
+
+2b. **Issues that can never dispatch are skipped**, because refining one spends
+a model call on a body no pipeline will read. The classes are: an
+`autonomous.exclude_labels` label (`owner-action`, `blocked`); a board
+status of `In progress`, `In review` or `Done`; an open PR linked to the
+issue (the work already shipped, and a rewrite edits text the PR was
+written against); and an issue held for a human decision
+(`architecture-approval`, operator-resume). One log line is written per
+skip class per repo per cycle — never one per issue.
+
+2c. **Tier cap.** The per-repo cap of five candidates per cycle is unchanged;
+what changed is which five. On top of it, tier 3 is not refined at all
+while a tier-1 or tier-2 issue **anywhere in the workspace** is still
+unrefined, so the hourly rate rail is never spent on the backlog while
+work that is about to run is unsized. Issues labelled `auto-process` are
+exempt from both tier gates — that label is the operator asking for one
+issue by name. 3. Qualifying issues are dispatched to the `nightgauge-issue-refine` skill
+via the execution manager (CLI mode) or IPC callback (VSCode mode) 4. On success: `pipeline:refined` label is added, `auto-process` label is
+removed (if present), and the issue is moved to Ready status on the board 5. On failure — including a failure to ADD the `pipeline:refined` label, which
+was previously logged and dropped — the run is recorded in
+`state.RefinementFailed` with its reason, the per-issue consecutive-failure
+counter is incremented, and the issue enters a cooldown (default: 5 minutes) 6. After **3 consecutive failures** the candidate loop stops re-selecting that
+issue and raises an Action Center card. The cooldown bounds how OFTEN an
+issue is retried; this bounds how MANY times. Without it a deterministic
+failure retried at the rail's cap indefinitely (#993)
 
 **Concurrency control:**
 
@@ -286,7 +317,27 @@ autonomous:
   refinement_enabled: true # Enable/disable refinement scan
   refinement_interval: 60s # How often to scan for unrefined issues
   refinement_max_concurrent: 1 # Concurrent refinement slots (1-3)
+  refinement_backlog: false # Also refine the open backlog (tier 3). Cost opt-in.
 ```
+
+**Pre-dispatch refinement (#1514).** The dispatch scan calls the refinement
+hook immediately before it enqueues an item. If that issue is unrefined and a
+refinement slot is free — bounded by the same workspace-wide semaphore and the
+same hourly rate rail as the scan — it is refined first, synchronously, and
+then dispatched. If no slot is free, the rail is spent, or refinement has no way
+to execute, the issue is **dispatched anyway** and one line records that it went
+unrefined:
+
+```text
+[refinement] pre-dispatch: refining acme/app#7 before dispatch
+[refinement] pre-dispatch: dispatching acme/app#7 unrefined — no refinement slot free
+```
+
+This makes refinement demand-driven for the issues that matter, so a cold
+workspace does not need a backlog sweep before the pipeline is useful. The hook
+fails closed exactly where the scan does: an issue whose label list the board
+scan truncated, or whose author is untrusted (#270), is dispatched unrefined
+rather than handed to the model.
 
 **Safety:** Refinement failures do NOT increment the dispatch circuit breaker.
 The refinement subsystem has its own independent failure tracking per issue and
@@ -346,6 +397,7 @@ the actual trigger).
 | `autonomous.refinement_interval`       | `60s`   | Time between refinement scans (min: 30s)                                    |
 | `autonomous.refinement_max_concurrent` | `1`     | Max concurrent refinement operations (1–3)                                  |
 | `autonomous.auto_actionable`           | `false` | Move refined issues directly to Ready (`true`) or hold in Backlog (`false`) |
+| `autonomous.refinement_backlog`        | `false` | Also refine tier-3 issues (the open backlog). A cost opt-in (#1514)         |
 
 See [CONFIGURATION.md](CONFIGURATION.md#autonomous-scheduler-configuration) for
 full details on each option.
