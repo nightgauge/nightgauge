@@ -1164,3 +1164,88 @@ func TestParseDependencyRefs_WaveParentheticalIsNotARef(t *testing.T) {
 		}
 	}
 }
+
+// --- Sentence-scoped dependency keywords (#1502) ----------------------------
+//
+// A "Blocked by" / "Depends on" keyword used to claim every `#N` from the
+// keyword to end of line, so a second sentence sharing the line was promoted
+// into a gating edge. The scheduler held two ready flutter issues on a #301
+// that only appeared in prose ("Reaches its full value with Epic #301"). A
+// fragment now ends at the next keyword or at a sentence terminator.
+
+func TestParseDependencyRefs_SentenceScopedKeywords(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		want []int
+	}{
+		{
+			// The exact epic body line from the scheduler log.
+			name: "second sentence on the same line is prose",
+			body: "Blocked by Epic #295. Reaches its full value with Epic #301 — authoring an issue\n",
+			want: []int{295},
+		},
+		{
+			name: "two declarations on one line yield both",
+			body: "Blocked by #5. Depends on #6\n",
+			want: []int{5, 6},
+		},
+		{
+			name: "semicolon terminates the declaration",
+			body: "Blocked by #5; see also #7\n",
+			want: []int{5},
+		},
+		{
+			name: "question mark terminates the declaration",
+			body: "Blocked by #5? Nobody knows about #8\n",
+			want: []int{5},
+		},
+		{
+			name: "a period inside a token is not a sentence break",
+			body: "Depends on v1.2 of #9\n",
+			want: []int{9},
+		},
+		{
+			name: "no terminator keeps the whole remainder",
+			body: "Blocked by #11, #12 and #13\n",
+			want: []int{11, 12, 13},
+		},
+		{
+			name: "trailing period does not drop the last reference",
+			body: "Blocked by #14.\n",
+			want: []int{14},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := sameRepoNumbers(t, tc.body)
+			if len(got) != len(tc.want) {
+				t.Fatalf("got %v, want %v", got, tc.want)
+			}
+			for i := range tc.want {
+				if got[i] != tc.want[i] {
+					t.Fatalf("got %v, want %v", got, tc.want)
+				}
+			}
+		})
+	}
+}
+
+// Each keyword keeps its own source label even when two share a line — the
+// scheduler prints `edge=<source>` when it holds a dispatch, so a mislabelled
+// fragment sends an operator to the wrong sentence.
+func TestParseDependencyRefs_PerKeywordSourceOnOneLine(t *testing.T) {
+	want := map[int]string{5: "body_text", 6: "depends_on"}
+	got := map[int]string{}
+	for _, r := range ParseDependencyRefs("Blocked by #5. Depends on #6\n", selfRepo, nil) {
+		if r.Repo == selfRepo {
+			got[r.Number] = r.Source
+		}
+	}
+	for num, src := range want {
+		if got[num] != src {
+			t.Errorf("#%d source = %q, want %q", num, got[num], src)
+		}
+	}
+}

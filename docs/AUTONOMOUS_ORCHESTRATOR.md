@@ -760,6 +760,23 @@ Two rules keep the bare form from over-matching:
   reference, not a blocker: promoting incidental mentions to hard edges
   silently stalls dispatch, which is why URL extraction was already scoped to
   these same contexts.
+- A keyword claims **its own sentence, not the rest of the line**. Each
+  declaration runs from the keyword to the earliest of the next keyword on that
+  line or a sentence terminator (`.`, `;`, `!`, `?` followed by whitespace or
+  end of line); a `.` inside a token — `v1.2` — is not a terminator, and a `;`
+  followed immediately by another reference is a list separator, so
+  `Blocked by #1187; #1190` remains one enumeration. Every keyword on the line
+  is honoured with its own source label, so `Blocked by #5. Depends on #6`
+  declares both. Before this, one keyword claimed every `#N` to end of line and
+  a second sentence became a hard edge:
+
+  ```
+  Blocked by Epic #295. Reaches its full value with Epic #301 — …
+  ```
+
+  declares one dependency, `#295`; reading `#301` as well held two ready child
+  issues indefinitely and, through the epic cascade, their siblings (#1502).
+
 - Inside a dependency section, a `#N` **introduced by a parent/child or
   bookkeeping relation is not a dependency**: `Part of #N`, `Parent`, `Epic`,
   `Sub-issue of`, `Child of`, `Tracks`, `Tracked by`, `Related` / `Related to`,

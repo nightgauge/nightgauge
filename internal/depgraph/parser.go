@@ -57,6 +57,20 @@ var (
 		`(?i)(blocked\s+by|depends?\s+on)\s*:?`,
 	)
 
+	// A sentence terminator: `.`, `;`, `!` or `?` FOLLOWED BY whitespace or the
+	// end of the string. The trailing context is what keeps a period inside a
+	// token from ending a sentence — "v1.2", "e.g.", "acme/repo#5.0" all carry
+	// a `.` that no author meant as a full stop. Used to bound a dependency
+	// keyword's claim to its own sentence; see depDeclarationFragments (#1502).
+	reSentenceBreak = regexp.MustCompile(`[.;!?](?:[ \t]|$)`)
+
+	// A reference list CONTINUING after a separator: the remainder begins with
+	// another `#N` (optionally repo-qualified). "Blocked by #1187; #1190" is one
+	// enumeration written with semicolons, which the "Depends on" spelling has
+	// always accepted — so a `;` in front of another reference separates items
+	// rather than ending the declaration. A `;` in front of prose ends it.
+	reRefListContinues = regexp.MustCompile(`^[ \t]*(?:[\w-]+(?:/[\w-]+)?[ \t]*)?#\d`)
+
 	// A possibly repo-qualified reference: the token in front of a `#N`, and
 	// the gap between them. The same-repo pass uses it to decide which `#N`
 	// tokens already belong to another repository — see maskQualifiedRefs.
@@ -459,12 +473,48 @@ type depFragment struct {
 	source string // "depends_on" | "body_text" | "structured_section"
 }
 
+// sentenceEnd returns the offset at which the sentence beginning at the start
+// of s ends, or -1 when s carries no terminator at all (in which case the whole
+// remainder is one sentence).
+//
+// A `;` that is immediately followed by another reference is a LIST separator,
+// not a terminator: "Blocked by #1187; #1190" is a single enumeration, a
+// spelling the "Depends on" pattern has always accepted. A `;` followed by
+// prose — "Blocked by #5; see also #7" — ends the declaration, and the `#7`
+// after it is no longer claimed.
+func sentenceEnd(s string) int {
+	for _, br := range reSentenceBreak.FindAllStringIndex(s, -1) {
+		if s[br[0]] == ';' && reRefListContinues.MatchString(s[br[0]+1:]) {
+			continue
+		}
+		return br[0]
+	}
+	return -1
+}
+
 // depDeclarationFragments returns the body slices in which a BARE `#N` (no
 // repo token in front of it) counts as a dependency declaration:
 //
-//  1. Everything after a "Blocked by" / "Depends on" keyword on its own line.
-//     The text BEFORE the keyword is excluded on purpose — "Closes #99 —
-//     depends on #100" declares one dependency, not two.
+//  1. The SENTENCE following each "Blocked by" / "Depends on" keyword on a
+//     line. Every keyword on the line is honoured, not just the first, so
+//     "Blocked by #5. Depends on #6" declares both — with the correct source
+//     label on each.
+//
+//     The text BEFORE a keyword is excluded on purpose — "Closes #99 —
+//     depends on #100" declares one dependency, not two — and so is the text
+//     AFTER the keyword's sentence ends. A fragment runs from the keyword to
+//     the earliest of the next keyword on the line or a sentence terminator
+//     (see reSentenceBreak), because a keyword that claims everything to end
+//     of line silently promotes an unrelated second sentence into a hard
+//     gating edge. The line that produced this was:
+//
+//     Blocked by Epic #295. Reaches its full value with Epic #301 — …
+//
+//     One declared dependency, #295; #301 is prose. Reading both held two
+//     ready child issues indefinitely, with the epic cascade spreading the
+//     hold to their siblings — the same "fails toward never dispatching"
+//     direction as #1497, and just as quiet (#1502).
+//
 //  2. Every line under a `## Blocked by` / `## Depends on` / `## Dependencies`
 //     / `## Cross-Repo Dependencies` header, until the next header.
 //
@@ -481,22 +531,35 @@ func depDeclarationFragments(body string) []depFragment {
 
 	// 1. Dependency-declaration keyword lines, anywhere in the body.
 	for _, line := range strings.Split(body, "\n") {
-		loc := reDeclKeyword.FindStringIndex(line)
-		if loc == nil {
+		locs := reDeclKeyword.FindAllStringIndex(line, -1)
+		if len(locs) == 0 {
 			continue
 		}
 		if isNonGatingLine(line) {
 			continue
 		}
-		source := "body_text"
-		if strings.Contains(strings.ToLower(line[loc[0]:loc[1]]), "depend") {
-			source = "depends_on"
+		for i, loc := range locs {
+			// The fragment ends where the next declaration on the line begins,
+			// so neither keyword claims the other's references.
+			end := len(line)
+			if i+1 < len(locs) {
+				end = locs[i+1][0]
+			}
+			text := line[loc[1]:end]
+			// …and no later than the end of the keyword's own sentence.
+			if cut := sentenceEnd(text); cut >= 0 {
+				text = text[:cut]
+			}
+			source := "body_text"
+			if strings.Contains(strings.ToLower(line[loc[0]:loc[1]]), "depend") {
+				source = "depends_on"
+			}
+			out = append(out, depFragment{
+				text:   text,
+				line:   strings.TrimSpace(line),
+				source: source,
+			})
 		}
-		out = append(out, depFragment{
-			text:   line[loc[1]:],
-			line:   strings.TrimSpace(line),
-			source: source,
-		})
 	}
 
 	// 2. Dependency-section bodies. A bare entry under "## Dependencies" is a

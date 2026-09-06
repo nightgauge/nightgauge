@@ -26,6 +26,14 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- A dependency keyword in an issue body now claims only its own sentence rather
+  than every `#N` to the end of the line, and every keyword on a line is
+  honoured rather than only the first. A line reading "Blocked by Epic #295"
+  followed by a second sentence of prose that mentions Epic #301 declares one
+  dependency; the scheduler was reading the prose reference as a hard edge and
+  holding two ready issues — and, through the epic cascade, their siblings —
+  indefinitely. A semicolon in front of another reference still separates one
+  list, so `Blocked by #1187; #1190` is unchanged (#1502)
 - A `Part of #N` parent link under a `## Dependencies` header is no longer read
   as a dependency on the parent epic. The same-repo dependency parsing added in
   #1492 treated every line in a dependency section as a declaration, and real
