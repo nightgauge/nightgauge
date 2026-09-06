@@ -18,6 +18,7 @@ function makeConfig(overrides: Partial<ProgressMonitorConfig> = {}): ProgressMon
     observeOnly: false,
     churnToolThreshold: 40,
     catastrophicKill: false,
+    externalProgressCeilingMs: 1_200_000,
     ...overrides,
   };
 }

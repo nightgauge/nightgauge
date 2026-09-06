@@ -475,12 +475,20 @@ fi
 >    to target a single file, the path must be **workspace-relative**
 >    (`src/routes/foo.test.ts`), not repo-relative.
 > 2. **Background-poll spiral.** When a foreground `npx vitest` exceeds
->    the Bash tool's default ~2-minute timeout, the recovery is to
+>    the Bash tool's default ~2-minute timeout, the first recovery is to
 >    re-invoke with an explicit longer `timeout` (or use `vitest --reporter=dot`
 >    to keep output flowing), **not** to background the run and then
 >    `sleep 15 && tail` the output file in a polling loop. The polling
->    spiral burns context, produces no useful output for the stall
->    watcher, and is a recurring stall vector (#884 again).
+>    spiral burns context and is a recurring stall vector (#884 again).
+>
+>    When a suite genuinely outlives any tool timeout — a Playwright or
+>    docker-backed run of several minutes — backgrounding it is correct, and
+>    then you **must** declare it (`NIGHTGAUGE_PROGRESS:`, see
+>    `_shared/LONG_RUNNING_PROCESSES.md`). An undeclared background suite is
+>    invisible to the runaway monitor and gets the stage killed mid-run: that
+>    is #1488, which cost one downstream issue two kills at ~$1.20 each with
+>    the browser-integration project only half done. Declare the pid and the
+>    log, poll with a bounded loop, and the wait is read as work.
 
 ### Step 2.1: Run Integration and E2E Tests (Strict Gate — #2909)
 
@@ -874,6 +882,9 @@ if [ "$MOBILE_MCP_ACTIVE" = "true" ]; then
     emulator -avd "Pixel_9_Pro" -no-window -no-audio -no-boot-anim &
     EMULATOR_PID=$!
     EMULATOR_STARTED_BY_SKILL=true
+    # Declare the child so the runaway monitor can see the boot wait as work
+    # rather than a stall (#1488). See _shared/LONG_RUNNING_PROCESSES.md.
+    echo "NIGHTGAUGE_PROGRESS: {\"pid\": $EMULATOR_PID, \"label\": \"android emulator boot\"}"
 
     BOOT_WAIT=0
     until adb shell getprop sys.boot_completed 2>/dev/null | grep -q "^1$"; do

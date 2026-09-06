@@ -118,6 +118,9 @@ if [ "$VERIFY_UI_ACTIVE" = "true" ]; then
     nohup $VERIFY_UI_DEV_CMD > /tmp/verify-ui-dev-server-${ISSUE_NUMBER}.log 2>&1 &
     DEV_SERVER_PID=$!
     DEV_SERVER_STARTED_BY_SKILL=true
+    # Declare the child and its log so the runaway monitor reads the startup
+    # wait as work, not a stall (#1488). See _shared/LONG_RUNNING_PROCESSES.md.
+    echo "NIGHTGAUGE_PROGRESS: {\"pid\": $DEV_SERVER_PID, \"log\": \"/tmp/verify-ui-dev-server-${ISSUE_NUMBER}.log\", \"label\": \"verify-ui dev server\"}"
 
     BOOT_WAIT=0
     until curl -fsS "$VERIFY_UI_BASE_URL" >/dev/null 2>&1; do

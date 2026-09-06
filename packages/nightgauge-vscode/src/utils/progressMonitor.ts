@@ -70,7 +70,44 @@
  * new-file writes / phase markers) is NEVER killed — only a stage that is
  * demonstrably active-but-not-progressing. See #2982 / #3840 for the
  * false-kill class this guards against.
+ *
+ * ## External progress (Issue #1488)
+ *
+ * Every clock above is fed from the agent's own message stream, so all three
+ * go cold in the one case where the stage is behaving perfectly: it started a
+ * long external process and is waiting for it. Two `feature-validate` runs in
+ * a downstream workspace repository proved it. The first was killed twice on
+ * one issue with a Playwright suite mid-run — once by the churn detector (40
+ * `tail`/`ps` polls), once by the no-progress window. The second was killed at
+ * 810s **while its own `git commit` was still running**: the commit registered
+ * as productive the moment the call was issued, and the window then expired
+ * underneath the very command that proved the stage was productive.
+ * `tool_heartbeat` (#1083) was meant to cover that, but it depends on the CLI
+ * emitting `tool_progress` events, which no adapter in these runs did.
+ *
+ * So the monitor gets a source of truth that does not run through the stream
+ * at all, and one that does not depend on an optional event:
+ *
+ *   - a **declared child PID** that is still alive (`kill(pid, 0)`),
+ *   - **byte growth** of a **declared progress log**,
+ *   - a **tool call currently in flight** — derived from tool_use ids with no
+ *     matching tool_result, which every adapter produces.
+ *
+ * Any of these records an `external_progress` signal, which is ACTIVITY and
+ * never productive: it can defer a kill, never satisfy one. It also suppresses
+ * the churn detector for as long as it holds, because "40 distinct tool calls,
+ * no progress" describes a poll loop around a live child exactly as well as it
+ * describes the #3811 churn — the live child is what tells the two apart.
+ *
+ * Both arms are bounded by `externalProgressCeilingMs` (20 minutes, matching
+ * `WEDGED_TOOL_CALL_CEILING_S`): past it the probe is not consulted at all, so
+ * a wedged child cannot make a stage immortal, and the existing kill paths
+ * reclaim it with no new kill path added. A stage that loops on `ls`/`cat`
+ * with no declared child and no log growth declares nothing, so it is killed
+ * on exactly the old schedule.
  */
+
+import * as fs from "fs";
 
 import type { KillCeiling } from "./killCeiling";
 import { msLimit, usdLimit } from "./killCeiling";
@@ -94,6 +131,15 @@ export type ProgressSignalType =
    * It can never satisfy the kill (it is not productive), only defer it.
    */
   | "tool_heartbeat"
+  /**
+   * Work observed OUTSIDE the message stream (#1488) — ACTIVITY ONLY.
+   *
+   * A declared child process still alive, byte growth of a declared progress
+   * log, or a tool call still in flight. Like `tool_heartbeat` it is never
+   * deduplicated (it is repetitive by nature) and can never satisfy a kill,
+   * only defer one.
+   */
+  | "external_progress"
   | "commit"; // git commit observed (productive)
 
 /** Signal types that represent genuine forward motion on the deliverable. */
@@ -130,6 +176,79 @@ export interface ProgressMonitorConfig {
    * stage is killed. 0 keeps the legacy warn-only behaviour.
    */
   catastrophicKill: boolean;
+  /**
+   * Ms of no PRODUCTIVE progress past which external progress (a live declared
+   * child, a growing declared log, an in-flight tool call) stops deferring the
+   * kill (Issue #1488). Default 1_200_000 (20 minutes), matching
+   * `WEDGED_TOOL_CALL_CEILING_S` in skillRunner: the longest legitimate single
+   * wait observed was ~17 minutes, the wedge that motivated that ceiling was
+   * 25. Past this the probe is not consulted at all, so a child that is alive
+   * but wedged — or a log that stopped growing — can never make a stage
+   * immortal. 0 disables external-progress deferral entirely.
+   */
+  externalProgressCeilingMs: number;
+}
+
+/**
+ * How the monitor observes the world outside its own signal stream (#1488).
+ *
+ * Injected so the deferral logic is testable without spawning processes or
+ * writing files; {@link defaultExternalProgressProbe} is the production one.
+ */
+export interface ExternalProgressProbe {
+  /** True when a process with this pid exists (any owner). */
+  isProcessAlive(pid: number): boolean;
+  /** Size of a file in bytes, or null when it cannot be read. */
+  fileSize(path: string): number | null;
+}
+
+export const defaultExternalProgressProbe: ExternalProgressProbe = {
+  isProcessAlive(pid: number): boolean {
+    if (!Number.isInteger(pid) || pid <= 1) return false;
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch (err) {
+      // EPERM means the process exists but belongs to another user — alive.
+      // ESRCH means no such process. Anything else: assume gone, because the
+      // conservative answer here is the one that does NOT defer a kill.
+      return (err as NodeJS.ErrnoException | undefined)?.code === "EPERM";
+    }
+  },
+  fileSize(path: string): number | null {
+    try {
+      return fs.statSync(path).size;
+    } catch {
+      return null;
+    }
+  },
+};
+
+/** What a stage declares when it starts a long external process (#1488). */
+export interface ExternalProgressDeclaration {
+  /** Pid of the child to watch. Ignored when not a plausible pid. */
+  pid?: number;
+  /** Absolute path of a log whose byte growth counts as activity. */
+  log?: string;
+  /** Human label for the operator-facing deferral line. */
+  label?: string;
+}
+
+/**
+ * Cap on declarations retained per kind. A stage that declares more than this
+ * is not the case this feature exists for, and the map must not grow with the
+ * stage — the oldest declaration is evicted, exactly as
+ * `toolCallDeclarations` does in skillRunner.
+ */
+const MAX_EXTERNAL_DECLARATIONS = 16;
+
+/** Drop the oldest entry when a declaration map is at its cap. */
+function evictOldest(map: Map<unknown, unknown>): void {
+  while (map.size >= MAX_EXTERNAL_DECLARATIONS) {
+    const oldest = map.keys().next();
+    if (oldest.done) return;
+    map.delete(oldest.value);
+  }
 }
 
 export interface ProgressCheckResult {
@@ -175,8 +294,17 @@ export class ProgressMonitor {
   private productiveSignals = 0;
   /** Distinct-tool signatures seen since the last productive signal (churn gauge). */
   private churnSinceProgress = 0;
+  /** Declared child pids → label (Issue #1488). */
+  private readonly declaredPids = new Map<number, string>();
+  /** Declared progress logs → last observed size in bytes (Issue #1488). */
+  private readonly declaredLogs = new Map<string, number>();
+  /** Tool calls issued with no matching tool_result yet (Issue #1488). */
+  private inFlightToolCalls = 0;
 
-  constructor(private readonly config: ProgressMonitorConfig) {
+  constructor(
+    private readonly config: ProgressMonitorConfig,
+    private readonly probe: ExternalProgressProbe = defaultExternalProgressProbe
+  ) {
     this.lastProgressMs = Date.now();
     this.lastActivityMs = this.lastProgressMs;
   }
@@ -222,8 +350,8 @@ export class ProgressMonitor {
       return;
     }
 
-    if (type === "tool_heartbeat") {
-      // Liveness, not progress, and never deduped — see the type's note.
+    if (type === "tool_heartbeat" || type === "external_progress") {
+      // Liveness, not progress, and never deduped — see the types' notes.
       this.totalSignals++;
       this.lastActivityMs = Date.now();
       return;
@@ -269,6 +397,95 @@ export class ProgressMonitor {
   }
 
   /**
+   * Declare a long-running external process and/or a log it writes (#1488).
+   *
+   * A validate stage that starts a Playwright/Docker/Flutter suite in the
+   * background emits `NIGHTGAUGE_PROGRESS:` with the pid it captured at spawn
+   * and the log it will poll; skillRunner routes it here. Nothing else about
+   * the stage changes — the declaration only gives the monitor something to
+   * look at that is not the message stream.
+   *
+   * The log is seeded with its size AT DECLARATION TIME, so only growth from
+   * this moment counts. Seeding with 0 would make an already-large log read as
+   * "grew" on the first poll and defer one kill for free.
+   */
+  declareExternalProgress(declaration: ExternalProgressDeclaration): void {
+    const label = declaration.label ?? "external";
+    let declared = false;
+
+    const pid = declaration.pid;
+    if (typeof pid === "number" && Number.isInteger(pid) && pid > 1) {
+      evictOldest(this.declaredPids);
+      this.declaredPids.set(pid, label);
+      declared = true;
+    }
+
+    const log = declaration.log;
+    if (typeof log === "string" && log.length > 0) {
+      evictOldest(this.declaredLogs);
+      this.declaredLogs.set(log, this.probe.fileSize(log) ?? 0);
+      declared = true;
+    }
+
+    if (declared) {
+      // Declaring is itself proof of life — the stage just started something.
+      this.recordSignal("external_progress");
+    }
+  }
+
+  /**
+   * Number of tool calls issued with no matching tool_result yet (#1488).
+   *
+   * Fed by skillRunner from tool_use / tool_result ids, which every adapter
+   * emits — unlike the `tool_progress` heartbeat of #1083, which is optional
+   * and was absent in both runs this fixes. This is what keeps a stage alive
+   * while its own `git commit` (or `npm test`) is still running.
+   */
+  setInFlightToolCalls(count: number): void {
+    this.inFlightToolCalls = Math.max(0, count);
+  }
+
+  /**
+   * Consult the external-progress sources and record activity if any is live.
+   *
+   * Called only from {@link check} (the 30-second ticker), so the syscalls
+   * here — one `kill(pid, 0)` and one `stat` per declaration, both bounded by
+   * {@link MAX_EXTERNAL_DECLARATIONS} — run at most twice a minute.
+   */
+  private pollExternalProgress(): { active: boolean; reason: string } {
+    const reasons: string[] = [];
+
+    for (const [pid, label] of [...this.declaredPids]) {
+      if (this.probe.isProcessAlive(pid)) {
+        reasons.push(`child pid ${pid} (${label}) alive`);
+      } else {
+        // Reaped — drop it, so a finished suite stops deferring immediately
+        // rather than at the next ceiling.
+        this.declaredPids.delete(pid);
+      }
+    }
+
+    for (const [path, lastSize] of [...this.declaredLogs]) {
+      const size = this.probe.fileSize(path);
+      if (size === null) continue;
+      if (size > lastSize) {
+        this.declaredLogs.set(path, size);
+        reasons.push(`progress log ${path} grew by ${size - lastSize}B`);
+      }
+    }
+
+    if (this.inFlightToolCalls > 0) {
+      reasons.push(`${this.inFlightToolCalls} tool call(s) in flight`);
+    }
+
+    if (reasons.length === 0) {
+      return { active: false, reason: "" };
+    }
+    this.recordSignal("external_progress");
+    return { active: true, reason: reasons.join("; ") };
+  }
+
+  /**
    * Productive-progress accessor for the cost-ceiling gate (Issue #3851).
    *
    * The orchestrator's unattended budget/ceiling escalation consults this to
@@ -306,12 +523,18 @@ export class ProgressMonitor {
    * Call from the 30-second stall ticker. O(1) — no I/O.
    */
   check(currentCostUsd: number): ProgressCheckResult {
-    const base = {
+    // Snapshotted at each return rather than once up front: the external
+    // probe below can record an activity signal mid-check (#1488), and a
+    // result whose counters predate that would contradict its own reason.
+    const base = (): Omit<
+      ProgressCheckResult,
+      "shouldKill" | "shouldWarn" | "reason" | "msSinceLastProgress"
+    > => ({
       signalsSeen: this.totalSignals,
       productiveSignals: this.productiveSignals,
       churnSinceProgress: this.churnSinceProgress,
       msSinceLastActivity: this.msSinceLastActivity,
-    };
+    });
 
     if (!this.config.enabled) {
       return {
@@ -319,7 +542,7 @@ export class ProgressMonitor {
         shouldWarn: false,
         reason: "disabled",
         msSinceLastProgress: 0,
-        ...base,
+        ...base(),
       };
     }
 
@@ -329,7 +552,7 @@ export class ProgressMonitor {
         shouldWarn: false,
         reason: `cost $${currentCostUsd.toFixed(4)} below activation threshold $${this.config.minCostToActivateUsd}`,
         msSinceLastProgress: 0,
-        ...base,
+        ...base(),
       };
     }
 
@@ -362,7 +585,7 @@ export class ProgressMonitor {
             `${Math.round(msSinceLastProgress / 1000)}s (catastrophic kill, Issue #3851)`,
           msSinceLastProgress,
           ceiling: catastrophicCeiling,
-          ...base,
+          ...base(),
         };
       }
       return {
@@ -371,9 +594,24 @@ export class ProgressMonitor {
         reason: `Cost $${currentCostUsd.toFixed(2)} reached catastrophic limit $${this.config.catastrophicLimitUsd.toFixed(2)} (warn-only backstop)`,
         msSinceLastProgress,
         ceiling: catastrophicCeiling,
-        ...base,
+        ...base(),
       };
     }
+
+    // ── External progress (Issue #1488) ───────────────────────────────────
+    // Consulted only past the productive window (nothing below this point runs
+    // otherwise) and only under the ceiling, so a wedged child cannot make the
+    // stage immortal. Recording the signal here refreshes the activity clock,
+    // which is what defers the no-progress kill at the gate further down; the
+    // returned flag additionally suppresses the churn detector, which is NOT
+    // activity-gated and would otherwise kill a legitimate poll loop.
+    const externalCeilingReached =
+      this.config.externalProgressCeilingMs <= 0 ||
+      msSinceLastProgress > this.config.externalProgressCeilingMs;
+    const external =
+      windowExceeded && !externalCeilingReached
+        ? this.pollExternalProgress()
+        : { active: false, reason: "" };
 
     // ── Churn detector (Issue #3851) ──────────────────────────────────────
     // Lots of novel activity, no productive progress, past the cost floor.
@@ -384,7 +622,10 @@ export class ProgressMonitor {
     const churnDetected =
       this.config.churnToolThreshold > 0 &&
       this.churnSinceProgress >= this.config.churnToolThreshold &&
-      windowExceeded;
+      windowExceeded &&
+      // A poll loop around a live child is indistinguishable from churn by
+      // tool count alone; the live child is the discriminator (#1488).
+      !external.active;
 
     if (churnDetected && !this.config.observeOnly) {
       return {
@@ -402,7 +643,7 @@ export class ProgressMonitor {
             `pipeline.progress_runaway.churn_tool_threshold, ` +
             `no productive progress for > ${msLimit(this.config.noProgressWindowMs)}`,
         },
-        ...base,
+        ...base(),
       };
     }
 
@@ -412,7 +653,24 @@ export class ProgressMonitor {
         shouldWarn: false,
         reason: "progress_ok",
         msSinceLastProgress,
-        ...base,
+        ...base(),
+      };
+    }
+
+    // External progress deferral gets its own reason line rather than falling
+    // through to the #128 activity gate, so an operator reading the log can
+    // tell "waiting on a declared child" from "still making tool calls"
+    // without correlating timestamps (#1488).
+    if (external.active) {
+      return {
+        shouldKill: false,
+        shouldWarn: false,
+        reason:
+          `No productive progress for ${Math.round(msSinceLastProgress / 1000)}s, but external ` +
+          `progress observed: ${external.reason} — waiting on real work, not stalled ` +
+          `(external ceiling: ${this.config.externalProgressCeilingMs / 1000}s, Issue #1488)`,
+        msSinceLastProgress,
+        ...base(),
       };
     }
 
@@ -436,7 +694,7 @@ export class ProgressMonitor {
           `(activity window: ${this.activityWindowMs / 1000}s) — working, not stalled ` +
           `(Issue #128)`,
         msSinceLastProgress,
-        ...base,
+        ...base(),
       };
     }
 
@@ -465,7 +723,7 @@ export class ProgressMonitor {
         reason,
         msSinceLastProgress,
         ceiling: noProgressCeiling,
-        ...base,
+        ...base(),
       };
     }
 
@@ -479,7 +737,7 @@ export class ProgressMonitor {
       reason,
       msSinceLastProgress,
       ceiling: noProgressCeiling,
-      ...base,
+      ...base(),
     };
   }
 

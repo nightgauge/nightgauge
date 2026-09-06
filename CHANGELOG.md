@@ -26,6 +26,17 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- A `feature-validate` stage waiting on a long external process is no longer
+  killed for waiting. The runaway monitor now counts a declared child process
+  that is still alive, byte growth of a declared progress log, and a tool call
+  still in flight as activity that defers the kill and suppresses the churn
+  detector. A Playwright suite mid-run cost one downstream issue two kills at
+  ~$1.20 each, and another stage was killed at 810s with its own `git commit`
+  still running — the commit counted as progress the moment the call was
+  issued, then the window expired underneath it. Stages declare a child with
+  `NIGHTGAUGE_PROGRESS: {"pid": …, "log": …}`; deferral is capped at 20 minutes
+  so a wedged child cannot make a stage immortal, and a loop that declares
+  nothing is still killed at the window (#1488)
 - A stage the scheduler itself killed — an operator pressed Stop, or a cancel
   tore the run down — is recorded as `operator_stop` instead of a bare pipeline
   failure, and is exempt from the issue's lifetime failure cap and from the
