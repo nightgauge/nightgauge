@@ -11,7 +11,10 @@ type BudgetConfig struct {
 	PipelineCeilingTokens int            // Total pipeline token ceiling (0 = unlimited)
 	PerStageCeilings      map[string]int // Per-stage token ceilings (0 = unlimited)
 	GracePercent          int            // Soft warning threshold (% below ceiling)
-	Mode                  string         // "hard" (terminate) or "soft" (warn only)
+	// Mode is "hard" (terminate) or "soft" (warn only). Default: "hard"
+	// (ADR-021). The budget was the pipeline's only defence against a runaway
+	// stage, and in "soft" it wrote a log line and let the stage keep spending.
+	Mode string
 
 	// PerformanceMode names the active named mode (efficiency / elevated /
 	// maximum) for this run. Mirrors the TS-side performance-mode resolution
@@ -35,7 +38,7 @@ func DefaultBudgetConfig() BudgetConfig {
 		PipelineCeilingTokens: 0, // Unlimited by default
 		PerStageCeilings:      make(map[string]int),
 		GracePercent:          50,
-		Mode:                  "soft",
+		Mode:                  "hard",
 	}
 }
 

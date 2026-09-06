@@ -394,7 +394,7 @@ describe("NightgaugeYamlService", () => {
       expect(DEFAULT_CONFIG.pull_request?.merge_strategy).toBe("squash");
       expect(DEFAULT_CONFIG.branch?.base).toBe("main");
       expect(DEFAULT_CONFIG.pipeline?.auto_fix).toBe(true);
-      expect(DEFAULT_CONFIG.sanitization?.mode).toBe("warn");
+      expect(DEFAULT_CONFIG.sanitization?.mode).toBe("block"); // ADR-021
     });
 
     it("should be a valid configuration", () => {

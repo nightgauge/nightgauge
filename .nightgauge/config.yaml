@@ -13,6 +13,12 @@ project:
 
 pr:
   admin_merge: false
+  # Pinned explicitly (ADR-021), not left to the default: this file is what a
+  # clone of the public core runs, and forge-side auto-merge would land a PR
+  # the moment its last check reported — past the pr-merge stage that is
+  # supposed to decide.
+  auto_merge: false
+  auto_merge_epic: false
   merge_strategy: squash
   delete_branch: true
   auto_fix_ci: true
@@ -43,8 +49,10 @@ knowledge:
   telemetry:
     enabled: false
 
+# Audit emission follows platform.enabled (ADR-021) — there is no independent
+# `enabled` switch. These are the tuning keys; with no platform URL or key
+# configured the emitter is inert.
 audit:
-  enabled: true
   features_config: .nightgauge/audit/features.yaml
   repos:
     - nightgauge

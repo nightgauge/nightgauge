@@ -52,13 +52,12 @@ export interface KnowledgeConfig {
   auto_scaffold?: boolean;
   /** Enable wiki-link resolution in knowledge documents */
   wiki_links?: boolean;
-  /** Regenerate knowledge index on every commit (reserved for future git hook use) */
-  index_on_commit?: boolean;
   /**
    * Enforce decisions.md population during planning when the plan contains
    * tradeoff signals (2+ distinct keywords from configs/knowledge-tradeoff-keywords.yaml).
    * When true, `nightgauge knowledge validate` must pass before planning completes.
-   * Defaults to false for backward compatibility with existing projects.
+   * Defaults to TRUE (#1517); the gate only fires on a plan that carries
+   * tradeoff signals.
    */
   require_decisions?: boolean;
 }

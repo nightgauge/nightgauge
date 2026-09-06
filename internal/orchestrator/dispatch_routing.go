@@ -168,10 +168,10 @@ func useEvalRecommendations(workspaceRoot string) bool {
 		return false
 	}
 	cfg, err := config.Load(workspaceRoot)
-	if err != nil || cfg == nil || cfg.ModelRouting == nil {
-		return false
+	if err != nil || cfg == nil {
+		return config.DefaultUseEvalRecommendations
 	}
-	return cfg.ModelRouting.UseEvalRecommendations
+	return cfg.ModelRouting.ResolveUseEvalRecommendations()
 }
 
 // workspaceDefaultModel resolves `ui.core.default_model` with the same

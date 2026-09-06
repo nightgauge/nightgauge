@@ -601,8 +601,30 @@ export const ConcurrencyConfigSchema = z.object({
   repository_overrides: z.record(z.string(), z.number().int().min(1).max(16)).optional(),
 });
 
+/**
+ * Per-gate trivial-change relaxation.
+ *
+ * `relax_on_change_class` lists the AUTHORITATIVE change classes — decided by
+ * the deterministic classifier from the real post-dev diff, not from the issue
+ * type — that skip this gate's retry/sleep overhead. Default (ADR-021):
+ * `["docs_only", "config_only"]`. An explicit empty list turns relaxation off
+ * without removing the key.
+ */
+export const GateRelaxConfigSchema = z.object({
+  relax_on_change_class: z.array(z.string()).optional(),
+});
+export type GateRelaxConfig = z.infer<typeof GateRelaxConfigSchema>;
+
+/** The `pipeline.gates:` block. Mirrors Go's PipelineGatesConfig. */
+export const PipelineGatesConfigSchema = z.object({
+  pr_create: GateRelaxConfigSchema.optional(),
+  pr_merge: GateRelaxConfigSchema.optional(),
+});
+export type PipelineGatesConfig = z.infer<typeof PipelineGatesConfigSchema>;
+
 export const PipelineConfigSchema = z.object({
   ci_timeout: z.number().int().min(0).optional(),
+  gates: PipelineGatesConfigSchema.optional(),
   auto_fix: z.boolean().optional(),
   skip: SkipChecksConfigSchema.optional(),
   skip_checks: SkipChecksConfigSchema.optional(), // Alias for backward compat
@@ -2817,7 +2839,8 @@ export const RalphLoopConfigSchema = z.object({
   enabled: z.boolean().optional(),
   build: z.boolean().optional(),
   tests: z.boolean().optional(),
-  lint: z.boolean().optional(),
+  // `lint` was removed in ADR-021: the loop never ran a lint step, so the
+  // switch had nothing to switch. Deleted rather than shipped as a dead knob.
   limits: RalphLoopLimitsSchema.optional(),
   abort_patterns: z.array(z.string()).optional(),
 });
@@ -2916,8 +2939,6 @@ export const KnowledgeConfigSchema = z.object({
   auto_scaffold: z.boolean().optional(),
   /** Enable wiki-link resolution in knowledge documents */
   wiki_links: z.boolean().optional(),
-  /** Regenerate knowledge index on every commit (reserved for future git hook use) */
-  index_on_commit: z.boolean().optional(),
   /** Auto-regenerate .nightgauge/knowledge/index.md and log.md after a successful merge that touched knowledge files (default: true) */
   auto_index: z.boolean().optional(),
   /** Prune boilerplate-only knowledge directories after a successful merge (default: true). Read by the pr-merge stage; it was absent from this schema, so Zod stripped it from any config that set it (#1517). */
@@ -3269,8 +3290,16 @@ function normalizeHostname(url: string | undefined): string | null {
  * @see packages/nightgauge-sdk/src/audit/AuditEventClient.ts
  */
 export const AuditConfigSectionSchema = z.object({
-  /** Enable audit event emission (default: false — opt-in) */
-  enabled: z.boolean().default(false),
+  /**
+   * `enabled` was removed in ADR-021. Audit emission follows
+   * `platform.enabled`: it needs a platform URL and key to do anything, so an
+   * independent switch could only ever be redundant (platform on, audit off is
+   * the one combination it expressed, and nobody asked for it) or misleading
+   * (audit on, platform off — inert, and the config says otherwise).
+   *
+   * An explicit `audit.enabled: true` is still accepted and warned about; the
+   * tuning keys below are unchanged.
+   */
   /** Platform API base URL for audit event submission */
   platformUrl: z.string().url().optional(),
   /** API key for authenticating with the platform audit endpoint */
@@ -3718,6 +3747,16 @@ export const DEFAULT_CONFIG: NightgaugeConfig = {
   project: {
     number: undefined,
     auto_dates: true,
+    sync: {
+      // Off by default: bidirectional label↔field sync writes to the board on
+      // every change, and a workspace that has not asked for it should not
+      // have its board rewritten. Turning it on is a deliberate act (ADR-021
+      // records the default; it was previously written down nowhere).
+      enabled: false,
+      direction: "bidirectional",
+      conflict_resolution: "warn",
+      debounce_ms: 1000,
+    },
   },
   pull_request: {
     merge_strategy: "squash",
@@ -3728,7 +3767,10 @@ export const DEFAULT_CONFIG: NightgaugeConfig = {
     // said false. The stage merges once CI is green; forge-side auto-merge on
     // top of it removes the one gate the forge itself enforces.
     auto_merge: false,
-    auto_merge_epic: true,
+    // ADR-021: false. The epic PR is the one merge with the widest blast
+    // radius, and forge-side auto-merge lands it the moment the last check
+    // goes green — past the pr-merge stage that is supposed to decide.
+    auto_merge_epic: false,
     reviewers: [],
   },
   branch: {
@@ -3820,6 +3862,21 @@ export const DEFAULT_CONFIG: NightgaugeConfig = {
         severity_threshold: "high",
       },
     },
+    context_budgets: {
+      enabled: true,
+      // ADR-021: hard. "Avoid breaking existing pipelines" is a migration
+      // reason, not a footprint or per-run-cost reason, and it was the only
+      // one `soft` ever had. `grace_percent` is the calibration knob.
+      mode: "hard",
+      grace_percent: 50,
+    },
+    gates: {
+      // ADR-021: a free cost win with no footprint. The deterministic change
+      // classifier decides membership from the real post-dev diff; an empty
+      // list turns relaxation off without removing the key.
+      pr_create: { relax_on_change_class: ["docs_only", "config_only"] },
+      pr_merge: { relax_on_change_class: ["docs_only", "config_only"] },
+    },
     phase_timeouts: {
       enabled: true,
       stale_detection_ms: 300_000,
@@ -3844,7 +3901,14 @@ export const DEFAULT_CONFIG: NightgaugeConfig = {
     confidence_threshold: 0.7,
     effort_auto: true,
     cost_aware: true,
-    auto_tune: false,
+    // ADR-021: read-only advice, reproduces pre-advice behaviour exactly when
+    // no advice file exists. The conservative rollout has soaked.
+    use_eval_recommendations: true,
+    // ADR-021, gated on #1515 (merged): writes tuned values back into config,
+    // which is the legitimate repository-footprint reason for an opt-out. The
+    // confidence / min_samples / max_delta guardrails below are what keep it
+    // from thrashing.
+    auto_tune: true,
     auto_tune_confidence: "high",
     auto_tune_min_samples: 5,
     auto_tune_max_delta: 1,
@@ -3863,7 +3927,9 @@ export const DEFAULT_CONFIG: NightgaugeConfig = {
     mobile_mcp_tests: "strict",
   },
   sanitization: {
-    mode: "warn",
+    // ADR-021: block. A security control that logs and proceeds is not a
+    // control; `warn` is the documented opt-out for a repo still calibrating.
+    mode: "block",
   },
   human_in_the_loop: {
     // #1050: FALSE, matching the runtime resolvers and `nightgauge init`.
@@ -3888,7 +3954,6 @@ export const DEFAULT_CONFIG: NightgaugeConfig = {
     enabled: true,
     build: true,
     tests: true,
-    lint: false,
     limits: {
       max_iterations: 3,
       token_budget_per_iteration: 2000,
@@ -3913,7 +3978,9 @@ export const DEFAULT_CONFIG: NightgaugeConfig = {
         model: CODEX_DEFAULT_BASE_MODEL,
         reasoning_effort: "medium",
         cli_command: "codex",
-        resume_enabled: false,
+        // ADR-021: resuming a Codex session re-uses the context already paid
+        // for. Saves per-run cost, adds no repository footprint.
+        resume_enabled: true,
       },
       copilot: {
         // No model default — undefined means the CLI picks its own default
@@ -4013,7 +4080,9 @@ export const DEFAULT_CONFIG: NightgaugeConfig = {
   },
   complexity_model: {
     cross_project: {
-      enabled: false,
+      // ADR-021: read-mostly, and exists for the multi-repo workspace that is
+      // the normal shape here. Damping already discounts imported patterns.
+      enabled: true,
       confidence_damping: 0.5,
       min_export_confidence: 0.3,
     },
@@ -4022,10 +4091,10 @@ export const DEFAULT_CONFIG: NightgaugeConfig = {
     enabled: true,
     auto_scaffold: true,
     wiki_links: true,
-    index_on_commit: false,
     auto_index: true,
     auto_prune_on_merge: true,
-    aggregate: false,
+    // ADR-021: read-mostly, and inert in a single-repo workspace.
+    aggregate: true,
     require_decisions: true,
     workspace_scoped: true,
   },

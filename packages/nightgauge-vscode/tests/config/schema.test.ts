@@ -482,7 +482,7 @@ describe("NightgaugeConfigSchema", () => {
 
     it("applies sanitization defaults", () => {
       const config = mergeWithDefaults({ sanitization: {} });
-      expect(config.sanitization).toEqual({ mode: "warn" });
+      expect(config.sanitization).toEqual({ mode: "block" }); // ADR-021
     });
 
     it("applies human_in_the_loop defaults", () => {

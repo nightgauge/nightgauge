@@ -1102,7 +1102,7 @@ function getPullRequestSectionHtml(
         "pull_request.auto_merge_epic",
         "Auto Merge Epic PR",
         "Auto-merge epic→main PR when all sub-issues complete",
-        pr.auto_merge_epic ?? true,
+        pr.auto_merge_epic ?? false,
         disabled,
         g("pull_request.auto_merge_epic"),
         showBadges,
@@ -2259,16 +2259,6 @@ function getRalphLoopSectionHtml(
           rl.tests ?? true,
           disabled,
           g("ralph_loop.tests"),
-          showBadges,
-          options
-        )}
-        ${getToggleHtml(
-          "ralph_loop.lint",
-          "Lint Auto-Fix",
-          "Automatically fix lint errors during validation",
-          rl.lint ?? false,
-          disabled,
-          g("ralph_loop.lint"),
           showBadges,
           options
         )}

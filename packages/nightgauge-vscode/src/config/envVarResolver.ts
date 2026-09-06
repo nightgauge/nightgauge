@@ -416,7 +416,6 @@ const KNOWN_CONFIG_PATHS: string[] = [
   "ralph_loop.enabled",
   "ralph_loop.build",
   "ralph_loop.tests",
-  "ralph_loop.lint",
   "ralph_loop.limits.max_iterations",
   "ralph_loop.limits.token_budget_per_iteration",
   "ralph_loop.limits.total_token_budget",

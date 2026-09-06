@@ -1434,7 +1434,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > default config render 1`] = `
                id="ui.core.codex.resume_enabled"
                class="toggle-input"
                data-path="ui.core.codex.resume_enabled"
-
+               checked
                disabled>
         <label for="ui.core.codex.resume_enabled" class="toggle-switch"></label>
       </div>
@@ -2063,7 +2063,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > default config render 1`] = `
                id="pull_request.auto_merge_epic"
                class="toggle-input"
                data-path="pull_request.auto_merge_epic"
-               checked
+
                disabled>
         <label for="pull_request.auto_merge_epic" class="toggle-switch"></label>
       </div>
@@ -2547,7 +2547,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > default config render 1`] = `
                id="model_routing.auto_tune"
                class="toggle-input"
                data-path="model_routing.auto_tune"
-
+               checked
                disabled>
         <label for="model_routing.auto_tune" class="toggle-switch"></label>
       </div>
@@ -2873,7 +2873,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > default config render 1`] = `
                 class="select-input"
                 data-path="sanitization.mode"
                 disabled>
-          <option value="warn" selected>Warn — log matches but allow</option><option value="block" >Block — deny matching commands</option><option value="disabled" >Disabled — skip pattern checks</option>
+          <option value="warn" >Warn — log matches but allow</option><option value="block" selected>Block — deny matching commands</option><option value="disabled" >Disabled — skip pattern checks</option>
         </select>
       </div>
     </div>
@@ -3080,24 +3080,6 @@ exports[`getSettingsHtml snapshots (Issue #1242) > default config render 1`] = `
                checked
                disabled>
         <label for="ralph_loop.tests" class="toggle-switch"></label>
-      </div>
-    </div>
-
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="ralph_loop.lint" class="setting-label">Lint Auto-Fix </label>
-        <p class="setting-description">Automatically fix lint errors during validation</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="checkbox"
-               id="ralph_loop.lint"
-               class="toggle-input"
-               data-path="ralph_loop.lint"
-
-               disabled>
-        <label for="ralph_loop.lint" class="toggle-switch"></label>
       </div>
     </div>
 
@@ -5615,7 +5597,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > global tier view 1`] = `
                id="ui.core.codex.resume_enabled"
                class="toggle-input"
                data-path="ui.core.codex.resume_enabled"
-
+               checked
                >
         <label for="ui.core.codex.resume_enabled" class="toggle-switch"></label>
       </div>
@@ -6246,7 +6228,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > global tier view 1`] = `
                id="pull_request.auto_merge_epic"
                class="toggle-input"
                data-path="pull_request.auto_merge_epic"
-               checked
+
                >
         <label for="pull_request.auto_merge_epic" class="toggle-switch"></label>
       </div>
@@ -6730,7 +6712,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > global tier view 1`] = `
                id="model_routing.auto_tune"
                class="toggle-input"
                data-path="model_routing.auto_tune"
-
+               checked
                >
         <label for="model_routing.auto_tune" class="toggle-switch"></label>
       </div>
@@ -7056,7 +7038,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > global tier view 1`] = `
                 class="select-input"
                 data-path="sanitization.mode"
                 >
-          <option value="warn" selected>Warn — log matches but allow</option><option value="block" >Block — deny matching commands</option><option value="disabled" >Disabled — skip pattern checks</option>
+          <option value="warn" >Warn — log matches but allow</option><option value="block" selected>Block — deny matching commands</option><option value="disabled" >Disabled — skip pattern checks</option>
         </select>
       </div>
     </div>
@@ -7261,24 +7243,6 @@ exports[`getSettingsHtml snapshots (Issue #1242) > global tier view 1`] = `
                checked
                >
         <label for="ralph_loop.tests" class="toggle-switch"></label>
-      </div>
-    </div>
-
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="ralph_loop.lint" class="setting-label">Lint Auto-Fix </label>
-        <p class="setting-description">Automatically fix lint errors during validation</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="checkbox"
-               id="ralph_loop.lint"
-               class="toggle-input"
-               data-path="ralph_loop.lint"
-
-               >
-        <label for="ralph_loop.lint" class="toggle-switch"></label>
       </div>
     </div>
 
@@ -9796,7 +9760,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > local tier view 1`] = `
                id="ui.core.codex.resume_enabled"
                class="toggle-input"
                data-path="ui.core.codex.resume_enabled"
-
+               checked
                >
         <label for="ui.core.codex.resume_enabled" class="toggle-switch"></label>
       </div>
@@ -10427,7 +10391,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > local tier view 1`] = `
                id="pull_request.auto_merge_epic"
                class="toggle-input"
                data-path="pull_request.auto_merge_epic"
-               checked
+
                >
         <label for="pull_request.auto_merge_epic" class="toggle-switch"></label>
       </div>
@@ -10911,7 +10875,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > local tier view 1`] = `
                id="model_routing.auto_tune"
                class="toggle-input"
                data-path="model_routing.auto_tune"
-
+               checked
                >
         <label for="model_routing.auto_tune" class="toggle-switch"></label>
       </div>
@@ -11237,7 +11201,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > local tier view 1`] = `
                 class="select-input"
                 data-path="sanitization.mode"
                 >
-          <option value="warn" selected>Warn — log matches but allow</option><option value="block" >Block — deny matching commands</option><option value="disabled" >Disabled — skip pattern checks</option>
+          <option value="warn" >Warn — log matches but allow</option><option value="block" selected>Block — deny matching commands</option><option value="disabled" >Disabled — skip pattern checks</option>
         </select>
       </div>
     </div>
@@ -11442,24 +11406,6 @@ exports[`getSettingsHtml snapshots (Issue #1242) > local tier view 1`] = `
                checked
                >
         <label for="ralph_loop.tests" class="toggle-switch"></label>
-      </div>
-    </div>
-
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="ralph_loop.lint" class="setting-label">Lint Auto-Fix </label>
-        <p class="setting-description">Automatically fix lint errors during validation</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="checkbox"
-               id="ralph_loop.lint"
-               class="toggle-input"
-               data-path="ralph_loop.lint"
-
-               >
-        <label for="ralph_loop.lint" class="toggle-switch"></label>
       </div>
     </div>
 
@@ -13995,7 +13941,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > locked section — pipeline r
                id="ui.core.codex.resume_enabled"
                class="toggle-input"
                data-path="ui.core.codex.resume_enabled"
-
+               checked
                disabled>
         <label for="ui.core.codex.resume_enabled" class="toggle-switch"></label>
       </div>
@@ -14624,7 +14570,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > locked section — pipeline r
                id="pull_request.auto_merge_epic"
                class="toggle-input"
                data-path="pull_request.auto_merge_epic"
-               checked
+
                disabled>
         <label for="pull_request.auto_merge_epic" class="toggle-switch"></label>
       </div>
@@ -15108,7 +15054,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > locked section — pipeline r
                id="model_routing.auto_tune"
                class="toggle-input"
                data-path="model_routing.auto_tune"
-
+               checked
                disabled>
         <label for="model_routing.auto_tune" class="toggle-switch"></label>
       </div>
@@ -15434,7 +15380,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > locked section — pipeline r
                 class="select-input"
                 data-path="sanitization.mode"
                 disabled>
-          <option value="warn" selected>Warn — log matches but allow</option><option value="block" >Block — deny matching commands</option><option value="disabled" >Disabled — skip pattern checks</option>
+          <option value="warn" >Warn — log matches but allow</option><option value="block" selected>Block — deny matching commands</option><option value="disabled" >Disabled — skip pattern checks</option>
         </select>
       </div>
     </div>
@@ -15641,24 +15587,6 @@ exports[`getSettingsHtml snapshots (Issue #1242) > locked section — pipeline r
                checked
                disabled>
         <label for="ralph_loop.tests" class="toggle-switch"></label>
-      </div>
-    </div>
-
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="ralph_loop.lint" class="setting-label">Lint Auto-Fix </label>
-        <p class="setting-description">Automatically fix lint errors during validation</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="checkbox"
-               id="ralph_loop.lint"
-               class="toggle-input"
-               data-path="ralph_loop.lint"
-
-               disabled>
-        <label for="ralph_loop.lint" class="toggle-switch"></label>
       </div>
     </div>
 
@@ -18176,7 +18104,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > project tier view 1`] = `
                id="ui.core.codex.resume_enabled"
                class="toggle-input"
                data-path="ui.core.codex.resume_enabled"
-
+               checked
                >
         <label for="ui.core.codex.resume_enabled" class="toggle-switch"></label>
       </div>
@@ -18807,7 +18735,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > project tier view 1`] = `
                id="pull_request.auto_merge_epic"
                class="toggle-input"
                data-path="pull_request.auto_merge_epic"
-               checked
+
                >
         <label for="pull_request.auto_merge_epic" class="toggle-switch"></label>
       </div>
@@ -19291,7 +19219,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > project tier view 1`] = `
                id="model_routing.auto_tune"
                class="toggle-input"
                data-path="model_routing.auto_tune"
-
+               checked
                >
         <label for="model_routing.auto_tune" class="toggle-switch"></label>
       </div>
@@ -19617,7 +19545,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > project tier view 1`] = `
                 class="select-input"
                 data-path="sanitization.mode"
                 >
-          <option value="warn" selected>Warn — log matches but allow</option><option value="block" >Block — deny matching commands</option><option value="disabled" >Disabled — skip pattern checks</option>
+          <option value="warn" >Warn — log matches but allow</option><option value="block" selected>Block — deny matching commands</option><option value="disabled" >Disabled — skip pattern checks</option>
         </select>
       </div>
     </div>
@@ -19822,24 +19750,6 @@ exports[`getSettingsHtml snapshots (Issue #1242) > project tier view 1`] = `
                checked
                >
         <label for="ralph_loop.tests" class="toggle-switch"></label>
-      </div>
-    </div>
-
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="ralph_loop.lint" class="setting-label">Lint Auto-Fix </label>
-        <p class="setting-description">Automatically fix lint errors during validation</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="checkbox"
-               id="ralph_loop.lint"
-               class="toggle-input"
-               data-path="ralph_loop.lint"
-
-               >
-        <label for="ralph_loop.lint" class="toggle-switch"></label>
       </div>
     </div>
 

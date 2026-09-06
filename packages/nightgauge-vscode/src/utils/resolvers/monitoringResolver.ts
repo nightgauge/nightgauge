@@ -3136,6 +3136,20 @@ export function getMcpToolsConfig(workspaceRoot?: string, stage?: string): strin
  *
  * @see Issue #1582 - Pipeline execution audit trail emission
  */
+/**
+ * Resolve the audit emitter's configuration.
+ *
+ * `audit.enabled` was removed as an independent switch in ADR-021: audit
+ * emission FOLLOWS `platform.enabled`. The switch could only ever express one
+ * combination nobody asked for (platform on, audit off) or one that lies
+ * (audit on, platform off — inert, because there is no URL and no key to send
+ * to). An explicit `audit.enabled: true` in an existing config is still read,
+ * warned about once, and otherwise ignored.
+ *
+ * `NIGHTGAUGE_AUDIT_ENABLED` still overrides in both directions: it is the
+ * escape hatch for a machine that wants the platform on and audit off for one
+ * run, and removing it would take away the only way to say that.
+ */
 export function getAuditConfig(workspaceRoot?: string): AuditConfig {
   const defaults: AuditConfig = {
     enabled: false,
@@ -3150,9 +3164,14 @@ export function getAuditConfig(workspaceRoot?: string): AuditConfig {
     timeoutMs: 5_000,
   };
 
-  // Check environment variable overrides first
-  if (process.env.NIGHTGAUGE_AUDIT_ENABLED !== undefined) {
-    defaults.enabled = process.env.NIGHTGAUGE_AUDIT_ENABLED === "true";
+  // NIGHTGAUGE_AUDIT_ENABLED still overrides in both directions and outranks
+  // the platform switch; it is the only way to say "platform on, audit off".
+  const envEnabled =
+    process.env.NIGHTGAUGE_AUDIT_ENABLED === undefined
+      ? undefined
+      : process.env.NIGHTGAUGE_AUDIT_ENABLED === "true";
+  if (envEnabled !== undefined) {
+    defaults.enabled = envEnabled;
   }
   if (process.env.NIGHTGAUGE_AUDIT_PLATFORM_URL) {
     defaults.platformUrl = process.env.NIGHTGAUGE_AUDIT_PLATFORM_URL;
@@ -3179,25 +3198,43 @@ export function getAuditConfig(workspaceRoot?: string): AuditConfig {
     const configContent = readEffectiveConfigTextSync(pathResult);
     const lines = configContent.split("\n");
     let inAudit = false;
+    let inPlatform = false;
+    let legacyEnabledTrue = false;
+    let platformEnabled = false;
 
     for (const line of lines) {
       const trimmed = line.trim();
 
-      // Detect audit: top-level section
+      // Detect audit: / platform: top-level sections
       if (trimmed === "audit:") {
         inAudit = true;
+        inPlatform = false;
+        continue;
+      }
+      if (trimmed === "platform:") {
+        inPlatform = true;
+        inAudit = false;
         continue;
       }
 
-      // Exit audit section on new top-level key
+      // Exit either section on a new top-level key
       if (
-        inAudit &&
+        (inAudit || inPlatform) &&
         trimmed &&
         !trimmed.startsWith("#") &&
         /^[a-z_]+:/.test(trimmed) &&
         !line.startsWith(" ")
       ) {
         inAudit = false;
+        inPlatform = false;
+        continue;
+      }
+
+      if (inPlatform) {
+        const pm = trimmed.match(/^enabled:\s*(.+)$/);
+        if (pm) {
+          platformEnabled = pm[1].trim() === "true";
+        }
         continue;
       }
 
@@ -3209,7 +3246,9 @@ export function getAuditConfig(workspaceRoot?: string): AuditConfig {
 
       switch (key) {
         case "enabled":
-          defaults.enabled = value === "true";
+          if (value.trim() === "true") {
+            legacyEnabledTrue = true;
+          }
           break;
         case "platform_url":
         case "platformUrl":
@@ -3240,6 +3279,19 @@ export function getAuditConfig(workspaceRoot?: string): AuditConfig {
           defaults.offlineQueuePath = value.trim();
           break;
       }
+    }
+    // Audit follows the platform switch unless the env var answered.
+    if (envEnabled === undefined) {
+      defaults.enabled = platformEnabled;
+    }
+
+    if (legacyEnabledTrue) {
+      console.warn(
+        "[Nightgauge] audit.enabled is no longer an independent switch (ADR-021). " +
+          "Audit emission follows platform.enabled — set platform.enabled: true (with a " +
+          "platform URL and key) to emit, or remove audit.enabled. The audit.* tuning " +
+          "keys are unchanged."
+      );
     }
   } catch {
     // Non-critical — return defaults on any parse error

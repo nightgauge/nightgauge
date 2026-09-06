@@ -901,7 +901,9 @@ export interface ContextBudgetConfig {
 export function getContextBudgetConfig(workspaceRoot?: string): ContextBudgetConfig {
   const validModes: BudgetMode[] = ["hard", "soft", "threshold"];
   let enabled = true;
-  let mode: BudgetMode = "soft";
+  // ADR-021: hard. The budget was the only defence against a runaway stage,
+  // and in "soft" it wrote a log line and let the stage keep spending.
+  let mode: BudgetMode = "hard";
   let gracePercent = 50;
   const stageOverrides: Record<string, number | Partial<Record<SizeLabel, number>>> = {};
   let hasStageOverrides = false;
@@ -1541,7 +1543,10 @@ export interface EpicMergeConfig {
 }
 
 export const DEFAULT_EPIC_MERGE_CONFIG: EpicMergeConfig = {
-  autoMergeEpic: true,
+  // ADR-021: false. The pr-merge stage merges the epic when its checks are
+  // green; forge-side auto-merge on top of that lands it the moment the last
+  // check reports, past the stage that is supposed to decide.
+  autoMergeEpic: false,
   mergeStrategy: "merge",
   deleteBranch: true,
 };

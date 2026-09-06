@@ -209,8 +209,10 @@ describe("DEFAULT_CONFIG codex defaults", () => {
     expect(DEFAULT_CONFIG.ui?.core?.codex?.cli_command).toBe("codex");
   });
 
-  it("defaults session resume to disabled", () => {
-    expect(DEFAULT_CONFIG.ui?.core?.codex?.resume_enabled).toBe(false);
+  // ADR-021: resume re-uses context already paid for — lower per-run cost, no
+  // repository footprint, so it ships on.
+  it("defaults session resume to enabled", () => {
+    expect(DEFAULT_CONFIG.ui?.core?.codex?.resume_enabled).toBe(true);
   });
 
   it("default codex config passes CodexConfigSchema validation", () => {

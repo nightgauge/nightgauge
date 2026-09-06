@@ -861,6 +861,35 @@ export NIGHTGAUGE_PROJECT_SPRINT_FIELD_NAME="Iteration"
 - `/nightgauge-issue-pickup` - Assigns current iteration when picking up an
   issue
 
+#### project.sync
+
+Bidirectional synchronisation between GitHub labels and Project board fields.
+
+| Option                | Type    | Default         | Description                                                                                                                                               |
+| --------------------- | ------- | --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `enabled`             | boolean | `false`         | Run the sync. **Off by default**: it writes to the board on every change, and a workspace that has not asked for that should not have its board rewritten |
+| `direction`           | enum    | `bidirectional` | `bidirectional`, `labels-to-fields`, or `fields-to-labels`                                                                                                |
+| `conflict_resolution` | enum    | `warn`          | When both sides differ: `labels`, `fields`, or `warn` (log, change nothing)                                                                               |
+| `debounce_ms`         | integer | `1000`          | Debounce window that prevents a sync loop                                                                                                                 |
+
+**Example:**
+
+```yaml
+project:
+  number: 10
+  sync:
+    enabled: true
+    direction: bidirectional
+    conflict_resolution: warn
+    debounce_ms: 1000
+```
+
+The default was previously written down nowhere — not in the schema, not in
+this reference — so "what happens if I do not configure it?" had no answer.
+ADR-021 records it as `false`.
+
+---
+
 #### project.custom_fields
 
 Custom field configuration for syncing additional GitHub Project fields beyond
@@ -1107,7 +1136,7 @@ Pull request creation and merge settings.
 | `delete_branch`         | boolean  | `true`   | Delete feature branch after merge                               |
 | `reviewers`             | string[] | `[]`     | Auto-request these reviewers                                    |
 | `auto_merge`            | boolean  | `false`  | Enable GitHub auto-merge                                        |
-| `auto_merge_epic`       | boolean  | `true`   | Auto-merge epic→main PR when all sub-issues complete            |
+| `auto_merge_epic`       | boolean  | `false`  | Enable GitHub auto-merge on the epic→main PR (see `auto_merge`) |
 | `auto_fix_ci`           | boolean  | `true`   | Auto-fix CI failures before merge                               |
 | `auto_fix_max_attempts` | number   | `2`      | Maximum auto-fix retry attempts (lowered from 3 in #3108)       |
 | `ci_check_timeout`      | number   | `600`    | Timeout for CI checks in seconds                                |
@@ -1155,7 +1184,7 @@ pr:
     - alice
     - bob
   auto_merge: false
-  auto_merge_epic: true # auto-merge epic→main PR when all sub-issues complete
+  auto_merge_epic: false # the pr-merge stage merges the epic; see auto_merge
   # CI check gate settings (Issue #426)
   auto_fix_ci: true
   auto_fix_max_attempts: 2
@@ -2399,7 +2428,15 @@ and [docs/STAGE_GATES.md § Evidence of execution](STAGE_GATES.md#evidence-of-ex
 
 ---
 
-### pipeline.scope_drift_gate (Issue #3040)
+### pipeline.scope_drift_gate
+
+| Option             | Type    | Default                | Description                                                                                                                                                        |
+| ------------------ | ------- | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `enabled`          | boolean | `true`                 | Run the gate at all                                                                                                                                                |
+| `enforcement_mode` | string  | `strict`               | `strict` blocks the PR, `warn` logs only. Strict by default (ADR-021) — a gate that only logs is a gate nobody reads; `bypass_label` is the per-issue escape hatch |
+| `bypass_label`     | string  | `scope:cross-cutting`  | Issue label that skips the gate entirely                                                                                                                           |
+| `allowlist_docs`   | list    | `docs/**`, `*.md`, …   | Paths a `type:docs` issue may touch                                                                                                                                |
+| `allowlist_chore`  | list    | _(falls back to docs)_ | Paths a `type:chore` issue may touch                                                                                                                               |
 
 Verifies that files modified for a `type:docs` or `type:chore` issue fall
 within an allowlist. Out-of-scope changes indicate scope drift — typically
@@ -2411,7 +2448,7 @@ scoped changes. Runs in `pr-create` Phase 2.6 and consumes
 pipeline:
   scope_drift_gate:
     enabled: true # default true; set false to bypass entirely
-    enforcement_mode: warn # "warn" (log only) | "strict" (block PR)
+    enforcement_mode: strict # "strict" (block PR, default) | "warn" (log only)
     bypass_label: scope:cross-cutting
     allowlist_docs:
       - docs/**
@@ -2585,13 +2622,15 @@ when both are present, all tool lists are merged.
 #### pipeline.context_budgets
 
 Per-stage input token budget configuration. Controls maximum input tokens
-injected per pipeline stage. Default mode is `soft` (warn only) to avoid
-breaking existing pipelines.
+injected per pipeline stage. The default mode is `hard` (ADR-021): the budget
+is the pipeline's only defence against a runaway stage, and in `soft` it wrote
+a log line and let the stage keep spending. `grace_percent` is the calibration
+knob; `soft` remains the documented opt-out.
 
 | Option          | Type    | Default  | Description                                         |
 | --------------- | ------- | -------- | --------------------------------------------------- |
 | `enabled`       | boolean | `true`   | Master toggle for context budget enforcement        |
-| `mode`          | string  | `'soft'` | Enforcement mode: `'soft'`, `'hard'`, `'threshold'` |
+| `mode`          | string  | `'hard'` | Enforcement mode: `'hard'`, `'soft'`, `'threshold'` |
 | `grace_percent` | number  | `50`     | Grace buffer percentage before enforcement (0-500)  |
 | `stage_limits`  | object  | -        | Per-stage input token limits (flat or per-size)     |
 
@@ -3464,17 +3503,18 @@ Model routing configuration controls how pipeline stages select AI models. This
 is a cross-cutting concern placed at the top level (alongside `pipeline`,
 `routing`) because it affects how `pipeline.stage_models` are interpreted.
 
-| Option                     | Type   | Default                                      | Description                                                                                                                                                   |
-| -------------------------- | ------ | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `mode`                     | enum   | `"automatic"`                                | Model selection strategy (see below)                                                                                                                          |
-| `complexity_thresholds`    | object | -                                            | Score boundaries for auto model tier selection                                                                                                                |
-| `minimum_model`            | object | -                                            | Per-stage model floor (auto cannot go below)                                                                                                                  |
-| `max_model`                | enum   | -                                            | Cap on the strongest tier automatic routing may reach, below the performance mode's ceiling (see below). Never raises; does not cap an explicit stage model.  |
-| `confidence_threshold`     | number | `0.7`                                        | Min confidence for auto-selection (0.0-1.0)                                                                                                                   |
-| `stage_efforts`            | object | planning: medium, dev: medium, validate: low | Per-stage Claude effort (`low\|medium\|high\|xhigh\|max`)                                                                                                     |
-| `effort_auto`              | bool   | `true`                                       | Auto-derive effort from stage + complexity (automatic/hybrid)                                                                                                 |
-| `default_effort`           | enum   | -                                            | Default effort for all stages when the active model supports it (`low\|medium\|high\|xhigh\|max`). Overridden by `stage_efforts`. Silently ignored for Haiku. |
-| `use_eval_recommendations` | bool   | `false`                                      | Opt routing into the eval advisor's materialized advice file (see below)                                                                                      |
+| Option                     | Type   | Default                                      | Description                                                                                                                                                                                      |
+| -------------------------- | ------ | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `mode`                     | enum   | `"automatic"`                                | Model selection strategy (see below)                                                                                                                                                             |
+| `complexity_thresholds`    | object | -                                            | Score boundaries for auto model tier selection                                                                                                                                                   |
+| `minimum_model`            | object | -                                            | Per-stage model floor (auto cannot go below)                                                                                                                                                     |
+| `max_model`                | enum   | -                                            | Cap on the strongest tier automatic routing may reach, below the performance mode's ceiling (see below). Never raises; does not cap an explicit stage model.                                     |
+| `confidence_threshold`     | number | `0.7`                                        | Min confidence for auto-selection (0.0-1.0)                                                                                                                                                      |
+| `stage_efforts`            | object | planning: medium, dev: medium, validate: low | Per-stage Claude effort (`low\|medium\|high\|xhigh\|max`)                                                                                                                                        |
+| `effort_auto`              | bool   | `true`                                       | Auto-derive effort from stage + complexity (automatic/hybrid)                                                                                                                                    |
+| `default_effort`           | enum   | -                                            | Default effort for all stages when the active model supports it (`low\|medium\|high\|xhigh\|max`). Overridden by `stage_efforts`. Silently ignored for Haiku.                                    |
+| `use_eval_recommendations` | bool   | `true`                                       | Consult the eval advisor's materialized advice file (see below). Read-only, and identical to pre-advice routing when no advice exists                                                            |
+| `auto_tune`                | bool   | `true`                                       | Write tuned routing values back into config. **Repository footprint** — it edits `.nightgauge/config.yaml`; guarded by `auto_tune_confidence`, `auto_tune_min_samples` and `auto_tune_max_delta` |
 
 **Eval routing advice (`use_eval_recommendations`, #581):**
 
@@ -4398,7 +4438,7 @@ pattern. The pattern set is built into the binary and is not configurable.
 
 | Option | Type   | Default | Description                                                       |
 | ------ | ------ | ------- | ----------------------------------------------------------------- |
-| `mode` | string | `warn`  | Firewall mode: `warn` (log + allow), `block` (reject), `disabled` |
+| `mode` | string | `block` | Firewall mode: `block` (reject), `warn` (log + allow), `disabled` |
 
 There is no directory-scoped bypass and no per-repo pattern list. Every
 command is evaluated against the same built-in pattern set; `mode` alone
@@ -4408,12 +4448,16 @@ decides warn vs block.
 
 ```yaml
 sanitization:
-  mode: warn # warn (default: log + allow), block, disabled
+  mode: block # block (default: reject), warn (log + allow), disabled
 ```
 
-> **Default:** when `sanitization.mode` is unset the effective mode is `warn` —
-> matches are appended to `.nightgauge/logs/sanitization.log` and the command is
-> allowed. Enforcement is opt-in via `mode: block`.
+> **Default:** when `sanitization.mode` is unset the effective mode is `block`
+> (ADR-021) — a match is refused and appended to
+> `.nightgauge/logs/sanitization.log`. A security control that logs and proceeds
+> is not a control. `warn` is the documented opt-out for a repository still
+> calibrating its rules against a real workload, and `disabled` for one that has
+> decided the gate is not for it; neither is what an unconfigured workspace
+> gets.
 >
 > **Scope:** Mode only affects Gate 6 (sanitization pattern matching). Security
 > gates (push-to-main, force-push, destructive-git, secret-read, secret-write)
@@ -4612,7 +4656,7 @@ new projects to benefit from existing calibration data.
 
 | Option                  | Type    | Default | Range   | Description                                      |
 | ----------------------- | ------- | ------- | ------- | ------------------------------------------------ |
-| `enabled`               | boolean | `false` | -       | Enable cross-project pattern import/export       |
+| `enabled`               | boolean | `true`  | -       | Enable cross-project pattern import/export       |
 | `confidence_damping`    | number  | `0.5`   | 0.0–1.0 | Confidence damping factor for imported patterns  |
 | `min_export_confidence` | number  | `0.3`   | 0.0–1.0 | Minimum confidence to include patterns in export |
 
@@ -4622,8 +4666,10 @@ new projects to benefit from existing calibration data.
   account for cross-project applicability differences
 - Only patterns with confidence at or above `min_export_confidence` are included
   when exporting from a source repository
-- Requires explicit opt-in (`enabled: true`) because patterns are
-  project-specific by nature
+- On by default (ADR-021): the import is read-mostly and exists for the
+  multi-repo workspace, and `confidence_damping` already discounts a pattern
+  learned elsewhere. Set `enabled: false` in a repository whose shape is
+  genuinely unlike its siblings
 
 **See also:**
 
@@ -4937,12 +4983,12 @@ When `ui.core.adapter: codex` is selected, Nightgauge uses your local
 The VS Code settings panel reads available Codex models from your local
 `~/.codex/models_cache.json` catalog when present.
 
-| Option                 | Type    | Default     | Description                                                 |
-| ---------------------- | ------- | ----------- | ----------------------------------------------------------- |
-| `codex.model`          | string  | `"gpt-5.4"` | Default Codex model for `sonnet`-tier stages and fallbacks  |
-| `codex.cli_command`    | string  | `"codex"`   | Codex executable name or absolute path                      |
-| `codex.cli_args`       | string  | _(none)_    | Optional raw CLI args override; blank uses adapter defaults |
-| `codex.resume_enabled` | boolean | `false`     | Enable Codex session resume for resumable stages            |
+| Option                 | Type    | Default     | Description                                                                                           |
+| ---------------------- | ------- | ----------- | ----------------------------------------------------------------------------------------------------- |
+| `codex.model`          | string  | `"gpt-5.4"` | Default Codex model for `sonnet`-tier stages and fallbacks                                            |
+| `codex.cli_command`    | string  | `"codex"`   | Codex executable name or absolute path                                                                |
+| `codex.cli_args`       | string  | _(none)_    | Optional raw CLI args override; blank uses adapter defaults                                           |
+| `codex.resume_enabled` | boolean | `true`      | Resume a Codex session on a resumable stage — re-uses context already paid for, lowering per-run cost |
 
 #### Codex Adapter Environment Variables
 
@@ -6399,7 +6445,6 @@ knowledge:
   enabled: true # Enable knowledge directory scaffolding
   auto_scaffold: true # Scaffold automatically during issue-pickup
   wiki_links: true # Enable wiki-link resolution in knowledge docs
-  index_on_commit: false # Regenerate index on commit (reserved for future use)
   auto_prune_on_merge: true # Remove boilerplate-only knowledge dirs after PR merge
   recall:
     bm25_k1: 1.5 # Term frequency saturation
@@ -6418,13 +6463,12 @@ knowledge:
 | `enabled`                          | boolean | `true`              | Master switch. **Absent means on** (ADR-020). When `false`, all knowledge operations are disabled           |
 | `auto_scaffold`                    | boolean | `true`              | Automatically create knowledge directory during issue-pickup (requires `enabled: true`)                     |
 | `wiki_links`                       | boolean | `true`              | Enable `[[wiki-link]]` resolution in knowledge documents                                                    |
-| `index_on_commit`                  | boolean | `false`             | Regenerate the knowledge index on every commit via a git hook (reserved for future git hook use)            |
 | `auto_index`                       | boolean | `true`              | Regenerate `index.md` and `log.md` after a merge that touched knowledge files (read by the pr-merge stage)  |
 | `auto_prune_on_merge`              | boolean | `true`              | Remove knowledge directories that contain only boilerplate content after a PR is merged                     |
 | `telemetry.enabled`                | boolean | _follows `enabled`_ | Emit `knowledge-events.jsonl`. Unset follows `knowledge.enabled` (ADR-005); always off when the KB is off   |
 | `require_decisions`                | boolean | `true`              | Gate planning completion when the plan carries tradeoff signals and `decisions.md` has no ADR block         |
 | `workspace_scoped`                 | boolean | `true`              | Also scaffold the workspace-level KB tree (`product/`, `cross-repo/`, `architecture/`); gated by `enabled`  |
-| `aggregate`                        | boolean | `false`             | In a multi-repo workspace, aggregate knowledge across every repository                                      |
+| `aggregate`                        | boolean | `true`              | In a multi-repo workspace, aggregate knowledge across every repository. Read-mostly, inert in a single repo |
 | `recall.dev_threshold`             | float   | `1.5`               | Minimum recall score for constraints shown to feature-dev. Higher than planning's default to reduce noise.  |
 | `recall.dev_limit`                 | integer | `5`                 | Max recalled architectural constraints shown to feature-dev per invocation.                                 |
 | `recall.bm25_k1`                   | float   | `1.5`               | BM25 term-frequency saturation.                                                                             |
@@ -6458,9 +6502,6 @@ scoring path; there is no plain-BM25 mode.
 - `auto_scaffold: true` causes issue-pickup to create a
   `.nightgauge/knowledge/{epics|features}/{N}-{slug}/` directory with
   `PRD.md` and `decisions.md` templates.
-- `index_on_commit` is currently a no-op — the flag is accepted and stored but
-  the git hook is not yet implemented. It is reserved to avoid a breaking change
-  when the hook is added.
 - Config files that do not include a `knowledge:` section continue to work
   unchanged — all four fields default to the values shown above.
 
@@ -6471,7 +6512,6 @@ scoring path; there is no plain-BM25 mode.
 | `NIGHTGAUGE_KNOWLEDGE_ENABLED`             | `true`  | Override `knowledge.enabled`             |
 | `NIGHTGAUGE_KNOWLEDGE_AUTO_SCAFFOLD`       | `true`  | Override `knowledge.auto_scaffold`       |
 | `NIGHTGAUGE_KNOWLEDGE_WIKI_LINKS`          | `true`  | Override `knowledge.wiki_links`          |
-| `NIGHTGAUGE_KNOWLEDGE_INDEX_ON_COMMIT`     | `false` | Override `knowledge.index_on_commit`     |
 | `NIGHTGAUGE_KNOWLEDGE_AUTO_PRUNE_ON_MERGE` | `true`  | Override `knowledge.auto_prune_on_merge` |
 
 ---

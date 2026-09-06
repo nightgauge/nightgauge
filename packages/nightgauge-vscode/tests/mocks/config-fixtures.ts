@@ -825,7 +825,6 @@ export const DEFAULT_RALPH_LOOP_CONFIG: import("../../src/config/schema").RalphL
   enabled: true,
   build: true,
   tests: true,
-  lint: false,
   limits: DEFAULT_RALPH_LOOP_LIMITS,
   abort_patterns: [],
 };
@@ -980,7 +979,6 @@ export const BEHAVIOR_CONFIG_ENV_MAPPINGS = {
   "ralph_loop.enabled": "NIGHTGAUGE_RALPH_LOOP_ENABLED",
   "ralph_loop.build": "NIGHTGAUGE_RALPH_LOOP_BUILD",
   "ralph_loop.tests": "NIGHTGAUGE_RALPH_LOOP_TESTS",
-  "ralph_loop.lint": "NIGHTGAUGE_RALPH_LOOP_LINT",
   "ralph_loop.limits.max_iterations": "NIGHTGAUGE_RALPH_LOOP_MAX_ITERATIONS",
   "ralph_loop.limits.token_budget_per_iteration": "NIGHTGAUGE_RALPH_LOOP_TOKEN_BUDGET_ITER",
   "ralph_loop.limits.total_token_budget": "NIGHTGAUGE_RALPH_LOOP_TOTAL_TOKENS",
