@@ -6807,8 +6807,9 @@ autonomous:
   budget_ceiling: 500000 # Global token budget, 0 = unlimited (default: 0)
   enabled_repos: # Optional allowlist — scan only these repos (default: all)
     - acme-platform
-  exclude_labels: # Human-only labels never dispatched (default: ["owner-action"])
+  exclude_labels: # Labels never dispatched (default: ["owner-action", "blocked"])
     - owner-action
+    - blocked
   pickup_backlog: false # Dispatch Backlog items after all Ready items done (default: false)
   auto_actionable: false # Move auto-refined issues directly to Ready (default: false)
   trusted_author_associations: # GitHub associations trusted for autonomous processing
@@ -6867,9 +6868,9 @@ Scoping to a subset cuts that cost proportionally.
 
 ### exclude_labels
 
-| Key              | Type         | Default        |
-| ---------------- | ------------ | -------------- |
-| `exclude_labels` | list[string] | `owner-action` |
+| Key              | Type         | Default                   |
+| ---------------- | ------------ | ------------------------- |
+| `exclude_labels` | list[string] | `owner-action`, `blocked` |
 
 Issues carrying one of these labels are **never dispatched** — by the
 autonomous candidate loop, by epic-expansion enqueue (`EnqueueEpic`), or by the
@@ -6880,13 +6881,26 @@ through issue-pickup → planning → feature-dev → validate — which correct
 produces zero code changes — and then fails at pr-create with nothing to
 commit (Issue #317).
 
+The default set has two entries:
+
+- **`owner-action`** — work only an operator can do, as described above.
+- **`blocked`** — the issue waits on another issue or on a decision. This is
+  the label's own published description ("Waits on another issue or a
+  decision; the scheduler skips it"), and until Issue #1492 nothing
+  implemented it: the default set held `owner-action` alone, so an operator
+  applied `blocked`, believed the issue was held, and the next scan dispatched
+  it. A label that promises scheduler behaviour no code performs is worse than
+  no label, because it is believed. Both entries are provisioned by
+  `nightgauge label ensure`.
+
 - Matching is case-insensitive against each issue's labels.
 - This is a single resolved option, not an additive allowlist: setting
-  `exclude_labels` **replaces** the default `["owner-action"]` entirely. To
-  keep the default while adding your own convention, list both explicitly
-  (e.g. `["owner-action", "needs-human"]`).
-- Empty/unset resolves to the default `["owner-action"]` — there is no
-  separate on/off knob.
+  `exclude_labels` **replaces** the default `["owner-action", "blocked"]`
+  entirely. To keep the defaults while adding your own convention, list them
+  all explicitly (e.g. `["owner-action", "blocked", "needs-human"]`) — a config
+  that names only its own label silently gives up both defaults.
+- Empty/unset resolves to the default `["owner-action", "blocked"]` — there is
+  no separate on/off knob.
 - The excluded issue stays on the project board for a human to act on; it is
   not closed or relabeled.
 

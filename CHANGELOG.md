@@ -37,6 +37,24 @@ changelog, and the release workflow refuses a tag that does not.
   `NIGHTGAUGE_PROGRESS: {"pid": …, "log": …}`; deferral is capped at 20 minutes
   so a wedged child cannot make a stage immortal, and a loop that declares
   nothing is still killed at the window (#1488)
+- The `blocked` label now actually stops autonomous dispatch: it joins
+  `owner-action` in the default `autonomous.exclude_labels` set and in the
+  required-label registry that `nightgauge label ensure` provisions. The
+  label's own description says "the scheduler skips it" and nothing
+  implemented that, so an operator applied it, believed the issue was held,
+  and the next scan dispatched it anyway (#1492)
+- A dependency declared in an issue body without a repo token — "Depends on:
+  #1187", "Blocked by #1187", a list under `## Dependencies` — is now a real
+  scheduler edge, and lands in `dependencies.blockedBy` at pickup. Only the
+  repo-qualified spelling ("Depends on: platform #535") was parsed before, so
+  the scheduler was stricter about a dependency in another repository than
+  about one in its own: an issue whose prerequisite was still open dispatched,
+  and feature-planning discovered it mid-plan by reading prose the scheduler
+  had ignored. A `#N` in narrative prose is still not a dependency (#1492)
+- feature-planning has a worked example for the case above — an open
+  prerequisite found during planning — so the stage emits a blocking signal
+  with the `blocked-on:` evidence marker instead of researching the convention
+  in another repository until its turn ends (#1492)
 - A stage the scheduler itself killed — an operator pressed Stop, or a cancel
   tore the run down — is recorded as `operator_stop` instead of a bare pipeline
   failure, and is exempt from the issue's lifetime failure cap and from the

@@ -930,7 +930,7 @@ type SchedulerConfig struct {
 	OnFailureStatus string
 	// ExcludeLabels lists human-only labels (autonomous.exclude_labels) that
 	// EnqueueEpic must never enqueue as sub-issues. Empty falls back to
-	// defaultExcludeLabels (["owner-action"]). Issue #317.
+	// defaultExcludeLabels (["owner-action", "blocked"]). Issue #317, #1492.
 	ExcludeLabels []string
 	// TrustedAuthorAssociations overrides the default trusted set
 	// (OWNER/MEMBER/COLLABORATOR) used by PickNext's author-trust

@@ -572,6 +572,74 @@ blocker. Only "no agent can produce this artifact" is this signal.
 
 @see Issue #1241
 
+### Open Prerequisite Dependency Signal
+
+The third case that cannot produce a normal plan: the issue is ordinary
+pipeline work, and it cannot start yet because **something it depends on is
+still open**. You discover this mid-planning, by reading the issue body —
+"Depends on: #1187", "Blocked by #1187", a "## Dependencies" section — or by
+finding that the API, table or module the plan would build on does not exist
+yet.
+
+**Check `dependencies.blockedBy` in `issue-{N}.json` first.** When it is
+populated, the prerequisite was already known and the deterministic gates
+should have held the issue before you were dispatched at all; say so in the
+rationale, because it is a pipeline bug worth a `pipeline-gap` issue. When it
+is **empty and the body still names a prerequisite**, do not conclude the
+dependency is imaginary — the declaration may simply never have been turned
+into a GitHub `blockedBy` edge. Trust the body.
+
+Emit a blocking feedback signal, **no plan file**, and stop:
+
+```json
+{
+  "feedback": [
+    {
+      "signal_type": "PLAN_REVISION_NEEDED",
+      "emitted_by_stage": "feature-planning",
+      "backtrack_target_stage": null,
+      "severity": "blocking",
+      "rationale": "The issue body declares 'Depends on: #1187'. #1187 is OPEN and its work is unimplemented — the endpoint this issue's acceptance criteria consume does not exist yet — so no plan written now can be implemented. dependencies.blockedBy in issue-1188.json was empty: the declaration was never captured as a GitHub blockedBy edge.",
+      "evidence": [
+        "blocked-on: #1187 (OPEN) — declared in the issue body: \"Depends on: #1187\"",
+        "issue-1188.json: dependencies.blockedBy == [] — the declaration is prose only",
+        "AC 2 consumes POST /v1/sessions, which #1187 introduces; it is absent from the current tree"
+      ]
+    }
+  ]
+}
+```
+
+Four fields carry the whole shape, and none of them is optional:
+
+| Field                    | Value                                                                    | Why                                                                                                                                                                                                 |
+| ------------------------ | ------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `signal_type`            | `PLAN_REVISION_NEEDED`                                                   | There is no dedicated type, and inventing one gets the signal dropped by the schema. The **marker** below is what classifies it, not the type.                                                      |
+| `evidence[0]` prefix     | `blocked-on:` (or `blocked-by:` / `external-blocker:` / `out-of-scope:`) | The post-validate gate reads the structured marker and **never** searches the free-text `rationale`. A marker overrides the type: a `PLAN_REVISION_NEEDED` carrying one is blocked, not rewindable. |
+| `backtrack_target_stage` | `null`                                                                   | No lap of this pipeline makes the prerequisite exist. Naming a stage here asks for a rewind that will reach the same verdict at full price.                                                         |
+| plan file                | **not written**                                                          | A plan is a promise a later stage can implement something. Writing one sends feature-dev to rediscover the blocker and be convicted of `dev_produced_no_changes` for having been right.             |
+
+Then move the board row to **Backlog**, not In progress — the issue is held,
+not in flight.
+
+**This is a hold, not a verdict, and it does not create a `blockedBy` edge.**
+An edge is durable and human-visible, and a wrong one converts a zero-cost
+defer into a permanent silent stall, so the operator adds it by hand
+(`nightgauge issue add-blocked-by <blocked> <blocker>`) after reading your
+comment. See
+[docs/FEEDBACK_LOOPS.md § Not every blocking signal is a rewind request](../../../../docs/FEEDBACK_LOOPS.md#not-every-blocking-signal-is-a-rewind-request)
+for what the run leaves behind (a blocked-finding file, an issue comment, an
+Action Center card).
+
+**Which signal is which.** Use this one when _other work_ would unblock the
+issue. Use `NOT_PIPELINE_ACTIONABLE` when nothing unblocks it but a human doing
+a thing no agent can do. Use a plain `PLAN_REVISION_NEEDED` with a real
+`backtrack_target_stage` when a _different plan_ would work today.
+
+@see Issue #1492 — this case was hit in production, took a subagent and a
+sibling repository's docs to resolve, and ended the stage's turn before it
+could emit anything.
+
 ### Phase 7: Self-Assessment Epilogue
 
 ```bash

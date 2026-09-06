@@ -399,9 +399,9 @@ type AutonomousConfig struct {
 	// satisfy — dispatching it burns tokens through
 	// issue-pickup → planning → feature-dev → validate and then fails at
 	// pr-create with nothing to commit. Matched case-insensitively against
-	// each candidate's labels. Empty/unset resolves to the single default
-	// ["owner-action"] via ResolvedExcludeLabels — there is no separate
-	// on/off knob, only this one list.
+	// each candidate's labels. Empty/unset resolves to the default
+	// ["owner-action", "blocked"] via ResolvedExcludeLabels — there is no
+	// separate on/off knob, only this one list.
 	ExcludeLabels []string `yaml:"exclude_labels,omitempty" json:"excludeLabels,omitempty"`
 }
 
@@ -550,10 +550,23 @@ func (a *AutonomousConfig) ResolvedEnabledRepos(defaultOwner string) []string {
 	return out
 }
 
-// DefaultExcludeLabels is the single default human-only label the autonomous
-// scheduler and epic-enqueue paths refuse to dispatch when
-// autonomous.exclude_labels is unset (#317).
-var DefaultExcludeLabels = []string{"owner-action"}
+// DefaultExcludeLabels are the human-only labels the autonomous scheduler and
+// epic-enqueue paths refuse to dispatch when autonomous.exclude_labels is
+// unset (#317, #1492).
+//
+//   - owner-action — work only an operator can do (rotate a credential, change
+//     DNS). No pipeline retry can clear it.
+//   - blocked — the issue waits on another issue or on a decision. Its label
+//     description says in so many words that "the scheduler skips it", and
+//     until #1492 nothing implemented that: the label was applied, the operator
+//     believed the issue was held, and the next tick dispatched it anyway.
+//     A label that promises scheduler behaviour no code performs is worse than
+//     no label at all, because it is *believed*.
+//
+// Every entry here must also be in github.RequiredLabels — a label a repo does
+// not have cannot be applied, which makes the exclusion inert. That pairing is
+// asserted by TestRequiredLabels_CoverDefaultExcludeLabels in this package.
+var DefaultExcludeLabels = []string{"owner-action", "blocked"}
 
 // ResolvedExcludeLabels returns the effective set of human-only labels that
 // must never be dispatched, trimmed and with empty entries dropped. Falls

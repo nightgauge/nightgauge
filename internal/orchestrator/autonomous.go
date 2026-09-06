@@ -117,7 +117,7 @@ type AutonomousConfig struct {
 	StuckEpicReAlertAfter time.Duration
 
 	// ExcludeLabels lists human-only labels (autonomous.exclude_labels,
-	// default ["owner-action"]) that the candidate loop refuses to dispatch —
+	// default ["owner-action", "blocked"]) that the candidate loop refuses to dispatch —
 	// see the skip check beside the type:epic exclusion below. Resolved by
 	// main.go via config.AutonomousConfig.ResolvedExcludeLabels(); empty here
 	// falls back to defaultExcludeLabels so callers that construct this
@@ -129,8 +129,13 @@ type AutonomousConfig struct {
 // defaultExcludeLabels mirrors config.DefaultExcludeLabels without importing
 // the config package here (autonomous.go stays config-shape-agnostic; main.go
 // is the only place that reads config.yaml and bridges it into this runtime
-// struct). Both must be changed together.
-var defaultExcludeLabels = []string{"owner-action"}
+// struct). Both must be changed together — TestDefaultExcludeLabels_MirrorsConfig
+// asserts the pair, so the copy cannot drift silently.
+//
+// "blocked" joined "owner-action" in #1492: the label's own description
+// promises the scheduler skips it, and for as long as this slice held only
+// owner-action nothing did.
+var defaultExcludeLabels = []string{"owner-action", "blocked"}
 
 // resolvedExcludeLabels returns cfg.ExcludeLabels, falling back to
 // defaultExcludeLabels when unset (#317).

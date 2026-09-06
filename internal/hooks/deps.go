@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/nightgauge/nightgauge/internal/depgraph"
 	"github.com/nightgauge/nightgauge/pkg/types"
 )
 
@@ -32,9 +33,34 @@ type OpenDependency struct {
 	Title  string `json:"title"`
 	State  string `json:"state"`
 	Repo   string `json:"repo"`
+	// Source records HOW the dependency was declared: "blockedBy" for
+	// GitHub's native relation, "body" for one declared in the issue body
+	// ("Depends on: #1187"). An operator who sees a deferral needs to know
+	// which one to edit to clear it (#1492).
+	Source string `json:"source,omitempty"`
+	// SourceLine is the body line a "body" dependency was parsed from.
+	SourceLine string `json:"source_line,omitempty"`
 }
 
-// EvaluateIssueDeps checks GitHub's blockedBy relationships for the given issue.
+// EvaluateIssueDeps reports the OPEN dependencies of an issue, from both
+// declaration mechanisms the pipeline honours:
+//
+//  1. GitHub's native `blockedBy` relation.
+//  2. Dependencies declared in the issue body — "Depends on: #1187",
+//     "Blocked by platform #535" — the same prose the scheduler's dependency
+//     graph parses (internal/depgraph).
+//
+// Reading only (1) was the pickup half of #1492: the scheduler built no edge
+// for a body-declared same-repo dependency and this gate saw nothing either,
+// so `dependencies.blockedBy` in issue-<N>.json was written empty and
+// feature-planning was the FIRST stage to notice the prerequisite — by reading
+// the body itself, mid-plan, with no signal shape prepared for it. Both halves
+// now read the same declarations.
+//
+// A body-declared reference whose issue cannot be fetched is skipped rather
+// than treated as blocking: unlike a native relation, prose can name a
+// repository that does not exist, and a permanent un-clearable hold on a typo
+// is worse than the deferral it would buy.
 func EvaluateIssueDeps(ctx context.Context, fetcher IssueFetcher, owner, repo string, number int) (IssueDepsResult, error) {
 	result := IssueDepsResult{IssueNumber: number}
 
@@ -43,15 +69,55 @@ func EvaluateIssueDeps(ctx context.Context, fetcher IssueFetcher, owner, repo st
 		return result, fmt.Errorf("failed to fetch issue #%d: %w", number, err)
 	}
 
+	selfRepo := owner + "/" + repo
+	seen := make(map[string]bool)
+
 	for _, blocker := range issue.BlockedBy {
+		blockerRepo := blocker.Repo
+		if blockerRepo == "" {
+			blockerRepo = selfRepo
+		}
+		seen[strings.ToLower(blockerRepo)+"#"+strconv.Itoa(blocker.Number)] = true
 		if strings.EqualFold(blocker.State, "OPEN") {
 			result.OpenDependencies = append(result.OpenDependencies, OpenDependency{
 				Number: blocker.Number,
 				Title:  blocker.Title,
 				State:  blocker.State,
 				Repo:   blocker.Repo,
+				Source: "blockedBy",
 			})
 		}
+	}
+
+	for _, ref := range depgraph.ParseDependencyRefs(issue.Body, selfRepo, nil) {
+		if ref.Number == number && strings.EqualFold(ref.Repo, selfRepo) {
+			continue // self-reference
+		}
+		key := strings.ToLower(ref.Repo) + "#" + strconv.Itoa(ref.Number)
+		if seen[key] {
+			continue // already covered by the native relation
+		}
+		seen[key] = true
+
+		refOwner, refName, ok := strings.Cut(ref.Repo, "/")
+		if !ok || refOwner == "" || refName == "" {
+			continue
+		}
+		dep, derr := fetcher.GetIssue(ctx, refOwner, refName, ref.Number)
+		if derr != nil || dep == nil {
+			continue // unresolvable prose reference — see the doc comment
+		}
+		if !strings.EqualFold(dep.State, "OPEN") {
+			continue
+		}
+		result.OpenDependencies = append(result.OpenDependencies, OpenDependency{
+			Number:     ref.Number,
+			Title:      dep.Title,
+			State:      dep.State,
+			Repo:       ref.Repo,
+			Source:     "body",
+			SourceLine: ref.SourceLine,
+		})
 	}
 
 	result.OpenCount = len(result.OpenDependencies)
