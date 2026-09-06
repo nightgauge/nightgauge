@@ -74,22 +74,11 @@ const SECRET_KEY_PATHS = new Set<string>(["platform.license_key"]);
  * `~/.nightgauge/config.yaml` (machine tier) on save and stripped from
  * the project-tier YAML write. Keys here must never appear in a committed file.
  *
- * @see Issue #3337 — Phase 4: Promote Machine Tier to First-Class
- * @see Issue #3997 — license key persisted to the machine tier (not committed)
+ * Defined in `./tierRouting` so `NightgaugeYamlService` can consult it without
+ * importing this panel; re-exported here for existing importers.
  */
-export const MACHINE_TIER_KEY_PATHS = new Set<string>([
-  "ui.core.default_model",
-  "ui.core.fallback_model",
-  "ui.core.auth_provider",
-  // Discord and Mattermost live under the TOP-LEVEL `notifications:` key, not
-  // under `ui.notifications` — UINotificationsConfigSchema holds only the
-  // VSCode-native sounds/banners and has no discord or mattermost member. The
-  // old paths could never match, so these webhook env names were never
-  // stripped as machine-tier keys. Found by #499.
-  "notifications.discord.webhook_env",
-  "notifications.mattermost.webhook_env",
-  "platform.license_key",
-]);
+export { MACHINE_TIER_KEY_PATHS } from "./tierRouting";
+import { MACHINE_TIER_KEY_PATHS } from "./tierRouting";
 
 /**
  * SettingsPanel - WebView panel for Nightgauge configuration
@@ -1110,20 +1099,21 @@ export class SettingsPanel implements vscode.Disposable {
       return;
     }
 
-    // Remove from higher tiers based on target
+    // Remove from higher tiers based on target. `touchesProject` records
+    // whether the committed team file actually has to change — resetting to
+    // the project tier only clears the local override, and writing
+    // `.nightgauge/config.yaml` anyway dirtied the checkout for a change it
+    // did not contain (#1516).
+    let touchesProject = false;
     switch (toTier) {
       case "default":
-        // Remove from both project and local
-        this.removeConfigValue(this.projectConfig, path);
-        this.removeConfigValue(this.localConfig, path);
-        break;
       case "global":
-        // Remove from project and local (keep global)
-        this.removeConfigValue(this.projectConfig, path);
+        // Remove from both project and local (for "global", keep global)
+        touchesProject = this.removeConfigValue(this.projectConfig, path);
         this.removeConfigValue(this.localConfig, path);
         break;
       case "project":
-        // Remove from local only
+        // Remove from local only — the team file is not a target here
         this.removeConfigValue(this.localConfig, path);
         break;
       default:
@@ -1131,10 +1121,11 @@ export class SettingsPanel implements vscode.Disposable {
     }
 
     // Save affected configs
-    await Promise.all([
-      this.yamlService.write(this.projectConfig, "project"),
-      this.yamlService.writeLocal(this.localConfig),
-    ]);
+    const writes: Promise<unknown>[] = [this.yamlService.writeLocal(this.localConfig)];
+    if (touchesProject) {
+      writes.push(this.yamlService.write(this.projectConfig, "project"));
+    }
+    await Promise.all(writes);
 
     await this.loadAllTiers();
     this.updatePanel();
@@ -1721,20 +1712,24 @@ export class SettingsPanel implements vscode.Disposable {
   /**
    * Remove a value at a config path
    */
-  private removeConfigValue(config: NightgaugeConfig, path: string): void {
+  private removeConfigValue(config: NightgaugeConfig, path: string): boolean {
     const parts = path.split(".");
     let current: Record<string, unknown> = config as Record<string, unknown>;
 
     for (let i = 0; i < parts.length - 1; i++) {
       const part = parts[i];
       if (typeof current[part] !== "object" || current[part] === null) {
-        return; // Path doesn't exist
+        return false; // Path doesn't exist
       }
       current = current[part] as Record<string, unknown>;
     }
 
     const lastKey = parts[parts.length - 1];
+    if (!(lastKey in current)) {
+      return false;
+    }
     delete current[lastKey];
+    return true;
   }
 
   /**

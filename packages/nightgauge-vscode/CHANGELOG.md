@@ -11,6 +11,15 @@ and this project adheres to
 
 ### Changed
 
+- Settings changes made from the UI no longer dirty the committed
+  `.nightgauge/config.yaml`. A concurrency change, an applied dashboard
+  recommendation, a reset to the project tier and the startup `max_concurrent`
+  migration now write `.nightgauge/config.local.yaml` (or
+  `~/.nightgauge/config.yaml` for a personal key). Saving the Settings panel's
+  **Project** tab still writes the team file — that is the one place that
+  names it — and now preserves its comments and blank lines instead of
+  reflowing the whole document (#1516)
+
 - The knowledge base is on by default, so the Knowledge view and the New Entry /
   New ADR / Scaffold commands work in a workspace that never set
   `nightgauge.knowledge.enabled`. They previously reported "Knowledge base is

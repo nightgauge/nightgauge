@@ -3,12 +3,15 @@
  *
  * Unit tests for RecommendationApplier service, focusing on:
  * - Applying config patches via NightgaugeYamlService
+ * - Routing the write to the runtime tier, never the committed team config
  * - Error handling when writes fail
  * - 30-second revert window management
  * - Applied categories tracking
  * - Dispose cleanup
  *
  * @see Issue #787 - Actionable Dashboard Recommendations
+ * @see Issue #1516 - applying a recommendation is a runtime write, so it goes
+ *      to the local (or machine) tier, not to `.nightgauge/config.yaml`
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
@@ -24,13 +27,19 @@ vi.mock("vscode", () => ({
 }));
 
 // Mock NightgaugeYamlService
-const mockRead = vi.fn();
+const mockReadMerged = vi.fn();
+const mockWriteRuntimeValue = vi.fn();
 const mockWrite = vi.fn();
 const mockDispose = vi.fn();
 
 vi.mock("../../src/views/settings/NightgaugeYamlService", () => ({
   NightgaugeYamlService: vi.fn(function () {
-    return { read: mockRead, write: mockWrite, dispose: mockDispose };
+    return {
+      readMerged: mockReadMerged,
+      writeRuntimeValue: mockWriteRuntimeValue,
+      write: mockWrite,
+      dispose: mockDispose,
+    };
   }),
 }));
 
@@ -41,10 +50,10 @@ describe("RecommendationApplier", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    mockRead.mockResolvedValue({
+    mockReadMerged.mockResolvedValue({
       config: { pipeline: { max_turns: 10 } },
     });
-    mockWrite.mockResolvedValue({ success: true });
+    mockWriteRuntimeValue.mockResolvedValue({ success: true });
     applier = new RecommendationApplier("/workspace");
   });
 
@@ -53,32 +62,34 @@ describe("RecommendationApplier", () => {
     vi.useRealTimers();
   });
 
-  it("apply() writes config with merged patch", async () => {
+  it("apply() writes the single key through the runtime-tier router", async () => {
     // Arrange
-    mockRead.mockResolvedValue({
+    mockReadMerged.mockResolvedValue({
       config: { pipeline: { max_turns: 10 } },
     });
-    mockWrite.mockResolvedValue({ success: true });
+    mockWriteRuntimeValue.mockResolvedValue({ success: true });
 
     // Act
     const result = await applier.apply("oversized-context", "pipeline.max_turns", 5);
 
     // Assert
-    expect(mockWrite).toHaveBeenCalledWith(
-      expect.objectContaining({
-        pipeline: expect.objectContaining({ max_turns: 5 }),
-      }),
-      "project"
-    );
+    expect(mockWriteRuntimeValue).toHaveBeenCalledWith("pipeline.max_turns", 5);
     expect(result).toEqual({ success: true, previousValue: 10 });
+  });
+
+  // #1516: the committed team config is not a target for this flow at all.
+  it("apply() never writes the project tier", async () => {
+    await applier.apply("oversized-context", "pipeline.max_turns", 5);
+
+    expect(mockWrite).not.toHaveBeenCalled();
   });
 
   it("apply() returns error when write fails", async () => {
     // Arrange
-    mockRead.mockResolvedValue({
+    mockReadMerged.mockResolvedValue({
       config: { pipeline: { max_turns: 10 } },
     });
-    mockWrite.mockResolvedValue({
+    mockWriteRuntimeValue.mockResolvedValue({
       success: false,
       error: "Permission denied",
     });
@@ -99,45 +110,41 @@ describe("RecommendationApplier", () => {
       const result = await applier.apply("unsafe", path, true);
 
       expect(result).toEqual({ success: false, error: "Unsafe configuration path" });
-      expect(mockWrite).not.toHaveBeenCalled();
+      expect(mockWriteRuntimeValue).not.toHaveBeenCalled();
     }
   );
 
   it("revert() restores previous value within 30s window", async () => {
     // Arrange
-    mockRead.mockResolvedValue({
+    mockReadMerged.mockResolvedValue({
       config: { pipeline: { max_turns: 10 } },
     });
-    mockWrite.mockResolvedValue({ success: true });
+    mockWriteRuntimeValue.mockResolvedValue({ success: true });
     await applier.apply("oversized-context", "pipeline.max_turns", 5);
 
-    // Reset to track revert write call specifically
-    mockRead.mockResolvedValue({
+    // Reset to track the revert write call specifically
+    mockReadMerged.mockResolvedValue({
       config: { pipeline: { max_turns: 5 } },
     });
-    mockWrite.mockClear();
-    mockWrite.mockResolvedValue({ success: true });
+    mockWriteRuntimeValue.mockClear();
+    mockWriteRuntimeValue.mockResolvedValue({ success: true });
 
     // Act
     const result = await applier.revert("oversized-context");
 
     // Assert
     expect(result).toEqual({ success: true });
-    expect(mockWrite).toHaveBeenCalledWith(
-      expect.objectContaining({
-        pipeline: expect.objectContaining({ max_turns: 10 }),
-      }),
-      "project"
-    );
+    expect(mockWriteRuntimeValue).toHaveBeenCalledWith("pipeline.max_turns", 10);
+    expect(mockWrite).not.toHaveBeenCalled();
   });
 
   it("revert() fails after window expires", async () => {
     // Arrange
     vi.useFakeTimers();
-    mockRead.mockResolvedValue({
+    mockReadMerged.mockResolvedValue({
       config: { pipeline: { max_turns: 10 } },
     });
-    mockWrite.mockResolvedValue({ success: true });
+    mockWriteRuntimeValue.mockResolvedValue({ success: true });
     await applier.apply("oversized-context", "pipeline.max_turns", 5);
 
     // Act
@@ -153,10 +160,10 @@ describe("RecommendationApplier", () => {
 
   it("getAppliedCategories() returns applied categories", async () => {
     // Arrange
-    mockRead.mockResolvedValue({
+    mockReadMerged.mockResolvedValue({
       config: { pipeline: { max_turns: 10 } },
     });
-    mockWrite.mockResolvedValue({ success: true });
+    mockWriteRuntimeValue.mockResolvedValue({ success: true });
 
     // Act
     await applier.apply("oversized-context", "pipeline.max_turns", 5);
@@ -172,10 +179,10 @@ describe("RecommendationApplier", () => {
   it("canRevert() returns true during window, false after", async () => {
     // Arrange
     vi.useFakeTimers();
-    mockRead.mockResolvedValue({
+    mockReadMerged.mockResolvedValue({
       config: { pipeline: { max_turns: 10 } },
     });
-    mockWrite.mockResolvedValue({ success: true });
+    mockWriteRuntimeValue.mockResolvedValue({ success: true });
     await applier.apply("oversized-context", "pipeline.max_turns", 5);
 
     // Act & Assert - within window
@@ -189,10 +196,10 @@ describe("RecommendationApplier", () => {
   it("dispose() clears all revert timers", async () => {
     // Arrange
     vi.useFakeTimers();
-    mockRead.mockResolvedValue({
+    mockReadMerged.mockResolvedValue({
       config: { pipeline: { max_turns: 10 } },
     });
-    mockWrite.mockResolvedValue({ success: true });
+    mockWriteRuntimeValue.mockResolvedValue({ success: true });
     await applier.apply("oversized-context", "pipeline.max_turns", 5);
     await applier.apply("slow-validation", "pipeline.timeout", 60);
 

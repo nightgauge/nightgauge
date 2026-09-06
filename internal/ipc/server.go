@@ -5771,75 +5771,27 @@ func (s *Server) sendError(id int, code int, message string) {
 	})
 }
 
-// persistMaxConcurrent writes the unified max_concurrent value to
-// pipeline.max_concurrent in config.yaml. The previous implementation did a
-// naive first-match on any `max_concurrent:` line, which silently updated
-// `autonomous.max_concurrent` when it appeared in the file before the
-// pipeline block — leaving pipeline at its old value. This routine now
-// targets the `pipeline:` block specifically and creates it (or the key) if
-// missing.
+// persistMaxConcurrent persists the unified max_concurrent value to
+// pipeline.max_concurrent.
 //
-// See Issue #3195.
+// The write targets the LOCAL tier (.nightgauge/config.local.yaml), never the
+// committed .nightgauge/config.yaml. Moving a concurrency slider in the
+// extension is a runtime preference, not a team policy change: writing it to
+// the team file left every checkout permanently dirty and risked committing a
+// per-developer value into the repository (#1516). `config.LoadMerged` reads
+// the local tier above the team tier, so the new value still wins.
+//
+// The previous implementation did line surgery on the team YAML to avoid
+// clobbering comments. That is no longer necessary — `WriteRuntimeValue`
+// round-trips through yaml.Node and touches only the addressed leaf.
+//
+// See Issue #3195 (targeting the pipeline block) and Issue #1516 (tier).
 func (s *Server) persistMaxConcurrent(n int) error {
-	yamlPath := filepath.Join(s.workspaceRootPath(), ".nightgauge", "config.yaml")
-	data, err := os.ReadFile(yamlPath)
+	_, err := config.WriteRuntimeValue(s.workspaceRootPath(), "pipeline.max_concurrent", n)
 	if err != nil {
-		return fmt.Errorf("read config.yaml: %w", err)
+		return fmt.Errorf("persist pipeline.max_concurrent: %w", err)
 	}
-
-	lines := strings.Split(string(data), "\n")
-
-	pipelineBlockStart := -1
-	pipelineBlockEnd := -1
-	for i, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if pipelineBlockStart < 0 {
-			if trimmed == "pipeline:" {
-				pipelineBlockStart = i
-			}
-			continue
-		}
-		// Block ends at the next non-empty, non-comment, top-level line.
-		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
-			continue
-		}
-		if !strings.HasPrefix(line, " ") && !strings.HasPrefix(line, "\t") {
-			pipelineBlockEnd = i
-			break
-		}
-	}
-
-	// Replace existing pipeline.max_concurrent if present inside the block.
-	if pipelineBlockStart >= 0 {
-		end := pipelineBlockEnd
-		if end < 0 {
-			end = len(lines)
-		}
-		for i := pipelineBlockStart + 1; i < end; i++ {
-			line := lines[i]
-			trimmed := strings.TrimSpace(line)
-			// Only top-level keys of the pipeline block — children of nested
-			// keys (e.g. context_schema_repair.max_attempts) are at deeper
-			// indentation and must be skipped.
-			indent := line[:len(line)-len(strings.TrimLeft(line, " \t"))]
-			if strings.HasPrefix(trimmed, "max_concurrent:") && len(indent) <= 2 {
-				lines[i] = fmt.Sprintf("%smax_concurrent: %d", indent, n)
-				return os.WriteFile(yamlPath, []byte(strings.Join(lines, "\n")), 0o644)
-			}
-		}
-		// Block exists but no max_concurrent yet — insert at top of block.
-		insertion := fmt.Sprintf("  max_concurrent: %d", n)
-		out := make([]string, 0, len(lines)+1)
-		out = append(out, lines[:pipelineBlockStart+1]...)
-		out = append(out, insertion)
-		out = append(out, lines[pipelineBlockStart+1:]...)
-		return os.WriteFile(yamlPath, []byte(strings.Join(out, "\n")), 0o644)
-	}
-
-	// No pipeline block — append one.
-	appended := strings.TrimRight(string(data), "\n")
-	appended += fmt.Sprintf("\npipeline:\n  max_concurrent: %d\n", n)
-	return os.WriteFile(yamlPath, []byte(appended), 0o644)
+	return nil
 }
 
 func (s *Server) sendJSON(v interface{}) {

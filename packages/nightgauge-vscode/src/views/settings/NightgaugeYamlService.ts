@@ -15,7 +15,9 @@
 
 import * as path from "path";
 import * as vscode from "vscode";
-import { parse as parseYaml, stringify as stringifyYaml, YAMLParseError } from "yaml";
+import { parse as parseYaml, YAMLParseError } from "yaml";
+import { serializePreservingComments } from "./yamlDocumentWriter";
+import { runtimeWriteTierFor } from "./tierRouting";
 import type { NightgaugeConfig } from "./types";
 import {
   resolveConfigPath,
@@ -388,11 +390,7 @@ export class NightgaugeYamlService implements vscode.Disposable {
       // Remove undefined values for cleaner YAML
       const cleanConfig = removeUndefined(mergedConfig);
 
-      const yaml = stringifyYaml(cleanConfig, {
-        indent: 2,
-        lineWidth: 100,
-        nullStr: "",
-      });
+      const yaml = await this.renderPreservingComments(this.primaryConfigPath, cleanConfig);
 
       // Always write to primary path
       const uri = vscode.Uri.file(this.primaryConfigPath);
@@ -614,11 +612,7 @@ export class NightgaugeYamlService implements vscode.Disposable {
         }
       }
 
-      const yaml = stringifyYaml(cleanConfig, {
-        indent: 2,
-        lineWidth: 100,
-        nullStr: "",
-      });
+      const yaml = await this.renderPreservingComments(this.localConfigPath, cleanConfig);
 
       // Ensure .nightgauge directory exists
       const nightgaugeDir = vscode.Uri.file(`${this.workspaceRoot}/.nightgauge`);
@@ -671,7 +665,7 @@ export class NightgaugeYamlService implements vscode.Disposable {
       const cleanConfig = removeUndefined(existing);
       const directory = vscode.Uri.file(`${this.workspaceRoot}/.nightgauge`);
       await vscode.workspace.fs.createDirectory(directory);
-      const yaml = stringifyYaml(cleanConfig, { indent: 2, lineWidth: 100, nullStr: "" });
+      const yaml = await this.renderPreservingComments(filePath, cleanConfig);
       await vscode.workspace.fs.writeFile(vscode.Uri.file(filePath), Buffer.from(yaml, "utf-8"));
       if (tier === "project") {
         this.resolvedConfigPath = this.primaryConfigPath;
@@ -849,11 +843,7 @@ export class NightgaugeYamlService implements vscode.Disposable {
         }
       }
 
-      const yaml = stringifyYaml(cleanConfig, {
-        indent: 2,
-        lineWidth: 100,
-        nullStr: "",
-      });
+      const yaml = await this.renderPreservingComments(globalPath, cleanConfig);
 
       // Ensure ~/.nightgauge directory exists
       try {
@@ -1059,6 +1049,61 @@ export class NightgaugeYamlService implements vscode.Disposable {
     }
 
     return result as T;
+  }
+
+  /**
+   * Persist one dotted-path key to the tier a runtime/UI write belongs in.
+   *
+   * Machine-tier keys go to `~/.nightgauge/config.yaml`; everything else goes
+   * to `.nightgauge/config.local.yaml`. The committed team file is never a
+   * target here — it changes only through `write(config, "project")`, which is
+   * reached from an explicit user action that names it (#1516).
+   */
+  async writeRuntimeValue(dottedPath: string, value: unknown): Promise<WriteResult> {
+    const segments = dottedPath.split(".");
+    if (segments.some((part) => ["__proto__", "prototype", "constructor"].includes(part))) {
+      return { success: false, error: `Unsafe configuration path: ${dottedPath}` };
+    }
+
+    const partial: Record<string, unknown> = {};
+    let cursor = partial;
+    for (let i = 0; i < segments.length - 1; i++) {
+      const next: Record<string, unknown> = {};
+      cursor[segments[i]] = next;
+      cursor = next;
+    }
+    cursor[segments[segments.length - 1]] = value;
+
+    return runtimeWriteTierFor(dottedPath) === "global"
+      ? this.writeGlobal(partial as Partial<NightgaugeConfig>)
+      : this.writeLocal(partial as Parameters<NightgaugeYamlService["writeLocal"]>[0]);
+  }
+
+  /**
+   * Render `config` as YAML, keeping the comments and layout the file on disk
+   * already has for every key the write does not change.
+   *
+   * A plain `stringify()` of the merged object drops every comment and blank
+   * line, so a one-scalar change rewrote `.nightgauge/config.yaml` wholesale
+   * and left the checkout permanently dirty — including the header that
+   * explains why the committed defaults are safe (#1516).
+   */
+  private async renderPreservingComments(
+    filePath: string,
+    config: Record<string, unknown>
+  ): Promise<string> {
+    let existingText: string | null;
+    try {
+      const content = await vscode.workspace.fs.readFile(vscode.Uri.file(filePath));
+      existingText = Buffer.from(content).toString("utf-8");
+    } catch {
+      existingText = null;
+    }
+    return serializePreservingComments(existingText, config, {
+      indent: 2,
+      lineWidth: 100,
+      nullStr: "",
+    });
   }
 
   /**
