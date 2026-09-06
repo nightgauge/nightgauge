@@ -888,6 +888,46 @@ export interface AutonomousRepoPause {
   stage?: string;
 }
 
+/**
+ * One pipeline run still in flight in this window, in either mode (#1511).
+ */
+export interface RunningPipelineInfo {
+  runId: string;
+  repo: string;
+  issueNumber: number;
+  title?: string;
+  stage?: string;
+  startedAt?: string;
+  /** Last time this run reported anything. Absent for an administrative entry. */
+  lastProgressAt?: string;
+  /**
+   * Nothing heard from this run inside the liveness window. Reported rather
+   * than filtered: dropping a stale row turns "possibly finished" into
+   * "definitely safe to reload", over work that may still be running.
+   */
+  stale: boolean;
+  /** "autonomous" when the scheduler dispatched it, "manual" otherwise. */
+  source: string;
+}
+
+/**
+ * Result from pipeline.runningSummary — "is any pipeline running in this
+ * window?", the question that decides whether a reload is safe (#1511).
+ *
+ * `autonomous stop` does NOT kill in-flight slots; a window reload does
+ * (`deactivate` → `abortAll`). So reload safety is a fact about RUNS, not
+ * about the scheduler's status, and it must include manual runs — they die
+ * identically and the scheduler has never heard of them.
+ */
+export interface RunningPipelinesResult {
+  count: number;
+  runs: RunningPipelineInfo[];
+  /** count === 0, computed server-side so every caller agrees on the predicate. */
+  reloadSafe: boolean;
+  /** The scheduler's own status; absent when no scheduler is attached. */
+  autonomousStatus?: string;
+}
+
 /** Result from autonomous.* methods — autonomous scheduler state snapshot. */
 export interface AutonomousStatusResult {
   status: string;

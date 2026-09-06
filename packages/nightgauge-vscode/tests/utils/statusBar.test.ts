@@ -746,6 +746,78 @@ describe("StatusBarManager.showAutonomousCooldown (#3446)", () => {
   });
 });
 
+describe("StatusBarManager.showAutonomousStopped (#1511)", () => {
+  // Stop does not abort the running pipelines; a window reload does. So
+  // "Stopped" on its own reads as "safe to reload" at exactly the moment it is
+  // not, and an operator acting on that word loses every in-flight run.
+  let sb: StatusBarManager;
+  let mainItem: vscode.StatusBarItem;
+
+  beforeEach(() => {
+    mainItem = {
+      text: "",
+      tooltip: "",
+      backgroundColor: undefined,
+      command: "",
+      show: vi.fn(),
+      hide: vi.fn(),
+      dispose: vi.fn(),
+    } as unknown as vscode.StatusBarItem;
+    const dummy = (): vscode.StatusBarItem =>
+      ({
+        text: "",
+        tooltip: "",
+        backgroundColor: undefined,
+        command: "",
+        show: vi.fn(),
+        hide: vi.fn(),
+        dispose: vi.fn(),
+      }) as unknown as vscode.StatusBarItem;
+    let n = 0;
+    vi.mocked(vscode.window.createStatusBarItem).mockImplementation(() => {
+      n++;
+      if (n === 1) return mainItem;
+      return dummy();
+    });
+    vi.mocked(vscode.commands.executeCommand).mockResolvedValue(undefined);
+    sb = new StatusBarManager();
+  });
+
+  afterEach(() => sb.dispose());
+
+  it("names the still-running slot count and refuses the reload", () => {
+    sb.showAutonomousStopped(2);
+    expect(mainItem.text).toContain("Stopped");
+    expect(mainItem.text).toContain("2 running");
+    expect(String(mainItem.tooltip)).toContain("reload is NOT safe yet");
+    expect(mainItem.backgroundColor).toBeInstanceOf(vscode.ThemeColor);
+  });
+
+  it("says the window is safe to reload at zero", () => {
+    sb.showAutonomousStopped(0);
+    expect(mainItem.text).toContain("safe to reload");
+    expect(String(mainItem.tooltip)).toContain("will not abort any work");
+  });
+
+  it("keeps pipelineRunning true while slots are finishing", () => {
+    // The context key drives the buttons that assume live work. A stopped
+    // scheduler with two slots in flight still has live work.
+    sb.showAutonomousStopped(2);
+    expect(vscode.commands.executeCommand).toHaveBeenCalledWith(
+      "setContext",
+      "nightgauge.pipelineRunning",
+      true
+    );
+  });
+
+  it("clicks through to the full status in both states", () => {
+    sb.showAutonomousStopped(3);
+    expect(mainItem.command).toBe("nightgauge.autonomousStatus");
+    sb.showAutonomousStopped(0);
+    expect(mainItem.command).toBe("nightgauge.autonomousStatus");
+  });
+});
+
 // ── Issue #659: adapter usage meter — pure formatting functions ───────────
 
 describe("renderUsageBar (#659)", () => {

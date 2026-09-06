@@ -1795,6 +1795,19 @@ func (s *Server) registerMethods() {
 		return map[string]string{"stage": string(stage)}, nil
 	}
 
+	//ipc:method pipelineRunningSummary params:none result:RunningPipelinesResult
+	// #1511 — "is any pipeline running in this window?", in ONE query and for
+	// BOTH modes. It is the reload-safety question: `autonomous stop` lets
+	// in-flight slots finish, but a window reload calls abortAll() and kills
+	// them, and nothing told the operator when the last one had landed.
+	//
+	// Deliberately NOT sourced from the autonomous scheduler's running list —
+	// that list omits every manually picked-up run, and a reload kills those
+	// identically. The run registry sees them all.
+	s.methods["pipeline.runningSummary"] = func(_ context.Context, _ json.RawMessage) (interface{}, error) {
+		return s.RunningPipelinesSnapshot(time.Now()), nil
+	}
+
 	//ipc:method executionList params:none result:ExecutionInfo[]
 	s.methods["execution.list"] = func(_ context.Context, _ json.RawMessage) (interface{}, error) {
 		if s.execMgr == nil {

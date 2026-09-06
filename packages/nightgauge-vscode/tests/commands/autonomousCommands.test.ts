@@ -132,6 +132,7 @@ const createMockStatusBar = (): StatusBarManager =>
     showAutonomousComplete: vi.fn(),
     showAutonomousDisconnected: vi.fn(),
     showAutonomousCooldown: vi.fn(),
+    showAutonomousStopped: vi.fn(),
   }) as unknown as StatusBarManager;
 
 const createMockQueueService = () => ({
@@ -169,6 +170,10 @@ describe("registerAutonomousCommands", () => {
       autonomousResume: vi.fn(() => Promise.resolve(createMockStatus())),
       autonomousStop: vi.fn(() =>
         Promise.resolve(createMockStatus({ status: "complete", remaining: 0 }))
+      ),
+      // #1511 — the reload-safety query. Both modes, one answer.
+      pipelineRunningSummary: vi.fn(() =>
+        Promise.resolve({ count: 0, runs: [], reloadSafe: true })
       ),
       autonomousClearQuotaCooldown: vi.fn(() =>
         Promise.resolve({ cleared: true, previousUntil: "2026-05-11T03:31:00Z" })
@@ -752,6 +757,90 @@ describe("registerAutonomousCommands", () => {
     });
   });
 
+  // ── Reload safety after Stop (#1511) ──────────────────────────────────
+
+  describe("reload safety after Stop", () => {
+    beforeEach(() => {
+      registerAutonomousCommands(mockLogger, mockStatusBar, null);
+      vi.mocked(vscode.window.showWarningMessage).mockResolvedValue("Stop" as any);
+    });
+
+    it("reports the still-running slot count instead of a 'Complete' badge", async () => {
+      // Stop does not abort the running pipelines — a window reload does. The
+      // old "Complete" badge read exactly like "safe to reload" at the moment
+      // it was not.
+      mockIpc.pipelineRunningSummary.mockResolvedValue({
+        count: 2,
+        reloadSafe: false,
+        runs: [
+          {
+            runId: "a",
+            repo: "acme/acme-flutter",
+            issueNumber: 313,
+            stale: false,
+            source: "autonomous",
+          },
+          {
+            runId: "b",
+            repo: "acme/acme-platform",
+            issueNumber: 1429,
+            stale: false,
+            source: "manual",
+          },
+        ],
+      });
+
+      const handler = getHandlerById("nightgauge.autonomousStop");
+      await handler();
+
+      expect(mockStatusBar.showAutonomousStopped).toHaveBeenCalledWith(2);
+      expect(mockStatusBar.showAutonomousComplete).not.toHaveBeenCalled();
+    });
+
+    it("says the window is safe to reload once nothing is running", async () => {
+      mockIpc.pipelineRunningSummary.mockResolvedValue({ count: 0, reloadSafe: true, runs: [] });
+
+      const handler = getHandlerById("nightgauge.autonomousStop");
+      await handler();
+
+      expect(mockStatusBar.showAutonomousStopped).toHaveBeenCalledWith(0);
+      const message = vi.mocked(vscode.window.showInformationMessage).mock.calls.at(-1)?.[0];
+      expect(String(message)).toContain("safe to reload");
+    });
+
+    it("counts manual runs, which the scheduler's own list never sees", async () => {
+      // autonomousStop resolves with an EMPTY running list (the scheduler
+      // dispatched nothing), yet a manual run is in flight and a reload would
+      // kill it. Sourcing the count from the scheduler would report 0 here.
+      mockIpc.autonomousStop.mockResolvedValue(
+        createMockStatus({ status: "complete", running: [] })
+      );
+      mockIpc.pipelineRunningSummary.mockResolvedValue({
+        count: 1,
+        reloadSafe: false,
+        runs: [{ runId: "c", repo: "acme/web", issueNumber: 5, stale: false, source: "manual" }],
+      });
+
+      const handler = getHandlerById("nightgauge.autonomousStop");
+      await handler();
+
+      expect(mockStatusBar.showAutonomousStopped).toHaveBeenCalledWith(1);
+    });
+
+    it("says so rather than claiming zero when the backend cannot answer", async () => {
+      mockIpc.pipelineRunningSummary.mockRejectedValue(new Error("no backend"));
+
+      const handler = getHandlerById("nightgauge.autonomousStop");
+      await handler();
+
+      // -1 is "unknown". Rendering it as 0 would be the false all-clear this
+      // whole change exists to prevent.
+      expect(mockStatusBar.showAutonomousStopped).toHaveBeenCalledWith(-1);
+      const message = vi.mocked(vscode.window.showInformationMessage).mock.calls.at(-1)?.[0];
+      expect(String(message)).toContain("Could not determine");
+    });
+  });
+
   // ── autonomousStop ────────────────────────────────────────────────────
 
   describe("autonomousStop", () => {
@@ -781,7 +870,10 @@ describe("registerAutonomousCommands", () => {
       await handler();
 
       expect(mockIpc.autonomousStop).toHaveBeenCalled();
-      expect(mockStatusBar.showAutonomousComplete).toHaveBeenCalledWith(1);
+      // #1511 — the badge now reports reload safety (0 running here), not a
+      // completion count. "Complete" read as "safe to reload" while slots
+      // were still finishing, which is exactly when it was not.
+      expect(mockStatusBar.showAutonomousStopped).toHaveBeenCalledWith(0);
       expect(vscode.commands.executeCommand).toHaveBeenCalledWith(
         "setContext",
         "nightgauge.autonomousRunning",

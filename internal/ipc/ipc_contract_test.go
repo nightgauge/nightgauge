@@ -115,6 +115,7 @@ var contractTestedMethods = map[string]bool{
 	"pipeline.runItem":                      true,
 	"pipeline.setPaused":                    true,
 	"pipeline.status":                       true,
+	"pipeline.runningSummary":               true,
 	"pipeline.stop":                         true,
 	// Auth
 	"auth.deviceFlowPoll":  true,
@@ -700,6 +701,13 @@ func TestContract_Pipeline(t *testing.T) {
 			"owner": "test-org", "projectNumber": 1, "itemId": "PVI_contract_test",
 		})
 		assertMethodRegistered(t, h.readResponseFor(id, nil), "pipeline.status")
+	})
+
+	// #1511 — the reload-safety query. Takes no params and answers from the
+	// run registry, so an empty server answers it happily.
+	t.Run("pipeline.runningSummary/registered", func(t *testing.T) {
+		id := h.sendRequest("pipeline.runningSummary", nil)
+		assertMethodRegistered(t, h.readResponseFor(id, nil), "pipeline.runningSummary")
 	})
 
 	// pipeline.run, stop, pause, resume, setPaused: send nil params to trigger

@@ -762,6 +762,47 @@ export class StatusBarManager {
   }
 
   /**
+   * Show "stopped, but slots are still finishing" (#1511).
+   *
+   * `autonomous stop` does not kill in-flight pipelines — it stops admitting
+   * new work and lets the running slots finish. A window reload DOES kill
+   * them (`deactivate` → `abortAll`). So "Stopped" on its own is the one
+   * label that reads as "safe to reload" at exactly the moment it is not, and
+   * an operator acting on it loses every in-flight run.
+   *
+   * The count covers manual runs too: it comes from the run registry, not
+   * from the scheduler's own list, because a manually picked-up run dies in a
+   * reload identically and the scheduler has never heard of it.
+   *
+   * It does NOT auto-reset like `showAutonomousComplete`: the whole value is
+   * that the operator can look up at any moment and see whether the last slot
+   * has landed.
+   */
+  showAutonomousStopped(runningCount: number): void {
+    this.currentStage = null;
+
+    if (runningCount <= 0) {
+      this.state = "complete";
+      this.item.text = "$(check) Autonomous: Stopped — safe to reload";
+      this.item.tooltip =
+        "Autonomous mode is stopped and no pipeline is running.\n" +
+        "Reloading the window will not abort any work.";
+      this.item.backgroundColor = STATUS_COLORS.complete;
+    } else {
+      this.state = "paused";
+      this.item.text = `$(debug-stop) Autonomous: Stopped — ${runningCount} running`;
+      this.item.tooltip =
+        `Autonomous mode is stopped: no new issues will be dispatched.\n` +
+        `${runningCount} pipeline(s) are still finishing — reload is NOT safe yet.\n` +
+        `Reloading the window aborts them; each restarts from scratch.\n` +
+        `Click for the full status.`;
+      this.item.backgroundColor = STATUS_COLORS.paused;
+    }
+    this.item.command = "nightgauge.autonomousStatus";
+    vscode.commands.executeCommand("setContext", "nightgauge.pipelineRunning", runningCount > 0);
+  }
+
+  /**
    * Show autonomous backend disconnected state.
    *
    * Displayed when the Go backend process exits unexpectedly while autonomous
