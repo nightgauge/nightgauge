@@ -14,9 +14,15 @@
  * @see Issue #325
  */
 
-import { describe, it, expect, vi, beforeEach, type Mock } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from "vitest";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import * as vscode from "vscode";
-import { registerAttentionCommands } from "../../src/commands/attentionCommands";
+import {
+  registerAttentionCommands,
+  renderAttentionDetails,
+} from "../../src/commands/attentionCommands";
 import {
   AttentionTreeProvider,
   type AttentionIpcSource,
@@ -83,7 +89,12 @@ vi.mock("vscode", () => ({
     registerCommand: vi.fn((_id: string, _handler: unknown) => ({ dispose: vi.fn() })),
     executeCommand: vi.fn(),
   },
+  workspace: {
+    workspaceFolders: [] as Array<{ uri: { fsPath: string } }>,
+    openTextDocument: vi.fn((opts: unknown) => Promise.resolve(opts)),
+  },
   window: {
+    showTextDocument: vi.fn(() => Promise.resolve(undefined)),
     showQuickPick: vi.fn(),
     showInputBox: vi.fn(),
     showInformationMessage: vi.fn(() => Promise.resolve(undefined)),
@@ -532,5 +543,161 @@ describe("registerAttentionCommands", () => {
       expect.stringContaining("2 required checks failing"),
       "Open Action Center"
     );
+  });
+});
+
+// ── The evidence entry (#1509) ───────────────────────────────────────────────
+
+/**
+ * An architecture-approval card as `raiseArchitectureApproval` actually raises
+ * it: repo + issue in the context, and NO url — which is why the link entry
+ * never appeared and the operator was asked to approve a plan they could not
+ * read.
+ */
+const archCard = (overrides: Partial<AttentionRequestView> = {}): AttentionRequestView =>
+  request({
+    id: "dr_arch",
+    kind: "approve",
+    severity: "blocking_run",
+    title: "Architecture approval required — #801",
+    body: "production-touching change — irreversible blast radius (#4135)",
+    producer: "architecture-approval",
+    standing: true,
+    default_action: "leave",
+    context: { repo: "octocat/acme-web", issue: 801 },
+    options: [
+      { id: "approve", label: "Approve & re-queue", verb: "issue.approveArchitecture" },
+      { id: "leave", label: "Leave for review", verb: "noop" },
+    ],
+    ...overrides,
+  });
+
+describe("Action Center — View details (#1509)", () => {
+  let logger: Logger;
+  let provider: AttentionTreeProvider;
+  let attentionResolve: Mock;
+  let tmpRoot: string | undefined;
+
+  const offerFor = async (req: AttentionRequestView) => {
+    let offered: Array<{ label: string; viewDetails?: boolean }> = [];
+    (vscode.window.showQuickPick as Mock).mockImplementation(
+      (items: Array<{ label: string; viewDetails?: boolean }>) => {
+        offered = items;
+        return Promise.resolve(undefined);
+      }
+    );
+    await getHandler("nightgauge.attentionResolve")(new AttentionRequestTreeItem(req));
+    return offered;
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    attentionResolve = vi.fn().mockResolvedValue({ ok: true, alreadyResolved: false });
+    (IpcClient.getInstance as unknown as Mock).mockReturnValue({
+      attentionResolve,
+      attentionMute: vi.fn(),
+      attentionUnmute: vi.fn(),
+    });
+    (vscode.workspace as unknown as { workspaceFolders: unknown[] }).workspaceFolders = [];
+    logger = createLogger();
+    provider = new AttentionTreeProvider();
+    registerAttentionCommands({
+      provider,
+      treeView: {} as unknown as vscode.TreeView<vscode.TreeItem>,
+      logger,
+    });
+  });
+
+  afterEach(() => {
+    if (tmpRoot) fs.rmSync(tmpRoot, { recursive: true, force: true });
+    tmpRoot = undefined;
+  });
+
+  it("derives the issue link for a card the producer raised without one, and offers View details next", async () => {
+    const offered = await offerFor(archCard());
+
+    expect(offered[0].label).toContain("Open in browser");
+    expect(offered[1].label).toContain("View details");
+  });
+
+  it("opens the derived issue URL — the producer never set one", async () => {
+    (vscode.window.showQuickPick as Mock).mockImplementation((items: Array<{ openUrl?: string }>) =>
+      Promise.resolve(items.find((i) => i.openUrl))
+    );
+    await getHandler("nightgauge.attentionResolve")(new AttentionRequestTreeItem(archCard()));
+
+    expect(vscode.env.openExternal).toHaveBeenCalledWith(
+      expect.objectContaining({ value: "https://github.com/octocat/acme-web/issues/801" })
+    );
+  });
+
+  it("leaves a producer-declared url alone rather than deriving over it", async () => {
+    const offered = await offerFor(
+      archCard({
+        context: {
+          repo: "octocat/acme-web",
+          issue: 801,
+          url: "https://github.com/octocat/acme-web/issues/801#issuecomment-99",
+        },
+      })
+    );
+
+    expect((offered[0] as unknown as { openUrl?: string }).openUrl).toBe(
+      "https://github.com/octocat/acme-web/issues/801#issuecomment-99"
+    );
+  });
+
+  it("offers no View details entry for a card with an empty body — there is no evidence to show", async () => {
+    const offered = await offerFor(archCard({ body: "   " }));
+
+    expect(offered.some((i) => i.viewDetails)).toBe(false);
+  });
+
+  it("View details opens a markdown document and resolves nothing", async () => {
+    (vscode.window.showQuickPick as Mock).mockImplementation(
+      (items: Array<{ viewDetails?: boolean }>) => Promise.resolve(items.find((i) => i.viewDetails))
+    );
+
+    await getHandler("nightgauge.attentionResolve")(new AttentionRequestTreeItem(archCard()));
+
+    expect(vscode.workspace.openTextDocument).toHaveBeenCalledWith(
+      expect.objectContaining({ language: "markdown" })
+    );
+    expect(vscode.window.showTextDocument).toHaveBeenCalled();
+    expect(attentionResolve).not.toHaveBeenCalled();
+    expect(vscode.window.showInputBox).not.toHaveBeenCalled();
+  });
+
+  it("renders the gate reason, the options and the derived link", () => {
+    const md = renderAttentionDetails(archCard());
+
+    expect(md).toContain("Architecture approval required — #801");
+    expect(md).toContain("irreversible blast radius");
+    expect(md).toContain("Approve & re-queue");
+    expect(md).toContain("https://github.com/octocat/acme-web/issues/801");
+  });
+
+  it("appends the local plan file for an architecture-approval card", () => {
+    tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ng-attention-"));
+    const dir = path.join(tmpRoot, ".worktrees", "issue-801", ".nightgauge", "pipeline");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, "planning-801.json"),
+      JSON.stringify({ approach: "split the gateway in two" })
+    );
+    (vscode.workspace as unknown as { workspaceFolders: unknown[] }).workspaceFolders = [
+      { uri: { fsPath: tmpRoot } },
+    ];
+
+    const md = renderAttentionDetails(archCard());
+
+    expect(md).toContain("The plan being approved");
+    expect(md).toContain("split the gateway in two");
+  });
+
+  it("renders without a plan section when nothing is on disk", () => {
+    const md = renderAttentionDetails(archCard());
+
+    expect(md).not.toContain("The plan being approved");
   });
 });

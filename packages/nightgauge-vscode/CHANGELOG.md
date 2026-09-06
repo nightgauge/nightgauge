@@ -11,6 +11,12 @@ and this project adheres to
 
 ### Fixed
 
+- An Action Center card no longer asks for a decision without showing what is
+  being decided. Every card naming a repo and an issue (or PR) now leads with
+  `Open in browser` — the link is derived when the producer set none — and a
+  `View details` entry opens the card's reason, its options' consequences and,
+  for an architecture-approval card, the run's plan file, without resolving
+  anything (#1509)
 - A pipeline stage is no longer failed for "writing outside its worktree" when
   another checkout's branch ref moved without its working tree, or when another
   running slot was simply working in its own repo. Both looked identical to a

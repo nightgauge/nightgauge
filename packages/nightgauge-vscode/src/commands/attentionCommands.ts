@@ -19,9 +19,13 @@
  * tells the operator to pick a listed option instead.
  *
  * Repo-scoped cards (issue #93) reach the same quick-pick with two additions.
- * `Open in browser` leads the list whenever the card carries a `context.url`,
- * because for a condition no verb in the registry can repair — a red default
- * branch, a PR waiting on a reviewer — following the link IS the action.
+ * `Open in browser` leads the list whenever the card HAS a forge URL —
+ * declared by the producer or derived from repo + issue by `attentionCardUrl`
+ * (#1509) — because for a condition no verb in the registry can repair — a red
+ * default branch, a PR waiting on a reviewer — following the link IS the
+ * action. `View details` follows it whenever the card has a body: the card asks
+ * for a decision and the body is the evidence for it, and nothing else in this
+ * flow renders it.
  * `Mute until this changes` appears on standing cards: it silences alerting
  * without resolving, so the card stays in the inbox at its severity and
  * re-alerts the moment the condition's fingerprint moves.
@@ -37,6 +41,7 @@
 
 import * as vscode from "vscode";
 import * as os from "node:os";
+import * as fs from "node:fs";
 import { IpcClient } from "../services/IpcClient";
 import type {
   AttentionRequestView,
@@ -47,7 +52,9 @@ import {
   AttentionTreeProvider,
   AttentionRequestTreeItem,
   describeAttentionOption,
+  attentionCardUrl,
 } from "../views/attention";
+import { pipelineFileCandidates } from "../utils/issueContextCandidates";
 import type { Logger } from "../utils/logger";
 
 export interface AttentionCommandDeps {
@@ -74,6 +81,8 @@ interface AttentionPickItem extends vscode.QuickPickItem {
   isSteer?: boolean;
   openUrl?: string;
   muteAction?: "mute" | "unmute";
+  /** Renders the card's evidence in an editor. Resolves nothing. */
+  viewDetails?: boolean;
 }
 
 export function buildPickItems(request: AttentionRequestView): AttentionPickItem[] {
@@ -84,13 +93,27 @@ export function buildPickItems(request: AttentionRequestView): AttentionPickItem
   // reviewer — no verb in the registry can fix the condition, so the honest
   // primary action is "go look at the thing". Burying that under the options
   // would make the quick-pick's default the one choice that changes nothing.
-  if (request.context.url) {
+  const url = attentionCardUrl(request);
+  if (url) {
     items.push({
       label: "$(link-external) Open in browser",
       description: request.context.blocker
         ? `Opens the ${request.context.blocker.split(":")[0]} this card is about`
         : "Opens the forge object this card is about",
-      openUrl: request.context.url,
+      openUrl: url,
+    });
+  }
+
+  // The evidence entry. A card that asks for a high-impact approval and shows
+  // only four verbs is asking the operator to decide blind: the gate's reason
+  // lives in `body`, which the quick pick never rendered, and the plan being
+  // approved lives in a file on disk. Neither is reachable from here without
+  // this entry, and reading them must not resolve anything.
+  if (request.body.trim()) {
+    items.push({
+      label: "$(eye) View details",
+      description: "Opens the card's reason, options and plan in the editor. Changes nothing.",
+      viewDetails: true,
     });
   }
 
@@ -208,12 +231,12 @@ async function resolveWithSteer(request: AttentionRequestView, logger: Logger): 
   await runResolve(request, defaultOption.id, defaultOption.label, trimmed, logger);
 }
 
-/** Open a card's `context.url` in the operator's browser. */
+/** Open the card's forge URL — declared or derived — in the operator's browser. */
 export async function openAttentionLink(
   request: AttentionRequestView,
   logger: Logger
 ): Promise<void> {
-  const url = request.context.url;
+  const url = attentionCardUrl(request);
   if (!url) return;
   try {
     await vscode.env.openExternal(vscode.Uri.parse(url));
@@ -259,6 +282,117 @@ export async function setAttentionMute(
   }
 }
 
+/** The producer id the Go orchestrator raises architecture-approval cards under
+ * (`producerArchitectureApprove` in `internal/orchestrator/attention_wiring.go`).
+ * Only these cards have a local plan file to append. */
+const ARCHITECTURE_APPROVAL_PRODUCER = "architecture-approval";
+
+/**
+ * The plan the operator is being asked to approve, read from disk.
+ *
+ * `planning-{N}.json` is written by the planning stage into whichever root the
+ * run actually used — the extension's `<repo>/.worktrees/issue-N`, the Go
+ * manager's `<repo>/.nightgauge/worktrees/<name>-issue-N`, or the repo root
+ * when the run took no worktree. `pipelineFileCandidates` is the shared list of
+ * those layouts (#994/#1206); reading only one of them is how a reader learns
+ * to report "no plan" for the majority of runs.
+ *
+ * Returns undefined when nothing is on disk — the card still renders, minus the
+ * plan section. Never throws.
+ */
+export function readArchitecturePlan(request: AttentionRequestView): string | undefined {
+  const issue = request.context.issue;
+  if (!issue || request.producer !== ARCHITECTURE_APPROVAL_PRODUCER) return undefined;
+  const roots = (vscode.workspace.workspaceFolders ?? []).map((f) => f.uri.fsPath);
+  for (const root of roots) {
+    const candidates = pipelineFileCandidates(
+      root,
+      "",
+      request.context.repo,
+      issue,
+      `planning-${issue}.json`
+    );
+    for (const file of candidates) {
+      try {
+        const raw = fs.readFileSync(file, "utf8");
+        // Pretty-printed when it parses, raw when it does not — an unparseable
+        // plan is still the plan, and hiding it would leave the operator with
+        // less than they had.
+        let rendered = raw;
+        try {
+          rendered = JSON.stringify(JSON.parse(raw), null, 2);
+        } catch {
+          /* keep the raw text */
+        }
+        return `${file}\n\n\`\`\`json\n${rendered}\n\`\`\``;
+      } catch {
+        // Next candidate.
+      }
+    }
+  }
+  return undefined;
+}
+
+/**
+ * The markdown document behind `View details` — the whole card, in the order an
+ * operator reads it: what is being asked, why, what each option would do, and
+ * (for an architecture approval) the actual plan.
+ */
+export function renderAttentionDetails(request: AttentionRequestView): string {
+  const lines: string[] = [`# ${request.title}`, ""];
+
+  const facts: string[] = [
+    `**Producer:** ${request.producer}`,
+    `**Severity:** ${request.severity}`,
+  ];
+  const number = request.context.issue || request.context.pr;
+  facts.push(
+    number ? `**Scope:** ${request.context.repo}#${number}` : `**Scope:** ${request.context.repo}`
+  );
+  if (request.context.stage) facts.push(`**Stage:** ${request.context.stage}`);
+  const url = attentionCardUrl(request);
+  if (url) facts.push(`**Link:** ${url}`);
+  lines.push(facts.join("  \n"), "");
+
+  if (request.body.trim()) {
+    lines.push("## Why this card exists", "", request.body.trim(), "");
+  }
+
+  if (request.options.length > 0) {
+    lines.push("## Options", "");
+    for (const opt of request.options) {
+      lines.push(`- **${opt.label}** — ${describeAttentionOption(opt, request)}`);
+    }
+    lines.push("");
+  }
+
+  const plan = readArchitecturePlan(request);
+  if (plan) {
+    lines.push("## The plan being approved", "", plan, "");
+  }
+
+  lines.push("_Reading this changed nothing — the card is still open._");
+  return lines.join("\n");
+}
+
+/** Open the card's evidence as a read-only markdown document. Resolves nothing. */
+export async function showAttentionDetails(
+  request: AttentionRequestView,
+  logger: Logger
+): Promise<void> {
+  try {
+    const doc = await vscode.workspace.openTextDocument({
+      language: "markdown",
+      content: renderAttentionDetails(request),
+    });
+    await vscode.window.showTextDocument(doc, { preview: true });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    logger.warn("nightgauge.attentionViewDetails failed", { error: message, id: request.id });
+    vscode.window.showErrorMessage(`Nightgauge: Could not open the card details — ${message}`);
+  }
+}
+
 /** The full click-to-resolve flow: quick-pick, then dispatch to the chosen path. */
 export async function resolveAttentionRequest(
   request: AttentionRequestView,
@@ -272,6 +406,13 @@ export async function resolveAttentionRequest(
 
   if (picked.openUrl) {
     await openAttentionLink(request, logger);
+    return;
+  }
+  if (picked.viewDetails) {
+    // Deliberately does NOT re-open the quick pick: the operator is being sent
+    // to a document to read, and re-entering this function from itself makes
+    // the flow unbounded. Clicking the card again returns here.
+    await showAttentionDetails(request, logger);
     return;
   }
   if (picked.muteAction) {

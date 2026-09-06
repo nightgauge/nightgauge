@@ -19,6 +19,7 @@ import type {
   AttentionOption,
   AttentionContext,
 } from "../../services/IpcClientBase";
+import { attentionCardUrl } from "./attentionLinks";
 
 /** Base type for all Action Center tree items — every node knows its children. */
 export abstract class AttentionTreeItem extends vscode.TreeItem {
@@ -116,7 +117,8 @@ export function formatDescription(request: AttentionRequestView): string {
  * `view/item/context` when-clauses can be regex-matched against it:
  *
  * - `attention.request`      — the base; every card is resolvable
- * - `attention.request.link` — carries a `context.url` worth opening
+ * - `attention.request.link` — has a forge URL worth opening (declared by the
+ *   producer, or derived from repo + issue — see `attentionCardUrl`, #1509)
  * - a trailing `.muted`      — currently silenced (offer unmute, not mute)
  *
  * Suffixes are appended in a fixed order so the four possible values are
@@ -125,7 +127,7 @@ export function formatDescription(request: AttentionRequestView): string {
  */
 export function contextValueFor(request: AttentionRequestView): string {
   let value = "attention.request";
-  if (request.context.url) value += ".link";
+  if (attentionCardUrl(request)) value += ".link";
   if (request.lifecycle.muted) value += ".muted";
   return value;
 }
@@ -251,7 +253,7 @@ export class AttentionRequestTreeItem extends AttentionTreeItem {
   }
 
   private buildTooltip(): vscode.MarkdownString {
-    const { title, body, context, producer, lifecycle } = this.request;
+    const { title, body, producer, lifecycle } = this.request;
     const md = new vscode.MarkdownString();
     // The URL is rendered as a real markdown link, not prose: for a card whose
     // only option is "dismiss", following it is the operator's actual next
@@ -259,7 +261,8 @@ export class AttentionRequestTreeItem extends AttentionTreeItem {
     md.isTrusted = false;
     md.appendMarkdown(`**${title}**\n\n`);
     if (body) md.appendMarkdown(`${body}\n\n`);
-    if (context.url) md.appendMarkdown(`[Open in browser](${context.url})\n\n`);
+    const url = attentionCardUrl(this.request);
+    if (url) md.appendMarkdown(`[Open in browser](${url})\n\n`);
     if (lifecycle.muted) {
       md.appendMarkdown(
         `_Muted by ${lifecycle.muted.actor || "an operator"} — re-alerts if the condition changes._\n\n`
