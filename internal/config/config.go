@@ -325,6 +325,19 @@ type AutonomousConfig struct {
 	// RefinementMaxConcurrent is the maximum number of concurrent refinement
 	// operations. Range: 1–3 (capped to prevent resource exhaustion). Default: 1.
 	RefinementMaxConcurrent int `yaml:"refinement_max_concurrent" json:"refinementMaxConcurrent,omitempty"`
+	// RefinementBacklog gates tier-3 refinement — every open issue that is on
+	// no project board, or on one without a "Ready" status or a Priority.
+	// Default: false.
+	//
+	// With it false the refinement scan only refines what the dispatch scan is
+	// about to consume (board Ready, board Backlog-with-priority) plus anything
+	// explicitly labelled auto-process. With it true the scan also sweeps the
+	// open backlog, oldest first, once no higher-tier issue is unrefined.
+	//
+	// Off by default because a backlog sweep is unbounded work at one model
+	// call each: 165 unrefined issues at the default rate rail is roughly 17
+	// hours of Sonnet calls on issues that may never dispatch (#1514).
+	RefinementBacklog *bool `yaml:"refinement_backlog" json:"refinementBacklog,omitempty"`
 	// TrustedAuthorAssociations overrides the default set of GitHub
 	// author_association values ("OWNER", "MEMBER", "COLLABORATOR") that are
 	// trusted to reach autonomous refinement and dispatch (#270). When set,
@@ -632,6 +645,8 @@ func DefaultAutonomousConfig() *AutonomousConfig {
 	refinementEnabled := true
 	stallEscalation := true
 	autoRedispatchStalled := false
+	// Tier-3 (open backlog) refinement is a cost opt-in, off by default (#1514).
+	refinementBacklog := false
 	return &AutonomousConfig{
 		ScanInterval:            YAMLDuration(30 * time.Second),
 		BudgetCeiling:           0,
@@ -643,6 +658,7 @@ func DefaultAutonomousConfig() *AutonomousConfig {
 		AutoRedispatchStalled:   &autoRedispatchStalled,
 		RefinementInterval:      YAMLDuration(60 * time.Second),
 		RefinementMaxConcurrent: 1,
+		RefinementBacklog:       &refinementBacklog,
 	}
 }
 

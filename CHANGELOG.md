@@ -224,6 +224,17 @@ validate` enforces OKF conformance pre-merge, recall and metrics weigh trust
 
 ### Changed
 
+- The autonomous refinement scan now refines issues in **dispatch order**
+  instead of oldest-first: board `Ready`, then board `Backlog` with a Priority,
+  and only then the rest of the open backlog. Issues that can never dispatch —
+  an `owner-action`/`blocked` label, `In progress`/`In review`/`Done` on the
+  board, an open linked PR, or a hold awaiting a human — are skipped, and tier 3
+  never takes the hourly rate rail while higher-tier work is unrefined. The
+  dispatch scan also refines the issue it is about to enqueue when a refinement
+  slot is free, and dispatches it unrefined with a log line when none is. The
+  new `autonomous.refinement_backlog` (default `false`) is the cost opt-in for
+  sweeping the backlog at all — a 165-issue backlog is ~17 hours of model calls
+  on issues that may never run (#1514)
 - `nightgauge serve` shuts down through a bounded drain: in-flight board
   writes get a grace period, then a bounded cancel, instead of being abandoned
   on SIGTERM (#489)
