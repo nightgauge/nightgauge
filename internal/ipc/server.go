@@ -3324,6 +3324,28 @@ func (s *Server) registerMethods() {
 			}
 		}
 
+		// #1515: the extension path's twin of the scheduler's post-planning
+		// size-label backfill. Both paths do it, from ONE implementation
+		// (orchestrator.BackfillPlannerSizeLabel), because a second copy here
+		// is the dual-path drift this file's own #1484 and #304 comments were
+		// written after — and because the extension path is the mode the
+		// product is actually operated in, so a fix that only landed on the
+		// autonomous path would fix almost nothing.
+		//
+		// A scheduler-owned run is skipped: the scheduler already ran this
+		// after the same stage, and two additive writes for one assessment is
+		// one wasted REST call per run.
+		if stage == state.StageFeaturePlanning && p.Status == "complete" &&
+			!res.schedulerOwned && s.client != nil && repo != "" {
+			if root := s.repoRoot(repo); root != "" {
+				worktreeDir := rt.Snapshot().WorktreeDir
+				cls := loadIssueClassification(root, worktreeDir, p.IssueNumber)
+				orchestrator.BackfillPlannerSizeLabel(context.Background(),
+					gh.NewIssueService(s.client), repo, p.IssueNumber,
+					cls.Labels, root, worktreeDir)
+			}
+		}
+
 		// Emit stateChanged event. The envelope carries the RESOLVED run identity
 		// (Decision 6) so PipelineStateService and PipelineSlotsTracker can route
 		// by run rather than by issue number — the filter that closes F19.
@@ -3678,7 +3700,27 @@ func (s *Server) registerMethods() {
 			cls := loadIssueClassification(root, snap.WorktreeDir, p.IssueNumber)
 			input.Labels = cls.Labels
 			input.IssueType = cls.Type
-			input.Size = cls.Size
+			// THREE SOURCES, ONE PRECEDENCE (#1515): the issue's size:* label,
+			// then the size the run's own feature-planning stage assessed in
+			// planning-{N}.json, then the estimator. Reading the label alone is
+			// why 12 of 14 runs completed on 2026-09-06 recorded no size at all
+			// while every one of them had assessed one — the information existed
+			// at run time and was thrown away at record time.
+			//
+			// The rule lives in orchestrator.RunSizeResolution because the Go
+			// scheduler writes the same two sinks from the same rule; a second
+			// copy here is precisely the dual-path drift this handler's own
+			// #1484 and #304 comments were written after.
+			//
+			// The board Size field is "" and always will be on this path:
+			// issue-{N}.json carries `labels` and `routing`, never the board
+			// field (see orchestrator.OutcomeSizeInput).
+			sizeRes := orchestrator.RunSizeResolution(
+				root, snap.WorktreeDir, recordRepo, p.IssueNumber,
+				"", cls.Labels, cls.Title, snap.Body)
+			input.Size = sizeRes.Size
+			input.SizeSource = sizeRes.Source
+			input.PlannerSize = sizeRes.PlannerSize
 			// The routing PREDICTION the run was picked up under. It sits in
 			// the same issue-{N}.json read above and was being dropped: every
 			// record this handler wrote carried routing.complexity_score 0,
@@ -3725,14 +3767,12 @@ func (s *Server) registerMethods() {
 					p.IssueNumber,
 				)
 			}
-			if cls.Size == "" {
-				// Loud by design: a silently size-less record is exactly how
-				// the calibration path stayed switched off unnoticed (#112).
-				log.Printf(
-					"notifyComplete: #%d has no size:* label — its run record cannot calibrate the pre-flight cost estimate (#112)",
-					p.IssueNumber,
-				)
-			}
+			// Loud by design: a silently size-less record is exactly how the
+			// calibration path stayed switched off unnoticed (#112). It now
+			// fires only when ALL THREE sources came up empty — a warning that
+			// fires on nearly every run is a warning an operator learns to
+			// scroll past, which is what it had become.
+			orchestrator.LogSizeResolution(p.IssueNumber, sizeRes)
 
 			hw := state.NewHistoryWriter(root)
 			// pipeline.logs.history_retention_days drives the prune pass
@@ -3771,7 +3811,7 @@ func (s *Server) registerMethods() {
 			// self-improvement loops steered on autonomous-only evidence.
 			// Derived here rather than rebuilt: an independently-built mirror
 			// record is exactly what drifted in #261.
-			outcome, outcomeVerdict := learningOutcomeFor(record, cls, snap, p.Repo, now)
+			outcome, outcomeVerdict := learningOutcomeFor(record, cls, sizeRes, snap, p.Repo, now)
 			if outcomeVerdict == outcomeRecord {
 				// Parity with the Go path, where recordOutcome's return value
 				// is threaded into recordV2History: the predicted-vs-actual

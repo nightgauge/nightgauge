@@ -127,6 +127,22 @@ type Input struct {
 	SubIssueCount     int
 }
 
+// SizeForScore maps a 1-10 estimator score onto the XS|S|M|L|XL bucket.
+//
+// Exported for the run record's third size source (#1515). The record's size
+// is the join key the pre-flight cost estimator matches history on, and it
+// resolves label → planner assessment → this estimator; without an exported
+// mapper the third source could only be reached by re-running Estimate, which
+// is what the caller does — this name is the one place the 1-10 → bucket rule
+// is written, so a caller holding only a score cannot invent a second one.
+//
+// NOTE: this is the ESTIMATOR's 1-10 scale, NOT the router's 1/2/3/5/8
+// Fibonacci scale. Feeding a Fibonacci score in here is a category error —
+// routing.SizeForBaseScore is that scale's mapper.
+func SizeForScore(score int) string {
+	return scoreToSize(score)
+}
+
 func scoreToSize(score int) string {
 	switch {
 	case score <= 2:

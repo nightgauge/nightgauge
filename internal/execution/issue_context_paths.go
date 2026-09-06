@@ -37,7 +37,31 @@ func IssueContextRelPath(issueNumber int) string {
 // worktreeDir is the run's actual worktree when the caller knows it, and is
 // tried first; pass "" when unknown. repo may be "owner/name" or a bare name.
 func IssueContextCandidates(repoRoot, worktreeDir, repo string, issueNumber int) []string {
-	rel := IssueContextRelPath(issueNumber)
+	return stageContextCandidates(repoRoot, worktreeDir, repo, issueNumber, IssueContextRelPath(issueNumber))
+}
+
+// PlanningContextRelPath is where every writer puts a run's planning context,
+// relative to whichever root it considers "the run" — the sibling of
+// IssueContextRelPath, written by the feature-planning stage.
+func PlanningContextRelPath(issueNumber int) string {
+	return filepath.Join(".nightgauge", "pipeline", fmt.Sprintf("planning-%d.json", issueNumber))
+}
+
+// PlanningContextCandidates returns every path a run's planning-{N}.json may
+// live at, most-specific first — the same four roots, in the same order, as
+// IssueContextCandidates, and for the same reason: the two dispatch paths use
+// different worktree layouts, and a reader that knows one of them reports
+// "absent" for every run of the other. #1515 reads this file for the planner's
+// assessed size, so a half-informed search there would reproduce exactly the
+// size-less records it exists to fix.
+func PlanningContextCandidates(repoRoot, worktreeDir, repo string, issueNumber int) []string {
+	return stageContextCandidates(repoRoot, worktreeDir, repo, issueNumber, PlanningContextRelPath(issueNumber))
+}
+
+// stageContextCandidates is the shared root enumeration behind both candidate
+// lists. ONE list of layouts, so a new layout cannot be taught to one reader
+// and not the other.
+func stageContextCandidates(repoRoot, worktreeDir, repo string, issueNumber int, rel string) []string {
 	roots := make([]string, 0, 4)
 
 	if worktreeDir != "" {

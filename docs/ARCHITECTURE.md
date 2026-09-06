@@ -853,7 +853,7 @@ Paths are relative to `claude-plugins/nightgauge/`. Gates live in
 
 ```json
 {
-  "schema_version": "1.8",
+  "schema_version": "1.9",
   "issue_number": 81,
   "plan_file": ".nightgauge/plans/81-add-user-auth.md",
   "approach": "...",

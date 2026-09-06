@@ -16,6 +16,8 @@ import { flexEnum, normalizePatternClassifications, optionalString } from "./hel
  * - 1.6: Added optional ac_reconcile field (Issue #3003)
  * - 1.7: Added optional recalled_decisions field (Issue #3593)
  * - 1.8: Added optional knowledge_read field (Issue #2964) — KB files read during planning
+ * - 1.9: complexity_assessment.size_label is the PLANNER'S assessment, always
+ *        populated, and may differ from the issue's label (Issue #1515)
  *
  * Created by: /nightgauge-feature-planning
  * Read by: /nightgauge-feature-dev
@@ -24,7 +26,7 @@ import { flexEnum, normalizePatternClassifications, optionalString } from "./hel
  */
 export const PlanningContextSchema = z
   .object({
-    /** Current schema version is 1.8 (see history above). */
+    /** Current schema version is 1.9 (see history above). */
     schema_version: z.string().regex(/^\d+\.\d+$/),
     issue_number: z.number().int().positive(),
     plan_file: z.string().min(1),
@@ -69,7 +71,24 @@ export const PlanningContextSchema = z
       .nullish(),
     complexity_assessment: z
       .object({
-        /** Size label from issue (XS/S/M/L/XL) */
+        /**
+         * The PLANNER'S ASSESSED SIZE (XS/S/M/L/XL) — not a copy of the issue's
+         * label, and it may differ from one.
+         *
+         * It was documented as "Size label from issue", and that description
+         * was doing damage: it told the skill to echo a label back, so a
+         * label-less issue produced `null` here and the size the planner had
+         * plainly reasoned about was never written down. Most issues in this
+         * workspace carry no `size:*` label, so most runs recorded no size at
+         * all and the cost-calibration corpus had nothing to join on (#112).
+         *
+         * ALWAYS POPULATE IT. It is the second of the run record's three size
+         * sources (label → this → estimator), and it is what the orchestrator
+         * back-fills onto a size-less issue as a `size:` label after planning
+         * completes. A disagreement with an existing label is expected and
+         * useful — it is recorded on the run record, and nothing relabels on
+         * account of it (#1515).
+         */
         size_label: z.string().nullish(),
         /** Issue type (feature/bug/docs/refactor/chore) */
         type_label: z.string().nullish(),

@@ -103,22 +103,43 @@ type V2RunRecord struct {
 	// nothing fabricates one — for records written from #397 onward. Records
 	// written earlier may carry a synthetic `feat/{IssueNumber}` for a run that
 	// resolved nothing, and cannot be distinguished after the fact.
-	Branch        string                   `json:"branch"`
-	BaseBranch    string                   `json:"base_branch"`
-	ExecutionMode string                   `json:"execution_mode"`
-	StartedAt     string                   `json:"started_at"`
-	CompletedAt   string                   `json:"completed_at"`
-	TotalDuration int64                    `json:"total_duration_ms"`
-	Outcome       string                   `json:"outcome"`
-	Labels        []string                 `json:"labels,omitempty"`
-	Size          *string                  `json:"size"`
-	Type          *string                  `json:"type"`
-	Priority      *string                  `json:"priority,omitempty"`
-	Stages        map[string]V2StageDetail `json:"stages"`
-	Tokens        V2Tokens                 `json:"tokens"`
-	OutcomeType   string                   `json:"outcome_type,omitempty"`
-	Files         V2Files                  `json:"files"`
-	Routing       V2Routing                `json:"routing"`
+	Branch        string   `json:"branch"`
+	BaseBranch    string   `json:"base_branch"`
+	ExecutionMode string   `json:"execution_mode"`
+	StartedAt     string   `json:"started_at"`
+	CompletedAt   string   `json:"completed_at"`
+	TotalDuration int64    `json:"total_duration_ms"`
+	Outcome       string   `json:"outcome"`
+	Labels        []string `json:"labels,omitempty"`
+	Size          *string  `json:"size"`
+	// SizeSource names where Size came from: "label" (the issue's board Size
+	// field or a size:* label), "planner" (the run's own
+	// planning-{N}.json complexity_assessment) or "estimator"
+	// (complexity.Estimator over the issue metadata). Absent when Size is
+	// absent, and on records written before #1515.
+	//
+	// Size is the join key the pre-flight cost estimator matches history on
+	// (#112). It used to be read from the label ALONE, and most issues in this
+	// workspace carry no size label — so most records were unusable as
+	// calibration input while the run's own plan had assessed a size and
+	// written it to disk. Recording the source is what keeps the three
+	// populations distinguishable now that they share one field.
+	SizeSource string `json:"size_source,omitempty"`
+	// PlannerSize is the size the feature-planning stage assessed, recorded
+	// whenever the planner assessed one — INCLUDING when a label won.
+	//
+	// A label that disagrees with the planner is the most informative row
+	// there is: it is the router's input being wrong, measurably. Nothing
+	// relabels on a disagreement (the label is the human's), so the only way
+	// the disagreement survives is for both halves to be written down.
+	PlannerSize string                   `json:"planner_size,omitempty"`
+	Type        *string                  `json:"type"`
+	Priority    *string                  `json:"priority,omitempty"`
+	Stages      map[string]V2StageDetail `json:"stages"`
+	Tokens      V2Tokens                 `json:"tokens"`
+	OutcomeType string                   `json:"outcome_type,omitempty"`
+	Files       V2Files                  `json:"files"`
+	Routing     V2Routing                `json:"routing"`
 	// BudgetEstimate is the pre-flight projection this run was dispatched
 	// against, persisted so accuracy can be measured from the corpus (#1213).
 	//
@@ -692,11 +713,19 @@ type V2RunInput struct {
 	// Body is the GitHub issue body captured at pickup (#183), sourced from
 	// RuntimeState.Body at the call site. Bounded again in BuildV2Record as a
 	// safety net. Empty when no issue body was captured.
-	Body            string
-	Branch          string
-	BaseBranch      string
-	Labels          []string
+	Body       string
+	Branch     string
+	BaseBranch string
+	Labels     []string
+	// Size is the run's resolved XS|S|M|L|XL bucket, and SizeSource says which
+	// of the three sources produced it — both come from
+	// orchestrator.ResolveRunSize, which is the single place the precedence is
+	// written (#1515). PlannerSize is the planner's own assessment, carried
+	// separately so a label/planner disagreement is recorded rather than
+	// collapsed.
 	Size            string
+	SizeSource      string
+	PlannerSize     string
 	IssueType       string
 	ComplexityScore int
 	RoutingPath     string
@@ -1563,8 +1592,14 @@ func (hw *HistoryWriter) BuildV2Record(snap *RuntimeState, success bool, errMsg 
 
 	// Nullable string pointers for size/type
 	var sizePtr, typePtr *string
+	sizeSource := input.SizeSource
 	if input.Size != "" {
 		sizePtr = &input.Size
+	} else {
+		// A source for a size that is not there names the provenance of
+		// nothing, and reads to a consumer scanning populated fields as a
+		// record that has a size. The two are written together or not at all.
+		sizeSource = ""
 	}
 	if input.IssueType != "" {
 		typePtr = &input.IssueType
@@ -1609,11 +1644,13 @@ func (hw *HistoryWriter) BuildV2Record(snap *RuntimeState, success bool, errMsg 
 		// case a caller (e.g. the IPC path reading a runtime state the extension
 		// populated) supplies an unbounded value; the pickup capture already caps
 		// it. 8192 matches the platform issueBody .max(8192) telemetry bound.
-		Body:   clipHistoryRunes(input.Body, v2RunBodyMax),
-		Labels: input.Labels,
-		Size:   sizePtr,
-		Type:   typePtr,
-		Stages: stages,
+		Body:        clipHistoryRunes(input.Body, v2RunBodyMax),
+		Labels:      input.Labels,
+		Size:        sizePtr,
+		SizeSource:  sizeSource,
+		PlannerSize: input.PlannerSize,
+		Type:        typePtr,
+		Stages:      stages,
 		Tokens: V2Tokens{
 			TotalInput:         accInput,
 			TotalOutput:        accOutput,

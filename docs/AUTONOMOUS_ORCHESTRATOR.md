@@ -1116,6 +1116,81 @@ next kind cannot slip through the same gap.
 scoped, so it falls back to the fleet-wide halt. Guessing a scope for an
 unattributable failure would let a real defect keep dispatching.
 
+## Learning and Calibration: Where a Run's Size Comes From — #1515
+
+Every terminal run writes two things the self-improvement loop reads: the V2
+history record (`.nightgauge/pipeline/history/<date>.jsonl`) and the outcome
+corpus (`.nightgauge/pipeline/history/outcomes.jsonl`). Both carry the run's
+**size**, and size is not a display field — it is the join key the pre-flight
+cost estimator matches historical runs on. A record written without it is
+unusable as calibration input, and the projection silently collapses back to
+the raw static estimate (#112).
+
+It used to come from the issue's `size:*` label and nothing else. Most issues
+carry no such label — on 2026-09-06, 12 of 14 completed runs had none — so most
+records recorded no size, while **every one of those runs had already assessed
+one**: the feature-planning skill writes `complexity_assessment.size_label` into
+`planning-{N}.json` before it writes anything else. The information existed at
+run time and was thrown away at record time.
+
+### Three sources, one precedence
+
+`orchestrator.ResolveRunSize` is the single place the order is written, and both
+terminal writers call it — `Scheduler.recordOutcome`/`recordV2History` on the
+autonomous path, and the `pipeline.notifyComplete` handler in `internal/ipc` on
+the extension path.
+
+| Order | Source               | Where it comes from                                       | `size_source` |
+| ----- | -------------------- | --------------------------------------------------------- | ------------- |
+| 1     | The issue's own term | Project board `Size` field, then a `size:*` label         | `label`       |
+| 2     | The planner          | `complexity_assessment` in the run's `planning-{N}.json`  | `planner`     |
+| 3     | The estimator        | `complexity.Estimator` over the issue's title/body/labels | `estimator`   |
+
+The resolved bucket lands on the run record as `size`, with `size_source` beside
+it. `planner_size` is recorded **whenever the planner assessed one, including
+when a label won** — a label that disagrees with the planner is the most
+informative row the corpus gets, and collapsing it to a single winner throws
+away the only evidence that they disagreed.
+
+The `#112` "this run cannot calibrate the estimate" warning now fires only when
+**all three** sources come up empty. It used to fire on any run without a label,
+i.e. on nearly every run, which is how an operator learns to scroll past it.
+
+### What reaches the outcome corpus, and what does not
+
+`learning.Outcome.predictedSize` accepts the first two sources only, and records
+which one in `sizeSource`:
+
+- **label** — the router actually scored this term, so the prediction is the
+  run's complexity score bucketed (`small`/`medium`/`large`).
+- **planner** — the router never saw the assessment, so bucketing the run's
+  score would record the router's `M` default under a new name. The
+  assessment's own base score is bucketed instead.
+- **estimator** — never a prediction. It is a second reading of the same
+  metadata the prediction would be scored against, and it is available for
+  nearly every run, so admitting it would fill the accuracy denominator with
+  rows that measure arithmetic rather than the router. It still fills the
+  record's `size` join key, where nothing compares it to a measurement.
+
+The estimator source is additionally gated on the estimator's **own**
+confidence: a `low` confidence means it had fewer than two signals to work with,
+and an unknown is spelled `""`, never a plausible-looking default.
+
+### The size label is written back
+
+When feature-planning completes and the issue carries **no** `size:*` label, the
+orchestrator applies the planner's assessed size to the issue — one additive
+REST call on the `core` bucket, no model spend, from
+`orchestrator.BackfillPlannerSizeLabel` on both dispatch paths. The next run of
+that backlog is then routed from a real size term instead of the router's
+default.
+
+**It never overwrites an existing label**, agreeing or not. The label is the
+human's input to the router; an agent quietly replacing it is a worse failure
+than the disagreement, and the disagreement is recorded on the run record
+instead. A forge refusal is logged and never fails the stage: a run whose label
+could not be written is exactly as well off as every run before this existed.
+
 ## Stuck-Epic Detection (No Silent Stalls) — #4073
 
 An epic with open sub-issues, **zero eligible (unblocked) work**, and **no active
