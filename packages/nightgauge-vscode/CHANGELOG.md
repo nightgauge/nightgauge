@@ -9,6 +9,15 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Added
+
+- After Stop, the status bar says whether a window reload is safe —
+  `Autonomous: Stopped — 2 running` while pipelines are still finishing, then
+  `Stopped — safe to reload` when the last one lands, updating as they go. Stop
+  lets running slots finish; reloading the window aborts them, and nothing used
+  to say when the drain was done. `dev-install.sh` now names the running issues
+  and asks before a rebuild that would kill them (`--force` skips) (#1511)
+
 ### Fixed
 
 - An Action Center card no longer asks for a decision without showing what is

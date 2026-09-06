@@ -16,6 +16,13 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Added
 
+- `nightgauge autonomous status` now answers whether a VS Code reload is safe:
+  `Stopped — 2 pipeline(s) still running (#313 flutter, #1429 platform); reload
+is not safe yet`, and `Stopped — 0 running; safe to reload` once they land.
+  Stop lets in-flight slots finish; a reload aborts them — and "Stopped" alone
+  read exactly like "safe to reload" at the moment it was not. The count comes
+  from the run registry, so manually picked-up runs are included, and
+  `--json` carries it as `running_pipelines` (#1511)
 - `nightgauge autonomous clear-failures <owner/repo#N>` (or `--all`) lifts the
   per-issue lifetime failure cap that quarantines an issue. It was reachable
   only from the IPC method and a VS Code command, so an operator on a headless

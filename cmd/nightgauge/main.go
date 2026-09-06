@@ -10245,6 +10245,66 @@ func autonomousStateIsStalled(state orchestrator.AutonomousState) bool {
 	return !runstate.ProcessAlive(state.PID)
 }
 
+// reloadSafetyLine renders the one sentence that answers "may I reload the VS
+// Code window right now?" (#1511).
+//
+// It exists because `Autonomous Mode: Stopped` was actively misleading at the
+// moment it mattered most. `autonomous stop` does NOT kill in-flight slots —
+// AutonomousScheduler.Stop neither cancels nor joins them, by design — but a
+// window reload does: `deactivate` calls `abortAll()`. So after Stop the fleet
+// reads "Stopped" while two pipelines are still mid-`feature-dev`, and the
+// operator who reloads on that word loses both, each restarting from scratch
+// and re-spending its planning.
+//
+// The count comes from the run registry (every run, both modes), never from
+// the scheduler's own list, which omits manual runs that die identically.
+func reloadSafetyLine(runs []ipc.RunningPipelineInfo) string {
+	if len(runs) == 0 {
+		return "0 running; safe to reload"
+	}
+	names := make([]string, 0, len(runs))
+	for _, r := range runs {
+		label := fmt.Sprintf("#%d", r.IssueNumber)
+		if short := shortRepoName(r.Repo); short != "" {
+			label += " " + short
+		}
+		if r.Stale {
+			// Reported, not hidden: a stale row may be a finished run whose
+			// terminal message never landed, and the operator is the one who
+			// can tell. Dropping it would manufacture a false "safe".
+			label += " (no progress recently)"
+		}
+		names = append(names, label)
+	}
+	return fmt.Sprintf("%d pipeline(s) still running (%s); reload is not safe yet",
+		len(runs), strings.Join(names, ", "))
+}
+
+// shortRepoName reduces "owner/some-repo" to "some-repo" for display.
+func shortRepoName(repo string) string {
+	if idx := strings.LastIndex(repo, "/"); idx >= 0 {
+		return repo[idx+1:]
+	}
+	return repo
+}
+
+// runningPipelinesForWorkspace asks the live daemon which pipelines are still
+// in flight, in either mode. Returns ok=false when no daemon is reachable —
+// which is not an error: a workspace with no `serve` running has no window to
+// reload and no slots to lose, and the CLI must not turn that into a failure.
+func runningPipelinesForWorkspace(ctx context.Context, workdir string) (ipc.RunningPipelinesResult, bool) {
+	client, err := ipc.DialClient(ctx, ipc.DaemonSocketPath(workdir), daemonDialTimeout)
+	if err != nil {
+		return ipc.RunningPipelinesResult{}, false
+	}
+	defer client.Close()
+	var res ipc.RunningPipelinesResult
+	if err := client.Call(ctx, "pipeline.runningSummary", map[string]any{}, &res); err != nil {
+		return ipc.RunningPipelinesResult{}, false
+	}
+	return res, true
+}
+
 func autonomousStatusCmd() *cobra.Command {
 	var outputJSON bool
 
@@ -10270,6 +10330,12 @@ func autonomousStatusCmd() *cobra.Command {
 
 			stalled := autonomousStateIsStalled(state)
 
+			// #1511 — the reload-safety fact, asked of the live daemon so it
+			// covers manual runs too. Best-effort: with no daemon there is no
+			// window to reload, and `daemonKnown` says so rather than letting
+			// a missing answer read as "nothing is running".
+			summary, daemonKnown := runningPipelinesForWorkspace(cmd.Context(), workdir)
+
 			// JSON output mode for scripting
 			if outputJSON {
 				type statusWithStalled struct {
@@ -10281,6 +10347,14 @@ func autonomousStatusCmd() *cobra.Command {
 					// script checking "is anything moving?" actually asks.
 					LeaseHeld   bool                       `json:"lease_held"`
 					LeaseHolder *runstate.ServeLeaseHolder `json:"lease_holder,omitempty"`
+					// #1511 — every pipeline still in flight in this window,
+					// in EITHER mode, and whether a reload would kill one.
+					// `running_pipelines_known` is false when no daemon
+					// answered: a consumer must not read the empty list as
+					// "nothing is running".
+					RunningPipelines      []ipc.RunningPipelineInfo `json:"running_pipelines"`
+					RunningPipelinesKnown bool                      `json:"running_pipelines_known"`
+					ReloadSafe            bool                      `json:"reload_safe"`
 				}
 				payload := statusWithStalled{AutonomousState: state, Stalled: stalled}
 				if cwd, cwdErr := os.Getwd(); cwdErr == nil {
@@ -10289,6 +10363,12 @@ func autonomousStatusCmd() *cobra.Command {
 						payload.LeaseHolder = &holder
 					}
 				}
+				payload.RunningPipelinesKnown = daemonKnown
+				payload.RunningPipelines = summary.Runs
+				if payload.RunningPipelines == nil {
+					payload.RunningPipelines = []ipc.RunningPipelineInfo{}
+				}
+				payload.ReloadSafe = daemonKnown && summary.Count == 0
 				out, _ := json.MarshalIndent(payload, "", "  ")
 				fmt.Println(string(out))
 				return nil
@@ -10301,6 +10381,12 @@ func autonomousStatusCmd() *cobra.Command {
 			}
 			if stalled {
 				fmt.Printf("Autonomous Mode: Stalled (pid %d is not running)\n", state.PID)
+			} else if daemonKnown {
+				// One line, two facts, because they are routinely different:
+				// the scheduler is Stopped AND two pipelines are still
+				// finishing. Reading only the first word is what loses work
+				// on the next reload (#1511).
+				fmt.Printf("Autonomous Mode: %s — %s\n", statusDisplay, reloadSafetyLine(summary.Runs))
 			} else {
 				fmt.Printf("Autonomous Mode: %s\n", statusDisplay)
 			}

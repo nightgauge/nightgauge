@@ -44,7 +44,9 @@ nightgauge autonomous stop
 - **Status bar** shows running/paused/complete state
 - **Autonomous: Dry Run** previews the execution plan without starting pipelines
 - **Autonomous: Pause / Resume** pauses scanning while keeping state
-- **Autonomous: Stop** stops the scheduler and prints a summary
+- **Autonomous: Stop** stops the scheduler and prints a summary. It does not
+  abort the running pipelines — a window reload does; see
+  [Rebuild the extension without losing work](#rebuild-the-extension-without-losing-work-1511)
 
 ## Getting Started: Hands-Free Issue Processing
 
@@ -1175,6 +1177,69 @@ finish_ instead of dying at a short deadline and leaving the issue stuck
 That long ceiling is what makes process exit dangerous. `nightgauge serve` can
 be shut down at any point inside that window, and an exit there abandons a
 board mutation with nothing to notice.
+
+### Rebuild the extension without losing work (#1511)
+
+**Stop does not kill running pipelines. A window reload does.**
+
+`autonomous stop` is already the graceful exit: `AutonomousScheduler.Stop`
+neither cancels nor joins in-flight work (see _Two different exits_ below), and
+the extension's own Stop confirmation says so — "Running pipelines will
+complete but no new issues will be dispatched." The manual queue has the same
+affordance in **Nightgauge: Stop After Current Issue**
+(`ConcurrentPipelineManager.pauseFilling`).
+
+What discards running slots is the **window reload**: the extension's
+`deactivate` calls `abortAll()`. Installing a new build ends in a reload, so a
+rebuild during a busy fleet kills every in-flight run, and each one restarts
+from scratch and re-spends its planning.
+
+The gap this closes was never a missing verb — it was that nothing said **when
+the last slot had landed**. `Autonomous Mode: Stopped` reads exactly like "safe
+to reload" while two pipelines are still mid-`feature-dev`.
+
+**The recipe:**
+
+1. Stop admitting new work:
+   - autonomous: `nightgauge autonomous stop` (or the Stop button), and
+   - the manual queue: **Nightgauge: Stop After Current Issue**.
+2. Wait for zero. Ask as often as you like — the answer covers both modes:
+
+   ```bash
+   nightgauge autonomous status
+   # Autonomous Mode: Stopped — 2 pipeline(s) still running (#313 flutter, #1429 platform); reload is not safe yet
+   # …later…
+   # Autonomous Mode: Stopped — 0 running; safe to reload
+   ```
+
+   The status bar says the same thing (`Autonomous: Stopped — 2 running` →
+   `Autonomous: Stopped — safe to reload`), and updates itself as the slots
+   land, so the drain can be watched without re-running anything.
+
+3. Reload the window (or run `dev-install.sh`, which asks first — see below).
+4. Start again: `nightgauge autonomous run`, or the Start button.
+
+**Where the count comes from.** `pipeline.runningSummary` reads the IPC **run
+registry**, not the scheduler's `running` list. That distinction is the whole
+point of step 2: the scheduler knows only about the runs it dispatched, while a
+manually picked-up issue, a queue batch or a drag-to-Ready is invisible there —
+and a reload kills all of them identically. `autonomous status --json` carries
+the same data as `running_pipelines`, with `running_pipelines_known: false`
+when no daemon answered, so a script never reads an empty list as "nothing is
+running".
+
+A run that has not reported progress inside the liveness window is **reported
+as stale, not dropped**. Hiding it would turn "possibly finished" into
+"definitely safe to reload" over work that may still be running; showing it
+costs one glance.
+
+**`dev-install.sh` asks.** It runs `check-running-pipelines.sh` before
+building; if anything is in flight it names the runs, prints the two stop
+commands, and asks for confirmation. `--force` skips the question, a
+non-interactive shell proceeds with a warning (CI has no window and no daemon),
+and an unknown answer is never treated as an alarm. It does not refuse: killing
+the in-flight runs is sometimes the right call — notably when the fix being
+installed is what those runs keep failing on.
 
 **Two different exits, two different answers:**
 

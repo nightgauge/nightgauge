@@ -4,12 +4,18 @@
 # Usage:
 #   ./scripts/dev-install.sh                # Build locally and install
 #   ./scripts/dev-install.sh --from-release # Download latest release from GitHub and install
+#   ./scripts/dev-install.sh --force        # Skip the running-pipeline confirmation
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PKG_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 REPO_ROOT="$(cd "$PKG_DIR/../.." && pwd)"
+
+FORCE=0
+for arg in "$@"; do
+  [[ "$arg" == "--force" ]] && FORCE=1
+done
 
 # ---------------------------------------------------------------------------
 # --from-release: download the latest .vsix from GitHub Releases and install
@@ -46,6 +52,54 @@ fi
 # ---------------------------------------------------------------------------
 # Default: local build and install
 # ---------------------------------------------------------------------------
+
+# Installing ends with a window reload, and a reload KILLS every running slot
+# (`deactivate` → `abortAll()`). `nightgauge autonomous stop` does not — it
+# stops admitting new work and lets the running slots finish — so the safe
+# sequence is stop, wait for "0 running", reload. Confirm before spending
+# someone's in-flight work (#1511).
+#
+# Never a hard block: an operator who wants the kill is entitled to it, and CI
+# has no window, no daemon and no answer to a prompt.
+check_running_pipelines() {
+  local rows rc=0
+  rows=$("$SCRIPT_DIR/check-running-pipelines.sh" "$REPO_ROOT") || rc=$?
+  [[ $rc -eq 1 ]] || return 0
+
+  echo "WARNING: pipelines are still running in this workspace:"
+  printf '%s\n' "$rows"
+  echo
+  echo "         Installing reloads the VS Code window, which ABORTS them —"
+  echo "         each one restarts from scratch and re-spends its planning."
+  echo "         To finish them first:"
+  echo "           nightgauge autonomous stop      # autonomous: stops admitting, lets slots finish"
+  echo "           Nightgauge: Stop After Current Issue   # the manual queue's equivalent"
+  echo "         then wait for \`nightgauge autonomous status\` to say \"0 running; safe to reload\"."
+  echo
+
+  if [[ $FORCE -eq 1 ]]; then
+    echo "         --force given — continuing and killing them."
+    return 0
+  fi
+  if [[ ! -t 0 ]]; then
+    # Non-interactive (CI, a piped invocation): warn and proceed. Prompting
+    # here would hang a runner forever, and refusing would break a build for a
+    # condition that cannot occur on one.
+    echo "         Not a terminal — continuing without asking."
+    return 0
+  fi
+
+  local reply
+  read -r -p "         Install anyway and kill them? [y/N] " reply
+  case "$reply" in
+    [yY] | [yY][eE][sS]) return 0 ;;
+    *)
+      echo "==> Aborted. Nothing was built or installed."
+      exit 1
+      ;;
+  esac
+}
+check_running_pipelines
 
 echo "==> Building Go binary (nightgauge serve — IPC backend)..."
 cd "$REPO_ROOT"

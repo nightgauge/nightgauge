@@ -872,3 +872,107 @@ func (s *Server) compareAndDeleteRun(entry *runEntry, runID string) {
 	}
 	s.closedRuns.addLocked(runID)
 }
+
+// RunningPipelinesSnapshot answers the one question the operator asks before a
+// window reload: "is any pipeline running in this window, in any mode?" (#1511)
+//
+// It reads the run registry, not the autonomous scheduler's `running` list,
+// and that distinction is the point. The scheduler knows only about the runs
+// IT dispatched; a manually picked-up issue, a drag-to-Ready, a batch started
+// from the queue are all invisible there and all die identically on a reload.
+// Every run — autonomous or manual — passes through this registry, because
+// every run reports its own stage transitions to it.
+//
+// An entry counts as running when it is neither terminal-latched nor
+// abandoned. Lease staleness is REPORTED, not filtered: an under-report here
+// becomes "safe to reload" over live work, which is the exact failure the
+// caller is trying to avoid, whereas an over-report costs one confirmation
+// prompt. `Stale` lets the caller say "no progress for 40m — it may already be
+// finished" instead of silently dropping the row.
+//
+// The scheduler's own running list is consulted only to LABEL each row's
+// source; it never adds or removes a row.
+//
+// The registry scan copies out every runtimesMu-guarded field — `repo`,
+// `issue`, `lastSeen` — inside the lock, and takes each run's own mutex (via
+// Snapshot) only afterwards. Reading `lastSeen` after the unlock would race
+// touchLocked, which stamps it on every accepted run-progress verb; and taking
+// N run mutexes while holding the server-global one is the lock-ordering
+// problem the derived issue index (Decision 6) exists to avoid.
+func (s *Server) RunningPipelinesSnapshot(now time.Time) RunningPipelinesResult {
+	autonomous := map[string]bool{}
+	if s.autonomousScheduler != nil {
+		for _, r := range s.autonomousScheduler.Status().Running {
+			autonomous[fmt.Sprintf("%s#%d", r.Repo, r.Number)] = true
+		}
+	}
+
+	// A registry row, copied out under runtimesMu.
+	type row struct {
+		rs       *state.RuntimeState
+		repo     string
+		issue    int
+		lastSeen time.Time
+	}
+	s.runtimesMu.Lock()
+	entries := make([]row, 0, len(s.activeRuntimes))
+	for _, e := range s.activeRuntimes {
+		if e == nil || e.terminal || e.abandoned {
+			continue
+		}
+		entries = append(entries, row{rs: e.rs, repo: e.repo, issue: e.issue, lastSeen: e.lastSeen})
+	}
+	s.runtimesMu.Unlock()
+
+	runs := make([]RunningPipelineInfo, 0, len(entries))
+	for _, e := range entries {
+		snap := e.rs.Snapshot()
+		repo := e.repo
+		if repo == "" {
+			repo = snap.Repo
+		}
+		issue := e.issue
+		if issue == 0 {
+			issue = snap.IssueNumber
+		}
+		info := RunningPipelineInfo{
+			RunID:       snap.RunID,
+			Repo:        repo,
+			IssueNumber: issue,
+			Title:       snap.Title,
+			Stage:       string(snap.Stage),
+			Source:      "manual",
+		}
+		if autonomous[fmt.Sprintf("%s#%d", repo, issue)] {
+			info.Source = "autonomous"
+		}
+		if !snap.StartedAt.IsZero() {
+			info.StartedAt = snap.StartedAt.UTC().Format(time.RFC3339)
+		}
+		// The zero lease is an administrative install, not a fresh one — it
+		// must read as stale rather than as "just seen" (ADR-017 §7.3).
+		if !e.lastSeen.IsZero() {
+			info.LastProgressAt = e.lastSeen.UTC().Format(time.RFC3339)
+		}
+		info.Stale = e.lastSeen.IsZero() || now.Sub(e.lastSeen) >= livenessWindow
+		runs = append(runs, info)
+	}
+	// Deterministic order so two calls a second apart do not reshuffle the
+	// list an operator is reading.
+	sort.SliceStable(runs, func(i, j int) bool {
+		if runs[i].Repo != runs[j].Repo {
+			return runs[i].Repo < runs[j].Repo
+		}
+		return runs[i].IssueNumber < runs[j].IssueNumber
+	})
+
+	res := RunningPipelinesResult{
+		Count:      len(runs),
+		Runs:       runs,
+		ReloadSafe: len(runs) == 0,
+	}
+	if s.autonomousScheduler != nil {
+		res.AutonomousStatus = s.autonomousScheduler.Status().Status
+	}
+	return res
+}

@@ -1271,6 +1271,46 @@ type AutonomousResumeParams struct {
 	WorkspaceRepos []string `json:"workspaceRepos,omitempty"`
 }
 
+// RunningPipelineInfo describes one pipeline run that is still in flight in
+// this window, in either mode (#1511).
+type RunningPipelineInfo struct {
+	RunID       string `json:"runId"`
+	Repo        string `json:"repo"`
+	IssueNumber int    `json:"issueNumber"`
+	Title       string `json:"title,omitempty"`
+	Stage       string `json:"stage,omitempty"`
+	StartedAt   string `json:"startedAt,omitempty"`
+	// LastProgressAt is the server-observed lease stamp — the last time this
+	// run reported anything. Empty for an entry installed administratively,
+	// which never counts as evidence of life.
+	LastProgressAt string `json:"lastProgressAt,omitempty"`
+	// Stale means nothing has been heard from this run inside the liveness
+	// window. It is reported rather than filtered: dropping a stale row would
+	// turn "possibly finished" into "definitely safe to reload", over work
+	// that may well still be running.
+	Stale bool `json:"stale"`
+	// Source is "autonomous" when the scheduler dispatched this run, "manual"
+	// otherwise — a picked-up issue, a queue batch, a drag to Ready.
+	Source string `json:"source"`
+}
+
+// RunningPipelinesResult answers "is any pipeline running in this window?"
+// (#1511) — the question that decides whether a VS Code reload is safe.
+//
+// `autonomous stop` does NOT kill in-flight slots; a window reload does
+// (`deactivate` → `abortAll`). So the reload-safety answer is about RUNS, not
+// about the scheduler's status, and it must include manual runs.
+type RunningPipelinesResult struct {
+	Count int                   `json:"count"`
+	Runs  []RunningPipelineInfo `json:"runs"`
+	// ReloadSafe is simply Count == 0, computed server-side so every caller
+	// (CLI, extension, dev-install.sh) agrees on the predicate.
+	ReloadSafe bool `json:"reloadSafe"`
+	// AutonomousStatus is the scheduler's own status, for callers that want to
+	// render both facts in one line. Empty when no scheduler is attached.
+	AutonomousStatus string `json:"autonomousStatus,omitempty"`
+}
+
 // AutonomousUpdateAllowlistParams updates the running scheduler's repo
 // allowlist without restarting it. Used by the VS Code extension's
 // Repositories tree checkbox so toggling a repo applies live (no

@@ -358,6 +358,9 @@ function stopAutonomousStallWatchdog(): void {
   // snapshot to every issue that misses the (now-cleared) per-issue cache.
   clearOpenPRsCache();
   stopLivenessProbe();
+  // #1511 — the reload-safety watch belongs to a stopped fleet; a restart
+  // makes it meaningless and a leaked timer would keep overwriting the badge.
+  stopReloadSafetyWatch();
   // #3296 — clear the network-outage breaker too so a fresh autonomous
   // start begins with a clean counter (no carryover from a prior outage).
   // Pass `null` (success-shaped observation) to reset the connectivity
@@ -953,6 +956,118 @@ async function runAutonomousStallWatchdog(logger: Logger): Promise<void> {
     stallWatchdogInFlight = false;
     IpcClientBase.activeCallSource = undefined;
   }
+}
+
+// ── Reload-safety watch (#1511) ────────────────────────────────────────────
+// After Stop, the running slots keep going — Stop does not abort them, a
+// window reload does. Nothing polled after Stop (the stall watchdog and the
+// liveness probe are both torn down by it), so the badge froze on whatever it
+// said at the moment of the click and never announced the drain finishing.
+// This is a small, self-terminating poll whose only job is to change
+// "Stopped — 2 running" into "Stopped — safe to reload".
+const RELOAD_SAFETY_POLL_MS = 15_000;
+// One hour at the cadence above. A watch that never reaches zero is a leaked
+// registry entry, not a reason to poll forever.
+const RELOAD_SAFETY_MAX_POLLS = 240;
+// Three consecutive unanswered polls means the backend is gone; the badge
+// already says "unknown" and there is nothing left to observe.
+const RELOAD_SAFETY_MAX_UNKNOWN = 3;
+
+let reloadSafetyTimer: ReturnType<typeof setTimeout> | null = null;
+
+function stopReloadSafetyWatch(): void {
+  if (reloadSafetyTimer) {
+    clearTimeout(reloadSafetyTimer);
+    reloadSafetyTimer = null;
+  }
+}
+
+/**
+ * Poll the running-pipeline count until it reaches zero, updating the badge.
+ * Self-terminating on zero, on a bounded run of unanswered polls, and on a
+ * hard ceiling — see the constants above.
+ */
+function startReloadSafetyWatch(logger: Logger): void {
+  stopReloadSafetyWatch();
+  let polls = 0;
+  let unknowns = 0;
+
+  const tick = async (): Promise<void> => {
+    reloadSafetyTimer = null;
+    polls += 1;
+    const count = await runningPipelineCount(IpcClient.getInstance(), logger);
+    _autonomousStatusBar?.showAutonomousStopped(count);
+    if (count === 0) {
+      getOutputChannel().appendLine(
+        `[${new Date().toISOString()}] All pipelines finished — safe to reload the window.`
+      );
+      return;
+    }
+    if (count < 0) {
+      unknowns += 1;
+      if (unknowns >= RELOAD_SAFETY_MAX_UNKNOWN) return;
+    } else {
+      unknowns = 0;
+    }
+    if (polls >= RELOAD_SAFETY_MAX_POLLS) {
+      logger.debug("reload-safety watch: giving up after the poll ceiling", { polls });
+      return;
+    }
+    reloadSafetyTimer = setTimeout(() => void tick(), RELOAD_SAFETY_POLL_MS);
+  };
+
+  reloadSafetyTimer = setTimeout(() => void tick(), RELOAD_SAFETY_POLL_MS);
+}
+
+/** Test-only — observe whether the reload-safety watch is armed. */
+export function _reloadSafetyWatchArmedForTest(): boolean {
+  return reloadSafetyTimer !== null;
+}
+
+/**
+ * "is any pipeline running in this window?" — one query, both modes (#1511).
+ *
+ * The autonomous status result cannot answer this: its `running` list holds
+ * only what the SCHEDULER dispatched, and a manually picked-up issue dies in a
+ * window reload identically. `pipeline.runningSummary` reads the Go run
+ * registry, which every run reports to.
+ *
+ * On failure it returns -1 — "unknown", which callers must not render as
+ * "zero". A backend that cannot answer is not a backend saying nothing is
+ * running.
+ */
+export async function runningPipelineCount(
+  ipc: { pipelineRunningSummary(): Promise<{ count: number }> },
+  logger?: Logger
+): Promise<number> {
+  try {
+    const summary = await ipc.pipelineRunningSummary();
+    return typeof summary?.count === "number" ? summary.count : -1;
+  } catch (error) {
+    logger?.debug?.("runningPipelineCount: backend did not answer", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return -1;
+  }
+}
+
+/**
+ * The sentence that answers "may I reload the window now?" (#1511).
+ *
+ * An unknown count (-1) says so rather than guessing: the failure mode this
+ * whole change exists to prevent is a confident "safe" over live work.
+ */
+export function describeReloadSafety(runningCount: number): string {
+  if (runningCount < 0) {
+    return "Could not determine whether pipelines are still running — check before reloading.";
+  }
+  if (runningCount === 0) {
+    return "0 running; safe to reload.";
+  }
+  return (
+    `${runningCount} pipeline(s) still running; reload is not safe yet — ` +
+    `a reload aborts them and each restarts from scratch.`
+  );
 }
 
 /**
@@ -1872,8 +1987,16 @@ export function registerAutonomousCommands(
         const ipc = IpcClient.getInstance();
         const result = await ipc.autonomousStop();
 
-        statusBar.showAutonomousComplete(result.completed.length);
+        // #1511 — Stop does NOT kill the running slots; a window reload does.
+        // Report how many are still finishing, from the run registry so
+        // manual runs are counted too, instead of the old "Complete" badge
+        // that read as "safe to reload" while two pipelines were mid-stage.
+        const running = await runningPipelineCount(ipc, logger);
+        statusBar.showAutonomousStopped(running);
         stopAutonomousStallWatchdog();
+        // Keep watching only while something is still finishing — that is the
+        // whole question the operator is now waiting on.
+        if (running > 0) startReloadSafetyWatch(logger);
 
         setAutonomousContextKeys("stopped");
 
@@ -1882,16 +2005,20 @@ export function registerAutonomousCommands(
         void vscode.commands.executeCommand("setContext", "nightgauge.stopAfterCurrentBatch", true);
 
         const channel = getOutputChannel();
-        channel.appendLine(`[${new Date().toISOString()}] Autonomous mode stopped`);
+        channel.appendLine(
+          `[${new Date().toISOString()}] Autonomous mode stopped — ${describeReloadSafety(running)}`
+        );
         channel.appendLine(formatStatus(result));
 
         vscode.window.showInformationMessage(
-          `Autonomous mode stopped. ${result.completed.length} issues completed, ${result.failed.length} failed.`
+          `Autonomous mode stopped. ${result.completed.length} issues completed, ` +
+            `${result.failed.length} failed. ${describeReloadSafety(running)}`
         );
 
         logger.info("Autonomous mode stopped", {
           completed: result.completed.length,
           failed: result.failed.length,
+          stillRunning: running,
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : "Unknown error";
@@ -2249,6 +2376,7 @@ export function resetWatchdogStateForTest(): void {
     clearTimeout(livenessProbeTimer);
     livenessProbeTimer = null;
   }
+  stopReloadSafetyWatch();
   stallWatchdogConsecutiveFailures = 0;
   stallWatchdogInFlight = false;
   livenessConsecutiveFailures = 0;

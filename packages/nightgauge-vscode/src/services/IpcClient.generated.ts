@@ -83,6 +83,7 @@ import type {
   RemoteGetCommandHistoryResult,
   RemotePollingStatus,
   RetentionConfig,
+  RunningPipelinesResult,
   StatusCounts,
   StatusOK,
   StuckEpicsResult,
@@ -230,6 +231,10 @@ export class IpcClientGenerated extends IpcClientBase {
 
   async pipelineStatus(owner: string, projectNumber: number, itemId: string, ownerType?: string, githubUser?: string): Promise<PipelineStatus> {
     return this.call<PipelineStatus>('pipeline.status', { owner, projectNumber, itemId, ownerType, githubUser });
+  }
+
+  async pipelineRunningSummary(): Promise<RunningPipelinesResult> {
+    return this.call<RunningPipelinesResult>('pipeline.runningSummary');
   }
 
   async pipelineStop(executionId: string): Promise<void> {
