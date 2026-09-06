@@ -97,7 +97,7 @@ func BackfillPlannerSizeLabel(
 		return PlannerSizeLabelResult{Verdict: SizeLabelAlreadyPresent, Size: size}
 	}
 
-	owner, name, ok := splitRepoSlug(repo)
+	owner, name, ok := splitRepoSlug(strings.TrimSpace(repo))
 	if !ok {
 		log.Printf("#%d: cannot backfill size:%s — repo %q is not owner/name (#1515)", issueNumber, size, repo)
 		return PlannerSizeLabelResult{Verdict: SizeLabelNoAssessment, Size: size}
@@ -110,12 +110,4 @@ func BackfillPlannerSizeLabel(
 	log.Printf("#%d: applied size:%s from the planner's own assessment — the issue had none, so neither the router "+
 		"nor the cost estimate had a size to work from (#112, #1515)", issueNumber, size)
 	return PlannerSizeLabelResult{Verdict: SizeLabelApplied, Size: size}
-}
-
-func splitRepoSlug(repo string) (owner, name string, ok bool) {
-	parts := strings.Split(strings.TrimSpace(repo), "/")
-	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-		return "", "", false
-	}
-	return parts[0], parts[1], true
 }
