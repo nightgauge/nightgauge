@@ -347,6 +347,37 @@ This is the Silent No-Op class from
 [docs/FAILURE_TAXONOMY.md](FAILURE_TAXONOMY.md) pointed at output instead of
 control flow, and it is checked at review.
 
+## Every card is linkable, and its body is the evidence (#1509)
+
+Two entries in the card's quick pick are supplied by the surface, not by the
+producer, and a producer should count on both rather than reimplement them.
+
+**The link.** `Open in browser` leads the list whenever the card has a forge
+URL. It no longer requires `Context.URL`: when the producer left it empty and
+the context names `repo` plus `issue` (or `pr`), the extension derives
+`https://github.com/<repo>/issues/<n>` in one place —
+`packages/nightgauge-vscode/src/views/attention/attentionLinks.ts` — which the
+quick pick, the tree item's `.link` context value and the tooltip all read. Set
+`Context.URL` only when you have a **better** link than the issue: the exact
+failing check run, the blocked PR, a comment permalink. An explicit URL always
+wins over the derived one.
+
+This is why the derivation lives on the surface rather than in `raiseAttention`:
+it covers every producer family at once — the two Go schedulers, the repo-scoped
+sweep, and the extension's own `attention.raise` — and it covers cards already
+persisted with an empty `url`, which a fill at raise time cannot, because a
+standing card is not re-raised while its condition holds.
+
+**The evidence.** `View details` follows the link whenever the card's `Body` is
+non-empty. It opens the title, the body, the scope, the link and every option's
+consequence as a markdown document, and for an `architecture-approval` card it
+appends the run's `planning-{N}.json` from disk — so the operator reads the plan
+they are approving without leaving the editor. Selecting it resolves nothing.
+
+The consequence for a producer is direct: **the body is the only place a card's
+reason is rendered in full**, so write it as the evidence for the decision the
+options ask for, not as a restatement of the title.
+
 ## Deduplicating against another producer
 
 Two producers can observe the same fact from different vantage points. The

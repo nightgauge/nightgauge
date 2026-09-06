@@ -17,3 +17,4 @@ export {
   contextValueFor,
   isRepoScoped,
 } from "./attentionTreeItems";
+export { attentionCardUrl } from "./attentionLinks";

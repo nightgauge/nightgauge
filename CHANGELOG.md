@@ -26,6 +26,12 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- An Action Center card no longer asks for a decision without showing what is
+  being decided. Every card naming a repo and an issue (or PR) now leads with
+  `Open in browser` — the link is derived when the producer set none — and a
+  `View details` entry opens the card's reason, its options' consequences and,
+  for an architecture-approval card, the run's plan file, without resolving
+  anything (#1509)
 - The dependency scanner recognises the board field's own spelling of the
   keyword — `blockedBy`, `blocked-by`, `blocked_by`, `dependsOn`, `depends-on`,
   `depends_on`, with or without surrounding backticks or bold markers — and a
