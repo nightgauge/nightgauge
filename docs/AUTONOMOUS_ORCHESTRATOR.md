@@ -846,28 +846,31 @@ ADR-bearing first ticket as a normal blocker for the rest of the epic.
 
 ## CLI Reference
 
-| Command                             | Description                            |
-| ----------------------------------- | -------------------------------------- |
-| `autonomous run`                    | Start the scheduler loop               |
-| `autonomous run --dry-run`          | Preview without executing              |
-| `autonomous run --budget N`         | Set token budget ceiling               |
-| `autonomous run --interval 30s`     | Set scan interval                      |
-| `autonomous run --max-concurrent N` | Set pipeline slot count                |
-| `autonomous run --repos a,b,c`      | Specify repos (comma-separated)        |
-| `autonomous run --owner ORG`        | Set GitHub org/owner                   |
-| `autonomous run --project N`        | Set project board number               |
-| `autonomous run --json`             | Output final status as JSON            |
-| `autonomous run --adapter NAME`     | Pin the CLI stage adapter (see below)  |
-| `autonomous status`                 | Show current state (human-readable)    |
-| `autonomous status --json`          | Machine-readable output                |
-| `autonomous resume`                 | Clear a halt/pause and resume (#405)   |
-| `autonomous resume --json`          | Machine-readable resume result         |
-| `autonomous stop`                   | Signal the scheduler to stop           |
-| `autonomous stuck-epics`            | List epics detected as stalled (#4073) |
-| `autonomous stuck-epics --json`     | Machine-readable stalled-epic list     |
-| `graph build`                       | Build and display the dependency graph |
-| `graph build --json`                | Machine-readable graph output          |
-| `graph build --repos a,b,c`         | Specify repos for graph                |
+| Command                                    | Description                                   |
+| ------------------------------------------ | --------------------------------------------- |
+| `autonomous run`                           | Start the scheduler loop                      |
+| `autonomous run --dry-run`                 | Preview without executing                     |
+| `autonomous run --budget N`                | Set token budget ceiling                      |
+| `autonomous run --interval 30s`            | Set scan interval                             |
+| `autonomous run --max-concurrent N`        | Set pipeline slot count                       |
+| `autonomous run --repos a,b,c`             | Specify repos (comma-separated)               |
+| `autonomous run --owner ORG`               | Set GitHub org/owner                          |
+| `autonomous run --project N`               | Set project board number                      |
+| `autonomous run --json`                    | Output final status as JSON                   |
+| `autonomous run --adapter NAME`            | Pin the CLI stage adapter (see below)         |
+| `autonomous status`                        | Show current state (human-readable)           |
+| `autonomous status --json`                 | Machine-readable output                       |
+| `autonomous resume`                        | Clear a halt/pause and resume (#405)          |
+| `autonomous resume --json`                 | Machine-readable resume result                |
+| `autonomous clear-failures <owner/repo#N>` | Lift one issue's lifetime failure cap (#1487) |
+| `autonomous clear-failures --all`          | Lift the cap for every issue                  |
+| `autonomous clear-failures --json`         | Machine-readable clear result                 |
+| `autonomous stop`                          | Signal the scheduler to stop                  |
+| `autonomous stuck-epics`                   | List epics detected as stalled (#4073)        |
+| `autonomous stuck-epics --json`            | Machine-readable stalled-epic list            |
+| `graph build`                              | Build and display the dependency graph        |
+| `graph build --json`                       | Machine-readable graph output                 |
+| `graph build --repos a,b,c`                | Specify repos for graph                       |
 
 ### Which executor runs the stages (#1336)
 
@@ -1203,8 +1206,24 @@ surface reads it.
   workspace keeps dispatching normally. Prior to #127, hitting this cap
   flipped the entire scheduler to `safety_tripped`, pausing dispatch for
   every repo in the workspace over one chronically-broken issue.
-- **Recovery**: `ClearIssueFailures(key)` (or `""` for all) clears both the
-  failure counter and the quarantine entry for manual triage. Alternatively,
+- **Visibility**: `nightgauge autonomous status` lists every issue that
+  carries a counter as `n/2`, marks the ones at the cap `QUARANTINED`, and
+  prints the command that lifts it. The cap is enforced at dispatch and
+  logged once, at the moment the quarantine is applied, so before #1487 an
+  operator asking hours later why an issue was not moving had nowhere to
+  look — the fleet simply read as idle. The under-cap counters are shown too:
+  `1/2` the cycle before a quarantine is the reading that lets an operator
+  act while acting is still cheap.
+- **Recovery**: `nightgauge autonomous clear-failures <owner/repo#N>`, or
+  `--all` for every issue. With a co-located daemon it goes through the
+  `autonomous.clearIssueFailures` IPC method so the **live** scheduler forgets
+  the counter and its next scan dispatches; without one it rewrites
+  `state.json` through the same `ClearIssueFailures` primitive, so "the
+  failures are cleared" has one definition either way. It clears the counter,
+  the quarantine entry, the session backoff and any operator-held failure
+  together, and reports whether the separate fleet-wide circuit breaker is
+  still tripped — that one is lifted by `nightgauge autonomous resume`, not by
+  this verb (#150). Alternatively,
   `reconcileStateAgainstGraph` prunes a `LifetimeIssueFailures`/
   `QuarantinedIssues` entry automatically once the issue no longer exists on
   the live project board (closed, deleted, or transferred to another repo) —
@@ -1213,7 +1232,39 @@ surface reads it.
 - **Note**: Only failures classified as the issue's own fault increment the
   counter — transient/environmental terminal kinds (stall-kill, rate-limit
   quota exhaustion, API overload, stream-idle-timeout) are exempt so a
-  provider outage never trips quarantine.
+  provider outage never trips quarantine. `operator_stop` is exempt for the
+  same reason from the other direction: a kill the **scheduler itself** issued
+  is never the issue's fault. Two stages in flight when an operator pressed
+  Stop exited 143 with no classifiable error text, were recorded as bare
+  pipeline failures, took their issues to 1/2, and together with one unrelated
+  failure tripped the cascading-failures breaker — halting the fleet the
+  operator had only asked to pause. The kind is derived structurally, from
+  `execution.Manager`'s own `Cancelled` flag and the scheduler's
+  `stopRequested`, never from what the dying process happened to print.
+- **Product faults are not the issue's fault either (#1487)**: when the
+  cascading-failure breaker trips and **every** failure inside its window
+  carries one terminal kind, that window is a single defect in the pipeline
+  observed N times, not N broken issues. No issue is charged for it — the
+  failure that tripped the breaker skips its increment, and the increments the
+  earlier in-window failures already made are refunded (a key that drops back
+  under the cap loses its quarantine record with it). The verdict is appended
+  to the cascade trip reason, so it reaches `PauseReason` on `state.json`, the
+  safety-rails `TripReason`, the log line, the Discord status change and the
+  Action Center card rather than being a silent counter adjustment.
+
+  The rule is deliberately narrow. It keys on the shared kind alone — no
+  terminal kind is special-cased as "product-caused", because that list is a
+  second taxonomy to keep in lockstep with the first and the wrong entry on it
+  switches the cap off for a genuinely broken issue. A window holding one
+  unclassified (empty) kind, or two different kinds, is not a shared cause and
+  charges normally. The per-issue backoff still applies to a product fault:
+  "the pipeline is broken" is a reason not to spend the issue's last life on
+  it, not a reason to re-dispatch straight back into the same defect.
+
+  The incident: three issues, in three different repositories, each reached
+  2/2 on a stage-gate defect that had already been fixed and shipped. The fix
+  could not reach them, and nothing short of hand-editing `state.json` could
+  release them.
 
 ### Author Trust Gate (#270)
 

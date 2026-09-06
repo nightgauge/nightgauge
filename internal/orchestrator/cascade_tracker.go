@@ -40,6 +40,12 @@ const (
 	// NOT in any auto-resume allowlist — clearing requires explicit user
 	// Resume() (which is the default behaviour of Resume()).
 	CascadePauseReason = "safety:cascading-failures"
+	// UnclassifiedCascadeReason is what the scheduler records on the tracker
+	// when a failure carried no terminal kind. It is a placeholder, not a
+	// classification: every unclassified failure of every cause shares it, so
+	// SharedProductFaultKind must never read a window of them as one shared
+	// defect.
+	UnclassifiedCascadeReason = "pipeline_failure"
 )
 
 // CascadeTrackerConfig holds the tunables for the cascading-failure breaker.
@@ -269,4 +275,57 @@ func (c *CascadeTracker) summarizeLocked(now time.Time) string {
 		"cascading-failures: %d pipeline failures in the last %s (%s). Manual triage required.",
 		len(c.entries), c.window, failures,
 	)
+}
+
+// SharedProductFaultKind reports whether every failure currently inside the
+// window carries the same terminal kind — the signature of a defect in the
+// pipeline itself rather than of N independently broken issues.
+//
+// Three repositories failing on `dev_build_verification_missing` inside half
+// an hour is one product defect observed three times; the issues had nothing
+// in common but the binary that ran them. Charging each of them a lifetime
+// failure quarantines work the fix has already unblocked, and #1487 is the
+// incident: three issues reached 2/2 on a gate defect that had been fixed and
+// shipped, and none of them could be dispatched again without an operator
+// editing state.json.
+//
+// chargedKeys is every in-window failure EXCEPT the one just recorded, in
+// chronological order and with repeats — one entry per failure, so a single
+// issue that failed twice inside the window appears twice. That is exactly
+// the set of lifetime-failure increments the caller has already made, because
+// this tracker is fed from the one code path that also increments the
+// counter, and the newest entry's increment has not happened yet at the
+// moment the breaker trips. Entries with no issue number are skipped: they
+// are orchestrator-level trips that never charged an issue.
+//
+// shared is false when the window holds fewer than two failures, when any
+// kind differs, or when the shared kind is unclassified — empty, or the
+// `pipeline_failure` placeholder the caller substitutes for an empty terminal
+// kind. An unclassified failure is not evidence of a shared cause, and every
+// unclassified failure carries the same placeholder, so accepting it would
+// refund every cascade of un-kinded failures: the cap silently switching
+// itself off rather than a verdict about a defect.
+func (c *CascadeTracker) SharedProductFaultKind(now time.Time) (kind string, chargedKeys []string, shared bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.pruneLocked(now)
+	if len(c.entries) < 2 {
+		return "", nil, false
+	}
+	kind = c.entries[0].Reason
+	if kind == "" || kind == UnclassifiedCascadeReason {
+		return "", nil, false
+	}
+	for _, e := range c.entries {
+		if e.Reason != kind {
+			return "", nil, false
+		}
+	}
+	for _, e := range c.entries[:len(c.entries)-1] {
+		if e.Number <= 0 {
+			continue
+		}
+		chargedKeys = append(chargedKeys, fmt.Sprintf("%s#%d", e.Repo, e.Number))
+	}
+	return kind, chargedKeys, true
 }

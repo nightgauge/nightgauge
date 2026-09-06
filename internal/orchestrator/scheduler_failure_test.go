@@ -2349,6 +2349,20 @@ func TestCLIGracefulStop_ExitZeroStillCarriesFailureText(t *testing.T) {
 	// have to become the ONLY safe shape, and any accidental widening to a
 	// plain "stderr is non-empty" check would misreport routine chatter
 	// (deprecation notices, progress logs) as why a stage failed.
+	// #1487 — the same flag is the ONLY structural evidence that a 143 was a
+	// stop and not a crash, so the projection has to carry it through to the
+	// scheduler as well as widening the text gate. Without it every stage an
+	// operator stopped was charged to its issue's lifetime failure cap.
+	t.Run("Cancelled is carried onto the StageRunResult, not just consumed", func(t *testing.T) {
+		got := cliRunResultToStageResult(&adapters.RunResult{ExitCode: 143, Cancelled: true})
+		if !got.Cancelled {
+			t.Error("StageRunResult.Cancelled is false for a stopped stage — the scheduler cannot tell a Stop from a crash, and exit 143 has no error text that would tell it")
+		}
+		if healthy := cliRunResultToStageResult(&adapters.RunResult{ExitCode: 1}); healthy.Cancelled {
+			t.Error("StageRunResult.Cancelled is true for an ordinary failure — every real failure would be exempted from the lifetime cap")
+		}
+	})
+
 	t.Run("exit-0 without Cancelled stays a healthy stage — no failure text", func(t *testing.T) {
 		result := &adapters.RunResult{
 			ExitCode:  0,

@@ -9,6 +9,13 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Fixed
+
+- Pressing Stop no longer counts the stages it kills against their issues.
+  A stopped run is recorded as `operator_stop` — exempt from the per-issue
+  failure cap and from the cascading-failures breaker — so a pause no longer
+  quarantines the work that was in flight or halts the whole workspace (#1487)
+
 ## [0.2.3] - 2026-09-05
 
 ### Added

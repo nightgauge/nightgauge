@@ -514,6 +514,7 @@ export const TerminalFailureKindSchema = z.enum([
   // Declared-but-unmatched, mirroring Go: set structurally (a gate/evidence
   // override), never derived from error text.
   "abandoned_commit", // Issue #191 — a stage committed valid, unmerged work but was killed/crashed before pr-create ran
+  "operator_stop", // Issue #1487 — the scheduler killed the stage (an operator pressed Stop, or a cancel tore the run down); derived from execution.Manager's own Cancelled flag and the scheduler's stopRequested, never from error text, and exempt from the lifetime failure cap and the cascade breaker
   "commit_orphaned", // Issue #266 — a killed stage's commit landed on the wrong branch and self-heal could not recover it; unrecoverable by retry
   // Gate-sourced kinds from the #1237 sweep — every KindFail site in the stage
   // gates classifies itself instead of falling through to subagent_crash.

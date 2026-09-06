@@ -2939,6 +2939,44 @@ func ClearMachineHalt(workspaceRoot string) (*MachineHaltRecord, error) {
 	return &cleared, nil
 }
 
+// ClearIssueFailuresOffline clears per-issue lifetime failure counters in a
+// workspace with no live scheduler — the offline half of
+// `nightgauge autonomous clear-failures`, mirroring what ClearMachineHalt is
+// to `autonomous resume`. key is "owner/repo#number" for one issue, or "" for
+// every issue.
+//
+// It loads state.json into a throwaway scheduler and calls the SAME
+// ClearIssueFailures method the IPC handler calls, so "the failures are
+// cleared" has exactly one definition: the operator-hold release, the
+// quarantine record, the session backoff and the counter itself all move
+// together whether or not a daemon happens to be up. The throwaway scheduler
+// has no safety rails, so the circuit-breaker flag is reported false — there
+// is no live breaker to report on.
+//
+// Returns (cleared, found). found is false when the workspace has no
+// autonomous state file at all, which is a different answer from "nothing to
+// clear" and the caller renders it differently.
+func ClearIssueFailuresOffline(workspaceRoot, key string) (cleared int, found bool, err error) {
+	if workspaceRoot == "" {
+		return 0, false, fmt.Errorf("workspace root is required")
+	}
+	p := filepath.Join(workspaceRoot, autonomousStateFile)
+	data, readErr := os.ReadFile(p)
+	if os.IsNotExist(readErr) {
+		return 0, false, nil
+	}
+	if readErr != nil {
+		return 0, false, fmt.Errorf("read state: %w", readErr)
+	}
+	var st AutonomousState
+	if unmarshalErr := json.Unmarshal(data, &st); unmarshalErr != nil {
+		return 0, false, fmt.Errorf("parse state: %w", unmarshalErr)
+	}
+	as := &AutonomousScheduler{workspaceRoot: workspaceRoot, state: &st}
+	cleared, _ = as.ClearIssueFailures(key)
+	return cleared, true, nil
+}
+
 // ClearQuotaCooldown unconditionally removes the global Anthropic-quota
 // cooldown so the next runCycle dispatches without waiting for the recorded
 // deadline. Returns (cleared, previousUntil) — cleared=false when no cooldown
@@ -3027,6 +3065,54 @@ func (as *AutonomousScheduler) releaseOperatorHoldsLocked(scope string) []string
 	}
 	as.state.Failed = kept
 	return released
+}
+
+// refundLifetimeFailuresLocked un-charges one lifetime failure per key in
+// keys, which may repeat — a single issue that failed twice inside the
+// cascade window is refunded twice. Returns the number of refunds applied.
+//
+// It exists because the lifetime counter is written at the moment of failure,
+// before anything knows whether the failures around it share a cause (#1487).
+// The cascade breaker is the first place that verdict is available, and by
+// then the earlier failures in its window have already been charged; a rule
+// that only skipped the increment for the failure that happened to trip the
+// breaker would still leave the first two issues at the cap. The refund is
+// the cleanest of the three options: deferring every increment until the
+// window closes would make the cap unenforceable during the window, and
+// tagging increments as provisional would put a second, parallel counter in
+// state.json for the same fact.
+//
+// A key at zero is deleted rather than left at zero, and a key that drops
+// back below the cap loses its quarantine record with it — the record is a
+// note about why an issue was skipped, and the skip itself is re-derived
+// from the counter on every dispatch pass, so a stale record would report a
+// quarantine that no longer exists.
+//
+// Caller MUST hold as.mu.
+func (as *AutonomousScheduler) refundLifetimeFailuresLocked(keys []string) int {
+	if as.state == nil || len(as.state.LifetimeIssueFailures) == 0 {
+		return 0
+	}
+	refunded := 0
+	for _, key := range keys {
+		n, ok := as.state.LifetimeIssueFailures[key]
+		if !ok || n <= 0 {
+			continue
+		}
+		n--
+		refunded++
+		if n == 0 {
+			delete(as.state.LifetimeIssueFailures, key)
+		} else {
+			as.state.LifetimeIssueFailures[key] = n
+		}
+		if n < MaxLifetimeFailuresPerIssue && as.state.QuarantinedIssues != nil {
+			delete(as.state.QuarantinedIssues, key)
+		}
+		log.Printf("autonomous: refunded a lifetime failure for %s — the cascade window is one product fault (now %d/%d)",
+			key, n, MaxLifetimeFailuresPerIssue)
+	}
+	return refunded
 }
 
 // ClearIssueFailures resets the lifetime failure counter for a single issue
@@ -4742,6 +4828,10 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 	// branch below; otherwise stays zero-valued and the safety-rails block
 	// is a no-op for cascade purposes.
 	cascadeTripped := false
+	// productFault is set when the cascade breaker trips on a window whose
+	// failures all share one terminal kind (#1487): the defect is the
+	// pipeline's, so this failure does not consume the issue's lifetime cap.
+	productFault := false
 	cascadeTripReason := ""
 
 	// Remove from running
@@ -4955,6 +5045,42 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 				as.state.Safety = &safetySnap
 			}
 			as.persistStateLocked()
+			return
+		}
+
+		// A kill the scheduler itself issued is never the issue's fault
+		// (#1487). Two stages in flight when an operator pressed Stop exited
+		// 143 with no classified kind, were recorded as bare pipeline
+		// failures, took their issues to 1/2 on the lifetime cap and — with
+		// one unrelated failure — tripped the cascading-failures breaker and
+		// halted the fleet the operator had only asked to pause.
+		//
+		// Two structural predicates, deliberately independent. The stage's own
+		// `Cancelled` (via TerminalKindOperatorStop, set in runPipeline) is the
+		// precise one but reaches only the CLI-mode executor; `stopRequested`
+		// catches every other teardown shape, including a stage killed by the
+		// process going down around it, and is safe to read broadly because it
+		// is cleared by Run() at startup and is true only between Stop() and
+		// the next start. Neither is derived from error text: a SIGTERM'd
+		// process's last words are its own, not a description of why it died.
+		//
+		// Recorded, reverted to Ready and left alone: NO lifetime increment, NO
+		// cascade feed, NO safety-rails failure, and no backoff — the stop is
+		// what stops re-dispatch, and once the operator resumes, the issue
+		// should be immediately eligible again.
+		if terminalFailureKind == TerminalKindOperatorStop || as.stopRequested {
+			terminalFailureKind = TerminalKindOperatorStop
+			as.recordFailureLocked(repo, issue, title, now,
+				"stopped by the operator — not a failure of this issue", terminalFailureKind)
+			log.Printf("autonomous: %s was stopped by the operator — no lifetime-cap increment, no cascade-breaker feed",
+				key)
+			if as.safetyRails != nil {
+				as.safetyRails.RecordNonFaultOutcome(0)
+				safetySnap := as.safetyRails.State()
+				as.state.Safety = &safetySnap
+			}
+			as.persistStateLocked()
+			as.goTrackedBoardOp(func(genCtx context.Context) { as.revertFailedIssueStatus(genCtx, repo, issue) })
 			return
 		}
 
@@ -5541,11 +5667,27 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 		if as.cascadeTracker != nil {
 			cascadeReason := terminalFailureKind
 			if cascadeReason == "" {
-				cascadeReason = "pipeline_failure"
+				cascadeReason = UnclassifiedCascadeReason
 			}
 			cascadeTripped, cascadeTripReason = as.cascadeTracker.RecordFailure(
 				repo, issue, cascadeReason, time.Now())
 			if cascadeTripped {
+				// #1487 — a cascade whose failures all carry ONE terminal kind is
+				// the pipeline failing, not N issues failing. The issues are not
+				// charged for it: this failure skips the lifetime increment below,
+				// and the increments the earlier in-window failures already made
+				// are refunded. The verdict is appended to the trip reason so it
+				// reaches every surface that renders it — the log line, PauseReason
+				// on state.json, the safety-rails TripReason, the Discord status
+				// change and the Action Center card — rather than being a silent
+				// counter adjustment nothing explains.
+				if sharedKind, chargedKeys, shared := as.cascadeTracker.SharedProductFaultKind(time.Now()); shared {
+					productFault = true
+					refunded := as.refundLifetimeFailuresLocked(chargedKeys)
+					cascadeTripReason += fmt.Sprintf(
+						" Every failure in the window is %s — a product fault, not the issues': %d earlier lifetime failure(s) refunded, and this one is not charged.",
+						sharedKind, refunded)
+				}
 				log.Printf("autonomous: %s", cascadeTripReason)
 				as.state.Status = "safety_tripped"
 				as.state.PauseReason = cascadeTripReason
@@ -5584,14 +5726,25 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 		// #3020: Increment the lifetime (cross-session) failure count. This
 		// survives Resume(), so a chronically-failing issue cannot be retried
 		// past the cap without explicit user triage.
+		//
+		// #1487 — unless the cascade breaker just ruled this window a product
+		// fault. The backoff above still applies: "the pipeline is broken" is a
+		// reason not to spend the issue's last life on it, not a reason to
+		// re-dispatch straight back into the same defect.
 		if as.state.LifetimeIssueFailures == nil {
 			as.state.LifetimeIssueFailures = make(map[string]int)
 		}
-		as.state.LifetimeIssueFailures[key]++
+		if !productFault {
+			as.state.LifetimeIssueFailures[key]++
+		}
 		lifetime := as.state.LifetimeIssueFailures[key]
 
-		log.Printf("autonomous: failed %s#%d (%d times this session, %d lifetime), backing off for %v",
-			repo, issue, as.perIssueFailureCount[key], lifetime, backoff)
+		charged := ""
+		if productFault {
+			charged = " — not charged, product fault"
+		}
+		log.Printf("autonomous: failed %s#%d (%d times this session, %d lifetime%s), backing off for %v",
+			repo, issue, as.perIssueFailureCount[key], lifetime, charged, backoff)
 
 		// Revert board status from "In progress" → "Ready" so the autonomous
 		// scheduler can re-pick it up after backoff expires. Without this,

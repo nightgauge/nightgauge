@@ -39,7 +39,27 @@ const OutcomeTypeDeferred = "deferred"
 // Mirrors TS TerminalFailureKindSchema in
 // packages/nightgauge-vscode/src/schemas/executionHistory.ts.
 const (
-	TerminalKindStallKill          = "stall_kill"
+	TerminalKindStallKill = "stall_kill"
+	// TerminalKindOperatorStop is set when the SCHEDULER killed the stage —
+	// an operator pressed Stop, or a cancel tore the run down — rather than
+	// the stage failing. The process takes SIGTERM and exits 143 with no
+	// classifiable error text of its own, so before #1487 it was recorded as a
+	// bare `pipeline_failure`: it charged the issue a lifetime failure and fed
+	// the cascading-failures breaker. Two stages killed by one Stop, plus one
+	// unrelated failure, tripped the fleet breaker and took two issues to 1/2
+	// for the crime of being in flight when a human pressed a button.
+	//
+	// It is derived structurally and never from error text — the two
+	// predicates are execution.Manager's own `Cancelled` (a CLI that traps
+	// SIGTERM and exits 0 is otherwise indistinguishable from success, #564)
+	// and the scheduler's `stopRequested`. Neither is a string a
+	// terminalkind rule could match, which is why this kind is absent from
+	// internal/terminalkind/table.json alongside the other declared-but-
+	// unmatched kinds.
+	//
+	// Exempt from the lifetime failure cap and from the cascade breaker: a
+	// kill the scheduler itself issued is never the issue's fault.
+	TerminalKindOperatorStop       = "operator_stop"
 	TerminalKindBudgetExceeded     = "budget_exceeded"
 	TerminalKindValidationError    = "validation_error"
 	TerminalKindSubagentCrash      = "subagent_crash"

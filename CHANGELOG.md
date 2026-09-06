@@ -14,8 +14,31 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+### Added
+
+- `nightgauge autonomous clear-failures <owner/repo#N>` (or `--all`) lifts the
+  per-issue lifetime failure cap that quarantines an issue. It was reachable
+  only from the IPC method and a VS Code command, so an operator on a headless
+  host could not release a quarantine without editing `state.json` by hand. It
+  clears on the live scheduler when a daemon is up and rewrites the state file
+  when one is not, and `autonomous status` now lists every issue's counter as
+  `n/2` and marks the ones at the cap (#1487)
+
 ### Fixed
 
+- A stage the scheduler itself killed — an operator pressed Stop, or a cancel
+  tore the run down — is recorded as `operator_stop` instead of a bare pipeline
+  failure, and is exempt from the issue's lifetime failure cap and from the
+  cascading-failures breaker. Two stages in flight when Stop was pressed exited
+  143 with nothing a classifier could read, charged their issues a failure
+  each, and with one unrelated failure tripped the fleet breaker — halting the
+  workspace the operator had only asked to pause (#1487)
+- A cascade of pipeline failures that all share one terminal kind is charged to
+  the pipeline, not to the issues: the lifetime failure counters are left
+  untouched and the increments already made inside the window are refunded.
+  Three issues across three repos reached 2/2 on a stage-gate defect that had
+  already been fixed and shipped, and the fix could not reach them. Failures of
+  differing kinds still count exactly as before (#1487)
 - A run halted for a human — the architecture-approval gate, or a stage
   declaring an issue not pipeline work — now stays halted. The autonomous
   rescan re-admitted every still-open failed item, which is exactly what an

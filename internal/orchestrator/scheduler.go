@@ -123,7 +123,16 @@ type StageRunParams struct {
 
 // StageRunResult is the cross-mode stage execution result.
 type StageRunResult struct {
-	ExitCode           int
+	ExitCode int
+	// Cancelled is true when execution.Manager itself asked this stage to
+	// exit — CancelWithGrace / StopExecution SIGTERM'd it (#564). It is
+	// carried through from adapters.RunResult rather than re-derived, because
+	// this is the ONE component that knows a stop was requested: the process
+	// exits 143 (or traps SIGTERM and exits 0) with no error text a classifier
+	// could tell apart from a genuine crash. It classifies to
+	// TerminalKindOperatorStop, which is exempt from the issue's lifetime
+	// failure cap (#1487).
+	Cancelled          bool
 	InputTokens        int
 	OutputTokens       int
 	CacheReadTokens    int     // Cache read input tokens (billed at lower rate)
@@ -461,7 +470,9 @@ func cliRunResultToStageResult(result *adapters.RunResult) *StageRunResult {
 	}
 
 	return &StageRunResult{
-		ExitCode:     result.ExitCode,
+		ExitCode: result.ExitCode,
+		// Carried, not re-derived — see StageRunResult.Cancelled (#564/#1487).
+		Cancelled:    result.Cancelled,
 		InputTokens:  result.InputTokens,
 		OutputTokens: result.OutputTokens,
 		// #91 served-model attribution, tracked by the execution manager's
@@ -5913,6 +5924,21 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			// from outside (TS watchdog observed sustained connectivity loss);
 			// retrying or escalating model would just spend more tokens against
 			// the same outage. Mark terminal kind, record stage error, return.
+			// Operator stop (#1487): the scheduler killed this stage. Checked
+			// FIRST, and structurally — a SIGTERM'd stage exits 143 with
+			// whatever its last words happened to be, so every text-based
+			// classification below would answer for the wrong question. Short
+			// circuit before retry, escalation and stall recovery, all of which
+			// would relaunch work an operator just asked to stop.
+			if result != nil && result.Cancelled {
+				terminalFailureKind = TerminalKindOperatorStop
+				runtime.SetStageError(stage, terminalFailureReason(exitCode, err, "stage stopped by the operator"))
+				s.emitStateChanged(item.Repo, item.Number, runtime)
+				log.Printf("#%d: stage %s stopped by the operator (exit %d) — not the issue's failure, no retry, no escalation",
+					item.Number, stage, exitCode)
+				return
+			}
+
 			if errors.Is(err, ErrNetworkUnavailable) {
 				terminalFailureKind = TerminalKindNetworkUnavailable
 				runtime.SetStageError(stage, err.Error())
