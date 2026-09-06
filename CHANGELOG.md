@@ -14,6 +14,36 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+### Breaking / behaviour change
+
+- **Sanitization now blocks.** `sanitization.mode` defaults to `block`, not
+  `warn`. A Bash command or Task prompt matching a destructive, exfiltration,
+  escalation or traversal pattern is refused and logged instead of logged and
+  allowed. A repository that wants the old behaviour writes
+  `sanitization: {mode: warn}` — that is the documented opt-out for one still
+  calibrating its rules (#1519, ADR-021)
+- **Scope drift and context budgets now enforce.**
+  `pipeline.scope_drift_gate.enforcement_mode` defaults to `strict` and
+  `pipeline.context_budgets.mode` to `hard`. A `type:docs` issue whose real diff
+  reaches outside the allowlist blocks its PR, and a stage over budget is
+  terminated rather than warned about. The `scope:cross-cutting` bypass label
+  and `grace_percent` are the escape hatches; "avoid breaking existing
+  pipelines" was a migration reason and migrations end (#1519, ADR-021)
+- **Auto-merge is no longer set by default.** `pull_request.auto_merge` and
+  `auto_merge_epic` both default to `false`, and both are pinned explicitly in
+  the committed public-core `.nightgauge/config.yaml`. The pr-merge stage
+  merges when CI is green; forge-side auto-merge on top lands the PR the moment
+  its last check reports, past the gate the forge itself enforces (#1519)
+- **`audit.enabled` is gone as an independent switch.** Audit emission follows
+  `platform.enabled` — it needs a platform URL and key to do anything at all.
+  An existing `audit.enabled: true` is read, warned about once and otherwise
+  ignored; the `audit.*` tuning keys are unchanged, and
+  `NIGHTGAUGE_AUDIT_ENABLED` still overrides in both directions (#1519)
+- `knowledge.index_on_commit` and `ralph_loop.lint` are removed. Neither gated
+  anything — the git hook was never implemented and the loop has no lint step —
+  so both were switches that told an operator they had configured something
+  (#1519)
+
 ### Changed
 
 - The knowledge base is **on by default**. `knowledge.enabled` now resolves to
@@ -28,6 +58,15 @@ knowledge_path is null` on every run. Every layer that read an absent key as
   [ADR-020](docs/decisions/020-value-adding-features-default-on.md) (#1513)
 
 ### Added
+
+- Six defaults now ship on that were off for a reason that had expired:
+  eval-advice routing and router auto-tune (`model_routing.use_eval_recommendations`,
+  `auto_tune`), cross-project complexity transfer, multi-repo knowledge
+  aggregation, Codex session resume, and gate relaxation for docs-only and
+  config-only changes. Each was defaulting off for a rollout or a migration,
+  neither of which is the repository-footprint or per-run-cost reason the rule
+  allows. `project.sync.enabled` gets a written default (`false`) and a docs
+  section — it previously had neither (#1519, ADR-021)
 
 - A shipped default now has one value. `TestDefaultsAgree` in
   `internal/config` reads the extension's `DEFAULT_CONFIG`, the

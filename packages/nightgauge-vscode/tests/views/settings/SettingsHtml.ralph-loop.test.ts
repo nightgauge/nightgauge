@@ -15,7 +15,9 @@ describe("SettingsHtml ralph_loop section", () => {
     expect(html).toContain('data-path="ralph_loop.enabled"');
     expect(html).toContain('data-path="ralph_loop.build"');
     expect(html).toContain('data-path="ralph_loop.tests"');
-    expect(html).toContain('data-path="ralph_loop.lint"');
+    // ralph_loop.lint was removed in ADR-021 — the loop has no lint step, so
+    // the switch gated nothing. It must not come back as a rendered control.
+    expect(html).not.toContain('data-path="ralph_loop.lint"');
 
     // Safety Limits subsection
     expect(html).toContain('data-path="ralph_loop.limits.max_iterations"');
@@ -31,7 +33,6 @@ describe("SettingsHtml ralph_loop section", () => {
     expect(html).toContain("Enabled");
     expect(html).toContain("Build Auto-Fix");
     expect(html).toContain("Test Auto-Fix");
-    expect(html).toContain("Lint Auto-Fix");
     expect(html).toContain("Max Iterations");
     expect(html).toContain("Token Budget Per Iteration");
     expect(html).toContain("Total Token Budget");
@@ -56,11 +57,6 @@ describe("SettingsHtml ralph_loop section", () => {
 
     // tests defaults to true (checked)
     expect(html).toMatch(/id="ralph_loop\.tests"[^>]*checked/);
-
-    // lint defaults to false (not checked)
-    const lintMatch = html.match(/id="ralph_loop\.lint"[^>]*/);
-    expect(lintMatch).toBeTruthy();
-    expect(lintMatch![0]).not.toContain("checked");
 
     // max_iterations defaults to 3
     expect(html).toMatch(/id="ralph_loop\.limits\.max_iterations"[^>]*value="3"/);
@@ -87,7 +83,6 @@ describe("SettingsHtml ralph_loop section", () => {
       enabled: false,
       build: false,
       tests: false,
-      lint: true,
       limits: {
         max_iterations: 5,
         token_budget_per_iteration: 5000,
@@ -113,9 +108,6 @@ describe("SettingsHtml ralph_loop section", () => {
     const testsMatch = html.match(/id="ralph_loop\.tests"[^>]*/);
     expect(testsMatch).toBeTruthy();
     expect(testsMatch![0]).not.toContain("checked");
-
-    // lint is true (checked)
-    expect(html).toMatch(/id="ralph_loop\.lint"[^>]*checked/);
 
     // Number inputs reflect custom values
     expect(html).toMatch(/id="ralph_loop\.limits\.max_iterations"[^>]*value="5"/);

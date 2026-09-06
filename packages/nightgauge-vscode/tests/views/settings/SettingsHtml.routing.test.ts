@@ -44,9 +44,13 @@ describe("SettingsHtml routing section", () => {
     expect(html).toMatch(/id="model_routing\.confidence_threshold"[^>]*step="0\.05"/);
 
     // auto_tune defaults to false (not checked)
+    // ADR-021: auto_tune ships ON, gated on the size-feedback fix (#1515).
+    // It writes tuned values back into config — the legitimate footprint
+    // reason — and the confidence / min_samples / max_delta guardrails are
+    // what keep it from thrashing.
     const autoTuneMatch = html.match(/id="model_routing\.auto_tune"[^>]*/);
     expect(autoTuneMatch).toBeTruthy();
-    expect(autoTuneMatch![0]).not.toContain("checked");
+    expect(autoTuneMatch![0]).toContain("checked");
   });
 
   it("renders custom config values", () => {

@@ -9,8 +9,10 @@ func TestDefaultGateConfig(t *testing.T) {
 	if !cfg.Enabled {
 		t.Error("Enabled = false, want true")
 	}
-	if cfg.EnforcementMode != EnforcementWarn {
-		t.Errorf("EnforcementMode = %q, want %q", cfg.EnforcementMode, EnforcementWarn)
+	// ADR-021: the shipped mode is strict. "warn" is the opt-out an operator
+	// writes while calibrating, not what an unconfigured workspace gets.
+	if cfg.EnforcementMode != EnforcementStrict {
+		t.Errorf("EnforcementMode = %q, want %q", cfg.EnforcementMode, EnforcementStrict)
 	}
 	if cfg.BypassLabel != "scope:cross-cutting" {
 		t.Errorf("BypassLabel = %q, want %q", cfg.BypassLabel, "scope:cross-cutting")
@@ -93,7 +95,11 @@ func TestEvaluate_DocsAllowed(t *testing.T) {
 }
 
 func TestEvaluate_DocsDriftWarnMode(t *testing.T) {
-	g := NewGateEvaluator(DefaultGateConfig())
+	// Explicitly warn: the DEFAULT is now strict (ADR-021), so a test of warn
+	// behaviour has to ask for warn rather than lean on the default.
+	cfg := DefaultGateConfig()
+	cfg.EnforcementMode = EnforcementWarn
+	g := NewGateEvaluator(cfg)
 	res := g.Evaluate(IssueTypeDocs, []string{"type:docs"}, []string{
 		"docs/CONFIGURATION.md",
 		"src/main.go",

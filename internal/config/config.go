@@ -94,16 +94,24 @@ type SanitizationConfig struct {
 	Mode SanitizationMode `json:"mode,omitempty" yaml:"mode,omitempty"`
 }
 
+// DefaultSanitizationMode is the shipped firewall mode: BLOCK (ADR-021).
+//
+// A security control that logs and proceeds is not a control. `warn` remains
+// the documented opt-out for a repository still calibrating its rules, and
+// `disabled` for one that has decided the gate is not for it — but neither is
+// what an unconfigured workspace gets.
+const DefaultSanitizationMode = SanitizationModeBlock
+
 // ResolvedMode returns the effective sanitization mode: the Mode field when
-// set, otherwise the default (warn).
+// set, otherwise DefaultSanitizationMode.
 func (s *SanitizationConfig) ResolvedMode() SanitizationMode {
 	if s == nil {
-		return SanitizationModeWarn
+		return DefaultSanitizationMode
 	}
 	if s.Mode != "" {
 		return s.Mode
 	}
-	return SanitizationModeWarn
+	return DefaultSanitizationMode
 }
 
 // GitHubAuthConfig holds org-to-user fallback mappings for multi-identity workspaces.
@@ -738,13 +746,17 @@ type ModelRoutingConfig struct {
 
 	// UseEvalRecommendations opts routing into the eval advisor's
 	// materialized advice file (.nightgauge/model-evals/routing-advice.json,
-	// #581 / spike #568 §4.2). Default FALSE — the conservative rollout: with
-	// the key off (or no advice file, or no advisable evidence) the axis
-	// query alone decides, which reproduces pre-advice behavior exactly.
+	// #581 / spike #568 §4.2). Default TRUE (ADR-021): the read is read-only
+	// and reproduces pre-advice behaviour exactly when no advice file exists
+	// or no advisable evidence has accumulated, so the conservative rollout
+	// that justified defaulting it off has nothing left to protect against.
 	// Advice re-picks only WITHIN the candidate set and the stage's
 	// routed-tier envelope. Mirrors use_eval_recommendations in the TS
 	// ModelRoutingConfigSchema.
-	UseEvalRecommendations bool `json:"useEvalRecommendations,omitempty" yaml:"use_eval_recommendations,omitempty"`
+	//
+	// A pointer so an omitted key stays distinguishable from an explicit
+	// `false`; resolve with ResolveUseEvalRecommendations.
+	UseEvalRecommendations *bool `json:"useEvalRecommendations,omitempty" yaml:"use_eval_recommendations,omitempty"`
 
 	// StageEfforts is the per-stage explicit effort override: stage name →
 	// EFFORT_LEVELS rung. Read by the Go dispatch path since #581, when the
@@ -1413,20 +1425,33 @@ type GateRelaxConfig struct {
 // RelaxClassesFor returns the relaxation change-class allowlist for the named
 // gate ("pr-create" | "pr-merge"), or nil when unset. Safe on a nil receiver.
 func (p *PipelineConfig) RelaxClassesFor(gate string) []string {
-	if p == nil || p.Gates == nil {
-		return nil
-	}
-	switch gate {
-	case "pr-create":
-		if p.Gates.PrCreate != nil {
-			return p.Gates.PrCreate.RelaxOnChangeClass
-		}
-	case "pr-merge":
-		if p.Gates.PrMerge != nil {
-			return p.Gates.PrMerge.RelaxOnChangeClass
+	var cfg *GateRelaxConfig
+	if p != nil && p.Gates != nil {
+		switch gate {
+		case "pr-create":
+			cfg = p.Gates.PrCreate
+		case "pr-merge":
+			cfg = p.Gates.PrMerge
 		}
 	}
-	return nil
+	if cfg == nil || cfg.RelaxOnChangeClass == nil {
+		return DefaultGateRelaxClasses()
+	}
+	return cfg.RelaxOnChangeClass
+}
+
+// DefaultGateRelaxClasses is the shipped relaxation allowlist (ADR-021):
+// docs-only and config-only changes skip the gate's retry/sleep overhead.
+//
+// It is a free cost win with no repository footprint — the deterministic
+// change classifier decides membership from the real post-dev diff, and a
+// change that classifies outside the list runs the full gate. An operator who
+// wants no relaxation writes an empty list, which is distinguishable from an
+// omitted key.
+//
+// Returns a fresh slice: the caller must not be able to mutate the default.
+func DefaultGateRelaxClasses() []string {
+	return []string{"docs_only", "config_only"}
 }
 
 // AdversarialReviewConfig is the pipeline.adversarial_review: block (#4097).

@@ -63,7 +63,8 @@ describe("sanitization surface (Issue #967)", () => {
   });
 
   it("carries nothing dead in the defaults", () => {
-    expect(DEFAULT_CONFIG.sanitization).toEqual({ mode: "warn" });
+    // ADR-021: block. A control that logs and proceeds is not a control.
+    expect(DEFAULT_CONFIG.sanitization).toEqual({ mode: "block" });
     expect(Object.keys(mergeWithDefaults({}).sanitization ?? {}).sort()).toEqual(["mode"]);
   });
 

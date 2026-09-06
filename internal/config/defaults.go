@@ -174,3 +174,33 @@ func (f *FeedbackLoopConfig) ResolveAutoRetroactive() bool {
 	}
 	return *f.AutoRetroactive
 }
+
+// DefaultUseEvalRecommendations is the shipped model_routing
+// use_eval_recommendations (ADR-021): routing consults the eval advisor's
+// materialized advice file.
+//
+// The read is read-only and reproduces pre-advice behaviour exactly when the
+// file is absent or holds no advisable evidence, so there is no footprint and
+// no per-run cost to opt out of — only a rollout that has now soaked.
+const DefaultUseEvalRecommendations = true
+
+// ResolveUseEvalRecommendations returns the effective setting. Safe on a nil
+// receiver, which is how a config with no model_routing block arrives.
+func (m *ModelRoutingConfig) ResolveUseEvalRecommendations() bool {
+	if m == nil || m.UseEvalRecommendations == nil {
+		return DefaultUseEvalRecommendations
+	}
+	return *m.UseEvalRecommendations
+}
+
+// DefaultScopeDriftEnforcementMode and DefaultContextBudgetMode are the shipped
+// enforcement levels for the two gates that used to warn (ADR-021).
+//
+// "Avoid breaking existing pipelines" is a migration reason, not a footprint or
+// per-run-cost reason, and it is the only one either gate ever had. The
+// `scope:cross-cutting` bypass label and the existing per-stage thresholds are
+// the escape hatches; a gate that only logs is a gate nobody reads.
+const (
+	DefaultScopeDriftEnforcementMode = "strict"
+	DefaultContextBudgetMode         = "hard"
+)

@@ -29,7 +29,10 @@ const (
 type GateConfig struct {
 	// Enabled is the master toggle. When false, Evaluate always returns Allowed=true.
 	Enabled bool
-	// EnforcementMode is "warn" (log only) or "strict" (block PR). Default: "warn".
+	// EnforcementMode is "warn" (log only) or "strict" (block PR).
+	// Default: "strict" (ADR-021) — a gate that only logs is a gate nobody
+	// reads. "warn" remains the documented opt-out, and the bypass label is
+	// the per-issue escape hatch.
 	EnforcementMode string
 	// AllowlistDocs is the glob pattern list applied to type:docs issues.
 	AllowlistDocs []string
@@ -45,7 +48,7 @@ type GateConfig struct {
 func DefaultGateConfig() GateConfig {
 	return GateConfig{
 		Enabled:         true,
-		EnforcementMode: EnforcementWarn,
+		EnforcementMode: EnforcementStrict,
 		AllowlistDocs: []string{
 			"docs/**",
 			"*.md",

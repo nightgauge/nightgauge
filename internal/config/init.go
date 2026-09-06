@@ -132,7 +132,7 @@ func BuildTemplate(opts InitOptions) (string, error) {
 	b.WriteString("\n")
 	b.WriteString("# Sanitization (prompt injection protection)\n")
 	b.WriteString("sanitization:\n")
-	b.WriteString("  mode: warn # warn | block | disabled\n")
+	b.WriteString("  mode: block # block (default) | warn | disabled\n")
 	b.WriteString("\n")
 	b.WriteString("# Human-in-the-loop gates\n")
 	b.WriteString("human_in_the_loop:\n")

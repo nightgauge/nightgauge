@@ -110,11 +110,6 @@ func defaultCases() []defaultCase {
 			docsAnchor: "## Knowledge Base Configuration", docsRow: "auto_prune_on_merge",
 		},
 		{
-			key: "knowledge.aggregate", ship: "false",
-			ts:         "knowledge.aggregate",
-			docsAnchor: "## Knowledge Base Configuration", docsRow: "aggregate",
-		},
-		{
 			key: "platform.enabled", ship: "false",
 			ts:         "platform.enabled",
 			docsAnchor: "## Platform Configuration", docsRow: "enabled",
@@ -206,10 +201,65 @@ func defaultCases() []defaultCase {
 			docsAnchor: "#### autonomous.safety_rails", docsRow: "epic_checkpoint",
 		},
 		{
-			key: "sanitization.mode", ship: "warn",
-			goVal:    func() string { return string((*SanitizationConfig)(nil).ResolvedMode()) },
-			ts:       "sanitization.mode",
+			key: "sanitization.mode", ship: "block",
+			goVal:      func() string { return string((*SanitizationConfig)(nil).ResolvedMode()) },
+			ts:         "sanitization.mode",
+			docsAnchor: "### sanitization", docsRow: "mode",
 			initPath: "sanitization.mode",
+		},
+		{
+			key: "pull_request.auto_merge_epic", ship: "false",
+			ts:         "pull_request.auto_merge_epic",
+			docsAnchor: "### pr", docsRow: "auto_merge_epic",
+		},
+		{
+			key: "model_routing.use_eval_recommendations", ship: "true",
+			goVal:      func() string { return fmt.Sprint((*ModelRoutingConfig)(nil).ResolveUseEvalRecommendations()) },
+			ts:         "model_routing.use_eval_recommendations",
+			docsAnchor: "### model_routing", docsRow: "use_eval_recommendations",
+		},
+		{
+			key: "model_routing.auto_tune", ship: "true",
+			ts:         "model_routing.auto_tune",
+			docsAnchor: "### model_routing", docsRow: "auto_tune",
+		},
+		{
+			key: "pipeline.context_budgets.mode", ship: "hard",
+			goVal:      func() string { return DefaultContextBudgetMode },
+			ts:         "pipeline.context_budgets.mode",
+			docsAnchor: "#### pipeline.context_budgets", docsRow: "mode",
+		},
+		{
+			key: "pipeline.scope_drift_gate.enforcement_mode", ship: "strict",
+			goVal:      func() string { return DefaultScopeDriftEnforcementMode },
+			docsAnchor: "### pipeline.scope_drift_gate", docsRow: "enforcement_mode",
+		},
+		{
+			key: "complexity_model.cross_project.enabled", ship: "true",
+			ts:         "complexity_model.cross_project.enabled",
+			docsAnchor: "#### complexity_model.cross_project", docsRow: "enabled",
+		},
+		{
+			key: "knowledge.aggregate", ship: "true",
+			ts:         "knowledge.aggregate",
+			docsAnchor: "## Knowledge Base Configuration", docsRow: "aggregate",
+		},
+		{
+			key: "ui.core.codex.resume_enabled", ship: "true",
+			ts:         "ui.core.codex.resume_enabled",
+			docsAnchor: "#### Codex Adapter Settings", docsRow: "codex.resume_enabled",
+		},
+		{
+			key: "project.sync.enabled", ship: "false",
+			ts:         "project.sync.enabled",
+			docsAnchor: "#### project.sync", docsRow: "enabled",
+		},
+		{
+			// Unchanged at false, and listed here so the reason is pinned with
+			// the value: it creates issues without a human. That is an
+			// authorisation reason, not a footprint or cost one.
+			key: "pipeline.feedback_loop.auto_retro.auto_create_issues", ship: "false",
+			ts: "pipeline.feedback_loop.auto_retro.auto_create_issues",
 		},
 		{
 			key: "human_in_the_loop.auto_accept_stages", ship: "false",

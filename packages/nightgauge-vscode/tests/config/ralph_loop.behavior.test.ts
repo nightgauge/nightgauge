@@ -83,7 +83,6 @@ describe("ralph_loop.behavior", () => {
         const checks: string[] = [];
         if (cfg.build) checks.push("build");
         if (cfg.tests) checks.push("tests");
-        if (cfg.lint) checks.push("lint");
         return checks;
       };
 
@@ -97,7 +96,6 @@ describe("ralph_loop.behavior", () => {
         const checks: string[] = [];
         if (cfg.build) checks.push("build");
         if (cfg.tests) checks.push("tests");
-        if (cfg.lint) checks.push("lint");
         return checks;
       };
 
@@ -121,7 +119,6 @@ describe("ralph_loop.behavior", () => {
         const checks: string[] = [];
         if (cfg.build) checks.push("build");
         if (cfg.tests) checks.push("tests");
-        if (cfg.lint) checks.push("lint");
         return checks;
       };
 
@@ -135,7 +132,6 @@ describe("ralph_loop.behavior", () => {
         const checks: string[] = [];
         if (cfg.build) checks.push("build");
         if (cfg.tests) checks.push("tests");
-        if (cfg.lint) checks.push("lint");
         return checks;
       };
 
@@ -144,44 +140,6 @@ describe("ralph_loop.behavior", () => {
 
     it("defaults to true", () => {
       expect(DEFAULT_RALPH_LOOP_CONFIG.tests).toBe(true);
-    });
-  });
-
-  // ============================================================================
-  // ralph_loop.lint - Behavior Tests
-  // ============================================================================
-
-  describe("lint", () => {
-    it("includes lint in self-healing loop when true", () => {
-      const config = createMockRalphLoopConfig({ lint: true });
-
-      const getHealingChecks = (cfg: typeof config): string[] => {
-        const checks: string[] = [];
-        if (cfg.build) checks.push("build");
-        if (cfg.tests) checks.push("tests");
-        if (cfg.lint) checks.push("lint");
-        return checks;
-      };
-
-      expect(getHealingChecks(config)).toContain("lint");
-    });
-
-    it("excludes lint from loop when false", () => {
-      const config = createMockRalphLoopConfig({ lint: false });
-
-      const getHealingChecks = (cfg: typeof config): string[] => {
-        const checks: string[] = [];
-        if (cfg.build) checks.push("build");
-        if (cfg.tests) checks.push("tests");
-        if (cfg.lint) checks.push("lint");
-        return checks;
-      };
-
-      expect(getHealingChecks(config)).not.toContain("lint");
-    });
-
-    it("defaults to false", () => {
-      expect(DEFAULT_RALPH_LOOP_CONFIG.lint).toBe(false);
     });
   });
 
@@ -544,7 +502,6 @@ describe("ralph_loop.behavior", () => {
       expect(DEFAULT_RALPH_LOOP_CONFIG.enabled).toBe(true);
       expect(DEFAULT_RALPH_LOOP_CONFIG.build).toBe(true);
       expect(DEFAULT_RALPH_LOOP_CONFIG.tests).toBe(true);
-      expect(DEFAULT_RALPH_LOOP_CONFIG.lint).toBe(false);
       expect(DEFAULT_RALPH_LOOP_CONFIG.limits?.max_iterations).toBe(5);
     });
 
@@ -564,7 +521,6 @@ describe("ralph_loop.behavior", () => {
       expect(config.ralph_loop?.enabled).toBe(true);
       expect(config.ralph_loop?.build).toBe(true);
       expect(config.ralph_loop?.tests).toBe(true);
-      expect(config.ralph_loop?.lint).toBe(false);
       expect(config.ralph_loop?.limits?.max_iterations).toBe(3);
     });
   });
@@ -579,7 +535,6 @@ describe("ralph_loop.behavior", () => {
         enabled: true,
         build: true,
         tests: true,
-        lint: false,
         limits: {
           max_iterations: 3,
           token_budget_per_iteration: 25000,
