@@ -29,6 +29,17 @@ changelog, and the release workflow refuses a tag that does not.
   free text under `quality_checks.build` is named untrustworthy rather than
   silently certified, because mapping prose to a build verdict is the inference
   the closed rule table forbids (#1482)
+- Run records from the autonomous / extension pipeline now report the route the
+  run was actually taken under and the stages it actually skipped. Every record
+  written through `pipeline.notifyComplete` carried a hard-coded
+  `routing.path: "standard"` and an empty `skip_stages`, so a trivial-route run
+  that correctly skipped feature-planning was recorded as a standard run that
+  skipped nothing — a record that contradicted its own trace and made a
+  fast-tracked run read as a bug (#1484)
+- The scheduler reads the issue context's routing decision from
+  `routing.suggested_route`, the key the schema defines. It decoded
+  `routing.path` — a key no producer writes — so the value was always empty and
+  every run record it wrote reported the standard route (#1484)
 - `scripts/check-changelog.sh --extract` reads the root changelog only and no
   longer requires the extension changelog to exist — a single-changelog
   repository's first release run failed at its own changelog gate because its

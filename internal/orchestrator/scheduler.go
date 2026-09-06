@@ -7255,8 +7255,17 @@ func loadIssueContext(workspaceRoot, worktreeDir, repo string, issueNumber int) 
 	}
 	var ctx struct {
 		Routing struct {
-			ComplexityScore      int    `json:"complexity_score"`
-			Path                 string `json:"path"`
+			ComplexityScore int `json:"complexity_score"`
+			// THE KEY IS `suggested_route`, NOT `path` (#1484). This decoded
+			// `routing.path` — a key no producer has ever written. The issue
+			// context's schema (RoutingSchema in
+			// packages/nightgauge-sdk/src/context/schemas/issue.ts) names the
+			// field `suggested_route`; `path` is the RUN RECORD's spelling of
+			// the same value, one layer downstream. So this always returned "",
+			// which recordOutcome coerces to "standard", which is why every run
+			// record reported the standard route — including trivial-route runs
+			// whose own trace showed the fast-track firing.
+			SuggestedRoute       string `json:"suggested_route"`
 			PickupRecommendation struct {
 				DevModel string `json:"dev_model"`
 			} `json:"pickup_recommendation"`
@@ -7265,7 +7274,7 @@ func loadIssueContext(workspaceRoot, worktreeDir, repo string, issueNumber int) 
 	if err := json.Unmarshal(data, &ctx); err != nil {
 		return 0, "", ""
 	}
-	return ctx.Routing.ComplexityScore, ctx.Routing.Path,
+	return ctx.Routing.ComplexityScore, ctx.Routing.SuggestedRoute,
 		ctx.Routing.PickupRecommendation.DevModel
 }
 

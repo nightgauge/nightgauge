@@ -278,6 +278,7 @@ func TestLoadIssueContext(t *testing.T) {
 	contextData := `{
 		"routing": {
 			"complexity_score": 7,
+			"suggested_route": "trivial",
 			"pickup_recommendation": {
 				"dev_model": "claude-opus-4-6"
 			}
@@ -291,10 +292,25 @@ func TestLoadIssueContext(t *testing.T) {
 	if score != 7 {
 		t.Errorf("complexityScore = %d, want 7", score)
 	}
-	// routingPath is empty when not present in context file (defaults applied by caller).
-	_ = routingPath
+	// #1484: the context's route is spelled `suggested_route`. This used to
+	// decode `routing.path`, a key no producer writes, so the value was always
+	// "" and every record downstream reported the coerced "standard".
+	if routingPath != "trivial" {
+		t.Errorf("routingPath = %q, want trivial (from routing.suggested_route)", routingPath)
+	}
 	if model != "claude-opus-4-6" {
 		t.Errorf("predictedModel = %q, want claude-opus-4-6", model)
+	}
+
+	// `routing.path` is the RUN RECORD's spelling, not the issue context's, and
+	// honouring it here would resurrect the key this decoder used to read
+	// (#1484). Reading it must yield "" — the honest "no route recorded".
+	if err := os.WriteFile(filepath.Join(pipelineDir, "issue-98.json"),
+		[]byte(`{"routing":{"complexity_score":3,"path":"extensive"}}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, routingPath, _ := loadIssueContext(tmpDir, "", "", 98); routingPath != "" {
+		t.Errorf("routingPath = %q for a context carrying only routing.path, want \"\" — `path` is not an issue-context key", routingPath)
 	}
 
 	// Missing file returns zero values
